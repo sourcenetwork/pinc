@@ -36,11 +36,15 @@ echo "-- tlc"
 run_tlc ranges VerifiedRanges VerifiedRanges
 run_tlc ranges_n1 VerifiedRanges VerifiedRanges_n1
 run_tlc verifier RangeVerifier RangeVerifier
+run_tlc handshake Handshake Handshake
+run_tlc handshake_resume Handshake Handshake_resume
+run_tlc record Record Record
+run_tlc record_chacha Record Record_chacha
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_handshake
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     out=$(VINC_TRACE_DIR="$dir" java -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
@@ -50,5 +54,6 @@ trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded
 }
 trace_tlc TraceVerifiedRanges ranges
 trace_tlc TraceRangeVerifier verifier
+trace_tlc TraceHandshake handshake
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

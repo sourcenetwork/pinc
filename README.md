@@ -73,8 +73,9 @@ runtime, and that nothing in the build compiles C.
 ## Proofs
 
 `proofs/tla/` and `proofs/lean/` hold specifications and proofs of the first crates' state machines and pure
-functions, kept identical to the Rust code by validating recorded traces of the code against both. The rest of the
-protocol is not specified here yet.
+functions and of the whole `vinc-security` crate (handshake, key schedule, record keys, replay window, amplification
+budget, tokens, ticket stores), kept identical to the Rust code by validating recorded traces of the code against
+both.
 
 How it is checked, by `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
 - **Lean** (`proofs/lean`, a Lake package on core Lean and Std, no Mathlib): `lake build` checks every proof. A script
@@ -132,32 +133,27 @@ jar is missing).
 | completeness: the stream `encode_range` produces for a genuine value and outboard is accepted, with no false rejection; the verifier completes and releases exactly the groups intersecting the range, with their genuine bytes; the encoder reads inside the value and the outboard, and each step has the size the verifier expects | `RangeEncoder`, `encode_range`, `RangeVerifier::feed` | none (the verifier model is shared with the row above) | `Encode.complete_accepts` (with `Encode.lockstep`, `Encode.encStep_size`) | none: it holds for any hash | the genuine runs: every step names the model's node, and the verifier accepts every item |
 | the stack never overflows: the verifier stack and the encoder stack hold at most 55 nodes for any value of at most `2^64 - 1` bytes (any group log), so the 64-entry `STACK_CAP` is never reached and `TreeError::StackOverflow` is unreachable; the builder stack holds at most 54 entries after each group, plus one before a merge | `Stack<_, 64>` in `RangeVerifier`, `RangeEncoder`, `OutboardBuilder` | the trace model checks `Len(stack) <= 55` on every recorded state | `Bounds.verifier_stack_le`, `Bounds.verifier_stack_le_len`, `Bounds.encoder_stack_le`, `Builder.mainPhase_stack_le` | none | the stack bound on every recorded verifier state |
 | the outboard builder writes the parents in pre-order: every parent of the tree is written once (`n - 1` writes), each at the slot `preorder_index` gives, with the pair of the genuine chaining values of its children, and the root it returns is the genuine root; one group has no parent and the group hash is the root | `OutboardBuilder::update`, `finish` (and `build_outboard`) | none | `Builder.builder_correct`, `Builder.builder_outboard` (against any genuine outboard), `Builder.builder_correct_one` | the abstract hash is what the BLAKE3 calls compute (as in `Tree`); the model starts when a group completes | none: only the finished outboard is observable, and the integration tests check it against the verifier and `blake3::hash` |
+| transcript encoding: the length-prefixed field encoding (varint length, bytes) is injective on lists of fields; every handshake field list is injective in its arguments; an Initial list never equals a Hello list | `Transcript::absorb`, `schedule.rs` field lists | none: pure functions | `Transcript.encode_injective`, `Transcript.initialFields_injective`, `helloFields_injective`, `replyFields_injective`, `fullFields_injective`, `resumeFields_injective`, `initial_ne_hello`, `full_th_injective` | the hash is injective (`HashInj`, a hypothesis of the theorems) | the handshake traces: every field of every message is bound (TLC, term/id bijection) |
+| no two key derivations share a (label, context) pair; the 22 labels are distinct, prefixed and differ from the `vinc-crypto` labels; signature messages are injective; handshake secrets of different transcripts come from different inputs | `labels.rs`, `schedule.rs` | `HsOps.tla`: terms tagged by purpose | `Labels.all_nodup`, `Schedule.distinct_purposes`, `thInput_injective`, `different_transcripts_different_inputs`, `sigMsg_injective` | `HashInj` | handshake traces |
+| replay window: a number is accepted at most once, anything below the window is refused, nothing unseen in the window is refused, a failed insert records nothing | `ReplayWindow::check`, `insert` | none | `ReplayWindow.reach_inv`, `accepted_once`, `too_old`, `fresh_accepted`, `insert_error`, `check_ok_iff` | window of 1 to 1024 numbers; the packing of the ring into 16 words of 64 bits is checked by trace only | Lean replay of 16800 operations over windows of 1, 2, 7, 64, 65, 100, 1024 |
+| anti-amplification: before validation `tx <= 3 * rx` in every reachable state, `can_send` is exact, saturation never breaks the bound, after validation there is no limit | `AmpBudget` | none | `Amp.amplification_bound`, `reach_margin`, `canSend_iff`, `u128_no_overflow`, `onSend_margin`, `canSend_validated`, `validated_sticky` | the caller sends only when `can_send` holds | Lean replay of 4800 operations, including counters near `u64::MAX` |
+| tokens: `validate` accepts exactly the tokens `issue` produced for that address and kind, within their lifetime and not from the future | `TokenKey::issue`, `validate` | none | `Token.validate_iff`, `Token.verdict_ok_iff`, `be8_injective` | the AEAD is ideal (`IdealAead`, a hypothesis) | Lean replay of 400 verdicts from the real API |
+| ticket stores: bounded at `N`, `N = 0` stores nothing, eviction order (empty, expired, oldest), a removed ticket is not found again, a client ticket is taken once | `ServerTickets`, `ClientTickets` | `HsOps.tla`: `Victim`, `IssueTicket`; `Handshake.tla`: `TypeOK`, `TicketsIssued` | `Tickets.reach_length`, `reach_occ_le`, `victim_empty`, `victim_expired`, `victim_min`, `find_remove_none`, `take_twice`; `HandshakeStore.ticketsIssued`, `acceptedGone` | ticket ids of one store are distinct (the store does not check; the responder derives them per session) | handshake traces (resume, replay) |
+| key schedule agreement: two finished sessions with the same final transcript hold the same keys, name each other as peer and agree on resumption, for any number of sessions, nodes and tickets | `Initiator`, `Responder`, `schedule.rs` | `Handshake.tla`: `Agreement`; 78336 states (one initiator at node 1, one responder at node 2, attacker node, short Initial allowed) in 7 s, and 321120 states (resumption with a seeded ticket, one initiator, two responders) in 45 s | `HandshakeAgree.agreement`, `agreement_full`, `agreement_resumed` | perfect cryptography (free term algebra) | `TraceHandshake.tla` and Lean replay of 1417 steps |
+| authentication: an initiator that completes with an honest peer X has a responder session of X that signed (full) or accepted the Hello of (resumed) the same transcript; a responder that completes with an honest Y has an initiator session of Y that signed it (full) or sent the Hello (resumed) | `Initiator`, `Responder` | `Handshake.tla`: `AuthI`, `AuthR`; same bounds | `HandshakeInv.authI`, `authR`, `HandshakeResume.authI_resumed`, `authR_resumed` | as above | as above |
+| secrecy: the application keys, resumption secret and early keys of a finished session with an honest peer are not known to the attacker | `Initiator`, `Responder` | `Handshake.tla`: `Secrecy`; same bounds | `HandshakeSecrecy.secrecy_init_full`, `secrecy_resp_full`, `HandshakeResume.secrecy_init_resumed`, `secrecy_init_early`, `secrecy_resp_resumed` | as above | as above |
+| no early acceptance: Established is raised only after the peer was authenticated; the responder's early keys come from a ticket it issued | `Initiator`, `Responder` | `Handshake.tla`: `NoEarly`; same bounds | `HandshakeInv2.noEarlyI`, `noEarlyR`, `HandshakeStore.earlyTied` | as above | as above |
+| 0-RTT at most once: a resumption Hello is accepted at most once per ticket, whatever the replay; a Hello with a wrong binder does not burn the ticket | `Responder::on_hello`, `ServerTickets` | `Handshake.tla`: `ZeroRttOnce`; the resumption config has a second responder session for the replay | `HandshakeStore.zeroRttOnce`, `acceptedGone` | as above | handshake traces: replayed Hello, bad binder |
+| rejects: a reject never authenticates or establishes an initiator and never changes whom it dialed; it only moves a short Initial to the full form or a resumption to a fresh full handshake; a responder's reject changes nothing | `Reject`, `on_prekey_reject`, `on_resume_reject` | `Handshake.tla`: `RejectsOnlyFallback` | `HandshakeRej.rejectInit`, `rejectRespPrej`, `rejectRespRrej` | as above | handshake traces: forged rejects with right and wrong echo |
+| the prekey cache only holds prekeys of initiators that finished a handshake | `Responder::on_finish` | `Handshake.tla`: `CacheAuthenticated` | `HandshakeStore.cacheAuthenticated` | as above | handshake traces: short hit and miss |
+| record keys: no (key, nonce) pair is used twice by successful seals (distinct generations have distinct keys, packet numbers strictly increasing); the AES sealing and ChaCha failed-open limits fire and change nothing; `next_generation` fails exactly at `u32::MAX`; packet numbers above 2^62 - 1 are refused; header protection changes only the low bits and is its own inverse | `PacketKey`, `HeaderKey` | `Record.tla`: `NoNonceReuse`, `AesBounded`, `FailedBounded`, `GenBounded`, `LimitFires`; limits shrunk to 2, 2 and 2 generations, 1044 and 1248 states | `Record.no_nonce_reuse`, `nonce_injective`, `seal_aes_limit`, `openFail_chacha_limit`, `next_exhausted_iff`, `seal_packet_number`, `apply_involutive`, `unprotect_protect` | generations derive distinct keys; the caller never repeats a packet number (`seal` does not check it) | `tests/security_record.rs` |
 
-What is not proven or not checked:
-- BLAKE3 itself is abstract. The genuine tree is defined from abstract leaf and parent hashes, and that these are
-  what the code computes (and that BLAKE3 is collision resistant) is an assumption, not a result. The trace check
-  does not weaken this: it takes the chaining values the code computed as an oracle, so it validates the verifier's
-  decisions, not the hashes.
-- The Lean model of the verifier works on completed stream items. The buffer, partial feeds and the zero-copy path are
-  validated by trace (the buffer arithmetic and the fast-path test in TLC and the Lean replay, over the recorded
-  runs), not proved for all inputs, and the model holds no bytes: group bytes and chaining values are ids chosen by
-  the test, so that the buffer reassembles pieces into the right item is checked through the hashes and the released
-  bytes (`rd`), not proved. The two paths take the same step on a completed item in the model, which is why the
-  proofs do not mention the path.
-- Completeness is proved at the level of the encoder and verifier models. `encode_range`'s conversions between `u64`
-  and `usize` (on a target where `usize` is narrower than 64 bits) and the caller's output buffer size are not
-  modelled; the stream sizes are, but `OutputTooSmall` follows from the caller's buffer being `encoded_len`, the
-  sum of the same steps.
-- `OutboardBuilder` is proved on the model that starts when a group completes. The per-piece bookkeeping of `update`
-  (`in_group`, `consumed`, splitting input at group boundaries, `TooMuchData`, `Incomplete`, `OutboardSize`), the
-  BLAKE3 hasher state (`update` over pieces, `set_input_offset`, `finalize_non_root`) and the empty value (the constant
-  hash of the empty input, which the verifier also checks) are not modelled, and the builder has no trace validation.
-- `left_groups` and `preorder_index` are crate private, so no test calls them: they are checked indirectly, through
-  the node walk of the verifier model and the offsets of the public encoder steps in the traces.
-- `Layout::depth` uses `u64::leading_zeros`, specified here by the position of the top set bit; the standard
-  library's implementation is validated by the size traces, not proved.
-- Offsets and lengths are modelled as natural numbers. For `u64` values the comparisons agree; the places where they
-  could differ are proved not to: the saturating sum in `covered_len`, the saturating multiply in `group_size`
-  (`Layout.groupSize_eq`), and the products in `outboard_size` and the encoder offsets (`Layout.outboardSize_lt`,
-  `Encode.InBounds`).
-- The TLC models are bounded as listed; the Lean theorems are not. The trace checks cover the recorded runs only.
+Every theorem named above has an `#audit_axioms` line, and `#audit_package` covers the rest. The handshake theorems are
+over a free term algebra for the primitives and a Dolev-Yao attacker that owns the node `A`, drops, reorders,
+duplicates, replays and injects every message it can build, and never learns an honest node's long-term or ephemeral
+secrets. The Lean attacker is a superset of the TLA+ one, with any number of sessions, nodes and tickets and any ticket
+store capacity. The TLA+ model is the bounded cross-check and the bridge to the code: `TraceHandshake.tla` and the Lean
+replay run the recorded steps of the real state machines through the same step functions (`HsOps.tla`,
+`HandshakeModel.lean`). The model checker finds a broken authentication binding (a mutation that makes a signature
+independent of the transcript violates `AuthR` in 6617 states), so the properties are not vacuous.
+

@@ -3,6 +3,8 @@ import Vinc.Varint
 import Vinc.Ranges
 import Vinc.Layout
 import Vinc.TraceVerifier
+import Vinc.SecurityTrace
+import Vinc.HandshakeTrace
 
 /-!
 # Trace replay
@@ -89,15 +91,40 @@ private def replayRanges (j : J) (items : List Ranges.Interval) : Except String 
   check (Ranges.containsRange next (← natF j "cs", ← natF j "ce") == (← boolF j "cr")) s!"contains_range of {next}"
   pure next
 
-private def replayFile (path : String) : IO Nat := do
+/-- Replay one file: the number of events that matched the model, and the number of those that were handshake (`hs`) events. -/
+private def replayFile (path : String) : IO (Nat × Nat) := do
   let text ← IO.FS.readFile path
   let mut items : List Ranges.Interval := []
   let mut vs : TraceVerifier.RState := {}
+  let mut sec : SecurityTrace.SecState := {}
   let mut count := 0
+  let mut hsw : HandshakeTrace.W := {}
+  let mut hsCount := 0
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
     if line.trimAscii.isEmpty then continue
+    -- Record-layer events (`rw`, `amp`, `tok`) go to the security replay, which carries its own model state.
+    if let .ok j := parse line then
+      match j.get? "t" |>.bind (·.str?) with
+      | some "hs" =>
+        -- Handshake events (`hs`, written by `trace_handshake`): every step goes through the Lean step functions.
+        match HandshakeTrace.replayEvent j hsw with
+        | .ok w' =>
+          hsw := w'
+          hsCount := hsCount + 1
+          count := count + 1
+          continue
+        | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+      | some t =>
+        if t == "rw" || t == "amp" || t == "tok" then
+          match SecurityTrace.replayEvent j sec with
+          | .ok s' =>
+            sec := s'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+      | none => pure ()
     let r : Except String (List Ranges.Interval × TraceVerifier.RState) := do
       let j ← parse line
       match j.get? "t" with
@@ -116,16 +143,18 @@ private def replayFile (path : String) : IO Nat := do
       vs := vnext
       count := count + 1
     | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
-  pure count
+  pure (count, hsCount)
 
 def main (args : List String) : IO UInt32 := do
   if args.isEmpty then
     IO.eprintln "usage: replay <trace.ndjson>..."
     return 2
   let mut total := 0
+  let mut hsTotal := 0
   for path in args do
-    let n ← replayFile path
-    IO.println s!"replay: {path}: {n} events match the model"
+    let (n, sk) ← replayFile path
+    IO.println s!"replay: {path}: {n} events match the model, {sk} of them handshake steps through the Lean step functions"
     total := total + n
-  IO.println s!"replay: ok, {total} events"
+    hsTotal := hsTotal + sk
+  IO.println s!"replay: ok, {total} events, {hsTotal} handshake steps replayed through the Lean step functions"
   return 0

@@ -58,6 +58,10 @@ name = "trace_verifier"
 path = "trace_verifier.rs"
 
 [[test]]
+name = "trace_handshake"
+path = "trace_handshake.rs"
+
+[[test]]
 name = "crypto_kat"
 path = "crypto_kat.rs"
 
