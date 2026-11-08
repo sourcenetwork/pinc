@@ -9,6 +9,67 @@ no_std_targets := "thumbv7em-none-eabihf wasm32-unknown-unknown"
 default:
     @just --list
 
+# Install everything: Java, swtpm, Python, the pinned Rust toolchain, cargo-nextest, Lean and the TLA+ tools.
+setup: _system _rust _nextest _lean tla-tools
+    @echo "setup: ok"
+
+_system:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    missing=()
+    command -v java >/dev/null || missing+=(java)
+    command -v swtpm >/dev/null || missing+=(swtpm)
+    command -v python3 >/dev/null || missing+=(python3)
+    command -v curl >/dev/null || missing+=(curl)
+    [ ${#missing[@]} -eq 0 ] && { echo "system packages: present"; exit 0; }
+    sudo=""; [ "$(id -u)" -ne 0 ] && sudo="sudo"
+    pkgs=()
+    if command -v pacman >/dev/null; then
+        for m in "${missing[@]}"; do case $m in java) pkgs+=(jre-openjdk-headless);; python3) pkgs+=(python);; *) pkgs+=("$m");; esac; done
+        $sudo pacman -S --needed --noconfirm "${pkgs[@]}"
+    elif command -v apt-get >/dev/null; then
+        for m in "${missing[@]}"; do case $m in java) pkgs+=(default-jre-headless);; *) pkgs+=("$m");; esac; done
+        $sudo apt-get update -q && $sudo apt-get install -y -q "${pkgs[@]}"
+    elif command -v dnf >/dev/null; then
+        for m in "${missing[@]}"; do case $m in java) pkgs+=(java-latest-openjdk-headless);; *) pkgs+=("$m");; esac; done
+        $sudo dnf install -y "${pkgs[@]}"
+    elif command -v brew >/dev/null; then
+        for m in "${missing[@]}"; do case $m in java) pkgs+=(openjdk);; python3) pkgs+=(python);; *) pkgs+=("$m");; esac; done
+        brew install "${pkgs[@]}"
+    else
+        echo "setup: install these with your package manager, then run just setup again: ${missing[*]}" >&2; exit 1
+    fi
+
+_rust:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v rustup >/dev/null; then
+        curl -sSfL https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+        . "$HOME/.cargo/env"
+    fi
+    rustup toolchain install
+
+_nextest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v cargo-nextest >/dev/null && { cargo nextest --version | head -1; exit 0; }
+    case "$(uname -s)" in
+        Linux) curl -sSfL https://get.nexte.st/latest/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin" ;;
+        Darwin) curl -sSfL https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin" ;;
+        *) cargo install --locked cargo-nextest ;;
+    esac
+    cargo nextest --version | head -1
+
+_lean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$HOME/.elan/bin:$PATH"
+    if ! command -v elan >/dev/null; then
+        curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+    fi
+    elan toolchain install "$(cat proofs/lean/lean-toolchain)"
+    (cd proofs/lean && lake --version)
+
 # Everything a change must pass before it is pushed.
 gate: checks test doctest proofs
     @echo "gate: ok"
@@ -84,4 +145,5 @@ tla-tools:
 
 _fetch path url sha:
     [ -f "{{path}}" ] || curl -fsSL -o "{{path}}" "{{url}}"
-    echo "{{sha}}  {{path}}" | sha256sum -c --quiet || { echo "{{path}} does not match its pinned checksum; delete it and run just tla-tools again" >&2; exit 1; }
+    if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi; \
+    echo "{{sha}}  {{path}}" | $sum -c --quiet || { echo "{{path}} does not match its pinned checksum; delete it and run just tla-tools again" >&2; exit 1; }

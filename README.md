@@ -56,6 +56,7 @@ VINC is a library, not a framework:
 The [justfile](justfile) holds every task; CI runs the same recipes.
 
 ```sh
+just setup        # install everything: system packages, the Rust toolchain, cargo-nextest, Lean, the TLA+ tools
 just              # list the recipes
 just gate         # everything a change must pass: checks, tests, doctests, proofs
 just checks       # dependency rules, format, lints, docs, no_std builds, pure Rust
