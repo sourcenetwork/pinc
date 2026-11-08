@@ -11,6 +11,8 @@
 //! - The cubic term is `dt^3 * 4 * mss / 1e10` with `|dt|` clamped to 2^30 ms: the product is below 2^(90+18) = 2^108.
 //! - A growth step accumulates `(target - cwnd) * acked` with both factors below 2^64 (product below 2^128) and
 //!   divides by `cwnd >= 2400`; the remainder is kept so no growth is lost to rounding.
+//! - Application-limited pauses and persistent congestion only assign or compare timestamps with saturating
+//!   arithmetic; the epoch shift is `epoch + (now - since)` capped at `now`, so it cannot overflow or pass `now`.
 //! - A reduction multiplies a window below 2^40 by at most 100: below 2^47, inside `u64`.
 
 use super::MS;
@@ -79,6 +81,8 @@ struct Window {
     reno_rem: u128,
     recovery_start: Option<u64>,
     filter_streak: u8,
+    /// When the sender stopped using the window in this epoch, if it has not resumed yet.
+    idle_since: Option<u64>,
 }
 
 impl Window {
@@ -94,6 +98,7 @@ impl Window {
             reno_rem: 0,
             recovery_start: None,
             filter_streak: 0,
+            idle_since: None,
         }
     }
 }
@@ -158,6 +163,28 @@ impl Cubic {
     /// Start over on a new path: initial window, slow start, no history. The segment size is kept.
     pub fn restart(&mut self) {
         *self = Self::new(self.mss);
+    }
+
+    /// Note that acknowledged data was sent while the window was not in use (the sender was application limited).
+    /// The window does not grow for it; the cubic epoch is paused until growth resumes, so the curve does not jump
+    /// over the idle time.
+    pub fn on_app_limited(&mut self, now: u64) {
+        if self.w.epoch_start.is_some() && self.w.idle_since.is_none() {
+            self.w.idle_since = Some(now);
+        }
+    }
+
+    /// Persistent congestion: collapse the window to [`MIN_CWND`] and forget the cubic state, the slow-start history,
+    /// the delivery-rate samples and any saved response. Slow start follows, up to the current threshold.
+    pub fn on_persistent_congestion(&mut self) {
+        let ssthresh = self.w.ssthresh;
+        self.w = Window::initial();
+        self.w.cwnd = MIN_CWND;
+        self.w.w_est = MIN_CWND;
+        self.w.ssthresh = ssthresh.max(MIN_CWND);
+        self.hystart = HyStart::new();
+        self.delivery = DeliveryRate::new();
+        self.snapshot = None;
     }
 
     /// Whether a congestion response was saved and can still be undone.
@@ -232,8 +259,18 @@ impl Cubic {
         let mss = self.mss;
         let w = &mut self.w;
         let epoch = if let Some(epoch) = w.epoch_start {
-            epoch
+            match w.idle_since.take() {
+                // Resuming after an idle stretch: shift the epoch by the idle time so the curve does not jump.
+                // `since >= epoch` and the shift is at most `now - since`, so the epoch stays at or below `now`.
+                Some(since) if since >= epoch => {
+                    let shifted = epoch.saturating_add(ack.now.saturating_sub(since)).min(ack.now);
+                    w.epoch_start = Some(shifted);
+                    shifted
+                }
+                _ => epoch,
+            }
         } else {
+            w.idle_since = None;
             // First step of an epoch: place K from the gap to the previous maximum.
             w.epoch_start = Some(ack.now);
             if w.w_max > w.cwnd {

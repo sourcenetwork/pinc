@@ -9,6 +9,12 @@
 //!   boundary; a late acknowledgement moves a packet's bytes from lost to acked;
 //! - the cumulative byte counters are `u128` (at most 2^64 packets of at most 2^32 bytes cannot overflow it) and the
 //!   in-flight counter is `u64` (at most `N <= 2^31` packets of at most 2^32 bytes: below 2^63);
+//! - an acknowledgement grows the window only for packets sent while the window was in use (bytes in flight, with
+//!   the packet, at least cwnd minus one segment); acknowledgements of packets sent application limited pause the
+//!   cubic epoch instead;
+//! - persistent congestion (RFC 9002 section 7.6) collapses the window to its minimum and clears the saved response,
+//!   so a later spurious-loss undo cannot restore it; it needs a round-trip sample taken before the lost packets
+//!   were sent and never counts a repair packet or path MTU probe;
 //! - a repair packet or a path MTU probe that is lost is reported with `requeue == false` (the probe with
 //!   `mtu_probe == true`) and never reduces the window.
 
@@ -33,6 +39,7 @@ const PTO_FLOOR_VAR: u64 = MS;
 const PTO_MAX_ACK_DELAY: u64 = 25 * MS;
 const PTO_MAX_SHIFT: u32 = 6;
 const PTO_CAP: u64 = 2 * SECOND;
+const PERSISTENT_PTOS: u64 = 3;
 const PTO_TELL_ENDPOINT: u32 = 3;
 const PTO_GIVE_UP: u32 = 10;
 const GIVE_UP_SILENCE_SLOW: u64 = 20 * SECOND;
@@ -97,6 +104,8 @@ pub struct Summary {
     pub lost_bytes: u64,
     /// Whether a congestion response was undone because every loss of its episode was spurious.
     pub congestion_undone: bool,
+    /// Whether the losses amounted to persistent congestion and the window collapsed to its minimum.
+    pub persistent_congestion: bool,
 }
 
 /// What a timer expiry asks for.
@@ -135,6 +144,8 @@ struct AckScan {
     /// The largest newly acknowledged packet: (number, send time, ack-eliciting, was declared lost).
     newest: Option<(u64, u64, bool, bool)>,
     growth: u64,
+    /// Whether a packet sent while the window was not in use was acknowledged.
+    app_limited: bool,
     new_eliciting: bool,
 }
 
@@ -164,6 +175,8 @@ pub struct Recovery<const MAX_IN_FLIGHT: usize> {
     last_heard: u64,
     paths: [PathKind; MAX_PATHS],
     active: u8,
+    first_sample_at: Option<u64>,
+    pc_barrier: Option<u64>,
 }
 
 impl<const N: usize> Recovery<N> {
@@ -187,6 +200,8 @@ impl<const N: usize> Recovery<N> {
             last_heard: 0,
             paths: [PathKind::Direct; MAX_PATHS],
             active: 0,
+            first_sample_at: None,
+            pc_barrier: None,
         };
         r.refresh_pacer();
         r
@@ -290,6 +305,8 @@ impl<const N: usize> Recovery<N> {
         }
         self.cc.restart();
         self.rtt.reset();
+        self.first_sample_at = None;
+        self.pc_barrier = None;
         self.pacer = Pacer::new(self.cc.mss());
         self.pto_count = 0;
         self.episode = Episode::default();
@@ -335,7 +352,9 @@ impl<const N: usize> Recovery<N> {
             return Err(RecoveryError::PacketNumberNotIncreasing);
         }
         self.ring.trim(p.time);
-        if !self.ring.push(p) {
+        let in_use = p.in_flight
+            && self.acct.in_flight.saturating_add(u64::from(p.size)) >= self.cc.cwnd().saturating_sub(self.cc.mss());
+        if !self.ring.push(p, in_use) {
             return Err(RecoveryError::RingFull);
         }
         self.largest_sent = Some(p.pn);
@@ -390,6 +409,7 @@ impl<const N: usize> Recovery<N> {
             frame_largest,
             newest,
             growth,
+            app_limited,
             new_eliciting,
             ..
         } = scan;
@@ -404,6 +424,7 @@ impl<const N: usize> Recovery<N> {
             let raw = now.saturating_sub(time);
             let raw = if late { raw.min(MAX_RTT_SAMPLE_LATE) } else { raw };
             self.rtt.update(raw, ack_delay);
+            self.first_sample_at.get_or_insert(now);
             sample = Some(raw);
         }
         if new_eliciting {
@@ -412,6 +433,9 @@ impl<const N: usize> Recovery<N> {
         if let (Some(largest_acked), Some(largest_sent)) = (newest.map(|n| n.0), self.largest_sent)
             && s.acked_bytes > 0
         {
+            if app_limited {
+                self.cc.on_app_limited(now);
+            }
             self.cc.on_acked(&AckInput {
                 now,
                 growth_bytes: growth,
@@ -449,6 +473,7 @@ impl<const N: usize> Recovery<N> {
                 State::Lost(_) => true,
             };
             let counted = slot.counted;
+            let slot_limited = slot.cwnd_limited;
             slot.state = State::Done;
             let size = u64::from(sent.size);
             s.acked_packets += 1;
@@ -474,8 +499,11 @@ impl<const N: usize> Recovery<N> {
                         self.eliciting_in_flight -= 1;
                     }
                     let after = recovery_start.is_none_or(|rs| sent.time > rs);
-                    if after {
+                    if after && slot_limited {
                         scan.growth += size;
+                    }
+                    if after && !slot_limited {
+                        scan.app_limited = true;
                     }
                     if recovery_start.is_some() && after {
                         self.episode.closed = true;
@@ -569,8 +597,51 @@ impl<const N: usize> Recovery<N> {
         }
     }
 
+    /// Persistent congestion: ack-eliciting packets sent over a period longer than three probe timeouts (without
+    /// backoff) were all lost, with none acknowledged or still unresolved in between, and every one sent after the
+    /// first round-trip sample. Repair packets and path MTU probes neither extend nor break a run. Returns the send
+    /// time of the last lost packet of the run.
+    fn persistent_congestion(&self) -> Option<u64> {
+        let first_sample = self.first_sample_at?;
+        let floor = self.pc_barrier.map_or(first_sample, |b| b.max(first_sample));
+        let var = self.rtt.rttvar().saturating_mul(4).max(PTO_FLOOR_VAR);
+        let span = self
+            .rtt
+            .smoothed()
+            .saturating_add(var)
+            .saturating_add(PTO_MAX_ACK_DELAY)
+            .saturating_mul(PERSISTENT_PTOS);
+        let mut run: Option<(u64, u64)> = None;
+        let mut i = 0;
+        while let Some(slot) = self.ring.get(i) {
+            i += 1;
+            let sent = &slot.sent;
+            if !sent.ack_eliciting || sent.is_repair || sent.is_mtu_probe {
+                continue;
+            }
+            if matches!(slot.state, State::Lost(_)) && sent.time > floor {
+                let (start, _) = run.unwrap_or((sent.time, sent.time));
+                run = Some((start, sent.time));
+                if sent.time.saturating_sub(start) > span {
+                    return Some(sent.time);
+                }
+            } else {
+                run = None;
+            }
+        }
+        None
+    }
+
     /// Undo a fully spurious congestion response, drop finished slots and refresh the pacer.
     fn finish(&mut self, now: u64, s: &mut Summary) {
+        if s.lost_packets > 0
+            && let Some(last) = self.persistent_congestion()
+        {
+            self.cc.on_persistent_congestion();
+            self.episode = Episode::default();
+            self.pc_barrier = Some(last);
+            s.persistent_congestion = true;
+        }
         let e = self.episode;
         if e.closed && e.lost > 0 && e.spurious == e.lost && self.cc.undo() {
             self.episode = Episode::default();

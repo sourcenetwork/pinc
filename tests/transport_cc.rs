@@ -341,6 +341,90 @@ fn slow_start_doubles_per_acknowledged_window() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Application-limited pause and persistent congestion
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A controller part-way through regrowth after a loss at 600 000 bytes; returns it with the current time.
+fn regrowing() -> (Cubic, u64) {
+    let mut c = grown_to(600_000);
+    let loss_at = 5 * SECOND;
+    c.on_congestion_event(loss_at, loss_at - 1, 40 * MS, Some(10 * MS));
+    let mut now = loss_at;
+    for _ in 0..1000 {
+        now += MS;
+        let bytes = c.cwnd() / 10;
+        c.on_acked(&AckInput {
+            now,
+            growth_bytes: bytes,
+            acked_bytes: bytes,
+            min_rtt: Some(10 * MS),
+            ..AckInput::default()
+        });
+    }
+    (c, now)
+}
+
+#[test]
+fn the_cubic_curve_does_not_jump_over_an_idle_stretch() {
+    let resume = |pause: bool| {
+        let (mut c, now) = regrowing();
+        let at_pause = c.cwnd();
+        if pause {
+            c.on_app_limited(now);
+        }
+        let later = now + 20 * SECOND;
+        c.on_acked(&AckInput {
+            now: later,
+            growth_bytes: c.cwnd(),
+            acked_bytes: c.cwnd(),
+            min_rtt: Some(10 * MS),
+            ..AckInput::default()
+        });
+        (at_pause, c.cwnd())
+    };
+    let (at_pause, paused) = resume(true);
+    let (_, unpaused) = resume(false);
+    assert!(paused <= at_pause + at_pause / 50, "paused: {at_pause} -> {paused}");
+    assert!(
+        unpaused > paused + paused / 10,
+        "without the pause the curve jumps: {unpaused} vs {paused}"
+    );
+}
+
+#[test]
+fn app_limited_before_an_epoch_is_ignored() {
+    let mut c = Cubic::new(MSS);
+    c.on_app_limited(SECOND);
+    c.on_acked(&AckInput {
+        now: 2 * SECOND,
+        growth_bytes: 1200,
+        ..AckInput::default()
+    });
+    assert_eq!(c.cwnd(), INITIAL_CWND + 1200);
+}
+
+#[test]
+fn persistent_congestion_resets_the_controller() {
+    let mut c = grown_to(500_000);
+    c.on_congestion_event(SECOND, SECOND - 1, 50 * MS, Some(10 * MS));
+    let ssthresh = c.ssthresh();
+    assert!(c.can_undo());
+    c.on_persistent_congestion();
+    assert_eq!(c.cwnd(), MIN_CWND);
+    assert_eq!(c.ssthresh(), ssthresh);
+    assert!(c.in_slow_start());
+    assert!(c.recovery_start().is_none());
+    assert!(!c.can_undo());
+    assert!(c.delivery_rate().is_none());
+    // Slow start grows it again.
+    c.on_acked(&AckInput {
+        growth_bytes: 1200,
+        ..AckInput::default()
+    });
+    assert_eq!(c.cwnd(), MIN_CWND + 1200);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Caps and restart
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -512,6 +596,8 @@ enum CcOp {
     Undo,
     Restart,
     Mss(u64),
+    AppLimited(u64),
+    Persistent,
 }
 
 fn big() -> impl Strategy<Value = u64> {
@@ -534,6 +620,8 @@ fn cc_op() -> impl Strategy<Value = CcOp> {
         1 => Just(CcOp::Undo),
         1 => Just(CcOp::Restart),
         1 => big().prop_map(CcOp::Mss),
+        1 => big().prop_map(CcOp::AppLimited),
+        1 => Just(CcOp::Persistent),
     ]
 }
 
@@ -552,6 +640,8 @@ proptest! {
                 CcOp::Undo => { c.undo(); }
                 CcOp::Restart => c.restart(),
                 CcOp::Mss(m) => c.set_mss(m),
+                CcOp::AppLimited(t) => c.on_app_limited(t),
+                CcOp::Persistent => c.on_persistent_congestion(),
             }
             prop_assert!(c.cwnd() >= MIN_CWND, "cwnd {} below the minimum", c.cwnd());
             prop_assert!(c.cwnd() <= MAX_CWND);

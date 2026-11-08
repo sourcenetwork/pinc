@@ -17,6 +17,7 @@ use vinc_transport::recovery::{
 };
 
 mod recovery_ack;
+mod recovery_congestion;
 
 use recovery_ack::rx;
 

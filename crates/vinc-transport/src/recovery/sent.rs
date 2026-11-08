@@ -49,6 +49,8 @@ pub(crate) struct Slot {
     pub(crate) state: State,
     /// Whether the loss was counted as a congestion signal (so a late acknowledgement can undo it).
     pub(crate) counted: bool,
+    /// Whether the window was in use when the packet was sent (its acknowledgement may grow the window).
+    pub(crate) cwnd_limited: bool,
 }
 
 const EMPTY: Slot = Slot {
@@ -65,6 +67,7 @@ const EMPTY: Slot = Slot {
     },
     state: State::Done,
     counted: false,
+    cwnd_limited: false,
 };
 
 /// A ring of at most `N` sent packets.
@@ -141,7 +144,7 @@ impl<const N: usize> SentRing<N> {
     }
 
     /// Append a packet. Returns false when the ring is full of packets still in flight.
-    pub(crate) fn push(&mut self, sent: Sent) -> bool {
+    pub(crate) fn push(&mut self, sent: Sent, cwnd_limited: bool) -> bool {
         while self.len == N {
             if self.get(0).is_some_and(|s| s.state == State::InFlight) {
                 return false;
@@ -154,6 +157,7 @@ impl<const N: usize> SentRing<N> {
                 sent,
                 state: State::InFlight,
                 counted: false,
+                cwnd_limited,
             };
         }
         self.len += 1;
