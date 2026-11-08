@@ -34,7 +34,7 @@ VINC is a library, not a framework:
 |---|---|---|---|---|
 | `vinc-wire` | encodings | varints and a strict canonical DAG-CBOR codec, parsed in place from borrowed bytes | yes | in progress |
 | `vinc-dag` | lite DAG | DefraDB blocks and CIDs, value roots and range proofs, verified-range sets, reconciliation summaries; no networking code, usable on its own | yes, heap-free mode | in progress |
-| `vinc-crypto` | primitives | the vetted primitives behind one static interface: X25519, ML-KEM-768, Ed25519, ChaCha20-Poly1305, BLAKE3 | yes | planned |
+| `vinc-crypto` | primitives | pure-Rust RustCrypto primitives behind one static `Provider` trait: ChaCha20-Poly1305 and AES-128-GCM, header protection, SHA-256, X25519, ML-KEM-768; Ed25519, P-256 and ML-DSA-65 identities with node ids; a BLAKE3 KDF, an injective transcript hash and a seeded DRBG; no allocation, no randomness inside | yes | in progress |
 | `vinc-security` | security | hybrid handshake, key schedule, record protection, replay window, address validation, anti-amplification | yes | planned |
 | `vinc-transport` | VINCER | streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids, migration | yes | planned |
 | `vinc-core` | endpoint | the SANS-IO endpoint: host interface, protocol registration and dispatch, commands, events and queries | yes | planned |

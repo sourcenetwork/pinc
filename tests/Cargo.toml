@@ -14,10 +14,13 @@ path = "support/lib.rs"
 [dependencies]
 vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["alloc"] }
+vinc-crypto = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 blake3 = { workspace = true, features = ["std"] }
+ml-kem = { workspace = true }
+ml-dsa = { workspace = true }
 
 [[test]]
 name = "wire"
@@ -42,6 +45,22 @@ path = "dag_car.rs"
 [[test]]
 name = "trace_ranges"
 path = "trace_ranges.rs"
+
+[[test]]
+name = "crypto_kat"
+path = "crypto_kat.rs"
+
+[[test]]
+name = "crypto_kem"
+path = "crypto_kem.rs"
+
+[[test]]
+name = "crypto_sig"
+path = "crypto_sig.rs"
+
+[[test]]
+name = "crypto_misc"
+path = "crypto_misc.rs"
 
 [lints]
 workspace = true

@@ -10,6 +10,7 @@ autobenches = false
 [dependencies]
 vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["std"] }
+vinc-crypto = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -21,6 +22,10 @@ harness = false
 
 [[bench]]
 name = "dag"
+harness = false
+
+[[bench]]
+name = "crypto"
 harness = false
 
 [lints]
