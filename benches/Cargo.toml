@@ -12,7 +12,7 @@ vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["std"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
-vinc-transport = { workspace = true }
+vinc-transport = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -36,6 +36,10 @@ harness = false
 
 [[bench]]
 name = "transport_packet"
+harness = false
+
+[[bench]]
+name = "transport_stream"
 harness = false
 
 [lints]
