@@ -4,3 +4,6 @@
 /proofs/tla/states
 /proofs/tla/*.out
 /distributed/results/*.tmp
+states/
+*.ndjson
+*_TTrace_*

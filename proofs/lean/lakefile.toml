@@ -1,0 +1,10 @@
+name = "vinc"
+version = "0.1.0"
+defaultTargets = ["Vinc", "replay"]
+
+[[lean_lib]]
+name = "Vinc"
+
+[[lean_exe]]
+name = "replay"
+root = "Replay"

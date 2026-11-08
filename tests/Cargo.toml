@@ -40,5 +40,9 @@ path = "dag_block.rs"
 name = "dag_car"
 path = "dag_car.rs"
 
+[[test]]
+name = "trace_ranges"
+path = "trace_ranges.rs"
+
 [lints]
 workspace = true
