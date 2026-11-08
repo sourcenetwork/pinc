@@ -27,6 +27,8 @@ pub enum TreeError {
     RootMismatch,
     /// The proof stack is exhausted; unreachable for any layout this crate accepts.
     StackOverflow,
+    /// The encoded stream would be longer than `u64::MAX` bytes.
+    EncodedTooLong,
 }
 
 impl fmt::Display for TreeError {
@@ -42,6 +44,7 @@ impl fmt::Display for TreeError {
             Self::GroupMismatch => "data group does not match its expected hash",
             Self::RootMismatch => "root does not match the empty value",
             Self::StackOverflow => "proof stack exhausted",
+            Self::EncodedTooLong => "encoded stream is longer than 2^64 - 1 bytes",
         })
     }
 }

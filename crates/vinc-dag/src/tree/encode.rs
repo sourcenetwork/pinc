@@ -110,14 +110,15 @@ impl Iterator for RangeEncoder {
 /// The size in bytes of the encoded stream for `range` of a value with `layout`.
 ///
 /// # Errors
-/// [`TreeError::RangeOutOfBounds`] if the range is reversed or ends past the value.
+/// [`TreeError::RangeOutOfBounds`] if the range is reversed or ends past the value, and
+/// [`TreeError::EncodedTooLong`] if the encoded stream would be longer than `u64::MAX` bytes.
 pub fn encoded_len(layout: Layout, range: &Range<u64>) -> Result<u64, TreeError> {
     RangeEncoder::new(layout, range)?.try_fold(0u64, |acc, step| {
         let n = match step? {
             Step::Parent { .. } => PARENT_LEN as u64,
             Step::Group { len, .. } => len,
         };
-        Ok(acc + n)
+        acc.checked_add(n).ok_or(TreeError::EncodedTooLong)
     })
 }
 
