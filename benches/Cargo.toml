@@ -42,5 +42,9 @@ harness = false
 name = "transport_stream"
 harness = false
 
+[[bench]]
+name = "transport_recovery"
+harness = false
+
 [lints]
 workspace = true

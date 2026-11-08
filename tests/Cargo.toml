@@ -110,5 +110,13 @@ path = "transport_stream.rs"
 name = "transport_pool"
 path = "transport_pool.rs"
 
+[[test]]
+name = "transport_recovery"
+path = "transport_recovery.rs"
+
+[[test]]
+name = "transport_cc"
+path = "transport_cc.rs"
+
 [lints]
 workspace = true
