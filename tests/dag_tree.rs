@@ -409,6 +409,34 @@ fn verified_ranges_basics() {
     assert!(!m.contains(u64::MAX));
 }
 
+#[test]
+fn fast_and_slow_paths_release_identical_bytes() {
+    let v = data(33, 70_000);
+    let (root, ob) = build_outboard_vec(&v, 4).unwrap();
+    let len = v.len() as u64;
+    for range in [0..70_000, 3000..40_000, 69_999..70_000] {
+        let s = stream(&v, &ob, 4, &range);
+        // The whole stream at once takes the fast path for every item that fits; one byte at a time never does.
+        let whole = verify::<16384>(root, len, &range, &s, s.len()).unwrap();
+        let bytewise = verify::<16384>(root, len, &range, &s, 1).unwrap();
+        let odd = verify::<16384>(root, len, &range, &s, 4097).unwrap();
+        assert_eq!(whole, bytewise);
+        assert_eq!(whole, odd);
+        for (offset, bytes) in &whole {
+            assert_eq!(bytes[..], v[*offset as usize..*offset as usize + bytes.len()]);
+        }
+    }
+    // A corrupt item fails the same way on both paths.
+    let range = 0..70_000;
+    let mut s = stream(&v, &ob, 4, &range);
+    let last = s.len() - 1;
+    s[last] ^= 1;
+    assert_eq!(
+        verify::<16384>(root, len, &range, &s, s.len()).unwrap_err(),
+        verify::<16384>(root, len, &range, &s, 1).unwrap_err()
+    );
+}
+
 // Zero allocations on the verification and range-set paths.
 
 #[test]

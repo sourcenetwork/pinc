@@ -4,7 +4,8 @@
 //! `GROUP` bytes (a parent pair or a group is assembled there) and a fixed stack of at most 64 pending nodes,
 //! each carrying the chaining value it must hash to; there is no heap. A group's bytes are handed out only after
 //! they hash to the chaining value committed by already-verified parents, so no unverified byte reaches the
-//! caller. Any mismatch returns a typed error, releases nothing of the bad item and leaves the verifier failed.
+//! caller. When nothing is buffered and the input holds the whole next item, the item is hashed straight from the
+//! input and released as a borrow of it, with no copy. Any mismatch returns a typed error, releases nothing of the bad item and leaves the verifier failed.
 //!
 //! The value length is not committed separately by a BLAKE3 root: it is authenticated only by a proof that
 //! reaches the last group (whose size and position bind it). A proof of earlier groups only authenticates those
@@ -44,16 +45,22 @@ pub struct Fed<'a> {
     pub verified: Option<Verified<'a>>,
 }
 
+/// The part of the verifier that a verified item advances, apart from the item buffer.
+#[derive(Debug, Clone)]
+struct Walk {
+    layout: Layout,
+    first: u64,
+    last: u64,
+    stack: Stack<Node, STACK_CAP>,
+}
+
 /// Verifies a range stream against a root, one item at a time, with `GROUP` bytes of buffer.
 ///
 /// `GROUP` must be `1024 << log` for a supported log (the group size); [`RangeVerifier::new`] rejects others.
 #[derive(Debug, Clone)]
 pub struct RangeVerifier<const GROUP: usize> {
-    layout: Layout,
-    first: u64,
-    last: u64,
+    walk: Walk,
     root: Cv,
-    stack: Stack<Node, STACK_CAP>,
     buf: [u8; GROUP],
     filled: usize,
     failed: Option<TreeError>,
@@ -85,11 +92,13 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
             })?;
         }
         Ok(Self {
-            layout,
-            first: groups.start,
-            last: groups.end,
+            walk: Walk {
+                layout,
+                first: groups.start,
+                last: groups.end,
+                stack,
+            },
             root,
-            stack,
             buf: [0; GROUP],
             filled: 0,
             failed: None,
@@ -98,12 +107,12 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
 
     /// The layout of the value being verified.
     pub const fn layout(&self) -> &Layout {
-        &self.layout
+        &self.walk.layout
     }
 
     /// True once every group of the range has been verified and released.
     pub fn is_complete(&self) -> bool {
-        self.failed.is_none() && self.stack.len() == 0
+        self.failed.is_none() && self.walk.stack.len() == 0
     }
 
     /// How many more bytes the current stream item needs; `None` when complete or failed.
@@ -111,16 +120,17 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
         if self.failed.is_some() {
             return None;
         }
-        self.next_item().map(|(_, need)| need - self.filled)
+        self.walk.next_item().map(|(_, need)| need - self.filled)
     }
 
     /// Feed stream bytes. At most one item (a parent pair or a group) is completed per call; call again with the
-    /// unconsumed tail. A completed group is returned only after it verified.
+    /// unconsumed tail. A completed group is returned only after it verified. When nothing is buffered and `input`
+    /// holds the whole next item, the group is borrowed from `input`; otherwise it is borrowed from the verifier.
     ///
     /// # Errors
     /// [`TreeError::ParentMismatch`] or [`TreeError::GroupMismatch`] on a bad item, after which every call
     /// returns the same error; [`TreeError::TooMuchData`] if the stream is already complete and `input` is not empty.
-    pub fn feed(&mut self, input: &[u8]) -> Result<Fed<'_>, TreeError> {
+    pub fn feed<'s>(&'s mut self, input: &'s [u8]) -> Result<Fed<'s>, TreeError> {
         if let Some(e) = self.failed {
             return Err(e);
         }
@@ -130,9 +140,18 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
                 verified: None,
             });
         }
-        let Some((node, need)) = self.next_item() else {
+        let Some((node, need)) = self.walk.next_item() else {
             return Err(TreeError::TooMuchData);
         };
+        if self.filled == 0
+            && let Some((item, _)) = input.split_at_checked(need)
+        {
+            let released = self.walk.complete(node, item).inspect_err(|&e| self.failed = Some(e))?;
+            return Ok(Fed {
+                consumed: need,
+                verified: released.map(|offset| Verified { offset, data: item }),
+            });
+        }
         let take = input.len().min(need - self.filled);
         let (head, _) = input.split_at_checked(take).ok_or(TreeError::TooMuchData)?;
         let dst = self
@@ -148,26 +167,21 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
             });
         }
         self.filled = 0;
-        let released = match self.complete(node, need) {
-            Ok(released) => released,
-            Err(e) => {
-                self.failed = Some(e);
-                return Err(e);
-            }
-        };
-        let verified = match released {
-            Some(offset) => Some(Verified {
-                offset,
-                data: self.buf.get(..need).ok_or(TreeError::OutputTooSmall)?,
-            }),
-            None => None,
-        };
+        let item = self.buf.get(..need).ok_or(TreeError::OutputTooSmall)?;
+        let released = self.walk.complete(node, item).inspect_err(|&e| self.failed = Some(e))?;
         Ok(Fed {
             consumed: take,
-            verified,
+            verified: released.map(|offset| Verified { offset, data: item }),
         })
     }
 
+    /// The root this verifier checks against.
+    pub const fn root(&self) -> &Cv {
+        &self.root
+    }
+}
+
+impl Walk {
     fn next_item(&self) -> Option<(Node, usize)> {
         let node = self.stack.top()?;
         let size = if node.hi - node.lo == 1 {
@@ -178,10 +192,9 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
         Some((node, usize::try_from(size).ok()?))
     }
 
-    fn complete(&mut self, node: Node, need: usize) -> Result<Option<u64>, TreeError> {
+    fn complete(&mut self, node: Node, data: &[u8]) -> Result<Option<u64>, TreeError> {
         let is_root = (node.lo, node.hi) == (0, self.layout.groups());
         if node.hi - node.lo == 1 {
-            let data = self.buf.get(..need).ok_or(TreeError::GroupMismatch)?;
             let mut hasher = Hasher::new();
             let cv = if is_root {
                 *hasher.update(data).finalize().as_bytes()
@@ -195,7 +208,7 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
             self.stack.pop();
             return Ok(Some(node.lo * self.layout.group_len()));
         }
-        let (left, rest) = self.buf.split_first_chunk::<32>().ok_or(TreeError::ParentMismatch)?;
+        let (left, rest) = data.split_first_chunk::<32>().ok_or(TreeError::ParentMismatch)?;
         let (right, _) = rest.split_first_chunk::<32>().ok_or(TreeError::ParentMismatch)?;
         let cv = if is_root {
             *merge_subtrees_root(left, right, Mode::Hash).as_bytes()
@@ -223,10 +236,5 @@ impl<const GROUP: usize> RangeVerifier<GROUP> {
             })?;
         }
         Ok(None)
-    }
-
-    /// The root this verifier checks against.
-    pub const fn root(&self) -> &Cv {
-        &self.root
     }
 }
