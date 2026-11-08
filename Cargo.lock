@@ -1327,6 +1327,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpm2-protocol"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "492aa0f6c41f20a0f391bf9d8844b1e3db1b078cd63ebf333c8a5c9e9b1479a5"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1396,6 +1402,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-keystore"
+version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "p256",
+ "tpm2-protocol",
+ "vinc-crypto",
+ "zeroize",
+]
+
+[[package]]
 name = "vinc-tests"
 version = "0.1.0"
 dependencies = [
@@ -1405,6 +1422,7 @@ dependencies = [
  "proptest",
  "vinc-crypto",
  "vinc-dag",
+ "vinc-keystore",
  "vinc-wire",
 ]
 

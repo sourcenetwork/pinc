@@ -1,0 +1,23 @@
+[package]
+name = "vinc-keystore"
+description = "Where VINC's long-term keys live: a software key store and, behind the hwenc feature, a pure-Rust TPM 2.0 backend"
+keywords = ["crypto", "keystore", "tpm"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Off by default: without it no TPM code is compiled.
+hwenc = ["dep:tpm2-protocol", "dep:p256"]
+
+[dependencies]
+vinc-crypto = { workspace = true }
+zeroize = { workspace = true, features = ["alloc"] }
+getrandom = { workspace = true }
+tpm2-protocol = { workspace = true, optional = true }
+p256 = { workspace = true, optional = true, features = ["ecdsa"] }
+
+[lints]
+workspace = true

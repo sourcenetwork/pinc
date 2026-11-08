@@ -11,10 +11,15 @@ autobenches = false
 [lib]
 path = "support/lib.rs"
 
+[features]
+# Compiles the TPM backend and its tests (they need `swtpm` installed).
+hwenc = ["vinc-keystore/hwenc"]
+
 [dependencies]
 vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true }
+vinc-keystore = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -65,6 +70,15 @@ path = "crypto_sig.rs"
 [[test]]
 name = "crypto_misc"
 path = "crypto_misc.rs"
+
+[[test]]
+name = "keystore_software"
+path = "keystore_software.rs"
+
+[[test]]
+name = "keystore_tpm"
+path = "keystore_tpm.rs"
+required-features = ["hwenc"]
 
 [lints]
 workspace = true
