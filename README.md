@@ -157,3 +157,38 @@ replay run the recorded steps of the real state machines through the same step f
 `HandshakeModel.lean`). The model checker finds a broken authentication binding (a mutation that makes a signature
 independent of the transcript violates `AuthR` in 6617 states), so the properties are not vacuous.
 
+## Assumptions
+
+The only things taken on trust are the dependencies, not this repository's code:
+- The cryptographic primitives behave as specified: BLAKE3 is collision resistant and a PRF (the transcript hash, the
+  key derivation and the binder tags), X25519 and ML-KEM-768 give shared secrets only the key holders know, the AEADs
+  (ChaCha20-Poly1305, AES-128-GCM) are ideal authenticated encryption, the signature algorithms are unforgeable. These
+  appear as the free term algebra and the Dolev-Yao `Known` predicate in the handshake model, as `HashInj` and
+  `IdealAead` hypotheses in Lean, and as `Tree.CollisionFree` for the verifier.
+- Rust `core` and `std` semantics: integer arithmetic, `slice` and `partition_point`, `u64::leading_zeros`, and the
+  `#![forbid(unsafe_code)]` guarantee.
+
+## Being closed
+
+These P1 items are still open and are being worked on; they are listed so nothing is hidden:
+- The Lean model of the verifier works on completed stream items. The buffer, partial feeds and the zero-copy path are
+  validated by trace (the buffer arithmetic and the fast-path test in TLC and the Lean replay, over the recorded
+  runs), not proved for all inputs, and the model holds no bytes: group bytes and chaining values are ids chosen by
+  the test.
+- `encode_range`'s conversions between `u64` and `usize` (on a target where `usize` is narrower than 64 bits) and the
+  caller's output buffer size (`OutputTooSmall`) are not modelled.
+- `OutboardBuilder`: the per-piece bookkeeping of `update` (`in_group`, `consumed`, splitting input at group
+  boundaries, `TooMuchData`, `Incomplete`, `OutboardSize`), the hasher state and the empty value are not modelled, and
+  the builder has no trace validation.
+- `left_groups` and `preorder_index` are crate private, so no test calls them: they are checked indirectly, through
+  the node walk of the verifier model and the offsets of the public encoder steps in the traces.
+- `Layout::depth` uses `u64::leading_zeros`, specified here by the position of the top set bit; the standard
+  library's implementation is validated by the size traces, not proved.
+- Offsets and lengths are modelled as natural numbers. For `u64` values the comparisons agree; the places where they
+  could differ are proved not to: the saturating sum in `covered_len`, the saturating multiply in `group_size`
+  (`Layout.groupSize_eq`), and the products in `outboard_size` and the encoder offsets (`Layout.outboardSize_lt`,
+  `Encode.InBounds`).
+- The TLC models are bounded as listed (the Lean theorems are not); the trace checks cover the recorded runs only.
+
+Not covered by the handshake traces: the `IRetransmitFull` step, an attacker identity as a session, ticket expiry and
+ticket-store eviction (the Lean model of the store covers eviction and the bounded model covers expiry).
