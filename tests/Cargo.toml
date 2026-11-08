@@ -1,0 +1,26 @@
+[package]
+name = "vinc-tests"
+description = "Every test of the VINC workspace: integration, property, scenario and trace tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+autotests = false
+autobenches = false
+
+[lib]
+path = "support/lib.rs"
+
+[dependencies]
+vinc-wire = { path = "../crates/vinc-wire" }
+
+[dev-dependencies]
+proptest = "1"
+allocation-counter = "0.8"
+
+[[test]]
+name = "wire"
+path = "wire.rs"
+
+[lints]
+workspace = true
