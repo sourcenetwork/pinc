@@ -12,9 +12,19 @@
 //! takes under that oracle. The two paths are told apart by where a released group's bytes live: the fast path
 //! returns a borrow of the input, the buffered path a borrow of the verifier's buffer (`ptr`).
 //!
+//! Every feed event also records the stream offset of the input (`pos`) and, when the call completed a stream item, the
+//! offset of that item's first byte (`istart`), so the Lean replay can run the byte-level model of `feed` on the real
+//! offsets: the buffer, `filled`, the fast path and the slow path.
+//!
+//! Two more files are written next to the verifier runs. `encoder.ndjson` holds the complete step list of
+//! `RangeEncoder` for layouts of every size up to `u64::MAX` bytes (no value is needed to walk the tree): each
+//! parent step is `64 * preorder position` of a node and each group step names a group, so the lists expose the
+//! `left_groups` split of every node visited and the position of every parent. `encout.ndjson` holds `encode_range`
+//! with output buffers of every size around the stream's length: `OutputTooSmall` exactly when the buffer is short.
+//!
 //! Every run is also checked here against the genuine value, so the test is meaningful without the proof tools.
 //! The traces are written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written. The
-//! same file carries the `Layout` size cases (`groups`, `depth`, `outboard_size`, `group_size`).
+//! same directory gets the `Layout` size cases (`groups`, `depth`, `outboard_size`, `group_size`).
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -226,6 +236,7 @@ fn run_case<const G: usize>(
     let mut empty_first = stream.is_empty() || below(rng, 4) == 0;
     while pos < stream.len() || empty_first {
         let nl0 = v.next_len();
+        let (call_pos, call_item_start) = (pos, item_start);
         let want = if empty_first {
             0
         } else {
@@ -308,8 +319,13 @@ fn run_case<const G: usize>(
         }
         let _ = writeln!(
             tr.out,
-            "{{\"t\":\"vfeed\",\"run\":{run},\"ilen\":{},\"fast\":{fast},\"nl0\":{},\"out\":\"{out}\",\"err\":\"{err_name}\",\"consumed\":{},\"off\":{},\"ptr\":\"{ptr}\",\"rd\":{rd},\"nl\":{},\"cmp\":{cmp},\"key\":{key},\"hout\":{hout},\"item\":{item},\"step\":{}}}",
+            "{{\"t\":\"vfeed\",\"run\":{run},\"ilen\":{},\"pos\":{call_pos},\"istart\":{},\"fast\":{fast},\"nl0\":{},\"out\":\"{out}\",\"err\":\"{err_name}\",\"consumed\":{},\"off\":{},\"ptr\":\"{ptr}\",\"rd\":{rd},\"nl\":{},\"cmp\":{cmp},\"key\":{key},\"hout\":{hout},\"item\":{item},\"step\":{}}}",
             input.len(),
+            if completed {
+                i64::try_from(call_item_start).unwrap()
+            } else {
+                -1
+            },
             json_u64(nl0.map(|x| x as u64)),
             json_u64(consumed.map(|x| x as u64)),
             json_u64(off),
@@ -424,6 +440,150 @@ fn verifier_traces() -> Trace {
     tr
 }
 
+/// One `encoder` event: the complete step list of `RangeEncoder` for `range` of a value of `len` bytes. The encoder
+/// needs only the layout, so `len` may be anything up to `u64::MAX`. The steps are checked here against the layout:
+/// the group steps are exactly the groups of the range, in order, and every parent offset is a multiple of 64.
+fn emit_encoder(out: &mut String, len: u64, log: u32, range: Range<u64>) {
+    let layout = Layout::new(len, log).unwrap();
+    let steps: Vec<Step> = RangeEncoder::new(layout, &range).unwrap().map(Result::unwrap).collect();
+    let groups = layout.group_range(&range).unwrap();
+    let glen = layout.group_len();
+    let seen: Vec<u64> = steps
+        .iter()
+        .filter_map(|s| match *s {
+            Step::Group { offset, len } => {
+                assert_eq!(len, layout.group_size(offset / glen));
+                Some(offset / glen)
+            }
+            Step::Parent { outboard_offset } => {
+                assert_eq!(outboard_offset % 64, 0);
+                assert!(outboard_offset < layout.outboard_size());
+                None
+            }
+        })
+        .collect();
+    assert!(seen.iter().copied().eq(groups.start..groups.end));
+    let body: Vec<String> = steps.iter().map(|s| step_json(Some(s))).collect();
+    let _ = writeln!(
+        out,
+        "{{\"t\":\"enc\",\"len\":{len},\"log\":{log},\"s\":{},\"e\":{},\"steps\":[{}]}}",
+        range.start,
+        range.end,
+        body.join(",")
+    );
+}
+
+/// `RangeEncoder` step lists over layouts from one group to `2^54` groups.
+fn encoder_traces() -> String {
+    let mut out = String::new();
+    let mut rng = SplitMix64::new(0xe4c0_de01);
+    // Every tree up to 70 groups over its whole range, and narrow ranges in it.
+    for n in 1..=70u64 {
+        let log = (n % 21) as u32;
+        let g = 1024u64 << log;
+        for len in [n * g, (n - 1) * g + 1 + below(&mut rng, g)] {
+            emit_encoder(&mut out, len, log, 0..len);
+            emit_encoder(&mut out, len, log, 0..1);
+            emit_encoder(&mut out, len, log, len - 1..len);
+            let a = below(&mut rng, len);
+            emit_encoder(&mut out, len, log, a..a + 1 + below(&mut rng, len - a));
+            emit_encoder(&mut out, len, log, a..a);
+        }
+    }
+    // Trees of 71 to 1500 groups: a few ranges each, the whole tree for some.
+    for _ in 0..60 {
+        let log = below(&mut rng, 4) as u32;
+        let g = 1024u64 << log;
+        let n = 71 + below(&mut rng, 1430);
+        let len = (n - 1) * g + 1 + below(&mut rng, g);
+        if n <= 300 {
+            emit_encoder(&mut out, len, log, 0..len);
+        }
+        let a = below(&mut rng, len);
+        emit_encoder(&mut out, len, log, a..a + 1 + below(&mut rng, (len - a).min(40 * g)));
+    }
+    // Huge trees, up to 2^54 groups (a value of u64::MAX bytes): around every power of two, with narrow ranges at
+    // the start, the end and in the middle.
+    for log in [0u32, 0, 1, 3, 7, 12, 20] {
+        let g = 1024u64 << log;
+        let max_n = u64::MAX.div_ceil(g);
+        let mut counts = vec![max_n, max_n - 1, 1 + below(&mut rng, max_n)];
+        for k in 1..=max_n.ilog2() {
+            let p = 1u64 << k;
+            counts.extend([p - 1, p, p + 1].into_iter().filter(|&c| c >= 1 && c <= max_n));
+        }
+        for n in counts {
+            let len = if n == max_n {
+                u64::MAX
+            } else {
+                (n - 1) * g + 1 + below(&mut rng, g)
+            };
+            assert_eq!(Layout::new(len, log).unwrap().groups(), n);
+            let a = below(&mut rng, len);
+            let width = (below(&mut rng, 3 * g)).min(len - a - 1) + 1;
+            for range in [0..1, len - 1..len, a..a + width, a..a, 0..len.min(2 * g + 1)] {
+                emit_encoder(&mut out, len, log, range);
+            }
+        }
+    }
+    out
+}
+
+/// `encode_range` with output buffers of every size around the stream's length, on a real value and outboard.
+fn encout_traces() -> String {
+    let mut out = String::new();
+    let mut rng = SplitMix64::new(0x0e07_5eed);
+    for _ in 0..160 {
+        let log = below(&mut rng, 3) as u32;
+        let g = 1024u64 << log;
+        let groups = below(&mut rng, 13);
+        let len = match below(&mut rng, 3) {
+            0 => groups * g,
+            _ if groups == 0 => 0,
+            _ => (groups - 1) * g + 1 + below(&mut rng, g),
+        };
+        let mut value = vec![0u8; len as usize];
+        rng.fill(&mut value);
+        let (_, outboard) = build_outboard_vec(&value, log).unwrap();
+        let layout = Layout::new(len, log).unwrap();
+        let a = below(&mut rng, len + 1);
+        let range = match below(&mut rng, 3) {
+            0 => 0..len,
+            1 => a..a,
+            _ => a..a + below(&mut rng, len - a + 1),
+        };
+        let exact = encoded_len(layout, &range).unwrap() as usize;
+        let mut sizes = vec![
+            exact,
+            exact.saturating_sub(1),
+            0,
+            exact + 1 + below(&mut rng, 10) as usize,
+        ];
+        sizes.push(below(&mut rng, exact as u64 + 1) as usize);
+        for olen in sizes {
+            let mut buf = vec![0xaa; olen];
+            let res = encode_range(&value, &outboard, log, &range, &mut buf);
+            let verdict = match res {
+                Ok(n) => {
+                    assert!(olen >= exact && n == exact);
+                    format!("\"res\":\"ok\",\"n\":{n}")
+                }
+                Err(TreeError::OutputTooSmall) => {
+                    assert!(olen < exact);
+                    "\"res\":\"small\",\"n\":0".to_string()
+                }
+                Err(other) => unreachable!("unexpected error {other:?}"),
+            };
+            let _ = writeln!(
+                out,
+                "{{\"t\":\"encout\",\"len\":{len},\"log\":{log},\"s\":{},\"e\":{},\"olen\":{olen},{verdict}}}",
+                range.start, range.end
+            );
+        }
+    }
+    out
+}
+
 /// `groups`, `depth`, `outboard_size` and `group_size` over lengths from 0 to `u64::MAX` and every group log.
 fn size_traces() -> String {
     let mut out = String::new();
@@ -470,6 +630,8 @@ fn size_traces() -> String {
 fn verifier_traces_are_consistent_with_the_genuine_value() {
     let tr = verifier_traces();
     let sizes = size_traces();
+    let encoder = encoder_traces();
+    let encout = encout_traces();
     let lines = tr.out.lines().count();
     // Both paths and every outcome must have been exercised.
     for needle in [
@@ -489,6 +651,8 @@ fn verifier_traces_are_consistent_with_the_genuine_value() {
         assert!(tr.out.contains(needle), "the runs never produce {needle}");
     }
     assert!(lines > 2000, "{lines} events");
+    assert!(encoder.contains("[\"p\",") && encoder.contains("[\"g\",") && encoder.lines().count() > 600);
+    assert!(encout.contains("\"res\":\"small\"") && encout.contains("\"res\":\"ok\""));
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
         return;
     };
@@ -496,4 +660,6 @@ fn verifier_traces_are_consistent_with_the_genuine_value() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("verifier.ndjson"), tr.out).unwrap();
     std::fs::write(dir.join("sizes.ndjson"), sizes).unwrap();
+    std::fs::write(dir.join("encoder.ndjson"), encoder).unwrap();
+    std::fs::write(dir.join("encout.ndjson"), encout).unwrap();
 }

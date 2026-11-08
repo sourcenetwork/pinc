@@ -44,16 +44,18 @@ run_tlc record_chacha Record Record_chacha
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_handshake
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_handshake
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
-    out=$(VINC_TRACE_DIR="$dir" java -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
+    # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
+    out=$(VINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
         -metadir "proofs/tla/states/$1" -config "proofs/tla/$1.cfg" "proofs/tla/$1.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: the recorded $2 trace is not a behaviour of its TLA+ model" >&2; exit 1; }
     echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
 }
 trace_tlc TraceVerifiedRanges ranges
 trace_tlc TraceRangeVerifier verifier
+trace_tlc TraceBuilder builder
 trace_tlc TraceHandshake handshake
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

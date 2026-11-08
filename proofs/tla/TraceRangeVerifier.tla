@@ -16,7 +16,9 @@
 (*    when nothing is buffered and the input holds it (the fast path),     *)
 (*    otherwise it buffers min(input, still needed) bytes; either way the  *)
 (*    item completes when its last byte arrives, so both paths take the    *)
-(*    same transition on the completed item;                               *)
+(*    same transition on the completed item; the stream offset `pos` of    *)
+(*    each piece advances by exactly the bytes consumed, and a completed   *)
+(*    item starts at `pos - filled`, the offset of its first byte;         *)
 (*  - the item: the hash call the verifier made (key) must be the one the  *)
 (*    model makes for that item, and the recorded value is the oracle, so  *)
 (*    the model decides accept or reject from it; the oracle must be a     *)
@@ -33,9 +35,9 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-VARIABLES n, first, last, stack, failed, released, len, G, filled, oracle, errk, i
+VARIABLES n, first, last, stack, failed, released, len, G, filled, oracle, errk, pos, i
 core == <<n, first, last, stack, failed, released>>
-vars == <<n, first, last, stack, failed, released, len, G, filled, oracle, errk, i>>
+vars == <<n, first, last, stack, failed, released, len, G, filled, oracle, errk, pos, i>>
 
 RV == INSTANCE RangeVerifier WITH MaxGroups <- 6
 
@@ -64,7 +66,7 @@ Pos(a, b, lo, hi) ==
 Init ==
     /\ i = 1
     /\ n = 0 /\ first = 0 /\ last = 0 /\ stack = <<>> /\ failed = FALSE /\ released = <<>>
-    /\ len = 0 /\ G = 1024 /\ filled = 0 /\ oracle = [k \in {} |-> 0] /\ errk = "none"
+    /\ len = 0 /\ G = 1024 /\ filled = 0 /\ oracle = [k \in {} |-> 0] /\ errk = "none" /\ pos = 0
 
 (* a new run: the layout, the requested group range and the initial stack, derived from the request *)
 Begin ==
@@ -81,7 +83,7 @@ Begin ==
           /\ ev.first = first' /\ ev.last = last'
           /\ stack' = IF first' < last' THEN <<[cv |-> ev.root, lo |-> 0, hi |-> cnt]>> ELSE <<>>
           /\ failed' = FALSE /\ released' = <<>>
-          /\ filled' = 0 /\ oracle' = [k \in {} |-> 0] /\ errk' = "none"
+          /\ filled' = 0 /\ oracle' = [k \in {} |-> 0] /\ errk' = "none" /\ pos' = 0
           /\ i' = i + 1
 
 (* one call of feed *)
@@ -92,6 +94,9 @@ FeedEv ==
            nlm == NL(stack, failed, filled)
            fast == filled = 0 /\ nlm >= 0 /\ ev.ilen >= nlm
        IN /\ ev.t = "vfeed"
+          /\ ev.pos = pos
+          /\ pos' = IF ev.consumed >= 0 THEN pos + ev.consumed ELSE pos
+          /\ ev.istart = IF ev.out \in {"parent", "release", "reject"} THEN pos - filled ELSE -1
           /\ ev.nl0 = nlm
           /\ ev.fast = fast
           /\ ev.rd = (IF ev.out = "release" THEN ev.item.d ELSE 0)

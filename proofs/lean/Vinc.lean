@@ -9,7 +9,12 @@ import Vinc.Sizes
 import Vinc.Encode
 import Vinc.Bounds
 import Vinc.Builder
+import Vinc.Machine
+import Vinc.MachineEnc
+import Vinc.VerifyBytes
+import Vinc.BuilderBytes
 import Vinc.TraceVerifier
+import Vinc.TraceBuilder
 import Vinc.Labels
 import Vinc.Transcript
 import Vinc.ReplayWindow

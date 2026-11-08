@@ -3,6 +3,7 @@ import Vinc.Varint
 import Vinc.Ranges
 import Vinc.Layout
 import Vinc.TraceVerifier
+import Vinc.TraceBuilder
 import Vinc.SecurityTrace
 import Vinc.HandshakeTrace
 
@@ -68,6 +69,8 @@ private def replayPure (j : J) (t : String) : Except String Unit := do
       | _ => throw "bad ok pair"
     | none => check res.isNone s!"group_range {len} {log} {s} {e}: expected an error"
   | "sizes" => TraceVerifier.replaySizes j
+  | "enc" => TraceVerifier.replayEncoder j
+  | "encout" => TraceVerifier.replayEncout j
   | _ => throw s!"unknown event {t}"
 
 /-- Replay one verified-range event against the model state of its run; returns the new model state. -/
@@ -98,6 +101,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut vs : TraceVerifier.RState := {}
   let mut sec : SecurityTrace.SecState := {}
   let mut count := 0
+  let mut bst : TraceBuilder.BState := {}
   let mut hsw : HandshakeTrace.W := {}
   let mut hsCount := 0
   let mut lineNo := 0
@@ -117,6 +121,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           continue
         | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
       | some t =>
+        if t == "bnew" || t == "bupd" || t == "bfin" then
+          -- Outboard builder events (`trace_builder`): the byte-level model of `update` and `finish`.
+          match TraceBuilder.replayEvent j bst with
+          | .ok b' =>
+            bst := b'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "rw" || t == "amp" || t == "tok" then
           match SecurityTrace.replayEvent j sec with
           | .ok s' =>
