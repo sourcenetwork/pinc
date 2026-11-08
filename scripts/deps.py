@@ -7,6 +7,7 @@
    `[workspace.dependencies]` pins that same version.
 3. Every library crate under `crates/` forbids unsafe code in its root (`#![forbid(unsafe_code)]`); the workspace lint is only `deny` so the test allocator can allow it.
 4. No library crate under `crates/` depends, directly or transitively, on an async runtime.
+5. Pure Rust: no crate that compiles or links C (crypto or otherwise) is anywhere in the workspace graph.
 """
 import json
 import subprocess
@@ -66,6 +67,12 @@ for pkg in meta["packages"]:
     bad = sorted(names[d] for d in seen if names[d] in RUNTIMES)
     if bad:
         failed.append(f"{pkg['name']}: depends on an async runtime ({', '.join(bad)}); VINC crates must stay runtime-free")
+
+C_CRATES = {"alloca", "openssl", "openssl-sys", "ring", "aws-lc-rs", "aws-lc-sys", "tss-esapi", "tss-esapi-sys", "cryptoki",
+            "cryptoki-sys", "libsodium-sys", "pqcrypto", "pqcrypto-internals"} | {n for n in names.values() if n.startswith("libcrux")}
+bad = sorted({n for n in names.values() if n in C_CRATES})
+if bad:
+    failed.append(f"pure Rust: crates that compile or link C are in the graph: {', '.join(bad)}")
 
 for line in failed:
     print(line, file=sys.stderr)
