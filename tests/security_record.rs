@@ -187,7 +187,8 @@ fn key_update_moves_both_sides_in_step() {
         // Packet number 0 under generation 0 and 1 gives different ciphertext: no nonce reuse across generations.
         let (mut x, mut y) = (*b"same", *b"same");
         let tag0 = tx0.seal(&p, 0, b"h", &mut x).unwrap();
-        let tag1 = tx1.seal(&p, 0, b"h", &mut y).unwrap();
+        let mut tx1b = tx0.next_generation(&p).unwrap();
+        let tag1 = tx1b.seal(&p, 0, b"h", &mut y).unwrap();
         assert_ne!((x, tag0), (y, tag1));
         // The chain continues, and each generation is distinct.
         let tx2 = tx1.next_generation(&p).unwrap();
@@ -570,4 +571,27 @@ fn labels_are_prefixed_unique_and_distinct_from_the_crypto_labels() {
     assert_eq!(labels::SIGNATURE_RESPONDER, "VINC 2026 v1 responder");
     assert_eq!(labels::SIGNATURE_INITIATOR, "VINC 2026 v1 initiator");
     assert_eq!(labels::HANDSHAKE, "VINC 2026 v1 handshake");
+}
+
+#[test]
+fn a_key_never_seals_a_packet_number_twice() {
+    let p = Software;
+    for aead in AEADS {
+        let mut k = PacketKey::from_secret(&p, aead, &secret(5)).unwrap();
+        let mut buf = [7u8; 32];
+        k.seal(&p, 5, b"aad", &mut buf).unwrap();
+        for pn in [5u64, 4, 0] {
+            assert_eq!(
+                k.seal(&p, pn, b"aad", &mut buf),
+                Err(RecordError::NotIncreasing),
+                "{pn}"
+            );
+        }
+        assert_eq!(k.sealed(), 1, "a refused seal is not counted");
+        k.seal(&p, 6, b"aad", &mut buf).unwrap();
+        k.seal(&p, 1000, b"aad", &mut buf).unwrap();
+        // A fresh generation has sealed nothing yet.
+        let mut next = k.next_generation(&p).unwrap();
+        next.seal(&p, 7, b"aad", &mut buf).unwrap();
+    }
 }

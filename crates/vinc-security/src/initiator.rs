@@ -16,6 +16,7 @@ use core::mem;
 
 use vinc_crypto::identity::{MAX_SIGNATURE_LEN, verify};
 use vinc_crypto::{Aead, NodeId, Provider, Secret, Transcript, ct_eq};
+use vinc_wire::WireError;
 use zeroize::Zeroize;
 
 use crate::error::Failure;
@@ -27,10 +28,11 @@ use crate::message::{
     ResumeReply, min_initial_len,
 };
 use crate::outbox::{Outbox, Pending};
+use crate::params::Params;
 use crate::schedule::{
-    HelloFields, InitialFields, absorb_identity, absorb_reply, absorb_resume_reply, application_secrets, binder, chain,
-    confirmation, early_secret, echo, handshake_keys, hello_transcript, initial_transcript, open_handshake, psk_chain,
-    seal_id_sig, signature_message,
+    HelloFields, InitialFields, absorb_identity, absorb_params, absorb_reply, absorb_resume_reply, application_secrets,
+    binder, chain, confirmation, early_secret, echo, handshake_keys, hello_transcript, initial_transcript,
+    open_handshake, psk_chain, seal_id_sig, signature_message,
 };
 use crate::session::{EarlyKeys, Env, Established, Output, Traffic};
 use crate::tickets::{Ticket, TicketBatch};
@@ -55,6 +57,9 @@ pub struct InitiatorParams<'a> {
     pub token: &'a [u8],
     /// A ticket for this peer and ALPN to resume with, if one is held.
     pub ticket: Option<Ticket>,
+    /// This side's transport parameters (at most [`crate::MAX_PARAMS_LEN`] bytes); the peer receives them
+    /// authenticated.
+    pub transport_params: &'a [u8],
 }
 
 enum State {
@@ -97,6 +102,9 @@ pub struct Initiator {
     offer: AeadSet,
     token: [u8; MAX_TOKEN_LEN],
     token_len: usize,
+    params: Params,
+    peer_params: Params,
+    remembered: Params,
     dcid: ConnId,
     seed: Secret<32>,
     e: [u8; 32],
@@ -138,6 +146,9 @@ impl Initiator {
             offer: AeadSet::offer(env.provider.capabilities()),
             token,
             token_len: params.token.len(),
+            params: Params::new(params.transport_params).ok_or(Failure::InvalidParameter)?,
+            peer_params: Params::EMPTY,
+            remembered: Params::EMPTY,
             dcid: ConnId::default(),
             seed: Secret::new([0; 32]),
             e: [0; 32],
@@ -288,6 +299,7 @@ impl Initiator {
             e: &self.e,
             prekey_hash: &self.prekey.hash,
             token: self.token(),
+            params: self.params.as_bytes(),
         });
         self.retransmits = 0;
         self.write_initial(!short)?;
@@ -313,6 +325,7 @@ impl Initiator {
             e: self.e,
             prekey,
             token: self.token.get(..self.token_len).unwrap_or_default(),
+            params: self.params.as_bytes(),
         };
         self.out
             .build(min_initial_len(form, self.peer.alg), |w| initial.write(w))
@@ -329,6 +342,7 @@ impl Initiator {
             aead: ticket.aead,
             tid: &ticket.tid,
             e: &self.e,
+            params: self.params.as_bytes(),
         });
         let th_hello = th.snapshot();
         let binder = binder(&ticket.psk, &th_hello);
@@ -341,7 +355,9 @@ impl Initiator {
             tid: ticket.tid,
             e: self.e,
             binder,
+            params: self.params.as_bytes(),
         };
+        self.remembered = ticket.params;
         self.out.build(0, |w| hello.write(w))?;
         let ck_psk = psk_chain(&ticket.psk);
         self.out.early = Some(EarlyKeys {
@@ -428,6 +444,8 @@ impl Initiator {
             return Err(Failure::WrongPeer);
         }
         absorb_identity(&mut self.th, ids.alg, ids.public_key);
+        absorb_params(&mut self.th, ids.params);
+        self.peer_params = Params::new(ids.params).ok_or(Failure::BadPayload(WireError::Unexpected("params")))?;
         let th2 = self.th.snapshot();
         verify(
             ids.alg,
@@ -467,6 +485,7 @@ impl Initiator {
             &th3,
             (self.identity.alg(), self.identity.public_key()),
             signature,
+            &[],
         )?;
         self.th.absorb(signature);
         let secrets = application_secrets(&ck1, &self.th.snapshot());
@@ -487,6 +506,9 @@ impl Initiator {
             resume: secrets.resume,
             tickets: TicketBatch::new(),
             resumed: false,
+            peer_params: self.peer_params,
+            local_params: self.params,
+            remembered_params: Params::EMPTY,
         });
         self.state = State::Done;
         Ok(())
@@ -507,7 +529,7 @@ impl Initiator {
         let ss_x = p
             .x25519_dh(&p.x25519_secret(self.seed.expose()), &reply.e)
             .map_err(|_| Failure::InvalidPeerKey)?;
-        absorb_resume_reply(&mut self.th, &binder, &reply.scid, &reply.e);
+        absorb_resume_reply(&mut self.th, &binder, &reply.scid, &reply.e, reply.params.as_bytes());
         let ck1 = chain(&ck_psk, ss_x.expose());
         let secrets = application_secrets(&ck1, &self.th.snapshot());
         let mut tickets = [0u8; 81];
@@ -527,6 +549,9 @@ impl Initiator {
             resume: secrets.resume,
             tickets: reply.tickets,
             resumed: true,
+            peer_params: reply.params,
+            local_params: self.params,
+            remembered_params: self.remembered,
         });
         // The Hello was answered: a later loss timer has nothing to send again.
         self.out.clear_message();

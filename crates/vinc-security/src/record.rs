@@ -44,6 +44,8 @@ impl Default for Limits {
 pub enum RecordError {
     /// The packet number is 2^62 or more.
     PacketNumber,
+    /// The packet number is not above the last one this key sealed: a number is never sealed twice under one key.
+    NotIncreasing,
     /// The tag does not match: the packet, its header, its number or the key is wrong.
     Authentication,
     /// The key reached its usage limit: derive the next generation with [`PacketKey::next_generation`].
@@ -66,6 +68,7 @@ impl fmt::Display for RecordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PacketNumber => f.write_str("packet number is 2^62 or more"),
+            Self::NotIncreasing => f.write_str("packet number does not increase"),
             Self::Authentication => f.write_str("packet failed authentication"),
             Self::KeyUpdateRequired => f.write_str("the key reached its usage limit; update keys"),
             Self::HeaderLength => f.write_str("packet number field is not 1 to 4 bytes"),
@@ -103,6 +106,7 @@ pub struct PacketKey<P: Provider> {
     secret: Secret<32>,
     generation: u32,
     sealed: u64,
+    last_sealed: Option<u64>,
     failed: u64,
     limits: Limits,
 }
@@ -140,6 +144,7 @@ impl<P: Provider> PacketKey<P> {
             secret,
             generation,
             sealed: 0,
+            last_sealed: None,
             failed: 0,
             limits,
         })
@@ -187,16 +192,22 @@ impl<P: Provider> PacketKey<P> {
     /// Encrypt `buf` in place under packet number `pn` and return the detached tag.
     ///
     /// # Errors
-    /// [`RecordError::PacketNumber`] for `pn` of 2^62 or more; [`RecordError::KeyUpdateRequired`] once an
+    /// [`RecordError::PacketNumber`] for `pn` of 2^62 or more; [`RecordError::NotIncreasing`] unless `pn` is above
+    /// every number this key sealed before (a retransmission resends the stored bytes, it never seals again);
+    /// [`RecordError::KeyUpdateRequired`] once an
     /// AES-128-GCM key has sealed [`Limits::aes_gcm_packets`] packets; [`RecordError::Crypto`] if the AEAD refuses
     /// the input length.
     pub fn seal(&mut self, p: &P, pn: u64, aad: &[u8], buf: &mut [u8]) -> Result<[u8; Aead::TAG_LEN], RecordError> {
         let nonce = self.nonce(pn)?;
+        if self.last_sealed.is_some_and(|l| pn <= l) {
+            return Err(RecordError::NotIncreasing);
+        }
         if self.aead == Aead::Aes128Gcm && self.sealed >= self.limits.aes_gcm_packets {
             return Err(RecordError::KeyUpdateRequired);
         }
         let tag = p.seal(&self.key, &nonce, aad, buf)?;
         self.sealed = self.sealed.saturating_add(1);
+        self.last_sealed = Some(pn);
         Ok(tag)
     }
 

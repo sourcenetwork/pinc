@@ -15,6 +15,7 @@ use vinc_wire::{Reader, WireError, Writer};
 
 use crate::error::Failure;
 use crate::ids::Alpn;
+use crate::params::Params;
 use crate::schedule::ticket_psk;
 use crate::session::{Env, Established};
 
@@ -22,6 +23,8 @@ use crate::session::{Env, Established};
 pub const TID_LEN: usize = 16;
 /// The most tickets in one batch.
 pub const MAX_BATCH: usize = 4;
+/// The most draws [`ServerTickets::issue_batch`] makes to find an unused ticket id.
+pub const ID_ATTEMPTS: usize = 8;
 /// The default lifetime of a ticket: 24 hours.
 pub const DEFAULT_TICKET_LIFETIME_S: u32 = 86_400;
 /// The default capacity of a [`ServerTickets`] store.
@@ -145,6 +148,7 @@ pub struct Ticket {
     pub(crate) alpn: Alpn,
     pub(crate) aead: Aead,
     pub(crate) expiry: u64,
+    pub(crate) params: Params,
 }
 
 impl core::fmt::Debug for Ticket {
@@ -164,6 +168,11 @@ impl Ticket {
     /// The nanosecond after which the ticket is no longer valid.
     pub const fn expiry(&self) -> u64 {
         self.expiry
+    }
+
+    /// The server's transport parameters of the session that issued this ticket: what 0-RTT data may rely on.
+    pub const fn peer_params(&self) -> &Params {
+        &self.params
     }
 }
 
@@ -199,6 +208,7 @@ pub(crate) struct ServerSlot {
     pub(crate) alpn: Alpn,
     pub(crate) aead: Aead,
     pub(crate) expiry: u64,
+    pub(crate) params: Params,
     stamp: u64,
 }
 
@@ -253,7 +263,8 @@ impl<const N: usize> ServerTickets<N> {
     /// 0) when the store has no room.
     ///
     /// # Errors
-    /// [`Failure::Randomness`] if the generator refuses.
+    /// [`Failure::Randomness`] if the generator refuses; [`Failure::TicketId`] if no id different from every stored one
+    /// turned up in [`ID_ATTEMPTS`] draws.
     pub fn issue_batch<P: Provider>(
         &mut self,
         env: &mut Env<'_, P>,
@@ -263,11 +274,12 @@ impl<const N: usize> ServerTickets<N> {
     ) -> Result<TicketBatch, Failure> {
         let mut batch = TicketBatch::new();
         for _ in 0..count.min(MAX_BATCH) {
-            let tid = env.random::<TID_LEN>()?;
+            let tid = self.fresh_id(env)?;
             self.clock = self.clock.wrapping_add(1);
             let slot = ServerSlot {
                 tid,
-                psk: ticket_psk(&session.resume, &tid),
+                psk: ticket_psk(&session.resume, &tid, session.local_params.as_bytes()),
+                params: session.local_params,
                 peer: session.peer,
                 alpn: session.alpn,
                 aead: session.traffic.aead,
@@ -281,6 +293,17 @@ impl<const N: usize> ServerTickets<N> {
             }
         }
         Ok(batch)
+    }
+
+    /// A ticket id that no stored ticket has, drawn from the generator in at most [`ID_ATTEMPTS`] tries.
+    fn fresh_id<P: Provider>(&self, env: &mut Env<'_, P>) -> Result<[u8; TID_LEN], Failure> {
+        for _ in 0..ID_ATTEMPTS {
+            let tid = env.random::<TID_LEN>()?;
+            if self.find(&tid).is_none() {
+                return Ok(tid);
+            }
+        }
+        Err(Failure::TicketId)
     }
 
     pub(crate) fn find(&self, tid: &[u8; TID_LEN]) -> Option<usize> {
@@ -350,7 +373,8 @@ impl<const N: usize> ClientTickets<N> {
             let slot = ClientSlot {
                 ticket: Ticket {
                     tid: e.tid,
-                    psk: ticket_psk(&session.resume, &e.tid),
+                    psk: ticket_psk(&session.resume, &e.tid, session.peer_params.as_bytes()),
+                    params: session.peer_params,
                     peer: session.peer,
                     alpn: session.alpn,
                     aead: session.traffic.aead,

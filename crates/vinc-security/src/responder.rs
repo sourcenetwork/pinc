@@ -26,10 +26,11 @@ use crate::keys::{KeyResponse, SoftKeys};
 use crate::labels;
 use crate::message::{Finish, IdSig, Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
 use crate::outbox::{Outbox, Pending};
+use crate::params::Params;
 use crate::schedule::{
-    HelloFields, InitialFields, absorb_identity, absorb_reply, absorb_resume_reply, application_secrets, binder, chain,
-    confirmation, early_secret, echo, handshake_keys, hello_transcript, initial_transcript, open_handshake, psk_chain,
-    seal_id_sig, signature_message,
+    HelloFields, InitialFields, absorb_identity, absorb_params, absorb_reply, absorb_resume_reply, application_secrets,
+    binder, chain, confirmation, early_secret, echo, handshake_keys, hello_transcript, initial_transcript,
+    open_handshake, psk_chain, seal_id_sig, signature_message,
 };
 use crate::session::{EarlyKeys, Env, Established, Output, Traffic};
 use crate::tickets::{DEFAULT_SERVER_TICKETS, DEFAULT_TICKET_LIFETIME_S, ServerTickets, TicketBatch};
@@ -56,6 +57,8 @@ pub struct ResponderConfig {
     pub tickets_per_session: u8,
     /// How long an issued ticket lives, in seconds.
     pub ticket_lifetime_s: u32,
+    /// This node's transport parameters, sent to every initiator authenticated and remembered by its tickets.
+    pub transport_params: Params,
 }
 
 impl ResponderConfig {
@@ -67,6 +70,7 @@ impl ResponderConfig {
             alpns,
             tickets_per_session: 1,
             ticket_lifetime_s: DEFAULT_TICKET_LIFETIME_S,
+            transport_params: Params::EMPTY,
         }
     }
 }
@@ -94,6 +98,7 @@ struct Box1 {
     e: [u8; 32],
     ct: [u8; KEM_CIPHERTEXT_LEN],
     prekey: Option<([u8; 32], [u8; KEM_ENCAPS_KEY_LEN])>,
+    peer_params: Params,
 }
 
 /// What the responder holds between the Reply and the Finish.
@@ -105,6 +110,7 @@ struct Wait {
     hs_initiator: Secret<32>,
     ck1: Secret<32>,
     prekey: Option<([u8; 32], [u8; KEM_ENCAPS_KEY_LEN])>,
+    peer_params: Params,
 }
 
 /// The responder side of the handshake, one per connection.
@@ -237,6 +243,7 @@ impl Responder {
             e: &initial.e,
             prekey_hash: &hash,
             token: initial.token,
+            params: initial.params,
         });
         let th0 = th.snapshot();
         match &self.state {
@@ -280,6 +287,7 @@ impl Responder {
         let th1 = th.snapshot();
         let hs = handshake_keys(&ss_k, &ss_x, &th1);
         absorb_identity(&mut th, self.cfg.identity.alg(), self.cfg.identity.public_key());
+        absorb_params(&mut th, self.cfg.transport_params.as_bytes());
         self.out.set_request(Pending::Sign {
             key: self.cfg.identity.key(),
             alg: self.cfg.identity.alg(),
@@ -297,6 +305,7 @@ impl Responder {
             e,
             ct,
             prekey: fresh.then_some((hash, ek_bytes)),
+            peer_params: Params::new(initial.params).ok_or(Failure::InvalidParameter)?,
         });
         Ok(())
     }
@@ -316,6 +325,7 @@ impl Responder {
             &b.th1,
             (id.alg(), id.public_key()),
             signature,
+            self.cfg.transport_params.as_bytes(),
         )?;
         self.th.absorb(signature);
         let reply = Reply {
@@ -334,6 +344,7 @@ impl Responder {
             hs_initiator: b.hs_initiator,
             ck1: b.ck1,
             prekey: b.prekey,
+            peer_params: b.peer_params,
         });
         Ok(())
     }
@@ -353,6 +364,11 @@ impl Responder {
         };
         let opened = open_handshake(env.provider, w.aead, &w.hs_initiator, &w.th3, finish.sealed)?;
         let ids = IdSig::parse(opened.as_slice()).map_err(Failure::BadPayload)?;
+        if !ids.params.is_empty() {
+            return Err(Failure::BadPayload(vinc_wire::WireError::Unexpected(
+                "params in a finish",
+            )));
+        }
         let peer = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
         absorb_identity(&mut self.th, ids.alg, ids.public_key);
         let th4 = self.th.snapshot();
@@ -376,6 +392,9 @@ impl Responder {
             resume: secrets.resume,
             tickets: TicketBatch::new(),
             resumed: false,
+            peer_params: w.peer_params,
+            local_params: self.cfg.transport_params,
+            remembered_params: Params::EMPTY,
         };
         session.tickets = stores.tickets.issue_batch(
             env,
@@ -413,6 +432,7 @@ impl Responder {
             aead: hello.aead,
             tid: &hello.tid,
             e: &hello.e,
+            params: hello.params,
         });
         let th_hello = th.snapshot();
         let found = stores.tickets.find(&hello.tid);
@@ -437,7 +457,13 @@ impl Responder {
         seed.zeroize();
         let e = p.x25519_public(&secret);
         let ss_x = p.x25519_dh(&secret, &hello.e).map_err(|_| Failure::InvalidPeerKey)?;
-        absorb_resume_reply(&mut th, &hello.binder, &self.cfg.scid, &e);
+        absorb_resume_reply(
+            &mut th,
+            &hello.binder,
+            &self.cfg.scid,
+            &e,
+            self.cfg.transport_params.as_bytes(),
+        );
         let ck1 = chain(&ck_psk, ss_x.expose());
         let secrets = application_secrets(&ck1, &th.snapshot());
         let mut session = Established {
@@ -451,6 +477,9 @@ impl Responder {
             resume: secrets.resume,
             tickets: TicketBatch::new(),
             resumed: true,
+            peer_params: Params::new(hello.params).ok_or(Failure::InvalidParameter)?,
+            local_params: self.cfg.transport_params,
+            remembered_params: slot.params,
         };
         session.tickets = stores.tickets.issue_batch(
             env,
@@ -465,6 +494,7 @@ impl Responder {
             scid: self.cfg.scid,
             e,
             tickets: session.tickets,
+            params: self.cfg.transport_params,
             confirm,
         };
         self.out.build(0, |w| reply.write(w))?;

@@ -138,5 +138,9 @@ path = "transport_net.rs"
 name = "transport_life"
 path = "transport_life.rs"
 
+[[test]]
+name = "transport_params"
+path = "transport_params.rs"
+
 [lints]
 workspace = true

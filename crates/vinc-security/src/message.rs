@@ -8,24 +8,28 @@
 //!
 //! | Type | Message | Layout after the type byte |
 //! |---|---|---|
-//! | 1 | Initial (full) | `version(4)`, `dcid`, `scid`, `alpn`, `aead_offer(1)`, `e_I(32)`, `pk_I(1184)`, `token`(`len(1) <= 101`, bytes) |
+//! | 1 | Initial (full) | `version(4)`, `dcid`, `scid`, `alpn`, `aead_offer(1)`, `e_I(32)`, `pk_I(1184)`, `token`(`len(1) <= 101`, bytes), `params`(`lp16`, at most 256 bytes) |
 //! | 2 | Initial (short) | as the full Initial, with `hash(pk_I)(32)` in place of `pk_I` |
 //! | 3 | Prekey reject | `echo(16)` |
 //! | 4 | Reply | `scid_R`, `aead(1)`, `e_R(32)`, `ct(1088)`, `sealed`(`lp16`) |
 //! | 5 | Finish | `sealed`(`lp16`) |
-//! | 6 | Resume Hello | `version(4)`, `dcid`, `scid`, `alpn`, `aead(1)`, `tid(16)`, `e_I(32)`, `binder(32)` |
-//! | 7 | Resume Reply | `scid_R`, `e_R(32)`, `tickets`, `confirm(32)` |
+//! | 6 | Resume Hello | `version(4)`, `dcid`, `scid`, `alpn`, `aead(1)`, `tid(16)`, `e_I(32)`, `binder(32)`, `params`(`lp16`, at most 256 bytes) |
+//! | 7 | Resume Reply | `scid_R`, `e_R(32)`, `tickets`, `params`(`lp16`, at most 256 bytes), `confirm(32)` |
 //! | 8 | Resume reject | `echo(16)` |
 //!
 //! * `aead_offer` is a bit set (bit 0 ChaCha20-Poly1305, bit 1 AES-128-GCM; 1 to 3), `aead` is the tag of one AEAD
 //!   (1 ChaCha20-Poly1305, 2 AES-128-GCM).
 //! * `sealed` is an AEAD ciphertext followed by its 16-byte tag. Its plaintext is an identity and a signature:
 //!   `alg(1)`, `pk`(`lp16`, exactly the length of `alg`'s key), `sig`(`lp16`, exactly the length of `alg`'s
-//!   signature). The Reply is sealed under the responder's handshake key, the Finish under the initiator's, both with
+//!   signature), `params`(`lp16`, at most 256 bytes; the responder's transport parameters in a Reply, empty in a
+//!   Finish). The Reply is sealed under the responder's handshake key, the Finish under the initiator's, both with
 //!   packet number 0 and the transcript hash as associated data.
 //! * `tickets` is `count(1) <= 4` followed by `count` entries of `tid(16) || lifetime_seconds(4)`.
 //! * `echo` is the first 16 bytes of the transcript hash of the message being rejected; it lets the sender match a
 //!   reject to its message. A reject is not authenticated: forging one only forces the fallback handshake.
+//! * `params` are opaque transport parameters of at most 256 bytes ([`crate::params`]). Each side's parameters are
+//!   absorbed into the transcript as their own length-prefixed field (the initiator's with the Initial or Hello, the
+//!   responder's right after its identity, or with the resume Reply), so they are authenticated by the handshake.
 //! * The token is an opaque address-validation token (see [`crate::token`]); it is absorbed into the transcript.
 //! * A message that is padded for amplification limits is padded by the transport, never inside the message.
 
@@ -36,17 +40,21 @@ use vinc_wire::{Reader, WireError, Writer};
 
 use crate::ids::{AeadSet, ConnId, MAX_ALPN_LEN, MAX_CID_LEN, aead_from_tag, aead_tag};
 use crate::keys::prekey_hash;
+use crate::params::{MAX_PARAMS_LEN, Params};
 use crate::tickets::TicketBatch;
 use crate::token::MAX_TOKEN_LEN;
 
+/// The transport parameters a Reply is sized for when padding the Initial: larger ones (up to [`MAX_PARAMS_LEN`]) still
+/// work, the responder just needs another round under the amplification limit.
+pub const TYPICAL_PARAMS_LEN: usize = 64;
 /// The full Initial is padded to at least this many bytes.
 pub const FULL_INITIAL_MIN: usize = 1200;
-/// The short Initial is padded to at least this many bytes: 464 x 3 covers the Reply of a 32-byte identity.
-pub const SHORT_INITIAL_MIN: usize = 464;
+/// The short Initial is padded to at least this many bytes: 480 x 3 covers the Reply of a 32-byte identity.
+pub const SHORT_INITIAL_MIN: usize = 480;
 /// The datagram size the padding rule assumes when it counts the datagrams of a Reply.
 pub const MIN_DATAGRAM: usize = 1200;
 /// The longest plaintext of a sealed identity and signature.
-pub const MAX_ID_SIG_LEN: usize = 1 + 2 + MAX_PUBLIC_KEY_LEN + 2 + MAX_SIGNATURE_LEN;
+pub const MAX_ID_SIG_LEN: usize = 1 + 2 + MAX_PUBLIC_KEY_LEN + 2 + MAX_SIGNATURE_LEN + 2 + MAX_PARAMS_LEN;
 /// The longest sealed identity and signature, tag included.
 pub const MAX_SEALED_LEN: usize = MAX_ID_SIG_LEN + Aead::TAG_LEN;
 
@@ -61,10 +69,11 @@ pub enum InitialForm {
 
 /// The size in bytes of the sealed identity and signature of `alg`.
 const fn sealed_len(alg: IdentityAlg) -> usize {
-    1 + 2 + alg.public_key_len() + 2 + alg.signature_len() + Aead::TAG_LEN
+    1 + 2 + alg.public_key_len() + 2 + alg.signature_len() + 2 + TYPICAL_PARAMS_LEN + Aead::TAG_LEN
 }
 
-/// An upper bound on the length of a Reply from a responder with identity `alg` (a 20-byte connection id).
+/// An upper bound on the length of a Reply from a responder with identity `alg` (a 20-byte connection id) and
+/// transport parameters of up to [`TYPICAL_PARAMS_LEN`] bytes.
 pub const fn reply_len(alg: IdentityAlg) -> usize {
     1 + (1 + MAX_CID_LEN) + 1 + 32 + KEM_CIPHERTEXT_LEN + 2 + sealed_len(alg)
 }
@@ -72,7 +81,7 @@ pub const fn reply_len(alg: IdentityAlg) -> usize {
 /// The least number of bytes the datagrams of an Initial of `form` must total, so that three times that covers the
 /// responder's Reply (with the per-datagram overhead of [`crate::amp`]) when the responder uses identity `alg`.
 ///
-/// The bound is 1200 bytes for the full form and 464 for the short form, raised for a responder whose Reply is
+/// The bound is 1200 bytes for the full form and 480 for the short form, raised for a responder whose Reply is
 /// larger (ML-DSA-65 and hybrid identities).
 pub const fn min_initial_len(form: InitialForm, responder: IdentityAlg) -> usize {
     let reply = reply_len(responder);
@@ -86,7 +95,7 @@ pub const fn min_initial_len(form: InitialForm, responder: IdentityAlg) -> usize
 }
 
 /// The longest message this crate produces: the largest Reply.
-pub const MAX_MESSAGE_LEN: usize = reply_len(IdentityAlg::Hybrid);
+pub const MAX_MESSAGE_LEN: usize = reply_len(IdentityAlg::Hybrid) + MAX_PARAMS_LEN - TYPICAL_PARAMS_LEN;
 
 /// The type byte of a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +193,22 @@ fn write_sealed(w: &mut Writer<'_>, sealed: &[u8]) -> Result<(), WireError> {
     w.put_slice(sealed)
 }
 
+fn read_params<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], WireError> {
+    let len = usize::from(r.read_u16()?);
+    if len > MAX_PARAMS_LEN {
+        return Err(WireError::Unexpected("transport parameters length"));
+    }
+    r.read_bytes(len)
+}
+
+fn write_params(w: &mut Writer<'_>, params: &[u8]) -> Result<(), WireError> {
+    if params.len() > MAX_PARAMS_LEN {
+        return Err(WireError::Unexpected("transport parameters length"));
+    }
+    w.put_u16(u16::try_from(params.len()).map_err(|_| WireError::VarintOverflow)?)?;
+    w.put_slice(params)
+}
+
 fn read_array<'a, const N: usize>(r: &mut Reader<'a>) -> Result<&'a [u8; N], WireError> {
     r.read_bytes(N)?
         .try_into()
@@ -218,6 +243,8 @@ pub struct Initial<'a> {
     pub prekey: PrekeyField<'a>,
     /// The address-validation token, possibly empty.
     pub token: &'a [u8],
+    /// The initiator's transport parameters, possibly empty.
+    pub params: &'a [u8],
 }
 
 impl<'a> Initial<'a> {
@@ -249,6 +276,7 @@ impl<'a> Initial<'a> {
             return Err(WireError::Unexpected("token length"));
         }
         let token = r.read_bytes(token_len)?;
+        let params = read_params(&mut r)?;
         finish(&r)?;
         Ok(Self {
             version,
@@ -259,6 +287,7 @@ impl<'a> Initial<'a> {
             e,
             prekey,
             token,
+            params,
         })
     }
 
@@ -282,7 +311,8 @@ impl<'a> Initial<'a> {
             PrekeyField::Hash(h) => w.put_slice(h)?,
         }
         w.put_u8(u8::try_from(self.token.len()).map_err(|_| WireError::VarintOverflow)?)?;
-        w.put_slice(self.token)
+        w.put_slice(self.token)?;
+        write_params(w, self.params)
     }
 
     /// The hash of the prekey, computed for the full form and read for the short form.
@@ -425,6 +455,8 @@ pub struct ResumeHello<'a> {
     pub e: [u8; 32],
     /// The binder over the transcript.
     pub binder: [u8; 32],
+    /// The initiator's transport parameters, possibly empty.
+    pub params: &'a [u8],
 }
 
 impl<'a> ResumeHello<'a> {
@@ -443,6 +475,7 @@ impl<'a> ResumeHello<'a> {
         let tid = r.read_array::<16>()?;
         let e = r.read_array::<32>()?;
         let binder = r.read_array::<32>()?;
+        let params = read_params(&mut r)?;
         finish(&r)?;
         Ok(Self {
             version,
@@ -453,6 +486,7 @@ impl<'a> ResumeHello<'a> {
             tid,
             e,
             binder,
+            params,
         })
     }
 
@@ -469,7 +503,8 @@ impl<'a> ResumeHello<'a> {
         w.put_u8(aead_tag(self.aead))?;
         w.put_slice(&self.tid)?;
         w.put_slice(&self.e)?;
-        w.put_slice(&self.binder)
+        w.put_slice(&self.binder)?;
+        write_params(w, self.params)
     }
 }
 
@@ -482,6 +517,8 @@ pub struct ResumeReply {
     pub e: [u8; 32],
     /// The new tickets.
     pub tickets: TicketBatch,
+    /// The responder's transport parameters.
+    pub params: Params,
     /// The confirmation tag.
     pub confirm: [u8; 32],
 }
@@ -497,12 +534,14 @@ impl ResumeReply {
         let scid = read_cid(&mut r)?;
         let e = r.read_array::<32>()?;
         let tickets = TicketBatch::read(&mut r)?;
+        let params = Params::new(read_params(&mut r)?).ok_or(WireError::Unexpected("transport parameters length"))?;
         let confirm = r.read_array::<32>()?;
         finish(&r)?;
         Ok(Self {
             scid,
             e,
             tickets,
+            params,
             confirm,
         })
     }
@@ -516,6 +555,7 @@ impl ResumeReply {
         write_cid(w, &self.scid)?;
         w.put_slice(&self.e)?;
         self.tickets.write(w)?;
+        write_params(w, self.params.as_bytes())?;
         w.put_slice(&self.confirm)
     }
 }
@@ -529,6 +569,8 @@ pub struct IdSig<'a> {
     pub public_key: &'a [u8],
     /// The signature, exactly [`IdentityAlg::signature_len`] bytes.
     pub signature: &'a [u8],
+    /// The sender's transport parameters (the responder's; empty in a Finish).
+    pub params: &'a [u8],
 }
 
 impl<'a> IdSig<'a> {
@@ -550,11 +592,13 @@ impl<'a> IdSig<'a> {
             return Err(WireError::Unexpected("signature length"));
         }
         let signature = r.read_bytes(sig_len)?;
+        let params = read_params(&mut r)?;
         finish(&r)?;
         Ok(Self {
             alg,
             public_key,
             signature,
+            params,
         })
     }
 
@@ -567,6 +611,7 @@ impl<'a> IdSig<'a> {
         w.put_u16(u16::try_from(self.public_key.len()).map_err(|_| WireError::VarintOverflow)?)?;
         w.put_slice(self.public_key)?;
         w.put_u16(u16::try_from(self.signature.len()).map_err(|_| WireError::VarintOverflow)?)?;
-        w.put_slice(self.signature)
+        w.put_slice(self.signature)?;
+        write_params(w, self.params)
     }
 }

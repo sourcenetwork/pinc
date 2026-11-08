@@ -375,6 +375,7 @@ fn the_resume_run_allocates_nothing() {
                     peer_has_prekey: false,
                     token: &[],
                     ticket: Some(ticket),
+                    transport_params: &[],
                 },
             )
             .unwrap();
@@ -471,5 +472,96 @@ fn client_tickets_are_single_use_bounded_and_per_peer() {
         }
         assert!(!full.push(TicketEntry::default()));
         let _ = Secret::new([0u8; 1]);
+    });
+}
+
+#[test]
+fn issued_ticket_ids_never_repeat_a_stored_one() {
+    let mut w = world();
+    let out = w.full();
+    let r = out.r_est().unwrap().clone();
+    // A generator replayed from the same seed draws the ids already stored; the store must draw on.
+    let mut tickets = ServerTickets::<64>::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for round in 0..2 {
+        let mut drbg = vinc_crypto::Drbg::new(&[0x77; 32]);
+        let mut env = Env {
+            provider: &w.r_prov,
+            now: w.now,
+            drbg: &mut drbg,
+        };
+        let batch = tickets.issue_batch(&mut env, &r, 2, 3600);
+        if round == 0 {
+            for e in batch.unwrap().entries() {
+                assert!(seen.insert(e.tid));
+            }
+        } else {
+            for e in batch.unwrap().entries() {
+                assert!(seen.insert(e.tid), "an id was issued twice");
+            }
+        }
+    }
+    // Once more ids are stored than the attempts allow, the replayed generator is exhausted: a typed error.
+    let mut failed = false;
+    for _ in 0..8 {
+        let mut drbg = vinc_crypto::Drbg::new(&[0x77; 32]);
+        let mut env = Env {
+            provider: &w.r_prov,
+            now: w.now,
+            drbg: &mut drbg,
+        };
+        if let Err(e) = tickets.issue_batch(&mut env, &r, 4, 3600) {
+            assert_eq!(e, Failure::TicketId);
+            failed = true;
+            break;
+        }
+    }
+    assert!(failed);
+}
+
+#[test]
+fn transport_parameters_are_authenticated_remembered_and_bound_into_resumption() {
+    big_stack(|| {
+        let mut w = world();
+        w.i_params = vec![1, 2, 3, 4];
+        w.r_params = vec![9; 40];
+        let first = w.full();
+        let (i, r) = (first.i_est().unwrap(), first.r_est().unwrap());
+        assert_eq!(i.peer_params.as_bytes(), &[9u8; 40][..]);
+        assert_eq!(r.peer_params.as_bytes(), &[1u8, 2, 3, 4][..]);
+        assert_eq!(
+            (i.local_params.as_bytes(), r.local_params.as_bytes()),
+            (&[1u8, 2, 3, 4][..], &[9u8; 40][..])
+        );
+        // Tampering with either side's parameters in flight breaks the handshake.
+        for (msg, from_end) in [(0usize, 1usize), (1, 17)] {
+            let mut ini = w.initiator();
+            let mut rsp = w.responder();
+            let t = sec_common::Tamper::flip(msg, first.msgs[msg].len() - from_end);
+            let out = w.run(&mut ini, &mut rsp, Some(&t));
+            assert!(!out.both_established(), "message {msg}");
+        }
+        // A resumption uses the parameters the ticket remembered and shows them to both sides.
+        let out = resume(&mut w);
+        let (i, r) = (out.i_est().unwrap(), out.r_est().unwrap());
+        assert!(i.resumed && r.resumed);
+        assert_eq!(i.remembered_params.as_bytes(), &[9u8; 40][..]);
+        assert_eq!(r.remembered_params.as_bytes(), &[9u8; 40][..]);
+        assert_eq!(i.peer_params.as_bytes(), &[9u8; 40][..]);
+        assert_eq!(r.peer_params.as_bytes(), &[1u8, 2, 3, 4][..]);
+        // A server that now advertises other parameters still honours the ticket; the transport sees both the
+        // remembered ones (for 0-RTT) and the current ones (for the rest).
+        let mut w2 = world();
+        w2.r_params = vec![9; 40];
+        w2.full();
+        w2.r_params = vec![8; 40];
+        let out = resume(&mut w2);
+        let (i, r) = (out.i_est().unwrap(), out.r_est().unwrap());
+        assert!(i.resumed && r.resumed);
+        assert_eq!(i.remembered_params.as_bytes(), &[9u8; 40][..]);
+        assert_eq!(i.peer_params.as_bytes(), &[8u8; 40][..]);
+        assert_eq!(r.remembered_params.as_bytes(), &[9u8; 40][..]);
+        // Too long is refused outright.
+        assert!(vinc_security::Params::new(&[0; 257]).is_none());
     });
 }

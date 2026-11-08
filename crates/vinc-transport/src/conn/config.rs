@@ -3,8 +3,9 @@
 use vinc_security::LocalIdentity;
 use vinc_security::{AlpnList, PrekeyInfo, Ticket};
 
+use super::params::TransportParams;
 use crate::recovery::{MS, PathKind, SECOND};
-use crate::stream::{self, PeerLimits};
+use crate::stream;
 
 /// The smallest datagram every path must carry, and the size a path starts at.
 pub const MIN_MTU: u16 = 1200;
@@ -65,8 +66,9 @@ pub struct Config {
     pub reset_key: [u8; 32],
     /// Whether to probe larger datagram sizes after the handshake.
     pub probe_mtu: bool,
-    /// What the peer lets us send. There is no parameter exchange, so both endpoints use the same initial limits.
-    pub peer_limits: PeerLimits,
+    /// What this endpoint tells the peer about its limits (see [`TransportParams`]). The idle timeout field is
+    /// taken from `idle_timeout`; the stream limits are clamped to what the stream table can hold.
+    pub params: TransportParams,
 }
 
 impl Config {
@@ -82,14 +84,7 @@ impl Config {
             key_update_after: 1 << 21,
             reset_key: [0; 32],
             probe_mtu: true,
-            peer_limits: PeerLimits {
-                max_data: stream::DEFAULT_INITIAL_WINDOW,
-                max_stream_data_bidi_local: stream::DEFAULT_INITIAL_WINDOW,
-                max_stream_data_bidi_remote: stream::DEFAULT_INITIAL_WINDOW,
-                max_stream_data_uni: stream::DEFAULT_INITIAL_WINDOW,
-                max_streams_bidi: stream::DEFAULT_MAX_STREAMS,
-                max_streams_uni: stream::DEFAULT_MAX_STREAMS,
-            },
+            params: TransportParams::for_streams(&stream::Config::new(false)),
         }
     }
 }

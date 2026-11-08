@@ -109,6 +109,7 @@ impl Rig {
                 peer_has_prekey: short,
                 token: &[],
                 ticket,
+                transport_params: &[],
             },
         )
         .unwrap();

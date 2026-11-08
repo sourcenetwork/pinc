@@ -1,7 +1,7 @@
 //! The transcripts and the key schedule, written once and called by both roles.
 //!
 //! Invariants: every transcript starts with its label and absorbs every field the handshake binds (version, ALPN, both
-//! connection ids, the AEAD offer and choice, every public value, the hash of the prekey, the identities and the
+//! connection ids, the transport parameters of both sides, the AEAD offer and choice, every public value, the hash of the prekey, the identities and the
 //! signatures), each as a length-prefixed field, so two different handshakes never share a transcript; the chain
 //! starts at `ck0 = hash("chain")`, mixes in the post-quantum and the classical secrets together
 //! (`extract(ck0, ss_K || ss_X)`), and the application keys come from a second extraction over the final transcript,
@@ -67,6 +67,7 @@ pub(crate) struct InitialFields<'a> {
     pub e: &'a [u8; 32],
     pub prekey_hash: &'a [u8; 32],
     pub token: &'a [u8],
+    pub params: &'a [u8],
 }
 
 /// The transcript after the Initial (the same for the full and the short form).
@@ -78,6 +79,7 @@ pub(crate) fn initial_transcript(f: &InitialFields<'_>) -> Transcript {
     th.absorb(f.dcid.as_bytes());
     th.absorb(f.scid.as_bytes());
     th.absorb(f.token);
+    th.absorb(f.params);
     th.absorb(&[f.offer.bits()]);
     th.absorb(f.e);
     th.absorb(f.prekey_hash);
@@ -90,6 +92,11 @@ pub(crate) fn absorb_reply(th: &mut Transcript, scid: &ConnId, aead: Aead, e: &[
     th.absorb(&[aead_tag(aead)]);
     th.absorb(e);
     th.absorb(ct);
+}
+
+/// Absorb transport parameters as their own field.
+pub(crate) fn absorb_params(th: &mut Transcript, params: &[u8]) {
+    th.absorb(params);
 }
 
 /// Absorb an identity: the algorithm tag, then the public key.
@@ -140,8 +147,12 @@ pub(crate) fn application_secrets(ck1: &Secret<32>, th: &[u8; 32]) -> AppSecrets
 }
 
 /// The pre-shared key of a ticket.
-pub(crate) fn ticket_psk(resume: &Secret<32>, tid: &[u8; 16]) -> Secret<32> {
-    derive(resume, labels::TICKET, tid)
+pub(crate) fn ticket_psk(resume: &Secret<32>, tid: &[u8; 16], params: &[u8]) -> Secret<32> {
+    // The server's remembered parameters are part of the key's context: a resumption only works against them.
+    let mut ctx = Transcript::with_label(labels::TICKET);
+    ctx.absorb(tid);
+    ctx.absorb(params);
+    derive(resume, labels::TICKET, &ctx.snapshot())
 }
 
 /// `extract(ck0, psk)`: the chain a resumption starts from.
@@ -158,6 +169,7 @@ pub(crate) struct HelloFields<'a> {
     pub aead: Aead,
     pub tid: &'a [u8; 16],
     pub e: &'a [u8; 32],
+    pub params: &'a [u8],
 }
 
 /// The transcript after the Hello, up to but not including the binder.
@@ -171,6 +183,7 @@ pub(crate) fn hello_transcript(f: &HelloFields<'_>) -> Transcript {
     th.absorb(&[aead_tag(f.aead)]);
     th.absorb(f.tid);
     th.absorb(f.e);
+    th.absorb(f.params);
     th
 }
 
@@ -186,10 +199,11 @@ pub(crate) fn early_secret(ck_psk: &Secret<32>, th_hello: &[u8; 32]) -> Secret<3
 }
 
 /// Absorb the rest of a resumption: the binder, the responder's connection id and public value.
-pub(crate) fn absorb_resume_reply(th: &mut Transcript, binder: &[u8; 32], scid: &ConnId, e: &[u8; 32]) {
+pub(crate) fn absorb_resume_reply(th: &mut Transcript, binder: &[u8; 32], scid: &ConnId, e: &[u8; 32], params: &[u8]) {
     th.absorb(binder);
     th.absorb(scid.as_bytes());
     th.absorb(e);
+    th.absorb(params);
 }
 
 /// The confirmation tag: `keyed_hash(confirm key, th_r || tickets)`, with the tickets absorbed into the transcript.
@@ -273,6 +287,7 @@ pub(crate) fn seal_id_sig<P: Provider>(
     th: &[u8; 32],
     id: (IdentityAlg, &[u8]),
     signature: &[u8],
+    params: &[u8],
 ) -> Result<Sealed, Failure> {
     let mut sealed = Sealed {
         bytes: [0; MAX_SEALED_LEN],
@@ -283,6 +298,7 @@ pub(crate) fn seal_id_sig<P: Provider>(
         alg: id.0,
         public_key: id.1,
         signature,
+        params,
     }
     .write(&mut w)
     .map_err(Failure::BadPayload)?;

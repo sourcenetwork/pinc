@@ -166,6 +166,8 @@ pub(crate) struct World {
     pub r_alpns: Vec<&'static [u8]>,
     pub tickets_per_session: u8,
     pub token: Vec<u8>,
+    pub i_params: Vec<u8>,
+    pub r_params: Vec<u8>,
 }
 
 impl World {
@@ -195,6 +197,8 @@ impl World {
             r_alpns: vec![ALPN, ALPN_B],
             tickets_per_session: 1,
             token: Vec::new(),
+            i_params: Vec::new(),
+            r_params: Vec::new(),
         }
     }
 
@@ -226,6 +230,7 @@ impl World {
                 peer_has_prekey,
                 token: &self.token,
                 ticket,
+                transport_params: &self.i_params,
             },
         )
         .unwrap()
@@ -243,6 +248,7 @@ impl World {
             AlpnList::new(&self.r_alpns).unwrap(),
         );
         cfg.tickets_per_session = self.tickets_per_session;
+        cfg.transport_params = vinc_security::Params::new(&self.r_params).unwrap();
         Responder::new(cfg)
     }
 

@@ -16,7 +16,7 @@
 
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
-use vinc_transport::conn::PathId;
+use vinc_transport::conn::{CloseReason, PathId};
 use vinc_transport::stream::datagram::DatagramError;
 
 vinc_tests::install_counting_allocator!();
@@ -532,5 +532,89 @@ fn zero_rtt_replay_is_rejected() {
             reply.is_some_and(|t| t.len < 400),
             "a short reject, not a handshake reply"
         );
+    });
+}
+
+#[test]
+fn a_lost_middle_fragment_of_a_handshake_flight_is_all_that_is_missing() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::MlDsa65);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(57, Params::new(10 * MS));
+        link.route(PathId(1)).ba.drop_index(3);
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<u8>>::new()));
+        let rec = sent.clone();
+        net.on_tx = Some(Box::new(move |is_a, d, _| {
+            if !is_a {
+                rec.borrow_mut().push(d.to_vec());
+            }
+        }));
+        net.run(net.now + 200 * MS, |_| false);
+        let flight = sent.borrow().clone();
+        assert!(flight.len() >= 5, "the reply spans several datagrams: {}", flight.len());
+        assert!(!net.a.conn.is_connected());
+        // The client holds the other fragments: the lost datagram alone completes the flight.
+        let mut lost = flight[2].clone();
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut lost))
+            .unwrap();
+        assert!(net.connect(net.now + 300 * MS), "no retransmission was needed");
+        assert_eq!(net.a.conn.stats().handshake_retransmits, 0);
+    });
+}
+
+#[test]
+fn key_answers_may_come_several_polls_later() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(58, Params::new(10 * MS)));
+        net.a.auto_keys = false;
+        net.b.auto_keys = false;
+        // Whoever has a request waits; the other side's timers keep running meanwhile.
+        for _ in 0..8 {
+            net.run(net.now + 5 * SEC, |n| {
+                n.a.deferred.is_some() || n.b.deferred.is_some() || (n.a.conn.is_connected() && n.b.conn.is_connected())
+            });
+            net.run(net.now + 300 * MS, |_| false);
+            let now = net.now;
+            if net.a.deferred.is_some() {
+                net.a.deliver_deferred(now).unwrap();
+            }
+            if net.b.deferred.is_some() {
+                net.b.deliver_deferred(now).unwrap();
+            }
+            if net.a.conn.is_connected() && net.b.conn.is_connected() {
+                break;
+            }
+        }
+        assert!(net.connect(net.now + 5 * SEC));
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, b"after slow keys").unwrap();
+        net.a.conn.finish(id).unwrap();
+        assert!(net.run(net.now + 2 * SEC, |n| n.b.fin.contains(&id)));
+    });
+}
+
+#[test]
+fn a_failed_key_answer_closes_with_a_typed_reason() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(59, Params::new(10 * MS)));
+        net.a.auto_keys = false;
+        net.a.fail_keys = true;
+        assert!(net.run(net.now + 5 * SEC, |n| n.a.deferred.is_some()));
+        net.run(net.now + 200 * MS, |_| false);
+        let now = net.now;
+        assert_eq!(net.a.deliver_deferred(now), Err(vinc_security::Failure::KeyOperation));
+        net.a.service(now);
+        assert_eq!(
+            net.a.closed(),
+            Some(CloseReason::Handshake(vinc_security::Failure::KeyOperation))
+        );
+        assert!(net.a.conn.is_closed());
     });
 }

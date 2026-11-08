@@ -102,15 +102,13 @@ fn close_then_drain() {
 fn a_flow_control_violation_closes_with_a_code() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
-        // A client that believes the server grants far more than it does sends past the window.
-        let honest = w.cfg;
-        w.cfg.peer_limits.max_data = 16 << 20;
-        w.cfg.peer_limits.max_stream_data_bidi_remote = 16 << 20;
-        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let a = w.client(&mut sa, None, vinc_security::ClientTickets::new());
-        w.cfg = honest;
-        let b = w.server(&mut sb);
-        let mut net = Net::new(a, b, Link::new(4, Params::new(10 * MS)), &mut w.stores);
+        // A server whose stream table is smaller than what it advertises: the client sends within the credit it was
+        // told about, and the server finds that more than its table can take.
+        let mut small = vinc_transport::stream::Config::new(false);
+        small.initial_stream_window = 64 * 1024;
+        let mut sa = Store::new(true);
+        let mut sb = Store::with_stream(CHUNKS, &small);
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
         net.b.auto_read = false;
         let big = pattern(6 << 20, 5);
@@ -347,12 +345,19 @@ fn early_one_rtt_packets_wait_for_the_finish() {
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(12, Params::new(10 * MS)));
         net.drop_finish = true;
-        let id = net.a.conn.open_bi().unwrap();
-        net.a.conn.write(id, b"before the finish").unwrap();
-        net.a.conn.finish(id).unwrap();
-        // Put the stream data in packets that reach the server before the retransmitted Finish does.
-        let ok = net.run(net.now + 20 * SEC, |n| n.b.fin.contains(&id));
+        // Once the client is connected (its Finish lost), it sends stream data that reaches the server first.
+        let mut id = None;
+        let ok = net.run(net.now + 20 * SEC, |n| {
+            if id.is_none() && n.a.conn.is_connected() {
+                let s = n.a.conn.open_bi().unwrap();
+                n.a.conn.write(s, b"before the finish").unwrap();
+                n.a.conn.finish(s).unwrap();
+                id = Some(s);
+            }
+            id.is_some_and(|s| n.b.fin.contains(&s))
+        });
         assert!(ok);
+        let id = id.unwrap();
         assert_eq!(net.b.read[&id], b"before the finish");
         assert!(
             net.b.conn.stats().early_buffered > 0,

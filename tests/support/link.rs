@@ -22,6 +22,7 @@
     clippy::trivially_copy_pass_by_ref,
     clippy::struct_excessive_bools,
     clippy::missing_panics_doc,
+    clippy::missing_errors_doc,
     clippy::must_use_candidate,
     clippy::return_self_not_must_use,
     clippy::new_without_default
@@ -233,6 +234,7 @@ pub struct Dir {
     seq: u64,
     free_at: u64,
     drop_next: u32,
+    drop_index: Option<u64>,
     pub sent: u64,
     pub dropped: u64,
     pub delivered: u64,
@@ -247,6 +249,7 @@ impl Dir {
             seq: 0,
             free_at: 0,
             drop_next: 0,
+            drop_index: None,
             sent: 0,
             dropped: 0,
             delivered: 0,
@@ -257,6 +260,10 @@ impl Dir {
     }
     fn send(&mut self, now: u64, data: &[u8]) {
         self.sent += 1;
+        if self.drop_index == Some(self.sent) {
+            self.dropped += 1;
+            return;
+        }
         if self.drop_next > 0 {
             self.drop_next -= 1;
             self.dropped += 1;
@@ -298,6 +305,10 @@ impl Dir {
             seq: self.seq,
             data,
         });
+    }
+    /// Drop only the `k`th datagram (counting from 1) sent in this direction.
+    pub fn drop_index(&mut self, k: u64) {
+        self.drop_index = Some(k);
     }
     /// Drop the next `n` datagrams sent in this direction.
     pub fn drop_next(&mut self, n: u32) {
@@ -411,8 +422,12 @@ impl Store {
         Self::with_chunks(client, CHUNKS)
     }
     pub fn with_chunks(client: bool, chunks: usize) -> Self {
+        Self::with_stream(chunks, &stream::Config::new(client))
+    }
+    /// A store whose stream table is built from `cfg`.
+    pub fn with_stream(chunks: usize, cfg: &stream::Config) -> Self {
         let pool = BufferPool::new_boxed(chunks);
-        let streams = Box::new(Table::new(&stream::Config::new(client), &pool));
+        let streams = Box::new(Table::new(cfg, &pool));
         Self {
             streams,
             loss: LossEstimate::new(),
@@ -452,6 +467,13 @@ pub enum Rec {
 
 pub const ALPN: &[u8] = b"vinc/1";
 
+/// A key answer computed but not yet delivered.
+pub enum Deferred {
+    Signature(Vec<u8>),
+    Secret(Secret<32>),
+    Failed,
+}
+
 /// An endpoint under test: a connection, its provider and keys, and what it saw.
 pub struct Node<'a> {
     pub conn: Conn<'a>,
@@ -467,6 +489,11 @@ pub struct Node<'a> {
     /// Read and consume stream data as it arrives.
     pub auto_read: bool,
     pub tx_log: Vec<(u64, usize, PathId)>,
+    /// Answer key requests at once; when false they are computed and held in `deferred` for the test to deliver.
+    pub auto_keys: bool,
+    pub deferred: Option<Deferred>,
+    /// Compute a failure instead of the real answer when deferring.
+    pub fail_keys: bool,
 }
 
 impl<'a> Node<'a> {
@@ -479,8 +506,30 @@ impl<'a> Node<'a> {
             let mut datagram = false;
             while let Some(ev) = self.conn.poll_event() {
                 let rec = match ev {
-                    Event::KeyRequest(_) => {
-                        key_request = true;
+                    Event::KeyRequest(req) => {
+                        if self.auto_keys {
+                            key_request = true;
+                        } else {
+                            let soft = SoftKeys {
+                                signer: Some((KeyHandle(1), &self.kp)),
+                                prekeys: self.prekeys.as_ref(),
+                            };
+                            let mut env = Env {
+                                provider: &self.prov,
+                                now,
+                                drbg: &mut self.drbg,
+                            };
+                            let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+                            self.deferred = Some(if self.fail_keys {
+                                Deferred::Failed
+                            } else {
+                                match soft.answer(&mut env, &req, &mut sig) {
+                                    vinc_security::KeyResponse::Signature(s) => Deferred::Signature(s.to_vec()),
+                                    vinc_security::KeyResponse::SharedSecret(s) => Deferred::Secret(s),
+                                    vinc_security::KeyResponse::Failed => Deferred::Failed,
+                                }
+                            });
+                        }
                         continue;
                     }
                     Event::Connected { resumed } => Rec::Connected(resumed),
@@ -572,6 +621,16 @@ impl<'a> Node<'a> {
         f(&mut self.conn, &mut env)
     }
 
+    /// Deliver the held key answer.
+    pub fn deliver_deferred(&mut self, now: u64) -> Result<(), vinc_security::Failure> {
+        let held = self.deferred.take().unwrap();
+        self.with_env(now, |c, env| match held {
+            Deferred::Signature(s) => c.on_key_response(env, vinc_security::KeyResponse::Signature(&s)),
+            Deferred::Secret(s) => c.on_key_response(env, vinc_security::KeyResponse::SharedSecret(s)),
+            Deferred::Failed => c.on_key_response(env, vinc_security::KeyResponse::Failed),
+        })
+    }
+
     pub fn closed(&self) -> Option<CloseReason> {
         self.log
             .iter()
@@ -607,6 +666,8 @@ pub struct World {
     pub cfg: Config,
     /// Try the short first flight.
     pub short: bool,
+    /// The client's own configuration when it differs from the server's.
+    pub client_cfg: Option<Config>,
 }
 
 impl World {
@@ -624,6 +685,7 @@ impl World {
             alg,
             cfg,
             short: false,
+            client_cfg: None,
         }
     }
 
@@ -644,7 +706,7 @@ impl World {
         let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
         let prekey = prekeys.acquire(&mut env).unwrap();
         let conn = Conn::client(
-            self.cfg,
+            self.client_cfg.unwrap_or(self.cfg),
             ClientParams {
                 peer: self.rp.id.node_id(),
                 alpn: ALPN,
@@ -673,6 +735,9 @@ impl World {
             dgrams: Vec::new(),
             auto_read: true,
             tx_log: Vec::new(),
+            auto_keys: true,
+            deferred: None,
+            fail_keys: false,
         }
     }
 
@@ -710,6 +775,9 @@ impl World {
             dgrams: Vec::new(),
             auto_read: true,
             tx_log: Vec::new(),
+            auto_keys: true,
+            deferred: None,
+            fail_keys: false,
         }
     }
 }

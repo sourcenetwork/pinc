@@ -98,12 +98,12 @@ fn message_sizes_and_padding() {
             let out = w.full();
             let (init, reply, finish) = (&out.msgs[0], &out.msgs[1], &out.msgs[2]);
             // Initial: type, version, dcid(16), scid(8), alpn(6), offer, e_I, pk_I, token(0).
-            assert_eq!(init.len(), 1 + 4 + 17 + 9 + 7 + 1 + 32 + 1184 + 1);
-            let sealed = 1 + 2 + alg.public_key_len() + 2 + alg.signature_len() + 16;
+            assert_eq!(init.len(), 1 + 4 + 17 + 9 + 7 + 1 + 32 + 1184 + 1 + 2);
+            let sealed = 1 + 2 + alg.public_key_len() + 2 + alg.signature_len() + 2 + 16;
             // Reply: type, scid(8), aead, e_R, ct, sealed.
             assert_eq!(reply.len(), 1 + 9 + 1 + 32 + 1088 + 2 + sealed);
             assert!(reply.len() <= reply_len(alg));
-            assert_eq!(finish.len(), 1 + 2 + (1 + 2 + 32 + 2 + 64 + 16));
+            assert_eq!(finish.len(), 1 + 2 + (1 + 2 + 32 + 2 + 64 + 2 + 16));
             // Three times the padded Initial covers the Reply and its per-datagram overhead.
             for form in [InitialForm::Full, InitialForm::Short] {
                 let min = min_initial_len(form, alg);
@@ -115,7 +115,7 @@ fn message_sizes_and_padding() {
                 min_initial_len(InitialForm::Short, alg),
             );
             match alg {
-                IdentityAlg::Ed25519 | IdentityAlg::EcdsaP256 => assert_eq!((full, short), (1200, 464)),
+                IdentityAlg::Ed25519 | IdentityAlg::EcdsaP256 => assert_eq!((full, short), (1200, 480)),
                 _ => assert!(full > 1200 && short > 464 && full == short),
             }
             assert!(reply_len(IdentityAlg::Hybrid) <= MAX_MESSAGE_LEN);
@@ -513,8 +513,8 @@ fn the_address_token_is_part_of_the_transcript() {
         w.token = b"token-bytes".to_vec();
         let out = w.full();
         assert!(out.both_established());
-        let token_at = out.msgs[0].len() - 11;
-        assert_eq!(&out.msgs[0][token_at..], b"token-bytes");
+        let token_at = out.msgs[0].len() - 11 - 2;
+        assert_eq!(&out.msgs[0][token_at..token_at + 11], b"token-bytes");
         let mut i = w.initiator();
         let mut r = w.responder();
         let t = Tamper::flip(0, token_at + 3);
@@ -794,6 +794,7 @@ fn a_full_handshake_run_allocates_nothing() {
                         peer_has_prekey: false,
                         token: &[],
                         ticket: None,
+                        transport_params: &[],
                     },
                 )
                 .unwrap();

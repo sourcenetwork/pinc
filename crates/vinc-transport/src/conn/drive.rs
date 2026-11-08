@@ -4,9 +4,10 @@
 use vinc_crypto::Provider;
 use vinc_security::{ClientTickets, Env, Event as SecEvent, Failure, KeyResponse, SoftKeys, TicketBatch};
 
-use super::event::{CloseReason, Ev};
+use super::event::{CloseReason, Ev, code};
 use super::handshake::Machine;
 use super::keys::Dir;
+use super::params::TransportParams;
 use super::path::PathState;
 use super::recv::Rx;
 use super::{Connection, Phase};
@@ -101,15 +102,51 @@ conn_impl! {
                 } else if !est.tickets.entries().is_empty() {
                     self.push(Ev::Tickets(est.tickets));
                 }
+                if !self.apply_peer_params(now, &est) {
+                    return;
+                }
                 let (len, key) = (self.cfg.cid_len, self.cfg.reset_key);
+                let target = usize::try_from(self.peer_params.active_cid_limit).unwrap_or(NP).min(NP);
                 // A failing generator leaves the peer with fewer ids; the next retirement tries again.
-                let _ = self.cids.issue(env, len, &key, NP);
+                let _ = self.cids.issue(env, len, &key, target);
                 self.mtu_start();
                 self.est = Some(est);
                 self.push(Ev::Connected(self.resumed));
                 self.drain_early(env);
             }
         }
+    }
+
+    /// Apply the peer's authenticated transport parameters. Returns false if the connection was closed instead.
+    fn apply_peer_params(&mut self, now: u64, est: &vinc_security::Established) -> bool {
+        let Ok(p) = TransportParams::decode(est.peer_params.as_bytes()) else {
+            self.violation(now, code::PROTOCOL_VIOLATION, "bad transport parameters");
+            return false;
+        };
+        // A server honours 0-RTT within what it remembered advertising: its limits must not have shrunk.
+        if est.resumed
+            && !self.client
+            && TransportParams::decode(est.remembered_params.as_bytes()).is_ok_and(|m| !self.local_params.covers(&m))
+        {
+            self.silent_close(CloseReason::Handshake(Failure::InvalidParameter));
+            return false;
+        }
+        self.streams.set_peer_limits(&p.peer_limits());
+        if p.idle_timeout_ms > 0 {
+            self.cfg.idle_timeout = self.cfg.idle_timeout.min(p.idle_timeout_ms.saturating_mul(1_000_000));
+        }
+        let cap = u16::try_from(p.max_udp_payload).unwrap_or(u16::MAX);
+        for path in self.paths.slots.iter_mut().flatten() {
+            path.mtu.ceiling = path.mtu.ceiling.min(cap.saturating_add(1));
+            path.mtu.current = path.mtu.current.min(cap).max(super::MIN_MTU);
+        }
+        self.peer_params = p;
+        true
+    }
+
+    /// The peer's transport parameters, once the handshake gave them (the minimum before, or what a ticket remembered).
+    pub const fn peer_params(&self) -> &TransportParams {
+        &self.peer_params
     }
 
     /// Process the early 1-RTT packets held while the peer was not yet authenticated.

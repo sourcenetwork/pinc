@@ -40,6 +40,8 @@ pub enum Failure {
     KeyOperation,
     /// The caller's random generator failed.
     Randomness,
+    /// The ticket store could not find a fresh ticket id: the generator kept returning ids already stored.
+    TicketId,
     /// The state machine already failed.
     Closed,
     /// A primitive refused its input.
@@ -79,6 +81,7 @@ impl fmt::Display for Failure {
             Self::WrongPeer => f.write_str("peer is not the node that was dialed"),
             Self::KeyOperation => f.write_str("key operation failed"),
             Self::Randomness => f.write_str("random generator failed"),
+            Self::TicketId => f.write_str("no fresh ticket id"),
             Self::Closed => f.write_str("handshake already failed"),
             Self::Crypto(e) => write!(f, "{e}"),
         }

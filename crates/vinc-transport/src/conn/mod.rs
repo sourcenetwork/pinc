@@ -63,19 +63,23 @@ mod handshake;
 mod keys;
 mod life;
 mod mtu;
+mod params;
 mod path;
 mod recv;
 mod send;
 mod timer;
 
 use vinc_crypto::Provider;
-use vinc_security::{ConnId, Env, Established, Failure, Initiator, InitiatorParams, Responder, ResponderConfig};
+use vinc_security::{
+    ConnId, Env, Established, Failure, Initiator, InitiatorParams, MAX_PARAMS_LEN, Params, Responder, ResponderConfig,
+};
 
 pub use cid::reset_token;
 pub use config::{
     ClientParams, Config, DEFAULT_IDLE, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
 };
 pub use event::{CloseReason, Drop, Event, code};
+pub use params::{ParamsError, TransportParams};
 pub use path::PathError;
 pub use send::Transmit;
 
@@ -88,7 +92,7 @@ use self::life::Life;
 use self::path::Paths;
 use crate::recovery::{LossEstimate, ReceivedPackets, Recovery};
 use crate::stream::datagram::{Datagrams, EarlyData};
-use crate::stream::pool::BufferPool;
+use crate::stream::pool::{BufferPool, CHUNK_SIZE};
 use crate::stream::{NoSource, StreamSource, Streams};
 
 /// Everything a connection borrows or is handed: the buffer pool, the stream table and the shared loss average.
@@ -155,6 +159,8 @@ pub struct Connection<
     ext_release: bool,
     paced_until: Option<u64>,
     degraded_told: bool,
+    local_params: TransportParams,
+    peer_params: TransportParams,
 }
 
 impl<'a, P, S, const N: usize, const C: usize, const F: usize, const NP: usize> Connection<'a, P, S, N, C, F, NP>
@@ -162,6 +168,7 @@ where
     P: Provider,
     S: StreamSource,
 {
+    #[allow(clippy::too_many_arguments, reason = "the fields both constructors fix, passed once")]
     fn base(
         client: bool,
         cfg: Config,
@@ -170,12 +177,13 @@ where
         first_cid: ConnId,
         odcid: ConnId,
         now: u64,
+        local_params: TransportParams,
     ) -> Self {
         let Resources { pool, streams, loss } = res;
         let hs = Handshake::new(machine, now, cfg.thin, cfg.remembered_rtt);
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
-        let c = Self {
+        Self {
             client,
             cfg,
             phase: Phase::Handshaking,
@@ -206,9 +214,27 @@ where
             ext_release: false,
             paced_until: None,
             degraded_told: false,
-        };
-        c.streams.set_peer_limits(&cfg.peer_limits);
-        c
+            local_params,
+            peer_params: TransportParams::MIN,
+        }
+    }
+
+    /// What this endpoint advertises: the configured parameters, the idle timeout, and the stream limits clamped to
+    /// what this stream table and pool can hold.
+    fn advertise(cfg: &Config, streams: &Streams<S, N, C>) -> (TransportParams, Params) {
+        let mut p = cfg.params;
+        p.idle_timeout_ms = cfg.idle_timeout / 1_000_000;
+        let conn = streams.recv_window();
+        let per_stream = conn.min((C as u64).saturating_sub(1) * CHUNK_SIZE as u64);
+        p.initial_max_data = p.initial_max_data.min(conn);
+        p.max_stream_data_bidi_local = p.max_stream_data_bidi_local.min(per_stream);
+        p.max_stream_data_bidi_remote = p.max_stream_data_bidi_remote.min(per_stream);
+        p.max_stream_data_uni = p.max_stream_data_uni.min(per_stream);
+        p.max_streams_bidi = p.max_streams_bidi.min(N as u64);
+        p.max_streams_uni = p.max_streams_uni.min(N as u64);
+        let mut buf = [0u8; MAX_PARAMS_LEN];
+        let n = p.encode(&mut buf).unwrap_or(0);
+        (p, Params::new(buf.get(..n).unwrap_or_default()).unwrap_or_default())
     }
 
     fn random_cid(env: &mut Env<'_, P>, len: usize) -> Result<ConnId, Failure> {
@@ -235,6 +261,11 @@ where
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = Self::random_cid(env, 8)?;
+        let (local, wire) = Self::advertise(&cfg, res.streams);
+        let remembered = params
+            .ticket
+            .as_ref()
+            .and_then(|t| TransportParams::decode(t.peer_params().as_bytes()).ok());
         let init = Initiator::new(
             env,
             InitiatorParams {
@@ -246,9 +277,16 @@ where
                 peer_has_prekey: params.peer_has_prekey,
                 token: params.token,
                 ticket: params.ticket,
+                transport_params: wire.as_bytes(),
             },
         )?;
-        let mut c = Self::base(true, cfg, res, Machine::Client(init), cid, odcid, env.now);
+        let mut c = Self::base(true, cfg, res, Machine::Client(init), cid, odcid, env.now, local);
+        // Until the server's parameters arrive, the minimum holds; with a ticket, 0-RTT data may rely on what the
+        // server advertised in the session that issued it.
+        if let Some(p) = remembered {
+            c.streams.set_peer_limits(&p.peer_limits());
+            c.peer_params = p;
+        }
         c.new_path_slot(params.path, params.path_info, env.now);
         if let Some(p) = c.paths.active_mut() {
             p.state = path::PathState::Validated;
@@ -259,7 +297,7 @@ where
     }
 
     /// Accept a connection. The first datagram of the client goes to
-    /// [`handle_datagram`](Self::handle_datagram), which tells the connection its path.
+    /// [`handle_datagram_with`](Self::handle_datagram_with), which tells the connection its path.
     ///
     /// # Errors
     /// A [`Failure`] if the connection id length is outside 1 to 20 or the random generator refuses.
@@ -271,10 +309,12 @@ where
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = ConnId::default();
+        let (local, wire) = Self::advertise(&cfg, res.streams);
         let mut rc = ResponderConfig::new(params.identity, cid, params.alpns);
         rc.tickets_per_session = params.tickets_per_session;
         rc.ticket_lifetime_s = params.ticket_lifetime_s;
-        Ok(Self::base(
+        rc.transport_params = wire;
+        let c = Self::base(
             false,
             cfg,
             res,
@@ -282,7 +322,9 @@ where
             cid,
             odcid,
             env.now,
-        ))
+            local,
+        );
+        Ok(c)
     }
 
     /// Whether the handshake completed and the connection is open.

@@ -24,6 +24,7 @@ pub mod keys;
 pub mod labels;
 pub mod message;
 mod outbox;
+pub mod params;
 pub mod record;
 pub mod replay;
 pub mod responder;
@@ -39,6 +40,7 @@ pub use ids::{AeadSet, Alpn, AlpnList, ConnId, KeyHandle, LocalIdentity, VERSION
 pub use initiator::{Initiator, InitiatorParams};
 pub use keys::{KeyRequest, KeyResponse, PrekeyInfo, PrekeyPolicy, SoftKeys, SoftPrekeys, prekey_hash};
 pub use message::{InitialForm, min_initial_len, reply_len};
+pub use params::{MAX_PARAMS_LEN, Params};
 pub use record::{HeaderKey, Limits, PacketKey, RecordError};
 pub use replay::{ReplayError, ReplayWindow};
 pub use responder::{Responder, ResponderConfig, ResponderStores};

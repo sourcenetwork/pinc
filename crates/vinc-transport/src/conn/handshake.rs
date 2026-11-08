@@ -2,9 +2,9 @@
 //!
 //! A handshake message can be longer than a datagram, so a Handshake packet body is
 //! `total(varint) offset(varint) fragment`: the message length, where the fragment starts and its bytes. The sender
-//! cuts the message into datagram-sized fragments in order; the receiver accepts a fragment only if it starts at or
-//! before the end of what it already holds, so a lost fragment waits for the retransmission, which sends the whole
-//! message again. Both directions hold one message in a fixed buffer: nothing here allocates.
+//! cuts the message into datagram-sized fragments; the receiver keeps every fragment that arrives, in any order, in a
+//! buffer of the largest message size with a bounded set of received runs, so a lost fragment costs only the
+//! retransmission, which sends the flight again and completes the message. Both directions hold one message in a fixed buffer: nothing here allocates.
 //!
 //! Invariants: the reassembly buffer never holds more than [`MAX_MESSAGE_LEN`] bytes and a message is handed to the
 //! state machine only when complete; the retransmit timer doubles from `max(500 ms, 2 x RTT)` up to
@@ -26,6 +26,9 @@ const RETX_BASE: u64 = 500 * MS;
 const RETX_CAP: u64 = 16 * SECOND;
 /// The longest retransmit delay of a thin node.
 const RETX_CAP_THIN: u64 = 8 * SECOND;
+
+/// The most disjoint runs of one message the receiver tracks (a message is a handful of datagrams).
+const RUNS: usize = 8;
 
 /// The longest message a key request signs.
 const SIGN_MAX: usize = 64;
@@ -78,7 +81,8 @@ pub(crate) struct Handshake {
     tx_total_sent: usize,
     tx_active: bool,
     rx: [u8; MAX_MESSAGE_LEN],
-    rx_have: usize,
+    rx_runs: [(usize, usize); RUNS],
+    rx_len: usize,
     rx_total: usize,
     pub(crate) request: Option<OwnedRequest>,
     pub(crate) request_announced: bool,
@@ -101,7 +105,8 @@ impl Handshake {
             tx_total_sent: 0,
             tx_active: false,
             rx: [0; MAX_MESSAGE_LEN],
-            rx_have: 0,
+            rx_runs: [(0, 0); RUNS],
+            rx_len: 0,
             rx_total: 0,
             request: None,
             request_announced: false,
@@ -196,8 +201,8 @@ impl Handshake {
         }
     }
 
-    /// A fragment arrived. Returns the length of the complete message once all of it is in; [`Self::feed`] hands it
-    /// to the state machine.
+    /// A fragment arrived, in any order. Returns the length of the complete message once every byte is in;
+    /// [`Self::feed`] hands it to the state machine.
     pub(crate) fn on_fragment(&mut self, body: &[u8]) -> Option<usize> {
         let mut r = Reader::new(body);
         let total = usize::try_from(r.read_varint().ok()?).ok()?;
@@ -208,21 +213,40 @@ impl Handshake {
         }
         if total != self.rx_total {
             self.rx_total = total;
-            self.rx_have = 0;
+            self.rx_runs = [(0, 0); RUNS];
+            self.rx_len = 0;
         }
-        // vertexia: a fragment that leaves a gap is dropped and the whole flight comes again on the retransmit timer;
-        // keeping out-of-order fragments in a range set would save a round on lossy links.
-        if off > self.rx_have {
+        let end = off.checked_add(data.len())?.min(total);
+        let data = data.get(..end.checked_sub(off)?)?;
+        if data.is_empty() {
             return None;
         }
-        let fresh = data.get(self.rx_have - off..)?;
-        let end = (self.rx_have + fresh.len()).min(total);
-        let dst = self.rx.get_mut(self.rx_have..end)?;
-        dst.copy_from_slice(fresh.get(..dst.len())?);
-        self.rx_have = end;
-        if self.rx_have == total {
-            self.rx_have = 0;
+        // Merge the new run into the sorted, disjoint runs; with no free slot the fragment is dropped and the
+        // retransmission brings it again.
+        let (mut lo, mut hi) = (off, end);
+        let mut keep = [(0usize, 0usize); RUNS];
+        let mut n = 0;
+        for &(s, e) in self.rx_runs.iter().take(self.rx_len) {
+            if e < lo || s > hi {
+                *keep.get_mut(n)? = (s, e);
+                n += 1;
+            } else {
+                lo = lo.min(s);
+                hi = hi.max(e);
+            }
+        }
+        if n == RUNS {
+            return None;
+        }
+        self.rx.get_mut(off..end)?.copy_from_slice(data);
+        *keep.get_mut(n)? = (lo, hi);
+        n += 1;
+        keep.get_mut(..n)?.sort_unstable();
+        self.rx_runs = keep;
+        self.rx_len = n;
+        if n == 1 && lo == 0 && hi == total {
             self.rx_total = 0;
+            self.rx_len = 0;
             return Some(total);
         }
         None
