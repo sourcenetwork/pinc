@@ -1,7 +1,12 @@
-//! Round-trip estimation (RFC 9002 section 5) with acknowledgement-delay capping.
+//! Round-trip estimation: the smoothed round trip, its variation and its minimum.
 //!
-//! Invariants: `smoothed`, `rttvar` and `latest` are nanoseconds; the minimum is the smallest sample ever seen since
-//! the last reset. All updates use `u128` intermediates and saturate, so no input can overflow.
+//! Every sample is used as measured: acknowledgements carry no delay field, because the receiver's delay is bounded by
+//! a fixed policy ([`max_ack_delay`]) that the sender already allows for in its probe timeout.
+//!
+//! Invariants: `smoothed`, `rttvar` and `latest` are nanoseconds; the minimum is the smallest sample ever seen. The
+//! first sample sets `smoothed = sample` and `rttvar = sample / 2`; later ones set `rttvar = (3 rttvar + |smoothed -
+//! sample|) / 4` and `smoothed = (7 smoothed + sample) / 8`. All updates use `u128` intermediates and saturate, so no
+//! input can overflow.
 
 use super::math::sat;
 use super::{LONG_RTT, MS, is_long_rtt};
@@ -10,13 +15,17 @@ use super::{LONG_RTT, MS, is_long_rtt};
 pub const INITIAL_RTT: u64 = 333 * MS;
 const BASE_MAX_ACK_DELAY: u64 = 25 * MS;
 const LONG_RTT_MAX_ACK_DELAY: u64 = 250 * MS;
+/// On a long-RTT path the receiver holds an acknowledgement for `min_rtt / ACK_DELAY_DIVISOR` (8).
+const ACK_DELAY_DIVISOR: u64 = 8;
 
-/// The longest the peer may hold an acknowledgement: 25 ms, or on a long-RTT path min(250 ms, `min_rtt` / 8).
+/// The longest the receiver holds an acknowledgement: 25 ms, or on a long-RTT path (minimum round trip of 250 ms or
+/// more) `min(250 ms, max(25 ms, min_rtt / 8))`.
 ///
-/// The receiver delays by this much and the sender caps the reported delay by it: both call this one function.
+/// The receiver delays by this much and the sender allows for 25 ms in its probe timeout: a fixed
+/// policy, never reported on the wire.
 pub fn max_ack_delay(min_rtt: Option<u64>) -> u64 {
     match min_rtt {
-        Some(m) if m >= LONG_RTT => (m / 8).min(LONG_RTT_MAX_ACK_DELAY),
+        Some(m) if m >= LONG_RTT => (m / ACK_DELAY_DIVISOR).clamp(BASE_MAX_ACK_DELAY, LONG_RTT_MAX_ACK_DELAY),
         _ => BASE_MAX_ACK_DELAY,
     }
 }
@@ -49,35 +58,24 @@ impl RttEstimator {
         }
     }
 
-    /// Fold in one sample: `latest` is the measured round trip, `ack_delay` what the peer reported holding the ack.
-    pub fn update(&mut self, latest: u64, ack_delay: u64) {
-        self.latest = latest;
-        self.min = self.min.min(latest);
+    /// Fold in one sample, used as measured.
+    pub fn update(&mut self, sample: u64) {
+        self.latest = sample;
+        self.min = self.min.min(sample);
         if !self.has_sample {
             self.has_sample = true;
-            self.smoothed = latest;
-            self.rttvar = latest / 2;
+            self.smoothed = sample;
+            self.rttvar = sample / 2;
             return;
         }
-        let delay = ack_delay.min(max_ack_delay(self.min_rtt()));
-        let adjusted = if latest >= self.min.saturating_add(delay) {
-            latest - delay
-        } else {
-            latest
-        };
-        let diff = u128::from(self.smoothed.abs_diff(adjusted));
+        let diff = u128::from(self.smoothed.abs_diff(sample));
         self.rttvar = sat((3 * u128::from(self.rttvar) + diff) / 4);
-        self.smoothed = sat((7 * u128::from(self.smoothed) + u128::from(adjusted)) / 8);
+        self.smoothed = sat((7 * u128::from(self.smoothed) + u128::from(sample)) / 8);
     }
 
-    /// Forget every sample (a new path).
-    pub fn reset(&mut self) {
-        *self = Self::new();
-    }
-
-    /// The latest raw sample, or 0 before the first.
-    pub const fn latest(&self) -> u64 {
-        self.latest
+    /// The latest sample, or `None` before the first.
+    pub const fn latest(&self) -> Option<u64> {
+        if self.has_sample { Some(self.latest) } else { None }
     }
 
     /// The smoothed round trip; [`INITIAL_RTT`] before the first sample.

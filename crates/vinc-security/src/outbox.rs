@@ -96,6 +96,11 @@ impl Outbox {
         self.send = false;
     }
 
+    /// The length of the message in the buffer.
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
     /// Queue the message in the buffer again.
     pub(crate) const fn resend(&mut self) {
         self.send = self.len > 0;

@@ -54,5 +54,8 @@ pub use protect::{
     Opened, PnLayout, SAMPLE_SKIP, Unprotected, open, protect_header, sample_at, seal, unprotect_header,
 };
 pub use reset::{MIN_RESET_LEN, RESET_TOKEN_LEN, build_stateless_reset, is_stateless_reset};
-pub use vinc_security::VERSION;
+/// The version the long header carries, still four bytes wide. The handshake's version is one byte
+/// ([`vinc_security::VERSION`]); the header narrows to that byte when the packet layer is reworked.
+#[allow(clippy::cast_lossless, reason = "u32::from is not const")]
+pub const VERSION: u32 = vinc_security::VERSION as u32;
 pub use vinc_security::ids::{ConnId, MAX_CID_LEN};

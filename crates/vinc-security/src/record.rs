@@ -1,11 +1,12 @@
-//! Record protection: packet keys with nonce construction, key-update generations and header protection.
+//! Record protection: packet keys with nonce construction, key-roll generations and header protection.
 //!
 //! Invariants: the nonce of a packet is the IV XOR the packet number, and a packet number is below 2^62, so a
 //! (key, nonce) pair is never reused within a generation; a key that reached its usage limit refuses to seal or open
-//! and says so with [`RecordError::KeyUpdateRequired`], it never continues silently; every generation's key and IV
-//! derive from the previous generation's secret only, so both sides move in step with no round trip; the header
-//! key belongs to the first generation and is not updated (RFC 9001 section 6). Seal and open work in place over
-//! caller buffers with a detached tag. Nothing here allocates, reads a clock or a random source, or panics.
+//! and says so with [`RecordError::KeyRollRequired`], it never continues silently; a key of the next generation
+//! derives only from a secret the two sides computed together with a fresh Diffie-Hellman value (see
+//! [`crate::keyroll`]), never from the old secret alone, so there is no hash-only successor; the header key belongs
+//! to the first generation and is not rolled. Seal and open work in place over caller buffers with a detached tag.
+//! Nothing here allocates, reads a clock or a random source, or panics.
 
 use core::fmt;
 
@@ -13,6 +14,7 @@ use vinc_crypto::{Aead, CryptoError, Provider, Secret, expand};
 use zeroize::Zeroize;
 
 use crate::labels;
+use crate::schedule::roll_secret;
 
 /// The largest packet number: packet numbers are below 2^62.
 pub const MAX_PACKET_NUMBER: u64 = (1 << 62) - 1;
@@ -48,8 +50,8 @@ pub enum RecordError {
     NotIncreasing,
     /// The tag does not match: the packet, its header, its number or the key is wrong.
     Authentication,
-    /// The key reached its usage limit: derive the next generation with [`PacketKey::next_generation`].
-    KeyUpdateRequired,
+    /// The key reached its usage limit: roll to the next generation with [`PacketKey::rolled`].
+    KeyRollRequired,
     /// The packet-number field is not 1 to 4 bytes.
     HeaderLength,
     /// There is no next generation: the generation counter is exhausted.
@@ -70,7 +72,7 @@ impl fmt::Display for RecordError {
             Self::PacketNumber => f.write_str("packet number is 2^62 or more"),
             Self::NotIncreasing => f.write_str("packet number does not increase"),
             Self::Authentication => f.write_str("packet failed authentication"),
-            Self::KeyUpdateRequired => f.write_str("the key reached its usage limit; update keys"),
+            Self::KeyRollRequired => f.write_str("the key reached its usage limit; roll keys"),
             Self::HeaderLength => f.write_str("packet number field is not 1 to 4 bytes"),
             Self::GenerationExhausted => f.write_str("no further key generation"),
             Self::Crypto(e) => write!(f, "{e}"),
@@ -162,7 +164,7 @@ impl<P: Provider> PacketKey<P> {
         self.aead
     }
 
-    /// The key generation: 0 for the first, one more for each update.
+    /// The key generation: 0 for the first, one more for each roll.
     pub const fn generation(&self) -> u32 {
         self.generation
     }
@@ -194,7 +196,7 @@ impl<P: Provider> PacketKey<P> {
     /// # Errors
     /// [`RecordError::PacketNumber`] for `pn` of 2^62 or more; [`RecordError::NotIncreasing`] unless `pn` is above
     /// every number this key sealed before (a retransmission resends the stored bytes, it never seals again);
-    /// [`RecordError::KeyUpdateRequired`] once an
+    /// [`RecordError::KeyRollRequired`] once an
     /// AES-128-GCM key has sealed [`Limits::aes_gcm_packets`] packets; [`RecordError::Crypto`] if the AEAD refuses
     /// the input length.
     pub fn seal(&mut self, p: &P, pn: u64, aad: &[u8], buf: &mut [u8]) -> Result<[u8; Aead::TAG_LEN], RecordError> {
@@ -203,7 +205,7 @@ impl<P: Provider> PacketKey<P> {
             return Err(RecordError::NotIncreasing);
         }
         if self.aead == Aead::Aes128Gcm && self.sealed >= self.limits.aes_gcm_packets {
-            return Err(RecordError::KeyUpdateRequired);
+            return Err(RecordError::KeyRollRequired);
         }
         let tag = p.seal(&self.key, &nonce, aad, buf)?;
         self.sealed = self.sealed.saturating_add(1);
@@ -214,7 +216,7 @@ impl<P: Provider> PacketKey<P> {
     /// Verify `tag` and decrypt `buf` in place under packet number `pn`. On failure `buf` is the ciphertext.
     ///
     /// # Errors
-    /// [`RecordError::PacketNumber`] for `pn` of 2^62 or more; [`RecordError::KeyUpdateRequired`] once a
+    /// [`RecordError::PacketNumber`] for `pn` of 2^62 or more; [`RecordError::KeyRollRequired`] once a
     /// ChaCha20-Poly1305 key has seen [`Limits::chacha_failures`] failed opens; [`RecordError::Authentication`] if
     /// the packet does not verify (it counts toward that limit).
     pub fn open(
@@ -227,7 +229,7 @@ impl<P: Provider> PacketKey<P> {
     ) -> Result<(), RecordError> {
         let nonce = self.nonce(pn)?;
         if self.aead == Aead::ChaCha20Poly1305 && self.failed >= self.limits.chacha_failures {
-            return Err(RecordError::KeyUpdateRequired);
+            return Err(RecordError::KeyRollRequired);
         }
         p.open(&self.key, &nonce, aad, buf, tag).map_err(|e| {
             if e == CryptoError::Authentication {
@@ -239,17 +241,25 @@ impl<P: Provider> PacketKey<P> {
         })
     }
 
-    /// The next key generation: its secret is `expand(secret, "key update")`. Both sides derive it independently.
+    /// Whether this key reached the usage limit that calls for a roll: an AES-128-GCM key that sealed
+    /// [`Limits::aes_gcm_packets`] packets, or a ChaCha20-Poly1305 key that saw [`Limits::chacha_failures`] failed
+    /// opens.
+    pub const fn limit_reached(&self) -> bool {
+        match self.aead {
+            Aead::Aes128Gcm => self.sealed >= self.limits.aes_gcm_packets,
+            Aead::ChaCha20Poly1305 => self.failed >= self.limits.chacha_failures,
+        }
+    }
+
+    /// The next key generation: its secret is `roll_secret(secret, dh)` for the fresh Diffie-Hellman value `dh` the
+    /// two sides computed together (see [`crate::keyroll`]). The usage limits carry over; the counters start again.
     ///
     /// # Errors
-    /// [`RecordError::GenerationExhausted`] after 2^32 - 1 updates; [`RecordError::Crypto`] if the provider refuses
+    /// [`RecordError::GenerationExhausted`] after 2^32 - 1 rolls; [`RecordError::Crypto`] if the provider refuses
     /// the key.
-    pub fn next_generation(&self, p: &P) -> Result<Self, RecordError> {
+    pub fn rolled(&self, p: &P, dh: &Secret<32>) -> Result<Self, RecordError> {
         let generation = self.generation.checked_add(1).ok_or(RecordError::GenerationExhausted)?;
-        let mut next = [0u8; 32];
-        expand(self.secret.expose(), labels::KEY_UPDATE, &[], &mut next);
-        let secret = Secret::new(next);
-        next.zeroize();
+        let secret = roll_secret(&self.secret, dh);
         Ok(Self::at_generation(p, self.aead, secret, generation, self.limits)?)
     }
 }

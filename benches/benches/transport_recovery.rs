@@ -28,8 +28,6 @@ fn packet(pn: u64) -> Sent {
         pn,
         time: pn * 1000,
         size: 1200,
-        ack_eliciting: true,
-        in_flight: true,
         path: 0,
         is_repair: false,
         is_mtu_probe: false,
@@ -56,7 +54,6 @@ fn timed_acks(iters: u64, count: u64, ranges: &[std::ops::RangeInclusive<u64>]) 
         rec.on_ack_received(
             black_box(now),
             ranges.iter().map(|r| pn + r.start()..=pn + r.end()),
-            0,
             |_| acked += 1,
         )
         .unwrap();
@@ -89,7 +86,7 @@ fn bench_ack(c: &mut Criterion) {
                     rec.on_packet_sent(black_box(packet(pn + k))).unwrap();
                 }
                 total += start.elapsed();
-                rec.on_ack_received(pn * 1000 + SECOND, std::iter::once(pn..=pn + chunk - 1), 0, |_| {})
+                rec.on_ack_received(pn * 1000 + SECOND, std::iter::once(pn..=pn + chunk - 1), |_| {})
                     .unwrap();
                 pn += chunk;
                 left -= chunk;
@@ -98,10 +95,9 @@ fn bench_ack(c: &mut Criterion) {
         });
     });
     g.bench_function("pacer_next_release", |b| {
-        let mut p = Pacer::new(1200);
-        p.set_rate(120_000, 100 * MS, 1200);
+        let mut p = Pacer::new();
         for _ in 0..10 {
-            p.on_sent(0, 1200);
+            p.on_sent(0, 1200, 100 * MS, 120_000);
         }
         let mut now = 0u64;
         b.iter(|| {

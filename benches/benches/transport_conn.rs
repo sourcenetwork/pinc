@@ -196,7 +196,6 @@ impl<'a> Rig<'a> {
                 identity: &id_a,
                 prekey: &prekey,
                 peer_has_prekey: false,
-                token: &[],
                 ticket: None,
                 path: PathId(1),
                 path_info: PathInfo::default(),

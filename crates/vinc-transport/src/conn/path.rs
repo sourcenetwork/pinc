@@ -271,9 +271,6 @@ conn_impl! {
         if !self.paths.get(i).is_some_and(Path::validated) {
             return Err(PathError::NotValidated);
         }
-        if i != self.paths.active && self.peer_params.disable_active_migration {
-            return Err(PathError::MigrationDisabled);
-        }
         self.switch_active(i);
         Ok(())
     }
@@ -440,9 +437,6 @@ conn_impl! {
     /// vertexia: scans every path on each validation, acknowledgement and timeout, which is at most `NP` (default 4)
     /// comparisons; a cached best path would only matter with many paths.
     pub(super) fn evaluate_paths(&mut self) {
-        if self.peer_params.disable_active_migration {
-            return;
-        }
         let active = self.paths.active;
         let degraded = self.rec.pto_count() >= 3;
         let cost_of = |i: usize, p: &Path, rec_rtt: Option<u64>| {

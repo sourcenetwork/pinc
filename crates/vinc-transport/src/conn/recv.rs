@@ -19,7 +19,7 @@ use super::ctl::{Outcome, apply};
 use super::event::{Drop, Ev, code};
 use super::path::PathState;
 use super::{Connection, Phase};
-use crate::frame::{ACK_DELAY_UNIT_NS, Ack, Frame, FrameIter};
+use crate::frame::{Ack, Frame, FrameIter};
 use crate::packet::{
     Header, LongHeader, LongType, Packet, PacketError, decode_pn, is_stateless_reset, open, packets, unprotect_header,
 };
@@ -212,7 +212,9 @@ conn_impl! {
         header_len: usize,
         bytes: &[u8],
     ) -> Result<(), Drop> {
-        if self.phase != Phase::Handshaking {
+        // A resumed server keeps answering a repeated Hello (or a full Initial under the same ids) until the first
+        // 1-RTT packet shows the client holds the session.
+        if self.phase != Phase::Handshaking && !(self.phase == Phase::Connected && self.hs.keeps_reply()) {
             return Err(Drop::Empty);
         }
         let Some(pi) = ctx.path else { return Err(Drop::NoPath) };
@@ -232,8 +234,8 @@ conn_impl! {
         }
         self.note_heard(ctx.now);
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
-        let Some(len) = self.hs.on_fragment(body) else { return Ok(()) };
-        let r = self.hs.feed(env, stores, len);
+        let Some(len) = self.hs.on_fragment(&mut self.pool, body) else { return Ok(()) };
+        let r = self.hs.feed(&self.pool, env, stores, len);
         self.pump(env);
         r.map_err(Drop::Handshake)
     }
@@ -304,13 +306,18 @@ conn_impl! {
         };
         if promoted {
             self.stats.key_updates += 1;
-            if self.keys.behind_peer() && self.keys.update_send(p).is_err() {
+            if self.keys.behind_peer() && self.keys.update_send(now).is_err() {
                 self.violation(now, code::INTERNAL, "key update failed");
                 return Err(Drop::Closed);
             }
         }
-        // A 1-RTT packet authenticated: the early keys have done their job.
+        // A 1-RTT packet authenticated: the early keys have done their job, and a resumed server may let go of the
+        // Reply it kept for a repeated Hello.
         self.keys.early_recv = None;
+        if !self.client && !self.confirmed {
+            self.confirmed = true;
+            self.hs.confirm(&mut self.pool);
+        }
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
         self.process_payload(env, ctx, opened.pn, payload)
     }
@@ -389,7 +396,7 @@ conn_impl! {
         }
         if self.client && self.phase == Phase::Connected && !self.confirmed {
             self.confirmed = true;
-            self.hs.confirm();
+            self.hs.confirm(&mut self.pool);
         }
         Ok(())
     }
@@ -488,7 +495,7 @@ conn_impl! {
             }
             Frame::Ready => self.push(Ev::Ready),
             Frame::NewTickets(batch) => {
-                if self.client && !batch.entries().is_empty() {
+                if !batch.entries().is_empty() {
                     self.push(Ev::Tickets(batch));
                 }
             }
@@ -529,11 +536,11 @@ conn_impl! {
 
     fn on_ack(&mut self, pi: usize, now: u64, ack: &Ack<'_>) -> Result<(), Fault> {
         let mut out = Outcome::default();
-        let delay = ack.delay().saturating_mul(ACK_DELAY_UNIT_NS);
-        let (streams, pool, ctl, cids, rx) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids, &mut self.rx);
-        let result = self.rec.on_ack_received(now, ack.ranges(), delay, |ev| apply(&ev, now, streams, pool, ctl, cids, rx, &mut out));
+        let (streams, pool, ctl, cids) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids);
+        let result = self.rec.on_ack_received(now, ack.ranges(), |ev| apply(&ev, streams, pool, ctl, cids, &mut out));
         match result {
             Ok(summary) => {
+                self.rx.on_peer_ack(now, &ack.ranges());
                 self.stats.packets_acked += u64::from(summary.acked_packets);
                 self.after_feedback(out, now);
                 self.after_ack(pi, now);
@@ -547,7 +554,7 @@ conn_impl! {
     /// Fold recovery feedback into the loss average, the path MTU state and the counters.
     pub(super) fn after_feedback(&mut self, out: Outcome, now: u64) {
         self.stats.packets_lost += u64::from(out.lost_packets);
-        self.loss.record(out.lost_packets, out.acked_packets);
+        self.loss.record(out.loss_lost, out.loss_acked);
         let active = self.paths.active;
         if let Some(size) = out.probe_acked.and_then(|s| u16::try_from(s).ok()) {
             self.mtu_raise(active, size);

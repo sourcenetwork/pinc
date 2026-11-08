@@ -1,4 +1,4 @@
-//! Record protection, key update and its limits, the replay window, address tokens, the amplification budget and labels.
+//! Record protection, key rolls and the limits, the amplification budget and labels.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -18,11 +18,7 @@ use proptest::prelude::*;
 use vinc_crypto::{Aead, Provider, Secret, Software, expand};
 use vinc_security::amp::{FACTOR, OVERHEAD};
 use vinc_security::record::{AES_GCM_PACKET_LIMIT, CHACHA_FAILURE_LIMIT, MAX_PACKET_NUMBER};
-use vinc_security::token::{MAX_ADDR_LEN, MAX_TOKEN_LEN, NEW_TOKEN_LIFETIME_NS, RETRY_LIFETIME_NS};
-use vinc_security::{
-    AmpBudget, HeaderKey, Limits, PacketKey, RecordError, ReplayError, ReplayWindow, TokenError, TokenKey, TokenKind,
-    labels,
-};
+use vinc_security::{AmpBudget, HeaderKey, Limits, PacketKey, RecordError, labels, roll_secret};
 
 mod sec_common;
 
@@ -168,14 +164,19 @@ fn header_protection_masks_the_low_bits_and_the_packet_number() {
     }
 }
 
+fn dh(tag: u8) -> Secret<32> {
+    Secret::new([tag; 32])
+}
+
 #[test]
-fn key_update_moves_both_sides_in_step() {
+fn a_key_roll_moves_both_sides_in_step() {
     let p = Software;
     for aead in AEADS {
         let mut tx0 = PacketKey::from_secret(&p, aead, &secret(3)).unwrap();
         let mut rx0 = PacketKey::from_secret(&p, aead, &secret(3)).unwrap();
-        let mut tx1 = tx0.next_generation(&p).unwrap();
-        let mut rx1 = rx0.next_generation(&p).unwrap();
+        // Both sides roll with the same Diffie-Hellman value and need no other message to agree.
+        let mut tx1 = tx0.rolled(&p, &dh(9)).unwrap();
+        let mut rx1 = rx0.rolled(&p, &dh(9)).unwrap();
         assert_eq!((tx0.generation(), tx1.generation()), (0, 1));
         let mut buf = *b"generation one";
         let tag = tx1.seal(&p, 0, b"h", &mut buf).unwrap();
@@ -187,11 +188,16 @@ fn key_update_moves_both_sides_in_step() {
         // Packet number 0 under generation 0 and 1 gives different ciphertext: no nonce reuse across generations.
         let (mut x, mut y) = (*b"same", *b"same");
         let tag0 = tx0.seal(&p, 0, b"h", &mut x).unwrap();
-        let mut tx1b = tx0.next_generation(&p).unwrap();
+        let mut tx1b = tx0.rolled(&p, &dh(9)).unwrap();
         let tag1 = tx1b.seal(&p, 0, b"h", &mut y).unwrap();
         assert_ne!((x, tag0), (y, tag1));
+        // A different Diffie-Hellman value gives a different generation: the old secret alone is not enough.
+        let mut other = tx0.rolled(&p, &dh(10)).unwrap();
+        let mut o = *b"same";
+        let tag_o = other.seal(&p, 0, b"h", &mut o).unwrap();
+        assert_ne!((o, tag_o), (y, tag1));
         // The chain continues, and each generation is distinct.
-        let tx2 = tx1.next_generation(&p).unwrap();
+        let tx2 = tx1.rolled(&p, &dh(11)).unwrap();
         assert_eq!(tx2.generation(), 2);
         let mut z = *b"same";
         let mut tx2 = tx2;
@@ -202,31 +208,32 @@ fn key_update_moves_both_sides_in_step() {
 }
 
 #[test]
-fn key_update_over_a_real_session() {
-    sec_common::big_stack(|| {
-        let mut w = sec_common::World::new(
-            vinc_crypto::IdentityAlg::Ed25519,
-            vinc_crypto::IdentityAlg::Ed25519,
-            true,
-            true,
-        );
-        let out = w.full();
-        let (i, r) = (out.i_est().unwrap(), out.r_est().unwrap());
-        let tx = i.traffic.send_keys(&w.i_prov).unwrap();
-        let rx = r.traffic.recv_keys(&w.r_prov).unwrap();
-        let (mut tx1, mut rx1) = (
-            tx.packet.next_generation(&w.i_prov).unwrap(),
-            rx.packet.next_generation(&w.r_prov).unwrap(),
-        );
-        let mut buf = *b"after the update";
-        let tag = tx1.seal(&w.i_prov, 3, b"x", &mut buf).unwrap();
-        rx1.open(&w.r_prov, 3, b"x", &mut buf, &tag).unwrap();
-        assert_eq!(&buf, b"after the update");
-    });
+fn the_rolled_secret_depends_on_the_old_secret_and_the_fresh_value() {
+    // Post-compromise: with the old secret known and a different (or no) Diffie-Hellman value, the next secret
+    // cannot be computed. The roll is not the hash successor `expand(secret)` either.
+    let (old, fresh) = (secret(5), dh(6));
+    let next = roll_secret(&old, &fresh);
+    assert_ne!(next.expose(), old.expose());
+    assert_ne!(
+        next.expose(),
+        roll_secret(&old, &dh(7)).expose(),
+        "another value, another secret"
+    );
+    assert_ne!(
+        next.expose(),
+        roll_secret(&secret(4), &fresh).expose(),
+        "another old secret"
+    );
+    assert_ne!(next.expose(), roll_secret(&old, &Secret::new([0; 32])).expose());
+    let mut hash_successor = [0u8; 32];
+    expand(old.expose(), labels::KEY_ROLL, &[], &mut hash_successor);
+    assert_ne!(&hash_successor, next.expose(), "not a function of the old secret alone");
+    // The roll label is its own domain.
+    assert!(labels::ALL.contains(&labels::KEY_ROLL) && labels::ALL.contains(&labels::CID_SECRET));
 }
 
 #[test]
-fn aes_gcm_keys_must_update_before_the_packet_limit() {
+fn aes_gcm_keys_must_roll_before_the_packet_limit() {
     let p = Software;
     assert_eq!(AES_GCM_PACKET_LIMIT, 1 << 22);
     assert_eq!(CHACHA_FAILURE_LIMIT, 1 << 36);
@@ -244,10 +251,10 @@ fn aes_gcm_keys_must_update_before_the_packet_limit() {
         key.seal(&p, pn, b"", &mut buf).unwrap();
     }
     let before = buf;
-    assert_eq!(key.seal(&p, 3, b"", &mut buf), Err(RecordError::KeyUpdateRequired));
+    assert_eq!(key.seal(&p, 3, b"", &mut buf), Err(RecordError::KeyRollRequired));
     assert_eq!(buf, before, "nothing is encrypted once the limit is hit");
-    assert_eq!(key.seal(&p, 4, b"", &mut buf), Err(RecordError::KeyUpdateRequired));
-    let mut next = key.next_generation(&p).unwrap();
+    assert_eq!(key.seal(&p, 4, b"", &mut buf), Err(RecordError::KeyRollRequired));
+    let mut next = key.rolled(&p, &dh(1)).unwrap();
     next.seal(&p, 0, b"", &mut buf).unwrap();
     assert_eq!(next.sealed(), 1);
     // ChaCha20-Poly1305 seals are not limited by packet count.
@@ -281,14 +288,11 @@ fn chacha_keys_count_failed_opens_toward_their_limit() {
         );
     }
     assert_eq!(rx.failed_opens(), 2);
-    // At the limit even a genuine packet is refused: the caller must update keys.
+    // At the limit even a genuine packet is refused: the caller must roll keys.
     let mut copy = good;
-    assert_eq!(
-        rx.open(&p, 0, b"", &mut copy, &tag),
-        Err(RecordError::KeyUpdateRequired)
-    );
-    let mut rx1 = rx.next_generation(&p).unwrap();
-    let mut tx1 = tx.next_generation(&p).unwrap();
+    assert_eq!(rx.open(&p, 0, b"", &mut copy, &tag), Err(RecordError::KeyRollRequired));
+    let mut rx1 = rx.rolled(&p, &dh(1)).unwrap();
+    let mut tx1 = tx.rolled(&p, &dh(1)).unwrap();
     let mut fresh = [2u8; 8];
     let tag1 = tx1.seal(&p, 0, b"", &mut fresh).unwrap();
     rx1.open(&p, 0, b"", &mut fresh, &tag1).unwrap();
@@ -321,7 +325,7 @@ fn seal_open_and_header_protection_allocate_nothing() {
             hk.protect(&p, &mut first, &mut pn, &sample, false).unwrap();
             hk.unprotect(&p, &mut first, &mut pn, &sample, false).unwrap();
             rx.open(&p, 1, b"hdr", &mut payload, &tag).unwrap();
-            let next = tx.next_generation(&p).unwrap();
+            let next = tx.rolled(&p, &dh(1)).unwrap();
             drop(next);
         });
         assert_eq!(stats.count(), 0, "{aead:?}: {stats:?}");
@@ -329,60 +333,8 @@ fn seal_open_and_header_protection_allocate_nothing() {
     }
 }
 
-fn model_window<const B: usize>(pns: &[u64]) {
-    let mut w = ReplayWindow::<B>::new();
-    let mut seen = BTreeSet::new();
-    let mut max: Option<u64> = None;
-    for &pn in pns {
-        let expect = match max {
-            None => Ok(()),
-            Some(m) if pn > m => Ok(()),
-            Some(m) if m - pn >= B as u64 => Err(ReplayError::TooOld),
-            Some(_) if seen.contains(&pn) => Err(ReplayError::Duplicate),
-            Some(_) => Ok(()),
-        };
-        assert_eq!(w.check(pn), expect, "check {pn} (window {B}, highest {max:?})");
-        assert_eq!(w.check(pn), expect, "check does not change the window");
-        assert_eq!(w.insert(pn), expect, "insert {pn}");
-        if expect.is_ok() {
-            seen.insert(pn);
-            max = Some(max.map_or(pn, |m| m.max(pn)));
-        }
-        assert_eq!(w.highest(), max);
-    }
-}
-
-fn walk() -> impl Strategy<Value = Vec<u64>> {
-    let start = prop_oneof![Just(0u64), 0u64..5000, (u64::MAX - 5000)..=u64::MAX];
-    (start, prop::collection::vec((0u64..6, 0u64..300), 0..300)).prop_map(|(start, steps)| {
-        let mut cursor = start;
-        steps
-            .into_iter()
-            .map(|(up, back)| {
-                cursor = cursor.saturating_add(up);
-                cursor.saturating_sub(back)
-            })
-            .collect()
-    })
-}
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(400))]
-
-    #[test]
-    fn the_replay_window_matches_a_set_model(pns in walk()) {
-        model_window::<64>(&pns);
-        model_window::<128>(&pns);
-        model_window::<1024>(&pns);
-        model_window::<1>(&pns);
-        model_window::<100>(&pns);
-    }
-
-    #[test]
-    fn the_replay_window_matches_a_set_model_on_random_numbers(pns in prop::collection::vec(any::<u64>(), 0..100)) {
-        model_window::<64>(&pns);
-        model_window::<1024>(&pns);
-    }
 
     #[test]
     fn the_amplification_budget_keeps_its_invariant(
@@ -420,33 +372,6 @@ proptest! {
 }
 
 #[test]
-fn replay_window_examples() {
-    let mut w = ReplayWindow::<64>::new();
-    assert_eq!(w.highest(), None);
-    w.insert(100).unwrap();
-    assert_eq!(w.insert(100), Err(ReplayError::Duplicate));
-    assert_eq!(
-        w.insert(36),
-        Err(ReplayError::TooOld),
-        "100 - 36 = 64 is outside a window of 64"
-    );
-    w.insert(37).unwrap();
-    w.insert(99).unwrap();
-    assert_eq!(w.insert(99), Err(ReplayError::Duplicate));
-    w.insert(164).unwrap();
-    assert_eq!(w.insert(100), Err(ReplayError::TooOld));
-    assert_eq!(w.insert(164), Err(ReplayError::Duplicate));
-    w.insert(101).unwrap();
-    // A huge jump clears the window; the first packet number may be anything, including 0.
-    w.insert(u64::MAX).unwrap();
-    assert_eq!(w.insert(u64::MAX), Err(ReplayError::Duplicate));
-    assert_eq!(w.insert(164), Err(ReplayError::TooOld));
-    let mut z = ReplayWindow::<64>::default();
-    z.insert(0).unwrap();
-    assert_eq!(z.insert(0), Err(ReplayError::Duplicate));
-}
-
-#[test]
 fn amp_budget_examples() {
     let mut b = AmpBudget::new();
     assert!(!b.can_send(0), "nothing may be sent before anything is received");
@@ -464,95 +389,6 @@ fn amp_budget_examples() {
     huge.on_send(u64::MAX);
     huge.on_send(u64::MAX);
     assert!(huge.can_send(1), "the comparison does not overflow");
-}
-
-fn token_key() -> TokenKey<Software> {
-    TokenKey::new(&Software, &secret(0x42)).unwrap()
-}
-
-#[test]
-fn tokens_validate_for_their_address_and_kind() {
-    let p = Software;
-    let key = token_key();
-    let addr = b"\x7f\x00\x00\x01\x1f\x90";
-    let mut buf = [0u8; MAX_TOKEN_LEN];
-    for kind in [TokenKind::Retry, TokenKind::NewToken] {
-        let n = key.issue(&p, addr, kind, 1_000, &[5; 12], &mut buf).unwrap();
-        assert_eq!(n, 12 + addr.len() + 9 + 16);
-        let token = &buf[..n];
-        key.validate(&p, token, addr, kind, 1_000).unwrap();
-        key.validate(&p, token, addr, kind, 1_000 + kind.lifetime_ns()).unwrap();
-        assert_eq!(
-            key.validate(&p, token, addr, kind, 1_001 + kind.lifetime_ns()),
-            Err(TokenError::Expired)
-        );
-        assert_eq!(key.validate(&p, token, addr, kind, 999), Err(TokenError::NotYetValid));
-        assert_eq!(
-            key.validate(&p, token, b"\x7f\x00\x00\x02\x1f\x90", kind, 1_000),
-            Err(TokenError::WrongAddress)
-        );
-        assert_eq!(key.validate(&p, token, b"", kind, 1_000), Err(TokenError::WrongAddress));
-        let other = if kind == TokenKind::Retry {
-            TokenKind::NewToken
-        } else {
-            TokenKind::Retry
-        };
-        assert_eq!(key.validate(&p, token, addr, other, 1_000), Err(TokenError::WrongKind));
-        // Another key did not issue it.
-        let stranger = TokenKey::new(&p, &secret(0x43)).unwrap();
-        assert_eq!(
-            stranger.validate(&p, token, addr, kind, 1_000),
-            Err(TokenError::Authentication)
-        );
-        // Every byte is authenticated, and every truncation is refused.
-        for at in 0..n {
-            let mut bad = token.to_vec();
-            bad[at] ^= 1;
-            assert!(key.validate(&p, &bad, addr, kind, 1_000).is_err(), "byte {at}");
-            assert!(key.validate(&p, &token[..at], addr, kind, 1_000).is_err(), "cut {at}");
-        }
-        let mut longer = token.to_vec();
-        longer.push(0);
-        assert!(key.validate(&p, &longer, addr, kind, 1_000).is_err());
-    }
-    const { assert!(RETRY_LIFETIME_NS < NEW_TOKEN_LIFETIME_NS) };
-}
-
-#[test]
-fn token_edge_cases() {
-    let p = Software;
-    let key = token_key();
-    let mut buf = [0u8; MAX_TOKEN_LEN];
-    let longest = [9u8; MAX_ADDR_LEN];
-    let n = key
-        .issue(&p, &longest, TokenKind::Retry, 5, &[1; 12], &mut buf)
-        .unwrap();
-    assert_eq!(n, MAX_TOKEN_LEN);
-    key.validate(&p, &buf[..n], &longest, TokenKind::Retry, 5).unwrap();
-    assert_eq!(
-        key.issue(&p, &[0; MAX_ADDR_LEN + 1], TokenKind::Retry, 5, &[1; 12], &mut buf),
-        Err(TokenError::AddressTooLong)
-    );
-    assert_eq!(
-        key.issue(&p, b"abc", TokenKind::Retry, 5, &[1; 12], &mut buf[..30]),
-        Err(TokenError::BufferTooSmall)
-    );
-    let n = key.issue(&p, b"", TokenKind::NewToken, 0, &[2; 12], &mut buf).unwrap();
-    key.validate(&p, &buf[..n], b"", TokenKind::NewToken, 0).unwrap();
-    assert_eq!(
-        key.validate(&p, &[], b"", TokenKind::Retry, 0),
-        Err(TokenError::Malformed)
-    );
-    assert_eq!(
-        key.validate(&p, &[0; 200], b"", TokenKind::Retry, 0),
-        Err(TokenError::Malformed)
-    );
-    // The same address, time and kind with another nonce is another token.
-    let mut other = [0u8; MAX_TOKEN_LEN];
-    let m = key
-        .issue(&p, b"", TokenKind::NewToken, 0, &[3; 12], &mut other)
-        .unwrap();
-    assert_ne!(buf[..n], other[..m]);
 }
 
 #[test]
@@ -591,7 +427,7 @@ fn a_key_never_seals_a_packet_number_twice() {
         k.seal(&p, 6, b"aad", &mut buf).unwrap();
         k.seal(&p, 1000, b"aad", &mut buf).unwrap();
         // A fresh generation has sealed nothing yet.
-        let mut next = k.next_generation(&p).unwrap();
+        let mut next = k.rolled(&p, &dh(1)).unwrap();
         next.seal(&p, 7, b"aad", &mut buf).unwrap();
     }
 }

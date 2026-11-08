@@ -713,7 +713,6 @@ impl World {
                 identity: &self.ip.id,
                 prekey: &prekey,
                 peer_has_prekey: self.short,
-                token: &[],
                 ticket,
                 path: PathId(1),
                 path_info: PathInfo::default(),
@@ -898,12 +897,35 @@ impl<'a, 'b> Net<'a, 'b> {
                     }
                 }
             }
+            progress |= self.relay_rekeys(now);
             self.a.service(now);
             self.b.service(now);
             if !progress {
                 break;
             }
             moved = true;
+        }
+        moved
+    }
+
+    /// Carry the REKEY bodies each side wants to send to the other, directly. The frame codec has no REKEY frame yet,
+    /// so this stands in for it; it is lossless and instant, and goes away when the frame is wired.
+    fn relay_rekeys(&mut self, now: u64) -> bool {
+        let mut moved = false;
+        let mut body = [0u8; 64];
+        for from_a in [true, false] {
+            loop {
+                let (from, to) = if from_a {
+                    (&mut self.a, &mut self.b)
+                } else {
+                    (&mut self.b, &mut self.a)
+                };
+                let Some(n) = from.conn.poll_rekey_body(now, &mut body) else {
+                    break;
+                };
+                to.with_env(now, |c, env| c.on_rekey_body(env, &body[..n]));
+                moved = true;
+            }
         }
         moved
     }

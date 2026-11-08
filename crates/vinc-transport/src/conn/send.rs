@@ -19,9 +19,9 @@ use vinc_security::amp::{FACTOR, OVERHEAD};
 use vinc_wire::Writer;
 
 use super::config::{MIN_MTU, PathId};
-use super::ctl::{K_ACK, K_NEW_CID, K_READY, K_RETIRE, K_STREAM_CTL, K_TICKETS};
+use super::ctl::{K_NEW_CID, K_READY, K_RETIRE, K_STREAM_CTL, K_TICKETS};
 use super::{Connection, Phase};
-use crate::frame::{ACK_DELAY_UNIT_NS, Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
+use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
 use crate::packet::{ConnId, LongHeader, LongType, PnLayout, ShortHeader, encode_pn, seal};
 use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, Sent};
 use crate::stream::{ControlFrame, StreamSource};
@@ -44,8 +44,6 @@ const STREAM_BUDGET: usize = 11;
 const MIN_ROOM: usize = 24;
 /// The space a long header can take at most, with an 8-byte length field and a 4-byte packet number.
 const LONG_HDR_MAX: usize = 1 + 4 + 1 + 20 + 1 + 20 + 8 + 4;
-/// Ack-only packets in a row before a PING makes the peer acknowledge them, so the sent ring drains.
-const ACK_ONLY_RUN: u8 = 8;
 /// The most stream bytes a repair packet re-carries.
 const REPAIR_BYTES: u64 = 600;
 /// Stream frames remembered as the tail of the last packet.
@@ -66,6 +64,8 @@ struct Fill {
     ti: usize,
     allow_cc: bool,
     force: bool,
+    /// The packet is the probe timeout's PING: nothing else but an acknowledgement goes in, and it is not recorded.
+    ping_only: bool,
     probe: Option<usize>,
     repair: bool,
     min_total: usize,
@@ -78,11 +78,27 @@ struct Filled {
     len: usize,
     refs: FrameRefs,
     eliciting: bool,
+    /// Whether something that is recorded in flight rides in the packet (anything but path validation, SLEEP, WAKE
+    /// and the probe timeout's PING).
+    tracked: bool,
     ack: bool,
     data: bool,
     streams: bool,
     drained: bool,
     tail: [Option<(u64, u64, u32, bool)>; TAIL],
+}
+
+impl Filled {
+    /// Something recorded in flight rides in the packet.
+    fn strong(&mut self) {
+        self.eliciting = true;
+        self.tracked = true;
+    }
+
+    /// The packet needs an acknowledgement but carries only frames that are never recorded in flight.
+    fn weak(&mut self) {
+        self.eliciting = true;
+    }
 }
 
 fn put(buf: &mut [u8], pos: &mut usize, f: &Frame<'_>) -> bool {
@@ -109,12 +125,7 @@ conn_impl! {
         if self.life.link_down.is_some() || (self.life.local_asleep.is_some() && self.life.sleep_tx == 0) {
             return None;
         }
-        if self.phase == Phase::Connected
-            && self.keys.wants_update(self.cfg.key_update_after)
-            && self.keys.update_send(env.provider).is_ok()
-        {
-            self.stats.key_updates += 1;
-        }
+        self.roll_tick(env);
         let order = self.target_order();
         for ti in order.into_iter().flatten() {
             let Some(first) = self.build_datagram(env, ti, out) else { continue };
@@ -228,7 +239,7 @@ conn_impl! {
     /// The size of an MTU probe to send on path `ti` now, if one is due and the caller's buffer can hold it.
     fn probe_size(&self, ti: usize, now: u64, room: usize) -> Option<usize> {
         let p = self.paths.get(ti)?;
-        let cc_ok = self.rec.cwnd_available() > 0 && self.rec.pacer().next_release(now) <= now;
+        let cc_ok = self.rec.can_send() && self.rec.pacer().next_release(now) <= now;
         let idle = self.life.probes == 0 && self.life.peer_asleep.is_none() && self.life.local_asleep.is_none();
         if ti != self.paths.active || self.phase != Phase::Connected || !cc_ok || !idle || p.mtu.next_at > now {
             return None;
@@ -248,7 +259,7 @@ conn_impl! {
         let fixed = 1 + 4 + 1 + dcid.as_bytes().len() + 1 + scid.as_bytes().len();
         // Leave a short packet's worth of room behind the flight only when the flight is short.
         let room = window.len().saturating_sub(fixed + 2 + self.hs.fragment_overhead());
-        let Some((total, off, bytes)) = self.hs.next_fragment(room) else { return 0 };
+        let Some((total, off, bytes)) = self.hs.next_fragment(&self.pool, room) else { return 0 };
         let body_len = vinc_wire::varint::encoded_len(total as u64) + vinc_wire::varint::encoded_len(off as u64) + bytes.len();
         let header = LongHeader { ty: LongType::Handshake, dcid, scid, body_len };
         let mut w = Writer::new(window);
@@ -280,8 +291,8 @@ conn_impl! {
         let now = env.now;
         let kind = if self.keys.send.is_some() { Kind::Short } else { Kind::ZeroRtt };
         let suspended_data = self.life.peer_asleep.is_some() || self.life.local_asleep.is_some();
-        let cc_ok = self.rec.cwnd_available() > 0 && self.rec.pacer().next_release(now) <= now;
-        if !cc_ok && self.rec.cwnd_available() > 0 {
+        let cc_ok = self.rec.can_send() && self.rec.pacer().next_release(now) <= now;
+        if !cc_ok && self.rec.can_send() {
             self.paced_until = Some(self.rec.pacer().next_release(now));
         }
         let probes = self.life.probes > 0;
@@ -291,8 +302,9 @@ conn_impl! {
         let mut fill = Fill {
             now,
             ti,
-            allow_cc: (cc_ok || probes) && !suspended_data,
+            allow_cc: cc_ok && !suspended_data,
             force,
+            ping_only: probes,
             probe: None,
             repair: false,
             min_total: 0,
@@ -371,18 +383,21 @@ conn_impl! {
             }
         };
         let total = header_len + payload_len + 16;
-        let sent = Sent {
-            pn,
-            time: now,
-            size: u32::try_from(total).ok()?,
-            ack_eliciting: filled.eliciting,
-            in_flight: filled.eliciting,
-            path: u8::try_from(ti).ok()?,
-            is_repair: fill.repair && filled.streams,
-            is_mtu_probe: fill.probe.is_some(),
-            frames: filled.refs,
+        let size = u32::try_from(total).ok()?;
+        let recorded = if filled.tracked {
+            self.rec.on_packet_sent(Sent {
+                pn,
+                time: now,
+                size,
+                path: u8::try_from(ti).ok()?,
+                is_repair: fill.repair && filled.streams,
+                is_mtu_probe: fill.probe.is_some(),
+                frames: filled.refs,
+            })
+        } else {
+            self.rec.on_packet_untracked(pn)
         };
-        if self.rec.on_packet_sent(sent).is_err() {
+        if recorded.is_err() {
             self.requeue(&filled.refs);
             return None;
         }
@@ -422,9 +437,6 @@ conn_impl! {
         }
         if filled.eliciting {
             self.life.ping_owed = false;
-            self.life.ack_only_run = 0;
-        } else {
-            self.life.ack_only_run = self.life.ack_only_run.saturating_add(1);
         }
         if filled.streams {
             self.after_stream_send(&mut filled, now, fill.repair);
@@ -492,7 +504,8 @@ conn_impl! {
                 *slot = r;
                 n += 1;
             }
-            let delay = self.rx.ack_delay(now) / ACK_DELAY_UNIT_NS;
+            // vertexia: the codec still carries an ack delay field; it is written as 0 until the frame codec drops it.
+            let delay = 0;
             if let Some(used) = ranges.get(..n)
                 && let it = used.iter().cloned()
                 && let Ok(len) = ack_len(delay, it.clone())
@@ -503,13 +516,19 @@ conn_impl! {
                 if write_ack(&mut w, delay, it).is_ok() {
                     pos += w.written().len();
                     out.ack = true;
-                    let _ = out.refs.push(FrameRef::Control { kind: K_ACK, id: 0 });
                 }
             }
         }
+        if fill.ping_only {
+            if put(payload, &mut pos, &Frame::Ping) {
+                out.weak();
+            }
+            out.len = pos;
+            return out;
+        }
         if let Some(size) = fill.probe {
             let _ = put(payload, &mut pos, &Frame::Ping);
-            out.eliciting = true;
+            out.strong();
             let _ = size;
             out.len = pos;
             return out;
@@ -527,10 +546,11 @@ conn_impl! {
             self.fill_datagrams(payload, &mut pos, &mut out);
         }
         if fill.force && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
-            out.eliciting = true;
-        }
-        if !out.eliciting && out.ack && self.life.ack_only_run >= ACK_ONLY_RUN && put(payload, &mut pos, &Frame::Ping) {
-            out.eliciting = true;
+            if ti == self.paths.active {
+                out.strong();
+            } else {
+                out.weak();
+            }
         }
         let _ = pn;
         out.len = pos;
@@ -542,11 +562,11 @@ conn_impl! {
         let _ = env;
         if self.life.sleep_tx > 0 && put(payload, pos, &Frame::Sleep) {
             self.life.sleep_tx -= 1;
-            out.eliciting = true;
+            out.weak();
         }
         if self.life.wake_tx && put(payload, pos, &Frame::Wake) {
             self.life.wake_tx = false;
-            out.eliciting = true;
+            out.weak();
         }
         if let Some(mtu) = self.paths.get_mut(fill.ti).and_then(|p| p.echo.take()) {
             let _ = put(payload, pos, &Frame::MtuProbeEcho { mtu });
@@ -554,7 +574,7 @@ conn_impl! {
         if self.ctl.ready && out.refs.len() < MAX_FRAME_REFS && put(payload, pos, &Frame::Ready) {
             self.ctl.ready = false;
             let _ = out.refs.push(FrameRef::Control { kind: K_READY, id: 0 });
-            out.eliciting = true;
+            out.strong();
         }
         if self.ctl.tickets_pending
             && out.refs.len() < MAX_FRAME_REFS
@@ -563,7 +583,7 @@ conn_impl! {
         {
             self.ctl.tickets_pending = false;
             let _ = out.refs.push(FrameRef::Control { kind: K_TICKETS, id: 0 });
-            out.eliciting = true;
+            out.strong();
         }
         while let Some(entry) = self.ext.peek_send(&self.pool) {
             let Ok((ty, n)) = vinc_wire::varint::decode(entry) else {
@@ -575,7 +595,7 @@ conn_impl! {
                 break;
             }
             self.ext.pop_send(&mut self.pool);
-            out.eliciting = true;
+            out.strong();
         }
         while out.refs.len() < MAX_FRAME_REFS && self.cids.has_pending_new() {
             let room = payload.len() - *pos;
@@ -586,7 +606,7 @@ conn_impl! {
                 break;
             }
             let _ = out.refs.push(FrameRef::Control { kind: K_NEW_CID, id: n.seq });
-            out.eliciting = true;
+            out.strong();
         }
         while out.refs.len() < MAX_FRAME_REFS && self.cids.has_pending_retire() {
             let Some(seq) = self.cids.next_retire() else { break };
@@ -595,7 +615,7 @@ conn_impl! {
                 break;
             }
             let _ = out.refs.push(FrameRef::Control { kind: K_RETIRE, id: seq });
-            out.eliciting = true;
+            out.strong();
         }
         while out.refs.len() < MAX_FRAME_REFS && payload.len() - *pos >= MIN_ROOM {
             let Some(cf) = self.streams.pending_control() else { break };
@@ -609,7 +629,7 @@ conn_impl! {
                 break;
             }
             let _ = out.refs.push(FrameRef::Control { kind: K_STREAM_CTL, id: key });
-            out.eliciting = true;
+            out.strong();
         }
     }
 
@@ -622,7 +642,7 @@ conn_impl! {
             if let Some(pm) = self.paths.get_mut(ti) {
                 pm.response = None;
             }
-            out.eliciting = true;
+            out.weak();
         }
         if let Some(c) = p.challenge
             && c.send
@@ -635,7 +655,7 @@ conn_impl! {
                 ch.send = false;
                 ch.retry_at = now.saturating_add(rto);
             }
-            out.eliciting = true;
+            out.weak();
             // A challenge also proves the path carries a full-size datagram.
             let pad = usize::from(MIN_MTU).saturating_sub(*pos + 16 + 20);
             let pad = pad.min(payload.len().saturating_sub(*pos));
@@ -703,7 +723,7 @@ conn_impl! {
             if let Some(slot) = out.tail.iter_mut().find(|t| t.is_none()) {
                 *slot = Some((chunk.id, chunk.offset, len32, chunk.fin));
             }
-            out.eliciting = true;
+            out.strong();
             out.data = true;
             out.streams = true;
         }
@@ -717,7 +737,7 @@ conn_impl! {
                 break;
             }
             self.dgrams.pop_send(&mut self.pool);
-            out.eliciting = true;
+            out.strong();
             out.data = true;
         }
     }

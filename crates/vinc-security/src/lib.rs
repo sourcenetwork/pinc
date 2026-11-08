@@ -6,8 +6,9 @@
 //! operations for the host to perform ([`KeyRequest`], so a TPM or HSM can hold the long-term keys) and events. The
 //! wire layout of every message is in [`message`]; the labels are in [`labels`].
 //!
-//! Around them: [`record`] (packet keys, header protection and key update), [`ReplayWindow`], address-validation
-//! [`token`]s, the [`AmpBudget`] and the tickets stores in [`tickets`].
+//! Around them: [`record`] (packet keys and header protection), [`keyroll`] (how a running session replaces its
+//! keys with a fresh Diffie-Hellman value), the [`CreditRecord`] each side sends, the [`AmpBudget`] and the ticket
+//! stores in [`tickets`].
 //!
 //! The crate is `no_std`, never allocates, uses no `dyn`, reads no clock or randomness, takes every primitive from
 //! `vinc-crypto` through the [`vinc_crypto::Provider`] trait, and never panics on any input. Secrets are zeroizing
@@ -17,34 +18,32 @@
 
 pub mod amp;
 pub mod cache;
+pub mod credit;
 pub mod error;
 pub mod ids;
 pub mod initiator;
+pub mod keyroll;
 pub mod keys;
 pub mod labels;
 pub mod message;
 mod outbox;
-pub mod params;
 pub mod record;
-pub mod replay;
 pub mod responder;
 mod schedule;
 pub mod session;
 pub mod tickets;
-pub mod token;
 
 pub use amp::AmpBudget;
 pub use cache::PrekeyCache;
+pub use credit::{CREDIT_RECORD_LEN, CreditRecord, WINDOW_UNIT};
 pub use error::Failure;
 pub use ids::{AeadSet, Alpn, AlpnList, ConnId, KeyHandle, LocalIdentity, VERSION};
 pub use initiator::{Initiator, InitiatorParams};
+pub use keyroll::{Answered, Completed, Rekey, Roll};
 pub use keys::{KeyRequest, KeyResponse, PrekeyInfo, PrekeyPolicy, SoftKeys, SoftPrekeys, prekey_hash};
 pub use message::{InitialForm, min_initial_len, reply_len};
-pub use params::{MAX_PARAMS_LEN, Params};
 pub use record::{HeaderKey, Limits, PacketKey, RecordError};
-pub use replay::{ReplayError, ReplayWindow};
 pub use responder::{Responder, ResponderConfig, ResponderStores};
-pub use schedule::sub_session_secret;
+pub use schedule::{roll_secret, sub_session_secret};
 pub use session::{EarlyKeys, Env, Established, Event, Output, Protection, Traffic};
 pub use tickets::{ClientTickets, ServerTickets, Ticket, TicketBatch, TicketEntry};
-pub use token::{TokenError, TokenKey, TokenKind};

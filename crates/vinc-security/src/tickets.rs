@@ -1,21 +1,26 @@
 //! Single-use resumption tickets and their two bounded stores.
 //!
-//! A ticket is a 16-byte id `tid` and a pre-shared key `psk = expand(resume, "ticket", tid)`, where `resume` is the
-//! resumption secret of the session that issued it. The side that issues tickets keeps them in a [`ServerTickets`]
-//! store; the side that dials with them keeps them in a [`ClientTickets`] store. Invariants: a ticket is used at
-//! most once (the store removes it on use, which is the replay defence for 0-RTT data); both stores hold at most `N`
-//! tickets, evicting expired tickets first and then the oldest; `N = 0` is valid and stores nothing, and then no
-//! ticket is handed out; a [`ServerTickets`] store has no way to read a pre-shared key out, list its tickets or
-//! serialize, so it can be neither persisted nor exported (a store restored from an old snapshot would allow
-//! replay; after a restart a client simply falls back to a full handshake). Expiry is in the caller's nanoseconds.
+//! A ticket is a 16-byte id `tid` and a pre-shared key `psk = expand(resume, "ticket", tid, credit record)`, where
+//! `resume` is the resumption secret of the session that issued it. The side that issues tickets keeps them in a
+//! [`ServerTickets`] store; the side that dials with them keeps them in a [`ClientTickets`] store. Either side of a
+//! session can issue: the responder issues to the initiator, and the initiator issues one to the responder, which
+//! then holds it in its own [`ClientTickets`]. Invariants: a ticket is used at most once (the store removes it on
+//! use, which is the replay defence for 0-RTT data); a [`ServerTickets`] store holds at most `N` tickets, evicting
+//! expired tickets first and then the oldest; a [`ClientTickets`] store holds one ticket per peer, the newest
+//! replacing the older, for at most `N` peers, evicting expired and then the oldest; `N = 0` is valid and stores
+//! nothing, and then no ticket is handed out; a [`ServerTickets`] store has no way to read a pre-shared key out, list
+//! its tickets or serialize, so it can be neither persisted nor exported (a store restored from an old snapshot
+//! would allow replay; after a restart a client simply falls back to a full handshake). Only a [`ClientTickets`]
+//! store exports, and its export is a secret the caller must seal before it is persisted. Expiry is in the
+//! caller's nanoseconds.
 // vertexia: linear scans over N slots, a hash index if the server store grows far beyond its 4000 default.
 
-use vinc_crypto::{Aead, NodeId, Provider, Secret};
+use vinc_crypto::{Aead, IdentityAlg, NodeId, Provider, Secret};
 use vinc_wire::{Reader, WireError, Writer};
 
+use crate::credit::{CREDIT_RECORD_LEN, CreditRecord};
 use crate::error::Failure;
-use crate::ids::Alpn;
-use crate::params::Params;
+use crate::ids::{Alpn, MAX_ALPN_LEN, aead_from_tag, aead_tag};
 use crate::schedule::ticket_psk;
 use crate::session::{Env, Established};
 
@@ -29,8 +34,12 @@ pub const ID_ATTEMPTS: usize = 8;
 pub const DEFAULT_TICKET_LIFETIME_S: u32 = 86_400;
 /// The default capacity of a [`ServerTickets`] store.
 pub const DEFAULT_SERVER_TICKETS: usize = 4000;
-/// The default capacity of a [`ClientTickets`] store.
+/// The default capacity of a [`ClientTickets`] store: tickets of 48 peers.
 pub const DEFAULT_CLIENT_TICKETS: usize = 48;
+/// The version byte of an exported ticket state.
+pub const EXPORT_VERSION: u8 = 1;
+/// The longest exported entry: `alg(1) node(32) alpn_len(1) alpn tid(16) psk(32) aead(1) expiry(8) credit(6)`.
+pub const MAX_EXPORT_ENTRY_LEN: usize = 1 + 32 + 1 + MAX_ALPN_LEN + TID_LEN + 32 + 1 + 8 + CREDIT_RECORD_LEN;
 
 const NS_PER_S: u64 = 1_000_000_000;
 
@@ -148,7 +157,7 @@ pub struct Ticket {
     pub(crate) alpn: Alpn,
     pub(crate) aead: Aead,
     pub(crate) expiry: u64,
-    pub(crate) params: Params,
+    pub(crate) credit: CreditRecord,
 }
 
 impl core::fmt::Debug for Ticket {
@@ -170,9 +179,9 @@ impl Ticket {
         self.expiry
     }
 
-    /// The server's transport parameters of the session that issued this ticket: what 0-RTT data may rely on.
-    pub const fn peer_params(&self) -> &Params {
-        &self.params
+    /// The issuer's credit record of the session that issued this ticket: what 0-RTT data may rely on.
+    pub const fn peer_credit(&self) -> &CreditRecord {
+        &self.credit
     }
 }
 
@@ -208,7 +217,7 @@ pub(crate) struct ServerSlot {
     pub(crate) alpn: Alpn,
     pub(crate) aead: Aead,
     pub(crate) expiry: u64,
-    pub(crate) params: Params,
+    pub(crate) credit: CreditRecord,
     stamp: u64,
 }
 
@@ -278,8 +287,8 @@ impl<const N: usize> ServerTickets<N> {
             self.clock = self.clock.wrapping_add(1);
             let slot = ServerSlot {
                 tid,
-                psk: ticket_psk(&session.resume, &tid, session.local_params.as_bytes()),
-                params: session.local_params,
+                psk: ticket_psk(&session.resume, &tid, session.local_credit),
+                credit: session.local_credit,
                 peer: session.peer,
                 alpn: session.alpn,
                 aead: session.traffic.aead,
@@ -326,7 +335,7 @@ struct ClientSlot {
     stamp: u64,
 }
 
-/// The dialer's store of tickets received from peers.
+/// The dialer's store of tickets received from peers: one per peer, the newest replacing the older.
 pub struct ClientTickets<const N: usize = DEFAULT_CLIENT_TICKETS> {
     slots: [Option<ClientSlot>; N],
     clock: u64,
@@ -356,7 +365,7 @@ impl<const N: usize> ClientTickets<N> {
         }
     }
 
-    /// How many tickets are stored.
+    /// How many tickets (one per peer) are stored.
     pub fn len(&self) -> usize {
         self.slots.iter().flatten().count()
     }
@@ -366,26 +375,39 @@ impl<const N: usize> ClientTickets<N> {
         self.len() == 0
     }
 
-    /// Store the tickets of `batch`, which the peer of `session` issued at time `now`.
+    /// Keep `ticket`, replacing the peer's older one; with no free slot the oldest stored ticket makes room.
+    fn insert(&mut self, ticket: Ticket, now: u64) {
+        self.clock = self.clock.wrapping_add(1);
+        let slot = ClientSlot {
+            ticket,
+            stamp: self.clock,
+        };
+        let same = self
+            .slots
+            .iter()
+            .position(|s| s.as_ref().is_some_and(|s| s.ticket.peer == slot.ticket.peer));
+        let at = same.or_else(|| victim(&self.slots, now, |s| s.ticket.expiry, |s| s.stamp));
+        if let Some(s) = at.and_then(|i| self.slots.get_mut(i)) {
+            *s = Some(slot);
+        }
+    }
+
+    /// Store the tickets of `batch`, which the peer of `session` issued at time `now`. Each replaces the peer's
+    /// earlier ticket, so the last of the batch is the one kept.
     pub fn accept_batch(&mut self, session: &Established, batch: &TicketBatch, now: u64) {
         for e in batch.entries() {
-            self.clock = self.clock.wrapping_add(1);
-            let slot = ClientSlot {
-                ticket: Ticket {
+            self.insert(
+                Ticket {
                     tid: e.tid,
-                    psk: ticket_psk(&session.resume, &e.tid, session.peer_params.as_bytes()),
-                    params: session.peer_params,
+                    psk: ticket_psk(&session.resume, &e.tid, session.peer_credit),
+                    credit: session.peer_credit,
                     peer: session.peer,
                     alpn: session.alpn,
                     aead: session.traffic.aead,
                     expiry: expiry(now, e.lifetime_s),
                 },
-                stamp: self.clock,
-            };
-            let at = victim(&self.slots, now, |s| s.ticket.expiry, |s| s.stamp);
-            if let Some(s) = at.and_then(|i| self.slots.get_mut(i)) {
-                *s = Some(slot);
-            }
+                now,
+            );
         }
     }
 
@@ -399,22 +421,123 @@ impl<const N: usize> ClientTickets<N> {
         Ok(())
     }
 
-    /// Take the newest unexpired ticket for `peer` and `alpn`, removing it (a ticket is used once). Expired tickets
-    /// are dropped on the way.
+    /// Take the unexpired ticket for `peer` if it is for `alpn`, removing it (a ticket is used once). Expired
+    /// tickets are dropped on the way.
     pub fn take(&mut self, peer: &NodeId, alpn: &[u8], now: u64) -> Option<Ticket> {
         for s in &mut self.slots {
             if s.as_ref().is_some_and(|s| s.ticket.expiry < now) {
                 *s = None;
             }
         }
-        let best = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| s.as_ref().map(|s| (i, s)))
-            .filter(|(_, s)| &s.ticket.peer == peer && s.ticket.alpn.as_bytes() == alpn)
-            .max_by_key(|(_, s)| s.stamp)
-            .map(|(i, _)| i)?;
-        self.slots.get_mut(best)?.take().map(|s| s.ticket)
+        let at = self.slots.iter().position(|s| {
+            s.as_ref()
+                .is_some_and(|s| &s.ticket.peer == peer && s.ticket.alpn.as_bytes() == alpn)
+        })?;
+        self.slots.get_mut(at)?.take().map(|s| s.ticket)
     }
+
+    /// Write the state for persistence: the newest at most `max` unexpired tickets, oldest first, as
+    /// `version(1) count(1)` and then per ticket `alg(1) node(32) alpn_len(1) alpn tid(16) psk(32) aead(1)
+    /// expiry(8) credit(6)`. Returns the length written.
+    ///
+    /// The bytes hold pre-shared keys: they are secret. The caller seals them (the key store's `seal`) before they
+    /// reach a disk and zeroizes `out` afterwards. Tickets stay in the store, which is harmless: a ticket is single
+    /// use at the issuer, so a restored copy of a used one is only rejected.
+    ///
+    /// # Errors
+    /// [`WireError::BufferTooSmall`] if `out` cannot hold the state; size it with
+    /// `2 + max * MAX_EXPORT_ENTRY_LEN`.
+    // vertexia: the live slots are ordered through two N-entry stack arrays, a bounded selection if N grows past a
+    // few thousand.
+    pub fn export(&self, now: u64, max: usize, out: &mut [u8]) -> Result<usize, WireError> {
+        let mut live: [Option<&ClientSlot>; N] = [const { None }; N];
+        for (l, s) in live.iter_mut().zip(&self.slots) {
+            *l = s.as_ref().filter(|s| s.ticket.expiry >= now);
+        }
+        let count = live.iter().flatten().count().min(max);
+        let skip = live.iter().flatten().count() - count;
+        let mut order: [(u64, usize); N] = [(0, 0); N];
+        let mut n = 0;
+        for (i, s) in live.iter().enumerate() {
+            if let (Some(s), Some(o)) = (s, order.get_mut(n)) {
+                *o = (s.stamp, i);
+                n += 1;
+            }
+        }
+        let order = order.get_mut(..n).unwrap_or_default();
+        order.sort_unstable();
+        let mut w = Writer::new(out);
+        w.put_u8(EXPORT_VERSION)?;
+        w.put_u8(u8::try_from(count).map_err(|_| WireError::VarintOverflow)?)?;
+        for (_, i) in order.iter().skip(skip) {
+            let Some(t) = live.get(*i).copied().flatten().map(|s| &s.ticket) else {
+                continue;
+            };
+            w.put_u8(t.peer.alg.tag())?;
+            w.put_slice(&t.peer.bytes)?;
+            w.put_u8(u8::try_from(t.alpn.as_bytes().len()).map_err(|_| WireError::VarintOverflow)?)?;
+            w.put_slice(t.alpn.as_bytes())?;
+            w.put_slice(&t.tid)?;
+            w.put_slice(t.psk.expose())?;
+            w.put_u8(aead_tag(t.aead))?;
+            w.put_u64(t.expiry)?;
+            w.put_slice(&t.credit.encode())?;
+        }
+        Ok(w.written().len())
+    }
+
+    /// Load a state written by [`ClientTickets::export`] (after the caller unsealed it): every entry that has not
+    /// expired by `now` is stored as [`ClientTickets::accept_batch`] stores tickets. Returns how many were stored.
+    ///
+    /// # Errors
+    /// A [`WireError`] if `bytes` is not exactly one well-formed state; nothing is stored then.
+    pub fn restore(&mut self, bytes: &[u8], now: u64) -> Result<usize, WireError> {
+        let mut check = Reader::new(bytes);
+        let count = read_export_header(&mut check)?;
+        for _ in 0..count {
+            read_export_entry(&mut check)?;
+        }
+        if !check.is_empty() {
+            return Err(WireError::Unexpected("trailing bytes"));
+        }
+        let mut r = Reader::new(bytes);
+        read_export_header(&mut r)?;
+        let mut stored = 0;
+        for _ in 0..count {
+            let t = read_export_entry(&mut r)?;
+            if t.expiry >= now {
+                self.insert(t, now);
+                stored += 1;
+            }
+        }
+        Ok(stored)
+    }
+}
+
+fn read_export_header(r: &mut Reader<'_>) -> Result<usize, WireError> {
+    if r.read_u8()? != EXPORT_VERSION {
+        return Err(WireError::Unexpected("ticket state version"));
+    }
+    Ok(usize::from(r.read_u8()?))
+}
+
+fn read_export_entry(r: &mut Reader<'_>) -> Result<Ticket, WireError> {
+    let alg = IdentityAlg::from_tag(r.read_u8()?).ok_or(WireError::Unexpected("identity algorithm"))?;
+    let bytes = r.read_array::<32>()?;
+    let alpn_len = usize::from(r.read_u8()?);
+    let alpn = Alpn::new(r.read_bytes(alpn_len)?).ok_or(WireError::Unexpected("alpn length"))?;
+    let tid = r.read_array::<TID_LEN>()?;
+    let psk = Secret::new(r.read_array::<32>()?);
+    let aead = aead_from_tag(r.read_u8()?).ok_or(WireError::Unexpected("unknown aead"))?;
+    let expiry = r.read_u64()?;
+    let credit = CreditRecord::decode(&r.read_array::<CREDIT_RECORD_LEN>()?);
+    Ok(Ticket {
+        tid,
+        psk,
+        peer: NodeId { alg, bytes },
+        alpn,
+        aead,
+        expiry,
+        credit,
+    })
 }

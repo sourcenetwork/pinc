@@ -37,9 +37,10 @@ conn_impl! {
             add(self.life.wake_deadline);
             return Some(t);
         }
-        if !self.client || !self.confirmed {
+        if !self.confirmed {
             add(self.hs.retransmit_at());
         }
+        add(self.rekey_deadline());
         if !self.suspended() {
             add(self.rec.next_timeout());
         }
@@ -78,7 +79,7 @@ conn_impl! {
             self.silent_close(CloseReason::IdleTimeout);
             return;
         }
-        if self.hs.on_timer(now) {
+        if self.hs.on_timer(env, now) {
             self.stats.handshake_retransmits += 1;
             self.pump(env);
         }
@@ -110,11 +111,11 @@ conn_impl! {
 
     fn run_recovery_timer(&mut self, now: u64) {
         let mut out = Outcome::default();
-        let (streams, pool, ctl, cids, rx) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids, &mut self.rx);
-        let to = self.rec.on_timeout(now, |ev| apply(&ev, now, streams, pool, ctl, cids, rx, &mut out));
+        let (streams, pool, ctl, cids) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids);
+        let to = self.rec.on_timeout(now, |ev| apply(&ev, streams, pool, ctl, cids, &mut out));
         self.after_feedback(out, now);
-        if to.probes > 0 {
-            self.life.probes = to.probes;
+        if to.ping {
+            self.life.probes = 1;
             self.stats.ptos += 1;
             self.mtu_black_hole_check();
         }

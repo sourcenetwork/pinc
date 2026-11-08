@@ -2,17 +2,28 @@
 //!
 //! Slots are kept in send order, so packet numbers increase from head to tail and a lookup is a binary search. A slot
 //! is in flight, declared lost (kept as a ghost so a late acknowledgement can still be recognised) or done. Done slots
-//! at the head are dropped at once; ghosts at the head are dropped after [`GHOST_RETENTION`] or when the ring needs
-//! the room. A ring full of packets still in flight refuses new ones.
+//! at the head are dropped at once; ghosts at the head are dropped once older than [`GHOST_RETENTION`] or when the ring needs
+//! the room. At most [`MAX_GHOSTS`] ghosts are kept. A ring full of packets still in flight refuses new ones.
+//!
+//! Only packets that need an acknowledgement and count toward bytes in flight are recorded here: acknowledgement-only
+//! packets and probes are not.
 
 use super::SECOND;
-use super::frame_ref::FrameRefs;
+use super::frame_ref::{FrameRef, FrameRefs};
 
-/// How long a packet declared lost stays recognisable to a late acknowledgement (4 s).
-pub(crate) const GHOST_RETENTION: u64 = 4 * SECOND;
+/// How long a packet declared lost stays recognisable to a late acknowledgement (2 s).
+pub(crate) const GHOST_RETENTION: u64 = 2 * SECOND;
+/// The most ghosts kept; the oldest go first.
+pub(crate) const MAX_GHOSTS: usize = 200;
 
-#[allow(clippy::struct_excessive_bools)]
-/// A packet handed to [`super::Recovery::on_packet_sent`].
+/// Whether a frame is kept by a ghost: stream data with at least one byte and no stream end. A packet with no such
+/// frame leaves no ghost, so a late acknowledgement of it acts on nothing.
+pub(crate) const fn is_ghost_data(f: &FrameRef) -> bool {
+    matches!(f, FrameRef::Stream { len, fin: false, .. } if *len > 0)
+}
+
+/// A packet handed to [`super::Recovery::on_packet_sent`]. Every recorded packet is ack-eliciting and counts toward
+/// bytes in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sent {
     /// The packet number; strictly above every earlier one.
@@ -21,10 +32,6 @@ pub struct Sent {
     pub time: u64,
     /// The datagram size in bytes.
     pub size: u32,
-    /// Whether the packet needs an acknowledgement.
-    pub ack_eliciting: bool,
-    /// Whether the packet counts toward bytes in flight.
-    pub in_flight: bool,
     /// The path the packet left on.
     pub path: u8,
     /// Whether this is a repair packet: its loss is neither retransmitted nor a congestion signal.
@@ -47,10 +54,6 @@ pub(crate) enum State {
 pub(crate) struct Slot {
     pub(crate) sent: Sent,
     pub(crate) state: State,
-    /// Whether the loss was counted as a congestion signal (so a late acknowledgement can undo it).
-    pub(crate) counted: bool,
-    /// Whether the window was in use when the packet was sent (its acknowledgement may grow the window).
-    pub(crate) cwnd_limited: bool,
 }
 
 const EMPTY: Slot = Slot {
@@ -58,16 +61,12 @@ const EMPTY: Slot = Slot {
         pn: 0,
         time: 0,
         size: 0,
-        ack_eliciting: false,
-        in_flight: false,
         path: 0,
         is_repair: false,
         is_mtu_probe: false,
         frames: FrameRefs::new(),
     },
     state: State::Done,
-    counted: false,
-    cwnd_limited: false,
 };
 
 /// A ring of at most `N` sent packets.
@@ -121,6 +120,29 @@ impl<const N: usize> SentRing<N> {
         lo
     }
 
+    /// The index of the oldest packet still in flight.
+    pub(crate) fn first_in_flight(&self) -> Option<usize> {
+        (0..self.len).find(|&i| self.get(i).is_some_and(|s| s.state == State::InFlight))
+    }
+
+    /// The send time of the newest packet still in flight.
+    ///
+    /// vertexia: scans back from the tail over acknowledged slots, O(ring) when the head is the only packet in
+    /// flight; a cached index would make it O(1) if profiles show it.
+    pub(crate) fn newest_in_flight_time(&self) -> Option<u64> {
+        (0..self.len)
+            .rev()
+            .find_map(|i| self.get(i).filter(|s| s.state == State::InFlight).map(|s| s.sent.time))
+    }
+
+    /// The packet with number `pn`, if it is still in flight.
+    pub(crate) fn in_flight(&self, pn: u64) -> Option<&Sent> {
+        let i = self.lower_bound(pn);
+        self.get(i)
+            .filter(|s| s.sent.pn == pn && s.state == State::InFlight)
+            .map(|s| &s.sent)
+    }
+
     fn pop_front(&mut self) {
         if self.len > 0 {
             self.head = (self.head + 1) % N;
@@ -133,7 +155,7 @@ impl<const N: usize> SentRing<N> {
         while let Some(slot) = self.get(0) {
             let drop = match slot.state {
                 State::Done => true,
-                State::Lost(at) => at.saturating_add(GHOST_RETENTION) <= now,
+                State::Lost(at) => at.saturating_add(GHOST_RETENTION) < now,
                 State::InFlight => false,
             };
             if !drop {
@@ -143,8 +165,25 @@ impl<const N: usize> SentRing<N> {
         }
     }
 
+    /// Forget the oldest ghosts beyond [`MAX_GHOSTS`].
+    pub(crate) fn limit_ghosts(&mut self) {
+        let ghosts = (0..self.len)
+            .filter(|&i| self.get(i).is_some_and(|s| matches!(s.state, State::Lost(_))))
+            .count();
+        let mut excess = ghosts.saturating_sub(MAX_GHOSTS);
+        for i in 0..self.len {
+            if excess == 0 {
+                break;
+            }
+            if let Some(s) = self.get_mut(i).filter(|s| matches!(s.state, State::Lost(_))) {
+                s.state = State::Done;
+                excess -= 1;
+            }
+        }
+    }
+
     /// Append a packet. Returns false when the ring is full of packets still in flight.
-    pub(crate) fn push(&mut self, sent: Sent, cwnd_limited: bool) -> bool {
+    pub(crate) fn push(&mut self, sent: Sent) -> bool {
         while self.len == N {
             if self.get(0).is_some_and(|s| s.state == State::InFlight) {
                 return false;
@@ -156,8 +195,6 @@ impl<const N: usize> SentRing<N> {
             *slot = Slot {
                 sent,
                 state: State::InFlight,
-                counted: false,
-                cwnd_limited,
             };
         }
         self.len += 1;

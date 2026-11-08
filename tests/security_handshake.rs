@@ -20,7 +20,8 @@ use vinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
 use vinc_crypto::{Aead, Drbg, IdentityAlg, NodeId, Software};
 use vinc_security::message::{MAX_MESSAGE_LEN, min_initial_len, reply_len};
 use vinc_security::{
-    Env, Event, Failure, InitialForm, KeyRequest, KeyResponse, Output, PrekeyCache, ResponderStores, SoftKeys,
+    CreditRecord, Env, Event, Failure, InitialForm, KeyRequest, KeyResponse, Output, PrekeyCache, ResponderStores,
+    SoftKeys,
 };
 
 mod sec_common;
@@ -97,13 +98,15 @@ fn message_sizes_and_padding() {
             let mut w = World::new(IdentityAlg::Ed25519, alg, false, false);
             let out = w.full();
             let (init, reply, finish) = (&out.msgs[0], &out.msgs[1], &out.msgs[2]);
-            // Initial: type, version, dcid(16), scid(8), alpn(6), offer, e_I, pk_I, token(0).
-            assert_eq!(init.len(), 1 + 4 + 17 + 9 + 7 + 1 + 32 + 1184 + 1 + 2);
-            let sealed = 1 + 2 + alg.public_key_len() + 2 + alg.signature_len() + 2 + 16;
+            // Initial: type, version(1), dcid(16), scid(8), alpn(6), offer, e_I, pk_I, credit(6).
+            assert_eq!(init.len(), 1 + 1 + 17 + 9 + 7 + 1 + 32 + 1184 + 6);
+            // The sealed part of the Reply carries the credit record (6) and the tag (16).
+            let sealed = 1 + 2 + alg.public_key_len() + 2 + alg.signature_len() + 6 + 16;
             // Reply: type, scid(8), aead, e_R, ct, sealed.
             assert_eq!(reply.len(), 1 + 9 + 1 + 32 + 1088 + 2 + sealed);
             assert!(reply.len() <= reply_len(alg));
-            assert_eq!(finish.len(), 1 + 2 + (1 + 2 + 32 + 2 + 64 + 2 + 16));
+            // The Finish carries no credit record.
+            assert_eq!(finish.len(), 1 + 2 + (1 + 2 + 32 + 2 + 64 + 16));
             // Three times the padded Initial covers the Reply and its per-datagram overhead.
             for form in [InitialForm::Full, InitialForm::Short] {
                 let min = min_initial_len(form, alg);
@@ -115,7 +118,15 @@ fn message_sizes_and_padding() {
                 min_initial_len(InitialForm::Short, alg),
             );
             match alg {
-                IdentityAlg::Ed25519 | IdentityAlg::EcdsaP256 => assert_eq!((full, short), (1200, 480)),
+                IdentityAlg::Ed25519 => {
+                    // The short Initial is 464 bytes: 3 x 464 = 1392 covers the 1268-byte Reply (two datagrams, 48
+                    // bytes of overhead each) with room to spare, and 463 would not.
+                    assert_eq!((full, short), (1200, 464));
+                    assert_eq!(reply_len(alg), 1268);
+                    assert_eq!((reply_len(alg) + 2 * 48).div_ceil(3), 455);
+                    assert!(3 * short >= reply_len(alg) + 2 * 48);
+                }
+                IdentityAlg::EcdsaP256 => assert!(full == 1200 && short >= 464),
                 _ => assert!(full > 1200 && short > 464 && full == short),
             }
             assert!(reply_len(IdentityAlg::Hybrid) <= MAX_MESSAGE_LEN);
@@ -271,10 +282,15 @@ fn every_third_retransmit_carries_the_full_prekey() {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
         let dial = w.dial();
         let mut i = w.initiator_with(dial, ALPN, true, false);
+        let mut env = Env {
+            provider: &w.i_prov,
+            now: w.now,
+            drbg: &mut w.i_drbg,
+        };
         let mut seen = vec![];
         for n in 0..7 {
             if n > 0 {
-                i.retransmit().unwrap();
+                i.retransmit(&mut env).unwrap();
             }
             let Some(Output::Send { data, .. }) = i.poll_output() else {
                 panic!("nothing to send at {n}")
@@ -282,8 +298,8 @@ fn every_third_retransmit_carries_the_full_prekey() {
             seen.push(data[0]);
             assert!(i.poll_output().is_none());
         }
-        // Original, then retransmits 1..=6: short, short, full, short, short, full.
-        assert_eq!(seen, vec![2, 2, 2, 1, 2, 2, 1]);
+        // Sends 1 to 7 are short, short, full, short, short, full, short: the full prekey goes on sends 3, 6, 9.
+        assert_eq!(seen, vec![2, 2, 1, 2, 2, 1, 2]);
     });
 }
 
@@ -357,11 +373,20 @@ fn the_finish_is_retransmitted_on_request() {
         let mut r = w.responder();
         let out = w.run(&mut i, &mut r, None);
         assert!(out.both_established());
-        i.retransmit().unwrap();
+        let mut env = Env {
+            provider: &w.i_prov,
+            now: w.now,
+            drbg: &mut w.i_drbg,
+        };
+        i.retransmit(&mut env).unwrap();
         let Some(Output::Send { data, .. }) = i.poll_output() else {
             panic!("no resend")
         };
         assert_eq!(data, out.msgs[2].as_slice());
+        // Once the transport shed the handshake there is nothing left to send again.
+        i.shed();
+        i.retransmit(&mut env).unwrap();
+        assert!(i.poll_output().is_none());
     });
 }
 
@@ -466,9 +491,9 @@ fn a_wrong_dialed_node_id_fails() {
 #[test]
 fn the_transcript_binds_alpn_connection_ids_version_and_the_aead_offer() {
     big_stack(|| {
-        // The initial message layout: type(1) version(4) dcid(1+16) scid(1+8) alpn(1+6) offer(1) e(32) pk(1184) token(1);
+        // The initial message layout: type(1) version(1) dcid(1+16) scid(1+8) alpn(1+6) offer(1) e(32) pk(1184) credit(6);
         // the offsets below are those of the bytes after each length prefix.
-        let (v, dcid, scid, alpn, offer, e) = (1, 6, 23, 32, 38, 39);
+        let (v, dcid, scid, alpn, offer, e) = (1, 3, 20, 29, 35, 36);
         let mk = |t: Tamper, i_hw: bool, r_hw: bool| {
             let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, i_hw, r_hw);
             let mut i = w.initiator();
@@ -489,7 +514,7 @@ fn the_transcript_binds_alpn_connection_ids_version_and_the_aead_offer() {
             assert_eq!(out.i_failed(), Some(Failure::Authentication), "cid byte {at}");
         }
         // The version is checked before anything else.
-        let out = mk(Tamper::flip(0, v + 3), false, false);
+        let out = mk(Tamper::flip(0, v), false, false);
         assert_eq!(out.r_failed(), Some(Failure::UnsupportedVersion));
         // The offer: widened by the attacker, the responder picks ChaCha (no hardware AES) and the transcripts differ.
         let out = mk(Tamper::custom(0, move |m| m[offer] = 3), false, false);
@@ -507,19 +532,26 @@ fn the_transcript_binds_alpn_connection_ids_version_and_the_aead_offer() {
 }
 
 #[test]
-fn the_address_token_is_part_of_the_transcript() {
+fn the_credit_record_is_part_of_the_transcript() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
-        w.token = b"token-bytes".to_vec();
+        w.i_credit = CreditRecord::new(1_310_720, 100, 1200);
         let out = w.full();
         assert!(out.both_established());
-        let token_at = out.msgs[0].len() - 11 - 2;
-        assert_eq!(&out.msgs[0][token_at..token_at + 11], b"token-bytes");
-        let mut i = w.initiator();
-        let mut r = w.responder();
-        let t = Tamper::flip(0, token_at + 3);
-        let out = w.run(&mut i, &mut r, Some(&t));
-        assert_eq!(out.i_failed(), Some(Failure::Authentication));
+        // The record is the last 6 bytes of the Initial; flipping any byte of it breaks the handshake.
+        let at = out.msgs[0].len() - 6;
+        assert_eq!(out.msgs[0][at..], w.i_credit.encode());
+        for off in 0..6 {
+            let mut i = w.initiator();
+            let mut r = w.responder();
+            let t = Tamper::flip(0, at + off);
+            let out = w.run(&mut i, &mut r, Some(&t));
+            assert_eq!(
+                out.i_failed(),
+                Some(Failure::Authentication),
+                "initiator record byte {off}"
+            );
+        }
     });
 }
 
@@ -792,9 +824,8 @@ fn a_full_handshake_run_allocates_nothing() {
                         identity: &w.ip.id,
                         prekey: &prekey,
                         peer_has_prekey: false,
-                        token: &[],
                         ticket: None,
-                        transport_params: &[],
+                        credit: vinc_security::CreditRecord::NONE,
                     },
                 )
                 .unwrap();

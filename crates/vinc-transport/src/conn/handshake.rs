@@ -1,14 +1,31 @@
-//! The handshake driver: carries `vinc-security` messages in long Handshake packets and runs its retransmit timer.
+//! The handshake driver: carries `vinc-security` messages in long Handshake packets and runs its timers.
 //!
 //! A handshake message can be longer than a datagram, so a Handshake packet body is
 //! `total(varint) offset(varint) fragment`: the message length, where the fragment starts and its bytes. The sender
 //! cuts the message into datagram-sized fragments; the receiver keeps every fragment that arrives, in any order, in a
 //! buffer of the largest message size with a bounded set of received runs, so a lost fragment costs only the
-//! retransmission, which sends the flight again and completes the message. Both directions hold one message in a fixed buffer: nothing here allocates.
+//! retransmission, which sends the flight again and completes the message.
+//!
+//! The send and receive buffers are one chunk of the connection's buffer pool, held only while the handshake needs
+//! them: the receive buffer is released when the session is established (a resumed responder keeps it, with the send
+//! buffer, to answer a repeated Hello), the send buffer when the peer has shown it holds the session (the first
+//! 1-RTT packet), and at once for a responder of a full handshake. Nothing here allocates.
+//!
+//! # Timers
+//!
+//! - A dialing side resends its first flight after `max(500 ms, 2 x RTT)`, where the RTT is the one remembered for
+//!   this peer, else the node's average; the delay then doubles up to `max(16 s, 4 x node RTT)`, and on a thin node
+//!   no further than `max(8 s, 2 x the node's largest RTT)`. A Hello that stayed unanswered for its third send gives
+//!   way to a full handshake (see `vinc-security`), and a rejected ticket restarts the schedule.
+//! - A responder resends its flight after 999 ms, then after 1.998 s, 3.996 s and every 4 s.
+//! - A dialing side resends its Finish on the probe timeout, backing off to at most `max(2 s, PTO)`, until the first
+//!   1-RTT packet arrives. On a thin node each wait is at least `min(20 s, 2 x max(srtt, node RTTs))`.
+//! - A handshake that is not established 30 s after it began (60 s on a thin node) ends; the connection then closes.
+//! - When the link returns, a dialing side's pending flight is resent at once.
+//! - The round trip of the first flight, if it was answered without a resend, is offered once as an RTT sample.
 //!
 //! Invariants: the reassembly buffer never holds more than [`MAX_MESSAGE_LEN`] bytes and a message is handed to the
-//! state machine only when complete; the retransmit timer doubles from `max(500 ms, 2 x RTT)` up to
-//! `max(16 s, 4 x RTT)` (8 s on a thin node) and stops once the handshake is confirmed.
+//! state machine only when complete; a timer is reported only while it can still act.
 
 use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
 use vinc_crypto::{IdentityAlg, Provider};
@@ -19,19 +36,89 @@ use vinc_security::{
 use vinc_wire::{Reader, varint};
 
 use crate::recovery::{MS, SECOND};
+use crate::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
 
-/// The first retransmit delay when no round trip is remembered.
-const RETX_BASE: u64 = 500 * MS;
-/// The longest retransmit delay, unless 4 round trips are longer.
-const RETX_CAP: u64 = 16 * SECOND;
-/// The longest retransmit delay of a thin node.
-const RETX_CAP_THIN: u64 = 8 * SECOND;
+/// The first resend delay of a dialing side when no round trip is known (the algorithm's 500 ms).
+const FIRST: u64 = 500 * MS;
+/// The shift limit of the doubling.
+const MAX_SHIFT: u32 = 5;
+/// The longest resend delay of a dialing side, unless 4 node round trips are longer.
+const CAP: u64 = 16 * SECOND;
+/// The longest resend delay of a thin node, unless twice its largest round trip is longer.
+const CAP_THIN: u64 = 8 * SECOND;
+/// A node whose round trip is at least this is thin whatever its configuration says.
+const THIN_RTT: u64 = 250 * MS;
+/// How long an unestablished handshake lasts.
+const CONNECT_TIMEOUT: u64 = 30 * SECOND;
+/// The first resend delay of a responder: three times the 333 ms initial round trip.
+const SERVER_FIRST: u64 = 999 * MS;
+/// The longest resend delay of a responder.
+const SERVER_CAP: u64 = 4 * SECOND;
+/// The shift limit of a responder's doubling.
+const SERVER_SHIFT: u32 = 4;
+/// The longest delay between resends of the Finish, unless the probe timeout is longer.
+const FINISH_CAP: u64 = 2 * SECOND;
+/// The longest extra wait before a thin node resends its Finish.
+const THIN_FINISH_MAX: u64 = 20 * SECOND;
+/// The shift limit of the Finish backoff.
+const FINISH_SHIFT: u32 = 3;
+/// The shortest round trip a handshake sample may be.
+const MIN_SAMPLE: u64 = MS;
 
 /// The most disjoint runs of one message the receiver tracks (a message is a handful of datagrams).
 const RUNS: usize = 8;
 
 /// The longest message a key request signs.
 const SIGN_MAX: usize = 64;
+
+const _: () = assert!(
+    2 * MAX_MESSAGE_LEN <= CHUNK_SIZE,
+    "both handshake buffers fit one pool chunk"
+);
+
+/// What the timers know about the node: how long round trips take. All durations in nanoseconds.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Timing {
+    /// A node on a constrained link (a thin node).
+    pub(crate) thin: bool,
+    /// The round trip remembered for this peer.
+    pub(crate) remembered_rtt: Option<u64>,
+    /// The node's average handshake round trip.
+    pub(crate) node_rtt: Option<u64>,
+    /// The node's largest recent round trip.
+    pub(crate) node_peak_rtt: Option<u64>,
+}
+
+impl Timing {
+    fn is_thin(&self) -> bool {
+        self.thin || self.node_rtt.unwrap_or(0).max(self.node_peak_rtt.unwrap_or(0)) >= THIN_RTT
+    }
+
+    /// The first resend delay of a dialing side.
+    fn first(&self) -> u64 {
+        let r = self.remembered_rtt.or(self.node_rtt).unwrap_or(0);
+        FIRST.max(r.saturating_mul(2))
+    }
+
+    /// The longest resend delay of a dialing side.
+    fn cap(&self) -> u64 {
+        let cap = CAP.max(self.node_rtt.unwrap_or(0).saturating_mul(4));
+        if self.is_thin() {
+            cap.min(CAP_THIN.max(self.node_peak_rtt.unwrap_or(0).saturating_mul(2)))
+        } else {
+            cap
+        }
+    }
+
+    /// How long an unestablished handshake lasts.
+    fn connect_timeout(&self) -> u64 {
+        if self.is_thin() {
+            CONNECT_TIMEOUT * 2
+        } else {
+            CONNECT_TIMEOUT
+        }
+    }
+}
 
 /// One of the two state machines.
 #[allow(
@@ -71,53 +158,94 @@ impl OwnedRequest {
     }
 }
 
+/// Where the dialing side or the responder is in its timers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// The first flight is out and unanswered, or the responder waits for the Finish.
+    Open,
+    /// A dialing side established the session and resends its Finish until the peer shows it holds the session.
+    Finish,
+    /// The timers are done.
+    Done,
+}
+
 /// The handshake state of a connection.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent flags of the buffers and timers"
+)]
 pub(crate) struct Handshake {
     pub(crate) machine: Machine,
-    tx: [u8; MAX_MESSAGE_LEN],
+    client: bool,
+    timing: Timing,
+    chunk: Option<Chunk>,
+    tx_live: bool,
+    rx_live: bool,
     tx_len: usize,
     tx_min: usize,
     tx_off: usize,
     tx_total_sent: usize,
     tx_active: bool,
-    rx: [u8; MAX_MESSAGE_LEN],
     rx_runs: [(usize, usize); RUNS],
     rx_len: usize,
     rx_total: usize,
     pub(crate) request: Option<OwnedRequest>,
     pub(crate) request_announced: bool,
+    stage: Stage,
     retx_at: Option<u64>,
-    retx_interval: u64,
-    cap: u64,
+    sends: u32,
+    pto: u64,
+    srtt: u64,
+    connect_at: Option<u64>,
+    timed_out: bool,
+    first_sent: u64,
+    sample: Option<u64>,
+    sampled: bool,
+    clock: u64,
 }
 
 impl Handshake {
-    pub(crate) fn new(machine: Machine, now: u64, thin: bool, rtt: Option<u64>) -> Self {
-        let base = rtt.map_or(RETX_BASE, |r| RETX_BASE.max(r.saturating_mul(2)));
-        let cap = rtt.map_or(RETX_CAP, |r| RETX_CAP.max(r.saturating_mul(4)));
-        let cap = if thin { cap.min(RETX_CAP_THIN) } else { cap };
-        Self {
+    /// The handshake of `machine` starting at `now`. Its buffers are one chunk of `pool`.
+    ///
+    /// # Errors
+    /// [`Failure::OutOfMemory`] if the pool has no free chunk.
+    pub(crate) fn new(machine: Machine, pool: &mut BufferPool<'_>, now: u64, timing: Timing) -> Result<Self, Failure> {
+        let client = matches!(machine, Machine::Client(_));
+        let chunk = pool.alloc_chunk().map_err(|_| Failure::OutOfMemory)?;
+        let (first, sends) = if client { (timing.first(), 1) } else { (SERVER_FIRST, 0) };
+        Ok(Self {
             machine,
-            tx: [0; MAX_MESSAGE_LEN],
+            client,
+            timing,
+            chunk: Some(chunk),
+            tx_live: true,
+            rx_live: true,
             tx_len: 0,
             tx_min: 0,
             tx_off: 0,
             tx_total_sent: 0,
             tx_active: false,
-            rx: [0; MAX_MESSAGE_LEN],
             rx_runs: [(0, 0); RUNS],
             rx_len: 0,
             rx_total: 0,
             request: None,
             request_announced: false,
-            retx_at: Some(now.saturating_add(base)),
-            retx_interval: base.min(cap),
-            cap,
-        }
+            stage: Stage::Open,
+            retx_at: client.then(|| now.saturating_add(first)),
+            sends,
+            pto: 0,
+            srtt: 0,
+            connect_at: Some(now.saturating_add(timing.connect_timeout())),
+            timed_out: false,
+            first_sent: now,
+            sample: None,
+            sampled: false,
+            clock: now,
+        })
     }
 
     /// Drain the machine until it reports an event. Messages and key requests are copied out; the event is returned.
-    pub(crate) fn step(&mut self) -> Option<SecEvent> {
+    pub(crate) fn step(&mut self, pool: &mut BufferPool<'_>) -> Option<SecEvent> {
         loop {
             let out = match &mut self.machine {
                 Machine::Client(m) => m.poll_output(),
@@ -125,13 +253,22 @@ impl Handshake {
             };
             match out? {
                 Output::Send { data, min_len } => {
-                    if let Some(dst) = self.tx.get_mut(..data.len()) {
+                    let dst = self
+                        .chunk
+                        .as_ref()
+                        .filter(|_| self.tx_live)
+                        .and_then(|c| pool.bytes_mut(c).get_mut(..data.len()));
+                    if let Some(dst) = dst {
                         dst.copy_from_slice(data);
                         self.tx_len = data.len();
                         self.tx_min = min_len;
                         self.tx_off = 0;
                         self.tx_total_sent = 0;
                         self.tx_active = true;
+                        // A responder's resend schedule starts when its flight first goes out.
+                        if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
+                            self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
+                        }
                     }
                 }
                 Output::Key(req) => {
@@ -148,8 +285,68 @@ impl Handshake {
                     });
                     self.request_announced = false;
                 }
-                Output::Event(e) => return Some(e),
+                Output::Event(e) => {
+                    self.on_event(pool, &e);
+                    return Some(e);
+                }
             }
+        }
+    }
+
+    /// React to an event of the machine: a rejected or abandoned ticket restarts the dialing schedule, and an
+    /// established session lets go of the buffers it no longer needs.
+    fn on_event(&mut self, pool: &mut BufferPool<'_>, e: &SecEvent) {
+        match e {
+            SecEvent::ResumeRejected => {
+                self.sends = 1;
+                self.first_sent = self.clock;
+                self.retx_at = Some(self.clock.saturating_add(self.timing.first()));
+            }
+            SecEvent::Established(est) => {
+                self.connect_at = None;
+                if self.client {
+                    self.stage = Stage::Finish;
+                    self.retx_at = None;
+                    self.rx_live = false;
+                    if est.resumed {
+                        self.tx_live = false;
+                        self.tx_active = false;
+                    }
+                } else {
+                    self.stage = Stage::Done;
+                    self.retx_at = None;
+                    if !est.resumed {
+                        self.rx_live = false;
+                        self.tx_live = false;
+                        self.tx_active = false;
+                    }
+                }
+                self.release(pool);
+            }
+            SecEvent::EarlyKeys(_) | SecEvent::Failed(_) => {}
+        }
+    }
+
+    /// Return the chunk to the pool once neither buffer is wanted.
+    fn release(&mut self, pool: &mut BufferPool<'_>) {
+        if !self.tx_live && !self.rx_live {
+            if let Some(c) = self.chunk.take() {
+                pool.free_chunk(c);
+            }
+            self.rx_runs = [(0, 0); RUNS];
+            self.rx_len = 0;
+            self.rx_total = 0;
+        }
+    }
+
+    /// A dialing side established its session at `now`: resend the Finish on the probe timeout `pto` until the first
+    /// 1-RTT packet arrives.
+    pub(crate) fn finish_sent(&mut self, now: u64, pto: u64, srtt: u64) {
+        if self.client && self.stage == Stage::Finish {
+            self.pto = pto;
+            self.srtt = srtt;
+            self.sends = 0;
+            self.retx_at = Some(now.saturating_add(pto));
         }
     }
 
@@ -159,14 +356,18 @@ impl Handshake {
     }
 
     /// The next fragment of at most `room` bytes after the two varints, as `(total, offset, bytes)`.
-    pub(crate) fn next_fragment(&mut self, room: usize) -> Option<(usize, usize, &[u8])> {
+    pub(crate) fn next_fragment<'p>(
+        &mut self,
+        pool: &'p BufferPool<'_>,
+        room: usize,
+    ) -> Option<(usize, usize, &'p [u8])> {
         if !self.tx_active || self.tx_off >= self.tx_len {
             return None;
         }
         let end = self.tx_len.min(self.tx_off + room);
         let off = self.tx_off;
         self.tx_off = end;
-        let bytes = self.tx.get(off..end)?;
+        let bytes = pool.bytes(self.chunk.as_ref()?).get(off..end)?;
         Some((self.tx_len, off, bytes))
     }
 
@@ -203,7 +404,10 @@ impl Handshake {
 
     /// A fragment arrived, in any order. Returns the length of the complete message once every byte is in;
     /// [`Self::feed`] hands it to the state machine.
-    pub(crate) fn on_fragment(&mut self, body: &[u8]) -> Option<usize> {
+    pub(crate) fn on_fragment(&mut self, pool: &mut BufferPool<'_>, body: &[u8]) -> Option<usize> {
+        if !self.rx_live {
+            return None;
+        }
         let mut r = Reader::new(body);
         let total = usize::try_from(r.read_varint().ok()?).ok()?;
         let off = usize::try_from(r.read_varint().ok()?).ok()?;
@@ -238,7 +442,8 @@ impl Handshake {
         if n == RUNS {
             return None;
         }
-        self.rx.get_mut(off..end)?.copy_from_slice(data);
+        let buf = pool.bytes_mut(self.chunk.as_ref()?).get_mut(MAX_MESSAGE_LEN..)?;
+        buf.get_mut(off..end)?.copy_from_slice(data);
         *keep.get_mut(n)? = (lo, hi);
         n += 1;
         keep.get_mut(..n)?.sort_unstable();
@@ -253,45 +458,126 @@ impl Handshake {
     }
 
     /// Hand the complete message of `len` bytes to the state machine. A server needs the shared `stores`.
+    ///
+    /// The first message that is taken, if the first flight went unrepeated, gives the handshake round trip.
     pub(crate) fn feed<P: Provider, const PK: usize, const TK: usize>(
         &mut self,
+        pool: &BufferPool<'_>,
         env: &mut Env<'_, P>,
         stores: Option<&mut ResponderStores<PK, TK>>,
         len: usize,
     ) -> Result<(), Failure> {
-        let msg = self.rx.get(..len).ok_or(Failure::InvalidParameter)?;
-        match (&mut self.machine, stores) {
+        self.clock = env.now;
+        let chunk = self.chunk.as_ref().filter(|_| self.rx_live).ok_or(Failure::Closed)?;
+        let msg = pool
+            .bytes(chunk)
+            .get(MAX_MESSAGE_LEN..)
+            .and_then(|b| b.get(..len))
+            .ok_or(Failure::InvalidParameter)?;
+        let r = match (&mut self.machine, stores) {
             (Machine::Client(m), _) => m.handle(env, msg),
             (Machine::Server(m), Some(stores)) => m.handle(env, stores, msg),
             (Machine::Server(_), None) => Err(Failure::InvalidParameter),
+        };
+        if r.is_ok() && self.client && !self.sampled && self.sends == 1 {
+            self.sampled = true;
+            self.sample = Some(env.now.saturating_sub(self.first_sent).max(MIN_SAMPLE));
+        }
+        r
+    }
+
+    /// The handshake round trip, once: offered when the first flight was answered without a resend.
+    pub(crate) const fn take_rtt_sample(&mut self) -> Option<u64> {
+        self.sample.take()
+    }
+
+    /// When the next timer fires, if one runs: the resend, or the end of an unestablished handshake.
+    pub(crate) fn retransmit_at(&self) -> Option<u64> {
+        match (self.retx_at, self.connect_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 
-    /// When the retransmit timer fires next, if it runs.
-    pub(crate) const fn retransmit_at(&self) -> Option<u64> {
-        self.retx_at
+    /// Whether the handshake ran out of time; the connection then closes.
+    pub(crate) const fn timed_out(&self) -> bool {
+        self.timed_out
     }
 
-    /// Run the timer if due: the machine queues its flight again and the delay doubles. Returns whether it fired.
-    pub(crate) fn on_timer(&mut self, now: u64) -> bool {
+    /// Run the timers if due: the machine queues its flight again and the delay grows, or an unestablished
+    /// handshake ends ([`Self::timed_out`]). Returns whether a timer fired.
+    pub(crate) fn on_timer<P: Provider>(&mut self, env: &mut Env<'_, P>, now: u64) -> bool {
+        self.clock = now;
+        if self.connect_at.is_some_and(|t| t <= now) {
+            self.connect_at = None;
+            self.retx_at = None;
+            self.timed_out = true;
+            return true;
+        }
         if self.retx_at.is_none_or(|t| t > now) {
             return false;
         }
+        self.sends = self.sends.saturating_add(1);
+        let delay = match (self.stage, self.client) {
+            (Stage::Finish, _) => {
+                let backoff = self
+                    .pto
+                    .saturating_mul(1 << self.sends.min(FINISH_SHIFT))
+                    .min(FINISH_CAP.max(self.pto));
+                if self.timing.is_thin() {
+                    // On a thin uplink the Finish is resent only after its answer could have arrived.
+                    let rtt = self
+                        .srtt
+                        .max(self.timing.node_peak_rtt.unwrap_or(0))
+                        .max(self.timing.node_rtt.unwrap_or(0));
+                    backoff.max(THIN_FINISH_MAX.min(rtt.saturating_mul(2)))
+                } else {
+                    backoff
+                }
+            }
+            (_, true) => self
+                .timing
+                .cap()
+                .min(self.timing.first().saturating_mul(1 << (self.sends - 1).min(MAX_SHIFT))),
+            (_, false) => SERVER_CAP.min(SERVER_FIRST.saturating_mul(1 << self.sends.min(SERVER_SHIFT))),
+        };
         match &mut self.machine {
             Machine::Client(m) => {
-                // The error type matches the encoder's and `retransmit` never fails in practice; a failure stops the machine
-                // and surfaces as its event.
-                let _ = m.retransmit();
+                // The machine's own failure (a fallback that cannot get randomness) stops it and surfaces as its
+                // event; there is nothing to do here.
+                let _ = m.retransmit(env);
             }
             Machine::Server(m) => m.retransmit(),
         }
-        self.retx_interval = self.retx_interval.saturating_mul(2).min(self.cap);
-        self.retx_at = Some(now.saturating_add(self.retx_interval));
+        // A fallback or a reject restarts the schedule when its event is drained; otherwise the delay stands.
+        self.retx_at = Some(now.saturating_add(delay));
         true
     }
 
-    /// Stop the timer: the handshake is confirmed.
-    pub(crate) fn confirm(&mut self) {
+    /// The link came back: a dialing side that still waits for the answer to its first flight sends it again now.
+    pub(crate) fn link_return(&mut self, now: u64) {
+        if self.client && self.stage == Stage::Open && self.retx_at.is_some() {
+            self.retx_at = Some(now);
+        }
+    }
+
+    /// The peer shows it holds the session (a 1-RTT packet arrived): stop the timers and let go of what the
+    /// handshake kept to answer a repeat.
+    pub(crate) fn confirm(&mut self, pool: &mut BufferPool<'_>) {
         self.retx_at = None;
+        self.stage = Stage::Done;
+        match &mut self.machine {
+            Machine::Client(m) => m.shed(),
+            Machine::Server(m) => m.shed(),
+        }
+        self.tx_live = false;
+        self.rx_live = false;
+        self.tx_active = false;
+        self.release(pool);
+    }
+
+    /// Whether a responder still holds its Reply to answer a repeated Hello.
+    pub(crate) const fn keeps_reply(&self) -> bool {
+        !self.client && (self.tx_live || self.rx_live)
     }
 }

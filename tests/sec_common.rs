@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 
 use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
 use vinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, NodeId, Provider, Secret, Software};
-use vinc_security::{AlpnList, ConnId};
+use vinc_security::{AlpnList, ConnId, CreditRecord};
 use vinc_security::{
     ClientTickets, Env, Established, Event, Failure, Initiator, InitiatorParams, KeyHandle, LocalIdentity, Output,
     PrekeyPolicy, Responder, ResponderConfig, ResponderStores, SoftKeys, SoftPrekeys,
@@ -165,9 +165,8 @@ pub(crate) struct World {
     pub client: ClientTickets<512>,
     pub r_alpns: Vec<&'static [u8]>,
     pub tickets_per_session: u8,
-    pub token: Vec<u8>,
-    pub i_params: Vec<u8>,
-    pub r_params: Vec<u8>,
+    pub i_credit: CreditRecord,
+    pub r_credit: CreditRecord,
 }
 
 impl World {
@@ -196,9 +195,8 @@ impl World {
             client: ClientTickets::new(),
             r_alpns: vec![ALPN, ALPN_B],
             tickets_per_session: 1,
-            token: Vec::new(),
-            i_params: Vec::new(),
-            r_params: Vec::new(),
+            i_credit: CreditRecord::NONE,
+            r_credit: CreditRecord::NONE,
         }
     }
 
@@ -228,9 +226,8 @@ impl World {
                 identity: &self.ip.id,
                 prekey: &prekey,
                 peer_has_prekey,
-                token: &self.token,
                 ticket,
-                transport_params: &self.i_params,
+                credit: self.i_credit,
             },
         )
         .unwrap()
@@ -248,7 +245,7 @@ impl World {
             AlpnList::new(&self.r_alpns).unwrap(),
         );
         cfg.tickets_per_session = self.tickets_per_session;
-        cfg.transport_params = vinc_security::Params::new(&self.r_params).unwrap();
+        cfg.credit = self.r_credit;
         Responder::new(cfg)
     }
 
@@ -475,6 +472,11 @@ pub(crate) fn assert_same_keys(i: &Established, r: &Established) {
     assert_ne!(i.traffic.send, i.traffic.recv);
     assert_eq!(i.resume, r.resume);
     assert_eq!(i.alpn, r.alpn);
+    // Both sides derive the connection ids from the same secret, which is none of the other secrets.
+    assert_eq!(i.cid_secret, r.cid_secret);
+    for other in [&i.traffic.send, &i.traffic.recv, &i.resume] {
+        assert_ne!(&i.cid_secret, other);
+    }
 }
 
 /// `from` seals a short-header packet with header protection; `to` removes it and opens it.

@@ -10,7 +10,12 @@
 //! The full flow is: Initial (or the short Initial when the responder is known to cache the prekey), then Reply,
 //! a prekey decapsulation request, a signature request, and the Finish together with the established session.
 //! With a ticket the flow is: resume Hello (and the 0-RTT keys), then the resume Reply and the established session;
-//! if the responder rejects the ticket the machine starts a full handshake by itself.
+//! if the responder rejects the ticket the machine starts a full handshake by itself, and so it does when the Hello
+//! stays unanswered: the third send is a full Initial under the same destination id. The machine then still accepts
+//! a late resume Reply, which completes the resumed session and abandons the full handshake.
+//!
+//! The sends are counted from the first: the short Initial is resent with the full prekey on sends 3, 6, 9 and so
+//! on, so a lost or unroutable reject never leaves the machine sending short Initials only.
 
 use core::mem;
 
@@ -19,6 +24,7 @@ use vinc_crypto::{Aead, NodeId, Provider, Secret, Transcript, ct_eq};
 use vinc_wire::WireError;
 use zeroize::Zeroize;
 
+use crate::credit::CreditRecord;
 use crate::error::Failure;
 use crate::ids::{AeadSet, Alpn, ConnId, LocalIdentity, VERSION};
 use crate::keys::{KeyResponse, PrekeyInfo, SoftKeys};
@@ -28,15 +34,18 @@ use crate::message::{
     ResumeReply, min_initial_len,
 };
 use crate::outbox::{Outbox, Pending};
-use crate::params::Params;
 use crate::schedule::{
-    HelloFields, InitialFields, absorb_identity, absorb_params, absorb_reply, absorb_resume_reply, application_secrets,
-    binder, chain, confirmation, early_secret, echo, handshake_keys, hello_transcript, initial_transcript,
-    open_handshake, psk_chain, seal_id_sig, signature_message,
+    AppSecrets, HelloFields, InitialFields, absorb_credit, absorb_identity, absorb_reply, absorb_resume_reply,
+    application_secrets, binder, chain, confirmation, early_secret, echo, handshake_keys, hello_transcript,
+    initial_transcript, open_handshake, psk_chain, seal_id_sig, signature_message,
 };
 use crate::session::{EarlyKeys, Env, Established, Output, Traffic};
 use crate::tickets::{Ticket, TicketBatch};
-use crate::token::MAX_TOKEN_LEN;
+
+/// The send on which an unanswered resume Hello gives way to a full handshake.
+pub const RESUME_TRIES: u32 = 3;
+/// Every this many sends the short Initial carries the full prekey.
+pub const FULL_EVERY: u32 = 3;
 
 /// What an [`Initiator`] needs to start.
 #[derive(Debug)]
@@ -53,13 +62,10 @@ pub struct InitiatorParams<'a> {
     pub prekey: &'a PrekeyInfo,
     /// Whether the responder is known to cache the prekey, so the short Initial can be tried first.
     pub peer_has_prekey: bool,
-    /// An address-validation token from an earlier Retry or `NewToken`, or empty.
-    pub token: &'a [u8],
     /// A ticket for this peer and ALPN to resume with, if one is held.
     pub ticket: Option<Ticket>,
-    /// This side's transport parameters (at most [`crate::MAX_PARAMS_LEN`] bytes); the peer receives them
-    /// authenticated.
-    pub transport_params: &'a [u8],
+    /// This side's credit record; the peer receives it authenticated.
+    pub credit: CreditRecord,
 }
 
 enum State {
@@ -92,6 +98,16 @@ enum State {
     Failed,
 }
 
+/// A resumption the machine stopped waiting for but still accepts a reply to.
+struct Late {
+    ck_psk: Secret<32>,
+    aead: Aead,
+    binder: [u8; 32],
+    th: Transcript,
+    seed: Secret<32>,
+    remembered: CreditRecord,
+}
+
 /// The initiator side of the handshake.
 pub struct Initiator {
     peer: NodeId,
@@ -100,16 +116,15 @@ pub struct Initiator {
     identity: LocalIdentity,
     prekey: PrekeyInfo,
     offer: AeadSet,
-    token: [u8; MAX_TOKEN_LEN],
-    token_len: usize,
-    params: Params,
-    peer_params: Params,
-    remembered: Params,
+    credit: CreditRecord,
+    peer_credit: CreditRecord,
+    remembered: CreditRecord,
     dcid: ConnId,
     seed: Secret<32>,
     e: [u8; 32],
     th: Transcript,
-    retransmits: u32,
+    sends: u32,
+    late: Option<Late>,
     out: Outbox,
     inbuf: [u8; MAX_MESSAGE_LEN],
     inlen: usize,
@@ -128,15 +143,9 @@ impl Initiator {
     /// Start a handshake: queue the first message (a resume Hello if `params.ticket` is usable, else an Initial).
     ///
     /// # Errors
-    /// [`Failure::InvalidParameter`] for an invalid ALPN or an over-long token; [`Failure::Randomness`] if the
-    /// generator refuses.
+    /// [`Failure::InvalidParameter`] for an invalid ALPN; [`Failure::Randomness`] if the generator refuses.
     pub fn new<P: Provider>(env: &mut Env<'_, P>, params: InitiatorParams<'_>) -> Result<Self, Failure> {
         let alpn = Alpn::new(params.alpn).ok_or(Failure::InvalidParameter)?;
-        let mut token = [0u8; MAX_TOKEN_LEN];
-        token
-            .get_mut(..params.token.len())
-            .ok_or(Failure::InvalidParameter)?
-            .copy_from_slice(params.token);
         let mut this = Self {
             peer: params.peer,
             alpn,
@@ -144,16 +153,15 @@ impl Initiator {
             identity: *params.identity,
             prekey: params.prekey.clone(),
             offer: AeadSet::offer(env.provider.capabilities()),
-            token,
-            token_len: params.token.len(),
-            params: Params::new(params.transport_params).ok_or(Failure::InvalidParameter)?,
-            peer_params: Params::EMPTY,
-            remembered: Params::EMPTY,
+            credit: params.credit,
+            peer_credit: CreditRecord::NONE,
+            remembered: CreditRecord::NONE,
             dcid: ConnId::default(),
             seed: Secret::new([0; 32]),
             e: [0; 32],
             th: Transcript::new(),
-            retransmits: 0,
+            sends: 0,
+            late: None,
             out: Outbox::new(),
             inbuf: [0; MAX_MESSAGE_LEN],
             inlen: 0,
@@ -164,7 +172,7 @@ impl Initiator {
             .filter(|t| t.expiry >= env.now && t.peer == this.peer && t.alpn == this.alpn);
         match usable {
             Some(t) => this.begin_resume(env, &t)?,
-            None => this.begin_full(env, params.peer_has_prekey)?,
+            None => this.begin_full(env, params.peer_has_prekey, false)?,
         }
         Ok(this)
     }
@@ -214,24 +222,45 @@ impl Initiator {
         result.map(|()| true)
     }
 
-    /// The host's loss timer fired: queue the outstanding flight again. While a short Initial is outstanding, every
-    /// third retransmission carries the full prekey.
+    /// The host's loss timer fired: queue the outstanding flight again. While a short Initial is outstanding, the
+    /// sends 3, 6, 9 and so on carry the full prekey. A resume Hello that reaches [`RESUME_TRIES`] sends is not sent
+    /// again: a full Initial under the same destination id takes its place, and a late resume Reply still completes
+    /// the resumed session. Once the Finish has gone out it is queued again until [`Initiator::shed`].
     ///
     /// # Errors
-    /// Never fails in practice; the error type matches the encoder's.
-    pub fn retransmit(&mut self) -> Result<(), Failure> {
+    /// [`Failure::Randomness`] if the fallback needs the generator and it refuses.
+    pub fn retransmit<P: Provider>(&mut self, env: &mut Env<'_, P>) -> Result<(), Failure> {
         let result = match self.state {
             State::Reply { short: true, .. } => {
-                self.retransmits = self.retransmits.saturating_add(1);
-                self.write_initial(self.retransmits.is_multiple_of(3))
+                self.sends = self.sends.saturating_add(1);
+                self.write_initial(self.sends.is_multiple_of(FULL_EVERY))
             }
-            State::Reply { short: false, .. } | State::Resume { .. } | State::Done => {
+            State::Resume { .. } => {
+                self.sends = self.sends.saturating_add(1);
+                if self.sends >= RESUME_TRIES {
+                    self.fall_back(env)
+                } else {
+                    self.out.resend();
+                    Ok(())
+                }
+            }
+            State::Reply { short: false, .. } | State::Done => {
+                self.sends = self.sends.saturating_add(1);
                 self.out.resend();
                 Ok(())
             }
             State::Decap { .. } | State::Sign { .. } | State::Failed => Ok(()),
         };
         self.settle(result)
+    }
+
+    /// Release what the handshake no longer needs once the transport knows the peer has the session (it received a
+    /// 1-RTT packet): the Finish that could be sent again, and the copy of the Reply.
+    pub fn shed(&mut self) {
+        self.out.clear_message();
+        self.inbuf.zeroize();
+        self.inlen = 0;
+        self.late = None;
     }
 
     fn settle(&mut self, result: Result<(), Failure>) -> Result<(), Failure> {
@@ -272,9 +301,11 @@ impl Initiator {
         }
     }
 
-    /// Fresh connection id and ephemeral key.
-    fn fresh_ephemeral<P: Provider>(&mut self, env: &mut Env<'_, P>) -> Result<(), Failure> {
-        self.dcid = ConnId::new(&env.random::<16>()?).ok_or(Failure::InvalidParameter)?;
+    /// Fresh destination connection id (unless `keep_dcid`) and ephemeral key.
+    fn fresh_ephemeral<P: Provider>(&mut self, env: &mut Env<'_, P>, keep_dcid: bool) -> Result<(), Failure> {
+        if !keep_dcid {
+            self.dcid = ConnId::new(&env.random::<16>()?).ok_or(Failure::InvalidParameter)?;
+        }
         let mut seed = env.random::<32>()?;
         let p = env.provider;
         self.e = p.x25519_public(&p.x25519_secret(&seed));
@@ -283,13 +314,10 @@ impl Initiator {
         Ok(())
     }
 
-    fn token(&self) -> &[u8] {
-        self.token.get(..self.token_len).unwrap_or_default()
-    }
-
-    /// Start (or restart) a full handshake with the short or the full Initial.
-    fn begin_full<P: Provider>(&mut self, env: &mut Env<'_, P>, short: bool) -> Result<(), Failure> {
-        self.fresh_ephemeral(env)?;
+    /// Start (or restart) a full handshake with the short or the full Initial. `keep_dcid` keeps the destination id
+    /// of the Hello it replaces, so the Initial reaches the responder's session if the Hello got through.
+    fn begin_full<P: Provider>(&mut self, env: &mut Env<'_, P>, short: bool, keep_dcid: bool) -> Result<(), Failure> {
+        self.fresh_ephemeral(env, keep_dcid)?;
         self.th = initial_transcript(&InitialFields {
             version: VERSION,
             dcid: &self.dcid,
@@ -298,10 +326,9 @@ impl Initiator {
             offer: self.offer,
             e: &self.e,
             prekey_hash: &self.prekey.hash,
-            token: self.token(),
-            params: self.params.as_bytes(),
+            credit: &self.credit,
         });
-        self.retransmits = 0;
+        self.sends = 1;
         self.write_initial(!short)?;
         self.state = State::Reply {
             short,
@@ -324,8 +351,7 @@ impl Initiator {
             aead_offer: self.offer,
             e: self.e,
             prekey,
-            token: self.token.get(..self.token_len).unwrap_or_default(),
-            params: self.params.as_bytes(),
+            credit: self.credit,
         };
         self.out
             .build(min_initial_len(form, self.peer.alg), |w| initial.write(w))
@@ -333,7 +359,7 @@ impl Initiator {
 
     /// Start a resumption with `ticket`: queue the Hello and the 0-RTT keys.
     fn begin_resume<P: Provider>(&mut self, env: &mut Env<'_, P>, ticket: &Ticket) -> Result<(), Failure> {
-        self.fresh_ephemeral(env)?;
+        self.fresh_ephemeral(env, false)?;
         let th = hello_transcript(&HelloFields {
             version: VERSION,
             alpn: self.alpn.as_bytes(),
@@ -342,7 +368,7 @@ impl Initiator {
             aead: ticket.aead,
             tid: &ticket.tid,
             e: &self.e,
-            params: self.params.as_bytes(),
+            credit: &self.credit,
         });
         let th_hello = th.snapshot();
         let binder = binder(&ticket.psk, &th_hello);
@@ -355,9 +381,10 @@ impl Initiator {
             tid: ticket.tid,
             e: self.e,
             binder,
-            params: self.params.as_bytes(),
+            credit: self.credit,
         };
-        self.remembered = ticket.params;
+        self.remembered = ticket.credit;
+        self.sends = 1;
         self.out.build(0, |w| hello.write(w))?;
         let ck_psk = psk_chain(&ticket.psk);
         self.out.early = Some(EarlyKeys {
@@ -396,7 +423,30 @@ impl Initiator {
             return Err(Failure::UnexpectedMessage);
         }
         self.out.early = None;
-        self.begin_full(env, false)?;
+        self.late = None;
+        self.begin_full(env, false, false)?;
+        self.out.set_resume_rejected();
+        Ok(())
+    }
+
+    /// The Hello went unanswered: queue a full Initial under the same destination id and keep what a late resume
+    /// Reply needs. The caller is told, as for a reject, so it sends its early data again under the 1-RTT keys.
+    fn fall_back<P: Provider>(&mut self, env: &mut Env<'_, P>) -> Result<(), Failure> {
+        let State::Resume {
+            ck_psk, aead, binder, ..
+        } = mem::replace(&mut self.state, State::Failed)
+        else {
+            return Err(Failure::UnexpectedMessage);
+        };
+        self.late = Some(Late {
+            ck_psk,
+            aead,
+            binder,
+            th: mem::take(&mut self.th),
+            seed: mem::replace(&mut self.seed, Secret::new([0; 32])),
+            remembered: self.remembered,
+        });
+        self.begin_full(env, false, true)?;
         self.out.set_resume_rejected();
         Ok(())
     }
@@ -438,14 +488,17 @@ impl Initiator {
         let hs = handshake_keys(ss_k, &ss_x, &th1);
         let reply = Reply::parse(self.inbuf.get(..self.inlen).unwrap_or_default()).map_err(Failure::BadPayload)?;
         let opened = open_handshake(env.provider, aead, &hs.responder, &th1, reply.sealed)?;
-        let ids = IdSig::parse(opened.as_slice()).map_err(Failure::BadPayload)?;
+        let ids = IdSig::parse(opened.as_slice(), true).map_err(Failure::BadPayload)?;
         let responder = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
         if responder != self.peer {
             return Err(Failure::WrongPeer);
         }
         absorb_identity(&mut self.th, ids.alg, ids.public_key);
-        absorb_params(&mut self.th, ids.params);
-        self.peer_params = Params::new(ids.params).ok_or(Failure::BadPayload(WireError::Unexpected("params")))?;
+        let credit = ids
+            .credit
+            .ok_or(Failure::BadPayload(WireError::Unexpected("credit record")))?;
+        absorb_credit(&mut self.th, credit);
+        self.peer_credit = credit;
         let th2 = self.th.snapshot();
         verify(
             ids.alg,
@@ -485,7 +538,7 @@ impl Initiator {
             &th3,
             (self.identity.alg(), self.identity.public_key()),
             signature,
-            &[],
+            None,
         )?;
         self.th.absorb(signature);
         let secrets = application_secrets(&ck1, &self.th.snapshot());
@@ -506,38 +559,53 @@ impl Initiator {
             resume: secrets.resume,
             tickets: TicketBatch::new(),
             resumed: false,
-            peer_params: self.peer_params,
-            local_params: self.params,
-            remembered_params: Params::EMPTY,
+            peer_credit: self.peer_credit,
+            local_credit: self.credit,
+            remembered_credit: CreditRecord::NONE,
+            cid_secret: secrets.cid,
         });
+        self.inbuf.zeroize();
+        self.inlen = 0;
         self.state = State::Done;
         Ok(())
     }
 
     fn on_resume_reply<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
-        if !matches!(self.state, State::Resume { .. }) {
-            return Err(Failure::UnexpectedMessage);
-        }
         let reply = ResumeReply::parse(input).map_err(Failure::Malformed)?;
-        let State::Resume {
-            ck_psk, aead, binder, ..
-        } = mem::replace(&mut self.state, State::Failed)
-        else {
+        if matches!(self.state, State::Resume { .. }) {
+            let State::Resume {
+                ck_psk, aead, binder, ..
+            } = mem::replace(&mut self.state, State::Failed)
+            else {
+                return Err(Failure::UnexpectedMessage);
+            };
+            let (seed, remembered) = (self.seed.clone(), self.remembered);
+            let mut th = mem::take(&mut self.th);
+            let secrets = open_resume_reply(env, &seed, &ck_psk, &binder, &mut th, &reply)?;
+            self.th = th;
+            self.finish_resume(aead, secrets, reply, remembered);
+            return Ok(());
+        }
+        // The Hello was given up for a full handshake: its reply may still come, and it only counts if it
+        // authenticates against the Hello's own transcript. A forgery changes nothing.
+        let (State::Reply { .. } | State::Decap { .. } | State::Sign { .. }) = self.state else {
             return Err(Failure::UnexpectedMessage);
         };
-        let p = env.provider;
-        let ss_x = p
-            .x25519_dh(&p.x25519_secret(self.seed.expose()), &reply.e)
-            .map_err(|_| Failure::InvalidPeerKey)?;
-        absorb_resume_reply(&mut self.th, &binder, &reply.scid, &reply.e, reply.params.as_bytes());
-        let ck1 = chain(&ck_psk, ss_x.expose());
-        let secrets = application_secrets(&ck1, &self.th.snapshot());
-        let mut tickets = [0u8; 81];
-        let n = reply.tickets.encode(&mut tickets).map_err(Failure::BadPayload)?;
-        let expected = confirmation(&secrets.confirm, &mut self.th, tickets.get(..n).unwrap_or_default());
-        if !ct_eq(&expected, &reply.confirm) {
-            return Err(Failure::Authentication);
-        }
+        let Some(late) = self.late.as_ref() else {
+            return Err(Failure::UnexpectedMessage);
+        };
+        let mut th = late.th.clone();
+        let secrets = open_resume_reply(env, &late.seed, &late.ck_psk, &late.binder, &mut th, &reply)
+            .map_err(|_| Failure::UnexpectedMessage)?;
+        let (aead, remembered) = (late.aead, late.remembered);
+        self.late = None;
+        self.out.take_request();
+        self.finish_resume(aead, secrets, reply, remembered);
+        Ok(())
+    }
+
+    /// Complete a resumption whose reply authenticated.
+    fn finish_resume(&mut self, aead: Aead, secrets: AppSecrets, reply: ResumeReply, remembered: CreditRecord) {
         self.out.established = Some(Established {
             peer: self.peer,
             alpn: self.alpn,
@@ -549,13 +617,41 @@ impl Initiator {
             resume: secrets.resume,
             tickets: reply.tickets,
             resumed: true,
-            peer_params: reply.params,
-            local_params: self.params,
-            remembered_params: self.remembered,
+            peer_credit: reply.credit,
+            local_credit: self.credit,
+            remembered_credit: remembered,
+            cid_secret: secrets.cid,
         });
         // The Hello was answered: a later loss timer has nothing to send again.
         self.out.clear_message();
+        self.inbuf.zeroize();
+        self.inlen = 0;
         self.state = State::Done;
-        Ok(())
+    }
+}
+
+/// Derive the session secrets of a resumption from its reply and check the confirmation tag.
+fn open_resume_reply<P: Provider>(
+    env: &Env<'_, P>,
+    seed: &Secret<32>,
+    ck_psk: &Secret<32>,
+    binder: &[u8; 32],
+    th: &mut Transcript,
+    reply: &ResumeReply,
+) -> Result<AppSecrets, Failure> {
+    let p = env.provider;
+    let ss_x = p
+        .x25519_dh(&p.x25519_secret(seed.expose()), &reply.e)
+        .map_err(|_| Failure::InvalidPeerKey)?;
+    absorb_resume_reply(th, binder, &reply.scid, &reply.e, reply.credit);
+    let ck1 = chain(ck_psk, ss_x.expose());
+    let secrets = application_secrets(&ck1, &th.snapshot());
+    let mut tickets = [0u8; 81];
+    let n = reply.tickets.encode(&mut tickets).map_err(Failure::BadPayload)?;
+    let expected = confirmation(&secrets.confirm, th, tickets.get(..n).unwrap_or_default());
+    if ct_eq(&expected, &reply.confirm) {
+        Ok(secrets)
+    } else {
+        Err(Failure::Authentication)
     }
 }

@@ -3,7 +3,7 @@
 use vinc_security::LocalIdentity;
 use vinc_security::{AlpnList, PrekeyInfo, Ticket};
 
-use super::params::TransportParams;
+use super::params::{CreditRecord, credit_for_streams};
 use crate::recovery::{MS, PathKind, SECOND};
 use crate::stream;
 
@@ -54,21 +54,32 @@ pub struct Config {
     pub idle_timeout: u64,
     /// Send a PING after this long without sending anything; `None` turns keepalives off.
     pub keepalive: Option<u64>,
-    /// A node on a constrained link: caps the handshake back-off at 8 s and re-challenges idle direct paths.
+    /// A node on a constrained link: caps the handshake back-off at `max(8 s, 2 x node_peak_rtt)`, gives an
+    /// unestablished handshake 60 s instead of 30 s, and re-challenges idle direct paths.
     pub thin: bool,
     /// The round trip remembered from an earlier connection to the same peer; scales the handshake timer.
     pub remembered_rtt: Option<u64>,
+    /// The node's average handshake round trip, in nanoseconds; the handshake timer uses it when no round trip is
+    /// remembered for the peer, and its cap is `max(16 s, 4 x node_rtt)`. A node whose `node_rtt` or `node_peak_rtt`
+    /// is 250 ms or more counts as thin.
+    pub node_rtt: Option<u64>,
+    /// The node's largest recent round trip, in nanoseconds; a thin node's handshake back-off stops at
+    /// `max(8 s, 2 x node_peak_rtt)`.
+    pub node_peak_rtt: Option<u64>,
     /// The most same-size datagrams one [`poll_transmit`](super::Connection::poll_transmit) call batches (1 = no GSO).
     pub max_gso: usize,
-    /// Start a key update after the sending key sealed this many packets.
+    /// Start a key roll after the sending key sealed this many packets.
     pub key_update_after: u64,
     /// The secret from which stateless-reset tokens derive, so an endpoint that lost its state can still answer.
     pub reset_key: [u8; 32],
     /// Whether to probe larger datagram sizes after the handshake.
     pub probe_mtu: bool,
-    /// What this endpoint tells the peer about its limits (see [`TransportParams`]). The idle timeout field is
-    /// taken from `idle_timeout`; the stream limits are clamped to what the stream table can hold.
-    pub params: TransportParams,
+    /// Acknowledge every this-many ack-eliciting packets instead of every 2nd (3rd for bulk): 4 for a member's
+    /// session with a hub. `None` keeps the default policy.
+    pub ack_every: Option<u32>,
+    /// What this endpoint tells the peer about its limits (see [`CreditRecord`]); the window and the stream limit
+    /// are clamped to what the stream table can hold. The idle timeout is not part of it: it is `idle_timeout`.
+    pub credit: CreditRecord,
 }
 
 impl Config {
@@ -80,11 +91,14 @@ impl Config {
             keepalive: None,
             thin: false,
             remembered_rtt: None,
+            node_rtt: None,
+            node_peak_rtt: None,
             max_gso: 1,
             key_update_after: 1 << 21,
             reset_key: [0; 32],
             probe_mtu: true,
-            params: TransportParams::for_streams(&stream::Config::new(false)),
+            ack_every: None,
+            credit: credit_for_streams(&stream::Config::new(false)),
         }
     }
 }
@@ -108,8 +122,6 @@ pub struct ClientParams<'a> {
     pub prekey: &'a PrekeyInfo,
     /// Whether the peer is known to cache the prekey (try the short first flight).
     pub peer_has_prekey: bool,
-    /// An address-validation token, or empty.
-    pub token: &'a [u8],
     /// A ticket for this peer and protocol: the connection resumes and may send 0-RTT data.
     pub ticket: Option<Ticket>,
     /// The path the first flight leaves on.

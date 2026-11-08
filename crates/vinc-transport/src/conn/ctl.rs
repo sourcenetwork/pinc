@@ -11,12 +11,10 @@
 use vinc_security::TicketBatch;
 
 use super::cid::Cids;
-use crate::recovery::{Event, FrameRef, ReceivedPackets};
+use crate::recovery::{Event, FrameRef};
 use crate::stream::pool::BufferPool;
 use crate::stream::{ControlFrame, StreamSource, Streams};
 
-/// An acknowledgement of ours was in the packet.
-pub(crate) const K_ACK: u8 = 1;
 /// A stream-layer control frame; the id keys the table.
 pub(crate) const K_STREAM_CTL: u8 = 2;
 /// NEW_CONNECTION_ID; the id is the sequence number.
@@ -38,6 +36,10 @@ pub(crate) struct Outcome {
     pub(crate) tickets_acked: bool,
     pub(crate) lost_packets: u32,
     pub(crate) acked_packets: u32,
+    /// Acknowledged packets that count toward the loss average (every one but repair packets).
+    pub(crate) loss_acked: u32,
+    /// Lost packets that count toward the loss average (every one but repair packets and path MTU probes).
+    pub(crate) loss_lost: u32,
 }
 
 /// Pending control state and the table of frames in flight.
@@ -85,28 +87,24 @@ impl Ctl {
 
 /// Apply one recovery event to every layer: stream bytes, control frames, acknowledgement bookkeeping and the
 /// summary the connection acts on.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "disjoint fields borrowed from the connection by a closure"
-)]
-pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize, const R: usize>(
+pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
     ev: &Event<'_>,
-    now: u64,
     streams: &mut Streams<S, N, C>,
     pool: &mut BufferPool<'_>,
     ctl: &mut Ctl,
     cids: &mut Cids,
-    rx: &mut ReceivedPackets<R>,
     out: &mut Outcome,
 ) {
     match *ev {
         Event::Acked {
-            pn,
             frames,
             mtu_probe,
             size,
+            repair,
+            ..
         } => {
             out.acked_packets += 1;
+            out.loss_acked += u32::from(!repair);
             if mtu_probe {
                 out.probe_acked = Some(size);
             }
@@ -115,17 +113,17 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize, const R: us
                     FrameRef::Stream { id, offset, len, fin } => {
                         streams.on_acked(pool, id, offset, u64::from(len), fin);
                     }
-                    FrameRef::Control { kind, id } => acked(kind, id, pn, now, streams, pool, ctl, cids, rx, out),
+                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, cids, out),
                 }
             }
         }
-        Event::LateAcked { pn, frames } => {
+        Event::LateAcked { frames, .. } => {
             for f in frames {
                 match *f {
                     FrameRef::Stream { id, offset, len, fin } => {
                         streams.on_late_acked(pool, id, offset, u64::from(len), fin);
                     }
-                    FrameRef::Control { kind, id } => acked(kind, id, pn, now, streams, pool, ctl, cids, rx, out),
+                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, cids, out),
                 }
             }
         }
@@ -137,6 +135,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize, const R: us
             ..
         } => {
             out.lost_packets += 1;
+            out.loss_lost += u32::from(requeue);
             if mtu_probe {
                 out.probe_lost = Some(size);
             }
@@ -153,24 +152,16 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize, const R: us
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "disjoint fields borrowed from the connection by a closure"
-)]
-fn acked<S: StreamSource, const N: usize, const C: usize, const R: usize>(
+fn acked<S: StreamSource, const N: usize, const C: usize>(
     kind: u8,
     id: u64,
-    pn: u64,
-    now: u64,
     streams: &mut Streams<S, N, C>,
     pool: &mut BufferPool<'_>,
     ctl: &mut Ctl,
     cids: &mut Cids,
-    rx: &mut ReceivedPackets<R>,
     out: &mut Outcome,
 ) {
     match kind {
-        K_ACK => rx.on_ack_confirmed(pn, now),
         K_STREAM_CTL => {
             if let Some(f) = ctl.take(id) {
                 streams.on_control_acked(pool, &f);

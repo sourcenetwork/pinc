@@ -156,7 +156,7 @@ conn_impl! {
             return 0;
         }
         let mtu = self.paths.active().map_or(usize::from(MIN_MTU), |p| usize::from(p.mtu.current));
-        let peer = usize::try_from(self.peer_params.max_datagram_frame_size).unwrap_or(usize::MAX);
+        let peer = usize::from(self.peer_credit.max_datagram);
         mtu.saturating_sub(SHORT_PACKET_FIXED + self.cfg.cid_len + DATAGRAM_FRAME_OVERHEAD)
             .min(peer.saturating_sub(DATAGRAM_FRAME_OVERHEAD))
     }

@@ -44,6 +44,8 @@ pub enum Failure {
     TicketId,
     /// The state machine already failed.
     Closed,
+    /// The connection's buffer pool had no chunk for the handshake.
+    OutOfMemory,
     /// A primitive refused its input.
     Crypto(CryptoError),
 }
@@ -83,6 +85,7 @@ impl fmt::Display for Failure {
             Self::Randomness => f.write_str("random generator failed"),
             Self::TicketId => f.write_str("no fresh ticket id"),
             Self::Closed => f.write_str("handshake already failed"),
+            Self::OutOfMemory => f.write_str("no buffer available for the handshake"),
             Self::Crypto(e) => write!(f, "{e}"),
         }
     }

@@ -1,48 +1,51 @@
-//! The recovery engine of one connection: sent ring, round-trip estimate, loss detection, probe timer, spurious-loss
-//! repair, congestion control and pacing behind one interface.
+//! The recovery engine of one connection: the ring of sent packets, the round-trip estimate, loss detection, the
+//! probe timer, congestion control and pacing behind one interface.
 //!
-//! Acknowledged ranges come in as inclusive packet-number ranges (largest first) plus the reported delay; what
-//! happened to each packet goes out through an [`Event`] callback, so nothing is buffered or allocated.
+//! Acknowledged ranges come in as inclusive packet-number ranges (largest first); what happened to each packet goes
+//! out through an [`Event`] callback, so nothing is buffered or allocated. This file holds the state, the sending
+//! side, the path rules and the accounting; acknowledgement handling is in `ack`, loss detection in `loss` and the
+//! probe timer in `pto`.
+//!
+//! Only packets that need an acknowledgement and count toward bytes in flight are recorded with
+//! [`Recovery::on_packet_sent`]. Acknowledgement-only packets, probes, path-validation packets on standby paths and
+//! CLOSE are announced with [`Recovery::on_packet_untracked`]: they use a packet number but are never in flight, never
+//! lost and never sampled.
 //!
 //! Invariants:
-//! - for packets flagged in flight, `bytes_sent == bytes_acked + bytes_in_flight + bytes_lost` at every call
-//!   boundary; a late acknowledgement moves a packet's bytes from lost to acked;
+//! - for recorded packets, `bytes_sent == bytes_acked + bytes_in_flight + bytes_lost` at every call boundary; a late
+//!   acknowledgement moves a packet's bytes from lost to acked;
 //! - the cumulative byte counters are `u128` (at most 2^64 packets of at most 2^32 bytes cannot overflow it) and the
 //!   in-flight counter is `u64` (at most `N <= 2^31` packets of at most 2^32 bytes: below 2^63);
-//! - an acknowledgement grows the window only for packets sent while the window was in use (bytes in flight, with
-//!   the packet, at least cwnd minus one segment); acknowledgements of packets sent application limited pause the
-//!   cubic epoch instead;
-//! - persistent congestion (RFC 9002 section 7.6) collapses the window to its minimum and clears the saved response,
-//!   so a later spurious-loss undo cannot restore it; it needs a round-trip sample taken before the lost packets
-//!   were sent and never counts a repair packet or path MTU probe;
 //! - a repair packet or a path MTU probe that is lost is reported with `requeue == false` (the probe with
-//!   `mtu_probe == true`) and never reduces the window.
-
-use core::ops::RangeInclusive;
+//!   `mtu_probe == true`) and never reduces the window;
+//! - the window grows on every acknowledged byte, and the rate gate (see [`Cubic::gate_cap`]) is the only brake
+//!   besides loss.
 
 use super::cubic::{AckInput, Cubic, MAX_MSS, MIN_MSS};
 use super::frame_ref::FrameRefs;
-use super::math::sat;
 use super::pacer::Pacer;
 use super::rtt::RttEstimator;
-use super::sent::{Sent, SentRing, State};
-use super::{LONG_RTT, MAX_PACKET_NUMBER, MS, RecoveryError, SECOND};
+use super::sent::{Sent, SentRing};
+use super::{LONG_RTT, MAX_PACKET_NUMBER, MS, RecoveryError};
 
 /// The most paths one connection tracks.
 pub const MAX_PATHS: usize = 8;
-const PACKET_THRESHOLD: u64 = 3;
-const OLD_PATH_RTT_FACTOR: u64 = 4;
-const OLD_PATH_EXTRA: u64 = 50 * MS;
-const RELAY_MIN_DELAY: u64 = 1_500 * MS;
-const MAX_RTT_SAMPLE_LATE: u64 = 4 * SECOND;
-const PTO_FLOOR_VAR: u64 = MS;
-const PTO_MAX_ACK_DELAY: u64 = 25 * MS;
-const PTO_MAX_SHIFT: u32 = 6;
-const PTO_CAP: u64 = 2 * SECOND;
-const PERSISTENT_PTOS: u64 = 3;
+/// The segment size of the window growth on every path but a fast direct one.
+const DEFAULT_SEGMENT: u64 = 1_200;
+/// A direct path whose minimum round trip is below this (2 ms) grows the window in units of its datagram size.
+const FAST_RTT: u64 = 2 * MS;
+/// Probe timeouts at which the endpoint is told the path is struggling.
 const PTO_TELL_ENDPOINT: u32 = 3;
+/// Probe timeouts at which the connection gives up (with the silence conditions of [`Recovery::health`]).
 const PTO_GIVE_UP: u32 = 10;
-const GIVE_UP_SILENCE_SLOW: u64 = 20 * SECOND;
+/// Silence needed to give up on a slow or thin path (20 s).
+const GIVE_UP_SILENCE_SLOW: u64 = 20 * super::SECOND;
+/// Silence needed to give up, in smoothed round trips.
+const GIVE_UP_SILENCE_RTTS: u64 = 8;
+/// A node round trip of this much or more marks a thin node.
+const THIN_RTT: u64 = LONG_RTT;
+/// Lost send times remembered so a late acknowledgement can still seed the round trip.
+const LATE_SENDS: usize = 32;
 
 /// Whether a path is a direct path or a relay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +69,8 @@ pub enum Event<'a> {
         frames: &'a FrameRefs,
         /// Whether the packet was a path MTU probe.
         mtu_probe: bool,
+        /// Whether the packet was a repair packet.
+        repair: bool,
     },
     /// A packet already declared lost was acknowledged after all: cancel any retransmission still queued for it.
     LateAcked {
@@ -92,20 +97,16 @@ pub enum Event<'a> {
 /// Totals of one call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Summary {
-    /// Packets newly acknowledged (late acknowledgements included).
+    /// Packets newly acknowledged while in flight.
     pub acked_packets: u32,
-    /// Bytes newly acknowledged that were in flight.
+    /// Bytes newly acknowledged.
     pub acked_bytes: u64,
     /// Packets acknowledged after being declared lost.
     pub late_acked_packets: u32,
     /// Packets declared lost.
     pub lost_packets: u32,
-    /// Bytes declared lost that were in flight.
+    /// Bytes declared lost.
     pub lost_bytes: u64,
-    /// Whether a congestion response was undone because every loss of its episode was spurious.
-    pub congestion_undone: bool,
-    /// Whether the losses amounted to persistent congestion and the window collapsed to its minimum.
-    pub persistent_congestion: bool,
 }
 
 /// What a timer expiry asks for.
@@ -113,8 +114,8 @@ pub struct Summary {
 pub struct Timeout {
     /// Packets declared lost by this expiry.
     pub summary: Summary,
-    /// The number of probe packets to send now (0 when the expiry only detected loss).
-    pub probes: u8,
+    /// Whether to send one PING now. It is not recorded as in flight.
+    pub ping: bool,
 }
 
 /// How the path is doing, from consecutive probe timeouts.
@@ -124,87 +125,122 @@ pub enum Health {
     Healthy,
     /// 3 or more probe timeouts: tell the endpoint.
     Degraded,
-    /// 10 or more probe timeouts (and, on a long-RTT path, 20 s of silence): give up.
+    /// 10 or more probe timeouts and enough silence (see [`Recovery::health`]): give up.
     Dead,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct Account {
-    sent: u128,
-    acked: u128,
-    lost: u128,
-    in_flight: u64,
+pub(super) struct Account {
+    pub(super) sent: u128,
+    pub(super) acked: u128,
+    pub(super) lost: u128,
+    pub(super) in_flight: u64,
 }
 
-/// What the ranges of one acknowledgement turned up.
-#[derive(Debug, Default)]
-struct AckScan {
-    /// The largest packet number the acknowledgement names.
-    frame_largest: Option<u64>,
-    /// The largest newly acknowledged packet: (number, send time, ack-eliciting, was declared lost).
-    newest: Option<(u64, u64, bool, bool)>,
-    growth: u64,
-    /// Whether a packet sent while the window was not in use was acknowledged.
-    app_limited: bool,
-    new_eliciting: bool,
+/// The window saved by the first probe timeout, restored if the packet it declared lost is acknowledged.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SavedWindow {
+    pub(super) pn: u64,
+    pub(super) cwnd: u64,
+    pub(super) ssthresh: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct Episode {
-    lost: u32,
-    spurious: u32,
-    closed: bool,
+/// Send times of the newest lost packets, so a late acknowledgement of one can seed an empty round-trip estimate.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LateSends {
+    items: [(u64, u64); LATE_SENDS],
+    len: usize,
 }
 
-/// Loss recovery for one connection, with room for `MAX_IN_FLIGHT` sent packets.
+impl LateSends {
+    const fn new() -> Self {
+        Self {
+            items: [(0, 0); LATE_SENDS],
+            len: 0,
+        }
+    }
+
+    /// Remember that packet `pn` sent at `time` was declared lost; the lowest number goes when the table is full.
+    pub(super) fn insert(&mut self, pn: u64, time: u64) {
+        if self.len == LATE_SENDS
+            && let Some(min) = self.items.iter().take(self.len).map(|e| e.0).min()
+        {
+            self.take(min);
+        }
+        if let Some(slot) = self.items.get_mut(self.len) {
+            *slot = (pn, time);
+            self.len += 1;
+        }
+    }
+
+    /// Forget and return the send time of lost packet `pn`.
+    pub(super) fn take(&mut self, pn: u64) -> Option<u64> {
+        let i = self.items.iter().take(self.len).position(|e| e.0 == pn)?;
+        let time = self.items.get(i).map(|e| e.1);
+        self.items.copy_within(i + 1..self.len, i);
+        self.len -= 1;
+        time
+    }
+}
+
+/// Loss recovery for one connection, with room for `N` recorded packets.
 #[derive(Debug, Clone)]
-pub struct Recovery<const MAX_IN_FLIGHT: usize> {
-    ring: SentRing<MAX_IN_FLIGHT>,
-    rtt: RttEstimator,
-    cc: Cubic,
-    pacer: Pacer,
-    acct: Account,
-    episode: Episode,
-    eliciting_in_flight: u32,
-    largest_sent: Option<u64>,
-    largest_acked: Option<u64>,
-    last_eliciting_sent: u64,
-    loss_time: Option<u64>,
-    pto_count: u32,
-    asleep: bool,
-    last_heard: u64,
-    paths: [PathKind; MAX_PATHS],
-    active: u8,
-    first_sample_at: Option<u64>,
-    pc_barrier: Option<u64>,
+pub struct Recovery<const N: usize> {
+    pub(super) ring: SentRing<N>,
+    pub(super) rtt: RttEstimator,
+    pub(super) cc: Cubic,
+    pub(super) pacer: Pacer,
+    pub(super) acct: Account,
+    pub(super) in_flight_packets: u32,
+    pub(super) largest_sent: Option<u64>,
+    pub(super) largest_acked: Option<u64>,
+    pub(super) loss_time: Option<u64>,
+    pub(super) pto_count: u32,
+    pub(super) last_pto: u64,
+    pub(super) asleep: bool,
+    pub(super) link_down: bool,
+    pub(super) last_heard: u64,
+    pub(super) clock: u64,
+    pub(super) tgr: u64,
+    pub(super) lrtt: u64,
+    pub(super) paths: [PathKind; MAX_PATHS],
+    pub(super) path_rtt: [u64; MAX_PATHS],
+    pub(super) active: u8,
+    pub(super) flip_at: Option<u64>,
+    pub(super) mtu: u64,
+    pub(super) late_sends: LateSends,
+    pub(super) saved_window: Option<SavedWindow>,
 }
 
 impl<const N: usize> Recovery<N> {
-    /// A recovery state with segment size `mss` (clamped to 1200..=65535), path 0 active and direct.
-    pub fn new(mss: u64) -> Self {
-        let cc = Cubic::new(mss);
-        let mut r = Self {
+    /// A recovery state for a path datagram size of `mtu` (clamped to 1200..=65535), path 0 active and direct.
+    pub fn new(mtu: u64) -> Self {
+        Self {
             ring: SentRing::new(),
             rtt: RttEstimator::new(),
-            cc,
-            pacer: Pacer::new(cc.mss()),
+            cc: Cubic::new(),
+            pacer: Pacer::new(),
             acct: Account::default(),
-            episode: Episode::default(),
-            eliciting_in_flight: 0,
+            in_flight_packets: 0,
             largest_sent: None,
             largest_acked: None,
-            last_eliciting_sent: 0,
             loss_time: None,
             pto_count: 0,
+            last_pto: 0,
             asleep: false,
+            link_down: false,
             last_heard: 0,
+            clock: 0,
+            tgr: 0,
+            lrtt: 0,
             paths: [PathKind::Direct; MAX_PATHS],
+            path_rtt: [0; MAX_PATHS],
             active: 0,
-            first_sample_at: None,
-            pc_barrier: None,
-        };
-        r.refresh_pacer();
-        r
+            flip_at: None,
+            mtu: mtu.clamp(MIN_MSS, MAX_MSS),
+            late_sends: LateSends::new(),
+            saved_window: None,
+        }
     }
 
     // ---- read access ----
@@ -212,6 +248,14 @@ impl<const N: usize> Recovery<N> {
     /// The round-trip estimator.
     pub const fn rtt(&self) -> &RttEstimator {
         &self.rtt
+    }
+
+    /// Seed the estimate with the handshake round trip when no acknowledgement has given a sample yet, so the first
+    /// probe timeout, the loss timer and the pacer start from it instead of the initial guess.
+    pub fn seed_rtt(&mut self, rtt: u64) {
+        if !self.rtt.has_sample() {
+            self.rtt.update(rtt);
+        }
     }
 
     /// The congestion controller.
@@ -234,12 +278,12 @@ impl<const N: usize> Recovery<N> {
         self.acct.in_flight
     }
 
-    /// Bytes still allowed by the congestion window.
-    pub const fn cwnd_available(&self) -> u64 {
-        self.cc.cwnd().saturating_sub(self.acct.in_flight)
+    /// Whether the window has room for one more datagram of the path's size: `in_flight + mtu <= cwnd`.
+    pub const fn can_send(&self) -> bool {
+        self.acct.in_flight.saturating_add(self.mtu) <= self.cc.cwnd()
     }
 
-    /// Cumulative bytes of in-flight packets sent.
+    /// Cumulative bytes of recorded packets sent.
     pub const fn bytes_sent(&self) -> u128 {
         self.acct.sent
     }
@@ -259,7 +303,7 @@ impl<const N: usize> Recovery<N> {
         self.pto_count
     }
 
-    /// The largest packet number sent.
+    /// The largest packet number sent, recorded or not.
     pub const fn largest_sent(&self) -> Option<u64> {
         self.largest_sent
     }
@@ -269,9 +313,39 @@ impl<const N: usize> Recovery<N> {
         self.largest_acked
     }
 
-    /// Ack-eliciting packets in flight.
-    pub const fn ack_eliciting_in_flight(&self) -> u32 {
-        self.eliciting_in_flight
+    /// Recorded packets in flight.
+    pub const fn packets_in_flight(&self) -> u32 {
+        self.in_flight_packets
+    }
+
+    /// The packet number the next sent packet will have.
+    pub const fn next_pn(&self) -> u64 {
+        match self.largest_sent {
+            Some(l) => l + 1,
+            None => 0,
+        }
+    }
+
+    /// The frames of packet `pn` if it is still in flight; used to build a tail repair.
+    pub fn sent_frames(&self, pn: u64) -> Option<&FrameRefs> {
+        self.ring.in_flight(pn).map(|s| &s.frames)
+    }
+
+    /// The segment size of the window growth: 1200, or the path datagram size on a direct path whose minimum round
+    /// trip is below 2 ms.
+    pub fn segment_size(&self) -> u64 {
+        let fast = self.rtt.min_rtt().is_some_and(|m| m < FAST_RTT)
+            && self.paths.get(usize::from(self.active)) == Some(&PathKind::Direct);
+        if fast && self.mtu > DEFAULT_SEGMENT {
+            self.mtu
+        } else {
+            DEFAULT_SEGMENT
+        }
+    }
+
+    /// The round trip last measured on `path`, if it carried the newest acknowledged packet of some acknowledgement.
+    pub fn path_rtt(&self, path: u8) -> Option<u64> {
+        self.path_rtt.get(usize::from(path)).copied().filter(|r| *r > 0)
     }
 
     // ---- configuration ----
@@ -288,8 +362,10 @@ impl<const N: usize> Recovery<N> {
         Ok(())
     }
 
-    /// Make `path` the active path. Congestion control, the round-trip estimate and the pacer restart, except on a
-    /// switch from one relay path to another. Returns whether they restarted.
+    /// Make `path` the active path. Unless both the old and the new path are relays, the congestion
+    /// controller restarts (initial window, slow start, fresh slow-start rounds) and a loss of anything sent before
+    /// the switch cuts nothing; the round-trip estimate, the probe count and the pacer are kept. Returns whether the
+    /// controller restarted. The switch is stamped with the newest time any call has carried.
     ///
     /// # Errors
     /// [`RecoveryError::PathOutOfRange`] if `path` is not below 8.
@@ -303,377 +379,165 @@ impl<const N: usize> Recovery<N> {
         if old == Some(PathKind::Relay) && new == PathKind::Relay {
             return Ok(false);
         }
-        self.cc.restart();
-        self.rtt.reset();
-        self.first_sample_at = None;
-        self.pc_barrier = None;
-        self.pacer = Pacer::new(self.cc.mss());
-        self.pto_count = 0;
-        self.episode = Episode::default();
-        self.refresh_pacer();
+        self.cc.new_path(self.clock, self.next_pn());
+        self.flip_at = Some(self.clock);
         Ok(true)
     }
 
-    /// Change the datagram size (clamped to 1200..=65535).
-    pub fn set_max_datagram_size(&mut self, mss: u64) {
-        self.cc.set_mss(mss.clamp(MIN_MSS, MAX_MSS));
-        self.refresh_pacer();
+    /// The session follows the peer onto `path` (a migration the peer started): nothing restarts, but packets sent
+    /// before now on a relay path are judged by the slow rule.
+    ///
+    /// # Errors
+    /// [`RecoveryError::PathOutOfRange`] if `path` is not below 8.
+    pub fn follow_path(&mut self, path: u8) -> Result<(), RecoveryError> {
+        if usize::from(path) >= MAX_PATHS {
+            return Err(RecoveryError::PathOutOfRange);
+        }
+        if path != self.active {
+            self.active = path;
+            self.flip_at = Some(self.clock);
+        }
+        Ok(())
     }
 
-    /// While the peer sleeps or the link is down, a probe timeout does not grow the backoff or the counter.
+    /// Set the datagram size of the active path (clamped to 1200..=65535).
+    pub fn set_max_datagram_size(&mut self, mtu: u64) {
+        self.mtu = mtu.clamp(MIN_MSS, MAX_MSS);
+    }
+
+    /// While the peer sleeps, a probe timeout sends nothing and does not grow the backoff or the counter.
     pub fn set_peer_asleep(&mut self, asleep: bool) {
         self.asleep = asleep;
+    }
+
+    /// While the link is down, a probe timeout still declares the oldest packet lost and asks for a PING, but does
+    /// not grow the counter.
+    pub fn set_link_down(&mut self, down: bool) {
+        self.link_down = down;
+    }
+
+    /// Seed the node's peak round trip (see [`Self::peak_rtt`]), for example from an earlier connection. A node
+    /// whose peak or handshake round trip is 250 ms or more is thin, which lengthens the silence needed before
+    /// giving up; without a sample of its own the probe timeout starts from `max(333 ms, 2 x` the larger of the two`)`.
+    pub fn set_node_rtt(&mut self, rtt: u64) {
+        self.tgr = rtt;
+    }
+
+    /// Set the node's handshake round trip (what the first flight measured).
+    pub fn set_handshake_rtt(&mut self, rtt: u64) {
+        self.lrtt = rtt;
+    }
+
+    /// The node's peak round trip: after each sample `peak = max(srtt, peak - peak / 32)`. The endpoint reads it
+    /// and feeds it back to later connections through [`Self::set_node_rtt`].
+    pub const fn peak_rtt(&self) -> u64 {
+        self.tgr
+    }
+
+    pub(super) const fn node_rtt(&self) -> u64 {
+        if self.tgr > self.lrtt { self.tgr } else { self.lrtt }
+    }
+
+    /// Set the rate gate's slack for round trips between 2 ms and 250 ms (44,000 bytes by default).
+    pub fn set_gate_slack(&mut self, bytes: u64) {
+        self.cc.set_gate_slack(bytes);
     }
 
     /// Note that anything arrived from the peer at `now` (restarts the silence clock).
     pub fn note_peer_activity(&mut self, now: u64) {
         self.last_heard = self.last_heard.max(now);
+        self.clock = self.clock.max(now);
     }
 
-    fn refresh_pacer(&mut self) {
-        self.pacer.set_rate(self.cc.cwnd(), self.rtt.smoothed(), self.cc.mss());
+    /// Whether the node is thin as far as this connection can tell: no round-trip sample yet, or the node round trip,
+    /// the minimum round trip or half the smoothed round trip is 250 ms or more.
+    pub fn is_thin(&self) -> bool {
+        let Some(min) = self.rtt.min_rtt() else { return true };
+        self.node_rtt().max(min).max(self.rtt.smoothed() >> 1) >= THIN_RTT
     }
 
     // ---- sending ----
 
-    /// Record a sent packet.
+    fn check_next(&self, pn: u64) -> Result<(), RecoveryError> {
+        if pn > MAX_PACKET_NUMBER {
+            return Err(RecoveryError::PacketNumberOutOfRange);
+        }
+        if self.largest_sent.is_some_and(|l| pn <= l) {
+            return Err(RecoveryError::PacketNumberNotIncreasing);
+        }
+        Ok(())
+    }
+
+    /// Record a sent packet that needs an acknowledgement and counts toward bytes in flight.
     ///
     /// # Errors
     /// [`RecoveryError::PacketNumberOutOfRange`], [`RecoveryError::PacketNumberNotIncreasing`],
     /// [`RecoveryError::PathOutOfRange`], or [`RecoveryError::RingFull`] when the ring is full of packets in flight.
     pub fn on_packet_sent(&mut self, p: Sent) -> Result<(), RecoveryError> {
-        if p.pn > MAX_PACKET_NUMBER {
-            return Err(RecoveryError::PacketNumberOutOfRange);
-        }
+        self.check_next(p.pn)?;
         if usize::from(p.path) >= MAX_PATHS {
             return Err(RecoveryError::PathOutOfRange);
         }
-        if self.largest_sent.is_some_and(|l| p.pn <= l) {
-            return Err(RecoveryError::PacketNumberNotIncreasing);
-        }
+        self.clock = self.clock.max(p.time);
         self.ring.trim(p.time);
-        let in_use = p.in_flight
-            && self.acct.in_flight.saturating_add(u64::from(p.size)) >= self.cc.cwnd().saturating_sub(self.cc.mss());
-        if !self.ring.push(p, in_use) {
+        if !self.ring.push(p) {
             return Err(RecoveryError::RingFull);
         }
         self.largest_sent = Some(p.pn);
-        if p.in_flight {
-            self.acct.sent += u128::from(p.size);
-            self.acct.in_flight += u64::from(p.size);
-            self.pacer.on_sent(p.time, u64::from(p.size));
-            if p.ack_eliciting {
-                self.eliciting_in_flight += 1;
-                self.last_eliciting_sent = p.time;
-            }
+        self.acct.sent += u128::from(p.size);
+        self.acct.in_flight += u64::from(p.size);
+        self.in_flight_packets += 1;
+        if self.rtt.has_sample() {
+            self.pacer
+                .on_sent(p.time, self.mtu, self.rtt.smoothed(), self.cc.cwnd());
         }
         Ok(())
     }
 
-    // ---- acknowledgements ----
-
-    /// Process an acknowledgement. `ranges` are inclusive packet-number ranges, largest first; `ack_delay` is the
-    /// delay the peer reported, in nanoseconds. Every packet event goes to `on_event`.
-    ///
-    /// An acknowledgement of a packet number that is not in flight is ignored. Each range costs a binary search plus
-    /// one step per packet it covers in the ring, so the work is bounded by the ring size and the ranges given.
+    /// Note that packet `pn` was sent without being recorded: an acknowledgement-only packet, a probe, a path
+    /// validation packet on a standby path, or a CLOSE. It never counts as in flight and is never lost.
     ///
     /// # Errors
-    /// [`RecoveryError::AckOfUnsentPacket`] if a range reaches above the largest packet sent;
-    /// [`RecoveryError::InvalidAckRange`] if a range is reversed. Ranges before the bad one stay applied.
-    pub fn on_ack_received<I, F>(
-        &mut self,
-        now: u64,
-        ranges: I,
-        ack_delay: u64,
-        mut on_event: F,
-    ) -> Result<Summary, RecoveryError>
-    where
-        I: IntoIterator<Item = RangeInclusive<u64>>,
-        F: FnMut(Event<'_>),
-    {
-        let mut s = Summary::default();
-        let mut scan = AckScan::default();
-        for range in ranges {
-            let (start, end) = (*range.start(), *range.end());
-            if start > end {
-                return Err(RecoveryError::InvalidAckRange);
-            }
-            if self.largest_sent.is_none_or(|l| end > l) {
-                return Err(RecoveryError::AckOfUnsentPacket);
-            }
-            scan.frame_largest.get_or_insert(end);
-            self.ack_range(start..=end, &mut scan, &mut s, &mut on_event);
-        }
-        let AckScan {
-            frame_largest,
-            newest,
-            growth,
-            app_limited,
-            new_eliciting,
-            ..
-        } = scan;
-        self.last_heard = self.last_heard.max(now);
-        if let Some(l) = frame_largest {
-            self.largest_acked = self.largest_acked.max(Some(l));
-        }
-        let mut sample = None;
-        if let Some((pn, time, true, late)) = newest
-            && Some(pn) == frame_largest
-        {
-            let raw = now.saturating_sub(time);
-            let raw = if late { raw.min(MAX_RTT_SAMPLE_LATE) } else { raw };
-            self.rtt.update(raw, ack_delay);
-            self.first_sample_at.get_or_insert(now);
-            sample = Some(raw);
-        }
-        if new_eliciting {
-            self.pto_count = 0;
-        }
-        if let (Some(largest_acked), Some(largest_sent)) = (newest.map(|n| n.0), self.largest_sent)
-            && s.acked_bytes > 0
-        {
-            if app_limited {
-                self.cc.on_app_limited(now);
-            }
-            self.cc.on_acked(&AckInput {
-                now,
-                growth_bytes: growth,
-                acked_bytes: s.acked_bytes,
-                largest_acked,
-                largest_sent,
-                rtt_sample: sample,
-                min_rtt: self.rtt.min_rtt(),
-            });
-        }
-        self.detect_lost(now, &mut s, &mut on_event);
-        self.finish(now, &mut s);
-        Ok(s)
+    /// [`RecoveryError::PacketNumberOutOfRange`] or [`RecoveryError::PacketNumberNotIncreasing`].
+    pub fn on_packet_untracked(&mut self, pn: u64) -> Result<(), RecoveryError> {
+        self.check_next(pn)?;
+        self.largest_sent = Some(pn);
+        Ok(())
     }
 
-    /// Acknowledge every slot with a packet number in `range`.
-    fn ack_range<F: FnMut(Event<'_>)>(
-        &mut self,
-        range: RangeInclusive<u64>,
-        scan: &mut AckScan,
-        s: &mut Summary,
-        on_event: &mut F,
-    ) {
-        let recovery_start = self.cc.recovery_start();
-        let mut i = self.ring.lower_bound(*range.start());
-        while let Some(slot) = self.ring.get_mut(i) {
-            if slot.sent.pn > *range.end() {
-                break;
-            }
-            i += 1;
-            let sent = slot.sent;
-            let late = match slot.state {
-                State::Done => continue,
-                State::InFlight => false,
-                State::Lost(_) => true,
-            };
-            let counted = slot.counted;
-            let slot_limited = slot.cwnd_limited;
-            slot.state = State::Done;
-            let size = u64::from(sent.size);
-            s.acked_packets += 1;
-            if late {
-                s.late_acked_packets += 1;
-                if sent.in_flight {
-                    self.acct.lost -= u128::from(size);
-                    self.acct.acked += u128::from(size);
-                }
-                if counted {
-                    self.episode.spurious = self.episode.spurious.saturating_add(1);
-                }
-                on_event(Event::LateAcked {
-                    pn: sent.pn,
-                    frames: &sent.frames,
-                });
-            } else {
-                if sent.in_flight {
-                    self.acct.in_flight -= size;
-                    self.acct.acked += u128::from(size);
-                    s.acked_bytes += size;
-                    if sent.ack_eliciting {
-                        self.eliciting_in_flight -= 1;
-                    }
-                    let after = recovery_start.is_none_or(|rs| sent.time > rs);
-                    if after && slot_limited {
-                        scan.growth += size;
-                    }
-                    if after && !slot_limited {
-                        scan.app_limited = true;
-                    }
-                    if recovery_start.is_some() && after {
-                        self.episode.closed = true;
-                    }
-                }
-                on_event(Event::Acked {
-                    pn: sent.pn,
-                    size: sent.size,
-                    frames: &sent.frames,
-                    mtu_probe: sent.is_mtu_probe,
-                });
-            }
-            scan.new_eliciting |= sent.ack_eliciting;
-            if scan.newest.is_none_or(|n| sent.pn > n.0) {
-                scan.newest = Some((sent.pn, sent.time, sent.ack_eliciting, late));
-            }
-        }
-    }
+    // ---- state changes shared by the submodules ----
 
-    /// Declare lost every in-flight packet below the largest acknowledged that crossed a threshold, and arm the loss
-    /// timer for the next one to cross.
-    ///
-    /// vertexia: scans from the ring head to the largest acknowledged packet on every acknowledgement, O(ring);
-    /// an index of in-flight packets would make it O(losses) if profiles show it.
-    fn detect_lost<F: FnMut(Event<'_>)>(&mut self, now: u64, s: &mut Summary, on_event: &mut F) {
-        self.loss_time = None;
-        let Some(largest_acked) = self.largest_acked else {
-            return;
-        };
-        let rtt = self.rtt.latest().max(self.rtt.smoothed());
-        let base_delay = sat(u128::from(rtt) * 9 / 8).max(MS);
-        let old_delay = rtt.saturating_mul(OLD_PATH_RTT_FACTOR).saturating_add(OLD_PATH_EXTRA);
-        let srtt = self.rtt.smoothed();
-        let min_rtt = self.rtt.min_rtt();
-        let (paths, active) = (self.paths, self.active);
-        let mut i = 0;
-        while let Some(slot) = self.ring.get_mut(i) {
-            if slot.sent.pn > largest_acked {
-                break;
-            }
-            i += 1;
-            if slot.state != State::InFlight {
-                continue;
-            }
-            let sent = slot.sent;
-            let kind = paths.get(usize::from(sent.path)).copied().unwrap_or(PathKind::Direct);
-            let (by_count, delay) = if sent.path == active {
-                (kind == PathKind::Direct, base_delay)
-            } else if kind == PathKind::Relay {
-                (false, old_delay.max(RELAY_MIN_DELAY))
-            } else {
-                (false, old_delay)
-            };
-            let due = sent.time.saturating_add(delay);
-            let lost = (by_count && largest_acked >= sent.pn.saturating_add(PACKET_THRESHOLD)) || now >= due;
-            if !lost {
-                self.loss_time = Some(self.loss_time.map_or(due, |t| t.min(due)));
-                continue;
-            }
-            slot.state = State::Lost(now);
-            let size = u64::from(sent.size);
-            s.lost_packets += 1;
-            let congestion = sent.in_flight && !sent.is_repair && !sent.is_mtu_probe;
-            if sent.in_flight {
-                self.acct.in_flight -= size;
-                self.acct.lost += u128::from(size);
-                s.lost_bytes += size;
-                if sent.ack_eliciting {
-                    self.eliciting_in_flight -= 1;
-                }
-            }
-            if congestion {
-                slot.counted = true;
-                if self.cc.on_congestion_event(now, sent.time, srtt, min_rtt) {
-                    self.episode = Episode {
-                        lost: 1,
-                        spurious: 0,
-                        closed: false,
-                    };
-                } else {
-                    self.episode.lost = self.episode.lost.saturating_add(1);
-                }
-            }
-            on_event(Event::Lost {
-                pn: sent.pn,
-                size: sent.size,
-                frames: &sent.frames,
-                requeue: !sent.is_repair && !sent.is_mtu_probe,
-                mtu_probe: sent.is_mtu_probe,
-            });
+    pub(super) fn ack_input(&self, now: u64, acked: u64) -> AckInput {
+        AckInput {
+            now,
+            acked,
+            largest_acked: self.largest_acked.unwrap_or(0),
+            next_pn: self.next_pn(),
+            srtt: self.rtt.has_sample().then(|| self.rtt.smoothed()),
+            min_rtt: self.rtt.min_rtt(),
+            mss: self.segment_size(),
         }
-    }
-
-    /// Persistent congestion: ack-eliciting packets sent over a period longer than three probe timeouts (without
-    /// backoff) were all lost, with none acknowledged or still unresolved in between, and every one sent after the
-    /// first round-trip sample. Repair packets and path MTU probes neither extend nor break a run. Returns the send
-    /// time of the last lost packet of the run.
-    fn persistent_congestion(&self) -> Option<u64> {
-        let first_sample = self.first_sample_at?;
-        let floor = self.pc_barrier.map_or(first_sample, |b| b.max(first_sample));
-        let var = self.rtt.rttvar().saturating_mul(4).max(PTO_FLOOR_VAR);
-        let span = self
-            .rtt
-            .smoothed()
-            .saturating_add(var)
-            .saturating_add(PTO_MAX_ACK_DELAY)
-            .saturating_mul(PERSISTENT_PTOS);
-        let mut run: Option<(u64, u64)> = None;
-        let mut i = 0;
-        while let Some(slot) = self.ring.get(i) {
-            i += 1;
-            let sent = &slot.sent;
-            if !sent.ack_eliciting || sent.is_repair || sent.is_mtu_probe {
-                continue;
-            }
-            if matches!(slot.state, State::Lost(_)) && sent.time > floor {
-                let (start, _) = run.unwrap_or((sent.time, sent.time));
-                run = Some((start, sent.time));
-                if sent.time.saturating_sub(start) > span {
-                    return Some(sent.time);
-                }
-            } else {
-                run = None;
-            }
-        }
-        None
-    }
-
-    /// Undo a fully spurious congestion response, drop finished slots and refresh the pacer.
-    fn finish(&mut self, now: u64, s: &mut Summary) {
-        if s.lost_packets > 0
-            && let Some(last) = self.persistent_congestion()
-        {
-            self.cc.on_persistent_congestion();
-            self.episode = Episode::default();
-            self.pc_barrier = Some(last);
-            s.persistent_congestion = true;
-        }
-        let e = self.episode;
-        if e.closed && e.lost > 0 && e.spurious == e.lost && self.cc.undo() {
-            self.episode = Episode::default();
-            s.congestion_undone = true;
-        }
-        self.ring.trim(now);
-        self.refresh_pacer();
     }
 
     /// Declare every packet in flight lost with no congestion response and reset the probe backoff: the peer woke
     /// from sleep, the link came back, or early data was rejected. Each packet is reported as lost and to be requeued.
     pub fn flush_in_flight<F: FnMut(Event<'_>)>(&mut self, now: u64, mut on_event: F) -> Summary {
+        self.clock = self.clock.max(now);
         let mut s = Summary::default();
         let mut i = 0;
         while let Some(slot) = self.ring.get_mut(i) {
             i += 1;
-            if slot.state != State::InFlight {
+            if slot.state != super::sent::State::InFlight {
                 continue;
             }
-            slot.state = State::Lost(now);
-            slot.counted = false;
+            slot.state = super::sent::State::Lost(now);
             let sent = slot.sent;
+            let size = u64::from(sent.size);
             s.lost_packets += 1;
-            if sent.in_flight {
-                let size = u64::from(sent.size);
-                self.acct.in_flight -= size;
-                self.acct.lost += u128::from(size);
-                s.lost_bytes += size;
-                if sent.ack_eliciting {
-                    self.eliciting_in_flight -= 1;
-                }
-            }
+            s.lost_bytes += size;
+            self.acct.in_flight -= size;
+            self.acct.lost += u128::from(size);
+            self.in_flight_packets -= 1;
             on_event(Event::Lost {
                 pn: sent.pn,
                 size: sent.size,
@@ -684,60 +548,21 @@ impl<const N: usize> Recovery<N> {
         }
         self.loss_time = None;
         self.pto_count = 0;
+        self.last_pto = 0;
+        self.saved_window = None;
         s
     }
 
-    // ---- timers ----
-
-    /// The probe timeout duration: srtt + max(4 x rttvar, 1 ms) + 25 ms, doubled per consecutive timeout (at most
-    /// 6 doublings), capped at 2 s, or at max(2 s, 2 x srtt) on a long-RTT path.
-    pub fn pto_duration(&self) -> u64 {
-        let var = self.rtt.rttvar().saturating_mul(4).max(PTO_FLOOR_VAR);
-        let base = self
-            .rtt
-            .smoothed()
-            .saturating_add(var)
-            .saturating_add(PTO_MAX_ACK_DELAY);
-        let shifted = base.saturating_mul(1u64 << self.pto_count.min(PTO_MAX_SHIFT));
-        let cap = if self.rtt.min_rtt().is_some_and(|m| m >= LONG_RTT) {
-            PTO_CAP.max(self.rtt.smoothed().saturating_mul(2))
-        } else {
-            PTO_CAP
-        };
-        shifted.min(cap)
-    }
-
-    fn pto_deadline(&self) -> Option<u64> {
-        (self.eliciting_in_flight > 0).then(|| self.last_eliciting_sent.saturating_add(self.pto_duration()))
-    }
-
-    /// The next time [`Self::on_timeout`] must run: the loss timer, or the probe timer when no loss is pending.
-    pub fn next_timeout(&self) -> Option<u64> {
-        self.loss_time.or_else(|| self.pto_deadline())
-    }
-
-    /// Run the expired timer. A loss timer detects losses; a probe timer asks for 1 probe on the first expiry and 2
-    /// after, and grows the backoff unless the peer is marked asleep.
-    pub fn on_timeout<F: FnMut(Event<'_>)>(&mut self, now: u64, mut on_event: F) -> Timeout {
-        let mut out = Timeout::default();
-        if self.loss_time.is_some_and(|t| t <= now) {
-            self.detect_lost(now, &mut out.summary, &mut on_event);
-            self.finish(now, &mut out.summary);
-            return out;
-        }
-        if self.pto_deadline().is_some_and(|d| d <= now) {
-            if !self.asleep {
-                self.pto_count = self.pto_count.saturating_add(1);
-            }
-            out.probes = if self.pto_count <= 1 { 1 } else { 2 };
-        }
-        out
-    }
-
     /// How the path is doing.
+    ///
+    /// `Dead` needs 10 probe timeouts and silence of at least `max(20 s if the minimum round trip is 250 ms or more
+    /// or the node is thin, 8 x smoothed round trip)`; the smoothed round trip counts as 0 before a sample.
+    /// `Degraded` is 3 or more probe timeouts.
     pub fn health(&self, now: u64) -> Health {
-        let silent = !self.rtt.is_long_rtt() || now.saturating_sub(self.last_heard) >= GIVE_UP_SILENCE_SLOW;
-        if self.pto_count >= PTO_GIVE_UP && silent {
+        let slow = self.rtt.is_long_rtt() || self.is_thin();
+        let srtt = if self.rtt.has_sample() { self.rtt.smoothed() } else { 0 };
+        let need = if slow { GIVE_UP_SILENCE_SLOW } else { 0 }.max(srtt.saturating_mul(GIVE_UP_SILENCE_RTTS));
+        if self.pto_count >= PTO_GIVE_UP && now.saturating_sub(self.last_heard) >= need {
             Health::Dead
         } else if self.pto_count >= PTO_TELL_ENDPOINT {
             Health::Degraded

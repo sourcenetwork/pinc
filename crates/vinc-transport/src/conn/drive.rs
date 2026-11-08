@@ -2,12 +2,14 @@
 //! shown to the host.
 
 use vinc_crypto::Provider;
-use vinc_security::{ClientTickets, Env, Event as SecEvent, Failure, KeyResponse, SoftKeys, TicketBatch};
+use vinc_security::{
+    ClientTickets, Env, Event as SecEvent, Failure, KeyResponse, ServerTickets, SoftKeys, TicketBatch,
+};
 
-use super::event::{CloseReason, Ev, code};
+use super::event::{CloseReason, Ev};
 use super::handshake::Machine;
 use super::keys::Dir;
-use super::params::TransportParams;
+use super::params::{CreditRecord, peer_limits};
 use super::path::PathState;
 use super::recv::Rx;
 use super::{Connection, Phase};
@@ -15,6 +17,8 @@ use crate::stream::StreamSource;
 
 /// The largest early packet replayed: the biggest datagram a path carries.
 const EARLY_MAX: usize = 9216;
+/// How many connection ids the peer is given.
+const CID_TARGET: usize = 4;
 
 conn_impl! {
     /// Answer the key request last announced by [`Event::KeyRequest`](super::Event::KeyRequest).
@@ -52,6 +56,30 @@ conn_impl! {
         }
     }
 
+    /// Issue `count` (at most 4) tickets for this session from `store` and send them to the peer, which keeps them
+    /// to resume towards this side. A responder does this by itself after a full handshake; a dialing side calls it
+    /// once the session is open to give the responder its one ticket. The peer receives them as
+    /// [`TicketsReceived`](super::Event::TicketsReceived).
+    ///
+    /// # Errors
+    /// [`Failure::UnexpectedMessage`] before the session is established; otherwise as
+    /// [`ServerTickets::issue_batch`].
+    pub fn issue_tickets<const T: usize>(
+        &mut self,
+        env: &mut Env<'_, P>,
+        store: &mut ServerTickets<T>,
+        count: usize,
+        lifetime_s: u32,
+    ) -> Result<(), Failure> {
+        let est = self.est.as_ref().ok_or(Failure::UnexpectedMessage)?;
+        let batch = store.issue_batch(env, est, count, lifetime_s)?;
+        if !batch.entries().is_empty() {
+            self.ctl.tickets = Some(batch);
+            self.ctl.tickets_pending = true;
+        }
+        Ok(())
+    }
+
     /// Send READY to the peer.
     pub fn send_ready(&mut self) {
         self.ctl.ready = true;
@@ -59,8 +87,14 @@ conn_impl! {
 
     /// Run the handshake machine until it has nothing more to report.
     pub(super) fn pump(&mut self, env: &mut Env<'_, P>) {
-        while let Some(ev) = self.hs.step() {
+        while let Some(ev) = self.hs.step(&mut self.pool) {
             self.on_hs_event(env, ev);
+        }
+        if let Some(rtt) = self.hs.take_rtt_sample() {
+            self.rec.seed_rtt(rtt);
+        }
+        if self.hs.timed_out() && self.phase == Phase::Handshaking {
+            self.silent_close(CloseReason::HandshakeTimeout);
         }
         if self.hs.request.is_some() && !self.hs.request_announced {
             self.hs.request_announced = true;
@@ -82,15 +116,22 @@ conn_impl! {
             }
             SecEvent::Failed(f) => self.silent_close(CloseReason::Handshake(f)),
             SecEvent::Established(est) => {
-                if self.keys.install(env.provider, &est.traffic).is_err() {
+                if self.keys.install(env.provider, &est.traffic, now).is_err() {
                     self.silent_close(CloseReason::Handshake(Failure::InvalidParameter));
                     return;
                 }
                 self.resumed = est.resumed;
                 self.phase = Phase::Connected;
                 self.life.last_activity = now;
-                if !self.client {
-                    self.hs.confirm();
+                if self.client {
+                    if !est.resumed {
+                        let srtt = self.rec.rtt().smoothed();
+                        self.hs.finish_sent(now, self.rec.pto_duration(), srtt);
+                    }
+                    if !est.tickets.entries().is_empty() {
+                        self.push(Ev::Tickets(est.tickets));
+                    }
+                } else {
                     if let Some(p) = self.paths.active_mut() {
                         p.state = PathState::Validated;
                         p.amp.validate();
@@ -99,14 +140,12 @@ conn_impl! {
                         self.ctl.tickets = Some(est.tickets);
                         self.ctl.tickets_pending = true;
                     }
-                } else if !est.tickets.entries().is_empty() {
-                    self.push(Ev::Tickets(est.tickets));
                 }
-                if !self.apply_peer_params(now, &est) {
+                if !self.apply_peer_credit(&est) {
                     return;
                 }
                 let (len, key) = (self.cfg.cid_len, self.cfg.reset_key);
-                let target = usize::try_from(self.peer_params.active_cid_limit).unwrap_or(NP).min(NP);
+                let target = NP.min(CID_TARGET);
                 // A failing generator leaves the peer with fewer ids; the next retirement tries again.
                 let _ = self.cids.issue(env, len, &key, target);
                 self.mtu_start();
@@ -117,36 +156,22 @@ conn_impl! {
         }
     }
 
-    /// Apply the peer's authenticated transport parameters. Returns false if the connection was closed instead.
-    fn apply_peer_params(&mut self, now: u64, est: &vinc_security::Established) -> bool {
-        let Ok(p) = TransportParams::decode(est.peer_params.as_bytes()) else {
-            self.violation(now, code::PROTOCOL_VIOLATION, "bad transport parameters");
-            return false;
-        };
+    /// Apply the peer's authenticated credit record. Returns false if the connection was closed instead.
+    fn apply_peer_credit(&mut self, est: &vinc_security::Established) -> bool {
         // A server honours 0-RTT within what it remembered advertising: its limits must not have shrunk.
-        if est.resumed
-            && !self.client
-            && TransportParams::decode(est.remembered_params.as_bytes()).is_ok_and(|m| !self.local_params.covers(&m))
-        {
+        if est.resumed && !self.client && !self.local_credit.covers(&est.remembered_credit) {
             self.silent_close(CloseReason::Handshake(Failure::InvalidParameter));
             return false;
         }
-        self.streams.set_peer_limits(&p.peer_limits());
-        if p.idle_timeout_ms > 0 {
-            self.cfg.idle_timeout = self.cfg.idle_timeout.min(p.idle_timeout_ms.saturating_mul(1_000_000));
-        }
-        let cap = u16::try_from(p.max_udp_payload).unwrap_or(u16::MAX);
-        for path in self.paths.slots.iter_mut().flatten() {
-            path.mtu.ceiling = path.mtu.ceiling.min(cap.saturating_add(1));
-            path.mtu.current = path.mtu.current.min(cap).max(super::MIN_MTU);
-        }
-        self.peer_params = p;
+        self.streams.set_peer_limits(&peer_limits(&est.peer_credit));
+        self.peer_credit = est.peer_credit;
         true
     }
 
-    /// The peer's transport parameters, once the handshake gave them (the minimum before, or what a ticket remembered).
-    pub const fn peer_params(&self) -> &TransportParams {
-        &self.peer_params
+    /// The peer's credit record, once the handshake gave it ([`CreditRecord::NONE`] before, or what a ticket
+    /// remembered): the stream window in 16 KiB units, the concurrent-stream limit and the datagram limit.
+    pub const fn peer_credit(&self) -> &CreditRecord {
+        &self.peer_credit
     }
 
     /// Process the early 1-RTT packets held while the peer was not yet authenticated.

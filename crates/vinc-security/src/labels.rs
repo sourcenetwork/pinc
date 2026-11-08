@@ -46,10 +46,10 @@ pub const PACKET_KEY: &str = "VINC 2026 v1 packet key";
 pub const PACKET_IV: &str = "VINC 2026 v1 packet iv";
 /// Derives a header-protection key from a traffic secret.
 pub const HEADER_KEY: &str = "VINC 2026 v1 header key";
-/// Derives the next generation of a traffic secret.
-pub const KEY_UPDATE: &str = "VINC 2026 v1 key update";
-/// Associated data of an address-validation token.
-pub const TOKEN: &str = "VINC 2026 v1 token";
+/// Derives the next secret of a traffic direction from the old secret and a fresh Diffie-Hellman value (a key roll).
+pub const KEY_ROLL: &str = "VINC 2026 v1 key roll";
+/// Derives the secret both sides use to compute each other's connection ids.
+pub const CID_SECRET: &str = "VINC 2026 v1 connection id secret";
 
 /// Every label above except [`PREFIX`], for tests that check uniqueness and the prefix.
 pub const ALL: [&str; 22] = [
@@ -73,6 +73,6 @@ pub const ALL: [&str; 22] = [
     PACKET_KEY,
     PACKET_IV,
     HEADER_KEY,
-    KEY_UPDATE,
-    TOKEN,
+    KEY_ROLL,
+    CID_SECRET,
 ];

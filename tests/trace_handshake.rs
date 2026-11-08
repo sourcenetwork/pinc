@@ -1,6 +1,5 @@
 //! Trace generation for the handshake: real runs of the `Initiator` and `Responder` through the public API, recorded
-//! step by step as ndjson for the TLA+ trace check and the Lean replay; and the record-layer traces of
-//! `ReplayWindow`, `AmpBudget` and the address-token checks.
+//! step by step as ndjson for the TLA+ trace check and the Lean replay; and the record-layer traces of `AmpBudget`.
 //!
 //! A world is one test scenario: one initiator node, up to two responder nodes (each with its own stores), and any
 //! number of sessions. Every step of either machine (start, receive a message, answer a key request, hand tickets to
@@ -10,9 +9,9 @@
 //! `EarlyKeys`. An id stands for one distinct byte string (equal bytes, equal id), so the checkers never see a hash
 //! function: they check that the recorded ids relate exactly as the model's symbolic terms do.
 //!
-//! The fields the model folds into one parameter value (version, ALPN, AEAD offer, connection ids, token) are
+//! The fields the model folds into one parameter value (version, ALPN, AEAD offer, connection ids, credit record) are
 //! tampered and asserted here, but only the version and the ALPN, which the machines refuse, are recorded; a changed
-//! connection id, token or offer is accepted by the code and absorbed into the transcript, which the model cannot say
+//! connection id, credit record or offer is accepted by the code and absorbed into the transcript, which the model cannot say
 //! with one value, so those worlds are run and asserted but not written.
 //!
 //! Every scenario is asserted here, so the test is meaningful without the proof tools. The traces are written to the
@@ -37,13 +36,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 
-use vinc_crypto::{IdentityAlg, Secret, Software};
+use vinc_crypto::IdentityAlg;
 use vinc_security::ids::aead_tag;
 use vinc_security::message::{Finish, Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
-use vinc_security::token::{TokenError, TokenKey, TokenKind};
 use vinc_security::{
-    AmpBudget, Env, Established, Event, Failure, Initiator, KeyHandle, KeyRequest, KeyResponse, Output, ReplayError,
-    ReplayWindow, Responder, ResponderStores, SoftKeys,
+    AmpBudget, Env, Established, Event, Failure, Initiator, KeyHandle, KeyRequest, KeyResponse, Output, Responder,
+    ResponderStores, SoftKeys,
 };
 use vinc_tests::SplitMix64;
 
@@ -92,14 +90,14 @@ fn fields(bytes: &[u8]) -> Option<Vec<(&'static str, Vec<u8>)>> {
                 PrekeyField::Hash(h) => h.to_vec(),
             };
             vec![
-                ("version", m.version.to_be_bytes().to_vec()),
+                ("version", vec![m.version]),
                 ("dcid", m.dcid.as_bytes().to_vec()),
                 ("scid", m.scid.as_bytes().to_vec()),
                 ("alpn", m.alpn.to_vec()),
                 ("offer", vec![m.aead_offer.bits()]),
                 ("e", m.e.to_vec()),
                 ("pk", pk),
-                ("token", m.token.to_vec()),
+                ("credit", m.credit.encode().to_vec()),
             ]
         }
         MessageType::PrekeyReject | MessageType::ResumeReject => {
@@ -119,7 +117,7 @@ fn fields(bytes: &[u8]) -> Option<Vec<(&'static str, Vec<u8>)>> {
         MessageType::ResumeHello => {
             let m = ResumeHello::parse(bytes).ok()?;
             vec![
-                ("version", m.version.to_be_bytes().to_vec()),
+                ("version", vec![m.version]),
                 ("dcid", m.dcid.as_bytes().to_vec()),
                 ("scid", m.scid.as_bytes().to_vec()),
                 ("alpn", m.alpn.to_vec()),
@@ -127,6 +125,7 @@ fn fields(bytes: &[u8]) -> Option<Vec<(&'static str, Vec<u8>)>> {
                 ("tid", m.tid.to_vec()),
                 ("e", m.e.to_vec()),
                 ("binder", m.binder.to_vec()),
+                ("credit", m.credit.encode().to_vec()),
             ]
         }
         MessageType::ResumeReply => {
@@ -137,6 +136,7 @@ fn fields(bytes: &[u8]) -> Option<Vec<(&'static str, Vec<u8>)>> {
                 ("scid", m.scid.as_bytes().to_vec()),
                 ("e", m.e.to_vec()),
                 ("tickets", t[..n].to_vec()),
+                ("credit", m.credit.encode().to_vec()),
                 ("confirm", m.confirm.to_vec()),
             ]
         }
@@ -150,7 +150,7 @@ enum Class {
     Malformed,
     /// One modelled field changed: the model's field name.
     Field(&'static str),
-    /// A field the model folds away changed (connection id, token, offer, Reply scid): run, assert, do not record.
+    /// A field the model folds away changed (connection id, credit record, offer, Reply scid): run, assert, do not record.
     Unmodelled,
 }
 
@@ -910,13 +910,16 @@ fn scenarios(ids: &mut Ids, trace: &mut String, wid: &mut u32) {
         assert!(sim.i_recv(is, &ex(&reply)).0.is_err());
         sim.drive(is, d.sends.clone(), None, 1);
     });
-    // the same Hello twice to one responder session
+    // the same Hello twice to one responder session: the resumed responder sends its Reply again, with no second session
     world!(sim, {
         sim.setup_full();
         let (_, first) = sim.i_start("resume");
         let rs = sim.r_new(1);
-        assert!(sim.r_recv(rs, &ex(&first[0])).0.is_ok());
-        assert!(sim.r_recv(rs, &ex(&first[0])).0.is_err());
+        let (r, d) = sim.r_recv(rs, &ex(&first[0]));
+        assert!(r.is_ok());
+        let reply = d.sends[0].clone();
+        let (r, d) = sim.r_recv(rs, &ex(&first[0]));
+        assert!(r.is_ok() && d.sends == vec![reply] && d.est.is_none());
     });
     // resumption rejected (the responder has no such ticket): the full handshake follows
     world!(sim, {
@@ -961,50 +964,6 @@ fn scenarios(ids: &mut Ids, trace: &mut String, wid: &mut u32) {
 
 fn security_traces(out: &mut String) {
     let mut rng = SplitMix64::new(0x5EC0_0001);
-    let mut run = 0u32;
-    macro_rules! windows {
-        ($($bits:literal),*) => {$({
-            for r in 0..6u32 {
-                run += 1;
-                let mut w = ReplayWindow::<$bits>::new();
-                let mut hi: u64 = 0;
-                let mut seq = 0u32;
-                let base: u64 = if r % 3 == 2 { u64::MAX - 5000 } else { 0 };
-                for _ in 0..400 {
-                    let pick = rng.next_u64() % 10;
-                    let pn = match pick {
-                        0 => base + rng.next_u64() % 8,
-                        1 => hi.saturating_add($bits as u64 - 1),
-                        2 => hi.saturating_add($bits as u64),
-                        3 => hi.saturating_add($bits as u64 + 1),
-                        4 => hi.saturating_add(1 + rng.next_u64() % 3),
-                        5 => hi.saturating_sub(rng.next_u64() % ($bits as u64 + 3)),
-                        6 => hi.saturating_sub($bits as u64 + rng.next_u64() % 5),
-                        7 => hi.saturating_add(rng.next_u64() % 100_000),
-                        8 => hi,
-                        _ => base + rng.next_u64() % 600,
-                    };
-                    let insert = rng.next_u64() % 3 != 0;
-                    let res = if insert { w.insert(pn) } else { w.check(pn) };
-                    let (ok, err) = match res {
-                        Ok(()) => (true, "none"),
-                        Err(ReplayError::Duplicate) => (false, "dup"),
-                        Err(ReplayError::TooOld) => (false, "old"),
-                    };
-                    let h = w.highest().map_or(-1i128, i128::from);
-                    hi = w.highest().unwrap_or(0);
-                    let _ = writeln!(
-                        out,
-                        r#"{{"t":"rw","run":{run},"seq":{seq},"bits":{},"op":"{}","pn":{pn},"ok":{ok},"err":"{err}","hi":{h}}}"#,
-                        $bits,
-                        if insert { "i" } else { "c" }
-                    );
-                    seq += 1;
-                }
-            }
-        })*};
-    }
-    windows!(1, 2, 7, 64, 65, 100, 1024);
     // the amplification budget
     for r in 0..40u32 {
         let mut b = AmpBudget::new();
@@ -1043,86 +1002,6 @@ fn security_traces(out: &mut String) {
             );
         }
     }
-    // token verdicts through the real API
-    let p = Software;
-    let key = TokenKey::new(&p, &Secret::new([7; 32])).unwrap();
-    let mut buf = [0u8; 128];
-    for _ in 0..400 {
-        let addr_len = (rng.next_u64() % 20) as usize;
-        let addr: Vec<u8> = (0..addr_len).map(|_| rng.next_u64() as u8).collect();
-        let other_addr = if rng.next_u64().is_multiple_of(3) {
-            let mut a = addr.clone();
-            a.push(1);
-            a
-        } else {
-            addr.clone()
-        };
-        let kinds = [TokenKind::Retry, TokenKind::NewToken];
-        let k1 = kinds[(rng.next_u64() % 2) as usize];
-        let k2 = if rng.next_u64().is_multiple_of(3) {
-            kinds[(rng.next_u64() % 2) as usize]
-        } else {
-            k1
-        };
-        let issued = rng.next_u64() % 1_000_000_000_000;
-        let life = k2.lifetime_ns();
-        let now = match rng.next_u64() % 6 {
-            0 => issued,
-            1 => issued + life,
-            2 => issued + life + 1,
-            3 => issued.saturating_sub(1 + rng.next_u64() % 5),
-            4 => issued + rng.next_u64() % (life + 1),
-            _ => issued + life + rng.next_u64() % life,
-        };
-        let mut nonce = [0u8; 12];
-        rng.fill(&mut nonce);
-        let n = key.issue(&p, &addr, k1, issued, &nonce, &mut buf).unwrap();
-        let res = key.validate(&p, &buf[..n], &other_addr, k2, now);
-        let name = match res {
-            Ok(()) => "ok",
-            Err(TokenError::WrongKind) => "kind",
-            Err(TokenError::WrongAddress) => "addr",
-            Err(TokenError::NotYetValid) => "notyet",
-            Err(TokenError::Expired) => "expired",
-            Err(e) => panic!("unexpected token error {e:?}"),
-        };
-        let kindok = k1 == k2;
-        let addrok = addr == other_addr;
-        // the verdict the checks give, written out: kind first, then address, then the age
-        let want = if !kindok {
-            "kind"
-        } else if !addrok {
-            "addr"
-        } else if now < issued {
-            "notyet"
-        } else if now - issued > life {
-            "expired"
-        } else {
-            "ok"
-        };
-        assert_eq!(name, want);
-        let _ = writeln!(
-            out,
-            r#"{{"t":"tok","kindok":{kindok},"addrok":{addrok},"issued":{issued},"now":{now},"kind":{},"res":"{name}"}}"#,
-            k2 as u8
-        );
-    }
-    // a forged or cut token is refused as malformed or unauthenticated, never accepted
-    let n = key.issue(&p, b"addr", TokenKind::Retry, 5, &[1; 12], &mut buf).unwrap();
-    let mut bad = buf[..n].to_vec();
-    bad[14] ^= 1;
-    assert_eq!(
-        key.validate(&p, &bad, b"addr", TokenKind::Retry, 6),
-        Err(TokenError::Authentication)
-    );
-    assert_eq!(
-        key.validate(&p, &buf[..n - 1], b"addr", TokenKind::Retry, 6),
-        Err(TokenError::Authentication)
-    );
-    assert_eq!(
-        key.validate(&p, &buf[..10], b"addr", TokenKind::Retry, 6),
-        Err(TokenError::Malformed)
-    );
 }
 
 #[test]
@@ -1152,15 +1031,10 @@ fn handshake_traces() {
         ] {
             assert!(hs.contains(needle), "the runs never produce {needle}");
         }
-        for needle in [
-            r#""t":"rw""#,
-            r#""t":"amp""#,
-            r#""res":"expired""#,
-            r#""res":"notyet""#,
-            r#""err":"old""#,
-        ] {
-            assert!(sec.contains(needle), "the runs never produce {needle}");
-        }
+        assert!(
+            sec.contains(r#""t":"amp""#),
+            "the runs never produce an amplification trace"
+        );
         let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
             return;
         };

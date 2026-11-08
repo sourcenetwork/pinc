@@ -16,8 +16,9 @@ use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_mai
 use vinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
 use vinc_security::message::MAX_MESSAGE_LEN;
 use vinc_security::{
-    AlpnList, ConnId, Env, Established, Event, HeaderKey, Initiator, InitiatorParams, KeyHandle, Limits, LocalIdentity,
-    Output, PacketKey, PrekeyPolicy, Responder, ResponderConfig, ResponderStores, SoftKeys, SoftPrekeys, Ticket,
+    AlpnList, ConnId, CreditRecord, Env, Established, Event, HeaderKey, Initiator, InitiatorParams, KeyHandle, Limits,
+    LocalIdentity, Output, PacketKey, PrekeyPolicy, Responder, ResponderConfig, ResponderStores, SoftKeys, SoftPrekeys,
+    Ticket,
 };
 
 const ALPN: &[u8] = b"vinc/1";
@@ -107,9 +108,8 @@ impl Rig {
                 identity: i_id,
                 prekey: &prekey,
                 peer_has_prekey: short,
-                token: &[],
                 ticket,
-                transport_params: &[],
+                credit: CreditRecord::NONE,
             },
         )
         .unwrap();

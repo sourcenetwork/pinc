@@ -1,7 +1,7 @@
 #![allow(clippy::doc_markdown, reason = "frame names such as NEW_TOKEN are prose, not code")]
 
 //! The connection: the handshake over `vinc-security`, packet assembly and dispatch, paths and migration, path MTU,
-//! key updates, idle timeout, close and drain, and sleep and wake, over the packet layer, recovery and the stream
+//! key rolls, idle timeout, close and drain, and sleep and wake, over the packet layer, recovery and the stream
 //! layer of this crate.
 //!
 //! # Driving a connection
@@ -70,23 +70,21 @@ mod send;
 mod timer;
 
 use vinc_crypto::Provider;
-use vinc_security::{
-    ConnId, Env, Established, Failure, Initiator, InitiatorParams, MAX_PARAMS_LEN, Params, Responder, ResponderConfig,
-};
+use vinc_security::{ConnId, Env, Established, Failure, Initiator, InitiatorParams, Responder, ResponderConfig};
 
 pub use cid::reset_token;
 pub use config::{
     ClientParams, Config, DEFAULT_IDLE, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
 };
 pub use event::{CloseReason, Drop, Event, code};
-pub use params::{ParamsError, TransportParams};
+pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::PathError;
 pub use send::Transmit;
 
 use self::cid::Cids;
 use self::ctl::Ctl;
 use self::event::{Ev, EvQueue};
-use self::handshake::{Handshake, Machine};
+use self::handshake::{Handshake, Machine, Timing};
 use self::keys::Keys;
 use self::life::Life;
 use self::path::Paths;
@@ -142,7 +140,7 @@ pub struct Connection<
     est: Option<Established>,
     keys: Keys<P>,
     rec: Recovery<F>,
-    rx: ReceivedPackets<64>,
+    rx: ReceivedPackets<32>,
     ctl: Ctl,
     cids: Cids,
     paths: Paths<NP>,
@@ -159,8 +157,8 @@ pub struct Connection<
     ext_release: bool,
     paced_until: Option<u64>,
     degraded_told: bool,
-    local_params: TransportParams,
-    peer_params: TransportParams,
+    local_credit: CreditRecord,
+    peer_credit: CreditRecord,
 }
 
 impl<'a, P, S, const N: usize, const C: usize, const F: usize, const NP: usize> Connection<'a, P, S, N, C, F, NP>
@@ -177,13 +175,23 @@ where
         first_cid: ConnId,
         odcid: ConnId,
         now: u64,
-        local_params: TransportParams,
-    ) -> Self {
-        let Resources { pool, streams, loss } = res;
-        let hs = Handshake::new(machine, now, cfg.thin, cfg.remembered_rtt);
+        local_credit: CreditRecord,
+    ) -> Result<Self, Failure> {
+        let Resources {
+            mut pool,
+            streams,
+            loss,
+        } = res;
+        let timing = Timing {
+            thin: cfg.thin,
+            remembered_rtt: cfg.remembered_rtt,
+            node_rtt: cfg.node_rtt,
+            node_peak_rtt: cfg.node_peak_rtt,
+        };
+        let hs = Handshake::new(machine, &mut pool, now, timing)?;
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
-        Self {
+        Ok(Self {
             client,
             cfg,
             phase: Phase::Handshaking,
@@ -195,9 +203,13 @@ where
             early: EarlyData::new(),
             hs,
             est: None,
-            keys: Keys::new(),
+            keys: Keys::new(client),
             rec: Recovery::new(u64::from(MIN_MTU)),
-            rx: ReceivedPackets::new(),
+            rx: {
+                let mut rx = ReceivedPackets::new();
+                rx.set_every(cfg.ack_every);
+                rx
+            },
             ctl: Ctl::new(),
             cids: Cids::new(first_cid),
             paths: Paths::new(),
@@ -214,27 +226,24 @@ where
             ext_release: false,
             paced_until: None,
             degraded_told: false,
-            local_params,
-            peer_params: TransportParams::MIN,
-        }
+            local_credit,
+            peer_credit: CreditRecord::NONE,
+        })
     }
 
-    /// What this endpoint advertises: the configured parameters, the idle timeout, and the stream limits clamped to
-    /// what this stream table and pool can hold.
-    fn advertise(cfg: &Config, streams: &Streams<S, N, C>) -> (TransportParams, Params) {
-        let mut p = cfg.params;
-        p.idle_timeout_ms = cfg.idle_timeout / 1_000_000;
+    /// What this endpoint advertises: the configured credit record with the stream window clamped to what this
+    /// stream table and pool can hold, and the stream limit to the table's slots.
+    fn advertise(cfg: &Config, streams: &Streams<S, N, C>) -> CreditRecord {
         let conn = streams.recv_window();
         let per_stream = conn.min((C as u64).saturating_sub(1) * CHUNK_SIZE as u64);
-        p.initial_max_data = p.initial_max_data.min(conn);
-        p.max_stream_data_bidi_local = p.max_stream_data_bidi_local.min(per_stream);
-        p.max_stream_data_bidi_remote = p.max_stream_data_bidi_remote.min(per_stream);
-        p.max_stream_data_uni = p.max_stream_data_uni.min(per_stream);
-        p.max_streams_bidi = p.max_streams_bidi.min(N as u64);
-        p.max_streams_uni = p.max_streams_uni.min(N as u64);
-        let mut buf = [0u8; MAX_PARAMS_LEN];
-        let n = p.encode(&mut buf).unwrap_or(0);
-        (p, Params::new(buf.get(..n).unwrap_or_default()).unwrap_or_default())
+        CreditRecord {
+            window_units: cfg
+                .credit
+                .window_units
+                .min(CreditRecord::new(per_stream, 0, 0).window_units),
+            max_streams: cfg.credit.max_streams.min(u16::try_from(N).unwrap_or(u16::MAX)),
+            max_datagram: cfg.credit.max_datagram,
+        }
     }
 
     fn random_cid(env: &mut Env<'_, P>, len: usize) -> Result<ConnId, Failure> {
@@ -251,7 +260,7 @@ where
     /// client may also write stream and datagram data before the handshake completes (0-RTT).
     ///
     /// # Errors
-    /// A [`Failure`] if the parameters are invalid (an over-long token, a connection id length outside 1 to 20) or
+    /// A [`Failure`] if the parameters are invalid (a connection id length outside 1 to 20) or
     /// the random generator refuses.
     pub fn client(
         cfg: Config,
@@ -261,11 +270,8 @@ where
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = Self::random_cid(env, 8)?;
-        let (local, wire) = Self::advertise(&cfg, res.streams);
-        let remembered = params
-            .ticket
-            .as_ref()
-            .and_then(|t| TransportParams::decode(t.peer_params().as_bytes()).ok());
+        let local = Self::advertise(&cfg, res.streams);
+        let remembered = params.ticket.as_ref().map(|t| *t.peer_credit());
         let init = Initiator::new(
             env,
             InitiatorParams {
@@ -275,17 +281,16 @@ where
                 identity: params.identity,
                 prekey: params.prekey,
                 peer_has_prekey: params.peer_has_prekey,
-                token: params.token,
                 ticket: params.ticket,
-                transport_params: wire.as_bytes(),
+                credit: local,
             },
         )?;
-        let mut c = Self::base(true, cfg, res, Machine::Client(init), cid, odcid, env.now, local);
+        let mut c = Self::base(true, cfg, res, Machine::Client(init), cid, odcid, env.now, local)?;
         // Until the server's parameters arrive, the minimum holds; with a ticket, 0-RTT data may rely on what the
         // server advertised in the session that issued it.
         if let Some(p) = remembered {
-            c.streams.set_peer_limits(&p.peer_limits());
-            c.peer_params = p;
+            c.streams.set_peer_limits(&peer_limits(&p));
+            c.peer_credit = p;
         }
         c.new_path_slot(params.path, params.path_info, env.now);
         if let Some(p) = c.paths.active_mut() {
@@ -309,11 +314,11 @@ where
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = ConnId::default();
-        let (local, wire) = Self::advertise(&cfg, res.streams);
+        let local = Self::advertise(&cfg, res.streams);
         let mut rc = ResponderConfig::new(params.identity, cid, params.alpns);
         rc.tickets_per_session = params.tickets_per_session;
         rc.ticket_lifetime_s = params.ticket_lifetime_s;
-        rc.transport_params = wire;
+        rc.credit = local;
         let c = Self::base(
             false,
             cfg,
@@ -323,7 +328,7 @@ where
             odcid,
             env.now,
             local,
-        );
+        )?;
         Ok(c)
     }
 

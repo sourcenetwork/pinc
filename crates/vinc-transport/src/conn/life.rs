@@ -53,7 +53,6 @@ pub(crate) struct Life {
     pub(crate) repair_at: Option<u64>,
     pub(crate) repair_due: bool,
     pub(crate) last_stream_tx: u64,
-    pub(crate) ack_only_run: u8,
     pub(crate) tail: [Option<(u64, u64, u32, bool)>; 4],
 }
 
@@ -78,7 +77,6 @@ impl Life {
             repair_at: None,
             repair_due: false,
             last_stream_tx: 0,
-            ack_only_run: 0,
             tail: [None; 4],
         }
     }
@@ -126,6 +124,10 @@ conn_impl! {
     /// probe backoff does not grow and the connection does not give up; when it returns, everything in flight is
     /// sent again without a congestion response.
     pub fn set_link_down(&mut self, env: &mut Env<'_, P>, down: bool) {
+        if self.phase == Phase::Handshaking && !down {
+            self.hs.link_return(env.now);
+            return;
+        }
         if self.phase != Phase::Connected {
             return;
         }
@@ -154,14 +156,15 @@ conn_impl! {
     }
 
     pub(super) fn suspend_probes(&mut self) {
-        self.rec.set_peer_asleep(self.suspended());
+        self.rec.set_peer_asleep(self.life.peer_asleep.is_some() || self.life.local_asleep.is_some());
+        self.rec.set_link_down(self.life.link_down.is_some());
     }
 
     /// Declare everything in flight lost with no congestion response and requeue it.
     pub(super) fn flush_in_flight(&mut self, now: u64) {
         let mut out = super::ctl::Outcome::default();
-        let (streams, pool, ctl, cids, rx) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids, &mut self.rx);
-        self.rec.flush_in_flight(now, |ev| super::ctl::apply(&ev, now, streams, pool, ctl, cids, rx, &mut out));
+        let (streams, pool, ctl, cids) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids);
+        self.rec.flush_in_flight(now, |ev| super::ctl::apply(&ev, streams, pool, ctl, cids, &mut out));
         self.life.probes = 0;
         self.degraded_told = false;
         self.after_feedback(out, now);

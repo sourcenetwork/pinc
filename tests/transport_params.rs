@@ -1,4 +1,4 @@
-//! Transport parameters: the canonical encoding, parameters carried in the handshake, mismatched configurations, and
+//! The credit record: its exact six-byte encoding, the record carried in the handshake, mismatched configurations, and
 //! 0-RTT within the limits a ticket remembered.
 #![allow(
     clippy::unwrap_used,
@@ -14,105 +14,62 @@
 use proptest::prelude::*;
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, ParamsError, TransportParams};
+use vinc_transport::conn::{CloseReason, CreditRecord, credit_for_streams, peer_limits};
 use vinc_transport::stream::{self, StreamError};
 
-/// An id and a value as varints.
-fn pair(id: u64, v: u64) -> Vec<u8> {
-    let mut buf = [0u8; 18];
-    let a = vinc_wire::varint::encode(id, &mut buf).unwrap();
-    let b = vinc_wire::varint::encode(v, &mut buf[a..]).unwrap();
-    buf[..a + b].to_vec()
-}
-
-fn enc(p: &TransportParams) -> Vec<u8> {
-    let mut buf = [0u8; 256];
-    let n = p.encode(&mut buf).unwrap();
-    buf[..n].to_vec()
+#[test]
+fn the_record_is_six_bytes_and_exact() {
+    // window (16 KiB units), streams, datagram: three big-endian u16.
+    let c = CreditRecord::new(1_310_720, 100, 65_535);
+    assert_eq!(c.encode(), [0, 80, 0, 100, 0xff, 0xff]);
+    assert_eq!(CreditRecord::decode(&c.encode()), c);
+    assert_eq!(c.window_bytes(), 1_310_720);
+    assert_eq!(CreditRecord::NONE.encode(), [0; 6]);
+    assert_eq!(CreditRecord::default(), CreditRecord::NONE);
+    // The window rounds down to whole units and saturates at the field's width.
+    assert_eq!(CreditRecord::new(16 * 1024 - 1, 1, 1).window_units, 0);
+    assert_eq!(CreditRecord::new(3 * 16 * 1024 + 5, 1, 1).window_units, 3);
+    assert_eq!(CreditRecord::new(u64::MAX, 1, 1).window_units, u16::MAX);
+    // A record covers another when every limit is at least as large.
+    let small = CreditRecord::new(64 * 1024, 10, 1200);
+    assert!(c.covers(&small) && !small.covers(&c));
+    assert!(c.covers(&c) && small.covers(&CreditRecord::NONE));
 }
 
 #[test]
-fn the_encoding_is_canonical_and_exact() {
-    assert_eq!(enc(&TransportParams::MIN), Vec::<u8>::new());
-    let p = TransportParams {
-        initial_max_data: 100,
-        max_streams_bidi: 4,
-        idle_timeout_ms: 75_000,
-        disable_active_migration: true,
-        ..TransportParams::MIN
-    };
-    // id 1 -> 100, id 5 -> 4, id 7 -> 75000 (a three-byte varint), id 12 -> 1.
-    assert_eq!(enc(&p), [1, 100, 5, 4, 7, 248, 201, 4, 12, 1]);
-    assert_eq!(TransportParams::decode(&enc(&p)).unwrap(), p);
-    // Unknown ids are skipped, even among known ones; they must still be ordered.
+fn the_record_maps_onto_the_stream_layers_limits() {
+    let sc = stream::Config::new(false);
+    let c = credit_for_streams(&sc);
+    assert_eq!(c.window_bytes(), sc.initial_stream_window);
+    assert_eq!(u64::from(c.max_streams), sc.max_streams_bidi.max(sc.max_streams_uni));
+    assert_eq!(c.max_datagram, u16::MAX);
+    let l = peer_limits(&CreditRecord::new(96 * 1024, 7, 0));
     assert_eq!(
-        TransportParams::decode(&[1, 5, 5, 7, 0x20, 9])
-            .unwrap()
-            .initial_max_data,
-        5
+        (
+            l.max_stream_data_bidi_local,
+            l.max_stream_data_bidi_remote,
+            l.max_stream_data_uni
+        ),
+        (96 * 1024, 96 * 1024, 96 * 1024)
     );
-    assert_eq!(TransportParams::decode(&[0x40, 0x99, 9]).unwrap(), TransportParams::MIN);
-    // Everything else about the form is strict.
-    for (bytes, want) in [
-        (&[5u8, 4, 1, 5][..], ParamsError::NotCanonical),
-        (&[5, 4, 5, 4][..], ParamsError::NotCanonical),
-        (&[1, 0][..], ParamsError::NotCanonical),
-        (&pair(8, 1200)[..], ParamsError::NotCanonical),
-        (&[12, 0][..], ParamsError::NotCanonical),
-        (&[12, 2][..], ParamsError::OutOfRange),
-        (&pair(8, 1199)[..], ParamsError::OutOfRange),
-        (&[10, 1][..], ParamsError::OutOfRange),
-        (&[1][..], ParamsError::Malformed),
-        (&[1, 0x80][..], ParamsError::Malformed),
-        (&[1, 0xff, 0xff][..], ParamsError::Malformed),
-    ] {
-        assert_eq!(TransportParams::decode(bytes), Err(want), "{bytes:02x?}");
-    }
-    let mut tiny = [0u8; 2];
-    assert_eq!(p.encode(&mut tiny), Err(ParamsError::BufferTooSmall));
-    let bad = TransportParams {
-        max_udp_payload: 1199,
-        ..TransportParams::MIN
-    };
-    assert_eq!(bad.encode(&mut [0u8; 64]), Err(ParamsError::OutOfRange));
-}
-
-fn params() -> impl Strategy<Value = TransportParams> {
-    let big = prop_oneof![Just(0u64), 0u64..1 << 20, any::<u64>().prop_map(|v| v >> 2)];
-    (
-        proptest::collection::vec(big.clone(), 7),
-        1200u64..70_000,
-        0u64..2_000,
-        2u64..16,
-        big,
-        any::<bool>(),
-    )
-        .prop_map(|(v, udp, ack, cid, dg, mig)| TransportParams {
-            initial_max_data: v[0],
-            max_stream_data_bidi_local: v[1],
-            max_stream_data_bidi_remote: v[2],
-            max_stream_data_uni: v[3],
-            max_streams_bidi: v[4],
-            max_streams_uni: v[5],
-            idle_timeout_ms: v[6],
-            max_udp_payload: udp,
-            max_ack_delay_ms: ack,
-            active_cid_limit: cid,
-            max_datagram_frame_size: dg,
-            disable_active_migration: mig,
-        })
+    assert_eq!((l.max_streams_bidi, l.max_streams_uni), (7, 7));
+    assert_eq!(peer_limits(&CreditRecord::NONE), stream::PeerLimits::default());
 }
 
 proptest! {
     #[test]
-    fn encoding_round_trips_and_is_unique(p in params(), junk in proptest::collection::vec(any::<u8>(), 0..40)) {
-        let bytes = enc(&p);
-        prop_assert_eq!(TransportParams::decode(&bytes).unwrap(), p);
-        // Decoding never panics, and what it accepts re-encodes to the same bytes unless it held unknown ids.
-        if let Ok(q) = TransportParams::decode(&junk) {
-            let again = enc(&q);
-            prop_assert_eq!(TransportParams::decode(&again).unwrap(), q);
-        }
+    fn every_six_bytes_decode_to_one_record_that_encodes_back(bytes in any::<[u8; 6]>()) {
+        let c = CreditRecord::decode(&bytes);
+        prop_assert_eq!(c.encode(), bytes);
+        prop_assert_eq!(CreditRecord::decode(&c.encode()), c);
+    }
+
+    #[test]
+    fn new_never_exceeds_the_window_asked_for(w in any::<u64>(), s in any::<u16>(), d in any::<u16>()) {
+        let c = CreditRecord::new(w, s, d);
+        prop_assert!(c.window_bytes() <= w);
+        prop_assert!(c.window_units == u16::MAX || w - c.window_bytes() < 16 * 1024);
+        prop_assert_eq!((c.max_streams, c.max_datagram), (s, d));
     }
 }
 
@@ -121,13 +78,13 @@ fn mcu() -> (stream::Config, vinc_transport::conn::Config) {
     let mut sc = stream::Config::new(true);
     sc.initial_stream_window = 32 * 1024;
     sc.max_stream_window = 32 * 1024;
-    sc.initial_conn_window = 48 * 1024;
-    sc.max_conn_window = 48 * 1024;
+    sc.initial_conn_window = 32 * 1024;
+    sc.max_conn_window = 32 * 1024;
     sc.max_streams_bidi = 3;
     sc.max_streams_uni = 3;
     let mut cfg = vinc_transport::conn::Config::new();
-    cfg.params = TransportParams::for_streams(&sc);
-    cfg.params.max_datagram_frame_size = 0;
+    cfg.credit = credit_for_streams(&sc);
+    cfg.credit.max_datagram = 0;
     cfg.idle_timeout = 10 * SEC;
     (sc, cfg)
 }
@@ -143,16 +100,12 @@ fn mismatched_configurations_work_both_ways() {
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(61, Params::new(5 * MS).loss(0.5)));
         assert!(net.connect(net.now + 10 * SEC));
         // Each side sees the other's limits.
-        let seen = net.b.conn.peer_params();
+        let seen = net.b.conn.peer_credit();
         assert_eq!(
-            (
-                seen.initial_max_data,
-                seen.max_streams_bidi,
-                seen.max_datagram_frame_size
-            ),
-            (48 * 1024, 3, 0)
+            (seen.window_bytes(), seen.max_streams, seen.max_datagram),
+            (32 * 1024, 3, 0)
         );
-        assert_eq!(net.a.conn.peer_params().initial_max_data, 1_310_720);
+        assert_eq!(net.a.conn.peer_credit().window_bytes(), 1_310_720);
         assert!(net.b.conn.send_datagram(b"x").is_err(), "the MCU takes no datagrams");
         assert!(net.a.conn.send_datagram(b"x").is_ok());
         // The server may open three streams, no more.
@@ -194,24 +147,24 @@ fn mismatched_configurations_work_both_ways() {
         assert!(net.b.read[&ua] == up && net.a.read[&db] == down);
         assert!(max_pool <= net.a.conn.pool().budget_bytes());
         assert!(net.a.closed().is_none() && net.b.closed().is_none());
-        // The smaller idle timeout rules for both.
+        // Idle is not negotiated: each side keeps its own timeout, so the short one leaves first.
         net.run(net.now + 30 * SEC, |_| false);
-        assert_eq!(net.b.closed(), Some(CloseReason::IdleTimeout));
         assert_eq!(net.a.closed(), Some(CloseReason::IdleTimeout));
+        assert!(net.b.closed().is_none() || net.b.closed() == Some(CloseReason::IdleTimeout));
     });
 }
 
 #[test]
 fn zero_rtt_respects_the_limits_the_ticket_remembered() {
     big_stack(|| {
-        // The server's table and its advertised limits: 100 KiB per stream and for the connection.
+        // The server's table and its advertised limits: 96 KiB per stream and for the connection.
         let mut sc = stream::Config::new(false);
-        sc.initial_stream_window = 100 * 1024;
-        sc.max_stream_window = 100 * 1024;
-        sc.initial_conn_window = 100 * 1024;
-        sc.max_conn_window = 100 * 1024;
+        sc.initial_stream_window = 96 * 1024;
+        sc.max_stream_window = 96 * 1024;
+        sc.initial_conn_window = 96 * 1024;
+        sc.max_conn_window = 96 * 1024;
         let mut w = World::new(IdentityAlg::Ed25519);
-        w.cfg.params = TransportParams::for_streams(&sc);
+        w.cfg.credit = credit_for_streams(&sc);
         let (mut sa, mut sb) = (Store::new(true), Store::with_stream(CHUNKS, &sc));
         let mut tickets = {
             let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(64, Params::new(10 * MS)));
@@ -221,11 +174,9 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
         };
         let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
         assert_eq!(
-            TransportParams::decode(ticket.peer_params().as_bytes())
-                .unwrap()
-                .initial_max_data,
-            100 * 1024,
-            "the ticket carries the server's parameters"
+            ticket.peer_credit().window_bytes(),
+            96 * 1024,
+            "the ticket carries the server's record"
         );
         let (mut sa, mut sb) = (Store::new(true), Store::with_stream(CHUNKS, &sc));
         let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
@@ -235,11 +186,11 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
         let id = net.a.conn.open_bi().unwrap();
         let data = pattern(1 << 20, 66);
         let accepted = net.a.conn.write(id, &data).unwrap();
-        assert!(accepted > 0 && accepted <= 100 * 1024, "early credit is {accepted}");
+        assert!(accepted > 0 && accepted <= 96 * 1024, "early credit is {accepted}");
         let deadline = net.now + 10 * MS + MS / 2;
         net.run(deadline, |_| false);
         let early = net.b.read.get(&id).map_or(0, Vec::len);
-        assert!(early > 0 && early <= 100 * 1024, "{early} early bytes arrived");
+        assert!(early > 0 && early <= 96 * 1024, "{early} early bytes arrived");
         assert!(!net.a.conn.is_connected());
         // The rest follows once the handshake is done.
         let mut off = accepted;
@@ -264,7 +215,7 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
 }
 
 #[test]
-fn without_a_ticket_nothing_may_be_sent_before_the_parameters_arrive() {
+fn without_a_ticket_nothing_may_be_sent_before_the_record_arrives() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
@@ -274,7 +225,7 @@ fn without_a_ticket_nothing_may_be_sent_before_the_parameters_arrive() {
             Err(StreamError::StreamLimit),
             "the minimum allows no streams"
         );
-        assert_eq!(net.a.conn.peer_params(), &TransportParams::MIN);
+        assert_eq!(net.a.conn.peer_credit(), &CreditRecord::NONE);
         assert!(net.connect(net.now + 10 * SEC));
         assert!(net.a.conn.open_bi().is_ok());
     });

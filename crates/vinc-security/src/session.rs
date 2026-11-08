@@ -7,10 +7,10 @@
 
 use vinc_crypto::{Aead, CryptoError, Drbg, NodeId, Provider, Secret};
 
+use crate::credit::CreditRecord;
 use crate::error::Failure;
 use crate::ids::Alpn;
 use crate::keys::KeyRequest;
-use crate::params::Params;
 use crate::record::{HeaderKey, PacketKey};
 use crate::schedule::sub_session_secret;
 use crate::tickets::TicketBatch;
@@ -120,13 +120,15 @@ pub struct Established {
     pub tickets: TicketBatch,
     /// Whether this session resumed an earlier one.
     pub resumed: bool,
-    /// The transport parameters the peer sent in the handshake, authenticated by it.
-    pub peer_params: Params,
-    /// The transport parameters this side sent.
-    pub local_params: Params,
-    /// On a resumption: the server's parameters that the ticket remembered (what 0-RTT data may rely on); empty
-    /// otherwise.
-    pub remembered_params: Params,
+    /// The credit record the peer sent in the handshake, authenticated by it.
+    pub peer_credit: CreditRecord,
+    /// The credit record this side sent.
+    pub local_credit: CreditRecord,
+    /// On a resumption: the issuer's credit record that the ticket remembered (what 0-RTT data may rely on);
+    /// [`CreditRecord::NONE`] otherwise.
+    pub remembered_credit: CreditRecord,
+    /// The secret both sides derive their connection ids from; the same on both sides and fresh for every session.
+    pub cid_secret: Secret<32>,
 }
 
 /// Something that happened.

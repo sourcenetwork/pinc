@@ -8,8 +8,9 @@
 use vinc_crypto::identity::MAX_PUBLIC_KEY_LEN;
 use vinc_crypto::{Aead, Capabilities, CryptoError, IdentityAlg, Keypair, NodeId};
 
-/// The protocol version carried in the Initial and the resume Hello.
-pub const VERSION: u32 = 1;
+/// The protocol version: one byte in the Initial, the resume Hello and the transcript. The transport's packet header
+/// carries the same byte.
+pub const VERSION: u8 = 1;
 /// The longest connection id.
 pub const MAX_CID_LEN: usize = 20;
 /// The longest ALPN.

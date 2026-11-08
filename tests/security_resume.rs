@@ -16,11 +16,12 @@
     unreachable_pub
 )]
 
-use vinc_crypto::{Aead, IdentityAlg, Secret};
+use vinc_crypto::{Aead, IdentityAlg, NodeId, Secret};
 use vinc_security::message::MAX_MESSAGE_LEN;
 use vinc_security::tickets::{DEFAULT_TICKET_LIFETIME_S, MAX_BATCH};
 use vinc_security::{
-    ClientTickets, Env, Event, Failure, Output, PacketKey, ResponderStores, ServerTickets, TicketBatch, TicketEntry,
+    ClientTickets, CreditRecord, Env, Event, Failure, Output, PacketKey, ResponderStores, ServerTickets, TicketBatch,
+    TicketEntry,
 };
 
 mod sec_common;
@@ -95,7 +96,12 @@ fn nothing_is_resent_after_a_resumption_completed() {
         let mut r = w.responder();
         let out = w.run(&mut i, &mut r, None);
         assert!(out.both_established());
-        i.retransmit().unwrap();
+        let mut env = Env {
+            provider: &w.i_prov,
+            now: w.now,
+            drbg: &mut w.i_drbg,
+        };
+        i.retransmit(&mut env).unwrap();
         r.retransmit();
         assert!(i.poll_output().is_none());
         assert!(r.poll_output().is_none());
@@ -373,9 +379,8 @@ fn the_resume_run_allocates_nothing() {
                     identity: &w.ip.id,
                     prekey: &prekey,
                     peer_has_prekey: false,
-                    token: &[],
                     ticket: Some(ticket),
-                    transport_params: &[],
+                    credit: vinc_security::CreditRecord::NONE,
                 },
             )
             .unwrap();
@@ -442,12 +447,52 @@ fn client_tickets_are_single_use_bounded_and_per_peer() {
         assert_eq!(batch.entries().len(), 4);
         let mut client: ClientTickets<2> = ClientTickets::new();
         client.accept_batch(i, &batch, w.now);
-        assert_eq!(client.len(), 2, "bounded");
+        assert_eq!(
+            client.len(),
+            1,
+            "one ticket per peer: the newest of the batch replaces the older"
+        );
         let peer = w.rp.id.node_id();
         let t1 = client.take(&peer, ALPN, w.now).unwrap();
         assert_eq!(t1.peer(), &peer);
-        assert_eq!(client.len(), 1, "taking removes");
+        assert!(client.is_empty(), "taking removes");
+        // The newest replaces: after a batch of four, the kept ticket is the fourth.
+        client.accept_batch(i, &batch, w.now);
+        let mut single = TicketBatch::new();
+        single.push(batch.entries()[3]);
+        let mut again: ClientTickets<2> = ClientTickets::new();
+        again.accept_batch(i, &single, w.now);
+        let (kept, want) = (
+            client.take(&peer, ALPN, w.now).unwrap(),
+            again.take(&peer, ALPN, w.now).unwrap(),
+        );
+        assert_eq!(kept.expiry(), want.expiry());
+        // Bounded by peers, not tickets: a third peer pushes the oldest peer out.
+        let peers: Vec<_> = (0..3u8)
+            .map(|n| {
+                let mut e = i.clone();
+                e.peer = NodeId {
+                    alg: IdentityAlg::Ed25519,
+                    bytes: [n + 1; 32],
+                };
+                e
+            })
+            .collect();
+        for e in &peers {
+            client.accept_batch(e, &batch, w.now);
+        }
+        assert_eq!(client.len(), 2);
+        assert!(
+            client.take(&peers[0].peer, ALPN, w.now).is_none(),
+            "the oldest peer was dropped"
+        );
+        assert!(client.take(&peers[1].peer, ALPN, w.now).is_some());
+        client.accept_batch(i, &batch, w.now);
         assert!(client.take(&peer, ALPN, w.now + 3_600_000_000_001).is_none(), "expired");
+        assert!(
+            client.take(&peers[2].peer, ALPN, w.now + 3_600_000_000_001).is_none(),
+            "expired"
+        );
         assert!(client.is_empty(), "expired tickets are dropped");
         let mut zero: ClientTickets<0> = ClientTickets::new();
         zero.accept_batch(i, &batch, w.now);
@@ -520,20 +565,18 @@ fn issued_ticket_ids_never_repeat_a_stored_one() {
 }
 
 #[test]
-fn transport_parameters_are_authenticated_remembered_and_bound_into_resumption() {
+fn credit_records_are_authenticated_remembered_and_bound_into_resumption() {
     big_stack(|| {
         let mut w = world();
-        w.i_params = vec![1, 2, 3, 4];
-        w.r_params = vec![9; 40];
+        w.i_credit = CreditRecord::new(1 << 20, 8, 1200);
+        w.r_credit = CreditRecord::new(5 << 20, 100, 65_535);
         let first = w.full();
         let (i, r) = (first.i_est().unwrap(), first.r_est().unwrap());
-        assert_eq!(i.peer_params.as_bytes(), &[9u8; 40][..]);
-        assert_eq!(r.peer_params.as_bytes(), &[1u8, 2, 3, 4][..]);
-        assert_eq!(
-            (i.local_params.as_bytes(), r.local_params.as_bytes()),
-            (&[1u8, 2, 3, 4][..], &[9u8; 40][..])
-        );
-        // Tampering with either side's parameters in flight breaks the handshake.
+        assert_eq!(i.peer_credit, w.r_credit);
+        assert_eq!(r.peer_credit, w.i_credit);
+        assert_eq!((i.local_credit, r.local_credit), (w.i_credit, w.r_credit));
+        assert_eq!(i.peer_credit.window_bytes(), 5 << 20);
+        // Tampering with either side's record in flight breaks the handshake.
         for (msg, from_end) in [(0usize, 1usize), (1, 17)] {
             let mut ini = w.initiator();
             let mut rsp = w.responder();
@@ -541,27 +584,85 @@ fn transport_parameters_are_authenticated_remembered_and_bound_into_resumption()
             let out = w.run(&mut ini, &mut rsp, Some(&t));
             assert!(!out.both_established(), "message {msg}");
         }
-        // A resumption uses the parameters the ticket remembered and shows them to both sides.
+        // A resumption uses the record the ticket remembered and shows both sides.
         let out = resume(&mut w);
         let (i, r) = (out.i_est().unwrap(), out.r_est().unwrap());
         assert!(i.resumed && r.resumed);
-        assert_eq!(i.remembered_params.as_bytes(), &[9u8; 40][..]);
-        assert_eq!(r.remembered_params.as_bytes(), &[9u8; 40][..]);
-        assert_eq!(i.peer_params.as_bytes(), &[9u8; 40][..]);
-        assert_eq!(r.peer_params.as_bytes(), &[1u8, 2, 3, 4][..]);
-        // A server that now advertises other parameters still honours the ticket; the transport sees both the
-        // remembered ones (for 0-RTT) and the current ones (for the rest).
+        assert_eq!(i.remembered_credit, w.r_credit);
+        assert_eq!(r.remembered_credit, w.r_credit);
+        assert_eq!(i.peer_credit, w.r_credit);
+        assert_eq!(r.peer_credit, w.i_credit);
+        // A server that now advertises another record still honours the ticket; the transport sees both the
+        // remembered one (the cap on 0-RTT data) and the current one (for the rest).
         let mut w2 = world();
-        w2.r_params = vec![9; 40];
+        w2.r_credit = CreditRecord::new(5 << 20, 100, 65_535);
         w2.full();
-        w2.r_params = vec![8; 40];
+        w2.r_credit = CreditRecord::new(2 << 20, 50, 65_535);
         let out = resume(&mut w2);
         let (i, r) = (out.i_est().unwrap(), out.r_est().unwrap());
         assert!(i.resumed && r.resumed);
-        assert_eq!(i.remembered_params.as_bytes(), &[9u8; 40][..]);
-        assert_eq!(i.peer_params.as_bytes(), &[8u8; 40][..]);
-        assert_eq!(r.remembered_params.as_bytes(), &[9u8; 40][..]);
-        // Too long is refused outright.
-        assert!(vinc_security::Params::new(&[0; 257]).is_none());
+        assert_eq!(i.remembered_credit, CreditRecord::new(5 << 20, 100, 65_535));
+        assert_eq!(i.peer_credit, CreditRecord::new(2 << 20, 50, 65_535));
+        assert_eq!(r.remembered_credit, i.remembered_credit);
+        // The server can see that its limits shrank below what the ticket promised.
+        assert!(!r.local_credit.covers(&r.remembered_credit));
+        assert!(r.remembered_credit.covers(&r.local_credit));
+    });
+}
+
+#[test]
+fn the_ticket_key_is_bound_to_the_remembered_credit_record() {
+    big_stack(|| {
+        // A ticket whose psk was derived under one record does not open a session under another: the issuer's
+        // store derives the key from its own record, the client from the record the Reply authenticated.
+        let mut w = world();
+        w.r_credit = CreditRecord::new(1 << 20, 10, 100);
+        let first = w.full();
+        let (i, r) = (first.i_est().unwrap(), first.r_est().unwrap());
+        let mut forged = i.clone();
+        forged.peer_credit = CreditRecord::new(8 << 20, 10, 100);
+        let mut env = Env {
+            provider: &w.r_prov,
+            now: w.now,
+            drbg: &mut w.r_drbg,
+        };
+        let batch = w.stores.tickets.issue_batch(&mut env, r, 1, 3600).unwrap();
+        let mut client: ClientTickets<4> = ClientTickets::new();
+        client.accept_batch(&forged, &batch, w.now);
+        w.client = ClientTickets::new();
+        let dial = w.dial();
+        let ticket = client.take(&dial, ALPN, w.now).unwrap();
+        let mut ini = {
+            let prekey = {
+                let mut env = Env {
+                    provider: &w.i_prov,
+                    now: w.now,
+                    drbg: &mut w.i_drbg,
+                };
+                w.prekeys.acquire(&mut env).unwrap()
+            };
+            let mut env = Env {
+                provider: &w.i_prov,
+                now: w.now,
+                drbg: &mut w.i_drbg,
+            };
+            vinc_security::Initiator::new(
+                &mut env,
+                vinc_security::InitiatorParams {
+                    peer: dial,
+                    alpn: ALPN,
+                    scid: vinc_security::ConnId::new(b"initiat0").unwrap(),
+                    identity: &w.ip.id,
+                    prekey: &prekey,
+                    peer_has_prekey: false,
+                    ticket: Some(ticket),
+                    credit: CreditRecord::NONE,
+                },
+            )
+            .unwrap()
+        };
+        let mut rsp = w.responder();
+        let out = w.run(&mut ini, &mut rsp, None);
+        assert_eq!(out.types()[..2], [6, 8], "the binder does not verify: reject");
     });
 }

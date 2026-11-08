@@ -62,6 +62,10 @@ name = "trace_builder"
 path = "trace_builder.rs"
 
 [[test]]
+name = "trace_tla"
+path = "trace_tla.rs"
+
+[[test]]
 name = "trace_handshake"
 path = "trace_handshake.rs"
 
@@ -97,6 +101,14 @@ path = "security_handshake.rs"
 [[test]]
 name = "security_resume"
 path = "security_resume.rs"
+
+[[test]]
+name = "security_fallback"
+path = "security_fallback.rs"
+
+[[test]]
+name = "security_keyroll"
+path = "security_keyroll.rs"
 
 [[test]]
 name = "security_record"
@@ -137,6 +149,10 @@ path = "transport_net.rs"
 [[test]]
 name = "transport_life"
 path = "transport_life.rs"
+
+[[test]]
+name = "transport_handshake"
+path = "transport_handshake.rs"
 
 [[test]]
 name = "transport_params"
