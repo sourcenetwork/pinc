@@ -12,6 +12,10 @@
 (* the inputs are the genuine ones: this is collision resistance, as an    *)
 (* explicit modelling assumption. The genuine payload of group g is g.     *)
 (*                                                                         *)
+(* StepWith and QueryKey take the hash value of the item as an argument, so  *)
+(* TraceRangeVerifier.tla reuses them with the hash values recorded from    *)
+(* the Rust code.                                                          *)
+(*                                                                         *)
 (* Checked by TLC for every n in 0..MaxGroups and every range [first,last)*)
 (* with first <= last <= n: released groups are genuine, ascending and in  *)
 (* range, a rejected item releases nothing, a failure is permanent, and a  *)
@@ -58,31 +62,50 @@ Init ==
     /\ failed = FALSE
     /\ released = <<>>
 
-(* one completed stream item, read according to the kind of the node on top of the stack *)
-Feed ==
+(* the hash call made for an item, as a key: the node on top of the stack decides whether the item is read as a
+   group or as a parent pair, and whether it is hashed as the root *)
+QueryKey(it) ==
+    LET nd == Head(stack)
+        root == (nd.lo = 0 /\ nd.hi = n)
+    IN IF nd.hi - nd.lo = 1 THEN <<"L", root, nd.lo, it.d>> ELSE <<"P", root, it.l, it.r>>
+
+(* one completed stream item `it`, whose hash call evaluates to the chaining value h: the node on top of the stack
+   is checked against h, a group is released when it matches, a parent pushes its children, and a mismatch fails
+   the verifier and releases nothing *)
+StepWith(h, it) ==
     /\ ~failed
     /\ stack # <<>>
     /\ LET nd == Head(stack)
            rest == Tail(stack)
-           root == (nd.lo = 0 /\ nd.hi = n)
        IN IF nd.hi - nd.lo = 1
-          THEN \E d \in DataU :
-                 IF HL(root, nd.lo, d) = nd.cv
-                 THEN /\ stack' = rest
-                      /\ released' = Append(released, <<nd.lo, d>>)
-                      /\ UNCHANGED failed
-                 ELSE /\ failed' = TRUE
-                      /\ UNCHANGED <<stack, released>>
-          ELSE \E l \in CvU(n), r \in CvU(n) :
-                 IF HP(root, l, r) = nd.cv
-                 THEN LET mid == nd.lo + Left(nd.hi - nd.lo)
-                      IN /\ stack' = (IF first < mid THEN <<[cv |-> l, lo |-> nd.lo, hi |-> mid]>> ELSE <<>>)
-                                     \o (IF mid < last THEN <<[cv |-> r, lo |-> mid, hi |-> nd.hi]>> ELSE <<>>)
-                                     \o rest
-                         /\ UNCHANGED <<failed, released>>
-                 ELSE /\ failed' = TRUE
-                      /\ UNCHANGED <<stack, released>>
+          THEN IF h = nd.cv
+               THEN /\ stack' = rest
+                    /\ released' = Append(released, <<nd.lo, it.d>>)
+                    /\ UNCHANGED failed
+               ELSE /\ failed' = TRUE
+                    /\ UNCHANGED <<stack, released>>
+          ELSE IF h = nd.cv
+               THEN LET mid == nd.lo + Left(nd.hi - nd.lo)
+                    IN /\ stack' = (IF first < mid THEN <<[cv |-> it.l, lo |-> nd.lo, hi |-> mid]>> ELSE <<>>)
+                                   \o (IF mid < last THEN <<[cv |-> it.r, lo |-> mid, hi |-> nd.hi]>> ELSE <<>>)
+                                   \o rest
+                       /\ UNCHANGED <<failed, released>>
+               ELSE /\ failed' = TRUE
+                    /\ UNCHANGED <<stack, released>>
     /\ UNCHANGED <<n, first, last>>
+
+(* the symbolic hash of an item, and every item the adversary can put on the node on top of the stack *)
+SymHash(it) ==
+    LET nd == Head(stack)
+        root == (nd.lo = 0 /\ nd.hi = n)
+    IN IF nd.hi - nd.lo = 1 THEN HL(root, nd.lo, it.d) ELSE HP(root, it.l, it.r)
+
+Items ==
+    IF Head(stack).hi - Head(stack).lo = 1
+    THEN {[l |-> <<"forged">>, r |-> <<"forged">>, d |-> d] : d \in DataU}
+    ELSE {[l |-> l, r |-> r, d |-> 0] : l \in CvU(n), r \in CvU(n)}
+
+Feed == /\ ~failed /\ stack # <<>> /\ \E it \in Items : StepWith(SymHash(it), it)
 
 (* a failed or finished verifier takes no further step *)
 Done == (failed \/ stack = <<>>) /\ UNCHANGED vars

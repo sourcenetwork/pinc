@@ -47,6 +47,10 @@ name = "trace_ranges"
 path = "trace_ranges.rs"
 
 [[test]]
+name = "trace_verifier"
+path = "trace_verifier.rs"
+
+[[test]]
 name = "crypto_kat"
 path = "crypto_kat.rs"
 

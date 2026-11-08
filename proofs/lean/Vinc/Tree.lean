@@ -102,6 +102,44 @@ def feed (H : Hash Cv D) (n first last : Nat) (s : State Cv D) (it : Raw Cv D) :
 def run (H : Hash Cv D) (n first last : Nat) (s : State Cv D) (items : List (Raw Cv D)) : State Cv D :=
   items.foldl (feed H n first last) s
 
+/-- The hash call `feed` makes for an item: a leaf hash of (root flag, group index, bytes) when the node on top
+is a group, a parent hash of (root flag, left, right) when it is a parent. -/
+inductive Query (Cv D : Type) where
+  | leaf (b : Bool) (i : Nat) (d : D)
+  | parent (b : Bool) (l r : Cv)
+  deriving BEq
+
+/-- The value of a hash call. -/
+def Query.eval (H : Hash Cv D) : Query Cv D → Cv
+  | .leaf b i d => H.leaf b i d
+  | .parent b l r => H.parent b l r
+
+/-- The hash call that `feed` makes for `it` in state `s`; `none` when it makes none (failed, or nothing
+pending). -/
+def query (n : Nat) (s : State Cv D) (it : Raw Cv D) : Option (Query Cv D) :=
+  if s.failed then none else
+  match s.stack with
+  | [] => none
+  | nd :: _ =>
+    if nd.hi - nd.lo = 1 then some (.leaf (isRoot n nd.lo nd.hi) nd.lo it.d)
+    else some (.parent (isRoot n nd.lo nd.hi) it.l it.r)
+
+/-- `feed` depends on the hash only through the one call it makes: two hashes that agree on that call give the
+same step. This is what lets a trace of recorded hash values stand for the real hash. -/
+theorem feed_congr (H H' : Hash Cv D) (n first last : Nat) (s : State Cv D) (it : Raw Cv D)
+    (h : ∀ q, query n s it = some q → q.eval H = q.eval H') : feed H n first last s it = feed H' n first last s it := by
+  by_cases hf : s.failed = true
+  · simp [feed, hf]
+  · rcases hs : s.stack with _ | ⟨nd, rest⟩
+    · simp [feed, hf, hs]
+    · by_cases hleaf : nd.hi - nd.lo = 1
+      · have := h (.leaf (isRoot n nd.lo nd.hi) nd.lo it.d) (by simp [query, hf, hs, hleaf])
+        simp only [Query.eval] at this
+        simp [feed, hf, hs, hleaf, this]
+      · have := h (.parent (isRoot n nd.lo nd.hi) it.l it.r) (by simp [query, hf, hs, hleaf])
+        simp only [Query.eval] at this
+        simp [feed, hf, hs, hleaf, this]
+
 /-- `is_complete`. -/
 def Complete (s : State Cv D) : Prop := s.failed = false ∧ s.stack = []
 
@@ -410,3 +448,4 @@ end Vinc.Tree
 #audit_axioms Vinc.Tree.feed_reject_releases_nothing
 #audit_axioms Vinc.Tree.feed_release_verified
 #audit_axioms Vinc.Tree.verifier_correct
+#audit_axioms Vinc.Tree.feed_congr

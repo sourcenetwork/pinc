@@ -2,55 +2,19 @@ import Vinc.Json
 import Vinc.Varint
 import Vinc.Ranges
 import Vinc.Layout
+import Vinc.TraceVerifier
 
 /-!
 # Trace replay
 
 `replay <file>...` replays the ndjson traces written by the Rust test `trace_ranges` against the Lean model
 functions (`Vinc.Varint.decode`, `Vinc.Varint.encodeInto`, `Vinc.Ranges.insertFixed`, `insertVec`, `find`,
-`containsRange`, `coveredLen`, `Vinc.Layout.groupRange`, `groups`). Any difference between what the code
+`containsRange`, `coveredLen`, `Vinc.Layout.groupRange`, `groups`) and the traces written by `trace_verifier`
+(the verifier model `Vinc.Tree.feed`, see `Vinc.TraceVerifier`; the layout sizes). Any difference between what the code
 recorded and what the proved model computes exits with an error naming the line.
 -/
 
 open Vinc Vinc.Json
-
-private def field (j : J) (k : String) : Except String J :=
-  match j.get? k with
-  | some v => pure v
-  | none => throw s!"missing field {k}"
-
-private def natF (j : J) (k : String) : Except String Nat := do
-  match (← field j k).nat? with
-  | some n => pure n
-  | none => throw s!"field {k} is not a number"
-
-private def boolF (j : J) (k : String) : Except String Bool := do
-  match (← field j k).bool? with
-  | some n => pure n
-  | none => throw s!"field {k} is not a bool"
-
-private def strF (j : J) (k : String) : Except String String := do
-  match (← field j k).str? with
-  | some n => pure n
-  | none => throw s!"field {k} is not a string"
-
-private def natList (j : J) : Except String (List Nat) := do
-  match j.arr? with
-  | some a => a.toList.mapM fun v => match v.nat? with
-    | some n => pure n
-    | none => throw "expected a number"
-  | none => throw "expected an array"
-
-private def pairList (j : J) : Except String (List (Nat × Nat)) := do
-  match j.arr? with
-  | some a => a.toList.mapM fun v => do
-    match ← natList v with
-    | [x, y] => pure (x, y)
-    | _ => throw "expected a pair"
-  | none => throw "expected an array"
-
-private def check (ok : Bool) (msg : String) : Except String Unit :=
-  if ok then pure () else throw msg
 
 /-- Replay one varint or layout event. -/
 private def replayPure (j : J) (t : String) : Except String Unit := do
@@ -101,6 +65,7 @@ private def replayPure (j : J) (t : String) : Except String Unit := do
       | [a, b] => check (res == some (a, b)) s!"group_range {len} {log} {s} {e}: expected ({a}, {b})"
       | _ => throw "bad ok pair"
     | none => check res.isNone s!"group_range {len} {log} {s} {e}: expected an error"
+  | "sizes" => TraceVerifier.replaySizes j
   | _ => throw s!"unknown event {t}"
 
 /-- Replay one verified-range event against the model state of its run; returns the new model state. -/
@@ -127,21 +92,28 @@ private def replayRanges (j : J) (items : List Ranges.Interval) : Except String 
 private def replayFile (path : String) : IO Nat := do
   let text ← IO.FS.readFile path
   let mut items : List Ranges.Interval := []
+  let mut vs : TraceVerifier.RState := {}
   let mut count := 0
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
     if line.trimAscii.isEmpty then continue
-    let r : Except String (List Ranges.Interval) := do
+    let r : Except String (List Ranges.Interval × TraceVerifier.RState) := do
       let j ← parse line
       match j.get? "t" with
       | some t =>
-        replayPure j (← match t.str? with | some s => pure s | none => throw "t is not a string")
-        pure items
-      | none => replayRanges j items
+        match t.str? with
+        | some "vrun" => pure (items, ← TraceVerifier.replayRun vs j)
+        | some "vfeed" => pure (items, ← TraceVerifier.replayFeed vs j)
+        | some s =>
+          replayPure j s
+          pure (items, vs)
+        | none => throw "t is not a string"
+      | none => pure (← replayRanges j items, vs)
     match r with
-    | .ok next =>
+    | .ok (next, vnext) =>
       items := next
+      vs := vnext
       count := count + 1
     | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
   pure count

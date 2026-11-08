@@ -40,10 +40,15 @@ run_tlc verifier RangeVerifier RangeVerifier
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges
-out=$(VINC_TRACE_DIR="$dir" java -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
-    -metadir proofs/tla/states/trace -config proofs/tla/TraceVerifiedRanges.cfg proofs/tla/TraceVerifiedRanges.tla 2>&1) \
-    || { echo "$out" >&2; echo "proofs: the recorded ranges trace is not a behaviour of VerifiedRanges.tla" >&2; exit 1; }
-echo "tlc TraceVerifiedRanges: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier
+trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
+    local out
+    out=$(VINC_TRACE_DIR="$dir" java -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
+        -metadir "proofs/tla/states/$1" -config "proofs/tla/$1.cfg" "proofs/tla/$1.tla" 2>&1) \
+        || { echo "$out" >&2; echo "proofs: the recorded $2 trace is not a behaviour of its TLA+ model" >&2; exit 1; }
+    echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
+}
+trace_tlc TraceVerifiedRanges ranges
+trace_tlc TraceRangeVerifier verifier
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"
