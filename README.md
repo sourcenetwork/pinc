@@ -53,20 +53,22 @@ VINC is a library, not a framework:
 
 ## Build and test
 
+The [justfile](justfile) holds every task; CI runs the same recipes.
+
 ```sh
-cargo build --workspace
-cargo nextest run --workspace --all-features   # every test
-scripts/gate.sh                                # format, lints, docs, no_std builds, tests
+just              # list the recipes
+just gate         # everything a change must pass: checks, tests, doctests, proofs
+just checks       # dependency rules, format, lints, docs, no_std builds, pure Rust
+just test         # every test with cargo-nextest (the hwenc TPM tests need swtpm); just test-default skips hwenc
+just proofs       # Lean proofs, TLC model checking and trace validation
+just tla-tools    # install the pinned TLA+ tools the proofs use
+just bench        # micro benchmarks
 ```
 
 Every dependency is declared once, in the root `Cargo.toml`, and every crate has the one workspace version; the gate
 checks both. `benches/` is a workspace member whose comparison dependencies (iroh, rust-libp2p and their async
 runtime) belong to the bench package only: the gate also checks that no crate under `crates/` depends on an async
-runtime.
-
-```sh
-cargo bench -p vinc-benches                    # micro benchmarks
-```
+runtime, and that nothing in the build compiles C.
 
 ## Proofs
 
