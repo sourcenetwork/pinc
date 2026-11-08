@@ -34,6 +34,7 @@ VINC is a library, not a framework:
 
 | Crate | Component | What it does | `no_std` | Status |
 |---|---|---|---|---|
+| `vinc` | facade | one entry point, with the runtime-agnostic async API and the blocking API | std feature | planned |
 | `vinc-wire` | encodings | varints and a strict canonical DAG-CBOR codec, parsed in place from borrowed bytes | yes | in progress |
 | `vinc-dag` | lite DAG | DefraDB blocks and CIDs, value roots and range proofs, verified-range sets, reconciliation summaries; no networking code, usable on its own | yes, heap-free mode | in progress |
 | `vinc-crypto` | primitives | pure-Rust RustCrypto primitives behind one static `Provider` trait: ChaCha20-Poly1305 and AES-128-GCM, header protection, SHA-256, X25519, ML-KEM-768; Ed25519, P-256 and ML-DSA-65 identities with node ids; a BLAKE3 KDF, an injective transcript hash and a seeded DRBG; no allocation, no randomness inside | yes | in progress |
@@ -48,7 +49,6 @@ VINC is a library, not a framework:
 | `vinc-reconcile` | reconciliation | set reconciliation whose cost scales with the difference | yes | planned |
 | `vinc-dtn` | delay tolerance | delay-tolerant bundles with custody | yes | planned |
 | `vinc-driver` | driver | std sockets and OS readiness polling around the SANS-IO endpoint | no (std) | planned |
-| `vinc` | facade | one entry point, with the runtime-agnostic async API and the blocking API | std feature | planned |
 | `vinc-sim` | testing | deterministic network simulator for scenario and trace tests | no | planned |
 
 ## Build and test
