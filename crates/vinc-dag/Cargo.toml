@@ -14,9 +14,9 @@ alloc = []
 std = ["alloc", "blake3/std"]
 
 [dependencies]
-vinc-wire = { path = "../vinc-wire" }
-blake3 = { version = "1.8.7", default-features = false }
-sha2 = { version = "0.11.1", default-features = false }
+vinc-wire = { workspace = true }
+blake3 = { workspace = true }
+sha2 = { workspace = true }
 
 [lints]
 workspace = true

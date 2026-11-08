@@ -3,6 +3,7 @@
     missing_docs,
     clippy::unwrap_used,
     clippy::expect_used,
+    clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
 
@@ -53,7 +54,7 @@ fn bench_outboard(c: &mut Criterion) {
         let (_, mut ob) = outboard_of(&v);
         g.throughput(Throughput::Bytes(v.len() as u64));
         g.bench_function(format!("blake3_hash_{mib}MiB"), |b| {
-            b.iter(|| blake3::hash(black_box(&v)))
+            b.iter(|| blake3::hash(black_box(&v)));
         });
         g.bench_function(format!("build_outboard_{mib}MiB"), |b| {
             b.iter(|| build_outboard(black_box(&v), LOG, black_box(&mut ob)).unwrap());

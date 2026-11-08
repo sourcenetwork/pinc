@@ -2,6 +2,7 @@
 # The gate: every check must pass before a push. Usage: scripts/gate.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+echo "== deps";     python3 scripts/deps.py
 echo "== fmt";      cargo fmt --all --check
 echo "== clippy";   cargo clippy --workspace --all-targets --all-features -- -D warnings
 echo "== doc";      RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features

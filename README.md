@@ -56,8 +56,14 @@ cargo nextest run --workspace --all-features   # every test
 scripts/gate.sh                                # format, lints, docs, no_std builds, tests
 ```
 
-`benches/` and `distributed/` are separate Cargo workspaces. They depend on iroh and rust-libp2p, and with them on an
-async runtime; no VINC crate does.
+Every dependency is declared once, in the root `Cargo.toml`, and every crate has the one workspace version; the gate
+checks both. `benches/` is a workspace member whose comparison dependencies (iroh, rust-libp2p and their async
+runtime) belong to the bench package only: the gate also checks that no crate under `crates/` depends on an async
+runtime.
+
+```sh
+cargo bench -p vinc-benches                    # micro benchmarks
+```
 
 ## Proofs
 

@@ -3,6 +3,7 @@
     missing_docs,
     clippy::unwrap_used,
     clippy::expect_used,
+    clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
 

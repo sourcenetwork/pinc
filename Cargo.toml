@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tests"]
-exclude = ["benches", "distributed"]
+members = ["crates/*", "tests", "benches"]
+exclude = ["distributed"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,6 +9,19 @@ edition = "2024"
 rust-version = "1.99"
 repository = "https://github.com/sourcenetwork/vinc"
 publish = false
+
+# Every dependency of every member is declared here, once; members only say `{ workspace = true }` and add features.
+# Every VINC crate has the workspace version, and the entries below pin that same version.
+[workspace.dependencies]
+vinc-wire = { path = "crates/vinc-wire", version = "0.1.0" }
+vinc-dag = { path = "crates/vinc-dag", version = "0.1.0" }
+
+blake3 = { version = "1.8.7", default-features = false }
+sha2 = { version = "0.11.1", default-features = false }
+
+allocation-counter = "0.8.1"
+criterion = "0.8.2"
+proptest = "1.12.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
