@@ -19,6 +19,7 @@ hwenc = ["vinc-keystore/hwenc"]
 vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
 
 [dev-dependencies]
@@ -79,6 +80,18 @@ path = "keystore_software.rs"
 name = "keystore_tpm"
 path = "keystore_tpm.rs"
 required-features = ["hwenc"]
+
+[[test]]
+name = "security_handshake"
+path = "security_handshake.rs"
+
+[[test]]
+name = "security_resume"
+path = "security_resume.rs"
+
+[[test]]
+name = "security_record"
+path = "security_record.rs"
 
 [lints]
 workspace = true

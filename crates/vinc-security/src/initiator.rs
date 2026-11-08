@@ -1,0 +1,536 @@
+//! The initiator state machine: dials a node and completes a full, prekey-short or resumption handshake.
+//!
+//! Invariants: no I/O, no clock, no randomness of its own. `new` queues the first message; the host feeds received
+//! bytes to `handle`, answers key requests with `on_key_response` (or `answer_soft`), tells it about lost flights
+//! with `retransmit`, and drains `poll_output`. The machine authenticates the responder before it sends anything
+//! identifying: the Finish (which carries the initiator's identity) goes out only after the responder's signature
+//! verified and its node id equals the dialed one. A fatal failure stops the machine and is reported once as an
+//! event; a malformed or misplaced message is dropped with an error and changes nothing.
+//!
+//! The full flow is: Initial (or the short Initial when the responder is known to cache the prekey), then Reply,
+//! a prekey decapsulation request, a signature request, and the Finish together with the established session.
+//! With a ticket the flow is: resume Hello (and the 0-RTT keys), then the resume Reply and the established session;
+//! if the responder rejects the ticket the machine starts a full handshake by itself.
+
+use core::mem;
+
+use vinc_crypto::identity::{MAX_SIGNATURE_LEN, verify};
+use vinc_crypto::{Aead, NodeId, Provider, Secret, Transcript, ct_eq};
+use zeroize::Zeroize;
+
+use crate::error::Failure;
+use crate::ids::{AeadSet, Alpn, ConnId, LocalIdentity, VERSION};
+use crate::keys::{KeyResponse, PrekeyInfo, SoftKeys};
+use crate::labels;
+use crate::message::{
+    Finish, IdSig, Initial, InitialForm, MAX_MESSAGE_LEN, MessageType, PrekeyField, Reject, Reply, ResumeHello,
+    ResumeReply, min_initial_len,
+};
+use crate::outbox::{Outbox, Pending};
+use crate::schedule::{
+    HelloFields, InitialFields, absorb_identity, absorb_reply, absorb_resume_reply, application_secrets, binder, chain,
+    confirmation, early_secret, echo, handshake_keys, hello_transcript, initial_transcript, open_handshake, psk_chain,
+    seal_id_sig, signature_message,
+};
+use crate::session::{EarlyKeys, Env, Established, Output, Traffic};
+use crate::tickets::{Ticket, TicketBatch};
+use crate::token::MAX_TOKEN_LEN;
+
+/// What an [`Initiator`] needs to start.
+#[derive(Debug)]
+pub struct InitiatorParams<'a> {
+    /// The node being dialed. The responder must prove it is this node.
+    pub peer: NodeId,
+    /// The application protocol to speak.
+    pub alpn: &'a [u8],
+    /// This side's connection id.
+    pub scid: ConnId,
+    /// This node's identity.
+    pub identity: &'a LocalIdentity,
+    /// The prekey to use for this handshake (from [`crate::SoftPrekeys::acquire`] or the host's key store).
+    pub prekey: &'a PrekeyInfo,
+    /// Whether the responder is known to cache the prekey, so the short Initial can be tried first.
+    pub peer_has_prekey: bool,
+    /// An address-validation token from an earlier Retry or `NewToken`, or empty.
+    pub token: &'a [u8],
+    /// A ticket for this peer and ALPN to resume with, if one is held.
+    pub ticket: Option<Ticket>,
+}
+
+enum State {
+    /// Waiting for the Reply (or a prekey reject, while `short`).
+    Reply {
+        short: bool,
+        echo: [u8; 16],
+    },
+    /// Waiting for the resume Reply (or a resume reject).
+    Resume {
+        ck_psk: Secret<32>,
+        aead: Aead,
+        binder: [u8; 32],
+        echo: [u8; 16],
+    },
+    /// Waiting for the host to decapsulate.
+    Decap {
+        aead: Aead,
+        th1: [u8; 32],
+        ss_x: Secret<32>,
+    },
+    /// Waiting for the host to sign.
+    Sign {
+        aead: Aead,
+        hs: Secret<32>,
+        ck1: Secret<32>,
+        th3: [u8; 32],
+    },
+    Done,
+    Failed,
+}
+
+/// The initiator side of the handshake.
+pub struct Initiator {
+    peer: NodeId,
+    alpn: Alpn,
+    scid: ConnId,
+    identity: LocalIdentity,
+    prekey: PrekeyInfo,
+    offer: AeadSet,
+    token: [u8; MAX_TOKEN_LEN],
+    token_len: usize,
+    dcid: ConnId,
+    seed: Secret<32>,
+    e: [u8; 32],
+    th: Transcript,
+    retransmits: u32,
+    out: Outbox,
+    inbuf: [u8; MAX_MESSAGE_LEN],
+    inlen: usize,
+    state: State,
+}
+
+impl core::fmt::Debug for Initiator {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Initiator")
+            .field("peer", &self.peer)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Initiator {
+    /// Start a handshake: queue the first message (a resume Hello if `params.ticket` is usable, else an Initial).
+    ///
+    /// # Errors
+    /// [`Failure::InvalidParameter`] for an invalid ALPN or an over-long token; [`Failure::Randomness`] if the
+    /// generator refuses.
+    pub fn new<P: Provider>(env: &mut Env<'_, P>, params: InitiatorParams<'_>) -> Result<Self, Failure> {
+        let alpn = Alpn::new(params.alpn).ok_or(Failure::InvalidParameter)?;
+        let mut token = [0u8; MAX_TOKEN_LEN];
+        token
+            .get_mut(..params.token.len())
+            .ok_or(Failure::InvalidParameter)?
+            .copy_from_slice(params.token);
+        let mut this = Self {
+            peer: params.peer,
+            alpn,
+            scid: params.scid,
+            identity: *params.identity,
+            prekey: params.prekey.clone(),
+            offer: AeadSet::offer(env.provider.capabilities()),
+            token,
+            token_len: params.token.len(),
+            dcid: ConnId::default(),
+            seed: Secret::new([0; 32]),
+            e: [0; 32],
+            th: Transcript::new(),
+            retransmits: 0,
+            out: Outbox::new(),
+            inbuf: [0; MAX_MESSAGE_LEN],
+            inlen: 0,
+            state: State::Failed,
+        };
+        let usable = params
+            .ticket
+            .filter(|t| t.expiry >= env.now && t.peer == this.peer && t.alpn == this.alpn);
+        match usable {
+            Some(t) => this.begin_resume(env, &t)?,
+            None => this.begin_full(env, params.peer_has_prekey)?,
+        }
+        Ok(this)
+    }
+
+    /// The next thing to do: a message to send, a key operation to perform, or an event.
+    pub fn poll_output(&mut self) -> Option<Output<'_>> {
+        self.out.poll()
+    }
+
+    /// Feed a received handshake message.
+    ///
+    /// # Errors
+    /// A non-fatal [`Failure`] (the input was dropped, the state is unchanged) or a fatal one (the machine stopped
+    /// and queued [`crate::Event::Failed`]).
+    pub fn handle<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
+        if matches!(self.state, State::Failed) {
+            return Err(Failure::Closed);
+        }
+        let result = self.dispatch(env, input);
+        self.settle(result)
+    }
+
+    /// Deliver the host's answer to the key request last returned by `poll_output`.
+    ///
+    /// # Errors
+    /// [`Failure::UnexpectedKeyResponse`] (nothing changes) if no request of that kind is outstanding; otherwise as
+    /// [`Initiator::handle`].
+    pub fn on_key_response<P: Provider>(&mut self, env: &mut Env<'_, P>, resp: KeyResponse<'_>) -> Result<(), Failure> {
+        if matches!(self.state, State::Failed) {
+            return Err(Failure::Closed);
+        }
+        let result = self.dispatch_key(env, resp);
+        self.settle(result)
+    }
+
+    /// Answer the outstanding key request at once from software keys. Returns whether there was one.
+    ///
+    /// # Errors
+    /// As [`Initiator::on_key_response`].
+    pub fn answer_soft<P: Provider>(&mut self, env: &mut Env<'_, P>, keys: &SoftKeys<'_, P>) -> Result<bool, Failure> {
+        let mut sig = [0u8; MAX_SIGNATURE_LEN];
+        let Some(resp) = self.out.answer_soft(env, keys, &mut sig) else {
+            return Ok(false);
+        };
+        let result = self.on_key_response(env, resp);
+        sig.zeroize();
+        result.map(|()| true)
+    }
+
+    /// The host's loss timer fired: queue the outstanding flight again. While a short Initial is outstanding, every
+    /// third retransmission carries the full prekey.
+    ///
+    /// # Errors
+    /// Never fails in practice; the error type matches the encoder's.
+    pub fn retransmit(&mut self) -> Result<(), Failure> {
+        let result = match self.state {
+            State::Reply { short: true, .. } => {
+                self.retransmits = self.retransmits.saturating_add(1);
+                self.write_initial(self.retransmits.is_multiple_of(3))
+            }
+            State::Reply { short: false, .. } | State::Resume { .. } | State::Done => {
+                self.out.resend();
+                Ok(())
+            }
+            State::Decap { .. } | State::Sign { .. } | State::Failed => Ok(()),
+        };
+        self.settle(result)
+    }
+
+    fn settle(&mut self, result: Result<(), Failure>) -> Result<(), Failure> {
+        if let Err(f) = result
+            && f.is_fatal()
+        {
+            self.state = State::Failed;
+            self.out.fail(f);
+        }
+        result
+    }
+
+    fn dispatch<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
+        match MessageType::of(input).map_err(Failure::Malformed)? {
+            MessageType::Reply => self.on_reply(env, input),
+            MessageType::PrekeyReject => self.on_prekey_reject(input),
+            MessageType::ResumeReply => self.on_resume_reply(env, input),
+            MessageType::ResumeReject => self.on_resume_reject(env, input),
+            _ => Err(Failure::UnexpectedMessage),
+        }
+    }
+
+    fn dispatch_key<P: Provider>(&mut self, env: &mut Env<'_, P>, resp: KeyResponse<'_>) -> Result<(), Failure> {
+        let fits = matches!(
+            (self.out.pending(), &resp),
+            (Some(Pending::Decap { .. }), KeyResponse::SharedSecret(_))
+                | (Some(Pending::Sign { .. }), KeyResponse::Signature(_))
+                | (Some(_), KeyResponse::Failed)
+        );
+        if !fits {
+            return Err(Failure::UnexpectedKeyResponse);
+        }
+        self.out.take_request();
+        match resp {
+            KeyResponse::SharedSecret(ss_k) => self.on_decapsulated(env, &ss_k),
+            KeyResponse::Signature(sig) => self.on_signed(env, sig),
+            KeyResponse::Failed => Err(Failure::KeyOperation),
+        }
+    }
+
+    /// Fresh connection id and ephemeral key.
+    fn fresh_ephemeral<P: Provider>(&mut self, env: &mut Env<'_, P>) -> Result<(), Failure> {
+        self.dcid = ConnId::new(&env.random::<16>()?).ok_or(Failure::InvalidParameter)?;
+        let mut seed = env.random::<32>()?;
+        let p = env.provider;
+        self.e = p.x25519_public(&p.x25519_secret(&seed));
+        self.seed = Secret::new(seed);
+        seed.zeroize();
+        Ok(())
+    }
+
+    fn token(&self) -> &[u8] {
+        self.token.get(..self.token_len).unwrap_or_default()
+    }
+
+    /// Start (or restart) a full handshake with the short or the full Initial.
+    fn begin_full<P: Provider>(&mut self, env: &mut Env<'_, P>, short: bool) -> Result<(), Failure> {
+        self.fresh_ephemeral(env)?;
+        self.th = initial_transcript(&InitialFields {
+            version: VERSION,
+            dcid: &self.dcid,
+            scid: &self.scid,
+            alpn: self.alpn.as_bytes(),
+            offer: self.offer,
+            e: &self.e,
+            prekey_hash: &self.prekey.hash,
+            token: self.token(),
+        });
+        self.retransmits = 0;
+        self.write_initial(!short)?;
+        self.state = State::Reply {
+            short,
+            echo: echo(&self.th.snapshot()),
+        };
+        Ok(())
+    }
+
+    fn write_initial(&mut self, full: bool) -> Result<(), Failure> {
+        let (prekey, form) = if full {
+            (PrekeyField::Full(&self.prekey.encaps_key), InitialForm::Full)
+        } else {
+            (PrekeyField::Hash(&self.prekey.hash), InitialForm::Short)
+        };
+        let initial = Initial {
+            version: VERSION,
+            dcid: self.dcid,
+            scid: self.scid,
+            alpn: self.alpn.as_bytes(),
+            aead_offer: self.offer,
+            e: self.e,
+            prekey,
+            token: self.token.get(..self.token_len).unwrap_or_default(),
+        };
+        self.out
+            .build(min_initial_len(form, self.peer.alg), |w| initial.write(w))
+    }
+
+    /// Start a resumption with `ticket`: queue the Hello and the 0-RTT keys.
+    fn begin_resume<P: Provider>(&mut self, env: &mut Env<'_, P>, ticket: &Ticket) -> Result<(), Failure> {
+        self.fresh_ephemeral(env)?;
+        let th = hello_transcript(&HelloFields {
+            version: VERSION,
+            alpn: self.alpn.as_bytes(),
+            dcid: &self.dcid,
+            scid: &self.scid,
+            aead: ticket.aead,
+            tid: &ticket.tid,
+            e: &self.e,
+        });
+        let th_hello = th.snapshot();
+        let binder = binder(&ticket.psk, &th_hello);
+        let hello = ResumeHello {
+            version: VERSION,
+            dcid: self.dcid,
+            scid: self.scid,
+            alpn: self.alpn.as_bytes(),
+            aead: ticket.aead,
+            tid: ticket.tid,
+            e: self.e,
+            binder,
+        };
+        self.out.build(0, |w| hello.write(w))?;
+        let ck_psk = psk_chain(&ticket.psk);
+        self.out.early = Some(EarlyKeys {
+            aead: ticket.aead,
+            secret: early_secret(&ck_psk, &th_hello),
+        });
+        self.th = th;
+        self.state = State::Resume {
+            ck_psk,
+            aead: ticket.aead,
+            binder,
+            echo: echo(&th_hello),
+        };
+        Ok(())
+    }
+
+    fn on_prekey_reject(&mut self, input: &[u8]) -> Result<(), Failure> {
+        let State::Reply { short: true, echo } = self.state else {
+            return Err(Failure::UnexpectedMessage);
+        };
+        let reject = Reject::parse(input, MessageType::PrekeyReject).map_err(Failure::Malformed)?;
+        if !ct_eq(&reject.echo, &echo) {
+            return Err(Failure::UnexpectedMessage);
+        }
+        self.write_initial(true)?;
+        self.state = State::Reply { short: false, echo };
+        Ok(())
+    }
+
+    fn on_resume_reject<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
+        let State::Resume { echo, .. } = self.state else {
+            return Err(Failure::UnexpectedMessage);
+        };
+        let reject = Reject::parse(input, MessageType::ResumeReject).map_err(Failure::Malformed)?;
+        if !ct_eq(&reject.echo, &echo) {
+            return Err(Failure::UnexpectedMessage);
+        }
+        self.out.early = None;
+        self.begin_full(env, false)?;
+        self.out.set_resume_rejected();
+        Ok(())
+    }
+
+    fn on_reply<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
+        if !matches!(self.state, State::Reply { .. }) {
+            return Err(Failure::UnexpectedMessage);
+        }
+        let reply = Reply::parse(input).map_err(Failure::Malformed)?;
+        if !self.offer.contains(reply.aead) {
+            return Err(Failure::NoCommonAead);
+        }
+        let p = env.provider;
+        let ss_x = p
+            .x25519_dh(&p.x25519_secret(self.seed.expose()), &reply.e)
+            .map_err(|_| Failure::InvalidPeerKey)?;
+        self.inbuf
+            .get_mut(..input.len())
+            .ok_or(Failure::InvalidParameter)?
+            .copy_from_slice(input);
+        self.inlen = input.len();
+        absorb_reply(&mut self.th, &reply.scid, reply.aead, &reply.e, reply.ct);
+        self.out.set_request(Pending::Decap {
+            key: self.prekey.handle,
+            ct: *reply.ct,
+        });
+        self.state = State::Decap {
+            aead: reply.aead,
+            th1: self.th.snapshot(),
+            ss_x,
+        };
+        Ok(())
+    }
+
+    fn on_decapsulated<P: Provider>(&mut self, env: &mut Env<'_, P>, ss_k: &Secret<32>) -> Result<(), Failure> {
+        let State::Decap { aead, th1, ss_x } = mem::replace(&mut self.state, State::Failed) else {
+            return Err(Failure::UnexpectedKeyResponse);
+        };
+        let hs = handshake_keys(ss_k, &ss_x, &th1);
+        let reply = Reply::parse(self.inbuf.get(..self.inlen).unwrap_or_default()).map_err(Failure::BadPayload)?;
+        let opened = open_handshake(env.provider, aead, &hs.responder, &th1, reply.sealed)?;
+        let ids = IdSig::parse(opened.as_slice()).map_err(Failure::BadPayload)?;
+        let responder = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
+        if responder != self.peer {
+            return Err(Failure::WrongPeer);
+        }
+        absorb_identity(&mut self.th, ids.alg, ids.public_key);
+        let th2 = self.th.snapshot();
+        verify(
+            ids.alg,
+            ids.public_key,
+            &signature_message(labels::SIGNATURE_RESPONDER, &th2),
+            ids.signature,
+        )
+        .map_err(|_| Failure::BadSignature)?;
+        self.th.absorb(ids.signature);
+        let th3 = self.th.snapshot();
+        absorb_identity(&mut self.th, self.identity.alg(), self.identity.public_key());
+        self.out.set_request(Pending::Sign {
+            key: self.identity.key(),
+            alg: self.identity.alg(),
+            msg: signature_message(labels::SIGNATURE_INITIATOR, &self.th.snapshot()),
+        });
+        self.state = State::Sign {
+            aead,
+            hs: hs.initiator,
+            ck1: hs.ck1,
+            th3,
+        };
+        Ok(())
+    }
+
+    fn on_signed<P: Provider>(&mut self, env: &mut Env<'_, P>, signature: &[u8]) -> Result<(), Failure> {
+        let State::Sign { aead, hs, ck1, th3 } = mem::replace(&mut self.state, State::Failed) else {
+            return Err(Failure::UnexpectedKeyResponse);
+        };
+        if signature.len() != self.identity.alg().signature_len() {
+            return Err(Failure::KeyOperation);
+        }
+        let sealed = seal_id_sig(
+            env.provider,
+            aead,
+            &hs,
+            &th3,
+            (self.identity.alg(), self.identity.public_key()),
+            signature,
+        )?;
+        self.th.absorb(signature);
+        let secrets = application_secrets(&ck1, &self.th.snapshot());
+        self.out.build(0, |w| {
+            Finish {
+                sealed: sealed.as_slice(),
+            }
+            .write(w)
+        })?;
+        self.out.established = Some(Established {
+            peer: self.peer,
+            alpn: self.alpn,
+            traffic: Traffic {
+                aead,
+                send: secrets.initiator,
+                recv: secrets.responder,
+            },
+            resume: secrets.resume,
+            tickets: TicketBatch::new(),
+            resumed: false,
+        });
+        self.state = State::Done;
+        Ok(())
+    }
+
+    fn on_resume_reply<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
+        if !matches!(self.state, State::Resume { .. }) {
+            return Err(Failure::UnexpectedMessage);
+        }
+        let reply = ResumeReply::parse(input).map_err(Failure::Malformed)?;
+        let State::Resume {
+            ck_psk, aead, binder, ..
+        } = mem::replace(&mut self.state, State::Failed)
+        else {
+            return Err(Failure::UnexpectedMessage);
+        };
+        let p = env.provider;
+        let ss_x = p
+            .x25519_dh(&p.x25519_secret(self.seed.expose()), &reply.e)
+            .map_err(|_| Failure::InvalidPeerKey)?;
+        absorb_resume_reply(&mut self.th, &binder, &reply.scid, &reply.e);
+        let ck1 = chain(&ck_psk, ss_x.expose());
+        let secrets = application_secrets(&ck1, &self.th.snapshot());
+        let mut tickets = [0u8; 81];
+        let n = reply.tickets.encode(&mut tickets).map_err(Failure::BadPayload)?;
+        let expected = confirmation(&secrets.confirm, &mut self.th, tickets.get(..n).unwrap_or_default());
+        if !ct_eq(&expected, &reply.confirm) {
+            return Err(Failure::Authentication);
+        }
+        self.out.established = Some(Established {
+            peer: self.peer,
+            alpn: self.alpn,
+            traffic: Traffic {
+                aead,
+                send: secrets.initiator,
+                recv: secrets.responder,
+            },
+            resume: secrets.resume,
+            tickets: reply.tickets,
+            resumed: true,
+        });
+        // The Hello was answered: a later loss timer has nothing to send again.
+        self.out.clear_message();
+        self.state = State::Done;
+        Ok(())
+    }
+}

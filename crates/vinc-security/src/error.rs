@@ -1,0 +1,88 @@
+//! The typed reasons a handshake step or a record operation is refused.
+//!
+//! Invariants: every type is `Copy`, holds no key material and names a cause, never a secret value. A [`Failure`] is
+//! either fatal (the state machine stops, and the same reason is queued as an event) or a dropped input (the state
+//! machine is unchanged); [`Failure::is_fatal`] tells which.
+
+use core::fmt;
+
+use vinc_crypto::CryptoError;
+use vinc_wire::WireError;
+
+/// Why a handshake step was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// The received message is malformed; it is dropped and the state is unchanged.
+    Malformed(WireError),
+    /// The authenticated content of a message is malformed.
+    BadPayload(WireError),
+    /// A message that does not belong to the current state; it is dropped and the state is unchanged.
+    UnexpectedMessage,
+    /// A key response that matches no outstanding request; it is dropped and the state is unchanged.
+    UnexpectedKeyResponse,
+    /// The peer speaks another protocol version.
+    UnsupportedVersion,
+    /// The requested ALPN is not served.
+    UnknownAlpn,
+    /// The peer's AEAD offer or choice shares nothing with ours.
+    NoCommonAead,
+    /// A parameter given to the state machine is out of range.
+    InvalidParameter,
+    /// The peer's key share or encapsulation key is invalid.
+    InvalidPeerKey,
+    /// A tag, binder or confirmation did not authenticate: the transcript, a key or a message differs.
+    Authentication,
+    /// The peer's signature does not verify.
+    BadSignature,
+    /// The responder is not the node that was dialed.
+    WrongPeer,
+    /// The host failed or refused a key operation.
+    KeyOperation,
+    /// The caller's random generator failed.
+    Randomness,
+    /// The state machine already failed.
+    Closed,
+    /// A primitive refused its input.
+    Crypto(CryptoError),
+}
+
+impl Failure {
+    /// Whether this reason stops the state machine. The others drop the input and leave the state unchanged.
+    pub const fn is_fatal(self) -> bool {
+        !matches!(
+            self,
+            Self::Malformed(_) | Self::UnexpectedMessage | Self::UnexpectedKeyResponse | Self::Closed
+        )
+    }
+}
+
+impl From<CryptoError> for Failure {
+    fn from(e: CryptoError) -> Self {
+        Self::Crypto(e)
+    }
+}
+
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed(e) => write!(f, "malformed message: {e}"),
+            Self::BadPayload(e) => write!(f, "malformed authenticated content: {e}"),
+            Self::UnexpectedMessage => f.write_str("message does not fit the current state"),
+            Self::UnexpectedKeyResponse => f.write_str("key response without an outstanding request"),
+            Self::UnsupportedVersion => f.write_str("unsupported protocol version"),
+            Self::UnknownAlpn => f.write_str("application protocol not served"),
+            Self::NoCommonAead => f.write_str("no common AEAD"),
+            Self::InvalidParameter => f.write_str("parameter out of range"),
+            Self::InvalidPeerKey => f.write_str("invalid peer key"),
+            Self::Authentication => f.write_str("authentication failed"),
+            Self::BadSignature => f.write_str("signature does not verify"),
+            Self::WrongPeer => f.write_str("peer is not the node that was dialed"),
+            Self::KeyOperation => f.write_str("key operation failed"),
+            Self::Randomness => f.write_str("random generator failed"),
+            Self::Closed => f.write_str("handshake already failed"),
+            Self::Crypto(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl core::error::Error for Failure {}

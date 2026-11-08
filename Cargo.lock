@@ -1368,6 +1368,7 @@ dependencies = [
  "criterion",
  "vinc-crypto",
  "vinc-dag",
+ "vinc-security",
  "vinc-wire",
 ]
 
@@ -1413,6 +1414,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-security"
+version = "0.1.0"
+dependencies = [
+ "vinc-crypto",
+ "vinc-wire",
+ "zeroize",
+]
+
+[[package]]
 name = "vinc-tests"
 version = "0.1.0"
 dependencies = [
@@ -1423,6 +1433,7 @@ dependencies = [
  "vinc-crypto",
  "vinc-dag",
  "vinc-keystore",
+ "vinc-security",
  "vinc-wire",
 ]
 
