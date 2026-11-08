@@ -33,3 +33,107 @@ impl SplitMix64 {
         }
     }
 }
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
+thread_local! {
+    // Const-initialised and drop-free, so touching them from inside the allocator never allocates.
+    static ALLOCS: Cell<u64> = const { Cell::new(0) };
+    static REALLOCS: Cell<u64> = const { Cell::new(0) };
+    static BYTES: Cell<u64> = const { Cell::new(0) };
+}
+
+fn bump(counter: &'static std::thread::LocalKey<Cell<u64>>, by: u64) {
+    counter.with(|c| c.set(c.get() + by));
+}
+
+/// A global allocator that delegates to the system allocator and counts, per thread, the allocations,
+/// reallocations and bytes requested. Install it with [`install_counting_allocator!`].
+#[derive(Debug)]
+pub struct CountingAlloc;
+
+// SAFETY: every method forwards its arguments unchanged to `System`, which upholds the `GlobalAlloc` contract; the
+// counters are thread-local `Cell`s that never allocate.
+#[allow(unsafe_code)]
+unsafe impl GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        bump(&ALLOCS, 1);
+        bump(&BYTES, layout.size() as u64);
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        bump(&ALLOCS, 1);
+        bump(&BYTES, layout.size() as u64);
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        bump(&REALLOCS, 1);
+        bump(&BYTES, new_size as u64);
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+/// Install [`CountingAlloc`] as the global allocator of a test target; [`measure`] needs it.
+#[macro_export]
+macro_rules! install_counting_allocator {
+    () => {
+        #[global_allocator]
+        static COUNTING_ALLOCATOR: $crate::CountingAlloc = $crate::CountingAlloc;
+    };
+}
+
+/// What the allocator counted on the current thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AllocStats {
+    /// Calls to `alloc` and `alloc_zeroed`.
+    pub allocs: u64,
+    /// Calls to `realloc`.
+    pub reallocs: u64,
+    /// Bytes requested by all of them.
+    pub bytes: u64,
+}
+
+impl AllocStats {
+    /// Allocations plus reallocations: zero means the code never touched the heap.
+    pub fn count(&self) -> u64 {
+        self.allocs + self.reallocs
+    }
+
+    fn now() -> Self {
+        Self {
+            allocs: ALLOCS.with(Cell::get),
+            reallocs: REALLOCS.with(Cell::get),
+            bytes: BYTES.with(Cell::get),
+        }
+    }
+}
+
+/// Run `f` and return what this thread allocated meanwhile.
+///
+/// # Panics
+///
+/// Panics if the test target did not install the counting allocator, since every count would read zero.
+#[allow(clippy::panic)]
+pub fn measure(f: impl FnOnce()) -> AllocStats {
+    let probe = AllocStats::now();
+    drop(std::hint::black_box(Box::new(0u8)));
+    assert!(
+        AllocStats::now() != probe,
+        "the counting allocator is not installed: add `vinc_tests::install_counting_allocator!();` to the test target"
+    );
+    let before = AllocStats::now();
+    f();
+    let after = AllocStats::now();
+    AllocStats {
+        allocs: after.allocs - before.allocs,
+        reallocs: after.reallocs - before.reallocs,
+        bytes: after.bytes - before.bytes,
+    }
+}

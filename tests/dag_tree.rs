@@ -16,6 +16,8 @@ use vinc_dag::tree::{
 };
 use vinc_tests::SplitMix64;
 
+vinc_tests::install_counting_allocator!();
+
 fn data(seed: u64, len: usize) -> Vec<u8> {
     let mut v = vec![0; len];
     SplitMix64::new(seed).fill(&mut v);
@@ -447,7 +449,7 @@ fn verifier_and_ranges_do_not_allocate() {
     let s = stream(&v, &ob, 4, &range);
     let len = v.len() as u64;
 
-    let info = allocation_counter::measure(|| {
+    let info = vinc_tests::measure(|| {
         let mut ver = RangeVerifier::<16384>::new(root, len, &range).unwrap();
         let mut rest = &s[..];
         let mut total = 0;
@@ -458,9 +460,9 @@ fn verifier_and_ranges_do_not_allocate() {
         }
         assert!(ver.is_complete() && total > 0);
     });
-    assert_eq!(info.count_total, 0);
+    assert_eq!(info.count(), 0);
 
-    let info = allocation_counter::measure(|| {
+    let info = vinc_tests::measure(|| {
         let mut set = VerifiedRanges::<4>::new();
         for i in 0..50u64 {
             let _ = set.insert(i * 10..i * 10 + 5);
@@ -474,5 +476,5 @@ fn verifier_and_ranges_do_not_allocate() {
             );
         }
     });
-    assert_eq!(info.count_total, 0);
+    assert_eq!(info.count(), 0);
 }

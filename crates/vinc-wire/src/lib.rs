@@ -3,6 +3,7 @@
 //! Everything here reads from a borrowed `&[u8]` and writes into a caller-provided `&mut [u8]`: no codec path
 //! allocates, panics, or reads a byte twice. Malformed input is always reported as a [`WireError`].
 #![no_std]
+#![forbid(unsafe_code)]
 
 pub mod cbor;
 pub mod error;

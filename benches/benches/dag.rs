@@ -125,19 +125,38 @@ fn bench_ranges(c: &mut Criterion) {
     let ranges = random_ranges(4, 10_000);
     let mut g = c.benchmark_group("ranges");
     g.throughput(Throughput::Elements(ranges.len() as u64));
-    g.bench_function("verified_ranges_64_insert_10k", |b| {
+    // Both fixed-set variants use disjoint, non-adjacent ranges so that nothing merges.
+    let fits: Vec<Range<u64>> = (0..64u64).map(|i| i * 100..i * 100 + 10).collect();
+    g.throughput(Throughput::Elements(fits.len() as u64));
+    g.bench_function("verified_ranges_64_insert_in_capacity", |b| {
         b.iter_batched(
             VerifiedRanges::<64>::new,
             |mut set| {
-                // A full fixed set rejects further disjoint inserts; the failed attempts are part of the cost.
-                for r in &ranges {
-                    black_box(set.insert(r.clone())).ok();
+                for r in &fits {
+                    black_box(set.insert(r.clone())).unwrap();
                 }
                 set
             },
             BatchSize::SmallInput,
         );
     });
+    // A full set rejects a disjoint insert without changing, so one set serves every iteration.
+    let mut full = VerifiedRanges::<64>::new();
+    for r in &fits {
+        full.insert(r.clone()).unwrap();
+    }
+    let rejected: Vec<Range<u64>> = (0..1000u64)
+        .map(|i| (1 << 40) + i * 100..(1 << 40) + i * 100 + 10)
+        .collect();
+    g.throughput(Throughput::Elements(rejected.len() as u64));
+    g.bench_function("verified_ranges_64_insert_rejected_when_full", |b| {
+        b.iter(|| {
+            for r in &rejected {
+                black_box(full.insert(r.clone())).unwrap_err();
+            }
+        });
+    });
+    g.throughput(Throughput::Elements(ranges.len() as u64));
     g.bench_function("verified_ranges_vec_insert_10k", |b| {
         b.iter_batched(
             VerifiedRangesVec::new,

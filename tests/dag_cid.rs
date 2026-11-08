@@ -16,6 +16,8 @@ use vinc_dag::cid::{BLAKE3, Cid, CidError, CidRef, DAG_CBOR, MAX_TEXT_LEN, RAW, 
 
 mod golden;
 
+vinc_tests::install_counting_allocator!();
+
 fn arb_cid() -> impl Strategy<Value = Cid> {
     let known = (
         prop::sample::select(vec![DAG_CBOR, RAW, 0x70, 0x129]),
@@ -218,7 +220,7 @@ fn cid_parse_and_text_do_not_allocate() {
     let other = Cid::for_block(DAG_CBOR, BLAKE3, b"alloc").unwrap();
     let bytes = cid.as_bytes().to_vec();
     let text = cid.to_string();
-    let info = allocation_counter::measure(|| {
+    let info = vinc_tests::measure(|| {
         let r = CidRef::parse(&bytes).unwrap();
         let c = Cid::from_bytes(&bytes).unwrap();
         let mut buf = [0u8; MAX_TEXT_LEN];
@@ -228,5 +230,5 @@ fn cid_parse_and_text_do_not_allocate() {
         let made = Cid::for_block(DAG_CBOR, SHA2_256, b"zero").unwrap();
         std::hint::black_box((t, back, ord, made, r.verify(b"zero").is_ok()));
     });
-    assert_eq!(info.count_total, 0);
+    assert_eq!(info.count(), 0);
 }

@@ -17,6 +17,8 @@ use vinc_wire::cbor::Decoder;
 
 mod golden;
 
+vinc_tests::install_counting_allocator!();
+
 /// Re-encode a parsed block from its parts.
 fn reencode(block: &BlockRef<'_>) -> Vec<u8> {
     let mut heads: Vec<Cid> = block.heads().map(|c| c.into_owned()).collect();
@@ -430,7 +432,7 @@ fn parse_and_encode_do_not_allocate() {
     }];
     let bytes = encode(&mut heads.clone(), &mut links.clone(), Some(cid_of(4)), Some(cid_of(5)));
     let mut out = [0u8; 512];
-    let info = allocation_counter::measure(|| {
+    let info = vinc_tests::measure(|| {
         let block = BlockRef::parse(&bytes).unwrap();
         let n = block.references().count() + block.heads().count() + block.links().count();
         let mut parts = BlockParts {
@@ -443,11 +445,11 @@ fn parse_and_encode_do_not_allocate() {
         let written = encode_block(&mut out, &mut parts).unwrap();
         std::hint::black_box((n, written));
     });
-    assert_eq!(info.count_total, 0);
+    assert_eq!(info.count(), 0);
     for (_, bytes, _) in golden::BLOCKS {
-        let info = allocation_counter::measure(|| {
+        let info = vinc_tests::measure(|| {
             std::hint::black_box(BlockRef::parse(bytes).unwrap().references().count());
         });
-        assert_eq!(info.count_total, 0);
+        assert_eq!(info.count(), 0);
     }
 }

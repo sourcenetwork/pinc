@@ -16,6 +16,8 @@ use vinc_wire::WireError;
 
 mod golden;
 
+vinc_tests::install_counting_allocator!();
+
 const MAX: usize = 1 << 16;
 
 fn golden_cids() -> Vec<Cid> {
@@ -306,7 +308,7 @@ proptest! {
 fn reading_and_writing_do_not_allocate() {
     let (car, cids) = golden_car();
     let mut out = vec![0u8; car.len()];
-    let info = allocation_counter::measure(|| {
+    let info = vinc_tests::measure(|| {
         let r = CarReader::new(&car, MAX).unwrap().with_verify(true);
         let n = r.roots().count() + r.sections().flatten().count();
         let mut dec = CarDecoder::new(MAX);
@@ -317,6 +319,6 @@ fn reading_and_writing_do_not_allocate() {
         }
         std::hint::black_box((n, matches!(step, Decoded::Header { .. }), w.written().len()));
     });
-    assert_eq!(info.count_total, 0);
+    assert_eq!(info.count(), 0);
     assert_eq!(out, car);
 }

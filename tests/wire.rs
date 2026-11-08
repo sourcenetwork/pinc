@@ -4,6 +4,8 @@
 
 use proptest::prelude::*;
 use vinc_tests::SplitMix64;
+
+vinc_tests::install_counting_allocator!();
 use vinc_wire::cbor::{Decoder, Encoder, Item, MAX_DEPTH, MapReader};
 use vinc_wire::{Reader, WireError, Writer, varint};
 
@@ -645,7 +647,7 @@ fn decoding_a_nested_document_allocates_nothing() {
     ]);
     let bytes = encode_to_vec(&doc);
 
-    let info = allocation_counter::measure(|| {
+    let info = vinc_tests::measure(|| {
         let mut d = Decoder::new(&bytes);
         let mut items = 0usize;
         while !d.is_empty() {
@@ -661,5 +663,5 @@ fn decoding_a_nested_document_allocates_nothing() {
             d.skip_value().unwrap();
         }
     });
-    assert_eq!(info.count_total, 0, "decoding must not touch the heap");
+    assert_eq!(info.count(), 0, "decoding must not touch the heap");
 }

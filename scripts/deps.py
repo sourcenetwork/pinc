@@ -5,7 +5,8 @@
    manifest may only say `{ workspace = true }` (plus features or `optional`).
 2. Every member has the one workspace version (`version.workspace = true`), and every VINC crate entry in
    `[workspace.dependencies]` pins that same version.
-3. No library crate under `crates/` depends, directly or transitively, on an async runtime.
+3. Every library crate under `crates/` forbids unsafe code in its root (`#![forbid(unsafe_code)]`); the workspace lint is only `deny` so the test allocator can allow it.
+4. No library crate under `crates/` depends, directly or transitively, on an async runtime.
 """
 import json
 import subprocess
@@ -43,6 +44,12 @@ for pkg in meta["packages"]:
 for name, spec in root.get("dependencies", {}).items():
     if name in member_names and (not isinstance(spec, dict) or spec.get("version") != version):
         failed.append(f"workspace dependency `{name}` must pin the workspace version {version}")
+
+for pkg in meta["packages"]:
+    if pkg["id"] in members and "/crates/" in pkg["manifest_path"]:
+        lib = pkg["manifest_path"].removesuffix("Cargo.toml") + "src/lib.rs"
+        if "#![forbid(unsafe_code)]" not in open(lib).read():
+            failed.append(f"{pkg['name']}: {lib} must contain `#![forbid(unsafe_code)]`")
 
 nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
 names = {p["id"]: p["name"] for p in meta["packages"]}
