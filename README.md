@@ -1,4 +1,9 @@
-# VINC
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="art/vinc-logo-white.svg">
+    <img height="120" alt="VINC" src="art/vinc-logo.svg">
+  </picture>
+</p>
 
 VINC is a peer-to-peer networking stack for Rust, written SANS-IO. It has its own encrypted, reliable transport
 (VINCER) with a hybrid post-quantum handshake (X25519 plus ML-KEM-768). On top of that core it builds membership,
