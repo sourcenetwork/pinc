@@ -13,14 +13,20 @@ path = "support/lib.rs"
 
 [dependencies]
 vinc-wire = { path = "../crates/vinc-wire" }
+vinc-dag = { path = "../crates/vinc-dag", features = ["alloc"] }
 
 [dev-dependencies]
 proptest = "1"
+blake3 = "1.8.7"
 allocation-counter = "0.8"
 
 [[test]]
 name = "wire"
 path = "wire.rs"
+
+[[test]]
+name = "dag_tree"
+path = "dag_tree.rs"
 
 [lints]
 workspace = true
