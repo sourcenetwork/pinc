@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="art/vinc-logo-white.svg">
-    <img height="120" alt="VINC" src="art/vinc-logo.svg">
-  </picture>
+  <img src="art/vinc-banner.png" alt="VINC: next-gen peer-to-peer networking stack" width="100%">
 </p>
 
 VINC is a peer-to-peer networking stack for Rust, written SANS-IO. It has its own encrypted, reliable transport
