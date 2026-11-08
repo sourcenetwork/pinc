@@ -46,5 +46,9 @@ harness = false
 name = "transport_recovery"
 harness = false
 
+[[bench]]
+name = "transport_conn"
+harness = false
+
 [lints]
 workspace = true

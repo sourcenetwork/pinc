@@ -29,6 +29,7 @@
 //! | `0x3a` | `MTU_PROBE_ECHO` | mtu (2 bytes, big-endian) |
 //! | `0x3b`, `0x3c` | SLEEP, WAKE | none |
 //! | `0x3e` | READY | none |
+//! | `0x3f` | `NEW_TICKETS` | a ticket batch: count (1 byte, 0 to 4), then per ticket the id (16 bytes) and the lifetime in seconds (4 bytes) |
 //! | `0x40` and up | extension | length (varint), body bytes |
 //!
 //! STREAM type bits: `0x04` OFF (an offset follows the stream id; absent means 0), `0x02` LEN (a length follows;
@@ -64,6 +65,8 @@ use vinc_wire::WireError;
 pub use ack::{Ack, AckRanges, MAX_ACK_RANGES, ack_len, write_ack};
 pub use decode::FrameIter;
 pub use encode::{datagram_overhead, stream_overhead};
+
+use vinc_security::TicketBatch;
 
 use crate::packet::{ConnId, RESET_TOKEN_LEN};
 
@@ -138,6 +141,8 @@ pub mod ty {
     pub const WAKE: u64 = 0x3c;
     /// READY.
     pub const READY: u64 = 0x3e;
+    /// `NEW_TICKETS`.
+    pub const NEW_TICKETS: u64 = 0x3f;
 }
 
 /// Why a frame was refused to decode or encode.
@@ -319,6 +324,8 @@ pub enum Frame<'a> {
     Wake,
     /// READY.
     Ready,
+    /// `NEW_TICKETS`: the resumption tickets the server issued, sent inside the protected channel.
+    NewTickets(TicketBatch),
     /// An extension frame of type `0x40` or more, passed through unparsed.
     Extension {
         /// The type.

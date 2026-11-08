@@ -7,6 +7,9 @@ use super::{EXTENSION_BASE, Frame, FrameError, MAX_STREAM_END, ty};
 /// The most a varint can hold: values from 2^63 are refused.
 const VARINT_LIMIT: u64 = 1 << 63;
 
+/// The bytes of one ticket on the wire: its id and its lifetime.
+const TICKET_LEN: usize = 16 + 4;
+
 fn vlen(v: u64) -> usize {
     varint::encoded_len(v)
 }
@@ -87,6 +90,7 @@ impl Frame<'_> {
             Self::ApplicationClose { error, reason } => 1 + vlen(error) + prefixed_len(reason),
             Self::Datagram { data, implicit_len } => datagram_overhead(data.len(), implicit_len) + data.len(),
             Self::MtuProbeEcho { .. } => 1 + 2,
+            Self::NewTickets(ref batch) => 1 + 1 + batch.entries().len() * TICKET_LEN,
             Self::Extension { ty, body } => vlen(ty) + prefixed_len(body),
         }
     }
@@ -200,6 +204,10 @@ impl Frame<'_> {
             Self::MtuProbeEcho { mtu } => {
                 w.put_varint(ty::MTU_PROBE_ECHO)?;
                 w.put_u16(mtu)?;
+            }
+            Self::NewTickets(ref batch) => {
+                w.put_varint(ty::NEW_TICKETS)?;
+                batch.write(w)?;
             }
             Self::Extension { ty, body } => {
                 w.put_varint(ty)?;

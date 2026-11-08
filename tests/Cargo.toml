@@ -107,12 +107,12 @@ name = "transport_frame"
 path = "transport_frame.rs"
 
 [[test]]
-name = "transport_stream"
-path = "transport_stream.rs"
-
-[[test]]
 name = "transport_pool"
 path = "transport_pool.rs"
+
+[[test]]
+name = "transport_stream"
+path = "transport_stream.rs"
 
 [[test]]
 name = "transport_recovery"
@@ -121,6 +121,18 @@ path = "transport_recovery.rs"
 [[test]]
 name = "transport_cc"
 path = "transport_cc.rs"
+
+[[test]]
+name = "transport_conn"
+path = "transport_conn.rs"
+
+[[test]]
+name = "transport_net"
+path = "transport_net.rs"
+
+[[test]]
+name = "transport_life"
+path = "transport_life.rs"
 
 [lints]
 workspace = true

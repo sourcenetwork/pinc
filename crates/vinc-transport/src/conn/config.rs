@@ -1,0 +1,184 @@
+//! Configuration, path identity and the counters a connection exposes.
+
+use vinc_security::LocalIdentity;
+use vinc_security::{AlpnList, PrekeyInfo, Ticket};
+
+use crate::recovery::{MS, PathKind, SECOND};
+use crate::stream::{self, PeerLimits};
+
+/// The smallest datagram every path must carry, and the size a path starts at.
+pub const MIN_MTU: u16 = 1200;
+/// The first size probed after the handshake.
+pub const PROBE_MTU: u16 = 1452;
+/// The largest size probed on a low-latency path.
+pub const JUMBO_MTU: u16 = 8952;
+/// A path whose minimum round trip is under this (2 ms) also probes the jumbo size.
+pub(super) const JUMBO_RTT: u64 = 2 * MS;
+/// The default idle timeout (75 s).
+pub const DEFAULT_IDLE: u64 = 75 * SECOND;
+/// How long a connection stays in the closing and draining states, in probe timeouts.
+pub(super) const DRAIN_PTOS: u64 = 3;
+
+/// An opaque name for a network path, chosen by the endpoint (a UDP address, or a relay carrier).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PathId(pub u64);
+
+/// What the endpoint knows about a path and the connection cannot learn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathInfo {
+    /// A direct path, or one through a relay (a relay carries a one second penalty when choosing the active path).
+    pub kind: PathKind,
+    /// Whether the path is IPv6 (it gets a 3 ms bonus when choosing the active path).
+    pub v6: bool,
+    /// The largest datagram the local interface sends on this path; bounds the jumbo probe.
+    pub interface_mtu: u16,
+}
+
+impl Default for PathInfo {
+    fn default() -> Self {
+        Self {
+            kind: PathKind::Direct,
+            v6: false,
+            interface_mtu: 1500,
+        }
+    }
+}
+
+/// How a connection behaves. [`Config::new`] holds the defaults.
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    /// The length of the connection ids this endpoint issues, 1 to 20 (4 by default).
+    pub cid_len: usize,
+    /// Silence after which the connection closes without a CLOSE packet, in nanoseconds (75 s by default).
+    pub idle_timeout: u64,
+    /// Send a PING after this long without sending anything; `None` turns keepalives off.
+    pub keepalive: Option<u64>,
+    /// A node on a constrained link: caps the handshake back-off at 8 s and re-challenges idle direct paths.
+    pub thin: bool,
+    /// The round trip remembered from an earlier connection to the same peer; scales the handshake timer.
+    pub remembered_rtt: Option<u64>,
+    /// The most same-size datagrams one [`poll_transmit`](super::Connection::poll_transmit) call batches (1 = no GSO).
+    pub max_gso: usize,
+    /// Start a key update after the sending key sealed this many packets.
+    pub key_update_after: u64,
+    /// The secret from which stateless-reset tokens derive, so an endpoint that lost its state can still answer.
+    pub reset_key: [u8; 32],
+    /// Whether to probe larger datagram sizes after the handshake.
+    pub probe_mtu: bool,
+    /// What the peer lets us send. There is no parameter exchange, so both endpoints use the same initial limits.
+    pub peer_limits: PeerLimits,
+}
+
+impl Config {
+    /// The defaults.
+    pub const fn new() -> Self {
+        Self {
+            cid_len: 4,
+            idle_timeout: DEFAULT_IDLE,
+            keepalive: None,
+            thin: false,
+            remembered_rtt: None,
+            max_gso: 1,
+            key_update_after: 1 << 21,
+            reset_key: [0; 32],
+            probe_mtu: true,
+            peer_limits: PeerLimits {
+                max_data: stream::DEFAULT_INITIAL_WINDOW,
+                max_stream_data_bidi_local: stream::DEFAULT_INITIAL_WINDOW,
+                max_stream_data_bidi_remote: stream::DEFAULT_INITIAL_WINDOW,
+                max_stream_data_uni: stream::DEFAULT_INITIAL_WINDOW,
+                max_streams_bidi: stream::DEFAULT_MAX_STREAMS,
+                max_streams_uni: stream::DEFAULT_MAX_STREAMS,
+            },
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What a client needs to dial.
+#[derive(Debug)]
+pub struct ClientParams<'a> {
+    /// The node being dialed.
+    pub peer: vinc_crypto::NodeId,
+    /// The application protocol.
+    pub alpn: &'a [u8],
+    /// This node's identity.
+    pub identity: &'a LocalIdentity,
+    /// The prekey for this handshake.
+    pub prekey: &'a PrekeyInfo,
+    /// Whether the peer is known to cache the prekey (try the short first flight).
+    pub peer_has_prekey: bool,
+    /// An address-validation token, or empty.
+    pub token: &'a [u8],
+    /// A ticket for this peer and protocol: the connection resumes and may send 0-RTT data.
+    pub ticket: Option<Ticket>,
+    /// The path the first flight leaves on.
+    pub path: PathId,
+    /// What the endpoint knows about that path.
+    pub path_info: PathInfo,
+}
+
+/// What a server needs to answer.
+#[derive(Debug, Clone)]
+pub struct ServerParams {
+    /// This node's identity.
+    pub identity: LocalIdentity,
+    /// The application protocols served.
+    pub alpns: AlpnList,
+    /// Tickets issued per full handshake (at most 4; 0 turns resumption off).
+    pub tickets_per_session: u8,
+    /// How long an issued ticket lives, in seconds.
+    pub ticket_lifetime_s: u32,
+}
+
+/// Counters of one connection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Datagrams sent.
+    pub datagrams_sent: u64,
+    /// Datagrams received and attributed to the connection.
+    pub datagrams_received: u64,
+    /// Packets sent, long and short.
+    pub packets_sent: u64,
+    /// Packets received and authenticated.
+    pub packets_received: u64,
+    /// Bytes sent.
+    pub bytes_sent: u64,
+    /// Bytes received.
+    pub bytes_received: u64,
+    /// Packets declared lost.
+    pub packets_lost: u64,
+    /// Packets acknowledged.
+    pub packets_acked: u64,
+    /// Received packets dropped as duplicates.
+    pub duplicates: u64,
+    /// Received packets that did not authenticate.
+    pub undecryptable: u64,
+    /// Early 1-RTT packets kept until the peer was authenticated.
+    pub early_buffered: u64,
+    /// Early 1-RTT packets dropped because the buffer was full.
+    pub early_dropped: u64,
+    /// Handshake flights sent again on the timer.
+    pub handshake_retransmits: u64,
+    /// Key updates, started here or by the peer.
+    pub key_updates: u64,
+    /// Probe timeouts that fired.
+    pub ptos: u64,
+    /// Repair packets sent.
+    pub repairs: u64,
+    /// Datagrams dropped from the send queue to make room.
+    pub datagrams_dropped_send: u64,
+    /// Datagrams dropped from the receive queue to make room.
+    pub datagrams_dropped_recv: u64,
+    /// The current congestion window in bytes.
+    pub cwnd: u64,
+    /// The smoothed round trip of the active path in nanoseconds, 0 before the first sample.
+    pub srtt: u64,
+    /// The datagram size of the active path.
+    pub mtu: u16,
+}

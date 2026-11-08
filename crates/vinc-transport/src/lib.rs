@@ -8,6 +8,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod conn;
 pub mod frame;
 pub mod packet;
 pub mod recovery;

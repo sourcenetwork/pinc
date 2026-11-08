@@ -651,6 +651,42 @@ impl<const N: usize> Recovery<N> {
         self.refresh_pacer();
     }
 
+    /// Declare every packet in flight lost with no congestion response and reset the probe backoff: the peer woke
+    /// from sleep, the link came back, or early data was rejected. Each packet is reported as lost and to be requeued.
+    pub fn flush_in_flight<F: FnMut(Event<'_>)>(&mut self, now: u64, mut on_event: F) -> Summary {
+        let mut s = Summary::default();
+        let mut i = 0;
+        while let Some(slot) = self.ring.get_mut(i) {
+            i += 1;
+            if slot.state != State::InFlight {
+                continue;
+            }
+            slot.state = State::Lost(now);
+            slot.counted = false;
+            let sent = slot.sent;
+            s.lost_packets += 1;
+            if sent.in_flight {
+                let size = u64::from(sent.size);
+                self.acct.in_flight -= size;
+                self.acct.lost += u128::from(size);
+                s.lost_bytes += size;
+                if sent.ack_eliciting {
+                    self.eliciting_in_flight -= 1;
+                }
+            }
+            on_event(Event::Lost {
+                pn: sent.pn,
+                size: sent.size,
+                frames: &sent.frames,
+                requeue: !sent.is_repair && !sent.is_mtu_probe,
+                mtu_probe: sent.is_mtu_probe,
+            });
+        }
+        self.loss_time = None;
+        self.pto_count = 0;
+        s
+    }
+
     // ---- timers ----
 
     /// The probe timeout duration: srtt + max(4 x rttvar, 1 ms) + 25 ms, doubled per consecutive timeout (at most

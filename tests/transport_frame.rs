@@ -20,6 +20,7 @@
 use std::ops::RangeInclusive;
 
 use proptest::prelude::*;
+use vinc_security::{TicketBatch, TicketEntry};
 use vinc_tests::SplitMix64;
 use vinc_transport::frame::{
     ACK_DELAY_UNIT_NS, Ack, Frame, FrameError, FrameIter, MAX_ACK_RANGES, MAX_STREAM_END, ack_len, datagram_overhead,
@@ -186,6 +187,38 @@ fn frames_have_the_documented_bytes() {
 }
 
 #[test]
+fn new_tickets_carries_a_batch() {
+    let mut batch = TicketBatch::new();
+    for i in 0..3u8 {
+        assert!(batch.push(TicketEntry {
+            tid: [i; 16],
+            lifetime_s: 86_400 + u32::from(i)
+        }));
+    }
+    let f = Frame::NewTickets(batch);
+    let bytes = encode(&f);
+    assert_eq!(bytes.len(), 1 + 1 + 3 * 20);
+    assert_eq!(bytes[..2], [0x3f, 3]);
+    assert_eq!(&bytes[2..18], &[0u8; 16]);
+    assert_eq!(&bytes[18..22], &86_400u32.to_be_bytes());
+    assert_eq!(one(&bytes), f);
+    assert_eq!(encode(&Frame::NewTickets(TicketBatch::new())), vec![0x3f, 0]);
+    assert_eq!(one(&[0x3f, 0]), Frame::NewTickets(TicketBatch::new()));
+    // More than four tickets is not a batch, and a cut batch is a wire error.
+    assert!(matches!(decode_all(&[0x3f, 5])[0], Err(FrameError::Wire(_))));
+    assert!(matches!(
+        decode_all(&bytes[..bytes.len() - 1])[0],
+        Err(FrameError::Wire(_))
+    ));
+    // Following frames are not swallowed.
+    let mut two = bytes.clone();
+    two.push(0x01);
+    let all = decode_all(&two);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[1], Ok(Frame::Ping));
+}
+
+#[test]
 fn stream_off_bit_with_zero_offset_is_accepted_and_re_encoded_canonically() {
     let f = one(&[0x0e, 4, 0, 1, b'z']); // OFF and LEN, offset 0
     assert_eq!(
@@ -207,7 +240,7 @@ fn stream_off_bit_with_zero_offset_is_accepted_and_re_encoded_canonically() {
 fn unassigned_types_below_0x40_are_errors() {
     let assigned = [
         0x00u64, 0x01, 0x02, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
-        0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x30, 0x31, 0x3a, 0x3b, 0x3c, 0x3e,
+        0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x30, 0x31, 0x3a, 0x3b, 0x3c, 0x3e, 0x3f,
     ];
     for t in 0..0x40u64 {
         let mut payload = vec![t as u8];

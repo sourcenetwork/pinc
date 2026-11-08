@@ -3,6 +3,9 @@
 //! The tests themselves are the `[[test]]` targets of this package (`tests/*.rs`); this library holds what several of
 //! them use.
 
+mod link;
+pub use link::*;
+
 /// A small deterministic pseudo-random generator (`SplitMix64`) for reproducible test inputs.
 ///
 /// Tests use it instead of a global random source, so a failing case reproduces from its seed.

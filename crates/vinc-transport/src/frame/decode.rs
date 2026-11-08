@@ -1,5 +1,6 @@
 //! Zero-copy frame decoding and the frame iterator.
 
+use vinc_security::TicketBatch;
 use vinc_wire::{Reader, WireError};
 
 use super::{Ack, EXTENSION_BASE, Frame, FrameError, MAX_STREAM_END, ty};
@@ -88,6 +89,7 @@ impl<'a> Frame<'a> {
             ty::SLEEP => Self::Sleep,
             ty::WAKE => Self::Wake,
             ty::READY => Self::Ready,
+            ty::NEW_TICKETS => Self::NewTickets(TicketBatch::read(r)?),
             t if t >= EXTENSION_BASE => Self::Extension {
                 ty: t,
                 body: read_len_prefixed(r)?,
