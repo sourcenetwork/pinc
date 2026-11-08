@@ -1369,6 +1369,7 @@ dependencies = [
  "vinc-crypto",
  "vinc-dag",
  "vinc-security",
+ "vinc-transport",
  "vinc-wire",
 ]
 
@@ -1433,6 +1434,16 @@ dependencies = [
  "vinc-crypto",
  "vinc-dag",
  "vinc-keystore",
+ "vinc-security",
+ "vinc-transport",
+ "vinc-wire",
+]
+
+[[package]]
+name = "vinc-transport"
+version = "0.1.0"
+dependencies = [
+ "vinc-crypto",
  "vinc-security",
  "vinc-wire",
 ]

@@ -21,6 +21,7 @@ vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
+vinc-transport = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -92,6 +93,14 @@ path = "security_resume.rs"
 [[test]]
 name = "security_record"
 path = "security_record.rs"
+
+[[test]]
+name = "transport_packet"
+path = "transport_packet.rs"
+
+[[test]]
+name = "transport_frame"
+path = "transport_frame.rs"
 
 [lints]
 workspace = true

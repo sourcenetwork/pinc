@@ -12,6 +12,7 @@ vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["std"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
+vinc-transport = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -31,6 +32,10 @@ harness = false
 
 [[bench]]
 name = "security"
+harness = false
+
+[[bench]]
+name = "transport_packet"
 harness = false
 
 [lints]

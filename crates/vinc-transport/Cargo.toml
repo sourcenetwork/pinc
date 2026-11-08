@@ -1,0 +1,21 @@
+[package]
+name = "vinc-transport"
+description = "VINCER, the VINC transport: packets, frames, streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids and migration"
+keywords = ["no_std", "transport", "streams", "congestion", "sans-io"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+alloc = []
+
+[dependencies]
+vinc-wire = { workspace = true }
+vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
+
+[lints]
+workspace = true
