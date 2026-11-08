@@ -28,5 +28,17 @@ path = "wire.rs"
 name = "dag_tree"
 path = "dag_tree.rs"
 
+[[test]]
+name = "dag_cid"
+path = "dag_cid.rs"
+
+[[test]]
+name = "dag_block"
+path = "dag_block.rs"
+
+[[test]]
+name = "dag_car"
+path = "dag_car.rs"
+
 [lints]
 workspace = true
