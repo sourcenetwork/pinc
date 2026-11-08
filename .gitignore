@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+/proofs/lean/.lake
+/proofs/tla/states
+/proofs/tla/*.out
+/distributed/results/*.tmp
