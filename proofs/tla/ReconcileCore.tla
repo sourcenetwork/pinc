@@ -59,7 +59,7 @@ LeafOk(lim, S, lo, hi, a, b, items) ==
             THEN Bind(LeafSum(lim, S, a, b - a), LAMBDA s : Ok(base + s <= Cap(lim)))
             ELSE Ok(base + (b - a) * IDLEN <= Cap(lim))
 
-IdBytes(o, x) == BeBytes(IDLEN, o.idf[x])
+IdBytes(o, x) == IdOf(o, x)
 
 RECURSIVE IdsBytes(_, _)
 IdsBytes(o, xs) == IF xs = <<>> THEN <<>> ELSE IdBytes(o, Head(xs)) \o IdsBytes(o, Tail(xs))

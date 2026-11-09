@@ -14,7 +14,7 @@
 (* <<x>> (some x).                                                         *)
 (*                                                                         *)
 (* Varints. TLC integers are 32 bits and a varint carries 63. A decoded    *)
-(* value saturates at BIG = 2^20, and its parity (the `more` bit) is kept  *)
+(* value saturates at BIG = 2^23, and its parity (the `more` bit) is kept  *)
 (* exactly. Every comparison the code makes on a decoded value is against  *)
 (* a length, a count or a limit that the checked configurations keep below *)
 (* BIG / 2, so every value at or above BIG behaves as BIG does (a count    *)
@@ -22,7 +22,7 @@
 (* responder's). The encoder is exact for every value below BIG.           *)
 (*                                                                         *)
 (* The hashes are an oracle `o`: o.H[x] is the 16 byte fingerprint of an   *)
-(* item and o.idf[x] its id (a number, sent as 8 bytes). The XOR           *)
+(* item and o.idb[x] its id (8 bytes). The XOR           *)
 (* independence of the item hashes is an assumption of the properties, not *)
 (* of the model; the one-hot oracle of Reconcile.tla states it exactly.    *)
 (*                                                                         *)
@@ -33,7 +33,7 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS SPLIT, ALEAF, BLEAF, COLD_RATIO, MAX_NEST, CPL_MAX, FRAME_MAX
 
-BIG == 1048576
+BIG == 8388608
 VARMAX == 9
 FPLEN == 16
 IDLEN == 8
@@ -57,7 +57,10 @@ Some(x) == <<x>>
 
 Ok(v) == [ok |-> TRUE, v |-> v]
 Er(e) == [ok |-> FALSE, err |-> e]
-Bind(r, F(_)) == IF r.ok THEN F(r.v) ELSE r
+Bind(r, F(_)) == LET x == r IN IF x.ok THEN F(x.v) ELSE x
+
+(* The LET evaluates the first argument once: TLC passes operator arguments by name, so a plain `r.ok ... r.v` would
+   evaluate the whole chain below it three times at every level. *)
 
 (* ---- bytes ---- *)
 
@@ -68,9 +71,12 @@ BitOf(x, i) == (x \div Pow2(i)) % 2
 SetBitByte(x, i) == IF BitOf(x, i) = 1 THEN x ELSE x + Pow2(i)
 
 XorBit(a, b, i) == (BitOf(a, i) + BitOf(b, i)) % 2
-Xor8(a, b) ==
+Xor8Slow(a, b) ==
     XorBit(a, b, 0) + 2 * XorBit(a, b, 1) + 4 * XorBit(a, b, 2) + 8 * XorBit(a, b, 3)
     + 16 * XorBit(a, b, 4) + 32 * XorBit(a, b, 5) + 64 * XorBit(a, b, 6) + 128 * XorBit(a, b, 7)
+(* the byte XOR as a table, computed once *)
+XorTab == [a \in 0..255 |-> [b \in 0..255 |-> Xor8Slow(a, b)]]
+Xor8(a, b) == XorTab[a][b]
 
 Zero16 == [i \in 1..FPLEN |-> 0]
 XorFp(f, g) == [i \in 1..FPLEN |-> Xor8(f[i], g[i])]
@@ -157,17 +163,38 @@ ReadParts(r) ==
 
 (* ---- the index (a strictly ascending sequence S of items; positions are 0-based as in the code) ---- *)
 
-Rank(S, b) == Len(SelectSeq(S, LAMBDA x : LexLt(x, b)))
+(* the number of items below b: the binary search of MemIndex::rank over the ascending sequence *)
+RECURSIVE RankBin(_, _, _, _)
+RankBin(S, lo, hi, b) ==
+    IF lo >= hi THEN lo
+    ELSE LET mid == lo + (hi - lo) \div 2
+         IN IF LexLt(S[mid + 1], b) THEN RankBin(S, mid + 1, hi, b) ELSE RankBin(S, lo, mid, b)
+Rank(S, b) == RankBin(S, 0, Len(S), b)
 
 ReadItem(lim, S, i) ==
     IF i >= Len(S) THEN Er("index")
     ELSE IF Len(S[i + 1]) <= lim.maxItem THEN Ok(S[i + 1]) ELSE Er("index")
 
+(* The hash oracle holds sorted tables of <<item, value>> pairs, looked up by binary search: o.H the 16 byte
+   fingerprints, o.idb the 8 byte ids. A missing item stops TLC with an error. *)
+RECURSIVE BinGet(_, _, _, _)
+BinGet(tab, lo, hi, x) ==
+    IF lo > hi THEN tab[0][2]
+    ELSE LET mid == (lo + hi) \div 2
+             k == tab[mid][1]
+         IN IF k = x THEN tab[mid][2] ELSE IF LexLt(x, k) THEN BinGet(tab, lo, mid - 1, x) ELSE BinGet(tab, mid + 1, hi, x)
+HOf(o, x) == BinGet(o.H, 1, Len(o.H), x)
+IdOf(o, x) == BinGet(o.idb, 1, Len(o.idb), x)
+
 RECURSIVE XorH(_, _)
-XorH(o, xs) == IF xs = <<>> THEN Zero16 ELSE XorFp(o.H[Head(xs)], XorH(o, Tail(xs)))
+XorH(o, xs) == IF xs = <<>> THEN Zero16 ELSE XorFp(HOf(o, Head(xs)), XorH(o, Tail(xs)))
+
+(* the XOR over the positions a..b-1 (0-based) of S *)
+RECURSIVE XorRange(_, _, _, _)
+XorRange(o, S, a, b) == IF a >= b THEN Zero16 ELSE XorFp(HOf(o, S[a + 1]), XorRange(o, S, a + 1, b))
 
 Slice(S, a, b) == IF b <= a THEN <<>> ELSE SubSeq(S, a + 1, b)
-FpRange(o, S, a, b) == XorH(o, Slice(S, a, b))
+FpRange(o, S, a, b) == XorRange(o, S, a, b)
 
 RECURSIVE DataLen(_)
 DataLen(xs) == IF xs = <<>> THEN 0 ELSE Len(Venc(Len(Head(xs)))) + Len(Head(xs)) + DataLen(Tail(xs))

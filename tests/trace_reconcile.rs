@@ -99,6 +99,9 @@ fn step_name(s: Step) -> &'static str {
     }
 }
 
+/// The largest `(|A| + |B|) * calls` of a case in the TLC trace; the Lean replay takes every case.
+const TLA_BUDGET: usize = 2500;
+
 // ---- the trace of one case -----------------------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -106,6 +109,8 @@ struct Tr {
     on: bool,
     norm: String,
     big: String,
+    /// The cases the TLC trace check replays: those whose size times calls stays within `TLA_BUDGET`.
+    tla: String,
     stats: BTreeMap<String, usize>,
     next_id: u32,
 }
@@ -264,9 +269,9 @@ impl Case {
                 .iter()
                 .map(|x| format!("[{},{}]", list(x), list(&item_id(x))))
                 .collect();
-            let out = if n == 0 { &mut tr.norm } else { &mut tr.big };
+            let mut case = String::new();
             writeln!(
-                out,
+                case,
                 r#"{{"t":"rc","e":"case","id":{},"A":{},"B":{},"H":[{}],"ID":[{}],"limI":{},"limR":{},"ref":{}}}"#,
                 self.id,
                 items_json(&self.a),
@@ -278,7 +283,12 @@ impl Case {
                 list(&self.rf)
             )
             .unwrap();
-            out.push_str(body);
+            case.push_str(body);
+            // TLC replays an interpreted model: the cost of a case is its items times its calls.
+            if n == 0 && (self.a.len() + self.b.len()) * body.lines().count() <= TLA_BUDGET {
+                tr.tla.push_str(&case);
+            }
+            if n == 0 { &mut tr.norm } else { &mut tr.big }.push_str(&case);
         }
         for (k, v) in self.stats {
             *tr.stats.entry(k).or_insert(0) += v;
@@ -932,6 +942,7 @@ fn reconcile_sessions_match_the_models() {
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("reconcile.ndjson"), &tr.norm).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join("reconcile_tla.ndjson"), &tr.tla).unwrap();
         if !tr.big.is_empty() {
             std::fs::write(std::path::Path::new(&dir).join("reconcile_big.ndjson"), &tr.big).unwrap();
         }

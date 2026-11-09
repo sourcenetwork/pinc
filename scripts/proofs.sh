@@ -108,6 +108,34 @@ par run_tlc_deep verifierbytes VerifierBytes VerifierBytes
 par run_tlc_deep reconcilewire ReconcileWire ReconcileWire
 par run_tlc_deep reconcilewire_cap1 ReconcileWire ReconcileWire_cap1
 par run_tlc_deep reconcilewire_long ReconcileWire ReconcileWire_long
+par run_tlc reconcile Reconcile Reconcile
+par run_tlc reconcile_collide Reconcile Reconcile_collide
+par run_tlc reconcile_cold Reconcile Reconcile_cold
+par run_tlc reconcile_dense Reconcile Reconcile_dense
+par run_tlc reconcile_varlen Reconcile Reconcile_varlen
+par run_tlc reconcile_cap Reconcile Reconcile_cap
+par run_tlc reconcile_frames Reconcile Reconcile_frames
+par run_tlc reconcile_liar Reconcile Reconcile_liar
+par run_tlc reconcile_reset Reconcile Reconcile_reset
+par run_tlc reconcile_garbage Reconcile Reconcile_garbage
+par run_tlc reconcile_garbage3 Reconcile Reconcile_garbage3
+par run_tlc_deep reconcile_real Reconcile Reconcile_real
+par run_tlc_deep reconcile_real_big Reconcile Reconcile_real_big
+par run_tlc_deep reconcile_real_swap Reconcile Reconcile_real_swap
+par run_tlc_deep reconcile_real_cold Reconcile Reconcile_real_cold
+par run_tlc_deep reconcile_real_dense Reconcile Reconcile_real_dense
+par run_tlc_deep reconcile_real_varlen Reconcile Reconcile_real_varlen
+par witness_tlc reconcile_never Reconcile Reconcile_never Witness_NotWrong
+par witness_tlc reconcile_w_miss Reconcile Reconcile_w_miss NotMiss
+par witness_tlc reconcile_w_done Reconcile Reconcile_w_done NotDone
+par witness_tlc reconcile_w_held Reconcile Reconcile_w_held NotHeld
+par witness_tlc reconcile_w_chunk Reconcile Reconcile_w_chunk NotChunk
+par witness_tlc reconcile_w_cold Reconcile Reconcile_w_cold NotColdStream
+par witness_tlc reconcile_w_toolarge Reconcile Reconcile_w_toolarge NotTooLarge
+par witness_tlc reconcile_w_mismatch Reconcile Reconcile_w_mismatch NotMismatch
+par witness_tlc reconcile_w_tmr Reconcile Reconcile_w_tmr NotTMR
+par witness_tlc reconcile_w_exhausted Reconcile Reconcile_w_exhausted NotExhausted
+par witness_tlc reconcile_w_refused Reconcile Reconcile_w_refused NotRefused
 par run_tlc tickets_client Tickets Tickets
 par run_tlc tickets_client3 Tickets Tickets_n3
 par run_tlc tickets_server Tickets Tickets_server
@@ -336,7 +364,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -382,5 +410,6 @@ trace_tlc TraceStreams "stream table"
 trace_tlc TraceRecovery "loss recovery"
 trace_tlc TraceBroadcast broadcast
 trace_tlc TraceReconcileWire reconcile-wire
+trace_tlc TraceReconcile reconcile
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

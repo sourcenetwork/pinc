@@ -83,7 +83,7 @@
 EXTENDS ReconcileSess
 
 CONSTANTS ALPHA, MAXLEN, UniMax, Scenario, HashMode, CapSet, MaxItemSet, IdMods, MaxReportC, MaxRoundsC,
-          Attempts, ResetOn, Shadow, Liar, Garbage, FanTight, AllowTMR
+          Attempts, ResetOn, Shadow, Liar, Garbage, SmallMenu, FanTight, AllowTMR
 
 RECURSIVE Words(_)
 Words(k) == IF k = 0 THEN {<<>>} ELSE {w \o <<x>> : w \in Words(k - 1), x \in ALPHA}
@@ -98,7 +98,7 @@ Range(s) == {s[i] : i \in 1..Len(s)}
 
 UniSeq == Take(SortedSeq(UniAll), UniMax)
 Universe == Range(UniSeq)
-IdxOf == [x \in Universe |-> Cardinality({y \in Universe : LexLt(y, x)})]
+IdxOf == [x \in UniAll |-> Cardinality({y \in UniAll : LexLt(y, x)})]
 
 RECURSIVE Gen(_, _)
 Gen(st, k) == IF k = 0 THEN <<>> ELSE LET s2 == (st * 75 + 74) % 65537 IN <<s2 % 256>> \o Gen(s2, k - 1)
@@ -108,7 +108,9 @@ HashOf(n) ==
     THEN [i \in 1..FPLEN |-> IF i = n \div 8 + 1 THEN Pow2(n % 8) ELSE 0]
     ELSE Gen(n + 5, FPLEN)
 
-MkOracle(idm) == [H |-> [x \in Universe |-> HashOf(IdxOf[x])], idf |-> [x \in Universe |-> IdxOf[x] % idm]]
+AllSeq == SortedSeq(UniAll)
+MkOracle(idm) == [H |-> [i \in 1..Len(AllSeq) |-> <<AllSeq[i], HashOf(i - 1)>>],
+                  idb |-> [i \in 1..Len(AllSeq) |-> <<AllSeq[i], BeBytes(IDLEN, (i - 1) % idm)>>]]
 
 (* ---- the cases ---- *)
 
@@ -182,7 +184,13 @@ BodiesMenu ==
     {PutParts(2, FALSE) \o p \o q : p \in PartsMenu, q \in PartsMenu} \cup
     {PutParts(1, FALSE) \o p \o <<0>> : p \in PartsMenu} \cup
     {Take(PutParts(1, FALSE) \o p, k) : p \in PartsMenu, k \in {2, 4, 9}}
-GarbageMenu == {Frame(b) : b \in BodiesMenu} \cup {<<0, 0>>, <<0, 0, 5, 0>>, <<0, 0, 1, 0, 0>>}
+SmallParts == {Hd(1, <<>>, None) \o FpBytes, Hd(3, <<>>, None) \o Venc(1) \o Venc(1) \o <<1>>, Hd(5, <<>>, None) \o Venc(0),
+               Hd(4, <<>>, None) \o Venc(0) \o Venc(0), Hd(7, <<>>, None), Hd(2, <<>>, None) \o Venc(0)}
+SmallBodies ==
+    {PutParts(0, FALSE), PutParts(0, TRUE)} \cup {PutParts(1, m) \o p : p \in SmallParts, m \in BOOLEAN}
+GarbageMenu ==
+    IF SmallMenu THEN {Frame(b) : b \in SmallBodies}
+    ELSE {Frame(b) : b \in BodiesMenu} \cup {<<0, 0>>, <<0, 0, 5, 0>>, <<0, 0, 1, 0, 0>>}
 
 VARIABLES cs, ini, rsp, shI, shR, pc, tx, replies, nxt, fmsg, attempt, delivered, steps, err, cnt,
           shOk, bad
@@ -209,7 +217,7 @@ Init ==
     /\ shR = NewResponder(LimOf(cs))
     /\ pc = "start"
     /\ tx = <<>> /\ replies = <<>> /\ nxt = None /\ fmsg = <<>>
-    /\ attempt = 1 /\ delivered = 0 /\ steps = 0 /\ err = "" /\ cnt = EmptyCnt /\ shOk = TRUE /\ bad = ""
+    /\ attempt = 1 /\ delivered = 0 /\ steps = 0 /\ err = "" /\ cnt = EmptyCnt /\ shOk = TRUE /\ bad = <<>>
 
 OrcTab == [idm \in IdMods |-> MkOracle(idm)]
 orc == OrcTab[cs.idm]
@@ -244,7 +252,7 @@ EndMsg == Frame(PutParts(0, FALSE))
 
 RespCall(s, msg) ==
     LET r == RespHandle(orc, cs.B, s, msg) IN
-    IF Liar = "miss" /\ IsCheck(msg) /\ r.ok THEN Ok(<<"send", MissMsg, r.v[3]>>)
+    IF Liar = "miss" /\ IsCheck(msg) /\ r.ok THEN Ok(<<"send", MissMsg, [r.v[3] EXCEPT !.side = "open"]>>)
     ELSE IF Liar = "never" /\ IsCheck(msg) /\ r.ok /\ r.v[2] # EndMsg
          THEN Ok(<<"last", EndMsg, [r.v[3] EXCEPT !.side = "done"]>>)
     ELSE r
@@ -283,7 +291,7 @@ DoIH ==
     /\ pc = "ih"
     /\ IF replies = <<>>
        THEN /\ IF nxt = None THEN pc' = "done" /\ UNCHANGED <<tx, nxt>>
-                ELSE pc' = "rh" /\ tx' = nxt[1] /\ nxt' = None
+                ELSE pc' = (IF Garbage THEN "gh" ELSE "rh") /\ tx' = nxt[1] /\ nxt' = None
             /\ UNCHANGED <<ini, shI, replies, fmsg, err, cnt, shOk, steps, delivered, bad>>
        ELSE LET m == Head(replies)
                 r == InitHandle(orc, cs.A, ini, m)
@@ -372,7 +380,9 @@ Cost == (Honest /\ ~ResetOn /\ pc = "done") =>
 FullCost == (Honest /\ ~ResetOn /\ Terminal) => cnt.calls <= RoundsBound(cs) + 1
 
 CoreBounds(c) ==
-    /\ Len(c.out.body) <= Cap(c.lim)
+    \* the parts of a reply stay within the limit from MinMessage up; below it only the root (one part that cannot be cut
+    \* further, no message to roll back to) may pass it, and the frame cap still bounds the body
+    /\ Len(c.out.body) <= (IF Cap(c.lim) >= MinMessage(c.lim) THEN Cap(c.lim) ELSE FrameCap(c))
     /\ Len(c.frames) <= MAX_NEST
     /\ c.rounds <= c.lim.maxRounds
     /\ DataLen(c.here) + DataLen(c.there) <= c.lim.maxReport
@@ -388,6 +398,15 @@ Refused ==
                                              "index", "badIndex", "messageTooLarge", "itemTooLarge",
                                              "reportTooLarge", "tooManyRounds", "mismatch"}
 GarbageEnds == Garbage => steps <= MaxRoundsC * 2 + 4
+\* a message that is malformed by construction gets the code's reason at the first handling
+Expect(m) ==
+    LET fb == FrameBody(m) IN
+    IF ~fb.ok THEN fb.err
+    ELSE IF fb.v = <<>> THEN "truncated"
+    ELSE IF fb.v = <<1>> THEN "count"
+    ELSE ""
+GarbageReason == (Garbage /\ steps = 2 /\ bad # <<>> /\ Expect(bad) # "") => (pc = "failed" /\ err = Expect(bad))
+LiarOutcome == (Liar = "miss" /\ pc = "failed") => err = "mismatch"
 
 (* ---- reachability witnesses: TLC must violate each (witness_tlc in scripts/proofs.sh) ---- *)
 NotMiss == ~(ini.core.exact)
