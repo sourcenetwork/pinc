@@ -97,3 +97,94 @@ fn a_reply_bitmap_with_a_padding_bit_set_is_refused() {
     assert_eq!(tampered, 1, "a reply with a partial bitmap byte was found");
     assert_eq!(res.err(), Some(Error::Malformed(Reason::Count)));
 }
+
+/// A message whose first part was merged into the report and whose second item is cut short is refused; the session
+/// is then dead, so a caller that ignores the error and goes on never gets a report with the half-merged items.
+#[test]
+fn a_failed_message_leaves_no_session_that_can_report() {
+    let a = vec![b"a".to_vec(), b"b".to_vec()];
+    let ia = index(&a);
+    let mut init = Initiator::new(Limits::default());
+    let mut tx = Vec::new();
+    init.start(&ia, b"set", &mut tx).unwrap();
+    // body: count 1, a cold part with an infinite upper bound, two items, the second longer than what is left
+    let body = [2u8, tag::COLD | tag::INF, 0, 0, 2, 1, b'z', 5, b'x'];
+    let mut msg = vec![0, 0, body.len() as u8];
+    msg.extend_from_slice(&body);
+    let mut out = Vec::new();
+    assert_eq!(
+        init.handle(&ia, &msg, &mut out).err(),
+        Some(Error::Malformed(Reason::Truncated))
+    );
+    // the empty message that would end an exchange
+    let end = [0, 0, 1, 0];
+    assert_eq!(
+        init.handle(&ia, &end, &mut out).err(),
+        Some(Error::Malformed(Reason::State))
+    );
+    assert!(init.report().is_none(), "no report after a failed message");
+}
+
+#[test]
+fn a_failed_responder_message_ends_its_session() {
+    let b: Vec<Vec<u8>> = (0..100u8).map(|i| vec![i]).collect();
+    let ib = index(&b);
+    let a: Vec<Vec<u8>> = (0..90u8).map(|i| vec![i]).collect();
+    let ia = index(&a);
+    let (mut init, mut resp) = (Initiator::new(Limits::default()), Responder::new(Limits::default()));
+    let (mut tx, mut rx) = (Vec::new(), Vec::new());
+    init.start(&ia, b"set", &mut tx).unwrap();
+    resp.handle(&ib, &tx, &mut rx).unwrap();
+    // a second message with a part count that the bytes do not hold
+    let msg = [0, 0, 2, 8, 1];
+    assert!(resp.handle(&ib, &msg, &mut rx).is_err());
+    assert_eq!(
+        resp.handle(&ib, &[0, 0, 1, 0], &mut rx).err(),
+        Some(Error::Malformed(Reason::State))
+    );
+    // reset starts a new session
+    resp.reset();
+    init.start(&ia, b"set", &mut tx).unwrap();
+    resp.handle(&ib, &tx, &mut rx).unwrap();
+}
+
+/// Items that share a long prefix make the separators of the root split long, so a small message limit narrows the
+/// root's fan. The narrowing rolls the message back to its start, which must leave the previous bound empty even
+/// when the initiator is reused after an earlier session.
+#[test]
+fn a_reused_initiator_narrows_the_root_split_correctly() {
+    const LEN: usize = 300;
+    let lim = Limits {
+        max_item: LEN,
+        ..Limits::default()
+    };
+    let lim = Limits {
+        max_message: lim.min_message(),
+        ..lim
+    };
+    let mut rng = SplitMix64::new(77);
+    let dense = |rng: &mut SplitMix64, n: usize| -> Vec<Vec<u8>> {
+        let mut v: Vec<Vec<u8>> = (0..n)
+            .map(|_| {
+                let mut it = vec![7u8; LEN];
+                rng.fill(&mut it[LEN - 20..]);
+                it
+            })
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let (mut init, mut resp) = (Initiator::new(lim), Responder::new(lim));
+    for round in 0..3 {
+        let a = dense(&mut rng, 600);
+        let mut b = a.clone();
+        b.drain(round..round + 5);
+        b.extend(dense(&mut rng, 5));
+        b.sort_unstable();
+        b.dedup();
+        let (ia, ib) = (index(&a), index(&b));
+        let o = run_with(&mut init, &mut resp, &ia, &ib, |_, _| {}).unwrap();
+        common::assert_exact(&o, &a, &b);
+    }
+}

@@ -128,6 +128,15 @@ impl Initiator {
     /// # Errors
     /// A malformed message, an exceeded limit, an index failure, or [`Error::Mismatch`].
     pub fn handle<I: ItemIndex>(&mut self, idx: &I, msg: &[u8], out: &mut Vec<u8>) -> Result<Step, Error<I::Error>> {
+        let res = self.step(idx, msg, out);
+        // A failed step leaves the report arenas half filled: the session is dead until `start`.
+        if res.is_err() && matches!(self.phase, Phase::Open | Phase::Checking) {
+            self.phase = Phase::Idle;
+        }
+        res
+    }
+
+    fn step<I: ItemIndex>(&mut self, idx: &I, msg: &[u8], out: &mut Vec<u8>) -> Result<Step, Error<I::Error>> {
         if !matches!(self.phase, Phase::Open | Phase::Checking) {
             return Err(Reason::State.into());
         }
@@ -234,6 +243,15 @@ impl Responder {
     /// # Errors
     /// A malformed message, an exceeded limit, or an index failure.
     pub fn handle<I: ItemIndex>(&mut self, idx: &I, msg: &[u8], out: &mut Vec<u8>) -> Result<Step, Error<I::Error>> {
+        let res = self.step(idx, msg, out);
+        // A fresh responder keeps no state from a refused first message; an open one holds frames, so it is dead.
+        if res.is_err() && self.side != Side::Fresh {
+            self.side = Side::Done;
+        }
+        res
+    }
+
+    fn step<I: ItemIndex>(&mut self, idx: &I, msg: &[u8], out: &mut Vec<u8>) -> Result<Step, Error<I::Error>> {
         let fresh = self.side == Side::Fresh;
         if !fresh && self.side != Side::Open {
             return Err(Reason::State.into());
@@ -280,6 +298,14 @@ impl Responder {
     /// # Errors
     /// An index failure, or [`Reason::State`] if no cold stream is running.
     pub fn resume<I: ItemIndex>(&mut self, idx: &I, out: &mut Vec<u8>) -> Result<Step, Error<I::Error>> {
+        let res = self.chunk(idx, out);
+        if res.is_err() {
+            self.side = Side::Done;
+        }
+        res
+    }
+
+    fn chunk<I: ItemIndex>(&mut self, idx: &I, out: &mut Vec<u8>) -> Result<Step, Error<I::Error>> {
         if self.side != Side::Cold {
             return Err(Reason::State.into());
         }
