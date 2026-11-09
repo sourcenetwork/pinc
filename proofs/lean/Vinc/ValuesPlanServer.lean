@@ -11,6 +11,8 @@ stream of a peer that is being collected, or is serving a response for a root ov
 * `supersede_iff`: the answer to a new request frees exactly the serving slots of the same peer and the same root
   whose rounded ranges overlap one of the new spans, and never the request's own stream; every other slot is
   untouched (`supersede_keeps`). Each freed slot is reset with `SUPERSEDED`.
+* `answer_refused_keeps_others`, `answer_installed_supersedes`: the older responses are freed only after the new
+  response is accepted; a refused install frees the request's own slot and nothing else.
 * `refuse_unavailable`: a value the store does not hold whole (or a plan the value cannot give) resets the
   request with `UNAVAILABLE` and frees only its slot.
 * `closed_iff`, `done_frees`: a closed session drops exactly its peer's slots; a finished stream frees its slot.
@@ -153,6 +155,42 @@ theorem refuse_spec (s : Slots) (i code : Nat) (o : Slot) (h : s[i]? = some (som
   · intro j hj
     rw [List.getElem?_set]; simp [Ne.symm hj]
 
+/-- `Server::answer` after the plan: the source is installed first. A refused install resets the request with
+`UNAVAILABLE` and frees only its slot; once accepted, the older responses are superseded and the slot serves `mine`. -/
+def answer (s : Slots) (i root : Nat) (mine spans : List (Nat × Nat)) (installs : Bool) : Slots × List (Nat × Nat) :=
+  match s[i]? with
+  | some (some me) =>
+    if installs then
+      ((supersede s me.stream me.peer root spans).1.set i (some { me with serving := some (root, mine) }),
+       (supersede s me.stream me.peer root spans).2)
+    else refuse s i UNAVAILABLE
+  | _ => (s, [])
+
+/-- A refused install leaves every other slot as it was and resets only the request. -/
+theorem answer_refused_keeps_others (s : Slots) (i root : Nat) (mine spans : List (Nat × Nat)) (me : Slot)
+    (h : s[i]? = some (some me)) :
+    (answer s i root mine spans false).2 = [(me.stream, UNAVAILABLE)] ∧
+      (answer s i root mine spans false).1[i]? = some none ∧
+      ∀ j, j ≠ i → (answer s i root mine spans false).1[j]? = s[j]? := by
+  unfold answer
+  rw [h]
+  exact refuse_spec s i UNAVAILABLE me h
+
+/-- An accepted install supersedes exactly the slots `supersede` frees, resets each with `SUPERSEDED`, and serves. -/
+theorem answer_installed_supersedes (s : Slots) (i root : Nat) (mine spans : List (Nat × Nat)) (me : Slot)
+    (h : s[i]? = some (some me)) :
+    (answer s i root mine spans true).2 = (supersede s me.stream me.peer root spans).2 ∧
+      (answer s i root mine spans true).1[i]? = some (some { me with serving := some (root, mine) }) ∧
+      ∀ j, j ≠ i → j < s.length → (answer s i root mine spans true).1[j]? = (supersede s me.stream me.peer root spans).1[j]? := by
+  unfold answer
+  rw [h]
+  have hi : i < s.length := (List.getElem?_eq_some_iff.1 h).1
+  refine ⟨rfl, ?_, ?_⟩
+  · simp [List.getElem?_set, hi, supersede_length]
+  · intro j hj _
+    simp only [if_true]
+    rw [List.getElem?_set]; simp [Ne.symm hj]
+
 /-- A closed session drops exactly the slots of its peer. -/
 def closed (s : Slots) (peer : Nat) : Slots :=
   s.map (fun x => match x with | some o => if o.peer = peer then none else x | none => none)
@@ -188,4 +226,6 @@ end Vinc.ValuesPlan
 #audit_axioms Vinc.ValuesPlan.supersedes_iff
 #audit_axioms Vinc.ValuesPlan.supersede_iff
 #audit_axioms Vinc.ValuesPlan.refuse_spec
+#audit_axioms Vinc.ValuesPlan.answer_refused_keeps_others
+#audit_axioms Vinc.ValuesPlan.answer_installed_supersedes
 #audit_axioms Vinc.ValuesPlan.closed_iff

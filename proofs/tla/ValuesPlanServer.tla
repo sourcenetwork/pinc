@@ -5,16 +5,18 @@
 (* ranges. The events are the code's: a stream opened (the first free slot*)
 (* or a BUSY reset, never a queue), a request answered (a value the store *)
 (* does not hold whole, or a plan the value cannot give, resets with      *)
-(* UNAVAILABLE and frees only its slot; otherwise the supersession pass    *)
-(* frees every serving slot of the same peer, the same root and an         *)
-(* overlapping range of another stream and resets it with SUPERSEDED,     *)
-(* then the source is installed, which can be refused: UNAVAILABLE), a     *)
-(* stream reset or finished, a closed session.                             *)
+(* UNAVAILABLE and frees only its slot; otherwise the source is installed, *)
+(* which can be refused (UNAVAILABLE, and only the request's slot is      *)
+(* freed), and once it is accepted the supersession pass frees every      *)
+(* serving slot of the same peer, the same root and an overlapping range  *)
+(* of another stream and resets it with SUPERSEDED), a stream reset or    *)
+(* finished, a closed session.                                             *)
 (*                                                                         *)
 (* Checked: at most S requests are held and never two on one stream; a     *)
 (* stream is reset SUPERSEDED exactly when it was another stream of the   *)
-(* peer serving the root over a range the new request overlaps (and every *)
-(* such stream is, whether or not the new request is then installed);     *)
+(* peer serving the root over a range the new request overlaps, and only  *)
+(* when the new request is installed (a refused request frees no other    *)
+(* slot);                                                                  *)
 (* every refusal frees the slot of the refused request and no other; a    *)
 (* BUSY reset happens only with all slots held.                           *)
 (*                                                                         *)
@@ -73,8 +75,8 @@ Answer == \E i \in Used, root \in Roots, req \in Reqs, holds \in BOOLEAN, instal
                   THEN /\ slots' = [freed EXCEPT ![i] = Serving(me.stream, me.peer, root, mine)]
                        /\ held' = held - Cardinality(sup)
                        /\ ghost' = [kind |-> "served", slot |-> i, peer |-> me.peer, root |-> root, req |-> req]
-                  ELSE /\ slots' = [freed EXCEPT ![i] = Free]
-                       /\ held' = held - Cardinality(sup) - 1
+                  ELSE /\ slots' = [slots EXCEPT ![i] = Free]
+                       /\ held' = held - 1
                        /\ ghost' = [kind |-> "refused", slot |-> i, peer |-> me.peer, root |-> root, req |-> req]
 
 Done == \E i \in Used :
@@ -96,16 +98,15 @@ UniqueStreams == \A i, j \in Used : i # j => slots[i].stream # slots[j].stream
 BusyOnlyFull == ghost.kind = "busy" => Used = 1 .. S
 
 \* the other slots after an answer: freed exactly when they were another stream of the peer serving the root over
-\* a range the request overlaps (the pass runs for a request that is then installed or refused, not for an
-\* unavailable value), untouched otherwise; the request's own slot is its own
+\* a range the request overlaps (the pass runs only for a request that is installed), untouched otherwise; the request's own slot is its own
 AnswerOK ==
-    /\ ghost'.kind \in {"served", "refused"} =>
+    /\ ghost'.kind = "served" =>
          \A j \in 1 .. S : j # ghost'.slot =>
             IF ~IsFree(slots[j]) /\ slots[j].peer = ghost'.peer /\ slots[j].root = ghost'.root /\ slots[j].root # 0
                /\ Overlaps(slots[j].ranges, ghost'.req)
             THEN IsFree(slots'[j])
             ELSE slots'[j] = slots[j]
-    /\ ghost'.kind = "unavailable" => \A j \in 1 .. S : j # ghost'.slot => slots'[j] = slots[j]
+    /\ ghost'.kind \in {"unavailable", "refused"} => \A j \in 1 .. S : j # ghost'.slot => slots'[j] = slots[j]
     /\ ghost'.kind = "served" => ~IsFree(slots'[ghost'.slot])
     /\ ghost'.kind \in {"refused", "unavailable"} => IsFree(slots'[ghost'.slot])
     /\ ghost'.kind = "closed" => \A j \in 1 .. S : IF j \in ghost'.gone THEN IsFree(slots'[j]) ELSE slots'[j] = slots[j]

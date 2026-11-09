@@ -33,11 +33,14 @@
 (* and the commit are two steps pd, so a restart can fall between them.    *)
 (* Every external action waits for tasks = <<>> and pd = NONE.             *)
 (*                                                                         *)
-(* Not in this model (stated where the report lists them): bytes inside a  *)
-(* group (a group is atomic, so the mid-group race of two streams carrying *)
-(* the same group, which exists only with range-list widening, is not      *)
-(* represented), the range-list capacity widening, PROOF_REQ, and the     *)
-(* doubling of the stall wait (ValuesTime).                                 *)
+(* With Mid, the in-order frame of a stream is taken in two events: its   *)
+(* header and proof are accepted while the group is not stored (status    *)
+(* "mg"), and its bytes complete later ("kg"); another stream may store   *)
+(* the group in between (the mid-group race). The completion then finds   *)
+(* the group stored and, with DupFix, only accounts for it (no write, no  *)
+(* Readable). Not in this model (stated where the report lists them): the  *)
+(* range-list capacity widening, PROOF_REQ, and the doubling of the stall *)
+(* wait (ValuesTime).                                                      *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, ValuesSysCore
 
@@ -63,11 +66,13 @@ CONSTANTS
     Proofs,    \* range proofs exist (a provider may send them)
     StoreFail, \* the store may refuse a write or a commit
     Restarts,  \* restarts of the process allowed
+    Mid,       \* a frame's bytes may arrive in two events, and the host may report a session up twice: two streams of a provider can carry one group
+    DupFix,    \* TRUE: a group another stream stored while this one was inside it is neither written nor announced again (the code); FALSE: the code before the fix
     OldConn,   \* TRUE: a provider that connects is not topped up (the code before the fix)
     Churn,     \* providers outside Fair may close, vanish and reset streams as often as they like
     OldRetry,  \* TRUE: a retry is dropped while any stream is open (the code before the fix); FALSE: only the provider's own streams count
     HasDl, DeadlineT, \* a deadline exists, and its tick
-    IDLE, SW, SMIN \* idle ticks before a steal, stall ticks before a redial, groups a busy victim must hold
+    IDLE, SW, SMIN \* idle ticks before a steal, stall ticks before a redial (0: none), groups a busy victim must hold
 
 
 Grps == 0..G-1
@@ -103,7 +108,7 @@ VARIABLES S
            pf: 0 no range proof, 1 good, 2 bad
    fb      faults left                      rs      restarts left
    now     ticks (only counted with a deadline)    ss  ticks since the last bytes or granule
-   lastp   a granule was parsed (the stall timer is armed)     tw  the steal re-check timer is armed
+   lastp   a request was sent (the stall timer is armed)      tw  the steal re-check timer is armed
    tasks   work left in the current call      pd  a verified group between its write and its commit (on, p, s, g, c, step)
    dr      the stream being drained (0 none, 8p+s)      striped  more than one provider
    aheadN  1 once a group was committed from the write-through path; stolen, redialed: a steal / a stall redial happened *)
@@ -118,15 +123,15 @@ Pend(st) == {g \in Grps : st.fr[g] \notin {"x", "c"}}
 NewStream(need) == [on |-> TRUE, fr |-> [g \in Grps |-> IF g \in need THEN "u" ELSE "x"], pf |-> [g \in Grps |-> 0]]
 SlotFree(T, p) == Min(Slots \ Streams(T, p))
 IsNet(x) == x \in {"ng", "nb", "nj"}
-IsHeld(x) == x \in {"hg", "hb", "hj"}
-KindOf(x) == IF x \in {"ng", "hg"} THEN "g" ELSE IF x \in {"nb", "hb"} THEN "b" ELSE "j"
+IsHeld(x) == x \in {"hg", "hb", "hj", "kg"}
+KindOf(x) == IF x \in {"ng", "hg", "kg", "mg"} THEN "g" ELSE IF x \in {"nb", "hb"} THEN "b" ELSE "j"
 HeldOf(k) == IF k = "g" THEN "hg" ELSE IF k = "b" THEN "hb" ELSE "hj"
 NetOf(k) == IF k = "g" THEN "ng" ELSE IF k = "b" THEN "nb" ELSE "nj"
 
 Fresh ==
     [run |-> "idle", fin |-> NONE, nfin |-> 0, late |-> 0, ann |-> [g \in Grps |-> 0],
      wr |-> [g \in Grps |-> IF g \in InitVer THEN "true" ELSE "none"], ver |-> InitVer, ver0 |-> InitVer,
-     reqd |-> {}, lied |-> {}, askedEv |-> FALSE, aheadN |-> 0, stolen |-> FALSE, redialed |-> FALSE, queue |-> {}, hd |-> -1, rel |-> FALSE,
+     reqd |-> {}, lied |-> {}, askedEv |-> FALSE, aheadN |-> 0, dupN |-> 0, stolen |-> FALSE, redialed |-> FALSE, queue |-> {}, hd |-> -1, rel |-> FALSE,
      inP |-> [p \in Provs |-> FALSE], inA |-> [p \in Provs |-> FALSE], asg |-> [p \in Provs |-> {}],
      conn |-> [p \in Provs |-> FALSE], dial |-> [p \in Provs |-> FALSE], retry |-> [p \in Provs |-> FALSE],
      up |-> [p \in Provs |-> TRUE], lpa |-> [p \in Provs |-> 0], rx |-> [p \in Provs |-> NoStreams],
@@ -148,7 +153,8 @@ ReqOut(T, p, useAsg, only) ==
             ELSE LET failT == [T EXCEPT !.retry[p] = TRUE]
                  IN IF Cardinality(Streams(T, p)) >= SPP THEN {failT}
                     ELSE {[T EXCEPT !.rx[p][SlotFree(T, p)] = NewStream(need), !.reqd = T.reqd \cup need,
-                                    !.askedEv = T.askedEv \/ ~T.inP[p]]}
+                                    !.askedEv = T.askedEv \/ ~T.inP[p],
+                                    !.ss = IF T.lastp THEN T.ss ELSE 0, !.lastp = TRUE]}
                          \cup (IF CanBusy /\ T.fb > 0 THEN {[failT EXCEPT !.fb = T.fb - 1]} ELSE {})
 
 (* the thief takes the stolen tail: assigned, its idle clock restarts, requested *)
@@ -274,7 +280,7 @@ TryAhead(T, p, s, g) ==
     IN IF Proofs /\ st.on /\ IsHeld(st.fr[g]) /\ st.pf[g] # 0 /\ g \notin T.ver
        THEN IF st.pf[g] = 1 /\ KindOf(st.fr[g]) # "j"
             THEN {[T EXCEPT !.pd = [on |-> TRUE, p |-> p, s |-> s, g |-> g, ahead |-> TRUE, c |-> "true", step |-> "w"]]}
-            ELSE {T}
+            ELSE {EvictOut(T, p)}   \* the proof and the bytes, both from p, do not hash to the root
        ELSE {T}
 
 (* ---- the server side of a stream (the adversary, or an honest provider) ---- *)
@@ -299,7 +305,8 @@ ExtraBytes(p, s) == \* bytes after the last range: a protocol fault
 ProofSend(p, s, g, j) == \* a range proof for g (good or wrong), from the provider of the stream
     /\ External /\ Proofs /\ S.inP[p] /\ S.rx[p][s].on /\ S.rx[p][s].fr[g] # "x"
     /\ (j = 1 \/ (p \in Liars /\ j = 2))
-    /\ S' \in TryAhead([S EXCEPT !.rx[p][s].pf[g] = j], p, s, g)
+    /\ \/ S' \in TryAhead([S EXCEPT !.rx[p][s].pf[g] = j], p, s, g)
+       \/ j = 2 /\ S' = EvictOut(S, p)   \* a frame that does not fit the value evicts its provider
 
 EndStream(p, s, cost) ==
     [S EXCEPT !.rx[p][s] = NoStream, !.fb = S.fb - cost,
@@ -327,8 +334,18 @@ Deliver(p, s, g) ==
     /\ LET st == S.rx[p][s] IN
        \/ /\ g = Min(Pend(st))
           /\ S' = [S EXCEPT !.rx[p][s].fr[g] = HeldOf(KindOf(st.fr[g])), !.dr = 8 * p + s, !.ss = 0]
+       \/ /\ Mid /\ g = Min(Pend(st)) /\ st.fr[g] = "ng" /\ g \notin S.ver
+          /\ S' = [S EXCEPT !.rx[p][s].fr[g] = "mg"]
        \/ /\ g # Min(Pend(st))
           /\ S' \in TryAhead([S EXCEPT !.rx[p][s].fr[g] = HeldOf(KindOf(st.fr[g]))], p, s, g)
+
+FinishMid(p, s, g) == \* the rest of the bytes of a frame accepted for verification arrive
+    /\ External /\ S.inP[p] /\ S.conn[p] /\ S.rx[p][s].on /\ S.rx[p][s].fr[g] = "mg"
+    /\ S' = [S EXCEPT !.rx[p][s].fr[g] = "kg", !.dr = 8 * p + s, !.ss = 0]
+
+Reconnect(p) == \* the host reports a session up that is already up: the missing work is asked for again
+    /\ Mid /\ External /\ S.inP[p] /\ S.conn[p] /\ S.inA[p]
+    /\ S' \in ReqOut(S, p, TRUE, {})
 
 Drain(p, s) ==
     /\ S.run = "run" /\ S.tasks = <<>> /\ ~S.pd.on /\ S.dr = 8 * p + s
@@ -338,7 +355,10 @@ Drain(p, s) ==
                 k == KindOf(st.fr[g])
                 T0 == [S EXCEPT !.lastp = TRUE, !.ss = 0]
             IN IF k = "b" THEN S' = EvictOut(T0, p)
-               ELSE IF g \in S.ver THEN S' = [T0 EXCEPT !.rx[p][s].fr[g] = "c"]
+               ELSE IF g \in S.ver /\ st.fr[g] # "kg" THEN S' = [T0 EXCEPT !.rx[p][s].fr[g] = "c"]
+               ELSE IF g \in S.ver /\ DupFix THEN \* stored by another stream while this one was inside the group: accounted, not announced again
+                    S' = [T0 EXCEPT !.rx[p][s].fr[g] = "c", !.dupN = 1, !.lpa[p] = 0,
+                                    !.tasks = IF T0.striped THEN <<<<"top", p>>, <<"chk">>>> ELSE <<<<"chk">>>>]
                ELSE IF k = "j" THEN S' = EvictOut(T0, p)
                ELSE S' = [T0 EXCEPT !.rx[p][s].fr[g] = "c",
                                     !.pd = [on |-> TRUE, p |-> p, s |-> s, g |-> g, ahead |-> FALSE, c |-> "true", step |-> "w"]]
@@ -373,8 +393,8 @@ TwFire ==
                       !.tasks = [i \in 1..Cardinality({q \in Provs : S.inA[q]}) |->
                                     <<"top", Ascending({q \in Provs : S.inA[q]})[i]>>]]
 
-StallRedial == \* no granule for the stall wait: hang up every session, dial afresh
-    /\ External /\ S.lastp /\ S.ss >= SW
+StallRedial == \* nothing for the stall wait since the first request: hang up every session, dial afresh (SW = 0: no stall redial)
+    /\ External /\ SW > 0 /\ S.lastp /\ S.ss >= SW
     /\ S' = [S EXCEPT !.ss = 0, !.redialed = TRUE,
                       !.rx = [p \in Provs |-> IF S.inA[p] /\ S.conn[p] THEN NoStreams ELSE S.rx[p]],
                       !.conn = [p \in Provs |-> IF S.inA[p] THEN FALSE ELSE S.conn[p]],
@@ -408,6 +428,8 @@ Restart ==
 Next ==
     \/ Start \/ Task \/ Write \/ Commit \/ TwFire \/ StallRedial \/ Release \/ DeadlineFire \/ Tick \/ Restart
     \/ \E p \in Provs :
+          \/ Reconnect(p)
+          \/ \E s \in Slots, g \in Grps : FinishMid(p, s, g)
           \/ DialOk(p) \/ DialFail(p) \/ Close(p) \/ Down(p) \/ Back(p) \/ Fire(p)
           \/ \E s \in Slots : Drain(p, s) \/ Truncate(p, s) \/ ExtraBytes(p, s) \/ Finished(p, s) \/ ResetBy(p, s)
           \/ \E s \in Slots : \E g \in Grps :
@@ -416,7 +438,7 @@ Next ==
                 \/ \E j \in 1..2 : ProofSend(p, s, g, j)
 
 HonestSteps(p) ==
-    DialOk(p) \/ (\E s \in Slots : \E g \in Grps : (\E k \in Kinds(p) : Send(p, s, g, k)) \/ Deliver(p, s, g)) \/ (\E s \in Slots : Finished(p, s))
+    DialOk(p) \/ (\E s \in Slots : \E g \in Grps : FinishMid(p, s, g)) \/ (\E s \in Slots : \E g \in Grps : (\E k \in Kinds(p) : Send(p, s, g, k)) \/ Deliver(p, s, g)) \/ (\E s \in Slots : Finished(p, s))
 
 (* Micro-steps of a call (Task, Write, Commit, Drain) are enabled until taken, so weak fairness. The external
    events of the host (a timer that is due, a frame of an answering provider, a provider that comes back) are
@@ -442,6 +464,14 @@ OnlyVerified == SoundStore(S, Grps) /\ SoundEvents(S, Grps)
 
 (* exactly one final event, none after it *)
 OneFinal == OneFinalP(S)
+
+(* a wrong range proof never stays next to a held out-of-order group of its stream: the provider is evicted *)
+BadProofEvicts ==
+    \A p \in Provs : \A s \in Slots : \A g \in Grps :
+        ~(S.rx[p][s].on /\ S.rx[p][s].pf[g] = 2 /\ IsHeld(S.rx[p][s].fr[g]) /\ g # Min(Pend(S.rx[p][s])) /\ g \notin S.ver)
+
+(* a granule is announced once, however the streams race on it *)
+AnnOnce == \A g \in Grps : S.ann[g] <= 1
 
 NoEventAfterDone == [][S.run = "done" => (S' = S \/ S'.run = "idle")]_S
 
@@ -479,6 +509,7 @@ NeverComplete == S.fin # "Complete"
 NeverLiarThenComplete == ~(S.fin = "Complete" /\ S.lied # {})
 NeverStolen == ~S.stolen
 NeverRedialed == ~S.redialed
+NeverDup == S.dupN = 0
 
 Terminates == <>(S.run = "done")
 Completes == <>(S.fin = "Complete")
