@@ -29,6 +29,7 @@ vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
+vinc-broadcast = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -380,6 +381,50 @@ path = "core_props.rs"
 [[test]]
 name = "transport_wide"
 path = "transport_wide.rs"
+
+[[test]]
+name = "broadcast_publish"
+path = "broadcast_publish.rs"
+
+[[test]]
+name = "broadcast_auth"
+path = "broadcast_auth.rs"
+
+[[test]]
+name = "broadcast_hub"
+path = "broadcast_hub.rs"
+
+[[test]]
+name = "broadcast_repair"
+path = "broadcast_repair.rs"
+
+[[test]]
+name = "broadcast_floors"
+path = "broadcast_floors.rs"
+
+[[test]]
+name = "broadcast_acp"
+path = "broadcast_acp.rs"
+
+[[test]]
+name = "broadcast_fallback"
+path = "broadcast_fallback.rs"
+
+[[test]]
+name = "broadcast_restore"
+path = "broadcast_restore.rs"
+
+[[test]]
+name = "broadcast_wire"
+path = "broadcast_wire.rs"
+
+[[test]]
+name = "broadcast_determinism"
+path = "broadcast_determinism.rs"
+
+[[test]]
+name = "broadcast_alloc"
+path = "broadcast_alloc.rs"
 
 [lints]
 workspace = true

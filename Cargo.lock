@@ -1375,6 +1375,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
+ "vinc-broadcast",
  "vinc-core",
  "vinc-crypto",
  "vinc-dag",
@@ -1384,6 +1385,16 @@ dependencies = [
  "vinc-sim",
  "vinc-transport",
  "vinc-values",
+ "vinc-wire",
+]
+
+[[package]]
+name = "vinc-broadcast"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "vinc-crypto",
+ "vinc-membership",
  "vinc-wire",
 ]
 
@@ -1496,6 +1507,7 @@ dependencies = [
  "ml-dsa",
  "ml-kem",
  "proptest",
+ "vinc-broadcast",
  "vinc-connect",
  "vinc-core",
  "vinc-crypto",

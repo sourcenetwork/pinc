@@ -1,0 +1,24 @@
+[package]
+name = "vinc-broadcast"
+description = "VINC topic broadcast with origin authentication: signed messages, a hub topic log, gap repair, replay floors and a member-to-member fallback, as a SANS-IO state machine"
+keywords = ["no_std", "broadcast", "pubsub", "sans-io"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# The topic machine (it keeps bounded tables and the hub log on the heap). The wire format, the signing and the host
+# interface need no allocator.
+alloc = []
+
+[dependencies]
+vinc-wire = { workspace = true }
+vinc-crypto = { workspace = true }
+vinc-membership = { workspace = true }
+blake3 = { workspace = true }
+
+[lints]
+workspace = true

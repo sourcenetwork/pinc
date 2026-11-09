@@ -1,0 +1,220 @@
+//! The deterministic trace: every input the machine acts on and every decision it takes, in order.
+//!
+//! The queue is bounded. When it is full the newest record is dropped and counted, and the count is delivered as
+//! [`Trace::Lost`] before the next record, so a consumer never mistakes a gap for silence. Topics appear as a
+//! [`Tag`], the first eight bytes of their hash, so a record is `Copy` and fixed-size.
+
+use vinc_membership::NodeId;
+
+/// The first eight bytes of the hash of a topic.
+pub type Tag = [u8; 8];
+
+/// The tag of `topic`.
+pub fn topic_tag(topic: &[u8]) -> Tag {
+    blake3::hash(topic)
+        .as_bytes()
+        .first_chunk::<8>()
+        .copied()
+        .unwrap_or([0; 8])
+}
+
+/// How a publish was handed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishMode {
+    /// Every hub was up: FANP to the primary, FAN to the others.
+    Fan,
+    /// PUB to the primary.
+    Single,
+    /// The node is a hub and stored it itself.
+    Local,
+}
+
+/// Why a message was not accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reject {
+    /// The head or the frame did not parse.
+    BadHead,
+    /// The signature does not cover this topic, id and body.
+    BadSignature,
+    /// Already seen or logged.
+    Duplicate,
+    /// The origin is revoked.
+    Revoked,
+    /// The dedupe set of the topic is full.
+    SeenFull,
+    /// The topic table is full.
+    TopicsFull,
+    /// The log could not take it.
+    LogFull,
+    /// Older than the replay floor.
+    Old,
+}
+
+/// Why a message waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldWhy {
+    /// For the access-control answer on its origin.
+    Acp,
+    /// For the replay floors of the hubs.
+    Floor,
+}
+
+/// A trace record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trace {
+    /// A message was published.
+    Published {
+        /// The topic.
+        topic: Tag,
+        /// The id.
+        mid: [u8; 8],
+        /// How it went out.
+        mode: PublishMode,
+    },
+    /// A PUB went to a hub on a retry.
+    PubRetry {
+        /// The hub.
+        hub: NodeId,
+        /// The id.
+        mid: [u8; 8],
+    },
+    /// A hub acknowledged a publish.
+    PubAcked {
+        /// The id.
+        mid: [u8; 8],
+    },
+    /// A publish was given up.
+    PubGaveUp {
+        /// The id.
+        mid: [u8; 8],
+    },
+    /// A hub logged a message.
+    Stored {
+        /// The topic.
+        topic: Tag,
+        /// The id.
+        mid: [u8; 8],
+        /// It came fanned, so it was not mirrored.
+        fanned: bool,
+    },
+    /// A message was refused.
+    Rejected {
+        /// The id, zero if the head did not parse.
+        mid: [u8; 8],
+        /// Why.
+        why: Reject,
+    },
+    /// A message was delivered.
+    Delivered {
+        /// The topic.
+        topic: Tag,
+        /// The id.
+        mid: [u8; 8],
+    },
+    /// A message is held.
+    Held {
+        /// The id.
+        mid: [u8; 8],
+        /// Why.
+        why: HoldWhy,
+    },
+    /// An access check was asked.
+    AcpAsked {
+        /// The check.
+        id: u32,
+    },
+    /// An access check was answered.
+    AcpAnswered {
+        /// The check.
+        id: u32,
+        /// The verdict.
+        allow: bool,
+    },
+    /// A SUB went to a hub.
+    SubSent {
+        /// The hub.
+        hub: NodeId,
+        /// The topic.
+        topic: Tag,
+        /// The point in time asked for (wall milliseconds).
+        since_ms: u64,
+        /// `REPLAY_PUSH` was asked.
+        replay: bool,
+    },
+    /// A HAVE went out.
+    HaveSent {
+        /// The peer.
+        peer: NodeId,
+        /// The topic.
+        topic: Tag,
+        /// How many ids.
+        count: u16,
+    },
+    /// A GET went out.
+    GetSent {
+        /// The peer.
+        peer: NodeId,
+        /// The topic.
+        topic: Tag,
+        /// How many ids.
+        count: u16,
+    },
+    /// A requested message arrived.
+    Repaired {
+        /// The topic.
+        topic: Tag,
+        /// The id.
+        mid: [u8; 8],
+    },
+    /// A hub reported its replay floor.
+    FloorReported {
+        /// The hub.
+        hub: NodeId,
+    },
+    /// The floor gathering ended.
+    FloorDone {
+        /// The floors were used (false: the wait ran out).
+        used: bool,
+    },
+    /// A message went straight to a subscriber.
+    FallbackSent {
+        /// The id.
+        mid: [u8; 8],
+        /// The subscriber.
+        to: NodeId,
+    },
+    /// A hub kept a member's subscriptions for its lease.
+    SubsHeld {
+        /// The member.
+        member: NodeId,
+    },
+    /// A hub made a member's held subscriptions live and told it.
+    SubsRestored {
+        /// The member.
+        member: NodeId,
+        /// How many topics.
+        topics: u16,
+    },
+    /// A hub forgot a member's subscriptions.
+    SubsReleased {
+        /// The member.
+        member: NodeId,
+    },
+    /// A member heard that its subscription was restored.
+    RestoredSeen {
+        /// The hub.
+        hub: NodeId,
+        /// The topic.
+        topic: Tag,
+    },
+    /// The primary hub changed.
+    Primary {
+        /// The new primary.
+        hub: NodeId,
+    },
+    /// This many trace records were dropped because the queue was full.
+    Lost {
+        /// How many.
+        count: u32,
+    },
+}
