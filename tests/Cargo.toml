@@ -26,6 +26,7 @@ vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true }
 vinc-connect = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
+vinc-dtn = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -253,6 +254,26 @@ path = "reconcile_alloc.rs"
 [[test]]
 name = "reconcile_codec"
 path = "reconcile_codec.rs"
+
+[[test]]
+name = "dtn_seal"
+path = "dtn_seal.rs"
+
+[[test]]
+name = "dtn_rs"
+path = "dtn_rs.rs"
+
+[[test]]
+name = "dtn_store"
+path = "dtn_store.rs"
+
+[[test]]
+name = "dtn_forward"
+path = "dtn_forward.rs"
+
+[[test]]
+name = "dtn_alloc"
+path = "dtn_alloc.rs"
 
 [lints]
 workspace = true
