@@ -100,6 +100,8 @@ pub struct RelayNode {
     /// Lookups answered over UDP and over a carrier.
     pub dns_udp: u64,
     pub dns_carrier: u64,
+    /// Every datagram the hub endpoint transmitted: time, destination and length.
+    pub tx_log: Vec<(Time, SocketAddr, usize)>,
 }
 
 impl RelayNode {
@@ -126,6 +128,7 @@ impl RelayNode {
             records: 0,
             dns_udp: 0,
             dns_carrier: 0,
+            tx_log: Vec::new(),
         }
     }
 
@@ -216,6 +219,7 @@ impl RelayNode {
                 break;
             };
             did = true;
+            self.tx_log.push((now, t.remote, t.len));
             if let Some((_, slot)) = relay_parts(&t.remote) {
                 let Some(node) = self.slots.get(usize::from(slot)).copied() else {
                     continue;

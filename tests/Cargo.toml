@@ -556,3 +556,7 @@ path = "sim_connect_local.rs"
 [[test]]
 name = "sim_connect_flight"
 path = "sim_connect_flight.rs"
+
+[[test]]
+name = "sim_connect_hub"
+path = "sim_connect_hub.rs"

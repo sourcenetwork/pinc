@@ -78,7 +78,7 @@ ep_impl! {
             let plan = Inputs {
                 role: slot.m.role,
                 dialer: slot.m.client,
-                direct: true,
+                direct: !conn.active_is_relay(),
                 now,
                 last_tx: slot.m.last_tx,
                 last_rx: slot.m.last_rx,

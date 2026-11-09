@@ -312,6 +312,11 @@ conn_impl! {
         Ok(())
     }
 
+    /// Whether the active path runs through a relay.
+    pub fn active_is_relay(&self) -> bool {
+        self.paths.active().is_some_and(|p| p.info.kind == PathKind::Relay)
+    }
+
     /// When a datagram last arrived on a path, in the connection's clock; 0 before the first.
     pub fn path_last_rx(&self, id: PathId) -> Option<u64> {
         let i = self.paths.find(id)?;
