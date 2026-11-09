@@ -337,7 +337,9 @@ The only things taken on trust are the dependencies, not this repository's code:
 ## Being closed
 
 These items are still open; they are listed so nothing is hidden:
-- `vinc-crypto` and `vinc-keystore`: the labels of `vinc-broadcast` are private constants, so they are not in the label registry or its trace; the zeroization statement covers the named buffers of the crate, not the copies a dependency makes of a scalar passed by value; the TPM store is traced against a software TPM only, and a refused flush after a failed `ReadPublic` in `generate` leaks the handle without an error; the TPM refuses an object auth value longer than the digest of its name algorithm (32 bytes), which the client reports as the TPM's code.
+- `vinc-crypto` and `vinc-keystore`: the labels of `vinc-broadcast` are private constants, so they are not in the label registry or its trace; the zeroization statement covers the named buffers of the crate, not the copies a dependency makes of a scalar passed by value; the TPM store is traced against a software TPM only, and a refused flush after a failed `ReadPublic` in `generate` leaks the handle without an error; the TPM refuses an object auth value longer than the digest of its name algorithm (32 bytes), which the client reports as the TPM's code. The TPM client's resend of a command answered `TPM_RC_RETRY`, `TPM_RC_YIELDED` or `TPM_RC_TESTING` is checked
+  at the trace level (the same bytes sent again, at most 8 sends; the store's programs are checked on the commands
+  that took effect); the typed error after the last resend is covered by unit tests, not by the TPM model.
 - The TLC models are bounded as listed (the Lean theorems are not); the trace checks cover the recorded runs only.
 - The proofs of `vinc-core` are being written. Until they are here, that crate is tested, not proven.
 - `vinc-reconcile`: the refinement of the byte-level handlers to the abstract part system is proved for the split,

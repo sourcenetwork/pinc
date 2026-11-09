@@ -125,9 +125,16 @@ CmdsOK(ev, own, key) ==
                           IF MethodOf(c.cmd) \in {"createPrimary", "evictControl"} THEN own
                           ELSE IF MethodOf(c.cmd) \in {"sign", "unseal"} THEN key ELSE <<>>, c.cmd)
            /\ Len(c.rsp) >= 10 /\ Be32(c.rsp, 3) = T!LenW(Len(c.rsp))
-Recorded(ev) == [k \in 1..Len(ev.cmds) |-> <<MethodOf(ev.cmds[k].cmd), RcOf(ev.cmds[k].rsp) = T!Zero2>>]
+(* The client sends a command again, with the same bytes, while the TPM answers TPM_RC_RETRY, TPM_RC_YIELDED or        *)
+(* TPM_RC_TESTING, at most 8 sends in all. The program is checked on the commands that took effect.                    *)
+ResendRc == {<<0, 2338>>, <<0, 2312>>, <<0, 2314>>}
+Resent(ev, k) == k < Len(ev.cmds) /\ RcOf(ev.cmds[k].rsp) \in ResendRc /\ ev.cmds[k + 1].cmd = ev.cmds[k].cmd
+KeptIdx(ev) == SelectSeq([k \in 1..Len(ev.cmds) |-> k], LAMBDA k : ~Resent(ev, k))
+Kept(ev) == [x \in 1..Len(KeptIdx(ev)) |-> ev.cmds[KeptIdx(ev)[x]]]
+ResendBound(ev) == \A k \in 1..Len(ev.cmds) : ~(\A d \in 0..7 : Resent(ev, k + d))
+Recorded(ev) == [k \in 1..Len(Kept(ev)) |-> <<MethodOf(Kept(ev)[k].cmd), RcOf(Kept(ev)[k].rsp) = T!Zero2>>]
 AllOk(rec) == \A k \in 1..Len(rec) : rec[k][2]
-FirstBad(ev) == (CHOOSE k \in 1..Len(ev.cmds) : RcOf(ev.cmds[k].rsp) # T!Zero2)
+FirstBad(ev) == (CHOOSE k \in 1..Len(Kept(ev)) : RcOf(Kept(ev)[k].rsp) # T!Zero2)
 ProgOp(name) ==
     CASE name = "open" -> "open" [] name = "generate" -> "generate" [] name = "load_persistent" -> "loadPersistent"
       [] name = "persist" -> "persist" [] name = "sign" -> "sign" [] name = "seal" -> "seal"
@@ -154,12 +161,13 @@ TpmOK(ev, st0) ==
                la == ev.live_after
                lb == ev.live_before
            IN /\ CmdsOK(ev, ev.owner, ev.key)
+              /\ ResendBound(ev)
               /\ FitsProgram(ev.prog, ev.n, rec)
               /\ la = lb + T!Net(rec)
               /\ la = ev.slots
               /\ IF ev.prog = "generate_unsupported" THEN ev.res = "Unsupported"
                  ELSE (ev.res = "ok") = AllOk(rec)
-              /\ (~AllOk(rec) /\ ev.res = "Tpm") => ev.code = RcOf(ev.cmds[FirstBad(ev)].rsp)
+              /\ (~AllOk(rec) /\ ev.res = "Tpm") => ev.code = RcOf(Kept(ev)[FirstBad(ev)].rsp)
       [] ev.op = "hnd" ->
            IF ev.call = "persist_again" THEN ev.res = "InvalidHandle" /\ ev.ncmds = 0
            ELSE IF T!Persistent(ev.h) THEN ev.res # "InvalidHandle" /\ ev.ncmds >= 1
@@ -174,13 +182,14 @@ TpmOK(ev, st0) ==
            LET rec == Recorded(ev)
                h == T!ParseHeader(ev.blob, ev.lib_ok)
                Rc(m) == IF \E k \in 1..Len(rec) : rec[k][1] = m
-                        THEN RcOf(ev.cmds[CHOOSE k \in 1..Len(rec) : rec[k][1] = m].rsp) ELSE T!Zero2
+                        THEN RcOf(Kept(ev)[CHOOSE k \in 1..Len(rec) : rec[k][1] = m].rsp) ELSE T!Zero2
                Dek == IF \E k \in 1..Len(rec) : rec[k][1] = "unseal" /\ rec[k][2]
-                      THEN LET r == ev.cmds[CHOOSE k \in 1..Len(rec) : rec[k][1] = "unseal"].rsp IN r[15] * 256 + r[16]
+                      THEN LET r == Kept(ev)[CHOOSE k \in 1..Len(rec) : rec[k][1] = "unseal"].rsp IN r[15] * 256 + r[16]
                       ELSE 0
                aead == \E b \in st0.tseal : b = ev.blob
                r == T!UnsealResult(h.ok, Rc("load"), Rc("unseal"), Rc("flush"), Dek, aead)
            IN /\ CmdsOK(ev, ev.owner, ev.key)
+              /\ ResendBound(ev)
               /\ (h.ok => h.hdr = ev.hdr)
               /\ (Len(rec) = 0) = ~h.ok
               /\ (Len(rec) = 0 \/ \E f \in -1..1 : T!ProgramOf("unseal", f).cmds = rec)

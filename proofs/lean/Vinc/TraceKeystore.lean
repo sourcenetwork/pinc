@@ -170,6 +170,23 @@ def mOfCc (cc : Nat) : Except String M :=
 
 def sliceBe32 (b : Bytes) (i : Nat) : Nat := be32 ((b.drop i).take 4)
 
+/-- The client sends a command again, with the same bytes, while the TPM answers `TPM_RC_RETRY`, `TPM_RC_YIELDED` or
+`TPM_RC_TESTING`, at most 8 sends in all. The program is checked on the commands that took effect: a command answered
+with one of those codes and followed by the same bytes is a resend, and a run of 8 resends is refused. -/
+def resendCodes : List Nat := [0x922, 0x908, 0x90A]
+
+def dropResent : List (M × Nat × Bytes × Bytes) → Except String (List (M × Nat × Bytes × Bytes))
+  | [] => pure []
+  | c :: rest => do
+    let tail ← dropResent rest
+    match rest with
+    | d :: _ => if resendCodes.contains c.2.1 && d.2.2.1 == c.2.2.1 then pure tail else pure (c :: tail)
+    | [] => pure (c :: tail)
+
+def resendRunOk (cmds : List (M × Nat × Bytes × Bytes)) : Bool :=
+  let flags := (cmds.zip (cmds.drop 1)).map fun (c, d) => resendCodes.contains c.2.1 && d.2.2.1 == c.2.2.1
+  (flags.foldl (fun (run, ok) f => if f then (run + 1, ok && run + 1 < 8) else (0, ok)) (0, true)).2
+
 /-- The commands of an event with the response codes. -/
 def readCmds (j : J) (owner key : Bytes) : Except String (List (M × Nat × Bytes × Bytes)) := do
   match (← field j "cmds").arr? with
@@ -223,7 +240,9 @@ def replayTpm (j : J) (w : W) : Except String W := do
   | "prog" =>
     let owner ← bytesF j "owner"
     let key ← bytesF j "key"
-    let cmds ← readCmds j owner key
+    let sent ← readCmds j owner key
+    check (resendRunOk sent) "at most 8 sends of one command"
+    let cmds ← dropResent sent
     let recorded := cmds.map fun c => (c.1, decide (c.2.1 = 0))
     let name ← strF j "prog"
     let n ← natF j "n"
@@ -279,7 +298,9 @@ def replayTpm (j : J) (w : W) : Except String W := do
   | "unseal" =>
     let blob ← bytesF j "blob"
     let res ← strF j "res"
-    let cmds ← readCmds j (← bytesF j "owner") (← bytesF j "key")
+    let sent ← readCmds j (← bytesF j "owner") (← bytesF j "key")
+    check (resendRunOk sent) "at most 8 sends of one command"
+    let cmds ← dropResent sent
     let recorded := cmds.map fun c => (c.1, decide (c.2.1 = 0))
     let rcOf (m : M) : Nat := ((cmds.find? (fun c => c.1 == m)).map (·.2.1)).getD 0
     let dekLen : Nat := match cmds.find? (fun c => c.1 == .unseal) with
