@@ -560,3 +560,12 @@ path = "sim_connect_flight.rs"
 [[test]]
 name = "sim_connect_hub"
 path = "sim_connect_hub.rs"
+
+[[test]]
+name = "connect_keyhost"
+path = "connect_keyhost.rs"
+
+[[test]]
+name = "connect_keyhost_tpm"
+path = "connect_keyhost_tpm.rs"
+required-features = ["hwenc"]

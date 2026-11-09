@@ -154,16 +154,32 @@ fn frames_queued_back_to_back_share_one_carrier_record_and_a_handshake_packet_ne
         w.dial(secs(6), a, b, vec![]);
         w.run(secs(7));
         let sa = w.connected(a).expect("connected");
-        let handshake_packets = w.client(a).tx_log.iter().filter(|(_, r, l)| *l >= 1000 && vinc_core::is_relay_addr(r)).count();
+        let handshake_packets = w
+            .client(a)
+            .tx_log
+            .iter()
+            .filter(|(_, r, l)| *l >= 1000 && vinc_core::is_relay_addr(r))
+            .count();
         assert!(handshake_packets >= 1);
         // The records the relay got while the handshake ran: one per handshake packet, none merged.
         let hs_records = w.relay_node(r).records - records0;
-        assert!(hs_records >= handshake_packets as u64, "{hs_records} records for {handshake_packets} long packets");
+        assert!(
+            hs_records >= handshake_packets as u64,
+            "{hs_records} records for {handshake_packets} long packets"
+        );
 
         // A burst of full-size datagrams in one step leaves in fewer records than packets.
         w.run(secs(10));
         let (tx0, rec0) = (w.client(a).tx_log.len(), w.relay_node(r).records);
-        w.sim.command(secs(10), a, Cmd::Datagrams { session: sa, count: 8, len: 1000 });
+        w.sim.command(
+            secs(10),
+            a,
+            Cmd::Datagrams {
+                session: sa,
+                count: 8,
+                len: 1000,
+            },
+        );
         w.run(secs(12));
         let packets = w.client(a).tx_log.len() - tx0;
         let records = (w.relay_node(r).records - rec0) as usize;

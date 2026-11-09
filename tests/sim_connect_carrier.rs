@@ -278,7 +278,15 @@ fn an_answer_of_no_record_ends_the_wait_of_a_pending_dial() {
         let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
         w.run(secs(15));
         let ghost = vinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
-        w.sim.command(secs(15), a, vinc_tests::Cmd::Dial { node: ghost, hints: vec![], role: vinc_core::Role::Other });
+        w.sim.command(
+            secs(15),
+            a,
+            vinc_tests::Cmd::Dial {
+                node: ghost,
+                hints: vec![],
+                role: vinc_core::Role::Other,
+            },
+        );
         w.run(secs(100));
         let lookups = w
             .relay_node(r)
@@ -286,7 +294,10 @@ fn an_answer_of_no_record_ends_the_wait_of_a_pending_dial() {
             .iter()
             .filter(|(_, t)| matches!(t, Trace::LookupServed { peer, found: false } if *peer == ghost))
             .count();
-        assert!((1..=2).contains(&lookups), "one answer of no record ends the wait; it is not asked again: {lookups}");
+        assert!(
+            (1..=2).contains(&lookups),
+            "one answer of no record ends the wait; it is not asked again: {lookups}"
+        );
         assert_eq!(w.client(a).conn.lookups_outstanding(), 0);
     });
 }
@@ -305,12 +316,30 @@ fn a_pending_dial_that_ended_drops_its_lookup() {
         let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
         w.run(secs(15));
         let ghost = vinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
-        w.sim.command(secs(15), a, vinc_tests::Cmd::Dial { node: ghost, hints: vec![], role: vinc_core::Role::Other });
+        w.sim.command(
+            secs(15),
+            a,
+            vinc_tests::Cmd::Dial {
+                node: ghost,
+                hints: vec![],
+                role: vinc_core::Role::Other,
+            },
+        );
         w.run(secs(20));
-        assert_eq!(w.client(a).conn.lookups_outstanding(), 1, "the lookup waits for a carrier");
+        assert_eq!(
+            w.client(a).conn.lookups_outstanding(),
+            1,
+            "the lookup waits for a carrier"
+        );
         w.run(secs(120));
-        let ended = w.when(a, |e| matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::ConnectFailed { .. })));
+        let ended = w.when(a, |e| {
+            matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::ConnectFailed { .. }))
+        });
         assert!(ended.is_some(), "the dial ended: {}", w.dump(a));
-        assert_eq!(w.client(a).conn.lookups_outstanding(), 0, "DIAL_PRUNE dropped the lookup of the ended dial");
+        assert_eq!(
+            w.client(a).conn.lookups_outstanding(),
+            0,
+            "DIAL_PRUNE dropped the lookup of the ended dial"
+        );
     });
 }
