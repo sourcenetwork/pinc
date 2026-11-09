@@ -25,6 +25,7 @@ vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true }
 vinc-connect = { workspace = true }
+vinc-reconcile = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -236,6 +237,22 @@ path = "connect_table.rs"
 [[test]]
 name = "connect_noalloc"
 path = "connect_noalloc.rs"
+
+[[test]]
+name = "reconcile_sets"
+path = "reconcile_sets.rs"
+
+[[test]]
+name = "reconcile_exact"
+path = "reconcile_exact.rs"
+
+[[test]]
+name = "reconcile_alloc"
+path = "reconcile_alloc.rs"
+
+[[test]]
+name = "reconcile_codec"
+path = "reconcile_codec.rs"
 
 [lints]
 workspace = true

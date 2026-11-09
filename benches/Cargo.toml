@@ -14,6 +14,7 @@ vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true }
+vinc-reconcile = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -53,6 +54,10 @@ harness = false
 
 [[bench]]
 name = "sim_engine"
+harness = false
+
+[[bench]]
+name = "reconcile"
 harness = false
 
 [lints]
