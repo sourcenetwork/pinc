@@ -246,4 +246,36 @@ def Responder.handle (o : Oracle) (S : List Item) (s : Responder) (msg : List Na
     else Responder.run o S { core := c, side := .open } r3
   else Responder.run o S s body
 
+/-! ## The state a refused message leaves
+
+`Initiator::handle` and `Responder::handle` wrap the rules above: a refused message ends the session of the object that
+refused it (`Idle` for an initiator that was open or checking, `Done` for a responder that was not fresh or that refused the
+rest of a first message; a fresh responder that refused the header of its first message keeps no state), so a caller that ignores the error and goes on is refused with
+`Reason::State` until it starts again. `Responder::resume` ends a cold stream the same way. -/
+
+/-- The initiator after `handle` returned an error. -/
+def Initiator.afterErr (s : Initiator) : Initiator :=
+  if s.phase = .open ∨ s.phase = .checking then { s with phase := .idle } else s
+
+/-- Whether the header of a first message is refused before the responder commits to the session: the frame, the set
+reference and the size of the other set. A refusal there leaves a fresh responder fresh. -/
+def Responder.headerRefused (s : Responder) (msg : List Nat) : Bool :=
+  match s.core.body msg with
+  | .error _ => true
+  | .ok body =>
+    match lr (count body) with
+    | .error _ => true
+    | .ok (l, r1) =>
+      decide (l > s.core.lim.maxItem) ||
+        match lr (readBytes l r1) with
+        | .error _ => true
+        | .ok (_, r2) => match lr (readVarint r2) with | .error _ => true | .ok _ => false
+
+/-- The responder after `handle` returned an error on `msg`. -/
+def Responder.afterErr (s : Responder) (msg : List Nat) : Responder :=
+  if s.side = .fresh ∧ s.headerRefused msg then s else { s with side := .done }
+
+/-- The responder after `resume` returned an error. -/
+def Responder.afterResumeErr (s : Responder) : Responder := { s with side := .done }
+
 end Vinc.Reconcile

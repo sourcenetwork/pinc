@@ -100,7 +100,7 @@ fn step_name(s: Step) -> &'static str {
 }
 
 /// The largest `(|A| + |B|) * calls` of a case in the TLC trace; the Lean replay takes every case.
-const TLA_BUDGET: usize = 2500;
+const TLA_BUDGET: usize = 1200;
 
 // ---- the trace of one case -----------------------------------------------------------------------------------------
 
@@ -317,6 +317,27 @@ fn session(
     r
 }
 
+/// A refused message ends the session of the object that refused it: the next call, the message that would end the
+/// exchange, is recorded too (it is refused with `State`, or for a fresh responder, as a first message).
+fn refused_again(
+    cs: &mut Case,
+    init: &mut Initiator,
+    resp: &mut Responder,
+    ia: &MemIndex,
+    ib: &MemIndex,
+    responder: bool,
+) {
+    const END: [u8; 4] = [0, 0, 1, 0];
+    let mut out = Vec::new();
+    if responder {
+        let r = resp.handle(ib, &END, &mut out);
+        cs.ev("R", "handle", &END, r, &out);
+    } else {
+        let r = init.handle(ia, &END, &mut out);
+        cs.ev("I", "handle", &END, r, &out);
+    }
+}
+
 fn run(
     cs: &mut Case,
     init: &mut Initiator,
@@ -352,6 +373,9 @@ fn run(
         cs.note(&tx, first);
         let r = resp.handle(ib, &tx, &mut rx);
         cs.ev("R", "handle", &tx, r, &rx);
+        if r.is_err() {
+            refused_again(cs, init, resp, ia, ib, true);
+        }
         let mut step = r?;
         let mut replies: Vec<Vec<u8>> = Vec::new();
         loop {
@@ -377,6 +401,9 @@ fn run(
             cs.note(&m, false);
             let r = init.handle(ia, &m, &mut tx);
             cs.ev("I", "handle", &m, r, &tx);
+            if r.is_err() {
+                refused_again(cs, init, resp, ia, ib, false);
+            }
             match r? {
                 Step::Send => {
                     assert!(tx.len() <= capi + 3, "an initiator message passes the frame cap");

@@ -21,8 +21,8 @@
 (* InitHandle, RespHandle, RespResume, the same operators the system       *)
 (* model Reconcile.tla runs) compute, on the state the previous calls of   *)
 (* that role left: the same step, the same bytes, or the same error. An    *)
-(* error leaves the state of the role as it was (the drivers reset the     *)
-(* channel and the next session clears it). A `reset` event is            *)
+(* error ends the session of the role that refused it (the wrappers of    *)
+(* Initiator::handle and Responder::handle). A `reset` event is           *)
 (* Responder::reset, and a finished session's `rep` line must be the       *)
 (* initiator's report, item for item.                                      *)
 (*                                                                         *)
@@ -62,6 +62,9 @@ ResetEv ==
     /\ rsp' = [rsp EXCEPT !.side = "fresh"]
     /\ UNCHANGED <<cs, ini>>
 
+(* a refused message ends the session of the object that refused it (Initiator::handle, Responder::handle) *)
+IniAfterErr(s) == IF s.phase \in {"open", "checking"} THEN [s EXCEPT !.phase = "idle"] ELSE s
+
 (* the recorded outcome equals the model's: the step and the bytes, or the error *)
 Agrees(r) ==
     IF Ev.ok THEN r.ok /\ r.v[1] = Ev.step /\ r.v[2] = Ev.out
@@ -78,21 +81,21 @@ IHandleEv ==
     LET r == InitHandle(cs.o, cs.A, ini, Ev.in)
     IN /\ Ev.who = "I" /\ Ev.call = "handle"
        /\ Agrees(r)
-       /\ ini' = IF r.ok THEN r.v[3] ELSE ini
+       /\ ini' = IF r.ok THEN r.v[3] ELSE IniAfterErr(ini)
        /\ UNCHANGED <<cs, rsp>>
 
 RHandleEv ==
     LET r == RespHandle(cs.o, cs.B, rsp, Ev.in)
     IN /\ Ev.who = "R" /\ Ev.call = "handle"
        /\ Agrees(r)
-       /\ rsp' = IF r.ok THEN r.v[3] ELSE rsp
+       /\ rsp' = IF r.ok THEN r.v[3] ELSE RespAfterErr(rsp, Ev.in)
        /\ UNCHANGED <<cs, ini>>
 
 RResumeEv ==
     LET r == RespResume(cs.B, rsp)
     IN /\ Ev.who = "R" /\ Ev.call = "resume"
        /\ Agrees(r)
-       /\ rsp' = IF r.ok THEN r.v[3] ELSE rsp
+       /\ rsp' = IF r.ok THEN r.v[3] ELSE [rsp EXCEPT !.side = "done"]
        /\ UNCHANGED <<cs, ini>>
 
 EvEv == /\ Ev.e = "ev" /\ (IStartEv \/ IHandleEv \/ RHandleEv \/ RResumeEv)

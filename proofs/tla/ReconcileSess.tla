@@ -216,4 +216,18 @@ RespHandle(o, S, s, msg) ==
                        ELSE RespRun(o, S, [core |-> c1, side |-> "open"], na[2]))))
          ELSE RespRun(o, S, s, body))
 
+(* The header of a first message is refused before the responder commits to the session (the frame, the set       *)
+(* reference, the size of the other set): a fresh responder that refuses it stays fresh, after that it is done.   *)
+RespHeaderRefused(s, msg) ==
+    LET rb == CoreBody(s.core, msg) IN
+    IF ~rb.ok THEN TRUE
+    ELSE LET rl == Count(rb.v) IN
+         IF ~rl.ok THEN TRUE
+         ELSE IF rl.v[1] > s.core.lim.maxItem THEN TRUE
+         ELSE LET rf == ReadBytes(rl.v[1], rl.v[2]) IN
+              IF ~rf.ok THEN TRUE ELSE ~Count(rf.v[2]).ok
+
+(* the responder after Responder::handle refused msg *)
+RespAfterErr(s, msg) == IF s.side = "fresh" /\ RespHeaderRefused(s, msg) THEN s ELSE [s EXCEPT !.side = "done"]
+
 =============================================================================

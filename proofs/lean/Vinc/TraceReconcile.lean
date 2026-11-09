@@ -14,7 +14,8 @@ fingerprint of every item that can be hashed and the 64-bit id of every item of 
 `Oracle` of the model (`H x` is the big endian number of the 16 bytes, `idf x` of the 8 bytes), so the real keyed
 hash is the model's hash and no assumption on it enters the replay. An `ev` event is one handler call with the bytes
 delivered to it; the replay requires the same step and the same bytes written, or the same error. A `reset` event
-is `Responder::reset`, a `rep` event the report of the finished initiator.
+is `Responder::reset`, a `rep` event the report of the finished initiator. A refused message leaves the object as
+`afterErr` says (the session ended).
 -/
 
 namespace Vinc.TraceReconcile
@@ -136,15 +137,15 @@ def replayEvent (j : J) (w : W) : Except String W := do
       | "I", "handle" =>
         let r := c.init.handle c.o c.a inp
         compare what j (r.map fun (s, m, _) => (s, m))
-        pure { w' with c := some { c with init := match r with | .ok (_, _, s) => s | .error _ => c.init } }
+        pure { w' with c := some { c with init := match r with | .ok (_, _, s) => s | .error _ => c.init.afterErr } }
       | "R", "handle" =>
         let r := c.resp.handle c.o c.b inp
         compare what j (r.map fun (s, m, _) => (s, m))
-        pure { w' with c := some { c with resp := match r with | .ok (_, _, s) => s | .error _ => c.resp } }
+        pure { w' with c := some { c with resp := match r with | .ok (_, _, s) => s | .error _ => c.resp.afterErr inp } }
       | "R", "resume" =>
         let r := c.resp.resume c.o c.b
         compare what j (r.map fun (s, m, _) => (s, m))
-        pure { w' with c := some { c with resp := match r with | .ok (_, _, s) => s | .error _ => c.resp } }
+        pure { w' with c := some { c with resp := match r with | .ok (_, _, s) => s | .error _ => c.resp.afterResumeErr } }
       | _, _ => throw s!"unknown call {who}.{call}"
     | _ => throw s!"unknown event {e}"
 
