@@ -86,6 +86,8 @@ enum State {
         aead: Aead,
         th1: [u8; 32],
         ss_x: Secret<32>,
+        /// What the machine goes back to when the Reply fails to open: a forged or damaged Reply is dropped.
+        back: Back,
     },
     /// Waiting for the host to sign.
     Sign {
@@ -96,6 +98,13 @@ enum State {
     },
     Done,
     Failed,
+}
+
+/// The state and transcript before a Reply was taken in.
+struct Back {
+    short: bool,
+    echo: [u8; 16],
+    th: Transcript,
 }
 
 /// A resumption the machine stopped waiting for but still accepts a reply to.
@@ -462,6 +471,9 @@ impl Initiator {
             return Err(Failure::UnexpectedMessage);
         }
         let reply = Reply::parse(input).map_err(Failure::Malformed)?;
+        let State::Reply { short, echo } = self.state else {
+            return Err(Failure::UnexpectedMessage);
+        };
         if !self.offer.contains(reply.aead) {
             return Err(Failure::NoCommonAead);
         }
@@ -474,6 +486,11 @@ impl Initiator {
             .ok_or(Failure::InvalidParameter)?
             .copy_from_slice(input);
         self.inlen = input.len();
+        let back = Back {
+            short,
+            echo,
+            th: self.th.clone(),
+        };
         absorb_reply(&mut self.th, &reply.scid, reply.aead, &reply.e, reply.ct);
         self.out.set_request(Pending::Decap {
             key: self.prekey.handle,
@@ -483,17 +500,33 @@ impl Initiator {
             aead: reply.aead,
             th1: self.th.snapshot(),
             ss_x,
+            back,
         };
         Ok(())
     }
 
     fn on_decapsulated<P: Provider>(&mut self, env: &mut Env<'_, P>, ss_k: &Secret<32>) -> Result<(), Failure> {
-        let State::Decap { aead, th1, ss_x } = mem::replace(&mut self.state, State::Failed) else {
+        let State::Decap { aead, th1, ss_x, back } = mem::replace(&mut self.state, State::Failed) else {
             return Err(Failure::UnexpectedKeyResponse);
         };
         let hs = handshake_keys(ss_k, &ss_x, &th1);
         let reply = Reply::parse(self.inbuf.get(..self.inlen).unwrap_or_default()).map_err(Failure::BadPayload)?;
-        let opened = open_handshake(env.provider, aead, &hs.responder, &th1, reply.sealed)?;
+        let opened = match open_handshake(env.provider, aead, &hs.responder, &th1, reply.sealed) {
+            Ok(o) => o,
+            Err(f) => {
+                if f == Failure::Authentication {
+                    // A damaged or forged Reply proves nothing: drop it and wait for the next one.
+                    self.th = back.th;
+                    self.state = State::Reply {
+                        short: back.short,
+                        echo: back.echo,
+                    };
+                    self.inbuf.zeroize();
+                    self.inlen = 0;
+                }
+                return Err(f);
+            }
+        };
         let ids = IdSig::parse(opened.as_slice(), true).map_err(Failure::BadPayload)?;
         let responder = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
         if responder != self.peer {
@@ -580,15 +613,32 @@ impl Initiator {
         let reply = ResumeReply::parse(input).map_err(Failure::Malformed)?;
         if matches!(self.state, State::Resume { .. }) {
             let State::Resume {
-                ck_psk, aead, binder, ..
+                ck_psk,
+                aead,
+                binder,
+                echo,
             } = mem::replace(&mut self.state, State::Failed)
             else {
                 return Err(Failure::UnexpectedMessage);
             };
             let (seed, remembered) = (self.seed.clone(), self.remembered);
-            let mut th = mem::take(&mut self.th);
-            let secrets = open_resume_reply(env, &seed, &ck_psk, &binder, &mut th, &reply)?;
-            self.th = th;
+            let th = mem::take(&mut self.th);
+            let mut tried = th.clone();
+            let secrets = match open_resume_reply(env, &seed, &ck_psk, &binder, &mut tried, &reply) {
+                Ok(s) => s,
+                Err(f) => {
+                    // A reply that does not confirm is dropped; the Hello is still outstanding.
+                    self.th = th;
+                    self.state = State::Resume {
+                        ck_psk,
+                        aead,
+                        binder,
+                        echo,
+                    };
+                    return Err(f);
+                }
+            };
+            self.th = tried;
             self.finish_resume(aead, secrets, reply, remembered);
             return Ok(());
         }

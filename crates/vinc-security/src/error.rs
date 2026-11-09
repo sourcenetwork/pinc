@@ -20,6 +20,10 @@ pub enum Failure {
     UnexpectedMessage,
     /// A key response that matches no outstanding request; it is dropped and the state is unchanged.
     UnexpectedKeyResponse,
+    /// A first message that differs from the one this session holds, under the same connection ids: the held one was
+    /// damaged or forged on the way, so the host may start the session again from this one. It is dropped and the state
+    /// is unchanged.
+    DifferentFirst,
     /// The peer speaks another protocol version.
     UnsupportedVersion,
     /// The requested ALPN is not served.
@@ -30,7 +34,8 @@ pub enum Failure {
     InvalidParameter,
     /// The peer's key share or encapsulation key is invalid.
     InvalidPeerKey,
-    /// A tag, binder or confirmation did not authenticate: the transcript, a key or a message differs.
+    /// A tag, binder or confirmation did not authenticate: the transcript, a key or a message differs. The message is
+    /// dropped and the state is unchanged, so the peer's resend can still complete the handshake.
     Authentication,
     /// The peer's signature does not verify.
     BadSignature,
@@ -55,7 +60,12 @@ impl Failure {
     pub const fn is_fatal(self) -> bool {
         !matches!(
             self,
-            Self::Malformed(_) | Self::UnexpectedMessage | Self::UnexpectedKeyResponse | Self::Closed
+            Self::Malformed(_)
+                | Self::Authentication
+                | Self::UnexpectedMessage
+                | Self::UnexpectedKeyResponse
+                | Self::DifferentFirst
+                | Self::Closed
         )
     }
 }
@@ -73,6 +83,7 @@ impl fmt::Display for Failure {
             Self::BadPayload(e) => write!(f, "malformed authenticated content: {e}"),
             Self::UnexpectedMessage => f.write_str("message does not fit the current state"),
             Self::UnexpectedKeyResponse => f.write_str("key response without an outstanding request"),
+            Self::DifferentFirst => f.write_str("a different first message under the same connection ids"),
             Self::UnsupportedVersion => f.write_str("unsupported protocol version"),
             Self::UnknownAlpn => f.write_str("application protocol not served"),
             Self::NoCommonAead => f.write_str("no common AEAD"),

@@ -354,7 +354,7 @@ fn a_repeated_initial_gets_the_same_reply_and_the_finish_can_be_retransmitted() 
         other[10] ^= 1;
         assert_eq!(
             r.handle(&mut env_r, &mut w.stores, &other),
-            Err(Failure::UnexpectedMessage)
+            Err(Failure::DifferentFirst)
         );
         assert!(r.poll_output().is_none());
     });
@@ -413,6 +413,48 @@ fn flips(alg: IdentityAlg, msg: usize, stride: usize) {
             match msg {
                 0 | 1 => assert!(out.i_est().is_none(), "{alg:?} message {msg} byte {byte}"),
                 _ => assert!(out.r_est().is_none(), "{alg:?} message {msg} byte {byte}"),
+            }
+        }
+    });
+}
+
+/// A message flipped in flight fails to authenticate and is dropped on both sides; the sender's resend then completes
+/// the handshake, with keys that carry data.
+#[test]
+fn a_damaged_reply_or_finish_is_dropped_and_the_resend_completes_the_handshake() {
+    big_stack(|| {
+        for alg in [IdentityAlg::Ed25519, IdentityAlg::Hybrid] {
+            for msg in [1, 2] {
+                let mut w = World::new(alg, alg, false, false);
+                let len = w.full().msgs[msg].len();
+                // A byte of the sealed part: past the header, so it is the tag check that refuses it.
+                let byte = len - 5;
+                let mut i = w.initiator();
+                let mut r = w.responder();
+                let out = w.run(&mut i, &mut r, Some(&Tamper::flip(msg, byte)));
+                assert!(!out.both_established(), "{alg:?} message {msg}");
+                assert!(
+                    out.i_failed().is_none() && out.r_failed().is_none(),
+                    "{alg:?} message {msg}"
+                );
+                let dropped = if msg == 1 { &out.i_errs } else { &out.r_errs };
+                assert!(dropped.contains(&Failure::Authentication), "{alg:?} message {msg}");
+                // The loss timer fires: the initiator sends its last flight again.
+                let mut env = Env {
+                    provider: &w.i_prov,
+                    now: w.now,
+                    drbg: &mut w.i_drbg,
+                };
+                i.retransmit(&mut env).unwrap();
+                let again = w.run(&mut i, &mut r, None);
+                assert!(
+                    again.i_est().is_some() || out.i_est().is_some(),
+                    "{alg:?} message {msg}: initiator"
+                );
+                assert!(again.r_est().is_some(), "{alg:?} message {msg}: responder");
+                let (i_est, r_est) = (again.i_est().or(out.i_est()).unwrap(), again.r_est().unwrap());
+                assert_eq!(i_est.traffic.send.expose(), r_est.traffic.recv.expose());
+                assert_eq!(i_est.traffic.recv.expose(), r_est.traffic.send.expose());
             }
         }
     });
@@ -506,25 +548,25 @@ fn the_transcript_binds_alpn_connection_ids_version_and_the_aead_offer() {
             false,
             false,
         );
-        assert_eq!(out.i_failed(), Some(Failure::Authentication), "alpn");
+        assert!(out.i_dropped_unauthentic(), "alpn");
         assert!(out.r_est().is_none());
         // A connection id on either side.
         for at in [dcid, scid] {
             let out = mk(Tamper::flip(0, at), false, false);
-            assert_eq!(out.i_failed(), Some(Failure::Authentication), "cid byte {at}");
+            assert!(out.i_dropped_unauthentic(), "cid byte {at}");
         }
         // The version is checked before anything else.
         let out = mk(Tamper::flip(0, v), false, false);
         assert_eq!(out.r_failed(), Some(Failure::UnsupportedVersion));
         // The offer: widened by the attacker, the responder picks ChaCha (no hardware AES) and the transcripts differ.
         let out = mk(Tamper::custom(0, move |m| m[offer] = 3), false, false);
-        assert_eq!(out.i_failed(), Some(Failure::Authentication), "offer");
+        assert!(out.i_dropped_unauthentic(), "offer");
         // With hardware AES at the responder it picks AES, which the initiator never offered.
         let out = mk(Tamper::custom(0, move |m| m[offer] = 3), false, true);
         assert_eq!(out.i_failed(), Some(Failure::NoCommonAead), "offer, hardware");
         // The key share.
         let out = mk(Tamper::flip(0, e), false, false);
-        assert_eq!(out.i_failed(), Some(Failure::Authentication), "e_I");
+        assert!(out.i_dropped_unauthentic(), "e_I");
         // The responder's choice, forged in the Reply (type, scid(1+8), aead).
         let out = mk(Tamper::custom(1, |m| m[10] = 2), false, false);
         assert_eq!(out.i_failed(), Some(Failure::NoCommonAead), "aead choice");
@@ -546,11 +588,7 @@ fn the_credit_record_is_part_of_the_transcript() {
             let mut r = w.responder();
             let t = Tamper::flip(0, at + off);
             let out = w.run(&mut i, &mut r, Some(&t));
-            assert_eq!(
-                out.i_failed(),
-                Some(Failure::Authentication),
-                "initiator record byte {off}"
-            );
+            assert!(out.i_dropped_unauthentic(), "initiator record byte {off}");
         }
     });
 }

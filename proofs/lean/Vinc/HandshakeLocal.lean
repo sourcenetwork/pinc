@@ -170,7 +170,8 @@ theorem ICl_acc (s : Nat × Nat) (st : IState) (h : ICl s st) : ICl s { st with 
   ⟨h.ne, h.reply, h.decap, h.sign, h.done, h.resume, h.resDone, h.resFlag, h.late⟩
 
 theorem ICl_ikey (s : Nat × Nat) (st : IState) (kind : KRes) (h : ICl s st) : ICl s (IKey st s.1 kind).st := by
-  rcases IKey_cases st s.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, k1, k2, k2', k3, k4, c1, -⟩ | ⟨hp, hk, c1, -⟩
+  rcases IKey_cases st s.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, k1, k2, k2', k3, k4, c1, -⟩ | ⟨hp, hk, c1, -⟩ |
+    ⟨hp, hk, -, c1, -⟩
   · rw [c1]; exact h
   · rw [c1]
     have hne := h.ne (by rcases hp with hp | hp <;> simp [hp])
@@ -195,6 +196,12 @@ theorem ICl_ikey (s : Nat × Nat) (st : IState) (kind : KRes) (h : ICl s st) : I
     · intro _; refine ⟨hf, rfl, rfl, rfl, rfl, rfl, rfl⟩
     · intro hr; have := hf.1.1.2.2; have h2 : (ikDoneSt st s.1).resumed = false := this; rw [h2] at hr; cases hr
     · rfl
+  · rw [c1]
+    have hf := h.decap hp
+    have hne := h.ne (by simp [hp])
+    refine ⟨fun _ => hne, fun _ => hf.1, ?_, ?_, ?_, ?_, ?_, ?_, h.late⟩ <;> intro hh
+    all_goals first | (cases hh; done) | skip
+    · have := h.resFlag hh; rw [hp] at this; cases this
 
 /-! ## The responder -/
 

@@ -327,6 +327,10 @@ impl Responder {
                 }
                 return Err(Failure::UnexpectedMessage);
             }
+            // The held Initial was not the dialer's (a bit flipped on the way, or a forgery): the dialer's own repeat
+            // differs from it, and the host starts the session again from the repeat.
+            State::Sign(b) if b.th0 != th0 => return Err(Failure::DifferentFirst),
+            State::Finish(_) => return Err(Failure::DifferentFirst),
             _ => return Err(Failure::UnexpectedMessage),
         }
         if initial.version != VERSION {
@@ -436,7 +440,14 @@ impl Responder {
         let State::Finish(w) = mem::replace(&mut self.state, State::Failed) else {
             return Err(Failure::UnexpectedMessage);
         };
-        let opened = open_handshake(env.provider, w.aead, &w.hs_initiator, &w.th3, finish.sealed)?;
+        let opened = match open_handshake(env.provider, w.aead, &w.hs_initiator, &w.th3, finish.sealed) {
+            Ok(o) => o,
+            Err(f) => {
+                // A damaged or forged Finish is dropped: the initiator's resend can still complete the handshake.
+                self.state = State::Finish(w);
+                return Err(f);
+            }
+        };
         let ids = IdSig::parse(opened.as_slice(), false).map_err(Failure::BadPayload)?;
         let peer = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
         absorb_identity(&mut self.th, ids.alg, ids.public_key);

@@ -533,7 +533,7 @@ def IHandle (st : IState) (n : Nat) (m : Msg) : IRes :=
       else Ok { st with short := false, mode := .full } [IInitMsg n st false] []
     | .rreply =>
       if st.ph = .resume then
-        if ¬ RrConfOK st.x st.ckpsk st.thh st.binder m then Fatal st
+        if ¬ RrConfOK st.x st.ckpsk st.thh st.binder m then Drop st
         else Ok (IResumed st st.x st.ckpsk st.thh st.binder st.rcr st.ad m) [] [.est]
       else if (st.ph = .reply ∨ st.ph = .decap ∨ st.ph = .sign) ∧ st.late.on = true then
         if ¬ RrConfOK st.late.x st.late.ckpsk st.late.thh st.late.binder m then Drop st
@@ -581,6 +581,9 @@ def ikSignSt (st : IState) (n : Nat) : IState :=
             th3 := th3 (ikTh2 st) st.reply.sealed.sig, th4 := th4 (th3 (ikTh2 st) st.reply.sealed.sig) n,
             ath := ikTh2 st, pcr := st.reply.sealed.cr, auth := true }
 
+/-- The initiator after a Reply that does not open: the Reply is dropped and it waits for the next one. -/
+def ikBackSt (st : IState) : IState := { st with ph := .reply, reply := {}, th1 := nil, ssx := nil }
+
 def ikSig (st : IState) (n : Nat) : Term := sig n false st.th4
 def ikT5 (st : IState) (n : Nat) : Term := th5 st.th4 (ikSig st n)
 def ikCk2 (st : IState) (n : Nat) : Term := ck2 st.ck1 (ikT5 st n)
@@ -594,7 +597,9 @@ def ikDoneSt (st : IState) (n : Nat) : IState :=
 def IKey (st : IState) (n : Nat) (kind : KRes) : IRes :=
   if st.ph = .decap ∧ kind = .ok then
     let b := st.reply.sealed
-    if b.k ≠ hs (ikCk1 st n) false st.th1 ∨ b.ad ≠ st.th1 then Fatal st
+    if b.k ≠ hs (ikCk1 st n) false st.th1 ∨ b.ad ≠ st.th1 then
+      -- the Reply does not open: it is dropped and the initiator waits for the next one
+      { st := ikBackSt st, err := .drop }
     else if b.cr = nil then Fatal st
     else if b.id ≠ st.peer then Fatal st
     else if b.sig ≠ sig b.id true (ikTh2 st) then Fatal st
@@ -739,7 +744,7 @@ def rfSt (st : RState) (n : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) 
 def RFinish (st : RState) (n : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) : RRes :=
   if st.ph = .failed then RDrop st sto
   else if st.ph ≠ .finish then RDrop st sto
-  else if m.sealed.k ≠ st.hsi ∨ m.sealed.ad ≠ st.th3 then RFatal st sto
+  else if m.sealed.k ≠ st.hsi ∨ m.sealed.ad ≠ st.th3 then RDrop st sto
   else if m.sealed.sig ≠ sig m.sealed.id false (rfT4 st m) then RFatal st sto
   else if (rfIs st n sto m cs).ok = false then
     { st := { st with ph := .failed }, ev := [.failed], err := .fatal, sto := rfSto1 st n sto m cs,

@@ -253,7 +253,7 @@ pub(crate) fn seal_handshake<P: Provider>(
 ) -> Result<Sealed, Failure> {
     let mut key = PacketKey::from_secret(p, aead, secret)?;
     let body = sealed.bytes.get_mut(..plain_len).ok_or(Failure::InvalidParameter)?;
-    let tag = key.seal(p, 0, th, body).map_err(|_| Failure::Authentication)?;
+    let tag = key.seal(p, 0, th, body).map_err(|_| Failure::InvalidParameter)?;
     let end = plain_len + tag.len();
     sealed
         .bytes

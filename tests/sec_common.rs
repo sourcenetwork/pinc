@@ -434,6 +434,10 @@ impl Outcome {
     pub fn both_established(&self) -> bool {
         self.i_est().is_some() && self.r_est().is_some()
     }
+    /// The initiator refused a message as unauthentic, dropped it, and neither failed nor established.
+    pub fn i_dropped_unauthentic(&self) -> bool {
+        self.i_failed().is_none() && self.i_est().is_none() && self.i_errs.contains(&Failure::Authentication)
+    }
     pub fn i_failed(&self) -> Option<Failure> {
         self.i_events.iter().find_map(|e| match e {
             Event::Failed(f) => Some(*f),

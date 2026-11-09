@@ -320,7 +320,7 @@ theorem iAnswer_inv {g : G} (h : Inv1 g) (s : Nat × Nat) (kind : KRes) :
   have hF := h.iFin s
   have hR := h.iRes s
   rcases IKey_cases (g.ist s) s.1 kind with ⟨c1, c2, c3⟩ | ⟨hp, c1, c2, c3⟩
-    | ⟨hp, hk, k1, k2, k2', k3, k4, c1, c2, c3⟩ | ⟨hp, hk, c1, c2, c3⟩
+    | ⟨hp, hk, k1, k2, k2', k3, k4, c1, c2, c3⟩ | ⟨hp, hk, c1, c2, c3⟩ | ⟨hp, hk, -, c1, c2, c3⟩
   · have hsig' : (stepIAnswer g s kind).signed = g.signed := by
       funext id r th; apply propext; simp [stepIAnswer, addSig, c3]
     exact Inv1_same h (by show upd g.ist s _ = _; rw [c1, upd_self]) rfl _ rfl hsig' (by simp [stepIAnswer, c2])
@@ -352,6 +352,14 @@ theorem iAnswer_inv {g : G} (h : Inv1 g) (s : Nat × Nat) (kind : KRes) :
   · have : kind = .ok := hk
     subst this
     exact iAnswerSign_inv h s hp
+  · have hsig' : (stepIAnswer g s kind).signed = g.signed := by
+      funext id r th; apply propext; simp [stepIAnswer, addSig, c3]
+    have hnd : (g.ist s).ph ≠ .done := by simp [hp]
+    refine upd_inv h s _ _ rfl rfl rfl hsig' hnd ?_ ?_ ?_ ?_ (by simp [c2])
+    · simp [c1, ikBackSt]
+    · simp [c1, ikBackSt]
+    · rw [c1]; exact hF
+    · rw [c1]; intro hr; exact absurd (hR hr) hnd
 
 theorem iRetrans_inv {g : G} (h : Inv1 g) (s : Nat × Nat) : Inv1 (stepIRetrans g s) := by
   have hF := h.iFin s

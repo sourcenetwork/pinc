@@ -17,7 +17,7 @@ use core::net::SocketAddr;
 
 use vinc_security::message::{FULL_INITIAL_MIN, MessageType, SHORT_INITIAL_MIN};
 use vinc_security::responder::hello_opens_ticket;
-use vinc_security::{ConnId, Env};
+use vinc_security::{ConnId, Env, Failure};
 use vinc_transport::conn::{Connection, Drop, ServerParams};
 use vinc_transport::packet::{LongHeader, LongType, short_dcid};
 use vinc_wire::Reader;
@@ -103,7 +103,10 @@ ep_impl! {
             1 => {
                 if let Some(i) = found.first().copied().flatten() {
                     // A drop reason is counted by the connection itself.
-                    let _ = self.deliver(i as usize, now, local, remote, buf);
+                    let r = self.deliver(i as usize, now, local, remote, buf);
+                    if r == Err(Drop::Handshake(Failure::DifferentFirst)) {
+                        self.supersede(i as usize, now, local, remote, buf);
+                    }
                 }
             }
             _ => self.trial(&found, now, local, remote, buf, long),
@@ -212,6 +215,13 @@ ep_impl! {
         };
         // A drop reason is counted by the connection itself.
         let _ = self.deliver(i, now, local, remote, buf);
+    }
+
+    /// A first message differs from the one the half-open session `i` holds under the same ids: the held one was
+    /// damaged or forged on the way, so the session ends and the new message starts another.
+    fn supersede(&mut self, i: usize, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        self.free_slot(i, now);
+        self.unrouted(now, local, remote, buf);
     }
 
     /// Whether a resumption Hello names an unused ticket that opens, so it needs no half-open slot.

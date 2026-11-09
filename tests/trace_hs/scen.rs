@@ -39,6 +39,7 @@ fn is_dropped(r: &Result<(), Failure>) -> bool {
 pub fn scenarios(c: &mut Ctx) {
     base(c);
     retransmits(c);
+    damaged(c);
     attacker(c);
     expiry(c);
     fallback(c);
@@ -312,6 +313,61 @@ fn retransmits(c: &mut Ctx) {
         let fin = sim.i_retx(is).sends.remove(0);
         assert!(sim.r_recv(rs, &ex(&fin)).1.est.is_some());
         assert!(sim.r_retx(rs).sends.is_empty());
+    });
+}
+
+/// A Reply, a Finish or a resume Reply that fails to authenticate is dropped and the flight sent again completes the
+/// handshake: the state the message left is the state it found.
+fn damaged(c: &mut Ctx) {
+    // the Reply does not open: the initiator is back at waiting for a Reply, its Initial goes out again
+    c.world(false, |sim| {
+        let (is, first) = sim.start(1, 1, false, false);
+        let rs = sim.r_new(1);
+        assert!(sim.r_recv(rs, &ex(&first[0])).1.req.is_some());
+        let reply = sim.r_key(rs, true).1.sends[0].clone();
+        for fld in ["sealed", "ct"] {
+            assert!(sim.i_recv(is, &flip_field(&reply, fld)).1.req.is_some(), "{fld}");
+            let (r, d) = sim.i_key(is, true);
+            assert!(matches!(r, Err(Failure::Authentication)) && is_dropped(&r), "{fld}");
+            assert!(d.req.is_none() && d.est.is_none() && d.sends.is_empty(), "{fld}");
+            assert_eq!(sim.i_retx(is).sends, first, "{fld}");
+        }
+        assert_eq!(sim.r_recv(rs, &ex(&first[0])).1.sends, vec![reply.clone()]);
+        assert!(sim.i_recv(is, &ex(&reply)).1.req.is_some());
+        let _ = sim.i_key(is, true);
+        let fin = sim.i_key(is, true).1.sends[0].clone();
+        assert!(sim.r_recv(rs, &ex(&fin)).1.est.is_some());
+        agree(&sim.ests[&('I', is)], &sim.ests[&('R', rs)]);
+    });
+    // the Finish does not open: the responder keeps waiting for it and takes the Finish sent again
+    c.world(false, |sim| {
+        let (is, first) = sim.start(1, 1, false, false);
+        let rs = sim.r_new(1);
+        assert!(sim.r_recv(rs, &ex(&first[0])).1.req.is_some());
+        let reply = sim.r_key(rs, true).1.sends[0].clone();
+        assert!(sim.i_recv(is, &ex(&reply)).1.req.is_some());
+        let _ = sim.i_key(is, true);
+        let fin = sim.i_key(is, true).1.sends[0].clone();
+        let (r, d) = sim.r_recv(rs, &flip_field(&fin, "sealed"));
+        assert!(matches!(r, Err(Failure::Authentication)) && is_dropped(&r));
+        assert!(d.est.is_none() && d.sends.is_empty());
+        assert_eq!(sim.r_retx(rs).sends, vec![reply.clone()]);
+        assert_eq!(sim.i_retx(is).sends, vec![fin.clone()]);
+        assert!(sim.r_recv(rs, &ex(&fin)).1.est.is_some());
+        agree(&sim.ests[&('I', is)], &sim.ests[&('R', rs)]);
+    });
+    // the resume Reply does not confirm: the Hello is still outstanding, the genuine reply completes it
+    c.world(false, |sim| {
+        sim.setup_full(1);
+        let (is, first) = sim.start(1, 1, false, true);
+        let rs = sim.r_new(1);
+        let rreply = sim.r_recv(rs, &ex(&first[0])).1.sends[0].clone();
+        let (r, d) = sim.i_recv(is, &flip_field(&rreply, "conf"));
+        assert!(matches!(r, Err(Failure::Authentication)) && is_dropped(&r));
+        assert!(d.est.is_none() && d.sends.is_empty());
+        assert_eq!(sim.i_retx(is).sends, first);
+        assert!(sim.i_recv(is, &ex(&rreply)).1.est.is_some());
+        agree(&sim.ests[&('I', is)], &sim.ests[&('R', rs)]);
     });
 }
 

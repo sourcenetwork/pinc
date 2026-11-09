@@ -38,11 +38,12 @@ theorem IKey_out_nil (st : IState) (n : Nat) (kind : KRes) :
     ∀ x ∈ (IKey st n kind).out, x.conf = nil ∧ x.binder = nil := by
   intro x hx
   rcases IKey_cases st n kind with ⟨c1, c2, -⟩ | ⟨hp, c1, c2, -⟩ | ⟨hp, hk, hb, hc, hcr, hid, hsg, c1, c2, -⟩
-    | ⟨hp, hk, c1, c2, -⟩ <;> rw [c2] at hx
+    | ⟨hp, hk, c1, c2, -⟩ | ⟨hp, hk, hb, c1, c2, -⟩ <;> rw [c2] at hx
   · simp at hx
   · simp at hx
   · simp at hx
   · simp at hx; subst hx; simp [ikFin]
+  · simp at hx
 
 /-- What an initiator's loss timer sends: an Initial, a Hello, or a Finish already on the network. -/
 theorem IRetransmit_out {g : G} (h1 : Inv1 g) (s : Nat × Nat) :
@@ -233,7 +234,8 @@ theorem CkS_ihandle {s : Nat × Nat} {t : Tk} {st : IState} (m : Msg) (hI : ICl 
 theorem CkS_ikey {s : Nat × Nat} {t : Tk} {st : IState} (kind : KRes) (hI : ICl s st)
     (h : CkS s.1 t st) : CkS s.1 t (IKey st s.1 kind).st := by
   refine CkS_of_near h (IKey_near st s.1 kind) ?_
-  rcases IKey_cases st s.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩
+  rcases IKey_cases st s.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩ |
+    ⟨hp, -, -, c1, -⟩
   · rw [c1]; exact h.rcr
   · rw [c1]; intro _; exact h.rcr (fun e => by rcases hp with hp | hp <;> simp [hp] at e)
   · rw [c1]; intro _; exact h.rcr (fun e => by simp [hp] at e)
@@ -242,6 +244,7 @@ theorem CkS_ikey {s : Nat × Nat} {t : Tk} {st : IState} (kind : KRes) (hI : ICl
     have := hh (by simp [ikDoneSt])
     have h2 := hI.resFlag (by simpa [ikDoneSt] using this)
     rw [hp] at h2; cases h2
+  · rw [c1]; intro _; exact h.rcr (fun e => by simp [hp] at e)
 
 theorem CkS_iretransmit {s : Nat × Nat} {t : Tk} {st : IState} (h : CkS s.1 t st) :
     CkS s.1 t (IRetransmit s.1 st).st := by
@@ -466,13 +469,15 @@ theorem ires2_step {K C : Nat} {g g' : G} (hr : Reach K C g) (h4 : Inv4 g) (hs :
   | iAnswer s0 kind hn hph =>
     refine ires2_upd hs0 h4 rfl ?_
     have hI := h3.ic s0
-    rcases IKey_cases (g.ist s0) s0.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩
+    rcases IKey_cases (g.ist s0) s0.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩ |
+      ⟨hp, -, -, c1, -⟩
     · rw [c1]; intro hph hres; exact IRes2Of_mono hs0 (h4.ires2 s0 hph hres)
     · rw [c1]; intro hph; rcases hp with hp | hp <;> simp [hp] at hph
     · rw [c1]; intro hph; simp [ikSignSt] at hph
     · rw [c1]; intro _ hres
       have h2 := hI.resFlag (by simpa [ikDoneSt] using hres)
       rw [hp] at h2; cases h2
+    · rw [c1]; intro hph; simp [ikBackSt] at hph
   | iRetrans s0 hn hph =>
     refine ires2_upd hs0 h4 rfl ?_
     rcases IRetransmit_cases s0.1 (g.ist s0) with ⟨hp, hsh, c1, -⟩ | ⟨hp, hl, c1, -⟩ | ⟨hp, hl, c1, -⟩ | ⟨c1, -⟩

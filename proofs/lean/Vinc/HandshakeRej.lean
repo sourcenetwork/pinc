@@ -15,48 +15,50 @@ open Term
 
 /-- An initiator that is waiting for a reply has not authenticated or established. -/
 def InvI (ist : Nat × Nat → IState) : Prop :=
-  ∀ s, ((ist s).ph = .reply ∨ (ist s).ph = .resume) → (ist s).est = false ∧ (ist s).auth = false
+  ∀ s, ((ist s).ph = .reply ∨ (ist s).ph = .resume ∨ (ist s).ph = .decap) → (ist s).est = false ∧ (ist s).auth = false
 
 theorem InvI_upd {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (st' : IState)
-    (hn : (st'.ph = .reply ∨ st'.ph = .resume) → st'.est = false ∧ st'.auth = false) : InvI (upd ist s st') := by
+    (hn : (st'.ph = .reply ∨ st'.ph = .resume ∨ st'.ph = .decap) → st'.est = false ∧ st'.auth = false) : InvI (upd ist s st') := by
   intro s' hs'
   by_cases hh : s' = s
   · subst hh; simp only [upd_same] at hs' ⊢; exact hn hs'
   · simp only [upd_ne _ _ _ _ hh] at hs' ⊢; exact h s' hs'
 
-theorem InvI_ihandle (st : IState) (n : Nat) (m : Msg) (h : (st.ph = .reply ∨ st.ph = .resume) → st.est = false ∧ st.auth = false) :
-    ((IHandle st n m).st.ph = .reply ∨ (IHandle st n m).st.ph = .resume) →
+theorem InvI_ihandle (st : IState) (n : Nat) (m : Msg) (h : (st.ph = .reply ∨ st.ph = .resume ∨ st.ph = .decap) → st.est = false ∧ st.auth = false) :
+    ((IHandle st n m).st.ph = .reply ∨ (IHandle st n m).st.ph = .resume ∨ (IHandle st n m).st.ph = .decap) →
       (IHandle st n m).st.est = false ∧ (IHandle st n m).st.auth = false := by
-  rcases IHandle_cases st n m with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨hp, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
+  rcases IHandle_cases st n m with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨hp, -, -, c, -⟩ | ⟨hp, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
     ⟨-, -, -, -, c, -⟩ | ⟨hp, -, -, c, -⟩
   · rw [c]; exact h
   · rw [c]; intro e; simp at e
-  · rw [c]; intro e; simp at e
+  · rw [c]; intro _; have := h (Or.inl hp); simp [this]
   · rw [c]; intro _; exact h (Or.inl hp)
   · rw [c]; intro e; simp [IResumed] at e
   · rw [c]; intro e; simp [IResumed] at e
-  · rw [c]; intro _; have := h (Or.inr hp); simp [rrFall, IBeginFull, Ok, this]
+  · rw [c]; intro _; have := h (Or.inr (Or.inl hp)); simp [rrFall, IBeginFull, Ok, this]
 
-theorem InvI_ikey (st : IState) (n : Nat) (kind : KRes) (h : (st.ph = .reply ∨ st.ph = .resume) → st.est = false ∧ st.auth = false) :
-    ((IKey st n kind).st.ph = .reply ∨ (IKey st n kind).st.ph = .resume) →
+theorem InvI_ikey (st : IState) (n : Nat) (kind : KRes) (h : (st.ph = .reply ∨ st.ph = .resume ∨ st.ph = .decap) → st.est = false ∧ st.auth = false) :
+    ((IKey st n kind).st.ph = .reply ∨ (IKey st n kind).st.ph = .resume ∨ (IKey st n kind).st.ph = .decap) →
       (IKey st n kind).st.est = false ∧ (IKey st n kind).st.auth = false := by
-  rcases IKey_cases st n kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨hp, -, -, -, -, -, -, c, -⟩ | ⟨hp, -, c, -⟩
+  rcases IKey_cases st n kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨hp, -, -, -, -, -, -, c, -⟩ | ⟨hp, -, c, -⟩ |
+    ⟨hp, -, -, c, -⟩
   · rw [c]; exact h
   · rw [c]; intro e; simp at e
   · rw [c]; intro e; simp [ikSignSt, hp] at e
   · rw [c]; intro e; simp [ikDoneSt, hp] at e
+  · rw [c]; intro _; have := h (Or.inr (Or.inr hp)); simp [ikBackSt, this]
 
-theorem InvI_iretrans (st : IState) (n : Nat) (h : (st.ph = .reply ∨ st.ph = .resume) → st.est = false ∧ st.auth = false) :
-    ((IRetransmit n st).st.ph = .reply ∨ (IRetransmit n st).st.ph = .resume) →
+theorem InvI_iretrans (st : IState) (n : Nat) (h : (st.ph = .reply ∨ st.ph = .resume ∨ st.ph = .decap) → st.est = false ∧ st.auth = false) :
+    ((IRetransmit n st).st.ph = .reply ∨ (IRetransmit n st).st.ph = .resume ∨ (IRetransmit n st).st.ph = .decap) →
       (IRetransmit n st).st.est = false ∧ (IRetransmit n st).st.auth = false := by
   rcases IRetransmit_cases n st with ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨c, -⟩
   · rw [c]; intro _; exact h (Or.inl hp)
-  · rw [c]; intro _; exact h (Or.inr hp)
-  · rw [c]; intro _; have := h (Or.inr hp); simp [lateFall, lateFallB, IBeginFull, Ok, this]
+  · rw [c]; intro _; exact h (Or.inr (Or.inl hp))
+  · rw [c]; intro _; have := h (Or.inr (Or.inl hp)); simp [lateFall, lateFallB, IBeginFull, Ok, this]
   · rw [c]; exact h
 
 theorem InvI_new (n k peer : Nat) (al : Term) (short : Bool) (tk : Option Tk) :
-    ((INew n k peer al short tk).st.ph = .reply ∨ (INew n k peer al short tk).st.ph = .resume) →
+    ((INew n k peer al short tk).st.ph = .reply ∨ (INew n k peer al short tk).st.ph = .resume ∨ (INew n k peer al short tk).st.ph = .decap) →
       (INew n k peer al short tk).st.est = false ∧ (INew n k peer al short tk).st.auth = false := by
   intro _
   unfold INew
@@ -114,7 +116,7 @@ theorem rejectInit {K C : Nat} {g : G} (hr : Reach K C g) (s : Nat × Nat) (m : 
       rw [e]; rfl
   · by_cases hc : (g.ist s).ph = .resume ∧ m.echo = (g.ist s).thh
     · right
-      have he := hs (Or.inr hc.1)
+      have he := hs (Or.inr (Or.inl hc.1))
       simp [IHandle, hf, hm, hc.1, hc.2, Ok, he.1, he.2, IBeginFull]
     · left
       have : (g.ist s).ph ≠ .resume ∨ m.echo ≠ (g.ist s).thh := by
@@ -260,11 +262,12 @@ theorem InvD_ihandle (s : Nat × Nat) (st : IState) (m : Msg) (h : InvD s st) : 
   · rw [c]; exact ⟨by simp [rrFall, IBeginFull, Ok], by simp [rrFall, IBeginFull, Ok, NoLate]⟩
 
 theorem InvD_ikey (s : Nat × Nat) (st : IState) (kind : KRes) (h : InvD s st) : InvD s (IKey st s.1 kind).st := by
-  rcases IKey_cases st s.1 kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, -, -, -, -, c, -⟩ | ⟨-, -, c, -⟩
+  rcases IKey_cases st s.1 kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, -, -, -, -, c, -⟩ | ⟨-, -, c, -⟩ | ⟨-, -, -, c, -⟩
   · rw [c]; exact h
   · rw [c]; exact ⟨by simp, h.2⟩
   · rw [c]; exact ⟨by simp [ikSignSt], h.2⟩
   · rw [c]; exact ⟨by simp [ikDoneSt], h.2⟩
+  · rw [c]; exact ⟨by simp [ikBackSt], h.2⟩
 
 theorem InvD_iretrans (s : Nat × Nat) (st : IState) (h : InvD s st) : InvD s (IRetransmit s.1 st).st := by
   rcases IRetransmit_cases s.1 st with ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨c, -⟩

@@ -140,8 +140,9 @@ theorem IHandle_near (st : IState) (n : Nat) (m : Msg) : Near st (IHandle st n m
   rw [c1] <;> simp [Near, IResumed, rrFall, IBeginFull, Ok]
 
 theorem IKey_near (st : IState) (n : Nat) (kind : KRes) : Near st (IKey st n kind).st := by
-  rcases IKey_cases st n kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩ <;>
-  rw [c1] <;> simp [Near, ikSignSt, ikDoneSt]
+  rcases IKey_cases st n kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩ |
+    ⟨-, -, -, c1, -⟩ <;>
+  rw [c1] <;> simp [Near, ikSignSt, ikDoneSt, ikBackSt]
 
 theorem IRetransmit_near (n : Nat) (st : IState) : Near st (IRetransmit n st).st := by
   rcases IRetransmit_cases n st with ⟨hp, hsh, c1, -⟩ | ⟨hp, hl, c1, -⟩ | ⟨hp, hl, c1, -⟩ | ⟨c1, -⟩ <;>
@@ -170,7 +171,8 @@ theorem ILoc_ihandle (s : Nat × Nat) (st : IState) (m : Msg) (hI : ICl s st) (h
 
 theorem ILoc_ikey (s : Nat × Nat) (st : IState) (kind : KRes) (hI : ICl s st) (h : ILoc st) :
     ILoc (IKey st s.1 kind).st := by
-  rcases IKey_cases st s.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩
+  rcases IKey_cases st s.1 kind with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hk, -, -, -, -, -, c1, -⟩ | ⟨hp, hk, c1, -⟩ |
+    ⟨hp, -, -, c1, -⟩
   · rw [c1]; exact h
   · rw [c1]; exact ⟨h.early, fun hh => by simp at hh, fun hh => by simp at hh, fun hh => by simp at hh⟩
   · rw [c1]
@@ -183,6 +185,9 @@ theorem ILoc_ikey (s : Nat × Nat) (st : IState) (kind : KRes) (hI : ICl s st) (
       · have := hI.resFlag hv; rw [hp] at this; cases this
     exact ⟨h.early, fun _ hh => by simp [ikDoneSt, hr] at hh, fun hh => by simp [ikDoneSt] at hh,
       fun hh => by simp [ikDoneSt] at hh⟩
+  · rw [c1]
+    exact ⟨h.early, fun hh => by simp [ikBackSt] at hh, fun hh => by simp [ikBackSt] at hh,
+      fun _ hl => h.late (by simp [hp]) hl⟩
 
 theorem ILoc_iretransmit (s : Nat × Nat) (st : IState) (h : ILoc st) : ILoc (IRetransmit s.1 st).st := by
   rcases IRetransmit_cases s.1 st with ⟨hp, hsh, c1, -⟩ | ⟨hp, hl, c1, -⟩ | ⟨hp, hl, c1, -⟩ | ⟨c1, -⟩

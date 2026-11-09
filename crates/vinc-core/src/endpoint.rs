@@ -287,6 +287,17 @@ ep_impl! {
         }
     }
 
+    /// End the endpoint and give its connection table back with every session closed and every slot's memory
+    /// returned, so another endpoint can run in the same memory. `None` when a failed construction took a slot's
+    /// memory for good (see [`Endpoint::retired_slots`]): the table is then not whole and must not be reused.
+    pub fn into_slots(mut self) -> Option<&'s mut [Slot<'a, P, S, N, C, F, NP>; K]> {
+        let now = self.last_now;
+        for i in 0..K {
+            self.free_slot(i, now);
+        }
+        self.slots.iter().all(|s| s.mem.is_some()).then_some(self.slots)
+    }
+
     /// Set the prekey new dials carry; the host rotates it.
     pub fn set_prekey(&mut self, prekey: PrekeyInfo) {
         self.prekey = Some(prekey);

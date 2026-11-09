@@ -302,7 +302,8 @@ IHandle(st, n, m) ==
             ELSE Ok([st EXCEPT !.short = FALSE, !.mode = "full"], {IInitMsg(n, st, FALSE)}, {})
       [] m.ty = "RReply" ->
             IF st.ph = "resume" THEN
-                IF ~RrConfOK(st.x, st.ckpsk, st.thh, st.binder, m) THEN Fatal(st)
+                (* a reply that does not confirm is dropped; the Hello is still outstanding *)
+                IF ~RrConfOK(st.x, st.ckpsk, st.thh, st.binder, m) THEN Drop(st)
                 ELSE Ok(IResumed(st, st.x, st.ckpsk, st.thh, st.binder, st.rcr, st.ad, m), {}, {"est"})
             ELSE IF st.ph \in {"reply", "decap", "sign"} /\ st.late.on THEN
                 (* the Hello was given up for a full handshake: its reply counts only if it authenticates against
@@ -348,7 +349,10 @@ IKey(st, n, kind) ==
             ck1 == Ck1(ssk, st.ssx)
             b == st.reply.sealed
             th2 == Th2(st.th1, b.id, b.cr)
-        IN IF b.k # Hs(ck1, "R", st.th1) \/ b.ad # st.th1 THEN Fatal(st)
+        IN IF b.k # Hs(ck1, "R", st.th1) \/ b.ad # st.th1 THEN
+               (* the Reply does not open: it is dropped and the initiator waits for the next one (st.ad keeps the
+                  refused Reply's value; the next accepted Reply overwrites it) *)
+               Res([st EXCEPT !.ph = "reply", !.reply = MNil, !.th1 = NIL, !.ssx = NIL], {}, {}, "drop")
            ELSE IF b.cr = NIL THEN Fatal(st)
            ELSE IF b.id # st.peer THEN Fatal(st)
            ELSE IF b.sig # Sig(b.id, "responder", th2) THEN Fatal(st)
@@ -451,7 +455,7 @@ RFinish(st, s, sto, m, cs) ==
         iss == IssuedOf(is.tids, res, RCr(s), b.id, st.al, st.ad)
     IN IF st.ph = "failed" THEN RDrop(st, sto)
        ELSE IF st.ph # "finish" THEN RDrop(st, sto)
-       ELSE IF b.k # st.hsi \/ b.ad # st.th3 THEN RFatal(st, sto)
+       ELSE IF b.k # st.hsi \/ b.ad # st.th3 THEN RDrop(st, sto)  \* a Finish that does not open is dropped
        ELSE IF b.sig # Sig(b.id, "initiator", th4) THEN RFatal(st, sto)
        ELSE IF ~is.ok THEN RRes([st EXCEPT !.ph = "failed"], {}, {"failed"}, "fatal", sto1, iss, {})
        ELSE RRes([st EXCEPT !.ph = "done", !.peer = b.id, !.th4 = th4, !.send = AppK(ck2, "R", th5),

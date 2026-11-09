@@ -300,3 +300,40 @@ fn commands_with_stale_or_absurd_arguments_fail_cleanly() {
         assert!(matches!(net.nodes[a].ep.query(Query::Stats(sa)), Answer::Stats(_)));
     });
 }
+
+/// A first flight with a bit flipped on the way (still a valid Initial of another dialer) makes the server start a
+/// session for it; the dialer's own repeat then replaces that session, and the dial completes.
+#[test]
+fn a_damaged_first_flight_does_not_stop_the_dial() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    big_stack(|| {
+        for at in [80usize, 120, 200, 300, 400, 500] {
+            let mut net = CoreNet::new(5 * MS_NS);
+            net.capture = true;
+            let (a, b) = (net.add(1), net.add(2));
+            let (addr_a, addr_b) = (net.nodes[a].addr, net.nodes[b].addr);
+            // The first long datagram of the dialer never arrives; a copy with one bit flipped does.
+            let taken = Rc::new(Cell::new(false));
+            let seen = Rc::clone(&taken);
+            net.loss = Some(Box::new(move |from, _, d| {
+                let first = from == addr_a && !seen.get() && d.first().is_some_and(|b| b & 0x80 != 0);
+                seen.set(seen.get() || first);
+                first
+            }));
+            let (peer, now) = (net.nodes[b].node, net.now);
+            net.nodes[a].connect(now, peer, ALPN_A, addr_b, Role::Other).unwrap();
+            net.pump_all();
+            assert!(taken.get());
+            let mut damaged = net.captured.iter().find(|(f, ..)| *f == addr_a).unwrap().2.clone();
+            damaged[at] ^= 1;
+            net.inject(addr_a, addr_b, damaged, 0);
+            let ok = net.run(now + 10 * SEC_NS, |n| {
+                n.nodes[a].saw(|e| matches!(e, Event::Connected { .. }))
+                    && n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+            });
+            assert!(ok, "byte {at}: {:?} / {:?}", net.nodes[a].events, net.nodes[b].events);
+        }
+    });
+}

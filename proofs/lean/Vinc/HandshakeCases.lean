@@ -63,7 +63,7 @@ theorem IHandle_cases (st : IState) (n : Nat) (m : Msg) :
     · by_cases h1 : st.ph = .resume
       · by_cases h2 : RrConfOK st.x st.ckpsk st.thh st.binder m
         · right; right; right; right; left; simp [h1, h2, Ok]
-        · right; left; simp [h1, h2, Fatal]
+        · left; simp [h1, h2, Drop]
       · by_cases h3 : (st.ph = .reply ∨ st.ph = .decap ∨ st.ph = .sign) ∧ st.late.on = true
         · by_cases h2 : RrConfOK st.late.x st.late.ckpsk st.late.thh st.late.binder m
           · right; right; right; right; right; left
@@ -112,7 +112,9 @@ theorem IKey_cases (st : IState) (n : Nat) (kind : KRes) :
     ∨ (st.ph = .sign ∧ kind = .ok ∧
         (IKey st n kind).st = ikDoneSt st n
         ∧ (IKey st n kind).out = [ikFin st n]
-        ∧ (IKey st n kind).sg = [⟨n, false, st.th4⟩]) := by
+        ∧ (IKey st n kind).sg = [⟨n, false, st.th4⟩])
+    ∨ (st.ph = .decap ∧ kind = .ok ∧ (st.reply.sealed.k ≠ hs (ikCk1 st n) false st.th1 ∨ st.reply.sealed.ad ≠ st.th1)
+        ∧ (IKey st n kind).st = ikBackSt st ∧ (IKey st n kind).out = [] ∧ (IKey st n kind).sg = []) := by
   unfold IKey
   by_cases h1 : st.ph = .decap ∧ kind = .ok
   · obtain ⟨hp, hk⟩ := h1
@@ -126,15 +128,15 @@ theorem IKey_cases (st : IState) (n : Nat) (kind : KRes) :
             simp [ca, cb, c2, c3, Ok, hp]
           · right; left; rw [c2] at c3; simp [ca, cb, c2, c3, Fatal]
         · right; left; simp [ca, cb, c2, Fatal]
-    · right; left
+    · right; right; right; right
       have : st.reply.sealed.k ≠ hs (ikCk1 st n) false st.th1 ∨ st.reply.sealed.ad ≠ st.th1 := by
         by_cases hh : st.reply.sealed.k = hs (ikCk1 st n) false st.th1
         · exact Or.inr (fun x => ca ⟨hh, x⟩)
         · exact Or.inl hh
-      simp [this, Fatal]
+      simp [this, ikBackSt, hp]
   · by_cases h2 : st.ph = .sign ∧ kind = .ok
     · obtain ⟨hp, hk⟩ := h2
-      right; right; right; simp [hp, hk]
+      right; right; right; left; simp [hp, hk]
     · by_cases h3 : (st.ph = .decap ∨ st.ph = .sign) ∧ kind = .fail
       · right; left; simp [h1, h2, h3, Fatal]
       · left; simp [h1, h2, h3, Drop]
@@ -255,12 +257,12 @@ theorem RHandle_cases (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : Li
               have h4' : (rfIs st n sto m cs).ok = false := by simpa using h4
               simp [h1, h2, h3, h4', hty]
           · right; left; simp [h1, h3, RFatal, h2]
-        · right; left
+        · left
           have : m.sealed.k ≠ st.hsi ∨ m.sealed.ad ≠ st.th3 := by
             by_cases hh : m.sealed.k = st.hsi
             · exact Or.inr (fun x => h2 ⟨hh.symm, x.symm⟩)
             · exact Or.inl hh
-          simp [h1, this, RFatal]
+          simp [h1, this, RDrop]
       · left; simp [h1, RDrop]
     · by_cases h2 : st.ph = .resumed
       · right; right; left

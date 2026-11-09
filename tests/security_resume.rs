@@ -333,7 +333,7 @@ fn a_forged_ticket_batch_in_the_reply_fails_the_confirmation() {
         // Change the ticket id (the byte after the count).
         let t = Tamper::flip(1, 1 + 9 + 32 + 1 + 3);
         let out = w.run(&mut i, &mut r, Some(&t));
-        assert_eq!(out.i_failed(), Some(Failure::Authentication));
+        assert!(out.i_dropped_unauthentic());
     });
 }
 
