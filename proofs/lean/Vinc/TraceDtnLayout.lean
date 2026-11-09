@@ -1,5 +1,6 @@
 import Vinc.Json
 import Vinc.DtnLayout
+import Vinc.DtnLayoutHlc
 
 /-!
 # Replay of the layout traces
@@ -28,27 +29,27 @@ def rows (j : J) (k : String) : Except String (List (List J)) := do
     | none => throw s!"field {k}: a row is not an array"
   | none => throw s!"field {k} is not an array"
 
-def isTag (t : String) : Bool := t == "dl"
+def isTag (t : String) : Bool := t == "dl" || t == "hc"
 
-private def at_ (r : List J) (i : Nat) : Except String J :=
+def at_ (r : List J) (i : Nat) : Except String J :=
   match r[i]? with
   | some v => pure v
   | none => throw s!"row too short at {i}"
 
-private def natAt (r : List J) (i : Nat) : Except String Nat := do
+def natAt (r : List J) (i : Nat) : Except String Nat := do
   match (← at_ r i).nat? with
   | some n => pure n
   | none => throw s!"entry {i} is not a number"
 
-private def boolAt (r : List J) (i : Nat) : Except String Bool := do
+def boolAt (r : List J) (i : Nat) : Except String Bool := do
   match (← at_ r i).bool? with
   | some n => pure n
   | none => throw s!"entry {i} is not a bool"
 
-private def limbAt (r : List J) (i : Nat) : Except String Nat := do limb (← at_ r i)
+def limbAt (r : List J) (i : Nat) : Except String Nat := do limb (← at_ r i)
 
 /-- Replay one `dl` event. -/
-def replayEvent (j : J) : Except String Unit := do
+def replayLayout (j : J) : Except String Unit := do
   let l : L := ⟨← natF j "k", ← natF j "m", ← natF j "log", ← limb (← field j "p")⟩
   let ok ← boolF j "ok"
   check (l.valid == ok) s!"new: model {l.valid}, code {ok} for {l.k} {l.m} {l.log} {l.p}"
@@ -82,5 +83,34 @@ def replayEvent (j : J) : Except String Unit := do
     | some (s, e), true => check (s == (← limbAt r 3) && e == (← limbAt r 4)) s!"byte_range {a} {b}"
     | none, false => pure ()
     | _, _ => throw s!"byte_range {a} {b}: model and code disagree on presence"
+
+/-- Replay one clock event (`hc`): `tick`, `observe`, `expires_at` and `is_expired` through the functions of
+`Vinc.DtnLayoutHlc`. -/
+def replayClock (j : J) : Except String Unit := do
+  let op ← strF j "op"
+  let w ← limb (← field j "w")
+  match op with
+  | "tick" =>
+    let h : DtnLayoutHlc.H := ⟨w, ← limb (← field j "c")⟩
+    let r := h.tick (← limb (← field j "now"))
+    check (r.wall == (← limb (← field j "ow")) && r.counter == (← limb (← field j "oc"))) "tick"
+  | "obs" =>
+    let h : DtnLayoutHlc.H := ⟨w, ← limb (← field j "c")⟩
+    let rem : DtnLayoutHlc.H := ⟨← limb (← field j "rw"), ← limb (← field j "rc")⟩
+    let r := h.observe rem (← limb (← field j "now"))
+    check (r.wall == (← limb (← field j "ow")) && r.counter == (← limb (← field j "oc"))) "observe"
+  | "exp" =>
+    let life ← limb (← field j "life")
+    check (DtnLayoutHlc.expiresAt w life == (← limb (← field j "e"))) "expires_at"
+    for r in ← rows j "pr" do
+      let n ← limbAt r 0
+      check (DtnLayoutHlc.isExpired w life n == (← boolAt r 1)) s!"is_expired at {n}"
+  | _ => throw s!"unknown clock op {op}"
+
+/-- Replay one event of the layout trace file. -/
+def replayEvent (j : J) : Except String Unit := do
+  match ← strF j "t" with
+  | "hc" => replayClock j
+  | _ => replayLayout j
 
 end Vinc.TraceDtnLayout

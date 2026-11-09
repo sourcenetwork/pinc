@@ -15,6 +15,9 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::comparison_chain,
+    clippy::nonminimal_bool,
     clippy::too_many_lines,
     clippy::many_single_char_names,
     clippy::similar_names,
@@ -22,8 +25,13 @@
     unreachable_pub
 )]
 
+mod dtn_common;
+
 use std::fmt::Write as _;
 
+use dtn_common::{keypair, make, plan, recipient};
+use vinc_crypto::IdentityAlg;
+use vinc_dtn::hlc::Hlc;
 use vinc_dtn::layout::SliceLayout;
 
 fn limbs(v: u64) -> String {
@@ -249,6 +257,97 @@ fn event(k: u8, m: u8, log: u8, payload: u64, out: &mut Vec<String>) {
     out.push(line);
 }
 
+/// The clock and lifetime events (`hc`): `Hlc::tick`, `Hlc::observe`, `Hlc::expires_at` and `Head::is_expired` on the
+/// boundary values, each result also checked against `u128` arithmetic written apart from the code.
+fn clock_events(out: &mut Vec<String>) {
+    let walls = [0u64, 5, u64::MAX];
+    let ctrs = [0u32, u32::MAX - 1, u32::MAX];
+    let times = [0u64, 5, u64::MAX];
+    for &w in &walls {
+        for &c in &ctrs {
+            for &now in &times {
+                let t = Hlc::new(w, c).tick(now);
+                let ew = u128::from(w.max(now));
+                assert_eq!(u128::from(t.wall), ew);
+                assert_eq!(t.counter, if now > w { 0 } else { c.saturating_add(1) });
+                out.push(format!(
+                    r#"{{"t":"hc","op":"tick","w":{},"c":{},"now":{},"ow":{},"oc":{}}}"#,
+                    limbs(w),
+                    limbs(u64::from(c)),
+                    limbs(now),
+                    limbs(t.wall),
+                    limbs(u64::from(t.counter))
+                ));
+                for &rw in &walls {
+                    for &rc in &ctrs {
+                        let o = Hlc::new(w, c).observe(Hlc::new(rw, rc), now);
+                        assert_eq!(o.wall, w.max(rw).max(now));
+                        if c < u32::MAX {
+                            assert!(o > Hlc::new(w, c), "observe is above the receiver");
+                        }
+                        if rc < u32::MAX {
+                            assert!(o > Hlc::new(rw, rc), "observe is above the remote stamp");
+                        }
+                        out.push(format!(
+                            r#"{{"t":"hc","op":"obs","w":{},"c":{},"rw":{},"rc":{},"now":{},"ow":{},"oc":{}}}"#,
+                            limbs(w),
+                            limbs(u64::from(c)),
+                            limbs(rw),
+                            limbs(u64::from(rc)),
+                            limbs(now),
+                            limbs(o.wall),
+                            limbs(u64::from(o.counter))
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let signer = keypair(IdentityAlg::Ed25519, 1);
+    let to = recipient(IdentityAlg::Ed25519, 2, 1);
+    let sealed = make(&signer, &to, plan(1, 0, 0), &[1, 2, 3], 9);
+    for &w in &[0u64, 1, u64::MAX - 1, u64::MAX] {
+        for &life in &[0u64, 1, u64::MAX - 1, u64::MAX] {
+            let mut head = *sealed.signed.head();
+            head.created = Hlc::new(w, 0);
+            head.lifetime_ms = life;
+            let e = head.expires_at();
+            assert_eq!(
+                u128::from(e),
+                (u128::from(w) + u128::from(life)).min(u128::from(u64::MAX))
+            );
+            assert_eq!(Hlc::new(w, 0).expires_at(life), e);
+            let mut probes = vec![0, 1, e, u64::MAX];
+            if e >= 1 {
+                probes.push(e - 1);
+            }
+            if e < u64::MAX {
+                probes.push(e + 1);
+            }
+            probes.sort_unstable();
+            probes.dedup();
+            let mut prev = false;
+            let rows: Vec<String> = probes
+                .iter()
+                .map(|&n| {
+                    let x = head.is_expired(n);
+                    assert_eq!(x, e <= n, "expired exactly from the expiry on");
+                    assert!(!prev || x, "expiry is monotone in time");
+                    prev = x;
+                    format!("[{},{x}]", limbs(n))
+                })
+                .collect();
+            out.push(format!(
+                r#"{{"t":"hc","op":"exp","w":{},"life":{},"e":{},"pr":[{}]}}"#,
+                limbs(w),
+                limbs(life),
+                limbs(e),
+                rows.join(",")
+            ));
+        }
+    }
+}
+
 #[test]
 fn layout_trace() {
     let kms: [(u8, u8); 10] = [
@@ -295,6 +394,7 @@ fn layout_trace() {
         }
     }
     assert!(valid > 100);
+    clock_events(&mut out);
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(

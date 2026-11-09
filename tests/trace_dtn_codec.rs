@@ -17,6 +17,9 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::comparison_chain,
+    clippy::nonminimal_bool,
     clippy::too_many_lines,
     clippy::many_single_char_names,
     clippy::similar_names,
@@ -33,7 +36,7 @@ use vinc_dtn::head::{BundleId, SignedHead};
 use vinc_dtn::hlc::Hlc;
 
 fn array(b: &[u8]) -> String {
-    let parts: Vec<String> = b.iter().map(|x| x.to_string()).collect();
+    let parts: Vec<String> = b.iter().map(ToString::to_string).collect();
     format!("[{}]", parts.join(","))
 }
 
@@ -126,7 +129,7 @@ fn scan(kind: Kind, alg: IdentityAlg, enc: &[u8], base: usize, out: &mut Vec<Str
     }
     // single-byte mutations
     let mut pos: Vec<usize> = (0..40.min(n)).collect();
-    let tags = if matches!(kind, Kind::Head) { [32, 65] } else { [32, 65] };
+    let tags = [32, 65];
     pos.extend(tags);
     pos.extend((body..body + 4 + pk + 6).filter(|p| p % 7 == 0 || *p < body + 6));
     pos.extend(n.saturating_sub(5)..n);
