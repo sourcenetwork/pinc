@@ -5,9 +5,13 @@ import Vinc.DtnStoreThm
 
 The statements of the task about the ledger, each for every ledger satisfying `Inv` and every call:
 
-* `admit_ok_iff`, `admit_refused_state`, `admit_budget`: an admission is accepted exactly when the key is new and the
-  non-evictable items leave room; a refusal moves nothing but the expired items; the bytes charged never exceed the
-  budget.
+* `admit_ok_iff`, `admit_refused_state`, `admit_budget`: an admission sweeps the expired items first and is then
+  accepted exactly when the key is new after the sweep, the item is not itself expired (`now < expires`) and the
+  non-evictable items leave room; every refusal (a duplicate and an expired item included) moves nothing but the
+  expired items; the bytes charged never exceed the budget.
+* `admit_sweeps_before_dup`, `admit_dup_sweeps`, `admit_expired_refused`: a key that expired but was not swept is
+  admitted fresh; a duplicate is refused with the swept ledger and the expired items; an item expired at admission is
+  refused (`expired`).
 * `admit_keeps_live_custody` (and the mailbox form): live custody is never evicted, by any admission.
 * `admit_eviction_order`, `admit_eviction_minimal`: expired items first, then transit items oldest admission first,
   and no more than needed.
@@ -20,21 +24,78 @@ The statements of the task about the ledger, each for every ledger satisfying `I
 namespace Vinc.DtnStore
 
 theorem admit_ok_iff {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
-    (admitItem L k b c x now).err = none ↔ L.contains k = false ∧ FitsSpec (expire L now).1 b := by
+    (admitItem L k b c x now).err = none ↔
+      (expire L now).1.contains k = false ∧ now < x ∧ FitsSpec (expire L now).1 b := by
   rcases admit_cases hI k b c x now with ⟨h1, h⟩ | ⟨h1, h2, h⟩ | ⟨h1, h2, _, _, _, _, _, h, _⟩
-  · simp [h, h1]
-  · simp [h, h1, h2]
-  · simp [h, h1, h2]
+  · rw [h]; simp only [reduceCtorEq, false_iff]
+    rintro ⟨h3, h4, -⟩
+    rcases h1 with h1 | h1
+    · rw [h3] at h1; cases h1
+    · omega
+  · rw [h]; simp only [reduceCtorEq, false_iff]
+    exact fun h3 => h2 h3.2.2
+  · rw [h]; simp only [true_iff]; exact ⟨h1.1, h1.2, h2⟩
 
+/-- Every refusal returns the swept ledger and the expired items as the evictions, nothing else moves, and the error
+is exactly: `dup` when the key is still kept after the sweep, else `expired` when the item itself is expired, else the
+refusal of its class when the non-evictable items leave no room. -/
 theorem admit_refused_state {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) (e : AErr)
     (h : (admitItem L k b c x now).err = some e) :
-    (e = .dup ∧ L.contains k = true ∧ (admitItem L k b c x now).L = L ∧ (admitItem L k b c x now).ev = []) ∨
-    (e = refusedOf c ∧ L.contains k = false ∧ (admitItem L k b c x now).L = (expire L now).1 ∧
-      (admitItem L k b c x now).ev = (expire L now).2) := by
+    (admitItem L k b c x now).L = (expire L now).1 ∧ (admitItem L k b c x now).ev = (expire L now).2 ∧
+    ((e = .dup ∧ (expire L now).1.contains k = true) ∨
+     (e = .expired ∧ (expire L now).1.contains k = false ∧ x ≤ now) ∨
+     (e = refusedOf c ∧ (expire L now).1.contains k = false ∧ now < x ∧ ¬ FitsSpec (expire L now).1 b)) := by
   rcases admit_cases hI k b c x now with ⟨h1, h2⟩ | ⟨h1, h2, h3⟩ | ⟨_, _, _, _, _, _, _, h3, _⟩
-  · left; rw [h2] at h ⊢; simp at h; simp [h, h1]
-  · right; rw [h3] at h ⊢; simp at h; simp [h, h1]
+  · rw [h2] at h ⊢
+    simp only [Option.some.injEq] at h
+    refine ⟨rfl, rfl, ?_⟩
+    by_cases hc : (expire L now).1.contains k = true
+    · left; simp only [hc, ite_true] at h; exact ⟨h.symm, hc⟩
+    · right; left
+      have hc' : (expire L now).1.contains k = false := by simpa using hc
+      simp only [hc] at h
+      exact ⟨h.symm, hc', h1.resolve_left hc⟩
+  · rw [h3] at h ⊢
+    simp only [Option.some.injEq] at h
+    exact ⟨rfl, rfl, Or.inr (Or.inr ⟨h.symm, h1.1, h1.2, h2⟩)⟩
   · rw [h3] at h; simp at h
+
+/-- A key that expired but was not yet swept is not a duplicate: the sweep comes first. -/
+theorem admit_sweeps_before_dup {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) (e : Entry)
+    (he : e ∈ L.entries) (hk : e.key = k) (hx : expiredAt now e = true) :
+    (admitItem L k b c x now).err ≠ some .dup := by
+  intro h
+  obtain ⟨-, -, hr⟩ := admit_refused_state hI k b c x now .dup h
+  have hc : (expire L now).1.contains k = true := by
+    rcases hr with ⟨-, hc⟩ | ⟨h1, -⟩ | ⟨h1, -⟩ <;> first | exact hc | (cases c <;> simp [refusedOf] at h1) | cases h1
+  obtain ⟨y, hy, hyk⟩ := contains_iff.1 hc
+  rw [entries_expire] at hy
+  obtain ⟨hyL, hyn⟩ := List.mem_filter.1 hy
+  have := nodup_map_inj (fun e : Entry => e.key) L.entries hI.keys y hyL e he (by simp [hyk, hk])
+  subst this
+  simp [hx] at hyn
+
+/-- Sweep, then duplicate: a key kept after the sweep is refused as `dup` with the swept ledger and the expired items
+(not with the ledger unchanged). -/
+theorem admit_dup_sweeps {L : Ledger} (k : Key) (b : Nat) (c : Class) (x now : Nat)
+    (h : (expire L now).1.contains k = true) :
+    admitItem L k b c x now = ⟨some .dup, (expire L now).1, (expire L now).2⟩ := by
+  simp [admitItem, h]
+
+/-- An item that is expired at admission (`expires ≤ now`) is refused: `expired` when its key is free after the sweep,
+`dup` otherwise; nothing but the expired items leaves. -/
+theorem admit_expired_refused {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) (hx : x ≤ now) :
+    (admitItem L k b c x now).err ≠ none ∧ (admitItem L k b c x now).L = (expire L now).1 ∧
+      (admitItem L k b c x now).ev = (expire L now).2 ∧
+      ((expire L now).1.contains k = false → admitItem L k b c x now = ⟨some .expired, (expire L now).1, (expire L now).2⟩) := by
+  have hne : (admitItem L k b c x now).err ≠ none := by
+    intro h
+    have := (admit_ok_iff hI k b c x now).1 h
+    omega
+  obtain ⟨e, he⟩ := Option.ne_none_iff_exists'.1 hne
+  obtain ⟨h1, h2, -⟩ := admit_refused_state hI k b c x now e he
+  refine ⟨hne, h1, h2, fun hc => ?_⟩
+  simp [admitItem, hc, hx]
 
 theorem admit_budget {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
     (admitItem L k b c x now).L.used ≤ (admitItem L k b c x now).L.budget :=
@@ -46,7 +107,7 @@ theorem admit_keeps_live_custody {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (
   have h1 : e ∈ (expire L now).1.entries := by
     rw [entries_expire]; exact List.mem_filter.2 ⟨he, by simp [hlive]⟩
   rcases admit_cases hI k b c x now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨hc', hf, L2, ev2, slots', hev, hput, h, hI2, hb2, hs2, hp2, hsl2, htr, hpw, hlt, hrm, hu2, hlast⟩
-  · rw [h]; exact he
+  · rw [h]; exact h1
   · rw [h]; exact h1
   · rw [h]
     have hn : e ∉ ev2 := fun hm => by have := htr e hm; rw [hc] at this; cases this
@@ -179,6 +240,9 @@ theorem spaces_are_distinct_keys : (⟨1, 5⟩ : Key) ≠ ⟨2, 5⟩ := by decid
 #audit_axioms Vinc.DtnStore.admit_ok_iff
 #audit_axioms Vinc.DtnStore.admit_refused_state
 #audit_axioms Vinc.DtnStore.admit_budget
+#audit_axioms Vinc.DtnStore.admit_sweeps_before_dup
+#audit_axioms Vinc.DtnStore.admit_dup_sweeps
+#audit_axioms Vinc.DtnStore.admit_expired_refused
 #audit_axioms Vinc.DtnStore.admit_keeps_live_custody
 #audit_axioms Vinc.DtnStore.admit_mailbox_keeps_live_custody
 #audit_axioms Vinc.DtnStore.admit_eviction_order

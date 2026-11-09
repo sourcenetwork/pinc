@@ -106,7 +106,7 @@ theorem bok_step {e d : Nat} {f0 f' : F} {n : Nat} {inp : DtnForward.Input} {er 
   | tick => simp [DtnForward.step] at hs; rw [← hs.1]; exact ha
   | hold id d' ex c =>
     obtain ⟨hid, hex, hdd⟩ := hh id d' ex c rfl
-    rcases DtnForward.hold_total f0 n id d' ex c f' er hs 0 with ⟨_, hf⟩ | ⟨_, _, _, _, i, _, hf⟩
+    rcases DtnForward.hold_total f0 n id d' ex c f' er hs 0 with ⟨_, hf⟩ | ⟨_, _, _, _, i, _, k, _, hf⟩
     · rw [hf]; exact ha
     · rw [hf]
       exact allB_upd _ _ (fun o _ b' hb' => by

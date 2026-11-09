@@ -18,14 +18,14 @@ theorem tick_expires {s : Sys} (h : Reach s) (hexp : s.cfg.exp ≤ s.t + 1) :
       ((exec s .tick).nodes n).L.contains (DtnStore.bkey bid) = false := by
   intro n hn
   have hC := reach_chinv h
-  obtain ⟨hB, hL⟩ := exec_BL s .tick n hn
+  obtain ⟨hB, hL, -⟩ := exec_BL s .tick n hn
   have hledg : ledgerEv s .tick n = some (.bexpire (s.t + 1)) := by simp [ledgerEv]
-  have hfun : ledgerAfter s .tick n = DtnStore.step ⟨(s.nodes n).B, (s.nodes n).L⟩ (.bexpire (s.t + 1)) := by
+  have hfun : ledgerAfter s .tick n = DtnStore.step ⟨(s.nodes n).B, (s.nodes n).L, (s.nodes n).nx⟩ (.bexpire (s.t + 1)) := by
     simp [ledgerAfter, hledg]
   have hnone : ((exec s .tick).nodes n).L.contains (DtnStore.bkey bid) = false := by
     rw [hL, hfun]
     obtain ⟨-, -, hent⟩ := DtnStore.bexpire_exits (s.nodes n).B (s.nodes n).L (s.t + 1)
-    cases hc : (DtnStore.step ⟨(s.nodes n).B, (s.nodes n).L⟩ (.bexpire (s.t + 1))).L.contains (DtnStore.bkey bid) with
+    cases hc : (DtnStore.step ⟨(s.nodes n).B, (s.nodes n).L, (s.nodes n).nx⟩ (.bexpire (s.t + 1))).L.contains (DtnStore.bkey bid) with
     | false => rfl
     | true =>
       exfalso
@@ -97,8 +97,8 @@ theorem tick_charged (s : Sys) (n : Nat) (hn : n ∈ s.cfg.ids) (i r k : Nat) (t
 
 /-! ### Liveness: a contact with the destination delivers the bundle -/
 
-theorem exec_bun_dest (s : Sys) (id f r c : Nat) (fr : Bool) (hr : r = s.cfg.dest) :
-    (exec s (.bun (.bun id f r c fr))).delivered = true := by
+theorem exec_bun_dest (s : Sys) (id f r c : Nat) (fr : Bool) (off : Nat) (hr : r = s.cfg.dest) :
+    (exec s (.bun (.bun id f r c fr off))).delivered = true := by
   subst hr
   simp [exec, exec0]
 
@@ -223,13 +223,13 @@ theorem delivery_schedule {s : Sys} (h : Reach s) (n : Nat) (hn : n ∈ s.cfg.id
       subst hc0
       subst hpd
       have hE : En s (.poll n) := hn
-      have hexec : (exec s (.poll n)).msgs = Msg.bun s.seq n s.cfg.dest 0 true :: s.msgs := by
+      have hexec : (exec s (.poll n)).msgs = Msg.bun s.seq n s.cfg.dest 0 true 0 :: s.msgs := by
         simp [exec, exec0, hp]
-      refine ⟨hE, Msg.bun s.seq n s.cfg.dest 0 true, by rw [hexec]; exact List.mem_cons_self, ?_, ?_⟩
+      refine ⟨hE, Msg.bun s.seq n s.cfg.dest 0 true 0, by rw [hexec]; exact List.mem_cons_self, ?_, ?_⟩
       · refine ⟨by rw [hexec]; exact List.mem_cons_self, ?_⟩
         show s.cfg.dest ∈ (exec s (.poll n)).cfg.ids
         rw [exec_cfg]; exact hd
-      · exact exec_bun_dest _ _ _ _ _ _ (by rw [exec_cfg])
+      · exact exec_bun_dest _ _ _ _ _ _ _ (by rw [exec_cfg])
 
 #audit_axioms Vinc.DtnScenario.delivery_schedule
 #audit_axioms Vinc.DtnScenario.contact_brings_link_up

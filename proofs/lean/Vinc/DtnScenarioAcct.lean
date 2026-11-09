@@ -29,7 +29,7 @@ theorem fwd_mono {c : Cfg} {t t' : Nat} (ht : t ≤ t') {f : DtnForward.F} (h : 
 
 /-- No fresh bundle message carries copies to the destination. -/
 def MsgOk (d : Nat) (l : List Msg) : Prop :=
-  ∀ m ∈ l, ∀ id fr to c, m = .bun id fr to c true → to = d → c = 0
+  ∀ m ∈ l, ∀ id fr to c off, m = .bun id fr to c true off → to = d → c = 0
 
 /-- The invariant of a system. -/
 structure SysInv (s : Sys) : Prop where
@@ -39,11 +39,11 @@ structure SysInv (s : Sys) : Prop where
   acct : s.replayed = false → s.heldAll + s.inflight + s.dropped + s.released = s.cfg.copies
 
 theorem msgOk_cons {d : Nat} {l : List Msg} (hm : MsgOk d l) (new : Msg)
-    (hn : ∀ id fr to c, new = .bun id fr to c true → to = d → c = 0) : MsgOk d (new :: l) := by
-  intro m hmem id fr to c h
+    (hn : ∀ id fr to c off, new = .bun id fr to c true off → to = d → c = 0) : MsgOk d (new :: l) := by
+  intro m hmem id fr to c off h
   rcases List.mem_cons.1 hmem with rfl | hm'
-  · exact hn id fr to c h
-  · exact hm m hm' id fr to c h
+  · exact hn id fr to c off h
+  · exact hm m hm' id fr to c off h
 
 theorem msgOk_erase {d : Nat} {l : List Msg} (hm : MsgOk d l) (x : Msg) : MsgOk d (l.erase x) :=
   fun m hmem => hm m (List.mem_of_mem_erase hmem)
@@ -51,12 +51,12 @@ theorem msgOk_erase {d : Nat} {l : List Msg} (hm : MsgOk d l) (x : Msg) : MsgOk 
 /-! ### The initial system -/
 
 theorem node_empty_fwd (c : Cfg) (n : Nat) : FwdOk c 0 (Node.empty c n).f := by
-  have hF : (Node.empty c n).f = DtnForward.F.new c.retry c.maxSends 0 c.fb c.fl c.ft := rfl
+  have hF : (Node.empty c n).f = DtnForward.F.new c.retry c.maxSends 0 c.fb c.fl c.ft c.fd := rfl
   refine ⟨?_, ?_, ?_, ?_⟩
   · rw [hF]; exact DtnForward.uniq_new _
   · intro i t ht
     rw [hF] at ht
-    have : DtnForward.slot (DtnForward.F.new c.retry c.maxSends 0 c.fb c.fl c.ft).ts i = none :=
+    have : DtnForward.slot (DtnForward.F.new c.retry c.maxSends 0 c.fb c.fl c.ft c.fd).ts i = none :=
       DtnForward.slot_replicate_none _ _
     rw [this] at ht; cases ht
   · rw [hF]; exact allB_replicate _ _
@@ -212,16 +212,16 @@ theorem inv_poll {s : Sys} (hI : SysInv s) (n : Nat) (hn : n ∈ s.cfg.ids) : Sy
       simp only
       refine ⟨hnd, fwd_set hfwd n _ hf', hmsg, fun hr => ?_⟩
       have := hacct hr
-      have e := heldAll_set_eq s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L⟩
+      have e := heldAll_set_eq s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L, (ledgerAfter s (.poll n) n).nx⟩
         (held_poll_keep hp (fun _ h => nomatch h) (fun _ _ _ h => nomatch h))
       show (s.set n _).heldAll + s.inflight + s.dropped + s.released = s.cfg.copies
       rw [e]; exact this
     | send p b c r =>
       simp only
-      have hdel : ∀ id fr to c', Msg.bun s.seq n p c (!r) = .bun id fr to c' true → to = s.cfg.dest → c' = 0 := by
-        intro id fr to c' h hto
+      have hdel : ∀ o id fr to c' off', Msg.bun s.seq n p c (!r) o = .bun id fr to c' true off' → to = s.cfg.dest → c' = 0 := by
+        intro o id fr to c' off' h hto
         simp only [Msg.bun.injEq] at h
-        obtain ⟨-, -, hpp, hc, hr⟩ := h
+        obtain ⟨-, -, hpp, hc, hr, -⟩ := h
         cases r
         · subst hpp hc
           obtain ⟨-, -, hfalse⟩ := DtnForward.poll_send_spec hp
@@ -231,17 +231,17 @@ theorem inv_poll {s : Sys} (hI : SysInv s) (n : Nat) (hn : n ∈ s.cfg.ids) : Sy
           · exact h0
           · exact absurd (hto.trans hd.symm) hne
         · simp at hr
-      refine ⟨hnd, fwd_set hfwd n _ hf', msgOk_cons hmsg _ hdel, fun hr => ?_⟩
+      refine ⟨hnd, fwd_set hfwd n _ hf', msgOk_cons hmsg _ (hdel _), fun hr => ?_⟩
       have := hacct hr
       cases r
       · have hs := held_poll_send hp hx.bok
-        have e := heldAll_set_delta s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L⟩ hnd hn
+        have e := heldAll_set_delta s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L, (ledgerAfter s (.poll n) n).nx⟩ hnd hn
         show (s.set n _).heldAll + (c + (s.msgs.map Msg.freshCopies).sum) + s.dropped + s.released = s.cfg.copies
         simp only [Sys.inflight] at this
         simp only at e
         omega
       · have hs := held_poll_keep hp (fun _ h => nomatch h) (fun _ _ _ h => by simp at h)
-        have e := heldAll_set_eq s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L⟩ hs
+        have e := heldAll_set_eq s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L, (ledgerAfter s (.poll n) n).nx⟩ hs
         show (s.set n _).heldAll + (0 + (s.msgs.map Msg.freshCopies).sum) + s.dropped + s.released = s.cfg.copies
         simp only [Sys.inflight] at this
         rw [e]; omega
@@ -250,32 +250,32 @@ theorem inv_poll {s : Sys} (hI : SysInv s) (n : Nat) (hn : n ∈ s.cfg.ids) : Sy
       refine ⟨hnd, fwd_set hfwd n _ hf', hmsg, fun hr => ?_⟩
       have := hacct hr
       have h0 := held_poll_release hp hx.uniq hx.bok
-      have e := heldAll_set_delta s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L⟩ hnd hn
+      have e := heldAll_set_delta s n ⟨f', (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L, (ledgerAfter s (.poll n) n).nx⟩ hnd hn
       show (s.set n _).heldAll + s.inflight + s.dropped + (s.released + heldOf (s.nodes n).f) = s.cfg.copies
       unfold heldOf
       simp only at e
       omega
 
-theorem fresh_bun (id fr to c : Nat) (fresh : Bool) :
-    (Msg.bun id fr to c fresh).freshCopies = if fresh then c else 0 := by
+theorem fresh_bun (id fr to c off : Nat) (fresh : Bool) :
+    (Msg.bun id fr to c fresh off).freshCopies = if fresh then c else 0 := by
   cases fresh <;> rfl
 
-theorem inv_bun {s : Sys} (hI : SysInv s) (id from_ r c : Nat) (fresh : Bool)
-    (hm : Msg.bun id from_ r c fresh ∈ s.msgs) (hr : r ∈ s.cfg.ids) :
-    SysInv (exec0 s (.bun (.bun id from_ r c fresh))) := by
+theorem inv_bun {s : Sys} (hI : SysInv s) (id from_ r c off : Nat) (fresh : Bool)
+    (hm : Msg.bun id from_ r c fresh off ∈ s.msgs) (hr : r ∈ s.cfg.ids) :
+    SysInv (exec0 s (.bun (.bun id from_ r c fresh off))) := by
   obtain ⟨hnd, hfwd, hmsg, hacct⟩ := hI
   have hinfl := inflight_erase s _ hm
   by_cases hd : r = s.cfg.dest
   · subst hd
     simp only [exec0, ite_true]
-    have hc0 : (Msg.bun id from_ s.cfg.dest c fresh).freshCopies = 0 := by
+    have hc0 : (Msg.bun id from_ s.cfg.dest c fresh off).freshCopies = 0 := by
       rw [fresh_bun]
       cases fresh
       · rfl
-      · exact hmsg _ hm id from_ s.cfg.dest c rfl rfl
-    refine ⟨hnd, hfwd, msgOk_cons (msgOk_erase hmsg _) (Msg.ack s.seq s.cfg.dest from_) (fun _ _ _ _ h => nomatch h), fun hrep => ?_⟩
+      · exact hmsg _ hm id from_ s.cfg.dest c off rfl rfl
+    refine ⟨hnd, hfwd, msgOk_cons (msgOk_erase hmsg _) (Msg.ack s.seq s.cfg.dest from_ off) (fun _ _ _ _ _ h => nomatch h), fun hrep => ?_⟩
     have := hacct hrep
-    show s.heldAll + (0 + (s.msgs.erase (Msg.bun id from_ s.cfg.dest c fresh) |>.map Msg.freshCopies).sum) + s.dropped + s.released = s.cfg.copies
+    show s.heldAll + (0 + (s.msgs.erase (Msg.bun id from_ s.cfg.dest c fresh off) |>.map Msg.freshCopies).sum) + s.dropped + s.released = s.cfg.copies
     simp only [Sys.inflight] at this hinfl
     omega
   · simp only [exec0, hd, ite_false]
@@ -285,9 +285,9 @@ theorem inv_bun {s : Sys} (hI : SysInv s) (id from_ r c : Nat) (fresh : Bool)
       simp only [hacc]
       refine ⟨hnd, fwd_set hfwd r _ hx, msgOk_erase hmsg _, fun hrep => ?_⟩
       have := hacct hrep
-      have e1 := heldAll_set_eq s r ⟨(s.nodes r).f, (ledgerAfter s (.bun (.bun id from_ r c fresh)) r).B,
-        (ledgerAfter s (.bun (.bun id from_ r c fresh)) r).L⟩ rfl
-      show (s.set r _).heldAll + (s.msgs.erase (Msg.bun id from_ r c fresh) |>.map Msg.freshCopies).sum +
+      have e1 := heldAll_set_eq s r ⟨(s.nodes r).f, (ledgerAfter s (.bun (.bun id from_ r c fresh off)) r).B,
+        (ledgerAfter s (.bun (.bun id from_ r c fresh off)) r).L, (ledgerAfter s (.bun (.bun id from_ r c fresh off)) r).nx⟩ rfl
+      show (s.set r _).heldAll + (s.msgs.erase (Msg.bun id from_ r c fresh off) |>.map Msg.freshCopies).sum +
         (s.dropped + (if fresh = true then c else 0)) + s.released = s.cfg.copies
       rw [e1]
       simp only [Sys.inflight, fresh_bun] at this hinfl
@@ -303,15 +303,15 @@ theorem inv_bun {s : Sys} (hI : SysInv s) (id from_ r c : Nat) (fresh : Bool)
             exact this)
         refine ⟨hnd, fwd_set hfwd r _ (fwd_step (Nat.le_refl _) hx _ (fun i d e c' h => by
             simp only [DtnForward.Input.hold.injEq] at h; exact ⟨h.1.symm, h.2.2.1.symm, h.2.1.symm⟩)),
-          msgOk_cons (msgOk_erase hmsg _) (Msg.ack s.seq r from_) (fun _ _ _ _ h => nomatch h), fun hrep => ?_⟩
+          msgOk_cons (msgOk_erase hmsg _) (Msg.ack s.seq r from_ off) (fun _ _ _ _ _ h => nomatch h), fun hrep => ?_⟩
         cases fresh
         · exfalso
           simp [hok] at hrep
         · have := hacct (by simpa [hok] using hrep)
           have e := heldAll_set_delta s r ⟨(DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).1,
-            (ledgerAfter s (.bun (.bun id from_ r c true)) r).B, (ledgerAfter s (.bun (.bun id from_ r c true)) r).L⟩ hnd hr
+            (ledgerAfter s (.bun (.bun id from_ r c true off)) r).B, (ledgerAfter s (.bun (.bun id from_ r c true off)) r).L, (ledgerAfter s (.bun (.bun id from_ r c true off)) r).nx⟩ hnd hr
           simp only at e
-          show (s.set r _).heldAll + (0 + (s.msgs.erase (Msg.bun id from_ r c true) |>.map Msg.freshCopies).sum) +
+          show (s.set r _).heldAll + (0 + (s.msgs.erase (Msg.bun id from_ r c true off) |>.map Msg.freshCopies).sum) +
             (s.dropped + (if ((DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).2 != .ok && true) = true then c else 0)) +
             s.released = s.cfg.copies
           simp only [Sys.inflight, fresh_bun, eq_self_iff_true, ite_true, if_true] at this hinfl
@@ -319,15 +319,15 @@ theorem inv_bun {s : Sys} (hI : SysInv s) (id from_ r c : Nat) (fresh : Bool)
           omega
       · have hfh := fwd_step (Nat.le_refl _) hx (.hold bid s.cfg.dest s.cfg.exp c) (fun i d e c' h => by
             simp only [DtnForward.Input.hold.injEq] at h; exact ⟨h.1.symm, h.2.2.1.symm, h.2.1.symm⟩)
-        refine ⟨hnd, fwd_set hfwd r _ hfh, msgOk_cons (msgOk_erase hmsg _) (Msg.ack s.seq r from_)
-          (fun _ _ _ _ h => nomatch h), fun hrep => ?_⟩
+        refine ⟨hnd, fwd_set hfwd r _ hfh, msgOk_cons (msgOk_erase hmsg _) (Msg.ack s.seq r from_ off)
+          (fun _ _ _ _ _ h => nomatch h), fun hrep => ?_⟩
         have hh := held_hold_err (f0 := (s.nodes r).f) (f' := (DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).1)
           (n := s.t) (er := (DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).2) (id := bid) (d := s.cfg.dest)
           (ex := s.cfg.exp) (c := c) rfl hok
         have e1 := heldAll_set_eq s r ⟨(DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).1,
-          (ledgerAfter s (.bun (.bun id from_ r c fresh)) r).B, (ledgerAfter s (.bun (.bun id from_ r c fresh)) r).L⟩ hh
+          (ledgerAfter s (.bun (.bun id from_ r c fresh off)) r).B, (ledgerAfter s (.bun (.bun id from_ r c fresh off)) r).L, (ledgerAfter s (.bun (.bun id from_ r c fresh off)) r).nx⟩ hh
         have := hacct (by simpa [hok] using hrep)
-        show (s.set r _).heldAll + (0 + (s.msgs.erase (Msg.bun id from_ r c fresh) |>.map Msg.freshCopies).sum) +
+        show (s.set r _).heldAll + (0 + (s.msgs.erase (Msg.bun id from_ r c fresh off) |>.map Msg.freshCopies).sum) +
           (s.dropped + (if ((DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).2 != .ok && fresh) = true then c else 0)) +
           s.released = s.cfg.copies
         have hne : ((DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).2 != .ok) = true := by
@@ -337,8 +337,8 @@ theorem inv_bun {s : Sys} (hI : SysInv s) (id from_ r c : Nat) (fresh : Bool)
         simp only [Sys.inflight, fresh_bun] at this hinfl
         omega
 
-theorem inv_ack {s : Sys} (hI : SysInv s) (id c p : Nat) (hm : Msg.ack id c p ∈ s.msgs) (hp : p ∈ s.cfg.ids) :
-    SysInv (exec0 s (.ack (.ack id c p))) := by
+theorem inv_ack {s : Sys} (hI : SysInv s) (id c p o : Nat) (hm : Msg.ack id c p o ∈ s.msgs) (hp : p ∈ s.cfg.ids) :
+    SysInv (exec0 s (.ack (.ack id c p o))) := by
   obtain ⟨hnd, hfwd, hmsg, hacct⟩ := hI
   have hinfl := inflight_erase s _ hm
   have hx := hfwd p hp
@@ -350,11 +350,11 @@ theorem inv_ack {s : Sys} (hI : SysInv s) (id c p : Nat) (hm : Msg.ack id c p �
   refine ⟨hnd, fwd_set hfwd p _ hfa, msgOk_erase hmsg _, fun hrep => ?_⟩
   have := hacct hrep
   have e := heldAll_set_eq s p ⟨(DtnForward.step (s.nodes p).f s.t (.acked c bid)).1,
-    (ledgerAfter s (.ack (.ack id c p)) p).B, (ledgerAfter s (.ack (.ack id c p)) p).L⟩ ka
-  show (s.set p _).heldAll + (s.msgs.erase (Msg.ack id c p) |>.map Msg.freshCopies).sum + s.dropped + s.released = s.cfg.copies
+    (ledgerAfter s (.ack (.ack id c p o)) p).B, (ledgerAfter s (.ack (.ack id c p o)) p).L, (ledgerAfter s (.ack (.ack id c p o)) p).nx⟩ ka
+  show (s.set p _).heldAll + (s.msgs.erase (Msg.ack id c p o) |>.map Msg.freshCopies).sum + s.dropped + s.released = s.cfg.copies
   rw [e]
   simp only [Sys.inflight] at this hinfl
-  have : (Msg.ack id c p).freshCopies = 0 := rfl
+  have : (Msg.ack id c p o).freshCopies = 0 := rfl
   omega
 
 theorem inv_lose {s : Sys} (hI : SysInv s) (m : Msg) (hm : m ∈ s.msgs) : SysInv (exec0 s (.lose m)) := by
@@ -364,17 +364,17 @@ theorem inv_lose {s : Sys} (hI : SysInv s) (m : Msg) (hm : m ∈ s.msgs) : SysIn
   have := hacct hrep
   simp only [Sys.inflight] at this hinfl
   cases m with
-  | bun a b c d e =>
+  | bun a b c d e f =>
     cases e
-    · show s.heldAll + (s.msgs.erase (Msg.bun a b c d false) |>.map Msg.freshCopies).sum + (s.dropped + 0) + s.released = s.cfg.copies
-      have : (Msg.bun a b c d false).freshCopies = 0 := rfl
+    · show s.heldAll + (s.msgs.erase (Msg.bun a b c d false f) |>.map Msg.freshCopies).sum + (s.dropped + 0) + s.released = s.cfg.copies
+      have : (Msg.bun a b c d false f).freshCopies = 0 := rfl
       omega
-    · show s.heldAll + (s.msgs.erase (Msg.bun a b c d true) |>.map Msg.freshCopies).sum + (s.dropped + d) + s.released = s.cfg.copies
-      have : (Msg.bun a b c d true).freshCopies = d := rfl
+    · show s.heldAll + (s.msgs.erase (Msg.bun a b c d true f) |>.map Msg.freshCopies).sum + (s.dropped + d) + s.released = s.cfg.copies
+      have : (Msg.bun a b c d true f).freshCopies = d := rfl
       omega
-  | ack a b c =>
-    show s.heldAll + (s.msgs.erase (Msg.ack a b c) |>.map Msg.freshCopies).sum + (s.dropped + 0) + s.released = s.cfg.copies
-    have : (Msg.ack a b c).freshCopies = 0 := rfl
+  | ack a b c d =>
+    show s.heldAll + (s.msgs.erase (Msg.ack a b c d) |>.map Msg.freshCopies).sum + (s.dropped + 0) + s.released = s.cfg.copies
+    have : (Msg.ack a b c d).freshCopies = 0 := rfl
     omega
 
 theorem inv_press {s : Sys} (hI : SysInv s) (n k : Nat) (hn : n ∈ s.cfg.ids) : SysInv (exec0 s (.press n k)) := by
@@ -394,7 +394,7 @@ theorem inv_press {s : Sys} (hI : SysInv s) (n k : Nat) (hn : n ∈ s.cfg.ids) :
       refine ⟨hnd, fwd_set hfwd n _ hfa, hmsg, fun hrep => ?_⟩
       have := hacct hrep
       have e := heldAll_set_delta s n ⟨(DtnForward.step (s.nodes n).f s.t (.forget bid)).1, (s.nodes n).B,
-        (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).L⟩ hnd hn
+        (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).L, (s.nodes n).nx⟩ hnd hn
       show (s.set n _).heldAll + s.inflight + s.dropped + (s.released + heldOf (s.nodes n).f) = s.cfg.copies
       unfold heldOf
       simp only at e
@@ -403,7 +403,7 @@ theorem inv_press {s : Sys} (hI : SysInv s) (n k : Nat) (hn : n ∈ s.cfg.ids) :
       refine ⟨hnd, fwd_set hfwd n _ hx, hmsg, fun hrep => ?_⟩
       have := hacct hrep
       have e := heldAll_set_eq s n ⟨(s.nodes n).f, (s.nodes n).B,
-        (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).L⟩ rfl
+        (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).L, (s.nodes n).nx⟩ rfl
       show (s.set n _).heldAll + s.inflight + s.dropped + (s.released + 0) = s.cfg.copies
       rw [e]; omega
 
@@ -414,12 +414,12 @@ theorem inv_exec0 {s : Sys} (hI : SysInv s) (ev : Ev) (hE : En s ev) : SysInv (e
   | poll n => exact inv_poll hI n hE
   | bun m =>
     cases m with
-    | bun id f r c fr => exact inv_bun hI id f r c fr hE.1 hE.2
-    | ack a b c => exact hE.2.elim
+    | bun id f r c fr off => exact inv_bun hI id f r c off fr hE.1 hE.2
+    | ack a b c d => exact hE.2.elim
   | ack m =>
     cases m with
-    | ack id c p => exact inv_ack hI id c p hE.1 hE.2
-    | bun a b c d e => exact hE.2.elim
+    | ack id c p o => exact inv_ack hI id c p o hE.1 hE.2
+    | bun a b c d e f => exact hE.2.elim
   | lose m => exact inv_lose hI m hE
   | press n k => exact inv_press hI n k hE
   | bad => exact hI

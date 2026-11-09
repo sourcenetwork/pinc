@@ -97,7 +97,7 @@ theorem held_step_keep {f0 f' : F} {n : Nat} {inp : DtnForward.Input} {er : DtnF
 
 theorem held_hold_ok {f0 f' : F} {n d ex c : Nat} (hs : step f0 n (.hold bid d ex c) = (f', .ok)) :
     heldSum f' bid = heldSum f0 bid + c := by
-  rcases DtnForward.hold_total f0 n bid d ex c f' .ok hs bid with ⟨he, _⟩ | ⟨_, _, _, htot, i, _, hf⟩
+  rcases DtnForward.hold_total f0 n bid d ex c f' .ok hs bid with ⟨he, _⟩ | ⟨_, _, _, htot, i, _, k, _, hf⟩
   · exact absurd rfl he
   · have h2 := handed_advance f0 n
     have h3 : handedSum f' bid = handedSum (advance f0 n) bid := by

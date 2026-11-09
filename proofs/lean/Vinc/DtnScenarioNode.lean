@@ -16,7 +16,7 @@ namespace Vinc.DtnScenario
 
 /-- The `DtnStore` events the glue applies are never a host event on a key of the book. -/
 theorem ledgerEv_allowed (s : Sys) (ev : Ev) (m : Nat) (le : DtnStore.Ev) (h : ledgerEv s ev m = some le) :
-    DtnStore.Allowed ⟨(s.nodes m).B, (s.nodes m).L⟩ le := by
+    DtnStore.Allowed ⟨(s.nodes m).B, (s.nodes m).L, (s.nodes m).nx⟩ le := by
   cases ev with
   | tick => simp only [ledgerEv] at h; cases h; trivial
   | poll n =>
@@ -31,20 +31,20 @@ theorem ledgerEv_allowed (s : Sys) (ev : Ev) (m : Nat) (le : DtnStore.Ev) (h : l
     · simp at h
   | bun mm =>
     cases mm with
-    | bun a b c d e =>
+    | bun a b c d e f =>
       simp only [ledgerEv] at h
       split at h
       · cases h; trivial
       · simp at h
-    | ack a b c => simp [ledgerEv] at h
+    | ack a b c d => simp [ledgerEv] at h
   | ack mm =>
     cases mm with
-    | ack a b c =>
+    | ack a b c d =>
       simp only [ledgerEv] at h
       split at h
       · cases h; trivial
       · simp at h
-    | bun a b c d e => simp [ledgerEv] at h
+    | bun a b c d e f => simp [ledgerEv] at h
   | press n k =>
     simp only [ledgerEv] at h
     split at h
@@ -66,21 +66,23 @@ theorem set_nodes_self (s : Sys) (n : Nat) (x : Node) : (s.set n x).nodes n = x 
   simp [Sys.set]
 
 theorem ledgerAfter_none (s : Sys) (ev : Ev) (m : Nat) (h : ledgerEv s ev m = none) :
-    ledgerAfter s ev m = ⟨(s.nodes m).B, (s.nodes m).L⟩ := by
+    ledgerAfter s ev m = ⟨(s.nodes m).B, (s.nodes m).L, (s.nodes m).nx⟩ := by
   simp [ledgerAfter, h]
 
 /-- The book and ledger of every node after an event are what `ledgerAfter` says. -/
 theorem exec_BL (s : Sys) (ev : Ev) (m : Nat) (hm : m ∈ s.cfg.ids) :
-    ((exec s ev).nodes m).B = (ledgerAfter s ev m).B ∧ ((exec s ev).nodes m).L = (ledgerAfter s ev m).L := by
+    ((exec s ev).nodes m).B = (ledgerAfter s ev m).B ∧ ((exec s ev).nodes m).L = (ledgerAfter s ev m).L ∧
+      ((exec s ev).nodes m).nx = (ledgerAfter s ev m).nx := by
   have key : ∀ (n : Nat) (x : Node) (s' : Sys), (s'.nodes = (s.set n x).nodes) →
-      (m = n → x.B = (ledgerAfter s ev m).B ∧ x.L = (ledgerAfter s ev m).L) →
+      (m = n → x.B = (ledgerAfter s ev m).B ∧ x.L = (ledgerAfter s ev m).L ∧ x.nx = (ledgerAfter s ev m).nx) →
       (m ≠ n → ledgerEv s ev m = none) →
-      (s'.nodes m).B = (ledgerAfter s ev m).B ∧ (s'.nodes m).L = (ledgerAfter s ev m).L := by
+      (s'.nodes m).B = (ledgerAfter s ev m).B ∧ (s'.nodes m).L = (ledgerAfter s ev m).L ∧
+        (s'.nodes m).nx = (ledgerAfter s ev m).nx := by
     intro n x s' hs' h1 h2
     rw [hs']
     by_cases hmn : m = n
     · subst hmn; rw [set_nodes_self]; exact h1 rfl
-    · rw [set_nodes_same _ _ _ _ hmn, ledgerAfter_none _ _ _ (h2 hmn)]; exact ⟨rfl, rfl⟩
+    · rw [set_nodes_same _ _ _ _ hmn, ledgerAfter_none _ _ _ (h2 hmn)]; exact ⟨rfl, rfl, rfl⟩
   cases ev with
   | contact a b up =>
     have hl : ledgerEv s (.contact a b up) m = none := by simp [ledgerEv]
@@ -92,50 +94,50 @@ theorem exec_BL (s : Sys) (ev : Ev) (m : Nat) (hm : m ∈ s.cfg.ids) :
       · subst ha; simp [hb]
       · simp [hb, ha]
   | tick =>
-    simp [exec, exec0, hm]
+    simp [exec, exec0, hm, ledgerAfter, ledgerEv, DtnStore.step]
   | poll n =>
-    refine key n ⟨(DtnForward.poll (s.nodes n).f).1, (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L⟩
+    refine key n ⟨(DtnForward.poll (s.nodes n).f).1, (ledgerAfter s (.poll n) n).B, (ledgerAfter s (.poll n) n).L, (ledgerAfter s (.poll n) n).nx⟩
       (exec s (.poll n)) ?_ ?_ ?_
     · simp only [exec, exec0]; split <;> rfl
-    · intro h; subst h; exact ⟨rfl, rfl⟩
+    · intro h; subst h; exact ⟨rfl, rfl, rfl⟩
     · intro h; simp [ledgerEv, h]
   | bun mm =>
     cases mm with
-    | ack a b c =>
-      have hl : ledgerEv s (.bun (.ack a b c)) m = none := by simp [ledgerEv]
+    | ack a b c d =>
+      have hl : ledgerEv s (.bun (.ack a b c d)) m = none := by simp [ledgerEv]
       rw [ledgerAfter_none _ _ _ hl]
       simp [exec, exec0]
-    | bun a from_ r c fresh =>
+    | bun a from_ r c fresh off =>
       by_cases hr : r = s.cfg.dest
-      · have hl : ledgerEv s (.bun (.bun a from_ r c fresh)) m = none := by simp [ledgerEv, hr]
+      · have hl : ledgerEv s (.bun (.bun a from_ r c fresh off)) m = none := by simp [ledgerEv, hr]
         rw [ledgerAfter_none _ _ _ hl]
         simp [exec, exec0, hr]
-      · have hl : ledgerEv s (.bun (.bun a from_ r c fresh)) r =
+      · have hl : ledgerEv s (.bun (.bun a from_ r c fresh off)) r =
             some (.accept bid 1 s.cfg.exp from_ s.t) := by simp [ledgerEv, hr]
-        have hl' : ∀ m', m' ≠ r → ledgerEv s (.bun (.bun a from_ r c fresh)) m' = none := by
+        have hl' : ∀ m', m' ≠ r → ledgerEv s (.bun (.bun a from_ r c fresh off)) m' = none := by
           intro m' hm'; simp [ledgerEv, hm']
         simp only [exec, exec0, hr, ite_false]
         split
-        · refine key r ⟨(s.nodes r).f, (ledgerAfter s (.bun (.bun a from_ r c fresh)) r).B,
-              (ledgerAfter s (.bun (.bun a from_ r c fresh)) r).L⟩ _ rfl ?_ (fun h => hl' m h)
-          intro h; subst h; exact ⟨rfl, rfl⟩
+        · refine key r ⟨(s.nodes r).f, (ledgerAfter s (.bun (.bun a from_ r c fresh off)) r).B,
+              (ledgerAfter s (.bun (.bun a from_ r c fresh off)) r).L, (ledgerAfter s (.bun (.bun a from_ r c fresh off)) r).nx⟩ _ rfl ?_ (fun h => hl' m h)
+          intro h; subst h; exact ⟨rfl, rfl, rfl⟩
         · refine key r ⟨(DtnForward.step (s.nodes r).f s.t (.hold bid s.cfg.dest s.cfg.exp c)).1,
-              (ledgerAfter s (.bun (.bun a from_ r c fresh)) r).B,
-              (ledgerAfter s (.bun (.bun a from_ r c fresh)) r).L⟩ _ rfl ?_ (fun h => hl' m h)
-          intro h; subst h; exact ⟨rfl, rfl⟩
+              (ledgerAfter s (.bun (.bun a from_ r c fresh off)) r).B,
+              (ledgerAfter s (.bun (.bun a from_ r c fresh off)) r).L, (ledgerAfter s (.bun (.bun a from_ r c fresh off)) r).nx⟩ _ rfl ?_ (fun h => hl' m h)
+          intro h; subst h; exact ⟨rfl, rfl, rfl⟩
   | ack mm =>
     cases mm with
-    | bun a b c d e =>
-      have hl : ledgerEv s (.ack (.bun a b c d e)) m = none := by simp [ledgerEv]
+    | bun a b c d e f =>
+      have hl : ledgerEv s (.ack (.bun a b c d e f)) m = none := by simp [ledgerEv]
       rw [ledgerAfter_none _ _ _ hl]
       simp [exec, exec0]
-    | ack a c p =>
-      have hl' : ∀ m', m' ≠ p → ledgerEv s (.ack (.ack a c p)) m' = none := by
+    | ack a c p o =>
+      have hl' : ∀ m', m' ≠ p → ledgerEv s (.ack (.ack a c p o)) m' = none := by
         intro m' hm'; simp [ledgerEv, hm']
       simp only [exec, exec0]
       refine key p ⟨(DtnForward.step (s.nodes p).f s.t (.acked c bid)).1,
-          (ledgerAfter s (.ack (.ack a c p)) p).B, (ledgerAfter s (.ack (.ack a c p)) p).L⟩ _ rfl ?_ (fun h => hl' m h)
-      intro h; subst h; exact ⟨rfl, rfl⟩
+          (ledgerAfter s (.ack (.ack a c p o)) p).B, (ledgerAfter s (.ack (.ack a c p o)) p).L, (ledgerAfter s (.ack (.ack a c p o)) p).nx⟩ _ rfl ?_ (fun h => hl' m h)
+      intro h; subst h; exact ⟨rfl, rfl, rfl⟩
   | lose mm =>
     have hl : ledgerEv s (.lose mm) m = none := by simp [ledgerEv]
     rw [ledgerAfter_none _ _ _ hl]
@@ -152,7 +154,7 @@ theorem exec_BL (s : Sys) (ev : Ev) (m : Nat) (hm : m ∈ s.cfg.ids) :
       refine key n ⟨if (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).ev.any
             (fun e => e.key.space == 1) then (DtnForward.step (s.nodes n).f s.t (.forget bid)).1 else (s.nodes n).f,
           (s.nodes n).B,
-          (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).L⟩ _ rfl ?_ (fun h => hl' m h)
+          (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).L, (s.nodes n).nx⟩ _ rfl ?_ (fun h => hl' m h)
       intro h; subst h
       simp [ledgerAfter, hl, DtnStore.step]
     · have hl : ledgerEv s (.press n k) m = none := by
@@ -173,11 +175,11 @@ theorem exec_cfg (s : Sys) (ev : Ev) : (exec s ev).cfg = s.cfg := by
   cases ev <;> (simp only [exec, exec0, Sys.set]; repeat' split) <;> rfl
 
 theorem node_reach {s : Sys} (h : Reach s) :
-    ∀ m ∈ s.cfg.ids, DtnStore.Reach ⟨(s.nodes m).B, (s.nodes m).L⟩ := by
+    ∀ m ∈ s.cfg.ids, DtnStore.Reach ⟨(s.nodes m).B, (s.nodes m).L, (s.nodes m).nx⟩ := by
   induction h with
   | init c hn hsrc hmax hacc hhold =>
     intro m hm
-    have h0 : DtnStore.Reach ⟨List.replicate c.bslots none, DtnStore.Ledger.empty (if m = c.tight then 0 else c.lbud) c.lslots⟩ :=
+    have h0 : DtnStore.Reach ⟨List.replicate c.bslots none, DtnStore.Ledger.empty (if m = c.tight then 0 else c.lbud) c.lslots, 0⟩ :=
       DtnStore.Reach.init _ _ _ (by split <;> omega)
     by_cases hms : m = c.src
     · subst hms
@@ -189,8 +191,8 @@ theorem node_reach {s : Sys} (h : Reach s) :
     intro m hm
     rw [exec_cfg] at hm
     have h1 := ih m hm
-    obtain ⟨hb, hl⟩ := exec_BL s0 ev m hm
-    rw [hb, hl]
+    obtain ⟨hb, hl, hn⟩ := exec_BL s0 ev m hm
+    rw [hb, hl, hn]
     unfold ledgerAfter
     cases hle : ledgerEv s0 ev m with
     | none => simp only [hle]; exact h1
@@ -199,14 +201,14 @@ theorem node_reach {s : Sys} (h : Reach s) :
 /-- At every node of every reachable system the charge is the sum of the sizes within the budget, no bundle is held
 twice and the item of a held bundle is custody. -/
 theorem node_inv {s : Sys} (h : Reach s) (m : Nat) (hm : m ∈ s.cfg.ids) :
-    DtnStore.SInv ⟨(s.nodes m).B, (s.nodes m).L⟩ :=
+    DtnStore.SInv ⟨(s.nodes m).B, (s.nodes m).L, (s.nodes m).nx⟩ :=
   DtnStore.reach_inv (node_reach h m hm)
 
 /-- The only events that touch the ledger key of a bundle on purpose are the release of a delivered or expired bundle
 by a poll at that node and an acknowledgement addressed to it. -/
 theorem ledgerEv_touches (s : Sys) (ev : Ev) (m : Nat) (le : DtnStore.Ev) (k : DtnStore.Key)
     (h : ledgerEv s ev m = some le) (ht : le.touches k) :
-    (ev = .poll m ∧ ∃ b, (DtnForward.poll (s.nodes m).f).2 = .release b) ∨ ∃ a c, ev = .ack (.ack a c m) := by
+    (ev = .poll m ∧ ∃ b, (DtnForward.poll (s.nodes m).f).2 = .release b) ∨ ∃ a c o, ev = .ack (.ack a c m o) := by
   cases ev with
   | tick => simp only [ledgerEv] at h; cases h; exact absurd ht (by simp [DtnStore.Ev.touches])
   | poll n =>
@@ -228,20 +230,20 @@ theorem ledgerEv_touches (s : Sys) (ev : Ev) (m : Nat) (le : DtnStore.Ev) (k : D
     · simp [hmn] at h
   | bun mm =>
     cases mm with
-    | bun a b c d e =>
+    | bun a b c d e f =>
       simp only [ledgerEv] at h
       split at h
       · cases h; exact absurd ht (by simp [DtnStore.Ev.touches])
       · simp at h
-    | ack a b c => simp [ledgerEv] at h
+    | ack a b c d => simp [ledgerEv] at h
   | ack mm =>
     cases mm with
-    | ack a c p =>
+    | ack a c p o =>
       simp only [ledgerEv] at h
       split at h
-      · rename_i hp; right; exact ⟨a, c, by rw [hp]⟩
+      · rename_i hp; right; exact ⟨a, c, o, by rw [hp]⟩
       · simp at h
-    | bun a b c d e => simp [ledgerEv] at h
+    | bun a b c d e f => simp [ledgerEv] at h
   | press n k' =>
     simp only [ledgerEv] at h
     split at h
@@ -258,9 +260,9 @@ custody of any bundle, an admission of any space, a lost message, a tick before 
 theorem custody_stays {s : Sys} (h : Reach s) (ev : Ev) (m : Nat) (hm : m ∈ s.cfg.ids) (e : DtnStore.Entry)
     (he : e ∈ (s.nodes m).L.entries) (hc : e.cls = .custody)
     (hlive : ∀ le t, ledgerEv s ev m = some le → le.now = some t → DtnStore.expiredAt t e = false)
-    (hn : ¬ ((ev = .poll m ∧ ∃ b, (DtnForward.poll (s.nodes m).f).2 = .release b) ∨ ∃ a c, ev = .ack (.ack a c m))) :
+    (hn : ¬ ((ev = .poll m ∧ ∃ b, (DtnForward.poll (s.nodes m).f).2 = .release b) ∨ ∃ a c o, ev = .ack (.ack a c m o))) :
     e ∈ ((exec s ev).nodes m).L.entries := by
-  obtain ⟨-, hl⟩ := exec_BL s ev m hm
+  obtain ⟨-, hl, -⟩ := exec_BL s ev m hm
   rw [hl]
   unfold ledgerAfter
   cases hle : ledgerEv s ev m with
@@ -274,10 +276,11 @@ theorem custody_stays {s : Sys} (h : Reach s) (ev : Ev) (m : Nat) (hm : m ∈ s.
 does so through an acknowledgement addressed to its node by a custodian to whom that node had offered custody. -/
 theorem relief_only_by_offered_ack {s : Sys} (h : Reach s) (ev : Ev) (m : Nat) (hm : m ∈ s.cfg.ids)
     (e e' : DtnStore.Entry) (he : e ∈ (s.nodes m).L.entries) (hc : e.cls = .custody)
+    (hlive : ∀ le t, ledgerEv s ev m = some le → le.now = some t → DtnStore.expiredAt t e = false)
     (he' : e' ∈ ((exec s ev).nodes m).L.entries) (hk : e'.key = e.key) (ht : e'.cls = .transit) :
-    ∃ a c, ev = .ack (.ack a c m) ∧ e.key = DtnStore.bkey bid ∧
-      ∃ r ∈ DtnStore.recs (s.nodes m).B, r.bundle = bid ∧ r.offered = some c := by
-  obtain ⟨-, hl⟩ := exec_BL s ev m hm
+    ∃ a c o, ev = .ack (.ack a c m o) ∧ e.key = DtnStore.bkey bid ∧
+      ∃ r ∈ DtnStore.recs (s.nodes m).B, r.bundle = bid ∧ r.offered = some c ∧ r.oid = o := by
+  obtain ⟨-, hl, -⟩ := exec_BL s ev m hm
   rw [hl] at he'
   unfold ledgerAfter at he'
   cases hle : ledgerEv s ev m with
@@ -286,10 +289,10 @@ theorem relief_only_by_offered_ack {s : Sys} (h : Reach s) (ev : Ev) (m : Nat) (
       rw [this, hc] at ht; cases ht)
   | some le =>
     simp only [hle] at he'
-    obtain ⟨b, c, hev, hkey, hr⟩ := DtnStore.custody_to_transit_only_by_relief (node_inv h m hm) le
-      (ledgerEv_allowed s ev m le hle) e e' he hc he' hk ht
+    obtain ⟨b, c, o, hev, hkey, hr⟩ := DtnStore.custody_to_transit_only_by_relief (node_inv h m hm) le
+      (ledgerEv_allowed s ev m le hle) e e' he hc (fun t ht => hlive le t hle ht) he' hk ht
     subst hev
-    rcases ledgerEv_touches s ev m (.ack b c true) e.key hle (by simp [DtnStore.Ev.touches, hkey]) with ⟨hp, b0, hrel⟩ | ⟨a, c', hev'⟩
+    rcases ledgerEv_touches s ev m (.ack b c o true) e.key hle (by simp [DtnStore.Ev.touches, hkey]) with ⟨hp, b0, hrel⟩ | ⟨a, c', o', hev'⟩
     · subst hp
       have hp2 : DtnForward.poll (s.nodes m).f = ((DtnForward.poll (s.nodes m).f).1, .release b0) := Prod.ext rfl hrel
       simp only [ledgerEv, if_true] at hle
@@ -298,7 +301,9 @@ theorem relief_only_by_offered_ack {s : Sys} (h : Reach s) (ev : Ev) (m : Nat) (
     · subst hev'
       simp only [ledgerEv] at hle
       split at hle
-      · cases hle; exact ⟨a, _, rfl, hkey, hr⟩
+      · cases hle
+        obtain ⟨r0, hr0, hr1, hr2, hr3⟩ := hr
+        exact ⟨a, _, _, rfl, hkey, r0, hr0, hr1, hr2, hr3⟩
       · simp at hle
 
 end Vinc.DtnScenario

@@ -29,7 +29,7 @@ def isTag (t : String) : Bool := t == "sc"
 (node 3 has none), books of 2, the ranked offer policy. -/
 def world : Cfg :=
   { ids := [1, 2, 3, 4], src := 1, dest := 4, copies := 4, exp := 30, retry := 2, maxSends := 3, fb := 1, fl := 3,
-    ft := 3, lbud := 3, lslots := 3, bslots := 2, tight := 3, pb := 2, ranked := true }
+    ft := 3, fd := 2, lbud := 3, lslots := 3, bslots := 2, tight := 3, pb := 2, ranked := true }
 
 /-- Keep the node function flat: a replay of thousands of events must not stack one closure per event. -/
 def compact (s : Sys) : Sys :=
@@ -96,11 +96,16 @@ def replayEvent (j : J) (w : W) : Except String W := do
         check (a == want) s!"poll {n}: model {repr a}, code {repr want}"
         check (s.seq == (← natF j "mid")) s!"poll {n}: message id {s.seq} against {← natF j "mid"}"
       | k => throw s!"unknown action {k}"
-      pure (exec s (.poll n))
+      let s' := exec s (.poll n)
+      if (← strF j "a") == "send" then
+        match s'.msgs with
+        | .bun _ _ _ _ _ off :: _ => check (off == (← natF j "off")) s!"poll {n}: offer id {off} against {← natF j "off"}"
+        | _ => throw s!"poll {n}: a send made no bundle message"
+      pure s'
     | "bun" =>
       let m ← findMsg s (← natF j "m")
       let (r, c, fresh) ← match m with
-        | .bun _ _ r c fr => pure (r, c, fr)
+        | .bun _ _ r c fr _ => pure (r, c, fr)
         | .ack .. => throw "a bundle event on an ack"
       let from_ := match m with | .bun _ f .. => f | .ack .. => 0
       let outcome :=
@@ -113,17 +118,17 @@ def replayEvent (j : J) (w : W) : Except String W := do
         | none =>
           if (DtnForward.step x.f s.t (.hold bid s.cfg.dest s.cfg.exp c)).2 == .ok then "held" else "holdrefused"
       check (outcome == (← strF j "o")) s!"delivery of {← natF j "m"}: model {outcome}, code {← strF j "o"}"
-      if outcome != "refused" && outcome != "capacity" then
+      if outcome != "refused" && outcome != "capacity" && outcome != "other" then
         check (s.seq == (← natF j "aid")) s!"ack id {s.seq} against {← natF j "aid"}"
       let _ := fresh
       pure (exec s (.bun m))
     | "ack" =>
       let m ← findMsg s (← natF j "m")
-      let (c, p) ← match m with
-        | .ack _ c p => pure (c, p)
+      let (c, p, off) ← match m with
+        | .ack _ c p off => pure (c, p, off)
         | .bun .. => throw "an ack event on a bundle"
       let x := s.nodes p
-      let o := match (DtnStore.onAck x.B x.L bid c true).err with
+      let o := match (DtnStore.onAck x.B x.L bid c off true).err with
         | none => "ok" | some .unknown => "unknown" | some .notOffered => "notoffered"
         | some .storeUnknown => "storeunknown" | some _ => "other"
       check (o == (← strF j "o")) s!"ack {← natF j "m"}: model {o}, code {← strF j "o"}"

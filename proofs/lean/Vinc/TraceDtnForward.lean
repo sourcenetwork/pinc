@@ -12,8 +12,10 @@ naming the line:
 * `new`: a fresh forwarder with the recorded capacities and policy.
 * `step`: the input at its time; the error the code returned must be the model's.
 * `poll`: the action the code returned must be the model's.
-* after every `step` and `poll`: the copies held, the copies handed and every transfer timer of the code must be
-  those of the model state (`ch`, `cd`, `tm`).
+* after every `step` and `poll`: the copies held, the copies handed, every transfer timer and the expiry of the live
+  memory entry of every bundle (0 for none) of the code must be those of the model state (`ch`, `cd`, `tm`, `mm`).
+  The memory table is private to the code, so the recorded `mm` is read through the behaviour of a copy of the
+  forwarder (the earliest time a forgotten bundle is held again); the model reads the same value off its table.
 -/
 
 namespace Vinc.TraceDtnForward
@@ -40,24 +42,33 @@ def parseInput (j : J) : Except String Input := do
 
 def errName : Err → String
   | .ok => "ok" | .duplicate => "Duplicate" | .full => "Full" | .noCopies => "NoCopies" | .unknown => "Unknown"
+  | .finished => "Finished"
+
+/-- The expiry of the live memory entry of `id` (0 for none): the largest `exp` of a table entry of `id` with
+`now < exp`. -/
+def memExp (f : F) (id : Nat) : Nat :=
+  (f.ds.filterMap fun o => o.filter fun s => s.id == id && decide (f.now < s.exp)).foldl (fun m s => max m s.exp) 0
 
 /-- The model's reading of the observables, in the shape the trace records them. -/
-def observe (f : F) (nIds nPeers : Nat) : List Nat × List Nat × List (List Nat) :=
+def observe (f : F) (nIds nPeers : Nat) : List Nat × List Nat × List (List Nat) × List Nat :=
   let ids := List.range nIds |>.map (· + 1)
   (ids.map fun i => (copiesHeld f i).getD 0,
    ids.map fun i => handed f i,
-   ids.map fun i => (List.range nPeers).map fun p => ((timer f (p + 1) i).map (· + 1)).getD 0)
+   ids.map fun i => (List.range nPeers).map fun p => ((timer f (p + 1) i).map (· + 1)).getD 0,
+   ids.map fun i => memExp f i)
 
 def checkSnap (j : J) (f : F) : Except String Unit := do
   let ch ← natList (← field j "ch")
   let cd ← natList (← field j "cd")
   let tmArr ← match (← field j "tm").arr? with | some a => pure a.toList | none => throw "tm"
   let tm ← tmArr.mapM natList
+  let mm ← natList (← field j "mm")
   let nPeers := (tm.headD []).length
-  let (mch, mcd, mtm) := observe f ch.length nPeers
+  let (mch, mcd, mtm, mmm) := observe f ch.length nPeers
   check (mch == ch) s!"copies held: model {mch}, code {ch}"
   check (mcd == cd) s!"copies handed: model {mcd}, code {cd}"
   check (mtm == tm) s!"timers: model {mtm}, code {tm}"
+  check (mmm == mm) s!"memory: model {mmm}, code {mm}"
 
 def parseAct (j : J) : Except String Act := do
   match ← strF j "k" with
@@ -69,7 +80,7 @@ def parseAct (j : J) : Except String Act := do
 def replayEvent (j : J) (w : W) : Except String W := do
   match ← strF j "e" with
   | "new" =>
-    pure { f := some (F.new (← natF j "retry") (← natF j "max") (← natF j "now") (← natF j "b") (← natF j "l") (← natF j "tt")) }
+    pure { f := some (F.new (← natF j "retry") (← natF j "max") (← natF j "now") (← natF j "b") (← natF j "l") (← natF j "tt") (← natF j "d")) }
   | "step" =>
     let some f := w.f | throw "step before new"
     let inp ← parseInput (← field j "in")

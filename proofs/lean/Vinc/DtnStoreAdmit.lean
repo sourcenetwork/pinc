@@ -170,4 +170,18 @@ theorem reclass_inv {L : Ledger} (hI : Inv L) (k : Key) (c : Class) : Inv (recla
   · have : (reclass L k c).1 = L := by simp [reclass, h]
     rw [this]; exact hI
 
+theorem contains_iff {L : Ledger} {k : Key} : L.contains k = true ↔ ∃ e ∈ L.entries, e.key = k := by
+  unfold Ledger.contains; simp
+
+theorem nodup_map_inj {α β : Type} (f : α → β) : ∀ (l : List α), (l.map f).Nodup → ∀ x ∈ l, ∀ y ∈ l, f x = f y → x = y
+  | [], _, x, hx, _, _, _ => by simp at hx
+  | a :: t, h, x, hx, y, hy, hxy => by
+    simp only [List.map_cons, List.nodup_cons, List.mem_map] at h
+    simp only [List.mem_cons] at hx hy
+    rcases hx with rfl | hx <;> rcases hy with rfl | hy
+    · rfl
+    · exact absurd ⟨y, hy, hxy.symm⟩ h.1
+    · exact absurd ⟨x, hx, hxy⟩ h.1
+    · exact nodup_map_inj f t (by simpa using h.2) x hx y hy hxy
+
 end Vinc.DtnStore

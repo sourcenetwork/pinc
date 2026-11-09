@@ -190,7 +190,7 @@ theorem step_ts (f0 : F) (n : Nat) (f' : F) (e : Err) (inp : Input) (h : step f0
   | forget id => exact absurd rfl (hn id)
   | acked p i => exact absurd rfl (hk p i)
   | hold id d ex c =>
-    rcases hold_total f0 n id d ex c f' e h 0 with ⟨_, hf⟩ | ⟨_, _, _, _, i, _, hf⟩
+    rcases hold_total f0 n id d ex c f' e h 0 with ⟨_, hf⟩ | ⟨_, _, _, _, i, _, k, _, hf⟩
     · rw [hf]
     · rw [hf]
   | linkUp peer => exact (step_link_shape f0 n peer true f' e (by simpa using h)).2
@@ -236,9 +236,9 @@ theorem ti_poll {f f' : F} {a : Act} (h : poll f = (f', a)) (hT : TInv f) : TInv
 
 theorem reach_ti {f : F} {g : Nat → Nat} (h : Reach f g) : TInv f := by
   induction h with
-  | init r m now b l tt =>
+  | init r m now b l tt dd =>
     refine ⟨fun i j t t' hi => ?_, fun i t rr s hi => ?_⟩ <;>
-    · have : slot (F.new r m now b l tt).ts i = none := slot_replicate_none _ _
+    · have : slot (F.new r m now b l tt dd).ts i = none := slot_replicate_none _ _
       rw [this] at hi; cases hi
   | holdOk n id d ex c hr hs ih => exact ti_step hs ih
   | forgetOk n id hr hs ih => exact ti_step hs ih

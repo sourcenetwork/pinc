@@ -4,12 +4,22 @@ import Vinc.DtnStoreProps
 # Custody
 
 A model of `vinc-dtn/src/custody.rs`: the `CustodyBook<N>` and its operations on the shared `Ledger`. The book is `N`
-optional records (`bundle`, `previous` custodian to whom an ack is owed, and the node custody was `offered` to). A
+optional records (`bundle`, `previous` custodian to whom an ack is owed, the node custody was `offered` to and the id of
+that offer). The book also has a counter `next_offer`: every `offer` takes the counter as its id and increments it.
+In this model the counter is the separate component `nx` of the callers (`offer B nx b to` returns the new one; no other
+operation reads or changes it). A
 bundle is the key `⟨1, id⟩` of the ledger (`Space::DTN` is `1`); nodes are numbers (equal bytes, equal number).
 
 The signature check of an acknowledgement is the one abstraction: `CustodyAck::verify` is the boolean `valid` of the
 ack (it succeeds exactly when the signature verifies under the custodian's node id; the signature scheme itself is
-assumed, as everywhere in this package, and is not re-proved). Everything else is the code's own logic.
+assumed, as everywhere in this package, and is not re-proved). Everything else is the code's own logic. The offer id an
+ack names is a number the model compares (it is part of the signed body, so it cannot be changed without invalidating
+the signature).
+
+Two behaviours are pinned: `onAck` for a bundle whose item the ledger no longer holds drops the record and returns
+the store's `Unknown` (`CErr.storeUnknown`); `accept` answers the `previous` and offer id of the INCOMING offer
+(`acceptDue`), not the record's, and a bundle already held keeps its record (its `previous` too) and cancels the
+outstanding offer (`cancelRec`).
 
 Environment of the book: the host admits and releases items of the ledger directly (the mailbox layer, transit bundles,
 `Ledger::expire`), but never admits, releases or reclasses a key the book holds a record of (`Allowed`): custody of a
@@ -21,11 +31,14 @@ invariants over all runs.
 
 namespace Vinc.DtnStore
 
-/-- A custody record. -/
+/-- A custody record: the bundle, the previous custodian (to whom an ack is owed), the node custody was `offered` to
+(none: no offer outstanding) and the id `oid` of that offer (`0` when none: the code's `Option<{to, id}>` is the pair
+`(offered, oid)` with `oid = 0` for none). -/
 structure Record where
   bundle : Nat
   previous : Nat
   offered : Option Nat
+  oid : Nat
   deriving DecidableEq, Repr
 
 /-- The bundle's ledger key. -/
@@ -60,47 +73,75 @@ structure COut where
   L : Ledger
   ev : List Entry
 
-/-- `CustodyBook::accept`. -/
+/-- Change the first record of `b` by `f` (`none` when the book has no record of `b`). -/
+def modFirst (b : Nat) (f : Record → Record) : Recs → Option Recs
+  | [] => none
+  | s :: r =>
+    match s with
+    | some x => if x.bundle = b then some (some (f x) :: r) else (modFirst b f r).map (s :: ·)
+    | none => (modFirst b f r).map (s :: ·)
+
+/-- The change an offer makes to a record: node and id are set. -/
+def offerRec (to id : Nat) (x : Record) : Record := { x with offered := some to, oid := id }
+
+/-- The change a hand-back makes to a record: the outstanding offer is cancelled (the previous custodian stays). -/
+def cancelRec (x : Record) : Record := { x with offered := none, oid := 0 }
+
+/-- `CustodyBook::accept`. The counter `next_offer` is not touched by `accept`. -/
 def accept (B : Recs) (L : Ledger) (bundle bytes expires previous now : Nat) : COut :=
   let L1 := (expire L now).1
   let ev1 := (expire L now).2
   let B1 := sync B L1
-  if holds B1 bundle then ⟨none, B1, L1, ev1⟩ else
+  if holds B1 bundle then ⟨none, ((modFirst bundle cancelRec B1).getD B1), L1, ev1⟩ else
   match B1.findIdx? Option.isNone with
   | none => ⟨some .capacity, B1, L1, ev1⟩
   | some slot =>
     if L1.contains (bkey bundle) then
       let L2 := (reclass L1 (bkey bundle) .custody).1
-      ⟨none, (sync B1 L2).set slot (some ⟨bundle, previous, none⟩), L2, ev1⟩
+      ⟨none, (sync B1 L2).set slot (some ⟨bundle, previous, none, 0⟩), L2, ev1⟩
     else
       let r := admitItem L1 (bkey bundle) bytes .custody expires now
       match r.err with
       | some e => ⟨some (.store e), B1, r.L, ev1 ++ r.ev⟩
-      | none => ⟨none, (sync B1 r.L).set slot (some ⟨bundle, previous, none⟩), r.L, ev1 ++ r.ev⟩
+      | none => ⟨none, (sync B1 r.L).set slot (some ⟨bundle, previous, none, 0⟩), r.L, ev1 ++ r.ev⟩
 
-/-- `CustodyBook::offer`: set the node custody was offered to (the first record of the bundle). -/
-def setOffered (b to : Nat) : Recs → Option Recs
-  | [] => none
-  | s :: r =>
-    match s with
-    | some x => if x.bundle = b then some (some { x with offered := some to } :: r) else (setOffered b to r).map (s :: ·)
-    | none => (setOffered b to r).map (s :: ·)
+/-- The `AckDue` an `accept` returns: for every successful acceptance (fresh, promoted from transit, or a bundle
+already held) it is the `previous` and the offer id of the INCOMING offer, never the record's. -/
+def acceptDue (previous offer : Nat) (o : COut) : Option (Nat × Nat) :=
+  if o.err = none then some (previous, offer) else none
 
-def offer (B : Recs) (b to : Nat) : Option CErr × Recs :=
-  match setOffered b to B with
-  | none => (some .unknown, B)
-  | some B' => (none, B')
+/-- The result of `CustodyBook::offer`: the error, the book, the counter after the call and the id handed out (`0`
+and meaningless when the call failed). -/
+structure OOut where
+  err : Option CErr
+  B : Recs
+  nx : Nat
+  id : Nat
 
-/-- `CustodyBook::on_ack` for an ack for `b` signed by `custodian` whose signature check gave `valid`. -/
-def onAck (B : Recs) (L : Ledger) (b custodian : Nat) (valid : Bool) : COut :=
+/-- `CustodyBook::offer` with the book's counter `nx` (`next_offer`): the offer gets the id `nx`, the counter becomes
+`nx + 1` (it saturates at `u64::MAX` in the code, which `2^64` offers cannot reach; here it counts in the naturals),
+and the record's outstanding offer is replaced by `(to, nx)`. -/
+def offer (B : Recs) (nx b to : Nat) : OOut :=
+  match modFirst b (offerRec to nx) B with
+  | none => ⟨some .unknown, B, nx, 0⟩
+  | some B' => ⟨none, B', nx + 1, nx⟩
+
+/-- `CustodyBook::on_ack` for an ack for `b` signed by `custodian`, naming offer `offer`, whose signature check gave
+`valid`. Relief needs the record's node AND its offer id to match; a stale ack is `notOffered` and moves nothing. An ack
+of an offered, current offer for an item the ledger no longer holds clears the record and reports `storeUnknown`
+(the store's `Unknown`). -/
+def onAck (B : Recs) (L : Ledger) (b custodian offer : Nat) (valid : Bool) : COut :=
   if valid then
     match slotOf B b with
     | none => ⟨some .unknown, B, L, []⟩
     | some i =>
-      if (B[i]?.bind id).bind (·.offered) ≠ some custodian then ⟨some .notOffered, B, L, []⟩
-      else
-        let r := reclass L (bkey b) .transit
-        ⟨if r.2 then none else some .storeUnknown, B.set i none, r.1, []⟩
+      match B[i]? with
+      | some (some r) =>
+        if r.offered = some custodian ∧ r.oid = offer then
+          let r := reclass L (bkey b) .transit
+          ⟨if r.2 then none else some .storeUnknown, B.set i none, r.1, []⟩
+        else ⟨some .notOffered, B, L, []⟩
+      | _ => ⟨some .notOffered, B, L, []⟩
   else ⟨some .ack, B, L, []⟩
 
 /-- `CustodyBook::delivered`. -/
@@ -142,9 +183,6 @@ theorem recs_sync (B : Recs) (L : Ledger) :
 theorem mem_recs_sync {B : Recs} {L : Ledger} {r : Record} :
     r ∈ recs (sync B L) ↔ r ∈ recs B ∧ L.contains (bkey r.bundle) = true := by
   rw [recs_sync]; simp
-
-theorem contains_iff {L : Ledger} {k : Key} : L.contains k = true ↔ ∃ e ∈ L.entries, e.key = k := by
-  unfold Ledger.contains; simp
 
 theorem recs_set_none (B : Recs) (i : Nat) : ∀ r ∈ recs (B.set i none), r ∈ recs B := by
   intro r hr

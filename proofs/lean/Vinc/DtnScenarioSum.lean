@@ -16,7 +16,7 @@ def Sys.heldAll (s : Sys) : Nat := (s.cfg.ids.map fun n => DtnForward.heldSum (s
 
 /-- The fresh copies of a message. -/
 def Msg.freshCopies : Msg → Nat
-  | .bun _ _ _ c true => c
+  | .bun _ _ _ c true _ => c
   | _ => 0
 
 /-- The copies in flight: those of the fresh bundle messages of the network. -/

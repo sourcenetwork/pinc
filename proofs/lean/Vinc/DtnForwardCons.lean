@@ -11,8 +11,8 @@ state and every capacity, how each operation changes `total` of each bundle:
   a link change, an acknowledgement do not change any total.
 * `spray_total`: a handover moves `copies / 2` from held to handed (and a delivery moves none): the total of every
   bundle is unchanged, so binary spray neither creates nor loses a copy.
-* `hold_total`: an accepted hold adds exactly the offered copies to that bundle's total; a repeated hold (`Duplicate`)
-  and a hold of no copies change nothing: the offered copies are lost, never added (`hold_refused_total`).
+* `hold_total`: an accepted hold adds exactly the offered copies to that bundle's total; a repeated hold (`Duplicate`),
+  a hold of a finished bundle (`Finished`), a hold that finds a table full and a hold of no copies change nothing: the offered copies are lost, never added (`hold_refused_total`).
 * `drop_total`: dropping a bundle (forget, or the release of a delivered or expired one) changes no other bundle's
   total and leaves no handed copy of the dropped one.
 * `spray_keeps_one`: a handover to anyone but the destination leaves the holder at least one copy, and hands at
@@ -200,8 +200,9 @@ theorem hold_total (f0 : F) (n id d ex c : Nat) (f' : F) (e : Err) (h : step f0 
     (e ≠ .ok ∧ f' = advance f0 n) ∨
     (e = .ok ∧ c ≠ 0 ∧ anyS (·.id == id) (advance f0 n).bs = false ∧
       total f' x = total f0 x + (if id = x then c else 0) ∧
-      ∃ i, freeIdx (advance f0 n).bs = some i ∧
-        f' = { advance f0 n with bs := upd (advance f0 n).bs i fun _ => some ⟨id, d, ex, c, false⟩ }) := by
+      ∃ i, freeIdx (advance f0 n).bs = some i ∧ ∃ k, freeD (advance f0 n).now (advance f0 n).ds = some k ∧
+        f' = { advance f0 n with bs := upd (advance f0 n).bs i fun _ => some ⟨id, d, ex, c, false⟩
+                                 ds := upd (advance f0 n).ds k fun _ => some ⟨id, ex⟩ }) := by
   unfold step at h
   simp only at h
   by_cases hc : c = 0
@@ -209,25 +210,34 @@ theorem hold_total (f0 : F) (n id d ex c : Nat) (f' : F) (e : Err) (h : step f0 
   · by_cases ha : anyS (·.id == id) (advance f0 n).bs = true
     · simp [hc, ha] at h; left; exact ⟨by rw [← h.2]; simp, by rw [← h.1]⟩
     · have ha' : anyS (·.id == id) (advance f0 n).bs = false := by simpa using ha
-      cases hf : freeIdx (advance f0 n).bs with
-      | none => simp [hc, ha', hf] at h; left; exact ⟨by rw [← h.2]; simp, by rw [← h.1]⟩
-      | some i =>
-        simp [hc, ha', hf] at h
-        obtain ⟨hf', he⟩ := h
-        right
-        refine ⟨he.symm, hc, ha', ?_, i, rfl, hf'.symm⟩
-        obtain ⟨hsn, hsl⟩ := freeIdx_some hf
-        have e2 := wsum_upd_fill (wB x) (advance f0 n).bs i ⟨id, d, ex, c, false⟩ hsn hsl
-        have hadv := advance_total f0 n x
-        have hb : (advance f0 n).bs = f0.bs := rfl
-        unfold total heldSum handedSum at hadv ⊢
-        rw [← hf']
-        simp only
-        rw [hb] at e2 hadv ⊢
-        by_cases hx : id = x
-        · simp [wB, hx] at e2 ⊢; omega
-        · have : (id == x) = false := by simpa using hx
-          simp [wB, this, hx] at e2 ⊢; omega
+      by_cases hs : anyS (fun d => d.id == id && decide ((advance f0 n).now < d.exp)) (advance f0 n).ds = true
+      · simp [hc, ha', hs] at h; left; exact ⟨by rw [← h.2]; simp, by rw [← h.1]⟩
+      · have hs' : anyS (fun d => d.id == id && decide ((advance f0 n).now < d.exp)) (advance f0 n).ds = false := by
+          simpa using hs
+        cases hk : freeD (advance f0 n).now (advance f0 n).ds with
+        | none =>
+          cases hf : freeIdx (advance f0 n).bs <;> simp [hc, ha', hs', hk, hf] at h <;>
+            (left; exact ⟨by rw [← h.2]; simp, by rw [← h.1]⟩)
+        | some k =>
+          cases hf : freeIdx (advance f0 n).bs with
+          | none => simp [hc, ha', hs', hk, hf] at h; left; exact ⟨by rw [← h.2]; simp, by rw [← h.1]⟩
+          | some i =>
+            simp [hc, ha', hs', hk, hf] at h
+            obtain ⟨hf', he⟩ := h
+            right
+            refine ⟨he.symm, hc, ha', ?_, i, rfl, k, rfl, hf'.symm⟩
+            obtain ⟨hsn, hsl⟩ := freeIdx_some hf
+            have e2 := wsum_upd_fill (wB x) (advance f0 n).bs i ⟨id, d, ex, c, false⟩ hsn hsl
+            have hadv := advance_total f0 n x
+            have hb : (advance f0 n).bs = f0.bs := rfl
+            unfold total heldSum handedSum at hadv ⊢
+            rw [← hf']
+            simp only
+            rw [hb] at e2 hadv ⊢
+            by_cases hx : id = x
+            · simp [wB, hx] at e2 ⊢; omega
+            · have : (id == x) = false := by simpa using hx
+              simp [wB, this, hx] at e2 ⊢; omega
 
 theorem wsum_upd_map {α : Type} (w : α → Nat) (g : α → α) (hg : ∀ a, w (g a) = w a) :
     ∀ (l : List (Option α)) (i : Nat), wsum w (upd l i (Option.map g)) = wsum w l

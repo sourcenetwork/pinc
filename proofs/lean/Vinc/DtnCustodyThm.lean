@@ -6,10 +6,15 @@ import Vinc.DtnCustody
 For a ledger with `Inv`, and a book with `NodupB` and `Linked`, each operation of `Vinc.DtnCustody`:
 
 * keeps the invariants (`accept_inv`, `offer_inv`, `onAck_inv`, `delivered_inv`, `bexpire_inv`);
-* `accept_err_state`: a refused acceptance changes nothing except the expired items leaving (and their records);
+* `accept_err_state`: a refused acceptance (full book, custody refused, or an incoming bundle that is already
+  expired) changes nothing except the expired items leaving (and their records);
+  `accept_held_cancels`: accepting a bundle already held (a hand-back or a repeated offer) keeps the record and its
+  previous custodian and cancels this node's outstanding offer; `handback_blocks_ack`: so every later ack is stale;
+  `accept_expired_refused`: an expired incoming bundle is refused with the store's `expired`;
   `accept_capacity_iff`: the book is full exactly when no record is free;
 * `onAck_ok_iff`: custody is relieved exactly when the ack is valid, the bundle is held, custody was offered to exactly
-  the acknowledging node, and the ledger still holds the item; `onAck_refused_state`: any other ack moves nothing
+  the acknowledging node under exactly the ack's offer id, and the ledger still holds the item; `onAck_stale`: any
+  other ack of a held bundle is `notOffered` and moves nothing; `onAck_refused_state`: any other ack moves nothing
   (the one exception is documented: a valid, offered ack for an item the ledger already dropped clears the record and
   reports `storeUnknown`);
 * `onAck_relief_only`: a relief changes the class of that bundle's item to transit and clears that bundle's record, and
@@ -41,6 +46,94 @@ theorem expire_idem (L : Ledger) (now : Nat) :
   rw [expire_noop _ now hent]; exact ⟨rfl, rfl⟩
 
 
+/-! ## Changing one record -/
+
+theorem modFirst_spec (b : Nat) (f : Record → Record) (hf : ∀ r, (f r).bundle = r.bundle) :
+    ∀ (B B' : Recs), modFirst b f B = some B' →
+      (recs B').map (·.bundle) = (recs B).map (·.bundle) ∧
+      (∀ r ∈ recs B', r ∈ recs B ∨ ∃ r0 ∈ recs B, r0.bundle = b ∧ r = f r0) ∧
+      ∃ r0 ∈ recs B, r0.bundle = b ∧ f r0 ∈ recs B'
+  | [], B', h => by simp [modFirst] at h
+  | s :: t, B', h => by
+    cases s with
+    | none =>
+      simp only [modFirst, Option.map_eq_some_iff] at h
+      obtain ⟨t', ht', rfl⟩ := h
+      obtain ⟨h1, h2, r0, hr0, hr0b, hr0'⟩ := modFirst_spec b f hf t t' ht'
+      refine ⟨by simpa [recs] using h1, ?_, r0, by simpa [recs] using hr0, hr0b, by simpa [recs] using hr0'⟩
+      intro r hr
+      have hr' : r ∈ recs t' := by simpa [recs] using hr
+      rcases h2 r hr' with h | ⟨r1, hr1, hb, he⟩
+      · left; simpa [recs] using h
+      · right; exact ⟨r1, by simpa [recs] using hr1, hb, he⟩
+    | some x =>
+      by_cases hx : x.bundle = b
+      · simp only [modFirst, hx, ite_true, Option.some.injEq] at h
+        subst h
+        refine ⟨?_, ?_, x, by simp [recs], hx, by simp [recs]⟩
+        · simp [recs, hf]
+        · intro r hr
+          simp only [recs, List.filterMap_cons, id, List.mem_cons] at hr
+          rcases hr with rfl | hr
+          · right; exact ⟨x, by simp [recs], hx, rfl⟩
+          · left; simp only [recs, List.filterMap_cons, id, List.mem_cons]; exact Or.inr hr
+      · simp only [modFirst, hx, ite_false, Option.map_eq_some_iff] at h
+        obtain ⟨t', ht', rfl⟩ := h
+        obtain ⟨h1, h2, r0, hr0, hr0b, hr0'⟩ := modFirst_spec b f hf t t' ht'
+        refine ⟨by simpa [recs] using h1, ?_, r0, ?_, hr0b, ?_⟩
+        · intro r hr
+          simp only [recs, List.filterMap_cons, id, List.mem_cons] at hr
+          rcases hr with rfl | hr
+          · left; simp [recs]
+          · rcases h2 r hr with h | ⟨r1, hr1, hb, he⟩
+            · left; simp only [recs, List.filterMap_cons, id, List.mem_cons]; exact Or.inr h
+            · right; exact ⟨r1, by simp only [recs, List.filterMap_cons, id, List.mem_cons]; exact Or.inr hr1, hb, he⟩
+        · simp only [recs, List.filterMap_cons, id, List.mem_cons]; exact Or.inr hr0
+        · simp only [recs, List.filterMap_cons, id, List.mem_cons]; exact Or.inr hr0'
+
+theorem modFirst_none (b : Nat) (f : Record → Record) :
+    ∀ (B : Recs), modFirst b f B = none ↔ ∀ r ∈ recs B, r.bundle ≠ b
+  | [] => by simp [modFirst, recs]
+  | s :: t => by
+    cases s with
+    | none =>
+      simp only [modFirst, Option.map_eq_none_iff, modFirst_none b f t]
+      simp [recs]
+    | some x =>
+      by_cases hx : x.bundle = b
+      · simp only [modFirst, hx, ite_true, reduceCtorEq, false_iff]
+        intro h
+        exact h x (by simp [recs]) hx
+      · simp only [modFirst, hx, ite_false, Option.map_eq_none_iff, modFirst_none b f t]
+        constructor
+        · intro h r hr
+          simp only [recs, List.filterMap_cons, id, List.mem_cons] at hr
+          rcases hr with rfl | hr
+          · exact hx
+          · exact h r hr
+        · intro h r hr
+          exact h r (by simp only [recs, List.filterMap_cons, id, List.mem_cons]; exact Or.inr hr)
+
+theorem cancel_some {B : Recs} {b : Nat} (h : holds B b = true) :
+    ∃ B', modFirst b cancelRec B = some B' := by
+  cases hm : modFirst b cancelRec B with
+  | some B' => exact ⟨B', rfl⟩
+  | none =>
+    exfalso
+    have := (modFirst_none b cancelRec B).1 hm
+    simp only [holds, List.any_eq_true, decide_eq_true_eq] at h
+    obtain ⟨r, hr, hb⟩ := h
+    exact this r hr hb
+
+/-- A change that keeps the set of bundles keeps the book well formed. -/
+theorem book_of_bundles {B B' : Recs} {L : Ledger} (hb : (recs B').map (·.bundle) = (recs B).map (·.bundle))
+    (hn : NodupB B) (hl : Linked B L) : NodupB B' ∧ Linked B' L := by
+  refine ⟨by unfold NodupB at *; rw [hb]; exact hn, ?_⟩
+  intro r hr e he hk
+  have : r.bundle ∈ (recs B).map (·.bundle) := by rw [← hb]; exact List.mem_map.2 ⟨r, hr, rfl⟩
+  obtain ⟨r0, hr0, hr0b⟩ := List.mem_map.1 this
+  exact hl r0 hr0 e he (by rw [hr0b]; exact hk)
+
 theorem bkey_inj {a b : Nat} : bkey a = bkey b ↔ a = b := by simp [bkey]
 
 theorem admit_entries_sub {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
@@ -49,7 +142,7 @@ theorem admit_entries_sub {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Cla
   have hsub : ∀ y ∈ (expire L now).1.entries, y ∈ L.entries := by
     intro y hy; rw [entries_expire] at hy; exact (List.mem_filter.1 hy).1
   rcases admit_cases hI k b c x now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨hc, hf, L2, ev2, slots', hev, hput, h, hI2, hb2, hs2, hp2, hsl2, htr, hpw, hlt, hrm, hu2, hlast⟩
-  · rw [h] at he; exact Or.inl he
+  · rw [h] at he; exact Or.inl (hsub e he)
   · rw [h] at he; exact Or.inl (hsub e he)
   · rw [h] at he
     have := (put_perm _ _ _ hput).1.mem_iff.1 (by simpa [Ledger.entries] using he)
@@ -140,7 +233,10 @@ theorem accept_inv {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Li
   unfold accept
   simp only
   by_cases hh : holds (sync B (expire L now).1) bundle = true
-  · simp [hh]; exact ⟨hI1, hn1, hl1⟩
+  · obtain ⟨B', hB'⟩ := cancel_some hh
+    simp only [hh, ite_true, hB', Option.getD_some]
+    obtain ⟨h1, -⟩ := modFirst_spec bundle cancelRec (fun _ => rfl) _ B' hB'
+    exact ⟨hI1, (book_of_bundles h1 hn1 hl1).1, (book_of_bundles h1 hn1 hl1).2⟩
   have hh' : holds (sync B (expire L now).1) bundle = false := by simpa using hh
   have hfresh : ∀ r ∈ recs (sync B (expire L now).1), r.bundle ≠ bundle := by
     intro r hr hrb
@@ -171,7 +267,7 @@ theorem accept_inv {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Li
         · simp [hyk]
         · simp only [hyk, ite_false] at hk ⊢
           exact hl1 r hr y hy hk
-      obtain ⟨hn3, hl3⟩ := add_rec (n := ⟨bundle, previous, none⟩) hslot2
+      obtain ⟨hn3, hl3⟩ := add_rec (n := ⟨bundle, previous, none, 0⟩) hslot2
         (sync_nodup _ hn1) (fun r hr => hfresh r (hsub2 r hr))
         (fun r hr => hold r (hsub2 r hr))
         (fun e he hk => by
@@ -183,8 +279,10 @@ theorem accept_inv {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Li
       exact ⟨hI2, hn3, hl3⟩
     · have hc' : (expire L now).1.contains (bkey bundle) = false := by simpa using hc
       simp only [hc', Bool.false_eq_true, ite_false]
-      rcases admit_cases hI1 (bkey bundle) bytes .custody expires now with ⟨h1, _⟩ | ⟨_, _, h⟩ | ⟨_, _, L2, ev2, slots', _, _, h, _⟩
-      · simp_all
+      rcases admit_cases hI1 (bkey bundle) bytes .custody expires now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨_, _, L2, ev2, slots', _, _, h, _⟩
+      · rw [h]; simp only
+        rw [(expire_idem L now).1]
+        exact ⟨hI1, hn1, hl1⟩
       · rw [h]; simp only
         rw [(expire_idem L now).1]
         exact ⟨hI1, hn1, hl1⟩
@@ -201,7 +299,7 @@ theorem accept_inv {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Li
         rw [← hLn] at hsubE
         have hkeys := contains_false hc'
         have hslot2 := sync_slot_none (L := Ln) hslot
-        obtain ⟨hn3, hl3⟩ := add_rec (n := ⟨bundle, previous, none⟩) (X := sync (sync B (expire L now).1) Ln) (slot := slot)
+        obtain ⟨hn3, hl3⟩ := add_rec (n := ⟨bundle, previous, none, 0⟩) (X := sync (sync B (expire L now).1) Ln) (slot := slot)
           hslot2 (sync_nodup _ hn1) (fun r hr => hfresh r (sync_sub _ _ r hr))
           (fun r hr e he hk => by
             have hr1 := sync_sub _ _ r hr
@@ -226,7 +324,7 @@ theorem holds_iff {B : Recs} {b : Nat} : holds B b = true ↔ ∃ r ∈ recs B, 
 /-- A refused acceptance changes nothing except the expired items leaving and their records. -/
 theorem accept_err_state {B : Recs} {L : Ledger} (hI : Inv L) (bundle bytes expires previous now : Nat) (e : CErr)
     (h : (accept B L bundle bytes expires previous now).err = some e) :
-    (e = .capacity ∨ e = .store .custodyRefused) ∧
+    (e = .capacity ∨ e = .store .custodyRefused ∨ e = .store .expired) ∧
       (accept B L bundle bytes expires previous now).L = (expire L now).1 ∧
       (accept B L bundle bytes expires previous now).B = sync B (expire L now).1 ∧
       (accept B L bundle bytes expires previous now).ev = (expire L now).2 := by
@@ -245,14 +343,17 @@ theorem accept_err_state {B : Recs} {L : Ledger} (hI : Inv L) (bundle bytes expi
     · simp [hc] at h
     · have hc' : (expire L now).1.contains (bkey bundle) = false := by simpa using hc
       simp only [hc', Bool.false_eq_true, ite_false] at h ⊢
-      rcases admit_cases hI1 (bkey bundle) bytes .custody expires now with ⟨h1, _⟩ | ⟨_, _, h2⟩ | ⟨_, _, L2, ev2, slots', _, _, h2, _⟩
-      · simp_all
+      rcases admit_cases hI1 (bkey bundle) bytes .custody expires now with ⟨_, h2⟩ | ⟨_, _, h2⟩ | ⟨_, _, L2, ev2, slots', _, _, h2, _⟩
       · rw [h2] at h ⊢
-        simp only [Option.some.injEq, CErr.store.injEq] at h
-        simp only [refusedOf] at h
+        simp only [Option.some.injEq] at h
         subst h
-        have := expire_idem L now
-        simp [this.1, this.2]
+        have hi := expire_idem L now
+        simp [hi.1, hi.2, hc']
+      · rw [h2] at h ⊢
+        simp only [Option.some.injEq] at h
+        subst h
+        have hi := expire_idem L now
+        simp [hi.1, hi.2, refusedOf]
       · rw [h2] at h; simp at h
 
 theorem accept_ok {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Linked B L)
@@ -264,8 +365,10 @@ theorem accept_ok {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Lin
   unfold accept at h ⊢
   simp only at h ⊢
   by_cases hh : holds (sync B (expire L now).1) bundle = true
-  · simp only [hh, ite_true] at h ⊢
-    refine ⟨by simp [hh], ?_⟩
+  · obtain ⟨B', hB'⟩ := cancel_some hh
+    simp only [hh, ite_true, hB', Option.getD_some] at h ⊢
+    obtain ⟨-, -, r0, hr0, hr0b, hr0'⟩ := modFirst_spec bundle cancelRec (fun _ => rfl) _ B' hB'
+    refine ⟨holds_iff.2 ⟨_, hr0', hr0b⟩, ?_⟩
     obtain ⟨r, hr, hrb⟩ := holds_iff.1 hh
     obtain ⟨hr1, hr2⟩ := mem_recs_sync.1 hr
     obtain ⟨e, he, hek⟩ := contains_iff.1 hr2
@@ -279,7 +382,7 @@ theorem accept_ok {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Lin
     have hslot := findIdx_none_slot hs
     by_cases hc : (expire L now).1.contains (bkey bundle) = true
     · simp only [hc, ite_true]
-      refine ⟨holds_set (n := ⟨bundle, previous, none⟩) (sync_slot_none hslot), ?_⟩
+      refine ⟨holds_set (n := ⟨bundle, previous, none, 0⟩) (sync_slot_none hslot), ?_⟩
       have hent := reclass_entries _ (bkey bundle) .custody hc
       obtain ⟨e, he, hek⟩ := contains_iff.1 hc
       refine ⟨{ e with cls := .custody }, ?_, ?_, rfl⟩
@@ -287,12 +390,12 @@ theorem accept_ok {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Lin
       · simpa using hek
     · have hc' : (expire L now).1.contains (bkey bundle) = false := by simpa using hc
       simp only [hc', Bool.false_eq_true, ite_false] at h ⊢
-      rcases admit_cases hI1 (bkey bundle) bytes .custody expires now with ⟨h1, _⟩ | ⟨_, _, h2⟩ | ⟨_, _, L2, ev2, slots', _, hput, h2, _⟩
-      · simp_all
+      rcases admit_cases hI1 (bkey bundle) bytes .custody expires now with ⟨_, h2⟩ | ⟨_, _, h2⟩ | ⟨_, _, L2, ev2, slots', _, hput, h2, _⟩
+      · rw [h2] at h; simp at h
       · rw [h2] at h; simp at h
       · rw [h2]
         simp only
-        refine ⟨holds_set (n := ⟨bundle, previous, none⟩) (sync_slot_none hslot), ?_⟩
+        refine ⟨holds_set (n := ⟨bundle, previous, none, 0⟩) (sync_slot_none hslot), ?_⟩
         have hperm := (put_perm _ _ _ hput).1
         exact ⟨_, hperm.mem_iff.2 (List.mem_cons_self), rfl, rfl⟩
 
@@ -351,17 +454,6 @@ theorem set_none_perm (B : Recs) (i : Nat) (r : Record) (h : B[i]? = some (some 
   rw [hr, hl]
   exact List.perm_middle.symm.symm
 
-theorem nodup_map_inj {α β : Type} (f : α → β) : ∀ (l : List α), (l.map f).Nodup → ∀ x ∈ l, ∀ y ∈ l, f x = f y → x = y
-  | [], _, x, hx, _, _, _ => by simp at hx
-  | a :: t, h, x, hx, y, hy, hxy => by
-    simp only [List.map_cons, List.nodup_cons, List.mem_map] at h
-    simp only [List.mem_cons] at hx hy
-    rcases hx with rfl | hx <;> rcases hy with rfl | hy
-    · rfl
-    · exact absurd ⟨y, hy, hxy.symm⟩ h.1
-    · exact absurd ⟨x, hx, hxy⟩ h.1
-    · exact nodup_map_inj f t (by simpa using h.2) x hx y hy hxy
-
 theorem slotOf_none {B : Recs} {b : Nat} : slotOf B b = none ↔ ∀ r ∈ recs B, r.bundle ≠ b := by
   unfold slotOf
   rw [List.findIdx?_eq_none_iff]
@@ -394,13 +486,13 @@ theorem slotOf_some {B : Recs} {b i : Nat} (hn : NodupB B) (h : slotOf B b = som
       simp only [recs, List.mem_filterMap, id]; exact ⟨some r, by rw [← hs]; exact List.getElem_mem hi, rfl⟩
     exact nodup_map_inj (fun r : Record => r.bundle) (recs B) hn r' hr' r hr (by rw [hrb', hp])
 
-theorem onAck_ok_iff {B : Recs} {L : Ledger} (hn : NodupB B) (b c : Nat) (v : Bool) :
-    (onAck B L b c v).err = none ↔
-      v = true ∧ (∃ r ∈ recs B, r.bundle = b ∧ r.offered = some c) ∧ L.contains (bkey b) = true := by
+theorem onAck_ok_iff {B : Recs} {L : Ledger} (hn : NodupB B) (b c o : Nat) (v : Bool) :
+    (onAck B L b c o v).err = none ↔
+      v = true ∧ (∃ r ∈ recs B, r.bundle = b ∧ r.offered = some c ∧ r.oid = o) ∧ L.contains (bkey b) = true := by
   unfold onAck
   cases v
   · simp
-  · simp only [↓reduceIte, if_true, true_and]
+  · simp only [↓reduceIte, true_and]
     cases hs : slotOf B b with
     | none =>
       simp only [reduceCtorEq, false_iff]
@@ -408,14 +500,14 @@ theorem onAck_ok_iff {B : Recs} {L : Ledger} (hn : NodupB B) (b c : Nat) (v : Bo
       exact (slotOf_none.1 hs) r hr hrb
     | some i =>
       obtain ⟨r, hBi, hrb, huniq⟩ := slotOf_some hn hs
-      simp only [hBi, Option.bind_some, id]
+      simp only [hBi]
       have hmem : r ∈ recs B := by
         rw [← hrb] at hs
         simp only [recs, List.mem_filterMap, id]
         have := List.mem_of_getElem? hBi
         exact ⟨_, this, rfl⟩
-      by_cases ho : r.offered = some c
-      · simp only [ho, ne_eq, not_true_eq_false, ite_false]
+      by_cases ho : r.offered = some c ∧ r.oid = o
+      · simp only [ho.1, ho.2, and_self, ite_true]
         have := reclass_ok_iff L (bkey b) .transit
         constructor
         · intro h
@@ -425,59 +517,59 @@ theorem onAck_ok_iff {B : Recs} {L : Ledger} (hn : NodupB B) (b c : Nat) (v : Bo
           · simp [hc] at h
         · rintro ⟨-, hc⟩
           simp [this, hc]
-      · simp only [ne_eq, ho, not_false_eq_true, ite_true]
+      · simp only [show (_ ∧ _) = False from eq_false ho, ite_false]
         simp only [reduceCtorEq, false_iff]
         rintro ⟨⟨r', hr', hrb', ho'⟩, _⟩
         have := huniq r' hr' hrb'
         subst this
         exact ho ho'
 
-theorem onAck_state {B : Recs} {L : Ledger} (hn : NodupB B) (b c : Nat) (v : Bool) :
-    (onAck B L b c v).ev = [] ∧
-    (((onAck B L b c v).err = some .ack ∨ (onAck B L b c v).err = some .unknown ∨
-        (onAck B L b c v).err = some .notOffered) →
-      (onAck B L b c v).B = B ∧ (onAck B L b c v).L = L) ∧
-    ((onAck B L b c v).err = some .storeUnknown →
-      (onAck B L b c v).L = L ∧ L.contains (bkey b) = false) ∧
-    ((onAck B L b c v).err = none →
-      (onAck B L b c v).L.entries = L.entries.map (fun x => if x.key = bkey b then { x with cls := .transit } else x)) := by
+theorem onAck_state {B : Recs} {L : Ledger} (hn : NodupB B) (b c o : Nat) (v : Bool) :
+    (onAck B L b c o v).ev = [] ∧
+    (((onAck B L b c o v).err = some .ack ∨ (onAck B L b c o v).err = some .unknown ∨
+        (onAck B L b c o v).err = some .notOffered) →
+      (onAck B L b c o v).B = B ∧ (onAck B L b c o v).L = L) ∧
+    ((onAck B L b c o v).err = some .storeUnknown →
+      (onAck B L b c o v).L = L ∧ L.contains (bkey b) = false) ∧
+    ((onAck B L b c o v).err = none →
+      (onAck B L b c o v).L.entries = L.entries.map (fun x => if x.key = bkey b then { x with cls := .transit } else x)) := by
   unfold onAck
   cases v
   · simp
-  · simp only [↓reduceIte, if_true]
+  · simp only [↓reduceIte]
     cases hs : slotOf B b with
     | none => simp
     | some i =>
       obtain ⟨r, hBi, hrb, huniq⟩ := slotOf_some hn hs
-      simp only [hBi, Option.bind_some, id]
-      by_cases ho : r.offered = some c
-      · simp only [ho, ne_eq, not_true_eq_false, ite_false]
+      simp only [hBi]
+      by_cases ho : r.offered = some c ∧ r.oid = o
+      · simp only [ho.1, ho.2, and_self, ite_true]
         by_cases hc : L.contains (bkey b) = true
         · have := reclass_ok_iff L (bkey b) .transit
           simp [this, hc]
           exact reclass_entries L (bkey b) .transit hc
         · have hc' : L.contains (bkey b) = false := by simpa using hc
           simp [reclass, hc']
-      · simp [ho]
+      · simp [show (_ ∧ _) = False from eq_false ho]
 
-theorem onAck_records {B : Recs} {L : Ledger} (hn : NodupB B) (b c : Nat) (v : Bool) :
-    (∀ r' ∈ recs (onAck B L b c v).B, r' ∈ recs B) ∧ NodupB (onAck B L b c v).B ∧
-    ((onAck B L b c v).err = none → (∀ r' ∈ recs (onAck B L b c v).B, r'.bundle ≠ b) ∧
-      ∀ r' ∈ recs B, r'.bundle ≠ b → r' ∈ recs (onAck B L b c v).B) := by
+theorem onAck_records {B : Recs} {L : Ledger} (hn : NodupB B) (b c o : Nat) (v : Bool) :
+    (∀ r' ∈ recs (onAck B L b c o v).B, r' ∈ recs B) ∧ NodupB (onAck B L b c o v).B ∧
+    ((onAck B L b c o v).err = none → (∀ r' ∈ recs (onAck B L b c o v).B, r'.bundle ≠ b) ∧
+      ∀ r' ∈ recs B, r'.bundle ≠ b → r' ∈ recs (onAck B L b c o v).B) := by
   unfold onAck
   cases v
   · simp [hn]
-  · simp only [↓reduceIte, if_true]
+  · simp only [↓reduceIte]
     cases hs : slotOf B b with
     | none => simp [hn]
     | some i =>
       obtain ⟨r, hBi, hrb, huniq⟩ := slotOf_some hn hs
-      simp only [hBi, Option.bind_some, id]
+      simp only [hBi]
       have hp := set_none_perm B i r hBi
       have hnd := (hp.map (·.bundle)).nodup_iff.1 (by unfold NodupB at hn; exact hn)
       simp only [List.map_cons, List.nodup_cons] at hnd
-      by_cases ho : r.offered = some c
-      · simp only [ho, ne_eq, not_true_eq_false, ite_false]
+      by_cases ho : r.offered = some c ∧ r.oid = o
+      · simp only [ho.1, ho.2, and_self, ite_true]
         refine ⟨fun r' hr' => recs_set_none B i r' hr', hnd.2, ?_⟩
         intro _
         constructor
@@ -492,33 +584,33 @@ theorem onAck_records {B : Recs} {L : Ledger} (hn : NodupB B) (b c : Nat) (v : B
           rcases this with rfl | h
           · exact absurd hrb hne
           · exact h
-      · simp only [ho, ne_eq, not_false_eq_true, ite_true]
+      · simp only [show (_ ∧ _) = False from eq_false ho, ite_false]
         exact ⟨fun r' hr' => hr', hn, by simp⟩
 
-theorem onAck_inv {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Linked B L) (b c : Nat) (v : Bool) :
-    Inv (onAck B L b c v).L ∧ NodupB (onAck B L b c v).B ∧ Linked (onAck B L b c v).B (onAck B L b c v).L := by
-  obtain ⟨hev, hsame, hunk, hok⟩ := onAck_state (L := L) hn b c v
-  obtain ⟨hsub, hnd, hrel⟩ := onAck_records (L := L) hn b c v
+theorem onAck_inv {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Linked B L) (b c o : Nat) (v : Bool) :
+    Inv (onAck B L b c o v).L ∧ NodupB (onAck B L b c o v).B ∧ Linked (onAck B L b c o v).B (onAck B L b c o v).L := by
+  obtain ⟨hev, hsame, hunk, hok⟩ := onAck_state (L := L) hn b c o v
+  obtain ⟨hsub, hnd, hrel⟩ := onAck_records (L := L) hn b c o v
   -- the shape of the result
-  have hshape : (onAck B L b c v).L = L ∨ ((onAck B L b c v).err = none ∧
-      (onAck B L b c v).L = (reclass L (bkey b) .transit).1) := by
+  have hshape : (onAck B L b c o v).L = L ∨ ((onAck B L b c o v).err = none ∧
+      (onAck B L b c o v).L = (reclass L (bkey b) .transit).1) := by
     unfold onAck
     cases v
     · simp
-    · simp only [↓reduceIte, if_true]
+    · simp only [↓reduceIte]
       cases hs : slotOf B b with
       | none => simp
       | some i =>
         obtain ⟨r, hBi, hrb, huniq⟩ := slotOf_some hn hs
-        simp only [hBi, Option.bind_some, id]
-        by_cases ho : r.offered = some c
-        · simp only [ho, ne_eq, not_true_eq_false, ite_false]
+        simp only [hBi]
+        by_cases ho : r.offered = some c ∧ r.oid = o
+        · simp only [ho.1, ho.2, and_self, ite_true]
           by_cases hc : (reclass L (bkey b) .transit).2 = true
           · right; simp [hc]
           · left
             have : L.contains (bkey b) = false := by rw [← reclass_ok_iff]; simpa using hc
             simp [hc, reclass, this]
-        · simp [ho]
+        · simp [show (_ ∧ _) = False from eq_false ho]
   refine ⟨?_, hnd, ?_⟩
   · rcases hshape with h | ⟨_, h⟩
     · rw [h]; exact hI
@@ -621,80 +713,157 @@ theorem bexpire_exits (B : Recs) (L : Ledger) (now : Nat) :
     (bexpire B L now).L.entries = L.entries.filter (fun e => !expiredAt now e) :=
   ⟨fun r hr => (mem_recs_sync.1 hr).2, rfl, entries_expire L now⟩
 
-theorem setOffered_bundles (b to : Nat) : ∀ (B B' : Recs), setOffered b to B = some B' →
-    (recs B').map (·.bundle) = (recs B).map (·.bundle) ∧ ∃ r ∈ recs B', r.bundle = b ∧ r.offered = some to
-  | [], B', h => by simp [setOffered] at h
-  | s :: t, B', h => by
-    cases s with
-    | none =>
-      simp only [setOffered, Option.map_eq_some_iff] at h
-      obtain ⟨t', ht', rfl⟩ := h
-      obtain ⟨h1, r, hr, h2⟩ := setOffered_bundles b to t t' ht'
-      refine ⟨by simpa [recs] using h1, r, ?_, h2⟩
-      simpa [recs] using hr
-    | some x =>
-      by_cases hx : x.bundle = b
-      · simp only [setOffered, hx, ite_true, Option.some.injEq] at h
-        subst h
-        refine ⟨?_, { x with offered := some to }, by simp [recs]; exact Or.inl hx, hx, rfl⟩
-        simp only [recs, List.filterMap_cons, id, List.map_cons]
-        rw [hx]
-      · simp only [setOffered, hx, ite_false, Option.map_eq_some_iff] at h
-        obtain ⟨t', ht', rfl⟩ := h
-        obtain ⟨h1, r, hr, h2⟩ := setOffered_bundles b to t t' ht'
-        refine ⟨by simpa [recs] using h1, r, ?_, h2⟩
-        simp only [recs, List.filterMap_cons, id, List.mem_cons] at hr ⊢
-        exact Or.inr hr
+theorem offerRec_bundle (to id : Nat) (r : Record) : (offerRec to id r).bundle = r.bundle := rfl
 
-theorem offer_inv {B : Recs} {L : Ledger} (hn : NodupB B) (hl : Linked B L) (b to : Nat) :
-    NodupB (offer B b to).2 ∧ Linked (offer B b to).2 L := by
+theorem cancelRec_bundle (r : Record) : (cancelRec r).bundle = r.bundle := rfl
+
+theorem offer_inv {B : Recs} {L : Ledger} (hn : NodupB B) (hl : Linked B L) (nx b to : Nat) :
+    NodupB (offer B nx b to).B ∧ Linked (offer B nx b to).B L := by
   unfold offer
-  cases h : setOffered b to B with
+  cases h : modFirst b (offerRec to nx) B with
   | none => exact ⟨hn, hl⟩
   | some B' =>
-    obtain ⟨hb, -⟩ := setOffered_bundles b to B B' h
-    refine ⟨by unfold NodupB at *; rw [hb]; exact hn, ?_⟩
-    intro r hr e he hk
-    have : r.bundle ∈ (recs B).map (·.bundle) := by rw [← hb]; exact List.mem_map.2 ⟨r, hr, rfl⟩
-    obtain ⟨r0, hr0, hr0b⟩ := List.mem_map.1 this
-    exact hl r0 hr0 e he (by rw [hr0b]; exact hk)
+    obtain ⟨hb, -⟩ := modFirst_spec b (offerRec to nx) (offerRec_bundle to nx) B B' h
+    exact book_of_bundles hb hn hl
 
 /-- Offering custody to a node records it for a held bundle, and refuses an unknown one. -/
-theorem offer_ok_iff (B : Recs) (b to : Nat) :
-    (offer B b to).1 = none ↔ holds B b = true := by
+theorem offer_ok_iff (B : Recs) (nx b to : Nat) :
+    (offer B nx b to).err = none ↔ holds B b = true := by
   unfold offer
-  cases h : setOffered b to B with
+  cases h : modFirst b (offerRec to nx) B with
   | none =>
+    have := (modFirst_none b _ B).1 h
     simp only [reduceCtorEq, false_iff]
     intro hh
-    obtain ⟨r, hr, hrb⟩ := holds_iff.1 hh
-    -- an unsuccessful search means no record of the bundle
-    have : ∀ (B : Recs), setOffered b to B = none → ∀ r ∈ recs B, r.bundle ≠ b := by
-      intro B
-      induction B with
-      | nil => intro _ r hr; simp [recs] at hr
-      | cons s t ih =>
-        intro hB r hr
-        cases s with
-        | none =>
-          simp only [setOffered, Option.map_eq_none_iff] at hB
-          simp only [recs, List.filterMap_cons, id] at hr
-          exact ih hB r hr
-        | some x =>
-          by_cases hx : x.bundle = b
-          · simp [setOffered, hx] at hB
-          · simp only [setOffered, hx, ite_false, Option.map_eq_none_iff] at hB
-            simp only [recs, List.filterMap_cons, id, List.mem_cons] at hr
-            rcases hr with rfl | hr
-            · exact hx
-            · exact ih hB r hr
-    exact this B h r hr hrb
+    simp only [holds, List.any_eq_true, decide_eq_true_eq] at hh
+    obtain ⟨r, hr, hrb⟩ := hh
+    exact this r hr hrb
   | some B' =>
-    obtain ⟨-, r, hr, hrb, -⟩ := setOffered_bundles b to B B' h
+    obtain ⟨-, -, r0, hr0, hr0b, -⟩ := modFirst_spec b (offerRec to nx) (offerRec_bundle to nx) B B' h
     simp only [true_iff]
-    have hmem : b ∈ (recs B').map (·.bundle) := List.mem_map.2 ⟨r, hr, hrb⟩
-    rw [(setOffered_bundles b to B B' h).1] at hmem
-    obtain ⟨r0, hr0, hr0b⟩ := List.mem_map.1 hmem
-    exact holds_iff.2 ⟨r0, hr0, hr0b⟩
+    simp only [holds, List.any_eq_true, decide_eq_true_eq]
+    exact ⟨r0, hr0, hr0b⟩
+
+/-- The counter: a successful offer returns the counter as the id and increments it; a failed offer leaves it. -/
+theorem offer_counter (B : Recs) (nx b to : Nat) :
+    ((offer B nx b to).err = none → (offer B nx b to).id = nx ∧ (offer B nx b to).nx = nx + 1) ∧
+    ((offer B nx b to).err ≠ none → (offer B nx b to).nx = nx ∧ (offer B nx b to).B = B) := by
+  unfold offer
+  cases modFirst b (offerRec to nx) B <;> simp
+
+/-- Changing one record: the other records stay, and the changed record is unique in the new book. -/
+theorem modFirst_unique {b : Nat} {f : Record → Record} (hf : ∀ r, (f r).bundle = r.bundle) {B B' : Recs}
+    (hm : modFirst b f B = some B') (hn : NodupB B) :
+    ∃ r0 ∈ recs B, r0.bundle = b ∧ f r0 ∈ recs B' ∧ (∀ r ∈ recs B', r.bundle = b → r = f r0) ∧
+      (∀ r ∈ recs B, r.bundle ≠ b → r ∈ recs B') ∧ (∀ r ∈ recs B', r.bundle ≠ b → r ∈ recs B) := by
+  obtain ⟨hb, hsub, r0, hr0, hr0b, hr0'⟩ := modFirst_spec b f hf B B' hm
+  have hnd : NodupB B' := by unfold NodupB at *; rw [hb]; exact hn
+  refine ⟨r0, hr0, hr0b, hr0', ?_, ?_, ?_⟩
+  · intro r hr hrb
+    exact (nodup_map_inj (fun r : Record => r.bundle) (recs B') hnd (f r0) hr0' r hr
+      (by simp [hf, hrb, hr0b])).symm
+  · intro r hr hne
+    have hp : r.bundle ∈ (recs B').map (·.bundle) := by
+      rw [hb]; exact List.mem_map.2 ⟨r, hr, rfl⟩
+    obtain ⟨r', hr', hrb'⟩ := List.mem_map.1 hp
+    rcases hsub r' hr' with h1 | ⟨r1, hr1, hb1, rfl⟩
+    · have := nodup_map_inj (fun r : Record => r.bundle) (recs B) hn r' h1 r hr hrb'
+      subst this; exact hr'
+    · exact absurd (by rw [← hrb', hf, hb1]) hne
+  · intro r hr hne
+    rcases hsub r hr with h1 | ⟨r1, hr1, hb1, rfl⟩
+    · exact h1
+    · exact absurd (by rw [hf, hb1]) hne
+
+/-- A new offer replaces the outstanding one: the held bundle's record carries exactly `(to, id)` afterwards, and every
+other record is unchanged. -/
+theorem offer_sets {B : Recs} (hn : NodupB B) (nx b to : Nat) (h : (offer B nx b to).err = none) :
+    (∀ r ∈ recs (offer B nx b to).B, r.bundle = b → r.offered = some to ∧ r.oid = nx) ∧
+    (∀ r ∈ recs B, r.bundle ≠ b → r ∈ recs (offer B nx b to).B) ∧
+    (∀ r ∈ recs (offer B nx b to).B, r.bundle ≠ b → r ∈ recs B) := by
+  unfold offer at h ⊢
+  cases hm : modFirst b (offerRec to nx) B with
+  | none => simp [hm] at h
+  | some B' =>
+    simp only [hm]
+    obtain ⟨r0, -, -, -, hu, h2, h3⟩ := modFirst_unique (offerRec_bundle to nx) hm hn
+    exact ⟨fun r hr hrb => by rw [hu r hr hrb]; simp [offerRec], h2, h3⟩
+
+/-- A stale acknowledgement never relieves and changes nothing: the bundle is held but its record does not offer
+custody to `c` under the offer id `o` (another node, another id, or no offer at all after a cancel). -/
+theorem onAck_stale {B : Recs} {L : Ledger} (hn : NodupB B) (b c o : Nat) (hheld : holds B b = true)
+    (hst : ∀ r ∈ recs B, r.bundle = b → ¬ (r.offered = some c ∧ r.oid = o)) :
+    onAck B L b c o true = ⟨some .notOffered, B, L, []⟩ := by
+  obtain ⟨r0, hr0, hb⟩ := holds_iff.1 hheld
+  cases hs : slotOf B b with
+  | none => exact absurd hb ((slotOf_none.1 hs) r0 hr0)
+  | some i =>
+    obtain ⟨r, hBi, hrb, -⟩ := slotOf_some hn hs
+    have hmem : r ∈ recs B := by
+      simp only [recs, List.mem_filterMap, id]
+      exact ⟨_, List.mem_of_getElem? hBi, rfl⟩
+    have h' : (r.offered = some c ∧ r.oid = o) = False := eq_false (hst r hmem hrb)
+    simp [onAck, hs, hBi, h']
+
+/-- The same, for an ack that names the wrong node or a wrong offer id of an outstanding offer. -/
+theorem onAck_wrong_offer {B : Recs} {L : Ledger} (hn : NodupB B) (b c o : Nat) (r : Record) (hr : r ∈ recs B)
+    (hb : r.bundle = b) (hne : r.offered ≠ some c ∨ r.oid ≠ o) :
+    onAck B L b c o true = ⟨some .notOffered, B, L, []⟩ :=
+  onAck_stale hn b c o (holds_iff.2 ⟨r, hr, hb⟩) (fun r' hr' hb' => by
+    have := nodup_map_inj (fun r : Record => r.bundle) (recs B) hn r' hr' r hr (by simp [hb', hb])
+    subst this
+    rintro ⟨h1, h2⟩
+    rcases hne with h | h <;> contradiction)
+
+/-- A hand-back (accept of a bundle already held): the record stays, with its previous custodian, and the outstanding
+offer of this node is cancelled; nothing in the ledger changes except the expired items leaving. -/
+theorem accept_held_cancels {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (bundle bytes expires previous now : Nat)
+    (hh : holds (sync B (expire L now).1) bundle = true) :
+    (accept B L bundle bytes expires previous now).err = none ∧
+    (accept B L bundle bytes expires previous now).L = (expire L now).1 ∧
+    (accept B L bundle bytes expires previous now).ev = (expire L now).2 ∧
+    (∃ r0 ∈ recs (sync B (expire L now).1), r0.bundle = bundle ∧
+      cancelRec r0 ∈ recs (accept B L bundle bytes expires previous now).B ∧
+      (∀ r ∈ recs (accept B L bundle bytes expires previous now).B, r.bundle = bundle → r = cancelRec r0) ∧
+      (∀ r ∈ recs (sync B (expire L now).1), r.bundle ≠ bundle →
+        r ∈ recs (accept B L bundle bytes expires previous now).B)) ∧
+    (∀ r ∈ recs (accept B L bundle bytes expires previous now).B, r.bundle = bundle → r.offered = none ∧ r.oid = 0) := by
+  obtain ⟨B', hB'⟩ := cancel_some hh
+  have hn1 : NodupB (sync B (expire L now).1) := sync_nodup _ hn
+  have hacc : accept B L bundle bytes expires previous now =
+      ⟨none, B', (expire L now).1, (expire L now).2⟩ := by
+    simp [accept, hh, hB']
+  rw [hacc]
+  obtain ⟨r0, hr0, hr0b, hr0', hu, h2, -⟩ := modFirst_unique cancelRec_bundle hB' hn1
+  refine ⟨rfl, rfl, rfl, ⟨r0, hr0, hr0b, hr0', hu, h2⟩, fun r hr hrb => ?_⟩
+  rw [hu r hr hrb]; simp [cancelRec]
+
+/-- After a hand-back every acknowledgement of the bundle is stale: whichever node and offer id it names, it neither
+relieves nor changes anything. -/
+theorem handback_blocks_ack {B : Recs} {L : Ledger} (hI : Inv L) (hn : NodupB B) (hl : Linked B L)
+    (bundle bytes expires previous now : Nat) (hh : holds (sync B (expire L now).1) bundle = true) (c o : Nat) :
+    onAck (accept B L bundle bytes expires previous now).B (accept B L bundle bytes expires previous now).L bundle c o true
+      = ⟨some .notOffered, (accept B L bundle bytes expires previous now).B, (accept B L bundle bytes expires previous now).L, []⟩ := by
+  obtain ⟨-, -, -, ⟨r0, hr0, hr0b, hr0', -, -⟩, hoff⟩ := accept_held_cancels hI hn bundle bytes expires previous now hh
+  exact onAck_stale (accept_inv hI hn hl bundle bytes expires previous now).2.1 bundle c o
+    (holds_iff.2 ⟨_, hr0', hr0b⟩) (fun r hr hrb => by
+      obtain ⟨h1, -⟩ := hoff r hr hrb
+      simp [h1])
+
+/-- An incoming bundle that is already expired is refused with the store's `expired` when the book has a free record
+and the ledger holds no item of the bundle after the sweep (nothing but the expired items leaves). -/
+theorem accept_expired_refused {B : Recs} {L : Ledger} (hI : Inv L) (bundle bytes expires previous now : Nat)
+    (hh : holds (sync B (expire L now).1) bundle = false) {slot : Nat}
+    (hs : (sync B (expire L now).1).findIdx? Option.isNone = some slot)
+    (hc : (expire L now).1.contains (bkey bundle) = false) (hx : expires ≤ now) :
+    accept B L bundle bytes expires previous now =
+      ⟨some (.store .expired), sync B (expire L now).1, (expire L now).1, (expire L now).2⟩ := by
+  have hI1 := expire_inv hI now
+  have hid := expire_idem L now
+  have hr := (admit_expired_refused hI1 (bkey bundle) bytes .custody expires now hx).2.2.2
+    (by rw [hid.1]; exact hc)
+  simp only [accept, hh, hs, hc, Bool.false_eq_true, ite_false]
+  rw [hr]
+  simp [hid.1, hid.2]
 
 end Vinc.DtnStore

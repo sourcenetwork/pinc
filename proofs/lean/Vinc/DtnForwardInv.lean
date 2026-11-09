@@ -279,7 +279,7 @@ theorem inv_step {f0 f' : F} {n : Nat} {inp : Input} {e : Err} (h : step f0 n in
   cases inp with
   | tick => simp [step] at h; rw [← h.1]; exact ⟨hUa, hLa⟩
   | hold id d ex c =>
-    rcases hold_total f0 n id d ex c f' e h 0 with ⟨_, hf⟩ | ⟨_, hc, ha, _, i, hfi, hf⟩
+    rcases hold_total f0 n id d ex c f' e h 0 with ⟨_, hf⟩ | ⟨_, hc, ha, _, i, hfi, k, _, hf⟩
     · rw [hf]; exact ⟨hUa, hLa⟩
     · obtain ⟨hsn, _⟩ := freeIdx_some hfi
       rw [hf]
@@ -334,7 +334,7 @@ theorem inv_step {f0 f' : F} {n : Nat} {inp : Input} {e : Err} (h : step f0 n in
 received by the accepted hold in force (0 when no bundle `x` is held). Refused inputs and quiet or sending polls
 leave the ghost alone. -/
 inductive Reach : F → (Nat → Nat) → Prop where
-  | init (r m now b l t : Nat) : Reach (F.new r m now b l t) fun _ => 0
+  | init (r m now b l t d : Nat) : Reach (F.new r m now b l t d) fun _ => 0
   | holdOk {f f' : F} {g : Nat → Nat} (n id d ex c : Nat) :
       Reach f g → step f n (.hold id d ex c) = (f', .ok) → Reach f' fun x => if x = id then c else g x
   | forgetOk {f f' : F} {g : Nat → Nat} (n id : Nat) :
@@ -406,9 +406,9 @@ copies received by the hold in force; the ids are unique and every transfer belo
 theorem balance {f : F} {g : Nat → Nat} (h : Reach f g) :
     Uniq f.bs ∧ Live f ∧ ∀ x, total f x = g x := by
   induction h with
-  | init r m now b l tt =>
+  | init r m now b l tt dd =>
     refine ⟨uniq_new _, fun i t ht => ?_, fun x => ?_⟩
-    · have : slot (F.new r m now b l tt).ts i = none := slot_replicate_none _ _
+    · have : slot (F.new r m now b l tt dd).ts i = none := slot_replicate_none _ _
       rw [this] at ht; cases ht
     · simp [total, heldSum, handedSum, F.new, wsum_replicate_none]
   | holdOk n id d ex c hr hs ih =>

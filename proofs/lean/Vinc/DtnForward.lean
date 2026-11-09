@@ -54,7 +54,13 @@ structure Transfer where
   phase : Phase
   deriving DecidableEq, Repr
 
-/-- The forwarder. `retry` and `maxSends` are the `Policy`; the tables are slot lists. -/
+/-- A memory slot: an accepted bundle and the time at which the memory of it ends. -/
+structure Seen where
+  id : Nat
+  exp : Nat
+  deriving DecidableEq, Repr
+
+/-- The forwarder. `retry` and `maxSends` are the `Policy`; the tables are slot lists (`ds` is the memory). -/
 structure F where
   retry : Nat
   maxSends : Nat
@@ -62,11 +68,12 @@ structure F where
   bs : List (Option Bundle)
   ls : List (Option Link)
   ts : List (Option Transfer)
+  ds : List (Option Seen)
   deriving DecidableEq, Repr
 
-/-- `Forwarder::new` with capacities `b`, `l`, `t` at time `now`. -/
-def F.new (retry maxSends now b l t : Nat) : F :=
-  ⟨retry, maxSends, now, List.replicate b none, List.replicate l none, List.replicate t none⟩
+/-- `Forwarder::new` with capacities `b`, `l`, `t`, `d` at time `now`. -/
+def F.new (retry maxSends now b l t d : Nat) : F :=
+  ⟨retry, maxSends, now, List.replicate b none, List.replicate l none, List.replicate t none, List.replicate d none⟩
 
 /-- The inputs. -/
 inductive Input where
@@ -80,7 +87,7 @@ inductive Input where
 
 /-- `ForwardError` (`ok` is the `Ok(())`). -/
 inductive Err where
-  | ok | duplicate | full | noCopies | unknown
+  | ok | duplicate | full | noCopies | unknown | finished
   deriving DecidableEq, Repr
 
 /-- `Action`; `none` is the quiet poll. -/
@@ -112,6 +119,10 @@ def slot {α : Type} (l : List (Option α)) (i : Nat) : Option α := (l[i]?).get
 /-- Whether some slot satisfies `p`. -/
 def anyS {α : Type} (p : α → Bool) (l : List (Option α)) : Bool := l.any fun o => o.any p
 
+/-- The first memory slot that is free or whose entry has expired (`exp ≤ now`). -/
+def freeD (now : Nat) (l : List (Option Seen)) : Option Nat :=
+  l.findIdx? fun o => o.all fun d => decide (d.exp ≤ now)
+
 /-- Whether a link to `p` is up. -/
 def upLink (ls : List (Option Link)) (p : Nat) : Bool := anyS (fun l => l.up && l.peer == p) ls
 
@@ -140,9 +151,12 @@ def step (f0 : F) (now : Nat) (inp : Input) : F × Err :=
   | .hold id dest exp copies =>
     if copies == 0 then (f, .noCopies)
     else if anyS (·.id == id) f.bs then (f, .duplicate)
-    else match freeIdx f.bs with
-      | none => (f, .full)
-      | some i => ({ f with bs := upd f.bs i fun _ => some ⟨id, dest, exp, copies, false⟩ }, .ok)
+    else if anyS (fun d => d.id == id && decide (f.now < d.exp)) f.ds then (f, .finished)
+    else match freeD f.now f.ds, freeIdx f.bs with
+      | some k, some i =>
+        ({ f with bs := upd f.bs i fun _ => some ⟨id, dest, exp, copies, false⟩
+                  ds := upd f.ds k fun _ => some ⟨id, exp⟩ }, .ok)
+      | _, _ => (f, .full)
   | .linkUp peer | .linkDown peer =>
     let up := match inp with | .linkUp _ => true | _ => false
     match firstIdx (·.peer == peer) f.ls with

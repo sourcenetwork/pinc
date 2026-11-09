@@ -46,7 +46,7 @@ theorem ended_mono {s : Sys} (h : Ended s) (ev : Ev) : Ended (exec s ev) := by
 /-- The shapes of the `DtnStore` events the glue applies to node `m`. -/
 theorem ledgerEv_forms (s : Sys) (ev : Ev) (m : Nat) (le : DtnStore.Ev) (h : ledgerEv s ev m = some le) :
     (le = .bexpire (s.t + 1) ∧ ev = .tick) ∨ (∃ p, le = .offer bid p ∧ ev = .poll m ∧ offerable s.cfg m p = true) ∨
-      (le = .delivered bid ∧ ev = .poll m) ∨ (∃ f, le = .accept bid 1 s.cfg.exp f s.t) ∨ (∃ c, le = .ack bid c true) ∨
+      (le = .delivered bid ∧ ev = .poll m) ∨ (∃ f, le = .accept bid 1 s.cfg.exp f s.t) ∨ (∃ c o, le = .ack bid c o true) ∨
       (∃ k, le = .hostAdmit ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t) := by
   cases ev with
   | tick => simp only [ledgerEv] at h; cases h; exact Or.inl ⟨rfl, rfl⟩
@@ -74,20 +74,20 @@ theorem ledgerEv_forms (s : Sys) (ev : Ev) (m : Nat) (le : DtnStore.Ev) (h : led
     · simp [hmn] at h
   | bun mm =>
     cases mm with
-    | bun a b c d e =>
+    | bun a b c d e f =>
       simp only [ledgerEv] at h
       split at h
       · cases h; right; right; right; left; exact ⟨_, rfl⟩
       · simp at h
-    | ack a b c => simp [ledgerEv] at h
+    | ack a b c d => simp [ledgerEv] at h
   | ack mm =>
     cases mm with
-    | ack a c p =>
+    | ack a c p o =>
       simp only [ledgerEv] at h
       split at h
-      · cases h; right; right; right; right; left; exact ⟨_, rfl⟩
+      · cases h; right; right; right; right; left; exact ⟨_, _, rfl⟩
       · simp at h
-    | bun a b c d e => simp [ledgerEv] at h
+    | bun a b c d e f => simp [ledgerEv] at h
   | press n k' =>
     simp only [ledgerEv] at h
     split at h
@@ -102,8 +102,8 @@ theorem exec_acc (s : Sys) (ev : Ev) (hE : En s ev) :
   cases ev with
   | bun mm =>
     cases mm with
-    | ack a b c => exact hE.2.elim
-    | bun a b r d e =>
+    | ack a b c d => exact hE.2.elim
+    | bun a b r d e off =>
       by_cases hd : r = s.cfg.dest
       · left; simp [exec, exec0, hd]
       · simp only [exec, exec0, hd, ite_false]
@@ -113,25 +113,25 @@ theorem exec_acc (s : Sys) (ev : Ev) (hE : En s ev) :
   | _ => left; (simp only [exec, exec0, Sys.set]; repeat' split) <;> rfl
 
 theorem exec_msgs (s : Sys) (ev : Ev) (hE : En s ev) : ∀ m' ∈ (exec s ev).msgs,
-    m' ∈ s.msgs ∨ (∃ a b c d e, m' = Msg.bun a b c d e) ∨
-      (∃ id c p, m' = Msg.ack id c p ∧ (c ∈ (exec s ev).acc ∨ (exec s ev).delivered = true)) := by
+    m' ∈ s.msgs ∨ (∃ a b c d e f, m' = Msg.bun a b c d e f) ∨
+      (∃ id c p o, m' = Msg.ack id c p o ∧ (c ∈ (exec s ev).acc ∨ (exec s ev).delivered = true)) := by
   intro m' hm'
   cases ev with
   | bun mm =>
     cases mm with
-    | ack a b c => exact hE.2.elim
-    | bun a b r d e =>
+    | ack a b c d => exact hE.2.elim
+    | bun a b r d e off =>
       by_cases hd : r = s.cfg.dest
       · simp only [exec, exec0, hd, ite_true, List.mem_cons] at hm'
         rcases hm' with rfl | h
-        · right; right; exact ⟨_, _, _, rfl, Or.inr (by simp [exec, exec0, hd])⟩
+        · right; right; exact ⟨_, _, _, _, rfl, Or.inr (by simp [exec, exec0, hd])⟩
         · left; exact List.mem_of_mem_erase h
       · simp only [exec, exec0, hd, ite_false] at hm'
         split at hm'
         · left; exact List.mem_of_mem_erase hm'
         · simp only [List.mem_cons] at hm'
           rcases hm' with rfl | h
-          · right; right; exact ⟨_, _, _, rfl, Or.inl (by simp [exec, exec0, hd]; split <;> simp_all)⟩
+          · right; right; exact ⟨_, _, _, _, rfl, Or.inl (by simp [exec, exec0, hd]; split <;> simp_all)⟩
           · left; exact List.mem_of_mem_erase h
   | poll n =>
     simp only [exec, exec0] at hm'
@@ -139,13 +139,13 @@ theorem exec_msgs (s : Sys) (ev : Ev) (hE : En s ev) : ∀ m' ∈ (exec s ev).ms
     · left; exact hm'
     · simp only [List.mem_cons] at hm'
       rcases hm' with rfl | h
-      · right; left; exact ⟨_, _, _, _, _, rfl⟩
+      · right; left; exact ⟨_, _, _, _, _, _, rfl⟩
       · left; exact h
     · left; exact hm'
   | ack mm =>
     cases mm with
-    | bun a b c d e => exact hE.2.elim
-    | ack a c p =>
+    | bun a b c d e f => exact hE.2.elim
+    | ack a c p o =>
       simp only [exec, exec0] at hm'
       left; exact List.mem_of_mem_erase hm'
   | lose mm =>
@@ -165,7 +165,7 @@ theorem exec_msgs (s : Sys) (ev : Ev) (hE : En s ev) : ∀ m' ∈ (exec s ev).ms
 structure ChInv (s : Sys) : Prop where
   rank : s.cfg.ranked = true → ∀ n ∈ s.cfg.ids, ∀ r ∈ DtnStore.recs (s.nodes n).B, ∀ q, r.offered = some q → n < q
   le : ∀ n ∈ s.cfg.ids, ∀ e ∈ (s.nodes n).L.entries, e.key = DtnStore.bkey bid → e.expires = s.cfg.exp
-  ackd : ∀ id c p, Msg.ack id c p ∈ s.msgs → c ∈ s.acc ∨ s.delivered = true
+  ackd : ∀ id c p o, Msg.ack id c p o ∈ s.msgs → c ∈ s.acc ∨ s.delivered = true
   flag : s.anyFlag = true → s.fin = true
   alive : s.cfg.ranked = true → ¬ Ended s → ∀ x ∈ s.acc, ∃ n ∈ s.cfg.ids, x ≤ n ∧ Cust s n
 
@@ -200,7 +200,7 @@ theorem release_ended {s : Sys} (hI : SysInv s) (hC : ChInv s) (n : Nat) (hn : n
 
 theorem cust_keep {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (ev : Ev)
     (hend : ¬ Ended (exec s ev)) (n : Nat) (hn : n ∈ s.cfg.ids) (hcu : Cust s n)
-    (hna : ¬ ∃ a c, ev = .ack (.ack a c n)) : Cust (exec s ev) n := by
+    (hna : ¬ ∃ a c o, ev = .ack (.ack a c n o)) : Cust (exec s ev) n := by
   obtain ⟨e, he, hk, hc⟩ := hcu
   have hexp := hC.le n hn e he hk
   have hcfg := exec_cfg s ev
@@ -213,7 +213,7 @@ theorem cust_keep {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (ev : 
     exact hend (ended_mono (release_ended hI hC n hn b hb) _)
   have hlive : ∀ le t, ledgerEv s ev n = some le → le.now = some t → DtnStore.expiredAt t e = false := by
     intro le t hle hnow
-    rcases ledgerEv_forms s ev n le hle with ⟨rfl, rfl⟩ | ⟨p, rfl, -⟩ | ⟨rfl, -⟩ | ⟨f, rfl⟩ | ⟨c, rfl⟩ | ⟨k, rfl⟩
+    rcases ledgerEv_forms s ev n le hle with ⟨rfl, rfl⟩ | ⟨p, rfl, -⟩ | ⟨rfl, -⟩ | ⟨f, rfl⟩ | ⟨c, o, rfl⟩ | ⟨k, rfl⟩
     · simp only [DtnStore.Ev.now, Option.some.injEq] at hnow
       subst hnow
       have : (exec s .tick).t = s.t + 1 := by simp [exec, exec0]
@@ -238,7 +238,7 @@ theorem rank_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
       ∀ q, r.offered = some q → m < q := by
   intro hrk m hm r hr q hq
   rw [exec_cfg] at hrk hm
-  obtain ⟨hB, -⟩ := exec_BL s ev m hm
+  obtain ⟨hB, -, -⟩ := exec_BL s ev m hm
   rw [hB] at hr
   have hold := hC.rank hrk m hm
   have hnd := node_inv hR m hm
@@ -247,19 +247,19 @@ theorem rank_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
   | none => simp only [hle] at hr; exact hold r hr q hq
   | some le =>
     simp only [hle] at hr
-    rcases ledgerEv_forms s ev m le hle with ⟨rfl, -⟩ | ⟨p, rfl, hev, hoff⟩ | ⟨rfl, -⟩ | ⟨f, rfl⟩ | ⟨c, rfl⟩ | ⟨k, rfl⟩
+    rcases ledgerEv_forms s ev m le hle with ⟨rfl, -⟩ | ⟨p, rfl, hev, hoff⟩ | ⟨rfl, -⟩ | ⟨f, rfl⟩ | ⟨c, o, rfl⟩ | ⟨k, rfl⟩
     · exact hold r (DtnStore.bexpire_recs_sub _ _ _ r hr) q hq
-    · rcases DtnStore.offer_recs _ _ _ r hr with h | ⟨-, ho⟩
+    · rcases DtnStore.offer_recs _ _ _ _ r hr with h | ⟨-, ho⟩
       · exact hold r h q hq
       · rw [ho] at hq
         cases hq
         simp only [offerable, hrk, if_true, decide_eq_true_eq] at hoff
         exact hoff
     · exact hold r (DtnStore.delivered_recs_sub _ _ _ r hr) q hq
-    · rcases DtnStore.accept_recs_sub _ _ _ _ _ _ _ r hr with h | rfl
+    · rcases DtnStore.accept_recs_sub _ _ _ _ _ _ _ r hr with h | h
       · exact hold r h q hq
-      · cases hq
-    · exact hold r ((DtnStore.onAck_records (L := (s.nodes m).L) hnd.nodup bid c true).1 r hr) q hq
+      · rw [h] at hq; cases hq
+    · exact hold r ((DtnStore.onAck_records (L := (s.nodes m).L) hnd.nodup bid c o true).1 r hr) q hq
     · exact hold r hr q hq
 
 theorem le_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
@@ -267,7 +267,7 @@ theorem le_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
       e.expires = (exec s ev).cfg.exp := by
   intro m hm e he hk
   rw [exec_cfg] at hm ⊢
-  obtain ⟨-, hL⟩ := exec_BL s ev m hm
+  obtain ⟨-, hL, -⟩ := exec_BL s ev m hm
   rw [hL] at he
   have hold := hC.le m hm
   have hnd := node_inv hR m hm
@@ -276,7 +276,7 @@ theorem le_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
   | none => simp only [hle] at he; exact hold e he hk
   | some le =>
     simp only [hle] at he
-    rcases ledgerEv_forms s ev m le hle with ⟨rfl, -⟩ | ⟨p, rfl, hev, hoff⟩ | ⟨rfl, -⟩ | ⟨f, rfl⟩ | ⟨c, rfl⟩ | ⟨k, rfl⟩
+    rcases ledgerEv_forms s ev m le hle with ⟨rfl, -⟩ | ⟨p, rfl, hev, hoff⟩ | ⟨rfl, -⟩ | ⟨f, rfl⟩ | ⟨c, o, rfl⟩ | ⟨k, rfl⟩
     · exact hold e (DtnStore.expire_sub _ _ e he) hk
     · exact hold e he hk
     · exact hold e (DtnStore.delivered_entries_sub _ _ _ e he) hk
@@ -284,7 +284,7 @@ theorem le_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
       · exact hold e h hk
       · exact hold y hy hk
       · exact h
-    · rcases DtnStore.onAck_entries_shape (L := (s.nodes m).L) hnd.nodup bid c true e he with h | ⟨x, hx, hxk, rfl⟩
+    · rcases DtnStore.onAck_entries_shape (L := (s.nodes m).L) hnd.nodup bid c o true e he with h | ⟨x, hx, hxk, rfl⟩
       · exact hold e h hk
       · exact hold x hx hxk
     · rcases DtnStore.admit_entries_sub hnd.inv ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t e he with h | rfl
@@ -292,11 +292,11 @@ theorem le_exec {s : Sys} (hR : Reach s) (hC : ChInv s) (ev : Ev) :
       · simp [DtnStore.bkey] at hk
 
 theorem ackd_exec {s : Sys} (hC : ChInv s) (ev : Ev) (hE : En s ev) :
-    ∀ id c p, Msg.ack id c p ∈ (exec s ev).msgs → c ∈ (exec s ev).acc ∨ (exec s ev).delivered = true := by
-  intro id c p hm
+    ∀ id c p o, Msg.ack id c p o ∈ (exec s ev).msgs → c ∈ (exec s ev).acc ∨ (exec s ev).delivered = true := by
+  intro id c p o hm
   obtain ⟨hd, -, -⟩ := exec_mono s ev
-  rcases exec_msgs s ev hE _ hm with h | ⟨a, b, c', d, e, h⟩ | ⟨id', c', p', h, hc⟩
-  · rcases hC.ackd id c p h with h1 | h1
+  rcases exec_msgs s ev hE _ hm with h | ⟨a, b, c', d, e, f, h⟩ | ⟨id', c', p', o', h, hc⟩
+  · rcases hC.ackd id c p o h with h1 | h1
     · left
       rcases exec_acc s ev hE with ha | ⟨r, -, ha⟩
       · rw [ha]; exact h1
@@ -308,126 +308,126 @@ theorem ackd_exec {s : Sys} (hC : ChInv s) (ev : Ev) (hE : En s ev) :
     exact hc
 
 theorem alive_old {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (ev : Ev)
-    (hrk : s.cfg.ranked = true) (hend : ¬ Ended (exec s ev)) (hna : ∀ n, ¬ ∃ a c, ev = .ack (.ack a c n)) :
+    (hrk : s.cfg.ranked = true) (hend : ¬ Ended (exec s ev)) (hna : ∀ n, ¬ ∃ a c o, ev = .ack (.ack a c n o)) :
     ∀ x ∈ s.acc, ∃ n ∈ s.cfg.ids, x ≤ n ∧ Cust (exec s ev) n := by
   intro x hx
   have hend0 : ¬ Ended s := fun h => hend (ended_mono h ev)
   obtain ⟨n, hn, hxn, hcu⟩ := hC.alive hrk hend0 x hx
   exact ⟨n, hn, hxn, cust_keep hR hI hC ev hend n hn hcu (hna n)⟩
 
-theorem alive_ack {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (id c p : Nat)
-    (hm : Msg.ack id c p ∈ s.msgs) (hp : p ∈ s.cfg.ids) (hrk : s.cfg.ranked = true)
-    (hend : ¬ Ended (exec s (.ack (.ack id c p)))) :
-    ∀ x ∈ s.acc, ∃ n ∈ s.cfg.ids, x ≤ n ∧ Cust (exec s (.ack (.ack id c p))) n := by
+theorem alive_ack {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (id c p o : Nat)
+    (hm : Msg.ack id c p o ∈ s.msgs) (hp : p ∈ s.cfg.ids) (hrk : s.cfg.ranked = true)
+    (hend : ¬ Ended (exec s (.ack (.ack id c p o)))) :
+    ∀ x ∈ s.acc, ∃ n ∈ s.cfg.ids, x ≤ n ∧ Cust (exec s (.ack (.ack id c p o))) n := by
   intro x hx
   have hend0 : ¬ Ended s := fun h => hend (ended_mono h _)
   have hnd := node_inv hR p hp
   obtain ⟨n, hn, hxn, hcu⟩ := hC.alive hrk hend0 x hx
-  by_cases hrel : (DtnStore.onAck (s.nodes p).B (s.nodes p).L bid c true).err = none
+  by_cases hrel : (DtnStore.onAck (s.nodes p).B (s.nodes p).L bid c o true).err = none
   · -- a relief at p: the acknowledging node c accepted custody and some node of at least its id keeps it
-    obtain ⟨-, hr, -⟩ := (DtnStore.onAck_ok_iff hnd.nodup bid c true).1 hrel
+    obtain ⟨-, hr, -⟩ := (DtnStore.onAck_ok_iff hnd.nodup bid c o true).1 hrel
     obtain ⟨r, hrm, -, hro⟩ := hr
-    have hpc : p < c := hC.rank hrk p hp r hrm c hro
+    have hpc : p < c := hC.rank hrk p hp r hrm c hro.1
     have hdel : s.delivered = false := by
       cases h : s.delivered
       · rfl
       · exact absurd (Or.inl h) hend0
     have hcacc : c ∈ s.acc := by
-      rcases hC.ackd id c p hm with h | h
+      rcases hC.ackd id c p o hm with h | h
       · exact h
       · rw [hdel] at h; cases h
     obtain ⟨nc, hnc, hcnc, hcuc⟩ := hC.alive hrk hend0 c hcacc
     have hncp : nc ≠ p := by omega
-    have kc : Cust (exec s (.ack (.ack id c p))) nc :=
+    have kc : Cust (exec s (.ack (.ack id c p o))) nc :=
       cust_keep hR hI hC _ hend nc hnc hcuc (by
-        rintro ⟨a, c', h⟩
+        rintro ⟨a, c', o', h⟩
         simp only [Ev.ack.injEq, Msg.ack.injEq] at h
-        exact hncp h.2.2.symm)
+        exact hncp h.2.2.1.symm)
     by_cases hnp : n = p
     · exact ⟨nc, hnc, by omega, kc⟩
     · exact ⟨n, hn, hxn, cust_keep hR hI hC _ hend n hn hcu (by
-        rintro ⟨a, c', h⟩
+        rintro ⟨a, c', o', h⟩
         simp only [Ev.ack.injEq, Msg.ack.injEq] at h
-        exact hnp h.2.2.symm)⟩
+        exact hnp h.2.2.1.symm)⟩
   · -- no relief: the ledger of p is untouched
     refine ⟨n, hn, hxn, ?_⟩
     by_cases hnp : n = p
     · subst hnp
       obtain ⟨e, he, hk, hc⟩ := hcu
-      obtain ⟨-, hL⟩ := exec_BL s (.ack (.ack id c n)) n hn
-      have hLs : ((exec s (.ack (.ack id c n))).nodes n).L = (s.nodes n).L := by
+      obtain ⟨-, hL, -⟩ := exec_BL s (.ack (.ack id c n o)) n hn
+      have hLs : ((exec s (.ack (.ack id c n o))).nodes n).L = (s.nodes n).L := by
         rw [hL]
-        have hledg : ledgerEv s (.ack (.ack id c n)) n = some (.ack bid c true) := by simp [ledgerEv]
+        have hledg : ledgerEv s (.ack (.ack id c n o)) n = some (.ack bid c o true) := by simp [ledgerEv]
         simp only [ledgerAfter, hledg, DtnStore.step]
-        rcases DtnStore.onAck_L_cases (L := (s.nodes n).L) (B := (s.nodes n).B) hnd.nodup bid c true with h | ⟨h, -⟩
+        rcases DtnStore.onAck_L_cases (L := (s.nodes n).L) (B := (s.nodes n).B) hnd.nodup bid c o true with h | ⟨h, -⟩
         · exact h
         · exact absurd h hrel
       exact ⟨e, by rw [hLs]; exact he, hk, hc⟩
     · exact cust_keep hR hI hC _ hend n hn hcu (by
-        rintro ⟨a, c', h⟩
+        rintro ⟨a, c', o', h⟩
         simp only [Ev.ack.injEq, Msg.ack.injEq] at h
-        exact hnp h.2.2.symm)
+        exact hnp h.2.2.1.symm)
 
 theorem alive_exec {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (ev : Ev) (hE : En s ev) :
     (exec s ev).cfg.ranked = true → ¬ Ended (exec s ev) →
       ∀ x ∈ (exec s ev).acc, ∃ n ∈ (exec s ev).cfg.ids, x ≤ n ∧ Cust (exec s ev) n := by
   intro hrk hend x hx
   rw [exec_cfg] at hrk ⊢
-  have noack : ∀ (e : Ev), (∀ a b c, e ≠ .ack (.ack a b c)) → ∀ n, ¬ ∃ a c, e = .ack (.ack a c n) :=
-    fun e h n ⟨a, c, hh⟩ => h a c n hh
-  have old := fun (h : ∀ n, ¬ ∃ a c, ev = .ack (.ack a c n)) => alive_old hR hI hC ev hrk hend h
+  have noack : ∀ (e : Ev), (∀ a b c d, e ≠ .ack (.ack a b c d)) → ∀ n, ¬ ∃ a c o, e = .ack (.ack a c n o) :=
+    fun e h n ⟨a, c, o, hh⟩ => h a c n o hh
+  have old := fun (h : ∀ n, ¬ ∃ a c o, ev = .ack (.ack a c n o)) => alive_old hR hI hC ev hrk hend h
   cases ev with
   | ack mm =>
     cases mm with
-    | bun a b c d e => exact hE.2.elim
-    | ack id c p =>
-      have hacc : (exec s (.ack (.ack id c p))).acc = s.acc := by simp [exec, exec0, Sys.set]
+    | bun a b c d e f => exact hE.2.elim
+    | ack id c p o =>
+      have hacc : (exec s (.ack (.ack id c p o))).acc = s.acc := by simp [exec, exec0, Sys.set]
       rw [hacc] at hx
-      exact alive_ack hR hI hC id c p hE.1 hE.2 hrk hend x hx
+      exact alive_ack hR hI hC id c p o hE.1 hE.2 hrk hend x hx
   | bun mm =>
     cases mm with
-    | ack a b c => exact hE.2.elim
-    | bun id from_ r c fresh =>
-      have hna : ∀ n, ¬ ∃ a c', Ev.bun (Msg.bun id from_ r c fresh) = .ack (.ack a c' n) := by
-        rintro n ⟨a, c', h⟩; cases h
+    | ack a b c d => exact hE.2.elim
+    | bun id from_ r c fresh off =>
+      have hna : ∀ n, ¬ ∃ a c' o', Ev.bun (Msg.bun id from_ r c fresh off) = .ack (.ack a c' n o') := by
+        rintro n ⟨a, c', o', h⟩; cases h
       by_cases hd : r = s.cfg.dest
-      · have hacc : (exec s (.bun (.bun id from_ r c fresh))).acc = s.acc := by simp [exec, exec0, hd]
+      · have hacc : (exec s (.bun (.bun id from_ r c fresh off))).acc = s.acc := by simp [exec, exec0, hd]
         rw [hacc] at hx
         exact old hna x hx
       · cases hacc : (DtnStore.accept (s.nodes r).B (s.nodes r).L bid 1 s.cfg.exp from_ s.t).err with
         | some e =>
-          have hacc2 : (exec s (.bun (.bun id from_ r c fresh))).acc = s.acc := by simp [exec, exec0, hd, hacc, Sys.set]
+          have hacc2 : (exec s (.bun (.bun id from_ r c fresh off))).acc = s.acc := by simp [exec, exec0, hd, hacc, Sys.set]
           rw [hacc2] at hx
           exact old hna x hx
         | none =>
-          have hacc2 : (exec s (.bun (.bun id from_ r c fresh))).acc = r :: s.acc := by simp [exec, exec0, hd, hacc]
+          have hacc2 : (exec s (.bun (.bun id from_ r c fresh off))).acc = r :: s.acc := by simp [exec, exec0, hd, hacc]
           rw [hacc2] at hx
           rcases List.mem_cons.1 hx with rfl | hx'
           · refine ⟨x, hE.2, Nat.le_refl _, ?_⟩
             have hnd := node_inv hR x hE.2
             obtain ⟨-, e, he, hk, hc⟩ := DtnStore.accept_ok hnd.inv hnd.nodup hnd.linked bid 1 s.cfg.exp from_ s.t hacc
-            obtain ⟨-, hL⟩ := exec_BL s (.bun (.bun id from_ x c fresh)) x hE.2
+            obtain ⟨-, hL, -⟩ := exec_BL s (.bun (.bun id from_ x c fresh off)) x hE.2
             refine ⟨e, ?_, hk, hc⟩
             rw [hL]
-            have hledg : ledgerEv s (.bun (.bun id from_ x c fresh)) x = some (.accept bid 1 s.cfg.exp from_ s.t) := by
+            have hledg : ledgerEv s (.bun (.bun id from_ x c fresh off)) x = some (.accept bid 1 s.cfg.exp from_ s.t) := by
               simp [ledgerEv, hd]
             simp only [ledgerAfter, hledg, DtnStore.step]
             exact he
           · exact old hna x hx'
-  | contact a b up => exact old (by rintro n ⟨a', c', h⟩; cases h) x (by simpa [exec, exec0, Sys.set] using hx)
-  | tick => exact old (by rintro n ⟨a', c', h⟩; cases h) x (by simpa [exec, exec0] using hx)
-  | poll n => exact old (by rintro n' ⟨a', c', h⟩; cases h) x (by
+  | contact a b up => exact old (by rintro n ⟨a', c', o', h⟩; cases h) x (by simpa [exec, exec0, Sys.set] using hx)
+  | tick => exact old (by rintro n ⟨a', c', o', h⟩; cases h) x (by simpa [exec, exec0] using hx)
+  | poll n => exact old (by rintro n' ⟨a', c', o', h⟩; cases h) x (by
       simp only [exec, exec0] at hx; split at hx <;> exact hx)
-  | lose m => exact old (by rintro n ⟨a', c', h⟩; cases h) x (by simpa [exec, exec0] using hx)
-  | press n k => exact old (by rintro n' ⟨a', c', h⟩; cases h) x (by
+  | lose m => exact old (by rintro n ⟨a', c', o', h⟩; cases h) x (by simpa [exec, exec0] using hx)
+  | press n k => exact old (by rintro n' ⟨a', c', o', h⟩; cases h) x (by
       simp only [exec, exec0] at hx; split at hx <;> exact hx)
-  | bad => exact old (by rintro n ⟨a', c', h⟩; cases h) x (by simpa [exec, exec0] using hx)
+  | bad => exact old (by rintro n ⟨a', c', o', h⟩; cases h) x (by simpa [exec, exec0] using hx)
 
 theorem chinv_exec {s : Sys} (hR : Reach s) (hI : SysInv s) (hC : ChInv s) (ev : Ev) (hE : En s ev) :
     ChInv (exec s ev) :=
   ⟨rank_exec hR hC ev, le_exec hR hC ev, ackd_exec hC ev hE, exec_flag s ev, alive_exec hR hI hC ev hE⟩
 
-theorem init_src (c : Cfg) : (Sys.init c).nodes c.src = ⟨(originHold c).1, (originAcc c).B, (originAcc c).L⟩ := by
+theorem init_src (c : Cfg) : (Sys.init c).nodes c.src = ⟨(originHold c).1, (originAcc c).B, (originAcc c).L, 0⟩ := by
   simp [Sys.init]
 
 theorem init_other (c : Cfg) (n : Nat) (hn : n ≠ c.src) : (Sys.init c).nodes n = Node.empty c n := by
@@ -436,7 +436,7 @@ theorem init_other (c : Cfg) (n : Nat) (hn : n ≠ c.src) : (Sys.init c).nodes n
 theorem origin_bs_no_flag (c : Cfg) (hhold : (originHold c).2 = .ok) :
     DtnForward.anyS (fun x : DtnForward.Bundle => x.delivered) (originHold c).1.bs = false := by
   have hs := origin_step c hhold
-  rcases DtnForward.hold_total _ _ bid c.dest c.exp c.copies _ _ hs bid with ⟨he, _⟩ | ⟨_, _, _, _, i, _, hf⟩
+  rcases DtnForward.hold_total _ _ bid c.dest c.exp c.copies _ _ hs bid with ⟨he, _⟩ | ⟨_, _, _, _, i, _, k, _, hf⟩
   · exact absurd rfl he
   · rw [hf]
     cases h : DtnForward.anyS (fun x : DtnForward.Bundle => x.delivered)
@@ -450,7 +450,7 @@ theorem origin_bs_no_flag (c : Cfg) (hhold : (originHold c).2 = .ok) :
 
 theorem chinv_init (c : Cfg) (hn : c.ids.Nodup) (hsrc : c.src ∈ c.ids) (hmax : c.lbud ≤ DtnStore.MAX)
     (hacc : (originAcc c).err = none) (hhold : (originHold c).2 = .ok) : ChInv (Sys.init c) := by
-  have hB0 : DtnStore.SInv ⟨List.replicate c.bslots none, DtnStore.Ledger.empty (if c.src = c.tight then 0 else c.lbud) c.lslots⟩ :=
+  have hB0 : DtnStore.SInv ⟨List.replicate c.bslots none, DtnStore.Ledger.empty (if c.src = c.tight then 0 else c.lbud) c.lslots, 0⟩ :=
     DtnStore.SInv.init _ _ _ (by split <;> omega)
   have hrec0 : ∀ k, DtnStore.recs (List.replicate k (none : Option DtnStore.Record)) = [] := by
     intro k; simp [DtnStore.recs]
@@ -462,10 +462,10 @@ theorem chinv_init (c : Cfg) (hn : c.ids.Nodup) (hsrc : c.src ∈ c.ids) (hmax :
     · subst hms
       rw [init_src] at hr
       have hsub := DtnStore.accept_recs_sub (Node.empty c c.src).B (Node.empty c c.src).L bid 1 c.exp 0 0 r hr
-      rcases hsub with h | rfl
+      rcases hsub with h | h
       · have : (Node.empty c c.src).B = List.replicate c.bslots none := rfl
         rw [this, hrec0] at h; simp at h
-      · cases hq
+      · rw [h] at hq; cases hq
     · rw [init_other c m hms] at hr
       have : (Node.empty c m).B = List.replicate c.bslots none := rfl
       rw [this, hrec0] at hr; simp at hr
@@ -483,7 +483,7 @@ theorem chinv_init (c : Cfg) (hn : c.ids.Nodup) (hsrc : c.src ∈ c.ids) (hmax :
     · rw [init_other c m hms] at he
       have : (Node.empty c m).L = DtnStore.Ledger.empty (if m = c.tight then 0 else c.lbud) c.lslots := rfl
       rw [this, hent0] at he; simp at he
-  · intro id c' p h; simp [Sys.init] at h
+  · intro id c' p o h; simp [Sys.init] at h
   · intro h
     exfalso
     have hf : (Sys.init c).anyFlag = false := by

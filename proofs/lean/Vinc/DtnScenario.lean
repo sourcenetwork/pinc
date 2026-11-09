@@ -23,7 +23,8 @@ implements with the real crate types:
 
 The model has any list of node ids (`Cfg.ids`, without repeats), so every theorem is for every number of nodes and every
 capacity. Ghost variables (not in the code) count the copies dropped (`dropped`) and released (`released`), and record
-`delivered` (the destination received the bundle), `replayed` (a retransmitted hold was accepted: the finding of
+`delivered` (the destination received the bundle), `replayed` (a retransmitted hold was accepted: possible only after
+the first copy of the message was lost, since a node that held or finished the bundle refuses the hold,
 `DtnForwardWitness`), `acc` (the nodes that accepted custody) and `fin` (a node was told of the delivery by an ack).
 
 The custody part of every node evolves only through `Vinc.DtnStore.step` (`ledgerEv`), so the single-node theorems of
@@ -47,6 +48,7 @@ structure Cfg where
   fb : Nat
   fl : Nat
   ft : Nat
+  fd : Nat
   lbud : Nat
   lslots : Nat
   bslots : Nat
@@ -62,11 +64,13 @@ structure Node where
   f : F
   B : DtnStore.Recs
   L : DtnStore.Ledger
+  /-- The book's offer counter (`next_offer`). -/
+  nx : Nat
 
 /-- A network message: a bundle message (`fresh` unless it is a retransmission) or a custody ack. -/
 inductive Msg where
-  | bun (id from_ to copies : Nat) (fresh : Bool)
-  | ack (id from_ to : Nat)
+  | bun (id from_ to copies : Nat) (fresh : Bool) (off : Nat)
+  | ack (id from_ to off : Nat)
   deriving DecidableEq, Repr
 
 /-- The message id (unique: the sequence number at creation). -/
@@ -81,6 +85,8 @@ structure Sys where
   msgs : List Msg
   t : Nat
   seq : Nat
+  /-- The host's memory of the offer id last made by a node to each peer, repeated by a retransmission. -/
+  lo : Nat → Nat → Nat
   dropped : Nat
   released : Nat
   delivered : Bool
@@ -101,8 +107,8 @@ inductive Ev where
 
 /-- A node with nothing in it. -/
 def Node.empty (c : Cfg) (n : Nat) : Node :=
-  ⟨F.new c.retry c.maxSends 0 c.fb c.fl c.ft, List.replicate c.bslots none,
-   DtnStore.Ledger.empty (if n = c.tight then 0 else c.lbud) c.lslots⟩
+  ⟨F.new c.retry c.maxSends 0 c.fb c.fl c.ft c.fd, List.replicate c.bslots none,
+   DtnStore.Ledger.empty (if n = c.tight then 0 else c.lbud) c.lslots, 0⟩
 
 /-- The origin accepts custody (previous node 0) and holds the copies. -/
 def originAcc (c : Cfg) : DtnStore.COut :=
@@ -118,10 +124,11 @@ def offerable (c : Cfg) (n p : Nat) : Bool := if c.ranked then decide (n < p) el
 def Sys.init (c : Cfg) : Sys where
   cfg := c
   nodes := fun n =>
-    if n = c.src then ⟨(originHold c).1, (originAcc c).B, (originAcc c).L⟩ else Node.empty c n
+    if n = c.src then ⟨(originHold c).1, (originAcc c).B, (originAcc c).L, 0⟩ else Node.empty c n
   msgs := []
   t := 0
   seq := 0
+  lo := fun _ _ => 0
   dropped := 0
   released := 0
   delivered := false
@@ -147,9 +154,9 @@ def ledgerEv (s : Sys) : Ev → Nat → Option DtnStore.Ev
       | (_, .release _) => some (.delivered bid)
       | _ => none
     else none
-  | .bun (.bun _ from_ r _ _), m =>
+  | .bun (.bun _ from_ r _ _ _), m =>
     if m = r ∧ r ≠ s.cfg.dest then some (.accept bid 1 s.cfg.exp from_ s.t) else none
-  | .ack (.ack _ c p), m => if m = p then some (.ack bid c true) else none
+  | .ack (.ack _ c p o), m => if m = p then some (.ack bid c o true) else none
   | .press n k, m =>
     if m = n ∧ (DtnStore.admitItem (s.nodes n).L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t).err = none
     then some (.hostAdmit ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t) else none
@@ -158,8 +165,8 @@ def ledgerEv (s : Sys) : Ev → Nat → Option DtnStore.Ev
 /-- The book and ledger of node `m` after the event. -/
 def ledgerAfter (s : Sys) (ev : Ev) (m : Nat) : DtnStore.Sys :=
   match ledgerEv s ev m with
-  | some e => DtnStore.step ⟨(s.nodes m).B, (s.nodes m).L⟩ e
-  | none => ⟨(s.nodes m).B, (s.nodes m).L⟩
+  | some e => DtnStore.step ⟨(s.nodes m).B, (s.nodes m).L, (s.nodes m).nx⟩ e
+  | none => ⟨(s.nodes m).B, (s.nodes m).L, (s.nodes m).nx⟩
 
 /-- The forwarder's `heldSum` of the bundle. -/
 def heldOf (f : F) : Nat := DtnForward.heldSum f bid
@@ -175,49 +182,56 @@ def exec0 (s : Sys) : Ev → Sys
       nodes := fun m =>
         if m ∈ s.cfg.ids then
           { f := (DtnForward.step (s.nodes m).f (s.t + 1) .tick).1
-            B := (ledgerAfter s .tick m).B, L := (ledgerAfter s .tick m).L }
+            B := (ledgerAfter s .tick m).B, L := (ledgerAfter s .tick m).L, nx := (s.nodes m).nx }
         else s.nodes m
       t := s.t + 1 }
   | .poll n =>
     let x := s.nodes n
     let r := DtnForward.poll x.f
-    let y : Node := { f := r.1, B := (ledgerAfter s (.poll n) n).B, L := (ledgerAfter s (.poll n) n).L }
+    let post := ledgerAfter s (.poll n) n
+    let y : Node := { f := r.1, B := post.B, L := post.L, nx := post.nx }
     match r.2 with
     | .none => s.set n y
     | .send p _ c retr =>
-      { s.set n y with msgs := Msg.bun s.seq n p c (!retr) :: s.msgs, seq := s.seq + 1 }
+      -- a fresh handover that is offered custody gets the id the book handed out; a retransmission repeats the id
+      -- last made to the peer
+      let offered := c > 0 && !retr && offerable s.cfg n p
+      let ok := offered && (DtnStore.offer x.B x.nx bid p).err = none
+      let off := if retr then s.lo n p else if ok then x.nx else 0
+      { s.set n y with msgs := Msg.bun s.seq n p c (!retr) off :: s.msgs, seq := s.seq + 1,
+                       lo := if ok then fun a q => if a = n ∧ q = p then x.nx else s.lo a q else s.lo }
     | .release _ => { s.set n y with released := s.released + heldOf x.f }
   | .bun m =>
     match m with
     | .ack .. => s
-    | .bun _ from_ r c fresh =>
+    | .bun _ from_ r c fresh off =>
       let rest := s.msgs.erase m
       if r = s.cfg.dest then
-        { s with msgs := Msg.ack s.seq r from_ :: rest, seq := s.seq + 1, delivered := true }
+        { s with msgs := Msg.ack s.seq r from_ off :: rest, seq := s.seq + 1, delivered := true }
       else
         let x := s.nodes r
         let a := DtnStore.accept x.B x.L bid 1 s.cfg.exp from_ s.t
         let post := ledgerAfter s (.bun m) r
         match a.err with
         | some _ =>
-          { s.set r { x with B := post.B, L := post.L } with
+          { s.set r { x with B := post.B, L := post.L, nx := post.nx } with
             msgs := rest, dropped := s.dropped + (if fresh then c else 0) }
         | none =>
           let h := DtnForward.step x.f s.t (.hold bid s.cfg.dest s.cfg.exp c)
-          { s.set r ⟨h.1, post.B, post.L⟩ with
-            msgs := Msg.ack s.seq r from_ :: rest, seq := s.seq + 1,
+          { s.set r ⟨h.1, post.B, post.L, post.nx⟩ with
+            msgs := Msg.ack s.seq r from_ off :: rest, seq := s.seq + 1,
             dropped := s.dropped + (if h.2 != .ok && fresh then c else 0),
             replayed := s.replayed || (h.2 == .ok && !fresh), acc := r :: s.acc }
   | .ack m =>
     match m with
     | .bun .. => s
-    | .ack _ c p =>
+    | .ack _ c p _ =>
       let x := s.nodes p
       let post := ledgerAfter s (.ack m) p
-      { s.set p ⟨(DtnForward.step x.f s.t (.acked c bid)).1, post.B, post.L⟩ with msgs := s.msgs.erase m }
+      { s.set p ⟨(DtnForward.step x.f s.t (.acked c bid)).1, post.B, post.L, post.nx⟩ with msgs := s.msgs.erase m }
   | .lose m =>
     { s with msgs := s.msgs.erase m,
-             dropped := s.dropped + (match m with | .bun _ _ _ c true => c | _ => 0) }
+             dropped := s.dropped + (match m with | .bun _ _ _ c true _ => c | _ => 0) }
   | .press n k =>
     let x := s.nodes n
     let a := DtnStore.admitItem x.L ⟨2, k⟩ s.cfg.pb .transit (s.cfg.exp + 100) s.t
@@ -226,7 +240,7 @@ def exec0 (s : Sys) : Ev → Sys
     | none =>
       let gone := a.ev.any fun e => e.key.space == 1
       let f' := if gone then (DtnForward.step x.f s.t (.forget bid)).1 else x.f
-      { s.set n ⟨f', x.B, a.L⟩ with released := s.released + (if gone then heldOf x.f else 0) }
+      { s.set n ⟨f', x.B, a.L, x.nx⟩ with released := s.released + (if gone then heldOf x.f else 0) }
   | .bad => s
 
 /-- One event: `exec0`, then the `fin` ghost learns of every delivery flag. -/
@@ -239,8 +253,8 @@ def En (s : Sys) : Ev → Prop
   | .contact a b _ => a ∈ s.cfg.ids ∧ b ∈ s.cfg.ids ∧ a < b
   | .tick => True
   | .poll n => n ∈ s.cfg.ids
-  | .bun m => m ∈ s.msgs ∧ match m with | .bun _ _ r _ _ => r ∈ s.cfg.ids | .ack .. => False
-  | .ack m => m ∈ s.msgs ∧ match m with | .ack _ _ p => p ∈ s.cfg.ids | .bun .. => False
+  | .bun m => m ∈ s.msgs ∧ match m with | .bun _ _ r _ _ _ => r ∈ s.cfg.ids | .ack .. => False
+  | .ack m => m ∈ s.msgs ∧ match m with | .ack _ _ p _ => p ∈ s.cfg.ids | .bun .. => False
   | .lose m => m ∈ s.msgs
   | .press n _ => n ∈ s.cfg.ids
   | .bad => True
