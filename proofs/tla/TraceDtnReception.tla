@@ -14,10 +14,13 @@
 (* with trailing bytes (the number of groups that verified is not          *)
 (* recorded, so it is a choice of the check), `finish` agrees with the     *)
 (* verdict rules of FinishCorrect (Incomplete exactly when a block is      *)
-(* short of k; Inconsistent exactly when the blocks are decodable and a    *)
-(* block that is not fully held has a parity that is not a code word,      *)
-(* while no earlier finish rewrote a block; an honest sender never), and   *)
-(* resume gives the verdict of its checks and the same held set. The       *)
+(* short of k; Ok exactly when the blocks are decodable and every block    *)
+(* that is not fully held is rebuilt, at its symbols that are not held, to *)
+(* the sender's bytes, which depends on the held set alone because finish  *)
+(* never writes a held symbol; Inconsistent otherwise, never for an honest *)
+(* sender), a finish with a wrong-sized outboard or scratch is Buffer with *)
+(* the held set unchanged, and resume gives the verdict of its checks and  *)
+(* the same held set. The                                                  *)
 (* answers of the helpers must be the model's on the recorded held set.    *)
 (* The step before an event is the held set the previous event recorded.   *)
 (*                                                                         *)
@@ -28,8 +31,8 @@ EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils, RangeOps
 
 VARIABLE c
 
-R2 == INSTANCE DtnReception WITH G <- 1024, W <- 2, ct <- 0, have <- 0, buf <- 0, touched <- 0, res <- 0
-R3 == INSTANCE DtnReception WITH G <- 1024, W <- 3, ct <- 0, have <- 0, buf <- 0, touched <- 0, res <- 0
+R2 == INSTANCE DtnReception WITH G <- 1024, W <- 2, ct <- 0, have <- 0, buf <- 0, res <- 0
+R3 == INSTANCE DtnReception WITH G <- 1024, W <- 3, ct <- 0, have <- 0, buf <- 0, res <- 0
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_reception.ndjson")
 News == SelectSeq(Trace, LAMBDA e : e.op = "new")
@@ -37,14 +40,8 @@ News == SelectSeq(Trace, LAMBDA e : e.op = "new")
 H(x) == [k \in 1..Len(x) |-> <<x[k][1], x[k][2]>>]
 Pre(i) == IF Trace[i].op = "new" THEN <<>> ELSE H(Trace[i - 1].have)
 
-TouchedNow(h) ==
-    \E b \in {0, 1} : ~R2!FullyHeld(h, b) /\ R2!Decodable(h, b)
-        /\ \A b2 \in 0..(b - 1) : R2!FullyHeld(h, b2) \/ R2!Decodable(h, b2)
-
-\* whether an earlier finish of the run rewrote a block
-RECURSIVE TB(_)
-TB(i) == IF i <= 2 \/ Trace[i - 1].op = "new" THEN FALSE
-         ELSE TB(i - 1) \/ (Trace[i - 1].op = "fin" /\ TouchedNow(Pre(i - 1)))
+\* the sender's content: zero data, so zero parity, except that the faulty parity symbols are one off
+CtOf(faulty) == [s \in 0..6 |-> IF s \in faulty THEN 1 ELSE 0]
 
 Z(n) == [k \in 1..n |-> 0]
 Ct0 == [s \in 0..6 |-> 0]
@@ -72,6 +69,7 @@ Ev(i) ==
         pre == Pre(i)
         nw == News[ev.run + 1]
         faulty == {nw.faulty[k] : k \in 1..Len(nw.faulty)}
+        ctv == CtOf(faulty)
     IN CASE ev.op = "new" -> ev.have = <<>>
          [] ev.op = "feed" ->
               /\ Snap(ev)
@@ -84,10 +82,13 @@ Ev(i) ==
               /\ Snap(ev)
               /\ LET dec == R2!IsDecodable(pre)
                  IN /\ (ev.res = "incomplete") = ~dec
-                    /\ (~TB(i) => ((ev.res = "inconsistent") = (dec /\ \E b \in faulty : ~R2!FullyHeld(pre, b))))
+                    /\ (ev.res = "ok") = (dec /\ \A b \in {0, 1} : ~R2!FullyHeld(pre, b) => R2!BlockMatches(ctv, ctv, pre, b))
                     /\ (ev.res = "inconsistent") => faulty # {}
                     /\ ev.res \in {"incomplete", "inconsistent", "ok"}
                     /\ H(ev.have) = IF ev.res = "ok" THEN <<<<0, 7168>>>> ELSE pre
+         [] ev.op = "finbuf" ->
+              /\ Snap(ev)
+              /\ ev.res = "buffer" /\ H(ev.have) = pre
          [] ev.op = "res" ->
               /\ Snap(ev)
               /\ H(ev.have) = pre

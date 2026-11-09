@@ -20,9 +20,10 @@ Unbounded in the number of symbols, the symbol size and the capacity of the held
 interval in the capacity-`W` set (`insertState`, whose failure leaves the set unchanged), keeps going after a full
 set, and reports the stream fault before the full-set fault (`verdict.and_then(|()| fault)`); an empty range is
 `Ok` and changes nothing. The held set is a `Reach` set of `Vinc.Ranges`, so it is sorted, disjoint and within
-capacity. `finish` is stated per block, because the code's reconstruction of a block reads and writes only that
-block's region of the buffer and the regions are disjoint (`Vinc.DtnLayout.blockStart_spec`); the TLC model
-(`DtnReception.tla`) runs the blocks in order on a real code.
+capacity. `finish` is the loop over the blocks in order (`finishLoop`): each block is rebuilt in the scratch and only
+the symbols that are not held are copied back, so a held symbol is never written (`finish_held_untouched`); the block
+regions are disjoint (`blocksOf_ordered`, from `Vinc.DtnLayout`); the TLC model (`DtnReception.tla`) runs the blocks in
+order on a real code.
 -/
 
 namespace Vinc.DtnReception
@@ -340,34 +341,256 @@ structure RsSpec (V : Type) where
   recon_ext : ∀ k m c buf pres, cw k m c → k ≤ ((List.range (k + m)).filter fun i => pres i).length →
     (∀ i, i < k + m → pres i = true → buf i = c i) → ∀ i, i < k + m → recon k m buf pres i = c i
 
-/-- The buffer after `finish` rebuilt the block of `blockK` data symbols that starts at `start`, from the held
-flags `pres` of its symbols. -/
-def blockOut (rs : RsSpec V) (k m start : Nat) (pres : Nat → Bool) (buf : Nat → V) (i : Nat) : V :=
-  rs.recon k m (fun j => buf (start + j)) pres i
+/-- One block of the bundle: its number of data symbols `k` and the number of its first symbol. The block has `k + m`
+symbols (`m` parity). -/
+abbrev Blk := Nat × Nat
 
-/-- `finish` accepts a block exactly when the rebuilt block equals the sender's. With the held symbols verified and
-at least `k` of them held, that is exactly when the sender's block is a code word: an honest sender is never
-reported `Inconsistent`, and a sender whose parity is not a code word is reported `Inconsistent` unless the block is
-fully held (then it is skipped). -/
-theorem block_consistent_iff (rs : RsSpec V) (k m start : Nat) (pres : Nat → Bool) (buf ct : Nat → V)
-    (hv : ∀ i, i < k + m → pres i = true → buf (start + i) = ct (start + i))
-    (hk : k ≤ ((List.range (k + m)).filter fun i => pres i).length) :
-    (∀ i, i < k + m → blockOut rs k m start pres buf i = ct (start + i)) ↔ rs.cw k m (fun i => ct (start + i)) := by
+/-- The symbols of the block `b`. -/
+def Blk.has (m : Nat) (b : Blk) (u : Nat) : Prop := b.2 ≤ u ∧ u < b.2 + (b.1 + m)
+
+/-- The buffer after `finish` rebuilt block `b` (`Rs::reconstruct` into the scratch, a copy of the block) and copied
+back only the symbols that are not held: `held u = false`. A held symbol and a symbol outside the block keep their
+bytes. -/
+def blockStep (rs : RsSpec V) (m : Nat) (b : Blk) (held : Nat → Bool) (buf : Nat → V) (u : Nat) : V :=
+  if b.2 ≤ u ∧ u < b.2 + (b.1 + m) ∧ held u = false then
+    rs.recon b.1 m (fun j => buf (b.2 + j)) (fun j => held (b.2 + j)) (u - b.2)
+  else buf u
+
+/-- **`finish` never writes a held symbol** (one block). -/
+theorem blockStep_held (rs : RsSpec V) (m : Nat) (b : Blk) (held : Nat → Bool) (buf : Nat → V) (u : Nat)
+    (hu : held u = true) : blockStep rs m b held buf u = buf u := by
+  unfold blockStep
+  rw [if_neg (by rintro ⟨-, -, h⟩; rw [hu] at h; cases h)]
+
+theorem blockStep_outside (rs : RsSpec V) (m : Nat) (b : Blk) (held : Nat → Bool) (buf : Nat → V) (u : Nat)
+    (hu : ¬ b.has m u) : blockStep rs m b held buf u = buf u := by
+  unfold blockStep
+  rw [if_neg (by rintro ⟨h1, h2, -⟩; exact hu ⟨h1, h2⟩)]
+
+theorem blockStep_inside (rs : RsSpec V) (m : Nat) (b : Blk) (held : Nat → Bool) (buf : Nat → V) (u : Nat)
+    (h : b.has m u) (hu : held u = false) :
+    blockStep rs m b held buf u = rs.recon b.1 m (fun j => buf (b.2 + j)) (fun j => held (b.2 + j)) (u - b.2) := by
+  unfold blockStep
+  rw [if_pos ⟨h.1, h.2, hu⟩]
+
+/-- `finish` accepts a block exactly when its rebuilt symbols that are not held equal the sender's: the verdict
+depends on the held set and on what the held symbols are (`hv`: the verified bytes), and on nothing the earlier
+`finish` calls wrote. -/
+theorem block_ok_iff (rs : RsSpec V) (m : Nat) (b : Blk) (held : Nat → Bool) (buf ct : Nat → V)
+    (hv : ∀ u, held u = true → buf u = ct u) :
+    (∀ u, b.has m u → blockStep rs m b held buf u = ct u) ↔
+      ∀ i, i < b.1 + m → held (b.2 + i) = false →
+        rs.recon b.1 m (fun j => buf (b.2 + j)) (fun j => held (b.2 + j)) i = ct (b.2 + i) := by
   constructor
-  · intro H
-    have hc : rs.cw k m (blockOut rs k m start pres buf) := rs.recon_cw k m (fun j => buf (start + j)) pres
-    exact (rs.cw_congr k m _ _ (fun i hi => (H i hi).symm)).2 hc
-  · intro hcw i hi
-    exact rs.recon_ext k m (fun j => ct (start + j)) (fun j => buf (start + j)) pres hcw hk
-      (fun j hj hp => hv j hj hp) i hi
+  · intro H i hi hh
+    have h := H (b.2 + i) ⟨by omega, by omega⟩
+    rw [blockStep_inside rs m b held buf _ ⟨by omega, by omega⟩ hh, Nat.add_sub_cancel_left] at h
+    exact h
+  · intro H u hu
+    cases hh : held u
+    · rw [blockStep_inside rs m b held buf u hu hh]
+      have := H (u - b.2) (by have := hu.1; have := hu.2; omega) (by rw [Nat.add_sub_cancel' hu.1]; exact hh)
+      rw [Nat.add_sub_cancel' hu.1] at this
+      exact this
+    · rw [blockStep_held rs m b held buf u hh]
+      exact hv u hh
 
-/-- The honest case: a sender whose block is a code word is never reported inconsistent. -/
-theorem honest_never_inconsistent (rs : RsSpec V) (k m start : Nat) (pres : Nat → Bool) (buf ct : Nat → V)
-    (hv : ∀ i, i < k + m → pres i = true → buf (start + i) = ct (start + i))
-    (hk : k ≤ ((List.range (k + m)).filter fun i => pres i).length)
-    (hcw : rs.cw k m (fun i => ct (start + i))) :
-    ∀ i, i < k + m → blockOut rs k m start pres buf i = ct (start + i) :=
-  (block_consistent_iff rs k m start pres buf ct hv hk).2 hcw
+/-- The honest case: a sender whose block is a code word is never reported inconsistent, whatever symbols are held,
+provided the block holds at least `k` (the rebuild is then exact at every symbol that is not held). -/
+theorem honest_block_ok (rs : RsSpec V) (m : Nat) (b : Blk) (held : Nat → Bool) (buf ct : Nat → V)
+    (hv : ∀ u, held u = true → buf u = ct u)
+    (hk : b.1 ≤ ((List.range (b.1 + m)).filter fun i => held (b.2 + i)).length)
+    (hcw : rs.cw b.1 m (fun i => ct (b.2 + i))) :
+    ∀ u, b.has m u → blockStep rs m b held buf u = ct u :=
+  (block_ok_iff rs m b held buf ct hv).2 fun i hi _ =>
+    rs.recon_ext b.1 m (fun j => ct (b.2 + j)) (fun j => buf (b.2 + j)) (fun j => held (b.2 + j)) hcw hk
+      (fun j _ hp => hv _ hp) i hi
+
+/-- Whether every symbol of the block is held (the block is skipped). -/
+def blockFull (m : Nat) (b : Blk) (held : Nat → Bool) : Bool := (List.range (b.1 + m)).all fun i => held (b.2 + i)
+
+/-- Whether the block holds at least `k` of its symbols (it can be rebuilt). -/
+def blockDec (m : Nat) (b : Blk) (held : Nat → Bool) : Bool :=
+  decide (b.1 ≤ ((List.range (b.1 + m)).filter fun i => held (b.2 + i)).length)
+
+theorem blockDec_of_full (m : Nat) (b : Blk) (held : Nat → Bool) (h : blockFull m b held = true) :
+    blockDec m b held = true := by
+  unfold blockDec
+  have : (List.range (b.1 + m)).filter (fun i => held (b.2 + i)) = List.range (b.1 + m) := by
+    apply List.filter_eq_self.2
+    intro i hi
+    exact (List.all_eq_true.1 h) i hi
+  rw [this]
+  simp
+
+/-- `Reception::finish`: the blocks in order. A fully held block is skipped; a block with fewer than `k` held symbols
+stops it with `Incomplete` (the blocks before it are already rebuilt, the others untouched); any other block is rebuilt
+into the scratch and only its symbols that are not held are copied back. The Boolean is whether the loop ran through
+(`false` is `Incomplete`). -/
+def finishLoop (rs : RsSpec V) (m : Nat) (held : Nat → Bool) : List Blk → (Nat → V) → (Nat → V) × Bool
+  | [], buf => (buf, true)
+  | b :: rest, buf =>
+    if blockFull m b held then finishLoop rs m held rest buf
+    else if blockDec m b held then finishLoop rs m held rest (blockStep rs m b held buf)
+    else (buf, false)
+
+/-- **`finish` never writes a held symbol**, for any list of blocks, any symbol and any size. -/
+theorem finish_held_untouched (rs : RsSpec V) (m : Nat) (held : Nat → Bool) :
+    ∀ (bs : List Blk) (buf : Nat → V) (u : Nat), held u = true → (finishLoop rs m held bs buf).1 u = buf u := by
+  intro bs
+  induction bs with
+  | nil => intro buf u _; rfl
+  | cons b rest ih =>
+    intro buf u hu
+    unfold finishLoop
+    by_cases hf : blockFull m b held = true
+    · rw [if_pos hf]; exact ih buf u hu
+    · rw [if_neg hf]
+      by_cases hd : blockDec m b held = true
+      · rw [if_pos hd, ih _ u hu]; exact blockStep_held rs m b held buf u hu
+      · rw [if_neg hd]
+
+/-- A symbol outside every block is never written. -/
+theorem finish_outside (rs : RsSpec V) (m : Nat) (held : Nat → Bool) :
+    ∀ (bs : List Blk) (buf : Nat → V) (u : Nat), (∀ b ∈ bs, ¬ b.has m u) → (finishLoop rs m held bs buf).1 u = buf u := by
+  intro bs
+  induction bs with
+  | nil => intro buf u _; rfl
+  | cons b rest ih =>
+    intro buf u hu
+    have hb := hu b (List.mem_cons_self ..)
+    have hr : ∀ c ∈ rest, ¬ c.has m u := fun c hc => hu c (List.mem_cons_of_mem _ hc)
+    unfold finishLoop
+    by_cases hf : blockFull m b held = true
+    · rw [if_pos hf]; exact ih buf u hr
+    · rw [if_neg hf]
+      by_cases hd : blockDec m b held = true
+      · rw [if_pos hd, ih _ u hr]; exact blockStep_outside rs m b held buf u hb
+      · rw [if_neg hd]
+
+/-- The verdict of the loop: it runs through exactly when every block holds at least `k` of its symbols
+(`Incomplete` otherwise), whatever the bytes. -/
+theorem finish_complete_iff (rs : RsSpec V) (m : Nat) (held : Nat → Bool) :
+    ∀ (bs : List Blk) (buf : Nat → V), (finishLoop rs m held bs buf).2 = true ↔ ∀ b ∈ bs, blockDec m b held = true := by
+  intro bs
+  induction bs with
+  | nil => intro buf; simp [finishLoop]
+  | cons b rest ih =>
+    intro buf
+    unfold finishLoop
+    by_cases hf : blockFull m b held = true
+    · rw [if_pos hf, ih buf]
+      simp only [List.mem_cons, forall_eq_or_imp]
+      exact ⟨fun h => ⟨blockDec_of_full m b held hf, h⟩, fun h => h.2⟩
+    · rw [if_neg hf]
+      by_cases hd : blockDec m b held = true
+      · rw [if_pos hd, ih]
+        simp only [List.mem_cons, forall_eq_or_imp]
+        exact ⟨fun h => ⟨hd, h⟩, fun h => h.2⟩
+      · rw [if_neg hd]
+        simp only [List.mem_cons, forall_eq_or_imp]
+        constructor
+        · intro h; cases h
+        · intro h; exact absurd h.1 hd
+
+/-- **The block order.** The first block short of `k` held symbols stops `finish`: the blocks before it (every one
+rebuildable) were handled in order, and no symbol outside them was written, in particular none of this block or of the
+blocks after it. -/
+theorem finish_stops (rs : RsSpec V) (m : Nat) (held : Nat → Bool) (b : Blk) (rest : List Blk)
+    (hb : blockDec m b held = false) :
+    ∀ (pre : List Blk) (buf : Nat → V), (∀ c ∈ pre, blockDec m c held = true) →
+      (finishLoop rs m held (pre ++ b :: rest) buf).2 = false ∧
+      ∀ u, (∀ c ∈ pre, ¬ c.has m u) → (finishLoop rs m held (pre ++ b :: rest) buf).1 u = buf u := by
+  intro pre
+  induction pre with
+  | nil =>
+    intro buf _
+    have hf : blockFull m b held = false := by
+      cases h : blockFull m b held
+      · rfl
+      · rw [blockDec_of_full m b held h] at hb; cases hb
+    simp [finishLoop, hf, hb]
+  | cons c pre ih =>
+    intro buf hpre
+    have hc := hpre c (List.mem_cons_self ..)
+    have hpre' : ∀ d ∈ pre, blockDec m d held = true := fun d hd => hpre d (List.mem_cons_of_mem _ hd)
+    simp only [List.cons_append]
+    unfold finishLoop
+    by_cases hf : blockFull m c held = true
+    · rw [if_pos hf]
+      obtain ⟨h1, h2⟩ := ih buf hpre'
+      refine ⟨h1, fun u hu => h2 u fun d hd => hu d (List.mem_cons_of_mem _ hd)⟩
+    · rw [if_neg hf, if_pos hc]
+      obtain ⟨h1, h2⟩ := ih (blockStep rs m c held buf) hpre'
+      refine ⟨h1, fun u hu => ?_⟩
+      rw [h2 u fun d hd => hu d (List.mem_cons_of_mem _ hd)]
+      exact blockStep_outside rs m c held buf u (hu c (List.mem_cons_self ..))
+
+/-- **`finish` succeeds on an honest sender.** The blocks are in ascending, disjoint order, each rebuildable and a code
+word, and the held symbols hold the sender's bytes: the loop runs through and every symbol of every block equals the
+sender's. The disjointness is what lets a later block read symbols no earlier block has written. -/
+theorem finish_exact (rs : RsSpec V) (m : Nat) (held : Nat → Bool) (ct : Nat → V) :
+    ∀ (bs : List Blk) (buf : Nat → V), (∀ u, held u = true → buf u = ct u) →
+      bs.Pairwise (fun b c => b.2 + (b.1 + m) ≤ c.2) →
+      (∀ b ∈ bs, blockDec m b held = true ∧ rs.cw b.1 m (fun i => ct (b.2 + i))) →
+      (finishLoop rs m held bs buf).2 = true ∧
+      ∀ u, (∃ b ∈ bs, b.has m u) → (finishLoop rs m held bs buf).1 u = ct u := by
+  intro bs
+  induction bs with
+  | nil => intro buf _ _ _; exact ⟨rfl, fun u ⟨b, hb, _⟩ => absurd hb (by simp)⟩
+  | cons b rest ih =>
+    intro buf hv hord hcw
+    obtain ⟨hdb, hcb⟩ := hcw b (List.mem_cons_self ..)
+    have hrest : ∀ c ∈ rest, blockDec m c held = true ∧ rs.cw c.1 m (fun i => ct (c.2 + i)) :=
+      fun c hc => hcw c (List.mem_cons_of_mem _ hc)
+    have hord' := (List.pairwise_cons.1 hord)
+    have hafter : ∀ u, b.has m u → ∀ c ∈ rest, ¬ c.has m u := by
+      intro u hu c hc hcu
+      have := hord'.1 c hc
+      have h1 := hu.2
+      have h2 := hcu.1
+      omega
+    have hk : b.1 ≤ ((List.range (b.1 + m)).filter fun i => held (b.2 + i)).length := by
+      have := hdb; unfold blockDec at this; exact of_decide_eq_true this
+    have hstep : ∀ u, b.has m u → blockStep rs m b held buf u = ct u :=
+      honest_block_ok rs m b held buf ct hv hk hcb
+    have hv' : ∀ u, held u = true → blockStep rs m b held buf u = ct u := fun u hu => by
+      rw [blockStep_held rs m b held buf u hu]; exact hv u hu
+    unfold finishLoop
+    by_cases hf : blockFull m b held = true
+    · rw [if_pos hf]
+      obtain ⟨h1, h2⟩ := ih buf hv hord'.2 hrest
+      refine ⟨h1, fun u ⟨c, hc, hcu⟩ => ?_⟩
+      rcases List.mem_cons.1 hc with rfl | hc
+      · rw [finish_outside rs m held rest buf u (hafter u hcu)]
+        have hh : held u = true := by
+          have := List.all_eq_true.1 hf (u - c.2) (List.mem_range.2 (by have := hcu.1; have := hcu.2; omega))
+          rwa [Nat.add_sub_cancel' hcu.1] at this
+        exact hv u hh
+      · exact h2 u ⟨c, hc, hcu⟩
+    · rw [if_neg hf, if_pos hdb]
+      obtain ⟨h1, h2⟩ := ih (blockStep rs m b held buf) hv' hord'.2 hrest
+      refine ⟨h1, fun u ⟨c, hc, hcu⟩ => ?_⟩
+      rcases List.mem_cons.1 hc with rfl | hc
+      · rw [finish_outside rs m held rest _ u (hafter u hcu)]
+        exact hstep u hcu
+      · exact h2 u ⟨c, hc, hcu⟩
+
+/-- The blocks of a layout in the order `finish` visits them. -/
+def blocksOf (l : L) : List Blk := (List.range l.blocks).map fun b => (l.blockK b, b * (l.k + l.m))
+
+/-- The blocks of a valid layout are ascending and disjoint, so `finish_exact` applies to them. -/
+theorem blocksOf_ordered (l : L) (h : l.valid = true) :
+    (blocksOf l).Pairwise (fun b c => b.2 + (b.1 + l.m) ≤ c.2) := by
+  unfold blocksOf
+  rw [List.pairwise_map]
+  refine (show List.Pairwise (· < ·) (List.range l.blocks) from List.pairwise_lt_range).imp_of_mem ?_
+  intro b c hb hc hbc
+  have hk := (blockK_le l h b (List.mem_range.1 hb)).2
+  have : (b + 1) * (l.k + l.m) ≤ c * (l.k + l.m) := Nat.mul_le_mul_right _ hbc
+  rw [Nat.add_mul, Nat.one_mul] at this
+  show b * (l.k + l.m) + (l.blockK b + l.m) ≤ c * (l.k + l.m)
+  omega
 
 /-- A block short of `k` held symbols is the `Incomplete` case: it is not fully held either (`k <= k + m`). -/
 theorem short_block_not_full (k m : Nat) (pres : Nat → Bool)
@@ -406,24 +629,18 @@ theorem resume_spec (sigOk expired layoutOk sizeOk : Bool) (buf : Nat → V) (h 
   · intro h1 h2; simp [resume, h1, h2]
   · intro h1 h2 h3 h4; simp [resume, h1, h2, h3, h4]
 
-/-- A concrete witness of the one place the contract is weaker than "held bytes are the verified bytes": the code of one
-data symbol and two repetition parity symbols, the sender's second parity symbol is wrong (7, not 1), the receiver holds
-only the two parity symbols; `finish` solves the data symbol from the first present parity row and re-encodes, so the
-held, verified parity symbol 2 is overwritten with 1. Only a sender whose parity is not a code word reaches this. -/
-def rep3 (buf : Nat → Nat) (pres : Nat → Bool) : Nat → Nat :=
-  let d0 := if pres 0 then buf 0 else if pres 1 then buf 1 else buf 2
-  fun _ => d0
-
-theorem overwrite_example :
-    let ct : Nat → Nat := fun i => if i = 2 then 7 else 1
-    let pres : Nat → Bool := fun i => decide (i ≠ 0)
-    pres 2 = true ∧ ct 2 = 7 ∧ rep3 ct pres 2 = 1 := by decide
-
 #print axioms feedGo_buf
 #print axioms feedGo_mono
 #print axioms feedGo_verified
 #print axioms feed_ok_holds
-#print axioms block_consistent_iff
+#print axioms block_ok_iff
+#print axioms honest_block_ok
+#print axioms finish_held_untouched
+#print axioms finish_outside
+#print axioms finish_complete_iff
+#print axioms finish_stops
+#print axioms finish_exact
+#print axioms blocksOf_ordered
 #print axioms resume_spec
 
 end Vinc.DtnReception

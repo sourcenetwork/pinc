@@ -12,8 +12,10 @@ recorded, so the stream is an intact one, one with a wrong group at some positio
 bytes, and some choice must reproduce the recorded verdict and the recorded held set); the answers of `holds`,
 `containsRange`, `heldIn` and the layout of `Vinc.DtnLayout` for `is_complete` and `is_decodable`; `finish` by the
 verdict rules proved per block in `Vinc.DtnReception` (Incomplete exactly when a block holds fewer than `k` symbols;
-Inconsistent only when a block that is not fully held has a parity that is not a code word, exactly so while no
-earlier finish rewrote a block); `resume` by its checks. `nextMissing` is the loop of the code, replayed here and
+Inconsistent only when a block that is not fully held has a parity that is not a code word, and Ok whenever every
+such block is a code word, since `finish` never writes a held symbol and so the verdict depends on the held set alone;
+the exact verdict for a sender with a bad parity needs the code and is checked by TLC); a finish with a wrong-sized
+outboard or scratch is `Buffer` and changes nothing; `resume` by its checks. `nextMissing` is the loop of the code, replayed here and
 checked by TLC (`DtnReception.tla`) but not proved. It is the port of `proofs/tla/TraceDtnReception.tla`.
 -/
 
@@ -27,10 +29,10 @@ structure W where
   cap : Nat := 0
   g : Nat := 1
   total : Nat := 0
+  /-- The symbols of the sender's content that are not what its block's code word has. -/
   faulty : List Nat := []
   lay : L := ⟨1, 0, 0, 1⟩
   have_ : List Interval := []
-  touched : Bool := false
 
 /-- `Reception::next_missing`, the loop of the code. -/
 def nmGo (g total : Nat) : List Interval → Nat → Option (Nat × Nat)
@@ -45,16 +47,6 @@ def decodableB (l : L) (g total : Nat) (h : List Interval) : Bool :=
 
 def fullB (l : L) (g total : Nat) (h : List Interval) (b : Nat) : Bool :=
   decide (heldIn g total h (b * (l.k + l.m)) (l.blockN b) = l.blockN b)
-
-def decB (l : L) (g total : Nat) (h : List Interval) (b : Nat) : Bool :=
-  decide (l.blockK b ≤ heldIn g total h (b * (l.k + l.m)) (l.blockN b))
-
-/-- Some block is rewritten by `finish`: a block that is not fully held, is decodable, and every block before it is
-fully held or decodable. -/
-def touchedNow (l : L) (g total : Nat) (h : List Interval) : Bool :=
-  (List.range l.blocks).any fun b =>
-    !fullB l g total h b && decB l g total h b &&
-      (List.range b).all fun b2 => fullB l g total h b2 || decB l g total h b2
 
 def pairs (j : J) (k : String) : Except String (List Interval) := do
   match (← field j k).arr? with
@@ -95,7 +87,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     check lay.valid "the layout of the run is valid"
     check (lay.totalSyms == (← natF j "total")) "total symbols"
     pure { cap := ← natF j "W", g := ← natF j "g", total := ← natF j "total", faulty := ← natList (← field j "faulty"),
-           lay, have_ := [], touched := false }
+           lay, have_ := [] }
   | "feed" =>
     let a ← natF j "a"
     let b ← natF j "b"
@@ -131,13 +123,21 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let pre := w.have_
     let dec := decodableB w.lay w.g w.total pre
     check ((res == "incomplete") == !dec) "Incomplete exactly when a block holds fewer than k symbols"
-    let faultyNonfull := w.faulty.any fun b => !fullB w.lay w.g w.total pre b
-    if !w.touched then
-      check ((res == "inconsistent") == (dec && faultyNonfull)) "Inconsistent exactly on a non-code-word block that is not fully held"
+    let stride := w.lay.k + w.lay.m
+    let faultyNonfull := w.faulty.any fun f => !fullB w.lay w.g w.total pre (f / stride)
+    check (res != "inconsistent" || (dec && faultyNonfull)) "Inconsistent only on a non-code-word block that is not fully held"
+    check (!(dec && !faultyNonfull) || res == "ok") "every block that is not fully held is a code word: Ok"
     check (res != "inconsistent" || !w.faulty.isEmpty) "an honest sender is never inconsistent"
     check (res == "incomplete" || res == "inconsistent" || res == "ok") "finish verdict"
     check (h2 == if res == "ok" then [(0, w.total * w.g)] else pre) "finish records the whole bundle only on Ok"
-    pure { w with have_ := h2, touched := w.touched || touchedNow w.lay w.g w.total pre }
+    pure { w with have_ := h2 }
+  | "finbuf" =>
+    let res ← strF j "res"
+    let h2 ← pairs j "have"
+    snap j w h2
+    check (res == "buffer") "a wrong-sized outboard or scratch is Buffer"
+    check (h2 == w.have_) "a refused finish changes nothing"
+    pure w
   | "res" =>
     let res ← strF j "res"
     let h2 ← pairs j "have"

@@ -5,8 +5,9 @@
 (*                                                                          *)
 (* The Rust test tests/trace_dtn_custody.rs drives the real CustodyBook on a *)
 (* Ledger through the public API with seeded random acceptances, offers,     *)
-(* acknowledgements (valid, from the wrong node, for an unknown bundle, with *)
-(* a signature that does not verify), deliveries and expiries, and with the *)
+(* acknowledgements (valid, stale ones naming the right node and another   *)
+(* offer id, from the wrong node, for an unknown bundle, with a signature   *)
+(* that does not verify), deliveries and expiries, and with the            *)
 (* host's own admissions, expiries and releases on the ledger, and records   *)
 (* every call. Each recorded call must be the step of DtnCustodyOps.tla     *)
 (* (Accept, Offer, OnAck, Delivered, BExpire) or of DtnStoreOps.tla (the     *)
@@ -24,8 +25,8 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-VARIABLES i, B, L
-vars == <<i, B, L>>
+VARIABLES i, B, L, nx
+vars == <<i, B, L, nx>>
 
 C == INSTANCE DtnCustodyOps WITH MaxU <- 1073741823
 
@@ -51,47 +52,51 @@ Seen(B2, L2, ev) == LedgerSeen(L2, ev) /\ BookSeen(B2, ev)
 
 ErrOf(e) == IF e = "cap" THEN "capacity" ELSE IF e = "cust" THEN "custody" ELSE e
 
-Init == i = 1 /\ B = <<>> /\ L = C!New(0, 0)
+Init == i = 1 /\ B = <<>> /\ L = C!New(0, 0) /\ nx = 0
 
 CNew == /\ Trace[i].t = "cu_new"
-        /\ B' = [k \in 1..Trace[i].n |-> C!BNone] /\ L' = C!New(Trace[i].budget, Trace[i].ln)
+        /\ B' = [k \in 1..Trace[i].n |-> C!BNone] /\ L' = C!New(Trace[i].budget, Trace[i].ln) /\ nx' = 0
         /\ i' = i + 1
 
 CAcc == /\ Trace[i].t = "cu_acc"
-        /\ \A r \in {C!Accept(B, L, Trace[i].b, Trace[i].by, Trace[i].x, Trace[i].p, Trace[i].now)} :
+        /\ \A r \in {C!Accept(B, L, Trace[i].b, Trace[i].by, Trace[i].x, Trace[i].p, Trace[i].o, Trace[i].now)} :
               /\ r.err = ErrOf(Trace[i].err)
+              /\ Trace[i].due = (r.err = "ok")
+              /\ (r.err = "ok") => (r.prev = Trace[i].ap /\ r.offer = Trace[i].ao)
               /\ EvProj(r.ev) = Ents(Trace[i].ev)
               /\ Seen(r.B, r.L, Trace[i])
               /\ B' = r.B /\ L' = r.L
-        /\ i' = i + 1
+        /\ UNCHANGED nx /\ i' = i + 1
 
 COff == /\ Trace[i].t = "cu_off"
-        /\ \A r \in {C!Offer(B, Trace[i].b, Trace[i].to)} :
+        /\ \A r \in {C!Offer(B, nx, Trace[i].b, Trace[i].to)} :
               /\ r.err = Trace[i].err
+              /\ r.id = Trace[i].id
+              /\ nx' = r.nx
               /\ BookSeen(r.B, Trace[i]) /\ LedgerSeen(L, Trace[i])
               /\ B' = r.B
         /\ UNCHANGED L /\ i' = i + 1
 
 CAck == /\ Trace[i].t = "cu_ack"
-        /\ \A r \in {C!OnAck(B, L, Trace[i].b, Trace[i].c, Trace[i].v)} :
+        /\ \A r \in {C!OnAck(B, L, Trace[i].b, Trace[i].c, Trace[i].o, Trace[i].v)} :
               /\ r.err = ErrOf(Trace[i].err)
               /\ Seen(r.B, r.L, Trace[i])
               /\ B' = r.B /\ L' = r.L
-        /\ i' = i + 1
+        /\ UNCHANGED nx /\ i' = i + 1
 
 CDel == /\ Trace[i].t = "cu_del"
         /\ \A r \in {C!Delivered(B, L, Trace[i].b)} :
               /\ r.err = Trace[i].err
               /\ Seen(r.B, r.L, Trace[i])
               /\ B' = r.B /\ L' = r.L
-        /\ i' = i + 1
+        /\ UNCHANGED nx /\ i' = i + 1
 
 CExp == /\ Trace[i].t = "cu_exp"
         /\ \A r \in {C!BExpire(B, L, Trace[i].now)} :
               /\ EvProj(r.ev) = Ents(Trace[i].ev)
               /\ Seen(r.B, r.L, Trace[i])
               /\ B' = r.B /\ L' = r.L
-        /\ i' = i + 1
+        /\ UNCHANGED nx /\ i' = i + 1
 
 HAdm == /\ Trace[i].t = "cu_hadm"
         /\ \A r \in {C!Admit(L, <<Trace[i].s, Trace[i].i>>, Trace[i].b, IF Trace[i].c = 0 THEN "custody" ELSE "transit",
@@ -100,14 +105,14 @@ HAdm == /\ Trace[i].t = "cu_hadm"
               /\ EvProj(r.ev) = Ents(Trace[i].ev)
               /\ Seen(B, r.L, Trace[i])
               /\ L' = r.L
-        /\ UNCHANGED B /\ i' = i + 1
+        /\ UNCHANGED <<B, nx>> /\ i' = i + 1
 
 HExp == /\ Trace[i].t = "cu_hexp"
         /\ \A r \in {C!Expire(L, Trace[i].now)} :
               /\ EvProj(r.ev) = Ents(Trace[i].ev)
               /\ Seen(B, r.L, Trace[i])
               /\ L' = r.L
-        /\ UNCHANGED B /\ i' = i + 1
+        /\ UNCHANGED <<B, nx>> /\ i' = i + 1
 
 HRel == /\ Trace[i].t = "cu_hrel"
         /\ \A r \in {C!Release(L, <<Trace[i].s, Trace[i].i>>)} :
@@ -115,7 +120,7 @@ HRel == /\ Trace[i].t = "cu_hrel"
               /\ r.got => Proj(r.e) = Ent(Trace[i].e)
               /\ Seen(B, r.L, Trace[i])
               /\ L' = r.L
-        /\ UNCHANGED B /\ i' = i + 1
+        /\ UNCHANGED <<B, nx>> /\ i' = i + 1
 
 Done == i > Len(Trace) /\ UNCHANGED vars
 
