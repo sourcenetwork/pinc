@@ -122,8 +122,7 @@ fn slot_run<const S: usize>(emit: &mut dyn FnMut(&str, &[u64]), rng: &mut SplitM
     for _ in 0..steps {
         let before = slot_table(&server, roots);
         let mark = sess.resets.len();
-        let head;
-        match rng.next_u64() % 14 {
+        let head = match rng.next_u64() % 14 {
             0..=3 => {
                 let (stream, peer) = (next, 1 + rng.next_u64() % 2);
                 next += 1;
@@ -140,18 +139,18 @@ fn slot_run<const S: usize>(emit: &mut dyn FnMut(&str, &[u64]), rng: &mut SplitM
                     collecting.push(stream);
                 }
                 seen.push(stream);
-                head = format!(r#""ev":"open","stream":{stream},"peer":{peer}"#);
+                format!(r#""ev":"open","stream":{stream},"peer":{peer}"#)
             }
             4..=9 if !collecting.is_empty() => {
                 let stream = collecting.swap_remove((rng.next_u64() as usize) % collecting.len());
-                let known = rng.next_u64() % 8 != 0;
+                let known = !rng.next_u64().is_multiple_of(8);
                 let (ridx, root, ln) = if known {
                     let k = (rng.next_u64() as usize) % 2;
                     (k + 1, roots[k].root(), roots[k].len())
                 } else {
                     (0, [0xEE; 32], 0)
                 };
-                let spans: Vec<Span> = (0..1 + rng.next_u64() % 3)
+                let spans: Vec<Span> = (0..=rng.next_u64() % 3)
                     .map(|_| match rng.next_u64() % 8 {
                         0 => Span { off: 0, len: 0 },
                         1 => Span {
@@ -174,19 +173,19 @@ fn slot_run<const S: usize>(emit: &mut dyn FnMut(&str, &[u64]), rng: &mut SplitM
                 let mut b = [0u8; 600];
                 let n = Req::encode(&root, &spans, &mut b).unwrap();
                 sess.reqs.insert(stream, b[..n].to_vec());
-                sess.refuse = rng.next_u64() % 6 == 0;
+                sess.refuse = rng.next_u64().is_multiple_of(6);
                 server.on_event(&mut sess, &mut (), 0, &ServerIn::Readable(stream));
                 nums.extend(spans.iter().flat_map(|s| [s.off, s.len]));
                 nums.push(ln);
-                head = format!(
+                format!(
                     r#""ev":"req","stream":{stream},"root":{ridx},"len":{ln},"spans":{},"inst":{}"#,
                     span_json(&spans),
                     u8::from(!sess.refuse)
-                );
+                )
             }
             10..=12 if !seen.is_empty() => {
                 let stream = seen[(rng.next_u64() as usize) % seen.len()];
-                let done = rng.next_u64() % 2 == 0;
+                let done = rng.next_u64().is_multiple_of(2);
                 server.on_event(
                     &mut sess,
                     &mut (),
@@ -198,15 +197,15 @@ fn slot_run<const S: usize>(emit: &mut dyn FnMut(&str, &[u64]), rng: &mut SplitM
                     },
                 );
                 collecting.retain(|&c| c != stream);
-                head = format!(r#""ev":"{}","stream":{stream}"#, if done { "done" } else { "reset" });
+                format!(r#""ev":"{}","stream":{stream}"#, if done { "done" } else { "reset" })
             }
             _ => {
                 let peer = 1 + rng.next_u64() % 3;
                 server.on_event(&mut sess, &mut (), 0, &ServerIn::Closed(Provider(peer as u32)));
                 collecting.retain(|&c| holds(&server, c));
-                head = format!(r#""ev":"closed","peer":{peer}"#);
+                format!(r#""ev":"closed","peer":{peer}"#)
             }
-        }
+        };
         assert!(server.held() <= S, "a request beyond {S} is refused, never queued");
         let rc = arr(sess.resets[mark..].iter().map(|(s, c)| format!("[{s},{c}]")));
         lines.push(format!(
@@ -232,4 +231,3 @@ pub fn slot_runs(emit: &mut dyn FnMut(&str, &[u64]), rng: &mut SplitMix64) {
         slot_run::<4>(emit, rng, &multi, 80);
     }
 }
-

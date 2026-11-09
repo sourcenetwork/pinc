@@ -7,7 +7,7 @@ import Vinc.ValuesSchedSplit
 `take_chunk`, the head/tail cut of a steal and the return of an evicted share to the queue front, as functions on span
 lists, each with the lemma the schedule needs: no byte that is not verified is lost by a move (`tc_cov`,
 `stealSplit_cov`, `evictQueue_cov`), also when a push widens. The exact accounting below capacity (no byte twice, the
-bytes moved equal the tail's total) is `tc_mult`... in `ValuesSchedPart`.
+bytes moved equal the tail's total) is `tc_mult` in `ValuesSchedExact` and the run-wide exact partition in `ValuesSchedExactRun`.
 
 `take_chunk` is the loop of `fetch/sched.rs`: pop the front span, take it whole or cut it at a group boundary
 (`gfloor`, at least one group), keep the rest at the front, and push what the store has not verified (`holes`) onto
