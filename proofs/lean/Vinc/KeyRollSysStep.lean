@@ -227,25 +227,24 @@ theorem inv_begin {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (hok : beginOk
 /-! ## `SendPkt` keeps the invariant -/
 
 theorem sendOk_spec {P : Params} {S : Sys} {n w : Bool} (h : sendOk P S n w = true) :
-    (sendQ P S n w).2.npn ≤ P.maxPn ∧ (w = true → (sendQ P S n w).1.isSome = true) ∧
-      (w = false → ((S.nd n).poll S.now P.pto).1 = none) := by
+    (sendQ P S n w).2.npn ≤ P.maxPn ∧ (w = true → (sendQ P S n w).1.isSome = true) := by
   simp only [sendOk, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
-  obtain ⟨⟨h1, h2⟩, h3⟩ := h
-  refine ⟨h1, fun hw => ?_, fun hw => ?_⟩
-  · rcases h2 with h2 | h2
-    · simp [hw] at h2
-    · exact h2
-  · rcases h3 with h3 | h3
-    · simp [hw] at h3
-    · simpa using h3
+  obtain ⟨h1, h2⟩ := h
+  refine ⟨h1, fun hw => ?_⟩
+  rcases h2 with h2 | h2
+  · simp [hw] at h2
+  · exact h2
 
 theorem sendQ_node (P : Params) (S : Sys) (n w : Bool) (h : sendOk P S n w = true) :
-    ∃ r l, LastOK (S.nd n) l ∧ (sendQ P S n w).2 = { S.nd n with out := none, reqAt := r, lastAns := l } := by
+    ∃ r l o, (o = none ∨ o = (S.nd n).out) ∧ ((sendQ P S n w).1 ≠ none → o = none) ∧ LastOK (S.nd n) l ∧
+      (sendQ P S n w).2 = { S.nd n with out := o, reqAt := r, lastAns := l } := by
   cases w with
-  | true => obtain ⟨r, l, e, _, hl⟩ := poll_node (S.nd n) S.now P.pto; exact ⟨r, l, hl, by simpa [sendQ] using e⟩
+  | true =>
+    obtain ⟨r, l, e, _, hl⟩ := poll_node (S.nd n) S.now P.pto
+    exact ⟨r, l, none, Or.inl rfl, fun _ => rfl, hl, by simpa [sendQ] using e⟩
   | false =>
-    have := poll_none_out _ _ _ ((sendOk_spec h).2.2 rfl)
-    exact ⟨(S.nd n).reqAt, (S.nd n).lastAns, Or.inl rfl, by simp only [sendQ, Bool.false_eq_true, ↓reduceIte]; cases hs : S.nd n; simp_all⟩
+    exact ⟨(S.nd n).reqAt, (S.nd n).lastAns, (S.nd n).out, Or.inr rfl, fun hh => by simp [sendQ] at hh, Or.inl rfl,
+      by simp only [sendQ, Bool.false_eq_true, ↓reduceIte]⟩
 
 theorem sendQ_msg (P : Params) (S : Sys) (n w : Bool) (m : Msg) (hm : (sendQ P S n w).1 = some m) :
     (S.nd n).out = some m ∨ ((S.nd n).out = none ∧ (S.nd n).roll.pending = some m) := by
@@ -257,54 +256,55 @@ theorem sendQ_msg (P : Params) (S : Sys) (n w : Bool) (m : Msg) (hm : (sendQ P S
 def sendNode (P : Params) (S : Sys) (n w : Bool) : Node := { (sendQ P S n w).2 with npn := (sendQ P S n w).2.npn + 1 }
 
 theorem sendUpd_eq {P : Params} {S : Sys} {n w : Bool} (h : sendOk P S n w = true) :
-    ∃ r l, LastOK (S.nd n) l ∧ sendUpd P S n w =
-      { (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }) with
+    ∃ r l o, (o = none ∨ o = (S.nd n).out) ∧ ((sendQ P S n w).1 ≠ none → o = none) ∧ LastOK (S.nd n) l ∧
+      sendUpd P S n w =
+      { (S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }) with
         net := ⟨n, (S.nd n).sph, (S.nd n).npn, (S.nd n).sk.sec, (sendQ P S n w).1⟩ :: S.net
         slog := ⟨n, (S.nd n).sk.sec, (S.nd n).sk.g, (S.nd n).npn⟩ :: S.slog } := by
-  obtain ⟨r, l, hl, hq⟩ := sendQ_node P S n w h
-  refine ⟨r, l, hl, ?_⟩
+  obtain ⟨r, l, o, hoo, hno, hl, hq⟩ := sendQ_node P S n w h
+  refine ⟨r, l, o, hoo, hno, hl, ?_⟩
   simp only [sendUpd, sendPkt, hq]
 
 theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk P S n w = true) :
     Inv P (sendUpd P S n w) := by
-  obtain ⟨r, l, hlo, he⟩ := sendUpd_eq hok
+  obtain ⟨r, l, o, hoo, hno, hlo, he⟩ := sendUpd_eq hok
   rw [he]
   generalize hpl : (sendQ P S n w).1 = pl at *
   have hplm : ∀ m, pl = some m → (S.nd n).out = some m ∨ ((S.nd n).out = none ∧ (S.nd n).roll.pending = some m) := by
     intro m hm; rw [← hpl] at hm; exact sendQ_msg P S n w m hm
-  have hnn : NodeInv P n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 } :=
-    ((h.node n).setOut none r l (Or.inl rfl) hlo).setNpn _
+  have hnn : NodeInv P n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 } :=
+    ((h.node n).setOut o r l hoo hlo).setNpn _
   have dep := (h.node n).depths
   have hsk := NodeInv.cnSk (h.node n)
-  have hne : ∀ m, m ≠ n → (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m = S.nd m :=
+  have hne : ∀ m, m ≠ n → (S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m = S.nd m :=
     fun m hm => Sys.setNode_ne S n m _ hm
-  have hsame : (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd n =
-      { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 } := Sys.setNode_same _ _ _
-  have fr : ∀ m, (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m = S.nd m ∨
-      (m = n ∧ (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m =
-        { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }) := by
+  have hsame : (S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd n =
+      { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 } := Sys.setNode_same _ _ _
+  have fr : ∀ m, (S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m = S.nd m ∨
+      (m = n ∧ (S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m =
+        { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }) := by
     intro m; by_cases hm : m = n
     · subst hm; exact Or.inr ⟨rfl, hsame⟩
     · exact Or.inl (hne m hm)
-  have eSk : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).sk = (S.nd m).sk := by
+  have eSk : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).sk = (S.nd m).sk := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eCtr : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).ctr = (S.nd m).ctr := by
+  have eCtr : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).ctr = (S.nd m).ctr := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eCur : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).cur = (S.nd m).cur := by
+  have eCur : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).cur = (S.nd m).cur := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eNxt : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).nxt = (S.nd m).nxt := by
+  have eNxt : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).nxt = (S.nd m).nxt := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eDers : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).ders = (S.nd m).ders := by
+  have eDers : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).ders = (S.nd m).ders := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eRoll : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).roll = (S.nd m).roll := by
+  have eRoll : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).roll = (S.nd m).roll := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eNpn : ∀ m, (S.nd m).npn ≤ ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).npn := by
+  have eNpn : ∀ m, (S.nd m).npn ≤ ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).npn := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e] <;> first | exact Nat.le_refl _ | exact Nat.le_succ _
-  have eChg : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).chg = (S.nd m).chg := by
+  have eChg : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).chg = (S.nd m).chg := by
     intro m; simp [Node.chg, eDers m]
-  have eOut : ∀ m, m ≠ n → ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).out = (S.nd m).out := by
+  have eOut : ∀ m, m ≠ n → ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).out = (S.nd m).out := by
     intro m hm; rw [hne m hm]
-  have eOutN : ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd n).out = none := by
+  have eOutN : ((S.setNode n { S.nd n with out := o, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd n).out = o := by
     rw [hsame]
   have hdsk : (S.nd n).sk.sec.depth = (S.nd n).sk.g := dep.1
   inv_mk
@@ -434,7 +434,10 @@ theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk
   case outAns =>
     intro m a ho ha
     by_cases hmn : m = n
-    · subst hmn; rw [eOutN] at ho; simp at ho
+    · subst hmn; rw [eOutN] at ho
+      rcases hoo with h0 | h0
+      · rw [h0] at ho; simp at ho
+      · exact h.outAns m a (by rw [← h0]; exact ho) ha
     · rw [eOut m hmn] at ho; exact h.outAns m a ho ha
   case ansLastStl =>
     intro m a hl
@@ -456,7 +459,15 @@ theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk
   case unsent =>
     intro m mm ho ha p hp heq
     by_cases hmn : m = n
-    · subst hmn; rw [eOutN] at ho; simp at ho
+    · subst hmn; rw [eOutN] at ho
+      rcases hoo with h0 | h0
+      · rw [h0] at ho; simp at ho
+      · have ho' : (S.nd m).out = some mm := by rw [← h0]; exact ho
+        rcases List.mem_cons.1 hp with rfl | hp
+        · simp only at heq
+          have := hno (by rw [heq]; simp)
+          rw [this] at ho; simp at ho
+        · exact h.unsent m mm ho' ha p hp heq
     · rw [eOut m hmn] at ho
       rcases List.mem_cons.1 hp with rfl | hp
       · simp only at heq

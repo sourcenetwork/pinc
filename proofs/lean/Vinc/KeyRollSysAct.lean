@@ -373,10 +373,10 @@ theorem genMonotone {P : Params} {S S' : Sys} (hr : Reach P S) (hs : Step P S S'
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
   | send d w hok =>
-    obtain ⟨r, l, hlo, he⟩ := sendUpd_eq hok
+    obtain ⟨r, l, o, _, _, hlo, he⟩ := sendUpd_eq hok
     rw [he]
     dsimp only
-    rcases Sys.setNode_cases S d n { S.nd d with out := none, reqAt := r, lastAns := l, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
+    rcases Sys.setNode_cases S d n { S.nd d with out := o, reqAt := r, lastAns := l, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
   | deliver d p f hok =>
@@ -486,10 +486,10 @@ theorem floorsRespected {P : Params} {S S' : Sys} (hr : Reach P S) (hs : Step P 
     · rw [e] at hx'; rw [hx] at hx'; cases hx'; rfl
     · rw [e] at hx'; simp only [beginNode] at hx'; rw [hx] at hx'; cases hx'; rfl
   | send d w hok =>
-    obtain ⟨r, l, hlo, he⟩ := sendUpd_eq hok
+    obtain ⟨r, l, o, _, _, hlo, he⟩ := sendUpd_eq hok
     rw [he] at hx'
     dsimp only at hx'
-    rcases Sys.setNode_cases S d n { S.nd d with out := none, reqAt := r, lastAns := l, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
+    rcases Sys.setNode_cases S d n { S.nd d with out := o, reqAt := r, lastAns := l, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
     · rw [e] at hx'; rw [hx] at hx'; cases hx'; rfl
     · rw [e] at hx'; simp only at hx'; rw [hx] at hx'; cases hx'; rfl
   | deliver d p f hok =>

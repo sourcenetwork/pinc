@@ -25,6 +25,7 @@ fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, after: 
     let (ia, ib) = (pair.a.conn.open_bi().unwrap(), pair.b.conn.open_bi().unwrap());
     pair.settle();
     pair.events.clear();
+    pair.pool.clear();
     (pair, ia, ib)
 }
 

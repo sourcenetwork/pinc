@@ -54,7 +54,9 @@ pub struct Pair<'a> {
 impl<'a> Pair<'a> {
     /// Take over a connected network: the nodes and the time. Datagrams still in flight on the link are lost.
     pub fn from_net(net: Net<'a, '_>) -> Self {
-        let Net { a, b, now, .. } = net;
+        let Net { mut a, mut b, now, .. } = net;
+        // What the connections noted while they connected is not part of the pair's story.
+        let _ = (a.conn.trace_take(), b.conn.trace_take());
         Self {
             a,
             b,
@@ -101,7 +103,8 @@ impl<'a> Pair<'a> {
         }
         node_service(self, a);
         let mut idx = made.iter().copied();
-        for (ev, view) in self.node(a).conn.trace_take() {
+        let evs = self.node(a).conn.trace_take();
+        for (ev, view) in evs {
             let dgram = if matches!(ev, KeyEvent::Sent { .. }) {
                 idx.next()
             } else {
@@ -109,6 +112,7 @@ impl<'a> Pair<'a> {
             };
             self.events.push(Logged { a, ev, view, dgram });
         }
+        assert!(idx.next().is_none(), "a datagram without a sealed packet");
         made
     }
 

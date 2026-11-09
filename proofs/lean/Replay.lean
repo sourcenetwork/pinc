@@ -7,6 +7,7 @@ import Vinc.TraceBuilder
 import Vinc.SecurityTrace
 import Vinc.HandshakeTrace
 import Vinc.TraceKeyRoll
+import Vinc.TraceKeyLayer
 import Vinc.TraceStores
 
 /-!
@@ -108,6 +109,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut hsCount := 0
   let mut stw : TraceStores.W := {}
   let mut krs : TraceKeyRoll.KState := {}
+  let mut kls : TraceKeyLayer.KL := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -138,6 +140,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceKeyRoll.replayEvent j krs with
           | .ok k' =>
             krs := k'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "kl" then
+          -- Key layer events (`kl`, written by `trace_keylayer`): the flip and hold layer of two real connections.
+          match TraceKeyLayer.replayEvent j kls with
+          | .ok k' =>
+            kls := k'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

@@ -207,16 +207,7 @@ View == <<nd, net, now, slog, comp>>     \* the state identity: ev only labels t
 Init == /\ nd = [n \in Nodes |-> NodeInit(n)]
         /\ net = {} /\ now = 0 /\ slog = {} /\ ev = [t |-> "init"] /\ comp = {}
 
-(* roll_tick: a due roll starts (when none is under way and nothing is staged) *)
-Begin(n) ==
-    LET s == nd[n]
-        r == RStart(s.roll, Atom(n, s.ctr))
-    IN /\ s.ctr < CtrCap(n) /\ s.stg = NONE /\ s.nxt = NONE
-       /\ r.res = "ok"
-       /\ nd' = [nd EXCEPT ![n] = [s EXCEPT !.roll = r.r, !.out = r.msg, !.reqAt = NOTIME, !.ctr = @ + 1]]
-       /\ ev' = [t |-> "begin", n |-> n]
-       /\ UNCHANGED <<net, now, slog, comp>>
-
+(* ---- the steps of one node, shared by the system below and by the trace validation ---- *)
 (* poll_rekey: the message waiting, or the pending request again once a probe timeout passed *)
 Poll(s, t, pto) ==
     IF s.out # NONE THEN [pl |-> s.out, s |-> [s EXCEPT !.out = NONE, !.reqAt = IF s.out.ans THEN @ ELSE t,
@@ -230,39 +221,68 @@ Poll(s, t, pto) ==
 RequeueAns(s) == IF s.out = NONE THEN [s EXCEPT !.out = s.lastAns] ELSE s
 RequestLostOp(s) == [s EXCEPT !.reqAt = NOTIME]
 
+(* Connection::roll_tick: a due roll starts, when none is under way and nothing is staged *)
+CanBegin(s, n) == s.stg = NONE /\ s.nxt = NONE /\ RStart(s.roll, Atom(n, s.ctr)).res = "ok"
+BeginOp(s, n) ==
+    LET r == RStart(s.roll, Atom(n, s.ctr))
+    IN [s EXCEPT !.roll = r.r, !.out = r.msg, !.reqAt = NOTIME, !.ctr = @ + 1]
+
+(* a packet sealed under the sending key, carrying the polled REKEY message if any (withPl); a packet built for a
+   probe or a repair carries none, whatever is due; ok: a packet with a message has one to carry *)
+SendOp(s0, t, pto, withPl, n) ==
+    LET q == IF withPl THEN Poll(s0, t, pto) ELSE [pl |-> NONE, s |-> s0]
+        s == q.s
+    IN [p |-> [from |-> n, ph |-> s.sph, pn |-> s.npn, sec |-> s.sk.sec, pl |-> q.pl],
+        s |-> [s EXCEPT !.npn = @ + 1],
+        ok |-> (withPl => q.pl # NONE)]
+
+(* a packet p arrives at node n (forged: with its phase bit flipped by the attacker): the keys layer, the packet
+   number set (rx.contains(pn): a packet number is processed once), then the REKEY message *)
+DeliverOp(s0, p, forged, t, pto, n) ==
+    LET k == RecvKeys(s0, p, forged, t, pto)
+        m == p.pl
+        proc == k.acc /\ ~(p.pn \in s0.seen)
+        s1 == IF proc THEN [k.s EXCEPT !.seen = @ \cup {p.pn}] ELSE k.s
+        hasMsg == proc /\ m # NONE
+        acts == hasMsg /\ Acts(m, k.sel)
+    IN [s |-> IF acts THEN RekeyRx(s1, m, n) ELSE s1, s1 |-> s1, k |-> k, proc |-> proc, hasMsg |-> hasMsg, acts |-> acts]
+
+(* ---- the system ---- *)
+
+(* roll_tick *)
+Begin(n) ==
+    LET s == nd[n]
+    IN /\ s.ctr < CtrCap(n) /\ CanBegin(s, n)
+       /\ nd' = [nd EXCEPT ![n] = BeginOp(s, n)]
+       /\ ev' = [t |-> "begin", n |-> n]
+       /\ UNCHANGED <<net, now, slog, comp>>
+
 (* a packet sealed under the sending key, carrying the polled REKEY message if any (withPl) *)
 SendPkt(n, withPl) ==
-    LET s0 == nd[n]
-        q == IF withPl THEN Poll(s0, now, PTO) ELSE [pl |-> NONE, s |-> s0]
-        s == q.s
-        p == [from |-> n, ph |-> s.sph, pn |-> s.npn, sec |-> s.sk.sec, pl |-> q.pl]
-    IN /\ s.npn <= MaxPn
-       /\ (withPl => q.pl # NONE)
-       /\ (~withPl => Poll(s0, now, PTO).pl = NONE)       \* a due REKEY message goes in the next packet
-       /\ nd' = [nd EXCEPT ![n] = [s EXCEPT !.npn = @ + 1]]
+    LET o == SendOp(nd[n], now, PTO, withPl, n)
+        p == o.p
+    IN /\ p.pn <= MaxPn
+       /\ o.ok
+       /\ nd' = [nd EXCEPT ![n] = o.s]
        /\ net' = net \cup {p}
-       /\ slog' = slog \cup {[n |-> n, sec |-> p.sec, g |-> s.sk.g, pn |-> p.pn]}
+       /\ slog' = slog \cup {[n |-> n, sec |-> p.sec, g |-> nd[n].sk.g, pn |-> p.pn]}
        /\ ev' = [t |-> "send", n |-> n, p |-> p]
        /\ UNCHANGED <<now, comp>>
 
 (* the network delivers packet p to node n (forged: with its phase bit flipped by the attacker) *)
 Deliver(n, p, forged) ==
     LET s0 == nd[n]
-        k == RecvKeys(s0, p, forged, now, PTO)
+        o == DeliverOp(s0, p, forged, now, PTO, n)
+        k == o.k
         m == p.pl
-        proc == k.acc /\ ~(p.pn \in s0.seen)       \* rx.contains(pn): a packet number is processed once
-        s1 == IF proc THEN [k.s EXCEPT !.seen = @ \cup {p.pn}] ELSE k.s
-        hasMsg == proc /\ m # NONE
-        acts == hasMsg /\ Acts(m, k.sel)
-        s2 == IF acts THEN RekeyRx(s1, m, n) ELSE s1
-        done == hasMsg /\ m.ans /\ ROnAnswer(s1.roll, m).res = "ok"
+        done == o.hasMsg /\ m.ans /\ ROnAnswer(o.s1.roll, m).res = "ok"
     IN /\ p \in net /\ p.from = Peer(n) /\ (forged => ForgeOn)
-       /\ (acts /\ ~m.ans) => CanRx(s1, m, n)
-       /\ nd' = [nd EXCEPT ![n] = s2]
-       /\ comp' = IF done THEN comp \cup {[n |-> n, dh |-> ROnAnswer(s1.roll, m).dh, gdh |-> m.gdh, to |-> m.to,
-                                              req |-> s1.roll.req.sh]}
+       /\ (o.acts /\ ~m.ans) => CanRx(o.s1, m, n)
+       /\ nd' = [nd EXCEPT ![n] = o.s]
+       /\ comp' = IF done THEN comp \cup {[n |-> n, dh |-> ROnAnswer(o.s1.roll, m).dh, gdh |-> m.gdh, to |-> m.to,
+                                              req |-> o.s1.roll.req.sh]}
                   ELSE comp
-       /\ ev' = [t |-> "deliver", n |-> n, p |-> p, forged |-> forged, acc |-> k.acc, sel |-> k.sel, proc |-> proc]
+       /\ ev' = [t |-> "deliver", n |-> n, p |-> p, forged |-> forged, acc |-> k.acc, sel |-> k.sel, proc |-> o.proc]
        /\ UNCHANGED <<net, now, slog>>
 
 (* loss detection queues a lost answer again, or marks a lost request *)

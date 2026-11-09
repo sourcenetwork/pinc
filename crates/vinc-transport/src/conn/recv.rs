@@ -264,6 +264,9 @@ conn_impl! {
         let mut promoted = false;
         #[cfg(feature = "trace")]
         let mut seen = (0u64, false, None);
+        // The hold of a previous key is computed from the probe timeout before the packet's frames change it.
+        #[cfg(feature = "trace")]
+        let pto_in = self.rec.pto_duration();
         if let Some(rk) = self.keys.recv.as_mut() {
             rk.expire(now);
             match unprotect_header(&rk.hk, p, bytes, pn_off, false) {
@@ -306,7 +309,7 @@ conn_impl! {
         let Some(opened) = opened.filter(|_| !failed) else {
             self.stats.undecryptable += 1;
             #[cfg(feature = "trace")]
-            self.trace_rx_event(now, seen, false, false, false);
+            self.trace_rx_event(now, pto_in, seen, false, false, false);
             return Err(Drop::Undecryptable);
         };
         if promoted {
@@ -329,7 +332,7 @@ conn_impl! {
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
         let result = self.process_payload(env, ctx, opened.pn, payload);
         #[cfg(feature = "trace")]
-        self.trace_rx_event(now, (opened.pn, seen.1, seen.2), true, matches!(result, Err(Drop::Duplicate)), promoted);
+        self.trace_rx_event(now, pto_in, (opened.pn, seen.1, seen.2), true, matches!(result, Err(Drop::Duplicate)), promoted);
         result
     }
 

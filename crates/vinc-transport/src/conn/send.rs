@@ -864,7 +864,7 @@ conn_impl! {
 }
 
 /// The most bytes a REKEY frame takes.
-const REKEY_MAX: usize = 1 + 1 + 32 + 9;
+const REKEY_MAX: usize = 1 + 1 + 32 + vinc_security::keyroll::ECHO_LEN + 9;
 
 /// Drop the length field of the STREAM frame that starts at `at` in `frames` and runs to the end of them, so its data
 /// runs to the end of the packet. `len_bytes` is the size of the type-and-id-and-offset part before the length

@@ -335,13 +335,14 @@ def Node.poll (s : Node) (now pto : Nat) : Option Msg × Node :=
     | some r => if s.pollDue now pto then (some r, { s with reqAt := some now }) else (none, s)
     | none => (none, s)
 
-/-- `SendPkt(n, withPl)`: a packet sealed under the sending key, carrying the polled REKEY message if any. -/
+/-- `SendPkt(n, withPl)`: a packet sealed under the sending key, carrying the polled REKEY message if any (a packet
+built for a probe or a repair carries none, whatever is due). -/
 def sendQ (P : Params) (S : Sys) (n : Bool) (withPl : Bool) : Option Msg × Node :=
   if withPl then (S.nd n).poll S.now P.pto else (none, S.nd n)
 
 def sendOk (P : Params) (S : Sys) (n : Bool) (withPl : Bool) : Bool :=
   let q := sendQ P S n withPl
-  decide (q.2.npn ≤ P.maxPn) && (!withPl || q.1.isSome) && (withPl || ((S.nd n).poll S.now P.pto).1.isNone)
+  decide (q.2.npn ≤ P.maxPn) && (!withPl || q.1.isSome)
 
 def sendPkt (P : Params) (S : Sys) (n : Bool) (withPl : Bool) : Pkt :=
   let q := sendQ P S n withPl

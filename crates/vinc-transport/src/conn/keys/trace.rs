@@ -63,7 +63,7 @@ pub enum KeyEvent {
     Received {
         /// The time of the call.
         now: u64,
-        /// The probe timeout in force.
+        /// The probe timeout in force when the packet arrived (it sets the hold of a previous key).
         pto: u64,
         /// The packet number (as received, estimated when the packet did not open).
         pn: u64,
@@ -194,6 +194,7 @@ conn_impl! {
     pub(in crate::conn) fn trace_rx_event(
         &mut self,
         now: u64,
+        pto: u64,
         seen: (u64, bool, Option<Sel>),
         opened: bool,
         dup: bool,
@@ -201,7 +202,7 @@ conn_impl! {
     ) {
         let ev = KeyEvent::Received {
             now,
-            pto: self.rec.pto_duration(),
+            pto,
             pn: seen.0,
             phase: seen.1,
             slot: seen.2.map(Slot::from),

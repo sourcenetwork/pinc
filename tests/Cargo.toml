@@ -339,6 +339,10 @@ name = "transport_keyroll"
 path = "transport_keyroll.rs"
 
 [[test]]
+name = "trace_keylayer"
+path = "trace_keylayer.rs"
+
+[[test]]
 name = "trace_keyroll"
 path = "trace_keyroll.rs"
 
