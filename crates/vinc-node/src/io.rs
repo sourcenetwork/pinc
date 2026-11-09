@@ -28,6 +28,7 @@ use crate::config::{
 };
 use crate::ep::Ep;
 use crate::event::NodeEvent;
+use crate::layer::{LSess, Layer};
 use crate::trace::{Body, NodeTrace, TraceQueue, tag};
 
 /// A session of the hub protocol.
@@ -53,6 +54,8 @@ pub(crate) struct Strm {
     pub(crate) inb: Vec<u8>,
     pub(crate) outb: Vec<u8>,
     pub(crate) off: usize,
+    /// End the stream once `outb` is written.
+    pub(crate) fin: bool,
 }
 
 impl Strm {
@@ -120,6 +123,16 @@ pub(crate) struct Io<E: Ep, St: Store> {
     pub(crate) rx_seen: BTreeMap<SessionId, (u64, Nanos)>,
     pub(crate) rtts: BTreeMap<NodeId, (Nanos, bool)>,
     pub(crate) revoked: BTreeSet<NodeId>,
+    /// The sessions of the layers above broadcast, by session.
+    pub(crate) lsess: BTreeMap<SessionId, LSess>,
+    /// The session this node dialed for a layer, by layer and peer.
+    pub(crate) lout: BTreeMap<(Layer, NodeId), SessionId>,
+    /// The dials of a layer in progress.
+    pub(crate) lconn: BTreeSet<(Layer, NodeId)>,
+    /// The dials the layers asked for and the node has not made yet.
+    pub(crate) ldials: Vec<(Layer, NodeId)>,
+    /// The dial backoff of a layer's peer: when the next dial may start, and the wait that was used.
+    pub(crate) lfailed: BTreeMap<(Layer, NodeId), (Nanos, Nanos)>,
     pub(crate) evq: VecDeque<Event>,
     pub(crate) out: EventQueue,
     pub(crate) tq: TraceQueue,
@@ -175,6 +188,11 @@ impl<E: Ep, St: Store> Io<E, St> {
             rx_seen: BTreeMap::new(),
             rtts: BTreeMap::new(),
             revoked: BTreeSet::new(),
+            lsess: BTreeMap::new(),
+            lout: BTreeMap::new(),
+            lconn: BTreeSet::new(),
+            ldials: Vec::new(),
+            lfailed: BTreeMap::new(),
             evq: VecDeque::with_capacity(64),
             out: EventQueue::with_capacity(256),
             tq: TraceQueue::new(trace),
@@ -240,6 +258,7 @@ impl<E: Ep, St: Store> Io<E, St> {
                 inb: Vec::with_capacity(512),
                 outb: Vec::new(),
                 off: 0,
+                fin: false,
             });
         }
     }
@@ -295,14 +314,80 @@ impl<E: Ep, St: Store> Io<E, St> {
             Ok(Value::Written(n)) => n.min(data.len()),
             _ => 0,
         };
+        let mut finish = false;
         if let Some(st) = self.strm.get_mut(&(session, stream)) {
             st.outb = buf;
             st.off = off + n;
             if st.off >= st.outb.len() {
                 st.outb.clear();
                 st.off = 0;
+                finish = core::mem::take(&mut st.fin);
             }
         }
+        if finish {
+            // A refused finish leaves the stream to the peer's reset or the session's end.
+            let _ = self.cmd(Command::Finish { session, stream });
+            self.strm.remove(&(session, stream));
+        }
+    }
+
+    /// End our half of a stream once what it holds is written, then forget it. For a stream this node is done
+    /// writing to.
+    pub(crate) fn close_stream(&mut self, session: SessionId, stream: StreamId) {
+        let Some(st) = self.strm.get_mut(&(session, stream)) else {
+            return;
+        };
+        if st.pending() > 0 {
+            st.fin = true;
+            return;
+        }
+        // A refused finish leaves the stream to the peer's reset or the session's end.
+        let _ = self.cmd(Command::Finish { session, stream });
+        self.strm.remove(&(session, stream));
+    }
+
+    /// End the write side of a stream once everything written to it has been accepted.
+    pub(crate) fn finish(&mut self, session: SessionId, stream: StreamId) -> bool {
+        let Some(st) = self.strm.get_mut(&(session, stream)) else {
+            return false;
+        };
+        if st.pending() > 0 {
+            st.fin = true;
+            return true;
+        }
+        self.cmd(Command::Finish { session, stream }).is_ok()
+    }
+
+    /// Read what the endpoint holds for a stream into `into`, consuming it, and report the stream's receive state.
+    /// `cap` bounds what `into` may hold; past it the stream is left unread and the second value is true.
+    pub(crate) fn drain_stream(
+        &mut self,
+        session: SessionId,
+        stream: StreamId,
+        into: &mut Vec<u8>,
+        cap: usize,
+    ) -> (vinc_transport::stream::RecvStatus, bool) {
+        let mut over = false;
+        loop {
+            let Some(chunk) = self.ep.read_chunk(session, stream).filter(|c| !c.is_empty()) else {
+                break;
+            };
+            let n = chunk.len();
+            if into.len().saturating_add(n) > cap {
+                over = true;
+                break;
+            }
+            into.extend_from_slice(chunk);
+            if self.cmd(Command::Consume { session, stream, n }).is_err() {
+                break;
+            }
+        }
+        // Consuming nothing reads the state of the end: finished once the end arrived and every byte was consumed.
+        let status = match self.cmd(Command::Consume { session, stream, n: 0 }) {
+            Ok(Value::Recv(st)) => st,
+            _ => vinc_transport::stream::RecvStatus::Open,
+        };
+        (status, over)
     }
 
     /// Hand a frame to the stream of `peer` on `lane`. With no stream the frame waits for a dial (at most

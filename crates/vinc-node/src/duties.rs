@@ -19,7 +19,14 @@ use crate::trace::{NodeTrace, tag};
 /// A failed dial's backoff entry is forgotten this long after it expired.
 const FAILED_KEEP: Nanos = 3_600_000_000_000;
 
-impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const PEERS: usize> Node<E, P, St, R, PEERS> {
+impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
+where
+    E: Ep,
+    P: vinc_crypto::Provider + Clone,
+    St: Store,
+    A: crate::apps::Apps<P>,
+    E::Src: crate::apps::ServeSource<A::Values>,
+{
     /// Dial `peer` for the hub protocol, unless a session or a dial exists or the peer is backing off.
     pub(crate) fn dial_peer(&mut self, now: Nanos, peer: &NodeId) {
         let io = &self.io;

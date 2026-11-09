@@ -7,6 +7,25 @@ use alloc::vec::Vec;
 use vinc_connect::client::Notice;
 use vinc_membership::NodeId;
 
+/// Why a reconcile round did not finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileFailure {
+    /// The peer sent a message that breaks the protocol, or one over the limits.
+    Protocol,
+    /// The item index failed or is not sorted.
+    Index,
+    /// The difference is larger than the host's report limit.
+    ReportTooLarge,
+    /// The sets still disagree after the exact pass: the peer is faulty or a set changed during the round.
+    Mismatch,
+    /// The peer holds no set of that name.
+    UnknownSet,
+    /// Every attempt ended in a reset or a closed session.
+    Exhausted,
+    /// The node left the group or the peer was revoked.
+    Cancelled,
+}
+
 /// An event for the application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeEvent {
@@ -69,6 +88,80 @@ pub enum NodeEvent {
         origin: NodeId,
         /// The topic of the message that asked.
         topic: Vec<u8>,
+    },
+    /// Verified bytes `[off, off + len)` of a fetched value are in the store and may be read.
+    ValueReadable {
+        /// The fetch.
+        fetch: u32,
+        /// The first byte.
+        off: u64,
+        /// The number of bytes.
+        len: u64,
+    },
+    /// Every byte a fetch wanted is verified and in the store.
+    ValueComplete {
+        /// The fetch.
+        fetch: u32,
+    },
+    /// A fetch failed.
+    ValueFailed {
+        /// The fetch.
+        fetch: u32,
+        /// Why.
+        reason: vinc_values::trace::FailReason,
+    },
+    /// A reconcile round finished: the exact difference between the two sets.
+    ReconcileDone {
+        /// The round.
+        round: u32,
+        /// The peer.
+        peer: NodeId,
+        /// The items the peer has and this node lacks.
+        missing_here: Vec<Vec<u8>>,
+        /// The items this node has and the peer lacks.
+        missing_there: Vec<Vec<u8>>,
+    },
+    /// A reconcile round failed.
+    ReconcileFailed {
+        /// The round.
+        round: u32,
+        /// The peer.
+        peer: NodeId,
+        /// Why.
+        reason: ReconcileFailure,
+    },
+    /// A bundle addressed to this node arrived and opened.
+    DtnReceived {
+        /// The bundle id.
+        bundle: [u8; 32],
+        /// The node that created it.
+        source: NodeId,
+        /// The payload.
+        payload: Vec<u8>,
+    },
+    /// This node took custody of a bundle from `from` and acknowledged it.
+    DtnCustody {
+        /// The bundle id.
+        bundle: [u8; 32],
+        /// The previous custodian.
+        from: NodeId,
+    },
+    /// A peer took custody of a bundle this node held: this node is relieved.
+    DtnHandedOff {
+        /// The bundle id.
+        bundle: [u8; 32],
+        /// The new custodian.
+        to: NodeId,
+    },
+    /// The destination of a bundle acknowledged it.
+    DtnDelivered {
+        /// The bundle id.
+        bundle: [u8; 32],
+    },
+    /// A bundle expired at this node before it was delivered.
+    DtnExpired {
+        /// The bundle id.
+        bundle: [u8; 32],
     },
     /// This many events were dropped because the queue was full.
     Lost {

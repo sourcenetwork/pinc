@@ -28,6 +28,12 @@ pub fn tag(id: &NodeId) -> u64 {
     u64::from(u32::from_be_bytes([a, b, c, d]))
 }
 
+/// The first eight bytes of a bundle id as a number, enough to tell the bundles of one run apart.
+pub fn btag(id: &[u8; 32]) -> u64 {
+    let [a, b, c, d, e, f, g, h, ..] = *id;
+    u64::from_be_bytes([a, b, c, d, e, f, g, h])
+}
+
 /// A decision of the node's own duties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeTrace {
@@ -105,6 +111,135 @@ pub enum NodeTrace {
     },
     /// The node left the group.
     Left,
+    /// A dial of a layer above broadcast started (1 values, 2 reconcile, 3 delay-tolerant).
+    LayerDial {
+        /// The layer.
+        layer: u64,
+        /// The peer's tag.
+        peer: u64,
+    },
+    /// A session of a layer came up.
+    LayerUp {
+        /// The layer.
+        layer: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// 1 if the peer dialed.
+        incoming: u64,
+    },
+    /// A session of a layer ended.
+    LayerDown {
+        /// The layer.
+        layer: u64,
+        /// The peer's tag.
+        peer: u64,
+    },
+    /// A fetch of a value was asked for.
+    ValuesFetch {
+        /// The fetch.
+        fetch: u64,
+        /// The providers named.
+        providers: u64,
+    },
+    /// A fetch was cancelled by the host.
+    ValuesCancel {
+        /// The fetch.
+        fetch: u64,
+    },
+    /// A peer that dialed again superseded its older incoming session of the values protocol.
+    ValuesSuperseded {
+        /// The peer's tag.
+        peer: u64,
+    },
+    /// A reconcile round started toward a peer.
+    SetsStart {
+        /// The round.
+        round: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// The attempt, from 1.
+        attempt: u64,
+    },
+    /// A reconcile round finished with the exact difference.
+    SetsDone {
+        /// The round.
+        round: u64,
+        /// The items the peer has and we lack.
+        here: u64,
+        /// The items we have and the peer lacks.
+        there: u64,
+    },
+    /// A reconcile round failed.
+    SetsFailed {
+        /// The round.
+        round: u64,
+        /// The reason code.
+        reason: u64,
+    },
+    /// A bundle was created here.
+    DtnCreated {
+        /// The first eight bytes of the bundle id.
+        bundle: u64,
+        /// The copies it starts with.
+        copies: u64,
+    },
+    /// A bundle was offered to a peer.
+    DtnOffer {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// The copies handed over.
+        copies: u64,
+    },
+    /// Symbols of a bundle arrived and verified.
+    DtnSymbols {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// The first symbol.
+        first: u64,
+    },
+    /// A bundle arrived complete and verified.
+    DtnComplete {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+    },
+    /// This node took custody of a bundle and acknowledged it.
+    DtnCustody {
+        /// The bundle.
+        bundle: u64,
+        /// The previous custodian's tag.
+        peer: u64,
+    },
+    /// An acknowledgement relieved this node (1) or was recorded for a delivery (0).
+    DtnAcked {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// 1 if custody moved to the peer.
+        relieved: u64,
+    },
+    /// A bundle was refused or an offer abandoned.
+    DtnRefused {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// The reason code.
+        reason: u64,
+    },
+    /// A bundle left this node: delivered (1) or expired (0).
+    DtnReleased {
+        /// The bundle.
+        bundle: u64,
+        /// 1 if the destination acknowledged it.
+        delivered: u64,
+    },
     /// This many items were dropped because the queue was full.
     Lost {
         /// How many.
@@ -128,6 +263,23 @@ impl NodeTrace {
             Self::Carrier { .. } => "carrier",
             Self::Revoked { .. } => "revoked",
             Self::Left => "left",
+            Self::LayerDial { .. } => "layer_dial",
+            Self::LayerUp { .. } => "layer_up",
+            Self::LayerDown { .. } => "layer_down",
+            Self::ValuesFetch { .. } => "values_fetch",
+            Self::ValuesCancel { .. } => "values_cancel",
+            Self::ValuesSuperseded { .. } => "values_superseded",
+            Self::SetsStart { .. } => "sets_start",
+            Self::SetsDone { .. } => "sets_done",
+            Self::SetsFailed { .. } => "sets_failed",
+            Self::DtnCreated { .. } => "dtn_created",
+            Self::DtnOffer { .. } => "dtn_offer",
+            Self::DtnSymbols { .. } => "dtn_symbols",
+            Self::DtnComplete { .. } => "dtn_complete",
+            Self::DtnCustody { .. } => "dtn_custody",
+            Self::DtnAcked { .. } => "dtn_acked",
+            Self::DtnRefused { .. } => "dtn_refused",
+            Self::DtnReleased { .. } => "dtn_released",
             Self::Lost { .. } => "lost",
         }
     }
@@ -148,6 +300,23 @@ impl NodeTrace {
             Self::Carrier { member, open } => ([("member", member), ("open", open), z], 2),
             Self::Revoked { peer, sessions } => ([("peer", peer), ("sessions", sessions), z], 2),
             Self::Left => ([z, z, z], 0),
+            Self::LayerDial { layer, peer } | Self::LayerDown { layer, peer } => ([("layer", layer), ("peer", peer), z], 2),
+            Self::LayerUp { layer, peer, incoming } => ([("layer", layer), ("peer", peer), ("incoming", incoming)], 3),
+            Self::ValuesFetch { fetch, providers } => ([("fetch", fetch), ("providers", providers), z], 2),
+            Self::ValuesCancel { fetch } => ([("fetch", fetch), z, z], 1),
+            Self::ValuesSuperseded { peer } => ([("peer", peer), z, z], 1),
+            Self::SetsStart { round, peer, attempt } => ([("round", round), ("peer", peer), ("attempt", attempt)], 3),
+            Self::SetsDone { round, here, there } => ([("round", round), ("here", here), ("there", there)], 3),
+            Self::SetsFailed { round, reason } => ([("round", round), ("reason", reason), z], 2),
+            Self::DtnCreated { bundle, copies } => ([("bundle", bundle), ("copies", copies), z], 2),
+            Self::DtnOffer { bundle, peer, copies } => ([("bundle", bundle), ("peer", peer), ("copies", copies)], 3),
+            Self::DtnSymbols { bundle, peer, first } => ([("bundle", bundle), ("peer", peer), ("first", first)], 3),
+            Self::DtnComplete { bundle, peer } | Self::DtnCustody { bundle, peer } => {
+                ([("bundle", bundle), ("peer", peer), z], 2)
+            }
+            Self::DtnAcked { bundle, peer, relieved } => ([("bundle", bundle), ("peer", peer), ("relieved", relieved)], 3),
+            Self::DtnRefused { bundle, peer, reason } => ([("bundle", bundle), ("peer", peer), ("reason", reason)], 3),
+            Self::DtnReleased { bundle, delivered } => ([("bundle", bundle), ("delivered", delivered), z], 2),
             Self::Lost { count } => ([("count", count), z, z], 1),
         }
     }
@@ -164,6 +333,8 @@ pub enum Body {
     Broadcast(vinc_broadcast::Trace),
     /// A record of the endpoint.
     Core(vinc_core::TraceRecord),
+    /// A record of a values fetch or of the values server, with the fetch it belongs to (0 for the server).
+    Values(u32, vinc_values::trace::Trace),
 }
 
 /// One trace record with the time of the call that produced it.
@@ -194,6 +365,7 @@ impl TraceItem {
             }
             Body::Membership(m) => write!(out, ",\"layer\":\"membership\",\"rec\":\"{m:?}\"")?,
             Body::Broadcast(b) => write!(out, ",\"layer\":\"broadcast\",\"rec\":\"{b:?}\"")?,
+            Body::Values(f, v) => write!(out, ",\"layer\":\"values\",\"fetch\":{f},\"rec\":\"{v:?}\"")?,
             Body::Core(c) => {
                 let mut line = String::new();
                 c.write_ndjson(&mut line)?;

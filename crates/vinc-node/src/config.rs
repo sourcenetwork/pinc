@@ -49,6 +49,12 @@ pub(crate) const DENIED: u64 = vinc_membership::session::DENIED_CODE;
 
 /// The default protocol id of the hub stream.
 pub const HUB_ALPN: &[u8] = b"vinc/hub";
+/// The protocol id of the values layer.
+pub const VALUES_ALPN: &[u8] = b"vinc/values";
+/// The protocol id of the reconcile layer.
+pub const SETS_ALPN: &[u8] = b"vinc/reconcile";
+/// The protocol id of the delay-tolerant layer.
+pub const DTN_ALPN: &[u8] = b"vinc/dtn";
 
 /// Where the incarnation epoch survives a restart. The host backs it with the key store's `seal` and `unseal` (the
 /// epoch is eight bytes), or with nothing.

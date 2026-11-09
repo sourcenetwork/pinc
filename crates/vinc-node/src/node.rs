@@ -33,11 +33,16 @@ use vinc_membership::session::Carrier;
 use vinc_membership::{Config as MemConfig, Membership, NodeId, StartError as MemStartError, TableFull};
 use vinc_security::{Env, KeyRequest, KeyResponse, PrekeyInfo};
 
+use crate::apps::{Apps, DtnApp, NoApps, ServeSource};
 use crate::config::{Config, Nanos, Store};
 use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::hosts::{Bc, MemHost};
+use crate::values::Values;
+use crate::dtn::Dtn;
 use crate::io::Io;
+use crate::layer::Layer;
+use crate::reconcile::Reconciler;
 use crate::trace::{Body, NodeTrace, TraceItem, tag};
 
 /// Why a node could not start.
@@ -64,8 +69,12 @@ impl core::fmt::Display for StartError {
 impl core::error::Error for StartError {}
 
 /// The node. See the module docs for the driving contract.
-pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> {
+pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize, A: Apps<P> = NoApps> {
     pub(crate) io: Io<E, St>,
+    pub(crate) apps: A,
+    pub(crate) vals: Option<Box<Values<A::Values>>>,
+    pub(crate) recs: Option<Box<Reconciler>>,
+    pub(crate) dtn: Option<Box<Dtn>>,
     pub(crate) conn: Box<Connectivity<P, R, PEERS>>,
     pub(crate) mem: Membership,
     pub(crate) topics: Topics,
@@ -78,8 +87,8 @@ pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEE
     pub(crate) leaving: bool,
 }
 
-impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> core::fmt::Debug
-    for Node<E, P, St, R, PEERS>
+impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize, A: Apps<P>> core::fmt::Debug
+    for Node<E, P, St, R, PEERS, A>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
@@ -92,9 +101,11 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
 /// The settle loop runs at most this many rounds per call.
 const SETTLE_ROUNDS: usize = 64;
 
-impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> Node<E, P, St, R, PEERS> {
-    /// Start a node. `ep` is an endpoint with its interfaces and prekey set; `key` signs broadcast messages and must
-    /// be the key of the configured identity; `seed` keys the connectivity layer's tables.
+impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> Node<E, P, St, R, PEERS, NoApps>
+where
+    E::Src: ServeSource<crate::apps::NoValues>,
+{
+    /// Start a node that runs membership and broadcast only.
     ///
     /// # Errors
     /// [`StartError`] if the protocol id cannot be registered, or a layer refuses to start.
@@ -104,7 +115,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
     )]
     pub fn new(
         cfg: &Config<R>,
-        mut ep: E,
+        ep: E,
         prekey: PrekeyInfo,
         prov: P,
         drbg: Drbg,
@@ -112,9 +123,48 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
         store: St,
         seed: u64,
     ) -> Result<Self, StartError> {
+        Self::with_apps(cfg, ep, prekey, prov, drbg, key, store, seed, NoApps::default())
+    }
+}
+
+impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
+where
+    E: Ep,
+    P: Provider + Clone,
+    St: Store,
+    A: Apps<P>,
+    E::Src: ServeSource<A::Values>,
+{
+    /// Start a node. `ep` is an endpoint with its interfaces and prekey set; `key` signs broadcast messages and must `ep` is an endpoint with its interfaces and prekey set; `key` signs broadcast messages and must
+    /// be the key of the configured identity; `seed` keys the connectivity layer's tables. `apps` says which layers
+    /// above broadcast run and gives them their stores.
+    ///
+    /// # Errors
+    /// [`StartError`] if a protocol id cannot be registered, or a layer refuses to start.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a node is built once from the pieces the host owns"
+    )]
+    pub fn with_apps(
+        cfg: &Config<R>,
+        mut ep: E,
+        prekey: PrekeyInfo,
+        prov: P,
+        drbg: Drbg,
+        key: Keypair,
+        store: St,
+        seed: u64,
+        mut apps: A,
+    ) -> Result<Self, StartError> {
         let now = cfg.connect.start;
         if !ep.register_alpn(cfg.alpn) {
             return Err(StartError::Alpn);
+        }
+        let on = apps.enabled();
+        for (enabled, layer) in [(on.values, Layer::Values), (on.sets, Layer::Sets), (on.dtn, Layer::Dtn)] {
+            if enabled && !ep.register_alpn(layer.alpn()) {
+                return Err(StartError::Alpn);
+            }
         }
         let ident = cfg.connect.identity.node_id();
         let me = ident.bytes;
@@ -182,8 +232,21 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
         io.trace(NodeTrace::Started {
             hub: u64::from(cfg.is_hub),
         });
+        let vals = on
+            .values
+            .then(|| Box::new(Values::new(apps.values().clone(), cfg.trace)));
+        let recs = on.sets.then(|| Box::new(Reconciler::new()));
+        let dtn = on.dtn.then(|| {
+            let policy = apps.dtn().policy();
+            let budget = apps.dtn().budget();
+            Box::new(Dtn::new(policy, budget, cfg.wall_ms))
+        });
         let mut node = Self {
             io,
+            apps,
+            vals,
+            recs,
+            dtn,
             conn,
             mem,
             topics,
@@ -252,6 +315,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
             self.drive(now);
             busy |= self.inbound_step(now);
             busy |= self.notices_step();
+            busy |= self.dtn_step(now);
             if !busy {
                 break;
             }
@@ -298,6 +362,10 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
         while let Some((hub, member)) = self.io.probes.pop() {
             did = true;
             self.probe_via(&hub, &member);
+        }
+        while let Some((layer, peer)) = self.io.ldials.pop() {
+            did = true;
+            self.dial_layer(now, layer, &peer);
         }
         while let Some(e) = self.mem.poll_event() {
             did = true;
@@ -348,6 +416,8 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
             let (t, mut h) = self.bc_host();
             t.on_timer(&mut h, now);
         }
+        self.values_timeout(now);
+        self.dtn_timeout(now);
         if now >= self.next_duty {
             self.duties(now);
         }
@@ -362,6 +432,8 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
             self.conn.next_deadline(now),
             Some(self.mem.poll_timeout()),
             self.topics.poll_timeout(),
+            self.values_deadline(),
+            self.dtn_deadline(),
             Some(self.next_duty),
         ]
         .into_iter()
@@ -447,6 +519,16 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
     /// The broadcast machine, for reading its tables.
     pub const fn broadcast(&self) -> &Topics {
         &self.topics
+    }
+
+    /// The host's stores of the layers above broadcast.
+    pub const fn apps(&self) -> &A {
+        &self.apps
+    }
+
+    /// The host's stores, for the host to fill: add a value to serve, a set item, a bundle's key.
+    pub const fn apps_mut(&mut self) -> &mut A {
+        &mut self.apps
     }
 
     /// The endpoint, for queries (statistics, reading a stream).
@@ -739,7 +821,14 @@ fn refresh_ticket<P: Provider, const R: usize, const PEERS: usize, E: Ep, St: St
 }
 
 /// The identity algorithm of this node, for hosts that build peer ids from bare bytes.
-impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> Node<E, P, St, R, PEERS> {
+impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
+where
+    E: Ep,
+    P: Provider + Clone,
+    St: Store,
+    A: Apps<P>,
+    E::Src: ServeSource<A::Values>,
+{
     /// This node's full id.
     pub const fn id(&self) -> &vinc_crypto::NodeId {
         &self.ident

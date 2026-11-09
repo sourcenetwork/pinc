@@ -29,7 +29,14 @@ const fn close_code(r: EndReason) -> u64 {
     }
 }
 
-impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const PEERS: usize> Node<E, P, St, R, PEERS> {
+impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
+where
+    E: Ep,
+    P: vinc_crypto::Provider + Clone,
+    St: Store,
+    A: crate::apps::Apps<P>,
+    E::Src: crate::apps::ServeSource<A::Values>,
+{
     pub(crate) fn events_step(&mut self, now: Nanos) -> bool {
         let mut did = false;
         loop {
@@ -50,6 +57,10 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
 
     fn on_event(&mut self, now: Nanos, ev: Event) {
         self.conn.observe(now, &mut self.io.ep, &ev);
+        if let Some(layer) = self.event_layer(&ev) {
+            self.on_layer_event(now, layer, ev);
+            return;
+        }
         let alpn = self.io.alpn;
         match ev {
             Event::Connected {

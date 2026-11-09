@@ -1,7 +1,7 @@
 [package]
 name = "vinc-node"
-description = "The VINC node: the endpoint, the connectivity client, membership and broadcast composed over real sessions as one SANS-IO state machine"
-keywords = ["no_std", "node", "sans-io", "membership"]
+description = "The VINC node: the endpoint, the connectivity client, membership, broadcast, values, reconcile and delay-tolerant delivery composed over real sessions as one SANS-IO state machine"
+keywords = ["no_std", "node", "sans-io", "membership", "values", "dtn"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,10 @@ vinc-core = { workspace = true, features = ["alloc"] }
 vinc-connect = { workspace = true }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
+vinc-dag = { workspace = true }
+vinc-values = { workspace = true }
+vinc-reconcile = { workspace = true, features = ["alloc"] }
+vinc-dtn = { workspace = true }
 blake3 = { workspace = true }
 
 [lints]
