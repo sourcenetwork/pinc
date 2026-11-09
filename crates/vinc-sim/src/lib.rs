@@ -6,6 +6,12 @@
 //! calls give a byte-identical run and trace. Std is used freely: this crate is for tests and benches only and is
 //! never a dependency of a library crate.
 //!
+//! Besides datagrams a node can open stream carriers (TCP, or WebSocket over TLS over TCP) to another node: the
+//! simulator models the TCP connection (setup round trips, congestion window, SACK, retransmission timers, FIN) and
+//! carries whole records through the same links, NATs, middleboxes and partitions as datagrams; see [`StreamOp`] and
+//! [`StreamEvent`]. The `reference` feature adds a module with a bit-exact port of the random source of the reference
+//! harness, so a [`Sim`] can reproduce its worlds draw for draw.
+//!
 //! Start with [`Sim::new`], add nodes and links, schedule commands and faults, then [`Sim::run_until`].
 #![forbid(unsafe_code)]
 #![allow(

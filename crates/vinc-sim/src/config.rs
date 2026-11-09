@@ -12,7 +12,7 @@ pub enum Driver {
     /// Poll the node to quiescence (events, transmits, timer) after every command.
     #[default]
     Vinc,
-    /// As the reference harness does: poll after [`Sim::command`], but not after [`Sim::command_nopump`] (a harness intent).
+    /// As the reference harness does: poll after [`crate::Sim::command`], but not after [`crate::Sim::command_nopump`] (a harness intent).
     /// Output produced by such a command waits for the node's next datagram, timer or pumped command.
     Reference,
 }
