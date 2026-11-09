@@ -109,6 +109,7 @@ import Vinc.DtnGfField
 import Vinc.DtnGfSlice
 import Vinc.DtnCauchy
 import Vinc.DtnRs
+import Vinc.DtnRsSym
 import Vinc.TraceDtnRs
 import Vinc.DtnLayout
 import Vinc.DtnLayoutOutboard

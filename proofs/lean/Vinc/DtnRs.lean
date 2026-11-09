@@ -9,7 +9,8 @@ position alike (`DtnGfSlice`), and the control flow never looks at a byte, so a 
 The model below is the algorithm on one column, a list of `k + m` field elements, step for step: the missing data
 indices `ys`, the first `e` present parity rows, the syndromes scaled by `G`, the data symbols solved with the Cauchy
 combination scaled by `F`, and the final `encode` of the repaired data. The same column function is replayed against
-the real code on every byte column of recorded blocks (`TraceDtnRs`).
+the real code on every byte column of recorded blocks (`TraceDtnRs`). `Vinc.DtnRsSym` lifts it to whole symbols:
+the symbol-level algorithm built from the slice kernels has the column model's output in every byte column.
 -/
 
 set_option linter.unusedVariables false
