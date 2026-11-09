@@ -74,6 +74,12 @@ pub enum Cmd {
     Beacon(Vec<u8>),
     Lookup(NodeId),
     LinkChanged,
+    /// Send a packet to `peer` through relay `relay`'s carrier, as the endpoint does.
+    Raw {
+        relay: usize,
+        peer: NodeId,
+        data: Vec<u8>,
+    },
     /// Run the host loop (a new node starts with it).
     Tick,
 }
@@ -415,6 +421,10 @@ impl Client {
             }
             Cmd::Lookup(p) => self.conn.lookup(now, &p),
             Cmd::LinkChanged => self.conn.link_changed(now),
+            Cmd::Raw { relay, peer, data } => {
+                let a = self.conn.path_addr(relay, &peer);
+                self.conn.route(now, &*self.host.ep, a, &data);
+            }
             Cmd::Tick => {}
         }
         self.pump(now);

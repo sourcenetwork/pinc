@@ -30,6 +30,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         {
             t = t.min(d);
         }
+        // Until a class is known, the watchdog that declares UDP blocked is a deadline of its own.
+        if self.class.is_none()
+            && let Some(first) = self.net.first_probe()
+        {
+            let at = first.saturating_add(super::link::dial_wait(self.net.best_rtt())).saturating_add(1);
+            if at > now {
+                t = t.min(at);
+            }
+        }
         Some(t)
     }
 
@@ -91,6 +100,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         for p in due.into_iter().flatten() {
             self.lookup(now, &p);
         }
+        self.update_class(now);
         self.publish(now);
         self.start_jobs(now);
     }

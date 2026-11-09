@@ -442,7 +442,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         pop(&mut self.notices)
     }
 
-    fn update_class(&mut self, now: u64) {
+    pub(super) fn update_class(&mut self, now: u64) {
         let mut local = [self.me_addr(); MAX_ADDRS];
         let mut nl = 0;
         for (d, a) in local.iter_mut().zip(self.local.iter().flatten()) {

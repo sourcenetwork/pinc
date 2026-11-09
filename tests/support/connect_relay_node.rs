@@ -97,6 +97,9 @@ pub struct RelayNode {
     pub carriers_ws: u64,
     /// Stream records received.
     pub records: u64,
+    /// Lookups answered over UDP and over a carrier.
+    pub dns_udp: u64,
+    pub dns_carrier: u64,
 }
 
 impl RelayNode {
@@ -121,6 +124,8 @@ impl RelayNode {
             carriers_opened: Vec::new(),
             carriers_ws: 0,
             records: 0,
+            dns_udp: 0,
+            dns_carrier: 0,
         }
     }
 
@@ -228,8 +233,18 @@ impl RelayNode {
     fn apply(&mut self, now: Time, s: Collect) {
         for e in s.0 {
             match e {
-                Eff::Carrier(to, plain) => self.write_frame(to, &plain),
-                Eff::Udp(UdpTarget::Reply(a), d) => self.out.datagrams.push_back((self.addr, a, d)),
+                Eff::Carrier(to, plain) => {
+                    if matches!(vinc_connect::carrier::Frame::decode(&plain), Ok(vinc_connect::carrier::Frame::DnsReply { .. })) {
+                        self.dns_carrier += 1;
+                    }
+                    self.write_frame(to, &plain);
+                }
+                Eff::Udp(UdpTarget::Reply(a), d) => {
+                    if matches!(vinc_connect::relay::datagram::Datagram::decode(&d), Ok(vinc_connect::relay::datagram::Datagram::DnsReply { .. })) {
+                        self.dns_udp += 1;
+                    }
+                    self.out.datagrams.push_back((self.addr, a, d));
+                }
                 Eff::Udp(UdpTarget::Member(n), d) => {
                     if let Some(a) = self.member_addr(&n) {
                         self.out.datagrams.push_back((self.addr, a, d));

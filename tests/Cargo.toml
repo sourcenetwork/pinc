@@ -540,3 +540,7 @@ path = "sim_connect_basic.rs"
 [[test]]
 name = "sim_connect_nat"
 path = "sim_connect_nat.rs"
+
+[[test]]
+name = "sim_connect_carrier"
+path = "sim_connect_carrier.rs"

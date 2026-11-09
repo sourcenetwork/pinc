@@ -106,12 +106,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let mut went_down = false;
         if let Some(r) = self.rly.get_mut(i) {
             let was = r.link.state();
+            went_down = was == State::Open || r.carrier.as_ref().is_some_and(ProtectedCarrier::is_open);
             if was != State::Down {
                 if was != State::Open {
                     r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
                 }
                 r.link.closed(now);
-                went_down = was == State::Open;
             }
             r.carrier = None;
             r.out_len = 0;
