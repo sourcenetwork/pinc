@@ -48,6 +48,9 @@ pub enum Reject {
     LogFull,
     /// Older than the replay floor.
     Old,
+    /// The messages held for an access answer are at their limit; the message is left unseen so the gap repair
+    /// brings it again.
+    HeldFull,
 }
 
 /// Why a message waits.

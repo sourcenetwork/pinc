@@ -544,6 +544,10 @@ path = "trace_membership.rs"
 name = "scenario_grade"
 path = "scenario_grade.rs"
 
+[[test]]
+name = "broadcast_fixes"
+path = "broadcast_fixes.rs"
+
 [lints]
 workspace = true
 

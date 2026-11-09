@@ -67,11 +67,13 @@ impl Topics {
             self.note_reject(mid, Reject::BadSignature);
             return;
         }
-        if ack {
-            self.send_pack(h, from, mid);
-        }
         let wall = h.wall_ms();
         self.observe(head.ts, wall);
+        // A message a peer pushed over a member session says nothing about what the hub logged meanwhile, so only the
+        // hub path moves the point a re-subscription asks the log back from.
+        if t != ty::MEMBER_PUSH {
+            self.last_rx_wall = wall;
+        }
         if let Some(st) = self.topics.get_mut(topic)
             && st.requested.remove(&mid)
         {
@@ -86,7 +88,11 @@ impl Topics {
                 self.note_publisher(h, from, topic);
             }
             let fanned = matches!(t, ty::FAN | ty::FANP);
-            self.hub_store(h, now, Some(from), fanned, topic, &head, rest, body);
+            // The acknowledgement follows the store: a publisher that hears PACK stops retrying, so a message the
+            // hub could not keep (no room for the topic) must not be acknowledged.
+            if self.hub_store(h, now, Some(from), fanned, topic, &head, rest, body) && ack {
+                self.send_pack(h, from, mid);
+            }
         } else {
             self.offer(h, now, topic, mid, head.origin, body, head.ts);
         }
@@ -97,7 +103,8 @@ impl Topics {
     }
 
     /// Log a verified message, push it to the live subscribers and mirror it to the other hubs unless it was fanned.
-    /// `rest` is the head and body as they arrived; `sender` is `None` for this hub's own publish.
+    /// `rest` is the head and body as they arrived; `sender` is `None` for this hub's own publish. Returns whether the
+    /// message is in the log.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn hub_store<H: Host>(
         &mut self,
@@ -109,26 +116,30 @@ impl Topics {
         head: &Head<'_>,
         rest: &[u8],
         body: &[u8],
-    ) {
+    ) -> bool {
         let key = u64::from_le_bytes(head.mid);
         let wall = h.wall_ms();
         if !self.ensure_topic(topic) {
             self.note_reject(head.mid, Reject::TopicsFull);
-            return;
+            return false;
         }
         let log_bytes = self.limits.log_bytes;
         let Some(st) = self.topics.get_mut(topic) else {
-            return;
+            return false;
         };
         let (log, seen) = (&mut st.log, &mut st.seen);
         let log = log.get_or_insert_with(|| HubLog::new(log_bytes));
         let head_bytes = rest.get(..head.len()).unwrap_or_default();
         let stored = log.push(key, now, wall, head_bytes, body, |old| {
-            seen.insert(old, now, true);
+            // Only an id the set lost needs a record: a second one at the same instant would leave the id forgotten
+            // when the first is popped.
+            if !seen.contains(old, now) {
+                seen.insert(old, now, true);
+            }
         });
         if !stored {
             self.note_reject(head.mid, Reject::LogFull);
-            return;
+            return false;
         }
         self.trace(|| Trace::Stored {
             topic: topic_tag(topic),
@@ -158,6 +169,7 @@ impl Topics {
         } else if let Some(st) = self.topics.get_mut(topic) {
             st.seen.insert(key, now, true);
         }
+        true
     }
 
     /// A verified message reaches this node: apply the replay floors, mark it seen, and deliver it if the node
@@ -192,26 +204,32 @@ impl Topics {
             self.hold_for_floor(mid, origin, ts, topic, body);
             return;
         }
+        let verdict = self.acp.get(origin).copied().filter(|(_, exp)| *exp >= now);
+        let holds = subscribed && !old && *origin != self.me && verdict.is_none();
+        let already = self.held.iter().any(|e| e.mid == mid);
+        if holds && !already && self.held.len() >= HELD_MAX {
+            // No room to wait for the answer: ask, and leave the id unseen so the gap repair brings it again.
+            self.ask_check(h, origin, topic);
+            self.note_reject(mid, Reject::HeldFull);
+            return;
+        }
         if let Some(st) = self.topics.get_mut(topic) {
             st.seen.insert(key, now, false);
         }
-        self.last_rx_wall = h.wall_ms();
         if !subscribed || old || *origin == self.me {
             if old {
                 self.note_reject(mid, Reject::Old);
             }
             return;
         }
-        match self.acp.get(origin).copied() {
-            Some((allow, exp)) if exp >= now => {
-                if allow {
-                    self.deliver(h, topic, mid, origin, body);
-                }
-                return;
+        if let Some((allow, _)) = verdict {
+            if allow {
+                self.deliver(h, topic, mid, origin, body);
             }
-            _ => {}
+            return;
         }
-        if self.held.len() < HELD_MAX {
+        // A copy that arrives after the dedupe set forgot the first, while the answer is still out, waits once.
+        if !already {
             let mut data = self.take_buf();
             if Self::pack(&mut data, topic, body) {
                 self.held.push(Held {
@@ -225,6 +243,11 @@ impl Topics {
                 self.give_buf(data);
             }
         }
+        self.ask_check(h, origin, topic);
+    }
+
+    /// Ask the access-control layer about `origin` unless a check for it is out.
+    fn ask_check<H: Host>(&mut self, h: &mut H, origin: &NodeId, topic: &[u8]) {
         if !self.checks.iter().any(|(_, o)| o == origin) && self.checks.len() < CHECKS_MAX {
             let id = self.next_check;
             self.next_check = self.next_check.wrapping_add(1);

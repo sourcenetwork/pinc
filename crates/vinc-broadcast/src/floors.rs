@@ -36,11 +36,14 @@ pub(crate) struct SentFloors {
     ms_over: bool,
     osent: BTreeMap<NodeId, BTreeMap<OriginKey, Hlc>>,
     o_over: bool,
+    /// The newest timestamp noted for any member: a full table reports a floor not below it.
+    top: Hlc,
 }
 
 impl SentFloors {
     /// Record that a message of `origin` published at `ts` went to `p`.
     pub(crate) fn note(&mut self, p: &NodeId, ts: Hlc, origin: &NodeId) {
+        self.top = self.top.max(ts);
         if !self.o_over {
             if !self.osent.contains_key(p) && self.osent.len() >= TABLE_MAX {
                 self.o_over = true;
@@ -67,7 +70,9 @@ impl SentFloors {
     fn write(&self, peer: &NodeId, present: Hlc, born: Hlc, out: &mut Vec<u8>) {
         let known = self.maxsent.get(peer);
         let floor = if self.ms_over {
-            present
+            // The hub's clock does not follow an origin stamped far ahead of it, so the present alone could fall
+            // below a timestamp the hub already sent.
+            present.max(self.top)
         } else {
             known.copied().unwrap_or_default().max(born)
         };
@@ -270,5 +275,32 @@ impl Topics {
             return true;
         }
         g.rfloor.is_none() && !g.nohist && ts.wall.saturating_add(crate::consts::OLD_SLACK_MS) < self.born_wall
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    /// A full table reports a floor at or above every timestamp it noted, even one stamped far ahead of the hub's own
+    /// clock (which the clock does not follow).
+    #[test]
+    fn a_full_table_reports_a_floor_not_below_any_noted_timestamp() {
+        let mut s = SentFloors::default();
+        let origin = [9u8; 32];
+        for i in 0..=TABLE_MAX {
+            let mut p = [0u8; 32];
+            p[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            s.note(&p, Hlc::new(1, 0), &origin);
+        }
+        let ahead = Hlc::new(5_000_000, 3);
+        let peer = [7u8; 32];
+        s.note(&peer, ahead, &origin);
+        assert!(s.ms_over && s.o_over);
+        let mut out = Vec::new();
+        s.write(&peer, Hlc::new(10, 0), Hlc::new(0, 0), &mut out);
+        assert!(get_ts(&out).unwrap() >= ahead);
+        assert_eq!(out.get(TS_LEN + 1), Some(&0), "a bare marker, no origin list");
     }
 }

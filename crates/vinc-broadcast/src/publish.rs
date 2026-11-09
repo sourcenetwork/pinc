@@ -123,7 +123,7 @@ impl Topics {
             if let Some(rest) = data.get(tlen..)
                 && let Ok((head, body)) = Head::parse(rest)
             {
-                self.hub_store(h, now, None, false, topic, &head, rest, body);
+                let _ = self.hub_store(h, now, None, false, topic, &head, rest, body);
             }
             self.give_buf(data);
             return Ok(mid);
