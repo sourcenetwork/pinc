@@ -74,6 +74,17 @@ impl<const C: usize> Recv<C> {
             observed: self.observed,
             send_done: false,
             send_reset: 0,
+            send_code: None,
+            stop: match self.stop {
+                Stop::None => 0,
+                Stop::Pending(_) => 1,
+                Stop::Sent(_) => 2,
+                Stop::Acked => 3,
+            },
+            stop_code: match self.stop {
+                Stop::Pending(c) | Stop::Sent(c) => Some(c),
+                Stop::None | Stop::Acked => None,
+            },
         }
     }
 

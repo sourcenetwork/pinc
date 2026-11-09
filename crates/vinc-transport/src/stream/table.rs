@@ -171,10 +171,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             .zip(&self.ids)
             .map(|(s, &id)| {
                 let mut v = s.recv.trace_view();
-                let (done, reset) = s.send.trace_state();
+                let (done, reset, code) = s.send.trace_state();
                 v.id = id;
                 v.send_done = done;
                 v.send_reset = reset;
+                v.send_code = code;
                 v
             })
             .collect();
@@ -185,8 +186,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             local_opened: self.local_opened,
             remote_live: self.remote_live,
             local_live: self.local_live,
-            // A stream with no room is held back and leaves no state: there is no refused queue to show.
-            refused: alloc::vec::Vec::new(),
             ext: (pool.used_chunks() as u64).saturating_sub(held),
             target: self.target,
             meter: self.meter.view(),

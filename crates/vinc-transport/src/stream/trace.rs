@@ -2,7 +2,7 @@
 //!
 //! [`Streams::trace_view`](super::Streams::trace_view) shows the state the receive and credit path works on: per
 //! slot the held chunk numbers, the stored ranges, the read position, the credit and the send half's state that
-//! frees the slot; per table the counters, the refused queue, the window target, the delivery meter and the pool
+//! frees the slot and the stop request; per table the counters, the window target, the delivery meter and the pool
 //! chunks the others hold. Nothing here is compiled without the feature, and nothing here feeds back into the table.
 
 use alloc::vec::Vec;
@@ -48,6 +48,12 @@ pub struct SlotView {
     pub send_done: bool,
     /// The send half's reset: 0 none, 1 pending, 2 sent, 3 acknowledged.
     pub send_reset: u8,
+    /// The error code of the send half's reset until it is acknowledged.
+    pub send_code: Option<u64>,
+    /// The receive half's stop request: 0 none, 1 pending, 2 sent, 3 acknowledged.
+    pub stop: u8,
+    /// The error code of the stop request until it is acknowledged.
+    pub stop_code: Option<u64>,
 }
 
 /// The table.
@@ -63,8 +69,6 @@ pub struct TableView {
     pub remote_live: u64,
     /// Live locally opened streams.
     pub local_live: u64,
-    /// The refused queue, one entry per cell: the stream id and whether its reset was sent.
-    pub refused: Vec<Option<(StreamId, bool)>>,
     /// Pool chunks charged and not held by a receive ring.
     pub ext: u64,
     /// The window size the delivery rate asks for.
