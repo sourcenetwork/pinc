@@ -35,6 +35,10 @@ import Vinc.CryptoDrbg
 import Vinc.CryptoProvider
 import Vinc.CryptoSecret
 import Vinc.TraceCrypto
+import Vinc.KeystoreSealed
+import Vinc.KeystoreStore
+import Vinc.KeystoreTpm
+import Vinc.TraceKeystore
 import Vinc.SecurityTrace
 import Vinc.Record
 import Vinc.KeyRoll

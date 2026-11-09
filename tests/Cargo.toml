@@ -48,6 +48,7 @@ p256 = { workspace = true, features = ["ecdsa"] }
 x25519-dalek = { workspace = true }
 chacha20 = { workspace = true, features = ["cipher"] }
 aes = { workspace = true }
+tpm2-protocol = { workspace = true }
 
 [[test]]
 name = "wire"
@@ -797,3 +798,12 @@ path = "node_determinism.rs"
 [[test]]
 name = "trace_crypto"
 path = "trace_crypto.rs"
+
+[[test]]
+name = "trace_keystore"
+path = "trace_keystore.rs"
+
+[[test]]
+name = "trace_keystore_tpm"
+path = "trace_keystore_tpm.rs"
+required-features = ["hwenc"]

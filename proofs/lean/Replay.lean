@@ -22,6 +22,7 @@ import Vinc.TraceConnectTable
 import Vinc.TraceConnect
 import Vinc.TraceTranscript
 import Vinc.TraceCrypto
+import Vinc.TraceKeystore
 import Vinc.TraceDtnStore
 import Vinc.TraceDtnForward
 import Vinc.TraceDtnRs
@@ -160,6 +161,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut rcs : TraceRecovery.St' := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
+  let mut ksw : TraceKeystore.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -360,6 +362,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           -- `vinc-crypto` events (`cr`, written by `trace_crypto`): the KDF, identities, DRBG, provider and secrets.
           match TraceCrypto.replayEvent j with
           | .ok () =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "ks" || t == "kt" then
+          -- `vinc-keystore` events (`ks`, `kt`, written by `trace_keystore` and `trace_keystore_tpm`).
+          match TraceKeystore.replayEvent j ksw with
+          | .ok w' =>
+            ksw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

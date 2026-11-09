@@ -1648,12 +1648,17 @@ dependencies = [
 name = "vinc-tests"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "blake3",
+ "chacha20",
+ "ed25519-dalek",
  "futures-io",
  "ml-dsa",
  "ml-kem",
  "nuclei",
+ "p256",
  "proptest",
+ "tpm2-protocol",
  "vinc",
  "vinc-broadcast",
  "vinc-connect",
@@ -1672,6 +1677,7 @@ dependencies = [
  "vinc-transport",
  "vinc-values",
  "vinc-wire",
+ "x25519-dalek",
 ]
 
 [[package]]
