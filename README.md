@@ -18,6 +18,75 @@ VINC is a library, not a framework:
 > **Status: pre-release.** Most crates are built and tested, and their proofs land crate by crate. The Status column
 > below says where each crate stands and [Open items](#open-items) lists what is not done.
 
+## Use it
+
+An echo through the `vinc` facade: one node accepts a stream on an ALPN and sends it back, another dials it by node id
+and address. The async API needs no runtime; `block_on` here is the facade's own.
+
+```rust
+use vinc::{Vinc, block_on};
+
+const ALPN: &[u8] = b"echo/1";
+
+fn main() -> vinc::Result<()> {
+    let lo = ([127, 0, 0, 1], 0).into();
+    let server = Vinc::builder().alpn(ALPN).bind_addr(lo).bind_blocking()?;
+    let client = Vinc::builder().bind_addr(lo).bind_blocking()?;
+    let addr = server.addr(); // node id and socket address
+
+    let echo = std::thread::spawn(move || {
+        block_on(async {
+            let conn = server.accept().await.expect("endpoint stopped").into_connection();
+            let (mut tx, mut rx) = conn.accept_bi().await?;
+            tx.write_all(&rx.read_to_end(1 << 20).await?).await?;
+            tx.finish().await?;
+            conn.closed().await; // dropping a connection closes it: wait for the client to finish reading
+            Ok(())
+        })
+    });
+
+    block_on(async {
+        let conn = client.connect(addr, ALPN).await?;
+        let (mut tx, mut rx) = conn.open_bi().await?;
+        tx.write_all(b"hello, vinc").await?;
+        tx.finish().await?;
+        assert_eq!(rx.read_to_end(1 << 20).await?, b"hello, vinc");
+        vinc::Result::Ok(())
+    })?;
+    echo.join().expect("echo thread")
+}
+```
+
+The blocking mirror, `vinc::blocking`, is one call away (`.blocking()`) and has the same shape:
+
+```rust
+use vinc::Vinc;
+
+fn main() -> vinc::Result<()> {
+    let lo = ([127, 0, 0, 1], 0).into();
+    let server = Vinc::builder().alpn(b"echo/1").bind_addr(lo).bind_blocking()?.blocking();
+    let client = Vinc::builder().bind_addr(lo).bind_blocking()?.blocking();
+    let addr = server.addr();
+
+    let echo = std::thread::spawn(move || -> vinc::Result<()> {
+        let (_node, _alpn, conn) = server.accept().expect("endpoint stopped");
+        let (mut tx, mut rx) = conn.accept_bi()?;
+        tx.write_all(&rx.read_to_end(1 << 20)?)?;
+        tx.finish()?;
+        conn.closed(); // dropping a connection closes it: wait for the client to finish reading
+        Ok(())
+    });
+
+    let conn = client.connect(addr, b"echo/1")?;
+    let (mut tx, mut rx) = conn.open_bi()?;
+    tx.write_all(b"hello, vinc")?;
+    tx.finish()?;
+    assert_eq!(rx.read_to_end(1 << 20)?, b"hello, vinc");
+    drop((conn, tx, rx)); // the last handle closes the connection
+    echo.join().expect("echo thread")
+}
+```
+
 ## Layout
 
 | Path | What |

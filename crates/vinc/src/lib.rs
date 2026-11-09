@@ -32,6 +32,11 @@
 //! feeds it datagrams and time and hands the application the same handles; the facade's types do not change.
 #![forbid(unsafe_code)]
 
+/// The README's examples, compiled and run as doctests so they cannot drift.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+pub struct ReadmeDoctests;
+
 mod addr;
 pub mod blocking;
 mod conn;
