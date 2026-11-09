@@ -13,11 +13,17 @@
 //!   it received. Handed copies are never taken back (a peer may have received them even if the acknowledgement was
 //!   lost), so across any forwarding graph the number of copies in existence is at most the head's budget.
 //!   A hold of a bundle already held ignores the extra copies: they are lost, never duplicated.
+//! - **A finished bundle stays finished.** Every accepted bundle is remembered in a bounded table until its own
+//!   expiry, whether it is still held or was released (delivered, expired or forgotten). A hold of a remembered,
+//!   unexpired bundle that is no longer held is ignored and counted ([`Forwarder::ignored_holds`]), so a late
+//!   duplicate of a hold never re-creates copies the budget already counted. When the table has no free or expired
+//!   slot a new hold is refused with [`ForwardError::Full`]; a remembered bundle is never forgotten early, because
+//!   that would re-open the over-budget hole.
 //! - **Timers pause while a link is down.** A retransmission timer counts down only for the time its link was up:
 //!   `step` first charges the elapsed time to the transfers whose link is up, then applies the input. A timer on a
 //!   down link keeps its remaining time until the link comes up again. Bundle lifetimes are wall-clock and do not
 //!   pause.
-//! - **Bounded.** Bundles, links and transfers live in const-generic arrays; when a table is full the machine
+//! - **Bounded.** Bundles, links, transfers and remembered bundles live in const-generic arrays; when a table is full the machine
 //!   refuses the input or sprays nothing, and says so, rather than growing.
 //! - A transfer is created once per (bundle, peer): a bundle is never sprayed to the same peer twice.
 
@@ -98,6 +104,8 @@ pub enum ForwardError {
     NoCopies,
     /// The bundle or transfer is unknown.
     Unknown,
+    /// The bundle was held and finished (released or forgotten) and has not expired: the hold is ignored.
+    Finished,
 }
 
 impl core::fmt::Display for ForwardError {
@@ -107,6 +115,7 @@ impl core::fmt::Display for ForwardError {
             Self::Full => "a forwarding table is full",
             Self::NoCopies => "a hold needs at least one copy",
             Self::Unknown => "unknown bundle or transfer",
+            Self::Finished => "the bundle is already finished",
         })
     }
 }
@@ -117,6 +126,13 @@ impl core::error::Error for ForwardError {}
 struct Bundle {
     held: Held,
     delivered: bool,
+}
+
+/// A remembered bundle: its id and the physical time at which the memory ends.
+#[derive(Debug, Clone, Copy)]
+struct Seen {
+    id: BundleId,
+    expires: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,17 +161,21 @@ struct Transfer {
     phase: Phase,
 }
 
-/// Spray-and-wait for at most `B` bundles, `L` links and `T` transfers.
+/// Spray-and-wait for at most `B` bundles, `L` links and `T` transfers, remembering at most `F` bundles (held or
+/// finished) until their expiry.
 #[derive(Debug, Clone)]
-pub struct Forwarder<const B: usize, const L: usize, const T: usize> {
+pub struct Forwarder<const B: usize, const L: usize, const T: usize, const F: usize> {
     policy: Policy,
     now: u64,
     bundles: [Option<Bundle>; B],
     links: [Option<Link>; L],
     transfers: [Option<Transfer>; T],
+    seen: [Option<Seen>; F],
+    // A metric: nothing reads it, so the models leave it out.
+    ignored: u32,
 }
 
-impl<const B: usize, const L: usize, const T: usize> Forwarder<B, L, T> {
+impl<const B: usize, const L: usize, const T: usize, const F: usize> Forwarder<B, L, T, F> {
     /// An empty forwarder starting at physical time `now`.
     pub const fn new(policy: Policy, now: u64) -> Self {
         Self {
@@ -164,6 +184,8 @@ impl<const B: usize, const L: usize, const T: usize> Forwarder<B, L, T> {
             bundles: [None; B],
             links: [None; L],
             transfers: [None; T],
+            seen: [None; F],
+            ignored: 0,
         }
     }
 
@@ -184,8 +206,9 @@ impl<const B: usize, const L: usize, const T: usize> Forwarder<B, L, T> {
     ///
     /// # Errors
     /// [`ForwardError::Duplicate`] for a hold of a bundle already held (its offered copies are ignored);
-    /// [`ForwardError::NoCopies`]; [`ForwardError::Full`] if a table is full; [`ForwardError::Unknown`] for an ack
-    /// of no transfer. The elapsed time is charged in every case.
+    /// [`ForwardError::Finished`] for a hold of a bundle that was finished and has not expired (ignored and counted);
+    /// [`ForwardError::NoCopies`]; [`ForwardError::Full`] if a table is full, the table of remembered bundles
+    /// included; [`ForwardError::Unknown`] for an ack of no transfer. The elapsed time is charged in every case.
     pub fn step(&mut self, now: u64, input: Input) -> Result<(), ForwardError> {
         self.advance(now);
         match input {
@@ -197,11 +220,25 @@ impl<const B: usize, const L: usize, const T: usize> Forwarder<B, L, T> {
                 if self.bundles.iter().flatten().any(|b| b.held.id == held.id) {
                     return Err(ForwardError::Duplicate);
                 }
+                if self.seen.iter().flatten().any(|d| d.id == held.id && d.expires > self.now) {
+                    self.ignored = self.ignored.saturating_add(1);
+                    return Err(ForwardError::Finished);
+                }
+                let now = self.now;
+                let memory = self
+                    .seen
+                    .iter_mut()
+                    .find(|s| s.is_none_or(|d| d.expires <= now))
+                    .ok_or(ForwardError::Full)?;
                 let slot = self
                     .bundles
                     .iter_mut()
                     .find(|s| s.is_none())
                     .ok_or(ForwardError::Full)?;
+                *memory = Some(Seen {
+                    id: held.id,
+                    expires: held.expires,
+                });
                 *slot = Some(Bundle { held, delivered: false });
                 Ok(())
             }
@@ -342,6 +379,11 @@ impl<const B: usize, const L: usize, const T: usize> Forwarder<B, L, T> {
             }
         }
         None
+    }
+
+    /// How many holds were ignored because the bundle was finished and had not expired.
+    pub const fn ignored_holds(&self) -> u32 {
+        self.ignored
     }
 
     /// The copies this node still holds of `bundle`.

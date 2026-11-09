@@ -22,7 +22,7 @@ use vinc_dtn::forward::{Action, ForwardError, Forwarder, Held, Input, Policy};
 use vinc_dtn::head::BundleId;
 use vinc_tests::SplitMix64;
 
-type Fwd = Forwarder<4, 8, 32>;
+type Fwd = Forwarder<4, 8, 32, 8>;
 
 const POLICY: Policy = Policy {
     retry_ms: 100,
@@ -189,7 +189,7 @@ fn an_acknowledged_transfer_is_not_repeated() {
 
 #[test]
 fn inputs_are_validated_and_tables_are_bounded() {
-    let mut f = Forwarder::<1, 1, 1>::new(POLICY, 0);
+    let mut f = Forwarder::<1, 1, 1, 1>::new(POLICY, 0);
     assert_eq!(f.step(0, Input::Hold(held(9, 0, 10))), Err(ForwardError::NoCopies));
     f.step(0, Input::Hold(held(9, 3, 10))).unwrap();
     assert_eq!(f.step(0, Input::Hold(held(9, 3, 10))), Err(ForwardError::Duplicate));
@@ -390,4 +390,45 @@ proptest! {
         // received, which for the source is the budget.
         prop_assert!(sim.nodes[0].copies_held(&BUNDLE).unwrap_or(0) as u32 + sim.nodes[0].copies_handed(&BUNDLE) <= u32::from(budget));
     }
+}
+
+#[test]
+fn a_finished_bundle_is_not_held_again_before_it_expires() {
+    let mut f = Forwarder::<1, 2, 2, 2>::new(POLICY, 0);
+    f.step(0, Input::Hold(held(2, 4, 100))).unwrap();
+    f.step(0, Input::LinkUp(node(2))).unwrap();
+    assert_eq!(f.poll(), Some(send(2, 0, false)));
+    f.step(
+        1,
+        Input::Acked {
+            peer: node(2),
+            bundle: BUNDLE,
+        },
+    )
+    .unwrap();
+    assert_eq!(f.poll(), Some(Action::Release(BUNDLE)));
+    // A late duplicate of the hold must not create copies the budget already counted.
+    assert_eq!(f.step(2, Input::Hold(held(2, 4, 100))), Err(ForwardError::Finished));
+    assert_eq!(f.copies_held(&BUNDLE), None);
+    assert_eq!(f.ignored_holds(), 1);
+    assert_eq!(f.poll(), None);
+    // The memory ends with the bundle's own expiry.
+    assert_eq!(f.step(100, Input::Hold(held(2, 4, 200))), Ok(()));
+    assert_eq!(f.copies_held(&BUNDLE), Some(4));
+}
+
+#[test]
+fn a_forgotten_bundle_stays_finished_and_a_full_memory_refuses_new_holds() {
+    let mut f = Forwarder::<2, 1, 1, 1>::new(POLICY, 0);
+    f.step(0, Input::Hold(held(9, 3, 50))).unwrap();
+    f.step(0, Input::Forget(BUNDLE)).unwrap();
+    assert_eq!(f.step(0, Input::Hold(held(9, 3, 50))), Err(ForwardError::Finished));
+    // The only memory slot belongs to the finished bundle: a new bundle is refused, the finished one is kept.
+    let other = Held {
+        id: BundleId([1; 32]),
+        ..held(9, 3, 50)
+    };
+    assert_eq!(f.step(0, Input::Hold(other)), Err(ForwardError::Full));
+    assert_eq!(f.step(49, Input::Hold(held(9, 3, 50))), Err(ForwardError::Finished));
+    assert_eq!(f.step(50, Input::Hold(other)), Ok(()));
 }
