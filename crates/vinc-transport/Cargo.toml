@@ -13,6 +13,8 @@ default = []
 alloc = []
 # Test-only observation of the key layer for trace validation. Costs nothing when off.
 trace = ["alloc", "vinc-security/trace"]
+# Test hook: hand the connection the frames of an authenticated packet without sealing them.
+inject = []
 
 [dependencies]
 vinc-wire = { workspace = true }

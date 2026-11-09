@@ -184,6 +184,9 @@ pub struct Stats {
     pub datagrams_dropped_send: u64,
     /// Datagrams dropped from the receive queue to make room.
     pub datagrams_dropped_recv: u64,
+    /// Events the application cannot recover that were dropped because the event queue held nothing else to give up;
+    /// 0 while the queue is sized for the stream slots and paths.
+    pub events_lost: u64,
     /// The current congestion window in bytes.
     pub cwnd: u64,
     /// The smoothed round trip of the active path in nanoseconds, 0 before the first sample.

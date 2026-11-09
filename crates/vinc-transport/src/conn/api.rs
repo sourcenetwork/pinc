@@ -93,7 +93,10 @@ conn_impl! {
                 Ev::PeerAsleep => Event::PeerAsleep,
                 Ev::PeerAwake => Event::PeerAwake,
                 Ev::WakeUnanswered => Event::WakeUnanswered,
-                Ev::Tickets(b) => Event::TicketsReceived(b),
+                Ev::Tickets => match self.events.tickets.take() {
+                    Some(b) => Event::TicketsReceived(b),
+                    None => continue,
+                },
                 Ev::Ready => Event::Ready,
                 Ev::Closed(r) => Event::Closed(r),
             });

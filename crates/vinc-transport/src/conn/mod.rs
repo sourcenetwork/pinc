@@ -198,6 +198,12 @@ where
         now: u64,
         local_credit: CreditRecord,
     ) -> Result<Self, Failure> {
+        const {
+            assert!(
+                event::queue_fits(N, NP),
+                "the event queue is too small for the stream slots and paths"
+            );
+        };
         let Resources {
             mut pool,
             streams,
@@ -395,6 +401,7 @@ where
         s.mtu = self.paths.active().map_or(MIN_MTU, |p| p.mtu.current);
         s.datagrams_dropped_send = self.dgrams.send_dropped();
         s.datagrams_dropped_recv = self.dgrams.recv_dropped();
+        s.events_lost = self.events.lost;
         s
     }
 

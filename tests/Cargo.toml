@@ -21,7 +21,7 @@ vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
-vinc-transport = { workspace = true, features = ["alloc", "trace"] }
+vinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true, features = ["reference"] }
 vinc-connect = { workspace = true }
@@ -385,6 +385,10 @@ path = "core_defense.rs"
 [[test]]
 name = "core_datagram"
 path = "core_datagram.rs"
+
+[[test]]
+name = "transport_events"
+path = "transport_events.rs"
 
 [[test]]
 name = "core_acp"

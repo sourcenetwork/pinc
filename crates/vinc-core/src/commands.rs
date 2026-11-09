@@ -56,7 +56,7 @@ ep_impl! {
 
     /// Copy the oldest received datagram of `session` into `out` and remove it from the session's bounded receive
     /// queue. `Ok(None)` means none is waiting. Read until `None` after each [`Event::DatagramReceived`](crate::Event):
-    /// one notification stands for one datagram, and a datagram the queue had no room for is counted in
+    /// a notification may stand for several datagrams, and a datagram the queue had no room for is counted in
     /// `SessionStats::transport.datagrams_dropped_recv`.
     ///
     /// # Errors

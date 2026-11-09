@@ -336,6 +336,16 @@ conn_impl! {
         result
     }
 
+    /// Process `payload` as the frames of an authenticated packet `pn` that arrived on `path` (test hook: no sealing).
+    ///
+    /// # Errors
+    /// The [`Drop`] reason if the packet is refused.
+    #[cfg(feature = "inject")]
+    pub fn inject_payload(&mut self, env: &mut Env<'_, P>, path: PathId, now: u64, pn: u64, payload: &[u8]) -> Result<(), Drop> {
+        let mut ctx = Rx { path_id: path, path: None, dlen: payload.len(), now, old_key: false };
+        self.process_payload(env, &mut ctx, pn, payload)
+    }
+
     /// Authenticated packet `pn` with `payload` frames.
     fn process_payload(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn: u64, payload: &[u8]) -> Result<(), Drop> {
         let now = ctx.now;
@@ -495,7 +505,7 @@ conn_impl! {
             Frame::Ready => self.push(Ev::Ready),
             Frame::NewTickets(batch) => {
                 if !batch.entries().is_empty() {
-                    self.push(Ev::Tickets(batch));
+                    self.events.push_tickets(batch);
                 }
             }
             Frame::Extension { ty, body } => self.queue_ext(ty, body),

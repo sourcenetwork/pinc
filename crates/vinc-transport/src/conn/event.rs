@@ -192,7 +192,7 @@ pub(crate) enum Ev {
     PeerAsleep,
     PeerAwake,
     WakeUnanswered,
-    Tickets(TicketBatch),
+    Tickets,
     Ready,
     Closed(CloseReason),
 }
@@ -205,16 +205,55 @@ impl Ev {
             Self::Readable(_) | Self::Writable(_) | Self::Datagram | Self::Extension
         )
     }
+
+    /// What makes a second event the same as one already queued, if anything does: a repeat of such an event tells
+    /// the application nothing, so it is not queued again. Bounds how many unrecoverable events one packet can add.
+    const fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Opened(a), Self::Opened(b))
+            | (Self::Reset(a, _), Self::Reset(b, _))
+            | (Self::Readable(a), Self::Readable(b))
+            | (Self::Writable(a), Self::Writable(b)) => *a == *b,
+            (Self::PathValidated(a), Self::PathValidated(b)) | (Self::PathFailed(a), Self::PathFailed(b)) => a.0 == b.0,
+            (Self::KeyRequest, Self::KeyRequest)
+            | (Self::Connected(_), Self::Connected(_))
+            | (Self::PeerAsleep, Self::PeerAsleep)
+            | (Self::PeerAwake, Self::PeerAwake)
+            | (Self::WakeUnanswered, Self::WakeUnanswered)
+            | (Self::Tickets, Self::Tickets)
+            | (Self::Ready, Self::Ready)
+            | (Self::Closed(_), Self::Closed(_)) => true,
+            _ => false,
+        }
+    }
 }
 
-const QUEUE: usize = 128;
+/// The places of the event queue.
+pub(crate) const QUEUE: usize = 256;
+/// Events that cannot be recovered and may be queued at once besides one `Opened` and one `Reset` per stream slot and
+/// one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake, wake
+/// unanswered, closed and the undeliverable extension frames of the 8 extension slots.
+pub(crate) const FIXED_EVENTS: usize = 16;
 
-/// A fixed ring of pending events. When it is full, a lossy notification is dropped first.
+/// Whether `streams` stream slots and `paths` paths leave room for every unrecoverable event: with the repeats of
+/// [`Ev::same_as`] dropped, no more than this many can be queued, so a full queue always holds a notification to give up.
+pub(crate) const fn queue_fits(streams: usize, paths: usize) -> bool {
+    2 * streams + 2 * paths + FIXED_EVENTS <= QUEUE
+}
+
+/// A fixed ring of pending events. A repeat of an event the application learns nothing more from is not queued. When
+/// the queue is full a notification the application can recover by polling state is dropped first; an event that
+/// cannot be recovered is never dropped while [`queue_fits`] holds, and one that is dropped anyway is counted in
+/// [`EvQueue::lost`].
 #[derive(Debug)]
 pub(crate) struct EvQueue {
     items: [Option<Ev>; QUEUE],
     head: usize,
     len: usize,
+    /// Unrecoverable events dropped because the queue held nothing else; 0 while the queue is sized by [`queue_fits`].
+    pub(crate) lost: u64,
+    /// The ticket batch the queued [`Ev::Tickets`] stands for: a newer batch replaces it, because the newest is kept.
+    pub(crate) tickets: Option<TicketBatch>,
 }
 
 impl EvQueue {
@@ -223,6 +262,8 @@ impl EvQueue {
             items: [None; QUEUE],
             head: 0,
             len: 0,
+            lost: 0,
+            tickets: None,
         }
     }
 
@@ -230,32 +271,61 @@ impl EvQueue {
         (self.head + i) % QUEUE
     }
 
-    fn contains(&self, ev: &Ev) -> bool {
-        (0..self.len).any(|i| {
-            matches!(
-                (self.items.get(self.slot(i)).copied().flatten(), ev),
-                (Some(Ev::Readable(a)), Ev::Readable(b)) | (Some(Ev::Writable(a)), Ev::Writable(b)) if a == *b
-            )
+    fn find(&self, ev: &Ev) -> Option<usize> {
+        (0..self.len).find(|i| {
+            self.items
+                .get(self.slot(*i))
+                .copied()
+                .flatten()
+                .is_some_and(|q| q.same_as(ev))
         })
     }
 
-    /// Queue an event. A repeated readable or writable notification for the same stream is merged.
+    /// Take the entry `i` out, closing the gap by moving the older entries up one place.
+    fn remove(&mut self, i: usize) {
+        for k in (0..i).rev() {
+            let (from, to) = (self.slot(k), self.slot(k + 1));
+            let moved = self.items.get(from).copied().flatten();
+            if let Some(s) = self.items.get_mut(to) {
+                *s = moved;
+            }
+        }
+        self.head = (self.head + 1) % QUEUE;
+        self.len -= 1;
+    }
+
+    /// Queue an event; a repeat of a queued event is not queued again.
     pub(crate) fn push(&mut self, ev: Ev) {
-        if self.contains(&ev) {
+        if !matches!(ev, Ev::Datagram | Ev::Extension | Ev::ExtensionUndeliverable(..)) && self.find(&ev).is_some() {
             return;
         }
         if self.len == QUEUE {
             if ev.lossy() {
                 return;
             }
-            self.head = (self.head + 1) % QUEUE;
-            self.len -= 1;
+            let Some(victim) = (0..self.len).find(|i| {
+                self.items
+                    .get(self.slot(*i))
+                    .copied()
+                    .flatten()
+                    .is_some_and(|e| e.lossy())
+            }) else {
+                self.lost += 1;
+                return;
+            };
+            self.remove(victim);
         }
         let at = self.slot(self.len);
         if let Some(s) = self.items.get_mut(at) {
             *s = Some(ev);
             self.len += 1;
         }
+    }
+
+    /// Queue the arrival of `batch`, replacing the batch of a ticket event still queued.
+    pub(crate) fn push_tickets(&mut self, batch: TicketBatch) {
+        self.tickets = Some(batch);
+        self.push(Ev::Tickets);
     }
 
     pub(crate) fn pop(&mut self) -> Option<Ev> {

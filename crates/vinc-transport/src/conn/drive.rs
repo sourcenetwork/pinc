@@ -129,7 +129,7 @@ conn_impl! {
                         self.hs.finish_sent(now, self.rec.pto_duration(), srtt);
                     }
                     if !est.tickets.entries().is_empty() {
-                        self.push(Ev::Tickets(est.tickets));
+                        self.events.push_tickets(est.tickets);
                     }
                 } else {
                     if let Some(p) = self.paths.active_mut() {
