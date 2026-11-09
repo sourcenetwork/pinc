@@ -68,7 +68,7 @@
 (* short of k symbols stops it, the blocks after it untouched),            *)
 (* finish_exact (an honest sender succeeds) and blocksOf_ordered (the      *)
 (* blocks of a layout are ascending and disjoint).                         *)
-***************************************************************************)
+(***************************************************************************)
 EXTENDS RangeOps, FiniteSets, TLC
 
 CONSTANTS G, W
