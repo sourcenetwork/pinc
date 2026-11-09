@@ -88,6 +88,8 @@ pub use event::{CloseReason, Drop, Event, code};
 pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
 pub use keys::trace::{KeyEvent, KeysView, Slot};
+#[cfg(feature = "trace")]
+pub use mtu::trace::{MtuProbe, MtuView};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::PathError;
 #[cfg(feature = "trace")]

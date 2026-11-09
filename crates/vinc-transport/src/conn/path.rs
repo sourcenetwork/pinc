@@ -26,7 +26,7 @@
 use vinc_crypto::Provider;
 use vinc_security::{AmpBudget, ConnId, Env};
 
-use super::config::{MIN_MTU, PathId, PathInfo};
+use super::config::{PathId, PathInfo};
 use super::event::Ev;
 use super::mtu::Jumbo;
 use super::{Connection, Phase};
@@ -137,18 +137,7 @@ impl Path {
             info,
             validated: false,
             amp: AmpBudget::new(),
-            mtu: Mtu {
-                current: MIN_MTU,
-                inflight: None,
-                probed: false,
-                jumbo: Jumbo::Untried,
-                retry_at: 0,
-                started: false,
-                last_big: None,
-                big_acked: None,
-                ping_big: None,
-                suspect: None,
-            },
+            mtu: Mtu::new(),
             challenge: None,
             sent: [None; CHALLENGES],
             sent_next: 0,

@@ -71,6 +71,8 @@ import Vinc.TracePn
 import Vinc.TransportReasm
 import Vinc.TransportReasmThm
 import Vinc.TraceReasm
+import Vinc.TransportMtu
+import Vinc.TraceMtu
 import Vinc.TraceRecovery
 import Vinc.ReconcileSession
 import Vinc.TraceReconcile

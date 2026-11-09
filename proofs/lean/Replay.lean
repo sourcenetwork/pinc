@@ -15,6 +15,7 @@ import Vinc.TraceCid
 import Vinc.TraceCc
 import Vinc.TracePn
 import Vinc.TraceReasm
+import Vinc.TraceMtu
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -173,6 +174,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut cidw : TransportCid.C := {}
   let mut ccw : TraceCc.W := {}
   let mut rsw : TraceReasm.W := {}
+  let mut mtw : TransportMtu.M := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
   let mut ksw : TraceKeystore.W := {}
@@ -440,6 +442,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceMtu.isTag t then
+          -- Path MTU events (`txmt`, written by `trace_mtu`): probing, the floor and the black-hole fallback.
+          match TraceMtu.replayEvent j mtw with
+          | .ok w' =>
+            mtw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

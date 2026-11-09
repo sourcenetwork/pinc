@@ -15,6 +15,7 @@ use vinc_crypto::Provider;
 
 use super::Connection;
 use super::config::{JUMBO_FLOOR, JUMBO_MTU, JUMBO_RTT, MIN_MTU, PROBE_MTU};
+use super::path::Mtu;
 use crate::recovery::{PathKind, SECOND};
 use crate::stream::StreamSource;
 
@@ -30,38 +31,133 @@ pub(crate) enum Jumbo {
     Done,
 }
 
+/// What the probe decision needs to know about the path and the connection.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeCtx {
+    /// The configuration allows probing, the node is not thin, the path is direct, and the quiet period is over.
+    pub(crate) allowed: bool,
+    /// The interface datagram size of the path.
+    pub(crate) interface_mtu: u16,
+    /// The path's minimum round trip is under [`JUMBO_RTT`].
+    pub(crate) low_latency: bool,
+}
+
+impl Mtu {
+    /// A path not yet probed: the minimum size, nothing in flight.
+    pub(crate) const fn new() -> Self {
+        Self {
+            current: MIN_MTU,
+            inflight: None,
+            probed: false,
+            jumbo: Jumbo::Untried,
+            retry_at: 0,
+            started: false,
+            last_big: None,
+            big_acked: None,
+            ping_big: None,
+            suspect: None,
+        }
+    }
+
+    /// The next size to probe, if one is due now.
+    pub(crate) fn target(&self, ctx: ProbeCtx, now: u64) -> Option<u16> {
+        if !ctx.allowed || !self.started || self.inflight.is_some() || self.retry_at > now {
+            return None;
+        }
+        if !self.probed {
+            return (ctx.interface_mtu >= PROBE_MTU && self.current < PROBE_MTU).then_some(PROBE_MTU);
+        }
+        let jumbo = ctx.interface_mtu.min(JUMBO_MTU);
+        (self.jumbo == Jumbo::Untried && self.current == PROBE_MTU && ctx.low_latency && jumbo > JUMBO_FLOOR)
+            .then_some(jumbo)
+    }
+
+    /// A probe of `size` left.
+    pub(crate) fn probe_sent(&mut self, size: u16) {
+        self.inflight = Some(size);
+        if size == PROBE_MTU && !self.probed {
+            self.probed = true;
+        } else {
+            self.jumbo = Jumbo::Done;
+        }
+    }
+
+    /// A probe of `size` was acknowledged or echoed; the new datagram size if it rose.
+    pub(crate) fn raise(&mut self, size: u16) -> Option<u16> {
+        if self.inflight == Some(size) {
+            self.inflight = None;
+        }
+        (size > self.current).then(|| {
+            self.current = size;
+            size
+        })
+    }
+
+    /// A probe of `size` was lost: it waits for the next path event or [`REPROBE_AFTER`].
+    pub(crate) fn probe_lost(&mut self, size: u16, now: u64) {
+        if self.inflight == Some(size) {
+            self.inflight = None;
+        }
+        self.retry_at = now.saturating_add(REPROBE_AFTER);
+        if size > PROBE_MTU {
+            self.jumbo = Jumbo::Done;
+        }
+    }
+
+    /// A path event happened: probe again.
+    pub(crate) fn event(&mut self) {
+        self.probed = false;
+        self.jumbo = Jumbo::Untried;
+        self.retry_at = 0;
+    }
+
+    /// The last probe-timeout PING was acknowledged; `rtt` is the smoothed round trip, 0 while unknown.
+    pub(crate) fn black_hole(&mut self, now: u64, rtt: u64) {
+        let Some(big) = self.ping_big else { return };
+        if self.current <= MIN_MTU || self.big_acked.is_some_and(|a| a >= big) {
+            return;
+        }
+        self.suspect = Some((big, now.saturating_add(rtt)));
+    }
+
+    /// Settle a black-hole suspicion; true when the path dropped to the minimum size.
+    pub(crate) fn black_hole_check(&mut self, now: u64) -> bool {
+        let Some((big, at)) = self.suspect else { return false };
+        if self.big_acked.is_some_and(|a| a >= big) || self.current <= MIN_MTU {
+            self.suspect = None;
+            return false;
+        }
+        if now < at {
+            return false;
+        }
+        self.suspect = None;
+        self.current = MIN_MTU;
+        self.inflight = None;
+        self.last_big = None;
+        self.ping_big = None;
+        self.retry_at = now.saturating_add(REPROBE_AFTER);
+        self.probed = true;
+        self.jumbo = Jumbo::Done;
+        true
+    }
+}
+
 conn_impl! {
     /// The next size to probe on path `i`, if one is due now.
     pub(super) fn mtu_target(&self, i: usize, now: u64) -> Option<u16> {
         let p = self.paths.get(i)?;
-        if !self.cfg.probe_mtu
-            || self.cfg.thin
-            || p.info.kind != PathKind::Direct
-            || !p.mtu.started
-            || p.mtu.inflight.is_some()
-            || p.mtu.retry_at > now
-            || now < self.life.qr_until
-        {
-            return None;
-        }
-        if !p.mtu.probed {
-            return (p.info.interface_mtu >= PROBE_MTU && p.mtu.current < PROBE_MTU).then_some(PROBE_MTU);
-        }
-        let low_latency = self.rec.rtt().min_rtt().is_some_and(|r| r < JUMBO_RTT);
-        let jumbo = p.info.interface_mtu.min(JUMBO_MTU);
-        (p.mtu.jumbo == Jumbo::Untried && p.mtu.current == PROBE_MTU && low_latency && jumbo > JUMBO_FLOOR)
-            .then_some(jumbo)
+        let ctx = ProbeCtx {
+            allowed: self.cfg.probe_mtu && !self.cfg.thin && p.info.kind == PathKind::Direct && now >= self.life.qr_until,
+            interface_mtu: p.info.interface_mtu,
+            low_latency: self.rec.rtt().min_rtt().is_some_and(|r| r < JUMBO_RTT),
+        };
+        p.mtu.target(ctx, now)
     }
 
     /// Note that a probe of `size` left on path `i`.
     pub(super) fn mtu_probe_sent(&mut self, i: usize, size: u16) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        p.mtu.inflight = Some(size);
-        if size == PROBE_MTU && !p.mtu.probed {
-            p.mtu.probed = true;
-        } else {
-            p.mtu.jumbo = Jumbo::Done;
-        }
+        p.mtu.probe_sent(size);
     }
 
     /// The earliest time a path whose probe was lost is probed again.
@@ -77,35 +173,23 @@ conn_impl! {
     pub(super) fn mtu_raise(&mut self, i: usize, size: u16) {
         let active = i == self.paths.active;
         let Some(p) = self.paths.get_mut(i) else { return };
-        if p.mtu.inflight == Some(size) {
-            p.mtu.inflight = None;
-        }
-        if size > p.mtu.current {
-            p.mtu.current = size;
-            if active {
-                self.rec.set_max_datagram_size(u64::from(size));
-            }
+        if let Some(new) = p.mtu.raise(size)
+            && active
+        {
+            self.rec.set_max_datagram_size(u64::from(new));
         }
     }
 
     /// A probe of `size` was lost: it waits for the next path event or [`REPROBE_AFTER`].
     pub(super) fn mtu_probe_lost(&mut self, i: usize, size: u16, now: u64) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        if p.mtu.inflight == Some(size) {
-            p.mtu.inflight = None;
-        }
-        p.mtu.retry_at = now.saturating_add(REPROBE_AFTER);
-        if size > PROBE_MTU {
-            p.mtu.jumbo = Jumbo::Done;
-        }
+        p.mtu.probe_lost(size, now);
     }
 
     /// A path event happened on path `i`: probe it again.
     pub(super) fn mtu_event(&mut self, i: usize) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        p.mtu.probed = false;
-        p.mtu.jumbo = Jumbo::Untried;
-        p.mtu.retry_at = 0;
+        p.mtu.event();
     }
 
     /// A path event happened on every path.
@@ -121,41 +205,142 @@ conn_impl! {
     pub(super) fn mtu_black_hole(&mut self, now: u64) {
         let rtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
         let Some(p) = self.paths.active_mut() else { return };
-        let Some(big) = p.mtu.ping_big else { return };
-        if p.mtu.current <= MIN_MTU || p.mtu.big_acked.is_some_and(|a| a >= big) {
-            return;
-        }
-        p.mtu.suspect = Some((big, now.saturating_add(rtt)));
+        p.mtu.black_hole(now, rtt);
     }
 
     /// Settle a black-hole suspicion once its round trip has passed: if no full-size packet at or after the suspect one
     /// was acknowledged, the path carries small packets only. Drop the active path to the minimum size.
     pub(super) fn mtu_black_hole_check(&mut self, now: u64) {
         let Some(p) = self.paths.active_mut() else { return };
-        let Some((big, at)) = p.mtu.suspect else { return };
-        if p.mtu.big_acked.is_some_and(|a| a >= big) || p.mtu.current <= MIN_MTU {
-            p.mtu.suspect = None;
-            return;
+        if p.mtu.black_hole_check(now) {
+            self.rec.set_max_datagram_size(u64::from(MIN_MTU));
+            self.shed_extensions();
         }
-        if now < at {
-            return;
-        }
-        p.mtu.suspect = None;
-        p.mtu.current = MIN_MTU;
-        p.mtu.inflight = None;
-        p.mtu.last_big = None;
-        p.mtu.ping_big = None;
-        p.mtu.retry_at = now.saturating_add(REPROBE_AFTER);
-        p.mtu.probed = true;
-        p.mtu.jumbo = Jumbo::Done;
-        self.rec.set_max_datagram_size(u64::from(MIN_MTU));
-        self.shed_extensions();
     }
 
     /// Start discovery on every path once the handshake is done.
     pub(super) fn mtu_start(&mut self) {
         for p in self.paths.slots.iter_mut().flatten() {
             p.mtu.started = true;
+        }
+    }
+}
+
+/// Test-only driver of the path MTU state machine, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+pub(super) mod trace {
+    use super::{Jumbo, Mtu, ProbeCtx};
+
+    /// The state of the machine.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MtuView {
+        /// The datagram size the path carries.
+        pub current: u16,
+        /// The probe in flight.
+        pub inflight: Option<u16>,
+        /// The main probe was sent since the last path event.
+        pub probed: bool,
+        /// The jumbo probe is done.
+        pub jumbo_done: bool,
+        /// A lost probe waits until this time.
+        pub retry_at: u64,
+        /// Discovery started.
+        pub started: bool,
+        /// The newest full-size packet sent.
+        pub last_big: Option<u64>,
+        /// The newest full-size packet acknowledged.
+        pub big_acked: Option<u64>,
+        /// The newest full-size packet sent before the last probe-timeout PING.
+        pub ping_big: Option<u64>,
+        /// The black-hole suspicion: the packet and the time it is judged.
+        pub suspect: Option<(u64, u64)>,
+    }
+
+    /// One path's MTU state, driven by the calls the connection makes.
+    #[derive(Debug, Clone, Copy)]
+    pub struct MtuProbe(Mtu);
+
+    impl Default for MtuProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl MtuProbe {
+        /// A path not yet probed.
+        pub const fn new() -> Self {
+            Self(Mtu::new())
+        }
+
+        /// Discovery starts (the handshake is done).
+        pub const fn start(&mut self) {
+            self.0.started = true;
+        }
+
+        /// The packet numbers of the full-size packets the connection tracks (inputs from the send and receive paths).
+        pub const fn set_big(&mut self, last_big: Option<u64>, big_acked: Option<u64>, ping_big: Option<u64>) {
+            self.0.last_big = last_big;
+            self.0.big_acked = big_acked;
+            self.0.ping_big = ping_big;
+        }
+
+        /// The next size to probe, if one is due now.
+        pub fn target(&self, allowed: bool, interface_mtu: u16, low_latency: bool, now: u64) -> Option<u16> {
+            self.0.target(
+                ProbeCtx {
+                    allowed,
+                    interface_mtu,
+                    low_latency,
+                },
+                now,
+            )
+        }
+
+        /// A probe of `size` left.
+        pub fn probe_sent(&mut self, size: u16) {
+            self.0.probe_sent(size);
+        }
+
+        /// A probe of `size` was acknowledged or echoed; the new size if it rose.
+        pub fn raise(&mut self, size: u16) -> Option<u16> {
+            self.0.raise(size)
+        }
+
+        /// A probe of `size` was lost.
+        pub fn probe_lost(&mut self, size: u16, now: u64) {
+            self.0.probe_lost(size, now);
+        }
+
+        /// A path event.
+        pub fn event(&mut self) {
+            self.0.event();
+        }
+
+        /// The probe-timeout PING was acknowledged.
+        pub fn black_hole(&mut self, now: u64, rtt: u64) {
+            self.0.black_hole(now, rtt);
+        }
+
+        /// Settle the suspicion; true when the path dropped to the minimum size.
+        pub fn black_hole_check(&mut self, now: u64) -> bool {
+            self.0.black_hole_check(now)
+        }
+
+        /// The state.
+        pub fn view(&self) -> MtuView {
+            let m = &self.0;
+            MtuView {
+                current: m.current,
+                inflight: m.inflight,
+                probed: m.probed,
+                jumbo_done: m.jumbo == Jumbo::Done,
+                retry_at: m.retry_at,
+                started: m.started,
+                last_big: m.last_big,
+                big_acked: m.big_acked,
+                ping_big: m.ping_big,
+                suspect: m.suspect,
+            }
         }
     }
 }
