@@ -65,7 +65,7 @@ fn drive() {
             &dtn_common::bytes(7, 5_000),
             300,
         );
-        let ack = CustodyAck::sign(s.signed.head().id, to.id.node_id(), Hlc::new(2_000, 0), &sender).unwrap();
+        let ack = CustodyAck::sign(s.signed.head().id, to.id.node_id(), 1, Hlc::new(2_000, 0), &sender).unwrap();
         ack.verify().unwrap();
     }
 }
