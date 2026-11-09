@@ -1,5 +1,5 @@
 //! Trace generation for the wire formats of `vinc-connect`: the carrier frame, the relay datagram, the signed record,
-//! the beacon, the sleep notice, the ticket (binary and text) and the candidate list of a REACH_OUT, recorded as ndjson
+//! the beacon, the sleep notice, the ticket (binary and text) and the candidate list of a `REACH_OUT`, recorded as ndjson
 //! (`connect_codec.ndjson`) for the TLA+ trace check (`TraceConnectCodec.tla`) and the Lean replay
 //! (`Vinc/TraceConnectCodec.lean`).
 //!
@@ -342,7 +342,7 @@ fn gen_frames(o: &mut Out, rng: &mut SplitMix64) {
         for k in 0..len {
             let r = rng.next_u64();
             // bias toward small values (valid tags, aliases, statuses) and the batch count range
-            b.push(if k < 40 && r % 3 == 0 {
+            b.push(if k < 40 && r.is_multiple_of(3) {
                 (r >> 8) as u8 % 6
             } else {
                 (r >> 16) as u8
@@ -491,7 +491,7 @@ fn gen_dgrams(o: &mut Out, rng: &mut SplitMix64) {
         let mut b = vec![ty];
         for k in 0..len {
             let r = rng.next_u64();
-            b.push(if k < 40 && r % 3 == 0 {
+            b.push(if k < 40 && r.is_multiple_of(3) {
                 (r >> 8) as u8 % 6
             } else {
                 (r >> 16) as u8
@@ -551,8 +551,8 @@ fn gen_signed(o: &mut Out, rng: &mut SplitMix64) {
             }
             let head = {
                 let mut h = vec![0u8; MAX_RECORD_LEN];
-                let hn = record::prepare(&node, &pk, &f, &mut h).unwrap();
-                hn
+
+                record::prepare(&node, &pk, &f, &mut h).unwrap()
             };
             o.rprep(&node, &pk, &f, head);
             for cap in [0usize, 1, 8, 9, 41, 74, 82, 83, 84, head - 1, head + 1] {
@@ -646,7 +646,7 @@ fn gen_signed(o: &mut Out, rng: &mut SplitMix64) {
         b.extend_from_slice(&node_bytes(&node));
         for k in 0..len {
             let r = rng.next_u64();
-            b.push(if k < 60 && r % 3 == 0 {
+            b.push(if k < 60 && r.is_multiple_of(3) {
                 (r >> 8) as u8 % 6
             } else {
                 (r >> 16) as u8
@@ -732,10 +732,10 @@ fn gen_tickets(o: &mut Out, rng: &mut SplitMix64) {
     }
     for _ in 0..600 {
         let len = (rng.next_u64() % 140) as usize;
-        let mut b = vec![1u8, (rng.next_u64() % 16) as u8 | 0];
+        let mut b = vec![1u8, ((rng.next_u64() % 16) as u8)];
         for k in 0..len {
             let r = rng.next_u64();
-            b.push(if k < 90 && r % 3 == 0 {
+            b.push(if k < 90 && r.is_multiple_of(3) {
                 (r >> 8) as u8 % 6
             } else {
                 (r >> 16) as u8
@@ -783,7 +783,7 @@ fn gen_cands(o: &mut Out, rng: &mut SplitMix64) {
         let mut b = vec![(rng.next_u64() % 10) as u8];
         for _ in 0..len {
             let r = rng.next_u64();
-            b.push(if r % 3 == 0 {
+            b.push(if r.is_multiple_of(3) {
                 [4u8, 6][(r >> 8) as usize % 2]
             } else {
                 (r >> 16) as u8

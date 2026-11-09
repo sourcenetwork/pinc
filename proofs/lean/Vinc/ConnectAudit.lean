@@ -14,6 +14,7 @@ import Vinc.ConnectTicket
 import Vinc.ConnectBase32
 import Vinc.ConnectTicketTextPf
 import Vinc.ConnectLinkThm
+import Vinc.ConnectClientThm
 
 /-! Axiom audit of the main theorems of the connectivity proofs. -/
 
@@ -137,3 +138,25 @@ import Vinc.ConnectLinkThm
 #audit_axioms Vinc.ConnectLink.defer_cancelled
 #audit_axioms Vinc.ConnectLink.tick_before_deadline
 #audit_axioms Vinc.ConnectLink.tick_none_future
+#audit_axioms Vinc.ConnectClient.gapsFrom_length
+#audit_axioms Vinc.ConnectClient.probeGaps_length
+#audit_axioms Vinc.ConnectClient.probeGaps_first
+#audit_axioms Vinc.ConnectClient.gapsFrom_cap
+#audit_axioms Vinc.ConnectClient.probeGaps_tail_cap
+#audit_axioms Vinc.ConnectClient.due_future
+#audit_axioms Vinc.ConnectClient.punch_when_due
+#audit_axioms Vinc.ConnectClient.punch_good_stops
+#audit_axioms Vinc.ConnectClient.idle_waits
+#audit_axioms Vinc.ConnectClient.decide_no_tunnel
+#audit_axioms Vinc.ConnectClient.decide_carrier_closed
+#audit_axioms Vinc.ConnectClient.decide_stale
+#audit_axioms Vinc.ConnectClient.seen_length
+#audit_axioms Vinc.ConnectClient.select_sublist
+#audit_axioms Vinc.ConnectClient.select_cap
+#audit_axioms Vinc.ConnectClient.add_size
+#audit_axioms Vinc.ConnectClient.ask_size
+#audit_axioms Vinc.ConnectClient.answered_removes
+#audit_axioms Vinc.ConnectClient.deadline_due
+#audit_axioms Vinc.ConnectClient.verify_found
+#audit_axioms Vinc.ConnectClient.classify_blocked
+#audit_axioms Vinc.ConnectClient.missing_fallback

@@ -2,7 +2,7 @@
 //! recorded as ndjson (`connect_link.ndjson`) for the TLA+ trace check (`TraceConnectLink.tla`) and the Lean replay
 //! (`Vinc/TraceConnectLink.lean`).
 //!
-//! A run starts a link with some node-wide shared state (phone or not, KEEP_LEARN on or off, a lease learned or not, a
+//! A run starts a link with some node-wide shared state (phone or not, `KEEP_LEARN` on or off, a lease learned or not, a
 //! restart pending or not) and calls it with every method of the module in a random order, at instants that step by
 //! amounts around every rule constant (and sometimes go back), with every context of the node. After every call the
 //! link and the shared state are read back (through their `Debug` form, the fields are private) and recorded with the
@@ -15,6 +15,7 @@
     clippy::panic,
     clippy::indexing_slicing,
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
     clippy::too_many_lines,
     clippy::items_after_statements,
     clippy::many_single_char_names,
@@ -137,10 +138,10 @@ fn pick<T: Copy>(rng: &mut SplitMix64, v: &[T]) -> T {
 fn run(seed: u64, steps: usize, out: &mut Vec<String>) {
     let mut rng = SplitMix64::new(seed);
     let mut sh = Shared {
-        phone: rng.next_u64() % 3 == 0,
-        keep_learn: rng.next_u64() % 2 == 0,
+        phone: rng.next_u64().is_multiple_of(3),
+        keep_learn: rng.next_u64().is_multiple_of(2),
         lease_hi: pick(&mut rng, &[0, 0, 15 * S, 20 * S, 30 * S, 40 * S]),
-        restarted: rng.next_u64() % 4 == 0,
+        restarted: rng.next_u64().is_multiple_of(4),
         ..Shared::default()
     };
     let mut l = Link::new();
@@ -185,11 +186,11 @@ fn run(seed: u64, steps: usize, out: &mut Vec<String>) {
             _ => now + pick(&mut rng, &deltas),
         };
         let c = Ctx {
-            home: rng.next_u64() % 4 != 0,
+            home: !rng.next_u64().is_multiple_of(4),
             rtt: pick(&mut rng, &rtts),
-            udp_any: rng.next_u64() % 3 == 0,
-            rides: rng.next_u64() % 3 == 0,
-            queued: rng.next_u64() % 4 == 0,
+            udp_any: rng.next_u64().is_multiple_of(3),
+            rides: rng.next_u64().is_multiple_of(3),
+            queued: rng.next_u64().is_multiple_of(4),
         };
         let line = |call: &str, res: &str, l: &Link, sh: &Shared| {
             format!(
@@ -240,7 +241,7 @@ fn run(seed: u64, steps: usize, out: &mut Vec<String>) {
                 out.push(line("before_send", &format!("\"{}\"", act(a)), &l, &sh));
             }
             69..=76 => {
-                let ridden = rng.next_u64() % 2 == 0;
+                let ridden = rng.next_u64().is_multiple_of(2);
                 let a = l.check(now, &c, ridden);
                 out.push(line("check", &format!("\"{}\"", act(a)), &l, &sh).replacen(
                     "\"ctx\"",

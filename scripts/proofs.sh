@@ -239,6 +239,10 @@ par run_tlc connect_link ConnectLink ConnectLink
 par run_tlc connect_link_lease ConnectLink ConnectLink_lease
 par run_tlc connect_link_rides ConnectLink ConnectLink_rides
 par run_tlc connect_link_restart ConnectLink ConnectLink_restart
+par run_tlc connect_client ConnectClient ConnectClient
+par run_tlc connect_client_pending ConnectClient ConnectClient_pending
+par run_tlc connect_client_lookups ConnectClient ConnectClient_lookups
+par run_tlc connect_client_net ConnectClient ConnectClient_net
 par run_tlc connect_table ConnectTable ConnectTable
 par run_tlc connect_table_n4 ConnectTable ConnectTable_n4
 par run_tlc connect_cache ConnectTable ConnectTable_cache
@@ -380,7 +384,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -411,6 +415,7 @@ trace_tlc TraceConnectTable table
 trace_tlc TraceConnect relay
 trace_tlc TraceConnectCodec connect-codec
 trace_tlc TraceConnectLink connect-link
+trace_tlc TraceConnectClient connect-client
 trace_tlc TraceTranscript transcript
 trace_tlc TraceDtnStore dtn-store
 trace_tlc TraceDtnCustody dtn-custody

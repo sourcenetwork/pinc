@@ -145,6 +145,9 @@ import Vinc.TraceConnectCodec
 import Vinc.ConnectLink
 import Vinc.TraceConnectLink
 import Vinc.ConnectLinkThm
+import Vinc.ConnectClient
+import Vinc.TraceConnectClient
+import Vinc.ConnectClientThm
 import Vinc.ConnectAudit
 import Vinc.DtnGf
 import Vinc.DtnGfField

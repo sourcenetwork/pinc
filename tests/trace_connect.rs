@@ -566,15 +566,19 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                 let dst = pick_dst(&mut rng);
                 let packet = vec![0x77u8; plen(&mut rng)];
                 let flag = (rng.next_u64() % 256) as u8;
+                // The encoder refuses an empty or oversized packet, and the relay must refuse those too: the header is
+                // encoded with one byte and the packet appended raw.
                 let mut b = vec![0u8; 2048];
                 let n = Datagram::Spu {
                     dst,
                     flag,
-                    packet: &packet,
+                    packet: &[0x77],
                 }
                 .encode(&mut b)
                 .unwrap();
-                let x = r.datagram(now, addr(), member.as_ref(), &b[..n], &mut sink);
+                b.truncate(n - 1);
+                b.extend_from_slice(&packet);
+                let x = r.datagram(now, addr(), member.as_ref(), &b, &mut sink);
                 res = res_name(&x);
                 head = format!(
                     r#"{{"t":"rspu","now":{secs},"m":{},"dst":{},"flag":{flag},"len":{}"#,

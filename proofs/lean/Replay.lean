@@ -21,6 +21,7 @@ import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
 import Vinc.TraceConnectCodec
 import Vinc.TraceConnectLink
+import Vinc.TraceConnectClient
 import Vinc.TraceConnect
 import Vinc.TraceTranscript
 import Vinc.TraceCrypto
@@ -149,6 +150,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ctb : TraceConnectTable.W := {}
   let mut crl : TraceConnect.W := {}
   let mut clk : TraceConnectLink.W := {}
+  let mut ccl : TraceConnectClient.W := {}
   let mut trs : TraceTranscript.TS := {}
   let mut trCount := 0
   let mut dsw : TraceDtnStore.W := {}
@@ -319,6 +321,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnectLink.replayEvent j clk with
           | .ok w' =>
             clk := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectClient.isTag t then
+          -- Client rule events (`trace_connect_client`): punch, tunnel, dial, lookup, netcheck.
+          match TraceConnectClient.replayEvent j ccl with
+          | .ok w' =>
+            ccl := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
