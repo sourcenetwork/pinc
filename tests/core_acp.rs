@@ -351,7 +351,7 @@ fn a_host_that_leaves_events_unread_holds_back_dials_and_timers_and_loses_nothin
         let ep = &mut net.nodes[b].ep;
         assert!(ep.poll_timeout().is_some());
         let made = stall_events(ep, t);
-        assert!(made > 1000, "only {made} events fit");
+        assert!(made > 900, "only {made} events fit");
         assert_eq!(ep.poll_timeout(), None, "no timer is due while the queue is near full");
         ep.handle_timeout(t + 600 * SEC_NS);
         assert_eq!(ep.node_stats().sessions, 1, "a timer ran while the queue was near full");

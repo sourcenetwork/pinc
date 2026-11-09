@@ -73,8 +73,8 @@ pub use api::{
 };
 pub use commands::UDP_FRESH;
 pub use endpoint::{
-    ACP_ENTRIES, CID_LEN, EVENT_QUEUE, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PATH_ENTRIES,
-    PREKEY_PEERS, SUBS_SEEN,
+    ACP_ENTRIES, CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PATH_ENTRIES, PREKEY_PEERS,
+    SUBS_SEEN,
 };
 pub use heap::DeadlineHeap;
 pub use iface::{IfaceEvent, IfaceId};
@@ -84,7 +84,7 @@ pub use keepalive::{
     standby_due,
 };
 pub use ledger::{DATAGRAM_OVERHEAD, FACTOR, LEDGER_ENTRIES, Ledger, LedgerEntry};
-pub use queue::EVENT_HEADROOM;
+pub use queue::{EVENT_BASE, event_headroom, event_queue};
 pub use rtt::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
 pub use rx::{HALF_OPEN_LIFE, MAX_HALF_OPEN};
 pub use slot::{HELD_EVENTS, Slot};

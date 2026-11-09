@@ -1,23 +1,37 @@
 //! The bounded queue of events waiting for the host.
 //!
-//! Invariants: the queue never holds more than `N` events; events leave in the order they entered; every drop is
+//! The ring holds `4 * K + EVENT_BASE` events for a table of `K` sessions: its memory grows with the table, as an
+//! array of `K`-event rows, so it needs no allocation and no extra type parameter.
+//!
+//! Invariants: the queue never holds more than that many events; events leave in the order they entered; every drop is
 //! counted. A full queue drops a new event the application can recover by reading state, and for any other new event
 //! evicts the oldest recoverable one. An event the application cannot recover is evicted only if the queue holds
-//! nothing else, which the endpoint prevents: while [`EventRing::stalled`], that is while fewer than [`EVENT_HEADROOM`]
+//! nothing else, which the endpoint prevents: while [`EventRing::stalled`], that is while fewer than `2 * K + 64`
 //! places remain beyond the unrecoverable events queued, it starts no session, holds timers and dials back, refuses the
-//! packets that would raise events and parks the work it could not finish until the host reads events.
+//! packets that would raise events and parks the work it could not finish until the host reads events. One step
+//! the endpoint takes without checking the queue again (one connection event, one timer, one command) emits at most
+//! one event per session twice over and a few more, which the headroom covers for any `K`.
 
 use crate::api::Event;
 
-/// The places kept free of unrecoverable events. One step the endpoint takes without checking the queue again (one
-/// connection event, one timer, one command) emits at most one event per session twice over (a lifecycle event and
-/// the close of an orphaned child) and a few more; the endpoint asserts `2 * K + 64` fits.
-pub const EVENT_HEADROOM: usize = 768;
+/// The places of the event queue besides the four rows of `K`.
+pub const EVENT_BASE: usize = 1024;
 
-/// A fixed ring of events.
+/// How many events an endpoint with a table of `sessions` sessions can leave unread.
+pub const fn event_queue(sessions: usize) -> usize {
+    4 * sessions + EVENT_BASE
+}
+
+/// The places the endpoint keeps free of unrecoverable events for a table of `sessions` sessions.
+pub const fn event_headroom(sessions: usize) -> usize {
+    2 * sessions + 64
+}
+
+/// A fixed ring of events for a table of `K` sessions.
 #[derive(Debug)]
-pub(crate) struct EventRing<const N: usize> {
-    items: [Option<Event>; N],
+pub(crate) struct EventRing<const K: usize> {
+    base: [Option<Event>; EVENT_BASE],
+    rows: [[Option<Event>; K]; 4],
     head: usize,
     len: usize,
     /// How many of the queued events the application can recover by reading state.
@@ -27,10 +41,14 @@ pub(crate) struct EventRing<const N: usize> {
     pub(crate) lost: u64,
 }
 
-impl<const N: usize> EventRing<N> {
+impl<const K: usize> EventRing<K> {
+    const CAP: usize = event_queue(K);
+
     pub(crate) const fn new() -> Self {
+        const { assert!(event_queue(K) >= 2 * event_headroom(K)) };
         Self {
-            items: [None; N],
+            base: [None; EVENT_BASE],
+            rows: [[None; K]; 4],
             head: 0,
             len: 0,
             lossy_len: 0,
@@ -39,51 +57,54 @@ impl<const N: usize> EventRing<N> {
         }
     }
 
+    /// The place of the `i`th queued event, counting from the oldest.
     fn at(&self, i: usize) -> usize {
-        (self.head + i) % N
+        (self.head + i) % Self::CAP
     }
 
-    /// Whether the queued events that cannot be recovered leave less than [`EVENT_HEADROOM`] places.
+    fn get(&self, p: usize) -> Option<Event> {
+        match p.checked_sub(EVENT_BASE) {
+            None => self.base.get(p).copied().flatten(),
+            Some(q) => self.rows.get(q.checked_div(K)?)?.get(q % K).copied().flatten(),
+        }
+    }
+
+    fn cell(&mut self, p: usize) -> Option<&mut Option<Event>> {
+        match p.checked_sub(EVENT_BASE) {
+            None => self.base.get_mut(p),
+            Some(q) => self.rows.get_mut(q.checked_div(K)?)?.get_mut(q % K),
+        }
+    }
+
+    /// Whether the queued events that cannot be recovered leave less than the headroom.
     pub(crate) const fn stalled(&self) -> bool {
-        self.len - self.lossy_len + EVENT_HEADROOM > N
+        self.len - self.lossy_len + event_headroom(K) > Self::CAP
     }
 
     pub(crate) fn push(&mut self, ev: Event) {
-        if self.len == N {
+        if self.len == Self::CAP {
             self.dropped += 1;
             if ev.lossy() {
                 return;
             }
-            let victim = (0..self.len).find(|i| {
-                self.items
-                    .get(self.at(*i))
-                    .copied()
-                    .flatten()
-                    .is_some_and(|e| e.lossy())
-            });
+            let victim = (0..self.len).find(|i| self.get(self.at(*i)).is_some_and(|e| e.lossy()));
             self.lost += u64::from(victim.is_none());
             let victim = victim.unwrap_or(0);
-            if self
-                .items
-                .get(self.at(victim))
-                .copied()
-                .flatten()
-                .is_some_and(|e| e.lossy())
-            {
+            if self.get(self.at(victim)).is_some_and(|e| e.lossy()) {
                 self.lossy_len -= 1;
             }
             for i in (0..victim).rev() {
                 let (from, to) = (self.at(i), self.at(i + 1));
-                let moved = self.items.get(from).copied().flatten();
-                if let Some(s) = self.items.get_mut(to) {
+                let moved = self.get(from);
+                if let Some(s) = self.cell(to) {
                     *s = moved;
                 }
             }
-            self.head = (self.head + 1) % N;
+            self.head = (self.head + 1) % Self::CAP;
             self.len -= 1;
         }
         let at = self.at(self.len);
-        if let Some(s) = self.items.get_mut(at) {
+        if let Some(s) = self.cell(at) {
             *s = Some(ev);
             self.len += 1;
             self.lossy_len += usize::from(ev.lossy());
@@ -94,8 +115,9 @@ impl<const N: usize> EventRing<N> {
         if self.len == 0 {
             return None;
         }
-        let e = self.items.get_mut(self.head).and_then(Option::take);
-        self.head = (self.head + 1) % N;
+        let head = self.head;
+        let e = self.cell(head).and_then(Option::take);
+        self.head = (self.head + 1) % Self::CAP;
         self.len -= 1;
         self.lossy_len -= usize::from(e.is_some_and(|e| e.lossy()));
         e
@@ -113,6 +135,8 @@ mod tests {
     use vinc_security::Alpn;
 
     use super::*;
+
+    const K_T: usize = 256;
     use crate::api::{ConnectFailure, EndReason, SessionId};
 
     fn event(kind: u8, n: u64) -> Event {
@@ -163,7 +187,7 @@ mod tests {
     fn ops() -> impl Strategy<Value = Vec<Op>> {
         prop::collection::vec(
             prop_oneof![
-                4 => prop::collection::vec(0..11u8, 1..EVENT_HEADROOM).prop_map(Op::Input),
+                4 => prop::collection::vec(0..11u8, 1..event_headroom(K_T)).prop_map(Op::Input),
                 1 => (1..40u8).prop_map(Op::Poll),
             ],
             0..120,
@@ -173,7 +197,7 @@ mod tests {
     proptest! {
         #[test]
         fn nothing_that_cannot_be_recovered_is_dropped_while_the_endpoint_honours_the_stall(ops in ops()) {
-            let mut ring: EventRing<2048> = EventRing::new();
+            let mut ring: EventRing<K_T> = EventRing::new();
             let (mut offered, mut delivered) = (Vec::new(), Vec::new());
             let mut n = 0u64;
             for op in ops {
@@ -211,12 +235,12 @@ mod tests {
 
     #[test]
     fn the_stall_leaves_headroom_and_ignores_events_that_can_be_recovered() {
-        let mut ring: EventRing<2048> = EventRing::new();
-        for n in 0..2048 {
+        let mut ring: EventRing<K_T> = EventRing::new();
+        for n in 0..event_queue(K_T) as u64 {
             ring.push(event(9, n));
         }
         assert!(!ring.stalled(), "recoverable events alone never stall the endpoint");
-        for n in 0..(2048 - EVENT_HEADROOM) as u64 {
+        for n in 0..(event_queue(K_T) - event_headroom(K_T)) as u64 {
             assert!(!ring.stalled());
             ring.push(event(0, n));
         }
