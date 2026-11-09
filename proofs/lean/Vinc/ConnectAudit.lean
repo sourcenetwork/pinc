@@ -2,6 +2,9 @@ import Vinc.Axioms
 import Vinc.ConnectMailbox
 import Vinc.TraceConnectMailbox
 import Vinc.ConnectTable
+import Vinc.ConnectRelay
+import Vinc.TraceConnect
+import Vinc.ConnectRelayThm
 import Vinc.TraceConnectTable
 
 /-! Axiom audit of the main theorems of the connectivity proofs. -/
@@ -23,3 +26,21 @@ import Vinc.TraceConnectTable
 #audit_axioms Vinc.ConnectTable.find_probes
 #audit_axioms Vinc.ConnectTable.insert_len
 #audit_axioms Vinc.ConnectTable.remove_len
+#audit_axioms Vinc.ConnectRelay.peer_unauth
+#audit_axioms Vinc.ConnectRelay.forward_peer
+#audit_axioms Vinc.ConnectRelay.no_reforward
+#audit_axioms Vinc.ConnectRelay.back_window
+#audit_axioms Vinc.ConnectRelay.back_expired
+#audit_axioms Vinc.ConnectRelay.fwdback_local
+#audit_axioms Vinc.ConnectRelay.fwdback_learnt
+#audit_axioms Vinc.ConnectRelay.aget_aput_self
+#audit_axioms Vinc.ConnectRelay.charge_reset
+#audit_axioms Vinc.ConnectRelay.charge_ok
+#audit_axioms Vinc.ConnectRelay.charge_drop
+#audit_axioms Vinc.ConnectRelay.charge_inv
+#audit_axioms Vinc.ConnectRelay.tunnel_spec
+#audit_axioms Vinc.ConnectRelay.spu_member
+#audit_axioms Vinc.ConnectRelay.sleep_spec
+#audit_axioms Vinc.ConnectRelay.close_asleep
+#audit_axioms Vinc.ConnectRelay.close_asleep_of
+#audit_axioms Vinc.ConnectRelay.stale_copy

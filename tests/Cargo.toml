@@ -492,3 +492,7 @@ path = "trace_connect_mailbox.rs"
 [[test]]
 name = "trace_connect_table"
 path = "trace_connect_table.rs"
+
+[[test]]
+name = "trace_connect"
+path = "trace_connect.rs"
