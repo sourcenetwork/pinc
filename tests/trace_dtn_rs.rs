@@ -168,7 +168,22 @@ fn field_and_code_trace() {
     }
 
     // Rs::new: valid and invalid parameters.
-    for (k, m) in [(0usize, 0usize), (0, 5), (1, 0), (1, 254), (1, 255), (2, 253), (2, 254), (127, 128), (128, 128), (255, 0), (255, 1), (256, 0), (300, 4), (3, 250)] {
+    for (k, m) in [
+        (0usize, 0usize),
+        (0, 5),
+        (1, 0),
+        (1, 254),
+        (1, 255),
+        (2, 253),
+        (2, 254),
+        (127, 128),
+        (128, 128),
+        (255, 0),
+        (255, 1),
+        (256, 0),
+        (300, 4),
+        (3, 250),
+    ] {
         let r = Rs::new(k, m);
         assert_eq!(r.is_ok(), k >= 1 && k + m <= 255, "k={k} m={m}");
         out.push(format!(r#"{{"t":"rsnew","k":{k},"m":{m},"ok":{}}}"#, r.is_ok()));
@@ -211,7 +226,7 @@ fn field_and_code_trace() {
                 let present: Vec<bool> = match trial {
                     0 => vec![true; n],
                     1 => (0..n).map(|s| s >= m).collect(),
-                    _ => (0..n).map(|_| rng.next_u64() % 3 != 0).collect(),
+                    _ => (0..n).map(|_| !rng.next_u64().is_multiple_of(3)).collect(),
                 };
                 let mut b = whole.clone();
                 for (s, p) in present.iter().enumerate() {
