@@ -83,6 +83,11 @@ ep_impl! {
             self.counters.dropped_in += 1;
             return;
         }
+        // Back-pressure: with the host's queue near full of events it cannot recover, read nothing more.
+        if self.events.stalled() {
+            self.counters.stalled_in += 1;
+            return;
+        }
         self.ledger.on_receive(remote, buf.len() as u64);
         trace!(self, now, LedgerRx {
             addr: addr_key(&remote),
@@ -153,6 +158,11 @@ ep_impl! {
         let pid = self.path_id(local, remote);
         let Some(slot) = self.slots.get_mut(i) else { return Err(Drop::Unroutable) };
         let Some(conn) = slot.conn.as_mut() else { return Err(Drop::Closed) };
+        // Back-pressure: the session's held events are all unrecoverable; the peer sends again once they drain.
+        if slot.m.held.stalled() {
+            self.counters.stalled_in += 1;
+            return Err(Drop::Closed);
+        }
         let mut env = env!(self, now);
         let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
         if r.is_ok() {

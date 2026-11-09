@@ -3,13 +3,16 @@
 //! The endpoint reads every event of a connection right after it changed. Transport events become [`Event`]s; the
 //! ones that report application data (streams, datagrams) pass the access gate: they are emitted only once the peer's
 //! access check allowed the session (and, on a client that waits for READY, once READY arrived), and are held in order
-//! until then, 64 at most. Establishment starts the access check and, on the dialing side, the round trip notes; a
-//! close tells the application, orphans the unheard sub-sessions of the session and, for a dial that timed out, raises
-//! the handshake floor.
+//! until then, 64 at most. A held read or write notification, which the application can recover by reading state, is
+//! the only thing a full hold gives up. A hold full of anything else stalls the session: its events wait in the
+//! connection and its datagrams are refused until the answer comes. Establishment starts the access check and, on the
+//! dialing side, the round trip notes; a close tells the application, orphans the unheard sub-sessions of the session
+//! and, for a dial that timed out, raises the handshake floor.
 //!
 //! Invariants: no application event leaves before the session is allowed; a session the application never heard of
 //! produces no `Closed`; a dial the application asked for ends with `Connected` or `ConnectFailed` (or `Closed` after
-//! an early `Connected`), never silently; a session is orphaned at most once.
+//! an early `Connected`), never silently; a session is orphaned at most once; an event the application cannot recover
+//! (a stream opened or reset, a datagram) is never dropped from the hold.
 
 use vinc_security::TicketBatch;
 use vinc_transport::conn::{CloseReason, Event as ConnEvent, PathId, code};
@@ -54,6 +57,10 @@ ep_impl! {
         loop {
             let Some(slot) = self.slots.get_mut(i) else { return };
             if !slot.m.in_use {
+                return;
+            }
+            // Back-pressure: leave the events in the connection until the host drains the held ones.
+            if slot.m.held.stalled() {
                 return;
             }
             let Some(conn) = slot.conn.as_mut() else { return };

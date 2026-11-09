@@ -1411,6 +1411,7 @@ dependencies = [
 name = "vinc-core"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "vinc-crypto",
  "vinc-security",
  "vinc-transport",

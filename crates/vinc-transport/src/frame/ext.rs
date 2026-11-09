@@ -1,4 +1,4 @@
-//! The registry of extension frame types: every type at or above [`EXTENSION_BASE`](super::EXTENSION_BASE) that a
+//! The registry of extension frame types: every type at or above [`EXTENSION_BASE`] that a
 //! crate of this library sends, in one place.
 //!
 //! Each assigned type or range is a constant here and an entry of [`ASSIGNED`]; a crate that sends or matches an

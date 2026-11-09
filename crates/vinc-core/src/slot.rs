@@ -3,7 +3,9 @@
 //!
 //! Invariants: exactly one of `conn` and `mem` holds a value at any time, so a slot's memory is never lost and never
 //! used by two connections; `gen` grows each time the slot starts a new session, so a [`SessionId`] names one
-//! session only; the held events of a session are released in the order they arrived.
+//! session only; the held events of a session are released in the order they arrived; the held ring never drops an
+//! event the application cannot recover by reading state (a stream opened, a stream reset, a datagram): when the ring
+//! holds nothing but those, the session is stalled and the endpoint reads no more from it until the ring drains.
 
 use vinc_crypto::{NodeId, Provider};
 use vinc_security::{Alpn, ConnId};
@@ -72,8 +74,9 @@ impl HeldEvent {
         }
     }
 
+    /// Whether reading state tells the application what the event did, so a full ring may drop it.
     pub(crate) const fn lossy(&self) -> bool {
-        matches!(self.kind, Self::READABLE | Self::WRITABLE | Self::DATAGRAM)
+        matches!(self.kind, Self::READABLE | Self::WRITABLE)
     }
 }
 
@@ -102,8 +105,26 @@ impl Held {
         (self.head + i) % HELD_EVENTS
     }
 
-    /// Hold an event. A repeated notification for the same stream merges; when full, the oldest notification the
-    /// application can recover by reading state goes first, then the oldest event.
+    /// Whether the ring holds nothing it may drop: it is full of events the application cannot recover. The endpoint
+    /// reads no more events from the session while this is true, so [`push`](Self::push) always finds room.
+    pub(crate) fn stalled(&self) -> bool {
+        self.len == HELD_EVENTS && self.first_lossy().is_none()
+    }
+
+    /// The place, counting from the oldest, of the oldest event the application can recover.
+    fn first_lossy(&self) -> Option<usize> {
+        (0..self.len).find(|i| {
+            self.items
+                .get(self.at(*i))
+                .copied()
+                .flatten()
+                .is_some_and(|h| h.lossy())
+        })
+    }
+
+    /// Hold an event. A repeated read or write notification for the same stream merges; when full, the oldest such
+    /// notification goes first. An event that cannot be recovered is never evicted: with none to evict the new event
+    /// is refused and counted (the endpoint prevents this by checking [`stalled`](Self::stalled) first).
     pub(crate) fn push(&mut self, ev: HeldEvent) {
         if ev.lossy()
             && (0..self.len).any(|i| {
@@ -117,15 +138,10 @@ impl Held {
             return;
         }
         if self.len == HELD_EVENTS {
-            let victim = (0..self.len)
-                .find(|i| {
-                    self.items
-                        .get(self.at(*i))
-                        .copied()
-                        .flatten()
-                        .is_some_and(|h| h.lossy())
-                })
-                .unwrap_or(0);
+            let Some(victim) = self.first_lossy() else {
+                self.dropped += 1;
+                return;
+            };
             // Close the gap at `victim` by moving the older entries up one place.
             for i in (0..victim).rev() {
                 let (from, to) = (self.at(i), self.at(i + 1));
@@ -351,5 +367,150 @@ impl<P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usiz
             .field("in_use", &self.m.in_use)
             .field("generation", &self.m.generation)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::vec::Vec;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    type Key = (u8, u64, u64);
+
+    fn key(e: &HeldEvent) -> Key {
+        (e.kind, e.stream, e.error)
+    }
+
+    /// What the endpoint does around the ring: it feeds a held event only while the ring is not stalled, and leaves
+    /// the rest in the connection, in order, until the host drains.
+    struct Sim {
+        held: Held,
+        waiting: VecDeque<HeldEvent>,
+        offered: Vec<Key>,
+        delivered: Vec<Key>,
+        lossy_offered: usize,
+    }
+
+    impl Sim {
+        fn feed(&mut self) {
+            while !self.held.stalled() {
+                let Some(ev) = self.waiting.pop_front() else { break };
+                self.held.push(ev);
+                assert!(self.held.len() <= HELD_EVENTS);
+            }
+        }
+
+        fn offer(&mut self, ev: HeldEvent) {
+            if ev.lossy() {
+                self.lossy_offered += 1;
+            } else {
+                self.offered.push(key(&ev));
+            }
+            self.waiting.push_back(ev);
+            self.feed();
+        }
+
+        fn take(&mut self) -> bool {
+            let Some(e) = self.held.pop() else { return false };
+            if !e.lossy() {
+                self.delivered.push(key(&e));
+            }
+            self.feed();
+            true
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Offer(u8, u64, u64),
+        Take,
+    }
+
+    fn ops() -> impl Strategy<Value = Vec<Op>> {
+        prop::collection::vec(
+            prop_oneof![
+                6 => (0..5u8, 0..6u64, 0..4u64).prop_map(|(k, s, e)| Op::Offer(k, s, e)),
+                1 => Just(Op::Take),
+            ],
+            0..600,
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn nothing_that_cannot_be_recovered_is_dropped(ops in ops()) {
+            let mut sim = Sim {
+                held: Held::EMPTY,
+                waiting: VecDeque::new(),
+                offered: Vec::new(),
+                delivered: Vec::new(),
+                lossy_offered: 0,
+            };
+            for op in ops {
+                match op {
+                    Op::Offer(kind, stream, error) => {
+                        let (stream, error) = if kind == HeldEvent::DATAGRAM { (0, 0) } else { (stream, error) };
+                        let error = if kind == HeldEvent::RESET { error } else { 0 };
+                        sim.offer(HeldEvent { kind, stream, error });
+                    }
+                    Op::Take => {
+                        sim.take();
+                    }
+                }
+            }
+            while sim.take() || !sim.waiting.is_empty() {}
+            prop_assert_eq!(&sim.delivered, &sim.offered, "an event that cannot be recovered was lost or reordered");
+            prop_assert!(sim.held.dropped as usize <= sim.lossy_offered, "a drop was counted for more than the lossy events");
+        }
+    }
+
+    #[test]
+    fn a_ring_full_of_unrecoverable_events_stalls_instead_of_dropping() {
+        let mut h = Held::EMPTY;
+        for i in 0..HELD_EVENTS as u64 {
+            assert!(!h.stalled());
+            h.push(HeldEvent {
+                kind: HeldEvent::OPENED,
+                stream: i,
+                error: 0,
+            });
+        }
+        assert!(h.stalled());
+        // A recoverable notification is the only thing a full ring gives up.
+        let mut h = Held::EMPTY;
+        h.push(HeldEvent {
+            kind: HeldEvent::READABLE,
+            stream: 1,
+            error: 0,
+        });
+        for _ in 1..HELD_EVENTS {
+            h.push(HeldEvent {
+                kind: HeldEvent::DATAGRAM,
+                stream: 0,
+                error: 0,
+            });
+        }
+        assert!(!h.stalled());
+        h.push(HeldEvent {
+            kind: HeldEvent::RESET,
+            stream: 2,
+            error: 9,
+        });
+        assert_eq!((h.len(), h.dropped), (HELD_EVENTS, 1));
+        assert!(h.stalled());
+        let kinds: Vec<u8> = std::iter::from_fn(|| h.pop()).map(|e| e.kind).collect();
+        assert!(!kinds.contains(&HeldEvent::READABLE));
+        assert_eq!(
+            kinds
+                .iter()
+                .map(|k| usize::from(*k == HeldEvent::DATAGRAM))
+                .sum::<usize>(),
+            HELD_EVENTS - 1
+        );
+        assert_eq!(kinds.last(), Some(&HeldEvent::RESET));
     }
 }

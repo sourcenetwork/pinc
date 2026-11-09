@@ -106,6 +106,7 @@ pub(crate) struct Counters {
     pub(crate) datagrams_out: u64,
     pub(crate) dropped_in: u64,
     pub(crate) held_by_ledger: u64,
+    pub(crate) stalled_in: u64,
     pub(crate) retired: u64,
 }
 
@@ -361,6 +362,7 @@ ep_impl! {
             datagrams_out: self.counters.datagrams_out,
             dropped_in: self.counters.dropped_in,
             held_by_ledger: self.counters.held_by_ledger,
+            stalled_in: self.counters.stalled_in,
             events_dropped: self.events.dropped,
         }
     }

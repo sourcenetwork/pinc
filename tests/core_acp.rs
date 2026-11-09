@@ -234,3 +234,83 @@ fn ready_hold_makes_a_fast_client_wait_for_the_servers_answer() {
         }
     });
 }
+
+#[test]
+fn a_flood_before_the_answer_fills_the_hold_and_stalls_the_session_without_losing_a_datagram() {
+    big_stack(|| {
+        let mut net = CoreNet::new(SLOW);
+        let (a, b) = (net.add(1), net.add(2));
+        net.nodes[b].acp = Acp::Manual;
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        assert!(net.run(now + 5 * SEC_NS, |n| n.nodes[a].saw(is_connected)
+            && !n.nodes[b].checks.is_empty()));
+        // One stream the peer opens first, then datagrams far past the 64 the hold keeps.
+        let t = net.now;
+        let Value::Stream(id) = net.nodes[a]
+            .cmd(
+                t,
+                Command::OpenStream {
+                    session: sa,
+                    bidi: false,
+                },
+            )
+            .unwrap()
+            .value
+        else {
+            panic!()
+        };
+        net.nodes[a]
+            .cmd(
+                t,
+                Command::Write {
+                    session: sa,
+                    stream: id,
+                    data: b"hi",
+                },
+            )
+            .unwrap();
+        net.run_for(50 * MS_NS);
+        for i in 0..300u32 {
+            let t = net.now;
+            let _ = net.nodes[a].cmd(
+                t,
+                Command::SendDatagram {
+                    session: sa,
+                    data: &i.to_be_bytes(),
+                },
+            );
+            net.run_for(MS_NS);
+        }
+        net.run_for(500 * MS_NS);
+        let ns = net.nodes[b].ep.node_stats();
+        assert!(ns.stalled_in > 0, "the flood was never held back: {ns:?}");
+        assert_eq!(
+            net.nodes[b].count(|e| matches!(e, Event::DatagramReceived { .. })),
+            0,
+            "nothing leaves before the answer"
+        );
+        let (check, _) = net.nodes[b].checks[0];
+        let answered = net.now;
+        net.nodes[b]
+            .cmd(answered, Command::AcpAnswer { check, allow: true })
+            .unwrap();
+        net.run_for(SEC_NS);
+        let got: Vec<&Event> = net.nodes[b].events.iter().map(|(_, e)| e).collect();
+        let opened = got.iter().position(|e| matches!(e, Event::StreamOpened { .. }));
+        let datagrams = got
+            .iter()
+            .filter(|e| matches!(e, Event::DatagramReceived { .. }))
+            .count();
+        assert!(opened.is_some(), "the stream the peer opened was dropped");
+        let first_dg = got.iter().position(|e| matches!(e, Event::DatagramReceived { .. }));
+        assert!(opened < first_dg, "order kept");
+        // Every datagram the hold took reached the host: 64 places less the stream, less one recoverable read.
+        assert!(
+            datagrams >= vinc_core::HELD_EVENTS - 2,
+            "{datagrams} datagrams of the {} held",
+            vinc_core::HELD_EVENTS
+        );
+    });
+}

@@ -23,5 +23,8 @@ vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-transport = { workspace = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [lints]
 workspace = true

@@ -196,12 +196,10 @@ pub enum Event {
 }
 
 impl Event {
-    /// Whether the application can recover the event by reading state, so a full queue may drop it.
+    /// Whether the application can recover the event by reading state, so a full queue may drop it. A datagram
+    /// cannot be recovered: each notification stands for one datagram.
     pub(crate) const fn lossy(&self) -> bool {
-        matches!(
-            self,
-            Self::StreamReadable { .. } | Self::StreamWritable { .. } | Self::DatagramReceived { .. }
-        )
+        matches!(self, Self::StreamReadable { .. } | Self::StreamWritable { .. })
     }
 }
 
@@ -475,7 +473,7 @@ pub struct SessionStats {
     pub thin: bool,
     /// Application events held back for the access check.
     pub held: usize,
-    /// Held events dropped because the hold was full.
+    /// Held read and write notifications dropped because the hold was full; they are recoverable by reading state.
     pub held_dropped: u64,
     /// The probe timeout now: before any round trip sample it starts from the node's round trips.
     pub pto: u64,
@@ -508,6 +506,8 @@ pub struct NodeStats {
     pub dropped_in: u64,
     /// Datagrams the ledger held back.
     pub held_by_ledger: u64,
+    /// Datagrams refused because the host left unrecoverable events unread, or a session's held events were full.
+    pub stalled_in: u64,
     /// Events dropped because the event queue was full.
     pub events_dropped: u64,
 }

@@ -84,6 +84,7 @@ pub use keepalive::{
     standby_due,
 };
 pub use ledger::{DATAGRAM_OVERHEAD, FACTOR, LEDGER_ENTRIES, Ledger, LedgerEntry};
+pub use queue::EVENT_HEADROOM;
 pub use rtt::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
 pub use rx::{HALF_OPEN_LIFE, MAX_HALF_OPEN};
 pub use slot::{HELD_EVENTS, Slot};
