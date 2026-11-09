@@ -117,7 +117,13 @@ impl CustodyAck {
     /// [`DtnError::Wire`] if `out` is too short.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, DtnError> {
         let mut w = Writer::new(out);
-        w.put_slice(&body(&self.bundle, &self.custodian, &self.previous, self.offer, self.at)?)?;
+        w.put_slice(&body(
+            &self.bundle,
+            &self.custodian,
+            &self.previous,
+            self.offer,
+            self.at,
+        )?)?;
         self.endorsement.encode(&mut w)?;
         Ok(w.written().len())
     }
@@ -308,7 +314,11 @@ impl<const N: usize> CustodyBook<N> {
         self.sync(ledger);
         if let Some(r) = self.records.iter_mut().flatten().find(|r| r.bundle == bundle) {
             r.offered = None;
-            return Ok(AckDue { bundle, previous, offer });
+            return Ok(AckDue {
+                bundle,
+                previous,
+                offer,
+            });
         }
         let slot = self
             .records
@@ -329,7 +339,11 @@ impl<const N: usize> CustodyBook<N> {
                 offered: None,
             });
         }
-        Ok(AckDue { bundle, previous, offer })
+        Ok(AckDue {
+            bundle,
+            previous,
+            offer,
+        })
     }
 
     /// The node an ack for `bundle` is owed to.

@@ -116,9 +116,14 @@ fn heads_and_acks_do_not_allocate_for_any_algorithm() {
             let n = s.signed.encode(&mut enc).unwrap();
             let back = SignedHead::decode(&enc[..n]).unwrap();
             back.verify().unwrap();
-            let ack =
-                vinc_dtn::custody::CustodyAck::sign(back.head().id, back.head().destination, 7, Hlc::new(1, 0), &sender)
-                    .unwrap();
+            let ack = vinc_dtn::custody::CustodyAck::sign(
+                back.head().id,
+                back.head().destination,
+                7,
+                Hlc::new(1, 0),
+                &sender,
+            )
+            .unwrap();
             ack.verify().unwrap();
         });
         assert_eq!(stats.count(), 0, "{alg:?}: {stats:?}");

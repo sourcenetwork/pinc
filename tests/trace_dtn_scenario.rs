@@ -479,7 +479,12 @@ impl Sim {
                                     }
                                     outcome = "held";
                                 }
-                                Err(ForwardError::Duplicate | ForwardError::Full | ForwardError::NoCopies | ForwardError::Finished) => {
+                                Err(
+                                    ForwardError::Duplicate
+                                    | ForwardError::Full
+                                    | ForwardError::NoCopies
+                                    | ForwardError::Finished,
+                                ) => {
                                     if fresh {
                                         self.dropped += u32::from(copies);
                                     }
@@ -492,7 +497,8 @@ impl Sim {
                     self.meet(outcome);
                 }
                 if outcome != "refused" && outcome != "capacity" && outcome != "other" {
-                    let ack = CustodyAck::sign(BUNDLE, self.ids[from], off, Hlc::new(t, 0), &self.nodes[to].kp).unwrap();
+                    let ack =
+                        CustodyAck::sign(BUNDLE, self.ids[from], off, Hlc::new(t, 0), &self.nodes[to].kp).unwrap();
                     let mut bytes = vec![0; ack.encoded_len()];
                     ack.encode(&mut bytes).unwrap();
                     let aid = self.seq;
@@ -509,7 +515,9 @@ impl Sim {
                     false,
                 )
             }
-            Msg::Ack { id, from, to, bytes, .. } => {
+            Msg::Ack {
+                id, from, to, bytes, ..
+            } => {
                 let ack = CustodyAck::decode(&bytes).unwrap();
                 ack.verify().unwrap();
                 assert_eq!(self.idx(&ack.custodian), from);

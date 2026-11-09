@@ -220,7 +220,12 @@ impl<const B: usize, const L: usize, const T: usize, const F: usize> Forwarder<B
                 if self.bundles.iter().flatten().any(|b| b.held.id == held.id) {
                     return Err(ForwardError::Duplicate);
                 }
-                if self.seen.iter().flatten().any(|d| d.id == held.id && d.expires > self.now) {
+                if self
+                    .seen
+                    .iter()
+                    .flatten()
+                    .any(|d| d.id == held.id && d.expires > self.now)
+                {
                     self.ignored = self.ignored.saturating_add(1);
                     return Err(ForwardError::Finished);
                 }

@@ -263,7 +263,10 @@ fn undecodable_partial_bundle_reports_incomplete() {
     let mut rx = Reception::<8>::new(&s.signed, &mut buf, NOW).unwrap();
     rx.feed(0..3, &s.proof(0..3)).unwrap();
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
-    assert_eq!(dtn_common::finish(&mut rx, &mut outboard).err(), Some(DtnError::Incomplete));
+    assert_eq!(
+        dtn_common::finish(&mut rx, &mut outboard).err(),
+        Some(DtnError::Incomplete)
+    );
     assert!(!rx.is_complete());
 }
 
@@ -500,7 +503,11 @@ fn finish_never_writes_over_a_held_symbol() {
     assert_eq!(dtn_common::finish(&mut rx, &mut ob).err(), Some(DtnError::Inconsistent));
     assert!(rx.holds(0) && rx.holds(2) && rx.holds(3) && !rx.holds(1));
     for s in [0, 2, 3] {
-        assert_eq!(&rx.sealed()[s * g..(s + 1) * g], &bad.sealed[s * g..(s + 1) * g], "symbol {s}");
+        assert_eq!(
+            &rx.sealed()[s * g..(s + 1) * g],
+            &bad.sealed[s * g..(s + 1) * g],
+            "symbol {s}"
+        );
     }
     // The scratch and outboard sizes are checked before anything moves.
     let mut scratch = vec![0; rx.scratch_len().unwrap()];

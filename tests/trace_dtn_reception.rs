@@ -274,7 +274,9 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
                 assert_eq!(rx.sealed(), &before_buf[..], "a refused finish writes nothing");
                 let (snap, now_held) = snapshot(&rx);
                 assert_eq!(now_held, held);
-                out.push(format!(r#"{{"t":"rx","run":{id},"op":"finbuf","res":"buffer",{snap}}}"#));
+                out.push(format!(
+                    r#"{{"t":"rx","run":{id},"op":"finbuf","res":"buffer",{snap}}}"#
+                ));
                 continue;
             }
             let was_held = held.clone();
@@ -294,7 +296,11 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
             }
             for (sym, _) in was_held.iter().enumerate().filter(|(_, h)| **h) {
                 let r = sym * G as usize..(sym + 1) * G as usize;
-                assert_eq!(&rx.sealed()[r.clone()], &b.sealed[r], "finish never writes a held symbol");
+                assert_eq!(
+                    &rx.sealed()[r.clone()],
+                    &b.sealed[r],
+                    "finish never writes a held symbol"
+                );
             }
             if rc == "ok" {
                 finished_ok = true;

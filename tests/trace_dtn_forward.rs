@@ -277,8 +277,7 @@ impl<const B: usize, const L: usize, const T: usize, const F: usize> Run<B, L, T
                         "forgotten" => "hold_finished_forgotten",
                         _ => "hold_finished_delivered",
                     });
-                } else if self.tr.seen.iter().filter(|&&(_, e)| e > self.tr.now).count() == F
-                    || self.tr.rcv.len() == B
+                } else if self.tr.seen.iter().filter(|&&(_, e)| e > self.tr.now).count() == F || self.tr.rcv.len() == B
                 {
                     assert_eq!(res, Err(ForwardError::Full));
                     self.cover.insert(if self.tr.rcv.len() == B {
@@ -379,7 +378,11 @@ impl<const B: usize, const L: usize, const T: usize, const F: usize> Run<B, L, T
                 .map(|&(_, e)| e)
                 .max()
                 .unwrap_or(0);
-            assert_eq!(memory_expiry(&self.f, id, self.tr.now), expected, "memory of bundle {id}");
+            assert_eq!(
+                memory_expiry(&self.f, id, self.tr.now),
+                expected,
+                "memory of bundle {id}"
+            );
             for p in 1..=PEERS {
                 let seen = self.f.timer_remaining(&node(p), &bid(id));
                 assert_eq!(seen, self.tr.timer.get(&(id, p)).copied(), "timer of ({id}, {p})");
@@ -493,8 +496,10 @@ impl<const B: usize, const L: usize, const T: usize, const F: usize> Run<B, L, T
         if act.is_some() {
             self.settle_gave_up(false);
         }
-        self.lines
-            .push(format!(r#"{{"t":"fw","e":"poll","act":{line},{}}}"#, snap(&self.f, self.tr.now)));
+        self.lines.push(format!(
+            r#"{{"t":"fw","e":"poll","act":{line},{}}}"#,
+            snap(&self.f, self.tr.now)
+        ));
         self.check_books();
         act.is_some()
     }

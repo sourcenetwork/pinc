@@ -102,7 +102,8 @@ fn an_expired_unswept_key_is_admitted_fresh_and_an_expired_item_is_refused() {
     l.admit(key(1), 10, Class::Transit, 50, 0, |_| {}).unwrap();
     // Key 1 expired at 50 but was not swept: the admission sweeps it first and takes the key fresh.
     let mut gone = vec![];
-    l.admit(key(1), 10, Class::Transit, 500, 60, |e| gone.push(e.key)).unwrap();
+    l.admit(key(1), 10, Class::Transit, 500, 60, |e| gone.push(e.key))
+        .unwrap();
     assert_eq!(gone, vec![key(1)]);
     assert_eq!(l.get(&key(1)).map(|e| e.expires), Some(500));
     // An item already expired at admission is refused, not admitted and swept later.
