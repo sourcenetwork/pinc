@@ -1,5 +1,5 @@
-//! Shared code of the scenario test targets: which seeds run, how a run is made (one child process per run, because a
-//! run leaks the endpoint memory of every incarnation), what a passing run must show, and the full-run switch.
+//! Shared code of the scenario test targets: which seeds run, how a run is made (one child process per run, so a panic
+//! or a stack overflow in one cannot take the others down and the determinism check has a clean environment), what a passing run must show, and the full-run switch.
 //!
 //! Default run: the matrix seed of the first variant of every scenario a target covers (one run per scenario). With
 //! `VINC_SUITE_FULL=1` every target runs all 96 seeds of its scenarios; the `report` test of a target (ignored by

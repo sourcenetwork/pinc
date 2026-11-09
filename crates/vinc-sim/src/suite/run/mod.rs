@@ -40,7 +40,9 @@ pub mod report;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
+use std::sync::{Mutex, OnceLock, mpsc};
 
 pub use self::plan::{LayerSet, Plan, Status, plan};
 use crate::suite::crypto::Registry;
@@ -356,6 +358,7 @@ fn execute(
         Ok((finish(world, driver, layers, p, &exec, &rec, reg), events))
     })();
     Registry::uninstall();
+    reg.clear();
     out
 }
 
@@ -469,7 +472,7 @@ fn finish(
 }
 
 /// Runs `world` with `driver` and `layers`. A scenario with nothing runnable is returned as `Waiting` without being
-/// run. The run happens on a thread with a large stack; the node adapter keeps half a megabyte per endpoint.
+/// run. Every run happens on one long-lived thread with a large stack (the node adapter keeps half a megabyte per endpoint), which also keeps the connection tables of finished runs for the next one.
 ///
 /// # Errors
 /// A [`RunError`] when a layer flag has no registration, the world needs something the runner does not build, or the
@@ -494,19 +497,52 @@ pub fn run_watching(
     if matches!(p.status, Status::Waiting(_)) {
         return Ok((waiting_result(world, driver, layers, p), Vec::new()));
     }
-    std::thread::scope(|s| {
-        std::thread::Builder::new()
-            .stack_size(STACK_BYTES)
-            .spawn_scoped(s, || execute(world, driver, layers, p, watch))
-            .map_err(|e| RunError::Panicked(e.to_string()))?
-            .join()
-            .map_err(|e| {
-                let m = e
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                    .unwrap_or_default();
-                RunError::Panicked(m)
-            })?
-    })
+    let (world, watch) = (world.clone(), watch.to_vec());
+    let (done, result) = mpsc::channel();
+    let job: Job = Box::new(move || {
+        let r = std::panic::catch_unwind(AssertUnwindSafe(|| execute(&world, driver, layers, p, &watch)));
+        // The caller waits for the answer; if it went away there is nobody to tell.
+        let _ = done.send(r);
+    });
+    worker()?
+        .lock()
+        .map_err(|_| RunError::Panicked("the run thread failed".to_owned()))?
+        .send(job)
+        .map_err(|_| RunError::Panicked("the run thread ended".to_owned()))?;
+    match result.recv() {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            let m = e
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_default();
+            Err(RunError::Panicked(m))
+        }
+        Err(_) => Err(RunError::Panicked("the run thread ended".to_owned())),
+    }
+}
+
+/// A run, queued for the run thread.
+type Job = Box<dyn FnOnce() + Send>;
+
+/// The thread every run executes on, started on first use and kept for the life of the process: it has the large stack
+/// the node adapter needs, and the connection tables of the nodes of a finished run stay with it for the next run
+/// instead of being allocated again.
+fn worker() -> Result<&'static Mutex<mpsc::Sender<Job>>, RunError> {
+    static WORKER: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
+    if let Some(w) = WORKER.get() {
+        return Ok(w);
+    }
+    let (tx, rx) = mpsc::channel::<Job>();
+    std::thread::Builder::new()
+        .name("suite-run".to_owned())
+        .stack_size(STACK_BYTES)
+        .spawn(move || {
+            for job in rx {
+                job();
+            }
+        })
+        .map_err(|e| RunError::Panicked(e.to_string()))?;
+    Ok(WORKER.get_or_init(|| Mutex::new(tx)))
 }

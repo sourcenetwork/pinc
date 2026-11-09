@@ -32,8 +32,9 @@
 //! Only UDP interfaces are used (the endpoint has no stream carrier). The state size reported to the recorder is an
 //! estimate built from counts the endpoint exposes (see [`SESSION_STATE_BYTES`]). The redundant-bytes count of a datagram
 //! is zero here: the value store, which knows what it already holds, sits above the adapter. The endpoint's connection
-//! memory is leaked once per incarnation (about 16 MiB: the slot table is resident, the buffer pools only as far as they are used);
-//! an idle node holds about 17 MiB. The endpoint is half a megabyte, so build a node on a thread with a stack of a few megabytes.
+//! memory (about 16 MiB per node: the slot table is resident, the buffer pools only as far as they are used) is
+//! allocated once per table and handed from an ended endpoint to the next one on the same thread, so a restart or a
+//! later run does not allocate again; an idle node holds about 17 MiB. The endpoint is half a megabyte, so build a node on a thread with a stack of a few megabytes.
 //!
 //! Invariants: the endpoint sees the node's local clock, the layers and the recorder see true time; a node's identity is created once
 //! and kept across restarts; nothing here reads a clock, a socket or a random source of the machine.

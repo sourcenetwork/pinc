@@ -236,6 +236,14 @@ impl Registry {
         Box::leak(Box::new(Self::new(seed)))
     }
 
+    /// Free everything the ledger recorded. The ledger itself lives on (a [`super::Tracked`] provider borrows it for
+    /// good), so a run that is over empties it instead of leaking what it learned.
+    pub fn clear(&self) {
+        self.st.take();
+        self.now.set(0);
+        self.current.set(0);
+    }
+
     /// Subscribe this ledger to the key derivations made on the current thread. Call it once per thread before any
     /// node runs; a derivation is attributed to the node last entered with [`Registry::enter`].
     pub fn install(&'static self) {

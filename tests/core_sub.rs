@@ -383,3 +383,50 @@ fn a_dial_that_waited_for_a_parent_that_fails_is_closed_for_a_redial() {
         )));
     });
 }
+
+#[test]
+fn a_second_protocol_opened_after_the_peer_moved_behind_its_nat_gets_its_answer() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let inside = net.nodes[a].addr;
+        let outside: std::net::SocketAddr = ([10, 9, 0, 1], 5000).into();
+        net.nat = Some((inside, outside));
+        // The first session is made behind the NAT, as seen from the outside address.
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        let parent_a = net.nodes[a].session(&rep);
+        let ok = net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[a].saw(is_connected) && n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+        });
+        assert!(ok);
+        net.run_for(2 * SEC_NS);
+        // The mapping changes while the node idles: the old outside address stops working, a new one appears.
+        let moved: std::net::SocketAddr = ([10, 9, 0, 1], 5001).into();
+        net.nat = Some((inside, moved));
+        // A second protocol: its open, its data and the answer must all get through.
+        let (child_a, _) = dial(&mut net, a, b, ALPN_B);
+        assert_ne!(child_a, parent_a);
+        write_new(&mut net, a, child_a, b"ask");
+        let end = net.now + 10 * SEC_NS;
+        assert!(net.run(end, |n| n.nodes[b].fin.len() == 1), "the request never arrived");
+        let sb = net.nodes[b]
+            .events
+            .iter()
+            .rev()
+            .find_map(|(_, e)| {
+                if let Event::Incoming { session, alpn, .. } = e {
+                    (alpn.as_bytes() == ALPN_B).then_some(*session)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        write_new(&mut net, b, sb, b"answer");
+        let end = net.now + 10 * SEC_NS;
+        assert!(
+            net.run(end, |n| n.nodes[a].fin.len() == 1),
+            "the answer never came back"
+        );
+    });
+}

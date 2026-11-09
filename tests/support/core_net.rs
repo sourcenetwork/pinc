@@ -363,6 +363,9 @@ pub struct CoreNet {
     pub delay: u64,
     seq: u64,
     pub loss: Option<LossFn>,
+    /// A NAT in front of one node: `(inside, outside)`. Datagrams the node sends carry the outside address as their
+    /// source, datagrams to the outside address reach the node, and datagrams to the inside address reach nobody.
+    pub nat: Option<(SocketAddr, SocketAddr)>,
     pub rng: SplitMix64,
     pub delivered: u64,
     /// Transmits that carried more than one datagram.
@@ -382,6 +385,7 @@ impl CoreNet {
             delay,
             seq: 0,
             loss: None,
+            nat: None,
             rng: SplitMix64::new(1),
             delivered: 0,
             batches: 0,
@@ -449,11 +453,15 @@ impl CoreNet {
                 let lost = self.loss.as_mut().is_some_and(|f| f(local, remote, chunk));
                 if !lost {
                     self.seq += 1;
+                    let from = match self.nat {
+                        Some((inside, outside)) if local == inside => outside,
+                        _ => local,
+                    };
                     self.wires.push(Wire {
                         at: now + self.delay,
                         seq: self.seq,
                         to: remote,
-                        from: local,
+                        from,
                         data: chunk.to_vec(),
                     });
                 }
@@ -514,10 +522,15 @@ impl CoreNet {
             self.now = t;
             while self.wires.peek().is_some_and(|w| w.at <= self.now) {
                 let w = self.wires.pop().unwrap();
-                if let Some(i) = self.node_at(w.to) {
+                let to = match self.nat {
+                    Some((inside, outside)) if w.to == outside => inside,
+                    Some((inside, _)) if w.to == inside => SocketAddr::from(([0, 0, 0, 0], 0)),
+                    _ => w.to,
+                };
+                if let Some(i) = self.node_at(to) {
                     let mut data = w.data;
                     self.delivered += 1;
-                    let (t, to, from) = (self.now, w.to, w.from);
+                    let (t, from) = (self.now, w.from);
                     metered(|| self.nodes[i].ep.handle_datagram(t, to, from, &mut data));
                     let now = self.now;
                     self.nodes[i].service(now);

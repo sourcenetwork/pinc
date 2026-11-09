@@ -1,7 +1,7 @@
 //! A text form of a [`RunResult`], so a run in one process can be read in another.
 //!
-//! A run leaks the endpoint memory of every incarnation (the node adapter's slot tables), so a long series of runs
-//! is made one process per run and the parent reads each child's result through this form. The form is lossless:
+//! A long series of runs is made one process per run, so one run cannot take the others down, and the parent reads
+//! each child's result through this form. The form is lossless:
 //! floats travel as their bit patterns, strings are escaped, and `decode(encode(r))` equals `r` field by field.
 //!
 //! Invariants: one record per line, tab-separated, strings escaped for backslash, tab and newline; an unknown line is

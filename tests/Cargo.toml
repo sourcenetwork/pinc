@@ -419,6 +419,10 @@ name = "core_props"
 path = "core_props.rs"
 
 [[test]]
+name = "scenario_leak"
+path = "scenario_leak.rs"
+
+[[test]]
 name = "scenario_crypto"
 path = "scenario_crypto.rs"
 

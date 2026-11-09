@@ -23,7 +23,7 @@ use vinc_crypto::{Drbg, Keypair, Software};
 use vinc_security::{Alpn, Env, KeyHandle, KeyRequest, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
 use vinc_transport::stream::{NoSource, RecvStatus};
 
-use super::mem::{CLIENT_TICKETS, Ep, slots};
+use super::mem::{CLIENT_TICKETS, Ep, recycle, slots};
 use super::shared::{Shared, derive, make_identity};
 use super::{NodeEvent, SetupError};
 use crate::Clock;
@@ -281,7 +281,9 @@ impl Core {
     }
 
     fn clear_volatile(&mut self) {
-        self.ep = None;
+        if let Some(ep) = self.ep.take() {
+            recycle(*ep);
+        }
         self.prekeys = None;
         self.sessions.clear();
         self.queue.clear();
@@ -296,7 +298,15 @@ impl Core {
     pub(super) fn end(&mut self) {
         self.clear_volatile();
     }
+}
 
+impl Drop for Core {
+    fn drop(&mut self) {
+        self.clear_volatile();
+    }
+}
+
+impl Core {
     // ---- commands to the endpoint ----
 
     pub(super) fn cmd(&mut self, c: Command<'_, NoSource>) -> Result<Reply, CommandError> {

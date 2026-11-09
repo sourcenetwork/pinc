@@ -713,7 +713,7 @@ fn rss_kib() -> u64 {
         * 4
 }
 
-/// Each restart builds a new endpoint (and leaks its connection table); the node keeps working across many.
+/// Each restart builds a new endpoint on the connection table of the last one; the node keeps working across many.
 #[test]
 fn many_restarts_keep_the_node_working() {
     big_stack(|| {

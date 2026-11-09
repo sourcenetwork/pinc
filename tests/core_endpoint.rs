@@ -316,3 +316,34 @@ fn a_session_goes_on_when_its_node_changes_address() {
         }
     });
 }
+
+#[test]
+fn an_ended_endpoint_gives_its_table_back_with_every_session_closed() {
+    use vinc_core::{Endpoint, EndpointConfig};
+    use vinc_crypto::Drbg;
+    use vinc_security::{KeyHandle, LocalIdentity};
+
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.connect_pair(a, b, ALPN_B, Role::Other);
+        assert!(net.nodes[a].ep.sessions().count() >= 2);
+        let node = net.nodes.swap_remove(a);
+        let TNode { ep, prov, kp, .. } = node;
+        let table = (*ep).into_slots().expect("every slot has its memory back");
+        // The same memory runs another endpoint, with no session in it.
+        let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+        let ep2: CoreEp = Endpoint::new(
+            net.now,
+            prov,
+            Drbg::new(&[9; 32]),
+            identity,
+            EndpointConfig::new(1),
+            table,
+        );
+        assert_eq!(ep2.sessions().count(), 0);
+        let again = ep2.into_slots();
+        assert!(again.is_some());
+    });
+}
