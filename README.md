@@ -10,80 +10,53 @@ microcontroller to a data centre and in the browser, and you write your own prot
 VINC is a library, not a framework:
 - **No runtime dependency.** The protocol crates are state machines: you give them bytes, time and commands, and they
   give back packets to send, timers and events. VINC depends on no async runtime.
-- **Async without a runtime.** The async API is runtime-agnostic (plain `std` futures) and works under any executor,
-  or under none.
+- **The host owns the runtime.** The facade starts no thread and runs no socket loop: its driver is a future your
+  executor spawns, on the core that owns the socket, and every method is `async`. nuclei is the runtime it is built and
+  tested on.
 - **Concurrency** is lock-free, through the [kovan](https://crates.io/crates/kovan) crates.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
 > **Status: pre-release.** Most crates are built and tested, and their proofs land crate by crate. The Status column
 > below says where each crate stands and [Open items](#open-items) lists what is not done.
 
-## Use it
+## Usage
 
-An echo through the `vinc` facade: one node accepts a stream on an ALPN and sends it back, another dials it by node id
-and address. The async API needs no runtime; `block_on` here is the facade's own.
+An echo on [nuclei](https://crates.io/crates/nuclei): the driver is a future the host spawns, and every call is async.
+Hosts with no executor drive the SANS-IO crates (`vinc-core`) directly.
 
 ```rust
-use vinc::{Vinc, block_on};
+use vinc::{RecvStream, SendStream, Vinc};
 
 const ALPN: &[u8] = b"echo/1";
 
-fn main() -> vinc::Result<()> {
+#[nuclei::main]
+async fn main() -> vinc::Result<()> {
     let lo = ([127, 0, 0, 1], 0).into();
-    let server = Vinc::builder().alpn(ALPN).bind_addr(lo).bind_blocking()?;
-    let client = Vinc::builder().bind_addr(lo).bind_blocking()?;
+    let (server, driver) = Vinc::builder().alpn(ALPN).bind_nuclei(lo).await?;
+    nuclei::spawn(driver.run()).detach();
+    let (client, driver) = Vinc::builder().bind_nuclei(lo).await?;
+    nuclei::spawn(driver.run()).detach();
     let addr = server.addr(); // node id and socket address
 
-    let echo = std::thread::spawn(move || {
-        block_on(async {
-            let conn = server.accept().await.expect("endpoint stopped").into_connection();
-            let (mut tx, mut rx) = conn.accept_bi().await?;
-            tx.write_all(&rx.read_to_end(1 << 20).await?).await?;
-            tx.finish().await?;
-            conn.closed().await; // dropping a connection closes it: wait for the client to finish reading
-            Ok(())
-        })
-    });
-
-    block_on(async {
-        let conn = client.connect(addr, ALPN).await?;
-        let (mut tx, mut rx) = conn.open_bi().await?;
-        tx.write_all(b"hello, vinc").await?;
-        tx.finish().await?;
-        assert_eq!(rx.read_to_end(1 << 20).await?, b"hello, vinc");
+    let echo = async |mut tx: SendStream, mut rx: RecvStream| -> vinc::Result<()> {
+        tx.write_all(&rx.read_to_end(1 << 20).await?).await?;
+        tx.finish().await
+    };
+    let accept = nuclei::spawn(async move {
+        let conn = server.accept().await.expect("endpoint stopped").into_connection();
+        let (tx, rx) = conn.accept_bi().await?;
+        echo(tx, rx).await?;
+        conn.closed().await; // dropping a connection closes it: wait for the client to finish reading
         vinc::Result::Ok(())
-    })?;
-    echo.join().expect("echo thread")
-}
-```
-
-The blocking mirror, `vinc::blocking`, is one call away (`.blocking()`) and has the same shape:
-
-```rust
-use vinc::Vinc;
-
-fn main() -> vinc::Result<()> {
-    let lo = ([127, 0, 0, 1], 0).into();
-    let server = Vinc::builder().alpn(b"echo/1").bind_addr(lo).bind_blocking()?.blocking();
-    let client = Vinc::builder().bind_addr(lo).bind_blocking()?.blocking();
-    let addr = server.addr();
-
-    let echo = std::thread::spawn(move || -> vinc::Result<()> {
-        let (_node, _alpn, conn) = server.accept().expect("endpoint stopped");
-        let (mut tx, mut rx) = conn.accept_bi()?;
-        tx.write_all(&rx.read_to_end(1 << 20)?)?;
-        tx.finish()?;
-        conn.closed(); // dropping a connection closes it: wait for the client to finish reading
-        Ok(())
     });
 
-    let conn = client.connect(addr, b"echo/1")?;
-    let (mut tx, mut rx) = conn.open_bi()?;
-    tx.write_all(b"hello, vinc")?;
-    tx.finish()?;
-    assert_eq!(rx.read_to_end(1 << 20)?, b"hello, vinc");
-    drop((conn, tx, rx)); // the last handle closes the connection
-    echo.join().expect("echo thread")
+    let conn = client.connect(addr, ALPN).await?;
+    let (mut tx, mut rx) = conn.open_bi().await?;
+    tx.write_all(b"hello, vinc").await?;
+    tx.finish().await?;
+    assert_eq!(rx.read_to_end(1 << 20).await?, b"hello, vinc");
+    drop((conn, tx, rx));
+    accept.await
 }
 ```
 
@@ -102,7 +75,7 @@ fn main() -> vinc::Result<()> {
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `vinc` | the facade: a builder, connections, `futures-io` streams and datagrams, with a runtime-agnostic async API and a blocking API | std | built; proofs being closed |
+| `vinc` | the facade: a builder, connections, `futures-io` streams and datagrams, all async and driven by the host's runtime | std | built; proofs being closed |
 | `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
 | `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
 | `vinc-crypto` | RustCrypto primitives behind one static `Provider`: AEADs, X25519, ML-KEM-768, Ed25519, P-256 and ML-DSA-65 identities, BLAKE3 KDF and transcript hash | yes | built; proofs being closed |
@@ -116,7 +89,8 @@ fn main() -> vinc::Result<()> {
 | `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proofs being closed |
 | `vinc-reconcile` | range-based set reconciliation whose cost scales with the difference, exact by a final check | yes | built; proofs being closed |
 | `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody and copy-limited forwarding | yes | built, proven |
-| `vinc-driver` | the reference driver: the endpoint on one thread over a std UDP socket | no | built; proofs being closed |
+| `vinc-driver` | the reference driver: the endpoint as a future over the host's async sockets and timers | no | built; proofs being closed |
+| `vinc-nuclei` | the driver's sockets and timers on the nuclei runtime | no | built |
 | `vinc-sim` | deterministic network simulator and scenario suite: links, sites, NAT, partitions, clocks, adversaries | no | built |
 
 **proven**: every property has a TLA+ model, a Lean theorem and trace validation ([docs/PROOFS.md](docs/PROOFS.md)).
