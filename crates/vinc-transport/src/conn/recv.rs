@@ -243,6 +243,19 @@ conn_impl! {
         if let Some(p) = self.paths.get_mut(pi) {
             p.last_rx = ctx.now;
         }
+        if self.client && self.phase == Phase::Handshaking && pi != self.paths.active {
+            // The answer to a flight sent on several paths came back on this one: the session continues here, and
+            // the path that did not answer is validated only when a challenge on it is answered.
+            let old = self.paths.active;
+            if let Some(p) = self.paths.get_mut(old) {
+                p.validated = false;
+            }
+            if let Some(p) = self.paths.get_mut(pi) {
+                p.validated = true;
+                p.amp.validate();
+            }
+            self.switch_active(pi);
+        }
         self.note_heard(ctx.now);
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
         let Some(len) = self.hs.on_fragment(&mut self.pool, body) else { return Ok(()) };

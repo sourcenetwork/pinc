@@ -570,7 +570,7 @@ drive_impl! {
             }
         }
         // THIN_HS: a try that does not include the primary path leaves it out of the flight.
-        let skip_primary = s.primary.is_some() && !primary_kept && na > 0;
+        let skip_primary = s.primary.is_some() && !primary_kept;
         let _ = self.cmd(ep,
             now,
             Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default(), skip_primary },

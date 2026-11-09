@@ -182,7 +182,8 @@ conn_impl! {
                 n += 1;
             }
         }
-        let skip_active = self.flight_skips_primary() && self.fan_target.is_some_and(|t| t != self.paths.active);
+        let skip_active = self.flight_skips_primary()
+            && (self.fan_target.is_some_and(|t| t != self.paths.active) || self.fan_set == 0);
         if !skip_active && let Some(s) = order.get_mut(n) {
             *s = Some(self.paths.active);
         }

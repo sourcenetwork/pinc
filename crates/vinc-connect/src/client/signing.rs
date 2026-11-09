@@ -280,7 +280,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.sign.close_at = None;
             self.sign.suspending = false;
             for i in 0..R {
-                if self.rly.get(i).is_some_and(|r| r.link.state() != super::link::State::Down) {
+                if self
+                    .rly
+                    .get(i)
+                    .is_some_and(|r| r.link.state() != super::link::State::Down)
+                {
                     self.close_pub(i);
                 }
             }

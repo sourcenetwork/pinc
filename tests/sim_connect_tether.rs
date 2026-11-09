@@ -1,7 +1,13 @@
 //! TETHER in the simulator: a node about to be suspended tells its relay (a signed notice, signed through the key
 //! request path), the relay holds packets for it in the mailbox and asks for a wake-up, and the packets arrive when
 //! the node resumes.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::too_many_lines)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::too_many_lines
+)]
 
 mod connect_sim_common;
 
@@ -27,7 +33,14 @@ fn a_sleeping_member_is_held_for_woken_and_served_from_the_mailbox() {
         w.run(secs(15));
         let sa = w.connected(a).expect("connected");
         let sbs = w.incoming(b).unwrap();
-        w.sim.command(secs(15), a, Cmd::Send { session: sa, data: b"awake".to_vec() });
+        w.sim.command(
+            secs(15),
+            a,
+            Cmd::Send {
+                session: sa,
+                data: b"awake".to_vec(),
+            },
+        );
         w.run(secs(20));
         assert_eq!(w.client(b).host.received(sbs), b"awake");
 
@@ -37,21 +50,38 @@ fn a_sleeping_member_is_held_for_woken_and_served_from_the_mailbox() {
         w.run(secs(25));
         let b_id = w.client(b).host.me;
         let traces = |w: &World| w.relay_node(r).traces.iter().map(|(_, t)| *t).collect::<Vec<_>>();
-        assert!(traces(&w).contains(&Trace::SleepAccepted { node: b_id }), "the signed sleep notice was accepted");
         assert!(
-            traces(&w).iter().any(|t| matches!(t, Trace::CarrierClosed { node, asleep: true } if *node == b_id)),
+            traces(&w).contains(&Trace::SleepAccepted { node: b_id }),
+            "the signed sleep notice was accepted"
+        );
+        assert!(
+            traces(&w)
+                .iter()
+                .any(|t| matches!(t, Trace::CarrierClosed { node, asleep: true } if *node == b_id)),
             "the close that followed is a suspension, not a crash"
         );
         assert!(
-            w.sim.events(a).iter().any(|(_, e)| matches!(e, Ev::Ep(Event::PeerAsleep { .. }))),
+            w.sim
+                .events(a)
+                .iter()
+                .any(|(_, e)| matches!(e, Ev::Ep(Event::PeerAsleep { .. }))),
             "the peer was told"
         );
 
         // A sends while B sleeps: the relay holds the packets and asks for a wake-up.
-        w.sim.command(secs(30), a, Cmd::Send { session: sa, data: b"while asleep".to_vec() });
+        w.sim.command(
+            secs(30),
+            a,
+            Cmd::Send {
+                session: sa,
+                data: b"while asleep".to_vec(),
+            },
+        );
         w.run(secs(40));
         assert!(
-            traces(&w).iter().any(|t| matches!(t, Trace::MailboxStored { node, .. } if *node == b_id)),
+            traces(&w)
+                .iter()
+                .any(|t| matches!(t, Trace::MailboxStored { node, .. } if *node == b_id)),
             "a packet went into the mailbox"
         );
         assert!(
@@ -65,7 +95,9 @@ fn a_sleeping_member_is_held_for_woken_and_served_from_the_mailbox() {
         w.sim.resume(secs(60), b);
         w.run(secs(75));
         assert!(
-            traces(&w).iter().any(|t| matches!(t, Trace::MailboxDelivered { node, .. } if *node == b_id)),
+            traces(&w)
+                .iter()
+                .any(|t| matches!(t, Trace::MailboxDelivered { node, .. } if *node == b_id)),
             "the mailbox was delivered"
         );
         assert_eq!(w.client(b).host.received(sbs), b"awakewhile asleep");

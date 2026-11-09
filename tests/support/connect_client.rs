@@ -103,6 +103,8 @@ pub struct Client {
     pub opened: Vec<(Time, usize, Kind)>,
     pub datagrams_sent: u64,
     pub datagrams_routed: u64,
+    /// Every datagram the endpoint transmitted: time, destination and length (relay paths included).
+    pub tx_log: Vec<(Time, SocketAddr, usize)>,
 }
 
 impl Client {
@@ -150,6 +152,7 @@ impl Client {
             opened: Vec::new(),
             datagrams_sent: 0,
             datagrams_routed: 0,
+            tx_log: Vec::new(),
         }
     }
 
@@ -296,6 +299,7 @@ impl Client {
                 break;
             };
             did = true;
+            self.tx_log.push((now, t.remote, t.len));
             if self.conn.route(now, &*self.host.ep, t.remote, &buf[..t.len]) {
                 self.datagrams_routed += 1;
                 continue;

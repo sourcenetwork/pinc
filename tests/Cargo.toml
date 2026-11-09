@@ -548,3 +548,11 @@ path = "sim_connect_carrier.rs"
 [[test]]
 name = "sim_connect_tether"
 path = "sim_connect_tether.rs"
+
+[[test]]
+name = "sim_connect_local"
+path = "sim_connect_local.rs"
+
+[[test]]
+name = "sim_connect_flight"
+path = "sim_connect_flight.rs"

@@ -103,14 +103,15 @@ conn_impl! {
     }
 
     /// While the handshake runs, send its flight only on the fan-out paths and never on the active one (one path
-    /// per try, chosen by the layer above). Ignored when no fan-out path is set, and once the handshake is done.
+    /// per try, chosen by the layer above). With no fan-out path the flight is not sent at all in that try. Ignored
+    /// once the handshake is done.
     pub fn set_flight_skip_primary(&mut self, skip: bool) {
         self.fan_skip = skip;
     }
 
     /// Whether the flight leaves only on the fan-out paths right now.
     pub(super) fn flight_skips_primary(&self) -> bool {
-        self.fan_skip && self.fan_set != 0 && self.phase == Phase::Handshaking
+        self.fan_skip && self.phase == Phase::Handshaking
     }
 
     /// A keepalive that is not a transport PING stood for this connection's (an authenticated carrier answered for
