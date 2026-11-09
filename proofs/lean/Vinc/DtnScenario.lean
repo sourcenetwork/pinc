@@ -18,7 +18,7 @@ implements with the real crate types:
   (a repeated hold ignores them) and an ack is answered; an ack at its addressee is `Acked` to the forwarder and
   `on_ack` to the book (the signature check is the boolean `valid = true`; an ack that fails it moves nothing: the
   `bad` event);
-* a message may be lost; the mailbox layer may admit an item to the shared ledger (`press`), and a bundle it evicts is
+* a message may be lost; the mailbox layer may add an item to the shared ledger (`press`), and a bundle it evicts is
   forgotten by the forwarder.
 
 The model has any list of node ids (`Cfg.ids`, without repeats), so every theorem is for every number of nodes and every
