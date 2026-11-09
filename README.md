@@ -15,8 +15,9 @@ VINC is a library, not a framework:
 - **Concurrency** is lock-free, through the [kovan](https://crates.io/crates/kovan) crates.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
-> **Status: under construction.** The crates are built one at a time. The Status column below says which exist;
-> nothing in this README claims more than that.
+> **Status: pre-release.** Most crates are built and tested, and their proofs land crate by crate. The Status column
+> below says where each crate stands and [Being closed](#being-closed) lists every open item; nothing in this README
+> claims more than that.
 
 ## Layout
 
@@ -26,30 +27,34 @@ VINC is a library, not a framework:
 | `proofs/tla/` | TLA+ specifications, model checked with TLC, plus trace validation of the implementation |
 | `proofs/lean/` | Lean 4 models and proofs of the same state machines, checked against the same traces |
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
-| `benches/` | micro benchmarks (per packet, allocations, copies) and comparisons with iroh and rust-libp2p |
-| `distributed/` | multi-node tests of VINC, iroh and rust-libp2p on shaped networks |
+| `benches/` | micro benchmarks (per packet, allocations, copies); the comparisons with iroh and rust-libp2p are not in the tree yet |
+| `distributed/` | multi-node tests of VINC, iroh and rust-libp2p on shaped networks (not in the tree yet) |
 | `scripts/gate.sh` | the checks every change must pass |
 
 ## Crates
 
 | Crate | Component | What it does | `no_std` | Status |
 |---|---|---|---|---|
-| `vinc` | facade | one entry point, with the runtime-agnostic async API and the blocking API | std feature | planned |
-| `vinc-wire` | encodings | varints and a strict canonical DAG-CBOR codec, parsed in place from borrowed bytes | yes | in progress |
-| `vinc-dag` | lite DAG | DefraDB blocks and CIDs, value roots and range proofs, verified-range sets, reconciliation summaries; no networking code, usable on its own | yes, heap-free mode | in progress |
-| `vinc-crypto` | primitives | pure-Rust RustCrypto primitives behind one static `Provider` trait: ChaCha20-Poly1305 and AES-128-GCM, header protection, SHA-256, X25519, ML-KEM-768; Ed25519, P-256 and ML-DSA-65 identities with node ids; a BLAKE3 KDF, an injective transcript hash and a seeded DRBG; no allocation, no randomness inside | yes | in progress |
-| `vinc-keystore` | key custody | where long-term keys live: a `KeyStore` trait (sign, ML-KEM decapsulate, random, seal and unseal at rest) with an in-memory software store; the optional `hwenc` feature adds a pure-Rust TPM 2.0 store (ECDSA P-256 identities and the sealing key, through `tpm2-protocol` over `/dev/tpmrm0`); no C library; std only | no | in progress |
-| `vinc-security` | security | SANS-IO hybrid post-quantum handshake (X25519 plus ML-KEM-768, mutual authentication with Ed25519, P-256, ML-DSA-65 or hybrid identities), prekey short Initial, single-use ticket resumption with 0-RTT keys, host key requests for signing and decapsulation, key schedule, packet and header protection, key roll with a fresh Diffie-Hellman value, a 6-byte authenticated credit record, resumption tickets in both directions with sealed export of the dialer's tickets, anti-amplification budget; no allocation, no randomness or clock inside | yes | in progress |
-| `vinc-transport` | VINCER | streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids, migration | yes | in progress |
-| `vinc-core` | endpoint | the SANS-IO endpoint: host interface, protocol registration and dispatch, commands, events and queries | yes | planned |
-| `vinc-connect` | connectivity | carriers over TCP and WebSocket secured by VINC's own handshake, relay forwarding between authenticated relays, signed records and lookup, address discovery, the hub tunnel, sleep notices and the mailbox; the client side is being built | yes | in progress |
-| `vinc-membership` | membership | hub roster and member view: leases, probes confirmed on an independent path, snapshots that never remove a live member, incarnations that survive restarts and clock jumps, leave and revocation | yes | in progress |
-| `vinc-values` | values | verified streaming of values of any size from up to four providers, with work stealing, liar eviction, resume and zero-copy serving | yes | in progress |
-| `vinc-broadcast` | broadcast | topic broadcast with origin authentication | yes | planned |
-| `vinc-reconcile` | reconciliation | range-based set reconciliation whose cost scales with the difference, made exact by a final fingerprint check | yes | in progress |
-| `vinc-dtn` | delay tolerance | bundles sealed to a recipient's static keys, Reed-Solomon erasure coding, verified partial bundles, custody and copy-limited forwarding | yes | in progress |
-| `vinc-driver` | driver | std sockets and OS readiness polling around the SANS-IO endpoint | no (std) | planned |
-| `vinc-sim` | testing | deterministic network simulator: links, sites, NAT, middleboxes, partitions, clocks, CPU cost and adversaries | no | in progress |
+| `vinc` | facade | one entry point, with the runtime-agnostic async API and the blocking API | std feature | being built |
+| `vinc-wire` | encodings | varints and a strict canonical DAG-CBOR codec, parsed in place from borrowed bytes | yes | built, proven |
+| `vinc-dag` | lite DAG | DefraDB blocks and CIDs, value roots and range proofs, verified-range sets, reconciliation summaries; no networking code, usable on its own | yes, heap-free mode | built, proven |
+| `vinc-crypto` | primitives | pure-Rust RustCrypto primitives behind one static `Provider` trait: ChaCha20-Poly1305 and AES-128-GCM, header protection, SHA-256, X25519, ML-KEM-768; Ed25519, P-256 and ML-DSA-65 identities with node ids; a BLAKE3 KDF, an injective transcript hash and a seeded DRBG; no allocation, no randomness inside | yes | built; proofs being closed |
+| `vinc-keystore` | key custody | where long-term keys live: a `KeyStore` trait (sign, ML-KEM decapsulate, random, seal and unseal at rest) with an in-memory software store; the optional `hwenc` feature adds a pure-Rust TPM 2.0 store (ECDSA P-256 identities and the sealing key, through `tpm2-protocol` over `/dev/tpmrm0`); no C library; std only | no | built; proofs being closed |
+| `vinc-security` | security | SANS-IO hybrid post-quantum handshake (X25519 plus ML-KEM-768, mutual authentication with Ed25519, P-256, ML-DSA-65 or hybrid identities), prekey short Initial, single-use ticket resumption with 0-RTT keys, host key requests for signing and decapsulation, key schedule, packet and header protection, key roll with a fresh Diffie-Hellman value, a 6-byte authenticated credit record, resumption tickets in both directions with sealed export of the dialer's tickets, anti-amplification budget; no allocation, no randomness or clock inside | yes | built, proven |
+| `vinc-transport` | VINCER | streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids, migration | yes | built; proofs being closed |
+| `vinc-core` | endpoint | the SANS-IO endpoint: host interface, protocol registration and dispatch, commands, events and queries | yes | built; proofs being closed |
+| `vinc-connect` | connectivity | carriers over TCP and WebSocket secured by VINC's own handshake, relay forwarding between authenticated relays, signed records and lookup, address discovery, the hub tunnel, sleep notices and the mailbox | yes | relay side built, partly proven; client side being built |
+| `vinc-membership` | membership | hub roster and member view: leases, probes confirmed on an independent path, snapshots that never remove a live member, incarnations that survive restarts and clock jumps, leave and revocation | yes | built; proofs being closed |
+| `vinc-values` | values | verified streaming of values of any size from up to four providers, with work stealing, liar eviction, resume and zero-copy serving | yes | built, proven |
+| `vinc-broadcast` | broadcast | topic broadcast through hubs: signed origins, replay floors, a bounded log per topic, subscriber sets and a fallback push | yes | built; proofs being closed |
+| `vinc-reconcile` | reconciliation | range-based set reconciliation whose cost scales with the difference, made exact by a final fingerprint check | yes | built; proofs being closed |
+| `vinc-dtn` | delay tolerance | bundles sealed to a recipient's static keys, Reed-Solomon erasure coding, verified partial bundles, custody and copy-limited forwarding | yes | built; proofs being closed |
+| `vinc-driver` | driver | std sockets and OS readiness polling around the SANS-IO endpoint | no (std) | being built |
+| `vinc-sim` | testing | deterministic network simulator: links, sites, NAT, middleboxes, partitions, clocks, CPU cost and adversaries | no | built; scenario suite being built |
+
+**built**: the crate is in `crates/` with its tests. **proven**: every property of the crate has a TLA+ model, a Lean
+theorem and trace validation in `proofs/` (the table under [Proofs](#proofs)). **being closed**: listed under
+[Being closed](#being-closed).
 
 ## Build and test
 
@@ -73,10 +78,10 @@ runtime, and that nothing in the build compiles C.
 
 ## Proofs
 
-`proofs/tla/` and `proofs/lean/` hold specifications and proofs of the first crates' state machines and pure
-functions and of the whole `vinc-security` crate (handshake, key schedule, record keys, key roll, credit record,
-amplification budget and padding, ticket stores, prekey cache), kept identical to the Rust code by validating recorded traces of the code against
-both.
+`proofs/tla/` and `proofs/lean/` hold specifications and proofs of `vinc-wire`, `vinc-dag`, the whole `vinc-security`
+crate (handshake, key schedule, record keys, key roll, credit record, amplification budget and padding, ticket stores,
+prekey cache), `vinc-values` and the relay side of `vinc-connect`, kept identical to the Rust code by validating
+recorded traces of the code against both.
 
 How it is checked, by `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
 - **Lean** (`proofs/lean`, a Lake package on core Lean and Std, no Mathlib): `lake build` checks every proof. A script
@@ -335,4 +340,16 @@ The only things taken on trust are the dependencies, not this repository's code:
 
 These items are still open; they are listed so nothing is hidden:
 - The TLC models are bounded as listed (the Lean theorems are not); the trace checks cover the recorded runs only.
-- The transport's cap on half-open sessions and their lifetime is not modelled or proved yet.
+- The proofs of `vinc-crypto` (beyond its labels), `vinc-keystore`, `vinc-transport` (beyond the key roll layer),
+  `vinc-core`, `vinc-membership`, `vinc-broadcast`, `vinc-reconcile` and `vinc-dtn` are being written. Until they are
+  in `proofs/`, those crates are tested, not proven.
+- `vinc-connect`: the relay core, the mailbox and the bounded tables are proven; the carrier frame codec, the protected
+  carrier, records and lookup, and the sleep notice codec are not yet. The client side is being built.
+- `vinc-values`: five corrections found by the proofs are being made: the `HEAD_HOLD` tail threshold (see the findings
+  rows above), a granule announced twice when two streams race on it, the stall timer armed only after the first byte,
+  a wrong out-of-band proof frame that does not evict its provider, and old responses freed before the new request is
+  accepted.
+- The endpoint's cap on half-open sessions and their lifetime (`vinc-core`) is not modelled or proved yet.
+- The facade `vinc` and `vinc-driver` are being built; their proofs follow them.
+- The scenario suite of `vinc-sim`, the comparisons with iroh and rust-libp2p, and the distributed tests are not in the
+  tree yet.
