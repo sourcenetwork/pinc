@@ -111,6 +111,7 @@ import Vinc.DtnCauchy
 import Vinc.DtnRs
 import Vinc.TraceDtnRs
 import Vinc.DtnLayout
+import Vinc.DtnLayoutOutboard
 import Vinc.DtnLayoutHlc
 import Vinc.DtnCodec
 import Vinc.DtnCodecWire
