@@ -409,8 +409,8 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
-        if t == "tr" then
-          -- Transcript events (`tr`, written by `trace_transcript`): the order of the fields every transcript absorbs.
+        if t == "tr" && (j.get? "label").isSome then
+          -- Transcript events (`tr` with a label, written by `trace_transcript`; a `tr` without one is the tail repair of `trace_recovery`): the order of the fields every transcript absorbs.
           match TraceTranscript.replayEvent j trs with
           | .ok k' =>
             trs := k'
