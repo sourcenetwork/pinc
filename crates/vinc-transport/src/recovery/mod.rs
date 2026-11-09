@@ -35,6 +35,8 @@ mod round_exit;
 mod rtt;
 mod sent;
 mod tail;
+#[cfg(feature = "trace")]
+pub mod trace;
 
 pub use cubic::{
     AckInput, CONGESTION_BETA_SMALL, Cubic, GATE_SLACK_FAST, GATE_SLACK_MID, INITIAL_CWND, MAX_CWND, MAX_MSS, MIN_CWND,

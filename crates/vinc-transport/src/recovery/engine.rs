@@ -182,6 +182,12 @@ impl LateSends {
         }
     }
 
+    /// The remembered entries, in insertion order, for trace validation.
+    #[cfg(feature = "trace")]
+    pub(super) fn entries(&self) -> alloc::vec::Vec<(u64, u64)> {
+        self.items.iter().take(self.len).copied().collect()
+    }
+
     /// Forget and return the send time of lost packet `pn`.
     pub(super) fn take(&mut self, pn: u64) -> Option<u64> {
         let i = self.items.iter().take(self.len).position(|e| e.0 == pn)?;

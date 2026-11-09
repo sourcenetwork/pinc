@@ -377,6 +377,10 @@ name = "trace_streams"
 path = "trace_streams.rs"
 
 [[test]]
+name = "trace_recovery"
+path = "trace_recovery.rs"
+
+[[test]]
 name = "trace_keyroll"
 path = "trace_keyroll.rs"
 

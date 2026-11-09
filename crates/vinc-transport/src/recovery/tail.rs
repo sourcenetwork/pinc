@@ -38,6 +38,12 @@ impl TailRepair {
         }
     }
 
+    /// The burst count and the candidate, for trace validation.
+    #[cfg(feature = "trace")]
+    pub const fn trace_view(&self) -> (u32, Option<u64>) {
+        (self.burst, self.candidate)
+    }
+
     /// Note one ack-eliciting packet `pn` just built. `has_plain` is true when it carried at least one stream frame
     /// with bytes or a stream end; `ineligible` is true when any of its stream frames could not be re-carried (longer
     /// than [`REPAIR_FRAME_BYTES`], or backed by a value source), which ends the candidate for this burst.

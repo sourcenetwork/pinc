@@ -9,6 +9,7 @@ import Vinc.HandshakeTrace
 import Vinc.TraceKeyRoll
 import Vinc.TraceKeyLayer
 import Vinc.TraceStreams
+import Vinc.TraceRecovery
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -152,6 +153,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut mis : TraceMembershipInc.W := {}
   let mut mems : TraceMembership.W := {}
   let mut sts : TraceStreams.St := {}
+  let mut rcs : TraceRecovery.St' := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -355,6 +357,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "rc" || t == "tr" then
+          -- Loss recovery events (`rc` and `tr`, written by `trace_recovery`): the sent ring, the probe timer and the tail repair.
+          match TraceRecovery.replayEvent j rcs with
+          | .ok s' =>
+            rcs := s'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
