@@ -426,3 +426,43 @@ fn held_events_released_into_a_near_full_queue_wait_and_arrive_in_order_after_th
         assert_eq!(ep.node_stats().events_lost, 0);
     });
 }
+
+#[test]
+fn a_stalled_session_still_takes_a_close_and_the_peers_acks() {
+    big_stack(|| {
+        let mut net = CoreNet::new(SLOW);
+        let (a, b) = (net.add(1), net.add(2));
+        net.nodes[b].acp = Acp::Manual;
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        assert!(net.run(now + 5 * SEC_NS, |n| n.nodes[a].saw(is_connected)
+            && !n.nodes[b].checks.is_empty()));
+        for i in 0..200u32 {
+            let t = net.now;
+            let _ = net.nodes[a].cmd(
+                t,
+                Command::SendDatagram {
+                    session: sa,
+                    data: &i.to_be_bytes(),
+                },
+            );
+            net.run_for(MS_NS);
+        }
+        net.run_for(500 * MS_NS);
+        let sb = net.nodes[b].ep.sessions().next().unwrap();
+        let Answer::Stats(st) = net.nodes[b].ep.query(Query::Stats(sb)) else {
+            panic!()
+        };
+        assert_eq!(st.held, vinc_core::HELD_EVENTS, "the hold is full");
+        assert!(net.nodes[b].ep.node_stats().stalled_in > 0);
+        // The dialer closes while the server's session is stalled and unanswered: the close gets through.
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+        assert!(
+            net.run(t + 5 * SEC_NS, |n| n.nodes[b].ep.node_stats().sessions == 0),
+            "the close never reached the stalled session"
+        );
+        assert_eq!(net.nodes[b].ep.node_stats().events_lost, 0);
+    });
+}

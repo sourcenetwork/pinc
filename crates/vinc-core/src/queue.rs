@@ -3,8 +3,9 @@
 //! Invariants: the queue never holds more than `N` events; events leave in the order they entered; every drop is
 //! counted. A full queue drops a new event the application can recover by reading state, and for any other new event
 //! evicts the oldest recoverable one. An event the application cannot recover is evicted only if the queue holds
-//! nothing else, which the endpoint prevents: it stops reading datagrams while [`EventRing::stalled`], that is while
-//! fewer than [`EVENT_HEADROOM`] places remain beyond the unrecoverable events queued.
+//! nothing else, which the endpoint prevents: while [`EventRing::stalled`], that is while fewer than [`EVENT_HEADROOM`]
+//! places remain beyond the unrecoverable events queued, it starts no session, holds timers and dials back, refuses the
+//! packets that would raise events and parks the work it could not finish until the host reads events.
 
 use crate::api::Event;
 

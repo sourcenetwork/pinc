@@ -84,11 +84,6 @@ ep_impl! {
             self.counters.dropped_in += 1;
             return;
         }
-        // Back-pressure: with the host's queue near full of events it cannot recover, read nothing more.
-        if self.events.stalled() {
-            self.counters.stalled_in += 1;
-            return;
-        }
         self.ledger.on_receive(remote, buf.len() as u64);
         trace!(self, now, LedgerRx {
             addr: addr_key(&remote),
@@ -159,13 +154,13 @@ ep_impl! {
         let pid = self.path_id(local, remote);
         let Some(slot) = self.slots.get_mut(i) else { return Err(Drop::Unroutable) };
         let Some(conn) = slot.conn.as_mut() else { return Err(Drop::Closed) };
-        // Back-pressure: the session's held events are all unrecoverable; the peer sends again once they drain.
-        if slot.m.held.stalled() {
-            self.counters.stalled_in += 1;
-            return Err(Drop::Closed);
-        }
+        // Back-pressure: while the session's held events are all unrecoverable, or the host's queue is near full of
+        // events it cannot recover, the connection refuses packets that would raise an event, and the peer sends them
+        // again. Packets that raise none (ACK, CLOSE) are still taken.
+        conn.set_gated(slot.m.held.stalled() || self.events.stalled());
         let mut env = env!(self, now);
         let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
+        self.counters.stalled_in += u64::from(r == Err(Drop::Gated));
         if r.is_ok() {
             slot.m.last_rx = now;
             if let Some(p) = slot.m.stamp(pid) {
@@ -181,6 +176,12 @@ ep_impl! {
 
     /// A datagram for an id no session holds: it may start a server session.
     fn unrouted(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        // Back-pressure: a new session raises events; with the host's queue near full of events it cannot recover,
+        // none starts.
+        if self.events.stalled() {
+            self.counters.stalled_in += 1;
+            return;
+        }
         let Some(first) = classify(buf) else {
             self.counters.dropped_in += 1;
             return;

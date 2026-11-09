@@ -279,6 +279,15 @@ conn_impl! {
             .map_err(|_| ExtensionError::Exhausted)
     }
 
+    /// Gate the connection: while `gated`, a packet with a frame that would raise an event for the application
+    /// (stream data, a reset, a datagram, an extension, READY, tickets, sleep and wake, a path answer) is refused with
+    /// [`Drop::Gated`](super::Drop::Gated) before it is processed or acknowledged, so the peer sends it again. Packets
+    /// that raise no event, such as ACK-only packets and CLOSE, are still taken. An endpoint gates a session whose
+    /// events the application has not read, so the event queue never overflows.
+    pub fn set_gated(&mut self, gated: bool) {
+        self.gated = gated;
+    }
+
     /// The oldest received datagram, borrowed; remove it with [`pop_datagram`](Self::pop_datagram).
     pub fn recv_datagram(&self) -> Option<&[u8]> {
         self.dgrams.recv_datagram(&self.pool)

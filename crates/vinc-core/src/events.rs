@@ -5,7 +5,8 @@
 //! access check allowed the session (and, on a client that waits for READY, once READY arrived), and are held in order
 //! until then, 64 at most. A held read or write notification, which the application can recover by reading state, is
 //! the only thing a full hold gives up. A hold full of anything else stalls the session: its events wait in the
-//! connection and its datagrams are refused until the answer comes. Establishment starts the access check and, on the
+//! connection and the packets that would raise more events are refused (acknowledgements and a close still get
+//! through) until the answer comes. Establishment starts the access check and, on the
 //! dialing side, the round trip notes; a close tells the application, orphans the unheard sub-sessions of the session
 //! and, for a dial that timed out, raises the handshake floor.
 //!
@@ -65,7 +66,9 @@ ep_impl! {
             if !slot.m.in_use {
                 return;
             }
-            if slot.m.held.stalled() {
+            // A session the application never heard of that ended needs its events read to be freed: its held ones go.
+            let dead = !slot.m.allowed && slot.conn.as_ref().is_some_and(vinc_transport::conn::Connection::is_closed);
+            if slot.m.held.stalled() && !dead {
                 return;
             }
             let Some(conn) = slot.conn.as_mut() else { return };

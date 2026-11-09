@@ -93,6 +93,9 @@ pub enum Drop {
     Handshake(Failure),
     /// The datagram held nothing to process.
     Empty,
+    /// The packet carries something that would raise an event and the application has not read the events it has
+    /// (see [`set_gated`](super::Connection::set_gated)); it was not processed and not acknowledged.
+    Gated,
 }
 
 impl fmt::Display for Drop {
@@ -107,6 +110,7 @@ impl fmt::Display for Drop {
             Self::NoPath => f.write_str("no room for another path"),
             Self::Handshake(e) => write!(f, "handshake message refused: {e}"),
             Self::Empty => f.write_str("the datagram held nothing to process"),
+            Self::Gated => f.write_str("the packet waits until the application reads its events"),
         }
     }
 }

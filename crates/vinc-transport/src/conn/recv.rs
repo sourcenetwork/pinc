@@ -44,8 +44,28 @@ pub(super) struct Rx {
 enum Fault {
     /// A rule was broken: close with this code.
     Violation(u64),
+    /// The connection is gated and the frame would raise an event: drop the packet unacknowledged.
+    Gated,
     /// Memory is short: drop the packet unacknowledged.
     Shortage,
+}
+
+/// Whether applying the frame can queue an event for the application. ACK, PING, PADDING, CLOSE and the frames that
+/// only make the connection answer or probe are not among them: a gated connection still takes those.
+const fn raises_event(f: &Frame<'_>) -> bool {
+    matches!(
+        f,
+        Frame::ResetStream { .. }
+            | Frame::Stream { .. }
+            | Frame::MaxStreamData { .. }
+            | Frame::PathResponse(_)
+            | Frame::Datagram { .. }
+            | Frame::Sleep
+            | Frame::Wake
+            | Frame::Ready
+            | Frame::NewTickets(_)
+            | Frame::Extension { .. }
+    )
 }
 
 fn stream_fault(e: StreamError) -> Fault {
@@ -387,6 +407,7 @@ conn_impl! {
                         Err(Drop::Closed)
                     }
                     Fault::Shortage => Err(Drop::Empty),
+                    Fault::Gated => Err(Drop::Gated),
                 };
             }
             if matches!(self.phase, Phase::Closed | Phase::Closing) {
@@ -446,6 +467,9 @@ conn_impl! {
     }
 
     fn on_frame(&mut self, env: &mut Env<'_, P>, pi: usize, now: u64, old_key: bool, f: Frame<'_>) -> Result<(), Fault> {
+        if self.gated && raises_event(&f) {
+            return Err(Fault::Gated);
+        }
         match f {
             // WAKE is acted on once the whole packet is known (see `process_payload`): it moves the path first.
             Frame::Padding { .. } | Frame::Ping | Frame::Wake => {}

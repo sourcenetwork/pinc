@@ -17,7 +17,7 @@ use proptest::prelude::*;
 use vinc_crypto::IdentityAlg;
 use vinc_security::{TicketBatch, TicketEntry};
 use vinc_tests::*;
-use vinc_transport::conn::{Event, PathId};
+use vinc_transport::conn::{Drop, Event, PathId};
 use vinc_transport::frame::Frame;
 use vinc_wire::Writer;
 
@@ -123,4 +123,67 @@ proptest! {
         });
         prop_assert!(ok, "an unrecoverable event was lost or repeated");
     }
+}
+
+fn gated_pair(f: impl FnOnce(&mut Net<'_, '_, RING>) + Send + 'static) {
+    big_stack(move || {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(7, Params::new(5 * MS)));
+        assert!(net.connect(net.now + 10 * SEC));
+        let t = net.now + SEC;
+        net.run(t, |_| false);
+        f(&mut net);
+    });
+}
+
+#[test]
+fn a_gated_connection_refuses_data_unacknowledged_and_takes_it_when_the_gate_opens() {
+    gated_pair(|net| {
+        net.b.conn.set_gated(true);
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, b"hello").unwrap();
+        net.a.conn.finish(id).unwrap();
+        let t = net.now + 2 * SEC;
+        net.run(t, |_| false);
+        assert!(net.rx_drops.contains(&(false, Drop::Gated)), "{:?}", net.rx_drops);
+        assert!(
+            !net.b.saw(|r| matches!(r, Rec::Opened(_))),
+            "an event was raised through the gate"
+        );
+        net.b.conn.set_gated(false);
+        let t = net.now + 5 * SEC;
+        assert!(
+            net.run(t, |n| n.b.fin.contains(&id)),
+            "the peer's retransmission was not accepted"
+        );
+        assert_eq!(net.b.read[&id], b"hello");
+    });
+}
+
+#[test]
+fn a_gated_connection_still_takes_acknowledgements_and_a_close() {
+    gated_pair(|net| {
+        // A is gated: B's acknowledgements of A's data (packets with no event frames) still reach it.
+        net.a.conn.set_gated(true);
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &vec![3u8; 20_000]).unwrap();
+        net.a.conn.finish(id).unwrap();
+        let t = net.now + 3 * SEC;
+        assert!(net.run(t, |n| n.b.fin.contains(&id)));
+        let t = net.now + SEC;
+        net.run(t, |_| false);
+        assert_eq!(
+            net.a.conn.recovery().bytes_in_flight(),
+            0,
+            "the acknowledgements were refused: {:?}",
+            net.rx_drops
+        );
+        // A close from B reaches the gated A.
+        let now = net.now;
+        net.b.with_env(now, |c, env| c.close(env, 0));
+        let t = net.now + 2 * SEC;
+        net.run(t, |_| false);
+        assert!(net.a.conn.is_closed(), "the close was refused by the gate");
+    });
 }

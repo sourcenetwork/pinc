@@ -513,7 +513,8 @@ pub struct NodeStats {
     pub dropped_in: u64,
     /// Datagrams the ledger held back.
     pub held_by_ledger: u64,
-    /// Datagrams refused because the host left unrecoverable events unread, or a session's held events were full.
+    /// Packets refused because they would raise events while the host left unrecoverable events unread or a session's
+    /// held events were full; the peer sends them again.
     pub stalled_in: u64,
     /// Events dropped because the event queue was full.
     pub events_dropped: u64,
