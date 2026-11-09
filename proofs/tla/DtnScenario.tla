@@ -90,13 +90,15 @@ Offerable(n, p) == IF Ranked = 1 THEN p > n ELSE TRUE
 
 HoldIn(copies) == [k |-> "hold", id |-> 1, dest |-> Dest, exp |-> Exp, copies |-> copies]
 
+OriginAcc == C!Accept(EmptyBook, Led(Src), 1, 1, Exp, 0, 0)
+OriginHold == F!Step(F!New(0), 0, HoldIn(Budget))
+OriginNf == [n \in Nodes |-> IF n = Src THEN OriginHold.f ELSE F!New(0)]
+OriginCb == [n \in Nodes |-> IF n = Src THEN OriginAcc.B ELSE EmptyBook]
+OriginLg == [n \in Nodes |-> IF n = Src THEN OriginAcc.L ELSE Led(n)]
+
 Init ==
-    LET a == C!Accept(EmptyBook, Led(Src), 1, 1, Exp, 0, 0)
-        h == F!Step(F!New(0), 0, HoldIn(Budget)) IN
-    /\ Assert(a.err = "ok" /\ h.err = "ok", "the origin was refused")
-    /\ nf = [n \in Nodes |-> IF n = Src THEN h.f ELSE F!New(0)]
-    /\ cb = [n \in Nodes |-> IF n = Src THEN a.B ELSE EmptyBook]
-    /\ lg = [n \in Nodes |-> IF n = Src THEN a.L ELSE Led(n)]
+    /\ Assert(OriginAcc.err = "ok" /\ OriginHold.err = "ok", "the origin was refused")
+    /\ nf = OriginNf /\ cb = OriginCb /\ lg = OriginLg
     /\ msgs = {} /\ t = 0 /\ seq = 0 /\ dropped = 0 /\ released = 0 /\ delivered = FALSE /\ replayed = FALSE
     /\ acc = {Src} /\ met = {}
 
