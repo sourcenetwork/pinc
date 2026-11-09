@@ -764,3 +764,19 @@ path = "node_churn.rs"
 [[test]]
 name = "node_accuracy"
 path = "node_accuracy.rs"
+
+[[test]]
+name = "node_broadcast"
+path = "node_broadcast.rs"
+
+[[test]]
+name = "node_partition"
+path = "node_partition.rs"
+
+[[test]]
+name = "node_revoke"
+path = "node_revoke.rs"
+
+[[test]]
+name = "node_newest_session"
+path = "node_newest_session.rs"
