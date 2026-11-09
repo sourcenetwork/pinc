@@ -144,4 +144,103 @@ theorem cw_lone_new (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (
   · cases hev : e.evidence m <;> cases sleep <;> simp_all [newSusp_roster] <;> (intros; exfalso; omega)
   · cases hev : e.evidence m <;> cases sleep <;> simp_all [newSusp_roster] <;> (intros; exfalso; omega)
 
+def ConfirmCond (e : Env) (n : N) (now m : Nat) (l : Lease) : Prop :=
+  ∃ since sleep sp tb path, e.carrier m = .gone since sleep ∧ ¬ Excused l since sleep (e.evidence m) ∧
+    n.susp.get? m = some sp ∧ sp.since = since ∧ (path = 1 ∨ path = 2) ∧
+    (sp.probeB = some (tb, path) ∨ (sp.probeB = none ∧ tb = now ∧ ∃ r, n.independentRoute now m (e.evidence m) = some (r, path))) ∧
+    max (max (since + CONFIRM) (sp.probeA + sp.wait)) (tb + sp.wait) ≤ now
+
+/-- The `else` of the excuse test in `carrier_watch`: the suspicion of this drop. -/
+def N.cwMain (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option Evid) : N :=
+  match n.susp.get? m with
+  | some sp0 =>
+    if sp0.since == since then
+      let (n, sp) : N × Susp :=
+        if sp0.probeB.isNone then
+          match n.independentRoute now m ev with
+          | some (route, path) =>
+            let n := (N.tx e n m route .probe).1
+            let n := n.trace (.probeSent m path)
+            let sp := { sp0 with probeB := some (now, path) }
+            ({ n with susp := n.susp.insert m sp }, sp)
+          | none => (n, sp0)
+        else (n, sp0)
+      match sp.probeB with
+      | some (tb, _) =>
+        let dl := max (max (sp.since + CONFIRM) (sp.probeA + sp.wait)) (tb + sp.wait)
+        if dl ≤ now then N.confirm e n now m sp l else n.scheduleConfirm now dl
+      | none => n
+    else N.newSusp e n now m since ev
+  | none => N.newSusp e n now m since ev
+
+theorem cw_eq_main (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease)
+    (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
+    (hx : ¬ Excused l since sleep (e.evidence m)) :
+    N.carrierWatch e n now m = N.cwMain e n now m since l (e.evidence m) := by
+  unfold N.carrierWatch N.cwMain
+  rw [hl]; dsimp only; simp only [hc]
+  cases hev : e.evidence m <;> cases sleep <;>
+    (rw [if_neg (by simp [Excused, hev] at hx ⊢; omega)]; rfl)
+
+theorem cwMain_keeps_unless (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease) (hOk : n.SuspOk)
+    (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
+    (hx : ¬ Excused l since sleep (e.evidence m)) :
+    (N.cwMain e n now m since l (e.evidence m)).roster.has m = true ∨ ConfirmCond e n now m l := by
+  have hhas : n.roster.has m = true := AMap.get?_has _ _ _ hl
+  have keep : ∀ x : N, x.roster = n.roster → x.roster.has m = true := fun x h => by rw [h]; exact hhas
+  unfold N.cwMain
+  cases hs : n.susp.get? m with
+  | none => left; exact keep _ (newSusp_roster ..)
+  | some sp0 =>
+    simp only []
+    by_cases hsi : sp0.since = since
+    · simp only [hsi, beq_self_eq_true, if_true]
+      cases hb : sp0.probeB with
+      | none =>
+        simp only [hb, Option.isNone_none, if_true]
+        cases hr : n.independentRoute now m (e.evidence m) with
+        | none => left; simp only [hr, hb]; exact hhas
+        | some rp =>
+          obtain ⟨route, path⟩ := rp
+          simp only [hr]
+          by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
+          · right
+            exact ⟨since, sleep, sp0, now, path, hc, hx, hs, hsi, independentRoute_path n now m _ route path hr,
+              Or.inr ⟨hb, rfl, route, hr⟩, hdl⟩
+          · left
+            simp only [hdl, if_false]
+            exact keep _ (by simp [scheduleConfirm_roster])
+      | some tbp =>
+        obtain ⟨tb, path⟩ := tbp
+        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false]
+        by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
+        · right
+          exact ⟨since, sleep, sp0, tb, path, hc, hx, hs, hsi, hOk m sp0 tb path hs hb, Or.inl hb, by rw [← hsi]; exact hdl⟩
+        · left
+          rw [if_neg hdl]
+          exact keep _ (by simp [scheduleConfirm_roster])
+    · left
+      simp only [show (sp0.since == since) = false by simpa using hsi]
+      exact keep _ (newSusp_roster ..)
+
+/-- The roster loses a member in `carrier_watch` only under `ConfirmCond`: the rule of the design. A single lost probe or a
+slow member (heard from since the drop: `Excused`), a member whose second probe has no path, a first sight of the
+drop, or a deadline not yet reached, all keep the member. -/
+theorem carrierWatch_keeps_unless (e : Env) (n : N) (now m : Nat) (l : Lease) (hOk : n.SuspOk)
+    (hl : n.roster.get? m = some l) :
+    (N.carrierWatch e n now m).roster.has m = true ∨ ConfirmCond e n now m l := by
+  have hhas : n.roster.has m = true := AMap.get?_has _ _ _ hl
+  cases hcar : e.carrier m with
+  | unknown =>
+    left; rw [cw_not_gone e n now m l hl (by intro s sl h; rw [hcar] at h; cases h)]; exact hhas
+  | open_ =>
+    left; rw [cw_not_gone e n now m l hl (by intro s sl h; rw [hcar] at h; cases h)]; exact hhas
+  | gone since sleep =>
+    by_cases hx : Excused l since sleep (e.evidence m)
+    · left
+      have := (cw_cleared e n now m since sleep l hl hcar hx).1
+      rw [AMap.has_keys, this, ← AMap.has_keys]; exact hhas
+    · rw [cw_eq_main e n now m since sleep l hl hcar hx]
+      exact cwMain_keeps_unless e n now m since sleep l hOk hl hcar hx
+
 end Vinc.Membership
