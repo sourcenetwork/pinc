@@ -82,6 +82,7 @@ import Vinc.ValuesPlanPairs
 import Vinc.ValuesPlanMain
 import Vinc.ValuesPlanSource
 import Vinc.ValuesPlanSourceRead
+import Vinc.ValuesPlanFlat
 import Vinc.ValuesPlanProofsK
 import Vinc.ValuesPlanProofsFrames
 import Vinc.ValuesPlanServer

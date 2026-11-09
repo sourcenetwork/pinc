@@ -24,7 +24,8 @@
 (* short return is only at the end or at a byte the store lacks).          *)
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Vinc/ValuesPlanSourceRead.lean            *)
-(* (readAt_spec, readAt_retx, readAt_prefix, readAt_short, fill_spec).     *)
+(* (readAt_spec, readAt_retx, readAt_prefix, readAt_short, fill_spec) and  *)
+(* ValuesPlanFlat.lean (byteAt_flat, readAt_closed).                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
@@ -151,6 +152,27 @@ Spec == Init /\ [][Next]_<<c, win, ok>>
 
 (* every answer is the specification, whatever the window held *)
 Inv == ok
+
+(* the flat byte of the response: the byte at stream offset p is found through Locate and the part of its frame,      *)
+(* and equals the byte of the concatenation of every frame of every range (the reference stream); the response has *)
+(* exactly `total` bytes                                                                                          *)
+Lacks == <<"none", 0>>
+ByteAtSym(c0, plan, p) ==
+    LET f == Ops!Locate(c0.len, plan.rs, plan.total, p)
+    IN IF "none" \in DOMAIN f THEN Lacks
+       ELSE IF p < f.start + HDR THEN HdrBytes(f)[p - f.start + 1]
+       ELSE IF p < f.start + HDR + f.plen
+            THEN LET into == p - (f.start + HDR)
+                     pp == Ops!ProofPair(c0.len, plan.rs, f, into \div PAR)
+                 IN IF "none" \in DOMAIN pp THEN Lacks ELSE <<"o", pp.off + (into % PAR)>>
+            ELSE <<"v", f.off + (p - (f.start + HDR + f.plen))>>
+
+FlatOK ==
+    LET plan == Plan(c)
+        stream == StreamSyms(c.len, plan.rs, 1)
+    IN /\ Len(stream) = plan.total
+       /\ \A p \in 0 .. plan.total + 1 :
+             ByteAtSym(c, plan, p) = IF p < Len(stream) THEN stream[p + 1] ELSE Lacks
 
 (* the window holds only frames of the plan *)
 WinOK == \A j \in 1 .. Len(win) :
