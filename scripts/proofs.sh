@@ -278,5 +278,6 @@ trace_tlc TraceDtnReception dtn-reception
 trace_tlc TraceDtnSeal dtn-seal
 trace_tlc TraceDtnScenario dtn-scenario
 trace_tlc TraceIncarnation incarnation
+trace_tlc TraceMembership membership
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"
