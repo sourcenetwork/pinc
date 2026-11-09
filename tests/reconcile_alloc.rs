@@ -64,6 +64,20 @@ fn a_warm_split_exchange_allocates_nothing() {
 }
 
 #[test]
+fn a_warm_chunked_exchange_allocates_nothing() {
+    let mut rng = SplitMix64::new(24);
+    let a = fixed_set(&mut rng, 20_000, 40);
+    let (b, ..) = mutate(&mut rng, &a, 6000, 40);
+    let limits = Limits {
+        max_message: 16_384,
+        ..Limits::default()
+    };
+    let (allocs, found) = warm_then_measure(&a, &b, limits);
+    assert_eq!(found, 6000);
+    assert_eq!(allocs, 0);
+}
+
+#[test]
 fn a_warm_cold_stream_allocates_nothing() {
     let mut rng = SplitMix64::new(22);
     let big = fixed_set(&mut rng, 20_000, 40);

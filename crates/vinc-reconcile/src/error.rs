@@ -46,13 +46,13 @@ pub enum Error<E> {
     BadIndex,
     /// The peer sent a malformed message.
     Malformed(Reason),
-    /// A message would be longer than the message limit; the sets differ by more than one message can describe.
+    /// A message from the peer is longer than the message limit, or the item limit is too large for any message.
     MessageTooLarge,
     /// An item, or the set reference, is longer than the item limit.
     ItemTooLarge,
-    /// The reported difference would be larger than the report limit.
+    /// The reported difference would be larger than the report limit. The host sets that limit; the protocol has none.
     ReportTooLarge,
-    /// The exchange needed more rounds than the round limit.
+    /// The exchange needed more rounds than the round limit, or held more suspended messages than a valid one needs.
     TooManyRounds,
     /// The final fingerprint still disagrees after the exact pass: the peer is faulty, or the index changed.
     Mismatch,
@@ -70,7 +70,7 @@ impl<E: fmt::Debug> fmt::Display for Error<E> {
             Self::Index(e) => write!(f, "the item index failed: {e:?}"),
             Self::BadIndex => f.write_str("the item index is unsorted or returned an item longer than its buffer"),
             Self::Malformed(r) => write!(f, "malformed message: {r}"),
-            Self::MessageTooLarge => f.write_str("a message would exceed the message limit"),
+            Self::MessageTooLarge => f.write_str("a message exceeds the message limit"),
             Self::ItemTooLarge => f.write_str("an item or the set reference exceeds the item limit"),
             Self::ReportTooLarge => f.write_str("the difference exceeds the report limit"),
             Self::TooManyRounds => f.write_str("the exchange exceeded the round limit"),

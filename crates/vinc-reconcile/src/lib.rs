@@ -10,7 +10,9 @@
 //! The crate is `no_std` and never uses `unsafe`. Without the `alloc` feature it offers the hashes, the message
 //! decoders, the [`ItemIndex`] trait and the channel types; with it, the [`Initiator`] and [`Responder`] state
 //! machines, the drivers over a [`Channel`], and [`MemIndex`]. Memory is bounded by [`Limits`] and no input can make
-//! any call panic. See [`wire`] for the message format and [`session`] for the protocol rules.
+//! any call panic. A round larger than one message is spread over as many messages as it needs, each within
+//! [`Limits::max_message`], so a valid difference never fails for its size; only the host-set report limit can end
+//! it. See [`wire`] for the message format and [`session`] for the protocol rules.
 #![no_std]
 #![forbid(unsafe_code)]
 

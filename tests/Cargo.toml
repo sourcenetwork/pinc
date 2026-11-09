@@ -273,6 +273,10 @@ name = "reconcile_codec"
 path = "reconcile_codec.rs"
 
 [[test]]
+name = "reconcile_chunked"
+path = "reconcile_chunked.rs"
+
+[[test]]
 name = "dtn_seal"
 path = "dtn_seal.rs"
 

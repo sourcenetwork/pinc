@@ -1,7 +1,12 @@
 //! The bounds of a session.
 //!
 //! Invariants: a session allocates its buffers from these once (a few times `max_item`, plus the message and report
-//! buffers, which grow only up to their limit) and never past them.
+//! buffers, which grow only up to their limit) and never past them. A session holds at most a fixed number of
+//! received messages that did not fit one reply, each at most the message limit.
+
+use vinc_wire::varint;
+
+use crate::hash::FP_LEN;
 
 /// The longest message the three-byte length can describe, without the length itself.
 pub const FRAME_MAX: usize = 0x00ff_ffff;
@@ -11,11 +16,14 @@ pub const FRAME_MAX: usize = 0x00ff_ffff;
 pub struct Limits {
     /// The longest item, and the longest set reference, in bytes.
     pub max_item: usize,
-    /// The longest message body in bytes; at most [`FRAME_MAX`].
+    /// The longest message body in bytes; at most [`FRAME_MAX`]. A difference of any size is spread over as many
+    /// messages as it needs, as long as the limit is at least [`min_message`](Self::min_message).
     pub max_message: usize,
-    /// The most bytes of difference the initiator keeps for its report.
+    /// The most bytes of difference the initiator keeps for its report. This is the host's choice of how much memory a
+    /// session may take, not a limit of the protocol.
     pub max_report: usize,
-    /// The most messages one side handles in a session.
+    /// The most messages one side handles in a session. The messages follow the difference and the message limit, so
+    /// this is a guard against a peer that never converges; the default is far above any valid exchange.
     pub max_rounds: u32,
 }
 
@@ -25,12 +33,21 @@ impl Default for Limits {
             max_item: 4096,
             max_message: FRAME_MAX,
             max_report: 64 << 20,
-            max_rounds: 256,
+            max_rounds: 1 << 24,
         }
     }
 }
 
 impl Limits {
+    /// The message limit from which every valid exchange fits: a range is cut in two with up to four bounds of
+    /// `max_item` bytes, and a leaf of one item is no larger. Below it a session still works while the keys are
+    /// shorter than `max_item`, and fails with [`Error::MessageTooLarge`](crate::Error::MessageTooLarge) when a
+    /// single part cannot fit.
+    pub fn min_message(&self) -> usize {
+        let bound = 1 + varint::encoded_len(self.max_item as u64) + self.max_item;
+        4 * bound + 2 * (1 + FP_LEN) + 16
+    }
+
     /// The message limit clamped to what the frame can carry.
     #[cfg(feature = "alloc")]
     pub(crate) fn cap(&self) -> usize {

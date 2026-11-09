@@ -1,8 +1,13 @@
 //! The message format.
 //!
-//! A message is `len3 | [venc(len ref) ref venc(n)] | venc(cnt) | parts`, where `len3` is the body length in three
-//! big-endian bytes, the bracketed header is only in the first message of the initiator, and `cnt == 0` ends the
-//! exchange. `venc` is the workspace varint of `vinc-wire`.
+//! A message is `len3 | [venc(len ref) ref venc(n)] | venc(cnt << 1 | more) | parts`, where `len3` is the body length
+//! in three big-endian bytes, the bracketed header is only in the first message of the initiator, and the empty count
+//! (`cnt == 0` and `more == 0`) ends the exchange. `venc` is the workspace varint of `vinc-wire`.
+//!
+//! A reply is at most one message, so a side whose answer to a message is larger keeps the parts that did not fit and
+//! says so with `more == 1`. The peer answers every message, with the empty count if it has nothing to say, which
+//! also tells a side that holds more to go on; the exchange ends only when both sides hold nothing. A message with
+//! `cnt == 0` and `more == 1` says nothing and is refused.
 //!
 //! A part is `tag | lo | hi | body`. The tag's low seven bits are the kind; the high bit ([`tag::INF`]) says the upper
 //! bound is infinity and is omitted. A bound is `cpl venc(len) suffix`: the shared prefix length with the previous
@@ -88,6 +93,20 @@ pub fn first_set_ref(msg: &[u8]) -> Result<&[u8], Reason> {
     r.read_bytes(n).map_err(|_| Reason::Truncated)
 }
 
+/// The part count and the `more` flag of a message.
+///
+/// # Errors
+/// [`Reason::Truncated`] for a bad varint, [`Reason::Count`] for an empty message that claims to hold more.
+pub fn read_parts(r: &mut Reader<'_>) -> Result<(usize, bool), Reason> {
+    let raw = count(r)?;
+    let (cnt, more) = (raw >> 1, raw & 1 == 1);
+    if cnt == 0 && more {
+        Err(Reason::Count)
+    } else {
+        Ok((cnt, more))
+    }
+}
+
 /// A varint as a `usize`.
 ///
 /// # Errors
@@ -147,6 +166,15 @@ pub fn put_varint(buf: &mut Vec<u8>, v: usize) -> Result<(), Reason> {
     let n = varint::encode(v as u64, &mut tmp).map_err(|_| Reason::Count)?;
     buf.extend_from_slice(tmp.get(..n).unwrap_or_default());
     Ok(())
+}
+
+/// Append the part count and the `more` flag of a message.
+///
+/// # Errors
+/// [`Reason::Count`] if the count does not encode.
+#[cfg(feature = "alloc")]
+pub fn put_parts(buf: &mut Vec<u8>, cnt: usize, more: bool) -> Result<(), Reason> {
+    put_varint(buf, (cnt << 1) | usize::from(more))
 }
 
 /// Append the bound `b` as `cpl venc(len) suffix` against `last`, the previous bound of the message, and make `b` the

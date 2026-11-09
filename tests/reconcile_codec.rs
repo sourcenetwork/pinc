@@ -94,26 +94,28 @@ proptest! {
     }
 
     #[test]
-    fn any_two_sets_reconcile_exactly_under_any_limits(
+    fn any_two_sets_reconcile_exactly_under_any_valid_limits(
         a in small_set(),
         b in small_set(),
-        max_message in 64usize..8192,
+        extra in 0usize..8192,
         swap in any::<bool>(),
     ) {
         let (a, b) = if swap { (b, a) } else { (a, b) };
-        let limits = Limits { max_item: 32, max_message, ..Limits::default() };
+        let limits = Limits { max_item: 32, ..Limits::default() };
+        let limits = Limits { max_message: limits.min_message() + extra, ..limits };
         let (ia, ib) = (index(&a), index(&b));
-        let res = run_with(&mut Initiator::new(limits), &mut Responder::new(limits), &ia, &ib, |_, _| {});
-        match res {
-            Ok(o) => {
-                let (only_b, only_a) = sym_diff(&a, &b);
-                prop_assert_eq!(sorted(o.here.clone()), only_b);
-                prop_assert_eq!(sorted(o.there.clone()), only_a);
-                prop_assert_eq!(o.here.len() + o.there.len(), sym_diff(&a, &b).0.len() + sym_diff(&a, &b).1.len());
-            }
-            // A message limit smaller than one differing range's description is a loud refusal, never a wrong answer.
-            Err(e) => prop_assert!(matches!(e, vinc_reconcile::Error::MessageTooLarge), "{e:?}"),
-        }
+        let mut largest = 0;
+        let o = run_with(&mut Initiator::new(limits), &mut Responder::new(limits), &ia, &ib, |_, m| {
+            largest = largest.max(m.len() - 3);
+        })
+        .unwrap();
+        let (only_b, only_a) = sym_diff(&a, &b);
+        let total = only_a.len() + only_b.len();
+        prop_assert_eq!(sorted(o.here.clone()), only_b);
+        prop_assert_eq!(sorted(o.there.clone()), only_a);
+        prop_assert_eq!(o.here.len() + o.there.len(), total);
+        // The parts stay within the limit; the count and the set reference are all that is added.
+        prop_assert!(largest <= limits.max_message + 16, "largest body {largest}");
     }
 
     #[test]

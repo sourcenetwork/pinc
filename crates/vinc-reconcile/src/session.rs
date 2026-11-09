@@ -4,7 +4,10 @@
 //! framed message, and a [`Step`] says what the caller does next. The drivers in [`crate::drive`] run them over a
 //! [`Channel`](crate::Channel).
 //!
-//! Invariants: only the initiator ends with a report. The exchange ends when a side sends or receives `cnt == 0`.
+//! Invariants: only the initiator ends with a report. Every message is answered by one message, so at most one side
+//! sends at a time. A reply holds as many parts as fit the message limit; the rest of the answer waits in the replier
+//! and its `more` flag says so (see [`wire`](crate::wire)). The exchange ends when a side sends or receives the empty
+//! count while neither side holds more.
 //! If any leaf part was exchanged, the initiator first sends one check: the fingerprint the responder's whole set
 //! must have if the reported difference is exact. A disagreement (an id collision) restarts the session from the root
 //! with items in place of ids, which cannot collide; a second disagreement is [`Error::Mismatch`]. So a finished
@@ -18,7 +21,7 @@ use crate::core::{Arena, Core};
 use crate::error::{Error, Reason};
 use crate::index::ItemIndex;
 use crate::limits::Limits;
-use crate::wire::count;
+use crate::wire::{count, read_parts};
 
 /// What the caller does after a handler wrote (or did not write) a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,14 +134,8 @@ impl Initiator {
         self.core.round()?;
         let body = self.core.body(msg)?;
         let mut r = Reader::new(body);
-        let np = count(&mut r)?;
-        if np == 0 {
-            return self.close(idx, out, true);
-        }
-        let ans = self.core.answer(idx, &mut r, np)?;
-        if !r.is_empty() {
-            return Err(Reason::Frame.into());
-        }
+        let (np, more) = read_parts(&mut r)?;
+        let ans = self.core.turn(idx, body, &mut r, np)?;
         if ans.cold {
             return Ok(if ans.cold_end {
                 self.phase = Phase::Done;
@@ -147,7 +144,7 @@ impl Initiator {
                 Step::Wait
             });
         }
-        if self.phase == Phase::Checking && !ans.miss {
+        if self.phase == Phase::Checking && np > 0 && !ans.miss {
             return Err(Reason::State.into());
         }
         if ans.miss {
@@ -158,11 +155,15 @@ impl Initiator {
             self.phase = Phase::Open;
             return Ok(Step::Send);
         }
-        if ans.cnt > 0 {
-            self.core.reply(out, ans.cnt)?;
+        if ans.cnt > 0 || self.core.holds() {
+            self.core.reply(out, ans.cnt, self.core.holds())?;
             return Ok(Step::Send);
         }
-        self.close(idx, out, false)
+        if more {
+            self.core.end_msg(out)?;
+            return Ok(Step::Send);
+        }
+        self.close(idx, out, np == 0)
     }
 
     /// The exchange has nothing left to say: verify if leaves were exchanged, else end.
@@ -256,21 +257,22 @@ impl Responder {
             self.side = Side::Open;
         }
         self.core.round()?;
-        let np = count(&mut r)?;
+        let (np, more) = read_parts(&mut r)?;
+        let ans = self.core.turn(idx, body, &mut r, np)?;
+        if ans.cnt > 0 || self.core.holds() {
+            self.core.reply(out, ans.cnt, self.core.holds())?;
+            return Ok(Step::Send);
+        }
+        if more {
+            self.core.end_msg(out)?;
+            return Ok(Step::Send);
+        }
+        self.side = Side::Done;
         if np == 0 {
-            self.side = Side::Done;
             return Ok(Step::Done);
         }
-        let ans = self.core.answer(idx, &mut r, np)?;
-        if !r.is_empty() {
-            return Err(Reason::Frame.into());
-        }
-        self.core.reply(out, ans.cnt)?;
-        if ans.cnt == 0 {
-            self.side = Side::Done;
-            return Ok(Step::Last);
-        }
-        Ok(Step::Send)
+        self.core.end_msg(out)?;
+        Ok(Step::Last)
     }
 
     /// Write the next chunk of a cold stream to `out`.
