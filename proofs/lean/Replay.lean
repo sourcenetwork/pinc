@@ -28,6 +28,7 @@ import Vinc.TraceDtnSeal
 import Vinc.TraceDtnScenario
 import Vinc.TraceDtnLayout
 import Vinc.TraceMembershipInc
+import Vinc.TraceMembership
 
 /-!
 # Trace replay
@@ -147,6 +148,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut dss : TraceDtnSeal.W := {}
   let mut dsc : TraceDtnScenario.W := {}
   let mut mis : TraceMembershipInc.W := {}
+  let mut mems : TraceMembership.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -294,6 +296,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnectMailbox.replayEvent j cmb with
           | .ok w' =>
             cmb := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceMembership.isTag t then
+          -- Hub and member state machine events (`mem`, written by `trace_membership`): the model of the node.
+          match TraceMembership.replayEvent j mems with
+          | .ok m' =>
+            mems := m'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

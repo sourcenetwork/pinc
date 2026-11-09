@@ -146,4 +146,10 @@ import Vinc.TraceDtnScenario
 import Vinc.MembershipInc
 import Vinc.MembershipIncThm
 import Vinc.TraceMembershipInc
+import Vinc.MembershipModelTypes
+import Vinc.MembershipModelView
+import Vinc.MembershipModelHub
+import Vinc.MembershipModelNode
+import Vinc.MembershipModelLemmas
+import Vinc.TraceMembership
 #audit_package
