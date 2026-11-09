@@ -36,6 +36,8 @@ pub struct Timers {
     pub deadline: Option<u64>,
     /// The first request offset.
     pub o0: u64,
+    /// The end of the wanted ranges in delivery order (the HEAD_HOLD tail threshold), 0 when none.
+    pub wend: u64,
 }
 
 impl Fetch {
@@ -53,7 +55,13 @@ impl Fetch {
             nv: self.nv,
             deadline: self.deadline,
             o0: self.o0,
+            wend: self.wanted_end(),
         }
+    }
+
+    /// The end of the wanted ranges in delivery order: where the last range asked ends (0 when none).
+    pub(super) fn wanted_end(&self) -> u64 {
+        self.want.as_slice().last().map_or(0, crate::span::Span::end)
     }
 
     /// The moment the stall wait counts from: the later of the last verified granule, the last stream bytes and the

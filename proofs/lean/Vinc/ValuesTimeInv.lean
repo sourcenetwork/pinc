@@ -36,35 +36,38 @@ structure Inv (s : Fs) : Prop where
     (s.head = none ∧ s.rel = true ∧ s.log.count (Ev.readable o l) = 1)
   comp : Ev.complete ∈ s.log → s.head = none
   term : (Ev.complete ∈ s.log ∨ ∃ r, Ev.failed r ∈ s.log) → s.running = false
+  vcov : ∀ o l, Ev.verified o l ∈ s.log → ∀ x, o ≤ x → x < o + l → Covers s.store x
 
 /-- No held granule: whatever else, an empty log is an invariant state. -/
 theorem inv_init (o0 : Nat) (want store : List Interval) (hs : Sound store) (dl : Option Nat) (st : Bool) (n : Nat) :
     Inv (Fs.init o0 want store dl st n) := by
-  refine ⟨hs, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Fs.init]
+  refine ⟨hs, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [Fs.init]
 
 /-- A change of fields the invariant does not read. -/
 theorem Inv.view {s s' : Fs} (hi : Inv s) (hst : s'.store = s.store) (hh : s'.head = s.head) (hr : s'.rel = s.rel)
     (ho : s'.o0 = s.o0) (hl : s'.log = s.log) (hrun : s'.running = s.running) : Inv s' := by
-  obtain ⟨a, b, c, d, e, f, g⟩ := hi
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp only [hst, hh, hr, ho, hl, hrun] <;> assumption
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp only [hst, hh, hr, ho, hl, hrun] <;> assumption
 
 /-- Committing a range keeps the invariant: every covered byte stays covered. -/
 theorem inv_commit {s : Fs} (hi : Inv s) (r : Interval) : Inv { s with store := insertVec s.store r } := by
-  obtain ⟨a, b, c, d, e, f, g⟩ := hi
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
   have hcov : ∀ x, Covers s.store x → Covers (insertVec s.store r) x :=
     fun x hx => (insertVec_covers s.store a r x).2 (Or.inl hx)
-  refine ⟨insertVec_sound _ a _, ?_, ?_, d, e, f, g⟩
+  refine ⟨insertVec_sound _ a _, ?_, ?_, d, e, f, g, ?_⟩
   · intro o l hm
     obtain ⟨h1, h2⟩ := b o l hm
     exact ⟨h1, fun x hx1 hx2 => hcov x (h2 x hx1 hx2)⟩
   · intro h hh
     obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := c h hh
     exact ⟨h1, h2, h3, h4, h5, h6, fun x hx1 hx2 => hcov x (h7 x hx1 hx2)⟩
+  · intro o l hm x h1 h2
+    exact hcov x (vc o l hm x h1 h2)
 
 /-- A failure record keeps the invariant. -/
 theorem inv_fail {s : Fs} (hi : Inv s) (r : Fail) : Inv (failWith s r) := by
-  obtain ⟨a, b, c, d, e, f, g⟩ := hi
-  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
+  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro o l hm
     simp [failWith] at hm ⊢
     exact b o l hm
@@ -79,11 +82,14 @@ theorem inv_fail {s : Fs} (hi : Inv s) (r : Fail) : Inv (failWith s r) := by
     exact f hc
   · intro _
     simp [failWith]
+  · intro o l hm
+    simp [failWith] at hm
+    exact vc o l hm
 
 /-- A redial record keeps the invariant. -/
 theorem inv_redial {s : Fs} (hi : Inv s) (now : Nat) : Inv (redial s now) := by
   have hl : (redial s now).log = s.log ++ [Ev.redial s.sw (min (smul s.sw 2) STALL_CAP)] := rfl
-  obtain ⟨a, b, c, d, e, f, g⟩ := hi
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
   have hmem : ∀ e', (∀ w n, e' ≠ Ev.redial w n) → (e' ∈ (redial s now).log ↔ e' ∈ s.log) := by
     intro e' hne
     rw [hl]
@@ -95,7 +101,7 @@ theorem inv_redial {s : Fs} (hi : Inv s) (now : Nat) : Inv (redial s now) := by
     · exact Or.inl
   have hcnt : (redial s now).log.count (Ev.readable 0 0) = s.log.count (Ev.readable 0 0) := by
     rw [hl]; simp
-  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro o l hm
     have hm' := (hmem _ (by intro w n; simp)).1 hm
     obtain ⟨h1, h2⟩ := b o l hm'
@@ -119,6 +125,8 @@ theorem inv_redial {s : Fs} (hi : Inv s) (now : Nat) : Inv (redial s now) := by
     rcases hc with hc | ⟨r, hr⟩
     · exact Or.inl ((hmem _ (by intro w n; simp)).1 hc)
     · exact Or.inr ⟨r, (hmem _ (by intro w n; simp)).1 hr⟩
+  · intro o l hm
+    exact vc o l ((hmem _ (by intro w n; simp)).1 hm)
 
 /-- A hold check keeps the invariant, for any forced cause. -/
 theorem inv_hold {s : Fs} (hi : Inv s) (now : Nat) (force : Option Cause) : Inv (holdCheck s now force) := by
@@ -128,13 +136,13 @@ theorem inv_hold {s : Fs} (hi : Inv s) (now : Nat) (force : Option Cause) : Inv 
     cases hw : holdWhy s h now force with
     | none => simpa [holdCheck, hh, hw] using hi
     | some c =>
-      obtain ⟨a, b, cc, d, e, f, g⟩ := hi
+      obtain ⟨a, b, cc, d, e, f, g, vc⟩ := hi
       obtain ⟨v1, v2, v3, v4, v5, v6, v7⟩ := cc h hh
       have hrel : holdCheck s now force =
           Fs.emit { s with head := none, rel := true } [.released h.off c, .readable h.off h.len] := by
         simp [holdCheck, hh, hw]
       rw [hrel]
-      refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · intro o l hm
         simp at hm ⊢
         rcases hm with hm | ⟨rfl, rfl⟩
@@ -158,6 +166,9 @@ theorem inv_hold {s : Fs} (hi : Inv s) (now : Nat) (force : Option Cause) : Inv 
       · intro hc
         simp at hc ⊢
         exact g (by simpa using hc)
+      · intro o l hm
+        simp at hm
+        exact vc o l hm
 
 /-- A forced release always empties the hold. -/
 theorem holdCheck_force_head (s : Fs) (now : Nat) (c : Cause) : (holdCheck s now (some c)).head = none := by
@@ -168,8 +179,8 @@ theorem holdCheck_force_head (s : Fs) (now : Nat) (c : Cause) : (holdCheck s now
 /-- Completion with no held granule keeps the invariant. -/
 theorem inv_complete {s : Fs} (hi : Inv s) (hn : s.head = none) :
     Inv (Fs.emit { s with running := false } [.complete]) := by
-  obtain ⟨a, b, c, d, e, f, g⟩ := hi
-  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
+  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro o l hm
     simp at hm ⊢
     exact b o l hm
@@ -186,6 +197,9 @@ theorem inv_complete {s : Fs} (hi : Inv s) (hn : s.head = none) :
     · exact ⟨hr, hc⟩
   · intro _; simpa using hn
   · intro _; rfl
+  · intro o l hm
+    simp at hm
+    exact vc o l hm
 
 /-- The `is_some` guards of the code are redundant: a hold check of no granule does nothing. -/
 theorem hold_guard (s : Fs) (now : Nat) (f : Option Cause) :
@@ -209,7 +223,7 @@ theorem inv_checkDone {s : Fs} (hi : Inv s) (now : Nat) : Inv (checkDone s now) 
   · exact h1
 
 /-- No group verified so far contains `o0` once a new group does (the groups are disjoint). -/
-theorem GroupOk.no_old {s : Fs} {off len : Nat} (hg : GroupOk s off len) (h1 : off ≤ s.o0) (h2 : s.o0 < off + len)
+theorem Fresh.no_old {s : Fs} {off len : Nat} (hg : Fresh s off len) (h1 : off ≤ s.o0) (h2 : s.o0 < off + len)
     {o l : Nat} (hm : Ev.verified o l ∈ s.log) (h3 : o ≤ s.o0) (h4 : s.o0 < o + l) : False := by
   have := hg.2 o l hm
   omega
@@ -225,12 +239,12 @@ theorem groupVerified_eq (s : Fs) (now off len : Nat) :
         else Fs.emit (Fs.emit s [Ev.verified off len]) [Ev.readable off len]) now := rfl
 
 /-- A verified group keeps the invariant: the first granule is captured, a later one is announced at once. -/
-theorem inv_group {s : Fs} (hi : Inv s) (now off len : Nat) (hg : GroupOk s off len)
+theorem inv_group {s : Fs} (hi : Inv s) (now off len : Nat) (hg : Fresh s off len)
     (hcov : ∀ x, off ≤ x → x < off + len → Covers s.store x) (hnc : Ev.complete ∉ s.log) :
     Inv (groupVerified s now off len) := by
   rw [groupVerified_eq]
   apply inv_checkDone
-  obtain ⟨a, b, c, d, e, f, g⟩ := hi
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
   have hlen := hg.1
   have hfresh : Ev.readable off len ∉ s.log := fun hm => by
     have := (b off len hm).1
@@ -240,7 +254,7 @@ theorem inv_group {s : Fs} (hi : Inv s) (now off len : Nat) (hg : GroupOk s off 
   · rw [if_pos hc]
     simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at hc
     obtain ⟨⟨hr, h1⟩, h2⟩ := hc
-    refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro o l hm
       simp at hm
       obtain ⟨h1', h2'⟩ := b o l hm
@@ -265,6 +279,11 @@ theorem inv_group {s : Fs} (hi : Inv s) (now off len : Nat) (hg : GroupOk s off 
       rcases hx with hx | ⟨r, hr'⟩
       · exact absurd hx hnc
       · exact Or.inr ⟨r, hr'⟩
+    · intro o l hm
+      simp at hm
+      rcases hm with hm | ⟨h1, h2⟩
+      · exact vc o l hm
+      · rw [h1, h2]; exact hcov
   · have hno : ¬(off ≤ s.o0 ∧ s.o0 < off + len) := by
       intro ⟨h1, h2⟩
       apply hc
@@ -274,7 +293,7 @@ theorem inv_group {s : Fs} (hi : Inv s) (now off len : Nat) (hg : GroupOk s off 
         exact (hg.no_old h1 h2 h5 h3 h4).elim
     rw [if_neg hc]
     have hI : Inv (Fs.emit (Fs.emit s [.verified off len]) [.readable off len]) := by
-      refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · intro o l hm
         simp at hm ⊢
         rcases hm with hm | ⟨rfl, rfl⟩
@@ -309,20 +328,69 @@ theorem inv_group {s : Fs} (hi : Inv s) (now off len : Nat) (hg : GroupOk s off 
         rcases hx with hx | ⟨r, hr'⟩
         · exact absurd hx hnc
         · exact Or.inr ⟨r, hr'⟩
+      · intro o l hm
+        simp at hm
+        rcases hm with hm | ⟨h1, h2⟩
+        · exact vc o l hm
+        · rw [h1, h2]; exact hcov
     split
     · exact inv_hold (hI.view (s' := { Fs.emit (Fs.emit s [Ev.verified off len]) [Ev.readable off len] with
         nv := s.nv + 1 }) rfl rfl rfl rfl rfl rfl) now none
     · exact hI
 
-/-- Commit and announce keep the invariant (the group is disjoint from the verified ones). -/
+/-- A group the store already holds only logs its verification: nothing is announced, the invariant stays. -/
+theorem inv_dup {s : Fs} (hi : Inv s) (now off len : Nat) (hm : Ev.verified off len ∈ s.log) :
+    Inv (dupStep s now off len) := by
+  unfold dupStep
+  apply inv_checkDone
+  have hl : (Fs.emit s [Ev.verified off len]).log = s.log ++ [Ev.verified off len] := rfl
+  have hmem : ∀ e', (e' ∈ (Fs.emit s [Ev.verified off len]).log ↔ e' ∈ s.log) := by
+    intro e'
+    rw [hl]
+    simp only [List.mem_append, List.mem_singleton]
+    constructor
+    · rintro (h | rfl)
+      · exact h
+      · exact hm
+    · exact Or.inl
+  have hcnt : ∀ o l, (Fs.emit s [Ev.verified off len]).log.count (Ev.readable o l) = s.log.count (Ev.readable o l) := by
+    intro o l; rw [hl]; simp
+  obtain ⟨a, b, c, d, e, f, g, vc⟩ := hi
+  refine ⟨a, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro o l hm'
+    obtain ⟨h1, h2⟩ := b o l ((hmem _).1 hm')
+    exact ⟨(hmem _).2 h1, h2⟩
+  · intro h hh
+    obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := c h hh
+    exact ⟨(hmem _).2 h1, (hmem _).2 h2, h3, h4, h5, h6, h7⟩
+  · intro hn
+    obtain ⟨o, l, h1, h2, h3⟩ := d hn
+    exact ⟨o, l, h1, h2, (hmem _).2 h3⟩
+  · intro o l h1 h2 h3
+    rw [hcnt]
+    exact e o l h1 h2 ((hmem _).1 h3)
+  · intro hc; exact f ((hmem _).1 hc)
+  · intro hc; exact g (by rcases hc with hc | ⟨r, hr⟩; exact Or.inl ((hmem _).1 hc); exact Or.inr ⟨r, (hmem _).1 hr⟩)
+  · intro o l hm'; exact vc o l ((hmem _).1 hm')
+
+/-- Commit and announce keep the invariant (the group is new), or a group the store holds is only logged. -/
 theorem inv_verify {s : Fs} (hi : Inv s) (now off len : Nat) (hg : GroupOk s off len) (hnc : Ev.complete ∉ s.log) :
     Inv (verifyStep s now off len) := by
   unfold verifyStep
-  have hc := inv_commit hi (off, off + len)
-  apply inv_group hc now off len hg
-  · intro x h1 h2
-    exact (insertVec_covers s.store hi.sound _ x).2 (Or.inr ⟨h1, h2⟩)
-  · exact hnc
+  by_cases hcr : containsRange s.store (off, off + len) = true
+  · rw [if_pos hcr]
+    exact inv_dup hi now off len (hg.2.2 hcr)
+  · rw [if_neg hcr]
+    have hf : Fresh s off len := ⟨hg.1, fun o l hm => by
+      rcases hg.2.1 o l hm with h | h | ⟨rfl, rfl⟩
+      · exact Or.inl h
+      · exact Or.inr h
+      · exact absurd ((containsRange_iff _ hi.sound _).2 (hi.vcov _ _ hm)) hcr⟩
+    have hc := inv_commit hi (off, off + len)
+    apply inv_group hc now off len hf
+    · intro x h1 h2
+      exact (insertVec_covers s.store hi.sound _ x).2 (Or.inr ⟨h1, h2⟩)
+    · exact hnc
 
 /-- Bytes arriving or a frame completing keep the invariant (only the stall fields change). -/
 theorem inv_byteLive {s : Fs} (hi : Inv s) (now : Nat) : Inv (byteLive s now) := by
@@ -390,8 +458,15 @@ theorem byteLive_log (s : Fs) (now : Nat) : (byteLive s now).log = s.log := by
 theorem arrival_log (s : Fs) (now : Nat) : (arrival s now).log = s.log := by
   unfold arrival; split <;> rfl
 
-theorem GroupOk.of_log {s s' : Fs} (h : s'.log = s.log) {o l : Nat} (hg : GroupOk s o l) : GroupOk s' o l := by
-  unfold GroupOk at *; rw [h]; exact hg
+theorem byteLive_store (s : Fs) (now : Nat) : (byteLive s now).store = s.store := by
+  unfold byteLive; split <;> (try split) <;> rfl
+
+theorem arrival_store (s : Fs) (now : Nat) : (arrival s now).store = s.store := by
+  unfold arrival; split <;> rfl
+
+theorem GroupOk.of_log {s s' : Fs} (h : s'.log = s.log) (hs : s'.store = s.store) {o l : Nat} (hg : GroupOk s o l) :
+    GroupOk s' o l := by
+  unfold GroupOk at *; rw [h, hs]; exact hg
 
 /-- Every input keeps the invariant. -/
 theorem inv_step {s : Fs} (hi : Inv s) (i : Inp) (hv : Valid s i) : Inv (step s i) := by
@@ -418,7 +493,11 @@ theorem inv_step {s : Fs} (hi : Inv s) (i : Inp) (hv : Valid s i) : Inv (step s 
           rw [arrival_log]; split
           · exact byteLive_log _ _
           · rfl
-        exact inv_verify h1 now o l (hv.of_log hl) (by rw [hl]; exact hnc)
+        have hst : (arrival (if b = true then byteLive s now else s) now).store = s.store := by
+          rw [arrival_store]; split
+          · exact byteLive_store _ _
+          · rfl
+        exact inv_verify h1 now o l (hv.of_log hl hst) (by rw [hl]; exact hnc)
     | frameStoreFail now b =>
       simp only []
       exact inv_fail (inv_arrival (by split; exact inv_byteLive hi now; exact hi) now) _

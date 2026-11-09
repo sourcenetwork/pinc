@@ -180,7 +180,7 @@ impl Fetch {
             .filter(|v| v.start <= end)
             .map_or(0, |v| v.end - end);
         // The wanted ranges end where the last one in delivery order ends (the list keeps the order they were asked).
-        let wanted_end = self.want.as_slice().last().map_or(0, crate::span::Span::end);
+        let wanted_end = self.wanted_end();
         let why = force.or(if buf >= HOLD_B {
             Some(Release::Buffered)
         } else if end + buf >= wanted_end {

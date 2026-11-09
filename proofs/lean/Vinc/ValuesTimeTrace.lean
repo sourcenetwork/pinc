@@ -1,5 +1,5 @@
 import Vinc.Json
-import Vinc.ValuesTimeDeadline
+import Vinc.ValuesTimeFix
 
 /-!
 # Replay of the time-rule traces
@@ -180,6 +180,7 @@ def replayStart (j : J) (w : W) : Except String W := do
   check (post.run == out.isNone && post.sw == STALL_WAIT && post.lastp == 0 && post.lastb == 0 && post.tw == 0 &&
     post.head.isNone && !post.rel && post.nv == 0) "state right after start"
   let fs := { Fs.init o0 want sto (if hasdl then some dl else none) striped np with running := out.isNone, treq := post.treq }
+  check (fs.wend == (← natF j "we")) s!"the end of the wanted ranges: model {fs.wend}, code {← natF j "we"}"
   pure { fs, inRun := true, run := ← natF j "run" }
 
 def replayEv (j : J) (w : W) : Except String W := do
@@ -216,7 +217,7 @@ def replayTo (j : J) (w : W) : Except String W := do
   let wr ← limbsF j "w"
   let lv ← limbsF j "lv"
   check (stallRtt ss == wr) s!"stall_rtt: model {stallRtt ss}, test {wr}"
-  check (stallLive now pre.lastp ss == lv) s!"stall_live: model {stallLive now pre.lastp ss}, test {lv}"
+  check (stallLive now (max pre.lastp pre.treq) ss == lv) s!"stall_live: model {stallLive now (max pre.lastp pre.treq) ss}, test {lv}"
   let s0 := { w.fs with log := [] }
   let ok (c : Fs) : Bool := cmpSt c post && c.log == evs && c.tw == post.tw
   let c0 := onTimeout s0 now ss false none

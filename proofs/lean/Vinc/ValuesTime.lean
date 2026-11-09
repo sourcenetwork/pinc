@@ -143,6 +143,9 @@ def Fs.wantedDone (s : Fs) : Bool := s.want.all (containsRange s.store)
 /-- `want.total()`. -/
 def Fs.tot (s : Fs) : Nat := coveredLen s.want
 
+/-- The end of the wanted ranges in delivery order: the end of the last range of the list (`want.last().end()`). -/
+def Fs.wend (s : Fs) : Nat := (s.want.getLast?.map (·.2)).getD 0
+
 /-- The run of verified bytes that starts at `e`: `verified_from(e).filter(start <= e).map_or(0, end - e)`, where
 `verified_from` is the first interval that ends after `e` (`store::verified_after`). -/
 def bufOf (st : List Interval) (e : Nat) : Nat :=
@@ -159,7 +162,7 @@ def holdWhy (s : Fs) (h : Head) (now : Nat) (force : Option Cause) : Option Caus
   | some c => some c
   | none =>
     if HOLD_B ≤ bufOf s.store (h.off + h.len) then some .buffered
-    else if s.o0 + s.tot ≤ h.off + h.len + bufOf s.store (h.off + h.len) then some .tail
+    else if s.wend ≤ h.off + h.len + bufOf s.store (h.off + h.len) then some .tail
     else if HOLD_NV ≤ s.nv then some .granules
     else if sadd h.t0 HOLD_MAX ≤ now then some .timeout
     else none
@@ -196,9 +199,15 @@ def groupVerified (s : Fs) (now off len : Nat) : Fs :=
       if s.head.isSome then holdCheck { s with nv := s.nv + 1 } now none else s
   checkDone s now
 
-/-- `store_group` then `group_verified`: commit `[off, off + len)` to the store, then announce. -/
+/-- A group another stream already stored (the race of two streams on one group) is neither written nor announced
+again: only its `Verified` record and the completion check run. -/
+def dupStep (s : Fs) (now off len : Nat) : Fs := checkDone (Fs.emit s [.verified off len]) now
+
+/-- `store_group` then `group_verified`: commit `[off, off + len)` to the store, then announce; a group the store
+already holds is a `dupStep`. -/
 def verifyStep (s : Fs) (now off len : Nat) : Fs :=
-  groupVerified { s with store := insertVec s.store (off, off + len) } now off len
+  if containsRange s.store (off, off + len) then dupStep s now off len
+  else groupVerified { s with store := insertVec s.store (off, off + len) } now off len
 
 /-- A terminal failure: the fetch is done and the reason is the one event. -/
 def failWith (s : Fs) (r : Fail) : Fs := Fs.emit { s with running := false } [.failed r]
@@ -250,18 +259,25 @@ def stallLive (now lastp : Nat) (ss : List Sess) : Nat :=
 def redial (s : Fs) (now : Nat) : Fs :=
   Fs.emit { s with lastp := now, sw := min (smul s.sw 2) STALL_CAP } [.redial s.sw (min (smul s.sw 2) STALL_CAP)]
 
+/-- The later of the last verified granule and the first request. -/
+def lastProg (s : Fs) : Nat := max s.lastp s.treq
+
+/-- `stall_base`: the moment the stall wait counts from, the later of the last granule, the last stream bytes and the
+first request (the timer runs once a request was sent). -/
+def stallBase (s : Fs) : Nat := max (max s.lastp s.lastb) s.treq
+
 /-- The first block of `on_timeout`. -/
 def stallStep (s : Fs) (now : Nat) (ss : List Sess) : Fs :=
-  if s.lastp ≠ 0 ∧ sadd (max s.lastp s.lastb) s.sw ≤ now then
-    if s.sw < stallRtt ss ∧ now < sadd s.lastp (stallRtt ss) then { s with sw := stallRtt ss }
-    else if stallLive now s.lastp ss ≠ 0 then { s with sw := sadd (now - s.lastp) (stallLive now s.lastp ss) }
+  if s.treq ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now then
+    if s.sw < stallRtt ss ∧ now < sadd (lastProg s) (stallRtt ss) then { s with sw := stallRtt ss }
+    else if stallLive now (lastProg s) ss ≠ 0 then { s with sw := sadd (now - lastProg s) (stallLive now (lastProg s) ss) }
     else redial s now
   else s
 
-/-- The timers `poll_timeout` takes the minimum of: the stall timer once a frame arrived, the hold timer, the steal
+/-- The timers `poll_timeout` takes the minimum of: the stall timer once a request was sent, the hold timer, the steal
 re-check, the deadline plus one, the retries. -/
 def pollList (s : Fs) : List Nat :=
-  (if s.lastp ≠ 0 then [sadd (max s.lastp s.lastb) s.sw] else []) ++
+  (if s.treq ≠ 0 then [sadd (stallBase s) s.sw] else []) ++
     (s.head.map (fun h => sadd h.t0 HOLD_MAX)).toList ++ (if s.tw ≠ 0 then [s.tw] else []) ++
     (s.deadline.map (fun d => sadd d 1)).toList ++ s.rt.toList
 
@@ -339,10 +355,16 @@ def step (s : Fs) (i : Inp) : Fs :=
     | .timeout now ss rearm rt' => onTimeout s now ss rearm rt'
   else s
 
-/-- A group fed to the receive path must be nonempty and disjoint from every group verified before (every byte is
-verified once: property 2 and the skip of stored frames in `Rx`). -/
-def GroupOk (s : Fs) (off len : Nat) : Prop :=
+/-- A group that no earlier verification overlapped: nonempty and disjoint from every group verified before. -/
+def Fresh (s : Fs) (off len : Nat) : Prop :=
   0 < len ∧ ∀ o l, Ev.verified o l ∈ s.log → o + l ≤ off ∨ off + len ≤ o
+
+/-- A group fed to the receive path must be nonempty and, against every group verified before, either disjoint or
+the same group (two streams may carry one group), and a group the store holds must have been verified by this fetch
+(the skip of stored frames in `Rx` decides this before the bytes are hashed). -/
+def GroupOk (s : Fs) (off len : Nat) : Prop :=
+  0 < len ∧ (∀ o l, Ev.verified o l ∈ s.log → o + l ≤ off ∨ off + len ≤ o ∨ (o = off ∧ l = len)) ∧
+    (containsRange s.store (off, off + len) = true → Ev.verified off len ∈ s.log)
 
 /-- The inputs the environment may give in state `s`. -/
 def Valid (s : Fs) : Inp → Prop

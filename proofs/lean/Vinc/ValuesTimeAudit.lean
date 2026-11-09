@@ -54,3 +54,10 @@ open Vinc.ValuesTime
 #audit_axioms Vinc.ValuesTime.startFetch_complete
 #audit_axioms Vinc.ValuesTime.startFetch_noProvider
 #audit_axioms Vinc.ValuesTime.startFetch_runs
+
+-- the corrections: tail threshold, one announcement per granule, stall armed at the first request
+#audit_axioms Vinc.ValuesTime.tail_waits_for_wanted_end
+#audit_axioms Vinc.ValuesTime.tail_means_wanted_end
+#audit_axioms Vinc.ValuesTime.dupStep_announces_only_the_held
+#audit_axioms Vinc.ValuesTime.silent_provider_redialled
+#audit_axioms Vinc.ValuesTime.poll_offers_stall_from_request

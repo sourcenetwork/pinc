@@ -169,8 +169,9 @@ par run_tlc valuestime_max ValuesTime ValuesTime_max
 par run_tlc valuestime_dl ValuesTime ValuesTime_dl
 par witness_tlc valuestime_seq ValuesTime ValuesTime_seq SwNot16
 par witness_tlc valuestime_low ValuesTime ValuesTime_low SwNeverLowered
-par witness_tlc valuestime_dup ValuesTime ValuesTime_dup AnnOnce
-par witness_tlc valuestime_tail ValuesTime ValuesTime_tail TailMeansDone
+par run_tlc valuestime_dup ValuesTime ValuesTime_dup
+par witness_tlc valuestime_wfirst ValuesTime ValuesTime_wfirst NoRedial
+par run_tlc valuestime_tail ValuesTime ValuesTime_tail
 par witness_tlc valuestime_wbuf ValuesTime ValuesTime_wbuf NoBuffered
 par witness_tlc valuestime_wbufreal ValuesTime ValuesTime_wbufreal NoBuffered
 par witness_tlc valuestime_wtail ValuesTime ValuesTime_wtail NoTail

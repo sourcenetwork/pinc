@@ -296,9 +296,10 @@ impl Run<'_> {
         };
         writeln!(
             self.out,
-            "{{\"t\":\"vtrun\",\"run\":{},\"o0\":{},\"len\":{},\"er\":{},\"wg\":{},\"want\":{},\"sto\":{},\"stoi\":{},\"hb\":{},\"nvl\":{},\"hasdl\":{},\"dl\":{},\"striped\":{},\"np\":{},\"post\":{},\"tr\":{}}}",
+            "{{\"t\":\"vtrun\",\"run\":{},\"o0\":{},\"we\":{},\"len\":{},\"er\":{},\"wg\":{},\"want\":{},\"sto\":{},\"stoi\":{},\"hb\":{},\"nvl\":{},\"hasdl\":{},\"dl\":{},\"striped\":{},\"np\":{},\"post\":{},\"tr\":{}}}",
             self.id,
             asked.first().map_or(0, |s| s.off),
+            t0.wend,
             sim.length,
             b(empty_root),
             pairs(&groups(&aligned)),
@@ -378,7 +379,7 @@ impl Run<'_> {
             }
             written += 1;
             let (ss, w, lv) = if sim.timed_out {
-                session_env(&sn, now, pre.lastp)
+                session_env(&sn, now, pre.lastp.max(pre.treq))
             } else {
                 ("[]".to_string(), 0, 0)
             };

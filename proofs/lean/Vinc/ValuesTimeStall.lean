@@ -168,11 +168,11 @@ theorem stallLive_ne_zero (now lastp : Nat) (ss : List Sess) (h : stallLive now 
 /-! ## The stall block of `on_timeout` -/
 
 /-- The stall wait is spent: a frame arrived once, and no frame and no byte for `sw` (saturating). -/
-def Due (s : Fs) (now : Nat) : Prop := s.lastp ≠ 0 ∧ sadd (max s.lastp s.lastb) s.sw ≤ now
+def Due (s : Fs) (now : Nat) : Prop := s.treq ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now
 
 /-- STALL_RTT applies: its wait is longer than the current one and still in the future. -/
 def RttWait (s : Fs) (now : Nat) (ss : List Sess) : Prop :=
-  s.sw < stallRtt ss ∧ now < sadd s.lastp (stallRtt ss)
+  s.sw < stallRtt ss ∧ now < sadd (lastProg s) (stallRtt ss)
 
 theorem stallStep_idle (s : Fs) (now : Nat) (ss : List Sess) (h : ¬ Due s now) : stallStep s now ss = s := by
   unfold stallStep Due at *
@@ -184,24 +184,24 @@ theorem stallStep_rtt (s : Fs) (now : Nat) (ss : List Sess) (hd : Due s now) (hr
   rw [if_pos hd, if_pos hr]
 
 theorem stallStep_live (s : Fs) (now : Nat) (ss : List Sess) (hd : Due s now) (hr : ¬ RttWait s now ss)
-    (hl : stallLive now s.lastp ss ≠ 0) :
-    stallStep s now ss = { s with sw := sadd (now - s.lastp) (stallLive now s.lastp ss) } := by
+    (hl : stallLive now (lastProg s) ss ≠ 0) :
+    stallStep s now ss = { s with sw := sadd (now - lastProg s) (stallLive now (lastProg s) ss) } := by
   unfold stallStep Due RttWait at *
   rw [if_pos hd, if_neg hr, if_pos hl]
 
 theorem stallStep_redial (s : Fs) (now : Nat) (ss : List Sess) (hd : Due s now) (hr : ¬ RttWait s now ss)
-    (hl : stallLive now s.lastp ss = 0) : stallStep s now ss = redial s now := by
+    (hl : stallLive now (lastProg s) ss = 0) : stallStep s now ss = redial s now := by
   unfold stallStep Due RttWait at *
   rw [if_pos hd, if_neg hr, if_neg (by simpa using hl)]
 
 /-- A redial happens exactly when the wait is spent, STALL_RTT has no longer wait in the future and STALL_LIVE finds
 no slow-but-receiving session. -/
 theorem redial_iff (s : Fs) (now : Nat) (ss : List Sess) :
-    (stallStep s now ss).log ≠ s.log ↔ (Due s now ∧ ¬ RttWait s now ss ∧ stallLive now s.lastp ss = 0) := by
+    (stallStep s now ss).log ≠ s.log ↔ (Due s now ∧ ¬ RttWait s now ss ∧ stallLive now (lastProg s) ss = 0) := by
   by_cases hd : Due s now
   · by_cases hr : RttWait s now ss
     · rw [stallStep_rtt s now ss hd hr]; simp [hd, hr]
-    · by_cases hl : stallLive now s.lastp ss = 0
+    · by_cases hl : stallLive now (lastProg s) ss = 0
       · rw [stallStep_redial s now ss hd hr hl]; simp [redial, hd, hr, hl]
       · rw [stallStep_live s now ss hd hr hl]; simp [hd, hr, hl]
   · rw [stallStep_idle s now ss hd]; simp [hd]
@@ -209,11 +209,13 @@ theorem redial_iff (s : Fs) (now : Nat) (ss : List Sess) :
 /-- A redial needs `sw` of silence: the clock has reached the later of the last frame and the last byte plus the
 wait, and, if that sum does not overflow, `sw` nanoseconds really passed since both. -/
 theorem redial_only_after_silence (s : Fs) (now : Nat) (ss : List Sess) (h : (stallStep s now ss).log ≠ s.log) :
-    s.lastp ≠ 0 ∧ sadd (max s.lastp s.lastb) s.sw ≤ now ∧
-      (max s.lastp s.lastb + s.sw ≤ U64Max → s.sw ≤ now - s.lastp ∧ s.sw ≤ now - s.lastb) := by
+    s.treq ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now ∧
+      (stallBase s + s.sw ≤ U64Max → s.sw ≤ now - lastProg s ∧ s.sw ≤ now - s.lastb) := by
   obtain ⟨hd, _, _⟩ := (redial_iff s now ss).1 h
   refine ⟨hd.1, hd.2, fun hov => ?_⟩
   have := hd.2
+  have e1 : lastProg s ≤ stallBase s := by simp only [lastProg, stallBase]; omega
+  have e2 : s.lastb ≤ stallBase s := by simp only [stallBase]; omega
   simp only [sadd] at this
   omega
 
@@ -224,19 +226,20 @@ theorem stallStep_sw_rtt (s : Fs) (now : Nat) (ss : List Sess) (hd : Due s now) 
   exact ⟨rfl, hr.1, stallRtt_le ss⟩
 
 theorem stallStep_sw_live (s : Fs) (now : Nat) (ss : List Sess) (hd : Due s now) (hr : ¬ RttWait s now ss)
-    (hl : stallLive now s.lastp ss ≠ 0) :
-    (stallStep s now ss).sw ≤ LIVE_CAP + stallLive now s.lastp ss ∧
-      (max s.lastp s.lastb + s.sw ≤ U64Max → s.sw ≤ (stallStep s now ss).sw) := by
+    (hl : stallLive now (lastProg s) ss ≠ 0) :
+    (stallStep s now ss).sw ≤ LIVE_CAP + stallLive now (lastProg s) ss ∧
+      (stallBase s + s.sw ≤ U64Max → s.sw ≤ (stallStep s now ss).sw) := by
   rw [stallStep_live s now ss hd hr hl]
-  obtain ⟨_, hlive, hge, _⟩ := stallLive_ne_zero now s.lastp ss hl
+  obtain ⟨_, hlive, hge, _⟩ := stallLive_ne_zero now (lastProg s) ss hl
   have h2 := hd.2
+  have e1 : lastProg s ≤ stallBase s := by simp only [lastProg, stallBase]; omega
   simp only [sadd] at h2 ⊢
   constructor
   · omega
   · intro hov; ucs; omega
 
 theorem stallStep_sw_redial (s : Fs) (now : Nat) (ss : List Sess) (hd : Due s now) (hr : ¬ RttWait s now ss)
-    (hl : stallLive now s.lastp ss = 0) : (stallStep s now ss).sw = nextSw s.sw := by
+    (hl : stallLive now (lastProg s) ss = 0) : (stallStep s now ss).sw = nextSw s.sw := by
   rw [stallStep_redial s now ss hd hr hl]; rfl
 
 
@@ -253,6 +256,12 @@ theorem sw_group (s : Fs) (now off len : Nat) : (groupVerified s now off len).sw
   split
   · simp
   · split <;> simp [sw_hold]
+
+theorem sw_verifyStep (s : Fs) (now off len : Nat) : (verifyStep s now off len).sw = s.sw := by
+  unfold verifyStep
+  split
+  · unfold dupStep; rw [sw_checkDone]; rfl
+  · rw [sw_group]
 
 theorem sw_headBlock (s : Fs) (now : Nat) : (headBlock s now).sw = s.sw := by
   unfold headBlock; split <;> simp [sw_checkDone, sw_hold]
@@ -287,11 +296,11 @@ theorem step_sw_eq (s : Fs) (i : Inp) :
       simp only [step, hrun, ite_true]
       cases g with
       | none => rfl
-      | some p => obtain ⟨o, l⟩ := p; simp [verifyStep, sw_group]
+      | some p => obtain ⟨o, l⟩ := p; simp [sw_verifyStep]
     | frameStoreFail now b =>
       right; right; left
       exact ⟨now, b, Or.inr rfl, by simp [step, hrun, failWith]⟩
-    | ahead now o l => left; simp [step, hrun, verifyStep, sw_group]
+    | ahead now o l => left; simp [step, hrun, sw_verifyStep]
     | aheadStoreFail now => left; simp [step, hrun, failWith]
     | evict now b =>
       right; left
@@ -329,12 +338,12 @@ theorem step_sw_ge (s : Fs) (i : Inp) (h : STALL_WAIT ≤ s.sw) : STALL_WAIT ≤
     · by_cases hd : Due s now
       · by_cases hr : RttWait s now ss
         · rw [stallStep_rtt s now ss hd hr]; exact Nat.le_of_lt (Nat.lt_of_le_of_lt h hr.1)
-        · by_cases hl : stallLive now s.lastp ss = 0
+        · by_cases hl : stallLive now (lastProg s) ss = 0
           · rw [stallStep_redial s now ss hd hr hl]
             simp only [redial, emit_sw, smul]; ucs; omega
           · rw [stallStep_live s now ss hd hr hl]
-            have := (stallLive_zero_or_ge now s.lastp ss).resolve_left hl
-            have := stallLive_le now s.lastp ss
+            have := (stallLive_zero_or_ge now (lastProg s) ss).resolve_left hl
+            have := stallLive_le now (lastProg s) ss
             simp only [sadd]; ucs; omega
       · rw [stallStep_idle s now ss hd]; exact h
 
@@ -344,8 +353,8 @@ the clock's own saturation, under STALL_LIVE: the timer sum overflows `u64`). -/
 theorem sw_decrease_cases (s : Fs) (i : Inp) (h : (step s i).sw < s.sw) :
     (ARK_PACE_CAP < s.sw ∧ ∃ now b, (∃ g, i = .frame now b g) ∨ i = .frameStoreFail now b) ∨
     (∃ now ss re rt, i = .timeout now ss re rt ∧ s.running = true ∧ s.late now = false ∧ Due s now ∧
-      ¬ RttWait s now ss ∧ ((stallLive now s.lastp ss = 0 ∧ STALL_CAP < s.sw) ∨
-        (stallLive now s.lastp ss ≠ 0 ∧ U64Max < max s.lastp s.lastb + s.sw))) := by
+      ¬ RttWait s now ss ∧ ((stallLive now (lastProg s) ss = 0 ∧ STALL_CAP < s.sw) ∨
+        (stallLive now (lastProg s) ss ≠ 0 ∧ U64Max < stallBase s + s.sw))) := by
   rcases step_sw_eq s i with h1 | ⟨now, b, h2⟩ | ⟨now, b, hi, h3⟩ | ⟨now, ss, re, rt, hi, hrun, h4⟩
   · omega
   · exfalso; rw [h2] at h; split at h
@@ -375,7 +384,7 @@ theorem sw_decrease_cases (s : Fs) (i : Inp) (h : (step s i).sw < s.sw) :
       · by_cases hr : RttWait s now ss
         · rw [stallStep_rtt s now ss hd hr] at h; simp at h; have := hr.1; omega
         · refine ⟨hd, hr, ?_⟩
-          by_cases hz : stallLive now s.lastp ss = 0
+          by_cases hz : stallLive now (lastProg s) ss = 0
           · left
             refine ⟨hz, ?_⟩
             rw [stallStep_redial s now ss hd hr hz] at h
@@ -383,7 +392,7 @@ theorem sw_decrease_cases (s : Fs) (i : Inp) (h : (step s i).sw < s.sw) :
           · right
             refine ⟨hz, ?_⟩
             have := (stallStep_sw_live s now ss hd hr hz).2
-            by_cases hov : max s.lastp s.lastb + s.sw ≤ U64Max
+            by_cases hov : stallBase s + s.sw ≤ U64Max
             · have := this hov; omega
             · omega
       · rw [stallStep_idle s now ss hd] at h; omega
@@ -401,7 +410,7 @@ theorem bd_ge (L : Nat) : STALL_RTT_CAP ≤ Bd L := by unfold Bd; split <;> ucs 
 
 /-- A timeout call whose STALL_LIVE extension is at most `L`. -/
 def LiveOk (L : Nat) (s : Fs) : Inp → Prop
-  | .timeout now ss _ _ => stallLive now s.lastp ss ≤ L
+  | .timeout now ss _ _ => stallLive now (lastProg s) ss ≤ L
   | _ => True
 
 theorem step_sw_le (L : Nat) (s : Fs) (i : Inp) (hs : s.sw ≤ Bd L) (hv : LiveOk L s i) :
@@ -425,15 +434,15 @@ theorem step_sw_le (L : Nat) (s : Fs) (i : Inp) (hs : s.sw ≤ Bd L) (hv : LiveO
     · by_cases hd : Due s now
       · by_cases hr : RttWait s now ss
         · rw [stallStep_rtt s now ss hd hr]; dsimp only; have := stallRtt_le ss; omega
-        · by_cases hl : stallLive now s.lastp ss = 0
+        · by_cases hl : stallLive now (lastProg s) ss = 0
           · rw [stallStep_redial s now ss hd hr hl]
             have h16 : (redial s now).sw = nextSw s.sw := by simp [redial, nextSw]
             rw [h16]
             have := nextSw_le s.sw
             ucs; omega
           · rw [stallStep_live s now ss hd hr hl]
-            have hlv : stallLive now s.lastp ss ≤ L := hv
-            obtain ⟨_, hlive, _, _⟩ := stallLive_ne_zero now s.lastp ss hl
+            have hlv : stallLive now (lastProg s) ss ≤ L := hv
+            obtain ⟨_, hlive, _, _⟩ := stallLive_ne_zero now (lastProg s) ss hl
             have hL : L ≠ 0 := by omega
             unfold Bd; rw [if_neg hL]
             simp only [sadd]; ucs; omega

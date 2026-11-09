@@ -50,7 +50,7 @@ open Vinc.Ranges
 theorem holdWhy_none_eq (s : Fs) (h : Head) (now : Nat) :
     holdWhy s h now none =
       if HOLD_B ≤ bufOf s.store (h.off + h.len) then some .buffered
-      else if s.o0 + s.tot ≤ h.off + h.len + bufOf s.store (h.off + h.len) then some .tail
+      else if s.wend ≤ h.off + h.len + bufOf s.store (h.off + h.len) then some .tail
       else if HOLD_NV ≤ s.nv then some .granules
       else if sadd h.t0 HOLD_MAX ≤ now then some .timeout
       else none := rfl
@@ -58,7 +58,7 @@ theorem holdWhy_none_eq (s : Fs) (h : Head) (now : Nat) :
 /-- A release happens exactly when one of the four causes holds (the cause of `Done` is forced, not tested). -/
 theorem holdWhy_isSome_iff (s : Fs) (h : Head) (now : Nat) :
     (holdWhy s h now none).isSome = true ↔
-      (HOLD_B ≤ bufOf s.store (h.off + h.len) ∨ s.o0 + s.tot ≤ h.off + h.len + bufOf s.store (h.off + h.len) ∨
+      (HOLD_B ≤ bufOf s.store (h.off + h.len) ∨ s.wend ≤ h.off + h.len + bufOf s.store (h.off + h.len) ∨
         HOLD_NV ≤ s.nv ∨ sadd h.t0 HOLD_MAX ≤ now) := by
   rw [holdWhy_none_eq]
   split <;> (try split) <;> (try split) <;> (try split) <;> simp_all
@@ -71,20 +71,20 @@ theorem holdWhy_buffered (s : Fs) (h : Head) (now : Nat) :
 
 theorem holdWhy_tail (s : Fs) (h : Head) (now : Nat) :
     holdWhy s h now none = some .tail ↔
-      bufOf s.store (h.off + h.len) < HOLD_B ∧ s.o0 + s.tot ≤ h.off + h.len + bufOf s.store (h.off + h.len) := by
+      bufOf s.store (h.off + h.len) < HOLD_B ∧ s.wend ≤ h.off + h.len + bufOf s.store (h.off + h.len) := by
   rw [holdWhy_none_eq]
   split <;> (try split) <;> (try split) <;> (try split) <;> simp_all <;> omega
 
 theorem holdWhy_granules (s : Fs) (h : Head) (now : Nat) :
     holdWhy s h now none = some .granules ↔
-      bufOf s.store (h.off + h.len) < HOLD_B ∧ h.off + h.len + bufOf s.store (h.off + h.len) < s.o0 + s.tot ∧
+      bufOf s.store (h.off + h.len) < HOLD_B ∧ h.off + h.len + bufOf s.store (h.off + h.len) < s.wend ∧
         HOLD_NV ≤ s.nv := by
   rw [holdWhy_none_eq]
   split <;> (try split) <;> (try split) <;> (try split) <;> simp_all <;> omega
 
 theorem holdWhy_timeout (s : Fs) (h : Head) (now : Nat) :
     holdWhy s h now none = some .timeout ↔
-      bufOf s.store (h.off + h.len) < HOLD_B ∧ h.off + h.len + bufOf s.store (h.off + h.len) < s.o0 + s.tot ∧
+      bufOf s.store (h.off + h.len) < HOLD_B ∧ h.off + h.len + bufOf s.store (h.off + h.len) < s.wend ∧
         s.nv < HOLD_NV ∧ sadd h.t0 HOLD_MAX ≤ now := by
   rw [holdWhy_none_eq]
   split <;> (try split) <;> (try split) <;> (try split) <;> simp_all <;> omega
@@ -110,7 +110,7 @@ theorem holdCheck_keep (s : Fs) (now : Nat) (force : Option Cause) (h : Head)
 theorem holdCheck_head (s : Fs) (now : Nat) :
     (holdCheck s now none).head = none ↔
       s.head = none ∨ ∃ h, s.head = some h ∧
-        (HOLD_B ≤ bufOf s.store (h.off + h.len) ∨ s.o0 + s.tot ≤ h.off + h.len + bufOf s.store (h.off + h.len) ∨
+        (HOLD_B ≤ bufOf s.store (h.off + h.len) ∨ s.wend ≤ h.off + h.len + bufOf s.store (h.off + h.len) ∨
           HOLD_NV ≤ s.nv ∨ sadd h.t0 HOLD_MAX ≤ now) := by
   cases hh : s.head with
   | none => simp [holdCheck, hh]

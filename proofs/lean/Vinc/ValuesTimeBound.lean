@@ -108,12 +108,12 @@ theorem later_granule_immediate (s : Fs) (now off len : Nat) (h : ¬(off ≤ s.o
 /-- A held granule has no cause that is already true at `now`. -/
 def NoLate (s : Fs) (now : Nat) : Prop :=
   ∀ h, s.head = some h → bufOf s.store (h.off + h.len) < HOLD_B ∧
-    h.off + h.len + bufOf s.store (h.off + h.len) < s.o0 + s.tot ∧ s.nv < HOLD_NV ∧ now < sadd h.t0 HOLD_MAX
+    h.off + h.len + bufOf s.store (h.off + h.len) < s.wend ∧ s.nv < HOLD_NV ∧ now < sadd h.t0 HOLD_MAX
 
 /-- The same without the clock: what holds between calls whatever time they run at. -/
 def J0 (s : Fs) : Prop :=
   ∀ h, s.head = some h → bufOf s.store (h.off + h.len) < HOLD_B ∧
-    h.off + h.len + bufOf s.store (h.off + h.len) < s.o0 + s.tot ∧ s.nv < HOLD_NV
+    h.off + h.len + bufOf s.store (h.off + h.len) < s.wend ∧ s.nv < HOLD_NV
 
 theorem NoLate.j0 {s : Fs} {now : Nat} (h : NoLate s now) : J0 s :=
   fun hd hh => let ⟨a, b, c, _⟩ := h hd hh; ⟨a, b, c⟩
@@ -166,7 +166,7 @@ theorem J0.core {s s' : Fs} (hj : J0 s) (hc : Core s s') : J0 s' := by
   intro h hh
   rw [h2] at hh
   have := hj h hh
-  simp only [Fs.tot, h1, h4, h5, h6]
+  simp only [Fs.wend, h1, h4, h5, h6]
   exact this
 
 theorem core_byteLive (s : Fs) (now : Nat) : Core s (byteLive s now) := by
@@ -186,6 +186,12 @@ theorem core_retry (s : Fs) (now : Nat) (rt' : Option Nat) : Core s (retryBlock 
   unfold retryBlock; split <;> (try split) <;> exact Core.refl _
 
 theorem j0_checkDone (s : Fs) (now : Nat) : J0 (checkDone s now) := (noLate_checkDone s now).j0
+
+theorem j0_verifyStep (s : Fs) (now off len : Nat) : J0 (verifyStep s now off len) := by
+  unfold verifyStep
+  split
+  · exact j0_checkDone _ _
+  · exact j0_checkDone _ _
 
 theorem j0_headBlock {s : Fs} (hj : J0 s) (now : Nat) : J0 (headBlock s now) := by
   unfold headBlock; split
@@ -221,7 +227,7 @@ theorem j0_step {s : Fs} (hj : J0 s) (i : Inp) : J0 (step s i) := by
         · exact hj
       cases g with
       | none => exact h1
-      | some p => exact j0_checkDone _ _
+      | some p => exact j0_verifyStep _ _ _ _
     | frameStoreFail now b =>
       simp only []
       have h1 : J0 (arrival (if b = true then byteLive s now else s) now) := by
@@ -230,7 +236,7 @@ theorem j0_step {s : Fs} (hj : J0 s) (i : Inp) : J0 (step s i) := by
         · exact hj.core (core_byteLive s now)
         · exact hj
       exact h1.core (core_fail _ _)
-    | ahead now o l => exact j0_checkDone _ _
+    | ahead now o l => exact j0_verifyStep _ _ _ _
     | aheadStoreFail now => exact hj.core (core_fail _ _)
     | evict now b =>
       simp only []

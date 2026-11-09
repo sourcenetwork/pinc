@@ -77,7 +77,7 @@ Init == i = 1 /\ m = OP!Init({}, 0) /\ c = [none |-> TRUE]
 Begin ==
     /\ Trace[i].t = "vtrun"
     /\ LET L == Trace[i]
-           cf == [o0 |-> L.o0, wg |-> GSet(L.wg), hasdl |-> L.hasdl, dl |-> W(L.dl), striped |-> L.striped,
+           cf == [o0 |-> L.o0, wg |-> GSet(L.wg), we |-> L.we, hasdl |-> L.hasdl, dl |-> W(L.dl), striped |-> L.striped,
                   hb |-> L.hb, nvl |-> L.nvl]
            sto == GSet(L.sto)
            out == OP!StartOutcome(L.len, L.er, cf.wg \subseteq sto, L.np)
@@ -122,7 +122,7 @@ EvStep(L) ==
             /\ LenOk(s4, L.tr)
             /\ W(post.treq) = m.treq \/ (m.treq = OP!Z /\ W(post.treq) = now)
             /\ W(post.tw) = m.tw \/ (U!Le(m.tw, now) /\ W(post.tw) = OP!SAdd(now, OP!StealHalf))
-            /\ PollOk(c, [s4 EXCEPT !.tw = W(post.tw)], post)
+            /\ PollOk(c, [s4 EXCEPT !.tw = W(post.tw), !.treq = W(post.treq)], post)
             /\ m' = [s4 EXCEPT !.treq = W(post.treq), !.tw = W(post.tw), !.ev = <<>>]
 
 ToStep(L) ==

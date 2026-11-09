@@ -98,6 +98,7 @@ import Vinc.ValuesTimeInv
 import Vinc.ValuesTimeBound
 import Vinc.ValuesTimeStall
 import Vinc.ValuesTimeDeadline
+import Vinc.ValuesTimeFix
 import Vinc.ValuesTimeTrace
 import Vinc.ValuesTimeAudit
 import Vinc.ValuesSysAudit

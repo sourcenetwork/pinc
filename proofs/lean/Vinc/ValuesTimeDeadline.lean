@@ -83,6 +83,14 @@ theorem gr_group (s : Fs) (now off len : Nat) : Gr Pg s (groupVerified s now off
     · exact ⟨[.verified off len, .readable off len], by simp, by intro e he; simp at he; rcases he with rfl | rfl <;> simp [Pg, Pd, Ph]⟩
 
 
+theorem gr_verifyStep (s : Fs) (now off len : Nat) : Gr Pg s (verifyStep s now off len) := by
+  unfold verifyStep
+  split
+  · unfold dupStep
+    refine Gr.trans (b := Fs.emit s [Ev.verified off len]) ⟨[.verified off len], rfl, by intro e he; simp at he; subst he; simp [Pg]⟩
+      ((gr_checkDone _ now).mono fun e h => Or.inl h)
+  · exact Gr.trans (Gr.same (b := { s with store := insertVec s.store (off, off + len) }) rfl) (gr_group _ now off len)
+
 theorem gr_fail (s : Fs) (r : Fail) : Gr (fun e => e = .failed r) s (failWith s r) :=
   ⟨[.failed r], rfl, by simp⟩
 
@@ -261,7 +269,7 @@ theorem gr_onTimeout_early (s : Fs) (now : Nat) (ss : List Sess) (rearm : Bool) 
   · have hl' : ¬ s.late now = true := by simp [hl]
     have h1 : Gr (fun e => Pd e ∨ ∃ w n, e = .redial w n) s (lateStall s now ss) := by
       unfold lateStall; rw [if_neg hl']
-      by_cases hd : Due s now ∧ ¬ RttWait s now ss ∧ stallLive now s.lastp ss = 0
+      by_cases hd : Due s now ∧ ¬ RttWait s now ss ∧ stallLive now (lastProg s) ss = 0
       · rw [stallStep_redial s now ss hd.1 hd.2.1 hd.2.2]
         exact ⟨[.redial s.sw (min (smul s.sw 2) STALL_CAP)], rfl, by simp⟩
       · by_cases hh : (stallStep s now ss).log = s.log
@@ -309,9 +317,7 @@ theorem gr_frame (s : Fs) (now : Nat) (b : Bool) (g : Option (Nat × Nat)) :
     | none => exact Gr.same hl
     | some p =>
       obtain ⟨o, l⟩ := p
-      simp only [verifyStep]
-      exact Gr.trans (Gr.same (b := { arrival (if b = true then byteLive s now else s) now with
-        store := insertVec (arrival (if b = true then byteLive s now else s) now).store (o, o + l) }) hl) (gr_group _ now o l)
+      exact Gr.trans (Gr.same hl) (gr_verifyStep _ now o l)
   · right; simpa using hrun
 
 /-- Which input reports which reason: a store refusal only a frame or an out-of-order group whose write failed, the
@@ -342,8 +348,8 @@ theorem fail_reason (s : Fs) (i : Inp) (ex : List Ev) (r : Fail) (h : (step s i)
       left; simp at hf; exact ⟨hf, Or.inl ⟨now, b, rfl⟩, hrun⟩
     | ahead now o l =>
       have hg : Gr Pg s (step s (.ahead now o l)) := by
-        simp only [step, hrun, ite_true, verifyStep]
-        exact gr_group _ now o l |> fun g => Gr.trans (Gr.same (b := { s with store := insertVec s.store (o, o + l) }) rfl) g
+        simp only [step, hrun, ite_true]
+        exact gr_verifyStep _ now o l
       exact absurd rfl (Pg_not_failed (hg.cls h _ hf) r)
     | aheadStoreFail now =>
       have h' : (step s (.aheadStoreFail now)).log = s.log ++ [Ev.failed .store] := by
@@ -415,7 +421,7 @@ theorem gr_onTimeout_gen (P : Ev → Prop) (hP : ∀ e, Pd e → P e) (s : Fs) (
   · simp only [onTimeout, hrun]; exact Gr.refl _ _
 
 theorem gr_onTimeout_calm (s : Fs) (now : Nat) (ss : List Sess) (rearm : Bool) (rt' : Option Nat)
-    (hl : s.late now = false) (hc : ¬ (Due s now ∧ ¬ RttWait s now ss ∧ stallLive now s.lastp ss = 0)) :
+    (hl : s.late now = false) (hc : ¬ (Due s now ∧ ¬ RttWait s now ss ∧ stallLive now (lastProg s) ss = 0)) :
     Gr Pd s (onTimeout s now ss rearm rt') := by
   refine gr_onTimeout_gen Pd (fun _ h => h) s now ss rearm rt' hl ?_
   unfold lateStall
@@ -430,7 +436,7 @@ longer wait to offer and STALL_LIVE finding no slow-but-receiving session. -/
 theorem redial_only_timeout (s : Fs) (i : Inp) (ex : List Ev) (w n : Nat) (h : (step s i).log = s.log ++ ex)
     (hr : Ev.redial w n ∈ ex) :
     ∃ now ss re rt, i = .timeout now ss re rt ∧ s.running = true ∧ s.late now = false ∧ Due s now ∧
-      ¬ RttWait s now ss ∧ stallLive now s.lastp ss = 0 := by
+      ¬ RttWait s now ss ∧ stallLive now (lastProg s) ss = 0 := by
   have hnr : ∀ {Q : Ev → Prop}, (∀ e, Q e → e ≠ .redial w n) → Gr Q s (step s i) → False := by
     intro Q hQ hg
     exact hQ _ (hg.cls h _ hr) rfl
@@ -452,8 +458,8 @@ theorem redial_only_timeout (s : Fs) (i : Inp) (ex : List Ev) (w n : Nat) (h : (
       subst this; simp at hr
     | ahead now o l =>
       have hg : Gr Pg s (step s (.ahead now o l)) := by
-        simp only [step, hrun, ite_true, verifyStep]
-        exact gr_group _ now o l |> fun g => Gr.trans (Gr.same (b := { s with store := insertVec s.store (o, o + l) }) rfl) g
+        simp only [step, hrun, ite_true]
+        exact gr_verifyStep _ now o l
       exact (hnr (Q := Pg) (fun e he => Pg_not_redial he w n) hg).elim
     | aheadStoreFail now =>
       have h' : (step s (.aheadStoreFail now)).log = s.log ++ [Ev.failed .store] := by
@@ -497,7 +503,7 @@ theorem redial_only_timeout (s : Fs) (i : Inp) (ex : List Ev) (w n : Nat) (h : (
           (by intro e he; rcases he with he | rfl; exact Pd_not_redial he w n; simp) hg').elim
       · have hl' : s.late now = false := by simpa using hl
         refine ⟨hl', ?_⟩
-        by_cases hc : Due s now ∧ ¬ RttWait s now ss ∧ stallLive now s.lastp ss = 0
+        by_cases hc : Due s now ∧ ¬ RttWait s now ss ∧ stallLive now (lastProg s) ss = 0
         · exact hc
         · have hg := gr_onTimeout_calm s now ss re rt hl' hc
           have hg' : Gr Pd s (step s (.timeout now ss re rt)) := by simpa [step, hrun] using hg

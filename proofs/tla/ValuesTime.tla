@@ -23,13 +23,12 @@
 (*             Granules (40 later granules do not fit; Lean and the trace  *)
 (*             cover HOLD_NV = 40, _holdsmall covers the cause with 2);    *)
 (*  _holdsmall HOLD_B = 2 granules, HOLD_NV = 2, the first request offset  *)
-(*             mid-granule (the tail threshold never reached: TailUnaligned);*)
+(*             mid-granule (the tail is the end of the wanted ranges);        *)
 (*  _stall, _live, _max, _dl  the wait, STALL_RTT, STALL_LIVE, clocks up   *)
 (*             to u64::MAX, the deadline;                                  *)
-(*  witnesses (TLC must violate the named property): _seq (the wait       *)
-(*             reaches 16 s), _low (the wait is not monotone), _dup (a     *)
-(*             group verified twice is announced twice), _tail (the Tail   *)
-(*             threshold fires with a wanted granule missing), _wbuf,      *)
+(*  witnesses (TLC must violate the named property): _wfirst (a provider   *)
+(*             that never sends is redialled), _seq (the wait       *)
+(*             reaches 16 s), _low (the wait is not monotone), _wbuf,      *)
 (*             _wbufreal, _wtail, _wgran, _wtime, _wdone (each release     *)
 (*             cause is reachable).                                        *)
 (*                                                                         *)
@@ -94,7 +93,8 @@ Grp(k) == [off |-> k * GR, len |-> GR]
 Groups == {Grp(k) : k \in 0..(NG - 1)}
 Offs == {g.off : g \in Groups}
 Dl == IF HasDl THEN DlW ELSE OP!Z
-Cfg == [o0 |-> O0, wg |-> {Grp(k) : k \in WantG}, hasdl |-> HasDl, dl |-> Dl, striped |-> Striped, hb |-> Hb, nvl |-> Nvl]
+WE == (CHOOSE k \in WantG : \A j \in WantG : j <= k) * GR + GR   \* the wanted granules are asked in ascending order
+Cfg == [o0 |-> O0, wg |-> {Grp(k) : k \in WantG}, we |-> WE, hasdl |-> HasDl, dl |-> Dl, striped |-> Striped, hb |-> Hb, nvl |-> Nvl]
 
 HasEv(ev, p) == \E i \in 1..Len(ev) : ev[i] = p
 Cnt(ev, p) == Cardinality({i \in 1..Len(ev) : ev[i] = p})
@@ -159,7 +159,7 @@ DoneReleased == done => (~s.head.h /\ (HeadG.off \in ver => ann[HeadG.off] = 1))
 J0 == s.head.h =>
         LET e == s.head.g.off + s.head.g.len
             b == OP!Chain(s.sto, e)
-        IN b < Hb /\ e + b < O0 + OP!SumLen(Cfg.wg) /\ s.nv < Nvl
+        IN b < Hb /\ e + b < Cfg.we /\ s.nv < Nvl
 
 PollBound == (s.run /\ s.head.h) =>
                (OP!Poll(Cfg, s).p /\ U!Le(OP!Poll(Cfg, s).v, OP!SAdd(s.head.t0, OP!HoldMax)))
@@ -180,12 +180,12 @@ MaxLV == CHOOSE m \in LVSet : \A x \in LVSet : U!Le(x, m)
 SwMax == IF MaxLV = OP!Z THEN OP!RttCap ELSE OP!SAdd(OP!LiveCap, MaxLV)
 HasEvRel(ev, why) == \E i \in 1..Len(ev) : ev[i][1] = "rel" /\ ev[i][3] = why
 TailMeansDone == [][ HasEvRel(s'.ev, "tail") => (Cfg.wg \subseteq s'.sto) ]_vars
-TailUnaligned == [][ (O0 % GR # 0) => ~HasEvRel(s'.ev, "tail") ]_vars
 
 SwGe == U!Le(OP!StallWait, s.sw)
 SwLe == U!Le(s.sw, SwMax)
 SwNeverLowered == ~low
 SwNot16 == s.sw # OP!Secs(16)
+NoRedial == s.sw = OP!StallWait
 NoBuffered == "buffered" \notin seen
 NoTail == "tail" \notin seen
 NoGranules == "granules" \notin seen
@@ -194,7 +194,7 @@ NoDone == "done" \notin seen
 W0 == {OP!Z}
 
 Redialed == \E i \in 1..Len(s'.ev) : s'.ev[i][1] = "redial"
-OverflowDue(p) == ~U!Fits(U!Add(OP!Mx(p.lastp, p.lastb), p.sw))
+OverflowDue(p) == ~U!Fits(U!Add(OP!Base(p), p.sw))
 SwDecrease == [][ U!Lt(s'.sw, s.sw) =>
                     ( (kind' \in {"frame", "frames", "framesf"} /\ U!Lt(OP!ArkCap, s.sw))
                       \/ (kind' = "timeout" /\ Redialed /\ U!Lt(OP!StallCap, s.sw))

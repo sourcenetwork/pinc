@@ -14,8 +14,9 @@
 (*                                                                         *)
 (* The configuration `c` of a fetch: c.o0 the first request offset,        *)
 (* c.wg the set of groups wanted (each a record [off, len]), c.dl the      *)
-(* deadline word or c.hasdl = FALSE, c.striped, c.hb = HOLD_B, c.nvl =     *)
-(* HOLD_NV. The state `s` holds the fields of `Fetch` the rules read or    *)
+(* deadline word or c.hasdl = FALSE, c.striped, c.we the end of the wanted  *)
+(* ranges in delivery order (the end of the last one asked), c.hb =        *)
+(* HOLD_B, c.nvl = HOLD_NV. The state `s` holds the fields of `Fetch` the rules read or    *)
 (* write: run, sw, lastp, lastb, treq, tw, rt (0 = none), head (NoHead or  *)
 (* [h, g, t0] with the held group g), rel, nv, sto (the verified groups),  *)
 (* trusted, and ev, the records and events the last operator emitted, in   *)
@@ -90,7 +91,7 @@ HoldWhy(c, s, h, t, force) ==
         b == Chain(s.sto, e)
     IN IF force # "none" THEN force
        ELSE IF b >= c.hb THEN "buffered"
-       ELSE IF e + b >= c.o0 + SumLen(c.wg) THEN "tail"
+       ELSE IF e + b >= c.we THEN "tail"
        ELSE IF s.nv >= c.nvl THEN "granules"
        ELSE IF ~U!Lt(t, SAdd(h.t0, HoldMax)) THEN "timeout"
        ELSE "none"
@@ -118,8 +119,11 @@ GroupVerified(c, s, t, g) ==
                    IN IF s2.head.h THEN HoldCheck(c, [s2 EXCEPT !.nv = s2.nv + 1], t, "none") ELSE s2
     IN CheckDone(c, s1, t)
 
-(* store_group then group_verified *)
-Verify(c, s, t, g) == GroupVerified(c, [s EXCEPT !.sto = s.sto \cup {g}], t, g)
+(* store_group then group_verified; a group another stream already stored (the race of two streams on one group) is
+   neither written nor announced again: only its Verified record and the completion check run *)
+Verify(c, s, t, g) ==
+    IF g \in s.sto THEN CheckDone(c, Emit(s, <<<<"ver", g.off>>>>), t)
+    ELSE GroupVerified(c, [s EXCEPT !.sto = s.sto \cup {g}], t, g)
 
 Fail(s, r) == [Emit(s, <<<<"fail", r>>>>) EXCEPT !.run = FALSE]
 
@@ -134,22 +138,26 @@ ByteLive(s, t) ==
                      ELSE s.sw,
               !.lastb = t]
 
-Due(s, t) == s.lastp # Z /\ U!Le(SAdd(Mx(s.lastp, s.lastb), s.sw), t)
-RttWait(s, t, w) == U!Lt(s.sw, w) /\ U!Lt(t, SAdd(s.lastp, w))
+(* the stall timer counts from the later of the last frame, the last bytes and the first request, and runs once a
+   request was sent (stall_base) *)
+Lp(s) == Mx(s.lastp, s.treq)
+Base(s) == Mx(Mx(s.lastp, s.lastb), s.treq)
+Due(s, t) == s.treq # Z /\ U!Le(SAdd(Base(s), s.sw), t)
+RttWait(s, t, w) == U!Lt(s.sw, w) /\ U!Lt(t, SAdd(Lp(s), w))
 NextSw(sw) == Mn(SMul2(sw), StallCap)
 
 (* the first block of on_timeout; w = stall_rtt, lv = stall_live as the session reports them *)
 StallStep(s, t, w, lv) ==
     IF ~Due(s, t) THEN s
     ELSE IF RttWait(s, t, w) THEN [s EXCEPT !.sw = w]
-    ELSE IF lv # Z THEN [s EXCEPT !.sw = SAdd(SSub(t, s.lastp), lv)]
+    ELSE IF lv # Z THEN [s EXCEPT !.sw = SAdd(SSub(t, Lp(s)), lv)]
     ELSE [Emit(s, <<<<"redial", s.sw, NextSw(s.sw)>>>>) EXCEPT !.lastp = t, !.sw = NextSw(s.sw)]
 
 Late(c, t) == c.hasdl /\ U!Lt(c.dl, t)
 
 (* poll_timeout: the minimum of the armed timers, [p |-> FALSE] if there is none *)
 Timers(c, s) ==
-    LET a == IF s.lastp # Z THEN {SAdd(Mx(s.lastp, s.lastb), s.sw)} ELSE {}
+    LET a == IF s.treq # Z THEN {SAdd(Base(s), s.sw)} ELSE {}
         b == IF s.head.h THEN {SAdd(s.head.t0, HoldMax)} ELSE {}
         d == IF s.tw # Z THEN {s.tw} ELSE {}
         e == IF c.hasdl THEN {SAdd(c.dl, U!One)} ELSE {}
