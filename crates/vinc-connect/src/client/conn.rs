@@ -592,11 +592,14 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             }
             Ok(None) => {
                 self.lookups.answered(peer);
+                // The wait of a pending dial is over: its first flight already went through the home relay.
+                let _ = push(&mut self.found_q, *peer);
                 self.notice(Notice::Missing(*peer));
             }
             Err(LookupError::TooLarge) => self.lookups.too_large(peer),
             Err(_) => {
                 self.lookups.answered(peer);
+                let _ = push(&mut self.found_q, *peer);
                 self.notice(Notice::BadRecord(*peer));
             }
         }
@@ -653,6 +656,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 self.net.probe_sent(now, i, nonce, self.udp_any);
             }
         }
+    }
+
+    /// How many lookups are outstanding.
+    pub fn lookups_outstanding(&self) -> usize {
+        self.lookups.len()
     }
 
     /// Ask for `peer`'s record. Picks UDP or the carrier by the rules of [`Lookups::ask`].
