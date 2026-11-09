@@ -27,7 +27,7 @@ theorem entry_rt (e : Entry) (h : e.valid) (r : List Nat) : rdEntry (encEntry e 
   rw [hl] at e4
   simp only [encEntry, List.append_assoc, List.singleton_append] at e1 e2 e3 e4 ⊢
   rcases e with ⟨m, ⟨i, v, t⟩, a⟩
-  cases a <;> simp_all [rdEntry, rdU8, Alive.toNat, bind, Except.bind, pure, Except.pure, throw, throwThe,
+  cases a <;> simp_all [rdEntry, rdU8, Alive.toNat, aliveOf, bind, Except.bind, pure, Except.pure, throw, throwThe,
     MonadExceptOf.throw]
 
 theorem entryOf_rt (e : Entry) (h : e.valid) : entryOf (encEntry e) = .ok e := by
@@ -130,7 +130,7 @@ theorem probes_rt (ps : List Probe) (r : List Nat) (h : ∀ p ∈ ps, p.age < 2 
     have e1 := rdBE_beBytes_lt 4 p.age ([p.path.toNat] ++ (ps.flatMap encProbe ++ r)) (by rw [p256_4]; exact hp)
     simp only [List.flatMap_cons, encProbe, List.length_cons, rdProbes, List.append_assoc, List.singleton_append] at *
     rcases p with ⟨a, pa⟩
-    cases pa <;> simp_all [rdU8, Path.toNat, bind, Except.bind, pure, Except.pure]
+    cases pa <;> simp_all [rdU8, Path.toNat, pathOf, bind, Except.bind, pure, Except.pure]
 
 theorem down_rt (mb : List Nat) (inc : Nat) (pf : Proof) (hv : (Frame.down mb inc pf).valid) :
     pDown (mb ++ beBytes 8 inc ++ beBytes 4 pf.sil ++ [pf.probes.length] ++ pf.probes.flatMap encProbe) =

@@ -163,6 +163,13 @@ def only (e : Err) (r : List Nat) : Except Err Unit :=
 
 /-! ## Parsing -/
 
+/-- The alive byte of an entry. -/
+def aliveOf : Nat → Except Err Alive
+  | 0 => .ok .down
+  | 1 => .ok .alive
+  | 2 => .ok .left
+  | _ => .error .aliveByte
+
 /-- `entry` on the bytes of one entry (the reader's rest is dropped, as the code drops it). -/
 def rdEntry (r : List Nat) : Except Err (Entry × List Nat) := do
   let (member, r) ← rdBytes 32 r
@@ -170,11 +177,7 @@ def rdEntry (r : List Nat) : Except Err (Entry × List Nat) := do
   let (ver, r) ← rdBE 2 r
   let (th, r) ← rdBytes 8 r
   let (a, r) ← rdU8 r
-  let alive ← match a with
-    | 0 => pure Alive.down
-    | 1 => pure Alive.alive
-    | 2 => pure Alive.left
-    | _ => throw Err.aliveByte
+  let alive ← aliveOf a
   pure (⟨member, ⟨inc, ver, th⟩, alive⟩, r)
 
 def entryOf (b : List Nat) : Except Err Entry := do
@@ -198,17 +201,20 @@ def snapNew (bs : List Nat) : Except Err (List Entry) :=
   if bs.length % entryLen ≠ 0 ∨ snapMax < (chunks bs).length then .error .snapSize
   else (chunks bs).mapM snapEntry
 
+/-- The path byte of a probe. -/
+def pathOf : Nat → Except Err Path
+  | 0 => .ok .session
+  | 1 => .ok .direct
+  | 2 => .ok .relay
+  | _ => .error .probePath
+
 /-- The probes of a DOWN, `n` of them, each `age(4) path(1)`. -/
 def rdProbes : Nat → List Nat → Except Err (List Probe × List Nat)
   | 0, r => .ok ([], r)
   | k + 1, r => do
     let (age, r) ← rdBE 4 r
     let (pb, r) ← rdU8 r
-    let path ← match pb with
-      | 0 => pure Path.session
-      | 1 => pure Path.direct
-      | 2 => pure Path.relay
-      | _ => throw Err.probePath
+    let path ← pathOf pb
     let (ps, r) ← rdProbes k r
     pure (⟨age, path⟩ :: ps, r)
 
