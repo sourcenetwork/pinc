@@ -52,6 +52,7 @@ MAX_HUBS == 64
 QUEUE_CAP == 8192
 SNAP_CHUNK == 64
 FLOOR_MAX == 4096
+MAX_BODY == <<0, 4, 0, 0, 0>>
 
 (* ---- helpers ---- *)
 Z == U!Zero
@@ -119,10 +120,13 @@ ClearOut(S) == [S EXCEPT !.sent = <<>>, !.bc = <<>>, !.cl = <<>>, !.ev = <<>>, !
 
 (* ---- the host (env of a call) ---- *)
 \* env: ev (function id -> evidence), car (function id -> carrier), acc (set), ver, tk, refl, pers, sealed (Option),
-\* failseal, failunseal, floor
+\* failseal, failunseal, floor, gu (function id -> Nanos word: the peers whose give_up is not the default)
 Evidence(env, p) == Lookup(env.ev, p)
 CarrierOf(env, m) == IF m \in DOMAIN env.car THEN env.car[m] ELSE [k |-> "unknown"]
 LocalOf(env) == [pers |-> env.pers, sealed |-> env.sealed, rf |-> env.failunseal, sf |-> env.failseal]
+
+\* Session::give_up: the host's bound on silence before a path is given up; HEAL_SILENCE for a peer it does not list
+GiveUp(env, p) == IF p \in DOMAIN env.gu THEN env.gu[p] ELSE HEAL_SILENCE
 
 IsHubIn(S, x) == \E i \in 1..Len(S.boot) : S.boot[i] = x
 =============================================================================

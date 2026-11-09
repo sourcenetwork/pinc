@@ -32,7 +32,7 @@ StartOp(cfg, env, now, wall, floor) ==
         t == INC!TagOp(INC!TagInit, now, env.refl, env.tk)
         rec0 == [inc |-> INC!Word(r.inc), ver |-> env.ver, th |-> t.tag]
         S0 == [me |-> cfg.me, isHub |-> cfg.isHub, boot |-> boot, born |-> now, leaving |-> FALSE, inc |-> r.inc,
-               tag |-> t.t, ver |-> env.ver, th |-> t.tag, sentRec |-> <<>>, sealFailed |-> FALSE,
+               tag |-> t.t, ver |-> env.ver, th |-> t.tag, sentRec |-> <<>>, sealFailed |-> FALSE, maxFrame |-> MAX_BODY,
                up |-> EmptyFn, heard |-> EmptyFn, revoked |-> {},
                hv |-> IF cfg.isHub THEN [x \in {cfg.me} |-> NewCopy] ELSE EmptyFn,
                members |-> EmptyFn, epoch |-> Z, hrtt |-> EmptyFn, hsent |-> EmptyFn, helloAt |-> EmptyFn,
@@ -51,8 +51,7 @@ StartOp(cfg, env, now, wall, floor) ==
 DropPeer(S, env, now, peer) ==
     LET s1 == [S EXCEPT !.up = IF peer \in DOMAIN @ THEN Del(@, peer) ELSE @,
                         !.attached = @ \ {peer}, !.homed = @ \ {peer},
-                        !.helloAt = IF peer \in DOMAIN @ THEN Del(@, peer) ELSE @,
-                        !.hsent = IF peer \in DOMAIN @ THEN Del(@, peer) ELSE @]
+                        !.helloAt = Unset(@, peer), !.hsent = Unset(@, peer)]
         s2 == IF ~s1.isHub /\ s1.homeOk = <<peer>> THEN [s1 EXCEPT !.homeOk = <<>>] ELSE s1
         s3 == IF peer \notin DOMAIN s2.downed THEN Bc(s2, [k |-> "release", m |-> peer]) ELSE s2
     IN IF IsBoot(s3, peer) /\ s3.primary = <<peer>> THEN Reselect(s3, env, now) ELSE s3
@@ -60,7 +59,7 @@ DropPeer(S, env, now, peer) ==
 SessionUp(S, env, now, peer, incoming) ==
     IF peer = S.me THEN S
     ELSE IF peer \in S.revoked THEN Close(S, peer, "revoked")
-    ELSE LET silent == peer \in DOMAIN S.heard /\ Gt(SatSub(now, S.heard[peer]), HEAL_SILENCE)
+    ELSE LET silent == peer \in DOMAIN S.heard /\ Gt(SatSub(now, S.heard[peer]), GiveUp(env, peer))
              s1 == IF ~S.isHub /\ IsBoot(S, peer) /\ silent THEN BeginQuiet(S, now, 1) ELSE S
          IN IF Cardinality(DOMAIN s1.up) >= MAX_TABLE /\ peer \notin DOMAIN s1.up THEN Close(s1, peer, "stale")
             ELSE LET s2 == [s1 EXCEPT !.up = Put(@, peer, now), !.attached = IF incoming THEN @ \ {peer} ELSE @]
@@ -108,6 +107,12 @@ RevokeOp(S, env, now, member) ==
 
 AddressChangedOp(S, now) == [S EXCEPT !.tag = INC!MovedOp(@, now)]
 
+\* hub.rs snapshot_to: a hub sends an attached peer its snapshot again, without a new attachment
+SnapshotToOp(S, env, now, peer) == IF S.isHub /\ peer \in S.attached THEN SendSnapshot(S, env, now, peer) ELSE S
+
+\* node.rs set_max_frame: the limit never goes below the default
+SetMaxFrameOp(S, mb) == [S EXCEPT !.maxFrame = Max2(mb, MAX_BODY)]
+
 (* ---- input.rs ---- *)
 RECURSIVE PulseLoop(_, _, _, _)
 PulseLoop(S, env, now, i) ==
@@ -117,7 +122,7 @@ PulseLoop(S, env, now, i) ==
             ELSE LET t == Lookup(S.heard, hub)
                      ev == Evidence(env, hub)
                  IN IF (t = <<>> \/ Ge(SatSub(now, t[1]), RENEW)) /\ ev # <<>> /\ (t = <<>> \/ Gt(ev[1].rx, t[1]))
-                    THEN LET s1 == IF ~S.isHub /\ t # <<>> /\ Gt(SatSub(ev[1].rx, t[1]), HEAL_SILENCE)
+                    THEN LET s1 == IF ~S.isHub /\ t # <<>> /\ Gt(SatSub(ev[1].rx, t[1]), GiveUp(env, hub))
                                    THEN BeginQuiet(S, now, 1) ELSE S
                          IN PulseLoop([s1 EXCEPT !.heard = Put(@, hub, ev[1].rx)], env, now, i + 1)
                     ELSE PulseLoop(S, env, now, i + 1)
@@ -127,13 +132,13 @@ OnFrame(S, env, now, peer, f) ==
     IF peer \in S.revoked \/ S.leaving THEN S
     ELSE LET s0 == PulseRefresh(Trace(S, [k |-> "frame_in", peer |-> peer, ty |-> TyOf(f)]), env, now)
              fromHub == IsBoot(s0, peer)
-             silent == peer \in DOMAIN s0.heard /\ Gt(SatSub(now, s0.heard[peer]), HEAL_SILENCE)
+             silent == peer \in DOMAIN s0.heard /\ Gt(SatSub(now, s0.heard[peer]), GiveUp(env, peer))
              sA == IF fromHub /\ ~s0.isHub /\ silent THEN BeginQuiet(s0, now, 1) ELSE s0
-             sB == IF fromHub THEN [sA EXCEPT !.heard = Put(@, peer, now), !.helloAt = IF peer \in DOMAIN @ THEN Del(@, peer) ELSE @]
+             sB == IF fromHub THEN [sA EXCEPT !.heard = Put(@, peer, now), !.helloAt = Unset(@, peer)]
                    ELSE sA
              isSample == f.k \in {"ack", "snap"}
-             t0 == IF fromHub /\ isSample THEN Lookup(sB.hsent, peer) ELSE <<>>
-             sC == IF fromHub /\ isSample /\ peer \in DOMAIN sB.hsent THEN [sB EXCEPT !.hsent = Del(@, peer)] ELSE sB
+             t0 == IF fromHub /\ isSample THEN TimeAt(sB.hsent, peer) ELSE <<>>
+             sC == IF fromHub /\ isSample THEN [sB EXCEPT !.hsent = Unset(@, peer)] ELSE sB
              sD == IF t0 # <<>> /\ Lt(SatSub(now, t0[1]), RTT_SAMPLE_MAX) THEN RttSample(sC, peer, N!Sub(now, t0[1])) ELSE sC
              switch == t0 # <<>> /\ Lt(SatSub(now, t0[1]), RTT_SAMPLE_MAX) /\ ~sD.isHub /\ sD.primary # <<>> /\ sD.primary[1] # peer
                        /\ HubUp(sD, now, peer)
@@ -201,13 +206,14 @@ RECURSIVE WatchdogLoop(_, _, _, _)
 WatchdogLoop(S, env, now, cur) ==
     LET hub == NextKey(DOMAIN S.helloAt, cur)
     IN IF hub = NONE THEN S
-       ELSE LET t0 == S.helloAt[hub]
+       ELSE IF S.helloAt[hub] = <<>> THEN WatchdogLoop(S, env, now, hub)
+       ELSE LET t0 == S.helloAt[hub][1]
                 opened == Get(Lookup(S.up, hub), now)
                 ev == Evidence(env, hub)
                 wt == IF ev = <<>> THEN Z ELSE Max2(ACK_WAIT, SatMulK(ev[1].srtt, 4))
                 spared == ev # <<>> /\ (Le(SatSub(now, t0), wt) \/ Lt(SatSub(now, ev[1].rx), N!Div(wt, 2)))
             IN IF Gt(SatSub(now, t0), ACK_WAIT) /\ Gt(SatSub(now, opened), HS_GRACE) /\ ~spared
-               THEN LET s1 == [S EXCEPT !.helloAt = Del(@, hub)]
+               THEN LET s1 == [S EXCEPT !.helloAt = Put(@, hub, <<>>)]
                         s2 == IF hub \in DOMAIN s1.up THEN DropPeer(Close(s1, hub, "noack"), env, now, hub) ELSE s1
                     IN WatchdogLoop(s2, env, now, hub)
                ELSE WatchdogLoop(S, env, now, hub)
@@ -274,5 +280,7 @@ CallLeave(S, env) == Drain(LeaveOp(Begin(S, env)))
 CallRevoke(S, env, now, member) ==
     LET r == RevokeOp(Begin(S, env), env, now, member) IN [ok |-> r.ok, S |-> Drain(r.S)]
 CallMoved(S, env, now) == Drain(AddressChangedOp(Begin(S, env), now))
+CallSnapshotTo(S, env, now, peer) == Drain(SnapshotToOp(Begin(S, env), env, now, peer))
+CallSetMaxFrame(S, env, mb) == Drain(SetMaxFrameOp(Begin(S, env), mb))
 CallStart(cfg, env, now, wall, floor) == StartOp(cfg, env, now, wall, floor)
 =============================================================================

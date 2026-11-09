@@ -53,8 +53,13 @@ BeginQuiet(S, now, cause) ==
 
 (* ---- view.rs: hello, record, renew ---- *)
 HelloTo(S, env, peer, snap) ==
-    SendS(S, env, peer, RSession,
-          [k |-> "hello", rec |-> RecOf(S), snap |-> snap, homed |-> (~S.isHub /\ S.primary = <<peer>>)])
+    IF S.leaving THEN S
+    ELSE SendS(S, env, peer, RSession,
+               [k |-> "hello", rec |-> RecOf(S), snap |-> snap, homed |-> (~S.isHub /\ S.primary = <<peer>>)])
+
+\* hello_at and hsent hold Options; a cleared entry stays in the table as <<>> (an entry never leaves)
+TimeAt(f, k) == IF k \in DOMAIN f THEN f[k] ELSE <<>>
+Unset(f, k) == IF k \in DOMAIN f THEN [f EXCEPT ![k] = <<>>] ELSE f
 
 BumpRecord(S) ==
     LET r == INC!NextOp(S.loc, S.inc)
@@ -76,8 +81,8 @@ RenewLoop(S, env, now, forceSnap, periodic, i) ==
             ELSE LET snap == forceSnap \/ hub \notin DOMAIN S.hv
                  IN IF periodic /\ ~snap /\ (S.primary # <<hub>> \/ S.homeOk = <<hub>>) /\ PulseFreshOn(env, now, hub)
                     THEN RenewLoop(Trace(S, [k |-> "hello_suppressed", hub |-> hub]), env, now, forceSnap, periodic, i + 1)
-                    ELSE LET s1 == [S EXCEPT !.helloAt = IF hub \in DOMAIN @ THEN @ ELSE Put(@, hub, now),
-                                             !.hsent = Put(@, hub, now)]
+                    ELSE LET s1 == [S EXCEPT !.helloAt = Put(@, hub, IF TimeAt(@, hub) = <<>> THEN <<now>> ELSE TimeAt(@, hub)),
+                                             !.hsent = Put(@, hub, <<now>>)]
                          IN RenewLoop(HelloTo(s1, env, hub, snap), env, now, forceSnap, periodic, i + 1)
 
 Renew(S, env, now, forceSnap, periodic) ==

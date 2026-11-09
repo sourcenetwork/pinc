@@ -411,7 +411,7 @@ theorem parse_injective {b b' f} (h : parse b = .ok f) (h' : parse b' = .ok f) (
 /-- The stream read uses exactly the bytes of the frame it returns. -/
 theorem read_canonical {buf f n} (h : read buf = .ok (some (f, n))) (hb : Byte buf) :
     f.valid ∧ enc f = buf.take n := by
-  unfold read at h
+  unfold read readWith at h
   split at h
   · simp at h
   · rename_i h4

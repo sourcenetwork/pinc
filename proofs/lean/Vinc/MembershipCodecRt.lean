@@ -232,9 +232,11 @@ theorem encBody_length (f : Frame) (hv : f.valid) : (encBody f).length = bodyLen
     omega
   | other t tp rest => simp [encBody, bodyLen]; omega
 
-/-- `Frame::read` returns the frame and the bytes it used, whatever follows it in the buffer. -/
-theorem read_enc (f : Frame) (hv : f.valid) (hs : bodyLen f ≤ maxBody) (rest : List Nat) :
-    read (enc f ++ rest) = .ok (some (f, 4 + bodyLen f)) := by
+/-- `Frame::read_with` for any limit at or above the default returns the frame and the bytes it used, whatever
+follows it in the buffer. -/
+theorem readWith_enc (mb : Nat) (hm : maxBody ≤ mb) (f : Frame) (hv : f.valid) (hs : bodyLen f ≤ maxBody)
+    (rest : List Nat) :
+    readWith mb (enc f ++ rest) = .ok (some (f, 4 + bodyLen f)) := by
   have hl := encBody_length f hv
   have h4 : beN (beBytes 4 (encBody f).length) = bodyLen f := by
     rw [beN_beBytes, Nat.mod_eq_of_lt, hl]
@@ -246,10 +248,14 @@ theorem read_enc (f : Frame) (hv : f.valid) (hs : bodyLen f ≤ maxBody) (rest :
     simp [beBytes_length]
   have e5 : ¬ ((encBody f ++ rest).length < bodyLen f) := by
     simp [← hl]
-  have e6 : ¬ (maxBody < bodyLen f) := Nat.not_lt.mpr hs
-  unfold read enc
+  have e6 : ¬ (mb < bodyLen f) := Nat.not_lt.mpr (Nat.le_trans hs hm)
+  unfold readWith enc
   simp only [List.append_assoc]
   rw [List.take_left' hb, List.drop_left' hb, h4]
   simp only [e4, e5, e6, e3, parse_encBody f hv, if_false, bind, Except.bind, pure, Except.pure]
+
+/-- `Frame::read` returns the frame and the bytes it used, whatever follows it in the buffer. -/
+theorem read_enc (f : Frame) (hv : f.valid) (hs : bodyLen f ≤ maxBody) (rest : List Nat) :
+    read (enc f ++ rest) = .ok (some (f, 4 + bodyLen f)) := readWith_enc maxBody (Nat.le_refl _) f hv hs rest
 
 end Vinc.MemCodec

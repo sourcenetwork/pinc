@@ -21,8 +21,16 @@ def N.refreshLocal (e : Env) (n : N) (now : Nat) : N :=
   { n with ver := e.ver, th := t, tag := tag' }
 
 def N.helloTo (e : Env) (n : N) (peer : Nat) (snap : Bool) : N :=
-  let homed := !n.isHub && n.primary == some peer
-  (N.tx e n peer .session (.hello ⟨n.inc.word, n.ver, n.th⟩ snap homed)).1
+  if n.leaving then n
+  else
+    let homed := !n.isHub && n.primary == some peer
+    (N.tx e n peer .session (.hello ⟨n.inc.word, n.ver, n.th⟩ snap homed)).1
+
+/-- The bookkeeping of a HELLO to `hub` in `renew`: `hello_at` keeps an armed time, else takes `now`; `hsent` takes
+`now`. -/
+def N.markHello (n : N) (hub now : Nat) : N :=
+  let at_ := match n.helloAt.timeAt hub with | some t => some t | none => some now
+  { n with helloAt := n.helloAt.insert hub at_, hsent := n.hsent.insert hub (some now) }
 
 /-- `bump_record`: the next record of this life, or the seal failure. -/
 def N.bumpRecord (n : N) : N :=
@@ -213,9 +221,7 @@ def N.renew (e : Env) (n : N) (now : Nat) (forceSnap periodic : Bool) : N :=
         if periodic && !snap && (n.primary != some hub || n.homeOk == some hub) && N.pulseFresh e now hub then
           n.trace (.helloSuppressed hub)
         else
-          let n := if n.helloAt.has hub then n else { n with helloAt := n.helloAt.insert hub now }
-          let n := { n with hsent := n.hsent.insert hub now }
-          N.helloTo e n hub snap) n
+          N.helloTo e (n.markHello hub now) hub snap) n
   { n with nextRenew := satAdd now RENEW }
 
 /-- `on_self_entry`: a hub told us about ourselves. -/

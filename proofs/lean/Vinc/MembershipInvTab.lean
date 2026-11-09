@@ -215,6 +215,8 @@ theorem erase (h : KBnd m b) (k : Nat) : KBnd (m.erase k) b := by
 theorem modify (h : KBnd m b) (k : Nat) (f : α → α) : KBnd (m.modify k f) b := by
   refine ⟨by rw [AMap.keys_modify]; exact h.1, by rw [AMap.keys_modify]; exact h.2⟩
 
+theorem unset {m : AMap (Option Nat)} (h : KBnd m b) (k : Nat) : KBnd (m.unset k) b := h.modify k _
+
 /-- The table is no longer than the (distinct) keys it may hold. -/
 theorem length_le (h : KBnd m b) (hb : b.Nodup) : m.length ≤ b.length := by
   have hn : m.keys.Nodup := h.1.imp (fun {a b} h => Nat.ne_of_lt h)

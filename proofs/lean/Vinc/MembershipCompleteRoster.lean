@@ -129,7 +129,7 @@ theorem rnStep_roster (e : Env) (now : Nat) (fs p : Bool) (n : N) (hub : Nat) : 
   · dsimp only
     split
     · simp
-    · simp [N.helloTo]
+    · unfold N.helloTo; split <;> simp [N.markHello]
 
 theorem renew_roster (e : Env) (n : N) (now : Nat) (fs p : Bool) : (N.renew e n now fs p).roster = n.roster := by
   rw [renew_eq']

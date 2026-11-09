@@ -729,6 +729,67 @@ fn leaving(c: &mut Ctx) {
     w.revoke(1, 0);
 }
 
+/// The transport's give-up bound decides what a heal is: a hub heard again after longer than the bound.
+fn give_up_bound(c: &mut Ctx) {
+    let mut w = c.started(2, 2);
+    let m = 2;
+    for hub in 0..2 {
+        w.nodes[m].h.gu.insert(id(hub), 8 * SEC);
+    }
+    w.run(10 * SEC);
+    w.cut.insert((1, m));
+    w.cut.insert((1, 0));
+    w.run(20 * SEC);
+    w.cut.remove(&(1, m));
+    w.cut.remove(&(1, 0));
+    w.close_session(m, 1, 0);
+    w.run(SEC);
+    w.connect(m, 1);
+    w.run(10 * SEC);
+    assert!(
+        traces(&w, m, |t| matches!(
+            t,
+            Trace::Quiet {
+                cause: QuietCause::Heal
+            }
+        )) >= 1,
+        "silence past the transport's bound is a heal"
+    );
+}
+
+/// A node that left sends no HELLO on a new session, and a hub sends a snapshot again only to an attached member.
+fn leave_and_resend(c: &mut Ctx) {
+    let mut w = c.started(2, 2);
+    w.run(5 * SEC);
+    w.snapshot_to(0, 2);
+    w.snapshot_to(3, 2);
+    w.snapshot_to(0, 0);
+    w.run(2 * SEC);
+    w.leave(3);
+    let before = w.nodes[3].h.sent_log.len();
+    w.close_session(3, 0, LEAVE);
+    w.run(SEC);
+    w.connect(3, 0);
+    w.run(5 * SEC);
+    assert_eq!(w.nodes[3].h.sent_log.len(), before, "a node that left sends nothing");
+}
+
+/// The frame body limit a node reads: refused at the default, a partial frame once raised, never below the default.
+fn wide_frames(c: &mut Ctx) {
+    let mut w = c.started(1, 1);
+    w.run(2 * SEC);
+    let long = [0u8, 4, 0, 1, 1, 0];
+    assert!(w.inject_bytes(0, 1, &long).is_err());
+    w.set_max_frame(0, 1 << 20);
+    assert_eq!(w.nodes[0].m.max_frame(), 1 << 20);
+    assert_eq!(w.inject_bytes(0, 1, &long), Ok(0));
+    assert!(w.inject_bytes(0, 1, &[0, 16, 0, 1, 1, 0]).is_err());
+    w.set_max_frame(0, 100);
+    assert_eq!(w.nodes[0].m.max_frame(), vinc_membership::codec::MAX_BODY);
+    assert!(w.inject_bytes(0, 1, &long).is_err());
+    w.run(2 * SEC);
+}
+
 /// Record every node scenario into `membership.ndjson`.
 pub fn run(tw: &mut TraceWriter) {
     let sink: Sink = Rc::new(RefCell::new(Vec::new()));
@@ -758,6 +819,9 @@ pub fn run(tw: &mut TraceWriter) {
     garbage(&mut c);
     leaving(&mut c);
     revoke_full(&mut c);
+    give_up_bound(&mut c);
+    leave_and_resend(&mut c);
+    wide_frames(&mut c);
     for line in sink.borrow().iter() {
         tw.line(FILE, line);
     }

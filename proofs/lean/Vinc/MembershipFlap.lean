@@ -25,8 +25,11 @@ theorem Fixed.of_out {n n' : N} (h : OutOnly n n') : Fixed n n' := ⟨h.hrtt, h.
 theorem Fixed.trans {a b c : N} (h1 : Fixed a b) (h2 : Fixed b c) : Fixed a c :=
   ⟨h2.1.trans h1.1, h2.2.1.trans h1.2.1, h2.2.2.1.trans h1.2.2.1, h2.2.2.2.1.trans h1.2.2.2.1, h2.2.2.2.2.trans h1.2.2.2.2⟩
 
-theorem helloTo_fixed (e : Env) (n : N) (peer : Nat) (snap : Bool) : Fixed n (N.helloTo e n peer snap) :=
-  Fixed.of_out (tx_out _ _ _ _ _)
+theorem helloTo_fixed (e : Env) (n : N) (peer : Nat) (snap : Bool) : Fixed n (N.helloTo e n peer snap) := by
+  unfold N.helloTo
+  split
+  · exact Fixed.refl n
+  · exact Fixed.of_out (tx_out _ _ _ _ _)
 
 theorem rsSwitch_fixed (e : Env) (n : N) (now p : Nat) : Fixed n (rsSwitch e n now p) := by
   unfold rsSwitch

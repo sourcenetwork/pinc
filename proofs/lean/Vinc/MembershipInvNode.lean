@@ -84,6 +84,14 @@ theorem inv_addressChanged {n : N} (hx : Inv B n) (now : Nat) : Inv B (N.address
   unfold N.addressChanged
   inv_go
 
+theorem inv_snapshotTo {e : Env} {n : N} (hx : Inv B n) (now peer : Nat) : Inv B (N.snapshotTo e n now peer) := by
+  unfold N.snapshotTo
+  inv_go
+
+theorem inv_setMaxFrame {n : N} (hx : Inv B n) (mb : Nat) : Inv B (N.setMaxFrame n mb) := by
+  unfold N.setMaxFrame
+  inv_go
+
 /-- The body of `revoke` after the `TableFull` test, as a node (`revoke_eq_body` checks it is the model's by `rfl`). -/
 def N.revokeBody (e : Env) (n : N) (now member : Nat) : N :=
     let n := { n with revoked := n.revoked.ins member }

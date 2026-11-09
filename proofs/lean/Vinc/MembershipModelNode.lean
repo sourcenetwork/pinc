@@ -16,7 +16,7 @@ open Vinc.MemInc
 /-- `drop_peer`. -/
 def N.dropPeer (e : Env) (n : N) (now peer : Nat) : N :=
   let n := { n with up := n.up.erase peer, attached := n.attached.del peer, homed := n.homed.del peer,
-                    helloAt := n.helloAt.erase peer, hsent := n.hsent.erase peer }
+                    helloAt := n.helloAt.unset peer, hsent := n.hsent.unset peer }
   let n := if !n.isHub && n.homeOk == some peer then { n with homeOk := none } else n
   let n := if !n.downed.has peer then n.bc (.release peer) else n
   if n.isBoot peer && n.primary == some peer then N.reselect e n now else n
@@ -36,7 +36,7 @@ def N.pulseRefresh (e : Env) (n : N) (now : Nat) : N :=
         match e.evidence hub with
         | some ev =>
           if (match t with | none => true | some t => decide (RENEW ≤ now - t)) && (match t with | none => true | some t => decide (t < ev.rx)) then
-            let n := if !n.isHub && (match t with | some t => decide (HEAL_SILENCE < ev.rx - t) | none => false) then
+            let n := if !n.isHub && (match t with | some t => decide (e.giveUp hub < ev.rx - t) | none => false) then
                 n.beginQuiet now 1 else n
             { n with heard := n.heard.insert hub ev.rx }
           else n
@@ -82,7 +82,7 @@ def N.dropStaleHubs (e : Env) (n : N) (now : Nat) : N :=
 def N.slowTick (e : Env) (n : N) (now : Nat) : N :=
   let n := forKeys n.helloAt.keys
     (fun hub n =>
-      match n.helloAt.get? hub with
+      match n.helloAt.timeAt hub with
       | none => n
       | some t0 =>
         let opened := (n.up.get? hub).getD now
@@ -94,7 +94,7 @@ def N.slowTick (e : Env) (n : N) (now : Nat) : N :=
             | none => false
           if skip then n
           else
-            let n := { n with helloAt := n.helloAt.erase hub }
+            let n := { n with helloAt := n.helloAt.unset hub }
             if n.up.has hub then N.dropPeer e (n.close hub .noack) now hub else n
         else n) n
   let n := if !n.isHub then N.sampleSessionRtts e n now else n
@@ -142,12 +142,12 @@ def N.onFrame (e : Env) (n : N) (now peer : Nat) (f : NFrame) : N :=
     let n := N.pulseRefresh e n now
     let fromHub := n.isBoot peer
     let n := if fromHub then
-        let silent := match n.heard.get? peer with | some t => decide (HEAL_SILENCE < now - t) | none => false
+        let silent := match n.heard.get? peer with | some t => decide (e.giveUp peer < now - t) | none => false
         let n := if !n.isHub && silent then n.beginQuiet now 1 else n
-        let n := { n with heard := n.heard.insert peer now, helloAt := n.helloAt.erase peer }
+        let n := { n with heard := n.heard.insert peer now, helloAt := n.helloAt.unset peer }
         let isAckSnap := match f with | .ack => true | .snap .. => true | _ => false
-        let t0 := n.hsent.get? peer
-        let n := if isAckSnap then { n with hsent := n.hsent.erase peer } else n
+        let t0 := n.hsent.timeAt peer
+        let n := if isAckSnap then { n with hsent := n.hsent.unset peer } else n
         let n := match t0 with
           | some t0 =>
             if isAckSnap && now - t0 < RTT_SAMPLE_MAX then
@@ -194,7 +194,7 @@ def N.sessionUp (e : Env) (n : N) (now peer : Nat) (incoming : Bool) : N :=
   if peer == n.me then n
   else if n.revoked.has peer then n.close peer .revoked
   else
-    let silent := match n.heard.get? peer with | some t => decide (HEAL_SILENCE < now - t) | none => false
+    let silent := match n.heard.get? peer with | some t => decide (e.giveUp peer < now - t) | none => false
     let n := if !n.isHub && n.isBoot peer && silent then n.beginQuiet now 1 else n
     if MAX_TABLE ≤ n.up.len && !n.up.has peer then n.close peer .stale
     else
@@ -241,6 +241,13 @@ def N.revoke (e : Env) (n : N) (now member : Nat) : Option N :=
     let n := if n.up.has member then n.close member .revoked else n
     some (n.emit (.revoked member))
 
+/-- `snapshot_to`: a hub sends an attached `peer` its snapshot again, without a new attachment. -/
+def N.snapshotTo (e : Env) (n : N) (now peer : Nat) : N :=
+  if n.isHub && n.attached.has peer then N.sendSnapshot e n now peer else n
+
+/-- `set_max_frame`: the limit never goes below the default. -/
+def N.setMaxFrame (n : N) (mb : Nat) : N := { n with maxFrame := max mb Vinc.MemCodec.maxBody }
+
 /-- `address_changed`. -/
 def N.addressChanged (n : N) (now : Nat) : N := { n with tag := n.tag.moved now }
 
@@ -265,7 +272,7 @@ def N.start (e : Env) (me : Nat) (isHub : Bool) (hubs : List Nat) (tracing : Boo
       let (th, tag) := Tag.init.tag now e.refl e.hash
       let n : N := {
         me := me, isHub := isHub, boot := boot, born := now, leaving := false, inc := inc, tag := tag, ver := e.ver,
-        th := th, sent := none, sealFailed := false, up := [], heard := [], revoked := [],
+        th := th, sent := none, sealFailed := false, maxFrame := Vinc.MemCodec.maxBody, up := [], heard := [], revoked := [],
         hv := if isHub then [(me, ⟨[], 0, false⟩)] else [], members := [], epoch := 0, hrtt := [], hsent := [],
         helloAt := [], primary := if isHub then some me else none, homeOk := none, homeSeen := false, recheck := [],
         quietUntil := 0, regrace := false, goneVer := [], left := [], nextRenew := now, nextTick := none,

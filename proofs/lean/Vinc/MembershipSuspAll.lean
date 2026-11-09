@@ -61,7 +61,7 @@ theorem forKeys_su (ks : List Nat) (f : Nat → N → N) (n : N) (h : ∀ k b, (
 @[simp] theorem refreshLocal_susp (e : Env) (n : N) (now : Nat) : (N.refreshLocal e n now).susp = n.susp := by
   unfold N.refreshLocal; simp
 
-attribute [local simp] foldl_su foldl_su2' forKeys_su
+attribute [local simp] foldl_su foldl_su2' forKeys_su N.markHello
 
 theorem pushDelta_susp'' (e : Env) (n : N) (now m : Nat) (rc : Rec) (a : Alive) : (N.pushDelta e n now m rc a).susp = n.susp :=
   pushDelta_susp' e n now m rc a
@@ -195,7 +195,7 @@ theorem swOut_susp (e : Env) (now : Nat) (a : N × Bool) (hub : Nat) : (swOut e 
 def N.stHello (e : Env) (now : Nat) (n : N) : N :=
   forKeys n.helloAt.keys
     (fun hub n =>
-      match n.helloAt.get? hub with
+      match n.helloAt.timeAt hub with
       | none => n
       | some t0 =>
         let opened := (n.up.get? hub).getD now
@@ -207,7 +207,7 @@ def N.stHello (e : Env) (now : Nat) (n : N) : N :=
             | none => false
           if skip then n
           else
-            let n := { n with helloAt := n.helloAt.erase hub }
+            let n := { n with helloAt := n.helloAt.unset hub }
             if n.up.has hub then N.dropPeer e (n.close hub .noack) now hub else n
         else n) n
 
@@ -424,10 +424,10 @@ theorem onTimeout_so (e : Env) (n : N) (now : Nat) (hs : n.SuspOk) : (N.onTimeou
 /-! ### `on_frame` -/
 
 /-- The first steps of the hub part of `on_frame`: silence detection and the hearing time. -/
-def N.ofHub1 (n : N) (now peer : Nat) : N :=
-  let silent := match n.heard.get? peer with | some t => decide (HEAL_SILENCE < now - t) | none => false
+def N.ofHub1 (e : Env) (n : N) (now peer : Nat) : N :=
+  let silent := match n.heard.get? peer with | some t => decide (e.giveUp peer < now - t) | none => false
   let n := if !n.isHub && silent then n.beginQuiet now 1 else n
-  { n with heard := n.heard.insert peer now, helloAt := n.helloAt.erase peer }
+  { n with heard := n.heard.insert peer now, helloAt := n.helloAt.unset peer }
 
 /-- The round trip sample of an acknowledged HELLO and the primary choice it can trigger. -/
 def N.ofHub2 (e : Env) (n : N) (now peer : Nat) (isAckSnap : Bool) (t0 : Option Nat) : N :=
@@ -450,10 +450,10 @@ def N.ofHub2 (e : Env) (n : N) (now peer : Nat) (isAckSnap : Bool) (t0 : Option 
 
 /-- The part of `on_frame` for a frame from a hub: silence detection, round trip samples, primary choice. -/
 def N.ofHub (e : Env) (n : N) (now peer : Nat) (f : NFrame) : N :=
-  let n := N.ofHub1 n now peer
+  let n := N.ofHub1 e n now peer
   let isAckSnap := match f with | .ack => true | .snap .. => true | _ => false
-  let t0 := n.hsent.get? peer
-  let n := if isAckSnap then { n with hsent := n.hsent.erase peer } else n
+  let t0 := n.hsent.timeAt peer
+  let n := if isAckSnap then { n with hsent := n.hsent.unset peer } else n
   let n := N.ofHub2 e n now peer isAckSnap t0
   if n.primary.isNone then N.reselect e n now else n
 
@@ -488,7 +488,7 @@ theorem onFrame_eq (e : Env) (n : N) (now peer : Nat) (f : NFrame) :
 theorem susp_ite (c : Prop) [Decidable c] {a b : N} {s : AMap Susp} (ha : a.susp = s) (hb : b.susp = s) : (if c then a else b).susp = s := by
   split <;> assumption
 
-theorem ofHub1_susp (n : N) (now peer : Nat) : (N.ofHub1 n now peer).susp = n.susp := by
+theorem ofHub1_susp (e : Env) (n : N) (now peer : Nat) : (N.ofHub1 e n now peer).susp = n.susp := by
   unfold N.ofHub1; dsimp only; split <;> simp
 
 theorem ofHub2_susp (e : Env) (n : N) (now peer : Nat) (isAckSnap : Bool) (t0 : Option Nat) :

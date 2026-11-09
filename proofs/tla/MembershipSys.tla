@@ -70,7 +70,7 @@ EnvFor(x, n) ==
      car |-> [m \in {m \in Members : n \in Hubs /\ x.car[<<n, m>>].k # "unknown"} |-> x.car[<<n, m>>]],
      acc |-> {p \in Nodes : Pr(n, p) \in x.sess},
      ver |-> 1, tk |-> n, refl |-> TRUE, pers |-> Pers, sealed |-> x.store[n], failseal |-> FALSE, failunseal |-> FALSE,
-     floor |-> [p \in 0..255 |-> <<241, p, 0, 0, 0, 0, 0, 0, 1>>]]
+     floor |-> [p \in 0..255 |-> <<241, p, 0, 0, 0, 0, 0, 0, 1>>], gu |-> EmptyFn]
 
 EvS(S) == {S.ev[i] : i \in 1..Len(S.ev)}
 TrS(S) == {S.tr[i] : i \in 1..Len(S.tr)}

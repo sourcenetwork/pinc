@@ -111,9 +111,9 @@ theorem pushDelta_me_hv (e : Env) (n : N) (now : Nat) (rc : Rec) (a : Alive) :
   exact h1.1
 
 theorem rnStep_hv (e : Env) (now : Nat) (fs p : Bool) (n : N) (hub : Nat) : (rnStep e now fs p n hub).hv = n.hv := by
-  unfold rnStep
+  unfold rnStep N.helloTo
   repeat' split
-  all_goals simp_all [N.helloTo]
+  all_goals simp_all [N.markHello]
 
 theorem bumpRecord_hv (n : N) : n.bumpRecord.hv = n.hv := by
   unfold N.bumpRecord; split <;> simp

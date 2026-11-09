@@ -5,7 +5,8 @@ import Vinc.MembershipInvNode
 
 `Reach n`: `n` is a node `Membership::start` returned, or the result of any public call on a reachable node (the
 host calls, in any order and with any arguments: `on_bytes`, `on_frame`, `on_timeout`, `session_up`, `session_down`,
-`leave`, `revoke` (when it does not return `TableFull`), `address_changed`, `carrier_return`, `carrier_gone`, and the
+`leave`, `revoke` (when it does not return `TableFull`), `address_changed`, `snapshot_to`, `set_max_frame`,
+`carrier_return`, `carrier_gone`, and the
 draining of the event and trace queues). `reach_inv` shows that a reachable node satisfies `Inv`: the roster, the
 attachments, the homed members, the suspicions, the downed set, the revoked set, the live sessions, the view, the
 recheck set, the leave set, the gone versions and every hub copy are within `MAX_TABLE` (the hub copies within
@@ -30,6 +31,8 @@ inductive Reach : N → Prop where
   | leave {n : N} : Reach n → Reach (N.leave n)
   | revoke {n n' : N} (e : Env) (now member : Nat) : Reach n → N.revoke e n now member = some n' → Reach n'
   | addressChanged {n : N} (now : Nat) : Reach n → Reach (N.addressChanged n now)
+  | snapshotTo {n : N} (e : Env) (now peer : Nat) : Reach n → Reach (N.snapshotTo e n now peer)
+  | setMaxFrame {n : N} (mb : Nat) : Reach n → Reach (N.setMaxFrame n mb)
   | carrierReturn {n : N} (e : Env) (now member : Nat) : Reach n → Reach (N.carrierReturn e n now member)
   | carrierGone {n : N} (e : Env) (now member : Nat) : Reach n → Reach (N.carrierGone e n now member)
   | drained {n : N} : Reach n → Reach n.drained
@@ -51,6 +54,8 @@ theorem reach_inv {n : N} (h : Reach n) : Inv n.boot n := by
   | leave _ ih => exact (inv_leave ih).bootEq ▸ inv_leave ih
   | revoke e now member _ hr ih => exact (inv_revoke ih now member _ hr).bootEq ▸ inv_revoke ih now member _ hr
   | addressChanged now _ ih => exact (inv_addressChanged ih now).bootEq ▸ inv_addressChanged ih now
+  | snapshotTo e now peer _ ih => exact (inv_snapshotTo ih now peer).bootEq ▸ inv_snapshotTo ih now peer
+  | setMaxFrame mb _ ih => exact (inv_setMaxFrame ih mb).bootEq ▸ inv_setMaxFrame ih mb
   | carrierReturn e now member _ ih => exact (inv_carrierReturn ih now member).bootEq ▸ inv_carrierReturn ih now member
   | carrierGone e now member _ ih => exact (inv_carrierGone ih now member).bootEq ▸ inv_carrierGone ih now member
   | drained _ ih => exact (inv_drained ih).bootEq ▸ inv_drained ih

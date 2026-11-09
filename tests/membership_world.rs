@@ -53,6 +53,8 @@ pub struct Host {
     pub sealed: Option<u64>,
     pub fail_seal: bool,
     pub fail_unseal: bool,
+    /// The transport's give-up bound per peer; a peer not listed has the default.
+    pub gu: BTreeMap<NodeId, u64>,
     /// Every `send` the machine made, with whether a session took it (for the proof traces).
     pub sent_log: Vec<(NodeId, Route, Vec<u8>, bool)>,
 }
@@ -72,6 +74,12 @@ impl Session for Host {
     }
     fn carrier(&self, member: &NodeId) -> Carrier {
         self.carriers.get(member).copied().unwrap_or_default()
+    }
+    fn give_up(&self, peer: &NodeId) -> u64 {
+        self.gu
+            .get(peer)
+            .copied()
+            .unwrap_or(vinc_membership::consts::HEAL_SILENCE)
     }
     fn close(&mut self, peer: &NodeId, reason: CloseReason) {
         self.closed.push((*peer, reason));
@@ -153,6 +161,7 @@ pub struct EnvSnap {
     pub sealed: Option<u64>,
     pub failseal: bool,
     pub failunseal: bool,
+    pub gu: Vec<(NodeId, u64)>,
 }
 
 /// One call into a machine.
@@ -178,6 +187,8 @@ pub enum Op {
         bytes: Vec<u8>,
         used: usize,
         bad: bool,
+        /// The frame body limit in force when the bytes arrived.
+        mf: usize,
     },
     Timeout,
     CarrierGone {
@@ -192,6 +203,12 @@ pub enum Op {
         ok: bool,
     },
     Moved,
+    SnapshotTo {
+        peer: NodeId,
+    },
+    SetMaxFrame {
+        max: usize,
+    },
 }
 
 /// The public state of a machine after a call.
@@ -203,6 +220,9 @@ pub struct StSnap {
     pub inc: u64,
     pub roster: Vec<(NodeId, u64)>,
     pub seal_failed: bool,
+    pub max_frame: usize,
+    /// The world's nodes `hub_is_up` says are alive at the call's time.
+    pub hubs_up: Vec<NodeId>,
 }
 
 /// A recorded call: its inputs, what the machine asked of the host and what it reported.
@@ -579,10 +599,11 @@ impl World {
             sealed: h.sealed,
             failseal: h.fail_seal,
             failunseal: h.fail_unseal,
+            gu: h.gu.iter().map(|(k, v)| (*k, *v)).collect(),
         }
     }
 
-    fn st_snap(&self, i: usize) -> StSnap {
+    fn st_snap(&self, i: usize, now: u64) -> StSnap {
         let m = &self.nodes[i].m;
         let roster = (0..self.nodes.len())
             .filter_map(|j| m.lease_of(&id(j)).map(|t| (id(j), t)))
@@ -594,6 +615,8 @@ impl World {
             inc: m.incarnation(),
             roster,
             seal_failed: m.seal_failed(),
+            max_frame: m.max_frame(),
+            hubs_up: (0..self.nodes.len()).map(id).filter(|x| m.hub_is_up(now, x)).collect(),
         }
     }
 
@@ -619,7 +642,7 @@ impl World {
             events: q.0,
             traces: q.1,
             sealed_after: h.sealed,
-            st: self.st_snap(i),
+            st: self.st_snap(i, now),
         }
     }
 
@@ -691,6 +714,21 @@ impl World {
         )
     }
 
+    /// Hub `hub` sends `member` its snapshot again (recorded).
+    pub fn snapshot_to(&mut self, hub: usize, member: usize) {
+        let mid = id(member);
+        self.call(
+            hub,
+            |m, h, now| m.snapshot_to(h, now, &mid),
+            |()| Op::SnapshotTo { peer: mid },
+        );
+    }
+
+    /// Node `i` raises the frame body limit it reads (recorded).
+    pub fn set_max_frame(&mut self, i: usize, max: usize) {
+        self.call(i, |m, _, _| m.set_max_frame(max), |()| Op::SetMaxFrame { max });
+    }
+
     /// The address of node `i` changed (recorded).
     pub fn moved(&mut self, i: usize) {
         self.call(i, |m, _, now| m.address_changed(now), |()| Op::Moved);
@@ -710,6 +748,7 @@ impl World {
             sealed: old.sealed,
             fail_seal: old.fail_seal,
             fail_unseal: old.fail_unseal,
+            gu: old.gu.clone(),
             ..Host::default()
         };
         self.sessions.retain(|&(a, b)| a != i && b != i);
@@ -765,6 +804,7 @@ impl World {
             return;
         }
         let peer = id(from);
+        let mf = self.nodes[to].m.max_frame();
         let n = self.call(
             to,
             |m, h, now| m.on_bytes(h, now, &peer, bytes),
@@ -773,6 +813,7 @@ impl World {
                 bytes: bytes.to_vec(),
                 used: r.as_ref().map_or(0, |n| *n),
                 bad: r.is_err(),
+                mf,
             },
         );
         let n = n.expect("frame parses");
@@ -782,6 +823,7 @@ impl World {
     /// Deliver bytes that need not be a whole frame to `to` as if `from` sent them, now; returns what `on_bytes` said.
     pub fn inject_bytes(&mut self, to: usize, from: usize, bytes: &[u8]) -> Result<usize, vinc_membership::FrameError> {
         let peer = id(from);
+        let mf = self.nodes[to].m.max_frame();
         self.call(
             to,
             |m, h, now| m.on_bytes(h, now, &peer, bytes),
@@ -790,6 +832,7 @@ impl World {
                 bytes: bytes.to_vec(),
                 used: r.as_ref().map_or(0, |n| *n),
                 bad: r.is_err(),
+                mf,
             },
         )
     }

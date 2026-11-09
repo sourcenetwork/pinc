@@ -160,9 +160,7 @@ def rnStep (e : Env) (now : Nat) (forceSnap periodic : Bool) (n : N) (hub : Nat)
     if periodic && !snap && (n.primary != some hub || n.homeOk == some hub) && N.pulseFresh e now hub then
       n.trace (.helloSuppressed hub)
     else
-      let n := if n.helloAt.has hub then n else { n with helloAt := n.helloAt.insert hub now }
-      let n := { n with hsent := n.hsent.insert hub now }
-      N.helloTo e n hub snap
+      N.helloTo e (n.markHello hub now) hub snap
 
 def rnPre (n : N) (periodic : Bool) : N × Bool :=
   let n := if (match n.sent with | some s => decide (s ≠ (n.ver, n.th)) | none => false) then n.bumpRecord else n
@@ -184,9 +182,9 @@ theorem bumpRecord_ep (n : N) : n.bumpRecord.epoch = n.epoch := by
   unfold N.bumpRecord; split <;> simp
 
 theorem rnStep_ep (e : Env) (now : Nat) (fs p : Bool) (n : N) (hub : Nat) : (rnStep e now fs p n hub).epoch = n.epoch := by
-  unfold rnStep
+  unfold rnStep N.helloTo
   repeat' split
-  all_goals simp_all [N.helloTo]
+  all_goals simp_all [N.markHello]
 
 theorem rnPre_ep (n : N) (p : Bool) : (rnPre n p).1.epoch = n.epoch := by
   unfold rnPre; dsimp only; split <;> simp [bumpRecord_ep]

@@ -25,12 +25,18 @@ theorem rdBE_short {k r} (h : r.length < k) : rdBE k r = .error .short := by
 /-! ## The stream read -/
 
 theorem read_short (buf : List Nat) (h : buf.length < 4) : read buf = .ok none := by
-  simp [read, h]
+  simp [read, readWith, h]
 
 theorem read_tooLarge (buf : List Nat) (h : 4 ≤ buf.length) (hl : maxBody < beN (buf.take 4)) :
     read buf = .error .tooLarge := by
   have : ¬ buf.length < 4 := by omega
-  simp [read, this, hl]
+  simp [read, readWith, this, hl]
+
+/-- A length prefix above the limit in force is refused whatever the limit is. -/
+theorem readWith_tooLarge (mb : Nat) (buf : List Nat) (h : 4 ≤ buf.length) (hl : mb < beN (buf.take 4)) :
+    readWith mb buf = .error .tooLarge := by
+  have : ¬ buf.length < 4 := by omega
+  simp [readWith, this, hl]
 
 /-- Every proper prefix of a frame is a partial frame: `read` asks for more bytes. -/
 theorem read_prefix (f : Frame) (hv : f.valid) (hs : bodyLen f ≤ maxBody) (k : Nat) (hk : k < (enc f).length) :
@@ -57,7 +63,7 @@ theorem read_prefix (f : Frame) (hv : f.valid) (hs : bodyLen f ≤ maxBody) (k :
     have h5 : ((encBody f).take (k - 4)).length < bodyLen f := by
       rw [List.length_take]; omega
     have h6 : ¬ (maxBody < bodyLen f) := Nat.not_lt.mpr hs
-    unfold read
+    unfold read readWith
     simp only [hlen4, e1', e2', hn, ite_false, h5, h6, ite_true]
 
 /-! ## The malformed classes -/

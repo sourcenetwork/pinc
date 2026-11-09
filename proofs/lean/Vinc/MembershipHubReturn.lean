@@ -147,7 +147,7 @@ theorem carrierReturn_roster_le (e : Env) (n : N) (now member : Nat) (hb : n.ros
 /-- The first step of `drop_peer`. -/
 def N.dpMid (n : N) (peer : Nat) : N :=
   { n with up := n.up.erase peer, attached := n.attached.del peer, homed := n.homed.del peer,
-           helloAt := n.helloAt.erase peer, hsent := n.hsent.erase peer }
+           helloAt := n.helloAt.unset peer, hsent := n.hsent.unset peer }
 
 theorem dropPeer_notboot (e : Env) (n : N) (now peer : Nat) (h : n.isBoot peer = false) :
     (N.dropPeer e n now peer).roster = n.roster ∧ (N.dropPeer e n now peer).downed = n.downed ∧

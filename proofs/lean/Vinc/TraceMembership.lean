@@ -120,12 +120,13 @@ def envOf (j : J) : Except String Env := do
     | "open" => pure (m, Car.open_)
     | "gone" => pure (m, Car.gone (← u64F x "since") (← optF x "sleep"))
     | k => throw s!"unknown carrier {k}"
+  let gu ← (← pairs (← field j "gu")).mapM fun (p, x) => do pure (p, ← limbsOf x)
   let acc ← natList (← field j "acc")
   check ((← natF j "floor") == 9) "the floor body is 9 bytes in the harness"
   pure { ev := sortedByKey ev, car := sortedByKey car, acc := sortedByKey (acc.map fun p => (p, ())),
          ver := ← natF j "ver", tk := ← natF j "tk", refl := ← boolF j "refl",
          loc := ⟨← boolF j "pers", ← optF j "sealed", ← boolF j "failunseal", ← boolF j "failseal"⟩,
-         floorBody := fun p => [0xF1, p, 0, 0, 0, 0, 0, 0, 1] }
+         floorBody := fun p => [0xF1, p, 0, 0, 0, 0, 0, 0, 1], gu := sortedByKey gu }
 
 def routeOf (j : J) : Except String Route := do
   match ← strF j "r" with
@@ -220,7 +221,7 @@ instance : BEq NFrame := ⟨fun a b => decide (a = b)⟩
 instance : BEq Route := ⟨fun a b => decide (a = b)⟩
 
 /-- Check what the machine produced against the line. -/
-def checkOut (j : J) (n : N) : Except String Unit := do
+def checkOut (j : J) (n : N) (now : Nat) : Except String Unit := do
   let o ← field j "out"
   same "sent" n.outSent (← (← listJ (← field o "sent")).mapM sentOf)
   same "broadcast calls" n.outBc (← (← listJ (← field o "bc")).mapM bcOf)
@@ -248,6 +249,8 @@ def checkOut (j : J) (n : N) : Except String Unit := do
     | _ => throw "bad roster entry"
   same "roster" (n.roster.map fun p => (p.1, p.2.renewed)) ro
   check ((← boolF st "sealfailed") == n.sealFailed) "seal_failed"
+  check ((← u64F st "maxframe") == n.maxFrame) s!"max frame: model {n.maxFrame}"
+  same "hubs up" (sortedByKey ((n.me :: n.up.keys).filter (fun h => n.hubUp now h) |>.map fun h => (h, ())) |>.keys) (← natList (← field st "hu"))
 
 def slotGet (w : W) (k : Nat) : Except String N :=
   match w.slots.lookup k with
@@ -257,19 +260,19 @@ def slotGet (w : W) (k : Nat) : Except String N :=
 def slotSet (w : W) (k : Nat) (n : N) : W :=
   { slots := (k, n) :: w.slots.filter (fun p => p.1 != k) }
 
-/-- The frames of a `by` line, tied to their bytes through the codec model. -/
-def framesOf (j : J) : Except String (List NFrame) := do
+/-- The frames of a `by` line, tied to their bytes through the codec model at the limit `mf` in force. -/
+def framesOf (j : J) (mf : Nat) : Except String (List NFrame) := do
   let fs ← (← listJ (← field j "fs")).mapM fun x => do
     let f ← frameOf (← field x "f")
     let hex ← hexBytes (← strF x "hex")
-    check (readIs (Vinc.MemCodec.read hex) (some (toCodec f, hex.length))) s!"codec: reading the bytes of {repr f} gives another frame"
+    check (readIs (Vinc.MemCodec.readWith mf hex) (some (toCodec f, hex.length))) s!"codec: reading the bytes of {repr f} gives another frame"
     pure f
   let rest ← hexBytes (← strF j "rest")
   let bad ← boolF j "bad"
   if bad then
-    check (match Vinc.MemCodec.read rest with | .error _ => true | _ => false) "codec: the bytes the code refused are accepted"
+    check (match Vinc.MemCodec.readWith mf rest with | .error _ => true | _ => false) "codec: the bytes the code refused are accepted"
   else
-    check (rest.isEmpty || readIs (Vinc.MemCodec.read rest) none) "codec: the partial tail is not a partial frame"
+    check (rest.isEmpty || readIs (Vinc.MemCodec.readWith mf rest) none) "codec: the partial tail is not a partial frame"
   pure fs
 
 def replayEvent (j : J) (w : W) : Except String W := do
@@ -284,7 +287,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     match r with
     | .ok n =>
       check (ret == "ok") s!"start: the model succeeds, the code said {ret}"
-      checkOut j n
+      checkOut j n now
       pure (slotSet w k n.drained.clearOut)
     | .error err =>
       let want := match err with
@@ -299,7 +302,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
       | "up" => pure (N.sessionUp e n0 now (← natF j "peer") (← boolF j "inc"))
       | "dn" => pure (N.sessionDown e n0 now (← natF j "peer") (← u64F j "code"))
       | "by" =>
-        let fs ← framesOf j
+        check ((← u64F j "mf") == n0.maxFrame) s!"max frame: model {n0.maxFrame}"
+        let fs ← framesOf j n0.maxFrame
         pure (N.onBytes e n0 now (← natF j "peer") fs (← boolF j "bad"))
       | "to" => pure (N.onTimeout e n0 now)
       | "cg" => pure (N.carrierGone e n0 now (← natF j "member"))
@@ -311,8 +315,10 @@ def replayEvent (j : J) (w : W) : Except String W := do
         | some n => do check (ret == "ok") "revoke: the model accepts, the code said full"; pure n
         | none => do check (ret == "full") "revoke: the model says full, the code accepted"; pure n0
       | "mv" => pure (N.addressChanged n0 now)
+      | "sn" => pure (N.snapshotTo e n0 now (← natF j "peer"))
+      | "sm" => pure (N.setMaxFrame n0 (← u64F j "mf"))
       | _ => throw s!"unknown node op {op}"
-    checkOut j n
+    checkOut j n now
     pure (slotSet w k n.drained.clearOut)
 
 end Vinc.TraceMembership

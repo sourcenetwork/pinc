@@ -285,11 +285,16 @@ fn env_json(e: &EnvSnap) -> String {
         })
         .collect();
     let acc: Vec<String> = e.acc.iter().map(|p| nid(p).to_string()).collect();
+    let gu: Vec<String> =
+        e.gu.iter()
+            .map(|(p, v)| format!("[{},{}]", nid(p), limbs(*v)))
+            .collect();
     format!(
-        "{{\"ev\":[{}],\"car\":[{}],\"acc\":[{}],\"ver\":{},\"tk\":{},\"refl\":{},\"pers\":{},\"sealed\":{},\"failseal\":{},\"failunseal\":{},\"floor\":9}}",
+        "{{\"ev\":[{}],\"car\":[{}],\"acc\":[{}],\"gu\":[{}],\"ver\":{},\"tk\":{},\"refl\":{},\"pers\":{},\"sealed\":{},\"failseal\":{},\"failunseal\":{},\"floor\":9}}",
         ev.join(","),
         car.join(","),
         acc.join(","),
+        gu.join(","),
         e.ver,
         e.tk,
         b(e.refl),
@@ -311,14 +316,17 @@ fn st_json(s: &StSnap) -> String {
         .iter()
         .map(|(m, t)| format!("[{},{}]", nid(m), limbs(*t)))
         .collect();
+    let hu: Vec<String> = s.hubs_up.iter().map(|x| nid(x).to_string()).collect();
     format!(
-        "{{\"members\":[{}],\"epoch\":{},\"primary\":{},\"inc\":{},\"roster\":[{}],\"sealfailed\":{}}}",
+        "{{\"members\":[{}],\"epoch\":{},\"primary\":{},\"inc\":{},\"roster\":[{}],\"sealfailed\":{},\"maxframe\":{},\"hu\":[{}]}}",
         members.join(","),
         limbs(s.epoch),
         opt_id(s.primary.as_ref()),
         limbs(s.inc),
         roster.join(","),
-        b(s.seal_failed)
+        b(s.seal_failed),
+        limbs(s.max_frame as u64),
+        hu.join(",")
     )
 }
 
@@ -355,10 +363,16 @@ fn op_json(c: &Call) -> String {
             nid(peer),
             limbs(*code)
         ),
-        Op::Bytes { peer, bytes, used, bad } => {
+        Op::Bytes {
+            peer,
+            bytes,
+            used,
+            bad,
+            mf,
+        } => {
             let mut fs = Vec::new();
             let mut at = 0;
-            while let Ok(Some((f, n))) = Frame::read(&bytes[at..]) {
+            while let Ok(Some((f, n))) = Frame::read_with(&bytes[at..], *mf) {
                 fs.push(format!(
                     "{{\"f\":{},\"hex\":\"{}\"}}",
                     frame_json(&f),
@@ -373,8 +387,9 @@ fn op_json(c: &Call) -> String {
                 assert_eq!(at, *used, "the frames recorded are the bytes the machine used");
             }
             format!(
-                "\"op\":\"by\",\"peer\":{},\"now\":{now},\"fs\":[{}],\"bad\":{},\"rest\":\"{}\"",
+                "\"op\":\"by\",\"peer\":{},\"now\":{now},\"mf\":{},\"fs\":[{}],\"bad\":{},\"rest\":\"{}\"",
                 nid(peer),
+                limbs(*mf as u64),
                 fs.join(","),
                 b(*bad),
                 hex(&bytes[at..])
@@ -383,7 +398,7 @@ fn op_json(c: &Call) -> String {
         Op::Timeout => format!("\"op\":\"to\",\"now\":{now}"),
         Op::CarrierGone { member } => format!("\"op\":\"cg\",\"member\":{},\"now\":{now}", nid(member)),
         Op::CarrierReturn { member } => format!("\"op\":\"cr\",\"member\":{},\"now\":{now}", nid(member)),
-        Op::Leave => "\"op\":\"lv\"".to_owned(),
+        Op::Leave => format!("\"op\":\"lv\",\"now\":{now}"),
         Op::Revoke { member, ok } => {
             format!(
                 "\"op\":\"rv\",\"member\":{},\"now\":{now},\"ret\":\"{}\"",
@@ -392,6 +407,8 @@ fn op_json(c: &Call) -> String {
             )
         }
         Op::Moved => format!("\"op\":\"mv\",\"now\":{now}"),
+        Op::SnapshotTo { peer } => format!("\"op\":\"sn\",\"peer\":{},\"now\":{now}", nid(peer)),
+        Op::SetMaxFrame { max } => format!("\"op\":\"sm\",\"mf\":{},\"now\":{now}", limbs(*max as u64)),
     }
 }
 

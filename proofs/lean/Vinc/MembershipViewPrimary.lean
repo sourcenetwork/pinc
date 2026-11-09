@@ -40,7 +40,7 @@ theorem rnStep_sends (e : Env) (now : Nat) (fs per : Bool) (n : N) (hub : Nat)
   unfold rnStep
   simp only [hup, Bool.false_eq_true, if_false, hc]
   refine ⟨_, rfl, ?_⟩
-  split <;> simp
+  simp [N.markHello]
 
 
 /-- The primary of `reselect` in two steps: the choice and the switch. -/
@@ -79,8 +79,9 @@ theorem reselect_eq (e : Env) (n : N) (now : Nat) :
 theorem rsSwitch_primary (e : Env) (n : N) (now p : Nat) : (rsSwitch e n now p).primary = some p := by
   unfold rsSwitch
   dsimp only
-  simp only [bc_primary_v]
-  split <;> (try split) <;> (try split) <;> simp [N.helloTo]
+  simp only [bc_primary_v, N.helloTo]
+  repeat' split
+  all_goals simp
 
 /-- **The primary changes only past the hysteresis.** If a member's primary changes from `cur` to a different hub `p`,
 then `cur` was not alive, or `p` is the best hub and `rn + 20 ms < rc * 3 / 4` (saturating, as in the code), where

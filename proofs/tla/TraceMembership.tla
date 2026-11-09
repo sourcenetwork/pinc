@@ -69,7 +69,8 @@ EnvOf(e) ==
      acc |-> {e.acc[a] : a \in 1..Len(e.acc)},
      ver |-> e.ver, tk |-> e.tk, refl |-> e.refl, pers |-> e.pers, sealed |-> OptL(e.sealed),
      failseal |-> e.failseal, failunseal |-> e.failunseal,
-     floor |-> [p \in 0..255 |-> <<241, p, 0, 0, 0, 0, 0, 0, 1>>]]
+     floor |-> [p \in 0..255 |-> <<241, p, 0, 0, 0, 0, 0, 0, 1>>],
+     gu |-> [x \in {e.gu[a][1] : a \in 1..Len(e.gu)} |-> L(e.gu[CHOOSE a \in 1..Len(e.gu) : e.gu[a][1] = x][2])]]
 
 (* ---- the checks ---- *)
 SeqEq(a, b, F(_)) == Len(a) = Len(b) /\ \A x \in 1..Len(a) : F(a[x]) = b[x]
@@ -94,6 +95,8 @@ StEq(S, st) ==
        /\ Len(st.roster) = Len(rs)
        /\ \A x \in 1..Len(rs) : st.roster[x][1] = rs[x] /\ L(st.roster[x][2]) = S.roster[rs[x]].renewed
        /\ st.sealfailed = S.sealFailed
+       /\ L(st.maxframe) = S.maxFrame
+       /\ st.hu = Ordered({x \in ({S.me} \cup DOMAIN S.up) : HubUp(S, L(Ev.now), x)}, NONE)
 
 Flags(S, o, st, ret) ==
     [sent |-> SentEq(S, o), bc |-> BcEq(S, o), cl |-> ClEq(S, o), ev |-> EvEq(S, o), tr |-> TrEq(S, o),
@@ -121,12 +124,15 @@ CallEv(op, S1) == /\ Ev.op = op /\ Done(S1, TRUE)
 
 UpEv == CallEv("up", CallUp(Cur, EnvOf(Ev.env), Now, Ev.peer, Ev.inc))
 DownEv == CallEv("dn", CallDown(Cur, EnvOf(Ev.env), Now, Ev.peer, L(Ev.code)))
-BytesEv == CallEv("by", CallBytes(Cur, EnvOf(Ev.env), Now, Ev.peer, [x \in 1..Len(Ev.fs) |-> FrameOf(Ev.fs[x].f)], Ev.bad))
+BytesEv == /\ Ev.op = "by" /\ L(Ev.mf) = Cur.maxFrame
+           /\ CallEv("by", CallBytes(Cur, EnvOf(Ev.env), Now, Ev.peer, [x \in 1..Len(Ev.fs) |-> FrameOf(Ev.fs[x].f)], Ev.bad))
 TimeoutEv == CallEv("to", CallTimeout(Cur, EnvOf(Ev.env), Now))
 GoneEv == CallEv("cg", CallCarrierGone(Cur, EnvOf(Ev.env), Now, Ev.member))
 ReturnEv == CallEv("cr", CallCarrierReturn(Cur, EnvOf(Ev.env), Now, Ev.member))
 LeaveEv == CallEv("lv", CallLeave(Cur, EnvOf(Ev.env)))
 MovedEv == CallEv("mv", CallMoved(Cur, EnvOf(Ev.env), Now))
+SnapshotEv == CallEv("sn", CallSnapshotTo(Cur, EnvOf(Ev.env), Now, Ev.peer))
+MaxFrameEv == CallEv("sm", CallSetMaxFrame(Cur, EnvOf(Ev.env), L(Ev.mf)))
 RevokeEv ==
     LET r == CallRevoke(Cur, EnvOf(Ev.env), Now, Ev.member)
     IN /\ Ev.op = "rv" /\ nodes' = [nodes EXCEPT ![Ev.n] = <<r.S>>]
@@ -135,7 +141,7 @@ RevokeEv ==
 Step ==
     /\ i <= Len(Tr)
     /\ Ev.t = "mem"
-    /\ \/ StartEv \/ UpEv \/ DownEv \/ BytesEv \/ TimeoutEv \/ GoneEv \/ ReturnEv \/ LeaveEv \/ MovedEv \/ RevokeEv
+    /\ \/ StartEv \/ UpEv \/ DownEv \/ BytesEv \/ TimeoutEv \/ GoneEv \/ ReturnEv \/ LeaveEv \/ MovedEv \/ SnapshotEv \/ MaxFrameEv \/ RevokeEv
     /\ i' = i + 1
 
 \* the trace has ended: every event was a step of the model

@@ -40,7 +40,7 @@ theorem sampleSessionRtts_roster (e : Env) (n : N) (now : Nat) : (N.sampleSessio
 
 /-- The visit of `hub` in the first loop of `slow_tick`. -/
 def stHello (e : Env) (now : Nat) (hub : Nat) (n : N) : N :=
-  match n.helloAt.get? hub with
+  match n.helloAt.timeAt hub with
   | none => n
   | some t0 =>
     let opened := (n.up.get? hub).getD now
@@ -52,7 +52,7 @@ def stHello (e : Env) (now : Nat) (hub : Nat) (n : N) : N :=
         | none => false
       if skip then n
       else
-        let n := { n with helloAt := n.helloAt.erase hub }
+        let n := { n with helloAt := n.helloAt.unset hub }
         if n.up.has hub then N.dropPeer e (n.close hub .noack) now hub else n
     else n
 

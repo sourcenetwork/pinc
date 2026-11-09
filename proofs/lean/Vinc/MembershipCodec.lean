@@ -276,18 +276,21 @@ def parse (body : List Nat) : Except Err Frame := do
   if topic ≠ [] ∧ isMem ty then throw Err.topicOnMembership
   dispatch ty topic r
 
-/-- `Frame::read`: the next frame of a stream buffer; `none` means more bytes are needed; the number is the bytes
-used, the length prefix included. -/
-def read (buf : List Nat) : Except Err (Option (Frame × Nat)) :=
+/-- `Frame::read_with`: the next frame of a stream buffer for a body limit of `mb`; `none` means more bytes are
+needed; the number is the bytes used, the length prefix included. -/
+def readWith (mb : Nat) (buf : List Nat) : Except Err (Option (Frame × Nat)) :=
   if buf.length < 4 then .ok none
   else
     let len := beN (buf.take 4)
     let rest := buf.drop 4
-    if maxBody < len then .error .tooLarge
+    if mb < len then .error .tooLarge
     else if rest.length < len then .ok none
     else do
       let f ← parse (rest.take len)
       pure (some (f, 4 + len))
+
+/-- `Frame::read`: `read_with` at the default limit `maxBody`. -/
+def read (buf : List Nat) : Except Err (Option (Frame × Nat)) := readWith maxBody buf
 
 /-! ## Encoding -/
 

@@ -158,6 +158,7 @@ macro "inv_tab" : tactic =>
     | (apply Bnd.modify; inv_src)
     | (apply KBnd.erase; inv_src)
     | (apply KBnd.modify; inv_src)
+    | (apply KBnd.unset; inv_src)
     | (apply HvB.erase; inv_src)
     | (apply HvB.map_erase; inv_src)
     | (refine Bnd.insert ?_ _ _ ?_ <;> first | inv_src | inv_guard)

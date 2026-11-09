@@ -97,6 +97,12 @@ def nextKey (m : AMap α) (after : Option Nat) : Option Nat :=
   (m.find? (fun p => match after with | none => true | some a => a < p.1)).map (·.1)
 end AMap
 
+/-- The time of an entry of `hello_at` or `hsent`: a cleared entry stays in the table as `None`. -/
+def AMap.timeAt (m : AMap (Option Nat)) (k : Nat) : Option Nat := (m.get? k).getD none
+
+/-- Clear the entry at `k` of `hello_at` or `hsent`, if present (`*v = None`): the entry stays. -/
+def AMap.unset (m : AMap (Option Nat)) (k : Nat) : AMap (Option Nat) := m.modify k (fun _ => none)
+
 namespace ASet
 def has (s : ASet) (k : Nat) : Bool := AMap.has s k
 def ins (s : ASet) (k : Nat) : ASet := AMap.insert s k ()
@@ -204,7 +210,11 @@ structure Env where
   loc : Local
   /-- The body the broadcast layer writes in a FLOOR frame for a member. -/
   floorBody : Nat → List Nat
+  /-- `give_up(peer)` for the peers the host lists; any other peer has the default `HEAL_SILENCE`. -/
+  gu : AMap Nat
 
+/-- `Session::give_up`: how long silence on the path to `p` lasts before the transport gives the path up. -/
+def Env.giveUp (e : Env) (p : Nat) : Nat := (e.gu.get? p).getD HEAL_SILENCE
 def Env.evidence (e : Env) (p : Nat) : Option Evid := e.ev.get? p
 def Env.carrier (e : Env) (m : Nat) : Car := (e.car.get? m).getD .unknown
 /-- `address_hash(moves)` of the host. -/
@@ -270,6 +280,7 @@ structure N where
   th : List Nat
   sent : Option (Nat × List Nat)
   sealFailed : Bool
+  maxFrame : Nat
   up : AMap Nat
   heard : AMap Nat
   revoked : ASet
@@ -277,8 +288,8 @@ structure N where
   members : AMap ViewEntry
   epoch : Nat
   hrtt : AMap Nat
-  hsent : AMap Nat
-  helloAt : AMap Nat
+  hsent : AMap (Option Nat)
+  helloAt : AMap (Option Nat)
   primary : Option Nat
   homeOk : Option Nat
   homeSeen : Bool
