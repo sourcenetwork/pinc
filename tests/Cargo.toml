@@ -756,3 +756,11 @@ path = "values_fixes.rs"
 [[test]]
 name = "node_view"
 path = "node_view.rs"
+
+[[test]]
+name = "node_churn"
+path = "node_churn.rs"
+
+[[test]]
+name = "node_accuracy"
+path = "node_accuracy.rs"

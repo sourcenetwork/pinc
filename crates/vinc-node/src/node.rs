@@ -75,6 +75,7 @@ pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEE
     pub(crate) local: SocketAddr,
     pub(crate) local_addrs: [Option<SocketAddr>; MAX_ADDRS],
     pub(crate) next_duty: Nanos,
+    pub(crate) leaving: bool,
 }
 
 impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> core::fmt::Debug
@@ -189,6 +190,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
             local: cfg.local,
             local_addrs,
             next_duty: now,
+            leaving: false,
         };
         node.refresh_alive(now);
         Ok(node)
@@ -332,6 +334,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
     pub fn handle_timeout(&mut self, now: Nanos) {
         self.begin(now);
         self.io.ep.handle_timeout(now);
+        self.io.sample_rx();
         self.refresh_alive(now);
         if now >= self.mem.poll_timeout() {
             self.refresh_ticket();
@@ -501,6 +504,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
     /// the member as left.
     pub fn leave(&mut self, now: Nanos) {
         self.begin(now);
+        self.leaving = true;
         let (m, mut h) = self.mem_host();
         m.leave(&mut h);
         self.io.trace(NodeTrace::Left);
@@ -573,6 +577,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
     /// close, if the relay saw one. The hub starts confirming the drop.
     pub fn member_carrier_closed(&mut self, now: Nanos, member: &NodeId, sleep: Option<Nanos>) {
         self.begin(now);
+        self.io.sample_rx();
         if self.io.carriers.len() < crate::config::TABLE_MAX || self.io.carriers.contains_key(member) {
             self.io
                 .carriers

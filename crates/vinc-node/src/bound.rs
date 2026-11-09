@@ -5,6 +5,10 @@
 //! the session's own state was reset. The bound here sums the same ten timeouts from the smoothed round trip with
 //! the transport's own caps, so it follows the path instead of a fixed minute.
 //!
+//! A quiet session pings only every minute or so, so a healthy hub can be silent for that long without a probe
+//! timeout in sight; the silence that proves a break is one keepalive interval plus the time the transport takes to
+//! give the path up ([`heal_after`]).
+//!
 //! Invariants: the bound grows with the smoothed round trip, never drops below the transport's silence rule, and an
 //! unsampled path is treated as the transport's seeded round trip.
 
@@ -52,6 +56,12 @@ pub fn give_up(srtt: Nanos, thin: bool) -> Nanos {
     sum.max(need)
 }
 
+/// The silence after which a hub heard again means the path was given up and a partition healed: one keepalive
+/// interval of a quiet session (`keepalive`, by the side that dialed) plus the transport's give-up time.
+pub fn heal_after(keepalive: Nanos, srtt: Nanos, thin: bool) -> Nanos {
+    keepalive.saturating_add(give_up(srtt, thin))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,9 +83,16 @@ mod tests {
     }
 
     #[test]
+    fn a_healthy_quiet_hub_is_never_a_heal() {
+        // The member pings the hub every 60 s; a hub silent between two pings is not a break.
+        assert!(heal_after(60 * S, 50 * MS, false) > 60 * S + 5 * S);
+    }
+
+    #[test]
     fn never_below_the_silence_rule() {
         assert!(give_up(2 * S, false) >= 16 * S);
         assert!(give_up(10 * MS, true) >= 20 * S);
         assert_eq!(give_up(0, false), give_up(SEED_RTT, false));
     }
 }
+

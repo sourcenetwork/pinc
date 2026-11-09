@@ -43,6 +43,9 @@ impl Membership {
     }
 
     pub(crate) fn hello_to<H: Host>(&mut self, h: &mut H, _now: Nanos, peer: &NodeId, snap: bool) {
+        if self.leaving {
+            return;
+        }
         let homed = !self.is_hub && self.primary.as_ref() == Some(peer);
         let f = Frame::Hello(Hello {
             rec: Record {

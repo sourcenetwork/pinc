@@ -106,7 +106,7 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         if self.io.sess.len() < TABLE_MAX {
             self.io.sess.insert(
                 session,
-                Sess { peer },
+                Sess { peer, incoming },
             );
         }
         if self.io.links.len() < TABLE_MAX || self.io.links.contains_key(&peer) {
@@ -131,17 +131,14 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         let peer = node.bytes;
         self.io.learn_alg(node);
         self.io.connecting.remove(&peer);
-        if self.io.links.get(&peer).is_some_and(|l| l.conn.is_some()) {
-            // The peer dialed us at the same time and its session is the one in use.
-            if self.io.sess.len() < TABLE_MAX {
-                self.io.sess.insert(
-                    session,
-                    Sess { peer },
-                );
+        if let Some(cur) = self.io.links.get(&peer).and_then(|l| l.conn) {
+            // The peer dialed us at the same time. Both ends keep the session the lower id dialed.
+            if self.io.me < peer && self.io.sess.get(&cur).is_some_and(|s| s.incoming) {
+                self.close_duplicate(now, cur, &peer);
+            } else {
+                self.close_duplicate(now, session, &peer);
+                return;
             }
-            let _ = self.io.cmd(Command::Close { session, error: 0 });
-            self.io.trace(NodeTrace::DuplicateClosed { peer: tag(&peer) });
-            return;
         }
         self.attach(now, session, peer, false);
         if let Some(s) = self.io.open_stream(session) {
@@ -163,15 +160,35 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         if self.io.links.get(&peer).and_then(|l| l.conn) == Some(session) {
             return;
         }
-        // The newest session of a peer supersedes the old one (it restarted or rebound): what was queued for the old
-        // write stream is dropped; the old session stays readable until it closes.
-        if let Some(l) = self.io.links.get(&peer).copied() {
+        if let Some(l) = self.io.links.get(&peer).copied()
+            && let Some(cur) = l.conn
+        {
+            if self.io.is_hub_id(&peer) && self.io.sess.get(&cur).is_some_and(|s| !s.incoming) {
+                // Both hubs dialed at once. Both ends keep the session the lower id dialed.
+                if self.io.me < peer {
+                    self.close_duplicate(now, session, &peer);
+                    return;
+                }
+                self.close_duplicate(now, cur, &peer);
+            }
+            // The newest session of a peer supersedes the old one (it restarted or rebound): what was queued for the
+            // old write stream is dropped; the old session stays readable until it closes.
             self.forget_writers(&l);
         }
         self.io.connecting.remove(&peer);
         self.attach(now, session, peer, true);
         let (m, mut h) = self.mem_host();
         m.session_up(&mut h, now, &peer, true);
+    }
+
+    /// Close a session that duplicates the one in use. It is remembered as a hub-protocol session so its close is
+    /// recognised, and it never becomes the peer's current session.
+    fn close_duplicate(&mut self, _now: Nanos, session: SessionId, peer: &NodeId) {
+        if self.io.sess.len() < TABLE_MAX && !self.io.sess.contains_key(&session) {
+            self.io.sess.insert(session, Sess { peer: *peer, incoming: false });
+        }
+        let _ = self.io.cmd(Command::Close { session, error: 0 });
+        self.io.trace(NodeTrace::DuplicateClosed { peer: tag(peer) });
     }
 
     /// Drop what a link's write streams still hold.
@@ -201,6 +218,7 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         };
         self.io.drop_session_streams(session);
         self.io.rx_extra.remove(&session);
+        self.io.rx_seen.remove(&session);
         let peer = s.peer;
         let code = close_code(reason);
         let Some(link) = self.io.links.get(&peer).copied().filter(|l| l.conn == Some(session)) else {

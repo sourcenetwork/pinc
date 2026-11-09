@@ -14,7 +14,9 @@ use alloc::vec::Vec;
 
 use vinc_broadcast::Lane;
 use vinc_connect::ticket::MAX_LEN as TICKET_MAX;
-use vinc_core::{Command, CommandError, Event, SessionId, Value, is_relay_addr};
+use vinc_core::{
+    Command, CommandError, Event, QUIET_KEEP_ACCEPTOR, QUIET_KEEP_DIALER, SessionId, Value, is_relay_addr,
+};
 use vinc_crypto::IdentityAlg;
 use vinc_membership::NodeId;
 use vinc_membership::session::{Carrier, CloseReason, DENIED_CODE, Evidence, LEAVE_CODE};
@@ -33,6 +35,8 @@ use crate::trace::{Body, NodeTrace, TraceQueue, tag};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Sess {
     pub(crate) peer: NodeId,
+    /// The peer dialed us.
+    pub(crate) incoming: bool,
 }
 
 /// The current session of a peer and its streams.
@@ -107,6 +111,8 @@ pub(crate) struct Io<E: Ep, St: Store> {
     pub(crate) probes: Vec<(NodeId, NodeId)>,
     pub(crate) carriers: BTreeMap<NodeId, Carrier>,
     pub(crate) rx_extra: BTreeMap<SessionId, Nanos>,
+    /// Per session: the packet count at the last look and when it last changed.
+    pub(crate) rx_seen: BTreeMap<SessionId, (u64, Nanos)>,
     pub(crate) rtts: BTreeMap<NodeId, (Nanos, bool)>,
     pub(crate) revoked: BTreeSet<NodeId>,
     pub(crate) evq: VecDeque<Event>,
@@ -159,6 +165,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             probes: Vec::new(),
             carriers: BTreeMap::new(),
             rx_extra: BTreeMap::new(),
+            rx_seen: BTreeMap::new(),
             rtts: BTreeMap::new(),
             revoked: BTreeSet::new(),
             evq: VecDeque::new(),
@@ -376,11 +383,30 @@ impl<E: Ep, St: Store> Io<E, St> {
 
     // ---------------------------------------------------------------- evidence and backoff
 
+    /// Look at every hub-protocol session's packet count and note when it last moved. The transport reports when the
+    /// last packet arrived on the active path only, and a quiet session's direct path idles out; the count moves
+    /// whatever the path.
+    pub(crate) fn sample_rx(&mut self) {
+        let now = self.now;
+        for sid in self.sess.keys() {
+            let Some(st) = self.ep.stats(*sid) else { continue };
+            let n = st.transport.packets_received;
+            let known = self.rx_seen.len();
+            if let Some(e) = self.rx_seen.get_mut(sid) {
+                if e.0 != n {
+                    *e = (n, now);
+                }
+            } else if known < TABLE_MAX {
+                self.rx_seen.insert(*sid, (n, now));
+            }
+        }
+    }
+
     /// What the transport knows about the current session of `peer`.
     pub(crate) fn evidence_of(&self, peer: &NodeId) -> Option<Evidence> {
         let sid = self.links.get(peer)?.conn?;
         let st = self.ep.stats(sid).filter(|s| s.established)?;
-        let extra = self.rx_extra.get(&sid).copied().unwrap_or(0);
+        let extra = self.rx_extra.get(&sid).copied().unwrap_or(0).max(self.rx_seen.get(&sid).map_or(0, |e| e.1));
         Some(Evidence {
             last_rx: st.heard.max(extra),
             srtt: st.transport.srtt,
@@ -390,17 +416,16 @@ impl<E: Ep, St: Store> Io<E, St> {
         })
     }
 
-    /// The silence after which the transport gives up the path to `peer`: from the live session if there is one, else
-    /// from the last round trip seen on a session with the peer.
+    /// The silence after which a peer heard again means a partition healed: one keepalive interval of a quiet session
+    /// plus the time the transport takes to give the path up, at the live session's round trip or, with none, at the
+    /// last round trip seen with the peer.
     pub(crate) fn give_up_of(&self, peer: &NodeId) -> Nanos {
-        let live = self
-            .links
-            .get(peer)
-            .and_then(|l| l.conn)
-            .and_then(|s| self.ep.stats(s))
-            .map(|s| (s.transport.srtt, s.thin));
+        let sid = self.links.get(peer).and_then(|l| l.conn);
+        let live = sid.and_then(|s| self.ep.stats(s)).map(|s| (s.transport.srtt, s.thin));
         let (srtt, thin) = live.or_else(|| self.rtts.get(peer).copied()).unwrap_or((0, false));
-        bound::give_up(srtt, thin)
+        let accepted = sid.and_then(|s| self.sess.get(&s)).is_some_and(|s| s.incoming);
+        let keepalive = if accepted { QUIET_KEEP_ACCEPTOR } else { QUIET_KEEP_DIALER };
+        bound::heal_after(keepalive, srtt, thin)
     }
 
     /// Remember the round trip of every live hub session, so the bound survives the session.

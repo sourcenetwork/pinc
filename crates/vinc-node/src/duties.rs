@@ -23,7 +23,8 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
     /// Dial `peer` for the hub protocol, unless a session or a dial exists or the peer is backing off.
     pub(crate) fn dial_peer(&mut self, now: Nanos, peer: &NodeId) {
         let io = &self.io;
-        if io.links.get(peer).is_some_and(|l| l.conn.is_some())
+        if self.leaving
+            || io.links.get(peer).is_some_and(|l| l.conn.is_some())
             || io.connecting.contains_key(peer)
             || io.revoked.contains(peer)
             || io.failed.get(peer).is_some_and(|(until, _)| now < *until)
@@ -68,6 +69,9 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
     /// The periodic duties.
     pub(crate) fn duties(&mut self, now: Nanos) {
         self.next_duty = now.saturating_add(if self.io.is_hub { DUTY_HUB } else { DUTY_MEMBER });
+        if self.leaving {
+            return;
+        }
         self.io.note_rtts();
         for i in 0..self.io.hubs.len() {
             let Some(hub) = self.io.hubs.get(i).copied() else {

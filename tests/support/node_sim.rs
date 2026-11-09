@@ -143,6 +143,8 @@ pub enum NCmd {
     Leave,
     Revoke([u8; 32]),
     AddressChanged,
+    /// Close every carrier stream of the node (a middlebox reset), as the client sees it.
+    DropCarriers,
     /// Answer the access checks of the endpoint with refusals from now on.
     Deny(bool),
     /// Answer the broadcast access checks with this verdict from now on.
@@ -435,7 +437,9 @@ impl SimNode {
         let mut did = false;
         while let Some(t) = self.node.poll_trace() {
             did = true;
-            self.traces.push((now, t));
+            if !matches!(t.body, vinc_node::Body::Core(_)) {
+                self.traces.push((now, t));
+            }
         }
         let inc = self.node.membership().incarnation();
         if self.incarnations.last() != Some(&inc) {
@@ -935,6 +939,15 @@ impl SimNode {
                 let _ = self.node.revoke(now, &p);
             }
             NCmd::AddressChanged => self.node.address_changed(now),
+            NCmd::DropCarriers => {
+                for i in 0..NRL {
+                    if let Some(st) = self.streams[i].take() {
+                        self.out.ops.push_back((StreamOp::Close { stream: st }, Vec::new()));
+                        self.cws[i] = None;
+                        self.node.stream_closed(now, i);
+                    }
+                }
+            }
             NCmd::Deny(d) => self.deny = d,
             NCmd::BroadcastAllow(a) => self.bc_allow = a,
         }
