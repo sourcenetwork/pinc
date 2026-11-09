@@ -269,8 +269,8 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
-        if t == "rc" then
-          -- Reconciliation events (`rc`, written by `trace_reconcile`): the byte-level session model.
+        if t == "rc" && (j.get? "e").isSome then
+          -- Reconciliation events (`rc` with an `e` field, written by `trace_reconcile`; an `rc` without one is loss recovery): the byte-level session model.
           match TraceReconcile.replayEvent j rcw with
           | .ok r' =>
             rcw := r'
