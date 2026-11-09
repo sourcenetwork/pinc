@@ -98,7 +98,7 @@ struct Dial {
     reply: Sender<Result<Arc<SessionShared>>>,
 }
 
-/// The engine; see the module docs. Build it with [`run`].
+/// The engine; see the module docs. Build it with [`crate::run`].
 pub struct Engine<'s, 'a> {
     pub(crate) ep: Box<dyn Node + 's>,
     pub(crate) _memory: std::marker::PhantomData<&'s &'a ()>,

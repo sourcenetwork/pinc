@@ -10,7 +10,13 @@ failure-output = "immediate-final"
 
 # Heavy tests: a loaded machine needs the bound explicit and generous, 15 periods of 60 s, never a skip.
 [[profile.ci.overrides]]
-filter = 'test(/^bulk_64_mib_/) | test(every_bit_flip_is_rejected_and_releases_nothing_bad) | binary(transport_wide) | binary(vinc_scale)'
+filter = 'test(/^bulk_64_mib_/) | test(every_bit_flip_is_rejected_and_releases_nothing_bad) | binary(transport_wide)'
+slow-timeout = { period = "60s", terminate-after = 15 }
+
+# A thousand sessions in one process: alone on the machine, as a starved server lets its peers time out.
+[[profile.ci.overrides]]
+filter = 'binary(vinc_scale) & test(a_thousand_sessions_in_one_process_all_move_data)'
+threads-required = "num-cpus"
 slow-timeout = { period = "60s", terminate-after = 15 }
 
 # The scenario targets run real endpoints for hundreds of seconds of virtual time; the full 96-seed runs
