@@ -7,7 +7,7 @@
 //! fragment the stored ranges), resets, consumes of the readable bytes, pending control frames that are then lost
 //! or acknowledged, locally opened streams with writes, sends and acknowledgements that take and give back pool
 //! chunks, other users of the pool, and the close of the table. After every call the table shows its state
-//! (`trace_view`): slots, held chunks, stored ranges, credit, counters, the refused queue, the window target and the
+//! (`trace_view`): slots, held chunks, stored ranges, credit, counters, the window target and the
 //! delivery meter. The checkers replay each call with the operators of the model (`StreamsOps.tla`,
 //! `Vinc.TransportStreams`) and require the state they compute to be the state recorded, and the error they compute
 //! to be the error returned.
@@ -79,7 +79,7 @@ fn slot_json(s: &SlotView) -> String {
     let id = i64::try_from(s.id).unwrap();
     let rs: Vec<String> = s.ranges.iter().map(|(a, z)| format!("[{a},{z}]")).collect();
     format!(
-        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{}}}"#,
+        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{}}}"#,
         b(s.open),
         list(&s.held),
         rs.join(","),
@@ -94,22 +94,18 @@ fn slot_json(s: &SlotView) -> String {
         opt(s.reset),
         b(s.observed),
         b(s.send_done),
-        s.send_reset
+        s.send_reset,
+        s.stop,
+        opt(s.stop_code),
+        opt(s.send_code)
     )
 }
 
 fn view_json(v: &TableView) -> String {
     let slots: Vec<String> = v.slots.iter().map(slot_json).collect();
-    // only the cells in use, as [cell (from 1), id, sent]
-    let refs: Vec<String> = v
-        .refused
-        .iter()
-        .enumerate()
-        .filter_map(|(j, r)| r.map(|(id, sent)| format!("[{},{id},{}]", j + 1, b(sent))))
-        .collect();
     let (ms, mb, mr) = v.meter;
     format!(
-        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ref":[{}],"ext":{},"tgt":{},"ms":{},"mb":{mb},"mr":{mr}}}"#,
+        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"ms":{},"mb":{mb},"mr":{mr}}}"#,
         slots.join(","),
         v.remote_next[0],
         v.remote_next[1],
@@ -117,7 +113,6 @@ fn view_json(v: &TableView) -> String {
         v.local_opened[1],
         v.remote_live,
         v.local_live,
-        refs.join(","),
         v.ext,
         v.target,
         opt(ms)
@@ -142,6 +137,8 @@ struct Run<'o> {
     control: Vec<ControlFrame>,
     inflight: Vec<(u64, u64, u64, bool)>,
     max_limit: std::collections::HashMap<u64, u64>,
+    /// Peer streams whose frame was held back (no slot, answered `Exhausted`) and not admitted since.
+    held: std::collections::HashSet<u64>,
 }
 
 impl Run<'_> {
@@ -204,8 +201,23 @@ impl Run<'_> {
                     .is_some_and(|stored| stored != data[(o - off) as usize])
             })
         });
+        let before = self.view();
         let res = self.t.on_stream_frame(&mut self.pool, id, off, &data, fin);
         let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
+        let after = self.view();
+        let class = usize::from(id & 2 != 0);
+        let opened = after.remote_next[class] - before.remote_next[class];
+        // A peer stream that does not fit is held back: nothing is stored, charged or counted, and the packet goes
+        // unacknowledged; the opener's retransmission is admitted once there is room.
+        let held_back = res == Err(StreamError::Exhausted) && after.slots.iter().all(|s| s.id != id);
+        let mut admitted = false;
+        if held_back && id & 1 == 0 {
+            assert_eq!(before, after, "a held-back stream changed the table");
+            self.held.insert(id);
+        } else if res.is_ok() && self.held.remove(&id) {
+            assert!(after.slots.iter().any(|s| s.id == id) || after.remote_next[class] > id >> 2);
+            admitted = true;
+        }
         if res.is_ok() && !corrupt {
             self.note_stored(id, lo, off + len as u64);
         } else if res.is_ok() {
@@ -213,9 +225,10 @@ impl Run<'_> {
             self.note_corrupt(id, lo, off, &data);
         }
         self.log(&format!(
-            r#""op":"frame","id":{id},"off":{off},"len":{len},"fin":{},"diff":{},"err":"{err}""#,
+            r#""op":"frame","id":{id},"off":{off},"len":{len},"fin":{},"diff":{},"err":"{err}","opened":{opened},"admitted":{}"#,
             b(fin),
-            b(diff)
+            b(diff),
+            b(admitted)
         ));
     }
 
@@ -331,11 +344,12 @@ impl Run<'_> {
                     error_code,
                     final_size,
                 });
-                format!(r#""op":"pending","kind":"reset","fid":{id},"max":0"#)
+                format!(r#""op":"pending","kind":"reset","fid":{id},"max":{error_code}"#)
             }
-            // The traced runs never stop a stream and the model has no stop-sending frame: logged as a kind the
-            // trace checks refuse, so one appearing fails the check instead of passing unseen.
-            Some(ControlFrame::StopSending { id, .. }) => format!(r#""op":"pending","kind":"stop","fid":{id},"max":0"#),
+            Some(ControlFrame::StopSending { id, error_code }) => {
+                self.control.push(ControlFrame::StopSending { id, error_code });
+                format!(r#""op":"pending","kind":"stop","fid":{id},"max":{error_code}"#)
+            }
         };
         self.log(&head);
     }
@@ -360,8 +374,15 @@ impl Run<'_> {
                 self.t.on_control_acked(&mut self.pool, &f);
                 self.log(&format!(r#""op":"ackedreset","id":{id}"#));
             }
-            // A stop-sending frame is never queued: `pending` does not push one.
-            (ControlFrame::MaxStreamData { .. }, false) | (ControlFrame::StopSending { .. }, _) => {}
+            (ControlFrame::StopSending { id, .. }, true) => {
+                self.t.on_control_lost(&f);
+                self.log(&format!(r#""op":"loststop","id":{id}"#));
+            }
+            (ControlFrame::StopSending { id, .. }, false) => {
+                self.t.on_control_acked(&mut self.pool, &f);
+                self.log(&format!(r#""op":"ackedstop","id":{id}"#));
+            }
+            (ControlFrame::MaxStreamData { .. }, false) => {}
         }
     }
 
@@ -372,6 +393,39 @@ impl Run<'_> {
         let res = self.t.on_reset_stream(&mut self.pool, id, 1, fs);
         let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
         self.log(&format!(r#""op":"reset","id":{id},"code":1,"fs":{fs},"err":"{err}""#));
+    }
+
+    /// Ask the peer to stop sending on a stream we receive on (code 7).
+    fn stop_request(&mut self) {
+        let ids = self.live_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let id = ids[self.below(ids.len() as u64) as usize];
+        let res = self.t.stop_sending(id, 7);
+        let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
+        self.log(&format!(r#""op":"stopreq","id":{id},"code":7,"err":"{err}""#));
+    }
+
+    /// A stop request arrived for a stream we send on: the send half is reset with the peer's code (7), a writer
+    /// sees the stream finished, and the reset frame that follows carries the code.
+    fn peer_stop(&mut self) {
+        let ids: Vec<u64> = REMOTE.iter().chain(LOCAL.iter()).copied().collect();
+        let id = ids[self.below(ids.len() as u64) as usize];
+        let res = self.t.on_stop_sending(&mut self.pool, id, 7);
+        let err = res.as_ref().err().map_or("ok", |e| err_name(*e));
+        let fresh = res == Ok(true);
+        if fresh {
+            assert_eq!(
+                self.t.write(&mut self.pool, id, b"x", u64::MAX),
+                Err(StreamError::Finished),
+                "a stopped stream still takes writes"
+            );
+        }
+        self.log(&format!(
+            r#""op":"onstop","id":{id},"code":7,"err":"{err}","fresh":{}"#,
+            b(fresh)
+        ));
     }
 
     fn open_local(&mut self) {
@@ -425,7 +479,7 @@ impl Run<'_> {
             }
             _ => {
                 let _ = self.t.reset(&mut self.pool, id, 9);
-                self.log(&format!(r#""op":"appreset","id":{id}"#));
+                self.log(&format!(r#""op":"appreset","id":{id},"code":9"#));
             }
         }
     }
@@ -451,8 +505,10 @@ impl Run<'_> {
             70..=77 => self.settle_control(),
             78..=81 => self.peer_reset(),
             82..=84 => self.open_local(),
-            85..=93 => self.send_side(),
-            94..=97 => self.ext_users(),
+            85..=91 => self.send_side(),
+            92..=93 => self.stop_request(),
+            94..=95 => self.peer_stop(),
+            96..=97 => self.ext_users(),
             98 => self.burst(),
             _ => {
                 self.t.close_all(&mut self.pool);
@@ -489,6 +545,7 @@ fn run(seed: u64, out: &mut String, run: u32) {
         control: Vec::new(),
         inflight: Vec::new(),
         max_limit: std::collections::HashMap::new(),
+        held: std::collections::HashSet::new(),
     };
     r.log(r#""op":"init""#);
     for _ in 0..220 {
@@ -516,14 +573,21 @@ fn stream_table_runs_match_the_models() {
             "ext",
             "finish",
             "appreset",
+            "stopreq",
+            "onstop",
+            "loststop",
+            "ackedstop",
             "close",
         ] {
             assert!(out.contains(&format!(r#""op":"{op}""#)), "no {op} event");
         }
-        // The runs reach the interesting steps: a stream refused as busy, a deferred grant, a conflict, a stream
+        // The runs reach the interesting steps: a peer stream held back and admitted later, stop requests sent and lost, implicit opens, a deferred grant, a conflict, a stream
         // that outgrew its ranges, a limit raised, a reset acknowledged.
         for needle in [
-            r#""err":"Busy""#,
+            r#""kind":"stop""#,
+            r#""fresh":true"#,
+            r#""admitted":true"#,
+            r#""opened":2"#,
             r#""err":"Conflict""#,
             r#""err":"Fragmented""#,
             r#""err":"FlowControl""#,
