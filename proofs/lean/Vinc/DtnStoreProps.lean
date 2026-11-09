@@ -20,29 +20,29 @@ The statements of the task about the ledger, each for every ledger satisfying `I
 namespace Vinc.DtnStore
 
 theorem admit_ok_iff {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
-    (admit L k b c x now).err = none ↔ L.contains k = false ∧ FitsSpec (expire L now).1 b := by
+    (admitItem L k b c x now).err = none ↔ L.contains k = false ∧ FitsSpec (expire L now).1 b := by
   rcases admit_cases hI k b c x now with ⟨h1, h⟩ | ⟨h1, h2, h⟩ | ⟨h1, h2, _, _, _, _, _, h, _⟩
   · simp [h, h1]
   · simp [h, h1, h2]
   · simp [h, h1, h2]
 
 theorem admit_refused_state {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) (e : AErr)
-    (h : (admit L k b c x now).err = some e) :
-    (e = .dup ∧ L.contains k = true ∧ (admit L k b c x now).L = L ∧ (admit L k b c x now).ev = []) ∨
-    (e = refusedOf c ∧ L.contains k = false ∧ (admit L k b c x now).L = (expire L now).1 ∧
-      (admit L k b c x now).ev = (expire L now).2) := by
+    (h : (admitItem L k b c x now).err = some e) :
+    (e = .dup ∧ L.contains k = true ∧ (admitItem L k b c x now).L = L ∧ (admitItem L k b c x now).ev = []) ∨
+    (e = refusedOf c ∧ L.contains k = false ∧ (admitItem L k b c x now).L = (expire L now).1 ∧
+      (admitItem L k b c x now).ev = (expire L now).2) := by
   rcases admit_cases hI k b c x now with ⟨h1, h2⟩ | ⟨h1, h2, h3⟩ | ⟨_, _, _, _, _, _, _, h3, _⟩
   · left; rw [h2] at h ⊢; simp at h; simp [h, h1]
   · right; rw [h3] at h ⊢; simp at h; simp [h, h1]
   · rw [h3] at h; simp at h
 
 theorem admit_budget {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
-    (admit L k b c x now).L.used ≤ (admit L k b c x now).L.budget :=
+    (admitItem L k b c x now).L.used ≤ (admitItem L k b c x now).L.budget :=
   (admit_inv hI k b c x now).used_le
 
 theorem admit_keeps_live_custody {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat)
     (e : Entry) (he : e ∈ L.entries) (hc : e.cls = .custody) (hlive : expiredAt now e = false) :
-    e ∈ (admit L k b c x now).L.entries := by
+    e ∈ (admitItem L k b c x now).L.entries := by
   have h1 : e ∈ (expire L now).1.entries := by
     rw [entries_expire]; exact List.mem_filter.2 ⟨he, by simp [hlive]⟩
   rcases admit_cases hI k b c x now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨hc', hf, L2, ev2, slots', hev, hput, h, hI2, hb2, hs2, hp2, hsl2, htr, hpw, hlt, hrm, hu2, hlast⟩
@@ -60,15 +60,15 @@ theorem admit_keeps_live_custody {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (
 /-- The mailbox form: an admission of a mailbox key never evicts live custody of either space. -/
 theorem admit_mailbox_keeps_live_custody {L : Ledger} (hI : Inv L) (k : Key) (_ : k.space = 2) (b : Nat) (c : Class)
     (x now : Nat) (e : Entry) (he : e ∈ L.entries) (hc : e.cls = .custody) (hlive : expiredAt now e = false) :
-    e ∈ (admit L k b c x now).L.entries :=
+    e ∈ (admitItem L k b c x now).L.entries :=
   admit_keeps_live_custody hI k b c x now e he hc hlive
 
 theorem admit_eviction_order {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat)
-    (hok : (admit L k b c x now).err = none) :
-    ∃ ev2, (admit L k b c x now).ev = L.entries.filter (expiredAt now) ++ ev2 ∧
+    (hok : (admitItem L k b c x now).err = none) :
+    ∃ ev2, (admitItem L k b c x now).ev = L.entries.filter (expiredAt now) ++ ev2 ∧
       (∀ e ∈ ev2, e.cls = .transit ∧ expiredAt now e = false) ∧
       ev2.Pairwise (fun p q => p.seq < q.seq) ∧
-      (∀ e ∈ ev2, ∀ r ∈ (admit L k b c x now).L.entries, r.cls = .transit → e.seq < r.seq) := by
+      (∀ e ∈ ev2, ∀ r ∈ (admitItem L k b c x now).L.entries, r.cls = .transit → e.seq < r.seq) := by
   rcases admit_cases hI k b c x now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨hc', hf, L2, ev2, slots', hev, hput, h, hI2, hb2, hs2, hp2, hsl2, htr, hpw, hlt, hrm, hu2, hlast⟩
   · rw [h] at hok; simp at hok
   · rw [h] at hok; simp at hok
@@ -91,11 +91,11 @@ theorem admit_eviction_order {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : 
 
 /-- The last eviction was needed: without it the item would not have fit. -/
 theorem admit_eviction_minimal {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat)
-    (hok : (admit L k b c x now).err = none) :
-    ∃ ev2, (admit L k b c x now).ev = L.entries.filter (expiredAt now) ++ ev2 ∧
+    (hok : (admitItem L k b c x now).err = none) :
+    ∃ ev2, (admitItem L k b c x now).ev = L.entries.filter (expiredAt now) ++ ev2 ∧
       ∀ l, ev2.getLast? = some l →
-        L.budget - ((admit L k b c x now).L.used - b + l.bytes) < b ∨
-          (admit L k b c x now).L.entries.length = (admit L k b c x now).L.slots.length := by
+        L.budget - ((admitItem L k b c x now).L.used - b + l.bytes) < b ∨
+          (admitItem L k b c x now).L.entries.length = (admitItem L k b c x now).L.slots.length := by
   rcases admit_cases hI k b c x now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨hc', hf, L2, ev2, slots', hev, hput, h, hI2, hb2, hs2, hp2, hsl2, htr, hpw, hlt, hrm, hu2, hlast⟩
   · rw [h] at hok; simp at hok
   · rw [h] at hok; simp at hok
@@ -161,14 +161,14 @@ theorem used_by_space {L : Ledger} (hI : Inv L) :
 /-- A bundle in transit and a mailbox item share one budget: the mailbox admission evicts the bundle's transit item. -/
 theorem mailbox_evicts_bundle_transit :
     let L : Ledger := ⟨10, 6, 1, [some ⟨⟨1, 1⟩, 6, .transit, 100, 0⟩, none]⟩
-    let r := admit L ⟨2, 7⟩ 6 .transit 100 0
+    let r := admitItem L ⟨2, 7⟩ 6 .transit 100 0
     r.err = none ∧ r.ev = [⟨⟨1, 1⟩, 6, .transit, 100, 0⟩] ∧ r.L.used = 6 := by
   decide
 
 /-- Bundle custody is not evicted by a mailbox admission: the admission is refused and nothing moves. -/
 theorem mailbox_refused_by_bundle_custody :
     let L : Ledger := ⟨10, 6, 1, [some ⟨⟨1, 1⟩, 6, .custody, 100, 0⟩, none]⟩
-    let r := admit L ⟨2, 7⟩ 6 .transit 100 0
+    let r := admitItem L ⟨2, 7⟩ 6 .transit 100 0
     r.err = some .full ∧ r.ev = [] ∧ r.L.used = 6 ∧ r.L.entries = L.entries := by
   decide
 

@@ -3,7 +3,7 @@ import Vinc.DtnStoreAdmit
 /-!
 # The charged store: the fit test and the eviction loop
 
-`fits` is the test of `admit` before it evicts anything (the sums are the code's saturating `u64` sums), `evictLoop` is
+`fits` is the test of `admitItem` before it evicts anything (the sums are the code's saturating `u64` sums), `evictLoop` is
 its `while` loop: while the free bytes are fewer than the item needs or every slot is taken, take the oldest transit
 item. The loop is written as the recursion that returns the evictions the loop makes (the code accumulates them in the
 callback), with the number of slots as fuel: every round removes one item.
@@ -21,7 +21,7 @@ def isTransit (e : Entry) : Bool := decide (e.cls = .transit)
 /-- The saturating sum of the sizes of the transit items (`transit_bytes`). -/
 def transitBytes (L : Ledger) : Nat := (L.entries.filter isTransit).foldl (fun b e => satAdd b e.bytes) 0
 
-/-- The test of `admit`: the free bytes plus the transit bytes cover the item, and a slot is free or a transit item
+/-- The test of `admitItem`: the free bytes plus the transit bytes cover the item, and a slot is free or a transit item
 holds one. -/
 def fits (L : Ledger) (bytes : Nat) : Bool :=
   decide (bytes ≤ satAdd (L.budget - L.used) (transitBytes L) ∧

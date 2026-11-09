@@ -3,7 +3,7 @@ import Vinc.DtnStoreLoop
 /-!
 # The charged store: admission
 
-`admit` of `store.rs`, and its theorems (see `Vinc.DtnStoreAdmit` for the list). The result of an admission is the
+`admitItem` of `store.rs`, and its theorems (see `Vinc.DtnStoreAdmit` for the list). The result of an admission is the
 error (if any), the ledger after it and the evictions in the order the callback saw them.
 
 The two exits of the code that its own logic makes unreachable (`evictLoop` returning `none`, and `put` finding no free
@@ -30,8 +30,8 @@ structure AOut where
   L : Ledger
   ev : List Entry
 
-/-- `Ledger::admit`. -/
-def admit (L : Ledger) (k : Key) (bytes : Nat) (cls : Class) (expires now : Nat) : AOut :=
+/-- the ledger admission (`admitItem`). -/
+def admitItem (L : Ledger) (k : Key) (bytes : Nat) (cls : Class) (expires now : Nat) : AOut :=
   if L.contains k then ⟨some .dup, L, []⟩ else
   let L1 := (expire L now).1
   let ev1 := (expire L now).2
@@ -79,13 +79,13 @@ theorem contains_false {L : Ledger} {k : Key} (h : L.contains k = false) : ∀ x
 
 /-- The three shapes of an admission. -/
 theorem admit_cases {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
-    (L.contains k = true ∧ admit L k b c x now = ⟨some .dup, L, []⟩) ∨
+    (L.contains k = true ∧ admitItem L k b c x now = ⟨some .dup, L, []⟩) ∨
     (L.contains k = false ∧ ¬ FitsSpec (expire L now).1 b ∧
-      admit L k b c x now = ⟨some (refusedOf c), (expire L now).1, (expire L now).2⟩) ∨
+      admitItem L k b c x now = ⟨some (refusedOf c), (expire L now).1, (expire L now).2⟩) ∨
     (L.contains k = false ∧ FitsSpec (expire L now).1 b ∧
       ∃ L2 ev2 slots', evictLoop b (expire L now).1.slots.length (expire L now).1 = some (L2, ev2) ∧
         put L2.slots ⟨k, b, c, x, L2.nextSeq⟩ = some slots' ∧
-        admit L k b c x now = ⟨none, { L2 with used := L2.used + b, nextSeq := L2.nextSeq + 1, slots := slots' },
+        admitItem L k b c x now = ⟨none, { L2 with used := L2.used + b, nextSeq := L2.nextSeq + 1, slots := slots' },
           (expire L now).2 ++ ev2⟩ ∧
         Inv L2 ∧ L2.budget = L.budget ∧ L2.nextSeq = L.nextSeq ∧
         (expire L now).1.entries.Perm (ev2 ++ L2.entries) ∧ L2.slots.length = L.slots.length ∧
@@ -94,7 +94,7 @@ theorem admit_cases {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x
         L2.used = (expire L now).1.used - sumB ev2 ∧
         (∀ l, ev2.getLast? = some l → L.budget - (L2.used + l.bytes) < b ∨ L2.entries.length + 1 = L2.slots.length)) := by
   by_cases hc : L.contains k = true
-  · left; exact ⟨hc, by simp [admit, hc]⟩
+  · left; exact ⟨hc, by simp [admitItem, hc]⟩
   have hc' : L.contains k = false := by simpa using hc
   right
   have hI1 := expire_inv hI now
@@ -113,7 +113,7 @@ theorem admit_cases {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x
     refine ⟨L2, ev2, slots', hev, hput, ?_, hI2, by rw [hb2]; simp [expire], by rw [hs2]; simp [expire], hp2,
       by rw [hsl2, hsl1], htr, hpw, hlt, hrm, hu2, ?_⟩
     · have hfit : fits (expire L now).1 b = true := (fits_iff hI1 b).2 hf
-      simp [admit, hc', hfit, hev, hput]
+      simp [admitItem, hc', hfit, hev, hput]
     · intro l hl; simpa [expire] using hlast l hl
   · left
     refine ⟨hc', hf, ?_⟩
@@ -121,10 +121,10 @@ theorem admit_cases {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x
       cases h : fits (expire L now).1 b
       · rfl
       · exact absurd ((fits_iff hI1 b).1 h) hf
-    simp [admit, hc', this]
+    simp [admitItem, hc', this]
 
 theorem admit_inv {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
-    Inv (admit L k b c x now).L := by
+    Inv (admitItem L k b c x now).L := by
   rcases admit_cases hI k b c x now with ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨hc, hf, L2, ev2, slots', hev, hput, h, hI2, hb2, hs2, hp2, hsl2, htr, hpw, hlt, hrm, hu2, hlast⟩
   · rw [h]; exact hI
   · rw [h]; exact expire_inv hI now

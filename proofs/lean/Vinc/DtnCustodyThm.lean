@@ -44,7 +44,7 @@ theorem expire_idem (L : Ledger) (now : Nat) :
 theorem bkey_inj {a b : Nat} : bkey a = bkey b ↔ a = b := by simp [bkey]
 
 theorem admit_entries_sub {L : Ledger} (hI : Inv L) (k : Key) (b : Nat) (c : Class) (x now : Nat) :
-    ∀ e ∈ (admit L k b c x now).L.entries, e ∈ L.entries ∨ e = ⟨k, b, c, x, L.nextSeq⟩ := by
+    ∀ e ∈ (admitItem L k b c x now).L.entries, e ∈ L.entries ∨ e = ⟨k, b, c, x, L.nextSeq⟩ := by
   intro e he
   have hsub : ∀ y ∈ (expire L now).1.entries, y ∈ L.entries := by
     intro y hy; rw [entries_expire] at hy; exact (List.mem_filter.1 hy).1

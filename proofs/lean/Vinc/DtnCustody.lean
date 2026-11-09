@@ -73,7 +73,7 @@ def accept (B : Recs) (L : Ledger) (bundle bytes expires previous now : Nat) : C
       let L2 := (reclass L1 (bkey bundle) .custody).1
       ⟨none, (sync B1 L2).set slot (some ⟨bundle, previous, none⟩), L2, ev1⟩
     else
-      let r := admit L1 (bkey bundle) bytes .custody expires now
+      let r := admitItem L1 (bkey bundle) bytes .custody expires now
       match r.err with
       | some e => ⟨some (.store e), B1, r.L, ev1 ++ r.ev⟩
       | none => ⟨none, (sync B1 r.L).set slot (some ⟨bundle, previous, none⟩), r.L, ev1 ++ r.ev⟩

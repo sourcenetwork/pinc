@@ -61,7 +61,7 @@ def step (s : Sys) : Ev → Sys
   | .ack b c v => ⟨(onAck s.B s.L b c v).B, (onAck s.B s.L b c v).L⟩
   | .delivered b => ⟨(delivered s.B s.L b).B, (delivered s.B s.L b).L⟩
   | .bexpire now => ⟨(bexpire s.B s.L now).B, (bexpire s.B s.L now).L⟩
-  | .hostAdmit k by_ c ex now => ⟨s.B, (admit s.L k by_ c ex now).L⟩
+  | .hostAdmit k by_ c ex now => ⟨s.B, (admitItem s.L k by_ c ex now).L⟩
   | .hostExpire now => ⟨s.B, (expire s.L now).1⟩
   | .hostRelease k => ⟨s.B, (release s.L k).1⟩
 

@@ -1,24 +1,13 @@
 import Vinc.DtnStore
 
 /-!
-# The charged store: invariants of every operation, and admission
+# The charged store: the oldest-transit search and the invariants of the simple operations
 
-Theorems about `Vinc.DtnStore`, for every ledger (every number of slots, budget and contents) and every operation
-(unbounded; the TLC model `DtnStore.tla` checks the same statements over small bounds, and the traces of the real code
-are replayed through these definitions):
-
-* `Inv` is preserved by `expire`, `release`, `reclass` and `admit`, whether an admission is accepted or refused, so the
-  bytes charged are the sum of the sizes and never exceed the budget (`admit_inv`).
-* `admit_keeps_live_custody`: a custody item that is not expired is never evicted by an admission, accepted or refused.
-* `admit_ok_iff`: an admission is accepted exactly when the key is new and, after the expired items left, the items
-  that cannot be evicted (custody) leave room for it in bytes and in slots. `admit_refused_state`: a refusal changes
-  nothing except the removal of the expired items (a duplicate changes nothing at all).
-* `admit_eviction_order`: the evictions are the expired items in slot order, then transit items only, oldest admission
-  first, with no remaining transit item older than an evicted one; `admit_eviction_minimal`: the last eviction was
-  needed.
-* The ledger is shared: the key's space is only part of the key's identity. `admit_mailbox_keeps_live_custody` is the
-  theorem for a mailbox admission and `mailbox_evicts_bundle_transit` the example in which a mailbox item takes a
-  bundle's transit room.
+Lemmas about `Vinc.DtnStore` for every ledger: `minT_none` and `minT_some` say that `oldest_transit` finds a transit item
+exactly when one exists and finds the one with the least admission number; `Inv` (the bytes charged are the sum of the
+sizes and within the budget, keys and admission numbers distinct) is preserved by `expire`, `release` and `reclass`.
+The fit test, the eviction loop and `admitItem` are in `Vinc.DtnStoreLoop`, `Vinc.DtnStoreThm` and `Vinc.DtnStoreProps`
+(whose header lists the statements of the task).
 -/
 
 namespace Vinc.DtnStore
