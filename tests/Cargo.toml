@@ -478,6 +478,10 @@ path = "trace_values_plan.rs"
 name = "trace_values_verify"
 path = "trace_values_verify.rs"
 
+[[test]]
+name = "trace_membership"
+path = "trace_membership.rs"
+
 [lints]
 workspace = true
 
