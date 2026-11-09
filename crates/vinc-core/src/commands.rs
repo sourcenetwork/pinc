@@ -358,6 +358,9 @@ ep_impl! {
                 return Err(CommandError::Failure(e));
             }
         };
+        for a in addrs {
+            self.ledger.open(*a);
+        }
         // The other addresses are candidate paths; one that cannot be added is not worth failing the dial.
         for (p, info) in extra.iter().flatten() {
             let _ = conn.add_path(&mut env, *p, *info);

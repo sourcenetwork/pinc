@@ -337,3 +337,23 @@ fn a_damaged_first_flight_does_not_stop_the_dial() {
         }
     });
 }
+
+/// A peer that still holds a session with a restarted node keeps writing to the address the node came back on. Those
+/// datagrams must not hold back the node's own dial to that peer.
+#[test]
+fn a_dial_to_an_address_that_wrote_first_still_goes_out() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (addr_a, addr_b) = (net.nodes[a].addr, net.nodes[b].addr);
+        // Two small datagrams from b reach a before a has sent anything: the ledger holds b to three times them.
+        net.inject(addr_b, addr_a, vec![0x40; 25], 0);
+        net.inject(addr_b, addr_a, vec![0x41; 25], 0);
+        net.run_for(MS_NS * 20);
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(sa)) else {
+            panic!()
+        };
+        assert!(st.established && st.dialer);
+    });
+}

@@ -2,7 +2,8 @@
 //!
 //! Per remote address the ledger keeps `[rx, tx, validated]`. An address that wrote to us first is held to three times
 //! the bytes it sent until it answers something we sent it; an address we wrote to first (we dialed it) is validated
-//! from the start. Each sent datagram counts its size plus 28 bytes (the IP and UDP headers).
+//! from the start, and so is an address the host dials, even one that wrote first. Each sent datagram counts its size
+//! plus 28 bytes (the IP and UDP headers).
 //!
 //! Invariants: the ledger holds at most [`LEDGER_ENTRIES`] addresses and evicts the one inserted first when full; for
 //! an address that is not validated the bytes charged never exceed three times the bytes received, so a spoofed
@@ -83,6 +84,24 @@ impl Ledger {
         }
     }
 
+    /// The host dials `addr`: the address counts as one we spoke to first, whatever it sent before. A peer that still
+    /// holds a session with us keeps writing to the address we restarted on, and that must not hold back our dial.
+    pub fn open(&mut self, addr: SocketAddr) {
+        match self.table.get_mut(&addr) {
+            Some(e) => e.validated = true,
+            None => {
+                self.table.insert(
+                    addr,
+                    LedgerEntry {
+                        rx: 0,
+                        tx: 0,
+                        validated: true,
+                    },
+                );
+            }
+        }
+    }
+
     /// Ask to send a datagram of `n` bytes (without headers) to `addr`: true charges it, false holds it.
     pub fn allow_send(&mut self, addr: SocketAddr, n: u64) -> bool {
         let charge = n.saturating_add(DATAGRAM_OVERHEAD);
@@ -134,6 +153,17 @@ mod tests {
         }
         assert!(sent <= 3 * 100);
         assert!(sent + 10 + DATAGRAM_OVERHEAD > 300);
+    }
+
+    #[test]
+    fn dialing_an_address_that_wrote_first_opens_it() {
+        let mut l = Ledger::new(1);
+        l.on_receive(a(4), 25);
+        assert!(!l.allow_send(a(4), 1200));
+        l.open(a(4));
+        assert!(l.allow_send(a(4), 1200));
+        l.open(a(5));
+        assert_eq!(l.get(&a(5)).map(|e| (e.rx, e.tx, e.validated)), Some((0, 0, true)));
     }
 
     #[test]
