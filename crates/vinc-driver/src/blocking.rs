@@ -26,12 +26,13 @@ use kovan_channel::bounded::Receiver;
 use vinc_core::Transmit;
 use vinc_crypto::NodeId;
 
-use crate::engine::{Admit, Engine, EngineConfig, run};
+use crate::engine::{Admit, Engine, EngineConfig};
 use crate::error::{Error, ErrorKind, Result};
 use crate::keys::Identity;
 use crate::link::{SessionShared, chan};
 use crate::mem::Limits;
 use crate::plane::{Remote, Wake, WakeFlag, plane};
+use crate::start::run;
 
 /// The first time the engine sees, so no time is zero.
 const T0: u64 = 10_000_000_000;
@@ -41,8 +42,11 @@ const RX_BUF: usize = 65_535;
 const TX_BUF: usize = 65_536;
 /// The most datagrams read in one burst before the engine runs.
 const DRAIN: usize = 256;
-/// The stack of the driver thread: the endpoint is large and is built on it.
-const STACK: usize = 16 * 1024 * 1024;
+
+/// The stack of the driver thread. `run` itself needs only a default stack; this is for the loop that follows: in an
+/// unoptimized build, creating a connection builds a value of over a megabyte on the stack several times over, which
+/// does not fit the 2 MiB default. An optimized build uses a small part of it; the pages are committed only when used.
+const STACK: usize = 8 * 1024 * 1024;
 
 /// What the reference loop is built from.
 pub struct Settings {

@@ -92,6 +92,10 @@ pub struct SessionShared {
     pub accept_uni: Receiver<NewStream>,
     /// Closes (the channel ends) when the session ends.
     pub gone: Receiver<()>,
+    /// Datagrams the peer sent, oldest first; at most `Limits::datagrams` wait here.
+    pub datagrams: Receiver<Vec<u8>>,
+    /// The engine stopped reading datagrams because the channel was full: the reader wakes it after it takes one.
+    pub datagrams_starved: AtomicBool,
 }
 
 /// A bounded channel of `cap` messages (at least one).

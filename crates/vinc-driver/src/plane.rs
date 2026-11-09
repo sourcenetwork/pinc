@@ -98,6 +98,10 @@ pub enum Ctl {
     Reset(SessionId, StreamId, u64),
     /// Close a session.
     Close(SessionId, u64),
+    /// Ask the peer to stop sending on a stream, with a code.
+    Stop(SessionId, StreamId, u64),
+    /// The datagram channel of a session has room again.
+    Datagrams(SessionId),
     /// Close every session of a peer.
     ClosePeer(NodeId),
     /// Remember an address for a peer.
@@ -228,6 +232,13 @@ impl Remote {
     pub fn ctl(&self, c: Ctl) {
         self.inner.ctl.send(c);
         self.inner.wake.wake();
+    }
+
+    /// Tell the engine a session's datagram channel has room, if it stopped for lack of it.
+    pub fn nudge_datagrams(&self, s: &SessionShared) {
+        if s.datagrams_starved.swap(false, Ordering::AcqRel) {
+            self.ctl(Ctl::Datagrams(s.id));
+        }
     }
 
     /// Tell the engine a stream has bytes to send or room to read into, once until it handles it.

@@ -68,6 +68,7 @@ pub struct RecvStream {
     pos: usize,
     next: Exclusive<Option<Pending<Option<Vec<u8>>>>>,
     done: bool,
+    stopped: u64,
 }
 
 impl core::fmt::Debug for SendStream {
@@ -103,6 +104,7 @@ pub(crate) fn halves(conn: &Arc<ConnInner>, n: NewStream) -> (Option<SendStream>
         pos: 0,
         next: Exclusive::new(None),
         done: false,
+        stopped: 0,
     });
     (send, recv)
 }
@@ -226,7 +228,10 @@ impl RecvStream {
     /// Take the next block into `cur`; `Ready(false)` at the end of the stream.
     fn poll_block(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         let Some(rx) = self.rx.as_ref() else {
-            return Poll::Ready(Err(Error::new(ErrorKind::Stopped(0), "the stream was stopped")));
+            return Poll::Ready(Err(Error::new(
+                ErrorKind::Stopped(self.stopped),
+                "the stream was stopped",
+            )));
         };
         let fut = self.next.get().get_or_insert_with(|| {
             let rx = rx.clone();
@@ -330,13 +335,16 @@ impl RecvStream {
         Ok(out)
     }
 
-    /// Stop reading: what the peer still sends is discarded and later reads fail with [`crate::ErrorKind::Stopped`]. The peer
-    /// is not told (the transport has no stop frame); it learns when the connection or its own stream ends.
-    pub fn stop(&mut self, _code: u64) {
+    /// Stop reading: what the peer still sends is discarded and later reads fail with [`crate::ErrorKind::Stopped`].
+    /// The peer is told with `code`: it resets the stream and its writer sees [`crate::ErrorKind::Stopped`] with the code.
+    pub fn stop(&mut self, code: u64) {
         self.rx = None;
+        self.stopped = code;
         *self.next.get() = None;
         self.cur.clear();
-        self.conn.remote.nudge(&self.shared);
+        self.conn
+            .remote
+            .ctl(Ctl::Stop(self.shared.session, self.shared.id, code));
     }
 }
 

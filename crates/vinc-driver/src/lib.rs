@@ -27,13 +27,16 @@ mod error;
 mod keys;
 mod link;
 mod mem;
+mod node;
 mod plane;
+mod start;
 
-pub use engine::{Admit, BUSY, CONNECTIONS, Direction, Engine, EngineConfig, run};
+pub use engine::{Admit, BUSY, Direction, Engine, EngineConfig};
 pub use error::{Error, ErrorKind, Result};
 pub use keys::Identity;
 pub use kovan_channel::bounded::{Receiver, Sender};
 pub use link::{BLOCK, Item, NewStream, SessionShared, StreamShared, chan};
 pub use mem::{Limits, MAX_CONNECTIONS, RING, STREAMS};
 pub use plane::{Ctl, Plane, Remote, Request, Wake, WakeFlag, WeakRemote, plane};
+pub use start::{CAPACITIES, run};
 pub use vinc_core::{NodeStats, SessionId, SessionStats};

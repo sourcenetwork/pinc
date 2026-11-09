@@ -450,6 +450,18 @@ name = "vinc_examples"
 path = "vinc_examples.rs"
 
 [[test]]
+name = "vinc_datagram"
+path = "vinc_datagram.rs"
+
+[[test]]
+name = "vinc_scale"
+path = "vinc_scale.rs"
+
+[[test]]
+name = "vinc_stop"
+path = "vinc_stop.rs"
+
+[[test]]
 name = "vinc_api"
 path = "vinc_api.rs"
 

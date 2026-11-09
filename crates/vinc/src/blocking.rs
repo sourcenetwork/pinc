@@ -147,6 +147,14 @@ impl Connection {
         block_on(self.0.accept_uni()).map(RecvStream)
     }
 
+    /// See [`crate::Connection::read_datagram`].
+    ///
+    /// # Errors
+    /// As the async method.
+    pub fn read_datagram(&self) -> Result<Vec<u8>> {
+        block_on(self.0.read_datagram())
+    }
+
     /// See [`crate::Connection::send_datagram`].
     ///
     /// # Errors

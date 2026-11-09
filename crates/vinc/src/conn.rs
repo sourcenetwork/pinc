@@ -241,6 +241,21 @@ impl Connection {
             .await?
     }
 
+    /// Wait for the next datagram the peer sent, in the order they arrived. Datagrams are unreliable: one that arrives
+    /// while `Limits::datagrams` are already waiting is dropped by the endpoint, which counts it. Cancel safe.
+    ///
+    /// # Errors
+    /// The reason the connection ended, once the datagrams that arrived before are read.
+    pub async fn read_datagram(&self) -> Result<Vec<u8>> {
+        match self.0.shared.datagrams.recv_async().await {
+            Some(d) => {
+                self.0.remote.nudge_datagrams(&self.0.shared);
+                Ok(d)
+            }
+            None => Err(self.ended()),
+        }
+    }
+
     /// Open a second protocol to the same peer. It costs no round trip, as the peer is already connected.
     ///
     /// # Errors

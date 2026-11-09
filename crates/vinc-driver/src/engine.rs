@@ -19,14 +19,15 @@ use vinc_core::{
     Answer, Command, CommandError, Event, IfaceEvent, IfaceId, MAX_ALPNS, NodeStats, Query, Reply, Role, SessionId,
     Transmit, Value,
 };
-use vinc_crypto::{Drbg, NodeId, Software};
+use vinc_crypto::NodeId;
 use vinc_security::{Alpn, KeyRequest, KeyResponse};
-use vinc_transport::stream::{NoSource, RecvStatus, StreamId, is_client_initiated, is_uni};
+use vinc_transport::stream::{NoSource, RecvStatus, StreamError, StreamId, is_uni};
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::keys::{Identity, Prekeys, is_identity};
 use crate::link::{BLOCK, Item, NewStream, SessionShared, StreamShared, chan};
-use crate::mem::{Ep, Limits, MAX_CONNECTIONS, Memory};
+use crate::mem::Limits;
+use crate::node::Node;
 use crate::plane::{Ctl, Plane, Request};
 
 /// The close code sent for a session or stream refused because a queue was full.
@@ -85,10 +86,7 @@ struct SessionRec {
     streams: HashMap<StreamId, StreamRec>,
     accept_bi: Sender<NewStream>,
     accept_uni: Sender<NewStream>,
-    // The peer's streams seen so far: below `low` all are, and `seen` holds those above it that are.
-    low_bi: u64,
-    low_uni: u64,
-    seen: std::collections::HashSet<StreamId>,
+    datagrams: Sender<Vec<u8>>,
     // Dropped with the record: closing the channel is the "session ended" signal.
     _gone: Sender<()>,
 }
@@ -102,7 +100,8 @@ struct Dial {
 
 /// The engine; see the module docs. Build it with [`run`].
 pub struct Engine<'s, 'a> {
-    ep: Box<Ep<'s, 'a>>,
+    pub(crate) ep: Box<dyn Node + 's>,
+    pub(crate) _memory: std::marker::PhantomData<&'s &'a ()>,
     identity: Identity,
     prekeys: Prekeys,
     plane: Plane,
@@ -114,70 +113,48 @@ pub struct Engine<'s, 'a> {
     dials: Vec<Dial>,
     book: HashMap<NodeId, Vec<SocketAddr>>,
     backlog: VecDeque<Event>,
+    dgram_buf: Vec<u8>,
     ifaces: Vec<IfaceId>,
     shutdown: Option<(u64, Vec<Sender<()>>)>,
     last_dropped: u64,
+    /// Set while `sweep` runs: the events a refused write waits for may have been dropped.
+    sweeping: bool,
     next_gc: u64,
 }
 
-/// Build an engine at time `now` and run `f` with it. The endpoint borrows memory that lives for the call, so the
-/// engine cannot outlive `f`; nothing is leaked. The endpoint is large and is built on the calling thread's stack:
-/// call this on a thread with at least 16 MiB, as the reference loop's thread has.
-///
-/// # Errors
-/// [`ErrorKind::Config`] if the limits or the keys are not usable.
-pub fn run<R>(
-    cfg: EngineConfig,
-    plane: Plane,
-    default_queue: Sender<Arc<SessionShared>>,
-    now: u64,
-    f: impl FnOnce(&mut Engine<'_, '_>) -> R,
-) -> Result<R> {
-    cfg.limits.check()?;
-    let mut mem = Memory::new();
-    let mut slots = mem.slots(cfg.limits.pool_chunks)?;
-    let mut rnd = [0u8; 32];
-    cfg.identity.random(&mut rnd)?;
-    let mut seed = [0u8; 8];
-    cfg.identity.random(&mut seed)?;
-    let mut ecfg = vinc_core::EndpointConfig::new(u64::from_le_bytes(seed));
-    ecfg.conn.max_gso = cfg.max_gso.max(1);
-    ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
-    let mut ep = Box::new(Ep::new(
-        now,
-        Software,
-        Drbg::new(&rnd),
-        cfg.identity.local()?,
-        ecfg,
-        &mut slots,
-    ));
-    let mut prekeys = Prekeys::new()?;
-    ep.set_prekey(prekeys.rotate(now)?);
-    for a in &cfg.alpns {
-        if !ep.register_alpn(a) {
-            return Err(Error::config("a protocol name is empty, too long or one too many"));
+impl<'s> Engine<'s, '_> {
+    /// An engine over `ep`, which already holds the prekey, the protocols and the interfaces `ifaces`.
+    pub(crate) fn new(
+        ep: Box<dyn Node + 's>,
+        cfg: EngineConfig,
+        prekeys: Prekeys,
+        plane: Plane,
+        default_queue: Sender<Arc<SessionShared>>,
+        ifaces: Vec<IfaceId>,
+        now: u64,
+    ) -> Self {
+        Self {
+            ep,
+            _memory: std::marker::PhantomData,
+            identity: cfg.identity,
+            prekeys,
+            plane,
+            limits: cfg.limits,
+            admit: cfg.admit,
+            default_queue,
+            routes: Vec::new(),
+            sessions: HashMap::new(),
+            dials: Vec::new(),
+            book: HashMap::new(),
+            backlog: VecDeque::new(),
+            dgram_buf: vec![0; vinc_core::MAX_DATAGRAM],
+            ifaces,
+            shutdown: None,
+            last_dropped: 0,
+            sweeping: false,
+            next_gc: now,
         }
     }
-    let ifaces = cfg.locals.iter().filter_map(|l| ep.add_iface(*l)).collect();
-    let mut engine = Engine {
-        ep,
-        identity: cfg.identity,
-        prekeys,
-        plane,
-        limits: cfg.limits,
-        admit: cfg.admit,
-        default_queue,
-        routes: Vec::new(),
-        sessions: HashMap::new(),
-        dials: Vec::new(),
-        book: HashMap::new(),
-        backlog: VecDeque::new(),
-        ifaces,
-        shutdown: None,
-        last_dropped: 0,
-        next_gc: now,
-    };
-    Ok(f(&mut engine))
 }
 
 impl Drop for Engine<'_, '_> {
@@ -229,7 +206,7 @@ impl Engine<'_, '_> {
     /// callers waiting for it; the driver then stops.
     pub fn finished(&mut self, now: u64) -> bool {
         let Some((at, _)) = &self.shutdown else { return false };
-        if self.ep.sessions().next().is_some() && now < *at {
+        if self.ep.node_stats().sessions > 0 && now < *at {
             return false;
         }
         for r in self.shutdown.take().map(|(_, r)| r).unwrap_or_default() {
@@ -300,12 +277,14 @@ impl Engine<'_, '_> {
             .iter()
             .map(|(s, r)| (*s, r.streams.keys().copied().collect()))
             .collect();
+        self.sweeping = true;
         for (s, streams) in all {
             for id in streams {
                 self.pump_send(now, s, id);
                 self.pump_recv(now, s, id);
             }
         }
+        self.sweeping = false;
     }
 
     fn on_event(&mut self, now: u64, ev: Event) {
@@ -325,19 +304,10 @@ impl Engine<'_, '_> {
             }
             Event::Closed { session, reason } => self.session_down(session, Error::ended(reason)),
             Event::StreamOpened { session, stream } => self.stream_opened(now, session, stream),
-            Event::StreamReadable { session, stream } => {
-                self.stream_opened(now, session, stream);
+            Event::StreamReadable { session, stream } | Event::StreamReset { session, stream, .. } => {
                 self.pump_recv(now, session, stream);
             }
             Event::StreamWritable { session, stream } => self.pump_send(now, session, stream),
-            Event::StreamReset { session, stream, error } => {
-                self.stream_opened(now, session, stream);
-                self.recv_end(
-                    session,
-                    stream,
-                    Err(Error::new(ErrorKind::Reset(error), "the peer reset the stream")),
-                );
-            }
             Event::AcpCheck { check, node, alpn } => {
                 let dir = if self.dials.iter().any(|d| d.node == node && d.alpn == alpn.as_bytes()) {
                     Direction::Outbound
@@ -347,13 +317,43 @@ impl Engine<'_, '_> {
                 let allow = self.admit.as_ref().is_none_or(|a| a.admit(&node, alpn.as_bytes(), dir));
                 let _ = self.cmd(now, Command::AcpAnswer { check, allow });
             }
+            Event::StreamStopped { session, stream, error } => self.send_fail(
+                session,
+                stream,
+                Error::new(ErrorKind::Stopped(error), "the peer stopped the stream"),
+            ),
             Event::KeyRequest { session } => self.answer_key(now, session),
-            // vertexia: received datagrams are not read yet; the endpoint has no read call until the core adds one.
-            Event::DatagramReceived { .. }
-            | Event::PathChanged { .. }
+            Event::DatagramReceived { session } => self.pump_datagrams(session),
+            Event::PathChanged { .. }
             | Event::PeerAsleep { .. }
             | Event::PeerAwake { .. }
             | Event::TicketsReceived { .. } => {}
+        }
+    }
+
+    /// Move the session's received datagrams from the endpoint into the read channel, as far as it has room. What the
+    /// endpoint holds meanwhile is bounded by its own queue, which drops the oldest and counts it.
+    fn pump_datagrams(&mut self, session: SessionId) {
+        let Some(rec) = self.sessions.get(&session) else { return };
+        let (tx, shared) = (rec.datagrams.clone(), Arc::clone(&rec.shared));
+        let discard = tx.is_disconnected();
+        loop {
+            if !discard && tx.is_full() {
+                // Set before the last look: a reader that drains in between sees the flag and wakes the engine.
+                shared.datagrams_starved.store(true, Ordering::SeqCst);
+                if tx.is_full() {
+                    return;
+                }
+            }
+            match self.ep.read_datagram(session, &mut self.dgram_buf) {
+                Ok(Some(n)) => {
+                    if !discard && let Some(d) = self.dgram_buf.get(..n) {
+                        tx.send(d.to_vec());
+                    }
+                }
+                Err(CommandError::BufferTooSmall { len }) => self.dgram_buf.resize(len, 0),
+                Ok(None) | Err(_) => return,
+            }
         }
     }
 
@@ -414,6 +414,7 @@ impl Engine<'_, '_> {
         let (bi_tx, bi_rx) = chan(self.limits.accept_streams);
         let (uni_tx, uni_rx) = chan(self.limits.accept_streams);
         let (gone_tx, gone_rx) = chan(1);
+        let (dg_tx, dg_rx) = chan(self.limits.datagrams);
         let shared = Arc::new(SessionShared {
             id: session,
             node,
@@ -423,6 +424,8 @@ impl Engine<'_, '_> {
             accept_bi: bi_rx,
             accept_uni: uni_rx,
             gone: gone_rx,
+            datagrams: dg_rx,
+            datagrams_starved: std::sync::atomic::AtomicBool::new(false),
         });
         if !dialer {
             let q = self.route(&alpn);
@@ -439,9 +442,7 @@ impl Engine<'_, '_> {
                 streams: HashMap::new(),
                 accept_bi: bi_tx,
                 accept_uni: uni_tx,
-                low_bi: 0,
-                low_uni: 0,
-                seen: std::collections::HashSet::new(),
+                datagrams: dg_tx,
                 _gone: gone_tx,
             },
         );
@@ -496,26 +497,11 @@ impl Engine<'_, '_> {
         (rec, NewStream { shared, tx, rx })
     }
 
-    /// The peer opened a stream: hand it to the session's accept queue, or refuse it if the queue is full.
-    ///
-    /// The endpoint reports a stream as opened only with the first frame of that stream. A peer that opens several at
-    /// once can have a later one arrive first, and the earlier ones are then opened without an event; their first
-    /// readable or reset event is where the host learns of them, so those events come here too. A stream already seen
-    /// is ignored.
+    /// The peer opened a stream: hand it to the session's accept queue, or refuse it if the queue is full. The
+    /// transport reports every stream the peer opens exactly once, before any other event of it.
     fn stream_opened(&mut self, now: u64, session: SessionId, id: StreamId) {
-        let Some(s) = self.sessions.get_mut(&session) else {
+        if self.stream_mut(session, id).is_some() {
             return;
-        };
-        // A stream this side opened has a record from the start.
-        if is_client_initiated(id) == s.shared.dialer {
-            return;
-        }
-        let low = if is_uni(id) { &mut s.low_uni } else { &mut s.low_bi };
-        if id >> 2 < *low || !s.seen.insert(id) {
-            return;
-        }
-        while s.seen.remove(&((*low << 2) | (id & 3))) {
-            *low += 1;
         }
         let uni = is_uni(id);
         let (mut rec, new) = self.make_stream(session, id, !uni, true);
@@ -648,6 +634,28 @@ impl Engine<'_, '_> {
         }
     }
 
+    /// The application stopped reading: tell the peer to stop sending, fail later reads with `error`, and discard
+    /// what is still on its way until the peer's reset ends the stream.
+    fn stop_recv(&mut self, now: u64, session: SessionId, id: StreamId, error: u64) {
+        let Some(r) = self.stream_mut(session, id).filter(|r| !r.recv_done) else {
+            return;
+        };
+        let _ = r
+            .shared
+            .rx_end
+            .set(Err(Error::new(ErrorKind::Stopped(error), "the stream was stopped")));
+        r.rx_tx = None;
+        let _ = self.cmd(
+            now,
+            Command::StopSending {
+                session,
+                stream: id,
+                error,
+            },
+        );
+        self.pump_recv(now, session, id);
+    }
+
     /// Move bytes from the write channel into the endpoint, as far as it takes them.
     fn pump_send(&mut self, now: u64, session: SessionId, id: StreamId) {
         loop {
@@ -687,9 +695,18 @@ impl Engine<'_, '_> {
                     }
                 }
                 Ok(_) => {}
-                Err(e) => return self.send_fail(session, id, Error::command(e)),
+                Err(e) => return self.send_refused(session, id, e),
             }
         }
+    }
+
+    /// A write or finish the endpoint refused. A send half the peer stopped refuses as finished before the stop event
+    /// behind it is handled; that event carries the code the writer must see, so it is left to fail the stream.
+    fn send_refused(&mut self, session: SessionId, id: StreamId, e: CommandError) {
+        if !self.sweeping && matches!(e, CommandError::Stream(StreamError::Finished)) {
+            return;
+        }
+        self.send_fail(session, id, Error::command(e));
     }
 
     fn finish(&mut self, now: u64, session: SessionId, id: StreamId) {
@@ -701,7 +718,7 @@ impl Engine<'_, '_> {
                 }
                 self.reap(session, id);
             }
-            Err(e) => self.send_fail(session, id, Error::command(e)),
+            Err(e) => self.send_refused(session, id, e),
         }
     }
 
@@ -714,6 +731,8 @@ impl Engine<'_, '_> {
                 self.pump_send(now, session, id);
                 self.pump_recv(now, session, id);
             }
+            Ctl::Datagrams(session) => self.pump_datagrams(session),
+            Ctl::Stop(session, id, error) => self.stop_recv(now, session, id, error),
             Ctl::Reset(session, id, error) => {
                 let _ = self.cmd(
                     now,
@@ -798,15 +817,7 @@ impl Engine<'_, '_> {
                         addrs.push(*a);
                     }
                 }
-                match self.cmd(
-                    now,
-                    Command::Connect {
-                        node,
-                        alpn: &alpn,
-                        addrs: &addrs,
-                        role: Role::Other,
-                    },
-                ) {
+                match self.connect(now, node, &alpn, &addrs) {
                     Ok(Reply {
                         value: Value::Session(session),
                         ..
@@ -876,6 +887,43 @@ impl Engine<'_, '_> {
         Ok(rx)
     }
 
+    /// Dial. While the application has left too many events unread the endpoint holds a dial back: read them and try
+    /// again, so the caller never sees an error for the endpoint's own back-pressure.
+    fn connect(
+        &mut self,
+        now: u64,
+        node: NodeId,
+        alpn: &[u8],
+        addrs: &[SocketAddr],
+    ) -> core::result::Result<Reply, CommandError> {
+        for _ in 0..2 {
+            let r = self.cmd(
+                now,
+                Command::Connect {
+                    node,
+                    alpn,
+                    addrs,
+                    role: Role::Other,
+                },
+            );
+            if !matches!(r, Err(CommandError::EventsPending)) {
+                return r;
+            }
+            while let Some(ev) = self.backlog.pop_front().or_else(|| self.ep.poll_event()) {
+                self.on_event(now, ev);
+            }
+        }
+        self.cmd(
+            now,
+            Command::Connect {
+                node,
+                alpn,
+                addrs,
+                role: Role::Other,
+            },
+        )
+    }
+
     fn open(&mut self, now: u64, session: SessionId, bidi: bool) -> Result<NewStream> {
         let Value::Stream(id) = self
             .cmd(now, Command::OpenStream { session, bidi })
@@ -893,6 +941,3 @@ impl Engine<'_, '_> {
         Ok(new)
     }
 }
-
-/// The most sessions an engine holds.
-pub const CONNECTIONS: usize = MAX_CONNECTIONS;
