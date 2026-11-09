@@ -117,13 +117,18 @@ ep_impl! {
     }
 
     /// The next time [`handle_timeout`](Self::handle_timeout) must run, or `None` when no session has a timer.
+    /// While the event queue is near full no timer is due: read events with `poll_event` first.
     pub fn poll_timeout(&self) -> Option<u64> {
-        self.heap.peek().map(|(t, _)| t)
+        self.heap.peek().map(|(t, _)| t).filter(|_| !self.events.stalled())
     }
 
     /// Run every timer that is due at `now`.
     pub fn handle_timeout(&mut self, now: u64) {
+        self.last_now = now;
         for _ in 0..K {
+            if self.events.stalled() {
+                return;
+            }
             let Some((t, i)) = self.heap.peek() else { return };
             if t > now {
                 return;

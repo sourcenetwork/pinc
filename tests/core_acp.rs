@@ -314,3 +314,115 @@ fn a_flood_before_the_answer_fills_the_hold_and_stalls_the_session_without_losin
         );
     });
 }
+
+/// Fill the host's event queue without reading it: dialing this node itself fails at once with an event each time,
+/// until the endpoint holds the dials back. Returns how many dials were refused with an event.
+fn stall_events(ep: &mut CoreEp, now: u64) -> usize {
+    let me = ep.identity().node_id();
+    let mut made = 0;
+    loop {
+        match ep.command(
+            now,
+            Command::Connect {
+                node: me,
+                alpn: ALPN_A,
+                addrs: &[],
+                role: Role::Other,
+            },
+        ) {
+            Err(CommandError::Refused) => made += 1,
+            Err(CommandError::EventsPending) => return made,
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(made < 10_000, "the queue never stalled");
+    }
+}
+
+#[test]
+fn a_host_that_leaves_events_unread_holds_back_dials_and_timers_and_loses_nothing() {
+    big_stack(|| {
+        let mut net = CoreNet::new(SLOW);
+        let (a, b) = (net.add(1), net.add(2));
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        assert!(net.run(now + 5 * SEC_NS, |n| n.nodes[a].saw(is_connected)
+            && n.nodes[b].saw(is_incoming)));
+        let t = net.now;
+        let ep = &mut net.nodes[b].ep;
+        assert!(ep.poll_timeout().is_some());
+        let made = stall_events(ep, t);
+        assert!(made > 1000, "only {made} events fit");
+        assert_eq!(ep.poll_timeout(), None, "no timer is due while the queue is near full");
+        ep.handle_timeout(t + 600 * SEC_NS);
+        assert_eq!(ep.node_stats().sessions, 1, "a timer ran while the queue was near full");
+        // Reading events lets the dials and the timers go on, and every event arrives.
+        let mut failed = 0;
+        while let Some(e) = ep.poll_event() {
+            failed += usize::from(matches!(e, Event::ConnectFailed { .. }));
+        }
+        assert_eq!(failed, made);
+        assert_eq!(ep.node_stats().events_lost, 0);
+        assert!(ep.poll_timeout().is_some());
+        let me = ep.identity().node_id();
+        assert!(matches!(
+            ep.command(
+                t,
+                Command::Connect {
+                    node: me,
+                    alpn: ALPN_A,
+                    addrs: &[],
+                    role: Role::Other
+                }
+            ),
+            Err(CommandError::Refused)
+        ));
+    });
+}
+
+#[test]
+fn held_events_released_into_a_near_full_queue_wait_and_arrive_in_order_after_the_host_reads() {
+    big_stack(|| {
+        let mut net = CoreNet::new(SLOW);
+        let (a, b) = (net.add(1), net.add(2));
+        net.nodes[b].acp = Acp::Manual;
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        assert!(net.run(now + 5 * SEC_NS, |n| n.nodes[a].saw(is_connected)
+            && !n.nodes[b].checks.is_empty()));
+        for i in 0..40u32 {
+            let t = net.now;
+            let _ = net.nodes[a].cmd(
+                t,
+                Command::SendDatagram {
+                    session: sa,
+                    data: &i.to_be_bytes(),
+                },
+            );
+            net.run_for(MS_NS);
+        }
+        net.run_for(500 * MS_NS);
+        let (check, _) = net.nodes[b].checks[0];
+        let t = net.now;
+        let ep = &mut net.nodes[b].ep;
+        stall_events(ep, t);
+        let rep = ep.command(t, Command::AcpAnswer { check, allow: true }).unwrap();
+        assert_eq!(ep.node_stats().events_lost, 0);
+        let mut got: Vec<Event> = rep.events.iter().copied().collect();
+        while let Some(e) = ep.poll_event() {
+            got.push(e);
+        }
+        let pos = |f: fn(&Event) -> bool| got.iter().position(f);
+        let incoming = pos(is_incoming).expect("Incoming");
+        let first_dg = pos(|e| matches!(e, Event::DatagramReceived { .. })).expect("datagram");
+        assert!(incoming < first_dg, "Incoming before the datagrams");
+        assert_eq!(
+            got.iter()
+                .filter(|e| matches!(e, Event::DatagramReceived { .. }))
+                .count(),
+            40,
+            "every held datagram notification arrived"
+        );
+        assert_eq!(ep.node_stats().events_lost, 0);
+    });
+}

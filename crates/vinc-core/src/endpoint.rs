@@ -40,7 +40,7 @@ use vinc_transport::stream::{self, StreamSource};
 use crate::api::{Event, Events, NodeStats, SessionId};
 use crate::heap::DeadlineHeap;
 use crate::ledger::Ledger;
-use crate::queue::EventRing;
+use crate::queue::{EVENT_HEADROOM, EventRing};
 use crate::rtt::NodeRtt;
 use crate::slot::{MAX_CIDS, NIL, Slot, State};
 use crate::table::Table;
@@ -59,7 +59,7 @@ pub const ACP_ENTRIES: usize = 256;
 /// Sub-session ids remembered so a repeated open is not accepted twice.
 pub const SUBS_SEEN: usize = 1024;
 /// The events the host may leave unread.
-pub const EVENT_QUEUE: usize = 1024;
+pub const EVENT_QUEUE: usize = 2048;
 /// The most protocols the registry holds.
 pub const MAX_ALPNS: usize = vinc_security::ids::MAX_ALPNS;
 /// The peers whose prekey cache knowledge is remembered.
@@ -162,6 +162,10 @@ pub struct Endpoint<
     pub(crate) ifaces: [Option<SocketAddr>; MAX_IFACES],
     pub(crate) subs_seen: Table<ConnId, (), SUBS_SEEN>,
     pub(crate) events: EventRing<EVENT_QUEUE>,
+    /// Some session has `parked` work.
+    pub(crate) backlog: bool,
+    /// The latest time an entry point was called with.
+    pub(crate) last_now: u64,
     pub(crate) capture: Option<Events>,
     pub(crate) scratch: [u8; MAX_DATAGRAM],
     pub(crate) stash: [u8; MAX_DATAGRAM],
@@ -223,6 +227,7 @@ ep_impl! {
         mut cfg: EndpointConfig,
         slots: &'s mut [Slot<'a, P, S, N, C, F, NP>; K],
     ) -> Self {
+        const { assert!(2 * K + 64 <= EVENT_HEADROOM, "the event queue headroom is too small for the session table") };
         cfg.conn.cid_len = CID_LEN;
         let seed = cfg.seed;
         let last = K.saturating_sub(1);
@@ -260,6 +265,8 @@ ep_impl! {
             ifaces: [None; MAX_IFACES],
             subs_seen: Table::new(seed ^ 0x0A),
             events: EventRing::new(),
+            backlog: false,
+            last_now: now,
             capture: None,
             scratch: [0; MAX_DATAGRAM],
             stash: [0; MAX_DATAGRAM],
@@ -364,6 +371,7 @@ ep_impl! {
             held_by_ledger: self.counters.held_by_ledger,
             stalled_in: self.counters.stalled_in,
             events_dropped: self.events.dropped,
+            events_lost: self.events.lost,
         }
     }
 
@@ -384,7 +392,11 @@ ep_impl! {
 
     /// The next event, oldest first.
     pub fn poll_event(&mut self) -> Option<Event> {
-        self.events.pop()
+        let ev = self.events.pop();
+        if self.backlog && !self.events.stalled() {
+            self.resume_parked(self.last_now);
+        }
+        ev
     }
 
     /// Queue an event for the host, or put it in the reply of the command being applied.

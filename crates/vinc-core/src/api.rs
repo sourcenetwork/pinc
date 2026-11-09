@@ -295,6 +295,8 @@ pub enum CommandError {
     NoKeyRequest,
     /// The node is this one: a node does not dial itself.
     Refused,
+    /// The host left too many events unread: read them with `poll_event` and send the command again.
+    EventsPending,
     /// The next received datagram does not fit the buffer; it stays queued. `len` is its size.
     BufferTooSmall {
         /// The size of the datagram.
@@ -515,6 +517,9 @@ pub struct NodeStats {
     pub stalled_in: u64,
     /// Events dropped because the event queue was full.
     pub events_dropped: u64,
+    /// Events the application cannot recover that were dropped because the event queue held nothing else to give up;
+    /// the endpoint keeps this at 0 by holding work back while the queue is near full.
+    pub events_lost: u64,
 }
 
 /// A peer in the round-trip table.

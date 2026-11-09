@@ -78,6 +78,7 @@ ep_impl! {
     /// what the datagram caused shows in [`poll_transmit`](Self::poll_transmit), [`poll_event`](Self::poll_event) and
     /// [`poll_timeout`](Self::poll_timeout).
     pub fn handle_datagram(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        self.last_now = now;
         self.counters.datagrams_in += 1;
         if buf.is_empty() || buf.len() > MAX_DATAGRAM {
             self.counters.dropped_in += 1;

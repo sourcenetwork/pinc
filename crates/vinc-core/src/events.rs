@@ -55,11 +55,16 @@ ep_impl! {
     /// Read and handle every event session `i` has.
     pub(crate) fn drain(&mut self, i: usize, now: u64) {
         loop {
+            // Back-pressure: leave the events in the connection until the host reads events (queue near full; the
+            // session is parked and `resume_parked` takes it up again) or the session's held events drain.
+            if self.events.stalled() {
+                self.park(i);
+                return;
+            }
             let Some(slot) = self.slots.get_mut(i) else { return };
             if !slot.m.in_use {
                 return;
             }
-            // Back-pressure: leave the events in the connection until the host drains the held ones.
             if slot.m.held.stalled() {
                 return;
             }
@@ -147,7 +152,8 @@ ep_impl! {
     /// An application event: emitted if the session is allowed and not waiting for READY, held otherwise.
     fn app_event(&mut self, i: usize, now: u64, ev: Event) {
         let Some(slot) = self.slots.get_mut(i) else { return };
-        if slot.m.allowed && slot.m.hold != 2 {
+        // Behind earlier held events the new one waits too, so the order holds.
+        if slot.m.allowed && slot.m.hold != 2 && slot.m.held.len() == 0 {
             self.emit(ev);
             return;
         }
@@ -161,8 +167,41 @@ ep_impl! {
     pub(crate) fn release_held(&mut self, i: usize, now: u64) {
         let session = self.session_id(i);
         trace!(self, now, Gate { slot: i as u64, release: 1, held: self.slots.get(i).map_or(0, |s| s.m.held.len()) as u64 });
-        while let Some(h) = self.slots.get_mut(i).and_then(|s| s.m.held.pop()) {
+        while !self.events.stalled() {
+            let Some(h) = self.slots.get_mut(i).and_then(|s| s.m.held.pop()) else { return };
             self.emit(h.event(session));
+        }
+        if self.slots.get(i).is_some_and(|s| s.m.held.len() > 0) {
+            self.park(i);
+        }
+    }
+
+    /// Mark session `i` as having work left for [`resume_parked`](Self::resume_parked).
+    fn park(&mut self, i: usize) {
+        if let Some(s) = self.slots.get_mut(i) {
+            s.m.parked = true;
+            self.backlog = true;
+        }
+    }
+
+    /// The host read events and the queue has room again: finish the work of the parked sessions, the held events
+    /// of an allowed session first, until the queue is near full again.
+    pub(crate) fn resume_parked(&mut self, now: u64) {
+        self.backlog = false;
+        for i in 0..K {
+            if self.events.stalled() {
+                self.backlog = true;
+                return;
+            }
+            let Some(s) = self.slots.get_mut(i) else { return };
+            if !s.m.parked {
+                continue;
+            }
+            s.m.parked = false;
+            if s.m.allowed && s.m.hold != 2 {
+                self.release_held(i, now);
+            }
+            self.settle(i, now);
         }
     }
 

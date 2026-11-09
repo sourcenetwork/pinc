@@ -40,6 +40,7 @@ ep_impl! {
     /// A [`CommandError`] if the session is unknown, the table is full, the stream or datagram layer refuses, or the
     /// command cannot be carried out.
     pub fn command(&mut self, now: u64, cmd: Command<'_, S>) -> Result<Reply, CommandError> {
+        self.last_now = now;
         self.capture = Some(Events::default());
         let r = self.apply(now, cmd);
         let events = self.capture.take().unwrap_or_default();
@@ -248,6 +249,9 @@ ep_impl! {
         addrs: &[SocketAddr],
         role: Role,
     ) -> Result<SessionId, CommandError> {
+        if self.events.stalled() {
+            return Err(CommandError::EventsPending);
+        }
         let alpn_t = Alpn::new(alpn).filter(|_| !alpn.is_empty()).ok_or(CommandError::BadAlpn)?;
         if node == self.identity.node_id() {
             self.emit(Event::ConnectFailed { node, alpn: alpn_t, reason: ConnectFailure::Refused });

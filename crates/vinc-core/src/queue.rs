@@ -8,9 +8,10 @@
 
 use crate::api::Event;
 
-/// The places kept free of unrecoverable events, enough for what one datagram, one timer round or the release of one
-/// session's held events (at most 64) can emit.
-pub const EVENT_HEADROOM: usize = 128;
+/// The places kept free of unrecoverable events. One step the endpoint takes without checking the queue again (one
+/// connection event, one timer, one command) emits at most one event per session twice over (a lifecycle event and
+/// the close of an orphaned child) and a few more; the endpoint asserts `2 * K + 64` fits.
+pub const EVENT_HEADROOM: usize = 768;
 
 /// A fixed ring of events.
 #[derive(Debug)]
@@ -21,6 +22,8 @@ pub(crate) struct EventRing<const N: usize> {
     /// How many of the queued events the application can recover by reading state.
     lossy_len: usize,
     pub(crate) dropped: u64,
+    /// Unrecoverable events dropped because the queue held nothing else to give up.
+    pub(crate) lost: u64,
 }
 
 impl<const N: usize> EventRing<N> {
@@ -31,6 +34,7 @@ impl<const N: usize> EventRing<N> {
             len: 0,
             lossy_len: 0,
             dropped: 0,
+            lost: 0,
         }
     }
 
@@ -49,15 +53,15 @@ impl<const N: usize> EventRing<N> {
             if ev.lossy() {
                 return;
             }
-            let victim = (0..self.len)
-                .find(|i| {
-                    self.items
-                        .get(self.at(*i))
-                        .copied()
-                        .flatten()
-                        .is_some_and(|e| e.lossy())
-                })
-                .unwrap_or(0);
+            let victim = (0..self.len).find(|i| {
+                self.items
+                    .get(self.at(*i))
+                    .copied()
+                    .flatten()
+                    .is_some_and(|e| e.lossy())
+            });
+            self.lost += u64::from(victim.is_none());
+            let victim = victim.unwrap_or(0);
             if self
                 .items
                 .get(self.at(victim))
@@ -168,7 +172,7 @@ mod tests {
     proptest! {
         #[test]
         fn nothing_that_cannot_be_recovered_is_dropped_while_the_endpoint_honours_the_stall(ops in ops()) {
-            let mut ring: EventRing<512> = EventRing::new();
+            let mut ring: EventRing<2048> = EventRing::new();
             let (mut offered, mut delivered) = (Vec::new(), Vec::new());
             let mut n = 0u64;
             for op in ops {
@@ -206,12 +210,12 @@ mod tests {
 
     #[test]
     fn the_stall_leaves_headroom_and_ignores_events_that_can_be_recovered() {
-        let mut ring: EventRing<512> = EventRing::new();
-        for n in 0..512 {
+        let mut ring: EventRing<2048> = EventRing::new();
+        for n in 0..2048 {
             ring.push(event(9, n));
         }
         assert!(!ring.stalled(), "recoverable events alone never stall the endpoint");
-        for n in 0..(512 - EVENT_HEADROOM) as u64 {
+        for n in 0..(2048 - EVENT_HEADROOM) as u64 {
             assert!(!ring.stalled());
             ring.push(event(0, n));
         }
