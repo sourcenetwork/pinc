@@ -181,6 +181,7 @@ pub struct Connection<
     fan_set: u16,
     fan_mask: u16,
     fan_target: Option<usize>,
+    fan_skip: bool,
 }
 
 impl<'a, P, S, const N: usize, const C: usize, const F: usize, const NP: usize> Connection<'a, P, S, N, C, F, NP>
@@ -271,6 +272,7 @@ where
             fan_set: 0,
             fan_mask: 0,
             fan_target: None,
+            fan_skip: false,
         })
     }
 

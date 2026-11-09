@@ -29,7 +29,7 @@ use super::link::{Link, Shared, State};
 use super::lookup::{Ask, Found, LookupError, Lookups};
 use super::netcheck::{self, Netcheck, Observed};
 use super::tunnel::Splices;
-use crate::carrier::frame::{DnsAnswer, MAX_PACKET_LEN};
+use crate::carrier::frame::{BatchState, DnsAnswer, MAX_FRAME_LEN, MAX_PACKET_LEN};
 use crate::carrier::session::ProtectedCarrier;
 use crate::carrier::{AliasTable, Frame};
 use crate::local::Duty;
@@ -98,6 +98,8 @@ pub struct Config<const R: usize> {
     pub start: u64,
     /// The synthetic relay addresses are IPv6 (the node has no IPv4 interface).
     pub v6: bool,
+    /// Learn the keepalive interval from silent carrier deaths (KEEP_LEARN).
+    pub keep_learn: bool,
 }
 
 /// A request for the host's streams.
@@ -137,6 +139,8 @@ pub enum Notice {
     Missing(NodeId),
     /// A relay answered with a record that did not verify.
     BadRecord(NodeId),
+    /// The host's key refused to sign something the layer asked for (a record, a sleep notice or a beacon).
+    SignFailed,
 }
 
 #[derive(Clone, Copy)]
@@ -154,11 +158,17 @@ pub(super) struct Rly<P: Provider> {
     pub(super) generation: u64,
     pub(super) out: [u8; OUT_LEN],
     pub(super) out_len: usize,
+    pub(super) bbuf: [u8; MAX_FRAME_LEN],
+    pub(super) bst: BatchState,
     pub(super) q: [Option<Queued>; QUEUED],
     pub(super) keyreq: bool,
     pub(super) ta: AliasTable,
     pub(super) ra: AliasTable,
     pub(super) rides: bool,
+    /// The last time a session packet was written to this carrier (a ridden check, CHECK_RIDE).
+    pub(super) etx: Option<u64>,
+    /// A PONG arrived that the sessions riding this carrier have not yet been told about (CARRIER_PULSE).
+    pub(super) pong: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -210,7 +220,10 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) found_q: [Option<NodeId>; 4],
     pub(super) beacons: [Option<super::drive::LocalPeer>; LOCAL_PEERS],
     pub(super) node_rtt: u64,
-    pub(super) hold_close: bool,
+    pub(super) sign: super::signing::Signing,
+    pub(super) evq: [Option<vinc_core::Event>; 16],
+    /// The latest time any call carried.
+    pub(super) clock: u64,
     /// Packets dropped because a queue was full.
     pub dropped: u64,
 }
@@ -247,6 +260,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let mut shared = Shared {
             phone: cfg.phone,
             restarted: cfg.restarted,
+            keep_learn: cfg.keep_learn,
             ..Shared::default()
         };
         shared.keep_fail = None;
@@ -265,11 +279,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 generation: 0,
                 out: [0; OUT_LEN],
                 out_len: 0,
+                bbuf: [0; MAX_FRAME_LEN],
+                bst: BatchState::new(),
                 q: [None; QUEUED],
                 keyreq: false,
                 ta: AliasTable::new(),
                 ra: AliasTable::new(),
                 rides: false,
+                etx: None,
+                pong: false,
             }),
             shared,
             net: Netcheck::new(),
@@ -297,7 +315,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             found_q: [None; 4],
             beacons: [None; LOCAL_PEERS],
             node_rtt: 0,
-            hold_close: false,
+            sign: super::signing::Signing::new(),
+            evq: [None; 16],
+            clock: cfg.start,
             dropped: 0,
         }
     }
@@ -506,6 +526,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// A UDP datagram from `from` arrived. Returns true if it was a relay control datagram (handled here); false
     /// means it belongs to the endpoint. `data[0] >= 0x40` is always a transport packet.
     pub fn handle_udp(&mut self, now: u64, from: SocketAddr, data: &[u8]) -> bool {
+        self.clock = self.clock.max(now);
         if data.first().is_none_or(|b| *b >= 0x40) {
             return false;
         }
@@ -517,8 +538,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.shared.restarted = false;
         match d {
             Datagram::Qadr { nonce, addr } => {
+                let before = self.net.home();
                 if self.net.answered(now, relay, nonce, addr).is_some() {
-                    self.after_answer(now, relay);
+                    self.after_answer(now, before);
                 }
             }
             Datagram::DnsReply { peer, answer } => self.dns_answer(&peer, &answer),
@@ -532,21 +554,24 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         true
     }
 
-    fn after_answer(&mut self, now: u64, relay: usize) {
-        let _ = relay;
-        let before = self.home_marker();
+    fn after_answer(&mut self, now: u64, before: Option<usize>) {
         self.update_class(now);
         let home = self.net.home();
         if home != before {
             if let Some(h) = home {
                 self.notice(Notice::Home(h));
+                // The home carrier is dialed as soon as the home is known.
+                let ctx = self.ctx(h);
+                let act = self
+                    .rly
+                    .get_mut(h)
+                    .and_then(|r| r.link.want_dial(now, &mut self.shared, &ctx));
+                if let Some(a) = act {
+                    self.act_pub(now, h, a);
+                }
             }
             self.next_publish = now;
         }
-    }
-
-    const fn home_marker(&self) -> Option<usize> {
-        self.net.home()
     }
 
     pub(super) fn dns_answer_pub(&mut self, peer: &NodeId, answer: &DnsAnswer<'_>) {

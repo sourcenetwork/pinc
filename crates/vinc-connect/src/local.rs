@@ -89,6 +89,48 @@ impl From<WireError> for BeaconError {
     }
 }
 
+/// Write everything of a beacon but its signature into `out`; returns the length of those bytes, which the
+/// signature covers. Sign `out[..len]` with the node's key and complete the beacon with [`finish`].
+///
+/// # Errors
+/// [`BeaconError::TooLong`] for too many addresses or hint bytes, [`BeaconError::Wire`] if `out` is short.
+pub fn prepare(
+    node: &NodeId,
+    public_key: &[u8],
+    seq: u64,
+    addrs: &[SocketAddr],
+    hint: &[u8],
+    out: &mut [u8],
+) -> Result<usize, BeaconError> {
+    if addrs.len() > MAX_ADDRS || hint.len() > MAX_HINT {
+        return Err(BeaconError::TooLong);
+    }
+    let mut w = Writer::new(out);
+    w.put_slice(MAGIC)?;
+    node::write(&mut w, node)?;
+    w.put_u64(seq)?;
+    w.put_u8(u8::try_from(addrs.len()).map_err(|_| BeaconError::TooLong)?)?;
+    for a in addrs {
+        write_addr(&mut w, a)?;
+    }
+    w.put_u8(u8::try_from(hint.len()).map_err(|_| BeaconError::TooLong)?)?;
+    w.put_slice(hint)?;
+    w.put_slice(public_key)?;
+    Ok(w.written().len())
+}
+
+/// Append `signature` to the `signed` bytes [`prepare`] wrote; returns the beacon's length.
+///
+/// # Errors
+/// [`BeaconError::Wire`] if `out` is short.
+pub fn finish(out: &mut [u8], signed: usize, signature: &[u8]) -> Result<usize, BeaconError> {
+    let end = signed + signature.len();
+    out.get_mut(signed..end)
+        .ok_or(WireError::BufferTooSmall { needed: end })?
+        .copy_from_slice(signature);
+    Ok(end)
+}
+
 /// Sign a beacon for `keypair` and write it into `out`; returns its length.
 ///
 /// # Errors
@@ -101,23 +143,16 @@ pub fn sign(
     hint: &[u8],
     out: &mut [u8],
 ) -> Result<usize, BeaconError> {
-    if addrs.len() > MAX_ADDRS || hint.len() > MAX_HINT {
-        return Err(BeaconError::TooLong);
-    }
-    let mut w = Writer::new(out);
-    w.put_slice(MAGIC)?;
-    node::write(&mut w, &keypair.node_id())?;
-    w.put_u64(seq)?;
-    w.put_u8(u8::try_from(addrs.len()).map_err(|_| BeaconError::TooLong)?)?;
-    for a in addrs {
-        write_addr(&mut w, a)?;
-    }
-    w.put_u8(u8::try_from(hint.len()).map_err(|_| BeaconError::TooLong)?)?;
-    w.put_slice(hint)?;
-    let body = w.written().len();
-    let tail = out.get_mut(body..).ok_or(WireError::BufferTooSmall { needed: 0 })?;
-    let pk = keypair.public_key(tail).map_err(|_| BeaconError::Signature)?;
-    let signed = body + pk;
+    let mut pk = [0u8; MAX_PUBLIC_KEY_LEN];
+    let n = keypair.public_key(&mut pk).map_err(|_| BeaconError::Signature)?;
+    let signed = prepare(
+        &keypair.node_id(),
+        pk.get(..n).unwrap_or_default(),
+        seq,
+        addrs,
+        hint,
+        out,
+    )?;
     let (msg, sig_out) = out
         .split_at_mut_checked(signed)
         .ok_or(WireError::BufferTooSmall { needed: 0 })?;

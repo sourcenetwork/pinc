@@ -626,6 +626,42 @@ pub enum Offer {
     Refused,
 }
 
+/// The frames a [`BatchBuilder`] holds so far, kept apart from its buffer so a host can resume the same batch on a
+/// later call.
+#[derive(Debug, Clone, Copy)]
+pub struct BatchState {
+    used: usize,
+    lens: [u16; BATCH_MAX_FRAMES],
+    count: usize,
+}
+
+impl Default for BatchState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BatchState {
+    /// An empty batch.
+    pub const fn new() -> Self {
+        Self {
+            used: 0,
+            lens: [0; BATCH_MAX_FRAMES],
+            count: 0,
+        }
+    }
+
+    /// Whether no frame was accepted.
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// How many frames were accepted.
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+}
+
 /// Builds one record from frames queued back to back for one carrier.
 ///
 /// Rules: at most [`BATCH_MAX_FRAMES`] frames and [`BATCH_MAX_BYTES`] bytes of frames, and a long-header packet is
@@ -634,9 +670,7 @@ pub enum Offer {
 #[derive(Debug)]
 pub struct BatchBuilder<'o> {
     out: &'o mut [u8],
-    used: usize,
-    lens: [u16; BATCH_MAX_FRAMES],
-    count: usize,
+    st: BatchState,
 }
 
 impl<'o> BatchBuilder<'o> {
@@ -644,10 +678,18 @@ impl<'o> BatchBuilder<'o> {
     pub const fn new(out: &'o mut [u8]) -> Self {
         Self {
             out,
-            used: 0,
-            lens: [0; BATCH_MAX_FRAMES],
-            count: 0,
+            st: BatchState::new(),
         }
+    }
+
+    /// Continue the batch `st` describes in `out`, the buffer it was built in.
+    pub const fn resume(out: &'o mut [u8], st: BatchState) -> Self {
+        Self { out, st }
+    }
+
+    /// The state to resume from.
+    pub const fn state(&self) -> BatchState {
+        self.st
     }
 
     /// Offer the next frame.
@@ -655,34 +697,34 @@ impl<'o> BatchBuilder<'o> {
     /// # Errors
     /// The frame's own encode errors; a frame that merely does not fit is [`Offer::Refused`].
     pub fn offer(&mut self, frame: &Frame<'_>) -> Result<Offer, FrameError> {
-        if matches!(frame, Frame::Batch(_)) || frame.is_long_header() || self.count >= BATCH_MAX_FRAMES {
+        if matches!(frame, Frame::Batch(_)) || frame.is_long_header() || self.st.count >= BATCH_MAX_FRAMES {
             return Ok(Offer::Refused);
         }
-        let start = BATCH_HEAD_MAX.saturating_add(self.used);
+        let start = BATCH_HEAD_MAX.saturating_add(self.st.used);
         let room = self.out.get_mut(start..).ok_or(FrameError::NoRoom)?;
         let n = match frame.encode(room) {
             Ok(n) => n,
-            Err(FrameError::Wire(WireError::BufferTooSmall { .. })) if self.count > 0 => return Ok(Offer::Refused),
+            Err(FrameError::Wire(WireError::BufferTooSmall { .. })) if self.st.count > 0 => return Ok(Offer::Refused),
             Err(e) => return Err(e),
         };
-        if self.used + n > BATCH_MAX_BYTES {
+        if self.st.used + n > BATCH_MAX_BYTES {
             return Ok(Offer::Refused);
         }
-        let slot = self.lens.get_mut(self.count).ok_or(FrameError::NoRoom)?;
+        let slot = self.st.lens.get_mut(self.st.count).ok_or(FrameError::NoRoom)?;
         *slot = u16::try_from(n).map_err(|_| FrameError::NoRoom)?;
-        self.used += n;
-        self.count += 1;
+        self.st.used += n;
+        self.st.count += 1;
         Ok(Offer::Added)
     }
 
     /// How many frames were accepted.
     pub const fn len(&self) -> usize {
-        self.count
+        self.st.count
     }
 
     /// Whether no frame was accepted.
     pub const fn is_empty(&self) -> bool {
-        self.count == 0
+        self.st.count == 0
     }
 
     /// Close the batch and return the record bytes: the single frame as is, or a BATCH frame. `None` if empty.
@@ -690,18 +732,18 @@ impl<'o> BatchBuilder<'o> {
     /// # Errors
     /// [`FrameError::NoRoom`] if the buffer cannot hold the header.
     pub fn finish(self) -> Result<Option<&'o [u8]>, FrameError> {
-        if self.count == 0 {
+        if self.st.count == 0 {
             return Ok(None);
         }
         let body_at = BATCH_HEAD_MAX;
-        if self.count == 1 {
-            return Ok(self.out.get(body_at..body_at + self.used));
+        if self.st.count == 1 {
+            return Ok(self.out.get(body_at..body_at + self.st.used));
         }
         let mut head = [0u8; BATCH_HEAD_MAX];
         let mut w = Writer::new(&mut head);
         w.put_u8(kind::BATCH)?;
-        w.put_u8(u8::try_from(self.count).map_err(|_| FrameError::NoRoom)?)?;
-        for len in self.lens.iter().take(self.count) {
+        w.put_u8(u8::try_from(self.st.count).map_err(|_| FrameError::NoRoom)?)?;
+        for len in self.st.lens.iter().take(self.st.count) {
             w.put_varint(u64::from(*len))?;
         }
         let head_len = w.written().len();
@@ -710,6 +752,6 @@ impl<'o> BatchBuilder<'o> {
             .get_mut(start..body_at)
             .ok_or(FrameError::NoRoom)?
             .copy_from_slice(w.written());
-        Ok(self.out.get(start..body_at + self.used))
+        Ok(self.out.get(start..body_at + self.st.used))
     }
 }

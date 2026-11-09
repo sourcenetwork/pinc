@@ -15,7 +15,7 @@
     clippy::many_single_char_names
 )]
 
-use vinc_connect::client::link::{Act, Ctx, Link, Shared, State, check_wait, dial_wait, lease_keep, rule};
+use vinc_connect::client::link::{Act, Ctx, Link, Pulse, Shared, State, check_wait, dial_wait, lease_keep, rule};
 
 const S: u64 = 1_000_000_000;
 
@@ -294,11 +294,68 @@ fn restart_defers_the_home_dial_600ms_unless_a_frame_waits() {
 }
 
 #[test]
-fn pulse_asks_for_a_check_only_on_an_open_quiet_carrier() {
+fn pulse_starts_a_check_on_an_open_carrier_and_reports_a_closed_one() {
     let (mut l, _sh) = open_link(0);
-    assert!(l.pulse());
-    l.check(1, &ctx(), false);
-    assert!(!l.pulse());
-    let l = Link::new();
-    assert!(!l.pulse());
+    assert_eq!(l.pulse(1, &ctx()), Pulse::Ping);
+    assert_eq!(l.pulse(2, &ctx()), Pulse::Waiting, "a check is already outstanding");
+    l.heard(3);
+    assert_eq!(l.pulse(4, &ctx()), Pulse::Ping, "the answer cleared it");
+    assert_eq!(Link::new().pulse(0, &ctx()), Pulse::Closed);
+}
+
+#[test]
+fn the_first_silent_death_after_an_idle_gap_sets_the_lease_from_unknown() {
+    let (mut l, mut sh) = open_link(0);
+    assert_eq!(sh.lease_hi, 0);
+    assert_eq!(l.check(40 * S, &ctx(), false), Some(Act::Ping));
+    assert_eq!(l.tick(43 * S, &mut sh, &ctx()), Some(Act::Close));
+    assert_eq!(sh.lease_hi, 40 * S);
+    // a gap under the floor teaches nothing
+    let (mut l, mut sh) = open_link(0);
+    l.check(14 * S, &ctx(), false);
+    l.tick(17 * S, &mut sh, &ctx());
+    assert_eq!(sh.lease_hi, 0);
+}
+
+#[test]
+fn keep_learn_halves_the_silence_a_dead_carrier_endured_down_to_the_floor() {
+    let learn = |sh: &mut Shared, silent: u64| {
+        let mut l = Link::new();
+        let mut c = ctx();
+        c.udp_any = true;
+        l.want_dial(0, sh, &c);
+        l.opened(0);
+        assert_eq!(l.tick(silent, sh, &c), Some(Act::Check));
+        assert_eq!(l.check(silent, &c, false), Some(Act::Ping));
+        assert_eq!(l.tick(silent + 3 * S, sh, &c), Some(Act::Close));
+    };
+    // off: nothing is learned
+    let mut sh = Shared::default();
+    learn(&mut sh, 65 * S);
+    assert_eq!(sh.keep_iv, 0);
+    // on: half of the silence, then half of the smaller of the two
+    let mut sh = Shared {
+        keep_learn: true,
+        ..Shared::default()
+    };
+    learn(&mut sh, 65 * S);
+    assert_eq!(sh.keep_iv, (65 * S + 3 * S) / 2);
+    let first = sh.keep_iv;
+    learn(&mut sh, 30 * S);
+    assert_eq!(sh.keep_iv, ((30 * S + 3 * S).min(first)) / 2);
+    // never below 15 s
+    for _ in 0..4 {
+        learn(&mut sh, 20 * S);
+    }
+    assert_eq!(sh.keep_iv, 15 * S);
+    // the learned interval caps every keepalive wait, home or not
+    let (mut l, _) = open_link(0);
+    let c = ctx();
+    assert_eq!(l.next_deadline(0, &sh, &c), Some(15 * S));
+    let other = Ctx {
+        home: false,
+        rides: true,
+        ..c
+    };
+    assert_eq!(l.next_deadline(0, &sh, &other), Some(15 * S));
 }

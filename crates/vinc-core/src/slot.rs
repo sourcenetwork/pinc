@@ -200,6 +200,9 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) client: bool,
     pub(crate) state: State,
     pub(crate) role: Role,
+    /// The connectivity layer sends this session's keepalive (CARRIER_PULSE), and one is due now.
+    pub(crate) pulse: bool,
+    pub(crate) pulse_due: bool,
     pub(crate) gossip: bool,
     /// A sub-session open is queued in this session and has not left yet.
     pub(crate) ctrl_pending: bool,
@@ -260,6 +263,8 @@ impl<const NP: usize> Meta<NP> {
         client: false,
         state: State::Handshaking,
         role: Role::Other,
+        pulse: false,
+        pulse_due: false,
         gossip: false,
         ctrl_pending: false,
         created: 0,

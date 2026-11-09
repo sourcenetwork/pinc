@@ -3,8 +3,16 @@
 //! The tests themselves are the `[[test]]` targets of this package (`tests/*.rs`); this library holds what several of
 //! them use.
 
+mod connect_client;
+mod connect_host;
+mod connect_relay_node;
+mod connect_world;
 mod core_net;
 mod link;
+pub use connect_client::*;
+pub use connect_host::*;
+pub use connect_relay_node::*;
+pub use connect_world::*;
 pub use core_net::*;
 mod pair;
 pub use link::*;

@@ -192,12 +192,18 @@ pub struct RecordFields<'a> {
     pub hints: &'a [u8],
 }
 
-/// Sign `fields` with `keypair` and write the record into `out`; returns its length.
+/// Write everything of a record but its signature into `out`: the fields, then the public key of `node`. Returns
+/// the length of those bytes, which are what the signature covers. A host whose key stays in a store signs
+/// `out[..len]` there and completes the record with [`finish`].
 ///
 /// # Errors
-/// [`RecordError::TooManyAddrs`], [`RecordError::HintsTooLong`], [`RecordError::Wire`] if `out` is short, and
-/// [`RecordError::Signature`] if the key pair refuses to sign.
-pub fn sign(keypair: &Keypair, fields: &RecordFields<'_>, out: &mut [u8]) -> Result<usize, RecordError> {
+/// [`RecordError::TooManyAddrs`], [`RecordError::HintsTooLong`] and [`RecordError::Wire`] if `out` is short.
+pub fn prepare(
+    node: &NodeId,
+    public_key: &[u8],
+    fields: &RecordFields<'_>,
+    out: &mut [u8],
+) -> Result<usize, RecordError> {
     if fields.addrs.len() > MAX_ADDRS {
         return Err(RecordError::TooManyAddrs);
     }
@@ -206,7 +212,7 @@ pub fn sign(keypair: &Keypair, fields: &RecordFields<'_>, out: &mut [u8]) -> Res
     }
     let mut w = Writer::new(out);
     w.put_slice(MAGIC)?;
-    node::write(&mut w, &keypair.node_id())?;
+    node::write(&mut w, node)?;
     node::write(&mut w, &fields.home)?;
     w.put_u64(fields.seq)?;
     w.put_u8(fields.reach as u8)?;
@@ -216,10 +222,31 @@ pub fn sign(keypair: &Keypair, fields: &RecordFields<'_>, out: &mut [u8]) -> Res
     }
     w.put_u8(u8::try_from(fields.hints.len()).map_err(|_| RecordError::HintsTooLong)?)?;
     w.put_slice(fields.hints)?;
-    let body = w.written().len();
-    let tail = out.get_mut(body..).ok_or(WireError::BufferTooSmall { needed: 0 })?;
-    let pk_len = keypair.public_key(tail).map_err(RecordError::Signature)?;
-    let signed = body + pk_len;
+    w.put_slice(public_key)?;
+    Ok(w.written().len())
+}
+
+/// Append `signature` to the `signed` bytes [`prepare`] wrote; returns the record's length.
+///
+/// # Errors
+/// [`RecordError::Wire`] if `out` is short.
+pub fn finish(out: &mut [u8], signed: usize, signature: &[u8]) -> Result<usize, RecordError> {
+    let end = signed + signature.len();
+    out.get_mut(signed..end)
+        .ok_or(WireError::BufferTooSmall { needed: end })?
+        .copy_from_slice(signature);
+    Ok(end)
+}
+
+/// Sign `fields` with `keypair` and write the record into `out`; returns its length.
+///
+/// # Errors
+/// [`RecordError::TooManyAddrs`], [`RecordError::HintsTooLong`], [`RecordError::Wire`] if `out` is short, and
+/// [`RecordError::Signature`] if the key pair refuses to sign.
+pub fn sign(keypair: &Keypair, fields: &RecordFields<'_>, out: &mut [u8]) -> Result<usize, RecordError> {
+    let mut pk = [0u8; MAX_PUBLIC_KEY_LEN];
+    let n = keypair.public_key(&mut pk).map_err(RecordError::Signature)?;
+    let signed = prepare(&keypair.node_id(), pk.get(..n).unwrap_or_default(), fields, out)?;
     let (msg, sig_out) = out
         .split_at_mut_checked(signed)
         .ok_or(WireError::BufferTooSmall { needed: 0 })?;

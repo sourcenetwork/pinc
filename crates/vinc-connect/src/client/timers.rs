@@ -1,16 +1,12 @@
 //! The timers of [`Connectivity`]: carrier links, lookups, address discovery, the record, beacons and suspension.
 
 use vinc_core::LATE_START;
-use vinc_crypto::{Keypair, Provider};
+use vinc_crypto::Provider;
 use vinc_security::Env;
 
 use super::conn::{Connectivity, Notice};
-use super::link::State;
 use super::netcheck::{HOME_RETRY_NS, HomeStep};
-use crate::carrier::Frame;
-use crate::record::{self, MAX_ADDRS, RecordFields};
-use crate::relay::datagram::Datagram;
-use crate::relay::{rule, sleep};
+use crate::relay::rule;
 
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
     /// The first instant [`Connectivity::tick`] has something to do.
@@ -26,7 +22,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
         for d in [
             self.lookups.next_deadline(),
-            Some(self.next_publish).filter(|p| *p != 0 && self.class.is_some()),
+            Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.class.is_some()),
             Some(self.duty.deadline()),
         ]
         .into_iter()
@@ -49,8 +45,13 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
     }
 
-    /// Run every timer at `now`. `signer` publishes the record (a software key; see the crate docs).
-    pub fn tick(&mut self, now: u64, env: &mut Env<'_, P>, signer: Option<(&Keypair, u64)>) {
+    /// Run every timer at `now`. `wall_ms` is the node's wall clock in milliseconds; with it the layer asks the host
+    /// to sign its record ([`Connectivity::sign_request`]), without it nothing is signed.
+    pub fn tick(&mut self, now: u64, env: &mut Env<'_, P>, wall_ms: Option<u64>) {
+        self.clock = self.clock.max(now);
+        if wall_ms.is_some() {
+            self.sign.wall_ms = wall_ms;
+        }
         for i in 0..R {
             if self.rly.get(i).is_none_or(|r| r.cfg.is_none()) {
                 continue;
@@ -90,47 +91,27 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         for p in due.into_iter().flatten() {
             self.lookup(now, &p);
         }
-        self.publish(now, signer);
+        self.publish(now);
+        self.start_jobs(now);
     }
 
-    /// Publish the signed record on the home carrier when it is due (the class or home changed, the carrier opened,
-    /// or 1800 s passed).
-    fn publish(&mut self, now: u64, signer: Option<(&Keypair, u64)>) {
-        let (Some((kp, wall_ms)), Some(home), Some(class)) = (signer, self.net.home(), self.class) else {
-            return;
-        };
-        if self.next_publish == 0 || now < self.next_publish {
+    /// Ask for the signed record when it is due (the class or home changed, the carrier opened, or 1800 s passed)
+    /// and the home carrier is open.
+    fn publish(&mut self, now: u64) {
+        if self.next_publish == 0
+            || self.next_publish == u64::MAX
+            || now < self.next_publish
+            || self.sign.record_wanted()
+        {
             return;
         }
-        let Some(home_id) = self.relay_cfg(home).map(|c| c.id) else {
-            return;
-        };
-        let mut addrs = [self
-            .local
-            .iter()
-            .flatten()
-            .next()
-            .copied()
-            .unwrap_or(self.me_addr_pub()); MAX_ADDRS];
-        let n = self.candidates(&mut addrs);
-        let fields = RecordFields {
-            home: home_id,
-            seq: wall_ms,
-            reach: class,
-            addrs: addrs.get(..n).unwrap_or_default(),
-            hints: &[],
-        };
-        let mut buf = [0u8; record::MAX_RECORD_LEN];
-        let Ok(len) = record::sign(kp, &fields, &mut buf) else {
+        let (Some(home), Some(_)) = (self.net.home(), self.class) else {
             return;
         };
         if self.rly.get(home).is_some_and(|r| r.link.is_open()) {
-            let frame = Frame::Publish {
-                record: buf.get(..len).unwrap_or_default(),
-            };
-            if self.frame_to(now, home, &frame) {
-                self.next_publish = now.saturating_add(rule::RECORD_REPUBLISH_NS);
-            }
+            self.sign.want_record();
+            // Disarmed until the signature is answered.
+            self.next_publish = u64::MAX;
         }
     }
 
@@ -140,35 +121,25 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// The node is about to be suspended: tell every relay with an open carrier, twice over UDP, so the carrier close
     /// that follows is not taken as a crash; then the carriers close. `wall_ms` is the node's clock in milliseconds.
-    pub fn suspend(&mut self, now: u64, kp: &Keypair, wall_ms: u64) {
-        let mut notice = [0u8; sleep::MAX_LEN];
-        for i in 0..R {
-            let Some(cfg) = self.relay_cfg(i) else { continue };
-            if !self.rly.get(i).is_some_and(|r| r.link.is_open()) {
-                continue;
-            }
-            if let (Some(udp), Ok(n)) = (cfg.udp, sleep::sign(kp, &cfg.id, wall_ms, &mut notice)) {
-                let d = Datagram::Sleep {
-                    notice: notice.get(..n).unwrap_or_default(),
-                };
-                for _ in 0..2 {
-                    self.enqueue_udp_pub(udp, &d);
-                }
+    /// The notices are signed by the host's key ([`Connectivity::sign_request`]); the carriers close once all of them
+    /// were answered.
+    pub fn suspend(&mut self, now: u64, wall_ms: u64) {
+        let mut relays = 0u32;
+        for i in 0..R.min(32) {
+            if self.relay_cfg(i).is_some_and(|c| c.udp.is_some()) && self.rly.get(i).is_some_and(|r| r.link.is_open()) {
+                relays |= 1 << i;
             }
         }
-        self.hold_close = true;
-        for i in 0..R {
-            if self.rly.get(i).is_some_and(|r| r.link.state() != State::Down) {
-                self.close_pub(i);
-            }
-        }
-        let _ = now;
+        self.sign.wall_ms = Some(wall_ms);
+        self.sign.begin_suspend(relays, wall_ms);
+        self.start_jobs(now);
+        self.maybe_close_for_suspend(now);
     }
 
     /// The node resumed. Carriers that the system closed during the suspension are dialed again; open ones are
     /// checked at once.
     pub fn resume(&mut self, now: u64) {
-        self.hold_close = false;
+        self.sign.cancel_suspend();
         self.net.restart();
         self.next_probe = now.saturating_add(10_000_000);
         self.duty.restart(now);

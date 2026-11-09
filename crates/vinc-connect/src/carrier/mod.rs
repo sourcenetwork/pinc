@@ -26,7 +26,7 @@ pub mod ws;
 
 pub use alias::{ALIAS_MAX, AliasTable, Assigned};
 pub use frame::{
-    BATCH_MAX_BYTES, BATCH_MAX_FRAMES, Batch, BatchBuilder, DnsAnswer, Frame, FrameError, MAX_FRAME_LEN,
+    BATCH_MAX_BYTES, BATCH_MAX_FRAMES, Batch, BatchBuilder, BatchState, DnsAnswer, Frame, FrameError, MAX_FRAME_LEN,
     MAX_PACKET_LEN, Offer,
 };
 pub use node::NODE_ID_LEN;

@@ -56,7 +56,12 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         if self.nodes[n as usize].state != NodeState::Up {
             return;
         }
-        let input = StreamInput::Record(h, data);
+        self.deliver_stream_input(t, n, StreamInput::Record(h, data));
+    }
+
+    /// The node gets the input now, or when it stops being busy. Events and records take the same path, so a record
+    /// never overtakes the event that opened its stream.
+    pub(crate) fn deliver_stream_input(&mut self, t: Time, n: u32, input: StreamInput) {
         let busy = self.nodes[n as usize].busy_until;
         if busy > t {
             let inc = self.nodes[n as usize].incarnation;

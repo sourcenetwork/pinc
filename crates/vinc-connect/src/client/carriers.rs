@@ -5,9 +5,9 @@ use vinc_security::{ConnId, CreditRecord, Env, InitiatorParams, KeyRequest, KeyR
 
 use super::conn::{Connectivity, Io, Kind, Notice, Queued, pop, push};
 use super::link::{Act, Ctx, State};
-use crate::carrier::Frame;
-use crate::carrier::frame::{DnsAnswer, MAX_PACKET_LEN};
+use crate::carrier::frame::{BatchBuilder, BatchState, DnsAnswer, MAX_PACKET_LEN, Offer};
 use crate::carrier::session::{ALPN, CarrierError, Poll, ProtectedCarrier};
+use crate::carrier::{AliasTable, Frame};
 
 /// What one polled frame asks of the connectivity layer, copied out so the carrier borrow ends.
 enum Got {
@@ -43,16 +43,6 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// The next stream request for the host.
     pub fn poll_io(&mut self) -> Option<Io> {
-        // A suspending node's sleep notices leave before its carriers close.
-        if self.hold_close && self.udp_q.iter().any(Option::is_some) {
-            return self
-                .io
-                .iter()
-                .flatten()
-                .find(|i| matches!(i, Io::Open { .. }))
-                .copied()
-                .and_then(|_| pop(&mut self.io));
-        }
         pop(&mut self.io)
     }
 
@@ -87,13 +77,20 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             Act::Dial => self.start_dial(i),
             Act::Close => {
                 self.lookups.clear();
+                if let Some(r) = self.rly.get_mut(i)
+                    && !r.carrier.as_ref().is_some_and(ProtectedCarrier::is_open)
+                {
+                    // The dial watchdog: a dial that never opened tries the other kind next.
+                    r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
+                }
                 self.close_stream(i);
             }
             Act::Ping => {
                 self.frame_to(now, i, &Frame::Ping);
             }
             Act::Check => {
-                let ridden = false;
+                // CHECK_RIDE: a session packet that left on this carrier in this very step carries the check.
+                let ridden = self.rly.get(i).is_some_and(|r| r.etx == Some(now));
                 let ctx = self.ctx(i);
                 if let Some(Act::Ping) = self.rly.get_mut(i).and_then(|r| r.link.check(now, &ctx, ridden)) {
                     self.frame_to(now, i, &Frame::Ping);
@@ -102,38 +99,124 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
     }
 
+    /// End the stream of `i`: the carrier is dropped, the host is asked to close the stream and the link learns of
+    /// it. A link that is already down (it was reset, its retry is scheduled) is left as it is.
     fn close_stream(&mut self, i: usize) {
+        let now = self.clock;
+        let mut went_down = false;
         if let Some(r) = self.rly.get_mut(i) {
+            let was = r.link.state();
+            if was != State::Down {
+                if was != State::Open {
+                    r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
+                }
+                r.link.closed(now);
+                went_down = was == State::Open;
+            }
             r.carrier = None;
             r.out_len = 0;
+            r.bst = BatchState::new();
             r.keyreq = false;
+        }
+        if went_down {
+            self.notice(Notice::CarrierDown(i));
         }
         self.push_io(Io::Close { relay: i });
     }
 
     // ---- frames out ----
 
-    /// Seal `frame` onto the carrier of `i`. Returns false if the carrier is not open or the buffer is full.
+    /// Queue `frame` for the carrier of `i`. Frames queued back to back join one batch that leaves as a single record
+    /// (up to 64 frames and 16 KiB); a long-header packet closes the batch and leaves alone. Returns false if the
+    /// carrier is not open or the frame was dropped (counted in `dropped`).
     pub(super) fn frame_to(&mut self, now: u64, i: usize, frame: &Frame<'_>) -> bool {
-        let Some(r) = self.rly.get_mut(i) else { return false };
-        let Some(c) = r.carrier.as_mut() else { return false };
-        if !c.is_open() {
+        if !self
+            .rly
+            .get(i)
+            .and_then(|r| r.carrier.as_ref())
+            .is_some_and(ProtectedCarrier::is_open)
+        {
             return false;
         }
-        let Some(slot) = r.out.get_mut(r.out_len..) else {
+        if let Some(r) = self.rly.get_mut(i) {
+            r.link.wrote(now);
+        }
+        match self.offer(i, frame) {
+            Ok(Offer::Added) => return true,
+            Ok(Offer::Refused) => {}
+            Err(_) => {
+                self.dropped += 1;
+                return false;
+            }
+        }
+        if !self.flush_batch(i) {
+            self.dropped += 1;
+            return false;
+        }
+        if let Ok(Offer::Added) = self.offer(i, frame) {
+            return true;
+        }
+        self.seal_alone(i, frame)
+    }
+
+    fn offer(&mut self, i: usize, frame: &Frame<'_>) -> Result<Offer, crate::carrier::FrameError> {
+        let r = self.rly.get_mut(i).ok_or(crate::carrier::FrameError::NoRoom)?;
+        let mut b = BatchBuilder::resume(&mut r.bbuf, r.bst);
+        let o = b.offer(frame)?;
+        if o == Offer::Added {
+            r.bst = b.state();
+        }
+        Ok(o)
+    }
+
+    fn seal_alone(&mut self, i: usize, frame: &Frame<'_>) -> bool {
+        let Some(r) = self.rly.get_mut(i) else { return false };
+        let (Some(c), Some(slot)) = (r.carrier.as_mut(), r.out.get_mut(r.out_len..)) else {
+            self.dropped += 1;
             return false;
         };
         match c.seal(&self.prov, frame, slot) {
             Ok(n) => {
                 r.out_len += n;
-                r.link.wrote(now);
                 true
             }
-            Err(CarrierError::NoRoom) => {
+            Err(e) => {
                 self.dropped += 1;
+                if e.is_fatal() {
+                    self.close_stream(i);
+                }
                 false
             }
+        }
+    }
+
+    /// Seal the waiting batch of the carrier of `i` as one record. Returns true if nothing is left waiting; false
+    /// means the write buffer was full (the batch stays) or the carrier failed.
+    pub(super) fn flush_batch(&mut self, i: usize) -> bool {
+        let Some(r) = self.rly.get_mut(i) else { return false };
+        if r.bst.is_empty() {
+            return true;
+        }
+        let Some(c) = r.carrier.as_mut() else {
+            r.bst = BatchState::new();
+            return false;
+        };
+        let Ok(Some(plain)) = BatchBuilder::resume(&mut r.bbuf, r.bst).finish() else {
+            r.bst = BatchState::new();
+            return false;
+        };
+        let Some(slot) = r.out.get_mut(r.out_len..) else {
+            return false;
+        };
+        match c.seal_bytes(&self.prov, plain, slot) {
+            Ok(n) => {
+                r.out_len += n;
+                r.bst = BatchState::new();
+                true
+            }
+            Err(CarrierError::NoRoom) => false,
             Err(e) => {
+                r.bst = BatchState::new();
                 if e.is_fatal() {
                     self.close_stream(i);
                 }
@@ -156,28 +239,22 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.act(now, i, a);
         }
         if self.rly.get(i).is_some_and(|r| r.link.is_open()) {
-            let sent = {
+            let sent = if relay_id.as_ref() == Some(dst) {
+                self.frame_to(now, i, &Frame::SelfSend { packet })
+            } else {
                 let Some(r) = self.rly.get_mut(i) else { return };
-                if relay_id.as_ref() == Some(dst) {
-                    false
-                } else {
-                    let f = r.ta.send_frame(dst, 0, packet);
-                    // sealing needs the carrier and the output buffer, both in `r`
-                    let Some(c) = r.carrier.as_mut() else { return };
-                    match r.out.get_mut(r.out_len..).map(|s| c.seal(&self.prov, &f, s)) {
-                        Some(Ok(n)) => {
-                            r.out_len += n;
-                            r.link.wrote(now);
-                            true
-                        }
-                        _ => false,
-                    }
+                let f = r.ta.send_frame(dst, 0, packet);
+                let ok = self.frame_to(now, i, &f);
+                if ok && let Some(r) = self.rly.get_mut(i) {
+                    r.etx = Some(now);
                 }
+                if !ok && let Some(r) = self.rly.get_mut(i) {
+                    // The relay never learnt an alias the frame would have defined.
+                    r.ta = AliasTable::new();
+                }
+                ok
             };
             if sent {
-                return;
-            }
-            if relay_id.as_ref() == Some(dst) && self.frame_to(now, i, &Frame::SelfSend { packet }) {
                 return;
             }
         }
@@ -226,6 +303,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// Take the bytes the carrier of `relay` wants written to its stream; returns how many were copied into `buf`.
     /// Call until it returns 0.
     pub fn poll_stream(&mut self, relay: usize, buf: &mut [u8]) -> usize {
+        self.flush_batch(relay);
         let Some(r) = self.rly.get_mut(relay) else { return 0 };
         let n = buf.len().min(r.out_len);
         if let (Some(d), Some(s)) = (buf.get_mut(..n), r.out.get(..n)) {
@@ -238,6 +316,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// The stream of `relay` opened: start the carrier handshake toward the relay's identity.
     pub fn stream_opened(&mut self, now: u64, env: &mut Env<'_, P>, relay: usize) {
+        self.clock = self.clock.max(now);
         let Some(id) = self.rly.get(relay).and_then(|r| r.cfg).map(|c| c.id) else {
             return;
         };
@@ -258,6 +337,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 if let Some(r) = self.rly.get_mut(relay) {
                     r.carrier = Some(c);
                     r.out_len = 0;
+                    r.bst = BatchState::new();
                     r.keyreq = false;
                 }
                 self.drain_handshake(relay);
@@ -269,10 +349,24 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// The stream of `relay` closed or its dial failed.
     pub fn stream_closed(&mut self, now: u64, relay: usize) {
+        self.clock = self.clock.max(now);
+        let Some(r) = self.rly.get_mut(relay) else { return };
+        if r.link.state() == State::Down {
+            // closed by this side already (a reset or a failed carrier): the retry is scheduled
+            r.carrier = None;
+            return;
+        }
+        self.close_stream_quiet(relay);
+    }
+
+    /// The network ended the stream: no close request goes back to the host.
+    fn close_stream_quiet(&mut self, relay: usize) {
+        let now = self.clock;
         let Some(r) = self.rly.get_mut(relay) else { return };
         let was = r.link.state();
         r.carrier = None;
         r.out_len = 0;
+        r.bst = BatchState::new();
         r.keyreq = false;
         if was != State::Open {
             // A dial that never opened tries the other kind next: UDP, then TCP, then WebSocket.
@@ -287,6 +381,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// Bytes arrived on the stream of `relay`. Returns how many were taken; offer the rest again after answering a
     /// key request ([`Connectivity::key_request`]).
     pub fn stream_data(&mut self, now: u64, env: &mut Env<'_, P>, relay: usize, mut bytes: &[u8]) -> usize {
+        self.clock = self.clock.max(now);
         let total = bytes.len();
         loop {
             let n = match self.rly.get_mut(relay).and_then(|r| r.carrier.as_mut()) {
@@ -309,6 +404,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// Answer the key request of `relay`'s carrier.
     pub fn key_response(&mut self, now: u64, env: &mut Env<'_, P>, relay: usize, resp: KeyResponse<'_>) {
+        self.clock = self.clock.max(now);
         let Some(c) = self.rly.get_mut(relay).and_then(|r| r.carrier.as_mut()) else {
             return;
         };
@@ -452,7 +548,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 let from = self.path_addr(relay, &src);
                 self.deliver(from, scratch.get(..n).unwrap_or_default());
             }
-            Got::Pong => self.heard(now, relay),
+            Got::Pong => {
+                self.heard(now, relay);
+                if let Some(r) = self.rly.get_mut(relay) {
+                    r.pong = true;
+                }
+            }
             Got::Ping => {
                 self.heard(now, relay);
                 self.frame_to(now, relay, &Frame::Pong);

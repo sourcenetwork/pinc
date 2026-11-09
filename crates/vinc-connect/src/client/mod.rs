@@ -32,6 +32,7 @@ pub mod link;
 pub mod lookup;
 pub mod netcheck;
 pub mod punch;
+mod signing;
 mod timers;
 pub mod tunnel;
 

@@ -183,7 +183,7 @@ ep_impl! {
                 self.resume(now, moved);
                 Ok(Value::None)
             }
-            Command::FlightPaths { session, addrs } => {
+            Command::FlightPaths { session, addrs, skip_primary } => {
                 let i = self.live(session)?;
                 let mut ids: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
                 for (d, a) in ids.iter_mut().zip(addrs) {
@@ -203,6 +203,30 @@ ep_impl! {
                     }
                 }
                 conn.set_flight_fanout(list.get(..n).unwrap_or_default());
+                conn.set_flight_skip_primary(skip_primary);
+                self.settle(i, now);
+                Ok(Value::None)
+            }
+            Command::Pulse { session, sent } => {
+                let i = self.live(session)?;
+                if let Some(s) = self.slots.get_mut(i) {
+                    s.m.last_rx = now;
+                    if sent {
+                        s.m.last_tx = now;
+                    }
+                    if let Some(c) = s.conn.as_mut() {
+                        c.pulse(now, sent);
+                    }
+                }
+                self.settle(i, now);
+                Ok(Value::None)
+            }
+            Command::SetPulse { session, on } => {
+                let i = self.live(session)?;
+                if let Some(s) = self.slots.get_mut(i) {
+                    s.m.pulse = on;
+                    s.m.plan.ping_at = None;
+                }
                 self.settle(i, now);
                 Ok(Value::None)
             }
@@ -422,6 +446,7 @@ ep_impl! {
             pto_count: conn.recovery().pto_count(),
             path_validated: path.is_some_and(|p| conn.path_validated(p)),
             heard: path.and_then(|p| conn.path_last_rx(p)).unwrap_or(0),
+            pulse_due: slot.m.pulse_due,
             transport,
         })
     }

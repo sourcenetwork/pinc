@@ -22,7 +22,8 @@ pub const SKEW_MS: u64 = 10_000;
 pub const MAX_LEN: usize = NODE_ID_LEN + 8 + MAX_PUBLIC_KEY_LEN + MAX_SIGNATURE_LEN;
 
 const LABEL: &[u8] = b"vinc-sleep";
-const MSG_LEN: usize = LABEL.len() + 2 * NODE_ID_LEN + 8;
+/// The length of the signed message of a notice.
+pub const MSG_LEN: usize = LABEL.len() + 2 * NODE_ID_LEN + 8;
 
 /// Why a notice was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +46,11 @@ impl From<WireError> for SleepError {
     }
 }
 
-fn message(relay: &NodeId, node: &NodeId, ts: u64) -> Result<[u8; MSG_LEN], WireError> {
+/// The message a notice's signature covers: the relay, the node and the clock.
+///
+/// # Errors
+/// Never fails for the buffer it fills; the error type matches the writer's.
+pub fn message(relay: &NodeId, node: &NodeId, ts: u64) -> Result<[u8; MSG_LEN], WireError> {
     let mut m = [0u8; MSG_LEN];
     let mut w = Writer::new(&mut m);
     w.put_slice(LABEL)?;
@@ -98,23 +103,43 @@ impl<'a> Notice<'a> {
     }
 }
 
+/// Write a notice but for its signature into `out`: the node, the clock and the public key. Returns the length of
+/// those bytes; sign [`message`] with the node's key and complete the notice with [`finish`].
+///
+/// # Errors
+/// [`SleepError::Wire`] if `out` is short.
+pub fn prepare(node: &NodeId, public_key: &[u8], ts_ms: u64, out: &mut [u8]) -> Result<usize, SleepError> {
+    let mut w = Writer::new(out);
+    node::write(&mut w, node)?;
+    w.put_u64(ts_ms)?;
+    w.put_slice(public_key)?;
+    Ok(w.written().len())
+}
+
+/// Append `signature` to the `head` bytes [`prepare`] wrote; returns the notice's length.
+///
+/// # Errors
+/// [`SleepError::Wire`] if `out` is short.
+pub fn finish(out: &mut [u8], head: usize, signature: &[u8]) -> Result<usize, SleepError> {
+    let end = head + signature.len();
+    out.get_mut(head..end)
+        .ok_or(WireError::BufferTooSmall { needed: end })?
+        .copy_from_slice(signature);
+    Ok(end)
+}
+
 /// Sign a notice for `relay` at `ts_ms` and write it into `out`; returns its length.
 ///
 /// # Errors
 /// [`SleepError::Wire`] if `out` is short, [`SleepError::Signature`] if the key pair refuses to sign.
 pub fn sign(keypair: &Keypair, relay: &NodeId, ts_ms: u64, out: &mut [u8]) -> Result<usize, SleepError> {
     let me = keypair.node_id();
-    let mut w = Writer::new(out);
-    node::write(&mut w, &me)?;
-    w.put_u64(ts_ms)?;
-    let head = w.written().len();
-    let tail = out.get_mut(head..).ok_or(WireError::BufferTooSmall { needed: 0 })?;
-    let pk = keypair.public_key(tail).map_err(SleepError::Signature)?;
-    let sig_out = out
-        .get_mut(head + pk..)
-        .ok_or(WireError::BufferTooSmall { needed: 0 })?;
+    let mut pk = [0u8; MAX_PUBLIC_KEY_LEN];
+    let n = keypair.public_key(&mut pk).map_err(SleepError::Signature)?;
+    let head = prepare(&me, pk.get(..n).unwrap_or_default(), ts_ms, out)?;
+    let sig_out = out.get_mut(head..).ok_or(WireError::BufferTooSmall { needed: 0 })?;
     let sig = keypair
         .sign(&message(relay, &me, ts_ms)?, sig_out)
         .map_err(SleepError::Signature)?;
-    Ok(head + pk + sig)
+    Ok(head + sig)
 }

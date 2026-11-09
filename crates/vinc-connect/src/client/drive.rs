@@ -13,9 +13,9 @@
 use core::net::SocketAddr;
 
 use vinc_core::{
-    Answer, Command, CommandError, Endpoint, Event, Query, Role, SessionId, SessionStats, Value, is_relay_addr,
+    Answer, Command, CommandError, Endpoint, Event, Query, Reply, Role, SessionId, SessionStats, Value, is_relay_addr,
 };
-use vinc_crypto::{Keypair, NodeId, Provider};
+use vinc_crypto::{NodeId, Provider};
 use vinc_security::Env;
 use vinc_transport::stream::StreamSource;
 
@@ -23,6 +23,7 @@ use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
 use super::dial::{Cand, HUB_FIRST_ADDRS, HUB_RELAY_DELAY, RelayView, Try, direct_first, select};
 use super::punch::{self, Puncher, Step, View};
 use super::tunnel::{self, HubSession, Rides, ThinSplice, Via};
+use crate::carrier::Frame;
 use crate::carrier::frame::MAX_PACKET_LEN;
 use crate::local::{self, Beacon};
 use crate::record::MAX_ADDRS;
@@ -39,6 +40,7 @@ pub(super) struct Sess {
     handshaking: bool,
     tries: u32,
     relay_at: Option<u64>,
+    pulse_on: bool,
     last_relay: Option<(u8, u64, u64)>,
     primary: Option<SocketAddr>,
 }
@@ -126,6 +128,24 @@ where
 }
 
 drive_impl! {
+    /// Apply `c` to the endpoint. Events its reply carries are kept for [`Connectivity::poll_event`], so the host
+    /// sees every event, including those of commands the layer issued itself.
+    fn cmd<E: Port>(&mut self, ep: &mut E, now: u64, c: Command<'_, E::Src>) -> Result<Reply, CommandError> {
+        let r = ep.command(now, c)?;
+        for e in r.events.iter() {
+            if !super::conn::push(&mut self.evq, *e) {
+                self.dropped += 1;
+            }
+        }
+        Ok(r)
+    }
+
+    /// The next endpoint event a command of the layer produced. The host handles these exactly as the events it
+    /// polls from the endpoint (observe, then act).
+    pub fn poll_event(&mut self) -> Option<Event> {
+        super::conn::pop(&mut self.evq)
+    }
+
     fn sess_mut(&mut self, id: SessionId) -> Option<&mut Sess> {
         self.sess.iter_mut().flatten().find(|s| s.id == id)
     }
@@ -225,17 +245,20 @@ drive_impl! {
             }
         }
         let primary = addrs.first().copied();
-        let rep = ep.command(
+        let rep = self.cmd(ep,
             now,
             Command::Connect { node, alpn, addrs: addrs.get(..na.min(1)).unwrap_or_default(), role },
         )?;
         let Value::Session(id) = rep.value else { return Err(CommandError::NoSession) };
         if na > 1 {
-            let _ = ep.command(now, Command::FlightPaths { session: id, addrs: addrs.get(1..na).unwrap_or_default() });
+            let _ = self.cmd(ep,
+                now,
+                Command::FlightPaths { session: id, addrs: addrs.get(1..na).unwrap_or_default(), skip_primary: false },
+            );
         }
         let mut relay_at = None;
         if direct {
-            let _ = ep.command(now, Command::FirstResend { session: id, delay: HUB_RELAY_DELAY });
+            let _ = self.cmd(ep, now, Command::FirstResend { session: id, delay: HUB_RELAY_DELAY });
             relay_at = Some(now.saturating_add(HUB_RELAY_DELAY));
         }
         let entry = Sess {
@@ -247,6 +270,7 @@ drive_impl! {
             handshaking: true,
             tries: 1,
             relay_at,
+            pulse_on: false,
             last_relay: carried.map(|(r, g)| (r, g, now)),
             primary,
         };
@@ -283,6 +307,7 @@ drive_impl! {
                         handshaking: false,
                         tries: 0,
                         relay_at: None,
+                        pulse_on: false,
                         last_relay: None,
                         primary: None,
                     });
@@ -291,7 +316,7 @@ drive_impl! {
                     s.punch.established(now);
                 }
                 if hub.is_some() && dialer {
-                    let _ = ep.command(now, Command::SetRole { session, role: Role::Hub });
+                    let _ = self.cmd(ep, now, Command::SetRole { session, role: Role::Hub });
                 }
             }
             Event::Closed { session, .. } => {
@@ -307,7 +332,7 @@ drive_impl! {
                 let mut cands = [self.me_addr_pub(); MAX_ADDRS];
                 if let Some(k) = punch::decode(body.get(..n).unwrap_or_default(), &mut cands) {
                     for a in cands.iter().take(k) {
-                        let _ = ep.command(now, Command::Punch { session, addr: *a });
+                        let _ = self.cmd(ep, now, Command::Punch { session, addr: *a });
                     }
                 }
             }
@@ -316,8 +341,9 @@ drive_impl! {
     }
 
     /// Everything the layer does between events: timers, lookups, dials waiting for an address, punching, the first
-    /// flight rules on later tries, beacons and the record. `signer` is the node's key and clock in milliseconds.
-    pub fn drive<E: Port>(&mut self, now: u64, ep: &mut E, env: &mut Env<'_, P>, signer: Option<(&Keypair, u64)>) {
+    /// flight rules on later tries, beacons and the record. `wall_ms` is the node's wall clock in milliseconds; the
+    /// signatures it needs are requested through [`Connectivity::sign_request`].
+    pub fn drive<E: Port>(&mut self, now: u64, ep: &mut E, env: &mut Env<'_, P>, wall_ms: Option<u64>) {
         if let Some(n) = ep.node() {
             self.set_node_rtt(n.tgr.max(n.lrtt));
         }
@@ -334,7 +360,7 @@ drive_impl! {
         for (i, r) in rides.iter().enumerate() {
             self.set_rides(i, *r);
         }
-        self.tick(now, env, signer);
+        self.tick(now, env, wall_ms);
         // DIAL_PRUNE: pending dials keep only the sessions still in handshake; a dial that ended drops its lookup.
         let mut dropped = [None; 8];
         let mut nd = 0;
@@ -367,7 +393,8 @@ drive_impl! {
             self.found_dial(now, ep, &p);
         }
         self.each_session(now, ep);
-        self.beacon(now, signer);
+        self.pulse_pongs(now, ep);
+        self.beacon(now, wall_ms);
     }
 
     fn found_dial<E: Port>(&mut self, now: u64, ep: &mut E, peer: &NodeId) {
@@ -385,7 +412,10 @@ drive_impl! {
                     na += 1;
                 }
             }
-            let _ = ep.command(now, Command::FlightPaths { session: id, addrs: addrs.get(..na).unwrap_or_default() });
+            let _ = self.cmd(ep,
+                now,
+                Command::FlightPaths { session: id, addrs: addrs.get(..na).unwrap_or_default(), skip_primary: false },
+            );
         }
         let _ = f;
     }
@@ -411,7 +441,10 @@ drive_impl! {
                             na += 1;
                         }
                     }
-                    let _ = ep.command(now, Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default() });
+                    let _ = self.cmd(ep,
+                        now,
+                        Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default(), skip_primary: false },
+                    );
                 }
             }
             // B9: later tries of a handshake choose their paths again.
@@ -433,8 +466,60 @@ drive_impl! {
                     self.punch_now(now, ep, &s);
                 }
             }
+            if let Some(h) = s.hub {
+                self.pulse_session(now, ep, &mut s, &st, h);
+            }
             if let Some(slot) = self.sess.get_mut(i) {
                 *slot = Some(s);
+            }
+        }
+    }
+
+    /// Whether the active path of `st` is the relay path to relay `h` itself (a hub session on the hub's carrier).
+    fn rides_own_relay(&self, st: &SessionStats, h: usize) -> bool {
+        st.route.is_some_and(|(_, r)| {
+            self.path_parts(&r)
+                .is_some_and(|(rr, peer)| rr == h && self.relay_cfg(h).is_some_and(|c| c.id == peer))
+        })
+    }
+
+    /// CARRIER_PULSE: a quiet hub session riding its hub's own carrier, with nothing in flight, is kept alive by a
+    /// carrier PING instead of a session PING. The endpoint hands such a session's keepalive over and reports when
+    /// one is due; when the carrier is not open the keepalive goes back to the endpoint.
+    fn pulse_session<E: Port>(&mut self, now: u64, ep: &mut E, s: &mut Sess, st: &SessionStats, h: usize) {
+        let want = st.established
+            && st.dialer
+            && st.role.quiet()
+            && st.pto_count == 0
+            && self.carrier_state(h) == super::link::State::Open
+            && self.rides_own_relay(st, h);
+        if want != s.pulse_on {
+            s.pulse_on = want;
+            let _ = self.cmd(ep, now, Command::SetPulse { session: s.id, on: want });
+        }
+        if want && st.pulse_due {
+            let ctx = self.ctx(h);
+            let pulse = self.rly.get_mut(h).map(|r| r.link.pulse(now, &ctx));
+            if pulse == Some(super::link::Pulse::Ping) {
+                self.frame_to(now, h, &Frame::Ping);
+            }
+            if pulse.is_some_and(|p| p != super::link::Pulse::Closed) {
+                let _ = self.cmd(ep, now, Command::Pulse { session: s.id, sent: true });
+            }
+        }
+    }
+
+    /// CARRIER_PULSE: a PONG on a carrier counts as a datagram heard by the sessions riding it.
+    fn pulse_pongs<E: Port>(&mut self, now: u64, ep: &mut E) {
+        for h in 0..R {
+            if !self.rly.get_mut(h).is_some_and(|r| core::mem::take(&mut r.pong)) {
+                continue;
+            }
+            for i in 0..SESSIONS {
+                let Some(s) = self.sess.get(i).copied().flatten().filter(|s| s.hub == Some(h)) else { continue };
+                if ep.stats(s.id).is_some_and(|st| st.established && self.rides_own_relay(&st, h)) {
+                    let _ = self.cmd(ep, now, Command::Pulse { session: s.id, sent: false });
+                }
             }
         }
     }
@@ -463,14 +548,22 @@ drive_impl! {
         }
         let mut addrs = [self.me_addr_pub(); 16];
         let mut na = 0;
+        let mut primary_kept = false;
         for c in chosen.get(..m).unwrap_or_default() {
             let a = self.to_addr(c, &s.node);
-            if Some(a) != s.primary && let Some(d) = addrs.get_mut(na) {
+            if Some(a) == s.primary {
+                primary_kept = true;
+            } else if let Some(d) = addrs.get_mut(na) {
                 *d = a;
                 na += 1;
             }
         }
-        let _ = ep.command(now, Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default() });
+        // THIN_HS: a try that does not include the primary path leaves it out of the flight.
+        let skip_primary = s.primary.is_some() && !primary_kept && na > 0;
+        let _ = self.cmd(ep,
+            now,
+            Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default(), skip_primary },
+        );
     }
 
     fn punch_now<E: Port>(&mut self, now: u64, ep: &mut E, s: &Sess) {
@@ -478,11 +571,11 @@ drive_impl! {
         let n = self.candidates(&mut cands);
         let mut body = [0u8; vinc_core::REACH_BODY_MAX];
         if let Some(len) = punch::encode(cands.get(..n).unwrap_or_default(), &mut body) {
-            let _ = ep.command(now, Command::ReachOut { session: s.id, body: body.get(..len).unwrap_or_default() });
+            let _ = self.cmd(ep, now, Command::ReachOut { session: s.id, body: body.get(..len).unwrap_or_default() });
         }
         if let Some(f) = self.found(&s.node) {
             for a in f.addrs() {
-                let _ = ep.command(now, Command::Punch { session: s.id, addr: a });
+                let _ = self.cmd(ep, now, Command::Punch { session: s.id, addr: a });
             }
         }
     }
@@ -492,6 +585,7 @@ drive_impl! {
     /// A datagram the endpoint transmitted to `remote`. Returns true if `remote` is a relay path and the datagram was
     /// handled here (sent on a carrier, by the hub tunnel, or held); false means it is an ordinary UDP datagram.
     pub fn route<E: Port>(&mut self, now: u64, ep: &E, remote: SocketAddr, packet: &[u8]) -> bool {
+        self.clock = self.clock.max(now);
         let Some((relay, peer)) = self.path_parts(&remote) else { return is_relay_addr(&remote) };
         let session = self.sess.iter().flatten().find(|s| s.node == peer).map(|s| s.id);
         let st = session.and_then(|id| ep.stats(id));
@@ -598,14 +692,14 @@ drive_impl! {
     // ---- suspension ----
 
     /// The node suspends: sessions sleep, relays get a signed notice, carriers close.
-    pub fn suspend_all<E: Port>(&mut self, now: u64, ep: &mut E, kp: &Keypair, wall_ms: u64) {
-        self.suspend(now, kp, wall_ms);
-        let _ = ep.command(now, Command::Suspend);
+    pub fn suspend_all<E: Port>(&mut self, now: u64, ep: &mut E, wall_ms: u64) {
+        self.suspend(now, wall_ms);
+        let _ = self.cmd(ep, now, Command::Suspend);
     }
 
     /// The node resumes: sessions wake (or redial), carriers come back.
     pub fn resume_all<E: Port>(&mut self, now: u64, ep: &mut E, moved: bool) {
-        let _ = ep.command(now, Command::Resume { moved });
+        let _ = self.cmd(ep, now, Command::Resume { moved });
         self.resume(now);
         for s in self.sess.iter_mut().flatten() {
             s.punch.arm(now.saturating_add(100_000_000));
@@ -614,22 +708,11 @@ drive_impl! {
 
     // ---- local discovery ----
 
-    fn beacon(&mut self, now: u64, signer: Option<(&Keypair, u64)>) {
-        let Some((kp, wall_ms)) = signer else { return };
-        if !self.duty.poll(now) {
-            return;
+    fn beacon(&mut self, now: u64, wall_ms: Option<u64>) {
+        if wall_ms.is_some() && self.duty.poll(now) {
+            self.sign.want_beacon();
         }
-        let mut local = [self.me_addr_pub(); MAX_ADDRS];
-        let n = self.candidates(&mut local);
-        let mut buf = [0u8; local::MAX_LEN];
-        let k = n.min(local::MAX_ADDRS);
-        let Ok(len) = local::sign(kp, wall_ms, local.get(..k).unwrap_or_default(), &[], &mut buf) else { return };
-        let group = SocketAddr::new(if self.v6 { core::net::IpAddr::V6(local::GROUP_V6) } else { core::net::IpAddr::V4(local::GROUP_V4) }, local::PORT);
-        let mut item = [0u8; MAX_PACKET_LEN];
-        if let (Some(d), Some(s)) = (item.get_mut(..len), buf.get(..len)) {
-            d.copy_from_slice(s);
-            self.enqueue_raw(group, d);
-        }
+        self.start_jobs(now);
     }
 
     /// A beacon arrived on the local group. A verified one makes its addresses candidate paths for dials to its

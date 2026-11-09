@@ -532,3 +532,7 @@ path = "connect_ticket.rs"
 [[test]]
 name = "connect_local"
 path = "connect_local.rs"
+
+[[test]]
+name = "sim_connect_basic"
+path = "sim_connect_basic.rs"

@@ -4,7 +4,8 @@
 //! about ([`Connection::pending_key_request`]), feeds the node-wide round trips back ([`Connection::set_node_rtt`]),
 //! moves the first resend of a dial ([`Connection::set_first_retransmit`]), defers the first path MTU probe
 //! ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
-//! ([`Connection::set_flight_fanout`]) and starts a sub-session ([`Connection::sub_session`]).
+//! ([`Connection::set_flight_fanout`], and [`Connection::set_flight_skip_primary`] to leave the active path out) and
+//! starts a sub-session ([`Connection::sub_session`]).
 //!
 //! Invariants: a sub-session is born established with keys derived from its parent's, so it needs no handshake
 //! message and no round trip; the flight fan-out only repeats bytes the handshake already queued, one path after the
@@ -18,7 +19,7 @@ use vinc_security::{
 
 use super::config::{Config, PathId, PathInfo};
 use super::handshake::Machine;
-use super::{Connection, Resources};
+use super::{Connection, Phase, Resources};
 use crate::stream::StreamSource;
 use vinc_security::Event as SecEvent;
 
@@ -101,9 +102,30 @@ conn_impl! {
         }
     }
 
+    /// While the handshake runs, send its flight only on the fan-out paths and never on the active one (one path
+    /// per try, chosen by the layer above). Ignored when no fan-out path is set, and once the handshake is done.
+    pub fn set_flight_skip_primary(&mut self, skip: bool) {
+        self.fan_skip = skip;
+    }
+
+    /// Whether the flight leaves only on the fan-out paths right now.
+    pub(super) fn flight_skips_primary(&self) -> bool {
+        self.fan_skip && self.fan_set != 0 && self.phase == Phase::Handshaking
+    }
+
+    /// A keepalive that is not a transport PING stood for this connection's (an authenticated carrier answered for
+    /// it): count it as traffic received, and as traffic sent when `sent`, so neither the idle timeout nor the next
+    /// keepalive fires meanwhile.
+    pub fn pulse(&mut self, now: u64, sent: bool) {
+        self.life.last_activity = now;
+        if sent {
+            self.life.last_sent = now;
+        }
+    }
+
     /// Replay the flight on the next fan-out path once the current one is fully out.
     pub(super) fn fan_step(&mut self) {
-        if self.hs.has_tx() {
+        if self.hs.has_tx() && !(self.flight_skips_primary() && self.fan_target.is_none() && self.fan_mask != 0) {
             return;
         }
         self.fan_target = None;

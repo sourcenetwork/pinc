@@ -414,12 +414,31 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         moved: bool,
     },
     /// Send the handshake flight of a session still dialing on these addresses as well as its first one, now and on
-    /// every resend; an empty list turns it off. The connectivity layer drives this to try several candidate paths.
+    /// every resend; an empty list turns it off. With `skip_primary` the flight leaves on these addresses only, never
+    /// on the first one (exactly one path per try). The connectivity layer drives this to try candidate paths.
     FlightPaths {
         /// The session.
         session: SessionId,
         /// The remote addresses to copy the flight to.
         addrs: &'c [SocketAddr],
+        /// Leave the session's first address out of the flight.
+        skip_primary: bool,
+    },
+    /// A carrier PING and PONG stood for the session's keepalive (CARRIER_PULSE): count it as received, and as sent
+    /// when `sent` says this side wrote the PING.
+    Pulse {
+        /// The session.
+        session: SessionId,
+        /// This side sent a carrier PING for the session.
+        sent: bool,
+    },
+    /// Hand the keepalive of a quiet session to the connectivity layer: the endpoint sends no PING itself and
+    /// reports [`SessionStats::pulse_due`] when one is due; the layer answers with [`Command::Pulse`].
+    SetPulse {
+        /// The session.
+        session: SessionId,
+        /// On or off.
+        on: bool,
     },
     /// Move the first resend of a session still dialing to `delay` nanoseconds from now.
     FirstResend {
@@ -521,6 +540,8 @@ pub struct SessionStats {
     pub path_validated: bool,
     /// When a datagram last arrived on the active path, in the endpoint's clock; 0 before the first.
     pub heard: u64,
+    /// The keepalive was handed to the connectivity layer ([`Command::SetPulse`]) and is due now.
+    pub pulse_due: bool,
     /// The transport counters, with the smoothed round trip in `srtt`.
     pub transport: Stats,
 }

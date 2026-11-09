@@ -13,6 +13,9 @@
 //! - **Keepalive (KEEP_SENSE).** A silent open carrier is checked after 30 s on a phone or within 10 minutes of a
 //!   carrier dying silently, and after 65 s otherwise. Only the home carrier is checked for its own sake; another
 //!   carrier is checked only while a session rides it.
+//! - **Learned keepalive (KEEP_LEARN).** When enabled, every carrier that dies silently sets `keep_iv` to half the
+//!   silence it had endured (at least 15 s, never rising above half of an earlier value); every keepalive wait is
+//!   then at most `keep_iv`.
 //! - **Check.** A PING that nothing answers within `max(3 s, 3 x rtt)` resets the carrier. A session packet that
 //!   leaves on the carrier may carry the check instead (CHECK_RIDE): its acknowledgement is the answer, and if
 //!   none comes a real PING follows. CARRIER_PULSE is the same PING and PONG serving a quiet hub session
@@ -53,6 +56,8 @@ pub mod rule {
     pub const CHECK_MIN: u64 = 3 * SEC;
     /// The wait for a PING in round trips.
     pub const CHECK_RTTS: u64 = 3;
+    /// The floor of the learned keepalive (KEEP_LEARN).
+    pub const KEEP_FLOOR: u64 = 15 * SEC;
     /// The floor of the keepalive gap on a lease, and the shortest idle gap that counts as a death.
     pub const LEASE_FLOOR: u64 = 15 * SEC;
     /// The wait before the home carrier dials after a restart.
@@ -93,6 +98,10 @@ pub struct Shared {
     pub keep_fail: Option<u64>,
     /// The shortest idle gap that killed a carrier, 0 until one did. Never rises.
     pub lease_hi: u64,
+    /// Learn the keepalive interval from silent deaths (KEEP_LEARN).
+    pub keep_learn: bool,
+    /// The learned keepalive interval, 0 until a carrier died silently with KEEP_LEARN on.
+    pub keep_iv: u64,
     /// The node just restarted: the home carrier dial waits [`rule::DEFER`].
     pub restarted: bool,
     /// When the restart defer ends, set by the first dial attempt after a restart.
@@ -127,6 +136,17 @@ pub enum State {
     Dialing,
     /// The handshake completed and frames flow.
     Open,
+}
+
+/// What [`Link::pulse`] decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pulse {
+    /// The carrier is not open: the session sends its own PING.
+    Closed,
+    /// A check is already outstanding: the carrier's answer will serve the session.
+    Waiting,
+    /// Write a PING on the carrier.
+    Ping,
 }
 
 /// What the host must do.
@@ -271,10 +291,17 @@ impl Link {
         self.hlt = now;
     }
 
-    /// A PONG or PING served a quiet hub session (CARRIER_PULSE): the carrier's liveness counts as the session's.
-    /// Returns whether a check should be started because none is outstanding and the carrier is open.
-    pub const fn pulse(&self) -> bool {
-        matches!(self.state, State::Open) && self.chk == 0
+    /// CARRIER_PULSE: a quiet hub session riding this relay's own carrier is kept alive by a carrier PING and PONG
+    /// instead of a session PING. Starts a check when none is outstanding. [`Pulse::Closed`] means the carrier is not
+    /// open and the session must send its own PING.
+    pub fn pulse(&mut self, now: u64, ctx: &Ctx) -> Pulse {
+        if !self.is_open() {
+            return Pulse::Closed;
+        }
+        match self.check(now, ctx, false) {
+            Some(_) => Pulse::Ping,
+            None => Pulse::Waiting,
+        }
     }
 
     /// Close the stream and dial again at once.
@@ -310,14 +337,13 @@ impl Link {
     }
 
     fn keep_after(now: u64, sh: &Shared, ctx: &Ctx) -> u64 {
-        if !ctx.home {
-            return rule::RELAY_KEEP;
-        }
-        if sh.phone || sh.keep_fail.is_some_and(|t| now.saturating_sub(t) < rule::KEEP_MEMORY) {
+        let base = if ctx.home && (sh.phone || sh.keep_fail.is_some_and(|t| now.saturating_sub(t) < rule::KEEP_MEMORY))
+        {
             rule::HOME_KEEP
         } else {
             rule::RELAY_KEEP
-        }
+        };
+        if sh.keep_iv == 0 { base } else { base.min(sh.keep_iv) }
     }
 
     /// Run the timers at `now`. Returns what the host must do, if anything; call again until it returns `None`.
@@ -344,15 +370,27 @@ impl Link {
                 return self.check(now, ctx, false);
             }
             sh.keep_fail = Some(now);
-            if lease && self.gap >= rule::LEASE_FLOOR {
-                sh.lease_hi = sh.lease_hi.min(self.gap);
+            if sh.keep_learn {
+                let silence = now.saturating_sub(self.lrx);
+                let seen = if sh.keep_iv == 0 {
+                    silence
+                } else {
+                    sh.keep_iv.min(silence)
+                };
+                sh.keep_iv = (seen / 2).max(rule::KEEP_FLOOR);
+            }
+            if !ctx.udp_any && self.gap >= rule::LEASE_FLOOR {
+                sh.lease_hi = if sh.lease_hi == 0 {
+                    self.gap
+                } else {
+                    sh.lease_hi.min(self.gap)
+                };
             }
             return Some(self.reset(now));
         }
         if self.chk != 0 {
             return None;
         }
-        // The lease is learned from the first death too: with `lease_hi` still 0 a failed check sets it.
         if lease && (ctx.home || ctx.rides) && now.saturating_sub(self.hlt) >= lease_keep(sh.lease_hi) {
             return self.check(now, ctx, false);
         }

@@ -90,7 +90,7 @@ ep_impl! {
             if plan != slot.m.plan {
                 slot.m.plan = plan;
                 let interval = plan.ping_at.map(|p| p.saturating_sub(slot.m.last_tx));
-                conn.set_keepalive(interval);
+                conn.set_keepalive(if slot.m.pulse { None } else { interval });
                 trace!(self, now, Keepalive {
                     slot: i as u64,
                     ping_at: plan.ping_at.unwrap_or(u64::MAX),
@@ -98,6 +98,10 @@ ep_impl! {
                 });
             }
             note(plan.review_at);
+            slot.m.pulse_due = slot.m.pulse && plan.ping_at.is_some_and(|p| p <= now);
+            if slot.m.pulse {
+                note(plan.ping_at);
+            }
             let active = conn.active_path();
             for p in slot.m.paths.iter().flatten() {
                 if Some(p.id) != active && conn.path_validated(p.id) {

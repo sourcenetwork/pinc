@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
 
 use crate::Time;
-use crate::config::CostModel;
+use crate::config::{CostModel, NodeState};
 use crate::node::{Node, StreamEvent, StreamId, StreamKind};
 use crate::rng::Random;
 use crate::sim::{Ev, Sim};
@@ -259,7 +259,15 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
                     self.tcp_ack(t, e, ack, seg.sack);
                 }
             }
-            SegKind::Data => self.tcp_data(t, e, seg.seq, u64::from(seg.len)),
+            SegKind::Data => {
+                // A data segment carries the acknowledgement that completes the handshake, so a server that sees
+                // data first still reports the stream open before the first record.
+                if self.ends[e as usize].state == State::SynRcvd {
+                    self.ends[e as usize].state = State::Est;
+                    self.tcp_server_est(t, e);
+                }
+                self.tcp_data(t, e, seg.seq, u64::from(seg.len));
+            }
             SegKind::Syn => {}
         }
     }
@@ -333,14 +341,16 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         end.state = State::Open;
         let (n, h, remote) = (end.node, end.handle, end.remote);
         self.metrics.carriers_opened += 1;
-        self.push_stream_input(
-            t,
-            n,
-            StreamInput::Event(StreamEvent::Opened {
-                stream: StreamId(h),
-                remote,
-            }),
-        );
+        if self.nodes[n as usize].state == NodeState::Up {
+            self.deliver_stream_input(
+                t,
+                n,
+                StreamInput::Event(StreamEvent::Opened {
+                    stream: StreamId(h),
+                    remote,
+                }),
+            );
+        }
     }
 
     /// Queues one record (or one setup exchange, which carries no payload) for sending at `t`.
