@@ -1602,9 +1602,13 @@ dependencies = [
  "vinc-connect",
  "vinc-core",
  "vinc-crypto",
+ "vinc-dag",
+ "vinc-dtn",
  "vinc-membership",
+ "vinc-reconcile",
  "vinc-security",
  "vinc-transport",
+ "vinc-values",
  "vinc-wire",
 ]
 

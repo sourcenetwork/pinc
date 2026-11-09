@@ -78,7 +78,7 @@ struct Round {
 
 /// A stream a peer's round arrives on.
 struct Resp {
-    resp: Box<Responder>,
+    machine: Box<Responder>,
     set_ref: Option<Vec<u8>>,
     inb: Vec<u8>,
     fresh: bool,
@@ -242,7 +242,11 @@ where
             })
             .unwrap_or_default();
         for id in waiting {
-            if let Some(r) = self.recs.as_deref_mut().and_then(|r| r.rounds.iter_mut().find(|x| x.id == id)) {
+            if let Some(r) = self
+                .recs
+                .as_deref_mut()
+                .and_then(|r| r.rounds.iter_mut().find(|x| x.id == id))
+            {
                 r.attempt += 1;
             }
             self.round_retry(now, id);
@@ -262,7 +266,11 @@ where
             .map(|r| r.id)
             .collect();
         for id in lost {
-            if let Some(r) = self.recs.as_deref_mut().and_then(|r| r.rounds.iter_mut().find(|x| x.id == id)) {
+            if let Some(r) = self
+                .recs
+                .as_deref_mut()
+                .and_then(|r| r.rounds.iter_mut().find(|x| x.id == id))
+            {
                 r.active = None;
             }
             self.round_retry(now, id);
@@ -292,7 +300,7 @@ where
         rec.resps.insert(
             (session, stream),
             Resp {
-                resp: Box::new(Responder::new(limits)),
+                machine: Box::new(Responder::new(limits)),
                 set_ref: None,
                 inb: Vec::new(),
                 fresh: true,
@@ -370,11 +378,12 @@ where
         };
         round.attempt += 1;
         rec.tx.clear();
-        let started = self
-            .apps
-            .sets()
-            .index(&round.set_ref)
-            .map(|idx| round.init.start(&idx, &round.set_ref, &mut rec.tx).map_err(|e| failure(&e)));
+        let started = self.apps.sets().index(&round.set_ref).map(|idx| {
+            round
+                .init
+                .start(&idx, &round.set_ref, &mut rec.tx)
+                .map_err(|e| failure(&e))
+        });
         match started {
             Some(Ok(())) => {}
             Some(Err(reason)) => {
@@ -465,7 +474,9 @@ where
         };
         let limits = self.apps.sets().limits();
         let cap = limits.max_message.min(FRAME_MAX) + 3;
-        let (status, over) = self.io.drain_stream(session, stream, &mut round.inb, cap.saturating_mul(2));
+        let (status, over) = self
+            .io
+            .drain_stream(session, stream, &mut round.inb, cap.saturating_mul(2));
         let mut done = false;
         let mut failed = if over { Some(ReconcileFailure::Protocol) } else { None };
         while failed.is_none() && !done {
@@ -519,7 +530,7 @@ where
             return;
         }
         if done {
-            self.round_finish(round);
+            self.round_finish(&round);
             return;
         }
         if status == RecvStatus::Finished {
@@ -532,9 +543,9 @@ where
         self.round_put(round);
     }
 
-    fn round_finish(&mut self, round: Round) {
+    fn round_finish(&mut self, round: &Round) {
         let Some(report) = round.init.report() else {
-            self.round_fail(&round, ReconcileFailure::Protocol);
+            self.round_fail(round, ReconcileFailure::Protocol);
             return;
         };
         let here: Vec<Vec<u8>> = report.missing_here().map(<[u8]>::to_vec).collect();
@@ -577,13 +588,11 @@ where
             };
             if r.fresh {
                 let named = first_set_ref(r.inb.get(..n).unwrap_or_default()).map(<[u8]>::to_vec);
-                match named {
-                    Ok(name) => r.set_ref = Some(name),
-                    Err(_) => {
-                        code = Some(PROTOCOL);
-                        break;
-                    }
-                }
+                let Ok(name) = named else {
+                    code = Some(PROTOCOL);
+                    break;
+                };
+                r.set_ref = Some(name);
                 r.fresh = false;
             }
             let Some(set_ref) = r.set_ref.as_deref() else {
@@ -600,7 +609,7 @@ where
             rec.tx.clear();
             let mut step = {
                 let msg = r.inb.get(..n).unwrap_or_default();
-                r.resp.handle(&idx, msg, &mut rec.tx)
+                r.machine.handle(&idx, msg, &mut rec.tx)
             };
             r.inb.drain(..n);
             loop {
@@ -611,7 +620,7 @@ where
                             break;
                         }
                         rec.tx.clear();
-                        step = r.resp.resume(&idx, &mut rec.tx);
+                        step = r.machine.resume(&idx, &mut rec.tx);
                     }
                     Ok(Step::Send) => {
                         if !self.io.write(session, stream, &rec.tx) {

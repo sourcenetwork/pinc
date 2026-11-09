@@ -45,9 +45,10 @@ extern crate alloc;
 mod apps;
 pub mod bound;
 mod config;
-mod duties;
 mod dtn;
+mod dtn_rx;
 mod dtn_wire;
+mod duties;
 mod ep;
 mod event;
 mod events;
@@ -59,9 +60,7 @@ mod reconcile;
 pub mod trace;
 mod values;
 
-pub use apps::{
-    Apps, DtnApp, Enabled, NoApps, NoDtn, NoIndex, NoSets, NoValues, Recipient, ServeSource, SetsApp,
-};
+pub use apps::{Apps, DtnApp, Enabled, NoApps, NoDtn, NoIndex, NoSets, NoValues, Recipient, ServeSource, SetsApp};
 pub use config::{
     BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, Config, DENY_CAP, DENY_FIRST, DTN_ALPN, HUB_ALPN, Nanos, QUEUE_FRAMES,
     SESSION_LIVED, SETS_ALPN, STREAM_REPAIR, SURVIVOR, SURVIVOR_HAVE, Store, VALUES_ALPN,
@@ -72,5 +71,5 @@ pub use event::{NodeEvent, ReconcileFailure};
 pub use layer::Layer;
 pub use node::{Node, StartError};
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
-pub use values::{FETCHES, ValuesError, ValuesRequest};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
+pub use values::{FETCHES, ValuesError, ValuesRequest};

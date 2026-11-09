@@ -339,12 +339,11 @@ impl<E: Ep, St: Store> Outbound for VSess<'_, E, St> {
             .get(&(Layer::Values, peer))
             .ok_or(OpenError::NotConnected)?;
         let real = self.io.open_stream(session).ok_or(OpenError::Busy)?;
-        match self.net.add(session, real, self.owner) {
-            Some(lid) => Ok(lid),
-            None => {
-                self.io.drop_strm(session, real);
-                Err(OpenError::Busy)
-            }
+        if let Some(lid) = self.net.add(session, real, self.owner) {
+            Ok(lid)
+        } else {
+            self.io.drop_strm(session, real);
+            Err(OpenError::Busy)
         }
     }
 
@@ -534,10 +533,7 @@ where
                     v.net.drop_stream(lid);
                 }
             }
-            let _ = self.io.cmd(Command::Close {
-                session: sid,
-                error: 0,
-            });
+            let _ = self.io.cmd(Command::Close { session: sid, error: 0 });
             self.io.trace(NodeTrace::ValuesSuperseded { peer: tag(peer) });
         }
     }
@@ -662,10 +658,14 @@ where
             };
             se.abandon(lid, OVERFLOW);
             if let Owner::Fetch(fid) = owner {
-                self.fetch_in(now, fid, &In::Reset {
-                    stream: lid,
-                    code: OVERFLOW,
-                });
+                self.fetch_in(
+                    now,
+                    fid,
+                    &In::Reset {
+                        stream: lid,
+                        code: OVERFLOW,
+                    },
+                );
             } else {
                 self.server_in(now, &ServerIn::Reset(lid));
             }
@@ -722,7 +722,14 @@ where
             return;
         };
         match s.owner {
-            Owner::Fetch(fid) => self.fetch_in(now, fid, &In::Reset { stream: lid, code: error }),
+            Owner::Fetch(fid) => self.fetch_in(
+                now,
+                fid,
+                &In::Reset {
+                    stream: lid,
+                    code: error,
+                },
+            ),
             Owner::Serve => self.server_in(now, &ServerIn::Reset(lid)),
         }
     }

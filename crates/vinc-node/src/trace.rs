@@ -29,6 +29,7 @@ pub fn tag(id: &NodeId) -> u64 {
 }
 
 /// The first eight bytes of a bundle id as a number, enough to tell the bundles of one run apart.
+#[allow(clippy::many_single_char_names, reason = "the eight id bytes")]
 pub fn btag(id: &[u8; 32]) -> u64 {
     let [a, b, c, d, e, f, g, h, ..] = *id;
     u64::from_be_bytes([a, b, c, d, e, f, g, h])
@@ -295,16 +296,18 @@ impl NodeTrace {
             | Self::Adopted { peer }
             | Self::StreamRepaired { peer }
             | Self::Watchdog { peer }
-            | Self::StreamReset { peer } => ([("peer", peer), z, z], 1),
+            | Self::StreamReset { peer }
+            | Self::ValuesSuperseded { peer } => ([("peer", peer), z, z], 1),
             Self::Backoff { peer, wait_ms, denied } => ([("peer", peer), ("wait_ms", wait_ms), ("denied", denied)], 3),
             Self::Carrier { member, open } => ([("member", member), ("open", open), z], 2),
             Self::Revoked { peer, sessions } => ([("peer", peer), ("sessions", sessions), z], 2),
             Self::Left => ([z, z, z], 0),
-            Self::LayerDial { layer, peer } | Self::LayerDown { layer, peer } => ([("layer", layer), ("peer", peer), z], 2),
+            Self::LayerDial { layer, peer } | Self::LayerDown { layer, peer } => {
+                ([("layer", layer), ("peer", peer), z], 2)
+            }
             Self::LayerUp { layer, peer, incoming } => ([("layer", layer), ("peer", peer), ("incoming", incoming)], 3),
             Self::ValuesFetch { fetch, providers } => ([("fetch", fetch), ("providers", providers), z], 2),
             Self::ValuesCancel { fetch } => ([("fetch", fetch), z, z], 1),
-            Self::ValuesSuperseded { peer } => ([("peer", peer), z, z], 1),
             Self::SetsStart { round, peer, attempt } => ([("round", round), ("peer", peer), ("attempt", attempt)], 3),
             Self::SetsDone { round, here, there } => ([("round", round), ("here", here), ("there", there)], 3),
             Self::SetsFailed { round, reason } => ([("round", round), ("reason", reason), z], 2),
@@ -314,7 +317,9 @@ impl NodeTrace {
             Self::DtnComplete { bundle, peer } | Self::DtnCustody { bundle, peer } => {
                 ([("bundle", bundle), ("peer", peer), z], 2)
             }
-            Self::DtnAcked { bundle, peer, relieved } => ([("bundle", bundle), ("peer", peer), ("relieved", relieved)], 3),
+            Self::DtnAcked { bundle, peer, relieved } => {
+                ([("bundle", bundle), ("peer", peer), ("relieved", relieved)], 3)
+            }
             Self::DtnRefused { bundle, peer, reason } => ([("bundle", bundle), ("peer", peer), ("reason", reason)], 3),
             Self::DtnReleased { bundle, delivered } => ([("bundle", bundle), ("delivered", delivered), z], 2),
             Self::Lost { count } => ([("count", count), z, z], 1),

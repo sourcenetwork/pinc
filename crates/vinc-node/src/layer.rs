@@ -12,11 +12,11 @@ use vinc_core::{Command, Event, Role, SessionId};
 use vinc_membership::NodeId;
 
 use crate::apps::Apps;
-use crate::event::NodeEvent;
 use crate::config::{
-    BACKOFF_CAP, BACKOFF_FIRST, DTN_ALPN, Nanos, SETS_ALPN, SESSION_LIVED, Store, TABLE_MAX, VALUES_ALPN,
+    BACKOFF_CAP, BACKOFF_FIRST, DTN_ALPN, Nanos, SESSION_LIVED, SETS_ALPN, Store, TABLE_MAX, VALUES_ALPN,
 };
 use crate::ep::Ep;
+use crate::event::NodeEvent;
 use crate::node::Node;
 use crate::trace::{NodeTrace, tag};
 
@@ -43,7 +43,9 @@ impl Layer {
 
     /// The layer a protocol id belongs to.
     pub fn of_alpn(alpn: &[u8]) -> Option<Self> {
-        [Self::Values, Self::Sets, Self::Dtn].into_iter().find(|l| l.alpn() == alpn)
+        [Self::Values, Self::Sets, Self::Dtn]
+            .into_iter()
+            .find(|l| l.alpn() == alpn)
     }
 
     const fn code(self) -> u64 {

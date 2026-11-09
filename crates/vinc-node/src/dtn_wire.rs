@@ -66,6 +66,7 @@ pub(crate) fn finish(out: &mut [u8]) {
 ///
 /// # Errors
 /// `()` if the frame announces a body over [`BODY_MAX`].
+#[allow(clippy::many_single_char_names, reason = "the five header bytes")]
 pub(crate) fn next(inb: &[u8]) -> Result<Option<(u8, usize)>, ()> {
     let Some(head) = inb.first_chunk::<HDR>() else {
         return Ok(None);

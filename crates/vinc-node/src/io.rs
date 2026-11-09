@@ -368,10 +368,7 @@ impl<E: Ep, St: Store> Io<E, St> {
         cap: usize,
     ) -> (vinc_transport::stream::RecvStatus, bool) {
         let mut over = false;
-        loop {
-            let Some(chunk) = self.ep.read_chunk(session, stream).filter(|c| !c.is_empty()) else {
-                break;
-            };
+        while let Some(chunk) = self.ep.read_chunk(session, stream).filter(|c| !c.is_empty()) {
             let n = chunk.len();
             if into.len().saturating_add(n) > cap {
                 over = true;

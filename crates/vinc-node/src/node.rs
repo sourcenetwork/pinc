@@ -35,15 +35,15 @@ use vinc_security::{Env, KeyRequest, KeyResponse, PrekeyInfo};
 
 use crate::apps::{Apps, DtnApp, NoApps, ServeSource};
 use crate::config::{Config, Nanos, Store};
+use crate::dtn::Dtn;
 use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::hosts::{Bc, MemHost};
-use crate::values::Values;
-use crate::dtn::Dtn;
 use crate::io::Io;
 use crate::layer::Layer;
 use crate::reconcile::Reconciler;
 use crate::trace::{Body, NodeTrace, TraceItem, tag};
+use crate::values::Values;
 
 /// Why a node could not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
