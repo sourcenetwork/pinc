@@ -68,6 +68,7 @@ mod life;
 mod mtu;
 mod params;
 mod path;
+mod reasm;
 mod recv;
 mod send;
 mod timer;
@@ -89,6 +90,8 @@ pub use hooks::{SubOpen, SubWait};
 pub use keys::trace::{KeyEvent, KeysView, Slot};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::PathError;
+#[cfg(feature = "trace")]
+pub use reasm::trace::{ReasmProbe, ReasmView};
 pub use send::Transmit;
 
 use self::cid::Cids;

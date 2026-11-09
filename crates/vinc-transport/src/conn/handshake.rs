@@ -35,6 +35,7 @@ use vinc_security::{
 };
 use vinc_wire::{Reader, varint};
 
+use super::reasm::Reassembly;
 use crate::recovery::{MS, SECOND};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE, Chunk};
 
@@ -64,9 +65,6 @@ const THIN_FINISH_MAX: u64 = 20 * SECOND;
 const FINISH_SHIFT: u32 = 3;
 /// The shortest round trip a handshake sample may be.
 const MIN_SAMPLE: u64 = MS;
-
-/// The most disjoint runs of one message the receiver tracks (a message is a handful of datagrams).
-const RUNS: usize = 8;
 
 /// The longest message a key request signs.
 const SIGN_MAX: usize = 64;
@@ -202,9 +200,7 @@ pub(crate) struct Handshake {
     /// The flight in the buffer is a retransmission.
     tx_retx: bool,
     retransmitting: bool,
-    rx_runs: [(usize, usize); RUNS],
-    rx_len: usize,
-    rx_total: usize,
+    rx: Reassembly,
     pub(crate) request: Option<OwnedRequest>,
     pub(crate) request_announced: bool,
     stage: Stage,
@@ -248,9 +244,7 @@ impl Handshake {
             tx_active: false,
             tx_retx: false,
             retransmitting: false,
-            rx_runs: [(0, 0); RUNS],
-            rx_len: 0,
-            rx_total: 0,
+            rx: Reassembly::new(),
             request: None,
             request_announced: false,
             stage: Stage::Open,
@@ -373,9 +367,7 @@ impl Handshake {
             if let Some(c) = self.chunk.take() {
                 pool.free_chunk(c);
             }
-            self.rx_runs = [(0, 0); RUNS];
-            self.rx_len = 0;
-            self.rx_total = 0;
+            self.rx.clear();
         }
     }
 
@@ -510,49 +502,11 @@ impl Handshake {
         let total = usize::try_from(r.read_varint().ok()?).ok()?;
         let off = usize::try_from(r.read_varint().ok()?).ok()?;
         let data = r.read_bytes(r.remaining()).ok()?;
-        if total == 0 || total > MAX_MESSAGE_LEN {
-            return None;
-        }
-        if total != self.rx_total {
-            self.rx_total = total;
-            self.rx_runs = [(0, 0); RUNS];
-            self.rx_len = 0;
-        }
-        let end = off.checked_add(data.len())?.min(total);
-        let data = data.get(..end.checked_sub(off)?)?;
-        if data.is_empty() {
-            return None;
-        }
-        // Merge the new run into the sorted, disjoint runs; with no free slot the fragment is dropped and the
-        // retransmission brings it again.
-        let (mut lo, mut hi) = (off, end);
-        let mut keep = [(0usize, 0usize); RUNS];
-        let mut n = 0;
-        for &(s, e) in self.rx_runs.iter().take(self.rx_len) {
-            if e < lo || s > hi {
-                *keep.get_mut(n)? = (s, e);
-                n += 1;
-            } else {
-                lo = lo.min(s);
-                hi = hi.max(e);
-            }
-        }
-        if n == RUNS {
-            return None;
-        }
-        let buf = pool.bytes_mut(self.chunk.as_ref()?).get_mut(MAX_MESSAGE_LEN..)?;
-        buf.get_mut(off..end)?.copy_from_slice(data);
-        *keep.get_mut(n)? = (lo, hi);
-        n += 1;
-        keep.get_mut(..n)?.sort_unstable();
-        self.rx_runs = keep;
-        self.rx_len = n;
-        if n == 1 && lo == 0 && hi == total {
-            self.rx_total = 0;
-            self.rx_len = 0;
-            return Some(total);
-        }
-        None
+        let buf = self
+            .chunk
+            .as_ref()
+            .and_then(|c| pool.bytes_mut(c).get_mut(MAX_MESSAGE_LEN..));
+        self.rx.add(buf, total, off, data)
     }
 
     /// Hand the complete message of `len` bytes to the state machine. A server needs the shared `stores`.

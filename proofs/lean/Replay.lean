@@ -14,6 +14,7 @@ import Vinc.TraceRx
 import Vinc.TraceCid
 import Vinc.TraceCc
 import Vinc.TracePn
+import Vinc.TraceReasm
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -171,6 +172,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut rxw : TraceRx.W := {}
   let mut cidw : TransportCid.C := {}
   let mut ccw : TraceCc.W := {}
+  let mut rsw : TraceReasm.W := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
   let mut ksw : TraceKeystore.W := {}
@@ -438,6 +440,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceReasm.isTag t then
+          -- Handshake fragment events (`txrs`, written by `trace_reasm`): the runs of a message put together.
+          match TraceReasm.replayEvent j rsw with
+          | .ok w' =>
+            rsw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
