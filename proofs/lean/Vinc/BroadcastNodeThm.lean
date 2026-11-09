@@ -337,6 +337,69 @@ theorem gather_ends {p : Params} {N : Node} {now : Nat} (hg : N.phase = .gatheri
   rw [T.core.phase]
   simp [Plain]
 
+theorem lk_cons_ne (o k : Nat) (w : AcpE) (l : List (Nat × AcpE)) (h : o ≠ k) :
+    List.lookup o ((k, w) :: l) = List.lookup o l := by
+  simp [List.lookup, beq_false_of_ne h]
+
+theorem lk_cons_eq (o : Nat) (w : AcpE) (l : List (Nat × AcpE)) : List.lookup o ((o, w) :: l) = some w := by
+  unfold List.lookup; simp
+
+theorem lookup_map_upd (o : Nat) (v : AcpE) : ∀ L : List (Nat × AcpE),
+    (L.map (fun e => if e.1 == o then (o, v) else e)).lookup o = if (L.lookup o).isSome then some v else none := by
+  intro L
+  induction L with
+  | nil => simp
+  | cons a l ih =>
+    obtain ⟨k, w⟩ := a
+    by_cases h : k = o
+    · subst h
+      rw [List.map_cons, lk_cons_eq]
+      simp [lk_cons_eq]
+    · have h' : o ≠ k := fun e => h e.symm
+      have hf : (if ((k, w).1 == o) = true then (o, v) else (k, w)) = (k, w) := by
+        simp [beq_false_of_ne h]
+      rw [List.map_cons, hf, lk_cons_ne o k w _ h', ih, lk_cons_ne o k w _ h']
+
+theorem lookup_append_new (o : Nat) (v : AcpE) : ∀ L : List (Nat × AcpE), L.lookup o = none →
+    (L ++ [(o, v)]).lookup o = some v := by
+  intro L
+  induction L with
+  | nil => intro _; exact lk_cons_eq o v []
+  | cons a l ih =>
+    intro h
+    obtain ⟨k, w⟩ := a
+    have hb : o ≠ k := by
+      intro e; subst e; rw [lk_cons_eq] at h; cases h
+    rw [lk_cons_ne o k w _ hb] at h
+    rw [List.cons_append, lk_cons_ne o k w _ hb]
+    exact ih h
+
+/-- A verdict that the table holds for the origin it answered is the answer just given, trusted until `acpCap` after
+now (and no entry is made when the table is full of other origins). -/
+theorem AcpAnswer_cached {p : Params} {N : Node} {now id : Nat} {allow : Bool} {c : Check}
+    (hf : N.checks.find? (fun c => c.id == id) = some c) (e : AcpE)
+    (he : (AcpAnswer p N now id allow).n.acp.lookup c.origin = some e) :
+    e.exp = now + p.acpCap ∧ e.allow = allow := by
+  unfold AcpAnswer at he
+  simp only [hf] at he
+  by_cases h1 : (N.acp.lookup c.origin).isSome = true
+  · simp only [h1, Bool.true_or, if_true, lookup_map_upd] at he
+    simp at he
+    rw [← he]; exact ⟨rfl, rfl⟩
+  · have h1' : N.acp.lookup c.origin = none := by
+      cases hh : N.acp.lookup c.origin
+      · rfl
+      · simp [hh] at h1
+    by_cases h2 : N.acp.length < p.acpMax
+    · simp only [h1, h2, Bool.false_or, decide_true, if_true, Bool.false_eq_true, if_false] at he
+      rw [lookup_append_new _ _ _ h1'] at he
+      cases he; exact ⟨rfl, rfl⟩
+    · have h2' : decide (N.acp.length < p.acpMax) = false := decide_eq_false h2
+      simp only [h1, h2', Bool.false_or, Bool.false_eq_true, if_false] at he
+      rw [h1'] at he; cases he
+
+#audit_axioms Vinc.BroadcastNode.AcpAnswer_cached
+
 #audit_axioms Vinc.BroadcastNode.reach_inv
 #audit_axioms Vinc.BroadcastNode.epochBound
 #audit_axioms Vinc.BroadcastNode.onceNoDup
