@@ -232,6 +232,9 @@ pub struct Topics {
     pub(crate) sent: SentFloors,
     pub(crate) gather: Gather,
     pub(crate) last_rx_wall: u64,
+    /// The wall clock up to which every periodic check since the start reached back to the one before; starts at the
+    /// start of the node.
+    pub(crate) last_gap_wall: u64,
     pub(crate) next_ae: Nanos,
     pub(crate) next_gap: Nanos,
     pub(crate) scratch: Vec<u8>,
@@ -311,6 +314,7 @@ impl Topics {
             sent: SentFloors::default(),
             gather: Gather::new(cfg.is_hub),
             last_rx_wall: 0,
+            last_gap_wall: wall_ms,
             next_ae: now,
             next_gap: now.saturating_add(GAP_EVERY),
             scratch: Vec::with_capacity(cfg.limits.max_frame()),

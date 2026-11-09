@@ -224,3 +224,38 @@ fn log_eviction_does_not_spend_a_second_dedupe_record_per_id() {
     }
     assert!(dup, "the first message is still remembered");
 }
+
+/// A message the hub's push lost, older than 15 s before the next one that arrived, must still be asked for when a
+/// link flap skips the periodic check and the re-subscription follows: the re-subscription goes back to the last
+/// check that was sent.
+#[test]
+fn a_swallowed_message_is_repaired_after_a_flap_that_skips_the_check() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
+    net.subscribe(2, T);
+    for k in 0..5u64 {
+        net.run_until((10 + 20 * k) * SEC);
+        net.publish(1, T, &[k as u8]);
+    }
+    // The checks ran at 21, 41, ... 101 s. The push of the message at 102 s is swallowed.
+    net.run_until(102 * SEC);
+    net.filter = Some(Box::new(|_, to, bytes| !(to == 2 && bytes.get(4) == Some(&ty::MSG))));
+    let missed = net.publish(1, T, b"swallowed");
+    net.filter = None;
+    net.run_until(118 * SEC);
+    let later = net.publish(1, T, b"later");
+    assert!(net.delivered(2).contains(&later) && !net.delivered(2).contains(&missed));
+    // The link drops before the check at 121 s and returns at 130 s, when membership asks to subscribe again.
+    net.run_until(119 * SEC);
+    net.link(2, 0, false);
+    net.run_until(130 * SEC);
+    net.link(2, 0, true);
+    let hub = net.id(0);
+    let now = net.now;
+    {
+        let n = &mut net.nodes[2];
+        n.h.tick(now);
+        n.t.resubscribe(&mut n.h, now, &hub);
+    }
+    net.pump();
+    assert!(net.delivered(2).contains(&missed), "the re-subscription asks back to the last check");
+}

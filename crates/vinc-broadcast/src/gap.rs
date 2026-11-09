@@ -25,11 +25,13 @@ impl Topics {
     /// The point in time a (re)subscription asks the hub to log back to.
     fn since_ms(&self) -> u64 {
         let base = self.gather.rfloor.map_or(self.born_wall, |f| f.wall);
+        // Back to 15 s before the last message the hub pushed, and no later than the point up to which the periodic
+        // checks form an unbroken chain from the start: a message swallowed before a newer one arrived, or on a topic
+        // the checks skipped as quiet, would otherwise fall out of every window when a link flap skips a check.
         if self.last_rx_wall == 0 {
-            base
-        } else {
-            base.max(self.last_rx_wall.saturating_sub(RESUB_BACK_MS))
+            return base;
         }
+        base.max(self.last_rx_wall.saturating_sub(RESUB_BACK_MS).min(self.last_gap_wall))
     }
 
     pub(crate) fn send_sub<H: Host>(&mut self, h: &mut H, hub: &NodeId, topic: &[u8], since_ms: u64, replay: bool) {
@@ -151,13 +153,20 @@ impl Topics {
         };
         let floor = self.gather.rfloor.map_or(self.born_wall, |f| f.wall);
         let since = h.wall_ms().saturating_sub(GAP_SPAN / 1_000_000).max(floor);
+        let wall = h.wall_ms();
         let topics = core::mem::take(&mut self.topics);
+        let mut asked = false;
         for (k, st) in &topics {
             if st.sub && st.seen.newest().is_some_and(|t| now.saturating_sub(t) < GAP_LIVE) {
                 self.send_sub(h, &p, k, since, false);
+                asked = true;
             }
         }
         self.topics = topics;
+        // The check reaches back GAP_SPAN: it extends the chain only if it overlaps the point the chain reached.
+        if asked && wall.saturating_sub(GAP_SPAN / 1_000_000) <= self.last_gap_wall {
+            self.last_gap_wall = wall;
+        }
     }
 
     /// Hub-to-hub HAVE: tell the other hubs the ids logged in `[-30 s, -1 s]`.
