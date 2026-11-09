@@ -314,6 +314,20 @@ LiveLeaveReported == Finished => \A o \in w.alive \ {4} : <<o, 4>> \in w.hist.le
 \* convergence: every live node lists exactly the live nodes other than itself
 LiveConverged == Finished => \A o \in w.alive : DOMAIN w.nodes[o].members = w.alive \ {o}
 StepsBound == w.steps <= 200000
+
+(* Temporal liveness under fairness. A run that never stops while Step is enabled (infinitely many steps, or it ends
+   in a state where Step is disabled and stays there) is FairRun; this is weak fairness of Step written as a
+   hypothesis of the property, so TLC checks every property below as FairRun => property over the whole state graph,
+   with no scripted bound beyond the model's MaxSec. Each is a leads-to or an eventually-always statement. *)
+FairRun == ([]<><<Step>>_w) \/ (<>[]Done0)
+CrashedMember == w.hist.crashAt[4] # <<>>
+GoneFromAll == \A o \in w.alive : 4 \notin DOMAIN w.nodes[o].members
+Converged == \A o \in w.alive : DOMAIN w.nodes[o].members = w.alive \ {o}
+TLiveComplete == FairRun => (CrashedMember ~> GoneFromAll)
+TLiveRestored == FairRun => (TRUE ~> (<<1, 4>> \in w.hist.restore))
+TLiveLeave == FairRun => (TRUE ~> (\A o \in w.alive \ {4} : <<o, 4>> \in w.hist.left))
+TLiveNever == FairRun => (TRUE ~> (\A o \in w.alive : <<o, 4>> \in w.hist.down))
+TLiveConverged == FairRun => <>[]Converged
 NeverFinished == ~Finished
 
 (* ---- properties ---- *)
