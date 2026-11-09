@@ -331,4 +331,13 @@ theorem buildSubs_exact (max : Nat) (cands : List Nat)
     simp at this
     omega
 
+#audit_axioms Vinc.BroadcastSubs.sub_ok
+#audit_axioms Vinc.BroadcastSubs.hold_ok
+#audit_axioms Vinc.BroadcastSubs.restore_ok
+#audit_axioms Vinc.BroadcastSubs.release_ok
+#audit_axioms Vinc.BroadcastSubs.pushed_iff
+#audit_axioms Vinc.BroadcastSubs.told_iff
+#audit_axioms Vinc.BroadcastSubs.told_nodup
+#audit_axioms Vinc.BroadcastSubs.buildSubs_exact
+
 end Vinc.BroadcastSubs

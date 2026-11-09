@@ -295,12 +295,45 @@ par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags
 par run_tlc recovery_tail Recovery Recovery_tail
+par run_tlc broadcast_auth BroadcastAuth BroadcastAuth
+par witness_tlc broadcast_auth_nobody BroadcastAuth BroadcastAuth_nobody DeliverExact
+par witness_tlc broadcast_auth_noisb BroadcastAuth BroadcastAuth_noisb DeliverExact
+par witness_tlc broadcast_auth_nomid BroadcastAuth BroadcastAuth_nomid DeliverExact
+par witness_tlc broadcast_auth_notopic BroadcastAuth BroadcastAuth_notopic DeliverExact
+par witness_tlc broadcast_auth_nots BroadcastAuth BroadcastAuth_nots DeliverExact
+par run_tlc broadcast_wire BroadcastWire BroadcastWire
+par run_tlc broadcast_midmap BroadcastMidMap BroadcastMidMap
+par run_tlc broadcast_log BroadcastLog BroadcastLog
+par run_tlc broadcast_subs BroadcastSubs BroadcastSubs
+par run_tlc broadcast_floors BroadcastFloors BroadcastFloors
+par run_tlc broadcast_floors_cap1 BroadcastFloors BroadcastFloors_cap1
+par witness_tlc broadcast_floors_top BroadcastFloors BroadcastFloors_top FloorsSound
+par witness_tlc broadcast_floors_future BroadcastFloors BroadcastFloors_future FloorsSound
+par run_tlc broadcast_publish BroadcastPublish BroadcastPublish
+par run_tlc broadcast_publish_reach BroadcastPublish BroadcastPublish_reach
+par run_tlc broadcast_publish_nohub BroadcastPublish BroadcastPublish_nohub
+par witness_tlc broadcast_publish_ceiling BroadcastPublish BroadcastPublish_ceiling AllServedAtGiveUp
+par run_tlc broadcast_repair BroadcastRepair BroadcastRepair
+par run_tlc broadcast_repair_ae BroadcastRepair BroadcastRepair_ae
+par witness_tlc broadcast_repair_gapmark BroadcastRepair BroadcastRepair_gapmark SinceCoversMissed
+par witness_tlc broadcast_repair_have BroadcastRepair BroadcastRepair_have FullHeal
+par witness_tlc broadcast_repair_quiet BroadcastRepair BroadcastRepair_quiet PeriodicDeliversQuiet
+par run_tlc broadcast_system BroadcastSystem BroadcastSystem
+par run_tlc broadcast_system_live BroadcastSystem BroadcastSystem_live
+par witness_tlc broadcast_system_fb BroadcastSystem BroadcastSystem_fb AtMostOnceStrict
+par run_tlc broadcast_node BroadcastNode BroadcastNode
+par run_tlc broadcast_node_floors BroadcastNode BroadcastNode_floors
+par run_tlc broadcast_node_hub BroadcastNode BroadcastNode_hub
+par witness_tlc broadcast_node_ackearly BroadcastNode BroadcastNode_ackEarly AckOnlyStored
+par witness_tlc broadcast_node_evict BroadcastNode BroadcastNode_evict EvictedSeen
+par witness_tlc broadcast_node_heldfull BroadcastNode BroadcastNode_heldFull SeenAccounted
+par witness_tlc broadcast_node_helddup BroadcastNode BroadcastNode_heldDup OnceNoDup
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -344,5 +377,6 @@ trace_tlc TraceIncarnation incarnation
 trace_tlc TraceMembership membership
 trace_tlc TraceStreams "stream table"
 trace_tlc TraceRecovery "loss recovery"
+trace_tlc TraceBroadcast broadcast
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"
