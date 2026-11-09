@@ -205,6 +205,29 @@ impl Topics {
         self.topics = topics;
     }
 
+    /// A hub offers `member` the ids it logged in the last `span` for each topic the member subscribes to: the host
+    /// adopted another session of the member, and what went out on the closed session may be lost.
+    pub fn have_to<H: Host>(&mut self, h: &mut H, now: Nanos, member: &NodeId, span: Nanos) {
+        if !self.is_hub {
+            return;
+        }
+        let topics = core::mem::take(&mut self.topics);
+        for (k, st) in &topics {
+            let Some(log) = st.log.as_ref().filter(|_| st.subs.contains_key(member)) else {
+                continue;
+            };
+            let total = log.window(now, span, 0).count();
+            self.ids.clear();
+            for mid in log.window(now, span, 0).skip(total.saturating_sub(HAVE_MAX)) {
+                self.ids.extend_from_slice(&mid.to_le_bytes());
+            }
+            if !self.ids.is_empty() && wire::build(&mut self.scratch, ty::HAVE, k, &[&self.ids]).is_ok() {
+                h.send(member, Lane::Main, &self.scratch);
+            }
+        }
+        self.topics = topics;
+    }
+
     /// A SUB at a hub: record the subscriber and answer with HAVE, or replay the messages when flag 1 is set.
     pub(crate) fn on_sub<H: Host>(&mut self, h: &mut H, _now: Nanos, from: &NodeId, topic: &[u8], rest: &[u8]) {
         let Some(since) = get_u64(rest).filter(|_| self.is_hub && *from != self.me) else {

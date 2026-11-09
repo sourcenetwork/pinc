@@ -9,6 +9,7 @@ mod connect_relay_node;
 mod connect_world;
 mod core_net;
 mod link;
+mod node_sim;
 mod swtpm;
 pub use connect_client::*;
 pub use connect_host::*;
@@ -17,6 +18,7 @@ pub use connect_world::*;
 pub use core_net::*;
 mod pair;
 pub use link::*;
+pub use node_sim::*;
 pub use pair::*;
 #[cfg(feature = "hwenc")]
 pub use swtpm::Swtpm;

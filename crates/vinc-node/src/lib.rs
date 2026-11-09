@@ -1,0 +1,63 @@
+//! The VINC node: the endpoint, the connectivity client, membership and broadcast, composed over real sessions as one
+//! SANS-IO state machine.
+//!
+//! Each layer is a state machine over its own host interface. This crate implements those interfaces over the real
+//! endpoint and the real connectivity client, so the algorithm runs as one system: membership and broadcast share one
+//! hub stream per hub, found by a protocol id the node registers; their frames ride the endpoint's streams; the
+//! evidence they judge by (last receive, smoothed round trip, probe timeouts, the give-up bound) is what the
+//! transport knows; carrier drops and returns come from the relays.
+//!
+//! A [`Node`] mirrors the endpoint's shape: datagrams, time and commands go in; datagrams, the next deadline and
+//! [`NodeEvent`]s come out. The application's own streams and datagrams pass through untouched. The host serves the
+//! connectivity client's streams and key answers exactly as it does for the client alone.
+//!
+//! The host-side duties that the layers leave to their host live here:
+//! - **Dialing.** Every hub is dialed, never inside its backoff window: 2 s doubling to 16 s for a hub (60 s for any
+//!   other node), reset by a session that lived 5 s; a peer whose access check refused us waits 60 s doubling to 15
+//!   min. A frame sent to a peer with no session waits for the dial (at most 256 frames).
+//! - **Survivor adoption.** When a member's newer session closes at a hub and an older one was heard within 30 s, the
+//!   hub adopts it: a fresh write stream, a snapshot, and the ids of the last 90 s of each subscribed topic. The
+//!   same happens when a member writes on a session that is not the hub's current one.
+//! - **Stream repair.** A hub session without our write stream gets a fresh one after 10 s.
+//! - **Watchdog.** A hub session with two probe timeouts and nothing received for the HELLO wait is closed.
+//! - **Heal detection.** A hub heard again after longer than the transport's give-up bound at the last round trip
+//!   means a partition healed ([`bound::give_up`]); membership then opens its quiet window.
+//! - **Independent probes.** A probe on [`Route::Via`](vinc_membership::session::Route) is a path challenge through
+//!   the named hub's relay; the member's answer is evidence from the transport.
+//! - **Revocation and leave.** A revoked peer loses every session within the call; a leave closes every hub session
+//!   with code 0x4C and then every other session.
+//!
+//! The crate is `no_std` with `alloc`, forbids unsafe code and uses no `dyn`. Every table is bounded.
+//!
+//! Invariants: the same inputs in the same order give the same outputs; no input panics; the streams of a
+//! hub-protocol session never reach the application as events or bytes (its lifecycle events do); a frame the node cannot hand to a session reports failure to its layer,
+//! which repairs it by its own rules.
+#![no_std]
+#![forbid(unsafe_code)]
+#![allow(
+    clippy::large_stack_arrays,
+    clippy::too_many_lines,
+    reason = "the connectivity layer holds its buffers inline; the node boxes it"
+)]
+
+extern crate alloc;
+
+pub mod bound;
+mod config;
+mod duties;
+mod ep;
+mod event;
+mod events;
+mod hosts;
+mod io;
+mod node;
+pub mod trace;
+
+pub use config::{
+    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, Config, DENY_CAP, DENY_FIRST, HUB_ALPN, Nanos, QUEUE_FRAMES,
+    SESSION_LIVED, STREAM_REPAIR, SURVIVOR, SURVIVOR_HAVE, Store,
+};
+pub use ep::Ep;
+pub use event::NodeEvent;
+pub use node::{Node, StartError};
+pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};

@@ -36,6 +36,7 @@ vinc = { workspace = true, features = ["nuclei"] }
 vinc-nuclei = { workspace = true }
 nuclei = { workspace = true }
 futures-io = { workspace = true }
+vinc-node = { workspace = true, features = ["trace"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -751,3 +752,7 @@ path = "scenario_diag.rs"
 [[test]]
 name = "values_fixes"
 path = "values_fixes.rs"
+
+[[test]]
+name = "node_view"
+path = "node_view.rs"

@@ -1,0 +1,28 @@
+[package]
+name = "vinc-node"
+description = "The VINC node: the endpoint, the connectivity client, membership and broadcast composed over real sessions as one SANS-IO state machine"
+keywords = ["no_std", "node", "sans-io", "membership"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Record every decision of the node, and forward the endpoint's records, as versioned trace records.
+trace = ["vinc-core/trace"]
+
+[dependencies]
+vinc-wire = { workspace = true }
+vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
+vinc-transport = { workspace = true }
+vinc-core = { workspace = true, features = ["alloc"] }
+vinc-connect = { workspace = true }
+vinc-membership = { workspace = true, features = ["alloc"] }
+vinc-broadcast = { workspace = true, features = ["alloc"] }
+blake3 = { workspace = true }
+
+[lints]
+workspace = true

@@ -37,3 +37,4 @@ mod timers;
 pub mod tunnel;
 
 pub use conn::{Config, Connectivity, Io, Kind, Notice, RelayCfg};
+pub use drive::Port;

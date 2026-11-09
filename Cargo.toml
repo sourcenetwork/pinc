@@ -31,6 +31,7 @@ vinc-broadcast = { path = "crates/vinc-broadcast", version = "0.1.0" }
 vinc-driver = { path = "crates/vinc-driver", version = "0.1.0" }
 vinc-nuclei = { path = "crates/vinc-nuclei", version = "0.1.0" }
 vinc = { path = "crates/vinc", version = "0.1.0" }
+vinc-node = { path = "crates/vinc-node", version = "0.1.0" }
 
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
 sha2 = { version = "0.11.1", default-features = false }

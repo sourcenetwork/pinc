@@ -86,6 +86,13 @@ pub trait Session {
     /// The state of `member`'s relay carrier to this node's relay.
     fn carrier(&self, member: &NodeId) -> Carrier;
 
+    /// How long silence on the path to `peer` lasts before the transport gives the path up (its probe-timeout bound
+    /// at the last known round trip). A peer heard again after a longer silence means a partition healed. The
+    /// default is the fixed [`HEAL_SILENCE`](crate::consts::HEAL_SILENCE).
+    fn give_up(&self, _peer: &NodeId) -> Nanos {
+        crate::consts::HEAL_SILENCE
+    }
+
     /// Close the session with `peer`. The host reports it back with `session_down`.
     fn close(&mut self, peer: &NodeId, reason: CloseReason);
 }

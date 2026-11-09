@@ -106,6 +106,14 @@ impl Membership {
         self.send_snap_chunk(h, peer, partial, false, &chunk, n);
     }
 
+    /// A hub sends `peer` its snapshot again without a new attachment: the host adopted another session of an
+    /// attached member, and what went out on the closed session may be lost.
+    pub fn snapshot_to<H: Host>(&mut self, h: &mut H, now: Nanos, peer: &NodeId) {
+        if self.is_hub && self.attached.contains(peer) {
+            self.send_snapshot(h, now, peer);
+        }
+    }
+
     fn send_snap_chunk<H: Host>(
         &mut self,
         h: &mut H,

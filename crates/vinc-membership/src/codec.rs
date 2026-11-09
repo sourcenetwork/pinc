@@ -396,11 +396,20 @@ impl<'a> Frame<'a> {
     /// # Errors
     /// [`FrameError::TooLarge`] for a length over [`MAX_BODY`], or any [`Frame::parse`] error.
     pub fn read(buf: &'a [u8]) -> Result<Option<(Self, usize)>, FrameError> {
+        Self::read_with(buf, MAX_BODY)
+    }
+
+    /// As [`Frame::read`], with a body limit of `max_body` bytes in place of [`MAX_BODY`]. A host whose broadcast layer
+    /// is configured for larger messages raises the limit to the largest frame that layer can build.
+    ///
+    /// # Errors
+    /// [`FrameError::TooLarge`] for a length over `max_body`, or any [`Frame::parse`] error.
+    pub fn read_with(buf: &'a [u8], max_body: usize) -> Result<Option<(Self, usize)>, FrameError> {
         let Some((head, rest)) = buf.split_first_chunk::<4>() else {
             return Ok(None);
         };
         let len = usize::try_from(u32::from_be_bytes(*head)).map_err(|_| FrameError::TooLarge)?;
-        if len > MAX_BODY {
+        if len > max_body {
             return Err(FrameError::TooLarge);
         }
         let Some(body) = rest.get(..len) else {

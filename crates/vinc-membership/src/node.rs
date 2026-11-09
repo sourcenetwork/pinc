@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use core::ops::Bound;
 
 use crate::codec::{Alive, Entry, Frame, NodeId, Path, Record};
-use crate::consts::{HEAL_SILENCE, HUB_STALE, MAX_HUBS, MAX_TABLE, QUEUE_CAP};
+use crate::consts::{HUB_STALE, MAX_HUBS, MAX_TABLE, QUEUE_CAP};
 use crate::event::{Event, QuietCause, Trace};
 use crate::incarnation::{AddressTag, Incarnation, IncarnationError};
 use crate::session::{CloseReason, Host, LEAVE_CODE, Nanos, Route};
@@ -141,6 +141,7 @@ pub struct Membership {
     pub(crate) th: [u8; 8],
     pub(crate) sent: Option<(u16, [u8; 8])>,
     pub(crate) seal_failed: bool,
+    pub(crate) max_frame: usize,
 
     pub(crate) up: BTreeMap<NodeId, Nanos>,
     pub(crate) heard: BTreeMap<NodeId, Nanos>,
@@ -229,6 +230,7 @@ impl Membership {
             th,
             sent: None,
             seal_failed: false,
+            max_frame: crate::codec::MAX_BODY,
             up: BTreeMap::new(),
             heard: BTreeMap::new(),
             revoked: BTreeSet::new(),
@@ -352,6 +354,28 @@ impl Membership {
         self.boot.iter().filter(move |h| **h != me)
     }
 
+    /// Whether hub `x` is alive at `now`: this node itself, or a session that received a frame recently.
+    pub fn hub_is_up(&self, now: Nanos, x: &NodeId) -> bool {
+        self.hub_up(now, x)
+    }
+
+    /// Whether the view lists `member`.
+    pub fn in_view(&self, member: &NodeId) -> bool {
+        self.members.contains_key(member)
+    }
+
+    /// Raise (or lower) the largest frame body the node reads from a hub stream, for a broadcast layer configured
+    /// for messages larger than the default [`MAX_BODY`](crate::codec::MAX_BODY). The limit never goes below the
+    /// default.
+    pub fn set_max_frame(&mut self, max_body: usize) {
+        self.max_frame = max_body.max(crate::codec::MAX_BODY);
+    }
+
+    /// The largest frame body the node reads from a hub stream.
+    pub const fn max_frame(&self) -> usize {
+        self.max_frame
+    }
+
     /// The members a hub holds a lease for.
     pub fn roster_len(&self) -> usize {
         self.roster.len()
@@ -431,7 +455,7 @@ impl Membership {
         let silent = self
             .heard
             .get(peer)
-            .is_some_and(|t| now.saturating_sub(*t) > HEAL_SILENCE);
+            .is_some_and(|t| now.saturating_sub(*t) > h.give_up(peer));
         if !self.is_hub && self.is_boot(peer) && silent {
             self.begin_quiet(now, QuietCause::Heal);
         }

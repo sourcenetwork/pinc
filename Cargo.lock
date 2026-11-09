@@ -1594,6 +1594,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-node"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "vinc-broadcast",
+ "vinc-connect",
+ "vinc-core",
+ "vinc-crypto",
+ "vinc-membership",
+ "vinc-security",
+ "vinc-transport",
+ "vinc-wire",
+]
+
+[[package]]
 name = "vinc-nuclei"
 version = "0.1.0"
 dependencies = [
@@ -1649,6 +1664,7 @@ dependencies = [
  "vinc-dtn",
  "vinc-keystore",
  "vinc-membership",
+ "vinc-node",
  "vinc-nuclei",
  "vinc-reconcile",
  "vinc-security",

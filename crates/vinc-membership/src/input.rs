@@ -8,7 +8,7 @@
 //! DELTA from a non-hub) is ignored, never an error; at most [`MAX_FRAMES_PER_CALL`] frames are parsed per call.
 
 use crate::codec::{Frame, FrameError, NodeId};
-use crate::consts::{HEAL_SILENCE, HYST_ABS, RENEW, RTT_SAMPLE_MAX};
+use crate::consts::{HYST_ABS, RENEW, RTT_SAMPLE_MAX};
 use crate::event::{QuietCause, Trace};
 use crate::node::Membership;
 use crate::session::{Host, Nanos};
@@ -33,7 +33,7 @@ impl Membership {
                 && t.is_none_or(|t| ev.last_rx > t)
             {
                 // The transport heard the hub again after a long silence: a partition healed.
-                if !self.is_hub && t.is_some_and(|t| ev.last_rx.saturating_sub(t) > HEAL_SILENCE) {
+                if !self.is_hub && t.is_some_and(|t| ev.last_rx.saturating_sub(t) > h.give_up(&hub)) {
                     self.begin_quiet(now, QuietCause::Heal);
                 }
                 self.heard.insert(hub, ev.last_rx);
@@ -50,7 +50,7 @@ impl Membership {
         let mut used = 0;
         for _ in 0..MAX_FRAMES_PER_CALL {
             let Some(rest) = buf.get(used..) else { break };
-            match Frame::read(rest) {
+            match Frame::read_with(rest, self.max_frame) {
                 Ok(Some((f, n))) => {
                     self.on_frame(h, now, peer, &f);
                     used += n;
@@ -80,7 +80,7 @@ impl Membership {
             let silent = self
                 .heard
                 .get(peer)
-                .is_some_and(|t| now.saturating_sub(*t) > HEAL_SILENCE);
+                .is_some_and(|t| now.saturating_sub(*t) > h.give_up(peer));
             if !self.is_hub && silent {
                 self.begin_quiet(now, QuietCause::Heal);
             }
