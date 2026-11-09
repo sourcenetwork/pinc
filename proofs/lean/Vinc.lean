@@ -102,4 +102,5 @@ import Vinc.ValuesSchedSteal
 import Vinc.ValuesSchedEvict
 import Vinc.ValuesSchedTerm
 import Vinc.TraceValuesSched
+import Vinc.ConnectAudit
 #audit_package

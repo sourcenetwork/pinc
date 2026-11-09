@@ -175,12 +175,13 @@ par run_tlc_deep valuesverify_skip ValuesVerify ValuesVerify_skip
 par run_tlc_deep valuesverify_skip2 ValuesVerify ValuesVerify_skip2
 par run_tlc_deep valuesverify_rx ValuesVerifyRx ValuesVerifyRx
 par run_tlc_deep valueswire ValuesWire ValuesWire
+par run_tlc connect_mailbox ConnectMailbox ConnectMailbox
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -206,5 +207,6 @@ trace_tlc TraceValuesSys values_sys
 trace_tlc TraceValuesTime values_time
 trace_tlc TraceValuesVerify valuesverify
 trace_tlc TraceValuesWire valueswire
+trace_tlc TraceConnectMailbox mailbox
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

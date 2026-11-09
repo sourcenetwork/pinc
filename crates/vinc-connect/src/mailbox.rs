@@ -253,13 +253,16 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         } = self;
         let h = held.get_mut(node)?;
         Self::expire(h, stats, now, *max_age_ns);
-        let out = h.front().filter(|f| f.2 <= max_len).and_then(|(src, flag, len, _, seq)| {
-            let dst = buf.get_mut(..len)?;
-            h.copy_out(h.head + ENTRY_HEAD, dst);
-            h.skip_front();
-            stats.delivered += 1;
-            Some(Delivered { src, flag, len, seq })
-        });
+        let out = h
+            .front()
+            .filter(|f| f.2 <= max_len)
+            .and_then(|(src, flag, len, _, seq)| {
+                let dst = buf.get_mut(..len)?;
+                h.copy_out(h.head + ENTRY_HEAD, dst);
+                h.skip_front();
+                stats.delivered += 1;
+                Some(Delivered { src, flag, len, seq })
+            });
         if h.count == 0 {
             held.remove(node);
         }

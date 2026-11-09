@@ -638,7 +638,10 @@ fn a_held_packet_too_long_for_a_datagram_stays_held_until_the_carrier_reopens() 
     // its carrier reopens: the packet is delivered there, once
     fx.open(T0 + 4 * SEC, m);
     let out = fx.fx();
-    assert!(out.iter().any(|r| matches!(r, Rec::Carrier(n, _) if *n == m)), "{out:?}");
+    assert!(
+        out.iter().any(|r| matches!(r, Rec::Carrier(n, _) if *n == m)),
+        "{out:?}"
+    );
     assert_eq!(fx.r.mailbox_pending(&m).0, 0);
     assert_eq!(fx.r.mailbox_stats().delivered, 1);
 }

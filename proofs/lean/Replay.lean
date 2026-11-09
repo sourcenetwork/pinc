@@ -15,6 +15,7 @@ import Vinc.TraceValuesSched
 import Vinc.ValuesWireTrace
 import Vinc.ValuesVerifyTrace
 import Vinc.ValuesTimeTrace
+import Vinc.TraceConnectMailbox
 
 /-!
 # Trace replay
@@ -121,6 +122,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut vsw : TraceValuesSched.RS := {}
   let mut gvw : ValuesVerifyTrace.W := {}
   let mut vtw : ValuesTimeTrace.W := default
+  let mut cmb : TraceConnectMailbox.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -182,6 +184,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesSys.replayEvent j vyw with
           | .ok w' =>
             vyw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectMailbox.isTag t then
+          -- Mailbox events (`trace_connect_mailbox`): push, pop, sweep and clear of the Lean mailbox model.
+          match TraceConnectMailbox.replayEvent j cmb with
+          | .ok w' =>
+            cmb := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
