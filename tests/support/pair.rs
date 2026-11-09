@@ -58,6 +58,8 @@ impl<'a> Pair<'a> {
         let Net { mut a, mut b, now, .. } = net;
         // What the connections noted while they connected is not part of the pair's story.
         let _ = (a.conn.trace_take(), b.conn.trace_take());
+        a.conn.trace_enable();
+        b.conn.trace_enable();
         Self {
             a,
             b,

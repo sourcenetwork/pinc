@@ -126,6 +126,9 @@ pub struct KeysView {
 /// What the connection records: the log and the REKEY message of the packet being sent or received.
 #[derive(Debug)]
 pub(crate) struct Recorder {
+    /// Whether steps are recorded; off until [`Connection::trace_enable`], so a connection built with the feature
+    /// still allocates nothing per packet.
+    pub(crate) on: bool,
     pub(crate) log: Vec<(KeyEvent, Option<KeysView>)>,
     pub(crate) tx: Option<Rekey>,
     pub(crate) rx: Option<Rekey>,
@@ -134,6 +137,7 @@ pub(crate) struct Recorder {
 impl Recorder {
     pub(crate) const fn new() -> Self {
         Self {
+            on: false,
             log: Vec::new(),
             tx: None,
             rx: None,
@@ -142,6 +146,11 @@ impl Recorder {
 }
 
 conn_impl! {
+    /// Start recording the steps of the key layer (they are not recorded by default).
+    pub fn trace_enable(&mut self) {
+        self.keys.rec.on = true;
+    }
+
     /// The key events since the last call, oldest first, each with the key state right after it (`None` for a
     /// loss event, which the connection notes from inside the key layer).
     pub fn trace_take(&mut self) -> Vec<(KeyEvent, Option<KeysView>)> {
@@ -216,6 +225,9 @@ conn_impl! {
 
     /// Note a step of the key layer.
     pub(super) fn trace_note(&mut self, ev: KeyEvent) {
+        if !self.keys.rec.on {
+            return;
+        }
         let view = self.trace_keys();
         self.keys.rec.log.push((ev, view));
     }
