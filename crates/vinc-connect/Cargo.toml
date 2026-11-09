@@ -12,6 +12,8 @@ publish.workspace = true
 vinc-wire = { workspace = true }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
+vinc-core = { workspace = true }
+vinc-transport = { workspace = true }
 
 [lints]
 workspace = true

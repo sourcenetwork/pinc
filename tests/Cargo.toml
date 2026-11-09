@@ -500,3 +500,35 @@ path = "trace_connect_table.rs"
 [[test]]
 name = "trace_connect"
 path = "trace_connect.rs"
+
+[[test]]
+name = "connect_link"
+path = "connect_link.rs"
+
+[[test]]
+name = "connect_netcheck"
+path = "connect_netcheck.rs"
+
+[[test]]
+name = "connect_lookup"
+path = "connect_lookup.rs"
+
+[[test]]
+name = "connect_dial"
+path = "connect_dial.rs"
+
+[[test]]
+name = "connect_tunnel"
+path = "connect_tunnel.rs"
+
+[[test]]
+name = "connect_punch"
+path = "connect_punch.rs"
+
+[[test]]
+name = "connect_ticket"
+path = "connect_ticket.rs"
+
+[[test]]
+name = "connect_local"
+path = "connect_local.rs"
