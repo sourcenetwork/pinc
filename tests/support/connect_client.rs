@@ -80,6 +80,12 @@ pub enum Cmd {
         peer: NodeId,
         data: Vec<u8>,
     },
+    /// Send `count` unreliable datagrams of `len` bytes on the session.
+    Datagrams {
+        session: SessionId,
+        count: usize,
+        len: usize,
+    },
     /// Run the host loop (a new node starts with it).
     Tick,
 }
@@ -428,6 +434,12 @@ impl Client {
             Cmd::Raw { relay, peer, data } => {
                 let a = self.conn.path_addr(relay, &peer);
                 self.conn.route(now, &*self.host.ep, a, &data);
+            }
+            Cmd::Datagrams { session, count, len } => {
+                let data = vec![0x5au8; len];
+                for _ in 0..count {
+                    let _ = self.host.command(now, Command::SendDatagram { session, data: &data });
+                }
             }
             Cmd::Tick => {}
         }
