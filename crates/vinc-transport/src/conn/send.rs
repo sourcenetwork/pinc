@@ -200,6 +200,9 @@ conn_impl! {
             usize::try_from(allowed.saturating_sub(b.sent()).saturating_sub(OVERHEAD as u64)).unwrap_or(usize::MAX)
         };
         match self.paths.get(ti) {
+            // Once the session is validated its peer is known to hold the keys, so a path it moved to is not limited by
+            // what arrived on it: the budget would be spent before the challenge that validates the path is answered.
+            Some(_) if self.sess_amp.is_validated() => usize::MAX,
             Some(p) => left(&p.amp).min(left(&self.sess_amp)),
             None => 0,
         }
@@ -262,7 +265,7 @@ conn_impl! {
     fn finish_datagram(&mut self, ti: usize, len: usize, now: u64) -> Option<usize> {
         let charge = (len + OVERHEAD) as u64;
         let p = self.paths.get_mut(ti)?;
-        debug_assert!(p.amp.can_send(len as u64));
+        debug_assert!(self.sess_amp.is_validated() || p.amp.can_send(len as u64));
         p.amp.on_send(charge);
         self.sess_amp.on_send(charge);
         self.stats.datagrams_sent += 1;

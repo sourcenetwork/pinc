@@ -430,3 +430,57 @@ fn a_second_protocol_opened_after_the_peer_moved_behind_its_nat_gets_its_answer(
         );
     });
 }
+
+#[test]
+fn a_big_answer_reaches_a_peer_that_moved_even_when_the_first_path_check_is_lost() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let inside = net.nodes[a].addr;
+        let outside: std::net::SocketAddr = ([10, 9, 0, 1], 5000).into();
+        net.nat = Some((inside, outside));
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        let parent_a = net.nodes[a].session(&rep);
+        assert!(net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[a].saw(is_connected) && n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+        }));
+        net.run_for(2 * SEC_NS);
+        // The mapping changes. The two datagrams that follow get through (the request); the next three, which hold
+        // the answer to the path check, are lost.
+        let moved: std::net::SocketAddr = ([10, 9, 0, 1], 5001).into();
+        net.nat = Some((inside, moved));
+        let seen = Rc::new(Cell::new(0u32));
+        let counter = Rc::clone(&seen);
+        net.loss = Some(Box::new(move |from, _, _| {
+            if from != inside {
+                return false;
+            }
+            counter.set(counter.get() + 1);
+            (3..=5).contains(&counter.get())
+        }));
+        write_new(&mut net, a, parent_a, b"ask");
+        let end = net.now + 2 * SEC_NS;
+        assert!(net.run(end, |n| n.nodes[b].fin.len() == 1), "the request never arrived");
+        let sb = net.nodes[b]
+            .events
+            .iter()
+            .find_map(|(_, e)| {
+                if let Event::Incoming { session, .. } = e {
+                    Some(*session)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        write_new(&mut net, b, sb, &pattern(40_000, 3));
+        let end = net.now + 3 * SEC_NS;
+        assert!(
+            net.run(end, |n| n.nodes[a].read.values().map(Vec::len).sum::<usize>() == 40_000),
+            "the answer did not arrive within 3 s"
+        );
+    });
+}
