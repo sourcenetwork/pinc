@@ -13,6 +13,7 @@ import Vinc.TraceRecovery
 import Vinc.TraceRx
 import Vinc.TraceCid
 import Vinc.TraceCc
+import Vinc.TracePn
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -437,6 +438,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TracePn.isTag t then
+          -- Packet-number codec events (`txpn`, written by `trace_pn`): truncation and expansion.
+          match TracePn.replayEvent j with
+          | .ok _ =>
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

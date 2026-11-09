@@ -875,3 +875,7 @@ path = "trace_cid.rs"
 [[test]]
 name = "trace_cc"
 path = "trace_cc.rs"
+
+[[test]]
+name = "trace_pn"
+path = "trace_pn.rs"
