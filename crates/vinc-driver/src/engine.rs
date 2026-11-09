@@ -327,6 +327,7 @@ impl Engine<'_, '_> {
             Event::PathChanged { .. }
             | Event::PeerAsleep { .. }
             | Event::PeerAwake { .. }
+            | Event::ReachOut { .. }
             | Event::TicketsReceived { .. } => {}
         }
     }

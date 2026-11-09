@@ -604,6 +604,7 @@ impl Core {
             | Event::PeerAsleep { .. }
             | Event::PeerAwake { .. }
             | Event::ReachOut { .. }
+            | Event::StreamStopped { .. }
             | Event::TicketsReceived { .. } => {}
         }
     }
