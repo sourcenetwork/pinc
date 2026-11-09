@@ -3,6 +3,7 @@ name = "vinc-node"
 description = "The VINC node: the endpoint, the connectivity client, membership, broadcast, values, reconcile and delay-tolerant delivery composed over real sessions as one SANS-IO state machine"
 keywords = ["no_std", "node", "sans-io", "membership", "values", "dtn"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
