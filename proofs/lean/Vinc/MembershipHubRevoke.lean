@@ -149,4 +149,82 @@ theorem onFrame_revoked (e : Env) (n : N) (now peer : Nat) (f : NFrame) (h : n.r
     N.onFrame e n now peer f = n := by
   unfold N.onFrame; simp [h]
 
+/-- A session from a revoked peer is closed at once, with the revocation reason, and nothing else happens. -/
+theorem sessionUp_revoked (e : Env) (n : N) (now peer : Nat) (incoming : Bool) (hne : peer ≠ n.me)
+    (h : n.revoked.has peer = true) : N.sessionUp e n now peer incoming = n.close peer .revoked := by
+  unfold N.sessionUp
+  have : (peer == n.me) = false := by simpa using hne
+  simp [this, h]
+
+/-- The steps of `on_hello` before the roster is touched. -/
+def N.ohPre (e : Env) (n : N) (now peer : Nat) (snap homed : Bool) : N :=
+  let n := if homed && !n.isBoot peer then
+      (if n.homed.len < MAX_TABLE then { n with homed := n.homed.ins peer } else n)
+    else { n with homed := n.homed.del peer }
+  let n := if n.downed.has peer then (N.bc { n with downed := n.downed.erase peer } (.restore peer)) else n
+  let newAttach := !n.attached.has peer
+  let n := if newAttach && n.attached.len < MAX_TABLE then { n with attached := n.attached.ins peer } else n
+  let n := if newAttach then N.sendFloor e (n.trace (.attached peer)) peer else n
+  if snap || newAttach then N.sendSnapshot e n now peer else (N.tx e n peer .session .ack).1
+
+theorem sendFloor_roster (e : Env) (n : N) (peer : Nat) : (N.sendFloor e n peer).roster = n.roster := by
+  unfold N.sendFloor; dsimp only; split <;> simp
+
+theorem foldlG_ht {α : Type} (l : List α) (f : N → α → N) (h : ∀ n a, (f n a).HT n) (n : N) : (l.foldl f n).HT n := by
+  induction l generalizing n with
+  | nil => exact N.HT_refl n
+  | cons k r ih => simp only [List.foldl_cons]; exact N.HT_trans (ih (f n k)) (h n k)
+
+theorem sendSnapshot_ht (e : Env) (n : N) (now peer : Nat) : (N.sendSnapshot e n now peer).HT n := by
+  unfold N.sendSnapshot
+  dsimp only
+  exact foldlG_ht _ _ (fun n c => tx_ht ..) n
+
+theorem sendFloor_ht (e : Env) (n : N) (peer : Nat) : (N.sendFloor e n peer).HT n := by
+  unfold N.sendFloor; dsimp only; split
+  · exact N.HT_refl n
+  · exact tx_ht ..
+
+@[simp] theorem sendFloor_r (e : Env) (n : N) (peer : Nat) : (N.sendFloor e n peer).roster = n.roster := (sendFloor_ht e n peer).1
+@[simp] theorem sendSnapshot_r (e : Env) (n : N) (now peer : Nat) : (N.sendSnapshot e n now peer).roster = n.roster :=
+  (sendSnapshot_ht e n now peer).1
+
+theorem ohPre_roster (e : Env) (n : N) (now peer : Nat) (snap homed : Bool) : (n.ohPre e now peer snap homed).roster = n.roster := by
+  unfold N.ohPre
+  dsimp only
+  simp only [ite_roster, bc_roster', trace_roster, sendFloor_r, sendSnapshot_r, tx_roster, ite_self]
+
+/-- Property 9: a HELLO from a member the full roster does not list is refused instead of evicting: the roster does
+not change. -/
+theorem onHello_full_refuses (e : Env) (n : N) (now peer : Nat) (rc : Rec) (snap homed : Bool)
+    (hn : n.roster.has peer = false) (hfull : MAX_TABLE ≤ n.roster.len) :
+    (N.onHello e n now peer rc snap homed).roster = n.roster := by
+  have hq : N.onHello e n now peer rc snap homed =
+      (let n1 := n.ohPre e now peer snap homed
+       match n1.roster.get? peer with
+       | some held =>
+         if rc.inc < held.rc.inc then
+           let n := { n1 with roster := n1.roster.modify peer (fun l => { l with renewed := now }) }
+           N.deltaTo e n peer peer held.rc .alive
+         else if held.rc == rc then
+           { n1 with roster := n1.roster.modify peer (fun l => { l with renewed := now }) }
+         else if MAX_TABLE ≤ n1.roster.len && !n1.roster.has peer then n1
+         else
+           let n := { n1 with roster := n1.roster.insert peer ⟨rc, now⟩ }
+           N.pushDelta e n now peer rc .alive
+       | none =>
+         if MAX_TABLE ≤ n1.roster.len then n1
+         else
+           let n := { n1 with roster := n1.roster.insert peer ⟨rc, now⟩ }
+           N.pushDelta e n now peer rc .alive) := rfl
+  rw [hq]
+  dsimp only
+  have hr := ohPre_roster e n now peer snap homed
+  have hg : (n.ohPre e now peer snap homed).roster.get? peer = none := by
+    rw [hr]; unfold AMap.get? AMap.has at *
+    simpa [List.any_eq_false, List.find?_eq_none] using hn
+  rw [hg]
+  have : MAX_TABLE ≤ (n.ohPre e now peer snap homed).roster.len := by rw [hr]; exact hfull
+  rw [if_pos this]; exact hr
+
 end Vinc.Membership
