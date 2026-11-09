@@ -75,11 +75,19 @@ gate: checks test doctest proofs
     @echo "gate: ok"
 
 # Every static check: dependency rules, format, lints, docs, no_std builds, pure Rust.
-checks: deps fmt-check clippy doc no-std pure
+checks: deps hygiene fmt-check clippy doc no-std pure
 
 # Dependency rules: declared only at the root, one version, unsafe forbidden, no async runtime, no C.
 deps:
     python3 scripts/deps.py
+
+# Public-repository hygiene: no internal project names and no em-dash or en-dash in any tracked file.
+hygiene:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    names='finalist|vinc_experiments|eurekagent|roster_settle|kindling|scramdb'
+    if git grep -nIiE "$names" -- . ':!justfile'; then echo "hygiene: internal names in the files above" >&2; exit 1; fi
+    if git grep -nIP '[\x{2013}\x{2014}]' -- .; then echo "hygiene: em-dash or en-dash in the files above" >&2; exit 1; fi
 
 # Format every crate.
 fmt:
