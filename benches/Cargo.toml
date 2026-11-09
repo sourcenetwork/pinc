@@ -16,6 +16,7 @@ vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
+vinc-values = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -59,6 +60,10 @@ harness = false
 
 [[bench]]
 name = "dtn"
+harness = false
+
+[[bench]]
+name = "values"
 harness = false
 
 [[bench]]

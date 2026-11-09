@@ -1373,6 +1373,7 @@ dependencies = [
  "vinc-security",
  "vinc-sim",
  "vinc-transport",
+ "vinc-values",
  "vinc-wire",
 ]
 
@@ -1482,6 +1483,7 @@ dependencies = [
  "vinc-security",
  "vinc-sim",
  "vinc-transport",
+ "vinc-values",
  "vinc-wire",
 ]
 
@@ -1491,6 +1493,16 @@ version = "0.1.0"
 dependencies = [
  "vinc-crypto",
  "vinc-security",
+ "vinc-wire",
+]
+
+[[package]]
+name = "vinc-values"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "vinc-dag",
+ "vinc-transport",
  "vinc-wire",
 ]
 

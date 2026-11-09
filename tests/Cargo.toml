@@ -27,6 +27,7 @@ vinc-sim = { workspace = true }
 vinc-connect = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
+vinc-values = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -274,6 +275,38 @@ path = "dtn_forward.rs"
 [[test]]
 name = "dtn_alloc"
 path = "dtn_alloc.rs"
+
+[[test]]
+name = "values_wire"
+path = "values_wire.rs"
+
+[[test]]
+name = "values_verify"
+path = "values_verify.rs"
+
+[[test]]
+name = "values_plan"
+path = "values_plan.rs"
+
+[[test]]
+name = "values_fetch"
+path = "values_fetch.rs"
+
+[[test]]
+name = "values_rules"
+path = "values_rules.rs"
+
+[[test]]
+name = "values_server"
+path = "values_server.rs"
+
+[[test]]
+name = "values_alloc"
+path = "values_alloc.rs"
+
+[[test]]
+name = "values_big"
+path = "values_big.rs"
 
 [lints]
 workspace = true
