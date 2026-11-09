@@ -189,7 +189,7 @@ theorem reseed_injective_key (d d' : D) (e : Bytes) (h1 : d.key.length = e.lengt
   exact this
 
 /-- The stream is a pseudo-random function of the key: bytes of output determine the key (a hypothesis on the
-abstract stream, the collision resistance of `ChaCha20`'s output, never an axiom). -/
+abstract stream, the collision resistance of `ChaCha20`'s output, a hypothesis). -/
 def StreamInj (stream : Bytes → Nat → Nat) : Prop :=
   ∀ k k' m, 1 ≤ m → (ks stream k (32 + m)).drop 32 = (ks stream k' (32 + m)).drop 32 → k = k'
 

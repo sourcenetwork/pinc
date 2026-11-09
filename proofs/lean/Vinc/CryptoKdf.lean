@@ -18,8 +18,7 @@ never meets a `derive_key` call.
 What is proved without any assumption: the call each site builds is injective in its arguments, calls of different
 labels differ, the 31 labels of the workspace that pass through the primitive are pairwise distinct (so no two sites
 share a domain), and the extendable output of `expand` has the length asked for and is a prefix of every longer
-output. What needs the collision resistance of the primitive (`PrimInj`, a hypothesis on an abstract function, never an
-axiom): the output of `expand` is injective in the secret, also along a chain of derivations (the key schedule's
+output. What needs the collision resistance of the primitive (`PrimInj`, a hypothesis on an abstract function): the output of `expand` is injective in the secret, also along a chain of derivations (the key schedule's
 `packet key` from a traffic secret relies on it).
 -/
 

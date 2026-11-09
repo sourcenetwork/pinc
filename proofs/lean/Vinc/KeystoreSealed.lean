@@ -125,7 +125,7 @@ theorem parse_build (p : Parts) (hn : p.nonce.length = nonceLen) (ht : p.tag.len
 
 /-- The ideal AEAD as a hypothesis on abstract functions `sealF key nonce aad plaintext = (ciphertext, tag)` and
 `open`: it opens what it sealed, opens nothing else, and the sealed bytes determine key, nonce, associated data and
-plaintext (the collision freedom of the tag; the repository's `IdealAead` assumption, never an axiom). -/
+plaintext (the collision freedom of the tag; the repository's `IdealAead` assumption, a hypothesis). -/
 structure Ideal (sealF : Bytes → Bytes → Bytes → Bytes → Bytes × Bytes)
     (openF : Bytes → Bytes → Bytes → Bytes → Bytes → Option Bytes) : Prop where
   opens : ∀ k n a p, openF k n a (sealF k n a p).1 (sealF k n a p).2 = some p
