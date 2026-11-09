@@ -193,4 +193,8 @@ import Vinc.MembershipCompleteRoster
 import Vinc.MembershipCompleteSlow
 import Vinc.MembershipCompleteTick
 import Vinc.MembershipCompleteTimeout
+import Vinc.MembershipInvView
+import Vinc.MembershipInvHub
+import Vinc.MembershipInvNode
+import Vinc.MembershipInvReach
 #audit_package

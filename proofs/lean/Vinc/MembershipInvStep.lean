@@ -15,17 +15,17 @@ open Vinc.MemInc
 
 variable {B : List Nat}
 
-theorem inv_let (v : N) (b : N → N) (hv : Inv B v) (hb : ∀ x, Inv B x → Inv B (b x)) : Inv B (b v) := hb v hv
-theorem inv_letP {β : Type} (v : N) (b : N → N × β) (hv : Inv B v) (hb : ∀ x, Inv B x → Inv B (b x).1) : Inv B (b v).1 := hb v hv
-theorem inv_match {β : Type} (X : N × β) (k : N → β → N) (hX : Inv B X.1) (hk : ∀ a b, Inv B a → Inv B (k a b)) :
-    Inv B (k X.1 X.2) := hk _ _ hX
-theorem inv_matchP {β γ : Type} (X : N × β) (k : N → β → N × γ) (hX : Inv B X.1) (hk : ∀ a b, Inv B a → Inv B (k a b).1) :
-    Inv B (k X.1 X.2).1 := hk _ _ hX
+theorem inv_let (v : N) (b : N → N) (hv : Inv B v) (hb : ∀ x, x = v → Inv B x → Inv B (b x)) : Inv B (b v) := hb v rfl hv
+theorem inv_letP {β : Type} (v : N) (b : N → N × β) (hv : Inv B v) (hb : ∀ x, x = v → Inv B x → Inv B (b x).1) : Inv B (b v).1 := hb v rfl hv
+theorem inv_match {β : Type} (X : N × β) (k : N → β → N) (hX : Inv B X.1) (hk : ∀ a b, X = (a, b) → Inv B a → Inv B (k a b)) :
+    Inv B (k X.1 X.2) := hk _ _ rfl hX
+theorem inv_matchP {β γ : Type} (X : N × β) (k : N → β → N × γ) (hX : Inv B X.1) (hk : ∀ a b, X = (a, b) → Inv B a → Inv B (k a b).1) :
+    Inv B (k X.1 X.2).1 := hk _ _ rfl hX
 
 theorem inv_match3 {β γ : Type} (X : N × β × γ) (k : N → β → γ → N) (hX : Inv B X.1)
-    (hk : ∀ a b c, Inv B a → Inv B (k a b c)) : Inv B (k X.1 X.2.1 X.2.2) := hk _ _ _ hX
+    (hk : ∀ a b c, X = (a, b, c) → Inv B a → Inv B (k a b c)) : Inv B (k X.1 X.2.1 X.2.2) := hk _ _ _ rfl hX
 theorem inv_match3P {β γ δ : Type} (X : N × β × γ) (k : N → β → γ → N × δ) (hX : Inv B X.1)
-    (hk : ∀ a b c, Inv B a → Inv B (k a b c).1) : Inv B (k X.1 X.2.1 X.2.2).1 := hk _ _ _ hX
+    (hk : ∀ a b c, X = (a, b, c) → Inv B a → Inv B (k a b c).1) : Inv B (k X.1 X.2.1 X.2.2).1 := hk _ _ _ rfl hX
 
 open Lean Elab Tactic Meta in
 /-- Peel the outermost `let` (of a node, or of any other value) or pair `match` of the node in a goal `Inv B e` or
@@ -49,11 +49,12 @@ elab "inv_let" : tactic => withMainContext do
       let bFun := Expr.lam nm ty b .default
       let hv ← mkFreshExprSyntheticOpaqueMVar (invB v)
       let hbT := Expr.forallE nm ty
-        (Expr.forallE `hx (invB (.bvar 0)) (invOf β (b.liftLooseBVars 0 1)) .default) .default
+        (Expr.forallE `hxe (mkApp3 (mkConst ``Eq [Level.succ Level.zero]) nT (.bvar 0) v)
+          (Expr.forallE `hx (invB (.bvar 1)) (invOf β (b.liftLooseBVars 0 2)) .default) .default) .default
       let hb ← mkFreshExprSyntheticOpaqueMVar hbT
       let pf := if wrapped then mkApp6 (mkConst ``inv_letP) Bx β v bFun hv hb else mkApp5 (mkConst ``inv_let) Bx v bFun hv hb
       g.assign pf
-      let (_, g2) ← hb.mvarId!.introN 2 [`x, `hx]
+      let (_, g2) ← hb.mvarId!.introN 3 [`x, `hxe, `hx]
       replaceMainGoal [hv.mvarId!, g2]
     else
       let nb := b.instantiate1 v
@@ -70,25 +71,55 @@ elab "inv_let" : tactic => withMainContext do
     let np := mApp.altNumParams[0]!
     let hX ← mkFreshExprSyntheticOpaqueMVar (invB (mkApp3 (mkConst ``Prod.fst [Level.zero, Level.zero]) nT β2 X))
     if np == 2 then
-      let hbT ← withLocalDeclD `a nT fun a => withLocalDeclD `b β2 fun b => withLocalDeclD `hx (invB a) fun hxv => do
+      let hbT ← withLocalDeclD `a nT fun a => withLocalDeclD `b β2 fun b => do
+        let eqT ← mkEq X (← mkAppM ``Prod.mk #[a, b])
+        withLocalDeclD `hXe eqT fun hXe => withLocalDeclD `hx (invB a) fun hxv => do
         let body := (mkApp2 k a b).headBeta
-        mkForallFVars #[a, b, hxv] (invOf β body)
+        mkForallFVars #[a, b, hXe, hxv] (invOf β body)
       let hb ← mkFreshExprSyntheticOpaqueMVar hbT
       let pf := if wrapped then mkApp7 (mkConst ``inv_matchP) Bx β2 β X k hX hb else mkApp6 (mkConst ``inv_match) Bx β2 X k hX hb
       g.assign pf
-      let (_, g2) ← hb.mvarId!.introN 3 [`n, `b, `hx]
+      let (_, g2) ← hb.mvarId!.introN 4 [`n, `b, `hXe, `hx]
       replaceMainGoal [hX.mvarId!, g2]
     else if np == 3 then
       let (``Prod, #[b1, b2]) := (← whnf β2).getAppFnArgs | throwError "inv_let: not a triple"
-      let hbT ← withLocalDeclD `a nT fun a => withLocalDeclD `b b1 fun b => withLocalDeclD `c b2 fun c => withLocalDeclD `hx (invB a) fun hxv => do
+      let hbT ← withLocalDeclD `a nT fun a => withLocalDeclD `b b1 fun b => withLocalDeclD `c b2 fun c => do
+        let eqT ← mkEq X (← mkAppM ``Prod.mk #[a, ← mkAppM ``Prod.mk #[b, c]])
+        withLocalDeclD `hXe eqT fun hXe => withLocalDeclD `hx (invB a) fun hxv => do
         let body := (mkApp3 k a b c).headBeta
-        mkForallFVars #[a, b, c, hxv] (invOf β body)
+        mkForallFVars #[a, b, c, hXe, hxv] (invOf β body)
       let hb ← mkFreshExprSyntheticOpaqueMVar hbT
       let pf := if wrapped then mkApp8 (mkConst ``inv_match3P) Bx b1 b2 β X k hX hb else mkApp7 (mkConst ``inv_match3) Bx b1 b2 X k hX hb
       g.assign pf
-      let (_, g2) ← hb.mvarId!.introN 4 [`n, `b, `c, `hx]
+      let (_, g2) ← hb.mvarId!.introN 5 [`n, `b, `c, `hXe, `hx]
       replaceMainGoal [hX.mvarId!, g2]
     else throwError "inv_let: pattern arity"
+
+theorem isBoot_mem {n : N} (h : Inv B n) {p : Nat} (hb : n.isBoot p = true) : p ∈ B := by
+  have := h.bootEq; unfold N.isBoot at hb; rw [this] at hb; simpa using hb
+
+open Lean Elab Tactic Meta in
+/-- Close `p ∈ B` from a hypothesis `n.isBoot p = true` and the `Inv B n` of the same node, wherever they sit in the context. -/
+elab "inv_boot" : tactic => withMainContext do
+  let g ← getMainGoal
+  for d in (← getLCtx) do
+    if d.isImplementationDetail then continue
+    let ty ← instantiateMVars d.type
+    let some (_, lhs, _) := ty.eq? | continue
+    let lhs := lhs.consumeMData
+    unless lhs.isAppOfArity ``N.isBoot 2 do continue
+    let n := lhs.appFn!.appArg!
+    for d2 in (← getLCtx) do
+      if d2.isImplementationDetail then continue
+      let ty2 ← instantiateMVars d2.type
+      unless ty2.isAppOfArity ``Inv 2 do continue
+      if (← isDefEq ty2.appArg! n) then
+        let pf ← mkAppM ``isBoot_mem #[d2.toExpr, d.toExpr]
+        unless (← isDefEq (← g.getType) (← inferType pf)) do continue
+        g.assign pf
+        replaceMainGoal []
+        return
+  throwError "inv_boot: no isBoot hypothesis"
 
 /-- The guard of an insert: from the branch hypotheses of the code. -/
 macro "inv_guard" : tactic =>
@@ -114,7 +145,7 @@ macro "inv_src" : tactic =>
 
 set_option hygiene false in
 /-- A node id is one of the bootstrap hubs. -/
-macro "inv_mem" : tactic => `(tactic| first | assumption | (have hb := hx.bootEq; simp_all [N.isBoot]; done))
+macro "inv_mem" : tactic => `(tactic| first | assumption | inv_boot | (have hb := hx.bootEq; simp_all [N.isBoot]; done))
 
 set_option hygiene false in
 /-- A table goal: a table already known, or an erase, an update or a guarded insert of one. -/
@@ -122,6 +153,7 @@ macro "inv_tab" : tactic =>
   `(tactic| first
     | inv_src
     | exact hx.bootEq | exact hx.bootLen | exact hx.bootNodup | exact hx.events | exact hx.traces
+    | exact Bnd.nil | exact KBnd.nil | exact HvB.nil
     | (apply Bnd.erase; inv_src)
     | (apply Bnd.modify; inv_src)
     | (apply KBnd.erase; inv_src)
@@ -155,10 +187,22 @@ theorem inv_foldl_boot (f : N → Nat → N) (hf : ∀ n a, a ∈ B → Inv B n 
 
 theorem prod_fst_mk {α β : Type} (a : α) (b : β) : (a, b).1 = a := rfl
 
+open Lean Elab Tactic Meta in
+/-- Rewrite `Inv B (a, b).1` to `Inv B a`, only when the pair is written out (a syntactic test: cheap on any other goal). -/
+elab "inv_fst" : tactic => withMainContext do
+  let g ← getMainGoal
+  let t ← instantiateMVars (← g.getType)
+  let .app f x := t.consumeMData | throwError "inv_fst: not an Inv goal"
+  let x := x.consumeMData
+  unless x.isAppOfArity ``Prod.fst 3 do throwError "inv_fst: no projection"
+  let pr := x.appArg!.consumeMData
+  unless pr.isAppOfArity ``Prod.mk 4 do throwError "inv_fst: not a written pair"
+  replaceMainGoal [← g.replaceTargetDefEq (mkApp f (pr.getArg! 2))]
+
 set_option hygiene false in
 /-- The whole walk of a step: peel lets and pair matches, split ifs and matches, apply a lemma for a call, check a leaf. -/
 macro "inv_go" : tactic =>
-  `(tactic| (repeat' (first | with_reducible assumption | rw [prod_fst_mk] | inv_let | (with_reducible inv_apply) | split | with_reducible refine inv_foldl_boot _ (fun n a ha hx => ?_) _ ?_ | with_reducible refine inv_foldl2 _ (fun a x hx => ?_) _ ?_ | inv_leaf)))
+  `(tactic| (repeat' (first | with_reducible assumption | inv_let | inv_fst | (with_reducible inv_apply) | split | with_reducible refine inv_foldl_boot _ (fun n a ha hx => ?_) _ ?_ | with_reducible refine inv_foldl2 _ (fun a x hx => ?_) _ ?_ | with_reducible refine inv_foldl _ (fun n a hx => ?_) _ ?_ | inv_boot | inv_leaf)))
 
 theorem inv_trace {n : N} (h : Inv B n) (t : Tr) : Inv B (n.trace t) := by
   unfold N.trace
