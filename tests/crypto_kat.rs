@@ -173,6 +173,26 @@ fn header_protection_rfc9001_appendix_a() {
     );
 }
 
+/// The mask for the last counter of the 32-bit block counter is block 2^32 - 1 of the stream, not a zero mask. The
+/// expected bytes come from OpenSSL's ChaCha20 (counter and nonce as its 16-byte IV) for the key 0..31 and the nonce
+/// 100..111.
+#[test]
+fn header_protection_chacha20_counter_edges() {
+    let p = Software;
+    let key: Vec<u8> = (0..32).collect();
+    let cc = p.hp_key(Aead::ChaCha20Poly1305, &key).unwrap();
+    let sample = |counter: u32| -> [u8; 16] {
+        let mut s = [0u8; 16];
+        s[..4].copy_from_slice(&counter.to_le_bytes());
+        for (i, b) in s[4..].iter_mut().enumerate() {
+            *b = 100 + i as u8;
+        }
+        s
+    };
+    assert_eq!(p.hp_mask(&cc, &sample(u32::MAX)), [175, 16, 59, 203, 205]);
+    assert_eq!(p.hp_mask(&cc, &sample(u32::MAX - 1)), [183, 54, 238, 111, 28]);
+}
+
 #[test]
 fn key_lengths_are_checked() {
     let p = Software;

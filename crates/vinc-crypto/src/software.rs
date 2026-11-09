@@ -7,8 +7,9 @@
 use aes::Aes128;
 use aes::cipher::BlockCipherEncrypt;
 use aes_gcm::{AeadInOut, Aes128Gcm, KeyInit};
-use chacha20::ChaCha20;
-use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
+use chacha20::cipher::{Block, KeyIvInit, StreamCipherCore};
+use chacha20::variants::Ietf;
+use chacha20::{ChaChaCore, R20};
 use chacha20poly1305::ChaCha20Poly1305;
 use ml_kem::ml_kem_768::{Ciphertext, DecapsulationKey, EncapsulationKey};
 use ml_kem::{B32, Decapsulate, KeyExport, Seed};
@@ -148,12 +149,14 @@ impl Provider for Software {
             }
             HpKey::ChaCha20(k) => {
                 let [c0, c1, c2, c3, nonce @ ..] = *sample;
-                let counter = u32::from_le_bytes([c0, c1, c2, c3]);
-                let mut cipher = ChaCha20::new(k.expose().into(), &nonce.into());
-                // The counter is a block number and the stream holds 2^32 blocks, so neither call can fail.
-                if cipher.try_seek(u64::from(counter) * 64).is_err() || cipher.try_write_keystream(&mut mask).is_err() {
-                    mask = [0; Aead::MASK_LEN];
-                }
+                // The mask is the first bytes of block `counter` of the stream (RFC 9001 5.4.4). The stream wrapper
+                // counts 2^32 - 1 blocks and refuses the last one, so a counter of 2^32 - 1 would give a zero mask;
+                // the core makes any block directly and does not check the count.
+                let mut core = ChaChaCore::<R20, Ietf>::new(k.expose().into(), &nonce.into());
+                core.set_block_pos(u32::from_le_bytes([c0, c1, c2, c3]));
+                let mut block = Block::<ChaChaCore<R20, Ietf>>::default();
+                core.write_keystream_block(&mut block);
+                mask.copy_from_slice(block.first_chunk().unwrap_or(&[0; Aead::MASK_LEN]));
             }
         }
         mask
