@@ -83,6 +83,8 @@ impl From<vinc_wire::WireError> for Malformed {
     }
 }
 
+// vertexia: every message of a non-Ed25519 origin carries its public key (up to 1984 bytes); a per-peer key cache
+// keyed by node id would drop it from all but the first.
 /// The signed head of a message, borrowed from the frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Head<'a> {

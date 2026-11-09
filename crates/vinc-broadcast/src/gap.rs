@@ -20,6 +20,8 @@ use crate::node::{Refused, Topics};
 use crate::wire::{self, Head, get_u64, ty};
 
 impl Topics {
+    // vertexia: `since` is a wall-clock instant compared with the hub's wall clock, so a skewed clock shifts the
+    // window it asks for (HAVE and GET still dedupe); an age relative to the hub's own clock removes the skew.
     /// The point in time a (re)subscription asks the hub to log back to.
     fn since_ms(&self) -> u64 {
         let base = self.gather.rfloor.map_or(self.born_wall, |f| f.wall);

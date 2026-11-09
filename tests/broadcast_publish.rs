@@ -173,3 +173,44 @@ fn oversize_and_overlong_are_refused() {
             .is_ok()
     );
 }
+
+#[test]
+fn a_key_that_is_not_the_nodes_is_refused_at_start() {
+    use vinc_broadcast::{Config, StartError, Topics};
+    let key = common::keypair(IdentityAlg::Ed25519, 1);
+    let other = common::keypair(IdentityAlg::Ed25519, 2);
+    let cfg = Config {
+        me: other.node_id().bytes,
+        is_hub: false,
+        hubs: &[],
+        incarnation: 1,
+        trace: false,
+    };
+    assert_eq!(Topics::start(&cfg, key, SEC, 1).unwrap_err(), StartError::KeyMismatch);
+}
+
+#[test]
+fn a_revoked_origin_is_refused_and_its_subscription_forgotten() {
+    use vinc_broadcast::Reject;
+    let mut net = world();
+    net.publish(2, T, b"warm up");
+    let (publisher, subscriber) = (net.id(2), net.id(3));
+    // The subscriber revokes the publisher; the hub relays its messages, and the subscriber refuses them by origin.
+    net.nodes[3].t.revoke(&publisher);
+    net.publish(2, T, b"after the revocation");
+    let mut refused = 0;
+    while let Some(t) = net.nodes[3].t.poll_trace() {
+        refused += usize::from(matches!(
+            t,
+            Trace::Rejected {
+                why: Reject::Revoked,
+                ..
+            }
+        ));
+    }
+    assert_eq!(refused, 1);
+    // The hub revokes the subscriber: its subscription is forgotten and nothing is pushed to it.
+    net.nodes[0].t.revoke(&subscriber);
+    assert_eq!(net.nodes[0].t.sub_state(T, &subscriber), None);
+    assert_eq!(net.delivered(3).len(), 1, "only the message from before the revocation");
+}

@@ -39,6 +39,7 @@ impl Topics {
         if !self.is_boot(from) {
             return;
         }
+        // vertexia: a linear scan of at most PENDING_MAX entries; an index by id if the bound is raised.
         if let Some(pos) = self.pending.iter().position(|p| p.mid == mid) {
             let p = self.pending.remove(pos);
             self.give_buf(p.data);

@@ -144,7 +144,7 @@ impl Topics {
                 body,
                 &mut served,
             );
-            self.trace_fallback(topic, mid, &served, 0);
+            self.trace_fallback(mid, &served);
         }
         if self.pending.len() < PENDING_MAX && !self.hubs.is_empty() {
             self.pending.push(Pending {
@@ -192,8 +192,8 @@ impl Topics {
         }
     }
 
-    fn trace_fallback(&mut self, _topic: &[u8], mid: [u8; 8], served: &[NodeId], from: usize) {
-        for to in served.iter().skip(from) {
+    fn trace_fallback(&mut self, mid: [u8; 8], served: &[NodeId]) {
+        for to in served {
             self.tq.push(|| Trace::FallbackSent { mid, to: *to });
         }
     }

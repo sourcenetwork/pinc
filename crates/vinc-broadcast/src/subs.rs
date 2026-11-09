@@ -42,6 +42,8 @@ fn build_subs(scratch: &mut Vec<u8>, nodes: &mut Vec<NodeId>, st: &Topic, topic:
 }
 
 /// Tell the members of `topic` the subscriber set, and the other hubs the local one.
+// vertexia: the whole set is pushed on every change, O(subscribers) frames of O(subscribers) bytes, bounded by
+// SUBSET_MAX; delta frames if topics should carry thousands of subscribers.
 fn announce<H: Host>(
     h: &mut H,
     scratch: &mut Vec<u8>,
@@ -92,6 +94,8 @@ impl Topics {
     }
 
     /// `member` was confirmed down: keep its subscriptions for the lease and push it nothing.
+    // vertexia: hold, restore and release scan the topic table (at most MAX_TOPICS); a per-member topic index if the
+    // table is ever raised far.
     pub fn hold<H: Host>(&mut self, h: &mut H, member: &NodeId) {
         let mut any = false;
         for (k, st) in &mut self.topics {
@@ -166,6 +170,7 @@ impl Topics {
             e.clear();
             e.extend(list.copied());
         } else {
+            // vertexia: the last report wins; a per-hub merge if hubs disagree for long.
             st.peers.clear();
             st.peers.extend(list.copied());
         }
