@@ -488,3 +488,7 @@ path = "trace_values_sched.rs"
 [[test]]
 name = "trace_connect_mailbox"
 path = "trace_connect_mailbox.rs"
+
+[[test]]
+name = "trace_connect_table"
+path = "trace_connect_table.rs"

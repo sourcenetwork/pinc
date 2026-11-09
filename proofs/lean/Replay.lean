@@ -16,6 +16,7 @@ import Vinc.ValuesWireTrace
 import Vinc.ValuesVerifyTrace
 import Vinc.ValuesTimeTrace
 import Vinc.TraceConnectMailbox
+import Vinc.TraceConnectTable
 
 /-!
 # Trace replay
@@ -123,6 +124,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut gvw : ValuesVerifyTrace.W := {}
   let mut vtw : ValuesTimeTrace.W := default
   let mut cmb : TraceConnectMailbox.W := {}
+  let mut ctb : TraceConnectTable.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -184,6 +186,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesSys.replayEvent j vyw with
           | .ok w' =>
             vyw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectTable.isTag t then
+          -- Table and cache events (`trace_connect_table`): the Lean table model with the buckets of the real hash.
+          match TraceConnectTable.replayEvent j ctb with
+          | .ok w' =>
+            ctb := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

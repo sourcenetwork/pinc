@@ -212,7 +212,11 @@ fn run<const N: usize, const B: usize>(seed: u64, age: u64, out: &mut Vec<String
                 ));
             }
             4..=5 => {
-                let max = if rng.next_u64().is_multiple_of(3) { B / 4 } else { MAX_PACKET_LEN };
+                let max = if rng.next_u64().is_multiple_of(3) {
+                    B / 4
+                } else {
+                    MAX_PACKET_LEN
+                };
                 let want = r.pop(now, k, max);
                 let mut buf = [0u8; MAX_PACKET_LEN];
                 let got = m.pop_fitting(now, &nid(k), &mut buf, max);
