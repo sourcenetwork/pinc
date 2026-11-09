@@ -35,7 +35,7 @@ VINC is a library, not a framework:
 |---|---|---|---|
 | `vinc` | the facade: one entry point with a runtime-agnostic async API and a blocking API | std | being built |
 | `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
-| `vinc-dag` | DefraDB blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
+| `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
 | `vinc-crypto` | RustCrypto primitives behind one static `Provider`: AEADs, X25519, ML-KEM-768, Ed25519, P-256 and ML-DSA-65 identities, BLAKE3 KDF and transcript hash | yes | built; proofs being closed |
 | `vinc-keystore` | long-term keys behind a `KeyStore` trait; a software store, and a pure-Rust TPM 2.0 store with `hwenc` | no | built; proofs being closed |
 | `vinc-security` | hybrid post-quantum handshake, ticket resumption with 0-RTT, key schedule, packet protection, key roll, amplification budget | yes | built, proven |
