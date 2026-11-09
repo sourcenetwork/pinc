@@ -28,7 +28,7 @@ theorem foldl_inv {α β : Type} (P : β → Prop) (f : β → α → β) (L : L
 @[simp] theorem ite_epoch (c : Prop) [Decidable c] (a b : N) : (if c then a else b).epoch = if c then a.epoch else b.epoch := by
   split <;> rfl
 
-@[simp] theorem ite_fst (c : Prop) [Decidable c] (a b : N × Bool) : (if c then a else b).1 = if c then a.1 else b.1 := by
+@[simp] theorem ite_fst_v (c : Prop) [Decidable c] (a b : N × Bool) : (if c then a else b).1 = if c then a.1 else b.1 := by
   split <;> rfl
 
 /-- The epoch does not go down from `n0` to `n`. -/
@@ -75,7 +75,7 @@ def adcUpd (n : N) (hub m : Nat) (rc : Rec) (a : Alive) : N :=
         else n
       | none => n
 
-theorem applyDeltaCore_eq (e : Env) (n : N) (now hub m : Nat) (rc : Rec) (a : Alive) :
+theorem applyDeltaCore_eq_v (e : Env) (n : N) (now hub m : Nat) (rc : Rec) (a : Alive) :
     N.applyDeltaCore e n now hub m rc a =
       (if n.revoked.has m then n
        else
@@ -101,7 +101,7 @@ theorem ite_ge_bump (n0 n : N) (ch : Bool) (h : EpGe n0 n) : EpGe n0 (if ch = tr
 
 theorem applyDeltaCore_epoch (e : Env) (n : N) (now hub m : Nat) (rc : Rec) (a : Alive) :
     EpGe n (N.applyDeltaCore e n now hub m rc a) := by
-  rw [applyDeltaCore_eq]
+  rw [applyDeltaCore_eq_v]
   by_cases h1 : n.revoked.has m = true
   · simp [h1]; exact EpGe.refl n
   · simp only [h1, if_false, Bool.false_eq_true]

@@ -165,4 +165,12 @@ import Vinc.MembershipHubWatch
 import Vinc.MembershipHubLease
 import Vinc.MembershipHubReturn
 import Vinc.MembershipHubRevoke
+import Vinc.MembershipViewFrame
+import Vinc.MembershipViewThm
+import Vinc.MembershipViewCand
+import Vinc.MembershipViewUnion
+import Vinc.MembershipViewEpoch
+import Vinc.MembershipViewSnap
+import Vinc.MembershipViewPrimary
+import Vinc.MembershipSysInc
 #audit_package

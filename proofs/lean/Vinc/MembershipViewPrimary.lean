@@ -79,7 +79,7 @@ theorem reselect_eq (e : Env) (n : N) (now : Nat) :
 theorem rsSwitch_primary (e : Env) (n : N) (now p : Nat) : (rsSwitch e n now p).primary = some p := by
   unfold rsSwitch
   dsimp only
-  simp only [bc_primary]
+  simp only [bc_primary_v]
   split <;> (try split) <;> (try split) <;> simp [N.helloTo]
 
 /-- **The primary changes only past the hysteresis.** If a member's primary changes from `cur` to a different hub `p`,
@@ -149,6 +149,6 @@ theorem removeFromView_defers (e : Env) (n : N) (now m : Nat) (c : ViewEntry) (s
 /-- A delta about a revoked member is dropped: nothing changes. -/
 theorem applyDeltaCore_revoked (e : Env) (n : N) (now hub m : Nat) (rc : Rec) (a : Alive) (h : n.revoked.has m = true) :
     N.applyDeltaCore e n now hub m rc a = n := by
-  rw [applyDeltaCore_eq]; simp [h]
+  rw [applyDeltaCore_eq_v]; simp [h]
 
 end Vinc.Membership

@@ -85,7 +85,7 @@ marked is not expired, so a snapshot alone cannot make a listed member leave. -/
 theorem recomputeOne_listed_stays (e : Env) (n : N) (now m : Nat)
     (h : (n.candidates now (n.source now) m).1 ≠ none) :
     (N.recomputeOne e n now m).1.members.has m = true ∨ (n.members.has m = false ∧ MAX_TABLE ≤ n.members.len) := by
-  rw [recomputeOne_eq]
+  rw [recomputeOne_eq_v]
   dsimp only
   split
   · rename_i hb; exact absurd (by rw [hb]) h
@@ -117,7 +117,7 @@ theorem recomputeOne_listed_stays (e : Env) (n : N) (now m : Nat)
 theorem recomputeOne_none (e : Env) (n : N) (now m : Nat) (h : (n.candidates now (n.source now) m).1 = none) :
     N.recomputeOne e n now m =
       N.removeFromView e n now m (n.members.get? m) (n.source now) (n.candidates now (n.source now) m).2 := by
-  rw [recomputeOne_eq]
+  rw [recomputeOne_eq_v]
   dsimp only
   split
   · rfl

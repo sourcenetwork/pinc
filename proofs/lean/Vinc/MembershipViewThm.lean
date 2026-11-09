@@ -84,7 +84,7 @@ def rcTail (n : N) (m : Nat) (absent : Bool) (changed : Bool) : N × Bool :=
     else (n, changed)
   | none => (n, changed)
 
-theorem recomputeOne_eq (e : Env) (n : N) (now m : Nat) :
+theorem recomputeOne_eq_v (e : Env) (n : N) (now m : Nat) :
     N.recomputeOne e n now m =
       (let src := n.source now
        let (best, expired) := n.candidates now src m
@@ -180,7 +180,7 @@ theorem hdIf_keeps2 (e : Env) (n : N) (m : Nat) (b0 : Rec) (c : Bool) :
   · simp only [h, if_false]; exact Keeps2.refl m n
 
 theorem recomputeOne_keeps2 (e : Env) (n : N) (now m : Nat) : Keeps2 m n (N.recomputeOne e n now m).1 := by
-  rw [recomputeOne_eq]
+  rw [recomputeOne_eq_v]
   dsimp only
   split
   · exact removeFromView_keeps2 _ _ _ _ _ _ _

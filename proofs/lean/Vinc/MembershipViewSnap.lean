@@ -102,7 +102,7 @@ theorem pushDelta_me_hv (e : Env) (n : N) (now : Nat) (rc : Rec) (a : Alive) :
       simp only [List.foldl_cons]
       apply ih
       split
-      · rw [deltaTo_hv, deltaTo_me]; exact hx
+      · rw [deltaTo_hv, deltaTo_me_v]; exact hx
       · exact hx
   have h1 := h n.attached.keys n ⟨rfl, rfl⟩
   generalize forKeys n.attached.keys (fun p n' => if p != n.me && (n'.isBoot p || (n.me == n'.me && n'.homed.has p)) then N.deltaTo e n' p n.me rc a else n') n = x at h1 ⊢
