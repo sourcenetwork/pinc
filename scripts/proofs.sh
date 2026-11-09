@@ -6,6 +6,9 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.elan/bin:$HOME/.local/bin:$PATH"
 
 TLA_HOME="${TLA_HOME:-$HOME/.local/share/tla}"
+# Parallel TLC runs unpack the standard modules into the temp directory; give this run its own.
+mkdir -p proofs/tla/states/tmp
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djava.io.tmpdir=$PWD/proofs/tla/states/tmp"
 # The trace check reads ndjson with the CommunityModules Json module, which needs a TLC of the same era as the jar.
 TRACE_TLC="$TLA_HOME/tla2tools-2026.11.06.jar"
 COMMUNITY="$TLA_HOME/CommunityModules-deps-202611060952.jar"
