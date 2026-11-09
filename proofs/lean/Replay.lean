@@ -19,6 +19,14 @@ import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
 import Vinc.TraceConnect
 import Vinc.TraceTranscript
+import Vinc.TraceDtnStore
+import Vinc.TraceDtnForward
+import Vinc.TraceDtnRs
+import Vinc.TraceDtnCodec
+import Vinc.TraceDtnReception
+import Vinc.TraceDtnSeal
+import Vinc.TraceDtnScenario
+import Vinc.TraceDtnLayout
 
 /-!
 # Trace replay
@@ -130,6 +138,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut crl : TraceConnect.W := {}
   let mut trs : TraceTranscript.TS := {}
   let mut trCount := 0
+  let mut dsw : TraceDtnStore.W := {}
+  let mut dfw : TraceDtnForward.W := {}
+  let mut drs : TraceDtnRs.W := {}
+  let mut dcx : TraceDtnCodec.W := {}
+  let mut drx : TraceDtnReception.W := {}
+  let mut dss : TraceDtnSeal.W := {}
+  let mut dsc : TraceDtnScenario.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -147,6 +162,68 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           continue
         | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
       | some t =>
+        if TraceDtnStore.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnStore.replayEvent j dsw with
+          | .ok w' =>
+            dsw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnForward.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnForward.replayEvent j dfw with
+          | .ok w' =>
+            dfw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnRs.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnRs.replayEvent j drs with
+          | .ok w' =>
+            drs := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnCodec.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnCodec.replayEvent j dcx with
+          | .ok w' =>
+            dcx := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnReception.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnReception.replayEvent j drx with
+          | .ok w' =>
+            drx := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnSeal.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnSeal.replayEvent j dss with
+          | .ok w' =>
+            dss := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnScenario.isTag t then
+          -- Delay-tolerant layer events (`trace_dtn_*`): the Lean models of `vinc-dtn`.
+          match TraceDtnScenario.replayEvent j dsc with
+          | .ok w' =>
+            dsc := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceDtnLayout.isTag t then
+          match TraceDtnLayout.replayEvent j with
+          | .ok () =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if TraceStores.isStoreTag t then
           -- Ticket store and prekey cache events (`trace_stores`): the Lean functions the store theorems are about.
           match TraceStores.replayEvent j stw with

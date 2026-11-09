@@ -186,12 +186,55 @@ par run_tlc connect_table ConnectTable ConnectTable
 par run_tlc connect_table_n4 ConnectTable ConnectTable_n4
 par run_tlc connect_cache ConnectTable ConnectTable_cache
 par run_tlc connect_relay ConnectRelay ConnectRelay
+par run_tlc dtn_store DtnStore DtnStore
+par witness_tlc dtn_store_cross DtnStore DtnStore_cross NoCrossEviction
+par run_tlc dtn_custody DtnCustody DtnCustody
+par run_tlc dtn_custody_deep DtnCustody DtnCustody_deep
+par run_tlc dtnforward DtnForward DtnForward
+par run_tlc dtnforward_l1 DtnForward DtnForward_l1
+par run_tlc dtnforward_live DtnForward DtnForward_live
+par witness_tlc dtnforward_full DtnForward DtnForward_full DestServed
+par witness_tlc dtnforward_rehold DtnForward DtnForward_rehold A_NoReHold
+par run_tlc dtnforwardnet DtnForwardNet DtnForwardNet
+par run_tlc dtnforwardnet_loss DtnForwardNet DtnForwardNet_loss
+par witness_tlc dtnforwardnet_replay DtnForwardNet DtnForwardNet_replay NoReplay
+par witness_tlc dtnforwardnet_over DtnForwardNet DtnForwardNet_over HeldAlways
+par run_tlc_deep dtngf DtnGf DtnGf
+par run_tlc_deep dtnrs_a DtnRs DtnRs_a
+par run_tlc_deep dtnrs_b DtnRs DtnRs_b
+par run_tlc_deep dtnrs_c DtnRs DtnRs_c
+par run_tlc_deep dtnrs_mds DtnRs DtnRs_mds
+par run_tlc_deep dtnrs_bounds DtnRs DtnRs_bounds
+par run_tlc_deep dtnlayout DtnLayout DtnLayout
+par run_tlc_deep dtncodec DtnCodec DtnCodec
+par run_tlc dtnreception DtnReception DtnReception
+par witness_tlc dtnreception_overwrite DtnReception DtnReception_overwrite HeldAlways
+par run_tlc_deep dtnclock DtnClock DtnClock
+par run_tlc dtnseal DtnSeal DtnSeal
+par run_tlc dtnseal_decap DtnSeal DtnSeal_decap
+par run_tlc dtnseal_xbroken DtnSeal DtnSeal_xbroken
+par run_tlc dtnseal_kbroken DtnSeal DtnSeal_kbroken
+par witness_tlc dtnseal_nofs DtnSeal DtnSeal_nofs NotRevealed
+par witness_tlc dtnseal_bothbroken DtnSeal DtnSeal_bothbroken NotRevealed
+par witness_tlc dtnseal_reuse DtnSeal DtnSeal_reuse NonceUnique
+par run_tlc dtn_sc_contacts DtnScenario DtnScenario_contacts
+par run_tlc dtn_sc_chain DtnScenario DtnScenario_chain
+par run_tlc dtn_sc_spray DtnScenario DtnScenario_spray
+par run_tlc dtn_sc_expiry DtnScenario DtnScenario_expiry
+par run_tlc dtn_sc_pressure DtnScenario DtnScenario_pressure
+par run_tlc dtn_sc_tight DtnScenario DtnScenario_tight
+par run_tlc dtn_sc_live DtnScenario DtnScenario_live
+par run_tlc dtn_sc_live_relay DtnScenario DtnScenario_live_relay
+par witness_tlc dtn_sc_nolive DtnScenario DtnScenario_nolive DeliveredByExpiry
+par witness_tlc dtn_sc_cycle DtnScenario DtnScenario_cycle CustodyAlive
+par witness_tlc dtn_sc_replay DtnScenario DtnScenario_replay NoReplay
+par witness_tlc dtn_sc_forget DtnScenario DtnScenario_forget NoForget
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -221,5 +264,14 @@ trace_tlc TraceConnectMailbox mailbox
 trace_tlc TraceConnectTable table
 trace_tlc TraceConnect relay
 trace_tlc TraceTranscript transcript
+trace_tlc TraceDtnStore dtn-store
+trace_tlc TraceDtnCustody dtn-custody
+trace_tlc TraceDtnForward dtn-forward
+trace_tlc TraceDtnRs dtn-rs
+trace_tlc TraceDtnLayout dtn-layout
+trace_tlc TraceDtnCodec dtn-codec
+trace_tlc TraceDtnReception dtn-reception
+trace_tlc TraceDtnSeal dtn-seal
+trace_tlc TraceDtnScenario dtn-scenario
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"
