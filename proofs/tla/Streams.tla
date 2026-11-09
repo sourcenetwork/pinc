@@ -10,7 +10,7 @@
 (*    without holes (read <= contig, the readable bytes are held in the    *)
 (*    pool), the read position never moves back, the stored ranges are     *)
 (*    sorted, disjoint, non-adjacent and at most RR;                       *)
-(*  - POOL_GRANT (CN19): the pool is never over its budget; a limit is     *)
+(*  - POOL_GRANT: the pool is never over its budget; a limit is     *)
 (*    raised and a peer stream admitted only when the credit granted and   *)
 (*    not yet received, with the new grant, fits in the bytes the pool     *)
 (*    has left (LedgerOnGrant); the held chunks lie inside the span the    *)
@@ -18,15 +18,15 @@
 (*    than the ledger counted (HeldInSpan, NeedCovered); when the pool has *)
 (*    no other user the ledger holds in every state (LedgerAlways, config  *)
 (*    Streams_ledger, with NeedCovered);                                   *)
-(*  - RATE_WINDOW (CN18): the window size stays between the initial window *)
+(*  - RATE_WINDOW: the window size stays between the initial window *)
 (*    and the ceiling, which is at most half the pool; the limit stays     *)
 (*    within one window of the read position;                              *)
-(*  - flow-control updates (CN17): a limit moves only by at least 1/8 of   *)
+(*  - flow-control updates: a limit moves only by at least 1/8 of   *)
 (*    the window, never down, and a window due to move is moved or         *)
 (*    deferred (NoMissedGrant); a deferred grant is retried after every     *)
 (*    release of pool chunks (NoStuckGrant; the witness Streams_stall is   *)
 (*    the earlier behaviour, retry only on a consume, which stalls);       *)
-(*  - STREAM_CAP (CN21): live peer streams never exceed the cap, a refused *)
+(*  - STREAM_CAP: live peer streams never exceed the cap, a refused *)
 (*    stream is remembered and answered with a reset (RefusedOk: it has no *)
 (*    slot and its index is not below the next one admitted), never stored, *)
 (*    and is forgotten only when its reset is acknowledged; the final size, *)
@@ -128,7 +128,7 @@ NeedCovered == \A i \in Live : T.slots[i].open =>
         Cardinality({k \in (T.slots[i].read \div CH)..((e - 1) \div CH) : k \notin T.slots[i].held}) * CH
             <= Unreceived(T.slots[i])
 
-(* ---- liveness (CN17): a stream whose peer is blocked at its limit, all of it read, gets a new limit once the *)
+(* ---- liveness: a stream whose peer is blocked at its limit, all of it read, gets a new limit once the *)
 (* other users of the pool let go: no deadlock, and the grant is not waiting for a read that cannot come     *)
 Blocked(i) == LET r == T.slots[i] IN
     r.id # -1 /\ r.open /\ r.fin = -1 /\ r.rst = -1 /\ r.read = r.limit /\ r.limit < MAXOFF

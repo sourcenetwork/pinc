@@ -553,7 +553,7 @@ theorem known_dh (att : Nat) (leaked : Nat → Prop) (a b : Atom) : Known att le
   · exact Iff.rfl
   · simp only [Known]; exact or_comm
 
-/-- CN8: an attacker that learned the old secret `s` does not know the key after a roll whose Diffie-Hellman atoms
+/-- Post-compromise security: an attacker that learned the old secret `s` does not know the key after a roll whose Diffie-Hellman atoms
 it does not own, whatever request identifier is bound into the value. -/
 theorem post_compromise (att : Nat) (leaked : Nat → Prop) (s i : T) (hs : Known att leaked s) (a b : Atom)
     (ha : a.n ≠ att) (hb : b.n ≠ att) :

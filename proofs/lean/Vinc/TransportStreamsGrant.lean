@@ -7,18 +7,18 @@ Unbounded theorems about `Vinc.TransportStreams.grantOne` and `grantRun`, which 
 window arithmetic of `Streams::new`, `Streams::consume` and `Recv::due`. Sizes are arbitrary (`P`).
 
 * `due_spec`: the limit a window is due to move to is above the old one by at least an eighth of the window, never
-  beyond the read position plus the window, and never beyond a fixed final size (the 1/8 rule of CN17).
+  beyond the read position plus the window, and never beyond a fixed final size (the 1/8 rule of flow control).
 * `grantOne_ledger`: when a grant raises a limit, the credit granted and not yet received, with the new grant,
-  fits in the bytes the pool has left (POOL_GRANT, CN19).
+  fits in the bytes the pool has left (POOL_GRANT).
 * `grantOne_limit_mono`, `grantOne_limit_le`, `grantOne_eighth`: a grant never lowers a limit, keeps it within one
   window of the read position, and moves it by an eighth of the window at least.
 * `grantOne_defers_only_when_unfit`, `grantOne_not_missed`: a window due to move is moved or deferred, and it is
   deferred only when the ledger says it does not fit.
 * `grantRun_first_ok`: after `Streams::grant` for the stream just read from, its window is not due (moved or
-  nothing due) or deferred: credit follows consumption (CN17), the deferred ones being retried by `regrant`.
+  nothing due) or deferred: credit follows consumption, the deferred ones being retried by `regrant`.
 * `target_bounds`, `maxStream_le_half`, `limit_span_lt_ring`: the window size stays between the initial window
   and the ceiling, which is at most half the pool and `(C - 1)` chunks, so a frame inside the credit never
-  reaches `C` chunks beyond the read position (the ring never overflows; RATE_WINDOW, CN18).
+  reaches `C` chunks beyond the read position (the ring never overflows; RATE_WINDOW).
 -/
 
 namespace Vinc.TransportStreams
@@ -318,7 +318,7 @@ theorem foldl_first_ok (p : P) (first : Nat) (l : List Nat) (hnd : l.Nodup) (hf 
         · exact h
       exact ih hnd.2 this _
 
-/-- Credit follows consumption (CN17): after `Streams::grant` for the stream just read from, its window is deferred
+/-- Credit follows consumption: after `Streams::grant` for the stream just read from, its window is deferred
 (and `regrant` retries it after every release of pool chunks) or has nothing due; no window due to move is left
 unmoved. -/
 theorem grantRun_first_ok (p : P) (T : Tab) (first : Nat) (h : first < p.n) :

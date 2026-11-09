@@ -9,9 +9,9 @@ Unbounded theorems about the receive half and the table of `Vinc.TransportStream
   at most what the ledger counted for the stream (`pool_demand`: the chunks of the span from the read position to
   the limit that are not held, so holes below the highest byte are counted). With `grantOne_ledger`
   (`Vinc.TransportStreamsGrant`), which keeps the sum of those counts within the pool bytes left whenever a limit is
-  raised, credit never exceeds the ledger (POOL_GRANT, CN19).
+  raised, credit never exceeds the ledger (POOL_GRANT).
 * `admits_cap`, `locate_busy_recorded`, `locate_error_stores_nothing`, `frame_busy_stores_nothing`: a peer stream
-  is admitted only under the cap, an excess stream is remembered for a reset and never stored (STREAM_CAP, CN21).
+  is admitted only under the cap, an excess stream is remembered for a reset and never stored (STREAM_CAP).
 * `onReset_ok`, `onReset_final_fixed`, `onData_final_fixed`: a reset frees the buffered bytes, leaves nothing
   readable and fixes the final size, and a final size once fixed never changes.
 * `Content`, `exactly_once_in_order`, `stored_immutable`: with the checks of `Recv::store` (a byte received twice
