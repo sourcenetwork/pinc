@@ -191,6 +191,7 @@ echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
 VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_transcript
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -219,5 +220,6 @@ trace_tlc TraceValuesWire valueswire
 trace_tlc TraceConnectMailbox mailbox
 trace_tlc TraceConnectTable table
 trace_tlc TraceConnect relay
+trace_tlc TraceTranscript transcript
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

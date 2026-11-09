@@ -18,6 +18,7 @@ import Vinc.ValuesTimeTrace
 import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
 import Vinc.TraceConnect
+import Vinc.TraceTranscript
 
 /-!
 # Trace replay
@@ -127,6 +128,8 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut cmb : TraceConnectMailbox.W := {}
   let mut ctb : TraceConnectTable.W := {}
   let mut crl : TraceConnect.W := {}
+  let mut trs : TraceTranscript.TS := {}
+  let mut trCount := 0
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -223,6 +226,15 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "tr" then
+          -- Transcript events (`tr`, written by `trace_transcript`): the order of the fields every transcript absorbs.
+          match TraceTranscript.replayEvent j trs with
+          | .ok k' =>
+            trs := k'
+            trCount := trCount + 1
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "kl" then
           -- Key layer events (`kl`, written by `trace_keylayer`): the flip and hold layer of two real connections.
           match TraceKeyLayer.replayEvent j kls with
@@ -273,6 +285,11 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
       vs := vnext
       count := count + 1
     | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+  -- A file of transcript lines must show every kind of transcript in full.
+  if trCount > 0 then
+    match TraceTranscript.covered trs with
+    | .ok () => pure ()
+    | .error msg => throw (IO.userError s!"{path}: {msg}")
   pure (count, hsCount)
 
 def main (args : List String) : IO UInt32 := do

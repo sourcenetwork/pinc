@@ -28,7 +28,7 @@ impl core::fmt::Debug for Endorsement {
 
 fn digest(label: &'static str, body: &[u8]) -> [u8; 32] {
     let mut t = Transcript::with_label(label);
-    t.absorb(body);
+    t.absorb("body", body);
     t.snapshot()
 }
 

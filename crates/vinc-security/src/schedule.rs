@@ -73,35 +73,35 @@ pub(crate) struct InitialFields<'a> {
 /// The transcript after the Initial (the same for the full and the short form).
 pub(crate) fn initial_transcript(f: &InitialFields<'_>) -> Transcript {
     let mut th = Transcript::with_label(labels::HANDSHAKE);
-    th.absorb(labels::HANDSHAKE.as_bytes());
-    th.absorb(&[f.version]);
-    th.absorb(f.alpn);
-    th.absorb(f.dcid.as_bytes());
-    th.absorb(f.scid.as_bytes());
-    th.absorb(&f.credit.encode());
-    th.absorb(&[f.offer.bits()]);
-    th.absorb(f.e);
-    th.absorb(f.prekey_hash);
+    th.absorb("label", labels::HANDSHAKE.as_bytes());
+    th.absorb("version", &[f.version]);
+    th.absorb("alpn", f.alpn);
+    th.absorb("dcid", f.dcid.as_bytes());
+    th.absorb("scid", f.scid.as_bytes());
+    th.absorb("credit", &f.credit.encode());
+    th.absorb("offer", &[f.offer.bits()]);
+    th.absorb("e", f.e);
+    th.absorb("prekey_hash", f.prekey_hash);
     th
 }
 
 /// Absorb the responder's contribution: its connection id, the chosen AEAD and its public values.
 pub(crate) fn absorb_reply(th: &mut Transcript, scid: &ConnId, aead: Aead, e: &[u8; 32], ct: &[u8]) {
-    th.absorb(scid.as_bytes());
-    th.absorb(&[aead_tag(aead)]);
-    th.absorb(e);
-    th.absorb(ct);
+    th.absorb("r_scid", scid.as_bytes());
+    th.absorb("aead", &[aead_tag(aead)]);
+    th.absorb("r_e", e);
+    th.absorb("ct", ct);
 }
 
 /// Absorb a credit record as its own field.
 pub(crate) fn absorb_credit(th: &mut Transcript, credit: CreditRecord) {
-    th.absorb(&credit.encode());
+    th.absorb("r_credit", &credit.encode());
 }
 
 /// Absorb an identity: the algorithm tag, then the public key.
 pub(crate) fn absorb_identity(th: &mut Transcript, alg: IdentityAlg, public_key: &[u8]) {
-    th.absorb(&[alg.tag()]);
-    th.absorb(public_key);
+    th.absorb("id_alg", &[alg.tag()]);
+    th.absorb("id_key", public_key);
 }
 
 /// The secrets of the first stage: the chain key and the two handshake secrets.
@@ -151,8 +151,8 @@ pub(crate) fn application_secrets(ck1: &Secret<32>, th: &[u8; 32]) -> AppSecrets
 pub(crate) fn ticket_psk(resume: &Secret<32>, tid: &[u8; 16], credit: CreditRecord) -> Secret<32> {
     // The issuer's remembered credit record is part of the key's context: a resumption only works against it.
     let mut ctx = Transcript::with_label(labels::TICKET);
-    ctx.absorb(tid);
-    ctx.absorb(&credit.encode());
+    ctx.absorb("tid", tid);
+    ctx.absorb("credit", &credit.encode());
     derive(resume, labels::TICKET, &ctx.snapshot())
 }
 
@@ -176,15 +176,15 @@ pub(crate) struct HelloFields<'a> {
 /// The transcript after the Hello, up to but not including the binder.
 pub(crate) fn hello_transcript(f: &HelloFields<'_>) -> Transcript {
     let mut th = Transcript::with_label(labels::RESUME_HANDSHAKE);
-    th.absorb(labels::RESUME_HANDSHAKE.as_bytes());
-    th.absorb(&[f.version]);
-    th.absorb(f.alpn);
-    th.absorb(f.dcid.as_bytes());
-    th.absorb(f.scid.as_bytes());
-    th.absorb(&[aead_tag(f.aead)]);
-    th.absorb(f.tid);
-    th.absorb(f.e);
-    th.absorb(&f.credit.encode());
+    th.absorb("label", labels::RESUME_HANDSHAKE.as_bytes());
+    th.absorb("version", &[f.version]);
+    th.absorb("alpn", f.alpn);
+    th.absorb("dcid", f.dcid.as_bytes());
+    th.absorb("scid", f.scid.as_bytes());
+    th.absorb("aead", &[aead_tag(f.aead)]);
+    th.absorb("tid", f.tid);
+    th.absorb("e", f.e);
+    th.absorb("credit", &f.credit.encode());
     th
 }
 
@@ -207,15 +207,15 @@ pub(crate) fn absorb_resume_reply(
     e: &[u8; 32],
     credit: CreditRecord,
 ) {
-    th.absorb(binder);
-    th.absorb(scid.as_bytes());
-    th.absorb(e);
-    th.absorb(&credit.encode());
+    th.absorb("binder", binder);
+    th.absorb("r_scid", scid.as_bytes());
+    th.absorb("r_e", e);
+    th.absorb("r_credit", &credit.encode());
 }
 
 /// The confirmation tag: `keyed_hash(confirm key, th_r || tickets)`, with the tickets absorbed into the transcript.
 pub(crate) fn confirmation(confirm: &Secret<32>, th: &mut Transcript, tickets: &[u8]) -> [u8; 32] {
-    th.absorb(tickets);
+    th.absorb("tickets", tickets);
     extract(confirm.expose(), &th.snapshot())
 }
 
@@ -223,9 +223,9 @@ pub(crate) fn confirmation(confirm: &Secret<32>, th: &mut Transcript, tickets: &
 /// length-prefixed, so different field splits never collide.
 pub fn sub_session_secret(parent: &Secret<32>, alpn: &[u8], cc: &[u8], cs: &[u8]) -> Secret<32> {
     let mut t = Transcript::with_label(labels::SUB_SESSION_CONTEXT);
-    t.absorb(alpn);
-    t.absorb(cc);
-    t.absorb(cs);
+    t.absorb("alpn", alpn);
+    t.absorb("cc", cc);
+    t.absorb("cs", cs);
     derive(parent, labels::SUB_SESSION, &t.snapshot())
 }
 

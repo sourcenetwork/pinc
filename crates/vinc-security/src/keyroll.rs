@@ -51,7 +51,7 @@ pub const MAX_REKEY_LEN: usize = 1 + 32 + ECHO_LEN + vinc_wire::varint::MAX_LEN;
 /// binds it into the key derivation.
 pub fn request_id(share: &[u8; 32]) -> [u8; ECHO_LEN] {
     let mut t = Transcript::with_label(labels::KEY_ROLL_ID);
-    t.absorb(share);
+    t.absorb("share", share);
     let mut id = [0u8; ECHO_LEN];
     id.iter_mut().zip(t.snapshot()).for_each(|(o, h)| *o = h);
     id

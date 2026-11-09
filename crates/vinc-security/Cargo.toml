@@ -11,7 +11,7 @@ publish.workspace = true
 [features]
 default = []
 # Test-only observation of internal state for trace validation. Costs nothing when off.
-trace = []
+trace = ["vinc-crypto/trace"]
 
 [dependencies]
 vinc-wire = { workspace = true }

@@ -52,7 +52,7 @@ pub enum KeyResponse<'a> {
 /// The hash of an encapsulation key, as the transcript and the responder's cache know it.
 pub fn prekey_hash(encaps_key: &[u8]) -> [u8; 32] {
     let mut t = Transcript::with_label(labels::KEM_KEY_HASH);
-    t.absorb(encaps_key);
+    t.absorb("encaps_key", encaps_key);
     t.snapshot()
 }
 

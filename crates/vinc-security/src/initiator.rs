@@ -507,7 +507,7 @@ impl Initiator {
             ids.signature,
         )
         .map_err(|_| Failure::BadSignature)?;
-        self.th.absorb(ids.signature);
+        self.th.absorb("sig", ids.signature);
         let th3 = self.th.snapshot();
         absorb_identity(&mut self.th, self.identity.alg(), self.identity.public_key());
         self.out.set_request(Pending::Sign {
@@ -540,7 +540,7 @@ impl Initiator {
             signature,
             None,
         )?;
-        self.th.absorb(signature);
+        self.th.absorb("sig", signature);
         let secrets = application_secrets(&ck1, &self.th.snapshot());
         self.out.build(0, |w| {
             Finish {

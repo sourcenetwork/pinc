@@ -18,7 +18,7 @@ hwenc = ["vinc-keystore/hwenc"]
 [dependencies]
 vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["alloc"] }
-vinc-crypto = { workspace = true }
+vinc-crypto = { workspace = true, features = ["trace"] }
 vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
@@ -349,6 +349,10 @@ path = "values_alloc.rs"
 [[test]]
 name = "values_big"
 path = "values_big.rs"
+
+[[test]]
+name = "trace_transcript"
+path = "trace_transcript.rs"
 
 [[test]]
 name = "trace_stores"

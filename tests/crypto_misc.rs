@@ -90,7 +90,7 @@ fn kdf_does_not_allocate() {
 fn absorb_all(fields: &[&[u8]]) -> [u8; 32] {
     let mut t = Transcript::new();
     for f in fields {
-        t.absorb(f);
+        t.absorb("f", f);
     }
     t.snapshot()
 }
@@ -117,10 +117,10 @@ fn transcript_is_length_prefixed() {
 #[test]
 fn snapshot_does_not_consume_the_transcript() {
     let mut t = Transcript::new();
-    t.absorb(b"one");
+    t.absorb("f", b"one");
     let first = t.snapshot();
     assert_eq!(first, t.snapshot());
-    t.absorb(b"two");
+    t.absorb("f", b"two");
     assert_ne!(first, t.snapshot());
     assert_eq!(t.snapshot(), absorb_all(&[b"one", b"two"]));
 }
@@ -168,8 +168,8 @@ proptest! {
 fn transcript_does_not_allocate() {
     let stats = vinc_tests::measure(|| {
         let mut t = Transcript::with_label(labels::NODE_ID);
-        t.absorb(b"hello");
-        t.absorb(&[0u8; 5000]);
+        t.absorb("f", b"hello");
+        t.absorb("f", &[0u8; 5000]);
         let _ = t.snapshot();
     });
     assert_eq!(stats.count(), 0, "{stats:?}");

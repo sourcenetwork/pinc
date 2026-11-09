@@ -7,8 +7,14 @@
 //!
 //! The crate is `no_std`, never allocates, never reads randomness (every key generation takes seed bytes from the
 //! caller) and never panics on any input. Secrets are zeroized on drop and compared in constant time.
+//!
+//! The test-only `trace` feature records what every [`Transcript`] absorbs once a thread arms it (it needs `std` and
+//! allocates then); it is off by default and costs nothing off.
 #![no_std]
 #![forbid(unsafe_code)]
+
+#[cfg(feature = "trace")]
+extern crate std;
 
 pub mod drbg;
 pub mod error;

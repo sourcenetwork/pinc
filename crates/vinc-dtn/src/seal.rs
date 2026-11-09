@@ -77,13 +77,13 @@ fn aad(th: &[u8; 32], index: u64) -> [u8; 40] {
 /// The transcript hash over every public value of the exchange.
 fn transcript_hash(rcpt: &RecipientKeys, eph: &[u8; 32], kem_ct: &[u8], id: &BundleId) -> [u8; 32] {
     let mut t = Transcript::with_label(labels::TRANSCRIPT);
-    t.absorb(eph);
-    t.absorb(&rcpt.x25519);
-    t.absorb(&rcpt.kem_ek);
-    t.absorb(kem_ct);
+    t.absorb("eph", eph);
+    t.absorb("x25519", &rcpt.x25519);
+    t.absorb("kem_ek", &rcpt.kem_ek);
+    t.absorb("kem_ct", kem_ct);
     absorb_node(&mut t, &rcpt.node);
-    t.absorb(&rcpt.epoch.to_be_bytes());
-    t.absorb(&id.0);
+    t.absorb("epoch", &rcpt.epoch.to_be_bytes());
+    t.absorb("id", &id.0);
     t.snapshot()
 }
 

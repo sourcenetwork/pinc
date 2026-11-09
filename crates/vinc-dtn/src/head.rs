@@ -30,9 +30,9 @@ impl BundleId {
     pub fn derive(source: &NodeId, created: Hlc, eph: &[u8; 32]) -> Self {
         let mut t = Transcript::with_label(labels::BUNDLE_ID);
         absorb_node(&mut t, source);
-        t.absorb(&created.wall.to_be_bytes());
-        t.absorb(&created.counter.to_be_bytes());
-        t.absorb(eph);
+        t.absorb("wall", &created.wall.to_be_bytes());
+        t.absorb("counter", &created.counter.to_be_bytes());
+        t.absorb("eph", eph);
         Self(t.snapshot())
     }
 }
@@ -49,8 +49,8 @@ impl BundleId {
 
 /// Absorb a node id into a transcript as its algorithm tag and its 32 bytes.
 pub(crate) fn absorb_node(t: &mut Transcript, node: &NodeId) {
-    t.absorb(&[node.alg.tag()]);
-    t.absorb(&node.bytes);
+    t.absorb("node_alg", &[node.alg.tag()]);
+    t.absorb("node_key", &node.bytes);
 }
 
 /// The one-shot encryption envelope of a bundle.

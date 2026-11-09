@@ -28,6 +28,7 @@ import Vinc.TicketsClient
 import Vinc.TicketsExport
 import Vinc.PrekeyCache
 import Vinc.TraceStores
+import Vinc.TraceTranscript
 import Vinc.SecurityTrace
 import Vinc.Record
 import Vinc.KeyRoll
