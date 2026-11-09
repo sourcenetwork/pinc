@@ -286,7 +286,7 @@ par run_tlc streams_ledger Streams Streams_ledger
 par witness_tlc streams_stall Streams Streams_stall NoStuckGrant
 par run_tlc streams_live Streams Streams_live
 par witness_live_tlc streams_live_stall Streams Streams_live_stall
-par witness_tlc_live streams_live_stall Streams Streams_live_stall
+par witness_live_tlc streams_live_stall Streams Streams_live_stall
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags
