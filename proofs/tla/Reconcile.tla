@@ -82,12 +82,12 @@
 (***************************************************************************)
 EXTENDS ReconcileSess
 
-CONSTANTS ALPHA, MAXLEN, Scenario, HashMode, CapSet, MaxItemSet, IdMods, MaxReportC, MaxRoundsC,
+CONSTANTS ALPHA, MAXLEN, UniMax, Scenario, HashMode, CapSet, MaxItemSet, IdMods, MaxReportC, MaxRoundsC,
           Attempts, ResetOn, Shadow, Liar, Garbage, FanTight, AllowTMR
 
 RECURSIVE Words(_)
 Words(k) == IF k = 0 THEN {<<>>} ELSE {w \o <<x>> : w \in Words(k - 1), x \in ALPHA}
-Universe == UNION {Words(k) : k \in 0..MAXLEN}
+UniAll == UNION {Words(k) : k \in 0..MAXLEN}
 
 RECURSIVE SortedSeq(_)
 SortedSeq(X) ==
@@ -96,7 +96,8 @@ SortedSeq(X) ==
 
 Range(s) == {s[i] : i \in 1..Len(s)}
 
-UniSeq == SortedSeq(Universe)
+UniSeq == Take(SortedSeq(UniAll), UniMax)
+Universe == Range(UniSeq)
 IdxOf == [x \in Universe |-> Cardinality({y \in Universe : LexLt(y, x)})]
 
 RECURSIVE Gen(_, _)
@@ -214,7 +215,7 @@ OrcTab == [idm \in IdMods |-> MkOracle(idm)]
 orc == OrcTab[cs.idm]
 
 Same(x, y) == x = y
-Fail(e) == /\ pc' = "failed" /\ err' = e /\ UNCHANGED <<tx, replies, nxt, fmsg>>
+Fail(e) == /\ pc' = "failed" /\ err' = e /\ UNCHANGED <<tx, nxt, fmsg>>
 
 (* the shadow: a fresh pair gets the same inputs; used after a restart *)
 DoStart ==
@@ -222,12 +223,12 @@ DoStart ==
     /\ LET r == InitStart(orc, cs.A, ini, Ref)
            sr == IF Shadow THEN InitStart(orc, cs.A, shI, Ref) ELSE r
        IN IF ~r.ok
-          THEN /\ Fail(r.err) /\ UNCHANGED <<ini, rsp, shI, shR, shOk, bad>>
+          THEN /\ Fail(r.err) /\ UNCHANGED <<ini, rsp, shI, shR, shOk, bad, replies>>
           ELSE /\ ini' = r.v[1] /\ tx' = r.v[2]
                /\ rsp' = [rsp EXCEPT !.side = "fresh"]
                /\ shI' = IF sr.ok THEN sr.v[1] ELSE shI
                /\ shR' = NewResponder(LimOf(cs))
-               /\ shOk' = shOk /\ (~Shadow \/ (sr.ok /\ sr.v[2] = r.v[2]))
+               /\ shOk' = (shOk /\ (~Shadow \/ (sr.ok /\ sr.v[2] = r.v[2])))
                /\ replies' = <<>> /\ nxt' = None /\ fmsg' = <<>>
                /\ pc' = IF Garbage THEN "gh" ELSE "rh"
                /\ UNCHANGED <<err, bad>>
@@ -252,14 +253,14 @@ DoRH ==
     /\ pc = "rh" /\ ~Garbage
     /\ LET r == RespCall(rsp, tx)
            sr == IF Shadow THEN RespCall(shR, tx) ELSE r
-       IN IF ~r.ok
-          THEN /\ Fail(r.err) /\ UNCHANGED <<rsp, shR, replies>>
-          ELSE /\ rsp' = r.v[3] /\ shR' = IF sr.ok THEN sr.v[3] ELSE shR
-               /\ replies' = IF r.v[1] \in {"send", "last", "chunk"} THEN Append(replies, r.v[2]) ELSE replies
-               /\ pc' = IF r.v[1] = "chunk" THEN "rr" ELSE "ih"
-               /\ UNCHANGED <<err, tx, nxt, fmsg>>
-          /\ shOk' = shOk /\ ShadowEq(r, sr)
+       IN /\ shOk' = (shOk /\ ShadowEq(r, sr))
           /\ cnt' = Account(cnt, IF r.ok THEN r.v[2] ELSE <<>>)
+          /\ IF ~r.ok
+             THEN /\ Fail(r.err) /\ UNCHANGED <<rsp, shR, replies>>
+             ELSE /\ rsp' = r.v[3] /\ shR' = IF sr.ok THEN sr.v[3] ELSE shR
+                  /\ replies' = IF r.v[1] \in {"send", "last", "chunk"} THEN Append(replies, r.v[2]) ELSE replies
+                  /\ pc' = IF r.v[1] = "chunk" THEN "rr" ELSE "ih"
+                  /\ UNCHANGED <<err, tx, nxt, fmsg>>
     /\ delivered' = delivered + 1 /\ steps' = steps + 1
     /\ UNCHANGED <<cs, ini, shI, attempt, bad>>
 
@@ -267,14 +268,14 @@ DoRR ==
     /\ pc = "rr"
     /\ LET r == RespResume(cs.B, rsp)
            sr == IF Shadow THEN RespResume(cs.B, shR) ELSE r
-       IN IF ~r.ok
-          THEN /\ Fail(r.err) /\ UNCHANGED <<rsp, shR, replies>>
-          ELSE /\ rsp' = r.v[3] /\ shR' = IF sr.ok THEN sr.v[3] ELSE shR
-               /\ replies' = Append(replies, r.v[2])
-               /\ pc' = IF r.v[1] = "chunk" THEN "rr" ELSE "ih"
-               /\ UNCHANGED <<err, tx, nxt, fmsg>>
-          /\ shOk' = shOk /\ ShadowEq(r, sr)
+       IN /\ shOk' = (shOk /\ ShadowEq(r, sr))
           /\ cnt' = Account(cnt, IF r.ok THEN r.v[2] ELSE <<>>)
+          /\ IF ~r.ok
+             THEN /\ Fail(r.err) /\ UNCHANGED <<rsp, shR, replies>>
+             ELSE /\ rsp' = r.v[3] /\ shR' = IF sr.ok THEN sr.v[3] ELSE shR
+                  /\ replies' = Append(replies, r.v[2])
+                  /\ pc' = IF r.v[1] = "chunk" THEN "rr" ELSE "ih"
+                  /\ UNCHANGED <<err, tx, nxt, fmsg>>
     /\ steps' = steps + 1
     /\ UNCHANGED <<cs, ini, shI, attempt, delivered, bad>>
 
@@ -289,7 +290,7 @@ DoIH ==
                 sr == IF Shadow THEN InitHandle(orc, cs.A, shI, m) ELSE r
             IN /\ steps' = steps + 1 /\ delivered' = delivered + 1
                /\ replies' = Tail(replies)
-               /\ shOk' = shOk /\ ShadowEq(r, sr)
+               /\ shOk' = (shOk /\ ShadowEq(r, sr))
                /\ IF ~r.ok
                   THEN /\ Fail(r.err) /\ UNCHANGED <<ini, shI, cnt>>
                   ELSE /\ ini' = r.v[3] /\ shI' = IF sr.ok THEN sr.v[3] ELSE shI
@@ -305,11 +306,11 @@ DoFin ==
     /\ pc = "fin"
     /\ LET r == RespCall(rsp, fmsg)
            sr == IF Shadow THEN RespCall(shR, fmsg) ELSE r
-       IN IF ~r.ok
-          THEN /\ Fail(r.err) /\ UNCHANGED <<rsp, shR>>
-          ELSE /\ rsp' = r.v[3] /\ shR' = IF sr.ok THEN sr.v[3] ELSE shR
-               /\ pc' = "ih" /\ UNCHANGED <<err, tx, replies, nxt, fmsg>>
-          /\ shOk' = shOk /\ ShadowEq(r, sr)
+       IN /\ shOk' = (shOk /\ ShadowEq(r, sr))
+          /\ IF ~r.ok
+             THEN /\ Fail(r.err) /\ UNCHANGED <<rsp, shR, replies>>
+             ELSE /\ rsp' = r.v[3] /\ shR' = IF sr.ok THEN sr.v[3] ELSE shR
+                  /\ pc' = "ih" /\ UNCHANGED <<err, tx, replies, nxt, fmsg>>
     /\ delivered' = delivered + 1 /\ steps' = steps + 1
     /\ UNCHANGED <<cs, ini, shI, attempt, cnt, bad>>
 
@@ -387,5 +388,18 @@ Refused ==
                                              "index", "badIndex", "messageTooLarge", "itemTooLarge",
                                              "reportTooLarge", "tooManyRounds", "mismatch"}
 GarbageEnds == Garbage => steps <= MaxRoundsC * 2 + 4
+
+(* ---- reachability witnesses: TLC must violate each (witness_tlc in scripts/proofs.sh) ---- *)
+NotMiss == ~(ini.core.exact)
+NotHeld == ~(Holds(rsp.core) \/ Holds(ini.core))
+NotDone == pc # "done"
+NotMismatch == err # "mismatch"
+NotTMR == err # "tooManyRounds"
+NotColdStream == ~(rsp.side = "cold")
+NotNarrowed == ~(pc = "rh" /\ cnt.calls = 0 /\ Len(cs.A) > ALEAF /\ PartsOf(tx) < SPLIT /\ PartsOf(tx) > 0)
+NotTooLarge == err # "messageTooLarge"
+NotChunk == ~(pc = "rr")
+NotExhausted == pc # "exhausted"
+NotRefused == ~(Garbage /\ pc = "failed" /\ err = "truncated")
 
 =============================================================================
