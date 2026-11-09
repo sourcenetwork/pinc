@@ -140,7 +140,5 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
             vinc_membership::session::Carrier::Gone { since, .. } => now.saturating_sub(*since) < GONE_TTL,
             _ => true,
         });
-        let sess = &self.io.sess;
-        self.io.rx_extra.retain(|s, _| sess.contains_key(s));
     }
 }

@@ -87,7 +87,7 @@ impl Membership {
         let mut cur: Option<NodeId> = None;
         while let Some(hub) = next_key(&self.hello_at, cur.as_ref()) {
             cur = Some(hub);
-            let Some(t0) = self.hello_at.get(&hub).copied() else {
+            let Some(t0) = self.hello_at.get(&hub).copied().flatten() else {
                 continue;
             };
             let opened = self.up.get(&hub).copied().unwrap_or(now);
@@ -99,7 +99,7 @@ impl Membership {
                         continue;
                     }
                 }
-                self.hello_at.remove(&hub);
+                self.hello_at.insert(hub, None);
                 if self.up.contains_key(&hub) {
                     h.close(&hub, CloseReason::NoAck);
                     self.drop_peer(h, now, &hub);

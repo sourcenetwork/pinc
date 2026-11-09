@@ -70,6 +70,13 @@ pub(crate) struct EventQueue {
 }
 
 impl EventQueue {
+    fn with_capacity(n: usize) -> Self {
+        Self {
+            q: VecDeque::with_capacity(n),
+            lost: 0,
+        }
+    }
+
     pub(crate) fn push(&mut self, e: NodeEvent) {
         if self.q.len() >= EVENT_CAP {
             self.lost = self.lost.saturating_add(1);
@@ -110,7 +117,6 @@ pub(crate) struct Io<E: Ep, St: Store> {
     pub(crate) dials: Vec<NodeId>,
     pub(crate) probes: Vec<(NodeId, NodeId)>,
     pub(crate) carriers: BTreeMap<NodeId, Carrier>,
-    pub(crate) rx_extra: BTreeMap<SessionId, Nanos>,
     /// Per session: the packet count at the last look and when it last changed.
     pub(crate) rx_seen: BTreeMap<SessionId, (u64, Nanos)>,
     pub(crate) rtts: BTreeMap<NodeId, (Nanos, bool)>,
@@ -161,15 +167,14 @@ impl<E: Ep, St: Store> Io<E, St> {
             failed: BTreeMap::new(),
             connecting: BTreeMap::new(),
             queue: BTreeMap::new(),
-            dials: Vec::new(),
-            probes: Vec::new(),
+            dials: Vec::with_capacity(16),
+            probes: Vec::with_capacity(16),
             carriers: BTreeMap::new(),
-            rx_extra: BTreeMap::new(),
             rx_seen: BTreeMap::new(),
             rtts: BTreeMap::new(),
             revoked: BTreeSet::new(),
-            evq: VecDeque::new(),
-            out: EventQueue::default(),
+            evq: VecDeque::with_capacity(64),
+            out: EventQueue::with_capacity(256),
             tq: TraceQueue::new(trace),
             ticket: [0; TICKET_MAX],
             ticket_len: 0,
@@ -406,7 +411,7 @@ impl<E: Ep, St: Store> Io<E, St> {
     pub(crate) fn evidence_of(&self, peer: &NodeId) -> Option<Evidence> {
         let sid = self.links.get(peer)?.conn?;
         let st = self.ep.stats(sid).filter(|s| s.established)?;
-        let extra = self.rx_extra.get(&sid).copied().unwrap_or(0).max(self.rx_seen.get(&sid).map_or(0, |e| e.1));
+        let extra = self.rx_seen.get(&sid).map_or(0, |e| e.1);
         Some(Evidence {
             last_rx: st.heard.max(extra),
             srtt: st.transport.srtt,

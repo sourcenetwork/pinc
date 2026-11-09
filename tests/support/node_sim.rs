@@ -43,7 +43,7 @@ use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, T
 use vinc_transport::stream::NoSource;
 
 use crate::connect_host::{Outbox, answer_parts};
-use crate::core_net::{CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, CoreSlot, memory};
+use crate::core_net::{metered, CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, CoreSlot, memory};
 use crate::Caps;
 
 pub const NK: usize = 24;
@@ -418,7 +418,7 @@ impl SimNode {
         self.now = now;
         self.node.set_wall_ms(now, self.wall_ms(now));
         for _ in 0..128 {
-            self.node.poll(now);
+            metered(|| self.node.poll(now));
             let mut busy = self.events_step(now);
             busy |= self.keys_step(now);
             busy |= self.io_step(now);
@@ -576,7 +576,7 @@ impl SimNode {
     fn tx_step(&mut self, now: u64) -> bool {
         let mut did = false;
         let mut buf = vec![0u8; 2048];
-        while let Some(t) = self.node.poll_transmit(now, &mut buf) {
+        while let Some(t) = metered(|| self.node.poll_transmit(now, &mut buf)) {
             did = true;
             if let Some((relay, slot)) = relay_parts(&t.remote)
                 && relay == LOCAL_RELAY
@@ -874,7 +874,7 @@ impl SimNode {
             {
                 let _ = self.hub.as_mut().unwrap().relay.udp_heard(&n, now);
             }
-            self.node.handle_datagram(now, local, remote, data);
+            metered(|| self.node.handle_datagram(now, local, remote, data));
         }
         self.pump(now);
     }
@@ -915,7 +915,7 @@ impl SimNode {
             h.relay.handle_timeout(now, &mut s);
             self.apply(now, s);
         }
-        self.node.handle_timeout(now);
+        metered(|| self.node.handle_timeout(now));
         self.pump(now);
     }
 

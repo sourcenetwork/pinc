@@ -90,8 +90,8 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
                 ..
             } => {
                 // The answer to a path probe is transport evidence that the peer is alive.
-                if self.io.rx_extra.len() < TABLE_MAX || self.io.rx_extra.contains_key(&session) {
-                    self.io.rx_extra.insert(session, now);
+                if let Some(e) = self.io.rx_seen.get_mut(&session) {
+                    e.1 = now;
                 }
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
@@ -217,7 +217,6 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
             return;
         };
         self.io.drop_session_streams(session);
-        self.io.rx_extra.remove(&session);
         self.io.rx_seen.remove(&session);
         let peer = s.peer;
         let code = close_code(reason);

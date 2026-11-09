@@ -152,8 +152,9 @@ pub struct Membership {
     pub(crate) members: BTreeMap<NodeId, ViewEntry>,
     pub(crate) epoch: u64,
     pub(crate) hrtt: BTreeMap<NodeId, Nanos>,
-    pub(crate) hsent: BTreeMap<NodeId, Nanos>,
-    pub(crate) hello_at: BTreeMap<NodeId, Nanos>,
+    // A cleared entry stays as `None`: a map emptied and refilled would allocate in steady state.
+    pub(crate) hsent: BTreeMap<NodeId, Option<Nanos>>,
+    pub(crate) hello_at: BTreeMap<NodeId, Option<Nanos>>,
     pub(crate) primary: Option<NodeId>,
     pub(crate) home_ok: Option<NodeId>,
     pub(crate) home_seen: bool,
@@ -492,8 +493,12 @@ impl Membership {
         self.up.remove(peer);
         self.attached.remove(peer);
         self.homed.remove(peer);
-        self.hello_at.remove(peer);
-        self.hsent.remove(peer);
+        if let Some(v) = self.hello_at.get_mut(peer) {
+            *v = None;
+        }
+        if let Some(v) = self.hsent.get_mut(peer) {
+            *v = None;
+        }
         if !self.is_hub && self.home_ok.as_ref() == Some(peer) {
             // The home session is gone, so its copy can go stale: until the home snapshot returns, additions from
             // every fresh hub are believed and removals are held.

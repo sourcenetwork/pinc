@@ -780,3 +780,11 @@ path = "node_revoke.rs"
 [[test]]
 name = "node_newest_session"
 path = "node_newest_session.rs"
+
+[[test]]
+name = "node_noalloc"
+path = "node_noalloc.rs"
+
+[[test]]
+name = "node_determinism"
+path = "node_determinism.rs"

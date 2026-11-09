@@ -110,8 +110,11 @@ impl Membership {
                 self.trace(Trace::HelloSuppressed { hub });
                 continue;
             }
-            self.hello_at.entry(hub).or_insert(now);
-            self.hsent.insert(hub, now);
+            let at = self.hello_at.entry(hub).or_insert(None);
+            if at.is_none() {
+                *at = Some(now);
+            }
+            self.hsent.insert(hub, Some(now));
             self.hello_to(h, now, &hub, snap);
         }
         self.next_renew = now.saturating_add(RENEW);

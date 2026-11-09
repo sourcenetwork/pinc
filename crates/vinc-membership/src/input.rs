@@ -85,9 +85,11 @@ impl Membership {
                 self.begin_quiet(now, QuietCause::Heal);
             }
             self.heard.insert(*peer, now);
-            self.hello_at.remove(peer);
+            if let Some(v) = self.hello_at.get_mut(peer) {
+                *v = None;
+            }
             if matches!(f, Frame::Ack | Frame::Snap(_))
-                && let Some(t0) = self.hsent.remove(peer)
+                && let Some(t0) = self.hsent.get_mut(peer).and_then(Option::take)
                 && now.saturating_sub(t0) < RTT_SAMPLE_MAX
             {
                 self.rtt_sample(peer, now - t0);
