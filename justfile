@@ -75,7 +75,7 @@ gate: checks test doctest proofs
     @echo "gate: ok"
 
 # Every static check: dependency rules, format, lints, docs, no_std builds, pure Rust.
-checks: deps hygiene fmt-check clippy doc no-std pure
+checks: deps hygiene fmt-check clippy build doc no-std pure
 
 # Dependency rules: declared only at the root, one version, unsafe forbidden, no async runtime, no C.
 deps:
@@ -100,6 +100,11 @@ fmt-check:
 # Lints on every target and feature, warnings as errors.
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Build every target, benches and examples included: post-monomorphization checks (const assertions in generic
+# code) are evaluated only by a real build, not by clippy or by building the tests.
+build:
+    cargo build --workspace --all-targets --all-features
 
 # Build the docs, warnings as errors.
 doc:
