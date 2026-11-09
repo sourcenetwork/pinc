@@ -45,6 +45,11 @@ impl<V, const N: usize> Table<V, N> {
         }
     }
 
+    /// The bucket `k` hashes to: where a probe for `k` starts.
+    pub fn bucket_of(&self, k: &NodeId) -> usize {
+        bucket::<N>(self.seed, k)
+    }
+
     /// The number of entries.
     pub const fn len(&self) -> usize {
         self.len
@@ -192,6 +197,11 @@ impl<V, const N: usize> Cache<V, N> {
             slots: core::array::from_fn(|_| None),
             seed,
         }
+    }
+
+    /// The bucket `k` hashes to: where a probe for `k` starts.
+    pub fn bucket_of(&self, k: &NodeId) -> usize {
+        bucket::<N>(self.seed, k)
     }
 
     /// The value for `k`.
