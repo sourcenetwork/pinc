@@ -263,9 +263,9 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
             // finish: a wrong-sized outboard or scratch is refused with nothing changed; otherwise the real call
             let mut ob = vec![0; b.layout.outboard_len().unwrap() as usize];
             let mut scratch = vec![0; rx.scratch_len().unwrap()];
-            if rng.next_u64() % 4 == 0 {
+            if rng.next_u64().is_multiple_of(4) {
                 let before_buf = rx.sealed().to_vec();
-                let res = if rng.next_u64() % 2 == 0 {
+                let res = if rng.next_u64().is_multiple_of(2) {
                     rx.finish(&mut ob[1..], &mut scratch)
                 } else {
                     rx.finish(&mut ob, &mut scratch[1..])
