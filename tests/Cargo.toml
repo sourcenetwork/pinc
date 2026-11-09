@@ -819,3 +819,23 @@ path = "trace_keystore.rs"
 name = "trace_keystore_tpm"
 path = "trace_keystore_tpm.rs"
 required-features = ["hwenc"]
+
+[[test]]
+name = "layers_values"
+path = "layers_values.rs"
+
+[[test]]
+name = "layers_reconcile"
+path = "layers_reconcile.rs"
+
+[[test]]
+name = "layers_dtn"
+path = "layers_dtn.rs"
+
+[[test]]
+name = "layers_noalloc"
+path = "layers_noalloc.rs"
+
+[[test]]
+name = "layers_determinism"
+path = "layers_determinism.rs"

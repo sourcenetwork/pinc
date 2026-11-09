@@ -35,28 +35,49 @@ use vinc_core::{
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
 use vinc_keystore::{KeyStore, SoftwareStore};
 use vinc_membership::session::StoreError;
-use vinc_node::{Config as NodeConfig, HUB_ALPN, Node, NodeEvent, Store, TraceItem};
+use vinc_node::{Apps, Config as NodeConfig, HUB_ALPN, NoApps, Node, NodeEvent, ServeSource, Store, TraceItem};
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
-use vinc_transport::stream::NoSource;
+use vinc_transport::conn::Resources;
+use vinc_transport::recovery::LossEstimate;
+use vinc_transport::stream::pool::BufferPool;
+use vinc_transport::stream::{self, NoSource, StreamSource, Streams};
 
 use crate::Caps;
 use crate::connect_host::{Outbox, answer_parts};
-use crate::core_net::{CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, CoreSlot, memory, metered};
+use crate::core_net::{CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, metered};
 
 pub const NK: usize = 24;
 pub const ND: usize = 384;
 pub const NRL: usize = 4;
 pub const NPEERS: usize = 32;
-pub type NEp = Endpoint<'static, 'static, Caps, NoSource, CN, CC, CF, CNP, NK, ND, CPK, CTK, CCT>;
+pub type NEpS<S> = Endpoint<'static, 'static, Caps, S, CN, CC, CF, CNP, NK, ND, CPK, CTK, CCT>;
+pub type NEp = NEpS<NoSource>;
+
+/// What a simulated node needs of the host stores of the layers above broadcast: the node's `Apps` and the stream
+/// source type its endpoint is built with.
+pub trait SimApps: Apps<Caps> + Clone + 'static {
+    type Src: StreamSource + ServeSource<<Self as Apps<Caps>>::Values> + 'static;
+}
+
+impl SimApps for NoApps {
+    type Src = NoSource;
+}
 
 /// The relay-path address family and index the hub's own relay uses for its members: an index no client has.
 const LOCAL_RELAY: u8 = 0xFE;
 
-fn node_slots() -> &'static mut [CoreSlot; NK] {
-    let v: Vec<CoreSlot> = (0..NK).map(|_| Slot::new(memory(false))).collect();
-    let b: Box<[CoreSlot; NK]> = v.into_boxed_slice().try_into().ok().unwrap();
-    let _ = CHUNKS_PER_CONN;
+fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC> {
+    let pool = BufferPool::new_boxed(CHUNKS_PER_CONN);
+    let streams: &'static mut Streams<S, CN, CC> =
+        Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
+    let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
+    Resources { pool, streams, loss }
+}
+
+fn node_slots<S: StreamSource + 'static>() -> &'static mut [Slot<'static, Caps, S, CN, CC, CF, CNP>; NK] {
+    let v: Vec<Slot<'static, Caps, S, CN, CC, CF, CNP>> = (0..NK).map(|_| Slot::new(memory_of::<S>())).collect();
+    let b: Box<[Slot<'static, Caps, S, CN, CC, CF, CNP>; NK]> = v.into_boxed_slice().try_into().ok().unwrap();
     Box::leak(b)
 }
 
@@ -94,7 +115,7 @@ impl Store for SealStore {
     }
 }
 
-pub type NodeT = Node<NEp, Caps, SealStore, NRL, NPEERS>;
+pub type NodeT<A = NoApps> = Node<NEpS<<A as SimApps>::Src>, Caps, SealStore, NRL, NPEERS, A>;
 pub type HubRelay = Relay<24, 16, 8, 4096>;
 
 /// How to reach a hub.
@@ -154,6 +175,26 @@ pub enum NCmd {
     Deny(bool),
     /// Answer the broadcast access checks with this verdict from now on.
     BroadcastAllow(bool),
+    /// Fetch a value from providers (node ids).
+    ValuesFetch {
+        root: [u8; 32],
+        length: u64,
+        ranges: Vec<(u64, u64)>,
+        providers: Vec<[u8; 32]>,
+    },
+    /// Cancel a fetch.
+    ValuesCancel(u32),
+    /// Start a reconcile round against a peer.
+    SetsStart {
+        peer: [u8; 32],
+        set_ref: Vec<u8>,
+    },
+    /// Create a bundle for a recipient.
+    DtnSend {
+        to: Box<vinc_dtn::seal::RecipientKeys>,
+        payload: Vec<u8>,
+        plan: vinc_node::DtnPlan,
+    },
 }
 
 /// What the scenario reads of a node.
@@ -236,8 +277,9 @@ fn wrap(rs: &RStream, bytes: &[u8]) -> Vec<u8> {
     }
 }
 
-pub struct SimNode {
-    pub node: Box<NodeT>,
+pub struct SimNode<A: SimApps = NoApps> {
+    pub node: Box<NodeT<A>>,
+    apps: A,
     pub spec: NodeSpec,
     pub me: NodeId,
     prov: Caps,
@@ -265,12 +307,13 @@ pub struct SimNode {
     pub incarnations: Vec<u64>,
 }
 
-fn build(
+fn build<A: SimApps>(
+    apps: A,
     spec: &NodeSpec,
     now: u64,
     seal: &SealStore,
     restarted: bool,
-) -> (Box<NodeT>, Caps, Keypair, SoftPrekeys<Caps>, Drbg) {
+) -> (Box<NodeT<A>>, Caps, Keypair, SoftPrekeys<Caps>, Drbg) {
     let alg = IdentityAlg::Ed25519;
     let tag = spec.tag;
     let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
@@ -280,7 +323,14 @@ fn build(
     let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
     cfg.conn.max_gso = 1;
     let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
-    let mut ep: Box<NEp> = Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, node_slots()));
+    let mut ep: Box<NEpS<<A as SimApps>::Src>> = Box::new(Endpoint::new(
+        now,
+        prov,
+        ep_drbg,
+        identity,
+        cfg,
+        node_slots::<<A as SimApps>::Src>(),
+    ));
     let mut env = Env {
         provider: &prov,
         now,
@@ -320,7 +370,7 @@ fn build(
     };
     let drbg2 = Drbg::new(&[tag ^ 0x33; 32]);
     let kp2 = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
-    let node = Node::new(
+    let node = Node::with_apps(
         &cfg,
         *ep,
         prekey_info,
@@ -329,23 +379,30 @@ fn build(
         kp2,
         seal.clone(),
         u64::from(tag) << 32,
+        apps,
     )
     .expect("the node starts");
     (Box::new(node), prov, kp, prekeys, drbg)
 }
 
-impl SimNode {
+impl SimNode<NoApps> {
     pub fn new(spec: &NodeSpec) -> Self {
+        Self::with_apps(spec, NoApps::default())
+    }
+}
+
+impl<A: SimApps> SimNode<A> {
+    pub fn with_apps(spec: &NodeSpec, apps: A) -> Self {
         let seal = SealStore {
             persist: spec.persist,
             ks: Rc::new(RefCell::new(SoftwareStore::new().unwrap())),
             blob: Rc::new(RefCell::new(Vec::new())),
         };
-        Self::with_seal(spec, seal, false)
+        Self::with_seal(apps, spec, seal, false)
     }
 
-    fn with_seal(spec: &NodeSpec, seal: SealStore, restarted: bool) -> Self {
-        let (node, prov, kp, prekeys, hdrbg) = build(spec, spec.start, &seal, restarted);
+    fn with_seal(apps: A, spec: &NodeSpec, seal: SealStore, restarted: bool) -> Self {
+        let (node, prov, kp, prekeys, hdrbg) = build(apps.clone(), spec, spec.start, &seal, restarted);
         let me = kp.node_id();
         let hub = spec.is_hub.then(|| HubSide {
             relay: Box::new(HubRelay::new(RelayConfig::new(me, 0x5eed ^ u64::from(spec.tag)))),
@@ -359,6 +416,7 @@ impl SimNode {
         let mut n = Self {
             incarnations: vec![node.membership().incarnation()],
             node,
+            apps,
             spec: spec.clone(),
             me,
             prov,
@@ -963,6 +1021,34 @@ impl SimNode {
             }
             NCmd::Deny(d) => self.deny = d,
             NCmd::BroadcastAllow(a) => self.bc_allow = a,
+            NCmd::ValuesFetch {
+                root,
+                length,
+                ranges,
+                providers,
+            } => {
+                let spans: Vec<vinc_values::span::Span> = ranges
+                    .iter()
+                    .map(|(off, len)| vinc_values::span::Span { off: *off, len: *len })
+                    .collect();
+                let req = vinc_node::ValuesRequest {
+                    root,
+                    length,
+                    ranges: &spans,
+                    providers: &providers,
+                    deadline: None,
+                };
+                let _ = self.node.values_fetch(now, &req);
+            }
+            NCmd::ValuesCancel(f) => {
+                let _ = self.node.values_cancel(now, f);
+            }
+            NCmd::SetsStart { peer, set_ref } => {
+                let _ = self.node.sets_start(now, &peer, &set_ref);
+            }
+            NCmd::DtnSend { to, payload, plan } => {
+                let _ = self.node.dtn_send(now, &to, &payload, &plan);
+            }
         }
         self.pump(now);
     }
@@ -1097,7 +1183,7 @@ impl SimNode {
         let mut spec = self.spec.clone();
         spec.start = now;
         let incs = std::mem::take(&mut self.incarnations);
-        let mut fresh = Self::with_seal(&spec, seal, true);
+        let mut fresh = Self::with_seal(self.apps.clone(), &spec, seal, true);
         fresh.clock = self.clock.clone();
         fresh.incarnations = incs;
         let last = fresh.node.membership().incarnation();
@@ -1137,7 +1223,7 @@ impl SimNode {
     }
 }
 
-impl vinc_sim::Node for SimNode {
+impl<A: SimApps> vinc_sim::Node for SimNode<A> {
     type Cmd = NCmd;
     type Event = NEv;
 

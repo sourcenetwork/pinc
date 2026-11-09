@@ -68,6 +68,7 @@ fn trace_records_are_versioned_and_cover_every_layer() {
                 vinc_node::Body::Membership(_) => "membership",
                 vinc_node::Body::Broadcast(_) => "broadcast",
                 vinc_node::Body::Core(_) => "core",
+                vinc_node::Body::Values(..) => "values",
             });
         }
         assert!(kinds.contains("node") && kinds.contains("membership"), "{kinds:?}");
