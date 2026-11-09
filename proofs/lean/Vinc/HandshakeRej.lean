@@ -6,7 +6,8 @@ import Vinc.HandshakeStore
 A forged or genuine reject (`PRej`, `RRej`) delivered to any initiator session of any reachable state either is
 dropped or moves the session to a full Initial under the same dialed peer, without establishing or authenticating
 anything; the short Initial keeps its transcript, and a rejected resumption starts a fresh full handshake. A reject
-a responder sends leaves the responder's state and store as they were (a rejected Hello only removes an expired slot).
+a responder sends leaves the responder's state as it was and its store as it was or with one slot removed (an
+expired one), and issues nothing (`RejectsOnlyFallback` of `Handshake.tla`).
 -/
 
 namespace Vinc.Hs
@@ -16,9 +17,6 @@ open Term
 def InvI (ist : Nat × Nat → IState) : Prop :=
   ∀ s, ((ist s).ph = .reply ∨ (ist s).ph = .resume) → (ist s).est = false ∧ (ist s).auth = false
 
-theorem InvI_init (K : Nat) : InvI (G0 K).ist := by
-  intro s h; simp [G0] at h
-
 theorem InvI_upd {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (st' : IState)
     (hn : (st'.ph = .reply ∨ st'.ph = .resume) → st'.est = false ∧ st'.auth = false) : InvI (upd ist s st') := by
   intro s' hs'
@@ -26,158 +24,329 @@ theorem InvI_upd {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (
   · subst hh; simp only [upd_same] at hs' ⊢; exact hn hs'
   · simp only [upd_ne _ _ _ _ hh] at hs' ⊢; exact h s' hs'
 
-theorem IBeginFull_clean (n : Nat) (x : Atom) (peer : Nat) (short : Bool) (a b : Term) :
-    (IBeginFull n x peer short a b).st.est = false ∧ (IBeginFull n x peer short a b).st.auth = false := by
-  simp [IBeginFull, Ok]
+theorem InvI_ihandle (st : IState) (n : Nat) (m : Msg) (h : (st.ph = .reply ∨ st.ph = .resume) → st.est = false ∧ st.auth = false) :
+    ((IHandle st n m).st.ph = .reply ∨ (IHandle st n m).st.ph = .resume) →
+      (IHandle st n m).st.est = false ∧ (IHandle st n m).st.auth = false := by
+  rcases IHandle_cases st n m with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨hp, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
+    ⟨-, -, -, -, c, -⟩ | ⟨hp, -, -, c, -⟩
+  · rw [c]; exact h
+  · rw [c]; intro e; simp at e
+  · rw [c]; intro e; simp at e
+  · rw [c]; intro _; exact h (Or.inl hp)
+  · rw [c]; intro e; simp [IResumed] at e
+  · rw [c]; intro e; simp [IResumed] at e
+  · rw [c]; intro _; have := h (Or.inr hp); simp [rrFall, IBeginFull, Ok, this]
 
-theorem InvI_iHandle {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (m : Msg) :
-    InvI (upd ist s (IHandle (ist s) s.1 m).st) := by
-  have hs := h s
-  refine InvI_upd h s _ ?_
-  rcases IHandle_cases (ist s) s.1 m with ⟨c1, -⟩ | ⟨-, c1, -⟩ | ⟨-, -, -, c1, -⟩ | ⟨hp, -, -, -, c1, -⟩
-    | ⟨-, -, c1, -⟩ | ⟨-, -, -, c1, -⟩
-  · rw [c1]; exact hs
-  · rw [c1]; intro e; simp at e
-  · rw [c1]; intro e; simp at e
-  · rw [c1]; intro _; exact hs (Or.inl hp)
-  · rw [c1]; intro e; simp [rrDone] at e
-  · rw [c1]; intro _; simp [rrFall, IBeginFull, Ok]
+theorem InvI_ikey (st : IState) (n : Nat) (kind : KRes) (h : (st.ph = .reply ∨ st.ph = .resume) → st.est = false ∧ st.auth = false) :
+    ((IKey st n kind).st.ph = .reply ∨ (IKey st n kind).st.ph = .resume) →
+      (IKey st n kind).st.est = false ∧ (IKey st n kind).st.auth = false := by
+  rcases IKey_cases st n kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨hp, -, -, -, -, -, -, c, -⟩ | ⟨hp, -, c, -⟩
+  · rw [c]; exact h
+  · rw [c]; intro e; simp at e
+  · rw [c]; intro e; simp [ikSignSt, hp] at e
+  · rw [c]; intro e; simp [ikDoneSt, hp] at e
 
-theorem InvI_iKey {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (kind : KRes) :
-    InvI (upd ist s (IKey (ist s) s.1 kind).st) := by
-  have hs := h s
-  refine InvI_upd h s _ ?_
-  rcases IKey_cases (ist s) s.1 kind with ⟨c1, -⟩ | ⟨-, c1, -⟩ | ⟨hp, -, -, -, -, -, c1, -⟩ | ⟨hp, -, c1, -⟩
-  · rw [c1]; exact hs
-  · rw [c1]; intro e; simp at e
-  · rw [c1]; intro e; simp [ikSignSt, hp] at e
-  · rw [c1]; intro e; simp [ikDoneSt] at e
+theorem InvI_iretrans (st : IState) (n : Nat) (h : (st.ph = .reply ∨ st.ph = .resume) → st.est = false ∧ st.auth = false) :
+    ((IRetransmit n st).st.ph = .reply ∨ (IRetransmit n st).st.ph = .resume) →
+      (IRetransmit n st).st.est = false ∧ (IRetransmit n st).st.auth = false := by
+  rcases IRetransmit_cases n st with ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨c, -⟩
+  · rw [c]; intro _; exact h (Or.inl hp)
+  · rw [c]; intro _; exact h (Or.inr hp)
+  · rw [c]; intro _; have := h (Or.inr hp); simp [lateFall, lateFallB, IBeginFull, Ok, this]
+  · rw [c]; exact h
 
-/-- The initiator invariant holds in every reachable state. -/
-theorem InvI_reach {K : Nat} {g : G} (hr : Reach K g) : InvI g.ist := by
+theorem InvI_new (n k peer : Nat) (al : Term) (short : Bool) (tk : Option Tk) :
+    ((INew n k peer al short tk).st.ph = .reply ∨ (INew n k peer al short tk).st.ph = .resume) →
+      (INew n k peer al short tk).st.est = false ∧ (INew n k peer al short tk).st.auth = false := by
+  intro _
+  unfold INew
+  cases tk <;> simp [IBeginResume, IBeginFull, Ok]
+
+theorem InvI_step {g g' : G} (h : InvI g.ist) (hs : Step g g') : InvI g'.ist := by
+  cases hs with
+  | iStart s peer al short take _ _ _ => exact InvI_upd h s _ (InvI_new _ _ _ _ _ _)
+  | iRecv s m _ _ => exact InvI_upd h s _ (InvI_ihandle _ _ _ (h s))
+  | iAnswer s kind _ _ => exact InvI_upd h s _ (InvI_ikey _ _ _ (h s))
+  | iRetrans s _ _ => exact InvI_upd h s _ (InvI_iretrans _ _ (h s))
+  | iShed s _ _ => exact InvI_upd h s _ (by intro e; simpa [IShed] using h s e)
+  | iAccept s tids _ hd _ _ _ => exact InvI_upd h s _ (by intro e; rw [hd] at e; simp at e)
+  | rRecv => exact h
+  | rAnswer => exact h
+  | rRetrans => exact h
+  | rShed => exact h
+  | expire => exact h
+  | expireC => exact h
+  | «export» => exact h
+  | restore => exact h
+  | restart => exact h
+
+theorem InvI_reach {K C : Nat} {g : G} (hr : Reach K C g) : InvI g.ist := by
   induction hr with
-  | init => exact InvI_init K
-  | step _ hs ih =>
-    cases hs with
-    | startFull s peer short _ hn _ =>
-      exact InvI_upd ih s _ (fun _ => IBeginFull_clean _ _ _ _ _ _)
-    | startResume s tk _ hn _ =>
-      exact InvI_upd ih s _ (fun _ => by simp [IBeginResume, Ok])
-    | iRecv s m _ _ => exact InvI_iHandle ih s m
-    | iAnswer s kind _ => exact InvI_iKey ih s kind
-    | iRetransmit => exact ih
-    | iAcceptFull s r hd _ _ _ _ _ _ =>
-      exact InvI_upd ih s _ (by intro e; rw [hd] at e; simp at e)
-    | iAcceptResumed s t hd _ _ _ _ =>
-      exact InvI_upd ih s _ (by intro e; rw [hd] at e; simp at e)
-    | rRecv => exact ih
-    | rAnswer => exact ih
-    | expire => exact ih
+  | init => intro s h; simp [G0] at h
+  | step _ hs ih => exact InvI_step ih hs
 
-/-- RejectsOnlyFallback, initiator side, for every state satisfying the initiator invariant and every message. -/
-theorem rejectInit_of {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (m : Msg)
-    (hm : m.ty = .prej ∨ m.ty = .rrej) :
-    (IHandle (ist s) s.1 m).st = ist s ∨
-    ((IHandle (ist s) s.1 m).st.ph = .reply ∧ (IHandle (ist s) s.1 m).st.short = false ∧
-      (IHandle (ist s) s.1 m).st.peer = (ist s).peer ∧ (IHandle (ist s) s.1 m).st.est = false ∧
-      (IHandle (ist s) s.1 m).st.auth = false ∧ (ist s).est = false ∧
-      ((ist s).ph = .reply → (IHandle (ist s) s.1 m).st.th0 = (ist s).th0) ∧
-      ((ist s).ph = .resume → (IHandle (ist s) s.1 m).st.fell = true)) := by
-  have hs := h s
-  by_cases hf : (ist s).ph = .failed
-  · left; simp [IHandle, hf, Drop]
-  · rcases hm with hm | hm
-    · have e : IHandle (ist s) s.1 m = if ¬((ist s).ph = .reply ∧ (ist s).short = true) ∨ m.echo ≠ (ist s).th0
-          then Drop (ist s) else Ok { ist s with short := false }
-            [{ ty := .init, form := .full, e := pub (ist s).x, pk := ek s.1 }] [] := by
-        simp [IHandle, hf, hm]
-      rw [e]
-      by_cases hc : ¬((ist s).ph = .reply ∧ (ist s).short = true) ∨ m.echo ≠ (ist s).th0
-      · left; simp only [hc, ite_true, Drop]
-      · right
-        have hc' : (ist s).ph = .reply ∧ (ist s).short = true := by
-          exact Decidable.byContradiction (fun hh => hc (Or.inl hh))
-        have he := hs (Or.inl hc'.1)
-        simp only [hc, ite_false, Ok]
-        simp [hc'.1, he.1, he.2]
-    · have e : IHandle (ist s) s.1 m = if (ist s).ph ≠ .resume ∨ m.echo ≠ (ist s).thh
-          then Drop (ist s) else Ok (rrFall (ist s) s.1) (IBeginFull s.1 (atom 1 (ist s).x.n (ist s).x.k) (ist s).peer false (ist s).thh nil).out [.rejected] := by
-        simp [IHandle, hf, hm]
-      rw [e]
-      by_cases hc : (ist s).ph ≠ .resume ∨ m.echo ≠ (ist s).thh
-      · left; simp only [hc, ite_true, Drop]
-      · right
-        have hc' : (ist s).ph = .resume := by
-          exact Decidable.byContradiction (fun hh => hc (Or.inl hh))
-        have he := hs (Or.inr hc')
-        simp only [hc, ite_false, Ok]
-        simp [hc', he.1, rrFall, IBeginFull, Ok]
-
-theorem rejectInit {K : Nat} {g : G} (hr : Reach K g) (s : Nat × Nat) (m : Msg)
+/-- RejectsOnlyFallback, initiator side: a reject delivered to any session is dropped or moves a session that was
+waiting for a reply to a full Initial to the same peer, unauthenticated, keeping the transcript of a short Initial
+and marking a resumption as fallen back. -/
+theorem rejectInit {K C : Nat} {g : G} (hr : Reach K C g) (s : Nat × Nat) (m : Msg)
     (hm : m.ty = .prej ∨ m.ty = .rrej) :
     (IHandle (g.ist s) s.1 m).st = g.ist s ∨
     ((IHandle (g.ist s) s.1 m).st.ph = .reply ∧ (IHandle (g.ist s) s.1 m).st.short = false ∧
       (IHandle (g.ist s) s.1 m).st.peer = (g.ist s).peer ∧ (IHandle (g.ist s) s.1 m).st.est = false ∧
       (IHandle (g.ist s) s.1 m).st.auth = false ∧ (g.ist s).est = false ∧
       ((g.ist s).ph = .reply → (IHandle (g.ist s) s.1 m).st.th0 = (g.ist s).th0) ∧
-      ((g.ist s).ph = .resume → (IHandle (g.ist s) s.1 m).st.fell = true)) :=
-  rejectInit_of (InvI_reach hr) s m hm
+      ((g.ist s).ph = .resume → (IHandle (g.ist s) s.1 m).st.fell = true)) := by
+  have hs := InvI_reach hr s
+  by_cases hf : (g.ist s).ph = .failed
+  · left; simp [IHandle, hf, Drop]
+  rcases hm with hm | hm
+  · by_cases hc : (g.ist s).ph = .reply ∧ (g.ist s).short = true ∧ m.echo = (g.ist s).th0
+    · right
+      have he := hs (Or.inl hc.1)
+      simp [IHandle, hf, hm, hc.1, hc.2.1, hc.2.2, Ok, he.1, he.2]
+    · left
+      have : ¬((g.ist s).ph = .reply ∧ (g.ist s).short = true) ∨ m.echo ≠ (g.ist s).th0 := by
+        by_cases h1 : (g.ist s).ph = .reply ∧ (g.ist s).short = true
+        · exact Or.inr (fun h2 => hc ⟨h1.1, h1.2, h2⟩)
+        · exact Or.inl h1
+      have e : IHandle (g.ist s) s.1 m = Drop (g.ist s) := by
+        unfold IHandle; rw [if_neg hf]; simp only [hm]; rw [if_pos this]
+      rw [e]; rfl
+  · by_cases hc : (g.ist s).ph = .resume ∧ m.echo = (g.ist s).thh
+    · right
+      have he := hs (Or.inr hc.1)
+      simp [IHandle, hf, hm, hc.1, hc.2, Ok, he.1, he.2, IBeginFull]
+    · left
+      have : (g.ist s).ph ≠ .resume ∨ m.echo ≠ (g.ist s).thh := by
+        by_cases h1 : (g.ist s).ph = .resume
+        · exact Or.inr (fun h2 => hc ⟨h1, h2⟩)
+        · exact Or.inl h1
+      have e : IHandle (g.ist s) s.1 m = Drop (g.ist s) := by
+        unfold IHandle; rw [if_neg hf]; simp only [hm]; rw [if_pos this]
+      rw [e]; rfl
+
+/-- The reply a responder holds while it waits for the Finish or repeats a Hello is of the right kind. -/
+def RplOK (st : RState) : Prop :=
+  (st.ph = .finish → st.reply.ty = .reply) ∧ (st.ph = .resumed → st.reply.ty = .rreply)
+
+theorem RplOK_handle (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) (h : RplOK st) :
+    RplOK (RHandle st n k sto m cs).st := by
+  rcases RHandle_cases st n k sto m cs with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, ⟨sp, nr, c⟩, -⟩ | ⟨-, -, c, -⟩ | ⟨-, -, c, -⟩ |
+    ⟨-, -, -, -, -, c, -⟩ | ⟨-, -, -, -, -, -, c, -⟩ | ⟨-, -, -, -, -, -, c, -⟩ | ⟨-, -, -, -, -, c, -⟩ |
+    ⟨-, -, -, -, -, -, c, -⟩ | ⟨-, -, -, -, -, -, c, -⟩
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp, by simp⟩
+  · rw [c]; exact h
+  · rw [c]; exact h
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp [rInitSt], by simp [rInitSt]⟩
+  · rw [c]; exact ⟨by simp [rfSt], by simp [rfSt]⟩
+  · rw [c]; exact ⟨by simp, by simp⟩
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp [rhSt], by simp [rhSt, rhReply]⟩
+  · rw [c]; exact ⟨by simp, by simp⟩
+
+theorem RplOK_key (st : RState) (n k : Nat) (sto : Store) (kind : KRes) (h : RplOK st) :
+    RplOK (RKey st n k sto kind).st := by
+  rcases RKey_cases st n k sto kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, c, -⟩
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp, by simp⟩
+  · rw [c]; exact ⟨by simp [rkSt, rkReply], by simp [rkSt]⟩
+
+theorem RplOK_reach {K C : Nat} {g : G} (hr : Reach K C g) : ∀ s, RplOK (g.rst s) := by
+  induction hr with
+  | init => intro s; exact ⟨by simp [G0], by simp [G0]⟩
+  | @step g0 g1 _ hs ih =>
+    cases hs with
+    | rRecv s m cs _ _ =>
+      intro r; by_cases e : r = s
+      · subst e; simpa [stepRRecv, upd_same] using RplOK_handle (g0.rst r) r.1 r.2 (g0.sto r.1) m cs (ih r)
+      · show RplOK (upd _ s _ r); rw [upd_ne _ _ _ _ e]; exact ih r
+    | rAnswer s kind _ _ =>
+      intro r; by_cases e : r = s
+      · subst e; simpa [stepRAnswer, upd_same] using RplOK_key (g0.rst r) r.1 r.2 (g0.sto r.1) kind (ih r)
+      · show RplOK (upd _ s _ r); rw [upd_ne _ _ _ _ e]; exact ih r
+    | rShed s _ =>
+      intro r; by_cases e : r = s
+      · subst e
+        show RplOK (upd _ r _ r); rw [upd_same]
+        have := ih r
+        unfold RShed; split
+        · exact ⟨by simp, by simp⟩
+        · exact this
+      · show RplOK (upd _ s _ r); rw [upd_ne _ _ _ _ e]; exact ih r
+    | _ => exact ih
 
 /-- RejectsOnlyFallback, responder side, for a prekey reject: the responder and its store are unchanged. -/
-theorem rejectRespPrej {K : Nat} {g : G} (hr : Reach K g) (n k : Nat) (m : Msg) :
-    ∀ o ∈ (RHandle (g.rst (n, k)) n k (g.sto n) m).out, o.ty = .prej →
-      (RHandle (g.rst (n, k)) n k (g.sto n) m).st = g.rst (n, k) ∧
-      (RHandle (g.rst (n, k)) n k (g.sto n) m).sto = g.sto n := by
-  have hfin := (InvRT_reach hr).fR (n, k)
-  rcases RHandle_cases (g.rst (n, k)) n k (g.sto n) m with ⟨c1, c2, c3, c4, c5⟩
-    | ⟨hp, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, c1, c2, c3, c4, c5⟩
-    | ⟨hp, hty, hpr, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, hk, had, hsig, c1, c2, c3, c4, c5⟩
-    | ⟨hp, hty, hpr, c1, c2, c4, c5⟩ | ⟨hp, hty, hpr, i0, hfi, hexp, hbind, c1, c2, c3, c4, c5⟩
+theorem rejectRespPrej {K C : Nat} {g : G} (hr : Reach K C g) (n k : Nat) (m : Msg) (cs : List (List Nat)) :
+    ∀ o ∈ (RHandle (g.rst (n, k)) n k (g.sto n) m cs).out, o.ty = .prej →
+      (RHandle (g.rst (n, k)) n k (g.sto n) m cs).st = g.rst (n, k) ∧
+      (RHandle (g.rst (n, k)) n k (g.sto n) m cs).sto = g.sto n := by
+  have hp := RplOK_reach hr (n, k)
+  rcases RHandle_cases (g.rst (n, k)) n k (g.sto n) m cs with ⟨c1, c2, c3, c4, c5⟩
+    | ⟨hph, c1, c2, c3, c4, c5⟩ | ⟨hph, ⟨sp, nr, c1⟩, c2, c3, c4, c5⟩ | ⟨hph, hty, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, c1, c2, c3, c4, c5⟩ | ⟨hph, hty, hv, hs, ha, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, hk, ha, hs, hok, c1, c2, c3, c4, c5⟩ | ⟨hph, hty, hk, ha, hs, hok, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, hv, hs, hu, c1, c2, c3, c4, c5⟩ | ⟨hph, hty, hv, hs, hu, hok, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, hv, hs, hu, hok, c1, c2, c3, c4, c5⟩
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho e
-    have := hfin hp
-    rw [c2] at ho; simp at ho; subst ho; simp [this] at e
+    rcases c2 with c2 | c2
+    · rw [c2] at ho; cases ho
+    · rw [c2] at ho; simp at ho; subst ho; simp [hp.2 hph] at e
+  · intro o ho e
+    rw [c2] at ho; simp at ho; subst ho; simp [hp.1 hph] at e
   · intro o ho _; exact ⟨c1, c3⟩
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho; rw [c2] at ho; cases ho
-  · intro o ho e
-    rw [c2] at ho; simp at ho; subst ho; simp at e
-  · intro o ho e
-    rw [c2] at ho; simp [rhMsg] at ho; subst ho; simp at e
+  · intro o ho; rw [c2] at ho; cases ho
+  · intro o ho e; rw [c2] at ho; simp at ho; subst ho; simp at e
+  · intro o ho e; rw [c2] at ho; simp [rhReply] at ho; subst ho; simp at e
+  · intro o ho; rw [c2] at ho; cases ho
 
 /-- A resume reject leaves the responder as it was, the store as it was or with one slot removed, and issues
 nothing. -/
-theorem rejectRespRrej {K : Nat} {g : G} (hr : Reach K g) (n k : Nat) (m : Msg) :
-    ∀ o ∈ (RHandle (g.rst (n, k)) n k (g.sto n) m).out, o.ty = .rrej →
-      (RHandle (g.rst (n, k)) n k (g.sto n) m).st = g.rst (n, k) ∧
-      ((RHandle (g.rst (n, k)) n k (g.sto n) m).sto = g.sto n ∨
-        ∃ i, (RHandle (g.rst (n, k)) n k (g.sto n) m).sto = RemoveSlot (g.sto n) i) ∧
-      (RHandle (g.rst (n, k)) n k (g.sto n) m).iss = [] := by
-  have hfin := (InvRT_reach hr).fR (n, k)
-  rcases RHandle_cases (g.rst (n, k)) n k (g.sto n) m with ⟨c1, c2, c3, c4, c5⟩
-    | ⟨hp, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, c1, c2, c3, c4, c5⟩
-    | ⟨hp, hty, hpr, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, hk, had, hsig, c1, c2, c3, c4, c5⟩
-    | ⟨hp, hty, hpr, c1, c2, c4, c5⟩ | ⟨hp, hty, hpr, i0, hfi, hexp, hbind, c1, c2, c3, c4, c5⟩
+theorem rejectRespRrej {K C : Nat} {g : G} (hr : Reach K C g) (n k : Nat) (m : Msg) (cs : List (List Nat)) :
+    ∀ o ∈ (RHandle (g.rst (n, k)) n k (g.sto n) m cs).out, o.ty = .rrej →
+      (RHandle (g.rst (n, k)) n k (g.sto n) m cs).st = g.rst (n, k) ∧
+      ((RHandle (g.rst (n, k)) n k (g.sto n) m cs).sto = g.sto n ∨
+        ∃ i, (RHandle (g.rst (n, k)) n k (g.sto n) m cs).sto = RemoveSlot (g.sto n) i) ∧
+      (RHandle (g.rst (n, k)) n k (g.sto n) m cs).iss = [] := by
+  have hp := RplOK_reach hr (n, k)
+  rcases RHandle_cases (g.rst (n, k)) n k (g.sto n) m cs with ⟨c1, c2, c3, c4, c5⟩
+    | ⟨hph, c1, c2, c3, c4, c5⟩ | ⟨hph, ⟨sp, nr, c1⟩, c2, c3, c4, c5⟩ | ⟨hph, hty, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, c1, c2, c3, c4, c5⟩ | ⟨hph, hty, hv, hs, ha, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, hk, ha, hs, hok, c1, c2, c3, c4, c5⟩ | ⟨hph, hty, hk, ha, hs, hok, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, hv, hs, hu, c1, c2, c3, c4, c5⟩ | ⟨hph, hty, hv, hs, hu, hok, c1, c2, c3, c4, c5⟩
+    | ⟨hph, hty, hv, hs, hu, hok, c1, c2, c3, c4, c5⟩
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho e
-    have := hfin hp
-    rw [c2] at ho; simp at ho; subst ho; simp [this] at e
+    rcases c2 with c2 | c2
+    · rw [c2] at ho; cases ho
+    · rw [c2] at ho; simp at ho; subst ho; simp [hp.2 hph] at e
   · intro o ho e
-    rw [c2] at ho; simp at ho; subst ho; simp at e
+    rw [c2] at ho; simp at ho; subst ho; simp [hp.1 hph] at e
+  · intro o ho e; rw [c2] at ho; simp at ho; subst ho; simp at e
+  · intro o ho; rw [c2] at ho; cases ho
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho; rw [c2] at ho; cases ho
   · intro o ho _
-    have hf : (g.rst (n, k)).ph ≠ .failed := by rw [hp]; simp
-    have hr2 := RHello_rej _ n k (g.sto n) m hp hpr (by rw [← RHandle_hello _ n k _ m hf hty]; exact c2)
-    rw [RHandle_hello _ n k _ m hf hty] at c1 c4 ⊢
-    exact ⟨hr2.1, hr2.2, c4⟩
-  · intro o ho e
-    rw [c2] at ho; simp [rhMsg] at ho; subst ho; simp at e
+    refine ⟨c1, ?_, c4⟩
+    rw [c3]; unfold rhStoRej; split
+    · exact Or.inr ⟨_, rfl⟩
+    · exact Or.inl rfl
+  · intro o ho e; rw [c2] at ho; simp [rhReply] at ho; subst ho; simp at e
+  · intro o ho; rw [c2] at ho; cases ho
 
+/-! ## A19 and A21: the fallback keeps the destination id, a resumed responder resends within its budgets -/
+
+/-- A resuming initiator, or one that gave up its Hello for a full Initial, holds the destination id it chose. -/
+def InvD (s : Nat × Nat) (st : IState) : Prop :=
+  (st.ph = .resume → st.dc = cid 1 s.1 s.2) ∧ (st.late.on = true → st.dc = cid 1 s.1 s.2)
+
+theorem InvD_none (s : Nat × Nat) : InvD s ({} : IState) := ⟨by simp, by simp [Late]⟩
+
+theorem InvD_ihandle (s : Nat × Nat) (st : IState) (m : Msg) (h : InvD s st) : InvD s (IHandle st s.1 m).st := by
+  rcases IHandle_cases st s.1 m with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨-, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
+    ⟨-, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp, h.2⟩
+  · rw [c]; exact ⟨by simp, h.2⟩
+  · rw [c]; exact ⟨fun e => h.1 e, h.2⟩
+  · rw [c]; exact ⟨by simp [IResumed], by simp [IResumed, NoLate]⟩
+  · rw [c]; exact ⟨by simp [IResumed], by simp [IResumed, NoLate]⟩
+  · rw [c]; exact ⟨by simp [rrFall, IBeginFull, Ok], by simp [rrFall, IBeginFull, Ok, NoLate]⟩
+
+theorem InvD_ikey (s : Nat × Nat) (st : IState) (kind : KRes) (h : InvD s st) : InvD s (IKey st s.1 kind).st := by
+  rcases IKey_cases st s.1 kind with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, -, -, -, -, c, -⟩ | ⟨-, -, c, -⟩
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp, h.2⟩
+  · rw [c]; exact ⟨by simp [ikSignSt], h.2⟩
+  · rw [c]; exact ⟨by simp [ikDoneSt], h.2⟩
+
+theorem InvD_iretrans (s : Nat × Nat) (st : IState) (h : InvD s st) : InvD s (IRetransmit s.1 st).st := by
+  rcases IRetransmit_cases s.1 st with ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨hp, -, c, -⟩ | ⟨c, -⟩
+  · rw [c]; exact h
+  · rw [c]; exact h
+  · rw [c]; exact ⟨by simp [lateFall, lateFallB, IBeginFull, Ok], fun _ => by
+      simp [lateFall, lateFallB, IBeginFull, Ok]; exact h.1 hp⟩
+  · rw [c]; exact h
+
+theorem InvD_new (s : Nat × Nat) (peer : Nat) (al : Term) (short : Bool) (tk : Option Tk) :
+    InvD s (INew s.1 s.2 peer al short tk).st := by
+  unfold INew
+  cases tk <;> simp [IBeginResume, IBeginFull, Ok, InvD]
+
+theorem InvD_reach {K C : Nat} {g : G} (hr : Reach K C g) : ∀ s, InvD s (g.ist s) := by
+  induction hr with
+  | init => intro s; exact InvD_none s
+  | @step g0 g1 _ hs ih =>
+    have key : ∀ (s : Nat × Nat) (st' : IState), InvD s st' → ∀ r, InvD r (upd g0.ist s st' r) := by
+      intro s st' hst r
+      by_cases e : r = s
+      · subst e; rw [upd_same]; exact hst
+      · rw [upd_ne _ _ _ _ e]; exact ih r
+    cases hs with
+    | iStart s peer al short take _ _ _ => exact key s _ (InvD_new s _ _ _ _)
+    | iRecv s m _ _ => exact key s _ (InvD_ihandle s _ m (ih s))
+    | iAnswer s kind _ _ => exact key s _ (InvD_ikey s _ kind (ih s))
+    | iRetrans s _ _ => exact key s _ (InvD_iretrans s _ (ih s))
+    | iShed s _ _ =>
+      exact key s _ ⟨fun e => (ih s).1 e, by simp [IShed, NoLate]⟩
+    | iAccept s tids _ _ _ _ _ => exact key s _ (ih s)
+    | _ => exact ih
+
+/-- A19: a Hello that gave way to a full Initial kept its destination id. -/
+theorem fallbackKeepsDcid {K C : Nat} {g : G} (hr : Reach K C g) (s : Nat × Nat) (h : (g.ist s).late.on = true) :
+    (g.ist s).dc = cid 1 s.1 s.2 :=
+  (InvD_reach hr s).2 h
+
+/-- A21 for every responder state and every message: a resumed responder sends its Reply again only within the byte
+budgets. A repeated Hello of the same transcript while the bytes it was sent total at most `RB`; an Initial under
+the same connection ids only when the Reply is at most three times its size and the bytes total at most `LB`. -/
+theorem resendWithinBudget (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : List (List Nat))
+    (hp : st.ph = .resumed) (ho : st.reply ∈ (RHandle st n k sto m cs).out) :
+    (m.ty = .hello ∧ (RHandle st n k sto m cs).st.thh = st.thh ∧ (RHandle st n k sto m cs).st.spent ≤ RB) ∨
+    (m.ty = .init ∧ m.dc = st.dc ∧ m.sc = st.sc ∧ st.reply.len ≤ 3 * m.len ∧
+      (RHandle st n k sto m cs).st.spent ≤ LB) := by
+  have hf : st.ph ≠ .failed := by rw [hp]; simp
+  have hr : ∀ r : RRes, r.out = [] → st.reply ∈ r.out → False := fun r h1 h2 => by rw [h1] at h2; cases h2
+  cases hty : m.ty
+  case init =>
+    have e : RHandle st n k sto m cs = RInitial st n k sto m := by simp [RHandle, hf, hty]
+    rw [e] at ho ⊢
+    by_cases h3 : st.dc = m.dc ∧ st.sc = m.sc
+    · by_cases h4 : st.reply.len ≤ 3 * m.len ∧ st.spent + m.len ≤ LB
+      · right; simp [RInitial, hp, h3, h4, ROk]
+      · exfalso; simp [RInitial, hp, h3, h4] at ho
+    · exfalso; simp [RInitial, hp, h3, RDrop] at ho
+  case hello =>
+    have e : RHandle st n k sto m cs = RRepeat st sto m := by simp [RHandle, hf, hty, RHello, hp]
+    rw [e] at ho ⊢
+    unfold RRepeat at ho ⊢
+    dsimp only at ho ⊢
+    by_cases hc : st.thh ≠ thH m.ver m.al m.dc m.sc m.ad m.tid m.e m.cr ∨ st.spent + m.len > RB
+    · exfalso; rw [if_pos hc] at ho; simp at ho
+    · rw [if_neg hc]
+      left
+      refine ⟨rfl, rfl, ?_⟩
+      have := (not_or.mp hc).2
+      show st.spent + m.len ≤ RB
+      omega
+  all_goals
+    exfalso
+    first
+      | (have e : RHandle st n k sto m cs = RDrop st sto := by simp [RHandle, hf, hty, RFinish, hp, RDrop]
+         rw [e] at ho; simp [RDrop] at ho)
+      | (simp [RHandle, hf, hty, RDrop] at ho)
+
+#audit_axioms Vinc.Hs.fallbackKeepsDcid
+#audit_axioms Vinc.Hs.resendWithinBudget
 #audit_axioms Vinc.Hs.InvI_reach
 #audit_axioms Vinc.Hs.rejectInit
+#audit_axioms Vinc.Hs.RplOK_reach
 #audit_axioms Vinc.Hs.rejectRespPrej
 #audit_axioms Vinc.Hs.rejectRespRrej
 

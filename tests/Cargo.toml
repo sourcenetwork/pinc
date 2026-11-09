@@ -308,5 +308,17 @@ path = "values_alloc.rs"
 name = "values_big"
 path = "values_big.rs"
 
+[[test]]
+name = "trace_stores"
+path = "trace_stores.rs"
+
+[[test]]
+name = "trace_keyroll"
+path = "trace_keyroll.rs"
+
+[[test]]
+name = "trace_security"
+path = "trace_security.rs"
+
 [lints]
 workspace = true

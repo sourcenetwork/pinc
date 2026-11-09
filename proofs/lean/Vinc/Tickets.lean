@@ -3,27 +3,50 @@ import Vinc.Axioms
 /-!
 # The ticket stores
 
-A model of the slot arithmetic of `vinc-security/src/tickets.rs`. A store is a list of `N` slots (`Option Slot`):
-`ServerTickets` and `ClientTickets` are arrays of `N` optional slots, `victim` picks where an issued ticket goes
-(the first empty slot, else the first expired one, else the one with the lowest `(stamp, index)`), `remove` empties a
-slot, and `ClientTickets::take` drops the expired tickets and removes the matching ticket with the greatest stamp (the
-last one on a tie, as `Iterator::max_by_key`). Times and stamps are `Nat`s; the code's `u64` comparisons are the same
-comparisons, and the stamp is a wrapping counter that does not wrap in practice (2^64 tickets).
+A model of `vinc-security/src/tickets.rs`. A store is a list of `N` slots (`Option Slot`): `ServerTickets` and
+`ClientTickets` are arrays of `N` optional slots with a clock that stamps every insertion. `victim` picks where an
+inserted ticket goes (the first empty slot, else the first expired one, else the one with the lowest `(stamp, index)`),
+`remove` empties a slot. Times and stamps are `Nat`s; the code's `u64` comparisons are the same comparisons, and the
+stamp is a `wrapping_add` counter that does not wrap before 2^64 insertions (a documented ceiling; the model counts in
+`Nat`).
 
-The server store does not check that two tickets have different ids: the single-use theorem for `find` assumes the
-ids of the stored tickets are pairwise distinct (`Distinct`), which the 128 random bits of an id provide, and
-proves the rest from that.
+This module holds the slot arithmetic and the server store. The server store draws ticket ids with `fresh_id`: at most
+`ID_ATTEMPTS = 8` draws, each of which must differ from every stored id, else `Failure::TicketId`. The random
+generator is the environment, so the model takes the sequence of draws as an arbitrary function (`draw p`, `none` when
+the generator refuses) and proves, for every such sequence, that the stored ids stay pairwise distinct: the old
+assumption "the ids of one store are distinct" is a theorem (`server_ids_distinct`). The client store is in
+`Vinc.TicketsClient`, the export format in `Vinc.TicketsWire`.
 -/
 
 namespace Vinc.Tickets
 
-/-- A stored ticket: its id, who it resumes with (peer and ALPN, for the client store), expiry and stamp. -/
-structure Slot where
+/-- A node: the identity algorithm tag and the 32 node bytes (`NodeId`; equality is equality of both). -/
+structure Peer where
+  alg : Nat
+  node : List Nat
+  deriving DecidableEq
+
+/-- A ticket as the stores keep and export it: peer, ALPN bytes, id, pre-shared key, AEAD tag, expiry and the
+issuer's credit record bytes. -/
+structure Tk where
+  peer : Peer
+  alpn : List Nat
   tid : List Nat
-  peer : Nat
-  alpn : Nat
+  psk : List Nat
+  aead : Nat
   expiry : Nat
+  credit : List Nat
+  deriving DecidableEq
+
+/-- A stored ticket and its stamp. -/
+structure Slot where
+  tk : Tk
   stamp : Nat
+
+abbrev Slot.tid (s : Slot) : List Nat := s.tk.tid
+abbrev Slot.peer (s : Slot) : Peer := s.tk.peer
+abbrev Slot.alpn (s : Slot) : List Nat := s.tk.alpn
+abbrev Slot.expiry (s : Slot) : Nat := s.tk.expiry
 
 abbrev Slots := List (Option Slot)
 
@@ -409,8 +432,7 @@ def remove (l : Slots) (i : Nat) : Slots := l.set i none
 /-- The ticket in slot `i`, if any. -/
 def get (l : Slots) (i : Nat) : Option Slot := (l[i]?).getD none
 
-/-- The tickets in the store have pairwise different ids. The store does not check this; 128 random bits make a
-collision negligible. -/
+/-- The tickets in the store have pairwise different ids. The server store keeps this (`server_ids_distinct`). -/
 def Distinct (l : Slots) : Prop :=
   ∀ (i j : Nat) (s t : Slot), l[i]? = some (some s) → l[j]? = some (some t) → s.tid = t.tid → i = j
 
@@ -453,230 +475,380 @@ theorem find_remove_none {l : Slots} {tid : List Nat} {i : Nat} (hd : Distinct l
         simpa [remove, List.getElem?_set_ne (Ne.symm hji)] using hx
       exact hji (hd j i t s hx' hs (by rw [hpt, hst]))
 
-/-! ## The client store -/
 
-/-- Expired tickets are dropped. -/
-def dropExpired (now : Nat) (l : Slots) : Slots :=
-  l.map fun s => s.bind fun x => if x.expiry < now then none else some x
+/-! ## The server store -/
 
-def matchesKey (peer alpn : Nat) (s : Slot) : Bool := decide (s.peer = peer ∧ s.alpn = alpn)
+/-- The most draws `fresh_id` makes (`ID_ATTEMPTS`). -/
+def idAttempts : Nat := 8
+/-- The most tickets of one `issue_batch` (`MAX_BATCH`). -/
+def maxBatch : Nat := 4
+/-- Nanoseconds in a second. -/
+def nsPerS : Nat := 1000000000
+/-- `u64::MAX`. -/
+def u64Max : Nat := 2 ^ 64 - 1
 
-/-- `(stamp, index)` of the matching ticket with the greatest stamp, the last one on a tie
-(`Iterator::max_by_key`), from index `i`. -/
-def bestAux (peer alpn : Nat) : Slots → Nat → Option (Nat × Nat)
-  | [], _ => none
-  | x :: l, i =>
-    match x with
-    | none => bestAux peer alpn l (i + 1)
-    | some s =>
-      if matchesKey peer alpn s then
-        match bestAux peer alpn l (i + 1) with
-        | none => some (s.stamp, i)
-        | some (st, j) => if s.stamp ≤ st then some (st, j) else some (s.stamp, i)
-      else bestAux peer alpn l (i + 1)
+/-- `expiry`: `now.saturating_add(lifetime_s.saturating_mul(NS_PER_S))`; the product of a `u32` and 10^9 fits a `u64`. -/
+def expiryOf (now life : Nat) : Nat := min (now + life * nsPerS) u64Max
 
-/-- `ClientTickets::take`: the new store and the ticket taken. -/
-def take (l : Slots) (now peer alpn : Nat) : Slots × Option Slot :=
-  let d := dropExpired now l
-  match bestAux peer alpn d 0 with
-  | none => (d, none)
-  | some (_, i) => (d.set i none, (d[i]?).getD none)
+theorem expiryOf_ge (now life : Nat) (h : now ≤ u64Max) : now ≤ expiryOf now life := by
+  unfold expiryOf; omega
 
-theorem bestAux_none_iff (peer alpn : Nat) : ∀ (l : Slots) (i : Nat), bestAux peer alpn l i = none ↔
-    ∀ (k : Nat) (t : Slot), l[k]? = some (some t) → matchesKey peer alpn t = false := by
-  intro l
-  induction l with
-  | nil => intro i; simp [bestAux]
-  | cons x l ih =>
-    intro i
-    cases x with
-    | none =>
-      simp only [bestAux]
-      rw [ih]
-      constructor
-      · intro h k t hk
-        cases k with
-        | zero => simp at hk
-        | succ k => exact h k t (by simpa using hk)
-      · intro h k t hk; exact h (k + 1) t (by simpa using hk)
-    | some s =>
-      simp only [bestAux]
-      by_cases hm : matchesKey peer alpn s = true
-      · simp only [hm, ite_true]
-        constructor
-        · intro h
-          exfalso
-          cases e : bestAux peer alpn l (i + 1) with
-          | none => rw [e] at h; simp at h
-          | some r => obtain ⟨a, b⟩ := r; rw [e] at h; by_cases hle : s.stamp ≤ a <;> simp [hle] at h
-        · intro h; have := h 0 s (by simp); simp_all
-      · simp only [hm, Bool.false_eq_true, ite_false]
-        rw [ih]
-        constructor
-        · intro h k t hk
-          cases k with
-          | zero => simp at hk; subst hk; simpa using hm
-          | succ k => exact h k t (by simpa using hk)
-        · intro h k t hk; exact h (k + 1) t (by simpa using hk)
+theorem expiryOf_exact (now life : Nat) (h : now + life * nsPerS ≤ u64Max) : expiryOf now life = now + life * nsPerS := by
+  unfold expiryOf; omega
 
-theorem bestAux_some (peer alpn : Nat) : ∀ (l : Slots) (i st j : Nat), bestAux peer alpn l i = some (st, j) →
-    i ≤ j ∧ (∃ s, l[j - i]? = some (some s) ∧ matchesKey peer alpn s = true ∧ s.stamp = st) ∧
-      ∀ (k : Nat) (t : Slot), l[k]? = some (some t) → matchesKey peer alpn t = true → t.stamp ≤ st := by
-  intro l
-  induction l with
-  | nil => intro i st j h; simp [bestAux] at h
-  | cons x l ih =>
-    intro i st j h
-    -- the result of the tail, used in every case
-    have tail : bestAux peer alpn l (i + 1) = some (st, j) →
-        i ≤ j ∧ (∃ s, (x :: l)[j - i]? = some (some s) ∧ matchesKey peer alpn s = true ∧ s.stamp = st) := by
-      intro h'
-      obtain ⟨h1, ⟨s, hs, hm, hst⟩, _⟩ := ih (i + 1) st j h'
-      refine ⟨by omega, s, ?_, hm, hst⟩
-      have : j - i = (j - (i + 1)) + 1 := by omega
-      rw [this]; simpa using hs
-    cases x with
-    | none =>
-      simp only [bestAux] at h
-      obtain ⟨_, _, h3⟩ := ih (i + 1) st j h
-      refine ⟨(tail h).1, (tail h).2, ?_⟩
-      intro k t hk hm
-      cases k with
-      | zero => simp at hk
-      | succ k => exact h3 k t (by simpa using hk) hm
-    | some s =>
-      simp only [bestAux] at h
-      by_cases hm : matchesKey peer alpn s = true
-      · simp only [hm, ite_true] at h
-        cases e : bestAux peer alpn l (i + 1) with
-        | none =>
-          rw [e] at h
-          simp only [Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          refine ⟨Nat.le_refl _, ⟨s, by simp, hm, rfl⟩, ?_⟩
-          intro k t hk hmt
-          cases k with
-          | zero => simp at hk; subst hk; exact Nat.le_refl _
-          | succ k => exact absurd ((bestAux_none_iff peer alpn l (i + 1)).1 e k t (by simpa using hk)) (by simp [hmt])
-        | some r =>
-          obtain ⟨st', j'⟩ := r
-          rw [e] at h
-          obtain ⟨h1, ⟨s', hs', hm', hst'⟩, h3⟩ := ih (i + 1) st' j' e
-          by_cases hle : s.stamp ≤ st'
-          · simp only [hle, ite_true, Option.some.injEq, Prod.mk.injEq] at h
-            obtain ⟨rfl, rfl⟩ := h
-            refine ⟨(tail e).1, (tail e).2, ?_⟩
-            intro k t hk hmt
-            cases k with
-            | zero => simp at hk; subst hk; exact hle
-            | succ k => exact h3 k t (by simpa using hk) hmt
-          · simp only [hle, ite_false, Option.some.injEq, Prod.mk.injEq] at h
-            obtain ⟨rfl, rfl⟩ := h
-            refine ⟨Nat.le_refl _, ⟨s, by simp, hm, rfl⟩, ?_⟩
-            intro k t hk hmt
-            cases k with
-            | zero => simp at hk; subst hk; exact Nat.le_refl _
-            | succ k => have := h3 k t (by simpa using hk) hmt; omega
-      · simp only [hm, Bool.false_eq_true, ite_false] at h
-        obtain ⟨_, _, h3⟩ := ih (i + 1) st j h
-        refine ⟨(tail h).1, (tail h).2, ?_⟩
-        intro k t hk hmt
-        cases k with
-        | zero => simp at hk; subst hk; exact absurd hmt hm
-        | succ k => exact h3 k t (by simpa using hk) hmt
+/-- A store: the `N` slots and the clock that stamps insertions. -/
+structure Store where
+  slots : Slots
+  clock : Nat
 
-theorem dropExpired_get {now : Nat} {l : Slots} {j : Nat} {x : Slot}
-    (h : (dropExpired now l)[j]? = some (some x)) : l[j]? = some (some x) ∧ ¬ x.expiry < now := by
-  simp only [dropExpired, List.getElem?_map] at h
-  cases hl : l[j]? with
-  | none => rw [hl] at h; simp at h
-  | some y =>
-    rw [hl] at h
-    cases y with
-    | none => simp at h
-    | some z =>
-      simp only [Option.map_some, Option.some.injEq, Option.bind_some] at h
-      by_cases hz : z.expiry < now
-      · simp [hz] at h
-      · simp only [hz, ite_false, Option.some.injEq] at h
-        subst h
-        exact ⟨rfl, hz⟩
+/-- A fresh store of `n` slots. -/
+def Store.empty (n : Nat) : Store := ⟨List.replicate n none, 0⟩
 
-theorem occ_cons (x : Option Slot) (l : Slots) : occ (x :: l) = (if x.isSome then 1 else 0) + occ l := by
-  cases x <;> simp [occ] <;> omega
+/-- Why `issue_batch` fails: the generator refused, or no unused id turned up (`Failure::Randomness`, `Failure::TicketId`). -/
+inductive Fail where
+  | randomness
+  | ticketId
 
-theorem occ_set_none : ∀ (l : Slots) (i : Nat) (s : Slot), l[i]? = some (some s) → occ (l.set i none) + 1 = occ l := by
-  intro l
-  induction l with
-  | nil => intro i s h; simp at h
-  | cons x l ih =>
-    intro i s h
-    cases i with
-    | zero => simp at h; subst h; simp [occ_cons]; omega
-    | succ i =>
-      have := ih i s (by simpa using h)
-      rw [List.set_cons_succ, occ_cons, occ_cons]
-      omega
+/-- `fresh_id`: at most `k` draws from position `p` of the generator's output; the first draw that no stored ticket
+has. `draw q` is the `q`-th draw (`none` if the generator refuses). Returns the result and the next position. -/
+def freshId (l : Slots) (draw : Nat → Option (List Nat)) : Nat → Nat → Except Fail (List Nat) × Nat
+  | 0, p => (.error .ticketId, p)
+  | k + 1, p =>
+    match draw p with
+    | none => (.error .randomness, p)
+    | some tid => if (find l tid).isNone then (.ok tid, p + 1) else freshId l draw k (p + 1)
 
-/-- A `take` that returns a ticket removes exactly that ticket (from the store with its expired tickets dropped),
-the ticket matches the peer and ALPN, it has the greatest stamp among the matches, and it was not expired. -/
-theorem take_some {l l' : Slots} {now peer alpn : Nat} {s : Slot} (h : take l now peer alpn = (l', some s)) :
-    ∃ i, (dropExpired now l)[i]? = some (some s) ∧ l' = (dropExpired now l).set i none ∧
-      occ l' + 1 = occ (dropExpired now l) ∧ matchesKey peer alpn s = true ∧ ¬ s.expiry < now ∧
-      ∀ (k : Nat) (t : Slot), (dropExpired now l)[k]? = some (some t) → matchesKey peer alpn t = true →
-        t.stamp ≤ s.stamp := by
-  unfold take at h
-  simp only at h
-  cases e : bestAux peer alpn (dropExpired now l) 0 with
-  | none => rw [e] at h; simp at h
-  | some r =>
-    obtain ⟨st, i⟩ := r
-    rw [e] at h
-    simp only [Prod.mk.injEq] at h
-    obtain ⟨rfl, hs⟩ := h
-    obtain ⟨_, ⟨s', hs', hm, hst⟩, h3⟩ := bestAux_some _ _ _ _ _ _ e
-    simp only [Nat.sub_zero] at hs'
-    rw [hs'] at hs
-    simp only [Option.getD_some, Option.some.injEq] at hs
-    subst hs
-    exact ⟨i, hs', rfl, occ_set_none _ _ _ hs', hm, (dropExpired_get hs').2, by
-      intro k t hk hmt; have := h3 k t hk hmt; omega⟩
+/-- `issue_batch`: for each of `k` tickets draw a fresh id, stamp it with the next clock value and place it in the
+victim slot (the batch lists only the tickets that found a slot). On a failure the tickets already placed stay
+stored and the call returns the error, as the code does. `mk tid` is the ticket of the session with id `tid`. -/
+def issueLoop (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
+    Nat → Store → Nat → Store × Except Fail (List (List Nat))
+  | 0, st, _ => (st, .ok [])
+  | k + 1, st, p =>
+    match (freshId st.slots draw idAttempts p).1 with
+    | .error e => (st, .error e)
+    | .ok tid =>
+      let r := issueAt st.slots now ⟨mk tid, st.clock + 1⟩
+      let rest := issueLoop mk now draw k ⟨r.1, st.clock + 1⟩ (freshId st.slots draw idAttempts p).2
+      (rest.1, rest.2.map fun ids => if r.2 then tid :: ids else ids)
 
-/-- When `take` finds nothing, no unexpired ticket matches the peer and ALPN, and only the expired ones were
-dropped. -/
-theorem take_none {l l' : Slots} {now peer alpn : Nat} (h : take l now peer alpn = (l', none)) :
-    l' = dropExpired now l ∧ ∀ (k : Nat) (t : Slot), (dropExpired now l)[k]? = some (some t) →
-      matchesKey peer alpn t = false := by
-  unfold take at h
-  simp only at h
-  cases e : bestAux peer alpn (dropExpired now l) 0 with
+/-- `ServerTickets::issue_batch` with `count` asked: `min count MAX_BATCH` tickets. -/
+def issueBatch (st : Store) (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) (count : Nat) :
+    Store × Except Fail (List (List Nat)) :=
+  issueLoop mk now draw (min count maxBatch) st 0
+
+/-- Setting a slot: what an index holds afterwards. -/
+theorem set_get_cases {α : Type} {l : List α} {j k : Nat} {x y : α} (h : (l.set j x)[k]? = some y) :
+    (k = j ∧ y = x ∧ j < l.length) ∨ (k ≠ j ∧ l[k]? = some y) := by
+  rw [List.getElem?_set] at h
+  by_cases hjk : j = k
+  · subst hjk
+    by_cases hl : j < l.length
+    · simp [hl] at h; exact Or.inl ⟨rfl, h.symm, hl⟩
+    · simp [hl] at h
+  · simp [hjk] at h; exact Or.inr ⟨fun e => hjk e.symm, h⟩
+
+theorem freshId_fresh (l : Slots) (draw : Nat → Option (List Nat)) : ∀ (k p : Nat) (tid : List Nat),
+    (freshId l draw k p).1 = .ok tid → find l tid = none := by
+  intro k
+  induction k with
+  | zero => intro p tid h; simp [freshId] at h
+  | succ k ih =>
+    intro p tid h
+    simp only [freshId] at h
+    cases hd : draw p with
+    | none => rw [hd] at h; simp at h
+    | some t =>
+      rw [hd] at h
+      by_cases hf : (find l t).isNone = true
+      · simp only [hf, ite_true] at h
+        have : t = tid := by simpa using h
+        subst this
+        simpa using hf
+      · simp only [hf, Bool.false_eq_true, ite_false] at h
+        exact ih (p + 1) tid h
+
+/-- `Tickets.issue_ids_distinct`: a drawn id that `fresh_id` accepts differs from the id of every stored ticket. -/
+theorem issue_ids_distinct {l : Slots} {draw : Nat → Option (List Nat)} {k p : Nat} {tid : List Nat}
+    (h : (freshId l draw k p).1 = .ok tid) : ∀ (i : Nat) (s : Slot), l[i]? = some (some s) → s.tid ≠ tid := by
+  intro i s hs heq
+  have hn := freshId_fresh l draw k p tid h
+  unfold find at hn
+  have := (firstIdx_none_iff _ _ _).1 hn i (some s) hs
+  simp [heq] at this
+
+/-- If every draw of the `k` attempts is an id that is already stored, `fresh_id` fails with `TicketId`. -/
+theorem freshId_collide (l : Slots) (draw : Nat → Option (List Nat)) : ∀ (k p : Nat),
+    (∀ i, i < k → ∃ tid, draw (p + i) = some tid ∧ find l tid ≠ none) → (freshId l draw k p).1 = .error .ticketId := by
+  intro k
+  induction k with
+  | zero => intro p _; simp [freshId]
+  | succ k ih =>
+    intro p h
+    obtain ⟨tid, hd, hf⟩ := h 0 (by omega)
+    simp only [freshId, Nat.add_zero] at hd ⊢
+    rw [hd]
+    have : (find l tid).isNone = false := by
+      cases e : find l tid with
+      | none => exact absurd e hf
+      | some _ => rfl
+    simp only [this, Bool.false_eq_true, ite_false]
+    apply ih
+    intro i hi
+    obtain ⟨t, ht, hft⟩ := h (i + 1) (by omega)
+    exact ⟨t, by rw [show p + 1 + i = p + (i + 1) by omega]; exact ht, hft⟩
+
+theorem freshId_refuse (l : Slots) (draw : Nat → Option (List Nat)) (k p : Nat) (h : draw p = none) :
+    (freshId l draw (k + 1) p).1 = .error .randomness := by
+  simp [freshId, h]
+
+/-! ### Invariants of the server store -/
+
+/-- Every stamp is at most the clock and no two stored tickets share a stamp: the stamps are the order of issue. -/
+def StampInv (st : Store) : Prop :=
+  (∀ (i : Nat) (s : Slot), st.slots[i]? = some (some s) → s.stamp ≤ st.clock) ∧
+  ∀ (i j : Nat) (s t : Slot), st.slots[i]? = some (some s) → st.slots[j]? = some (some t) → s.stamp = t.stamp → i = j
+
+theorem replicate_none_get {α : Type} {n i : Nat} {s : α} (h : (List.replicate n (none : Option α))[i]? = some (some s)) :
+    False := by
+  rw [List.getElem?_replicate] at h
+  split at h <;> simp at h
+
+theorem StampInv.empty (n : Nat) : StampInv (Store.empty n) := by
+  constructor
+  · intro i s h; exact (replicate_none_get h).elim
+  · intro i j s t hs; exact (replicate_none_get hs).elim
+
+theorem issueAt_distinct {l : Slots} {now : Nat} {s : Slot} (hd : Distinct l)
+    (hf : ∀ (i : Nat) (t : Slot), l[i]? = some (some t) → t.tid ≠ s.tid) : Distinct (issueAt l now s).1 := by
+  unfold issueAt
+  cases hv : victim l now with
+  | none => simpa using hd
+  | some j =>
+    simp only
+    intro a b x y hx hy hxy
+    rcases set_get_cases hx with ⟨rfl, hxs, _⟩ | ⟨hne, hx'⟩ <;>
+      rcases set_get_cases hy with ⟨rfl, hys, _⟩ | ⟨hne', hy'⟩
+    · rfl
+    · cases hxs
+      exact absurd hxy.symm (hf b y hy')
+    · cases hys
+      exact absurd hxy (hf a x hx')
+    · exact hd a b x y hx' hy' hxy
+
+theorem issueAt_stamps {st : Store} (hs : StampInv st) (now : Nat) (s : Slot) (hst : s.stamp = st.clock + 1) :
+    StampInv ⟨(issueAt st.slots now s).1, st.clock + 1⟩ := by
+  unfold issueAt
+  cases hv : victim st.slots now with
   | none =>
-    rw [e] at h
-    simp only [Prod.mk.injEq, and_true] at h
-    exact ⟨h.symm, (bestAux_none_iff _ _ _ _).1 e⟩
-  | some r =>
-    obtain ⟨st, i⟩ := r
-    rw [e] at h
-    obtain ⟨_, ⟨s', hs', _, _⟩, _⟩ := bestAux_some _ _ _ _ _ _ e
-    simp only [Nat.sub_zero] at hs'
-    simp [hs'] at h
+    simp only
+    constructor
+    · intro i t h; have := hs.1 i t h; simp only; omega
+    · exact hs.2
+  | some j =>
+    simp only
+    constructor
+    · intro i t h
+      simp only
+      rcases set_get_cases h with ⟨rfl, hts, _⟩ | ⟨hne, h'⟩
+      · cases hts; omega
+      · have := hs.1 i t h'; omega
+    · intro a b x y hx hy hxy
+      simp only at hx hy
+      rcases set_get_cases hx with ⟨rfl, hxs, _⟩ | ⟨hne, hx'⟩ <;>
+        rcases set_get_cases hy with ⟨rfl, hys, _⟩ | ⟨hne', hy'⟩
+      · rfl
+      · cases hxs
+        have := hs.1 b y hy'; omega
+      · cases hys
+        have := hs.1 a x hx'; omega
+      · exact hs.2 a b x y hx' hy' hxy
 
-/-- A ticket taken is not taken twice: two successive takes return tickets from two different slots. -/
-theorem take_twice {l l₁ l₂ : Slots} {now peer alpn : Nat} {s s₂ : Slot} (h₁ : take l now peer alpn = (l₁, some s))
-    (h₂ : take l₁ now peer alpn = (l₂, some s₂)) :
-    ∃ i j : Nat, i ≠ j ∧ (dropExpired now l)[i]? = some (some s) ∧ (dropExpired now l)[j]? = some (some s₂) := by
-  obtain ⟨i, hi, hl₁, _⟩ := take_some h₁
-  obtain ⟨j, hj, _⟩ := take_some h₂
-  have hj' := (dropExpired_get hj).1
-  have hilt : i < (dropExpired now l).length := (List.getElem?_eq_some_iff.mp hi).1
-  refine ⟨i, j, ?_, hi, ?_⟩
-  · rintro rfl
-    rw [hl₁] at hj'
-    simp [List.getElem?_set_self hilt] at hj'
-  · rw [hl₁] at hj'
-    by_cases hij : i = j
-    · subst hij; simp [List.getElem?_set_self hilt] at hj'
-    · simpa [List.getElem?_set_ne hij] using hj'
+theorem issueLoop_length (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat), (issueLoop mk now draw k st p).1.slots.length = st.slots.length := by
+  intro k
+  induction k with
+  | zero => intro st p; simp [issueLoop]
+  | succ k ih =>
+    intro st p
+    simp only [issueLoop]
+    cases (freshId st.slots draw idAttempts p).1 with
+    | error e => simp
+    | ok tid =>
+      simp only
+      rw [ih]
+      exact issueAt_length _ _ _
+
+theorem issueLoop_distinct (mk : List Nat → Tk) (hmk : ∀ t, (mk t).tid = t) (now : Nat)
+    (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat), Distinct st.slots → Distinct (issueLoop mk now draw k st p).1.slots := by
+  intro k
+  induction k with
+  | zero => intro st p h; simpa [issueLoop] using h
+  | succ k ih =>
+    intro st p hd
+    simp only [issueLoop]
+    cases hf : (freshId st.slots draw idAttempts p).1 with
+    | error e => simpa using hd
+    | ok tid =>
+      simp only
+      apply ih
+      apply issueAt_distinct hd
+      intro i t ht
+      show t.tid ≠ (mk tid).tid
+      rw [hmk]
+      exact issue_ids_distinct hf i t ht
+
+theorem issueLoop_stamps (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat), StampInv st → StampInv (issueLoop mk now draw k st p).1 := by
+  intro k
+  induction k with
+  | zero => intro st p h; simpa [issueLoop] using h
+  | succ k ih =>
+    intro st p hs
+    simp only [issueLoop]
+    cases hf : (freshId st.slots draw idAttempts p).1 with
+    | error e => simpa using hs
+    | ok tid =>
+      simp only
+      exact ih _ _ (issueAt_stamps hs now _ rfl)
+
+theorem issueLoop_reach {N : Nat} (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat), Reach N st.slots → Reach N (issueLoop mk now draw k st p).1.slots := by
+  intro k
+  induction k with
+  | zero => intro st p h; simpa [issueLoop] using h
+  | succ k ih =>
+    intro st p hr
+    simp only [issueLoop]
+    cases hf : (freshId st.slots draw idAttempts p).1 with
+    | error e => simpa using hr
+    | ok tid =>
+      simp only
+      exact ih _ _ (Reach.issue now _ hr)
+
+/-- The server stores reachable from empty by `issue_batch` (with any generator output) and `remove`. -/
+inductive SReach (N : Nat) : Store → Prop where
+  | init : SReach N (Store.empty N)
+  | issue {st : Store} (mk : List Nat → Tk) (hmk : ∀ t, (mk t).tid = t) (now : Nat) (draw : Nat → Option (List Nat))
+      (count : Nat) : SReach N st → SReach N (issueBatch st mk now draw count).1
+  | remove {st : Store} (i : Nat) : SReach N st → SReach N ⟨st.slots.set i none, st.clock⟩
+
+theorem sreach_reach {N : Nat} {st : Store} (h : SReach N st) : Reach N st.slots := by
+  induction h with
+  | init => exact Reach.init
+  | issue mk hmk now draw count _ ih => exact issueLoop_reach mk now draw _ _ _ ih
+  | remove i _ ih => exact Reach.remove i ih
+
+/-- `Tickets.server_len`: a server store has `N` slots, so it holds at most `N` tickets; `N = 0` stores nothing. -/
+theorem server_len {N : Nat} {st : Store} (h : SReach N st) : st.slots.length = N ∧ occ st.slots ≤ N :=
+  ⟨reach_length (sreach_reach h), reach_occ_le (sreach_reach h)⟩
+
+theorem server_zero {st : Store} (h : SReach 0 st) : occ st.slots = 0 := reach_zero (sreach_reach h)
+
+/-- `Tickets.server_ids_distinct`: over every reachable server store, the stored ticket ids are pairwise
+distinct, whatever the generator returned. -/
+theorem server_ids_distinct {N : Nat} {st : Store} (h : SReach N st) : Distinct st.slots := by
+  induction h with
+  | init => intro i j s t hs; exact (replicate_none_get hs).elim
+  | issue mk hmk now draw count _ ih => exact issueLoop_distinct mk hmk now draw _ _ _ ih
+  | remove i _ ih =>
+    intro a b x y hx hy hxy
+    simp only at hx hy
+    rcases set_get_cases hx with ⟨rfl, hxs, _⟩ | ⟨hne, hx'⟩
+    · cases hxs
+    · rcases set_get_cases hy with ⟨rfl, hys, _⟩ | ⟨hne', hy'⟩
+      · cases hys
+      · exact ih a b x y hx' hy' hxy
+
+/-- Stamps of a reachable server store are distinct and bounded by the clock. -/
+theorem server_stamps {N : Nat} {st : Store} (h : SReach N st) : StampInv st := by
+  induction h with
+  | init => exact StampInv.empty N
+  | issue mk hmk now draw count _ ih => exact issueLoop_stamps mk now draw _ _ _ ih
+  | remove i _ ih =>
+    constructor
+    · intro a x hx
+      simp only at hx ⊢
+      rcases set_get_cases hx with ⟨rfl, hxs, _⟩ | ⟨hne, hx'⟩
+      · cases hxs
+      · exact ih.1 a x hx'
+    · intro a b x y hx hy hxy
+      simp only at hx hy
+      rcases set_get_cases hx with ⟨rfl, hxs, _⟩ | ⟨hne, hx'⟩
+      · cases hxs
+      · rcases set_get_cases hy with ⟨rfl, hys, _⟩ | ⟨hne', hy'⟩
+        · cases hys
+        · exact ih.2 a b x y hx' hy' hxy
+
+/-- `Tickets.server_evicts_oldest`: when an issue overwrites an occupied, unexpired slot, the overwritten ticket is
+the one issued earliest of all stored tickets. -/
+theorem server_evicts_oldest {N : Nat} {st : Store} (h : SReach N st) {now j : Nat} {old : Slot}
+    (hv : victim st.slots now = some j) (hold : st.slots[j]? = some (some old)) (hfresh : ¬ old.expiry < now) :
+    ∀ (k : Nat) (t : Slot), st.slots[k]? = some (some t) → k ≠ j → old.stamp < t.stamp := by
+  intro k t hk hkj
+  obtain ⟨hne, hall⟩ := issueAt_evicts hv hold
+  obtain ⟨s', hs', hmin⟩ := victim_min hv hne (hall hfresh)
+  rw [hold] at hs'
+  cases hs'
+  have hle := hmin k t hk
+  refine Nat.lt_of_le_of_ne hle fun heq => hkj ?_
+  exact (server_stamps h).2 k j t old hk hold heq.symm
+
+/-- `Tickets.issue_zero_empty`: a store without slots issues no ticket (the batch is empty), whatever it draws. -/
+theorem issue_zero_empty (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat)) :
+    ∀ (k : Nat) (st : Store) (p : Nat) (ids : List (List Nat)), st.slots = [] →
+      (issueLoop mk now draw k st p).2 = .ok ids → ids = [] := by
+  intro k
+  induction k with
+  | zero => intro st p ids _ h; simpa [issueLoop] using h.symm
+  | succ k ih =>
+    intro st p ids hs h
+    obtain ⟨sl, c⟩ := st
+    simp only at hs
+    subst hs
+    simp only [issueLoop] at h
+    cases hf : (freshId [] draw idAttempts p).1 with
+    | error e => rw [hf] at h; simp at h
+    | ok tid =>
+      rw [hf] at h
+      have hv := (victim_none_iff [] now).2 rfl
+      simp only [issueAt, hv] at h
+      cases hr : (issueLoop mk now draw k ⟨[], c + 1⟩ (freshId [] draw idAttempts p).2).2 with
+      | error e => rw [hr] at h; simp [Except.map] at h
+      | ok r =>
+        rw [hr] at h
+        simp only [Except.map, Except.ok.injEq] at h
+        have := ih ⟨[], c + 1⟩ _ r rfl hr
+        subst this
+        simpa using h.symm
+
+/-- `Tickets.issue_all_collide`: when every one of the 8 draws is an id that is already stored, the call asked for
+at least one ticket fails with `TicketId` and stores nothing. -/
+theorem issue_all_collide (st : Store) (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat))
+    (count : Nat) (hc : 1 ≤ count)
+    (h : ∀ i, i < 8 → ∃ tid, draw i = some tid ∧ find st.slots tid ≠ none) :
+    (issueBatch st mk now draw count).1 = st ∧ (issueBatch st mk now draw count).2 = .error .ticketId := by
+  unfold issueBatch maxBatch
+  obtain ⟨m, hm⟩ : ∃ m, min count 4 = m + 1 := ⟨min count 4 - 1, by omega⟩
+  rw [hm]
+  have hf := freshId_collide st.slots draw idAttempts 0 (by simpa [idAttempts] using h)
+  simp only [issueLoop]
+  rw [hf]
+  simp
+
+/-- A generator that refuses fails the call with `Randomness` and stores nothing for that ticket. -/
+theorem issue_refuse (st : Store) (mk : List Nat → Tk) (now : Nat) (draw : Nat → Option (List Nat))
+    (count : Nat) (hc : 1 ≤ count) (h : draw 0 = none) :
+    (issueBatch st mk now draw count).1 = st ∧ (issueBatch st mk now draw count).2 = .error .randomness := by
+  unfold issueBatch maxBatch
+  obtain ⟨m, hm⟩ : ∃ m, min count 4 = m + 1 := ⟨min count 4 - 1, by omega⟩
+  rw [hm]
+  have hf := freshId_refuse st.slots draw (idAttempts - 1) 0 h
+  simp only [issueLoop]
+  have : idAttempts = (idAttempts - 1) + 1 := by simp [idAttempts]
+  rw [this, hf]
+  simp
 
 end Vinc.Tickets
 
@@ -695,6 +867,13 @@ end Vinc.Tickets
 #audit_axioms Vinc.Tickets.remove_get
 #audit_axioms Vinc.Tickets.find_remove_ne
 #audit_axioms Vinc.Tickets.find_remove_none
-#audit_axioms Vinc.Tickets.take_some
-#audit_axioms Vinc.Tickets.take_none
-#audit_axioms Vinc.Tickets.take_twice
+#audit_axioms Vinc.Tickets.issue_ids_distinct
+#audit_axioms Vinc.Tickets.freshId_collide
+#audit_axioms Vinc.Tickets.server_len
+#audit_axioms Vinc.Tickets.server_zero
+#audit_axioms Vinc.Tickets.server_ids_distinct
+#audit_axioms Vinc.Tickets.server_stamps
+#audit_axioms Vinc.Tickets.server_evicts_oldest
+#audit_axioms Vinc.Tickets.issue_zero_empty
+#audit_axioms Vinc.Tickets.issue_all_collide
+#audit_axioms Vinc.Tickets.issue_refuse

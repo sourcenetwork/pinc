@@ -31,14 +31,14 @@ def subSessionContext : String := "VINC 2026 v1 sub session context"
 def packetKey : String := "VINC 2026 v1 packet key"
 def packetIv : String := "VINC 2026 v1 packet iv"
 def headerKey : String := "VINC 2026 v1 header key"
-def keyUpdate : String := "VINC 2026 v1 key update"
-def token : String := "VINC 2026 v1 token"
+def keyRoll : String := "VINC 2026 v1 key roll"
+def cidSecret : String := "VINC 2026 v1 connection id secret"
 
 /-- `labels::ALL`. -/
 def all : List String :=
   [handshake, resumeHandshake, chain, kemKeyHash, signatureResponder, signatureInitiator, handshakeInitiator,
    handshakeResponder, applicationInitiator, applicationResponder, resumption, ticket, binder, earlyData,
-   resumeConfirm, subSession, subSessionContext, packetKey, packetIv, headerKey, keyUpdate, token]
+   resumeConfirm, subSession, subSessionContext, packetKey, packetIv, headerKey, keyRoll, cidSecret]
 
 /-- The labels of `vinc-crypto` (`NODE_ID`, `HYBRID_SIGNATURE`). -/
 def cryptoLabels : List String := ["VINC 2026 v1 node id", "VINC 2026 v1 hybrid signature"]
@@ -57,6 +57,13 @@ theorem all_prefix : ∀ l ∈ all, prefix_.toList <+: l.toList := by decide
 /-- No label of the security layer is a label of `vinc-crypto`. -/
 theorem disjoint_crypto : ∀ l ∈ all, l ∉ cryptoLabels := by decide
 
+/-- Every label is ASCII, so its UTF-8 bytes are its character codes and `bytes` is the byte string the code hashes. -/
+theorem all_ascii : ∀ l ∈ all, ∀ c ∈ l.toList, c.toNat < 128 := by decide
+
+/-- The labels of the removed key update and token are no longer in the list, and the two that replaced them are. -/
+theorem removed_and_added :
+    "VINC 2026 v1 key update" ∉ all ∧ "VINC 2026 v1 token" ∉ all ∧ keyRoll ∈ all ∧ cidSecret ∈ all := by decide
+
 /-- The byte string of an ASCII label determines it (characters are determined by their codes below `2^21`
 unless they are surrogates, which cannot occur in a `String`). Only the concrete labels are needed: they are
 pairwise distinct as byte strings. -/
@@ -64,7 +71,10 @@ theorem bytes_nodup : (all.map bytes).Nodup := by decide
 
 end Vinc.Labels
 
+#audit_axioms Vinc.Labels.all_length
 #audit_axioms Vinc.Labels.all_nodup
+#audit_axioms Vinc.Labels.all_ascii
+#audit_axioms Vinc.Labels.removed_and_added
 #audit_axioms Vinc.Labels.all_prefix
 #audit_axioms Vinc.Labels.disjoint_crypto
 #audit_axioms Vinc.Labels.bytes_nodup

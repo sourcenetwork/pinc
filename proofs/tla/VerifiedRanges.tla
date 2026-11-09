@@ -36,8 +36,19 @@ TypeOK ==
     /\ req \in Offsets \X Offsets
     /\ res \in {"ok", "full"}
 
-(* the canonical invariant, within capacity *)
-Inv == Canonical(items) /\ Len(items) <= N
+(* the canonical invariant, within capacity; and the binary search loop of partition_point, run with each
+   predicate that plan and find use, returns the first index where it fails (PP, the specification) and finds
+   exactly the covered offsets (Lean: PP.partitionPoint_eq, with Ranges.part_end_lt, part_start_le, part_end_le
+   for the partition of canonical sets) *)
+Inv ==
+    /\ Canonical(items) /\ Len(items) <= N
+    /\ CoveredLen(items) = Cardinality({x \in Offsets : Covers(items, x)})
+    /\ \A x \in 0..(MaxOff + 1) :
+          /\ PPLoop(LAMBDA iv : iv[2] < x, items) = PP(LAMBDA iv : iv[2] < x, items)
+          /\ PPLoop(LAMBDA iv : iv[1] <= x, items) = PP(LAMBDA iv : iv[1] <= x, items)
+          /\ PPLoop(LAMBDA iv : iv[2] <= x, items) = PP(LAMBDA iv : iv[2] <= x, items)
+          /\ Find(items, x) = Covers(items, x)
+          /\ \A y \in 0..(MaxOff + 1) : ContainsRange(items, x, y) = CoversRange(items, x, y)
 
 (* a covered offset stays covered, also across a capacity failure *)
 MonotoneCoverage == [][\A x \in Offsets : Covers(items, x) => Covers(items', x)]_vars

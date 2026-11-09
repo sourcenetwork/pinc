@@ -32,19 +32,73 @@ run_tlc() { # run_tlc <name> <spec> <cfg> : model check one config, show the sum
         || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
     echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
 }
+run_tlc_deep() { # run_tlc_deep <name> <spec> <cfg> : like run_tlc, with the deep thread stack the word arithmetic of the specs needs
+    local out
+    out=$(java -Xss256m -XX:+UseParallelGC -cp "$TLA_HOME/tla2tools.jar" tlc2.TLC -workers auto \
+        -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
+        || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
+    echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
+}
+witness_tlc() { # witness_tlc <name> <spec> <cfg> <property> : TLC must find a violation of <property> (a reachability witness or a documented finding)
+    local out
+    if out=$(tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
+        echo "$out" >&2; echo "proofs: TLC found no violation of $4 in $3: the witness is gone" >&2; exit 1
+    fi
+    grep -q "$4 is violated" <<<"$out" \
+        || { echo "$out" >&2; echo "proofs: TLC failed on $3 for another reason than $4" >&2; exit 1; }
+    echo "tlc $3: finds the expected violation of $4"
+}
 echo "-- tlc"
-run_tlc ranges VerifiedRanges VerifiedRanges
-run_tlc ranges_n1 VerifiedRanges VerifiedRanges_n1
-run_tlc verifier RangeVerifier RangeVerifier
-run_tlc handshake Handshake Handshake
-run_tlc handshake_resume Handshake Handshake_resume
-run_tlc record Record Record
-run_tlc record_chacha Record Record_chacha
+# The independent model checks run at most 3 at a time; a failure of any stops the script.
+par() {
+    while [ "$(jobs -rp | wc -l)" -ge 3 ]; do wait -n || exit 1; done
+    "$@" &
+}
+par run_tlc ranges VerifiedRanges VerifiedRanges
+par run_tlc ranges_n1 VerifiedRanges VerifiedRanges_n1
+par run_tlc verifier RangeVerifier RangeVerifier
+par run_tlc handshake Handshake Handshake
+par run_tlc handshake_resume Handshake Handshake_resume
+par run_tlc handshake_late Handshake Handshake_late
+par run_tlc handshake_stores Handshake Handshake_stores
+par run_tlc record Record Record
+par run_tlc record_chacha Record Record_chacha
+par run_tlc headerprot HeaderProt HeaderProt
+par run_tlc headerprot_pn HeaderProt HeaderProt_pn
+par run_tlc keyroll KeyRoll KeyRoll
+par run_tlc keyroll_collide KeyRoll KeyRoll_collide
+par run_tlc keyroll_two KeyRoll KeyRoll_two
+par run_tlc keyroll_forge KeyRoll KeyRoll_forge
+par witness_tlc keyroll_good KeyRoll KeyRoll_good NotGood
+par witness_tlc keyroll_stale KeyRoll KeyRoll_stale AgreeDh
+par witness_tlc keyroll_gate KeyRoll KeyRoll_gate DupRequestAnswered
+par witness_tlc keyroll_orphan KeyRoll KeyRoll_orphan NoOrphan
+par run_tlc labels Labels Labels
+par run_tlc credit_w2 Credit Credit_w2
+par run_tlc credit Credit Credit
+par run_tlc transcript Transcript Transcript
+par run_tlc amp Amp Amp
+par run_tlc padding Padding Padding
+par run_tlc_deep varint Varint Varint
+par run_tlc_deep rekeycodec RekeyCodec RekeyCodec
+par run_tlc_deep partition PartitionPoint PartitionPoint
+par run_tlc_deep layout Layout Layout
+par run_tlc_deep encoder Encoder Encoder
+par run_tlc_deep builderbytes BuilderBytes BuilderBytes
+par run_tlc_deep verifierbytes VerifierBytes VerifierBytes
+par run_tlc tickets_client Tickets Tickets
+par run_tlc tickets_client3 Tickets Tickets_n3
+par run_tlc tickets_server Tickets Tickets_server
+par run_tlc tickets_zero Tickets Tickets_zero
+par run_tlc prekeycache PrekeyCache PrekeyCache
+par run_tlc prekeycache_n0 PrekeyCache PrekeyCache_n0
+par run_tlc prekeycache_n3 PrekeyCache PrekeyCache_n3
+while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_handshake
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_stores
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -54,8 +108,14 @@ trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded
     echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
 }
 trace_tlc TraceVerifiedRanges ranges
+trace_tlc TraceVarint varint
+trace_tlc TraceLayout layout
+trace_tlc TraceEncoder encoder
 trace_tlc TraceRangeVerifier verifier
 trace_tlc TraceBuilder builder
 trace_tlc TraceHandshake handshake
+trace_tlc TraceSecurity security
+trace_tlc TraceKeyRoll keyroll
+trace_tlc TraceStores stores
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

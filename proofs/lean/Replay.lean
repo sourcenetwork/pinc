@@ -6,6 +6,8 @@ import Vinc.TraceVerifier
 import Vinc.TraceBuilder
 import Vinc.SecurityTrace
 import Vinc.HandshakeTrace
+import Vinc.TraceKeyRoll
+import Vinc.TraceStores
 
 /-!
 # Trace replay
@@ -104,11 +106,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut bst : TraceBuilder.BState := {}
   let mut hsw : HandshakeTrace.W := {}
   let mut hsCount := 0
+  let mut stw : TraceStores.W := {}
+  let mut krs : TraceKeyRoll.KState := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
     if line.trimAscii.isEmpty then continue
-    -- Record-layer events (`rw`, `amp`, `tok`) go to the security replay, which carries its own model state.
+    -- Security events (`lbl`, `cred`, `amp`, `pad`) go to the security replay, which carries its own model state.
     if let .ok j := parse line then
       match j.get? "t" |>.bind (·.str?) with
       | some "hs" =>
@@ -121,6 +125,22 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           continue
         | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
       | some t =>
+        if TraceStores.isStoreTag t then
+          -- Ticket store and prekey cache events (`trace_stores`): the Lean functions the store theorems are about.
+          match TraceStores.replayEvent j stw with
+          | .ok w' =>
+            stw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "kr" then
+          -- Key roll events (`kr`, written by `trace_keyroll`): the Roll machine, the packet keys, `due` and the REKEY codec.
+          match TraceKeyRoll.replayEvent j krs with
+          | .ok k' =>
+            krs := k'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "bnew" || t == "bupd" || t == "bfin" then
           -- Outboard builder events (`trace_builder`): the byte-level model of `update` and `finish`.
           match TraceBuilder.replayEvent j bst with
@@ -129,7 +149,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
-        if t == "rw" || t == "amp" || t == "tok" then
+        if t == "lbl" || t == "cred" || t == "amp" || t == "pad" then
           match SecurityTrace.replayEvent j sec with
           | .ok s' =>
             sec := s'

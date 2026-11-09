@@ -3,11 +3,23 @@ import Vinc.Axioms
 /-!
 # The anti-amplification budget
 
-A model of `vinc-security/src/amp.rs`. The counters `rx` and `tx` are `u64` and both `on_receive` and `on_send` are
-`saturating_add`; `can_send` is computed in 128 bits, which cannot overflow (`u128_no_overflow`), so it equals the
-exact comparison on `Nat`, which is what the model uses. A caller that sends only when `can_send` holds (the
-discipline, `Reach`) keeps `tx <= 3 * rx` until the path is validated, and the margin `tx + OVERHEAD <= 3 * rx`
-after every send, because `can_send` counts the datagram's overhead although `on_send` records only its payload.
+A model of `vinc-security/src/amp.rs`, constant by constant: `OVERHEAD = 48`, `FACTOR = 3`; `AmpBudget` holds `rx` and
+`tx` (`u64`) and a `validated` flag; `on_receive` and `on_send` are `saturating_add` on `u64`; `can_send(n)` is
+`validated || tx + n + OVERHEAD <= rx * FACTOR`, evaluated in 128 bits, which cannot overflow for `u64` operands
+(`u128_no_overflow`), so it equals the comparison on `Nat`, which is what the model uses (`canSend_iff`); `validate`
+sets the flag and nothing clears it (`validated_sticky`).
+
+The bound `amplification_bound` (`tx <= 3 * rx` before validation) and its margin `reach_margin`
+(`tx = 0 or tx + OVERHEAD <= 3 * rx`) are statements about the reachable set `Reach`: the budgets that result from
+any sequence of receives, validations and sends in which every send obeyed `can_send` at the moment of the send. That
+is the definition of the reachable set, not an assumption about a caller: a send that `can_send` refuses is simply
+not an operation of the discipline. The model proves nothing about a caller that sends without asking.
+
+Counters saturate at `u64::MAX`, so after `2^64` bytes `tx` stops counting; the bound is then about the recorded
+counters (`satAdd_exact` is the exactness below saturation). `can_send` counts the datagram's overhead although
+`on_send` records only its payload, which is why the margin `tx + OVERHEAD <= 3 * rx` holds after every send.
+Amp.tla checks the same facts exhaustively on small counters, and TraceAmp.tla and `lake exe replay` check the
+recorded events of the real `AmpBudget`.
 -/
 
 namespace Vinc.Amp

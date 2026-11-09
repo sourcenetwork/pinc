@@ -3,57 +3,70 @@
 (* Trace validation of vinc-security Initiator and Responder.              *)
 (*                                                                         *)
 (* The Rust test tests/trace_handshake.rs drives real handshakes in        *)
-(* memory (full, short Initial with hit and miss, resumption, replays,     *)
-(* rejects, tampered and cut messages, key requests answered late or       *)
-(* failing) and records one line per step of either machine: the input     *)
-(* message, the outcome (ok, dropped, fatal), the messages sent, the key   *)
-(* request raised, the events and the fingerprints of the keys. Every      *)
-(* public value, transcript hash prefix and key is an id: one id per       *)
-(* distinct byte string.                                                   *)
+(* memory (full, short Initial with hit and miss and the full prekey on    *)
+(* the third send, resumption with a ticket, 0-RTT replays, unanswered     *)
+(* Hellos that give way to a full Initial under the same destination id,   *)
+(* late resume replies, repeated Hellos and Initials answered by a resumed *)
+(* responder, rejects, tampered and cut messages, an attacker identity as  *)
+(* the dialed peer and as the dialing node, key requests answered late or  *)
+(* failing, ticket expiry, store eviction, export and restore of the       *)
+(* client store) and records one line per step of either machine: the      *)
+(* input message with its length, the outcome (ok, dropped, fatal), the    *)
+(* messages sent, the key request raised, the events and the fingerprints  *)
+(* of the keys. Every public value, transcript hash prefix and key is an   *)
+(* id: one id per distinct byte string.                                    *)
 (*                                                                         *)
 (* Each recorded world must be a behaviour of Handshake.tla's machines:    *)
-(* every step is replayed through the SAME step functions (IBeginFull,     *)
-(* IBeginResume, IHandle, IKey, RHandle, RKey of HsOps.tla), and           *)
-(*  - the outcome, the events, the messages sent and the key request       *)
-(*    must be the model's;                                                 *)
+(* every step is replayed through the SAME step functions (INew,           *)
+(* IHandle, IKey, IRetransmit, IShed, RHandle, RKey, RRetransmit, RShed,   *)
+(* CTake, CInsertAll, CExport of HsOps.tla), and                           *)
+(*  - the outcome, the events, the messages sent (with their lengths) and  *)
+(*    the key request must be the model's;                                 *)
 (*  - an input is the model message of an earlier output (a replay,        *)
 (*    found by message id), or that message with the recorded field        *)
 (*    replaced by a value the attacker made (a tampered message);          *)
 (*  - the oracle om is a bijection between the symbolic terms the code     *)
 (*    hashes or derives (ephemeral publics, prekey hash, ciphertexts,      *)
-(*    transcript hashes, ticket ids, keys) and their recorded ids: equal   *)
-(*    ids must be equal terms and equal terms equal ids, so the code       *)
-(*    absorbs into each transcript exactly the fields the model does, and  *)
-(*    both sides derive the same keys exactly when the model says so;      *)
-(*  - the resolved tickets of a client are those a finished session        *)
-(*    received.                                                            *)
-(* A world starts from empty stores (the begin line); sessions are         *)
-(* numbered by the test.                                                   *)
+(*    transcript hashes, keys) and their recorded ids: equal ids must be   *)
+(*    equal terms and equal terms equal ids, so the code absorbs into each *)
+(*    transcript exactly the fields the model does, and both sides derive  *)
+(*    the same keys exactly when the model says so;                        *)
+(*  - ticket ids are the recorded ids themselves (the generator is the     *)
+(*    environment), so a repeated id in a store would make the model fail  *)
+(*    where the code did not;                                              *)
+(*  - the tickets of a client store, its export and its restore are those  *)
+(*    of the sessions that finished.                                       *)
+(* A world starts from empty stores (the begin line, which also gives the  *)
+(* store sizes and whether the dialing node is the attacker's); sessions   *)
+(* are numbered by the test.                                               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds handshake.ndjson.     *)
 (***************************************************************************)
 EXTENDS HsOps, Json, IOUtils
 
-CONSTANTS INODE, R1, R2   \* the initiator's node and the two responder nodes of a world
-MaxS == 12
+CONSTANTS INODE, R1, R2   \* the honest initiator node and the two honest responder nodes of a world
+MaxS == 40
 
-VARIABLES ist, rst, sto, cli, msgs, om, i
-vars == <<ist, rst, sto, cli, msgs, om, i>>
+VARIABLES ist, rst, sto, cli, snap, msgs, om, i, inode
+vars == <<ist, rst, sto, cli, snap, msgs, om, i, inode>>
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/handshake.ndjson")
 
-RNode(rn) == IF rn = 1 THEN R1 ELSE R2
-EmptySto == [pkc |-> {}, clk |-> 0, tks |-> [k \in Slots |-> NoSlot]]
+RNode(rn) == CASE rn = 1 -> R1 [] rn = 2 -> R2 [] OTHER -> A
+PeerNode(c) == CASE c = "R1" -> R1 [] c = "R2" -> R2 [] OTHER -> A
+EmptySto(tk) == [pkc |-> {}, tks |-> NoSlots(tk)]
 
 Init ==
     /\ i = 1
     /\ ist = [s \in 1..MaxS |-> INil]
-    /\ rst = [x \in {1, 2} \X (1..MaxS) |-> RNil]
-    /\ sto = [rn \in {1, 2} |-> EmptySto]
-    /\ cli = {}
+    /\ rst = [x \in {1, 2, 3} \X (1..MaxS) |-> RNil]
+    /\ sto = [rn \in {1, 2, 3} |-> EmptySto(1)]
+    /\ cli = NoSlots(1)
+    /\ snap = <<>>
     /\ msgs = {}
     /\ om = {}
+    /\ inode = INODE
 
 (* ---- the oracle: a bijection between terms and ids ---- *)
 Consistent(o, t, id) ==
@@ -67,26 +80,35 @@ FoldOm(o, sq) ==
     ELSE IF Consistent(o, sq[1][1], sq[1][2]) THEN FoldOm(o \cup {sq[1]}, Tail(sq))
     ELSE [ok |-> FALSE, om |-> o]
 
-(* the ids the code recorded for a message it sent, paired with the model terms *)
+(* the ids the code recorded for a message it sent, paired with the model terms; tickets are checked, not paired *)
 HpkOf(m) == IF m.form = "full" THEN Hash(m.pk) ELSE m.pk
 MPairs(m, rec) ==
-    <<<<m.e, rec.e>>, <<m.ct, rec.ct>>, <<m.tid, rec.tid>>, <<m.echo, rec.echo>>>>
+    <<<<m.e, rec.e>>, <<m.ct, rec.ct>>, <<m.echo, rec.echo>>>>
     \o (IF m.ty = "Init" THEN <<<<HpkOf(m), rec.hpk>>, <<m.pk, rec.pk>>>> ELSE <<>>)
-    \o [j \in 1..Len(m.tids) |-> <<m.tids[j], rec.tids[j]>>]
+TidsOK(tids, ids) == Len(tids) = Len(ids) /\ \A j \in DOMAIN ids : tids[j] = TidT(ids[j])
+MsgOK(m, rec) ==
+    /\ rec.ty = m.ty
+    /\ (m.ty \in {"Init", "Hello", "RReply"} => m.len = rec.len)
+    /\ (m.tid # NIL => m.tid = TidT(rec.tid))
+    /\ (m.ty = "RReply" => TidsOK(m.tids, rec.tids))
 
 (* ---- messages ---- *)
 MsgOf(mid) == (CHOOSE p \in msgs : p[1] = mid)[2]
 Forge(b, fld, mid) ==
-    CASE fld = "prm" -> [b EXCEPT !.prm = "bad"]
+    CASE fld = "ver" -> [b EXCEPT !.ver = "bad"]
+      [] fld = "al" -> [b EXCEPT !.al = BadAlp]
+      [] fld = "dc" -> [b EXCEPT !.dc = Cid("x", A, mid)]
+      [] fld = "sc" -> [b EXCEPT !.sc = Cid("x", A, mid)]
+      [] fld = "of" -> [b EXCEPT !.of = Off(A)]
+      [] fld = "cr" -> [b EXCEPT !.cr = Cr(A)]
       [] fld = "e" -> [b EXCEPT !.e = Pub(<<"x", A, mid>>)]
       [] fld = "pk" -> [b EXCEPT !.pk = IF b.form = "full" THEN EK(<<"x", A, mid>>) ELSE Hash(EK(<<"x", A, mid>>))]
       [] fld = "ct" -> [b EXCEPT !.ct = Ct(<<"m", A, mid>>, EK(A))]
       [] fld = "sealed" -> [b EXCEPT !.sealed = BadBlob]
-      [] fld = "tid" -> [b EXCEPT !.tid = <<"tid", "x", mid>>]
+      [] fld = "tid" -> [b EXCEPT !.tid = TidT(1000000 + mid)]
       [] fld = "binder" -> [b EXCEPT !.binder = <<"bad">>]
       [] fld = "conf" -> [b EXCEPT !.conf = <<"bad">>]
-      [] fld = "tids" -> [b EXCEPT !.tids = <<<<"tid", "x", mid>>>>]
-      [] fld = "rprm" -> [b EXCEPT !.rprm = "alt"]
+      [] fld = "tids" -> [b EXCEPT !.tids = <<TidT(1000000 + mid)>>]
       [] fld = "echo" -> [b EXCEPT !.echo = <<"bad">>]
 InputMsg(ev) ==
     IF ev.ibase = -1 THEN MsgOf(ev.imid) ELSE Forge(MsgOf(ev.ibase), ev.ifld, ev.imid)
@@ -94,6 +116,13 @@ InputKnown(ev) ==
     \/ ev.imal
     \/ (ev.ibase = -1 /\ \E p \in msgs : p[1] = ev.imid)
     \/ (ev.ibase # -1 /\ \E p \in msgs : p[1] = ev.ibase)
+
+(* the input is of the type and (for the messages whose length the model keeps) of the length that was delivered *)
+InputShape(ev) ==
+    IF ev.imal THEN TRUE
+    ELSE LET m == InputMsg(ev)
+         IN /\ m.ty = ev.ity
+            /\ (m.ty \in {"Init", "Hello", "RReply"} => m.len = ev.ilen)
 
 (* ---- the checks common to every step ---- *)
 EvSet(ev) == {ev.evs[j] : j \in DOMAIN ev.evs}
@@ -104,135 +133,233 @@ ReqOf(who, old, new) ==
           ELSE IF new.ph = "sign" /\ old.ph # "sign" THEN "sign" ELSE "none")
     ELSE (IF new.ph = "sign" /\ old.ph # "sign" THEN "sign" ELSE "none")
 
-TidPairs(ev, who, new) ==
-    IF ~("est" \in EvSet(ev)) THEN <<>>
-    ELSE IF who = "I" THEN [j \in 1..Len(new.tids) |-> <<new.tids[j], ev.etids[j]>>]
-    ELSE <<<<new.mytid, ev.etids[1]>>>>
-
 StepPairs(ev, who, old, r) ==
     LET new == r.st
     IN (IF ev.outs = <<>> \/ r.out = {} THEN <<>> ELSE MPairs(CHOOSE m \in r.out : TRUE, ev.outs[1]))
        \o (IF ReqOf(who, old, new) = "sign"
            THEN <<<<IF who = "I" THEN new.th4 ELSE new.th2, ev.rth>>>> ELSE <<>>)
-       \o (IF "est" \in r.ev THEN <<<<new.send, ev.send>>, <<new.recv, ev.recv>>, <<new.res, ev.rsm>>>> ELSE <<>>)
+       \o (IF "est" \in r.ev
+           THEN <<<<new.send, ev.send>>, <<new.recv, ev.recv>>, <<new.res, ev.rsm>>, <<new.cid, ev.cid>>>> ELSE <<>>)
        \o (IF "early" \in r.ev THEN <<<<new.early, ev.early>>>> ELSE <<>>)
-       \o TidPairs(ev, who, new)
 
 (* the step is the model's: outcome, events, outputs, request, established session, oracle and message table *)
-StepOK(ev, who, old, r) ==
+StepOK(ev, who, old, r, peer) ==
     LET new == r.st
         fo == FoldOm(om, StepPairs(ev, who, old, r))
-        peer == IF who = "I" THEN R1 ELSE INODE
     IN /\ ev.res = r.err
        /\ EvSet(ev) = r.ev
        /\ Len(ev.outs) = Cardinality(r.out)
        /\ ev.req = ReqOf(who, old, new)
        /\ ("est" \in r.ev) =>
             /\ new.est /\ new.peer = peer /\ new.resumed = ev.resumed
-            /\ Len(ev.etids) = (IF who = "I" THEN Len(new.tids) ELSE 1)
-       /\ ~("est" \in r.ev) => ev.peer = "none"
+            /\ TidsOK(IF who = "I" THEN new.tids ELSE new.mytids, ev.etids)
+            /\ ev.alpn = new.al[2]
+       /\ ("est" \in r.ev) => ev.peer = IF who = "I" THEN "R" ELSE "I"
+       /\ (~("est" \in r.ev) /\ ev.op # "start") => ev.peer = "none"
        /\ fo.ok
        /\ om' = fo.om
        /\ IF r.out = {} THEN msgs' = msgs
           ELSE LET m == CHOOSE x \in r.out : TRUE
                    mid == ev.outs[1].mid
-               IN /\ ev.outs[1].ty = m.ty
+               IN /\ MsgOK(m, ev.outs[1])
                   /\ \A p \in msgs : (p[1] = mid) = (p[2] = m)
                   /\ msgs' = msgs \cup {<<mid, m>>}
 
+Guard == i <= Len(Trace)
+
 (* ---- steps ---- *)
 Begin ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ Trace[i].op = "begin"
-    /\ ist' = [s \in 1..MaxS |-> INil]
-    /\ rst' = [x \in {1, 2} \X (1..MaxS) |-> RNil]
-    /\ sto' = [rn \in {1, 2} |-> EmptySto]
-    /\ cli' = {} /\ msgs' = {} /\ om' = {}
+    /\ LET ev == Trace[i] IN
+       /\ ist' = [s \in 1..MaxS |-> INil]
+       /\ rst' = [x \in {1, 2, 3} \X (1..MaxS) |-> RNil]
+       /\ sto' = [rn \in {1, 2, 3} |-> EmptySto(ev.tk)]
+       /\ cli' = NoSlots(ev.ck)
+       /\ inode' = IF ev.ia THEN A ELSE INODE
+    /\ snap' = <<>> /\ msgs' = {} /\ om' = {}
     /\ i' = i + 1
 
 StartI ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ LET ev == Trace[i]
-           x == <<"i", INODE, ev.s>>
+           peer == PeerNode(ev.peer)
+           al == Alp(ev.alpn)
+           c == IF ev.take THEN CTake(cli, peer, al) ELSE [sl |-> cli, tk |-> NoTk]
+           r == INew(inode, ev.s, peer, al, ev.mode = "short", c.tk)
        IN /\ ev.op = "start"
           /\ ist[ev.s].ph = "none"
-          /\ \E tk \in IF ev.mode = "resume" THEN {t \in cli : <<t.tid, ev.tid>> \in om} ELSE {[tid |-> NIL]} :
-               LET r == IF ev.mode = "resume" THEN IBeginResume(INODE, x, tk)
-                        ELSE IBeginFull(INODE, x, R1, ev.mode = "short", NIL, NIL)
-               IN /\ StepOK(ev, "I", INil, r)
-                  /\ ist' = [ist EXCEPT ![ev.s] = r.st]
-                  /\ cli' = IF ev.mode = "resume" THEN cli \ {tk} ELSE cli
-          /\ UNCHANGED <<rst, sto>>
+          /\ (ev.mode = "resume") = (c.tk # NoTk)
+          /\ (c.tk # NoTk => c.tk.tid = TidT(ev.tid))
+          /\ StepOK(ev, "I", INil, r, peer)
+          /\ ist' = [ist EXCEPT ![ev.s] = r.st]
+          /\ cli' = c.sl
+          /\ UNCHANGED <<rst, sto, snap, inode>>
           /\ i' = i + 1
 
 RecvI ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ LET ev == Trace[i]
            old == ist[ev.s]
-           r == IF ev.imal THEN Drop(old) ELSE IHandle(old, INODE, InputMsg(ev))
+           r == IF ev.imal THEN Drop(old) ELSE IHandle(old, inode, InputMsg(ev))
        IN /\ ev.op = "recv" /\ ev.who = "I"
           /\ InputKnown(ev)
-          /\ StepOK(ev, "I", old, r)
+          /\ InputShape(ev)
+          /\ StepOK(ev, "I", old, r, old.peer)
           /\ ist' = [ist EXCEPT ![ev.s] = r.st]
-          /\ UNCHANGED <<rst, sto, cli>>
+          /\ UNCHANGED <<rst, sto, cli, snap, inode>>
           /\ i' = i + 1
 
 KeyI ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ LET ev == Trace[i]
            old == ist[ev.s]
-           r == IKey(old, INODE, IF ev.kind = "ok" THEN "ok" ELSE "fail")
+           r == IKey(old, inode, IF ev.kind = "ok" THEN "ok" ELSE "fail")
        IN /\ ev.op = "key" /\ ev.who = "I"
-          /\ StepOK(ev, "I", old, r)
+          /\ StepOK(ev, "I", old, r, old.peer)
           /\ ist' = [ist EXCEPT ![ev.s] = r.st]
-          /\ UNCHANGED <<rst, sto, cli>>
+          /\ UNCHANGED <<rst, sto, cli, snap, inode>>
           /\ i' = i + 1
 
+RetxI ==
+    /\ Guard
+    /\ LET ev == Trace[i]
+           old == ist[ev.s]
+           r == IRetransmit(inode, old)
+       IN /\ ev.op = "retx" /\ ev.who = "I"
+          /\ StepOK(ev, "I", old, r, old.peer)
+          /\ ist' = [ist EXCEPT ![ev.s] = r.st]
+          /\ UNCHANGED <<rst, sto, cli, snap, inode>>
+          /\ i' = i + 1
+
+ShedI ==
+    /\ Guard
+    /\ LET ev == Trace[i] IN
+       /\ ev.op = "shed" /\ ev.who = "I"
+       /\ ist' = [ist EXCEPT ![ev.s] = IShed(ist[ev.s])]
+    /\ UNCHANGED <<rst, sto, cli, snap, msgs, om, inode>>
+    /\ i' = i + 1
+
+(* the id draws of the ticket batch an established responder session issued: the recorded ids *)
+DrawsOf(ev) == [j \in DOMAIN ev.etids |-> <<ev.etids[j]>>]
+
 RecvR ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ LET ev == Trace[i]
            old == rst[<<ev.rn, ev.s>>]
            r == IF ev.imal THEN RDrop(old, sto[ev.rn])
-                ELSE RHandle(old, <<RNode(ev.rn), ev.s>>, sto[ev.rn], InputMsg(ev))
+                ELSE RHandle(old, <<RNode(ev.rn), ev.s>>, sto[ev.rn], InputMsg(ev), DrawsOf(ev))
        IN /\ ev.op = "recv" /\ ev.who = "R"
           /\ InputKnown(ev)
-          /\ StepOK(ev, "R", old, r)
+          /\ InputShape(ev)
+          /\ StepOK(ev, "R", old, r, inode)
           /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = r.st]
           /\ sto' = [sto EXCEPT ![ev.rn] = r.sto]
-          /\ UNCHANGED <<ist, cli>>
+          /\ UNCHANGED <<ist, cli, snap, inode>>
           /\ i' = i + 1
 
 KeyR ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ LET ev == Trace[i]
            old == rst[<<ev.rn, ev.s>>]
            r == RKey(old, <<RNode(ev.rn), ev.s>>, sto[ev.rn], IF ev.kind = "ok" THEN "ok" ELSE "fail")
        IN /\ ev.op = "key" /\ ev.who = "R"
-          /\ StepOK(ev, "R", old, r)
+          /\ StepOK(ev, "R", old, r, inode)
           /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = r.st]
           /\ sto' = [sto EXCEPT ![ev.rn] = r.sto]
-          /\ UNCHANGED <<ist, cli>>
+          /\ UNCHANGED <<ist, cli, snap, inode>>
           /\ i' = i + 1
+
+RetxR ==
+    /\ Guard
+    /\ LET ev == Trace[i]
+           old == rst[<<ev.rn, ev.s>>]
+           r == RRetransmit(old, sto[ev.rn])
+       IN /\ ev.op = "retx" /\ ev.who = "R"
+          /\ StepOK(ev, "R", old, r, inode)
+          /\ UNCHANGED <<ist, rst, sto, cli, snap, inode>>
+          /\ i' = i + 1
+
+ShedR ==
+    /\ Guard
+    /\ LET ev == Trace[i] IN
+       /\ ev.op = "shed" /\ ev.who = "R"
+       /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = RShed(rst[<<ev.rn, ev.s>>])]
+    /\ UNCHANGED <<ist, sto, cli, snap, msgs, om, inode>>
+    /\ i' = i + 1
 
 (* the client takes the tickets of a finished session: a resumed session's own, or the batch of the responder
    session of a full handshake, whose final transcript the client must share *)
 AcceptT ==
-    /\ i <= Len(Trace)
+    /\ Guard
     /\ LET ev == Trace[i]
            st == ist[ev.s]
            rr == rst[<<ev.rn, ev.rs>>]
-           tid == IF st.resumed THEN st.tids[1] ELSE rr.mytid
-           fo == FoldOm(om, <<<<tid, ev.tid>>>>)
+           tids == IF st.resumed THEN st.tids ELSE rr.mytids
        IN /\ ev.op = "accept"
-          /\ st.ph = "done" /\ (st.resumed \/ (rr.ph = "done" /\ rr.thf = st.thf))
-          /\ fo.ok /\ om' = fo.om
-          /\ cli' = cli \cup {[tid |-> tid, psk |-> Psk(st.res, tid), peer |-> st.peer]}
-          /\ UNCHANGED <<ist, rst, sto, msgs>>
+          /\ st.ph = "done" /\ (st.resumed \/ (rr.ph \in {"done", "resumed"} /\ rr.thf = st.thf))
+          /\ TidsOK(tids, ev.tids)
+          /\ cli' = CInsertAll(cli, [j \in DOMAIN tids |->
+                       [tid |-> tids[j], psk |-> Psk(st.res, tids[j], st.pcr), peer |-> st.peer, al |-> st.al,
+                        ad |-> st.ad, cr |-> st.pcr]])
+          /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode>>
           /\ i' = i + 1
+
+(* time passes: the ticket with this id expires in the store of the responder node or in the client store *)
+MarkExpired(sl, tid) ==
+    [j \in 1..Len(sl) |-> IF sl[j].occ /\ sl[j].tid = TidT(tid) THEN [sl[j] EXCEPT !.exp = TRUE] ELSE sl[j]]
+ExpireT ==
+    /\ Guard
+    /\ LET ev == Trace[i] IN
+       /\ ev.op = "expire"
+       /\ IF ev.scope = "srv"
+          THEN /\ sto' = [sto EXCEPT ![ev.rn].tks = MarkExpired(@, ev.tid)]
+               /\ UNCHANGED cli
+          ELSE /\ cli' = MarkExpired(cli, ev.tid)
+               /\ UNCHANGED sto
+    /\ UNCHANGED <<ist, rst, snap, msgs, om, inode>>
+    /\ i' = i + 1
+
+ExportT ==
+    /\ Guard
+    /\ LET ev == Trace[i]
+           out == CExport(cli, ev.max)
+       IN /\ ev.op = "export"
+          /\ TidsOK([j \in DOMAIN out |-> out[j].tid], ev.tids)
+          /\ snap' = out
+    /\ UNCHANGED <<ist, rst, sto, cli, msgs, om, inode>>
+    /\ i' = i + 1
+
+RECURSIVE DropIdx(_, _, _)
+DropIdx(sq, kept, j) ==
+    IF j > Len(sq) THEN {}
+    ELSE (IF sq[j].tid \in {TidT(k) : k \in kept} THEN {} ELSE {j}) \cup DropIdx(sq, kept, j + 1)
+
+RestoreT ==
+    /\ Guard
+    /\ LET ev == Trace[i]
+           kept == {ev.kept[j] : j \in DOMAIN ev.kept}
+           drop == DropIdx(snap, kept, 1)
+       IN /\ ev.op = "restore"
+          /\ IF ev.ok
+             THEN /\ ev.stored = Len(ev.kept)
+                  /\ Len(snap) - Cardinality(drop) = Len(ev.kept)
+                  /\ cli' = CInsertAll(cli, KeepSeq(snap, drop, 1))
+             ELSE cli' = cli
+    /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode>>
+    /\ i' = i + 1
+
+RestartT ==
+    /\ Guard
+    /\ Trace[i].op = "restart"
+    /\ cli' = NoSlots(Len(cli))
+    /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode>>
+    /\ i' = i + 1
 
 Done == i > Len(Trace) /\ UNCHANGED vars
 
-TNext == Begin \/ StartI \/ RecvI \/ KeyI \/ RecvR \/ KeyR \/ AcceptT \/ Done
+TNext == Begin \/ StartI \/ RecvI \/ KeyI \/ RetxI \/ ShedI \/ RecvR \/ KeyR \/ RetxR \/ ShedR \/ AcceptT \/ ExpireT
+         \/ ExportT \/ RestoreT \/ RestartT \/ Done
 
 TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
 

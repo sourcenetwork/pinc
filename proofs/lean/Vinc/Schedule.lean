@@ -1,4 +1,4 @@
-import Vinc.Transcript
+import Vinc.Credit
 
 /-!
 # Key schedule structure
@@ -11,6 +11,11 @@ the hash hypothesis (`Transcript.HashInj`, never assumed as a postulate) the con
 transcript, so the secrets of two handshakes with different transcripts are derived from different inputs, for
 whatever chaining keys they start from.
 
+The context of a ticket's pre-shared key is `H(tid, credit.encode())` (`ticket_psk`); it is injective in the ticket id
+and the credit record (`ticketInput_injective`), so a resumption derives the same key only against the record the
+ticket remembers. A key roll derives `expand(extract(secret, dh), KEY_ROLL)` (`roll_secret`); its input is modelled by
+`rollInput`, with the extraction as a function `ext` that is injective as a hypothesis about the hash.
+
 The signature messages `label ++ th` are injective in the label and the hash because the two signature labels have
 the same length.
 -/
@@ -21,7 +26,7 @@ open Vinc.Transcript
 /-- Why a key is derived: every `derive`/`expand` call of the security layer. -/
 inductive Purpose where
   | hsInitiator | hsResponder | appInitiator | appResponder | resumption | confirm | ticket | binder | early
-  | subSession | packetKey | packetIv | headerKey | keyUpdate
+  | subSession | packetKey | packetIv | headerKey | keyRoll | cidSecret
   deriving DecidableEq, Repr
 
 /-- The label of each purpose, as the code passes it. -/
@@ -39,11 +44,12 @@ def Purpose.label : Purpose → String
   | .packetKey => Labels.packetKey
   | .packetIv => Labels.packetIv
   | .headerKey => Labels.headerKey
-  | .keyUpdate => Labels.keyUpdate
+  | .keyRoll => Labels.keyRoll
+  | .cidSecret => Labels.cidSecret
 
 def Purpose.all : List Purpose :=
   [.hsInitiator, .hsResponder, .appInitiator, .appResponder, .resumption, .confirm, .ticket, .binder, .early,
-   .subSession, .packetKey, .packetIv, .headerKey, .keyUpdate]
+   .subSession, .packetKey, .packetIv, .headerKey, .keyRoll, .cidSecret]
 
 theorem Purpose.mem_all (p : Purpose) : p ∈ Purpose.all := by cases p <;> simp [Purpose.all]
 
@@ -110,6 +116,77 @@ theorem full_ne_resume_hash {β : Type} {H : List Nat → List Nat → β} (hH :
   revert this
   decide
 
+
+/-! ## The ticket key -/
+
+/-- The input of `ticket_psk(resume, tid, credit)`: the resumption secret as the key, the ticket label, and as
+context the hash of the transcript `tid, credit.encode()` labelled with the ticket label. -/
+def ticketInput {α β : Type} (H : List Nat → List Nat → β) (resume : α) (tid : Field) (credit : Credit.Record) :
+    Input α β :=
+  ⟨resume, Purpose.ticket.label, th H Labels.ticket (ticketCtxFields tid (Credit.encode credit))⟩
+
+/-- Two ticket keys are derived from the same input only for the same resumption secret, ticket id and credit
+record: a resumption works only against the record the ticket remembers. -/
+theorem ticketInput_injective {α β : Type} {H : List Nat → List Nat → β} (hH : HashInj H) {resume resume' : α}
+    {tid tid' : Field} {r s : Credit.Record} (hr : Credit.Valid r) (hs : Credit.Valid s)
+    (hf : Bounded (ticketCtxFields tid (Credit.encode r))) (hg : Bounded (ticketCtxFields tid' (Credit.encode s)))
+    (h : ticketInput H resume tid r = ticketInput H resume' tid' s) : resume = resume' ∧ tid = tid' ∧ r = s := by
+  simp only [ticketInput, Input.mk.injEq] at h
+  obtain ⟨h1, _, h3⟩ := h
+  obtain ⟨h4, h5⟩ := Credit.ticketCtx_credit_recovered tid tid' r s hr hs (th_injective hH hf hg h3).2
+  exact ⟨h1, h4, h5⟩
+
+/-- A ticket remembered with a different credit record gives a different key input: a client cannot resume a ticket
+against a record other than the remembered one. -/
+theorem ticket_psk_binds_credit {α β : Type} {H : List Nat → List Nat → β} (hH : HashInj H) (resume resume' : α)
+    (tid tid' : Field) {r s : Credit.Record} (hr : Credit.Valid r) (hs : Credit.Valid s) (hne : r ≠ s)
+    (hf : Bounded (ticketCtxFields tid (Credit.encode r))) (hg : Bounded (ticketCtxFields tid' (Credit.encode s))) :
+    ticketInput H resume tid r ≠ ticketInput H resume' tid' s :=
+  fun h => hne (ticketInput_injective hH hr hs hf hg h).2.2
+
+/-- The context of the ticket key is the same hash function as every transcript, labelled `ticket`: it differs from
+the hash of any handshake or resumption transcript. -/
+theorem ticket_ctx_ne_handshake {β : Type} {H : List Nat → List Nat → β} (hH : HashInj H) (tid : Field)
+    (r : Credit.Record) (fs : List Field) (hf : Bounded (ticketCtxFields tid (Credit.encode r))) (hg : Bounded fs) :
+    th H Labels.ticket (ticketCtxFields tid (Credit.encode r)) ≠ th H Labels.handshake fs ∧
+      th H Labels.ticket (ticketCtxFields tid (Credit.encode r)) ≠ th H Labels.resumeHandshake fs := by
+  constructor <;> intro h <;> have := (th_injective hH hf hg h).1 <;> revert this <;> decide
+
+/-! ## The key roll -/
+
+/-- The input of `roll_secret(secret, dh)`: the chaining key `extract(secret, dh)` (`ext` stands for the extraction),
+the key-roll label and the empty context. -/
+def rollInput {α γ : Type} (ext : α → α → γ) (secret dh : α) : Input γ (List Nat) :=
+  ⟨ext secret dh, Purpose.keyRoll.label, []⟩
+
+/-- Two rolls share an input only when the extraction input (the old secret and the fresh Diffie-Hellman value) is
+the same, if the extraction is injective (a hypothesis about the keyed hash, never a postulate). -/
+theorem rollInput_injective {α γ : Type} {ext : α → α → γ} (hext : ∀ a b c d, ext a b = ext c d → a = c ∧ b = d)
+    {s s' d d' : α} (h : rollInput ext s d = rollInput ext s' d') : s = s' ∧ d = d' := by
+  simp only [rollInput, Input.mk.injEq] at h
+  exact hext _ _ _ _ h.1
+
+/-- A key roll never shares its derivation input with another purpose, whatever the keys and contexts: the label
+is `key roll`. -/
+theorem rollInput_ne_other {α γ : Type} (ext : α → α → γ) (s d : α) {p : Purpose} (hp : p ≠ .keyRoll) (k : γ)
+    (c : List Nat) : rollInput ext s d ≠ (⟨k, p.label, c⟩ : Input γ (List Nat)) := by
+  intro h
+  simp only [rollInput, Input.mk.injEq] at h
+  exact hp (label_injective h.2.1).symm
+
+/-- The secrets derived from the final transcript (`application_secrets`) have five distinct purposes, so five
+distinct inputs from the same chaining key and transcript hash: the application secrets of both directions, the
+resumption secret, the confirmation key and the connection id secret. -/
+theorem app_secret_labels_nodup :
+    ([Purpose.appInitiator, .appResponder, .resumption, .confirm, .cidSecret].map Purpose.label).Nodup := by decide
+
+/-- The derivations from `ck1` and the transcript hash after the reply (`handshake_keys`). -/
+theorem handshake_secret_labels_nodup :
+    ([Purpose.hsInitiator, .hsResponder].map Purpose.label).Nodup := by decide
+
+/-- The record layer derives three keys from one traffic secret with three distinct labels. -/
+theorem record_labels_nodup : ([Purpose.packetKey, .packetIv, .headerKey].map Purpose.label).Nodup := by decide
+
 /-! ## Signature messages -/
 
 /-- The message a signature covers: `label ++ th`. -/
@@ -155,3 +232,11 @@ end Vinc.Schedule
 #audit_axioms Vinc.Schedule.full_ne_resume_hash
 #audit_axioms Vinc.Schedule.sigMsg_injective
 #audit_axioms Vinc.Schedule.sigMsg_responder_ne_initiator
+#audit_axioms Vinc.Schedule.ticketInput_injective
+#audit_axioms Vinc.Schedule.ticket_psk_binds_credit
+#audit_axioms Vinc.Schedule.ticket_ctx_ne_handshake
+#audit_axioms Vinc.Schedule.rollInput_injective
+#audit_axioms Vinc.Schedule.rollInput_ne_other
+#audit_axioms Vinc.Schedule.app_secret_labels_nodup
+#audit_axioms Vinc.Schedule.handshake_secret_labels_nodup
+#audit_axioms Vinc.Schedule.record_labels_nodup

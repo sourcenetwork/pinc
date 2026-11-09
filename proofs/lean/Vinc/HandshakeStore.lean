@@ -1,587 +1,598 @@
-import Vinc.HandshakeInv2
+import Vinc.HandshakeCases
 
 /-!
-# The ticket store, the prekey cache and 0-RTT, for unboundedly many sessions
+# The ticket stores and the prekey cache, for unboundedly many sessions
 
-Inductive invariants of the responder side of the system of `HandshakeSys`, proved over every reachable state for
-any number of nodes, sessions and tickets and any store capacity `K`:
+Inductive invariants of the stores of the system of `HandshakeSys`, proved over every reachable state for any number
+of nodes, sessions and tickets and any store capacities:
 
-* every occupied slot of a ticket store is a ticket that was issued (`TicketsIssued`), is owned by a finished
-  session of the same node (its id is `tid n k`) and its ticket id is unique in the store;
-* a responder that raised the early keys holds them from an issued ticket and authenticated (`NoEarly`);
-* no two responder sessions accepted a Hello with the same ticket id (`ZeroRttOnce`): the accepted slot is removed,
-  and nothing puts a ticket with that id back, because only a session that is not finished issues, under its own id;
+* the stored ids of every server store are pairwise distinct whatever the generator returns (`uniqueIds`): the
+  fresh-id check of `issue_batch` discharges the assumption a generator would otherwise need;
+* every occupied slot of a server store is a ticket that was issued (`ticketsIssued`);
 * a prekey hash enters a cache only together with a finished responder session that used that prekey
-  (`CacheAuthenticated`).
-
-A rejected Hello leaves the responder and its store as they were, except that an expired slot is removed.
+  (`cacheAuthenticated`);
+* a client store holds at most one ticket per peer (`clientOnePerPeer`), and only tickets some responder issued
+  (`clientTicketsIssued`).
 -/
 
 namespace Vinc.Hs
 open Term
 
-/-- The invariant, on the three components of the global state it concerns. -/
-structure InvRT (rst : Nat × Nat → RState) (sto : Nat → Store) (issued : Tk → Prop) : Prop where
-  sI : ∀ (n i : Nat) (sl : Slot), (sto n).tks[i]? = some sl → sl.occ = true → issued ⟨sl.tid, sl.psk, sl.peer⟩
-  sO : ∀ (n i : Nat) (sl : Slot), (sto n).tks[i]? = some sl → sl.occ = true → ∃ k, sl.tid = Term.tid n k ∧ (rst (n, k)).ph = .done
-  sU : ∀ (n i j : Nat) (a b : Slot), (sto n).tks[i]? = some a → (sto n).tks[j]? = some b → a.occ = true → b.occ = true →
-    a.tid = b.tid → i = j
-  eI : ∀ r, (rst r).early ≠ nil → (rst r).auth = true ∧
-    ∃ t, issued t ∧ t.tid = (rst r).tid ∧ (rst r).early = early (ckpsk t.psk) (rst r).thh
-  eT : ∀ r, (rst r).early ≠ nil → ∃ k0, (rst r).tid = Term.tid r.1 k0 ∧ (rst (r.1, k0)).ph = .done
-  eN : ∀ r, (rst r).early ≠ nil → ∀ (i : Nat) (sl : Slot), (sto r.1).tks[i]? = some sl → sl.occ = true → sl.tid ≠ (rst r).tid
-  ch : ∀ n h, h ∈ (sto n).pkc → ∃ k, (rst (n, k)).ph = .done ∧ (rst (n, k)).hpk = h
-  fR : ∀ s, (rst s).ph = .finish → (rst s).reply.ty = .reply
-  zr : ∀ r1 r2, r1 ≠ r2 → (rst r1).early ≠ nil → (rst r2).early ≠ nil → (rst r1).tid ≠ (rst r2).tid
+/-- The occupied slots of a store have pairwise distinct ticket ids. -/
+def UniqTids (sl : List Slot) : Prop :=
+  ∀ (i j : Nat) (a b : Slot), sl[i]? = some a → sl[j]? = some b → a.occ = true → b.occ = true → a.tid = b.tid → i = j
 
-theorem InvRT_init (K : Nat) : InvRT (G0 K).rst (G0 K).sto (G0 K).issued := by
-  have hg : ∀ (n i : Nat) (sl : Slot), ((G0 K).sto n).tks[i]? = some sl → sl.occ = false := by
-    intro n i sl h
-    simp only [G0, List.getElem?_replicate] at h
+theorem StoredIn_false {sl : List Slot} {t : Term} (h : StoredIn sl t = false) :
+    ∀ s ∈ sl, s.occ = true → s.tid ≠ t := by
+  intro s hs ho e
+  simp only [StoredIn, List.any_eq_false] at h
+  have := h s hs
+  simp [ho, e] at this
+
+theorem FreshFrom_some {sl : List Slot} {c : List Nat} {t : Term} (h : FreshFrom sl c = some t) :
+    StoredIn sl t = false := by
+  induction c with
+  | nil => simp [FreshFrom] at h
+  | cons x r ih =>
+    simp only [FreshFrom] at h
     split at h
-    · simp at h; subst h; rfl
-    · simp at h
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro n i sl h ho; rw [hg n i sl h] at ho; cases ho
-  · intro n i sl h ho; rw [hg n i sl h] at ho; cases ho
-  · intro n i j a b ha hb hao; rw [hg n i a ha] at hao; cases hao
-  · intro r h; simp [G0] at h
-  · intro r h; simp [G0] at h
-  · intro r h; simp [G0] at h
-  · intro n h hm; simp [G0] at hm
-  · intro s h; simp [G0] at h
-  · intro r1 r2 _ h; simp [G0] at h
+    · exact ih h
+    · rename_i hn; simp at h; subst h; simpa using hn
 
-/-- The responder session `s` does not move to `done`, keeps what the early-key and finish clauses read, and its
-store and ledger do not change. -/
-def Frame (st st' : RState) : Prop :=
-  st.ph ≠ .done ∧ st'.ph ≠ .done ∧ st'.early = st.early ∧ st'.tid = st.tid ∧ st'.thh = st.thh ∧
-    (st.auth = true → st'.auth = true) ∧ (st'.ph = .finish → st'.reply.ty = .reply)
-
-theorem upd_comm_self {α β : Type} [DecidableEq α] (f : α → β) (a : α) (b : β) (h : f a = b) : upd f a b = f := by
-  subst h; exact upd_self f a
-
-theorem upd_self' {α β : Type} [DecidableEq α] (f : α → β) (a : α) : upd f a (f a) = f := by
-  funext x; by_cases h : x = a
-  · subst h; simp [upd]
-  · simp [upd, h]
-
-/-- A step that changes one responder session but not its store, and issues nothing. -/
-theorem InvRT_frame {rst sto issued} (h : InvRT rst sto issued) (s : Nat × Nat) (st' : RState)
-    (hf : Frame (rst s) st') :
-    InvRT (upd rst s st') sto (fun t => issued t ∨ t ∈ ([] : List Tk)) := by
-  obtain ⟨f1, f2, f3, f4, f5, f6, f7⟩ := hf
-  have hdone : ∀ w, (rst w).ph = .done → w ≠ s := fun w hw e => f1 (e ▸ hw)
-  have hu : ∀ w, w ≠ s → upd rst s st' w = rst w := fun w hw => upd_ne _ _ _ _ hw
-  have mono : ∀ t, issued t → (issued t ∨ t ∈ ([] : List Tk)) := fun t ht => Or.inl ht
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro n i sl hs ho; exact mono _ (h.sI n i sl hs ho)
-  · intro n i sl hs ho
-    obtain ⟨k, hk1, hk2⟩ := h.sO n i sl hs ho
-    exact ⟨k, hk1, by rw [hu _ (hdone _ hk2)]; exact hk2⟩
-  · exact h.sU
-  · intro r hr
-    by_cases hrs : r = s
-    · subst hrs
-      simp only [upd_same] at hr ⊢
-      rw [f3] at hr ⊢
-      obtain ⟨a, t, ht1, ht2, ht3⟩ := h.eI r hr
-      exact ⟨f6 a, t, mono _ ht1, by rw [f4]; exact ht2, by rw [f5]; exact ht3⟩
-    · rw [hu r hrs] at hr ⊢
-      obtain ⟨a, t, ht1, ht2, ht3⟩ := h.eI r hr
-      exact ⟨a, t, mono _ ht1, ht2, ht3⟩
-  · intro r hr
-    by_cases hrs : r = s
-    · subst hrs
-      simp only [upd_same] at hr ⊢
-      rw [f3] at hr
-      obtain ⟨k0, hk0, hk1⟩ := h.eT r hr
-      exact ⟨k0, by rw [f4]; exact hk0, by rw [hu _ (hdone _ hk1)]; exact hk1⟩
-    · rw [hu r hrs] at hr ⊢
-      obtain ⟨k0, hk0, hk1⟩ := h.eT r hr
-      exact ⟨k0, hk0, by rw [hu _ (hdone _ hk1)]; exact hk1⟩
-  · intro r hr i sl hs ho
-    by_cases hrs : r = s
-    · subst hrs
-      simp only [upd_same] at hr ⊢
-      rw [f3] at hr; rw [f4]; exact h.eN r hr i sl hs ho
-    · rw [hu r hrs] at hr ⊢; exact h.eN r hr i sl hs ho
-  · intro n hh hm
-    obtain ⟨k, hk1, hk2⟩ := h.ch n hh hm
-    exact ⟨k, by rw [hu _ (hdone _ hk1)]; exact hk1, by rw [hu _ (hdone _ hk1)]; exact hk2⟩
-  · intro r hr
-    by_cases hrs : r = s
-    · subst hrs; simp only [upd_same] at hr ⊢; exact f7 hr
-    · rw [hu r hrs] at hr ⊢; exact h.fR r hr
-  · intro r1 r2 hne h1 h2
-    by_cases a : r1 = s <;> by_cases b : r2 = s
-    · exact absurd (a.trans b.symm) hne
-    · subst a; simp only [upd_same, hu _ b] at h1 h2 ⊢; rw [f3] at h1; rw [f4]; exact h.zr r1 r2 hne h1 h2
-    · subst b; simp only [upd_same, hu _ a] at h1 h2 ⊢; rw [f3] at h2; rw [f4]; exact h.zr r1 r2 hne h1 h2
-    · simp only [hu _ a, hu _ b] at h1 h2 ⊢; exact h.zr r1 r2 hne h1 h2
-
-
-/-! ## The store operations -/
-
-theorem IssueTicket_get (sto : Store) (t p : Term) (peer j : Nat) (sl : Slot)
-    (h : (IssueTicket sto t p peer).tks[j]? = some sl) :
-    (j = Victim sto.tks ∧ sl = { occ := true, tid := t, psk := p, peer := peer, exp := false, stamp := sto.clk + 1 })
-    ∨ (j ≠ Victim sto.tks ∧ sto.tks[j]? = some sl) := by
-  simp only [IssueTicket, List.getElem?_set] at h
-  by_cases hv : Victim sto.tks = j
-  · simp only [hv, ite_true] at h
+theorem Put_get {sl : List Slot} {v : Option Nat} {x a : Slot} {j : Nat} (h : (Put sl v x)[j]? = some a) :
+    (v = some j ∧ a = x) ∨ sl[j]? = some a := by
+  cases v with
+  | none => right; simpa [Put] using h
+  | some i =>
+    simp only [Put] at h
+    rw [List.getElem?_set] at h
     split at h
-    · simp at h; left; exact ⟨hv.symm, h.symm⟩
-    · simp at h
-  · simp only [hv, ite_false] at h
-    right; exact ⟨fun e => hv e.symm, h⟩
+    · rename_i hh; split at h
+      · simp at h; left; exact ⟨by rw [hh], h.symm⟩
+      · simp at h
+    · right; exact h
 
-theorem RemoveSlot_get (sto : Store) (i j : Nat) (sl : Slot) (h : (RemoveSlot sto i).tks[j]? = some sl)
-    (ho : sl.occ = true) : sto.tks[j]? = some sl ∧ j ≠ i := by
-  simp only [RemoveSlot, List.getElem?_set] at h
-  by_cases hv : i = j
-  · simp only [hv, ite_true] at h
-    split at h
-    · simp at h; subst h; simp [NoSlot] at ho
-    · simp at h
-  · simp only [hv, ite_false] at h
-    exact ⟨h, fun e => hv e.symm⟩
+theorem Put_mem {sl : List Slot} {v : Option Nat} {x a : Slot} (h : a ∈ Put sl v x) : a ∈ sl ∨ a = x := by
+  cases v with
+  | none => left; simpa [Put] using h
+  | some i =>
+    simp only [Put] at h
+    rcases List.mem_or_eq_of_mem_set h with h | h
+    · left; exact h
+    · right; exact h
 
-theorem IssueTicket_sU (sto : Store) (t p : Term) (peer : Nat)
-    (hU : ∀ (i j : Nat) (a b : Slot), sto.tks[i]? = some a → sto.tks[j]? = some b → a.occ = true → b.occ = true →
-      a.tid = b.tid → i = j)
-    (hfresh : ∀ (j : Nat) (sl : Slot), sto.tks[j]? = some sl → sl.occ = true → sl.tid ≠ t) :
-    ∀ (i j : Nat) (a b : Slot), (IssueTicket sto t p peer).tks[i]? = some a → (IssueTicket sto t p peer).tks[j]? = some b →
-      a.occ = true → b.occ = true → a.tid = b.tid → i = j := by
+theorem Uniq_put {sl : List Slot} (hu : UniqTids sl) (v : Option Nat) (x : Slot) (hx : x.occ = true)
+    (hf : StoredIn sl x.tid = false) : UniqTids (Put sl v x) := by
   intro i j a b ha hb hao hbo hab
-  rcases IssueTicket_get _ _ _ _ _ _ ha with ⟨hi, rfl⟩ | ⟨hi, ha'⟩
-  · rcases IssueTicket_get _ _ _ _ _ _ hb with ⟨hj, rfl⟩ | ⟨hj, hb'⟩
-    · rw [hi, hj]
-    · exact absurd hab.symm (hfresh j b hb' hbo)
-  · rcases IssueTicket_get _ _ _ _ _ _ hb with ⟨hj, rfl⟩ | ⟨hj, hb'⟩
-    · exact absurd hab (hfresh i a ha' hao)
-    · exact hU i j a b ha' hb' hao hbo hab
+  rcases Put_get ha with ⟨hi, rfl⟩ | ha'
+  · rcases Put_get hb with ⟨hj, rfl⟩ | hb'
+    · exact Option.some.inj (hi.symm.trans hj)
+    · exact absurd hab.symm (StoredIn_false hf b (List.mem_of_getElem? hb') hbo)
+  · rcases Put_get hb with ⟨hj, rfl⟩ | hb'
+    · exact absurd hab (StoredIn_false hf a (List.mem_of_getElem? ha') hao)
+    · exact hu i j a b ha' hb' hao hbo hab
 
-/-- The generic step in which one responder session finishes (becomes `done`) and writes its node's store. -/
-theorem InvRT_done {rst sto issued} (h : InvRT rst sto issued) (n k : Nat) (st' : RState) (stn : Store) (iss : Tk)
-    (hst : (rst (n, k)).ph ≠ .done) (hst' : st'.ph = .done)
-    (hget : ∀ (j : Nat) (sl : Slot), stn.tks[j]? = some sl → sl.occ = true →
-      (sl.tid = Term.tid n k ∧ (⟨sl.tid, sl.psk, sl.peer⟩ : Tk) = iss) ∨ (sto n).tks[j]? = some sl)
-    (hsU : ∀ (i j : Nat) (a b : Slot), stn.tks[i]? = some a → stn.tks[j]? = some b → a.occ = true → b.occ = true →
-      a.tid = b.tid → i = j)
-    (hpk : ∀ x, x ∈ stn.pkc → x ∈ (sto n).pkc ∨ x = st'.hpk)
-    (hE : st'.early ≠ nil → st'.auth = true ∧ (∃ t, (issued t ∨ t = iss) ∧ t.tid = st'.tid ∧
-        st'.early = early (ckpsk t.psk) st'.thh) ∧ (∃ k0, st'.tid = Term.tid n k0 ∧ (rst (n, k0)).ph = .done) ∧
-      (∀ (j : Nat) (sl : Slot), stn.tks[j]? = some sl → sl.occ = true → sl.tid ≠ st'.tid) ∧
-      ∀ r2, r2 ≠ (n, k) → (rst r2).early ≠ nil → (rst r2).tid ≠ st'.tid) :
-    InvRT (upd rst (n, k) st') (upd sto n stn) (fun t => issued t ∨ t ∈ [iss]) := by
-  have hu : ∀ w, w ≠ (n, k) → upd rst (n, k) st' w = rst w := fun w hw => upd_ne _ _ _ _ hw
-  have hdn : ∀ w, (rst w).ph = .done → w ≠ (n, k) := fun w hw e => hst (e ▸ hw)
-  have hdp : ∀ w, (rst w).ph = .done → (upd rst (n, k) st' w).ph = .done := fun w hw => by
-    rw [hu w (hdn w hw)]; exact hw
-  have mono : ∀ t, issued t → (issued t ∨ t ∈ [iss]) := fun t ht => Or.inl ht
-  have hsn : ∀ m, m ≠ n → upd sto n stn m = sto m := fun m hm => upd_ne _ _ _ _ hm
-  have hnn : upd sto n stn n = stn := upd_same _ _ _
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro m i sl hs ho
-    by_cases hm : m = n
-    · subst hm; rw [hnn] at hs
-      rcases hget i sl hs ho with ⟨-, he⟩ | hs'
-      · right; simp [← he]
-      · exact mono _ (h.sI m i sl hs' ho)
-    · rw [hsn m hm] at hs; exact mono _ (h.sI m i sl hs ho)
-  · intro m i sl hs ho
-    by_cases hm : m = n
-    · subst hm; rw [hnn] at hs
-      rcases hget i sl hs ho with ⟨he, -⟩ | hs'
-      · exact ⟨k, he, by simp [upd_same, hst']⟩
-      · obtain ⟨k1, hk1, hk2⟩ := h.sO m i sl hs' ho
-        exact ⟨k1, hk1, hdp _ hk2⟩
-    · rw [hsn m hm] at hs
-      obtain ⟨k1, hk1, hk2⟩ := h.sO m i sl hs ho
-      exact ⟨k1, hk1, hdp _ hk2⟩
-  · intro m i j a b ha hb hao hbo hab
-    by_cases hm : m = n
-    · subst hm; rw [hnn] at ha hb; exact hsU i j a b ha hb hao hbo hab
-    · rw [hsn m hm] at ha hb; exact h.sU m i j a b ha hb hao hbo hab
-  · intro r hr
-    by_cases hrs : r = (n, k)
-    · subst hrs; simp only [upd_same] at hr ⊢
-      obtain ⟨a, ⟨t, ht1, ht2, ht3⟩, -, -, -⟩ := hE hr
-      refine ⟨a, t, ?_, ht2, ht3⟩
-      rcases ht1 with ht1 | ht1
-      · exact Or.inl ht1
-      · right; simp [ht1]
-    · rw [hu r hrs] at hr ⊢
-      obtain ⟨a, t, ht1, ht2, ht3⟩ := h.eI r hr
-      exact ⟨a, t, mono _ ht1, ht2, ht3⟩
-  · intro r hr
-    by_cases hrs : r = (n, k)
-    · subst hrs; simp only [upd_same] at hr ⊢
-      obtain ⟨-, -, ⟨k0, hk0, hk1⟩, -, -⟩ := hE hr
-      exact ⟨k0, hk0, hdp _ hk1⟩
-    · rw [hu r hrs] at hr ⊢
-      obtain ⟨k0, hk0, hk1⟩ := h.eT r hr
-      exact ⟨k0, hk0, hdp _ hk1⟩
-  · intro r hr i sl hs ho
-    by_cases hrs : r = (n, k)
-    · subst hrs; simp only [upd_same] at hr hs ⊢
-      try rw [hnn] at hs
-      obtain ⟨-, -, -, hn, -⟩ := hE hr
-      exact hn i sl hs ho
-    · rw [hu r hrs] at hr ⊢
-      by_cases hm : r.1 = n
-      · rw [hm, hnn] at hs
-        rcases hget i sl hs ho with ⟨he, -⟩ | hs'
-        · obtain ⟨k0, hk0, hk1⟩ := h.eT r hr
-          intro e
-          rw [he, hk0, hm] at e
-          injection e with e1 e2
-          subst e2
-          rw [hm] at hk1
-          exact hst hk1
-        · exact h.eN r hr i sl (by rw [hm]; exact hs') ho
-      · rw [hsn _ hm] at hs; exact h.eN r hr i sl hs ho
-  · intro m hh hm
-    by_cases hmn : m = n
-    · subst hmn; rw [hnn] at hm
-      rcases hpk hh hm with hm' | he
-      · obtain ⟨k1, hk1, hk2⟩ := h.ch m hh hm'
-        exact ⟨k1, hdp _ hk1, by rw [hu _ (hdn _ hk1)]; exact hk2⟩
-      · exact ⟨k, by simp [upd_same, hst'], by simp [upd_same, he]⟩
-    · rw [hsn m hmn] at hm
-      obtain ⟨k1, hk1, hk2⟩ := h.ch m hh hm
-      exact ⟨k1, hdp _ hk1, by rw [hu _ (hdn _ hk1)]; exact hk2⟩
-  · intro r hr
-    by_cases hrs : r = (n, k)
-    · subst hrs; simp only [upd_same] at hr; rw [hst'] at hr; cases hr
-    · rw [hu r hrs] at hr ⊢; exact h.fR r hr
-  · intro r1 r2 hne h1 h2
-    by_cases a : r1 = (n, k) <;> by_cases b : r2 = (n, k)
-    · exact absurd (a.trans b.symm) hne
-    · subst a; simp only [upd_same, hu _ b] at h1 h2 ⊢
-      obtain ⟨-, -, -, -, hz⟩ := hE h1
-      exact fun e => hz r2 b h2 e.symm
-    · subst b; simp only [upd_same, hu _ a] at h1 h2 ⊢
-      obtain ⟨-, -, -, -, hz⟩ := hE h2
-      exact hz r1 a h1
-    · simp only [hu _ a, hu _ b] at h1 h2 ⊢; exact h.zr r1 r2 hne h1 h2
+theorem Uniq_remove {sl : List Slot} (hu : UniqTids sl) (v : Option Nat) : UniqTids (Put sl v NoSlot) := by
+  intro i j a b ha hb hao hbo hab
+  rcases Put_get ha with ⟨-, rfl⟩ | ha'
+  · simp [NoSlot] at hao
+  · rcases Put_get hb with ⟨-, rfl⟩ | hb'
+    · simp [NoSlot] at hbo
+    · exact hu i j a b ha' hb' hao hbo hab
 
-/-- A step that leaves every responder session as it was and replaces a node's store by one whose occupied slots
-are slots of the old one (nothing is added, a slot may be removed). -/
-theorem InvRT_shrink {rst sto issued} (h : InvRT rst sto issued) (n : Nat) (stn : Store)
-    (hget : ∀ (j : Nat) (sl : Slot), stn.tks[j]? = some sl → sl.occ = true → (sto n).tks[j]? = some sl)
-    (hpk : stn.pkc = (sto n).pkc) :
-    InvRT rst (upd sto n stn) (fun t => issued t ∨ t ∈ ([] : List Tk)) := by
-  have hg : ∀ m (j : Nat) (sl : Slot), (upd sto n stn m).tks[j]? = some sl → sl.occ = true →
-      (sto m).tks[j]? = some sl := by
-    intro m j sl hs ho
-    by_cases hm : m = n
-    · subst hm; rw [upd_same] at hs; exact hget j sl hs ho
-    · rw [upd_ne _ _ _ _ hm] at hs; exact hs
-  have hp : ∀ m, (upd sto n stn m).pkc = (sto m).pkc := by
-    intro m
-    by_cases hm : m = n
-    · subst hm; rw [upd_same]; exact hpk
-    · rw [upd_ne _ _ _ _ hm]
-  have mono : ∀ t, issued t → (issued t ∨ t ∈ ([] : List Tk)) := fun t ht => Or.inl ht
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro m i sl hs ho; exact mono _ (h.sI m i sl (hg m i sl hs ho) ho)
-  · intro m i sl hs ho; exact h.sO m i sl (hg m i sl hs ho) ho
-  · intro m i j a b ha hb hao hbo hab; exact h.sU m i j a b (hg m i a ha hao) (hg m j b hb hbo) hao hbo hab
-  · intro r hr
-    obtain ⟨a, t, ht1, ht2, ht3⟩ := h.eI r hr
-    exact ⟨a, t, mono _ ht1, ht2, ht3⟩
-  · exact h.eT
-  · intro r hr i sl hs ho; exact h.eN r hr i sl (hg r.1 i sl hs ho) ho
-  · intro m hh hm; rw [hp] at hm; exact h.ch m hh hm
-  · exact h.fR
-  · exact h.zr
 
-/-! ## The responder steps -/
+/-! ## issue_batch -/
 
-theorem find_facts (tks : List Slot) (t : Term) (i0 : Nat)
-    (h : tks.findIdx? (fun s => s.occ && s.tid == t) = some i0) :
-    ∃ sl0, tks[i0]? = some sl0 ∧ sl0.occ = true ∧ sl0.tid = t := by
+/-- The slot `IssueOne` stores for the id `t`. -/
+def newSlot (sl : List Slot) (t rs cr : Term) (peer : Nat) (al ad : Term) : Slot :=
+  { occ := true, tid := t, psk := psk rs t cr, peer := peer, al := al, ad := ad, cr := cr, exp := false,
+    stamp := Stamp sl }
+
+theorem IssueOne_cases (sl : List Slot) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) :
+    (FreshFrom sl c = none ∧ (IssueOne sl c rs cr peer al ad).ok = false ∧ (IssueOne sl c rs cr peer al ad).sl = sl
+      ∧ (IssueOne sl c rs cr peer al ad).tid = none)
+    ∨ ∃ t, FreshFrom sl c = some t ∧ (IssueOne sl c rs cr peer al ad).ok = true ∧
+      (IssueOne sl c rs cr peer al ad).sl = Put sl (Victim sl) (newSlot sl t rs cr peer al ad) ∧
+      (IssueOne sl c rs cr peer al ad).tid = (if Victim sl = none then none else some t) := by
+  unfold IssueOne
+  cases h : FreshFrom sl c with
+  | none => left; simp
+  | some t => right; exact ⟨t, rfl, rfl, rfl, rfl⟩
+
+theorem IssueOne_uniq {sl : List Slot} (hu : UniqTids sl) (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) :
+    UniqTids (IssueOne sl c rs cr peer al ad).sl := by
+  rcases IssueOne_cases sl c rs cr peer al ad with ⟨-, -, h, -⟩ | ⟨t, hf, -, h, -⟩
+  · rw [h]; exact hu
+  · rw [h]; exact Uniq_put hu _ _ rfl (FreshFrom_some hf)
+
+theorem IssueOne_prov {sl : List Slot} (c : List Nat) (rs cr : Term) (peer : Nat) (al ad : Term) :
+    ∀ x ∈ (IssueOne sl c rs cr peer al ad).sl, x.occ = true →
+      x ∈ sl ∨ ∃ t, x = newSlot sl t rs cr peer al ad := by
+  intro x hx ho
+  rcases IssueOne_cases sl c rs cr peer al ad with ⟨-, -, h, -⟩ | ⟨t, hf, -, h, -⟩
+  · rw [h] at hx; exact Or.inl hx
+  · rw [h] at hx
+    rcases Put_mem hx with hx | hx
+    · exact Or.inl hx
+    · exact Or.inr ⟨t, hx⟩
+
+theorem IssueAll_uniq (rs cr : Term) (peer : Nat) (al ad : Term) (cs : List (List Nat)) :
+    ∀ (sl : List Slot) (tids : List Term), UniqTids sl → UniqTids (IssueAll sl rs cr peer al ad tids cs).sl := by
+  induction cs with
+  | nil => intro sl tids hu; simpa [IssueAll] using hu
+  | cons c r ih =>
+    intro sl tids hu
+    simp only [IssueAll]
+    split
+    · exact IssueOne_uniq hu c rs cr peer al ad
+    · exact ih _ _ (IssueOne_uniq hu c rs cr peer al ad)
+
+theorem IssueAll_tids_sub (rs cr : Term) (peer : Nat) (al ad : Term) (cs : List (List Nat)) :
+    ∀ (sl : List Slot) (tids : List Term), ∀ t ∈ tids, t ∈ (IssueAll sl rs cr peer al ad tids cs).tids := by
+  induction cs with
+  | nil => intro sl tids t ht; simpa [IssueAll] using ht
+  | cons c r ih =>
+    intro sl tids t ht
+    simp only [IssueAll]
+    split
+    · exact ht
+    · apply ih
+      split
+      · exact ht
+      · exact List.mem_append_left _ ht
+
+/-- Every occupied slot after `issue_batch` is an old slot or a ticket the batch issued. -/
+theorem IssueAll_prov (rs cr : Term) (peer : Nat) (al ad : Term) (cs : List (List Nat)) :
+    ∀ (sl : List Slot) (tids : List Term), ∀ x ∈ (IssueAll sl rs cr peer al ad tids cs).sl, x.occ = true →
+      x ∈ sl ∨ TicketOf x ∈ IssuedOf (IssueAll sl rs cr peer al ad tids cs).tids rs cr peer al ad := by
+  induction cs with
+  | nil => intro sl tids x hx ho; exact Or.inl (by simpa [IssueAll] using hx)
+  | cons c r ih =>
+    intro sl tids x hx ho
+    rcases IssueOne_cases sl c rs cr peer al ad with ⟨-, hok, hsl, -⟩ | ⟨t, hf, hok, hsl, htid⟩
+    · simp only [IssueAll, hok] at hx ⊢
+      simp at hx ⊢
+      rw [hsl] at hx
+      exact Or.inl hx
+    · have e : IssueAll sl rs cr peer al ad tids (c :: r) =
+          IssueAll (IssueOne sl c rs cr peer al ad).sl rs cr peer al ad
+            (match (IssueOne sl c rs cr peer al ad).tid with | none => tids | some t => tids ++ [t]) r := by
+        simp only [IssueAll, hok, Bool.not_true, Bool.false_eq_true, ite_false]
+        rfl
+      rw [e] at hx ⊢
+      rcases ih _ _ x hx ho with h | h
+      · rw [hsl] at h
+        cases hv : Victim sl with
+        | none => rw [hv] at h; exact Or.inl (by simpa [Put] using h)
+        | some v =>
+          rw [hv] at h
+          rcases Put_mem h with h | h
+          · exact Or.inl h
+          · right
+            have hm := IssueAll_tids_sub rs cr peer al ad r (IssueOne sl c rs cr peer al ad).sl
+              (match (IssueOne sl c rs cr peer al ad).tid with | none => tids | some t => tids ++ [t])
+            have ht : t ∈ (match (IssueOne sl c rs cr peer al ad).tid with | none => tids | some t => tids ++ [t]) := by
+              rw [htid, hv]; simp
+            have := hm t ht
+            subst h
+            simp only [IssuedOf, List.mem_map]
+            exact ⟨t, this, rfl⟩
+      · exact Or.inr h
+
+/-! ## What a responder step does to its store -/
+
+theorem Issue_uniq {sl : List Slot} (hu : UniqTids sl) (cs : List (List Nat)) (rs cr : Term) (peer : Nat) (al ad : Term) :
+    UniqTids (Issue sl cs rs cr peer al ad).sl := IssueAll_uniq rs cr peer al ad cs sl [] hu
+
+theorem Issue_prov (sl : List Slot) (cs : List (List Nat)) (rs cr : Term) (peer : Nat) (al ad : Term) :
+    ∀ x ∈ (Issue sl cs rs cr peer al ad).sl, x.occ = true →
+      x ∈ sl ∨ TicketOf x ∈ IssuedOf (Issue sl cs rs cr peer al ad).tids rs cr peer al ad :=
+  IssueAll_prov rs cr peer al ad cs sl []
+
+/-- The store a step leaves: still pairwise distinct ids, every new slot an issued ticket, and a prekey hash only
+added by a Finish that completes. -/
+def StoOK (st : RState) (sto : Store) (r : RRes) : Prop :=
+  (UniqTids sto.tks → UniqTids r.sto.tks) ∧
+  (∀ x ∈ r.sto.tks, x.occ = true → x ∈ sto.tks ∨ TicketOf x ∈ r.iss) ∧
+  (∀ h ∈ r.sto.pkc, h ∈ sto.pkc ∨ (st.ph = .finish ∧ r.st.ph = .done ∧ r.st.hpk = st.hpk ∧ h = st.hpk))
+
+theorem StoOK_same (st : RState) (sto : Store) (r : RRes) (h : r.sto = sto) : StoOK st sto r := by
+  refine ⟨fun hu => h ▸ hu, fun x hx _ => Or.inl (h ▸ hx), fun x hx => Or.inl (h ▸ hx)⟩
+
+theorem RemoveSlot_tks (sto : Store) (i : Option Nat) : (RemoveSlot sto i).tks = Put sto.tks i NoSlot := rfl
+
+theorem rhStoR_prov (sto : Store) (m : Msg) : ∀ x ∈ (rhStoR sto m).tks, x.occ = true → x ∈ sto.tks := by
+  intro x hx ho
+  rcases Put_mem hx with h | h
+  · exact h
+  · subst h; simp [NoSlot] at ho
+
+theorem rfSto2_tks (st : RState) (n : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) :
+    (rfSto2 st n sto m cs).tks = (rfIs st n sto m cs).sl := by
+  unfold rfSto2; split <;> rfl
+
+theorem rfSto2_pkc (st : RState) (n : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) :
+    ∀ h ∈ (rfSto2 st n sto m cs).pkc, h ∈ sto.pkc ∨ h = st.hpk := by
+  intro h hh
+  unfold rfSto2 at hh; split at hh
+  · simp [rfSto1] at hh; rcases hh with hh | hh
+    · exact Or.inr hh
+    · exact Or.inl hh
+  · exact Or.inl (by simpa [rfSto1] using hh)
+
+theorem RHandle_sto (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) :
+    StoOK st sto (RHandle st n k sto m cs) := by
+  rcases RHandle_cases st n k sto m cs with
+    ⟨-, -, c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨-, -, -, -, c, -⟩ | ⟨-, -, -, -, c, -⟩ |
+    ⟨-, -, -, -, -, -, -, c, -⟩ | ⟨hph, -, -, -, -, -, hst, -, hsto, hiss, -⟩ |
+    ⟨hph, -, -, -, -, -, hst, -, hsto, hiss, -⟩ | ⟨-, -, -, -, -, hst, -, hsto, hiss, -⟩ |
+    ⟨-, -, -, -, -, -, hst, -, hsto, hiss, -⟩ | ⟨-, -, -, -, -, -, hst, -, hsto, hiss, -⟩
+  · exact StoOK_same _ _ _ c
+  · exact StoOK_same _ _ _ c
+  · exact StoOK_same _ _ _ c
+  · exact StoOK_same _ _ _ c
+  · exact StoOK_same _ _ _ c
+  · exact StoOK_same _ _ _ c
+  · refine ⟨fun hu => ?_, fun x hx ho => ?_, fun h hh => ?_⟩
+    · rw [hsto, rfSto2_tks]; exact Issue_uniq hu _ _ _ _ _ _
+    · rw [hsto, rfSto2_tks] at hx; rw [hiss]; exact Issue_prov _ _ _ _ _ _ _ x hx ho
+    · rw [hsto] at hh
+      rcases rfSto2_pkc st n sto m cs h hh with h' | h'
+      · exact Or.inl h'
+      · right; refine ⟨hph, ?_, ?_, h'⟩ <;> rw [hst] <;> rfl
+  · refine ⟨fun hu => ?_, fun x hx ho => ?_, fun h hh => Or.inl ?_⟩
+    · rw [hsto]; exact Issue_uniq hu _ _ _ _ _ _
+    · rw [hsto] at hx; rw [hiss]; exact Issue_prov _ _ _ _ _ _ _ x hx ho
+    · rw [hsto] at hh; exact hh
+  · refine ⟨fun hu => ?_, fun x hx ho => Or.inl ?_, fun h hh => Or.inl ?_⟩
+    · rw [hsto]; unfold rhStoRej; split
+      · exact Uniq_remove hu _
+      · exact hu
+    · rw [hsto] at hx; unfold rhStoRej at hx; split at hx
+      · exact rhStoR_prov sto m x hx ho
+      · exact hx
+    · rw [hsto] at hh; unfold rhStoRej at hh; split at hh <;> exact hh
+  all_goals
+    refine ⟨fun hu => ?_, fun x hx ho => ?_, fun h hh => Or.inl ?_⟩
+    · rw [hsto]; exact Issue_uniq (Uniq_remove hu _) _ _ _ _ _ _
+    · rw [hsto] at hx
+      rw [hiss]
+      rcases Issue_prov _ _ _ _ _ _ _ x hx ho with h | h
+      · exact Or.inl (rhStoR_prov sto m x h ho)
+      · exact Or.inr h
+    · rw [hsto] at hh; exact hh
+
+/-! ## The client store -/
+
+/-- The occupied slots of a client store name pairwise distinct peers. -/
+def UniqPeer (sl : List Slot) : Prop :=
+  ∀ (i j : Nat) (a b : Slot), sl[i]? = some a → sl[j]? = some b → a.occ = true → b.occ = true → a.peer = b.peer → i = j
+
+theorem CFindPeer_some {sl : List Slot} {p i : Nat} (h : CFindPeer sl p = some i) :
+    ∃ a, sl[i]? = some a ∧ a.occ = true ∧ a.peer = p := by
+  unfold CFindPeer at h
   rw [List.findIdx?_eq_some_iff_getElem] at h
   obtain ⟨hl, hp, -⟩ := h
-  refine ⟨tks[i0], List.getElem?_eq_getElem hl, ?_⟩
-  simpa [Bool.and_eq_true, beq_iff_eq] using hp
+  refine ⟨sl[i], List.getElem?_eq_getElem hl, ?_⟩
+  simpa using hp
 
-theorem issued_nil {i : Tk → Prop} : (fun t => i t ∨ t ∈ ([] : List Tk)) = i := by
-  funext t; apply propext; simp
+theorem Uniq_put_peer {sl : List Slot} (hu : UniqPeer sl) (v : Option Nat) (x : Slot)
+    (hv : ∀ (j : Nat) (b : Slot), sl[j]? = some b → b.occ = true → b.peer = x.peer → v = some j)
+    (hx : x.occ = true) : UniqPeer (Put sl v x) := by
+  intro i j a b ha hb hao hbo hab
+  rcases Put_get ha with ⟨hi, rfl⟩ | ha'
+  · rcases Put_get hb with ⟨hj, rfl⟩ | hb'
+    · exact Option.some.inj (hi.symm.trans hj)
+    · exact Option.some.inj (hi.symm.trans (hv j b hb' hbo hab.symm))
+  · rcases Put_get hb with ⟨hj, rfl⟩ | hb'
+    · exact (Option.some.inj (hj.symm.trans (hv i a ha' hao hab))).symm
+    · exact hu i j a b ha' hb' hao hbo hab
 
-theorem RHello_rej (st : RState) (n k : Nat) (sto : Store) (m : Msg) (hi : st.ph = .idle) (hp : m.prm = ok)
-    (ho : (RHello st n k sto m).out = [{ ty := .rrej, echo := rhThh m }]) :
-    (RHello st n k sto m).st = st ∧ ((RHello st n k sto m).sto = sto ∨ ∃ i, (RHello st n k sto m).sto = RemoveSlot sto i) := by
-  unfold RHello at ho ⊢
-  dsimp only at ho ⊢
-  rw [if_neg (by rw [hi]; simp), if_neg (by simp [hi]), if_neg (by simp [hp])] at ho ⊢
-  by_cases hu : (sto.tks.findIdx? (fun s => s.occ && s.tid == m.tid)).isSome = true ∧
-      (rhSlot sto ((sto.tks.findIdx? (fun s => s.occ && s.tid == m.tid)).getD 0)).exp = false ∧
-      binder (rhSlot sto ((sto.tks.findIdx? (fun s => s.occ && s.tid == m.tid)).getD 0)).psk (rhThh m) = m.binder
-  · simp only [hu, not_true_eq_false, ite_false] at ho
-    simp [rhMsg] at ho
-  · simp only [hu, not_false_eq_true, ite_true, ROk]
-    refine ⟨trivial, ?_⟩
-    split
-    · right; exact ⟨_, rfl⟩
-    · left; rfl
+theorem Uniq_remove_peer {sl : List Slot} (hu : UniqPeer sl) (v : Option Nat) : UniqPeer (Put sl v NoSlot) := by
+  intro i j a b ha hb hao hbo hab
+  rcases Put_get ha with ⟨-, rfl⟩ | ha'
+  · simp [NoSlot] at hao
+  · rcases Put_get hb with ⟨-, rfl⟩ | hb'
+    · simp [NoSlot] at hbo
+    · exact hu i j a b ha' hb' hao hbo hab
 
-theorem rfSto_tks (st : RState) (n k : Nat) (sto : Store) (m : Msg) :
-    (rfSto st n k sto m).tks = (IssueTicket sto (Term.tid n k) (psk (rfRes st m) (Term.tid n k)) m.sealed.id).tks := by
-  unfold rfSto; split <;> rfl
+theorem CInsert_uniq {sl : List Slot} (hu : UniqPeer sl) (tk : Tk) : UniqPeer (CInsert sl tk) := by
+  unfold CInsert
+  apply Uniq_put_peer hu _ _ _ rfl
+  intro j b hb hbo hbp
+  cases hf : CFindPeer sl tk.peer with
+  | none =>
+    exfalso
+    unfold CFindPeer at hf
+    rw [List.findIdx?_eq_none_iff] at hf
+    have := hf b (List.mem_of_getElem? hb)
+    simp [hbo, hbp] at this
+  | some i =>
+    obtain ⟨a, ha, hao, hap⟩ := CFindPeer_some hf
+    have : i = j := hu i j a b ha hb hao hbo (hap.trans hbp.symm)
+    simp [this]
 
-theorem rfSto_pkc (st : RState) (n k : Nat) (sto : Store) (m : Msg) :
-    ∀ x, x ∈ (rfSto st n k sto m).pkc → x ∈ sto.pkc ∨ x = st.hpk := by
-  intro x hx
-  unfold rfSto at hx
-  split at hx
-  · simp [IssueTicket] at hx; rcases hx with hx | hx
-    · right; exact hx
-    · left; exact hx
-  · left; simpa [IssueTicket] using hx
+theorem CInsertAll_uniq (tks : List Tk) : ∀ {sl : List Slot}, UniqPeer sl → UniqPeer (CInsertAll sl tks) := by
+  induction tks with
+  | nil => intro sl h; exact h
+  | cons t r ih => intro sl h; exact ih (CInsert_uniq h t)
 
-theorem RHandle_hello (st : RState) (n k : Nat) (sto : Store) (m : Msg) (hf : st.ph ≠ .failed) (hty : m.ty = .hello) :
-    RHandle st n k sto m = RHello st n k sto m := by
-  simp [RHandle, hf, hty]
+theorem dropExp_occ {x a : Slot} (h : (if (x.occ && x.exp) = true then NoSlot else x) = a) (ho : a.occ = true) :
+    a = x := by
+  split at h
+  · subst h; simp [NoSlot] at ho
+  · exact h.symm
 
-/-- The invariant is kept by a responder receiving any message. -/
-theorem InvRT_rRecv {rst sto issued} (h : InvRT rst sto issued) (n k : Nat) (m : Msg) :
-    InvRT (upd rst (n, k) (RHandle (rst (n, k)) n k (sto n) m).st)
-      (upd sto n (RHandle (rst (n, k)) n k (sto n) m).sto)
-      (fun t => issued t ∨ t ∈ (RHandle (rst (n, k)) n k (sto n) m).iss) := by
-  rcases RHandle_cases (rst (n, k)) n k (sto n) m with ⟨c1, c2, c3, c4, c5⟩
-    | ⟨hp, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, c1, c2, c3, c4, c5⟩
-    | ⟨hp, hty, hpr, c1, c2, c3, c4, c5⟩ | ⟨hp, hty, hk, had, hsig, c1, c2, c3, c4, c5⟩
-    | ⟨hp, hty, hpr, c1, c2, c4, c5⟩ | ⟨hp, hty, hpr, i0, hfi, hexp, hbind, c1, c2, c3, c4, c5⟩
-  · rw [c1, c3, c4, upd_self', upd_self', issued_nil]; exact h
-  · have hnd : (rst (n, k)).ph ≠ .done := by rcases hp with hp | hp <;> simp [hp]
-    have hF : Frame (rst (n, k)) (RHandle (rst (n, k)) n k (sto n) m).st := by
-      rw [c1]; exact ⟨hnd, by simp, rfl, rfl, rfl, fun a => a, by intro e; simp at e⟩
-    rw [c3, c4, upd_self']
-    exact InvRT_frame h (n, k) _ hF
-  · rw [c1, c3, c4, upd_self', upd_self', issued_nil]; exact h
-  · rw [c1, c3, c4, upd_self', upd_self', issued_nil]; exact h
-  · have hF : Frame (rst (n, k)) (RHandle (rst (n, k)) n k (sto n) m).st := by
-      rw [c1]; exact ⟨by simp [hp], by simp [rInitSt], rfl, rfl, rfl, fun a => a, by intro e; simp [rInitSt] at e⟩
-    rw [c3, c4, upd_self']
-    exact InvRT_frame h (n, k) _ hF
-  · -- the Finish authenticates: the session finishes and issues its ticket
-    rw [c1, c3, c4]
-    have hfresh : ∀ (j : Nat) (sl : Slot), (sto n).tks[j]? = some sl → sl.occ = true → sl.tid ≠ Term.tid n k := by
-      intro j sl hs ho e
-      obtain ⟨k1, hk1, hk2⟩ := h.sO n j sl hs ho
-      have := Term.tid.inj (e.symm.trans hk1)
-      obtain ⟨-, rfl⟩ := this
-      rw [hp] at hk2; cases hk2
-    refine InvRT_done h n k _ _ _ (by simp [hp]) (by simp [rfSt]) ?_ ?_ (fun x hx => rfSto_pkc _ n k _ m x hx) ?_
-    · intro j sl hs ho
-      rw [rfSto_tks] at hs
-      rcases IssueTicket_get _ _ _ _ _ _ hs with ⟨-, rfl⟩ | ⟨-, hs'⟩
-      · left; exact ⟨rfl, rfl⟩
-      · right; exact hs'
-    · intro i j a b ha hb hao hbo hab
-      rw [rfSto_tks] at ha hb
-      exact IssueTicket_sU _ _ _ _ (h.sU n) hfresh i j a b ha hb hao hbo hab
-    · intro he
-      obtain ⟨ha, t, ht1, ht2, ht3⟩ := h.eI (n, k) he
-      obtain ⟨k0, hk0, hk1⟩ := h.eT (n, k) he
-      refine ⟨by simp [rfSt], ⟨t, Or.inl ht1, ht2, ht3⟩, ⟨k0, hk0, hk1⟩, ?_,
-        fun r2 hr2 he2 e => h.zr (n, k) r2 (Ne.symm hr2) he he2 e.symm⟩
-      intro j sl hs ho
-      rw [rfSto_tks] at hs
-      rcases IssueTicket_get _ _ _ _ _ _ hs with ⟨-, rfl⟩ | ⟨-, hs'⟩
-      · intro e
-        have e2 : Term.tid n k = Term.tid n k0 := e.trans hk0
-        obtain ⟨-, rfl⟩ := Term.tid.inj e2
-        rw [hp] at hk1; cases hk1
-      · exact h.eN (n, k) he j sl hs' ho
-  · have hf : (rst (n, k)).ph ≠ .failed := by rw [hp]; simp
-    have hr := RHello_rej _ n k (sto n) m hp hpr (by rw [← RHandle_hello _ n k _ m hf hty]; exact c2)
-    rw [RHandle_hello _ n k _ m hf hty] at c1 c4 ⊢
-    rw [hr.1, c4, upd_self']
-    refine InvRT_shrink h n _ ?_ ?_
-    · rcases hr.2 with e | ⟨i, e⟩
-      · rw [e]; exact fun j sl hs _ => hs
-      · rw [e]; intro j sl hs ho; exact (RemoveSlot_get _ _ _ _ hs ho).1
-    · rcases hr.2 with e | ⟨i, e⟩ <;> rw [e] <;> rfl
-  · obtain ⟨sl0, hsl0, hocc0, htid0⟩ := find_facts _ _ _ hfi
-    have hslot : rhSlot (sto n) i0 = sl0 := by simp [rhSlot, List.getD_eq_getElem?_getD, hsl0]
-    rw [c1, c3, c4]
-    have hfresh : ∀ (j : Nat) (sl : Slot), (RemoveSlot (sto n) i0).tks[j]? = some sl → sl.occ = true →
-        sl.tid ≠ Term.tid n k := by
-      intro j sl hs ho e
-      obtain ⟨hs', -⟩ := RemoveSlot_get _ _ _ _ hs ho
-      obtain ⟨k1, hk1, hk2⟩ := h.sO n j sl hs' ho
-      obtain ⟨-, rfl⟩ := Term.tid.inj (e.symm.trans hk1)
-      rw [hp] at hk2; cases hk2
-    refine InvRT_done h n k _ _ _ (by simp [hp]) (by simp [rhSt]) ?_ ?_ ?_ ?_
-    · intro j sl hs ho
-      simp only [rhSto] at hs
-      rcases IssueTicket_get _ _ _ _ _ _ hs with ⟨-, rfl⟩ | ⟨-, hs'⟩
-      · left; exact ⟨rfl, rfl⟩
-      · right; exact (RemoveSlot_get _ _ _ _ hs' ho).1
-    · intro i j a b ha hb hao hbo hab
-      simp only [rhSto] at ha hb
-      refine IssueTicket_sU _ _ _ _ ?_ hfresh i j a b ha hb hao hbo hab
-      intro i' j' a' b' ha' hb' hao' hbo' hab'
-      exact h.sU n i' j' a' b' (RemoveSlot_get _ _ _ _ ha' hao').1 (RemoveSlot_get _ _ _ _ hb' hbo').1 hao' hbo' hab'
-    · intro x hx; left; simpa [rhSto, IssueTicket, RemoveSlot] using hx
-    · intro _
-      obtain ⟨k0, hk0, hk1⟩ := h.sO n i0 sl0 hsl0 hocc0
-      have htid' : (rhSt (rst (n, k)) n k (sto n) i0 m).tid = sl0.tid := by simp [rhSt, htid0]
-      refine ⟨by simp [rhSt], ⟨⟨sl0.tid, sl0.psk, sl0.peer⟩, Or.inl (h.sI n i0 sl0 hsl0 hocc0), htid'.symm, ?_⟩,
-        ⟨k0, by rw [htid']; exact hk0, hk1⟩, ?_, ?_⟩
-      · simp [rhSt, hslot]
-      · intro j sl hs ho
-        simp only [rhSto] at hs
-        rcases IssueTicket_get _ _ _ _ _ _ hs with ⟨-, rfl⟩ | ⟨-, hs'⟩
-        · intro e
-          rw [htid'] at e
-          have e' : Term.tid n k = sl0.tid := e
-          obtain ⟨-, rfl⟩ := Term.tid.inj (e'.trans hk0)
-          rw [hp] at hk1; cases hk1
-        · obtain ⟨hs'', hne⟩ := RemoveSlot_get _ _ _ _ hs' ho
-          intro e
-          rw [htid'] at e
-          exact hne (h.sU n j i0 sl sl0 hs'' hsl0 ho hocc0 e)
-      · intro r2 hr2 he2 e
-        have e1 : (rst r2).tid = sl0.tid := e.trans htid'
-        obtain ⟨k2, hk2, -⟩ := h.eT r2 he2
-        obtain ⟨hn2, -⟩ := Term.tid.inj ((hk2.symm.trans e1).trans hk0)
-        exact h.eN r2 he2 i0 sl0 (by rw [hn2]; exact hsl0) hocc0 e1.symm
+theorem CTake_uniq {sl : List Slot} (hu : UniqPeer sl) (peer : Nat) (al : Term) : UniqPeer (CTake sl peer al).sl := by
+  have hd : UniqPeer (CDropExpired sl) := by
+    intro i j a b ha hb hao hbo hab
+    simp only [CDropExpired, List.getElem?_map] at ha hb
+    cases hi : sl[i]? with
+    | none => rw [hi] at ha; simp at ha
+    | some x =>
+      cases hj : sl[j]? with
+      | none => rw [hj] at hb; simp at hb
+      | some y =>
+        rw [hi] at ha; rw [hj] at hb
+        simp only [Option.map_some, Option.some.injEq] at ha hb
+        have ex := dropExp_occ ha hao
+        have ey := dropExp_occ hb hbo
+        subst ex; subst ey
+        exact hu i j _ _ hi hj hao hbo hab
+  unfold CTake
+  cases hc : CFind (CDropExpired sl) peer al with
+  | none => simpa [hc] using hd
+  | some i => simpa [hc] using Uniq_remove_peer hd (some i)
 
-/-- As `InvRT_shrink`, for a store whose occupied slots equal old ones in everything the invariant reads (the
-expiry flag may differ). -/
-theorem InvRT_shrink2 {rst sto issued} (h : InvRT rst sto issued) (n : Nat) (stn : Store)
-    (hget : ∀ (j : Nat) (sl : Slot), stn.tks[j]? = some sl → sl.occ = true →
-      ∃ sl' : Slot, (sto n).tks[j]? = some sl' ∧ sl'.occ = true ∧ sl'.tid = sl.tid ∧ sl'.psk = sl.psk ∧ sl'.peer = sl.peer)
-    (hpk : stn.pkc = (sto n).pkc) :
-    InvRT rst (upd sto n stn) (fun t => issued t ∨ t ∈ ([] : List Tk)) := by
-  have hg : ∀ m (j : Nat) (sl : Slot), (upd sto n stn m).tks[j]? = some sl → sl.occ = true →
-      ∃ sl' : Slot, (sto m).tks[j]? = some sl' ∧ sl'.occ = true ∧ sl'.tid = sl.tid ∧ sl'.psk = sl.psk ∧
-        sl'.peer = sl.peer := by
-    intro m j sl hs ho
-    by_cases hm : m = n
-    · subst hm; rw [upd_same] at hs; exact hget j sl hs ho
-    · rw [upd_ne _ _ _ _ hm] at hs; exact ⟨sl, hs, ho, rfl, rfl, rfl⟩
-  have hp : ∀ m, (upd sto n stn m).pkc = (sto m).pkc := by
-    intro m
-    by_cases hm : m = n
-    · subst hm; rw [upd_same]; exact hpk
-    · rw [upd_ne _ _ _ _ hm]
-  have mono : ∀ t, issued t → (issued t ∨ t ∈ ([] : List Tk)) := fun t ht => Or.inl ht
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro m i sl hs ho
-    obtain ⟨sl', h1, h2, h3, h4, h5⟩ := hg m i sl hs ho
-    have := h.sI m i sl' h1 h2
-    rw [h3, h4, h5] at this
-    exact mono _ this
-  · intro m i sl hs ho
-    obtain ⟨sl', h1, h2, h3, -, -⟩ := hg m i sl hs ho
-    obtain ⟨k, hk1, hk2⟩ := h.sO m i sl' h1 h2
-    exact ⟨k, h3 ▸ hk1, hk2⟩
-  · intro m i j a b ha hb hao hbo hab
-    obtain ⟨a', h1, h2, h3, -, -⟩ := hg m i a ha hao
-    obtain ⟨b', h1', h2', h3', -, -⟩ := hg m j b hb hbo
-    exact h.sU m i j a' b' h1 h1' h2 h2' (by rw [h3, h3']; exact hab)
-  · intro r hr
-    obtain ⟨a, t, ht1, ht2, ht3⟩ := h.eI r hr
-    exact ⟨a, t, mono _ ht1, ht2, ht3⟩
-  · exact h.eT
-  · intro r hr i sl hs ho
-    obtain ⟨sl', h1, h2, h3, -, -⟩ := hg r.1 i sl hs ho
-    rw [← h3]; exact h.eN r hr i sl' h1 h2
-  · intro m hh hm; rw [hp] at hm; exact h.ch m hh hm
-  · exact h.fR
-  · exact h.zr
+theorem UniqPeer_modify {sl : List Slot} (hu : UniqPeer sl) (i : Nat) (f : Slot → Slot)
+    (hf : ∀ s, (f s).occ = s.occ ∧ (f s).peer = s.peer) : UniqPeer (sl.modify i f) := by
+  intro j k a b ha hb hao hbo hab
+  rw [List.getElem?_modify] at ha hb
+  cases hj : sl[j]? with
+  | none => rw [hj] at ha; simp at ha
+  | some x =>
+    cases hk : sl[k]? with
+    | none => rw [hk] at hb; simp at hb
+    | some y =>
+      rw [hj] at ha; rw [hk] at hb
+      have ha : (if i = j then f x else x) = a := Option.some.inj ha
+      have hb : (if i = k then f y else y) = b := Option.some.inj hb
+      have hx : ∀ z : Slot, (if i = j then f z else z).occ = z.occ ∧ (if i = j then f z else z).peer = z.peer := by
+        intro z; split
+        · exact hf z
+        · exact ⟨rfl, rfl⟩
+      have hy : ∀ z : Slot, (if i = k then f z else z).occ = z.occ ∧ (if i = k then f z else z).peer = z.peer := by
+        intro z; split
+        · exact hf z
+        · exact ⟨rfl, rfl⟩
+      rw [← ha] at hao hab; rw [← hb] at hbo hab
+      rw [(hx x).1] at hao; rw [(hy y).1] at hbo
+      rw [(hx x).2, (hy y).2] at hab
+      exact hu j k x y hj hk hao hbo hab
 
-theorem InvRT_rAnswer {rst sto issued} (h : InvRT rst sto issued) (n k : Nat) (kind : KRes) :
-    InvRT (upd rst (n, k) (RKey (rst (n, k)) n k (sto n) kind).st) sto issued := by
-  rcases RKey_cases (rst (n, k)) n k (sto n) kind with ⟨c1, -, -, -, -⟩ | ⟨hp, c1, -, -, -, -⟩
-    | ⟨hp, hk, c1, -, -, -, -⟩
-  · rw [c1, upd_self']; exact h
-  · have hF : Frame (rst (n, k)) (RKey (rst (n, k)) n k (sto n) kind).st := by
-      rw [c1]; exact ⟨by simp [hp], by simp, rfl, rfl, rfl, fun a => a, by intro e; simp at e⟩
-    have := InvRT_frame h (n, k) _ hF
-    rwa [issued_nil] at this
-  · have hF : Frame (rst (n, k)) (RKey (rst (n, k)) n k (sto n) kind).st := by
-      rw [c1]; exact ⟨by simp [hp], by simp [rkSt], rfl, rfl, rfl, fun a => a, by intro _; simp [rkSt, rkReply]⟩
-    have := InvRT_frame h (n, k) _ hF
-    rwa [issued_nil] at this
+theorem UniqPeer_empty (sl : List Slot) (h : ∀ s ∈ sl, s.occ = false) : UniqPeer sl := by
+  intro i j a b ha _ hao
+  rw [h a (List.mem_of_getElem? ha)] at hao; cases hao
 
-theorem InvRT_expire {rst sto issued} (h : InvRT rst sto issued) (n i : Nat) :
-    InvRT rst (upd sto n { sto n with tks := (sto n).tks.modify i (fun sl => { sl with exp := true }) })
-      (fun t => issued t ∨ t ∈ ([] : List Tk)) := by
-  refine InvRT_shrink2 h n _ ?_ rfl
-  intro j sl hs ho
-  simp only [List.getElem?_modify] at hs
-  cases hj : (sto n).tks[j]? with
-  | none => simp [hj] at hs
-  | some a =>
-    simp only [hj, Option.map_some] at hs
-    refine ⟨a, rfl, ?_⟩
-    have hsl : sl = if i = j then { a with exp := true } else a := by
-      simp at hs; exact hs.symm
-    split at hsl <;> (subst hsl; simp_all)
+theorem UniqTids_modify {sl : List Slot} (hu : UniqTids sl) (i : Nat) (f : Slot → Slot)
+    (hf : ∀ s, (f s).occ = s.occ ∧ (f s).tid = s.tid) : UniqTids (sl.modify i f) := by
+  intro j k a b ha hb hao hbo hab
+  rw [List.getElem?_modify] at ha hb
+  cases hj : sl[j]? with
+  | none => rw [hj] at ha; simp at ha
+  | some x =>
+    cases hk : sl[k]? with
+    | none => rw [hk] at hb; simp at hb
+    | some y =>
+      rw [hj] at ha; rw [hk] at hb
+      have ha : (if i = j then f x else x) = a := Option.some.inj ha
+      have hb : (if i = k then f y else y) = b := Option.some.inj hb
+      have hx : ∀ z : Slot, (if i = j then f z else z).occ = z.occ ∧ (if i = j then f z else z).tid = z.tid := by
+        intro z; split
+        · exact hf z
+        · exact ⟨rfl, rfl⟩
+      have hy : ∀ z : Slot, (if i = k then f z else z).occ = z.occ ∧ (if i = k then f z else z).tid = z.tid := by
+        intro z; split
+        · exact hf z
+        · exact ⟨rfl, rfl⟩
+      rw [← ha] at hao hab; rw [← hb] at hbo hab
+      rw [(hx x).1] at hao; rw [(hy y).1] at hbo
+      rw [(hx x).2, (hy y).2] at hab
+      exact hu j k x y hj hk hao hbo hab
 
-/-- The invariant holds in every reachable state. -/
-theorem InvRT_reach {K : Nat} {g : G} (hr : Reach K g) : InvRT g.rst g.sto g.issued := by
+theorem mem_modify {sl : List Slot} {i : Nat} {f : Slot → Slot} {x : Slot} (h : x ∈ sl.modify i f) :
+    x ∈ sl ∨ ∃ y ∈ sl, x = f y := by
+  obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp h
+  rw [List.getElem?_modify] at hj
+  cases hs : sl[j]? with
+  | none => rw [hs] at hj; simp at hj
+  | some y =>
+    rw [hs] at hj
+    have hj : (if i = j then f y else y) = x := Option.some.inj hj
+    split at hj
+    · exact Or.inr ⟨y, List.mem_of_getElem? hs, hj.symm⟩
+    · exact Or.inl (hj ▸ List.mem_of_getElem? hs)
+
+/-- The store invariants, on the components of the global state they concern. -/
+structure StoreInv (rst : Nat × Nat → RState) (sto : Nat → Store) (cli : Nat → List Slot) (issued : Tk → Prop) :
+    Prop where
+  sU : ∀ n, UniqTids (sto n).tks
+  sI : ∀ n x, x ∈ (sto n).tks → x.occ = true → issued (TicketOf x)
+  ch : ∀ n h, h ∈ (sto n).pkc → ∃ k, (rst (n, k)).ph = .done ∧ (rst (n, k)).hpk = h
+  cU : ∀ n, UniqPeer (cli n)
+
+theorem StoreInv_init (K C : Nat) : StoreInv (G0 K C).rst (G0 K C).sto (G0 K C).cli (G0 K C).issued := by
+  have h1 : ∀ s ∈ List.replicate K NoSlot, s.occ = false := by
+    intro s hs; rw [(List.mem_replicate.mp hs).2]; rfl
+  have h2 : ∀ s ∈ List.replicate C NoSlot, s.occ = false := by
+    intro s hs; rw [(List.mem_replicate.mp hs).2]; rfl
+  refine ⟨fun n => ?_, fun n x hx ho => ?_, fun n h hh => ?_, fun n => ?_⟩
+  · intro i j a b ha _ hao; rw [h1 a (List.mem_of_getElem? ha)] at hao; cases hao
+  · rw [h1 x hx] at ho; cases ho
+  · simp [G0] at hh
+  · exact UniqPeer_empty _ h2
+
+theorem RHandle_done (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) (hd : st.ph = .done) :
+    (RHandle st n k sto m cs).st = st := by
+  rcases RHandle_cases st n k sto m cs with ⟨c, -⟩ | ⟨h, -⟩ | ⟨h, -⟩ | ⟨h, -⟩ | ⟨h, -⟩ | ⟨h, -⟩ | ⟨h, -⟩ | ⟨h, -⟩ |
+    ⟨h, -⟩ | ⟨h, -⟩ | ⟨h, -⟩
+  · exact c
+  all_goals (rw [hd] at h; simp at h)
+
+theorem RKey_done (st : RState) (n k : Nat) (sto : Store) (kind : KRes) (hd : st.ph = .done) :
+    (RKey st n k sto kind).st = st := by
+  rcases RKey_cases st n k sto kind with ⟨c, -⟩ | ⟨h, -⟩ | ⟨h, -⟩
+  · exact c
+  all_goals (rw [hd] at h; simp at h)
+
+theorem keep_upd (rst : Nat × Nat → RState) (s : Nat × Nat) (st' : RState) (h : (rst s).ph = .done → st' = rst s) :
+    ∀ r, (rst r).ph = .done → (upd rst s st' r).ph = .done ∧ (upd rst s st' r).hpk = (rst r).hpk := by
+  intro r hr
+  by_cases e : r = s
+  · subst e; rw [upd_same, h hr]; exact ⟨hr, rfl⟩
+  · rw [upd_ne _ _ _ _ e]; exact ⟨hr, rfl⟩
+
+theorem StoreInv_ch_keep {rst rst' : Nat × Nat → RState} {sto : Nat → Store}
+    (hk : ∀ r, (rst r).ph = .done → (rst' r).ph = .done ∧ (rst' r).hpk = (rst r).hpk)
+    (h : ∀ n h, h ∈ (sto n).pkc → ∃ k, (rst (n, k)).ph = .done ∧ (rst (n, k)).hpk = h) :
+    ∀ n h, h ∈ (sto n).pkc → ∃ k, (rst' (n, k)).ph = .done ∧ (rst' (n, k)).hpk = h := by
+  intro n hh hm
+  obtain ⟨k, h1, h2⟩ := h n hh hm
+  obtain ⟨a, b⟩ := hk _ h1
+  exact ⟨k, a, b.trans h2⟩
+
+theorem StoreInv_step {g g' : G} (h : StoreInv g.rst g.sto g.cli g.issued) (hs : Step g g') :
+    StoreInv g'.rst g'.sto g'.cli g'.issued := by
+  cases hs with
+  | iStart s peer al short take _ _ _ =>
+    refine ⟨h.sU, h.sI, h.ch, fun n => ?_⟩
+    show UniqPeer (upd g.cli s.1 _ n)
+    by_cases e : n = s.1
+    · subst e; rw [upd_same]
+      by_cases ht : take = true
+      · simp only [ht, ite_true]; exact CTake_uniq (h.cU _) _ _
+      · simp only [ht, ite_false]; exact h.cU _
+    · rw [upd_ne _ _ _ _ e]; exact h.cU n
+  | iRecv s m _ _ => exact h
+  | iAnswer s kind _ _ => exact h
+  | iRetrans s _ _ => exact h
+  | iShed s _ _ => exact h
+  | iAccept s tids _ _ _ _ _ =>
+    refine ⟨h.sU, h.sI, h.ch, fun n => ?_⟩
+    show UniqPeer (upd g.cli s.1 _ n)
+    by_cases e : n = s.1
+    · subst e; rw [upd_same]; exact CInsertAll_uniq _ (h.cU _)
+    · rw [upd_ne _ _ _ _ e]; exact h.cU n
+  | rRecv s m cs _ _ =>
+    obtain ⟨hu, hsI, hch⟩ := RHandle_sto (g.rst s) s.1 s.2 (g.sto s.1) m cs
+    refine ⟨fun n => ?_, fun n x hx ho => ?_, fun n hh hm => ?_, h.cU⟩
+    · show UniqTids (upd g.sto s.1 _ n).tks
+      by_cases e : n = s.1
+      · subst e; rw [upd_same]; exact hu (h.sU _)
+      · rw [upd_ne _ _ _ _ e]; exact h.sU n
+    · show g.issued (TicketOf x) ∨ _
+      by_cases e : n = s.1
+      · subst e
+        have hx' : x ∈ (upd g.sto s.1 (RHandle (g.rst s) s.1 s.2 (g.sto s.1) m cs).sto s.1).tks := hx
+        rw [upd_same] at hx'
+        rcases hsI x hx' ho with h1 | h1
+        · exact Or.inl (h.sI _ x h1 ho)
+        · exact Or.inr h1
+      · have hx' : x ∈ (upd g.sto s.1 (RHandle (g.rst s) s.1 s.2 (g.sto s.1) m cs).sto n).tks := hx
+        rw [upd_ne _ _ _ _ e] at hx'
+        exact Or.inl (h.sI n x hx' ho)
+    · have hm' : hh ∈ (upd g.sto s.1 (RHandle (g.rst s) s.1 s.2 (g.sto s.1) m cs).sto n).pkc := hm
+      by_cases e : n = s.1
+      · subst e
+        rw [upd_same] at hm'
+        rcases hch hh hm' with h1 | ⟨hf, hd, hp, rfl⟩
+        · obtain ⟨k, a, b⟩ := h.ch _ hh h1
+          obtain ⟨a', b'⟩ := keep_upd g.rst s (RHandle (g.rst s) s.1 s.2 (g.sto s.1) m cs).st
+            (fun hd => RHandle_done _ _ _ _ _ _ hd) (s.1, k) a
+          exact ⟨k, a', b'.trans b⟩
+        · refine ⟨s.2, ?_, ?_⟩
+          · show (upd g.rst s _ (s.1, s.2)).ph = .done
+            rw [upd_same]; exact hd
+          · show (upd g.rst s _ (s.1, s.2)).hpk = _
+            rw [upd_same]; exact hp
+      · rw [upd_ne _ _ _ _ e] at hm'
+        obtain ⟨k, a, b⟩ := h.ch n hh hm'
+        have hne : (n, k) ≠ s := fun e' => e (by rw [← e'])
+        exact ⟨k, by show (upd g.rst s _ (n, k)).ph = .done; rw [upd_ne _ _ _ _ hne]; exact a,
+               by show (upd g.rst s _ (n, k)).hpk = _; rw [upd_ne _ _ _ _ hne]; exact b⟩
+  | rAnswer s kind _ _ =>
+    exact ⟨h.sU, h.sI, StoreInv_ch_keep (keep_upd g.rst s _ (fun hd => RKey_done _ _ _ _ _ hd)) h.ch, h.cU⟩
+  | rRetrans s _ _ => exact h
+  | rShed s _ =>
+    refine ⟨h.sU, h.sI, StoreInv_ch_keep (keep_upd g.rst s _ ?_) h.ch, h.cU⟩
+    intro hd; simp [RShed, hd]
+  | expire n i sl _ _ _ _ =>
+    refine ⟨fun m => ?_, fun m x hx ho => ?_, fun m hh hm => h.ch m hh ?_, h.cU⟩
+    · show UniqTids (upd g.sto n _ m).tks
+      by_cases e : m = n
+      · subst e; rw [upd_same]; exact UniqTids_modify (h.sU _) _ _ (fun _ => ⟨rfl, rfl⟩)
+      · rw [upd_ne _ _ _ _ e]; exact h.sU m
+    · have hx' : x ∈ (upd g.sto n { g.sto n with tks := (g.sto n).tks.modify i (fun sl => { sl with exp := true }) } m).tks := hx
+      by_cases e : m = n
+      · subst e
+        rw [upd_same] at hx'
+        rcases mem_modify hx' with h1 | ⟨y, hy, rfl⟩
+        · exact h.sI _ x h1 ho
+        · exact h.sI _ y hy ho
+      · rw [upd_ne _ _ _ _ e] at hx'; exact h.sI m x hx' ho
+    · by_cases e : m = n
+      · subst e; simpa [stepExpire, upd_same] using hm
+      · simpa [stepExpire, upd_ne _ _ _ _ e] using hm
+  | expireC n i sl _ _ _ _ =>
+    refine ⟨h.sU, h.sI, h.ch, fun m => ?_⟩
+    show UniqPeer (upd g.cli n _ m)
+    by_cases e : m = n
+    · subst e; rw [upd_same]; exact UniqPeer_modify (h.cU _) _ _ (fun _ => ⟨rfl, rfl⟩)
+    · rw [upd_ne _ _ _ _ e]; exact h.cU m
+  | «export» n mx _ => exact h
+  | restore n drop _ =>
+    refine ⟨h.sU, h.sI, h.ch, fun m => ?_⟩
+    show UniqPeer (upd g.cli n _ m)
+    by_cases e : m = n
+    · subst e; rw [upd_same]; exact CInsertAll_uniq _ (h.cU _)
+    · rw [upd_ne _ _ _ _ e]; exact h.cU m
+  | restart n _ =>
+    refine ⟨h.sU, h.sI, h.ch, fun m => ?_⟩
+    show UniqPeer (upd g.cli n _ m)
+    by_cases e : m = n
+    · subst e; rw [upd_same]
+      apply UniqPeer_empty; intro x hx; obtain ⟨y, -, rfl⟩ := List.mem_map.mp hx; rfl
+    · rw [upd_ne _ _ _ _ e]; exact h.cU m
+
+theorem StoreInv_reach {K C : Nat} {g : G} (hr : Reach K C g) : StoreInv g.rst g.sto g.cli g.issued := by
   induction hr with
-  | init => exact InvRT_init K
-  | step _ hs ih =>
-    cases hs with
-    | startFull => exact ih
-    | startResume => exact ih
-    | iRecv => exact ih
-    | iAnswer => exact ih
-    | iRetransmit => exact ih
-    | iAcceptFull => exact ih
-    | iAcceptResumed => exact ih
-    | rRecv s m _ _ =>
-      obtain ⟨n, k⟩ := s
-      exact InvRT_rRecv ih n k m
-    | rAnswer s kind _ =>
-      obtain ⟨n, k⟩ := s
-      exact InvRT_rAnswer ih n k kind
-    | expire n i =>
-      have := InvRT_expire ih n i
-      rwa [issued_nil] at this
+  | init => exact StoreInv_init K C
+  | step _ hs ih => exact StoreInv_step ih hs
 
-/-! ## The properties of `Handshake.tla` -/
+/-- Stored ticket ids of every server store are pairwise distinct, whatever the generator returns. -/
+theorem uniqueIds {K C : Nat} {g : G} (h : Reach K C g) (n i j : Nat) (a b : Slot) (ha : (g.sto n).tks[i]? = some a)
+    (hb : (g.sto n).tks[j]? = some b) (hao : a.occ = true) (hbo : b.occ = true) (hab : a.tid = b.tid) : i = j :=
+  (StoreInv_reach h).sU n i j a b ha hb hao hbo hab
 
-/-- TicketsIssued: every occupied slot of every ticket store is a ticket that was issued. -/
-theorem ticketsIssued {K : Nat} {g : G} (h : Reach K g) (n i : Nat) (sl : Slot)
-    (hs : (g.sto n).tks[i]? = some sl) (ho : sl.occ = true) : g.issued ⟨sl.tid, sl.psk, sl.peer⟩ :=
-  (InvRT_reach h).sI n i sl hs ho
+/-- Every occupied slot of a server store is a ticket a responder issued. -/
+theorem ticketsIssued {K C : Nat} {g : G} (h : Reach K C g) (n i : Nat) (sl : Slot) (hs : (g.sto n).tks[i]? = some sl)
+    (ho : sl.occ = true) : g.issued ⟨sl.tid, sl.psk, sl.peer, sl.al, sl.ad, sl.cr⟩ :=
+  (StoreInv_reach h).sI n sl (List.mem_of_getElem? hs) ho
 
-/-- ZeroRttOnce: no two responder sessions accepted a Hello with the same ticket id. -/
-theorem zeroRttOnce {K : Nat} {g : G} (h : Reach K g) (r1 r2 : Nat × Nat) (hne : r1 ≠ r2)
-    (h1 : (g.rst r1).early ≠ nil) (h2 : (g.rst r2).early ≠ nil) : (g.rst r1).tid ≠ (g.rst r2).tid :=
-  (InvRT_reach h).zr r1 r2 hne h1 h2
-
-/-- NoEarly, second half: a responder holding early keys authenticated, and the keys come from a ticket in the
-issued ledger with the ticket id of its Hello. -/
-theorem earlyTied {K : Nat} {g : G} (h : Reach K g) (r : Nat × Nat) (he : (g.rst r).early ≠ nil) :
-    (g.rst r).auth = true ∧ ∃ t, g.issued t ∧ t.tid = (g.rst r).tid ∧
-      (g.rst r).early = early (ckpsk t.psk) (g.rst r).thh :=
-  (InvRT_reach h).eI r he
-
-/-- CacheAuthenticated: a prekey hash in a node's cache belongs to a finished responder session of that node. -/
-theorem cacheAuthenticated {K : Nat} {g : G} (h : Reach K g) (n : Nat) (hp : Term) (hm : hp ∈ (g.sto n).pkc) :
+/-- A prekey hash is in a cache only if a finished responder session of that node used that prekey. -/
+theorem cacheAuthenticated {K C : Nat} {g : G} (h : Reach K C g) (n : Nat) (hp : Term) (hm : hp ∈ (g.sto n).pkc) :
     ∃ k, (g.rst (n, k)).ph = .done ∧ (g.rst (n, k)).hpk = hp :=
-  (InvRT_reach h).ch n hp hm
+  (StoreInv_reach h).ch n hp hm
 
-/-- The ticket id of an accepted Hello is not in its node's store: the slot was removed and nothing re-adds it. -/
-theorem acceptedGone {K : Nat} {g : G} (h : Reach K g) (r : Nat × Nat) (he : (g.rst r).early ≠ nil) (i : Nat)
-    (sl : Slot) (hs : (g.sto r.1).tks[i]? = some sl) (ho : sl.occ = true) : sl.tid ≠ (g.rst r).tid :=
-  (InvRT_reach h).eN r he i sl hs ho
+/-- A client store holds at most one ticket per peer. -/
+theorem clientOnePerPeer {K C : Nat} {g : G} (h : Reach K C g) (n i j : Nat) (a b : Slot)
+    (ha : (g.cli n)[i]? = some a) (hb : (g.cli n)[j]? = some b) (hao : a.occ = true) (hbo : b.occ = true)
+    (hab : a.peer = b.peer) : i = j :=
+  (StoreInv_reach h).cU n i j a b ha hb hao hbo hab
 
+#audit_axioms Vinc.Hs.uniqueIds
 #audit_axioms Vinc.Hs.ticketsIssued
-#audit_axioms Vinc.Hs.zeroRttOnce
-#audit_axioms Vinc.Hs.earlyTied
 #audit_axioms Vinc.Hs.cacheAuthenticated
-#audit_axioms Vinc.Hs.acceptedGone
+#audit_axioms Vinc.Hs.clientOnePerPeer
 
 end Vinc.Hs

@@ -40,19 +40,30 @@ core == <<n, first, last, stack, failed, released>>
 vars == <<n, first, last, stack, failed, released, len, G, filled, oracle, errk, pos, i>>
 
 RV == INSTANCE RangeVerifier WITH MaxGroups <- 6
+VB == INSTANCE VerifierBytes WITH Extra <- 0, cfg <- 0, its <- 0, vs <- 0, pos <- 0, rem <- 0, stop <- FALSE, j <- 0
+U == INSTANCE U64
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/verifier.ndjson")
 
 Min(a, b) == IF a < b THEN a ELSE b
 
+(* the layout of the current run as VerifierBytes.tla has it: the value length, the group length and parent length
+   in bytes, a usize of 64 bits (the host of the trace) and the number of groups *)
+Lay == [len |-> U!W(len), g |-> U!W(G), p |-> U!W(64), bits |-> 64, n |-> VB!L!GroupsG(U!W(len), U!W(G))]
+
+(* the verifier state as Plan and NextLen read it: the bytes buffered, the failure, and the node on top *)
+VsOf(st, f, fl) ==
+    [filled |-> U!W(fl), failed |-> IF f THEN "failed" ELSE "none",
+     stack |-> IF st = <<>> THEN <<>> ELSE <<[lo |-> U!W(Head(st).lo), hi |-> U!W(Head(st).hi)]>>]
+
 (* Layout::group_size: the bytes of group g *)
-GroupSize(g) == IF g * G >= len THEN 0 ELSE Min(G, len - g * G)
+GroupSize(g) == U!Val(VB!L!GroupSizeG(U!W(len), U!W(G), U!W(g)))
 
 (* how many bytes the node needs as its stream item *)
 NodeNeed(nd) == IF nd.hi - nd.lo = 1 THEN GroupSize(nd.lo) ELSE 64
 
 (* next_len: the bytes still needed for the current item, -1 when complete or failed *)
-NL(st, f, fl) == IF f \/ st = <<>> THEN -1 ELSE NodeNeed(Head(st)) - fl
+NL(st, f, fl) == VB!NextLen(Lay, VsOf(st, f, fl))
 
 (* the pre-order position of the parent [lo, hi) among the parents of the tree [a, b), counted from the
    definition: the node itself first, then every parent of the left subtree, then those of the right one *)
@@ -64,14 +75,14 @@ Pos(a, b, lo, hi) ==
          IN IF hi <= m THEN 1 + Pos(a, m, lo, hi) ELSE 1 + Parents(a, m) + Pos(m, b, lo, hi)
 
 Init ==
-    /\ i = 1
+    /\ i = 0
     /\ n = 0 /\ first = 0 /\ last = 0 /\ stack = <<>> /\ failed = FALSE /\ released = <<>>
     /\ len = 0 /\ G = 1024 /\ filled = 0 /\ oracle = [k \in {} |-> 0] /\ errk = "none" /\ pos = 0
 
 (* a new run: the layout, the requested group range and the initial stack, derived from the request *)
 Begin ==
-    /\ i <= Len(Trace)
-    /\ LET ev == Trace[i]
+    /\ i = 0
+    /\ \E k \in 1..Len(Trace) : Trace[k].t = "vrun" /\ LET ev == Trace[k]
            g == 1024 * 2 ^ ev.log
            cnt == (ev.len + g - 1) \div g
        IN /\ ev.t = "vrun"
@@ -83,16 +94,16 @@ Begin ==
           /\ ev.first = first' /\ ev.last = last'
           /\ stack' = IF first' < last' THEN <<[cv |-> ev.root, lo |-> 0, hi |-> cnt]>> ELSE <<>>
           /\ failed' = FALSE /\ released' = <<>>
-          /\ filled' = 0 /\ oracle' = [k \in {} |-> 0] /\ errk' = "none" /\ pos' = 0
-          /\ i' = i + 1
+          /\ filled' = 0 /\ oracle' = [kk \in {} |-> 0] /\ errk' = "none" /\ pos' = 0
+          /\ i' = k + 1
 
 (* one call of feed *)
 FeedEv ==
-    /\ i <= Len(Trace)
+    /\ i >= 1 /\ i <= Len(Trace)
     /\ LET ev == Trace[i]
-           need == IF stack = <<>> THEN 0 ELSE NodeNeed(Head(stack))
+           pl == VB!Plan(Lay, VsOf(stack, failed, filled), U!W(ev.ilen))
            nlm == NL(stack, failed, filled)
-           fast == filled = 0 /\ nlm >= 0 /\ ev.ilen >= nlm
+           fast == pl.kind = "item" /\ pl.fast
        IN /\ ev.t = "vfeed"
           /\ ev.pos = pos
           /\ pos' = IF ev.consumed >= 0 THEN pos + ev.consumed ELSE pos
@@ -102,24 +113,24 @@ FeedEv ==
           /\ ev.rd = (IF ev.out = "release" THEN ev.item.d ELSE 0)
           /\ UNCHANGED <<len, G>>
           /\ i' = i + 1
-          /\ IF failed
+          /\ IF pl.kind = "sticky"
              THEN \* a failed verifier repeats its error and changes nothing
                   /\ ev.out = "sticky" /\ ev.err = errk /\ ev.consumed = -1 /\ ev.off = -1 /\ ev.ptr = "none"
                   /\ ev.nl = -1 /\ ev.cmp = FALSE
                   /\ UNCHANGED <<core, filled, oracle, errk>>
-             ELSE IF ev.ilen = 0
+             ELSE IF pl.kind = "empty"
              THEN /\ ev.out = "empty" /\ ev.err = "none" /\ ev.consumed = 0 /\ ev.off = -1 /\ ev.ptr = "none"
                   /\ ev.nl = nlm /\ ev.cmp = (stack = <<>>)
                   /\ UNCHANGED <<core, filled, oracle, errk>>
-             ELSE IF stack = <<>>
+             ELSE IF pl.kind = "toomuch"
              THEN /\ ev.out = "toomuch" /\ ev.err = "toomuch" /\ ev.consumed = -1 /\ ev.off = -1 /\ ev.ptr = "none"
                   /\ ev.nl = -1 /\ ev.cmp = TRUE
                   /\ UNCHANGED <<core, filled, oracle, errk>>
-             ELSE LET take == IF fast THEN need ELSE Min(ev.ilen, need - filled)
-                  IN IF filled + take < need
+             ELSE LET take == U!Val(pl.take)
+                  IN IF pl.kind = "partial"
                      THEN \* the item is still incomplete: the bytes are buffered
                           /\ ev.out = "more" /\ ev.err = "none" /\ ev.consumed = take /\ ev.off = -1 /\ ev.ptr = "none"
-                          /\ filled' = filled + take
+                          /\ filled' = U!Val(pl.filled)
                           /\ ev.nl = NL(stack, failed, filled') /\ ev.cmp = FALSE
                           /\ UNCHANGED <<core, oracle, errk>>
                      ELSE LET top == Head(stack)
@@ -147,11 +158,12 @@ FeedEv ==
                                              /\ ev.ptr = IF fast THEN "input" ELSE "buf"
                                         ELSE /\ ev.out = "parent" /\ ev.off = -1 /\ ev.ptr = "none"
 
-Done == i > Len(Trace) /\ UNCHANGED vars
+\* a run ends where the next one begins, or at the end of the trace
+RunEnd == i >= 1 /\ (i > Len(Trace) \/ (i <= Len(Trace) /\ Trace[i].t = "vrun")) /\ UNCHANGED vars
 
-TNext == Begin \/ FeedEv \/ Done
+TNext == Begin \/ FeedEv \/ RunEnd
 
-TraceSpec == Init /\ [][TNext]_vars /\ WF_vars(TNext)
+TraceSpec == Init /\ [][TNext]_vars
 
 (* the safety facts of the model hold on every recorded state, for the recorded roots *)
 Inv ==
@@ -159,6 +171,4 @@ Inv ==
     /\ Len(stack) <= 55
     /\ filled < 1 \/ (stack # <<>> /\ filled < NodeNeed(Head(stack)))
 
-(* the whole recorded trace is a behaviour of the model *)
-TraceAccepted == <>(i = Len(Trace) + 1)
 =================================================================================

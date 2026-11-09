@@ -1,14 +1,14 @@
 import Vinc.HandshakeInv
 
 /-!
-# No early acceptance and the prekey cache, for unboundedly many sessions
+# No early acceptance, for unboundedly many sessions
 
 A second inductive invariant of the system of `HandshakeSys`, proved over every reachable state, for any number of
 sessions, tickets and any store capacity:
 
 * a session that raised Established (or, for an initiator, that signed) authenticated its peer first: the initiator
-  only after the responder's signature verified, the responder only after the Finish verified or the binder of the
-  ticket verified.
+  only after the responder's signature (or, resumed, the confirmation of the reply) verified, the responder only after
+  the Finish verified or the binder of the ticket verified.
 -/
 
 namespace Vinc.Hs
@@ -19,7 +19,7 @@ structure Inv2 (g : G) : Prop where
   rEst : ∀ s, (g.rst s).est = true → (g.rst s).auth = true
   rClean : ∀ s, ((g.rst s).ph = .idle ∨ (g.rst s).ph = .sign ∨ (g.rst s).ph = .finish) → (g.rst s).est = false
 
-theorem Inv2_init (K : Nat) : Inv2 (G0 K) := by
+theorem Inv2_init (K C : Nat) : Inv2 (G0 K C) := by
   refine ⟨?_, ?_, ?_⟩ <;> intro s <;> simp [G0]
 
 theorem Inv2_congr {g g' : G} (hi : g'.ist = g.ist) (hr : g'.rst = g.rst) (h : Inv2 g) : Inv2 g' := by
@@ -51,48 +51,62 @@ theorem rupd2 {g g' : G} (h : Inv2 g) (s : Nat × Nat) (st' : RState)
 
 theorem iStep2 {g g' : G} (h1 : Inv1 g) (h : Inv2 g) (hs : Step g g') : Inv2 g' := by
   cases hs with
-  | startFull s peer short _ hn _ => exact iupd2 h s _ rfl rfl (by simp [IBeginFull, Ok])
-  | startResume s tk _ hn _ => exact iupd2 h s _ rfl rfl (by simp [IBeginResume, Ok])
+  | iStart s peer al short take _ hn _ =>
+    refine iupd2 h s (INew s.1 s.2 peer al short (if take then (CTake (g.cli s.1) peer al).tk else none)).st
+      (by cases take <;> rfl) (by cases take <;> rfl) ?_
+    unfold INew
+    cases (if take then (CTake (g.cli s.1) peer al).tk else none) <;> simp [IBeginFull, IBeginResume, Ok]
   | iRecv s m _ hd =>
     have hl := h.iEst s
     refine iupd2 h s _ rfl rfl ?_
     rcases IHandle_cases (g.ist s) s.1 m with ⟨c1, -⟩ | ⟨-, c1, -⟩ | ⟨-, -, -, c1, -⟩ | ⟨-, -, -, -, c1, -⟩
-      | ⟨-, -, c1, -⟩ | ⟨-, -, -, c1, -⟩
+      | ⟨-, -, -, c1, -⟩ | ⟨-, -, -, -, c1, -⟩ | ⟨-, -, -, c1, -⟩
     · rw [c1]; exact hl
     · rw [c1]; exact ⟨hl.1, by simp⟩
     · rw [c1]; exact ⟨hl.1, by simp⟩
     · rw [c1]; exact hl
-    · rw [c1]; simp [rrDone]
-    · rw [c1]; simp [rrFall, IBeginFull, Ok]
-  | iAnswer s kind _ =>
+    · rw [c1]; simp [IResumed]
+    · rw [c1]; simp [IResumed]
+    · rw [c1]; simp [rrFall, IBeginFull, Ok]; exact hl.1
+  | iAnswer s kind _ _ =>
     have hl := h.iEst s
     refine iupd2 h s _ rfl rfl ?_
-    rcases IKey_cases (g.ist s) s.1 kind with ⟨c1, -⟩ | ⟨-, c1, -⟩ | ⟨-, -, -, -, -, -, c1, -⟩ | ⟨hp, -, c1, -⟩
+    rcases IKey_cases (g.ist s) s.1 kind with ⟨c1, -⟩ | ⟨-, c1, -⟩ | ⟨-, -, -, -, -, -, -, c1, -⟩ | ⟨hp, -, c1, -⟩
     · rw [c1]; exact hl
     · rw [c1]; exact ⟨hl.1, by simp⟩
     · rw [c1]; simp [ikSignSt]
     · rw [c1]; simp [ikDoneSt]; exact hl.2 hp
-  | iRetransmit s _ _ => refine Inv2_congr (g := g) ?_ ?_ h <;> rfl
-  | iAcceptFull s r _ _ _ _ _ _ _ =>
-    exact iupd2 h s _ rfl rfl ⟨fun hh => (h.iEst s).1 hh, fun hh => (h.iEst s).2 hh⟩
-  | iAcceptResumed s t _ _ _ _ _ =>
-    exact iupd2 h s _ rfl rfl ⟨fun hh => (h.iEst s).1 hh, fun hh => (h.iEst s).2 hh⟩
-  | rRecv s m _ hd =>
+  | iRetrans s _ _ =>
+    have hl := h.iEst s
+    refine iupd2 h s _ rfl rfl ?_
+    rcases IRetransmit_cases s.1 (g.ist s) with ⟨-, -, c1, -⟩ | ⟨-, -, c1, -⟩ | ⟨-, -, c1, -⟩ | ⟨c1, -⟩
+    · rw [c1]; simpa using hl
+    · rw [c1]; simpa using hl
+    · rw [c1]; simp [lateFall, lateFallB, IBeginFull, Ok]; exact hl.1
+    · rw [c1]; exact hl
+  | iShed s _ _ => exact iupd2 h s _ rfl rfl (by simpa [IShed] using h.iEst s)
+  | iAccept s tids _ _ _ _ _ => exact iupd2 h s _ rfl rfl (by simpa using h.iEst s)
+  | rRecv s m cs _ hd =>
     have hl := h.rEst s
     have hc := h.rClean s
     have hi := h1.rIdle s
     refine rupd2 h s _ rfl rfl ?_
-    rcases RHandle_cases (g.rst s) s.1 s.2 (g.sto s.1) m with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, -, c1, -⟩ | ⟨hp, -, c1, -⟩
-      | ⟨hp, -, -, c1, -⟩ | ⟨hp, -, -, -, -, c1, -⟩ | ⟨hp, -, -, c1, -⟩ | ⟨hp, -, -, i0, -, -, -, c1, -⟩
+    rcases RHandle_cases (g.rst s) s.1 s.2 (g.sto s.1) m cs with
+        ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, ⟨sp, nr, c1⟩, -⟩ | ⟨hp, -, c1, -⟩ | ⟨hp, -, c1, -⟩
+      | ⟨hp, -, -, -, -, c1, -⟩ | ⟨hp, -, -, -, -, -, c1, -⟩ | ⟨hp, -, -, -, -, -, c1, -⟩
+      | ⟨hp, -, -, -, -, c1, -⟩ | ⟨hp, -, -, -, -, -, c1, -⟩ | ⟨hp, -, -, -, -, -, c1, -⟩
     · rw [c1]; exact ⟨hl, hc⟩
     · rw [c1]; have := hc (by rcases hp with hp | hp <;> simp [hp]); simp [this]
+    · rw [c1]; simp [hp]; exact hl
     · rw [c1]; exact ⟨hl, hc⟩
     · rw [c1]; exact ⟨hl, hc⟩
     · rw [c1]; have := hc (by simp [hp]); simp [rInitSt, this]
     · rw [c1]; simp [rfSt]
+    · rw [c1]; have := hc (by simp [hp]); simp [this]
     · rw [c1]; exact ⟨hl, hc⟩
     · rw [c1]; simp [rhSt]
-  | rAnswer s kind _ =>
+    · rw [c1]; have := hc (by simp [hp]); simp [this]
+  | rAnswer s kind _ _ =>
     have hl := h.rEst s
     have hc := h.rClean s
     refine rupd2 h s _ rfl rfl ?_
@@ -100,19 +114,31 @@ theorem iStep2 {g g' : G} (h1 : Inv1 g) (h : Inv2 g) (hs : Step g g') : Inv2 g' 
     · rw [c1]; exact ⟨hl, hc⟩
     · rw [c1]; have := hc (by simp [hp]); simp [this]
     · rw [c1]; have := hc (by simp [hp]); simp [rkSt, this]
-  | expire n i => refine Inv2_congr (g := g) ?_ ?_ h <;> rfl
+  | rRetrans s _ _ => exact Inv2_congr (g := g) rfl rfl h
+  | rShed s _ =>
+    have hl := h.rEst s
+    have hc := h.rClean s
+    refine rupd2 h s _ rfl rfl ?_
+    by_cases hp : (g.rst s).ph = .resumed
+    · simp [RShed, hp]; exact hl
+    · simp [RShed, hp]; exact ⟨hl, hc⟩
+  | expire n i sl _ _ _ _ => exact Inv2_congr (g := g) rfl rfl h
+  | expireC n i sl _ _ _ _ => exact Inv2_congr (g := g) rfl rfl h
+  | «export» n mx _ => exact Inv2_congr (g := g) rfl rfl h
+  | restore n drop _ => exact Inv2_congr (g := g) rfl rfl h
+  | restart n _ => exact Inv2_congr (g := g) rfl rfl h
 
-theorem Inv2_reach {K : Nat} {g : G} (h : Reach K g) : Inv2 g := by
+theorem Inv2_reach {K C : Nat} {g : G} (h : Reach K C g) : Inv2 g := by
   induction h with
-  | init => exact Inv2_init K
+  | init => exact Inv2_init K C
   | step hr hs ih => exact iStep2 (Inv1_reach hr) ih hs
 
-/-- No early acceptance, initiator: it raised Established only after the responder's signature verified. -/
-theorem noEarlyI {K : Nat} {g : G} (h : Reach K g) (s : Nat × Nat) (he : (g.ist s).est = true) :
+/-- No early acceptance, initiator: it raised Established only after the peer was authenticated. -/
+theorem noEarlyI {K C : Nat} {g : G} (h : Reach K C g) (s : Nat × Nat) (he : (g.ist s).est = true) :
     (g.ist s).auth = true := ((Inv2_reach h).iEst s).1 he
 
 /-- No early acceptance, responder: it raised Established only after the Finish or the ticket binder verified. -/
-theorem noEarlyR {K : Nat} {g : G} (h : Reach K g) (s : Nat × Nat) (he : (g.rst s).est = true) :
+theorem noEarlyR {K C : Nat} {g : G} (h : Reach K C g) (s : Nat × Nat) (he : (g.rst s).est = true) :
     (g.rst s).auth = true := (Inv2_reach h).rEst s he
 
 #audit_axioms Vinc.Hs.Inv2_reach
