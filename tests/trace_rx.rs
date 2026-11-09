@@ -18,6 +18,9 @@
     clippy::too_many_lines,
     clippy::items_after_statements,
     clippy::cognitive_complexity,
+    clippy::many_single_char_names,
+    clippy::cast_possible_truncation,
+    clippy::similar_names,
     unreachable_pub
 )]
 
@@ -218,10 +221,10 @@ fn run<const N: usize>(seed: u64, out: &mut String, id: u32, steps: u32, sparse:
                         _ => next.saturating_sub(rng.next_u64() % 4),
                     }
                 };
-                let elic = rng.next_u64() % 5 != 0;
+                let elic = !rng.next_u64().is_multiple_of(5);
                 let bytes = [0u32, 500, 1000, 1400][(rng.next_u64() % 4) as usize];
                 r.recv(pn, elic, bytes);
-                if r.now > 0 && rng.next_u64() % 3 == 0 {
+                if r.now > 0 && rng.next_u64().is_multiple_of(3) {
                     r.recv(pn, elic, bytes);
                 }
             }
@@ -342,7 +345,7 @@ fn wide(out: &mut String) {
     );
     rx.on_ack_sent(1, u64::MAX);
     log(&rx, out, &format!(r#""op":"acksent","apn":1,"now":{}"#, u64::MAX));
-    rx.on_peer_ack(u64::MAX, &vec![0..=1]);
+    rx.on_peer_ack(u64::MAX, &std::iter::once(0..=1).collect::<Vec<_>>());
     log(&rx, out, &format!(r#""op":"peer","now":{},"rgs":[[0,1]]"#, u64::MAX));
     let rgs: Vec<_> = rx.ack_ranges(u64::MAX).collect();
     log(
@@ -374,10 +377,10 @@ fn received_packet_runs_match_the_models() {
     for id in 1..=60u32 {
         let seed = 0x5258_0000 + u64::from(id);
         match id % 4 {
-            0 => add(run::<2>(seed, &mut out, id, 120, id % 8 == 0)),
-            1 => add(run::<4>(seed, &mut out, id, 200, id % 5 == 0)),
+            0 => add(run::<2>(seed, &mut out, id, 120, id.is_multiple_of(8))),
+            1 => add(run::<4>(seed, &mut out, id, 200, id.is_multiple_of(5))),
             2 => add(run::<3>(seed, &mut out, id, 160, false)),
-            _ => add(run::<128>(seed, &mut out, id, 400, id % 3 == 0)),
+            _ => add(run::<128>(seed, &mut out, id, 400, id.is_multiple_of(3))),
         }
     }
     // the long sparse runs fill the real set of 128 ranges, so the oldest is forgotten and a report is thinned

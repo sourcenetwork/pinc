@@ -9,7 +9,17 @@
 //!
 //! The test checks the bytes itself: a message reported complete is, byte for byte, the message that was cut, and no
 //! run ever covers a byte that was not sent.
-#![allow(clippy::unwrap_used, clippy::too_many_lines, unreachable_pub)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::too_many_lines,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::cognitive_complexity,
+    unreachable_pub
+)]
 
 use std::fmt::Write as _;
 
@@ -72,7 +82,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
                 .iter()
                 .copied()
                 .enumerate()
-                .filter(|(i, _)| i % 2 == 0)
+                .filter(|(i, _)| i.is_multiple_of(2))
                 .map(|x| x.1)
                 .collect();
             frags = odd.into_iter().chain(even).collect();
@@ -160,11 +170,9 @@ fn reassembly_runs_match_the_models() {
     let mut rng = SplitMix64::new(0x5253_0001);
     let mut out = String::new();
     for id in 1..=80u32 {
-        run(&mut rng, &mut out, id, id % 3 == 0);
+        run(&mut rng, &mut out, id, id.is_multiple_of(3));
     }
-    for needle in [r#""op":"add""#] {
-        assert!(out.contains(needle));
-    }
+    assert!(out.contains(r#""op":"add""#));
     assert!(
         out.contains(r#""out":-1"#) && out.matches(r#""runs":[]"#).count() > 80,
         "no message was ever completed"

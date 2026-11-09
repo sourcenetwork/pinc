@@ -3,7 +3,17 @@
 //! A path whose packets never arrive leaves its derived id unused. The table forgets used ids first; when unused ids
 //! older than the highest used index filled the table, no slot was left for the next ids and the lookahead (the ids
 //! just above the highest used index) was lost, so a packet on a fresh path could not be routed.
-#![allow(clippy::unwrap_used, unreachable_pub)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    clippy::cast_possible_truncation,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    unreachable_pub
+)]
 
 use vinc_transport::conn::CidTable;
 
@@ -46,7 +56,7 @@ fn a_retired_id_is_never_accepted_again() {
             assert!(*r <= t.view().highest);
         }
     }
-    assert!(!retired.is_empty());
+    assert_ne!(retired.len(), 0, "no id was ever retired");
 }
 
 #[test]
@@ -57,6 +67,10 @@ fn the_sender_takes_each_index_once_and_none_before_the_peers_first_id() {
     assert_eq!(t.claim_remote(), Some((0, true)));
     assert_eq!(t.claim_remote(), None, "an index past 0 needs the session secret");
     t.install(&SECRET);
-    assert_eq!(t.claim_remote(), Some((1, true)), "the id claimed is the one derived for its index");
+    assert_eq!(
+        t.claim_remote(),
+        Some((1, true)),
+        "the id claimed is the one derived for its index"
+    );
     assert_eq!(t.claim_remote(), Some((2, true)));
 }

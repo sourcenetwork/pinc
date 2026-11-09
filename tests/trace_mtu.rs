@@ -10,7 +10,17 @@
 //!
 //! The test asserts what it can itself (the size never falls below the floor, rises only by a raise, falls only to
 //! the floor by the black-hole fallback, a probe is due only when none is in flight).
-#![allow(clippy::unwrap_used, clippy::too_many_lines, unreachable_pub)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::too_many_lines,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    clippy::cast_possible_truncation,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::cognitive_complexity,
+    unreachable_pub
+)]
 
 use std::fmt::Write as _;
 
@@ -71,9 +81,9 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
                 } else {
                     (now + [0u64, 1, 1_000_000][(rng.next_u64() % 3) as usize]).min(1_900_000_000)
                 };
-                let allowed = rng.next_u64() % 8 != 0;
+                let allowed = !rng.next_u64().is_multiple_of(8);
                 let im = sizes[(rng.next_u64() % 5) as usize];
-                let ll = rng.next_u64() % 2 == 0;
+                let ll = rng.next_u64().is_multiple_of(2);
                 let r = p.target(allowed, im, ll, now);
                 if let Some(s) = r {
                     assert!(allowed && before.started && before.inflight.is_none() && before.retry_at <= now);
@@ -90,7 +100,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
             }
             15..=34 => {
                 // send what is due, as the connection does
-                let ll = rng.next_u64() % 2 == 0;
+                let ll = rng.next_u64().is_multiple_of(2);
                 let im = sizes[(rng.next_u64() % 5) as usize];
                 if let Some(s) = p.target(true, im, ll, now) {
                     p.probe_sent(s);
@@ -121,7 +131,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
             67..=78 => {
                 pn += 1 + rng.next_u64() % 3;
                 let pick = |rng: &mut SplitMix64, v: u64| {
-                    if rng.next_u64() % 3 == 0 {
+                    if rng.next_u64().is_multiple_of(3) {
                         None
                     } else {
                         Some(v.saturating_sub(rng.next_u64() % 4))

@@ -19,6 +19,9 @@
     clippy::cast_possible_truncation,
     clippy::items_after_statements,
     clippy::cognitive_complexity,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    clippy::similar_names,
     unreachable_pub
 )]
 
@@ -174,7 +177,7 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
                     r.now
                 };
                 r.la = r.la.saturating_add(rng.next_u64() % 4);
-                if wide && rng.next_u64() % 9 == 0 {
+                if wide && rng.next_u64().is_multiple_of(9) {
                     r.la = pick(&mut rng, &[0, u64::MAX, 1 << 62]);
                 }
                 next_pn = r.la.saturating_add(rng.next_u64() % 6);
@@ -222,7 +225,7 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
                 } else {
                     (lat, mn)
                 };
-                if wide && rng.next_u64() % 3 == 0 {
+                if wide && rng.next_u64().is_multiple_of(3) {
                     r.now = r.now.saturating_add(1 << 40);
                 }
                 let reduced = r.c.on_loss(r.now, newest, lat, mn);
@@ -290,7 +293,7 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
             }
             _ => {
                 let cw = r.c.cwnd();
-                if rng.next_u64() % 4 == 0 {
+                if rng.next_u64().is_multiple_of(4) {
                     let q = r.now;
                     let rel = r.p.next_release(q);
                     assert!(rel >= q, "the pacer released data in the past");

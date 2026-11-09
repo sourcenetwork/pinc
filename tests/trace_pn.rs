@@ -10,7 +10,17 @@
 //!
 //! The test asserts the round trip itself (the number comes back whenever it is within half a window) so it is
 //! meaningful without the proof tools.
-#![allow(clippy::unwrap_used, clippy::too_many_lines, unreachable_pub)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::too_many_lines,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    clippy::cast_possible_truncation,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::cognitive_complexity,
+    unreachable_pub
+)]
 
 use std::fmt::Write as _;
 
@@ -51,7 +61,7 @@ fn dec(out: &mut String, t: u32, len: usize, lg: Option<u64>) -> u64 {
     let _ = writeln!(
         out,
         r#"{{"t":"txpn","op":"dec","tr":{t},"len":{len},"lg":{},"r":{r}}}"#,
-        lg.map_or(-1, |v| i128::from(v))
+        lg.map_or(-1, i128::from)
     );
     r
 }
@@ -66,9 +76,9 @@ fn run(rng: &mut SplitMix64, out: &mut String, wide: bool, n: u32) {
         };
         let w: u64 = 1 << (8 * len);
         let h = w / 2;
-        let lg = if rng.next_u64() % 6 == 0 {
+        let lg = if rng.next_u64().is_multiple_of(6) {
             None
-        } else if wide && rng.next_u64() % 8 == 0 {
+        } else if wide && rng.next_u64().is_multiple_of(8) {
             Some([u64::MAX, u64::MAX - 1, MAX_PN, MAX_PN + 1, 1 << 62, (1 << 62) + 5][(rng.next_u64() % 6) as usize])
         } else {
             Some(rng.next_u64() % top)
@@ -89,7 +99,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, wide: bool, n: u32) {
             u64::from(t) % w,
             "the expansion is not congruent to the truncated number"
         );
-        if rng.next_u64() % 5 == 0 {
+        if rng.next_u64().is_multiple_of(5) {
             // the truncated number beyond its width
             let big = (rng.next_u64() >> 32) as u32;
             if wide || len < 4 {

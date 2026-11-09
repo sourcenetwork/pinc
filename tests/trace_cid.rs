@@ -9,7 +9,17 @@
 //!
 //! The test asserts what it can itself (the lookahead is always held once the secret is installed, a retired id is
 //! never accepted again, the sender takes each index once) so it is meaningful without the proof tools.
-#![allow(clippy::unwrap_used, clippy::too_many_lines, unreachable_pub)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::too_many_lines,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    clippy::cast_possible_truncation,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::cognitive_complexity,
+    unreachable_pub
+)]
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -44,7 +54,7 @@ fn view_json(v: &CidView) -> String {
 
 fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
     let mut rng = SplitMix64::new(seed);
-    let client = id % 2 == 0;
+    let client = id.is_multiple_of(2);
     let mut t = CidTable::new(client, &[1, 2, 3, 4]).unwrap();
     let mut secret_bytes = [0u8; 32];
     rng.fill(&mut secret_bytes);
@@ -144,7 +154,7 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
 fn connection_id_runs_match_the_models() {
     let mut out = String::new();
     for id in 1..=40u32 {
-        run(0x4349_4400 + u64::from(id), &mut out, id, 300, id % 5 == 0);
+        run(0x4349_4400 + u64::from(id), &mut out, id, 300, id.is_multiple_of(5));
     }
     for needle in [
         r#""op":"frem""#,
