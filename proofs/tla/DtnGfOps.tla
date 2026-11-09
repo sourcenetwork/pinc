@@ -69,14 +69,36 @@ PMulN(n, a, b) == IF n = 0 THEN 0 ELSE X(IF b % 2 = 1 THEN a ELSE 0, PMulN(n - 1
 PMul(a, b) == PMulN(8, a, b)
 
 \* ---- the slice kernels, byte by byte on the common length ----
+\* Each result is built as a sequence, and each argument is bound once in a LET, so that TLC evaluates the chain of
+\* kernel calls of a reconstruction once and not once per use of an argument.
 Zero(len) == [p \in 1..len |-> 0]
-XorInto(d, s) == [p \in 1..Len(d) |-> IF p <= Len(s) THEN X(d[p], s[p]) ELSE d[p]]
-MulAddS(d, s, c) ==
-    IF c = 0 THEN d
-    ELSE IF c = 1 THEN XorInto(d, s)
-    ELSE [p \in 1..Len(d) |-> IF p <= Len(s) THEN X(d[p], Mul(c, s[p])) ELSE d[p]]
-ScaleS(b, c) ==
-    IF c = 1 THEN b
-    ELSE IF c = 0 THEN [p \in 1..Len(b) |-> 0]
-    ELSE [p \in 1..Len(b) |-> Mul(c, b[p])]
+
+XorInto(d0, s0) ==
+    LET d == d0
+        s == s0
+        RECURSIVE Go(_, _)
+        Go(p, acc) == IF p > Len(d) THEN acc
+                      ELSE Go(p + 1, Append(acc, IF p <= Len(s) THEN X(d[p], s[p]) ELSE d[p]))
+    IN Go(1, <<>>)
+
+\* c = 0 leaves d alone, c = 1 is xor_into, any other c looks the bytes up in the row of c
+MulAddS(d0, s0, c0) ==
+    LET d == d0
+        s == s0
+        c == c0
+        RECURSIVE Go(_, _)
+        Go(p, acc) == IF p > Len(d) THEN acc
+                      ELSE Go(p + 1, Append(acc,
+                                IF c = 0 \/ p > Len(s) THEN d[p]
+                                ELSE IF c = 1 THEN X(d[p], s[p])
+                                ELSE X(d[p], Mul(c, s[p]))))
+    IN Go(1, <<>>)
+
+ScaleS(b0, c0) ==
+    LET b == b0
+        c == c0
+        RECURSIVE Go(_, _)
+        Go(p, acc) == IF p > Len(b) THEN acc
+                      ELSE Go(p + 1, Append(acc, IF c = 1 THEN b[p] ELSE IF c = 0 THEN 0 ELSE Mul(c, b[p])))
+    IN Go(1, <<>>)
 =============================================================================
