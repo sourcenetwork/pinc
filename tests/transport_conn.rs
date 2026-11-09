@@ -17,6 +17,7 @@
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, Drop, PathId};
+use vinc_transport::frame::ext;
 use vinc_transport::stream::datagram::DatagramError;
 
 vinc_tests::install_counting_allocator!();
@@ -367,7 +368,10 @@ fn extension_frames_reach_the_endpoint_layer() {
         assert!(net.connect(net.now + 10 * SEC));
         assert!(net.a.conn.send_extension(0x10, b"too low").is_err());
         for i in 0..3u8 {
-            net.a.conn.send_extension(0x41 + u64::from(i), &[i; 100]).unwrap();
+            net.a
+                .conn
+                .send_extension(ext::TEST_FIRST + u64::from(i), &[i; 100])
+                .unwrap();
         }
         net.a.conn.send_extension(0x1_0000, b"large type").unwrap();
         net.a.conn.send_ready();
@@ -385,8 +389,8 @@ fn extension_frames_reach_the_endpoint_layer() {
             })
             .collect();
         assert_eq!(got.len(), 4);
-        assert_eq!(got[0], (0x41, vec![0; 100]));
-        assert_eq!(got[2], (0x43, vec![2; 100]));
+        assert_eq!(got[0], (ext::TEST_FIRST, vec![0; 100]));
+        assert_eq!(got[2], (ext::TEST_LAST, vec![2; 100]));
         assert_eq!(got[3], (0x1_0000, b"large type".to_vec()));
     });
 }

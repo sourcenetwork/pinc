@@ -15,6 +15,7 @@
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{PathId, PathInfo};
+use vinc_transport::frame::ext;
 use vinc_transport::recovery::PathKind;
 
 fn connected<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, link: Link) -> Net<'a, 'a> {
@@ -393,10 +394,10 @@ fn a_black_hole_is_detected_and_the_mtu_falls_to_the_minimum() {
         // then the full-size retransmission of the held frame.
         let p = Params::new(10 * MS).mtu(1200);
         net.link.set(PathId(1), p, p);
-        net.a.conn.send_extension(0x41, &vec![5u8; big]).unwrap();
+        net.a.conn.send_extension(ext::TEST_FIRST, &vec![5u8; big]).unwrap();
         assert!(net.run(net.now + 60 * SEC, |n| n.a.conn.path_mtu(PathId(1)) == Some(1200)));
         assert!(
-            net.a.saw(|r| *r == Rec::ExtensionUndeliverable(0x41, big)),
+            net.a.saw(|r| *r == Rec::ExtensionUndeliverable(ext::TEST_FIRST, big)),
             "the held frame is reported"
         );
         assert!(
@@ -407,9 +408,9 @@ fn a_black_hole_is_detected_and_the_mtu_falls_to_the_minimum() {
         // The path works at the new size: a frame that fits is delivered.
         let max = net.a.conn.max_extension_size(0x41);
         assert!(max < big);
-        net.a.conn.send_extension(0x42, &vec![6u8; max]).unwrap();
+        net.a.conn.send_extension(ext::TEST_FIRST + 1, &vec![6u8; max]).unwrap();
         assert!(net.run(net.now + 30 * SEC, |n| {
-            n.b.saw(|r| *r == Rec::Extension(0x42, vec![6u8; max]))
+            n.b.saw(|r| *r == Rec::Extension(ext::TEST_FIRST + 1, vec![6u8; max]))
         }));
     });
 }

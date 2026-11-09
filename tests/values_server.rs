@@ -16,13 +16,14 @@ mod values_support;
 
 use values_support::*;
 use vinc_dag::tree::{Layout, PARENT_LEN};
+use vinc_transport::frame::ext;
 use vinc_values::knobs::{GROUP_LOG, code};
 use vinc_values::plan::Plan;
 use vinc_values::server::{Server, ServerIn};
 use vinc_values::session::Provider;
 use vinc_values::span::Span;
 use vinc_values::trace::Trace;
-use vinc_values::wire::{EXT_PROOF, EXT_PROOF_REQ, ProofFrame, ProofReq, Req};
+use vinc_values::wire::{ProofFrame, ProofReq, Req};
 
 const PEER: Provider = Provider(7);
 
@@ -201,7 +202,7 @@ fn proofs(r: &Rig) -> Vec<(u64, Vec<u8>)> {
         .iter()
         .filter_map(|m| {
             if let ToClient::Ext(s, ty, b) = m {
-                (*ty == EXT_PROOF).then(|| (*s, b.clone()))
+                (*ty == ext::PROOF).then(|| (*s, b.clone()))
             } else {
                 None
             }
@@ -233,7 +234,7 @@ fn a_proof_request_is_answered_with_the_outboard_pairs_of_each_range() {
     .encode(&mut body)
     .unwrap();
     r.ev(&ServerIn::Ext {
-        ty: EXT_PROOF_REQ,
+        ty: ext::PROOF_REQ,
         body: &body[..n],
     });
     let frames = proofs(&r);
@@ -273,7 +274,7 @@ fn a_proof_request_is_answered_with_the_outboard_pairs_of_each_range() {
     // Asking again for the same region sends nothing new.
     let before = r.sess.out.len();
     r.ev(&ServerIn::Ext {
-        ty: EXT_PROOF_REQ,
+        ty: ext::PROOF_REQ,
         body: &body[..n],
     });
     assert_eq!(r.sess.out.len(), before);
@@ -344,7 +345,7 @@ fn proofs_are_not_sent_for_a_stream_that_never_lost_or_asked() {
 fn junk_extension_frames_and_unknown_streams_are_ignored() {
     let mut r = Rig::new(100_000);
     r.ev(&ServerIn::Ext {
-        ty: EXT_PROOF_REQ,
+        ty: ext::PROOF_REQ,
         body: &[1, 2, 3],
     });
     r.ev(&ServerIn::Ext {
@@ -360,7 +361,7 @@ fn junk_extension_frames_and_unknown_streams_are_ignored() {
     .encode(&mut body)
     .unwrap();
     r.ev(&ServerIn::Ext {
-        ty: EXT_PROOF_REQ,
+        ty: ext::PROOF_REQ,
         body: &body[..n],
     });
     r.ev(&ServerIn::Loss {

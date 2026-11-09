@@ -88,7 +88,6 @@ pub use rtt::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT}
 pub use rx::{HALF_OPEN_LIFE, MAX_HALF_OPEN};
 pub use slot::{HELD_EVENTS, Slot};
 pub use state::{Restored, STATE_VERSION, StateError, state_len};
-pub use sub::EXT_SUB_SESSION_OPEN;
 pub use table::Table;
 pub use trace::{TRACE_CAPACITY, TraceEvent, TraceRecord};
 pub use tx::Transmit;

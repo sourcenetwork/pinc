@@ -38,7 +38,7 @@
 //! `end - length`. There are `range_count + 1` ranges, at most [`MAX_ACK_RANGES`]. This encoding cannot express two
 //! ranges that touch or overlap, and no range may go below packet number 0: such an ACK is malformed.
 //!
-//! Extension frames (type `0x40` and up) are never parsed here. To find where one ends, every extension frame
+//! Extension frames (type `0x40` and up; the assigned types are named in [`ext`]) are never parsed here. To find where one ends, every extension frame
 //! carries a varint length after its type; the body is passed through as [`Frame::Extension`]. Any other type
 //! not in the table is an error.
 //!
@@ -52,6 +52,7 @@
 mod ack;
 mod decode;
 mod encode;
+pub mod ext;
 
 use core::fmt;
 

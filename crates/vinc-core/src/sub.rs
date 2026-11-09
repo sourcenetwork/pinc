@@ -20,15 +20,13 @@
 use vinc_crypto::NodeId;
 use vinc_security::{Alpn, ConnId, Failure};
 use vinc_transport::conn::{Connection, PathInfo, SubOpen};
+use vinc_transport::frame::ext;
 
 use crate::api::{CommandError, SessionId};
 use crate::endpoint::{CID_LEN, env, ep_impl};
 use crate::keepalive::Role;
 use crate::slot::State;
 use crate::trace::trace;
-
-/// The extension frame type of a sub-session open.
-pub const EXT_SUB_SESSION_OPEN: u64 = 0x40;
 
 ep_impl! {
     /// The established session of `peer` a new session can be opened over, if any: a live one, a root one first.
@@ -121,7 +119,7 @@ ep_impl! {
         let queued = self.slots.get_mut(parent).and_then(|s| {
             s.m.has_sub = true;
             s.m.ctrl_pending = true;
-            s.conn.as_mut().map(|c| c.send_extension(EXT_SUB_SESSION_OPEN, body.get(..used).unwrap_or_default()))
+            s.conn.as_mut().map(|c| c.send_extension(ext::SUB_SESSION_OPEN, body.get(..used).unwrap_or_default()))
         });
         trace!(self, now, Sub { step: 0, parent: parent as u64, child: child as u64 });
         self.settle(parent, now);

@@ -18,6 +18,7 @@
 //! - Nothing here allocates; a request that breaks the wire format is reset and its slot freed.
 
 use vinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step};
+use vinc_transport::frame::ext;
 use vinc_transport::stream::StreamId;
 
 use crate::knobs::{GROUP, GROUP_LOG, MAX_REQ_RANGES, WT_LEAD, WT_MAX_K, WT_MAXF, WT_MIN_K, WT_PMAX, code};
@@ -27,7 +28,7 @@ use crate::source::ValueSource;
 use crate::span::Span;
 use crate::store::ValueRead;
 use crate::trace::{Out, Trace};
-use crate::wire::{EXT_PROOF, EXT_PROOF_REQ, PROOF_BODY_MAX, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
+use crate::wire::{PROOF_BODY_MAX, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
 
 /// The inputs a server takes from the session.
 #[derive(Debug, Clone, Copy)]
@@ -176,7 +177,7 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
             } => self.on_loss(se, out, now, stream, offset, sent, window),
             ServerIn::Sent { stream, sent, window } => self.on_sent(se, out, now, stream, sent, window),
             ServerIn::Ext { ty, body } => {
-                if ty != EXT_PROOF_REQ {
+                if ty != ext::PROOF_REQ {
                     return;
                 }
                 let Ok(rq) = ProofReq::parse(body) else { return };
@@ -494,7 +495,7 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
             }
             len += PARENT_LEN;
         }
-        se.send_ext(stream, EXT_PROOF, body.get(..len)?).then_some(len)
+        se.send_ext(stream, ext::PROOF, body.get(..len)?).then_some(len)
     }
 }
 

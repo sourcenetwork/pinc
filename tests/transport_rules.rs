@@ -17,6 +17,7 @@ use std::rc::Rc;
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, ExtensionError, PathId, PathInfo, code};
+use vinc_transport::frame::ext;
 use vinc_transport::recovery::PathKind;
 
 vinc_tests::install_counting_allocator!();
@@ -231,14 +232,14 @@ fn an_extension_frame_is_sent_again_when_its_packet_is_lost() {
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(7, Params::new(10 * MS)));
         net.run(net.now + SEC, |_| false);
         net.link.route(PathId(1)).ab.drop_next(1);
-        net.a.conn.send_extension(0x41, b"sub open").unwrap();
+        net.a.conn.send_extension(ext::TEST_FIRST, b"sub open").unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| {
-            n.b.saw(|r| *r == Rec::Extension(0x41, b"sub open".to_vec()))
+            n.b.saw(|r| *r == Rec::Extension(ext::TEST_FIRST, b"sub open".to_vec()))
         }));
         let max = net.a.conn.max_extension_size(0x41);
         assert!(max > 1025, "{max}");
         assert_eq!(
-            net.a.conn.send_extension(0x41, &vec![0u8; max + 1]),
+            net.a.conn.send_extension(ext::TEST_FIRST, &vec![0u8; max + 1]),
             Err(ExtensionError::TooLarge { max_size: max })
         );
         assert_eq!(net.a.conn.send_extension(0x10, b"low"), Err(ExtensionError::BadType));
@@ -257,9 +258,9 @@ fn an_extension_frame_near_the_packet_limit_is_delivered_once_under_loss() {
         assert!(max > 1300, "{max}");
         let body: Vec<u8> = (0..max).map(|i| (i % 251) as u8).collect();
         net.link.route(PathId(1)).ab.drop_next(2);
-        net.a.conn.send_extension(0x41, &body).unwrap();
+        net.a.conn.send_extension(ext::TEST_FIRST, &body).unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| {
-            n.b.saw(|r| *r == Rec::Extension(0x41, body.clone()))
+            n.b.saw(|r| *r == Rec::Extension(ext::TEST_FIRST, body.clone()))
         }));
         // Once acknowledged the frame is not sent again.
         net.run(net.now + 5 * SEC, |_| false);
@@ -267,12 +268,12 @@ fn an_extension_frame_near_the_packet_limit_is_delivered_once_under_loss() {
             .b
             .log
             .iter()
-            .filter(|r| **r == Rec::Extension(0x41, body.clone()))
+            .filter(|r| **r == Rec::Extension(ext::TEST_FIRST, body.clone()))
             .count();
         assert_eq!(seen, 1, "delivered {seen} times");
         // One byte more cannot fit the packet.
         assert!(matches!(
-            net.a.conn.send_extension(0x41, &vec![0u8; max + 1]),
+            net.a.conn.send_extension(ext::TEST_FIRST, &vec![0u8; max + 1]),
             Err(ExtensionError::TooLarge { .. })
         ));
     });
@@ -300,16 +301,16 @@ fn an_extension_frame_that_no_longer_fits_after_the_mtu_falls_is_reported_and_fr
         // A frame as large as the first path takes goes out and is never acknowledged.
         let big = net.a.conn.max_extension_size(0x41);
         net.link.route(PathId(1)).up = false;
-        net.a.conn.send_extension(0x41, &vec![7u8; big]).unwrap();
+        net.a.conn.send_extension(ext::TEST_FIRST, &vec![7u8; big]).unwrap();
         net.run(net.now + 300 * MS, |_| false);
         // The connection moves to the smaller path: the held frame cannot fit a packet there.
         net.a.conn.set_active(PathId(3)).unwrap();
         let max = net.a.conn.max_extension_size(0x41);
         assert!(max < big, "{max} {big}");
         net.run(net.now + 10 * MS, |_| false);
-        assert!(net.a.saw(|r| *r == Rec::ExtensionUndeliverable(0x41, big)));
+        assert!(net.a.saw(|r| *r == Rec::ExtensionUndeliverable(ext::TEST_FIRST, big)));
         assert!(matches!(
-            net.a.conn.send_extension(0x41, &vec![0u8; big]),
+            net.a.conn.send_extension(ext::TEST_FIRST, &vec![0u8; big]),
             Err(ExtensionError::TooLarge { max_size }) if max_size == max
         ));
         // Every slot is free: eight more frames, each as large as now fits, all arrive once.
@@ -320,7 +321,7 @@ fn an_extension_frame_that_no_longer_fits_after_the_mtu_falls_is_reported_and_fr
             (0x50..0x58u64).all(|ty| n.b.saw(|r| *r == Rec::Extension(ty, vec![ty as u8; max])))
         }));
         assert!(
-            !net.b.saw(|r| matches!(r, Rec::Extension(0x41, _))),
+            !net.b.saw(|r| matches!(r, Rec::Extension(ext::TEST_FIRST, _))),
             "the dropped frame was delivered"
         );
     });

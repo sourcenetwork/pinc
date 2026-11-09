@@ -13,11 +13,11 @@
 
 use vinc_security::TicketBatch;
 use vinc_transport::conn::{CloseReason, Event as ConnEvent, PathId, code};
+use vinc_transport::frame::ext;
 
 use crate::api::{ConnectFailure, EndReason, Event, PathState};
 use crate::endpoint::{env, ep_impl};
 use crate::slot::{HeldEvent, State};
-use crate::sub::EXT_SUB_SESSION_OPEN;
 use crate::trace::trace;
 
 /// The largest extension body kept for the endpoint to parse.
@@ -102,13 +102,13 @@ ep_impl! {
             Co::Reset(stream, error) => self.app_event(i, now, Event::StreamReset { session, stream, error }),
             Co::Datagram => self.app_event(i, now, Event::DatagramReceived { session }),
             Co::Extension { ty, len, body } => {
-                if ty == EXT_SUB_SESSION_OPEN && len > 0 {
+                if ty == ext::SUB_SESSION_OPEN && len > 0 {
                     self.sub_accept(i, now, body.get(..len).unwrap_or_default());
                 }
             }
             Co::Undeliverable(ty) => {
                 // A sub-session open that cannot be sent leaves its children unaccepted.
-                if ty == EXT_SUB_SESSION_OPEN {
+                if ty == ext::SUB_SESSION_OPEN {
                     self.orphan_children(i, now);
                 }
             }

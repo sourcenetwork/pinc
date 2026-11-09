@@ -33,10 +33,6 @@ use crate::span::Span;
 pub const T_REQ: u8 = 1;
 /// The type byte of a GROUP.
 pub const T_GROUP: u8 = 2;
-/// The extension frame type of a range proof.
-pub const EXT_PROOF: u64 = 0x4f;
-/// The extension frame type of a range-proof request.
-pub const EXT_PROOF_REQ: u64 = 0x49;
 /// The size of a REQ without its ranges.
 pub const REQ_FIXED: usize = 34;
 /// The size of a GROUP header.

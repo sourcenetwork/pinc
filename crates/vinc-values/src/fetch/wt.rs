@@ -11,6 +11,7 @@
 //! will judge the bytes). The proof cache is a ring of [`WT_KEEP`] entries for the whole fetch.
 
 use vinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step};
+use vinc_transport::frame::ext;
 use vinc_transport::stream::StreamId;
 
 use super::{Env, Fetch, State};
@@ -20,7 +21,7 @@ use crate::session::Session;
 use crate::store::ValueStore;
 use crate::trace::{Out, Trace};
 use crate::verify::GroupVerifier;
-use crate::wire::{EXT_PROOF, EXT_PROOF_REQ, PROOF_BODY_MAX, ProofFrame, ProofReq};
+use crate::wire::{PROOF_BODY_MAX, ProofFrame, ProofReq};
 
 /// A kept range proof.
 #[derive(Debug, Clone)]
@@ -107,7 +108,7 @@ impl Fetch {
             .encode(&mut buf)
             .ok()
             .and_then(|n| buf.get(..n))
-            .is_some_and(|b| io.split().0.send_ext(stream, EXT_PROOF_REQ, b));
+            .is_some_and(|b| io.split().0.send_ext(stream, ext::PROOF_REQ, b));
             if sent && let Some(r) = self.rx.get_mut(si).and_then(Option::as_mut) {
                 r.preq_to = upto;
             }
@@ -119,7 +120,7 @@ impl Fetch {
 
     /// An extension frame arrived: a range proof is kept and tried against the groups it covers.
     pub(super) fn on_ext<E: Env>(&mut self, io: &mut E, now: u64, ty: u64, body: &[u8]) {
-        if ty != EXT_PROOF || body.len() > PROOF_BODY_MAX {
+        if ty != ext::PROOF || body.len() > PROOF_BODY_MAX {
             return;
         }
         let Ok(pf) = ProofFrame::parse(body) else { return };

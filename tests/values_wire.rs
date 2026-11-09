@@ -13,12 +13,10 @@
 )]
 
 use proptest::prelude::*;
-use vinc_transport::frame::{EXTENSION_BASE, Frame};
+use vinc_transport::frame::{Frame, ext};
 use vinc_values::knobs::{MAX_REQ_RANGES, WT_PMAX};
 use vinc_values::span::Span;
-use vinc_values::wire::{
-    EXT_PROOF, EXT_PROOF_REQ, GROUP_HDR, GroupHeader, PROOF_BODY_MAX, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req,
-};
+use vinc_values::wire::{GROUP_HDR, GroupHeader, PROOF_BODY_MAX, ProofFrame, ProofReq, REQ_FIXED, REQ_MAX, Req};
 use vinc_wire::{Reader, WireError, Writer};
 
 fn truncated<T>(r: &Result<T, WireError>) -> bool {
@@ -96,11 +94,11 @@ proptest! {
         // As a transport frame: an extension type, passed through unparsed with its length.
         let mut payload = [0u8; 1500];
         let mut w = Writer::new(&mut payload);
-        Frame::Extension { ty: EXT_PROOF, body }.write(&mut w).unwrap();
+        Frame::Extension { ty: ext::PROOF, body }.write(&mut w).unwrap();
         let n = w.written().len();
         let mut r = Reader::new(&payload[..n]);
         match Frame::decode(&mut r).unwrap() {
-            Frame::Extension { ty, body: got } => { prop_assert_eq!(ty, EXT_PROOF); prop_assert_eq!(got, body); }
+            Frame::Extension { ty, body: got } => { prop_assert_eq!(ty, ext::PROOF); prop_assert_eq!(got, body); }
             other => prop_assert!(false, "decoded as {:?}", other),
         }
         prop_assert!(r.is_empty());
@@ -127,7 +125,7 @@ proptest! {
         prop_assert!(ProofReq::parse(&buf[..=n]).is_err(), "trailing byte accepted");
         let mut payload = [0u8; 64];
         let mut w = Writer::new(&mut payload);
-        Frame::Extension { ty: EXT_PROOF_REQ, body: &buf[..n] }.write(&mut w).unwrap();
+        Frame::Extension { ty: ext::PROOF_REQ, body: &buf[..n] }.write(&mut w).unwrap();
         prop_assert!(w.written().len() > n);
     }
 
@@ -135,12 +133,6 @@ proptest! {
     fn arbitrary_proof_request_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..40)) {
         let _ = ProofReq::parse(&bytes);
     }
-}
-
-#[test]
-fn the_frame_types_are_extension_types() {
-    const { assert!(EXT_PROOF >= EXTENSION_BASE && EXT_PROOF_REQ >= EXTENSION_BASE) };
-    assert_ne!(EXT_PROOF, EXT_PROOF_REQ);
 }
 
 #[test]
