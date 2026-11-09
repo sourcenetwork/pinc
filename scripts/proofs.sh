@@ -194,11 +194,11 @@ par run_tlc dtnforward DtnForward DtnForward
 par run_tlc dtnforward_l1 DtnForward DtnForward_l1
 par run_tlc dtnforward_live DtnForward DtnForward_live
 par witness_tlc dtnforward_full DtnForward DtnForward_full DestServed
-par witness_tlc dtnforward_rehold DtnForward DtnForward_rehold A_NoReHold
+par run_tlc dtnforward_rehold DtnForward DtnForward_rehold
 par run_tlc dtnforwardnet DtnForwardNet DtnForwardNet
 par run_tlc dtnforwardnet_loss DtnForwardNet DtnForwardNet_loss
-par witness_tlc dtnforwardnet_replay DtnForwardNet DtnForwardNet_replay NoReplay
-par witness_tlc dtnforwardnet_over DtnForwardNet DtnForwardNet_over HeldAlways
+par run_tlc dtnforwardnet_replay DtnForwardNet DtnForwardNet_replay
+par run_tlc dtnforwardnet_over DtnForwardNet DtnForwardNet_over
 par run_tlc_deep dtngf DtnGf DtnGf
 par run_tlc_deep dtnrs_a DtnRs DtnRs_a
 par run_tlc_deep dtnrs_b DtnRs DtnRs_b
@@ -208,7 +208,7 @@ par run_tlc_deep dtnrs_bounds DtnRs DtnRs_bounds
 par run_tlc_deep dtnlayout DtnLayout DtnLayout
 par run_tlc_deep dtncodec DtnCodec DtnCodec
 par run_tlc dtnreception DtnReception DtnReception
-par witness_tlc dtnreception_overwrite DtnReception DtnReception_overwrite HeldAlways
+par run_tlc dtnreception_w3 DtnReception DtnReception_w3
 par run_tlc_deep dtnclock DtnClock DtnClock
 par run_tlc dtnseal DtnSeal DtnSeal
 par run_tlc dtnseal_decap DtnSeal DtnSeal_decap
@@ -226,8 +226,8 @@ par run_tlc dtn_sc_tight DtnScenario DtnScenario_tight
 par run_tlc dtn_sc_live DtnScenario DtnScenario_live
 par run_tlc dtn_sc_live_relay DtnScenario DtnScenario_live_relay
 par witness_tlc dtn_sc_nolive DtnScenario DtnScenario_nolive DeliveredByExpiry
-par witness_tlc dtn_sc_cycle DtnScenario DtnScenario_cycle CustodyAlive
-par witness_tlc dtn_sc_replay DtnScenario DtnScenario_replay NoReplay
+par run_tlc dtn_sc_cycle DtnScenario DtnScenario_cycle
+par run_tlc dtn_sc_replay DtnScenario DtnScenario_replay
 par witness_tlc dtn_sc_forget DtnScenario DtnScenario_forget NoForget
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
