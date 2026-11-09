@@ -15,8 +15,10 @@ use crate::ids::{HostId, IfaceId, NatId, NodeId, ObsId, SiteId};
 use crate::link::{Link, LinkChange};
 use crate::metrics::Metrics;
 use crate::nat::Nat;
-use crate::node::Node;
+use crate::node::{Node, StreamKind};
 use crate::rng::{Random, Rng};
+use crate::stream::StreamInput;
+use crate::tcp::{Seg, TcpEnd};
 use crate::{Clock, Time, WALL_EPOCH};
 
 /// Datagrams one node may hand over in a single turn before the engine yields and continues at the same instant.
@@ -31,7 +33,7 @@ pub(crate) struct Lan<R: Random> {
     pub(crate) up: Link<R>,
     pub(crate) down: Link<R>,
     pub(crate) down_site: u32,
-    pub(crate) fw: BTreeMap<IpAddr, BTreeSet<SocketAddr>>,
+    pub(crate) fw: BTreeMap<SocketAddr, BTreeSet<SocketAddr>>,
 }
 
 /// A scheduled partition between sets of LANs, judged at the uplink send time.
@@ -66,6 +68,13 @@ pub(crate) struct Slot<N: Node> {
     pub(crate) group: u32,
     pub(crate) portal_ns: Time,
     pub(crate) portal_until: Time,
+    /// Counts restarts, so stream input scheduled before a restart is ignored.
+    pub(crate) incarnation: u64,
+    /// Live stream ends by handle.
+    pub(crate) streams: BTreeMap<u32, u32>,
+    pub(crate) next_stream: u32,
+    /// The handles the operating system closed while the node was suspended.
+    pub(crate) slept_streams: Vec<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +103,15 @@ pub(crate) struct Packet {
     pub(crate) data: Vec<u8>,
     pub(crate) origin: Option<u32>,
     pub(crate) sent_at: Time,
+    /// The TCP header when this is a stream segment (the payload then travels in the sending end, not in `data`).
+    pub(crate) seg: Option<Box<Seg>>,
+}
+
+impl Packet {
+    /// Bytes on the wire as the links see them.
+    pub(crate) fn wire_len(&self) -> usize {
+        self.seg.as_ref().map_or(self.data.len(), |s| s.size as usize)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -111,6 +129,25 @@ pub(crate) enum Ev<C> {
     Timer {
         node: u32,
         epoch: u64,
+    },
+    TcpRto {
+        end: u32,
+        ver: u64,
+    },
+    TcpDelack {
+        end: u32,
+        ver: u64,
+    },
+    TcpFail {
+        end: u32,
+    },
+    TcpPeerClosed {
+        end: u32,
+    },
+    StreamInput {
+        node: u32,
+        inc: u64,
+        input: StreamInput,
     },
     Wake {
         node: u32,
@@ -194,6 +231,8 @@ pub struct Sim<N: Node, R: Random = Rng, C: CostModel = FlatCost> {
     pub(crate) nats: Vec<NatSlot<R>>,
     pub(crate) hosts: Vec<HostSlot>,
     pub(crate) lans: Vec<Lan<R>>,
+    pub(crate) ends: Vec<TcpEnd>,
+    pub(crate) listeners: BTreeMap<(IpAddr, u16), (u32, StreamKind)>,
     pub(crate) lan_parts: Vec<LanPartition>,
     pub(crate) region_delay: BTreeMap<(u32, u32), Time>,
     pub(crate) addr_map: BTreeMap<IpAddr, u32>,
@@ -235,6 +274,8 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             nats: Vec::new(),
             hosts: Vec::new(),
             lans: Vec::new(),
+            ends: Vec::new(),
+            listeners: BTreeMap::new(),
             lan_parts: Vec::new(),
             region_delay: BTreeMap::new(),
             addr_map: BTreeMap::new(),
@@ -349,6 +390,11 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         match ev {
             Ev::Arrive { site, pkt } => self.on_arrive(t, site, pkt),
             Ev::Timer { node, epoch } => self.on_timer(t, node as usize, epoch),
+            Ev::TcpRto { end, ver } => self.on_tcp_rto(t, end, ver),
+            Ev::TcpDelack { end, ver } => self.tcp_delack(t, end, ver),
+            Ev::TcpFail { end } => self.on_tcp_fail(t, end),
+            Ev::TcpPeerClosed { end } => self.tcp_peer_closed(t, end),
+            Ev::StreamInput { node, inc, input } => self.on_stream_input(t, node, inc, input),
             Ev::Wake { node } => {
                 if self.nodes[node as usize].state == NodeState::Up {
                     let busy = self.nodes[node as usize].busy_until;
@@ -426,6 +472,13 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             let len = tx.len.min(buf.len());
             let at = send_at.max(tx.send_at.unwrap_or(0));
             self.emit(n, at, tx.local, tx.remote, &buf[..len]);
+            sent += 1;
+        }
+        while sent < TX_BURST {
+            let Some(op) = self.nodes[n].node.poll_stream(now, &mut buf) else {
+                break;
+            };
+            self.stream_op(n, now, send_at, op, &buf);
             sent += 1;
         }
         if sent == TX_BURST {

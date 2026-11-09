@@ -31,17 +31,20 @@ mod node;
 pub mod reference;
 mod rng;
 mod sim;
+mod stream;
+mod tcp;
 mod topology;
 pub mod toy;
+pub mod toy_stream;
 
 pub use adversary::{FloodPayload, FloodSpec, ObsRecord, Observer};
 pub use clock::Clock;
-pub use config::{Call, CostModel, Cpu, Driver, FlatCost, LanConfig, LanDir, NodeState, SimConfig};
+pub use config::{Call, CostModel, Cpu, Driver, FlatCost, LanConfig, LanDir, NodeState, SimConfig, StreamPolicy};
 pub use ids::{HostId, IfaceId, LanId, NatId, NodeId, ObsId, SiteId};
 pub use link::{LinkChange, LinkConfig, Loss, reference_queue_bytes};
 pub use metrics::{DropReason, Latency, Metrics, NodeMetrics};
 pub use nat::{NatConfig, NatKind, PortPolicy};
-pub use node::{IfaceEvent, Node, Transmit, Work};
+pub use node::{IfaceEvent, Node, StreamEvent, StreamId, StreamKind, StreamOp, Transmit, Work};
 pub use rng::{Random, Rng, Stream};
 pub use sim::{Sim, SiteRef};
 

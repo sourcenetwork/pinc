@@ -209,6 +209,18 @@ name = "sim_reference"
 path = "sim_reference.rs"
 
 [[test]]
+name = "sim_carrier"
+path = "sim_carrier.rs"
+
+[[test]]
+name = "sim_carrier_ref"
+path = "sim_carrier_ref.rs"
+
+[[test]]
+name = "sim_nat_ref"
+path = "sim_nat_ref.rs"
+
+[[test]]
 name = "sim_reference_rng"
 path = "sim_reference_rng.rs"
 

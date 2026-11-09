@@ -63,6 +63,10 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             group: 0,
             portal_ns: 0,
             portal_until: 0,
+            incarnation: 0,
+            streams: BTreeMap::new(),
+            next_stream: 1,
+            slept_streams: Vec::new(),
         });
         self.metrics.nodes.push(NodeMetrics::default());
         NodeId(id)

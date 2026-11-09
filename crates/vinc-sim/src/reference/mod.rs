@@ -1,13 +1,13 @@
-//! The reference random source: a bit-exact port of CPython's `random` and of the reference harness's seed
+//! The reference random source: a bit-exact port of `CPython`'s `random` and of the reference harness's seed
 //! derivation, behind the simulator's [`Random`] trait.
 //!
 //! The harness seeds each component stream with `random.Random(int_from_blake2b(repr((seed, tag, index))))`. This
 //! module reproduces the whole chain: [`seed`] hashes the `repr` text of a tuple, [`PyRandom`] is the generator, and
 //! [`RefRng`] makes the generator a [`Random`] so that a [`crate::Sim`] draws exactly the numbers the reference
-//! harness draws. Needs the `reference` feature (it brings in the BLAKE2b hash).
+//! harness draws. Needs the `reference` feature (it brings in the `BLAKE2b` hash).
 //!
 //! Invariant: every function here is a pure function of its arguments, and the test vectors in
-//! `tests/data/reference_rng.txt` were produced by CPython itself.
+//! `tests/data/reference_rng.txt` were produced by `CPython` itself.
 
 mod mt;
 mod repr;
@@ -20,7 +20,7 @@ pub use repr::Py;
 
 use crate::rng::{Random, Stream};
 
-/// The reference `_seed(*parts)`: the little-endian integer of the 8-byte BLAKE2b of `repr(parts)`, where `parts` is
+/// The reference `_seed(*parts)`: the little-endian integer of the 8-byte `BLAKE2b` of `repr(parts)`, where `parts` is
 /// the tuple of the given values.
 pub fn seed(parts: &[Py<'_>]) -> u64 {
     let d = Blake2b::<U8>::digest(Py::Tuple(parts).repr().as_bytes());
@@ -39,7 +39,7 @@ pub fn blake2b_128(data: &[u8]) -> [u8; 16] {
     Blake2b::<U16>::digest(data).into()
 }
 
-/// The random source of the reference harness: CPython's generator seeded the way the harness seeds each stream.
+/// The random source of the reference harness: `CPython`'s generator seeded the way the harness seeds each stream.
 #[derive(Clone, Debug)]
 pub struct RefRng(PyRandom);
 

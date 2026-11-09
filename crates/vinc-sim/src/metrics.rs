@@ -113,9 +113,18 @@ pub struct NodeMetrics {
     pub sent_packets: u64,
     /// Payload bytes the node handed to the network.
     pub sent_bytes: u64,
-    /// Bytes on the wire the node produced: payload plus 28 (IPv4) or 48 (IPv6) header bytes per datagram. Counted
-    /// before any drop in the network, but not for a datagram larger than the path MTU, which never leaves the node.
+    /// Bytes on the wire the node produced: payload plus 28 (IPv4) or 48 (IPv6) header bytes per datagram, and
+    /// every stream segment with its 52-byte header (retransmissions, ACKs and FINs included). Counted before any
+    /// drop in the network, but not for a datagram larger than the path MTU, which never leaves the node.
     pub wire_bytes: u64,
+    /// Stream segments the node handed to the network (SYNs, data, ACKs, retransmissions and FINs).
+    pub stream_packets: u64,
+    /// Bytes on the wire of those segments; part of [`NodeMetrics::wire_bytes`].
+    pub stream_wire_bytes: u64,
+    /// Whole records delivered to the node from its streams.
+    pub stream_records_in: u64,
+    /// Bytes of those records.
+    pub stream_bytes_in: u64,
     /// Datagrams delivered to the node.
     pub recv_packets: u64,
     /// Bytes delivered to the node.
@@ -136,6 +145,14 @@ pub struct Metrics {
     pub duplicated: u64,
     /// Datagrams adversaries injected (floods and replays).
     pub injected: u64,
+    /// Streams that became open.
+    pub carriers_opened: u64,
+    /// Streams that failed (no answer, too many timeouts, refused).
+    pub streams_failed: u64,
+    /// Writes to a stream that was not open, which were dropped.
+    pub stream_write_errors: u64,
+    /// Connect requests from an address the node does not have, which were ignored.
+    pub stream_op_errors: u64,
 }
 
 impl Metrics {

@@ -63,6 +63,8 @@ pub enum Call {
     Timer,
     /// A scenario command.
     Command,
+    /// A stream record arrived, or a stream endpoint changed.
+    Stream,
 }
 
 /// Turns one call of a node into busy time. A node is busy until its calls' cost has passed: later datagrams and
@@ -96,6 +98,9 @@ pub struct LanConfig {
     pub mtu: usize,
     /// Drop all UDP in and out of the LAN.
     pub udp_block: bool,
+    /// What the LAN's middlebox lets through for stream connections; `None` for no restriction. A LAN with a stream
+    /// policy or `udp_block` refuses every inbound connection (SYN), as does a LAN with a captive-portal node.
+    pub stream: Option<StreamPolicy>,
     /// A stateful IPv6 firewall: inbound IPv6 is admitted only from remotes the host sent to (at most 256 each).
     pub v6_firewall: bool,
 }
@@ -108,9 +113,22 @@ impl Default for LanConfig {
             region: 0,
             mtu: 1500,
             udp_block: false,
+            stream: None,
             v6_firewall: false,
         }
     }
+}
+
+/// The stream rules of a LAN's middlebox, applied to the SYN of a connection leaving the LAN.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamPolicy {
+    /// Destination ports a connection may use; `None` allows any.
+    pub ports: Option<Vec<u16>>,
+    /// Allow only WebSocket carriers (deep packet inspection blocks raw TCP).
+    pub tls_only: bool,
+    /// Answer a refused connection with a reset, so it fails after `2 * uplink delay + 1` ns; otherwise the SYN
+    /// is dropped silently and the connection fails after its SYN retries.
+    pub reject: bool,
 }
 
 /// Which link of a LAN.

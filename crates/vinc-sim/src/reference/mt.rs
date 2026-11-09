@@ -1,8 +1,8 @@
-//! A bit-exact port of CPython's `random.Random`: MT19937 with `init_by_array` seeding, the 53-bit `random()`,
+//! A bit-exact port of `CPython`'s `random.Random`: `MT19937` with `init_by_array` seeding, the 53-bit `random()`,
 //! `getrandbits`, `_randbelow` by rejection sampling, and the methods built on them.
 //!
-//! Invariant: for the same seed every method returns exactly what the CPython method of the same name returns, and
-//! consumes the same 32-bit words, so a mixed sequence of calls stays in step with CPython. The float methods use
+//! Invariant: for the same seed every method returns exactly what the `CPython` method of the same name returns, and
+//! consumes the same 32-bit words, so a mixed sequence of calls stays in step with `CPython`. The float methods use
 //! the platform logarithm like `math.log` does; the tests compare them bit for bit.
 
 use std::collections::BTreeSet;
@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 const N: usize = 624;
 const M: usize = 397;
 
-/// CPython's Mersenne Twister generator and the `random.Random` methods the reference harness calls.
+/// `CPython`'s Mersenne Twister generator and the `random.Random` methods the reference harness calls.
 #[derive(Clone, Debug)]
 pub struct PyRandom {
     mt: [u32; N],
@@ -140,7 +140,7 @@ impl PyRandom {
     }
 
     /// `_randbelow(n)` (and `randrange(n)`): a uniform integer in `[0, n)` by rejection sampling on
-    /// `getrandbits(n.bit_length())`. Returns 0 without drawing when `n` is 0 (CPython raises there).
+    /// `getrandbits(n.bit_length())`. Returns 0 without drawing when `n` is 0 (`CPython` raises there).
     pub fn randbelow(&mut self, n: u64) -> u64 {
         if n == 0 {
             return 0;
@@ -154,7 +154,7 @@ impl PyRandom {
         }
     }
 
-    /// `randrange(start, stop)` with step 1; `start` when the range is empty (CPython raises there).
+    /// `randrange(start, stop)` with step 1; `start` when the range is empty (`CPython` raises there).
     pub fn randrange(&mut self, start: i64, stop: i64) -> i64 {
         let width = i128::from(stop) - i128::from(start);
         if width <= 0 {
@@ -163,7 +163,7 @@ impl PyRandom {
         (i128::from(start) + i128::from(self.randbelow(width as u64))) as i64
     }
 
-    /// `randint(a, b)`: a uniform integer in `[a, b]`; `a` when `b < a` (CPython raises there).
+    /// `randint(a, b)`: a uniform integer in `[a, b]`; `a` when `b < a` (`CPython` raises there).
     pub fn randint(&mut self, a: i64, b: i64) -> i64 {
         self.randrange(a, b.saturating_add(1))
     }
@@ -173,7 +173,7 @@ impl PyRandom {
         (len > 0).then(|| self.randbelow(len as u64) as usize)
     }
 
-    /// `shuffle(x)`: the Fisher-Yates shuffle CPython uses, from the back.
+    /// `shuffle(x)`: the Fisher-Yates shuffle `CPython` uses, from the back.
     pub fn shuffle<T>(&mut self, x: &mut [T]) {
         for i in (1..x.len()).rev() {
             let j = self.randbelow(i as u64 + 1) as usize;
@@ -182,7 +182,7 @@ impl PyRandom {
     }
 
     /// `sample(range(n), k)`: `k` distinct indices below `n` in selection order, or `None` when `k > n`. Uses the
-    /// pool method for small populations and a selected-set method otherwise, exactly as CPython chooses.
+    /// pool method for small populations and a selected-set method otherwise, exactly as `CPython` chooses.
     pub fn sample_indices(&mut self, n: usize, k: usize) -> Option<Vec<usize>> {
         if k > n {
             return None;

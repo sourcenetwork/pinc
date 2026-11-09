@@ -13,9 +13,11 @@ use crate::Time;
 use crate::config::{Call, CostModel, NodeState};
 use crate::link::{Fate, Link, LinkConfig};
 use crate::metrics::DropReason;
+use crate::nat::Proto;
 use crate::node::Node;
 use crate::rng::{Random, Stream};
 use crate::sim::{Ev, POOL_MAX, Packet, Sim, SiteKind};
+use crate::tcp::{Seg, SegKind, State};
 
 /// Remotes the stateful IPv6 firewall remembers per host.
 const FW_REMOTES: usize = 256;
@@ -38,7 +40,26 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             data: buf,
             origin,
             sent_at,
+            seg: None,
         };
+        self.store_pkt(p)
+    }
+
+    /// A stream segment from node `origin` (no payload bytes; the size is in the header).
+    pub(crate) fn alloc_seg(&mut self, src: SocketAddr, dst: SocketAddr, seg: Seg, origin: u32, sent_at: Time) -> u32 {
+        let mut data = self.pool.pop().unwrap_or_default();
+        data.clear();
+        self.store_pkt(Packet {
+            src,
+            dst,
+            data,
+            origin: Some(origin),
+            sent_at,
+            seg: Some(Box::new(seg)),
+        })
+    }
+
+    fn store_pkt(&mut self, p: Packet) -> u32 {
         if let Some(i) = self.free_pkts.pop() {
             self.pkts[i as usize] = Some(p);
             i
@@ -55,7 +76,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         }
     }
 
-    fn count_drop(&mut self, t: Time, why: DropReason, len: usize) {
+    pub(crate) fn count_drop(&mut self, t: Time, why: DropReason, len: usize) {
         self.metrics.drops[why as usize] += 1;
         if self.cfg.trace_packets {
             let name = why.name();
@@ -69,7 +90,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         let Some(p) = self.pkts[pkt as usize].take() else {
             return;
         };
-        self.count_drop(t, why, p.data.len());
+        self.count_drop(t, why, p.wire_len());
         self.recycle(pkt, p);
     }
 
@@ -85,7 +106,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
     }
 
     /// The LAN a site's datagrams leave through, if any.
-    fn lan_of(&self, site: u32) -> Option<u32> {
+    pub(crate) fn lan_of(&self, site: u32) -> Option<u32> {
         match self.sites[site as usize] {
             SiteKind::Iface { node, idx } => {
                 let i = &self.nodes[node as usize].ifaces[idx as usize];
@@ -97,7 +118,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
     }
 
     /// The first site a datagram for `ip` reaches: its LAN's downlink if it has one, else its owner.
-    fn entry_for(&self, ip: std::net::IpAddr) -> Option<(u32, u32)> {
+    pub(crate) fn entry_for(&self, ip: std::net::IpAddr) -> Option<(u32, u32)> {
         let owner = *self.addr_map.get(&ip)?;
         Some((
             owner,
@@ -133,7 +154,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         if let (None, Some(l), false) = (via, lan, local.is_ipv4()) {
             let fw = &mut self.lans[l as usize];
             if fw.cfg.v6_firewall {
-                let set = fw.fw.entry(local.ip()).or_default();
+                let set = fw.fw.entry(local).or_default();
                 if set.len() < FW_REMOTES || set.contains(&remote) {
                     set.insert(remote);
                 }
@@ -171,7 +192,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             self.drop_pkt(t, pkt, DropReason::NoRoute);
             return;
         };
-        let Some(len) = self.pkts[pkt as usize].as_ref().map(|p| p.data.len()) else {
+        let Some(len) = self.pkts[pkt as usize].as_ref().map(Packet::wire_len) else {
             return;
         };
         let Some(link) = self.link_entry(from, entry) else {
@@ -187,13 +208,16 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         match fate {
             Fate::Drop(why) => self.drop_pkt(t, pkt, why),
             Fate::Sent { at, dup_at } => {
-                if let (Some(o), Some(p)) = (obs, self.pkts[pkt as usize].as_ref()) {
+                if let (Some(o), Some(p)) = (obs, self.pkts[pkt as usize].as_ref().filter(|p| p.seg.is_none())) {
                     self.observers[o as usize].record(t, p.src, p.dst, &p.data);
                 }
                 if let (Some(d), Some(p)) = (dup_at, self.pkts[pkt as usize].as_ref()) {
                     let (src, dst, origin, sent_at) = (p.src, p.dst, p.origin, p.sent_at);
-                    let data = p.data.clone();
+                    let (data, seg) = (p.data.clone(), p.seg.clone());
                     let copy = self.alloc_pkt(src, dst, &data, origin, sent_at);
+                    if let Some(c) = self.pkts[copy as usize].as_mut() {
+                        c.seg = seg;
+                    }
                     self.metrics.duplicated += 1;
                     self.push(d + extra, Ev::Arrive { site: to, pkt: copy });
                 }
@@ -207,11 +231,18 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         let Some(p) = self.pkts[pkt as usize].as_ref() else {
             return;
         };
-        let (len, dst, origin) = (p.data.len(), p.dst.ip(), p.origin);
-        let portal = origin.is_some_and(|o| self.nodes[o as usize].portal_until > t);
-        if portal || self.lans[l].cfg.udp_block {
-            self.drop_pkt(t, pkt, DropReason::Middlebox);
-            return;
+        let (len, dst, origin, seg) = (p.wire_len(), p.dst.ip(), p.origin, p.seg.as_deref().copied());
+        if let Some(seg) = seg {
+            if seg.kind == SegKind::Syn && self.syn_refused(t, l, seg.from, origin) {
+                self.drop_pkt(t, pkt, DropReason::Middlebox);
+                return;
+            }
+        } else {
+            let portal = origin.is_some_and(|o| self.nodes[o as usize].portal_until > t);
+            if portal || self.lans[l].cfg.udp_block {
+                self.drop_pkt(t, pkt, DropReason::Middlebox);
+                return;
+            }
         }
         let up = &mut self.lans[l].up;
         let (fate, obs) = (up.send(t, len), up.observer);
@@ -249,7 +280,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         let Some(p) = self.pkts[pkt as usize].as_ref() else {
             return;
         };
-        let (len, dst) = (p.data.len(), p.dst.ip());
+        let (len, dst) = (p.wire_len(), p.dst.ip());
         let down = &mut self.lans[l].down;
         let (fate, obs) = (down.send(t, len), down.observer);
         let Some(owner) = self.addr_map.get(&dst).copied() else {
@@ -279,6 +310,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             return;
         };
         let (src, dst) = (p.src, p.dst);
+        let proto = if p.seg.is_some() { Proto::Tcp } else { Proto::Udp };
         if dst.ip() == self.nats[n].nat.cfg.ext_ip {
             let public_src = self
                 .addr_map
@@ -288,7 +320,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
                     SiteKind::Host(_) => true,
                     _ => false,
                 });
-            let Some(int) = self.nats[n].nat.inbound(t, dst.port(), src, public_src) else {
+            let Some(int) = self.nats[n].nat.inbound(t, proto, dst.port(), src, public_src) else {
                 self.drop_pkt(t, pkt, DropReason::NatFilter);
                 return;
             };
@@ -300,7 +332,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
                 None => self.drop_pkt(t, pkt, DropReason::NoRoute),
             }
         } else {
-            let ext = self.nats[n].nat.outbound(t, src, dst);
+            let ext = self.nats[n].nat.outbound(t, proto, src, dst);
             if let Some(p) = self.pkts[pkt as usize].as_mut() {
                 p.src = ext;
             }
@@ -316,17 +348,21 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         let slot = &self.nodes[n];
         let iface = &slot.ifaces[idx];
         let lan = iface.lan.map(|l| &self.lans[l as usize]);
-        let firewalled = lan.is_some_and(|l| {
-            l.cfg.v6_firewall && p.dst.is_ipv6() && !l.fw.get(&p.dst.ip()).is_some_and(|s| s.contains(&p.src))
-        });
+        let stream = p.seg.is_some();
+        let syn = p.seg.as_ref().is_some_and(|s| s.kind == SegKind::Syn);
+        // The IPv6 firewall and the UDP rules concern datagrams; a middlebox refuses every inbound connection.
+        let firewalled = !stream
+            && lan.is_some_and(|l| {
+                l.cfg.v6_firewall && p.dst.is_ipv6() && !l.fw.get(&p.dst).is_some_and(|s| s.contains(&p.src))
+            });
+        let blocks_udp = !stream && (slot.portal_until > t || lan.is_some_and(|l| l.cfg.udp_block));
+        let refuses_syn = syn && (slot.portal_ns > 0 || lan.is_some_and(|l| l.cfg.udp_block || l.cfg.stream.is_some()));
         let why = match slot.state {
             NodeState::Crashed => Some(DropReason::NodeDown),
             NodeState::Suspended => Some(DropReason::NodeAsleep),
             NodeState::Up if !iface.up || iface.addr != p.dst.ip() => Some(DropReason::NoIface),
             NodeState::Up if firewalled => Some(DropReason::NatFilter),
-            NodeState::Up if slot.portal_until > t || lan.is_some_and(|l| l.cfg.udp_block) => {
-                Some(DropReason::Middlebox)
-            }
+            NodeState::Up if blocks_udp || refuses_syn => Some(DropReason::Middlebox),
             NodeState::Up => p
                 .origin
                 .filter(|o| self.nodes[*o as usize].group != slot.group)
@@ -339,6 +375,12 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         let Some(mut p) = self.pkts[pkt as usize].take() else {
             return;
         };
+        if let Some(seg) = p.seg.take() {
+            let (dst, src) = (p.dst, p.src);
+            self.recycle(pkt, p);
+            self.tcp_input(t, n, dst, src, *seg);
+            return;
+        }
         let len = p.data.len();
         let keep = self.cfg.latency_samples;
         let m = &mut self.metrics.nodes[n];
@@ -352,6 +394,28 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         self.recycle(pkt, p);
         let send_at = self.finish_call(n, t, Call::Datagram, len);
         self.drive(n, t, send_at, false);
+    }
+
+    /// Whether the middlebox of LAN `l` refuses the SYN of end `e` (sent by node `origin`): during a captive portal
+    /// every connection is reset, and the stream policy refuses the ports and carriers it does not allow, resetting
+    /// or silently dropping them. A reset fails the connect after `2 * uplink delay + 1` ns.
+    fn syn_refused(&mut self, t: Time, l: usize, e: u32, origin: Option<u32>) -> bool {
+        let portal = origin.is_some_and(|o| self.nodes[o as usize].portal_until > t);
+        let end = &self.ends[e as usize];
+        let (refused, reset) = match (portal, self.lans[l].cfg.stream.as_ref()) {
+            (true, _) => (true, true),
+            (false, Some(p)) => {
+                let ports_ok = p.ports.as_ref().is_none_or(|ps| ps.contains(&end.remote.port()));
+                ((p.tls_only && !end.ws) || !ports_ok, p.reject)
+            }
+            (false, None) => (false, false),
+        };
+        if refused && reset && end.state == State::Syn {
+            self.ends[e as usize].state = State::Rejected;
+            let at = t + 2 * self.lans[l].up.cfg.delay + 1;
+            self.push(at, Ev::TcpFail { end: e });
+        }
+        refused
     }
 
     /// Injects a datagram from an adversary host, with any source address it likes.

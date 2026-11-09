@@ -1,8 +1,8 @@
 //! Python's `repr` for the value types the reference harness hashes: ints, floats, strings, bytes, booleans, `None`
-//! and tuples. The seed derivation hashes the text of `repr(tuple)`, so the text must match CPython character for
+//! and tuples. The seed derivation hashes the text of `repr(tuple)`, so the text must match `CPython` character for
 //! character.
 //!
-//! Invariant: `Py::repr` equals CPython's `repr` of the same value. One approximation: a non-ASCII character is
+//! Invariant: `Py::repr` equals `CPython`'s `repr` of the same value. One approximation: a non-ASCII character is
 //! escaped when it is a control, separator or format character in the common ranges listed in `printable`;
 //! unassigned code points are not detected and stay as they are.
 
@@ -62,7 +62,7 @@ impl Py<'_> {
     }
 }
 
-/// The shortest round-trip digits and the exponent, laid out as CPython's `repr(float)` does: scientific notation
+/// The shortest round-trip digits and the exponent, laid out as `CPython`'s `repr(float)` does: scientific notation
 /// when the decimal point position is at most -4 or above 16.
 fn float_repr(f: f64, out: &mut String) {
     if f.is_nan() {
@@ -80,7 +80,7 @@ fn float_repr(f: f64, out: &mut String) {
     let (mant, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
     let digits: String = mant.chars().filter(char::is_ascii_digit).collect();
     let decpt = exp.parse::<i32>().unwrap_or(0) + 1;
-    let n = digits.len() as i32;
+    let n = i32::try_from(digits.len()).unwrap_or(i32::MAX);
     if decpt <= -4 || decpt > 16 {
         out.push_str(&digits[..1]);
         if n > 1 {
@@ -108,7 +108,7 @@ fn float_repr(f: f64, out: &mut String) {
 fn printable(c: char) -> bool {
     !matches!(c as u32,
         0x80..=0xa0 | 0xad | 0x1680 | 0x2000..=0x200f | 0x2028..=0x202f | 0x205f..=0x206f | 0x3000
-        | 0xd800..=0xf8ff | 0xfeff | 0xfff9..=0xfffb | 0xe0000..=0xe0fff | 0xf0000..=0x10ffff)
+        | 0xd800..=0xf8ff | 0xfeff | 0xfff9..=0xfffb | 0xe0000..=0xe0fff | 0xf0000..=0x0010_ffff)
 }
 
 fn quote_for(has_single: bool, has_double: bool) -> char {

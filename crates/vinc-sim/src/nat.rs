@@ -1,10 +1,14 @@
 //! A NAT: translation of private sources to a public address, with endpoint-independent or endpoint-dependent
 //! mapping and three filtering behaviours.
 //!
-//! Mappings are created by outbound datagrams and expire `mapping_timeout` after their last outbound use (strictly
-//! more than the timeout idle). A mapping expired or moved by a rebind returns a different external port. A mapping
-//! remembers at most 64 contacted remotes; beyond that new remotes are never admitted back. Hairpinning (a private
-//! host addressing the NAT's own public address) is not modelled: such a datagram fails the filter.
+//! Mappings are created by outbound datagrams and segments and expire after their last outbound use (strictly more
+//! than `mapping_timeout` idle for datagrams, `tcp_timeout` for stream segments; the two kinds of traffic have
+//! separate mappings). A mapping expired or moved by a rebind returns a different external port. A mapping remembers
+//! at most 64 contacted remotes (address and port); beyond that new remotes are never admitted back. Hairpinning (a
+//! private host addressing the NAT's own public address) is not modelled: such a datagram fails the filter.
+//!
+//! Port allocation under [`PortPolicy::Randomized`] advances the counter first and returns the new value; a rebind
+//! walks the mappings in the order their keys were first created, expired ones included, and gives each a new port.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr};
@@ -40,8 +44,8 @@ impl NatKind {
 pub enum PortPolicy {
     /// Consecutive ports from `port_base`, skipping ports in use.
     Sequential,
-    /// A random start in `[20000, 40000)`, each allocation advancing by 1 to 7, wrapping above 65000 to a random port
-    /// in `[20000, 21000)` with no collision check after a wrap.
+    /// A random start in `[20000, 40000)`; each allocation first advances the counter by 1 to 7 and returns the new
+    /// value, wrapping above 65000 to a random port in `[20000, 21000)`. There is no collision check.
     Randomized,
 }
 
@@ -52,8 +56,11 @@ pub struct NatConfig {
     pub kind: NatKind,
     /// The public address.
     pub ext_ip: IpAddr,
-    /// Idle time after which a mapping disappears, in nanoseconds (a short value models a firewall's UDP timeout).
+    /// Idle time after which a datagram mapping disappears, in nanoseconds (a short value models a firewall's UDP
+    /// timeout).
     pub mapping_timeout: Time,
+    /// Idle time after which a stream (TCP) mapping disappears, in nanoseconds; the reference uses 7200 s.
+    pub tcp_timeout: Time,
     /// Whether inbound datagrams also keep a mapping alive (otherwise only outbound ones do).
     pub refresh_on_inbound: bool,
     /// The first external port handed out under [`PortPolicy::Sequential`].
@@ -64,12 +71,20 @@ pub struct NatConfig {
     pub no_punch: bool,
 }
 
-type Key = (SocketAddr, Option<SocketAddr>);
+/// The kind of traffic a mapping serves; each has its own mappings, ports and timeout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Proto {
+    Udp,
+    Tcp,
+}
+
+type Key = (Proto, SocketAddr, Option<SocketAddr>);
 
 struct Mapping {
     port: u16,
     last: Time,
-    created: u64,
+    /// When the key was first created; a replaced (expired) mapping keeps its key's place in the rebind order.
+    order: u64,
     allowed: BTreeSet<SocketAddr>,
 }
 
@@ -80,7 +95,7 @@ pub(crate) struct Nat<R: Random> {
     pub(crate) cfg: NatConfig,
     rng: R,
     by_key: BTreeMap<Key, Mapping>,
-    by_port: BTreeMap<u16, Key>,
+    by_port: BTreeMap<(Proto, u16), Key>,
     next_port: u16,
     created: u64,
     sweep_at: usize,
@@ -111,14 +126,17 @@ impl<R: Random> Nat<R> {
     }
 
     /// Moves every mapping to a new external port (old inbound entries vanish), as a NAT reboot does; the public
-    /// address may change too.
+    /// address may change too. Mappings are visited in the order their keys were first created.
     pub(crate) fn rebind(&mut self, new_ip: Option<IpAddr>) {
-        let mut keys: Vec<(u64, Key)> = self.by_key.iter().map(|(k, m)| (m.created, *k)).collect();
+        let mut keys: Vec<(u64, Key)> = self.by_key.iter().map(|(k, m)| (m.order, *k)).collect();
         keys.sort_unstable();
-        self.by_port.clear();
         for (_, k) in keys {
+            let Some(old) = self.by_key.get(&k).map(|m| m.port) else {
+                continue;
+            };
+            self.by_port.remove(&(k.0, old));
             let port = self.alloc_port();
-            self.by_port.insert(port, k);
+            self.by_port.insert((k.0, port), k);
             if let Some(m) = self.by_key.get_mut(&k) {
                 m.port = port;
             }
@@ -128,13 +146,16 @@ impl<R: Random> Nat<R> {
         }
     }
 
+    /// Forgets expired mappings so a long run holds only live ones. The reference keeps them forever, so a rebind
+    /// after a sweep skips them (one port draw each fewer); this only matters once a NAT holds over 64 mappings.
+    // vertexia: the reference never forgets a mapping; exact rebind order beyond 64 mappings needs an unbounded table.
     fn sweep(&mut self, now: Time) {
-        let timeout = self.cfg.mapping_timeout;
+        let (udp, tcp) = (self.cfg.mapping_timeout, self.cfg.tcp_timeout);
         let by_port = &mut self.by_port;
-        self.by_key.retain(|_, m| {
-            let keep = now.saturating_sub(m.last) <= timeout;
+        self.by_key.retain(|k, m| {
+            let keep = now.saturating_sub(m.last) <= if k.0 == Proto::Udp { udp } else { tcp };
             if !keep {
-                by_port.remove(&m.port);
+                by_port.remove(&(k.0, m.port));
             }
             keep
         });
@@ -144,64 +165,69 @@ impl<R: Random> Nat<R> {
     fn alloc_port(&mut self) -> u16 {
         match self.cfg.ports {
             PortPolicy::Randomized => {
-                let p = self.next_port;
-                let next = u32::from(p) + 1 + self.rng.below(7) as u32;
+                let next = u32::from(self.next_port) + 1 + self.rng.below(7) as u32;
                 self.next_port = if next > 65_000 {
                     20_000 + self.rng.below(1000) as u16
                 } else {
                     next as u16
                 };
-                p
+                self.next_port
             }
             PortPolicy::Sequential => {
                 let base = self.cfg.port_base.max(1);
                 for _ in 0..=u32::from(u16::MAX - base) {
                     let p = self.next_port;
                     self.next_port = if p == u16::MAX { base } else { p + 1 };
-                    if !self.by_port.contains_key(&p) {
+                    if !self.by_port.contains_key(&(Proto::Udp, p)) && !self.by_port.contains_key(&(Proto::Tcp, p)) {
                         return p;
                     }
                 }
                 // Every port is mapped and live: reuse the next one, evicting its owner.
                 let p = self.next_port;
-                if let Some(k) = self.by_port.remove(&p) {
-                    self.by_key.remove(&k);
+                for proto in [Proto::Udp, Proto::Tcp] {
+                    if let Some(k) = self.by_port.remove(&(proto, p)) {
+                        self.by_key.remove(&k);
+                    }
                 }
                 p
             }
         }
     }
 
-    /// Translates a datagram going out; returns the public source address.
-    pub(crate) fn outbound(&mut self, now: Time, src: SocketAddr, dst: SocketAddr) -> SocketAddr {
-        let key = (src, self.cfg.kind.dependent().then_some(dst));
-        let peer = match self.cfg.kind {
-            NatKind::AddressRestricted | NatKind::DependentAddress => SocketAddr::new(dst.ip(), 0),
-            _ => dst,
-        };
-        let timeout = self.cfg.mapping_timeout;
+    fn timeout_of(&self, proto: Proto) -> Time {
+        match proto {
+            Proto::Udp => self.cfg.mapping_timeout,
+            Proto::Tcp => self.cfg.tcp_timeout,
+        }
+    }
+
+    /// Translates a datagram or segment going out; returns the public source address.
+    pub(crate) fn outbound(&mut self, now: Time, proto: Proto, src: SocketAddr, dst: SocketAddr) -> SocketAddr {
+        let key = (proto, src, self.cfg.kind.dependent().then_some(dst));
+        let timeout = self.timeout_of(proto);
         let live = self
             .by_key
             .get(&key)
             .is_some_and(|m| now.saturating_sub(m.last) <= timeout);
         if !live {
-            if let Some(old) = self.by_key.remove(&key)
-                && self.by_port.get(&old.port) == Some(&key)
-            {
-                self.by_port.remove(&old.port);
-            }
+            let order = if let Some(old) = self.by_key.remove(&key) {
+                self.by_port.remove(&(proto, old.port));
+                old.order
+            } else {
+                self.created += 1;
+                self.created
+            };
             if self.by_key.len() >= self.sweep_at {
                 self.sweep(now);
             }
             let port = self.alloc_port();
-            self.by_port.insert(port, key);
-            self.created += 1;
+            self.by_port.insert((proto, port), key);
             self.by_key.insert(
                 key,
                 Mapping {
                     port,
                     last: now,
-                    created: self.created,
+                    order,
                     allowed: BTreeSet::new(),
                 },
             );
@@ -211,19 +237,26 @@ impl<R: Random> Nat<R> {
             return SocketAddr::new(ext, 0);
         };
         m.last = now;
-        if m.allowed.len() < MAX_REMOTES || m.allowed.contains(&peer) {
-            m.allowed.insert(peer);
+        if m.allowed.len() < MAX_REMOTES {
+            m.allowed.insert(dst);
         }
         SocketAddr::new(ext, m.port)
     }
 
-    /// Translates a datagram coming in to external `port` from `from`; `None` when the NAT drops it.
+    /// Translates a datagram or segment coming in to external `port` from `from`; `None` when the NAT drops it.
     /// `public_src` tells whether the sender is a public host (not behind a NAT).
-    pub(crate) fn inbound(&mut self, now: Time, port: u16, from: SocketAddr, public_src: bool) -> Option<SocketAddr> {
-        let key = *self.by_port.get(&port)?;
+    pub(crate) fn inbound(
+        &mut self,
+        now: Time,
+        proto: Proto,
+        port: u16,
+        from: SocketAddr,
+        public_src: bool,
+    ) -> Option<SocketAddr> {
+        let key = *self.by_port.get(&(proto, port))?;
         let (refresh, timeout, kind, no_punch) = (
             self.cfg.refresh_on_inbound,
-            self.cfg.mapping_timeout,
+            self.timeout_of(proto),
             self.cfg.kind,
             self.cfg.no_punch,
         );
@@ -233,9 +266,7 @@ impl<R: Random> Nat<R> {
         }
         let pass = match kind {
             NatKind::FullCone | NatKind::DependentOpen => true,
-            NatKind::AddressRestricted | NatKind::DependentAddress => {
-                m.allowed.contains(&SocketAddr::new(from.ip(), 0))
-            }
+            NatKind::AddressRestricted | NatKind::DependentAddress => m.allowed.iter().any(|r| r.ip() == from.ip()),
             NatKind::PortRestricted | NatKind::Symmetric => m.allowed.contains(&from),
         };
         if pass && refresh {
@@ -244,6 +275,6 @@ impl<R: Random> Nat<R> {
         if pass && !public_src {
             self.punched += 1;
         }
-        pass.then_some(key.0)
+        pass.then_some(key.1)
     }
 }

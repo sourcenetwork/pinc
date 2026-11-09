@@ -8,7 +8,7 @@ use crate::adversary::{Flood, FloodPayload, FloodSpec, Replay};
 use crate::config::{CostModel, LanDir, NodeState};
 use crate::ids::{HostId, LanId, NatId, NodeId, ObsId};
 use crate::link::LinkChange;
-use crate::node::{IfaceEvent, Node};
+use crate::node::{IfaceEvent, Node, StreamEvent, StreamId};
 use crate::rng::{Random, Stream};
 use crate::sim::{Ev, IfaceChange, LanPartition, Sim, SiteRef};
 
@@ -239,6 +239,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         slot.timer_gen += 1;
         slot.timer_at = None;
         slot.busy_until = 0;
+        self.close_all_streams(t, n);
         self.trace_line(format_args!("{{\"t\":{t},\"k\":\"crash\",\"n\":{n}}}"));
     }
 
@@ -248,6 +249,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             return;
         }
         slot.state = NodeState::Up;
+        slot.incarnation += 1;
         slot.busy_until = t;
         slot.portal_until = t + slot.portal_ns;
         slot.node.restart(t, &slot.persisted);
@@ -265,6 +267,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
         slot.timer_gen += 1;
         slot.timer_at = None;
         self.drain_events(n, t);
+        self.nodes[n].slept_streams = self.close_all_streams(t, n);
         self.trace_line(format_args!("{{\"t\":{t},\"k\":\"suspend\",\"n\":{n}}}"));
     }
 
@@ -274,6 +277,11 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             return;
         }
         slot.state = NodeState::Up;
+        // The operating system closed the sockets while the node slept; it learns of that first.
+        for h in std::mem::take(&mut slot.slept_streams) {
+            slot.node
+                .handle_stream_event(t, StreamEvent::Closed { stream: StreamId(h) });
+        }
         slot.node.resume(t);
         self.trace_line(format_args!("{{\"t\":{t},\"k\":\"resume\",\"n\":{n}}}"));
         self.drive(n, t, t, false);
@@ -305,6 +313,9 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
                 IfaceEvent::Changed { old, new }
             }
         };
+        if matches!(change, IfaceChange::Down | IfaceChange::Addr(_)) {
+            self.close_streams_on(t, n, old);
+        }
         self.trace_line(format_args!(
             "{{\"t\":{t},\"k\":\"iface\",\"n\":{n},\"i\":{idx},\"e\":\"{event:?}\"}}"
         ));

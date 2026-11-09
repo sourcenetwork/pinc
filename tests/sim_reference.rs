@@ -408,6 +408,7 @@ fn nat_cfg(kind: NatKind, ports: PortPolicy, no_punch: bool) -> NatConfig {
         kind,
         ext_ip: NAT_EXT,
         mapping_timeout: 600 * SEC,
+        tcp_timeout: 7200 * SEC,
         refresh_on_inbound: false,
         port_base: 20_000,
         ports,
