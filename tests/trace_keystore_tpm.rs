@@ -32,9 +32,9 @@ use std::sync::{Arc, Mutex};
 use tpm2_protocol::TpmUnmarshal;
 use tpm2_protocol::data::{Tpm2bPrivate, Tpm2bPublic};
 use tpm2_protocol::frame::{TpmGetRandomResponse, TpmResponse};
+use vinc_crypto::IdentityAlg;
 use vinc_keystore::tpm::{SimTransport, TpmClient, Transport};
 use vinc_keystore::{KeyHandle, KeyStore, KeyStoreError, TpmConfig, TpmStore};
-use vinc_crypto::IdentityAlg;
 use vinc_tests::Swtpm;
 
 fn arr(b: &[u8]) -> String {
@@ -45,9 +45,12 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes(b[..4].try_into().unwrap())
 }
 
+/// A command and its response.
+type Exchange = (Vec<u8>, Vec<u8>);
+
 #[derive(Default)]
 struct Log {
-    cmds: Vec<(Vec<u8>, Vec<u8>)>,
+    cmds: Vec<Exchange>,
     live: HashSet<u32>,
 }
 
@@ -100,6 +103,7 @@ fn code_of<T>(r: &Result<T, KeyStoreError>) -> String {
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn describe(e: &KeyStoreError) -> String {
     match e {
         KeyStoreError::Tpm { .. } => "Tpm".to_string(),
@@ -112,7 +116,9 @@ fn describe(e: &KeyStoreError) -> String {
 fn res_of<T>(r: &Result<T, KeyStoreError>) -> String {
     match r {
         Ok(_) => "ok".into(),
-        Err(KeyStoreError::Tpm { code }) => format!("Tpm#{}", [code >> 16, code & 0xffff].map(|x| x.to_string()).join(",")),
+        Err(KeyStoreError::Tpm { code }) => {
+            format!("Tpm#{}", [code >> 16, code & 0xffff].map(|x| x.to_string()).join(","))
+        }
         Err(e) => describe(e),
     }
 }
@@ -134,12 +140,12 @@ struct Run {
 
 impl Run {
     /// Take the commands logged since the last call, as events fields.
-    fn take(&mut self) -> (Vec<(Vec<u8>, Vec<u8>)>, usize) {
+    fn take(&mut self) -> (Vec<Exchange>, usize) {
         let mut log = self.log.lock().unwrap();
         (std::mem::take(&mut log.cmds), log.live.len())
     }
 
-    fn cmds_json(cmds: &[(Vec<u8>, Vec<u8>)]) -> String {
+    fn cmds_json(cmds: &[Exchange]) -> String {
         cmds.iter()
             .map(|(c, r)| format!(r#"{{"cmd":{},"rsp":{}}}"#, arr(c), arr(r)))
             .collect::<Vec<_>>()
@@ -159,7 +165,11 @@ impl Run {
             self.slots,
             Self::cmds_json(&cmds)
         );
-        assert_eq!(after as i64, self.slots, "the TPM holds exactly the handles the store tracks");
+        assert_eq!(
+            i64::try_from(after).unwrap(),
+            self.slots,
+            "the TPM holds exactly the handles the store tracks"
+        );
     }
 
     fn live(&self) -> usize {
@@ -183,7 +193,7 @@ fn resp_trace(out: &mut String) {
     cases.push(Ok(trailing));
     for delta in [-1i32, 1] {
         let mut v = valid.clone();
-        v[5] = (20 + delta) as u8;
+        v[5] = u8::try_from(20 + delta).unwrap();
         cases.push(Ok(v));
     }
     for code in [0x100u32, 0x1D, 0x98E, 0xFFFF_FFFF] {
@@ -206,7 +216,9 @@ fn resp_trace(out: &mut String) {
             Ok(r) => (r.clone(), String::new()),
             Err(k) => (vec![], format!("{k:?}")),
         };
-        let body_ok = TpmResponse::cast(&rsp).and_then(|r| r.unmarshal::<TpmGetRandomResponse>()).is_ok();
+        let body_ok = TpmResponse::cast(&rsp)
+            .and_then(TpmResponse::unmarshal::<TpmGetRandomResponse>)
+            .is_ok();
         let mut client = TpmClient::new(Script(vec![case]));
         let r = client.get_random(16);
         let r = r.map(|_| ());
@@ -251,7 +263,7 @@ fn programs(tpm: &Swtpm, run: &mut Run) {
             b = run.live();
         }
         // a key: created, loaded and read
-        let k: KeyHandle = store.generate(IdentityAlg::EcdsaP256).unwrap_or_else(|e| panic!("{e:?} {:?}", run.log.lock().unwrap().cmds.last()));
+        let k: KeyHandle = store.generate(IdentityAlg::EcdsaP256).unwrap();
         run.prog("generate", 0, owner, key, b, "ok", 1);
         b = run.live();
         let r = store.sign(&k, b"message");
@@ -311,7 +323,7 @@ fn programs(tpm: &Swtpm, run: &mut Run) {
         run.prog("load_persistent", 0, owner, key, b, &res_of(&r), 0);
         b = run.live();
         let r = store.load_persistent(at);
-        run.prog("load_persistent", 0, owner, key, b, &res_of(&r), if r.is_ok() { 0 } else { 0 });
+        run.prog("load_persistent", 0, owner, key, b, &res_of(&r), 0);
         b = run.live();
         sealed(&mut store, run, owner, key);
         let _ = b;
@@ -358,13 +370,40 @@ fn sealed(store: &mut TpmStore<Recorder<SimTransport>>, run: &mut Run, owner: &[
         arr(&blob)
     );
     let mut variants: Vec<Vec<u8>> = vec![blob.clone()];
-    let positions = [0usize, 1, 2, 3, 10, hdr / 2, hdr - 1, hdr, hdr + 5, hdr + 11, hdr + 12, hdr + 14, blob.len() - 17, blob.len() - 16, blob.len() - 1];
+    let positions = [
+        0usize,
+        1,
+        2,
+        3,
+        10,
+        hdr / 2,
+        hdr - 1,
+        hdr,
+        hdr + 5,
+        hdr + 11,
+        hdr + 12,
+        hdr + 14,
+        blob.len() - 17,
+        blob.len() - 16,
+        blob.len() - 1,
+    ];
     for &i in &positions {
         let mut v = blob.clone();
         v[i] ^= 0x01;
         variants.push(v);
     }
-    for cut in [0usize, 1, 2, 3, hdr / 2, hdr, hdr + 11, hdr + 12, blob.len() - 17, blob.len() - 1] {
+    for cut in [
+        0usize,
+        1,
+        2,
+        3,
+        hdr / 2,
+        hdr,
+        hdr + 11,
+        hdr + 12,
+        blob.len() - 17,
+        blob.len() - 1,
+    ] {
         variants.push(blob[..cut].to_vec());
     }
     let mut longer = blob.clone();
@@ -415,7 +454,10 @@ fn auth_trace(tpm: &Swtpm, run: &mut Run) {
             Ok(_) => "ok".to_string(),
             Err(e) => describe(e),
         };
-        let _ = writeln!(run.out, r#"{{"t":"kt","op":"auth","len":{len},"res":"{res}","ncmds":{ncmds}}}"#);
+        let _ = writeln!(
+            run.out,
+            r#"{{"t":"kt","op":"auth","len":{len},"res":"{res}","ncmds":{ncmds}}}"#
+        );
         drop(r);
         run.take();
     }

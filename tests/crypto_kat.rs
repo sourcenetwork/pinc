@@ -174,7 +174,7 @@ fn header_protection_rfc9001_appendix_a() {
 }
 
 /// The mask for the last counter of the 32-bit block counter is block 2^32 - 1 of the stream, not a zero mask. The
-/// expected bytes come from OpenSSL's ChaCha20 (counter and nonce as its 16-byte IV) for the key 0..31 and the nonce
+/// expected bytes come from the `OpenSSL` implementation of `ChaCha20` (counter and nonce as its 16-byte IV) for the key 0..31 and the nonce
 /// 100..111.
 #[test]
 fn header_protection_chacha20_counter_edges() {

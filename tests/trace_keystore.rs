@@ -108,13 +108,18 @@ impl Run {
             Ok(sig) => {
                 let (alg, pk) = self.stores[s].public(&self.handles[h]).unwrap();
                 let ver = verify(sig.alg(), &pk, &msg, sig.as_bytes()).is_ok() && sig.alg() == alg;
-                format!(r#""res":"ok","alg":{},"len":{},"ver":{ver}"#, sig.alg().tag(), sig.as_bytes().len())
+                format!(
+                    r#""res":"ok","alg":{},"len":{},"ver":{ver}"#,
+                    sig.alg().tag(),
+                    sig.as_bytes().len()
+                )
             }
             Err(e) => format!(r#""res":"{e:?}","alg":0,"len":0,"ver":false"#),
         };
         let _ = writeln!(self.out, r#"{{"t":"ks","op":"sign","s":{s},"h":{h},{tail}}}"#);
     }
 
+    #[allow(clippy::many_single_char_names)]
     fn public(&mut self, s: usize, h: usize) {
         let r = self.stores[s].public(&self.handles[h]);
         let tail = match &r {
@@ -206,12 +211,13 @@ fn host_trace(out: &mut String) {
     let mut host = KeyHost::new(store);
     let mut bound: Vec<(u64, usize)> = Vec::new();
     let all: Vec<KeyHandle> = ks.iter().map(|(_, h)| h.clone()).chain([kem_h.clone()]).collect();
-    let bind = |host: &mut KeyHost<SoftwareStore>, bound: &mut Vec<(u64, usize)>, out: &mut String, sec: u64, k: usize| {
-        host.bind(SecHandle(sec), all[k].clone());
-        bound.retain(|(s, _)| *s != sec);
-        bound.push((sec, k));
-        let _ = writeln!(out, r#"{{"t":"ks","op":"bind","sec":{sec},"k":{k}}}"#);
-    };
+    let bind =
+        |host: &mut KeyHost<SoftwareStore>, bound: &mut Vec<(u64, usize)>, out: &mut String, sec: u64, k: usize| {
+            host.bind(SecHandle(sec), all[k].clone());
+            bound.retain(|(s, _)| *s != sec);
+            bound.push((sec, k));
+            let _ = writeln!(out, r#"{{"t":"ks","op":"bind","sec":{sec},"k":{k}}}"#);
+        };
     for i in 0..4 {
         bind(&mut host, &mut bound, out, 10 + i as u64, i);
     }
@@ -241,7 +247,10 @@ fn host_trace(out: &mut String) {
     sign(&mut host, out, 99, IdentityAlg::Ed25519);
     sign(&mut host, out, 20, IdentityAlg::Ed25519);
     let decap = |host: &mut KeyHost<SoftwareStore>, out: &mut String, sec: u64| {
-        let (kind, agree) = match host.answer(&KeyRequest::Decapsulate { key: SecHandle(sec), ct: &ct }) {
+        let (kind, agree) = match host.answer(&KeyRequest::Decapsulate {
+            key: SecHandle(sec),
+            ct: &ct,
+        }) {
             KeyResponse::Signature(_) => ("sig", false),
             KeyResponse::SharedSecret(s) => ("secret", *s.expose() == *shared.expose()),
             KeyResponse::Failed => ("failed", false),
@@ -297,13 +306,23 @@ fn sealed_trace(run: &mut Run) {
             assert_eq!(blob.len(), 1 + 12 + pt_len + 16);
             assert_eq!(blob[0], 1);
             assert!(sealed.iter().all(|(_, b, _)| *b != blob), "a nonce repeated");
-            let _ = writeln!(run.out, r#"{{"t":"ks","op":"seal","s":{s},"pt":{},"blob":{}}}"#, arr(&pt), arr(&blob));
+            let _ = writeln!(
+                run.out,
+                r#"{{"t":"ks","op":"seal","s":{s},"pt":{},"blob":{}}}"#,
+                arr(&pt),
+                arr(&blob)
+            );
             sealed.push((s, blob, pt.clone()));
         }
         // the same plaintext twice in one store gives two blobs
         let again = run.stores[0].seal(&pt).unwrap();
         assert!(sealed.iter().all(|(_, b, _)| *b != again));
-        let _ = writeln!(run.out, r#"{{"t":"ks","op":"seal","s":0,"pt":{},"blob":{}}}"#, arr(&pt), arr(&again));
+        let _ = writeln!(
+            run.out,
+            r#"{{"t":"ks","op":"seal","s":0,"pt":{},"blob":{}}}"#,
+            arr(&pt),
+            arr(&again)
+        );
         sealed.push((0, again, pt));
     }
     let all = sealed.clone();
