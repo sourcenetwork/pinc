@@ -99,10 +99,11 @@ fn one_close_then_the_state_is_freed() {
 }
 
 #[test]
-fn a_stream_the_pool_cannot_hold_is_refused_with_a_busy_reset_and_the_connection_stays_up() {
+fn a_stream_the_pool_cannot_hold_waits_unacknowledged_and_is_delivered_once_there_is_room() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
-        // A server whose pool holds the windows of three streams: a fourth stream is refused, never dropped silently.
+        // A server whose pool holds the windows of three streams: a fourth stream waits for room, and is never
+        // reset or dropped silently.
         let mut small = vinc_transport::stream::Config::new(false);
         small.initial_stream_window = 192 * 1024;
         small.max_stream_window = 192 * 1024;
@@ -112,25 +113,28 @@ fn a_stream_the_pool_cannot_hold_is_refused_with_a_busy_reset_and_the_connection
         assert!(net.connect(net.now + 10 * SEC));
         net.b.auto_read = false;
         let ids: Vec<u64> = (0..5).map(|_| net.a.conn.open_bi().unwrap()).collect();
-        for id in &ids {
-            net.a.conn.write(*id, b"hello").unwrap();
+        let data: Vec<Vec<u8>> = (0..5).map(|i| pattern(20_000 + 1_000 * i, 50 + i as u64)).collect();
+        for (id, d) in ids.iter().zip(&data) {
+            assert_eq!(net.a.conn.write(*id, d).unwrap(), d.len());
+            net.a.conn.finish(*id).unwrap();
         }
-        let busy = vinc_transport::stream::BUSY;
-        assert!(net.run(net.now + 5 * SEC, |n| {
-            n.a.saw(|r| matches!(r, Rec::Reset(_, c) if *c == busy))
-        }));
-        let refused = ids
-            .iter()
-            .filter(|id| net.a.saw(|r| *r == Rec::Reset(**id, busy)))
-            .count();
-        assert!((1..5).contains(&refused), "{refused} streams were refused");
+        // Nothing is read, so the pool stays full: the streams beyond it keep being retried, without a reset.
+        net.run(net.now + 3 * SEC, |_| false);
+        assert!(!net.a.saw(|r| matches!(r, Rec::Reset(..))), "a stream was reset");
         assert!(net.a.closed().is_none() && net.b.closed().is_none());
-        // The streams that were admitted are untouched.
-        let admitted = ids
-            .iter()
-            .filter(|id| !net.a.saw(|r| *r == Rec::Reset(**id, busy)))
-            .count();
-        assert!(admitted >= 1);
+        // Reading frees the room, and every stream arrives once, whole and in order.
+        net.b.auto_read = true;
+        let ok = net.run(net.now + 60 * SEC, |n| {
+            for id in &ids {
+                n.b.read_stream(n.now, *id);
+            }
+            ids.iter().all(|id| n.b.fin.contains(id))
+        });
+        assert!(ok, "not every stream was delivered");
+        for (id, d) in ids.iter().zip(&data) {
+            assert!(net.b.read[id] == *d, "stream {id} differs");
+        }
+        assert!(!net.a.saw(|r| matches!(r, Rec::Reset(..))), "a stream was reset");
     });
 }
 

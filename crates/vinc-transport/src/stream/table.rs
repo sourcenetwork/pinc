@@ -4,7 +4,8 @@
 //! (a stale bit costs one failed attempt, a missing bit would starve the slot, so every mutator refreshes it); a slot
 //! is freed only when both halves are done, which returns all of its chunks to the pool; `buffered` is the sum over
 //! slots of the written-and-unacknowledged bytes; `local_live` and `remote_live` count the live streams each side
-//! opened; a refused peer stream is remembered in `refused` until its reset is acknowledged and is never stored;
+//! opened; a peer stream the table has no room for is stored nowhere, answers nothing and is never acknowledged, so
+//! its opener holds and retransmits it until there is room;
 //! stream ids of a class are opened in order and never reused.
 
 use super::flow::Meter;
@@ -12,7 +13,7 @@ use super::pool::{BufferPool, CHUNK_SIZE};
 use super::recv::Recv;
 use super::send::Send;
 use super::{
-    BUSY, Config, ControlFrame, DEFAULT_URGENCY, NoSource, PeerLimits, RecvStatus, StreamChunk, StreamError, StreamId,
+    Config, ControlFrame, DEFAULT_URGENCY, NoSource, PeerLimits, RecvStatus, StreamChunk, StreamError, StreamId,
     StreamSource, StreamStats, is_uni,
 };
 
@@ -20,8 +21,6 @@ const NONE: u64 = u64::MAX;
 const HOT_RETX: u8 = 1;
 const HOT_NEW: u8 = 2;
 const HOT_CTL: u8 = 4;
-/// How many refused peer streams are remembered until their reset is acknowledged.
-const REFUSED: usize = 16;
 
 #[derive(Debug)]
 struct Slot<S, const C: usize> {
@@ -36,13 +35,6 @@ impl<S: StreamSource, const C: usize> Slot<S, C> {
         send: Send::NEW,
         urgency: DEFAULT_URGENCY,
     };
-}
-
-/// A refused peer stream waiting for its reset to be sent and acknowledged.
-#[derive(Debug, Clone, Copy)]
-struct Refused {
-    id: StreamId,
-    sent: bool,
 }
 
 /// The class index of a stream id: 0 for bidirectional, 1 for unidirectional.
@@ -69,7 +61,6 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     remote_next: [u64; 2],
     local_live: u64,
     remote_live: u64,
-    refused: [Option<Refused>; REFUSED],
     open: usize,
     buffered: u64,
     stats: StreamStats,
@@ -96,7 +87,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             remote_next: [0; 2],
             local_live: 0,
             remote_live: 0,
-            refused: [None; REFUSED],
             open: 0,
             buffered: 0,
             stats: StreamStats::default(),
@@ -133,7 +123,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.remote_next = [0; 2];
         self.local_live = 0;
         self.remote_live = 0;
-        self.refused = [None; REFUSED];
         self.open = 0;
         self.buffered = 0;
         self.stats = StreamStats::default();
@@ -276,30 +265,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         Ok(i)
     }
 
-    /// Remember `id` as refused so a reset answers it; nothing of the stream is stored.
-    fn refuse(&mut self, id: StreamId) -> Result<Option<usize>, StreamError> {
-        let entry = self
-            .refused
-            .iter_mut()
-            .find(|e| e.is_none())
-            .ok_or(StreamError::Exhausted)?;
-        *entry = Some(Refused { id, sent: false });
-        Err(StreamError::Busy)
-    }
-
     /// Whether `count` more peer streams of class `c` starting at index `next` can be admitted: under the cap, with
-    /// slots, with their initial windows covered by the pool, and without passing a stream still being refused.
-    fn admits(&self, pool: &BufferPool<'_>, c: usize, next: u64, count: u64) -> bool {
+    /// slots, with their initial windows covered by the pool.
+    fn admits(&self, pool: &BufferPool<'_>, count: u64) -> bool {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
         let chunk = CHUNK_SIZE as u64;
         let window = count.saturating_mul(self.stream_window.div_ceil(chunk).saturating_mul(chunk));
-        let behind_refused = self
-            .refused
-            .iter()
-            .flatten()
-            .any(|r| class(r.id) == c && (r.id >> 2) >= next && (r.id >> 2) < next + count);
-        !behind_refused
-            && self.remote_live + count <= self.max_remote
+        self.remote_live + count <= self.max_remote
             && free >= count
             && self.granted_unreceived().saturating_add(window) <= pool.available_bytes()
     }
@@ -317,14 +289,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if index < next {
             return Ok(self.find(id));
         }
-        if self.refused.iter().flatten().any(|r| r.id == id) {
-            return Err(StreamError::Busy);
-        }
         if index >= next.saturating_add(self.max_remote) {
             return Err(StreamError::StreamLimit);
         }
-        if !self.admits(pool, c, next, index - next + 1) {
-            return self.refuse(id);
+        if !self.admits(pool, index - next + 1) {
+            return Err(StreamError::Exhausted);
         }
         let mut last = None;
         for n in next..=index {
@@ -382,9 +351,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     ///
     /// # Errors
     /// A violation by the peer ([`StreamError::StreamLimit`], [`StreamError::StreamState`], [`StreamError::FlowControl`],
-    /// [`StreamError::FinalSize`], [`StreamError::Conflict`]), a refused stream ([`StreamError::Busy`]: a reset answers
-    /// it, nothing was stored) or a local shortage ([`StreamError::Exhausted`], [`StreamError::Fragmented`]); on a
-    /// local shortage nothing was stored and the packet should go unacknowledged.
+    /// [`StreamError::FinalSize`], [`StreamError::Conflict`]) or a local shortage ([`StreamError::Exhausted`], including a new
+    /// peer stream the table has no room for yet, and [`StreamError::Fragmented`]); on a local shortage nothing was
+    /// stored and the packet should go unacknowledged.
     pub fn on_stream_frame(
         &mut self,
         pool: &mut BufferPool<'_>,
@@ -749,9 +718,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 }
             }
             ControlFrame::ResetStream { id, .. } => {
-                if let Some(r) = self.refused.iter_mut().flatten().find(|r| r.id == id) {
-                    r.sent = false;
-                } else if let Some(i) = self.find(id) {
+                if let Some(i) = self.find(id) {
                     if let Some(slot) = self.slots.get_mut(i) {
                         slot.send.control_lost(frame);
                     }
@@ -761,43 +728,25 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
     }
 
-    /// A control frame was acknowledged. Only a stream reset matters: the stream may close once it is acknowledged, and
-    /// a refused stream is forgotten.
+    /// A control frame was acknowledged. Only a stream reset matters: the stream may close once it is acknowledged.
     pub fn on_control_acked(&mut self, pool: &mut BufferPool<'_>, frame: &ControlFrame) {
         if let ControlFrame::StopSending { id, .. } = *frame {
             if let Some(slot) = self.find(id).and_then(|i| self.slots.get_mut(i)) {
                 slot.recv.stop_acked();
             }
-        } else if let ControlFrame::ResetStream { id, .. } = *frame {
-            if let Some(e) = self.refused.iter_mut().find(|e| e.is_some_and(|r| r.id == id)) {
-                *e = None;
-                // The opener knows the stream is refused and opens its next one after it. If the refused stream was
-                // the next one expected, it is over: the stream after it must not have to open it (and take its
-                // window) first.
-                let (c, index) = (class(id), id >> 2);
-                if let Some(next) = self.remote_next.get_mut(c).filter(|n| **n == index) {
-                    *next += 1;
-                }
-            } else if let Some(i) = self.find(id) {
-                if let Some(slot) = self.slots.get_mut(i) {
-                    slot.send.reset_acked();
-                }
-                self.settle(pool, i);
+        } else if let ControlFrame::ResetStream { id, .. } = *frame
+            && let Some(i) = self.find(id)
+        {
+            if let Some(slot) = self.slots.get_mut(i) {
+                slot.send.reset_acked();
             }
+            self.settle(pool, i);
         }
     }
 
     /// The next control frame to send, if any. The frame counts as sent; if it is not sent after all, give it back
     /// with [`Streams::on_control_lost`].
     pub fn pending_control(&mut self) -> Option<ControlFrame> {
-        if let Some(r) = self.refused.iter_mut().flatten().find(|r| !r.sent) {
-            r.sent = true;
-            return Some(ControlFrame::ResetStream {
-                id: r.id,
-                error_code: BUSY,
-                final_size: 0,
-            });
-        }
         for i in 0..N {
             if self.hot.get(i).is_none_or(|h| h & HOT_CTL == 0) {
                 continue;
@@ -838,7 +787,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
         self.ids = [NONE; N];
         self.hot = [0; N];
-        self.refused = [None; REFUSED];
         self.open = 0;
         self.buffered = 0;
         self.local_live = 0;

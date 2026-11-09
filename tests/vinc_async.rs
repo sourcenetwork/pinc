@@ -18,8 +18,8 @@ use futures_io::{AsyncRead, AsyncWrite};
 use std::future::poll_fn;
 use std::pin::Pin;
 
-use vinc::ErrorKind;
-use vinc_common::{ECHO, GEN, SINK, client, join_all, node, pattern, pattern_hash, within};
+use vinc::{ErrorKind, Limits, Vinc};
+use vinc_common::{ECHO, GEN, SINK, bind, client, join_all, node, pattern, pattern_hash, serve_conn, within};
 
 const BIG: u64 = 4 << 20;
 
@@ -70,6 +70,43 @@ async fn many_streams_datagrams_and_reconnect() {
         tx.write_all(b"again").await.unwrap();
         tx.finish().await.unwrap();
         assert_eq!(rx.read_to_end(100).await.unwrap(), b"again");
+    })
+    .await;
+}
+
+/// A peer whose pool covers the windows of only a few streams: the streams opened beyond that wait for room instead
+/// of failing, and every stream's bytes arrive once and in order.
+#[nuclei::test]
+async fn streams_beyond_the_peer_pool_are_delivered() {
+    within(120, async {
+        let small = Limits {
+            pool_chunks: 8,
+            stream_window: 64 * 1024,
+            ..Limits::default()
+        };
+        let peer = bind(Vinc::builder().alpn(ECHO).limits(small)).await;
+        let s = peer.clone();
+        nuclei::spawn(async move {
+            while let Some(i) = s.accept().await {
+                nuclei::spawn(serve_conn(i.into_connection())).detach();
+            }
+        })
+        .detach();
+        let ep = client().await;
+        let conn = ep.connect(peer.addr(), ECHO).await.unwrap();
+        let jobs = (0..24u8).map(|i| {
+            let conn = conn.clone();
+            async move {
+                let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+                let payload: Vec<u8> = (0..20_000 + usize::from(i) * 1301)
+                    .map(|k| (k as u8).wrapping_mul(3).wrapping_add(i))
+                    .collect();
+                tx.write_all(&payload).await.unwrap();
+                tx.finish().await.unwrap();
+                assert_eq!(rx.read_to_end(1 << 20).await.unwrap(), payload);
+            }
+        });
+        join_all(jobs).await;
     })
     .await;
 }

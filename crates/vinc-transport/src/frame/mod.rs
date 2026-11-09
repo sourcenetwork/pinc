@@ -25,8 +25,8 @@
 //! | `0x40` and up | extension | length (varint), body bytes |
 //!
 //! There is no connection-level credit frame, no blocked frame, no stream-count frame, no frame to stop a connection, and no frame for
-//! connection ids: the receiver grants credit per stream with `MAX_STREAM_DATA`, refuses a stream it cannot hold with
-//! `RESET_STREAM`, and a connection id is derived from the session secret. An ACK carries no delay.
+//! connection ids: the receiver grants credit per stream with `MAX_STREAM_DATA`, leaves a stream it cannot hold yet
+//! unacknowledged so its opener retransmits it, and a connection id is derived from the session secret. An ACK carries no delay.
 //!
 //! STREAM type bits: `0x04` OFF (an offset follows the stream id; absent means 0), `0x02` LEN (a length follows;
 //! absent means the data runs to the end of the packet, so the frame must be the last), `0x01` FIN. The stream end

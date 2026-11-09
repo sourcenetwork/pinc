@@ -174,7 +174,7 @@ impl Error {
     /// The error for a refused stream operation.
     pub const fn stream(e: StreamError) -> Self {
         match e {
-            StreamError::StreamLimit | StreamError::TableFull | StreamError::Busy | StreamError::Exhausted => {
+            StreamError::StreamLimit | StreamError::TableFull | StreamError::Exhausted => {
                 Self::new(ErrorKind::Busy, "too many streams are open")
             }
             StreamError::Finished => Self::new(ErrorKind::Stopped(0), "the stream is already finished"),

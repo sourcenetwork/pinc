@@ -492,7 +492,6 @@ conn_impl! {
                 let first = self.first_unopened(id);
                 match self.streams.on_reset_stream(&mut self.pool, id, error, final_size) {
                     Ok(()) => {}
-                    Err(StreamError::Busy) => return Ok(()),
                     Err(e) => return Err(stream_fault(e)),
                 }
                 self.push_opened(id, first);
@@ -507,7 +506,6 @@ conn_impl! {
                             self.push(Ev::Stopped(id, error));
                         }
                     }
-                    Err(StreamError::Busy) => {}
                     Err(e) => return Err(stream_fault(e)),
                 }
             }
@@ -515,8 +513,6 @@ conn_impl! {
                 let first = self.first_unopened(id);
                 match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
                     Ok(()) => {}
-                    // Refused and answered with a reset: the packet still counts as received.
-                    Err(StreamError::Busy) => return Ok(()),
                     Err(e) => return Err(stream_fault(e)),
                 }
                 self.push_opened(id, first);
@@ -525,7 +521,6 @@ conn_impl! {
             Frame::MaxStreamData { id, max } => {
                 match self.streams.on_max_stream_data(&self.pool, id, max) {
                     Ok(()) => self.push(Ev::Writable(id)),
-                    Err(StreamError::Busy) => {}
                     Err(e) => return Err(stream_fault(e)),
                 }
             }

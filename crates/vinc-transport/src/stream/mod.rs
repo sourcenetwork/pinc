@@ -9,8 +9,8 @@
 //! - a receive window grant (and the initial window of an admitted peer stream) is made only while the credit already
 //!   granted and not yet received, plus the new grant, fits in the bytes the pool has left;
 //! - a limit, once advertised or received, never shrinks, and a final size, once fixed, never changes;
-//! - the number of live streams each side opened never exceeds its cap; an excess peer stream is refused with a reset
-//!   and nothing of it is stored;
+//! - the number of live streams each side opened never exceeds its cap; an excess peer stream is stored nowhere and
+//!   its packet goes unacknowledged, so its opener retransmits it from the start once there is room;
 //! - streams are served in order of urgency, then id, so a better stream drains before a worse one gets anything;
 //! - a stream id's low bit is the initiator (0 = client) and its second bit is set for unidirectional streams.
 #![allow(
@@ -44,8 +44,6 @@ pub const DEFAULT_INITIAL_WINDOW: u64 = 1_310_720;
 pub const DEFAULT_MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
 /// The urgency a stream starts with; a lower number is served first.
 pub const DEFAULT_URGENCY: u8 = 3;
-/// The reset code sent for a peer stream refused because too many are live.
-pub const BUSY: u64 = 0x42;
 /// The most disjoint ranges a stream tracks per range map of the send side (acknowledged, lost).
 pub const RANGES: usize = 16;
 /// The most disjoint ranges a stream tracks of what it received. A packet that does not fit is dropped unacknowledged,
@@ -79,8 +77,6 @@ pub enum StreamError {
     Conflict,
     /// The stream table has no free slot for a stream we open.
     TableFull,
-    /// A peer stream was refused (too many are live) and a reset answers it; nothing of it was stored.
-    Busy,
     /// The buffer pool has no chunk left; drop the packet unacknowledged and let the peer retransmit.
     Exhausted,
     /// The stream has more disjoint received ranges than it can track; drop the frame unacknowledged.
@@ -108,7 +104,6 @@ impl fmt::Display for StreamError {
             Self::FinalSize => "final size violated",
             Self::Conflict => "overlapping bytes differ",
             Self::TableFull => "stream table full",
-            Self::Busy => "stream refused, too many open",
             Self::Exhausted => "buffer pool exhausted",
             Self::Fragmented => "too many disjoint ranges",
             Self::UnknownStream => "unknown or closed stream",
