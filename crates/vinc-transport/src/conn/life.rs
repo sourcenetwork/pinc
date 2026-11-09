@@ -1,14 +1,15 @@
-//! The lifecycle: idle timeout, keepalive, close and drain, sleep and wake, and link outages.
+//! The lifecycle: idle timeout, keepalive, close, sleep and wake, and link outages.
 //!
-//! Invariants: a connection ends exactly once and reports it with one [`Event::Closed`]; after a local close or a
-//! violation it answers packets with CLOSE for three probe timeouts, after a peer's CLOSE it only waits (draining);
-//! a silent end (idle, stateless reset, dead path) sends nothing. While the peer sleeps or the link is down the probe
-//! backoff does not grow and the connection does not give up: a sleeping peer is held for 120 s, a down link for 30 s.
+//! Invariants: a connection ends exactly once and reports it with one [`Event::Closed`]; a local close or a violation
+//! sends one CLOSE and the state is freed (there is no closing or draining wait); a peer's CLOSE and every silent end
+//! (idle, dead path) send nothing. Any authenticated packet from the peer ends its sleep; only a peer that announced
+//! its sleep is held past the idle timeout, for 120 s, and the probe backoff does not grow while the peer sleeps or
+//! the link is down.
 
 use vinc_crypto::Provider;
 use vinc_security::Env;
 
-use super::config::DRAIN_PTOS;
+use super::config::IDLE_TIMEOUT;
 use super::event::{CloseReason, Ev};
 use super::{Connection, Phase};
 use crate::recovery::{MS, SECOND};
@@ -20,16 +21,12 @@ pub(crate) const SLEEP_HOLD: u64 = 120 * SECOND;
 pub(crate) const WAKE_WAIT: u64 = 800 * MS;
 /// How long a link outage freezes the probe backoff.
 pub(crate) const LINK_DOWN_MAX: u64 = 30 * SECOND;
-/// CLOSE replies sent to a peer that keeps talking after we closed.
-const CLOSE_REPLIES: u8 = 8;
-
-/// The frame a closing connection sends.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CloseFrame {
-    pub(crate) app: bool,
-    pub(crate) error: u64,
-    pub(crate) reason: &'static str,
-}
+/// For this long after a wake or a link return the probes carry WAKE too.
+pub(crate) const WAKE_SPAN: u64 = 3 * SECOND;
+/// For this long after a wake or a link return no path MTU probe is sent.
+pub(crate) const QUIET_RESUME: u64 = 10 * SECOND;
+/// A second WAKE within this long (or the smoothed round trip, if larger) of the last one is not acted on again.
+const WAKE_DEDUP: u64 = 333 * MS;
 
 /// Timers and flags of the lifecycle.
 #[derive(Debug)]
@@ -38,22 +35,35 @@ pub(crate) struct Life {
     pub(crate) last_activity: u64,
     pub(crate) last_sent: u64,
     pub(crate) keepalive: Option<u64>,
-    pub(crate) close: Option<CloseFrame>,
-    pub(crate) close_until: u64,
-    pub(crate) close_owed: bool,
-    pub(crate) close_replies: u8,
+    /// The code of the CLOSE to send, until it left.
+    pub(crate) close: Option<u64>,
     pub(crate) peer_asleep: Option<u64>,
     pub(crate) local_asleep: Option<u64>,
     pub(crate) sleep_tx: u8,
     pub(crate) wake_tx: bool,
     pub(crate) wake_deadline: Option<u64>,
+    /// Probes carry WAKE until this time.
+    pub(crate) wake_until: u64,
+    /// When the last received WAKE was acted on.
+    pub(crate) wake_rx: Option<u64>,
     pub(crate) link_down: Option<u64>,
+    /// No path MTU probe is sent before this time.
+    pub(crate) qr_until: u64,
     pub(crate) probes: u8,
     pub(crate) ping_owed: bool,
-    pub(crate) repair_at: Option<u64>,
-    pub(crate) repair_due: bool,
-    pub(crate) last_stream_tx: u64,
-    pub(crate) tail: [Option<(u64, u64, u32, bool)>; 4],
+    /// An acknowledgement must leave in the next packet.
+    pub(crate) ack_now: bool,
+    /// The packet number of the last probe-timeout PING, while a black-hole check waits for its acknowledgement.
+    pub(crate) small_ping: Option<u64>,
+    /// When the application last wrote anything, and when it last wrote more than a control message.
+    pub(crate) last_app: u64,
+    pub(crate) last_data: u64,
+    pub(crate) app_written: bool,
+    pub(crate) data_written: bool,
+    /// The packet the next tail repair re-carries.
+    pub(crate) repair_pn: Option<u64>,
+    /// The latest time any call carried; the path rules read it.
+    pub(crate) clock: u64,
 }
 
 impl Life {
@@ -63,30 +73,33 @@ impl Life {
             last_sent: now,
             keepalive: None,
             close: None,
-            close_until: 0,
-            close_owed: false,
-            close_replies: 0,
             peer_asleep: None,
             local_asleep: None,
             sleep_tx: 0,
             wake_tx: false,
             wake_deadline: None,
+            wake_until: 0,
+            wake_rx: None,
             link_down: None,
+            qr_until: 0,
             probes: 0,
             ping_owed: false,
-            repair_at: None,
-            repair_due: false,
-            last_stream_tx: 0,
-            tail: [None; 4],
+            ack_now: false,
+            small_ping: None,
+            last_app: 0,
+            last_data: 0,
+            app_written: false,
+            data_written: false,
+            repair_pn: None,
+            clock: now,
         }
     }
 }
 
 conn_impl! {
-    /// Close the connection with an application error code and a short reason. A CLOSE goes out and the connection
-    /// drains for three probe timeouts.
-    pub fn close(&mut self, env: &mut Env<'_, P>, error: u64, reason: &'static str) {
-        self.begin_close(env.now, CloseFrame { app: true, error, reason }, CloseReason::Local { error });
+    /// Close the connection with `error`. One CLOSE goes out and the connection is over; nothing waits afterwards.
+    pub fn close(&mut self, env: &mut Env<'_, P>, error: u64) {
+        self.begin_close(env.now, error, CloseReason::Local { error });
     }
 
     /// Set (or turn off) the keepalive interval: a PING goes out after this long without sending anything.
@@ -96,7 +109,7 @@ conn_impl! {
     }
 
     /// Tell the peer this endpoint is about to sleep (SLEEP is sent twice). Until [`wake`](Self::wake) the
-    /// connection stays open without probing, for up to 120 s.
+    /// connection stays open without probing.
     pub fn sleep(&mut self, env: &mut Env<'_, P>) {
         if self.phase != Phase::Connected || self.life.local_asleep.is_some() {
             return;
@@ -106,23 +119,19 @@ conn_impl! {
         self.suspend_probes();
     }
 
-    /// Wake up: WAKE and a PING go out, everything in flight is declared lost without a congestion response and
-    /// sent again. If nothing is heard within 800 ms, [`Event::WakeUnanswered`](super::Event::WakeUnanswered) is reported.
+    /// Wake up: WAKE, a PING and an acknowledgement go out, everything in flight is declared lost without a
+    /// congestion response and sent again, and the probes carry WAKE for 3 s. If nothing is heard within 800 ms,
+    /// [`Event::WakeUnanswered`](super::Event::WakeUnanswered) is reported.
     pub fn wake(&mut self, env: &mut Env<'_, P>) {
         if self.phase != Phase::Connected || self.life.local_asleep.take().is_none() {
             return;
         }
-        self.life.wake_tx = true;
-        self.life.ping_owed = true;
-        self.life.wake_deadline = Some(env.now.saturating_add(WAKE_WAIT));
-        self.life.last_activity = env.now;
-        self.suspend_probes();
-        self.flush_in_flight(env.now);
+        self.resume(env.now);
     }
 
     /// The endpoint saw the network link go down (`true`) or come back (`false`). While it is down for up to 30 s the
-    /// probe backoff does not grow and the connection does not give up; when it returns, everything in flight is
-    /// sent again without a congestion response.
+    /// probe backoff does not grow and the connection does not give up; when it returns the connection resumes as
+    /// after [`wake`](Self::wake).
     pub fn set_link_down(&mut self, env: &mut Env<'_, P>, down: bool) {
         if self.phase == Phase::Handshaking && !down {
             self.hs.link_return(env.now);
@@ -134,10 +143,23 @@ conn_impl! {
         if down {
             self.life.link_down.get_or_insert(env.now);
         } else if self.life.link_down.take().is_some() {
-            self.life.last_activity = env.now;
-            self.flush_in_flight(env.now);
+            self.resume(env.now);
         }
         self.suspend_probes();
+    }
+
+    /// The common part of a local wake and a link return.
+    fn resume(&mut self, now: u64) {
+        self.life.wake_tx = true;
+        self.life.ping_owed = true;
+        self.life.ack_now = self.rx.ack_pending();
+        self.life.wake_deadline = Some(now.saturating_add(WAKE_WAIT));
+        self.life.wake_until = now.saturating_add(WAKE_SPAN);
+        self.life.qr_until = now.saturating_add(QUIET_RESUME);
+        self.life.last_activity = now;
+        self.suspend_probes();
+        self.flush_in_flight(now);
+        self.mtu_event_all();
     }
 
     /// Whether the peer announced it sleeps.
@@ -150,11 +172,6 @@ conn_impl! {
         self.life.local_asleep.is_some()
     }
 
-    /// Whether probe timeouts are frozen: the peer or this endpoint sleeps, or the link is down.
-    pub(super) const fn suspended(&self) -> bool {
-        self.life.peer_asleep.is_some() || self.life.local_asleep.is_some() || self.life.link_down.is_some()
-    }
-
     pub(super) fn suspend_probes(&mut self) {
         self.rec.set_peer_asleep(self.life.peer_asleep.is_some() || self.life.local_asleep.is_some());
         self.rec.set_link_down(self.life.link_down.is_some());
@@ -163,43 +180,40 @@ conn_impl! {
     /// Declare everything in flight lost with no congestion response and requeue it.
     pub(super) fn flush_in_flight(&mut self, now: u64) {
         let mut out = super::ctl::Outcome::default();
-        let (streams, pool, ctl, cids) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids);
-        self.rec.flush_in_flight(now, |ev| super::ctl::apply(&ev, streams, pool, ctl, cids, &mut out));
+        let (streams, pool, ctl) = (&mut *self.streams, &mut self.pool, &mut self.ctl);
+        self.rec.flush_in_flight(now, |ev| super::ctl::apply(&ev, streams, pool, ctl, &mut out));
         self.life.probes = 0;
         self.degraded_told = false;
         self.after_feedback(out, now);
     }
 
-    /// Start closing with `frame`: a CLOSE goes out, then three probe timeouts of waiting.
-    pub(super) fn begin_close(&mut self, now: u64, frame: CloseFrame, reason: CloseReason) {
-        if matches!(self.phase, Phase::Closing | Phase::Draining | Phase::Closed) {
+    /// Start closing with `error`: one CLOSE goes out when the next datagram is built, and the state is then freed.
+    pub(super) fn begin_close(&mut self, now: u64, error: u64, reason: CloseReason) {
+        let _ = now;
+        if matches!(self.phase, Phase::Closing | Phase::Closed) {
             return;
         }
         let established = self.phase == Phase::Connected;
         self.release_buffers();
-        self.life.close = Some(frame);
-        self.life.close_owed = true;
-        self.life.close_until = now.saturating_add(self.rec.pto_duration().saturating_mul(DRAIN_PTOS));
+        self.life.close = Some(error);
         self.phase = if established && self.keys.send.is_some() { Phase::Closing } else { Phase::Closed };
         self.push(Ev::Closed(reason));
     }
 
     /// Close because a rule was broken.
-    pub(super) fn violation(&mut self, now: u64, error: u64, reason: &'static str) {
-        self.begin_close(now, CloseFrame { app: false, error, reason }, CloseReason::Violation { error });
+    pub(super) fn violation(&mut self, now: u64, error: u64) {
+        self.begin_close(now, error, CloseReason::Violation { error });
     }
 
-    /// The peer sent CLOSE: drain without sending.
-    pub(super) fn on_peer_close(&mut self, now: u64, app: bool, error: u64) {
-        if matches!(self.phase, Phase::Draining | Phase::Closed) {
+    /// The peer sent CLOSE: the connection is over and nothing is sent.
+    pub(super) fn on_peer_close(&mut self, error: u64) {
+        if matches!(self.phase, Phase::Closed) {
             return;
         }
         self.release_buffers();
-        self.life.close_until = now.saturating_add(self.rec.pto_duration().saturating_mul(DRAIN_PTOS));
-        self.life.close_owed = false;
-        self.phase = Phase::Draining;
-        let reason = if app { CloseReason::PeerApplication { error } } else { CloseReason::PeerTransport { error } };
-        self.push(Ev::Closed(reason));
+        self.life.close = None;
+        self.phase = Phase::Closed;
+        self.push(Ev::Closed(CloseReason::Peer { error }));
     }
 
     /// End without a CLOSE packet.
@@ -208,6 +222,7 @@ conn_impl! {
             return;
         }
         self.release_buffers();
+        self.life.close = None;
         self.phase = Phase::Closed;
         self.push(Ev::Closed(reason));
     }
@@ -219,27 +234,44 @@ conn_impl! {
         self.early.clear(&mut self.pool);
     }
 
-    /// A packet arrived while closing: owe another CLOSE, within a bound.
-    pub(super) fn on_packet_while_closing(&mut self) {
-        if self.life.close_replies < CLOSE_REPLIES {
-            self.life.close_replies += 1;
-            self.life.close_owed = true;
-        }
-    }
-
-    /// The peer is heard: clear the wake wait, and its sleep if it was only that.
+    /// The peer is heard: clear the wake wait.
     pub(super) fn note_heard(&mut self, now: u64) {
         self.life.last_activity = now;
         self.life.wake_deadline = None;
     }
 
-    /// The deadline after which silence closes the connection.
+    /// A WAKE arrived: act on it unless one was acted on within the last round trip. Returns whether it was acted on.
+    pub(super) fn on_wake(&mut self, now: u64) -> bool {
+        let gap = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { WAKE_DEDUP };
+        if self.life.wake_rx.is_some_and(|t| now.saturating_sub(t) <= gap) {
+            return false;
+        }
+        self.life.wake_rx = Some(now);
+        self.life.ack_now = true;
+        self.flush_in_flight(now);
+        true
+    }
+
+    /// The deadline after which silence closes the connection: 75 s after the last packet, or 120 s after the peer
+    /// announced its sleep.
     pub(super) fn idle_deadline(&self) -> u64 {
-        let base = self.life.last_activity.saturating_add(self.cfg.idle_timeout);
-        match self.life.peer_asleep.into_iter().chain(self.life.local_asleep).chain(self.life.link_down).min() {
+        let base = self.life.last_activity.saturating_add(IDLE_TIMEOUT);
+        match self.life.peer_asleep {
             Some(since) => base.max(since.saturating_add(SLEEP_HOLD)),
             None => base,
         }
     }
 
+    /// Fold the application's writes since the last clock reading into the activity times: data above a control
+    /// message after an idle spell re-challenges the paths that wait on the slow back-off.
+    pub(super) fn apply_app_writes(&mut self, now: u64) {
+        if self.life.app_written {
+            self.life.app_written = false;
+            self.life.last_app = now;
+        }
+        if self.life.data_written {
+            self.life.data_written = false;
+            self.data_seen(now);
+        }
+    }
 }

@@ -20,13 +20,12 @@
 use std::ops::RangeInclusive;
 
 use proptest::prelude::*;
-use vinc_security::{TicketBatch, TicketEntry};
+use vinc_security::{Rekey, TicketBatch, TicketEntry};
 use vinc_tests::SplitMix64;
 use vinc_transport::frame::{
-    ACK_DELAY_UNIT_NS, Ack, Frame, FrameError, FrameIter, MAX_ACK_RANGES, MAX_STREAM_END, ack_len, datagram_overhead,
-    stream_overhead, ty, write_ack,
+    Ack, Frame, FrameError, FrameIter, MAX_ACK_RANGES, MAX_STREAM_END, ack_len, datagram_overhead, stream_overhead, ty,
+    write_ack,
 };
-use vinc_transport::packet::ConnId;
 use vinc_wire::{WireError, Writer};
 
 vinc_tests::install_counting_allocator!();
@@ -59,10 +58,10 @@ fn ranges_of(bytes: &[u8]) -> (Ack<'_>, Vec<RangeInclusive<u64>>) {
     (ack, ranges)
 }
 
-fn ack_bytes(delay: u64, ranges: &[RangeInclusive<u64>]) -> Result<Vec<u8>, FrameError> {
+fn ack_bytes(ranges: &[RangeInclusive<u64>]) -> Result<Vec<u8>, FrameError> {
     let mut buf = vec![0u8; 1024];
     let mut w = Writer::new(&mut buf);
-    write_ack(&mut w, delay, ranges.iter().cloned())?;
+    write_ack(&mut w, ranges.iter().cloned())?;
     let n = w.written().len();
     buf.truncate(n);
     Ok(buf)
@@ -83,8 +82,6 @@ fn frames_have_the_documented_bytes() {
             },
             vec![0x04, 4, 9, 0xac, 0x02],
         ),
-        (Frame::StopSending { id: 4, error: 9 }, vec![0x05, 4, 9]),
-        (Frame::NewToken { token: b"tok" }, vec![0x07, 3, b't', b'o', b'k']),
         (
             Frame::Stream {
                 id: 4,
@@ -115,24 +112,7 @@ fn frames_have_the_documented_bytes() {
             },
             vec![0x0f, 1, 7, 0],
         ),
-        (Frame::MaxData { max: 5 }, vec![0x10, 5]),
         (Frame::MaxStreamData { id: 8, max: 5 }, vec![0x11, 8, 5]),
-        (Frame::MaxStreams { bidi: true, max: 5 }, vec![0x12, 5]),
-        (Frame::MaxStreams { bidi: false, max: 5 }, vec![0x13, 5]),
-        (Frame::DataBlocked { limit: 6 }, vec![0x14, 6]),
-        (Frame::StreamDataBlocked { id: 8, limit: 6 }, vec![0x15, 8, 6]),
-        (Frame::StreamsBlocked { bidi: true, limit: 6 }, vec![0x16, 6]),
-        (Frame::StreamsBlocked { bidi: false, limit: 6 }, vec![0x17, 6]),
-        (
-            Frame::NewConnectionId {
-                seq: 2,
-                retire_prior_to: 1,
-                cid: ConnId::new(&[0xaa, 0xbb]).unwrap(),
-                token: [0x33; 16],
-            },
-            [vec![0x18, 2, 1, 2, 0xaa, 0xbb], vec![0x33; 16]].concat(),
-        ),
-        (Frame::RetireConnectionId { seq: 2 }, vec![0x19, 2]),
         (
             Frame::PathChallenge([1, 2, 3, 4, 5, 6, 7, 8]),
             vec![0x1a, 1, 2, 3, 4, 5, 6, 7, 8],
@@ -141,21 +121,8 @@ fn frames_have_the_documented_bytes() {
             Frame::PathResponse([1, 2, 3, 4, 5, 6, 7, 8]),
             vec![0x1b, 1, 2, 3, 4, 5, 6, 7, 8],
         ),
-        (
-            Frame::Close {
-                error: 3,
-                frame_type: 2,
-                reason: b"no",
-            },
-            vec![0x1c, 3, 2, 2, b'n', b'o'],
-        ),
-        (
-            Frame::ApplicationClose {
-                error: 3,
-                reason: b"no",
-            },
-            vec![0x1d, 3, 2, b'n', b'o'],
-        ),
+        (Frame::Close { error: 3 }, vec![0x1c, 3]),
+        (Frame::Close { error: 0x4c }, vec![0x1c, 0x4c]),
         (
             Frame::Datagram {
                 data: b"dg",
@@ -173,6 +140,22 @@ fn frames_have_the_documented_bytes() {
         (Frame::MtuProbeEcho { mtu: 1452 }, vec![0x3a, 0x05, 0xac]),
         (Frame::Sleep, vec![0x3b]),
         (Frame::Wake, vec![0x3c]),
+        (
+            Frame::Rekey(Rekey {
+                answer: false,
+                share: [7; 32],
+                switch_pn: 0,
+            }),
+            [vec![0x3d, 0], vec![7; 32]].concat(),
+        ),
+        (
+            Frame::Rekey(Rekey {
+                answer: true,
+                share: [8; 32],
+                switch_pn: 300,
+            }),
+            [vec![0x3d, 1], vec![8; 32], vec![0xac, 0x02]].concat(),
+        ),
         (Frame::Ready, vec![0x3e]),
         (
             Frame::Extension { ty: 0x40, body: b"abc" },
@@ -239,8 +222,8 @@ fn stream_off_bit_with_zero_offset_is_accepted_and_re_encoded_canonically() {
 #[test]
 fn unassigned_types_below_0x40_are_errors() {
     let assigned = [
-        0x00u64, 0x01, 0x02, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
-        0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x30, 0x31, 0x3a, 0x3b, 0x3c, 0x3e, 0x3f,
+        0x00u64, 0x01, 0x02, 0x04, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x11, 0x1a, 0x1b, 0x1c, 0x30, 0x31,
+        0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
     ];
     for t in 0..0x40u64 {
         let mut payload = vec![t as u8];
@@ -273,7 +256,7 @@ fn the_iterator_stops_at_the_first_error() {
         vec![Err(FrameError::Wire(WireError::VarintNonMinimal))]
     );
     assert!(matches!(
-        decode_all(&[0x07, 9, 1, 2]).as_slice(),
+        decode_all(&[0x0a, 4, 9, 1, 2]).as_slice(),
         [Err(FrameError::Wire(WireError::Truncated { .. }))]
     ));
     assert!(matches!(
@@ -328,37 +311,13 @@ fn validation_errors() {
     wire.extend_from_slice(&off);
     wire.extend_from_slice(&[1, b'a']);
     assert_eq!(decode_all(&wire), vec![Err(FrameError::StreamEnd)]);
-    // A connection id of 0 or 21 bytes, and retire_prior_to past the sequence number.
-    let mut wire = vec![0x18, 1, 0, 0];
-    wire.extend_from_slice(&[0u8; 16]);
-    assert_eq!(decode_all(&wire), vec![Err(FrameError::ConnId)]);
-    let mut wire = vec![0x18, 1, 0, 21];
-    wire.extend_from_slice(&[0u8; 40]);
-    assert_eq!(decode_all(&wire), vec![Err(FrameError::ConnId)]);
-    let mut wire = vec![0x18, 1, 2, 1, 9];
-    wire.extend_from_slice(&[0u8; 16]);
-    assert_eq!(decode_all(&wire), vec![Err(FrameError::RetirePriorTo)]);
-    let bad = Frame::NewConnectionId {
-        seq: 1,
-        retire_prior_to: 2,
-        cid: ConnId::new(&[1]).unwrap(),
-        token: [0; 16],
-    };
-    assert_eq!(bad.write(&mut Writer::new(&mut buf)), Err(FrameError::RetirePriorTo));
-    let empty = Frame::NewConnectionId {
-        seq: 1,
-        retire_prior_to: 0,
-        cid: ConnId::new(&[]).unwrap(),
-        token: [0; 16],
-    };
-    assert_eq!(empty.write(&mut Writer::new(&mut buf)), Err(FrameError::ConnId));
     // An extension below 0x40 cannot be written, and a field of 2^63 or more does not fit a varint.
     let ext = Frame::Extension { ty: 0x3f, body: b"" };
     assert_eq!(
         ext.write(&mut Writer::new(&mut buf)),
         Err(FrameError::UnknownType(0x3f))
     );
-    let big = Frame::MaxData { max: 1 << 63 };
+    let big = Frame::MaxStreamData { id: 0, max: 1 << 63 };
     let mut w = Writer::new(&mut buf);
     assert_eq!(big.write(&mut w), Err(FrameError::Wire(WireError::VarintOverflow)));
     assert!(w.written().is_empty());
@@ -416,19 +375,17 @@ fn size_functions_match_the_encoding() {
 #[test]
 fn ack_exact_bytes_and_decode() {
     // Ranges 12..=14 and 5..=7: largest 14, first_range 2, one more range with gap 12-7-2 = 3 and length 2.
-    let bytes = ack_bytes(25, &[12..=14, 5..=7]).unwrap();
-    assert_eq!(bytes, vec![0x02, 14, 25, 1, 2, 3, 2]);
+    let bytes = ack_bytes(&[12..=14, 5..=7]).unwrap();
+    assert_eq!(bytes, vec![0x02, 14, 1, 2, 3, 2]);
     let (ack, ranges) = ranges_of(&bytes);
-    assert_eq!((ack.largest(), ack.delay(), ack.range_count()), (14, 25, 2));
+    assert_eq!((ack.largest(), ack.range_count()), (14, 2));
     assert_eq!(ranges, vec![12..=14, 5..=7]);
     // A single range, and a range down to packet 0.
-    assert_eq!(ack_bytes(0, &[0..=0]).unwrap(), vec![0x02, 0, 0, 0, 0]);
-    assert_eq!(ranges_of(&[0x02, 0, 0, 0, 0]).1, vec![0..=0]);
+    assert_eq!(ack_bytes(&[0..=0]).unwrap(), vec![0x02, 0, 0, 0]);
+    assert_eq!(ranges_of(&[0x02, 0, 0, 0]).1, vec![0..=0]);
     // The smallest gap that is expressible: exactly one packet missing between ranges.
-    assert_eq!(ack_bytes(1, &[10..=10, 8..=8]).unwrap(), vec![0x02, 10, 1, 1, 0, 0, 0]);
-    // The delay unit is 8 microseconds.
-    assert_eq!(ACK_DELAY_UNIT_NS, 8_000);
-    assert_eq!(ack_len(25, [12..=14, 5..=7]).unwrap(), bytes.len());
+    assert_eq!(ack_bytes(&[10..=10, 8..=8]).unwrap(), vec![0x02, 10, 1, 0, 0, 0]);
+    assert_eq!(ack_len([12..=14, 5..=7]).unwrap(), bytes.len());
     // Re-encoding a decoded frame keeps the bytes.
     assert_eq!(encode(&Frame::Ack(ack)), bytes);
 }
@@ -448,23 +405,18 @@ fn ack_encoding_rejects_non_canonical_ranges() {
         (vec![10..=12, 3..=3, 3..=3], "a repeat after a valid pair"),
     ];
     for (ranges, why) in bad {
-        assert_eq!(ack_bytes(0, &ranges), Err(FrameError::Ack), "{why}");
-        assert_eq!(ack_len(0, ranges.iter().cloned()), Err(FrameError::Ack), "{why}");
+        assert_eq!(ack_bytes(&ranges), Err(FrameError::Ack), "{why}");
+        assert_eq!(ack_len(ranges.iter().cloned()), Err(FrameError::Ack), "{why}");
     }
     // A gap of exactly one missing packet is fine; zero missing is not.
-    assert!(ack_bytes(0, &[5..=7, 3..=3]).is_ok());
-    assert_eq!(ack_bytes(0, &[5..=7, 3..=4]), Err(FrameError::Ack));
-    assert!(ack_bytes(0, &[max..=max]).is_ok());
-    // A delay that cannot be a varint.
-    assert_eq!(
-        ack_bytes(1 << 63, &[1..=1]),
-        Err(FrameError::Wire(WireError::VarintOverflow))
-    );
+    assert!(ack_bytes(&[5..=7, 3..=3]).is_ok());
+    assert_eq!(ack_bytes(&[5..=7, 3..=4]), Err(FrameError::Ack));
+    assert!(ack_bytes(&[max..=max]).is_ok());
     // A too-small buffer writes nothing.
     let mut tiny = [0u8; 3];
     let mut w = Writer::new(&mut tiny);
     assert!(matches!(
-        write_ack(&mut w, 0, [5..=7, 3..=3]),
+        write_ack(&mut w, [5..=7, 3..=3]),
         Err(FrameError::Wire(WireError::BufferTooSmall { .. }))
     ));
     assert!(w.written().is_empty());
@@ -473,24 +425,24 @@ fn ack_encoding_rejects_non_canonical_ranges() {
 #[test]
 fn ack_decoding_rejects_malformed_frames() {
     // first_range larger than largest: a range below packet number 0.
-    assert_eq!(decode_all(&[0x02, 5, 0, 0, 6]), vec![Err(FrameError::Ack)]);
+    assert_eq!(decode_all(&[0x02, 5, 0, 6]), vec![Err(FrameError::Ack)]);
     // Gap or length that goes below 0.
-    assert_eq!(decode_all(&[0x02, 10, 0, 1, 0, 9, 0]), vec![Err(FrameError::Ack)]);
-    assert_eq!(decode_all(&[0x02, 10, 0, 1, 0, 0, 9]), vec![Err(FrameError::Ack)]);
-    assert_eq!(decode_all(&[0x02, 10, 0, 1, 0, 8, 1]), vec![Err(FrameError::Ack)]); // ends at 0, starts at -1
+    assert_eq!(decode_all(&[0x02, 10, 1, 0, 9, 0]), vec![Err(FrameError::Ack)]);
+    assert_eq!(decode_all(&[0x02, 10, 1, 0, 0, 9]), vec![Err(FrameError::Ack)]);
+    assert_eq!(decode_all(&[0x02, 10, 1, 0, 8, 1]), vec![Err(FrameError::Ack)]); // ends at 0, starts at -1
     // The last valid values: the range ends at 0 and starts at 0.
-    assert_eq!(ranges_of(&[0x02, 10, 0, 1, 0, 8, 0]).1, vec![10..=10, 0..=0]);
+    assert_eq!(ranges_of(&[0x02, 10, 1, 0, 8, 0]).1, vec![10..=10, 0..=0]);
     // Largest above 2^62 - 1.
     let mut wire = vec![0x02];
     let mut v = [0u8; 9];
     let n = vinc_wire::varint::encode(1 << 62, &mut v).unwrap();
     wire.extend_from_slice(&v[..n]);
-    wire.extend_from_slice(&[0, 0, 0]);
+    wire.extend_from_slice(&[0, 0]);
     assert_eq!(decode_all(&wire), vec![Err(FrameError::Ack)]);
     // Too many ranges (32 extra means 33 in total), and a count that promises more than the bytes hold.
-    assert_eq!(decode_all(&[0x02, 100, 0, 32, 0]), vec![Err(FrameError::TooManyRanges)]);
+    assert_eq!(decode_all(&[0x02, 100, 32, 0]), vec![Err(FrameError::TooManyRanges)]);
     assert!(matches!(
-        decode_all(&[0x02, 100, 0, 3, 0, 1, 0]).as_slice(),
+        decode_all(&[0x02, 100, 3, 0, 1, 0]).as_slice(),
         [Err(FrameError::Wire(WireError::Truncated { .. }))]
     ));
     assert!(matches!(
@@ -499,7 +451,7 @@ fn ack_decoding_rejects_malformed_frames() {
     ));
     // A frame after the ACK is parsed from the right place.
     assert_eq!(
-        decode_all(&[0x02, 14, 25, 1, 2, 3, 2, 0x01]).len(),
+        decode_all(&[0x02, 14, 1, 2, 3, 2, 0x01]).len(),
         2,
         "the iterator resumes after the last range"
     );
@@ -522,17 +474,15 @@ proptest! {
     fn ack_round_trips_and_is_trimmed_to_32_ranges(
         base in 0u64..(1 << 40),
         parts in proptest::collection::vec((1u64..2000, 0u64..2000), 1..48),
-        delay in 0u64..(1 << 40),
     ) {
         let ranges = descending(base, &parts);
-        let bytes = ack_bytes(delay, &ranges).unwrap();
-        prop_assert_eq!(bytes.len(), ack_len(delay, ranges.iter().cloned()).unwrap());
+        let bytes = ack_bytes(&ranges).unwrap();
+        prop_assert_eq!(bytes.len(), ack_len(ranges.iter().cloned()).unwrap());
         let (ack, got) = ranges_of(&bytes);
         let want: Vec<_> = ranges.iter().take(MAX_ACK_RANGES).cloned().collect();
         prop_assert_eq!(&got, &want);
         prop_assert_eq!(ack.range_count(), want.len());
         prop_assert_eq!(ack.largest(), *want[0].end());
-        prop_assert_eq!(ack.delay(), delay);
         prop_assert_eq!(ack.ranges().size_hint(), (want.len(), Some(want.len())));
         // Decoded ranges are canonical: strictly descending with at least one missing packet between them.
         for pair in got.windows(2) {
@@ -551,7 +501,6 @@ struct Spec {
     b: u64,
     c: u64,
     data: Vec<u8>,
-    cid: Vec<u8>,
     token: [u8; 16],
     path: [u8; 8],
     flag: bool,
@@ -567,18 +516,16 @@ fn spec() -> impl Strategy<Value = Spec> {
         0u8..=255,
         (value(), value(), value()),
         proptest::collection::vec(any::<u8>(), 0..300),
-        proptest::collection::vec(any::<u8>(), 1..=20),
         any::<[u8; 16]>(),
         any::<[u8; 8]>(),
         (any::<bool>(), any::<bool>()),
     )
-        .prop_map(|(sel, (a, b, c), data, cid, token, path, (flag, implicit))| Spec {
+        .prop_map(|(sel, (a, b, c), data, token, path, (flag, implicit))| Spec {
             sel,
             a,
             b,
             c,
             data,
-            cid,
             token,
             path,
             flag,
@@ -587,6 +534,15 @@ fn spec() -> impl Strategy<Value = Spec> {
 }
 
 const KINDS: u8 = 25;
+
+impl Spec {
+    fn token_share(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[..16].copy_from_slice(&self.token);
+        out[16..].copy_from_slice(&self.token);
+        out
+    }
+}
 
 /// A frame of every kind but ACK (which has its own tests), chosen by `sel`.
 fn frame(s: &Spec) -> Frame<'_> {
@@ -601,8 +557,6 @@ fn frame(s: &Spec) -> Frame<'_> {
             error: b,
             final_size: c,
         },
-        3 => Frame::StopSending { id: a, error: b },
-        4 => Frame::NewToken { token: &s.data },
         5 => Frame::Stream {
             id: a,
             offset: b % ((1 << 62) - 1 - 400),
@@ -610,30 +564,15 @@ fn frame(s: &Spec) -> Frame<'_> {
             data: &s.data,
             implicit_len: s.implicit,
         },
-        6 => Frame::MaxData { max: a },
         7 => Frame::MaxStreamData { id: a, max: b },
-        8 => Frame::MaxStreams { bidi: s.flag, max: a },
-        9 => Frame::DataBlocked { limit: a },
-        10 => Frame::StreamDataBlocked { id: a, limit: b },
-        11 => Frame::StreamsBlocked { bidi: s.flag, limit: a },
-        12 => Frame::NewConnectionId {
-            seq: a,
-            retire_prior_to: b % (a + 1),
-            cid: ConnId::new(&s.cid).unwrap(),
-            token: s.token,
-        },
-        13 => Frame::RetireConnectionId { seq: a },
         14 => Frame::PathChallenge(s.path),
         15 => Frame::PathResponse(s.path),
-        16 => Frame::Close {
-            error: a,
-            frame_type: b,
-            reason: &s.data,
-        },
-        17 => Frame::ApplicationClose {
-            error: a,
-            reason: &s.data,
-        },
+        16 => Frame::Close { error: a },
+        17 => Frame::Rekey(Rekey {
+            answer: s.flag,
+            share: s.token_share(),
+            switch_pn: if s.flag { a } else { 0 },
+        }),
         18 => Frame::Datagram {
             data: &s.data,
             implicit_len: s.implicit,
@@ -735,7 +674,6 @@ proptest! {
 #[test]
 fn frame_paths_allocate_nothing() {
     let data = [7u8; 200];
-    let cid = ConnId::new(&[1, 2, 3, 4]).unwrap();
     let frames = [
         Frame::Padding { len: 40 },
         Frame::Ping,
@@ -744,8 +682,6 @@ fn frame_paths_allocate_nothing() {
             error: 9,
             final_size: 300,
         },
-        Frame::StopSending { id: 4, error: 9 },
-        Frame::NewToken { token: &data[..30] },
         Frame::Stream {
             id: 4,
             offset: 99,
@@ -753,30 +689,15 @@ fn frame_paths_allocate_nothing() {
             data: &data,
             implicit_len: false,
         },
-        Frame::MaxData { max: 1 << 30 },
         Frame::MaxStreamData { id: 4, max: 1 << 20 },
-        Frame::MaxStreams { bidi: false, max: 100 },
-        Frame::DataBlocked { limit: 5 },
-        Frame::StreamDataBlocked { id: 4, limit: 5 },
-        Frame::StreamsBlocked { bidi: true, limit: 5 },
-        Frame::NewConnectionId {
-            seq: 3,
-            retire_prior_to: 1,
-            cid,
-            token: [9; 16],
-        },
-        Frame::RetireConnectionId { seq: 1 },
         Frame::PathChallenge([1; 8]),
         Frame::PathResponse([1; 8]),
-        Frame::Close {
-            error: 1,
-            frame_type: 2,
-            reason: &data[..20],
-        },
-        Frame::ApplicationClose {
-            error: 1,
-            reason: &data[..20],
-        },
+        Frame::Close { error: 1 },
+        Frame::Rekey(Rekey {
+            answer: true,
+            share: [3; 32],
+            switch_pn: 9,
+        }),
         Frame::Datagram {
             data: &data,
             implicit_len: false,
@@ -800,7 +721,7 @@ fn frame_paths_allocate_nothing() {
         for f in &frames {
             f.write(&mut w).unwrap();
         }
-        write_ack(&mut w, 25, ranges.iter().cloned()).unwrap();
+        write_ack(&mut w, ranges.iter().cloned()).unwrap();
         let n = w.written().len();
         let mut seen = 0;
         for f in FrameIter::new(&buf[..n]) {
@@ -811,7 +732,7 @@ fn frame_paths_allocate_nothing() {
         }
         assert_eq!(seen, frames.len() + 1);
         assert!(FrameIter::new(&junk).count() > 0);
-        assert!(ack_len(1, ranges.iter().cloned()).unwrap() > 0);
+        assert!(ack_len(ranges.iter().cloned()).unwrap() > 0);
         assert!(stream_overhead(1, 2, 3, false) + datagram_overhead(3, false) > 0);
     });
     assert_eq!(stats.count(), 0, "{stats:?}");

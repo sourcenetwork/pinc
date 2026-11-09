@@ -1,10 +1,10 @@
-//! The receive half of a stream: reassembly into pool chunks, final-size rules and window credit.
+//! The receive half of a stream: reassembly into pool chunks and the final-size rules.
 //!
 //! Invariants: bytes live in the chunk ring at their absolute offset; `ranges` records which offsets were stored and
 //! `contig` is the end of the prefix stored without holes; chunks wholly below `read_off` are returned to the pool; a
-//! byte received twice must be identical.
+//! byte received twice must be identical. Window grants are decided by the table, which owns the pool accounting.
 
-use super::flow::{ConnRecv, Tune, Window};
+use super::flow::Window;
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
 use super::{MAX_OFFSET, RANGES, RecvStatus, StreamError};
@@ -20,10 +20,8 @@ pub(super) struct Recv<const C: usize> {
     final_size: Option<u64>,
     pub(super) win: Window,
     reset: Option<u64>,
-    discard: bool,
     /// The application has seen the end (a consume after the final size, or a reset).
     observed: bool,
-    pub(super) stop_pending: Option<u64>,
 }
 
 impl<const C: usize> Recv<C> {
@@ -35,16 +33,14 @@ impl<const C: usize> Recv<C> {
         highest: 0,
         contig: 0,
         final_size: None,
-        win: Window::new(0, 0),
+        win: Window::new(0),
         reset: None,
-        discard: false,
         observed: false,
-        stop_pending: None,
     };
 
-    pub(super) const fn init(&mut self, size: u64, max: u64) {
+    pub(super) const fn init(&mut self, size: u64) {
         self.open = true;
-        self.win = Window::new(size, max);
+        self.win = Window::new(size);
     }
 
     pub(super) fn status(&self) -> RecvStatus {
@@ -65,6 +61,28 @@ impl<const C: usize> Recv<C> {
         self.ranges.clear();
     }
 
+    /// The credit granted beyond what arrived, which the pool must still be able to hold.
+    pub(super) fn unreceived(&self) -> u64 {
+        if !self.open {
+            return 0;
+        }
+        let reach = self.final_size.map_or(self.win.limit, |f| f.min(self.win.limit));
+        reach.saturating_sub(self.highest)
+    }
+
+    /// The limit the window is due to move to, with the increase it means, when at least an eighth of the window was
+    /// freed.
+    pub(super) fn due(&self) -> Option<(u64, u64)> {
+        if !self.open {
+            return None;
+        }
+        let cap = self.final_size.unwrap_or(MAX_OFFSET);
+        let candidate = self.read_off.saturating_add(self.win.size).min(cap);
+        let limit = self.win.limit;
+        (candidate > limit && candidate >= limit.saturating_add(self.win.size / 8))
+            .then(|| (candidate, candidate - limit))
+    }
+
     fn readable(&self) -> u64 {
         if self.reset.is_some() {
             return 0;
@@ -76,7 +94,6 @@ impl<const C: usize> Recv<C> {
     pub(super) fn on_data(
         &mut self,
         pool: &mut BufferPool<'_>,
-        conn: &mut ConnRecv,
         offset: u64,
         data: &[u8],
         fin: bool,
@@ -93,23 +110,12 @@ impl<const C: usize> Recv<C> {
         if end > self.win.limit {
             return Err(StreamError::FlowControl);
         }
-        let delta = end.saturating_sub(self.highest);
-        if !conn.admits(delta) {
-            return Err(StreamError::FlowControl);
-        }
-        if self.reset.is_none() && !self.discard {
+        if self.reset.is_none() {
             self.store(pool, offset, data, end)?;
         }
-        conn.received += delta;
         self.highest = self.highest.max(end);
         if fin {
             self.final_size = Some(end);
-        }
-        if self.discard {
-            let n = self.highest - self.read_off;
-            self.read_off = self.highest;
-            self.contig = self.read_off;
-            conn.consumed(n, None, pool.available_bytes());
         }
         Ok(())
     }
@@ -156,14 +162,8 @@ impl<const C: usize> Recv<C> {
         self.ring.span(pool, self.read_off / CHUNK_SIZE as u64, at, len)
     }
 
-    /// Release `n` readable bytes and credit them.
-    pub(super) fn consume(
-        &mut self,
-        pool: &mut BufferPool<'_>,
-        conn: &mut ConnRecv,
-        n: u64,
-        tune: Option<Tune>,
-    ) -> Result<(), StreamError> {
+    /// Release `n` readable bytes.
+    pub(super) fn consume(&mut self, pool: &mut BufferPool<'_>, n: u64) -> Result<(), StreamError> {
         if n > self.readable() {
             return Err(StreamError::InvalidConsume);
         }
@@ -175,18 +175,14 @@ impl<const C: usize> Recv<C> {
         if self.final_size == Some(self.read_off) {
             self.release_all(pool);
         }
-        conn.consumed(n, tune, pool.available_bytes());
-        let cap = self.final_size.unwrap_or(MAX_OFFSET);
-        self.win.consumed(self.read_off, n, tune, cap);
         self.observed |= self.status() != RecvStatus::Open;
         Ok(())
     }
 
-    /// The peer reset the stream: fix the final size, drop the buffered bytes and credit them to the connection.
+    /// The peer reset the stream: fix the final size and drop the buffered bytes.
     pub(super) fn on_reset(
         &mut self,
         pool: &mut BufferPool<'_>,
-        conn: &mut ConnRecv,
         code: u64,
         final_size: u64,
     ) -> Result<(), StreamError> {
@@ -199,41 +195,12 @@ impl<const C: usize> Recv<C> {
         if self.reset.is_some() {
             return Ok(());
         }
-        let delta = final_size - self.highest;
-        if !conn.admits(delta) {
-            return Err(StreamError::FlowControl);
-        }
-        conn.received += delta;
         self.highest = final_size;
         self.final_size = Some(final_size);
         self.reset = Some(code);
-        let n = final_size.saturating_sub(self.read_off);
         self.read_off = final_size;
         self.contig = final_size;
         self.release_all(pool);
-        conn.consumed(n, None, pool.available_bytes());
         Ok(())
-    }
-
-    /// The application discards the rest of the stream: drop what is buffered and credit later bytes on arrival.
-    pub(super) fn stop(&mut self, pool: &mut BufferPool<'_>, conn: &mut ConnRecv, code: u64) {
-        if !self.open || self.discard || self.status() != RecvStatus::Open {
-            return;
-        }
-        self.discard = true;
-        self.observed = true;
-        self.stop_pending = Some(code);
-        let n = self.highest - self.read_off;
-        self.read_off = self.highest;
-        self.contig = self.read_off;
-        self.release_all(pool);
-        conn.consumed(n, None, pool.available_bytes());
-    }
-
-    /// STOP_SENDING needs retransmitting while the peer has not ended the stream.
-    pub(super) fn requeue_stop(&mut self, code: u64) {
-        if self.discard && self.status() == RecvStatus::Open {
-            self.stop_pending = Some(code);
-        }
     }
 }

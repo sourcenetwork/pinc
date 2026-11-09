@@ -1,14 +1,14 @@
 //! The receive path: split a datagram into packets, unprotect and open each, and dispatch its frames to the layers.
 //!
 //! Order of work for a packet: header (route by connection id), header unprotection, key choice by phase bit,
-//! authentication, a first pass over the frames (what the packet is: ack-eliciting, probing, a ping, stream bytes)
-//! and the duplicate check, a second pass that applies each frame, and last the bookkeeping that depends on the whole
-//! packet (the received-packet record, migration, the handshake confirmation).
+//! authentication, a first pass over the frames (what the packet is: ack-eliciting, a ping, stream bytes, whether it
+//! carries data that moves the peer's path) and the duplicate check, a second pass that applies each frame, and last
+//! the bookkeeping that depends on the whole packet (the received-packet record, following the peer, the handshake
+//! confirmation).
 //!
 //! Invariants: nothing is acted on before it authenticated, so a forged packet changes nothing (a new path is added
 //! only after a packet from it authenticated); a packet whose frames could not be stored for lack of memory is not
-//! recorded as received, so the peer sends it again; a stateless reset is looked for only when a short packet failed
-//! to open.
+//! recorded as received, so the peer sends it again; any authenticated packet ends the peer's sleep.
 
 use vinc_crypto::Provider;
 use vinc_security::{Env, ResponderStores};
@@ -17,13 +17,12 @@ use vinc_wire::varint;
 use super::config::{MIN_MTU, PathId, PathInfo};
 use super::ctl::{Outcome, apply};
 use super::event::{Drop, Ev, code};
-use super::path::PathState;
+use super::path::RJ_THIN_GAP;
 use super::{Connection, Phase};
 use crate::frame::{Ack, Frame, FrameIter};
-use crate::packet::{
-    Header, LongHeader, LongType, Packet, PacketError, decode_pn, is_stateless_reset, open, packets, unprotect_header,
-};
-use crate::recovery::{RecoveryError, RxOutcome, RxPacket};
+use crate::packet::{Header, LongHeader, LongType, Packet, PacketError, decode_pn, open, packets, unprotect_header};
+use crate::recovery::PathKind;
+use crate::recovery::{RxOutcome, RxPacket};
 use crate::stream::{StreamError, StreamSource};
 
 /// The largest extension body kept: a datagram of the biggest path size.
@@ -42,21 +41,18 @@ pub(super) struct Rx {
 #[derive(Debug, Clone, Copy)]
 enum Fault {
     /// A rule was broken: close with this code.
-    Violation(u64, &'static str),
+    Violation(u64),
     /// Memory is short: drop the packet unacknowledged.
     Shortage,
 }
 
 fn stream_fault(e: StreamError) -> Fault {
     match e {
-        StreamError::StreamLimit | StreamError::TableFull => Fault::Violation(code::STREAM_LIMIT, "too many streams"),
-        StreamError::StreamState | StreamError::UnknownStream => {
-            Fault::Violation(code::STREAM_STATE, "frame does not fit the stream")
-        }
-        StreamError::FlowControl => Fault::Violation(code::FLOW_CONTROL, "flow control credit exceeded"),
-        StreamError::FinalSize => Fault::Violation(code::FINAL_SIZE, "final size violated"),
+        StreamError::StreamState | StreamError::UnknownStream => Fault::Violation(code::STREAM_STATE),
+        StreamError::FlowControl => Fault::Violation(code::FLOW_CONTROL),
+        StreamError::FinalSize => Fault::Violation(code::FINAL_SIZE),
         StreamError::Exhausted | StreamError::Fragmented => Fault::Shortage,
-        _ => Fault::Violation(code::PROTOCOL_VIOLATION, "stream data refused"),
+        _ => Fault::Violation(code::PROTOCOL_VIOLATION),
     }
 }
 
@@ -65,38 +61,45 @@ fn stream_fault(e: StreamError) -> Fault {
 #[allow(clippy::struct_excessive_bools, reason = "independent facts about one packet")]
 struct Props {
     eliciting: bool,
-    probing: bool,
     ping: bool,
     padding: bool,
+    /// The packet carries STREAM, DATAGRAM or WAKE: the frames that move the peer's path.
+    nonprobing: bool,
+    wake: bool,
     stream_bytes: u32,
+    /// The largest data payload (stream or datagram bytes).
+    payload: usize,
 }
 
 fn scan(payload: &[u8]) -> Result<Props, crate::frame::FrameError> {
-    let mut p = Props {
-        probing: true,
-        ..Props::default()
-    };
+    let mut p = Props::default();
     for f in FrameIter::new(payload) {
         match f? {
             Frame::Padding { .. } => p.padding = true,
-            Frame::Ack(_) => p.probing = false,
+            Frame::Ack(_) => {}
             Frame::Ping => {
                 p.eliciting = true;
                 p.ping = true;
-                p.probing = false;
             }
-            Frame::PathChallenge(_) | Frame::PathResponse(_) | Frame::NewConnectionId { .. } => p.eliciting = true,
             Frame::Stream { data, .. } => {
                 p.eliciting = true;
-                p.probing = false;
+                p.nonprobing = true;
+                p.payload += data.len();
                 p.stream_bytes = p
                     .stream_bytes
                     .saturating_add(u32::try_from(data.len()).unwrap_or(u32::MAX));
             }
-            _ => {
+            Frame::Datagram { data, .. } => {
                 p.eliciting = true;
-                p.probing = false;
+                p.nonprobing = true;
+                p.payload += data.len();
             }
+            Frame::Wake => {
+                p.eliciting = true;
+                p.nonprobing = true;
+                p.wake = true;
+            }
+            _ => p.eliciting = true,
         }
     }
     Ok(p)
@@ -139,9 +142,7 @@ conn_impl! {
     ) -> Result<(), Drop> {
         let now = env.now;
         match self.phase {
-            Phase::Closed => return Err(Drop::Closed),
-            Phase::Draining => return Err(Drop::Draining),
-            Phase::Closing => self.on_packet_while_closing(),
+            Phase::Closed | Phase::Closing => return Err(Drop::Closed),
             _ => {}
         }
         let dlen = dgram.len();
@@ -152,9 +153,11 @@ conn_impl! {
         if let Some(p) = known.and_then(|i| self.paths.get_mut(i)) {
             p.amp.on_receive(dlen as u64);
         }
+        self.sess_amp.on_receive(dlen as u64);
         self.stats.datagrams_received += 1;
         self.stats.bytes_received += dlen as u64;
         let mut ctx = Rx { path_id: path, path: known, dlen, now };
+        self.life.clock = now;
         let (mut ok, mut first_err) = (false, None);
         for pkt in packets(dgram, self.cfg.cid_len) {
             let r = match pkt {
@@ -167,7 +170,7 @@ conn_impl! {
                     first_err.get_or_insert(e);
                 }
             }
-            if matches!(self.phase, Phase::Closed | Phase::Draining) {
+            if matches!(self.phase, Phase::Closed | Phase::Closing) {
                 break;
             }
         }
@@ -186,16 +189,9 @@ conn_impl! {
             Header::Long { header, header_len } => match header.ty {
                 LongType::Handshake => self.on_handshake(env, stores, ctx, &header, header_len, pkt.bytes),
                 LongType::ZeroRtt => self.on_zero_rtt(env, ctx, pn_off, pkt.bytes),
-                LongType::Retry => Err(Drop::Empty),
             },
             Header::Short { dcid } => {
                 if !self.cids.is_local(&dcid) {
-                    // A stateless reset names an id we never issued.
-                    if is_stateless_reset(pkt.bytes, self.cids.peer_tokens()) {
-                        self.push(Ev::StatelessReset);
-                        self.silent_close(super::CloseReason::StatelessReset);
-                        return Ok(());
-                    }
                     return Err(Drop::Unroutable);
                 }
                 self.on_short(env, ctx, pn_off, pkt.bytes)
@@ -218,19 +214,12 @@ conn_impl! {
             return Err(Drop::Empty);
         }
         let Some(pi) = ctx.path else { return Err(Drop::NoPath) };
-        if self.client && self.cids.first_local() != Some(header.dcid) {
+        if self.client && self.cids.first_local() != header.dcid {
             return Err(Drop::Unroutable);
         }
-        let first_remote = self.cids.remote_cid(0).is_none();
         self.cids.set_first_remote(header.scid);
-        if first_remote
-            && let (Some(p), Ok(slot)) = (self.paths.get_mut(pi), u8::try_from(pi))
-            && p.cid_seq.is_none()
-        {
-            p.cid_seq = self.cids.claim_remote(slot);
-        }
         if let Some(p) = self.paths.get_mut(pi) {
-            p.last_heard = ctx.now;
+            p.last_rx = ctx.now;
         }
         self.note_heard(ctx.now);
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
@@ -244,6 +233,9 @@ conn_impl! {
         let p = env.provider;
         let Some(dir) = self.keys.early_recv.as_mut() else { return Err(Drop::Undecryptable) };
         let un = unprotect_header(&dir.hk, p, bytes, pn_off, true).map_err(|_| Drop::Undecryptable)?;
+        if un.pn_len != crate::packet::PN_LEN_BASE {
+            return Err(Drop::Undecryptable);
+        }
         let opened = open(&mut dir.pk, p, bytes, pn_off, &un, self.rx.largest()).map_err(|_| Drop::Undecryptable)?;
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
         self.process_payload(env, ctx, opened.pn, payload)
@@ -269,7 +261,7 @@ conn_impl! {
         if let Some(rk) = self.keys.recv.as_mut() {
             rk.expire(now);
             match unprotect_header(&rk.hk, p, bytes, pn_off, false) {
-                Ok(un) => {
+                Ok(un) if un.pn_len == self.pn_len => {
                     let pn_est = decode_pn(un.truncated, un.pn_len, largest);
                     match rk.select(p, un.key_phase(), pn_est) {
                         Ok(sel) => {
@@ -293,21 +285,17 @@ conn_impl! {
                         Err(_) => failed = true,
                     }
                 }
-                Err(_) => failed = true,
+                _ => failed = true,
             }
         }
         let Some(opened) = opened.filter(|_| !failed) else {
             self.stats.undecryptable += 1;
-            if is_stateless_reset(bytes, self.cids.peer_tokens()) {
-                self.push(Ev::StatelessReset);
-                self.silent_close(super::CloseReason::StatelessReset);
-            }
             return Err(Drop::Undecryptable);
         };
         if promoted {
             self.stats.key_updates += 1;
             if self.keys.behind_peer() && self.keys.update_send(now).is_err() {
-                self.violation(now, code::INTERNAL, "key update failed");
+                self.violation(now, code::INTERNAL);
                 return Err(Drop::Closed);
             }
         }
@@ -318,6 +306,9 @@ conn_impl! {
             self.confirmed = true;
             self.hs.confirm(&mut self.pool);
         }
+        if let Some(dcid) = bytes.get(1..1 + self.cfg.cid_len).and_then(vinc_security::ConnId::new) {
+            self.cids.on_authenticated(&dcid);
+        }
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
         self.process_payload(env, ctx, opened.pn, payload)
     }
@@ -326,7 +317,7 @@ conn_impl! {
     fn process_payload(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn: u64, payload: &[u8]) -> Result<(), Drop> {
         let now = ctx.now;
         let Ok(props) = scan(payload) else {
-            self.violation(now, code::FRAME_ENCODING, "malformed frame");
+            self.violation(now, code::FRAME_ENCODING);
             return Err(Drop::Closed);
         };
         if self.rx.contains(pn) {
@@ -341,41 +332,36 @@ conn_impl! {
             if let Some(p) = self.paths.get_mut(i) {
                 p.amp.on_receive(ctx.dlen as u64);
             }
-            if self.phase == Phase::Connected {
-                self.start_challenge(env, i, false);
-            }
             i
         };
+        let prev_largest = self.rx.largest();
         self.stats.packets_received += 1;
         self.note_heard(now);
         self.rec.note_peer_activity(now);
         if let Some(p) = self.paths.get_mut(pi) {
-            p.last_heard = now;
+            p.last_rx = now;
         }
-        if self.phase == Phase::Closing {
-            for f in FrameIter::new(payload).flatten() {
-                match f {
-                    Frame::Close { error, .. } => self.on_peer_close(now, false, error),
-                    Frame::ApplicationClose { error, .. } => self.on_peer_close(now, true, error),
-                    _ => {}
-                }
-            }
-            return Ok(());
+        let was_asleep = self.life.peer_asleep.take().is_some();
+        if was_asleep {
+            self.suspend_probes();
         }
         for f in FrameIter::new(payload) {
             let Ok(f) = f else { break };
             if let Err(fault) = self.on_frame(env, pi, now, f) {
                 return match fault {
-                    Fault::Violation(c, why) => {
-                        self.violation(now, c, why);
+                    Fault::Violation(c) => {
+                        self.violation(now, c);
                         Err(Drop::Closed)
                     }
                     Fault::Shortage => Err(Drop::Empty),
                 };
             }
-            if matches!(self.phase, Phase::Closed | Phase::Draining) {
+            if matches!(self.phase, Phase::Closed | Phase::Closing) {
                 return Ok(());
             }
+        }
+        if was_asleep && self.life.peer_asleep.is_none() {
+            self.push(Ev::PeerAwake);
         }
         // `contains` was false above and nothing recorded it since, so this is always `New`; a number beyond 2^62 was
         // refused by `open`.
@@ -391,8 +377,11 @@ conn_impl! {
         {
             p.echo = Some(u16::try_from(ctx.dlen).unwrap_or(u16::MAX));
         }
-        if !props.probing {
-            self.on_nonprobing(pi, pn);
+        if props.nonprobing {
+            self.follow_peer(env, pi, pn, prev_largest, props.wake, now);
+        }
+        if props.wake && self.on_wake(now) {
+            self.suspend_probes();
         }
         if self.client && self.phase == Phase::Connected && !self.confirmed {
             self.confirmed = true;
@@ -401,69 +390,63 @@ conn_impl! {
         Ok(())
     }
 
-    /// The server follows the highest-numbered non-probing packet to its path.
-    fn on_nonprobing(&mut self, pi: usize, pn: u64) {
-        if self.highest_nonprobing.is_some_and(|h| pn <= h) {
+    /// Both ends follow the highest-numbered packet that carries data to the path it came from, and challenge a new
+    /// UDP path in parallel.
+    fn follow_peer(&mut self, env: &mut Env<'_, P>, pi: usize, pn: u64, prev_largest: Option<u64>, wake: bool, now: u64) {
+        if prev_largest.is_some_and(|l| pn < l) || self.phase != Phase::Connected || pi == self.paths.active {
             return;
         }
-        self.highest_nonprobing = Some(pn);
-        if self.client || pi == self.paths.active || self.phase != Phase::Connected {
-            return;
+        let Some(p) = self.paths.get(pi).copied() else { return };
+        if p.info.kind == PathKind::Direct && !p.validated {
+            let node = self.rec.peak_rtt().max(if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 });
+            let fresh = self.cfg.thin
+                && p.challenge.is_some()
+                && now.saturating_sub(p.challenge_at) < RJ_THIN_GAP.max(node.saturating_mul(2));
+            if !fresh {
+                self.queue_challenge(env, pi);
+            }
         }
-        match self.paths.get(pi).map(|p| p.state) {
-            Some(PathState::Validated) => self.switch_active(pi),
-            Some(PathState::Unvalidated) => self.migrate_to = Some(pi),
-            _ => {}
+        let cur_relay = self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay);
+        if cur_relay || p.info.kind == PathKind::Direct || wake {
+            self.follow_active(pi);
         }
     }
 
     fn on_frame(&mut self, env: &mut Env<'_, P>, pi: usize, now: u64, f: Frame<'_>) -> Result<(), Fault> {
         match f {
-            Frame::Padding { .. } | Frame::Ping => {}
+            // WAKE is acted on once the whole packet is known (see `process_payload`): it moves the path first.
+            Frame::Padding { .. } | Frame::Ping | Frame::Wake => {}
             Frame::Ack(ack) => self.on_ack(pi, now, &ack)?,
             Frame::ResetStream { id, error, final_size } => {
                 let new = self.is_new_peer_stream(id);
-                self.streams.on_reset_stream(&mut self.pool, id, error, final_size).map_err(stream_fault)?;
+                match self.streams.on_reset_stream(&mut self.pool, id, error, final_size) {
+                    Ok(()) => {}
+                    Err(StreamError::Busy) => return Ok(()),
+                    Err(e) => return Err(stream_fault(e)),
+                }
                 if new {
                     self.push(Ev::Opened(id));
                 }
                 self.push(Ev::Reset(id, error));
             }
-            Frame::StopSending { id, error } => {
-                self.streams.on_stop_sending(&mut self.pool, id, error).map_err(stream_fault)?;
-                self.push(Ev::Stopped(id, error));
-            }
-            Frame::NewToken { token } => self.queue_ext(crate::frame::ty::NEW_TOKEN, token),
             Frame::Stream { id, offset, fin, data, .. } => {
                 let new = self.is_new_peer_stream(id);
-                self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin).map_err(stream_fault)?;
+                match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
+                    Ok(()) => {}
+                    // Refused and answered with a reset: the packet still counts as received.
+                    Err(StreamError::Busy) => return Ok(()),
+                    Err(e) => return Err(stream_fault(e)),
+                }
                 if new {
                     self.push(Ev::Opened(id));
                 }
                 self.push(Ev::Readable(id));
             }
-            Frame::MaxData { max } => self.streams.on_max_data(max),
             Frame::MaxStreamData { id, max } => {
-                self.streams.on_max_stream_data(id, max).map_err(stream_fault)?;
-                self.push(Ev::Writable(id));
-            }
-            Frame::MaxStreams { bidi, max } => self.streams.on_max_streams(bidi, max),
-            Frame::DataBlocked { limit } => self.streams.on_data_blocked(limit),
-            Frame::StreamDataBlocked { id, limit } => {
-                self.streams.on_stream_data_blocked(id, limit).map_err(stream_fault)?;
-            }
-            Frame::StreamsBlocked { bidi, limit } => self.streams.on_streams_blocked(bidi, limit),
-            Frame::NewConnectionId { seq, retire_prior_to, cid, token } => {
-                self.cids
-                    .on_new_remote(seq, retire_prior_to, cid, token)
-                    .map_err(|()| Fault::Violation(code::CONNECTION_ID, "connection id limit exceeded"))?;
-                self.reassign_retired_cids();
-            }
-            Frame::RetireConnectionId { seq } => {
-                if self.cids.on_retire(seq) {
-                    let (len, key) = (self.cfg.cid_len, self.cfg.reset_key);
-                    // A failing generator leaves the peer with fewer ids; the next retirement tries again.
-                    let _ = self.cids.issue(env, len, &key, NP);
+                match self.streams.on_max_stream_data(&self.pool, id, max) {
+                    Ok(()) => self.push(Ev::Writable(id)),
+                    Err(StreamError::Busy) => {}
+                    Err(e) => return Err(stream_fault(e)),
                 }
             }
             Frame::PathChallenge(d) => {
@@ -472,8 +455,7 @@ conn_impl! {
                 }
             }
             Frame::PathResponse(d) => self.on_path_response(pi, d, now),
-            Frame::Close { error, .. } => self.on_peer_close(now, false, error),
-            Frame::ApplicationClose { error, .. } => self.on_peer_close(now, true, error),
+            Frame::Close { error } => self.on_peer_close(error),
             Frame::Datagram { data, .. } => {
                 self.dgrams.on_datagram_frame(&mut self.pool, data);
                 self.push(Ev::Datagram);
@@ -486,13 +468,7 @@ conn_impl! {
                     self.push(Ev::PeerAsleep);
                 }
             }
-            Frame::Wake => {
-                if self.life.peer_asleep.take().is_some() {
-                    self.push(Ev::PeerAwake);
-                }
-                self.suspend_probes();
-                self.flush_in_flight(now);
-            }
+            Frame::Rekey(rekey) => self.on_rekey(env, &rekey),
             Frame::Ready => self.push(Ev::Ready),
             Frame::NewTickets(batch) => {
                 if !batch.entries().is_empty() {
@@ -520,34 +496,30 @@ conn_impl! {
         }
     }
 
-    /// A retired peer id may still be the one a path sends with: move such paths to a fresh id.
-    fn reassign_retired_cids(&mut self) {
-        for i in 0..NP {
-            let Some(seq) = self.paths.get(i).and_then(|p| p.cid_seq) else { continue };
-            if !self.cids.is_retired(seq) {
-                continue;
-            }
-            let fresh = u8::try_from(i).ok().and_then(|u| self.cids.claim_remote(u));
-            if let Some(p) = self.paths.get_mut(i) {
-                p.cid_seq = fresh;
-            }
-        }
-    }
-
     fn on_ack(&mut self, pi: usize, now: u64, ack: &Ack<'_>) -> Result<(), Fault> {
         let mut out = Outcome::default();
-        let (streams, pool, ctl, cids) = (&mut *self.streams, &mut self.pool, &mut self.ctl, &mut self.cids);
-        let result = self.rec.on_ack_received(now, ack.ranges(), |ev| apply(&ev, streams, pool, ctl, cids, &mut out));
+        let (streams, pool, ctl) = (&mut *self.streams, &mut self.pool, &mut self.ctl);
+        let result = self.rec.on_ack_received(now, ack.ranges(), |ev| apply(&ev, streams, pool, ctl, &mut out));
         match result {
             Ok(summary) => {
                 self.rx.on_peer_ack(now, &ack.ranges());
                 self.stats.packets_acked += u64::from(summary.acked_packets);
+                if let Some(b) = out.big_acked
+                    && let Some(p) = self.paths.get_mut(pi)
+                {
+                    p.mtu.big_acked = p.mtu.big_acked.max(Some(b));
+                }
+                if let Some(ping) = self.life.small_ping
+                    && ack.ranges().any(|r| r.contains(&ping))
+                {
+                    self.life.small_ping = None;
+                    self.mtu_black_hole(ping, now);
+                }
                 self.after_feedback(out, now);
-                self.after_ack(pi, now);
+                self.after_ack(now);
                 Ok(())
             }
-            Err(RecoveryError::AckOfUnsentPacket) => Err(Fault::Violation(code::PROTOCOL_VIOLATION, "acknowledged a packet never sent")),
-            Err(_) => Err(Fault::Violation(code::PROTOCOL_VIOLATION, "malformed acknowledgement")),
+            Err(_) => Err(Fault::Violation(code::PROTOCOL_VIOLATION)),
         }
     }
 
@@ -565,25 +537,23 @@ conn_impl! {
         if out.tickets_acked {
             self.ctl.tickets_pending = false;
         }
+        if out.rekey_answer_lost {
+            self.keys.requeue_answer();
+        }
+        if out.rekey_request_lost {
+            self.keys.request_lost();
+        }
     }
 
-    fn after_ack(&mut self, pi: usize, now: u64) {
-        let rtt = self.rec.rtt();
-        if rtt.has_sample() && pi == self.paths.active
-            && let Some(p) = self.paths.active_mut()
-        {
-            p.rtt = Some(self.rec.rtt().smoothed());
-        }
+    fn after_ack(&mut self, now: u64) {
+        self.update_path_rtts();
         self.rx.set_min_rtt(self.rec.rtt().min_rtt());
         if self.rec.pto_count() == 0 {
             self.degraded_told = false;
         }
-        if self.rec.bytes_in_flight() == 0 {
-            self.life.repair_at = None;
-            self.life.repair_due = false;
-        }
-        if self.client {
-            self.evaluate_paths();
+        let cap = self.send_buffer_cap();
+        while let Some(id) = self.streams.poll_writable(cap) {
+            self.push(Ev::Writable(id));
         }
         let _ = now;
     }

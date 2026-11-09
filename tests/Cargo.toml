@@ -158,5 +158,9 @@ path = "transport_handshake.rs"
 name = "transport_params"
 path = "transport_params.rs"
 
+[[test]]
+name = "transport_rules"
+path = "transport_rules.rs"
+
 [lints]
 workspace = true

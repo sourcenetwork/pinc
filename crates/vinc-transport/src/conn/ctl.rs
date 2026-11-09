@@ -1,38 +1,59 @@
 //! Control frames that must be sent again when their packet is lost, and how recovery feedback reaches every layer.
 //!
 //! A [`FrameRef::Control`] carries only a kind and one number, so the frames with a payload (the stream layer's flow
-//! control frames) live in a small table keyed by that number. The frames that are fully described by a sequence
-//! number (connection ids) or by a flag are re-derived from their owners.
+//! control and reset frames) live in a small table keyed by that number, and the extension frames in a second one
+//! that keeps their bodies. The frames fully described by a flag (READY, tickets, REKEY) are re-derived from their
+//! owners.
 //!
-//! Invariants: the table holds at most [`TABLE`] frames in flight, so a packet that cannot record one more stops
-//! adding control frames; an entry is removed when its packet is acknowledged or lost, and a lost entry hands its
-//! frame back to the layer that produced it.
+//! Invariants: the tables hold at most [`TABLE`] stream frames and [`EXT_SLOTS`] extension frames in flight, so a
+//! packet that cannot record one more stops adding them; an entry is removed when its packet is acknowledged, and a
+//! lost entry hands its frame back to the layer that produced it or is sent again.
 
 use vinc_security::TicketBatch;
 
-use super::cid::Cids;
 use crate::recovery::{Event, FrameRef};
 use crate::stream::pool::BufferPool;
 use crate::stream::{ControlFrame, StreamSource, Streams};
 
 /// A stream-layer control frame; the id keys the table.
 pub(crate) const K_STREAM_CTL: u8 = 2;
-/// NEW_CONNECTION_ID; the id is the sequence number.
-pub(crate) const K_NEW_CID: u8 = 3;
-/// RETIRE_CONNECTION_ID; the id is the sequence number.
-pub(crate) const K_RETIRE: u8 = 4;
 /// NEW_TICKETS.
 pub(crate) const K_TICKETS: u8 = 5;
 /// READY.
 pub(crate) const K_READY: u8 = 6;
+/// REKEY; the id is 1 for an answer and 0 for a request.
+pub(crate) const K_REKEY: u8 = 7;
+/// An extension frame; the id keys the extension table.
+pub(crate) const K_EXT: u8 = 8;
 
 const TABLE: usize = 24;
+/// Extension frames kept for retransmission at once.
+pub(crate) const EXT_SLOTS: usize = 8;
+/// The most body bytes of an extension frame sent reliably.
+pub const EXT_RELIABLE_MAX: usize = 1024;
+
+/// An extension frame waiting for its acknowledgement.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExtSlot {
+    pub(crate) key: u64,
+    pub(crate) ty: u64,
+    pub(crate) len: usize,
+    pub(crate) body: [u8; EXT_RELIABLE_MAX],
+    /// Whether the frame waits to be (re)sent; false while a packet carries it.
+    pub(crate) pending: bool,
+}
 
 /// What a batch of recovery events turned up for the connection.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Outcome {
     pub(crate) probe_acked: Option<u32>,
     pub(crate) probe_lost: Option<u32>,
+    /// The newest acknowledged packet larger than the minimum datagram size.
+    pub(crate) big_acked: Option<u64>,
+    /// A REKEY answer was lost.
+    pub(crate) rekey_answer_lost: bool,
+    /// A REKEY request was lost.
+    pub(crate) rekey_request_lost: bool,
     pub(crate) tickets_acked: bool,
     pub(crate) lost_packets: u32,
     pub(crate) acked_packets: u32,
@@ -50,6 +71,8 @@ pub(crate) struct Ctl {
     pub(crate) ready: bool,
     pub(crate) tickets: Option<TicketBatch>,
     pub(crate) tickets_pending: bool,
+    pub(crate) ext: [Option<ExtSlot>; EXT_SLOTS],
+    next_ext: u64,
 }
 
 impl Ctl {
@@ -60,7 +83,36 @@ impl Ctl {
             ready: false,
             tickets: None,
             tickets_pending: false,
+            ext: [None; EXT_SLOTS],
+            next_ext: 1,
         }
+    }
+
+    /// Keep an extension frame for sending and resending until acknowledged. Returns false when every slot is busy
+    /// or the body is too long.
+    pub(crate) fn hold_ext(&mut self, ty: u64, body: &[u8]) -> bool {
+        let Some(slot) = self.ext.iter_mut().find(|s| s.is_none()) else {
+            return false;
+        };
+        let mut buf = [0u8; EXT_RELIABLE_MAX];
+        let Some(dst) = buf.get_mut(..body.len()) else {
+            return false;
+        };
+        dst.copy_from_slice(body);
+        *slot = Some(ExtSlot {
+            key: self.next_ext,
+            ty,
+            len: body.len(),
+            body: buf,
+            pending: true,
+        });
+        self.next_ext += 1;
+        true
+    }
+
+    /// The extension slot with `key`.
+    pub(crate) fn ext_mut(&mut self, key: u64) -> Option<&mut ExtSlot> {
+        self.ext.iter_mut().flatten().find(|s| s.key == key)
     }
 
     /// Record `frame` as in flight and return the key to put in the frame reference, or `None` if the table is full.
@@ -92,7 +144,6 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
     streams: &mut Streams<S, N, C>,
     pool: &mut BufferPool<'_>,
     ctl: &mut Ctl,
-    cids: &mut Cids,
     out: &mut Outcome,
 ) {
     match *ev {
@@ -101,9 +152,13 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             mtu_probe,
             size,
             repair,
+            pn,
             ..
         } => {
             out.acked_packets += 1;
+            if size > u32::from(super::config::MIN_MTU) {
+                out.big_acked = out.big_acked.max(Some(pn));
+            }
             out.loss_acked += u32::from(!repair);
             if mtu_probe {
                 out.probe_acked = Some(size);
@@ -113,7 +168,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                     FrameRef::Stream { id, offset, len, fin } => {
                         streams.on_acked(pool, id, offset, u64::from(len), fin);
                     }
-                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, cids, out),
+                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, out),
                 }
             }
         }
@@ -123,7 +178,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
                     FrameRef::Stream { id, offset, len, fin } => {
                         streams.on_late_acked(pool, id, offset, u64::from(len), fin);
                     }
-                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, cids, out),
+                    FrameRef::Control { kind, id } => acked(kind, id, streams, pool, ctl, out),
                 }
             }
         }
@@ -145,7 +200,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             for f in frames {
                 match *f {
                     FrameRef::Stream { id, offset, len, fin } => streams.on_lost(id, offset, u64::from(len), fin),
-                    FrameRef::Control { kind, id } => lost(kind, id, streams, ctl, cids),
+                    FrameRef::Control { kind, id } => lost(kind, id, streams, ctl, out),
                 }
             }
         }
@@ -158,7 +213,6 @@ fn acked<S: StreamSource, const N: usize, const C: usize>(
     streams: &mut Streams<S, N, C>,
     pool: &mut BufferPool<'_>,
     ctl: &mut Ctl,
-    cids: &mut Cids,
     out: &mut Outcome,
 ) {
     match kind {
@@ -167,8 +221,11 @@ fn acked<S: StreamSource, const N: usize, const C: usize>(
                 streams.on_control_acked(pool, &f);
             }
         }
-        K_NEW_CID => cids.new_acked(id),
-        K_RETIRE => cids.retire_acked(id),
+        K_EXT => {
+            if let Some(s) = ctl.ext.iter_mut().find(|s| s.is_some_and(|s| s.key == id)) {
+                *s = None;
+            }
+        }
         K_TICKETS => {
             ctl.tickets = None;
             ctl.tickets_pending = false;
@@ -183,7 +240,7 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
     id: u64,
     streams: &mut Streams<S, N, C>,
     ctl: &mut Ctl,
-    cids: &mut Cids,
+    out: &mut Outcome,
 ) {
     match kind {
         K_STREAM_CTL => {
@@ -191,8 +248,18 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
                 streams.on_control_lost(&f);
             }
         }
-        K_NEW_CID => cids.new_lost(id),
-        K_RETIRE => cids.retire_lost(id),
+        K_EXT => {
+            if let Some(s) = ctl.ext_mut(id) {
+                s.pending = true;
+            }
+        }
+        K_REKEY => {
+            if id == 1 {
+                out.rekey_answer_lost = true;
+            } else {
+                out.rekey_request_lost = true;
+            }
+        }
         K_TICKETS => ctl.tickets_pending = ctl.tickets.is_some(),
         K_READY => ctl.ready = true,
         _ => {}

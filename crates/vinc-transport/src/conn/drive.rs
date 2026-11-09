@@ -10,15 +10,12 @@ use super::event::{CloseReason, Ev};
 use super::handshake::Machine;
 use super::keys::Dir;
 use super::params::{CreditRecord, peer_limits};
-use super::path::PathState;
 use super::recv::Rx;
 use super::{Connection, Phase};
 use crate::stream::StreamSource;
 
 /// The largest early packet replayed: the biggest datagram a path carries.
 const EARLY_MAX: usize = 9216;
-/// How many connection ids the peer is given.
-const CID_TARGET: usize = 4;
 
 conn_impl! {
     /// Answer the key request last announced by [`Event::KeyRequest`](super::Event::KeyRequest).
@@ -133,9 +130,10 @@ conn_impl! {
                     }
                 } else {
                     if let Some(p) = self.paths.active_mut() {
-                        p.state = PathState::Validated;
+                        p.validated = true;
                         p.amp.validate();
                     }
+                    self.sess_amp.validate();
                     if !est.resumed && !est.tickets.entries().is_empty() {
                         self.ctl.tickets = Some(est.tickets);
                         self.ctl.tickets_pending = true;
@@ -144,10 +142,7 @@ conn_impl! {
                 if !self.apply_peer_credit(&est) {
                     return;
                 }
-                let (len, key) = (self.cfg.cid_len, self.cfg.reset_key);
-                let target = NP.min(CID_TARGET);
-                // A failing generator leaves the peer with fewer ids; the next retirement tries again.
-                let _ = self.cids.issue(env, len, &key, target);
+                self.cids.install(est.cid_secret.expose());
                 self.mtu_start();
                 self.est = Some(est);
                 self.push(Ev::Connected(self.resumed));
@@ -165,6 +160,7 @@ conn_impl! {
         }
         self.streams.set_peer_limits(&peer_limits(&est.peer_credit));
         self.peer_credit = est.peer_credit;
+        self.pn_len = crate::packet::pn_len_for(est.peer_credit.window_bytes().max(est.local_credit.window_bytes()));
         true
     }
 

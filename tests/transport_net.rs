@@ -238,7 +238,7 @@ fn nat_rebinding_keeps_the_transfer_alive() {
 }
 
 #[test]
-fn path_validation_failure_is_reported() {
+fn a_path_that_never_answers_gets_nine_small_probes_and_stays_unvalidated() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
@@ -249,9 +249,17 @@ fn path_validation_failure_is_reported() {
         net.a
             .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
             .unwrap();
-        assert!(net.run(net.now + 30 * SEC, |n| n.a.saw(|r| *r == Rec::PathFailed(PathId(3)))));
+        net.run(net.now + 30 * SEC, |_| false);
+        // There is no failed state: nine probes on the doubling cadence, then the path just stays unvalidated.
+        assert!(!net.a.saw(|r| *r == Rec::PathFailed(PathId(3))));
         assert!(!net.a.conn.path_validated(PathId(3)));
         assert!(net.a.conn.set_active(PathId(3)).is_err());
+        let probes: Vec<usize> = net.a.tx_log.iter().filter(|t| t.2 == PathId(3)).map(|t| t.1).collect();
+        assert_eq!(probes.len(), 9, "{probes:?}");
+        assert!(
+            probes.iter().all(|len| *len < 100),
+            "challenges are not padded: {probes:?}"
+        );
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         let data = pattern(1 << 20, 15);
         bulk(&mut net, &data, 60 * SEC);
@@ -300,44 +308,103 @@ fn relay_carries_a_penalty_and_takes_over_when_the_direct_path_dies() {
 }
 
 #[test]
-fn switching_needs_a_gain_above_5_ms_and_ipv6_gets_a_bonus() {
+fn switching_needs_a_gain_above_5_ms_on_the_raw_round_trip() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        // Active path: 40 ms round trip.
-        let mut link = Link::new(18, Params::new(20 * MS));
-        for (a, rtt_ms) in [(3u64, 38u64), (5, 46), (7, 36)] {
-            let p = Params::new(rtt_ms * MS / 2);
-            link.add_route(PathId(a), PathId(a + 1), p, p);
-        }
-        let mut net = connected(&mut w, &mut sa, &mut sb, link);
-        // Some traffic so the active path has a round-trip sample.
+        // Active path: 20 ms round trip. A challenge is repeated every 33 ms, so candidates answer within that.
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(18, Params::new(10 * MS)));
+        // Some traffic so the active path has a smoothed round trip; that is the number a candidate must beat.
         bulk(&mut net, &pattern(200_000, 19), 30 * SEC);
         net.run(net.now + SEC, |_| false);
-        // A clean round-trip measurement of the active path, from a challenge.
-        net.a.with_env(net.now, |c, env| c.probe(env, PathId(1))).unwrap();
-        net.run(net.now + SEC, |_| false);
-        let add = |net: &mut Net<'_, '_>, id: u64, v6: bool| {
+        let cur = net.a.conn.path_rtt(PathId(1)).unwrap();
+        assert!((19 * MS..23 * MS).contains(&cur), "{cur}");
+        let add = |net: &mut Net<'_, '_>, id: u64, rtt: u64, v6: bool| -> u64 {
+            let p = Params::new(rtt / 2);
+            net.link.add_route(PathId(id), PathId(id + 1), p, p);
             let now = net.now;
             let info = PathInfo {
                 v6,
                 ..PathInfo::default()
             };
             net.a.with_env(now, |c, env| c.add_path(env, PathId(id), info)).unwrap();
-            net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(id)));
+            assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(id))));
+            let measured = net.a.conn.path_rtt(PathId(id)).unwrap();
             net.run(net.now + SEC, |_| false);
+            measured
         };
-        add(&mut net, 3, false); // 38 ms: a 2 ms gain is not enough
+        let r = add(&mut net, 3, 18 * MS, false);
+        assert!(r + 5 * MS >= cur, "a gain of {} ns is not enough", cur - r);
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
-        add(&mut net, 5, true); // 46 ms, minus the 3 ms bonus: still worse
+        let r = add(&mut net, 5, 26 * MS, true); // slower, and 3 ms of bonus does not make it faster
+        assert!(r > cur - 5 * MS);
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         net.a.conn.remove_path(PathId(3)).unwrap();
         assert!(
             net.a.conn.remove_path(PathId(1)).is_err(),
             "the active path cannot be removed"
         );
-        add(&mut net, 7, true);
-        // 36 ms, 33 with the bonus: a gain of 7 ms
+        let r = add(&mut net, 7, 12 * MS, true);
+        assert!(r + 5 * MS < cur, "a raw gain of {} ns", cur - r);
         assert_eq!(net.a.conn.active_path(), Some(PathId(7)));
+    });
+}
+
+#[test]
+fn a_black_hole_drops_at_the_first_probe_timeout_and_the_next_probe_waits_for_a_path_event() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(5, Params::new(10 * MS).mtu(1500)));
+        net.run(net.now + 2 * SEC, |_| false);
+        assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
+        net.a.conn.set_keepalive(Some(5 * SEC));
+        // Full-size packets vanish under a running transfer; small ones still pass.
+        net.link.set(
+            PathId(1),
+            Params::new(10 * MS).mtu(1300),
+            Params::new(10 * MS).mtu(1300),
+        );
+        let data = pattern(2 << 20, 7);
+        let id = net.a.conn.open_bi().unwrap();
+        let mut off = 0;
+        let ok = net.run(net.now + 60 * SEC, |n| {
+            while off < data.len() {
+                let k = n.a.conn.write(id, &data[off..]).unwrap();
+                if k == 0 {
+                    break;
+                }
+                off += k;
+            }
+            n.a.conn.path_mtu(PathId(1)) == Some(1200)
+        });
+        assert!(ok, "the path must fall back");
+        assert!(
+            net.a.conn.stats().ptos <= 2,
+            "after {} probe timeouts",
+            net.a.conn.stats().ptos
+        );
+        // The failing probe timeouts also took the path through a re-join, which is a path event: one probe goes out
+        // and is lost. After that a lost probe waits: nothing above 1200 bytes leaves for ten minutes.
+        let sent_big = |n: &Net<'_, '_>, from: usize| n.a.tx_log[from..].iter().filter(|t| t.1 > 1200).count();
+        net.run(net.now + 20 * SEC, |_| false);
+        let mark = net.a.tx_log.len();
+        net.run(net.now + 500 * SEC, |_| false);
+        assert_eq!(sent_big(&net, mark), 0);
+        net.run(net.now + 120 * SEC, |_| false);
+        assert_eq!(sent_big(&net, mark), 1, "after ten minutes the path is probed again");
+        // A link return is a path event: the path is probed again, and a lost probe is not retried.
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.set_link_down(env, true));
+        net.a.with_env(now, |c, env| c.set_link_down(env, false));
+        net.link.set(
+            PathId(1),
+            Params::new(10 * MS).mtu(1500),
+            Params::new(10 * MS).mtu(1500),
+        );
+        let mark = net.a.tx_log.len();
+        net.run(net.now + 30 * SEC, |_| false);
+        assert_eq!(sent_big(&net, mark), 1, "re-probed after the event");
+        assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
     });
 }

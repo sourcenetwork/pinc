@@ -1,4 +1,4 @@
-//! The lifecycle of the VINCER connection: idle and keepalive, close and drain, stateless reset, sleep and wake, link
+//! The lifecycle of the VINCER connection: idle and keepalive, one close, the give-up, sleep and wake, link
 //! outages, amplification limits, early packets, tail repair, connection ids, memory bounds and hostile input.
 #![allow(
     clippy::unwrap_used,
@@ -21,8 +21,8 @@ use proptest::prelude::*;
 use vinc_crypto::IdentityAlg;
 use vinc_security::Env;
 use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId, PathInfo, reset_token};
-use vinc_transport::packet::{ConnId, LongHeader, build_stateless_reset};
+use vinc_transport::conn::{CloseReason, PathId, PathInfo};
+use vinc_transport::packet::LongHeader;
 
 vinc_tests::install_counting_allocator!();
 
@@ -76,110 +76,81 @@ fn keepalive_holds_a_quiet_connection_open() {
 }
 
 #[test]
-fn close_then_drain() {
+fn one_close_then_the_state_is_freed() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(3, Params::new(10 * MS)));
         net.run(net.now + SEC, |_| false);
         let at = net.now;
-        net.a.with_env(at, |c, env| c.close(env, 42, "done"));
+        net.a.with_env(at, |c, env| c.close(env, 42));
         assert!(net.run(at + 5 * SEC, |n| n.b.closed().is_some()));
         assert_eq!(net.a.closed(), Some(CloseReason::Local { error: 42 }));
-        assert_eq!(net.b.closed(), Some(CloseReason::PeerApplication { error: 42 }));
+        assert_eq!(net.b.closed(), Some(CloseReason::Peer { error: 42 }));
         let (a_sent, b_sent) = (net.a.tx_log.len(), net.b.tx_log.len());
-        assert!(net.run(at + 30 * SEC, |n| n.a.conn.is_closed() && n.b.conn.is_closed()));
+        // Both states are freed at once: no timer, no waiting, nothing sent afterwards.
+        assert!(net.a.conn.is_closed() && net.b.conn.is_closed());
         net.run(net.now + 10 * SEC, |_| false);
-        // The draining side stays silent, and the closing side sent its CLOSE once.
         assert_eq!(net.b.tx_log.len(), b_sent);
-        assert!(net.a.tx_log.len() <= a_sent + 1);
+        assert_eq!(net.a.tx_log.len(), a_sent);
         assert!(net.a.conn.poll_timeout().is_none() && net.b.conn.poll_timeout().is_none());
         assert!(net.b.conn.open_bi().is_err());
     });
 }
 
 #[test]
-fn a_flow_control_violation_closes_with_a_code() {
+fn a_stream_the_pool_cannot_hold_is_refused_with_a_busy_reset_and_the_connection_stays_up() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
-        // A server whose stream table is smaller than what it advertises: the client sends within the credit it was
-        // told about, and the server finds that more than its table can take.
+        // A server whose pool holds the windows of three streams: a fourth stream is refused, never dropped silently.
         let mut small = vinc_transport::stream::Config::new(false);
-        small.initial_stream_window = 64 * 1024;
+        small.initial_stream_window = 192 * 1024;
+        small.max_stream_window = 192 * 1024;
         let mut sa = Store::new(true);
-        let mut sb = Store::with_stream(CHUNKS, &small);
+        let mut sb = Store::with_stream(40, &small);
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
         net.b.auto_read = false;
-        let big = pattern(6 << 20, 5);
-        let sid = net.a.conn.open_bi().unwrap();
-        let mut off = 0;
-        let ok = net.run(net.now + 30 * SEC, |n| {
-            while off < big.len() {
-                let k = n.a.conn.write(sid, &big[off..]).unwrap_or(0);
-                if k == 0 {
-                    break;
-                }
-                off += k;
-            }
-            n.a.closed().is_some() && n.b.closed().is_some()
-        });
-        assert!(ok);
-        assert_eq!(
-            net.b.closed(),
-            Some(CloseReason::Violation {
-                error: vinc_transport::conn::code::FLOW_CONTROL
-            })
-        );
-        assert_eq!(
-            net.a.closed(),
-            Some(CloseReason::PeerTransport {
-                error: vinc_transport::conn::code::FLOW_CONTROL
-            })
-        );
+        let ids: Vec<u64> = (0..5).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        for id in &ids {
+            net.a.conn.write(*id, b"hello").unwrap();
+        }
+        let busy = vinc_transport::stream::BUSY;
+        assert!(net.run(net.now + 5 * SEC, |n| {
+            n.a.saw(|r| matches!(r, Rec::Reset(_, c) if *c == busy))
+        }));
+        let refused = ids
+            .iter()
+            .filter(|id| net.a.saw(|r| *r == Rec::Reset(**id, busy)))
+            .count();
+        assert!((1..5).contains(&refused), "{refused} streams were refused");
+        assert!(net.a.closed().is_none() && net.b.closed().is_none());
+        // The streams that were admitted are untouched.
+        let admitted = ids
+            .iter()
+            .filter(|id| !net.a.saw(|r| *r == Rec::Reset(**id, busy)))
+            .count();
+        assert!(admitted >= 1);
     });
 }
 
 #[test]
-fn stateless_reset_closes_at_once_after_a_peer_restart() {
+fn a_restarted_peer_is_caught_by_the_give_up() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
-        let key = w.cfg.reset_key;
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(5, Params::new(10 * MS)));
         net.run(net.now + 2 * SEC, |_| false);
-        // The server restarts and forgets everything. The client's next packet is answered by the new endpoint with a
-        // reset built from the id the client used.
-        net.a.conn.send_datagram(b"anyone there").unwrap();
-        let now = net.now;
-        let mut out = vec![0u8; 2048];
-        let t = net.a.with_env(now, |c, env| c.poll_transmit(env, &mut out)).unwrap();
-        let dcid = ConnId::new(&out[1..5]).unwrap();
-        let token = reset_token(&key, &dcid);
-        let mut random = [0u8; 64];
-        SplitMix64::new(6).fill(&mut random);
-        let mut reset = vec![0u8; 64];
-        let len = build_stateless_reset(&mut reset, t.len.saturating_sub(1).clamp(25, 64), &random, &token).unwrap();
-        reset.truncate(len);
-        net.a
-            .with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut reset))
-            .unwrap();
-        net.a.service(now);
-        assert!(net.a.saw(|r| *r == Rec::StatelessReset));
-        assert_eq!(net.a.closed(), Some(CloseReason::StatelessReset));
+        // The server restarts and forgets the session: nothing it sends comes back, and nothing it answers is valid.
+        // From the client this looks like a peer that went silent, and the give-up closes the connection.
+        let gone = Params::new(10 * MS).loss(100.0);
+        net.link.set(PathId(1), gone, gone);
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, b"anyone there").unwrap();
+        let ok = net.run(net.now + 400 * SEC, |n| n.a.closed().is_some());
+        assert!(ok, "the client must give up");
+        assert_eq!(net.a.closed(), Some(CloseReason::PathDead));
         assert!(net.a.conn.is_closed());
-        // A datagram of the right shape with the wrong token is just noise.
-        let mut w2 = World::new(IdentityAlg::Ed25519);
-        let (mut sa2, mut sb2) = (Store::new(true), Store::new(false));
-        let mut net2 = connected(&mut w2, &mut sa2, &mut sb2, Link::new(7, Params::new(10 * MS)));
-        net2.run(net2.now + 2 * SEC, |_| false);
-        let mut fake = vec![0x40u8; 64];
-        let now = net2.now;
-        let _ = net2
-            .a
-            .with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut fake));
-        net2.a.service(now);
-        assert!(net2.a.closed().is_none());
     });
 }
 
@@ -290,13 +261,15 @@ fn a_link_outage_freezes_the_probe_backoff() {
             serve(n, &data, &mut off, id);
             n.a.read.get(&id).map_or(0, Vec::len) > (1 << 20)
         });
-        let ptos = net.b.conn.stats().ptos;
+        let count = net.b.conn.recovery().pto_count();
         let now = net.now;
         net.link.route(PathId(1)).up = false;
         net.a.with_env(now, |c, env| c.set_link_down(env, true));
         net.b.with_env(now, |c, env| c.set_link_down(env, true));
         net.run(now + 20 * SEC, |_| false);
-        assert_eq!(net.b.conn.stats().ptos, ptos);
+        // The probe timer still runs (it declares the oldest packet lost and pings) but the count does not grow.
+        assert!(net.b.conn.stats().ptos > 0);
+        assert_eq!(net.b.conn.recovery().pto_count(), count);
         assert!(net.a.closed().is_none() && net.b.closed().is_none());
         net.link.route(PathId(1)).up = true;
         let now = net.now;
@@ -456,7 +429,6 @@ fn every_path_gets_its_own_connection_id() {
         ids.sort();
         ids.dedup();
         assert!(ids.len() >= 3, "three paths use three different ids, saw {}", ids.len());
-        // The very first id has no reset token, so it is retired once tokened ones are available.
         net.run(net.now + 5 * SEC, |_| false);
         assert!(net.a.closed().is_none() && net.b.closed().is_none());
     });
@@ -470,7 +442,7 @@ fn a_thin_node_rechallenges_an_idle_direct_path_on_a_backoff() {
         w.cfg.keepalive = Some(10 * SEC);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut link = Link::new(16, Params::new(10 * MS));
-        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(30 * MS), Params::new(30 * MS));
         let mut net = connected(&mut w, &mut sa, &mut sb, link);
         let now = net.now;
         net.a
@@ -485,9 +457,11 @@ fn a_thin_node_rechallenges_an_idle_direct_path_on_a_backoff() {
             net.run(t0 + target * SEC, |_| false);
             marks.push(sent(&net) - base);
         }
-        // Challenges at about +20 s, +60 s and +140 s: the interval doubles from 20 s while the path is quiet.
-        // (Each end challenges the other, so every round is one challenge and one response from here.)
-        assert_eq!(marks, vec![0, 2, 2, 4, 4, 6], "{marks:?}");
+        // The path is silent for 15 s and stops being validated; the first challenge follows 20 s later (at +35 s) and
+        // its answer validates the path again. Each later round waits 15 s of silence and then twice the previous
+        // back-off: challenges at about +35 s, +90 s and +185 s, so marks are 0, 0, 1, 1, 2, 2. Only the end that
+        // added the path challenges it.
+        assert_eq!(marks, vec![0, 0, 1, 1, 2, 2], "{marks:?}");
     });
 }
 
@@ -530,7 +504,8 @@ fn the_pool_budget_is_never_exceeded() {
             max_a <= budget && max_b <= budget && budget == 160 * 16 * 1024,
             "{max_a} {max_b} {budget}"
         );
-        assert!(max_a > budget / 8, "the transfer really used the pool");
+        // The send buffer holds at most max(192 KiB, 1.5 x the window), so the sender uses a fraction of the pool.
+        assert!(max_a > budget / 16, "the transfer really used the pool");
     });
 }
 

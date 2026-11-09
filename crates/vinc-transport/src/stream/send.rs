@@ -3,9 +3,8 @@
 //! Invariants: `lost` never holds an offset at or beyond `sent_max` and is served lowest first; `acked_prefix` is the
 //! end of the acknowledged prefix and a buffered stream holds chunks only from the one containing it; credit is spent
 //! once per byte (at write time for buffered streams, at first transmission for source-backed ones) and
-//! retransmissions are free.
+//! retransmissions are free; the bytes a buffered stream holds are exactly `written - acked_prefix`.
 
-use super::flow::ConnSend;
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
 use super::{ControlFrame, MAX_OFFSET, RANGES, StreamChunk, StreamError, StreamId, StreamSource};
@@ -21,7 +20,7 @@ enum Fin {
     Acked,
 }
 
-/// A RESET_STREAM's life.
+/// A stream reset's life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reset {
     None,
@@ -45,8 +44,8 @@ pub(super) struct Send<S, const C: usize> {
     final_size: Option<u64>,
     fin: Fin,
     reset: Reset,
-    blocked_sent: Option<u64>,
-    blocked_pending: bool,
+    /// A write was cut short by the connection's send buffer cap and the application has not been woken since.
+    pub(super) cap_cut: bool,
 }
 
 impl<S: StreamSource, const C: usize> Send<S, C> {
@@ -64,8 +63,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         final_size: None,
         fin: Fin::None,
         reset: Reset::None,
-        blocked_sent: None,
-        blocked_pending: false,
+        cap_cut: false,
     };
 
     pub(super) const fn init(&mut self, limit: u64) {
@@ -80,6 +78,15 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
 
     fn live(&self) -> bool {
         self.open && matches!(self.reset, Reset::None)
+    }
+
+    /// Bytes written and not yet acknowledged; they occupy the send buffer.
+    pub(super) const fn buffered(&self) -> u64 {
+        if self.is_source || !self.open || !matches!(self.reset, Reset::None) {
+            0
+        } else {
+            self.written - self.acked_prefix
+        }
     }
 
     /// Bytes ready to go out for the first time (ignoring credit).
@@ -108,20 +115,17 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             return (false, false);
         }
         let fin_only = self.fin == Fin::Pending && self.final_size == Some(self.sent_max);
-        (!self.lost.is_empty() || fin_only, self.unsent() > 0)
+        let credit = !self.is_source || self.limit > self.sent_max;
+        (!self.lost.is_empty() || fin_only, self.unsent() > 0 && credit)
     }
 
     pub(super) const fn control_pending(&self) -> bool {
-        self.blocked_pending || matches!(self.reset, Reset::Pending { .. })
+        matches!(self.reset, Reset::Pending { .. })
     }
 
-    /// Accept up to `data.len()` bytes into the buffer, bounded by credit, the ring and the pool.
-    pub(super) fn write(
-        &mut self,
-        pool: &mut BufferPool<'_>,
-        conn: &mut ConnSend,
-        data: &[u8],
-    ) -> Result<usize, StreamError> {
+    /// Accept up to `data.len()` bytes into the buffer, bounded by credit, the ring, the pool and `room` (what is left
+    /// of the connection's send buffer cap).
+    pub(super) fn write(&mut self, pool: &mut BufferPool<'_>, data: &[u8], room: u64) -> Result<usize, StreamError> {
         if !self.open {
             return Err(StreamError::StreamState);
         }
@@ -133,7 +137,6 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         }
         let want = data.len() as u64;
         let stream_credit = self.limit.saturating_sub(self.written);
-        let conn_credit = conn.credit();
         let base = self.acked_prefix / CHUNK_SIZE as u64 * CHUNK_SIZE as u64;
         let ring_room = (base + C as u64 * CHUNK_SIZE as u64).saturating_sub(self.written);
         let tail_room = match self.written % CHUNK_SIZE as u64 {
@@ -141,26 +144,12 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             at => CHUNK_SIZE as u64 - at,
         };
         let pool_room = pool.available_bytes() + tail_room;
-        let n = want.min(stream_credit).min(conn_credit).min(ring_room).min(pool_room);
-        if n < want {
-            if stream_credit <= n && stream_credit < want {
-                self.block();
-            }
-            if conn_credit <= n && conn_credit < want {
-                conn.block();
-            }
-        }
+        let n = want.min(stream_credit).min(room).min(ring_room).min(pool_room);
+        self.cap_cut |= room <= n && room < want;
         let n = n as usize;
         self.ring.write(pool, self.written, data.get(..n).unwrap_or(&[]))?;
         self.written += n as u64;
-        conn.used += n as u64;
         Ok(n)
-    }
-
-    fn block(&mut self) {
-        if self.blocked_sent != Some(self.limit) {
-            self.blocked_pending = true;
-        }
     }
 
     /// Mark the end of a buffered stream.
@@ -199,7 +188,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         Ok(())
     }
 
-    /// Abandon the stream: drop the buffers and queue a RESET_STREAM.
+    /// Abandon the stream: drop the buffers and queue a stream reset.
     pub(super) fn reset(&mut self, pool: &mut BufferPool<'_>, code: u64) -> Result<(), StreamError> {
         if !self.open {
             return Err(StreamError::StreamState);
@@ -214,9 +203,21 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         self.source = None;
         self.lost.clear();
         self.acked.clear();
-        self.blocked_pending = false;
         self.release_all(pool);
         Ok(())
+    }
+
+    /// Whether the bytes `offset..offset + len` (or, for an empty range, the end marker) are acknowledged.
+    pub(super) fn is_acked(&self, offset: u64, len: u64) -> bool {
+        if len == 0 {
+            return self.fin == Fin::Acked;
+        }
+        self.acked.gaps(offset..offset.saturating_add(len)).next().is_none()
+    }
+
+    /// Whether the stream sends from application storage instead of a buffer.
+    pub(super) const fn is_source(&self) -> bool {
+        self.is_source
     }
 
     pub(super) fn raise_limit(&mut self, limit: u64) {
@@ -224,13 +225,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
     }
 
     /// The next frame: `retx` selects the retransmission pass, otherwise fresh data.
-    pub(super) fn next_frame(
-        &mut self,
-        id: StreamId,
-        retx: bool,
-        budget: usize,
-        conn: &mut ConnSend,
-    ) -> Option<StreamChunk> {
+    pub(super) fn next_frame(&mut self, id: StreamId, retx: bool, budget: usize) -> Option<StreamChunk> {
         if !self.live() {
             return None;
         }
@@ -259,19 +254,10 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             return None;
         }
         if self.is_source {
-            let stream_credit = self.limit.saturating_sub(self.sent_max);
-            let conn_credit = conn.credit();
-            n = n.min(stream_credit).min(conn_credit);
+            n = n.min(self.limit.saturating_sub(self.sent_max));
             if n == 0 {
-                if stream_credit == 0 {
-                    self.block();
-                }
-                if conn_credit == 0 {
-                    conn.block();
-                }
                 return None;
             }
-            conn.used += n;
         }
         let offset = self.sent_max;
         self.sent_max += n;
@@ -367,36 +353,24 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
                 final_size,
             });
         }
-        if self.blocked_pending {
-            self.blocked_pending = false;
-            self.blocked_sent = Some(self.limit);
-            return Some(ControlFrame::StreamDataBlocked { id, limit: self.limit });
-        }
         None
     }
 
-    /// A RESET_STREAM or STREAM_DATA_BLOCKED was lost.
+    /// A stream reset was lost.
     pub(super) fn control_lost(&mut self, frame: &ControlFrame) {
-        match *frame {
-            ControlFrame::ResetStream {
-                error_code, final_size, ..
-            } => {
-                if matches!(self.reset, Reset::Sent { .. }) {
-                    self.reset = Reset::Pending {
-                        code: error_code,
-                        final_size,
-                    };
-                }
-            }
-            ControlFrame::StreamDataBlocked { limit, .. } if limit == self.limit => {
-                self.blocked_sent = None;
-                self.blocked_pending = true;
-            }
-            _ => {}
+        if let ControlFrame::ResetStream {
+            error_code, final_size, ..
+        } = *frame
+            && matches!(self.reset, Reset::Sent { .. })
+        {
+            self.reset = Reset::Pending {
+                code: error_code,
+                final_size,
+            };
         }
     }
 
-    /// A RESET_STREAM was acknowledged.
+    /// A stream reset was acknowledged.
     pub(super) fn reset_acked(&mut self) {
         if matches!(self.reset, Reset::Sent { .. } | Reset::Pending { .. }) {
             self.reset = Reset::Acked;

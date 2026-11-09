@@ -1,4 +1,4 @@
-//! Datagram queues (RFC 9221) and the early-data buffer, both packed into pool chunks.
+//! Datagram queues and the early-data buffer, both packed into pool chunks.
 //!
 //! Invariants: entries are stored back to back in a ring of pool chunks and never straddle a chunk; a chunk is
 //! returned to the pool as soon as its last entry is removed, and an empty queue holds no chunk. The queues are bounded

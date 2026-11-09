@@ -20,9 +20,9 @@
 //!
 //! # The REKEY frame
 //!
-//! The frame layer carries one REKEY body, whose bytes are `vinc_security::Rekey::encode`: `kind(1)` (0 request,
-//! 1 answer), `share(32)`, and for an answer `switch_pn(varint)`. Until the frame codec has a frame type for it,
-//! [`Connection::poll_rekey_body`] and [`Connection::on_rekey_body`] move the body bytes in and out.
+//! The REKEY frame carries one message: `kind(1)` (0 request, 1 answer), `share(32)`, and for an answer
+//! `switch_pn(varint)`. A request is sent again every probe timeout until it is answered; a lost answer is sent
+//! again at once.
 //!
 //! Invariants: a receive key of the next generation is installed only after a packet authenticated under it, so a
 //! forged phase bit costs one failed open and changes nothing; a generation only moves forward; the sending key of
@@ -144,6 +144,8 @@ pub(crate) struct Keys<P: Provider> {
     staged_send: Option<PacketKey<P>>,
     /// A REKEY waiting for a packet.
     out: Option<Rekey>,
+    /// The last answer sent, kept so a lost one can be sent again.
+    last_answer: Option<Rekey>,
     /// When the pending request last went out.
     request_at: Option<u64>,
 }
@@ -158,6 +160,7 @@ impl<P: Provider> Keys<P> {
             roll: Roll::new(client),
             staged_send: None,
             out: None,
+            last_answer: None,
             request_at: None,
         }
     }
@@ -228,7 +231,9 @@ impl<P: Provider> Keys<P> {
     /// without an answer.
     pub(crate) fn poll_rekey(&mut self, now: u64, pto: u64) -> Option<Rekey> {
         if let Some(r) = self.out.take() {
-            if !r.answer {
+            if r.answer {
+                self.last_answer = Some(r);
+            } else {
                 self.request_at = Some(now);
             }
             return Some(r);
@@ -239,6 +244,18 @@ impl<P: Provider> Keys<P> {
             return Some(r);
         }
         None
+    }
+
+    /// A lost answer goes out again.
+    pub(crate) fn requeue_answer(&mut self) {
+        if self.out.is_none() {
+            self.out = self.last_answer;
+        }
+    }
+
+    /// A lost request goes out again at the next opportunity.
+    pub(crate) fn request_lost(&mut self) {
+        self.request_at = None;
     }
 
     /// When the pending request goes out again, if one is waiting for its answer.
@@ -296,12 +313,11 @@ conn_impl! {
         let _ = self.keys.begin(|roll| roll.start(env));
     }
 
-    /// The body of the REKEY frame to send now, written to the start of `out`, and its length; `None` when there is
-    /// nothing to send. A request is offered again each probe timeout until it is answered.
-    pub fn poll_rekey_body(&mut self, now: u64, out: &mut [u8]) -> Option<usize> {
+    /// The REKEY message to send now, if any: a message waiting, or the request again once a probe timeout passed
+    /// without an answer.
+    pub(super) fn poll_rekey(&mut self, now: u64) -> Option<Rekey> {
         let pto = self.rec.pto_duration();
-        let rekey = self.keys.poll_rekey(now, pto)?;
-        rekey.encode(out).ok()
+        self.keys.poll_rekey(now, pto)
     }
 
     /// When the pending REKEY request is due to be sent again, if one waits for its answer.
@@ -309,24 +325,20 @@ conn_impl! {
         self.keys.rekey_deadline(self.rec.pto_duration())
     }
 
-    /// Take a received REKEY frame body. A request stages the new keys and queues the answer; an answer switches the
-    /// sending key. A body that does not parse, or does not fit the state of the roll, is dropped.
-    pub fn on_rekey_body(&mut self, env: &mut Env<'_, P>, body: &[u8]) {
-        let Ok(rekey) = Rekey::decode(body) else {
-            self.violation(env.now, code::FRAME_ENCODING, "malformed rekey");
-            return;
-        };
+    /// A received REKEY message. A request stages the new keys and queues the answer; an answer switches the
+    /// sending key. A message that does not fit the state of the roll is dropped.
+    pub(super) fn on_rekey(&mut self, env: &mut Env<'_, P>, rekey: &Rekey) {
         let p = env.provider;
         let result = if rekey.answer {
-            self.keys.on_answer(p, env, &rekey, env.now)
+            self.keys.on_answer(p, env, rekey, env.now)
         } else {
             let next_pn = self.next_pn;
-            self.keys.on_request(p, env, &rekey, next_pn)
+            self.keys.on_request(p, env, rekey, next_pn)
         };
         if let Err(f) = result
             && f.is_fatal()
         {
-            self.violation(env.now, code::INTERNAL, "key roll failed");
+            self.violation(env.now, code::INTERNAL);
         }
     }
 }

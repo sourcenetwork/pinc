@@ -17,7 +17,7 @@ use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_mai
 use vinc_crypto::{Aead, Secret, Software};
 use vinc_security::{HeaderKey, Limits, PacketKey};
 use vinc_transport::frame::{Frame, FrameIter, stream_overhead, write_ack};
-use vinc_transport::packet::{ConnId, PnLayout, ShortHeader, encode_pn, open, seal, unprotect_header};
+use vinc_transport::packet::{ConnId, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, open, seal, unprotect_header};
 use vinc_wire::Writer;
 
 const DATAGRAM: usize = 1452;
@@ -28,14 +28,12 @@ fn payload_frames(many: bool, data: &[u8], room: usize) -> Vec<Frame<'_>> {
     if many {
         let mut v = vec![
             Frame::Ping,
-            Frame::MaxData { max: 1 << 30 },
             Frame::MaxStreamData { id: 4, max: 1 << 20 },
-            Frame::MaxStreams { bidi: true, max: 100 },
-            Frame::DataBlocked { limit: 99_999 },
-            Frame::StreamDataBlocked { id: 8, limit: 5000 },
-            Frame::RetireConnectionId { seq: 3 },
             Frame::PathChallenge([1; 8]),
-            Frame::StopSending { id: 12, error: 7 },
+            Frame::MaxStreamData { id: 8, max: 5000 },
+            Frame::Wake,
+            Frame::Sleep,
+            Frame::Ready,
             Frame::ResetStream {
                 id: 16,
                 error: 1,
@@ -76,7 +74,8 @@ fn bench_packets(c: &mut Criterion) {
         let mut g = c.benchmark_group(format!("packet/{aead_name}"));
         g.throughput(Throughput::Bytes(DATAGRAM as u64));
         for (label, many) in [("1_stream", false), ("10_frames", true)] {
-            let (pnb, pn_len) = encode_pn(1000, Some(990)).unwrap();
+            let pn_len = PN_LEN_BASE;
+            let pnb = encode_pn(1000, pn_len).unwrap();
             let header_len = 1 + DCID_LEN + pn_len;
             let room = DATAGRAM - header_len - Aead::TAG_LEN;
             let frames = payload_frames(many, &data, room);
@@ -131,14 +130,14 @@ fn bench_ack(c: &mut Criterion) {
         .collect();
     let mut buf = [0u8; 256];
     let mut w = Writer::new(&mut buf);
-    write_ack(&mut w, 3125, ranges.iter().cloned()).unwrap();
+    write_ack(&mut w, ranges.iter().cloned()).unwrap();
     let len = w.written().len();
     let encoded = buf[..len].to_vec();
     let mut g = c.benchmark_group("ack_32_ranges");
     g.bench_function("encode", |b| {
         b.iter(|| {
             let mut w = Writer::new(&mut buf);
-            write_ack(&mut w, black_box(3125), ranges.iter().cloned()).unwrap();
+            write_ack(&mut w, ranges.iter().cloned()).unwrap();
             black_box(w.written().len());
         });
     });

@@ -184,8 +184,17 @@ pub(crate) struct Handshake {
     tx_len: usize,
     tx_min: usize,
     tx_off: usize,
+    /// Where the segment being sent ends, and where a second segment (from 0) ends once the first is out: a
+    /// retransmission of a flight that never went out whole starts at the first byte never sent.
+    tx_seg_end: usize,
+    tx_wrap: Option<usize>,
+    /// The highest offset ever sent of the flight.
+    tx_high: usize,
     tx_total_sent: usize,
     tx_active: bool,
+    /// The flight in the buffer is a retransmission.
+    tx_retx: bool,
+    retransmitting: bool,
     rx_runs: [(usize, usize); RUNS],
     rx_len: usize,
     rx_total: usize,
@@ -223,8 +232,13 @@ impl Handshake {
             tx_len: 0,
             tx_min: 0,
             tx_off: 0,
+            tx_seg_end: 0,
+            tx_wrap: None,
+            tx_high: 0,
             tx_total_sent: 0,
             tx_active: false,
+            tx_retx: false,
+            retransmitting: false,
             rx_runs: [(0, 0); RUNS],
             rx_len: 0,
             rx_total: 0,
@@ -259,12 +273,27 @@ impl Handshake {
                         .filter(|_| self.tx_live)
                         .and_then(|c| pool.bytes_mut(c).get_mut(..data.len()));
                     if let Some(dst) = dst {
+                        // The same flight again, after part of it never went out (the amplification limit stopped
+                        // it): start at the first byte never sent, then wrap to the start.
+                        let same = self.tx_active && data.len() == self.tx_len && dst.get(..data.len()) == Some(data);
                         dst.copy_from_slice(data);
+                        let resume = if same && self.tx_high < data.len() {
+                            self.tx_high
+                        } else {
+                            0
+                        };
+                        if resume == 0 {
+                            self.tx_high = 0;
+                        }
                         self.tx_len = data.len();
                         self.tx_min = min_len;
-                        self.tx_off = 0;
+                        self.tx_off = resume;
+                        self.tx_seg_end = data.len();
+                        self.tx_wrap = (resume > 0).then_some(resume);
                         self.tx_total_sent = 0;
                         self.tx_active = true;
+                        self.tx_retx = self.retransmitting;
+                        self.retransmitting = false;
                         // A responder's resend schedule starts when its flight first goes out.
                         if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
                             self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
@@ -355,18 +384,42 @@ impl Handshake {
         self.tx_active
     }
 
+    /// The length of the flight in the buffer if none of it has gone out yet and it is not a retransmission: only
+    /// such a flight may leave whole in one datagram.
+    pub(crate) const fn whole_len(&self) -> Option<usize> {
+        if self.tx_active && self.tx_off == 0 && self.tx_high == 0 && !self.tx_retx {
+            Some(if self.tx_len > self.tx_min {
+                self.tx_len
+            } else {
+                self.tx_min
+            })
+        } else {
+            None
+        }
+    }
+
     /// The next fragment of at most `room` bytes after the two varints, as `(total, offset, bytes)`.
     pub(crate) fn next_fragment<'p>(
         &mut self,
         pool: &'p BufferPool<'_>,
         room: usize,
     ) -> Option<(usize, usize, &'p [u8])> {
-        if !self.tx_active || self.tx_off >= self.tx_len {
+        if !self.tx_active {
             return None;
         }
-        let end = self.tx_len.min(self.tx_off + room);
+        if self.tx_off >= self.tx_seg_end
+            && let Some(e) = self.tx_wrap.take()
+        {
+            self.tx_off = 0;
+            self.tx_seg_end = e;
+        }
+        if self.tx_off >= self.tx_seg_end {
+            return None;
+        }
+        let end = self.tx_seg_end.min(self.tx_off + room);
         let off = self.tx_off;
         self.tx_off = end;
+        self.tx_high = self.tx_high.max(end);
         let bytes = pool.bytes(self.chunk.as_ref()?).get(off..end)?;
         Some((self.tx_len, off, bytes))
     }
@@ -379,7 +432,7 @@ impl Handshake {
     /// Record that a datagram of `len` bytes carried this flight; returns how many zero bytes it should be padded
     /// with so the flight totals at least the message's minimum, within `room`.
     pub(crate) fn account(&mut self, len: usize, room: usize) -> usize {
-        let done = self.tx_off >= self.tx_len;
+        let done = self.tx_off >= self.tx_seg_end && self.tx_wrap.is_none();
         let before = self.tx_total_sent;
         let pad = if done {
             self.tx_min.saturating_sub(before + len).min(room)
@@ -395,7 +448,7 @@ impl Handshake {
 
     /// Zero bytes still owed after the last fragment went out (a flight padded across datagrams).
     pub(crate) fn padding_owed(&self) -> usize {
-        if self.tx_active && self.tx_off >= self.tx_len {
+        if self.tx_active && self.tx_off >= self.tx_seg_end && self.tx_wrap.is_none() {
             self.tx_min.saturating_sub(self.tx_total_sent)
         } else {
             0
@@ -549,6 +602,7 @@ impl Handshake {
             }
             Machine::Server(m) => m.retransmit(),
         }
+        self.retransmitting = true;
         // A fallback or a reject restarts the schedule when its event is drained; otherwise the delay stands.
         self.retx_at = Some(now.saturating_add(delay));
         true

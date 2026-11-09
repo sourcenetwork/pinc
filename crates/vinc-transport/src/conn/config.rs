@@ -11,14 +11,14 @@ use crate::stream;
 pub const MIN_MTU: u16 = 1200;
 /// The first size probed after the handshake.
 pub const PROBE_MTU: u16 = 1452;
-/// The largest size probed on a low-latency path.
+/// The largest size probed on a low-latency path (UDP, round trip under 2 ms, and only above 2904 bytes).
 pub const JUMBO_MTU: u16 = 8952;
 /// A path whose minimum round trip is under this (2 ms) also probes the jumbo size.
 pub(super) const JUMBO_RTT: u64 = 2 * MS;
-/// The default idle timeout (75 s).
-pub const DEFAULT_IDLE: u64 = 75 * SECOND;
-/// How long a connection stays in the closing and draining states, in probe timeouts.
-pub(super) const DRAIN_PTOS: u64 = 3;
+/// Silence after which a connection closes without a CLOSE: fixed at 75 s, the same on every node.
+pub const IDLE_TIMEOUT: u64 = 75 * SECOND;
+/// A jumbo probe is only worth sending when the size is above this (twice the first probe size).
+pub(super) const JUMBO_FLOOR: u16 = 2 * PROBE_MTU;
 
 /// An opaque name for a network path, chosen by the endpoint (a UDP address, or a relay carrier).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,8 +50,6 @@ impl Default for PathInfo {
 pub struct Config {
     /// The length of the connection ids this endpoint issues, 1 to 20 (4 by default).
     pub cid_len: usize,
-    /// Silence after which the connection closes without a CLOSE packet, in nanoseconds (75 s by default).
-    pub idle_timeout: u64,
     /// Send a PING after this long without sending anything; `None` turns keepalives off.
     pub keepalive: Option<u64>,
     /// A node on a constrained link: caps the handshake back-off at `max(8 s, 2 x node_peak_rtt)`, gives an
@@ -70,15 +68,19 @@ pub struct Config {
     pub max_gso: usize,
     /// Start a key roll after the sending key sealed this many packets.
     pub key_update_after: u64,
-    /// The secret from which stateless-reset tokens derive, so an endpoint that lost its state can still answer.
-    pub reset_key: [u8; 32],
-    /// Whether to probe larger datagram sizes after the handshake.
+    /// Whether to probe larger datagram sizes after the handshake (UDP paths only, never on a thin node).
     pub probe_mtu: bool,
+    /// Send the first handshake flight whole when it fits one datagram (1452 bytes or less), and split only the
+    /// retransmissions into datagram-sized fragments. Off by default: every flight is fragmented to the minimum
+    /// datagram size.
+    pub flight_split: bool,
+    /// The slack of the rate gate on round trips between 2 ms and 250 ms, in bytes; `None` keeps the default.
+    pub gate_slack: Option<u64>,
     /// Acknowledge every this-many ack-eliciting packets instead of every 2nd (3rd for bulk): 4 for a member's
     /// session with a hub. `None` keeps the default policy.
     pub ack_every: Option<u32>,
     /// What this endpoint tells the peer about its limits (see [`CreditRecord`]); the window and the stream limit
-    /// are clamped to what the stream table can hold. The idle timeout is not part of it: it is `idle_timeout`.
+    /// are clamped to what the stream table can hold. The idle timeout is not part of it: it is the fixed [`IDLE_TIMEOUT`].
     pub credit: CreditRecord,
 }
 
@@ -87,7 +89,6 @@ impl Config {
     pub const fn new() -> Self {
         Self {
             cid_len: 4,
-            idle_timeout: DEFAULT_IDLE,
             keepalive: None,
             thin: false,
             remembered_rtt: None,
@@ -95,8 +96,9 @@ impl Config {
             node_peak_rtt: None,
             max_gso: 1,
             key_update_after: 1 << 21,
-            reset_key: [0; 32],
             probe_mtu: true,
+            flight_split: false,
+            gate_slack: None,
             ack_every: None,
             credit: credit_for_streams(&stream::Config::new(false)),
         }

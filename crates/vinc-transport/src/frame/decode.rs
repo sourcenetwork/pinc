@@ -1,10 +1,9 @@
 //! Zero-copy frame decoding and the frame iterator.
 
-use vinc_security::TicketBatch;
+use vinc_security::{Rekey, TicketBatch};
 use vinc_wire::{Reader, WireError};
 
 use super::{Ack, EXTENSION_BASE, Frame, FrameError, MAX_STREAM_END, ty};
-use crate::packet::{ConnId, MAX_CID_LEN};
 
 /// A varint length, then that many bytes borrowed from the payload.
 fn read_len_prefixed<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], FrameError> {
@@ -36,46 +35,15 @@ impl<'a> Frame<'a> {
                 error: r.read_varint()?,
                 final_size: r.read_varint()?,
             },
-            ty::STOP_SENDING => Self::StopSending {
-                id: r.read_varint()?,
-                error: r.read_varint()?,
-            },
-            ty::NEW_TOKEN => Self::NewToken {
-                token: read_len_prefixed(r)?,
-            },
             ty::STREAM..=ty::STREAM_LAST => Self::decode_stream(t, r)?,
-            ty::MAX_DATA => Self::MaxData { max: r.read_varint()? },
             ty::MAX_STREAM_DATA => Self::MaxStreamData {
                 id: r.read_varint()?,
                 max: r.read_varint()?,
             },
-            ty::MAX_STREAMS_BIDI | ty::MAX_STREAMS_UNI => Self::MaxStreams {
-                bidi: t == ty::MAX_STREAMS_BIDI,
-                max: r.read_varint()?,
-            },
-            ty::DATA_BLOCKED => Self::DataBlocked {
-                limit: r.read_varint()?,
-            },
-            ty::STREAM_DATA_BLOCKED => Self::StreamDataBlocked {
-                id: r.read_varint()?,
-                limit: r.read_varint()?,
-            },
-            ty::STREAMS_BLOCKED_BIDI | ty::STREAMS_BLOCKED_UNI => Self::StreamsBlocked {
-                bidi: t == ty::STREAMS_BLOCKED_BIDI,
-                limit: r.read_varint()?,
-            },
-            ty::NEW_CONNECTION_ID => Self::decode_new_cid(r)?,
-            ty::RETIRE_CONNECTION_ID => Self::RetireConnectionId { seq: r.read_varint()? },
             ty::PATH_CHALLENGE => Self::PathChallenge(r.read_array()?),
             ty::PATH_RESPONSE => Self::PathResponse(r.read_array()?),
             ty::CLOSE => Self::Close {
                 error: r.read_varint()?,
-                frame_type: r.read_varint()?,
-                reason: read_len_prefixed(r)?,
-            },
-            ty::APPLICATION_CLOSE => Self::ApplicationClose {
-                error: r.read_varint()?,
-                reason: read_len_prefixed(r)?,
             },
             ty::DATAGRAM => Self::Datagram {
                 data: r.read_bytes(r.remaining())?,
@@ -88,6 +56,7 @@ impl<'a> Frame<'a> {
             ty::MTU_PROBE_ECHO => Self::MtuProbeEcho { mtu: r.read_u16()? },
             ty::SLEEP => Self::Sleep,
             ty::WAKE => Self::Wake,
+            ty::REKEY => Self::decode_rekey(r)?,
             ty::READY => Self::Ready,
             ty::NEW_TICKETS => Self::NewTickets(TicketBatch::read(r)?),
             t if t >= EXTENSION_BASE => Self::Extension {
@@ -122,23 +91,19 @@ impl<'a> Frame<'a> {
         })
     }
 
-    fn decode_new_cid(r: &mut Reader<'a>) -> Result<Self, FrameError> {
-        let seq = r.read_varint()?;
-        let retire_prior_to = r.read_varint()?;
-        if retire_prior_to > seq {
-            return Err(FrameError::RetirePriorTo);
-        }
-        let len = usize::from(r.read_u8()?);
-        if !(1..=MAX_CID_LEN).contains(&len) {
-            return Err(FrameError::ConnId);
-        }
-        let cid = ConnId::new(r.read_bytes(len)?).ok_or(FrameError::ConnId)?;
-        Ok(Self::NewConnectionId {
-            seq,
-            retire_prior_to,
-            cid,
-            token: r.read_array()?,
-        })
+    fn decode_rekey(r: &mut Reader<'a>) -> Result<Self, FrameError> {
+        let answer = match r.read_u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(FrameError::RekeyKind),
+        };
+        let share = r.read_array::<32>()?;
+        let switch_pn = if answer { r.read_varint()? } else { 0 };
+        Ok(Self::Rekey(Rekey {
+            answer,
+            share,
+            switch_pn,
+        }))
     }
 }
 

@@ -41,18 +41,10 @@ fn the_record_maps_onto_the_stream_layers_limits() {
     let sc = stream::Config::new(false);
     let c = credit_for_streams(&sc);
     assert_eq!(c.window_bytes(), sc.initial_stream_window);
-    assert_eq!(u64::from(c.max_streams), sc.max_streams_bidi.max(sc.max_streams_uni));
+    assert_eq!(u64::from(c.max_streams), sc.max_streams);
     assert_eq!(c.max_datagram, u16::MAX);
     let l = peer_limits(&CreditRecord::new(96 * 1024, 7, 0));
-    assert_eq!(
-        (
-            l.max_stream_data_bidi_local,
-            l.max_stream_data_bidi_remote,
-            l.max_stream_data_uni
-        ),
-        (96 * 1024, 96 * 1024, 96 * 1024)
-    );
-    assert_eq!((l.max_streams_bidi, l.max_streams_uni), (7, 7));
+    assert_eq!((l.window, l.max_streams), (96 * 1024, 7));
     assert_eq!(peer_limits(&CreditRecord::NONE), stream::PeerLimits::default());
 }
 
@@ -73,19 +65,15 @@ proptest! {
     }
 }
 
-/// A small MCU-like peer: tiny windows, three streams, no datagrams, a short idle timeout.
+/// A small MCU-like peer: tiny windows, three streams, no datagrams.
 fn mcu() -> (stream::Config, vinc_transport::conn::Config) {
     let mut sc = stream::Config::new(true);
     sc.initial_stream_window = 32 * 1024;
     sc.max_stream_window = 32 * 1024;
-    sc.initial_conn_window = 32 * 1024;
-    sc.max_conn_window = 32 * 1024;
-    sc.max_streams_bidi = 3;
-    sc.max_streams_uni = 3;
+    sc.max_streams = 3;
     let mut cfg = vinc_transport::conn::Config::new();
     cfg.credit = credit_for_streams(&sc);
     cfg.credit.max_datagram = 0;
-    cfg.idle_timeout = 10 * SEC;
     (sc, cfg)
 }
 
@@ -147,10 +135,12 @@ fn mismatched_configurations_work_both_ways() {
         assert!(net.b.read[&ua] == up && net.a.read[&db] == down);
         assert!(max_pool <= net.a.conn.pool().budget_bytes());
         assert!(net.a.closed().is_none() && net.b.closed().is_none());
-        // Idle is not negotiated: each side keeps its own timeout, so the short one leaves first.
+        // Idle is the same fixed 75 s on every node, whatever a peer's limits: neither side leaves early.
+        net.run(net.now + 60 * SEC, |_| false);
+        assert!(net.a.closed().is_none() && net.b.closed().is_none());
         net.run(net.now + 30 * SEC, |_| false);
         assert_eq!(net.a.closed(), Some(CloseReason::IdleTimeout));
-        assert!(net.b.closed().is_none() || net.b.closed() == Some(CloseReason::IdleTimeout));
+        assert_eq!(net.b.closed(), Some(CloseReason::IdleTimeout));
     });
 }
 
@@ -161,8 +151,6 @@ fn zero_rtt_respects_the_limits_the_ticket_remembered() {
         let mut sc = stream::Config::new(false);
         sc.initial_stream_window = 96 * 1024;
         sc.max_stream_window = 96 * 1024;
-        sc.initial_conn_window = 96 * 1024;
-        sc.max_conn_window = 96 * 1024;
         let mut w = World::new(IdentityAlg::Ed25519);
         w.cfg.credit = credit_for_streams(&sc);
         let (mut sa, mut sb) = (Store::new(true), Store::with_stream(CHUNKS, &sc));

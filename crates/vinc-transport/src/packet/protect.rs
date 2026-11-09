@@ -4,17 +4,18 @@ use vinc_crypto::{Aead, Provider};
 use vinc_security::{HeaderKey, PacketKey};
 use vinc_wire::WireError;
 
-use super::{MAX_PN, MAX_PN_LEN, PacketError, decode_pn};
+use super::{MAX_PN, PacketError, decode_pn};
 
-/// Bytes between the start of the packet number and the start of the header-protection sample (RFC 9001 5.4.2).
-pub const SAMPLE_SKIP: usize = MAX_PN_LEN;
+/// Bytes between the start of the packet number and the start of the header-protection sample: the longest packet-number
+/// field plus one, so the sample never depends on the width.
+pub const SAMPLE_SKIP: usize = 4;
 
 /// Where the packet number sits in a packet, and which first-byte mask applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PnLayout {
     /// Offset of the first packet-number byte from the start of the packet.
     pub pn_off: usize,
-    /// Packet-number length, 1 to 4.
+    /// Packet-number length, 2 or 3.
     pub pn_len: usize,
     /// Whether the packet has a long header (a 4-bit rather than a 5-bit first-byte mask).
     pub long: bool,
@@ -25,7 +26,7 @@ pub struct PnLayout {
 pub struct Unprotected {
     /// The first byte with the mask removed.
     pub first: u8,
-    /// The packet-number length, 1 to 4.
+    /// The packet-number length the first byte declares, 1 to 4 (the connection refuses any but its fixed width).
     pub pn_len: usize,
     /// The truncated packet number, to expand with [`decode_pn`].
     pub truncated: u32,

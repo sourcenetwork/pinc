@@ -1,5 +1,5 @@
-//! Packet numbers, long and short headers, header protection, in-place seal and open, coalesced datagrams and
-//! stateless reset.
+//! Fixed-width packet numbers, long and short headers, header protection, in-place seal and open and coalesced
+//! datagrams.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -22,9 +22,9 @@ use vinc_security::{HeaderKey, PacketKey, RecordError};
 use vinc_tests::SplitMix64;
 use vinc_transport::frame::{Frame, FrameIter};
 use vinc_transport::packet::{
-    ConnId, Header, LongHeader, LongType, MAX_PN, MIN_RESET_LEN, Opened, PacketError, PnLayout, ShortHeader, VERSION,
-    build_stateless_reset, decode_pn, encode_pn, is_stateless_reset, open, packets, pad_to, protect_header, sample_at,
-    seal, short_dcid, short_header_len, unprotect_header,
+    ConnId, Header, LongHeader, LongType, MAX_PN, Opened, PN_LEN_BASE, PN_LEN_WIDE, PacketError, PnLayout, ShortHeader,
+    VERSION, WIDE_WINDOW, decode_pn, encode_pn, open, packets, pad_to, pn_len_for, protect_header, sample_at, seal,
+    short_dcid, short_header_len, unprotect_header,
 };
 use vinc_wire::{WireError, Writer};
 
@@ -69,7 +69,9 @@ fn build_short(
     largest_acked: Option<u64>,
     frames: &[Frame<'_>],
 ) -> usize {
-    let (pnb, pn_len) = encode_pn(pn, largest_acked).unwrap();
+    let _ = largest_acked;
+    let pn_len = PN_LEN_BASE;
+    let pnb = encode_pn(pn, pn_len).unwrap();
     let mut w = Writer::new(buf);
     ShortHeader { key_phase, dcid }.write(&mut w, &pnb[..pn_len]).unwrap();
     let header_len = w.written().len();
@@ -88,74 +90,59 @@ fn build_short(
 // ---- packet numbers ----
 
 #[test]
-fn rfc9000_a2_and_a3_examples() {
-    // A.2: sending 0xac5c02 with 0xabe8b3 acknowledged needs 2 bytes; 0xace8fe needs 3.
-    let (b, n) = encode_pn(0xac5c02, Some(0xabe8b3)).unwrap();
-    assert_eq!((&b[..n], n), (&[0x5c, 0x02][..], 2));
-    let (b, n) = encode_pn(0xace8fe, Some(0xabe8b3)).unwrap();
-    assert_eq!((&b[..n], n), (&[0xac, 0xe8, 0xfe][..], 3));
-    // A.3: largest received 0xa82f30ea and a 2-byte 0x9b32 decode to 0xa82f9b32.
+fn packet_numbers_have_a_fixed_width() {
+    // 0x5c02 is the low two bytes of 0xac5c02, 0xe8fe the low two of 0xace8fe; three bytes keep one more.
+    let b = encode_pn(0xac5c02, PN_LEN_BASE).unwrap();
+    assert_eq!(&b[..2], &[0x5c, 0x02]);
+    let b = encode_pn(0xace8fe, PN_LEN_WIDE).unwrap();
+    assert_eq!(&b[..3], &[0xac, 0xe8, 0xfe]);
+    // Expanding picks the value closest to the next expected one.
     assert_eq!(decode_pn(0x9b32, 2, Some(0xa82f_30ea)), 0xa82f_9b32);
-    // First packet, nothing acknowledged yet.
-    assert_eq!(encode_pn(0, None).unwrap(), ([0; 4], 1));
-    assert_eq!(decode_pn(0, 1, None), 0);
+    assert_eq!(encode_pn(0, PN_LEN_BASE).unwrap(), [0; 3]);
+    assert_eq!(decode_pn(0, 2, None), 0);
+    // Only the two widths exist, and the number must be in the 62-bit space.
+    for len in [0usize, 1, 4, 9] {
+        assert_eq!(encode_pn(5, len), Err(PacketError::PnLength), "width {len}");
+    }
+    assert_eq!(encode_pn(MAX_PN + 1, PN_LEN_BASE), Err(PacketError::PacketNumber));
+    assert!(encode_pn(MAX_PN, PN_LEN_WIDE).is_ok());
 }
 
 #[test]
-fn packet_number_length_boundaries() {
-    // The sender must cover more than twice the distance: 127 unacked is the last that fits one byte.
-    for (unacked, len) in [
-        (1u64, 1usize),
-        (127, 1),
-        (128, 2),
-        (32_767, 2),
-        (32_768, 3),
-        (8_388_607, 3),
-        (8_388_608, 4),
-    ] {
-        let full = 1_000_000_000 + unacked;
-        let (_, n) = encode_pn(full, Some(1_000_000_000)).unwrap();
-        assert_eq!(n, len, "unacked {unacked}");
-    }
-    // Further than 4 bytes can cover still uses 4 bytes.
-    assert_eq!(encode_pn(MAX_PN, Some(0)).unwrap().1, 4);
-    assert_eq!(encode_pn(MAX_PN + 1, None), Err(PacketError::PacketNumber));
-    assert_eq!(encode_pn(5, Some(5)), Err(PacketError::PacketNumber));
-    assert_eq!(encode_pn(4, Some(5)), Err(PacketError::PacketNumber));
-    assert_eq!(encode_pn(MAX_PN, None).unwrap().1, 4);
-    // Decoding wraps around the window in both directions and clamps the length.
+fn the_width_follows_the_granted_window() {
+    assert_eq!(pn_len_for(0), PN_LEN_BASE);
+    assert_eq!(pn_len_for(1_310_720), PN_LEN_BASE);
+    assert_eq!(pn_len_for(WIDE_WINDOW), PN_LEN_BASE);
+    assert_eq!(pn_len_for(WIDE_WINDOW + 1), PN_LEN_WIDE);
+    assert_eq!(pn_len_for(u64::MAX), PN_LEN_WIDE);
+}
+
+#[test]
+fn decoding_wraps_around_the_window_in_both_directions() {
     assert_eq!(decode_pn(0xff, 1, Some(0x100)), 0xff);
     assert_eq!(decode_pn(0x00, 1, Some(0xff)), 0x100);
     assert_eq!(decode_pn(0x01, 0, Some(0)), 1);
     assert_eq!(decode_pn(0x01, 9, Some(0)), 1);
+    // Two bytes cover 16,384 packets either side of the next expected number.
+    assert_eq!(decode_pn(0x0000, 2, Some(0xffff)), 0x1_0000);
+    assert_eq!(decode_pn(0xffff, 2, Some(0x1_0000)), 0xffff);
 }
 
 proptest! {
     #[test]
     fn decode_of_encode_within_the_window(
-        acked in 0u64..(1 << 61),
-        delta in 1u64..(1 << 31),
-        lag in 0u64..(1 << 20),
+        base in 0u64..(1 << 61),
+        delta in 1u64..16_000,
+        lag in 0u64..16_000,
     ) {
-        let full = acked + delta;
-        let (bytes, len) = encode_pn(full, Some(acked)).unwrap();
-        prop_assert!((1..=4).contains(&len));
-        let truncated = bytes[..len].iter().fold(0u32, |a, b| (a << 8) | u32::from(*b));
-        // The receiver's largest is anywhere from the sender's acked up to the packet before this one.
-        let largest = (acked + lag).min(full - 1);
-        prop_assert_eq!(decode_pn(truncated, len, Some(largest)), full);
-        // And at every length, a number within half a window of the expected one comes back whole.
-        for l in 1..=4usize {
-            let t = (full & ((1u64 << (8 * l)) - 1)) as u32;
-            prop_assert_eq!(decode_pn(t, l, Some(full.saturating_sub(1))), full);
+        let full = base + delta;
+        for len in [PN_LEN_BASE, PN_LEN_WIDE] {
+            let bytes = encode_pn(full, len).unwrap();
+            let truncated = bytes[..len].iter().fold(0u32, |a, b| (a << 8) | u32::from(*b));
+            // The receiver's largest is anywhere from `lag` below the packet to the packet before this one.
+            let largest = full.saturating_sub(1 + lag.min(delta + 15_000));
+            prop_assert_eq!(decode_pn(truncated, len, Some(largest)), full);
         }
-    }
-
-    #[test]
-    fn first_packets_round_trip(full in 0u64..(1 << 31)) {
-        let (bytes, len) = encode_pn(full, None).unwrap();
-        let t = bytes[..len].iter().fold(0u32, |a, b| (a << 8) | u32::from(*b));
-        prop_assert_eq!(decode_pn(t, len, None), full);
     }
 }
 
@@ -165,11 +152,7 @@ proptest! {
 fn long_header_layout_and_round_trip() {
     let dcid = cid(&[1, 2, 3, 4]);
     let scid = cid(&[9; 20]);
-    for (ty, pn_len, first) in [
-        (LongType::Handshake, 0usize, 0xc0u8),
-        (LongType::ZeroRtt, 3, 0xd2),
-        (LongType::Retry, 0, 0xe0),
-    ] {
+    for (ty, pn_len, first) in [(LongType::Handshake, 0usize, 0xc0u8), (LongType::ZeroRtt, 2, 0xd1)] {
         let h = LongHeader {
             ty,
             dcid,
@@ -181,7 +164,7 @@ fn long_header_layout_and_round_trip() {
         h.write(&mut w, pn_len).unwrap();
         let written = w.written().len();
         assert_eq!(written, h.header_len());
-        let mut expect = vec![first, 0, 0, 0, 1, 4, 1, 2, 3, 4, 20];
+        let mut expect = vec![first, VERSION, 4, 1, 2, 3, 4, 20];
         expect.extend_from_slice(&[9; 20]);
         expect.extend_from_slice(&[0xac, 0x02]); // 300 as a varint
         assert_eq!(&buf[..written], &expect[..], "{ty:?}");
@@ -224,10 +207,10 @@ fn long_header_rejects_malformed_input() {
     bad[0] |= 0x01; // a handshake low nibble must be zero
     assert_eq!(LongHeader::parse(&bad), Err(PacketError::Reserved));
     let mut bad = ok.clone();
-    bad[4] = 2;
+    bad[1] = 2;
     assert_eq!(LongHeader::parse(&bad), Err(PacketError::Version(2)));
     let mut bad = ok.clone();
-    bad[5] = 21; // dcid length above 20
+    bad[2] = 21; // dcid length above 20
     assert_eq!(LongHeader::parse(&bad), Err(PacketError::ConnIdLength));
     let mut bad = ok.clone();
     let last = bad.len() - 3;
@@ -244,7 +227,7 @@ fn long_header_rejects_malformed_input() {
         body_len: 0,
     };
     let mut buf = [0u8; 64];
-    for bad_len in [0usize, 5] {
+    for bad_len in [0usize, 1, 3, 5] {
         assert_eq!(h.write(&mut Writer::new(&mut buf), bad_len), Err(PacketError::PnLength));
     }
     let hs = LongHeader {
@@ -252,7 +235,7 @@ fn long_header_rejects_malformed_input() {
         ..h
     };
     assert_eq!(hs.write(&mut Writer::new(&mut buf), 1), Err(PacketError::PnLength));
-    let mut tiny = [0u8; 5];
+    let mut tiny = [0u8; 3];
     let mut w = Writer::new(&mut tiny);
     assert!(matches!(
         hs.write(&mut w, 0),
@@ -266,12 +249,7 @@ fn long_header_rejects_malformed_input() {
 #[test]
 fn short_header_layout() {
     let dcid = cid(&[0xa1, 0xa2, 0xa3, 0xa4]);
-    for (phase, pn, first) in [
-        (false, &[0x11u8][..], 0x40u8),
-        (true, &[0x11, 0x22][..], 0x51),
-        (false, &[1, 2, 3][..], 0x42),
-        (true, &[1, 2, 3, 4][..], 0x53),
-    ] {
+    for (phase, pn, first) in [(true, &[0x11u8, 0x22][..], 0x51u8), (false, &[1, 2, 3][..], 0x42)] {
         let mut buf = [0u8; 16];
         let mut w = Writer::new(&mut buf);
         ShortHeader { key_phase: phase, dcid }.write(&mut w, pn).unwrap();
@@ -283,7 +261,7 @@ fn short_header_layout() {
         assert_eq!(short_dcid(&buf[..n], 4).unwrap(), dcid);
     }
     let mut buf = [0u8; 16];
-    for bad in [&[][..], &[0u8; 5][..]] {
+    for bad in [&[][..], &[0u8][..], &[0u8; 4][..], &[0u8; 5][..]] {
         assert_eq!(
             ShortHeader { key_phase: false, dcid }.write(&mut Writer::new(&mut buf), bad),
             Err(PacketError::PnLength)
@@ -400,9 +378,9 @@ fn packets_too_short_to_sample_are_rejected() {
 }
 
 #[test]
-fn rfc9001_a5_chacha20_short_header_vector() {
-    // RFC 9001 appendix A.5: the header key and the AEAD key are given directly. The initial-secret vectors of
-    // A.2 to A.4 derive their keys with QUIC labels this protocol does not use, so they do not apply.
+fn chacha20_header_protection_known_answer() {
+    // A published ChaCha20-Poly1305 short-header vector: the header key and the AEAD key are given directly, so
+    // it checks the mask and the seal against an independent implementation. Its packet number is 3 bytes wide.
     let p = Software;
     let hp: [u8; 32] = arr("25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4");
     let key: [u8; 32] = arr("c6d98ff3441c3fe1b2182094f69caa2ed4b716b65488960a7a984979fb23e1c8");
@@ -424,10 +402,7 @@ fn rfc9001_a5_chacha20_short_header_vector() {
     assert_eq!(header[0] & 0x03, 2); // pn_len 3
     let truncated = u32::from_be_bytes([0, header[1], header[2], header[3]]);
     assert_eq!(decode_pn(truncated, 3, Some(pn_full - 1)), pn_full);
-    assert_eq!(
-        encode_pn(pn_full, Some(pn_full - 0x10000)).unwrap(),
-        ([0x00, 0xbf, 0xf4, 0], 3)
-    );
+    assert_eq!(encode_pn(pn_full, PN_LEN_WIDE).unwrap(), [0x00, 0xbf, 0xf4]);
     // The AEAD: nonce = iv xor pn, the unmasked header is the associated data.
     let aead = p.aead_key(Aead::ChaCha20Poly1305, &key).unwrap();
     let mut nonce = iv;
@@ -496,7 +471,7 @@ fn every_single_bit_flip_is_rejected() {
     for aead in AEADS {
         let mut s = side(aead, 9);
         let mut buf = vec![0u8; 200];
-        let frames = [Frame::Ping, Frame::MaxData { max: 77 }];
+        let frames = [Frame::Ping, Frame::MaxStreamData { id: 4, max: 77 }];
         let len = build_short(&mut buf, &mut s, dcid, true, 5, Some(2), &frames);
         let good = buf[..len].to_vec();
         for bit in 0..len * 8 {
@@ -537,7 +512,8 @@ fn open_reports_authentication_and_pn_range() {
         open(&mut wrong.rx, &p, &mut pkt, 5, &un, Some(8)),
         Err(PacketError::Record(RecordError::Authentication))
     );
-    assert_eq!(wrong.rx.failed_opens(), 1);
+    // The first attempt with the wrong header key may or may not have reached the authentication step.
+    assert!((1..=2).contains(&wrong.rx.failed_opens()));
     // A truncated number that expands past 2^62 is refused.
     let un = vinc_transport::packet::Unprotected {
         first: 0x43,
@@ -558,7 +534,8 @@ fn zero_rtt_long_packet_seals_and_opens() {
         let mut s = side(aead, 4);
         let (dcid, scid) = (cid(&[1, 2, 3, 4, 5, 6, 7, 8]), cid(&[8, 7, 6]));
         let pn = 70_000u64;
-        let (pnb, pn_len) = encode_pn(pn, Some(69_000)).unwrap();
+        let pn_len = PN_LEN_BASE;
+        let pnb = encode_pn(pn, pn_len).unwrap();
         let frames = [Frame::Datagram {
             data: b"early data",
             implicit_len: false,
@@ -618,7 +595,7 @@ fn coalesced_datagram_yields_long_packets_then_one_short() {
     let mut buf = vec![0u8; 400];
     let mut w = Writer::new(&mut buf);
     let bodies: [&[u8]; 3] = [b"first handshake message", b"retry token", b""];
-    let types = [LongType::Handshake, LongType::Retry, LongType::Handshake];
+    let types = [LongType::Handshake, LongType::ZeroRtt, LongType::Handshake];
     for (ty, body) in types.iter().zip(bodies) {
         LongHeader {
             ty: *ty,
@@ -626,11 +603,11 @@ fn coalesced_datagram_yields_long_packets_then_one_short() {
             scid,
             body_len: body.len(),
         }
-        .write(&mut w, 0)
+        .write(&mut w, if *ty == LongType::ZeroRtt { PN_LEN_BASE } else { 0 })
         .unwrap();
         w.put_slice(body).unwrap();
     }
-    ShortHeader { key_phase: false, dcid }.write(&mut w, &[7]).unwrap();
+    ShortHeader { key_phase: false, dcid }.write(&mut w, &[7, 8]).unwrap();
     w.put_slice(&[0xaa; 40]).unwrap();
     let total = w.written().len();
     let mut dg = buf[..total].to_vec();
@@ -647,7 +624,7 @@ fn coalesced_datagram_yields_long_packets_then_one_short() {
         assert_eq!((header.ty, header.body_len), (types[i], bodies[i].len()));
         assert_eq!(*len, header_len + bodies[i].len());
     }
-    assert_eq!(got[3], (Header::Short { dcid }, 1 + 4 + 1 + 40));
+    assert_eq!(got[3], (Header::Short { dcid }, 1 + 4 + 2 + 40));
     // Packets are disjoint, in order, and cover the datagram.
     assert_eq!(got.iter().map(|(_, l)| l).sum::<usize>(), total);
 }
@@ -704,7 +681,7 @@ fn iterator_stops_at_the_first_error() {
     w.put_u8(0xee).unwrap();
     let n = w.written().len();
     // A second long packet whose length runs past the datagram.
-    w.put_slice(&[0xc0, 0, 0, 0, 1, 0, 0, 50, 1, 2]).unwrap();
+    w.put_slice(&[0xc0, VERSION, 0, 0, 50, 1, 2]).unwrap();
     let total = w.written().len();
     let mut dg = buf[..total].to_vec();
     let mut it = packets(&mut dg, 4);
@@ -715,64 +692,6 @@ fn iterator_stops_at_the_first_error() {
     let mut dg = vec![0x40, 1, 2];
     assert_eq!(packets(&mut dg, 4).next(), Some(Err(PacketError::TooShort)));
     assert!(packets(&mut [], 4).next().is_none());
-}
-
-// ---- stateless reset ----
-
-#[test]
-fn stateless_reset_builds_and_is_detected() {
-    let token = [0x5a; 16];
-    let other = [0xa5; 16];
-    let mut rng = SplitMix64::new(11);
-    let mut random = [0u8; 64];
-    rng.fill(&mut random);
-    for len in [MIN_RESET_LEN, 26, 41, 64, 80] {
-        let mut out = [0u8; 80];
-        random[0] = 0xff; // the form bits are forced regardless of the random byte
-        let n = build_stateless_reset(&mut out, len, &random, &token).unwrap();
-        assert_eq!(n, len);
-        assert_eq!(out[0] & 0xe0, 0x40);
-        assert_eq!(&out[1..len - 16], &random[1..len - 16]);
-        assert_eq!(&out[len - 16..len], &token);
-        let dg = &out[..len];
-        assert!(is_stateless_reset(dg, [&other, &token]));
-        assert!(is_stateless_reset(dg, [&token]));
-        assert!(!is_stateless_reset(dg, [&other]));
-        assert!(!is_stateless_reset(dg, []));
-        // One bit of the token differs.
-        let mut near = token;
-        near[15] ^= 1;
-        assert!(!is_stateless_reset(dg, [&near]));
-        // Shorter than the minimum, or not short-header shaped, is never a reset.
-        assert!(!is_stateless_reset(&dg[1..], [&token]) || len - 1 >= MIN_RESET_LEN);
-        let mut long_form = dg.to_vec();
-        long_form[0] = 0xc0;
-        assert!(!is_stateless_reset(&long_form, [&token]));
-        long_form[0] = 0x00;
-        assert!(!is_stateless_reset(&long_form, [&token]));
-    }
-    assert!(!is_stateless_reset(&[0x40; 24], [&[0x40; 16]]));
-    assert!(is_stateless_reset(&[0x40; 25], [&[0x40; 16]]));
-    assert!(!is_stateless_reset(&[], [&token]));
-}
-
-#[test]
-fn stateless_reset_refuses_bad_input() {
-    let token = [1; 16];
-    let mut out = [0u8; 64];
-    assert_eq!(
-        build_stateless_reset(&mut out, 24, &[0; 64], &token),
-        Err(PacketError::ResetTooShort)
-    );
-    assert_eq!(
-        build_stateless_reset(&mut out, 40, &[0; 23], &token),
-        Err(PacketError::ResetEntropy)
-    );
-    assert!(build_stateless_reset(&mut out, 40, &[0; 24], &token).is_ok());
-    assert!(matches!(
-        build_stateless_reset(&mut out[..30], 40, &[0; 24], &token),
-        Err(PacketError::Wire(WireError::BufferTooSmall { needed: 10 }))
-    ));
 }
 
 // ---- robustness ----
@@ -788,9 +707,9 @@ proptest! {
         let mut dg = bytes;
         if long_prefix && dg.len() >= 8 {
             dg[0] = 0xc0 | (dg[0] & 0x30 & 0x20);
-            dg[1..5].copy_from_slice(&VERSION.to_be_bytes());
-            dg[5] %= 21;
-            dg[6] %= 21;
+            dg[1] = VERSION;
+            dg[2] %= 21;
+            dg[3] %= 21;
         }
         let total = dg.len();
         let _ = LongHeader::parse(&dg);
@@ -819,7 +738,6 @@ proptest! {
         if let Ok(un) = unprotect_header(&s.hk, &p, &mut copy, pn_off, seed & 1 == 0) {
             let _ = open(&mut s.rx, &p, &mut copy, pn_off, &un, Some(seed >> 20));
         }
-        let _ = is_stateless_reset(&dg, [&[0u8; 16]]);
     }
 }
 
@@ -833,7 +751,6 @@ fn packet_paths_allocate_nothing() {
     let mut buf = vec![0u8; 1452];
     let mut dg = vec![0u8; 1452];
     let mut out = [0u8; 80];
-    let tokens = [[3u8; 16], [4u8; 16]];
     let frames = [
         Frame::Ping,
         Frame::Stream {
@@ -856,7 +773,7 @@ fn packet_paths_allocate_nothing() {
         }
         let mut w = Writer::new(&mut out);
         LongHeader {
-            ty: LongType::Retry,
+            ty: LongType::Handshake,
             dcid,
             scid: dcid,
             body_len: 0,
@@ -865,13 +782,11 @@ fn packet_paths_allocate_nothing() {
         .unwrap();
         let n = w.written().len();
         LongHeader::parse(&out[..n]).unwrap();
-        build_stateless_reset(&mut out, 40, &[9; 40], &tokens[0]).unwrap();
-        assert!(is_stateless_reset(&out[..40], &tokens));
         let mut w = Writer::new(&mut out);
         pad_to(&mut w, 50).unwrap();
-        let (b, n) = encode_pn(1000, Some(10)).unwrap();
-        let t = b[..n].iter().fold(0u32, |a, x| (a << 8) | u32::from(*x));
-        assert_eq!(decode_pn(t, n, Some(999)), 1000);
+        let b = encode_pn(1000, PN_LEN_BASE).unwrap();
+        let t = b[..PN_LEN_BASE].iter().fold(0u32, |a, x| (a << 8) | u32::from(*x));
+        assert_eq!(decode_pn(t, PN_LEN_BASE, Some(999)), 1000);
     });
     assert_eq!(stats.count(), 0, "{stats:?}");
 }

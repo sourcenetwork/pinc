@@ -17,23 +17,19 @@ pub enum PacketError {
     /// The long-header type bits are 3, which is not assigned.
     LongType,
     /// The version is not [`crate::packet::VERSION`].
-    Version(u32),
+    Version(u8),
     /// A connection id is longer than 20 bytes.
     ConnIdLength,
     /// A reserved bit of the first byte is set.
     Reserved,
     /// The packet number is out of range, or not above the largest acknowledged.
     PacketNumber,
-    /// The packet number field is not 1 to 4 bytes, or does not match the packet kind.
+    /// The packet number field does not have the connection's fixed width, or does not match the packet kind.
     PnLength,
     /// The packet is too short to sample for header protection or to hold a tag.
     TooShort,
     /// A length field is larger than what the datagram holds.
     Length,
-    /// A stateless reset must be at least 25 bytes.
-    ResetTooShort,
-    /// Fewer random bytes were supplied than the stateless-reset prefix needs.
-    ResetEntropy,
 }
 
 impl From<WireError> for PacketError {
@@ -62,8 +58,6 @@ impl fmt::Display for PacketError {
             Self::PnLength => f.write_str("packet number length is invalid for this packet"),
             Self::TooShort => f.write_str("packet is too short"),
             Self::Length => f.write_str("a length field exceeds the datagram"),
-            Self::ResetTooShort => f.write_str("a stateless reset is at least 25 bytes"),
-            Self::ResetEntropy => f.write_str("not enough random bytes for the stateless reset"),
         }
     }
 }

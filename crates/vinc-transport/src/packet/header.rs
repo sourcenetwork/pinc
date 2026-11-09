@@ -2,7 +2,7 @@
 
 use vinc_wire::{Reader, Writer, varint};
 
-use super::{ConnId, MAX_CID_LEN, MAX_PN_LEN, PacketError, VERSION};
+use super::{ConnId, MAX_CID_LEN, PN_LEN_BASE, PacketError, VERSION};
 
 /// The bit pattern of the first byte of a long header, before the type.
 const LONG_FORM: u8 = 0b1100_0000;
@@ -18,8 +18,6 @@ pub enum LongType {
     Handshake = 0,
     /// A packet under the early keys, carrying a packet number and frames.
     ZeroRtt = 1,
-    /// A retry, whose body is an address-validation token.
-    Retry = 2,
 }
 
 impl LongType {
@@ -27,7 +25,6 @@ impl LongType {
         match bits {
             0 => Some(Self::Handshake),
             1 => Some(Self::ZeroRtt),
-            2 => Some(Self::Retry),
             _ => None,
         }
     }
@@ -50,7 +47,7 @@ pub struct LongHeader {
 impl LongHeader {
     /// The encoded size of this header: everything before the body.
     pub fn header_len(&self) -> usize {
-        1 + 4
+        1 + 1
             + 1
             + self.dcid.as_bytes().len()
             + 1
@@ -58,22 +55,22 @@ impl LongHeader {
             + varint::encoded_len(self.body_len as u64)
     }
 
-    /// Write the header. `pn_len` is the packet-number length of a 0-RTT packet (1 to 4) and must be 0 for the other
-    /// types. Nothing is written on an error.
+    /// Write the header. `pn_len` is the packet-number length of a 0-RTT packet (the base width) and must be 0 for
+    /// the other types. Nothing is written on an error.
     ///
     /// # Errors
     /// [`PacketError::PnLength`] for a `pn_len` that does not fit the type; a [`PacketError::Wire`] if the buffer is
     /// too small.
     pub fn write(&self, w: &mut Writer<'_>, pn_len: usize) -> Result<(), PacketError> {
         let low = match self.ty {
-            LongType::ZeroRtt if (1..=MAX_PN_LEN).contains(&pn_len) => u8::try_from(pn_len - 1).unwrap_or(0),
+            LongType::ZeroRtt if pn_len == PN_LEN_BASE => u8::try_from(pn_len - 1).unwrap_or(0),
             LongType::ZeroRtt => return Err(PacketError::PnLength),
             _ if pn_len == 0 => 0,
-            _ => return Err(PacketError::PnLength),
+            LongType::Handshake => return Err(PacketError::PnLength),
         };
         w.ensure(self.header_len())?;
         w.put_u8(LONG_FORM | ((self.ty as u8) << 4) | low)?;
-        w.put_u32(VERSION)?;
+        w.put_u8(VERSION)?;
         for id in [&self.dcid, &self.scid] {
             let bytes = id.as_bytes();
             w.put_u8(u8::try_from(bytes.len()).map_err(|_| PacketError::ConnIdLength)?)?;
@@ -89,7 +86,7 @@ impl LongHeader {
     ///
     /// # Errors
     /// [`PacketError::Form`] if the first byte is not a long header with the fixed bit,
-    /// [`PacketError::LongType`], [`PacketError::Reserved`] (a non-zero low nibble on a handshake or retry),
+    /// [`PacketError::LongType`], [`PacketError::Reserved`] (a non-zero low nibble on a handshake),
     /// [`PacketError::Version`], [`PacketError::ConnIdLength`], [`PacketError::Length`] or a [`PacketError::Wire`]
     /// for a truncated field.
     pub fn parse(packet: &[u8]) -> Result<(Self, usize), PacketError> {
@@ -102,7 +99,7 @@ impl LongHeader {
         if ty != LongType::ZeroRtt && first & 0x0f != 0 {
             return Err(PacketError::Reserved);
         }
-        let version = r.read_u32()?;
+        let version = r.read_u8()?;
         if version != VERSION {
             return Err(PacketError::Version(version));
         }
@@ -142,13 +139,13 @@ pub struct ShortHeader {
 }
 
 impl ShortHeader {
-    /// Write the header and the truncated packet number `pn` (1 to 4 bytes, from [`encode_pn`](super::encode_pn)).
+    /// Write the header and the truncated packet number `pn` (2 or 3 bytes, from [`encode_pn`](super::encode_pn)).
     /// Nothing is written on an error.
     ///
     /// # Errors
-    /// [`PacketError::PnLength`] if `pn` is not 1 to 4 bytes; a [`PacketError::Wire`] if the buffer is too small.
+    /// [`PacketError::PnLength`] if `pn` is not 2 or 3 bytes; a [`PacketError::Wire`] if the buffer is too small.
     pub fn write(&self, w: &mut Writer<'_>, pn: &[u8]) -> Result<(), PacketError> {
-        if !(1..=MAX_PN_LEN).contains(&pn.len()) {
+        if !(PN_LEN_BASE..=super::PN_LEN_WIDE).contains(&pn.len()) {
             return Err(PacketError::PnLength);
         }
         let dcid = self.dcid.as_bytes();

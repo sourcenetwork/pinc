@@ -451,7 +451,6 @@ pub enum Rec {
     Readable(u64),
     Writable(u64),
     Reset(u64, u64),
-    Stopped(u64, u64),
     Datagram,
     Extension(u64, Vec<u8>),
     PathValidated(PathId),
@@ -461,7 +460,6 @@ pub enum Rec {
     WakeUnanswered,
     Tickets,
     Ready,
-    StatelessReset,
     Closed(CloseReason),
 }
 
@@ -540,7 +538,6 @@ impl<'a> Node<'a> {
                     }
                     Event::StreamWritable(id) => Rec::Writable(id),
                     Event::StreamReset { id, error } => Rec::Reset(id, error),
-                    Event::StreamStopped { id, error } => Rec::Stopped(id, error),
                     Event::DatagramReceived => {
                         datagram = true;
                         Rec::Datagram
@@ -556,7 +553,6 @@ impl<'a> Node<'a> {
                         Rec::Tickets
                     }
                     Event::Ready => Rec::Ready,
-                    Event::StatelessReset => Rec::StatelessReset,
                     Event::Closed(r) => Rec::Closed(r),
                 };
                 self.log.push(rec);
@@ -668,6 +664,8 @@ pub struct World {
     pub short: bool,
     /// The client's own configuration when it differs from the server's.
     pub client_cfg: Option<Config>,
+    /// Mixed into both sides' random generators, so two worlds with different seeds run different sessions.
+    pub seed: u8,
 }
 
 impl World {
@@ -675,8 +673,7 @@ impl World {
         Self::with_aead(alg, true)
     }
     pub fn with_aead(alg: IdentityAlg, hw: bool) -> Self {
-        let mut cfg = Config::new();
-        cfg.reset_key = [7; 32];
+        let cfg = Config::new();
         Self {
             ip: party(alg, 0x21),
             rp: party(alg, 0x22),
@@ -686,6 +683,7 @@ impl World {
             cfg,
             short: false,
             client_cfg: None,
+            seed: 0,
         }
     }
 
@@ -696,7 +694,7 @@ impl World {
         tickets: ClientTickets<8>,
     ) -> Node<'a> {
         let prov = Caps(Software, self.hw);
-        let mut drbg = Drbg::new(&[0x11; 32]);
+        let mut drbg = Drbg::new(&[0x11 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x21; self.alg.seed_len()]).unwrap();
         let mut env = Env {
             provider: &prov,
@@ -742,7 +740,7 @@ impl World {
 
     pub fn server<'a>(&self, store: &'a mut Store) -> Node<'a> {
         let prov = Caps(Software, self.hw);
-        let mut drbg = Drbg::new(&[0x33; 32]);
+        let mut drbg = Drbg::new(&[0x33 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x22; self.alg.seed_len()]).unwrap();
         let mut env = Env {
             provider: &prov,
@@ -792,7 +790,8 @@ pub struct Net<'a, 'b> {
     pub on_tx: Option<Box<dyn FnMut(bool, &[u8], u64)>>,
     pub buf: Vec<u8>,
     pub rx_drops: Vec<(bool, Drop)>,
-    /// Assert that B sends at most 3 times what it received until it is connected.
+    /// Assert that B sends at most 3 times what it received until it is connected, counting 48 bytes more than the
+    /// size of every datagram.
     pub amp_check: bool,
     /// Drop A's first datagram sent after A is connected and B is not (the Finish flight).
     pub drop_finish: bool,
@@ -880,14 +879,15 @@ impl<'a, 'b> Net<'a, 'b> {
                         if !is_a {
                             if self.amp_check && !self.b.conn.is_connected() {
                                 assert!(
-                                    self.b_tx + seg.len() as u64 <= 3 * self.b_rx,
-                                    "amplification: sent {} + {} after receiving {}",
+                                    self.b_tx + seg.len() as u64 + 48 <= 3 * self.b_rx,
+                                    "amplification: sent {} + {} + 48 after receiving {}",
                                     self.b_tx,
                                     seg.len(),
                                     self.b_rx
                                 );
                             }
-                            self.b_tx += seg.len() as u64;
+                            // Every datagram counts 48 bytes more than its size.
+                            self.b_tx += seg.len() as u64 + 48;
                         }
                         if is_a {
                             self.link.send_a(now, path, seg);
@@ -897,35 +897,12 @@ impl<'a, 'b> Net<'a, 'b> {
                     }
                 }
             }
-            progress |= self.relay_rekeys(now);
             self.a.service(now);
             self.b.service(now);
             if !progress {
                 break;
             }
             moved = true;
-        }
-        moved
-    }
-
-    /// Carry the REKEY bodies each side wants to send to the other, directly. The frame codec has no REKEY frame yet,
-    /// so this stands in for it; it is lossless and instant, and goes away when the frame is wired.
-    fn relay_rekeys(&mut self, now: u64) -> bool {
-        let mut moved = false;
-        let mut body = [0u8; 64];
-        for from_a in [true, false] {
-            loop {
-                let (from, to) = if from_a {
-                    (&mut self.a, &mut self.b)
-                } else {
-                    (&mut self.b, &mut self.a)
-                };
-                let Some(n) = from.conn.poll_rekey_body(now, &mut body) else {
-                    break;
-                };
-                to.with_env(now, |c, env| c.on_rekey_body(env, &body[..n]));
-                moved = true;
-            }
         }
         moved
     }

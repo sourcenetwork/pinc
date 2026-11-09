@@ -2,7 +2,7 @@
 
 use core::ops::RangeInclusive;
 
-use vinc_wire::{Reader, WireError, Writer, varint};
+use vinc_wire::{Reader, Writer, varint};
 
 use super::{FrameError, ty};
 use crate::packet::MAX_PN;
@@ -14,7 +14,6 @@ pub const MAX_ACK_RANGES: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ack<'a> {
     largest: u64,
-    delay: u64,
     first_range: u64,
     extra: usize,
     tail: &'a [u8],
@@ -24,11 +23,6 @@ impl<'a> Ack<'a> {
     /// The highest packet number acknowledged.
     pub const fn largest(&self) -> u64 {
         self.largest
-    }
-
-    /// The ack delay, in units of [`ACK_DELAY_UNIT_NS`](super::ACK_DELAY_UNIT_NS).
-    pub const fn delay(&self) -> u64 {
-        self.delay
     }
 
     /// How many ranges the ACK holds, 1 to [`MAX_ACK_RANGES`].
@@ -52,7 +46,6 @@ impl<'a> Ack<'a> {
         if largest > MAX_PN {
             return Err(FrameError::Ack);
         }
-        let delay = r.read_varint()?;
         let extra = usize::try_from(r.read_varint()?).map_err(|_| FrameError::TooManyRanges)?;
         if extra >= MAX_ACK_RANGES {
             return Err(FrameError::TooManyRanges);
@@ -72,7 +65,6 @@ impl<'a> Ack<'a> {
         let tail = r.read_bytes(probe.position().saturating_sub(r.position()))?;
         Ok(Self {
             largest,
-            delay,
             first_range,
             extra,
             tail,
@@ -81,7 +73,7 @@ impl<'a> Ack<'a> {
 
     /// The encoded size after the type.
     pub(super) fn body_len(&self) -> usize {
-        [self.largest, self.delay, self.extra as u64, self.first_range]
+        [self.largest, self.extra as u64, self.first_range]
             .iter()
             .map(|v| varint::encoded_len(*v))
             .sum::<usize>()
@@ -91,7 +83,6 @@ impl<'a> Ack<'a> {
     /// Write the fields after the type; the room was checked.
     pub(super) fn write_body(&self, w: &mut Writer<'_>) -> Result<(), FrameError> {
         w.put_varint(self.largest)?;
-        w.put_varint(self.delay)?;
         w.put_varint(self.extra as u64)?;
         w.put_varint(self.first_range)?;
         w.put_slice(self.tail)?;
@@ -161,10 +152,7 @@ fn wire_fields(
 }
 
 /// Validate `ranges` and return how many will be written and the encoded size of the frame after the type.
-fn shape(delay: u64, ranges: impl Iterator<Item = RangeInclusive<u64>>) -> Result<(usize, usize), FrameError> {
-    if delay >= 1 << 63 {
-        return Err(WireError::VarintOverflow.into());
-    }
+fn shape(ranges: impl Iterator<Item = RangeInclusive<u64>>) -> Result<(usize, usize), FrameError> {
     let (mut count, mut len, mut largest, mut first_range) = (0usize, 0usize, 0u64, 0u64);
     for item in wire_fields(ranges) {
         let (a, b) = item?;
@@ -178,7 +166,7 @@ fn shape(delay: u64, ranges: impl Iterator<Item = RangeInclusive<u64>>) -> Resul
     if count == 0 {
         return Err(FrameError::Ack);
     }
-    let head = [largest, delay, (count - 1) as u64, first_range];
+    let head = [largest, (count - 1) as u64, first_range];
     Ok((count, len + head.iter().map(|v| varint::encoded_len(*v)).sum::<usize>()))
 }
 
@@ -187,32 +175,30 @@ fn shape(delay: u64, ranges: impl Iterator<Item = RangeInclusive<u64>>) -> Resul
 /// # Errors
 /// [`FrameError::Ack`] if the ranges are empty, an empty range, above 2^62 - 1, out of order, touching or
 /// overlapping (adjacent ranges must be merged by the caller).
-pub fn ack_len<I>(delay: u64, ranges: I) -> Result<usize, FrameError>
+pub fn ack_len<I>(ranges: I) -> Result<usize, FrameError>
 where
     I: IntoIterator<Item = RangeInclusive<u64>>,
 {
-    Ok(1 + shape(delay, ranges.into_iter())?.1)
+    Ok(1 + shape(ranges.into_iter())?.1)
 }
 
-/// Encode an ACK frame for `ranges`, highest first, trimmed to the first [`MAX_ACK_RANGES`]. `delay` is in units of
-/// [`ACK_DELAY_UNIT_NS`](super::ACK_DELAY_UNIT_NS). The range iterator is walked twice: once to validate and size, once to
+/// Encode an ACK frame for `ranges`, highest first, trimmed to the first [`MAX_ACK_RANGES`]. The range iterator is walked twice: once to validate and size, once to
 /// write. Nothing is written on an error.
 ///
 /// # Errors
 /// As [`ack_len`], and a [`FrameError::Wire`] if the buffer is too small.
-pub fn write_ack<I>(w: &mut Writer<'_>, delay: u64, ranges: I) -> Result<(), FrameError>
+pub fn write_ack<I>(w: &mut Writer<'_>, ranges: I) -> Result<(), FrameError>
 where
     I: IntoIterator<Item = RangeInclusive<u64>>,
     I::IntoIter: Clone,
 {
     let ranges = ranges.into_iter();
-    let (count, body) = shape(delay, ranges.clone())?;
+    let (count, body) = shape(ranges.clone())?;
     w.ensure(1 + body)?;
     let mut fields = wire_fields(ranges);
     let (largest, first_range) = fields.next().ok_or(FrameError::Ack)??;
     w.put_varint(ty::ACK)?;
     w.put_varint(largest)?;
-    w.put_varint(delay)?;
     w.put_varint((count - 1) as u64)?;
     w.put_varint(first_range)?;
     for item in fields {

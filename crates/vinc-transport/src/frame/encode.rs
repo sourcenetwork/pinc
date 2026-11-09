@@ -35,20 +35,10 @@ impl Frame<'_> {
     fn varint_fields(&self) -> [u64; 3] {
         match *self {
             Self::ResetStream { id, error, final_size } => [id, error, final_size],
-            Self::StopSending { id, error } | Self::MaxStreamData { id, max: error } => [id, error, 0],
+            Self::MaxStreamData { id, max: error } => [id, error, 0],
             Self::Stream { id, offset, .. } => [id, offset, 0],
-            Self::MaxData { max: v }
-            | Self::MaxStreams { max: v, .. }
-            | Self::DataBlocked { limit: v }
-            | Self::StreamsBlocked { limit: v, .. }
-            | Self::RetireConnectionId { seq: v }
-            | Self::ApplicationClose { error: v, .. }
-            | Self::Extension { ty: v, .. } => [v, 0, 0],
-            Self::StreamDataBlocked { id, limit } => [id, limit, 0],
-            Self::NewConnectionId {
-                seq, retire_prior_to, ..
-            } => [seq, retire_prior_to, 0],
-            Self::Close { error, frame_type, .. } => [error, frame_type, 0],
+            Self::Close { error: v } | Self::Extension { ty: v, .. } => [v, 0, 0],
+            Self::Rekey(r) => [r.switch_pn, 0, 0],
             _ => [0; 3],
         }
     }
@@ -60,8 +50,6 @@ impl Frame<'_> {
             Self::Ping | Self::Sleep | Self::Wake | Self::Ready => 1,
             Self::Ack(ref ack) => 1 + ack.body_len(),
             Self::ResetStream { id, error, final_size } => 1 + vlen(id) + vlen(error) + vlen(final_size),
-            Self::StopSending { id, error } => 1 + vlen(id) + vlen(error),
-            Self::NewToken { token } => 1 + prefixed_len(token),
             Self::Stream {
                 id,
                 offset,
@@ -69,27 +57,12 @@ impl Frame<'_> {
                 implicit_len,
                 ..
             } => stream_overhead(id, offset, data.len(), implicit_len) + data.len(),
-            Self::MaxData { max: v }
-            | Self::DataBlocked { limit: v }
-            | Self::RetireConnectionId { seq: v }
-            | Self::MaxStreams { max: v, .. }
-            | Self::StreamsBlocked { limit: v, .. } => 1 + vlen(v),
-            Self::MaxStreamData { id, max: v } | Self::StreamDataBlocked { id, limit: v } => 1 + vlen(id) + vlen(v),
-            Self::NewConnectionId {
-                seq,
-                retire_prior_to,
-                cid,
-                ..
-            } => 1 + vlen(seq) + vlen(retire_prior_to) + 1 + cid.as_bytes().len() + super::RESET_TOKEN_LEN,
+            Self::MaxStreamData { id, max: v } => 1 + vlen(id) + vlen(v),
             Self::PathChallenge(_) | Self::PathResponse(_) => 1 + 8,
-            Self::Close {
-                error,
-                frame_type,
-                reason,
-            } => 1 + vlen(error) + vlen(frame_type) + prefixed_len(reason),
-            Self::ApplicationClose { error, reason } => 1 + vlen(error) + prefixed_len(reason),
+            Self::Close { error } => 1 + vlen(error),
             Self::Datagram { data, implicit_len } => datagram_overhead(data.len(), implicit_len) + data.len(),
             Self::MtuProbeEcho { .. } => 1 + 2,
+            Self::Rekey(r) => 1 + 1 + 32 + if r.answer { vlen(r.switch_pn) } else { 0 },
             Self::NewTickets(ref batch) => 1 + 1 + batch.entries().len() * TICKET_LEN,
             Self::Extension { ty, body } => vlen(ty) + prefixed_len(body),
         }
@@ -104,10 +77,6 @@ impl Frame<'_> {
             Self::Stream { offset, data, .. } if offset.saturating_add(data.len() as u64) > MAX_STREAM_END => {
                 Err(FrameError::StreamEnd)
             }
-            Self::NewConnectionId { cid, .. } if cid.as_bytes().is_empty() => Err(FrameError::ConnId),
-            Self::NewConnectionId {
-                seq, retire_prior_to, ..
-            } if retire_prior_to > seq => Err(FrameError::RetirePriorTo),
             Self::Extension { ty, .. } if ty < EXTENSION_BASE => Err(FrameError::UnknownType(ty)),
             _ => Ok(()),
         }
@@ -117,9 +86,8 @@ impl Frame<'_> {
     /// frame and the room are checked first, so nothing is written on an error.
     ///
     /// # Errors
-    /// [`FrameError::Wire`] if the buffer is too small or a field is 2^63 or more, [`FrameError::StreamEnd`],
-    /// [`FrameError::ConnId`], [`FrameError::RetirePriorTo`], or [`FrameError::UnknownType`] for an extension
-    /// below `0x40`.
+    /// [`FrameError::Wire`] if the buffer is too small or a field is 2^63 or more, [`FrameError::StreamEnd`], or
+    /// [`FrameError::UnknownType`] for an extension below `0x40`.
     pub fn write(&self, w: &mut Writer<'_>) -> Result<(), FrameError> {
         self.validate()?;
         w.ensure(self.encoded_len())?;
@@ -142,36 +110,8 @@ impl Frame<'_> {
                 ack.write_body(w)?;
             }
             Self::ResetStream { id, error, final_size } => put(w, ty::RESET_STREAM, &[id, error, final_size])?,
-            Self::StopSending { id, error } => put(w, ty::STOP_SENDING, &[id, error])?,
-            Self::NewToken { token } => {
-                w.put_varint(ty::NEW_TOKEN)?;
-                put_bytes(w, token)?;
-            }
             Self::Stream { .. } => self.write_stream(w)?,
-            Self::MaxData { max } => put(w, ty::MAX_DATA, &[max])?,
             Self::MaxStreamData { id, max } => put(w, ty::MAX_STREAM_DATA, &[id, max])?,
-            Self::MaxStreams { bidi, max } => put(
-                w,
-                if bidi {
-                    ty::MAX_STREAMS_BIDI
-                } else {
-                    ty::MAX_STREAMS_UNI
-                },
-                &[max],
-            )?,
-            Self::DataBlocked { limit } => put(w, ty::DATA_BLOCKED, &[limit])?,
-            Self::StreamDataBlocked { id, limit } => put(w, ty::STREAM_DATA_BLOCKED, &[id, limit])?,
-            Self::StreamsBlocked { bidi, limit } => put(
-                w,
-                if bidi {
-                    ty::STREAMS_BLOCKED_BIDI
-                } else {
-                    ty::STREAMS_BLOCKED_UNI
-                },
-                &[limit],
-            )?,
-            Self::NewConnectionId { .. } => self.write_new_cid(w)?,
-            Self::RetireConnectionId { seq } => put(w, ty::RETIRE_CONNECTION_ID, &[seq])?,
             Self::PathChallenge(data) => {
                 w.put_varint(ty::PATH_CHALLENGE)?;
                 w.put_slice(&data)?;
@@ -180,18 +120,7 @@ impl Frame<'_> {
                 w.put_varint(ty::PATH_RESPONSE)?;
                 w.put_slice(&data)?;
             }
-            Self::Close {
-                error,
-                frame_type,
-                reason,
-            } => {
-                put(w, ty::CLOSE, &[error, frame_type])?;
-                put_bytes(w, reason)?;
-            }
-            Self::ApplicationClose { error, reason } => {
-                put(w, ty::APPLICATION_CLOSE, &[error])?;
-                put_bytes(w, reason)?;
-            }
+            Self::Close { error } => put(w, ty::CLOSE, &[error])?,
             Self::Datagram { data, implicit_len } => {
                 if implicit_len {
                     w.put_varint(ty::DATAGRAM)?;
@@ -204,6 +133,10 @@ impl Frame<'_> {
             Self::MtuProbeEcho { mtu } => {
                 w.put_varint(ty::MTU_PROBE_ECHO)?;
                 w.put_u16(mtu)?;
+            }
+            Self::Rekey(r) => {
+                w.put_varint(ty::REKEY)?;
+                r.write(w).map_err(FrameError::Wire)?;
             }
             Self::NewTickets(ref batch) => {
                 w.put_varint(ty::NEW_TICKETS)?;
@@ -240,24 +173,6 @@ impl Frame<'_> {
         } else {
             put_bytes(w, data)?;
         }
-        Ok(())
-    }
-
-    fn write_new_cid(&self, w: &mut Writer<'_>) -> Result<(), FrameError> {
-        let Self::NewConnectionId {
-            seq,
-            retire_prior_to,
-            cid,
-            token,
-        } = *self
-        else {
-            return Ok(());
-        };
-        put(w, ty::NEW_CONNECTION_ID, &[seq, retire_prior_to])?;
-        let bytes = cid.as_bytes();
-        w.put_u8(u8::try_from(bytes.len()).map_err(|_| FrameError::ConnId)?)?;
-        w.put_slice(bytes)?;
-        w.put_slice(&token)?;
         Ok(())
     }
 }

@@ -19,12 +19,8 @@ const FRAMES: usize = 512;
 
 fn peer() -> PeerLimits {
     PeerLimits {
-        max_data: 1 << 60,
-        max_stream_data_bidi_local: 1 << 60,
-        max_stream_data_bidi_remote: 1 << 60,
-        max_stream_data_uni: 1 << 60,
-        max_streams_bidi: 100,
-        max_streams_uni: 100,
+        window: 1 << 60,
+        max_streams: 100,
     }
 }
 
@@ -96,7 +92,10 @@ fn bench_write(c: &mut Criterion) {
     let mut out = [0u8; FRAME];
     g.bench_function("buffered_write_build_ack_1400", |b| {
         b.iter(|| {
-            assert_eq!(table.write(&mut pool, id, black_box(&payload)).unwrap(), FRAME);
+            assert_eq!(
+                table.write(&mut pool, id, black_box(&payload), u64::MAX).unwrap(),
+                FRAME
+            );
             let frame = table.next_stream_frame(FRAME).unwrap();
             table.copy_out(&pool, &frame, &mut out).unwrap();
             table.on_acked(&mut pool, id, frame.offset, frame.len as u64, false);

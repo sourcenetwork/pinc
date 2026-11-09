@@ -1,7 +1,7 @@
-#![allow(clippy::doc_markdown, reason = "frame names such as NEW_TOKEN are prose, not code")]
+#![allow(clippy::doc_markdown, reason = "frame names such as REKEY are prose, not code")]
 
 //! The connection: the handshake over `vinc-security`, packet assembly and dispatch, paths and migration, path MTU,
-//! key rolls, idle timeout, close and drain, and sleep and wake, over the packet layer, recovery and the stream
+//! key rolls, the fixed idle timeout, close, and sleep and wake, over the packet layer, recovery and the stream
 //! layer of this crate.
 //!
 //! # Driving a connection
@@ -29,9 +29,11 @@
 //!
 //! # Extension frames
 //!
-//! A frame of type 0x40 and up (and NEW_TOKEN) is not parsed here. Its body is copied into a bounded queue held in
-//! the buffer pool and handed out as [`Event::Extension`], borrowed from the connection until the next
-//! [`poll_event`](Connection::poll_event) call. When the queue is full the oldest entry is dropped and counted.
+//! A frame of type 0x40 and up is not parsed here. Its body is copied into a bounded queue held in the buffer pool and
+//! handed out as [`Event::Extension`], borrowed from the connection until the next
+//! [`poll_event`](Connection::poll_event) call. When the queue is full the oldest entry is dropped and counted. A
+//! frame sent with [`send_extension`](Connection::send_extension) is kept (up to [`EXT_RELIABLE_MAX`] body bytes) and
+//! sent again until its packet is acknowledged, so the receiver may see it more than once.
 //!
 //! # Invariants
 //!
@@ -70,12 +72,14 @@ mod send;
 mod timer;
 
 use vinc_crypto::Provider;
-use vinc_security::{ConnId, Env, Established, Failure, Initiator, InitiatorParams, Responder, ResponderConfig};
-
-pub use cid::reset_token;
-pub use config::{
-    ClientParams, Config, DEFAULT_IDLE, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
+use vinc_security::{
+    AmpBudget, ConnId, Env, Established, Failure, Initiator, InitiatorParams, Responder, ResponderConfig,
 };
+
+pub use config::{
+    ClientParams, Config, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
+};
+pub use ctl::EXT_RELIABLE_MAX;
 pub use event::{CloseReason, Drop, Event, code};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::PathError;
@@ -88,7 +92,8 @@ use self::handshake::{Handshake, Machine, Timing};
 use self::keys::Keys;
 use self::life::Life;
 use self::path::Paths;
-use crate::recovery::{LossEstimate, ReceivedPackets, Recovery};
+use crate::packet::PN_LEN_BASE;
+use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, TailRepair};
 use crate::stream::datagram::{Datagrams, EarlyData};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE};
 use crate::stream::{NoSource, StreamSource, Streams};
@@ -109,7 +114,6 @@ pub(crate) enum Phase {
     Handshaking,
     Connected,
     Closing,
-    Draining,
     Closed,
 }
 
@@ -142,15 +146,16 @@ pub struct Connection<
     rec: Recovery<F>,
     rx: ReceivedPackets<32>,
     ctl: Ctl,
+    tail: TailRepair,
     cids: Cids,
     paths: Paths<NP>,
+    sess_amp: AmpBudget,
+    pn_len: usize,
     events: EvQueue,
     life: Life,
     stats: Stats,
     next_pn: u64,
     started: u64,
-    migrate_to: Option<usize>,
-    highest_nonprobing: Option<u64>,
     odcid: ConnId,
     resumed: bool,
     confirmed: bool,
@@ -191,6 +196,16 @@ where
         let hs = Handshake::new(machine, &mut pool, now, timing)?;
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
+        let mut rec = Recovery::new(u64::from(MIN_MTU));
+        if let Some(r) = cfg.node_peak_rtt {
+            rec.set_node_rtt(r);
+        }
+        if let Some(r) = cfg.node_rtt {
+            rec.set_handshake_rtt(r);
+        }
+        if let Some(b) = cfg.gate_slack {
+            rec.set_gate_slack(b);
+        }
         Ok(Self {
             client,
             cfg,
@@ -204,22 +219,23 @@ where
             hs,
             est: None,
             keys: Keys::new(client),
-            rec: Recovery::new(u64::from(MIN_MTU)),
+            rec,
             rx: {
                 let mut rx = ReceivedPackets::new();
                 rx.set_every(cfg.ack_every);
                 rx
             },
             ctl: Ctl::new(),
-            cids: Cids::new(first_cid),
+            tail: TailRepair::new(),
+            cids: Cids::new(client, first_cid),
             paths: Paths::new(),
+            sess_amp: AmpBudget::new(),
+            pn_len: PN_LEN_BASE,
             events: EvQueue::new(),
             life,
             stats: Stats::default(),
             next_pn: 0,
             started: now,
-            migrate_to: None,
-            highest_nonprobing: None,
             odcid,
             resumed: false,
             confirmed: false,
@@ -294,9 +310,10 @@ where
         }
         c.new_path_slot(params.path, params.path_info, env.now);
         if let Some(p) = c.paths.active_mut() {
-            p.state = path::PathState::Validated;
+            p.validated = true;
             p.amp.validate();
         }
+        c.sess_amp.validate();
         c.pump(env);
         Ok(c)
     }
@@ -337,9 +354,9 @@ where
         matches!(self.phase, Phase::Connected)
     }
 
-    /// Whether the connection ended: closed, or draining and no longer sending.
+    /// Whether the connection ended: closed, or closing with its CLOSE still to leave.
     pub const fn is_closed(&self) -> bool {
-        matches!(self.phase, Phase::Closed | Phase::Draining)
+        matches!(self.phase, Phase::Closed | Phase::Closing)
     }
 
     /// Whether this endpoint dialed.
@@ -375,6 +392,18 @@ where
     /// The authenticated session, once the handshake completed.
     pub const fn session(&self) -> Option<&Established> {
         self.est.as_ref()
+    }
+
+    /// Every connection id this side accepts now. An endpoint that serves many connections routes a datagram to the
+    /// connection whose list holds its destination id; two connections may hold the same id by chance, and the one
+    /// whose keys open the packet owns it.
+    pub fn local_cids(&self) -> impl Iterator<Item = ConnId> + '_ {
+        self.cids.local()
+    }
+
+    /// Whether `cid` is one this side accepts now.
+    pub fn accepts_cid(&self, cid: &ConnId) -> bool {
+        self.cids.is_local(cid)
     }
 
     fn push(&mut self, ev: Ev) {

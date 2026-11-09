@@ -8,26 +8,26 @@ use super::config::PathId;
 use crate::packet::PacketError;
 use crate::stream::StreamId;
 
-/// Transport error codes carried in CLOSE.
+/// The codes a CLOSE frame carries. 0 and 3 are the codes of the protocol itself; 0x4C means the sender is leaving
+/// the network on purpose; the rest are VINC's own and say which rule the peer broke. An application may close with
+/// any other code of its own through [`Connection::close`](super::Connection::close).
 pub mod code {
-    /// No error.
+    /// No error: an orderly close.
     pub const NO_ERROR: u64 = 0;
     /// The peer broke a rule not named below.
     pub const PROTOCOL_VIOLATION: u64 = 1;
+    /// A frame could not be decoded.
+    pub const FRAME_ENCODING: u64 = 2;
     /// The peer sent beyond the credit it was given.
-    pub const FLOW_CONTROL: u64 = 2;
-    /// The peer opened more streams than allowed.
-    pub const STREAM_LIMIT: u64 = 3;
+    pub const FLOW_CONTROL: u64 = 3;
     /// A frame did not fit the state of its stream.
     pub const STREAM_STATE: u64 = 4;
     /// A final size changed or was exceeded.
     pub const FINAL_SIZE: u64 = 5;
-    /// A frame could not be decoded.
-    pub const FRAME_ENCODING: u64 = 6;
-    /// The peer broke the connection id rules.
-    pub const CONNECTION_ID: u64 = 7;
     /// Local state failed.
     pub const INTERNAL: u64 = 8;
+    /// The sender leaves the network on purpose.
+    pub const LEAVE: u64 = 0x4C;
 }
 
 /// Why a connection ended.
@@ -37,26 +37,19 @@ pub enum CloseReason {
     IdleTimeout,
     /// The local application closed with this code.
     Local {
-        /// The application error code.
+        /// The code.
         error: u64,
     },
-    /// The peer sent CLOSE (a transport error) with this code.
-    PeerTransport {
-        /// The transport error code.
-        error: u64,
-    },
-    /// The peer sent APPLICATION_CLOSE with this code.
-    PeerApplication {
-        /// The application error code.
+    /// The peer sent CLOSE with this code.
+    Peer {
+        /// The code.
         error: u64,
     },
     /// The connection broke a rule and sent CLOSE with this code.
     Violation {
-        /// The transport error code.
+        /// The code.
         error: u64,
     },
-    /// The peer answered with a stateless reset: it lost the connection.
-    StatelessReset,
     /// The active path gave up after repeated probe timeouts.
     PathDead,
     /// The handshake failed.
@@ -70,10 +63,8 @@ impl fmt::Display for CloseReason {
         match self {
             Self::IdleTimeout => f.write_str("the connection was idle for too long"),
             Self::Local { error } => write!(f, "closed locally with code {error}"),
-            Self::PeerTransport { error } => write!(f, "the peer closed with transport error {error}"),
-            Self::PeerApplication { error } => write!(f, "the peer closed with code {error}"),
+            Self::Peer { error } => write!(f, "the peer closed with code {error}"),
             Self::Violation { error } => write!(f, "closed after a protocol error {error}"),
-            Self::StatelessReset => f.write_str("the peer no longer knows this connection"),
             Self::PathDead => f.write_str("the peer stopped answering"),
             Self::Handshake(e) => write!(f, "the handshake failed: {e}"),
             Self::HandshakeTimeout => f.write_str("the handshake took too long"),
@@ -86,8 +77,6 @@ impl fmt::Display for CloseReason {
 pub enum Drop {
     /// The connection is closed.
     Closed,
-    /// The connection is draining and ignores everything.
-    Draining,
     /// A header or length was malformed.
     Malformed(PacketError),
     /// The destination connection id is not one of ours.
@@ -110,7 +99,6 @@ impl fmt::Display for Drop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Closed => f.write_str("the connection is closed"),
-            Self::Draining => f.write_str("the connection is draining"),
             Self::Malformed(e) => write!(f, "malformed packet: {e}"),
             Self::Unroutable => f.write_str("the connection id is not ours"),
             Self::Undecryptable => f.write_str("the packet could not be decrypted"),
@@ -150,16 +138,10 @@ pub enum Event<'a> {
         /// The application error code.
         error: u64,
     },
-    /// The peer asked us to stop sending on a stream; the send side was abandoned.
-    StreamStopped {
-        /// The stream.
-        id: StreamId,
-        /// The application error code.
-        error: u64,
-    },
     /// A datagram arrived; read it with [`recv_datagram`](super::Connection::recv_datagram).
     DatagramReceived,
-    /// An extension frame (type 0x40 and up) or a NEW_TOKEN arrived. The body is a copy held in a bounded queue.
+    /// An extension frame (type 0x40 and up) arrived. The body is a copy held in a bounded queue. A frame the sender
+    /// repeated because its packet looked lost may arrive twice.
     Extension {
         /// The frame type.
         ty: u64,
@@ -181,8 +163,6 @@ pub enum Event<'a> {
     TicketsReceived(TicketBatch),
     /// The peer sent READY.
     Ready,
-    /// A stateless reset arrived: the peer lost the connection. The connection is closed.
-    StatelessReset,
     /// The connection ended.
     Closed(CloseReason),
 }
@@ -196,7 +176,6 @@ pub(crate) enum Ev {
     Readable(StreamId),
     Writable(StreamId),
     Reset(StreamId, u64),
-    Stopped(StreamId, u64),
     Datagram,
     Extension,
     PathValidated(PathId),
@@ -206,7 +185,6 @@ pub(crate) enum Ev {
     WakeUnanswered,
     Tickets(TicketBatch),
     Ready,
-    StatelessReset,
     Closed(CloseReason),
 }
 
