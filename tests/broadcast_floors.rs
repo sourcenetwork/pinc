@@ -15,7 +15,7 @@
 mod common;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::consts::FHOLD_MAX;
+use vinc_broadcast::consts::{FHOLD_MAX, ORIGIN_MAX};
 use vinc_broadcast::{HoldWhy, Reject, Trace};
 use vinc_crypto::IdentityAlg;
 
@@ -205,4 +205,36 @@ fn a_floor_frame_that_is_cut_short_is_ignored() {
     net.publish(2, T, b"x");
     net.run_until(11 * SEC);
     assert!(net.delivered(3).is_empty());
+}
+
+#[test]
+fn the_per_origin_floor_lists_128_origins_and_no_more() {
+    // Hub 0, subscriber 1, then one publisher per origin.
+    let build = |origins: usize| {
+        let mut net = Net::new(IdentityAlg::Ed25519, 1, 1 + origins, SEC);
+        net.subscribe(1, T);
+        for i in 0..origins {
+            net.publish(2 + i, T, &[i as u8]);
+        }
+        net
+    };
+    let sub = |net: &Net| net.id(1);
+    let mut body = [0u8; 4096];
+
+    let mut net = build(ORIGIN_MAX);
+    let me = sub(&net);
+    let n = net.nodes[0].t.floor(&me, &mut body);
+    assert_eq!(n, 12 + 1 + 2 + ORIGIN_MAX * 20, "every origin is listed at the cap");
+    assert_eq!(&body[13..15], &[1, ORIGIN_MAX as u8]);
+
+    let mut net = build(ORIGIN_MAX + 1);
+    let me = sub(&net);
+    let n = net.nodes[0].t.floor(&me, &mut body);
+    assert_eq!(
+        n,
+        12 + 1 + 1,
+        "one origin past the cap: no per-origin list, only the overall floor"
+    );
+    assert_eq!(body[12], 1, "history is still reported");
+    assert_eq!(body[13], 0);
 }
