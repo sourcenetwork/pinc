@@ -32,7 +32,7 @@
 //! A frame of type 0x40 and up is not parsed here. Its body is copied into a bounded queue held in the buffer pool and
 //! handed out as [`Event::Extension`], borrowed from the connection until the next
 //! [`poll_event`](Connection::poll_event) call. When the queue is full the oldest entry is dropped and counted. A
-//! frame sent with [`send_extension`](Connection::send_extension) is kept (up to [`EXT_RELIABLE_MAX`] body bytes) and
+//! frame sent with [`send_extension`](Connection::send_extension) is kept (up to what fits one packet at the path MTU) and
 //! sent again until its packet is acknowledged, so the receiver may see it more than once.
 //!
 //! # Invariants
@@ -62,6 +62,7 @@ mod ctl;
 mod drive;
 mod event;
 mod handshake;
+mod hooks;
 mod keys;
 mod life;
 mod mtu;
@@ -76,11 +77,12 @@ use vinc_security::{
     AmpBudget, ConnId, Env, Established, Failure, Initiator, InitiatorParams, Responder, ResponderConfig,
 };
 
+pub use api::ExtensionError;
 pub use config::{
     ClientParams, Config, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
 };
-pub use ctl::EXT_RELIABLE_MAX;
 pub use event::{CloseReason, Drop, Event, code};
+pub use hooks::SubOpen;
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::PathError;
 pub use send::Transmit;
@@ -97,6 +99,13 @@ use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, TailRepair};
 use crate::stream::datagram::{Datagrams, EarlyData};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE};
 use crate::stream::{NoSource, StreamSource, Streams};
+
+/// The received packet-number ranges tracked. Below the floor a packet counts as a duplicate, so this must hold the
+/// holes that deep reordering leaves open. The deepest of the reordering scenarios measured (5 ms of independent
+/// jitter on top of 5% of the packets held back 20 ms, at a window of megabytes) needs 116 at once; 96 and below
+/// forgot holes and judged new packets duplicates (32 did in most of the scenarios), 128 and above never did.
+/// Acknowledgements still report at most `MAX_ACK_RANGES`.
+const RX_RANGES: usize = 128;
 
 /// Everything a connection borrows or is handed: the buffer pool, the stream table and the shared loss average.
 pub struct Resources<'a, S: StreamSource, const N: usize, const C: usize> {
@@ -144,7 +153,7 @@ pub struct Connection<
     est: Option<Established>,
     keys: Keys<P>,
     rec: Recovery<F>,
-    rx: ReceivedPackets<32>,
+    rx: ReceivedPackets<RX_RANGES>,
     ctl: Ctl,
     tail: TailRepair,
     cids: Cids,
@@ -164,6 +173,11 @@ pub struct Connection<
     degraded_told: bool,
     local_credit: CreditRecord,
     peer_credit: CreditRecord,
+    /// Path slots that receive a copy of every handshake flight, those still owed the current flight, and the one
+    /// being served now.
+    fan_set: u16,
+    fan_mask: u16,
+    fan_target: Option<usize>,
 }
 
 impl<'a, P, S, const N: usize, const C: usize, const F: usize, const NP: usize> Connection<'a, P, S, N, C, F, NP>
@@ -244,6 +258,9 @@ where
             degraded_told: false,
             local_credit,
             peer_credit: CreditRecord::NONE,
+            fan_set: 0,
+            fan_mask: 0,
+            fan_target: None,
         })
     }
 

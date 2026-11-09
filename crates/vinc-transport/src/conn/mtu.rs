@@ -4,8 +4,8 @@
 //! Only direct (UDP) paths are probed, never on a thin node, and not for 10 s after a wake or a link return. A path
 //! is probed once: a lost probe is not retried, it waits for the next path event (a re-join that worked, a link
 //! return, a new address, a re-validation) or for 10 minutes. When a probe-timeout PING is acknowledged while a
-//! full-size packet sent before it is not, the path drops to 1200 at once, because the signature is a path that
-//! carries small packets only.
+//! full-size packet sent before it still is not one round trip later, the path drops to 1200, because the signature
+//! is a path that carries small packets only.
 //!
 //! Invariants: at most one probe is in flight per path; a lost probe is not a congestion signal (recovery is told the
 //! packet is a probe); the datagram size only rises to a size the peer confirmed (an acknowledgement or an echo) and
@@ -66,7 +66,11 @@ conn_impl! {
 
     /// The earliest time a path whose probe was lost is probed again.
     pub(super) fn mtu_deadline(&self) -> Option<u64> {
-        self.paths.iter().map(|(_, p)| p.mtu.retry_at).filter(|t| *t > 0).min()
+        self.paths
+            .iter()
+            .flat_map(|(_, p)| [p.mtu.retry_at, p.mtu.suspect.map_or(0, |(_, at)| at)])
+            .filter(|t| *t > 0)
+            .min()
     }
 
     /// A probe of `size` was acknowledged or echoed: the path carries it.
@@ -111,22 +115,41 @@ conn_impl! {
         }
     }
 
-    /// The signature of a black hole: the probe-timeout PING `ping_pn` was acknowledged by an ack that did not
-    /// cover the newest full-size packet sent before it, and no full-size packet at all was acknowledged since.
-    /// Drop the active path to the minimum size.
-    pub(super) fn mtu_black_hole(&mut self, ping_pn: u64, now: u64) {
+    /// The last probe-timeout PING was acknowledged. If a full-size packet sent before it is still unacknowledged
+    /// the path is suspect, and [`mtu_black_hole_check`](Self::mtu_black_hole_check) decides one round trip later.
+    /// The full-size retransmission that follows the PING does not matter: the evidence is the packet that preceded it.
+    pub(super) fn mtu_black_hole(&mut self, now: u64) {
+        let rtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
         let Some(p) = self.paths.active_mut() else { return };
-        let Some(big) = p.mtu.last_big.filter(|b| *b < ping_pn) else { return };
+        let Some(big) = p.mtu.ping_big else { return };
         if p.mtu.current <= MIN_MTU || p.mtu.big_acked.is_some_and(|a| a >= big) {
             return;
         }
+        p.mtu.suspect = Some((big, now.saturating_add(rtt)));
+    }
+
+    /// Settle a black-hole suspicion once its round trip has passed: if no full-size packet at or after the suspect one
+    /// was acknowledged, the path carries small packets only. Drop the active path to the minimum size.
+    pub(super) fn mtu_black_hole_check(&mut self, now: u64) {
+        let Some(p) = self.paths.active_mut() else { return };
+        let Some((big, at)) = p.mtu.suspect else { return };
+        if p.mtu.big_acked.is_some_and(|a| a >= big) || p.mtu.current <= MIN_MTU {
+            p.mtu.suspect = None;
+            return;
+        }
+        if now < at {
+            return;
+        }
+        p.mtu.suspect = None;
         p.mtu.current = MIN_MTU;
         p.mtu.inflight = None;
         p.mtu.last_big = None;
+        p.mtu.ping_big = None;
         p.mtu.retry_at = now.saturating_add(REPROBE_AFTER);
         p.mtu.probed = true;
         p.mtu.jumbo = Jumbo::Done;
         self.rec.set_max_datagram_size(u64::from(MIN_MTU));
+        self.shed_extensions();
     }
 
     /// Start discovery on every path once the handshake is done.

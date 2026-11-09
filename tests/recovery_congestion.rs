@@ -3,7 +3,7 @@
 //! of the `transport_recovery` test target.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use vinc_transport::recovery::{BURST_PACKETS, INITIAL_CWND, MIN_CWND, MS, PathKind, SECOND, Sent};
+use vinc_transport::recovery::{BURST_PACKETS, INITIAL_CWND, MIN_CWND, MS, PathKind, Recovery, SECOND, Sent};
 
 use crate::{MSS, Rec, ack, assert_conserved, established, fire, on_path, sent};
 
@@ -46,12 +46,18 @@ fn a_lone_packet_grows_the_window_and_the_rate_gate_then_holds_it_to_what_was_de
     rec.on_packet_sent(sent(0, 0)).unwrap();
     ack(&mut rec, 10 * MS, &[(0, 0)]);
     assert_eq!(rec.cwnd(), INITIAL_CWND + 1200);
-    // A second lone packet a second later: it would grow the window again, but the rate gate bounds the window by
-    // what was delivered: 2400 bytes in the 1 s interval = 2400 bytes/s, a BDP of 24 bytes at 10 ms, so the gate is
-    // max(44,000, 2 x 24 + 44,000).
+    // A second lone packet a second later grows it again. The rate gate bounds the window only when the sender
+    // resumes, by what was delivered: 2400 bytes in the 1 s interval = 2400 bytes/s, a BDP of 24 bytes at 10 ms, so
+    // the gate is max(44,000, 2 x 24 + 44,000).
     rec.on_packet_sent(sent(1, SECOND)).unwrap();
     ack(&mut rec, SECOND + 10 * MS, &[(1, 1)]);
     assert_eq!(rec.cc().delivery_rate(), 2400);
+    assert_eq!(
+        rec.cwnd(),
+        INITIAL_CWND + 2400,
+        "an acknowledgement alone does not apply the gate"
+    );
+    rec.on_packet_sent(sent(2, 2 * SECOND)).unwrap();
     assert_eq!(rec.cwnd(), 44_048);
 }
 
@@ -193,12 +199,13 @@ fn the_window_is_restored_when_the_packet_the_first_timeout_declared_lost_is_ack
     ack(&mut rec, 600 * MS, &[(2, 2)]);
     assert_eq!(rec.cwnd(), saved * 9 / 10 + 1200);
     // The original arrives after all: the window returns to what it was before the probe, and slow start with it.
-    let (s, log) = ack(&mut rec, 610 * MS, &[(1, 1)]);
+    // (The ghosts are looked at once every 25 ms and the acknowledgement at 600 ms took this period's look.)
+    let (s, log) = ack(&mut rec, 630 * MS, &[(1, 1)]);
     assert_eq!((s.late_acked_packets, log), (1, vec!["late 1".to_string()]));
     assert_eq!(rec.cwnd(), saved);
     assert_eq!(rec.cc().ssthresh(), u64::MAX);
     // Only once: a second late acknowledgement changes nothing.
-    ack(&mut rec, 620 * MS, &[(1, 1)]);
+    ack(&mut rec, 660 * MS, &[(1, 1)]);
     assert_eq!(rec.cwnd(), saved);
 }
 
@@ -242,7 +249,8 @@ fn repeated_timeouts_cut_once_per_episode_and_never_collapse_the_window() {
 fn a_burst_of_acknowledgements_after_a_long_silence_cannot_inflate_the_window() {
     // min_rtt 50 ms. pn 0 is acknowledged at 50 ms (1200 bytes open the first interval); 20 packets sent at 1 s are
     // acknowledged at 1.05 s. The interval is 1 s long and carries 25,200 bytes: 25,200 bytes/s, a BDP of 1260 bytes,
-    // a gate of 2 x 1260 + 44,000 = 46,520. Slow start alone would have reached 44,000 + 25,200.
+    // a gate of 2 x 1260 + 44,000 = 46,520. Slow start alone would have reached 44,000 + 25,200; the sender's next
+    // send, after an idle stretch, is where the gate bounds it.
     for relay in [false, true] {
         let mut rec = Rec::new(MSS);
         if relay {
@@ -255,7 +263,104 @@ fn a_burst_of_acknowledgements_after_a_long_silence_cannot_inflate_the_window() 
         }
         ack(&mut rec, SECOND + 50 * MS, &[(1, 20)]);
         assert_eq!(rec.cc().delivery_rate(), 25_200);
+        assert_eq!(rec.cwnd(), INITIAL_CWND + 1200 + 24_000, "relay {relay}");
+        rec.on_packet_sent(sent(21, 2 * SECOND)).unwrap();
         assert_eq!(rec.cwnd(), 46_520, "relay {relay}");
         assert_eq!(rec.cc().ssthresh(), 46_520);
     }
+}
+
+/// `rounds` rounds of window-limited sending: send until the window is full, acknowledge everything one round trip
+/// later. `pn` and `now` carry on from one call to the next.
+fn full_rounds<const N: usize>(rec: &mut Recovery<N>, pn: &mut u64, now: &mut u64, rounds: usize, rtt: u64) {
+    for _ in 0..rounds {
+        let first = *pn;
+        while rec.can_send() {
+            rec.on_packet_sent(sent(*pn, *now)).unwrap();
+            *pn += 1;
+        }
+        *now += rtt;
+        ack(rec, *now, &[(first, *pn - 1)]);
+    }
+}
+
+#[test]
+fn slow_start_on_a_busy_mid_range_path_is_not_cut_by_the_rate_gate() {
+    // 20 ms path, the sender always has data: the window limits it in every round trip, so the gate never applies and
+    // slow start adds every acknowledged byte, as in the algorithm. Applied on every acknowledgement the gate would
+    // end slow start at about 2 x the delivery rate x 20 ms + 44,000 bytes.
+    let mut rec = Recovery::<1024>::new(MSS);
+    let (mut pn, mut now) = (0, 0);
+    rec.on_packet_sent(sent(pn, now)).unwrap();
+    pn += 1;
+    now += 20 * MS;
+    ack(&mut rec, now, &[(0, 0)]);
+    full_rounds(&mut rec, &mut pn, &mut now, 8, 20 * MS);
+    assert_eq!(rec.cc().ssthresh(), u64::MAX, "slow start was not left");
+    assert_eq!(u128::from(rec.cwnd()), u128::from(INITIAL_CWND) + rec.bytes_acked());
+    assert!(rec.cwnd() > 1_000_000, "{}", rec.cwnd());
+}
+
+#[test]
+fn a_trickle_cannot_inflate_the_first_burst_after_it() {
+    // min_rtt 50 ms. One packet per 100 ms for 20 s, each acknowledged 50 ms later: slow start would add 1200 bytes
+    // per acknowledgement, 240,000 in all. Every send is a resumption, so the window never leaves the gate
+    // (12,000 bytes/s measured, 2 x 12,000 x 50 ms + 44,000), and the burst that follows is bounded by it.
+    let mut rec = Recovery::<1024>::new(MSS);
+    for i in 0..200 {
+        let t = i * 100 * MS;
+        rec.on_packet_sent(sent(i, t)).unwrap();
+        ack(&mut rec, t + 50 * MS, &[(i, i)]);
+    }
+    let cap = rec.cc().gate_cap(50 * MS).unwrap();
+    assert_eq!(cap, 2 * 600 + 44_000);
+    let (mut pn, now) = (200, 21 * SECOND);
+    let mut burst = 0;
+    while rec.can_send() {
+        rec.on_packet_sent(sent(pn, now)).unwrap();
+        pn += 1;
+        burst += 1200;
+    }
+    assert!(burst <= cap, "burst {burst} over the gate {cap}");
+    assert!(burst > cap - 3 * 1200, "burst {burst}");
+}
+
+#[test]
+fn after_the_gate_caps_a_resuming_sender_the_window_grows_again() {
+    // Capped once at the resumption; the burst then limits the window, so later rounds are not capped and the window
+    // grows by the congestion avoidance rules.
+    let mut rec = Recovery::<1024>::new(MSS);
+    for i in 0..200 {
+        let t = i * 100 * MS;
+        rec.on_packet_sent(sent(i, t)).unwrap();
+        ack(&mut rec, t + 50 * MS, &[(i, i)]);
+    }
+    let cap = rec.cc().gate_cap(50 * MS).unwrap();
+    let (mut pn, mut now) = (200, 21 * SECOND);
+    full_rounds(&mut rec, &mut pn, &mut now, 1, 50 * MS);
+    assert!(rec.cwnd() >= cap, "{} under the gate {cap}", rec.cwnd());
+    let after_first = rec.cwnd();
+    full_rounds(&mut rec, &mut pn, &mut now, 3, 50 * MS);
+    assert!(
+        rec.cwnd() > after_first,
+        "{} did not grow past {after_first}",
+        rec.cwnd()
+    );
+}
+
+#[test]
+fn a_full_ring_closes_the_window_like_a_full_window() {
+    // 8 slots, a window of 44,000: 8 packets in flight fill the ring long before the window.
+    let mut rec = Recovery::<8>::new(MSS);
+    for pn in 0..8 {
+        assert!(rec.can_send(), "slot {pn} is free");
+        rec.on_packet_sent(sent(pn, pn)).unwrap();
+    }
+    assert!(rec.bytes_in_flight() + MSS <= rec.cwnd(), "the window has room");
+    assert!(!rec.can_send(), "the ring has none");
+    // The head is acknowledged: a done head slot is room.
+    ack(&mut rec, 10 * MS, &[(0, 0)]);
+    assert!(rec.can_send());
+    rec.on_packet_sent(sent(8, 11 * MS)).unwrap();
+    assert!(!rec.can_send());
 }

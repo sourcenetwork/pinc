@@ -444,7 +444,10 @@ fn at_most_200_ghosts_are_kept_oldest_first_out() {
         (0, 0),
         "the 97 oldest ghosts were forgotten"
     );
+    // Ghosts are looked at once every 25 ms: the acknowledgement at 211 ms used this period's look.
     let (s, _) = ack(&mut rec, 212 * MS, &[(98, 297)]);
+    assert_eq!(s.late_acked_packets, 0, "no second look within 25 ms of the first");
+    let (s, _) = ack(&mut rec, 236 * MS, &[(98, 297)]);
     assert_eq!(s.late_acked_packets, 200);
     assert_conserved(&rec);
 }

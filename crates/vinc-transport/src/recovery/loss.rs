@@ -7,7 +7,15 @@
 //! - a relay packet sent on the active path before the latest path switch is lost once `max(rtt * 4 + 50 ms,
 //!   1.5 s)` old;
 //! - a packet on the active relay path is lost once `max(2 * rtt, delay) + 50 ms` old (time only, no packet count);
-//! - any other packet is lost when three packets above it are acknowledged or it is `delay` old.
+//! - any other packet is lost when three packets above it are acknowledged or it is `delay` old; while the path shows
+//!   reordering (the reorder lens, below) only the time rule applies, with `min(max(delay, rtt + 2 * extent), 4 *
+//!   rtt)`.
+//!
+//! The reorder lens: a packet of the active direct path that is acknowledged, or acknowledged late after being declared
+//! lost, at least three numbers below the largest packet acknowledged before was overtaken. The path's reorder extent
+//! becomes the send-time spread between the two (the widest seen while the evidence stays fresh), and the path keeps
+//! the time rule for `max(2 s, 16 smoothed round trips)` after the last such packet. A path that never shows it keeps
+//! the count rule, so nothing changes there.
 //!
 //! The loss timer is the earliest time at which a packet still in flight would cross its threshold. A lost repair
 //! packet or path MTU probe is dropped without a retransmission, a ghost or a congestion signal. Any other loss
@@ -31,6 +39,14 @@ const OLD_PATH_EXTRA: u64 = 50 * MS;
 const RELAY_MIN_DELAY: u64 = 3 * SECOND / 2;
 /// The multiple of the round trip for the active relay path.
 const ACTIVE_RELAY_RTT_FACTOR: u64 = 2;
+/// The reorder lens: the time rule waits `rtt + REORDER_EXTENT_FACTOR * extent` ...
+const REORDER_EXTENT_FACTOR: u64 = 2;
+/// ... at most `REORDER_CAP_RTTS * rtt`.
+const REORDER_CAP_RTTS: u64 = 4;
+/// The reorder lens holds a path on the time rule this long after the last overtaken packet (at least 2 s) ...
+const REORDER_HOLD_MIN: u64 = 2 * SECOND;
+/// ... or this many smoothed round trips, whichever is longer.
+const REORDER_HOLD_RTTS: u64 = 16;
 
 impl<const N: usize> Recovery<N> {
     fn kind_of(&self, path: u8) -> PathKind {
@@ -90,6 +106,9 @@ impl<const N: usize> Recovery<N> {
                     .max(delay)
                     .saturating_add(OLD_PATH_EXTRA);
                 (false, d2)
+            } else if let Some(extent) = self.reorder_extent(sent.path, now) {
+                let wait = rtt.saturating_add(extent.saturating_mul(REORDER_EXTENT_FACTOR));
+                (false, delay.max(wait).min(rtt.saturating_mul(REORDER_CAP_RTTS)))
             } else {
                 (largest >= sent.pn.saturating_add(PACKET_THRESHOLD), delay)
             };
@@ -102,6 +121,29 @@ impl<const N: usize> Recovery<N> {
             newest_lost = newest_lost.max(self.lose_at(idx, now, s, on_event));
         }
         self.settle_losses(now, newest_lost, s);
+    }
+
+    /// The reorder extent of `path` while its evidence is fresh (the reorder lens); `None` keeps the count rule.
+    fn reorder_extent(&self, path: u8, now: u64) -> Option<u64> {
+        let hold = REORDER_HOLD_MIN.max(self.rtt.smoothed().saturating_mul(REORDER_HOLD_RTTS));
+        let r = self.reorder.get(usize::from(path))?;
+        r.seen.filter(|t| now.saturating_sub(*t) < hold).map(|_| r.extent)
+    }
+
+    /// The reorder lens: packet `pn`, sent at `time` on `path`, was just acknowledged (or acknowledged late). If it is
+    /// at least three below the largest packet acknowledged before, on the active direct path, it was overtaken: widen the
+    /// path's extent to the send-time spread and refresh the evidence.
+    pub(super) fn note_overtaken(&mut self, now: u64, pn: u64, time: u64, path: u8) {
+        let Some(prev) = self.largest_acked else { return };
+        if pn.saturating_add(PACKET_THRESHOLD) > prev || path != self.active || self.kind_of(path) != PathKind::Direct {
+            return;
+        }
+        let spread = self.largest_acked_time.saturating_sub(time);
+        let kept = self.reorder_extent(path, now).unwrap_or(0);
+        if let Some(r) = self.reorder.get_mut(usize::from(path)) {
+            r.extent = kept.max(spread);
+            r.seen = Some(now);
+        }
     }
 
     /// Declare the packet at ring index `idx` lost. Returns its send time if it counts as a congestion signal.

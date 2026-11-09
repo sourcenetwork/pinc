@@ -29,8 +29,8 @@ pub(crate) const K_EXT: u8 = 8;
 const TABLE: usize = 24;
 /// Extension frames kept for retransmission at once.
 pub(crate) const EXT_SLOTS: usize = 8;
-/// The most body bytes of an extension frame sent reliably.
-pub const EXT_RELIABLE_MAX: usize = 1024;
+/// The room a held extension frame body has: a packet at the largest path MTU never carries more.
+pub(crate) const EXT_BODY_MAX: usize = super::config::JUMBO_MTU as usize;
 
 /// An extension frame waiting for its acknowledgement.
 #[derive(Debug, Clone, Copy)]
@@ -38,7 +38,7 @@ pub(crate) struct ExtSlot {
     pub(crate) key: u64,
     pub(crate) ty: u64,
     pub(crate) len: usize,
-    pub(crate) body: [u8; EXT_RELIABLE_MAX],
+    pub(crate) body: [u8; EXT_BODY_MAX],
     /// Whether the frame waits to be (re)sent; false while a packet carries it.
     pub(crate) pending: bool,
 }
@@ -76,6 +76,10 @@ pub(crate) struct Ctl {
 }
 
 impl Ctl {
+    #[allow(
+        clippy::large_stack_arrays,
+        reason = "the extension table holds one packet's body per slot"
+    )]
     pub(crate) const fn new() -> Self {
         Self {
             table: [None; TABLE],
@@ -94,7 +98,7 @@ impl Ctl {
         let Some(slot) = self.ext.iter_mut().find(|s| s.is_none()) else {
             return false;
         };
-        let mut buf = [0u8; EXT_RELIABLE_MAX];
+        let mut buf = [0u8; EXT_BODY_MAX];
         let Some(dst) = buf.get_mut(..body.len()) else {
             return false;
         };

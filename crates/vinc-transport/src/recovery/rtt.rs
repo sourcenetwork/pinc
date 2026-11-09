@@ -3,10 +3,12 @@
 //! Every sample is used as measured: acknowledgements carry no delay field, because the receiver's delay is bounded by
 //! a fixed policy ([`max_ack_delay`]) that the sender already allows for in its probe timeout.
 //!
-//! Invariants: `smoothed`, `rttvar` and `latest` are nanoseconds; the minimum is the smallest sample ever seen. The
+//! Invariants: `smoothed`, `rttvar` and `latest` are nanoseconds; the minimum is the smallest sample ever measured. The
 //! first sample sets `smoothed = sample` and `rttvar = sample / 2`; later ones set `rttvar = (3 rttvar + |smoothed -
-//! sample|) / 4` and `smoothed = (7 smoothed + sample) / 8`. All updates use `u128` intermediates and saturate, so no
-//! input can overflow.
+//! sample|) / 4` and `smoothed = (7 smoothed + sample) / 8`. The handshake round trip ([`RttEstimator::seed`]) sets
+//! only the smoothed value and the variation, so the first measured sample is smoothed into it, and the latest and
+//! minimum stay unknown until a sample is measured. All updates use `u128` intermediates and saturate, so no input
+//! can overflow.
 
 use super::math::sat;
 use super::{LONG_RTT, MS, is_long_rtt};
@@ -37,7 +39,10 @@ pub struct RttEstimator {
     smoothed: u64,
     rttvar: u64,
     min: u64,
+    /// The smoothed value is known: seeded or measured.
     has_sample: bool,
+    /// A sample was measured, so `latest` and `min` are known.
+    measured: bool,
 }
 
 impl Default for RttEstimator {
@@ -55,6 +60,18 @@ impl RttEstimator {
             rttvar: INITIAL_RTT / 2,
             min: u64::MAX,
             has_sample: false,
+            measured: false,
+        }
+    }
+
+    /// Seed the smoothed value with the handshake round trip, at least 1 ms, and the variation with half of it. The
+    /// latest and minimum stay unknown, and the first measured sample is smoothed into the seed. Does nothing once
+    /// the smoothed value is known.
+    pub fn seed(&mut self, rtt: u64) {
+        if !self.has_sample {
+            self.has_sample = true;
+            self.smoothed = rtt.max(MS);
+            self.rttvar = self.smoothed / 2;
         }
     }
 
@@ -62,6 +79,7 @@ impl RttEstimator {
     pub fn update(&mut self, sample: u64) {
         self.latest = sample;
         self.min = self.min.min(sample);
+        self.measured = true;
         if !self.has_sample {
             self.has_sample = true;
             self.smoothed = sample;
@@ -73,9 +91,9 @@ impl RttEstimator {
         self.smoothed = sat((7 * u128::from(self.smoothed) + u128::from(sample)) / 8);
     }
 
-    /// The latest sample, or `None` before the first.
+    /// The latest measured sample, or `None` before the first.
     pub const fn latest(&self) -> Option<u64> {
-        if self.has_sample { Some(self.latest) } else { None }
+        if self.measured { Some(self.latest) } else { None }
     }
 
     /// The smoothed round trip; [`INITIAL_RTT`] before the first sample.
@@ -88,12 +106,12 @@ impl RttEstimator {
         self.rttvar
     }
 
-    /// The smallest sample, or `None` before the first.
+    /// The smallest measured sample, or `None` before the first.
     pub const fn min_rtt(&self) -> Option<u64> {
-        if self.has_sample { Some(self.min) } else { None }
+        if self.measured { Some(self.min) } else { None }
     }
 
-    /// Whether at least one sample was taken.
+    /// Whether the smoothed value is known: a sample was measured or the handshake round trip seeded it.
     pub const fn has_sample(&self) -> bool {
         self.has_sample
     }

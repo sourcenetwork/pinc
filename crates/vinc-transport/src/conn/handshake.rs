@@ -90,6 +90,13 @@ pub(crate) struct Timing {
 }
 
 impl Timing {
+    /// Replace what the node knows about its round trips.
+    pub(crate) const fn set_node(&mut self, thin: bool, node_rtt: Option<u64>, node_peak_rtt: Option<u64>) {
+        self.thin = thin;
+        self.node_rtt = node_rtt;
+        self.node_peak_rtt = node_peak_rtt;
+    }
+
     fn is_thin(&self) -> bool {
         self.thin || self.node_rtt.unwrap_or(0).max(self.node_peak_rtt.unwrap_or(0)) >= THIN_RTT
     }
@@ -211,6 +218,8 @@ pub(crate) struct Handshake {
     sample: Option<u64>,
     sampled: bool,
     clock: u64,
+    /// A new flight was queued since the connection last asked.
+    fresh: bool,
 }
 
 impl Handshake {
@@ -255,6 +264,7 @@ impl Handshake {
             sample: None,
             sampled: false,
             clock: now,
+            fresh: false,
         })
     }
 
@@ -292,6 +302,7 @@ impl Handshake {
                         self.tx_wrap = (resume > 0).then_some(resume);
                         self.tx_total_sent = 0;
                         self.tx_active = true;
+                        self.fresh = true;
                         self.tx_retx = self.retransmitting;
                         self.retransmitting = false;
                         // A responder's resend schedule starts when its flight first goes out.
@@ -324,7 +335,7 @@ impl Handshake {
 
     /// React to an event of the machine: a rejected or abandoned ticket restarts the dialing schedule, and an
     /// established session lets go of the buffers it no longer needs.
-    fn on_event(&mut self, pool: &mut BufferPool<'_>, e: &SecEvent) {
+    pub(crate) fn on_event(&mut self, pool: &mut BufferPool<'_>, e: &SecEvent) {
         match e {
             SecEvent::ResumeRejected => {
                 self.sends = 1;
@@ -376,6 +387,40 @@ impl Handshake {
             self.srtt = srtt;
             self.sends = 0;
             self.retx_at = Some(now.saturating_add(pto));
+        }
+    }
+
+    /// Update the node-level timing inputs.
+    pub(crate) const fn set_node_timing(&mut self, thin: bool, node_rtt: Option<u64>, node_peak_rtt: Option<u64>) {
+        self.timing.set_node(thin, node_rtt, node_peak_rtt);
+    }
+
+    /// Whether a flight was queued since the last call (the connection copies it onto its fan-out paths).
+    pub(crate) const fn take_fresh(&mut self) -> bool {
+        let f = self.fresh;
+        self.fresh = false;
+        f
+    }
+
+    /// Queue the flight in the buffer again from its first byte, for another path. Returns whether there is one.
+    pub(crate) const fn replay(&mut self) -> bool {
+        if !self.tx_live || self.tx_len == 0 {
+            return false;
+        }
+        self.tx_off = 0;
+        self.tx_seg_end = self.tx_len;
+        self.tx_wrap = None;
+        self.tx_high = 0;
+        self.tx_total_sent = 0;
+        self.tx_retx = true;
+        self.tx_active = true;
+        true
+    }
+
+    /// Move the pending resend of a dialing side to `at`; ignored once the handshake is past its first flight.
+    pub(crate) const fn set_retransmit_at(&mut self, at: u64) {
+        if self.client && matches!(self.stage, Stage::Open) && self.retx_at.is_some() {
+            self.retx_at = Some(at);
         }
     }
 

@@ -124,6 +124,13 @@ impl Cids {
         }
     }
 
+    /// A number that changes whenever the set of accepted ids does.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.highest
+            .wrapping_mul(2)
+            .wrapping_add(u64::from(self.secret.is_some()))
+    }
+
     /// Whether `cid` is one of the ids this side accepts.
     pub(crate) fn is_local(&self, cid: &ConnId) -> bool {
         self.first_local == *cid || self.entries.iter().flatten().any(|e| e.cid == *cid)

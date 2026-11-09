@@ -5,12 +5,16 @@
 //! 1. each range is checked against the largest packet sent; if the first probe's packet is in it, the window saved
 //!    before that probe is restored (the probe was spurious);
 //! 2. packets in flight inside a range are acknowledged; a packet already declared lost (a ghost) inside a range is
-//!    reported as late-acknowledged and moves its bytes from lost to acknowledged, but is not a new acknowledgement;
+//!    reported as late-acknowledged and moves its bytes from lost to acknowledged, but is not a new acknowledgement.
+//!    Ghosts are looked at once every 25 ms while any exists: ranges are cumulative, so a ghost
+//!    skipped by one acknowledgement is found by a later one;
 //! 3. when the acknowledgement's largest packet had been declared lost, nothing newer is acknowledged and no round
 //!    trip sample exists yet, that packet's send time (at most 4 s old) seeds the estimate;
 //! 4. if nothing was newly acknowledged, stop; otherwise the sample is taken (the largest newly acknowledged packet,
 //!    if it is the acknowledgement's largest), the probe count resets, the congestion controller learns the bytes and
 //!    the sample, and loss detection runs.
+//!
+//! Every packet acknowledged in step 2, late or not, is also evidence for the reorder lens (see `loss`).
 //!
 //! Overflow bounds: sums of packet sizes of at most `N <= 2^31` recorded packets of at most 2^32 bytes stay below
 //! 2^63 in `u64`; byte totals are `u128`.
@@ -20,10 +24,12 @@ use core::ops::RangeInclusive;
 use super::engine::{Event, Recovery, Summary};
 use super::frame_ref::FrameRefs;
 use super::sent::{GHOST_RETENTION, State, is_ghost_data};
-use super::{RecoveryError, SECOND};
+use super::{MS, RecoveryError, SECOND};
 
 /// A late sample seeds the round trip only up to this age (4 s).
 const MAX_LATE_SAMPLE: u64 = 4 * SECOND;
+/// The interval between looks at the ghosts (25 ms).
+const GHOST_SCAN: u64 = 25 * MS;
 
 /// What the ranges of one acknowledgement turned up.
 #[derive(Default)]
@@ -32,6 +38,8 @@ struct Scan {
     frame_largest: Option<u64>,
     /// The newest newly acknowledged packet: (number, send time, path).
     newest: Option<(u64, u64, u8)>,
+    /// Whether this acknowledgement looks at the ghosts.
+    ghosts: bool,
 }
 
 impl<const N: usize> Recovery<N> {
@@ -51,8 +59,13 @@ impl<const N: usize> Recovery<N> {
         F: FnMut(Event<'_>),
     {
         self.clock = self.clock.max(now);
+        self.note_limited(now);
         let mut s = Summary::default();
         let mut scan = Scan::default();
+        if now.saturating_sub(self.ghost_scan) >= GHOST_SCAN && self.ring.has_ghost() {
+            self.ghost_scan = now;
+            scan.ghosts = true;
+        }
         for range in ranges {
             let (start, end) = (*range.start(), *range.end());
             if start > end {
@@ -90,6 +103,7 @@ impl<const N: usize> Recovery<N> {
             return Ok(s);
         };
         if newest_pn == frame_largest {
+            self.largest_acked_time = newest_time;
             let sample = now.saturating_sub(newest_time);
             self.rtt.update(sample);
             self.tgr = self.rtt.smoothed().max(self.tgr - (self.tgr >> 5));
@@ -125,6 +139,7 @@ impl<const N: usize> Recovery<N> {
             let late = match slot.state {
                 State::Done => continue,
                 State::InFlight => false,
+                State::Lost(_) if !scan.ghosts => continue,
                 State::Lost(at) if now.saturating_sub(at) > GHOST_RETENTION => {
                     slot.state = State::Done;
                     continue;
@@ -132,6 +147,7 @@ impl<const N: usize> Recovery<N> {
                 State::Lost(_) => true,
             };
             slot.state = State::Done;
+            self.note_overtaken(now, sent.pn, sent.time, sent.path);
             let size = u64::from(sent.size);
             if late {
                 s.late_acked_packets += 1;

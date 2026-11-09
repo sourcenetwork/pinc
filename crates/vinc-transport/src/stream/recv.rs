@@ -7,13 +7,13 @@
 use super::flow::Window;
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
-use super::{MAX_OFFSET, RANGES, RecvStatus, StreamError};
+use super::{MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
 
 #[derive(Debug)]
 pub(super) struct Recv<const C: usize> {
     pub(super) open: bool,
     ring: Ring<C>,
-    ranges: RangeSet<RANGES>,
+    ranges: RangeSet<RECV_RANGES>,
     pub(super) read_off: u64,
     highest: u64,
     contig: u64,
@@ -61,26 +61,33 @@ impl<const C: usize> Recv<C> {
         self.ranges.clear();
     }
 
-    /// The credit granted beyond what arrived, which the pool must still be able to hold.
+    /// The pool bytes the credit up to the granted limit may still claim: every chunk of the span from the read
+    /// position to the limit that is not held yet. A byte received out of order claims its whole chunk, and a hole
+    /// below the highest byte received is credit not yet used, so neither is counted by bytes.
     pub(super) fn unreceived(&self) -> u64 {
-        if !self.open {
-            return 0;
-        }
-        let reach = self.final_size.map_or(self.win.limit, |f| f.min(self.win.limit));
-        reach.saturating_sub(self.highest)
+        self.pool_demand(self.win.limit)
     }
 
-    /// The limit the window is due to move to, with the increase it means, when at least an eighth of the window was
-    /// freed.
-    pub(super) fn due(&self) -> Option<(u64, u64)> {
+    /// The pool bytes credit up to `limit` may claim, as [`Recv::unreceived`].
+    pub(super) fn pool_demand(&self, limit: u64) -> u64 {
+        let reach = self.final_size.map_or(limit, |f| f.min(limit));
+        if !self.open || reach <= self.read_off {
+            return 0;
+        }
+        let chunk = CHUNK_SIZE as u64;
+        let span = (reach - 1) / chunk - self.read_off / chunk + 1;
+        span.saturating_sub(self.ring.held() as u64).saturating_mul(chunk)
+    }
+
+    /// The limit the window is due to move to, when at least an eighth of the window was freed.
+    pub(super) fn due(&self) -> Option<u64> {
         if !self.open {
             return None;
         }
         let cap = self.final_size.unwrap_or(MAX_OFFSET);
         let candidate = self.read_off.saturating_add(self.win.size).min(cap);
         let limit = self.win.limit;
-        (candidate > limit && candidate >= limit.saturating_add(self.win.size / 8))
-            .then(|| (candidate, candidate - limit))
+        (candidate > limit && candidate >= limit.saturating_add(self.win.size / 8)).then_some(candidate)
     }
 
     fn readable(&self) -> u64 {

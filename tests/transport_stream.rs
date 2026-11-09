@@ -291,6 +291,28 @@ fn a_grant_waits_for_pool_room_and_is_issued_after_a_later_consume() {
 }
 
 #[test]
+fn credit_is_charged_in_whole_chunks_including_the_holes_below_the_highest_byte() {
+    // Windows of 64 KiB: four chunks. One byte in the last chunk makes the highest byte 64 KiB, so a charge by bytes
+    // beyond it would be zero, while the three chunks below it are credit that can still claim the pool.
+    let (mut pool, mut t) = setup(16, |c| c.initial_stream_window = 64 * 1024);
+    let chunk = CHUNK_SIZE as u64;
+    assert_eq!(t.granted_unreceived(), 0, "a stream not opened yet holds no credit");
+    t.on_stream_frame(&mut pool, 0, 64 * 1024 - 1, &[1], false).unwrap();
+    assert_eq!(t.granted_unreceived(), 3 * chunk);
+    // A few bytes at the start claim their whole chunk.
+    t.on_stream_frame(&mut pool, 0, 5, &[1; 10], false).unwrap();
+    assert_eq!(t.granted_unreceived(), 2 * chunk);
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+    // Read everything that arrived in order: the chunk is released, the window moves on, still covered by the pool.
+    t.on_stream_frame(&mut pool, 0, 0, &[1; 5], false).unwrap();
+    t.on_stream_frame(&mut pool, 0, 15, &vec![1; 64 * 1024 - 16], false)
+        .unwrap();
+    assert_eq!(read_all(&mut t, &mut pool, 0).len(), 64 * 1024);
+    drain_control(&mut t);
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+}
+
+#[test]
 fn a_peer_stream_whose_window_does_not_fit_the_pool_is_refused() {
     let (mut pool, mut t) = setup(16, |c| c.initial_stream_window = 96 * 1024);
     // Half of the pool is 128 KiB, so the window is 96 KiB; two do not fit in 256 KiB less a stored chunk.

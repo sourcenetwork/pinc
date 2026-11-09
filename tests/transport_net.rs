@@ -351,6 +351,70 @@ fn switching_needs_a_gain_above_5_ms_on_the_raw_round_trip() {
 }
 
 #[test]
+fn a_slow_path_probed_faster_than_its_round_trip_reads_the_true_round_trip() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(18, Params::new(10 * MS)));
+        bulk(&mut net, &pattern(200_000, 19), 30 * SEC);
+        net.run(net.now + SEC, |_| false);
+        let cur = net.a.conn.path_rtt(PathId(1)).unwrap();
+        assert!((19 * MS..23 * MS).contains(&cur), "{cur}");
+        // A new path with a 40 ms round trip is probed every 33 ms, so a new challenge leaves before the answer to
+        // the last one arrives. The round trip is that of the challenge the answer echoes, not of the latest send.
+        let p = Params::new(20 * MS);
+        net.link.add_route(PathId(3), PathId(4), p, p);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(3))));
+        let measured = net.a.conn.path_rtt(PathId(3)).unwrap();
+        assert!((39 * MS..45 * MS).contains(&measured), "{measured}");
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(PathId(1)),
+            "a slower path does not win the switch"
+        );
+    });
+}
+
+#[test]
+fn a_black_hole_is_detected_and_the_mtu_falls_to_the_minimum() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(12, Params::new(10 * MS).mtu(1500)));
+        net.run(net.now + 2 * SEC, |_| false);
+        assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
+        let big = net.a.conn.max_extension_size(0x41);
+        // After the raise the link drops every datagram above 1200 bytes. Each probe timeout sends the small PING and
+        // then the full-size retransmission of the held frame.
+        let p = Params::new(10 * MS).mtu(1200);
+        net.link.set(PathId(1), p, p);
+        net.a.conn.send_extension(0x41, &vec![5u8; big]).unwrap();
+        assert!(net.run(net.now + 60 * SEC, |n| n.a.conn.path_mtu(PathId(1)) == Some(1200)));
+        assert!(
+            net.a.saw(|r| *r == Rec::ExtensionUndeliverable(0x41, big)),
+            "the held frame is reported"
+        );
+        assert!(
+            net.a.conn.stats().ptos <= 3,
+            "after {} probe timeouts",
+            net.a.conn.stats().ptos
+        );
+        // The path works at the new size: a frame that fits is delivered.
+        let max = net.a.conn.max_extension_size(0x41);
+        assert!(max < big);
+        net.a.conn.send_extension(0x42, &vec![6u8; max]).unwrap();
+        assert!(net.run(net.now + 30 * SEC, |n| {
+            n.b.saw(|r| *r == Rec::Extension(0x42, vec![6u8; max]))
+        }));
+    });
+}
+
+#[test]
 fn a_black_hole_drops_at_the_first_probe_timeout_and_the_next_probe_waits_for_a_path_event() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

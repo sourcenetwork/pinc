@@ -46,8 +46,12 @@ pub const DEFAULT_MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
 pub const DEFAULT_URGENCY: u8 = 3;
 /// The reset code sent for a peer stream refused because too many are live.
 pub const BUSY: u64 = 0x42;
-/// The most disjoint ranges a stream tracks per range map (received, acknowledged, lost).
+/// The most disjoint ranges a stream tracks per range map of the send side (acknowledged, lost).
 pub const RANGES: usize = 16;
+/// The most disjoint ranges a stream tracks of what it received. A packet that does not fit is dropped unacknowledged,
+/// so under deep reordering this must cover the holes of the packet-number tracking and the splits retransmissions
+/// add: the deepest reordering scenario measured needed 65 at 128 packet ranges, and 96 leaves room.
+pub const RECV_RANGES: usize = 96;
 
 /// Whether `id` is unidirectional.
 pub const fn is_uni(id: StreamId) -> bool {

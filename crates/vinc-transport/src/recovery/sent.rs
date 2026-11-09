@@ -165,6 +165,11 @@ impl<const N: usize> SentRing<N> {
         }
     }
 
+    /// Whether any packet declared lost is still recognisable to a late acknowledgement.
+    pub(crate) fn has_ghost(&self) -> bool {
+        (0..self.len).any(|i| self.get(i).is_some_and(|s| matches!(s.state, State::Lost(_))))
+    }
+
     /// Forget the oldest ghosts beyond [`MAX_GHOSTS`].
     pub(crate) fn limit_ghosts(&mut self) {
         let ghosts = (0..self.len)
@@ -180,6 +185,11 @@ impl<const N: usize> SentRing<N> {
                 excess -= 1;
             }
         }
+    }
+
+    /// Whether [`Self::push`] would succeed: a free slot, or a head slot that is not in flight.
+    pub(crate) fn has_room(&self) -> bool {
+        self.len < N || self.get(0).is_some_and(|s| s.state != State::InFlight)
     }
 
     /// Append a packet. Returns false when the ring is full of packets still in flight.

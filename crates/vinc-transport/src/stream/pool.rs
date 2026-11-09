@@ -106,6 +106,14 @@ impl<'p> BufferPool<'p> {
         }
     }
 
+    /// Forget every chunk handed out, so the pool is as new: for a pool whose connection ended. Every
+    /// [`Chunk`] taken before is dead and must be dropped, not freed.
+    pub const fn reset(&mut self) {
+        self.fresh = 0;
+        self.free_head = 0;
+        self.used = 0;
+    }
+
     /// Lower the byte budget to `bytes` (rounded down to whole chunks, never above the slab). Chunks already in use
     /// stay valid; later allocations fail until usage drops below the new budget.
     pub fn set_budget_bytes(&mut self, bytes: u64) {
@@ -205,6 +213,7 @@ impl<'p> BufferPool<'p> {
 #[derive(Debug)]
 pub(super) struct Ring<const C: usize> {
     slots: [Option<Chunk>; C],
+    held: usize,
 }
 
 #[allow(
@@ -218,7 +227,13 @@ const fn ring_index(k: u64, c: usize) -> usize {
 impl<const C: usize> Ring<C> {
     pub(super) const EMPTY: Self = Self {
         slots: [const { None }; C],
+        held: 0,
     };
+
+    /// How many chunks are held.
+    pub(super) const fn held(&self) -> usize {
+        self.held
+    }
 
     fn slot(&self, k: u64) -> Option<&Chunk> {
         self.slots.get(ring_index(k, C)).and_then(Option::as_ref)
@@ -237,6 +252,7 @@ impl<const C: usize> Ring<C> {
     /// Release chunk number `k`, if held.
     pub(super) fn release(&mut self, pool: &mut BufferPool<'_>, k: u64) {
         if let Some(chunk) = self.slots.get_mut(ring_index(k, C)).and_then(Option::take) {
+            self.held -= 1;
             pool.free_chunk(chunk);
         }
     }
@@ -246,6 +262,7 @@ impl<const C: usize> Ring<C> {
         for chunk in self.slots.iter_mut().filter_map(Option::take) {
             pool.free_chunk(chunk);
         }
+        self.held = 0;
     }
 
     /// The bytes of chunk number `k` from `from` to `from + len`, clipped to the chunk.
@@ -265,6 +282,7 @@ impl<const C: usize> Ring<C> {
             let slot = self.slots.get_mut(ring_index(k, C)).ok_or(PoolExhausted)?;
             if slot.is_none() {
                 *slot = Some(pool.alloc_chunk()?);
+                self.held += 1;
             }
             let dst = slot
                 .as_ref()

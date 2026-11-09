@@ -80,10 +80,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// hold, and the peer-opened stream cap to the table size.
     pub fn new(config: &Config, pool: &BufferPool<'_>) -> Self {
         const { assert!(C >= 2 && N >= 1) };
-        let chunk = CHUNK_SIZE as u64;
-        let half = pool.budget_bytes() / 2 / chunk * chunk;
-        let max_stream = config.max_stream_window.min((C as u64 - 1) * chunk).min(half);
-        let stream_window = config.initial_stream_window.min(max_stream);
+        let (max_stream, stream_window) = Self::windows(config, pool);
         let mut streams = Self {
             is_client: config.is_client,
             ids: [NONE; N],
@@ -106,6 +103,41 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         };
         streams.set_peer_limits(&config.peer);
         streams
+    }
+
+    /// The window ceiling and the initial window `config` gives against `pool`.
+    fn windows(config: &Config, pool: &BufferPool<'_>) -> (u64, u64) {
+        let chunk = CHUNK_SIZE as u64;
+        let half = pool.budget_bytes() / 2 / chunk * chunk;
+        let max_stream = config.max_stream_window.min((C as u64 - 1) * chunk).min(half);
+        (max_stream, config.initial_stream_window.min(max_stream))
+    }
+
+    /// Make this table the one [`Streams::new`] builds for `config`, in place. For reuse by a new connection: the
+    /// pool must be fresh (every chunk the old streams held is gone), so no chunk is released here.
+    pub fn reinit(&mut self, config: &Config, pool: &BufferPool<'_>) {
+        let (max_stream, stream_window) = Self::windows(config, pool);
+        for slot in &mut self.slots {
+            *slot = Slot::NEW;
+        }
+        self.is_client = config.is_client;
+        self.ids = [NONE; N];
+        self.hot = [0; N];
+        self.stream_window = stream_window;
+        self.max_stream_window = max_stream;
+        self.target = stream_window;
+        self.meter = Meter::NEW;
+        self.peer = PeerLimits::default();
+        self.max_remote = config.max_streams.min(N as u64);
+        self.local_opened = [0; 2];
+        self.remote_next = [0; 2];
+        self.local_live = 0;
+        self.remote_live = 0;
+        self.refused = [None; REFUSED];
+        self.open = 0;
+        self.buffered = 0;
+        self.stats = StreamStats::default();
+        self.set_peer_limits(&config.peer);
     }
 
     /// Counters of absorbed events.
@@ -259,7 +291,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// slots, with their initial windows covered by the pool, and without passing a stream still being refused.
     fn admits(&self, pool: &BufferPool<'_>, c: usize, next: u64, count: u64) -> bool {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
-        let window = count.saturating_mul(self.stream_window);
+        let chunk = CHUNK_SIZE as u64;
+        let window = count.saturating_mul(self.stream_window.div_ceil(chunk).saturating_mul(chunk));
         let behind_refused = self
             .refused
             .iter()
@@ -430,17 +463,20 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 continue;
             }
             slot.recv.win.size = slot.recv.win.size.max(target);
-            let Some((candidate, increase)) = slot.recv.due() else {
+            let Some(candidate) = slot.recv.due() else {
                 slot.recv.win.deferred = false;
                 continue;
             };
             let sum = *granted.get_or_insert_with(|| self.granted_unreceived());
             let Some(slot) = self.slots.get_mut(i) else { continue };
-            if sum.saturating_add(increase) <= pool.available_bytes() {
+            let demand = sum
+                .saturating_sub(slot.recv.unreceived())
+                .saturating_add(slot.recv.pool_demand(candidate));
+            if demand <= pool.available_bytes() {
                 slot.recv.win.limit = candidate;
                 slot.recv.win.pending = true;
                 slot.recv.win.deferred = false;
-                granted = Some(sum + increase);
+                granted = Some(demand);
             } else {
                 slot.recv.win.deferred = true;
             }

@@ -85,6 +85,7 @@ conn_impl! {
         }
         self.apply_app_writes(now);
         self.run_recovery_timer(env);
+        self.mtu_black_hole_check(now);
         self.on_path_timers(env);
         // A lost probe has waited long enough: the path is probed again.
         for i in 0..NP {

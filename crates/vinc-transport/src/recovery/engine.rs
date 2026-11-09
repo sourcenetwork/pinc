@@ -145,6 +145,15 @@ pub(super) struct SavedWindow {
     pub(super) ssthresh: u64,
 }
 
+/// The reorder lens: what overtaken packets showed about reordering on one path.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Reorder {
+    /// The widest send-time spread between an overtaken packet and the packet acknowledged ahead of it.
+    pub(super) extent: u64,
+    /// When the last overtaken packet was acknowledged.
+    pub(super) seen: Option<u64>,
+}
+
 /// Send times of the newest lost packets, so a late acknowledgement of one can seed an empty round-trip estimate.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct LateSends {
@@ -210,6 +219,13 @@ pub struct Recovery<const N: usize> {
     pub(super) mtu: u64,
     pub(super) late_sends: LateSends,
     pub(super) saved_window: Option<SavedWindow>,
+    pub(super) reorder: [Reorder; MAX_PATHS],
+    /// When the ghosts were last looked at.
+    pub(super) ghost_scan: u64,
+    /// When the window last limited the sender; `None` before the first time.
+    pub(super) limited_at: Option<u64>,
+    /// The send time of the largest acknowledged packet, from the acknowledgement that sampled it.
+    pub(super) largest_acked_time: u64,
 }
 
 impl<const N: usize> Recovery<N> {
@@ -240,6 +256,10 @@ impl<const N: usize> Recovery<N> {
             mtu: mtu.clamp(MIN_MSS, MAX_MSS),
             late_sends: LateSends::new(),
             saved_window: None,
+            reorder: [Reorder { extent: 0, seen: None }; MAX_PATHS],
+            ghost_scan: 0,
+            limited_at: None,
+            largest_acked_time: 0,
         }
     }
 
@@ -250,12 +270,11 @@ impl<const N: usize> Recovery<N> {
         &self.rtt
     }
 
-    /// Seed the estimate with the handshake round trip when no acknowledgement has given a sample yet, so the first
-    /// probe timeout, the loss timer and the pacer start from it instead of the initial guess.
+    /// Seed the smoothed round trip and its variation with the handshake round trip when the estimate is still empty,
+    /// so the first probe timeout, the loss timer and the pacer start from it instead of the initial guess. The
+    /// latest and minimum round trip stay unknown until an acknowledgement measures them (see [`RttEstimator::seed`]).
     pub fn seed_rtt(&mut self, rtt: u64) {
-        if !self.rtt.has_sample() {
-            self.rtt.update(rtt);
-        }
+        self.rtt.seed(rtt);
     }
 
     /// The congestion controller.
@@ -278,9 +297,11 @@ impl<const N: usize> Recovery<N> {
         self.acct.in_flight
     }
 
-    /// Whether the window has room for one more datagram of the path's size: `in_flight + mtu <= cwnd`.
-    pub const fn can_send(&self) -> bool {
-        self.acct.in_flight.saturating_add(self.mtu) <= self.cc.cwnd()
+    /// Whether the window has room for one more datagram of the path's size, `in_flight + mtu <= cwnd`, and the ring
+    /// has a slot to record it. A full ring closes the window like a full `cwnd`: the caller then sends only what is
+    /// never recorded (an acknowledgement), instead of building data packets the ring refuses.
+    pub fn can_send(&self) -> bool {
+        self.acct.in_flight.saturating_add(self.mtu) <= self.cc.cwnd() && self.ring.has_room()
     }
 
     /// Cumulative bytes of recorded packets sent.
@@ -449,11 +470,16 @@ impl<const N: usize> Recovery<N> {
         self.clock = self.clock.max(now);
     }
 
-    /// Whether the node is thin as far as this connection can tell: no round-trip sample yet, or the node round trip,
-    /// the minimum round trip or half the smoothed round trip is 250 ms or more.
+    /// Whether the node is thin as far as this connection can tell: no round-trip estimate yet (a handshake seed
+    /// counts), or the node round trip, the minimum round trip or half the smoothed round trip is 250 ms or more.
     pub fn is_thin(&self) -> bool {
-        let Some(min) = self.rtt.min_rtt() else { return true };
-        self.node_rtt().max(min).max(self.rtt.smoothed() >> 1) >= THIN_RTT
+        if !self.rtt.has_sample() {
+            return true;
+        }
+        self.node_rtt()
+            .max(self.rtt.min_rtt().unwrap_or(0))
+            .max(self.rtt.smoothed() >> 1)
+            >= THIN_RTT
     }
 
     // ---- sending ----
@@ -480,6 +506,9 @@ impl<const N: usize> Recovery<N> {
         }
         self.clock = self.clock.max(p.time);
         self.ring.trim(p.time);
+        if self.unlimited_for(p.time) {
+            self.cc.resume(self.rtt.min_rtt());
+        }
         if !self.ring.push(p) {
             return Err(RecoveryError::RingFull);
         }
@@ -491,7 +520,22 @@ impl<const N: usize> Recovery<N> {
             self.pacer
                 .on_sent(p.time, self.mtu, self.rtt.smoothed(), self.cc.cwnd());
         }
+        self.note_limited(p.time);
         Ok(())
+    }
+
+    /// Remember that the window limits the sender at `now`: it cannot send, or at least half of the window is in
+    /// flight (a paced or credit-limited sender that keeps the path busy is not idle).
+    pub(super) fn note_limited(&mut self, now: u64) {
+        if !self.can_send() || self.acct.in_flight >= self.cc.cwnd() / 2 {
+            self.limited_at = Some(now);
+        }
+    }
+
+    /// Whether the window has not limited the sender for at least one smoothed round trip (or ever).
+    fn unlimited_for(&self, now: u64) -> bool {
+        self.limited_at
+            .is_none_or(|t| now.saturating_sub(t) >= self.rtt.smoothed())
     }
 
     /// Note that packet `pn` was sent without being recorded: an acknowledgement-only packet, a probe, a path

@@ -93,13 +93,16 @@ conn_impl! {
         if self.hs.timed_out() && self.phase == Phase::Handshaking {
             self.silent_close(CloseReason::HandshakeTimeout);
         }
+        if self.hs.take_fresh() {
+            self.fan_mask = self.fan_set;
+        }
         if self.hs.request.is_some() && !self.hs.request_announced {
             self.hs.request_announced = true;
             self.push(Ev::KeyRequest);
         }
     }
 
-    fn on_hs_event(&mut self, env: &mut Env<'_, P>, ev: SecEvent) {
+    pub(super) fn on_hs_event(&mut self, env: &mut Env<'_, P>, ev: SecEvent) {
         let now = env.now;
         match ev {
             SecEvent::EarlyKeys(e) => match Dir::early(env.provider, &e) {

@@ -1,0 +1,164 @@
+//! Hooks for the endpoint layer: what `vinc-core` needs from a connection and the connection alone can give.
+//!
+//! The endpoint recycles a connection's memory ([`Connection::into_resources`]), answers key requests it was told
+//! about ([`Connection::pending_key_request`]), feeds the node-wide round trips back ([`Connection::set_node_rtt`]),
+//! moves the first resend of a dial ([`Connection::set_first_retransmit`]), defers the first path MTU probe
+//! ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
+//! ([`Connection::set_flight_fanout`]) and starts a sub-session ([`Connection::sub_session`]).
+//!
+//! Invariants: a sub-session is born established with keys derived from its parent's, so it needs no handshake
+//! message and no round trip; the flight fan-out only repeats bytes the handshake already queued, one path after the
+//! other, and never changes what the primary path sends.
+
+use vinc_crypto::Provider;
+use vinc_security::{
+    Alpn, AlpnList, ConnId, CreditRecord, Env, Established, Failure, KeyRequest, LocalIdentity, Responder,
+    ResponderConfig, TicketBatch, sub_session_secret,
+};
+
+use super::config::{Config, PathId, PathInfo};
+use super::handshake::Machine;
+use super::{Connection, Resources};
+use crate::stream::StreamSource;
+use vinc_security::Event as SecEvent;
+
+/// What a sub-session is opened from: the parent session, the protocol and the two connection ids.
+#[derive(Debug, Clone, Copy)]
+pub struct SubOpen<'p> {
+    /// Whether this side opened the sub-session (the dialer) or accepts it.
+    pub client: bool,
+    /// The established parent session; its secrets seed the sub-session's keys.
+    pub parent: &'p Established,
+    /// The application protocol of the sub-session.
+    pub alpn: Alpn,
+    /// The dialer's connection id for the sub-session.
+    pub cc: ConnId,
+    /// The accepting side's connection id for the sub-session.
+    pub cs: ConnId,
+    /// This node's identity (the shell handshake machine needs one; it signs nothing).
+    pub identity: LocalIdentity,
+    /// The path the sub-session starts on: the parent's active path.
+    pub path: PathId,
+    /// What the endpoint knows about that path.
+    pub path_info: PathInfo,
+}
+
+conn_impl! {
+    /// Give back the memory this connection used, for the next one. The pool is not reset here.
+    pub fn into_resources(self) -> Resources<'a, S, N, C> {
+        Resources { pool: self.pool, streams: self.streams, loss: self.loss }
+    }
+
+    /// The key operation the handshake waits for, if any, after an [`Event::KeyRequest`](super::Event::KeyRequest).
+    pub fn pending_key_request(&self) -> Option<KeyRequest<'_>> {
+        self.hs.request.as_ref().map(super::handshake::OwnedRequest::as_request)
+    }
+
+    /// A number that changes whenever the set of connection ids [`local_cids`](Self::local_cids) yields changes.
+    pub fn cid_epoch(&self) -> u64 {
+        self.cids.epoch()
+    }
+
+    /// Feed the node-wide round trips back: the largest recent round trip (the probe timeout of a connection with
+    /// no sample starts from it), the average handshake round trip, and whether the node is on a constrained link.
+    /// A zero value leaves that input as it was.
+    pub fn set_node_rtt(&mut self, peak: u64, handshake: u64, thin: bool) {
+        if peak > 0 {
+            self.rec.set_node_rtt(peak.max(self.rec.peak_rtt()));
+            self.cfg.node_peak_rtt = Some(peak);
+        }
+        if handshake > 0 {
+            self.rec.set_handshake_rtt(handshake);
+            self.cfg.node_rtt = Some(handshake);
+        }
+        self.cfg.thin = thin;
+        self.hs.set_node_timing(thin, self.cfg.node_rtt, self.cfg.node_peak_rtt);
+    }
+
+    /// Move the pending first resend of a dialing handshake to the absolute time `at`. Ignored once the first
+    /// flight is answered.
+    pub fn set_first_retransmit(&mut self, at: u64) {
+        self.hs.set_retransmit_at(at);
+    }
+
+    /// No path MTU probe is sent before `until`.
+    pub fn defer_mtu_probe(&mut self, until: u64) {
+        self.life.qr_until = self.life.qr_until.max(until);
+    }
+
+    /// Send every handshake flight, and each resend of it, on the given paths as well as the active one. The flight
+    /// leaves on the active path first, then on each listed path in turn; paths the connection does not track are
+    /// ignored. An empty list turns the fan-out off.
+    pub fn set_flight_fanout(&mut self, ids: &[PathId]) {
+        self.fan_set = ids
+            .iter()
+            .filter_map(|id| self.paths.find(*id))
+            .filter(|i| *i != self.paths.active && *i < 16)
+            .fold(0u16, |m, i| m | (1 << i));
+        self.fan_mask = if self.hs.has_tx() { self.fan_set } else { 0 };
+        if self.fan_set == 0 {
+            self.fan_target = None;
+        }
+    }
+
+    /// Replay the flight on the next fan-out path once the current one is fully out.
+    pub(super) fn fan_step(&mut self) {
+        if self.hs.has_tx() {
+            return;
+        }
+        self.fan_target = None;
+        while self.fan_mask != 0 {
+            let i = self.fan_mask.trailing_zeros() as usize;
+            self.fan_mask &= !(1u16 << i);
+            if i != self.paths.active && self.paths.get(i).is_some() && self.hs.replay() {
+                self.fan_target = Some(i);
+                return;
+            }
+        }
+    }
+
+    /// Start a sub-session: a connection born established, with keys from the parent session's secrets, the
+    /// connection ids `cc` and `cs`, and the parent's active path. [`Event::Connected`](super::Event::Connected) is
+    /// ready at once and data can be written before any packet is exchanged.
+    ///
+    /// # Errors
+    /// A [`Failure`] if the protocol cannot be listed or the pool has no chunk.
+    pub fn sub_session(
+        cfg: Config,
+        open: SubOpen<'_>,
+        res: Resources<'a, S, N, C>,
+        env: &mut Env<'_, P>,
+    ) -> Result<Self, Failure> {
+        let SubOpen { client, parent, alpn, cc, cs, identity, path, path_info } = open;
+        let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };
+        let local = Self::advertise(&cfg, res.streams);
+        let a = alpn.as_bytes();
+        let est = Established {
+            peer: parent.peer,
+            alpn,
+            traffic: parent.traffic.sub_session(a, cc.as_bytes(), cs.as_bytes()),
+            resume: sub_session_secret(&parent.resume, a, cc.as_bytes(), cs.as_bytes()),
+            tickets: TicketBatch::new(),
+            resumed: false,
+            peer_credit: parent.peer_credit,
+            local_credit: local,
+            remembered_credit: CreditRecord::NONE,
+            cid_secret: sub_session_secret(&parent.cid_secret, a, cc.as_bytes(), cs.as_bytes()),
+        };
+        let alpns = AlpnList::new(&[a]).ok_or(Failure::InvalidParameter)?;
+        let shell = Machine::Server(Responder::new(ResponderConfig::new(identity, first_local, alpns)));
+        let mut c = Self::base(client, cfg, res, shell, first_local, ConnId::default(), env.now, local)?;
+        c.cids.set_first_remote(first_remote);
+        c.new_path_slot(path, path_info, env.now);
+        if let Some(p) = c.paths.active_mut() {
+            p.validated = true;
+            p.amp.validate();
+        }
+        c.sess_amp.validate();
+        c.hs.on_event(&mut c.pool, &SecEvent::Established(est.clone()));
+        c.on_hs_event(env, SecEvent::Established(est));
+        c.confirmed = true;
+        c.hs.confirm(&mut c.pool);
+        Ok(c)
+    }
+}

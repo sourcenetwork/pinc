@@ -1,9 +1,10 @@
 //! Paths: validation, following the peer, the active-path choice, the idle rules and path MTU state.
 //!
 //! A connection keeps at most `NP` paths. Each has its own validated flag, [`AmpBudget`], datagram size, round trip
-//! and last-heard and last-sent times. A path is validated by an answered PATH_CHALLENGE (the previous challenge is
+//! and last-heard time. A path is validated by an answered PATH_CHALLENGE (the previous challenge is
 //! accepted too, so a replaced challenge cannot strand the answer to the first); the round trip it gives is the time
-//! since the last datagram sent on the path. Challenges and responses are small and unpadded: the datagram size is
+//! since the challenge the response echoes was first sent, kept in a small table of the outstanding challenges, so
+//! challenges repeated faster than the round trip cannot under-read it. Challenges and responses are small and unpadded: the datagram size is
 //! found by the separate probe.
 //!
 //! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves
@@ -66,6 +67,8 @@ const QUIET_RTT: u64 = 700 * MS;
 const QUIET_RX: u64 = 75 * SECOND;
 /// A round trip at least this long is a slow path.
 const SLOW_RTT: u64 = 250 * MS;
+/// Outstanding challenges kept per path with their send times.
+const CHALLENGES: usize = 4;
 /// Data larger than this is more than a control message.
 pub(crate) const CTRL_SMALL: usize = 72;
 
@@ -84,6 +87,11 @@ pub(crate) struct Mtu {
     pub(crate) last_big: Option<u64>,
     /// The newest full-size packet the peer acknowledged.
     pub(crate) big_acked: Option<u64>,
+    /// The newest full-size packet sent before the last probe-timeout PING.
+    pub(crate) ping_big: Option<u64>,
+    /// A black-hole suspicion: that full-size packet, and the time (one round trip after the PING was acknowledged)
+    /// at which it is still unacknowledged evidence.
+    pub(crate) suspect: Option<(u64, u64)>,
 }
 
 /// One network path.
@@ -95,9 +103,12 @@ pub(crate) struct Path {
     pub(crate) validated: bool,
     pub(crate) amp: AmpBudget,
     pub(crate) mtu: Mtu,
-    /// The challenge outstanding on this path, and the one it replaced.
+    /// The challenge outstanding on this path.
     pub(crate) challenge: Option<[u8; 8]>,
-    pub(crate) prev_challenge: Option<[u8; 8]>,
+    /// The newest challenges (the outstanding one and those it replaced) with the time each was first sent, 0 while
+    /// unsent; the oldest entry is overwritten.
+    pub(crate) sent: [Option<([u8; 8], u64)>; CHALLENGES],
+    sent_next: usize,
     /// When the outstanding migration challenge was sent.
     pub(crate) challenge_at: u64,
     /// The challenge is waiting for a packet.
@@ -111,9 +122,8 @@ pub(crate) struct Path {
     pub(crate) rj_back: u64,
     /// The smoothed round trip of the path, 0 while unknown.
     pub(crate) rtt: u64,
-    /// When a datagram last arrived and last left on this path, 0 for never.
+    /// When a datagram last arrived on this path, 0 for never.
     pub(crate) last_rx: u64,
-    pub(crate) last_tx: u64,
     /// The peer's id this path sends with, and its index.
     pub(crate) dcid: Option<ConnId>,
 }
@@ -134,9 +144,12 @@ impl Path {
                 started: false,
                 last_big: None,
                 big_acked: None,
+                ping_big: None,
+                suspect: None,
             },
             challenge: None,
-            prev_challenge: None,
+            sent: [None; CHALLENGES],
+            sent_next: 0,
             challenge_at: 0,
             send_challenge: false,
             response: None,
@@ -148,9 +161,31 @@ impl Path {
             rj_back: 0,
             rtt: 0,
             last_rx: 0,
-            last_tx: 0,
             dcid: None,
         }
+    }
+
+    /// Record a fresh challenge, keeping the ones it replaces.
+    fn push_challenge(&mut self, data: [u8; 8]) {
+        self.challenge = Some(data);
+        if let Some(s) = self.sent.get_mut(self.sent_next) {
+            *s = Some((data, 0));
+        }
+        self.sent_next = (self.sent_next + 1) % CHALLENGES;
+    }
+
+    /// Note that the challenge `data` left on the path at `now`; only the first send counts.
+    pub(crate) fn challenge_sent(&mut self, data: [u8; 8], now: u64) {
+        if let Some((_, at)) = self.sent.iter_mut().flatten().find(|(d, _)| *d == data)
+            && *at == 0
+        {
+            *at = now;
+        }
+    }
+
+    /// The time the challenge `data` was first sent, if it is one of the outstanding ones.
+    fn challenge_time(&self, data: [u8; 8]) -> Option<u64> {
+        self.sent.iter().flatten().find(|(d, _)| *d == data).map(|(_, at)| *at)
     }
 
     /// The cost used to rank paths.
@@ -352,8 +387,7 @@ conn_impl! {
         let Ok(data) = env.random::<8>() else { return };
         let now = env.now;
         let Some(p) = self.paths.get_mut(i) else { return };
-        p.prev_challenge = p.challenge;
-        p.challenge = Some(data);
+        p.push_challenge(data);
         p.challenge_at = now;
     }
 
@@ -380,17 +414,15 @@ conn_impl! {
     /// A PATH_RESPONSE arrived on path `i`.
     pub(super) fn on_path_response(&mut self, i: usize, data: [u8; 8], now: u64) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        if p.challenge != Some(data) && p.prev_challenge != Some(data) {
-            return;
-        }
+        let Some(sent_at) = p.challenge_time(data) else { return };
         let was = p.validated;
-        p.prev_challenge = None;
+        p.sent = [None; CHALLENGES];
         p.challenge = None;
         p.send_challenge = false;
         p.validated = true;
         p.amp.validate();
         p.probes_left = 0;
-        p.rtt = if p.last_tx == 0 { 0 } else { now.saturating_sub(p.last_tx) };
+        p.rtt = if sent_at == 0 { 0 } else { now.saturating_sub(sent_at) };
         p.rejoin = false;
         let id = p.id;
         if !was {
@@ -438,6 +470,7 @@ conn_impl! {
             self.rec.set_max_datagram_size(mtu);
         }
         self.rx.set_min_rtt(self.rec.rtt().min_rtt());
+        self.shed_extensions();
     }
 
     /// The best usable path: validated, and not a direct path that went quiet for 15 s.

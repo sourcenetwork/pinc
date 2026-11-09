@@ -22,6 +22,7 @@ use vinc_wire::Writer;
 
 use super::config::{MIN_MTU, PROBE_MTU, PathId};
 use super::ctl::{K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
+use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
 use crate::packet::{ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, seal};
@@ -136,6 +137,7 @@ conn_impl! {
             return None;
         }
         self.roll_tick(env);
+        self.fan_step();
         let order = self.target_order();
         for ti in order.into_iter().flatten() {
             let Some(first) = self.build_datagram(env, ti, out) else { continue };
@@ -162,12 +164,18 @@ conn_impl! {
     }
 
     /// Candidate paths for the next datagram: standby paths with path-specific work, then the active path.
-    fn target_order(&self) -> [Option<usize>; 5] {
-        let mut order = [None; 5];
+    fn target_order(&self) -> [Option<usize>; 6] {
+        let mut order = [None; 6];
         let mut n = 0;
+        if let Some(i) = self.fan_target.filter(|i| *i != self.paths.active) {
+            if let Some(s) = order.first_mut() {
+                *s = Some(i);
+            }
+            n = 1;
+        }
         for (i, p) in self.paths.iter() {
             let work = p.send_challenge || p.response.is_some() || p.echo.is_some();
-            if i != self.paths.active && work && n < 4 {
+            if i != self.paths.active && Some(i) != self.fan_target && work && n < 5 {
                 if let Some(s) = order.get_mut(n) {
                     *s = Some(i);
                 }
@@ -254,7 +262,6 @@ conn_impl! {
         let p = self.paths.get_mut(ti)?;
         debug_assert!(p.amp.can_send(len as u64));
         p.amp.on_send(charge);
-        p.last_tx = now;
         self.sess_amp.on_send(charge);
         self.stats.datagrams_sent += 1;
         self.stats.bytes_sent += len as u64;
@@ -453,6 +460,9 @@ conn_impl! {
         self.life.ack_now = false;
         if fill.ping_only && self.paths.get(ti).is_some_and(|p| p.mtu.current > MIN_MTU) {
             self.life.small_ping = Some(pn);
+            if let Some(p) = self.paths.get_mut(ti) {
+                p.mtu.ping_big = p.mtu.last_big;
+            }
         }
         if total > usize::from(MIN_MTU)
             && let Some(p) = self.paths.get_mut(ti)
@@ -581,7 +591,7 @@ conn_impl! {
         // Control frames.
         self.fill_control(payload, &mut pos, &mut out, fill);
         // PATH frames.
-        self.fill_path(payload, &mut pos, &mut out, ti);
+        self.fill_path(payload, &mut pos, &mut out, ti, fill.now);
         // Retransmissions and new stream data.
         if fill.allow_cc {
             self.fill_streams(payload, &mut pos, &mut out);
@@ -661,11 +671,18 @@ conn_impl! {
     /// Extension frames: queued ones move into the retransmission table as slots free up, and every slot waiting to
     /// go is sent, to stay in the table until its packet is acknowledged.
     fn fill_extensions(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled) {
+        self.shed_extensions();
         while let Some(entry) = self.ext.peek_send(&self.pool) {
             let Ok((ty, n)) = vinc_wire::varint::decode(entry) else {
                 self.ext.pop_send(&mut self.pool);
                 continue;
             };
+            let len = entry.len() - n;
+            if len > self.max_extension_size(ty) {
+                self.ext.pop_send(&mut self.pool);
+                self.events.push(Ev::ExtensionUndeliverable(ty, len));
+                continue;
+            }
             if !self.ctl.hold_ext(ty, entry.get(n..).unwrap_or_default()) {
                 break;
             }
@@ -685,7 +702,7 @@ conn_impl! {
         }
     }
 
-    fn fill_path(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, ti: usize) {
+    fn fill_path(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, ti: usize, now: u64) {
         let Some(p) = self.paths.get(ti).copied() else { return };
         if let Some(d) = p.response
             && put(payload, pos, &Frame::PathResponse(d))
@@ -701,6 +718,7 @@ conn_impl! {
         {
             if let Some(pm) = self.paths.get_mut(ti) {
                 pm.send_challenge = false;
+                pm.challenge_sent(data, now);
             }
             out.weak();
         }

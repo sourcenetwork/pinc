@@ -340,5 +340,9 @@ path = "trace_keyroll.rs"
 name = "trace_security"
 path = "trace_security.rs"
 
+[[test]]
+name = "transport_wide"
+path = "transport_wide.rs"
+
 [lints]
 workspace = true

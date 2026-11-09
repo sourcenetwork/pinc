@@ -148,6 +148,14 @@ pub enum Event<'a> {
         /// The frame body.
         body: &'a [u8],
     },
+    /// An extension frame that was queued with [`send_extension`](super::Connection::send_extension) no longer fits one
+    /// packet because the path MTU fell. It was dropped and will not be sent: send it again in smaller frames.
+    ExtensionUndeliverable {
+        /// The frame type.
+        ty: u64,
+        /// The body length that no longer fits.
+        len: usize,
+    },
     /// A path answered its challenge.
     PathValidated(PathId),
     /// A path failed validation, or the active path stopped answering.
@@ -178,6 +186,7 @@ pub(crate) enum Ev {
     Reset(StreamId, u64),
     Datagram,
     Extension,
+    ExtensionUndeliverable(u64, usize),
     PathValidated(PathId),
     PathFailed(PathId),
     PeerAsleep,

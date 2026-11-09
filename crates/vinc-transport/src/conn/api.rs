@@ -4,7 +4,7 @@ use vinc_crypto::Provider;
 use vinc_security::Env;
 use vinc_wire::varint;
 
-use super::ctl::EXT_RELIABLE_MAX;
+use super::ctl::EXT_BODY_MAX;
 use super::event::{Ev, Event};
 use super::path::CTRL_SMALL;
 use super::{Connection, MIN_MTU, Phase};
@@ -14,8 +14,36 @@ use crate::stream::{RecvStatus, StreamError, StreamId, StreamSource};
 
 /// A DATAGRAM frame spends its type and a two-byte length besides the data.
 const DATAGRAM_FRAME_OVERHEAD: usize = 3;
-/// The largest extension frame, type included, that [`send_extension`](Connection::send_extension) queues.
-const EXT_ENTRY_MAX: usize = 9300;
+/// The largest extension queue entry: the type, then a body of at most [`EXT_BODY_MAX`] bytes.
+const EXT_ENTRY_MAX: usize = EXT_BODY_MAX + 9;
+/// The length prefix of an extension frame, at most two bytes below the largest MTU.
+const EXT_LEN_PREFIX: usize = 2;
+
+/// Why an extension frame could not be queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionError {
+    /// The type is below 0x40 or cannot be encoded.
+    BadType,
+    /// The body cannot fit one packet at the current path MTU.
+    TooLarge {
+        /// The largest body that fits now.
+        max_size: usize,
+    },
+    /// The pool has no chunk left and nothing older could be dropped to make room.
+    Exhausted,
+}
+
+impl core::fmt::Display for ExtensionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::BadType => "extension frame type below 0x40",
+            Self::TooLarge { .. } => "extension frame larger than one packet",
+            Self::Exhausted => "buffer pool exhausted",
+        })
+    }
+}
+
+impl core::error::Error for ExtensionError {}
 /// A short packet spends its first byte and the 16-byte tag besides the packet number and the connection id.
 const SHORT_PACKET_FIXED: usize = 1 + 16;
 /// The send buffer holds at least this much whatever the window (192 KiB).
@@ -53,6 +81,7 @@ conn_impl! {
                     self.ext_release = true;
                     Event::Extension { ty, body: entry.get(n..).unwrap_or_default() }
                 }
+                Ev::ExtensionUndeliverable(ty, len) => Event::ExtensionUndeliverable { ty, len },
                 Ev::Connected(resumed) => Event::Connected { resumed },
                 Ev::Opened(id) => Event::StreamOpened(id),
                 Ev::Readable(id) => Event::StreamReadable(id),
@@ -187,29 +216,64 @@ conn_impl! {
         self.dgrams.send_datagram(&mut self.pool, data, max)
     }
 
-    /// Queue an extension frame (type 0x40 and up, body up to [`EXT_RELIABLE_MAX`] bytes) for the endpoint layer. It
-    /// is sent ahead of stream data and sent again whenever its packet is declared lost, until a packet carrying it
-    /// is acknowledged; the peer may therefore receive it more than once. The queue is bounded and drops its oldest
-    /// entry when full.
+    /// The largest body [`send_extension`](Self::send_extension) takes for type `ty` on the active path now: what is
+    /// left of a packet's payload after the type and the length prefix of the frame.
+    pub fn max_extension_size(&self, ty: u64) -> usize {
+        if !self.is_open() {
+            return 0;
+        }
+        let mtu = self.paths.active().map_or(usize::from(MIN_MTU), |p| usize::from(p.mtu.current));
+        // The widest packet number, so the room holds if the width grows after the frame is queued.
+        let payload = mtu.saturating_sub(SHORT_PACKET_FIXED + PN_LEN_WIDE + self.cfg.cid_len);
+        payload.saturating_sub(varint::encoded_len(ty) + EXT_LEN_PREFIX).min(EXT_BODY_MAX)
+    }
+
+    /// Drop every held extension frame that no longer fits one packet at the current path MTU, freeing its slot, and
+    /// tell the application with [`Event::ExtensionUndeliverable`].
+    pub(super) fn shed_extensions(&mut self) {
+        if !self.is_open() {
+            return;
+        }
+        for i in 0..self.ctl.ext.len() {
+            let Some((ty, len)) = self.ctl.ext.get(i).and_then(|s| s.as_ref().map(|s| (s.ty, s.len))) else { continue };
+            if len > self.max_extension_size(ty) {
+                if let Some(s) = self.ctl.ext.get_mut(i) {
+                    *s = None;
+                }
+                self.events.push(Ev::ExtensionUndeliverable(ty, len));
+            }
+        }
+    }
+
+    /// Queue an extension frame (type 0x40 and up) for the endpoint layer. It is sent ahead of stream data and sent
+    /// again whenever its packet is declared lost, until a packet carrying it is acknowledged; the peer may therefore
+    /// receive it more than once. The queue is bounded and drops its oldest entry when full. The frame must fit one
+    /// packet at the current path MTU, see [`max_extension_size`](Self::max_extension_size).
     ///
     /// # Errors
-    /// [`DatagramError::TooLarge`] if the body is longer than [`EXT_RELIABLE_MAX`] or `ty` is below 0x40, and
-    /// [`DatagramError::Exhausted`] when the pool is empty.
-    pub fn send_extension(&mut self, ty: u64, body: &[u8]) -> Result<(), DatagramError> {
-        if ty < crate::frame::EXTENSION_BASE || body.len() > EXT_RELIABLE_MAX {
-            return Err(DatagramError::TooLarge { max_size: EXT_RELIABLE_MAX });
+    /// [`ExtensionError::BadType`] if `ty` is below 0x40 or not a varint, [`ExtensionError::TooLarge`] if the body
+    /// cannot fit one packet, and [`ExtensionError::Exhausted`] when the pool is empty.
+    pub fn send_extension(&mut self, ty: u64, body: &[u8]) -> Result<(), ExtensionError> {
+        if ty < crate::frame::EXTENSION_BASE {
+            return Err(ExtensionError::BadType);
+        }
+        let max_size = self.max_extension_size(ty);
+        if body.len() > max_size {
+            return Err(ExtensionError::TooLarge { max_size });
         }
         let mut buf = [0u8; 9];
-        let head = varint::encode(ty, &mut buf).map_err(|_| DatagramError::TooLarge { max_size: EXT_RELIABLE_MAX })?;
+        let head = varint::encode(ty, &mut buf).map_err(|_| ExtensionError::BadType)?;
         // The queue holds one contiguous entry: the type, then the body.
         let mut entry = [0u8; EXT_ENTRY_MAX];
-        let used = entry.get_mut(..head + body.len()).ok_or(DatagramError::TooLarge { max_size: EXT_RELIABLE_MAX })?;
+        let used = entry.get_mut(..head + body.len()).ok_or(ExtensionError::TooLarge { max_size })?;
         let (h, b) = used.split_at_mut(head);
         h.copy_from_slice(buf.get(..head).unwrap_or_default());
         b.copy_from_slice(body);
         let used = &*used;
         self.life.app_written = true;
-        self.ext.send_datagram(&mut self.pool, used, EXT_ENTRY_MAX)
+        self.ext
+            .send_datagram(&mut self.pool, used, EXT_ENTRY_MAX)
+            .map_err(|_| ExtensionError::Exhausted)
     }
 
     /// The oldest received datagram, borrowed; remove it with [`pop_datagram`](Self::pop_datagram).

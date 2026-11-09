@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId, PathInfo, code};
+use vinc_transport::conn::{CloseReason, ExtensionError, PathId, PathInfo, code};
 use vinc_transport::recovery::PathKind;
 
 vinc_tests::install_counting_allocator!();
@@ -235,7 +235,94 @@ fn an_extension_frame_is_sent_again_when_its_packet_is_lost() {
         assert!(net.run(net.now + 10 * SEC, |n| {
             n.b.saw(|r| *r == Rec::Extension(0x41, b"sub open".to_vec()))
         }));
-        assert!(net.a.conn.send_extension(0x41, &[0u8; 1025]).is_err());
+        let max = net.a.conn.max_extension_size(0x41);
+        assert!(max > 1025, "{max}");
+        assert_eq!(
+            net.a.conn.send_extension(0x41, &vec![0u8; max + 1]),
+            Err(ExtensionError::TooLarge { max_size: max })
+        );
+        assert_eq!(net.a.conn.send_extension(0x10, b"low"), Err(ExtensionError::BadType));
+    });
+}
+
+#[test]
+fn an_extension_frame_near_the_packet_limit_is_delivered_once_under_loss() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(8, Params::new(10 * MS).mtu(1500)));
+        net.run(net.now + 2 * SEC, |_| false);
+        assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
+        let max = net.a.conn.max_extension_size(0x41);
+        assert!(max > 1300, "{max}");
+        let body: Vec<u8> = (0..max).map(|i| (i % 251) as u8).collect();
+        net.link.route(PathId(1)).ab.drop_next(2);
+        net.a.conn.send_extension(0x41, &body).unwrap();
+        assert!(net.run(net.now + 10 * SEC, |n| {
+            n.b.saw(|r| *r == Rec::Extension(0x41, body.clone()))
+        }));
+        // Once acknowledged the frame is not sent again.
+        net.run(net.now + 5 * SEC, |_| false);
+        let seen = net
+            .b
+            .log
+            .iter()
+            .filter(|r| **r == Rec::Extension(0x41, body.clone()))
+            .count();
+        assert_eq!(seen, 1, "delivered {seen} times");
+        // One byte more cannot fit the packet.
+        assert!(matches!(
+            net.a.conn.send_extension(0x41, &vec![0u8; max + 1]),
+            Err(ExtensionError::TooLarge { .. })
+        ));
+    });
+}
+
+#[test]
+fn an_extension_frame_that_no_longer_fits_after_the_mtu_falls_is_reported_and_frees_its_slot() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(9, Params::new(10 * MS).mtu(1500)));
+        net.run(net.now + 2 * SEC, |_| false);
+        assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
+        // A second path, still at the minimum size, is validated while the first is about to lose its datagrams.
+        let p = Params::new(10 * MS);
+        net.link.add_route(PathId(3), PathId(4), p, p);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(3))));
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        assert_eq!(net.a.conn.path_mtu(PathId(3)), Some(1200));
+        // A frame as large as the first path takes goes out and is never acknowledged.
+        let big = net.a.conn.max_extension_size(0x41);
+        net.link.route(PathId(1)).up = false;
+        net.a.conn.send_extension(0x41, &vec![7u8; big]).unwrap();
+        net.run(net.now + 300 * MS, |_| false);
+        // The connection moves to the smaller path: the held frame cannot fit a packet there.
+        net.a.conn.set_active(PathId(3)).unwrap();
+        let max = net.a.conn.max_extension_size(0x41);
+        assert!(max < big, "{max} {big}");
+        net.run(net.now + 10 * MS, |_| false);
+        assert!(net.a.saw(|r| *r == Rec::ExtensionUndeliverable(0x41, big)));
+        assert!(matches!(
+            net.a.conn.send_extension(0x41, &vec![0u8; big]),
+            Err(ExtensionError::TooLarge { max_size }) if max_size == max
+        ));
+        // Every slot is free: eight more frames, each as large as now fits, all arrive once.
+        for ty in 0x50..0x58u64 {
+            net.a.conn.send_extension(ty, &vec![ty as u8; max]).unwrap();
+        }
+        assert!(net.run(net.now + 30 * SEC, |n| {
+            (0x50..0x58u64).all(|ty| n.b.saw(|r| *r == Rec::Extension(ty, vec![ty as u8; max])))
+        }));
+        assert!(
+            !net.b.saw(|r| matches!(r, Rec::Extension(0x41, _))),
+            "the dropped frame was delivered"
+        );
     });
 }
 

@@ -513,8 +513,9 @@ conn_impl! {
                     && ack.ranges().any(|r| r.contains(&ping))
                 {
                     self.life.small_ping = None;
-                    self.mtu_black_hole(ping, now);
+                    self.mtu_black_hole(now);
                 }
+                self.mtu_black_hole_check(now);
                 self.after_feedback(out, now);
                 self.after_ack(now);
                 Ok(())

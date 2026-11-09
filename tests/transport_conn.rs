@@ -16,7 +16,7 @@
 
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId};
+use vinc_transport::conn::{CloseReason, Drop, PathId};
 use vinc_transport::stream::datagram::DatagramError;
 
 vinc_tests::install_counting_allocator!();
@@ -104,6 +104,80 @@ fn bulk_64_mib_1_percent_loss() {
 #[test]
 fn bulk_64_mib_5_percent_loss() {
     bulk_64(23, 5.0);
+}
+
+/// 8 MiB over 20 ms with `params`; returns (virtual ms, packets declared lost, packets sent).
+fn transfer_8_mib(seed: u64, params: Params) -> (u64, u64, u64) {
+    big_stack(move || {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, params));
+        assert!(net.connect(net.now + 60 * SEC));
+        let data = pattern(8 << 20, seed);
+        let (t, _) = bulk(&mut net, &data, 600 * SEC);
+        let s = net.a.conn.stats();
+        (t / MS, s.packets_lost, s.packets_sent)
+    })
+}
+
+/// Datagrams that overtake each other on one path (independent 1 ms jitter on a 20 ms path: every pacing burst
+/// arrives shuffled) are not loss: after the first overtaken packet the path keeps the time rule, so the transfer takes
+/// about as long as on an ordered path and almost nothing is declared lost.
+#[test]
+fn reordering_on_one_path_does_not_collapse_the_window() {
+    let (ordered_ms, _, _) = transfer_8_mib(41, Params::new(10 * MS).jitter(MS));
+    let (ms, lost, sent) = transfer_8_mib(41, Params::new(10 * MS).unordered_jitter(MS));
+    assert!(ms <= 2 * ordered_ms, "reordered {ms} ms vs ordered {ordered_ms} ms");
+    assert!(lost * 200 <= sent, "{lost} of {sent} packets declared lost");
+}
+
+/// A path whose bandwidth-delay product (an unlimited link over 100 ms) exceeds what the 512-slot sent ring holds in
+/// flight (about 740 KB) lets the window open past the ring while a packet that arrives late holds the ring head. The
+/// sender must then wait for acknowledgements, not rebuild a packet the ring refuses at the same instant (which stalls
+/// virtual time): the transfer finishes, at about the rate the ring allows, one ring per round trip.
+#[test]
+fn a_path_whose_bandwidth_delay_product_exceeds_the_ring_makes_progress() {
+    for seed in [41, 42] {
+        let (ms, lost, sent) = transfer_8_mib(seed, Params::new(50 * MS).unordered_jitter(MS));
+        assert!(ms < 10_000, "{ms} ms for 8 MiB");
+        assert!(lost * 100 <= sent, "{lost} of {sent} packets declared lost");
+    }
+}
+
+/// `size` bytes over `params`; returns the datagrams the receiver dropped, by reason.
+fn receiver_drops(seed: u64, size: usize, params: Params) -> std::collections::BTreeMap<String, u64> {
+    big_stack(move || {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, params));
+        assert!(net.connect(net.now + 60 * SEC));
+        let data = pattern(size, seed);
+        bulk(&mut net, &data, 600 * SEC);
+        let mut drops = std::collections::BTreeMap::new();
+        for (to_a, d) in &net.rx_drops {
+            if !*to_a {
+                *drops.entry(format!("{d:?}")).or_insert(0) += 1;
+            }
+        }
+        drops
+    })
+}
+
+/// Deep reordering at a window of megabytes leaves dozens of holes open at once. The receiver must keep track of all
+/// of them: a datagram dropped for lack of room (`Drop::Empty`: pool space or stream ranges) is lost to the sender, and
+/// a new packet judged a duplicate (`Drop::Duplicate`; the link duplicates nothing here) is never acknowledged.
+#[test]
+fn deep_reordering_at_a_large_window_drops_nothing_for_room_or_as_a_duplicate() {
+    // 5 ms of independent jitter on top of 5% of the datagrams held back 20 ms: the deepest case measured (116 packet
+    // ranges open at once at 16 MiB). 2 MiB is enough to fail with 32 packet ranges and 16 stream ranges.
+    let drops = receiver_drops(
+        83,
+        2 << 20,
+        Params::new(10 * MS).unordered_jitter(5 * MS).reorder(5.0, 20 * MS),
+    );
+    for kind in [Drop::Empty, Drop::Duplicate] {
+        assert_eq!(drops.get(&format!("{kind:?}")), None, "{drops:?}");
+    }
 }
 
 #[test]

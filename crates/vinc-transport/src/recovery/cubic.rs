@@ -5,7 +5,10 @@
 //! `W(t) = W_max + 0.4 (t - K)^3` in segments, with `t` looking one smoothed round trip ahead, and a Reno-style
 //! estimate that grows by 53/100 of a segment per window and takes over the window whenever it is higher. The window
 //! grows on every acknowledged byte, in or out of a recovery, and nothing paces it down when the sender runs dry: the
-//! [rate gate](Cubic::gate_cap) bounds it by what the path was measured to deliver.
+//! [rate gate](Cubic::gate_cap) bounds it by what the path was measured to deliver. Below 2 ms and from 250 ms of
+//! minimum round trip the gate caps the window on every acknowledgement. In between it caps it only when the sender
+//! resumes after an idle or application-limited stretch ([`Cubic::resume`]), so slow start on a busy path is not cut
+//! short by a rate sample that is one interval behind it.
 //!
 //! A loss multiplies the window by 0.7 (0.85 below 48,000 bytes) and ends slow start. A loss that shows no queueing
 //! delay (the latest round trip within `min_rtt + max(4 ms, min_rtt / 8)`) is filtered: the window is multiplied by
@@ -208,7 +211,22 @@ impl Cubic {
             self.streak = 0;
         }
         self.grow(a, srtt);
-        if let Some(cap) = a.min_rtt.and_then(|m| self.gate_cap(m))
+        if let Some(m) = a.min_rtt.filter(|m| !(FAST_RTT..SLOW_RTT).contains(m)) {
+            self.apply_gate(m);
+        }
+    }
+
+    /// The sender resumes after a stretch in which the window did not limit it: cap the window, and the threshold,
+    /// at the rate gate for a path with minimum round trip `min_rtt`, so a window that grew while the sender was idle
+    /// or application-limited cannot leave as one burst. A no-op without a known minimum or a measured rate.
+    pub fn resume(&mut self, min_rtt: Option<u64>) {
+        if let Some(m) = min_rtt {
+            self.apply_gate(m);
+        }
+    }
+
+    fn apply_gate(&mut self, min_rtt: u64) {
+        if let Some(cap) = self.gate_cap(min_rtt)
             && self.cwnd > cap
         {
             self.cwnd = cap;

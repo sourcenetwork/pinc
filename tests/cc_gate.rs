@@ -72,6 +72,7 @@ fn the_rate_is_a_maximum_that_decays_by_an_eighth_per_interval() {
             min_rtt: Some(m),
             ..ack(now, 0)
         });
+        c.resume(Some(m));
         btl -= btl >> 3;
         assert_eq!(c.delivery_rate(), btl);
     }
@@ -190,6 +191,7 @@ fn a_trickle_cannot_inflate_the_window_between_2_and_250_ms() {
             min_rtt: Some(m),
             ..ack(SECOND + i * m, 1200)
         });
+        c.resume(Some(m));
         if let Some(cap) = c.gate_cap(m) {
             assert!(c.cwnd() <= cap, "step {i}: {} above the gate {cap}", c.cwnd());
         }
@@ -198,6 +200,36 @@ fn a_trickle_cannot_inflate_the_window_between_2_and_250_ms() {
     assert!(worst <= 48_800, "worst {worst}");
     assert_eq!(c.delivery_rate(), 24_000);
     assert_eq!(c.cwnd(), 46_400);
+}
+
+#[test]
+fn between_2_and_250_ms_only_a_resuming_sender_is_capped() {
+    // The same acknowledgement that caps the window below 2 ms and from 250 ms leaves it alone in between, and the
+    // resume call applies the same gate; without a measured rate or a minimum round trip it does nothing.
+    for min_rtt in [2 * MS, 20 * MS, 249 * MS] {
+        let mut c = with_rate(min_rtt, 1_000, 1_000);
+        let cap = c.gate_cap(min_rtt).unwrap();
+        big_ack(&mut c, min_rtt, 50 * MS, 100_000_000);
+        assert!(
+            c.cwnd() > cap,
+            "min_rtt {min_rtt}: slow start is not cut by an acknowledgement"
+        );
+        assert_eq!(c.ssthresh(), u64::MAX);
+        c.resume(None);
+        assert!(c.cwnd() > cap);
+        c.resume(Some(min_rtt));
+        assert_eq!((c.cwnd(), c.ssthresh()), (cap, cap), "min_rtt {min_rtt}");
+        c.resume(Some(min_rtt));
+        assert_eq!(c.cwnd(), cap, "a second resume changes nothing");
+    }
+    let mut c = Cubic::new();
+    c.on_acked(&AckInput {
+        min_rtt: Some(20 * MS),
+        ..ack(SECOND, 1_000_000)
+    });
+    let w = c.cwnd();
+    c.resume(Some(20 * MS));
+    assert_eq!((c.cwnd(), c.ssthresh()), (w, u64::MAX), "no rate is known yet");
 }
 
 #[test]
@@ -216,6 +248,7 @@ fn after_a_busy_period_the_gate_falls_with_the_decaying_rate() {
             min_rtt: Some(m),
             ..ack(now, 0)
         });
+        c.resume(Some(m));
         btl -= btl >> 3;
         let cap = (2 * (btl * m / 1_000_000_000) + 44_000).max(44_000);
         assert_eq!(c.gate_cap(m), Some(cap));

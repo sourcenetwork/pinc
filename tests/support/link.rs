@@ -2,9 +2,12 @@
 //!
 //! [`Link`] carries datagrams between two endpoints over one or more routes. Each direction of a route has its own
 //! one-way delay, jitter, loss rate, duplication, reordering, datagram size limit and bandwidth cap, and draws its
-//! randomness from a seeded [`SplitMix64`], so a run repeats exactly. [`Node`] wraps a connection with its provider,
-//! keys and a log of what happened; [`Net`] pumps two nodes on virtual time until nothing is left to do or a
-//! deadline passes.
+//! randomness from a seeded [`SplitMix64`], so a run repeats exactly. A direction is a first-in, first-out queue:
+//! jitter delays a datagram but never lets it overtake the one sent ahead of it (real paths reorder through
+//! multipath, link aggregation or link-layer recovery, not through queue jitter). Reordering is explicit
+//! ([`Params::reorder`]), or [`Params::unordered_jitter`] for a stress test of independent per-datagram delays.
+//! [`Node`] wraps a connection with its provider, keys and a log of what happened; [`Net`] pumps two nodes on virtual
+//! time until nothing is left to do or a deadline passes.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -152,6 +155,8 @@ pub struct Params {
     /// Probability (ppm) that a datagram is held back by `reorder_ns`.
     pub reorder_ppm: u32,
     pub reorder_ns: u64,
+    /// Each datagram draws its jitter independently and may overtake earlier ones (off: the queue keeps its order).
+    pub unordered: bool,
     /// Datagrams longer than this are dropped.
     pub mtu: usize,
     /// Bits per second; 0 means unlimited.
@@ -170,6 +175,7 @@ impl Params {
             dup_ppm: 0,
             reorder_ppm: 0,
             reorder_ns: 0,
+            unordered: false,
             mtu: 65_535,
             bps: 0,
             queue_ns: 200_000_000,
@@ -188,8 +194,16 @@ impl Params {
         self.reorder_ns = extra_ns;
         self
     }
+    /// Up to `ns` of extra delay per datagram, keeping the queue's order.
     pub fn jitter(mut self, ns: u64) -> Self {
         self.jitter_ns = ns;
+        self
+    }
+    /// Up to `ns` of extra delay drawn independently per datagram, so datagrams sent within `ns` of each other arrive
+    /// in any order (a stress model; no single real queue does this).
+    pub fn unordered_jitter(mut self, ns: u64) -> Self {
+        self.jitter_ns = ns;
+        self.unordered = true;
         self
     }
     pub fn mtu(mut self, mtu: usize) -> Self {
@@ -233,6 +247,7 @@ pub struct Dir {
     heap: BinaryHeap<Item>,
     seq: u64,
     free_at: u64,
+    last_at: u64,
     drop_next: u32,
     drop_index: Option<u64>,
     pub sent: u64,
@@ -248,6 +263,7 @@ impl Dir {
             heap: BinaryHeap::new(),
             seq: 0,
             free_at: 0,
+            last_at: 0,
             drop_next: 0,
             drop_index: None,
             sent: 0,
@@ -289,6 +305,10 @@ impl Dir {
             0
         };
         at += self.p.delay_ns + jitter;
+        if !self.p.unordered {
+            at = at.max(self.last_at);
+            self.last_at = at;
+        }
         if self.draw(self.p.reorder_ppm) {
             at += self.p.reorder_ns;
         }
@@ -407,12 +427,14 @@ pub const CHUNKS: usize = 1024;
 pub const PK: usize = 8;
 pub const TK: usize = 512;
 pub type Stores = ResponderStores<PK, TK>;
-pub type Table = Streams<NoSource, 64, 257>;
-pub type Conn<'a> = Connection<'a, Caps, NoSource, 64, 257, 512, 4>;
+/// Chunk-ring slots per stream of the default table: it caps the granted window at 4 MiB.
+pub const RING: usize = 257;
+pub type Table<const C: usize = RING> = Streams<NoSource, 64, C>;
+pub type Conn<'a, const C: usize = RING> = Connection<'a, Caps, NoSource, 64, C, 512, 4>;
 
 /// Storage a connection borrows: its stream table, its loss average and its pool.
-pub struct Store {
-    pub streams: Box<Table>,
+pub struct Store<const C: usize = RING> {
+    pub streams: Box<Table<C>>,
     pub loss: LossEstimate,
     pub pool: Option<BufferPool<'static>>,
 }
@@ -426,15 +448,22 @@ impl Store {
     }
     /// A store whose stream table is built from `cfg`.
     pub fn with_stream(chunks: usize, cfg: &stream::Config) -> Self {
+        Self::sized(chunks, cfg)
+    }
+}
+
+impl<const C: usize> Store<C> {
+    /// A store with `C` chunk-ring slots per stream, whose table is built from `cfg`.
+    pub fn sized(chunks: usize, cfg: &stream::Config) -> Self {
         let pool = BufferPool::new_boxed(chunks);
-        let streams = Box::new(Table::new(cfg, &pool));
+        let streams = Box::new(Table::<C>::new(cfg, &pool));
         Self {
             streams,
             loss: LossEstimate::new(),
             pool: Some(BufferPool::new_boxed(chunks)),
         }
     }
-    pub fn resources(&mut self) -> Resources<'_, NoSource, 64, 257> {
+    pub fn resources(&mut self) -> Resources<'_, NoSource, 64, C> {
         Resources {
             pool: self.pool.take().unwrap(),
             streams: &mut self.streams,
@@ -453,6 +482,7 @@ pub enum Rec {
     Reset(u64, u64),
     Datagram,
     Extension(u64, Vec<u8>),
+    ExtensionUndeliverable(u64, usize),
     PathValidated(PathId),
     PathFailed(PathId),
     PeerAsleep,
@@ -473,8 +503,8 @@ pub enum Deferred {
 }
 
 /// An endpoint under test: a connection, its provider and keys, and what it saw.
-pub struct Node<'a> {
-    pub conn: Conn<'a>,
+pub struct Node<'a, const C: usize = RING> {
+    pub conn: Conn<'a, C>,
     pub prov: Caps,
     pub drbg: Drbg,
     pub kp: Keypair,
@@ -494,7 +524,7 @@ pub struct Node<'a> {
     pub fail_keys: bool,
 }
 
-impl<'a> Node<'a> {
+impl<'a, const C: usize> Node<'a, C> {
     /// Drain events: answer key requests, store tickets, read streams and datagrams.
     pub fn service(&mut self, now: u64) {
         loop {
@@ -543,6 +573,7 @@ impl<'a> Node<'a> {
                         Rec::Datagram
                     }
                     Event::Extension { ty, body } => Rec::Extension(ty, body.to_vec()),
+                    Event::ExtensionUndeliverable { ty, len } => Rec::ExtensionUndeliverable(ty, len),
                     Event::PathValidated(p) => Rec::PathValidated(p),
                     Event::PathFailed(p) => Rec::PathFailed(p),
                     Event::PeerAsleep => Rec::PeerAsleep,
@@ -608,7 +639,7 @@ impl<'a> Node<'a> {
     }
 
     /// Call `f` with the connection and an `Env` at time `now`.
-    pub fn with_env<R>(&mut self, now: u64, f: impl FnOnce(&mut Conn<'a>, &mut Env<'_, Caps>) -> R) -> R {
+    pub fn with_env<R>(&mut self, now: u64, f: impl FnOnce(&mut Conn<'a, C>, &mut Env<'_, Caps>) -> R) -> R {
         let mut env = Env {
             provider: &self.prov,
             now,
@@ -687,12 +718,12 @@ impl World {
         }
     }
 
-    pub fn client<'a>(
+    pub fn client<'a, const C: usize>(
         &self,
-        store: &'a mut Store,
+        store: &'a mut Store<C>,
         ticket: Option<vinc_security::Ticket>,
         tickets: ClientTickets<8>,
-    ) -> Node<'a> {
+    ) -> Node<'a, C> {
         let prov = Caps(Software, self.hw);
         let mut drbg = Drbg::new(&[0x11 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x21; self.alg.seed_len()]).unwrap();
@@ -703,7 +734,7 @@ impl World {
         };
         let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
         let prekey = prekeys.acquire(&mut env).unwrap();
-        let conn = Conn::client(
+        let conn = Conn::<C>::client(
             self.client_cfg.unwrap_or(self.cfg),
             ClientParams {
                 peer: self.rp.id.node_id(),
@@ -738,7 +769,7 @@ impl World {
         }
     }
 
-    pub fn server<'a>(&self, store: &'a mut Store) -> Node<'a> {
+    pub fn server<'a, const C: usize>(&self, store: &'a mut Store<C>) -> Node<'a, C> {
         let prov = Caps(Software, self.hw);
         let mut drbg = Drbg::new(&[0x33 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x22; self.alg.seed_len()]).unwrap();
@@ -747,7 +778,7 @@ impl World {
             now: T0,
             drbg: &mut drbg,
         };
-        let conn = Conn::server(
+        let conn = Conn::<C>::server(
             self.cfg,
             &ServerParams {
                 identity: self.rp.id,
@@ -780,9 +811,9 @@ impl World {
 }
 
 /// Two nodes on a link, on virtual time.
-pub struct Net<'a, 'b> {
-    pub a: Node<'a>,
-    pub b: Node<'a>,
+pub struct Net<'a, 'b, const C: usize = RING> {
+    pub a: Node<'a, C>,
+    pub b: Node<'a, C>,
     pub link: Link,
     pub stores: &'b mut Stores,
     pub now: u64,
@@ -803,8 +834,8 @@ pub const T0: u64 = 1_000_000_000_000;
 pub const MS: u64 = 1_000_000;
 pub const SEC: u64 = 1_000_000_000;
 
-impl<'a, 'b> Net<'a, 'b> {
-    pub fn new(a: Node<'a>, b: Node<'a>, link: Link, stores: &'b mut Stores) -> Self {
+impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
+    pub fn new(a: Node<'a, C>, b: Node<'a, C>, link: Link, stores: &'b mut Stores) -> Self {
         Self {
             a,
             b,
@@ -987,7 +1018,12 @@ pub fn pattern(len: usize, seed: u64) -> Vec<u8> {
 }
 
 /// A client and a server on `link`, not yet connected.
-pub fn setup<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, link: Link) -> Net<'a, 'a> {
+pub fn setup<'a, const C: usize>(
+    w: &'a mut World,
+    sa: &'a mut Store<C>,
+    sb: &'a mut Store<C>,
+    link: Link,
+) -> Net<'a, 'a, C> {
     let a = w.client(sa, None, ClientTickets::new());
     let b = w.server(sb);
     Net::new(a, b, link, &mut w.stores)
@@ -995,7 +1031,7 @@ pub fn setup<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, link: L
 
 /// Send `data` on a new bidirectional stream from A and run until B has read it all and A has nothing in flight.
 /// Returns the virtual time the transfer took and the stream id.
-pub fn bulk(net: &mut Net<'_, '_>, data: &[u8], timeout: u64) -> (u64, u64) {
+pub fn bulk<const C: usize>(net: &mut Net<'_, '_, C>, data: &[u8], timeout: u64) -> (u64, u64) {
     let id = net.a.conn.open_bi().unwrap();
     let mut off = 0;
     let mut finished = false;
