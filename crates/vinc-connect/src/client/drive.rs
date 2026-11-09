@@ -6,7 +6,13 @@
 //! - [`Connectivity::observe`] with every endpoint event, before handling it;
 //! - [`Connectivity::drive`] after any input and at [`Connectivity::next_deadline`];
 //! - [`Connectivity::route`] for every datagram the endpoint transmits;
-//! - [`Connectivity::deliver_inbound`] to hand the endpoint what relays carried.
+//! - [`Connectivity::deliver_inbound`] to hand the endpoint what relays carried;
+//! - [`Connectivity::poll_event`] for the endpoint events that commands of the layer itself produced (handle them
+//!   exactly like polled ones, `observe` first);
+//! - [`Connectivity::sign_request`] and [`Connectivity::key_request`] after any call, answered from the node's key
+//!   (a software key, or a TPM through a key host) with [`Connectivity::sign_response`] and
+//!   [`Connectivity::key_response`]: the record, the sleep notices, the beacons and the carrier handshake all take
+//!   the same path, so the private key never has to be in this process.
 //!
 //! Nothing here allocates; the endpoint's own types carry the commands.
 
@@ -176,17 +182,6 @@ drive_impl! {
         }
         // The peer's own relay when the record named one, otherwise ours (RELAY_FORWARD on the first flight).
         let rid = found.and_then(|f| self.relay_of(&f.home)).or(self.home()).or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()));
-        // FWD_ANY: the peer's relay has no open carrier, so an open one (the home first) carries the flight and its
-        // relay forwards it.
-        let rid = rid.map(|r| {
-            if self.carrier_state(r) == super::link::State::Open {
-                return r;
-            }
-            self.home()
-                .filter(|h| self.carrier_state(*h) == super::link::State::Open)
-                .or_else(|| (0..R).find(|i| self.carrier_state(*i) == super::link::State::Open))
-                .unwrap_or(r)
-        });
         if let Some(r) = rid {
             add(Cand::Relay(u8::try_from(r).unwrap_or(0)), out, &mut n);
         }
@@ -288,7 +283,7 @@ drive_impl! {
         if let Some(s) = self.sess.iter_mut().find(|s| s.is_none()) {
             *s = Some(entry);
         }
-        if hub.is_none() && self.found(&node).is_none() && hints.is_empty() {
+        if hub.is_none() && self.found_fresh(now, &node).is_none() && hints.is_empty() {
             self.pending.add(node, id);
             self.lookup(now, &node);
         }
@@ -467,6 +462,8 @@ drive_impl! {
             // Hole punching.
             if st.established && s.punch.deadline().is_some() {
                 let relay_active = st.route.is_some_and(|(_, r)| is_relay_addr(&r));
+                // vertexia: a session always counts as busy; the endpoint reports no application idle time yet, so the
+                // 20 s idle rule of the punch timer never applies. Upgrade: add the idle time to the session statistics.
                 let v = View {
                     app_idle: 0,
                     direct: !relay_active && st.path_validated,

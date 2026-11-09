@@ -43,7 +43,7 @@ fn obs<'a>(local: &'a [SocketAddr], refl: &'a [SocketAddr], mapped: &'a [SocketA
 fn the_home_is_the_lowest_round_trip_and_changes_only_for_a_strictly_lower_one() {
     let mut n = Netcheck::<3>::new();
     for (i, nonce) in [[1u8; 8], [2; 8], [3; 8]].into_iter().enumerate() {
-        n.probe_sent(0, i, nonce);
+        n.probe_sent(0, i, nonce, true);
     }
     assert_eq!(n.home(), None);
     assert_eq!(n.answered(50, 0, [1; 8], a("1.2.3.4:5")), Some(50));
@@ -58,7 +58,7 @@ fn the_home_is_the_lowest_round_trip_and_changes_only_for_a_strictly_lower_one()
 #[test]
 fn a_wrong_nonce_or_a_second_answer_is_ignored() {
     let mut n = Netcheck::<2>::new();
-    n.probe_sent(0, 0, [9; 8]);
+    n.probe_sent(0, 0, [9; 8], true);
     assert_eq!(n.answered(10, 0, [8; 8], a("1.2.3.4:5")), None);
     assert_eq!(
         n.answered(10, 1, [9; 8], a("1.2.3.4:5")),
@@ -127,11 +127,75 @@ fn udp_blocked_needs_silence_for_the_whole_watchdog_and_no_udp_ever() {
 #[test]
 fn restart_forgets_answers_but_keeps_the_home() {
     let mut n = Netcheck::<1>::new();
-    n.probe_sent(0, 0, [1; 8]);
+    n.probe_sent(0, 0, [1; 8], true);
     n.answered(5, 0, [1; 8], a("1.2.3.4:5"));
     n.restart();
     assert_eq!(n.reflexive_of(0), None);
     assert_eq!(n.home(), Some(0));
     assert_eq!(n.first_probe(), None);
     let _ = ed(1);
+}
+
+#[test]
+fn a_relay_that_fails_three_times_in_a_row_loses_the_home_to_the_next_healthy_one() {
+    let mut n = Netcheck::<3>::new();
+    for i in 0..3 {
+        n.probe_sent(0, i, [i as u8; 8], true);
+        assert!(
+            n.answered(
+                10 * (i as u64 + 1),
+                i,
+                [i as u8; 8],
+                format!("198.51.100.{}:4000", i + 1).parse().unwrap()
+            )
+            .is_some()
+        );
+    }
+    assert_eq!(n.home(), Some(0), "the lowest round trip");
+    // A probe sent while the last one is unanswered is a failure; the first of a round is only sent.
+    for round in 0..3u8 {
+        n.probe_sent(1_000, 0, [50 + round; 8], true);
+    }
+    assert!(!n.unhealthy(0), "two failures are not yet three");
+    assert_eq!(n.failover(|_| true), None);
+    n.probe_sent(1_000, 0, [60; 8], true);
+    assert!(n.unhealthy(0));
+    assert_eq!(
+        n.failover(|_| true),
+        Some(1),
+        "the healthy relay with the lowest round trip"
+    );
+    assert_eq!(n.home(), Some(1));
+    // A carrier that opens makes a relay healthy again; an answer too.
+    n.healthy(0);
+    assert!(!n.unhealthy(0));
+    // Carrier dial failures count the same, and a node that never heard UDP expects no answers to its probes.
+    let mut d = Netcheck::<2>::new();
+    d.probe_sent(0, 0, [1; 8], false);
+    d.probe_sent(1, 0, [2; 8], false);
+    d.probe_sent(2, 0, [3; 8], false);
+    assert!(!d.unhealthy(0), "unanswered probes of a UDP-dark node are not failures");
+    d.failed(0);
+    d.failed(0);
+    d.failed(0);
+    assert!(d.unhealthy(0));
+    assert_eq!(d.failover(|i| i < 2), None, "no home yet, nothing to move");
+    d.home_missing(Some(0));
+    d.home_missing(Some(0));
+    d.home_missing(Some(0));
+    assert_eq!(d.home(), Some(0));
+    assert_eq!(
+        d.failover(|i| i < 2),
+        Some(1),
+        "with no round trip known the next relay by position"
+    );
+    // The only relay has nowhere to go.
+    let mut one = Netcheck::<1>::new();
+    one.home_missing(Some(0));
+    one.home_missing(Some(0));
+    one.home_missing(Some(0));
+    for _ in 0..3 {
+        one.failed(0);
+    }
+    assert_eq!(one.failover(|_| true), None);
 }

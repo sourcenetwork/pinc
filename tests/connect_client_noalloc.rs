@@ -38,7 +38,7 @@ fn the_client_allocates_nothing_in_steady_state() {
         let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
         let (identity, prekey) = (host.identity, host.prekey_info.clone());
         let mut keys = Soft(host);
-        let mut rig = Rig::new(identity, prekey);
+        let mut rig = Rig::new(&identity, prekey);
         let mut answered = 0;
         let mut now = rig.bring_up(&mut keys, 1000 * SEC, &mut answered);
         // The record is published and the carrier is quiet.

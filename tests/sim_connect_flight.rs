@@ -1,6 +1,6 @@
-//! The first-flight rules in the simulator: B8 (a late-starting node sends a hub its first flight on the direct
-//! address only), THIN_HS0 (a hub Initial resent under 4 s goes by relay paths only), THIN_HS (one path per try on
-//! a slow uplink, rotating) and RLY_ONCE (a flight handed to a relay carrier is not queued again on a slow link).
+//! The first-flight rules in the simulator: `B8` (a late-starting node sends a hub its first flight on the direct
+//! address only), `THIN_HS0` (a hub Initial resent under 4 s goes by relay paths only), `THIN_HS` (one path per try on
+//! a slow uplink, rotating).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

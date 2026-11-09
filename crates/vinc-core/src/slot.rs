@@ -200,7 +200,7 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) client: bool,
     pub(crate) state: State,
     pub(crate) role: Role,
-    /// The connectivity layer sends this session's keepalive (CARRIER_PULSE), and one is due now.
+    /// The connectivity layer sends this session's keepalive (`CARRIER_PULSE`), and one is due now.
     pub(crate) pulse: bool,
     pub(crate) pulse_due: bool,
     pub(crate) gossip: bool,

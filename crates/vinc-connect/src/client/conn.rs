@@ -16,6 +16,14 @@
 //! it). A key operation of a carrier handshake is raised exactly as the endpoint raises its own
 //! ([`Connectivity::key_request`], [`Connectivity::key_response`]).
 //!
+//! Batching. Frames queued on a carrier back to back join one batch (at most 64 frames and 16 KiB) that is sealed as a
+//! single record when the host asks for the carrier's bytes ([`Connectivity::poll_stream`]) or the batch is full. A
+//! long-header packet (a handshake packet of the transport) closes the batch and is sealed alone.
+//!
+//! Failover. A relay whose carrier dials never opened, or whose probes went unanswered on a node that hears UDP,
+//! three times in a row is unhealthy; the home moves to the healthy relay with the lowest round trip and the record is
+//! published there.
+//!
 //! Invariants: every table and queue is bounded and nothing allocates; a stream is open only for a relay whose link
 //! is not `Down`; sealed bytes leave a carrier in the order they were sealed.
 
@@ -46,6 +54,8 @@ pub const UDP_QUEUE: usize = 16;
 pub const INBOUND: usize = 16;
 /// Found records kept for the dials that waited for them.
 pub const FOUND: usize = 8;
+/// How long a found record without addresses is believed.
+pub const FOUND_TTL: u64 = 30_000_000_000;
 /// Notices waiting for the host.
 pub const NOTICES: usize = 16;
 /// Stream requests waiting for the host.
@@ -83,6 +93,10 @@ pub struct RelayCfg {
 
 /// How the connectivity layer starts.
 #[derive(Debug, Clone, Copy)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the node, not a state"
+)]
 pub struct Config<const R: usize> {
     /// This node.
     pub me: NodeId,
@@ -197,7 +211,7 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) shared: Shared,
     pub(super) net: Netcheck<R>,
     pub(super) lookups: Lookups<LOOKUPS>,
-    pub(super) found: [Option<(NodeId, Found)>; FOUND],
+    pub(super) found: [Option<(NodeId, Found, u64)>; FOUND],
     pub(super) found_next: usize,
     pub(super) peers: [Option<NodeId>; PEERS],
     pub(super) peers_next: usize,
@@ -585,7 +599,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 let slot = self.found_next % FOUND;
                 self.found_next = (slot + 1) % FOUND;
                 if let Some(s) = self.found.get_mut(slot) {
-                    *s = Some((*peer, f));
+                    *s = Some((*peer, f, self.clock));
                 }
                 let _ = push(&mut self.found_q, *peer);
                 self.notice(Notice::Found(*peer));
@@ -607,13 +621,28 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// The verified record found for `peer`, if a lookup produced one.
     pub fn found(&self, peer: &NodeId) -> Option<Found> {
-        self.found.iter().flatten().find(|(p, _)| p == peer).map(|(_, f)| *f)
+        self.found
+            .iter()
+            .flatten()
+            .find(|(p, _, _)| p == peer)
+            .map(|(_, f, _)| *f)
+    }
+
+    /// The record found for `peer` unless it is stale: older than [`FOUND_TTL`] and listing no address (such a
+    /// record only names a relay, and the relay may have changed).
+    pub fn found_fresh(&self, now: u64, peer: &NodeId) -> Option<Found> {
+        self.found
+            .iter()
+            .flatten()
+            .find(|(p, _, _)| p == peer)
+            .filter(|(_, f, at)| now.saturating_sub(*at) < FOUND_TTL || f.addrs().next().is_some())
+            .map(|(_, f, _)| *f)
     }
 
     /// Forget the found record of `peer` (it was used).
     pub fn forget_found(&mut self, peer: &NodeId) {
         for s in &mut self.found {
-            if s.as_ref().is_some_and(|(p, _)| p == peer) {
+            if s.as_ref().is_some_and(|(p, _, _)| p == peer) {
                 *s = None;
             }
         }

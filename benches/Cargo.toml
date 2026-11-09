@@ -18,6 +18,7 @@ vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc"] }
+vinc-connect = { workspace = true }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
@@ -82,3 +83,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "connect"
+harness = false

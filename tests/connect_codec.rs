@@ -711,3 +711,84 @@ fn a_sleep_notice_is_signed_for_one_relay_and_one_sender() {
         assert!(!ok, "flip at {i}");
     }
 }
+
+#[test]
+fn a_record_notice_and_beacon_signed_in_two_steps_equal_the_one_step_form_and_refuse_a_short_buffer() {
+    use vinc_connect::local;
+    let kp = ed(0x44);
+    let me = id(&kp);
+    let mut pk = [0u8; 2000];
+    let n = kp.public_key(&mut pk).unwrap();
+    let pk = &pk[..n];
+    let addrs: [SocketAddr; 2] = ["192.0.2.1:4000".parse().unwrap(), "[2001:db8::1]:4000".parse().unwrap()];
+    // Record.
+    let fields = RecordFields {
+        home: nid(9),
+        seq: 77,
+        reach: Reach::Nat,
+        addrs: &addrs,
+        hints: b"h",
+    };
+    let mut one = vec![0u8; MAX_RECORD_LEN];
+    let one_len = sign(&kp, &fields, &mut one).unwrap();
+    let mut two = vec![0u8; MAX_RECORD_LEN];
+    let signed = vinc_connect::record::prepare(&me, pk, &fields, &mut two).unwrap();
+    let mut sig = [0u8; 200];
+    let s = kp.sign(&two[..signed], &mut sig).unwrap();
+    let two_len = vinc_connect::record::finish(&mut two, signed, &sig[..s]).unwrap();
+    assert_eq!(one[..one_len], two[..two_len]);
+    assert!(Record::parse_verified(&two[..two_len]).is_ok());
+    assert!(vinc_connect::record::prepare(&me, pk, &fields, &mut [0u8; 20]).is_err());
+    assert!(vinc_connect::record::finish(&mut two[..signed + 3], signed, &sig[..s]).is_err());
+    // Sleep notice.
+    let relay = nid(5);
+    let mut one = vec![0u8; sleep::MAX_LEN];
+    let one_len = sleep::sign(&kp, &relay, 1234, &mut one).unwrap();
+    let mut two = vec![0u8; sleep::MAX_LEN];
+    let head = sleep::prepare(&me, pk, 1234, &mut two).unwrap();
+    let msg = sleep::message(&relay, &me, 1234).unwrap();
+    let s = kp.sign(&msg, &mut sig).unwrap();
+    let two_len = sleep::finish(&mut two, head, &sig[..s]).unwrap();
+    assert_eq!(one[..one_len], two[..two_len]);
+    Notice::parse(&two[..two_len]).unwrap().verify(&relay).unwrap();
+    // Beacon.
+    let mut one = vec![0u8; local::MAX_LEN];
+    let one_len = local::sign(&kp, 9, &addrs, b"x", &mut one).unwrap();
+    let mut two = vec![0u8; local::MAX_LEN];
+    let signed = local::prepare(&me, pk, 9, &addrs, b"x", &mut two).unwrap();
+    let s = kp.sign(&two[..signed], &mut sig).unwrap();
+    let two_len = local::finish(&mut two, signed, &sig[..s]).unwrap();
+    assert_eq!(one[..one_len], two[..two_len]);
+    local::Beacon::parse_verified(&two[..two_len]).unwrap();
+}
+
+#[test]
+fn a_batch_resumes_from_its_state_and_keeps_its_limits() {
+    use vinc_connect::carrier::BatchState;
+    let mut buf = vec![0u8; MAX_FRAME_LEN + 64];
+    let pkt = [0x41u8; 100];
+    let f = Frame::Send {
+        dst: nid(3),
+        flag: 0,
+        packet: &pkt,
+    };
+    let mut st = BatchState::new();
+    for i in 0..BATCH_MAX_FRAMES {
+        let mut b = BatchBuilder::resume(&mut buf, st);
+        assert_eq!(b.offer(&f).unwrap(), Offer::Added, "frame {i}");
+        st = b.state();
+    }
+    assert_eq!(st.len(), BATCH_MAX_FRAMES);
+    assert_eq!(
+        BatchBuilder::resume(&mut buf, st).offer(&f).unwrap(),
+        Offer::Refused,
+        "the 65th frame"
+    );
+    let sealed = BatchBuilder::resume(&mut buf, st).finish().unwrap().unwrap().to_vec();
+    let Frame::Batch(b) = Frame::decode(&sealed).unwrap() else {
+        panic!("not a batch")
+    };
+    assert_eq!(b.frames().count(), BATCH_MAX_FRAMES);
+    assert!(sealed.len() <= MAX_FRAME_LEN);
+    assert!(st.len() > 0 && !st.is_empty());
+}

@@ -1,7 +1,13 @@
 //! A software TPM (`swtpm`) for the tests that need a TPM: each test starts its own on a free port in a fresh state
 //! directory and kills it at the end. Only built with the `hwenc` feature, like the TPM store itself.
 #![cfg(feature = "hwenc")]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::missing_panics_doc,
+    missing_docs
+)]
 
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;

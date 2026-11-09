@@ -214,10 +214,7 @@ impl RelayNode {
     fn tx_step(&mut self, now: u64) -> bool {
         let mut did = false;
         let mut buf = vec![0u8; 2048];
-        loop {
-            let Some(t) = self.host.ep.poll_transmit(now, &mut buf) else {
-                break;
-            };
+        while let Some(t) = self.host.ep.poll_transmit(now, &mut buf) {
             did = true;
             self.tx_log.push((now, t.remote, t.len));
             if let Some((_, slot)) = relay_parts(&t.remote) {

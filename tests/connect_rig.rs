@@ -68,7 +68,7 @@ pub struct Rig {
 }
 
 impl Rig {
-    pub fn new(identity: LocalIdentity, prekey: vinc_security::PrekeyInfo) -> Self {
+    pub fn new(identity: &LocalIdentity, prekey: vinc_security::PrekeyInfo) -> Self {
         let relay_kp = ed(0x77);
         let relay_id = id(&relay_kp);
         let udp: SocketAddr = RELAY_UDP.parse().unwrap();
@@ -82,7 +82,7 @@ impl Rig {
         });
         let cfg = Config {
             me: identity.node_id(),
-            identity,
+            identity: *identity,
             relays,
             phone: false,
             restarted: false,

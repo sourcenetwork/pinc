@@ -39,6 +39,7 @@ pub enum Ev {
     Wake(NodeId),
 }
 
+#[allow(clippy::large_enum_variant, reason = "a test type, built once per key request")]
 /// A key answer that owns its bytes, so the request it answers can be dropped first.
 pub enum Answer {
     Sig([u8; vinc_crypto::identity::MAX_SIGNATURE_LEN], usize),

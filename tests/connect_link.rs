@@ -339,17 +339,17 @@ fn keep_learn_halves_the_silence_a_dead_carrier_endured_down_to_the_floor() {
         ..Shared::default()
     };
     learn(&mut sh, 65 * S);
-    assert_eq!(sh.keep_iv, (65 * S + 3 * S) / 2);
+    assert_eq!(sh.keep_iv, u64::midpoint(65 * S, 3 * S));
     let first = sh.keep_iv;
     learn(&mut sh, 30 * S);
-    assert_eq!(sh.keep_iv, ((30 * S + 3 * S).min(first)) / 2);
+    assert_eq!(sh.keep_iv, (33 * S).min(first) / 2);
     // never below 15 s
     for _ in 0..4 {
         learn(&mut sh, 20 * S);
     }
     assert_eq!(sh.keep_iv, 15 * S);
     // the learned interval caps every keepalive wait, home or not
-    let (mut l, _) = open_link(0);
+    let (l, _) = open_link(0);
     let c = ctx();
     assert_eq!(l.next_deadline(0, &sh, &c), Some(15 * S));
     let other = Ctx {

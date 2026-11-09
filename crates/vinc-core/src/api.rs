@@ -424,7 +424,7 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// Leave the session's first address out of the flight.
         skip_primary: bool,
     },
-    /// A carrier PING and PONG stood for the session's keepalive (CARRIER_PULSE): count it as received, and as sent
+    /// A carrier PING and PONG stood for the session's keepalive (`CARRIER_PULSE`): count it as received, and as sent
     /// when `sent` says this side wrote the PING.
     Pulse {
         /// The session.

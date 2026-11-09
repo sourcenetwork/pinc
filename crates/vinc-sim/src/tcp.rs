@@ -259,15 +259,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
                     self.tcp_ack(t, e, ack, seg.sack);
                 }
             }
-            SegKind::Data => {
-                // A data segment carries the acknowledgement that completes the handshake, so a server that sees
-                // data first still reports the stream open before the first record.
-                if self.ends[e as usize].state == State::SynRcvd {
-                    self.ends[e as usize].state = State::Est;
-                    self.tcp_server_est(t, e);
-                }
-                self.tcp_data(t, e, seg.seq, u64::from(seg.len));
-            }
+            SegKind::Data => self.tcp_data(t, e, seg.seq, u64::from(seg.len)),
             SegKind::Syn => {}
         }
     }

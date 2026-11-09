@@ -19,7 +19,7 @@ use vinc_sim::{LanConfig, SEC, StreamPolicy};
 fn udp_blocked_forces_a_carrier_that_falls_back_from_tcp_to_websocket_and_still_dials() {
     big(|| {
         let mut w = World::new(21);
-        let (_r, rs) = w.relay(1, relay_ip(10));
+        let (r, rs) = w.relay(1, relay_ip(10));
         let lan = w.sim.add_lan(LanConfig {
             udp_block: true,
             stream: Some(StreamPolicy {
@@ -58,10 +58,10 @@ fn udp_blocked_forces_a_carrier_that_falls_back_from_tcp_to_websocket_and_still_
         w.run(secs(35));
         assert_eq!(w.client(b).host.received(sb), b"through ws");
         assert!(
-            w.relay_node(_r).dns_carrier >= 1 && w.relay_node(_r).dns_udp == 0,
+            w.relay_node(r).dns_carrier >= 1 && w.relay_node(r).dns_udp == 0,
             "the lookup rode the carrier"
         );
-        assert!(w.relay_node(_r).carriers_ws >= 1, "the relay saw a WebSocket carrier");
+        assert!(w.relay_node(r).carriers_ws >= 1, "the relay saw a WebSocket carrier");
         let _ = SEC;
     });
 }
@@ -149,7 +149,10 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
         w.run(secs(800));
         assert_eq!(downs(&w), 3, "the carrier died again");
         assert_eq!(w.client(a).conn.shared().lease_hi, lease);
-        assert!(w.client(a).conn.carrier_state(0) == vinc_connect::client::link::State::Open);
+        assert_eq!(
+            w.client(a).conn.carrier_state(0),
+            vinc_connect::client::link::State::Open
+        );
 
         // STALE_SEND: the second relay's carrier is neither home nor ridden, so nothing keeps it alive. A send onto
         // it after it idled for longer than the lease resets it first and goes out on the new one.
@@ -224,7 +227,10 @@ fn the_home_moves_to_the_second_relay_when_the_first_dies() {
                 .filter_map(|(_, x)| if let Notice::Home(h) = x { Some(*h) } else { None })
                 .collect();
             assert_eq!(homes, [0, 1], "the home moved once, to the second relay");
-            assert!(w.client(n).conn.carrier_state(1) == vinc_connect::client::link::State::Open);
+            assert_eq!(
+                w.client(n).conn.carrier_state(1),
+                vinc_connect::client::link::State::Open
+            );
             assert_eq!(w.client(n).conn.home(), Some(1));
         }
         assert_eq!(
@@ -341,5 +347,37 @@ fn a_pending_dial_that_ended_drops_its_lookup() {
             0,
             "DIAL_PRUNE dropped the lookup of the ended dial"
         );
+    });
+}
+
+#[test]
+fn keep_learn_shortens_the_keepalive_after_silent_deaths_until_the_carrier_stops_dying() {
+    big(|| {
+        let deaths = |learn: bool| {
+            let mut w = World::new(95);
+            let (_r, rs) = w.relay(1, relay_ip(10));
+            // UDP works (so the lease rules stay out), but the NAT forgets an idle TCP flow after 20 s.
+            let nat = w.nat(vinc_sim::NatKind::PortRestricted, ext(1), 120 * SEC, 20 * SEC);
+            let mut s = client_spec(0xa1, priv_addr(1), &[rs]);
+            s.keep_learn = learn;
+            let a = w.client_behind(&s, nat);
+            w.run(secs(900));
+            let downs = w
+                .notices(a)
+                .into_iter()
+                .filter(|(_, n)| matches!(n, Notice::CarrierDown(0)))
+                .map(|(t, _)| t / SEC)
+                .collect::<Vec<_>>();
+            (downs, w.client(a).conn.shared().keep_iv / SEC)
+        };
+        let (off, iv_off) = deaths(false);
+        let (on, iv_on) = deaths(true);
+        assert_eq!(iv_off, 0);
+        // The check after a recent death is 30 s, longer than the NAT's 20 s: without learning the carrier dies again
+        // and again.
+        assert!(off.len() >= 15, "{off:?}");
+        // Learning halves the silence each death endured; the interval ends under 20 s and the deaths stop.
+        assert!((15..20).contains(&iv_on), "{iv_on}");
+        assert!(on.len() <= 4 && on.last().is_some_and(|t| *t < 300), "{on:?}");
     });
 }

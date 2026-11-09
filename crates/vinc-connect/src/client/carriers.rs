@@ -91,6 +91,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             }
             Act::Check => {
                 // CHECK_RIDE: a session packet that left on this carrier in this very step carries the check.
+                // vertexia: any session packet counts, ack-eliciting or not; an ACK-only packet gets no answer and the
+                // real PING that follows the wait covers it. Upgrade: have the endpoint say which packets elicit.
                 let ridden = self.rly.get(i).is_some_and(|r| r.etx == Some(now));
                 let ctx = self.ctx(i);
                 if let Some(Act::Ping) = self.rly.get_mut(i).and_then(|r| r.link.check(now, &ctx, ridden)) {

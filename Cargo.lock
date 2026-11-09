@@ -1376,6 +1376,7 @@ dependencies = [
  "blake3",
  "criterion",
  "vinc-broadcast",
+ "vinc-connect",
  "vinc-core",
  "vinc-crypto",
  "vinc-dag",

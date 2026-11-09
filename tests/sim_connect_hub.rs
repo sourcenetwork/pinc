@@ -1,4 +1,4 @@
-//! The hub tunnel and CARRIER_PULSE in the simulator: a member whose carrier is not open still sends and receives
+//! The hub tunnel and `CARRIER_PULSE` in the simulator: a member whose carrier is not open still sends and receives
 //! through its hub's UDP session, and a quiet hub session on the hub's own carrier is kept alive by the carrier
 //! PING and PONG.
 #![allow(
@@ -136,7 +136,7 @@ fn a_quiet_hub_session_on_its_own_carrier_is_kept_alive_by_the_carrier_ping_and_
             relay_after <= 14,
             "the hub endpoint transmitted {relay_after} datagrams in ten minutes"
         );
-        assert!(w.client(a).conn.carrier_state(0) == State::Open);
+        assert_eq!(w.client(a).conn.carrier_state(0), State::Open);
     });
 }
 
@@ -182,7 +182,7 @@ fn frames_queued_back_to_back_share_one_carrier_record_and_a_handshake_packet_ne
         );
         w.run(secs(12));
         let packets = w.client(a).tx_log.len() - tx0;
-        let records = (w.relay_node(r).records - rec0) as usize;
+        let records = usize::try_from(w.relay_node(r).records - rec0).unwrap();
         assert!(packets >= 8, "{packets}");
         assert!(records < packets, "{packets} packets in {records} carrier records");
     });

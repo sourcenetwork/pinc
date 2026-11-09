@@ -83,7 +83,7 @@ pub fn exercise<S: KeyStore>(mut host: KeyHost<S>, key: KeyHandle) {
         prekeys,
         drbg: Drbg::new(&[0x64; 32]),
     };
-    let mut rig = Rig::new(identity, prekey);
+    let mut rig = Rig::new(&identity, prekey);
     let (relay_id, udp) = (rig.relay_id, rig.udp);
     let wall = |now: u64| now / 1_000_000;
     let mut answered = 0;
