@@ -603,6 +603,7 @@ impl Core {
             | Event::PathChanged { .. }
             | Event::PeerAsleep { .. }
             | Event::PeerAwake { .. }
+            | Event::ReachOut { .. }
             | Event::TicketsReceived { .. } => {}
         }
     }
