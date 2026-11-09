@@ -22,6 +22,7 @@ vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
+vinc-membership = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -161,6 +162,26 @@ path = "transport_params.rs"
 [[test]]
 name = "transport_rules"
 path = "transport_rules.rs"
+
+[[test]]
+name = "membership_codec"
+path = "membership_codec.rs"
+
+[[test]]
+name = "membership_hub"
+path = "membership_hub.rs"
+
+[[test]]
+name = "membership_view"
+path = "membership_view.rs"
+
+[[test]]
+name = "membership_s13"
+path = "membership_s13.rs"
+
+[[test]]
+name = "membership_incarnation"
+path = "membership_incarnation.rs"
 
 [lints]
 workspace = true

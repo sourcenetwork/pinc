@@ -1415,6 +1415,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-membership"
+version = "0.1.0"
+dependencies = [
+ "vinc-wire",
+]
+
+[[package]]
 name = "vinc-security"
 version = "0.1.0"
 dependencies = [
@@ -1434,6 +1441,7 @@ dependencies = [
  "vinc-crypto",
  "vinc-dag",
  "vinc-keystore",
+ "vinc-membership",
  "vinc-security",
  "vinc-transport",
  "vinc-wire",
