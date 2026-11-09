@@ -26,6 +26,7 @@
     clippy::cast_possible_truncation,
     clippy::too_many_lines,
     clippy::similar_names,
+    clippy::many_single_char_names,
     clippy::items_after_statements,
     clippy::type_complexity,
     unreachable_pub
@@ -99,7 +100,9 @@ impl World {
                     v.push(format!("{{\"k\":\"Held\",\"mid\":{m},\"why\":\"{why:?}\"}}"));
                 }
                 Trace::AcpAsked { id } => v.push(format!("{{\"k\":\"AcpAsked\",\"id\":{id}}}")),
-                Trace::AcpAnswered { id, allow } => v.push(format!("{{\"k\":\"AcpAnswered\",\"id\":{id},\"allow\":{allow}}}")),
+                Trace::AcpAnswered { id, allow } => {
+                    v.push(format!("{{\"k\":\"AcpAnswered\",\"id\":{id},\"allow\":{allow}}}"));
+                }
                 Trace::Repaired { mid, .. } => {
                     let m = id(self, mid);
                     v.push(format!("{{\"k\":\"Repaired\",\"mid\":{m}}}"));
@@ -125,7 +128,9 @@ impl World {
     fn note_signs(&mut self, i: usize) {
         let outs: Vec<Vec<u8>> = self.net.nodes[i].h.out.iter().map(|o| o.bytes.clone()).collect();
         for b in outs {
-            let (Some(&fty), Some(&tl)) = (b.get(4), b.get(5)) else { continue };
+            let (Some(&fty), Some(&tl)) = (b.get(4), b.get(5)) else {
+                continue;
+            };
             if !matches!(fty, ty::PUB | ty::FAN | ty::FANP | ty::MSG | ty::MEMBER_PUSH) {
                 continue;
             }
@@ -139,7 +144,11 @@ impl World {
             let org = self.origin(head.origin);
             assert_eq!(org, i, "only the origin signs");
             self.signed.push((sig, org));
-            let (m, t, bd) = (self.id(K_MID, &head.mid), self.id(K_TOPIC, topic), self.id(K_BODY, body));
+            let (m, t, bd) = (
+                self.id(K_MID, &head.mid),
+                self.id(K_TOPIC, topic),
+                self.id(K_BODY, body),
+            );
             let ts = head.ts.wall.saturating_sub(WALL0) * 8 + u64::from(head.ts.counter.min(7));
             self.line(&format!(
                 "{{\"t\":\"bc\",\"op\":\"sign\",\"sig\":{sig},\"org\":{org},\"tid\":{t},\"mid\":{m},\"bid\":{bd},\"ts\":{ts},\"isb\":{}}}",
@@ -171,7 +180,10 @@ impl World {
                     ),
                 )
             }
-            Err(_) => (false, "\"mid\":0,\"org\":0,\"tid\":0,\"bid\":0,\"sig\":0,\"ts\":0,\"isb\":false".to_string()),
+            Err(_) => (
+                false,
+                "\"mid\":0,\"org\":0,\"tid\":0,\"bid\":0,\"sig\":0,\"ts\":0,\"isb\":false".to_string(),
+            ),
         };
         let before = self.net.nodes[to].h.out.len();
         {
@@ -201,7 +213,9 @@ impl World {
                 let outs = std::mem::take(&mut self.net.nodes[i].h.out);
                 for o in outs {
                     let to = self.net.nodes.iter().position(|n| n.id == o.to).unwrap();
-                    let (Some(&fty), Some(&tl)) = (o.bytes.get(4), o.bytes.get(5)) else { continue };
+                    let (Some(&fty), Some(&tl)) = (o.bytes.get(4), o.bytes.get(5)) else {
+                        continue;
+                    };
                     let tl = usize::from(tl);
                     let (topic, rest) = (&o.bytes[6..6 + tl], &o.bytes[6 + tl..]);
                     progressed = true;
@@ -223,7 +237,9 @@ impl World {
                 }
             }
             for i in 0..self.net.nodes.len() {
-                let Some(allow) = self.net.nodes[i].auto_acp else { continue };
+                let Some(allow) = self.net.nodes[i].auto_acp else {
+                    continue;
+                };
                 let evs = std::mem::take(&mut self.net.nodes[i].h.events);
                 let (acp, rest): (Vec<Ev>, Vec<Ev>) = evs.into_iter().partition(|e| matches!(e, Ev::Acp { .. }));
                 self.net.nodes[i].h.events = rest;
@@ -290,7 +306,9 @@ impl World {
                             }
                             let out = self.outs(i);
                             let at = units(now);
-                            self.line(&format!("{{\"t\":\"bc\",\"op\":\"timer\",\"n\":{i},\"at\":{at},\"out\":{out}}}"));
+                            self.line(&format!(
+                                "{{\"t\":\"bc\",\"op\":\"timer\",\"n\":{i},\"at\":{at},\"out\":{out}}}"
+                            ));
                         }
                     }
                 }

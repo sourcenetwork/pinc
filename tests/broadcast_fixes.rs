@@ -136,8 +136,8 @@ fn a_hub_without_room_for_the_topic_does_not_acknowledge() {
     net.subscribe(2, b"taken");
     let m = net.publish(1, b"full", b"x");
     net.advance(100 * SEC);
-    let acked = net.events(1).iter().any(|e| *e == Ev::Acked(m));
-    let gave_up = net.events(1).iter().any(|e| *e == Ev::GaveUp(m));
+    let acked = net.events(1).contains(&Ev::Acked(m));
+    let gave_up = net.events(1).contains(&Ev::GaveUp(m));
     assert!(!acked, "the hub did not store it");
     assert!(gave_up);
 }
@@ -257,5 +257,8 @@ fn a_swallowed_message_is_repaired_after_a_flap_that_skips_the_check() {
         n.t.resubscribe(&mut n.h, now, &hub);
     }
     net.pump();
-    assert!(net.delivered(2).contains(&missed), "the re-subscription asks back to the last check");
+    assert!(
+        net.delivered(2).contains(&missed),
+        "the re-subscription asks back to the last check"
+    );
 }
