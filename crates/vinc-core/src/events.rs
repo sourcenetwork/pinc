@@ -25,7 +25,7 @@ use crate::slot::{HeldEvent, State};
 use crate::trace::trace;
 
 /// The largest extension body kept for the endpoint to parse.
-const EXT_KEEP: usize = 64;
+const EXT_KEEP: usize = crate::reach::REACH_BODY_MAX;
 /// Application data above this many bytes counts as activity on a quiet session.
 const CTRL_SMALL: usize = 72;
 /// The round trip below which a client waits for READY before it reports the session (20 ms).
@@ -119,6 +119,9 @@ ep_impl! {
             Co::Extension { ty, len, body } => {
                 if ty == ext::SUB_SESSION_OPEN && len > 0 {
                     self.sub_accept(i, now, body.get(..len).unwrap_or_default());
+                } else if ty == ext::REACH_OUT && len > 0 {
+                    self.reach_in.put(session, body.get(..len).unwrap_or_default());
+                    self.emit(Event::ReachOut { session });
                 }
             }
             Co::Undeliverable(ty) => {

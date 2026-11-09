@@ -15,8 +15,6 @@
 
 use core::net::SocketAddr;
 
-use vinc_transport::conn::PathInfo;
-
 use crate::endpoint::{MAX_IFACES, env, ep_impl};
 use crate::keepalive::RESUME_QUIET;
 use crate::slot::State;
@@ -121,7 +119,7 @@ ep_impl! {
             let pid = self.path_id(new, remote);
             if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 let mut env = env!(self, now);
-                let _ = conn.add_path(&mut env, pid, PathInfo::default());
+                let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote));
                 // The link went away and came back on the new address: the peer is woken on the new path.
                 conn.set_link_down(&mut env, true);
                 conn.set_link_down(&mut env, false);

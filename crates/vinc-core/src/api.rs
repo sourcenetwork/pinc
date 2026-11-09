@@ -176,6 +176,12 @@ pub enum Event {
         /// What happened to it.
         state: PathState,
     },
+    /// The peer sent its candidate addresses for a direct path: read them with [`Query::ReachOut`] before the next
+    /// few events arrive.
+    ReachOut {
+        /// The session.
+        session: SessionId,
+    },
     /// The peer announced it sleeps.
     PeerAsleep {
         /// The session.
@@ -415,6 +421,29 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The remote addresses to copy the flight to.
         addrs: &'c [SocketAddr],
     },
+    /// Move the first resend of a session still dialing to `delay` nanoseconds from now.
+    FirstResend {
+        /// The session.
+        session: SessionId,
+        /// The wait before the flight is sent again.
+        delay: u64,
+    },
+    /// Send the peer a REACH_OUT: an opaque body (the candidate addresses, at most [`crate::REACH_BODY_MAX`]
+    /// bytes) the layer above encodes.
+    ReachOut {
+        /// The session.
+        session: SessionId,
+        /// The body.
+        body: &'c [u8],
+    },
+    /// Try a candidate address as a direct path of a session: add it and start its 9 probes, or start them again if
+    /// the session already tracks it and it never validated.
+    Punch {
+        /// The session.
+        session: SessionId,
+        /// The candidate address.
+        addr: SocketAddr,
+    },
     /// Set a session's role (the layer above knows which sessions are hub sessions).
     SetRole {
         /// The session.
@@ -453,6 +482,8 @@ pub enum Query {
     Node,
     /// The ledger entry of an address.
     Ledger(SocketAddr),
+    /// The body of the latest REACH_OUT this session received.
+    ReachOut(SessionId),
 }
 
 /// The counters of a session.
@@ -484,6 +515,12 @@ pub struct SessionStats {
     pub held_dropped: u64,
     /// The probe timeout now: before any round trip sample it starts from the node's round trips.
     pub pto: u64,
+    /// Probe timeouts in a row; above 0 the session is in loss recovery.
+    pub pto_count: u32,
+    /// Whether the active path is validated.
+    pub path_validated: bool,
+    /// When a datagram last arrived on the active path, in the endpoint's clock; 0 before the first.
+    pub heard: u64,
     /// The transport counters, with the smoothed round trip in `srtt`.
     pub transport: Stats,
 }
@@ -549,4 +586,6 @@ pub enum Answer<'q> {
     Node(NodeStats),
     /// A ledger entry.
     Ledger(LedgerEntry),
+    /// A REACH_OUT body, borrowed from the endpoint.
+    ReachOut(&'q [u8]),
 }

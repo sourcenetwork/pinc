@@ -17,6 +17,7 @@ use core::net::SocketAddr;
 use vinc_crypto::NodeId;
 use vinc_security::Alpn;
 use vinc_transport::conn::{ClientParams, Connection, PathInfo, code};
+use vinc_transport::recovery::PathKind;
 
 use crate::acp::ACP_RECHECK;
 use crate::api::{
@@ -25,6 +26,7 @@ use crate::api::{
 };
 use crate::endpoint::{env, ep_impl};
 use crate::keepalive::{LATE_START, MTU_PROBE_DELAY, Role};
+use crate::relay_net::is_relay_addr;
 use crate::slot::State;
 use crate::trace::trace;
 
@@ -32,6 +34,19 @@ use crate::trace::trace;
 pub const UDP_FRESH: u64 = 90_000_000_000;
 /// Application data above this many bytes counts as activity on a quiet session.
 const CTRL_SMALL: usize = 72;
+
+/// What the endpoint knows about the path to `remote`: through a relay, and the address family.
+pub(crate) fn path_info(remote: &SocketAddr) -> PathInfo {
+    PathInfo {
+        kind: if is_relay_addr(remote) {
+            PathKind::Relay
+        } else {
+            PathKind::Direct
+        },
+        v6: remote.is_ipv6(),
+        ..PathInfo::default()
+    }
+}
 
 ep_impl! {
     /// Apply a command at time `now`.
@@ -170,17 +185,17 @@ ep_impl! {
             }
             Command::FlightPaths { session, addrs } => {
                 let i = self.live(session)?;
-                let mut ids: [Option<vinc_transport::conn::PathId>; NP] = [None; NP];
+                let mut ids: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
                 for (d, a) in ids.iter_mut().zip(addrs) {
-                    *d = self.route_for(a).map(|l| self.path_id(l, *a));
+                    *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a)));
                 }
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
                 let mut list: [vinc_transport::conn::PathId; NP] = [vinc_transport::conn::PathId(0); NP];
                 let mut n = 0;
-                for id in ids.iter().flatten() {
+                for (id, info) in ids.iter().flatten() {
                     // A path the connection cannot track is left out of the fan-out.
-                    if conn.add_path(&mut env, *id, PathInfo::default()).is_ok()
+                    if conn.add_path(&mut env, *id, *info).is_ok()
                         && let Some(s) = list.get_mut(n)
                     {
                         *s = *id;
@@ -188,6 +203,31 @@ ep_impl! {
                     }
                 }
                 conn.set_flight_fanout(list.get(..n).unwrap_or_default());
+                self.settle(i, now);
+                Ok(Value::None)
+            }
+            Command::FirstResend { session, delay } => {
+                let i = self.live(session)?;
+                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                conn.set_first_retransmit(now.saturating_add(delay));
+                self.settle(i, now);
+                Ok(Value::None)
+            }
+            Command::ReachOut { session, body } => {
+                if body.is_empty() || body.len() > crate::reach::REACH_BODY_MAX {
+                    return Err(CommandError::BadAlpn);
+                }
+                self.with_conn(session, now, |c| {
+                    c.send_extension(vinc_transport::frame::ext::REACH_OUT, body).map_err(|_| CommandError::NoSession)
+                })
+            }
+            Command::Punch { session, addr } => {
+                let i = self.live(session)?;
+                let local = self.route_for(&addr).ok_or(CommandError::NoRoute)?;
+                let pid = self.path_id(local, addr);
+                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                let mut env = env!(self, now);
+                conn.punch(&mut env, pid, path_info(&addr)).map_err(|_| CommandError::Full)?;
                 self.settle(i, now);
                 Ok(Value::None)
             }
@@ -271,9 +311,9 @@ ep_impl! {
         self.t_first.get_or_insert(now);
         let late = self.t_first.is_some_and(|t| t.saturating_sub(self.started) > LATE_START);
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
-        let mut extra: [Option<vinc_transport::conn::PathId>; NP] = [None; NP];
+        let mut extra: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
         for (d, a) in extra.iter_mut().zip(addrs.iter().filter(|a| **a != first)) {
-            *d = self.route_for(a).map(|l| self.path_id(l, *a));
+            *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a)));
         }
         let cfg = self.conn_config(Some(&node));
         let params = ClientParams {
@@ -284,7 +324,7 @@ ep_impl! {
             peer_has_prekey,
             ticket,
             path: pid,
-            path_info: PathInfo::default(),
+            path_info: path_info(&first),
         };
         let mut env = env!(self, now);
         let mut conn = match Connection::client(cfg, params, mem, &mut env) {
@@ -295,8 +335,8 @@ ep_impl! {
             }
         };
         // The other addresses are candidate paths; one that cannot be added is not worth failing the dial.
-        for p in extra.iter().flatten() {
-            let _ = conn.add_path(&mut env, *p, PathInfo::default());
+        for (p, info) in extra.iter().flatten() {
+            let _ = conn.add_path(&mut env, *p, *info);
         }
         // A ticket resume to a hub after a late start waits for the remembered round trip before its first resend.
         if resume
@@ -354,6 +394,7 @@ ep_impl! {
                 .and_then(vinc_transport::conn::Connection::pending_key_request)
                 .map_or(Answer::None, Answer::KeyRequest),
             Query::Node => Answer::Node(self.node_stats()),
+            Query::ReachOut(id) => self.reach_in.get(id).map_or(Answer::None, Answer::ReachOut),
             Query::Ledger(a) => self.ledger.get(&a).map_or(Answer::None, Answer::Ledger),
         }
     }
@@ -378,6 +419,9 @@ ep_impl! {
             held: slot.m.held.len(),
             held_dropped: slot.m.held.dropped,
             pto: conn.recovery().pto_duration(),
+            pto_count: conn.recovery().pto_count(),
+            path_validated: path.is_some_and(|p| conn.path_validated(p)),
+            heard: path.and_then(|p| conn.path_last_rx(p)).unwrap_or(0),
             transport,
         })
     }

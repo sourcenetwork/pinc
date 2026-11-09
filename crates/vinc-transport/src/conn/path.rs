@@ -298,6 +298,26 @@ conn_impl! {
         Ok(())
     }
 
+    /// Add the path `id`, or start its 9-probe punch over again if the connection already tracks it. Used to re-punch
+    /// a candidate path that did not validate.
+    ///
+    /// # Errors
+    /// As [`add_path`](Self::add_path).
+    pub fn punch(&mut self, env: &mut Env<'_, P>, id: PathId, info: PathInfo) -> Result<(), PathError> {
+        let known = self.paths.find(id).is_some();
+        self.add_path(env, id, info)?;
+        if known && self.phase == Phase::Connected && let Some(i) = self.paths.find(id) && !self.paths.get(i).is_some_and(|p| p.validated) {
+            self.start_punch(env, i);
+        }
+        Ok(())
+    }
+
+    /// When a datagram last arrived on a path, in the connection's clock; 0 before the first.
+    pub fn path_last_rx(&self, id: PathId) -> Option<u64> {
+        let i = self.paths.find(id)?;
+        self.paths.get(i).map(|p| p.last_rx)
+    }
+
     /// Challenge `id` again now, to refresh its round trip or check that it still works.
     ///
     /// # Errors
