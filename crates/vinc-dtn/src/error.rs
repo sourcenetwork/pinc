@@ -30,6 +30,8 @@ pub enum DtnError {
     Incomplete,
     /// The decoded bundle does not hash to the signed root: the sender's parity was not a valid code word.
     Inconsistent,
+    /// The bundle id in the head is not the one derived from its source, creation time and ephemeral key.
+    BadId,
     /// The set of verified ranges is full; the slice was not recorded and can be fetched again.
     ReceptionFull,
 }
@@ -64,6 +66,7 @@ impl fmt::Display for DtnError {
             Self::Expired => f.write_str("the bundle is past its lifetime"),
             Self::Incomplete => f.write_str("too few symbols held to decode"),
             Self::Inconsistent => f.write_str("the decoded bundle does not match its root"),
+            Self::BadId => f.write_str("the bundle id does not match the head"),
             Self::ReceptionFull => f.write_str("the verified-range set is full"),
         }
     }

@@ -241,7 +241,7 @@ fn partial_reception_resumes_and_decodes_from_any_k_symbols() {
     // Block 2 (k = 2) holds symbols 12, 14, 15: three of four. Block 0 holds 0, 1, 4, 5. Block 1 holds 6, 8, 10, 11.
     assert!(rx.is_decodable());
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
-    rx.finish(&mut outboard).unwrap();
+    dtn_common::finish(&mut rx, &mut outboard).unwrap();
     assert!(rx.is_complete());
     assert_eq!(outboard, s.outboard);
     assert_eq!(rx.sealed(), &s.sealed[..]);
@@ -262,7 +262,7 @@ fn undecodable_partial_bundle_reports_incomplete() {
     let mut rx = Reception::<8>::new(&s.signed, &mut buf, NOW).unwrap();
     rx.feed(0..3, &s.proof(0..3)).unwrap();
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
-    assert_eq!(rx.finish(&mut outboard).err(), Some(DtnError::Incomplete));
+    assert_eq!(dtn_common::finish(&mut rx, &mut outboard).err(), Some(DtnError::Incomplete));
     assert!(!rx.is_complete());
 }
 
@@ -292,7 +292,7 @@ fn inconsistent_parity_is_detected_not_trusted() {
     let mut rx = Reception::<8>::new(&bad.signed, &mut buf, NOW).unwrap();
     rx.feed(0..2, &bad.proof(0..2)).unwrap();
     let mut ob = vec![0; layout.outboard_len().unwrap() as usize];
-    assert_eq!(rx.finish(&mut ob).err(), Some(DtnError::Inconsistent));
+    assert_eq!(dtn_common::finish(&mut rx, &mut ob).err(), Some(DtnError::Inconsistent));
     assert!(!rx.is_complete());
 }
 
@@ -444,4 +444,63 @@ proptest! {
         let s = make(&sender, &to, plan(k, m, log), &payload, seed);
         prop_assert_eq!(receive_and_open(&s, &to).unwrap(), payload);
     }
+}
+
+#[test]
+fn finish_never_writes_over_a_held_symbol() {
+    // A sender whose parity is not a code word: the signed root commits to it. Holding the bad parity symbol and one
+    // data symbol, finish solves the missing data from the parity, finds the root does not match and must leave
+    // every held symbol as it was verified.
+    let sender = keypair(IdentityAlg::Ed25519, 1);
+    let to = recipient(IdentityAlg::Ed25519, 2, 1);
+    let good = make(&sender, &to, plan(2, 1, 0), &bytes(5, 1_800), 3);
+    let layout = good.signed.head().layout().unwrap();
+    let g = layout.slice_len() as usize;
+    let mut sealed = good.sealed.clone();
+    sealed[2 * g] ^= 0xff;
+    let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
+    let root = vinc_dag::tree::build_outboard(&sealed, 0, &mut outboard).unwrap();
+    let mut head = *good.signed.head();
+    head.root = root;
+    let signed = SignedHead::sign(head, &sender).unwrap();
+    let bad = Sealed {
+        signed,
+        sealed,
+        outboard,
+        payload: Vec::new(),
+    };
+    let mut buf = vec![0; layout.total_len() as usize];
+    let mut rx = Reception::<8>::new(&bad.signed, &mut buf, NOW).unwrap();
+    rx.feed(0..1, &bad.proof(0..1)).unwrap();
+    rx.feed(2..3, &bad.proof(2..3)).unwrap();
+    let mut ob = vec![0; layout.outboard_len().unwrap() as usize];
+    assert_eq!(dtn_common::finish(&mut rx, &mut ob).err(), Some(DtnError::Inconsistent));
+    assert!(rx.holds(0) && rx.holds(2) && !rx.holds(1));
+    assert_eq!(&rx.sealed()[..g], &bad.sealed[..g]);
+    assert_eq!(&rx.sealed()[2 * g..3 * g], &bad.sealed[2 * g..3 * g]);
+    // The scratch and outboard sizes are checked before anything moves.
+    let mut scratch = vec![0; rx.scratch_len().unwrap()];
+    assert_eq!(rx.finish(&mut ob[1..], &mut scratch).err(), Some(DtnError::Buffer));
+    assert_eq!(rx.finish(&mut ob, &mut scratch[1..]).err(), Some(DtnError::Buffer));
+}
+
+#[test]
+fn decapsulate_recomputes_the_bundle_id() {
+    let sender = keypair(IdentityAlg::Ed25519, 1);
+    let to = recipient(IdentityAlg::Ed25519, 2, 1);
+    let s = make(&sender, &to, plan(2, 1, 0), &bytes(5, 1_800), 3);
+    let mut head = *s.signed.head();
+    decapsulate(&Software, &to.keys, &to.dk, &to.xs, &head).unwrap();
+    // A head whose id is not derived from its source, creation time and ephemeral key is refused.
+    head.id = BundleId([0xaa; 32]);
+    assert_eq!(
+        decapsulate(&Software, &to.keys, &to.dk, &to.xs, &head).err(),
+        Some(DtnError::BadId)
+    );
+    let mut head = *s.signed.head();
+    head.created = Hlc::new(head.created.wall + 1, head.created.counter);
+    assert_eq!(
+        decapsulate(&Software, &to.keys, &to.dk, &to.xs, &head).err(),
+        Some(DtnError::BadId)
+    );
 }

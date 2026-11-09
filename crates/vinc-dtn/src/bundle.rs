@@ -9,7 +9,9 @@
 //! proof; the set of held symbols only grows; the reception borrows the caller's buffer, which must be exactly the
 //! sealed length the head commits to, so memory is bounded and charged by the caller before any byte arrives
 //! ([`SliceLayout::total_len`] is the charge); decoding from any `k` symbols of a block checks the result against the
-//! root, so a sender whose parity was not a code word is detected, never trusted. No path allocates or panics.
+//! root, so a sender whose parity was not a code word is detected, never trusted; decoding runs in caller-provided
+//! scratch and writes only symbols that are not held, so a held symbol keeps its verified bytes. No path allocates
+//! or panics.
 
 use core::ops::Range;
 
@@ -330,15 +332,32 @@ impl<'a, const W: usize> Reception<'a, W> {
         })
     }
 
+    /// The size of the scratch buffer [`Reception::finish`] needs: one erasure block of symbols, the largest one.
+    ///
+    /// # Errors
+    /// [`DtnError::Buffer`] if the size does not fit `usize`.
+    pub fn scratch_len(&self) -> Result<usize, DtnError> {
+        usz(self.layout.slice_len())?
+            .checked_mul(self.layout.block_n(0))
+            .ok_or(DtnError::Buffer)
+    }
+
     /// Recover every missing symbol from any `k` of its block, rebuild the outboard into `outboard` (exactly
     /// [`SliceLayout::outboard_len`] bytes) and check the result against the signed root. Afterwards the buffer is
     /// the complete sealed bundle: it can be served and opened.
     ///
+    /// Each block is reconstructed in `scratch` (exactly [`Reception::scratch_len`] bytes), and only the symbols
+    /// that are not held are copied back, so a held symbol is never written over, even when the check fails.
+    ///
     /// # Errors
-    /// [`DtnError::Incomplete`] if a block holds fewer than `k` symbols; [`DtnError::Inconsistent`] if the decoded
-    /// bundle does not hash to the root (the sender's parity was not a code word; nothing is marked held);
-    /// [`DtnError::Buffer`] for a wrong-sized outboard.
-    pub fn finish(&mut self, outboard: &mut [u8]) -> Result<(), DtnError> {
+    /// [`DtnError::Buffer`] for a wrong-sized `outboard` or `scratch` (nothing changes);
+    /// [`DtnError::Incomplete`] if a block holds fewer than `k` symbols (earlier blocks are already completed);
+    /// [`DtnError::Inconsistent`] if the decoded bundle does not hash to the root (the sender's parity was not a code
+    /// word; nothing is marked held and no held symbol was touched).
+    pub fn finish(&mut self, outboard: &mut [u8], scratch: &mut [u8]) -> Result<(), DtnError> {
+        if u64::try_from(outboard.len()) != Ok(self.layout.outboard_len()?) || scratch.len() != self.scratch_len()? {
+            return Err(DtnError::Buffer);
+        }
         let g = usz(self.layout.slice_len())?;
         for b in 0..self.layout.blocks() {
             let (start, n) = (self.layout.block_start(b), self.layout.block_n(b));
@@ -352,10 +371,14 @@ impl<'a, const W: usize> Reception<'a, W> {
             }
             let from = usz(start)? * g;
             let region = self.buf.get_mut(from..from + n * g).ok_or(DtnError::Buffer)?;
-            Rs::new(self.layout.block_k(b), usize::from(self.layout.m()))?.reconstruct(g, region, present)?;
-        }
-        if u64::try_from(outboard.len()) != Ok(self.layout.outboard_len()?) {
-            return Err(DtnError::Buffer);
+            let work = scratch.get_mut(..n * g).ok_or(DtnError::Buffer)?;
+            work.copy_from_slice(region);
+            Rs::new(self.layout.block_k(b), usize::from(self.layout.m()))?.reconstruct(g, work, present)?;
+            for ((dst, src), held) in region.chunks_exact_mut(g).zip(work.chunks_exact(g)).zip(present.iter()) {
+                if !held {
+                    dst.copy_from_slice(src);
+                }
+            }
         }
         let root = build_outboard(self.buf, u32::from(self.layout.slice_log()), outboard)?;
         if root != self.head.root {

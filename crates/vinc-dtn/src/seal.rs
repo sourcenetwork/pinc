@@ -135,10 +135,12 @@ pub fn encapsulate<P: Provider>(
 /// The recipient's half: decapsulate the head's envelope with the static secret keys.
 ///
 /// `own` is the recipient's own published record (its keys must match the secrets); the head must be addressed to
-/// `own.node` under `own.epoch`.
+/// `own.node` under `own.epoch`, and its id must be the one derived from its source, creation time and ephemeral
+/// key (the id is recomputed, never trusted).
 ///
 /// # Errors
-/// [`DtnError::WrongRecipient`] for another node or epoch; [`DtnError::Crypto`] for a low-order ephemeral key. A
+/// [`DtnError::WrongRecipient`] for another node or epoch; [`DtnError::BadId`] if the head's id is not the derived
+/// one; [`DtnError::Crypto`] for a low-order ephemeral key. A
 /// forged KEM ciphertext does not error here: ML-KEM rejects implicitly, so the key differs and the first slice
 /// fails authentication.
 pub fn decapsulate<P: Provider>(
@@ -151,10 +153,14 @@ pub fn decapsulate<P: Provider>(
     if head.destination != own.node || head.envelope.epoch != own.epoch {
         return Err(DtnError::WrongRecipient);
     }
+    let id = BundleId::derive(&head.source, head.created, &head.envelope.eph_x25519);
+    if id != head.id {
+        return Err(DtnError::BadId);
+    }
     let ss_x = p.x25519_dh(x25519_secret, &head.envelope.eph_x25519)?;
     let ct = p.kem_ciphertext(&head.envelope.kem_ct)?;
     let ss_k = p.kem_decapsulate(kem_dk, &ct)?;
-    let th = transcript_hash(own, &head.envelope.eph_x25519, &head.envelope.kem_ct, &head.id);
+    let th = transcript_hash(own, &head.envelope.eph_x25519, &head.envelope.kem_ct, &id);
     derive(p, &ss_k, &ss_x, th)
 }
 

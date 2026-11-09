@@ -21,7 +21,8 @@
 )]
 
 use vinc_crypto::{IdentityAlg, Keypair, Provider, Secret, Software};
-use vinc_dtn::bundle::{Outgoing, Plan, seal_bundle, serve, serve_len};
+use vinc_dtn::DtnError;
+use vinc_dtn::bundle::{Outgoing, Plan, Reception, seal_bundle, serve, serve_len};
 use vinc_dtn::head::{Erasure, SignedHead};
 use vinc_dtn::hlc::Hlc;
 use vinc_dtn::seal::{RecipientKeys, SealSeeds};
@@ -127,4 +128,10 @@ impl Sealed {
         );
         out
     }
+}
+
+/// `Reception::finish` with a scratch block allocated for the call.
+pub fn finish<const W: usize>(rx: &mut Reception<'_, W>, outboard: &mut [u8]) -> Result<(), DtnError> {
+    let mut scratch = vec![0; rx.scratch_len().unwrap()];
+    rx.finish(outboard, &mut scratch)
 }
