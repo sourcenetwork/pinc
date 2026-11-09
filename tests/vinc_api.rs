@@ -15,15 +15,11 @@ mod vinc_common;
 
 use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 
-use vinc::{
-    Admission, Direction, Discovery, ErrorKind, NodeAddr, NodeId, Vinc, block_on, node_from_str, node_to_string,
-};
-use vinc_common::{ECHO, Svc, lo, serve_conn};
+use vinc::{Admission, Direction, Discovery, ErrorKind, NodeAddr, NodeId, Vinc, node_from_str, node_to_string};
+use vinc_common::{ECHO, Svc, bind, client, node, register, serve_conn, within};
 
 fn assert_send_sync<T: Send + Sync + 'static>() {}
 
@@ -34,19 +30,12 @@ fn handles_are_send_sync_static() {
     assert_send_sync::<vinc::Incoming>();
     assert_send_sync::<vinc::SendStream>();
     assert_send_sync::<vinc::RecvStream>();
-    assert_send_sync::<vinc::blocking::Endpoint>();
     assert_send_sync::<vinc::Error>();
 }
 
-#[test]
-fn addresses_round_trip() {
-    let node = Vinc::builder()
-        .seed(&[9; 32])
-        .unwrap()
-        .bind_addr(lo())
-        .bind_blocking()
-        .unwrap()
-        .id();
+#[nuclei::test]
+async fn addresses_round_trip() {
+    let node = bind(Vinc::builder().seed(&[9; 32]).unwrap()).await.id();
     let text = node_to_string(&node);
     assert_eq!(text.len(), 64);
     assert_eq!(node_from_str(&text).unwrap(), node);
@@ -60,30 +49,16 @@ fn addresses_round_trip() {
     }
 }
 
-#[test]
-fn identity_is_the_seed_and_signs() {
-    let a = Vinc::builder()
-        .seed(&[5; 32])
-        .unwrap()
-        .bind_addr(lo())
-        .bind_blocking()
-        .unwrap();
-    let b = Vinc::builder()
-        .seed(&[5; 32])
-        .unwrap()
-        .bind_addr(lo())
-        .bind_blocking()
-        .unwrap();
+#[nuclei::test]
+async fn identity_is_the_seed_and_signs() {
+    let a = bind(Vinc::builder().seed(&[5; 32]).unwrap()).await;
+    let b = bind(Vinc::builder().seed(&[5; 32]).unwrap()).await;
     assert_eq!(a.id(), b.id());
     assert_eq!(a.public_key(), &a.id().bytes);
-    let sig = a.sign(b"message").unwrap();
+    let sig = within(30, a.sign(b"message")).await.unwrap();
     assert_eq!(sig.len(), 64);
-    vinc_crypto_verify(&a, b"message", &sig);
-}
-
-fn vinc_crypto_verify(a: &vinc::Endpoint, msg: &[u8], sig: &[u8]) {
     // Verify with the public key through the crypto crate the facade uses.
-    vinc_crypto::identity::verify(vinc_crypto::IdentityAlg::Ed25519, a.public_key(), msg, sig).unwrap();
+    vinc_crypto::identity::verify(vinc_crypto::IdentityAlg::Ed25519, a.public_key(), b"message", &sig).unwrap();
 }
 
 struct Gate {
@@ -98,47 +73,34 @@ impl Admission for Gate {
     }
 }
 
-#[test]
-fn access_hook_refuses_on_accept_and_on_dial_and_serves_gossip_checks() {
-    let denied = Vinc::builder()
-        .seed(&[7; 32])
-        .unwrap()
-        .alpn(ECHO)
-        .bind_addr(lo())
-        .bind_blocking()
-        .unwrap();
+#[nuclei::test]
+async fn access_hook_refuses_on_accept_and_on_dial_and_serves_gossip_checks() {
+    let denied = bind(Vinc::builder().seed(&[7; 32]).unwrap().alpn(ECHO)).await;
     let seen = Arc::new(AtomicUsize::new(0));
-    let server = Vinc::builder()
-        .alpn(ECHO)
-        .bind_addr(lo())
-        .acp(Gate {
-            seen: Arc::clone(&seen),
-            deny: Some(denied.id()),
-        })
-        .bind_blocking()
-        .unwrap();
+    let server = bind(Vinc::builder().alpn(ECHO).acp(Gate {
+        seen: Arc::clone(&seen),
+        deny: Some(denied.id()),
+    }))
+    .await;
     let s = server.clone();
-    thread::spawn(move || {
-        block_on(async move {
-            while let Some(i) = s.accept().await {
-                thread::spawn(move || block_on(serve_conn(i.into_connection())));
-            }
-        })
-    });
+    nuclei::spawn(async move {
+        while let Some(i) = s.accept().await {
+            nuclei::spawn(serve_conn(i.into_connection())).detach();
+        }
+    })
+    .detach();
 
-    // A peer the hook allows connects and works.
-    let ok = Vinc::builder().alpn(ECHO).bind_addr(lo()).bind_blocking().unwrap();
-    block_on(async {
+    within(60, async {
+        // A peer the hook allows connects and works.
+        let ok = client().await;
         let c = ok.connect(server.addr(), ECHO).await.unwrap();
         let (mut tx, mut rx) = c.open_bi().await.unwrap();
         tx.write_all(b"ok").await.unwrap();
         tx.finish().await.unwrap();
         assert_eq!(rx.read_to_end(10).await.unwrap(), b"ok");
-    });
-    assert!(seen.load(Ordering::SeqCst) >= 1);
+        assert!(seen.load(Ordering::SeqCst) >= 1);
 
-    // The denied peer is closed out: its streams never work.
-    block_on(async {
+        // The denied peer is closed out: its streams never work.
         match denied.connect(server.addr(), ECHO).await {
             Err(e) => assert!(
                 matches!(
@@ -158,55 +120,39 @@ fn access_hook_refuses_on_accept_and_on_dial_and_serves_gossip_checks() {
                 assert!(r.is_err(), "the denied peer got an echo");
             }
         }
-    });
 
-    // The same hook answers for a gossip neighbour.
-    assert!(server.admit(&ok.id(), b"gossip", Direction::Gossip));
-    assert!(!server.admit(&denied.id(), b"gossip", Direction::Gossip));
+        // The same hook answers for a gossip neighbour.
+        assert!(server.admit(&ok.id(), b"gossip", Direction::Gossip));
+        assert!(!server.admit(&denied.id(), b"gossip", Direction::Gossip));
+    })
+    .await;
 }
 
 struct Book(SocketAddr, NodeId);
 impl Discovery for Book {
-    fn lookup<'a>(&'a self, node: &'a NodeId) -> Pin<Box<dyn Future<Output = Vec<SocketAddr>> + Send + 'a>> {
-        let found = if *node == self.1 { vec![self.0] } else { Vec::new() };
-        Box::pin(async move { found })
+    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> + Send {
+        std::future::ready(if *node == self.1 { vec![self.0] } else { Vec::new() })
     }
 }
 
-#[test]
-fn discovery_unreachable_and_self_dial_errors() {
-    let server = Vinc::builder()
-        .seed(&[3; 32])
-        .unwrap()
-        .alpn(ECHO)
-        .bind_addr(lo())
-        .bind_blocking()
-        .unwrap();
+#[nuclei::test]
+async fn discovery_unreachable_and_self_dial_errors() {
+    let server = bind(Vinc::builder().seed(&[3; 32]).unwrap().alpn(ECHO)).await;
     let s = server.clone();
-    thread::spawn(move || {
-        block_on(async move {
-            while let Some(i) = s.accept().await {
-                std::mem::forget(i);
-            }
-        })
-    });
-    let client = Vinc::builder()
-        .discovery(Book(server.local_addr(), server.id()))
-        .bind_addr(lo())
-        .bind_blocking()
-        .unwrap();
-    block_on(async {
+    nuclei::spawn(async move {
+        while let Some(i) = s.accept().await {
+            std::mem::forget(i);
+        }
+    })
+    .detach();
+    let book = Book(server.local_addr(), server.id());
+    let client = bind(Vinc::builder().discovery(book)).await;
+    within(120, async {
         // No address given: discovery supplies it.
         let c = client.connect(server.id(), ECHO).await.unwrap();
         assert_eq!(c.remote(), server.id());
         // An unknown node with no address cannot be reached.
-        let nobody = Vinc::builder()
-            .seed(&[4; 32])
-            .unwrap()
-            .bind_addr(lo())
-            .bind_blocking()
-            .unwrap()
-            .id();
+        let nobody = bind(Vinc::builder().seed(&[4; 32]).unwrap()).await.id();
         assert_eq!(
             client.connect(nobody, ECHO).await.unwrap_err().kind(),
             ErrorKind::Unreachable
@@ -221,25 +167,26 @@ fn discovery_unreachable_and_self_dial_errors() {
             client.connect(server.addr(), b"").await.unwrap_err().kind(),
             ErrorKind::Config
         );
-    });
+    })
+    .await;
 }
 
-#[test]
-fn registered_protocols_tags_and_alpn_limits() {
-    let server = Vinc::builder().bind_addr(lo()).bind_blocking().unwrap();
-    let client = Vinc::builder().bind_addr(lo()).bind_blocking().unwrap();
-    block_on(async {
+#[nuclei::test]
+async fn registered_protocols_tags_and_alpn_limits() {
+    let server = bind(Vinc::builder()).await;
+    let client = bind(Vinc::builder()).await;
+    within(120, async {
         for a in [&b"t/a"[..], b"t/b", b"t/c", b"t/d"] {
             let a: &'static [u8] = Box::leak(a.to_vec().into_boxed_slice());
-            server.register(Arc::new(Svc(a))).await.unwrap();
+            register(&server, Arc::new(Svc(a))).await.unwrap();
         }
         // A fifth, a repeat and a bad name are refused.
         assert_eq!(
-            server.register(Arc::new(Svc(b"t/e"))).await.unwrap_err().kind(),
+            register(&server, Arc::new(Svc(b"t/e"))).await.unwrap_err().kind(),
             ErrorKind::Config
         );
         assert_eq!(
-            server.register(Arc::new(Svc(b"t/a"))).await.unwrap_err().kind(),
+            register(&server, Arc::new(Svc(b"t/a"))).await.unwrap_err().kind(),
             ErrorKind::Config
         );
 
@@ -258,22 +205,15 @@ fn registered_protocols_tags_and_alpn_limits() {
             ErrorKind::Config
         );
         tx.reset(9);
-    });
+    })
+    .await;
 }
 
-#[test]
-fn close_peer_and_shutdown() {
-    let server = Vinc::builder().alpn(ECHO).bind_addr(lo()).bind_blocking().unwrap();
-    let s = server.clone();
-    thread::spawn(move || {
-        block_on(async move {
-            while let Some(i) = s.accept().await {
-                thread::spawn(move || block_on(serve_conn(i.into_connection())));
-            }
-        })
-    });
-    let client = Vinc::builder().alpn(ECHO).bind_addr(lo()).bind_blocking().unwrap();
-    block_on(async {
+#[nuclei::test]
+async fn close_peer_and_shutdown() {
+    let server = node().await;
+    let client = client().await;
+    within(120, async {
         let c = client.connect(server.addr(), ECHO).await.unwrap();
         client.close_peer(&server.id());
         let why = c.closed().await;
@@ -286,5 +226,6 @@ fn close_peer_and_shutdown() {
             client.connect(server.addr(), ECHO).await.unwrap_err().kind(),
             ErrorKind::Shutdown
         );
-    });
+    })
+    .await;
 }

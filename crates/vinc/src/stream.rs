@@ -1,9 +1,8 @@
 //! Streams: a [`SendStream`] and a [`RecvStream`] that implement the `futures-io` traits.
 //!
-//! Bytes cross to the engine thread in blocks of at most 16 KiB through bounded channels, so a stream holds at most
-//! `Limits::stream_blocks` blocks per direction outside the endpoint. Every wait is a channel wait owned by the stream
-//! itself, not by the future that asked, so a dropped future never loses bytes and never leaves the stream half
-//! updated.
+//! Bytes cross to the driver in blocks of at most 16 KiB through bounded channels, so a stream holds at most
+//! `Limits::stream_blocks` blocks per direction outside the endpoint. Every wait registers the task's waker on a signal
+//! of the stream and checks again, so a dropped future never loses bytes and never leaves the stream half updated.
 //!
 //! # Cancel safety
 //!
@@ -18,32 +17,17 @@
 //! Dropping a [`SendStream`] without finishing it finishes it after the bytes already written (a clean end). Dropping a
 //! [`RecvStream`] discards what the peer still sends.
 
-use std::future::{Future, poll_fn};
+use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
 use futures_io::{AsyncRead, AsyncWrite};
 use vinc_driver::{BLOCK, Ctl, Error, ErrorKind, Item, NewStream, Receiver, Result, Sender, StreamShared};
 
 use crate::conn::ConnInner;
-
-type Pending<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-
-/// A value only `&mut` reaches, made `Sync` for the handle's sake: the lock is never contended, as `get_mut` shows.
-struct Exclusive<T>(Mutex<T>);
-
-impl<T> Exclusive<T> {
-    const fn new(v: T) -> Self {
-        Self(Mutex::new(v))
-    }
-
-    fn get(&mut self) -> &mut T {
-        self.0.get_mut().unwrap_or_else(PoisonError::into_inner)
-    }
-}
 
 fn io_err(e: Error) -> io::Error {
     e.into()
@@ -54,8 +38,6 @@ pub struct SendStream {
     conn: Arc<ConnInner>,
     shared: Arc<StreamShared>,
     tx: Sender<Item>,
-    // A wait for room in the channel. It carries no bytes, so dropping a write that was waiting loses nothing.
-    wait: Exclusive<Option<Pending<()>>>,
     finished: bool,
 }
 
@@ -66,7 +48,6 @@ pub struct RecvStream {
     rx: Option<Receiver<Vec<u8>>>,
     cur: Vec<u8>,
     pos: usize,
-    next: Exclusive<Option<Pending<Option<Vec<u8>>>>>,
     done: bool,
     stopped: u64,
 }
@@ -93,7 +74,6 @@ pub(crate) fn halves(conn: &Arc<ConnInner>, n: NewStream) -> (Option<SendStream>
         conn: Arc::clone(conn),
         shared: Arc::clone(&n.shared),
         tx,
-        wait: Exclusive::new(None),
         finished: false,
     });
     let recv = n.rx.map(|rx| RecvStream {
@@ -102,7 +82,6 @@ pub(crate) fn halves(conn: &Arc<ConnInner>, n: NewStream) -> (Option<SendStream>
         rx: Some(rx),
         cur: Vec::new(),
         pos: 0,
-        next: Exclusive::new(None),
         done: false,
         stopped: 0,
     });
@@ -119,24 +98,19 @@ impl SendStream {
         self.shared.tx_err.get().copied()
     }
 
-    /// Wait until the channel has room for one more item. An empty block, which the engine ignores, stands in for the
-    /// item while waiting, so the wait owns none of the caller's bytes.
-    fn poll_room(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        loop {
-            if let Some(w) = self.wait.get().as_mut() {
-                if w.as_mut().poll(cx).is_pending() {
-                    return Poll::Pending;
-                }
-                *self.wait.get() = None;
-            }
-            if !self.tx.is_full() {
-                return Poll::Ready(());
-            }
-            let tx = self.tx.clone();
-            *self.wait.get() = Some(Box::pin(async move { tx.send_async(Item::Data(Vec::new())).await }));
-            // The engine may be idle with a full channel: make sure it looks.
-            self.conn.remote.nudge(&self.shared);
+    /// Wait until the channel has room for one more item, or the stream has failed (the caller looks).
+    fn poll_room(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let ready = || !self.tx.is_full() || self.shared.tx_err.get().is_some();
+        if ready() {
+            return Poll::Ready(());
         }
+        self.shared.writable.register(cx.waker());
+        if ready() {
+            return Poll::Ready(());
+        }
+        // The driver may be idle with a full channel: make sure it looks.
+        self.conn.remote.nudge(&self.shared);
+        Poll::Pending
     }
 
     fn poll_write_inner(&mut self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
@@ -152,6 +126,9 @@ impl SendStream {
         if self.poll_room(cx).is_pending() {
             return Poll::Pending;
         }
+        if let Some(e) = self.failed() {
+            return Poll::Ready(Err(e));
+        }
         let n = buf.len().min(BLOCK);
         self.tx.send(Item::Data(buf.get(..n).unwrap_or_default().to_vec()));
         self.conn.remote.nudge(&self.shared);
@@ -165,6 +142,9 @@ impl SendStream {
         if !self.finished {
             if self.poll_room(cx).is_pending() {
                 return Poll::Pending;
+            }
+            if let Some(e) = self.failed() {
+                return Poll::Ready(Err(e));
             }
             self.finished = true;
             self.tx.send(Item::Fin);
@@ -204,7 +184,6 @@ impl SendStream {
     /// Abandon the stream: bytes not yet sent are dropped and the peer sees a reset with `code`.
     pub fn reset(&mut self, code: u64) {
         self.finished = true;
-        *self.wait.get() = None;
         self.conn
             .remote
             .ctl(Ctl::Reset(self.shared.session, self.shared.id, code));
@@ -225,7 +204,8 @@ impl RecvStream {
         }
     }
 
-    /// Take the next block into `cur`; `Ready(false)` at the end of the stream.
+    /// Take the next block into `cur`; `Ready(false)` at the end of the stream. The end is the stream's reason, set
+    /// after the last block was sent, so blocks are drained once more after it is seen.
     fn poll_block(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
         let Some(rx) = self.rx.as_ref() else {
             return Poll::Ready(Err(Error::new(
@@ -233,27 +213,27 @@ impl RecvStream {
                 "the stream was stopped",
             )));
         };
-        let fut = self.next.get().get_or_insert_with(|| {
-            let rx = rx.clone();
-            Box::pin(async move { rx.recv_async().await })
-        });
-        match fut.as_mut().poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(b)) => {
-                *self.next.get() = None;
+        let mut registered = false;
+        loop {
+            let ended = self.shared.rx_end.get().is_some();
+            if let Some(b) = rx.try_recv() {
                 self.cur = b;
                 self.pos = 0;
                 // The channel has room again: wake the engine if it stopped for lack of it.
                 if self.shared.starved.swap(false, Ordering::SeqCst) {
                     self.conn.remote.nudge(&self.shared);
                 }
-                Poll::Ready(Ok(true))
+                return Poll::Ready(Ok(true));
             }
-            Poll::Ready(None) => {
-                *self.next.get() = None;
+            if ended {
                 self.done = true;
-                self.end().map(|_| false).into()
+                return self.end().map(|_| false).into();
             }
+            if registered {
+                return Poll::Pending;
+            }
+            self.shared.readable.register(cx.waker());
+            registered = true;
         }
     }
 
@@ -340,7 +320,6 @@ impl RecvStream {
     pub fn stop(&mut self, code: u64) {
         self.rx = None;
         self.stopped = code;
-        *self.next.get() = None;
         self.cur.clear();
         self.conn
             .remote
@@ -352,7 +331,6 @@ impl Drop for RecvStream {
     fn drop(&mut self) {
         if self.rx.is_some() && !self.done {
             self.rx = None;
-            *self.next.get() = None;
             self.conn.remote.nudge(&self.shared);
         }
     }

@@ -6,7 +6,10 @@
 2. Every member has the one workspace version (`version.workspace = true`), and every VINC crate entry in
    `[workspace.dependencies]` pins that same version.
 3. Every library crate under `crates/` forbids unsafe code in its root (`#![forbid(unsafe_code)]`); the workspace lint is only `deny` so the test allocator can allow it.
-4. No library crate under `crates/` depends, directly or transitively, on an async runtime.
+4. No library crate under `crates/` depends, directly or transitively, on an async runtime. nuclei, the runtime the
+   facade is built and tested on, is allowed in `vinc-nuclei` only (and in `vinc` through its optional `nuclei`
+   feature); everywhere else it is refused, as a dependency of any kind except the dev-dependencies of `vinc`, `tests`
+   and `benches`.
 5. Pure Rust: no crate that compiles or links C (crypto or otherwise) is anywhere in the workspace graph.
 6. No QUIC library in VINC: no member except the comparison harness (`vinc-benches`, which measures iroh and
    rust-libp2p, both built on QUIC stacks) may depend, directly or transitively, on a QUIC implementation.
@@ -16,7 +19,10 @@ import subprocess
 import sys
 import tomllib
 
-RUNTIMES = {"tokio", "async-std", "smol", "async-executor", "glommio", "monoio", "embassy-executor"}
+RUNTIMES = {"tokio", "async-std", "smol", "async-executor", "glommio", "monoio", "embassy-executor", "nuclei"}
+# The members that may reach nuclei: the I/O crate, the facade that re-exports it, and the tests and benches.
+NUCLEI_HOMES = {"vinc-nuclei", "vinc", "vinc-tests", "vinc-benches"}
+NUCLEI_DEV_ONLY = {"vinc", "vinc-tests", "vinc-benches"}
 SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
 
 try:
@@ -35,6 +41,17 @@ for pkg in meta["packages"]:
         for name, spec in table.items():
             if not (isinstance(spec, dict) and spec.get("workspace") is True):
                 failed.append(f"{pkg['name']}: dependency `{name}` must be `{{ workspace = true }}`; declare it in the root Cargo.toml")
+
+for pkg in meta["packages"]:
+    if pkg["id"] not in members:
+        continue
+    for dep in pkg["dependencies"]:
+        if dep["name"] != "nuclei":
+            continue
+        if pkg["name"] not in NUCLEI_HOMES:
+            failed.append(f"{pkg['name']}: depends on the runtime nuclei; only vinc-nuclei, the facade's dev-dependencies, tests and benches may")
+        elif dep["kind"] != "dev" and pkg["name"] in NUCLEI_DEV_ONLY - {"vinc-tests", "vinc-benches"}:
+            failed.append(f"{pkg['name']}: nuclei must be a dev-dependency here; the facade reaches it through vinc-nuclei")
 
 root = tomllib.load(open(meta["workspace_root"] + "/Cargo.toml", "rb"))["workspace"]
 version = root["package"]["version"]
@@ -66,7 +83,7 @@ for pkg in meta["packages"]:
             if any(k["kind"] in (None, "build") for k in dep["dep_kinds"]) and dep["pkg"] not in seen:
                 seen.add(dep["pkg"])
                 stack.append(dep["pkg"])
-    bad = sorted(names[d] for d in seen if names[d] in RUNTIMES)
+    bad = sorted(names[d] for d in seen if names[d] in RUNTIMES and not (names[d] == "nuclei" and pkg["name"] in NUCLEI_HOMES))
     if bad:
         failed.append(f"{pkg['name']}: depends on an async runtime ({', '.join(bad)}); VINC crates must stay runtime-free")
 

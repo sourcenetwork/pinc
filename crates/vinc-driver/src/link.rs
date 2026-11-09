@@ -7,13 +7,19 @@
 //! also carries the end of the data: when the engine drops a sender, the reader sees the channel end and reads why from
 //! the shared value, which is always set first.
 //!
-//! Invariants: an end reason is set once and before the channel it explains is closed; a handle keeps no state that a
-//! dropped future could lose, so every wait is a plain channel wait that is safe to drop.
+//! A handle that must wait for the engine (for a block to read, or room to write) registers its waker on a signal of
+//! the [`StreamShared`] and checks again; the engine notifies the signal after it sends a block, takes one, or sets an
+//! end reason. The end of a stream is its reason, never the closing of a channel, so a stream whose engine is dropped
+//! is ended by the engine's drop, which sets the reason and notifies.
+//!
+//! Invariants: an end reason is set once and before the signal that announces it; a handle keeps no state that a
+//! dropped future could lose, so every wait is safe to drop.
 
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 
 use kovan_channel::bounded::{Receiver, Sender};
+use kovan_channel::signal::{AsyncSignal, Notifier};
 use vinc_core::SessionId;
 use vinc_crypto::NodeId;
 use vinc_security::Alpn;
@@ -44,7 +50,6 @@ pub struct NewStream {
 }
 
 /// The state of one stream that both the engine and its handles read.
-#[derive(Debug)]
 pub struct StreamShared {
     /// The session.
     pub session: SessionId,
@@ -58,11 +63,24 @@ pub struct StreamShared {
     pub pump: AtomicBool,
     /// The engine stopped delivering because the read channel was full: the reader wakes it after it drains.
     pub starved: AtomicBool,
+    /// Notified when the read channel has a block or the receive side has ended; the reader's waker waits on it.
+    pub readable: AsyncSignal,
+    /// Notified when the write channel has room or the send side has ended; the writer's waker waits on it.
+    pub writable: AsyncSignal,
+}
+
+impl core::fmt::Debug for StreamShared {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StreamShared")
+            .field("session", &self.session)
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StreamShared {
     /// A stream's shared state.
-    pub const fn new(session: SessionId, id: StreamId) -> Self {
+    pub fn new(session: SessionId, id: StreamId) -> Self {
         Self {
             session,
             id,
@@ -70,7 +88,21 @@ impl StreamShared {
             tx_err: OnceLock::new(),
             pump: AtomicBool::new(false),
             starved: AtomicBool::new(false),
+            readable: AsyncSignal::new(),
+            writable: AsyncSignal::new(),
         }
+    }
+
+    /// Set how the receive side ended (once) and tell the reader.
+    pub fn end_rx(&self, end: Result<(), Error>) {
+        let _ = self.rx_end.set(end);
+        self.readable.notify();
+    }
+
+    /// Set why the send side can take no more (once) and tell the writer.
+    pub fn end_tx(&self, err: Error) {
+        let _ = self.tx_err.set(err);
+        self.writable.notify();
     }
 }
 

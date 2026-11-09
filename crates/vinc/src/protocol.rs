@@ -2,7 +2,8 @@
 //!
 //! A higher layer (values, broadcast, reconcile, membership, delay-tolerant delivery) is a [`Protocol`]: it names an
 //! ALPN and serves each session the peers open on it. [`Endpoint::register`](crate::Endpoint::register) hands the
-//! ALPN to the endpoint and runs the protocol's task for every accepted session on the host's spawner. A second
+//! ALPN to the endpoint and returns a [`Registered`]; the host takes each session from it and spawns the protocol's
+//! future on its own executor, as the library spawns nothing. A second
 //! protocol to a peer you are already connected to is a sub-session and costs no round trip: dial it with
 //! [`Connection::open_protocol`](crate::Connection::open_protocol).
 //!
@@ -11,12 +12,14 @@
 //!
 //! Invariants: a tag is never empty and never longer than 64 bytes; reading a tag consumes exactly its bytes.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use vinc_driver::{Error, ErrorKind, Result};
 
 use crate::conn::Connection;
-use crate::rt::Task;
+use vinc_driver::{Receiver, SessionShared, WeakRemote};
+
 use crate::stream::{RecvStream, SendStream};
 
 /// The longest stream tag.
@@ -27,9 +30,35 @@ pub trait Protocol: Send + Sync + 'static {
     /// The ALPN: 1 to 32 bytes.
     fn alpn(&self) -> &'static [u8];
 
-    /// Serve one session a peer opened. The task runs on the spawner until it returns; the session closes when the last
-    /// handle to it is dropped.
-    fn serve(self: Arc<Self>, conn: Connection) -> Task;
+    /// Serve one session a peer opened. The host spawns the future; the session closes when the last handle to it is
+    /// dropped.
+    fn serve(self: Arc<Self>, conn: Connection) -> impl Future<Output = ()> + Send;
+}
+
+/// The sessions a registered [`Protocol`] is to serve. Holds the endpoint only weakly, so a registered protocol does not
+/// keep the endpoint running.
+pub struct Registered<P> {
+    rx: Receiver<Arc<SessionShared>>,
+    remote: WeakRemote,
+    protocol: Arc<P>,
+}
+
+impl<P: Protocol> Registered<P> {
+    pub(crate) const fn new(rx: Receiver<Arc<SessionShared>>, remote: WeakRemote, protocol: Arc<P>) -> Self {
+        Self { rx, remote, protocol }
+    }
+
+    /// The protocol.
+    pub fn protocol(&self) -> Arc<P> {
+        Arc::clone(&self.protocol)
+    }
+
+    /// Wait for the next session a peer opened on the protocol's ALPN. `None` once the endpoint stopped. The host runs
+    /// `registered.protocol().serve(conn)` on its executor.
+    pub async fn accept(&self) -> Option<Connection> {
+        let shared = self.rx.recv_async().await?;
+        Some(Connection::new(shared, self.remote.upgrade()?))
+    }
 }
 
 /// Write a tag at the start of `send`.

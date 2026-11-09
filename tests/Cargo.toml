@@ -31,7 +31,9 @@ vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
 vinc-driver = { workspace = true }
-vinc = { workspace = true }
+vinc = { workspace = true, features = ["nuclei"] }
+vinc-nuclei = { workspace = true }
+nuclei = { workspace = true }
 futures-io = { workspace = true }
 
 [dev-dependencies]
@@ -430,8 +432,8 @@ name = "scenario_crypto"
 path = "scenario_crypto.rs"
 
 [[test]]
-name = "vinc_blocking"
-path = "vinc_blocking.rs"
+name = "vinc_cores"
+path = "vinc_cores.rs"
 
 [[test]]
 name = "vinc_async"

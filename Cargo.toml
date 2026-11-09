@@ -28,6 +28,7 @@ vinc-values = { path = "crates/vinc-values", version = "0.1.0" }
 vinc-core = { path = "crates/vinc-core", version = "0.1.0" }
 vinc-broadcast = { path = "crates/vinc-broadcast", version = "0.1.0" }
 vinc-driver = { path = "crates/vinc-driver", version = "0.1.0" }
+vinc-nuclei = { path = "crates/vinc-nuclei", version = "0.1.0" }
 vinc = { path = "crates/vinc", version = "0.1.0" }
 
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
@@ -50,6 +51,7 @@ tpm2-protocol = { version = "1.2.3", default-features = false }
 
 futures-io = { version = "0.3.34", default-features = false, features = ["std"] }
 kovan-channel = "0.2.3"
+nuclei = "0.5.6"
 
 criterion = "0.7.0"
 proptest = "1.12.0"

@@ -1,4 +1,4 @@
-//! The async API, driven by the test executor in `vinc_common`, against a peer in another process.
+//! The async API on nuclei, between two endpoints of one process over loopback.
 #![allow(
     clippy::semicolon_if_nothing_returned,
     clippy::zombie_processes,
@@ -18,47 +18,32 @@ use futures_io::{AsyncRead, AsyncWrite};
 use std::future::poll_fn;
 use std::pin::Pin;
 
-use vinc::{ErrorKind, Vinc};
-use vinc_common::{ECHO, Exec, GEN, SINK, lo, pattern, pattern_hash, spawn_peer, watchdog};
+use vinc::ErrorKind;
+use vinc_common::{ECHO, GEN, SINK, client, join_all, node, pattern, pattern_hash, within};
 
 const BIG: u64 = 4 << 20;
 
-#[test]
-fn child_async() {
-    if vinc_common::is_child() {
-        vinc_common::run_child(true);
-    }
-}
-
-#[test]
-fn many_streams_datagrams_and_reconnect() {
-    watchdog(120);
-    let peer = spawn_peer("child_async");
-    let exec = Exec::new(4);
-    let ep = Vinc::builder()
-        .alpn(ECHO)
-        .bind_addr(lo())
-        .spawn_on(exec.clone())
-        .unwrap();
-    let addr = peer.addr.clone();
-    exec.block_on(async move {
+#[nuclei::test]
+async fn many_streams_datagrams_and_reconnect() {
+    within(120, async {
+        let peer = node().await;
+        let ep = client().await;
+        let addr = peer.addr();
         let conn = ep.connect(addr.clone(), ECHO).await.unwrap();
 
-        let jobs: Vec<Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = (0..40u8)
-            .map(|i| {
-                let conn = conn.clone();
-                Box::pin(async move {
-                    let (mut tx, mut rx) = conn.open_bi().await.unwrap();
-                    let payload: Vec<u8> = (0..5000 + usize::from(i) * 977)
-                        .map(|k| (k as u8).wrapping_add(i))
-                        .collect();
-                    tx.write_all(&payload).await.unwrap();
-                    tx.finish().await.unwrap();
-                    assert_eq!(rx.read_to_end(1 << 20).await.unwrap(), payload);
-                }) as Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-            })
-            .collect();
-        vinc_common::join_all(jobs).await;
+        let jobs = (0..40u8).map(|i| {
+            let conn = conn.clone();
+            async move {
+                let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+                let payload: Vec<u8> = (0..5000 + usize::from(i) * 977)
+                    .map(|k| (k as u8).wrapping_add(i))
+                    .collect();
+                tx.write_all(&payload).await.unwrap();
+                tx.finish().await.unwrap();
+                assert_eq!(rx.read_to_end(1 << 20).await.unwrap(), payload);
+            }
+        });
+        join_all(jobs).await;
 
         conn.send_datagram(&[1u8; 100]).await.unwrap();
         assert_eq!(
@@ -85,22 +70,17 @@ fn many_streams_datagrams_and_reconnect() {
         tx.write_all(b"again").await.unwrap();
         tx.finish().await.unwrap();
         assert_eq!(rx.read_to_end(100).await.unwrap(), b"again");
-    });
+    })
+    .await;
 }
 
-#[test]
-fn large_transfer_with_futures_io() {
-    watchdog(240);
-    let peer = spawn_peer("child_async");
-    let exec = Exec::new(2);
-    let ep = Vinc::builder()
-        .alpn(SINK)
-        .bind_addr(lo())
-        .spawn_on(exec.clone())
-        .unwrap();
-    let addr = peer.addr.clone();
-    exec.block_on(async move {
-        // Upload through the AsyncWrite trait object.
+#[nuclei::test]
+async fn large_transfer_with_futures_io() {
+    within(240, async {
+        let peer = node().await;
+        let ep = client().await;
+        let addr = peer.addr();
+        // Upload through the AsyncWrite trait.
         let up = ep.connect(addr.clone(), SINK).await.unwrap();
         let (mut tx, mut rx) = up.open_bi().await.unwrap();
         let mut buf = vec![0u8; 64 * 1024];
@@ -138,5 +118,6 @@ fn large_transfer_with_futures_io() {
         }
         assert_eq!(total, BIG);
         assert_eq!(h.finalize().as_bytes(), &pattern_hash(9, BIG));
-    });
+    })
+    .await;
 }

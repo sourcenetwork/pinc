@@ -1,5 +1,5 @@
 //! A server that holds a thousand sessions in one process over loopback, all moving data; and the engine building on
-//! a thread with the default stack size.
+//! a nuclei worker with its default stack size.
 #![allow(
     clippy::semicolon_if_nothing_returned,
     clippy::zombie_processes,
@@ -15,14 +15,14 @@
 
 mod vinc_common;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use nuclei::sync::Semaphore;
 use vinc::Vinc;
-use vinc_common::{ECHO, Exec, Svc, lo, watchdog};
-use vinc_driver::{EngineConfig, Identity, Limits, Wake, chan, plane, run};
+use vinc_common::{ECHO, Svc, bind, eventually, register, within};
+use vinc_driver::{AllowAll, EngineConfig, Identity, Limits, chan, plane, run};
 
 const SESSIONS: usize = 1000;
 /// The most handshakes in flight at once.
@@ -39,153 +39,118 @@ fn small() -> Limits {
     }
 }
 
-#[test]
+/// One client: its own endpoint, one session, 20 000 bytes echoed; then it holds the session until `release`.
+async fn client(
+    i: usize,
+    addr: vinc::NodeAddr,
+    dialing: Arc<Semaphore>,
+    done: Arc<AtomicUsize>,
+    release: Arc<AtomicBool>,
+) -> Result<(), String> {
+    // At most DIALING handshakes are in flight, so a burst of a thousand does not starve the server.
+    let permit = dialing
+        .acquire()
+        .await
+        .map_err(|_| "the dial window closed".to_owned())?;
+    let ep = bind(Vinc::builder().limits(small())).await;
+    let mut last = String::new();
+    let mut conn = None;
+    for _ in 0..5 {
+        match ep.connect(addr.clone(), ECHO).await {
+            Ok(c) => {
+                conn = Some(c);
+                break;
+            }
+            Err(e) => last = format!("{e:?}"),
+        }
+    }
+    let conn = conn.ok_or_else(|| format!("client {i}: no session after 5 dials: {last}"))?;
+    drop(permit);
+    let (mut tx, mut rx) = conn.open_bi().await.map_err(|e| format!("client {i}: open: {e:?}"))?;
+    let payload: Vec<u8> = (0..20_000usize).map(|k| (k ^ i) as u8).collect();
+    tx.write_all(&payload)
+        .await
+        .map_err(|e| format!("client {i}: write: {e:?}"))?;
+    tx.finish().await.map_err(|e| format!("client {i}: finish: {e:?}"))?;
+    let got = rx
+        .read_to_end(1 << 20)
+        .await
+        .map_err(|e| format!("client {i}: read: {e:?}"))?;
+    if got != payload {
+        return Err(format!("client {i}: the echo differs ({} bytes)", got.len()));
+    }
+    done.fetch_add(1, Ordering::SeqCst);
+    // Every session stays open until all have moved their data.
+    while !release.load(Ordering::SeqCst) {
+        nuclei::time::sleep(Duration::from_millis(50)).await;
+    }
+    drop((conn, ep));
+    Ok(())
+}
+
+#[nuclei::test]
 #[ignore = "a host stall of about a second drops a loopback session; waits for the dead-path silence floor"]
-#[allow(clippy::too_many_lines)]
-fn a_thousand_sessions_in_one_process_all_move_data() {
-    watchdog(900);
-    let exec = Exec::new(4);
-    let server = Vinc::builder()
-        .bind_addr(lo())
-        .limits(Limits {
+async fn a_thousand_sessions_in_one_process_all_move_data() {
+    within(900, async {
+        let server = bind(Vinc::builder().limits(Limits {
             connections: 1024,
             pool_chunks: 32,
             stream_window: 32 * 1024,
             streams: 2,
             ..Limits::default()
-        })
-        .spawn_on(exec.clone())
-        .unwrap();
-    exec.block_on({
-        let server = server.clone();
-        async move { server.register(Arc::new(Svc(ECHO))).await.unwrap() }
-    });
-    let addr = server.addr();
-    let (done, failed, release, dialing) = (
-        Arc::new(AtomicUsize::new(0)),
-        Arc::new(AtomicUsize::new(0)),
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(AtomicUsize::new(0)),
-    );
-    let errors = Arc::new(Mutex::new(Vec::<String>::new()));
-    let clients: Vec<_> = (0..SESSIONS)
-        .map(|i| {
-            // At most DIALING handshakes are in flight, so a burst of a thousand does not starve the server.
-            wait_until(Duration::from_secs(300), || {
-                dialing
-                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < DIALING).then_some(n + 1))
-                    .is_ok()
+        }))
+        .await;
+        register(&server, Arc::new(Svc(ECHO))).await.unwrap();
+        let addr = server.addr();
+        let (done, release, dialing) = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Semaphore::new(DIALING)),
+        );
+        let clients: Vec<_> = (0..SESSIONS)
+            .map(|i| {
+                nuclei::spawn(client(
+                    i,
+                    addr.clone(),
+                    Arc::clone(&dialing),
+                    Arc::clone(&done),
+                    Arc::clone(&release),
+                ))
             })
-            .expect("the dial window never opened");
-            let (addr, done, failed, release, dialing, errors) = (
-                addr.clone(),
-                Arc::clone(&done),
-                Arc::clone(&failed),
-                Arc::clone(&release),
-                Arc::clone(&dialing),
-                Arc::clone(&errors),
-            );
-            thread::Builder::new()
-                .stack_size(2 * 1024 * 1024)
-                .spawn(move || {
-                    let run = || -> Result<_, String> {
-                        let ep = Vinc::builder()
-                            .bind_addr(lo())
-                            .limits(small())
-                            .bind_blocking()
-                            .map_err(|e| format!("bind: {e:?}"))?
-                            .blocking();
-                        let mut last = String::new();
-                        let conn = (0..5)
-                            .find_map(|_| match ep.connect(addr.clone(), ECHO) {
-                                Ok(c) => Some(c),
-                                Err(e) => {
-                                    last = format!("{e:?}");
-                                    None
-                                }
-                            })
-                            .ok_or_else(|| format!("client {i}: no session after 5 dials: {last}"))?;
-                        dialing.fetch_sub(1, Ordering::SeqCst);
-                        let (mut tx, mut rx) = conn.open_bi().map_err(|e| format!("client {i}: open: {e:?}"))?;
-                        let payload: Vec<u8> = (0..20_000usize).map(|k| (k ^ i) as u8).collect();
-                        tx.write_all(&payload)
-                            .map_err(|e| format!("client {i}: write: {e:?}"))?;
-                        tx.finish().map_err(|e| format!("client {i}: finish: {e:?}"))?;
-                        let got = rx
-                            .read_to_end(1 << 20)
-                            .map_err(|e| format!("client {i}: read: {e:?}"))?;
-                        if got != payload {
-                            return Err(format!("client {i}: the echo differs ({} bytes)", got.len()));
-                        }
-                        Ok((conn, ep))
-                    };
-                    match run() {
-                        Ok(keep) => {
-                            done.fetch_add(1, Ordering::SeqCst);
-                            // Every session stays open until all have moved their data.
-                            wait_until(Duration::from_secs(600), || release.load(Ordering::SeqCst)).ok();
-                            drop(keep);
-                        }
-                        Err(e) => {
-                            errors.lock().unwrap().push(e);
-                            failed.fetch_add(1, Ordering::SeqCst);
-                        }
-                    }
-                })
-                .unwrap()
+            .collect();
+        eventually(600, "every client moved its data", || async {
+            done.load(Ordering::SeqCst) == SESSIONS || clients.iter().any(nuclei::Task::is_finished)
         })
-        .collect();
-    let all = wait_until(Duration::from_secs(600), || {
-        failed.load(Ordering::SeqCst) > 0 || done.load(Ordering::SeqCst) == SESSIONS
-    });
-    let stats = exec.block_on({
-        let server = server.clone();
-        async move { server.node_stats().await.unwrap() }
-    });
-    let finish = |release: &AtomicBool| {
+        .await;
+        let stats = server.node_stats().await.unwrap();
+        let n_done = done.load(Ordering::SeqCst);
         release.store(true, Ordering::SeqCst);
+        let mut errors = Vec::new();
         for c in clients {
-            c.join().unwrap();
+            if let Err(e) = c.await {
+                errors.push(e);
+            }
         }
-    };
-    let (n_done, n_failed) = (done.load(Ordering::SeqCst), failed.load(Ordering::SeqCst));
-    if all.is_err() || n_failed > 0 {
-        let first: Vec<String> = errors.lock().unwrap().iter().take(5).cloned().collect();
-        finish(&release);
-        panic!("{n_done} of {SESSIONS} clients done, {n_failed} failed: {first:?}; server {stats:?}");
-    }
-    // A dial that was retried leaves its first attempt half open on the server until it times out.
-    assert_eq!(stats.sessions - stats.half_open, SESSIONS, "{stats:?}");
-    assert_eq!(stats.events_lost, 0, "{stats:?}");
-    finish(&release);
+        assert!(
+            errors.is_empty(),
+            "{n_done} of {SESSIONS} clients done, {} failed: {:?}; server {stats:?}",
+            errors.len(),
+            errors.iter().take(5).collect::<Vec<_>>()
+        );
+        // A dial that was retried leaves its first attempt half open on the server until it times out.
+        assert_eq!(stats.sessions - stats.half_open, SESSIONS, "{stats:?}");
+        assert_eq!(stats.events_lost, 0, "{stats:?}");
+    })
+    .await;
 }
 
-/// Poll `ready` with a bounded, growing pause until it holds or `limit` passes.
-fn wait_until(limit: Duration, mut ready: impl FnMut() -> bool) -> Result<(), ()> {
-    let end = Instant::now() + limit;
-    let mut pause = Duration::from_micros(100);
-    while !ready() {
-        if Instant::now() >= end {
-            return Err(());
-        }
-        thread::sleep(pause);
-        pause = (pause * 2).min(Duration::from_millis(20));
-    }
-    Ok(())
-}
-
-struct Nop;
-impl Wake for Nop {
-    fn wake(&self) {}
-}
-
-#[test]
-fn the_engine_builds_on_a_thread_with_the_default_stack() {
-    // A thread made by `std::thread::spawn` has the default stack (2 MiB unless RUST_MIN_STACK says otherwise); the
-    // endpoint of 1024 sessions is over a megabyte and its stream tables are far larger.
+#[nuclei::test]
+async fn the_engine_builds_on_a_nuclei_worker_with_the_default_stack() {
+    // A nuclei worker has the runtime's default stack; the endpoint of 1024 sessions is over a megabyte and its stream
+    // tables are far larger.
     for connections in [1, 1024] {
-        let sessions = thread::spawn(move || {
-            let (_remote, plane) = plane(8, Arc::new(Nop));
+        let sessions = nuclei::spawn(async move {
+            let (_remote, plane) = plane(8);
             let (queue, _incoming) = chan(4);
             let cfg = EngineConfig {
                 identity: Identity::from_seed(&[5; 32]).unwrap(),
@@ -195,14 +160,15 @@ fn the_engine_builds_on_a_thread_with_the_default_stack() {
                     pool_chunks: 16,
                     ..Limits::default()
                 },
-                admit: None,
+                admit: AllowAll,
                 max_gso: 1,
                 locals: vec!["10.0.0.1:4433".parse().unwrap()],
             };
-            run(cfg, plane, queue, 10_000_000_000, |e| e.node_stats().sessions).unwrap()
+            run(cfg, plane, queue, 10_000_000_000, async |e| e.node_stats().sessions)
+                .await
+                .unwrap()
         })
-        .join()
-        .unwrap();
+        .await;
         assert_eq!(sessions, 0);
     }
 }

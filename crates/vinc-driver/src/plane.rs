@@ -1,12 +1,12 @@
-//! How handles talk to the engine thread: a bounded request queue with replies, an unbounded control queue for
+//! How handles talk to the engine: a bounded request queue with replies, an unbounded control queue for
 //! fire-and-forget messages, and a wake.
 //!
 //! A [`Request`] has a reply channel and goes through a bounded queue, so a flood of callers waits instead of growing
 //! memory. A [`Ctl`] message never waits and is bounded by what it names (a stream is nudged once until the engine
-//! handles it; a session closes once). After either, the engine's loop is woken through [`Wake`], which a driver
-//! implements for its own loop (a datagram to its own socket for the reference driver).
+//! handles it; a session closes once). After either, the driver future is woken through a unit message on a channel
+//! it awaits, coalesced by a [`WakeFlag`]: the host's executor wakes the driver, nothing else does.
 //!
-//! Invariants: the engine clears the wake flag before it drains the queues, so a message sent after the drain wakes it
+//! Invariants: the driver clears the wake flag before it drains the queues, so a message sent after the drain wakes it
 //! again; when the last [`Remote`] is dropped the engine is told, and it closes its sessions and stops.
 
 use std::net::SocketAddr;
@@ -20,12 +20,6 @@ use vinc_transport::stream::StreamId;
 
 use crate::error::{Error, Result};
 use crate::link::{NewStream, SessionShared, StreamShared, chan};
-
-/// How a driver rouses its loop when a message is waiting.
-pub trait Wake: Send + Sync + 'static {
-    /// Make the loop run once soon. It may be called from any thread and any number of times.
-    fn wake(&self);
-}
 
 /// A call that has an answer.
 pub enum Request {
@@ -82,6 +76,13 @@ pub enum Request {
         /// The queue, or why not.
         reply: bounded::Sender<Result<bounded::Receiver<Arc<SessionShared>>>>,
     },
+    /// Sign `data` with the node's identity key.
+    Sign {
+        /// The message.
+        data: Vec<u8>,
+        /// The signature, or why not.
+        reply: bounded::Sender<Result<Vec<u8>>>,
+    },
     /// Close every session and stop; the reply comes when they are gone.
     Shutdown {
         /// The answer.
@@ -120,13 +121,23 @@ struct RemoteInner {
     stopped: Arc<AtomicBool>,
     req: bounded::Sender<Request>,
     ctl: unbounded::Sender<Ctl>,
-    wake: Arc<dyn Wake>,
+    wake: unbounded::Sender<()>,
+    armed: Arc<WakeFlag>,
+}
+
+impl RemoteInner {
+    /// Rouse the driver future: one unit message per drain, however many messages were queued.
+    fn wake(&self) {
+        if self.armed.arm() {
+            self.wake.send(());
+        }
+    }
 }
 
 impl Drop for RemoteInner {
     fn drop(&mut self) {
         self.ctl.send(Ctl::Dropped);
-        self.wake.wake();
+        self.wake();
     }
 }
 
@@ -147,18 +158,23 @@ pub struct Plane {
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) req: bounded::Receiver<Request>,
     pub(crate) ctl: unbounded::Receiver<Ctl>,
+    pub(crate) wake: unbounded::Receiver<()>,
+    pub(crate) armed: Arc<WakeFlag>,
 }
 
 /// A queue pair: the handle side and the engine side. `depth` is the most requests waiting at once.
-pub fn plane(depth: usize, wake: Arc<dyn Wake>) -> (Remote, Plane) {
+pub fn plane(depth: usize) -> (Remote, Plane) {
     let (req, req_rx) = chan::<Request>(depth);
     let (ctl, ctl_rx) = unbounded::<Ctl>();
+    let (wake, wake_rx) = unbounded::<()>();
     let stopped = Arc::new(AtomicBool::new(false));
+    let armed = Arc::new(WakeFlag::default());
     let inner = Arc::new(RemoteInner {
         stopped: Arc::clone(&stopped),
         req,
         ctl,
         wake,
+        armed: Arc::clone(&armed),
     });
     (
         Remote { inner },
@@ -166,11 +182,13 @@ pub fn plane(depth: usize, wake: Arc<dyn Wake>) -> (Remote, Plane) {
             stopped,
             req: req_rx,
             ctl: ctl_rx,
+            wake: wake_rx,
+            armed,
         },
     )
 }
 
-/// The flag a loop clears before it drains, and a [`Wake`] sets before it rouses the loop: it makes many wakes one.
+/// The flag a driver clears before it drains, and a handle sets before it rouses the driver: it makes many wakes one.
 #[derive(Debug, Default)]
 pub struct WakeFlag(AtomicBool);
 
@@ -183,11 +201,6 @@ impl WakeFlag {
     /// Call before draining the queues.
     pub fn clear(&self) {
         self.0.store(false, Ordering::Release);
-    }
-
-    /// Forget a wake that could not be delivered, so the next message tries again.
-    pub fn disarm(&self) {
-        self.clear();
     }
 }
 
@@ -219,7 +232,7 @@ impl Remote {
             return Err(Error::shutdown());
         }
         self.inner.req.send_async(make(tx)).await;
-        self.inner.wake.wake();
+        self.inner.wake();
         // The engine sets `stopped` and then answers every request still queued, so a request sent before that is
         // answered and one sent after it is caught here.
         if self.inner.stopped.load(Ordering::SeqCst) {
@@ -231,7 +244,7 @@ impl Remote {
     /// Send a message that needs no answer.
     pub fn ctl(&self, c: Ctl) {
         self.inner.ctl.send(c);
-        self.inner.wake.wake();
+        self.inner.wake();
     }
 
     /// Tell the engine a session's datagram channel has room, if it stopped for lack of it.

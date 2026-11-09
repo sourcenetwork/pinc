@@ -6,7 +6,7 @@
 //! request that carries a response token (the send half of the request's own stream), and `shutdown`. Protocols are
 //! per-stream tags on one connection per peer, so a failure on one stream never closes the connection.
 //!
-//! Run with `cargo run -p vinc --example defradb_backend`.
+//! Run with `cargo run -p vinc --features nuclei --example defradb_backend`.
 
 #![allow(
     missing_docs,
@@ -25,9 +25,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use vinc::{
-    Connection, Endpoint, Error, ErrorKind, NodeAddr, SendStream, Vinc, block_on, node_from_str, node_to_string,
-};
+use nuclei::sync::Mutex as AsyncMutex;
+use nuclei::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use vinc::{Connection, Endpoint, Error, ErrorKind, NodeAddr, SendStream, Vinc, node_from_str, node_to_string};
 use vinc::{RecvStream, read_tag};
 
 const MUX: &[u8] = b"example/mux/1";
@@ -38,7 +38,7 @@ pub trait Transport: Clone + Send + Sync + 'static {
     /// The send half of a request's stream, used to reply on it.
     type ResponseToken: Send + 'static;
     fn local_peer_id(&self) -> String;
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error>;
+    async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error>;
     async fn dial(&self, peer: &str, hints: Vec<SocketAddr>) -> Result<(), Error>;
     fn disconnect(&self, peer: &str) -> Result<(), Error>;
     async fn connected_peers(&self) -> Result<Vec<String>, Error>;
@@ -62,49 +62,8 @@ pub struct VincTransport {
     ep: Endpoint,
     // One connection per peer for every protocol.
     conns: Arc<Mutex<HashMap<String, Connection>>>,
-    inbox: Arc<inbox::Inbox<Request<SendStream>>>,
-}
-
-/// A tiny async queue for the sketch, so it needs nothing beyond `std` and `vinc`.
-mod inbox {
-    use std::collections::VecDeque;
-    use std::future::poll_fn;
-    use std::sync::Mutex;
-    use std::task::{Poll, Waker};
-
-    pub struct Inbox<T> {
-        state: Mutex<(VecDeque<T>, Vec<Waker>)>,
-    }
-
-    impl<T> Inbox<T> {
-        pub fn new() -> Self {
-            Self {
-                state: Mutex::new((VecDeque::new(), Vec::new())),
-            }
-        }
-
-        pub fn push(&self, v: T) {
-            let mut s = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            s.0.push_back(v);
-            for w in s.1.drain(..) {
-                w.wake();
-            }
-        }
-
-        pub async fn pop(&self) -> Option<T> {
-            poll_fn(|cx| {
-                let mut s = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                match s.0.pop_front() {
-                    Some(v) => Poll::Ready(Some(v)),
-                    None => {
-                        s.1.push(cx.waker().clone());
-                        Poll::Pending
-                    }
-                }
-            })
-            .await
-        }
-    }
+    inbox: UnboundedSender<Request<SendStream>>,
+    requests: Arc<AsyncMutex<UnboundedReceiver<Request<SendStream>>>>,
 }
 
 async fn write_msg(tx: &mut SendStream, body: &[u8]) -> Result<(), Error> {
@@ -130,29 +89,30 @@ async fn read_msg(rx: &mut RecvStream) -> Result<Vec<u8>, Error> {
 }
 
 impl VincTransport {
-    /// Bind an endpoint with the given 32-byte seed and start serving inbound streams.
-    pub fn start(seed: &[u8; 32], bind: SocketAddr) -> Result<Self, Error> {
-        let ep = Vinc::builder().seed(seed)?.alpn(MUX).bind_addr(bind).bind_blocking()?;
+    /// Bind an endpoint with the given 32-byte seed, spawn its driver and start serving inbound streams.
+    pub async fn start(seed: &[u8; 32], bind: SocketAddr) -> Result<Self, Error> {
+        let (ep, driver) = Vinc::builder().seed(seed)?.alpn(MUX).bind_nuclei(bind).await?;
+        nuclei::spawn(driver.run()).detach();
+        let (inbox, requests) = unbounded_channel();
         let t = Self {
             ep: ep.clone(),
             conns: Arc::default(),
-            inbox: Arc::new(inbox::Inbox::new()),
+            inbox,
+            requests: Arc::new(AsyncMutex::new(requests)),
         };
         let me = t.clone();
-        std::thread::spawn(move || {
-            block_on(async move {
-                while let Some(inc) = me.ep.accept().await {
-                    let peer = node_to_string(&inc.remote());
-                    let conn = inc.into_connection();
-                    me.conns
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(peer.clone(), conn.clone());
-                    let inbox = Arc::clone(&me.inbox);
-                    std::thread::spawn(move || block_on(serve(conn, peer, inbox)));
-                }
-            });
-        });
+        nuclei::spawn(async move {
+            while let Some(inc) = me.ep.accept().await {
+                let peer = node_to_string(&inc.remote());
+                let conn = inc.into_connection();
+                me.conns
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(peer.clone(), conn.clone());
+                nuclei::spawn(serve(conn, peer, me.inbox.clone())).detach();
+            }
+        })
+        .detach();
         Ok(t)
     }
 
@@ -170,11 +130,11 @@ impl VincTransport {
     }
 }
 
-async fn serve(conn: Connection, peer: String, inbox: Arc<inbox::Inbox<Request<SendStream>>>) {
+async fn serve(conn: Connection, peer: String, inbox: UnboundedSender<Request<SendStream>>) {
     while let Ok((tx, mut rx)) = conn.accept_bi().await {
         let Ok(tag) = read_tag(&mut rx).await else { continue };
         let Ok(body) = read_msg(&mut rx).await else { continue };
-        inbox.push(Request {
+        let _ = inbox.send(Request {
             peer: peer.clone(),
             tag,
             body,
@@ -190,8 +150,8 @@ impl Transport for VincTransport {
         node_to_string(&self.ep.id())
     }
 
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error> {
-        self.ep.sign(data)
+    async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error> {
+        self.ep.sign(data).await
     }
 
     async fn dial(&self, peer: &str, hints: Vec<SocketAddr>) -> Result<(), Error> {
@@ -232,7 +192,7 @@ impl Transport for VincTransport {
     }
 
     async fn next_request(&self) -> Option<Request<SendStream>> {
-        self.inbox.pop().await
+        self.requests.lock().await.recv().await
     }
 
     async fn respond(&self, mut token: SendStream, body: Vec<u8>) -> Result<(), Error> {
@@ -246,35 +206,33 @@ impl Transport for VincTransport {
 }
 
 /// Two backends on loopback: one asks, the other answers on the request's own stream. Returns the reply.
-pub fn run() -> Result<Vec<u8>, Error> {
+pub async fn run() -> Result<Vec<u8>, Error> {
     let lo: SocketAddr = ([127, 0, 0, 1], 0).into();
-    let a = VincTransport::start(&[1; 32], lo)?;
-    let b = VincTransport::start(&[2; 32], lo)?;
+    let a = VincTransport::start(&[1; 32], lo).await?;
+    let b = VincTransport::start(&[2; 32], lo).await?;
     let b2 = b.clone();
-    std::thread::spawn(move || {
-        block_on(async move {
-            while let Some(req) = b2.next_request().await {
-                let mut reply = req.tag.clone();
-                reply.extend_from_slice(b"/");
-                reply.extend_from_slice(&req.body);
-                let _ = b2.respond(req.token, reply).await;
-            }
-        });
-    });
-    block_on(async {
-        a.dial(&b.local_peer_id(), b.addr().direct).await?;
-        assert!(a.connected_peers().await?.contains(&b.local_peer_id()));
-        let sig = a.sign(b"message")?;
-        assert_eq!(sig.len(), 64);
-        let reply = a.request(&b.local_peer_id(), b"pushlog", b"payload".to_vec()).await?;
-        a.shutdown().await;
-        Ok(reply)
+    nuclei::spawn(async move {
+        while let Some(req) = b2.next_request().await {
+            let mut reply = req.tag.clone();
+            reply.extend_from_slice(b"/");
+            reply.extend_from_slice(&req.body);
+            let _ = b2.respond(req.token, reply).await;
+        }
     })
+    .detach();
+    a.dial(&b.local_peer_id(), b.addr().direct).await?;
+    assert!(a.connected_peers().await?.contains(&b.local_peer_id()));
+    let sig = a.sign(b"message").await?;
+    assert_eq!(sig.len(), 64);
+    let reply = a.request(&b.local_peer_id(), b"pushlog", b"payload".to_vec()).await?;
+    a.shutdown().await;
+    Ok(reply)
 }
 
 #[allow(dead_code)]
-fn main() {
-    match run() {
+#[nuclei::main]
+async fn main() {
+    match run().await {
         Ok(r) => println!("reply: {}", String::from_utf8_lossy(&r)),
         Err(e) => eprintln!("failed: {e}"),
     }

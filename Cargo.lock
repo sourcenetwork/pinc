@@ -601,6 +601,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -787,6 +793,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovan-map"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e37b89c7827b824d80ef7a8dba6aebd394d790dd571f6e0f00d0f8f6f6094de0"
+dependencies = [
+ "foldhash",
+ "kovan",
+]
+
+[[package]]
+name = "kovan-queue"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfb6480396d536cecf454bad4c133fd9a0130bac03306d2b8ece1f5d3000803a"
+dependencies = [
+ "crossbeam-utils",
+ "kovan",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -797,6 +823,12 @@ name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
+name = "log"
+version = "0.4.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "memchr"
@@ -845,6 +877,29 @@ dependencies = [
  "num-traits",
  "zeroize",
 ]
+
+[[package]]
+name = "nuclei"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2639d9b23dd5f30b5911a563c0b5d5e3c3b349763f2b4a88d33775475ff2e4a"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "kovan",
+ "kovan-channel",
+ "kovan-map",
+ "kovan-queue",
+ "libc",
+ "log",
+ "nuclei-macros",
+]
+
+[[package]]
+name = "nuclei-macros"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbaecdcaaa41e1eac7f65c51e778920dbf5ed814bf083442787cbfdc2c1d3e0"
 
 [[package]]
 name = "num-traits"
@@ -1406,9 +1461,11 @@ name = "vinc"
 version = "0.1.0"
 dependencies = [
  "futures-io",
+ "nuclei",
  "vinc-crypto",
  "vinc-driver",
  "vinc-keystore",
+ "vinc-nuclei",
 ]
 
 [[package]]
@@ -1417,6 +1474,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
+ "nuclei",
  "vinc",
  "vinc-broadcast",
  "vinc-connect",
@@ -1536,6 +1594,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-nuclei"
+version = "0.1.0"
+dependencies = [
+ "nuclei",
+ "vinc-driver",
+]
+
+[[package]]
 name = "vinc-reconcile"
 version = "0.1.0"
 dependencies = [
@@ -1571,6 +1637,7 @@ dependencies = [
  "futures-io",
  "ml-dsa",
  "ml-kem",
+ "nuclei",
  "proptest",
  "vinc",
  "vinc-broadcast",
@@ -1582,6 +1649,7 @@ dependencies = [
  "vinc-dtn",
  "vinc-keystore",
  "vinc-membership",
+ "vinc-nuclei",
  "vinc-reconcile",
  "vinc-security",
  "vinc-sim",

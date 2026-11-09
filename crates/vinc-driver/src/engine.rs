@@ -1,4 +1,4 @@
-//! The engine: the SANS-IO endpoint plus everything a host does for it, with no socket and no clock of its own.
+//! The engine: the SANS-IO endpoint plus everything a host does for it, with no socket, no clock and no thread of its own.
 //!
 //! A driver feeds it datagrams and the time and reads datagrams and a deadline back; the engine answers key requests
 //! and access checks, moves stream bytes between the endpoint and the handles' channels, opens and accepts streams,
@@ -15,11 +15,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use kovan_channel::bounded::{Receiver, Sender};
+use kovan_channel::signal::Notifier;
 use vinc_core::{
     Answer, Command, CommandError, Event, IfaceEvent, IfaceId, MAX_ALPNS, NodeStats, Query, Reply, Role, SessionId,
     Transmit, Value,
 };
 use vinc_crypto::NodeId;
+use vinc_keystore::KeyStore;
 use vinc_security::{Alpn, KeyRequest, KeyResponse};
 use vinc_transport::stream::{NoSource, RecvStatus, StreamError, StreamId, is_uni};
 
@@ -27,7 +29,7 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::keys::{Identity, Prekeys, is_identity};
 use crate::link::{BLOCK, Item, NewStream, SessionShared, StreamShared, chan};
 use crate::mem::Limits;
-use crate::node::Node;
+use crate::node::AnyEp;
 use crate::plane::{Ctl, Plane, Request};
 
 /// The close code sent for a session or stream refused because a queue was full.
@@ -50,22 +52,38 @@ pub enum Direction {
     Gossip,
 }
 
-/// The access hook: whether a peer may connect or be a neighbour. It runs on the engine thread and must not block.
+/// The access hook: whether a peer may connect or be a neighbour. It runs on the driver's task and must not block.
 pub trait Admit: Send + Sync + 'static {
     /// Whether `peer` may use `alpn` in `dir`.
     fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool;
 }
 
+impl<T: Admit> Admit for Arc<T> {
+    fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
+        (**self).admit(peer, alpn, dir)
+    }
+}
+
+/// The access hook that admits everyone.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AllowAll;
+
+impl Admit for AllowAll {
+    fn admit(&self, _peer: &NodeId, _alpn: &[u8], _dir: Direction) -> bool {
+        true
+    }
+}
+
 /// What an engine is built from.
-pub struct EngineConfig {
+pub struct EngineConfig<S, A> {
     /// The node's identity.
-    pub identity: Identity,
+    pub identity: Identity<S>,
     /// The protocols served; at most [`MAX_ALPNS`] with those added later.
     pub alpns: Vec<Vec<u8>>,
     /// The sizes.
     pub limits: Limits,
-    /// The access hook, if any.
-    pub admit: Option<Arc<dyn Admit>>,
+    /// The access hook.
+    pub admit: A,
     /// The most same-size datagrams one transmit batches (1 turns batching off).
     pub max_gso: usize,
     /// The local addresses datagrams are sent from and received on.
@@ -99,14 +117,13 @@ struct Dial {
 }
 
 /// The engine; see the module docs. Build it with [`crate::run`].
-pub struct Engine<'s, 'a> {
-    pub(crate) ep: Box<dyn Node + 's>,
-    pub(crate) _memory: std::marker::PhantomData<&'s &'a ()>,
-    identity: Identity,
+pub struct Engine<'s, 'a, S, A> {
+    pub(crate) ep: AnyEp<'s, 'a>,
+    identity: Identity<S>,
     prekeys: Prekeys,
     plane: Plane,
     limits: Limits,
-    admit: Option<Arc<dyn Admit>>,
+    admit: A,
     default_queue: Sender<Arc<SessionShared>>,
     routes: Vec<(Vec<u8>, Sender<Arc<SessionShared>>)>,
     sessions: HashMap<SessionId, SessionRec>,
@@ -122,11 +139,11 @@ pub struct Engine<'s, 'a> {
     next_gc: u64,
 }
 
-impl<'s> Engine<'s, '_> {
+impl<'s, 'a, S: KeyStore, A: Admit> Engine<'s, 'a, S, A> {
     /// An engine over `ep`, which already holds the prekey, the protocols and the interfaces `ifaces`.
     pub(crate) fn new(
-        ep: Box<dyn Node + 's>,
-        cfg: EngineConfig,
+        ep: AnyEp<'s, 'a>,
+        cfg: EngineConfig<S, A>,
         prekeys: Prekeys,
         plane: Plane,
         default_queue: Sender<Arc<SessionShared>>,
@@ -135,7 +152,6 @@ impl<'s> Engine<'s, '_> {
     ) -> Self {
         Self {
             ep,
-            _memory: std::marker::PhantomData,
             identity: cfg.identity,
             prekeys,
             plane,
@@ -157,17 +173,21 @@ impl<'s> Engine<'s, '_> {
     }
 }
 
-impl Drop for Engine<'_, '_> {
+impl<S, A> Drop for Engine<'_, '_, S, A> {
     fn drop(&mut self) {
         // Mark the plane stopped, then answer what is still queued: a caller never waits on an engine that is gone.
         self.plane.stopped.store(true, Ordering::SeqCst);
         while let Some(r) = self.plane.req.try_recv() {
-            Self::refuse(r);
+            refuse(r);
+        }
+        // End every session, so a handle waiting on a stream of a dropped engine wakes with the reason.
+        for (_, rec) in self.sessions.drain() {
+            end_session(rec, Error::shutdown());
         }
     }
 }
 
-impl Engine<'_, '_> {
+impl<S: KeyStore, A: Admit> Engine<'_, '_, S, A> {
     /// This node's id.
     pub const fn node_id(&self) -> NodeId {
         self.identity.node_id()
@@ -314,7 +334,7 @@ impl Engine<'_, '_> {
                 } else {
                     Direction::Inbound
                 };
-                let allow = self.admit.as_ref().is_none_or(|a| a.admit(&node, alpn.as_bytes(), dir));
+                let allow = self.admit.admit(&node, alpn.as_bytes(), dir);
                 let _ = self.cmd(now, Command::AcpAnswer { check, allow });
             }
             Event::StreamStopped { session, stream, error } => self.send_fail(
@@ -461,13 +481,8 @@ impl Engine<'_, '_> {
         if let Some(i) = self.dials.iter().position(|d| d.session == session) {
             self.dials.remove(i).reply.send(Err(err));
         }
-        let Some(mut rec) = self.sessions.remove(&session) else {
-            return;
-        };
-        let _ = rec.shared.ended.set(err);
-        for s in rec.streams.values_mut() {
-            let _ = s.shared.rx_end.set(Err(err));
-            let _ = s.shared.tx_err.set(err);
+        if let Some(rec) = self.sessions.remove(&session) {
+            end_session(rec, err);
         }
     }
 
@@ -553,7 +568,7 @@ impl Engine<'_, '_> {
     /// The receive side of a stream ended for `end`: set why, then close the channel.
     fn recv_end(&mut self, session: SessionId, id: StreamId, end: Result<()>) {
         let Some(r) = self.stream_mut(session, id) else { return };
-        let _ = r.shared.rx_end.set(end);
+        r.shared.end_rx(end);
         r.rx_tx = None;
         r.recv_done = true;
         self.reap(session, id);
@@ -562,7 +577,7 @@ impl Engine<'_, '_> {
     /// The send side of a stream can take no more, for `err`.
     fn send_fail(&mut self, session: SessionId, id: StreamId, err: Error) {
         let Some(r) = self.stream_mut(session, id) else { return };
-        let _ = r.shared.tx_err.set(err);
+        r.shared.end_tx(err);
         r.tx_rx = None;
         r.cur = None;
         r.send_done = true;
@@ -619,6 +634,7 @@ impl Engine<'_, '_> {
             }
             if let Some(t) = tx.as_ref().filter(|_| !block.is_empty()) {
                 t.send(block);
+                shared.readable.notify();
             }
             match status {
                 RecvStatus::Finished => return self.recv_end(session, id, Ok(())),
@@ -641,10 +657,8 @@ impl Engine<'_, '_> {
         let Some(r) = self.stream_mut(session, id).filter(|r| !r.recv_done) else {
             return;
         };
-        let _ = r
-            .shared
-            .rx_end
-            .set(Err(Error::new(ErrorKind::Stopped(error), "the stream was stopped")));
+        r.shared
+            .end_rx(Err(Error::new(ErrorKind::Stopped(error), "the stream was stopped")));
         r.rx_tx = None;
         let _ = self.cmd(
             now,
@@ -667,7 +681,11 @@ impl Engine<'_, '_> {
                 cur
             } else {
                 let Some(rx) = r.tx_rx.as_ref() else { return };
-                match rx.try_recv() {
+                let item = rx.try_recv();
+                if item.is_some() {
+                    r.shared.writable.notify();
+                }
+                match item {
                     Some(Item::Data(v)) if v.is_empty() => continue,
                     Some(Item::Data(v)) => (v, 0),
                     // The writer finished, or dropped the stream, which finishes it.
@@ -800,7 +818,7 @@ impl Engine<'_, '_> {
         if self.shutdown.is_some() {
             return match r {
                 Request::Shutdown { reply } => self.begin_shutdown(now, Some(reply)),
-                r => Self::refuse(r),
+                r => refuse(r),
             };
         }
         match r {
@@ -859,20 +877,8 @@ impl Engine<'_, '_> {
             }
             Request::Node { reply } => reply.send(self.ep.node_stats()),
             Request::Listen { alpn, reply } => reply.send(self.listen(&alpn)),
+            Request::Sign { data, reply } => reply.send(self.identity.sign(&data)),
             Request::Shutdown { reply } => self.begin_shutdown(now, Some(reply)),
-        }
-    }
-
-    /// Answer a request that arrives while the engine is stopping.
-    fn refuse(r: Request) {
-        match r {
-            Request::Connect { reply, .. } => reply.send(Err(Error::shutdown())),
-            Request::Open { reply, .. } => reply.send(Err(Error::shutdown())),
-            Request::Datagram { reply, .. } => reply.send(Err(Error::shutdown())),
-            Request::Stats { reply, .. } => reply.send(Err(Error::shutdown())),
-            Request::Listen { reply, .. } => reply.send(Err(Error::shutdown())),
-            Request::Shutdown { reply } => reply.send(()),
-            Request::Peers { .. } | Request::Node { .. } => {}
         }
     }
 
@@ -940,5 +946,29 @@ impl Engine<'_, '_> {
             .streams
             .insert(id, rec);
         Ok(new)
+    }
+}
+
+/// Answer a request that arrives while the engine is stopping.
+fn refuse(r: Request) {
+    match r {
+        Request::Connect { reply, .. } => reply.send(Err(Error::shutdown())),
+        Request::Open { reply, .. } => reply.send(Err(Error::shutdown())),
+        Request::Datagram { reply, .. } => reply.send(Err(Error::shutdown())),
+        Request::Stats { reply, .. } => reply.send(Err(Error::shutdown())),
+        Request::Listen { reply, .. } => reply.send(Err(Error::shutdown())),
+        Request::Sign { reply, .. } => reply.send(Err(Error::shutdown())),
+        Request::Shutdown { reply } => reply.send(()),
+        Request::Peers { .. } | Request::Node { .. } => {}
+    }
+}
+
+/// A session is over for `err`: every reason is set, and every handle waiting on a stream of it is woken, before the
+/// record (and with it the channels) is dropped.
+fn end_session(mut rec: SessionRec, err: Error) {
+    let _ = rec.shared.ended.set(err);
+    for s in rec.streams.values_mut() {
+        s.shared.end_rx(Err(err));
+        s.shared.end_tx(err);
     }
 }

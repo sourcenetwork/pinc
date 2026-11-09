@@ -1,14 +1,15 @@
-//! The node's keys: an identity in a key store that anyone may ask to sign, and the prekeys that stay in software.
+//! The node's keys: an identity in a key store that the engine owns, and the prekeys that stay in software.
 //!
-//! The identity key lives in a [`KeyStore`] behind a lock, because signing takes `&mut` and both the engine (the
-//! handshake) and the application (signing its own messages) sign. The ML-KEM prekeys always live in the engine's own
-//! [`SoftwareStore`], as a TPM cannot hold them; the two newest generations are kept so a handshake that began under
-//! the old prekey still completes.
+//! The identity key lives in a [`KeyStore`] the engine owns outright: signing takes `&mut`, and both the engine (the
+//! handshake) and the application (signing its own messages, as a request to the engine) sign, one at a time on the
+//! engine's task, so no lock is needed. The ML-KEM prekeys always live in the engine's own [`SoftwareStore`], as a TPM
+//! cannot hold them; the two newest generations are kept so a handshake that began under the old prekey still
+//! completes.
 //!
 //! Invariants: no private key leaves a store; a rotated-out prekey is removed, which zeroizes it; errors name the
 //! failed operation and never a key.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use vinc_crypto::{IdentityAlg, Keypair, NodeId};
 use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
@@ -22,16 +23,14 @@ const IDENTITY: WireHandle = WireHandle(0);
 pub(crate) const PREKEY_LIFE: u64 = 600_000_000_000;
 
 /// The node's identity: a key in a store, and the public facts about it.
-#[derive(Clone)]
-pub struct Identity {
-    // vertexia: one lock for the store, as a store signs with `&mut`; a per-key signer thread if signing contends.
-    store: Arc<Mutex<dyn KeyStore>>,
+pub struct Identity<S = SoftwareStore> {
+    store: S,
     handle: KeyHandle,
     node: NodeId,
     public: Arc<[u8]>,
 }
 
-impl core::fmt::Debug for Identity {
+impl<S> core::fmt::Debug for Identity<S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Identity")
             .field("alg", &self.node.alg)
@@ -65,16 +64,18 @@ impl Identity {
         let handle = store.generate(IdentityAlg::Ed25519).map_err(key_error)?;
         Self::from_store(store, handle)
     }
+}
 
+impl<S: KeyStore> Identity<S> {
     /// The identity of the key `handle` in `store`.
     ///
     /// # Errors
     /// [`ErrorKind::Config`] if the store does not hold an identity key under `handle`.
-    pub fn from_store(store: impl KeyStore + 'static, handle: KeyHandle) -> Result<Self> {
+    pub fn from_store(store: S, handle: KeyHandle) -> Result<Self> {
         let (alg, public) = store.public(&handle).map_err(key_error)?;
         let node = NodeId::from_public(alg, &public).map_err(|_| Error::config("the identity key is not valid"))?;
         Ok(Self {
-            store: Arc::new(Mutex::new(store)),
+            store,
             handle,
             node,
             public: public.into(),
@@ -95,20 +96,16 @@ impl Identity {
     ///
     /// # Errors
     /// [`ErrorKind::Config`] if the store fails.
-    pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>> {
-        let mut s = self.store.lock().unwrap_or_else(PoisonError::into_inner);
-        s.sign(&self.handle, msg)
+    pub fn sign(&mut self, msg: &[u8]) -> Result<Vec<u8>> {
+        self.store
+            .sign(&self.handle, msg)
             .map(vinc_keystore::Signature::into_bytes)
             .map_err(key_error)
     }
 
     /// Fill `out` with random bytes from the store.
-    pub(crate) fn random(&self, out: &mut [u8]) -> Result<()> {
-        self.store
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .random(out)
-            .map_err(key_error)
+    pub(crate) fn random(&mut self, out: &mut [u8]) -> Result<()> {
+        self.store.random(out).map_err(key_error)
     }
 
     pub(crate) fn local(&self) -> Result<LocalIdentity> {

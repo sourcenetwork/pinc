@@ -1,6 +1,6 @@
 [package]
 name = "vinc-driver"
-description = "The reference driver: the SANS-IO endpoint on one thread over a std UDP socket, with a bounded command queue, key requests answered by a key store and typed stream handles for a facade"
+description = "The reference driver: the SANS-IO endpoint as a future over the host's sockets and timers, with a bounded command queue, key requests answered by a key store and typed stream handles for a facade"
 keywords = ["driver", "udp", "endpoint"]
 version.workspace = true
 edition.workspace = true

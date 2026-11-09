@@ -1,29 +1,27 @@
-//! The reference driver of the VINC endpoint: one thread, one UDP socket, no async runtime.
+//! The reference driver of the VINC endpoint: the SANS-IO endpoint as a future the host runs, over the host's own
+//! sockets and timers. It owns no executor, no thread and no socket loop.
 //!
 //! The pieces, from the inside out:
 //!
 //! - [`Engine`]: the SANS-IO `vinc-core` endpoint with the host duties around it (key requests answered by a key store,
 //!   access checks, dials, stream bytes moved between the endpoint and bounded channels). It reads no clock and opens
-//!   no socket, so a different driver can run it the same way.
-//! - [`Remote`] and [`Plane`]: the bounded request queue and the control queue between application handles on any
-//!   thread and the engine thread, built on `kovan-channel`, with a [`Wake`] that rouses the driver loop.
-//! - [`blocking`]: the loop over a `std::net::UdpSocket` that computes the next deadline, waits on the socket with a read
-//!   timeout set to it, feeds the datagram or the timer, sends every datagram the endpoint produced (each segment on
-//!   its own when the platform has no segmentation offload), and sleeps again. It never spins: it runs only for an
-//!   input, a request or a deadline.
+//!   no socket, so any driver can run it the same way.
+//! - [`Remote`] and [`Plane`]: the bounded request queue and the control queue between application handles and the
+//!   engine, built on `kovan-channel`, with a wake that rouses the driver future through the host's executor.
+//! - [`Datagrams`] and [`Timer`]: what the host implements, as async traits (a batched send, a receive into the
+//!   driver's buffer, the local address; a clock and a sleep until an instant).
+//! - [`open`] and [`Driver`]: the handles and the future. The host spawns [`Driver::run`] on the executor and the core
+//!   that own the socket; while the endpoint is idle that future is parked on an await.
 //!
-//! A driver for another runtime builds the same [`Engine`] with [`run`], feeds it from its own sockets and timers, and
-//! hands the application the [`Remote`] side.
-//!
-//! Invariants: after every input the engine is serviced to quiescence before the driver sleeps; every endpoint
-//! deadline is honoured by the next wait (a wait may end late by the timer granularity of the operating system, never
-//! early without a recheck); nothing is leaked when the loop stops.
+//! Invariants: after every input the engine is serviced to quiescence before the driver awaits; every endpoint deadline
+//! is honoured by the next wait; nothing is leaked when the future ends or is dropped.
 #![forbid(unsafe_code)]
 #![allow(clippy::needless_pass_by_value, reason = "reply senders are consumed by the answer")]
 
-pub mod blocking;
+mod drive;
 mod engine;
 mod error;
+mod io;
 mod keys;
 mod link;
 mod mem;
@@ -31,12 +29,15 @@ mod node;
 mod plane;
 mod start;
 
-pub use engine::{Admit, BUSY, Direction, Engine, EngineConfig};
+pub use drive::{Driver, Handles, LoopCounts, LoopStats, Settings, open};
+pub use engine::{Admit, AllowAll, BUSY, Direction, Engine, EngineConfig};
 pub use error::{Error, ErrorKind, Result};
+pub use io::{Datagrams, Timer};
 pub use keys::Identity;
 pub use kovan_channel::bounded::{Receiver, Sender};
 pub use link::{BLOCK, Item, NewStream, SessionShared, StreamShared, chan};
 pub use mem::{Limits, MAX_CONNECTIONS, RING, STREAMS};
-pub use plane::{Ctl, Plane, Remote, Request, Wake, WakeFlag, WeakRemote, plane};
-pub use start::{CAPACITIES, run};
+pub use node::CAPACITIES;
+pub use plane::{Ctl, Plane, Remote, Request, WakeFlag, WeakRemote, plane};
+pub use start::run;
 pub use vinc_core::{NodeStats, SessionId, SessionStats};

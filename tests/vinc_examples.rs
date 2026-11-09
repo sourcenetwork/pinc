@@ -19,19 +19,19 @@ mod echo;
 #[path = "../crates/vinc/examples/transfer.rs"]
 mod transfer;
 
-#[test]
-fn echo_example() {
-    assert_eq!(echo::run().unwrap(), b"hello, vinc");
+#[nuclei::test]
+async fn echo_example() {
+    assert_eq!(echo::run().await.unwrap(), b"hello, vinc");
 }
 
-#[test]
-fn transfer_example() {
-    let (n, ok) = transfer::run(4 << 20).unwrap();
+#[nuclei::test]
+async fn transfer_example() {
+    let (n, ok) = transfer::run(4 << 20).await.unwrap();
     assert_eq!(n, 4 << 20);
     assert!(ok);
 }
 
-#[test]
-fn defradb_backend_example() {
-    assert_eq!(defradb_backend::run().unwrap(), b"pushlog/payload");
+#[nuclei::test]
+async fn defradb_backend_example() {
+    assert_eq!(defradb_backend::run().await.unwrap(), b"pushlog/payload");
 }

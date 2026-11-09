@@ -1,6 +1,6 @@
 //! A large stream transfer: a client sends 32 MiB and the server answers with the byte count and a checksum.
 //!
-//! Run with `cargo run --release -p vinc --example transfer`.
+//! Run with `cargo run --release -p vinc --features nuclei --example transfer`.
 
 #![allow(
     missing_docs,
@@ -15,10 +15,9 @@
     reason = "an example favours the short form"
 )]
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
-use vinc::{Connection, Protocol, Task, Vinc, block_on};
+use vinc::{Connection, Protocol, Vinc};
 
 const ALPN: &[u8] = b"example/transfer/1";
 
@@ -37,30 +36,36 @@ impl Protocol for Sink {
         ALPN
     }
 
-    fn serve(self: Arc<Self>, conn: Connection) -> Task {
-        Box::pin(async move {
-            while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
-                let (mut total, mut h) = (0u64, 0xcbf2_9ce4_8422_2325_u64);
-                while let Ok(Some(chunk)) = rx.read_chunk(64 * 1024).await {
-                    total += chunk.len() as u64;
-                    h = fnv(h, &chunk);
-                }
-                let mut reply = total.to_le_bytes().to_vec();
-                reply.extend_from_slice(&h.to_le_bytes());
-                let _ = tx.write_all(&reply).await;
-                let _ = tx.finish().await;
+    async fn serve(self: Arc<Self>, conn: Connection) {
+        while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
+            let (mut total, mut h) = (0u64, 0xcbf2_9ce4_8422_2325_u64);
+            while let Ok(Some(chunk)) = rx.read_chunk(64 * 1024).await {
+                total += chunk.len() as u64;
+                h = fnv(h, &chunk);
             }
-        })
+            let mut reply = total.to_le_bytes().to_vec();
+            reply.extend_from_slice(&h.to_le_bytes());
+            let _ = tx.write_all(&reply).await;
+            let _ = tx.finish().await;
+        }
     }
 }
 
 /// Send `len` bytes; returns `(bytes the server counted, whether its checksum matches ours)`.
-pub fn run(len: usize) -> vinc::Result<(u64, bool)> {
-    let lo: SocketAddr = ([127, 0, 0, 1], 0).into();
-    let server = Vinc::builder().bind_addr(lo).bind_blocking()?;
-    let client = Vinc::builder().bind_addr(lo).bind_blocking()?;
-    block_on(async {
-        server.register(Arc::new(Sink)).await?;
+pub async fn run(len: usize) -> vinc::Result<(u64, bool)> {
+    let lo = ([127, 0, 0, 1], 0).into();
+    let (server, driver) = Vinc::builder().bind_nuclei(lo).await?;
+    nuclei::spawn(driver.run()).detach();
+    let (client, driver) = Vinc::builder().bind_nuclei(lo).await?;
+    nuclei::spawn(driver.run()).detach();
+    {
+        let registered = server.register(Arc::new(Sink)).await?;
+        nuclei::spawn(async move {
+            while let Some(conn) = registered.accept().await {
+                nuclei::spawn(registered.protocol().serve(conn)).detach();
+            }
+        })
+        .detach();
         let conn = client.connect(server.addr(), ALPN).await?;
         let (mut tx, mut rx) = conn.open_bi().await?;
         let block: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
@@ -76,12 +81,13 @@ pub fn run(len: usize) -> vinc::Result<(u64, bool)> {
         let total = u64::from_le_bytes(reply[..8].try_into().unwrap_or_default());
         let theirs = u64::from_le_bytes(reply[8..16].try_into().unwrap_or_default());
         Ok((total, theirs == h))
-    })
+    }
 }
 
 #[allow(dead_code)]
-fn main() {
-    match run(32 << 20) {
+#[nuclei::main]
+async fn main() {
+    match run(32 << 20).await {
         Ok((n, ok)) => println!(
             "server counted {n} bytes, checksum {}",
             if ok { "matches" } else { "differs" }
