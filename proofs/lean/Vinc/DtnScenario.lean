@@ -247,8 +247,8 @@ def En (s : Sys) : Ev → Prop
 
 /-- The reachable systems. -/
 inductive Reach : Sys → Prop where
-  | init (c : Cfg) (hn : c.ids.Nodup) (hsrc : c.src ∈ c.ids) (hacc : (originAcc c).err = none)
-      (hhold : (originHold c).2 = .ok) : Reach (Sys.init c)
+  | init (c : Cfg) (hn : c.ids.Nodup) (hsrc : c.src ∈ c.ids) (hmax : c.lbud ≤ DtnStore.MAX)
+      (hacc : (originAcc c).err = none) (hhold : (originHold c).2 = .ok) : Reach (Sys.init c)
   | step {s : Sys} (ev : Ev) : Reach s → En s ev → Reach (exec s ev)
 
 end Vinc.DtnScenario
