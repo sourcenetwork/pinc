@@ -262,14 +262,14 @@ impl<P: Provider> Keys<P> {
             self.out = self.last_answer;
         }
         #[cfg(feature = "trace")]
-        self.rec.log.push(trace::KeyEvent::AnswerRequeued);
+        self.rec.log.push((trace::KeyEvent::AnswerRequeued, None));
     }
 
     /// A lost request goes out again at the next opportunity.
     pub(crate) fn request_lost(&mut self) {
         self.request_at = None;
         #[cfg(feature = "trace")]
-        self.rec.log.push(trace::KeyEvent::RequestLost);
+        self.rec.log.push((trace::KeyEvent::RequestLost, None));
     }
 
     /// When the pending request goes out again, if one is waiting for its answer.

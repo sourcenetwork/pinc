@@ -20,11 +20,11 @@ def Node.lastRid (s : Node) : Option T :=
   | none => none
 
 /-- A message sent by node `n` that has drawn `c` atoms: shares are public values of its own atoms, an answer carries
-the request share it answers and the Diffie-Hellman value of the two atoms. -/
+the identifier of the request share it answers and the Diffie-Hellman value of the two atoms with it bound in. -/
 structure MsgOK (n : Bool) (c : Nat) (m : Msg) : Prop where
   req : m.answer = false → m = Msg.req m.share ∧ ∃ k, m.share = .pub (atomOf n k) ∧ k < c
-  ans : m.answer = true → ∃ k k', m.share = .pub (atomOf n k) ∧ k < c ∧ m.to = .pub (atomOf (!n) k') ∧
-    m.gdh = Dh (atomOf n k) (atomOf (!n) k')
+  ans : m.answer = true → ∃ k k', m.share = .pub (atomOf n k) ∧ k < c ∧ m.to = .id (.pub (atomOf (!n) k')) ∧
+    m.gdh = .bound (.id (.pub (atomOf (!n) k'))) (Dh (atomOf n k) (atomOf (!n) k'))
 
 theorem MsgOK.mono {n : Bool} {c c' : Nat} {m : Msg} (h : MsgOK n c m) (hc : c ≤ c') : MsgOK n c' m :=
   ⟨fun a => let ⟨x, k, y, z⟩ := h.req a; ⟨x, k, y, by omega⟩,
@@ -70,13 +70,14 @@ structure NodeInv (P : Params) (n : Bool) (s : Node) : Prop where
   lastAns : ∀ sh a, s.roll.last = some (sh, a) → a.answer = true
   outReq : ∀ m, s.out = some m → m.answer = false → s.roll.pending = some m
   pendSeed : ∀ seed rq, s.roll.st = .req seed rq → rq = Msg.req (.pub seed) ∧ ∃ k, seed = atomOf n k ∧ k < s.ctr
+  ansLast : ∀ m, s.lastAns = some m → MsgOK n s.ctr m ∧ m.answer = true
 
 /-- Prove every field of `NodeInv` separately. -/
-macro "node_inv" : tactic => `(tactic| refine NodeInv.mk ?dialer ?kfSk ?kfCur ?kfStg ?kfNxt ?kfPrev ?cnSk ?cnCur ?cnSN ?phS ?phR ?req ?hold ?rolls ?derOK ?lastInv ?stgLast ?noDup ?derLvl ?outMsg ?pendMsg ?lastMsg ?lastAns ?outReq ?pendSeed)
+macro "node_inv" : tactic => `(tactic| refine NodeInv.mk ?dialer ?kfSk ?kfCur ?kfStg ?kfNxt ?kfPrev ?cnSk ?cnCur ?cnSN ?phS ?phR ?req ?hold ?rolls ?derOK ?lastInv ?stgLast ?noDup ?derLvl ?outMsg ?pendMsg ?lastMsg ?lastAns ?outReq ?pendSeed ?ansLast)
 
 /-- `node_inv` closing every field that reads only fields the update leaves alone. -/
 macro "close_same " h:ident : tactic =>
-  `(tactic| first | (have t := NodeInv.dialer $h; exact t) | (have t := NodeInv.kfSk $h; exact t) | (have t := NodeInv.kfCur $h; exact t) | (have t := NodeInv.kfStg $h; exact t) | (have t := NodeInv.kfNxt $h; exact t) | (have t := NodeInv.kfPrev $h; exact t) | (have t := NodeInv.cnSk $h; exact t) | (have t := NodeInv.cnCur $h; exact t) | (have t := NodeInv.cnSN $h; exact t) | (have t := NodeInv.phS $h; exact t) | (have t := NodeInv.phR $h; exact t) | (have t := NodeInv.req $h; exact t) | (have t := NodeInv.hold $h; exact t) | (have t := NodeInv.rolls $h; exact t) | (have t := NodeInv.derOK $h; exact t) | (have t := NodeInv.lastInv $h; exact t) | (have t := NodeInv.stgLast $h; exact t) | (have t := NodeInv.noDup $h; exact t) | (have t := NodeInv.derLvl $h; exact t) | (have t := NodeInv.outMsg $h; exact t) | (have t := NodeInv.pendMsg $h; exact t) | (have t := NodeInv.lastMsg $h; exact t) | (have t := NodeInv.lastAns $h; exact t) | (have t := NodeInv.outReq $h; exact t) | (have t := NodeInv.pendSeed $h; exact t))
+  `(tactic| first | (have t := NodeInv.dialer $h; exact t) | (have t := NodeInv.kfSk $h; exact t) | (have t := NodeInv.kfCur $h; exact t) | (have t := NodeInv.kfStg $h; exact t) | (have t := NodeInv.kfNxt $h; exact t) | (have t := NodeInv.kfPrev $h; exact t) | (have t := NodeInv.cnSk $h; exact t) | (have t := NodeInv.cnCur $h; exact t) | (have t := NodeInv.cnSN $h; exact t) | (have t := NodeInv.phS $h; exact t) | (have t := NodeInv.phR $h; exact t) | (have t := NodeInv.req $h; exact t) | (have t := NodeInv.hold $h; exact t) | (have t := NodeInv.rolls $h; exact t) | (have t := NodeInv.derOK $h; exact t) | (have t := NodeInv.lastInv $h; exact t) | (have t := NodeInv.stgLast $h; exact t) | (have t := NodeInv.noDup $h; exact t) | (have t := NodeInv.derLvl $h; exact t) | (have t := NodeInv.outMsg $h; exact t) | (have t := NodeInv.pendMsg $h; exact t) | (have t := NodeInv.lastMsg $h; exact t) | (have t := NodeInv.lastAns $h; exact t) | (have t := NodeInv.outReq $h; exact t) | (have t := NodeInv.pendSeed $h; exact t) | (have t := NodeInv.ansLast $h; exact t))
 
 macro "node_inv_same " h:ident : tactic => `(tactic| (node_inv <;> close_same $h))
 
@@ -123,23 +124,33 @@ theorem NodeInv.begin {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (hn
     obtain ⟨e1, e2⟩ := hs
     subst e1; subst e2
     exact ⟨rfl, s.ctr, rfl, by show s.ctr < s.ctr + 1; omega⟩
+  · intro m hm'; have t := h.ansLast m hm'; exact ⟨t.1.mono (by show s.ctr ≤ s.ctr + 1; omega), t.2⟩
+
+/-- What `poll` does to the last answer: nothing, or it becomes the answer that was waiting. -/
+def LastOK (s : Node) (l : Option Msg) : Prop :=
+  l = s.lastAns ∨ ∃ m, s.out = some m ∧ m.answer = true ∧ l = some m
 
 theorem poll_node (s : Node) (now pto : Nat) :
-    ∃ r, (s.poll now pto).2 = { s with out := none, reqAt := r } ∧ (s.out = none ∨ ∃ m, s.out = some m) := by
+    ∃ r l, (s.poll now pto).2 = { s with out := none, reqAt := r, lastAns := l } ∧
+      (s.out = none ∨ ∃ m, s.out = some m) ∧ LastOK s l := by
   unfold Node.poll
   split
-  · rename_i m ho; exact ⟨_, rfl, Or.inr ⟨m, ho⟩⟩
+  · rename_i m ho
+    refine ⟨_, if m.answer = true then some m else s.lastAns, rfl, Or.inr ⟨m, ho⟩, ?_⟩
+    by_cases ha : m.answer = true
+    · exact Or.inr ⟨m, ho, ha, by simp [ha]⟩
+    · exact Or.inl (by simp [ha])
   · rename_i ho
     split
     · rename_i r hp
       by_cases hd : s.pollDue now pto = true
       · simp only [hd, ↓reduceIte]
-        refine ⟨some now, ?_, Or.inl ho⟩
+        refine ⟨some now, s.lastAns, ?_, Or.inl ho, Or.inl rfl⟩
         cases s; simp_all
       · simp only [hd, Bool.false_eq_true, ↓reduceIte]
-        refine ⟨s.reqAt, ?_, Or.inl ho⟩
+        refine ⟨s.reqAt, s.lastAns, ?_, Or.inl ho, Or.inl rfl⟩
         cases s; simp_all
-    · refine ⟨s.reqAt, ?_, Or.inl ho⟩
+    · refine ⟨s.reqAt, s.lastAns, ?_, Or.inl ho, Or.inl rfl⟩
       cases s; simp_all
 
 theorem poll_none_out (s : Node) (now pto : Nat) (h : (s.poll now pto).1 = none) : s.out = none := by
@@ -163,7 +174,8 @@ theorem poll_msg (s : Node) (now pto : Nat) (m : Msg) (h : (s.poll now pto).1 = 
 
 /-- Setting the message waiting (`out`) to nothing or leaving it, and the time of the last send, keeps the invariant. -/
 theorem NodeInv.setOut {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (o : Option Msg) (r : Option Nat)
-    (ho : o = none ∨ o = s.out) : NodeInv P n { s with out := o, reqAt := r } := by
+    (l : Option Msg) (ho : o = none ∨ o = s.out) (hl : LastOK s l) :
+    NodeInv P n { s with out := o, reqAt := r, lastAns := l } := by
   node_inv
   · exact h.dialer
   · exact h.kfSk
@@ -194,6 +206,10 @@ theorem NodeInv.setOut {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (o
     · simp at hm
     · exact h.outReq m hm hq
   · exact h.pendSeed
+  · intro m hm
+    rcases hl with rfl | ⟨m', hm', ha, rfl⟩
+    · exact h.ansLast m hm
+    · simp only [Option.some.injEq] at hm; subst hm; exact ⟨h.outMsg m' hm', ha⟩
 
 /-- The packet number does not matter to the local invariant. -/
 theorem NodeInv.setNpn {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (k : Nat) :
@@ -312,6 +328,7 @@ theorem NodeInv.promoteSend {P : Params} {n : Bool} {s : Node} (h : NodeInv P n 
       case lastAns => (have t := NodeInv.lastAns h; exact t)
       case outReq => (have t := NodeInv.outReq h; exact t)
       case pendSeed => (have t := NodeInv.pendSeed h; exact t)
+      case ansLast => (have t := NodeInv.ansLast h; exact t)
     | some k =>
       obtain ⟨hk1, hk2⟩ := NodeInv.kfStg h k hs
       have hcs := NodeInv.cnSk h
@@ -348,6 +365,7 @@ theorem NodeInv.promoteSend {P : Params} {n : Bool} {s : Node} (h : NodeInv P n 
       case lastAns => (have t := NodeInv.lastAns h; exact t)
       case outReq => (have t := NodeInv.outReq h; exact t)
       case pendSeed => (have t := NodeInv.pendSeed h; exact t)
+      case ansLast => (have t := NodeInv.ansLast h; exact t)
 
 /-- What `RecvKeys` can do to the node. -/
 theorem recvKeys_form (s : Node) (p : Pkt) (f : Bool) (t pto : Nat) :
@@ -494,7 +512,7 @@ theorem take_len_self {α : Type} (l : List α) (g : Nat) (h : g = l.length) : l
 
 theorem NodeInv.consumed {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (seed : Atom) (rq : Msg) (b : Atom)
     (pspn : Nat) (hst : s.roll.st = .req seed rq) (hnoreq : ∀ m', s.out = some m' → m'.answer = true) :
-    NodeInv P n (s.consumed s.roll.completed (Dh seed b) pspn rq.share) := by
+    NodeInv P n (s.consumed s.roll.completed (.bound (.id rq.share) (Dh seed b)) pspn rq.share) := by
   have hr := h.req (by simp [Roll.isIdle, hst])
   have hc1 := NodeInv.cnSk h
   have hc2 := NodeInv.cnCur h
@@ -504,9 +522,9 @@ theorem NodeInv.consumed {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) 
   have e1 : (dhs s).take s.sk.g = dhs s := take_len_self _ _ (by omega)
   have e2 : (dhs s).take s.cur.g = dhs s := take_len_self _ _ (by omega)
   have hsp := parity_succ _ _ (NodeInv.phS h)
-  have tk1 : List.take (s.sk.g + 1) (dhs s ++ [Dh seed b]) = dhs s ++ [Dh seed b] :=
+  have tk1 : List.take (s.sk.g + 1) (dhs s ++ [.bound (.id rq.share) (Dh seed b)]) = dhs s ++ [.bound (.id rq.share) (Dh seed b)] :=
     List.take_of_length_le (by simp; omega)
-  have tk2 : List.take (s.cur.g + 1) (dhs s ++ [Dh seed b]) = dhs s ++ [Dh seed b] :=
+  have tk2 : List.take (s.cur.g + 1) (dhs s ++ [.bound (.id rq.share) (Dh seed b)]) = dhs s ++ [.bound (.id rq.share) (Dh seed b)] :=
     List.take_of_length_le (by simp; omega)
   node_inv
   case dialer => simpa [Roll.completed] using NodeInv.dialer h
@@ -557,12 +575,13 @@ theorem NodeInv.consumed {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) 
     have := hnoreq m hm
     rw [hq] at this; simp at this
   case pendSeed => intro sd r hs; simp [Roll.completed] at hs
+  case ansLast => have t := NodeInv.ansLast h; exact t
 
 theorem NodeInv.staged {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m : Msg) (lvl : Nat) (b : Atom)
     {c : Nat} (hmok : MsgOK (!n) c m) (hm : m.answer = false) (hsh : m.share = .pub b)
     (hnx : s.nxt = none) (hnd : s.roll.isDup m = false) (hlvl : lvl = s.ders.length ∨ lvl + 1 = s.ders.length) :
     NodeInv P n (s.staged (s.roll.answeredWith m.share (answerTo n s.ctr s.npn m.share b))
-      (answerTo n s.ctr s.npn m.share b) (Dh (atomOf n s.ctr) b) m.share lvl) := by
+      (answerTo n s.ctr s.npn m.share b) (.bound (.id m.share) (Dh (atomOf n s.ctr) b)) m.share lvl) := by
   have hstg : s.stg = none := by
     cases hs : s.stg with
     | none => rfl
@@ -575,13 +594,15 @@ theorem NodeInv.staged {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m
   have hdl : (dhs s).length = s.chg := dhs_length s
   have e1 : (dhs s).take s.sk.g = dhs s := take_len_self _ _ (by omega)
   have e2 : (dhs s).take s.cur.g = dhs s := take_len_self _ _ (by omega)
-  have tk1 : List.take (s.sk.g + 1) (dhs s ++ [Dh (atomOf n s.ctr) b]) = dhs s ++ [Dh (atomOf n s.ctr) b] :=
+  have tk1 : List.take (s.sk.g + 1) (dhs s ++ [.bound (.id m.share) (Dh (atomOf n s.ctr) b)]) =
+      dhs s ++ [.bound (.id m.share) (Dh (atomOf n s.ctr) b)] :=
     List.take_of_length_le (by simp; omega)
-  have tk2 : List.take (s.cur.g + 1) (dhs s ++ [Dh (atomOf n s.ctr) b]) = dhs s ++ [Dh (atomOf n s.ctr) b] :=
+  have tk2 : List.take (s.cur.g + 1) (dhs s ++ [.bound (.id m.share) (Dh (atomOf n s.ctr) b)]) =
+      dhs s ++ [.bound (.id m.share) (Dh (atomOf n s.ctr) b)] :=
     List.take_of_length_le (by simp; omega)
   have hansok : MsgOK n (s.ctr + 1) (answerTo n s.ctr s.npn m.share b) :=
     ⟨fun a => by simp [answerTo] at a,
-     fun _ => ⟨s.ctr, k', rfl, by omega, by simp [answerTo, hsh, hb], by simp [answerTo, hb]⟩⟩
+     fun _ => ⟨s.ctr, k', rfl, by omega, by simp [answerTo, hk1], by simp [answerTo, hk1, hb]⟩⟩
   node_inv
   case dialer => simpa [Roll.answeredWith] using NodeInv.dialer h
   case kfSk =>
@@ -628,7 +649,7 @@ theorem NodeInv.staged {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m
     obtain ⟨_, k'', hk'', _⟩ := hmok.req hm
     exact DerOK.snoc (NodeInv.derOK h) _ (Or.inl ⟨rfl, k'', hk''⟩)
   case lastInv => simp [Roll.answeredWith]
-  case stgLast => intro _; exact ⟨⟨true, m.share, Dh (atomOf n s.ctr) b, lvl⟩, by simp, rfl⟩
+  case stgLast => intro _; exact ⟨⟨true, m.share, .bound (.id m.share) (Dh (atomOf n s.ctr) b), lvl⟩, by simp, rfl⟩
   case noDup =>
     refine NoDupStg.snoc (NodeInv.noDup h) _ ?_
     intro x hx hxs hds
@@ -660,6 +681,10 @@ theorem NodeInv.staged {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m
     rfl
   case outReq => intro mm hmm hq; simp only [staged_out, Option.some.injEq] at hmm; subst hmm; simp [answerTo] at hq
   case pendSeed => intro sd r hs; simp [Roll.answeredWith] at hs
+  case ansLast =>
+    intro mm hmm
+    have t := NodeInv.ansLast h mm hmm
+    exact ⟨t.1.mono (by show s.ctr ≤ s.ctr + 1; omega), t.2⟩
 
 theorem NodeInv.dupOut {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (sh : T) (ans : Msg)
     (hl : s.roll.last = some (sh, ans)) : NodeInv P n { s with out := some ans } := by
@@ -674,27 +699,27 @@ theorem NodeInv.dupOut {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (s
 theorem NodeInv.rekeyRx {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m : Msg) (lvl : Nat) {c : Nat}
     (hmok : MsgOK (!n) c m) (hlvl : lvl = s.ders.length ∨ lvl + 1 = s.ders.length)
     (hnoreq : m.answer = true → ∀ m', s.out = some m' → m'.answer = true) :
-    NodeInv P n (rekeyRx P s m n lvl).s := by
+    NodeInv P n (rekeyRx s m n lvl).s := by
   by_cases ha : m.answer = true
   · cases hok : (s.roll.onAnswer m).2 with
     | ok c' =>
-      obtain ⟨seed, rq, b, hst, _, hsh, _⟩ := onAnswer_ok_st s.roll m c' hok
-      rw [rekeyRx_consume P s m n lvl seed rq b ha hst hsh]
+      obtain ⟨seed, rq, b, hst, _, hsh, he, _⟩ := onAnswer_ok_st s.roll m c' hok
+      rw [rekeyRx_consume s m n lvl seed rq b ha hst hsh he]
       exact h.consumed seed rq b m.spn hst (hnoreq ha)
     | error e =>
-      rw [rekeyRx_answer_refused P s m n lvl ha (by intro c'' hc; rw [hok] at hc; cases hc)]
+      rw [rekeyRx_answer_refused s m n lvl ha (by intro c'' hc; rw [hok] at hc; cases hc)]
       exact h
   · have ha' : m.answer = false := by simpa using ha
-    by_cases hg : gated P s m = true
-    · rw [rekeyRx_gated P s m n lvl ha' hg]; exact h
-    · have hg' : gated P s m = false := by simpa using hg
+    by_cases hg : gated s m = true
+    · rw [rekeyRx_gated s m n lvl ha' hg]; exact h
+    · have hg' : gated s m = false := by simpa using hg
       rcases onRequest_split s.roll m ha' with hd | ⟨hn, hb⟩ | ⟨hn, hf⟩
       · obtain ⟨ans, hl⟩ := isDup_last s.roll m hd
-        rw [rekeyRx_dup P s m n lvl ha' hg' ans hl]
+        rw [rekeyRx_dup s m n lvl ha' hg' ans hl]
         exact h.dupOut _ _ hl
-      · rw [rekeyRx_busy P s m n lvl ha' hg' hn hb]; exact h
+      · rw [rekeyRx_busy s m n lvl ha' hg' hn hb]; exact h
       · obtain ⟨_, k, hk, _⟩ := hmok.req ha'
-        rw [rekeyRx_stage P s m n lvl (atomOf (!n) k) ha' hg' hn hf hk]
+        rw [rekeyRx_stage s m n lvl (atomOf (!n) k) ha' hg' hn hf hk]
         exact h.staged m lvl (atomOf (!n) k) hmok ha' hk (gated_nodup P s m ha' hn hg') hn hlvl
 
 theorem NodeInv.pending_req {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) {m : Msg}

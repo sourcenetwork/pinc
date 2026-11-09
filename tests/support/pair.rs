@@ -12,7 +12,7 @@
 )]
 
 use vinc_security::{Env, ResponderStores};
-use vinc_transport::conn::{Drop, KeyEvent, PathId, Transmit};
+use vinc_transport::conn::{Drop, KeyEvent, KeysView, PathId, Transmit};
 
 use super::{Net, Node, PK, TK};
 
@@ -31,6 +31,8 @@ pub struct Logged {
     /// Whether node A took the step.
     pub a: bool,
     pub ev: KeyEvent,
+    /// The key state of the node right after the step, when the connection could take it.
+    pub view: Option<KeysView>,
     /// For a sealed packet: its datagram in the pool.
     pub dgram: Option<usize>,
 }
@@ -99,30 +101,41 @@ impl<'a> Pair<'a> {
         }
         node_service(self, a);
         let mut idx = made.iter().copied();
-        for ev in self.node(a).conn.trace_take() {
+        for (ev, view) in self.node(a).conn.trace_take() {
             let dgram = if matches!(ev, KeyEvent::Sent { .. }) {
                 idx.next()
             } else {
                 None
             };
-            self.events.push(Logged { a, ev, dgram });
+            self.events.push(Logged { a, ev, view, dgram });
         }
         made
     }
 
     /// Move the key-layer steps of node `a` into [`Pair::events`].
     fn drain(&mut self, a: bool) {
-        for ev in self.node(a).conn.trace_take() {
-            self.events.push(Logged { a, ev, dgram: None });
+        for (ev, view) in self.node(a).conn.trace_take() {
+            self.events.push(Logged {
+                a,
+                ev,
+                view,
+                dgram: None,
+            });
         }
     }
 
     /// Deliver pool datagram `idx` to the node it is addressed to (any number of times is allowed).
     pub fn deliver(&mut self, idx: usize) {
+        self.deliver_with(idx, |_| {});
+    }
+
+    /// As [`Pair::deliver`], with the bytes changed by `tamper` first (the pool keeps the original).
+    pub fn deliver_with(&mut self, idx: usize, tamper: impl FnOnce(&mut Vec<u8>)) {
         let now = self.now;
         let d = self.pool[idx].clone();
         let to_a = !d.from_a;
         let mut bytes = d.bytes;
+        tamper(&mut bytes);
         let result = if to_a {
             let mut env = Env {
                 provider: &self.a.prov,

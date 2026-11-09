@@ -70,9 +70,9 @@ par run_tlc keyroll_collide KeyRoll KeyRoll_collide
 par run_tlc keyroll_two KeyRoll KeyRoll_two
 par run_tlc keyroll_forge KeyRoll KeyRoll_forge
 par witness_tlc keyroll_good KeyRoll KeyRoll_good NotGood
-par witness_tlc keyroll_stale KeyRoll KeyRoll_stale AgreeDh
-par witness_tlc keyroll_gate KeyRoll KeyRoll_gate DupRequestAnswered
-par witness_tlc keyroll_orphan KeyRoll KeyRoll_orphan NoOrphan
+par run_tlc keyroll_stale KeyRoll KeyRoll_stale
+par run_tlc keyroll_gate KeyRoll KeyRoll_gate
+par run_tlc keyroll_orphan KeyRoll KeyRoll_orphan
 par run_tlc labels Labels Labels
 par run_tlc credit_w2 Credit Credit_w2
 par run_tlc credit Credit Credit

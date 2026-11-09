@@ -48,10 +48,10 @@ theorem par_ne (a : Nat) : decide ((a + 1) % 2 = 1) ≠ decide (a % 2 = 1) := by
     simp [h, this]
 
 /-- A packet is accepted iff the receiver holds the key it was sealed under (`AcceptIff`). -/
-theorem acceptIff {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
+theorem acceptIff {P : Params} {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
     (hp : p ∈ S.net) :
     ((S.nd n).recvKeys p false S.now P.pto).acc = true ↔ (S.nd n).holds p S.now := by
-  have I := hr.inv hb
+  have I := hr.inv
   have hph := I.netPh p hp
   have hn := I.node n
   have hdep := hn.depths
@@ -235,13 +235,13 @@ theorem forgedCostsOneOpen (s : Node) (p : Pkt) (t pto : Nat) :
     cases hx : s1.prev <;> simp [hx] at this ⊢ <;> omega
 
 /-- What `Deliver` does with the body of the packet. -/
-def rkOf (P : Params) (r : Node × Bool) (p : Pkt) (n : Bool) : Rk :=
+def rkOf (r : Node × Bool) (sel : Sel) (p : Pkt) (n : Bool) : Rk :=
   match p.pl with
-  | some m => if r.2 then rekeyRx P r.1 m n p.sec.depth else ⟨r.1, none, none⟩
+  | some m => if r.2 && acts m sel then rekeyRx r.1 m n p.sec.depth else ⟨r.1, none, none⟩
   | none => ⟨r.1, none, none⟩
 
 theorem deliverUpd_nd (P : Params) (S : Sys) (n : Bool) (p : Pkt) (f : Bool) :
-    (deliverUpd P S n p f).nd n = (rkOf P ((S.nd n).afterRecv P p f S.now) p n).s ∧
+    (deliverUpd P S n p f).nd n = (rkOf ((S.nd n).afterRecv P p f S.now) ((S.nd n).rxSel P p f S.now) p n).s ∧
     (deliverUpd P S n p f).nd (!n) = S.nd (!n) ∧ (deliverUpd P S n p f).net = S.net ∧
     (deliverUpd P S n p f).slog = S.slog ∧ (deliverUpd P S n p f).breq = S.breq := by
   refine ⟨?_, ?_, rfl, rfl, rfl⟩
@@ -267,11 +267,11 @@ theorem forged_deliver (P : Params) (S : Sys) (n : Bool) (p : Pkt) :
 key, it moves the sending key by one only when it takes the answer to a request that is out, and it sets the staged
 next key only when none was staged. -/
 theorem rekeyRx_keys {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m : Msg) (me : Bool) (lvl : Nat) :
-    (rekeyRx P s m me lvl).s.cur = s.cur ∧
-    ((rekeyRx P s m me lvl).s.sk = s.sk ∨ ((rekeyRx P s m me lvl).s.sk.g = s.sk.g + 1 ∧ s.roll.isIdle = false)) ∧
-    ((rekeyRx P s m me lvl).s.nxt = s.nxt ∨ s.nxt = none) ∧
-    ((rekeyRx P s m me lvl).s.sk.sec = s.sk.sec ∨ s.roll.isIdle = false) ∧
-    ((rekeyRx P s m me lvl).s.ders = s.ders ∨ s.roll.isIdle = false ∨ s.nxt = none) := by
+    (rekeyRx s m me lvl).s.cur = s.cur ∧
+    ((rekeyRx s m me lvl).s.sk = s.sk ∨ ((rekeyRx s m me lvl).s.sk.g = s.sk.g + 1 ∧ s.roll.isIdle = false)) ∧
+    ((rekeyRx s m me lvl).s.nxt = s.nxt ∨ s.nxt = none) ∧
+    ((rekeyRx s m me lvl).s.sk.sec = s.sk.sec ∨ s.roll.isIdle = false) ∧
+    ((rekeyRx s m me lvl).s.ders = s.ders ∨ s.roll.isIdle = false ∨ s.nxt = none) := by
   unfold rekeyRx
   by_cases ha : m.answer = true
   · simp only [ha, ↓reduceIte]
@@ -290,9 +290,9 @@ theorem rekeyRx_keys {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m :
       simp [Node.consumed, PK.new, hid, hnx]
   · have ha' : m.answer = false := by simpa using ha
     simp only [ha, Bool.false_eq_true, ↓reduceIte]
-    by_cases hg : gated P s m = true
+    by_cases hg : gated s m = true
     · simp [hg]
-    · have hg' : gated P s m = false := by simpa using hg
+    · have hg' : gated s m = false := by simpa using hg
       simp only [hg, Bool.false_eq_true, ↓reduceIte]
       cases hor : s.roll.onRequest m s.npn (some (atomOf me s.ctr))
       rename_i r res
@@ -315,10 +315,10 @@ theorem rekeyRx_keys {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (m :
 
 /-- The sending and receiving generations of a node only move forward, by one, in one delivery. -/
 theorem deliver_gen {P : Params} {n : Bool} {s0 : Node} (h : NodeInv P n s0) (p : Pkt) (f : Bool) (now : Nat) :
-    ((rkOf P (s0.afterRecv P p f now) p n).s.sk.g = s0.sk.g ∨
-        (rkOf P (s0.afterRecv P p f now) p n).s.sk.g = s0.sk.g + 1) ∧
-      ((rkOf P (s0.afterRecv P p f now) p n).s.cur.g = s0.cur.g ∨
-        (rkOf P (s0.afterRecv P p f now) p n).s.cur.g = s0.cur.g + 1) := by
+    ((rkOf (s0.afterRecv P p f now) (s0.rxSel P p f now) p n).s.sk.g = s0.sk.g ∨
+        (rkOf (s0.afterRecv P p f now) (s0.rxSel P p f now) p n).s.sk.g = s0.sk.g + 1) ∧
+      ((rkOf (s0.afterRecv P p f now) (s0.rxSel P p f now) p n).s.cur.g = s0.cur.g ∨
+        (rkOf (s0.afterRecv P p f now) (s0.rxSel P p f now) p n).s.cur.g = s0.cur.g + 1) := by
   have h1 := h.afterRecv (f := f) (t := now) p
   have rf := afterRecv_facts h p f now
   have hs1 : ((s0.afterRecv P p f now).1.sk.g = s0.sk.g ∨ (s0.afterRecv P p f now).1.sk.g = s0.sk.g + 1) ∧
@@ -343,7 +343,7 @@ theorem deliver_gen {P : Params} {n : Bool} {s0 : Node} (h : NodeInv P n s0) (p 
   cases hpl : p.pl with
   | none => simp only; exact ⟨a1, a2⟩
   | some m =>
-    by_cases hp : pr = true
+    by_cases hp : (pr && acts m (s0.rxSel P p f now)) = true
     · simp only [hp, if_true]
       obtain ⟨c1, c2, c3, c4, c5⟩ := rekeyRx_keys h1 m n p.sec.depth
       refine ⟨?_, by rw [c1]; exact a2⟩
@@ -361,10 +361,10 @@ theorem deliver_gen {P : Params} {n : Bool} {s0 : Node} (h : NodeInv P n s0) (p 
     · simp only [hp]; simp; exact ⟨a1, a2⟩
 
 /-- The sending generation and the receiving generation only move forward, by one (`GenMonotone`). -/
-theorem genMonotone {P : Params} (hb : P.bindAnswers = true) {S S' : Sys} (hr : Reach P S) (hs : Step P S S') (n : Bool) :
+theorem genMonotone {P : Params} {S S' : Sys} (hr : Reach P S) (hs : Step P S S') (n : Bool) :
     ((S'.nd n).sk.g = (S.nd n).sk.g ∨ (S'.nd n).sk.g = (S.nd n).sk.g + 1) ∧
     ((S'.nd n).cur.g = (S.nd n).cur.g ∨ (S'.nd n).cur.g = (S.nd n).cur.g + 1) := by
-  have I := hr.inv hb
+  have I := hr.inv
   cases hs with
   | begin d hok =>
     rw [beginUpd_eq hok]
@@ -373,10 +373,10 @@ theorem genMonotone {P : Params} (hb : P.bindAnswers = true) {S S' : Sys} (hr : 
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
   | send d w hok =>
-    obtain ⟨r, he⟩ := sendUpd_eq hok
+    obtain ⟨r, l, hlo, he⟩ := sendUpd_eq hok
     rw [he]
     dsimp only
-    rcases Sys.setNode_cases S d n { S.nd d with out := none, reqAt := r, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
+    rcases Sys.setNode_cases S d n { S.nd d with out := none, reqAt := r, lastAns := l, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
     · rw [e]; exact ⟨Or.inl rfl, Or.inl rfl⟩
   | deliver d p f hok =>
@@ -389,6 +389,14 @@ theorem genMonotone {P : Params} (hb : P.bindAnswers = true) {S S' : Sys} (hr : 
       rw [this, b]
       exact ⟨Or.inl rfl, Or.inl rfl⟩
   | tick => exact ⟨Or.inl rfl, Or.inl rfl⟩
+  | requeue d _ =>
+    unfold requeueUpd
+    rcases Sys.setNode_cases S d n { S.nd d with out := (S.nd d).lastAns } with e | ⟨rfl, e⟩ <;>
+      rw [e] <;> exact ⟨Or.inl rfl, Or.inl rfl⟩
+  | reqLost d _ =>
+    unfold reqLostUpd
+    rcases Sys.setNode_cases S d n { S.nd d with reqAt := none } with e | ⟨rfl, e⟩ <;>
+      rw [e] <;> exact ⟨Or.inl rfl, Or.inl rfl⟩
 
 /-- Unless the packet promotes the staged next key, the keys layer leaves the generations and the floor alone. -/
 theorem recvKeys_neutral (s : Node) (p : Pkt) (f : Bool) (t pto : Nat)
@@ -430,12 +438,12 @@ theorem afterRecv_neutral {P : Params} (s : Node) (p : Pkt) (f : Bool) (t : Nat)
 
 /-- The floor of a staged next key does not change while it is staged, unless the packet promotes it
 (`FloorsRespected`, delivery). -/
-theorem floorsRespected_deliver {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S) {n : Bool}
+theorem floorsRespected_deliver {P : Params} {S : Sys} (hr : Reach P S) {n : Bool}
     {p : Pkt} {f : Bool}
     (hnp : ¬ (((S.nd n).recvKeys p f S.now P.pto).acc = true ∧ ((S.nd n).recvKeys p f S.now P.pto).sel = .next))
     {x x' : Nxt} (hx : (S.nd n).nxt = some x) (hx' : ((deliverUpd P S n p f).nd n).nxt = some x') :
     x'.floor = x.floor := by
-  have I := hr.inv hb
+  have I := hr.inv
   have kn := afterRecv_neutral (P := P) (S.nd n) p f S.now hnp
   have h1 := (I.node n).afterRecv p f S.now
   rw [(deliverUpd_nd P S n p f).1] at hx'
@@ -452,7 +460,7 @@ theorem floorsRespected_deliver {P : Params} (hb : P.bindAnswers = true) {S : Sy
   cases hpl : p.pl with
   | none => simp only [hpl] at hx'; exact key x' hx'
   | some m =>
-    by_cases hp : pr = true
+    by_cases hp : (pr && acts m ((S.nd n).rxSel P p f S.now)) = true
     · simp only [hpl, hp, if_true] at hx'
       obtain ⟨_, _, c3, _⟩ := rekeyRx_keys h1 m n p.sec.depth
       rcases c3 with c3 | c3
@@ -465,7 +473,7 @@ theorem floorsRespected_deliver {P : Params} (hb : P.bindAnswers = true) {S : Sy
 
 /-- The floor of a staged next key does not change while it is staged, in any step, unless the step is the delivery
 of a packet that promotes it (`FloorsRespected`). -/
-theorem floorsRespected {P : Params} (hb : P.bindAnswers = true) {S S' : Sys} (hr : Reach P S) (hs : Step P S S')
+theorem floorsRespected {P : Params} {S S' : Sys} (hr : Reach P S) (hs : Step P S S')
     (n : Bool) {x x' : Nxt} (hx : (S.nd n).nxt = some x) (hx' : (S'.nd n).nxt = some x')
     (hnp : ∀ p f, S' = deliverUpd P S n p f →
       ¬ (((S.nd n).recvKeys p f S.now P.pto).acc = true ∧ ((S.nd n).recvKeys p f S.now P.pto).sel = .next)) :
@@ -478,61 +486,73 @@ theorem floorsRespected {P : Params} (hb : P.bindAnswers = true) {S S' : Sys} (h
     · rw [e] at hx'; rw [hx] at hx'; cases hx'; rfl
     · rw [e] at hx'; simp only [beginNode] at hx'; rw [hx] at hx'; cases hx'; rfl
   | send d w hok =>
-    obtain ⟨r, he⟩ := sendUpd_eq hok
+    obtain ⟨r, l, hlo, he⟩ := sendUpd_eq hok
     rw [he] at hx'
     dsimp only at hx'
-    rcases Sys.setNode_cases S d n { S.nd d with out := none, reqAt := r, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
+    rcases Sys.setNode_cases S d n { S.nd d with out := none, reqAt := r, lastAns := l, npn := (S.nd d).npn + 1 } with e | ⟨rfl, e⟩
     · rw [e] at hx'; rw [hx] at hx'; cases hx'; rfl
     · rw [e] at hx'; simp only at hx'; rw [hx] at hx'; cases hx'; rfl
   | deliver d p f hok =>
     by_cases hn : n = d
     · subst hn
-      exact floorsRespected_deliver hb hr (hnp p f rfl) hx hx'
+      exact floorsRespected_deliver hr (hnp p f rfl) hx hx'
     · have : n = !d := by cases n <;> cases d <;> simp_all
       rw [this, (deliverUpd_nd P S d p f).2.1] at hx'
       rw [this] at hx
       rw [hx] at hx'; cases hx'; rfl
   | tick => have : (tickUpd S).nd n = S.nd n := rfl
             rw [this, hx] at hx'; cases hx'; rfl
+  | requeue d _ =>
+    unfold requeueUpd at hx'
+    rcases Sys.setNode_cases S d n { S.nd d with out := (S.nd d).lastAns } with e | ⟨rfl, e⟩
+    · rw [e] at hx'; rw [hx] at hx'; cases hx'; rfl
+    · rw [e] at hx'; simp only at hx'; rw [hx] at hx'; cases hx'; rfl
+  | reqLost d _ =>
+    unfold reqLostUpd at hx'
+    rcases Sys.setNode_cases S d n { S.nd d with reqAt := none } with e | ⟨rfl, e⟩
+    · rw [e] at hx'; rw [hx] at hx'; cases hx'; rfl
+    · rw [e] at hx'; simp only at hx'; rw [hx] at hx'; cases hx'; rfl
 
-/-- A duplicate request is answered with the same answer and creates no key (`DupRequestAnswered`); this is the
-code with `gateFirst = false`: with `gateFirst = true` a duplicate is dropped while a next key is staged, which
-`KeyRollSysCex.lean` shows. -/
-theorem dupRequestAnswered {P : Params} (hb : P.bindAnswers = true) (hgf : P.gateFirst = false) {S : Sys}
+/-- A duplicate request is answered with the same answer and creates no key (`DupRequestAnswered`), also while the
+next key is staged; the old code, which refused it there, is shown by `KeyRollSysCex.lean`. A request that arrived
+under the previous key (`sel = prev`) is a late copy of a settled roll and is ignored instead. -/
+theorem dupRequestAnswered {P : Params} {S : Sys}
     (hr : Reach P S) {n : Bool} {p : Pkt} {f : Bool} {m : Msg}
     (hproc : ((S.nd n).afterRecv P p f S.now).2 = true) (hpl : p.pl = some m) (hm : m.answer = false)
-    (hd : (S.nd n).roll.isDup m = true) :
+    (hsel : (S.nd n).rxSel P p f S.now ≠ .prev) (hd : (S.nd n).roll.isDup m = true) :
     ∃ ans, (S.nd n).roll.last = some (m.share, ans) ∧
       ((deliverUpd P S n p f).nd n).out = some ans ∧ ((deliverUpd P S n p f).nd n).chg = (S.nd n).chg := by
-  have I := hr.inv hb
+  have I := hr.inv
   have rf := afterRecv_facts (I.node n) p f S.now
   obtain ⟨ans, hl⟩ := isDup_last _ _ hd
   have hl1 : ((S.nd n).afterRecv P p f S.now).1.roll.last = some (m.share, ans) := by rw [rf.roll]; exact hl
   have hd1' : ((S.nd n).afterRecv P p f S.now).1.roll.isDup m = true := by rw [rf.roll]; exact hd
-  have hg : gated P ((S.nd n).afterRecv P p f S.now).1 m = false := by
-    simp [gated, isDupMsg, hm, hgf, hd1']
+  have hg : gated ((S.nd n).afterRecv P p f S.now).1 m = false := by
+    simp [gated, isDupMsg, hm, hd1']
+  have hact : acts m ((S.nd n).rxSel P p f S.now) = true := by simp [acts, hm, hsel]
   refine ⟨ans, hl, ?_⟩
   rw [(deliverUpd_nd P S n p f).1]
   unfold rkOf
   generalize (S.nd n).afterRecv P p f S.now = r at *
   obtain ⟨s1, pr⟩ := r
   simp only at *
-  simp only [hpl, hproc, ite_true]
-  rw [rekeyRx_dup P s1 m n _ hm hg ans hl1]
+  simp only [hpl, hproc, hact, Bool.and_self, ite_true]
+  rw [rekeyRx_dup s1 m n _ hm hg ans hl1]
   exact ⟨rfl, by simp [Node.chg, rf.ders]⟩
 
 /-- The dialer wins a collision: while its own request is out, the dialing side ignores the other side's request
 and keeps its state; the accepting side drops its own request and answers (`DialerWins`). -/
-theorem dialerWins {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
+theorem dialerWins {P : Params} {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
     {f : Bool} (hok : deliverOk P S n p f = true) {m : Msg}
     (hproc : ((S.nd n).afterRecv P p f S.now).2 = true) (hpl : p.pl = some m) (hm : m.answer = false)
+    (hsel : (S.nd n).rxSel P p f S.now ≠ .prev)
     (hnd : (S.nd n).roll.isDup m = false) (hreq : (S.nd n).roll.isIdle = false) (hnx : (S.nd n).nxt = none) :
     ((S.nd n).roll.dialer = true →
       ((deliverUpd P S n p f).nd n).roll = (S.nd n).roll ∧ ((deliverUpd P S n p f).nd n).stg = none) ∧
     ((S.nd n).roll.dialer = false →
       ((deliverUpd P S n p f).nd n).roll.st = .idle ∧ ((deliverUpd P S n p f).nd n).out ≠ none) := by
-  have I := hr.inv hb
-  obtain ⟨hp, hsrc, _⟩ := deliverOk_spec hok
+  have I := hr.inv
+  obtain ⟨hp, hsrc⟩ := deliverOk_spec hok
   have rf := afterRecv_facts (I.node n) p f S.now
   have hstg0 : (S.nd n).stg = none := ((I.node n).req hreq).2
   have hk : ((S.nd n).afterRecv P p f S.now).1.nxt = none ∧ ((S.nd n).afterRecv P p f S.now).1.stg = none := by
@@ -544,38 +564,40 @@ theorem dialerWins {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reac
       exact ⟨by cases h : ((S.nd n).afterRecv P p f S.now).1.nxt <;> simp_all,
              by cases h : ((S.nd n).afterRecv P p f S.now).1.stg <;> simp_all⟩
     · have := k.1; rw [hnx] at this; simp at this
-  have hg : gated P ((S.nd n).afterRecv P p f S.now).1 m = false := by simp [gated, hk.1]
+  have hg : gated ((S.nd n).afterRecv P p f S.now).1 m = false := by simp [gated, hk.1]
   have hnd1 : ((S.nd n).afterRecv P p f S.now).1.roll.isDup m = false := by rw [rf.roll]; exact hnd
   have hmok := (I.netMsg p hp m hpl)
   rw [hsrc] at hmok
   obtain ⟨_, kk, hkk, _⟩ := hmok.req hm
   have hd1 := (deliverUpd_nd P S n p f).1
+  have hact : acts m ((S.nd n).rxSel P p f S.now) = true := by simp [acts, hm, hsel]
   unfold rkOf at hd1
   generalize (S.nd n).afterRecv P p f S.now = r at *
   obtain ⟨s1, pr⟩ := r
   simp only at *
-  simp only [hpl, hproc, if_true] at hd1
+  simp only [hpl, hproc, hact, Bool.and_self, if_true] at hd1
   constructor
   · intro hdl
     have hc : (!s1.roll.isIdle && s1.roll.dialer) = true := by rw [rf.roll]; simp [hreq, hdl]
-    rw [hd1, rekeyRx_busy P s1 m n _ hm hg hnd1 hc]
+    rw [hd1, rekeyRx_busy s1 m n _ hm hg hnd1 hc]
     exact ⟨rf.roll, hk.2⟩
   · intro hdl
     have hc : (!s1.roll.isIdle && s1.roll.dialer) = false := by rw [rf.roll]; simp [hdl]
-    rw [hd1, rekeyRx_stage P s1 m n _ (atomOf (!n) kk) hm hg hnd1 hc hkk]
+    rw [hd1, rekeyRx_stage s1 m n _ (atomOf (!n) kk) hm hg hnd1 hc hkk]
     simp [Node.staged, Roll.answeredWith]
 
 /-- An answer while no request is out changes no key (a packet that promotes the staged key still does)
 (`StaleAnswerNoKey`). -/
-theorem staleAnswerNoKey {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
+theorem staleAnswerNoKey {P : Params} {S : Sys} (hr : Reach P S) {n : Bool} {p : Pkt}
     {f : Bool} {m : Msg}
     (hnp : ¬ (((S.nd n).recvKeys p f S.now P.pto).acc = true ∧ ((S.nd n).recvKeys p f S.now P.pto).sel = .next))
     (hpl : p.pl = some m) (hm : m.answer = true) (hidle : (S.nd n).roll.isIdle = true) :
     ((deliverUpd P S n p f).nd n).sk.g = (S.nd n).sk.g ∧ ((deliverUpd P S n p f).nd n).chg = (S.nd n).chg := by
-  have I := hr.inv hb
+  have I := hr.inv
   have rf := afterRecv_facts (I.node n) p f S.now
   have kn := afterRecv_neutral (P := P) (S.nd n) p f S.now hnp
   have hd1 := (deliverUpd_nd P S n p f).1
+  have hact : acts m ((S.nd n).rxSel P p f S.now) = true := by simp [acts, hm]
   unfold rkOf at hd1
   generalize (S.nd n).afterRecv P p f S.now = r at *
   obtain ⟨s1, pr⟩ := r
@@ -586,8 +608,8 @@ theorem staleAnswerNoKey {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr 
     have := (isIdle_st s1.roll).1 (by rw [rf.roll]; exact hidle)
     rw [this] at hst; cases hst
   by_cases hp : pr = true
-  · simp only [hpl, hp, if_true] at hd1
-    rw [hd1, rekeyRx_answer_refused P s1 m n _ hm hstale]
+  · simp only [hpl, hp, hact, Bool.and_self, if_true] at hd1
+    rw [hd1, rekeyRx_answer_refused s1 m n _ hm hstale]
     exact ⟨kn.1, by simp [Node.chg, rf.ders]⟩
   · simp only [hpl, hp] at hd1
     simp at hd1
@@ -595,9 +617,9 @@ theorem staleAnswerNoKey {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr 
     exact ⟨kn.1, by simp [Node.chg, rf.ders]⟩
 
 /-- A seal never repeats a (secret, packet number) pair and a node's numbers increase (`FreshSeal`). -/
-theorem freshSeal {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S) (n : Bool) :
+theorem freshSeal {P : Params} {S : Sys} (hr : Reach P S) (n : Bool) :
     ∀ x ∈ S.slog, ¬ (x.sec = (S.nd n).sk.sec ∧ x.pn = (S.nd n).npn) ∧ (x.n = n → x.pn < (S.nd n).npn) := by
-  have I := hr.inv hb
+  have I := hr.inv
   intro x hx
   obtain ⟨a1, a2, a3, ds, hds⟩ := I.slogOK x hx
   have hxn : x.n = n → x.pn < (S.nd n).npn := fun e => by rw [← e]; exact a1

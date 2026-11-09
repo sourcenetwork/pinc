@@ -33,8 +33,9 @@ structure Run where
   sOm : List (T × Int)
   dOm : List (T × Int)
   cOm : List ((Record.Sec × Nat) × Int)
+  eOm : List (T × Int)
 
-instance : Inhabited Run := ⟨⟨0, #[], #[], #[], [], [], []⟩⟩
+instance : Inhabited Run := ⟨⟨0, #[], #[], #[], [], [], [], []⟩⟩
 
 /-- The replay state of a file: the current run, if any. -/
 structure KState where
@@ -54,6 +55,12 @@ def inShare (o : List (T × Int)) (id : Int) (zero : Bool) : T :=
   match o.find? (·.2 == id) with
   | some p => p.1
   | none => if zero then .junk else .pub ⟨99, id.toNat⟩
+
+/-- An input echo: a known id is its term; a new id is an echo the attacker made, equal to no request's identifier. -/
+def inEcho (o : List (T × Int)) (id : Int) : T :=
+  match o.find? (·.2 == id) with
+  | some p => p.1
+  | none => .id (.pub ⟨98, id.toNat⟩)
 
 def pnOf (pn big : Nat) : Nat := if big == 0 then pn else if big == 1 then 2 ^ 62 + pn else 2 ^ 64 - 1
 
@@ -110,7 +117,7 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     let lim : Record.Limits := ⟨← natF j "al", ← natF j "cl"⟩
     pure { r := some ⟨← natF j "run", #[Roll.new true, Roll.new false], #[0, 0],
       #[Record.Key.fresh aead lim 0, Record.Key.fresh aead lim 1, Record.Key.fresh aead lim 1, Record.Key.fresh aead lim 0],
-      [], [], []⟩ }
+      [], [], [], []⟩ }
   | "start" =>
     let r ← getRun st j
     let n ← natF j "n"
@@ -143,24 +150,26 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     let (r1, out) := r.rolls[n]!.onRequest m spn (some (freshAtom r n))
     let res ← strF j "res"
     let drew := !(ans || r.rolls[n]!.isDup m || (!r.rolls[n]!.isIdle && r.rolls[n]!.dialer))
-    let (som, dom) ← match out with
+    let (som, dom, eom) ← match out with
       | .ok (a, dh) =>
         check (res == "ok") s!"onreq: model ok, code {res}"
         let som2 ← bind som1 a.share (← intF j "oans")
+        let eom ← bind r.eOm a.to (← intF j "oecho")
         check ((← natF j "ospn") == a.spn) "onreq: answer switch number"
         match dh with
-        | some d => pure (som2, ← bind r.dOm d (← intF j "dh"))
+        | some d => pure (som2, ← bind r.dOm d (← intF j "dh"), eom)
         | none =>
           check ((← intF j "dh") == -1) "onreq: duplicate request gave a value"
-          pure (som2, r.dOm)
+          pure (som2, r.dOm, eom)
       | .error e =>
         check (res == failName e) s!"onreq: model {failName e}, code {res}"
-        check ((← intF j "oans") == -1 && (← natF j "ospn") == 0 && (← intF j "dh") == -1) "onreq: refusal output"
-        pure (som1, r.dOm)
+        check ((← intF j "oans") == -1 && (← intF j "oecho") == -1 && (← natF j "ospn") == 0 && (← intF j "dh") == -1)
+          "onreq: refusal output"
+        pure (som1, r.dOm, r.eOm)
     check ((← intF j "pend") == pendId r1 som) "onreq: pending"
     check ((← boolF j "idle") == r1.isIdle) "onreq: idle"
     check ((← natF j "rolls") == r1.rolls) "onreq: rolls"
-    pure { r := some { setRoll r n r1 with sOm := som, dOm := dom, ctr := r.ctr.set! n (r.ctr[n]! + (if drew then 1 else 0)) } }
+    pure { r := some { setRoll r n r1 with sOm := som, dOm := dom, eOm := eom, ctr := r.ctr.set! n (r.ctr[n]! + (if drew then 1 else 0)) } }
   | "onans" =>
     let r ← getRun st j
     let n ← natF j "n"
@@ -170,7 +179,8 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     let sh := inShare r.sOm sid zero
     check (zero == (sh == .junk)) "onans: zero share"
     let som ← bind r.sOm sh sid
-    let m : Msg := ⟨ans, sh, ← natF j "spn", .junk, .junk⟩
+    let eid ← intF j "echo"
+    let m : Msg := ⟨ans, sh, ← natF j "spn", if ans then inEcho r.eOm eid else .junk, .junk⟩
     let (r1, out) := r.rolls[n]!.onAnswer m
     let res ← strF j "res"
     let dom ← match out with
@@ -233,7 +243,7 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     check (limitReached sk == (← boolF j "lrs") && limitReached rk == (← boolF j "lrr")) "due: limit_reached"
     pure st
   | "enc" =>
-    let m : Rekey := ⟨← boolF j "ans", ← natList (← field j "share"), ← limbsVal (← field j "sl")⟩
+    let m : Rekey := ⟨← boolF j "ans", ← natList (← field j "share"), ← natList (← field j "echo"), ← limbsVal (← field j "sl")⟩
     let res ← strF j "res"
     match m.encode with
     | some bs =>
@@ -248,7 +258,7 @@ def replayEvent (j : J) (st : KState) : Except String KState := do
     | .ok m =>
       check (res == "ok") "dec: model ok, code refused"
       check (m.answer == (← boolF j "ans") && m.share == (← natList (← field j "share")) &&
-        m.switchPn == (← limbsVal (← field j "sl"))) "dec: message"
+        m.echo == (← natList (← field j "echo")) && m.switchPn == (← limbsVal (← field j "sl"))) "dec: message"
     | .error e =>
       let name := match e with | .kind => "kind" | .trailing => "trailing" | _ => "other"
       check (res == name) s!"dec: model {name}, code {res}"

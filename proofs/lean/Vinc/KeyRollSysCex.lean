@@ -1,63 +1,60 @@
 import Vinc.KeyRollSysAct
 
 /-!
-# Three findings about the code as read, as concrete traces
+# Three findings about the old code, as concrete traces of the fixed model
 
-Each lemma is one trace of `Vinc.KeyRollSys` that the model checker also finds (`KeyRoll_gate.cfg`,
-`KeyRoll_stale.cfg`, `KeyRoll_orphan.cfg`); every step is checked by evaluation, and the property that fails is
-shown to fail in the last state. They are findings about `keyroll.rs` and `conn/keys.rs`, not properties.
+Each trace is a trace of `Vinc.KeyRollSys` that the model checker found a violation on in the code as first read
+(`KeyRoll_gate.cfg`, `KeyRoll_stale.cfg`, `KeyRoll_orphan.cfg`, which now pass); every step is checked by
+evaluation. The same steps, run against the fixed code, end differently:
 
-* F1 (`gate_drops_duplicate`): with `gateFirst = true` (`Keys::on_request` refuses a request while a next key is
-  staged, before the duplicate check of `Roll::on_request`) a duplicate request is dropped while the answerer's
-  next key is staged: the answer is not sent again. With `gateFirst = false` the same trace answers it.
-* F2 (`stale_answer_disagrees`): with `bindAnswers = false` (an answer carries no echo of the request it answers
-  and `Roll::on_answer` does not check it) an old answer delivered while a newer request is out is taken, and the
-  two sides compute different Diffie-Hellman values.
-* F3 (`orphan_after_collision`): a request that lost a collision, still in flight, is delivered after the roll
-  finished and is answered as a fresh request: the answerer stages keys the peer never takes.
+* F1 (`duplicate_answered_again`): a repeated request is delivered while the answerer's next key is staged. The old
+  `Keys::on_request` refused it before the duplicate check of `Roll::on_request`, so the lost answer was never sent
+  again. Now the answer is queued again, the same answer, and no key changes.
+* F2 (`stale_answer_ignored`): an old answer arrives while a newer request is out. The old `Roll::on_answer` took it
+  and the two sides computed different Diffie-Hellman values. Now the answer echoes the identifier of its own
+  request, which is not the request that is out, so it is ignored and nothing changes.
+* F3 (`no_orphan_after_collision`): the request that lost a collision is still in flight when the roll finishes. The
+  old code answered it as a fresh request and left keys staged that the peer never takes. Now it arrives in a packet
+  opened under the previous key (a late copy of a settled roll) and is ignored.
 -/
 
 namespace Vinc.KeyRollSys
 open Vinc.KeyRoll
 
-/-! ## F1: the gate drops a duplicate request -/
+/-! ## F1: a repeated request is answered again while the next key is staged -/
 
-/-- One answerer, one requester, one retransmission; `g` is `gateFirst`. -/
-def P1 (g : Bool) : Params := ⟨1, fun _ => 1, 2, g, true, false⟩
+/-- One answerer, one requester, one retransmission. -/
+def P1 : Params := ⟨1, fun _ => 1, 2, false⟩
 
-def f1S1 (P : Params) := beginUpd Sys.init false
-def f1S2 (P : Params) := sendUpd P (f1S1 P) false true
-def f1Pk0 (P : Params) := sendPkt P (f1S1 P) false true
-def f1S3 (P : Params) := deliverUpd P (f1S2 P) true (f1Pk0 P) false
-def f1S4 (P : Params) := tickUpd (f1S3 P)
-def f1S5 (P : Params) := sendUpd P (f1S4 P) true true
-def f1S6 (P : Params) := sendUpd P (f1S5 P) false true
-def f1Pk1 (P : Params) := sendPkt P (f1S5 P) false true
+def f1S1 := beginUpd Sys.init false
+def f1S2 := sendUpd P1 f1S1 false true
+def f1Pk0 := sendPkt P1 f1S1 false true
+def f1S3 := deliverUpd P1 f1S2 true f1Pk0 false
+def f1S4 := tickUpd f1S3
+def f1S5 := sendUpd P1 f1S4 true true
+def f1S6 := sendUpd P1 f1S5 false true
+def f1Pk1 := sendPkt P1 f1S5 false true
 
-theorem f1_reach (g : Bool) : Reach (P1 g) (f1S6 (P1 g)) := by
-  cases g <;>
-  exact Reach.step _ _ (Reach.step _ _ (Reach.step _ _ (Reach.step _ _ (Reach.step _ _ (Reach.step _ _
+theorem f1_reach : Reach P1 f1S6 :=
+  Reach.step _ _ (Reach.step _ _ (Reach.step _ _ (Reach.step _ _ (Reach.step _ _ (Reach.step _ _
     Reach.init (Step.begin _ false (by decide))) (Step.send _ false true (by decide)))
-    (Step.deliver _ true (f1Pk0 _) false (by decide))) (Step.tick _)) (Step.send _ true true (by decide)))
+    (Step.deliver _ true f1Pk0 false (by decide))) (Step.tick _)) (Step.send _ true true (by decide)))
     (Step.send _ false true (by decide))
 
-/-- With `gateFirst = true` the duplicate request is delivered, processed, is a duplicate of the request answered,
-and no answer is queued: `DupRequestAnswered` fails. -/
-theorem gate_drops_duplicate :
-    deliverOk (P1 true) (f1S6 (P1 true)) true (f1Pk1 (P1 true)) false = true ∧
-    ((f1S6 (P1 true)).nd true).roll.isDup (Msg.req (.pub (atomOf false 0))) = true ∧
-    (f1Pk1 (P1 true)).pl = some (Msg.req (.pub (atomOf false 0))) ∧
-    (((f1S6 (P1 true)).nd true).afterRecv (P1 true) (f1Pk1 (P1 true)) false (f1S6 (P1 true)).now).2 = true ∧
-    ((deliverUpd (P1 true) (f1S6 (P1 true)) true (f1Pk1 (P1 true)) false).nd true).out = none := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide⟩
+/-- The repeated request is delivered, processed, is a duplicate of the request answered, the next key is staged,
+and the answer is queued again: the same answer that went out before (`DupRequestAnswered` holds). -/
+theorem duplicate_answered_again :
+    deliverOk P1 f1S6 true f1Pk1 false = true ∧
+    ((f1S6.nd true).afterRecv P1 f1Pk1 false f1S6.now).2 = true ∧
+    ((f1S6.nd true).roll.isDup (Msg.req (.pub (atomOf false 0)))) = true ∧
+    (f1S6.nd true).nxt.isSome = true ∧
+    ((deliverUpd P1 f1S6 true f1Pk1 false).nd true).out ≠ none ∧
+    ((deliverUpd P1 f1S6 true f1Pk1 false).nd true).out = (f1S6.nd true).lastAns := by
+  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
 
-/-- ... and with `gateFirst = false` the same step queues the answer again. -/
-theorem ungated_answers_duplicate :
-    ((deliverUpd (P1 false) (f1S6 (P1 false)) true (f1Pk1 (P1 false)) false).nd true).out ≠ none := by decide
+/-! ## F2: a stale answer is ignored -/
 
-/-! ## F2: a stale answer is taken when answers are not bound to their request -/
-
-def P2 : Params := ⟨1, fun _ => 2, 2, false, false, false⟩
+def P2 : Params := ⟨1, fun _ => 2, 2, false⟩
 
 def f2S1 := beginUpd Sys.init false
 def f2S2 := sendUpd P2 f2S1 false true
@@ -98,13 +95,19 @@ theorem f2_reach : Reach P2 f2S15 := by
   have s14 : Reach P2 f2S14 := Reach.step _ _ s13 (Step.begin _ false (by decide))
   exact Reach.step _ _ s14 (Step.deliver _ false f2Pa1 false (by decide))
 
-/-- The two sides complete a roll with different Diffie-Hellman values: `AgreeDh` fails. -/
-theorem stale_answer_disagrees : ∃ c ∈ f2S15.comp, c.dh ≠ c.gdh := by
-  exact ⟨f2S15.comp.head (by decide), List.head_mem _, by decide⟩
+/-- The old answer is delivered while the newer request is out: it is ignored. The requester's roll and the list of
+completed rolls stay as they were, so no two sides disagree (`AgreeDh` holds). -/
+theorem stale_answer_ignored :
+    deliverOk P2 f2S14 false f2Pa1 false = true ∧
+    ((deliverUpd P2 f2S14 false f2Pa1 false).nd false).roll = (f2S14.nd false).roll ∧
+    (f2S14.nd false).roll.isIdle = false ∧
+    (deliverUpd P2 f2S14 false f2Pa1 false).comp.length = f2S14.comp.length ∧
+    ∀ c ∈ f2S15.comp, c.dh = c.gdh := by
+  refine ⟨by decide, by decide, by decide, by decide, by decide⟩
 
 /-! ## F3: keys staged for a roll the peer never takes -/
 
-def P3 : Params := ⟨1, fun _ => 2, 2, false, true, false⟩
+def P3 : Params := ⟨1, fun _ => 2, 2, false⟩
 
 /-- A node holds staged keys for a roll the peer never took and no longer can: the peer is idle with nothing staged
 and on the old generation. -/
@@ -144,8 +147,11 @@ theorem f3_reach : Reach P3 f3S12 := by
   have s11 : Reach P3 f3S11 := Reach.step _ _ s10 (Step.deliver _ false f3Pn1 false (by decide))
   exact Reach.step _ _ s11 (Step.deliver _ false f3Pk1 false (by decide))
 
-/-- The request that lost the collision is answered after the roll finished: the dialer stages keys the acceptor
-never takes. -/
-theorem orphan_after_collision : Orphan f3S12 := ⟨false, by decide, by decide, by decide, by decide, by decide⟩
+/-- The request that lost the collision arrives after the roll finished, under the previous key: nothing is staged
+and the state is not an orphan. -/
+theorem no_orphan_after_collision : ¬ Orphan f3S12 ∧ (f3S12.nd false).stg = none ∧ (f3S12.nd false).nxt = none := by
+  refine ⟨?_, by decide, by decide⟩
+  rintro ⟨n, h1, _⟩
+  cases n <;> revert h1 <;> decide
 
 end Vinc.KeyRollSys

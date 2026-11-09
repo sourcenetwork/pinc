@@ -3,22 +3,21 @@ import Vinc.KeyRollSysReach
 /-!
 # Properties of the key roll system
 
-Every theorem here is about a reachable state (`Reach P S`) of `Vinc.KeyRollSys` with `P.bindAnswers = true`, the
-switch that makes the network deliver an answer only to the request it answers; `gateFirst` is free except where a
-theorem says it must be `false`. The names are those of the invariants and action properties of `KeyRoll.tla`.
+Every theorem here is about a reachable state (`Reach P S`) of `Vinc.KeyRollSys`, for every parameter `P`. The names are
+those of the invariants and action properties of `KeyRoll.tla`.
 -/
 
 namespace Vinc.KeyRollSys
 open Vinc.KeyRoll
 
 section State
-variable {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S)
-include hb hr
+variable {P : Params} {S : Sys} (hr : Reach P S)
+include hr
 
 /-- The generation of a key is the depth of its secret (`GenIsDepth`). -/
 theorem genIsDepth (n : Bool) :
     (S.nd n).sk.g = (S.nd n).sk.sec.depth ∧ (S.nd n).cur.g = (S.nd n).cur.sec.depth := by
-  have := ((hr.inv hb).node n).depths
+  have := ((hr.inv).node n).depths
   exact ⟨this.1.symm, this.2.1.symm⟩
 
 /-- The phase bit is the parity of the generation, for every key held (`PhaseParity`). -/
@@ -27,7 +26,7 @@ theorem phaseParity (n : Bool) :
     (∀ k, (S.nd n).stg = some k → k.g = (S.nd n).sk.g + 1) ∧
     (∀ x, (S.nd n).nxt = some x → x.k.g = (S.nd n).cur.g + 1) ∧
     (∀ pv, (S.nd n).prev = some pv → pv.k.g + 1 = (S.nd n).cur.g) := by
-  have h := (hr.inv hb).node n
+  have h := (hr.inv).node n
   exact ⟨h.phS, h.phR, fun k hk => (h.kfStg k hk).2, fun x hx => (h.kfNxt x hx).2, fun pv hpv => (h.kfPrev pv hpv).2⟩
 
 
@@ -36,7 +35,7 @@ def gens (S : Sys) : List Nat := [(S.nd false).sk.g, (S.nd false).cur.g, (S.nd t
 
 /-- Both sides stay in step: any two of these generations differ by at most one (`InStep`). -/
 theorem inStep : ∀ a ∈ gens S, ∀ b ∈ gens S, a ≤ b + 1 := by
-  have I := hr.inv hb
+  have I := hr.inv
   have d0 := I.d1 false
   have d1 := I.d1 true
   have c0 := (I.node false).cn
@@ -101,11 +100,11 @@ theorem take_eq_of_pp {α : Type} {a b : List α} (h : PP a b) {g : Nat} (ha : g
   · rw [List.take_append_of_le_length hb]
 
 section State
-variable {P : Params} (hb : P.bindAnswers = true) {S : Sys} (hr : Reach P S)
-include hb hr
+variable {P : Params} {S : Sys} (hr : Reach P S)
+include hr
 
 
-omit hb hr in
+omit hr in
 theorem dhs_pp {P : Params} {S : Sys} (I : Inv P S) (n : Bool) : PP (dhs (S.nd n)) (dhs (S.nd (!n))) := by
   have h := I.ppn n
   have e : ∀ s : Node, dhs s = (s.ders.map Der.core).map Prod.snd := by intro s; simp [dhs, Der.core, Function.comp_def]
@@ -116,7 +115,7 @@ theorem dhs_pp {P : Params} {S : Sys} (I : Inv P S) (n : Bool) : PP (dhs (S.nd n
 
 /-- The keys of one direction agree: two of the same generation are the same secret (`KeysAgree`). -/
 theorem keysAgree (n : Bool) : ∀ x ∈ held S n, ∀ y ∈ held S n, x.g = y.g → x.sec = y.sec := by
-  have I := hr.inv hb
+  have I := hr.inv
   have fn := key_form (I.node n)
   have fm := key_form (I.node (!n))
   simp only [Bool.not_not] at fm
@@ -150,7 +149,7 @@ theorem keysAgree (n : Bool) : ∀ x ∈ held S n, ∀ y ∈ held S n, x.g = y.g
 /-- No packet number is sealed twice under a key, and a node's sending generation never goes back (`NoKeyReuse`). -/
 theorem noKeyReuse : (∀ x ∈ S.slog, ∀ y ∈ S.slog, x.n = y.n → x.pn < y.pn → x.g ≤ y.g) ∧
     (∀ x ∈ S.slog, ∀ y ∈ S.slog, x.sec = y.sec → x.pn = y.pn → x = y) := by
-  have I := hr.inv hb
+  have I := hr.inv
   refine ⟨I.slogOrd, fun x hx y hy hs hp => ?_⟩
   obtain ⟨_, _, _, ds, hds⟩ := I.slogOK x hx
   obtain ⟨_, _, _, es, hes⟩ := I.slogOK y hy
@@ -163,20 +162,20 @@ theorem noKeyReuse : (∀ x ∈ S.slog, ∀ y ∈ S.slog, x.n = y.n → x.pn < y
 (`SharesOnce`); the counter saturates at `u64::MAX`. -/
 theorem sharesOnce : (∀ c ∈ S.comp, ∀ c' ∈ S.comp, c.req = c'.req → c = c') ∧
     ∀ n, (S.nd n).roll.rolls = min (S.nd n).chg Record.u64max :=
-  ⟨(hr.inv hb).compUniq, fun n => ((hr.inv hb).node n).rolls⟩
+  ⟨(hr.inv).compUniq, fun n => ((hr.inv).node n).rolls⟩
 
 /-- The old key is held exactly one probe timeout: its deadline is the promotion time plus `pto` (`HoldOnePTO`). -/
 theorem holdOnePTO (n : Bool) : ∀ pv, (S.nd n).prev = some pv → ∃ t, (S.nd n).promAt = some t ∧ pv.dl = t + P.pto :=
-  ((hr.inv hb).node n).hold
+  ((hr.inv).node n).hold
 
 /-- When both complete a roll they computed the same Diffie-Hellman value (`AgreeDh`). -/
-theorem agreeDh : ∀ c ∈ S.comp, c.dh = c.gdh := (hr.inv hb).agree
+theorem agreeDh : ∀ c ∈ S.comp, c.dh = c.gdh := (hr.inv).agree
 
 /-- The floor in an answer is a true floor: every packet the peer sealed under the staged next key has a number
 at or above it (`FloorHonoured`). -/
 theorem floorHonoured (n : Bool) : ∀ x, (S.nd n).nxt = some x → ∀ p ∈ S.net, p.src = !n → p.sec = x.k.sec →
     x.floor ≤ p.pn := by
-  have I := hr.inv hb
+  have I := hr.inv
   intro x hx p hp hsrc hsec
   rcases I.nxtFloor n x hx with h0 | ⟨c, hc, hcn, hpos, hspn⟩
   · omega

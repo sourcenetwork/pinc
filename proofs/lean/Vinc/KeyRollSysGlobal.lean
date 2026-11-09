@@ -6,7 +6,7 @@ open Vinc.KeyRoll
 /-! ## The invariant of the system
 
 `NodeInv` for each node, the packets on the network, the logs and the cross-node facts. Everything here is proved
-by induction over `Reach`; `Inv.cross` needs `bindAnswers`. -/
+by induction over `Reach`. -/
 
 /-- A derivation as the other node sees it: the request and the Diffie-Hellman value. -/
 def Der.core (e : Der) : T × T := (e.rid, e.dh)
@@ -44,10 +44,11 @@ structure Inv (P : Params) (S : Sys) : Prop where
   derBreq : ∀ (n : Bool) (q : Nat) (e : Der), (S.nd n).ders[q]? = some e → e.stg = true → (⟨!n, e.rid, e.lvl⟩ : BReq) ∈ S.breq
   -- the stagings
   stlOK : ∀ c ∈ S.stl, c.ans.answer = true ∧ MsgOK c.n (S.nd c.n).ctr c.ans ∧
-    (∃ lv, (S.nd c.n).ders[c.pos]? = some ⟨true, c.ans.to, c.ans.gdh, lv⟩) ∧ c.pos ≤ (S.nd c.n).cur.g ∧
+    (∃ lv rid, c.ans.to = .id rid ∧ (S.nd c.n).ders[c.pos]? = some ⟨true, rid, c.ans.gdh, lv⟩) ∧
+    c.pos ≤ (S.nd c.n).cur.g ∧
     c.ans.spn ≤ (S.nd c.n).npn ∧
     (∀ x ∈ S.slog, x.n = c.n → c.pos < x.g → c.ans.spn ≤ x.pn) ∧
-    ∃ p ∈ S.net, ∃ r, p.pl = some r ∧ r.answer = false ∧ r.share = c.ans.to
+    ∃ p ∈ S.net, ∃ r, p.pl = some r ∧ r.answer = false ∧ c.ans.to = .id r.share
   outAns : ∀ n a, (S.nd n).out = some a → a.answer = true → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n
   lastAnsStl : ∀ n sh a, (S.nd n).roll.last = some (sh, a) → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n
   unsent : ∀ n m, (S.nd n).out = some m → m.answer = false → ∀ p ∈ S.net, p.pl ≠ some m
@@ -59,13 +60,15 @@ structure Inv (P : Params) (S : Sys) : Prop where
   d1 : ∀ n, (S.nd (!n)).cur.g ≤ (S.nd n).sk.g ∧ (S.nd n).sk.g ≤ (S.nd (!n)).cur.g + 1 ∧
     ((S.nd n).sk.g = (S.nd (!n)).cur.g + 1 → (S.nd (!n)).nxt.isSome = true)
   pp : PP ((S.nd false).ders.map Der.core) ((S.nd true).ders.map Der.core)
-  qq : ∀ n rq, (S.nd n).roll.pending = some rq → ∀ c ∈ S.stl, c.n = !n → c.ans.to = rq.share →
+  qq : ∀ n rq, (S.nd n).roll.pending = some rq → ∀ c ∈ S.stl, c.n = !n → c.ans.to = .id rq.share →
     c.pos = (S.nd n).chg
   nxtFloor : ∀ n x, (S.nd n).nxt = some x →
     x.floor = 0 ∨ ∃ c ∈ S.stl, c.n = !n ∧ c.pos = (S.nd n).cur.g ∧ c.ans.spn = x.floor
+  -- the last answer polled is a staging of this node
+  ansLastStl : ∀ n a, (S.nd n).lastAns = some a → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n
 
 /-- Prove every field of `Inv` separately. -/
-macro "inv_mk" : tactic => `(tactic| refine Inv.mk ?node ?netPh ?netDep ?netMsg ?netSlog ?netReq ?netAns ?slogOK ?slogOrd ?slogUniq ?breqOK ?breqPend ?breqFun ?breqF3 ?derBreq ?stlOK ?outAns ?lastAnsStl ?unsent ?compOK ?compUniq ?agree ?d1 ?pp ?qq ?nxtFloor)
+macro "inv_mk" : tactic => `(tactic| refine Inv.mk ?node ?netPh ?netDep ?netMsg ?netSlog ?netReq ?netAns ?slogOK ?slogOrd ?slogUniq ?breqOK ?breqPend ?breqFun ?breqF3 ?derBreq ?stlOK ?outAns ?lastAnsStl ?unsent ?compOK ?compUniq ?agree ?d1 ?pp ?qq ?nxtFloor ?ansLastStl)
 
 theorem Inv.init (P : Params) : Inv P Sys.init := by
   inv_mk

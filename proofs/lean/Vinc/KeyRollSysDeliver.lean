@@ -13,7 +13,8 @@ theorem inv_recv {P : Params} {S : Sys} {n : Bool} {p : Pkt} {f : Bool} (h : Inv
     Inv P (S.setNode n ((S.nd n).afterRecv P p f S.now).1) := by
   have hnn := (h.node n).afterRecv p f S.now
   have rf := afterRecv_facts (h.node n) p f S.now
-  generalize ((S.nd n).afterRecv P p f S.now).1 = s1 at hnn rf ⊢
+  have hla := afterRecv_lastAns P (S.nd n) p f S.now
+  generalize ((S.nd n).afterRecv P p f S.now).1 = s1 at hnn rf hla ⊢
   have hne : ∀ m, m ≠ n → (S.setNode n s1).nd m = S.nd m := fun m hm => Sys.setNode_ne S n m _ hm
   have hsame : (S.setNode n s1).nd n = s1 := Sys.setNode_same _ _ _
   have fr : ∀ m, (S.setNode n s1).nd m = S.nd m ∨ (m = n ∧ (S.setNode n s1).nd m = s1) := by
@@ -96,6 +97,11 @@ theorem inv_recv {P : Params} {S : Sys} {n : Bool} {p : Pkt} {f : Bool} (h : Inv
       by rw [eNpn]; exact s5, s6, s7⟩
   case outAns => intro m a ho ha; rw [eOut] at ho; exact h.outAns m a ho ha
   case lastAnsStl => intro m sh a hl; rw [eRoll] at hl; exact h.lastAnsStl m sh a hl
+  case ansLastStl =>
+    intro m a hl
+    rcases fr m with e | ⟨rfl, e⟩
+    · rw [e] at hl; exact h.ansLastStl m a hl
+    · rw [e, hla] at hl; exact h.ansLastStl _ a hl
   case unsent => intro m mm ho ha; rw [eOut] at ho; exact h.unsent m mm ho ha
   case compOK =>
     intro c hc
@@ -200,33 +206,33 @@ theorem Sys.setNode_setNode (S : Sys) (n : Bool) (a b : Node) : (S.setNode n a).
     funext m
     by_cases hm : m = n <;> simp [upd, hm]
 
-/-- Changing only the message waiting of a node. -/
-theorem inv_setOut {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (o : Option Msg)
-    (hnn : NodeInv P n { S.nd n with out := o })
+/-- Changing only the message waiting of a node and the time of the last send. -/
+theorem inv_setOut {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (o : Option Msg) (r : Option Nat)
+    (hnn : NodeInv P n { S.nd n with out := o, reqAt := r })
     (hA : ∀ a, o = some a → a.answer = true → ∃ c ∈ S.stl, c.ans = a ∧ c.n = n)
     (hU : ∀ a, o = some a → a.answer = false → ∀ p ∈ S.net, p.pl ≠ some a) :
-    Inv P (S.setNode n { S.nd n with out := o }) := by
-  have fr : ∀ m, (S.setNode n { S.nd n with out := o }).nd m = S.nd m ∨
-      (m = n ∧ (S.setNode n { S.nd n with out := o }).nd m = { S.nd n with out := o }) :=
+    Inv P (S.setNode n { S.nd n with out := o, reqAt := r }) := by
+  have fr : ∀ m, (S.setNode n { S.nd n with out := o, reqAt := r }).nd m = S.nd m ∨
+      (m = n ∧ (S.setNode n { S.nd n with out := o, reqAt := r }).nd m = { S.nd n with out := o, reqAt := r }) :=
     fun m => Sys.setNode_cases S n m _
-  have hsame : (S.setNode n { S.nd n with out := o }).nd n = { S.nd n with out := o } := Sys.setNode_same _ _ _
-  have hne : ∀ m, m ≠ n → (S.setNode n { S.nd n with out := o }).nd m = S.nd m :=
+  have hsame : (S.setNode n { S.nd n with out := o, reqAt := r }).nd n = { S.nd n with out := o, reqAt := r } := Sys.setNode_same _ _ _
+  have hne : ∀ m, m ≠ n → (S.setNode n { S.nd n with out := o, reqAt := r }).nd m = S.nd m :=
     fun m hm => Sys.setNode_ne S n m _ hm
-  have eSk : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).sk = (S.nd m).sk := by
+  have eSk : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).sk = (S.nd m).sk := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eCtr : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).ctr = (S.nd m).ctr := by
+  have eCtr : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).ctr = (S.nd m).ctr := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eCur : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).cur = (S.nd m).cur := by
+  have eCur : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).cur = (S.nd m).cur := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eNxt : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).nxt = (S.nd m).nxt := by
+  have eNxt : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).nxt = (S.nd m).nxt := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eDers : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).ders = (S.nd m).ders := by
+  have eDers : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).ders = (S.nd m).ders := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eRoll : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).roll = (S.nd m).roll := by
+  have eRoll : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).roll = (S.nd m).roll := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eNpn : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).npn = (S.nd m).npn := by
+  have eNpn : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).npn = (S.nd m).npn := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eChg : ∀ m, ((S.setNode n { S.nd n with out := o }).nd m).chg = (S.nd m).chg := by
+  have eChg : ∀ m, ((S.setNode n { S.nd n with out := o, reqAt := r }).nd m).chg = (S.nd m).chg := by
     intro m; simp [Node.chg, eDers m]
   inv_mk
   all_goals try dsimp only
@@ -272,6 +278,11 @@ theorem inv_setOut {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (o : Option M
     by_cases hmn : m = n
     · subst hmn; rw [hsame] at ho; exact hA a ho ha
     · rw [hne m hmn] at ho; exact h.outAns m a ho ha
+  case ansLastStl =>
+    intro m a hl
+    rcases fr m with e | ⟨rfl, e⟩
+    · rw [e] at hl; exact h.ansLastStl m a hl
+    · rw [e] at hl; exact h.ansLastStl _ a hl
   case lastAnsStl => intro m sh a hl; rw [eRoll] at hl; exact h.lastAnsStl m sh a hl
   case unsent =>
     intro m mm ho ha p hp heq
@@ -301,7 +312,7 @@ theorem inv_dup {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (sh : T) (ans : 
     (hl : (S.nd n).roll.last = some (sh, ans)) :
     Inv P (S.setNode n { S.nd n with out := some ans }) := by
   have ans_true := NodeInv.lastAns (h.node n) sh ans hl
-  refine inv_setOut h (some ans) ((h.node n).dupOut sh ans hl) ?_ ?_
+  refine inv_setOut h (some ans) (S.nd n).reqAt ((h.node n).dupOut sh ans hl) ?_ ?_
   · intro a ha _; simp only [Option.some.injEq] at ha; subst ha; exact h.lastAnsStl n sh _ hl
   · intro a ha hq; simp only [Option.some.injEq] at ha; subst ha; rw [ans_true] at hq; simp at hq
 

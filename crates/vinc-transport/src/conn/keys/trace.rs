@@ -126,7 +126,7 @@ pub struct KeysView {
 /// What the connection records: the log and the REKEY message of the packet being sent or received.
 #[derive(Debug)]
 pub(crate) struct Recorder {
-    pub(crate) log: Vec<KeyEvent>,
+    pub(crate) log: Vec<(KeyEvent, Option<KeysView>)>,
     pub(crate) tx: Option<Rekey>,
     pub(crate) rx: Option<Rekey>,
 }
@@ -142,8 +142,9 @@ impl Recorder {
 }
 
 conn_impl! {
-    /// The key events since the last call, oldest first.
-    pub fn trace_take(&mut self) -> Vec<KeyEvent> {
+    /// The key events since the last call, oldest first, each with the key state right after it (`None` for a
+    /// loss event, which the connection notes from inside the key layer).
+    pub fn trace_take(&mut self) -> Vec<(KeyEvent, Option<KeysView>)> {
         core::mem::take(&mut self.keys.rec.log)
     }
 
@@ -186,7 +187,7 @@ conn_impl! {
             key: s.pk.fingerprint(),
             rekey: self.keys.rec.tx.take(),
         };
-        self.keys.rec.log.push(ev);
+        self.trace_note(ev);
     }
 
     /// Note a received 1-RTT packet: `seen` is its number, phase bit and key choice.
@@ -209,11 +210,12 @@ conn_impl! {
             promoted,
             rekey: self.keys.rec.rx.take(),
         };
-        self.keys.rec.log.push(ev);
+        self.trace_note(ev);
     }
 
     /// Note a step of the key layer.
     pub(super) fn trace_note(&mut self, ev: KeyEvent) {
-        self.keys.rec.log.push(ev);
+        let view = self.trace_keys();
+        self.keys.rec.log.push((ev, view));
     }
 }

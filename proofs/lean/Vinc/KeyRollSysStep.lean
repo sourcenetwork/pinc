@@ -6,7 +6,7 @@ open Vinc.KeyRoll
 /-! ## Time and `Begin` keep the invariant -/
 
 /-- Close a field of `Inv` from the same field of the hypothesis. -/
-macro "inv_close " h:ident : tactic => `(tactic| first | (have t := Inv.node $h; exact t) | (have t := Inv.netPh $h; exact t) | (have t := Inv.netDep $h; exact t) | (have t := Inv.netMsg $h; exact t) | (have t := Inv.netSlog $h; exact t) | (have t := Inv.netReq $h; exact t) | (have t := Inv.netAns $h; exact t) | (have t := Inv.slogOK $h; exact t) | (have t := Inv.slogOrd $h; exact t) | (have t := Inv.slogUniq $h; exact t) | (have t := Inv.breqOK $h; exact t) | (have t := Inv.breqPend $h; exact t) | (have t := Inv.breqFun $h; exact t) | (have t := Inv.breqF3 $h; exact t) | (have t := Inv.derBreq $h; exact t) | (have t := Inv.stlOK $h; exact t) | (have t := Inv.outAns $h; exact t) | (have t := Inv.lastAnsStl $h; exact t) | (have t := Inv.unsent $h; exact t) | (have t := Inv.compOK $h; exact t) | (have t := Inv.compUniq $h; exact t) | (have t := Inv.agree $h; exact t) | (have t := Inv.d1 $h; exact t) | (have t := Inv.pp $h; exact t) | (have t := Inv.qq $h; exact t) | (have t := Inv.nxtFloor $h; exact t))
+macro "inv_close " h:ident : tactic => `(tactic| first | (have t := Inv.node $h; exact t) | (have t := Inv.netPh $h; exact t) | (have t := Inv.netDep $h; exact t) | (have t := Inv.netMsg $h; exact t) | (have t := Inv.netSlog $h; exact t) | (have t := Inv.netReq $h; exact t) | (have t := Inv.netAns $h; exact t) | (have t := Inv.slogOK $h; exact t) | (have t := Inv.slogOrd $h; exact t) | (have t := Inv.slogUniq $h; exact t) | (have t := Inv.breqOK $h; exact t) | (have t := Inv.breqPend $h; exact t) | (have t := Inv.breqFun $h; exact t) | (have t := Inv.breqF3 $h; exact t) | (have t := Inv.derBreq $h; exact t) | (have t := Inv.stlOK $h; exact t) | (have t := Inv.outAns $h; exact t) | (have t := Inv.lastAnsStl $h; exact t) | (have t := Inv.unsent $h; exact t) | (have t := Inv.compOK $h; exact t) | (have t := Inv.compUniq $h; exact t) | (have t := Inv.agree $h; exact t) | (have t := Inv.d1 $h; exact t) | (have t := Inv.pp $h; exact t) | (have t := Inv.qq $h; exact t) | (have t := Inv.nxtFloor $h; exact t) | (have t := Inv.ansLastStl $h; exact t))
 
 /-- `Inv` is unchanged by a step that changes none of the things it reads. -/
 macro "inv_same " h:ident : tactic => `(tactic| (inv_mk <;> inv_close $h))
@@ -158,6 +158,11 @@ theorem inv_begin {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (hok : beginOk
     by_cases hmn : m = n
     · subst hmn; rw [hsame] at ho; simp [beginNode] at ho; subst ho; simp [Msg.req] at ha
     · rw [hne m hmn] at ho; exact h.outAns m a ho ha
+  case ansLastStl =>
+    intro m a hl
+    by_cases hmn : m = n
+    · subst hmn; rw [hsame] at hl; exact h.ansLastStl m a (by simpa [beginNode] using hl)
+    · rw [hne m hmn] at hl; exact h.ansLastStl m a hl
   case lastAnsStl =>
     intro m sh a hl
     by_cases hmn : m = n
@@ -204,10 +209,11 @@ theorem inv_begin {P : Params} {S : Sys} {n : Bool} (h : Inv P S) (hok : beginOk
       obtain ⟨_, _, _, _, _, _, p, hp, r, hr1, hr2, hr3⟩ := h.stlOK c hc
       obtain ⟨_, k, hk, hk2⟩ := (h.netMsg p hp r hr1).req hr2
       simp only [Msg.req] at hto
-      rw [hr3] at hk
-      rw [hk] at hto
-      -- hto : pub (atomOf p.src k) = pub (atomOf m ctr)
-      have := pub_atom_inj hto
+      rw [hr3] at hto
+      have hto' := T.id.inj hto
+      rw [hk] at hto'
+      -- hto' : pub (atomOf p.src k) = pub (atomOf m ctr)
+      have := pub_atom_inj hto'.symm
       obtain ⟨e1, e2⟩ := this
       subst e1
       omega
@@ -234,12 +240,12 @@ theorem sendOk_spec {P : Params} {S : Sys} {n w : Bool} (h : sendOk P S n w = tr
     · simpa using h3
 
 theorem sendQ_node (P : Params) (S : Sys) (n w : Bool) (h : sendOk P S n w = true) :
-    ∃ r, (sendQ P S n w).2 = { S.nd n with out := none, reqAt := r } := by
+    ∃ r l, LastOK (S.nd n) l ∧ (sendQ P S n w).2 = { S.nd n with out := none, reqAt := r, lastAns := l } := by
   cases w with
-  | true => obtain ⟨r, e, _⟩ := poll_node (S.nd n) S.now P.pto; exact ⟨r, by simpa [sendQ] using e⟩
+  | true => obtain ⟨r, l, e, _, hl⟩ := poll_node (S.nd n) S.now P.pto; exact ⟨r, l, hl, by simpa [sendQ] using e⟩
   | false =>
     have := poll_none_out _ _ _ ((sendOk_spec h).2.2 rfl)
-    exact ⟨(S.nd n).reqAt, by simp only [sendQ, Bool.false_eq_true, ↓reduceIte]; cases hs : S.nd n; simp_all⟩
+    exact ⟨(S.nd n).reqAt, (S.nd n).lastAns, Or.inl rfl, by simp only [sendQ, Bool.false_eq_true, ↓reduceIte]; cases hs : S.nd n; simp_all⟩
 
 theorem sendQ_msg (P : Params) (S : Sys) (n w : Bool) (m : Msg) (hm : (sendQ P S n w).1 = some m) :
     (S.nd n).out = some m ∨ ((S.nd n).out = none ∧ (S.nd n).roll.pending = some m) := by
@@ -251,54 +257,54 @@ theorem sendQ_msg (P : Params) (S : Sys) (n w : Bool) (m : Msg) (hm : (sendQ P S
 def sendNode (P : Params) (S : Sys) (n w : Bool) : Node := { (sendQ P S n w).2 with npn := (sendQ P S n w).2.npn + 1 }
 
 theorem sendUpd_eq {P : Params} {S : Sys} {n w : Bool} (h : sendOk P S n w = true) :
-    ∃ r, sendUpd P S n w =
-      { (S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }) with
+    ∃ r l, LastOK (S.nd n) l ∧ sendUpd P S n w =
+      { (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }) with
         net := ⟨n, (S.nd n).sph, (S.nd n).npn, (S.nd n).sk.sec, (sendQ P S n w).1⟩ :: S.net
         slog := ⟨n, (S.nd n).sk.sec, (S.nd n).sk.g, (S.nd n).npn⟩ :: S.slog } := by
-  obtain ⟨r, hq⟩ := sendQ_node P S n w h
-  refine ⟨r, ?_⟩
+  obtain ⟨r, l, hl, hq⟩ := sendQ_node P S n w h
+  refine ⟨r, l, hl, ?_⟩
   simp only [sendUpd, sendPkt, hq]
 
 theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk P S n w = true) :
     Inv P (sendUpd P S n w) := by
-  obtain ⟨r, he⟩ := sendUpd_eq hok
+  obtain ⟨r, l, hlo, he⟩ := sendUpd_eq hok
   rw [he]
   generalize hpl : (sendQ P S n w).1 = pl at *
   have hplm : ∀ m, pl = some m → (S.nd n).out = some m ∨ ((S.nd n).out = none ∧ (S.nd n).roll.pending = some m) := by
     intro m hm; rw [← hpl] at hm; exact sendQ_msg P S n w m hm
-  have hnn : NodeInv P n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 } :=
-    ((h.node n).setOut none r (Or.inl rfl)).setNpn _
+  have hnn : NodeInv P n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 } :=
+    ((h.node n).setOut none r l (Or.inl rfl) hlo).setNpn _
   have dep := (h.node n).depths
   have hsk := NodeInv.cnSk (h.node n)
-  have hne : ∀ m, m ≠ n → (S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m = S.nd m :=
+  have hne : ∀ m, m ≠ n → (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m = S.nd m :=
     fun m hm => Sys.setNode_ne S n m _ hm
-  have hsame : (S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd n =
-      { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 } := Sys.setNode_same _ _ _
-  have fr : ∀ m, (S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m = S.nd m ∨
-      (m = n ∧ (S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m =
-        { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }) := by
+  have hsame : (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd n =
+      { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 } := Sys.setNode_same _ _ _
+  have fr : ∀ m, (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m = S.nd m ∨
+      (m = n ∧ (S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m =
+        { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }) := by
     intro m; by_cases hm : m = n
     · subst hm; exact Or.inr ⟨rfl, hsame⟩
     · exact Or.inl (hne m hm)
-  have eSk : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).sk = (S.nd m).sk := by
+  have eSk : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).sk = (S.nd m).sk := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eCtr : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).ctr = (S.nd m).ctr := by
+  have eCtr : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).ctr = (S.nd m).ctr := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eCur : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).cur = (S.nd m).cur := by
+  have eCur : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).cur = (S.nd m).cur := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eNxt : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).nxt = (S.nd m).nxt := by
+  have eNxt : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).nxt = (S.nd m).nxt := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eDers : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).ders = (S.nd m).ders := by
+  have eDers : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).ders = (S.nd m).ders := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eRoll : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).roll = (S.nd m).roll := by
+  have eRoll : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).roll = (S.nd m).roll := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e]
-  have eNpn : ∀ m, (S.nd m).npn ≤ ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).npn := by
+  have eNpn : ∀ m, (S.nd m).npn ≤ ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).npn := by
     intro m; rcases fr m with e | ⟨rfl, e⟩ <;> rw [e] <;> first | exact Nat.le_refl _ | exact Nat.le_succ _
-  have eChg : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).chg = (S.nd m).chg := by
+  have eChg : ∀ m, ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).chg = (S.nd m).chg := by
     intro m; simp [Node.chg, eDers m]
-  have eOut : ∀ m, m ≠ n → ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd m).out = (S.nd m).out := by
+  have eOut : ∀ m, m ≠ n → ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd m).out = (S.nd m).out := by
     intro m hm; rw [hne m hm]
-  have eOutN : ((S.setNode n { S.nd n with out := none, reqAt := r, npn := (S.nd n).npn + 1 }).nd n).out = none := by
+  have eOutN : ((S.setNode n { S.nd n with out := none, reqAt := r, lastAns := l, npn := (S.nd n).npn + 1 }).nd n).out = none := by
     rw [hsame]
   have hdsk : (S.nd n).sk.sec.depth = (S.nd n).sk.g := dep.1
   inv_mk
@@ -430,6 +436,19 @@ theorem inv_send {P : Params} {S : Sys} {n w : Bool} (h : Inv P S) (hok : sendOk
     by_cases hmn : m = n
     · subst hmn; rw [eOutN] at ho; simp at ho
     · rw [eOut m hmn] at ho; exact h.outAns m a ho ha
+  case ansLastStl =>
+    intro m a hl
+    by_cases hmn : m = n
+    · subst hmn
+      rw [hsame] at hl
+      have hl' : l = some a := hl
+      rcases hlo with h0 | ⟨m0, hm0, ha0, h0⟩
+      · exact h.ansLastStl m a (by rw [← h0]; exact hl')
+      · rw [h0] at hl'
+        have : m0 = a := Option.some.inj hl'
+        subst this
+        exact h.outAns m m0 hm0 ha0
+    · rw [hne m hmn] at hl; exact h.ansLastStl m a hl
   case lastAnsStl =>
     intro m sh a hl
     rw [eRoll] at hl

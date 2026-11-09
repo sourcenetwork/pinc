@@ -193,4 +193,18 @@ theorem afterRecv_depth {P : Params} {n : Bool} {s : Node} (h : NodeInv P n s) (
   rw [if_pos (by simpa [Bool.and_eq_true] using hp')]
   exact recvKeys_depth h p f t hacc
 
+/-- Receiving a packet never touches the last answer polled. -/
+theorem afterRecv_lastAns (P : Params) (s : Node) (p : Pkt) (f : Bool) (t : Nat) :
+    (s.afterRecv P p f t).1.lastAns = s.lastAns := by
+  have he : (s.expire t).lastAns = s.lastAns := by
+    unfold Node.expire; split <;> (try split) <;> rfl
+  have hb : ∀ (x : Node) (sel : Sel), (x.bumpFC sel).lastAns = x.lastAns := by
+    intro x sel; cases sel <;> rfl
+  have hp : ∀ (x : Node) (a b c : Nat), ((x.promote a b c).updateSend).lastAns = x.lastAns := by
+    intro x a b c; unfold Node.promote Node.updateSend; split <;> (try split) <;> rfl
+  unfold Node.afterRecv Node.recvKeys
+  dsimp only
+  repeat' split
+  all_goals simp_all [he, hb, hp]
+
 end Vinc.KeyRollSys

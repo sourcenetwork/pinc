@@ -177,12 +177,12 @@ theorem stage_chg_le {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (
 
 theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp : p ∈ S.net) (hsrc : p.src = !n)
     {m : Msg} (hpl : p.pl = some m) (hm : m.answer = false) (b : Atom) (hsh : m.share = .pub b)
-    (hg : gated P (S.nd n) m = false) (hn : (S.nd n).roll.isDup m = false)
+    (hg : gated (S.nd n) m = false) (hn : (S.nd n).roll.isDup m = false)
     (hc : (!(S.nd n).roll.isIdle && (S.nd n).roll.dialer) = false)
     (hdep : p.sec.depth = (S.nd n).cur.g ∨ p.sec.depth + 1 = (S.nd n).cur.g) :
     Inv P { (S.setNode n ((S.nd n).staged ((S.nd n).roll.answeredWith m.share
         (answerTo n (S.nd n).ctr (S.nd n).npn m.share b))
-        (answerTo n (S.nd n).ctr (S.nd n).npn m.share b) (Dh (atomOf n (S.nd n).ctr) b) m.share p.sec.depth)) with
+        (answerTo n (S.nd n).ctr (S.nd n).npn m.share b) ((T.bound (.id m.share) (Dh (atomOf n (S.nd n).ctr) b))) m.share p.sec.depth)) with
         stl := ⟨n, answerTo n (S.nd n).ctr (S.nd n).npn m.share b, (S.nd n).ders.length⟩ :: S.stl } := by
   have hnx : (S.nd n).nxt = none := gated_nodup P _ m hm hn hg
   have cn := (h.node n).cn
@@ -202,26 +202,27 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
     simp only [Node.chg] at hc2; omega
   have hnn := (h.node n).staged m p.sec.depth b hmok hm hsh hnx hn hlvl
   have hchgle := stage_chg_le h hp hsrc hpl hm hnx hn hc hdep
-  have ans_to : (answerTo n (S.nd n).ctr (S.nd n).npn m.share b).to = m.share := rfl
+  have ans_to : (answerTo n (S.nd n).ctr (S.nd n).npn m.share b).to = .id m.share := rfl
   have ans_ans : (answerTo n (S.nd n).ctr (S.nd n).npn m.share b).answer = true := rfl
   have ans_spn : (answerTo n (S.nd n).ctr (S.nd n).npn m.share b).spn = (S.nd n).npn := rfl
-  have ans_gdh : (answerTo n (S.nd n).ctr (S.nd n).npn m.share b).gdh = Dh (atomOf n (S.nd n).ctr) b := rfl
+  have ans_gdh : (answerTo n (S.nd n).ctr (S.nd n).npn m.share b).gdh = (T.bound (.id m.share) (Dh (atomOf n (S.nd n).ctr) b)) := rfl
   generalize hA : answerTo n (S.nd n).ctr (S.nd n).npn m.share b = ans at *
-  generalize hs' : (S.nd n).staged ((S.nd n).roll.answeredWith m.share ans) ans (Dh (atomOf n (S.nd n).ctr) b) m.share
+  generalize hs' : (S.nd n).staged ((S.nd n).roll.answeredWith m.share ans) ans ((T.bound (.id m.share) (Dh (atomOf n (S.nd n).ctr) b))) m.share
     p.sec.depth = s' at hnn ⊢
   have fr := fun m' => Sys.setNode_cases S n m' s'
   have hsame : (S.setNode n s').nd n = s' := Sys.setNode_same _ _ _
   have hne : ∀ m', m' ≠ n → (S.setNode n s').nd m' = S.nd m' := fun m' hm' => Sys.setNode_ne S n m' _ hm'
   have hnY : (S.setNode n s').nd (!n) = S.nd (!n) := Sys.setNode_not S n s'
   have s'ctr : s'.ctr = (S.nd n).ctr + 1 := by rw [← hs']; rfl
-  have s'ders : s'.ders = (S.nd n).ders ++ [⟨true, m.share, Dh (atomOf n (S.nd n).ctr) b, p.sec.depth⟩] := by
+  have s'ders : s'.ders = (S.nd n).ders ++ [⟨true, m.share, (T.bound (.id m.share) (Dh (atomOf n (S.nd n).ctr) b)), p.sec.depth⟩] := by
     rw [← hs']; rfl
   have s'roll : s'.roll = (S.nd n).roll.answeredWith m.share ans := by rw [← hs']; rfl
   have s'sk : s'.sk = (S.nd n).sk := by rw [← hs']; rfl
   have s'cur : s'.cur = (S.nd n).cur := by rw [← hs']; rfl
   have s'nxt : s'.nxt.isSome = true := by rw [← hs']; rfl
-  have s'nxt' : s'.nxt = some ⟨PK.new (.roll (S.nd n).cur.sec (Dh (atomOf n (S.nd n).ctr) b)) ((S.nd n).cur.g + 1), 0⟩ := by
+  have s'nxt' : s'.nxt = some ⟨PK.new (.roll (S.nd n).cur.sec ((T.bound (.id m.share) (Dh (atomOf n (S.nd n).ctr) b)))) ((S.nd n).cur.g + 1), 0⟩ := by
     rw [← hs']; rfl
+  have s'las : s'.lastAns = (S.nd n).lastAns := by rw [← hs']; rfl
   have s'out : s'.out = some ans := by rw [← hs']; rfl
   have s'npn : s'.npn = (S.nd n).npn := by rw [← hs']; rfl
   have s'pend : s'.roll.pending = none := by rw [s'roll]; simp [Roll.pending, Roll.answeredWith]
@@ -323,13 +324,14 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
           rw [hsrc] at hj
           rw [← hjd] at hj
           exact hj
-        · simp [List.getElem?_eq_none (show [(⟨true, m.share, Dh (atomOf m' (S.nd m').ctr) b, p.sec.depth⟩ : Der)].length ≤
+        · simp [List.getElem?_eq_none (show [(⟨true, m.share, (T.bound (.id m.share) (Dh (atomOf m' (S.nd m').ctr) b)), p.sec.depth⟩ : Der)].length ≤
             q - (S.nd m').ders.length by simp; omega)] at he
   case stlOK =>
     intro c' hc'
     rcases List.mem_cons.1 hc' with rfl | hc'
-    · refine ⟨ans_ans, ?_, ⟨p.sec.depth, ?_⟩, ?_, ?_, ?_, p, hp, m, hpl, hm, ?_⟩
+    · refine ⟨ans_ans, ?_, ⟨p.sec.depth, m.share, ?_, ?_⟩, ?_, ?_, ?_, p, hp, m, hpl, hm, ?_⟩
       · simp only [hsame]; exact hnn.outMsg ans s'out
+      · exact ans_to
       · simp only [hsame, s'ders, ans_to, ans_gdh]
         rw [List.getElem?_append_right (Nat.le_refl _)]; simp
       · simp only [hsame, s'cur]; exact Nat.le_of_eq hc2'
@@ -340,9 +342,9 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
         rw [hxn] at hxg
         simp only at hpos hxn hxg
         omega
-      · exact ans_to.symm
-    · obtain ⟨a1', a2', ⟨lv', a3'⟩, a4', a5', a6', a7'⟩ := h.stlOK c' hc'
-      refine ⟨a1', a2'.mono (eCtr _), ⟨lv', ?_⟩, by rw [eCur]; exact a4', by rw [eNpn]; exact a5', a6', a7'⟩
+      · exact ans_to
+    · obtain ⟨a1', a2', ⟨lv', rid', hrid', a3'⟩, a4', a5', a6', a7'⟩ := h.stlOK c' hc'
+      refine ⟨a1', a2'.mono (eCtr _), ⟨lv', rid', hrid', ?_⟩, by rw [eCur]; exact a4', by rw [eNpn]; exact a5', a6', a7'⟩
       rcases fr c'.n with e' | ⟨e0, e'⟩
       · rw [e']; exact a3'
       · rw [e', s'ders]; rw [e0] at a3'; exact app_get _ _ _ _ a3'
@@ -356,6 +358,15 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
       exact ⟨_, List.mem_cons_self .., rfl, rfl⟩
     · rw [hne m' hmn] at ho
       obtain ⟨c', hc', e1, e2⟩ := h.outAns m' a ho ha
+      exact ⟨c', List.mem_cons_of_mem _ hc', e1, e2⟩
+  case ansLastStl =>
+    intro m' a hl
+    rcases fr m' with e | ⟨rfl, e⟩
+    · rw [e] at hl
+      obtain ⟨c', hc', e1, e2⟩ := h.ansLastStl m' a hl
+      exact ⟨c', List.mem_cons_of_mem _ hc', e1, e2⟩
+    · rw [e] at hl
+      obtain ⟨c', hc', e1, e2⟩ := h.ansLastStl _ a (by rw [← s'las]; exact hl)
       exact ⟨c', List.mem_cons_of_mem _ hc', e1, e2⟩
   case lastAnsStl =>
     intro m' sh a hl
@@ -409,7 +420,7 @@ theorem inv_stage {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp 
           List.IsPrefix.eq_of_length hh (by omega)
         rw [e]; exact List.prefix_refl _
     obtain ⟨t, ht⟩ := hpre
-    exact ⟨t ++ [Der.core ⟨true, m.share, Dh (atomOf n (S.nd n).ctr) b, p.sec.depth⟩], by
+    exact ⟨t ++ [Der.core ⟨true, m.share, (T.bound (.id m.share) (Dh (atomOf n (S.nd n).ctr) b)), p.sec.depth⟩], by
       rw [List.map_append, ← ht, List.append_assoc]; rfl⟩
   case qq =>
     intro m' rq' hrq' c' hc' hcn' hto'

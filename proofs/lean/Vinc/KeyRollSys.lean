@@ -21,9 +21,10 @@ timeout, the floors), for two connections over a network that loses, reorders an
   (how many fresh atoms a node may draw) and `maxPn` stay as parameters, so every theorem holds for every value.
   The generation counter is a `Nat` (the `GenerationExhausted` refusal of `PacketKey::rolled` at `u32::MAX` is the
   subject of `Vinc.Record`, not of this model, as in the TLA+ model).
-* The switches `gateFirst` (the code as read: a request is refused while a next key is staged, before the
-  duplicate-request check) and `bindAnswers` (the network only delivers an answer to the request it answers) are
-  explicit fields of `Params`; the theorems that need one say so in their hypotheses.
+* The fixed code: an answer carries the identifier of its request and `Roll.onAnswer` takes it only for the request
+  that is out (so the network needs no help); a repeated request is answered again also while the next key is staged
+  (`gated`); a request that arrived in a packet opened under the previous generation's key is a late copy of a
+  settled roll and is ignored (`acts`); the loss events of the transport are steps (`requeue`, `reqLost`).
 * GHOST state, never read by the machine, only by the statements and the invariants: `Node.ders` (every derivation
   of new keys at this node, in order: whether it was a staging as answerer, the request share, the
   Diffie-Hellman value, the depth of the key the request arrived under), `Node.promAt` (the last promotion time),
@@ -45,10 +46,6 @@ structure Params where
   cap : Bool → Nat
   /-- The largest packet number sealed. -/
   maxPn : Nat
-  /-- `GateFirst`: a request is refused while a next key is staged, before the duplicate-request check. -/
-  gateFirst : Bool
-  /-- `BindAnswers`: an answer is only delivered to a requester whose current request it answers. -/
-  bindAnswers : Bool
   /-- `ForgeOn`: the attacker may deliver a packet with its phase bit flipped. -/
   forgeOn : Bool
 
@@ -105,6 +102,8 @@ structure Node where
   nxt : Option Nxt
   npn : Nat
   seen : List Nat
+  /-- The last answer polled, kept so a lost one can be queued again (`last_answer`). -/
+  lastAns : Option Msg
   /-- Ghost: the derivations of new keys, in order. -/
   ders : List Der
   /-- Ghost: when the last promotion happened. -/
@@ -129,6 +128,7 @@ def Node.init (n : Bool) : Node where
   nxt := none
   npn := 0
   seen := []
+  lastAns := none
   ders := []
   promAt := none
 
@@ -204,13 +204,16 @@ def Node.recvKeys (s : Node) (p : Pkt) (forged : Bool) (t pto : Nat) : Rx :=
 /-- `IsDupMsg`: a request whose share is the share of the last request answered. -/
 def isDupMsg (s : Node) (m : Msg) : Bool := !m.answer && s.roll.isDup m
 
-/-- `Gated`: `Keys::on_request` is refused while a next key is staged; with `gateFirst = false` a duplicate request
-is answered before that check. -/
-def gated (P : Params) (s : Node) (m : Msg) : Bool := s.nxt.isSome && (P.gateFirst || !isDupMsg s m)
+/-- `Gated`: `Keys::on_request` is refused while a next key is staged, unless the request repeats the one answered. -/
+def gated (s : Node) (m : Msg) : Bool := s.nxt.isSome && !isDupMsg s m
+
+/-- `Acts`: a request that arrived in a packet opened under the previous generation's key is a late copy of a settled
+roll and is ignored; every answer is looked at. -/
+def acts (m : Msg) (sel : Sel) : Bool := m.answer || sel != .prev
 
 /-- `CanRx`: a fresh atom is drawn for every request that is not a duplicate. -/
 def canRx (P : Params) (s : Node) (m : Msg) (me : Bool) : Bool :=
-  m.answer || isDupMsg s m || gated P s m || decide (s.ctr < P.cap me) || (s.roll.dialer && !s.roll.isIdle)
+  m.answer || isDupMsg s m || gated s m || decide (s.ctr < P.cap me) || (s.roll.dialer && !s.roll.isIdle)
 
 /-- Ghost: a completed answer: the node, the Diffie-Hellman value it computed, the one the answerer used, the
 request the answer answers and the request that was out. -/
@@ -249,12 +252,12 @@ def Node.staged (s : Node) (r : Roll) (ans : Msg) (dh : T) (rid : T) (lvl : Nat)
 
 /-- `RekeyRx` (`Connection::on_rekey_body` for a body that parsed): the answer switches the sending key, a request
 stages the keys. `lvl` is the depth of the secret of the packet the body arrived in (ghost). -/
-def rekeyRx (P : Params) (s : Node) (m : Msg) (me : Bool) (lvl : Nat) : Rk :=
+def rekeyRx (s : Node) (m : Msg) (me : Bool) (lvl : Nat) : Rk :=
   if m.answer then
     match s.roll.onAnswer m, s.roll.pending with
     | (r, .ok (dh, pspn)), some rq => ⟨s.consumed r dh pspn rq.share, some ⟨me, dh, m.gdh, m.to, rq.share⟩, none⟩
     | (r, _), _ => ⟨{ s with roll := r }, none, none⟩
-  else if gated P s m then ⟨s, none, none⟩
+  else if gated s m then ⟨s, none, none⟩
   else
     match s.roll.onRequest m s.npn (some (atomOf me s.ctr)) with
     | (r, .error _) => ⟨{ s with roll := r }, none, none⟩
@@ -325,7 +328,8 @@ def Node.pollDue (s : Node) (now pto : Nat) : Bool :=
 /-- `Poll` (`poll_rekey`): the message waiting, or the pending request again once a probe timeout passed. -/
 def Node.poll (s : Node) (now pto : Nat) : Option Msg × Node :=
   match s.out with
-  | some m => (some m, { s with out := none, reqAt := if m.answer then s.reqAt else some now })
+  | some m =>
+    (some m, { s with out := none, reqAt := (if m.answer then s.reqAt else some now), lastAns := (if m.answer then some m else s.lastAns) })
   | none =>
     match s.roll.pending with
     | some r => if s.pollDue now pto then (some r, { s with reqAt := some now }) else (none, s)
@@ -356,28 +360,39 @@ def Node.afterRecv (P : Params) (s0 : Node) (p : Pkt) (forged : Bool) (now : Nat
   let proc := k.acc && decide (p.pn ∉ s0.seen)
   (if proc then { k.s with seen := p.pn :: k.s.seen } else k.s, proc)
 
+/-- The key slot a delivered packet is opened with (`Select`, after `Expire`). -/
+def Node.rxSel (P : Params) (s0 : Node) (p : Pkt) (forged : Bool) (now : Nat) : Sel :=
+  (s0.recvKeys p forged now P.pto).sel
+
 /-- The guard of `Deliver(n, p, forged)`: the packet is on the network, comes from the peer, a forged one only
-when the attacker is on; the network only delivers an answer to the request it answers (`bindAnswers`); a request
-is only delivered to a node that can draw a fresh atom (`CanRx`). -/
+when the attacker is on; a request that is looked at is only delivered to a node that can draw a fresh atom
+(`CanRx`). -/
 def deliverOk (P : Params) (S : Sys) (n : Bool) (p : Pkt) (forged : Bool) : Bool :=
   let r := (S.nd n).afterRecv P p forged S.now
   S.net.contains p && decide (p.src = !n) && (!forged || P.forgeOn) &&
     (match p.pl with
      | none => true
-     | some m =>
-       !r.2 ||
-         ((!(P.bindAnswers && m.answer && !r.1.roll.isIdle) ||
-             (match r.1.roll.pending with | some rq => decide (m.to = rq.share) | none => false)) &&
-          (m.answer || canRx P r.1 m n)))
+     | some m => !r.2 || !acts m ((S.nd n).rxSel P p forged S.now) || m.answer || canRx P r.1 m n)
 
 def deliverUpd (P : Params) (S : Sys) (n : Bool) (p : Pkt) (forged : Bool) : Sys :=
   let r := (S.nd n).afterRecv P p forged S.now
   let rk : Rk := match p.pl with
-    | some m => if r.2 then rekeyRx P r.1 m n p.sec.depth else ⟨r.1, none, none⟩
+    | some m =>
+      if r.2 && acts m ((S.nd n).rxSel P p forged S.now) then rekeyRx r.1 m n p.sec.depth else ⟨r.1, none, none⟩
     | none => ⟨r.1, none, none⟩
   { (S.setNode n rk.s) with comp := addOpt rk.comp S.comp, stl := addOpt rk.st S.stl }
 
 def tickUpd (S : Sys) : Sys := { S with now := S.now + 1 }
+
+/-- `RequeueAnswer(n)` (`Keys::requeue_answer`): a lost answer is queued again. Guard and update. -/
+def requeueOk (S : Sys) (n : Bool) : Bool := (S.nd n).out.isNone && (S.nd n).lastAns.isSome
+
+def requeueUpd (S : Sys) (n : Bool) : Sys := S.setNode n { S.nd n with out := (S.nd n).lastAns }
+
+/-- `RequestLost(n)` (`Keys::request_lost`): a lost request goes out at the next opportunity. Guard and update. -/
+def reqLostOk (S : Sys) (n : Bool) : Bool := (S.nd n).reqAt.isSome
+
+def reqLostUpd (S : Sys) (n : Bool) : Sys := S.setNode n { S.nd n with reqAt := none }
 
 /-- One step of the system. -/
 inductive Step (P : Params) : Sys → Sys → Prop
@@ -385,6 +400,8 @@ inductive Step (P : Params) : Sys → Sys → Prop
   | send (S : Sys) (n w : Bool) : sendOk P S n w = true → Step P S (sendUpd P S n w)
   | deliver (S : Sys) (n : Bool) (p : Pkt) (f : Bool) : deliverOk P S n p f = true → Step P S (deliverUpd P S n p f)
   | tick (S : Sys) : Step P S (tickUpd S)
+  | requeue (S : Sys) (n : Bool) : requeueOk S n = true → Step P S (requeueUpd S n)
+  | reqLost (S : Sys) (n : Bool) : reqLostOk S n = true → Step P S (reqLostUpd S n)
 
 /-- The reachable states. -/
 inductive Reach (P : Params) : Sys → Prop

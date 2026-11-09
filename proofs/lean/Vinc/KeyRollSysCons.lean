@@ -42,29 +42,32 @@ theorem prefix_of_shorter {α : Type} {x y : List α} (h : PP x y) (hl : x.lengt
 
 theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (hp : p ∈ S.net) (hsrc : p.src = !n)
     {m : Msg} (hpl : p.pl = some m) (hm : m.answer = true) (seed : Atom) (rq : Msg) (b : Atom)
-    (hst : (S.nd n).roll.st = .req seed rq) (hsh : m.share = .pub b) (hto : m.to = rq.share) :
-    Inv P { (S.setNode n ((S.nd n).consumed (S.nd n).roll.completed (Dh seed b) m.spn rq.share)) with
-            comp := ⟨n, Dh seed b, m.gdh, m.to, rq.share⟩ :: S.comp } := by
+    (hst : (S.nd n).roll.st = .req seed rq) (hsh : m.share = .pub b) (hto : m.to = .id rq.share) :
+    Inv P { (S.setNode n ((S.nd n).consumed (S.nd n).roll.completed (T.bound (.id rq.share) (Dh seed b)) m.spn rq.share)) with
+            comp := ⟨n, T.bound (.id rq.share) (Dh seed b), m.gdh, m.to, rq.share⟩ :: S.comp } := by
   have hpend : (S.nd n).roll.pending = some rq := by simp [Roll.pending, hst]
   obtain ⟨c, hc, hcm, hcn⟩ := h.netAns p hp m hpl hm
   rw [hsrc] at hcn
   have hq := h.qq n rq hpend c hc hcn (by rw [hcm]; exact hto)
-  obtain ⟨a1, a2, ⟨lv, a3⟩, a4, a5, a6, a7⟩ := h.stlOK c hc
+  obtain ⟨a1, a2, ⟨lv, rid, hrid, a3⟩, a4, a5, a6, a7⟩ := h.stlOK c hc
   rw [hcn] at a2 a3 a4 a5 a6
   have hcm' : c.ans = m := hcm
-  rw [hcm'] at a2 a3
+  rw [hcm'] at a2 a3 hrid
   have hchg := (h.node n).pending_chg hpend
   obtain ⟨hps1, k0, hps2, hps3⟩ := (h.node n).pendSeed seed rq hst
   -- the answer was made for this request
   obtain ⟨kY, kYn, hkY1, hkY2, hkY3, hkY4⟩ := a2.ans hm
   simp only [Bool.not_not] at hkY3 hkY4
   have hb : b = atomOf (!n) kY := by rw [hsh] at hkY1; exact T.pub.inj hkY1
-  have hdh : Dh seed b = m.gdh := by
+  have hdh : T.bound (.id rq.share) (Dh seed b) = m.gdh := by
     have hrq : rq.share = .pub seed := by rw [hps1]; rfl
-    rw [hto, hrq] at hkY3
-    have e1 := T.pub.inj hkY3
-    rw [hkY4, e1, ← hb]
+    have e0 := T.id.inj (hto.symm.trans hkY3)
+    rw [hrq] at e0
+    have e1 := T.pub.inj e0
+    rw [hkY4, hrq, e1, hb]
+    congr 1
     exact Dh_comm _ _
+  have hrid' : rid = rq.share := T.id.inj (hrid.symm.trans hto)
   -- no request waits in the message slot
   have hnoreq : ∀ m', (S.nd n).out = some m' → m'.answer = true := by
     intro m' hm'
@@ -79,21 +82,23 @@ theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (h
     have hrm := (h.netMsg p' hp' r hr1).req hr2
     have hrr : r = Msg.req r.share := hrm.1
     have hmq : rq = Msg.req rq.share := by rw [hps1]; rfl
-    have hreq : r = rq := by rw [hrr, hr3, hcm', hto, ← hmq]
+    have hrs : r.share = rq.share := T.id.inj (hr3.symm.trans (by rw [hcm']; exact hto))
+    have hreq : r = rq := by rw [hrr, hrs, ← hmq]
     exact h.unsent n m' hm' hq'' p' hp' (by rw [hr1, hreq, hmm])
   have hnn := (h.node n).consumed seed rq b m.spn hst hnoreq
-  generalize hs' : (S.nd n).consumed (S.nd n).roll.completed (Dh seed b) m.spn rq.share = s' at hnn ⊢
+  generalize hs' : (S.nd n).consumed (S.nd n).roll.completed (T.bound (.id rq.share) (Dh seed b)) m.spn rq.share = s' at hnn ⊢
   have fr := fun m' => Sys.setNode_cases S n m' s'
   have hsame : (S.setNode n s').nd n = s' := Sys.setNode_same _ _ _
   have hne : ∀ m', m' ≠ n → (S.setNode n s').nd m' = S.nd m' := fun m' hm' => Sys.setNode_ne S n m' _ hm'
   have s'ctr : s'.ctr = (S.nd n).ctr := by rw [← hs']; rfl
-  have s'ders : s'.ders = (S.nd n).ders ++ [⟨false, rq.share, Dh seed b, 0⟩] := by rw [← hs']; rfl
+  have s'ders : s'.ders = (S.nd n).ders ++ [⟨false, rq.share, T.bound (.id rq.share) (Dh seed b), 0⟩] := by rw [← hs']; rfl
   have s'roll : s'.roll = (S.nd n).roll.completed := by rw [← hs']; rfl
-  have s'sk : s'.sk = PK.new (.roll (S.nd n).sk.sec (Dh seed b)) ((S.nd n).sk.g + 1) := by rw [← hs']; rfl
+  have s'sk : s'.sk = PK.new (.roll (S.nd n).sk.sec (T.bound (.id rq.share) (Dh seed b))) ((S.nd n).sk.g + 1) := by rw [← hs']; rfl
   have s'cur : s'.cur = (S.nd n).cur := by rw [← hs']; rfl
-  have s'nxt : s'.nxt = some ⟨PK.new (.roll (S.nd n).cur.sec (Dh seed b)) ((S.nd n).cur.g + 1), m.spn⟩ := by
+  have s'nxt : s'.nxt = some ⟨PK.new (.roll (S.nd n).cur.sec (T.bound (.id rq.share) (Dh seed b))) ((S.nd n).cur.g + 1), m.spn⟩ := by
     rw [← hs']; rfl
   have s'out : s'.out = (S.nd n).out := by rw [← hs']; rfl
+  have s'las : s'.lastAns = (S.nd n).lastAns := by rw [← hs']; rfl
   have s'npn : s'.npn = (S.nd n).npn := by rw [← hs']; rfl
   have s'pend : s'.roll.pending = none := by rw [s'roll]; simp [Roll.pending, Roll.completed]
   have s'last : s'.roll.last = none := by rw [s'roll]; simp [Roll.completed]
@@ -190,7 +195,7 @@ theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (h
         have := (h.breqOK b0 hb0).2.2 (by rw [hbn]; exact hjc.symm)
         rw [hbn, hpend] at this
         simp at this
-        refine ⟨⟨false, rq.share, Dh seed b, 0⟩, ?_, rfl, ?_⟩
+        refine ⟨⟨false, rq.share, T.bound (.id rq.share) (Dh seed b), 0⟩, ?_, rfl, ?_⟩
         · rw [hjc]; simp [Node.chg]
         · exact this
     · rw [hne _ hbn] at hd hj ⊢; exact h.breqF3 b0 hb0 hd hj
@@ -204,12 +209,12 @@ theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (h
       · rw [List.getElem?_append_right (by omega)] at he
         by_cases hq0 : q - (S.nd m').ders.length = 0
         · simp [hq0] at he; subst he; simp at hs
-        · simp [List.getElem?_eq_none (show [(⟨false, rq.share, Dh seed b, 0⟩ : Der)].length ≤ q - (S.nd m').ders.length by
+        · simp [List.getElem?_eq_none (show [(⟨false, rq.share, T.bound (.id rq.share) (Dh seed b), 0⟩ : Der)].length ≤ q - (S.nd m').ders.length by
             simp; omega)] at he
   case stlOK =>
     intro c' hc'
-    obtain ⟨a1', a2', ⟨lv', a3'⟩, a4', a5', a6', a7'⟩ := h.stlOK c' hc'
-    refine ⟨a1', by rw [eCtr]; exact a2', ⟨lv', ?_⟩, by rw [eCur]; exact a4', by rw [eNpn]; exact a5', a6', a7'⟩
+    obtain ⟨a1', a2', ⟨lv', rid', hrid', a3'⟩, a4', a5', a6', a7'⟩ := h.stlOK c' hc'
+    refine ⟨a1', by rw [eCtr]; exact a2', ⟨lv', rid', hrid', ?_⟩, by rw [eCur]; exact a4', by rw [eNpn]; exact a5', a6', a7'⟩
     rcases fr c'.n with e' | ⟨e0, e'⟩
     · rw [e']; exact a3'
     · rw [e', s'ders]; rw [e0] at a3'; exact app_get _ _ _ _ a3'
@@ -220,6 +225,11 @@ theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (h
     · rw [e] at hl; exact h.lastAnsStl m' sh a hl
     · rw [e, s'last] at hl; simp at hl
   case unsent => intro m' mm ho ha; rw [eOut] at ho; exact h.unsent m' mm ho ha
+  case ansLastStl =>
+    intro m' a hl
+    rcases fr m' with e | ⟨rfl, e⟩
+    · rw [e] at hl; exact h.ansLastStl m' a hl
+    · rw [e] at hl; exact h.ansLastStl _ a (by rw [← s'las]; exact hl)
   case compOK =>
     intro c' hc'
     rcases List.mem_cons.1 hc' with rfl | hc'
@@ -283,10 +293,10 @@ theorem inv_consume {P : Params} {S : Sys} {n : Bool} (h : Inv P S) {p : Pkt} (h
       simp only [List.length_map, Node.chg] at hq ⊢
       omega
     have hpre := prefix_of_shorter hpp hlen
-    have hget : ((S.nd (!n)).ders.map Der.core)[((S.nd n).ders.map Der.core).length]? = some (rq.share, Dh seed b) := by
+    have hget : ((S.nd (!n)).ders.map Der.core)[((S.nd n).ders.map Der.core).length]? = some (rq.share, T.bound (.id rq.share) (Dh seed b)) := by
       have : ((S.nd n).ders.map Der.core).length = c.pos := by simp [hq, Node.chg]
       rw [this, List.getElem?_map, a3]
-      simp [Der.core, hto, hdh]
+      simp [Der.core, hrid', hdh]
     have := prefix_snoc_of_get hpre _ hget
     left
     simpa [Der.core] using this

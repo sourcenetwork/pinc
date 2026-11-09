@@ -23,7 +23,6 @@ import Vinc.KeyRollSysCex
 #audit_axioms Vinc.KeyRollSys.dupRequestAnswered
 #audit_axioms Vinc.KeyRollSys.dialerWins
 #audit_axioms Vinc.KeyRollSys.staleAnswerNoKey
-#audit_axioms Vinc.KeyRollSys.gate_drops_duplicate
-#audit_axioms Vinc.KeyRollSys.ungated_answers_duplicate
-#audit_axioms Vinc.KeyRollSys.stale_answer_disagrees
-#audit_axioms Vinc.KeyRollSys.orphan_after_collision
+#audit_axioms Vinc.KeyRollSys.duplicate_answered_again
+#audit_axioms Vinc.KeyRollSys.stale_answer_ignored
+#audit_axioms Vinc.KeyRollSys.no_orphan_after_collision

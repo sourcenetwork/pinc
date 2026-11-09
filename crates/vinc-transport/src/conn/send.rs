@@ -452,11 +452,11 @@ conn_impl! {
             self.next_pn += 1;
             return None;
         }
+        self.next_pn += 1;
         #[cfg(feature = "trace")]
         if kind == Kind::Short {
             self.trace_sent(now, pn);
         }
-        self.next_pn += 1;
         self.stats.packets_sent += 1;
         if filled.ack {
             self.rx.on_ack_sent(pn, now);
