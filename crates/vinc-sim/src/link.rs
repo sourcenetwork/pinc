@@ -131,7 +131,7 @@ impl Timed {
         while self.ends.last().is_none_or(|e| *e <= t) {
             let bad = (self.trimmed + self.ends.len() as u64) % 2 == 1;
             let mean = if bad { mean_bad } else { mean_good };
-            let dur = (rng.expovariate(1.0 / mean) as Time).max(1000);
+            let dur = (rng.expovariate(1.0 / mean.max(1.0)) as Time).max(1000);
             self.ends.push(self.ends.last().copied().unwrap_or(0) + dur);
         }
         let i = self.ends.partition_point(|e| *e <= t);
@@ -213,7 +213,8 @@ impl<R: Random> Link<R> {
         if self.cfg.bandwidth_bps > 0 {
             let bps = self.cfg.bandwidth_bps as f64;
             start = self.next_free.max(now);
-            if (start - now) as f64 * bps / 8e9 > self.cfg.queue_bytes as f64 {
+            if (u128::from(start - now) * u128::from(self.cfg.bandwidth_bps)) as f64 / 8e9 > self.cfg.queue_bytes as f64
+            {
                 return Err(DropReason::QueueFull);
             }
             ser = (len as f64 * 8e9 / bps) as Time;

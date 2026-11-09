@@ -27,6 +27,8 @@ mod metrics;
 mod nat;
 mod net;
 mod node;
+#[cfg(feature = "reference")]
+pub mod reference;
 mod rng;
 mod sim;
 mod topology;

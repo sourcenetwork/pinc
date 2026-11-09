@@ -23,7 +23,7 @@ vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
-vinc-sim = { workspace = true }
+vinc-sim = { workspace = true, features = ["reference"] }
 vinc-connect = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
@@ -207,6 +207,10 @@ path = "sim_faults.rs"
 [[test]]
 name = "sim_reference"
 path = "sim_reference.rs"
+
+[[test]]
+name = "sim_reference_rng"
+path = "sim_reference_rng.rs"
 
 [[test]]
 name = "connect_codec"
