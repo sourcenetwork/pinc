@@ -338,6 +338,10 @@ par run_tlc streams Streams Streams
 par run_tlc streams_ext Streams Streams_ext
 par run_tlc streams_caps Streams Streams_caps
 par run_tlc streams_ledger Streams Streams_ledger
+par run_tlc streams_two Streams Streams_two
+par run_tlc streams_held Streams Streams_held
+par witness_tlc streams_held_w Streams Streams_held_w NotHeldBack
+par witness_tlc streams_two_w Streams Streams_two_w NoImplicitOpen
 par witness_tlc streams_stall Streams Streams_stall NoStuckGrant
 par run_tlc streams_live Streams Streams_live
 par witness_live_tlc streams_live_stall Streams Streams_live_stall

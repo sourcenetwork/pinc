@@ -8,17 +8,19 @@
 (*                                                                         *)
 (* One operator per public call of Streams: Frame (on_stream_frame),       *)
 (* Reset (on_reset_stream), Consume, Pending (pending_control), CtlLostMsd *)
-(* and CtlLostReset (on_control_lost), CtlAckedReset (on_control_acked),   *)
-(* OpenLocal (open_stream, bidirectional), AppReset (reset), Finish (the   *)
+(* CtlLostReset and CtlLostStop (on_control_lost), CtlAckedReset and       *)
+(* CtlAckedStop (on_control_acked), StopReq (stop_sending), OnStop         *)
+(* (on_stop_sending), OpenLocal (open_stream, bidirectional), AppReset     *)
+(* (reset), Finish (the                                                    *)
 (* send half completing), ExtTo (the other users of the pool: send         *)
 (* buffers, datagram queues, the early-data buffer, which the code charges *)
 (* to the same pool), CloseAll. The state T holds the table: slots, the    *)
-(* peer-opened and locally opened counters, the refused ring, the pool use *)
+(* peer-opened and locally opened counters, the pool use                  *)
 (* of the others, the window target and the delivery meter. The pool use   *)
 (* of the streams is the number of chunks their rings hold.                *)
 (*                                                                         *)
 (* Scaling. The real constants are CH = 16384, RING = 1025, RR = 96,       *)
-(* N = 100, RF = 16, B = the pool in chunks; the model is parameterised by *)
+(* N = 100, B = the pool in chunks; the model is parameterised by *)
 (* them and TLC runs them small. Offsets are bounded by MAXOFF (the real   *)
 (* bound is 2^62 - 1); the model never produces a larger one.              *)
 (*                                                                         *)
@@ -28,13 +30,19 @@
 (* which stalled a stream when the application had nothing left to read.   *)
 (* RETRY = FALSE is that earlier behaviour (a witness config).             *)
 (*                                                                         *)
+(* Held back streams. A peer stream the table has no room for yet is      *)
+(* stored nowhere, answered with nothing and never acknowledged: Locate    *)
+(* answers "Exhausted" and returns the table unchanged, so the opener's    *)
+(* retransmission on the same id meets the table as the first arrival did  *)
+(* and the stream is admitted once Admits holds. There is no refused queue. *)
+(*                                                                         *)
 (* Data bytes are not part of the state here; a frame carries `diff`, whether *)
 (* its bytes differ from the bytes already stored where they overlap. The *)
 (* content theorems are in Vinc/TransportStreams.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, RF, MAXOFF, RETRY, RemIds, LocIds
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -50,11 +58,11 @@ SW == Min(SWC, MaxStream)           \* the initial window; the ceiling is MaxStr
 
 NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi |-> 0, contig |-> 0, fin |-> -1,
             limit |-> 0, size |-> 0, pend |-> FALSE, defer |-> FALSE, rst |-> -1, obs |-> FALSE,
-            sdone |-> TRUE, srst |-> 0]
-NoRef == [id |-> -1, sent |-> FALSE]
+            sdone |-> TRUE, srst |-> 0,
+            stop |-> 0, qcode |-> -1, scode |-> -1]
 
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
-          rl |-> 0, ll |-> 0, ref |-> [j \in 1..RF |-> NoRef], ext |-> 0, tgt |-> SW,
+          rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW,
           m |-> [start |-> -1, bytes |-> 0, rate |-> 0]]
 
 (* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most RR ---- *)
@@ -101,10 +109,8 @@ GU(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Unreceived(T.slots
 
 SetSlot(T, i, r) == [T EXCEPT !.slots[i] = r]
 FindSlot(T, id) == IF \E i \in 1..N : T.slots[i].id = id THEN CHOOSE i \in 1..N : T.slots[i].id = id ELSE 0
-Hot(r) == (r.pend /\ r.open) \/ r.srst = 1
+Hot(r) == (r.pend /\ r.open) \/ r.srst = 1 \/ r.stop = 1
 AnyDefer(T) == \E i \in 1..N : T.slots[i].defer
-RefIdx(T, id) == IF \E j \in 1..RF : T.ref[j].id = id THEN CHOOSE j \in 1..RF : T.ref[j].id = id ELSE 0
-Refused(T) == {T.ref[j].id : j \in {k \in 1..RF : T.ref[k].id # -1}}
 
 (* ---- the window grant (Streams::grant) ---- *)
 GrantOne(T, i, first) ==
@@ -143,15 +149,11 @@ AllocSlot(T, id) ==
         T1 == SetSlot(T, i, r)
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
-(* ---- admission of peer streams (Streams::admits, refuse, locate) ---- *)
+(* ---- admission of peer streams (Streams::admits, locate) ---- *)
 Admits(T, c, next, count) ==
     LET free == Cardinality({i \in 1..N : T.slots[i].id = -1})
         window == count * (((SW + CH - 1) \div CH) * CH)
-        behind == \E j \in 1..RF : T.ref[j].id # -1 /\ Class(T.ref[j].id) = c /\ Idx(T.ref[j].id) >= next
-                                    /\ Idx(T.ref[j].id) < next + count
-    IN ~behind /\ T.rl + count <= MAXREM /\ free >= count /\ GU(T) + window <= Avail(T)
-
-FirstFreeRef(T) == IF \E j \in 1..RF : T.ref[j].id = -1 THEN CHOOSE j \in 1..RF : (T.ref[j].id = -1 /\ \A k \in 1..(j - 1) : T.ref[k].id # -1) ELSE 0
+    IN T.rl + count <= MAXREM /\ free >= count /\ GU(T) + window <= Avail(T)
 
 (* Locate: the new table, the slot (0 = none), the error ("ok" when none) *)
 Locate(T, id) ==
@@ -162,12 +164,8 @@ Locate(T, id) ==
           THEN IF ix >= T.lo[c] THEN [t |-> T, i |-> 0, err |-> "StreamState"]
                ELSE [t |-> T, i |-> FindSlot(T, id), err |-> "ok"]
        ELSE IF ix < next THEN [t |-> T, i |-> FindSlot(T, id), err |-> "ok"]
-       ELSE IF RefIdx(T, id) # 0 THEN [t |-> T, i |-> 0, err |-> "Busy"]
        ELSE IF ix >= next + MAXREM THEN [t |-> T, i |-> 0, err |-> "StreamLimit"]
-       ELSE IF ~Admits(T, c, next, ix - next + 1)
-          THEN LET j == FirstFreeRef(T)
-               IN IF j = 0 THEN [t |-> T, i |-> 0, err |-> "Exhausted"]
-                  ELSE [t |-> [T EXCEPT !.ref[j] = [id |-> id, sent |-> FALSE]], i |-> 0, err |-> "Busy"]
+       ELSE IF ~Admits(T, c, next, ix - next + 1) THEN [t |-> T, i |-> 0, err |-> "Exhausted"]
        ELSE LET f[k \in next..ix] ==
                     IF k = next THEN AllocSlot(T, k * 4 + (id % 4)) ELSE AllocSlot(f[k - 1], k * 4 + (id % 4))
                 T2 == [f[ix] EXCEPT !.rn[c] = ix + 1]
@@ -241,18 +239,16 @@ Consume(T, id, n, now, srtt) ==
        ELSE [t |-> Settle(GrantRun(T1, i), i), err |-> "ok"]
 
 (* ---- control frames ---- *)
-(* Pending: pending_control; the table after and the frame (kind "none", "reset" or "msd") *)
-PendingRef(T) == IF \E j \in 1..RF : T.ref[j].id # -1 /\ ~T.ref[j].sent
-                    THEN CHOOSE j \in 1..RF : (T.ref[j].id # -1 /\ ~T.ref[j].sent /\ \A k \in 1..(j - 1) : (T.ref[k].id = -1 \/ T.ref[k].sent))
-                    ELSE 0
+(* Pending: pending_control; the table after, the frame (kind "none", "reset", "stop" or "msd") and its number:
+   the limit of an msd, the error code of a reset or a stop. The first slot with a frame to send gives one: its stream
+   reset first, then its stop request, then its limit. *)
 PendingSlot(T) == IF \E i \in 1..N : Hot(T.slots[i]) THEN CHOOSE i \in 1..N : (Hot(T.slots[i]) /\ \A j \in 1..(i - 1) : ~Hot(T.slots[j])) ELSE 0
 Pending(T) ==
-    LET j == PendingRef(T)
-        i == PendingSlot(T)
+    LET i == PendingSlot(T)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
-    IN IF j # 0 THEN [t |-> [T EXCEPT !.ref[j].sent = TRUE], kind |-> "reset", id |-> T.ref[j].id, max |-> 0]
-       ELSE IF i = 0 THEN [t |-> T, kind |-> "none", id |-> -1, max |-> 0]
-       ELSE IF r.srst = 1 THEN [t |-> SetSlot(T, i, [r EXCEPT !.srst = 2]), kind |-> "reset", id |-> r.id, max |-> 0]
+    IN IF i = 0 THEN [t |-> T, kind |-> "none", id |-> -1, max |-> 0]
+       ELSE IF r.srst = 1 THEN [t |-> SetSlot(T, i, [r EXCEPT !.srst = 2]), kind |-> "reset", id |-> r.id, max |-> r.scode]
+       ELSE IF r.stop = 1 THEN [t |-> SetSlot(T, i, [r EXCEPT !.stop = 2]), kind |-> "stop", id |-> r.id, max |-> r.qcode]
        ELSE [t |-> SetSlot(T, i, [r EXCEPT !.pend = FALSE]), kind |-> "msd", id |-> r.id, max |-> r.limit]
 
 CtlLostMsd(T, id, max) ==
@@ -260,17 +256,24 @@ CtlLostMsd(T, id, max) ==
     IN IF i = 0 THEN T
        ELSE IF max >= T.slots[i].limit THEN SetSlot(T, i, [T.slots[i] EXCEPT !.pend = TRUE]) ELSE T
 CtlLostReset(T, id) ==
-    LET j == RefIdx(T, id)
-        i == FindSlot(T, id)
-    IN IF j # 0 THEN [T EXCEPT !.ref[j].sent = FALSE]
-       ELSE IF i = 0 THEN T
+    LET i == FindSlot(T, id)
+    IN IF i = 0 THEN T
        ELSE IF T.slots[i].srst = 2 THEN SetSlot(T, i, [T.slots[i] EXCEPT !.srst = 1]) ELSE T
 CtlAckedReset(T, id) ==
-    LET j == RefIdx(T, id)
-        i == FindSlot(T, id)
-    IN IF j # 0 THEN [T EXCEPT !.ref[j] = NoRef]
-       ELSE IF i = 0 THEN T
-       ELSE Settle(SetSlot(T, i, [T.slots[i] EXCEPT !.srst = IF T.slots[i].srst \in {1, 2} THEN 3 ELSE @]), i)
+    LET i == FindSlot(T, id)
+    IN IF i = 0 THEN T
+       ELSE LET acked == T.slots[i].srst \in {1, 2}
+            IN Settle(SetSlot(T, i, [T.slots[i] EXCEPT !.srst = IF acked THEN 3 ELSE @, !.scode = IF acked THEN -1 ELSE @]), i)
+\* a lost stop request is sent again unless the sender ended the stream meanwhile
+CtlLostStop(T, id) ==
+    LET i == FindSlot(T, id)
+    IN IF i = 0 THEN T
+       ELSE IF T.slots[i].stop = 2 /\ T.slots[i].rst = -1 /\ T.slots[i].fin = -1
+               THEN SetSlot(T, i, [T.slots[i] EXCEPT !.stop = 1]) ELSE T
+CtlAckedStop(T, id) ==
+    LET i == FindSlot(T, id)
+    IN IF i = 0 THEN T
+       ELSE IF T.slots[i].stop \in {1, 2} THEN SetSlot(T, i, [T.slots[i] EXCEPT !.stop = 3, !.qcode = -1]) ELSE T
 
 (* ---- the send half, as far as the receive side sees it ---- *)
 OpenLocal(T) ==
@@ -280,12 +283,34 @@ OpenLocal(T) ==
        ELSE [AllocSlot(T, id) EXCEPT !.lo[c] = @ + 1]
 SendOpen(r) == ~(IsUni(r.id) /\ ~IsLocal(r.id))
 (* Streams::reset: queue a stream reset on the send half, the send buffers released (ext2 <= ext) *)
-AppReset(T, id, ext2) ==
+AppReset(T, id, code, ext2) ==
     LET i == FindSlot(T, id)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
         change == SendOpen(r) /\ r.srst = 0 /\ ~r.sdone
-        T1 == IF change THEN [SetSlot(T, i, [r EXCEPT !.srst = 1]) EXCEPT !.ext = ext2] ELSE T
+        T1 == IF change THEN [SetSlot(T, i, [r EXCEPT !.srst = 1, !.scode = code]) EXCEPT !.ext = ext2] ELSE T
     IN IF i = 0 THEN T ELSE Settle(T1, i)
+(* Streams::stop_sending: ask the peer to stop sending on a stream we receive on; queued once, nothing if the sender
+   already ended the stream *)
+StopReq(T, id, code) ==
+    LET i == FindSlot(T, id)
+        r == IF i = 0 THEN NewSlot ELSE T.slots[i]
+    IN IF i = 0 THEN [t |-> T, err |-> "UnknownStream"]
+       ELSE IF ~r.open THEN [t |-> T, err |-> "StreamState"]
+       ELSE IF r.rst = -1 /\ r.fin = -1 /\ r.stop = 0
+               THEN [t |-> SetSlot(T, i, [r EXCEPT !.stop = 1, !.qcode = code]), err |-> "ok"]
+       ELSE [t |-> T, err |-> "ok"]
+(* Streams::on_stop_sending: a stop request arrived for a stream we send on. The peer stream is located (opened
+   implicitly if new) and, if its send half can still be stopped, reset with the peer's code; fresh says it was. *)
+OnStop(T, id, code, ext2) ==
+    IF IsUni(id) /\ ~IsLocal(id) THEN [t |-> T, err |-> "StreamState", fresh |-> FALSE]
+    ELSE LET L == Locate(T, id)
+         IN IF L.err # "ok" THEN [t |-> L.t, err |-> L.err, fresh |-> FALSE]
+            ELSE IF L.i = 0 THEN [t |-> L.t, err |-> "ok", fresh |-> FALSE]
+            ELSE LET r == L.t.slots[L.i]
+                     fresh == SendOpen(r) /\ r.srst = 0 /\ ~r.sdone
+                     T1 == IF fresh THEN [SetSlot(L.t, L.i, [r EXCEPT !.srst = 1, !.scode = code]) EXCEPT !.ext = ext2]
+                                    ELSE L.t
+                 IN [t |-> Settle(T1, L.i), err |-> "ok", fresh |-> fresh]
 (* acknowledgements free send buffers (ext2 <= ext); done: the whole send half is acknowledged, the end too *)
 Finish(T, id, ext2, done) ==
     LET i == FindSlot(T, id)

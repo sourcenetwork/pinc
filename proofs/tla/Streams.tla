@@ -26,11 +26,17 @@
 (*    deferred (NoMissedGrant); a deferred grant is retried after every     *)
 (*    release of pool chunks (NoStuckGrant; the witness Streams_stall is   *)
 (*    the earlier behaviour, retry only on a consume, which stalls);       *)
-(*  - STREAM_CAP: live peer streams never exceed the cap, a refused *)
-(*    stream is remembered and answered with a reset (RefusedOk: it has no *)
-(*    slot and its index is not below the next one admitted), never stored, *)
-(*    and is forgotten only when its reset is acknowledged; the final size, *)
-(*    once fixed, never changes;                                           *)
+(*  - STREAM_CAP: live peer streams never exceed the cap; a peer stream    *)
+(*    that does not fit is held back: the call answers Exhausted and the   *)
+(*    table is unchanged (LocatePure: no slot, no pool charge, no counter  *)
+(*    moved), so the retransmission meets the table as the first arrival   *)
+(*    did and the stream is admitted once it fits; an arriving stream      *)
+(*    opens every lower id of its kind and initiator (ImplicitOpens); the  *)
+(*    final size, once fixed, never changes;                               *)
+(*  - STOP_SENDING: a stop request is queued once, sent as a control frame *)
+(*    and sent again if lost unless the sender ended the stream; a stop    *)
+(*    that arrives resets the send half with the peer's code (StopEndsWithCode), *)
+(*    and the code of a reset never changes (CodeKept);                    *)
 (*  - RESET: a reset fixes the final size, frees the buffered bytes and    *)
 (*    leaves the stream readable to its end (nothing more is readable).    *)
 (* The local-stream witness Streams_local shows that the initial window of *)
@@ -38,7 +44,7 @@
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, RF, MAXOFF, RETRY, RemIds, LocIds
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 VARIABLES T, clock
 vars == <<T, clock>>
@@ -60,13 +66,17 @@ LostMsdOp == \E id \in Ids, mx \in 0..HOR : T' = CtlLostMsd(T, id, mx) /\ UNCHAN
 LostResetOp == \E id \in Ids : T' = CtlLostReset(T, id) /\ UNCHANGED clock
 AckedResetOp == \E id \in Ids : T' = CtlAckedReset(T, id) /\ UNCHANGED clock
 OpenOp == T' = OpenLocal(T) /\ UNCHANGED clock
-AppResetOp == \E id \in Ids, e2 \in 0..T.ext : T' = AppReset(T, id, e2) /\ UNCHANGED clock
+AppResetOp == \E id \in Ids, e2 \in 0..T.ext : T' = AppReset(T, id, 9, e2) /\ UNCHANGED clock
+LostStopOp == \E id \in Ids : T' = CtlLostStop(T, id) /\ UNCHANGED clock
+AckedStopOp == \E id \in Ids : T' = CtlAckedStop(T, id) /\ UNCHANGED clock
+StopReqOp == \E id \in Ids : T' = StopReq(T, id, 7).t /\ UNCHANGED clock
+OnStopOp == \E id \in Ids, e2 \in 0..T.ext : T' = OnStop(T, id, 7, e2).t /\ UNCHANGED clock
 FinishOp == \E id \in Ids, e2 \in 0..T.ext, dn \in BOOLEAN : T' = Finish(T, id, e2, dn) /\ UNCHANGED clock
 ExtOp == \E e2 \in 0..EXTMAX : T' = ExtTo(T, e2) /\ UNCHANGED clock
 CloseOp == \E e2 \in 0..T.ext : T' = CloseAll(T, e2) /\ UNCHANGED clock
 
 Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ LostResetOp \/ AckedResetOp \/ OpenOp
-        \/ AppResetOp \/ FinishOp \/ ExtOp \/ CloseOp
+        \/ AppResetOp \/ FinishOp \/ ExtOp \/ CloseOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp
 Spec == Init /\ [][Next]_vars
 
 \* the other users of the pool eventually let go (the liveness config only)
@@ -108,10 +118,22 @@ Counters == /\ T.rl = Cardinality({i \in Live : ~IsLocal(T.slots[i].id)})
             /\ T.ll = Cardinality({i \in Live : IsLocal(T.slots[i].id)})
             /\ T.rl <= MAXREM /\ T.ll <= PM
 Admitted == \A i \in Live : ~IsLocal(T.slots[i].id) => Idx(T.slots[i].id) < T.rn[Class(T.slots[i].id)]
-RefusedOk == \A j \in 1..RF : T.ref[j].id # -1 =>
-                /\ Idx(T.ref[j].id) >= T.rn[Class(T.ref[j].id)]
-                /\ FindSlot(T, T.ref[j].id) = 0
-                /\ \A k \in 1..RF : (k # j) => T.ref[k].id # T.ref[j].id
+\* a peer stream that does not fit is held back: any error answer of locate leaves the table as it was
+LocatePure == \A id \in Ids : Locate(T, id).err # "ok" => Locate(T, id).t = T
+\* an arriving stream opens every lower id of its kind and initiator, one slot and one count each
+ImplicitOpens == \A id \in Ids : LET L == Locate(T, id) IN
+    (~IsLocal(id) /\ Idx(id) >= T.rn[Class(id)] /\ L.err = "ok") =>
+        /\ L.t.rn[Class(id)] = Idx(id) + 1
+        /\ L.t.rl = T.rl + (Idx(id) - T.rn[Class(id)] + 1)
+        /\ \A k \in T.rn[Class(id)]..Idx(id) : FindSlot(L.t, k * 4 + (id % 4)) # 0
+\* reachability witnesses (the configs *_w must find a violation): a stream is held back; an arriving stream opens a lower id
+NotHeldBack == \A id \in Ids : Locate(T, id).err # "Exhausted"
+NoImplicitOpen == \A id \in Ids : ~(~IsLocal(id) /\ Idx(id) > T.rn[Class(id)] /\ Locate(T, id).err = "ok")
+\* a stop that resets the send half leaves the peer's code on it
+StopEndsWithCode == \A id \in Ids, c \in 0..1, e2 \in 0..T.ext : LET R == OnStop(T, id, c, e2) IN
+    R.fresh => (FindSlot(R.t, id) # 0 /\ R.t.slots[FindSlot(R.t, id)].scode = c)
+\* a queued stop or reset carries a code
+CodesSet == \A i \in Live : (T.slots[i].stop \in {1, 2} => T.slots[i].qcode # -1) /\ (T.slots[i].srst \in {1, 2} => T.slots[i].scode # -1)
 \* a window due to move was moved or deferred (credit follows consumption)
 NoMissedGrant == \A i \in Live : T.slots[i].open => (Due(T.slots[i]) = -1 \/ T.slots[i].defer)
 GrantFits(i) == LET r == T.slots[i]
@@ -149,4 +171,6 @@ LedgerOnGrant == [][((\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[
 PoolOnAlloc == [][Used(T') > Used(T) => Used(T') <= B]_vars
 \* the limits never exceed the pool a stream may hold
 ReadFollowsContig == [][\A i \in 1..N : SameInc(i) => T'.slots[i].read <= T'.slots[i].contig]_vars
+\* the code of a reset, once set, never changes (the acknowledgement of the reset forgets it)
+CodeKept == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].scode # -1 /\ T'.slots[i].srst # 3) => T'.slots[i].scode = T.slots[i].scode]_vars
 =============================================================================

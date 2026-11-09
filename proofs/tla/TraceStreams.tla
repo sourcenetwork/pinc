@@ -14,7 +14,8 @@
 (* After every call the table shows its state; every event must be the     *)
 (* step the operators of StreamsOps.tla compute from the state before it   *)
 (* (Frame, Reset, Consume, Pending, CtlLostMsd, CtlLostReset,              *)
-(* CtlAckedReset, OpenLocal, AppReset, Finish, ExtTo, CloseAll), with the  *)
+(* CtlAckedReset, CtlLostStop, CtlAckedStop, StopReq, OnStop, OpenLocal,   *)
+(* AppReset, Finish, ExtTo, CloseAll), with the                            *)
 (* error the call returned, and the state the model computes must be the   *)
 (* state recorded. The constants are the real ones of the test: chunks of  *)
 (* 16384 bytes, a ring of 5, 96 stored ranges, 4 slots, a pool of 8.       *)
@@ -24,7 +25,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, RF, MAXOFF, RETRY, RemIds, LocIds
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds
 VARIABLES i, rs
 vars == <<i, rs>>
 
@@ -37,16 +38,13 @@ SlotOf(s) ==
     IF s.id = -1 THEN NewSlot
     ELSE [id |-> s.id, open |-> s.open, held |-> {s.held[k] : k \in 1..Len(s.held)}, rs |-> s.rs,
           read |-> s.read, hi |-> s.hi, contig |-> s.contig, fin |-> s.fin, limit |-> s.limit, size |-> s.size,
-          pend |-> s.pend, defer |-> s.defer, rst |-> s.rst, obs |-> s.obs, sdone |-> s.sdone, srst |-> s.srst]
+          pend |-> s.pend, defer |-> s.defer, rst |-> s.rst, obs |-> s.obs, sdone |-> s.sdone, srst |-> s.srst,
+          stop |-> s.stop, qcode |-> s.qcode, scode |-> s.scode]
 
 TOf(v) ==
     [slots |-> [k \in 1..N |-> SlotOf(v.slots[k])],
      rn |-> [c \in 0..1 |-> v.rn[c + 1]], lo |-> [c \in 0..1 |-> v.lo[c + 1]],
      rl |-> v.rl, ll |-> v.ll,
-     ref |-> [j \in 1..RF |-> IF \E q \in {v.ref[k] : k \in 1..Len(v.ref)} : q[1] = j
-                                  THEN LET q == CHOOSE q \in {v.ref[k] : k \in 1..Len(v.ref)} : q[1] = j
-                                       IN [id |-> q[2], sent |-> q[3]]
-                                  ELSE NoRef],
      ext |-> v.ext, tgt |-> v.tgt, m |-> [start |-> v.ms, bytes |-> v.mb, rate |-> v.mr]]
 
 InitEv == /\ Ev.op = "init" /\ TOf(Ev.v) = Init0 /\ rs' = TOf(Ev.v)
@@ -66,9 +64,17 @@ LostResetEv == LET R == CtlLostReset(rs, Ev.id)
                IN /\ Ev.op = "lostreset" /\ TOf(Ev.v) = R /\ rs' = R
 AckedResetEv == LET R == CtlAckedReset(rs, Ev.id)
                 IN /\ Ev.op = "ackedreset" /\ TOf(Ev.v) = R /\ rs' = R
+LostStopEv == LET R == CtlLostStop(rs, Ev.id)
+              IN /\ Ev.op = "loststop" /\ TOf(Ev.v) = R /\ rs' = R
+AckedStopEv == LET R == CtlAckedStop(rs, Ev.id)
+               IN /\ Ev.op = "ackedstop" /\ TOf(Ev.v) = R /\ rs' = R
+StopReqEv == LET R == StopReq(rs, Ev.id, Ev.code)
+             IN /\ Ev.op = "stopreq" /\ R.err = Ev.err /\ TOf(Ev.v) = R.t /\ rs' = R.t
+OnStopEv == LET R == OnStop(rs, Ev.id, Ev.code, Ev.v.ext)
+            IN /\ Ev.op = "onstop" /\ R.err = Ev.err /\ R.fresh = Ev.fresh /\ TOf(Ev.v) = R.t /\ rs' = R.t
 OpenEv == LET R == OpenLocal(rs)
           IN /\ Ev.op = "open" /\ TOf(Ev.v) = R /\ rs' = R
-AppResetEv == LET R == AppReset(rs, Ev.id, Ev.v.ext)
+AppResetEv == LET R == AppReset(rs, Ev.id, Ev.code, Ev.v.ext)
               IN /\ Ev.op = "appreset" /\ TOf(Ev.v) = R /\ rs' = R
 FinishEv == LET R == Finish(rs, Ev.id, Ev.v.ext, Ev.done)
             IN /\ Ev.op = "finish" /\ TOf(Ev.v) = R /\ rs' = R
@@ -83,7 +89,7 @@ Step ==
     /\ i <= Len(Trace)
     /\ Ev.t = "st"
     /\ \/ InitEv \/ EndEv \/ FrameEv \/ ResetEv \/ ConsumeEv \/ PendingEv \/ LostMsdEv \/ LostResetEv
-       \/ AckedResetEv \/ OpenEv \/ AppResetEv \/ FinishEv \/ ExtEv \/ CloseEv
+       \/ AckedResetEv \/ LostStopEv \/ AckedStopEv \/ StopReqEv \/ OnStopEv \/ OpenEv \/ AppResetEv \/ FinishEv \/ ExtEv \/ CloseEv
     /\ i' = i + 1
 
 Finished == i > Len(Trace) /\ UNCHANGED vars
