@@ -55,7 +55,6 @@ fn err_name(e: StreamError) -> &'static str {
         StreamError::FinalSize => "FinalSize",
         StreamError::Conflict => "Conflict",
         StreamError::TableFull => "TableFull",
-        StreamError::Busy => "Busy",
         StreamError::Exhausted => "Exhausted",
         StreamError::Fragmented => "Fragmented",
         StreamError::UnknownStream => "UnknownStream",
