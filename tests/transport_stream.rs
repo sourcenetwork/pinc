@@ -323,6 +323,35 @@ fn a_peer_stream_whose_window_does_not_fit_the_pool_is_refused() {
     assert!(t.granted_unreceived() <= pool.available_bytes());
 }
 
+#[test]
+fn a_refused_peer_stream_is_admitted_again_once_room_returns_and_never_while_it_fits() {
+    // A pool of 24 chunks gives each stream half of it (192 KiB): two do not fit, so the second is refused (the
+    // opener sees the reset and opens again), but the same two streams fit a pool that has the room.
+    let (mut pool, mut t) = setup(24, |_| {});
+    // This side opens a stream of its own at the same moment (its receive half is granted a window too).
+    let own = t.open_stream(true).unwrap();
+    let theirs = own ^ 1;
+    t.on_stream_frame(&mut pool, theirs, 0, &[1; 10], true).unwrap();
+    assert_eq!(
+        t.on_stream_frame(&mut pool, theirs + 4, 0, &[2; 10], true),
+        Err(StreamError::Busy)
+    );
+    let reset = drain_control(&mut t)
+        .into_iter()
+        .find(|f| matches!(f, ControlFrame::ResetStream { id, .. } if *id == theirs + 4))
+        .unwrap();
+    t.on_control_acked(&mut pool, &reset);
+    assert_eq!(read_all(&mut t, &mut pool, theirs).len(), 10);
+    // The first stream is done and gave its grant back: the opener's next stream is admitted at once.
+    t.on_stream_frame(&mut pool, theirs + 8, 0, &[3; 10], true).unwrap();
+    let (mut roomy, mut t) = setup(256, |_| {});
+    let own = t.open_stream(true).unwrap();
+    t.on_stream_frame(&mut roomy, own ^ 1, 0, &[1; 10], false).unwrap();
+    t.on_stream_frame(&mut roomy, (own ^ 1) + 4, 0, &[2; 10], false)
+        .unwrap();
+    assert_eq!(t.open_streams(), 3);
+}
+
 // ---- receive windows ------------------------------------------------------------------------------------------
 
 #[test]
@@ -800,15 +829,23 @@ fn a_stream_over_the_cap_is_refused_with_one_busy_reset_per_cycle() {
     t.on_control_lost(&reset);
     assert_eq!(drain_control(&mut t), [reset]);
     assert!(drain_control(&mut t).is_empty());
-    // An acknowledged one is forgotten: a new attempt is refused afresh while the cap holds.
+    // An acknowledged one is forgotten, and the stream is over: frames still on the way for it are ignored, and the
+    // next stream of the opener is refused afresh while the cap holds.
     t.on_control_acked(&mut pool, &reset);
-    assert_eq!(t.on_reset_stream(&mut pool, 10, 0, 0), Err(StreamError::Busy));
+    assert_eq!(t.on_reset_stream(&mut pool, 10, 0, 0), Ok(()));
+    assert!(drain_control(&mut t).is_empty());
+    assert_eq!(t.on_reset_stream(&mut pool, 14, 0, 0), Err(StreamError::Busy));
+    let reset = ControlFrame::ResetStream {
+        id: 14,
+        error_code: BUSY,
+        final_size: 0,
+    };
     assert_eq!(drain_control(&mut t), [reset]);
     t.on_control_acked(&mut pool, &reset);
     // Consuming the last byte of the first stream lets the application see the end, which closes it.
     assert_eq!(read_all(&mut t, &mut pool, 2).len(), 10);
     assert_eq!(t.open_streams(), 1);
-    t.on_stream_frame(&mut pool, 10, 0, &[1], false).unwrap();
+    t.on_stream_frame(&mut pool, 18, 0, &[1], false).unwrap();
     // A frame for a closed stream is ignored.
     t.on_stream_frame(&mut pool, 2, 0, &[1; 10], true).unwrap();
     assert_eq!(t.open_streams(), 2);
@@ -1167,9 +1204,9 @@ fn refusing_a_stream_does_not_allocate() {
     });
     t.on_stream_frame(&mut pool, 0, 0, &[1; 10], false).unwrap();
     let stats = measure(|| {
-        for _ in 0..100 {
+        for k in 1..=100u64 {
             assert_eq!(
-                t.on_stream_frame(&mut pool, 4, 0, &[1; 10], false),
+                t.on_stream_frame(&mut pool, 4 * k, 0, &[1; 10], false),
                 Err(StreamError::Busy)
             );
             let reset = t.pending_control().unwrap();

@@ -711,6 +711,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if let ControlFrame::ResetStream { id, .. } = *frame {
             if let Some(e) = self.refused.iter_mut().find(|e| e.is_some_and(|r| r.id == id)) {
                 *e = None;
+                // The opener knows the stream is refused and opens its next one after it. If the refused stream was
+                // the next one expected, it is over: the stream after it must not have to open it (and take its
+                // window) first.
+                let (c, index) = (class(id), id >> 2);
+                if let Some(next) = self.remote_next.get_mut(c).filter(|n| **n == index) {
+                    *next += 1;
+                }
             } else if let Some(i) = self.find(id) {
                 if let Some(slot) = self.slots.get_mut(i) {
                     slot.send.reset_acked();
