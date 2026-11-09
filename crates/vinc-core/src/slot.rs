@@ -239,9 +239,6 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) orphaned: bool,
     /// The session was closed so the application dials again.
     pub(crate) redial: bool,
-    /// Work on the session was left undone because the host's event queue was near full; the endpoint finishes it when
-    /// the host reads events.
-    pub(crate) parked: bool,
     /// This is a sub-session.
     pub(crate) sub: bool,
     /// The session is in its peer's list.
@@ -283,7 +280,6 @@ impl<const NP: usize> Meta<NP> {
         cid_epoch: u64::MAX,
         odcid: None,
         held: Held::EMPTY,
-        parked: false,
         seen_peak: 0,
         plan: Plan {
             ping_at: None,

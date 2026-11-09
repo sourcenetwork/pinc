@@ -160,8 +160,12 @@ pub struct Endpoint<
     pub(crate) ifaces: [Option<SocketAddr>; MAX_IFACES],
     pub(crate) subs_seen: Table<ConnId, (), SUBS_SEEN>,
     pub(crate) events: EventRing<K>,
-    /// Some session has `parked` work.
-    pub(crate) backlog: bool,
+    /// The sessions with `parked` work, each at most once.
+    pub(crate) parked: [u32; K],
+    /// Whether session slot `i` is in `parked`; kept beside the list, not in the slot, so a slot reused while listed
+    /// is not listed twice and the list never outgrows `K`.
+    pub(crate) is_parked: [bool; K],
+    pub(crate) parked_len: usize,
     /// The latest time an entry point was called with.
     pub(crate) last_now: u64,
     pub(crate) capture: Option<Events>,
@@ -262,7 +266,9 @@ ep_impl! {
             ifaces: [None; MAX_IFACES],
             subs_seen: Table::new(seed ^ 0x0A),
             events: EventRing::new(),
-            backlog: false,
+            parked: [0; K],
+            is_parked: [false; K],
+            parked_len: 0,
             last_now: now,
             capture: None,
             scratch: [0; MAX_DATAGRAM],
@@ -390,7 +396,7 @@ ep_impl! {
     /// The next event, oldest first.
     pub fn poll_event(&mut self) -> Option<Event> {
         let ev = self.events.pop();
-        if self.backlog && !self.events.stalled() {
+        if self.parked_len > 0 && !self.events.stalled() {
             self.resume_parked(self.last_now);
         }
         ev

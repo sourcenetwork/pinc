@@ -181,26 +181,26 @@ ep_impl! {
 
     /// Mark session `i` as having work left for [`resume_parked`](Self::resume_parked).
     fn park(&mut self, i: usize) {
-        if let Some(s) = self.slots.get_mut(i) {
-            s.m.parked = true;
-            self.backlog = true;
+        let Ok(id) = u32::try_from(i) else { return };
+        if let (Some(flag), Some(cell)) = (self.is_parked.get_mut(i), self.parked.get_mut(self.parked_len))
+            && !*flag
+        {
+            *flag = true;
+            *cell = id;
+            self.parked_len += 1;
         }
     }
 
     /// The host read events and the queue has room again: finish the work of the parked sessions, the held events
-    /// of an allowed session first, until the queue is near full again.
+    /// of an allowed session first, until the queue is near full again. Costs one step per parked session.
     pub(crate) fn resume_parked(&mut self, now: u64) {
-        self.backlog = false;
-        for i in 0..K {
-            if self.events.stalled() {
-                self.backlog = true;
-                return;
+        while self.parked_len > 0 && !self.events.stalled() {
+            self.parked_len -= 1;
+            let i = self.parked.get(self.parked_len).map_or(0, |v| *v as usize);
+            if let Some(flag) = self.is_parked.get_mut(i) {
+                *flag = false;
             }
-            let Some(s) = self.slots.get_mut(i) else { return };
-            if !s.m.parked {
-                continue;
-            }
-            s.m.parked = false;
+            let Some(s) = self.slots.get(i) else { continue };
             if s.m.allowed && s.m.hold != 2 {
                 self.release_held(i, now);
             }
