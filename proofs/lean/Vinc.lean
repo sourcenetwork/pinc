@@ -44,6 +44,8 @@ import Vinc.TransportRecoveryAcct
 import Vinc.TransportRecoveryCalls
 import Vinc.TransportRecoveryThm
 import Vinc.TraceRecovery
+import Vinc.ReconcileSession
+import Vinc.TraceReconcile
 import Vinc.HandshakeModel
 import Vinc.HandshakeSys
 import Vinc.HandshakeCases
@@ -237,4 +239,7 @@ import Vinc.BroadcastSubs
 import Vinc.BroadcastTrace
 import Vinc.BroadcastTable
 import Vinc.BroadcastWire
+import Vinc.ReconcileWireProofs
+import Vinc.ReconcileWireMsg
+import Vinc.TraceReconcileWire
 #audit_package

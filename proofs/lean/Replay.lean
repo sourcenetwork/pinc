@@ -33,6 +33,8 @@ import Vinc.TraceMembershipInc
 import Vinc.TraceMembershipCodec
 import Vinc.TraceMembership
 import Vinc.BroadcastTrace
+import Vinc.TraceReconcile
+import Vinc.TraceReconcileWire
 
 /-!
 # Trace replay
@@ -156,6 +158,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut sts : TraceStreams.St := {}
   let mut rcs : TraceRecovery.St' := {}
   let mut bcw : BroadcastTrace.W := {}
+  let mut rcw : TraceReconcile.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -254,6 +257,21 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
         if ValuesWireTrace.isWireTag t then
           -- Value wire codec events (`trace_values_wire`): REQ, GROUP header, PROOF and PROOF_REQ parse and encode.
           match ValuesWireTrace.replayEvent j with
+          | .ok () =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "rc" then
+          -- Reconciliation events (`rc`, written by `trace_reconcile`): the byte-level session model.
+          match TraceReconcile.replayEvent j rcw with
+          | .ok r' =>
+            rcw := r'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "rw" then
+          -- Reconcile wire events (`rw`, written by `trace_reconcile_wire`): the codec of `vinc-reconcile`.
+          match TraceReconcileWire.replayEvent j with
           | .ok () =>
             count := count + 1
             continue

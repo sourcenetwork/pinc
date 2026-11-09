@@ -285,6 +285,10 @@ name = "reconcile_chunked"
 path = "reconcile_chunked.rs"
 
 [[test]]
+name = "reconcile_wire"
+path = "reconcile_wire.rs"
+
+[[test]]
 name = "dtn_seal"
 path = "dtn_seal.rs"
 
@@ -383,6 +387,14 @@ path = "trace_recovery.rs"
 [[test]]
 name = "trace_keyroll"
 path = "trace_keyroll.rs"
+
+[[test]]
+name = "trace_reconcile_wire"
+path = "trace_reconcile_wire.rs"
+
+[[test]]
+name = "trace_reconcile"
+path = "trace_reconcile.rs"
 
 [[test]]
 name = "trace_security"

@@ -223,7 +223,7 @@ def splitFit (o : Oracle) (lim : Limits) (S : List Item) (out : Out) (lo : Item)
     (a b mark : Nat) : Nat → Except Err (Out × Nat)
   | 0 => splitParts o lim S out lo hi a b 2
   | k + 1 =>
-    let fan := spl / 2 ^ (3 - k)
+    let fan := spl / 2 ^ (2 - k)
     match splitParts o lim S out lo hi a b fan with
     | .error e => .error e
     | .ok (out', cnt) =>

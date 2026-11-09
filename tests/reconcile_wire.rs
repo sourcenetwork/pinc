@@ -1,0 +1,99 @@
+//! The reconcile wire format is canonical: a bound has one encoding (the shared prefix length is the longest one the
+//! encoder writes, capped at 255) and a reply bitmap has zero padding bits. Both refusals carry their reason.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::many_single_char_names
+)]
+
+#[path = "reconcile_common.rs"]
+mod common;
+
+use common::{Dir, Err, fixed_set, index, run_with};
+use vinc_reconcile::wire::{frame_body, put_bound, read_bound, read_parts, tag};
+use vinc_reconcile::{Error, Initiator, Limits, Reason, Responder};
+use vinc_tests::SplitMix64;
+use vinc_wire::Reader;
+
+fn read(last: &[u8], bytes: &[u8]) -> Result<Vec<u8>, Reason> {
+    let mut l = last.to_vec();
+    let mut r = Reader::new(bytes);
+    read_bound(&mut l, &mut r, 4096).map(|()| l)
+}
+
+#[test]
+fn a_bound_with_a_shorter_shared_prefix_than_the_encoder_writes_is_refused() {
+    // last = 1 2 3, bound = 1 2 4: the encoder writes c = 2 and the suffix 4.
+    let (mut last, mut enc) = (vec![1u8, 2, 3], Vec::new());
+    put_bound(&mut enc, &mut last, &[1, 2, 4]).unwrap();
+    assert_eq!(enc, [2, 1, 4]);
+    assert_eq!(read(&[1, 2, 3], &enc), Ok(vec![1, 2, 4]));
+    // The same bound with c = 1 and the suffix 2 4 would read back as the same bytes, so it must be refused.
+    assert_eq!(read(&[1, 2, 3], &[1, 2, 2, 4]), Err(Reason::Bound));
+    // c = 0, the whole bound as the suffix.
+    assert_eq!(read(&[1, 2, 3], &[0, 3, 1, 2, 4]), Err(Reason::Bound));
+    // A shorter prefix is fine when the next bytes differ (that is the longest prefix).
+    assert_eq!(read(&[1, 2, 3], &[1, 2, 9, 4]), Ok(vec![1, 9, 4]));
+}
+
+#[test]
+fn the_cap_of_the_shared_prefix_is_the_longest_prefix_when_it_is_255() {
+    let last = vec![7u8; 300];
+    let mut enc = Vec::new();
+    let mut l = last.clone();
+    put_bound(&mut enc, &mut l, &last).unwrap();
+    assert_eq!(enc[0], 255, "the prefix length is capped at 255");
+    assert_eq!(read(&last, &enc), Ok(last.clone()));
+    // 254 with the suffix of 46 equal bytes is another encoding of the same bound.
+    let mut other = vec![254, 46];
+    other.extend(std::iter::repeat_n(7u8, 46));
+    assert_eq!(read(&last, &other), Err(Reason::Bound));
+}
+
+#[test]
+fn a_reply_bitmap_with_a_padding_bit_set_is_refused() {
+    let mut rng = SplitMix64::new(77);
+    // The initiator is small enough to send ids at once, the responder too large for one reply: ids leaves follow.
+    let a = fixed_set(&mut rng, 30, 8);
+    let mut b = a.clone();
+    b.extend(fixed_set(&mut rng, 10, 8));
+    let b = common::sorted(b);
+    let (ia, ib) = (index(&a), index(&b));
+    let mut tampered = 0;
+    let res: Result<_, Err> = run_with(
+        &mut Initiator::new(Limits::default()),
+        &mut Responder::new(Limits::default()),
+        &ia,
+        &ib,
+        |d, m| {
+            if d != Dir::ToInitiator {
+                return;
+            }
+            let body = frame_body(m).unwrap();
+            let mut r = Reader::new(body);
+            let (np, _) = read_parts(&mut r).unwrap();
+            if np == 0 {
+                return;
+            }
+            let t = r.read_u8().unwrap();
+            if t & !tag::INF != tag::REPLY {
+                return;
+            }
+            let mut last = Vec::new();
+            read_bound(&mut last, &mut r, 4096).unwrap();
+            if t & tag::INF == 0 {
+                read_bound(&mut last, &mut r, 4096).unwrap();
+            }
+            let c = r.read_varint().unwrap() as usize;
+            if c.is_multiple_of(8) || tampered > 0 {
+                return;
+            }
+            let at = 3 + r.position() + c.div_ceil(8) - 1;
+            m[at] |= 0x80;
+            tampered += 1;
+        },
+    );
+    assert_eq!(tampered, 1, "a reply with a partial bitmap byte was found");
+    assert_eq!(res.err(), Some(Error::Malformed(Reason::Count)));
+}
