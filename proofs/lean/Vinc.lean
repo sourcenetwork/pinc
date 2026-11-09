@@ -197,4 +197,6 @@ import Vinc.MembershipInvView
 import Vinc.MembershipInvHub
 import Vinc.MembershipInvNode
 import Vinc.MembershipInvReach
+import Vinc.MembershipWindow
+import Vinc.MembershipFlap
 #audit_package
