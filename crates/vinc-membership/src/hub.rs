@@ -325,6 +325,15 @@ impl Membership {
         if self.roster.contains_key(member) || self.revoked.contains(member) {
             return;
         }
+        if self.roster.len() >= MAX_TABLE {
+            // The roster filled up while the member was held: a full table refuses, it never grows past its bound.
+            h.release(member);
+            self.trace(Trace::CarrierReturned {
+                member: *member,
+                restored: false,
+            });
+            return;
+        }
         l.renewed = now;
         self.roster.insert(*member, l);
         if self.up.contains_key(member) && self.attached.len() < MAX_TABLE {

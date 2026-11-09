@@ -732,3 +732,127 @@ fn steady_state_allocates_nothing() {
         "leases kept alive on transport evidence and renewals"
     );
 }
+
+/// A host whose carriers the test sets, that takes every send and reports a validated direct path to everyone.
+#[derive(Default)]
+struct Scripted {
+    carriers: std::collections::BTreeMap<vinc_membership::NodeId, Carrier>,
+    released: Vec<vinc_membership::NodeId>,
+}
+
+impl vinc_membership::Session for Scripted {
+    fn send(&mut self, _: &vinc_membership::NodeId, _: Route, _: &[u8]) -> bool {
+        true
+    }
+    fn evidence(&self, _: &vinc_membership::NodeId) -> Option<vinc_membership::Evidence> {
+        Some(vinc_membership::Evidence {
+            last_rx: 0,
+            srtt: 20 * MS,
+            pto: 0,
+            inflight: 0,
+            direct: true,
+        })
+    }
+    fn carrier(&self, m: &vinc_membership::NodeId) -> Carrier {
+        self.carriers.get(m).copied().unwrap_or_default()
+    }
+    fn close(&mut self, _: &vinc_membership::NodeId, _: CloseReason) {}
+}
+
+impl vinc_membership::Broadcast for Scripted {
+    fn floor(&mut self, _: &vinc_membership::NodeId, _: &mut [u8]) -> usize {
+        0
+    }
+    fn frame(&mut self, _: &vinc_membership::NodeId, _: u8, _: &[u8], _: &[u8]) {}
+    fn hold(&mut self, _: &vinc_membership::NodeId) {}
+    fn restore(&mut self, _: &vinc_membership::NodeId) {}
+    fn release(&mut self, m: &vinc_membership::NodeId) {
+        self.released.push(*m);
+    }
+    fn resubscribe(&mut self, _: &vinc_membership::NodeId) {}
+    fn primary_changed(&mut self, _: Option<&vinc_membership::NodeId>, _: &vinc_membership::NodeId) {}
+}
+
+impl vinc_membership::Local for Scripted {
+    fn version(&self) -> u16 {
+        1
+    }
+    fn reflexive_known(&self) -> bool {
+        true
+    }
+    fn address_hash(&self, _: u8) -> [u8; 8] {
+        [1; 8]
+    }
+}
+
+/// The id of the `k`-th member of a big table: 30 zero bytes and `k` as a big-endian number.
+fn wide(k: u16) -> vinc_membership::NodeId {
+    let mut id = [0u8; 32];
+    id[30..].copy_from_slice(&k.to_be_bytes());
+    id
+}
+
+#[test]
+fn a_returning_carrier_never_grows_a_full_roster_past_its_bound() {
+    use vinc_membership::consts::MAX_TABLE;
+    use vinc_membership::{Config, Membership};
+    let me = [255u8; 32];
+    let mut h = Scripted::default();
+    let cfg = Config {
+        me,
+        is_hub: true,
+        hubs: &[],
+        trace: false,
+    };
+    let mut hub = Membership::start(&cfg, &mut h, START, 1_000_000, 0).unwrap();
+    let hello = |k: u16| {
+        Frame::Hello(Hello {
+            rec: Record {
+                inc: (u64::from(k) + 2) << 16,
+                ver: 1,
+                thash: [0; 8],
+            },
+            snap: false,
+            homed: false,
+        })
+    };
+    let mut now = START;
+    // Fill the roster with the members 1 to MAX_TABLE.
+    let fill = u16::try_from(MAX_TABLE).unwrap();
+    for k in 1..=fill {
+        hub.on_frame(&mut h, now, &wide(k), &hello(k));
+    }
+    assert_eq!(hub.roster_len(), MAX_TABLE);
+    // Member 1 drops its carrier and is confirmed down on its direct path: the roster has a free slot.
+    let x = wide(1);
+    now += 5 * SEC;
+    h.carriers.insert(
+        x,
+        Carrier::Gone {
+            since: now,
+            sleep: None,
+        },
+    );
+    hub.carrier_gone(&mut h, now, &x);
+    now += 2 * SEC;
+    hub.on_timeout(&mut h, now);
+    assert_eq!(
+        hub.roster_len(),
+        MAX_TABLE - 1,
+        "the member was confirmed down and held"
+    );
+    // Another member takes the free slot.
+    hub.on_frame(&mut h, now, &wide(fill + 1), &hello(fill + 1));
+    assert_eq!(hub.roster_len(), MAX_TABLE);
+    // The carrier returns within the lease, but the roster is full: nothing is restored, the table does not grow,
+    // and the held subscriptions are released.
+    h.carriers.insert(x, Carrier::Open);
+    h.released.clear();
+    hub.carrier_return(&mut h, now, &x);
+    assert_eq!(hub.roster_len(), MAX_TABLE, "a full roster refuses instead of growing");
+    assert!(hub.lease_of(&x).is_none());
+    assert!(
+        h.released.contains(&x),
+        "the subscriptions held for the member are released"
+    );
+}
