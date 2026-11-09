@@ -42,6 +42,9 @@ const RX_BUF: usize = 65_535;
 const TX_BUF: usize = 65_536;
 /// The most datagrams read in one burst before the engine runs.
 const DRAIN: usize = 256;
+/// The longest a burst is read before the engine runs: a datagram can cost milliseconds (a handshake in an unoptimized
+/// build), and sessions that wait for their acknowledgements through hundreds of them give up on a path that is fine.
+const DRAIN_TIME: Duration = Duration::from_millis(2);
 
 /// The stack of the driver thread. `run` itself needs only a default stack; this is for the loop that follows: in an
 /// unoptimized build, creating a connection builds a value of over a megabyte on the stack several times over, which
@@ -349,7 +352,11 @@ fn ingest(engine: &mut Engine<'_, '_>, ctx: &Ctx, rx: &mut [u8], n: usize, from:
 fn drain(engine: &mut Engine<'_, '_>, ctx: &Ctx, rx: &mut [u8]) -> io::Result<()> {
     ctx.socket.set_nonblocking(true)?;
     let mut result = Ok(());
+    let start = Instant::now();
     for _ in 0..DRAIN {
+        if start.elapsed() >= DRAIN_TIME {
+            break;
+        }
         match ctx.socket.recv_from(rx) {
             Ok((n, from)) => {
                 ingest(engine, ctx, rx, n, from);

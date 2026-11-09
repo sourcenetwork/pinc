@@ -75,8 +75,7 @@ pub use api::{
 };
 pub use commands::UDP_FRESH;
 pub use endpoint::{
-    ACP_ENTRIES, CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PATH_ENTRIES, PREKEY_PEERS,
-    SUBS_SEEN,
+    ACP_ENTRIES, CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PREKEY_PEERS, SUBS_SEEN,
 };
 pub use heap::DeadlineHeap;
 pub use iface::{IfaceEvent, IfaceId};

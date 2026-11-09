@@ -52,8 +52,6 @@ pub const CID_LEN: usize = 4;
 pub const MAX_DATAGRAM: usize = 9216;
 /// The most interfaces.
 pub const MAX_IFACES: usize = 8;
-/// The most (local, remote) address pairs named by a path id at once.
-pub const PATH_ENTRIES: usize = 1024;
 /// The most peers whose access answer is cached, and the most checks waiting.
 pub const ACP_ENTRIES: usize = 256;
 /// Sub-session ids remembered so a repeated open is not accepted twice.
@@ -112,7 +110,7 @@ pub(crate) struct Counters {
 ///
 /// Type parameters: the crypto provider `P`, the source type `S` of source-backed streams, `N` stream slots, `C` chunk
 /// ring entries per stream half, `F` packets tracked in flight and `NP` paths per connection (as for the
-/// transport's `Connection`), `K` sessions in the table, `D` entries of the connection id table (at least ten per
+/// transport's `Connection`), `K` sessions in the table, `D` entries of the connection id table and of the table of address pairs (at least ten per
 /// session), `PK` prekeys and `TK` tickets in the responder's stores and `CT` tickets this node holds as a client.
 #[allow(clippy::type_complexity, reason = "the table sizes are the type's parameters")]
 pub struct Endpoint<
@@ -155,7 +153,7 @@ pub struct Endpoint<
     pub(crate) next_check: u64,
     pub(crate) stores: ResponderStores<PK, TK>,
     pub(crate) tickets: ClientTickets<CT>,
-    pub(crate) paths: Table<(SocketAddr, SocketAddr), u32, PATH_ENTRIES>,
+    pub(crate) paths: Table<(SocketAddr, SocketAddr), u32, D>,
     pub(crate) next_path_gen: u32,
     pub(crate) ifaces: [Option<SocketAddr>; MAX_IFACES],
     pub(crate) subs_seen: Table<ConnId, (), SUBS_SEEN>,
