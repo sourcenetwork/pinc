@@ -42,14 +42,14 @@ VINC is a library, not a framework:
 | `vinc-security` | security | SANS-IO hybrid post-quantum handshake (X25519 plus ML-KEM-768, mutual authentication with Ed25519, P-256, ML-DSA-65 or hybrid identities), prekey short Initial, single-use ticket resumption with 0-RTT keys, host key requests for signing and decapsulation, key schedule, packet and header protection, key roll with a fresh Diffie-Hellman value, a 6-byte authenticated credit record, resumption tickets in both directions with sealed export of the dialer's tickets, anti-amplification budget; no allocation, no randomness or clock inside | yes | in progress |
 | `vinc-transport` | VINCER | streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids, migration | yes | in progress |
 | `vinc-core` | endpoint | the SANS-IO endpoint: host interface, protocol registration and dispatch, commands, events and queries | yes | planned |
-| `vinc-connect` | connectivity | reachability, relays, carriers (TCP, WebSocket), rendezvous, keepalive, mailbox | yes | planned |
-| `vinc-membership` | membership | membership views, epochs, failure detection, member records, revocation | yes | planned |
-| `vinc-values` | values | verified streaming of values of any size from one or many providers, with resume | yes | planned |
+| `vinc-connect` | connectivity | carriers over TCP and WebSocket secured by VINC's own handshake, relay forwarding between authenticated relays, signed records and lookup, address discovery, the hub tunnel, sleep notices and the mailbox; the client side is being built | yes | in progress |
+| `vinc-membership` | membership | hub roster and member view: leases, probes confirmed on an independent path, snapshots that never remove a live member, incarnations that survive restarts and clock jumps, leave and revocation | yes | in progress |
+| `vinc-values` | values | verified streaming of values of any size from up to four providers, with work stealing, liar eviction, resume and zero-copy serving | yes | in progress |
 | `vinc-broadcast` | broadcast | topic broadcast with origin authentication | yes | planned |
-| `vinc-reconcile` | reconciliation | set reconciliation whose cost scales with the difference | yes | planned |
-| `vinc-dtn` | delay tolerance | delay-tolerant bundles with custody | yes | planned |
+| `vinc-reconcile` | reconciliation | range-based set reconciliation whose cost scales with the difference, made exact by a final fingerprint check | yes | in progress |
+| `vinc-dtn` | delay tolerance | bundles sealed to a recipient's static keys, Reed-Solomon erasure coding, verified partial bundles, custody and copy-limited forwarding | yes | in progress |
 | `vinc-driver` | driver | std sockets and OS readiness polling around the SANS-IO endpoint | no (std) | planned |
-| `vinc-sim` | testing | deterministic network simulator for scenario and trace tests | no | planned |
+| `vinc-sim` | testing | deterministic network simulator: links, sites, NAT, middleboxes, partitions, clocks, CPU cost and adversaries | no | in progress |
 
 ## Build and test
 
