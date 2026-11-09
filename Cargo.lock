@@ -1470,6 +1470,7 @@ dependencies = [
  "ml-dsa",
  "ml-kem",
  "proptest",
+ "vinc-connect",
  "vinc-crypto",
  "vinc-dag",
  "vinc-keystore",

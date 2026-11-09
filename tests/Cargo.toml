@@ -24,6 +24,7 @@ vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true }
+vinc-connect = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -203,6 +204,38 @@ path = "sim_faults.rs"
 [[test]]
 name = "sim_reference"
 path = "sim_reference.rs"
+
+[[test]]
+name = "connect_codec"
+path = "connect_codec.rs"
+
+[[test]]
+name = "connect_carrier"
+path = "connect_carrier.rs"
+
+[[test]]
+name = "connect_relay"
+path = "connect_relay.rs"
+
+[[test]]
+name = "connect_rendezvous"
+path = "connect_rendezvous.rs"
+
+[[test]]
+name = "connect_hub"
+path = "connect_hub.rs"
+
+[[test]]
+name = "connect_mailbox"
+path = "connect_mailbox.rs"
+
+[[test]]
+name = "connect_table"
+path = "connect_table.rs"
+
+[[test]]
+name = "connect_noalloc"
+path = "connect_noalloc.rs"
 
 [lints]
 workspace = true

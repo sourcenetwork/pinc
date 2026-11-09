@@ -1,0 +1,17 @@
+[package]
+name = "vinc-connect"
+description = "VINC connectivity: the secured relay carrier, its frame codec, and the relay-side state machines (sessions, forwarding, records, lookup, address discovery, hub tunnel, sleep notices and the mailbox)"
+keywords = ["no_std", "relay", "carrier", "rendezvous", "sans-io"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+vinc-wire = { workspace = true }
+vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
+
+[lints]
+workspace = true
