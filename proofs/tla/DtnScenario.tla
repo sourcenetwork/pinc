@@ -60,15 +60,15 @@
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS N, Budget, Exp, MaxTime, Retry, MaxSends, LedgerBudget, LedgerSlots, BookSlots, MaxMsgs,
-          Loss, Ranked, Pressure, PB, PK, Edges, Recur, Lasting, Gate, Cdl, TightNode
+          Loss, Ranked, Pressure, PB, PK, Edges, Recur, Lasting, Gate, Cdl, TightNode, FD
 
-VARIABLES nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met
-vars == <<nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met>>
+VARIABLES nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin
+vars == <<nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
 
 Nodes == 1..N
 Src == 1
 Dest == N
-F == INSTANCE DtnForwardOps WITH B <- 1, L <- N - 1, T <- N - 1
+F == INSTANCE DtnForwardOps WITH B <- 1, L <- N - 1, T <- N - 1, D <- FD
 C == INSTANCE DtnCustodyOps WITH MaxU <- 1000
 Key == <<1, 1>>
 
@@ -90,7 +90,8 @@ Offerable(n, p) == IF Ranked = 1 THEN p > n ELSE TRUE
 
 HoldIn(copies) == [k |-> "hold", id |-> 1, dest |-> Dest, exp |-> Exp, copies |-> copies]
 
-OriginAcc == C!Accept(EmptyBook, Led(Src), 1, 1, Exp, 0, 0)
+OriginAcc == C!Accept(EmptyBook, Led(Src), 1, 1, Exp, 0, 0, 0)
+OriginNx == [n \in Nodes |-> 0]
 OriginHold == F!Step(F!New(0), 0, HoldIn(Budget))
 OriginNf == [n \in Nodes |-> IF n = Src THEN OriginHold.f ELSE F!New(0)]
 OriginCb == [n \in Nodes |-> IF n = Src THEN OriginAcc.B ELSE EmptyBook]
@@ -101,6 +102,7 @@ Init ==
     /\ nf = OriginNf /\ cb = OriginCb /\ lg = OriginLg
     /\ msgs = {} /\ t = 0 /\ seq = 0 /\ dropped = 0 /\ released = 0 /\ delivered = FALSE /\ replayed = FALSE
     /\ acc = {Src} /\ met = {}
+    /\ nx = OriginNx /\ lo = [n \in Nodes |-> [p \in Nodes |-> 0]] /\ fins = {} /\ refin = FALSE
 
 Quiet(n) == LET r == F!Poll(nf[n]) IN r.f = nf[n] /\ r.act.k = "none"
 AllQuiet == msgs = {} /\ \A n \in Nodes : Quiet(n)
@@ -118,7 +120,7 @@ Contact(e, up) ==
        \* a lasting contact ends only when both sides finished the exchange
        /\ (~up /\ Lasting = 1) => (Quiet(a) /\ Quiet(b) /\ ~\E m \in msgs : {m.from, m.to} = {a, b})
        /\ met' = IF up /\ e \in Recur THEN met \cup {e} ELSE met
-    /\ UNCHANGED <<cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc>>
+    /\ UNCHANGED <<cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, nx, lo, fins, refin>>
 
 (* time passes: every forwarder ticks, then every book expires its ledger *)
 Tick ==
@@ -128,69 +130,76 @@ Tick ==
     /\ cb' = [n \in Nodes |-> C!BExpire(cb[n], lg[n], t + 1).B]
     /\ lg' = [n \in Nodes |-> C!BExpire(cb[n], lg[n], t + 1).L]
     /\ t' = t + 1
-    /\ UNCHANGED <<msgs, seq, dropped, released, delivered, replayed, acc, met>>
+    /\ UNCHANGED <<msgs, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
 
-Msg(kind, from, to, copies, fresh) == [kind |-> kind, id |-> seq, from |-> from, to |-> to, copies |-> copies, fresh |-> fresh]
+Msg(kind, from, to, copies, fresh, off) == [kind |-> kind, id |-> seq, from |-> from, to |-> to, copies |-> copies, fresh |-> fresh, off |-> off]
 
 PollN(n) ==
-    LET r == F!Poll(nf[n]) IN
+    LET r == F!Poll(nf[n])
+        offered == r.act.k = "send" /\ r.act.copies > 0 /\ ~r.act.retr /\ Offerable(n, r.act.peer)
+        of == C!Offer(cb[n], nx[n], 1, r.act.peer)
+        \* a retransmission repeats the offer id of the handover it repeats (the host keeps it per peer)
+        moff == IF r.act.k # "send" THEN 0 ELSE IF r.act.retr THEN lo[n][r.act.peer] ELSE IF offered /\ of.err = "ok" THEN of.id ELSE 0 IN
     /\ (r.f # nf[n] \/ r.act.k # "none")
     /\ nf' = [nf EXCEPT ![n] = r.f]
     /\ CASE r.act.k = "send" ->
               /\ Cardinality(msgs) < MaxMsgs
-              /\ msgs' = msgs \cup {Msg("bun", n, r.act.peer, r.act.copies, ~r.act.retr)}
+              /\ msgs' = msgs \cup {Msg("bun", n, r.act.peer, r.act.copies, ~r.act.retr, moff)}
               /\ seq' = seq + 1
-              /\ cb' = IF r.act.copies > 0 /\ ~r.act.retr /\ Offerable(n, r.act.peer)
-                       THEN [cb EXCEPT ![n] = C!Offer(cb[n], 1, r.act.peer).B] ELSE cb
-              /\ UNCHANGED <<lg, dropped, released, delivered, replayed, acc, met>>
+              /\ cb' = IF offered THEN [cb EXCEPT ![n] = of.B] ELSE cb
+              /\ nx' = IF offered THEN [nx EXCEPT ![n] = of.nx] ELSE nx
+              /\ lo' = IF offered /\ of.err = "ok" THEN [lo EXCEPT ![n][r.act.peer] = of.id] ELSE lo
+              /\ UNCHANGED <<lg, dropped, released, delivered, replayed, acc, met, fins, refin>>
          [] r.act.k = "release" ->
               /\ released' = released + F!CopiesHeld(nf[n], 1)
               /\ cb' = [cb EXCEPT ![n] = C!Delivered(cb[n], lg[n], 1).B]
               /\ lg' = [lg EXCEPT ![n] = C!Delivered(cb[n], lg[n], 1).L]
-              /\ UNCHANGED <<msgs, seq, dropped, delivered, replayed, acc, met>>
-         [] OTHER -> UNCHANGED <<cb, lg, msgs, seq, dropped, released, delivered, replayed, acc, met>>
+              /\ fins' = fins \cup {n}
+              /\ UNCHANGED <<msgs, seq, dropped, delivered, replayed, acc, met, nx, lo, refin>>
+         [] OTHER -> UNCHANGED <<cb, lg, msgs, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
     /\ UNCHANGED t
 
 DeliverBun(m) ==
     /\ m \in msgs /\ m.kind = "bun"
     /\ LET r == m.to
-           ack == Msg("ack", r, m.from, 0, FALSE)
-           a == C!Accept(cb[r], lg[r], 1, 1, Exp, m.from, t)
+           ack == Msg("ack", r, m.from, 0, FALSE, m.off)
+           a == C!Accept(cb[r], lg[r], 1, 1, Exp, m.from, m.off, t)
            h == F!Step(nf[r], t, HoldIn(m.copies)) IN
        IF r = Dest
        THEN /\ delivered' = TRUE
             /\ msgs' = (msgs \ {m}) \cup {ack} /\ seq' = seq + 1
-            /\ UNCHANGED <<nf, cb, lg, dropped, released, replayed, acc, met>>
+            /\ UNCHANGED <<nf, cb, lg, dropped, released, replayed, acc, met, nx, lo, fins, refin>>
        ELSE IF a.err # "ok"
        THEN /\ cb' = [cb EXCEPT ![r] = a.B] /\ lg' = [lg EXCEPT ![r] = a.L]
             /\ msgs' = msgs \ {m}
             /\ dropped' = IF m.fresh THEN dropped + m.copies ELSE dropped
-            /\ UNCHANGED <<nf, seq, released, delivered, replayed, acc, met>>
+            /\ UNCHANGED <<nf, seq, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
        ELSE /\ cb' = [cb EXCEPT ![r] = a.B] /\ lg' = [lg EXCEPT ![r] = a.L]
             /\ nf' = [nf EXCEPT ![r] = h.f]
             /\ dropped' = IF h.err # "ok" /\ m.fresh THEN dropped + m.copies ELSE dropped
             /\ replayed' = (replayed \/ (h.err = "ok" /\ ~m.fresh))
+            /\ refin' = (refin \/ (h.err = "ok" /\ r \in fins /\ t < Exp))
             /\ acc' = acc \cup {r}
             /\ msgs' = (msgs \ {m}) \cup {ack} /\ seq' = seq + 1
-            /\ UNCHANGED <<released, delivered, met>>
+            /\ UNCHANGED <<released, delivered, met, nx, lo, fins>>
     /\ UNCHANGED t
 
 DeliverAck(m) ==
     /\ m \in msgs /\ m.kind = "ack"
     /\ LET p == m.to
            s == F!Step(nf[p], t, [k |-> "ack", peer |-> m.from, id |-> 1])
-           o == C!OnAck(cb[p], lg[p], 1, m.from, TRUE) IN
+           o == C!OnAck(cb[p], lg[p], 1, m.from, m.off, TRUE) IN
        /\ nf' = [nf EXCEPT ![p] = s.f]
        /\ cb' = [cb EXCEPT ![p] = o.B]
        /\ lg' = [lg EXCEPT ![p] = o.L]
     /\ msgs' = msgs \ {m}
-    /\ UNCHANGED <<t, seq, dropped, released, delivered, replayed, acc, met>>
+    /\ UNCHANGED <<t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
 
 Lose(m) ==
     /\ Loss = 1 /\ m \in msgs
     /\ msgs' = msgs \ {m}
     /\ dropped' = IF m.kind = "bun" /\ m.fresh THEN dropped + m.copies ELSE dropped
-    /\ UNCHANGED <<nf, cb, lg, t, seq, released, delivered, replayed, acc, met>>
+    /\ UNCHANGED <<nf, cb, lg, t, seq, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
 
 (* the mailbox layer admits an item to the shared ledger; an evicted bundle is forgotten by the forwarder *)
 PressureAt(n, k) ==
@@ -202,7 +211,8 @@ PressureAt(n, k) ==
        /\ lg' = [lg EXCEPT ![n] = a.L]
        /\ nf' = IF gone THEN [nf EXCEPT ![n] = fg.f] ELSE nf
        /\ released' = IF gone THEN released + F!CopiesHeld(nf[n], 1) ELSE released
-    /\ UNCHANGED <<cb, msgs, t, seq, dropped, delivered, replayed, acc, met>>
+       /\ fins' = IF gone THEN fins \cup {n} ELSE fins
+    /\ UNCHANGED <<cb, msgs, t, seq, dropped, delivered, replayed, acc, met, nx, lo, refin>>
 
 Next == \/ \E e \in Edges, up \in BOOLEAN : Contact(e, up)
         \/ Tick
@@ -243,7 +253,7 @@ A_CustodyExit == [][\A n \in Nodes :
     (CustodyHeld(n) /\ ~C!Holds(cb'[n], 1)) =>
         \/ t' >= Exp
         \/ \E m \in msgs : /\ m.kind = "ack" /\ m.to = n /\ m \notin msgs'
-                           /\ cb[n][C!SlotOf(cb[n], 1)].off = m.from
+                           /\ cb[n][C!SlotOf(cb[n], 1)].off = m.from /\ cb[n][C!SlotOf(cb[n], 1)].oid = m.off
         \/ nf[n].bs[1].delivered /\ nf[n].bs[1].full /\ nf[n].bs[1].id = 1]_vars
 
 A_TickExpires == [][(t' = t + 1 /\ t' >= Exp) =>
@@ -254,7 +264,8 @@ A_FrozenDown == [][t' = t + 1 =>
         (nf[n].ts[i].full /\ nf[n].ts[i].ph = "sent" /\ ~F!Up(nf[n], nf[n].ts[i].peer)) =>
             nf'[n].ts[i].rem = nf[n].ts[i].rem]_vars
 
-NoReplay == ~replayed
+\* no node accepts a hold of a bundle it finished (released or forgotten) before its expiry
+NoReplay == ~refin
 NoForget == released = 0
 DeliveredByExpiry == t < MaxTime \/ delivered
 Served == <>delivered

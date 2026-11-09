@@ -7,7 +7,9 @@
 (* that the code does not have, only to state the properties:              *)
 (*   rcv[id]  the copies the node received with the Hold of id (0 if none) *)
 (*   gs[i]    the number of sends of the transfer in slot i                *)
-(*   gone     the ids released as delivered or expired                     *)
+(*   fin      the finished bundles, as records [id, exp]: those released     *)
+(*            (delivered or expired) or forgotten, with the exp they were  *)
+(*            held with                                                    *)
 (*   lab      what the last action was                                     *)
 (*                                                                         *)
 (* Checked (invariants and action properties, every config):               *)
@@ -33,18 +35,29 @@
 (*    at once).                                                           *)
 (* Liveness (config DtnForward_live): with room in the tables and the     *)
 (* destination's link up, the delivery send happens.                      *)
-(* Witness (config DtnForward_rehold): a bundle released as delivered can  *)
-(* be held again with fresh copies, so a late duplicate of the hold        *)
-(* re-creates copies the budget already counted (see DtnForwardNet).      *)
+(* Memory (the table of accepted bundles, D slots, DtnForwardOps.tla):    *)
+(*  - NoReHold (config DtnForward_rehold): a hold of an id that was        *)
+(*    released (delivered or expired) or forgotten is accepted only once   *)
+(*    the exp that bundle was held with has passed, so a late duplicate of *)
+(*    a hold never re-creates copies the budget already counted (see       *)
+(*    DtnForwardNet).                                                      *)
+(*  - HeldRemembered: every held bundle that has not expired has its      *)
+(*    memory entry (its id and exp); MemoryExplained: every live memory    *)
+(*    entry is a held bundle or a finished one; FinishedSound: a Finished  *)
+(*    refusal is of an id that is not held and has a finished record that  *)
+(*    has not expired.                                                     *)
+(*  - MemoryKeeps: an entry leaves a slot only by being overwritten by an  *)
+(*    accepted hold after its exp <= now; a poll never touches the memory. *)
+(* The ignored-holds metric of the code is not modelled (nothing reads it). *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
-CONSTANTS B, L, T, Retry, MaxSends, NI, NP, MaxTime, CopyVals, ExpVals, Live
+CONSTANTS B, L, T, D, Retry, MaxSends, NI, NP, MaxTime, CopyVals, ExpVals, Live
 
-VARIABLES f, rcv, gs, gone, lab
-vars == <<f, rcv, gs, gone, lab>>
+VARIABLES f, rcv, gs, fin, lab
+vars == <<f, rcv, gs, fin, lab>>
 View == <<f, rcv, gs>>
-ViewG == <<f, rcv, gs, gone>>
+ViewG == <<f, rcv, gs, fin>>
 
 F == INSTANCE DtnForwardOps
 
@@ -60,7 +73,7 @@ Inputs == {[k |-> "tick"]}
 Init == /\ f = F!New(0)
         /\ rcv = [i \in Ids |-> 0]
         /\ gs = [i \in 1..T |-> 0]
-        /\ gone = {}
+        /\ fin = {}
         /\ lab = [t |-> "init"]
 
 GsAfter(g, act, old) ==
@@ -74,7 +87,8 @@ StepA == \E now \in 0..MaxTime, inp \in Inputs :
     /\ rcv' = IF inp.k = "hold" /\ r.err = "ok" THEN [rcv EXCEPT ![inp.id] = inp.copies]
               ELSE IF inp.k = "forget" /\ r.err = "ok" THEN [rcv EXCEPT ![inp.id] = 0] ELSE rcv
     /\ gs' = GsAfter(r.f, F!NoAct, gs)
-    /\ gone' = gone
+    /\ fin' = IF inp.k = "forget" /\ r.err = "ok"
+              THEN fin \cup {[id |-> inp.id, exp |-> f.bs[F!MinOf(F!BIdx(f, inp.id))].exp]} ELSE fin
     /\ lab' = [t |-> "step", now |-> now, inp |-> inp, err |-> r.err]
 
 PollA == LET r == F!Poll(f) IN
@@ -82,7 +96,8 @@ PollA == LET r == F!Poll(f) IN
     /\ f' = r.f
     /\ rcv' = IF r.act.k = "release" THEN [rcv EXCEPT ![r.act.bundle] = 0] ELSE rcv
     /\ gs' = GsAfter(r.f, r.act, gs)
-    /\ gone' = IF r.act.k = "release" THEN gone \cup {r.act.bundle} ELSE gone
+    /\ fin' = IF r.act.k = "release"
+              THEN fin \cup {[id |-> r.act.bundle, exp |-> f.bs[F!MinOf(F!BIdx(f, r.act.bundle))].exp]} ELSE fin
     /\ lab' = [t |-> "poll", act |-> r.act]
 
 Next == StepA \/ PollA
@@ -175,6 +190,19 @@ GiveUpOnly == \A i \in 1..T : (SameTransfer(i) /\ f.ts[i].ph = "sent" /\ f'.ts[i
 \* a refused step input leaves exactly the advanced state: in particular a repeated hold adds nothing
 RefusedKeeps == (lab'.t = "step" /\ lab'.err # "ok") => f' = F!Advance(f, lab'.now)
 
+\* a live memory entry never goes away early: a slot changes only to take an accepted hold, after its exp <= now
+MemoryKeeps == \A i \in 1..D : f'.ds[i] # f.ds[i] =>
+    /\ lab'.t = "step" /\ lab'.inp.k = "hold" /\ lab'.err = "ok"
+    /\ (f.ds[i].full => f.ds[i].exp <= f'.now)
+    /\ f'.ds[i] = [full |-> TRUE, id |-> lab'.inp.id, exp |-> lab'.inp.exp]
+
+\* a Finished refusal is of an id that is not held and was finished with an exp that has not passed
+FinishedSound == (lab'.t = "step" /\ lab'.err = "Finished") =>
+    /\ lab'.inp.k = "hold" /\ ~F!HasB(f', lab'.inp.id)
+    /\ \E r \in fin : r.id = lab'.inp.id /\ r.exp > f'.now
+
+A_MemoryKeeps == [][MemoryKeeps]_vars
+A_FinishedSound == [][FinishedSound]_vars
 A_QuietSound == [][QuietSound]_vars
 A_Kept == [][Kept]_vars
 A_HeldNeverGrows == [][HeldNeverGrows]_vars
@@ -186,9 +214,24 @@ A_PollActs == [][PollActs]_vars
 A_GiveUpOnly == [][GiveUpOnly]_vars
 A_RefusedKeeps == [][RefusedKeeps]_vars
 
-\* ------------------------------ the witness --------------------------------
-\* NoReHold is violated: a bundle released as delivered or expired is held again with fresh copies
-A_NoReHold == [][(lab'.t = "step" /\ lab'.inp.k = "hold" /\ lab'.err = "ok") => ~(lab'.inp.id \in gone)]_vars
+\* ------------------------------ the memory ---------------------------------
+\* a hold of a finished id is accepted only once the exp that bundle was held with has passed
+NoReHold == (lab'.t = "step" /\ lab'.inp.k = "hold" /\ lab'.err = "ok") =>
+    \A r \in fin : r.id = lab'.inp.id => r.exp <= f'.now
+A_NoReHold == [][NoReHold]_vars
+
+\* every finished record that has not expired is still in the memory
+FinRemembered == \A r \in fin : r.exp > f.now =>
+    \E j \in 1..D : f.ds[j] = [full |-> TRUE, id |-> r.id, exp |-> r.exp]
+
+\* every held bundle that has not expired has its memory entry
+HeldRemembered == \A i \in 1..B : (f.bs[i].full /\ f.bs[i].exp > f.now) =>
+    \E j \in 1..D : f.ds[j] = [full |-> TRUE, id |-> f.bs[i].id, exp |-> f.bs[i].exp]
+
+\* every live memory entry is a held bundle or a finished one
+MemoryExplained == \A j \in 1..D : (f.ds[j].full /\ f.ds[j].exp > f.now) =>
+    \/ \E i \in 1..B : f.bs[i].full /\ f.bs[i].id = f.ds[j].id /\ f.bs[i].exp = f.ds[j].exp
+    \/ [id |-> f.ds[j].id, exp |-> f.ds[j].exp] \in fin
 
 \* ------------------------------ liveness ------------------------------------
 \* with the destination's link up and a free transfer slot, a held bundle gets its delivery send

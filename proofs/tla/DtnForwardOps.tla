@@ -3,7 +3,7 @@
 (* The operations of vinc-dtn forward.rs (Forwarder::step and poll), one   *)
 (* node, step for step.                                                    *)
 (*                                                                         *)
-(* The three tables are fixed arrays of slots, as in the code: a slot is a *)
+(* The four tables are fixed arrays of slots, as in the code: a slot is a *)
 (* record with a full flag (None is full = FALSE), searches run in slot     *)
 (* order, and a new entry goes to the first free slot. Node ids, bundle    *)
 (* ids and times are integers (equal integer, equal bytes). Machine        *)
@@ -13,10 +13,19 @@
 (* the send counter is a u8 with a saturating add (SatU8), copies are a    *)
 (* u16 halved by integer division.                                         *)
 (*                                                                         *)
-(* A state is f = [now, bs, ls, ts]: the physical time, the bundle slots   *)
-(* (id, dest, exp, copies, delivered), the link slots (peer, up) and the   *)
-(* transfer slots (bundle, peer, given, deliver, ph, rem, sends) with      *)
-(* ph in {"sent", "acked", "gaveup"}.                                      *)
+(* A state is f = [now, bs, ls, ts, ds]: the physical time, the bundle     *)
+(* slots (id, dest, exp, copies, delivered), the link slots (peer, up),   *)
+(* the transfer slots (bundle, peer, given, deliver, ph, rem, sends) with  *)
+(* ph in {"sent", "acked", "gaveup"} and the D slots of the memory table   *)
+(* (id, exp) of the accepted bundles. An accepted bundle is remembered     *)
+(* until its own expiry, whether still held or released (delivered,        *)
+(* expired or forgotten): a hold of a remembered, unexpired bundle that is *)
+(* not held is refused with err "Finished", so a late duplicate of a hold  *)
+(* never re-creates copies the budget already counted. A new hold takes   *)
+(* the first memory slot that is free or whose entry has expired (exp <=  *)
+(* now), and is refused with "Full" when there is none. Release and Forget *)
+(* do not touch the memory. The code also counts the ignored holds in a   *)
+(* metric that nothing reads; it is not modelled.                         *)
 (*                                                                         *)
 (* Step(f, now, inp) is Forwarder::step: it first charges the elapsed time *)
 (* to the timers whose link is up (Advance) and then applies the input;    *)
@@ -32,7 +41,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS B, L, T, Retry, MaxSends
+CONSTANTS B, L, T, D, Retry, MaxSends
 
 Mon(a, b) == IF a > b THEN a - b ELSE 0               \* u64 saturating_sub
 Max2(a, b) == IF a > b THEN a ELSE b
@@ -41,9 +50,10 @@ MinOf(S) == CHOOSE i \in S : \A j \in S : i <= j
 
 EmptyB == [full |-> FALSE, id |-> 0, dest |-> 0, exp |-> 0, copies |-> 0, delivered |-> FALSE]
 EmptyL == [full |-> FALSE, peer |-> 0, up |-> FALSE]
+EmptyD == [full |-> FALSE, id |-> 0, exp |-> 0]
 EmptyT == [full |-> FALSE, bundle |-> 0, peer |-> 0, given |-> 0, deliver |-> FALSE, ph |-> "sent", rem |-> 0, sends |-> 0]
 
-New(now) == [now |-> now, bs |-> [i \in 1..B |-> EmptyB], ls |-> [i \in 1..L |-> EmptyL], ts |-> [i \in 1..T |-> EmptyT]]
+New(now) == [now |-> now, bs |-> [i \in 1..B |-> EmptyB], ls |-> [i \in 1..L |-> EmptyL], ts |-> [i \in 1..T |-> EmptyT], ds |-> [i \in 1..D |-> EmptyD]]
 
 Up(f, p) == \E i \in 1..L : f.ls[i].full /\ f.ls[i].up /\ f.ls[i].peer = p
 BIdx(f, id) == {i \in 1..B : f.bs[i].full /\ f.bs[i].id = id}
@@ -51,6 +61,10 @@ HasB(f, id) == BIdx(f, id) # {}
 FreeB(f) == {i \in 1..B : ~f.bs[i].full}
 FreeL(f) == {i \in 1..L : ~f.ls[i].full}
 FreeT(f) == {i \in 1..T : ~f.ts[i].full}
+\* the memory slots that can take a new entry: free, or expired (exp <= now)
+FreeD(f) == {i \in 1..D : ~f.ds[i].full \/ f.ds[i].exp <= f.now}
+\* a remembered bundle whose memory has not ended
+SeenLive(f, id) == \E i \in 1..D : f.ds[i].full /\ f.ds[i].id = id /\ f.ds[i].exp > f.now
 TIdx(f, id, p) == {i \in 1..T : f.ts[i].full /\ f.ts[i].bundle = id /\ f.ts[i].peer = p}
 
 (* Forwarder::advance *)
@@ -73,10 +87,13 @@ Step(f0, now, inp) ==
     LET f == Advance(f0, now)
         hold == IF inp.copies = 0 THEN [f |-> f, err |-> "NoCopies"]
                 ELSE IF HasB(f, inp.id) THEN [f |-> f, err |-> "Duplicate"]
+                ELSE IF SeenLive(f, inp.id) THEN [f |-> f, err |-> "Finished"]
+                ELSE IF FreeD(f) = {} THEN [f |-> f, err |-> "Full"]
                 ELSE IF FreeB(f) = {} THEN [f |-> f, err |-> "Full"]
                 ELSE [f |-> [f EXCEPT !.bs[MinOf(FreeB(f))] =
                         [full |-> TRUE, id |-> inp.id, dest |-> inp.dest, exp |-> inp.exp, copies |-> inp.copies,
-                         delivered |-> FALSE]], err |-> "ok"]
+                         delivered |-> FALSE],
+                        !.ds[MinOf(FreeD(f))] = [full |-> TRUE, id |-> inp.id, exp |-> inp.exp]], err |-> "ok"]
         li == {i \in 1..L : f.ls[i].full /\ f.ls[i].peer = inp.peer}
         link == IF li # {}
                 THEN [f |-> [f EXCEPT !.ls[MinOf(li)].up = (inp.k = "up")], err |-> "ok"]

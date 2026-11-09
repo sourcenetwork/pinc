@@ -2,7 +2,8 @@
 (***************************************************************************)
 (* The receiving side of a bundle, vinc-dtn/src/bundle.rs `Reception`:     *)
 (* `feed`, `holds`, `next_missing`, `is_complete`, `is_decodable`,         *)
-(* `finish` and `resume`, over the verified-range set of VerifiedRanges    *)
+(* `finish` (with its scratch) and `resume`, over the verified-range set   *)
+(* of VerifiedRanges                                                       *)
 (* (RangeOps.tla: the same `insert` and `contains_range`).                 *)
 (*                                                                         *)
 (* The tree verifier is imported as its contract: a group of a proof       *)
@@ -18,45 +19,52 @@
 (* keeps the present data symbols, solves the missing data from the first  *)
 (* as many present parity rows, and re-encodes every parity symbol of the  *)
 (* block (the code of rs.rs does exactly this); the solution is unique,    *)
-(* which TLC checks at every call. The layout is k = 2, m = 2 and three    *)
+(* which TLC checks in every state (ReconUniqueOK). The layout is k = 2, m = 2 and three    *)
 (* data symbols: block 0 has data 0, 1 and parity 2, 3; block 1 (the      *)
 (* short last block, one data symbol) has data 4 and parity 5, 6.          *)
 (* The sender's content is either a code word in every block (honest) or   *)
 (* has one parity symbol changed (a sender whose parity is not a code      *)
 (* word, which the signed root still commits to).                          *)
 (*                                                                         *)
-(* Checked by TLC (DtnReception.cfg, W = 2 and 3, a held set of at most W  *)
-(* disjoint intervals): the set only grows; a feed writes only the         *)
-(* sender's symbols into the buffer and records exactly the verified ones  *)
-(* that fit; ReceptionFull keeps the earlier symbols; an empty feed        *)
-(* changes nothing; `finish` reports Incomplete exactly when a block holds *)
-(* fewer than k symbols, Inconsistent exactly when every block is          *)
-(* decodable and a block that is not fully held has content that is not a  *)
-(* code word (a fully held block is skipped, as in the code), and Ok only  *)
-(* with the buffer equal to the sender's content and everything held; the  *)
-(* helpers is_complete, is_decodable and next_missing agree with their     *)
-(* definitions; `resume` keeps the buffer and the held set and refuses a   *)
-(* bad signature, an expired head and a wrong-sized buffer.                *)
+(* Checked by TLC (DtnReception.cfg for W = 2, DtnReception_w3.cfg for     *)
+(* W = 3, a held set of at most W disjoint intervals; the same rules):     *)
+(* the set only grows; a feed writes only the sender's symbols into the    *)
+(* buffer and records exactly the verified ones that fit; ReceptionFull    *)
+(* keeps the earlier symbols; an empty feed changes nothing; `finish`      *)
+(* works per block in order on a COPY of the block (the scratch), copies   *)
+(* back only the symbols that are not held, and so never writes a held     *)
+(* symbol: HeldAlways, every held symbol's buffer bytes are the sender's,  *)
+(* always, including after a finish that fails. `finish` reports           *)
+(* Incomplete exactly when a block holds fewer than k symbols (the blocks  *)
+(* before it already completed, the blocks from it on untouched),          *)
+(* Inconsistent only for a sender whose parity is not a code word (an      *)
+(* honest sender never), and Ok exactly when the blocks are decodable and  *)
+(* every block that is not fully held is rebuilt, symbol by symbol where   *)
+(* it is not held, to the sender's bytes; Ok leaves the buffer equal to    *)
+(* the sender's content and everything held, any other verdict leaves the  *)
+(* held set alone and the held symbols' bytes as they were. A fully held   *)
+(* block is skipped, as in the code, and a wrong-sized outboard or scratch *)
+(* is `Buffer` with nothing changed. The helpers is_complete,              *)
+(* is_decodable and next_missing agree with their definitions; `resume`    *)
+(* keeps the buffer and the held set and refuses a bad signature, an       *)
+(* expired head and a wrong-sized buffer.                                  *)
 (*                                                                         *)
-(* Finding (DtnReception_overwrite.cfg, a witness): after a `finish` that  *)
-(* fails, the parity symbols the reconstruction recomputed in place        *)
-(* overwrite held parity bytes, so `holds` can be true for a parity symbol *)
-(* whose buffer bytes are no longer the verified ones (only for a sender   *)
-(* whose parity is not a code word, whose bundle is rejected anyway; held  *)
-(* data symbols are never touched). HeldVerified states the contract with  *)
-(* that case excluded; HeldAlways is the contract without the exception    *)
-(* and TLC finds its violation there.                                      *)
+(* The symbols that are not held hold whatever the reconstruction wrote:   *)
+(* after a failed finish they can differ from the sender's, which is       *)
+(* harmless because they are not held and a later feed or finish rewrites  *)
+(* them from verified symbols only.                                        *)
 (*                                                                         *)
-(* Lean counterpart (proofs/lean/Vinc/DtnReception.lean, unbounded in the  *)
-(* number of symbols, blocks and in the symbol size): feedGo_buf (only     *)
-(* verified bytes enter the buffer), feedGo_verified (held means verified),*)
-(* feedGo_mono and feedGo_reach (the held set only grows and stays within  *)
-(* capacity, also when a record fails), feedGo_new, feedGo_cover and       *)
-(* feed_ok_holds, feed_empty, feed_ok_iff, holds_iff, isComplete_iff,      *)
-(* isDecodable, short_block_not_full, block_consistent_iff and             *)
-(* honest_never_inconsistent (the finish verdict per block), resume_spec,  *)
-(* overwrite_example (the finding). next_missing is checked here and by    *)
-(* the trace only.                                                         *)
+(* Lean counterpart (proofs/lean/Vinc/DtnReception.lean and               *)
+(* DtnReceptionFinish.lean, unbounded in the number of symbols, blocks and *)
+(* in the symbol size): feedGo_buf (only verified bytes enter the buffer), *)
+(* feedGo_verified (held means verified), feedGo_mono and feedGo_reach     *)
+(* (the held set only grows and stays within capacity, also when a record  *)
+(* fails), feedGo_new, feedGo_cover and feed_ok_holds, feed_empty,         *)
+(* feed_ok_iff, holds_iff, isComplete_iff, isDecodable, short_block_not_   *)
+(* full, block_consistent_iff and honest_never_inconsistent (the finish    *)
+(* verdict per block), resume_spec; and finish_held_untouched (a held      *)
+(* symbol is never written by finish, for every block, symbol and size)    *)
+(* with the verdict theorems of the per-block loop.                        *)
 (***************************************************************************)
 EXTENDS RangeOps, FiniteSets, TLC
 
@@ -83,7 +91,7 @@ Codeword(b, d) == [i \in 0..(BN(b) - 1) |-> IF i < BK(b) THEN d[i] ELSE ParityOf
 Honest(d3) == [s \in Syms |->
     IF s \in 0..3 THEN Codeword(0, [i \in 0..1 |-> d3[i + 1]])[s] ELSE Codeword(1, [i \in 0..0 |-> d3[3]])[s - 4]]
 Faulty(d3, f) == [Honest(d3) EXCEPT ![f] = (Honest(d3)[f] + 1) % 5]
-Contents == {Honest(d) : d \in {<<1, 2, 3>>, <<4, 4, 1>>}} \cup {Faulty(<<1, 2, 3>>, f) : f \in {2, 5}}
+Contents == {Honest(<<1, 2, 3>>)} \cup {Faulty(<<1, 2, 3>>, f) : f \in {2, 5}}
 
 (* does the block's region of `v` hold a code word *)
 BlockSlice(v, b) == [i \in 0..(BN(b) - 1) |-> v[BStart(b) + i]]
@@ -152,24 +160,29 @@ ReconUnique(buf, h, b) ==
 FullyHeld(h, b) == \A s \in BSyms(b) : Holds(h, s)
 Decodable(h, b) == Cardinality({s \in BSyms(b) : Holds(h, s)}) >= BK(b)
 
-(* finish: blocks in order; the first block short of k symbols stops it (earlier blocks already rewritten) *)
+(* finish: blocks in order; a fully held block is skipped; the first block short of k symbols stops it (earlier blocks
+   already completed). A block is reconstructed in the scratch, a copy of its region, and only the symbols that are
+   not held are copied back, so a held symbol is never written. *)
 RECURSIVE FinishGo(_, _, _)
 FinishGo(buf, h, b) ==
-    IF b > 1 THEN [buf |-> buf, res |-> "done", touched |-> FALSE]
+    IF b > 1 THEN [buf |-> buf, res |-> "done"]
     ELSE IF FullyHeld(h, b) THEN FinishGo(buf, h, b + 1)
-    ELSE IF ~Decodable(h, b) THEN [buf |-> buf, res |-> "incomplete", touched |-> FALSE]
+    ELSE IF ~Decodable(h, b) THEN [buf |-> buf, res |-> "incomplete"]
     ELSE LET d == Recon(buf, h, b)
-             nb == [s \in Syms |-> IF s \in BSyms(b) THEN Codeword(b, d)[s - BStart(b)] ELSE buf[s]]
-             r == FinishGo(nb, h, b + 1)
-         IN [buf |-> r.buf, res |-> r.res, touched |-> TRUE]
+             nb == [s \in Syms |-> IF s \in BSyms(b) /\ ~Holds(h, s) THEN Codeword(b, d)[s - BStart(b)] ELSE buf[s]]
+         IN FinishGo(nb, h, b + 1)
 
-VARIABLES ct, have, buf, touched, res
-vars == <<ct, have, buf, touched, res>>
+(* block b of the content c is rebuilt right: every symbol of it that is not held gets the sender's bytes *)
+BlockMatches(c, bf, h, b) ==
+    LET d == Recon(bf, h, b)
+    IN \A s \in BSyms(b) : ~Holds(h, s) => Codeword(b, d)[s - BStart(b)] = c[s]
+
+VARIABLES ct, have, buf, res
+vars == <<ct, have, buf, res>>
 
 Init == /\ ct \in Contents
         /\ have = <<>>
         /\ buf = [s \in Syms |-> 9]
-        /\ touched = FALSE
         /\ res = "init"
 
 GoodVals(a, b) == [i \in 1..(b - a) |-> ct[a + i - 1]]
@@ -178,52 +191,51 @@ Streams(a, b) ==
     \cup {[vals |-> SubSeq(GoodVals(a, b), 1, j), extra |-> FALSE] : j \in 0..(b - a - 1)}
     \cup {[vals |-> [GoodVals(a, b) EXCEPT ![p] = (GoodVals(a, b)[p] + 1) % 5], extra |-> FALSE] : p \in {1, b - a}}
 
-\* the ranges a peer asks for: every symbol, runs of two, the two blocks, the whole bundle, and an empty range
-Ranges == {<<a, a + 1>> : a \in Syms} \cup {<<a, a + 2>> : a \in 0..5} \cup {<<0, 4>>, <<4, 7>>, <<0, 7>>, <<3, 3>>}
+\* the ranges a peer asks for: every symbol, the two blocks, the whole bundle, and an empty range
+Ranges == {<<a, a + 1>> : a \in Syms} \cup {<<0, 4>>, <<4, 7>>, <<0, 7>>, <<3, 3>>}
 
 Feed ==
     \E rg \in Ranges : \E a \in {rg[1]}, b \in {rg[2]} : \E st \in Streams(a, b) :
         LET r == FeedResult(ct, buf, have, a, b, st)
         IN /\ buf' = r.buf /\ have' = r.h /\ res' = r.res
-           /\ UNCHANGED <<ct, touched>>
+           /\ UNCHANGED ct
 
 Finish ==
-    /\ \A b \in Blocks : ~FullyHeld(have, b) /\ Decodable(have, b) => ReconUnique(buf, have, b)
     /\ LET r == FinishGo(buf, have, 0)
        IN IF r.res = "incomplete"
-          THEN /\ buf' = r.buf /\ res' = "fin_incomplete" /\ touched' = (touched \/ r.touched) /\ have' = have
+          THEN /\ buf' = r.buf /\ res' = "fin_incomplete" /\ have' = have
           ELSE IF r.buf = ct
-               THEN /\ buf' = r.buf /\ res' = "fin_ok" /\ touched' = (touched \/ r.touched) /\ have' = <<<<0, Total * G>>>>
-               ELSE /\ buf' = r.buf /\ res' = "fin_inconsistent" /\ touched' = (touched \/ r.touched) /\ have' = have
+               THEN /\ buf' = r.buf /\ res' = "fin_ok" /\ have' = <<<<0, Total * G>>>>
+               ELSE /\ buf' = r.buf /\ res' = "fin_inconsistent" /\ have' = have
     /\ UNCHANGED ct
+
+\* Reception::finish with an outboard or scratch of the wrong size: refused before anything is read or written
+FinishBuffer == res' = "fin_buffer" /\ UNCHANGED <<ct, have, buf>>
 
 \* Reception::resume: the signature, then the lifetime, then the buffer size; the state is the one passed in
 Resume ==
     \E badSig \in BOOLEAN, expired \in BOOLEAN, wrongSize \in BOOLEAN :
         /\ res' = IF badSig THEN "r_crypto" ELSE IF expired THEN "r_expired" ELSE IF wrongSize THEN "r_buffer" ELSE "r_ok"
-        /\ UNCHANGED <<ct, have, buf, touched>>
+        /\ UNCHANGED <<ct, have, buf>>
 
-Next == Feed \/ Finish \/ Resume
+Next == Feed \/ Finish \/ FinishBuffer \/ Resume
 Spec == Init /\ [][Next]_vars
 
 (* ---- the properties ---- *)
-TypeOK == /\ ct \in Contents /\ buf \in [Syms -> 0..9] /\ Canonical(have) /\ Len(have) <= W /\ touched \in BOOLEAN
+TypeOK == /\ ct \in Contents /\ buf \in [Syms -> 0..9] /\ Canonical(have) /\ Len(have) <= W
 
-\* what a held symbol's buffer bytes are: the verified ones, unless a failed finish rewrote a parity symbol of a
-\* sender whose parity is not a code word
+\* what a held symbol's buffer bytes are: the verified ones, always, also after a finish that fails
 HeldAlways == \A s \in HeldSet(have) : buf[s] = ct[s]
-HeldVerified == \A s \in HeldSet(have) : buf[s] = ct[s] \/ (touched /\ IsParity(s) /\ ~(\A b \in Blocks : IsCW(ct, b)))
 
-\* the buffer holds only the sender's symbols and the initial fill, until a finish rewrote it
-OnlyVerifiedBytes == ~touched => \A s \in Syms : buf[s] = 9 \/ buf[s] = ct[s]
+\* the reconstruction of a block that is not fully held has a unique solution in every state
+ReconUniqueOK == \A b \in Blocks : ~FullyHeld(have, b) /\ Decodable(have, b) => ReconUnique(buf, have, b)
 
 HeldGrows == [][HeldSet(have) \subseteq HeldSet(have')]_vars
 
 FeedCorrect ==
     [][ (res' \in {"ok", "tree", "full"}) =>
          /\ \A s \in Syms : buf'[s] # buf[s] => buf'[s] = ct[s]
-         /\ \A s \in Syms : (Holds(have', s) /\ ~Holds(have, s)) => buf'[s] = ct[s]
-         /\ touched' = touched ]_vars
+         /\ \A s \in Syms : (Holds(have', s) /\ ~Holds(have, s)) => buf'[s] = ct[s] ]_vars
 
 \* the groups a feed delivers are kept in the buffer even when the held set is full, and the intervals recorded
 \* before the fault stay
@@ -232,13 +244,19 @@ FullKeepsEarlier == [][res' = "full" => HeldSet(have) \subseteq HeldSet(have')]_
 FinishCorrect ==
     [][ (res' \in {"fin_incomplete", "fin_inconsistent", "fin_ok"}) =>
          /\ (res' = "fin_incomplete") = ~(\A b \in Blocks : Decodable(have, b))
-         \* with no earlier rewrite the verdict is exactly the parity check of the blocks that are not fully held
-         /\ ~touched => ((res' = "fin_inconsistent") =
-              ((\A b \in Blocks : Decodable(have, b)) /\ \E b \in Blocks : ~FullyHeld(have, b) /\ ~IsCW(ct, b)))
-         \* an honest sender is never reported inconsistent, whatever the history
-         /\ (res' = "fin_inconsistent") => (\E b \in Blocks : ~IsCW(ct, b))
+         \* Ok exactly when the blocks are decodable and every block that is not fully held is rebuilt to the sender's bytes
+         /\ (res' = "fin_ok") = ((\A b \in Blocks : Decodable(have, b))
+                                 /\ \A b \in Blocks : ~FullyHeld(have, b) => BlockMatches(ct, buf, have, b))
+         \* an honest sender is never reported inconsistent
+         /\ (res' = "fin_inconsistent") => (\E b \in Blocks : ~FullyHeld(have, b) /\ ~IsCW(ct, b))
          /\ (res' = "fin_ok") => (buf' = ct /\ IsComplete(have') /\ HeldSet(have') = Syms)
-         /\ (res' # "fin_ok") => have' = have ]_vars
+         /\ (res' # "fin_ok") => have' = have
+         \* a held symbol is never written, whatever the verdict
+         /\ \A s \in HeldSet(have) : buf'[s] = buf[s]
+         \* a block short of k symbols stops finish: it and every later block are untouched
+         /\ \A b, b2 \in Blocks : (b <= b2 /\ ~Decodable(have, b)) => \A s \in BSyms(b2) : buf'[s] = buf[s] ]_vars
+
+FinishBufferCorrect == [][res' = "fin_buffer" => (have' = have /\ buf' = buf)]_vars
 
 ResumeCorrect == [][(res' \in {"r_crypto", "r_expired", "r_buffer", "r_ok"}) => (have' = have /\ buf' = buf)]_vars
 

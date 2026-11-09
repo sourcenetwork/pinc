@@ -28,17 +28,17 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-VARIABLES i, nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met
-vars == <<i, nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met>>
-sv == <<nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met>>
+VARIABLES i, nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin
+vars == <<i, nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
+sv == <<nf, cb, lg, msgs, t, seq, dropped, released, delivered, replayed, acc, met, nx, lo, fins, refin>>
 
 AllEdges == {e \in (1..4) \X (1..4) : e[1] < e[2]}
 NoRecur == {}
 SC == INSTANCE DtnScenario WITH N <- 4, Budget <- 4, Exp <- 30, MaxTime <- 1000, Retry <- 2, MaxSends <- 3,
           LedgerBudget <- 3, LedgerSlots <- 3, BookSlots <- 2, MaxMsgs <- 100000, Loss <- 1, Ranked <- 1,
           Pressure <- 1, PB <- 2, PK <- 2, Edges <- AllEdges, Recur <- NoRecur, Lasting <- 0, Gate <- 0, Cdl <- 0,
-          TightNode <- 3
-F == INSTANCE DtnForwardOps WITH B <- 1, L <- 3, T <- 3, Retry <- 2, MaxSends <- 3
+          TightNode <- 3, FD <- 2
+F == INSTANCE DtnForwardOps WITH B <- 1, L <- 3, T <- 3, D <- 2, Retry <- 2, MaxSends <- 3
 C == INSTANCE DtnCustodyOps WITH MaxU <- 1000
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_scenario.ndjson")
@@ -68,6 +68,7 @@ NewRun == /\ Trace[i].e = "new"
           /\ nf' = SC!OriginNf /\ cb' = SC!OriginCb /\ lg' = SC!OriginLg
           /\ msgs' = {} /\ t' = 0 /\ seq' = 0 /\ dropped' = 0 /\ released' = 0 /\ delivered' = FALSE
           /\ replayed' = FALSE /\ acc' = {1} /\ met' = {}
+          /\ nx' = SC!OriginNx /\ lo' = [n \in 1..4 |-> [p \in 1..4 |-> 0]] /\ fins' = {} /\ refin' = FALSE
           /\ i' = i + 1
 
 ContactEv == /\ Trace[i].e = "contact"
@@ -81,28 +82,32 @@ PollEv == /\ Trace[i].e = "poll"
                  r == F!Poll(nf[n]) IN
              /\ r.act.k = (CASE Trace[i].a = "none" -> "none" [] Trace[i].a = "send" -> "send" [] OTHER -> "release")
              /\ (r.act.k = "send" => /\ r.act.peer = Trace[i].p /\ r.act.copies = Trace[i].c
-                                     /\ r.act.retr = Trace[i].r /\ seq = Trace[i].mid)
+                                     /\ r.act.retr = Trace[i].r /\ seq = Trace[i].mid
+                                     /\ Trace[i].off = (IF r.act.retr THEN lo[n][r.act.peer]
+                                          ELSE IF r.act.copies > 0 /\ SC!Offerable(n, r.act.peer) /\ C!Offer(cb[n], nx[n], 1, r.act.peer).err = "ok"
+                                               THEN nx[n] ELSE 0))
              /\ (SC!PollN(n) \/ (r.f = nf[n] /\ r.act.k = "none" /\ UNCHANGED sv))
           /\ i' = i + 1
 
 BunEv == /\ Trace[i].e = "bun"
          /\ \E m \in msgs :
               /\ m.id = Trace[i].m /\ m.kind = "bun"
-              /\ LET a == C!Accept(cb[m.to], lg[m.to], 1, 1, 30, m.from, t)
+              /\ LET a == C!Accept(cb[m.to], lg[m.to], 1, 1, 30, m.from, m.off, t)
                      h == F!Step(nf[m.to], t, SC!HoldIn(m.copies))
                      out == IF m.to = 4 THEN "dest"
                             ELSE IF a.err = "custody" THEN "refused"
                             ELSE IF a.err = "capacity" THEN "capacity"
+                            ELSE IF a.err # "ok" THEN "other"
                             ELSE IF h.err = "ok" THEN "held" ELSE "holdrefused" IN
                  /\ out = Trace[i].o
-                 /\ (out \notin {"refused", "capacity"} => seq = Trace[i].aid)
+                 /\ (out \notin {"refused", "capacity", "other"} => seq = Trace[i].aid)
               /\ SC!DeliverBun(m)
          /\ i' = i + 1
 
 AckEv == /\ Trace[i].e = "ack"
          /\ \E m \in msgs :
               /\ m.id = Trace[i].m /\ m.kind = "ack"
-              /\ C!OnAck(cb[m.to], lg[m.to], 1, m.from, TRUE).err = Trace[i].o
+              /\ C!OnAck(cb[m.to], lg[m.to], 1, m.from, m.off, TRUE).err = Trace[i].o
               /\ SC!DeliverAck(m)
          /\ i' = i + 1
 

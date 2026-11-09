@@ -13,11 +13,16 @@
 (*   Inv                the charge is the sum of the sizes, within the      *)
 (*                      budget; keys and admission numbers are distinct     *)
 (*   LiveCustodyKept    no call evicts custody that has not expired         *)
-(*   RefusalMovesNothing  a refused admission removes only the expired items*)
-(*                      (a duplicate changes nothing at all)                *)
-(*   AdmitIffFits       accepted exactly when the key is new and custody    *)
-(*                      leaves room in bytes and in slots, after the expired*)
-(*                      items left (FitsSpec does not use the code's sums)  *)
+(*   RefusalMovesNothing  every refused admission (a duplicate and an       *)
+(*                      already expired item included) removes only the     *)
+(*                      expired items: the swept ledger, the expired events *)
+(*   AdmitIffFits       accepted exactly when the key is new after the      *)
+(*                      sweep, the item is not itself expired (exp > now)   *)
+(*                      and custody leaves room in bytes and in slots       *)
+(*                      (FitsSpec does not use the code's sums); the error  *)
+(*                      is dup, else expired, else the class's refusal      *)
+(*   SweptKeyIsFresh    a key that expired but was not swept is admitted    *)
+(*                      fresh, never refused as a duplicate                 *)
 (*   EvictionOrder      expired items in slot order, then transit items     *)
 (*                      only, oldest admission first, none older remains,   *)
 (*                      and the last one was needed                         *)
@@ -45,14 +50,19 @@ LiveCustodyKept(pre, post, now) ==
 AdmitProps(pre, key, bytes, cls, exp, now, r) ==
     LET post == r.L
         ev1 == ExpiredSeq(pre, now)
+        sw == WithoutExpired(pre, now)
         ev2 == SubSeq(r.ev, Len(ev1) + 1, Len(r.ev))
     IN /\ LiveCustodyKept(pre, post, now)
-       \* a duplicate changes nothing; any other refusal removes only the expired items
-       /\ r.err = "dup" => post = pre /\ r.ev = <<>>
-       /\ r.err \in {"custody", "full"} => post = WithoutExpired(pre, now) /\ r.ev = ev1
-       /\ r.err # "ok" /\ r.err # "dup" => r.err = IF cls = "custody" THEN "custody" ELSE "full"
-       \* accepted exactly when the key is new and custody leaves room, after the expired items left
-       /\ (r.err = "ok") = (~Contains(pre, key) /\ FitsSpec(WithoutExpired(pre, now), bytes))
+       \* every refusal (duplicate and expired item included) removes only the expired items
+       /\ r.err \in {"dup", "expired", "custody", "full"} => post = sw /\ r.ev = ev1
+       \* the error: dup when the key is kept after the sweep, else expired, else the refusal of the class
+       /\ (r.err = "dup") = Contains(sw, key)
+       /\ (r.err = "expired") = (~Contains(sw, key) /\ exp <= now)
+       /\ r.err \in {"custody", "full"} => r.err = IF cls = "custody" THEN "custody" ELSE "full"
+       \* a key that expired but was not swept is admitted fresh
+       /\ (\E e \in Ents(pre) : e.key = key /\ e.exp <= now) => r.err # "dup"
+       \* accepted exactly when the key is new after the sweep, the item is live and custody leaves room
+       /\ (r.err = "ok") = (~Contains(sw, key) /\ exp > now /\ FitsSpec(sw, bytes))
        /\ r.err = "ok" =>
             /\ Entry(key, bytes, cls, exp, pre.seq) \in Ents(post)
             /\ post.seq = pre.seq + 1

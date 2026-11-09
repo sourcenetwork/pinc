@@ -12,10 +12,13 @@
 (*                                                                          *)
 (*  ExpireAt   expire: every slot whose entry has expires <= now is taken,  *)
 (*             reported in slot order                                       *)
-(*  Admit      admit: Duplicate first; then expire; then the fits test; then*)
-(*             take the oldest transit item (least (seq, index)) while the  *)
-(*             free bytes are fewer than needed or no slot is free; then the*)
-(*             first free slot takes the entry with the next seq            *)
+(*  Admit      admit: expire first; then Contains(key) after the sweep is   *)
+(*             "dup"; then exp <= now is "expired"; then the fits test;    *)
+(*             then take the oldest transit item (least (seq, index))      *)
+(*             while the free bytes are fewer than needed or no slot is     *)
+(*             free; then the first free slot takes the entry with the next *)
+(*             seq. Every refusal ("dup", "expired", "custody", "full")     *)
+(*             returns the swept ledger and the expired items as the events *)
 (*  Release    release: the first slot holding the key is taken             *)
 (*  Reclass    reclass: the class of the item changes, no room is needed    *)
 (*                                                                          *)
@@ -96,7 +99,7 @@ EvictLoop(L, bytes, ev) ==
 
 FirstFree(slots) == IF \E i \in 1..Len(slots) : ~slots[i].full THEN CHOOSE i \in 1..Len(slots) : ~slots[i].full /\ \A j \in 1..(i - 1) : slots[j].full ELSE 0
 
-\* admit: [err, L, ev] with err one of "ok", "dup", "custody" (CustodyRefused), "full"
+\* admit: [err, L, ev] with err one of "ok", "dup", "expired", "custody" (CustodyRefused), "full"
 Admit(L, key, bytes, cls, exp, now) ==
     LET refused == IF cls = "custody" THEN "custody" ELSE "full"
         x == Expire(L, now)
@@ -105,7 +108,8 @@ Admit(L, key, bytes, cls, exp, now) ==
         added == [y.L EXCEPT !.used = IF Assert(y.L.used + bytes <= MaxU, "used overflows") THEN y.L.used + bytes ELSE 0,
                              !.seq = y.L.seq + 1,
                              !.slots[at] = Entry(key, bytes, cls, exp, y.L.seq)]
-    IN IF Contains(L, key) THEN [err |-> "dup", L |-> L, ev |-> <<>>]
+    IN IF Contains(x.L, key) THEN [err |-> "dup", L |-> x.L, ev |-> x.ev]
+       ELSE IF exp <= now THEN [err |-> "expired", L |-> x.L, ev |-> x.ev]
        ELSE IF ~Fits(x.L, bytes) THEN [err |-> refused, L |-> x.L, ev |-> x.ev]
        ELSE IF at = 0 THEN [err |-> refused, L |-> y.L, ev |-> y.ev, stuck |-> Assert(FALSE, "no free slot after the loop")]
        ELSE [err |-> "ok", L |-> added, ev |-> y.ev]
