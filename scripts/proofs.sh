@@ -128,6 +128,7 @@ par run_tlc vsched_wants ValuesSched ValuesSched_wants
 par run_tlc vsched_tight ValuesSched ValuesSched_tight
 par run_tlc vsched_track ValuesSched ValuesSched_track
 par run_tlc vsched_ends ValuesSched ValuesSched_ends
+par run_tlc vsched_live ValuesSched ValuesSched_live
 par witness_tlc vsched_wide ValuesSched ValuesSched_wide Room
 par witness_tlc vsched_dup ValuesSched ValuesSched_dup ResumeFresh
 par witness_tlc vsched_nocorr ValuesSched ValuesSched_nocorr NoStealOfJustGiven

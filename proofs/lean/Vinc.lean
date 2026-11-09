@@ -115,6 +115,7 @@ import Vinc.ValuesSchedRoom
 import Vinc.ValuesSchedExact
 import Vinc.ValuesSchedExactRun
 import Vinc.ValuesSchedSplitOnce
+import Vinc.ValuesSchedLive
 import Vinc.ValuesSchedSteal
 import Vinc.ValuesSchedEvict
 import Vinc.ValuesSchedTerm
