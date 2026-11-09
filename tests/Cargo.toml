@@ -383,6 +383,10 @@ name = "core_defense"
 path = "core_defense.rs"
 
 [[test]]
+name = "core_datagram"
+path = "core_datagram.rs"
+
+[[test]]
 name = "core_acp"
 path = "core_acp.rs"
 

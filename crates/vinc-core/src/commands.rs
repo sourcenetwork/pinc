@@ -54,6 +54,24 @@ ep_impl! {
         }
     }
 
+    /// Copy the oldest received datagram of `session` into `out` and remove it from the session's bounded receive
+    /// queue. `Ok(None)` means none is waiting. Read until `None` after each [`Event::DatagramReceived`](crate::Event):
+    /// one notification stands for one datagram, and a datagram the queue had no room for is counted in
+    /// `SessionStats::transport.datagrams_dropped_recv`.
+    ///
+    /// # Errors
+    /// [`CommandError::NoSession`] if the session is unknown; [`CommandError::BufferTooSmall`] if the datagram is
+    /// longer than `out` (it stays queued; read it again with a larger buffer).
+    pub fn read_datagram(&mut self, session: SessionId, out: &mut [u8]) -> Result<Option<usize>, CommandError> {
+        let i = self.live(session)?;
+        let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+        let Some(d) = conn.recv_datagram() else { return Ok(None) };
+        let len = d.len();
+        out.get_mut(..len).ok_or(CommandError::BufferTooSmall { len })?.copy_from_slice(d);
+        conn.pop_datagram();
+        Ok(Some(len))
+    }
+
     fn live(&self, id: SessionId) -> Result<usize, CommandError> {
         self.slot_of(id).ok_or(CommandError::NoSession)
     }

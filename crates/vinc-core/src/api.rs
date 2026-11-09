@@ -295,6 +295,11 @@ pub enum CommandError {
     NoKeyRequest,
     /// The node is this one: a node does not dial itself.
     Refused,
+    /// The next received datagram does not fit the buffer; it stays queued. `len` is its size.
+    BufferTooSmall {
+        /// The size of the datagram.
+        len: usize,
+    },
 }
 
 /// What the application asks of the endpoint. `S` is the type of source-backed stream data.
