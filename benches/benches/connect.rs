@@ -51,6 +51,28 @@ struct Pair {
     relay: Box<ProtectedCarrier<Software>>,
 }
 
+/// Poll a carrier until idle, answering every key request from software keys; true once it opened.
+fn step(
+    c: &mut ProtectedCarrier<Software>,
+    env: &mut Env<'_, Software>,
+    stores: &mut ResponderStores<2, 2>,
+    soft: &SoftKeys<'_, Software>,
+) -> bool {
+    let mut opened = false;
+    let mut next = c.poll(env, stores).unwrap();
+    loop {
+        match next {
+            Poll::KeyRequest => next = c.answer_soft(env, soft).unwrap(),
+            Poll::Open(_) => {
+                opened = true;
+                next = c.poll(env, stores).unwrap();
+            }
+            Poll::Idle => return opened,
+            _ => next = c.poll(env, stores).unwrap(),
+        }
+    }
+}
+
 fn pair() -> Pair {
     let (ckp, rkp) = (kp(0x31), kp(0x32));
     let cid = LocalIdentity::from_keypair(&ckp, KeyHandle(1)).unwrap();
@@ -83,6 +105,7 @@ fn pair() -> Pair {
         session::responder_config(rid, ConnId::new(b"relay000").unwrap()).unwrap(),
     ));
     let mut stores = ResponderStores::<2, 2>::default();
+    let mut cstores = ResponderStores::<2, 2>::default();
     let csoft = SoftKeys {
         signer: Some((KeyHandle(1), &ckp)),
         prekeys: Some(&prekeys),
@@ -92,49 +115,34 @@ fn pair() -> Pair {
         prekeys: None,
     };
     let mut buf = vec![0u8; 32 * 1024];
+    let (mut c_open, mut r_open) = (false, false);
     for _ in 0..64 {
         let n = client.transmit(&mut buf);
         let mut rest = &buf[..n];
         while !rest.is_empty() {
             let took = relay.receive(rest);
             rest = &rest[took..];
-            let mut renv = Env {
-                provider: &Software,
-                now: NOW,
-                drbg: &mut rd,
-            };
-            loop {
-                match relay.poll(&mut renv, &mut stores).unwrap() {
-                    Poll::KeyRequest => {
-                        relay.answer_soft(&mut renv, &rsoft).unwrap();
-                    }
-                    Poll::Idle => break,
-                    _ => {}
-                }
-            }
             if took == 0 {
                 break;
             }
         }
+        let mut renv = Env {
+            provider: &Software,
+            now: NOW,
+            drbg: &mut rd,
+        };
+        r_open |= step(&mut relay, &mut renv, &mut stores, &rsoft);
         let n = relay.transmit(&mut buf);
         let mut rest = &buf[..n];
         while !rest.is_empty() {
             let took = client.receive(rest);
             rest = &rest[took..];
-            loop {
-                match client.poll(&mut env, &mut stores).unwrap() {
-                    Poll::KeyRequest => {
-                        client.answer_soft(&mut env, &csoft).unwrap();
-                    }
-                    Poll::Idle => break,
-                    _ => {}
-                }
-            }
             if took == 0 {
                 break;
             }
         }
-        if client.is_open() && relay.is_open() {
+        c_open |= step(&mut client, &mut env, &mut cstores, &csoft);
+        if c_open && r_open {
             return Pair { client, relay };
         }
     }
@@ -214,7 +222,10 @@ fn bench_relay(c: &mut Criterion) {
         bytes: [t; 32],
     };
     let (a, b) = (node(0xa1), node(0xb2));
-    let mut relay: Box<Relay<16, 16, 4, 2048>> = Box::new(Relay::new(Config::new(node(0x10), 9)));
+    // The measured loop sends far more than the default per-minute quota; lift it so the bench times forwarding.
+    let mut cfg = Config::new(node(0x10), 9);
+    cfg.quota.bytes = u64::MAX;
+    let mut relay: Box<Relay<16, 16, 4, 2048>> = Box::new(Relay::new(cfg));
     let mut sink = Count::default();
     let sa = relay.carrier_opened(0, a, &mut sink).unwrap();
     relay.carrier_opened(0, b, &mut sink).unwrap();
