@@ -13,6 +13,7 @@ vinc-dag = { workspace = true, features = ["std"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
+vinc-sim = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -48,6 +49,10 @@ harness = false
 
 [[bench]]
 name = "transport_conn"
+harness = false
+
+[[bench]]
+name = "sim_engine"
 harness = false
 
 [lints]

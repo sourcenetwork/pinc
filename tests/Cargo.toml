@@ -23,6 +23,7 @@ vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
+vinc-sim = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -182,6 +183,26 @@ path = "membership_s13.rs"
 [[test]]
 name = "membership_incarnation"
 path = "membership_incarnation.rs"
+
+[[test]]
+name = "sim_engine"
+path = "sim_engine.rs"
+
+[[test]]
+name = "sim_links"
+path = "sim_links.rs"
+
+[[test]]
+name = "sim_nat"
+path = "sim_nat.rs"
+
+[[test]]
+name = "sim_faults"
+path = "sim_faults.rs"
+
+[[test]]
+name = "sim_reference"
+path = "sim_reference.rs"
 
 [lints]
 workspace = true

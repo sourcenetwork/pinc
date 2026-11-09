@@ -1369,7 +1369,17 @@ dependencies = [
  "vinc-crypto",
  "vinc-dag",
  "vinc-security",
+ "vinc-sim",
  "vinc-transport",
+ "vinc-wire",
+]
+
+[[package]]
+name = "vinc-connect"
+version = "0.1.0"
+dependencies = [
+ "vinc-crypto",
+ "vinc-security",
  "vinc-wire",
 ]
 
@@ -1404,6 +1414,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-dtn"
+version = "0.1.0"
+dependencies = [
+ "vinc-crypto",
+ "vinc-dag",
+ "vinc-wire",
+ "zeroize",
+]
+
+[[package]]
 name = "vinc-keystore"
 version = "0.1.0"
 dependencies = [
@@ -1422,6 +1442,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-reconcile"
+version = "0.1.0"
+dependencies = [
+ "vinc-crypto",
+ "vinc-wire",
+]
+
+[[package]]
 name = "vinc-security"
 version = "0.1.0"
 dependencies = [
@@ -1429,6 +1457,10 @@ dependencies = [
  "vinc-wire",
  "zeroize",
 ]
+
+[[package]]
+name = "vinc-sim"
+version = "0.1.0"
 
 [[package]]
 name = "vinc-tests"
@@ -1443,6 +1475,7 @@ dependencies = [
  "vinc-keystore",
  "vinc-membership",
  "vinc-security",
+ "vinc-sim",
  "vinc-transport",
  "vinc-wire",
 ]

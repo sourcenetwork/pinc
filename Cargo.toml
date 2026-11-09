@@ -20,6 +20,7 @@ vinc-security = { path = "crates/vinc-security", version = "0.1.0" }
 vinc-keystore = { path = "crates/vinc-keystore", version = "0.1.0" }
 vinc-transport = { path = "crates/vinc-transport", version = "0.1.0" }
 vinc-membership = { path = "crates/vinc-membership", version = "0.1.0" }
+vinc-sim = { path = "crates/vinc-sim", version = "0.1.0" }
 
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
 sha2 = { version = "0.11.1", default-features = false }
