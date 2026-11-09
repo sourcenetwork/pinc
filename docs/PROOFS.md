@@ -304,4 +304,4 @@ These items are still open; they are listed so nothing is hidden:
   proof frame that does not evict its provider, old responses freed before the new request is accepted), with the
   proof gaps they close.
 - The endpoint's cap on half-open sessions and their lifetime (`vinc-core`) is not modelled or proved yet.
-- The facade `vinc` and `vinc-driver` are being built; their proofs follow them.
+- The facade `vinc` and `vinc-driver` are built; their proofs follow.

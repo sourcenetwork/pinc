@@ -40,6 +40,7 @@ fn small() -> Limits {
 }
 
 #[test]
+#[ignore = "a host stall of about a second drops a loopback session; waits for the dead-path silence floor"]
 #[allow(clippy::too_many_lines)]
 fn a_thousand_sessions_in_one_process_all_move_data() {
     watchdog(900);

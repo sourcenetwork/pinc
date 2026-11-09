@@ -102,7 +102,7 @@ fn main() -> vinc::Result<()> {
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `vinc` | the facade: one entry point with a runtime-agnostic async API and a blocking API | std | being built |
+| `vinc` | the facade: a builder, connections, `futures-io` streams and datagrams, with a runtime-agnostic async API and a blocking API | std | built; proofs being closed |
 | `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
 | `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
 | `vinc-crypto` | RustCrypto primitives behind one static `Provider`: AEADs, X25519, ML-KEM-768, Ed25519, P-256 and ML-DSA-65 identities, BLAKE3 KDF and transcript hash | yes | built; proofs being closed |
@@ -116,8 +116,8 @@ fn main() -> vinc::Result<()> {
 | `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proofs being closed |
 | `vinc-reconcile` | range-based set reconciliation whose cost scales with the difference, exact by a final check | yes | built; proofs being closed |
 | `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody and copy-limited forwarding | yes | built, proven |
-| `vinc-driver` | std sockets and OS readiness polling around the endpoint | no | being built |
-| `vinc-sim` | deterministic network simulator: links, sites, NAT, partitions, clocks, adversaries | no | built; scenario suite being built |
+| `vinc-driver` | the reference driver: the endpoint on one thread over a std UDP socket | no | built; proofs being closed |
+| `vinc-sim` | deterministic network simulator and scenario suite: links, sites, NAT, partitions, clocks, adversaries | no | built |
 
 **proven**: every property has a TLA+ model, a Lean theorem and trace validation ([docs/PROOFS.md](docs/PROOFS.md)).
 
@@ -151,6 +151,8 @@ checked, the assumptions and what is still being closed.
 
 - The proofs listed under [Being closed](docs/PROOFS.md#being-closed).
 - `vinc-values`: five corrections found by its proofs are being made.
-- The facade `vinc` and `vinc-driver` are being built.
-- The scenario suite of `vinc-sim`, the comparisons with iroh and rust-libp2p, and the distributed tests are not in
-  the tree yet.
+- On loopback and other very fast paths a session is given up after about a second of silence, so a host stall that
+  long drops it. An absolute silence floor is being added; the 1000-session test waits for it.
+- The scenario suite passes every gate on every seed it runs; the two scenarios that need the values and reconcile
+  layers in one composition wait for them.
+- The comparisons with iroh and rust-libp2p, and the distributed tests, are not in the tree yet.
