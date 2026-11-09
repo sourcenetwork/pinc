@@ -1,5 +1,5 @@
 //! Stream carriers against the reference: each scenario in `data/reference_carrier.txt` was run through the
-//! reference harness's own link, NAT, middlebox and TCP code (`scripts/gen_reference_carrier.py`), recording what
+//! reference harness's own link, NAT, middlebox and TCP code (the recorded vectors), recording what
 //! each end saw. The simulator, driven by the reference random source, must reproduce every event time, every
 //! record, every wire byte count and the count of opened carriers exactly.
 #![allow(

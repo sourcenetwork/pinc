@@ -1,5 +1,5 @@
 //! The NAT of `vinc-sim` against the reference NAT: operation sequences recorded from the reference harness's NAT
-//! class (`data/reference_nat.txt`, made by `scripts/gen_reference_nat.py`) are replayed as datagrams, and every
+//! class (`data/reference_nat.txt`) are replayed as datagrams, and every
 //! translated port, every admitted or refused reply, every rebind and the final mapping count must be the same.
 //! Covers port allocation (advance then return, wrap above 65000), expiry, filtering and the rebind order.
 #![allow(
