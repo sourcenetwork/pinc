@@ -108,4 +108,66 @@ theorem carrierReturn_roster_unbounded (e : Env) (n : N) (now member : Nat) (l :
   rw [a1, hXr]
   exact AMap.insert_length_new _ _ _ hr
 
+@[simp] theorem bc_boot (n : N) (b : Bc) : (n.bc b).boot = n.boot := rfl
+@[simp] theorem bc_roster (n : N) (b : Bc) : (n.bc b).roster = n.roster := rfl
+@[simp] theorem bc_downed (n : N) (b : Bc) : (n.bc b).downed = n.downed := rfl
+@[simp] theorem bc_outBc (n : N) (b : Bc) : (n.bc b).outBc = n.outBc ++ [b] := rfl
+@[simp] theorem bc_primary (n : N) (b : Bc) : (n.bc b).primary = n.primary := rfl
+
+/-- The first step of `drop_peer`. -/
+def N.dpMid (n : N) (peer : Nat) : N :=
+  { n with up := n.up.erase peer, attached := n.attached.del peer, homed := n.homed.del peer,
+           helloAt := n.helloAt.erase peer, hsent := n.hsent.erase peer }
+
+theorem dropPeer_notboot (e : Env) (n : N) (now peer : Nat) (h : n.isBoot peer = false) :
+    (N.dropPeer e n now peer).roster = n.roster ∧ (N.dropPeer e n now peer).downed = n.downed ∧
+    (N.dropPeer e n now peer).outBc = n.outBc ++ (if n.downed.has peer then [] else [.release peer]) := by
+  have hb : (n.dpMid peer).isBoot peer = false := h
+  have hd : N.dropPeer e n now peer =
+      (let n1 := n.dpMid peer
+       let n1 := if !n1.isHub && n1.homeOk == some peer then { n1 with homeOk := none } else n1
+       let n1 := if !n1.downed.has peer then n1.bc (.release peer) else n1
+       if n1.isBoot peer && n1.primary == some peer then N.reselect e n1 now else n1) := rfl
+  rw [hd]
+  have h' : n.boot.contains peer = false := h
+  have h'' : peer ∉ n.boot := by simpa using h'
+  simp [N.dpMid, N.isBoot, h'']
+  split <;> split <;> simp_all
+
+/-- Property 7 at the hub: the leave code on a member's session is `hub_down` with cause `left`: the lease is dropped,
+the subscriptions are released (never held), nothing is recorded as held. -/
+theorem sessionDown_leave (e : Env) (n : N) (now peer code : Nat) (l : Lease) (hup : n.up.has peer = true)
+    (hhub : n.isHub = true) (hcode : code = LEAVE_CODE) (hb : n.isBoot peer = false) (hl : n.roster.get? peer = some l) :
+    (N.sessionDown e n now peer code).roster.get? peer = none ∧
+    (N.sessionDown e n now peer code).downed = n.downed ∧
+    (N.sessionDown e n now peer code).outBc = n.outBc ++ [.release peer] ++ (if n.downed.has peer then [] else [.release peer]) := by
+  have hs : N.sessionDown e n now peer code =
+      N.dropPeer e (N.hubDown e (({ n with up := n.up.erase peer } : N).trace (.leaveSeen peer)) now peer .left) now peer := by
+    unfold N.sessionDown
+    subst hcode
+    have h1 : (!n.up.has peer) = false := by simp [hup]
+    have h2 : (n.isHub && LEAVE_CODE == LEAVE_CODE && !n.isBoot peer) = true := by simp [hhub, hb]
+    simp only [h1, Bool.false_eq_true, if_false]
+    have hc : (n.isHub && LEAVE_CODE == LEAVE_CODE && !(({ n with up := n.up.erase peer } : N).isBoot peer)) = true := h2
+    rw [if_pos hc]
+  rw [hs]
+  obtain ⟨n1, hn1⟩ : ∃ n1 : N, n1 = (({ n with up := n.up.erase peer } : N).trace (.leaveSeen peer)) := ⟨_, rfl⟩
+  rw [← hn1]
+  have hr1 : n1.roster = n.roster := by rw [hn1]; simp
+  have hd1 : n1.downed = n.downed := by rw [hn1]; simp
+  have hb1 : n1.outBc = n.outBc := by rw [hn1]; simp
+  have hbt : n1.isBoot peer = false := by rw [hn1]; simpa [N.isBoot] using hb
+  obtain ⟨r1, r2, r3⟩ := hubDown_left e n1 now peer l (by rw [hr1]; exact hl)
+  have hbd : (N.hubDown e n1 now peer .left).isBoot peer = false := by
+    rw [hubDown_left_eq e n1 now peer l (by rw [hr1]; exact hl)]
+    obtain ⟨-, -, -, -, -, -, -, -, -, hbt', -⟩ := pushDelta_ht e ((n1.hdPre peer).bc (.release peer)) now peer l.rc .left
+    unfold N.isBoot
+    rw [hbt']
+    exact hbt
+  obtain ⟨q1, q2, q3⟩ := dropPeer_notboot e (N.hubDown e n1 now peer .left) now peer hbd
+  refine ⟨?_, ?_, ?_⟩
+  · rw [q1]; exact r1
+  · rw [q2, r2, hd1]
+  · rw [q3, r3, hb1, r2, hd1]
+
 end Vinc.Membership
