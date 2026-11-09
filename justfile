@@ -85,9 +85,9 @@ deps:
 hygiene:
     #!/usr/bin/env bash
     set -euo pipefail
-    names='finalist|vinc_experiments|eurekagent|roster_settle|kindling|scramdb'
-    if git grep -nIiE "$names" -- . ':!justfile'; then echo "hygiene: internal names in the files above" >&2; exit 1; fi
-    if git grep -nIP '[\x{2013}\x{2014}]' -- .; then echo "hygiene: em-dash or en-dash in the files above" >&2; exit 1; fi
+    names='finalist|grader|vinc_experiments|eurekagent|roster_settle|kindling|scramdb'
+    if git grep -nIiE --untracked "$names" -- . ':!justfile'; then echo "hygiene: internal names in the files above" >&2; exit 1; fi
+    if git grep -nIP --untracked '[\x{2013}\x{2014}]' -- .; then echo "hygiene: em-dash or en-dash in the files above" >&2; exit 1; fi
 
 # Format every crate.
 fmt:
