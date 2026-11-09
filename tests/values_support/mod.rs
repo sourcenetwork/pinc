@@ -20,7 +20,9 @@
 )]
 
 mod net;
+mod slots;
 mod stores;
 
 pub use net::*;
+pub use slots::slot_runs;
 pub use stores::*;
