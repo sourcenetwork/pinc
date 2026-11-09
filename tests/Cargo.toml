@@ -43,6 +43,11 @@ proptest = { workspace = true }
 blake3 = { workspace = true, features = ["std"] }
 ml-kem = { workspace = true }
 ml-dsa = { workspace = true }
+ed25519-dalek = { workspace = true }
+p256 = { workspace = true, features = ["ecdsa"] }
+x25519-dalek = { workspace = true }
+chacha20 = { workspace = true, features = ["cipher"] }
+aes = { workspace = true }
 
 [[test]]
 name = "wire"
@@ -788,3 +793,7 @@ path = "node_noalloc.rs"
 [[test]]
 name = "node_determinism"
 path = "node_determinism.rs"
+
+[[test]]
+name = "trace_crypto"
+path = "trace_crypto.rs"

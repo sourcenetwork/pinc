@@ -21,6 +21,7 @@ import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
 import Vinc.TraceConnect
 import Vinc.TraceTranscript
+import Vinc.TraceCrypto
 import Vinc.TraceDtnStore
 import Vinc.TraceDtnForward
 import Vinc.TraceDtnRs
@@ -352,6 +353,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match BroadcastTrace.replayEvent j bcw with
           | .ok b' =>
             bcw := b'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceCrypto.isTag t then
+          -- `vinc-crypto` events (`cr`, written by `trace_crypto`): the KDF, identities, DRBG, provider and secrets.
+          match TraceCrypto.replayEvent j with
+          | .ok () =>
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
