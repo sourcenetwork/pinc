@@ -20,6 +20,7 @@ import Vinc.ValuesTimeTrace
 import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
 import Vinc.TraceConnectCodec
+import Vinc.TraceConnectLink
 import Vinc.TraceConnect
 import Vinc.TraceTranscript
 import Vinc.TraceCrypto
@@ -147,6 +148,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut cmb : TraceConnectMailbox.W := {}
   let mut ctb : TraceConnectTable.W := {}
   let mut crl : TraceConnect.W := {}
+  let mut clk : TraceConnectLink.W := {}
   let mut trs : TraceTranscript.TS := {}
   let mut trCount := 0
   let mut dsw : TraceDtnStore.W := {}
@@ -309,6 +311,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnect.replayEvent j crl with
           | .ok w' =>
             crl := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectLink.isTag t then
+          -- Client carrier events (`trace_connect_link`): the Lean link state machine.
+          match TraceConnectLink.replayEvent j clk with
+          | .ok w' =>
+            clk := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

@@ -13,6 +13,7 @@ import Vinc.ConnectSigned
 import Vinc.ConnectTicket
 import Vinc.ConnectBase32
 import Vinc.ConnectTicketTextPf
+import Vinc.ConnectLinkThm
 
 /-! Axiom audit of the main theorems of the connectivity proofs. -/
 
@@ -124,3 +125,15 @@ import Vinc.ConnectTicketTextPf
 #audit_axioms Vinc.ConnCodec.Tk.fromText_inv
 #audit_axioms Vinc.ConnCodec.Tk.toText_short
 #audit_axioms Vinc.ConnCodec.Tk.toText_ok
+#audit_axioms Vinc.ConnectLink.retry_ok
+#audit_axioms Vinc.ConnectLink.open_by_opened
+#audit_axioms Vinc.ConnectLink.lease_mono
+#audit_axioms Vinc.ConnectLink.kiv_learn
+#audit_axioms Vinc.ConnectLink.watchdog
+#audit_axioms Vinc.ConnectLink.check_future
+#audit_axioms Vinc.ConnectLink.check_fail_lease
+#audit_axioms Vinc.ConnectLink.stale_send_iff
+#audit_axioms Vinc.ConnectLink.defer_waits
+#audit_axioms Vinc.ConnectLink.defer_cancelled
+#audit_axioms Vinc.ConnectLink.tick_before_deadline
+#audit_axioms Vinc.ConnectLink.tick_none_future

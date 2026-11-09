@@ -317,7 +317,11 @@ impl Link {
     /// the frame waits for the reopened carrier. Returns [`Act::Close`] when it did.
     pub fn before_send(&mut self, now: u64, sh: &Shared, ctx: &Ctx) -> Option<Act> {
         let hi = sh.lease_hi;
-        (self.is_open() && hi != 0 && !ctx.udp_any && now - self.hlt >= hi && now - self.lrx >= hi)
+        (self.is_open()
+            && hi != 0
+            && !ctx.udp_any
+            && now.saturating_sub(self.hlt) >= hi
+            && now.saturating_sub(self.lrx) >= hi)
             .then(|| self.reset(now))
     }
 
@@ -404,7 +408,14 @@ impl Link {
     pub fn next_deadline(&self, now: u64, sh: &Shared, ctx: &Ctx) -> Option<u64> {
         match self.state {
             State::Dialing => Some(self.dial_start.saturating_add(dial_wait(ctx.rtt)).saturating_add(1)),
-            State::Down => (ctx.queued || ctx.home).then_some(self.at),
+            // a frame queued during the restart defer cancels the wait: the carrier dials at once
+            State::Down => (ctx.queued || ctx.home).then(|| {
+                if sh.restarted && ctx.queued && self.defer {
+                    self.at.min(now)
+                } else {
+                    self.at
+                }
+            }),
             State::Open => {
                 if self.chk != 0 {
                     return Some(self.chk);

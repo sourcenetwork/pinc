@@ -359,3 +359,49 @@ fn keep_learn_halves_the_silence_a_dead_carrier_endured_down_to_the_floor() {
     };
     assert_eq!(l.next_deadline(0, &sh, &other), Some(15 * S));
 }
+
+/// A clock reading older than the last stamp of the carrier (the host's clock is only read, never trusted to rise)
+/// is no idle gap: the send does not reset the carrier. (The gap was once computed with a plain subtraction, which
+/// underflowed.)
+#[test]
+fn a_send_at_an_earlier_instant_than_the_last_stamp_resets_nothing() {
+    let sh = Shared {
+        lease_hi: 20 * S,
+        ..Shared::default()
+    };
+    let c = ctx();
+    let mut shm = sh;
+    let mut l = Link::new();
+    l.want_dial(100 * S, &mut shm, &c);
+    l.opened(100 * S);
+    l.wrote(120 * S);
+    l.heard(130 * S);
+    for now in [0, 1, 50 * S, 100 * S, 119 * S, 125 * S, 129 * S] {
+        assert_eq!(l.before_send(now, &sh, &c), None, "now = {now}");
+    }
+    assert_eq!(l.state(), State::Open);
+    // and the gap still counts from the later stamp
+    assert_eq!(l.before_send(150 * S - 1, &sh, &c), None);
+    assert_eq!(l.before_send(150 * S, &sh, &c), Some(Act::Close));
+}
+
+/// A frame queued during the restart defer cancels the wait, so the carrier can dial at once: the deadline the link
+/// reports is not later than the instant `tick` acts. (It reported the end of the defer while `tick` dialed at once.)
+#[test]
+fn a_queued_frame_during_the_restart_defer_makes_the_deadline_now() {
+    let mut sh = Shared {
+        restarted: true,
+        ..Shared::default()
+    };
+    let mut c = ctx();
+    let mut l = Link::new();
+    assert_eq!(l.tick(0, &mut sh, &c), None, "the home carrier waits out the defer");
+    assert_eq!(l.next_deadline(0, &sh, &c), Some(rule::DEFER));
+    c.queued = true;
+    let d = l.next_deadline(10 * 1_000_000, &sh, &c).unwrap();
+    assert!(
+        d <= 10 * 1_000_000,
+        "a frame is waiting: the carrier dials now, not at {d}"
+    );
+    assert_eq!(l.tick(d.max(10 * 1_000_000), &mut sh, &c), Some(Act::Dial));
+}

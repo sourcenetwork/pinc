@@ -142,6 +142,9 @@ import Vinc.ConnectTicketText
 import Vinc.ConnectBase32
 import Vinc.ConnectTicketTextPf
 import Vinc.TraceConnectCodec
+import Vinc.ConnectLink
+import Vinc.TraceConnectLink
+import Vinc.ConnectLinkThm
 import Vinc.ConnectAudit
 import Vinc.DtnGf
 import Vinc.DtnGfField
