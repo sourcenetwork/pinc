@@ -126,6 +126,8 @@ pub(crate) struct Path {
     pub(crate) last_rx: u64,
     /// The peer's id this path sends with, and its index.
     pub(crate) dcid: Option<ConnId>,
+    /// The local address of the path is gone (the host's interface moved): nothing can use it again.
+    pub(crate) gone: bool,
 }
 
 impl Path {
@@ -162,6 +164,7 @@ impl Path {
             rtt: 0,
             last_rx: 0,
             dcid: None,
+            gone: false,
         }
     }
 
@@ -361,6 +364,33 @@ conn_impl! {
         Ok(())
     }
 
+    /// Tell the connection the local address of path `id` is gone (the host's interface moved). The path is no longer
+    /// usable: the connection leaves it for the best validated path at once, or as soon as one validates, and then
+    /// forgets it.
+    ///
+    /// # Errors
+    /// [`PathError::Unknown`] if the path is not tracked.
+    pub fn path_lost(&mut self, id: PathId) -> Result<(), PathError> {
+        let i = self.paths.find(id).ok_or(PathError::Unknown)?;
+        if let Some(p) = self.paths.get_mut(i) {
+            p.gone = true;
+            p.validated = false;
+        }
+        self.choose_path();
+        self.forget_gone();
+        Ok(())
+    }
+
+    /// Stop tracking the paths whose local address is gone, except the active one.
+    pub(super) fn forget_gone(&mut self) {
+        let active = self.paths.active;
+        for (i, s) in self.paths.slots.iter_mut().enumerate() {
+            if i != active && s.as_ref().is_some_and(|p| p.gone) {
+                *s = None;
+            }
+        }
+    }
+
     /// The path packets leave on, if any.
     pub fn active_path(&self) -> Option<PathId> {
         self.paths.active().map(|p| p.id)
@@ -512,8 +542,9 @@ conn_impl! {
     pub(super) fn choose_path(&mut self) {
         let Some(best) = self.best_path() else { return };
         let (Some(b), cur) = (self.paths.get(best).copied(), self.paths.active().copied()) else { return };
-        if cur.is_none_or(|c| c.info.kind == PathKind::Relay || b.rtt.saturating_add(SWITCH_GAIN) < c.rtt) {
+        if cur.is_none_or(|c| c.gone || c.info.kind == PathKind::Relay || b.rtt.saturating_add(SWITCH_GAIN) < c.rtt) {
             self.switch_active(best);
+            self.forget_gone();
         }
     }
 

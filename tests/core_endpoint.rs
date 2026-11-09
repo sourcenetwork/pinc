@@ -11,8 +11,8 @@
 )]
 
 use vinc_core::{
-    Answer, Command, CommandError, ConnectFailure, EndReason, Event, Query, Role, SessionId, StateError, Value,
-    state_len,
+    Answer, Command, CommandError, ConnectFailure, EndReason, Event, IfaceEvent, IfaceId, Query, Role, SessionId,
+    StateError, Value, state_len,
 };
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, code};
@@ -279,5 +279,40 @@ fn a_node_does_not_dial_itself_and_a_dial_needs_a_route() {
             net.nodes[a].connect(now, other, b"", addr, Role::Other).err(),
             Some(CommandError::BadAlpn)
         );
+    });
+}
+
+#[test]
+fn a_session_goes_on_when_its_node_changes_address() {
+    big_stack(|| {
+        for gap_ms in [0u64, 200, 1_150, 2_000] {
+            let mut net = CoreNet::new(5 * MS_NS);
+            let (a, b) = (net.add(1), net.add(2));
+            let (sa, sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
+            net.run_for(2 * SEC_NS);
+            // The node moves: its link goes down, its address changes at once, and after the gap the link returns on
+            // the new address. The old address reaches nobody.
+            let new: std::net::SocketAddr = ([10, 0, 9, 1], 4433).into();
+            let old = net.nodes[a].addr;
+            net.nodes[a].addr = new;
+            net.loss = Some(Box::new(move |from, _, _| from == old));
+            let now = net.now;
+            net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
+            net.run_for(gap_ms * MS_NS);
+            let now = net.now;
+            net.nodes[a]
+                .ep
+                .iface_event(now, IfaceId(0), IfaceEvent::AddrChange(new));
+            net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Up);
+            // Data in both directions after the change arrives within a few round trips.
+            open_and_send(&mut net, a, sa, b"after");
+            let t0 = net.now;
+            let ok = net.run(t0 + 6 * SEC_NS, |n| !n.nodes[b].fin.is_empty());
+            assert!(ok, "gap {gap_ms} ms: nothing from the moved node");
+            open_and_send(&mut net, b, sb, b"back");
+            let t0 = net.now;
+            let ok = net.run(t0 + 6 * SEC_NS, |n| !n.nodes[a].fin.is_empty());
+            assert!(ok, "gap {gap_ms} ms: nothing to the moved node");
+        }
     });
 }

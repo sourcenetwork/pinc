@@ -108,18 +108,18 @@ ep_impl! {
             if !self.leaves_from(i, &old) {
                 continue;
             }
-            let remote = self
+            let active = self
                 .slots
                 .get(i)
                 .and_then(|s| s.conn.as_ref())
-                .and_then(vinc_transport::conn::Connection::active_path)
-                .and_then(|p| self.path_addrs(p))
-                .map(|(_, r)| r);
-            let Some(remote) = remote else { continue };
+                .and_then(vinc_transport::conn::Connection::active_path);
+            let Some((active, remote)) = active.and_then(|p| self.path_addrs(p).map(|(_, r)| (p, r))) else { continue };
             let pid = self.path_id(new, remote);
             if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 let mut env = env!(self, now);
                 let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote));
+                // The old local address is gone: the session leaves its path as soon as the new one validates.
+                let _ = conn.path_lost(active);
                 // The link went away and came back on the new address: the peer is woken on the new path.
                 conn.set_link_down(&mut env, true);
                 conn.set_link_down(&mut env, false);
