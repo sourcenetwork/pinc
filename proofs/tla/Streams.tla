@@ -126,9 +126,11 @@ ImplicitOpens == \A id \in Ids : LET L == Locate(T, id) IN
         /\ L.t.rn[Class(id)] = Idx(id) + 1
         /\ L.t.rl = T.rl + (Idx(id) - T.rn[Class(id)] + 1)
         /\ \A k \in T.rn[Class(id)]..Idx(id) : FindSlot(L.t, k * 4 + (id % 4)) # 0
-\* reachability witnesses (the configs *_w must find a violation): a stream is held back; an arriving stream opens a lower id
-NotHeldBack == \A id \in Ids : Locate(T, id).err # "Exhausted"
-NoImplicitOpen == \A id \in Ids : ~(~IsLocal(id) /\ Idx(id) > T.rn[Class(id)] /\ Locate(T, id).err = "ok")
+\* reachability witnesses (the configs *_w must find a violation): a stream is held back with the table full and is
+\* admitted later through steps; one arriving frame opens a lower id as well
+Held4 == T.rn[0] = 1 /\ Locate(T, 4).err = "Exhausted"
+NoHeldAdmit == [](Held4 => [](FindSlot(T, 4) = 0))
+NoJump == [][~(T.rn[0] = 0 /\ T'.rn[0] >= 2)]_vars
 \* a stop that resets the send half leaves the peer's code on it
 StopEndsWithCode == \A id \in Ids, c \in 0..1, e2 \in 0..T.ext : LET R == OnStop(T, id, c, e2) IN
     R.fresh => (FindSlot(R.t, id) # 0 /\ R.t.slots[FindSlot(R.t, id)].scode = c)
