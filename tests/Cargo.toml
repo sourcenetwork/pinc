@@ -859,3 +859,7 @@ path = "node_hub_duties.rs"
 [[test]]
 name = "layers_dtn_restart"
 path = "layers_dtn_restart.rs"
+
+[[test]]
+name = "trace_rx"
+path = "trace_rx.rs"

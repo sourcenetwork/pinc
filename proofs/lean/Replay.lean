@@ -10,6 +10,7 @@ import Vinc.TraceKeyRoll
 import Vinc.TraceKeyLayer
 import Vinc.TraceStreams
 import Vinc.TraceRecovery
+import Vinc.TraceRx
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -164,6 +165,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut mems : TraceMembership.W := {}
   let mut sts : TraceStreams.St := {}
   let mut rcs : TraceRecovery.St' := {}
+  let mut rxw : TraceRx.W := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
   let mut ksw : TraceKeystore.W := {}
@@ -431,6 +433,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceRx.isTag t then
+          -- Received-packet tracker events (`txrx`, written by `trace_rx`): the range set and the acknowledgement rules.
+          match TraceRx.replayEvent j rxw with
+          | .ok w' =>
+            rxw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

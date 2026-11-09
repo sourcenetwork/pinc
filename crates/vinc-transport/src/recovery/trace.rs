@@ -148,3 +148,27 @@ impl<const N: usize> Recovery<N> {
         }
     }
 }
+
+/// The state of a [`ReceivedPackets`](super::ReceivedPackets) tracker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RxView {
+    /// The tracked ranges, `[start, end)`, lowest first.
+    pub items: Vec<(u64, u64)>,
+    /// Everything below it counts as received.
+    pub floor: u64,
+    /// Ack-eliciting packets awaiting an acknowledgement.
+    pub pending: u32,
+    /// When the acknowledgement is due.
+    pub due: Option<u64>,
+    /// The acknowledgement interval the owner set.
+    pub every: Option<u32>,
+    /// The path's minimum round trip.
+    pub min_rtt: Option<u64>,
+    /// Our acknowledgement-carrying packets: (packet number, largest number reported).
+    pub sent: Vec<(u64, u64)>,
+    /// Confirmations waiting for the floor: (time, largest number confirmed).
+    pub confirms: Vec<(u64, u64)>,
+    /// The floor the confirmations produced.
+    pub confirmed_floor: Option<u64>,
+}
+

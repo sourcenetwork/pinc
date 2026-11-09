@@ -352,6 +352,8 @@ par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags
 par run_tlc recovery_tail Recovery Recovery_tail
+par run_tlc rx Rx Rx
+par run_tlc rx_wide Rx Rx_wide
 par run_tlc broadcast_auth BroadcastAuth BroadcastAuth
 par witness_tlc broadcast_auth_nobody BroadcastAuth BroadcastAuth_nobody DeliverExact
 par witness_tlc broadcast_auth_noisb BroadcastAuth BroadcastAuth_noisb DeliverExact
@@ -390,7 +392,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -437,6 +439,7 @@ trace_tlc TraceIncarnation incarnation
 trace_tlc TraceMembership membership
 trace_tlc TraceStreams "stream table"
 trace_tlc TraceRecovery "loss recovery"
+trace_tlc TraceRx "received packets"
 trace_tlc TraceBroadcast broadcast
 trace_tlc TraceReconcileWire reconcile-wire
 trace_tlc TraceReconcile reconcile

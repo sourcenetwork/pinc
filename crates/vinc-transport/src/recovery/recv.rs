@@ -339,3 +339,21 @@ impl<const RANGES: usize> ReceivedPackets<RANGES> {
         }
     }
 }
+
+#[cfg(feature = "trace")]
+impl<const RANGES: usize> ReceivedPackets<RANGES> {
+    /// The state of the tracker, for trace validation.
+    pub fn trace_view(&self) -> super::trace::RxView {
+        super::trace::RxView {
+            items: self.live().to_vec(),
+            floor: self.floor,
+            pending: self.pending,
+            due: self.due,
+            every: self.every,
+            min_rtt: self.min_rtt,
+            sent: self.sent.iter().take(self.sent_len).copied().collect(),
+            confirms: self.confirms.iter().take(self.confirms_len).copied().collect(),
+            confirmed_floor: self.confirmed_floor,
+        }
+    }
+}
