@@ -334,6 +334,9 @@ impl Run<'_> {
                 });
                 format!(r#""op":"pending","kind":"reset","fid":{id},"max":0"#)
             }
+            // The traced runs never stop a stream and the model has no stop-sending frame: logged as a kind the
+            // trace checks refuse, so one appearing fails the check instead of passing unseen.
+            Some(ControlFrame::StopSending { id, .. }) => format!(r#""op":"pending","kind":"stop","fid":{id},"max":0"#),
         };
         self.log(&head);
     }
@@ -358,7 +361,8 @@ impl Run<'_> {
                 self.t.on_control_acked(&mut self.pool, &f);
                 self.log(&format!(r#""op":"ackedreset","id":{id}"#));
             }
-            (ControlFrame::MaxStreamData { .. }, false) => {}
+            // A stop-sending frame is never queued: `pending` does not push one.
+            (ControlFrame::MaxStreamData { .. }, false) | (ControlFrame::StopSending { .. }, _) => {}
         }
     }
 
