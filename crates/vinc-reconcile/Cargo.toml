@@ -3,6 +3,7 @@ name = "vinc-reconcile"
 description = "VINC set reconciliation by range fingerprints: the cost scales with the difference, and the result is exact"
 keywords = ["no_std", "reconciliation", "sync", "fingerprint"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "vinc-transport"
 description = "VINCER, the VINC transport: packets, frames, streams, datagrams, flow control, loss recovery, congestion control, pacing, path MTU, connection ids and migration"
 keywords = ["no_std", "transport", "streams", "congestion", "sans-io"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

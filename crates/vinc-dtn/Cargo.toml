@@ -3,6 +3,7 @@ name = "vinc-dtn"
 description = "VINC delay-tolerant delivery: one-shot hybrid encryption, bundles of verifiable slices, custody, a charged store, spray-and-wait forwarding and Reed-Solomon erasure coding"
 keywords = ["no_std", "dtn", "erasure-coding", "post-quantum", "custody"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

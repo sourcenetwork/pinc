@@ -3,6 +3,7 @@ name = "vinc-dag"
 description = "The lite VINC DAG library: CIDs and blocks in DefraDB's format, BLAKE3 verified streaming, verified-range sets; no networking code"
 keywords = ["no_std", "dag", "cid", "blake3"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

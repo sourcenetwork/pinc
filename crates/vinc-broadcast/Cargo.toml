@@ -3,6 +3,7 @@ name = "vinc-broadcast"
 description = "VINC topic broadcast with origin authentication: signed messages, a hub topic log, gap repair, replay floors and a member-to-member fallback, as a SANS-IO state machine"
 keywords = ["no_std", "broadcast", "pubsub", "sans-io"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

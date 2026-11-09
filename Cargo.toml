@@ -5,6 +5,7 @@ exclude = ["distributed"]
 
 [workspace.package]
 version = "0.1.0"
+authors = ["Theo M. Bulut <theo@source.network>"]
 edition = "2024"
 rust-version = "1.99"
 repository = "https://github.com/sourcenetwork/vinc"

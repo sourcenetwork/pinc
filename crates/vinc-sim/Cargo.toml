@@ -3,6 +3,7 @@ name = "vinc-sim"
 description = "Deterministic network simulator engine for VINC tests and benches: virtual time, links, NAT, faults, adversaries"
 keywords = ["simulation", "network", "deterministic", "testing"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

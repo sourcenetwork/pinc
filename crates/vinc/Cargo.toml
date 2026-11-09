@@ -3,6 +3,7 @@ name = "vinc"
 description = "VINC for applications: one entry point with a builder, connections, streams that implement futures-io, access hooks and a typed protocol registration, all async and driven by the host's runtime"
 keywords = ["p2p", "transport", "facade"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

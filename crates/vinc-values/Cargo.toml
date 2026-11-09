@@ -3,6 +3,7 @@ name = "vinc-values"
 description = "Verified streaming of values of any size from one or many providers: the wire, the multi-provider fetcher, the zero-copy server and the incremental group verifier"
 keywords = ["no_std", "values", "streaming", "blake3", "multi-provider"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

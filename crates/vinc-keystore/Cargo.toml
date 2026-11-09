@@ -3,6 +3,7 @@ name = "vinc-keystore"
 description = "Where VINC's long-term keys live: a software key store and, behind the hwenc feature, a pure-Rust TPM 2.0 backend"
 keywords = ["crypto", "keystore", "tpm"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "vinc-core"
 description = "The VINC endpoint: a SANS-IO table of connections with demultiplexing, an amplification ledger, a half-open cap, node round trips, access checks, sub-sessions, keepalive schedules and one deadline heap"
 keywords = ["no_std", "endpoint", "sans-io", "transport"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

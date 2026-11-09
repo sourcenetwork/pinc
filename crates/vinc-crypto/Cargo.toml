@@ -3,6 +3,7 @@ name = "vinc-crypto"
 description = "VINC primitives behind one static interface: AEADs, X25519, ML-KEM-768, identities, a BLAKE3 KDF and a DRBG"
 keywords = ["no_std", "crypto", "aead", "kem", "signature"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

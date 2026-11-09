@@ -2,6 +2,7 @@
 name = "vinc-tests"
 description = "Every test of the VINC workspace: integration, property, scenario and trace tests"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false

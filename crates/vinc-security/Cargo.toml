@@ -3,6 +3,7 @@ name = "vinc-security"
 description = "The VINC hybrid post-quantum handshake as a SANS-IO state machine, with the key schedule, record protection, replay window and address validation"
 keywords = ["no_std", "handshake", "post-quantum", "aead"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

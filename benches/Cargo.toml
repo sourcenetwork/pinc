@@ -2,6 +2,7 @@
 name = "vinc-benches"
 description = "Criterion benchmarks of the VINC crates, and later the comparisons with iroh and rust-libp2p"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false

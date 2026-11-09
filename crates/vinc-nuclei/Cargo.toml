@@ -3,6 +3,7 @@ name = "vinc-nuclei"
 description = "The nuclei runtime's UDP sockets and timers for the VINC driver, one endpoint per worker"
 keywords = ["nuclei", "udp", "driver"]
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
