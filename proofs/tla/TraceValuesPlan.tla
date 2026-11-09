@@ -22,7 +22,15 @@
 (*    chunk by chunk from the plan;                                         *)
 (*  - vk: proof_k;                                                         *)
 (*  - vsrvnew / vsrv: the server's state machine on the events fed to it,  *)
-(*    and the proof frames it sent (start, length, proof bytes, body).     *)
+(*    and the proof frames it sent (start, length, proof bytes, body);     *)
+(*  - vslotnew / vslot: the request slots of the server (ValuesPlanServer): *)
+(*    a stream opened (the first free slot, or a BUSY reset), a request    *)
+(*    answered (UNAVAILABLE and only its slot freed when the value or the  *)
+(*    plan is refused or the install fails; otherwise it serves the rounded *)
+(*    ranges of its plan, and exactly the other streams of the peer        *)
+(*    serving the root over an overlapping range are freed and reset       *)
+(*    SUPERSEDED, in slot order), a stream finished or reset, a closed     *)
+(*    session; the table before is the table after the last event.         *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds                       *)
@@ -30,8 +38,8 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-VARIABLES i, srv
-vars == <<i, srv>>
+VARIABLES i, srv, tab
+vars == <<i, srv, tab>>
 
 MaxU == 1073741824
 Ops == INSTANCE ValuesPlanOps WITH G <- 16384, HDR <- 16, PAR <- 64, MaxU <- MaxU, MaxS <- 268435455, MaxR <- 32
@@ -47,7 +55,7 @@ ErrOf(code) == IF code = 1 THEN "oob" ELSE IF code = 2 THEN "many" ELSE "long"
 
 EmptySrv == [ln |-> 0, rs |-> <<>>, total |-> 0, st |-> [deep |-> FALSE, pfTo |-> 0],
              vfront |-> 0, window |-> 0, armed |-> FALSE]
-Init == i = 1 /\ srv = EmptySrv
+Init == i = 1 /\ srv = EmptySrv /\ tab = <<>>
 
 (* ---- vplan ---- *)
 FrameRowOK(len, rs, r) ==
@@ -156,13 +164,74 @@ SrvEv ==
              IN /\ FramesRow(s.ln, res.fr) = Ev.fr
                 /\ srv' = [s EXCEPT !.st = res.st, !.armed = TRUE]
 
+
+(* ---- the request slots of the server ---- *)
+\* a slot is <<>> (free), <<stream, peer>> (collecting) or <<stream, peer, root, ranges>> (serving)
+BUSY == 6
+UNAVAIL == 2
+SUPERSEDED == 4
+GB == 16384
+
+Used(t) == {j \in 1 .. Len(t) : t[j] # <<>>}
+StreamAt(t, st) == {j \in Used(t) : t[j][1] = st}
+
+OverlapsB(rg, spans) ==
+    \E r \in {rg[a] : a \in 1 .. Len(rg)}, sp \in {spans[b] : b \in 1 .. Len(spans)} :
+        sp[2] > 0 /\ sp[1] < r[1] + r[2] /\ r[1] < sp[1] + sp[2]
+
+\* the rounded ranges of a plan, clamped to the value (Plan::range_span)
+MineOf(len, rs) == [j \in 1 .. Len(rs) |-> <<rs[j].first * GB, Ops!Min(rs[j].last * GB, len) - rs[j].first * GB>>]
+
+RECURSIVE Supers(_, _, _)
+Supers(t, sup, j) == IF j > Len(t) THEN <<>>
+                     ELSE IF j \in sup THEN <<<<t[j][1], SUPERSEDED>>>> \o Supers(t, sup, j + 1)
+                     ELSE Supers(t, sup, j + 1)
+
+OpenEv ==
+    /\ Ev.ev = "open" /\ Ev.before = tab /\ StreamAt(tab, Ev.stream) = {}
+    /\ LET free == {j \in 1 .. Len(tab) : tab[j] = <<>>}
+       IN IF free = {}
+          THEN Ev.after = tab /\ Ev.rc = <<<<Ev.stream, BUSY>>>>
+          ELSE LET j == CHOOSE j \in free : \A k \in free : j <= k
+               IN Ev.after = [tab EXCEPT ![j] = <<Ev.stream, Ev.peer>>] /\ Ev.rc = <<>>
+
+ReqEv ==
+    /\ Ev.ev = "req" /\ Ev.before = tab
+    /\ \E si \in StreamAt(tab, Ev.stream) :
+         /\ Len(tab[si]) = 2
+         /\ LET me == tab[si]
+                pn == IF Ev.len = 0 THEN [err |-> "unknown"] ELSE Ops!PlanNew(Ev.len, Ev.spans)
+            IN IF "err" \in DOMAIN pn \/ Ev.inst = 0
+               THEN Ev.after = [tab EXCEPT ![si] = <<>>] /\ Ev.rc = <<<<Ev.stream, UNAVAIL>>>>
+               ELSE LET sup == {j \in Used(tab) : j # si /\ tab[j][1] # Ev.stream /\ tab[j][2] = me[2]
+                                 /\ Len(tab[j]) = 4 /\ tab[j][3] = Ev.root /\ OverlapsB(tab[j][4], Ev.spans)}
+                    IN /\ Ev.after = [j \in 1 .. Len(tab) |->
+                                         IF j = si THEN <<me[1], me[2], Ev.root, MineOf(Ev.len, pn.rs)>>
+                                         ELSE IF j \in sup THEN <<>> ELSE tab[j]]
+                       /\ Ev.rc = Supers(tab, sup, 1)
+
+DoneEv ==
+    /\ Ev.ev \in {"done", "reset"} /\ Ev.before = tab /\ Ev.rc = <<>>
+    /\ LET at == StreamAt(tab, Ev.stream)
+       IN IF at = {} THEN Ev.after = tab
+          ELSE LET j == CHOOSE j \in at : \A k \in at : j <= k
+               IN Ev.after = [tab EXCEPT ![j] = <<>>]
+
+ClosedEv ==
+    /\ Ev.ev = "closed" /\ Ev.before = tab /\ Ev.rc = <<>>
+    /\ Ev.after = [j \in 1 .. Len(tab) |-> IF tab[j] # <<>> /\ tab[j][2] = Ev.peer THEN <<>> ELSE tab[j]]
+
+SlotEv == OpenEv \/ ReqEv \/ DoneEv \/ ClosedEv
+
 Step ==
     /\ i <= Len(Trace)
-    /\ \/ Ev.t = "vplan" /\ PlanEv /\ UNCHANGED srv
-       \/ Ev.t = "vread" /\ ReadEv /\ UNCHANGED srv
-       \/ Ev.t = "vk" /\ KEv /\ UNCHANGED srv
-       \/ Ev.t = "vsrvnew" /\ SrvNewEv
-       \/ Ev.t = "vsrv" /\ SrvEv
+    /\ \/ Ev.t = "vplan" /\ PlanEv /\ UNCHANGED <<srv, tab>>
+       \/ Ev.t = "vread" /\ ReadEv /\ UNCHANGED <<srv, tab>>
+       \/ Ev.t = "vk" /\ KEv /\ UNCHANGED <<srv, tab>>
+       \/ Ev.t = "vsrvnew" /\ SrvNewEv /\ UNCHANGED tab
+       \/ Ev.t = "vsrv" /\ SrvEv /\ UNCHANGED tab
+       \/ Ev.t = "vslotnew" /\ tab' = [j \in 1 .. Ev.s |-> <<>>] /\ UNCHANGED srv
+       \/ Ev.t = "vslot" /\ SlotEv /\ tab' = Ev.after /\ UNCHANGED srv
     /\ i' = i + 1
 
 \* the trace has ended: every event was a step of the model

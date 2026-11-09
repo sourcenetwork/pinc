@@ -154,6 +154,9 @@ par run_tlc vsys_noprov ValuesSys ValuesSys_noprov
 par run_tlc vsys_store ValuesSys ValuesSys_store
 par run_tlc vsys_done ValuesSys ValuesSys_done
 par run_tlc vsys_mid ValuesSys ValuesSys_mid
+par run_tlc vsys_code ValuesSys ValuesSys_code
+par run_tlc vsys_code_steal ValuesSys ValuesSys_code_steal
+par witness_tlc vsys_w_code_steal ValuesSys ValuesSys_w_code_steal NeverStolen
 par witness_tlc vsys_midold ValuesSys ValuesSys_midold AnnOnce
 par witness_tlc vsys_w_dup ValuesSys ValuesSys_w_dup NeverDup
 par witness_tlc vsys_w_lied ValuesSys ValuesSys_w_lied NeverLiedFail

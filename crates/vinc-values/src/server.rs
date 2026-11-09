@@ -105,6 +105,18 @@ struct Slot {
     stage: Stage,
 }
 
+/// What one request slot holds, for an observer: the stream and the peer, and the root and the plan once the request is
+/// being served.
+#[derive(Debug, Clone, Copy)]
+pub struct SlotView<'a> {
+    /// The request stream.
+    pub stream: StreamId,
+    /// The requesting peer.
+    pub peer: Provider,
+    /// The root and the plan of the response, once the request is answered.
+    pub serving: Option<(&'a [u8; 32], &'a Plan)>,
+}
+
 /// The server over a read-only store handle `H` with room for `S` requests.
 #[derive(Debug)]
 pub struct Server<H: ValueRead + Clone, const S: usize = 32> {
@@ -124,6 +136,19 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
     /// The number of requests held.
     pub fn held(&self) -> usize {
         self.slots.iter().flatten().count()
+    }
+
+    /// What slot `i` holds, `None` when it is free or `i` is past the table.
+    pub fn slot(&self, i: usize) -> Option<SlotView<'_>> {
+        let s = self.slots.get(i)?.as_ref()?;
+        Some(SlotView {
+            stream: s.stream,
+            peer: s.peer,
+            serving: match &s.stage {
+                Stage::Serve(sv) => Some((&sv.root, &sv.plan)),
+                Stage::Collect { .. } => None,
+            },
+        })
     }
 
     fn find(&self, stream: StreamId) -> Option<usize> {

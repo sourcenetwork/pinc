@@ -30,7 +30,7 @@ structure Slot where
   stream : Nat
   peer : Nat
   serving : Option (Nat × List (Nat × Nat))
-  deriving DecidableEq
+  deriving DecidableEq, Repr
 
 abbrev Slots := List (Option Slot)
 

@@ -1,6 +1,7 @@
 import Vinc.Json
 import Vinc.ValuesPlanProofsFrames
 import Vinc.ValuesPlanSourceRead
+import Vinc.ValuesPlanServer
 
 /-!
 # Replay of the plan, source and server traces
@@ -154,6 +155,7 @@ structure Srv where
   vfront : Nat := 0
   window : Nat := 0
   armed : Bool := false
+  tab : Slots := []
 
 instance : Inhabited Srv := ⟨{}⟩
 
@@ -206,13 +208,65 @@ def replayServer (j : J) (s : Srv) : Except String Srv := do
     check (rec_ == model) s!"server {kind} (ln {s.ln}): the code sent frames {rec_}, the model {model}"
     pure s'
 
+/-- A slot of the recorded table: free `[]`, collecting `[stream, peer]`, serving `[stream, peer, root, ranges]`. -/
+def parseSlot (j : J) : Except String (Option Slot) := do
+  let some a := j.arr? | throw "a slot is an array"
+  match a.toList with
+  | [] => pure none
+  | [s, p] =>
+    let some s := s.nat? | throw "slot stream"
+    let some p := p.nat? | throw "slot peer"
+    pure (some ⟨s, p, none⟩)
+  | [s, p, r, rg] =>
+    let some s := s.nat? | throw "slot stream"
+    let some p := p.nat? | throw "slot peer"
+    let some r := r.nat? | throw "slot root"
+    pure (some ⟨s, p, some (r, ← pairList rg)⟩)
+  | _ => throw "a slot has 0, 2 or 4 fields"
+
+def parseTable (j : J) : Except String Slots := do
+  let some a := j.arr? | throw "a table is an array"
+  a.toList.mapM parseSlot
+
+/-- One slot event: the model of `ValuesPlanServer` on the recorded table gives the recorded table and resets. -/
+def replaySlot (j : J) (tab : Slots) : Except String Slots := do
+  match ← strF j "t" with
+  | "vslotnew" => pure (List.replicate (← natF j "s") none)
+  | _ =>
+    let before ← parseTable (← field j "before")
+    let after ← parseTable (← field j "after")
+    let rc ← pairList (← field j "rc")
+    check (before == tab) "slot event: the table before is not the table after the last event"
+    let ev ← strF j "ev"
+    let (model, mrc) : Slots × List (Nat × Nat) ← match ev with
+      | "open" => pure (opened before (← natF j "stream") (← natF j "peer"))
+      | "done" | "reset" => pure (done before (← natF j "stream"), [])
+      | "closed" => pure (closed before (← natF j "peer"), [])
+      | "req" =>
+        let stream ← natF j "stream"
+        let len ← natF j "len"
+        let spans ← pairList (← field j "spans")
+        match before.findIdx? (fun x => match x with | some o => decide (o.stream = stream) && o.serving.isNone | none => false) with
+        | none => throw s!"request on stream {stream}: no slot collects it"
+        | some i =>
+          match (if len == 0 then none else (planNew len spans).toOption) with
+          | none => pure (refuse before i UNAVAILABLE)
+          | some pl =>
+            let mine := (List.range pl.rs.length).filterMap pl.rangeSpan
+            pure (answer before i (← natF j "root") mine spans ((← natF j "inst") == 1))
+      | _ => throw s!"unknown slot event {ev}"
+    check (model == after) s!"slot {ev}: the model gives {repr model}, the code {repr after}"
+    check (mrc == rc) s!"slot {ev}: the model resets {mrc}, the code {rc}"
+    pure after
+
 def replayK (j : J) : Except String Unit := do
   let ln ← natF j "ln"
   let k ← natF j "k"
   check (protoK ln == (if k == 0 then none else some k)) s!"proof_k {ln}: model {protoK ln}, code {k}"
 
 /-- The event tags of this trace. -/
-def isTag (t : String) : Bool := t == "vplan" || t == "vread" || t == "vk" || t == "vsrvnew" || t == "vsrv"
+def isTag (t : String) : Bool :=
+  t == "vplan" || t == "vread" || t == "vk" || t == "vsrvnew" || t == "vsrv" || t == "vslotnew" || t == "vslot"
 
 /-- Replay one event; the server model state is threaded. -/
 def replayEvent (j : J) (s : Srv) : Except String Srv := do
@@ -220,6 +274,7 @@ def replayEvent (j : J) (s : Srv) : Except String Srv := do
   | "vplan" => replayPlan j; pure s
   | "vread" => replayRead j; pure s
   | "vk" => replayK j; pure s
+  | "vslotnew" | "vslot" => do pure { s with tab := ← replaySlot j s.tab }
   | _ => replayServer j s
 
 end Vinc.TraceValuesPlan

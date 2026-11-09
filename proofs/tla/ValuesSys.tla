@@ -20,8 +20,11 @@
 (* never answers is a provider that is not in Fair.                        *)
 (*                                                                         *)
 (* The scheduling decisions (top-up chunk, steal tail) are nondeterministic *)
-(* but constrained to what sched.rs guarantees (whole groups, front of the *)
-(* queue, never a verified group, a victim chosen as the code chooses it); *)
+(* in the size only, the size being the environment's (the target and the  *)
+(* rates), and constrained to what sched.rs guarantees: whole groups, front *)
+(* of the queue, never a verified group, a chunk of at least the minimum   *)
+(* target (MinChunk), a victim chosen as the code chooses it, a rate victim *)
+(* keeping at least one group;                                              *)
 (* their arithmetic is ValuesSched, the head-hold and stall timing is      *)
 (* ValuesTime. The clock is discrete: ticks since the last progress are     *)
 (* saturating counters (IDLE for the steal idleness, SW for the stall      *)
@@ -72,6 +75,9 @@ CONSTANTS
     Churn,     \* providers outside Fair may close, vanish and reset streams as often as they like
     OldRetry,  \* TRUE: a retry is dropped while any stream is open (the code before the fix); FALSE: only the provider's own streams count
     HasDl, DeadlineT, \* a deadline exists, and its tick
+    MinT,      \* groups of the minimum target (MIN_TARGET_GROUPS = 4 in the code): a top-up takes at least this many
+               \* groups from a provider that holds none, half as many from one that holds some; 1 lets a value of a few
+               \* groups be striped among the providers, which the real minimum would give to the first one whole
     IDLE, SW, SMIN \* idle ticks before a steal, stall ticks before a redial (0: none), groups a busy victim must hold
 
 
@@ -84,7 +90,7 @@ ASSUME /\ NP \in 1..4 /\ G \in 0..6 /\ SPP \in 1..4
        /\ Want \subseteq Grps /\ InitVer \subseteq Grps /\ Listed \subseteq Provs
        /\ Liars \subseteq Provs /\ Always \subseteq Liars /\ (Always # {} => BadKinds # {}) /\ Fair \subseteq Provs /\ BadKinds \subseteq {"b", "j"}
        /\ (Want # {} => Head0 \in Want)
-       /\ OldConn \in BOOLEAN /\ OldRetry \in BOOLEAN /\ Churn \in BOOLEAN /\ Faults \in Nat /\ Restarts \in Nat /\ DeadlineT \in Nat /\ HasDl \in BOOLEAN
+       /\ MinT \in 1..4 /\ OldConn \in BOOLEAN /\ OldRetry \in BOOLEAN /\ Churn \in BOOLEAN /\ Faults \in Nat /\ Restarts \in Nat /\ DeadlineT \in Nat /\ HasDl \in BOOLEAN
 
 Min(X) == CHOOSE x \in X : \A y \in X : x <= y
 Max(X) == CHOOSE x \in X : \A y \in X : y <= x
@@ -177,13 +183,21 @@ StealOut(Tr, p) ==
         from == IF idle # {} THEN {Min(idle)} ELSE rate
         none == IF idle = {} THEN {[Tr EXCEPT !.tw = TRUE]} ELSE {}
         \* an idle victim is robbed of everything (its rate is taken as 0); a slow one keeps any head
-        keeps(v) == IF v \in idle THEN {0} ELSE 0..Cardinality(Miss(Tr, v))
+        \* a rate victim has a positive rate and at least SMIN groups, so the group-rounded cut keeps one group or more
+        keeps(v) == IF v \in idle THEN {0} ELSE 1..Cardinality(Miss(Tr, v))
     IN none \cup UNION {UNION {StealFrom(Tr, p, v, k) : k \in keeps(v)} : v \in from}
 
 (* ---- top-up (sched.rs top_up) ---- *)
 TakeChunk(T0, p, out, chunk) ==
     ReqOut([T0 EXCEPT !.queue = {x \in T0.queue : x > Max(chunk)}, !.asg[p] = T0.asg[p] \cup chunk,
                       !.lpa[p] = IF out = 0 THEN 0 ELSE T0.lpa[p]], p, FALSE, chunk)
+
+\* take_chunk gathers want bytes of unverified groups: want is at least two groups when the provider holds work (a
+\* top-up returns early from half the target) and at least the four-group minimum target when it holds none, and the
+\* loop ends only at want or on an empty queue
+MinChunk(out, nq) ==
+    LET m == IF out = 0 THEN MinT ELSE (IF MinT \div 2 < 1 THEN 1 ELSE MinT \div 2)
+    IN IF nq < m THEN nq ELSE m
 
 TopUpOut(T, p) ==
     IF ~T.striped \/ T.run # "run" \/ ~T.inA[p] THEN {T}
@@ -193,7 +207,7 @@ TopUpOut(T, p) ==
          IN IF Cardinality(Streams(T0, p)) >= SPP THEN {T0}
             ELSE (IF out > 0 THEN {T0} ELSE {})
                  \cup (IF qv # {}
-                       THEN UNION {TakeChunk(T0, p, out, FirstK(qv, k)) : k \in 1..Cardinality(qv)}
+                       THEN UNION {TakeChunk(T0, p, out, FirstK(qv, k)) : k \in MinChunk(out, Cardinality(qv))..Cardinality(qv)}
                        ELSE IF out = 0 /\ T0.conn[p] THEN StealOut([T0 EXCEPT !.queue = {}], p)
                             ELSE {[T0 EXCEPT !.queue = {}]})
 
