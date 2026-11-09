@@ -33,6 +33,7 @@
     clippy::items_after_statements,
     clippy::needless_pass_by_value,
     clippy::type_complexity,
+    clippy::manual_midpoint,
     unreachable_pub
 )]
 
@@ -461,7 +462,6 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
             };
             let node_n = |rng: &mut SplitMix64| 1 + (rng.next_u64() % u64::from(PEERS)) as u8;
             match rng.next_u64() % 100 {
-                0..=9 => self.step(now, Input::Tick),
                 10..=29 => {
                     let id = 1 + (rng.next_u64() % u64::from(IDS)) as u8;
                     let dest = node_n(rng);
@@ -473,7 +473,7 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
                 50..=59 => self.step(now, Input::LinkDown(node(node_n(rng)))),
                 60..=77 => {
                     let known: Vec<(u8, u8)> = self.tr.sends.keys().copied().collect();
-                    let (id, p) = if !known.is_empty() && rng.next_u64() % 2 == 0 {
+                    let (id, p) = if !known.is_empty() && rng.next_u64().is_multiple_of(2) {
                         known[(rng.next_u64() % known.len() as u64) as usize]
                     } else {
                         (1 + (rng.next_u64() % u64::from(IDS)) as u8, node_n(rng))
