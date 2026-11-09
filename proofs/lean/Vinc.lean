@@ -159,4 +159,10 @@ import Vinc.MembershipModelHub
 import Vinc.MembershipModelNode
 import Vinc.MembershipModelLemmas
 import Vinc.TraceMembership
+import Vinc.MembershipHubFrame
+import Vinc.MembershipHubDown
+import Vinc.MembershipHubWatch
+import Vinc.MembershipHubLease
+import Vinc.MembershipHubReturn
+import Vinc.MembershipHubRevoke
 #audit_package
