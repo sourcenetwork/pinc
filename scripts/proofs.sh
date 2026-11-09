@@ -10,10 +10,11 @@ TLA_HOME="${TLA_HOME:-$HOME/.local/share/tla}"
 TRACE_TLC="$TLA_HOME/tla2tools-2026.11.06.jar"
 COMMUNITY="$TLA_HOME/CommunityModules-deps-202611060952.jar"
 # TLC unpacks its standard modules into the JVM's temporary directory; runs that share one race on those files, so
-# every run gets its own.
+# every run gets its own. The JVM's default heap bound is a quarter of the memory it sees, so 3 parallel runs could
+# take 75% of the machine; 15% each keeps the 3 under half (of the cgroup limit, when the run has one).
 jtmp_root=$(mktemp -d)
 trap 'rm -rf "$jtmp_root"' EXIT
-jopts() { printf -- '-Djava.io.tmpdir=%s' "$(mktemp -d -p "$jtmp_root")"; }
+jopts() { printf -- '-XX:MaxRAMPercentage=15 -Djava.io.tmpdir=%s' "$(mktemp -d -p "$jtmp_root")"; }
 
 need() { # need <file> <download command>
     [ -f "$1" ] || { echo "proofs: missing $1; fetch it with: $2" >&2; exit 1; }
