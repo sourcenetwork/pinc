@@ -1,0 +1,353 @@
+import Vinc.BroadcastNodeLemmas6
+
+/-!
+# The node theorems
+
+The unbounded counterpart of the invariants and properties of `proofs/tla/BroadcastNode.tla`, over every reachable
+state of one node (`Reach p`, for any parameters with a non-empty dedupe set): the node under any message by any
+frame, any timer, any answer to an access check, the floors settled in any way, time passing up to the next
+deadline and any restart.
+
+`SInv` collects the invariant; `reach_inv` proves it by induction on `Reach`, from the postconditions of the
+operators (`OnMsg_post`, `OnTimer_post`, `AcpAnswer_post`, `FloorsSettled_post`). The named theorems are its
+projections, with the names of the TLA properties:
+* `epochBound`: an id is delivered at most once per epoch, an epoch being a record the dedupe set made while it held
+  none for the id (and a record held by the access check counts against the epoch too);
+* `onceNoDup`: no id is delivered twice in one step (with the hold set deduplicating);
+* `seenAccounted`: every id the set or the log holds was delivered, held, refused with a reason or dropped for a
+  stated cause (with full holds keeping the id unseen);
+* `deliveredAllowed`, `denyDrops`, `floorRespected`, `floorHold`, `bounds`, `gatherBound`;
+* `ackOnlyStored`: a hub acknowledges only a message it holds; `garbageInert`: a frame that is not a good message
+  changes nothing (`OnMsg_garbage`); `gatherEnds`: the first timer past the wait ends the gathering.
+-/
+
+set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
+
+namespace Vinc.BroadcastNode
+
+/-! ## Facts about the operators the invariant needs -/
+
+theorem MinOf_le : ∀ (l : List Nat) (x : Nat), x ∈ l → ∃ y, MinOf l = some y ∧ y ≤ x := by
+  intro l
+  induction l with
+  | nil => intro x hx; cases hx
+  | cons a l ih =>
+    intro x hx
+    unfold MinOf
+    rcases hm : MinOf l with _ | y
+    · rcases List.mem_cons.1 hx with rfl | h
+      · exact ⟨x, rfl, Nat.le_refl _⟩
+      · obtain ⟨z, hz, _⟩ := ih x h; rw [hm] at hz; cases hz
+    · simp only
+      refine ⟨min a y, rfl, ?_⟩
+      rcases List.mem_cons.1 hx with rfl | h
+      · exact Nat.min_le_left _ _
+      · obtain ⟨z, hz, hle⟩ := ih x h
+        rw [hm] at hz; cases hz
+        exact Nat.le_trans (Nat.min_le_right _ _) hle
+
+theorem PollTimeout_gather (p : Params) (N : Node) (hg : N.phase = .gathering) :
+    ∃ y, PollTimeout p N = some y ∧ y ≤ N.born + p.floorWait + 1 := by
+  unfold PollTimeout
+  refine MinOf_le _ _ ?_ |>.imp fun y hy => hy
+  simp [hg]
+
+theorem TickOk_gather {p : Params} {N : Node} {now : Nat} (h : TickOk p N now = true) (hg : N.phase = .gathering) :
+    now + 1 ≤ N.born + p.floorWait + 1 := by
+  obtain ⟨y, hy, hle⟩ := PollTimeout_gather p N hg
+  unfold TickOk at h
+  rw [hy] at h
+  simp at h
+  omega
+
+theorem FloorsSettled_ack (p : Params) (hcap : 0 < p.seenCap) (N : Node) (now : Nat) (used : Bool)
+    (rf : Option Nat) (of_ : Option (Nat → Option Nat)) (nh : Bool) :
+    (FloorsSettled p N now used rf of_ nh).ack = 0 := by
+  unfold FloorsSettled
+  have T := offerAllTrans p now N.fhold (Plain {N with phase := .done, rfloor := rf, ofloor := of_, nohist := nh, fhold := []} [.floorDone used])
+  rw [T.ack]; rfl
+
+theorem OnTimer_ack (p : Params) (hcap : 0 < p.seenCap) (N : Node) (now : Nat) : (OnTimer p N now).ack = 0 := by
+  unfold OnTimer
+  dsimp only
+  split
+  · exact FloorsSettled_ack p hcap _ _ _ _ _ _
+  · rfl
+
+theorem HubStore_stored {p : Params} {N : Node} {now wall : Nat} {fanned : Bool} {m : Msg}
+    (hhub : p.isHub = true) :
+    (HubStore p N now wall fanned m).ack = 0 ∧
+      ((HubStore p N now wall fanned m).outs.any IsStored = true →
+        m.mid ∈ LIds (HubStore p N now wall fanned m).n.lg) := by
+  unfold HubStore
+  by_cases htf : p.topicFull = true
+  · rw [if_pos htf]; simp [Plain, IsStored]
+  · rw [if_neg htf]
+    dsimp only
+    have PS := LPush_spec p N.lg m.mid now wall m.n
+    generalize LPush p N.lg m.mid now wall m.n = rr at PS ⊢
+    by_cases hok : rr.ok = true
+    · rw [if_neg (by simp [hok])]
+      by_cases hsub : (N.sub && m.origin != p.me) = true
+      · rw [if_pos hsub]
+        have S := Offer_spec p {N with seen := SInsertAll p N.seen now rr.ev, lg := rr.log} now m.ent
+        refine ⟨(Nat.zero_add _).trans S.ack, fun _ => ?_⟩
+        show m.mid ∈ LIds (Offer p {N with seen := SInsertAll p N.seen now rr.ev, lg := rr.log} now m.ent).n.lg
+        rw [S.lg]
+        exact PS.ok hok
+      · rw [if_neg hsub]
+        exact ⟨rfl, fun _ => PS.ok hok⟩
+    · rw [if_pos (by simpa using hok)]
+      simp [Plain, IsStored]
+
+theorem OnMsg_garbage {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool} {m : Msg}
+    (h : m.kind ≠ .good) : (OnMsg p N now wall t b m).n = N ∧ (OnMsg p N now wall t b m).dl = [] := by
+  unfold OnMsg
+  by_cases h1 : (!Allowed p t b) = true
+  · rw [if_pos h1]; exact ⟨rfl, rfl⟩
+  rw [if_neg h1]
+  by_cases h2 : m.kind = .badhead
+  · rw [if_pos h2]; exact ⟨rfl, rfl⟩
+  rw [if_neg h2]
+  by_cases h3 : m.kind = .big
+  · rw [if_pos h3]; exact ⟨rfl, rfl⟩
+  rw [if_neg h3]
+  dsimp only
+  by_cases h4 : IsDup p N m.mid now = true
+  · rw [if_pos h4]; exact ⟨rfl, rfl⟩
+  rw [if_neg h4]
+  by_cases h5 : p.revoked.contains m.origin = true
+  · rw [if_pos h5]; exact ⟨rfl, rfl⟩
+  rw [if_neg h5]
+  by_cases h6 : m.kind = .badsig
+  · rw [if_pos h6]; exact ⟨rfl, rfl⟩
+  exfalso
+  cases hk : m.kind <;> simp_all
+
+theorem OnMsg_ack {p : Params} {N : Node} {now wall : Nat} {t : Frame} {b : Bool} {m : Msg}
+    (hcap : 0 < p.seenCap) (hack : p.ackAfterStore = true) (hI : NodeInv p N)
+    (h : 0 < (OnMsg p N now wall t b m).ack) :
+    m.mid ∈ LIds (OnMsg p N now wall t b m).n.lg ∨ (OnMsg p N now wall t b m).n.seen.map m.mid ≠ none := by
+  unfold OnMsg at h ⊢
+  by_cases h1 : (!Allowed p t b) = true
+  · rw [if_pos h1] at h; simp [Plain] at h
+  rw [if_neg h1] at h ⊢
+  by_cases h2 : m.kind = .badhead
+  · rw [if_pos h2] at h; simp [Plain] at h
+  rw [if_neg h2] at h ⊢
+  by_cases h3 : m.kind = .big
+  · rw [if_pos h3] at h; simp [Plain] at h
+  rw [if_neg h3] at h ⊢
+  dsimp only at h ⊢
+  by_cases h4 : IsDup p N m.mid now = true
+  · rw [if_pos h4] at ⊢
+    simp only [IsDup, Bool.or_eq_true] at h4
+    rcases h4 with h4 | h4
+    · right
+      rw [SContains_iff] at h4
+      obtain ⟨t', ht, _⟩ := h4
+      show N.seen.map m.mid ≠ none
+      rw [ht]; simp
+    · left; exact (LContains_iff N.lg m.mid).1 h4
+  rw [if_neg h4] at h ⊢
+  by_cases h5 : p.revoked.contains m.origin = true
+  · rw [if_pos h5] at h; simp [Plain] at h
+  rw [if_neg h5] at h ⊢
+  by_cases h6 : m.kind = .badsig
+  · rw [if_pos h6] at h; simp [Plain] at h
+  rw [if_neg h6] at h ⊢
+  by_cases hhub : p.isHub = true
+  · rw [if_pos hhub] at h ⊢
+    have HS := HubStore_stored (p := p) (N := {N with req := N.req.filter (fun x => x != m.mid)}) (now := now)
+      (wall := wall) (fanned := (decide (t = .fan) || decide (t = .fanp))) (m := m) hhub
+    left
+    show m.mid ∈ LIds (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
+      (decide (t = .fan) || decide (t = .fanp)) m).n.lg
+    by_cases hs : (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
+        (decide (t = .fan) || decide (t = .fanp)) m).outs.any IsStored = true
+    · exact HS.2 hs
+    · exfalso
+      have hany : ∀ (o1 l : List TraceRec), (∀ o ∈ o1, ¬ IsStored o = true) → (o1 ++ l).any IsStored = l.any IsStored := by
+        intro o1 l ho
+        rw [List.any_append]
+        have : o1.any IsStored = false := by
+          rw [Bool.eq_false_iff]
+          intro hh
+          obtain ⟨o, hoo, hio⟩ := List.any_eq_true.1 hh
+          exact ho o hoo hio
+        rw [this]; rfl
+      have ho1 : ∀ o ∈ (if N.req.contains m.mid = true then [TraceRec.repaired m.mid] else ([] : List TraceRec)),
+          ¬ IsStored o = true := by
+        intro o ho; split at ho <;> simp_all [IsStored]
+      simp only [bind_eq, hack, if_true, HS.1, Nat.zero_add, hany _ _ ho1] at h
+      have hs' : (HubStore p {N with req := N.req.filter (fun x => x != m.mid)} now wall
+          (decide (t = .fan) || decide (t = .fanp)) m).outs.any IsStored = false := by simpa using hs
+      simp [hs'] at h
+  · rw [if_neg hhub] at h
+    exfalso
+    have S := Offer_spec p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent
+    simp only [hack, if_true, bind_eq] at h
+    have h' : 0 < 0 + (Offer p {N with req := N.req.filter (fun x => x != m.mid)} now m.ent).ack := h
+    rw [S.ack] at h'
+    exact absurd h' (Nat.lt_irrefl _)
+
+/-! ## The system invariant -/
+
+/-- The invariant of a reachable state. -/
+structure SInv (p : Params) (s : Sys) : Prop where
+  inv : NodeInv p s.node
+  epoch : ∀ m, s.cnt m + hc s.node m ≤ s.ep m
+  nodup : p.heldDedup = true → s.dls.Nodup
+  acct : p.heldFullKeepsUnseen = true → JInv s.acct s.node
+  del : DelOK s.node.acp s.now s.outs
+  deny : DenyOK s.node.held s.outs
+  resp : FreshDel p s.node s.outs
+  floor : p.isHub = false → (s.last = .msg ∨ s.last = .timer ∨ s.last = .answer) → s.node.phase = .gathering →
+    ∀ o ∈ s.outs, NoDel o
+  gather : s.node.phase = .gathering → s.now ≤ s.node.born + p.floorWait + 1
+  ack : p.ackAfterStore = true → 0 < s.ackd → s.lm ∈ LIds s.node.lg ∨ s.node.seen.map s.lm ≠ none
+
+theorem sinit_inv (p : Params) : SInv p (SInit p) := by
+  refine ⟨NodeInit_inv p 0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro m; simp [SInit, hc, NodeInit]
+  · intro _; simp [SInit]
+  · intro _; refine ⟨fun x hx => ?_, fun x hx => ?_⟩ <;> simp_all [SInit, NodeInit, SeenEmpty, LEmpty, LIds]
+  · intro mid org ts via h; simp [SInit] at h
+  · intro id org h; simp [SInit] at h
+  · intro mid org ts via h; simp [SInit] at h
+  · intro _ _ _ o ho; simp [SInit] at ho
+  · intro _; simp [SInit]
+  · intro _ h; simp [SInit] at h
+
+theorem apply_inv {p : Params} {s : Sys} {r : Res} {what : Last} {mid : Nat} (hcap : 0 < p.seenCap)
+    (hs : SInv p s) (P : Post p s.node s.now r) (hlast : what = .msg ∨ what = .timer ∨ what = .answer ∨ what = .floors)
+    (hack : p.ackAfterStore = true → 0 < r.ack → mid ∈ LIds r.n.lg ∨ r.n.seen.map mid ≠ none) :
+    SInv p (Apply p s r what mid) := by
+  refine ⟨P.inv, ?_, P.nodup, ?_, P.del, P.deny, P.resp, ?_, ?_, hack⟩
+  · intro m
+    have d := P.delta m
+    have e := hs.epoch m
+    show s.cnt m + r.dl.count m + hc r.n m ≤ EpG p s.now s.node r.n s.ep m
+    unfold EpG
+    split <;> rename_i hn <;> simp [hn] at d ⊢ <;> omega
+  · intro hk
+    exact P.acc hk _ (hs.acct hk)
+  · intro hh hl hg
+    exact P.floor hh hg
+  · intro hg
+    obtain ⟨h1, h2⟩ := P.phase hg
+    have := hs.gather h1
+    show s.now ≤ r.n.born + p.floorWait + 1
+    rw [h2]; exact this
+
+theorem AcpAnswer_ack (p : Params) (N : Node) (now id : Nat) (allow : Bool) : (AcpAnswer p N now id allow).ack = 0 := by
+  unfold AcpAnswer
+  rcases hf : N.checks.find? (fun c => c.id == id) with _ | c <;> simp [hf, Plain]
+
+theorem step_inv {p : Params} {s s' : Sys} (hcap : 0 < p.seenCap) (hs : SInv p s) (st : Step p s s') :
+    SInv p s' := by
+  cases st with
+  | msg t b m =>
+    exact apply_inv hcap hs (OnMsg_post hcap hs.inv) (Or.inl rfl)
+      (fun hk hpos => OnMsg_ack hcap hk hs.inv hpos)
+  | timer =>
+    exact apply_inv hcap hs (OnTimer_post hcap hs.inv) (Or.inr (Or.inl rfl))
+      (fun _ hpos => absurd hpos (by rw [OnTimer_ack p hcap]; exact Nat.lt_irrefl _))
+  | answer c hc allow =>
+    exact apply_inv hcap hs (AcpAnswer_post hs.inv) (Or.inr (Or.inr (Or.inl rfl)))
+      (fun _ hpos => absurd hpos (by rw [AcpAnswer_ack]; exact Nat.lt_irrefl _))
+  | floors rf of_ nh h =>
+    exact apply_inv hcap hs (FloorsSettled_post hcap hs.inv h true rf of_ nh) (Or.inr (Or.inr (Or.inr rfl)))
+      (fun _ hpos => absurd hpos (by rw [FloorsSettled_ack p hcap]; exact Nat.lt_irrefl _))
+  | tick h =>
+    refine ⟨hs.inv, hs.epoch, ?_, hs.acct, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · intro _; exact List.nodup_nil
+    · intro mid org ts via hm; cases hm
+    · intro id org hm; cases hm
+    · intro mid org ts via hm; cases hm
+    · intro _ _ _ o ho; cases ho
+    · intro hg; have := TickOk_gather h hg; show s.now + 1 ≤ _; exact this
+    · intro _ hpos; exact absurd hpos (Nat.lt_irrefl _)
+  | restart =>
+    refine ⟨NodeInit_inv p _, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · intro m; simp [Restarted, hc, NodeInit]
+    · intro _; exact List.nodup_nil
+    · intro _; refine ⟨fun x hx => ?_, fun x hx => ?_⟩ <;> simp_all [Restarted, NodeInit, SeenEmpty, LEmpty, LIds]
+    · intro mid org ts via hm; cases hm
+    · intro id org hm; cases hm
+    · intro mid org ts via hm; cases hm
+    · intro _ _ _ o ho; cases ho
+    · intro hg; show s.now ≤ s.now + p.floorWait + 1; omega
+    · intro _ hpos; exact absurd hpos (Nat.lt_irrefl _)
+
+theorem reach_inv {p : Params} {s : Sys} (hcap : 0 < p.seenCap) (r : Reach p s) : SInv p s := by
+  induction r with
+  | init => exact sinit_inv p
+  | step _ st ih => exact step_inv hcap ih st
+
+section Named
+variable {p : Params} {s : Sys} (hcap : 0 < p.seenCap) (r : Reach p s)
+include hcap r
+
+/-- An id is delivered, in all the epochs so far, at most as often as there were epochs (and a held copy counts). -/
+theorem epochBound : ∀ m, s.cnt m ≤ s.ep m := fun m => by
+  have := (reach_inv hcap r).epoch m; omega
+
+theorem onceNoDup (h : p.heldDedup = true) : s.dls.Nodup := (reach_inv hcap r).nodup h
+
+theorem seenAccounted (h : p.heldFullKeepsUnseen = true) :
+    (∀ x, s.node.seen.map x ≠ none → x ∈ s.acct) ∧ (∀ x ∈ LIds s.node.lg, x ∈ s.acct) := (reach_inv hcap r).acct h
+
+theorem deliveredAllowed : DelOK s.node.acp s.now s.outs := (reach_inv hcap r).del
+
+theorem denyDrops : DenyOK s.node.held s.outs := (reach_inv hcap r).deny
+
+theorem floorRespected : FreshDel p s.node s.outs := (reach_inv hcap r).resp
+
+theorem bounds : s.node.held.length ≤ p.heldMax ∧ s.node.fhold.length ≤ p.fholdMax ∧
+    s.node.checks.length ≤ p.checksMax ∧ s.node.seen.order.length ≤ p.seenCap ∧ s.node.lg.entries.length ≤ p.logCap ∧
+    s.node.acp.length ≤ p.acpMax :=
+  have h := (reach_inv hcap r).inv
+  ⟨h.heldLen, h.fholdLen, h.checksLen, h.seen.len, h.lgLen, h.acpLen⟩
+
+theorem gatherBound (h : s.node.phase = .gathering) : s.now ≤ s.node.born + p.floorWait + 1 :=
+  (reach_inv hcap r).gather h
+
+theorem ackOnlyStored (hk : p.ackAfterStore = true) (h : 0 < s.ackd) :
+    s.lm ∈ LIds s.node.lg ∨ s.node.seen.map s.lm ≠ none := (reach_inv hcap r).ack hk h
+
+end Named
+
+/-- A step whose message is not a good one changes nothing but the records. -/
+theorem garbage_inert {p : Params} {s s' : Sys} {t : Frame} {b : Bool} {m : Msg} (h : m.kind ≠ .good)
+    (st : s' = Apply p s (OnMsg p s.node s.now s.now t b m) .msg m.mid) : s'.node = s.node ∧ s'.dls = [] := by
+  subst st
+  exact OnMsg_garbage h
+
+/-- The first timer past the wait ends the gathering. -/
+theorem gather_ends {p : Params} {N : Node} {now : Nat} (hg : N.phase = .gathering) (h : p.floorWait < now - N.born) :
+    (OnTimer p N now).n.phase ≠ .gathering := by
+  unfold OnTimer
+  dsimp only
+  rw [if_pos ⟨hg, h⟩]
+  unfold FloorsSettled
+  have T := offerAllTrans p now (Sweep p N now).fhold
+    (Plain {Sweep p N now with phase := .done, rfloor := none, ofloor := none, nohist := false, fhold := []} [.floorDone false])
+  rw [T.core.phase]
+  simp [Plain]
+
+#audit_axioms Vinc.BroadcastNode.reach_inv
+#audit_axioms Vinc.BroadcastNode.epochBound
+#audit_axioms Vinc.BroadcastNode.onceNoDup
+#audit_axioms Vinc.BroadcastNode.seenAccounted
+#audit_axioms Vinc.BroadcastNode.deliveredAllowed
+#audit_axioms Vinc.BroadcastNode.denyDrops
+#audit_axioms Vinc.BroadcastNode.floorRespected
+#audit_axioms Vinc.BroadcastNode.bounds
+#audit_axioms Vinc.BroadcastNode.gatherBound
+#audit_axioms Vinc.BroadcastNode.ackOnlyStored
+#audit_axioms Vinc.BroadcastNode.garbage_inert
+#audit_axioms Vinc.BroadcastNode.gather_ends
+
+end Vinc.BroadcastNode
