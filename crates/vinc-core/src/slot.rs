@@ -1,0 +1,355 @@
+//! One entry of the connection table: the connection (or the memory waiting for the next one) and what the endpoint
+//! knows about the session around it.
+//!
+//! Invariants: exactly one of `conn` and `mem` holds a value at any time, so a slot's memory is never lost and never
+//! used by two connections; `gen` grows each time the slot starts a new session, so a [`SessionId`] names one
+//! session only; the held events of a session are released in the order they arrived.
+
+use vinc_crypto::{NodeId, Provider};
+use vinc_security::{Alpn, ConnId};
+use vinc_transport::conn::{Connection, PathId, Resources};
+use vinc_transport::stream::StreamSource;
+
+use crate::api::{Event, SessionId};
+use crate::keepalive::{Plan, Role};
+
+/// Most connection ids one session registers: the first, the derived window and the id the dialer invented.
+pub(crate) const MAX_CIDS: usize = 10;
+/// The most application events held back for the access check.
+pub const HELD_EVENTS: usize = 64;
+pub(crate) const NIL: u32 = u32::MAX;
+
+/// Where the session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum State {
+    /// The handshake runs.
+    Handshaking,
+    /// The peer is authenticated.
+    Established,
+    /// The connection ended and the slot waits to be freed.
+    Closing,
+}
+
+/// A held application event in compact form.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HeldEvent {
+    pub(crate) kind: u8,
+    pub(crate) stream: u64,
+    pub(crate) error: u64,
+}
+
+impl HeldEvent {
+    pub(crate) const OPENED: u8 = 0;
+    pub(crate) const READABLE: u8 = 1;
+    pub(crate) const WRITABLE: u8 = 2;
+    pub(crate) const RESET: u8 = 3;
+    pub(crate) const DATAGRAM: u8 = 4;
+
+    pub(crate) const fn of(ev: &Event) -> Option<Self> {
+        let (kind, stream, error) = match *ev {
+            Event::StreamOpened { stream, .. } => (Self::OPENED, stream, 0),
+            Event::StreamReadable { stream, .. } => (Self::READABLE, stream, 0),
+            Event::StreamWritable { stream, .. } => (Self::WRITABLE, stream, 0),
+            Event::StreamReset { stream, error, .. } => (Self::RESET, stream, error),
+            Event::DatagramReceived { .. } => (Self::DATAGRAM, 0, 0),
+            _ => return None,
+        };
+        Some(Self { kind, stream, error })
+    }
+
+    pub(crate) const fn event(&self, session: SessionId) -> Event {
+        let stream = self.stream;
+        match self.kind {
+            Self::OPENED => Event::StreamOpened { session, stream },
+            Self::READABLE => Event::StreamReadable { session, stream },
+            Self::WRITABLE => Event::StreamWritable { session, stream },
+            Self::RESET => Event::StreamReset {
+                session,
+                stream,
+                error: self.error,
+            },
+            _ => Event::DatagramReceived { session },
+        }
+    }
+
+    pub(crate) const fn lossy(&self) -> bool {
+        matches!(self.kind, Self::READABLE | Self::WRITABLE | Self::DATAGRAM)
+    }
+}
+
+/// The application events of a session waiting for its access check.
+#[derive(Debug)]
+pub(crate) struct Held {
+    items: [Option<HeldEvent>; HELD_EVENTS],
+    head: usize,
+    len: usize,
+    pub(crate) dropped: u64,
+}
+
+impl Held {
+    pub(crate) const EMPTY: Self = Self {
+        items: [None; HELD_EVENTS],
+        head: 0,
+        len: 0,
+        dropped: 0,
+    };
+
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    fn at(&self, i: usize) -> usize {
+        (self.head + i) % HELD_EVENTS
+    }
+
+    /// Hold an event. A repeated notification for the same stream merges; when full, the oldest notification the
+    /// application can recover by reading state goes first, then the oldest event.
+    pub(crate) fn push(&mut self, ev: HeldEvent) {
+        if ev.lossy()
+            && (0..self.len).any(|i| {
+                self.items
+                    .get(self.at(i))
+                    .copied()
+                    .flatten()
+                    .is_some_and(|h| h.kind == ev.kind && h.stream == ev.stream)
+            })
+        {
+            return;
+        }
+        if self.len == HELD_EVENTS {
+            let victim = (0..self.len)
+                .find(|i| {
+                    self.items
+                        .get(self.at(*i))
+                        .copied()
+                        .flatten()
+                        .is_some_and(|h| h.lossy())
+                })
+                .unwrap_or(0);
+            // Close the gap at `victim` by moving the older entries up one place.
+            for i in (0..victim).rev() {
+                let (from, to) = (self.at(i), self.at(i + 1));
+                let moved = self.items.get(from).copied().flatten();
+                if let Some(s) = self.items.get_mut(to) {
+                    *s = moved;
+                }
+            }
+            self.head = (self.head + 1) % HELD_EVENTS;
+            self.len -= 1;
+            self.dropped += 1;
+        }
+        let at = self.at(self.len);
+        if let Some(s) = self.items.get_mut(at) {
+            *s = Some(ev);
+            self.len += 1;
+        }
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<HeldEvent> {
+        if self.len == 0 {
+            return None;
+        }
+        let e = self.items.get_mut(self.head).and_then(Option::take);
+        self.head = (self.head + 1) % HELD_EVENTS;
+        self.len -= 1;
+        e
+    }
+
+    pub(crate) fn clear(&mut self) {
+        while self.pop().is_some() {}
+    }
+}
+
+/// When the endpoint last sent and heard on one path of a session.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PathStamp {
+    pub(crate) id: PathId,
+    pub(crate) tx: u64,
+    pub(crate) rx: u64,
+}
+
+/// What the endpoint knows about a session.
+#[derive(Debug)]
+pub(crate) struct Meta<const NP: usize> {
+    pub(crate) generation: u32,
+    pub(crate) in_use: bool,
+    pub(crate) next_free: u32,
+    /// 0 not queued for sending, else the queue (1 normal, 2 broadcast).
+    pub(crate) dirty: u8,
+    pub(crate) dirty_next: u32,
+    pub(crate) peer: Option<NodeId>,
+    pub(crate) alpn: Option<Alpn>,
+    /// The next session of the same peer.
+    pub(crate) peer_next: u32,
+    pub(crate) client: bool,
+    pub(crate) state: State,
+    pub(crate) role: Role,
+    pub(crate) gossip: bool,
+    /// A sub-session open is queued in this session and has not left yet.
+    pub(crate) ctrl_pending: bool,
+    pub(crate) created: u64,
+    /// Counted against the half-open cap.
+    pub(crate) half_open: bool,
+    /// A server session whose peer is not authenticated yet.
+    pub(crate) unauth: bool,
+    pub(crate) allowed: bool,
+    pub(crate) optimistic: bool,
+    /// 0 none, 1 waiting for the access check and READY, 2 allowed and waiting for READY, 3 READY seen and waiting
+    /// for the access check.
+    pub(crate) hold: u8,
+    /// Whether the application was told this session exists.
+    pub(crate) announced: bool,
+    pub(crate) resumed: bool,
+    pub(crate) parent: Option<SessionId>,
+    pub(crate) has_sub: bool,
+    pub(crate) last_tx: u64,
+    pub(crate) last_rx: u64,
+    pub(crate) last_app: u64,
+    pub(crate) paths: [Option<PathStamp>; NP],
+    pub(crate) cids: [Option<ConnId>; MAX_CIDS],
+    pub(crate) cid_epoch: u64,
+    pub(crate) odcid: Option<ConnId>,
+    pub(crate) held: Held,
+    pub(crate) seen_peak: u64,
+    pub(crate) plan: Plan,
+    /// Whether the session was woken by suspension while timing out.
+    pub(crate) sleep_doubt: bool,
+    pub(crate) acp_recheck: Option<u64>,
+    /// The node round trip version last handed to the connection.
+    pub(crate) node_ver: u64,
+    /// The access check denied the session.
+    pub(crate) denied: bool,
+    /// The session was closed because its parent closed before the peer was heard.
+    pub(crate) orphaned: bool,
+    /// The session was closed so the application dials again.
+    pub(crate) redial: bool,
+    /// This is a sub-session.
+    pub(crate) sub: bool,
+    /// The session is in its peer's list.
+    pub(crate) linked: bool,
+    /// Close with this code once everything queued has left (a dialer's Finish goes out before its deny).
+    pub(crate) deferred_close: Option<u64>,
+}
+
+impl<const NP: usize> Meta<NP> {
+    pub(crate) const EMPTY: Self = Self {
+        generation: 0,
+        in_use: false,
+        next_free: NIL,
+        dirty: 0,
+        dirty_next: NIL,
+        peer: None,
+        alpn: None,
+        peer_next: NIL,
+        client: false,
+        state: State::Handshaking,
+        role: Role::Other,
+        gossip: false,
+        ctrl_pending: false,
+        created: 0,
+        half_open: false,
+        unauth: false,
+        allowed: false,
+        optimistic: false,
+        hold: 0,
+        announced: false,
+        resumed: false,
+        parent: None,
+        has_sub: false,
+        last_tx: 0,
+        last_rx: 0,
+        last_app: 0,
+        paths: [None; NP],
+        cids: [None; MAX_CIDS],
+        cid_epoch: u64::MAX,
+        odcid: None,
+        held: Held::EMPTY,
+        seen_peak: 0,
+        plan: Plan {
+            ping_at: None,
+            review_at: None,
+        },
+        sleep_doubt: false,
+        acp_recheck: None,
+        node_ver: 0,
+        denied: false,
+        orphaned: false,
+        redial: false,
+        sub: false,
+        linked: false,
+        deferred_close: None,
+    };
+
+    /// Reset for a new session, keeping the table bookkeeping (generation, list links).
+    pub(crate) fn begin(&mut self, client: bool, now: u64) {
+        let keep = (
+            self.generation.wrapping_add(1),
+            self.next_free,
+            self.dirty,
+            self.dirty_next,
+        );
+        *self = Self::EMPTY;
+        (self.generation, self.next_free, self.dirty, self.dirty_next) = keep;
+        self.in_use = true;
+        self.client = client;
+        self.created = now;
+        self.last_tx = now;
+        self.last_rx = now;
+        self.last_app = now;
+    }
+
+    pub(crate) fn stamp(&mut self, id: PathId) -> Option<&mut PathStamp> {
+        let i = self
+            .paths
+            .iter()
+            .position(|p| p.is_some_and(|p| p.id == id))
+            .or_else(|| {
+                let free = self.paths.iter().position(Option::is_none);
+                free.or_else(|| {
+                    self.paths
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| p.map(|p| (p.tx.max(p.rx), i)))
+                        .min()
+                        .map(|(_, i)| i)
+                })
+                .inspect(|i| {
+                    if let Some(s) = self.paths.get_mut(*i) {
+                        *s = Some(PathStamp { id, tx: 0, rx: 0 });
+                    }
+                })
+            })?;
+        self.paths.get_mut(i)?.as_mut()
+    }
+}
+
+/// One entry of the connection table. Build one per connection the endpoint may hold, each with its own memory.
+pub struct Slot<'a, P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usize, const NP: usize> {
+    pub(crate) conn: Option<Connection<'a, P, S, N, C, F, NP>>,
+    pub(crate) mem: Option<Resources<'a, S, N, C>>,
+    pub(crate) m: Meta<NP>,
+}
+
+impl<'a, P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usize, const NP: usize>
+    Slot<'a, P, S, N, C, F, NP>
+{
+    /// A free slot that will run its connections in `memory`.
+    pub fn new(memory: Resources<'a, S, N, C>) -> Self {
+        Self {
+            conn: None,
+            mem: Some(memory),
+            m: Meta::EMPTY,
+        }
+    }
+}
+
+impl<P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usize, const NP: usize> core::fmt::Debug
+    for Slot<'_, P, S, N, C, F, NP>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Slot")
+            .field("in_use", &self.m.in_use)
+            .field("generation", &self.m.generation)
+            .finish_non_exhaustive()
+    }
+}

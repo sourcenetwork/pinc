@@ -1,0 +1,250 @@
+//! Datagrams in: find the session a datagram belongs to, or decide whether it may create one.
+//!
+//! The destination connection id of the first packet picks the candidates in the demultiplexing table. One
+//! candidate owns the datagram; several (two sessions derived the same four bytes) are tried in turn on a copy of the
+//! datagram, because opening a packet changes the bytes in place, and the session whose keys open it owns it. An id no
+//! session holds can only start a session if the datagram is a first handshake message that meets its size floor
+//! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
+//! resumption Hello is exempt from the count because its binder proves a past session.
+//!
+//! Invariants: a datagram larger than [`MAX_DATAGRAM`] or shorter than a header is dropped and counted; a datagram
+//! that cannot create a session and matches none is dropped and counted; the copy used for trials is the only extra
+//! buffer, held inside the endpoint.
+
+use core::net::SocketAddr;
+
+use vinc_security::message::{FULL_INITIAL_MIN, MessageType, SHORT_INITIAL_MIN};
+use vinc_security::{ConnId, Env};
+use vinc_transport::conn::{Connection, Drop, ServerParams};
+use vinc_transport::packet::{LongHeader, LongType, short_dcid};
+use vinc_wire::Reader;
+
+use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl};
+use crate::trace::trace;
+
+/// The most sessions that may hold the same four bytes and still be tried.
+const MAX_CANDIDATES: usize = 4;
+/// The most unauthenticated sessions.
+pub const MAX_HALF_OPEN: usize = 256;
+/// How long an unauthenticated session lives (30 s).
+pub const HALF_OPEN_LIFE: u64 = 30_000_000_000;
+
+/// What the first packet of an unroutable datagram says.
+struct First {
+    odcid: ConnId,
+    kind: MessageType,
+}
+
+/// The destination id of the first packet of a datagram, and whether it is a long header.
+fn peek(buf: &[u8]) -> Option<(ConnId, bool)> {
+    let first = *buf.first()?;
+    if first & 0x80 == 0 {
+        short_dcid(buf, CID_LEN).ok().map(|d| (d, false))
+    } else {
+        LongHeader::parse(buf).ok().map(|(h, _)| (h.dcid, true))
+    }
+}
+
+/// The destination id and first message type of a long Handshake packet that starts a message.
+fn classify(buf: &[u8]) -> Option<First> {
+    let (h, hlen) = LongHeader::parse(buf).ok()?;
+    if h.ty != LongType::Handshake {
+        return None;
+    }
+    let body = buf.get(hlen..hlen.checked_add(h.body_len)?)?;
+    let mut r = Reader::new(body);
+    let total = r.read_varint().ok()?;
+    let off = r.read_varint().ok()?;
+    if off != 0 || total == 0 {
+        return None;
+    }
+    let kind = MessageType::of(&[r.read_u8().ok()?]).ok()?;
+    Some(First { odcid: h.dcid, kind })
+}
+
+ep_impl! {
+    /// Process a datagram that arrived on `local` from `remote`. The bytes are changed in place. Nothing is returned:
+    /// what the datagram caused shows in [`poll_transmit`](Self::poll_transmit), [`poll_event`](Self::poll_event) and
+    /// [`poll_timeout`](Self::poll_timeout).
+    pub fn handle_datagram(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        self.counters.datagrams_in += 1;
+        if buf.is_empty() || buf.len() > MAX_DATAGRAM {
+            self.counters.dropped_in += 1;
+            return;
+        }
+        self.ledger.on_receive(remote, buf.len() as u64);
+        trace!(self, now, LedgerRx {
+            addr: addr_key(&remote),
+            rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
+        });
+        let Some((dcid, long)) = peek(buf) else {
+            self.counters.dropped_in += 1;
+            return;
+        };
+        let (found, n) = self.demux.matches::<MAX_CANDIDATES>(&dcid);
+        trace!(self, now, Demux {
+            slot: found.first().copied().flatten().map_or(u64::MAX, u64::from),
+            candidates: n as u64,
+        });
+        match n {
+            0 => self.unrouted(now, local, remote, buf),
+            1 => {
+                if let Some(i) = found.first().copied().flatten() {
+                    // A drop reason is counted by the connection itself.
+                    let _ = self.deliver(i as usize, now, local, remote, buf);
+                }
+            }
+            _ => self.trial(&found, now, local, remote, buf, long),
+        }
+    }
+
+    /// Try each session that holds the id on a fresh copy; the first whose keys open the packet owns it.
+    fn trial(
+        &mut self,
+        found: &[Option<u32>],
+        now: u64,
+        local: SocketAddr,
+        remote: SocketAddr,
+        buf: &mut [u8],
+        long: bool,
+    ) {
+        let len = buf.len();
+        if let Some(d) = self.scratch.get_mut(..len) {
+            d.copy_from_slice(buf);
+        }
+        for (k, i) in found.iter().flatten().enumerate() {
+            if k > 0 {
+                match self.scratch.get(..len) {
+                    Some(s) => buf.copy_from_slice(s),
+                    None => return,
+                }
+            }
+            let r = self.deliver(*i as usize, now, local, remote, buf);
+            // A long packet is not sealed, so the first holder takes it.
+            let mine = long || !matches!(r, Err(Drop::Undecryptable | Drop::Unroutable));
+            trace!(self, now, Trial { slot: u64::from(*i), ok: u64::from(mine) });
+            if mine {
+                return;
+            }
+        }
+        self.counters.dropped_in += 1;
+    }
+
+    /// Hand a datagram to session `i`, then bring the endpoint's view of it up to date.
+    fn deliver(
+        &mut self,
+        i: usize,
+        now: u64,
+        local: SocketAddr,
+        remote: SocketAddr,
+        buf: &mut [u8],
+    ) -> Result<(), Drop> {
+        let pid = self.path_id(local, remote);
+        let Some(slot) = self.slots.get_mut(i) else { return Err(Drop::Unroutable) };
+        let Some(conn) = slot.conn.as_mut() else { return Err(Drop::Closed) };
+        let mut env = env!(self, now);
+        let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
+        if r.is_ok() {
+            slot.m.last_rx = now;
+            if let Some(p) = slot.m.stamp(pid) {
+                p.rx = now;
+            }
+            if conn.path_validated(pid) {
+                self.udp_heard = Some(now);
+            }
+        }
+        self.settle(i, now);
+        r
+    }
+
+    /// A datagram for an id no session holds: it may start a server session.
+    fn unrouted(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        let Some(first) = classify(buf) else {
+            self.counters.dropped_in += 1;
+            return;
+        };
+        let floor = match first.kind {
+            MessageType::Initial => FULL_INITIAL_MIN,
+            MessageType::ShortInitial => SHORT_INITIAL_MIN,
+            MessageType::ResumeHello => 0,
+            _ => {
+                self.counters.dropped_in += 1;
+                return;
+            }
+        };
+        let resume = first.kind == MessageType::ResumeHello;
+        let admitted = buf.len() >= floor && (resume || self.half_open < MAX_HALF_OPEN);
+        trace!(self, now, HalfOpen {
+            admitted: u64::from(admitted),
+            half_open: self.half_open as u64,
+            resume: u64::from(resume),
+        });
+        if !admitted {
+            self.counters.dropped_in += 1;
+            return;
+        }
+        let Some(i) = self.accept(now, first.odcid, resume) else {
+            self.counters.dropped_in += 1;
+            return;
+        };
+        // A drop reason is counted by the connection itself.
+        let _ = self.deliver(i, now, local, remote, buf);
+    }
+
+    /// Create the server session for a first handshake message.
+    fn accept(&mut self, now: u64, odcid: ConnId, resume: bool) -> Option<usize> {
+        let alpns = self.alpn_list()?;
+        let (i, mem) = self.alloc_slot(false, now)?;
+        let cfg = self.conn_config(None);
+        let params = ServerParams {
+            identity: self.identity,
+            alpns,
+            tickets_per_session: self.cfg.tickets_per_session,
+            ticket_lifetime_s: self.cfg.ticket_lifetime_s,
+        };
+        let mut env: Env<'_, P> = env!(self, now);
+        let Ok(conn) = Connection::server(cfg, &params, mem, &mut env) else {
+            self.retire_slot(i);
+            return None;
+        };
+        if !self.register_cid(i, odcid) {
+            // The table is full: there is no room to route this session, so it is not created.
+            if let Some(slot) = self.slots.get_mut(i) {
+                slot.conn = Some(conn);
+            }
+            self.free_slot(i, now);
+            return None;
+        }
+        let slot = self.slots.get_mut(i)?;
+        slot.conn = Some(conn);
+        slot.m.odcid = Some(odcid);
+        slot.m.unauth = true;
+        slot.m.half_open = !resume;
+        if !resume {
+            self.half_open += 1;
+        }
+        self.sync_cids(i, true);
+        trace!(self, now, Session { slot: i as u64, step: 0, dialer: 0 });
+        Some(i)
+    }
+}
+
+/// A number standing for an address in a trace line.
+#[cfg(feature = "trace")]
+pub(crate) fn addr_key(a: &SocketAddr) -> u64 {
+    match a {
+        SocketAddr::V4(v) => u64::from(u32::from(*v.ip())) << 16 | u64::from(v.port()),
+        SocketAddr::V6(v) => {
+            let o = v.ip().octets();
+            let mut x = u64::from(v.port());
+            for c in o.chunks(8) {
+                let mut w = [0u8; 8];
+                if let Some(d) = w.get_mut(..c.len()) {
+                    d.copy_from_slice(c);
+                }
+                x ^= u64::from_be_bytes(w).rotate_left(17);
+            }
+            x
+        }
+    }
+}

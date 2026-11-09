@@ -28,6 +28,7 @@ vinc-connect = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
+vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -339,6 +340,42 @@ path = "trace_keyroll.rs"
 [[test]]
 name = "trace_security"
 path = "trace_security.rs"
+
+[[test]]
+name = "core_endpoint"
+path = "core_endpoint.rs"
+
+[[test]]
+name = "core_demux"
+path = "core_demux.rs"
+
+[[test]]
+name = "core_defense"
+path = "core_defense.rs"
+
+[[test]]
+name = "core_acp"
+path = "core_acp.rs"
+
+[[test]]
+name = "core_sub"
+path = "core_sub.rs"
+
+[[test]]
+name = "core_timing"
+path = "core_timing.rs"
+
+[[test]]
+name = "core_noalloc"
+path = "core_noalloc.rs"
+
+[[test]]
+name = "core_garbage"
+path = "core_garbage.rs"
+
+[[test]]
+name = "core_props"
+path = "core_props.rs"
 
 [[test]]
 name = "transport_wide"

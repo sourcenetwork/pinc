@@ -1375,6 +1375,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
+ "vinc-core",
  "vinc-crypto",
  "vinc-dag",
  "vinc-dtn",
@@ -1392,6 +1393,16 @@ version = "0.1.0"
 dependencies = [
  "vinc-crypto",
  "vinc-security",
+ "vinc-wire",
+]
+
+[[package]]
+name = "vinc-core"
+version = "0.1.0"
+dependencies = [
+ "vinc-crypto",
+ "vinc-security",
+ "vinc-transport",
  "vinc-wire",
 ]
 
@@ -1486,6 +1497,7 @@ dependencies = [
  "ml-kem",
  "proptest",
  "vinc-connect",
+ "vinc-core",
  "vinc-crypto",
  "vinc-dag",
  "vinc-dtn",

@@ -17,6 +17,7 @@ vinc-sim = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
+vinc-core = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -68,6 +69,10 @@ harness = false
 
 [[bench]]
 name = "reconcile"
+harness = false
+
+[[bench]]
+name = "core"
 harness = false
 
 [lints]

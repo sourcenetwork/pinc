@@ -3,7 +3,9 @@
 //! The tests themselves are the `[[test]]` targets of this package (`tests/*.rs`); this library holds what several of
 //! them use.
 
+mod core_net;
 mod link;
+pub use core_net::*;
 pub use link::*;
 
 /// A small deterministic pseudo-random generator (`SplitMix64`) for reproducible test inputs.

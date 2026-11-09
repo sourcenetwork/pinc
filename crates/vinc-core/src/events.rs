@@ -1,0 +1,325 @@
+//! Connection events to endpoint events: establishment, closing and the application gate.
+//!
+//! The endpoint reads every event of a connection right after it changed. Transport events become [`Event`]s; the
+//! ones that report application data (streams, datagrams) pass the access gate: they are emitted only once the peer's
+//! access check allowed the session (and, on a client that waits for READY, once READY arrived), and are held in order
+//! until then, 64 at most. Establishment starts the access check and, on the dialing side, the round trip notes; a
+//! close tells the application, orphans the unheard sub-sessions of the session and, for a dial that timed out, raises
+//! the handshake floor.
+//!
+//! Invariants: no application event leaves before the session is allowed; a session the application never heard of
+//! produces no `Closed`; a dial the application asked for ends with `Connected` or `ConnectFailed` (or `Closed` after
+//! an early `Connected`), never silently; a session is orphaned at most once.
+
+use vinc_security::TicketBatch;
+use vinc_transport::conn::{CloseReason, Event as ConnEvent, PathId, code};
+
+use crate::api::{ConnectFailure, EndReason, Event, PathState};
+use crate::endpoint::{env, ep_impl};
+use crate::slot::{HeldEvent, State};
+use crate::sub::EXT_SUB_SESSION_OPEN;
+use crate::trace::trace;
+
+/// The largest extension body kept for the endpoint to parse.
+const EXT_KEEP: usize = 64;
+/// Application data above this many bytes counts as activity on a quiet session.
+const CTRL_SMALL: usize = 72;
+/// The round trip below which a client waits for READY before it reports the session (20 ms).
+const READY_RTT: u64 = 20_000_000;
+
+/// A connection event with its borrowed data copied out.
+#[derive(Clone, Copy)]
+enum Co {
+    KeyRequest,
+    Connected(bool),
+    Opened(u64),
+    Readable(u64),
+    Writable(u64),
+    Reset(u64, u64),
+    Datagram,
+    Extension { ty: u64, len: usize, body: [u8; EXT_KEEP] },
+    Undeliverable(u64),
+    Path(PathId, PathState),
+    Asleep,
+    Awake,
+    WakeUnanswered,
+    Tickets(TicketBatch),
+    Ready,
+    Closed(CloseReason),
+}
+
+ep_impl! {
+    /// Read and handle every event session `i` has.
+    pub(crate) fn drain(&mut self, i: usize, now: u64) {
+        loop {
+            let Some(slot) = self.slots.get_mut(i) else { return };
+            if !slot.m.in_use {
+                return;
+            }
+            let Some(conn) = slot.conn.as_mut() else { return };
+            let Some(ev) = conn.poll_event() else { return };
+            let co = match ev {
+                ConnEvent::KeyRequest(_) => Co::KeyRequest,
+                ConnEvent::Connected { resumed } => Co::Connected(resumed),
+                ConnEvent::StreamOpened(id) => Co::Opened(id),
+                ConnEvent::StreamReadable(id) => Co::Readable(id),
+                ConnEvent::StreamWritable(id) => Co::Writable(id),
+                ConnEvent::StreamReset { id, error } => Co::Reset(id, error),
+                ConnEvent::DatagramReceived => Co::Datagram,
+                ConnEvent::Extension { ty, body } => {
+                    let mut buf = [0u8; EXT_KEEP];
+                    let len = body.len().min(EXT_KEEP);
+                    if let (Some(d), Some(s)) = (buf.get_mut(..len), body.get(..len)) {
+                        d.copy_from_slice(s);
+                    }
+                    Co::Extension { ty, len: if body.len() > EXT_KEEP { 0 } else { len }, body: buf }
+                }
+                ConnEvent::ExtensionUndeliverable { ty, .. } => Co::Undeliverable(ty),
+                ConnEvent::PathValidated(p) => Co::Path(p, PathState::Validated),
+                ConnEvent::PathFailed(p) => Co::Path(p, PathState::Failed),
+                ConnEvent::PeerAsleep => Co::Asleep,
+                ConnEvent::PeerAwake => Co::Awake,
+                ConnEvent::WakeUnanswered => Co::WakeUnanswered,
+                ConnEvent::TicketsReceived(b) => Co::Tickets(b),
+                ConnEvent::Ready => Co::Ready,
+                ConnEvent::Closed(r) => Co::Closed(r),
+            };
+            self.on_conn_event(i, now, co);
+        }
+    }
+
+    fn on_conn_event(&mut self, i: usize, now: u64, co: Co) {
+        let session = self.session_id(i);
+        match co {
+            Co::KeyRequest => self.emit(Event::KeyRequest { session }),
+            Co::Connected(resumed) => self.on_established(i, now, resumed),
+            Co::Opened(stream) => self.app_event(i, now, Event::StreamOpened { session, stream }),
+            Co::Readable(stream) => {
+                self.note_app_data(i, now, stream);
+                self.app_event(i, now, Event::StreamReadable { session, stream });
+            }
+            Co::Writable(stream) => self.app_event(i, now, Event::StreamWritable { session, stream }),
+            Co::Reset(stream, error) => self.app_event(i, now, Event::StreamReset { session, stream, error }),
+            Co::Datagram => self.app_event(i, now, Event::DatagramReceived { session }),
+            Co::Extension { ty, len, body } => {
+                if ty == EXT_SUB_SESSION_OPEN && len > 0 {
+                    self.sub_accept(i, now, body.get(..len).unwrap_or_default());
+                }
+            }
+            Co::Undeliverable(ty) => {
+                // A sub-session open that cannot be sent leaves its children unaccepted.
+                if ty == EXT_SUB_SESSION_OPEN {
+                    self.orphan_children(i, now);
+                }
+            }
+            Co::Path(path, state) => self.emit(Event::PathChanged { session, path, state }),
+            Co::Asleep => self.emit(Event::PeerAsleep { session }),
+            Co::Awake => self.emit(Event::PeerAwake { session }),
+            Co::WakeUnanswered => self.redial(i, now),
+            Co::Tickets(batch) => {
+                if let Some(conn) = self.slots.get(i).and_then(|s| s.conn.as_ref()) {
+                    conn.store_tickets(&mut self.tickets, &batch, now);
+                }
+                self.emit(Event::TicketsReceived { session, count: batch.entries().len() });
+            }
+            Co::Ready => self.on_ready(i, now),
+            Co::Closed(reason) => self.on_closed(i, now, reason),
+        }
+    }
+
+    /// Application data arrived on `stream`: it counts as activity unless the session is quiet and the data is only
+    /// a control message.
+    fn note_app_data(&mut self, i: usize, now: u64, stream: u64) {
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        let n = slot.conn.as_ref().and_then(|c| c.read_chunk(stream)).map_or(0, <[u8]>::len);
+        if !slot.m.role.quiet() || n > CTRL_SMALL {
+            slot.m.last_app = now;
+        }
+    }
+
+    /// An application event: emitted if the session is allowed and not waiting for READY, held otherwise.
+    fn app_event(&mut self, i: usize, now: u64, ev: Event) {
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        if slot.m.allowed && slot.m.hold != 2 {
+            self.emit(ev);
+            return;
+        }
+        if let Some(h) = HeldEvent::of(&ev) {
+            slot.m.held.push(h);
+            trace!(self, now, Gate { slot: i as u64, release: 0, held: slot.m.held.len() as u64 });
+        }
+    }
+
+    /// Emit the held events of session `i` in the order they arrived.
+    pub(crate) fn release_held(&mut self, i: usize, now: u64) {
+        let session = self.session_id(i);
+        trace!(self, now, Gate { slot: i as u64, release: 1, held: self.slots.get(i).map_or(0, |s| s.m.held.len()) as u64 });
+        while let Some(h) = self.slots.get_mut(i).and_then(|s| s.m.held.pop()) {
+            self.emit(h.event(session));
+        }
+    }
+
+    /// The handshake completed.
+    fn on_established(&mut self, i: usize, now: u64, resumed: bool) {
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        let Some(conn) = slot.conn.as_mut() else { return };
+        let Some((peer, alpn)) = conn.session().map(|e| (e.peer, e.alpn)) else { return };
+        let stats = conn.stats();
+        slot.m.peer = Some(peer);
+        slot.m.alpn = Some(alpn);
+        slot.m.state = State::Established;
+        slot.m.resumed = resumed;
+        slot.m.last_app = now;
+        if slot.m.unauth {
+            slot.m.unauth = false;
+            if slot.m.half_open {
+                slot.m.half_open = false;
+                self.half_open = self.half_open.saturating_sub(1);
+            }
+        }
+        let client = slot.m.client;
+        let sub = slot.m.sub;
+        self.link_peer(peer, u32::try_from(i).unwrap_or(0));
+        trace!(self, now, Session { slot: i as u64, step: 1, dialer: u64::from(client) });
+        if sub {
+            // A sub-session takes the access state of the peer; there was no handshake to measure.
+            self.start_acp(i, now);
+            return;
+        }
+        if client {
+            if stats.handshake_retransmits == 0 && stats.srtt > 0 {
+                self.rtt.note_handshake(peer, stats.srtt);
+                self.node_ver += 1;
+                trace!(self, now, Rtt {
+                    lrtt: self.rtt.lrtt(),
+                    tgr: self.rtt.tgr(),
+                    hs_floor: self.rtt.hs_floor(),
+                });
+            }
+            if !resumed && let Some(pk) = self.prekey.as_ref() {
+                self.ekk.insert(peer, *pk.hash());
+            }
+            if let Some(slot) = self.slots.get_mut(i) {
+                if stats.srtt > 0 && stats.srtt < READY_RTT {
+                    slot.m.hold = 1;
+                }
+                if let Some(conn) = slot.conn.as_mut() {
+                    let mut env = env!(self, now);
+                    // The responder keeps one ticket of ours so it can dial back with a resumption.
+                    let _ = conn.issue_tickets(&mut env, &mut self.stores.tickets, 1, self.cfg.ticket_lifetime_s);
+                }
+            }
+        }
+        self.start_acp(i, now);
+    }
+
+    /// The peer sent READY: the server's access answer is in.
+    fn on_ready(&mut self, i: usize, now: u64) {
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        if !slot.m.client {
+            return;
+        }
+        match slot.m.hold {
+            2 => {
+                slot.m.hold = 0;
+                let report = !slot.m.optimistic && slot.m.state == State::Established;
+                trace!(self, now, Early { slot: i as u64, rule: 2 });
+                if report {
+                    self.announce(i);
+                }
+                self.release_held(i, now);
+            }
+            1 => slot.m.hold = 3,
+            _ => {}
+        }
+    }
+
+    /// Tell the application a dialed session is open.
+    pub(crate) fn announce(&mut self, i: usize) {
+        let session = self.session_id(i);
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        let (Some(node), Some(alpn)) = (slot.m.peer, slot.m.alpn) else { return };
+        slot.m.announced = true;
+        let resumed = slot.m.resumed;
+        self.emit(Event::Connected { session, node, alpn, resumed });
+    }
+
+    /// A connection ended.
+    fn on_closed(&mut self, i: usize, now: u64, reason: CloseReason) {
+        let session = self.session_id(i);
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        let was_visible = slot.m.allowed || slot.m.optimistic;
+        let (client, denied, orphaned, redial) = (slot.m.client, slot.m.denied, slot.m.orphaned, slot.m.redial);
+        let (node, alpn) = (slot.m.peer, slot.m.alpn);
+        let has_sub = slot.m.has_sub;
+        slot.m.state = State::Closing;
+        slot.m.held.clear();
+        slot.m.acp_recheck = None;
+        if was_visible {
+            let why = if denied {
+                EndReason::Denied
+            } else if orphaned {
+                EndReason::Orphaned
+            } else if redial {
+                EndReason::Redial
+            } else {
+                EndReason::Transport(reason)
+            };
+            self.emit(Event::Closed { session, reason: why });
+        } else if client && !denied && let (Some(node), Some(alpn)) = (node, alpn) {
+            self.emit(Event::ConnectFailed { node, alpn, reason: failure_of(reason) });
+        }
+        if client && matches!(reason, CloseReason::HandshakeTimeout) {
+            self.rtt.note_timeout();
+            self.node_ver += 1;
+        }
+        if has_sub {
+            self.orphan_children(i, now);
+        }
+    }
+
+    /// Close the sessions opened over session `i` that never heard their peer.
+    fn orphan_children(&mut self, parent: usize, now: u64) {
+        let Some(peer) = self.slots.get(parent).and_then(|s| s.m.peer) else { return };
+        let pid = self.session_id(parent);
+        while let Some(c) = self.peer_find(&peer, |e, c| {
+            e.slots.get(c).is_some_and(|s| {
+                s.m.parent == Some(pid)
+                    && s.m.state == State::Established
+                    && !s.m.orphaned
+                    && s.conn.as_ref().is_some_and(|k| k.stats().packets_received == 0)
+            })
+        }) {
+            trace!(self, now, Sub { step: 2, parent: parent as u64, child: c as u64 });
+            if let Some(s) = self.slots.get_mut(c) {
+                s.m.orphaned = true;
+                if let Some(conn) = s.conn.as_mut() {
+                    let mut env = env!(self, now);
+                    conn.close(&mut env, code::NO_ERROR);
+                }
+            }
+            self.settle(c, now);
+        }
+    }
+
+    /// Close session `i` so the application dials again at once.
+    pub(crate) fn redial(&mut self, i: usize, now: u64) {
+        if let Some(s) = self.slots.get_mut(i) {
+            s.m.redial = true;
+            if let Some(conn) = s.conn.as_mut() {
+                let mut env = env!(self, now);
+                conn.close(&mut env, code::NO_ERROR);
+            }
+        }
+        self.settle(i, now);
+    }
+}
+
+/// How a dial that never opened is reported.
+const fn failure_of(reason: CloseReason) -> ConnectFailure {
+    match reason {
+        CloseReason::HandshakeTimeout => ConnectFailure::Timeout,
+        CloseReason::Handshake(f) => ConnectFailure::Handshake(f),
+        _ => ConnectFailure::Closed,
+    }
+}
