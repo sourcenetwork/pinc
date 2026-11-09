@@ -115,6 +115,7 @@ import Vinc.DtnLayoutHlc
 import Vinc.DtnCodec
 import Vinc.DtnCodecWire
 import Vinc.DtnReception
+import Vinc.DtnReceptionNext
 import Vinc.DtnStoreProps
 import Vinc.DtnCustodySys
 import Vinc.TraceDtnStore

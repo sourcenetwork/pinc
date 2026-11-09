@@ -1,6 +1,7 @@
 import Vinc.Json
 import Vinc.TraceDtnLayout
 import Vinc.DtnReception
+import Vinc.DtnReceptionNext
 
 /-!
 # Replay of the reception traces
@@ -16,7 +17,7 @@ Inconsistent only when a block that is not fully held has a parity that is not a
 such block is a code word, since `finish` never writes a held symbol and so the verdict depends on the held set alone;
 the exact verdict for a sender with a bad parity needs the code and is checked by TLC); a finish with a wrong-sized
 outboard or scratch is `Buffer` and changes nothing; `resume` by its checks. `nextMissing` is the loop of the code, replayed here and
-checked by TLC (`DtnReception.tla`) but not proved. It is the port of `proofs/tla/TraceDtnReception.tla`.
+proved in `Vinc.DtnReceptionNext` and checked by TLC (`DtnReception.tla`). It is the port of `proofs/tla/TraceDtnReception.tla`.
 -/
 
 namespace Vinc.TraceDtnReception
@@ -33,14 +34,6 @@ structure W where
   faulty : List Nat := []
   lay : L := ⟨1, 0, 0, 1⟩
   have_ : List Interval := []
-
-/-- `Reception::next_missing`, the loop of the code. -/
-def nmGo (g total : Nat) : List Interval → Nat → Option (Nat × Nat)
-  | [], at_ => if at_ < total * g then some (at_ / g, total) else none
-  | iv :: rest, at_ =>
-    if iv.2 ≤ at_ then nmGo g total rest at_
-    else if iv.1 > at_ then some (at_ / g, min iv.1 (total * g) / g)
-    else nmGo g total rest iv.2
 
 def decodableB (l : L) (g total : Nat) (h : List Interval) : Bool :=
   (List.range l.blocks).all fun b => decide (l.blockK b ≤ heldIn g total h (b * (l.k + l.m)) (l.blockN b))
