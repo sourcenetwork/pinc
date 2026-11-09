@@ -73,6 +73,9 @@ theorem Inv.tick (h : Inv c s) (n : Nat) (hn : s.now ≤ n) : Inv c { s with now
 
 theorem Inv.same (h : Inv c s) (e : s' = s) : Inv c s' := e ▸ h
 
+/-- The frames inside a header-accepted state are bookkeeping: no invariant mentions them. -/
+theorem Inv.mid (h : Inv c s) (m : List (Nat × Nat × Kind)) : Inv c { s with mid := m } := { h with }
+
 /-- While the fetch runs there is no final event yet. -/
 theorem Inv.running_fin (h : Inv c s) (hr : s.run = .running) : s.fin = none ∧ s.nfin = 0 := by
   have h1 := h.doneFin
@@ -189,6 +192,69 @@ theorem Inv.plumb (h : Inv c s) (hr : s.run = .running) {q : GSet} {a : Nat → 
     · by_cases hc : s.ver0 g = false
       · exact hc
       · have := h.ver0 g (by simpa using hc); simp_all
+
+/-- Every operation of the scheduler keeps what `PlumbOk` asks, in every state that satisfies the invariant. -/
+theorem Op.plumbOk (h : Inv c s) (hr : s.run = .running) (op : Op) (hok : Op.ok c s op) :
+    PlumbOk c s (Op.out c s op).1 (Op.out c s op).2.1 (Op.out c s op).2.2 := by
+  have hw := h.work hr
+  have hh := h.holders hr
+  cases op with
+  | topUp p chunk =>
+    obtain ⟨hp, hch⟩ := hok
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro g hg
+      simp only [Op.out, uni] at hg
+      by_cases hc : chunk g = true
+      · obtain ⟨_, h2, h3⟩ := hch g hc; exact Or.inr ⟨h2, h3⟩
+      · left; simpa [hc] using hg
+    · intro g hg; simp [Op.out, uni, hg]
+    · intro g hwg hvg
+      rcases hw g hwg hvg with hq | ⟨q, hq, hqg⟩
+      · by_cases hc : chunk g = true
+        · right; exact ⟨p, hp, by simp [Op.out, setAt, uni, hc]⟩
+        · left; simp [Op.out, dif, hq, hc]
+      · by_cases hqp : q = p
+        · subst hqp; right; exact ⟨q, hq, by simp [Op.out, setAt, uni, dif, hqg, hvg]⟩
+        · right; exact ⟨q, hq, by simp [Op.out, setAt, hqp, hqg]⟩
+    · intro q hq
+      have hqp : q ≠ p := fun e => by subst e; simp_all
+      right; intro g hg
+      exact hh q hq g (by simpa [Op.out, setAt, hqp] using hg)
+  | steal p v tail =>
+    obtain ⟨hpv, hp, hv, hthief, htail⟩ := hok
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro g hg
+      simp only [Op.out, uni] at hg
+      by_cases hc : tail g = true
+      · obtain ⟨_, h2, h3⟩ := htail g hc; exact Or.inr ⟨h2, h3⟩
+      · left; simpa [hc] using hg
+    · intro g hg; simp [Op.out, uni, hg]
+    · intro g hwg hvg
+      rcases hw g hwg hvg with hq | ⟨q, hq, hqg⟩
+      · left; simpa [Op.out] using hq
+      · by_cases hqp : q = p
+        · subst hqp; exact absurd (hthief g hqg) (by simp [hvg])
+        · by_cases hqv : q = v
+          · subst hqv
+            by_cases hc : tail g = true
+            · right; exact ⟨p, hp, by simp [Op.out, setAt, uni, hc]⟩
+            · right; exact ⟨q, hq, by simp [Op.out, setAt, dif, hqg, hc, Ne.symm hpv, hpv]⟩
+          · right; exact ⟨q, hq, by simp [Op.out, setAt, hqp, hqv, hqg]⟩
+    · intro q hq
+      have hqp : q ≠ p := fun e => by subst e; simp_all
+      have hqv : q ≠ v := fun e => by subst e; simp_all
+      right; intro g hg
+      exact hh q hq g (by simpa [Op.out, setAt, hqp, hqv] using hg)
+  | redial p =>
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro g hg
+      simp only [Op.out, uni] at hg
+      by_cases hc : s.reqd g = true
+      · exact Or.inl hc
+      · right; simp at hg; simp_all
+    · intro g hg; simp [Op.out, uni, hg]
+    · intro g hwg hvg; simpa [Op.out] using hw g hwg hvg
+    · intro q hq; right; intro g hg; exact hh q hq g (by simpa [Op.out] using hg)
 
 /-- An accepted frame: the group is on its way into the store, with the bytes of a frame that verifies. -/
 theorem Inv.accept (h : Inv c s) (hr : s.run = .running) (k : Kind) (hk : k.verifies = true) (g : Nat) :
@@ -453,7 +519,10 @@ theorem Inv.step (h : Inv c s) (st : Step c s s') : Inv c s' := by
   | startNoProvider h1 h2 h3 h4 =>
     exact h.startFinal h1 .noProvider (fun _ => h4) (by simp) (by simp) (by simp) (by simp) (by simp)
   | begin h1 h2 h3 h4 => exact h.begin h1
-  | plumb q a r h1 h2 po => exact h.plumb h1 po
+  | sched op h1 h2 hok => exact h.plumb h1 (Op.plumbOk h h1 op hok)
+  | acceptHdr p g k h1 h2 h3 h4 h5 h6 h7 => exact h.mid _
+  | acceptEnd p g k h1 h2 h3 h4 h5 h6 => exact (h.accept h1 k h6 g).mid _
+  | acceptDup p g k h1 h2 h3 h4 h5 => exact h.mid _
   | accept p g k h1 h2 h3 h4 h5 h6 h7 => exact h.accept h1 k h7 g
   | skip p g h1 h2 h3 h4 h5 => exact h
   | acceptAhead p g k h1 h2 h3 h4 h5 h6 h7 => exact h.accept h1 k h7 g
@@ -497,7 +566,10 @@ theorem verified_grows {c : Cfg} {s s' : St} (st : Step c s s') : ∀ g, s.ver g
   | startComplete h1 h2 h3 => simpa [finish] using hg
   | startNoProvider h1 h2 h3 => simpa [finish] using hg
   | begin h1 h2 h3 h4 => simpa using hg
-  | plumb q a r h1 h2 po => simpa using hg
+  | sched op h1 h2 hok => simpa using hg
+  | acceptHdr p g' k h1 h2 h3 h4 h5 h6 h7 => simpa using hg
+  | acceptEnd p g' k h1 h2 h3 h4 h5 h6 => simpa using hg
+  | acceptDup p g' k h1 h2 h3 h4 h5 => simpa using hg
   | accept p g' k h1 h2 h3 h4 h5 h6 h7 => simpa using hg
   | skip p g' h1 h2 h3 h4 h5 => exact hg
   | acceptAhead p g' k h1 h2 h3 h4 h5 h6 h7 => simpa using hg

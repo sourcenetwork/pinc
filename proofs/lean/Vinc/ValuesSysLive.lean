@@ -15,14 +15,14 @@ in which each step is a step of the model or a stutter. The fairness assumption 
   within finitely many steps. This is the pipeline of the machine at work under an honest provider that stays
   reachable and is redialled: the dial, the request, the answer, the parse, the write and the commit, with the
   retry, the steal and the stall redial that repair every loss. It is NOT proved here: the scheduling is the
-  constructor `plumb` of the model, and the pipeline lives in the TLA+ model `ValuesSys.tla`, where TLC checks it
+  operations of `sched` in the model, and the pipeline lives in the TLA+ model `ValuesSys.tla`, where TLC checks it
   as a liveness property under weak and strong fairness (`ValuesSys_n1`, `_n2`, `_n3`, `_drop`, `_slow`, `_liar`,
   `_alllie`, `_restart`, `_resume`) and where it found two stuck states of the code (a refused open whose retry was
   swallowed by the stream of another provider, and an idle provider that reconnected and was never topped up
   again); the witnesses `ValuesSys_n2_old` and `_n2_oldconn` keep the old behaviour as counterexamples.
 * `CheckFair`: when nothing wanted is missing, `check_done` runs (weak fairness of an enabled step).
 
-What IS proved, with no assumption on the scheduling beyond `PlumbOk`: the counting argument that turns the
+What IS proved, with no assumption on the scheduling beyond what its operations keep (`Op.plumbOk`): the counting argument that turns the
 progress of the pipeline into the end of the fetch (`terminates`), and that the end is `Complete` when nothing else
 can end a fetch (`completes`: no deadline, a store that does not refuse, no provider that lies, a valid start), and the
 safety of every state (`ValuesSysSafe`), which holds whatever the pipeline does.
@@ -67,7 +67,10 @@ theorem step_keeps {c : Cfg} {s s' : St} (st : Step c s s') (hi : s.run ≠ .idl
   | startComplete h1 => simp_all
   | startNoProvider h1 => simp_all
   | begin h1 => simp_all
-  | plumb q a r h1 h2 po => simp_all
+  | sched op h1 h2 hok => simp_all
+  | acceptHdr p g k h1 => simp_all
+  | acceptEnd p g k h1 => simp_all
+  | acceptDup p g k h1 => simp_all
   | accept p g k h1 => simp_all
   | skip p g h1 => simp_all
   | acceptAhead p g k h1 => simp_all

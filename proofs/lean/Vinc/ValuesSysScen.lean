@@ -18,7 +18,7 @@ groups, with the same providers and liars as its TLC configuration.
 | loss and reordering | `ValuesSys_loss` | `loss_safe` |
 | deadline, refusing store, bad root, no provider | `ValuesSys_deadline`, `_store`, `_badroot`, `_noprov` | `edge_reasons` |
 
-A dropped or a slow provider is a behaviour of the scheduling (`plumb`) and the session, which the model lets the
+A dropped or a slow provider is a behaviour of the scheduling (`sched`: `redial`, `steal`) and the session, which the model lets the
 adversary do anyway; their theorem is the completion theorem under `Fairness`, where `Fairness` is what the TLC liveness
 check of those configurations establishes for the bounded model.
 -/

@@ -46,7 +46,10 @@ theorem Inv2.step {c : Cfg} {s s' : St} (h2 : Inv2 c s) (h : Inv c s) (st : Step
   | begin h1 h3 h4 h5 =>
     obtain ⟨p, hp⟩ := h5
     refine ⟨fun _ => ⟨p, by simpa using hp⟩, fun e => by simp at e⟩
-  | plumb q a r h1 h3 po => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩
+  | sched op h1 h3 hok => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩
+  | acceptHdr p g k h1 h3 h4 h5 h6 h7 h8 => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩
+  | acceptEnd p g k h1 h3 h4 h5 h6 h7 => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩
+  | acceptDup p g k h1 h3 h4 h5 h6 => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩
   | accept p g k h1 h3 h4 h5 h6 h7 h8 => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩
   | skip p g h1 h3 h4 h5 h6 => exact h2
   | acceptAhead p g k h1 h3 h4 h5 h6 h7 h8 => exact ⟨fun e => h2.cand h1, fun e => by simp_all⟩

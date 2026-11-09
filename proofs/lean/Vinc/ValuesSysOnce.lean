@@ -48,7 +48,13 @@ theorem Once.step {c : Cfg} {s s' : St} (hi : Inv c s) (h : Once s) (st : Step c
   | startComplete h1 h2 h3 => exact h.finish _ _ rfl rfl
   | startNoProvider h1 h2 h3 h4 => exact h.finish _ _ rfl rfl
   | begin h1 h2 h3 h4 => exact h.view rfl rfl rfl rfl (by simp)
-  | plumb q a r h1 h2 po => exact h.view rfl rfl rfl rfl (by simp [h1])
+  | sched op h1 h2 hok => exact h.view rfl rfl rfl rfl (by simp [h1])
+  | acceptHdr p g k h1 h2 h3 h4 h5 h6 h7 => exact h.view rfl rfl rfl rfl (by simp [h1])
+  | acceptEnd p g k h1 h2 h3 h4 h5 h6 =>
+    refine ⟨h.annLe, h.hdFresh, ?_, ?_⟩
+    · intro d hd; simp at hd; subst hd; simpa using h5
+    · intro e; simp [h1] at e
+  | acceptDup p g k h1 h2 h3 h4 h5 => exact h.view rfl rfl rfl rfl (by simp [h1])
   | accept p g k h1 h2 h3 h4 h5 h6 h7 =>
     refine ⟨h.annLe, h.hdFresh, ?_, ?_⟩
     · intro d hd; simp at hd; subst hd; simpa using h6

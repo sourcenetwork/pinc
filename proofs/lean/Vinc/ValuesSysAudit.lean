@@ -35,3 +35,4 @@ import Vinc.ValuesSysScen
 #audit_axioms Vinc.ValuesSys.restart_keeps_verified
 #audit_axioms Vinc.ValuesSys.loss_safe
 #audit_axioms Vinc.ValuesSys.edge_reasons
+#audit_axioms Vinc.ValuesSys.Op.plumbOk
