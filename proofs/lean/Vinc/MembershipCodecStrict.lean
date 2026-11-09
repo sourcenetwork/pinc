@@ -155,4 +155,22 @@ theorem probe_path (age : List Nat) (pb : Nat) (hl : age.length = 4) (hp : pathO
     rdProbes (k + 1) (age ++ pb :: rest) = .error .probePath := by
   simp [rdProbes, rdBE_app 4 age (pb :: rest) hl, rdU8, hp, bind, Except.bind]
 
+theorem down_trailing (mb : List Nat) (inc : Nat) (pf : Proof) (hv : (Frame.down mb inc pf).valid) (x : Nat)
+    (r : List Nat) :
+    pDown (mb ++ beBytes 8 inc ++ beBytes 4 pf.sil ++ [pf.probes.length] ++ pf.probes.flatMap encProbe ++ x :: r) =
+      .error .downLen := by
+  obtain ⟨hm, _, hi, hs, h1, h4, hp⟩ := hv
+  have e1 := rdBytes_app mb (beBytes 8 inc ++ beBytes 4 pf.sil ++ [pf.probes.length] ++
+    pf.probes.flatMap encProbe ++ x :: r)
+  rw [hm] at e1
+  have e2 := rdBE_beBytes_lt 8 inc (beBytes 4 pf.sil ++ [pf.probes.length] ++ pf.probes.flatMap encProbe ++ x :: r)
+    (by rw [p256_8]; exact hi)
+  have e3 := rdBE_beBytes_lt 4 pf.sil ([pf.probes.length] ++ pf.probes.flatMap encProbe ++ x :: r)
+    (by rw [p256_4]; exact hs)
+  have e5 := probes_rt pf.probes (x :: r) hp
+  simp only [List.append_assoc, List.singleton_append, List.cons_append, List.nil_append] at e1 e2 e3 e5 ⊢
+  have hc1 : pf.probes.length ≠ 0 := by omega
+  have hc2 : ¬ maxProbes < pf.probes.length := by omega
+  simp [pDown, e1, e2, e3, e5, rdU8, hc1, hc2, only, bind, Except.bind, pure, Except.pure]
+
 end Vinc.MemCodec
