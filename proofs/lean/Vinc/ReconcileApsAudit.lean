@@ -2,7 +2,7 @@ import Vinc.Axioms
 import Vinc.ReconcileApsIds
 
 /-!
-# Reconcile APS: axiom audit of the main theorems
+# Reconcile APS: dependency audit of the main theorems
 
 The abstract part system (ReconcileApsSplit .. ReconcileApsIds) proves, for sorted sets and any choice of the code's
 nondeterminism, any id function and (where stated) independent hashes:
