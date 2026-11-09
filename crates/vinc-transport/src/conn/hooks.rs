@@ -4,8 +4,9 @@
 //! about ([`Connection::pending_key_request`]), feeds the node-wide round trips back ([`Connection::set_node_rtt`]),
 //! moves the first resend of a dial ([`Connection::set_first_retransmit`]), defers the first path MTU probe
 //! ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
-//! ([`Connection::set_flight_fanout`], and [`Connection::set_flight_skip_primary`] to leave the active path out) and
-//! starts a sub-session ([`Connection::sub_session`]).
+//! ([`Connection::set_flight_fanout`], and [`Connection::set_flight_skip_primary`] to leave the active path out),
+//! starts a sub-session ([`Connection::sub_session`]) and starts one whose parent is still in its handshake
+//! ([`Connection::sub_pending`], opened by [`Connection::activate_sub`]).
 //!
 //! Invariants: a sub-session is born established with keys derived from its parent's, so it needs no handshake
 //! message and no round trip; the flight fan-out only repeats bytes the handshake already queued, one path after the
@@ -19,8 +20,15 @@ use vinc_security::{
 
 use super::config::{Config, PathId, PathInfo};
 use super::handshake::Machine;
+use super::params::peer_limits;
 use super::{Connection, Phase, Resources};
 use crate::stream::StreamSource;
+
+/// What the application may queue on a pending sub-session before the peer's record is known: one window unit
+/// (16 KiB) ...
+const PENDING_WINDOW: u64 = 16 * 1024;
+/// ... and this many streams.
+const PENDING_STREAMS: u16 = 4;
 use vinc_security::Event as SecEvent;
 
 /// What a sub-session is opened from: the parent session, the protocol and the two connection ids.
@@ -39,6 +47,23 @@ pub struct SubOpen<'p> {
     /// This node's identity (the shell handshake machine needs one; it signs nothing).
     pub identity: LocalIdentity,
     /// The path the sub-session starts on: the parent's active path.
+    pub path: PathId,
+    /// What the endpoint knows about that path.
+    pub path_info: PathInfo,
+}
+
+/// What a dialed sub-session whose parent is still in its handshake is opened from.
+#[derive(Debug, Clone, Copy)]
+pub struct SubWait {
+    /// The application protocol of the sub-session.
+    pub alpn: Alpn,
+    /// The dialer's connection id for the sub-session.
+    pub cc: ConnId,
+    /// The accepting side's connection id for the sub-session.
+    pub cs: ConnId,
+    /// This node's identity (the shell handshake machine needs one; it signs nothing).
+    pub identity: LocalIdentity,
+    /// The path the sub-session starts on: the parent's dial path.
     pub path: PathId,
     /// What the endpoint knows about that path.
     pub path_info: PathInfo,
@@ -153,22 +178,59 @@ conn_impl! {
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubOpen { client, parent, alpn, cc, cs, identity, path, path_info } = open;
+        let mut c = Self::sub_shell(client, cfg, alpn, cc, cs, identity, path, path_info, res, env)?;
+        c.establish_sub(env, parent, alpn);
+        Ok(c)
+    }
+
+    /// Start a dialed sub-session whose parent is still in its handshake: the connection exists, takes writes and has
+    /// its ids, but holds no keys until [`Connection::activate_sub`] gives it the parent's secrets.
+    ///
+    /// # Errors
+    /// A [`Failure`] if the protocol cannot be listed or the pool has no chunk.
+    pub fn sub_pending(
+        cfg: Config,
+        open: SubWait,
+        res: Resources<'a, S, N, C>,
+        env: &mut Env<'_, P>,
+    ) -> Result<Self, Failure> {
+        let SubWait { alpn, cc, cs, identity, path, path_info } = open;
+        let mut c = Self::sub_shell(true, cfg, alpn, cc, cs, identity, path, path_info, res, env)?;
+        // The peer's record is not known yet; the application may still open a stream and queue its first bytes, which
+        // wait for the keys. The parent's record replaces this when the sub-session opens.
+        c.peer_credit = CreditRecord::new(PENDING_WINDOW, PENDING_STREAMS, 0);
+        c.streams.set_peer_limits(&peer_limits(&c.peer_credit));
+        Ok(c)
+    }
+
+    /// The parent of a pending sub-session is established: derive the keys from its secrets and open for data.
+    ///
+    /// # Errors
+    /// [`Failure::InvalidParameter`] if the connection is not a pending sub-session.
+    pub fn activate_sub(&mut self, env: &mut Env<'_, P>, parent: &Established, alpn: Alpn) -> Result<(), Failure> {
+        if !self.client || self.phase != Phase::Handshaking || self.cids.first_remote().is_none() {
+            return Err(Failure::InvalidParameter);
+        }
+        self.establish_sub(env, parent, alpn);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "the parts of a sub-session shell")]
+    fn sub_shell(
+        client: bool,
+        cfg: Config,
+        alpn: Alpn,
+        cc: ConnId,
+        cs: ConnId,
+        identity: LocalIdentity,
+        path: PathId,
+        path_info: PathInfo,
+        res: Resources<'a, S, N, C>,
+        env: &mut Env<'_, P>,
+    ) -> Result<Self, Failure> {
         let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };
         let local = Self::advertise(&cfg, res.streams);
-        let a = alpn.as_bytes();
-        let est = Established {
-            peer: parent.peer,
-            alpn,
-            traffic: parent.traffic.sub_session(a, cc.as_bytes(), cs.as_bytes()),
-            resume: sub_session_secret(&parent.resume, a, cc.as_bytes(), cs.as_bytes()),
-            tickets: TicketBatch::new(),
-            resumed: false,
-            peer_credit: parent.peer_credit,
-            local_credit: local,
-            remembered_credit: CreditRecord::NONE,
-            cid_secret: sub_session_secret(&parent.cid_secret, a, cc.as_bytes(), cs.as_bytes()),
-        };
-        let alpns = AlpnList::new(&[a]).ok_or(Failure::InvalidParameter)?;
+        let alpns = AlpnList::new(&[alpn.as_bytes()]).ok_or(Failure::InvalidParameter)?;
         let shell = Machine::Server(Responder::new(ResponderConfig::new(identity, first_local, alpns)));
         let mut c = Self::base(client, cfg, res, shell, first_local, ConnId::default(), env.now, local)?;
         c.cids.set_first_remote(first_remote);
@@ -178,10 +240,32 @@ conn_impl! {
             p.amp.validate();
         }
         c.sess_amp.validate();
-        c.hs.on_event(&mut c.pool, &SecEvent::Established(est.clone()));
-        c.on_hs_event(env, SecEvent::Established(est));
-        c.confirmed = true;
-        c.hs.confirm(&mut c.pool);
         Ok(c)
+    }
+
+    /// Give the shell the keys of the sub-session derived from `parent`.
+    fn establish_sub(&mut self, env: &mut Env<'_, P>, parent: &Established, alpn: Alpn) {
+        let (cc, cs) = if self.client {
+            (self.cids.first_local(), self.cids.first_remote().unwrap_or_default())
+        } else {
+            (self.cids.first_remote().unwrap_or_default(), self.cids.first_local())
+        };
+        let a = alpn.as_bytes();
+        let est = Established {
+            peer: parent.peer,
+            alpn,
+            traffic: parent.traffic.sub_session(a, cc.as_bytes(), cs.as_bytes()),
+            resume: sub_session_secret(&parent.resume, a, cc.as_bytes(), cs.as_bytes()),
+            tickets: TicketBatch::new(),
+            resumed: false,
+            peer_credit: parent.peer_credit,
+            local_credit: self.local_credit,
+            remembered_credit: CreditRecord::NONE,
+            cid_secret: sub_session_secret(&parent.cid_secret, a, cc.as_bytes(), cs.as_bytes()),
+        };
+        self.hs.on_event(&mut self.pool, &SecEvent::Established(est.clone()));
+        self.on_hs_event(env, SecEvent::Established(est));
+        self.confirmed = true;
+        self.hs.confirm(&mut self.pool);
     }
 }

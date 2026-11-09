@@ -82,7 +82,7 @@ pub use config::{
     ClientParams, Config, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
 };
 pub use event::{CloseReason, Drop, Event, code};
-pub use hooks::SubOpen;
+pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
 pub use keys::trace::{KeyEvent, KeysView, Slot};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};

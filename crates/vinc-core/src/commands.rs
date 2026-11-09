@@ -324,6 +324,10 @@ ep_impl! {
         if let Some(parent) = self.find_parent(&node) {
             return self.open_sub(parent, node, alpn, role, now);
         }
+        // Another protocol to a peer whose handshake is still running waits for it instead of starting a second one.
+        if let Some(parent) = self.find_waiting_parent(&node, alpn) {
+            return self.open_sub_wait(parent, node, alpn, role, now);
+        }
         let prekey = self.prekey.clone().ok_or(CommandError::NoPrekey)?;
         let first = addrs.iter().copied().find(|a| self.route_for(a).is_some()).ok_or(CommandError::NoRoute)?;
         let local = self.route_for(&first).ok_or(CommandError::NoRoute)?;

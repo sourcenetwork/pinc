@@ -144,6 +144,7 @@ ep_impl! {
             slot.m.acp_recheck = Some(recheck_at(a.until));
         }
         let (client, optimistic) = (slot.m.client, slot.m.optimistic);
+        let has_sub = slot.m.has_sub;
         if !client && !slot.m.sub && let Some(conn) = slot.conn.as_mut() {
             conn.send_ready();
         }
@@ -165,6 +166,9 @@ ep_impl! {
             }
         }
         self.release_held(i, now);
+        if has_sub {
+            self.release_waiting(i, now);
+        }
     }
 
     /// Apply the application's answer to check `check`.

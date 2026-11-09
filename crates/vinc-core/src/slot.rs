@@ -244,6 +244,10 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) redial: bool,
     /// This is a sub-session.
     pub(crate) sub: bool,
+    /// This sub-session waits for its parent's handshake to finish before it has keys.
+    pub(crate) waiting: bool,
+    /// The two connection ids of a waiting sub-session (the dialer's, then the accepting side's).
+    pub(crate) sub_ids: Option<(ConnId, ConnId)>,
     /// The session is in its peer's list.
     pub(crate) linked: bool,
     /// Close with this code once everything queued has left (a dialer's Finish goes out before its deny).
@@ -297,6 +301,8 @@ impl<const NP: usize> Meta<NP> {
         orphaned: false,
         redial: false,
         sub: false,
+        waiting: false,
+        sub_ids: None,
         linked: false,
         deferred_close: None,
     };

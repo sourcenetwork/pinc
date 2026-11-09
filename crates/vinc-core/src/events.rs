@@ -346,9 +346,10 @@ ep_impl! {
         while let Some(c) = self.peer_find(&peer, |e, c| {
             e.slots.get(c).is_some_and(|s| {
                 s.m.parent == Some(pid)
-                    && s.m.state == State::Established
                     && !s.m.orphaned
-                    && s.conn.as_ref().is_some_and(|k| k.stats().packets_received == 0)
+                    && (s.m.waiting
+                        || (s.m.state == State::Established
+                            && s.conn.as_ref().is_some_and(|k| k.stats().packets_received == 0)))
             })
         }) {
             trace!(self, now, Sub { step: 2, parent: parent as u64, child: c as u64 });

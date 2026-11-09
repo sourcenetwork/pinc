@@ -314,3 +314,72 @@ fn a_child_waits_with_its_parent_for_the_access_check() {
         assert!(net.nodes[b].read.values().any(|v| v == b"gated"));
     });
 }
+
+#[test]
+fn a_second_protocol_dialed_during_the_handshake_connects_at_once_and_opens_with_its_parent() {
+    big_stack(|| {
+        let delay = 10 * MS_NS;
+        let mut net = CoreNet::new(delay);
+        let (a, b) = (net.add(1), net.add(2));
+        let t0 = net.now;
+        let (parent_a, _) = dial(&mut net, a, b, ALPN_A);
+        // The handshake has not run a single round trip: the second protocol still reports at once and takes writes.
+        let (child_a, _) = dial(&mut net, a, b, ALPN_B);
+        assert_ne!(child_a, parent_a);
+        let connected: Vec<_> = net.nodes[a]
+            .events
+            .iter()
+            .filter(|(_, e)| matches!(e, Event::Connected { session, .. } if *session == child_a))
+            .map(|(t, _)| *t)
+            .collect();
+        assert!(connected.len() <= 1);
+        net.pump_all();
+        write_new(&mut net, a, child_a, b"early");
+        let end = net.now + 5 * SEC_NS;
+        assert!(net.run(end, |n| n.nodes[b].fin.len() == 1));
+        // Connected came with the dial, not a handshake later.
+        let at = net.nodes[a]
+            .time_of(|e| matches!(e, Event::Connected { session, .. } if *session == child_a))
+            .unwrap();
+        assert!(at <= t0 + delay, "Connected after {} ns", at - t0);
+        // Both sessions are open at the peer, for their own protocols.
+        let alpns: Vec<_> = net.nodes[b]
+            .events
+            .iter()
+            .filter_map(|(_, e)| {
+                if let Event::Incoming { alpn, .. } = e {
+                    Some(alpn.as_bytes().to_vec())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            alpns.contains(&ALPN_A.to_vec()) && alpns.contains(&ALPN_B.to_vec()),
+            "{alpns:?}"
+        );
+        assert_eq!(net.nodes[b].read.values().next().unwrap(), b"early");
+    });
+}
+
+#[test]
+fn a_dial_that_waited_for_a_parent_that_fails_is_closed_for_a_redial() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        // The peer drops everything it is sent: the handshake never completes.
+        let addr_b = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_b));
+        let (_parent, _) = dial(&mut net, a, b, ALPN_A);
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        assert!(net.nodes[a].saw(is_connected));
+        let end = net.now + 60 * SEC_NS;
+        assert!(net.run(end, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Closed { session, .. } if *session == child))
+        }));
+        assert!(net.nodes[a].saw(|e| matches!(
+            e,
+            Event::Closed { session, reason: EndReason::Orphaned } if *session == child
+        )));
+    });
+}
