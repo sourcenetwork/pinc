@@ -449,6 +449,7 @@ impl<'a> Sim<'a> {
                 None => kv.push((k, v.clone())),
             }
         }
+        kv.push(("ts", ((self.now - T0) / NS).to_string()));
         kv.push(("z", "0".into()));
         let body = kv
             .iter()
@@ -675,6 +676,29 @@ impl<'a> Sim<'a> {
         s
     }
 
+    /// What a responder session and the ticket store of its node expose after a step: the cap the last message set
+    /// on a repeated Reply (-1 when none), and for every slot of the store the ticket id (-1 when empty) and the
+    /// expiry in seconds since the start of time (-1 when empty).
+    fn r_obs(&mut self, rn: u8, s: usize) -> Vec<(&'static str, String)> {
+        let cap = self.resps[s - 1].1.resend_cap().map_or(-1, |c| c as i64);
+        let (mut slots, mut sx) = (Vec::new(), Vec::new());
+        for slot in self.nodes[usize::from(rn) - 1].stores.tickets.slot_table() {
+            if let Some((tid, expiry)) = slot {
+                assert_eq!((expiry - T0) % NS, 0, "expiries are whole seconds");
+                slots.push(self.ids.id(K_TID, &tid));
+                sx.push(((expiry - T0) / NS) as i64);
+            } else {
+                slots.push(-1);
+                sx.push(-1);
+            }
+        }
+        vec![
+            ("rcap", cap.to_string()),
+            ("slots", json_ids(&slots)),
+            ("sx", json_ids(&sx)),
+        ]
+    }
+
     pub fn r_recv(&mut self, s: usize, inp: &Inp) -> (Result<(), Failure>, Drained) {
         let rn = self.resps[s - 1].0;
         let now = self.now;
@@ -686,7 +710,8 @@ impl<'a> Sim<'a> {
         };
         let r = self.resps[s - 1].1.handle(&mut env, stores, inp.bytes());
         let mut d = drain!(self.resps[s - 1].1);
-        self.step("recv", 'R', rn, s, inp, &r, &d, &[]);
+        let ov = self.r_obs(rn, s);
+        self.step("recv", 'R', rn, s, inp, &r, &d, &ov);
         self.note_est('R', rn, s, &mut d);
         (r, d)
     }
@@ -712,7 +737,8 @@ impl<'a> Sim<'a> {
             self.resps[s - 1].1.on_key_response(&mut env, KeyResponse::Failed)
         };
         let mut d = drain!(self.resps[s - 1].1);
-        let ov = [("kind", format!("\"{}\"", if ok { "ok" } else { "fail" }))];
+        let mut ov = self.r_obs(rn, s);
+        ov.push(("kind", format!("\"{}\"", if ok { "ok" } else { "fail" })));
         self.step("key", 'R', rn, s, &Inp::None, &r, &d, &ov);
         self.note_est('R', rn, s, &mut d);
         (r, d)
@@ -728,7 +754,8 @@ impl<'a> Sim<'a> {
         } else {
             Ok(())
         };
-        self.step("retx", 'R', rn, s, &Inp::None, &r, &d, &[]);
+        let ov = self.r_obs(rn, s);
+        self.step("retx", 'R', rn, s, &Inp::None, &r, &d, &ov);
         d
     }
 

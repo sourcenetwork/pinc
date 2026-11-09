@@ -42,6 +42,8 @@ use crate::tickets::{DEFAULT_SERVER_TICKETS, DEFAULT_TICKET_LIFETIME_S, ServerTi
 
 /// The most bytes of repeated Hellos and Initials a resumed responder answers with its Reply again.
 pub const RESEND_BUDGET: usize = 4096;
+/// A resumed responder sends its Reply again for a full Initial at most this many times the Initial's size.
+pub const RESEND_FACTOR: usize = 3;
 /// The most bytes of full Initials a resumed responder answers with its Reply again.
 pub const LATE_INITIAL_BUDGET: usize = 16_384;
 
@@ -139,6 +141,8 @@ pub struct Responder {
     th: Transcript,
     out: Outbox,
     state: State,
+    #[cfg(feature = "trace")]
+    resend_cap: Option<usize>,
 }
 
 impl core::fmt::Debug for Responder {
@@ -155,7 +159,16 @@ impl Responder {
             th: Transcript::new(),
             out: Outbox::new(),
             state: State::Idle,
+            #[cfg(feature = "trace")]
+            resend_cap: None,
         }
+    }
+
+    /// The most bytes of Reply the last message let a resumed responder send again, when the last message was a
+    /// full Initial under the ids of the answered Hello; `None` for every other message.
+    #[cfg(feature = "trace")]
+    pub const fn resend_cap(&self) -> Option<usize> {
+        self.resend_cap
     }
 
     /// The next thing to do: a message to send, a key operation to perform, or an event.
@@ -176,6 +189,10 @@ impl Responder {
     ) -> Result<(), Failure> {
         if matches!(self.state, State::Failed) {
             return Err(Failure::Closed);
+        }
+        #[cfg(feature = "trace")]
+        {
+            self.resend_cap = None;
         }
         let result = match MessageType::of(input).map_err(Failure::Malformed) {
             Ok(MessageType::Initial | MessageType::ShortInitial) => self.on_initial(env, stores, input),
@@ -293,7 +310,12 @@ impl Responder {
                 // the Hello was lost or late. Send it again, but never answer more than it was asked.
                 let size = self.out.len();
                 r.spent = r.spent.saturating_add(input.len());
-                if size <= input.len().saturating_mul(3) && r.spent <= LATE_INITIAL_BUDGET {
+                let cap = input.len().saturating_mul(RESEND_FACTOR);
+                #[cfg(feature = "trace")]
+                {
+                    self.resend_cap = Some(cap);
+                }
+                if size <= cap && r.spent <= LATE_INITIAL_BUDGET {
                     self.out.resend();
                     return Ok(());
                 }
@@ -373,7 +395,7 @@ impl Responder {
             signature,
             Some(self.cfg.credit),
         )?;
-        self.th.absorb(signature);
+        self.th.absorb("sig", signature);
         let reply = Reply {
             scid: self.cfg.scid,
             aead: b.aead,
@@ -420,7 +442,7 @@ impl Responder {
             ids.signature,
         )
         .map_err(|_| Failure::BadSignature)?;
-        self.th.absorb(ids.signature);
+        self.th.absorb("sig", ids.signature);
         let secrets = application_secrets(&w.ck1, &self.th.snapshot());
         let mut session = Established {
             peer,

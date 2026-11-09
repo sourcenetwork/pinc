@@ -165,6 +165,26 @@ StepOK(ev, who, old, r, peer) ==
                   /\ \A p \in msgs : (p[1] = mid) = (p[2] = m)
                   /\ msgs' = msgs \cup {<<mid, m>>}
 
+(* the slot table of the ticket store of the responder's node after a step, as the code holds it: slot by slot, the
+   ticket id and whether the code's clock passed its expiry (the expiry in seconds sx against the time ts of the step)
+   must be the model's; an empty slot is -1 *)
+SlotsOK(sl, ev) ==
+    /\ Len(ev.slots) = Len(sl) /\ Len(ev.sx) = Len(sl)
+    /\ \A j \in 1..Len(sl) :
+         IF sl[j].occ
+         THEN sl[j].tid = TidT(ev.slots[j]) /\ (sl[j].exp = (ev.sx[j] < ev.ts))
+         ELSE ev.slots[j] = -1 /\ ev.sx[j] = -1
+
+(* a resumed responder bounds the Reply it sends again for a full Initial under the answered ids by this many times
+   the Initial's length (RInitial of HsOps.tla); the code records the bound it computed, and -1 for any other message *)
+ResendFactor == 3
+CapOK(ev, old) ==
+    IF ev.imal THEN ev.rcap = -1
+    ELSE LET m == InputMsg(ev)
+         IN IF m.ty = "Init" /\ old.ph = "resumed" /\ old.dc = m.dc /\ old.sc = m.sc
+            THEN ev.rcap = ResendFactor * ev.ilen
+            ELSE ev.rcap = -1
+
 Guard == i <= Len(Trace)
 
 (* ---- steps ---- *)
@@ -253,6 +273,8 @@ RecvR ==
           /\ InputKnown(ev)
           /\ InputShape(ev)
           /\ StepOK(ev, "R", old, r, inode)
+          /\ SlotsOK(r.sto.tks, ev)
+          /\ CapOK(ev, old)
           /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = r.st]
           /\ sto' = [sto EXCEPT ![ev.rn] = r.sto]
           /\ UNCHANGED <<ist, cli, snap, inode>>
@@ -265,6 +287,7 @@ KeyR ==
            r == RKey(old, <<RNode(ev.rn), ev.s>>, sto[ev.rn], IF ev.kind = "ok" THEN "ok" ELSE "fail")
        IN /\ ev.op = "key" /\ ev.who = "R"
           /\ StepOK(ev, "R", old, r, inode)
+          /\ SlotsOK(r.sto.tks, ev)
           /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = r.st]
           /\ sto' = [sto EXCEPT ![ev.rn] = r.sto]
           /\ UNCHANGED <<ist, cli, snap, inode>>
@@ -277,6 +300,7 @@ RetxR ==
            r == RRetransmit(old, sto[ev.rn])
        IN /\ ev.op = "retx" /\ ev.who = "R"
           /\ StepOK(ev, "R", old, r, inode)
+          /\ SlotsOK(r.sto.tks, ev)
           /\ UNCHANGED <<ist, rst, sto, cli, snap, inode>>
           /\ i' = i + 1
 

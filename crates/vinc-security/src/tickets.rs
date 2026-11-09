@@ -325,6 +325,13 @@ impl<const N: usize> ServerTickets<N> {
         self.slots.get(index)?.as_ref()
     }
 
+    /// The slot table in index order, for trace validation: the id and the expiry of each stored ticket, `None` for
+    /// an empty slot.
+    #[cfg(feature = "trace")]
+    pub fn slot_table(&self) -> impl Iterator<Item = Option<([u8; TID_LEN], u64)>> + '_ {
+        self.slots.iter().map(|s| s.as_ref().map(|s| (s.tid, s.expiry)))
+    }
+
     pub(crate) fn remove(&mut self, index: usize) -> Option<ServerSlot> {
         self.slots.get_mut(index)?.take()
     }

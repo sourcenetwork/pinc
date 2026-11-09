@@ -233,6 +233,34 @@ def dropIdx (sq : List Tk) (kept : List Nat) : List Nat :=
 /-- The id draws of the ticket batch an established responder session issued: the recorded ids. -/
 def drawsOf (etids : List Nat) : List (List Nat) := etids.map fun t => [t]
 
+/-- TraceHandshake `SlotsOK`: the slot table of the ticket store of the responder's node after a step, as the code
+holds it. Slot by slot the ticket id, and whether the code's clock passed the expiry (the expiry in seconds `sx`
+against the time `ts` of the step), must be the model's; an empty slot is -1. -/
+def slotsOK (sl : List Slot) (ev : J) : Except String Unit := do
+  let slots ← intList (← field ev "slots")
+  let sx ← intList (← field ev "sx")
+  let ts ← intF ev "ts"
+  check (slots.length == sl.length && sx.length == sl.length) "the slot table has another size than the model's"
+  for (s, (id, x)) in sl.zip (slots.zip sx) do
+    if s.occ then
+      check (id ≥ 0 && s.tid == tidT id.toNat) "the ticket id of a slot differs from the model's"
+      check (s.exp == decide (x < ts)) "the expiry of a slot differs from the model's"
+    else check (id == -1 && x == -1) "a slot the model has empty holds a ticket"
+
+/-- A resumed responder bounds the Reply it sends again for a full Initial under the answered ids by this many times
+the Initial's length (`RInitial`); the code records the bound it computed, and -1 for any other message. -/
+def resendFactor : Nat := 3
+
+/-- TraceHandshake `CapOK`. -/
+def capOK (old : RState) (ev : J) (m? : Option Msg) : Except String Unit := do
+  let cap ← intF ev "rcap"
+  match m? with
+  | some m =>
+    if m.ty == .init && old.ph == .resumed && old.dc == m.dc && old.sc == m.sc then
+      check (cap == Int.ofNat resendFactor * (← intF ev "ilen")) s!"the bound on the repeated Reply is {cap}, not {resendFactor} times the Initial"
+    else check (cap == -1) "a bound on a repeated Reply is reported for a message that has none"
+  | none => check (cap == -1) "a bound on a repeated Reply is reported for a malformed message"
+
 /-! ## Replaying one event -/
 
 def replayEvent (ev : J) (w : W) : Except String W := do
@@ -273,8 +301,11 @@ def replayEvent (ev : J) (w : W) : Except String W := do
       let old := w.getR rn s
       let sto := w.getS rn
       let cs := drawsOf (← natList (← field ev "etids"))
-      let r ← if imal then pure (RDrop old sto) else do pure (RHandle old (rNode rn) s sto (← inputMsg w ev) cs)
+      let m? ← if imal then pure none else do pure (some (← inputMsg w ev))
+      let r := match m? with | some m => RHandle old (rNode rn) s sto m cs | none => RDrop old sto
       let (om', msgs') ← stepOK ev w (viewR old r) w.inode
+      slotsOK r.sto.tks ev
+      capOK old ev m?
       pure { ((w.setR rn s r.st).setS rn r.sto) with om := om', msgs := msgs' }
   | "key" =>
     let who ← strF ev "who"
@@ -291,6 +322,7 @@ def replayEvent (ev : J) (w : W) : Except String W := do
       let sto := w.getS rn
       let r := RKey old (rNode rn) s sto kind
       let (om', msgs') ← stepOK ev w (viewR old r) w.inode
+      slotsOK r.sto.tks ev
       pure { ((w.setR rn s r.st).setS rn r.sto) with om := om', msgs := msgs' }
   | "retx" =>
     let who ← strF ev "who"
@@ -305,6 +337,7 @@ def replayEvent (ev : J) (w : W) : Except String W := do
       let old := w.getR rn s
       let r := RRetransmit old (w.getS rn)
       let (om', msgs') ← stepOK ev w (viewR old r) w.inode
+      slotsOK r.sto.tks ev
       pure { w with om := om', msgs := msgs' }
   | "shed" =>
     let who ← strF ev "who"

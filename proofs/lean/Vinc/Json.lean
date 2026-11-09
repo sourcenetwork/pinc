@@ -161,6 +161,13 @@ def natList (j : J) : Except String (List Nat) := do
     | none => throw "expected a number"
   | none => throw "expected an array"
 
+def intList (j : J) : Except String (List Int) := do
+  match j.arr? with
+  | some a => a.toList.mapM fun v => match v.int? with
+    | some n => pure n
+    | none => throw "expected an integer"
+  | none => throw "expected an array"
+
 def pairList (j : J) : Except String (List (Nat × Nat)) := do
   match j.arr? with
   | some a => a.toList.mapM fun v => do
