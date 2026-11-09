@@ -650,7 +650,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             };
             let Ok(nonce) = env.random::<8>() else { continue };
             if self.enqueue_udp(udp, &Datagram::Qad { nonce }) {
-                self.net.probe_sent(now, i, nonce);
+                self.net.probe_sent(now, i, nonce, self.udp_any);
             }
         }
     }

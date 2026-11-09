@@ -1,6 +1,12 @@
 //! Each NAT kind against the connectivity layer: the reachability class a node reads from its observations, the
 //! session it gets through the relay, and whether hole punching moves it onto a direct path.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::too_many_lines)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::too_many_lines
+)]
 
 mod connect_sim_common;
 
@@ -59,10 +65,24 @@ fn every_nat_kind_gets_a_class_a_session_and_a_path() {
             assert_eq!(direct(&w, a), Some(punched), "{ka:?}/{kb:?}\n{}", w.dump(a));
             // Whatever path carries the session, data flows both ways.
             let sa = w.connected(a).unwrap();
-            w.sim.command(secs(9), a, vinc_tests::Cmd::Send { session: sa, data: b"ping".to_vec() });
+            w.sim.command(
+                secs(9),
+                a,
+                vinc_tests::Cmd::Send {
+                    session: sa,
+                    data: b"ping".to_vec(),
+                },
+            );
             w.run(secs(10));
             assert_eq!(w.client(b).host.received(sb), b"ping", "{ka:?}/{kb:?}");
-            w.sim.command(secs(10), b, vinc_tests::Cmd::Send { session: sb, data: b"pong".to_vec() });
+            w.sim.command(
+                secs(10),
+                b,
+                vinc_tests::Cmd::Send {
+                    session: sb,
+                    data: b"pong".to_vec(),
+                },
+            );
             w.run(secs(12));
             assert_eq!(w.client(a).host.received(sa), b"pong", "{ka:?}/{kb:?}");
             let _ = Notice::SignFailed;

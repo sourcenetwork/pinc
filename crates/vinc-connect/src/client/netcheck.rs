@@ -14,6 +14,11 @@
 //! 5. **Behind NAT**: a reflexive address that differs from every local address and is the same at every relay that
 //!    answered. With one answer this is the best the node can say; a second relay may correct it to carrier-grade.
 //!
+//! **Failover.** A relay that failed [`MISS_LIMIT`] times in a row (probes sent while the last was unanswered, or
+//! carrier dials that never opened) is unhealthy. When the home relay is unhealthy the home moves to the healthy
+//! relay with the lowest round trip, or to the next healthy one by table position when no round trip is known (a node
+//! that only has carriers). Any answer or opened carrier makes a relay healthy again.
+//!
 //! Invariants: the nonce of an answer must match the probe sent to that relay, and a probe is answered at most once;
 //! the round trip of a relay is the last measured one; [`Netcheck::home`] is stable until a strictly lower round trip
 //! is measured.
@@ -26,6 +31,8 @@ use crate::record::Reach;
 pub const HOME_TRIES: u8 = 3;
 /// The wait between those attempts.
 pub const HOME_RETRY_NS: u64 = 2_000_000_000;
+/// Failures in a row after which a relay is unhealthy.
+pub const MISS_LIMIT: u8 = 3;
 
 /// Whether `ip` is in the shared address space of carrier-grade NAT (100.64.0.0/10).
 pub const fn is_shared(ip: &IpAddr) -> bool {
@@ -85,6 +92,7 @@ pub struct Netcheck<const R: usize> {
     rtt: [u64; R],
     reflexive: [Option<SocketAddr>; R],
     home: Option<usize>,
+    missed: [u8; R],
     tries: u8,
     first_probe: Option<u64>,
 }
@@ -103,13 +111,18 @@ impl<const R: usize> Netcheck<R> {
             rtt: [0; R],
             reflexive: [None; R],
             home: None,
+            missed: [0; R],
             tries: 0,
             first_probe: None,
         }
     }
 
-    /// Record a probe sent to relay `relay` at `now` with `nonce`.
-    pub fn probe_sent(&mut self, now: u64, relay: usize, nonce: [u8; 8]) {
+    /// Record a probe sent to relay `relay` at `now` with `nonce`. An unanswered earlier probe counts as a failure
+    /// when `udp_works` (a node that never heard UDP expects none).
+    pub fn probe_sent(&mut self, now: u64, relay: usize, nonce: [u8; 8], udp_works: bool) {
+        if udp_works && self.probes.get(relay).copied().flatten().is_some() {
+            self.failed(relay);
+        }
         if let Some(p) = self.probes.get_mut(relay) {
             *p = Some(Probe { nonce, sent: now });
             self.first_probe.get_or_insert(now);
@@ -122,19 +135,63 @@ impl<const R: usize> Netcheck<R> {
         let p = self.probes.get_mut(relay)?;
         let sent = p.filter(|p| p.nonce == nonce)?.sent;
         *p = None;
+        if let Some(m) = self.missed.get_mut(relay) {
+            *m = 0;
+        }
         let rtt = now.saturating_sub(sent);
         *self.rtt.get_mut(relay)? = rtt;
         *self.reflexive.get_mut(relay)? = Some(addr);
         let best = (0..R)
-            .filter(|i| self.reflexive.get(*i).is_some_and(Option::is_some))
+            .filter(|i| self.reflexive.get(*i).is_some_and(Option::is_some) && !self.unhealthy(*i))
             .min_by_key(|i| self.rtt.get(*i).copied().unwrap_or(u64::MAX));
         if let Some(b) = best
             && self.home != Some(b)
-            && self.home.is_none_or(|h| self.rtt.get(b) < self.rtt.get(h))
+            && self
+                .home
+                .is_none_or(|h| self.unhealthy(h) || self.rtt.get(b) < self.rtt.get(h))
         {
             self.home = Some(b);
         }
         Some(rtt)
+    }
+
+    /// A probe or a carrier dial of `relay` failed.
+    pub fn failed(&mut self, relay: usize) {
+        if let Some(m) = self.missed.get_mut(relay) {
+            *m = m.saturating_add(1);
+        }
+    }
+
+    /// A carrier to `relay` opened: it is healthy.
+    pub fn healthy(&mut self, relay: usize) {
+        if let Some(m) = self.missed.get_mut(relay) {
+            *m = 0;
+        }
+    }
+
+    /// Whether `relay` failed [`MISS_LIMIT`] times in a row.
+    pub fn unhealthy(&self, relay: usize) -> bool {
+        self.missed.get(relay).is_some_and(|m| *m >= MISS_LIMIT)
+    }
+
+    /// Move the home away from an unhealthy relay. `usable` says which relays are configured. Returns the new home.
+    pub fn failover(&mut self, usable: impl Fn(usize) -> bool) -> Option<usize> {
+        let home = self.home?;
+        if !self.unhealthy(home) {
+            return None;
+        }
+        let measured = (0..R)
+            .filter(|i| {
+                *i != home && usable(*i) && !self.unhealthy(*i) && self.reflexive.get(*i).is_some_and(Option::is_some)
+            })
+            .min_by_key(|i| self.rtt.get(*i).copied().unwrap_or(u64::MAX));
+        let next = measured.or_else(|| {
+            (1..R)
+                .map(|k| (home + k) % R)
+                .find(|i| usable(*i) && !self.unhealthy(*i))
+        })?;
+        self.home = Some(next);
+        Some(next)
     }
 
     /// The home relay chosen by round trip, once any probe was answered.

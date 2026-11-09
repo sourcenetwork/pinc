@@ -82,6 +82,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 {
                     // The dial watchdog: a dial that never opened tries the other kind next.
                     r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
+                    self.dial_failed(i);
                 }
                 self.close_stream(i);
             }
@@ -104,12 +105,14 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     fn close_stream(&mut self, i: usize) {
         let now = self.clock;
         let mut went_down = false;
+        let mut dial_failed = false;
         if let Some(r) = self.rly.get_mut(i) {
             let was = r.link.state();
             went_down = was == State::Open || r.carrier.as_ref().is_some_and(ProtectedCarrier::is_open);
             if was != State::Down {
                 if was != State::Open {
                     r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
+                    dial_failed = true;
                 }
                 r.link.closed(now);
             }
@@ -120,6 +123,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
         if went_down {
             self.notice(Notice::CarrierDown(i));
+        }
+        if dial_failed {
+            self.dial_failed(i);
         }
         self.push_io(Io::Close { relay: i });
     }
@@ -375,6 +381,32 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         r.link.closed(now);
         if was == State::Open {
             self.notice(Notice::CarrierDown(relay));
+        } else {
+            self.dial_failed(relay);
+        }
+    }
+
+    /// A carrier dial of `relay` never opened. A relay that fails repeatedly stops being the home.
+    fn dial_failed(&mut self, relay: usize) {
+        self.net.failed(relay);
+        self.check_failover(self.clock);
+    }
+
+    /// Move the home away from an unhealthy relay, dial the new home and republish there.
+    pub(super) fn check_failover(&mut self, now: u64) {
+        let cfg: [bool; R] = core::array::from_fn(|i| self.rly.get(i).is_some_and(|r| r.cfg.is_some()));
+        let Some(h) = self.net.failover(|i| cfg.get(i).copied().unwrap_or(false)) else {
+            return;
+        };
+        self.notice(Notice::Home(h));
+        self.next_publish = now;
+        let ctx = self.ctx(h);
+        let act = self
+            .rly
+            .get_mut(h)
+            .and_then(|r| r.link.want_dial(now, &mut self.shared, &ctx));
+        if let Some(a) = act {
+            self.act(now, h, a);
         }
     }
 
@@ -449,6 +481,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     fn carrier_open(&mut self, now: u64, relay: usize) {
+        self.net.healthy(relay);
         let Some(r) = self.rly.get_mut(relay) else { return };
         let was = r.link.opened(now);
         r.ta = crate::carrier::AliasTable::new();

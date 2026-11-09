@@ -1,6 +1,12 @@
 //! Carriers in the simulator: UDP blocked, the TCP to WebSocket fallback, lookups over the carrier, middlebox idle
 //! timeouts and the lease, relay failover.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::too_many_lines)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::too_many_lines
+)]
 
 mod connect_sim_common;
 
@@ -30,17 +36,31 @@ fn udp_blocked_forces_a_carrier_that_falls_back_from_tcp_to_websocket_and_still_
         assert_eq!(kinds.first(), Some(&Kind::Tcp), "TCP is tried first");
         assert!(kinds.contains(&Kind::Ws), "then WebSocket: {kinds:?}");
         assert_eq!(w.client(a).conn.class(), Some(Reach::UdpBlocked), "{}", w.dump(a));
-        assert!(w.notices(a).iter().any(|(_, n)| matches!(n, Notice::CarrierUp(0))), "{}", w.dump(a));
+        assert!(
+            w.notices(a).iter().any(|(_, n)| matches!(n, Notice::CarrierUp(0))),
+            "{}",
+            w.dump(a)
+        );
         assert!(!w.client(a).conn.udp_heard());
         // The lookup goes over the carrier, and the session works through the relay.
         w.dial(secs(12), a, b, vec![]);
         w.run(secs(30));
         let sa = w.connected(a).expect("a connected through the carrier");
         let sb = w.incoming(b).unwrap();
-        w.sim.command(secs(30), a, vinc_tests::Cmd::Send { session: sa, data: b"through ws".to_vec() });
+        w.sim.command(
+            secs(30),
+            a,
+            vinc_tests::Cmd::Send {
+                session: sa,
+                data: b"through ws".to_vec(),
+            },
+        );
         w.run(secs(35));
         assert_eq!(w.client(b).host.received(sb), b"through ws");
-        assert!(w.relay_node(_r).dns_carrier >= 1 && w.relay_node(_r).dns_udp == 0, "the lookup rode the carrier");
+        assert!(
+            w.relay_node(_r).dns_carrier >= 1 && w.relay_node(_r).dns_udp == 0,
+            "the lookup rode the carrier"
+        );
         assert!(w.relay_node(_r).carriers_ws >= 1, "the relay saw a WebSocket carrier");
         let _ = SEC;
     });
@@ -109,8 +129,15 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
         let leases: Vec<u64> = seen.iter().map(|(_, l)| *l).collect();
         assert_eq!(leases, [0, 61, 30, 22], "{seen:?}");
         let lease = w.client(a).conn.shared().lease_hi;
-        assert!(lease > 20 * SEC, "a lease at or below the real timeout would have been learned from a survivor");
-        assert!(lease_keep(lease) < 20 * SEC, "the keepalive gap {} must undercut the timeout", lease_keep(lease));
+        assert!(
+            lease > 20 * SEC,
+            "a lease at or below the real timeout would have been learned from a survivor"
+        );
+        assert!(
+            lease_keep(lease) < 20 * SEC,
+            "the keepalive gap {} must undercut the timeout",
+            lease_keep(lease)
+        );
         let downs = |w: &World| {
             w.notices(a)
                 .into_iter()
@@ -128,11 +155,27 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
         // it after it idled for longer than the lease resets it first and goes out on the new one.
         let peer = w.client(a).host.me;
         let packet = vec![0x40u8; 64];
-        w.sim.command(secs(800), a, vinc_tests::Cmd::Raw { relay: 1, peer, data: packet.clone() });
+        w.sim.command(
+            secs(800),
+            a,
+            vinc_tests::Cmd::Raw {
+                relay: 1,
+                peer,
+                data: packet.clone(),
+            },
+        );
         w.run(secs(830));
         let opened = |w: &World| w.relay_node(r2).carriers_opened.len();
         assert_eq!(opened(&w), 1, "the first send dialed the carrier");
-        w.sim.command(secs(900), a, vinc_tests::Cmd::Raw { relay: 1, peer, data: packet });
+        w.sim.command(
+            secs(900),
+            a,
+            vinc_tests::Cmd::Raw {
+                relay: 1,
+                peer,
+                data: packet,
+            },
+        );
         w.run(secs(910));
         assert_eq!(opened(&w), 2, "the stale carrier was reset and dialed again");
         let downs1 = w
@@ -147,6 +190,77 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
             .iter()
             .filter(|(_, t)| matches!(t, vinc_connect::relay::Trace::Routed { .. }))
             .count();
-        assert_eq!(routed, 2, "both packets reached the relay, the second on the new carrier");
+        assert_eq!(
+            routed, 2,
+            "both packets reached the relay, the second on the new carrier"
+        );
+    });
+}
+
+#[test]
+fn the_home_moves_to_the_second_relay_when_the_first_dies() {
+    big(|| {
+        use vinc_sim::NatKind;
+        let mut w = World::new(41);
+        let (r1, rs1) = w.relay(1, relay_ip(10));
+        let (r2, rs2) = w.relay(2, relay_ip(20));
+        let na = w.nat(NatKind::Symmetric, ext(1), 120 * SEC, 7200 * SEC);
+        let nb = w.nat(NatKind::Symmetric, ext(2), 120 * SEC, 7200 * SEC);
+        let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs1, rs2]), na);
+        let b = w.client_behind(&client_spec(0xb1, priv_addr(2), &[rs1, rs2]), nb);
+        w.run(secs(6));
+        w.dial(secs(6), a, b, vec![]);
+        w.run(secs(15));
+        assert!(w.connected(a).is_some(), "connected over the first relay");
+        assert_eq!(w.relay_node(r1).relay.record_count(), 2);
+        // The first relay dies. Each carrier dial that never opens counts against it; the third failure moves the
+        // home to the second relay, whose carrier opens and takes the record.
+        w.sim.crash(secs(20), r1);
+        w.run(secs(120));
+        for n in [a, b] {
+            let homes: Vec<usize> = w
+                .notices(n)
+                .iter()
+                .filter_map(|(_, x)| if let Notice::Home(h) = x { Some(*h) } else { None })
+                .collect();
+            assert_eq!(homes, [0, 1], "the home moved once, to the second relay");
+            assert!(w.client(n).conn.carrier_state(1) == vinc_connect::client::link::State::Open);
+            assert_eq!(w.client(n).conn.home(), Some(1));
+        }
+        assert_eq!(
+            w.relay_node(r2).relay.record_count(),
+            2,
+            "both records were republished at the second relay"
+        );
+    });
+}
+
+#[test]
+fn a_dial_through_the_second_relay_while_the_first_is_dead() {
+    big(|| {
+        use vinc_sim::NatKind;
+        let mut w = World::new(42);
+        let (r1, rs1) = w.relay(1, relay_ip(10));
+        let (_r2, rs2) = w.relay(2, relay_ip(20));
+        w.sim.crash(0, r1);
+        let na = w.nat(NatKind::Symmetric, ext(1), 120 * SEC, 7200 * SEC);
+        let nb = w.nat(NatKind::Symmetric, ext(2), 120 * SEC, 7200 * SEC);
+        let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs1, rs2]), na);
+        let b = w.client_behind(&client_spec(0xb1, priv_addr(2), &[rs1, rs2]), nb);
+        w.run(secs(60));
+        w.dial(secs(60), a, b, vec![]);
+        w.run(secs(75));
+        let sa = w.connected(a).expect("connected");
+        let sb = w.incoming(b).unwrap();
+        w.sim.command(
+            secs(75),
+            a,
+            vinc_tests::Cmd::Send {
+                session: sa,
+                data: b"via two".to_vec(),
+            },
+        );
+        w.run(secs(80));
+        assert_eq!(w.client(b).host.received(sb), b"via two");
     });
 }

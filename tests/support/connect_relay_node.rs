@@ -234,13 +234,19 @@ impl RelayNode {
         for e in s.0 {
             match e {
                 Eff::Carrier(to, plain) => {
-                    if matches!(vinc_connect::carrier::Frame::decode(&plain), Ok(vinc_connect::carrier::Frame::DnsReply { .. })) {
+                    if matches!(
+                        vinc_connect::carrier::Frame::decode(&plain),
+                        Ok(vinc_connect::carrier::Frame::DnsReply { .. })
+                    ) {
                         self.dns_carrier += 1;
                     }
                     self.write_frame(to, &plain);
                 }
                 Eff::Udp(UdpTarget::Reply(a), d) => {
-                    if matches!(vinc_connect::relay::datagram::Datagram::decode(&d), Ok(vinc_connect::relay::datagram::Datagram::DnsReply { .. })) {
+                    if matches!(
+                        vinc_connect::relay::datagram::Datagram::decode(&d),
+                        Ok(vinc_connect::relay::datagram::Datagram::DnsReply { .. })
+                    ) {
                         self.dns_udp += 1;
                     }
                     self.out.datagrams.push_back((self.addr, a, d));

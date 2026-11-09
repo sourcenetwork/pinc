@@ -176,6 +176,17 @@ drive_impl! {
         }
         // The peer's own relay when the record named one, otherwise ours (RELAY_FORWARD on the first flight).
         let rid = found.and_then(|f| self.relay_of(&f.home)).or(self.home()).or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()));
+        // FWD_ANY: the peer's relay has no open carrier, so an open one (the home first) carries the flight and its
+        // relay forwards it.
+        let rid = rid.map(|r| {
+            if self.carrier_state(r) == super::link::State::Open {
+                return r;
+            }
+            self.home()
+                .filter(|h| self.carrier_state(*h) == super::link::State::Open)
+                .or_else(|| (0..R).find(|i| self.carrier_state(*i) == super::link::State::Open))
+                .unwrap_or(r)
+        });
         if let Some(r) = rid {
             add(Cand::Relay(u8::try_from(r).unwrap_or(0)), out, &mut n);
         }

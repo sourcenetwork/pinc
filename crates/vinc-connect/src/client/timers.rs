@@ -34,7 +34,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         if self.class.is_none()
             && let Some(first) = self.net.first_probe()
         {
-            let at = first.saturating_add(super::link::dial_wait(self.net.best_rtt())).saturating_add(1);
+            let at = first
+                .saturating_add(super::link::dial_wait(self.net.best_rtt()))
+                .saturating_add(1);
             if at > now {
                 t = t.min(at);
             }
@@ -79,6 +81,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
         if now >= self.next_probe {
             self.probe_all(now, env);
+            self.check_failover(now);
             self.next_probe = now.saturating_add(HOME_RETRY_NS);
             if self.net.home().is_none() {
                 let first = (0..R).find(|i| self.rly.get(*i).is_some_and(|r| r.cfg.is_some_and(|c| c.udp.is_some())));
