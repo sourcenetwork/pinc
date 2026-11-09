@@ -111,6 +111,9 @@ import Vinc.ValuesSchedSplit
 import Vinc.ValuesSchedMove
 import Vinc.ValuesSchedCover
 import Vinc.ValuesSchedPart
+import Vinc.ValuesSchedRoom
+import Vinc.ValuesSchedExact
+import Vinc.ValuesSchedExactRun
 import Vinc.ValuesSchedSteal
 import Vinc.ValuesSchedEvict
 import Vinc.ValuesSchedTerm
