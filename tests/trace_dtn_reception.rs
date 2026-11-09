@@ -8,7 +8,8 @@
 //! computed, so the signed root commits to a block that is not a code word. A run feeds ranges of real proof streams
 //! (`serve`) that are intact, have one byte flipped, are cut short or carry trailing bytes, into a held set of 2 or
 //! 3 intervals, so the set fills up; it asks `holds`, `next_missing`, `is_complete` and `is_decodable` after every
-//! step; it calls `finish` when it likes; and it resumes from a copy of its buffer and held set with a bad
+//! step; it calls `finish` when it likes (sometimes with a wrong-sized outboard or scratch, which is refused with
+//! nothing changed); and it resumes from a copy of its buffer and held set with a bad
 //! signature, an expired head and a wrong-sized buffer. The verdict of every call and the whole held set after it
 //! are recorded.
 //!
@@ -16,7 +17,7 @@
 //! use of `VerifiedRanges`), that an intact stream records every symbol whose interval fits, one at a time in
 //! order, that a damaged stream records only a prefix of its range, that no symbol outside the range is ever
 //! recorded, that the held set only grows, that `finish` says `Incomplete` exactly when a block holds fewer than
-//! `k` symbols, and that an honest sender is never `Inconsistent`, so it is meaningful without the proof tools. The
+//! `k` symbols, that `finish` never writes a held symbol, and that an honest sender is never `Inconsistent`, so it is meaningful without the proof tools. The
 //! trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,

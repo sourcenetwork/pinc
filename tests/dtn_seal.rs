@@ -25,6 +25,7 @@ use vinc_dtn::bundle::Reception;
 use vinc_dtn::error::DtnError;
 use vinc_dtn::head::{BundleId, MAX_SIGNED_HEAD_LEN, SignedHead};
 use vinc_dtn::hlc::Hlc;
+use vinc_dtn::layout::SliceLayout;
 use vinc_dtn::seal::decapsulate;
 
 const NOW: u64 = 2_000;
@@ -446,38 +447,61 @@ proptest! {
     }
 }
 
-#[test]
-fn finish_never_writes_over_a_held_symbol() {
-    // A sender whose parity is not a code word: the signed root commits to it. Holding the bad parity symbol and one
-    // data symbol, finish solves the missing data from the parity, finds the root does not match and must leave
-    // every held symbol as it was verified.
+/// A sealed bundle (k = 2, m = 2) whose symbol `bad` was changed before the root was computed, so the signed root
+/// commits to content that is not a code word.
+fn bundle_with_bad_symbol(bad: usize) -> (Sealed, SliceLayout) {
     let sender = keypair(IdentityAlg::Ed25519, 1);
     let to = recipient(IdentityAlg::Ed25519, 2, 1);
-    let good = make(&sender, &to, plan(2, 1, 0), &bytes(5, 1_800), 3);
+    let good = make(&sender, &to, plan(2, 2, 0), &bytes(5, 1_800), 3);
     let layout = good.signed.head().layout().unwrap();
     let g = layout.slice_len() as usize;
     let mut sealed = good.sealed.clone();
-    sealed[2 * g] ^= 0xff;
+    sealed[bad * g] ^= 0xff;
     let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
     let root = vinc_dag::tree::build_outboard(&sealed, 0, &mut outboard).unwrap();
     let mut head = *good.signed.head();
     head.root = root;
     let signed = SignedHead::sign(head, &sender).unwrap();
-    let bad = Sealed {
-        signed,
-        sealed,
-        outboard,
-        payload: Vec::new(),
-    };
+    (
+        Sealed {
+            signed,
+            sealed,
+            outboard,
+            payload: Vec::new(),
+        },
+        layout,
+    )
+}
+
+#[test]
+fn finish_never_writes_over_a_held_symbol() {
+    // Holding the first data symbol and both parity symbols, finish solves the missing data symbol from the first
+    // parity row and recomputes the second parity row. Written back over the held symbol, that row would differ from
+    // the verified one whenever the sender's parity is not a code word.
+    // 1. The second parity symbol is the bad one and is held: the signed root commits to it, so finish succeeds and
+    //    the buffer is the sealed bundle, bad symbol included.
+    let (bad, layout) = bundle_with_bad_symbol(3);
+    let g = layout.slice_len() as usize;
     let mut buf = vec![0; layout.total_len() as usize];
     let mut rx = Reception::<8>::new(&bad.signed, &mut buf, NOW).unwrap();
     rx.feed(0..1, &bad.proof(0..1)).unwrap();
-    rx.feed(2..3, &bad.proof(2..3)).unwrap();
+    rx.feed(2..4, &bad.proof(2..4)).unwrap();
     let mut ob = vec![0; layout.outboard_len().unwrap() as usize];
+    dtn_common::finish(&mut rx, &mut ob).unwrap();
+    assert!(rx.is_complete());
+    assert_eq!(rx.sealed(), &bad.sealed[..]);
+    // 2. The first parity symbol is the bad one and is held: the solved data symbol is wrong, the root does not
+    //    match, and every held symbol is still the verified one.
+    let (bad, layout) = bundle_with_bad_symbol(2);
+    let mut buf = vec![0; layout.total_len() as usize];
+    let mut rx = Reception::<8>::new(&bad.signed, &mut buf, NOW).unwrap();
+    rx.feed(0..1, &bad.proof(0..1)).unwrap();
+    rx.feed(2..4, &bad.proof(2..4)).unwrap();
     assert_eq!(dtn_common::finish(&mut rx, &mut ob).err(), Some(DtnError::Inconsistent));
-    assert!(rx.holds(0) && rx.holds(2) && !rx.holds(1));
-    assert_eq!(&rx.sealed()[..g], &bad.sealed[..g]);
-    assert_eq!(&rx.sealed()[2 * g..3 * g], &bad.sealed[2 * g..3 * g]);
+    assert!(rx.holds(0) && rx.holds(2) && rx.holds(3) && !rx.holds(1));
+    for s in [0, 2, 3] {
+        assert_eq!(&rx.sealed()[s * g..(s + 1) * g], &bad.sealed[s * g..(s + 1) * g], "symbol {s}");
+    }
     // The scratch and outboard sizes are checked before anything moves.
     let mut scratch = vec![0; rx.scratch_len().unwrap()];
     assert_eq!(rx.finish(&mut ob[1..], &mut scratch).err(), Some(DtnError::Buffer));
