@@ -178,7 +178,7 @@ conn_impl! {
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubOpen { client, parent, alpn, cc, cs, identity, path, path_info } = open;
-        let mut c = Self::sub_shell(client, cfg, alpn, cc, cs, identity, path, path_info, res, env)?;
+        let mut c = Self::sub_shell(client, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
         c.establish_sub(env, parent, alpn);
         Ok(c)
     }
@@ -195,7 +195,7 @@ conn_impl! {
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubWait { alpn, cc, cs, identity, path, path_info } = open;
-        let mut c = Self::sub_shell(true, cfg, alpn, cc, cs, identity, path, path_info, res, env)?;
+        let mut c = Self::sub_shell(true, cfg, alpn, cc, cs, &identity, path, path_info, res, env)?;
         // The peer's record is not known yet; the application may still open a stream and queue its first bytes, which
         // wait for the keys. The parent's record replaces this when the sub-session opens.
         c.peer_credit = CreditRecord::new(PENDING_WINDOW, PENDING_STREAMS, 0);
@@ -222,7 +222,7 @@ conn_impl! {
         alpn: Alpn,
         cc: ConnId,
         cs: ConnId,
-        identity: LocalIdentity,
+        identity: &LocalIdentity,
         path: PathId,
         path_info: PathInfo,
         res: Resources<'a, S, N, C>,
@@ -231,7 +231,7 @@ conn_impl! {
         let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };
         let local = Self::advertise(&cfg, res.streams);
         let alpns = AlpnList::new(&[alpn.as_bytes()]).ok_or(Failure::InvalidParameter)?;
-        let shell = Machine::Server(Responder::new(ResponderConfig::new(identity, first_local, alpns)));
+        let shell = Machine::Server(Responder::new(ResponderConfig::new(*identity, first_local, alpns)));
         let mut c = Self::base(client, cfg, res, shell, first_local, ConnId::default(), env.now, local)?;
         c.cids.set_first_remote(first_remote);
         c.new_path_slot(path, path_info, env.now);

@@ -86,7 +86,8 @@ enum State {
         aead: Aead,
         th1: [u8; 32],
         ss_x: Secret<32>,
-        /// What the machine goes back to when the Reply fails to open: a forged or damaged Reply is dropped.
+        /// What the machine goes back to when the Reply fails to open: a forged or damaged Reply is dropped (the
+        /// transcript before it is in `back_th`).
         back: Back,
     },
     /// Waiting for the host to sign.
@@ -100,11 +101,11 @@ enum State {
     Failed,
 }
 
-/// The state and transcript before a Reply was taken in.
+/// The state before a Reply was taken in.
+#[derive(Clone, Copy)]
 struct Back {
     short: bool,
     echo: [u8; 16],
-    th: Transcript,
 }
 
 /// A resumption the machine stopped waiting for but still accepts a reply to.
@@ -132,6 +133,8 @@ pub struct Initiator {
     seed: Secret<32>,
     e: [u8; 32],
     th: Transcript,
+    /// The transcript as it was before the Reply that is waiting to be opened.
+    back_th: Transcript,
     sends: u32,
     late: Option<Late>,
     out: Outbox,
@@ -169,6 +172,7 @@ impl Initiator {
             seed: Secret::new([0; 32]),
             e: [0; 32],
             th: Transcript::new(),
+            back_th: Transcript::new(),
             sends: 0,
             late: None,
             out: Outbox::new(),
@@ -486,11 +490,8 @@ impl Initiator {
             .ok_or(Failure::InvalidParameter)?
             .copy_from_slice(input);
         self.inlen = input.len();
-        let back = Back {
-            short,
-            echo,
-            th: self.th.clone(),
-        };
+        let back = Back { short, echo };
+        self.back_th = self.th.clone();
         absorb_reply(&mut self.th, &reply.scid, reply.aead, &reply.e, reply.ct);
         self.out.set_request(Pending::Decap {
             key: self.prekey.handle,
@@ -516,7 +517,7 @@ impl Initiator {
             Err(f) => {
                 if f == Failure::Authentication {
                     // A damaged or forged Reply proves nothing: drop it and wait for the next one.
-                    self.th = back.th;
+                    self.th = self.back_th.clone();
                     self.state = State::Reply {
                         short: back.short,
                         echo: back.echo,
