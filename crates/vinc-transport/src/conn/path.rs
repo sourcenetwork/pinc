@@ -564,7 +564,7 @@ conn_impl! {
     }
 
     /// Send the probe of path `i` that is due and plan the next one.
-    // vertexia: the finalist also spaces re-join challenges per destination address across sessions; that table
+    // vertexia: the protocol also spaces re-join challenges per destination address across sessions; that table
     // belongs to the endpoint, which owns the sessions that share an address.
     fn fire_probe(&mut self, env: &mut Env<'_, P>, i: usize) {
         let now = env.now;
