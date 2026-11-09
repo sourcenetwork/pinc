@@ -26,6 +26,7 @@
     clippy::cast_possible_truncation,
     clippy::too_many_lines,
     clippy::similar_names,
+    clippy::many_single_char_names,
     clippy::items_after_statements,
     unreachable_pub
 )]
@@ -184,13 +185,13 @@ fn run(rng: &mut SplitMix64, out: &mut String, run: u32) -> bool {
         let mut delivered: Option<(usize, bool)> = None;
         match rng.next_u64() % 12 {
             0..=2 => {
-                let a = rng.next_u64() % 2 == 0;
+                let a = rng.next_u64().is_multiple_of(2);
                 let id = if a { ia } else { ib };
                 let _ = pair.node(a).conn.write(id, &data);
                 pair.pump(a);
             }
             3 | 4 => {
-                let a = rng.next_u64() % 2 == 0;
+                let a = rng.next_u64().is_multiple_of(2);
                 pair.pump(a);
             }
             5..=9 => {
@@ -198,7 +199,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, run: u32) -> bool {
                     continue;
                 }
                 let idx = (rng.next_u64() % pair.pool.len() as u64) as usize;
-                let forged = rng.next_u64() % 10 == 0;
+                let forged = rng.next_u64().is_multiple_of(10);
                 if forged {
                     // The key phase bit is the 0x10 bit of the first byte, which header protection masks: flipping
                     // it flips the bit the receiver reads and breaks the tag.

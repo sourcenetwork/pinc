@@ -58,8 +58,8 @@ pub fn request_id(share: &[u8; 32]) -> [u8; ECHO_LEN] {
 }
 
 /// The Diffie-Hellman value with the request identifier bound in: `extract(dh, id)`.
-fn bind(dh: &Secret<32>, id: &[u8; ECHO_LEN]) -> Secret<32> {
-    chain(dh, id)
+fn bind(dh: &Secret<32>, id: [u8; ECHO_LEN]) -> Secret<32> {
+    chain(dh, &id)
 }
 
 /// One REKEY message.
@@ -294,7 +294,7 @@ impl Roll {
         let dh = bind(
             &p.x25519_dh(&secret, &request.share)
                 .map_err(|_| Failure::InvalidPeerKey)?,
-            &echo,
+            echo,
         );
         let answer = Rekey {
             answer: true,
@@ -328,7 +328,7 @@ impl Roll {
         let dh = bind(
             &p.x25519_dh(&p.x25519_secret(seed.expose()), &answer.share)
                 .map_err(|_| Failure::InvalidPeerKey)?,
-            &id,
+            id,
         );
         self.state = State::Idle;
         self.last = None;

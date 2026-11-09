@@ -154,7 +154,7 @@ conn_impl! {
         Some(KeysView {
             send_phase: s.phase,
             send_key: s.pk.fingerprint(),
-            staged_send: self.keys.staged_send.as_ref().map(|k| k.fingerprint()),
+            staged_send: self.keys.staged_send.as_ref().map(vinc_security::PacketKey::fingerprint),
             recv_phase: r.phase,
             recv_key: r.cur.fingerprint(),
             first_pn: r.first_pn,
