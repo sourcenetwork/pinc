@@ -229,12 +229,16 @@ par witness_tlc dtn_sc_nolive DtnScenario DtnScenario_nolive DeliveredByExpiry
 par run_tlc dtn_sc_cycle DtnScenario DtnScenario_cycle
 par run_tlc dtn_sc_replay DtnScenario DtnScenario_replay
 par witness_tlc dtn_sc_forget DtnScenario DtnScenario_forget NoForget
+par run_tlc incarnation Incarnation Incarnation
+par run_tlc incarnation_pers Incarnation Incarnation_pers
+par run_tlc incarnation_hlc Incarnation Incarnation_hlc
+par witness_tlc incarnation_clock Incarnation Incarnation_clock MonoAll
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -273,5 +277,6 @@ trace_tlc TraceDtnCodec dtn-codec
 trace_tlc TraceDtnReception dtn-reception
 trace_tlc TraceDtnSeal dtn-seal
 trace_tlc TraceDtnScenario dtn-scenario
+trace_tlc TraceIncarnation incarnation
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

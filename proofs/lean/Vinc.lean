@@ -142,4 +142,8 @@ import Vinc.DtnScenarioTime
 import Vinc.DtnScenarioCycle
 import Vinc.DtnScenarioChain
 import Vinc.TraceDtnScenario
+
+import Vinc.MembershipInc
+import Vinc.MembershipIncThm
+import Vinc.TraceMembershipInc
 #audit_package

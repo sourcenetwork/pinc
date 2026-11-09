@@ -18,9 +18,12 @@
 
 #[path = "trace_membership/common.rs"]
 mod common;
+#[path = "trace_membership/inc.rs"]
+mod inc;
 
 #[test]
 fn membership_traces() {
     let mut tw = common::TraceWriter::new();
+    inc::run(&mut tw);
     tw.finish();
 }

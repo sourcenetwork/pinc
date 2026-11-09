@@ -27,6 +27,7 @@ import Vinc.TraceDtnReception
 import Vinc.TraceDtnSeal
 import Vinc.TraceDtnScenario
 import Vinc.TraceDtnLayout
+import Vinc.TraceMembershipInc
 
 /-!
 # Trace replay
@@ -145,6 +146,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut drx : TraceDtnReception.W := {}
   let mut dss : TraceDtnSeal.W := {}
   let mut dsc : TraceDtnScenario.W := {}
+  let mut mis : TraceMembershipInc.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -292,6 +294,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnectMailbox.replayEvent j cmb with
           | .ok w' =>
             cmb := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceMembershipInc.isTag t then
+          -- Incarnation and address tag events (`mi`, written by `trace_membership`): the model of `incarnation.rs`.
+          match TraceMembershipInc.replayEvent j mis with
+          | .ok m' =>
+            mis := m'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
