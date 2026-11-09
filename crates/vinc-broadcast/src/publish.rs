@@ -21,7 +21,7 @@ use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_membership::{Nanos, NodeId};
 
 use crate::auth;
-use crate::consts::{FALLBACK_BATCH, MAX_BODY, MAX_TOPIC, PENDING_MAX, PUB_GIVEUP, PUB_RETRY};
+use crate::consts::{FALLBACK_BATCH, MAX_TOPIC, PENDING_MAX, PUB_GIVEUP, PUB_RETRY};
 use crate::event::{PublishMode, Trace, topic_tag};
 use crate::host::{Event, Host, Lane};
 use crate::node::{Pending, Refused, Topic, Topics};
@@ -71,8 +71,10 @@ impl Topics {
         if topic.len() > MAX_TOPIC {
             return Err(Refused::TopicTooLong);
         }
-        if body.len() > MAX_BODY {
-            return Err(Refused::BodyTooLarge);
+        if body.len() > self.limits.max_body {
+            return Err(Refused::BodyTooLarge {
+                limit: self.limits.max_body,
+            });
         }
         if !self.ensure_topic(topic) {
             return Err(Refused::TopicsFull);
@@ -100,7 +102,12 @@ impl Topics {
             ts: self.hlc,
         };
         let hlen = head.len();
-        head.write(u32::try_from(body.len()).map_err(|_| Refused::BodyTooLarge)?, &mut data);
+        head.write(
+            u32::try_from(body.len()).map_err(|_| Refused::BodyTooLarge {
+                limit: self.limits.max_body,
+            })?,
+            &mut data,
+        );
         data.extend_from_slice(body);
         let key = u64::from_le_bytes(mid);
         if let Some(st) = self.topics.get_mut(topic) {

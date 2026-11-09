@@ -8,13 +8,13 @@
 //! publishers the full set (SUBS), and the other hubs its local set, so that a member cut off from every hub still
 //! knows whom to reach.
 //!
-//! Invariants: a SUBS frame lists at most [`SUBSET_MAX`] nodes in id order, so two hubs with the same tables send the
+//! Invariants: a SUBS frame lists at most `max_subscribers` nodes in id order, so two hubs with the same tables send the
 //! same bytes; a held member receives no push; a restore tells the member exactly the topics it had.
 
 use alloc::vec::Vec;
 use vinc_membership::NodeId;
 
-use crate::consts::{SUBSET_MAX, TABLE_MAX};
+use crate::consts::TABLE_MAX;
 use crate::event::{Trace, topic_tag};
 use crate::host::{Event, Host, Lane};
 use crate::node::{Topic, Topics};
@@ -26,13 +26,20 @@ const PUBS_MAX: usize = 256;
 /// Lay the SUBS frame of `st` in `scratch`: the union of the live local subscribers and the other hubs' reports
 /// (or only the local ones), in id order. An empty set is sent too, so a node that knew subscribers learns they are
 /// gone.
-fn build_subs(scratch: &mut Vec<u8>, nodes: &mut Vec<NodeId>, st: &Topic, topic: &[u8], local_only: bool) -> bool {
+fn build_subs(
+    scratch: &mut Vec<u8>,
+    nodes: &mut Vec<NodeId>,
+    st: &Topic,
+    topic: &[u8],
+    local_only: bool,
+    max: usize,
+) -> bool {
     nodes.clear();
     let live = st.subs.iter().filter(|(_, l)| **l).map(|(p, _)| p);
     let remote = st.rsubs.values().flatten().filter(|_| !local_only);
     for n in live.chain(remote) {
         if let Err(pos) = nodes.binary_search(n)
-            && nodes.len() < SUBSET_MAX
+            && nodes.len() < max
         {
             nodes.insert(pos, *n);
         }
@@ -43,7 +50,7 @@ fn build_subs(scratch: &mut Vec<u8>, nodes: &mut Vec<NodeId>, st: &Topic, topic:
 
 /// Tell the members of `topic` the subscriber set, and the other hubs the local one.
 // vertexia: the whole set is pushed on every change, O(subscribers) frames of O(subscribers) bytes, bounded by
-// SUBSET_MAX; delta frames if topics should carry thousands of subscribers.
+// the configured `max_subscribers`; delta frames if topics should carry thousands of subscribers.
 fn announce<H: Host>(
     h: &mut H,
     scratch: &mut Vec<u8>,
@@ -51,15 +58,16 @@ fn announce<H: Host>(
     hubs: &[NodeId],
     topic: &[u8],
     st: &Topic,
+    max: usize,
 ) {
-    if build_subs(scratch, nodes, st, topic, false) {
+    if build_subs(scratch, nodes, st, topic, false, max) {
         let live = st.subs.iter().filter(|(_, l)| **l).map(|(p, _)| p);
         let others = st.pubs.iter().filter(|p| !st.subs.contains_key(*p));
         for p in live.chain(others) {
             h.send(p, Lane::Main, scratch);
         }
     }
-    if build_subs(scratch, nodes, st, topic, true) {
+    if build_subs(scratch, nodes, st, topic, true, max) {
         for hub in hubs {
             h.send(hub, Lane::Main, scratch);
         }
@@ -70,7 +78,15 @@ impl Topics {
     /// Replicate the subscriber set of `topic` after a change.
     pub(crate) fn announce_topic<H: Host>(&mut self, h: &mut H, topic: &[u8]) {
         if let Some(st) = self.topics.get(topic) {
-            announce(h, &mut self.scratch, &mut self.nodes, &self.hubs, topic, st);
+            announce(
+                h,
+                &mut self.scratch,
+                &mut self.nodes,
+                &self.hubs,
+                topic,
+                st,
+                self.limits.max_subscribers,
+            );
         }
     }
 
@@ -88,13 +104,21 @@ impl Topics {
         let Some(st) = self.topics.get(topic) else {
             return;
         };
-        if build_subs(&mut self.scratch, &mut self.nodes, st, topic, false) && !self.nodes.is_empty() {
+        if build_subs(
+            &mut self.scratch,
+            &mut self.nodes,
+            st,
+            topic,
+            false,
+            self.limits.max_subscribers,
+        ) && !self.nodes.is_empty()
+        {
             h.send(from, Lane::Main, &self.scratch);
         }
     }
 
     /// `member` was confirmed down: keep its subscriptions for the lease and push it nothing.
-    // vertexia: hold, restore and release scan the topic table (at most MAX_TOPICS); a per-member topic index if the
+    // vertexia: hold, restore and release scan the topic table (at most `max_topics`); a per-member topic index if the
     // table is ever raised far.
     pub fn hold<H: Host>(&mut self, h: &mut H, member: &NodeId) {
         let mut any = false;
@@ -103,7 +127,15 @@ impl Topics {
                 && core::mem::replace(live, false)
             {
                 any = true;
-                announce(h, &mut self.scratch, &mut self.nodes, &self.hubs, k, st);
+                announce(
+                    h,
+                    &mut self.scratch,
+                    &mut self.nodes,
+                    &self.hubs,
+                    k,
+                    st,
+                    self.limits.max_subscribers,
+                );
             }
         }
         if any {
@@ -122,7 +154,15 @@ impl Topics {
                 if wire::build(&mut self.scratch, ty::RESTORED, k, &[]).is_ok() {
                     h.send(member, Lane::Main, &self.scratch);
                 }
-                announce(h, &mut self.scratch, &mut self.nodes, &self.hubs, k, st);
+                announce(
+                    h,
+                    &mut self.scratch,
+                    &mut self.nodes,
+                    &self.hubs,
+                    k,
+                    st,
+                    self.limits.max_subscribers,
+                );
             }
         }
         if topics > 0 {
@@ -140,7 +180,15 @@ impl Topics {
             let was_pub = st.pubs.remove(member);
             if st.subs.remove(member).is_some() {
                 any = true;
-                announce(h, &mut self.scratch, &mut self.nodes, &self.hubs, k, st);
+                announce(
+                    h,
+                    &mut self.scratch,
+                    &mut self.nodes,
+                    &self.hubs,
+                    k,
+                    st,
+                    self.limits.max_subscribers,
+                );
             } else {
                 any |= was_pub;
             }
@@ -159,7 +207,7 @@ impl Topics {
         let Some((count, ids)) = rest.split_first_chunk::<2>() else {
             return;
         };
-        let n = usize::from(u16::from_be_bytes(*count)).min(SUBSET_MAX);
+        let n = usize::from(u16::from_be_bytes(*count)).min(self.limits.max_subscribers);
         let list = ids.as_chunks::<32>().0.iter().take(n);
         let is_hub = self.is_hub;
         let Some(st) = self.topics.get_mut(topic) else {
@@ -176,7 +224,14 @@ impl Topics {
         }
         if is_hub
             && let Some(st) = self.topics.get(topic)
-            && build_subs(&mut self.scratch, &mut self.nodes, st, topic, false)
+            && build_subs(
+                &mut self.scratch,
+                &mut self.nodes,
+                st,
+                topic,
+                false,
+                self.limits.max_subscribers,
+            )
         {
             for p in st
                 .subs

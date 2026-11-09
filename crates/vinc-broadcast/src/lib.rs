@@ -20,6 +20,9 @@
 //! - With no hub reachable, a publisher sends the message straight to the topic's subscribers over member sessions.
 //! - A hub keeps a member's subscriptions while it is held down and tells the member when they are live again.
 //!
+//! Sizes are configuration ([`Limits`]): the body limit, the log ring, the topic count and the subscriber cap. Data
+//! larger than the limit goes by reference: broadcast a root or CID and fetch the bytes with `vinc-values`.
+//!
 //! Invariants: all tables are bounded; no input panics; the same inputs produce the same outputs; a message is
 //! delivered only after its signature over the exact body verified.
 #![no_std]
@@ -58,4 +61,4 @@ mod timers;
 pub use event::{HoldWhy, PublishMode, Reject, Tag, Trace, topic_tag};
 pub use host::{Event, Host, Lane};
 #[cfg(feature = "alloc")]
-pub use node::{Config, Refused, StartError, Topics};
+pub use node::{Config, Limits, Refused, StartError, Topics};

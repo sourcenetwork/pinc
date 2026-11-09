@@ -19,7 +19,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use vinc_broadcast::{Config, Event, Host, Lane, Topics};
 use vinc_crypto::{IdentityAlg, Keypair};
-use vinc_membership::{Frame, NodeId};
+use vinc_membership::NodeId;
 
 pub const SEC: u64 = 1_000_000_000;
 pub const WALL0: u64 = 1_700_000_000_000;
@@ -169,6 +169,12 @@ impl Host for NodeHost {
     }
 }
 
+struct Other<'a> {
+    ty: u8,
+    topic: &'a [u8],
+    rest: &'a [u8],
+}
+
 pub struct Node {
     pub id: NodeId,
     pub t: Topics,
@@ -181,6 +187,7 @@ pub struct Node {
 pub struct Net {
     pub now: u64,
     pub algs: Vec<IdentityAlg>,
+    pub limits: vinc_broadcast::Limits,
     pub hubs: usize,
     pub nodes: Vec<Node>,
     queue: VecDeque<(usize, usize, bool, Vec<u8>)>,
@@ -230,6 +237,10 @@ impl Net {
     }
 
     pub fn with_algs(algs: &[IdentityAlg], hubs: usize, start: u64) -> Self {
+        Self::with_limits(algs, hubs, start, vinc_broadcast::Limits::default())
+    }
+
+    pub fn with_limits(algs: &[IdentityAlg], hubs: usize, start: u64, limits: vinc_broadcast::Limits) -> Self {
         let keys: Vec<Keypair> = algs
             .iter()
             .enumerate()
@@ -245,6 +256,7 @@ impl Net {
                 hubs: &hub_ids,
                 incarnation: (WALL0 + 1) << 16,
                 trace: true,
+                limits,
             };
             let t = Topics::start(&cfg, k, start, WALL0 + start / 1_000_000).unwrap();
             let h = NodeHost {
@@ -264,6 +276,7 @@ impl Net {
         let mut net = Self {
             now: start,
             algs: algs.to_vec(),
+            limits,
             hubs,
             nodes,
             queue: VecDeque::new(),
@@ -289,6 +302,7 @@ impl Net {
             hubs: &hub_ids,
             incarnation: ((WALL0 + at / 1_000_000 + 1) << 16) | 1,
             trace: true,
+            limits: self.limits,
         };
         let skew = self.nodes[i].h.skew_ms;
         let wall = WALL0.saturating_add_signed(skew + i64::try_from(at / 1_000_000).unwrap());
@@ -385,9 +399,15 @@ impl Net {
                 continue;
             }
             let (now, fid) = (self.now, self.nodes[from].id);
-            let Ok(Some((Frame::Other(o), _))) = Frame::read(&bytes) else {
+            // The frame is parsed here, not by membership's reader, whose frame cap is below the sizes some tests use.
+            let (Some(&fty), Some(&tl)) = (bytes.get(4), bytes.get(5)) else {
                 continue;
             };
+            let tl = usize::from(tl);
+            let (Some(topic), Some(rest)) = (bytes.get(6..6 + tl), bytes.get(6 + tl..)) else {
+                continue;
+            };
+            let o = Other { ty: fty, topic, rest };
             self.log.push((now, from, to, o.ty, member));
             let n = &mut self.nodes[to];
             n.h.tick(now);

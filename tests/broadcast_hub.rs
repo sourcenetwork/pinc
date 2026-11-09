@@ -14,7 +14,7 @@
 mod common;
 
 use common::{Net, SEC, ty};
-use vinc_broadcast::consts::{LOG_CAP, MAX_BODY};
+use vinc_broadcast::consts::{DEFAULT_MAX_BODY, LOG_CAP};
 use vinc_broadcast::{Reject, Trace};
 use vinc_crypto::IdentityAlg;
 
@@ -58,7 +58,7 @@ fn the_log_holds_at_most_2048_messages_and_drops_the_oldest() {
 #[test]
 fn the_log_is_bounded_in_bytes_as_well() {
     let mut net = Net::new(IdentityAlg::Ed25519, 1, 1, SEC);
-    let big = vec![7u8; MAX_BODY];
+    let big = vec![7u8; DEFAULT_MAX_BODY];
     // 4 MiB of ring holds at most 64 full-size bodies however many entries are allowed.
     for _ in 0..200 {
         net.publish(1, T, &big);

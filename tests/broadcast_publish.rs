@@ -165,11 +165,11 @@ fn oversize_and_overlong_are_refused() {
     let n = &mut net.nodes[2];
     assert!(n.t.publish(&mut n.h, SEC, &[b'a'; 256], b"x").is_err());
     assert!(
-        n.t.publish(&mut n.h, SEC, T, &vec![0; vinc_broadcast::consts::MAX_BODY + 1])
+        n.t.publish(&mut n.h, SEC, T, &vec![0; vinc_broadcast::consts::DEFAULT_MAX_BODY + 1])
             .is_err()
     );
     assert!(
-        n.t.publish(&mut n.h, SEC, T, &vec![0; vinc_broadcast::consts::MAX_BODY])
+        n.t.publish(&mut n.h, SEC, T, &vec![0; vinc_broadcast::consts::DEFAULT_MAX_BODY])
             .is_ok()
     );
 }
@@ -185,6 +185,7 @@ fn a_key_that_is_not_the_nodes_is_refused_at_start() {
         hubs: &[],
         incarnation: 1,
         trace: false,
+        limits: vinc_broadcast::Limits::default(),
     };
     assert_eq!(Topics::start(&cfg, key, SEC, 1).unwrap_err(), StartError::KeyMismatch);
 }

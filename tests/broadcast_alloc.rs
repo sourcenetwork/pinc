@@ -86,6 +86,7 @@ fn world(alg: IdentityAlg) -> World {
         hubs: &hubs,
         incarnation: 1 << 16,
         trace: false,
+        limits: vinc_broadcast::Limits::default(),
     };
     let now = SEC;
     let wall = 1_700_000_000_000;

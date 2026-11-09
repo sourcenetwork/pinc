@@ -426,5 +426,9 @@ path = "broadcast_determinism.rs"
 name = "broadcast_alloc"
 path = "broadcast_alloc.rs"
 
+[[test]]
+name = "broadcast_limits"
+path = "broadcast_limits.rs"
+
 [lints]
 workspace = true

@@ -14,8 +14,6 @@ use vinc_membership::NodeId;
 use vinc_wire::Reader;
 use vinc_wire::hlc::Hlc;
 
-use crate::consts::MAX_BODY;
-
 /// Frame type numbers. The membership types (1 to 4, 12 to 14) are not repeated here.
 pub mod ty {
     /// A publisher hands a message to a hub; the hub mirrors it to the other hubs.
@@ -108,8 +106,8 @@ impl<'a> Head<'a> {
     /// Parse the head at the start of `rest` and return it with the body that follows.
     ///
     /// # Errors
-    /// [`Malformed`] for an unknown algorithm, a reserved flag, a body whose length differs from `blen`, or a body
-    /// over the limit.
+    /// [`Malformed`] for an unknown algorithm, a reserved flag, a body whose length differs from `blen`. The size limit
+    /// is the node's configuration, checked by the caller.
     pub fn parse(rest: &'a [u8]) -> Result<(Self, &'a [u8]), Malformed> {
         let mut r = Reader::new(rest);
         let mid = r.read_array::<MID_LEN>()?;
@@ -130,7 +128,7 @@ impl<'a> Head<'a> {
         let ts = Hlc::new(r.read_u64()?, r.read_u32()?);
         let n = r.remaining();
         let body = r.read_bytes(n)?;
-        if body.len() != blen || blen > MAX_BODY {
+        if body.len() != blen {
             return Err(Malformed("body length"));
         }
         Ok((

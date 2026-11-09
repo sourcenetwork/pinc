@@ -53,21 +53,19 @@ pub const OLD_SLACK_MS: u64 = 2_000;
 /// A `REPLAY_PUSH` carries at most this many messages.
 pub const REPLAY_PUSH_MAX: usize = 256;
 
-/// The largest message body. A frame is bounded by the hub stream, and the log is bounded in bytes too.
-pub const MAX_BODY: usize = 65_536;
-/// The most topics one node tracks.
-pub const MAX_TOPICS: usize = 128;
-/// The bytes of message data one topic log holds.
-pub const LOG_BYTES: usize = 4 << 20;
+/// The default largest message body (matches the default maximum message size of common gossip stacks).
+pub const DEFAULT_MAX_BODY: usize = 65_536;
+/// The default most topics one node tracks.
+pub const DEFAULT_MAX_TOPICS: usize = 128;
+/// The default bytes of message data one topic log holds.
+pub const DEFAULT_LOG_BYTES: usize = 4 << 20;
 /// The longest topic.
 pub const MAX_TOPIC: usize = 255;
-/// The most subscribers a node learns for one topic, for the member-to-member fallback.
-pub const SUBSET_MAX: usize = 256;
+/// The default most subscribers a node learns for one topic, for the member-to-member fallback.
+pub const DEFAULT_MAX_SUBSCRIBERS: usize = 256;
 /// The fallback sends a message to at most this many subscribers per pacing step.
 pub const FALLBACK_BATCH: usize = 8;
 /// A remote timestamp more than this far ahead of the local wall clock does not advance the local clock (ms).
 pub const HLC_DRIFT_MS: u64 = 60_000;
 /// The most trace records queued between two polls.
 pub const QUEUE_CAP: usize = 8192;
-/// The largest frame the machine builds, length prefix included.
-pub const MAX_FRAME: usize = 4 + 2 + MAX_TOPIC + crate::wire::MAX_HEAD + MAX_BODY;

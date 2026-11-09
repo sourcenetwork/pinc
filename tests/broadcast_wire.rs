@@ -15,7 +15,7 @@ mod common;
 
 use common::{ALGS, Net, SEC, keypair};
 use proptest::prelude::*;
-use vinc_broadcast::consts::MAX_BODY;
+use vinc_broadcast::consts::DEFAULT_MAX_BODY;
 use vinc_broadcast::wire::{self, Head, build, ty};
 use vinc_broadcast::{auth, consts};
 use vinc_crypto::IdentityAlg;
@@ -96,14 +96,17 @@ fn an_unknown_algorithm_and_a_reserved_body_flag_are_errors() {
 }
 
 #[test]
-fn a_body_over_the_limit_is_an_error() {
-    let mut bytes = encoded(IdentityAlg::Ed25519, &vec![0; MAX_BODY]);
+fn the_size_limit_is_the_nodes_configuration_not_the_parsers() {
+    let mut bytes = encoded(IdentityAlg::Ed25519, &vec![0; DEFAULT_MAX_BODY]);
     assert!(Head::parse(&bytes).is_ok());
     // Claim one more byte and supply it.
     let at = 8 + 32 + 1 + 64 + 1;
-    bytes[at..at + 4].copy_from_slice(&u32::try_from(MAX_BODY + 1).unwrap().to_be_bytes());
+    bytes[at..at + 4].copy_from_slice(&u32::try_from(DEFAULT_MAX_BODY + 1).unwrap().to_be_bytes());
     bytes.push(0);
-    assert!(Head::parse(&bytes).is_err());
+    assert!(
+        Head::parse(&bytes).is_ok(),
+        "a node enforces its configured limit; see broadcast_limits"
+    );
 }
 
 #[test]
@@ -175,7 +178,7 @@ proptest! {
         net.pump();
         prop_assert!(net.delivered(1).is_empty() && net.delivered(2).is_empty());
         for n in &net.nodes {
-            prop_assert!(n.t.topic_count() <= consts::MAX_TOPICS);
+            prop_assert!(n.t.topic_count() <= consts::DEFAULT_MAX_TOPICS);
         }
     }
 

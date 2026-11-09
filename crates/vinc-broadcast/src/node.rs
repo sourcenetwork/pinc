@@ -15,11 +15,56 @@ use vinc_crypto::{IdentityAlg, Keypair};
 use vinc_membership::{Nanos, NodeId};
 use vinc_wire::hlc::Hlc;
 
-use crate::consts::{GAP_EVERY, HAVE_MAX, MAX_FRAME, MAX_TOPICS, QUEUE_CAP, SEEN_CAP, SUBSET_MAX};
+use crate::consts::{
+    DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, GAP_EVERY, HAVE_MAX, MAX_TOPIC,
+    QUEUE_CAP, SEEN_CAP,
+};
 use crate::event::Trace;
 use crate::floors::{Gather, SentFloors};
 use crate::log::HubLog;
 use crate::table::Seen;
+
+/// The size limits of a node. The defaults suit small messages; raise `max_body` (and `log_bytes` with it) for a
+/// stack that broadcasts larger payloads. Data larger than any sensible limit belongs behind a reference: broadcast a
+/// root or CID and fetch the bytes with `vinc-values`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// The largest message body, in bytes.
+    pub max_body: usize,
+    /// The bytes of message data (heads and bodies) one topic log holds on a hub.
+    pub log_bytes: usize,
+    /// The most topics the node tracks.
+    pub max_topics: usize,
+    /// The most subscribers the node learns or announces per topic.
+    pub max_subscribers: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_body: DEFAULT_MAX_BODY,
+            log_bytes: DEFAULT_LOG_BYTES,
+            max_topics: DEFAULT_MAX_TOPICS,
+            max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
+        }
+    }
+}
+
+impl Limits {
+    /// The most bytes one frame can take: prefix, type, topic, head and body.
+    pub(crate) const fn max_frame(&self) -> usize {
+        4 + 2 + MAX_TOPIC + crate::wire::MAX_HEAD + self.max_body
+    }
+
+    fn valid(&self) -> bool {
+        // A logged message is its head and body, and the whole of it must fit the ring.
+        self.max_topics > 0
+            && self.max_subscribers > 0
+            && u16::try_from(self.max_subscribers).is_ok()
+            && u32::try_from(self.max_body).is_ok()
+            && self.max_body.saturating_add(crate::wire::MAX_HEAD) <= self.log_bytes
+    }
+}
 
 /// How a node is set up.
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +80,8 @@ pub struct Config<'a> {
     pub incarnation: u64,
     /// Queue trace records for [`Topics::poll_trace`].
     pub trace: bool,
+    /// The size limits.
+    pub limits: Limits,
 }
 
 /// Why a node could not start.
@@ -44,6 +91,8 @@ pub enum StartError {
     TooManyHubs,
     /// The key does not belong to this node id.
     KeyMismatch,
+    /// The limits are unusable: a body (with its head) larger than the log ring, or a zero table.
+    InvalidLimits,
 }
 
 impl core::fmt::Display for StartError {
@@ -51,6 +100,9 @@ impl core::fmt::Display for StartError {
         f.write_str(match self {
             Self::TooManyHubs => "more hubs than the node supports",
             Self::KeyMismatch => "the signing key is not the key of this node id",
+            Self::InvalidLimits => {
+                "the limits are unusable: the log must hold a full message and no table may be empty"
+            }
         })
     }
 }
@@ -62,8 +114,11 @@ impl core::error::Error for StartError {}
 pub enum Refused {
     /// The topic is longer than 255 bytes.
     TopicTooLong,
-    /// The body is larger than the limit.
-    BodyTooLarge,
+    /// The body is larger than the configured limit.
+    BodyTooLarge {
+        /// The configured limit, in bytes.
+        limit: usize,
+    },
     /// The node tracks as many topics as it can.
     TopicsFull,
     /// The signature could not be produced.
@@ -72,9 +127,16 @@ pub enum Refused {
 
 impl core::fmt::Display for Refused {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let Self::BodyTooLarge { limit } = self {
+            return write!(
+                f,
+                "the message body is larger than the configured limit of {limit} bytes; send large data by reference"
+            );
+        }
         f.write_str(match self {
+            Self::BodyTooLarge { .. } => "",
             Self::TopicTooLong => "the topic is longer than 255 bytes",
-            Self::BodyTooLarge => "the message body is larger than the limit",
+
             Self::TopicsFull => "the node tracks as many topics as it can",
             Self::Sign => "the message could not be signed",
         })
@@ -150,6 +212,7 @@ pub struct Topics {
     pub(crate) me: NodeId,
     pub(crate) is_hub: bool,
     pub(crate) hubs: Vec<NodeId>,
+    pub(crate) limits: Limits,
     pub(crate) key: alloc::boxed::Box<Keypair>,
     pub(crate) alg: IdentityAlg,
     pub(crate) pk: Vec<u8>,
@@ -215,6 +278,9 @@ impl Topics {
         if hubs.len() > vinc_membership::consts::MAX_HUBS {
             return Err(StartError::TooManyHubs);
         }
+        if !cfg.limits.valid() {
+            return Err(StartError::InvalidLimits);
+        }
         let alg = key.alg();
         if key.node_id().bytes != cfg.me {
             return Err(StartError::KeyMismatch);
@@ -225,6 +291,7 @@ impl Topics {
             me: cfg.me,
             is_hub: cfg.is_hub,
             hubs,
+            limits: cfg.limits,
             key: alloc::boxed::Box::new(key),
             alg,
             pk,
@@ -246,9 +313,9 @@ impl Topics {
             last_rx_wall: 0,
             next_ae: now,
             next_gap: now.saturating_add(GAP_EVERY),
-            scratch: Vec::with_capacity(MAX_FRAME),
+            scratch: Vec::with_capacity(cfg.limits.max_frame()),
             ids: Vec::with_capacity(8 * HAVE_MAX),
-            nodes: Vec::with_capacity(SUBSET_MAX),
+            nodes: Vec::with_capacity(cfg.limits.max_subscribers),
             spare: Vec::new(),
             tq: TraceQueue {
                 on: cfg.trace,
@@ -329,7 +396,7 @@ impl Topics {
     /// The state of `topic`, created if the table has room.
     pub(crate) fn topic(&mut self, topic: &[u8]) -> Option<&mut Topic> {
         if !self.topics.contains_key(topic) {
-            if self.topics.len() >= MAX_TOPICS {
+            if self.topics.len() >= self.limits.max_topics {
                 return None;
             }
             self.topics.insert(topic.to_vec(), Topic::new());

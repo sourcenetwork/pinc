@@ -13,7 +13,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use vinc_membership::Nanos;
 
-use crate::consts::{LOG_BYTES, LOG_CAP, LOG_WINDOW};
+use crate::consts::{LOG_CAP, LOG_WINDOW};
 use crate::table::MidMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -39,12 +39,12 @@ pub(crate) struct HubLog {
 }
 
 impl HubLog {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(bytes: usize) -> Self {
         Self {
             entries: VecDeque::with_capacity(LOG_CAP),
             index: MidMap::with_capacity(LOG_CAP),
             base: 0,
-            ring: vec![0; LOG_BYTES],
+            ring: vec![0; bytes],
             wpos: 0,
             used: 0,
         }

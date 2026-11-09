@@ -46,6 +46,10 @@ impl Topics {
             self.note_reject([0; 8], Reject::BadHead);
             return;
         };
+        if body.len() > self.limits.max_body {
+            self.note_reject(head.mid, Reject::BadHead);
+            return;
+        }
         let (mid, key) = (head.mid, u64::from_le_bytes(head.mid));
         let ack = self.is_hub && matches!(t, ty::PUB | ty::FANP);
         if self.is_dup(topic, key, now) {
@@ -112,11 +116,12 @@ impl Topics {
             self.note_reject(head.mid, Reject::TopicsFull);
             return;
         }
+        let log_bytes = self.limits.log_bytes;
         let Some(st) = self.topics.get_mut(topic) else {
             return;
         };
         let (log, seen) = (&mut st.log, &mut st.seen);
-        let log = log.get_or_insert_with(HubLog::new);
+        let log = log.get_or_insert_with(|| HubLog::new(log_bytes));
         let head_bytes = rest.get(..head.len()).unwrap_or_default();
         let stored = log.push(key, now, wall, head_bytes, body, |old| {
             seen.insert(old, now, true);

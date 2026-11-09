@@ -100,6 +100,7 @@ impl Rig {
                 hubs: &hubs,
                 incarnation: 1 << 16,
                 trace: false,
+                limits: vinc_broadcast::Limits::default(),
             };
             Topics::start(&cfg, it.next().unwrap(), 1_000_000_000, WALL).unwrap()
         };
