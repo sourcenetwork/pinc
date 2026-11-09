@@ -110,3 +110,37 @@ fn a_sub_session_and_a_dial_after_warm_up_allocate_nothing_either() {
         assert_eq!(allocs, 0, "opening a sub-session allocated {allocs} times");
     });
 }
+
+#[test]
+fn a_resumption_dial_and_a_forged_hello_allocate_nothing() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Close { session: sa, error: 0 }).unwrap();
+        net.run_for(2 * SEC_NS);
+        net.capture = true;
+        meter_endpoint_calls(true);
+        let _ = take_metered_allocs();
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        net.run_for(SEC_NS);
+        // Once the resumed session is gone the Hello's id routes nowhere, so the copies reach admission.
+        let session = net.nodes[a].session(&rep);
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Close { session, error: 0 }).unwrap();
+        net.run_for(2 * SEC_NS);
+        let mut hello = net.captured.iter().find(|c| c.1 == to).unwrap().2.clone();
+        *hello.last_mut().unwrap() ^= 1;
+        for i in 0..20u8 {
+            net.inject(([10, 9, 9, i], 1000).into(), to, hello.clone(), 0);
+        }
+        net.run_for(SEC_NS);
+        meter_endpoint_calls(false);
+        let allocs = take_metered_allocs();
+        assert_eq!(allocs, 0, "a resumption allocated {allocs} times");
+        assert!(net.nodes[a].count(|e| matches!(e, vinc_core::Event::Connected { .. })) >= 2);
+    });
+}

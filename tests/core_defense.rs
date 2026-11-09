@@ -17,8 +17,9 @@ use std::net::SocketAddr;
 use vinc_core::{
     Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role, Slot, TraceEvent,
 };
+use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::{ConnId, KeyHandle, LocalIdentity};
+use vinc_security::{ConnId, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys};
 use vinc_tests::*;
 use vinc_transport::conn::Resources;
 use vinc_transport::packet::{LongHeader, LongType};
@@ -206,10 +207,12 @@ fn the_half_open_cap_floors_and_expiry() {
         assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
         assert_eq!(ep.node_stats().dropped_in, dropped + 2);
 
-        // A resumption Hello is exempt from the cap: it starts a session and the count does not move.
+        // A resumption Hello whose ticket does not open is counted like an Initial: the full table refuses it.
+        let dropped = ep.node_stats().dropped_in;
         feed(&mut ep, addr, now, 902, craft(902, 6, 300));
-        assert_eq!(admissions(&mut ep), [(true, true)]);
+        assert_eq!(admissions(&mut ep), [(false, false)]);
         assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
+        assert_eq!(ep.node_stats().dropped_in, dropped + 1);
 
         // Each unauthenticated session lives 30 s, then the cap opens again.
         let end = now + 31 * SEC_NS;
@@ -235,5 +238,220 @@ fn the_half_open_cap_floors_and_expiry() {
         assert_eq!(admissions(&mut ep), [(true, false)]);
         let _: Option<Event> = None;
         let _ = Answer::None;
+    });
+}
+
+// ---- resumption Hellos and the cap ----
+
+/// The host side of the big server: answers key requests with its key and allows every peer.
+struct Host {
+    kp: Keypair,
+    prov: Caps,
+    drbg: Drbg,
+}
+
+impl Host {
+    fn new() -> Self {
+        Self {
+            kp: Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap(),
+            prov: Caps(Software, true),
+            drbg: Drbg::new(&[9; 32]),
+        }
+    }
+
+    fn react(&mut self, ep: &mut BigEp, now: u64, ev: Event) {
+        let rep = match ev {
+            Event::AcpCheck { check, .. } => ep.command(now, Command::AcpAnswer { check, allow: true }),
+            Event::KeyRequest { session } => {
+                let soft = SoftKeys {
+                    signer: Some((KeyHandle(1), &self.kp)),
+                    prekeys: None::<&SoftPrekeys<Caps>>,
+                };
+                let mut env = Env {
+                    provider: &self.prov,
+                    now,
+                    drbg: &mut self.drbg,
+                };
+                let mut sig = [0u8; MAX_SIGNATURE_LEN];
+                let response = match ep.query(Query::KeyRequest(session)) {
+                    Answer::KeyRequest(req) => match soft.answer(&mut env, &req, &mut sig) {
+                        KeyResponse::Signature(s) => KeyResponse::Signature(s),
+                        KeyResponse::SharedSecret(s) => KeyResponse::SharedSecret(s),
+                        KeyResponse::Failed => KeyResponse::Failed,
+                    },
+                    _ => return,
+                };
+                ep.command(now, Command::KeyResponse { session, response })
+            }
+            _ => return,
+        };
+        for e in rep
+            .into_iter()
+            .flat_map(|r| r.events.iter().copied().collect::<Vec<_>>())
+        {
+            self.react(ep, now, e);
+        }
+    }
+}
+
+/// One dialer on a `CoreNet` and the big server beside it, joined by hand: the dialer's datagrams to the server's
+/// address go in, the server's go back.
+struct Duo {
+    net: CoreNet,
+    srv: Box<BigEp>,
+    addr: SocketAddr,
+    host: Host,
+    taken: usize,
+}
+
+impl Duo {
+    fn new() -> Self {
+        let mut net = CoreNet::new(MS_NS);
+        net.add(2);
+        net.capture = true;
+        let (srv, addr) = big_server(net.now);
+        Self {
+            net,
+            srv,
+            addr,
+            host: Host::new(),
+            taken: 0,
+        }
+    }
+
+    fn drive(&mut self, span: u64) {
+        for _ in 0..span / MS_NS {
+            self.net.run_for(MS_NS);
+            let now = self.net.now;
+            while let Some((from, to, d)) = self.net.captured.get(self.taken).cloned() {
+                self.taken += 1;
+                if to == self.addr {
+                    self.srv.handle_datagram(now, self.addr, from, &mut d.clone());
+                }
+            }
+            self.srv.handle_timeout(now);
+            while let Some(e) = self.srv.poll_event() {
+                self.host.react(&mut self.srv, now, e);
+            }
+            let mut buf = vec![0u8; 65_536];
+            while let Some(t) = self.srv.poll_transmit(now, &mut buf) {
+                for chunk in buf[..t.len].chunks(t.segment_size) {
+                    self.net.inject(t.local, t.remote, chunk.to_vec(), 0);
+                }
+            }
+        }
+    }
+
+    /// The dialer dials the server and the call returns the session once connected.
+    fn dial(&mut self) -> vinc_core::SessionId {
+        let id = LocalIdentity::from_keypair(&self.host.kp, KeyHandle(1)).unwrap();
+        let (now, to) = (self.net.now, self.addr);
+        let n0 = self.net.nodes[0].count(|e| matches!(e, Event::Connected { .. }));
+        let rep = self.net.nodes[0]
+            .connect(now, id.node_id(), ALPN_A, to, Role::Other)
+            .unwrap();
+        self.drive(300 * MS_NS);
+        assert_eq!(
+            self.net.nodes[0].count(|e| matches!(e, Event::Connected { .. })),
+            n0 + 1,
+            "no session"
+        );
+        self.net.nodes[0].session(&rep)
+    }
+
+    fn hang_up(&mut self, session: vinc_core::SessionId) {
+        let now = self.net.now;
+        self.net.nodes[0]
+            .cmd(now, Command::Close { session, error: 0 })
+            .unwrap();
+        self.drive(2 * SEC_NS);
+    }
+
+    /// A full handshake that leaves the dialer holding a ticket, then the half-open table filled with forgeries.
+    fn with_full_cap() -> Self {
+        let mut d = Self::new();
+        let first = d.dial();
+        d.hang_up(first);
+        let now = d.net.now;
+        for i in 0..MAX_HALF_OPEN as u64 {
+            feed(&mut d.srv, d.addr, now, 1000 + i, craft(1000 + i, 6, 300));
+        }
+        assert_eq!(
+            d.srv.node_stats().half_open,
+            MAX_HALF_OPEN,
+            "a forged resumption Hello must count"
+        );
+        d
+    }
+}
+
+#[test]
+fn a_flood_of_forged_resume_hellos_is_held_to_the_cap() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let (mut ep, addr) = big_server(now);
+        for i in 0..(MAX_HALF_OPEN as u64 + 100) {
+            feed(&mut ep, addr, now, i, craft(i + 1, 6, 300));
+        }
+        let ns = ep.node_stats();
+        assert_eq!((ns.half_open, ns.sessions), (MAX_HALF_OPEN, MAX_HALF_OPEN));
+        assert_eq!(ns.dropped_in, 100);
+    });
+}
+
+#[test]
+fn a_genuine_resume_connects_while_the_cap_is_full_of_forgeries() {
+    big_stack(|| {
+        let mut d = Duo::with_full_cap();
+        let _ = admissions(&mut d.srv);
+        d.dial();
+        let adm = admissions(&mut d.srv);
+        assert_eq!(
+            adm,
+            [(true, true)],
+            "the genuine Hello is exempt and nothing else starts a session"
+        );
+        assert_eq!(d.srv.node_stats().half_open, MAX_HALF_OPEN);
+    });
+}
+
+#[test]
+fn replays_of_a_used_ticket_are_held_to_the_cap() {
+    big_stack(|| {
+        let mut d = Duo::with_full_cap();
+        let mark = d.net.captured.len();
+        let second = d.dial();
+        let hello = d.net.captured[mark..].iter().find(|c| c.1 == d.addr).unwrap().2.clone();
+        d.hang_up(second);
+        assert_eq!(
+            d.srv.node_stats().sessions,
+            MAX_HALF_OPEN,
+            "the resumed session is gone"
+        );
+        let _ = admissions(&mut d.srv);
+        let (now, dropped) = (d.net.now, d.srv.node_stats().dropped_in);
+        for i in 0..50u64 {
+            feed(&mut d.srv, d.addr, now, 5000 + i, hello.clone());
+        }
+        let adm = admissions(&mut d.srv);
+        assert!(adm.iter().all(|a| *a == (false, false)), "a replay was exempt: {adm:?}");
+        assert_eq!(d.srv.node_stats().half_open, MAX_HALF_OPEN);
+        assert_eq!(d.srv.node_stats().dropped_in, dropped + 50);
+    });
+}
+
+#[test]
+fn a_hello_with_a_forged_binder_is_not_exempt() {
+    big_stack(|| {
+        let mut d = Duo::with_full_cap();
+        let mark = d.net.captured.len();
+        let session = d.dial();
+        let mut hello = d.net.captured[mark..].iter().find(|c| c.1 == d.addr).unwrap().2.clone();
+        // The credit record is the last field of the message and is part of what the binder covers.
+        *hello.last_mut().unwrap() ^= 1;
+        d.hang_up(session);
+        let _ = admissions(&mut d.srv);
+        feed(&mut d.srv, d.addr, d.net.now, 7000, hello);
+        assert_eq!(admissions(&mut d.srv), [(false, false)]);
     });
 }

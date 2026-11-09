@@ -493,24 +493,9 @@ impl Responder {
             return Err(Failure::UnsupportedVersion);
         }
         let alpn = self.cfg.alpns.find(hello.alpn).ok_or(Failure::UnknownAlpn)?;
-        let mut th = hello_transcript(&HelloFields {
-            version: hello.version,
-            alpn: hello.alpn,
-            dcid: &hello.dcid,
-            scid: &hello.scid,
-            aead: hello.aead,
-            tid: &hello.tid,
-            e: &hello.e,
-            credit: &hello.credit,
-        });
+        let mut th = hello_transcript(&hello_fields(&hello));
         let th_hello = th.snapshot();
-        let found = stores.tickets.find(&hello.tid);
-        let usable = found.and_then(|i| stores.tickets.get(i)).is_some_and(|s| {
-            s.expiry >= env.now
-                && s.alpn == alpn
-                && s.aead == hello.aead
-                && ct_eq(&binder(&s.psk, &th_hello), &hello.binder)
-        });
+        let (found, usable) = find_ticket(&stores.tickets, env.now, alpn, &hello, &th_hello);
         let Some(slot) = found.filter(|_| usable).and_then(|i| stores.tickets.remove(i)) else {
             // Unknown, expired or not matching: tell the initiator to start a full handshake.
             if let Some(i) = found.filter(|i| stores.tickets.get(*i).is_some_and(|s| s.expiry < env.now)) {
@@ -575,4 +560,56 @@ impl Responder {
         });
         Ok(())
     }
+}
+
+fn hello_fields<'a>(h: &'a ResumeHello<'a>) -> HelloFields<'a> {
+    HelloFields {
+        version: h.version,
+        alpn: h.alpn,
+        dcid: &h.dcid,
+        scid: &h.scid,
+        aead: h.aead,
+        tid: &h.tid,
+        e: &h.e,
+        credit: &h.credit,
+    }
+}
+
+/// The store index of the ticket a Hello names, and whether that ticket opens for it: unexpired, for the same
+/// protocol and cipher, and the binder verifies. Nothing is removed.
+fn find_ticket<const N: usize>(
+    tickets: &ServerTickets<N>,
+    now: u64,
+    alpn: Alpn,
+    hello: &ResumeHello<'_>,
+    th_hello: &[u8; 32],
+) -> (Option<usize>, bool) {
+    let found = tickets.find(&hello.tid);
+    let usable = found.and_then(|i| tickets.get(i)).is_some_and(|s| {
+        s.expiry >= now && s.alpn == alpn && s.aead == hello.aead && ct_eq(&binder(&s.psk, th_hello), &hello.binder)
+    });
+    (found, usable)
+}
+
+/// Whether `message`, a complete resumption Hello, names an unused ticket of `tickets` that opens for it at `now`:
+/// the check [`Responder`] makes before it answers, without taking the ticket. False for anything else, a message
+/// that does not parse included. A server uses it to tell a genuine resumption from a forgery before it holds any
+/// state for the sender.
+pub fn hello_opens_ticket<const N: usize>(
+    tickets: &ServerTickets<N>,
+    alpns: &AlpnList,
+    now: u64,
+    message: &[u8],
+) -> bool {
+    let Ok(hello) = ResumeHello::parse(message) else {
+        return false;
+    };
+    if hello.version != VERSION {
+        return false;
+    }
+    let Some(alpn) = alpns.find(hello.alpn) else {
+        return false;
+    };
+    let th_hello = hello_transcript(&hello_fields(&hello)).snapshot();
+    find_ticket(tickets, now, alpn, &hello, &th_hello).1
 }

@@ -5,7 +5,9 @@
 //! datagram, because opening a packet changes the bytes in place, and the session whose keys open it owns it. An id no
 //! session holds can only start a session if the datagram is a first handshake message that meets its size floor
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
-//! resumption Hello is exempt from the count because its binder proves a past session.
+//! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
+//! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
+//! forged or replayed one included, counts like a full Initial.
 //!
 //! Invariants: a datagram larger than [`MAX_DATAGRAM`] or shorter than a header is dropped and counted; a datagram
 //! that cannot create a session and matches none is dropped and counted; the copy used for trials is the only extra
@@ -14,6 +16,7 @@
 use core::net::SocketAddr;
 
 use vinc_security::message::{FULL_INITIAL_MIN, MessageType, SHORT_INITIAL_MIN};
+use vinc_security::responder::hello_opens_ticket;
 use vinc_security::{ConnId, Env};
 use vinc_transport::conn::{Connection, Drop, ServerParams};
 use vinc_transport::packet::{LongHeader, LongType, short_dcid};
@@ -30,9 +33,11 @@ pub const MAX_HALF_OPEN: usize = 256;
 pub const HALF_OPEN_LIFE: u64 = 30_000_000_000;
 
 /// What the first packet of an unroutable datagram says.
-struct First {
+struct First<'a> {
     odcid: ConnId,
     kind: MessageType,
+    /// The whole message when this packet carries all of it.
+    message: Option<&'a [u8]>,
 }
 
 /// The destination id of the first packet of a datagram, and whether it is a long header.
@@ -46,7 +51,7 @@ fn peek(buf: &[u8]) -> Option<(ConnId, bool)> {
 }
 
 /// The destination id and first message type of a long Handshake packet that starts a message.
-fn classify(buf: &[u8]) -> Option<First> {
+fn classify(buf: &[u8]) -> Option<First<'_>> {
     let (h, hlen) = LongHeader::parse(buf).ok()?;
     if h.ty != LongType::Handshake {
         return None;
@@ -58,8 +63,14 @@ fn classify(buf: &[u8]) -> Option<First> {
     if off != 0 || total == 0 {
         return None;
     }
-    let kind = MessageType::of(&[r.read_u8().ok()?]).ok()?;
-    Some(First { odcid: h.dcid, kind })
+    let data = r.read_bytes(r.remaining()).ok()?;
+    let kind = MessageType::of(&[*data.first()?]).ok()?;
+    let message = usize::try_from(total).ok().and_then(|t| data.get(..t));
+    Some(First {
+        odcid: h.dcid,
+        kind,
+        message,
+    })
 }
 
 ep_impl! {
@@ -172,7 +183,7 @@ ep_impl! {
                 return;
             }
         };
-        let resume = first.kind == MessageType::ResumeHello;
+        let resume = first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
         let admitted = buf.len() >= floor && (resume || self.half_open < MAX_HALF_OPEN);
         trace!(self, now, HalfOpen {
             admitted: u64::from(admitted),
@@ -189,6 +200,14 @@ ep_impl! {
         };
         // A drop reason is counted by the connection itself.
         let _ = self.deliver(i, now, local, remote, buf);
+    }
+
+    /// Whether a resumption Hello names an unused ticket that opens, so it needs no half-open slot.
+    fn opens_ticket(&self, now: u64, message: Option<&[u8]>) -> bool {
+        message.is_some_and(|m| {
+            self.alpn_list()
+                .is_some_and(|alpns| hello_opens_ticket(&self.stores.tickets, &alpns, now, m))
+        })
     }
 
     /// Create the server session for a first handshake message.
