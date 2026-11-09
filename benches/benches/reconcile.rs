@@ -1,7 +1,8 @@
 //! Benchmarks of `vinc-reconcile`: the time and the bytes of a reconciliation against the size of the difference, on
 //! sets of 10^6 items of 40 bytes. Each session runs both sides in one thread over in-memory indexes, so the time is
-//! the work of the protocol (fingerprints, splits, leaves, merges), without a network. The bytes and messages of each
-//! difference are printed, and the machine's load average before and after, since a loaded machine inflates the times.
+//! the work of the protocol (fingerprints, splits, leaves, merges), without a network. Each difference runs under the
+//! default message limit and under a 16 KiB limit, where a round is spread over many messages. The bytes and messages
+//! of each run are printed, and the machine's load average before and after, since a loaded machine inflates the times.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -19,6 +20,7 @@ use vinc_reconcile::{Initiator, Limits, MemIndex, Responder, Step};
 const N: usize = 1_000_000;
 const ITEM: usize = 40;
 const DIFFS: [usize; 7] = [0, 1, 10, 100, 1000, 10_000, 100_000];
+const LIMITS: [(&str, usize); 2] = [("default", 0x00ff_ffff), ("16k", 16_384)];
 
 struct SplitMix64(u64);
 
@@ -125,15 +127,21 @@ fn reconcile(c: &mut Criterion) {
     for d in DIFFS {
         let other = changed(&mut rng, &base, d);
         let ib = index(&other);
-        let (mut init, mut resp) = (Initiator::new(Limits::default()), Responder::new(Limits::default()));
-        let (mut tx, mut rx) = (Vec::new(), Vec::new());
-        let (bytes, messages) = session(&mut init, &mut resp, &ia, &ib, &mut tx, &mut rx);
-        let found = init.report().map(|r| r.here_count() + r.there_count()).unwrap();
-        eprintln!("d = {d:>6}: {bytes:>9} bytes, {messages:>2} messages, {found} items found");
-        group.throughput(Throughput::Bytes(bytes as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(d), &d, |bench, _| {
-            bench.iter(|| black_box(session(&mut init, &mut resp, &ia, &ib, &mut tx, &mut rx)));
-        });
+        for (label, max_message) in LIMITS {
+            let limits = Limits {
+                max_message,
+                ..Limits::default()
+            };
+            let (mut init, mut resp) = (Initiator::new(limits), Responder::new(limits));
+            let (mut tx, mut rx) = (Vec::new(), Vec::new());
+            let (bytes, messages) = session(&mut init, &mut resp, &ia, &ib, &mut tx, &mut rx);
+            let found = init.report().map(|r| r.here_count() + r.there_count()).unwrap();
+            eprintln!("{label:>7} d = {d:>6}: {bytes:>9} bytes, {messages:>4} messages, {found} items found");
+            group.throughput(Throughput::Bytes(bytes as u64));
+            group.bench_with_input(BenchmarkId::new(label, d), &d, |bench, _| {
+                bench.iter(|| black_box(session(&mut init, &mut resp, &ia, &ib, &mut tx, &mut rx)));
+            });
+        }
     }
     group.finish();
     eprintln!("load average (1, 5, 15 min) at end: {}", load_average());
