@@ -39,11 +39,11 @@ VARIABLES i, rs
 vars == <<i, rs>>
 
 KR == INSTANCE KeyRoll WITH PTO <- 1, MaxTime <- 1, Cap0 <- 1, Cap1 <- 1, MaxPn <- 1, Sat <- 100000,
-                            GateFirst <- FALSE, BindAnswers <- TRUE, ForgeOn <- FALSE,
+                            ForgeOn <- FALSE,
                             nd <- 0, net <- 0, now <- 0, slog <- 0, ev <- 0, comp <- 0
 RC == INSTANCE Record WITH MaxPn <- 1000000, AesLimit <- 0, ChachaLimit <- 0, MaxGen <- 1000000, Sat <- 1000000,
                            Aead <- "aes", DhIds <- {}, key <- 0, log <- 0
-CD == INSTANCE RekeyCodec WITH ans <- 0, sh <- 0, spn <- 0
+CD == INSTANCE RekeyCodec WITH ans <- 0, sh <- 0, echo <- 0, spn <- 0
 U == INSTANCE U64
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/keyroll.ndjson")
@@ -60,7 +60,10 @@ Consistent(om, t, id) == (\E p \in om : p[1] = t \/ p[2] = id) => <<t, id>> \in 
 InShare(om, id, zero) ==
     IF Bound(om, id) THEN TermOf(om, id) ELSE IF zero THEN KR!JUNK ELSE KR!Pub(KR!Atom(99, id))
 
-EmptyRun == [run |-> 0, rolls |-> <<>>, ctr |-> <<>>, keys |-> <<>>, sOm |-> {}, dOm |-> {}, cOm |-> {}]
+(* an input echo: a known id is its term; a new id is an echo the attacker made, equal to no request's identifier *)
+InEcho(om, id) == IF Bound(om, id) THEN TermOf(om, id) ELSE KR!RId(KR!Pub(KR!Atom(98, id)))
+
+EmptyRun == [run |-> 0, rolls |-> <<>>, ctr |-> <<>>, keys |-> <<>>, sOm |-> {}, dOm |-> {}, cOm |-> {}, eOm |-> {}]
 
 Init == i = 1 /\ rs = EmptyRun
 
@@ -77,7 +80,7 @@ BeginEv ==
               rolls |-> [n \in 0..1 |-> KR!RInit(n = 0)],
               ctr |-> [n \in 0..1 |-> 0],
               keys |-> [s \in 0..3 |-> RC!NewKey(IF Ev.aead = 1 THEN "aes" ELSE "chacha", BaseOf(s), Ev.al, Ev.cl)],
-              sOm |-> {}, dOm |-> {}, cOm |-> {}]
+              sOm |-> {}, dOm |-> {}, cOm |-> {}, eOm |-> {}]
 
 PendId(r, om) == IF r.req = KR!NONE THEN -1 ELSE IdOf(om, r.req.sh)
 
@@ -100,22 +103,24 @@ OnReqEv ==
         r == KR!ROnRequest(rs.rolls[n], m, Ev.spn, fr)
         om1 == rs.sOm \cup {<<sh, Ev.share>>}
         om2 == IF r.res = "ok" THEN om1 \cup {<<r.ans.sh, Ev.oans>>} ELSE om1
+        em2 == IF r.res = "ok" THEN rs.eOm \cup {<<r.ans.to, Ev.oecho>>} ELSE rs.eOm
         dm2 == IF r.res = "ok" /\ r.dh # KR!NONE THEN rs.dOm \cup {<<r.dh, Ev.dh>>} ELSE rs.dOm
     IN /\ Ev.op = "onreq" /\ Ev.run = rs.run
        /\ (Ev.zero => sh = KR!JUNK) /\ (~Ev.zero => sh # KR!JUNK)
        /\ Consistent(rs.sOm, sh, Ev.share)
        /\ Ev.res = r.res
        /\ IF r.res = "ok"
-          THEN /\ Consistent(om1, r.ans.sh, Ev.oans) /\ Ev.ospn = r.ans.spn
+          THEN /\ Consistent(om1, r.ans.sh, Ev.oans) /\ Consistent(rs.eOm, r.ans.to, Ev.oecho) /\ Ev.ospn = r.ans.spn
                /\ IF r.dh = KR!NONE THEN Ev.dh = -1 ELSE Consistent(rs.dOm, r.dh, Ev.dh)
-          ELSE Ev.oans = -1 /\ Ev.ospn = 0 /\ Ev.dh = -1
+          ELSE Ev.oans = -1 /\ Ev.oecho = -1 /\ Ev.ospn = 0 /\ Ev.dh = -1
        /\ Ev.pend = PendId(r.r, om2) /\ Ev.idle = (r.r.st = "idle") /\ Ev.rolls = r.r.rolls
-       /\ rs' = [rs EXCEPT !.rolls[n] = r.r, !.ctr[n] = IF r.drew THEN @ + 1 ELSE @, !.sOm = om2, !.dOm = dm2]
+       /\ rs' = [rs EXCEPT !.rolls[n] = r.r, !.ctr[n] = IF r.drew THEN @ + 1 ELSE @, !.sOm = om2, !.dOm = dm2, !.eOm = em2]
 
 OnAnsEv ==
     LET n == Ev.n
         sh == InShare(rs.sOm, Ev.share, Ev.zero)
-        m == [ans |-> Ev.ans, sh |-> sh, spn |-> Ev.spn, to |-> KR!NONE, gdh |-> KR!NONE]
+        m == [ans |-> Ev.ans, sh |-> sh, spn |-> Ev.spn, to |-> IF Ev.ans THEN InEcho(rs.eOm, Ev.echo) ELSE KR!NONE,
+              gdh |-> KR!NONE]
         r == KR!ROnAnswer(rs.rolls[n], m)
         om1 == rs.sOm \cup {<<sh, Ev.share>>}
         dm2 == IF r.res = "ok" THEN rs.dOm \cup {<<r.dh, Ev.dh>>} ELSE rs.dOm
@@ -173,7 +178,7 @@ DueEv ==
        /\ UNCHANGED rs
 
 EncEv ==
-    LET e == CD!RkEncode([ans |-> Ev.ans, sh |-> Ev.share, spn |-> U!FromLimbs(Ev.sl)])
+    LET e == CD!RkEncode([ans |-> Ev.ans, sh |-> Ev.share, echo |-> Ev.echo, spn |-> U!FromLimbs(Ev.sl)])
     IN /\ Ev.op = "enc"
        /\ IF e.err = "ok" THEN Ev.res = "ok" /\ Ev.bytes = e.bytes ELSE Ev.res = "overflow" /\ Ev.bytes = <<>>
        /\ UNCHANGED rs
@@ -182,7 +187,7 @@ DecEv ==
     LET d == CD!RkDecode(Ev.bytes)
     IN /\ Ev.op = "dec"
        /\ IF d.err = "ok"
-          THEN Ev.res = "ok" /\ Ev.ans = d.ans /\ Ev.share = d.sh /\ U!FromLimbs(Ev.sl) = d.spn
+          THEN Ev.res = "ok" /\ Ev.ans = d.ans /\ Ev.share = d.sh /\ Ev.echo = d.echo /\ U!FromLimbs(Ev.sl) = d.spn
           ELSE Ev.res = (IF d.err \in {"kind", "trailing"} THEN d.err ELSE "other")
        /\ UNCHANGED rs
 

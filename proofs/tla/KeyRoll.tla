@@ -33,23 +33,33 @@
 (* packet that is never delivered), and an attacker can deliver a packet   *)
 (* with its phase bit flipped (Forge), which cannot open.                  *)
 (*                                                                         *)
-(* The ghost fields of a message (to, gdh) record what an answer answers   *)
-(* and the Diffie-Hellman value its sender used; no code reads them. The   *)
+(* An answer carries the identifier of the request it answers (the echo,  *)
+(* RId: a short hash of the request share, injective in this model) and    *)
+(* the Diffie-Hellman value of a roll has the identifier bound into it     *)
+(* (Bound). The requester takes an answer only when its echo names the     *)
+(* request that is out; any other answer is ignored. The ghost field gdh   *)
+(* of a message records the value its sender used; no code reads it. The   *)
 (* REKEY body travels in an authenticated packet, so the attacker of this  *)
 (* model is passive for REKEY (it only delays, drops and repeats).         *)
 (*                                                                         *)
-(* Switches: GateFirst = TRUE reads conn/keys.rs as it is (a request is    *)
-(* refused while a next key is staged, before the duplicate-request check  *)
-(* of Roll); FALSE answers a duplicate request first. BindAnswers = TRUE   *)
-(* only delivers an answer to a requester whose current request it answers *)
-(* (Roll itself does not check this: an answer carries no echo of the      *)
-(* request), FALSE lets the network deliver any answer at any time.        *)
+(* The collision rule is one rule for both sides: the dialer keeps its     *)
+(* request and ignores the acceptor's, the acceptor drops its own and      *)
+(* answers. A duplicate of the request being answered is answered again    *)
+(* with the same answer, also while the next key is staged. A request that *)
+(* arrives in a packet opened under the previous generation's key is a     *)
+(* late copy of a settled roll and is ignored. The loss events of the      *)
+(* transport (a lost answer queued again, a lost request sent at the next  *)
+(* opportunity) are steps of the model (RequeueAnswer, RequestLost).       *)
+(*                                                                         *)
+(* The probe timeout is an argument of the operators that use it (Promote, *)
+(* RecvKeys, Poll); the system passes the constant PTO and the trace       *)
+(* validation the timeout in force at each event.                          *)
 (*                                                                         *)
 (* Lean counterpart: Vinc/KeyRoll.lean. Trace validation: TraceKeyRoll.tla *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS PTO, MaxTime, Cap0, Cap1, MaxPn, Sat, GateFirst, BindAnswers, ForgeOn
+CONSTANTS PTO, MaxTime, Cap0, Cap1, MaxPn, Sat, ForgeOn
 
 Nodes == {0, 1}
 Peer(n) == 1 - n          \* node 0 is the dialer, node 1 the acceptor
@@ -64,12 +74,14 @@ Atom(n, k) == [t |-> "atom", n |-> n, k |-> k]
 Pub(a) == [t |-> "pub", a |-> a]
 JUNK == [t |-> "junk"]
 DhOf(own, sh) == IF sh = JUNK THEN NONE ELSE [t |-> "dh", s |-> {own, sh.a}]   \* unordered: both sides agree
+RId(sh) == [t |-> "id", s |-> sh]                    \* the identifier of a request share (a short hash, injective here)
+Bound(id, dh) == [t |-> "bound", id |-> id, dh |-> dh]       \* extract(dh, id): the identifier bound into the value
 Base(d) == [t |-> "base", d |-> d]
 RollSec(s, dh) == [t |-> "roll", s |-> s, dh |-> dh]
 RECURSIVE Depth(_)
 Depth(s) == IF s.t = "base" THEN 0 ELSE 1 + Depth(s.s)
 
-(* ---- REKEY messages ---- *)
+(* ---- REKEY messages: to is the echo of an answer (NONE in a request) ---- *)
 Req(sh) == [ans |-> FALSE, sh |-> sh, spn |-> 0, to |-> NONE, gdh |-> NONE]
 Ans(sh, spn, to, gdh) == [ans |-> TRUE, sh |-> sh, spn |-> spn, to |-> to, gdh |-> gdh]
 
@@ -95,18 +107,20 @@ ROnRequest(r, req, spn, fresh) ==
          IN IF fresh = NONE THEN [res |-> "randomness", r |-> r1, ans |-> NONE, dh |-> NONE, drew |-> FALSE]
             ELSE LET dh == DhOf(fresh, req.sh)
                  IN IF dh = NONE THEN [res |-> "invalid", r |-> r1, ans |-> NONE, dh |-> NONE, drew |-> TRUE]
-                    ELSE LET a == Ans(Pub(fresh), spn, req.sh, dh)
+                    ELSE LET bd == Bound(RId(req.sh), dh)
+                             a == Ans(Pub(fresh), spn, RId(req.sh), bd)
                          IN [res |-> "ok", r |-> [r1 EXCEPT !.last = [sh |-> req.sh, ans |-> a], !.rolls = Inc(@)],
-                             ans |-> a, dh |-> dh, drew |-> TRUE]
+                             ans |-> a, dh |-> bd, drew |-> TRUE]
 
-(* Roll::on_answer: takes the answer to the request that is out *)
+(* Roll::on_answer: takes the answer to the request that is out; an answer that echoes another request is ignored *)
 ROnAnswer(r, a) ==
     IF ~a.ans THEN [res |-> "unexpected", r |-> r, dh |-> NONE, pspn |-> 0]
     ELSE IF r.st # "req" THEN [res |-> "unexpected", r |-> r, dh |-> NONE, pspn |-> 0]
+    ELSE IF a.to # RId(r.req.sh) THEN [res |-> "unexpected", r |-> r, dh |-> NONE, pspn |-> 0]
     ELSE LET dh == DhOf(r.seed, a.sh)
          IN IF dh = NONE THEN [res |-> "invalid", r |-> r, dh |-> NONE, pspn |-> 0]
             ELSE [res |-> "ok", r |-> [r EXCEPT !.st = "idle", !.seed = NONE, !.req = NONE, !.last = NONE, !.rolls = Inc(@)],
-                  dh |-> dh, pspn |-> a.spn]
+                  dh |-> Bound(RId(r.req.sh), dh), pspn |-> a.spn]
 
 (* keyroll.rs due(): a limit reached, the sending key sealed `after` packets, or the keys are MaxAge old *)
 Due(limitSend, limitRecv, sealed, after, age, maxAge) == limitSend \/ limitRecv \/ sealed >= after \/ age >= maxAge
@@ -118,7 +132,7 @@ NodeInit(n) ==
     [roll |-> RInit(n = 0), ctr |-> 0,
      sk |-> NewK(Base(n), 0), sph |-> FALSE, stg |-> NONE, out |-> NONE, reqAt |-> NOTIME,
      cur |-> NewK(Base(Peer(n)), 0), rph |-> FALSE, first |-> 0, prev |-> NONE, nxt |-> NONE,
-     npn |-> 0, seen |-> {}, chg |-> 0, promAt |-> NOTIME]
+     npn |-> 0, seen |-> {}, chg |-> 0, promAt |-> NOTIME, lastAns |-> NONE]
 
 (* RecvKeys::expire *)
 Expire(s, t) == IF s.prev # NONE /\ s.prev.until <= t THEN [s EXCEPT !.prev = NONE] ELSE s
@@ -139,34 +153,37 @@ BumpFC(s, sel) ==
       [] sel = "next" -> [s EXCEPT !.nxt.k.fc = Inc(@)]
       [] OTHER -> s
 
-(* RecvKeys::promote and Keys::update_send *)
-Promote(s, pn, t) ==
-    [s EXCEPT !.prev = [k |-> s.cur, until |-> t + PTO], !.cur = s.nxt.k, !.rph = ~s.rph, !.first = pn,
+(* RecvKeys::promote and Keys::update_send; pto is the probe timeout in force *)
+Promote(s, pn, t, pto) ==
+    [s EXCEPT !.prev = [k |-> s.cur, until |-> t + pto], !.cur = s.nxt.k, !.rph = ~s.rph, !.first = pn,
               !.nxt = NONE, !.promAt = t]
 UpdateSend(s) == IF s.stg = NONE THEN s ELSE [s EXCEPT !.sk = s.stg, !.sph = ~s.sph, !.stg = NONE]
 
 (* on_short, up to the opening: the new keys state and whether the packet opened. forged: the phase bit of the
    packet was flipped by the attacker, so the tag does not verify under any key. *)
-RecvKeys(s, p, forged, t) ==
+RecvKeys(s, p, forged, t, pto) ==
     LET s1 == Expire(s, t)
         ph == IF forged THEN ~p.ph ELSE p.ph
         sel == Select(s1, ph, p.pn)
     IN IF sel = "err" THEN [s |-> s1, acc |-> FALSE, sel |-> sel]
        ELSE IF forged \/ p.sec # SlotKey(s1, sel).sec THEN [s |-> BumpFC(s1, sel), acc |-> FALSE, sel |-> sel]
        ELSE IF sel = "cur" THEN [s |-> [s1 EXCEPT !.first = IF p.pn < @ THEN p.pn ELSE @], acc |-> TRUE, sel |-> sel]
-       ELSE IF sel = "next" THEN [s |-> UpdateSend(Promote(s1, p.pn, t)), acc |-> TRUE, sel |-> sel]
+       ELSE IF sel = "next" THEN [s |-> UpdateSend(Promote(s1, p.pn, t, pto)), acc |-> TRUE, sel |-> sel]
        ELSE [s |-> s1, acc |-> TRUE, sel |-> sel]
 
 IsDupMsg(s, m) == ~m.ans /\ IsDup(s.roll, m)
 
-(* Keys::on_request is refused while a next key is staged; with GateFirst = FALSE a duplicate request is answered
-   before that check *)
-Gated(s, m) == s.nxt # NONE /\ (GateFirst \/ ~IsDupMsg(s, m))
+(* Keys::on_request is refused while a next key is staged, unless the request repeats the one answered *)
+Gated(s, m) == s.nxt # NONE /\ ~IsDupMsg(s, m)
+
+(* Connection::on_rekey: a request that arrived in a packet opened under the previous generation's key is a late
+   copy of a settled roll, and is ignored; every answer is looked at *)
+Acts(m, sel) == m.ans \/ sel # "prev"
 
 (* a fresh atom is drawn for every request that is not a duplicate *)
 CanRx(s, m, me) == m.ans \/ IsDupMsg(s, m) \/ Gated(s, m) \/ s.ctr < CtrCap(me) \/ (s.roll.dialer /\ s.roll.st # "idle")
 
-(* Connection::on_rekey_body for a body that parsed: the answer switches the sending key, a request stages the keys *)
+(* the body of a REKEY frame: the answer switches the sending key, a request stages the keys *)
 RekeyRx(s, m, me) ==
     IF m.ans THEN
         LET r == ROnAnswer(s.roll, m)
@@ -201,21 +218,27 @@ Begin(n) ==
        /\ UNCHANGED <<net, now, slog, comp>>
 
 (* poll_rekey: the message waiting, or the pending request again once a probe timeout passed *)
-Poll(s) ==
-    IF s.out # NONE THEN [pl |-> s.out, s |-> [s EXCEPT !.out = NONE, !.reqAt = IF s.out.ans THEN @ ELSE now]]
-    ELSE IF s.roll.req # NONE /\ (s.reqAt = NOTIME \/ now >= s.reqAt + PTO)
-         THEN [pl |-> s.roll.req, s |-> [s EXCEPT !.reqAt = now]]
+Poll(s, t, pto) ==
+    IF s.out # NONE THEN [pl |-> s.out, s |-> [s EXCEPT !.out = NONE, !.reqAt = IF s.out.ans THEN @ ELSE t,
+                                                          !.lastAns = IF s.out.ans THEN s.out ELSE @]]
+    ELSE IF s.roll.req # NONE /\ (s.reqAt = NOTIME \/ t >= s.reqAt + pto)
+         THEN [pl |-> s.roll.req, s |-> [s EXCEPT !.reqAt = t]]
     ELSE [pl |-> NONE, s |-> s]
+
+(* Keys::requeue_answer: a lost answer goes out again; Keys::request_lost: a lost request goes out at the next
+   opportunity *)
+RequeueAns(s) == IF s.out = NONE THEN [s EXCEPT !.out = s.lastAns] ELSE s
+RequestLostOp(s) == [s EXCEPT !.reqAt = NOTIME]
 
 (* a packet sealed under the sending key, carrying the polled REKEY message if any (withPl) *)
 SendPkt(n, withPl) ==
     LET s0 == nd[n]
-        q == IF withPl THEN Poll(s0) ELSE [pl |-> NONE, s |-> s0]
+        q == IF withPl THEN Poll(s0, now, PTO) ELSE [pl |-> NONE, s |-> s0]
         s == q.s
         p == [from |-> n, ph |-> s.sph, pn |-> s.npn, sec |-> s.sk.sec, pl |-> q.pl]
     IN /\ s.npn <= MaxPn
        /\ (withPl => q.pl # NONE)
-       /\ (~withPl => Poll(s0).pl = NONE)       \* a due REKEY message goes in the next packet
+       /\ (~withPl => Poll(s0, now, PTO).pl = NONE)       \* a due REKEY message goes in the next packet
        /\ nd' = [nd EXCEPT ![n] = [s EXCEPT !.npn = @ + 1]]
        /\ net' = net \cup {p}
        /\ slog' = slog \cup {[n |-> n, sec |-> p.sec, g |-> s.sk.g, pn |-> p.pn]}
@@ -225,17 +248,16 @@ SendPkt(n, withPl) ==
 (* the network delivers packet p to node n (forged: with its phase bit flipped by the attacker) *)
 Deliver(n, p, forged) ==
     LET s0 == nd[n]
-        k == RecvKeys(s0, p, forged, now)
+        k == RecvKeys(s0, p, forged, now, PTO)
         m == p.pl
         proc == k.acc /\ ~(p.pn \in s0.seen)       \* rx.contains(pn): a packet number is processed once
         s1 == IF proc THEN [k.s EXCEPT !.seen = @ \cup {p.pn}] ELSE k.s
         hasMsg == proc /\ m # NONE
-        s2 == IF hasMsg THEN RekeyRx(s1, m, n) ELSE s1
+        acts == hasMsg /\ Acts(m, k.sel)
+        s2 == IF acts THEN RekeyRx(s1, m, n) ELSE s1
         done == hasMsg /\ m.ans /\ ROnAnswer(s1.roll, m).res = "ok"
     IN /\ p \in net /\ p.from = Peer(n) /\ (forged => ForgeOn)
-       \* the network only delivers an answer to the request it answers, when BindAnswers
-       /\ (hasMsg /\ BindAnswers /\ m.ans /\ s1.roll.st = "req") => m.to = s1.roll.req.sh
-       /\ (hasMsg /\ ~m.ans) => CanRx(s1, m, n)
+       /\ (acts /\ ~m.ans) => CanRx(s1, m, n)
        /\ nd' = [nd EXCEPT ![n] = s2]
        /\ comp' = IF done THEN comp \cup {[n |-> n, dh |-> ROnAnswer(s1.roll, m).dh, gdh |-> m.gdh, to |-> m.to,
                                               req |-> s1.roll.req.sh]}
@@ -243,9 +265,22 @@ Deliver(n, p, forged) ==
        /\ ev' = [t |-> "deliver", n |-> n, p |-> p, forged |-> forged, acc |-> k.acc, sel |-> k.sel, proc |-> proc]
        /\ UNCHANGED <<net, now, slog>>
 
+(* loss detection queues a lost answer again, or marks a lost request *)
+RequeueAnswer(n) ==
+    /\ nd[n].out = NONE /\ nd[n].lastAns # NONE
+    /\ nd' = [nd EXCEPT ![n] = RequeueAns(@)]
+    /\ ev' = [t |-> "requeue", n |-> n]
+    /\ UNCHANGED <<net, now, slog, comp>>
+
+RequestLost(n) ==
+    /\ nd[n].reqAt # NOTIME
+    /\ nd' = [nd EXCEPT ![n] = RequestLostOp(@)]
+    /\ ev' = [t |-> "reqlost", n |-> n]
+    /\ UNCHANGED <<net, now, slog, comp>>
+
 Tick == /\ now < MaxTime /\ now' = now + 1 /\ ev' = [t |-> "tick"] /\ UNCHANGED <<nd, net, slog, comp>>
 
-Next == \/ \E n \in Nodes : Begin(n) \/ SendPkt(n, TRUE) \/ SendPkt(n, FALSE)
+Next == \/ \E n \in Nodes : Begin(n) \/ SendPkt(n, TRUE) \/ SendPkt(n, FALSE) \/ RequeueAnswer(n) \/ RequestLost(n)
         \/ \E n \in Nodes, p \in net, f \in BOOLEAN : Deliver(n, p, f)
         \/ Tick
 
@@ -367,12 +402,13 @@ FloorsRespected ==
 DupRequestAnswered ==
     [][ev'.t = "deliver" /\ ~ev'.forged /\ ev'.proc /\ ev'.p.pl # NONE /\ ~ev'.p.pl.ans
        /\ IsDup(nd[ev'.n].roll, ev'.p.pl)
+       /\ ev'.sel # "prev"
        => (nd'[ev'.n].out = nd[ev'.n].roll.last.ans /\ nd'[ev'.n].chg = nd[ev'.n].chg)]_vars
 
 (* the dialer wins a collision: the dialer ignores the acceptor's request while its own is out; the acceptor
    drops its own request and answers *)
 DialerWins ==
-    [][ev'.t = "deliver" /\ ~ev'.forged /\ ev'.proc /\ ev'.p.pl # NONE /\ ~ev'.p.pl.ans
+    [][ev'.t = "deliver" /\ ~ev'.forged /\ ev'.proc /\ ev'.p.pl # NONE /\ ~ev'.p.pl.ans /\ ev'.sel # "prev"
        /\ nd[ev'.n].roll.st = "req" /\ ~IsDup(nd[ev'.n].roll, ev'.p.pl) /\ nd[ev'.n].nxt = NONE
        => IF nd[ev'.n].roll.dialer
           THEN nd'[ev'.n].roll = nd[ev'.n].roll /\ nd'[ev'.n].stg = NONE

@@ -26,7 +26,7 @@ open Vinc.Transcript
 /-- Why a key is derived: every `derive`/`expand` call of the security layer. -/
 inductive Purpose where
   | hsInitiator | hsResponder | appInitiator | appResponder | resumption | confirm | ticket | binder | early
-  | subSession | packetKey | packetIv | headerKey | keyRoll | cidSecret
+  | subSession | packetKey | packetIv | headerKey | keyRoll | keyRollId | cidSecret
   deriving DecidableEq, Repr
 
 /-- The label of each purpose, as the code passes it. -/
@@ -45,18 +45,19 @@ def Purpose.label : Purpose → String
   | .packetIv => Labels.packetIv
   | .headerKey => Labels.headerKey
   | .keyRoll => Labels.keyRoll
+  | .keyRollId => Labels.keyRollId
   | .cidSecret => Labels.cidSecret
 
 def Purpose.all : List Purpose :=
   [.hsInitiator, .hsResponder, .appInitiator, .appResponder, .resumption, .confirm, .ticket, .binder, .early,
-   .subSession, .packetKey, .packetIv, .headerKey, .keyRoll, .cidSecret]
+   .subSession, .packetKey, .packetIv, .headerKey, .keyRoll, .keyRollId, .cidSecret]
 
 theorem Purpose.mem_all (p : Purpose) : p ∈ Purpose.all := by cases p <;> simp [Purpose.all]
 
 /-- No two purposes share a label. -/
 theorem labels_nodup : (Purpose.all.map Purpose.label).Nodup := by decide
 
-/-- Every label a purpose uses is one of the 22 labels. -/
+/-- Every label a purpose uses is one of the 23 labels. -/
 theorem labels_known : ∀ p ∈ Purpose.all, p.label ∈ Labels.all := by decide
 
 theorem label_injective {p q : Purpose} (h : p.label = q.label) : p = q := by

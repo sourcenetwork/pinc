@@ -4,7 +4,7 @@
 (* strings of the code (TLC compares strings, and reads them as sequences  *)
 (* of characters), and the purposes of schedule.rs that use them.          *)
 (*                                                                         *)
-(* Checked, exhaustively: there are exactly 22 labels (the length of       *)
+(* Checked, exhaustively: there are exactly 23 labels (the length of       *)
 (* labels::ALL); they are pairwise distinct; every one starts with the     *)
 (* prefix "VINC 2026 v1 " and is longer than it; none is a label of        *)
 (* vinc-crypto (NODE_ID, HYBRID_SIGNATURE); every character is ASCII, so  *)
@@ -48,6 +48,7 @@ AllLabels == <<
     "VINC 2026 v1 packet iv",
     "VINC 2026 v1 header key",
     "VINC 2026 v1 key roll",
+    "VINC 2026 v1 key roll id",
     "VINC 2026 v1 connection id secret">>
 
 (* vinc-crypto kdf.rs labels *)
@@ -75,6 +76,7 @@ PurposeLabel == [
     packetIv |-> "VINC 2026 v1 packet iv",
     headerKey |-> "VINC 2026 v1 header key",
     keyRoll |-> "VINC 2026 v1 key roll",
+    keyRollId |-> "VINC 2026 v1 key roll id",
     cidSecret |-> "VINC 2026 v1 connection id secret"]
 
 Chars == {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
@@ -88,7 +90,7 @@ Init == x = 0
 Next == UNCHANGED x
 Spec == Init /\ [][Next]_x
 
-CountOK == Len(AllLabels) = 22
+CountOK == Len(AllLabels) = 23
 Distinct == \A i, j \in Idx : AllLabels[i] = AllLabels[j] => i = j
 HasPrefix == \A i \in Idx : Starts(AllLabels[i], Prefix)
 DisjointCrypto == \A i \in Idx : AllLabels[i] \notin CryptoLabels
