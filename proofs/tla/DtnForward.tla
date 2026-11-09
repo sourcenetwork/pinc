@@ -192,6 +192,11 @@ A_NoReHold == [][(lab'.t = "step" /\ lab'.inp.k = "hold" /\ lab'.err = "ok") => 
 
 \* ------------------------------ liveness ------------------------------------
 \* with the destination's link up and a free transfer slot, a held bundle gets its delivery send
+\* the destination's link is up and its bundle has no transfer to it yet: a free transfer slot must exist
+DestServed == \A li \in 1..L, bi \in 1..B :
+    (f.ls[li].full /\ f.ls[li].up /\ f.bs[bi].full /\ f.ls[li].peer = f.bs[bi].dest /\
+     F!TIdx(f, f.bs[bi].id, f.ls[li].peer) = {}) => F!FreeT(f) # {}
+
 DestOf(id) == f.bs[F!MinOf(F!BIdx(f, id))].dest
 Ready(id) == F!HasB(f, id) /\ F!DoneSet(f) = {} /\ F!Up(f, DestOf(id)) /\ F!TIdx(f, id, DestOf(id)) = {}
 Served == \A id \in Ids : [](Ready(id) => <>(F!TIdx(f, id, DestOf(id)) # {} \/ ~F!HasB(f, id)))
