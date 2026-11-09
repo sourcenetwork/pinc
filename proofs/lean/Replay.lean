@@ -32,6 +32,7 @@ import Vinc.TraceDtnLayout
 import Vinc.TraceMembershipInc
 import Vinc.TraceMembershipCodec
 import Vinc.TraceMembership
+import Vinc.BroadcastTrace
 
 /-!
 # Trace replay
@@ -154,6 +155,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut mems : TraceMembership.W := {}
   let mut sts : TraceStreams.St := {}
   let mut rcs : TraceRecovery.St' := {}
+  let mut bcw : BroadcastTrace.W := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -324,6 +326,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceMembershipInc.replayEvent j mis with
           | .ok m' =>
             mis := m'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "bc" then
+          -- Broadcast events (`bc`, written by `trace_broadcast`): the node operators the node theorems are about.
+          match BroadcastTrace.replayEvent j bcw with
+          | .ok b' =>
+            bcw := b'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

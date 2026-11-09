@@ -545,6 +545,10 @@ name = "scenario_grade"
 path = "scenario_grade.rs"
 
 [[test]]
+name = "trace_broadcast"
+path = "trace_broadcast.rs"
+
+[[test]]
 name = "broadcast_fixes"
 path = "broadcast_fixes.rs"
 
