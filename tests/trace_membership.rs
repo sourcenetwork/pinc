@@ -31,6 +31,8 @@
     unreachable_pub
 )]
 
+#[path = "trace_membership/codec.rs"]
+mod codec;
 #[path = "trace_membership/common.rs"]
 mod common;
 #[path = "trace_membership/inc.rs"]
@@ -45,6 +47,7 @@ mod world;
 #[test]
 fn membership_traces() {
     let mut tw = common::TraceWriter::new();
+    codec::run(&mut tw);
     inc::run(&mut tw);
     node::run(&mut tw);
     tw.finish();

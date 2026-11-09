@@ -28,6 +28,7 @@ import Vinc.TraceDtnSeal
 import Vinc.TraceDtnScenario
 import Vinc.TraceDtnLayout
 import Vinc.TraceMembershipInc
+import Vinc.TraceMembershipCodec
 import Vinc.TraceMembership
 
 /-!
@@ -304,6 +305,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceMembership.replayEvent j mems with
           | .ok m' =>
             mems := m'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceMembershipCodec.isTag t then
+          -- Hub stream codec events (`mc`, written by `trace_membership`): the model of `codec.rs`.
+          match TraceMembershipCodec.replayEvent j with
+          | .ok () =>
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

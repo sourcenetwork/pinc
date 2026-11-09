@@ -229,6 +229,13 @@ par witness_tlc dtn_sc_nolive DtnScenario DtnScenario_nolive DeliveredByExpiry
 par run_tlc dtn_sc_cycle DtnScenario DtnScenario_cycle
 par run_tlc dtn_sc_replay DtnScenario DtnScenario_replay
 par witness_tlc dtn_sc_forget DtnScenario DtnScenario_forget NoForget
+par run_tlc hubcodec_hello HubCodec HubCodec_hello
+par run_tlc hubcodec_fixed HubCodec HubCodec_fixed
+par run_tlc hubcodec_snap HubCodec HubCodec_snap
+par run_tlc hubcodec_snapn HubCodec HubCodec_snapn
+par run_tlc hubcodec_down HubCodec HubCodec_down
+par run_tlc hubcodec_other HubCodec HubCodec_other
+par witness_tlc hubcodec_snapcut HubCodec HubCodec_snapcut SnapCutRefused
 par run_tlc incarnation Incarnation Incarnation
 par run_tlc incarnation_pers Incarnation Incarnation_pers
 par run_tlc incarnation_hlc Incarnation Incarnation_hlc
@@ -277,6 +284,7 @@ trace_tlc TraceDtnCodec dtn-codec
 trace_tlc TraceDtnReception dtn-reception
 trace_tlc TraceDtnSeal dtn-seal
 trace_tlc TraceDtnScenario dtn-scenario
+trace_tlc TraceHubCodec hubcodec
 trace_tlc TraceIncarnation incarnation
 trace_tlc TraceMembership membership
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson

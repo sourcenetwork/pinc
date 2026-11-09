@@ -143,6 +143,13 @@ import Vinc.DtnScenarioCycle
 import Vinc.DtnScenarioChain
 import Vinc.TraceDtnScenario
 
+import Vinc.MembershipCodec
+import Vinc.MembershipCodecNum
+import Vinc.MembershipCodecRt
+import Vinc.MembershipCodecInv
+import Vinc.MembershipCodecStrict
+import Vinc.MembershipCodecBuf
+import Vinc.TraceMembershipCodec
 import Vinc.MembershipInc
 import Vinc.MembershipIncThm
 import Vinc.TraceMembershipInc
