@@ -142,7 +142,8 @@ HeadPair(x) == IF {p \in Nodes \X Nodes : x.net[p] # <<>>} = {} THEN <<>>
                ELSE <<CHOOSE p \in {p \in Nodes \X Nodes : x.net[p] # <<>>} :
                         \A q \in {q \in Nodes \X Nodes : x.net[q] # <<>>} : p[1] < q[1] \/ (p[1] = q[1] /\ p[2] <= q[2])>>
 InboxDue(x) == {n \in Nodes : x.inbox[n] # <<>> /\ Ge(x.now, x.inbox[n][1].due)}
-TimerDue(x) == {n \in x.alive : Le(PollTimeout(x.nodes[n]), x.now)}
+\* a node that left stops ticking (the host stops calling it)
+TimerDue(x) == {n \in x.alive : ~x.nodes[n].leaving /\ Le(PollTimeout(x.nodes[n]), x.now)}
 KaDue(x) == KeepaliveOn /\ Ge(x.now, x.nextKA)
 \* sessions that must be dialed or ended
 ToDial(x) == {p \in Nodes \X Nodes : p[2] \in Hubs /\ p[1] > p[2] /\ Pr(p[1], p[2]) \notin x.sess
@@ -195,7 +196,7 @@ KaStep(x) ==
                                             THEN x.now ELSE x.rx[p]]]
 
 Deadlines(x) ==
-    {PollTimeout(x.nodes[n]) : n \in x.alive} \cup {x.nextKA} \cup {i.due : i \in {x.inbox[n][1] : n \in {n \in Nodes : x.inbox[n] # <<>>}}}
+    {PollTimeout(x.nodes[n]) : n \in {n \in x.alive : ~x.nodes[n].leaving}} \cup {x.nextKA} \cup {i.due : i \in {x.inbox[n][1] : n \in {n \in Nodes : x.inbox[n] # <<>>}}}
       \cup (IF x.pc <= Len(Script) THEN {SecW(START + Script[x.pc][2])} ELSE {})
 FutureDeadlines(x) == {d \in Deadlines(x) : Lt(x.now, d)}
 MinD(S) == CHOOSE d \in S : \A e \in S : Le(d, e)
@@ -273,29 +274,47 @@ StartAll ==
                net |-> [p \in Nodes \X Nodes |-> <<>>], inbox |-> [n \in Nodes |-> <<>>],
                rx |-> [p \in Nodes \X Nodes |-> SecW(START)], srtt |-> [p \in Nodes \X Nodes |-> SRTT], sess |-> {}, cut |-> {}, dead |-> {}, direct |-> {},
                car |-> [p \in Hubs \X Members |-> [k |-> "unknown"]], store |-> [n \in Nodes |-> <<>>],
-               hist |-> HistInit, pc |-> 1, lose |-> 0, nextKA |-> SecW(START + 30), dial |-> TRUE]
+               hist |-> HistInit, steps |-> 0, pc |-> 1, lose |-> 0, nextKA |-> SecW(START + 30), dial |-> TRUE]
     IN St(x0, 1)
 
 Init == w = StartAll
 
-Step ==
-    \/ w.pc <= Len(Script) /\ ScriptDue(w) /\ w' = ScriptStep(w)
-    \/ ~ScriptDue(w) /\ HeadPair(w) # <<>> /\ w' = DeliverStep(w)
-    \/ ~ScriptDue(w) /\ HeadPair(w) = <<>> /\ InboxDue(w) # {} /\ w' = ProcessStep(w)
-    \/ ~ScriptDue(w) /\ HeadPair(w) = <<>> /\ InboxDue(w) = {} /\ ToDetect(w) # {} /\ w' = Detect(w)
-    \/ ~ScriptDue(w) /\ HeadPair(w) = <<>> /\ InboxDue(w) = {} /\ ToDetect(w) = {} /\ ToDial(w) # {} /\ w' = Connect(w)
-    \/ ~ScriptDue(w) /\ HeadPair(w) = <<>> /\ InboxDue(w) = {} /\ ToDetect(w) = {} /\ ToDial(w) = {}
-       /\ TimerDue(w) # {} /\ w' = FireStep(w)
-    \/ ~ScriptDue(w) /\ HeadPair(w) = <<>> /\ InboxDue(w) = {} /\ ToDetect(w) = {} /\ ToDial(w) = {}
-       /\ TimerDue(w) = {} /\ KaDue(w) /\ w' = KaStep(w)
-    \/ Quiescent(w) /\ FutureDeadlines(w) # {} /\ Le(MinD(FutureDeadlines(w)), SecW(START + MaxSec)) /\ w' = AdvanceStep(w)
+\* the run is deterministic: one successor function
+Nxt(x) ==
+    IF ScriptDue(x) THEN ScriptStep(x)
+    ELSE IF HeadPair(x) # <<>> THEN DeliverStep(x)
+    ELSE IF InboxDue(x) # {} THEN ProcessStep(x)
+    ELSE IF ToDetect(x) # {} THEN Detect(x)
+    ELSE IF ToDial(x) # {} THEN Connect(x)
+    ELSE IF TimerDue(x) # {} THEN FireStep(x)
+    ELSE IF KaDue(x) THEN KaStep(x)
+    ELSE AdvanceStep(x)
 
-Done0 == Quiescent(w) /\ (FutureDeadlines(w) = {} \/ ~Le(MinD(FutureDeadlines(w)), SecW(START + MaxSec)))
+CanAdvance(x) == FutureDeadlines(x) # {} /\ Le(MinD(FutureDeadlines(x)), SecW(START + MaxSec))
+Live(x) == ~Quiescent(x) \/ CanAdvance(x)
+Step == Live(w) /\ w' = [Nxt(w) EXCEPT !.steps = w.steps + 1]
+
+Done0 == ~Live(w)
 Next == Step \/ (Done0 /\ UNCHANGED w)
 
 (* No fairness is needed: the scripted run is a deterministic chain, and the awareness bound is the safety property Awareness.
    Liveness (a crashed member is eventually gone) is the bounded-time statement: 145 s after the crash it holds. *)
 Spec == Init /\ [][Next]_w
+
+(* Liveness. The scripted run is forced: every state that is not Finished has exactly one successor, and each step
+   counts in `steps`, so the state graph is acyclic. TLC's exploration finishing (0 states left on queue) therefore
+   shows that EVERY execution of the model, under every adversary choice, reaches a Finished state; the properties
+   below are invariants of the Finished states. Together they are the leads-to statements (`crashed ~> removed`, ...)
+   at the end of the run, with no bound beyond the model's time. A temporal check with WF_w on Step was tried and
+   does not finish in TLC (it stalls on the second state of even the smallest model), see the report. *)
+Finished == ~Live(w)
+LiveCompleteAll == Finished => (w.hist.crashAt[4] # <<>> => \A o \in w.alive : 4 \notin DOMAIN w.nodes[o].members)
+LiveRestored == Finished => <<1, 4>> \in w.hist.restore
+LiveLeaveReported == Finished => \A o \in w.alive \ {4} : <<o, 4>> \in w.hist.left
+\* convergence: every live node lists exactly the live nodes other than itself
+LiveConverged == Finished => \A o \in w.alive : DOMAIN w.nodes[o].members = w.alive \ {o}
+StepsBound == w.steps <= 200000
+NeverFinished == ~Finished
 
 (* ---- properties ---- *)
 SecsSince(x, t) == U!Lt(SecW(START + t), x.now)
