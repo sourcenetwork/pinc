@@ -48,6 +48,7 @@ pub(super) struct Signing {
     sleep: u32,
     sleep_ms: u64,
     suspending: bool,
+    close_at: Option<u64>,
     pub(super) wall_ms: Option<u64>,
 }
 
@@ -60,6 +61,7 @@ impl Signing {
             sleep: 0,
             sleep_ms: 0,
             suspending: false,
+            close_at: None,
             wall_ms: None,
         }
     }
@@ -87,6 +89,7 @@ impl Signing {
     pub(super) fn cancel_suspend(&mut self) {
         self.sleep = 0;
         self.suspending = false;
+        self.close_at = None;
         if self.job.as_ref().is_some_and(|j| j.kind == Kind::Sleep) {
             self.job = None;
         }
@@ -263,20 +266,29 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         Some(job)
     }
 
-    /// The suspension's notices are all signed: the carriers close.
+    /// The suspension's notices are all signed: the carriers close one tick later, so what the endpoint sent as the
+    /// node went to sleep (its sleep announcements to the peers) leaves on them first.
     pub(super) fn maybe_close_for_suspend(&mut self, now: u64) {
-        if self.sign.suspending && self.sign.sleep == 0 && self.sign.job.is_none() {
+        if self.sign.suspending && self.sign.sleep == 0 && self.sign.job.is_none() && self.sign.close_at.is_none() {
+            self.sign.close_at = Some(now.saturating_add(1));
+        }
+    }
+
+    /// Close the carriers of a suspending node once its tick has come.
+    pub(super) fn close_for_suspend(&mut self, now: u64) {
+        if self.sign.close_at.is_some_and(|t| now >= t) {
+            self.sign.close_at = None;
             self.sign.suspending = false;
             for i in 0..R {
-                if self
-                    .rly
-                    .get(i)
-                    .is_some_and(|r| r.link.state() != super::link::State::Down)
-                {
+                if self.rly.get(i).is_some_and(|r| r.link.state() != super::link::State::Down) {
                     self.close_pub(i);
                 }
             }
         }
-        let _ = now;
+    }
+
+    /// When the carriers of a suspending node close, if they wait for it.
+    pub(super) const fn close_deadline(&self) -> Option<u64> {
+        self.sign.close_at
     }
 }

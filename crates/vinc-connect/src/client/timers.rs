@@ -24,6 +24,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.lookups.next_deadline(),
             Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.class.is_some()),
             Some(self.duty.deadline()),
+            self.close_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -103,6 +104,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         for p in due.into_iter().flatten() {
             self.lookup(now, &p);
         }
+        self.close_for_suspend(now);
         self.update_class(now);
         self.publish(now);
         self.start_jobs(now);
