@@ -149,7 +149,7 @@ impl Rig {
             drbg: &mut self.c_drbg,
         };
         let mut stores = ResponderStores::<4, 4>::default();
-        out(self.client.poll(&mut env, &mut stores, &soft))
+        poll_soft(&mut self.client, &mut env, &mut stores, &soft)
     }
 
     pub fn poll_relay(&mut self) -> Result<Out, CarrierError> {
@@ -162,7 +162,7 @@ impl Rig {
             now: NOW,
             drbg: &mut self.r_drbg,
         };
-        out(self.relay.poll(&mut env, &mut self.stores, &soft))
+        poll_soft(&mut self.relay, &mut env, &mut self.stores, &soft)
     }
 
     /// Move pending handshake bytes client to relay.
@@ -245,16 +245,12 @@ impl Rig {
 
     /// Poll the relay side and return the kind of the frame found (no allocation).
     pub fn relay_next_kind(&mut self) -> Option<u8> {
-        let soft = SoftKeys {
-            signer: Some((KeyHandle(1), &self.relay_kp)),
-            prekeys: None,
-        };
         let mut env = Env {
             provider: &self.prov,
             now: NOW,
             drbg: &mut self.r_drbg,
         };
-        match self.relay.poll(&mut env, &mut self.stores, &soft).unwrap() {
+        match self.relay.poll(&mut env, &mut self.stores).unwrap() {
             Poll::Frame(f) => Some(f.kind()),
             _ => None,
         }
@@ -273,14 +269,30 @@ impl Rig {
 pub enum Out {
     Idle,
     Handshake,
+    KeyRequest,
     Open(NodeId),
     Frame(Vec<u8>),
+}
+
+/// Poll a carrier and answer its key requests from software keys, as a software node's host does.
+pub fn poll_soft<const PK: usize, const TK: usize>(
+    c: &mut ProtectedCarrier<Software>,
+    env: &mut Env<'_, Software>,
+    stores: &mut ResponderStores<PK, TK>,
+    soft: &SoftKeys<'_, Software>,
+) -> Result<Out, CarrierError> {
+    let mut r = out(c.poll(env, stores))?;
+    while r == Out::KeyRequest {
+        r = out(c.answer_soft(env, soft))?;
+    }
+    Ok(r)
 }
 
 fn out(r: Result<Poll<'_>, CarrierError>) -> Result<Out, CarrierError> {
     r.map(|p| match p {
         Poll::Idle => Out::Idle,
         Poll::Handshake => Out::Handshake,
+        Poll::KeyRequest => Out::KeyRequest,
         Poll::Open(n) => Out::Open(n),
         Poll::Frame(f) => Out::Frame(enc(&f)),
     })

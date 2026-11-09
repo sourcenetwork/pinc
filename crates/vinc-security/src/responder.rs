@@ -28,7 +28,7 @@ use crate::cache::{DEFAULT_KEY_CACHE, PrekeyCache};
 use crate::credit::CreditRecord;
 use crate::error::Failure;
 use crate::ids::{AeadSet, Alpn, AlpnList, ConnId, LocalIdentity, VERSION};
-use crate::keys::{KeyResponse, SoftKeys};
+use crate::keys::{KeyRequest, KeyResponse, SoftKeys};
 use crate::labels;
 use crate::message::{Finish, IdSig, Initial, MessageType, PrekeyField, Reject, Reply, ResumeHello, ResumeReply};
 use crate::outbox::{Outbox, Pending};
@@ -169,6 +169,12 @@ impl Responder {
     #[cfg(feature = "trace")]
     pub const fn resend_cap(&self) -> Option<usize> {
         self.resend_cap
+    }
+
+    /// The key operation the machine waits for, if any: the same request `poll_output` announced once, readable
+    /// again until `on_key_response` answers it.
+    pub fn pending_key_request(&self) -> Option<KeyRequest<'_>> {
+        self.out.request()
     }
 
     /// The next thing to do: a message to send, a key operation to perform, or an event.

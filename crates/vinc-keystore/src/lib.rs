@@ -10,11 +10,15 @@
 //! A TPM holds only ECDSA P-256 keys among VINC's algorithms. Ed25519, ML-DSA-65, hybrid and ML-KEM keys stay in a
 //! [`SoftwareStore`]; asking a `TpmStore` for one is a typed [`KeyStoreError::Unsupported`], never a fallback.
 //!
+//! [`KeyHost`] answers the handshake's key requests ([`vinc_security::KeyRequest`]) from a store, the one host path
+//! both the endpoint and a relay carrier use.
+//!
 //! Invariants: errors are small `Copy` values with one-sentence messages and no key material; private keys never
 //! appear in `Debug` output; keys held in memory are zeroized when dropped.
 #![forbid(unsafe_code)]
 
 mod error;
+mod host;
 mod sealed;
 mod software;
 #[cfg(feature = "hwenc")]
@@ -26,6 +30,7 @@ use vinc_crypto::{IdentityAlg, NodeId, Secret};
 use zeroize::Zeroizing;
 
 pub use error::{KeyStoreError, Result};
+pub use host::KeyHost;
 pub use software::SoftwareStore;
 #[cfg(feature = "hwenc")]
 pub use tpm::{TpmConfig, TpmStore};

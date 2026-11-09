@@ -27,7 +27,7 @@ use zeroize::Zeroize;
 use crate::credit::CreditRecord;
 use crate::error::Failure;
 use crate::ids::{AeadSet, Alpn, ConnId, LocalIdentity, VERSION};
-use crate::keys::{KeyResponse, PrekeyInfo, SoftKeys};
+use crate::keys::{KeyRequest, KeyResponse, PrekeyInfo, SoftKeys};
 use crate::labels;
 use crate::message::{
     Finish, IdSig, Initial, InitialForm, MAX_MESSAGE_LEN, MessageType, PrekeyField, Reject, Reply, ResumeHello,
@@ -175,6 +175,12 @@ impl Initiator {
             None => this.begin_full(env, params.peer_has_prekey, false)?,
         }
         Ok(this)
+    }
+
+    /// The key operation the machine waits for, if any: the same request `poll_output` announced once, readable
+    /// again until `on_key_response` answers it.
+    pub fn pending_key_request(&self) -> Option<KeyRequest<'_>> {
+        self.out.request()
     }
 
     /// The next thing to do: a message to send, a key operation to perform, or an event.

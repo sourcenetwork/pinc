@@ -115,6 +115,10 @@ impl Outbox {
         self.request.as_ref()
     }
 
+    pub(crate) fn request(&self) -> Option<KeyRequest<'_>> {
+        self.request.as_ref().map(Pending::as_request)
+    }
+
     pub(crate) const fn take_request(&mut self) -> Option<Pending> {
         self.announced = false;
         self.request.take()

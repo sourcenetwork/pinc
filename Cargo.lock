@@ -1402,8 +1402,10 @@ dependencies = [
 name = "vinc-connect"
 version = "0.1.0"
 dependencies = [
+ "vinc-core",
  "vinc-crypto",
  "vinc-security",
+ "vinc-transport",
  "vinc-wire",
 ]
 
@@ -1466,6 +1468,7 @@ dependencies = [
  "p256",
  "tpm2-protocol",
  "vinc-crypto",
+ "vinc-security",
  "zeroize",
 ]
 

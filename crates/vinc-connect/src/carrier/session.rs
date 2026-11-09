@@ -10,6 +10,10 @@
 //! - The peer is authenticated by the VINC handshake before the first frame is accepted: [`Poll::Frame`] is never
 //!   returned before [`Poll::Open`], and [`Poll::Open`] carries the node id the handshake proved. A dialer names the
 //!   relay it expects, and the handshake fails if another node answers.
+//! - The long-term key is never touched here: a handshake step that needs a signature or a decapsulation returns
+//!   [`Poll::KeyRequest`], the host reads it with [`ProtectedCarrier::key_request`] and answers with
+//!   [`ProtectedCarrier::key_response`]. These are the same [`KeyRequest`] and [`KeyResponse`] the endpoint raises, so
+//!   a node whose key lives in a TPM or HSM opens carriers through the same host path.
 //! - A record that fails authentication, a unit of the wrong size or a failed handshake ends the carrier for good:
 //!   every later call returns [`CarrierError::Closed`] and the host closes the stream.
 //! - A frame inside an authenticated record that does not decode is dropped and reported
@@ -24,8 +28,8 @@ use core::fmt;
 use vinc_crypto::{Aead, NodeId, Provider};
 use vinc_security::message::MAX_MESSAGE_LEN;
 use vinc_security::{
-    AlpnList, ConnId, Env, Established, Event, Failure, Initiator, InitiatorParams, LocalIdentity, Output, PacketKey,
-    RecordError, Responder, ResponderConfig, ResponderStores, SoftKeys,
+    AlpnList, ConnId, Env, Established, Event, Failure, Initiator, InitiatorParams, KeyRequest, KeyResponse,
+    LocalIdentity, Output, PacketKey, RecordError, Responder, ResponderConfig, ResponderStores, SoftKeys,
 };
 
 use super::frame::{Frame, FrameError, MAX_FRAME_LEN};
@@ -42,8 +46,6 @@ pub const IN_LEN: usize = 2 + if MAX_UNIT_LEN > MAX_MESSAGE_LEN {
 };
 /// The size of the buffered handshake output: two full messages with their length prefixes.
 pub const OUT_LEN: usize = 2 * (2 + MAX_MESSAGE_LEN);
-
-const STEPS: usize = 8;
 
 /// A responder configuration for a relay: serves [`ALPN`] and issues no resumption tickets.
 ///
@@ -114,6 +116,9 @@ pub enum Poll<'a> {
     Idle,
     /// A handshake message was processed: call [`ProtectedCarrier::transmit`], then poll again.
     Handshake,
+    /// The handshake waits for a key operation: read [`ProtectedCarrier::key_request`] and answer it with
+    /// [`ProtectedCarrier::key_response`].
+    KeyRequest,
     /// The handshake completed; the peer is this authenticated node.
     Open(NodeId),
     /// A decoded frame, valid until the next call on the carrier.
@@ -157,20 +162,8 @@ impl<P: Provider> fmt::Debug for ProtectedCarrier<P> {
 
 /// Append handshake messages and collect the outcome of draining one machine.
 macro_rules! drive {
-    ($m:expr, $env:expr, $soft:expr, $out:expr, $out_len:expr) => {{
+    ($m:expr, $out:expr, $out_len:expr) => {{
         let mut result: Result<Option<Established>, CarrierError> = Ok(None);
-        if let Some(soft) = $soft {
-            for _ in 0..STEPS {
-                match $m.answer_soft($env, soft) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(f) => {
-                        result = Err(CarrierError::Handshake(f));
-                        break;
-                    }
-                }
-            }
-        }
         while let Some(o) = $m.poll_output() {
             match o {
                 Output::Send { data, .. } => {
@@ -229,8 +222,7 @@ impl<P: Provider> ProtectedCarrier<P> {
     pub fn dial(env: &mut Env<'_, P>, params: InitiatorParams<'_>) -> Result<Self, CarrierError> {
         let mut m = Initiator::new(env, params).map_err(CarrierError::Handshake)?;
         let mut this = Self::with(Stage::Ended);
-        let none: Option<&SoftKeys<'_, P>> = None;
-        drive!(m, env, none, this.out, &mut this.out_len)?;
+        drive!(m, this.out, &mut this.out_len)?;
         this.stage = Stage::Dialing(m);
         Ok(this)
     }
@@ -305,17 +297,15 @@ impl<P: Provider> ProtectedCarrier<P> {
 
     /// Process the next unit.
     ///
-    /// `stores` and `soft` serve the listener's handshake (the dialer ignores `stores`); `soft` answers the key
-    /// operations the handshake needs, so the identity key must be a software key.
+    /// `stores` serve the listener's handshake (the dialer ignores them). A step that needs the long-term key returns
+    /// [`Poll::KeyRequest`].
     ///
     /// # Errors
     /// A [`CarrierError`]; [`CarrierError::is_fatal`] says whether the carrier ended.
-    // vertexia: software keys only; a host with a TPM or HSM needs the machines' key requests passed through
     pub fn poll<const PK: usize, const TK: usize>(
         &mut self,
         env: &mut Env<'_, P>,
         stores: &mut ResponderStores<PK, TK>,
-        soft: &SoftKeys<'_, P>,
     ) -> Result<Poll<'_>, CarrierError> {
         self.release();
         if matches!(self.stage, Stage::Ended) {
@@ -334,18 +324,72 @@ impl<P: Provider> ProtectedCarrier<P> {
                 Stage::Dialing(m) => m
                     .handle(env, msg)
                     .map_err(CarrierError::Handshake)
-                    .and_then(|()| drive!(m, env, Some(soft), self.out, &mut self.out_len)),
+                    .and_then(|()| drive!(m, self.out, &mut self.out_len)),
                 Stage::Accepting(m) => m
                     .handle(env, stores, msg)
                     .map_err(CarrierError::Handshake)
-                    .and_then(|()| drive!(m, env, Some(soft), self.out, &mut self.out_len)),
+                    .and_then(|()| drive!(m, self.out, &mut self.out_len)),
                 Stage::Open | Stage::Ended => Err(CarrierError::Closed),
             }
         };
         self.consume = end;
+        self.finish(env, outcome)
+    }
+
+    /// The key operation the handshake waits for, after [`Poll::KeyRequest`].
+    pub fn key_request(&self) -> Option<KeyRequest<'_>> {
+        match &self.stage {
+            Stage::Dialing(m) => m.pending_key_request(),
+            Stage::Accepting(m) => m.pending_key_request(),
+            Stage::Open | Stage::Ended => None,
+        }
+    }
+
+    /// Deliver the host's answer to [`ProtectedCarrier::key_request`]. The result is as for
+    /// [`ProtectedCarrier::poll`]: a later operation, handshake output to transmit, or the open carrier.
+    ///
+    /// # Errors
+    /// [`CarrierError::Handshake`] if no request is outstanding or the answer fails the handshake; the carrier ends.
+    pub fn key_response(&mut self, env: &mut Env<'_, P>, resp: KeyResponse<'_>) -> Result<Poll<'_>, CarrierError> {
+        let outcome = match &mut self.stage {
+            Stage::Dialing(m) => m
+                .on_key_response(env, resp)
+                .map_err(CarrierError::Handshake)
+                .and_then(|()| drive!(m, self.out, &mut self.out_len)),
+            Stage::Accepting(m) => m
+                .on_key_response(env, resp)
+                .map_err(CarrierError::Handshake)
+                .and_then(|()| drive!(m, self.out, &mut self.out_len)),
+            Stage::Open | Stage::Ended => Err(CarrierError::Closed),
+        };
+        self.finish(env, outcome)
+    }
+
+    /// Answer the outstanding key request at once from software keys (a host without a hardware key).
+    ///
+    /// # Errors
+    /// [`CarrierError::Handshake`] if there is no request or the handshake fails.
+    pub fn answer_soft(&mut self, env: &mut Env<'_, P>, soft: &SoftKeys<'_, P>) -> Result<Poll<'_>, CarrierError> {
+        let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+        let resp = match self.key_request() {
+            Some(req) => soft.answer(env, &req, &mut sig),
+            None => return Err(self.end(CarrierError::Handshake(Failure::UnexpectedKeyResponse))),
+        };
+        self.key_response(env, resp)
+    }
+
+    fn finish(
+        &mut self,
+        env: &mut Env<'_, P>,
+        outcome: Result<Option<Established>, CarrierError>,
+    ) -> Result<Poll<'_>, CarrierError> {
         match outcome {
             Err(e) => Err(self.end(e)),
-            Ok(None) => Ok(Poll::Handshake),
+            Ok(None) => Ok(if self.key_request().is_some() {
+                Poll::KeyRequest
+            } else {
+                Poll::Handshake
+            }),
             Ok(Some(est)) => {
                 let keys = est
                     .traffic
