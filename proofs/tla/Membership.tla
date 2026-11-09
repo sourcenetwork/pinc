@@ -422,6 +422,8 @@ CarrierReturn(S, env, now, member) ==
     ELSE LET l0 == S.downed[member][1]
              s1 == [S EXCEPT !.downed = Del(@, member)]
          IN IF member \in DOMAIN s1.roster \/ member \in s1.revoked THEN s1
+            ELSE IF Cardinality(DOMAIN s1.roster) >= MAX_TABLE
+            THEN Trace(Bc(s1, [k |-> "release", m |-> member]), [k |-> "carrier_returned", member |-> member, restored |-> FALSE])
             ELSE LET l == [l0 EXCEPT !.renewed = now]
                      s2 == [s1 EXCEPT !.roster = Put(@, member, l)]
                      s3 == IF member \in DOMAIN s2.up /\ Cardinality(s2.attached) < MAX_TABLE
