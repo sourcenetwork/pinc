@@ -104,8 +104,6 @@ import Vinc.ValuesSchedEvict
 import Vinc.ValuesSchedTerm
 import Vinc.TraceValuesSched
 import Vinc.ConnectAudit
-#audit_package
-
 import Vinc.DtnGf
 import Vinc.DtnGfField
 import Vinc.DtnGfSlice
@@ -141,3 +139,4 @@ import Vinc.DtnScenarioTime
 import Vinc.DtnScenarioCycle
 import Vinc.DtnScenarioChain
 import Vinc.TraceDtnScenario
+#audit_package
