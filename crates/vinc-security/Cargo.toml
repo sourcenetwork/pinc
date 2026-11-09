@@ -8,6 +8,11 @@ rust-version.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# Test-only observation of internal state for trace validation. Costs nothing when off.
+trace = []
+
 [dependencies]
 vinc-wire = { workspace = true }
 vinc-crypto = { workspace = true }

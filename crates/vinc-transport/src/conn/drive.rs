@@ -196,6 +196,7 @@ conn_impl! {
                 path: Some(self.paths.active),
                 dlen: n,
                 now: env.now,
+                old_key: false,
             };
             // A packet that does not open now is simply lost: the peer sends its data again.
             let _ = self.on_short(env, &mut ctx, pn_off, pkt);

@@ -21,7 +21,7 @@ vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
-vinc-transport = { workspace = true, features = ["alloc"] }
+vinc-transport = { workspace = true, features = ["alloc", "trace"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true, features = ["reference"] }
 vinc-connect = { workspace = true }
@@ -333,6 +333,10 @@ path = "values_big.rs"
 [[test]]
 name = "trace_stores"
 path = "trace_stores.rs"
+
+[[test]]
+name = "transport_keyroll"
+path = "transport_keyroll.rs"
 
 [[test]]
 name = "trace_keyroll"

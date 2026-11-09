@@ -1,5 +1,6 @@
 //! Frame encoding and the size functions the packet builder uses to fit frames.
 
+use vinc_security::keyroll::ECHO_LEN;
 use vinc_wire::{Writer, varint};
 
 use super::{EXTENSION_BASE, Frame, FrameError, MAX_STREAM_END, ty};
@@ -62,7 +63,7 @@ impl Frame<'_> {
             Self::Close { error } => 1 + vlen(error),
             Self::Datagram { data, implicit_len } => datagram_overhead(data.len(), implicit_len) + data.len(),
             Self::MtuProbeEcho { .. } => 1 + 2,
-            Self::Rekey(r) => 1 + 1 + 32 + if r.answer { vlen(r.switch_pn) } else { 0 },
+            Self::Rekey(r) => 1 + 1 + 32 + if r.answer { ECHO_LEN + vlen(r.switch_pn) } else { 0 },
             Self::NewTickets(ref batch) => 1 + 1 + batch.entries().len() * TICKET_LEN,
             Self::Extension { ty, body } => vlen(ty) + prefixed_len(body),
         }

@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use vinc_crypto::{Aead, Drbg, Secret, Software};
-use vinc_security::keyroll::{MAX_KEY_AGE_NS, MAX_REKEY_LEN, due};
+use vinc_security::keyroll::{ECHO_LEN, MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
 use vinc_security::{Env, Failure, Limits, PacketKey, RecordError, Rekey, Roll, roll_secret};
 use vinc_tests::SplitMix64;
 use vinc_wire::WireError;
@@ -71,6 +71,7 @@ struct Ids(HashMap<(u8, Vec<u8>), u32>);
 const K_SHARE: u8 = 1;
 const K_DH: u8 = 2;
 const K_CT: u8 = 3;
+const K_ECHO: u8 = 4;
 
 impl Ids {
     fn id(&mut self, kind: u8, bytes: &[u8]) -> i64 {
@@ -262,9 +263,10 @@ impl Run {
         let p = Software;
         let zero = msg.share == [0u8; 32];
         let sid = self.ids.id(K_SHARE, &msg.share);
+        let eid = self.ids.id(K_ECHO, &msg.echo);
         let as_answer = msg.answer != wrong;
         let head = format!(
-            r#""run":{},"n":{n},"ans":{},"zero":{},"share":{sid},"spn":{}"#,
+            r#""run":{},"n":{n},"ans":{},"zero":{},"share":{sid},"echo":{eid},"spn":{}"#,
             self.id,
             b(msg.answer),
             b(zero),
@@ -277,10 +279,15 @@ impl Run {
                 Ok(done) => {
                     assert!(msg.answer && own.is_some());
                     let dhid = self.ids.id(K_DH, done.dh.expose());
-                    // Agreement: the answer of this very request carries the value the answerer computed.
-                    if let Some((req, theirs)) = self.answered.get(&msg.share)
-                        && Some(*req) == own
-                    {
+                    // Agreement: the answer taken names the request that is out, and when it is one the answerer
+                    // computed (its share unchanged), both sides hold the same value.
+                    assert_eq!(
+                        msg.echo,
+                        request_id(&own.unwrap()),
+                        "an answer is taken only for the request out"
+                    );
+                    if let Some((req, theirs)) = self.answered.get(&msg.share) {
+                        assert_eq!(Some(*req), own);
                         assert_eq!(&theirs[..], &done.dh.expose()[..], "both sides computed the same value");
                     }
                     assert_eq!(done.peer_switch_pn, msg.switch_pn);
@@ -305,6 +312,8 @@ impl Run {
                 Ok(answered) => {
                     assert!(!msg.answer && answered.answer.answer);
                     let oans = self.ids.id(K_SHARE, &answered.answer.share);
+                    let oecho = self.ids.id(K_ECHO, &answered.answer.echo);
+                    assert_eq!(answered.answer.echo, request_id(&msg.share));
                     let dh = answered.dh.as_ref().map_or(-1, |d| self.ids.id(K_DH, d.expose()));
                     if let Some(d) = &answered.dh {
                         self.answered.insert(answered.answer.share, (msg.share, *d.expose()));
@@ -312,7 +321,7 @@ impl Run {
                     self.pool.push(answered.answer);
                     let tail = self.tail(n);
                     tr.line(&format!(
-                        r#"{{"t":"kr","op":"onreq",{head},"res":"ok","oans":{oans},"ospn":{},"dh":{dh},{tail}}}"#,
+                        r#"{{"t":"kr","op":"onreq",{head},"res":"ok","oans":{oans},"oecho":{oecho},"ospn":{},"dh":{dh},{tail}}}"#,
                         answered.answer.switch_pn
                     ));
                     if let Some(d) = answered.dh {
@@ -322,7 +331,7 @@ impl Run {
                 Err(f) => {
                     let tail = self.tail(n);
                     tr.line(&format!(
-                        r#"{{"t":"kr","op":"onreq",{head},"res":"{}","oans":-1,"ospn":0,"dh":-1,{tail}}}"#,
+                        r#"{{"t":"kr","op":"onreq",{head},"res":"{}","oans":-1,"oecho":-1,"ospn":0,"dh":-1,{tail}}}"#,
                         res_name(&f)
                     ));
                 }
@@ -470,10 +479,10 @@ impl Run {
             return;
         }
         let mut m = self.pool[below(rng, self.pool.len() as u64) as usize];
-        if below(rng, 3) == 0 {
-            m.share = [0u8; 32];
-        } else {
-            m.share[below(rng, 32) as usize] ^= 1 << below(rng, 8);
+        match below(rng, 4) {
+            0 => m.share = [0u8; 32],
+            1 => m.echo[below(rng, 8) as usize] ^= 1 << below(rng, 8),
+            _ => m.share[below(rng, 32) as usize] ^= 1 << below(rng, 8),
         }
         self.pool.push(m);
     }
@@ -584,23 +593,24 @@ fn edge_numbers() -> Vec<u64> {
 }
 
 fn decode_event(tr: &mut Trace, bytes: &[u8]) {
-    let (res, ans, share, spn) = match Rekey::decode(bytes) {
+    let (res, ans, share, echo, spn) = match Rekey::decode(bytes) {
         Ok(m) => {
             // An accepted body re-encodes to itself.
             let mut buf = [0u8; MAX_REKEY_LEN];
             let n = m.encode(&mut buf).unwrap();
             assert_eq!(&buf[..n], bytes);
-            ("ok", m.answer, m.share.to_vec(), m.switch_pn)
+            ("ok", m.answer, m.share.to_vec(), m.echo.to_vec(), m.switch_pn)
         }
-        Err(WireError::Unexpected("rekey kind")) => ("kind", false, vec![], 0),
-        Err(WireError::Unexpected("trailing bytes")) => ("trailing", false, vec![], 0),
-        Err(_) => ("other", false, vec![], 0),
+        Err(WireError::Unexpected("rekey kind")) => ("kind", false, vec![], vec![], 0),
+        Err(WireError::Unexpected("trailing bytes")) => ("trailing", false, vec![], vec![], 0),
+        Err(_) => ("other", false, vec![], vec![], 0),
     };
     tr.line(&format!(
-        r#"{{"t":"kr","op":"dec","bytes":{},"res":"{res}","ans":{},"share":{},"sl":{}}}"#,
+        r#"{{"t":"kr","op":"dec","bytes":{},"res":"{res}","ans":{},"share":{},"echo":{},"sl":{}}}"#,
         list(bytes),
         b(ans),
         list(&share),
+        list(&echo),
         limbs(spn)
     ));
 }
@@ -608,11 +618,14 @@ fn decode_event(tr: &mut Trace, bytes: &[u8]) {
 fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
     let mut share = [0u8; 32];
     rng.fill(&mut share);
+    let mut echo = [0u8; ECHO_LEN];
+    rng.fill(&mut echo);
     for answer in [false, true] {
         for (i, &spn) in edge_numbers().iter().enumerate() {
             let m = Rekey {
                 answer,
                 share,
+                echo: if answer { echo } else { [0; ECHO_LEN] },
                 switch_pn: if answer { spn } else { 0 },
             };
             let mut buf = [0u8; MAX_REKEY_LEN];
@@ -622,7 +635,7 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
                     assert_eq!(
                         n,
                         if answer {
-                            33 + vinc_wire::varint::encoded_len(spn)
+                            33 + ECHO_LEN + vinc_wire::varint::encoded_len(spn)
                         } else {
                             33
                         }
@@ -637,9 +650,10 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
                 Err(other) => panic!("unexpected {other:?}"),
             };
             tr.line(&format!(
-                r#"{{"t":"kr","op":"enc","ans":{},"share":{},"sl":{},"res":"{res}","bytes":{}}}"#,
+                r#"{{"t":"kr","op":"enc","ans":{},"share":{},"echo":{},"sl":{},"res":"{res}","bytes":{}}}"#,
                 b(answer),
                 list(&share),
+                list(&m.echo),
                 limbs(spn),
                 list(&out)
             ));
@@ -676,7 +690,7 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
     }
     // Random bodies of random length.
     for _ in 0..40 {
-        let len = below(rng, 45) as usize;
+        let len = below(rng, 56) as usize;
         let mut body = vec![0u8; len];
         rng.fill(&mut body);
         if !body.is_empty() {

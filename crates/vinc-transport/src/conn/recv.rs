@@ -35,6 +35,8 @@ pub(super) struct Rx {
     pub(super) path: Option<usize>,
     pub(super) dlen: usize,
     pub(super) now: u64,
+    /// The packet in hand opened under the previous generation's key.
+    pub(super) old_key: bool,
 }
 
 /// Why a frame could not be applied.
@@ -156,7 +158,7 @@ conn_impl! {
         self.sess_amp.on_receive(dlen as u64);
         self.stats.datagrams_received += 1;
         self.stats.bytes_received += dlen as u64;
-        let mut ctx = Rx { path_id: path, path: known, dlen, now };
+        let mut ctx = Rx { path_id: path, path: known, dlen, now, old_key: false };
         self.life.clock = now;
         let (mut ok, mut first_err) = (false, None);
         for pkt in packets(dgram, self.cfg.cid_len) {
@@ -231,6 +233,7 @@ conn_impl! {
 
     fn on_zero_rtt(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn_off: usize, bytes: &mut [u8]) -> Result<(), Drop> {
         let p = env.provider;
+        ctx.old_key = false;
         let Some(dir) = self.keys.early_recv.as_mut() else { return Err(Drop::Undecryptable) };
         let un = unprotect_header(&dir.hk, p, bytes, pn_off, true).map_err(|_| Drop::Undecryptable)?;
         if un.pn_len != crate::packet::PN_LEN_BASE {
@@ -254,17 +257,29 @@ conn_impl! {
             }
             return Err(Drop::Undecryptable);
         }
+        ctx.old_key = false;
         let largest = self.rx.largest();
         let mut failed = false;
         let mut opened = None;
         let mut promoted = false;
+        #[cfg(feature = "trace")]
+        let mut seen = (0u64, false, None);
         if let Some(rk) = self.keys.recv.as_mut() {
             rk.expire(now);
             match unprotect_header(&rk.hk, p, bytes, pn_off, false) {
                 Ok(un) if un.pn_len == self.pn_len => {
                     let pn_est = decode_pn(un.truncated, un.pn_len, largest);
+                    #[cfg(feature = "trace")]
+                    {
+                        seen = (pn_est, un.key_phase(), None);
+                    }
                     match rk.select(p, un.key_phase(), pn_est) {
                         Ok(sel) => {
+                            ctx.old_key = sel == super::keys::Sel::Previous;
+                            #[cfg(feature = "trace")]
+                            {
+                                seen.2 = Some(sel);
+                            }
                             if let Some(key) = rk.key_mut(sel) {
                                 match open(key, p, bytes, pn_off, &un, largest) {
                                     Ok(o) => {
@@ -290,6 +305,8 @@ conn_impl! {
         }
         let Some(opened) = opened.filter(|_| !failed) else {
             self.stats.undecryptable += 1;
+            #[cfg(feature = "trace")]
+            self.trace_rx_event(now, seen, false, false, false);
             return Err(Drop::Undecryptable);
         };
         if promoted {
@@ -310,7 +327,10 @@ conn_impl! {
             self.cids.on_authenticated(&dcid);
         }
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
-        self.process_payload(env, ctx, opened.pn, payload)
+        let result = self.process_payload(env, ctx, opened.pn, payload);
+        #[cfg(feature = "trace")]
+        self.trace_rx_event(now, (opened.pn, seen.1, seen.2), true, matches!(result, Err(Drop::Duplicate)), promoted);
+        result
     }
 
     /// Authenticated packet `pn` with `payload` frames.
@@ -347,7 +367,7 @@ conn_impl! {
         }
         for f in FrameIter::new(payload) {
             let Ok(f) = f else { break };
-            if let Err(fault) = self.on_frame(env, pi, now, f) {
+            if let Err(fault) = self.on_frame(env, pi, now, ctx.old_key, f) {
                 return match fault {
                     Fault::Violation(c) => {
                         self.violation(now, c);
@@ -412,7 +432,7 @@ conn_impl! {
         }
     }
 
-    fn on_frame(&mut self, env: &mut Env<'_, P>, pi: usize, now: u64, f: Frame<'_>) -> Result<(), Fault> {
+    fn on_frame(&mut self, env: &mut Env<'_, P>, pi: usize, now: u64, old_key: bool, f: Frame<'_>) -> Result<(), Fault> {
         match f {
             // WAKE is acted on once the whole packet is known (see `process_payload`): it moves the path first.
             Frame::Padding { .. } | Frame::Ping | Frame::Wake => {}
@@ -468,7 +488,7 @@ conn_impl! {
                     self.push(Ev::PeerAsleep);
                 }
             }
-            Frame::Rekey(rekey) => self.on_rekey(env, &rekey),
+            Frame::Rekey(rekey) => self.on_rekey(env, &rekey, old_key),
             Frame::Ready => self.push(Ev::Ready),
             Frame::NewTickets(batch) => {
                 if !batch.entries().is_empty() {

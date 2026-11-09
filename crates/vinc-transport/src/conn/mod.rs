@@ -83,6 +83,8 @@ pub use config::{
 };
 pub use event::{CloseReason, Drop, Event, code};
 pub use hooks::SubOpen;
+#[cfg(feature = "trace")]
+pub use keys::trace::{KeyEvent, KeysView, Slot};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::PathError;
 pub use send::Transmit;

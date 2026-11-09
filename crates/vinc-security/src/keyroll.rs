@@ -9,9 +9,10 @@
 //! Two REKEY messages, carried by the transport in a frame:
 //!
 //! 1. the side whose key is due sends a *request*: a fresh X25519 public value;
-//! 2. the peer answers with its own fresh public value and the packet number at which it switches to the new keys
-//!    (the first number it seals under them);
-//! 3. both sides compute `dh = X25519(own secret, other public)` and roll both directions with it. The side that
+//! 2. the peer answers with its own fresh public value, the identifier of the request it answers (the *echo*) and the
+//!    packet number at which it switches to the new keys (the first number it seals under them);
+//! 3. both sides compute `dh = X25519(own secret, other public)`, bind the echo into it (`extract(dh, echo)`) and
+//!    roll both directions with the result. The side that
 //!    answered switches at its announced number; the side that requested switches at its next packet after the
 //!    answer. The packet header's phase bit marks the first packet under the new keys; the old keys stay for one
 //!    probe timeout for packets that arrive late.
@@ -19,8 +20,8 @@
 //! # Wire form of a REKEY body
 //!
 //! `kind(1)`: 0 request, 1 answer; `share(32)`: the sender's X25519 public value; for an answer only,
-//! `switch_pn(varint)`. A request is 33 bytes, an answer 34 to 42. The frame type that carries it belongs to the
-//! transport's frame codec.
+//! `echo(8)`, the first eight bytes of the hash of the request's share ([`request_id`]), and `switch_pn(varint)`. A
+//! request is 33 bytes, an answer 42 to 50. The frame type that carries it belongs to the transport's frame codec.
 //!
 //! # State machine
 //!
@@ -29,18 +30,37 @@
 //! key. A request is sent again until it is answered ([`Roll::pending`]). Invariants: no I/O, clock or randomness
 //! of its own; the Diffie-Hellman secret never leaves [`Roll`]; each request share is used for one roll.
 
-use vinc_crypto::{Provider, Secret, ct_eq};
+use vinc_crypto::{Provider, Secret, Transcript, ct_eq};
 use vinc_wire::{Reader, WireError, Writer};
 use zeroize::Zeroize;
 
 use crate::error::Failure;
+use crate::labels;
 use crate::record::PacketKey;
+use crate::schedule::chain;
 use crate::session::Env;
 
 /// A key older than this many nanoseconds (10 minutes) is rolled, whatever it sealed.
 pub const MAX_KEY_AGE_NS: u64 = 600 * 1_000_000_000;
+/// The length of the identifier an answer echoes.
+pub const ECHO_LEN: usize = 8;
 /// The longest REKEY body.
-pub const MAX_REKEY_LEN: usize = 1 + 32 + vinc_wire::varint::MAX_LEN;
+pub const MAX_REKEY_LEN: usize = 1 + 32 + ECHO_LEN + vinc_wire::varint::MAX_LEN;
+
+/// The identifier of a request: the first [`ECHO_LEN`] bytes of the hash of its share. An answer carries it and
+/// binds it into the key derivation.
+pub fn request_id(share: &[u8; 32]) -> [u8; ECHO_LEN] {
+    let mut t = Transcript::with_label(labels::KEY_ROLL_ID);
+    t.absorb(share);
+    let mut id = [0u8; ECHO_LEN];
+    id.iter_mut().zip(t.snapshot()).for_each(|(o, h)| *o = h);
+    id
+}
+
+/// The Diffie-Hellman value with the request identifier bound in: `extract(dh, id)`.
+fn bind(dh: &Secret<32>, id: &[u8; ECHO_LEN]) -> Secret<32> {
+    chain(dh, id)
+}
 
 /// One REKEY message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +69,8 @@ pub struct Rekey {
     pub answer: bool,
     /// The sender's fresh X25519 public value.
     pub share: [u8; 32],
+    /// For an answer: the identifier of the request it answers ([`request_id`]). Zero in a request.
+    pub echo: [u8; ECHO_LEN],
     /// For an answer: the first packet number the sender seals under the new keys. Zero in a request.
     pub switch_pn: u64,
 }
@@ -63,9 +85,34 @@ impl Rekey {
         w.put_u8(u8::from(self.answer))?;
         w.put_slice(&self.share)?;
         if self.answer {
+            w.put_slice(&self.echo)?;
             w.put_varint(self.switch_pn)?;
         }
         Ok(())
+    }
+
+    /// Read a body from the front of `r`, leaving what follows.
+    ///
+    /// # Errors
+    /// A [`WireError`] for an unknown kind or a short body.
+    pub fn read(r: &mut Reader<'_>) -> Result<Self, WireError> {
+        let answer = match r.read_u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(WireError::Unexpected("rekey kind")),
+        };
+        let share = r.read_array::<32>()?;
+        let (echo, switch_pn) = if answer {
+            (r.read_array::<ECHO_LEN>()?, r.read_varint()?)
+        } else {
+            ([0; ECHO_LEN], 0)
+        };
+        Ok(Self {
+            answer,
+            share,
+            echo,
+            switch_pn,
+        })
     }
 
     /// The body as bytes in `buf`, and their count.
@@ -84,19 +131,9 @@ impl Rekey {
     /// A [`WireError`] for an unknown kind, a short buffer or a trailing byte.
     pub fn decode(buf: &[u8]) -> Result<Self, WireError> {
         let mut r = Reader::new(buf);
-        let answer = match r.read_u8()? {
-            0 => false,
-            1 => true,
-            _ => return Err(WireError::Unexpected("rekey kind")),
-        };
-        let share = r.read_array::<32>()?;
-        let switch_pn = if answer { r.read_varint()? } else { 0 };
+        let rekey = Self::read(&mut r)?;
         if r.is_empty() {
-            Ok(Self {
-                answer,
-                share,
-                switch_pn,
-            })
+            Ok(rekey)
         } else {
             Err(WireError::Unexpected("trailing bytes"))
         }
@@ -164,9 +201,24 @@ impl Roll {
         matches!(self.state, State::Idle)
     }
 
+    /// The share of the last request answered and the answer given.
+    #[cfg(feature = "trace")]
+    pub const fn last_answered(&self) -> Option<([u8; 32], Rekey)> {
+        self.last
+    }
+
     /// How many rolls completed.
     pub const fn rolls(&self) -> u64 {
         self.rolls
+    }
+
+    /// Whether `request` repeats the last request answered: the answer is sent again and no key changes.
+    pub fn is_duplicate(&self, request: &Rekey) -> bool {
+        !request.answer
+            && self
+                .last
+                .as_ref()
+                .is_some_and(|(share, _)| ct_eq(share, &request.share))
     }
 
     /// The request to send (again) while one is waiting for its answer.
@@ -191,6 +243,7 @@ impl Roll {
         let request = Rekey {
             answer: false,
             share: p.x25519_public(&p.x25519_secret(&seed)),
+            echo: [0; ECHO_LEN],
             switch_pn: 0,
         };
         self.state = State::Requested {
@@ -219,8 +272,8 @@ impl Roll {
         if request.answer {
             return Err(Failure::UnexpectedMessage);
         }
-        if let Some((share, answer)) = &self.last
-            && ct_eq(share, &request.share)
+        if self.is_duplicate(request)
+            && let Some((_, answer)) = &self.last
         {
             return Ok(Answered {
                 answer: *answer,
@@ -237,12 +290,16 @@ impl Roll {
         let p = env.provider;
         let secret = p.x25519_secret(&seed);
         seed.zeroize();
-        let dh = p
-            .x25519_dh(&secret, &request.share)
-            .map_err(|_| Failure::InvalidPeerKey)?;
+        let echo = request_id(&request.share);
+        let dh = bind(
+            &p.x25519_dh(&secret, &request.share)
+                .map_err(|_| Failure::InvalidPeerKey)?,
+            &echo,
+        );
         let answer = Rekey {
             answer: true,
             share: p.x25519_public(&secret),
+            echo,
             switch_pn,
         };
         self.last = Some((request.share, answer));
@@ -253,19 +310,26 @@ impl Roll {
     /// Take the answer to the request that is out.
     ///
     /// # Errors
-    /// [`Failure::UnexpectedMessage`] for a request, or when no request is out (a stale or repeated answer);
+    /// [`Failure::UnexpectedMessage`] for a request, when no request is out, or when the answer echoes another
+    /// request (a stale or repeated answer; nothing changes);
     /// [`Failure::InvalidPeerKey`] for a share that gives no shared secret.
     pub fn on_answer<P: Provider>(&mut self, env: &Env<'_, P>, answer: &Rekey) -> Result<Completed, Failure> {
         if !answer.answer {
             return Err(Failure::UnexpectedMessage);
         }
-        let State::Requested { seed, .. } = &self.state else {
+        let State::Requested { seed, request } = &self.state else {
             return Err(Failure::UnexpectedMessage);
         };
+        let id = request_id(&request.share);
+        if !ct_eq(&answer.echo, &id) {
+            return Err(Failure::UnexpectedMessage);
+        }
         let p = env.provider;
-        let dh = p
-            .x25519_dh(&p.x25519_secret(seed.expose()), &answer.share)
-            .map_err(|_| Failure::InvalidPeerKey)?;
+        let dh = bind(
+            &p.x25519_dh(&p.x25519_secret(seed.expose()), &answer.share)
+                .map_err(|_| Failure::InvalidPeerKey)?,
+            &id,
+        );
         self.state = State::Idle;
         self.last = None;
         self.rolls = self.rolls.saturating_add(1);

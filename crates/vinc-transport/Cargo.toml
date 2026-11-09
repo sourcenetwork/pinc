@@ -11,6 +11,8 @@ publish.workspace = true
 [features]
 default = []
 alloc = []
+# Test-only observation of the key layer for trace validation. Costs nothing when off.
+trace = ["alloc", "vinc-security/trace"]
 
 [dependencies]
 vinc-wire = { workspace = true }

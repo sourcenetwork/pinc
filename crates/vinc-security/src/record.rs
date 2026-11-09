@@ -169,6 +169,15 @@ impl<P: Provider> PacketKey<P> {
         self.generation
     }
 
+    /// A short fingerprint of the secret, for trace validation: equal fingerprints mean equal secrets.
+    #[cfg(feature = "trace")]
+    pub fn fingerprint(&self) -> u64 {
+        let h = vinc_crypto::extract(&[0u8; 32], self.secret.expose());
+        let mut b = [0u8; 8];
+        b.iter_mut().zip(h).for_each(|(o, x)| *o = x);
+        u64::from_le_bytes(b)
+    }
+
     /// How many packets this key sealed.
     pub const fn sealed(&self) -> u64 {
         self.sealed

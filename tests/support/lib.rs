@@ -6,7 +6,9 @@
 mod core_net;
 mod link;
 pub use core_net::*;
+mod pair;
 pub use link::*;
+pub use pair::*;
 
 /// A small deterministic pseudo-random generator (`SplitMix64`) for reproducible test inputs.
 ///

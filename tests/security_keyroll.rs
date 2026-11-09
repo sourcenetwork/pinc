@@ -11,8 +11,8 @@
     unreachable_pub
 )]
 
-use vinc_crypto::{Aead, Drbg, Secret, Software};
-use vinc_security::keyroll::{MAX_KEY_AGE_NS, MAX_REKEY_LEN, due};
+use vinc_crypto::{Aead, Drbg, Provider, Secret, Software};
+use vinc_security::keyroll::{MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
 use vinc_security::{Env, Failure, Limits, PacketKey, Rekey, Roll, roll_secret};
 
 fn env<'a>(p: &'a Software, drbg: &'a mut Drbg) -> Env<'a, Software> {
@@ -40,11 +40,13 @@ fn rekey_bodies_encode_and_decode_exactly() {
     let req = Rekey {
         answer: false,
         share: [7; 32],
+        echo: [0; 8],
         switch_pn: 0,
     };
     let ans = Rekey {
         answer: true,
         share: [9; 32],
+        echo: [3; 8],
         switch_pn: 1 << 40,
     };
     let mut buf = [0u8; MAX_REKEY_LEN];
@@ -52,7 +54,7 @@ fn rekey_bodies_encode_and_decode_exactly() {
     assert_eq!((n, buf[0]), (33, 0));
     assert_eq!(Rekey::decode(&buf[..n]).unwrap(), req);
     let n = ans.encode(&mut buf).unwrap();
-    assert_eq!((n, buf[0]), (1 + 32 + 6, 1), "2^40 takes six varint bytes");
+    assert_eq!((n, buf[0]), (1 + 32 + 8 + 6, 1), "2^40 takes six varint bytes");
     assert_eq!(Rekey::decode(&buf[..n]).unwrap(), ans);
     assert!(MAX_REKEY_LEN >= n);
     // Strict: trailing bytes, short bodies, unknown kinds, and a number over 2^63 are refused.
@@ -161,6 +163,59 @@ fn when_both_sides_ask_at_once_the_dialing_side_wins() {
 }
 
 #[test]
+fn an_answer_to_another_request_is_ignored() {
+    let p = Software;
+    let (mut da, mut db) = (Drbg::new(&[1; 32]), Drbg::new(&[2; 32]));
+    let (mut a, mut b) = (Roll::new(true), Roll::new(false));
+    // The first roll completes; its answer is still on the network.
+    let first = a.start(&mut env(&p, &mut da)).unwrap();
+    let old = b.on_request(&mut env(&p, &mut db), &first, 10).unwrap();
+    a.on_answer(&env(&p, &mut da), &old.answer).unwrap();
+    // A second roll is out when the old answer arrives again: it is ignored and the second request stays out.
+    let second = a.start(&mut env(&p, &mut da)).unwrap();
+    assert_ne!(old.answer.echo, request_id(&second.share));
+    assert_eq!(old.answer.echo, request_id(&first.share));
+    assert_eq!(
+        a.on_answer(&env(&p, &mut da), &old.answer).unwrap_err(),
+        Failure::UnexpectedMessage
+    );
+    assert_eq!(a.pending(), Some(second));
+    assert_eq!(a.rolls(), 1, "the ignored answer completed nothing");
+    // The answer to the second request completes it, and both sides hold the same value.
+    let fresh = b.on_request(&mut env(&p, &mut db), &second, 20).unwrap();
+    let done = a.on_answer(&env(&p, &mut da), &fresh.answer).unwrap();
+    assert_eq!(done.dh.expose(), fresh.dh.unwrap().expose());
+    // An answer whose echo names no request is ignored too.
+    let third = a.start(&mut env(&p, &mut da)).unwrap();
+    let mut forged = b.on_request(&mut env(&p, &mut db), &third, 30).unwrap().answer;
+    forged.echo[0] ^= 1;
+    assert_eq!(
+        a.on_answer(&env(&p, &mut da), &forged).unwrap_err(),
+        Failure::UnexpectedMessage
+    );
+    assert_eq!(a.pending(), Some(third));
+}
+
+#[test]
+fn the_echo_is_bound_into_the_derived_value() {
+    let p = Software;
+    let (mut da, mut db) = (Drbg::new(&[1; 32]), Drbg::new(&[2; 32]));
+    let (mut a, mut b) = (Roll::new(true), Roll::new(false));
+    // The requester's secret is the first draw of its generator; the plain Diffie-Hellman value is not the result.
+    let seed = env(&p, &mut Drbg::new(&[1; 32])).random::<32>().unwrap();
+    let request = a.start(&mut env(&p, &mut da)).unwrap();
+    let answered = b.on_request(&mut env(&p, &mut db), &request, 1).unwrap();
+    let raw = p.x25519_dh(&p.x25519_secret(&seed), &answered.answer.share).unwrap();
+    let done = a.on_answer(&env(&p, &mut da), &answered.answer).unwrap();
+    assert_ne!(done.dh.expose(), raw.expose());
+    assert_eq!(
+        done.dh.expose(),
+        &vinc_crypto::extract(raw.expose(), &request_id(&request.share)),
+        "the value is extract(dh, request id)"
+    );
+}
+
+#[test]
 fn a_request_with_a_weak_share_is_refused() {
     let p = Software;
     let mut db = Drbg::new(&[2; 32]);
@@ -168,6 +223,7 @@ fn a_request_with_a_weak_share_is_refused() {
     let weak = Rekey {
         answer: false,
         share: [0; 32],
+        echo: [0; 8],
         switch_pn: 0,
     };
     assert_eq!(

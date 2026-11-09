@@ -48,11 +48,13 @@ pub const PACKET_IV: &str = "VINC 2026 v1 packet iv";
 pub const HEADER_KEY: &str = "VINC 2026 v1 header key";
 /// Derives the next secret of a traffic direction from the old secret and a fresh Diffie-Hellman value (a key roll).
 pub const KEY_ROLL: &str = "VINC 2026 v1 key roll";
+/// Domain of the hash whose first bytes identify a key roll request in the answer to it.
+pub const KEY_ROLL_ID: &str = "VINC 2026 v1 key roll id";
 /// Derives the secret both sides use to compute each other's connection ids.
 pub const CID_SECRET: &str = "VINC 2026 v1 connection id secret";
 
 /// Every label above except [`PREFIX`], for tests that check uniqueness and the prefix.
-pub const ALL: [&str; 22] = [
+pub const ALL: [&str; 23] = [
     HANDSHAKE,
     RESUME_HANDSHAKE,
     CHAIN,
@@ -74,5 +76,6 @@ pub const ALL: [&str; 22] = [
     PACKET_IV,
     HEADER_KEY,
     KEY_ROLL,
+    KEY_ROLL_ID,
     CID_SECRET,
 ];

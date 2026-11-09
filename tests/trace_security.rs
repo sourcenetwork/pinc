@@ -63,7 +63,7 @@ fn labels_trace(out: &mut String) {
         vinc_crypto::labels::HYBRID_SIGNATURE
     );
     // the facts the model proves, asserted on the real constants
-    assert_eq!(labels::ALL.len(), 22);
+    assert_eq!(labels::ALL.len(), 23);
     for (i, a) in labels::ALL.iter().enumerate() {
         assert!(a.starts_with(labels::PREFIX) && a.len() > labels::PREFIX.len() && a.is_ascii());
         assert!(!labels::ALL[..i].contains(a), "label {a} repeats");

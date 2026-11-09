@@ -92,18 +92,13 @@ impl<'a> Frame<'a> {
     }
 
     fn decode_rekey(r: &mut Reader<'a>) -> Result<Self, FrameError> {
-        let answer = match r.read_u8()? {
-            0 => false,
-            1 => true,
-            _ => return Err(FrameError::RekeyKind),
-        };
-        let share = r.read_array::<32>()?;
-        let switch_pn = if answer { r.read_varint()? } else { 0 };
-        Ok(Self::Rekey(Rekey {
-            answer,
-            share,
-            switch_pn,
-        }))
+        Rekey::read(r).map(Self::Rekey).map_err(|e| {
+            if e == WireError::Unexpected("rekey kind") {
+                FrameError::RekeyKind
+            } else {
+                e.into()
+            }
+        })
     }
 }
 

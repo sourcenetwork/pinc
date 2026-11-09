@@ -8,8 +8,9 @@
 //! `Config::key_update_after` packets, or when the keys are 10 minutes old.
 //!
 //! 1. The side whose key is due sends a REKEY request and sends it again every probe timeout until it is answered.
-//! 2. The peer answers with its own value and a floor: the lowest packet number it will seal under the new keys.
-//!    It stages the new keys but keeps sending under the old ones.
+//! 2. The peer answers with its own value, the identifier of the request it answers and a floor: the lowest packet
+//!    number it will seal under the new keys. It stages the new keys but keeps sending under the old ones. A repeated
+//!    request is answered again with the same answer, also while its keys are staged.
 //! 3. On the answer the requester switches its sending key at once and flips the phase bit of its packets; it stages
 //!    the new receive key.
 //! 4. The first packet that authenticates under the new receive key promotes it. The side that answered then
@@ -20,9 +21,10 @@
 //!
 //! # The REKEY frame
 //!
-//! The REKEY frame carries one message: `kind(1)` (0 request, 1 answer), `share(32)`, and for an answer
-//! `switch_pn(varint)`. A request is sent again every probe timeout until it is answered; a lost answer is sent
-//! again at once.
+//! The REKEY frame carries one message: `kind(1)` (0 request, 1 answer), `share(32)`, and for an answer `echo(8)`
+//! and `switch_pn(varint)`. A request is sent again every probe timeout until it is answered; a lost answer is sent
+//! again at once. A request that arrives in a packet opened under the previous generation's key is a late copy of
+//! a settled roll and is ignored.
 //!
 //! Invariants: a receive key of the next generation is installed only after a packet authenticated under it, so a
 //! forged phase bit costs one failed open and changes nothing; a generation only moves forward; the sending key of
@@ -31,6 +33,9 @@
 use vinc_crypto::{CryptoError, Provider};
 use vinc_security::keyroll::{self, Rekey, Roll};
 use vinc_security::{EarlyKeys, Env, Failure, HeaderKey, PacketKey, RecordError, Traffic};
+
+#[cfg(feature = "trace")]
+pub(super) mod trace;
 
 use super::event::code;
 use super::{Connection, Phase};
@@ -148,6 +153,9 @@ pub(crate) struct Keys<P: Provider> {
     last_answer: Option<Rekey>,
     /// When the pending request last went out.
     request_at: Option<u64>,
+    /// The log of the key layer (trace validation only).
+    #[cfg(feature = "trace")]
+    rec: trace::Recorder,
 }
 
 impl<P: Provider> Keys<P> {
@@ -162,6 +170,8 @@ impl<P: Provider> Keys<P> {
             out: None,
             last_answer: None,
             request_at: None,
+            #[cfg(feature = "trace")]
+            rec: trace::Recorder::new(),
         }
     }
 
@@ -251,11 +261,15 @@ impl<P: Provider> Keys<P> {
         if self.out.is_none() {
             self.out = self.last_answer;
         }
+        #[cfg(feature = "trace")]
+        self.rec.log.push(trace::KeyEvent::AnswerRequeued);
     }
 
     /// A lost request goes out again at the next opportunity.
     pub(crate) fn request_lost(&mut self) {
         self.request_at = None;
+        #[cfg(feature = "trace")]
+        self.rec.log.push(trace::KeyEvent::RequestLost);
     }
 
     /// When the pending request goes out again, if one is waiting for its answer.
@@ -270,7 +284,7 @@ impl<P: Provider> Keys<P> {
         let (Some(s), Some(r)) = (self.send.as_ref(), self.recv.as_mut()) else {
             return Err(Failure::UnexpectedMessage);
         };
-        if r.next.is_some() {
+        if r.next.is_some() && !self.roll.is_duplicate(request) {
             return Err(Failure::UnexpectedMessage);
         }
         let answered = self.roll.on_request(env, request, next_pn)?;
@@ -310,7 +324,13 @@ conn_impl! {
             return;
         }
         // A failing generator leaves the roll for the next attempt.
-        let _ = self.keys.begin(|roll| roll.start(env));
+        let began = self.keys.begin(|roll| roll.start(env)).is_ok();
+        #[cfg(feature = "trace")]
+        if began {
+            self.trace_note(trace::KeyEvent::Begun { now: env.now });
+        }
+        #[cfg(not(feature = "trace"))]
+        let _ = began;
     }
 
     /// The REKEY message to send now, if any: a message waiting, or the request again once a probe timeout passed
@@ -326,11 +346,19 @@ conn_impl! {
     }
 
     /// A received REKEY message. A request stages the new keys and queues the answer; an answer switches the
-    /// sending key. A message that does not fit the state of the roll is dropped.
-    pub(super) fn on_rekey(&mut self, env: &mut Env<'_, P>, rekey: &Rekey) {
+    /// sending key. A message that does not fit the state of the roll is dropped, and so is a request that arrived
+    /// under the previous generation's key (`old_key`).
+    pub(super) fn on_rekey(&mut self, env: &mut Env<'_, P>, rekey: &Rekey, old_key: bool) {
         let p = env.provider;
+        #[cfg(feature = "trace")]
+        {
+            self.keys.rec.rx = Some(*rekey);
+        }
         let result = if rekey.answer {
             self.keys.on_answer(p, env, rekey, env.now)
+        } else if old_key {
+            // A late copy of a request of the previous generation: that roll is settled.
+            return;
         } else {
             let next_pn = self.next_pn;
             self.keys.on_request(p, env, rekey, next_pn)

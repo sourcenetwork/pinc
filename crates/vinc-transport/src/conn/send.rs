@@ -452,6 +452,10 @@ conn_impl! {
             self.next_pn += 1;
             return None;
         }
+        #[cfg(feature = "trace")]
+        if kind == Kind::Short {
+            self.trace_sent(now, pn);
+        }
         self.next_pn += 1;
         self.stats.packets_sent += 1;
         if filled.ack {
@@ -645,6 +649,8 @@ conn_impl! {
             if put(payload, pos, &Frame::Rekey(rekey)) {
                 let _ = out.refs.push(FrameRef::Control { kind: K_REKEY, id: u64::from(rekey.answer) });
                 out.strong();
+                #[cfg(feature = "trace")]
+                self.trace_tx(rekey);
             } else if rekey.answer {
                 self.keys.requeue_answer();
             } else {
