@@ -50,7 +50,7 @@ theorem carrierReturn_nothing_held (e : Env) (n : N) (now member : Nat) (h : n.d
   unfold N.carrierReturn; simp [h]
 
 theorem carrierReturn_eq (e : Env) (n : N) (now member : Nat) (l : Lease) (t0 : Nat) (h : n.downed.get? member = some (l, t0))
-    (hr : n.roster.has member = false) (hv : n.revoked.has member = false) :
+    (hr : n.roster.has member = false) (hv : n.revoked.has member = false) (hf : n.roster.len < MAX_TABLE) :
     N.carrierReturn e n now member =
       (let l' : Lease := { l with renewed := now }
        let n1 : N := { n with downed := n.downed.erase member }
@@ -59,15 +59,17 @@ theorem carrierReturn_eq (e : Env) (n : N) (now member : Nat) (l : Lease) (t0 : 
        let n4 := N.pushDelta e n3 now member l'.rc .alive
        (N.deltaTo e n4 member member l'.rc .alive).trace (.carrierReturned member true)) := by
   unfold N.carrierReturn N.crAttach
-  simp [h, hr, hv]
+  have hf' : ¬ MAX_TABLE ≤ n.roster.len := by omega
+  simp [h, hr, hv, hf']
 
 /-- Property 5: a returning carrier within the hold restores the lease, the subscriptions and tells the member. -/
 theorem carrierReturn_restores (e : Env) (n : N) (now member : Nat) (l : Lease) (t0 : Nat)
-    (h : n.downed.get? member = some (l, t0)) (hr : n.roster.has member = false) (hv : n.revoked.has member = false) :
+    (h : n.downed.get? member = some (l, t0)) (hr : n.roster.has member = false) (hv : n.revoked.has member = false)
+    (hf : n.roster.len < MAX_TABLE) :
     (N.carrierReturn e n now member).roster.get? member = some { l with renewed := now } ∧
     (N.carrierReturn e n now member).downed.get? member = none ∧
     (N.carrierReturn e n now member).outBc = n.outBc ++ [.restore member] := by
-  rw [carrierReturn_eq e n now member l t0 h hr hv]
+  rw [carrierReturn_eq e n now member l t0 h hr hv hf]
   dsimp only
   obtain ⟨X, hX⟩ : ∃ X : N, X = { n with downed := n.downed.erase member, roster := n.roster.insert member { l with renewed := now } } := ⟨_, rfl⟩
   rw [← hX]
@@ -89,17 +91,15 @@ theorem carrierReturn_restores (e : Env) (n : N) (now member : Nat) (l : Lease) 
   · rw [p2, hY2]; exact AMap.get?_erase_self _ _
   · rw [p3, hY3]
 
-/-- Property 9: the roster insert of `carrier_return` is not guarded by the table bound (the other inserts are): a full
-roster grows to `MAX_TABLE + 1`. -/
-theorem carrierReturn_roster_unbounded (e : Env) (n : N) (now member : Nat) (l : Lease) (t0 : Nat)
-    (h : n.downed.get? member = some (l, t0)) (hr : n.roster.has member = false) (hv : n.revoked.has member = false) :
+theorem carrierReturn_roster_len (e : Env) (n : N) (now member : Nat) (l : Lease) (t0 : Nat)
+    (h : n.downed.get? member = some (l, t0)) (hr : n.roster.has member = false) (hv : n.revoked.has member = false)
+    (hf : n.roster.len < MAX_TABLE) :
     (N.carrierReturn e n now member).roster.length = n.roster.length + 1 := by
-  rw [carrierReturn_eq e n now member l t0 h hr hv]
+  rw [carrierReturn_eq e n now member l t0 h hr hv hf]
   dsimp only
   obtain ⟨X, hX⟩ : ∃ X : N, X = { n with downed := n.downed.erase member, roster := n.roster.insert member { l with renewed := now } } := ⟨_, rfl⟩
   rw [← hX]
   have hXr : X.roster = n.roster.insert member { l with renewed := now } := by rw [hX]
-  have hXd : X.downed = n.downed.erase member := by rw [hX]
   obtain ⟨a1, a2, a3⟩ := crAttach_ht X member
   obtain ⟨p1, -⟩ := pushDelta_ht e ((X.crAttach member).bc (.restore member)) now member { l with renewed := now }.rc .alive
   simp only [trace_roster, deltaTo_roster]
@@ -107,6 +107,36 @@ theorem carrierReturn_roster_unbounded (e : Env) (n : N) (now member : Nat) (l :
   show (X.crAttach member).roster.length = _
   rw [a1, hXr]
   exact AMap.insert_length_new _ _ _ hr
+
+/-- Property 9: a full roster refuses the returning member: its held entry is dropped, its subscriptions released, and
+`restored = false` is reported; the roster does not change. -/
+theorem carrierReturn_full (e : Env) (n : N) (now member : Nat) (l : Lease) (t0 : Nat)
+    (h : n.downed.get? member = some (l, t0)) (hr : n.roster.has member = false) (hv : n.revoked.has member = false)
+    (hf : MAX_TABLE ≤ n.roster.len) :
+    N.carrierReturn e n now member =
+      (({ n with downed := n.downed.erase member } : N).bc (.release member)).trace (.carrierReturned member false) := by
+  unfold N.carrierReturn
+  simp [h, hr, hv, hf]
+
+/-- Property 9: the roster never grows past `MAX_TABLE` through `carrier_return`. -/
+theorem carrierReturn_roster_le (e : Env) (n : N) (now member : Nat) (hb : n.roster.len ≤ MAX_TABLE) :
+    (N.carrierReturn e n now member).roster.len ≤ MAX_TABLE := by
+  cases hd : n.downed.get? member with
+  | none => rw [carrierReturn_nothing_held e n now member hd]; simpa using hb
+  | some p =>
+    obtain ⟨l, t0⟩ := p
+    by_cases hrv : n.roster.has member = true ∨ n.revoked.has member = true
+    · have : N.carrierReturn e n now member = { n with downed := n.downed.erase member } := by
+        unfold N.carrierReturn; rcases hrv with h1 | h1 <;> simp [hd, h1]
+      rw [this]; exact hb
+    · simp only [not_or, Bool.not_eq_true] at hrv
+      by_cases hf : MAX_TABLE ≤ n.roster.len
+      · rw [carrierReturn_full e n now member l t0 hd hrv.1 hrv.2 hf]
+        simp only [trace_roster]; exact hb
+      · have hf' : n.roster.len < MAX_TABLE := by omega
+        have hlen := carrierReturn_roster_len e n now member l t0 hd hrv.1 hrv.2 hf'
+        show (N.carrierReturn e n now member).roster.length ≤ MAX_TABLE
+        rw [hlen]; unfold AMap.len at hf'; omega
 
 @[simp] theorem bc_boot (n : N) (b : Bc) : (n.bc b).boot = n.boot := rfl
 @[simp] theorem bc_roster (n : N) (b : Bc) : (n.bc b).roster = n.roster := rfl

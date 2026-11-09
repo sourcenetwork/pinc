@@ -118,6 +118,7 @@ def N.carrierReturn (e : Env) (n : N) (now member : Nat) : N :=
   | some (l, _) =>
     let n := { n with downed := n.downed.erase member }
     if n.roster.has member || n.revoked.has member then n
+    else if MAX_TABLE ≤ n.roster.len then (n.bc (.release member)).trace (.carrierReturned member false)
     else
       let l := { l with renewed := now }
       let n := { n with roster := n.roster.insert member l }
