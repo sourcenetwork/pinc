@@ -408,7 +408,7 @@ fn a_second_protocol_opened_after_the_peer_moved_behind_its_nat_gets_its_answer(
         let (child_a, _) = dial(&mut net, a, b, ALPN_B);
         assert_ne!(child_a, parent_a);
         write_new(&mut net, a, child_a, b"ask");
-        let end = net.now + 10 * SEC_NS;
+        let end = net.now + SEC_NS;
         assert!(net.run(end, |n| n.nodes[b].fin.len() == 1), "the request never arrived");
         let sb = net.nodes[b]
             .events
