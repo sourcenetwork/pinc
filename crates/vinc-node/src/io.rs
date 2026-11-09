@@ -24,8 +24,7 @@ use vinc_transport::stream::StreamId;
 
 use crate::bound;
 use crate::config::{
-    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, DENY_CAP, DENY_FIRST, EVENT_CAP, Nanos, QUEUE_FRAMES, Store,
-    TABLE_MAX,
+    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, DENY_CAP, DENY_FIRST, EVENT_CAP, Nanos, QUEUE_FRAMES, Store, TABLE_MAX,
 };
 use crate::ep::Ep;
 use crate::event::NodeEvent;
@@ -132,7 +131,10 @@ pub(crate) struct Io<E: Ep, St: Store> {
 }
 
 impl<E: Ep, St: Store> Io<E, St> {
-    #[allow(clippy::too_many_arguments, reason = "the node builds its session state once, from its configuration")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the node builds its session state once, from its configuration"
+    )]
     pub(crate) fn new(
         ep: E,
         store: St,
@@ -186,7 +188,9 @@ impl<E: Ep, St: Store> Io<E, St> {
 
     /// The wall clock in milliseconds at the node's current time.
     pub(crate) fn wall_ms(&self) -> u64 {
-        self.wall.1.saturating_add(self.now.saturating_sub(self.wall.0) / 1_000_000)
+        self.wall
+            .1
+            .saturating_add(self.now.saturating_sub(self.wall.0) / 1_000_000)
     }
 
     /// The host reports the wall clock.
@@ -429,7 +433,11 @@ impl<E: Ep, St: Store> Io<E, St> {
         let live = sid.and_then(|s| self.ep.stats(s)).map(|s| (s.transport.srtt, s.thin));
         let (srtt, thin) = live.or_else(|| self.rtts.get(peer).copied()).unwrap_or((0, false));
         let accepted = sid.and_then(|s| self.sess.get(&s)).is_some_and(|s| s.incoming);
-        let keepalive = if accepted { QUIET_KEEP_ACCEPTOR } else { QUIET_KEEP_DIALER };
+        let keepalive = if accepted {
+            QUIET_KEEP_ACCEPTOR
+        } else {
+            QUIET_KEEP_DIALER
+        };
         bound::heal_after(keepalive, srtt, thin)
     }
 
@@ -449,8 +457,15 @@ impl<E: Ep, St: Store> Io<E, St> {
     }
 
     pub(crate) fn backoff(&mut self, peer: &NodeId) {
-        let cap = if self.is_hub_id(peer) { BACKOFF_HUB_CAP } else { BACKOFF_CAP };
-        let back = self.failed.get(peer).map_or(BACKOFF_FIRST, |(_, b)| b.saturating_mul(2).min(cap));
+        let cap = if self.is_hub_id(peer) {
+            BACKOFF_HUB_CAP
+        } else {
+            BACKOFF_CAP
+        };
+        let back = self
+            .failed
+            .get(peer)
+            .map_or(BACKOFF_FIRST, |(_, b)| b.saturating_mul(2).min(cap));
         self.set_failed(peer, back, false);
     }
 

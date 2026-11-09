@@ -75,7 +75,9 @@ impl World {
     pub fn build_with(seed: u64, h: usize, m: usize, tweak: impl Fn(&mut World)) -> Self {
         let mut w = Self::new(seed);
         tweak(&mut w);
-        let addrs: Vec<HubAddr> = (0..h).map(|i| hub_addr(0x10 + i as u8, ip(203, 0, 113, 10 + i as u8))).collect();
+        let addrs: Vec<HubAddr> = (0..h)
+            .map(|i| hub_addr(0x10 + i as u8, ip(203, 0, 113, 10 + i as u8)))
+            .collect();
         for (i, a) in addrs.iter().enumerate() {
             let spec = NodeSpec {
                 tag: 0x10 + i as u8,
@@ -135,7 +137,12 @@ impl World {
 
     /// The members of the view of `n` plus `n` itself.
     pub fn everyone(&self) -> BTreeSet<[u8; 32]> {
-        self.hubs.iter().map(|(n, _)| *n).chain(self.members.iter().copied()).map(|n| self.id(n)).collect()
+        self.hubs
+            .iter()
+            .map(|(n, _)| *n)
+            .chain(self.members.iter().copied())
+            .map(|n| self.id(n))
+            .collect()
     }
 
     pub fn member_events(&self, n: SimId) -> Vec<(Time, MEvent)> {
@@ -169,9 +176,9 @@ impl World {
             .events(n)
             .iter()
             .filter_map(|(t, e)| match e {
-                NEv::Node(NodeEvent::Message { topic, origin, body, .. }) => {
-                    Some((*t, topic.clone(), *origin, body.clone()))
-                }
+                NEv::Node(NodeEvent::Message {
+                    topic, origin, body, ..
+                }) => Some((*t, topic.clone(), *origin, body.clone())),
                 _ => None,
             })
             .collect()

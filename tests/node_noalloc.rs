@@ -1,6 +1,14 @@
 //! The node allocates nothing in steady state: datagrams in, the hub stream, membership timers and datagrams out,
 //! over a quiet minute of a hub and its members.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
 

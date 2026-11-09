@@ -11,9 +11,7 @@
 //! Invariants: no method blocks; a frame that no session took reports `false`.
 
 use vinc_broadcast::{Event as BcEvent, Host as BcHost, Lane, Topics};
-use vinc_membership::session::{
-    Broadcast, Carrier, CloseReason, Evidence, Local, Nanos, Route, Session, StoreError,
-};
+use vinc_membership::session::{Broadcast, Carrier, CloseReason, Evidence, Local, Nanos, Route, Session, StoreError};
 use vinc_membership::{Membership, NodeId};
 
 use crate::config::Store;
@@ -32,7 +30,13 @@ pub(crate) struct MemHost<'a, E: Ep, St: Store> {
 
 impl<E: Ep, St: Store> MemHost<'_, E, St> {
     fn bc(&mut self) -> (Option<&mut Topics>, Bc<'_, E, St>) {
-        (self.topics.as_deref_mut(), Bc { io: &mut *self.io, mem: None })
+        (
+            self.topics.as_deref_mut(),
+            Bc {
+                io: &mut *self.io,
+                mem: None,
+            },
+        )
     }
 }
 
@@ -128,12 +132,13 @@ impl<E: Ep, St: Store> Local for MemHost<'_, E, St> {
     }
 
     fn address_hash(&self, moves: u8) -> [u8; 8] {
-        let mut h = blake3::Hasher::new();
-        h.update(self.io.ticket.get(..self.io.ticket_len).unwrap_or_default());
-        h.update(&[moves]);
-        let d = h.finalize();
-        let [a, b, c, e, f, g, i, j, ..] = *d.as_bytes();
-        [a, b, c, e, f, g, i, j]
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(self.io.ticket.get(..self.io.ticket_len).unwrap_or_default());
+        hasher.update(&[moves]);
+        let digest = hasher.finalize();
+        let mut out = [0u8; 8];
+        out.copy_from_slice(digest.as_bytes().get(..8).unwrap_or_default());
+        out
     }
 
     fn persistent(&self) -> bool {

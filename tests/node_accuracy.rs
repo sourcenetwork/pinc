@@ -1,6 +1,14 @@
 //! Accuracy over real sessions: a live member is never confirmed down by a late or lost answer, by a snapshot after a
 //! heal, or by a DOWN from another hub while its own lease is fresh.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
 
@@ -19,7 +27,11 @@ fn lossy(delay: u64, p: f64) -> LinkConfig {
 }
 
 fn all_nodes(w: &World) -> Vec<SimId> {
-    w.hubs.iter().map(|(n, _)| *n).chain(w.members.iter().copied()).collect()
+    w.hubs
+        .iter()
+        .map(|(n, _)| *n)
+        .chain(w.members.iter().copied())
+        .collect()
 }
 
 fn no_one_accused(w: &World, seed: u64, what: &str) {
@@ -27,9 +39,17 @@ fn no_one_accused(w: &World, seed: u64, what: &str) {
         let downs: Vec<_> = w
             .member_events(n)
             .into_iter()
-            .filter(|(_, e)| matches!(e, vinc_membership::Event::MemberConfirmedDown { .. } | vinc_membership::Event::MemberLeft { .. }))
+            .filter(|(_, e)| {
+                matches!(
+                    e,
+                    vinc_membership::Event::MemberConfirmedDown { .. } | vinc_membership::Event::MemberLeft { .. }
+                )
+            })
             .collect();
-        assert!(downs.is_empty(), "seed {seed} ({what}): node {n:?} confirmed a live node down: {downs:?}");
+        assert!(
+            downs.is_empty(),
+            "seed {seed} ({what}): node {n:?} confirmed a live node down: {downs:?}"
+        );
     }
 }
 
@@ -96,7 +116,9 @@ fn a_snapshot_after_a_heal_removes_nobody() {
 fn refusals(traces: &[(u64, TraceItem)], why: Refusal) -> usize {
     traces
         .iter()
-        .filter(|(_, t)| matches!(t.body, Body::Membership(vinc_membership::Trace::DownRefused { why: w, .. }) if w == why))
+        .filter(
+            |(_, t)| matches!(t.body, Body::Membership(vinc_membership::Trace::DownRefused { why: w, .. }) if w == why),
+        )
         .count()
 }
 
@@ -121,7 +143,10 @@ fn a_down_from_another_hub_is_refused_while_the_lease_is_fresh() {
                 .filter(|(_, t)| matches!(t.body, Body::Membership(vinc_membership::Trace::Confirmed { .. })))
                 .count();
             let refused = refusals(&w.sim.node(c).traces, Refusal::LeaseFresh);
-            assert!(confirmed_at_a > 0, "seed {seed}: hub A never confirmed the member, so the scenario did not run");
+            assert!(
+                confirmed_at_a > 0,
+                "seed {seed}: hub A never confirmed the member, so the scenario did not run"
+            );
             assert!(refused > 0, "seed {seed}: hub C did not refuse the DOWN");
             no_one_accused(&w, seed, "a DOWN from another hub");
             complete(&w, seed, "a DOWN from another hub");

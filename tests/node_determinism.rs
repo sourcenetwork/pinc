@@ -1,7 +1,17 @@
 //! The same seed gives the same run: events, views and trace records are identical.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
+
+use std::fmt::Write as _;
 
 use node_common::{World, big, secs};
 use vinc_tests::NCmd;
@@ -10,17 +20,24 @@ fn run(seed: u64) -> String {
     let mut w = World::build_with(seed, 2, 4, |w| w.trace = true);
     let m = w.members.clone();
     w.sim.command(secs(20), m[1], NCmd::Subscribe(b"t".to_vec()));
-    w.sim.command(secs(30), m[0], NCmd::Publish { topic: b"t".to_vec(), body: vec![9; 100] });
+    w.sim.command(
+        secs(30),
+        m[0],
+        NCmd::Publish {
+            topic: b"t".to_vec(),
+            body: vec![9; 100],
+        },
+    );
     w.sim.crash(secs(40), m[2]);
     w.sim.restart(secs(50), m[2]);
     w.run(secs(120));
     let mut out = String::new();
     for n in w.hubs.iter().map(|(n, _)| *n).chain(m.iter().copied()) {
         for (t, e) in w.sim.events(n) {
-            out += &format!("{n:?} {t} {e:?}\n");
+            writeln!(out, "{n:?} {t} {e:?}").unwrap();
         }
         for (t, it) in &w.sim.node(n).traces {
-            out += &format!("{n:?} {t} {:?}\n", it.body);
+            writeln!(out, "{n:?} {t} {:?}", it.body).unwrap();
         }
     }
     out
@@ -32,7 +49,6 @@ fn the_same_seed_gives_the_same_run() {
         let a = run(161);
         assert!(a.len() > 1000);
         assert_eq!(a, run(161));
-        
     });
 }
 

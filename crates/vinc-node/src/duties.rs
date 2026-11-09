@@ -33,22 +33,27 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         }
         let id = io.full_id(peer);
         let hub = io.is_hub_id(peer);
-        let udp = self.conn.relay_of(&id).and_then(|i| self.conn.relay_cfg(i)).and_then(|c| c.udp);
+        let udp = self
+            .conn
+            .relay_of(&id)
+            .and_then(|i| self.conn.relay_cfg(i))
+            .and_then(|c| c.udp);
         let hints = [udp];
-        let hints: &[core::net::SocketAddr] = if let [Some(a)] = &hints { core::slice::from_ref(a) } else { &[] };
+        let hints: &[core::net::SocketAddr] = if let [Some(a)] = &hints {
+            core::slice::from_ref(a)
+        } else {
+            &[]
+        };
         let role = if hub { Role::Hub } else { Role::Other };
         let alpn = self.io.alpn;
-        match self.conn.dial(now, &mut self.io.ep, id, alpn, role, hints) {
-            Ok(_) => {
-                if self.io.connecting.len() < crate::config::TABLE_MAX {
-                    self.io.connecting.insert(*peer, now);
-                }
-                self.io.trace(NodeTrace::Dial { peer: tag(peer) });
+        if self.conn.dial(now, &mut self.io.ep, id, alpn, role, hints).is_ok() {
+            if self.io.connecting.len() < crate::config::TABLE_MAX {
+                self.io.connecting.insert(*peer, now);
             }
-            Err(_) => {
-                self.io.backoff(peer);
-                self.io.drop_queue(peer);
-            }
+            self.io.trace(NodeTrace::Dial { peer: tag(peer) });
+        } else {
+            self.io.backoff(peer);
+            self.io.drop_queue(peer);
         }
     }
 

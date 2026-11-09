@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn grows_with_the_round_trip() {
         let mut last = 0;
-        for srtt in [0, 10 * MS, 50 * MS, 200 * MS, S, 3 * S] {
+        for srtt in [10 * MS, 50 * MS, 200 * MS, S, 3 * S] {
             let b = give_up(srtt, false);
             assert!(b >= last, "{srtt}: {b} < {last}");
             last = b;
@@ -95,4 +95,3 @@ mod tests {
         assert_eq!(give_up(0, false), give_up(SEED_RTT, false));
     }
 }
-

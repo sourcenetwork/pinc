@@ -14,7 +14,7 @@ use vinc_membership::session::LEAVE_CODE;
 use vinc_transport::conn::CloseReason as TransportClose;
 use vinc_transport::stream::StreamId;
 
-use crate::config::{Nanos, SESSION_LIVED, Store, SURVIVOR, SURVIVOR_HAVE, DENIED, REDIAL_SOON, TABLE_MAX};
+use crate::config::{DENIED, Nanos, REDIAL_SOON, SESSION_LIVED, SURVIVOR, SURVIVOR_HAVE, Store, TABLE_MAX};
 use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::io::{Link, Sess};
@@ -52,7 +52,9 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         self.conn.observe(now, &mut self.io.ep, &ev);
         let alpn = self.io.alpn;
         match ev {
-            Event::Connected { session, node, alpn: a, .. } if a.as_bytes() == alpn => {
+            Event::Connected {
+                session, node, alpn: a, ..
+            } if a.as_bytes() == alpn => {
                 self.hub_connected(now, session, &node);
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
@@ -104,10 +106,7 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
     /// Make `session` the current session of `peer`.
     fn attach(&mut self, now: Nanos, session: SessionId, peer: NodeId, incoming: bool) {
         if self.io.sess.len() < TABLE_MAX {
-            self.io.sess.insert(
-                session,
-                Sess { peer, incoming },
-            );
+            self.io.sess.insert(session, Sess { peer, incoming });
         }
         if self.io.links.len() < TABLE_MAX || self.io.links.contains_key(&peer) {
             self.io.links.insert(
@@ -155,7 +154,11 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
     fn hub_incoming(&mut self, now: Nanos, session: SessionId, node: &vinc_crypto::NodeId) {
         let peer = node.bytes;
         self.io.learn_alg(node);
-        let role = if self.io.is_hub_id(&peer) { Role::Hub } else { Role::Member };
+        let role = if self.io.is_hub_id(&peer) {
+            Role::Hub
+        } else {
+            Role::Member
+        };
         let _ = self.io.cmd(Command::SetRole { session, role });
         if self.io.links.get(&peer).and_then(|l| l.conn) == Some(session) {
             return;
@@ -185,7 +188,13 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
     /// recognised, and it never becomes the peer's current session.
     fn close_duplicate(&mut self, _now: Nanos, session: SessionId, peer: &NodeId) {
         if self.io.sess.len() < TABLE_MAX && !self.io.sess.contains_key(&session) {
-            self.io.sess.insert(session, Sess { peer: *peer, incoming: false });
+            self.io.sess.insert(
+                session,
+                Sess {
+                    peer: *peer,
+                    incoming: false,
+                },
+            );
         }
         let _ = self.io.cmd(Command::Close { session, error: 0 });
         self.io.trace(NodeTrace::DuplicateClosed { peer: tag(peer) });
@@ -223,17 +232,16 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         let Some(link) = self.io.links.get(&peer).copied().filter(|l| l.conn == Some(session)) else {
             return;
         };
-        if self.io.is_hub && !self.io.is_hub_id(&peer) && code != LEAVE_CODE {
-            if let Some(alt) = self.survivor(now, &peer, session) {
-                self.adopt(now, &peer, alt);
-                return;
-            }
+        if self.io.is_hub
+            && !self.io.is_hub_id(&peer)
+            && code != LEAVE_CODE
+            && let Some(alt) = self.survivor(now, &peer, session)
+        {
+            self.adopt(now, &peer, alt);
+            return;
         }
         self.io.links.remove(&peer);
-        self.io.trace(NodeTrace::SessionDown {
-            peer: tag(&peer),
-            code,
-        });
+        self.io.trace(NodeTrace::SessionDown { peer: tag(&peer), code });
         let (m, mut h) = self.mem_host();
         m.session_down(&mut h, now, &peer, code);
         let hub = self.io.is_hub_id(&peer);
@@ -302,7 +310,12 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
             return;
         };
         self.io.register_stream(session, stream);
-        let Some(l) = self.io.links.get_mut(&peer).filter(|l| l.conn == Some(session) && l.out.is_none()) else {
+        let Some(l) = self
+            .io
+            .links
+            .get_mut(&peer)
+            .filter(|l| l.conn == Some(session) && l.out.is_none())
+        else {
             return;
         };
         l.out = Some(stream);
@@ -316,9 +329,7 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
         };
         self.io.register_stream(session, stream);
         // The hub follows the session a member writes on: answer on it.
-        if self.io.is_hub
-            && !self.io.is_hub_id(&peer)
-            && self.io.links.get(&peer).and_then(|l| l.conn) != Some(session)
+        if self.io.is_hub && !self.io.is_hub_id(&peer) && self.io.links.get(&peer).and_then(|l| l.conn) != Some(session)
         {
             self.adopt(now, &peer, session);
         }
@@ -359,7 +370,12 @@ impl<E: Ep, P: vinc_crypto::Provider + Clone, St: Store, const R: usize, const P
 
     /// Hand the whole frames in the stream's buffer to membership. False if the framing broke.
     fn parse_stream(&mut self, now: Nanos, session: SessionId, stream: StreamId, peer: &NodeId) -> bool {
-        let Some(mut buf) = self.io.strm.get_mut(&(session, stream)).map(|s| core::mem::take(&mut s.inb)) else {
+        let Some(mut buf) = self
+            .io
+            .strm
+            .get_mut(&(session, stream))
+            .map(|s| core::mem::take(&mut s.inb))
+        else {
             return true;
         };
         let (m, mut h) = self.mem_host();

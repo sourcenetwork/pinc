@@ -1,6 +1,14 @@
 //! Broadcast over real hub streams: origin authentication, a body at the configured size limit, and publishes during
 //! churn reaching every live subscriber.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
 
@@ -11,7 +19,9 @@ use vinc_tests::NCmd;
 const TOPIC: &[u8] = b"news";
 
 fn body(len: usize, salt: u8) -> Vec<u8> {
-    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(salt)).collect()
+    (0..len)
+        .map(|i| (i as u8).wrapping_mul(31).wrapping_add(salt))
+        .collect()
 }
 
 #[test]
@@ -24,17 +34,31 @@ fn a_message_reaches_every_subscriber_once_with_its_origin() {
                 w.sim.command(secs(20), *sub, NCmd::Subscribe(TOPIC.to_vec()));
             }
             let sent = body(1000, 7);
-            w.sim.command(secs(40), m[0], NCmd::Publish { topic: TOPIC.to_vec(), body: sent.clone() });
+            w.sim.command(
+                secs(40),
+                m[0],
+                NCmd::Publish {
+                    topic: TOPIC.to_vec(),
+                    body: sent.clone(),
+                },
+            );
             w.run(secs(80));
             let origin = w.id(m[0]);
             for sub in &m[1..] {
                 let got = w.messages(*sub);
                 assert_eq!(got.len(), 1, "seed {seed}: {sub:?} got {} messages", got.len());
                 let (_, topic, from, b) = &got[0];
-                assert_eq!((topic.as_slice(), *from, b), (TOPIC, origin, &sent), "seed {seed}: {sub:?}");
+                assert_eq!(
+                    (topic.as_slice(), *from, b),
+                    (TOPIC, origin, &sent),
+                    "seed {seed}: {sub:?}"
+                );
             }
             // The publisher and a non-subscriber hear nothing.
-            assert!(w.messages(m[0]).is_empty(), "seed {seed}: the origin got its own message");
+            assert!(
+                w.messages(m[0]).is_empty(),
+                "seed {seed}: the origin got its own message"
+            );
         }
     });
 }
@@ -48,7 +72,14 @@ fn a_subscriber_that_refuses_the_origin_gets_nothing() {
         for sub in &m[1..] {
             w.sim.command(secs(20), *sub, NCmd::Subscribe(TOPIC.to_vec()));
         }
-        w.sim.command(secs(40), m[0], NCmd::Publish { topic: TOPIC.to_vec(), body: body(64, 1) });
+        w.sim.command(
+            secs(40),
+            m[0],
+            NCmd::Publish {
+                topic: TOPIC.to_vec(),
+                body: body(64, 1),
+            },
+        );
         w.run(secs(70));
         assert_eq!(w.messages(m[1]).len(), 1);
         assert_eq!(w.messages(m[2]).len(), 1);
@@ -72,7 +103,14 @@ fn a_body_at_the_configured_limit_crosses_a_hub_stream() {
                 w.sim.command(secs(20), *sub, NCmd::Subscribe(TOPIC.to_vec()));
             }
             let sent = body(max_body, 3);
-            w.sim.command(secs(40), m[0], NCmd::Publish { topic: TOPIC.to_vec(), body: sent.clone() });
+            w.sim.command(
+                secs(40),
+                m[0],
+                NCmd::Publish {
+                    topic: TOPIC.to_vec(),
+                    body: sent.clone(),
+                },
+            );
             w.run(secs(100));
             for sub in &m[1..] {
                 let got = w.messages(*sub);
@@ -134,7 +172,10 @@ fn a_publish_during_churn_reaches_every_live_subscriber() {
             let got: Vec<Vec<u8>> = w.messages(m[3]).into_iter().map(|(_, _, _, b)| b).collect();
             for i in 0..n {
                 if 45 + 5 * u64::from(i) >= 80 {
-                    assert!(got.contains(&body(200, i)), "seed {seed}: the restarted subscriber missed {i}");
+                    assert!(
+                        got.contains(&body(200, i)),
+                        "seed {seed}: the restarted subscriber missed {i}"
+                    );
                 }
             }
         }

@@ -1,6 +1,14 @@
 //! Partitions and heals over real sessions: views converge after a heal; a hub that confirmed a member down on a
 //! dropped carrier restores its entry and its subscriptions when the carrier returns.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
 
@@ -28,7 +36,11 @@ fn views_converge_after_a_long_partition_heals() {
             // After the heal the views merge.
             w.run(secs(420));
             for n in hubs.iter().chain(m.iter()) {
-                assert_eq!(w.view(*n), w.others(*n), "seed {seed}: the view of {n:?} after the heal");
+                assert_eq!(
+                    w.view(*n),
+                    w.others(*n),
+                    "seed {seed}: the view of {n:?} after the heal"
+                );
             }
         }
     });
@@ -51,14 +63,35 @@ fn a_returning_carrier_restores_the_subscriptions_its_hub_held() {
             w.sim.outage(a, sub, secs(41), secs(47));
             w.sim.outage(a, b, secs(41), secs(47));
             w.sim.outage(a, c, secs(41), secs(47));
-            w.sim.command(secs(70), publisher, NCmd::Publish { topic: TOPIC.to_vec(), body: b"after".to_vec() });
+            w.sim.command(
+                secs(70),
+                publisher,
+                NCmd::Publish {
+                    topic: TOPIC.to_vec(),
+                    body: b"after".to_vec(),
+                },
+            );
             w.run(secs(120));
-            let restored = w.sim.events(sub).iter().any(|(_, e)| matches!(e, NEv::Node(NodeEvent::Restored { .. })));
-            assert!(restored, "seed {seed}: the subscriber was never told its subscriptions are live again");
+            let restored = w
+                .sim
+                .events(sub)
+                .iter()
+                .any(|(_, e)| matches!(e, NEv::Node(NodeEvent::Restored { .. })));
+            assert!(
+                restored,
+                "seed {seed}: the subscriber was never told its subscriptions are live again"
+            );
             let got: Vec<_> = w.messages(sub).into_iter().map(|(_, _, _, b)| b).collect();
-            assert!(got.contains(&b"after".to_vec()), "seed {seed}: the restored subscriber missed the publish");
+            assert!(
+                got.contains(&b"after".to_vec()),
+                "seed {seed}: the restored subscriber missed the publish"
+            );
             let id = w.id(sub);
-            assert_eq!(w.sim.node(a).node.broadcast().sub_state(TOPIC, &id), Some(true), "seed {seed}: hub A holds the subscription");
+            assert_eq!(
+                w.sim.node(a).node.broadcast().sub_state(TOPIC, &id),
+                Some(true),
+                "seed {seed}: hub A holds the subscription"
+            );
         }
     });
 }

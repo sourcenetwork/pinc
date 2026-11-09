@@ -36,15 +36,13 @@ use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
 use vinc_keystore::{KeyStore, SoftwareStore};
 use vinc_membership::session::StoreError;
 use vinc_node::{Config as NodeConfig, HUB_ALPN, Node, NodeEvent, Store, TraceItem};
-use vinc_security::{
-    ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys,
-};
+use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
 use vinc_transport::stream::NoSource;
 
-use crate::connect_host::{Outbox, answer_parts};
-use crate::core_net::{metered, CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, CoreSlot, memory};
 use crate::Caps;
+use crate::connect_host::{Outbox, answer_parts};
+use crate::core_net::{CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, CoreSlot, memory, metered};
 
 pub const NK: usize = 24;
 pub const ND: usize = 384;
@@ -86,7 +84,11 @@ impl Store for SealStore {
     }
 
     fn save(&mut self, epoch: u64) -> Result<(), StoreError> {
-        let sealed = self.ks.borrow_mut().seal(&epoch.to_be_bytes()).map_err(|_| StoreError)?;
+        let sealed = self
+            .ks
+            .borrow_mut()
+            .seal(&epoch.to_be_bytes())
+            .map_err(|_| StoreError)?;
         *self.blob.borrow_mut() = sealed;
         Ok(())
     }
@@ -139,7 +141,10 @@ pub enum NCmd {
     Tick,
     Subscribe(Vec<u8>),
     Unsubscribe(Vec<u8>),
-    Publish { topic: Vec<u8>, body: Vec<u8> },
+    Publish {
+        topic: Vec<u8>,
+        body: Vec<u8>,
+    },
     Leave,
     Revoke([u8; 32]),
     AddressChanged,
@@ -179,7 +184,6 @@ impl Sink for Collect {
                 b.truncate(n);
                 Eff::Carrier(to, b)
             }
-            Effect::PeerRelay { .. } => return,
             Effect::Udp { to, datagram } => {
                 let mut b = vec![0u8; 2048];
                 let n = datagram.encode(&mut b).unwrap();
@@ -188,7 +192,7 @@ impl Sink for Collect {
             }
             Effect::Local { from, packet } => Eff::Local(from, packet.to_vec()),
             Effect::Close { node, session, .. } => Eff::Close(node, session),
-            Effect::Wake { .. } => return,
+            Effect::PeerRelay { .. } | Effect::Wake { .. } => return,
             Effect::Trace(t) => Eff::Trace(t),
         });
     }
@@ -261,7 +265,12 @@ pub struct SimNode {
     pub incarnations: Vec<u64>,
 }
 
-fn build(spec: &NodeSpec, now: u64, seal: &SealStore, restarted: bool) -> (Box<NodeT>, Caps, Keypair, SoftPrekeys<Caps>, Drbg) {
+fn build(
+    spec: &NodeSpec,
+    now: u64,
+    seal: &SealStore,
+    restarted: bool,
+) -> (Box<NodeT>, Caps, Keypair, SoftPrekeys<Caps>, Drbg) {
     let alg = IdentityAlg::Ed25519;
     let tag = spec.tag;
     let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
@@ -377,7 +386,7 @@ impl SimNode {
     }
 
     fn wall_ms(&self, now: Time) -> u64 {
-        u64::try_from((WALL_EPOCH as i64 + self.clock.local(now)).max(0)).unwrap() / 1_000_000
+        u64::try_from((WALL_EPOCH.cast_signed() + self.clock.local(now)).max(0)).unwrap() / 1_000_000
     }
 
     fn slot(&mut self, n: &NodeId) -> u16 {
@@ -470,9 +479,14 @@ impl SimNode {
         match ev {
             Event::KeyRequest { session } => {
                 let owned = match self.node.endpoint().query(Query::KeyRequest(session)) {
-                    vinc_core::Answer::KeyRequest(req) => {
-                        Some(answer_parts(&self.prov, &self.kp, &self.prekeys, &mut self.hdrbg, now, &req))
-                    }
+                    vinc_core::Answer::KeyRequest(req) => Some(answer_parts(
+                        &self.prov,
+                        &self.kp,
+                        &self.prekeys,
+                        &mut self.hdrbg,
+                        now,
+                        &req,
+                    )),
                     _ => None,
                 };
                 if let Some(owned) = owned {
@@ -688,8 +702,7 @@ impl SimNode {
                     match t {
                         Trace::CarrierOpened { node, .. } => self.node.member_carrier_opened(now, &node.bytes),
                         Trace::CarrierClosed { node, asleep } => {
-                            self.node
-                                .member_carrier_closed(now, &node.bytes, asleep.then_some(now));
+                            self.node.member_carrier_closed(now, &node.bytes, asleep.then_some(now));
                         }
                         Trace::Pulse { node } => {
                             let sid = self

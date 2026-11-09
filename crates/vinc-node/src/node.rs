@@ -98,7 +98,10 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
     ///
     /// # Errors
     /// [`StartError`] if the protocol id cannot be registered, or a layer refuses to start.
-    #[allow(clippy::too_many_arguments, reason = "a node is built once from the pieces the host owns")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a node is built once from the pieces the host owns"
+    )]
     pub fn new(
         cfg: &Config<R>,
         mut ep: E,
@@ -579,9 +582,7 @@ impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize> 
         self.begin(now);
         self.io.sample_rx();
         if self.io.carriers.len() < crate::config::TABLE_MAX || self.io.carriers.contains_key(member) {
-            self.io
-                .carriers
-                .insert(*member, Carrier::Gone { since: now, sleep });
+            self.io.carriers.insert(*member, Carrier::Gone { since: now, sleep });
         }
         self.io.trace(NodeTrace::Carrier {
             member: tag(member),

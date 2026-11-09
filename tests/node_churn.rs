@@ -1,7 +1,15 @@
 //! Churn over real sessions: joins, crashes, restarts without state and graceful leaves. A failed member is confirmed
 //! down by every other node within the awareness bound; a member that left is reported as left; nobody who stays is
 //! ever confirmed down.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
 
@@ -35,10 +43,19 @@ fn churn_is_noticed_everywhere_and_nobody_else_is_accused() {
                 .collect();
             for &n in &alive {
                 let v = w.view(n);
-                assert!(!v.contains(&ids(crashed)), "seed {seed}: {n:?} still lists the crashed member");
-                assert!(!v.contains(&ids(leaver)), "seed {seed}: {n:?} still lists the member that left");
+                assert!(
+                    !v.contains(&ids(crashed)),
+                    "seed {seed}: {n:?} still lists the crashed member"
+                );
+                assert!(
+                    !v.contains(&ids(leaver)),
+                    "seed {seed}: {n:?} still lists the member that left"
+                );
                 for live in [restarted, steady] {
-                    assert!(live == n || v.contains(&ids(live)), "seed {seed}: {n:?} lost live member {live:?}");
+                    assert!(
+                        live == n || v.contains(&ids(live)),
+                        "seed {seed}: {n:?} lost live member {live:?}"
+                    );
                 }
                 // Completeness: the crashed member was confirmed down within the bound.
                 let down = w.confirmed_down(n, &ids(crashed));

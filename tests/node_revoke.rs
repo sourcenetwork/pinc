@@ -1,5 +1,13 @@
 //! Revocation, graceful leave and incarnations over real sessions.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::similar_names
+)]
 
 mod node_common;
 
@@ -30,28 +38,53 @@ fn a_revoked_member_loses_every_session_within_five_seconds() {
             let mut w = World::build(seed, 3, 5);
             let target = w.members[0];
             let id = w.id(target);
-            let others: Vec<SimId> = w.hubs.iter().map(|(n, _)| *n).chain(w.members[1..].iter().copied()).collect();
+            let others: Vec<SimId> = w
+                .hubs
+                .iter()
+                .map(|(n, _)| *n)
+                .chain(w.members[1..].iter().copied())
+                .collect();
             w.run(secs(40));
             for n in &others {
-                assert!(w.view(*n).contains(&id), "seed {seed}: {n:?} does not list the member before the revocation");
+                assert!(
+                    w.view(*n).contains(&id),
+                    "seed {seed}: {n:?} does not list the member before the revocation"
+                );
             }
             for n in &others {
                 w.sim.command(secs(40), *n, NCmd::Revoke(id));
             }
             w.run(secs(45));
             for n in &others {
-                assert!(!w.view(*n).contains(&id), "seed {seed}: {n:?} still lists the revoked member");
                 assert!(
-                    w.member_events(*n).iter().any(|(t, e)| matches!(e, Event::MemberRevoked { member } if *member == id) && *t <= secs(40) + 5 * SEC),
+                    !w.view(*n).contains(&id),
+                    "seed {seed}: {n:?} still lists the revoked member"
+                );
+                assert!(
+                    w.member_events(*n)
+                        .iter()
+                        .any(|(t, e)| matches!(e, Event::MemberRevoked { member } if *member == id)
+                            && *t <= secs(40) + 5 * SEC),
                     "seed {seed}: {n:?} did not report the revocation within 5 s"
                 );
-                assert_eq!(sessions_with(&w, *n, &id), 0, "seed {seed}: {n:?} still holds a session with the revoked member");
+                assert_eq!(
+                    sessions_with(&w, *n, &id),
+                    0,
+                    "seed {seed}: {n:?} still holds a session with the revoked member"
+                );
             }
             // The revoked member does not come back.
             w.run(secs(160));
             for n in &others {
-                assert!(!w.view(*n).contains(&id), "seed {seed}: {n:?} lists the revoked member again");
-                assert_eq!(sessions_with(&w, *n, &id), 0, "seed {seed}: {n:?} accepted a session from the revoked member");
+                assert!(
+                    !w.view(*n).contains(&id),
+                    "seed {seed}: {n:?} lists the revoked member again"
+                );
+                assert_eq!(
+                    sessions_with(&w, *n, &id),
+                    0,
+                    "seed {seed}: {n:?} accepted a session from the revoked member"
+                );
             }
         }
     });
@@ -64,14 +97,26 @@ fn a_graceful_leave_is_reported_as_left_within_seconds() {
             let mut w = World::build(seed, 3, 5);
             let leaver = w.members[2];
             let id = w.id(leaver);
-            let others: Vec<SimId> = w.hubs.iter().map(|(n, _)| *n).chain(w.members.iter().copied().filter(|m| *m != leaver)).collect();
+            let others: Vec<SimId> = w
+                .hubs
+                .iter()
+                .map(|(n, _)| *n)
+                .chain(w.members.iter().copied().filter(|m| *m != leaver))
+                .collect();
             w.sim.command(secs(40), leaver, NCmd::Leave);
             w.run(secs(60));
             for n in &others {
                 let left = w.left(*n, &id);
                 assert_eq!(left.len(), 1, "seed {seed}: {n:?} reported the leave {left:?}");
-                assert!(left[0] <= secs(40) + 3 * SEC, "seed {seed}: {n:?} reported the leave at {:?}", left[0]);
-                assert!(w.confirmed_down(*n, &id).is_empty(), "seed {seed}: {n:?} reported the leave as a failure");
+                assert!(
+                    left[0] <= secs(40) + 3 * SEC,
+                    "seed {seed}: {n:?} reported the leave at {:?}",
+                    left[0]
+                );
+                assert!(
+                    w.confirmed_down(*n, &id).is_empty(),
+                    "seed {seed}: {n:?} reported the leave as a failure"
+                );
                 assert!(!w.view(*n).contains(&id));
             }
         }
@@ -109,12 +154,26 @@ fn incarnations_only_go_up_across_restarts_and_clock_jumps() {
                 let epochs: Vec<u64> = incs.iter().map(|i| i >> 16).collect();
                 let last = *incs.last().unwrap();
                 // Whatever the node announced at the start of a life, it ends above everything it announced before.
-                assert!(incs.iter().all(|i| *i <= last || (*i >> 16) <= (last >> 16)), "seed {seed}: {n:?} {epochs:?}");
+                assert!(
+                    incs.iter().all(|i| *i <= last || (*i >> 16) <= (last >> 16)),
+                    "seed {seed}: {n:?} {epochs:?}"
+                );
                 let id = w.id(n);
                 // And the hubs hold the node's current record, never an older one.
                 for (h, _) in &w.hubs {
-                    let held = w.sim.node(*h).node.membership().members().find(|(m, _)| **m == id).map(|(_, r)| r.inc);
-                    assert_eq!(held.map(|i| i >> 16), Some(last >> 16), "seed {seed}: hub {h:?} holds an old life of {n:?}");
+                    let held = w
+                        .sim
+                        .node(*h)
+                        .node
+                        .membership()
+                        .members()
+                        .find(|(m, _)| **m == id)
+                        .map(|(_, r)| r.inc);
+                    assert_eq!(
+                        held.map(|i| i >> 16),
+                        Some(last >> 16),
+                        "seed {seed}: hub {h:?} holds an old life of {n:?}"
+                    );
                 }
             }
             // The sealed counter goes up by exactly one per restart.
@@ -122,7 +181,10 @@ fn incarnations_only_go_up_across_restarts_and_clock_jumps() {
             let mut lives = epochs.clone();
             lives.dedup();
             for pair in lives.windows(2) {
-                assert!(pair[1] > pair[0], "seed {seed}: the sealed counter went back: {lives:?}");
+                assert!(
+                    pair[1] > pair[0],
+                    "seed {seed}: the sealed counter went back: {lives:?}"
+                );
             }
             assert_eq!(lives.len(), 4, "seed {seed}: {lives:?}");
         }
