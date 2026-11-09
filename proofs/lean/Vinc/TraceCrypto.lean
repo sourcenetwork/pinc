@@ -251,10 +251,9 @@ def replayEvent (j : J) : Except String Unit := do
     let a ← algOf (← natF j "alg")
     let need := if (← strF j "kind") == "pub" then a.pkLen else a.sigLen
     let r := writeOut need (← natF j "out")
-    match (← field j "res") with
-    | .num n => check (match r with | .ok m => m == n | .error _ => false) "write: expected a refusal"
-    | .str s => check (resName r == s) "write"
-    | _ => throw "write res"
+    let n ← natF j "n"
+    check (resName r == (← strF j "res")) "write"
+    check (match r with | .ok m => m == n | .error _ => n == 0) "write: length"
   | "drbg" => replayDrbg j
   | "key" =>
     let alg := if (← natF j "alg") == 0 then Aead.chacha20Poly1305 else Aead.aes128Gcm

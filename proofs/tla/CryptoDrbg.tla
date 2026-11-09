@@ -23,7 +23,7 @@
 (*                    fill, so no (key, nonce) pair and no output byte     *)
 (*                    repeats, also across reseeds                         *)
 (*   OutputsDisjoint  two outputs come from different keys                 *)
-(*   RefusedUnchanged a request over MAX_FILL leaves the state as it was   *)
+(*   RefuseKeeps      a request over MAX_FILL leaves the state as it was   *)
 (*   StreamHolds      every accepted request fits the 2^32 - 1 blocks the  *)
 (*                    stream serves, so the error path (which wipes the    *)
 (*                    output) is unreachable                               *)
@@ -122,7 +122,6 @@ Spec == Init /\ [][Next]_vars
 
 NeverReuse == pc[1] = "cipher" => key \notin used
 OutputsDisjoint == \A i, j \in 1..Len(outs) : i # j => outs[i][1] # outs[j][1]
-RefusedUnchanged == \A n \in Lens : n > MaxFill => ~Fits(n) \/ n > MaxFill   \* a refused request is never within the stream by accident
 StreamHolds == \A n \in Lens : n <= MaxFill => Fits(n)
 NoResidue == pc[1] = "idle" => residue = {}
 FailUnreachable == pc[1] = "wipe" => Fits(pc[2])

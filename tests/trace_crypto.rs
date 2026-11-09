@@ -633,8 +633,8 @@ fn kp_trace(out: &mut String) {
                 let mut buf = vec![0u8; len];
                 let r = if kind == "pub" { kp.public_key(&mut buf) } else { kp.sign(b"m", &mut buf) };
                 let rs = match &r {
-                    Ok(n) => format!("{n}"),
-                    Err(e) => format!("\"{e:?}\""),
+                    Ok(n) => format!("\"ok\",\"n\":{n}"),
+                    Err(e) => format!("\"{e:?}\",\"n\":0"),
                 };
                 let _ = writeln!(
                     out,
