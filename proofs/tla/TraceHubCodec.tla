@@ -21,7 +21,7 @@ EXTENDS Integers, Sequences, TLC, Json, IOUtils
 
 VARIABLE c
 
-H == INSTANCE HubCodec WITH f <- 0
+H == INSTANCE HubCodec WITH f <- 0, Part <- "hello"
 U == INSTANCE U64
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/mcodec.ndjson")
