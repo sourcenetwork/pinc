@@ -197,8 +197,8 @@ pub fn put_bound(buf: &mut Vec<u8>, last: &mut Vec<u8>, b: &[u8]) -> Result<(), 
 /// Read one bound against `last`, the previous bound of the message, into `last`. The bound is at most `max` bytes.
 ///
 /// # Errors
-/// [`Reason::Bound`] if the shared prefix is longer than `last` or the bound longer than `max`, [`Reason::Truncated`]
-/// if the message ends inside it.
+/// [`Reason::Bound`] if the shared prefix is longer than `last`, not the longest one the encoder writes, or the bound
+/// longer than `max`, [`Reason::Truncated`] if the message ends inside it.
 #[cfg(feature = "alloc")]
 pub fn read_bound(last: &mut Vec<u8>, r: &mut Reader<'_>, max: usize) -> Result<(), Reason> {
     let c = usize::from(r.read_u8().map_err(|_| Reason::Truncated)?);
@@ -207,6 +207,10 @@ pub fn read_bound(last: &mut Vec<u8>, r: &mut Reader<'_>, max: usize) -> Result<
         return Err(Reason::Bound);
     }
     let suffix = r.read_bytes(n).map_err(|_| Reason::Truncated)?;
+    // One encoding per bound: the shared prefix length is the longest one the encoder writes (capped at 255).
+    if c < usize::from(u8::MAX) && last.get(c).is_some_and(|x| suffix.first() == Some(x)) {
+        return Err(Reason::Bound);
+    }
     last.truncate(c);
     last.extend_from_slice(suffix);
     Ok(())

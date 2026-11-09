@@ -833,6 +833,10 @@ impl Core {
                         return Err(Reason::Count.into());
                     }
                     let seen = r.read_bytes(c.div_ceil(8)).map_err(|_| Reason::Truncated)?;
+                    // The bits past the count are zero, so the bitmap has one encoding.
+                    if c % 8 != 0 && seen.last().is_some_and(|byte| byte >> (c % 8) != 0) {
+                        return Err(Reason::Count.into());
+                    }
                     for j in 0..c {
                         let bit = seen.get(j >> 3).is_some_and(|byte| byte >> (j & 7) & 1 == 1);
                         if !bit {
