@@ -187,13 +187,16 @@ def chunks (bs : List Nat) : List (List Nat) :=
 termination_by bs.length
 decreasing_by simp [entryLen] at *; omega
 
+/-- One entry of a snapshot: it must be alive. -/
+def snapEntry (c : List Nat) : Except Err Entry := do
+  let e ← entryOf c
+  if e.alive != .alive then throw Err.snapNotAlive
+  pure e
+
 /-- `Snap::new` over the entry bytes, returning the entries. -/
 def snapNew (bs : List Nat) : Except Err (List Entry) :=
   if bs.length % entryLen ≠ 0 ∨ snapMax < (chunks bs).length then .error .snapSize
-  else (chunks bs).mapM fun c => do
-    let e ← entryOf c
-    if e.alive != .alive then throw Err.snapNotAlive
-    pure e
+  else (chunks bs).mapM snapEntry
 
 /-- The probes of a DOWN, `n` of them, each `age(4) path(1)`. -/
 def rdProbes : Nat → List Nat → Except Err (List Probe × List Nat)
@@ -209,47 +212,63 @@ def rdProbes : Nat → List Nat → Except Err (List Probe × List Nat)
     let (ps, r) ← rdProbes k r
     pure (⟨age, path⟩ :: ps, r)
 
+/-- The body of a HELLO after the header. -/
+def pHello (r : List Nat) : Except Err Frame := do
+  let (inc, r) ← rdBE 8 r
+  let (ver, r) ← rdBE 2 r
+  let (th, r) ← rdBytes 8 r
+  let (flags, r) ← rdU8 r
+  if flags / 4 ≠ 0 then throw Err.helloFlag
+  only Err.helloLen r
+  pure (.hello ⟨inc, ver, th⟩ (flags % 2 == 1) (flags / 2 % 2 == 1))
+
+/-- The body of a DELTA after the header. -/
+def pDelta (r : List Nat) : Except Err Frame := do
+  let (eb, r) ← rdBytes entryLen r
+  let e ← entryOf eb
+  only Err.deltaLen r
+  pure (.delta e)
+
+/-- The body of a SNAP after the header. -/
+def pSnap (r : List Nat) : Except Err Frame := do
+  let (flags, r) ← rdU8 r
+  if flags / 4 ≠ 0 then throw Err.snapFlag
+  let (eb, _) ← rdBytes r.length r
+  let es ← snapNew eb
+  pure (.snap (flags % 2 == 1) (flags / 2 % 2 == 1) es)
+
+/-- The body of a DOWN after the header. -/
+def pDown (r : List Nat) : Except Err Frame := do
+  let (member, r) ← rdBytes 32 r
+  let (inc, r) ← rdBE 8 r
+  let (sil, r) ← rdBE 4 r
+  let (n, r) ← rdU8 r
+  if n = 0 ∨ maxProbes < n then throw Err.probeCount
+  let (ps, r) ← rdProbes n r
+  only Err.downLen r
+  let some pf := Proof.new sil ps | throw Err.probeCount
+  pure (.down member inc pf)
+
+/-- What a frame of type `ty` with `topic` and the bytes `r` after the topic is. -/
+def dispatch (ty : Nat) (topic r : List Nat) : Except Err Frame :=
+  match ty with
+  | 1 => pHello r
+  | 2 => do only Err.ackLen r; pure .ack
+  | 12 => do only Err.probeLen r; pure .probe
+  | 3 => pDelta r
+  | 4 => pSnap r
+  | 13 => pDown r
+  | _ => do
+    let (rest, _) ← rdBytes r.length r
+    pure (.other ty topic rest)
+
 /-- `Frame::parse`: one frame body (the bytes after the length prefix). -/
 def parse (body : List Nat) : Except Err Frame := do
   let (ty, r) ← rdU8 body
   let (tl, r) ← rdU8 r
   let (topic, r) ← rdBytes tl r
   if topic ≠ [] ∧ isMem ty then throw Err.topicOnMembership
-  match ty with
-  | 1 =>
-    let (inc, r) ← rdBE 8 r
-    let (ver, r) ← rdBE 2 r
-    let (th, r) ← rdBytes 8 r
-    let (flags, r) ← rdU8 r
-    if flags / 4 ≠ 0 then throw Err.helloFlag
-    only Err.helloLen r
-    pure (.hello ⟨inc, ver, th⟩ (flags % 2 == 1) (flags / 2 % 2 == 1))
-  | 2 => do only Err.ackLen r; pure .ack
-  | 12 => do only Err.probeLen r; pure .probe
-  | 3 =>
-    let (eb, r) ← rdBytes entryLen r
-    let e ← entryOf eb
-    only Err.deltaLen r
-    pure (.delta e)
-  | 4 =>
-    let (flags, r) ← rdU8 r
-    if flags / 4 ≠ 0 then throw Err.snapFlag
-    let (eb, _) ← rdBytes r.length r
-    let es ← snapNew eb
-    pure (.snap (flags % 2 == 1) (flags / 2 % 2 == 1) es)
-  | 13 =>
-    let (member, r) ← rdBytes 32 r
-    let (inc, r) ← rdBE 8 r
-    let (sil, r) ← rdBE 4 r
-    let (n, r) ← rdU8 r
-    if n = 0 ∨ maxProbes < n then throw Err.probeCount
-    let (ps, r) ← rdProbes n r
-    only Err.downLen r
-    let some pf := Proof.new sil ps | throw Err.probeCount
-    pure (.down member inc pf)
-  | _ =>
-    let (rest, _) ← rdBytes r.length r
-    pure (.other ty topic rest)
+  dispatch ty topic r
 
 /-- `Frame::read`: the next frame of a stream buffer; `none` means more bytes are needed; the number is the bytes
 used, the length prefix included. -/
