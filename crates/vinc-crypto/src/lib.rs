@@ -10,7 +10,9 @@
 //!
 //! The test-only `trace` feature records what every [`Transcript`] absorbs once a thread arms it (it needs `std` and
 //! allocates then); it is off by default and costs nothing off.
-#![no_std]
+//! The optional `derive-trace` feature (for test and simulation builds only; it needs `std`) lets a host observe
+//! every [`extract`] and [`expand`] call through [`trace`], so a simulator can follow which secrets a key derives from.
+#![cfg_attr(not(feature = "derive-trace"), no_std)]
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "trace")]
@@ -23,6 +25,8 @@ pub mod kdf;
 pub mod provider;
 pub mod secret;
 pub mod software;
+#[cfg(feature = "derive-trace")]
+pub mod trace;
 pub mod transcript;
 
 pub use drbg::Drbg;

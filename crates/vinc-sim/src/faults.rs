@@ -1,16 +1,16 @@
 //! Scheduled changes to the world: link changes, partitions, NAT rebinding, node lifecycle, interface and clock
 //! faults, and the adversaries. Each `at` is a virtual time; a time in the past runs at the current time.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::Time;
-use crate::adversary::{Flood, FloodPayload, FloodSpec, Replay};
+use crate::adversary::{Captured, Flood, FloodPayload, FloodSpec, Replay, Tap, TapSpec, TapStats};
 use crate::config::{CostModel, LanDir, NodeState};
 use crate::ids::{HostId, LanId, NatId, NodeId, ObsId};
 use crate::link::LinkChange;
 use crate::node::{IfaceEvent, Node, StreamEvent, StreamId};
 use crate::rng::{Random, Stream};
-use crate::sim::{Ev, IfaceChange, LanPartition, Sim, SiteRef};
+use crate::sim::{Ev, IfaceChange, LanPartition, Packet, Sim, SiteRef};
 
 impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
     /// Changes the link from `from` to `to` at time `at` (an outage, an MTU change, a bandwidth step, ...).
@@ -193,6 +193,94 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             spacing,
         });
         self.push(at, Ev::ReplayStep(id));
+    }
+
+    /// Installs the inbound adversary (see [`TapSpec`]); it draws from [`Stream::Adversary`]. A second call replaces
+    /// the first and forgets what it captured.
+    pub fn tap_inbound(&mut self, spec: TapSpec) {
+        self.tap = Some(Tap {
+            spec,
+            rng: R::derive(self.seed, Stream::Adversary),
+            captured: Vec::new(),
+            stats: TapStats::default(),
+        });
+    }
+
+    /// The datagrams the inbound adversary has kept, in the order it saw them.
+    pub fn tap_captured(&self) -> &[Captured] {
+        self.tap.as_ref().map_or(&[], |t| &t.captured)
+    }
+
+    /// What the inbound adversary has done so far.
+    pub fn tap_stats(&self) -> TapStats {
+        self.tap.as_ref().map(|t| t.stats).unwrap_or_default()
+    }
+
+    /// Hands `data` to `node` at time `at` as if it had arrived from `src` at `dst`, bypassing every link, NAT and
+    /// firewall (the adversary sits inside the access network). It is dropped when the node is not running or has no
+    /// interface up at `dst`.
+    pub fn inject_at(&mut self, at: Time, node: NodeId, src: SocketAddr, dst: SocketAddr, data: Vec<u8>) {
+        self.push(
+            at,
+            Ev::Inject {
+                node: node.0,
+                src,
+                dst,
+                data,
+            },
+        );
+    }
+
+    /// The inbound adversary's decision for the datagram `p` reaching node `n` at `t`: capture it, and for a victim
+    /// replay it later or flip a bit of it.
+    pub(crate) fn tap_datagram(&mut self, t: Time, n: usize, p: &mut Packet) {
+        let Some(mut tap) = self.tap.take() else { return };
+        let sp = &tap.spec;
+        let eligible = p.data.len() >= sp.capture_min
+            && tap.captured.len() < sp.capture_max
+            && (!sp.first_flights_only || p.data.first().is_some_and(|b| b & 0x80 != 0));
+        if eligible && tap.rng.random() < tap.spec.capture_prob {
+            tap.captured.push(Captured {
+                node: NodeId(n as u32),
+                src: p.src,
+                dst: p.dst,
+                data: p.data.clone(),
+            });
+        }
+        if tap.spec.victims.iter().any(|v| v.index() == n) {
+            let r = tap.rng.random();
+            if r < tap.spec.replay {
+                let delay = 1_000_000 + tap.rng.below(2_000_000_000);
+                tap.stats.replayed += 1;
+                self.inject_at(t + delay, NodeId(n as u32), p.src, p.dst, p.data.clone());
+            } else if r < tap.spec.replay + tap.spec.modify && !p.data.is_empty() {
+                let (byte, bit) = (tap.rng.below(p.data.len() as u64) as usize, tap.rng.below(8));
+                p.data[byte] ^= 1 << bit;
+                tap.stats.modified += 1;
+            }
+        }
+        self.tap = Some(tap);
+    }
+
+    pub(crate) fn on_inject(&mut self, t: Time, n: usize, src: SocketAddr, dst: SocketAddr, mut data: Vec<u8>) {
+        let slot = &self.nodes[n];
+        let why = match slot.state {
+            NodeState::Crashed => Some(crate::metrics::DropReason::NodeDown),
+            NodeState::Suspended => Some(crate::metrics::DropReason::NodeAsleep),
+            NodeState::Up if !slot.ifaces.iter().any(|i| i.up && i.addr == dst.ip()) => {
+                Some(crate::metrics::DropReason::NoIface)
+            }
+            NodeState::Up => None,
+        };
+        if let Some(why) = why {
+            self.count_drop(t, why, data.len());
+            return;
+        }
+        self.metrics.injected += 1;
+        let len = data.len();
+        self.nodes[n].node.handle_datagram(t, dst, src, &mut data);
+        let send_at = self.finish_call(n, t, crate::config::Call::Datagram, len);
+        self.drive(n, t, send_at, false);
     }
 
     pub(crate) fn on_flood(&mut self, t: Time, i: usize) {

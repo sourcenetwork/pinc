@@ -38,12 +38,14 @@ pub mod reference;
 mod rng;
 mod sim;
 mod stream;
+#[cfg(feature = "suite")]
+pub mod suite;
 mod tcp;
 mod topology;
 pub mod toy;
 pub mod toy_stream;
 
-pub use adversary::{FloodPayload, FloodSpec, ObsRecord, Observer};
+pub use adversary::{Captured, FloodPayload, FloodSpec, ObsRecord, Observer, TapSpec, TapStats};
 pub use clock::Clock;
 pub use config::{Call, CostModel, Cpu, Driver, FlatCost, LanConfig, LanDir, NodeState, SimConfig, StreamPolicy};
 pub use ids::{HostId, IfaceId, LanId, NatId, NodeId, ObsId, SiteId};

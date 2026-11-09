@@ -77,16 +77,26 @@ panic = "abort"
 inherits = "release"
 debug = true
 
-# The multi-GiB value tests hash gigabytes; keep the hash fast in the dev and test profiles.
-[profile.dev.package.blake3]
+# Tests hash gigabytes, sign thousands of messages and run real endpoints for minutes of virtual time, which the
+# unoptimised build of the dependencies and of the hot crates makes an order of magnitude too slow. Debug assertions
+# and overflow checks stay on.
+[profile.dev.package."*"]
 opt-level = 3
 
-# The broadcast tests sign and verify thousands of messages; keep the Ed25519 arithmetic fast in the dev and test profiles.
-[profile.dev.package.curve25519-dalek]
+[profile.dev.package.vinc-wire]
 opt-level = 3
 
-[profile.dev.package.ed25519-dalek]
+[profile.dev.package.vinc-crypto]
 opt-level = 3
 
-[profile.dev.package.sha2]
+[profile.dev.package.vinc-security]
+opt-level = 3
+
+[profile.dev.package.vinc-transport]
+opt-level = 3
+
+[profile.dev.package.vinc-core]
+opt-level = 3
+
+[profile.dev.package.vinc-sim]
 opt-level = 3

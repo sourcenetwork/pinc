@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
-use crate::adversary::{Flood, Observer, Replay};
+use crate::adversary::{Flood, Observer, Replay, Tap};
 use crate::config::{Call, CostModel, Cpu, Driver, FlatCost, LanConfig, LanDir, NodeState, SimConfig};
 use crate::ids::{HostId, IfaceId, NatId, NodeId, ObsId, SiteId};
 use crate::link::{Link, LinkChange};
@@ -191,6 +191,12 @@ pub(crate) enum Ev<C> {
     },
     FloodTick(u32),
     ReplayStep(u32),
+    Inject {
+        node: u32,
+        src: SocketAddr,
+        dst: SocketAddr,
+        data: Vec<u8>,
+    },
 }
 
 pub(crate) struct Entry<C> {
@@ -243,6 +249,7 @@ pub struct Sim<N: Node, R: Random = Rng, C: CostModel = FlatCost> {
     pub(crate) observers: Vec<Observer>,
     pub(crate) floods: Vec<Flood<R>>,
     pub(crate) replays: Vec<Replay>,
+    pub(crate) tap: Option<Tap<R>>,
     pub(crate) metrics: Metrics,
     pub(crate) trace: Option<String>,
     pub(crate) buf: Vec<u8>,
@@ -286,6 +293,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             observers: Vec::new(),
             floods: Vec::new(),
             replays: Vec::new(),
+            tap: None,
             metrics: Metrics::default(),
             trace: cfg.trace.then(String::new),
             buf: vec![0; BUF_LEN],
@@ -376,7 +384,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
                 SiteKind::Iface { node, .. } => Some(node),
                 _ => None,
             },
-            Ev::Timer { node, .. } => Some(*node),
+            Ev::Timer { node, .. } | Ev::Inject { node, .. } => Some(*node),
             _ => None,
         };
         if let Some(n) = gated {
@@ -419,6 +427,7 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             Ev::ClockDrift { node, ppm } => self.on_clock_drift(t, node as usize, ppm),
             Ev::FloodTick(i) => self.on_flood(t, i as usize),
             Ev::ReplayStep(i) => self.on_replay(t, i as usize),
+            Ev::Inject { node, src, dst, data } => self.on_inject(t, node as usize, src, dst, data),
         }
     }
 

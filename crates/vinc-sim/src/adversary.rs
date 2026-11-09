@@ -1,8 +1,10 @@
-//! Adversaries: an on-path observer that records traffic, spoofed floods, and replay of captured datagrams.
+//! Adversaries: an on-path observer that records traffic, spoofed floods, replay of captured datagrams, and an inbound
+//! tap that captures, replays and corrupts what reaches the nodes.
 
 use std::net::SocketAddr;
 
 use crate::Time;
+use crate::ids::NodeId;
 
 /// One datagram an observer saw.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,4 +93,59 @@ pub(crate) struct Replay {
     pub(crate) next: usize,
     pub(crate) end: usize,
     pub(crate) spacing: Time,
+}
+
+/// The inbound adversary: it sees every datagram at the moment it reaches a node (after the NAT, the firewall and the
+/// middlebox, so it sits inside the access network), may keep a copy of large first flights, and for the victims may
+/// replay a datagram later or flip one bit of it. Install it with [`crate::Sim::tap_inbound`].
+///
+/// Draw order per datagram, from the adversary's own stream: one draw for the capture decision (only when the datagram
+/// is eligible and the capture list is not full), then for a victim one draw choosing replay, modify or neither, then
+/// for a replay one draw for its delay, for a modification two draws for the byte and the bit.
+#[derive(Clone, Debug)]
+pub struct TapSpec {
+    /// The nodes whose inbound datagrams are replayed or corrupted.
+    pub victims: Vec<NodeId>,
+    /// Probability that an inbound datagram at a victim is replayed (delivered now and again after 1 ms plus up to 2 s).
+    pub replay: f64,
+    /// Probability that an inbound datagram at a victim is delivered with one random bit flipped.
+    pub modify: f64,
+    /// Datagrams of at least this many bytes are eligible for capture.
+    pub capture_min: usize,
+    /// Probability that an eligible datagram is captured.
+    pub capture_prob: f64,
+    /// At most this many datagrams are kept.
+    pub capture_max: usize,
+    /// Capture only datagrams whose first byte has its high bit set (the long-header form of the first flight of a
+    /// QUIC-style handshake).
+    pub first_flights_only: bool,
+}
+
+/// A datagram the inbound adversary kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Captured {
+    /// The node it reached.
+    pub node: NodeId,
+    /// Its source as the node saw it.
+    pub src: SocketAddr,
+    /// Its destination address on the node.
+    pub dst: SocketAddr,
+    /// The bytes.
+    pub data: Vec<u8>,
+}
+
+/// What the inbound adversary did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TapStats {
+    /// Datagrams scheduled for replay.
+    pub replayed: u64,
+    /// Datagrams delivered with a flipped bit.
+    pub modified: u64,
+}
+
+pub(crate) struct Tap<R> {
+    pub(crate) spec: TapSpec,
+    pub(crate) rng: R,
+    pub(crate) captured: Vec<Captured>,
+    pub(crate) stats: TapStats,
 }

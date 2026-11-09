@@ -12,6 +12,8 @@ publish.workspace = true
 default = []
 # Test-only record of what every transcript absorbs, for trace validation. Allocates once armed; costs nothing when off.
 trace = []
+# Lets a simulator observe every key derivation (see `trace`); test and simulation builds only, needs `std`.
+derive-trace = []
 
 [dependencies]
 vinc-wire = { workspace = true }

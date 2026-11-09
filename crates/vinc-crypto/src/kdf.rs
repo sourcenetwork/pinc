@@ -21,7 +21,10 @@ pub mod labels {
 
 /// Extract a pseudo-random key from the input keying material `ikm`, keyed by `salt`.
 pub fn extract(salt: &[u8; 32], ikm: &[u8]) -> [u8; 32] {
-    *blake3::keyed_hash(salt, ikm).as_bytes()
+    let out = *blake3::keyed_hash(salt, ikm).as_bytes();
+    #[cfg(feature = "derive-trace")]
+    crate::trace::emit(&crate::trace::Derivation::Extract { salt, ikm, out: &out });
+    out
 }
 
 /// Fill `out` with key material derived from `prk` and `ctx` under `label`.
@@ -33,4 +36,6 @@ pub fn expand(prk: &[u8; 32], label: &'static str, ctx: &[u8], out: &mut [u8]) {
     hasher.update(ctx);
     hasher.finalize_xof().fill(out);
     hasher.zeroize();
+    #[cfg(feature = "derive-trace")]
+    crate::trace::emit(&crate::trace::Derivation::Expand { prk, label, ctx, out });
 }

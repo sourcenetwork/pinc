@@ -23,7 +23,7 @@ vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
-vinc-sim = { workspace = true, features = ["reference"] }
+vinc-sim = { workspace = true, features = ["reference", "suite"] }
 vinc-connect = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dtn = { workspace = true }
@@ -419,6 +419,10 @@ name = "core_props"
 path = "core_props.rs"
 
 [[test]]
+name = "scenario_crypto"
+path = "scenario_crypto.rs"
+
+[[test]]
 name = "transport_wide"
 path = "transport_wide.rs"
 
@@ -481,6 +485,10 @@ path = "trace_values_verify.rs"
 [[test]]
 name = "trace_membership"
 path = "trace_membership.rs"
+
+[[test]]
+name = "scenario_grade"
+path = "scenario_grade.rs"
 
 [lints]
 workspace = true
@@ -613,3 +621,55 @@ path = "trace_dtn_seal.rs"
 [[test]]
 name = "trace_dtn_store"
 path = "trace_dtn_store.rs"
+
+[[test]]
+name = "scenario_world"
+path = "scenario_world.rs"
+
+[[test]]
+name = "scenario_proto"
+path = "scenario_proto.rs"
+
+[[test]]
+name = "scenario_node"
+path = "scenario_node.rs"
+
+[[test]]
+name = "scenario_s1"
+path = "scenario_s1.rs"
+
+[[test]]
+name = "scenario_internet"
+path = "scenario_internet.rs"
+
+[[test]]
+name = "scenario_mobile"
+path = "scenario_mobile.rs"
+
+[[test]]
+name = "scenario_hostile"
+path = "scenario_hostile.rs"
+
+[[test]]
+name = "scenario_adversarial"
+path = "scenario_adversarial.rs"
+
+[[test]]
+name = "scenario_churn"
+path = "scenario_churn.rs"
+
+[[test]]
+name = "scenario_large"
+path = "scenario_large.rs"
+
+[[test]]
+name = "scenario_determinism"
+path = "scenario_determinism.rs"
+
+[[test]]
+name = "sim_tap"
+path = "sim_tap.rs"
+
+[[test]]
+name = "scenario_diag"
+path = "scenario_diag.rs"

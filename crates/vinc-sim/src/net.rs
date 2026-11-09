@@ -381,6 +381,9 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             self.tcp_input(t, n, dst, src, *seg);
             return;
         }
+        if self.tap.is_some() {
+            self.tap_datagram(t, n, &mut p);
+        }
         let len = p.data.len();
         let keep = self.cfg.latency_samples;
         let m = &mut self.metrics.nodes[n];

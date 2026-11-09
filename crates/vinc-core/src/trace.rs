@@ -270,10 +270,12 @@ impl TraceLog {
         Self
     }
 
+    #[allow(clippy::unused_self)] // the stub keeps the signature of the real log
     pub(crate) fn pop(&mut self) -> Option<TraceRecord> {
         None
     }
 
+    #[allow(clippy::unused_self)] // the stub keeps the signature of the real log
     pub(crate) const fn dropped(&self) -> u64 {
         0
     }

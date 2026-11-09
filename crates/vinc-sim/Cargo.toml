@@ -11,9 +11,16 @@ publish.workspace = true
 [features]
 # The reference random source: a bit-exact port of CPython's `random` and the reference seed derivation.
 reference = ["dep:blake2"]
+# The scenario suite: the reference harness's worlds, protocols, gates and metrics run against the real `vinc-core`
+# endpoint with real crypto.
+suite = ["reference", "dep:vinc-core", "dep:vinc-crypto", "dep:vinc-security", "dep:vinc-transport"]
 
 [dependencies]
 blake2 = { workspace = true, optional = true }
+vinc-core = { workspace = true, optional = true, features = ["alloc"] }
+vinc-crypto = { workspace = true, optional = true, features = ["derive-trace"] }
+vinc-security = { workspace = true, optional = true }
+vinc-transport = { workspace = true, optional = true, features = ["alloc"] }
 
 [lints]
 workspace = true

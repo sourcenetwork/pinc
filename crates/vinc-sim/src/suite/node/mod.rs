@@ -1,0 +1,426 @@
+//! The node adapter: a real `vinc-core` endpoint with instrumented crypto, driven as a simulator [`Node`].
+//!
+//! [`SuiteNode`] wraps one endpoint (rebuilt on every restart) and the protocol layers of the node
+//! ([`Layers`]). It answers the endpoint's key requests with a deterministic
+//! software identity, answers its access checks through the recorder's oracle after the world's latency, splits
+//! the endpoint's batched transmits into single datagrams, reports every datagram and every state sample to the
+//! recorder, and implements [`Host`](crate::suite::proto::host::Host) so the layers can dial, open streams and write.
+//! [`Shared`] holds what all nodes of a run share; [`SuiteCost`] is the simulator's cost model for the suite.
+//!
+//! # What the runner does
+//!
+//! - Builds one [`Shared`] per run and one [`SuiteNode`] per world node, adds them to the simulator in world order, and
+//!   gives each simulator interface the address [`iface_ip`] of the matching world interface.
+//! - Stops every node at time 0 (`Sim::crash`) and starts it at its start time (`Sim::restart`): a node begins stopped,
+//!   and each restart builds a new incarnation. A restart that keeps no state must be scheduled at the time of its
+//!   `restart` action with a false flag.
+//! - Sends [`Cmd::Persist`] every 60 s, [`Cmd::Shutdown`] and then a crash at the same time for a leave or upgrade,
+//!   [`Cmd::Revoke`] to every node when the oracle revokes a peer (it also calls `Rec::revoke`), [`Cmd::Intent`] for
+//!   each application intent, and [`Cmd::Compromise`] at a key compromise (the node then calls
+//!   `Registry::note_compromise` with its identity seed and its current exported state; for a node that is down, use
+//!   [`SuiteNode::identity_seed`] and [`SuiteNode::exported`]).
+//! - Records what only it knows: `Rec::suspended`, `Rec::address_change` and `Rec::nat_rebind` (the node records
+//!   `node_started`, `node_stopped`, `resumed`, `link_returned` on an interface coming up, and `restarted_with_state`,
+//!   which need the layers' open intents; the reference records it for every `restart` action of the world, state kept or
+//!   not, so a restart at the time of such an action does, and an upgrade does not). A path-MTU violation is the simulator's `DropReason::Mtu` count. The runner
+//!   tells a node about address changes and moves that the simulator does not deliver while the node is not running
+//!   with [`SuiteNode::mark_moved`] and [`SuiteNode::set_iface_up`].
+//! - Feeds the amplification ledger of `Registry::sec_verdict` from the simulator, which alone sees unvalidated sources.
+//!
+//! # Limits of the adapter
+//!
+//! Only UDP interfaces are used (the endpoint has no stream carrier). The state size reported to the recorder is an
+//! estimate built from counts the endpoint exposes (see [`SESSION_STATE_BYTES`]). The redundant-bytes count of a datagram
+//! is zero here: the value store, which knows what it already holds, sits above the adapter. The endpoint's connection
+//! memory is leaked once per incarnation (about 16 MiB: the slot table is resident, the buffer pools only as far as they are used);
+//! an idle node holds about 17 MiB. The endpoint is half a megabyte, so build a node on a thread with a stack of a few megabytes.
+//!
+//! Invariants: the endpoint sees the node's local clock, the layers and the recorder see true time; a node's identity is created once
+//! and kept across restarts; nothing here reads a clock, a socket or a random source of the machine.
+
+mod core;
+mod cost;
+mod mem;
+mod shared;
+
+use std::net::{IpAddr, SocketAddr};
+use std::rc::Rc;
+
+use self::core::{Core, Phase};
+pub use self::core::{LEDGER_ENTRY_BYTES, LOCAL_BASE, MAX_GSO, PEER_ENTRY_BYTES, SESSION_STATE_BYTES};
+pub use self::cost::{HANDLER_CALL_NS, SuiteCost};
+pub use self::mem::{CHUNKS_PER_CONN, Ep, SESSIONS};
+pub use self::shared::{SetupError, Shared, identity_seed, iface_ip};
+use crate::suite::proto::host::Layers;
+use crate::suite::world::model::Intent;
+use crate::{Clock, IfaceEvent, Node, Time, Transmit, Work};
+
+/// A scenario command for a suite node.
+#[derive(Debug)]
+pub enum Cmd {
+    /// Export the endpoint state into the persisted bytes (the runner sends it every 60 s).
+    Persist,
+    /// The node leaves on purpose (leave or upgrade): the endpoint closes its sessions and exports its state; the runner
+    /// crashes the node at the same time.
+    Shutdown,
+    /// The oracle revoked this peer: end its sessions and refuse it from now on.
+    Revoke(usize),
+    /// An application intent for the layers.
+    Intent(Box<Intent>),
+    /// The adversary compromised this node: its identity seed and current state become known to it.
+    Compromise,
+}
+
+/// What a suite node reports to the engine's event log (session level only, so a trace stays small).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeEvent {
+    /// An incarnation started; `restored` says it loaded persisted state.
+    Started {
+        /// State was restored.
+        restored: bool,
+    },
+    /// The node stopped for good: a graceful leave (a crash is the engine's own record).
+    Stopped,
+    /// A dial of this node is open.
+    Connected {
+        /// The peer's world index.
+        peer: usize,
+        /// The session resumed an earlier one.
+        resumed: bool,
+    },
+    /// A peer's session is open.
+    Incoming {
+        /// The peer's world index.
+        peer: usize,
+    },
+    /// A dial ended without a session.
+    ConnectFailed {
+        /// The peer's world index.
+        peer: usize,
+        /// Why the endpoint gave up; `None` when the node itself closed the session (a revoked peer).
+        reason: Option<vinc_core::ConnectFailure>,
+    },
+    /// A session ended.
+    Closed {
+        /// The peer's world index.
+        peer: usize,
+    },
+    /// The oracle revoked a peer.
+    Revoked {
+        /// The peer's world index.
+        peer: usize,
+    },
+    /// The node was suspended.
+    Suspended,
+    /// The node resumed.
+    Resumed,
+}
+
+/// One node of a suite run; see the module docs.
+pub struct SuiteNode<L: Layers> {
+    core: Core,
+    layers: L,
+    /// The time of the last link-returned record: the interfaces of one handover come up together and count once.
+    link_returned_at: Option<Time>,
+}
+
+impl<L: Layers> SuiteNode<L> {
+    /// Node `idx` of the shared world, running `layers`. The node starts stopped.
+    ///
+    /// # Errors
+    /// [`SetupError::NoSuchNode`] if `idx` is not in the world, or an identity error.
+    pub fn new(shared: Rc<Shared>, idx: usize, layers: L) -> Result<Self, SetupError> {
+        Ok(Self {
+            core: Core::new(shared, idx)?,
+            layers,
+            link_returned_at: None,
+        })
+    }
+
+    /// The node's index in the world.
+    pub fn idx(&self) -> usize {
+        self.core.idx
+    }
+
+    /// The layers, for inspection.
+    pub fn layers(&self) -> &L {
+        &self.layers
+    }
+
+    /// The layers, mutably.
+    pub fn layers_mut(&mut self) -> &mut L {
+        &mut self.layers
+    }
+
+    /// Whether an incarnation is running.
+    pub fn running(&self) -> bool {
+        self.core.running()
+    }
+
+    /// How many incarnations have started.
+    pub fn incarnation(&self) -> u64 {
+        self.core.incarnation
+    }
+
+    /// The largest exported state so far in bytes (the recorder's `NodeFacts.export_max`).
+    pub fn max_export(&self) -> usize {
+        self.core.max_export
+    }
+
+    /// The bytes the node would return from a crash now: the last exported state.
+    pub fn exported(&self) -> &[u8] {
+        &self.core.persisted
+    }
+
+    /// The seed of the node's identity key.
+    pub fn identity_seed(&self) -> [u8; 32] {
+        self.core.seed
+    }
+
+    /// Timeouts the endpoint left at or before its own call time (each is a defect of the endpoint).
+    pub fn timer_violations(&self) -> u64 {
+        self.core.timer_violations
+    }
+
+    /// The nanoseconds of CPU the node has reported in all, for the recorder's total.
+    pub fn cpu_ns(&self) -> u64 {
+        self.core.cpu_ns
+    }
+
+    /// The estimate of the live state in bytes (see [`SESSION_STATE_BYTES`]); zero when stopped.
+    pub fn state_bytes(&self) -> u64 {
+        self.core.state_bytes()
+    }
+
+    /// Sessions the endpoint holds now.
+    pub fn sessions(&self) -> usize {
+        self.core.endpoint().map_or(0, |e| e.node_stats().sessions)
+    }
+
+    /// The node's address changed while it was suspended or stopped: the next resume says it moved.
+    pub fn mark_moved(&mut self) {
+        self.core.moved = true;
+    }
+
+    /// Record that the interface with this address is up or down without telling the endpoint, for a change the
+    /// simulator did not deliver because the node was not running. The next incarnation starts from this state.
+    pub fn set_iface_up(&mut self, ip: IpAddr, up: bool) {
+        if up {
+            self.core.iface_up(ip);
+        } else {
+            self.core.iface_down(ip);
+        }
+    }
+
+    fn enter(&mut self, now: Time) {
+        self.core.tick(now);
+    }
+
+    /// Handle the events of the last call until none is left, then sample the state size.
+    fn settle(&mut self) {
+        self.core.service(&mut self.layers);
+        self.core.sample();
+    }
+
+    fn graceful_stop(&mut self, now: Time) {
+        self.core.events.push_back(NodeEvent::Stopped);
+        self.core.shared.rec.borrow_mut().node_stopped(self.core.idx, now, true);
+        self.layers.stop();
+        self.core.phase = Phase::Left;
+    }
+}
+
+impl<L: Layers> Node for SuiteNode<L> {
+    type Cmd = Cmd;
+    type Event = NodeEvent;
+
+    fn handle_datagram(&mut self, now: Time, local: SocketAddr, remote: SocketAddr, data: &mut [u8]) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        self.core.calls += 1;
+        let hdr = if local.is_ipv4() { 28 } else { 48 };
+        let size = data.len() as u64 + hdr;
+        self.core
+            .shared
+            .rec
+            .borrow_mut()
+            .udp_received(self.core.idx, now, remote, size, 0);
+        self.core.handle_datagram(local, remote, data);
+        self.settle();
+    }
+
+    fn poll_transmit(&mut self, now: Time, buf: &mut [u8]) -> Option<Transmit> {
+        if !self.core.running() {
+            return None;
+        }
+        self.enter(now);
+        loop {
+            if let Some((local, remote, len)) = self.core.next_datagram(buf) {
+                self.core.record_wire(remote, local, buf.get(..len)?);
+                return Some(Transmit {
+                    local,
+                    remote,
+                    len,
+                    send_at: None,
+                });
+            }
+            // The endpoint may have events of its own (a closed session, a writable stream) that make the layers
+            // write more; handle them before saying nothing is left.
+            if !self.core.service(&mut self.layers) {
+                self.core.sample();
+                return None;
+            }
+        }
+    }
+
+    fn poll_timeout(&mut self) -> Option<Time> {
+        if !self.core.running() {
+            return None;
+        }
+        let layers = self.layers.poll_timeout().filter(|_| self.core.deliver());
+        self.core.next_deadline().into_iter().chain(layers).min()
+    }
+
+    fn handle_timeout(&mut self, now: Time) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        self.core.calls += 1;
+        self.core.run_timers();
+        if self.core.deliver() && self.layers.poll_timeout().is_some_and(|d| d <= self.core.now) {
+            let local = self.core.now;
+            self.layers.timeout(local, &mut self.core);
+        }
+        self.settle();
+    }
+
+    fn command(&mut self, now: Time, cmd: Cmd) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        self.core.calls += 1;
+        match cmd {
+            Cmd::Persist => self.core.persisted = self.core.export(),
+            Cmd::Shutdown => {
+                let _ = self.core.cmd(vinc_core::Command::Shutdown);
+                self.core.persisted = self.core.export();
+                self.graceful_stop(now);
+            }
+            Cmd::Revoke(peer) => self.core.revoke(peer),
+            Cmd::Intent(intent) => {
+                if self.core.deliver() {
+                    let local = self.core.now;
+                    self.layers.intent(local, &mut self.core, &intent);
+                }
+            }
+            Cmd::Compromise => {
+                let state = self.core.export();
+                self.core
+                    .shared
+                    .registry
+                    .note_compromise(self.core.idx, now, &self.core.seed, &state);
+            }
+        }
+        self.settle();
+    }
+
+    fn poll_event(&mut self) -> Option<NodeEvent> {
+        self.core.events.pop_front()
+    }
+
+    fn crash(&mut self, now: Time) -> Vec<u8> {
+        if self.core.running() {
+            self.enter(now);
+            if self.core.phase != Phase::Left {
+                self.core
+                    .shared
+                    .rec
+                    .borrow_mut()
+                    .node_stopped(self.core.idx, now, false);
+                self.layers.stop();
+            }
+            self.core.end();
+        }
+        self.core.persisted.clone()
+    }
+
+    fn restart(&mut self, now: Time, persisted: &[u8]) {
+        let alpns = self.layers.alpns();
+        let Some(restored) = self.core.begin(now, persisted, &alpns) else {
+            return;
+        };
+        self.core.events.push_back(NodeEvent::Started { restored });
+        self.core.shared.rec.borrow_mut().node_started(self.core.idx, now);
+        let local = self.core.now;
+        self.layers.boot(local, &mut self.core);
+        if self.core.shared.restart_action_at(self.core.idx, now) {
+            let open = self.layers.has_open_intents(local);
+            self.core
+                .shared
+                .rec
+                .borrow_mut()
+                .restarted_with_state(self.core.idx, now, open);
+        }
+        self.settle();
+    }
+
+    fn suspend(&mut self, now: Time) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        let _ = self.core.cmd(vinc_core::Command::Suspend);
+        self.core.events.push_back(NodeEvent::Suspended);
+        self.settle();
+    }
+
+    fn resume(&mut self, now: Time) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        let moved = std::mem::take(&mut self.core.moved);
+        let _ = self.core.cmd(vinc_core::Command::Resume { moved });
+        self.core.events.push_back(NodeEvent::Resumed);
+        let open = self.layers.has_open_intents(self.core.now);
+        self.core.shared.rec.borrow_mut().resumed(self.core.idx, now, open);
+        self.settle();
+    }
+
+    fn iface_event(&mut self, now: Time, event: IfaceEvent) {
+        self.enter(now);
+        match event {
+            IfaceEvent::Up(ip) => {
+                self.core.iface_up(ip);
+                if self.core.running() && self.link_returned_at.replace(now) != Some(now) {
+                    let open = self.layers.has_open_intents(self.core.now);
+                    self.core
+                        .shared
+                        .rec
+                        .borrow_mut()
+                        .link_returned(self.core.idx, now, open);
+                }
+            }
+            IfaceEvent::Down(ip) => self.core.iface_down(ip),
+            IfaceEvent::Changed { old, new } => self.core.iface_changed(old, new),
+        }
+        self.settle();
+    }
+
+    fn take_work(&mut self) -> Work {
+        let crypto = self.core.shared.registry.take_work(self.core.idx, &self.core.costs);
+        let io = self.core.io_acc.floor();
+        self.core.io_acc -= io;
+        let ns = crypto + std::mem::take(&mut self.core.calls) * HANDLER_CALL_NS + io as u64;
+        self.core.cpu_ns += ns;
+        Work { ticks: 0, ns }
+    }
+
+    fn clock_changed(&mut self, _now: Time, clock: &Clock) {
+        self.core.clock = clock.clone();
+    }
+}

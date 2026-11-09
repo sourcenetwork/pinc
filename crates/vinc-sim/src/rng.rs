@@ -22,6 +22,8 @@ pub enum Stream {
     Nat(u32),
     /// A flood's payloads.
     Flood(u32),
+    /// The inbound adversary's choices (captures, replays, bit flips).
+    Adversary,
 }
 
 /// A source of random numbers with the operations the engine needs. Implement it to replace [`Rng`].
@@ -88,6 +90,7 @@ impl Random for Rng {
             Stream::LanDown(i) => 0x2_0000_0000_0000 | u64::from(i),
             Stream::Nat(i) => 0x3_0000_0000_0000 | u64::from(i),
             Stream::Flood(i) => 0x4_0000_0000_0000 | u64::from(i),
+            Stream::Adversary => 0x5_0000_0000_0000,
         };
         Self::stream(seed, tag)
     }

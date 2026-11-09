@@ -63,7 +63,7 @@ impl RefRng {
 impl Random for RefRng {
     /// Streams the reference harness has are seeded as it seeds them: `("ge-up", site)`, `("ge-down", site)` and
     /// `("nat", nat)` after the run seed. The two that it does not have get `("link", from, to)` and
-    /// `("flood", index)`.
+    /// `("flood", index)`; the inbound adversary is seeded `("adversary")` after the run seed, as the harness seeds it.
     fn derive(run_seed: u64, stream: Stream) -> Self {
         let s = Py::Int(i128::from(run_seed));
         match stream {
@@ -74,6 +74,7 @@ impl Random for RefRng {
                 Self::from_parts(&[s, Py::Str("link"), Py::Int(i128::from(from)), Py::Int(i128::from(to))])
             }
             Stream::Flood(i) => Self::from_parts(&[s, Py::Str("flood"), Py::Int(i128::from(i))]),
+            Stream::Adversary => Self::from_parts(&[s, Py::Str("adversary")]),
         }
     }
 
