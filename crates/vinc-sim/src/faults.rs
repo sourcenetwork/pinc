@@ -5,11 +5,12 @@ use std::net::IpAddr;
 
 use crate::Time;
 use crate::adversary::{Flood, FloodPayload, FloodSpec, Replay};
+use crate::config::{CostModel, LanDir, NodeState};
 use crate::ids::{HostId, LanId, NatId, NodeId, ObsId};
 use crate::link::LinkChange;
 use crate::node::{IfaceEvent, Node};
 use crate::rng::{Random, Stream};
-use crate::sim::{CostModel, Ev, IfaceChange, LanDir, LanPartition, NodeState, Sim, SiteRef};
+use crate::sim::{Ev, IfaceChange, LanPartition, Sim, SiteRef};
 
 impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
     /// Changes the link from `from` to `to` at time `at` (an outage, an MTU change, a bandwidth step, ...).

@@ -10,11 +10,12 @@ use std::collections::btree_map::Entry as MapEntry;
 use std::net::SocketAddr;
 
 use crate::Time;
+use crate::config::{Call, CostModel, NodeState};
 use crate::link::{Fate, Link, LinkConfig};
 use crate::metrics::DropReason;
 use crate::node::Node;
 use crate::rng::{Random, Stream};
-use crate::sim::{Call, CostModel, Ev, NodeState, POOL_MAX, Packet, Sim, SiteKind};
+use crate::sim::{Ev, POOL_MAX, Packet, Sim, SiteKind};
 
 /// Remotes the stateful IPv6 firewall remembers per host.
 const FW_REMOTES: usize = 256;

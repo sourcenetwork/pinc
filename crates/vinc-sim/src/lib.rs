@@ -19,6 +19,7 @@
 
 mod adversary;
 mod clock;
+mod config;
 mod faults;
 mod ids;
 mod link;
@@ -28,17 +29,19 @@ mod net;
 mod node;
 mod rng;
 mod sim;
+mod topology;
 pub mod toy;
 
 pub use adversary::{FloodPayload, FloodSpec, ObsRecord, Observer};
 pub use clock::Clock;
+pub use config::{Call, CostModel, Cpu, Driver, FlatCost, LanConfig, LanDir, NodeState, SimConfig};
 pub use ids::{HostId, IfaceId, LanId, NatId, NodeId, ObsId, SiteId};
 pub use link::{LinkChange, LinkConfig, Loss, reference_queue_bytes};
 pub use metrics::{DropReason, Latency, Metrics, NodeMetrics};
 pub use nat::{NatConfig, NatKind, PortPolicy};
 pub use node::{IfaceEvent, Node, Transmit, Work};
 pub use rng::{Random, Rng, Stream};
-pub use sim::{Call, CostModel, Cpu, Driver, FlatCost, LanConfig, LanDir, NodeState, Sim, SimConfig, SiteRef};
+pub use sim::{Sim, SiteRef};
 
 /// Virtual time in nanoseconds.
 pub type Time = u64;
