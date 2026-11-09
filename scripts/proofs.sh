@@ -236,6 +236,31 @@ par run_tlc hubcodec_snapn HubCodec HubCodec_snapn
 par run_tlc hubcodec_down HubCodec HubCodec_down
 par run_tlc hubcodec_other HubCodec HubCodec_other
 par witness_tlc hubcodec_snapcut HubCodec HubCodec_snapcut SnapCutRefused
+par run_tlc sys_steady MembershipSys MembershipSys_steady
+par run_tlc sys_complete MembershipSys MembershipSys_complete
+par run_tlc sys_complete33 MembershipSys MembershipSys_complete33
+par run_tlc sys_lease MembershipSys MembershipSys_lease
+par run_tlc sys_lostprobe MembershipSys MembershipSys_lostprobe
+par run_tlc sys_slow MembershipSys MembershipSys_slow
+par run_tlc sys_partition MembershipSys MembershipSys_partition
+par run_tlc sys_return MembershipSys MembershipSys_return
+par run_tlc sys_leave MembershipSys MembershipSys_leave
+par run_tlc sys_revoke MembershipSys MembershipSys_revoke
+par run_tlc sys_restart MembershipSys MembershipSys_restart
+par run_tlc sys_jump MembershipSys MembershipSys_jump
+par run_tlc sys_move MembershipSys MembershipSys_move
+par run_tlc sys_primary MembershipSys MembershipSys_primary
+par run_tlc sys_pulse MembershipSys MembershipSys_pulse
+par witness_tlc sys_w_clockback MembershipSys MembershipSys_w_clockback IncOK
+par witness_tlc sys_w_confirm MembershipSys MembershipSys_w_confirm NeverConfirmed
+par witness_tlc sys_w_down MembershipSys MembershipSys_w_down NeverDown
+par witness_tlc sys_w_susp MembershipSys MembershipSys_w_susp NeverSusp
+par witness_tlc sys_w_restore MembershipSys MembershipSys_w_restore NeverRestore
+par witness_tlc sys_w_left MembershipSys MembershipSys_w_left NeverLeft
+par witness_tlc sys_w_revoked MembershipSys MembershipSys_w_revoked NeverRevoked
+par witness_tlc sys_w_restart MembershipSys MembershipSys_w_restart NeverRestarted
+par witness_tlc sys_w_suppressed MembershipSys MembershipSys_w_suppressed NeverSuppressed
+par witness_tlc sys_w_switch MembershipSys MembershipSys_w_switch NeverSwitched
 par run_tlc incarnation Incarnation Incarnation
 par run_tlc incarnation_pers Incarnation Incarnation_pers
 par run_tlc incarnation_hlc Incarnation Incarnation_hlc
