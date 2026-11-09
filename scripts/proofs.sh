@@ -9,6 +9,11 @@ TLA_HOME="${TLA_HOME:-$HOME/.local/share/tla}"
 # The trace check reads ndjson with the CommunityModules Json module, which needs a TLC of the same era as the jar.
 TRACE_TLC="$TLA_HOME/tla2tools-2026.11.06.jar"
 COMMUNITY="$TLA_HOME/CommunityModules-deps-202611060952.jar"
+# TLC unpacks its standard modules into the JVM's temporary directory; runs that share one race on those files, so
+# every run gets its own.
+jtmp_root=$(mktemp -d)
+trap 'rm -rf "$jtmp_root"' EXIT
+jopts() { printf -- '-Djava.io.tmpdir=%s' "$(mktemp -d -p "$jtmp_root")"; }
 
 need() { # need <file> <download command>
     [ -f "$1" ] || { echo "proofs: missing $1; fetch it with: $2" >&2; exit 1; }
@@ -28,20 +33,20 @@ fi
 
 run_tlc() { # run_tlc <name> <spec> <cfg> : model check one config, show the summary lines
     local out
-    out=$(tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
     echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
 }
 run_tlc_deep() { # run_tlc_deep <name> <spec> <cfg> : like run_tlc, with the deep thread stack the word arithmetic of the specs needs
     local out
-    out=$(java -Xss256m -XX:+UseParallelGC -cp "$TLA_HOME/tla2tools.jar" tlc2.TLC -workers auto \
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" java -Xss256m -XX:+UseParallelGC -cp "$TLA_HOME/tla2tools.jar" tlc2.TLC -workers auto \
         -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: TLC failed on $3" >&2; exit 1; }
     echo "tlc $3: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
 }
 witness_tlc() { # witness_tlc <name> <spec> <cfg> <property> : TLC must find a violation of <property> (a reachability witness or a documented finding)
     local out
-    if out=$(tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
+    if out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
         echo "$out" >&2; echo "proofs: TLC found no violation of $4 in $3: the witness is gone" >&2; exit 1
     fi
     grep -q "$4 is violated" <<<"$out" \
@@ -50,7 +55,7 @@ witness_tlc() { # witness_tlc <name> <spec> <cfg> <property> : TLC must find a v
 }
 witness_live_tlc() { # witness_live_tlc <name> <spec> <cfg> : TLC must find a counterexample to the liveness property (the stuck states the code had)
     local out
-    if out=$(tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
+    if out=$(JAVA_TOOL_OPTIONS="$(jopts)" tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
         echo "$out" >&2; echo "proofs: TLC found no liveness violation in $3: the witness is gone" >&2; exit 1
     fi
     grep -q "Temporal properties were violated" <<<"$out" \
@@ -184,12 +189,12 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
-trap 'rm -rf "$dir"' EXIT
+trap 'rm -rf "$dir" "$jtmp_root"' EXIT
 VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
-    out=$(VINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
+    out=$(JAVA_TOOL_OPTIONS="$(jopts)" VINC_TRACE_DIR="$dir" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC:$COMMUNITY" tlc2.TLC -workers auto \
         -metadir "proofs/tla/states/$1" -config "proofs/tla/$1.cfg" "proofs/tla/$1.tla" 2>&1) \
         || { echo "$out" >&2; echo "proofs: the recorded $2 trace is not a behaviour of its TLA+ model" >&2; exit 1; }
     echo "tlc $1: $(echo "$out" | grep -E 'states generated, ' | tail -1)"
