@@ -243,4 +243,7 @@ import Vinc.ReconcileWireProofs
 import Vinc.ReconcileWireMsg
 import Vinc.TraceReconcileWire
 import Vinc.ReconcileApsAudit
+import Vinc.ReconcileRefSplit
+import Vinc.ReconcileCorrect
+import Vinc.ReconcileRefArmsAudit
 #audit_package

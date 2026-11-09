@@ -71,32 +71,32 @@ theorem lexLt_false_iff (a b : List Nat) : lexLt a b = false ↔ (a = b ∨ lexL
 
 /-! ## The shared prefix and the separator -/
 
-theorem cpl_le_left : ∀ p q : List Nat, cpl p q ≤ p.length
+theorem alg_cpl_le_left : ∀ p q : List Nat, cpl p q ≤ p.length
   | [], _ => by simp [cpl]
   | _ :: _, [] => by simp [cpl]
   | a :: as, b :: bs => by
     simp only [cpl]; split
-    · have := cpl_le_left as bs; simp; omega
+    · have := alg_cpl_le_left as bs; simp; omega
     · simp
 
-theorem cpl_le_right : ∀ p q : List Nat, cpl p q ≤ q.length
+theorem alg_cpl_le_right : ∀ p q : List Nat, cpl p q ≤ q.length
   | [], _ => by simp [cpl]
   | _ :: _, [] => by simp [cpl]
   | a :: as, b :: bs => by
     simp only [cpl]; split
-    · have := cpl_le_right as bs; simp; omega
+    · have := alg_cpl_le_right as bs; simp; omega
     · simp
 
-theorem take_cpl_eq : ∀ p q : List Nat, p.take (cpl p q) = q.take (cpl p q)
+theorem alg_take_cpl_eq : ∀ p q : List Nat, p.take (cpl p q) = q.take (cpl p q)
   | [], _ => by simp [cpl]
   | _ :: _, [] => by simp [cpl]
   | a :: as, b :: bs => by
     simp only [cpl]; split
-    · next h => subst h; simp [take_cpl_eq as bs]
+    · next h => subst h; simp [alg_take_cpl_eq as bs]
     · simp
 
 /-- If `p < q` the shared prefix is shorter than `q`. -/
-theorem cpl_lt_right : ∀ p q : List Nat, lexLt p q = true → cpl p q < q.length
+theorem alg_cpl_lt_right : ∀ p q : List Nat, lexLt p q = true → cpl p q < q.length
   | [], [], h => by simp [lexLt] at h
   | [], _ :: _, _ => by simp [cpl]
   | _ :: _, [], h => by simp [lexLt] at h
@@ -107,7 +107,7 @@ theorem cpl_lt_right : ∀ p q : List Nat, lexLt p q = true → cpl p q < q.leng
       subst hab
       rcases h with h | ⟨_, h⟩
       · omega
-      · have := cpl_lt_right as bs h; simp; omega
+      · have := alg_cpl_lt_right as bs h; simp; omega
     · simp
 
 /-- The separator `q[..cpl p q + 1]` of `p < q` has `p < sep ≤ q`. -/
