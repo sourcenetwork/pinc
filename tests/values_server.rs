@@ -196,6 +196,23 @@ fn a_newer_overlapping_request_supersedes_the_older_one_of_the_same_peer_only() 
     assert_eq!(r.server.held(), 3);
 }
 
+#[test]
+fn a_refused_newer_request_leaves_the_older_response_alone() {
+    let mut r = Rig::new(200_000);
+    let root = r.store.root();
+    r.open(1, PEER, &Rig::req(root, &[Span { off: 0, len: 100_000 }]));
+    // The session has no room for the newer response: the request is refused and the older response keeps running.
+    r.sess.refuse_serve = true;
+    r.open(2, PEER, &Rig::req(root, &[Span { off: 90_000, len: 50_000 }]));
+    assert_eq!(r.resets(), vec![(2, code::UNAVAILABLE)]);
+    assert_eq!(r.server.held(), 1);
+    // Once it can be accepted, the newer request supersedes the older one.
+    r.sess.refuse_serve = false;
+    r.open(3, PEER, &Rig::req(root, &[Span { off: 90_000, len: 50_000 }]));
+    assert_eq!(r.resets(), vec![(2, code::UNAVAILABLE), (1, code::SUPERSEDED)]);
+    assert_eq!(r.server.held(), 1);
+}
+
 fn proofs(r: &Rig) -> Vec<(u64, Vec<u8>)> {
     r.sess
         .out

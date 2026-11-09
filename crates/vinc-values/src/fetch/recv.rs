@@ -61,7 +61,10 @@ impl Fetch {
                 } => {
                     self.arrival(now);
                     let upto = self.rx.get(si).and_then(Option::as_ref).map_or(from, |r| r.pos);
-                    if matched && !self.store_group(io, stream, off, len, data_start) {
+                    // Another stream (a write-through on the same group) may have stored it while this one was still
+                    // hashing: the bytes are the same, so they are not written or announced a second time.
+                    let again = matched && self.is_stored(io, off, len);
+                    if matched && !again && !self.store_group(io, stream, off, len, data_start) {
                         self.state = State::Done;
                         self.drop_all_streams(io);
                         io.split().2.event(now, Event::Failed(FailReason::Store));
@@ -69,11 +72,19 @@ impl Fetch {
                     }
                     io.split().0.consume(stream, upto);
                     if matched {
-                        self.group_verified(io, now, pi, off, len, false);
+                        self.group_verified(io, now, pi, off, len, false, !again);
                     }
                 }
             }
         }
+    }
+
+    /// Whether the store holds `[off, off + len)` verified.
+    fn is_stored<E: Env>(&self, io: &mut E, off: u64, len: u64) -> bool {
+        io.split()
+            .1
+            .verified_from(&self.root, off)
+            .is_some_and(|v| v.start <= off && v.end >= off + len)
     }
 
     /// ARK_PACE: the stall timer follows this transfer's own granule pace.
@@ -109,8 +120,19 @@ impl Fetch {
         ok && left == 0 && st.commit(&root, off..off + len).is_ok()
     }
 
-    /// A group is verified and stored: announce it (or hold the first), account for the provider, top it up.
-    pub(super) fn group_verified<E: Env>(&mut self, io: &mut E, now: u64, pi: usize, off: u64, len: u64, ahead: bool) {
+    /// A group is verified and stored: announce it (or hold the first), account for the provider, top it up. A group
+    /// that is not `fresh` was already announced when another stream stored it, so only the accounting runs.
+    #[allow(clippy::too_many_arguments, reason = "one verified group's fields, passed once")]
+    pub(super) fn group_verified<E: Env>(
+        &mut self,
+        io: &mut E,
+        now: u64,
+        pi: usize,
+        off: u64,
+        len: u64,
+        ahead: bool,
+        fresh: bool,
+    ) {
         if let Some(p) = self.provs.get(pi) {
             io.split().2.trace(
                 now,
@@ -122,14 +144,14 @@ impl Fetch {
                 },
             );
         }
-        if !self.released && off <= self.o0 && self.o0 < off + len {
+        if fresh && !self.released && off <= self.o0 && self.o0 < off + len {
             // HEAD_HOLD: the granule at the start of the request is verified now but announced only once a playout
             // buffer of verified bytes stands behind it.
             let t0 = self.head.map_or(now, |h| h.t0);
             self.head = Some(Head { off, len, t0 });
             self.nv = 0;
             io.split().2.trace(now, Trace::Held { off });
-        } else {
+        } else if fresh {
             io.split().2.event(now, Event::Readable { off, len });
             if self.head.is_some() {
                 self.nv += 1;
@@ -157,10 +179,11 @@ impl Fetch {
             .verified_from(&self.root, end)
             .filter(|v| v.start <= end)
             .map_or(0, |v| v.end - end);
-        let tot = self.want.total();
+        // The wanted ranges end where the last one in delivery order ends (the list keeps the order they were asked).
+        let wanted_end = self.want.as_slice().last().map_or(0, crate::span::Span::end);
         let why = force.or(if buf >= HOLD_B {
             Some(Release::Buffered)
-        } else if end + buf >= self.o0 + tot {
+        } else if end + buf >= wanted_end {
             Some(Release::Tail)
         } else if self.nv >= HOLD_NV {
             Some(Release::Granules)

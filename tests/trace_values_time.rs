@@ -497,8 +497,8 @@ fn time_rules_trace() {
     });
     assert_eq!(releases(&sim)[0].1, Release::Timeout);
 
-    // The first granule is mid-granule: the tail threshold of the code is the first offset plus the wanted bytes,
-    // which an unaligned start puts past the wanted range, so the release is the completion.
+    // The first request offset is mid-granule: the tail threshold is the end of the wanted ranges (the aligned
+    // end), so the value ends in the buffer and the release is the tail.
     let mut sim = Sim::uniform(1, 40 * G as usize, 2000);
     run.go(
         &mut sim,
@@ -507,7 +507,7 @@ fn time_rules_trace() {
         None,
         30 * SEC,
     );
-    assert_eq!(releases(&sim)[0].1, Release::Done);
+    assert_eq!(releases(&sim)[0].1, Release::Tail);
 
     // The first granule is in the store already: it is never held.
     let content = PStore::random(48, 8 * G as usize);

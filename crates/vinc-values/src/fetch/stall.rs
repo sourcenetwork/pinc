@@ -56,12 +56,18 @@ impl Fetch {
         }
     }
 
+    /// The moment the stall wait counts from: the later of the last verified granule, the last stream bytes and the
+    /// first request (so a provider that connects and never sends is redialled too); `None` before the first request.
+    fn stall_base(&self) -> Option<u64> {
+        (self.treq != 0).then(|| self.lastp.max(self.lastb).max(self.treq))
+    }
+
     /// The next time [`Fetch::on_timeout`] has something to do, if any.
     pub fn poll_timeout(&self) -> Option<u64> {
         if self.state != State::Running {
             return None;
         }
-        let stall = (self.lastp != 0).then(|| self.lastp.max(self.lastb).saturating_add(self.sw));
+        let stall = self.stall_base().map(|b| b.saturating_add(self.sw));
         let head = self.head.map(|h| h.t0.saturating_add(HOLD_MAX));
         let steal = (self.tw != 0).then_some(self.tw);
         stall
@@ -80,13 +86,15 @@ impl Fetch {
         }
         // Past the deadline the call only winds the fetch down: no redial and no steal re-check, the fetch fails below.
         let late = self.deadline.is_some_and(|d| now > d);
-        if !late && STALL_WAIT != 0 && self.lastp != 0 && now >= self.lastp.max(self.lastb).saturating_add(self.sw) {
+        let base = self.stall_base();
+        if !late && STALL_WAIT != 0 && base.is_some_and(|b| now >= b.saturating_add(self.sw)) {
             let w = self.stall_rtt(io);
             let lv = self.stall_live(io, now);
-            if w > self.sw && self.lastp.saturating_add(w) > now {
+            let lp = self.lastp.max(self.treq);
+            if w > self.sw && lp.saturating_add(w) > now {
                 self.sw = w;
             } else if lv != 0 {
-                self.sw = now.saturating_sub(self.lastp).saturating_add(lv);
+                self.sw = now.saturating_sub(lp).saturating_add(lv);
             } else {
                 self.stall_redial(io, now);
             }
@@ -152,7 +160,7 @@ impl Fetch {
             if r < SLOW_RTT
                 || info.pto
                 || now.saturating_sub(info.last_rx) > (2 * NS).max(r.saturating_mul(2))
-                || now.saturating_sub(self.lastp) > LIVE_CAP
+                || now.saturating_sub(self.lastp.max(self.treq)) > LIVE_CAP
             {
                 return 0;
             }

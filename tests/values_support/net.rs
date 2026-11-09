@@ -266,6 +266,8 @@ pub struct ServerSession {
     pub installs: Vec<(StreamId, ValueSource<PStore>, u64)>,
     pub out: Vec<ToClient>,
     pub consumed: HashMap<StreamId, u64>,
+    /// Refuse to serve: the session has no room for the response.
+    pub refuse_serve: bool,
 }
 
 impl Session for ServerSession {
@@ -296,6 +298,9 @@ impl Session for ServerSession {
 
 impl Inbound<PStore> for ServerSession {
     fn serve(&mut self, stream: StreamId, source: ValueSource<PStore>, len: u64) -> bool {
+        if self.refuse_serve {
+            return false;
+        }
         self.installs.push((stream, source, len));
         true
     }

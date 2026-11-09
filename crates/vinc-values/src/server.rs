@@ -293,7 +293,13 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
         let Some((stream, peer)) = self.slots.get(i).and_then(Option::as_ref).map(|s| (s.stream, s.peer)) else {
             return;
         };
+        let total = plan.total();
+        let source = ValueSource::new(self.store.clone(), root, plan.clone());
+        if !se.serve(stream, source, total) {
+            return self.refuse(se, out, now, i, code::UNAVAILABLE);
+        }
         // SERVE_ONE: a newer request for bytes an older response from the same peer is still sending supersedes it.
+        // The older responses are freed only now that the new one is accepted: a refused request costs nothing.
         for s2 in &mut self.slots {
             let old = s2.as_ref().is_some_and(|o| {
                 o.stream != stream
@@ -310,11 +316,6 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
                     },
                 );
             }
-        }
-        let total = plan.total();
-        let source = ValueSource::new(self.store.clone(), root, plan.clone());
-        if !se.serve(stream, source, total) {
-            return self.refuse(se, out, now, i, code::UNAVAILABLE);
         }
         se.consume(stream, req_len as u64);
         out.trace(

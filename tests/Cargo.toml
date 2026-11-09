@@ -727,3 +727,7 @@ path = "sim_tap.rs"
 [[test]]
 name = "scenario_diag"
 path = "scenario_diag.rs"
+
+[[test]]
+name = "values_fixes"
+path = "values_fixes.rs"

@@ -19,7 +19,7 @@ use crate::knobs::{GROUP, GROUP_LOG, WT_AHEAD, WT_KEEP, WT_MAX_K, WT_PMAX};
 use crate::plan::{Frame, range_pairs};
 use crate::session::Session;
 use crate::store::ValueStore;
-use crate::trace::{Out, Trace};
+use crate::trace::{LiarWhy, Out, Trace};
 use crate::verify::GroupVerifier;
 use crate::wire::{PROOF_BODY_MAX, ProofFrame, ProofReq};
 
@@ -137,6 +137,10 @@ impl Fetch {
             && layout.is_ok_and(|l| pf.proof.len() as u64 == range_pairs(l.groups(), a, b) * PARENT_LEN as u64);
         if !fits {
             io.split().2.trace(now, Trace::ProofRejected { stream: pf.sid });
+            let pi = self.rx.get(si).and_then(Option::as_ref).map(|r| r.provider);
+            if let Some(pi) = pi {
+                self.evict(io, now, pi, LiarWhy::Protocol);
+            }
             return;
         }
         let mut pairs = [0u8; WT_PMAX];
@@ -211,11 +215,13 @@ impl Fetch {
             });
         }
         if !(fed && matched && left == 0) {
+            // The proof and the bytes both came from this provider, and together they do not hash to the root.
             io.split().2.trace(now, Trace::ProofRejected { stream });
+            self.evict(io, now, pi, LiarWhy::Hash);
             return;
         }
         if self.store_group(io, stream, gs, u64::from(f.dlen), f.data_start()) {
-            self.group_verified(io, now, pi, gs, u64::from(f.dlen), true);
+            self.group_verified(io, now, pi, gs, u64::from(f.dlen), true, true);
         } else {
             self.state = State::Done;
             self.drop_all_streams(io);
