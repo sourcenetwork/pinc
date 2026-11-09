@@ -338,3 +338,30 @@ fn cubic_target(w_max: u64, k_ms: u64, mss: u64, t_ms: u64) -> i128 {
     let delta = (4 * i128::from(mss) * d * d * d).div_euclid(10_000_000_000);
     (i128::from(w_max) + delta).min(i128::from(MAX_CWND))
 }
+
+#[cfg(feature = "trace")]
+impl Cubic {
+    /// The state of the controller, for trace validation.
+    pub const fn trace_view(&self) -> super::trace::CcView {
+        let (round_end, reference, round_min, samples) = self.round_exit.trace_view();
+        let (probe_start, probe_bytes, rate) = self.probe.trace_view();
+        super::trace::CcView {
+            cwnd: self.cwnd,
+            ssthresh: self.ssthresh,
+            w_max: self.w_max,
+            w_est: self.w_est,
+            k_ms: self.k_ms,
+            epoch: self.epoch,
+            recovery: self.recovery,
+            streak: self.streak,
+            round_end,
+            reference,
+            round_min,
+            samples,
+            probe_start,
+            probe_bytes,
+            rate,
+            slack: self.gate_slack_mid,
+        }
+    }
+}

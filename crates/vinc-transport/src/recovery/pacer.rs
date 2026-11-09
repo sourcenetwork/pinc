@@ -54,3 +54,11 @@ impl Pacer {
         self.tokens = BURST_PACKETS;
     }
 }
+
+#[cfg(feature = "trace")]
+impl Pacer {
+    /// The tokens left and the next release, for trace validation.
+    pub const fn trace_view(&self) -> (u32, u64) {
+        (self.tokens, self.next)
+    }
+}

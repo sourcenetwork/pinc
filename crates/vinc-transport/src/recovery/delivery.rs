@@ -47,3 +47,11 @@ impl RateProbe {
         self.rate
     }
 }
+
+#[cfg(feature = "trace")]
+impl RateProbe {
+    /// The interval start, the bytes counted in it and the rate, for trace validation.
+    pub(super) const fn trace_view(&self) -> (Option<u64>, u64, u64) {
+        (self.start, self.bytes, self.rate)
+    }
+}

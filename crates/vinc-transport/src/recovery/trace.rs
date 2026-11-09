@@ -172,3 +172,39 @@ pub struct RxView {
     pub confirmed_floor: Option<u64>,
 }
 
+/// The state of a [`Cubic`](super::Cubic) controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CcView {
+    /// The congestion window.
+    pub cwnd: u64,
+    /// The slow-start threshold.
+    pub ssthresh: u64,
+    /// The window the last reduction started from.
+    pub w_max: u64,
+    /// The Reno estimate.
+    pub w_est: u64,
+    /// The cubic curve's origin in milliseconds.
+    pub k_ms: u64,
+    /// When the current growth epoch began.
+    pub epoch: Option<u64>,
+    /// When the last reduction happened.
+    pub recovery: Option<u64>,
+    /// Consecutive filtered reductions.
+    pub streak: u8,
+    /// The packet number that ends the current round.
+    pub round_end: u64,
+    /// The reference minimum round trip of the exit detector.
+    pub reference: Option<u64>,
+    /// The minimum round trip of the current round.
+    pub round_min: Option<u64>,
+    /// The samples of the current round.
+    pub samples: u32,
+    /// The start of the delivery-rate interval.
+    pub probe_start: Option<u64>,
+    /// The bytes counted in it.
+    pub probe_bytes: u64,
+    /// The delivery-rate estimate.
+    pub rate: u64,
+    /// The rate gate's slack for mid-length round trips.
+    pub slack: u64,
+}

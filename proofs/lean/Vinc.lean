@@ -63,6 +63,9 @@ import Vinc.TransportCidThm
 import Vinc.TransportCidInv
 import Vinc.TransportCidCalls
 import Vinc.TraceCid
+import Vinc.TransportCc
+import Vinc.TransportCcThm
+import Vinc.TraceCc
 import Vinc.TraceRecovery
 import Vinc.ReconcileSession
 import Vinc.TraceReconcile

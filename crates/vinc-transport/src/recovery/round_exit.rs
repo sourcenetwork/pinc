@@ -64,3 +64,11 @@ impl RoundExit {
         self.samples >= MIN_SAMPLES && cwnd >= MIN_CWND && min > reference.saturating_add(thresh)
     }
 }
+
+#[cfg(feature = "trace")]
+impl RoundExit {
+    /// The round end, the reference, the round minimum and the samples, for trace validation.
+    pub(super) const fn trace_view(&self) -> (u64, Option<u64>, Option<u64>, u32) {
+        (self.round_end, self.reference, self.round_min, self.samples)
+    }
+}
