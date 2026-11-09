@@ -5,8 +5,6 @@
 //! checked before the body is read, so a failure is a [`KeyStoreError::Tpm`] carrying the code; buffers that held
 //! commands or responses with secrets are zeroized.
 
-use std::time::Duration;
-
 use tpm2_protocol::basic::{TpmHandle, TpmUint16};
 use tpm2_protocol::constant::TPM_MAX_COMMAND_SIZE;
 use tpm2_protocol::data::{
@@ -46,40 +44,19 @@ const fn is_resend(code: u32) -> bool {
     matches!(code, RC_YIELDED | RC_TESTING | RC_RETRY)
 }
 
-/// How often and how long a command is resent when the TPM answers "send it again".
+/// How often a command is sent when the TPM answers "send it again".
 ///
-/// A command is sent at most `attempts` times. Before send `n + 1` the client waits `first_wait * 2^(n-1)`, never
-/// more than `max_wait`, so the whole wait is bounded by `(attempts - 1) * max_wait`. The default is 8 sends and
-/// waits of 1, 2, 4, 8, 16, 32 and 50 ms: 113 ms in all, enough for a TPM to finish a self test slice or yield,
-/// short enough that a wedged TPM is reported promptly as [`KeyStoreError::TpmBusy`].
+/// The command is resent at once, never waiting: the client runs on the caller's thread, which must not block. A
+/// command is sent at most `attempts` times, then [`KeyStoreError::TpmBusy`] is returned. The default is 8 sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
     /// The most times one command is sent; `0` is treated as `1`.
     pub attempts: u32,
-    /// The wait before the first resend.
-    pub first_wait: Duration,
-    /// The longest single wait.
-    pub max_wait: Duration,
-}
-
-impl RetryPolicy {
-    /// Resend at once, as often as `attempts` allows, without waiting.
-    pub const fn immediate(attempts: u32) -> Self {
-        Self {
-            attempts,
-            first_wait: Duration::ZERO,
-            max_wait: Duration::ZERO,
-        }
-    }
 }
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        Self {
-            attempts: 8,
-            first_wait: Duration::from_millis(1),
-            max_wait: Duration::from_millis(50),
-        }
+        Self { attempts: 8 }
     }
 }
 
@@ -188,12 +165,11 @@ impl<T: Transport> TpmClient<T> {
         TpmResponse::cast(&rsp).map_err(proto)?.unmarshal::<R>().map_err(proto)
     }
 
-    /// Send `command` and return its whole response, resending the same bytes while the TPM answers one of the
-    /// warnings that mean "send it again" ([`RC_RETRY`], [`RC_YIELDED`], [`RC_TESTING`]), within the [`RetryPolicy`].
+    /// Send `command` and return its whole response, resending the same bytes at once while the TPM answers one
+    /// of the warnings that mean "send it again" ([`RC_RETRY`], [`RC_YIELDED`], [`RC_TESTING`]), within the [`RetryPolicy`].
     /// Every command goes through here. Any other nonzero code is returned as [`KeyStoreError::Tpm`].
     fn exchange(&mut self, command: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         let attempts = self.retry.attempts.max(1);
-        let mut wait = self.retry.first_wait;
         for attempt in 1..=attempts {
             let rsp = Zeroizing::new(
                 self.transport
@@ -219,8 +195,6 @@ impl<T: Transport> TpmClient<T> {
                 if attempt == attempts {
                     return Err(KeyStoreError::TpmBusy { code });
                 }
-                std::thread::sleep(wait);
-                wait = wait.saturating_mul(2).min(self.retry.max_wait);
                 continue;
             }
             if code != 0 {
@@ -454,7 +428,7 @@ mod tests {
             codes: codes.to_vec(),
             sent: Vec::new(),
         };
-        TpmClient::new(t).with_retry(RetryPolicy::immediate(attempts))
+        TpmClient::new(t).with_retry(RetryPolicy { attempts })
     }
 
     #[test]
@@ -493,8 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_wait_is_bounded() {
-        let p = RetryPolicy::default();
-        assert!(p.max_wait.saturating_mul(p.attempts) <= Duration::from_secs(1));
+    fn default_policy_is_bounded_and_nonzero() {
+        assert!((1..=64).contains(&RetryPolicy::default().attempts));
     }
 }
