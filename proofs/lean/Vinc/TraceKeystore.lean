@@ -195,7 +195,11 @@ def opOfName (name : String) (n calls : Nat) : Except String Op :=
   | "generate_unsupported" => pure .publicOnly
   | _ => throw s!"unknown program {name}"
 
-def tpmName (code : Nat) : String := s!"Tpm:{code}"
+/-- A response code recorded as two 16-bit limbs, most significant first. -/
+def codeF (j : J) : Except String Nat := do
+  match ← natList (← field j "code") with
+  | [hi, lo] => pure (hi * 65536 + lo)
+  | _ => throw "code limbs"
 
 /-- The program the model gives for the recorded commands, if any failure point matches. -/
 def matchProgram (op : Op) (recorded : List (M × Bool)) : Option Int :=
@@ -209,12 +213,12 @@ def replayTpm (j : J) (w : W) : Except String W := do
     let link ← strF j "link"
     let res ← strF j "res"
     if link ≠ "" then
-      check (res == s!"Transport:{link}") "link failure"
+      check (res == "Transport") "link failure"
     else
       match parseResp rsp (← boolF j "body_ok") with
       | .ok () => check (res == "ok") "response"
       | .error .protocol => check (res == "Protocol") s!"response: model Protocol, code {res}"
-      | .error (.tpm c) => check (res == tpmName c) s!"response: model {tpmName c}, code {res}"
+      | .error (.tpm c) => check (res == "Tpm" && (← codeF j) == c) s!"response: model Tpm {c}, code {res}"
     pure w
   | "prog" =>
     let owner ← bytesF j "owner"
@@ -236,11 +240,16 @@ def replayTpm (j : J) (w : W) : Except String W := do
       let allOk := recorded.all (·.2)
       if name == "generate_unsupported" then check (res == "Unsupported") "unsupported algorithm"
       else check ((res == "ok") == allOk) s!"result {res} for commands {recorded.length}"
+      match cmds.find? (fun c => c.2.1 != 0) with
+      | some (_, rc, _, _) => if res == "Tpm" then check ((← codeF j) == rc) "the code is the TPM's" else pure ()
+      | none => pure ()
       if name == "random" && allOk then check (recorded.length == randomCalls n) "random: one command per 32 bytes"
     | none => throw s!"program {name}: the commands are not the model's"
     pure w
   | "hnd" =>
-    let h ← natF j "h"
+    let h ← match ← natList (← field j "h") with
+      | [hi, lo] => pure (hi * 65536 + lo)
+      | _ => throw "handle limbs"
     let res ← strF j "res"
     let ncmds ← natF j "ncmds"
     match ← strF j "call" with
@@ -287,7 +296,7 @@ def replayTpm (j : J) (w : W) : Except String W := do
     match model with
     | .ok () => check (res == "ok" && (← boolF j "genuine")) "unseal"
     | .error .invalidSealed => check (res == "InvalidSealed") s!"unseal: model InvalidSealed, code {res}"
-    | .error (.tpm c) => check (res == tpmName c) s!"unseal: model {tpmName c}, code {res}"
+    | .error (.tpm c) => check (res == "Tpm" && (← codeF j) == c) s!"unseal: model Tpm {c}, code {res}"
     check ((← natF j "live_after") == (← natF j "live_before")) "unseal leaves no handle"
     pure w
   | op => throw s!"unknown tpm op {op}"

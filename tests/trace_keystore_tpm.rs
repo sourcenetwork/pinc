@@ -92,18 +92,36 @@ impl Transport for Script {
     }
 }
 
+/// The TPM response code of an error as two 16-bit limbs (most significant first), or zeros.
+fn code_of<T>(r: &Result<T, KeyStoreError>) -> String {
+    match r {
+        Err(KeyStoreError::Tpm { code }) => format!("[{},{}]", code >> 16, code & 0xffff),
+        _ => "[0,0]".into(),
+    }
+}
+
 fn describe(e: &KeyStoreError) -> String {
     match e {
-        KeyStoreError::Tpm { code } => format!("Tpm:{code}"),
-        KeyStoreError::Transport(k) => format!("Transport:{k:?}"),
+        KeyStoreError::Tpm { .. } => "Tpm".to_string(),
+        KeyStoreError::Transport(_) => "Transport".to_string(),
         other => format!("{other:?}"),
     }
 }
 
+/// A result as a name and, for a TPM refusal, a trailing code field kept apart.
 fn res_of<T>(r: &Result<T, KeyStoreError>) -> String {
     match r {
         Ok(_) => "ok".into(),
+        Err(KeyStoreError::Tpm { code }) => format!("Tpm#{}", [code >> 16, code & 0xffff].map(|x| x.to_string()).join(",")),
         Err(e) => describe(e),
+    }
+}
+
+/// Split `Tpm#hi,lo` into the name and the limbs field.
+fn split_res(res: &str) -> (String, String) {
+    match res.split_once('#') {
+        Some((name, limbs)) => (name.to_string(), format!("[{limbs}]")),
+        None => (res.to_string(), "[0,0]".to_string()),
     }
 }
 
@@ -130,11 +148,12 @@ impl Run {
 
     #[allow(clippy::too_many_arguments)]
     fn prog(&mut self, op: &str, n: usize, owner: &[u8], key: &[u8], before: usize, res: &str, slots_delta: i64) {
+        let (res, code) = split_res(res);
         let (cmds, after) = self.take();
         self.slots += slots_delta;
         let _ = writeln!(
             self.out,
-            r#"{{"t":"kt","op":"prog","prog":"{op}","n":{n},"owner":{},"key":{},"live_before":{before},"live_after":{after},"slots":{},"res":"{res}","cmds":[{}]}}"#,
+            r#"{{"t":"kt","op":"prog","prog":"{op}","n":{n},"owner":{},"key":{},"live_before":{before},"live_after":{after},"slots":{},"res":"{res}","code":{code},"cmds":[{}]}}"#,
             arr(owner),
             arr(key),
             self.slots,
@@ -190,10 +209,11 @@ fn resp_trace(out: &mut String) {
         let body_ok = TpmResponse::cast(&rsp).and_then(|r| r.unmarshal::<TpmGetRandomResponse>()).is_ok();
         let mut client = TpmClient::new(Script(vec![case]));
         let r = client.get_random(16);
-        let res = res_of(&r.map(|_| ()));
+        let r = r.map(|_| ());
+        let (res, code) = (split_res(&res_of(&r)).0, code_of(&r));
         let _ = writeln!(
             out,
-            r#"{{"t":"kt","op":"resp","rsp":{},"link":"{link}","body_ok":{body_ok},"res":"{res}"}}"#,
+            r#"{{"t":"kt","op":"resp","rsp":{},"link":"{link}","body_ok":{body_ok},"res":"{res}","code":{code}}}"#,
             arr(&rsp)
         );
     }
@@ -246,16 +266,20 @@ fn programs(tpm: &Swtpm, run: &mut Run) {
             let (cmds, _) = run.take();
             let _ = writeln!(
                 run.out,
-                r#"{{"t":"kt","op":"hnd","call":"persist","h":{h},"res":"{}","ncmds":{}}}"#,
-                res_of(&r),
+                r#"{{"t":"kt","op":"hnd","call":"persist","h":[{},{}],"res":"{}","ncmds":{}}}"#,
+                h >> 16,
+                h & 0xffff,
+                split_res(&res_of(&r)).0,
                 cmds.len()
             );
             let r = store.load_persistent(h);
             let (cmds, _) = run.take();
             let _ = writeln!(
                 run.out,
-                r#"{{"t":"kt","op":"hnd","call":"load","h":{h},"res":"{}","ncmds":{}}}"#,
-                res_of(&r),
+                r#"{{"t":"kt","op":"hnd","call":"load","h":[{},{}],"res":"{}","ncmds":{}}}"#,
+                h >> 16,
+                h & 0xffff,
+                split_res(&res_of(&r)).0,
                 cmds.len()
             );
         }
@@ -269,9 +293,10 @@ fn programs(tpm: &Swtpm, run: &mut Run) {
         let (cmds, _) = run.take();
         let _ = writeln!(
             run.out,
-            r#"{{"t":"kt","op":"hnd","call":"persist_again","h":{},"res":"{}","ncmds":{}}}"#,
-            at + 0x100,
-            res_of(&r),
+            r#"{{"t":"kt","op":"hnd","call":"persist_again","h":[{},{}],"res":"{}","ncmds":{}}}"#,
+            (at + 0x100) >> 16,
+            (at + 0x100) & 0xffff,
+            split_res(&res_of(&r)).0,
             cmds.len()
         );
         // another key cannot take a taken handle: the TPM refuses
@@ -355,15 +380,15 @@ fn sealed(store: &mut TpmStore<Recorder<SimTransport>>, run: &mut Run, owner: &[
         b = run.live();
         let (lib_ok, hdr_lib) = header_verdict(&v);
         let r = store.unseal(&v);
+        let (rname, rcode) = split_res(&res_of(&r));
         let genuine = v == blob;
         let (cmds, after) = run.take();
         let _ = writeln!(
             run.out,
-            r#"{{"t":"kt","op":"unseal","owner":{},"key":{},"blob":{},"genuine":{genuine},"lib_ok":{lib_ok},"hdr":{hdr_lib},"live_before":{b},"live_after":{after},"res":"{}","cmds":[{}]}}"#,
+            r#"{{"t":"kt","op":"unseal","owner":{},"key":{},"blob":{},"genuine":{genuine},"lib_ok":{lib_ok},"hdr":{hdr_lib},"live_before":{b},"live_after":{after},"res":"{rname}","code":{rcode},"cmds":[{}]}}"#,
             arr(owner),
             arr(key),
             arr(&v),
-            res_of(&r),
             Run::cmds_json(&cmds)
         );
         assert_eq!(after, b, "an unseal leaves no handle behind");
