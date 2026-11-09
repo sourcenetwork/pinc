@@ -22,7 +22,7 @@
 (* one oracle, a bijection between ids and model terms: a sealing binds    *)
 (* the ephemeral key, the ciphertext, the bundle id and the key probe to   *)
 (* the terms of the model; an id first met in a decapsulation is a value   *)
-(* the attacker made (a junk term). Equal ids must be equal terms and      *)
+(* the attacker made (a junk term), unless the code found the id to be the one derived from the head's source and creation time, in which case it is that derived term. Equal ids must be equal terms and      *)
 (* equal terms equal ids, so the key a recipient derives equals the        *)
 (* sender's exactly when the terms say so.                                 *)
 (*                                                                         *)
@@ -61,8 +61,8 @@ DecEv ==
     LET own == [node |-> Ev.node, epoch |-> Ev.ep, kp |-> Ev.kp]
         eph == TermOf(Ev.eph)
         ct == TermOf(Ev.ct)
-        id == TermOf(Ev.id)
-        h == [dst |-> Ev.dst, epoch |-> Ev.hep, eph |-> eph, ct |-> ct, id |-> id, lo |-> Ev.lo]
+        id == IF Ev.idok THEN DS!Bid(Ev.hsrc, Ev.hwall, Ev.hctr, eph) ELSE TermOf(Ev.id)
+        h == [src |-> Ev.hsrc, wall |-> Ev.hwall, ctr |-> Ev.hctr, dst |-> Ev.dst, epoch |-> Ev.hep, eph |-> eph, ct |-> ct, id |-> id, lo |-> Ev.lo]
         v == DS!Decap(own, h)
         base == om \cup {<<eph, Ev.eph>>, <<ct, Ev.ct>>, <<id, Ev.id>>}
         ok == v.t = "ok"

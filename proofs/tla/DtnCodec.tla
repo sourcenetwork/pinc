@@ -32,7 +32,9 @@
 (* signed_trailing, signed_truncated, signed_checks (tags, layout,         *)
 (* endorsement lengths), signed_len, headC_len, and the same for the       *)
 (* acknowledgement (ack_roundtrip, ack_canonical, ack_injective,           *)
-(* ack_trailing, ack_truncated, ack_len).                                  *)
+(* ack_trailing, ack_truncated, ack_len). The acknowledgement carries the  *)
+(* offer id (a u64 after the previous custodian, before the time), so     *)
+(* its body is ACK_BODY_LEN = 118 bytes.                                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
@@ -42,7 +44,7 @@ D == INSTANCE DtnLayout WITH c <- 0
 PkLen(a) == CASE a = 1 -> 32 [] a = 2 -> 33 [] a = 3 -> 1952 [] a = 4 -> 1984
 SigLen(a) == CASE a = 1 -> 64 [] a = 2 -> 64 [] a = 3 -> 3309 [] a = 4 -> 3373
 HeadLen == 32 + 2 * 33 + 12 + 8 + 2 + 2 + 1 + 8 + 32 + 4 + 32 + 1088
-AckBodyLen == 32 + 33 + 33 + 12
+AckBodyLen == 32 + 33 + 33 + 8 + 12
 
 RECURSIVE Cat(_)
 Cat(s) == IF s = <<>> THEN <<>> ELSE Head(s) \o Cat(Tail(s))
@@ -102,17 +104,17 @@ SignedRead(bs) ==
             IN IF ~e.ok \/ e.i # Len(bs) THEN [ok |-> FALSE] ELSE [ok |-> TRUE, v |-> [h |-> h.v, e |-> e.v]]
 
 (* CustodyAck::{encode, decode} *)
-AckBodyWidths == <<32, 1, 32, 1, 32, 8, 4>>
+AckBodyWidths == <<32, 1, 32, 1, 32, 8, 8, 4>>
 AckBytes(a) ==
-    Cat(<<a.bundle, <<a.ca>>, a.cb, <<a.pa>>, a.pb, BE(a.wall, 8), BE(a.cnt, 4)>>) \o EndBytes(a.e)
+    Cat(<<a.bundle, <<a.ca>>, a.cb, <<a.pa>>, a.pb, BE(a.offer, 8), BE(a.wall, 8), BE(a.cnt, 4)>>) \o EndBytes(a.e)
 AckRead(bs) ==
     LET r == ReadAll(bs, 0, AckBodyWidths)
     IN IF ~r.ok \/ r.chunks[2][1] \notin 1..4 \/ r.chunks[4][1] \notin 1..4 THEN [ok |-> FALSE]
        ELSE LET e == EndRead(r.chunks[2][1], bs, r.i)
             IN IF ~e.ok \/ e.i # Len(bs) THEN [ok |-> FALSE]
                ELSE [ok |-> TRUE, v |-> [bundle |-> r.chunks[1], ca |-> r.chunks[2][1], cb |-> r.chunks[3],
-                                         pa |-> r.chunks[4][1], pb |-> r.chunks[5], wall |-> BEWord(r.chunks[6]),
-                                         cnt |-> BEWord(r.chunks[7]), e |-> e.v]]
+                                         pa |-> r.chunks[4][1], pb |-> r.chunks[5], offer |-> BEWord(r.chunks[6]),
+                                         wall |-> BEWord(r.chunks[7]), cnt |-> BEWord(r.chunks[8]), e |-> e.v]]
 
 (* ---- the checked domain ---- *)
 Fill(n, s) == [j \in 1..n |-> (j * 7 + s) % 256]
@@ -137,7 +139,8 @@ Cases == {[kind |-> "head", sa |-> a[1], da |-> a[2], ones |-> o, ly |-> ly] : a
 
 HeadOf(c) == MkHead(c.sa, c.da, c.ones, c.ly)
 SignedOf(c) == [h |-> HeadOf(c), e |-> MkEnd(c.sa)]
-AckOf(c) == [bundle |-> Fill(32, 1), ca |-> c.sa, cb |-> Fill(32, 2), pa |-> c.da, pb |-> Fill(32, 3), wall |-> N(c.ones, 8),
+AckOf(c) == [bundle |-> Fill(32, 1), ca |-> c.sa, cb |-> Fill(32, 2), pa |-> c.da, pb |-> Fill(32, 3),
+             offer |-> IF c.ones THEN Ones(8) ELSE U!FromLimbs(<<1, 2, 3, 4>>), wall |-> N(c.ones, 8),
              cnt |-> N(c.ones, 4), e |-> MkEnd(c.sa)]
 
 Enc(c) == IF c.kind = "head" THEN SignedBytes(SignedOf(c)) ELSE AckBytes(AckOf(c))
@@ -150,7 +153,7 @@ Mutate(bs, i, d) == [bs EXCEPT ![i] = IF d = 0 THEN 0 ELSE IF d = 1 THEN 255 ELS
 \* positions scanned: the head start, the identity tags, the ends of the endorsement fields, the tail and a stride
 Positions(c, n) ==
     LET ends == IF c.kind = "head" THEN HeadLen ELSE AckBodyLen
-        near == (1..40) \cup ((n - 5)..n) \cup {ends + k : k \in 1..8} \cup {33, 66}
+        near == (1..40) \cup ((n - 5)..n) \cup {ends + k : k \in 1..8} \cup {33, 66} \cup {99 + k : k \in 0..7}
         pk == {ends + 6 + PkLen(c.sa) + k : k \in -1..3} \cup {ends + 4 + PkLen(c.sa) + k : k \in -1..4}
     IN (near \cup pk \cup {p \in 41..n : p % (IF c.sa <= 2 THEN 11 ELSE 97) = 0}) \cap (1..n)
 

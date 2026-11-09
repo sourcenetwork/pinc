@@ -16,7 +16,9 @@
 (* by the attacker in the initial state, which covers every order of       *)
 (* compromise, a later leak of the recipient's statics included (that is   *)
 (* the "no forward secrecy beyond key rotation" of the design). The        *)
-(* recipient side (Decap) and the slice AEAD (OpenSlice) are checked for   *)
+(* recipient side (Decap, which recomputes the bundle id from the head's   *)
+(* source, creation time and ephemeral key and refuses a mismatch) and the *)
+(* slice AEAD (OpenSlice) are checked for                                  *)
 (* every head the attacker can derive from a sent head by changing one     *)
 (* field, against every recipient record (node, epoch, key pair).          *)
 (*                                                                         *)
@@ -77,7 +79,8 @@ BCt(b) == Ct(b.sm, EK(b.kp))
 BId(b) == Bid(b.src, b.wall, b.ctr, BEph(b))
 BTh(b) == Th(BEph(b), b.kp, b.dest, b.epoch, BCt(b), BId(b))
 BKey(b) == Key(SsK(b.sm, EK(b.kp)), SsX(BEph(b), b.kp), BTh(b))
-BHead(b) == [dst |-> b.dest, epoch |-> b.epoch, eph |-> BEph(b), ct |-> BCt(b), id |-> BId(b), lo |-> FALSE]
+BHead(b) == [src |-> b.src, wall |-> b.wall, ctr |-> b.ctr, dst |-> b.dest, epoch |-> b.epoch, eph |-> BEph(b), ct |-> BCt(b),
+             id |-> BId(b), lo |-> FALSE]
 BOwn(b) == [node |-> b.dest, epoch |-> b.epoch, kp |-> b.kp]
 
 PayloadKnown(b) == Known(BKey(b)) \/ Has("srcK", b.src)
@@ -87,10 +90,15 @@ KHalf(b) == BK0 \/ Has("mK", b.sm) \/ Has("kK", b.kp)
 (* ---- the recipient: decapsulate ---- *)
 DecapK(kp, c) == IF c[1] = "ct" /\ c[3] = EK(kp) THEN SsK(c[2], c[3]) ELSE Rej(kp, c)
 
+\* the id recomputed from the head's source, creation time and ephemeral key (BundleId::derive)
+Derived(h) == Bid(h.src, h.wall, h.ctr, h.eph)
+
+\* decapsulate: the recipient and epoch, then the recomputed id (never trusted), then the key agreement
 Decap(o, h) ==
     IF h.dst # o.node \/ h.epoch # o.epoch THEN [t |-> "wrong"]
+    ELSE IF h.id # Derived(h) THEN [t |-> "badid"]
     ELSE IF h.lo THEN [t |-> "crypto"]
-    ELSE [t |-> "ok", k |-> Key(DecapK(o.kp, h.ct), SsX(h.eph, o.kp), Th(h.eph, o.kp, o.node, o.epoch, h.ct, h.id))]
+    ELSE [t |-> "ok", k |-> Key(DecapK(o.kp, h.ct), SsX(h.eph, o.kp), Th(h.eph, o.kp, o.node, o.epoch, h.ct, Derived(h)))]
 
 Owns == [node : Nodes, epoch : Epochs, kp : Kps]
 
@@ -102,6 +110,9 @@ Heads(b) ==
     \cup {[BHead(b) EXCEPT !.ct = c] : c \in {Junk(1), Ct(b.sm, EK(b.kp)), Ct(b.sm, EK(1 + (b.kp % Cardinality(Kps)))),
                                                Ct(1 + (b.sm % MaxB), EK(b.kp))}}
     \cup {[BHead(b) EXCEPT !.eph = e] : e \in {Junk(1), EPub(1 + (b.se % MaxB))}}
+    \cup {[BHead(b) EXCEPT !.src = s] : s \in Srcs}
+    \cup {[BHead(b) EXCEPT !.wall = w] : w \in Walls \cup {b.wall + 1}}
+    \cup {[BHead(b) EXCEPT !.ctr = c] : c \in {1}}
     \cup {[BHead(b) EXCEPT !.id = Junk(1)], [BHead(b) EXCEPT !.lo = TRUE]}
 
 (* ---- the slice AEAD: the nonce is injective in the index (Vinc.DtnSeal.nonce_inj) ---- *)
@@ -159,8 +170,12 @@ DecapSound ==
         LET v == Decap(o, h)
             same == /\ o.node = b.dest /\ o.epoch = b.epoch /\ o.kp = b.kp /\ h.eph = BEph(b) /\ h.ct = BCt(b)
                     /\ h.id = BId(b)
-        IN /\ (v.t = "wrong") <=> (h.dst # o.node \/ h.epoch # o.epoch)
-           /\ (h.dst = o.node /\ h.epoch = o.epoch /\ h.lo) <=> (v.t = "crypto")
+            mine == h.dst = o.node /\ h.epoch = o.epoch
+        IN /\ (v.t = "wrong") <=> ~mine
+           \* the id is recomputed: a head whose id is not the derived one is never decapsulated
+           /\ (v.t = "badid") <=> (mine /\ h.id # Derived(h))
+           /\ (h.id # Derived(h)) => v.t # "ok"
+           /\ (mine /\ h.id = Derived(h) /\ h.lo) <=> (v.t = "crypto")
            /\ (v.t = "ok") => ((v.k = BKey(b)) <=> same)
            /\ (v.t = "ok" /\ o = BOwn(b) /\ h.ct # BCt(b)) => v.k # BKey(b)
            /\ (o = BOwn(b) /\ h = BHead(b)) => v = [t |-> "ok", k |-> BKey(b)]

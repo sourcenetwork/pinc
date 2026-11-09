@@ -35,7 +35,9 @@ the transcript, not by the keys. Nothing is declared beyond definitions and theo
   (`key_binding`) but an epoch bump without new keys protects nothing. This is a design limit, not a defect.
 * Binding (`key_binding`, `decap_agree`, `decap_wrong_iff`, `forged_ct_other_key`): the key determines the
   ephemeral key, the static pair, the node, the epoch, the KEM ciphertext and the bundle id; a wrong recipient or
-  epoch is refused exactly when `head.destination != own.node || head.epoch != own.epoch`; a forged KEM
+  epoch is refused exactly when `head.destination != own.node || head.epoch != own.epoch`; a head whose id is not
+  the one derived from its source, creation time and ephemeral key is refused (`decap_badId_iff`,
+  `decap_bad_id_refused`), the id is recomputed and never trusted; a forged KEM
   ciphertext gives another key, so the first slice fails to authenticate.
 * Nonces (`openSlice_other_index`, `sealIdx_nodup`, `seal_nonces_distinct`, `keys_distinct_of_fresh`): each data
   index is sealed once per bundle, the nonce is injective in the index, two bundles with different seeds have
@@ -124,9 +126,12 @@ def Bun.thT (b : Bun) : T := th b.eph b.kp b.dest b.epoch b.ctT b.idT
 /-- `encapsulate`: `key = expand(extract(ck0, ss_K || ss_X), th)`. -/
 def Bun.key (b : Bun) : T := T.key (ssK b.sm (ek b.kp)) (ssX b.eph b.kp) b.thT
 
-/-- The head fields the recipient reads: destination node, epoch, ephemeral key, KEM ciphertext, bundle id, and
-whether the ephemeral key is a low-order point. -/
+/-- The head fields the recipient reads: source, creation time, destination node, epoch, ephemeral key, KEM
+ciphertext, bundle id, and whether the ephemeral key is a low-order point. -/
 structure HeadT where
+  src : Nat
+  wall : Nat
+  counter : Nat
   dst : Nat
   epoch : Nat
   eph : T
@@ -134,7 +139,10 @@ structure HeadT where
   id : T
   lo : Bool
 
-def Bun.head (b : Bun) : HeadT := ⟨b.dest, b.epoch, b.eph, b.ctT, b.idT, false⟩
+def Bun.head (b : Bun) : HeadT := ⟨b.src, b.wall, b.counter, b.dest, b.epoch, b.eph, b.ctT, b.idT, false⟩
+
+/-- The id `decapsulate` recomputes from the head's source, creation time and ephemeral key (`BundleId::derive`). -/
+def HeadT.derived (h : HeadT) : T := bid h.src h.wall h.counter h.eph
 
 /-- The recipient's own record: node, epoch and the key pair whose secrets it holds. -/
 structure Own where
@@ -150,28 +158,65 @@ def decapK (kp : Nat) : T → T
 
 inductive Verdict where
   | wrong
+  | badId
   | crypto
   | ok (k : T)
   deriving DecidableEq
 
-/-- `decapsulate`: the recipient and epoch check first, then the Diffie-Hellman value, then the key. -/
+/-- `decapsulate`: the recipient and epoch check first, then the recomputed bundle id (the head's id is never
+trusted), then the Diffie-Hellman value, then the key, whose transcript uses the derived id. -/
 def decap (o : Own) (h : HeadT) : Verdict :=
   if h.dst ≠ o.node ∨ h.epoch ≠ o.epoch then .wrong
+  else if h.id ≠ h.derived then .badId
   else if h.lo then .crypto
-  else .ok (T.key (decapK o.kp h.ct) (ssX h.eph o.kp) (th h.eph o.kp o.node o.epoch h.ct h.id))
+  else .ok (T.key (decapK o.kp h.ct) (ssX h.eph o.kp) (th h.eph o.kp o.node o.epoch h.ct h.derived))
 
 def Bun.own (b : Bun) : Own := ⟨b.dest, b.epoch, b.kp⟩
 
 /-- The recipient's key for a genuine head is the sender's key. -/
 theorem decap_agree (b : Bun) : decap b.own b.head = .ok b.key := by
-  simp [decap, Bun.own, Bun.head, Bun.key, Bun.thT, decapK, Bun.ctT]
+  simp [decap, Bun.own, Bun.head, Bun.key, Bun.thT, decapK, Bun.ctT, HeadT.derived, Bun.idT]
+
+/-- The four outcomes of `decap`, with the conditions that select them. -/
+theorem decap_cases (o : Own) (h : HeadT) :
+    (decap o h = .wrong ∧ (h.dst ≠ o.node ∨ h.epoch ≠ o.epoch)) ∨
+    (decap o h = .badId ∧ ¬ (h.dst ≠ o.node ∨ h.epoch ≠ o.epoch) ∧ h.id ≠ h.derived) ∨
+    (decap o h = .crypto ∧ ¬ (h.dst ≠ o.node ∨ h.epoch ≠ o.epoch) ∧ ¬ h.id ≠ h.derived ∧ h.lo = true) ∨
+    (∃ k, decap o h = .ok k ∧ ¬ (h.dst ≠ o.node ∨ h.epoch ≠ o.epoch) ∧ ¬ h.id ≠ h.derived ∧ ¬ h.lo = true ∧
+      k = T.key (decapK o.kp h.ct) (ssX h.eph o.kp) (th h.eph o.kp o.node o.epoch h.ct h.derived)) := by
+  unfold decap
+  by_cases h1 : h.dst ≠ o.node ∨ h.epoch ≠ o.epoch
+  · rw [if_pos h1]; exact Or.inl ⟨rfl, h1⟩
+  · rw [if_neg h1]
+    by_cases h2 : h.id ≠ h.derived
+    · rw [if_pos h2]; exact Or.inr (Or.inl ⟨rfl, h1, h2⟩)
+    · rw [if_neg h2]
+      by_cases h3 : h.lo = true
+      · rw [if_pos h3]; exact Or.inr (Or.inr (Or.inl ⟨rfl, h1, h2, h3⟩))
+      · rw [if_neg h3]; exact Or.inr (Or.inr (Or.inr ⟨_, rfl, h1, h2, h3, rfl⟩))
 
 /-- A head is refused as addressed elsewhere exactly when its destination or epoch is not the recipient's. -/
 theorem decap_wrong_iff (o : Own) (h : HeadT) : decap o h = .wrong ↔ (h.dst ≠ o.node ∨ h.epoch ≠ o.epoch) := by
-  unfold decap
-  split <;> rename_i hc
-  · simp [hc]
-  · split <;> simp [hc]
+  rcases decap_cases o h with ⟨e, c⟩ | ⟨e, c, _⟩ | ⟨e, c, _⟩ | ⟨k, e, c, _⟩ <;> simp [e, c]
+
+/-- A head addressed to the recipient is refused as having a bad id exactly when its id is not the one derived from
+its source, creation time and ephemeral key. -/
+theorem decap_badId_iff (o : Own) (h : HeadT) :
+    decap o h = .badId ↔ ((h.dst = o.node ∧ h.epoch = o.epoch) ∧ h.id ≠ h.derived) := by
+  rcases decap_cases o h with ⟨e, c⟩ | ⟨e, c, d⟩ | ⟨e, c, d, _⟩ | ⟨k, e, c, d, _⟩
+  · simp [e]; intro h1 h2; simp_all
+  · simp_all
+  · simp_all
+  · simp_all
+
+/-- A head whose id is not the derived one is never decapsulated. -/
+theorem decap_bad_id_refused (o : Own) (h : HeadT) (hid : h.id ≠ h.derived) (k : T) : decap o h ≠ .ok k := by
+  rcases decap_cases o h with ⟨e, c⟩ | ⟨e, c, d⟩ | ⟨e, c, d, _⟩ | ⟨k, e, c, d, _⟩ <;> simp_all
+
+/-- The key a recipient derives depends on the derived id only: every key it derives has the derived id in its
+transcript, and the head's id is that id. -/
+theorem decap_ok_id (o : Own) (h : HeadT) (k : T) (hk : decap o h = .ok k) : h.id = h.derived := by
+  exact Classical.byContradiction fun hid => decap_bad_id_refused o h hid k hk
 
 /-- A wrong recipient and a wrong epoch both fail. -/
 theorem decap_wrong_recipient (o : Own) (h : HeadT) (hn : h.dst ≠ o.node) : decap o h = .wrong :=
@@ -259,26 +304,38 @@ theorem keys_distinct_of_fresh (b b' : Bun) (h : b.se ≠ b'.se ∨ b.sm ≠ b'.
 ciphertext and bundle id. -/
 theorem decap_key_binding (o o' : Own) (h h' : HeadT) (k : T) (e1 : decap o h = .ok k) (e2 : decap o' h' = .ok k) :
     o.node = o'.node ∧ o.epoch = o'.epoch ∧ o.kp = o'.kp ∧ h.eph = h'.eph ∧ h.ct = h'.ct ∧ h.id = h'.id := by
-  simp only [decap] at e1 e2
-  split at e1 <;> try simp at e1
-  split at e1 <;> try simp at e1
-  split at e2 <;> try simp at e2
-  split at e2 <;> try simp at e2
-  rw [← e2] at e1
-  simp only [T.key.injEq, T.th.injEq] at e1
-  obtain ⟨-, -, h1, h2, h3, h4, h5, h6⟩ := e1
-  exact ⟨h3, h4, h2, h1, h5, h6⟩
+  have i1 := decap_ok_id o h k e1
+  have i2 := decap_ok_id o' h' k e2
+  rcases decap_cases o h with ⟨e, c⟩ | ⟨e, c, d⟩ | ⟨e, c, d, _⟩ | ⟨k1, e, c, d, l, hk1⟩
+  · simp_all
+  · simp_all
+  · simp_all
+  rcases decap_cases o' h' with ⟨e', c'⟩ | ⟨e', c', d'⟩ | ⟨e', c', d', _⟩ | ⟨k2, e', c', d', l', hk2⟩
+  · simp_all
+  · simp_all
+  · simp_all
+  have q1 : k1 = k := Verdict.ok.inj (e.symm.trans e1)
+  have q2 : k2 = k := Verdict.ok.inj (e'.symm.trans e2)
+  rw [q1] at hk1
+  rw [q2] at hk2
+  have hh := hk1.symm.trans hk2
+  simp only [T.key.injEq, T.th.injEq] at hh
+  obtain ⟨-, -, h1, h2, h3, h4, h5, h6⟩ := hh
+  exact ⟨h3, h4, h2, h1, h5, by rw [i1, i2]; exact h6⟩
 
 /-- A recipient of a head whose KEM ciphertext was forged (any ciphertext but the sender's) derives another key
 than the sender's: the first slice fails to authenticate. -/
 theorem forged_ct_other_key (b : Bun) (c : T) (hc : c ≠ b.ctT) (k : T)
     (h : decap b.own { b.head with ct := c } = .ok k) : k ≠ b.key := by
   intro e
-  simp only [decap, Bun.own, Bun.head] at h
-  simp at h
-  rw [← h] at e
-  simp only [Bun.key, Bun.thT, T.key.injEq] at e
-  obtain ⟨hk, -⟩ := e
+  rcases decap_cases b.own { b.head with ct := c } with ⟨e1, _⟩ | ⟨e1, _⟩ | ⟨e1, _⟩ | ⟨k1, e1, _, _, _, hk1⟩
+  · rw [e1] at h; cases h
+  · rw [e1] at h; cases h
+  · rw [e1] at h; cases h
+  have q : k1 = k := Verdict.ok.inj (e1.symm.trans h)
+  rw [q, e] at hk1
+  simp only [Bun.key, Bun.thT, Bun.own, Bun.head, HeadT.derived, Bun.idT, T.key.injEq] at hk1
+  obtain ⟨hk, -⟩ := hk1
   apply hc
   cases c with
   | ct sm e' =>
@@ -379,6 +436,9 @@ end Vinc.DtnSeal
 
 #audit_axioms Vinc.DtnSeal.decap_agree
 #audit_axioms Vinc.DtnSeal.decap_wrong_iff
+#audit_axioms Vinc.DtnSeal.decap_badId_iff
+#audit_axioms Vinc.DtnSeal.decap_bad_id_refused
+#audit_axioms Vinc.DtnSeal.decap_ok_id
 #audit_axioms Vinc.DtnSeal.known_key_iff
 #audit_axioms Vinc.DtnSeal.payload_secret
 #audit_axioms Vinc.DtnSeal.known_key_local

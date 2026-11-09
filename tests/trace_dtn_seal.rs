@@ -74,13 +74,18 @@ fn probe(c: &Cipher<Software>) -> Vec<u8> {
     buf.iter().chain(tag.iter()).copied().collect()
 }
 
+/// The id `decapsulate` recomputes from a head.
+fn derived(h: &Head) -> BundleId {
+    BundleId::derive(&h.source, h.created, &h.envelope.eph_x25519)
+}
+
 /// A head with the fields `decapsulate` reads; the rest is a placeholder.
-fn head_of(id: BundleId, src: NodeId, dst: NodeId, env: &Envelope) -> Head {
+fn head_of(id: BundleId, src: NodeId, dst: NodeId, created: Hlc, env: &Envelope) -> Head {
     Head {
         id,
         source: src,
         destination: dst,
-        created: Hlc::new(1000, 0),
+        created,
         lifetime_ms: 1,
         copies: 1,
         erasure: Erasure { k: 1, m: 0 },
@@ -139,26 +144,31 @@ impl Run {
             rcpt.keys.epoch
         ));
         self.keep(kid, cipher);
-        head_of(id, *src, rcpt.keys.node, &env)
+        head_of(id, *src, rcpt.keys.node, created, &env)
     }
 
     /// Decapsulate `head` with `own`; the verdict is asserted against the expectation read off the head.
     fn dec(&mut self, own: &Recipient, head: &Head, expect_ok_key_of: Option<u32>) {
         let r = decapsulate(&Software, &own.keys, &own.dk, &own.xs, head);
         let lo = head.envelope.eph_x25519 == [0; 32];
+        let idok = derived(head) == head.id;
         let wrong = head.destination != own.keys.node || head.envelope.epoch != own.keys.epoch;
         let (v, kid) = match r {
             Err(DtnError::WrongRecipient) => {
                 assert!(wrong);
                 ("wrong", 0)
             }
+            Err(DtnError::BadId) => {
+                assert!(!wrong && !idok);
+                ("badid", 0)
+            }
             Err(DtnError::Crypto(_)) => {
-                assert!(!wrong && lo);
+                assert!(!wrong && idok && lo);
                 ("crypto", 0)
             }
             Err(e) => panic!("unexpected {e:?}"),
             Ok(c) => {
-                assert!(!wrong && !lo);
+                assert!(!wrong && idok && !lo);
                 let kid = self.ids.id('k', &probe(&c));
                 if let Some(want) = expect_ok_key_of {
                     assert_eq!(kid, want, "a genuine head must derive the sender's key");
@@ -177,8 +187,10 @@ impl Run {
             self.ids.id('c', &head.envelope.kem_ct),
             self.ids.id('i', &head.id.0),
         );
+        let hsrc = self.ids.id('n', &node_bytes(&head.source));
+        let (hwall, hctr) = (head.created.wall, head.created.counter);
         self.lines.push(format!(
-            r#"{{"t":"ds","e":"dec","node":{n},"ep":{},"kp":{kp},"dst":{dst},"hep":{},"eph":{e},"ct":{c},"id":{i},"lo":{lo},"v":"{v}","kid":{kid}}}"#,
+            r#"{{"t":"ds","e":"dec","node":{n},"ep":{},"kp":{kp},"dst":{dst},"hep":{},"eph":{e},"ct":{c},"id":{i},"lo":{lo},"hsrc":{hsrc},"hwall":{hwall},"hctr":{hctr},"idok":{idok},"v":"{v}","kid":{kid}}}"#,
             own.keys.epoch, head.envelope.epoch
         ));
     }
@@ -289,6 +301,21 @@ fn trace() {
         run.dec(own, &h, None);
         let mut h = h_a;
         h.envelope.eph_x25519 = [0; 32];
+        run.dec(own, &h, None);
+        // A low-order ephemeral key under an id derived from it passes the id check and fails the key agreement.
+        h.id = derived(&h);
+        run.dec(own, &h, None);
+        // A source or a creation time that is not the one the id was derived from.
+        let mut h = h_a;
+        h.source = n1;
+        run.dec(own, &h, None);
+        h.id = derived(&h);
+        run.dec(own, &h, None);
+        let mut h = h_a;
+        h.created = Hlc::new(1001, 0);
+        run.dec(own, &h, None);
+        let mut h = h_a;
+        h.created = Hlc::new(1000, 1);
         run.dec(own, &h, None);
         let mut h = h_a;
         h.destination = r1.keys.node;

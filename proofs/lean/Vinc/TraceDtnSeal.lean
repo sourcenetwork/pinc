@@ -78,9 +78,13 @@ def replayEvent (j : J) (st : W) : Except String W := do
     let idId ← natF j "id"
     let eph := termOf st.om ephId
     let ct := termOf st.om ctId
-    let id := termOf st.om idId
+    let hsrc ← natF j "hsrc"
+    let hwall ← natF j "hwall"
+    let hctr ← natF j "hctr"
+    let idok ← boolF j "idok"
+    let id := if idok then bid hsrc hwall hctr eph else termOf st.om idId
     let lo ← boolF j "lo"
-    let h : HeadT := ⟨← natF j "dst", ← natF j "hep", eph, ct, id, lo⟩
+    let h : HeadT := ⟨hsrc, hwall, hctr, ← natF j "dst", ← natF j "hep", eph, ct, id, lo⟩
     let o ← bind st.om eph ephId
     let o ← bind o ct ctId
     let o ← bind o id idId
@@ -89,6 +93,9 @@ def replayEvent (j : J) (st : W) : Except String W := do
     match decap own h with
     | .wrong =>
       check (v == "wrong" && kid == 0) s!"decap: model refuses the recipient or epoch, code says {v}"
+      pure ⟨o⟩
+    | .badId =>
+      check (v == "badid" && kid == 0) s!"decap: model refuses the bundle id, code says {v}"
       pure ⟨o⟩
     | .crypto =>
       check (v == "crypto" && kid == 0) s!"decap: model fails on the ephemeral key, code says {v}"

@@ -12,8 +12,8 @@ bytes), the key epoch (`u32`), the ephemeral key (32 bytes) and the KEM cipherte
 bytes, after which the layout must be valid (`Head::read` calls `layout()`). The endorsement is the two length
 fields and the two byte strings, each length exactly the algorithm's public key and signature length
 (`Endorsement::decode`); the zero padding of the in-memory form is a representation detail with no wire image. The
-acknowledgement is the bundle id, the custodian, the previous custodian, the time, and the endorsement of the
-custodian's algorithm (`ACK_BODY_LEN = 110` bytes before it).
+acknowledgement is the bundle id, the custodian, the previous custodian, the offer id (`u64`), the time, and the endorsement of the
+custodian's algorithm (`ACK_BODY_LEN = 118` bytes before it).
 
 What is not here: that a signature verifies is a property of the signature scheme, assumed (the codec only fixes the
 bytes the signature covers: the unsigned head, which is the first `HEAD_LEN` bytes of the encoding).
@@ -87,10 +87,10 @@ def headC : Codec HeadM :=
 def signedC : Codec (HeadM × (Nat × Bytes × Nat × Bytes)) :=
   pairD headC fun h => endC h.src.1
 
-/-- The fields of an acknowledgement body: bundle, custodian, previous custodian, wall, counter. -/
-abbrev AckT := Bytes × Node × Node × Nat × Nat
+/-- The fields of an acknowledgement body: bundle, custodian, previous custodian, offer id, wall, counter. -/
+abbrev AckT := Bytes × Node × Node × Nat × Nat × Nat
 
-def ackBodyC : Codec AckT := pair (bytesC 32) (pair nodeC (pair nodeC (pair (uC 8) (uC 4))))
+def ackBodyC : Codec AckT := pair (bytesC 32) (pair nodeC (pair nodeC (pair (uC 8) (pair (uC 8) (uC 4)))))
 
 /-- `CustodyAck::{encode, decode}`. -/
 def ackC : Codec (AckT × (Nat × Bytes × Nat × Bytes)) :=
@@ -157,10 +157,10 @@ theorem signed_checks (bs v) (h : decodeAll signedC bs = some v) :
 /-! ## The properties of the acknowledgement -/
 
 theorem ack_len (v : AckT × (Nat × Bytes × Nat × Bytes)) (w : ackC.wf v) :
-    (ackC.emit v).length = 110 + 4 + pkLen v.1.2.1.1 + sigLen v.1.2.1.1 := by
-  obtain ⟨⟨b, c, p, t, n⟩, pl, pk, sl, sg⟩ := v
+    (ackC.emit v).length = 118 + 4 + pkLen v.1.2.1.1 + sigLen v.1.2.1.1 := by
+  obtain ⟨⟨b, c, p, o, t, n⟩, pl, pk, sl, sg⟩ := v
   simp [ackC, ackBodyC, pairD, endC, pair, guardC, bytesC, uC, nodeC, toBE_length, List.length_append] at w ⊢
-  obtain ⟨⟨hb, ⟨_, hc⟩, ⟨_, hp⟩, _, _⟩, ⟨_, hpl⟩, hpk, ⟨_, hsl⟩, hsg⟩ := w
+  obtain ⟨⟨hb, ⟨_, hc⟩, ⟨_, hp⟩, _, _, _⟩, ⟨_, hpl⟩, hpk, ⟨_, hsl⟩, hsg⟩ := w
   omega
 
 theorem ack_roundtrip (v) (w : ackC.wf v) : decodeAll ackC (ackC.emit v) = some v :=

@@ -94,7 +94,7 @@ fn scan(kind: Kind, alg: IdentityAlg, enc: &[u8], base: usize, out: &mut Vec<Str
         array(enc)
     ));
     let (pk, sig) = alg_len(alg.tag());
-    let body = if matches!(kind, Kind::Head) { 1287 } else { 110 };
+    let body = if matches!(kind, Kind::Head) { 1287 } else { 118 };
     assert_eq!(n, body + 4 + pk + sig);
     let short = alg.tag() <= 2;
     // truncations
@@ -131,6 +131,10 @@ fn scan(kind: Kind, alg: IdentityAlg, enc: &[u8], base: usize, out: &mut Vec<Str
     let mut pos: Vec<usize> = (0..40.min(n)).collect();
     let tags = [32, 65];
     pos.extend(tags);
+    if matches!(kind, Kind::Ack) {
+        // the offer id, after the two nodes
+        pos.extend(98..106);
+    }
     pos.extend((body..body + 4 + pk + 6).filter(|p| p % 7 == 0 || *p < body + 6));
     pos.extend(n.saturating_sub(5)..n);
     pos.extend((40..n).step_by(if short { 41 } else { 97 }));
@@ -178,12 +182,19 @@ fn codec_trace() {
             bases += 1;
         }
         let prev = keypair(alg_to, 500 + i as u64).node_id();
-        let ack = CustodyAck::sign(BundleId([9 + i as u8; 32]), prev, Hlc::new(5, 1), &signer).unwrap();
-        let mut enc = vec![0; ack.encoded_len()];
-        let n = ack.encode(&mut enc).unwrap();
-        assert_eq!(n, enc.len());
-        scan(Kind::Ack, alg, &enc, bases, &mut out);
-        bases += 1;
+        // The offer id is a signed u64 field: distinct bytes for every algorithm, and the extremes once.
+        let mut offers = vec![0x0102_0304_0506_0708 ^ i as u64];
+        if i == 0 {
+            offers.extend([0, 1, u64::MAX]);
+        }
+        for offer in offers {
+            let ack = CustodyAck::sign(BundleId([9 + i as u8; 32]), prev, offer, Hlc::new(5, 1), &signer).unwrap();
+            let mut enc = vec![0; ack.encoded_len()];
+            let n = ack.encode(&mut enc).unwrap();
+            assert_eq!(n, enc.len());
+            scan(Kind::Ack, alg, &enc, bases, &mut out);
+            bases += 1;
+        }
     }
     assert!(out.len() > 1000);
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
