@@ -8,9 +8,9 @@ a new entry goes to the first free slot, as in the code. Node ids and bundle ids
 
 Machine integers: the times and timers are `u64` with `saturating_sub` (`Nat` subtraction truncates at 0, the same
 function) and the clock is `max`; `sat8` is the `u8` `saturating_add` of the send counter; the copies are a `u16`
-halved by integer division. The model keeps the values as `Nat`; `DtnForwardInv.lean` proves that no operation
-produces a value above the largest of its inputs plus the one step the code takes, so no `u64`, `u16` or `u8` ever
-wraps (`Bounds` there).
+halved by integer division. The model keeps the values as `Nat`. Nothing in the forwarder adds to a time, a timer or
+a copy count (timers only go down, `advance_timer_le`; copies only move from held to handed, `spray_total`), and the
+one addition, the send counter, is capped (`sat8_le`), so no `u64`, `u16` or `u8` wraps.
 
 The theorems about the model are in `DtnForwardThm.lean` (ordering, timers, expiry, spray rules, the destination),
 `DtnForwardInv.lean` (the invariants) and `DtnForwardCons.lean` (copies are conserved); the trace replay is

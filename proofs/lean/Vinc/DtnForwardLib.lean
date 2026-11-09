@@ -40,6 +40,13 @@ theorem slot_upd_ne (l : List (Option α)) (i j : Nat) (g : Option α → Option
   | cons a r ih =>
     cases i <;> cases j <;> simp_all [upd, slot_cons_zero, slot_cons_succ]
 
+theorem slot_upd_map (l : List (Option α)) (i j : Nat) (g : α → α) :
+    slot (upd l i (Option.map g)) j = if j = i then (slot l j).map g else slot l j := by
+  induction l generalizing i j with
+  | nil => simp [upd]
+  | cons a r ih =>
+    cases i <;> cases j <;> simp_all [upd, slot_cons_zero, slot_cons_succ]
+
 theorem slot_map (l : List (Option α)) (g : Option α → Option β) (hn : g none = none) (i : Nat) :
     slot (l.map g) i = g (slot l i) := by
   induction l generalizing i with
