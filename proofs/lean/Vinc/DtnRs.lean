@@ -62,14 +62,15 @@ def synOf (k m : Nat) (blk : List GF) (present : List Bool) (t : Nat) : GF :=
         ((List.range k).filter fun i => !(ysOf k present).contains i))
 
 /-- The `s`-th missing data symbol: `F_s` times the Cauchy combination of the scaled syndromes. -/
-def outOf (k m : Nat) (blk : List GF) (present : List Bool) (s : Nat) : GF :=
+def outOf (k m : Nat) (present : List Bool) (syns : List GF) (s : Nat) : GF :=
   fF (xsOf k m present) (ygOf k present) s *
-    sumL (fun t => ((xsOf k m present).getD t 0 + (ygOf k present).getD s 0)⁻¹ * synOf k m blk present t)
+    sumL (fun t => ((xsOf k m present).getD t 0 + (ygOf k present).getD s 0)⁻¹ * syns.getD t 0)
       (List.range (ysOf k present).length)
 
 /-- The data symbols after the solve: the missing ones replaced, the others untouched. -/
 def solveData (k m : Nat) (blk : List GF) (present : List Bool) : List GF :=
-  (List.range k).map fun i => if (ysOf k present).contains i then outOf k m blk present ((ysOf k present).idxOf i)
+  let syns := (List.range (ysOf k present).length).map (synOf k m blk present)
+  (List.range k).map fun i => if (ysOf k present).contains i then outOf k m present syns ((ysOf k present).idxOf i)
     else blk.getD i 0
 
 /-- `Rs::reconstruct` on one column: the checks, the solve, then `encode` of the repaired data. -/
@@ -402,11 +403,16 @@ theorem syn_eq (hk1 : 1 ≤ k) (hn : k + m ≤ 255) (hd : d.length = k) (hp : pr
   unfold synOf
   rw [← syn_part hd hp hag _ hrm hrp]
 
+theorem syns_getD (e : Nat) (f : Nat → GF) (t : Nat) (ht : t < e) :
+    ((List.range e).map f).getD t 0 = f t := by
+  simp [List.getD_eq_getElem?_getD, ht]
+
 theorem out_eq (hk1 : 1 ≤ k) (hn : k + m ≤ 255) (hd : d.length = k) (hp : present.length = k + m)
     (hheld : k ≤ present.countP id)
     (hag : ∀ s, s < k + m → present.getD s false = true → blk.getD s 0 = (codeword k m d).getD s 0)
     (s : Nat) (hs : s < (ysOf k present).length) :
-    outOf k m blk present s = d.getD ((ysOf k present).getD s 0) 0 := by
+    outOf k m present ((List.range (ysOf k present).length).map (synOf k m blk present)) s =
+      d.getD ((ysOf k present).getD s 0) 0 := by
   have hN := nodes_of k m present hn hp hheld
   have hxe : (xsOf k m present).length = (ysOf k present).length := by
     have := hN.len; simpa [ygOf] using this
@@ -414,13 +420,13 @@ theorem out_eq (hk1 : 1 ≤ k) (hn : k + m ≤ 255) (hd : d.length = k) (hp : pr
   unfold outOf
   rw [sumL_eq, sumList_range]
   have e1 : sumTo (ysOf k present).length (fun t => ((xsOf k m present).getD t 0 + (ygOf k present).getD s 0)⁻¹ *
-      synOf k m blk present t) =
+      ((List.range (ysOf k present).length).map (synOf k m blk present)).getD t 0) =
       sumTo (xsOf k m present).length (fun t => ((xsOf k m present).getD t 0 + (ygOf k present).getD s 0)⁻¹ *
         (gF (xsOf k m present) (ygOf k present) t * sumTo (xsOf k m present).length (fun r =>
           ((xsOf k m present).getD t 0 + (ygOf k present).getD r 0)⁻¹ * d.getD ((ysOf k present).getD r 0) 0))) := by
     rw [hxe]
     apply sumTo_congr; intro t ht
-    rw [syn_eq hk1 hn hd hp hheld hag t ht]
+    rw [syns_getD _ _ t ht, syn_eq hk1 hn hd hp hheld hag t ht]
   rw [e1]
   exact solve_id hN (fun r => d.getD ((ysOf k present).getD r 0) 0) s hsy
 
