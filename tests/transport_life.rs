@@ -98,6 +98,45 @@ fn one_close_then_the_state_is_freed() {
     });
 }
 
+/// A frame held back for want of room must not discard the frames behind it in its packet. The room the held stream
+/// waits for only comes back as the stream ahead of it receives its bytes, and those ride behind it in every
+/// retransmission.
+#[test]
+fn a_held_back_stream_does_not_discard_the_frames_behind_it_in_its_packet() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        // A server whose pool holds two windows, one chunk of it taken for good by a stream nobody reads: the second
+        // stream fits only once the first has been received whole and read.
+        let mut small = vinc_transport::stream::Config::new(false);
+        small.initial_stream_window = 64 * 1024;
+        small.max_stream_window = 64 * 1024;
+        let mut sa = Store::new(true);
+        let mut sb = Store::with_stream(8, &small);
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(5, Params::new(10 * MS)));
+        assert!(net.connect(net.now + 10 * SEC));
+        net.b.auto_read = false;
+        let parked = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(parked, &[9; 100]).unwrap();
+        net.run(net.now + SEC, |_| false);
+        let (first, second) = (net.a.conn.open_bi().unwrap(), net.a.conn.open_bi().unwrap());
+        // The second stream is served first, so its frame leads the packet that carries the first stream's bytes.
+        net.a.conn.set_urgency(second, 0).unwrap();
+        let (d1, d2) = (pattern(30_000, 61), pattern(100, 62));
+        for (id, d) in [(first, &d1), (second, &d2)] {
+            assert_eq!(net.a.conn.write(id, d).unwrap(), d.len());
+            net.a.conn.finish(id).unwrap();
+        }
+        let ok = net.run(net.now + 60 * SEC, |n| {
+            n.b.read_stream(n.now, first);
+            n.b.read_stream(n.now, second);
+            n.b.fin.contains(&first) && n.b.fin.contains(&second)
+        });
+        assert!(ok, "the streams were not delivered: {:?}", net.b.fin);
+        assert!(net.b.read[&first] == d1 && net.b.read[&second] == d2);
+        assert!(!net.a.saw(|r| matches!(r, Rec::Reset(..))), "a stream was reset");
+    });
+}
+
 #[test]
 fn a_stream_the_pool_cannot_hold_waits_unacknowledged_and_is_delivered_once_there_is_room() {
     big_stack(|| {

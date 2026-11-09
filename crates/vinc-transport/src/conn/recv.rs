@@ -412,17 +412,20 @@ conn_impl! {
         if was_asleep {
             self.suspend_probes();
         }
+        // A frame held back for want of room leaves the packet unacknowledged, but the frames behind it are still
+        // taken: the room it waits for may only come from them, and a retransmission repeats the same order.
+        let mut held = false;
         for f in FrameIter::new(payload) {
             let Ok(f) = f else { break };
             if let Err(fault) = self.on_frame(env, pi, now, ctx.old_key, f) {
-                return match fault {
+                match fault {
                     Fault::Violation(c) => {
                         self.violation(now, c);
-                        Err(Drop::Closed)
+                        return Err(Drop::Closed);
                     }
-                    Fault::Shortage => Err(Drop::Empty),
-                    Fault::Gated => Err(Drop::Gated),
-                };
+                    Fault::Shortage => held = true,
+                    Fault::Gated => return Err(Drop::Gated),
+                }
             }
             if matches!(self.phase, Phase::Closed | Phase::Closing) {
                 return Ok(());
@@ -430,6 +433,9 @@ conn_impl! {
         }
         if was_asleep && self.life.peer_asleep.is_none() {
             self.push(Ev::PeerAwake);
+        }
+        if held {
+            return Err(Drop::Empty);
         }
         // `contains` was false above and nothing recorded it since, so this is always `New`; a number beyond 2^62 was
         // refused by `open`.
