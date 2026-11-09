@@ -221,6 +221,8 @@ pub struct ClientStore {
     pub verified: VerifiedRanges<64>,
     pub written: u64,
     pub fail_writes: bool,
+    /// Every range committed to the verified set, in order.
+    pub commits: Vec<Range<u64>>,
 }
 
 impl ClientStore {
@@ -308,7 +310,9 @@ impl ValueStore for ClientStore {
     }
 
     fn commit(&mut self, _: &[u8; 32], range: Range<u64>) -> Result<(), StoreError> {
-        self.verified.insert(range).map_err(Into::into)
+        self.verified.insert(range.clone())?;
+        self.commits.push(range);
+        Ok(())
     }
 }
 
@@ -320,14 +324,25 @@ impl ValueStore for ClientStore {
 pub struct Rec {
     pub events: Vec<(u64, Event)>,
     pub traces: Vec<(u64, Trace)>,
+    /// Every event and trace record in the order the fetcher reported it.
+    pub log: Vec<Logged>,
+}
+
+/// One item of [`Rec::log`].
+#[derive(Clone, Copy, Debug)]
+pub enum Logged {
+    Ev(u64, Event),
+    Tr(u64, Trace),
 }
 
 impl Out for Rec {
     fn event(&mut self, now: u64, ev: Event) {
         self.events.push((now, ev));
+        self.log.push(Logged::Ev(now, ev));
     }
     fn trace(&mut self, now: u64, t: Trace) {
         self.traces.push((now, t));
+        self.log.push(Logged::Tr(now, t));
     }
 }
 

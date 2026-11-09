@@ -48,6 +48,15 @@ witness_tlc() { # witness_tlc <name> <spec> <cfg> <property> : TLC must find a v
         || { echo "$out" >&2; echo "proofs: TLC failed on $3 for another reason than $4" >&2; exit 1; }
     echo "tlc $3: finds the expected violation of $4"
 }
+witness_live_tlc() { # witness_live_tlc <name> <spec> <cfg> : TLC must find a counterexample to the liveness property (the stuck states the code had)
+    local out
+    if out=$(tlc -workers auto -metadir "proofs/tla/states/$1" -config "proofs/tla/$3.cfg" "proofs/tla/$2.tla" 2>&1); then
+        echo "$out" >&2; echo "proofs: TLC found no liveness violation in $3: the witness is gone" >&2; exit 1
+    fi
+    grep -q "Temporal properties were violated" <<<"$out" \
+        || { echo "$out" >&2; echo "proofs: TLC failed on $3 for another reason than a liveness violation" >&2; exit 1; }
+    echo "tlc $3: finds the expected liveness violation"
+}
 echo "-- tlc"
 # The independent model checks run at most 3 at a time; a failure of any stops the script.
 par() {
@@ -93,12 +102,85 @@ par run_tlc tickets_zero Tickets Tickets_zero
 par run_tlc prekeycache PrekeyCache PrekeyCache
 par run_tlc prekeycache_n0 PrekeyCache PrekeyCache_n0
 par run_tlc prekeycache_n3 PrekeyCache PrekeyCache_n3
+par run_tlc values_plan ValuesPlan ValuesPlan
+par run_tlc values_plan_tight ValuesPlan ValuesPlan_tight
+par run_tlc values_plan_word ValuesPlan ValuesPlan_word
+par run_tlc values_plan_source ValuesPlanSource ValuesPlanSource
+par run_tlc values_plan_proofs ValuesPlanProofs ValuesPlanProofs
+par run_tlc values_plan_server ValuesPlanServer ValuesPlanServer
+par run_tlc vsched_list ValuesSchedList ValuesSchedList
+par run_tlc vsched_n2 ValuesSched ValuesSched_n2
+par run_tlc vsched_n3 ValuesSched ValuesSched_n3
+par run_tlc vsched_liar ValuesSched ValuesSched_liar
+par run_tlc vsched_alllie ValuesSched ValuesSched_alllie
+par run_tlc vsched_silent ValuesSched ValuesSched_silent
+par run_tlc vsched_wants ValuesSched ValuesSched_wants
+par run_tlc vsched_tight ValuesSched ValuesSched_tight
+par run_tlc vsched_track ValuesSched ValuesSched_track
+par run_tlc vsched_ends ValuesSched ValuesSched_ends
+par witness_tlc vsched_wide ValuesSched ValuesSched_wide Room
+par witness_tlc vsched_dup ValuesSched ValuesSched_dup ResumeFresh
+par witness_tlc vsched_nocorr ValuesSched ValuesSched_nocorr NoStealOfJustGiven
+par witness_tlc vsched_small ValuesSched ValuesSched_small NoSmallIdleSteal
+par run_tlc vsys_n1 ValuesSys ValuesSys_n1
+par run_tlc vsys_n2 ValuesSys ValuesSys_n2
+par run_tlc vsys_n3 ValuesSys ValuesSys_n3
+par run_tlc vsys_n3_live ValuesSys ValuesSys_n3_live
+par run_tlc vsys_n4 ValuesSys ValuesSys_n4
+par run_tlc vsys_drop ValuesSys ValuesSys_drop
+par run_tlc vsys_slow ValuesSys ValuesSys_slow
+par run_tlc vsys_steal ValuesSys ValuesSys_steal
+par run_tlc vsys_liar ValuesSys ValuesSys_liar
+par run_tlc vsys_alllie ValuesSys ValuesSys_alllie
+par run_tlc vsys_restart ValuesSys ValuesSys_restart
+par run_tlc vsys_resume ValuesSys ValuesSys_resume
+par run_tlc vsys_loss ValuesSys ValuesSys_loss
+par run_tlc vsys_extra ValuesSys ValuesSys_extra
+par run_tlc vsys_deadline ValuesSys ValuesSys_deadline
+par run_tlc vsys_deadline_ok ValuesSys ValuesSys_deadline_ok
+par run_tlc vsys_badroot ValuesSys ValuesSys_badroot
+par run_tlc vsys_noprov ValuesSys ValuesSys_noprov
+par run_tlc vsys_store ValuesSys ValuesSys_store
+par run_tlc vsys_done ValuesSys ValuesSys_done
+par witness_tlc vsys_w_lied ValuesSys ValuesSys_w_lied NeverLiedFail
+par witness_tlc vsys_w_deadline ValuesSys ValuesSys_w_deadline NeverDeadlineFail
+par witness_tlc vsys_w_store ValuesSys ValuesSys_w_store NeverStoreFail
+par witness_tlc vsys_w_ahead ValuesSys ValuesSys_w_ahead NeverAheadCommit
+par witness_tlc vsys_w_liar_complete ValuesSys ValuesSys_w_liar_complete NeverLiarThenComplete
+par witness_tlc vsys_w_steal ValuesSys ValuesSys_w_steal NeverStolen
+par witness_tlc vsys_w_redial ValuesSys ValuesSys_w_redial NeverRedialed
+par witness_live_tlc vsys_n2_old ValuesSys ValuesSys_n2_old
+par witness_live_tlc vsys_n2_oldconn ValuesSys ValuesSys_n2_oldconn
+par run_tlc valuestime_hold ValuesTime ValuesTime_hold
+par run_tlc valuestime_holdsmall ValuesTime ValuesTime_holdsmall
+par run_tlc valuestime_stall ValuesTime ValuesTime_stall
+par run_tlc valuestime_live ValuesTime ValuesTime_live
+par run_tlc valuestime_max ValuesTime ValuesTime_max
+par run_tlc valuestime_dl ValuesTime ValuesTime_dl
+par witness_tlc valuestime_seq ValuesTime ValuesTime_seq SwNot16
+par witness_tlc valuestime_low ValuesTime ValuesTime_low SwNeverLowered
+par witness_tlc valuestime_dup ValuesTime ValuesTime_dup AnnOnce
+par witness_tlc valuestime_tail ValuesTime ValuesTime_tail TailMeansDone
+par witness_tlc valuestime_wbuf ValuesTime ValuesTime_wbuf NoBuffered
+par witness_tlc valuestime_wbufreal ValuesTime ValuesTime_wbufreal NoBuffered
+par witness_tlc valuestime_wtail ValuesTime ValuesTime_wtail NoTail
+par witness_tlc valuestime_wgran ValuesTime ValuesTime_wgran NoGranules
+par witness_tlc valuestime_wtime ValuesTime ValuesTime_wtime NoTimeout
+par witness_tlc valuestime_wdone ValuesTime ValuesTime_wdone NoDone
+par run_tlc_deep valuesverify ValuesVerify ValuesVerify
+par run_tlc_deep valuesverify_small ValuesVerify ValuesVerify_small
+par run_tlc_deep valuesverify_real64 ValuesVerify ValuesVerify_real64
+par run_tlc_deep valuesverify_real32 ValuesVerify ValuesVerify_real32
+par run_tlc_deep valuesverify_skip ValuesVerify ValuesVerify_skip
+par run_tlc_deep valuesverify_skip2 ValuesVerify ValuesVerify_skip2
+par run_tlc_deep valuesverify_rx ValuesVerifyRx ValuesVerifyRx
+par run_tlc_deep valueswire ValuesWire ValuesWire
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -118,5 +200,11 @@ trace_tlc TraceSecurity security
 trace_tlc TraceKeyRoll keyroll
 trace_tlc TraceKeyLayer "key layer"
 trace_tlc TraceStores stores
+trace_tlc TraceValuesPlan values_plan
+trace_tlc TraceValuesSched values_sched
+trace_tlc TraceValuesSys values_sys
+trace_tlc TraceValuesTime values_time
+trace_tlc TraceValuesVerify valuesverify
+trace_tlc TraceValuesWire valueswire
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
 echo "proofs: ok"

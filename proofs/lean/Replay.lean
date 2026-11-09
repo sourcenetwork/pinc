@@ -9,6 +9,12 @@ import Vinc.HandshakeTrace
 import Vinc.TraceKeyRoll
 import Vinc.TraceKeyLayer
 import Vinc.TraceStores
+import Vinc.TraceValuesSys
+import Vinc.TraceValuesPlan
+import Vinc.TraceValuesSched
+import Vinc.ValuesWireTrace
+import Vinc.ValuesVerifyTrace
+import Vinc.ValuesTimeTrace
 
 /-!
 # Trace replay
@@ -110,6 +116,11 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut stw : TraceStores.W := {}
   let mut krs : TraceKeyRoll.KState := {}
   let mut kls : TraceKeyLayer.KL := {}
+  let mut vyw : TraceValuesSys.W := {}
+  let mut vps : TraceValuesPlan.Srv := {}
+  let mut vsw : TraceValuesSched.RS := {}
+  let mut gvw : ValuesVerifyTrace.W := {}
+  let mut vtw : ValuesTimeTrace.W := default
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -135,6 +146,45 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if ValuesVerifyTrace.isTag t then
+          -- GroupVerifier events (`trace_values_verify`): `feedG` and `skipG` next to the RangeVerifier replay.
+          match ValuesVerifyTrace.replayEvent j gvw with
+          | .ok w' =>
+            gvw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if ValuesWireTrace.isWireTag t then
+          -- Value wire codec events (`trace_values_wire`): REQ, GROUP header, PROOF and PROOF_REQ parse and encode.
+          match ValuesWireTrace.replayEvent j with
+          | .ok () =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "vs" then
+          -- Scheduler events (`vs`, written by `trace_values_sched`): top-up, steal, eviction and verification on the model.
+          match TraceValuesSched.replayChecked j vsw with
+          | .ok w' =>
+            vsw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if ValuesTimeTrace.isTag t then
+          -- Time-rule events (`vtrun`, `vt`, written by `trace_values_time`): HEAD_HOLD, STALL_REDIAL, the deadline.
+          match ValuesTimeTrace.replayEvent j vtw with
+          | .ok w' =>
+            vtw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "vsys" then
+          -- Value fetch system events (`vsys`, written by `trace_values_sys`): the model `Vinc.ValuesSys` of the whole fetch.
+          match TraceValuesSys.replayEvent j vyw with
+          | .ok w' =>
+            vyw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
         if t == "kr" then
           -- Key roll events (`kr`, written by `trace_keyroll`): the Roll machine, the packet keys, `due` and the REKEY codec.
           match TraceKeyRoll.replayEvent j krs with
@@ -148,6 +198,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceKeyLayer.replayEvent j kls with
           | .ok k' =>
             kls := k'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceValuesPlan.isTag t then
+          -- Plan, read_at and server proof-frame events (`trace_values_plan`): the Lean model functions of `ValuesPlan*`.
+          match TraceValuesPlan.replayEvent j vps with
+          | .ok v' =>
+            vps := v'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

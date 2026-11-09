@@ -303,6 +303,10 @@ name = "values_wire"
 path = "values_wire.rs"
 
 [[test]]
+name = "trace_values_wire"
+path = "trace_values_wire.rs"
+
+[[test]]
 name = "values_verify"
 path = "values_verify.rs"
 
@@ -317,6 +321,22 @@ path = "values_fetch.rs"
 [[test]]
 name = "values_rules"
 path = "values_rules.rs"
+
+[[test]]
+name = "values_time"
+path = "values_time.rs"
+
+[[test]]
+name = "trace_values_time"
+path = "trace_values_time.rs"
+
+[[test]]
+name = "values_sys"
+path = "values_sys.rs"
+
+[[test]]
+name = "trace_values_sys"
+path = "trace_values_sys.rs"
 
 [[test]]
 name = "values_server"
@@ -438,5 +458,21 @@ path = "broadcast_alloc.rs"
 name = "broadcast_limits"
 path = "broadcast_limits.rs"
 
+[[test]]
+name = "trace_values_plan"
+path = "trace_values_plan.rs"
+
+[[test]]
+name = "trace_values_verify"
+path = "trace_values_verify.rs"
+
 [lints]
 workspace = true
+
+[[test]]
+name = "values_sched"
+path = "values_sched.rs"
+
+[[test]]
+name = "trace_values_sched"
+path = "trace_values_sched.rs"

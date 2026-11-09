@@ -50,11 +50,14 @@ pub fn holes<St: ValueStore + ?Sized>(st: &St, root: &[u8; 32], span: Span, mut 
     }
 }
 
-/// Round `span` out to whole groups, clamped to a value of `total` bytes; `None` if nothing is left.
+/// Round `span` out to whole groups, clamped to a value of `total` bytes; `None` if nothing is left (an empty span
+/// asks for no bytes, whatever its offset).
 pub fn align(span: Span, total: u64) -> Option<Span> {
     let a = span.off / GROUP * GROUP;
     let b = span.end().div_ceil(GROUP).saturating_mul(GROUP).min(total);
-    (b > a).then_some(Span { off: a, len: b - a })
+    b.checked_sub(a)
+        .filter(|&len| span.len > 0 && len > 0)
+        .map(|len| Span { off: a, len })
 }
 
 /// A bounded, ordered list of up to `N` spans.
@@ -124,6 +127,36 @@ impl<const N: usize> RangeList<N> {
         if let Some(slot) = self.items.get_mut(self.len) {
             *slot = s;
             self.len += 1;
+        }
+    }
+
+    /// Append the parts of `s` that no span of the list covers yet, in order. Bytes asked twice are fetched twice, so
+    /// a caller that cannot promise disjoint input uses this instead of [`RangeList::push`].
+    pub fn push_new(&mut self, s: Span) {
+        let (mut cur, end) = (s.off, s.end());
+        while cur < end {
+            let covered = self
+                .as_slice()
+                .iter()
+                .filter(|e| e.off <= cur && cur < e.end())
+                .map(Span::end)
+                .max();
+            if let Some(to) = covered {
+                cur = to;
+                continue;
+            }
+            let next = self
+                .as_slice()
+                .iter()
+                .map(|e| e.off)
+                .filter(|&o| o > cur && o < end)
+                .min()
+                .unwrap_or(end);
+            self.push(Span {
+                off: cur,
+                len: next - cur,
+            });
+            cur = next;
         }
     }
 

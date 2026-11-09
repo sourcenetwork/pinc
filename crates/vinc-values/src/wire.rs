@@ -41,8 +41,10 @@ pub const GROUP_HDR: usize = 16;
 pub const REQ_MAX: usize = REQ_FIXED + 16 * MAX_REQ_RANGES;
 /// The size of the fixed part of a PROOF body after the stream id.
 const PROOF_FIXED: usize = 1 + 8 + 4 + 8;
-/// The largest PROOF body: a 9-byte id, the fixed part and the largest proof.
-pub const PROOF_BODY_MAX: usize = 9 + PROOF_FIXED + WT_PMAX;
+/// The most bytes the head of a PROOF body takes: a 9-byte id and the fixed part.
+const PROOF_HEAD_MAX: usize = 9 + PROOF_FIXED;
+/// The largest PROOF body: the largest head and the largest proof.
+pub const PROOF_BODY_MAX: usize = PROOF_HEAD_MAX + WT_PMAX;
 
 /// A parsed REQ, borrowing its bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,15 +239,15 @@ impl<'a> ProofFrame<'a> {
     /// Write the fixed part of a PROOF body (everything before the proof) into `out`; returns its length.
     ///
     /// # Errors
-    /// [`WireError`] if `out` is short or `sid` does not fit a varint.
+    /// [`WireError`] if `out` is short or `sid` does not fit a varint; `out` is untouched then.
     pub fn write_head(sid: u64, glog: u8, start: u64, wn: u32, ln: u64, out: &mut [u8]) -> Result<usize, WireError> {
-        let mut w = Writer::new(out);
-        w.put_varint(sid)?;
-        w.put_u8(glog)?;
-        w.put_u64(start)?;
-        w.put_u32(wn)?;
-        w.put_u64(ln)?;
-        Ok(w.written().len())
+        put_whole(out, |w| {
+            w.put_varint(sid)?;
+            w.put_u8(glog)?;
+            w.put_u64(start)?;
+            w.put_u32(wn)?;
+            w.put_u64(ln)
+        })
     }
 }
 
@@ -279,14 +281,25 @@ impl ProofReq {
     /// Encode the body into `out`; returns the bytes written.
     ///
     /// # Errors
-    /// [`WireError`] if `out` is short or `sid` does not fit a varint.
+    /// [`WireError`] if `out` is short or `sid` does not fit a varint; `out` is untouched then.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, WireError> {
-        let mut w = Writer::new(out);
-        w.put_varint(self.sid)?;
-        w.put_u64(self.from)?;
-        w.put_u64(self.upto)?;
-        Ok(w.written().len())
+        put_whole(out, |w| {
+            w.put_varint(self.sid)?;
+            w.put_u64(self.from)?;
+            w.put_u64(self.upto)
+        })
     }
+}
+
+/// Build a frame head of at most [`PROOF_HEAD_MAX`] bytes with `fill`, then copy it to `out` whole: `out` is untouched when
+/// `fill` fails or the head does not fit.
+fn put_whole(out: &mut [u8], fill: impl FnOnce(&mut Writer<'_>) -> Result<(), WireError>) -> Result<usize, WireError> {
+    let mut head = [0u8; PROOF_HEAD_MAX];
+    let mut w = Writer::new(&mut head);
+    fill(&mut w)?;
+    let bytes = w.written();
+    Writer::new(out).put_slice(bytes)?;
+    Ok(bytes.len())
 }
 
 /// A big-endian `u64` from the first 8 bytes of `b`; 0 if `b` is shorter (callers pass exact slices).

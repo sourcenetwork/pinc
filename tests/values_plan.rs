@@ -236,3 +236,15 @@ fn a_source_over_a_store_that_lost_bytes_reads_short() {
     let n = src.read_at(0, &mut b);
     assert!(n > 0 && n < 100_000);
 }
+
+#[test]
+fn the_span_of_a_range_of_a_value_near_the_top_of_u64_does_not_overflow() {
+    // The last group of a value of u64::MAX bytes ends past 2^64: rounding the range out to whole groups must clip to
+    // the value (as `Plan::new` does), not wrap or panic.
+    for len in [u64::MAX, u64::MAX - 1, u64::MAX - 16383, u64::MAX - 16384] {
+        let tail = Plan::new(len, &[Span { off: len - 1, len: 1 }]).unwrap();
+        let sp = tail.range_span(0).unwrap();
+        assert_eq!(sp.end(), len, "the range ends at the value end");
+        assert!(sp.off < len);
+    }
+}

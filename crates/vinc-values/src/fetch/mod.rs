@@ -38,6 +38,7 @@ use crate::span::{RangeList, Span, align};
 use crate::store::ValueStore;
 use crate::trace::{Event, FailReason, Out, Trace};
 use rx::Rx;
+pub use stall::Timers;
 use wt::ProofCache;
 
 /// The most request streams a fetch has open at once, over all providers.
@@ -304,7 +305,7 @@ impl Fetch {
         };
         for s in asked {
             if let Some(a) = align(*s, spec.length) {
-                self.want.push(a);
+                self.want.push_new(a);
             }
         }
         self.root = spec.root;
@@ -401,6 +402,11 @@ impl Fetch {
         });
         if assigned {
             self.request(io, now, pi, None);
+            // A provider that holds nothing (it finished, or its work was stolen) must try to take work or steal
+            // again now that it is back: no other event will top it up.
+            if self.striped {
+                self.top_up(io, now, pi);
+            }
         }
     }
 

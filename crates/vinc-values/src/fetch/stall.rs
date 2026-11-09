@@ -10,7 +10,52 @@ use crate::knobs::{ASSUMED_RTT, HOLD_MAX, LIVE_CAP, NS, SLOW_RTT, STALL_CAP, STA
 use crate::session::Outbound;
 use crate::trace::{Event, FailReason, Out, Trace};
 
+/// The time-related state of a fetch: what [`Fetch::poll_timeout`] and [`Fetch::on_timeout`] decide from. Read only,
+/// for the trace replay of the proofs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timers {
+    /// Whether the fetch is running.
+    pub running: bool,
+    /// The stall wait in nanoseconds.
+    pub sw: u64,
+    /// The time of the last completed frame, 0 before the first.
+    pub lastp: u64,
+    /// The time of the last stream bytes, 0 before the first.
+    pub lastb: u64,
+    /// The time of the first request, 0 before it.
+    pub treq: u64,
+    /// The steal re-check time, 0 when none is armed.
+    pub tw: u64,
+    /// The held first granule as (offset, length, time held), if any.
+    pub head: Option<(u64, u64, u64)>,
+    /// Whether the first granule was announced.
+    pub released: bool,
+    /// The granules verified while the first is held.
+    pub nv: u32,
+    /// The deadline, if any.
+    pub deadline: Option<u64>,
+    /// The first request offset.
+    pub o0: u64,
+}
+
 impl Fetch {
+    /// The time-related state, for the proofs' trace replay.
+    pub fn timers(&self) -> Timers {
+        Timers {
+            running: self.state == State::Running,
+            sw: self.sw,
+            lastp: self.lastp,
+            lastb: self.lastb,
+            treq: self.treq,
+            tw: self.tw,
+            head: self.head.map(|h| (h.off, h.len, h.t0)),
+            released: self.released,
+            nv: self.nv,
+            deadline: self.deadline,
+            o0: self.o0,
+        }
+    }
+
     /// The next time [`Fetch::on_timeout`] has something to do, if any.
     pub fn poll_timeout(&self) -> Option<u64> {
         if self.state != State::Running {
@@ -33,7 +78,9 @@ impl Fetch {
         if self.state != State::Running {
             return;
         }
-        if STALL_WAIT != 0 && self.lastp != 0 && now >= self.lastp.max(self.lastb).saturating_add(self.sw) {
+        // Past the deadline the call only winds the fetch down: no redial and no steal re-check, the fetch fails below.
+        let late = self.deadline.is_some_and(|d| now > d);
+        if !late && STALL_WAIT != 0 && self.lastp != 0 && now >= self.lastp.max(self.lastb).saturating_add(self.sw) {
             let w = self.stall_rtt(io);
             let lv = self.stall_live(io, now);
             if w > self.sw && self.lastp.saturating_add(w) > now {
@@ -51,7 +98,7 @@ impl Fetch {
                 return;
             }
         }
-        if self.striped && self.tw != 0 && now >= self.tw {
+        if !late && self.striped && self.tw != 0 && now >= self.tw {
             self.tw = 0;
             for pi in 0..self.nprov {
                 if self.provs.get(pi).is_some_and(|p| p.in_assign) {
@@ -62,7 +109,7 @@ impl Fetch {
                 return;
             }
         }
-        if self.deadline.is_some_and(|d| now > d) {
+        if late {
             self.state = State::Done;
             self.drop_all_streams(io);
             io.split().2.event(now, Event::Failed(FailReason::Deadline));
@@ -73,7 +120,8 @@ impl Fetch {
                 .provs
                 .get_mut(pi)
                 .is_some_and(|p| p.retry.is_some_and(|t| t <= now) && p.retry.take().is_some());
-            if due && (self.rx.iter().all(Option::is_none) || !self.provs.get(pi).is_some_and(|p| p.conn)) {
+            // Only the provider's own streams matter: a stream of another provider must not swallow its retry.
+            if due && (self.streams_of(pi) == 0 || !self.provs.get(pi).is_some_and(|p| p.conn)) {
                 self.request(io, now, pi, None);
             }
         }

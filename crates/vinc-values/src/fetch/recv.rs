@@ -207,7 +207,7 @@ impl Fetch {
             self.top_up(io, now, rx.provider);
         }
         if self.state == State::Running
-            && self.rx.iter().all(Option::is_none)
+            && self.streams_of(rx.provider) == 0
             && let Some(p) = self.provs.get_mut(rx.provider)
         {
             p.retry = Some(now + RESTREAM_DELAY);

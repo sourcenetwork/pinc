@@ -179,3 +179,41 @@ fn strictness_cases() {
     v.extend_from_slice(&[0u8; 16]);
     assert!(ProofReq::parse(&v).is_err());
 }
+
+#[test]
+fn a_failed_frame_head_encode_writes_nothing() {
+    // The sid varint fits a 3-byte buffer but the rest does not: the old encoders left the varint behind.
+    let rq = ProofReq {
+        sid: 300,
+        from: 1,
+        upto: 2,
+    };
+    let need = rq.encode(&mut [0u8; 32]).unwrap();
+    for cap in 0..need {
+        let mut buf = vec![0xaa; cap];
+        assert_eq!(
+            rq.encode(&mut buf),
+            Err(WireError::BufferTooSmall { needed: need - cap })
+        );
+        assert!(buf.iter().all(|&b| b == 0xaa), "PROOF_REQ cap {cap}");
+    }
+    let need = ProofFrame::write_head(300, 4, 1, 2, 3, &mut [0u8; 32]).unwrap();
+    for cap in 0..need {
+        let mut buf = vec![0xaa; cap];
+        assert_eq!(
+            ProofFrame::write_head(300, 4, 1, 2, 3, &mut buf),
+            Err(WireError::BufferTooSmall { needed: need - cap })
+        );
+        assert!(buf.iter().all(|&b| b == 0xaa), "PROOF cap {cap}");
+    }
+    // An id that does not fit a varint is refused before the room is looked at.
+    assert_eq!(
+        ProofReq {
+            sid: 1 << 63,
+            from: 0,
+            upto: 0
+        }
+        .encode(&mut [0u8; 2]),
+        Err(WireError::VarintOverflow)
+    );
+}

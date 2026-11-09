@@ -410,27 +410,17 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
         if ln == 0 || s.deep {
             return;
         }
+        // The end is peer-controlled (`upto`), so it saturates: a request near 2^64 must not wrap or panic.
         let end = if upto != 0 {
-            upto + GROUP
+            upto.saturating_add(GROUP)
         } else {
-            s.vfront + s.window + GROUP
+            s.vfront.saturating_add(s.window).saturating_add(GROUP)
         };
         let end = end.min(ln).min(end - end % GROUP);
-        let ngroups = ln.div_ceil(GROUP);
-        let dep = u64::from((ngroups - 1).checked_ilog2().map_or(0, |b| b + 1));
-        let cost = |k: u64| {
-            PARENT_LEN as u64 * (k - 1)
-                + PARENT_LEN as u64 * dep.saturating_sub(u64::from((k - 1).checked_ilog2().map_or(0, |b| b + 1)))
-                + 8
-        };
-        let mut k = WT_MAX_K;
-        while k > 1 && cost(k) > WT_PMAX as u64 {
-            k /= 2;
-        }
-        if cost(k) > WT_PMAX as u64 || k < WT_MIN_K {
+        let Some(k) = proof_k(ln) else {
             s.deep = true;
             return;
-        }
+        };
         let Ok(layout) = Layout::new(ln, GROUP_LOG) else { return };
         // Frames are cut at multiples of `k` groups, so each is a subtree of the tree and fits its size bound.
         let block = k * GROUP;
@@ -497,6 +487,23 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
         }
         se.send_ext(stream, ext::PROOF, body.get(..len)?).then_some(len)
     }
+}
+
+/// The groups per range-proof frame for a value of `ln` bytes (`ln > 0`), or `None` when the tree is so deep that
+/// fewer than [`WT_MIN_K`] groups fit a frame of at most [`WT_PMAX`] proof bytes (such a value gets no write-through).
+///
+/// A frame of `k` aligned groups holds the `k - 1` parents inside its subtree and at most one parent per level above
+/// it, so `cost(k)` bounds its proof bytes; the frame size halves from [`WT_MAX_K`] until the bound fits.
+pub fn proof_k(ln: u64) -> Option<u64> {
+    let ngroups = ln.div_ceil(GROUP);
+    let bits = |x: u64| u64::from(x.checked_ilog2().map_or(0, |b| b + 1));
+    let dep = bits(ngroups.saturating_sub(1));
+    let cost = |k: u64| PARENT_LEN as u64 * (k - 1) + PARENT_LEN as u64 * dep.saturating_sub(bits(k - 1)) + 8;
+    let mut k = WT_MAX_K;
+    while k > 1 && cost(k) > WT_PMAX as u64 {
+        k /= 2;
+    }
+    (cost(k) <= WT_PMAX as u64 && k >= WT_MIN_K).then_some(k)
 }
 
 /// Whether any range of `plan` overlaps any of `spans`.

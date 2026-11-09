@@ -240,7 +240,7 @@ impl Plan {
         let off = r.first * GROUP;
         Some(Span {
             off,
-            len: (r.last * GROUP).min(self.layout.value_len()) - off,
+            len: r.last.saturating_mul(GROUP).min(self.layout.value_len()) - off,
         })
     }
 

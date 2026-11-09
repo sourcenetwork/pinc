@@ -363,7 +363,7 @@ pub struct PSim {
     pub sent_bytes: u64,
     epoch: u64,
     server: Server<PStore, 32>,
-    sess: ServerSession,
+    pub sess: ServerSession,
     pub rec: Rec,
     txs: BTreeMap<StreamId, Tx>,
     ticking: bool,
@@ -405,6 +405,8 @@ pub struct Sim {
     pub store: ClientStore,
     pub rec: Rec,
     pub fetch: Box<Fetch>,
+    /// Whether the last step of `run_until` was a call of `Fetch::on_timeout` (not a queued event).
+    pub timed_out: bool,
     pub provs: Vec<PSim>,
     heap: BinaryHeap<Reverse<Item>>,
     seq: u64,
@@ -442,6 +444,7 @@ impl Sim {
             store,
             rec: Rec::default(),
             fetch: Box::new(Fetch::new()),
+            timed_out: false,
             provs,
             heap: BinaryHeap::new(),
             seq: 0,
@@ -797,7 +800,9 @@ impl Sim {
             }
             self.now = self.now.max(next);
             self.sess.now = self.now;
-            if te.is_some_and(|a| a <= self.now) {
+            let event_due = te.is_some_and(|a| a <= self.now);
+            self.timed_out = !event_due;
+            if event_due {
                 let Reverse(item) = self.heap.pop().unwrap();
                 self.handle(item.ev);
             } else {

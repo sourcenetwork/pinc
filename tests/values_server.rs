@@ -281,6 +281,41 @@ fn a_proof_request_is_answered_with_the_outboard_pairs_of_each_range() {
 }
 
 #[test]
+fn a_proof_request_near_the_top_of_the_offset_range_is_bounded_not_wrapped() {
+    // `upto` is peer-controlled: the end of the proofs must saturate, never overflow (a debug-build panic, a wrap in release).
+    let len = 64 * 16384;
+    let mut r = Rig::new(len);
+    r.open(
+        1,
+        PEER,
+        &Rig::req(
+            r.store.root(),
+            &[Span {
+                off: 0,
+                len: len as u64,
+            }],
+        ),
+    );
+    for upto in [u64::MAX, u64::MAX - 16383, u64::MAX - 16384] {
+        let mut body = [0u8; 32];
+        let n = ProofReq { sid: 1, from: 0, upto }.encode(&mut body).unwrap();
+        r.ev(&ServerIn::Ext {
+            ty: ext::PROOF_REQ,
+            body: &body[..n],
+        });
+    }
+    let frames = proofs(&r);
+    assert!(!frames.is_empty(), "the request is served as far as the value goes");
+    let mut next = 0;
+    for (_, b) in &frames {
+        let pf = ProofFrame::parse(b).unwrap();
+        assert_eq!(pf.start, next);
+        next = pf.start + u64::from(pf.wn);
+    }
+    assert_eq!(next, len as u64, "proofs stop at the end of the value");
+}
+
+#[test]
 fn a_loss_arms_proofs_from_the_lost_group_to_a_window_past_the_frontier() {
     let len = 64 * 16384;
     let mut r = Rig::new(len);

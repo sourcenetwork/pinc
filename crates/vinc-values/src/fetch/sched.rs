@@ -120,7 +120,7 @@ impl Fetch {
             let k = self.assigned_count().max(1);
             let mut left = 0u64;
             for s in self.queue.as_slice() {
-                left += s.len;
+                left = left.saturating_add(s.len);
                 if left >= 4 * STRIPE_CHUNK * k {
                     break;
                 }
@@ -227,6 +227,14 @@ impl Fetch {
                 }
                 acc += s.len;
             }
+        }
+        if tail.is_empty() {
+            // Rounding `keep` up to a group can leave nothing to move (a thief far slower than the victim); the
+            // victim's streams are then left alone, and the steal is looked at again later.
+            if self.tw <= now {
+                self.tw = now + STEAL_IDLE / 2;
+            }
+            return RangeList::new();
         }
         let (from, to) = (self.provs.get(bi).map(|p| p.id), self.provs.get(pi).map(|p| p.id));
         if let Some(b) = self.provs.get_mut(bi) {
@@ -442,3 +450,6 @@ mod heapless_idx {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
