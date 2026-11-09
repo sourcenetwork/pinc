@@ -380,6 +380,59 @@ fn bundle_ids_are_unique_per_ephemeral() {
     assert_eq!(id, a.signed.head().id);
 }
 
+/// The probe of a cipher: its sealing of 16 zero bytes at index 0; equal probes mean equal keys.
+fn key_probe(c: &vinc_dtn::seal::Cipher<Software>) -> Vec<u8> {
+    let mut buf = [0u8; 16];
+    let tag = c.seal_slice(&Software, 0, &mut buf).unwrap();
+    buf.iter().chain(tag.iter()).copied().collect()
+}
+
+#[test]
+fn the_slice_key_is_bound_to_every_input_and_to_nothing_else() {
+    use vinc_crypto::Secret;
+    use vinc_dtn::seal::{SealSeeds, encapsulate};
+    let sender = keypair(IdentityAlg::Ed25519, 1).node_id();
+    let r = recipient(IdentityAlg::Ed25519, 2, 1);
+    let key = |to: &dtn_common::Recipient, a: u8, b: u8, ctr: u32| {
+        let seeds = SealSeeds {
+            eph_x25519: Secret::new([a; 32]),
+            kem_m: Secret::new([b; 32]),
+        };
+        let (_, _, c) = encapsulate(&Software, &to.keys, &sender, Hlc::new(1_000, ctr), &seeds).unwrap();
+        key_probe(&c)
+    };
+    let base = key(&r, 1, 2, 0);
+    assert_eq!(base, key(&r, 1, 2, 0), "the derivation is deterministic in its inputs");
+    assert_ne!(base, key(&r, 3, 2, 0), "the ephemeral seed is bound");
+    assert_ne!(base, key(&r, 1, 4, 0), "the KEM message is bound");
+    assert_ne!(
+        base,
+        key(&r, 1, 2, 1),
+        "the creation time, through the bundle id, is bound"
+    );
+    // The same keys at another epoch, and another key pair under the same node and epoch, derive other keys.
+    let r2 = recipient(IdentityAlg::Ed25519, 2, 2);
+    assert_eq!(r.keys.node, r2.keys.node);
+    assert_ne!(base, key(&r2, 1, 2, 0), "the epoch is bound");
+    let mut other = recipient(IdentityAlg::Ed25519, 50, 1);
+    other.keys.node = r.keys.node;
+    assert_ne!(base, key(&other, 1, 2, 0), "the recipient's static keys are bound");
+    // A slice sealed at one index opens at no other, even for the largest index.
+    let seeds = SealSeeds {
+        eph_x25519: Secret::new([1; 32]),
+        kem_m: Secret::new([2; 32]),
+    };
+    let (_, _, c) = encapsulate(&Software, &r.keys, &sender, Hlc::new(1_000, 0), &seeds).unwrap();
+    let mut buf = [7u8; 16];
+    let tag = c.seal_slice(&Software, 4, &mut buf).unwrap();
+    for j in [0, 3, 5, u64::MAX] {
+        let mut b = buf;
+        assert!(c.open_slice(&Software, j, &mut b, &tag).is_err());
+    }
+    let mut b = buf;
+    assert!(c.open_slice(&Software, 4, &mut b, &tag).is_ok());
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
 

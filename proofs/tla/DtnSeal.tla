@@ -74,7 +74,7 @@ Known(t) ==
 (* ---- a bundle sealed by an honest sender ---- *)
 BEph(b) == EPub(b.se)
 BCt(b) == Ct(b.sm, EK(b.kp))
-BId(b) == Bid(b.src, b.wall, 0, BEph(b))
+BId(b) == Bid(b.src, b.wall, b.ctr, BEph(b))
 BTh(b) == Th(BEph(b), b.kp, b.dest, b.epoch, BCt(b), BId(b))
 BKey(b) == Key(SsK(b.sm, EK(b.kp)), SsX(BEph(b), b.kp), BTh(b))
 BHead(b) == [dst |-> b.dest, epoch |-> b.epoch, eph |-> BEph(b), ct |-> BCt(b), id |-> BId(b), lo |-> FALSE]
@@ -134,7 +134,7 @@ Send(src, kp, dest, epoch, wall, pay, n) ==
     /\ \/ /\ ~SeedReuse /\ n = Len(bundles) + 1
        \/ /\ SeedReuse /\ n \in Seeds
     /\ bundles' = Append(bundles, [src |-> src, se |-> n, sm |-> n, kp |-> kp, dest |-> dest, epoch |-> epoch,
-                                    wall |-> wall, pay |-> pay])
+                                    wall |-> wall, ctr |-> 0, pay |-> pay])
     /\ UNCHANGED L
 
 Next == \E src \in Srcs, kp \in Kps, dest \in Nodes, epoch \in Epochs, wall \in Walls, pay \in Pays, n \in Seeds :
@@ -178,7 +178,7 @@ NonceUnique ==
 \* different seeds, different keys (given a fresh creation time)
 KeysDistinct ==
     \A b \in BSet, c \in BSet : (BKey(b) = BKey(c)) => (b.src = c.src /\ b.se = c.se /\ b.sm = c.sm /\ b.kp = c.kp
-                                                     /\ b.dest = c.dest /\ b.epoch = c.epoch /\ b.wall = c.wall)
+                                                     /\ b.dest = c.dest /\ b.epoch = c.epoch /\ b.wall = c.wall /\ b.ctr = c.ctr)
 
 \* authenticity: a tampered head never verifies under the old signature; a signature of an honest node on a digest
 \* exists only if the node signed that head or its key leaked
