@@ -6,8 +6,13 @@
 //! custody keeps the bundle until it is delivered or expires; the [`CustodyBook`] remembers whom each acknowledgement
 //! is owed to and whom custody was offered to.
 //!
+//! Every offer gets a fresh offer id from a counter of the book; the id travels with the bundle, the custodian signs
+//! it into its ack, and the ack relieves the offerer only if it names the offer currently outstanding to that node.
+//! A node that takes custody of a bundle it already holds (a hand-back) cancels its outstanding offer: the offer is
+//! superseded, so a late ack of it cannot relieve a node that is the custodian again.
+//!
 //! Invariants: an ack is valid only if its signature verifies under the custodian's node id; custody is relieved
-//! only by a valid ack from exactly the node it was offered to; a custody item leaves the ledger only through
+//! only by a valid ack from exactly the node it was offered to, for exactly the offer outstanding; a custody item leaves the ledger only through
 //! delivery ([`CustodyBook::delivered`]), expiry or relief (which keeps the bytes as transit); the book never holds
 //! a record for an item the ledger no longer holds ([`CustodyBook::sync`]). All tables are fixed-size arrays.
 
@@ -23,8 +28,8 @@ use crate::hlc::Hlc;
 use crate::labels;
 use crate::store::{Class, Entry, Ledger, StoreError};
 
-/// The signed fields of an acknowledgement: bundle, custodian, previous custodian, time.
-const ACK_BODY_LEN: usize = 32 + 33 + 33 + 12;
+/// The signed fields of an acknowledgement: bundle, custodian, previous custodian, offer id, time.
+const ACK_BODY_LEN: usize = 32 + 33 + 33 + 8 + 12;
 
 /// A custodian's signed statement that it holds a bundle and took custody from `previous`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +40,8 @@ pub struct CustodyAck {
     pub custodian: NodeId,
     /// The node custody was taken from, to whom the ack is addressed.
     pub previous: NodeId,
+    /// The offer being acknowledged: the id the previous custodian gave the handover.
+    pub offer: u64,
     /// When the ack was made.
     pub at: Hlc,
     endorsement: Endorsement,
@@ -54,29 +61,37 @@ fn get_node(r: &mut Reader<'_>) -> Result<NodeId, DtnError> {
     })
 }
 
-fn body(bundle: &BundleId, custodian: &NodeId, previous: &NodeId, at: Hlc) -> Result<[u8; ACK_BODY_LEN], DtnError> {
+fn body(
+    bundle: &BundleId,
+    custodian: &NodeId,
+    previous: &NodeId,
+    offer: u64,
+    at: Hlc,
+) -> Result<[u8; ACK_BODY_LEN], DtnError> {
     let mut out = [0u8; ACK_BODY_LEN];
     let mut w = Writer::new(&mut out);
     w.put_slice(&bundle.0)?;
     put_node(&mut w, custodian)?;
     put_node(&mut w, previous)?;
+    w.put_u64(offer)?;
     w.put_u64(at.wall)?;
     w.put_u32(at.counter)?;
     Ok(out)
 }
 
 impl CustodyAck {
-    /// Sign an ack from `signer` (the custodian) to `previous` for `bundle` at time `at`.
+    /// Sign an ack from `signer` (the custodian) to `previous` for `bundle`, answering offer `offer`, at time `at`.
     ///
     /// # Errors
     /// [`DtnError::Crypto`] if signing fails.
-    pub fn sign(bundle: BundleId, previous: NodeId, at: Hlc, signer: &Keypair) -> Result<Self, DtnError> {
+    pub fn sign(bundle: BundleId, previous: NodeId, offer: u64, at: Hlc, signer: &Keypair) -> Result<Self, DtnError> {
         let custodian = signer.node_id();
-        let b = body(&bundle, &custodian, &previous, at)?;
+        let b = body(&bundle, &custodian, &previous, offer, at)?;
         Ok(Self {
             bundle,
             custodian,
             previous,
+            offer,
             at,
             endorsement: Endorsement::sign(signer, labels::CUSTODY_ACK, &b)?,
         })
@@ -87,7 +102,7 @@ impl CustodyAck {
     /// # Errors
     /// [`DtnError::Crypto`] if the key is not the custodian's or the signature does not verify.
     pub fn verify(&self) -> Result<(), DtnError> {
-        let b = body(&self.bundle, &self.custodian, &self.previous, self.at)?;
+        let b = body(&self.bundle, &self.custodian, &self.previous, self.offer, self.at)?;
         self.endorsement.verify(&self.custodian, labels::CUSTODY_ACK, &b)
     }
 
@@ -102,7 +117,7 @@ impl CustodyAck {
     /// [`DtnError::Wire`] if `out` is too short.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, DtnError> {
         let mut w = Writer::new(out);
-        w.put_slice(&body(&self.bundle, &self.custodian, &self.previous, self.at)?)?;
+        w.put_slice(&body(&self.bundle, &self.custodian, &self.previous, self.offer, self.at)?)?;
         self.endorsement.encode(&mut w)?;
         Ok(w.written().len())
     }
@@ -116,6 +131,7 @@ impl CustodyAck {
         let bundle = BundleId(r.read_array()?);
         let custodian = get_node(&mut r)?;
         let previous = get_node(&mut r)?;
+        let offer = r.read_u64()?;
         let at = Hlc::new(r.read_u64()?, r.read_u32()?);
         let endorsement = Endorsement::decode(custodian.alg, &mut r)?;
         if !r.is_empty() {
@@ -125,6 +141,7 @@ impl CustodyAck {
             bundle,
             custodian,
             previous,
+            offer,
             at,
             endorsement,
         })
@@ -142,7 +159,7 @@ pub enum CustodyError {
     Capacity,
     /// No such bundle is in custody here.
     Unknown,
-    /// The ack is not from the node custody was offered to.
+    /// The ack is not from the node custody was offered to, or not for the offer currently outstanding.
     NotOffered,
 }
 
@@ -159,7 +176,7 @@ impl fmt::Display for CustodyError {
             Self::Ack(e) => write!(f, "invalid acknowledgement: {e}"),
             Self::Capacity => f.write_str("too many bundles in custody"),
             Self::Unknown => f.write_str("the bundle is not in custody here"),
-            Self::NotOffered => f.write_str("custody was not offered to the acknowledging node"),
+            Self::NotOffered => f.write_str("the acknowledgement does not match the custody offer outstanding"),
         }
     }
 }
@@ -177,6 +194,8 @@ pub struct Incoming {
     pub expires: u64,
     /// The node custody is taken from.
     pub previous: NodeId,
+    /// The offer id the previous custodian gave the handover, to be echoed in the ack.
+    pub offer: u64,
 }
 
 /// An acknowledgement this node owes after accepting custody.
@@ -186,6 +205,8 @@ pub struct AckDue {
     pub bundle: BundleId,
     /// The node to acknowledge to.
     pub previous: NodeId,
+    /// The offer being acknowledged.
+    pub offer: u64,
 }
 
 impl AckDue {
@@ -194,21 +215,30 @@ impl AckDue {
     /// # Errors
     /// [`DtnError::Crypto`] if signing fails.
     pub fn sign(&self, at: Hlc, signer: &Keypair) -> Result<CustodyAck, DtnError> {
-        CustodyAck::sign(self.bundle, self.previous, at, signer)
+        CustodyAck::sign(self.bundle, self.previous, self.offer, at, signer)
     }
+}
+
+/// A custody offer outstanding: the node it went to and its id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Offered {
+    to: NodeId,
+    id: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Record {
     bundle: BundleId,
     previous: NodeId,
-    offered: Option<NodeId>,
+    offered: Option<Offered>,
 }
 
 /// The custody records of one node, at most `N` bundles.
 #[derive(Debug, Clone)]
 pub struct CustodyBook<const N: usize> {
     records: [Option<Record>; N],
+    // vertexia: a u64 counter that saturates; 2^64 offers cannot happen, and the models count in the naturals.
+    next_offer: u64,
 }
 
 impl<const N: usize> Default for CustodyBook<N> {
@@ -220,7 +250,10 @@ impl<const N: usize> Default for CustodyBook<N> {
 impl<const N: usize> CustodyBook<N> {
     /// An empty book.
     pub const fn new() -> Self {
-        Self { records: [None; N] }
+        Self {
+            records: [None; N],
+            next_offer: 0,
+        }
     }
 
     /// The number of bundles in custody.
@@ -248,10 +281,14 @@ impl<const N: usize> CustodyBook<N> {
     }
 
     /// Accept custody of the `incoming` bundle. A bundle already kept as
-    /// transit is promoted without new room. Evictions go to `on_evict`.
+    /// transit is promoted without new room. A bundle already in custody here (a hand-back or a repeated offer)
+    /// keeps its record, cancels the outstanding offer of this node and is acknowledged again. The returned
+    /// [`AckDue`] is always addressed to the `previous` of `incoming`, whatever the record says. Evictions go to
+    /// `on_evict`.
     ///
     /// # Errors
-    /// [`CustodyError::Store`] if the ledger refuses (custody cannot be kept without evicting live custody);
+    /// [`CustodyError::Store`] if the ledger refuses (custody cannot be kept without evicting live custody, or the
+    /// bundle is already expired: [`StoreError::Expired`]);
     /// [`CustodyError::Capacity`] if the book is full. Nothing changes on error except expired items leaving.
     pub fn accept<const L: usize>(
         &mut self,
@@ -265,11 +302,13 @@ impl<const N: usize> CustodyBook<N> {
             bytes,
             expires,
             previous,
+            offer,
         } = incoming;
         ledger.expire(now, &mut on_evict);
         self.sync(ledger);
-        if self.holds(&bundle) {
-            return Ok(AckDue { bundle, previous });
+        if let Some(r) = self.records.iter_mut().flatten().find(|r| r.bundle == bundle) {
+            r.offered = None;
+            return Ok(AckDue { bundle, previous, offer });
         }
         let slot = self
             .records
@@ -290,7 +329,7 @@ impl<const N: usize> CustodyBook<N> {
                 offered: None,
             });
         }
-        Ok(AckDue { bundle, previous })
+        Ok(AckDue { bundle, previous, offer })
     }
 
     /// The node an ack for `bundle` is owed to.
@@ -302,27 +341,33 @@ impl<const N: usize> CustodyBook<N> {
             .map(|r| r.previous)
     }
 
-    /// Record that custody of `bundle` was offered to `to`, whose ack will relieve this node.
+    /// Record that custody of `bundle` was offered to `to`, whose ack will relieve this node, and return the fresh
+    /// offer id to send with the bundle. A new offer replaces the outstanding one.
     ///
     /// # Errors
     /// [`CustodyError::Unknown`] if the bundle is not in custody here.
-    pub fn offer(&mut self, bundle: &BundleId, to: NodeId) -> Result<(), CustodyError> {
+    pub fn offer(&mut self, bundle: &BundleId, to: NodeId) -> Result<u64, CustodyError> {
         let r = self
             .records
             .iter_mut()
             .flatten()
             .find(|r| r.bundle == *bundle)
             .ok_or(CustodyError::Unknown)?;
-        r.offered = Some(to);
-        Ok(())
+        let id = self.next_offer;
+        self.next_offer = id.saturating_add(1);
+        r.offered = Some(Offered { to, id });
+        Ok(id)
     }
 
-    /// Process an ack. If it verifies and comes from the node custody was offered to, this node is relieved: the
-    /// bundle stays in the ledger as transit and the record is dropped.
+    /// Process an ack. If it verifies and comes from the node custody was offered to, for the offer currently
+    /// outstanding to it, this node is relieved: the bundle stays in the ledger as transit and the record is
+    /// dropped.
     ///
     /// # Errors
     /// [`CustodyError::Ack`] for a bad signature; [`CustodyError::Unknown`] if the bundle is not in custody here;
-    /// [`CustodyError::NotOffered`] if the ack is not from the node it was offered to.
+    /// [`CustodyError::NotOffered`] if the ack is not from the node it was offered to or names another offer (a
+    /// stale ack); [`CustodyError::Store`] with [`StoreError::Unknown`] if the ledger no longer holds the item (the
+    /// record is dropped all the same).
     pub fn on_ack<const L: usize>(&mut self, ledger: &mut Ledger<L>, ack: &CustodyAck) -> Result<(), CustodyError> {
         ack.verify().map_err(CustodyError::Ack)?;
         let slot = self
@@ -330,7 +375,12 @@ impl<const N: usize> CustodyBook<N> {
             .iter_mut()
             .find(|s| s.is_some_and(|r| r.bundle == ack.bundle))
             .ok_or(CustodyError::Unknown)?;
-        if slot.and_then(|r| r.offered) != Some(ack.custodian) {
+        if slot.and_then(|r| r.offered)
+            != Some(Offered {
+                to: ack.custodian,
+                id: ack.offer,
+            })
+        {
             return Err(CustodyError::NotOffered);
         }
         *slot = None;

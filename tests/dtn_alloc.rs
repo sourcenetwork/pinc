@@ -76,6 +76,7 @@ fn sealing_receiving_and_opening_do_not_allocate() {
 
     let mut buf = vec![0; layout.total_len() as usize];
     let mut ob2 = vec![0; outboard.len()];
+    let mut scratch = vec![0; layout.block_n(0) * layout.slice_len() as usize];
     let mut padded = vec![0; layout.padded_len() as usize];
     let skip = 1..3u64;
     let (p_a, p_b) = (
@@ -95,7 +96,7 @@ fn sealing_receiving_and_opening_do_not_allocate() {
         rx.feed(0..1, &p_a).unwrap();
         rx.feed(3..total, &p_b).unwrap();
         assert!(rx.holds(0) && !rx.holds(skip.start));
-        rx.finish(&mut ob2).unwrap();
+        rx.finish(&mut ob2, &mut scratch).unwrap();
         let cipher = decapsulate(&Software, &to.keys, &to.dk, &to.xs, signed.head()).unwrap();
         let n = rx.open(&Software, &cipher, &mut padded).unwrap();
         assert_eq!(n, payload.len());
@@ -116,7 +117,7 @@ fn heads_and_acks_do_not_allocate_for_any_algorithm() {
             let back = SignedHead::decode(&enc[..n]).unwrap();
             back.verify().unwrap();
             let ack =
-                vinc_dtn::custody::CustodyAck::sign(back.head().id, back.head().destination, Hlc::new(1, 0), &sender)
+                vinc_dtn::custody::CustodyAck::sign(back.head().id, back.head().destination, 7, Hlc::new(1, 0), &sender)
                     .unwrap();
             ack.verify().unwrap();
         });
@@ -132,7 +133,7 @@ fn store_custody_and_forwarding_do_not_allocate() {
     };
     let mut ledger = Ledger::<16>::new(1_000);
     let mut book = CustodyBook::<16>::new();
-    let mut fwd = Forwarder::<8, 8, 32>::new(
+    let mut fwd = Forwarder::<8, 8, 32, 64>::new(
         Policy {
             retry_ms: 50,
             max_sends: 3,
@@ -154,6 +155,7 @@ fn store_custody_and_forwarding_do_not_allocate() {
                     bytes: 10,
                     expires: 900,
                     previous: node(1),
+                    offer: 0,
                 },
                 u64::from(i),
                 |_| {},

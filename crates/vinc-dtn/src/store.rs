@@ -10,6 +10,9 @@
 //! would force, the admission is refused ([`StoreError::CustodyRefused`] for custody, [`StoreError::Full`] otherwise)
 //! and nothing live is evicted.
 //!
+//! Admission sweeps the expired items first, so a key that expired but was not yet swept is admitted fresh, and an item
+//! that is already expired at admission is refused with [`StoreError::Expired`].
+//!
 //! Invariants: `used()` equals the sum of the entries' sizes and never exceeds `budget()`; an item whose expiry is
 //! after `now` and whose class is custody leaves only through [`Ledger::release`] (delivery) or [`Ledger::reclass`]
 //! to transit (custody handed on); a failed admission changes nothing except removing expired items; all scans are
@@ -68,8 +71,10 @@ pub enum StoreError {
     CustodyRefused,
     /// A transit item does not fit even after evicting every evictable item.
     Full,
-    /// The key is already kept.
+    /// The key is already kept (after the expired items left).
     Duplicate,
+    /// The item is already expired at the time of admission.
+    Expired,
     /// The key is not kept.
     Unknown,
 }
@@ -80,6 +85,7 @@ impl core::fmt::Display for StoreError {
             Self::CustodyRefused => "no room for custody without evicting custody",
             Self::Full => "the store is full",
             Self::Duplicate => "the item is already kept",
+            Self::Expired => "the item is already expired",
             Self::Unknown => "the item is not kept",
         })
     }
@@ -180,8 +186,10 @@ impl<const N: usize> Ledger<N> {
     /// `on_evict`.
     ///
     /// # Errors
-    /// [`StoreError::Duplicate`] if `key` is kept; [`StoreError::CustodyRefused`] or [`StoreError::Full`] if the item
-    /// cannot fit without evicting live custody. Expired items are removed even when the admission fails.
+    /// Expired items leave first, so a key that expired but was not yet swept is admitted fresh. Then:
+    /// [`StoreError::Duplicate`] if `key` is kept; [`StoreError::Expired`] if `expires <= now`;
+    /// [`StoreError::CustodyRefused`] or [`StoreError::Full`] if the item cannot fit without evicting live custody.
+    /// Expired items are removed even when the admission fails.
     pub fn admit(
         &mut self,
         key: Key,
@@ -191,10 +199,13 @@ impl<const N: usize> Ledger<N> {
         now: u64,
         mut on_evict: impl FnMut(&Entry),
     ) -> Result<(), StoreError> {
+        self.expire(now, &mut on_evict);
         if self.contains(&key) {
             return Err(StoreError::Duplicate);
         }
-        self.expire(now, &mut on_evict);
+        if expires <= now {
+            return Err(StoreError::Expired);
+        }
         let refused = match class {
             Class::Custody => StoreError::CustodyRefused,
             Class::Transit => StoreError::Full,

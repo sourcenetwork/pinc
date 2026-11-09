@@ -97,6 +97,24 @@ fn duplicates_unknowns_and_slot_exhaustion() {
 }
 
 #[test]
+fn an_expired_unswept_key_is_admitted_fresh_and_an_expired_item_is_refused() {
+    let mut l = Ledger::<4>::new(100);
+    l.admit(key(1), 10, Class::Transit, 50, 0, |_| {}).unwrap();
+    // Key 1 expired at 50 but was not swept: the admission sweeps it first and takes the key fresh.
+    let mut gone = vec![];
+    l.admit(key(1), 10, Class::Transit, 500, 60, |e| gone.push(e.key)).unwrap();
+    assert_eq!(gone, vec![key(1)]);
+    assert_eq!(l.get(&key(1)).map(|e| e.expires), Some(500));
+    // An item already expired at admission is refused, not admitted and swept later.
+    assert_eq!(
+        l.admit(key(2), 10, Class::Transit, 60, 60, |_| {}).err(),
+        Some(StoreError::Expired)
+    );
+    assert!(!l.contains(&key(2)));
+    assert_eq!(l.used(), 10);
+}
+
+#[test]
 fn spaces_share_one_budget() {
     let mut l = Ledger::<4>::new(10);
     let mail = Key {
@@ -223,7 +241,7 @@ fn custody_ack_signs_verifies_and_round_trips_for_every_algorithm() {
     let (_, prev) = node(1);
     for (i, alg) in dtn_common::ALGS.into_iter().enumerate() {
         let custodian = keypair(alg, 40 + i as u64);
-        let ack = CustodyAck::sign(BundleId([9; 32]), prev, Hlc::new(5, 1), &custodian).unwrap();
+        let ack = CustodyAck::sign(BundleId([9; 32]), prev, 3, Hlc::new(5, 1), &custodian).unwrap();
         ack.verify().unwrap();
         let mut buf = vec![0; ack.encoded_len() + 1];
         let n = ack.encode(&mut buf).unwrap();
@@ -261,12 +279,13 @@ fn custody_hand_over_relieves_the_previous_custodian() {
             bytes: 60,
             expires: 1_000,
             previous: c,
+            offer: 0,
         },
         0,
         |_| {},
     )
     .unwrap();
-    ba.offer(&id, b).unwrap();
+    let offer_id = ba.offer(&id, b).unwrap();
     assert_eq!(ba.owed_to(&id), Some(c));
     // B accepts and owes A an ack.
     let due = bb
@@ -277,18 +296,19 @@ fn custody_hand_over_relieves_the_previous_custodian() {
                 bytes: 60,
                 expires: 1_000,
                 previous: a,
+                offer: offer_id,
             },
             0,
             |_| {},
         )
         .unwrap();
-    assert_eq!(due.previous, a);
+    assert_eq!((due.previous, due.offer), (a, offer_id));
     let ack = due.sign(Hlc::new(1, 0), &b_key).unwrap();
 
     // An ack from the wrong node, or one that does not verify, does not relieve A.
-    let stray = CustodyAck::sign(id, a, Hlc::new(1, 0), &c_key).unwrap();
+    let stray = CustodyAck::sign(id, a, offer_id, Hlc::new(1, 0), &c_key).unwrap();
     assert_eq!(ba.on_ack(&mut la, &stray).err(), Some(CustodyError::NotOffered));
-    let unknown = CustodyAck::sign(BundleId([1; 32]), a, Hlc::new(1, 0), &b_key).unwrap();
+    let unknown = CustodyAck::sign(BundleId([1; 32]), a, offer_id, Hlc::new(1, 0), &b_key).unwrap();
     assert_eq!(ba.on_ack(&mut la, &unknown).err(), Some(CustodyError::Unknown));
     let mut enc = vec![0; ack.encoded_len()];
     ack.encode(&mut enc).unwrap();
@@ -335,6 +355,7 @@ fn custody_is_refused_when_the_store_cannot_keep_it() {
         bytes,
         expires: 1_000,
         previous: a,
+        offer: 0,
     };
     book.accept(&mut l, one(1, 80), 0, |_| {}).unwrap();
     assert_eq!(
@@ -369,7 +390,115 @@ fn custody_of_a_real_bundle_is_charged_at_its_sealed_size() {
         bytes: layout.total_len(),
         expires: head.expires_at(),
         previous: head.source,
+        offer: 0,
     };
     book.accept(&mut l, inc, 0, |_| {}).unwrap();
     assert_eq!(l.used(), layout.total_len());
+}
+
+#[test]
+fn a_stale_ack_cannot_relieve_a_node_that_is_the_custodian_again() {
+    let (a_key, a) = node(1);
+    let (b_key, b) = node(2);
+    let id = BundleId([7; 32]);
+    let (mut la, mut lb) = (Ledger::<4>::new(100), Ledger::<4>::new(100));
+    let (mut ba, mut bb) = (CustodyBook::<4>::new(), CustodyBook::<4>::new());
+    let inc = |previous, offer| Incoming {
+        bundle: id,
+        bytes: 10,
+        expires: 1_000,
+        previous,
+        offer,
+    };
+    // A holds custody, offers it to B (offer 0); B accepts and its ack is delayed.
+    ba.accept(&mut la, inc(b, 0), 0, |_| {}).unwrap();
+    let first = ba.offer(&id, b).unwrap();
+    let late = bb
+        .accept(&mut lb, inc(a, first), 0, |_| {})
+        .unwrap()
+        .sign(Hlc::new(1, 0), &b_key)
+        .unwrap();
+    // B hands custody back; A holds it already, answers, and is the custodian again.
+    let back = bb.offer(&id, a).unwrap();
+    let due = ba.accept(&mut la, inc(b, back), 1, |_| {}).unwrap();
+    assert_eq!((due.previous, due.offer), (b, back));
+    bb.on_ack(&mut lb, &due.sign(Hlc::new(2, 0), &a_key).unwrap()).unwrap();
+    // The delayed ack of the first offer arrives: it must not relieve A.
+    assert_eq!(ba.on_ack(&mut la, &late).err(), Some(CustodyError::NotOffered));
+    assert!(ba.holds(&id));
+    // A new offer gets a new id; the old ack stays stale, the matching one relieves.
+    let second = ba.offer(&id, b).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(ba.on_ack(&mut la, &late).err(), Some(CustodyError::NotOffered));
+    let fresh = bb
+        .accept(&mut lb, inc(a, second), 2, |_| {})
+        .unwrap()
+        .sign(Hlc::new(3, 0), &b_key)
+        .unwrap();
+    ba.on_ack(&mut la, &fresh).unwrap();
+    assert!(!ba.holds(&id));
+}
+
+#[test]
+fn the_ack_offer_id_is_signed_and_part_of_the_encoding() {
+    let (_, prev) = node(1);
+    let custodian = keypair(IdentityAlg::Ed25519, 40);
+    let ack = CustodyAck::sign(BundleId([9; 32]), prev, 5, Hlc::new(5, 1), &custodian).unwrap();
+    let mut buf = vec![0; ack.encoded_len()];
+    ack.encode(&mut buf).unwrap();
+    let mut other = CustodyAck::decode(&buf).unwrap();
+    assert_eq!(other.offer, 5);
+    // The id sits before the 12 bytes of the time: changing it breaks the signature.
+    let at = 32 + 33 + 33;
+    buf[at + 7] ^= 1;
+    other = CustodyAck::decode(&buf).unwrap();
+    assert_eq!(other.offer, 4);
+    assert!(other.verify().is_err());
+}
+
+#[test]
+fn an_ack_for_a_dropped_item_reports_the_store_unknown_and_an_expired_bundle_is_not_accepted() {
+    let (_, a) = node(1);
+    let (b_key, b) = node(2);
+    let id = BundleId([7; 32]);
+    let mut la = Ledger::<4>::new(100);
+    let mut ba = CustodyBook::<4>::new();
+    let inc = |expires| Incoming {
+        bundle: id,
+        bytes: 10,
+        expires,
+        previous: b,
+        offer: 0,
+    };
+    // Already expired at acceptance: refused with the store's verdict, nothing is kept.
+    assert_eq!(
+        ba.accept(&mut la, inc(5), 5, |_| {}).err(),
+        Some(CustodyError::Store(StoreError::Expired))
+    );
+    assert!(ba.is_empty() && la.is_empty());
+    // accept answers the previous custodian of the incoming offer, even for a bundle already held.
+    let due = ba.accept(&mut la, inc(1_000), 0, |_| {}).unwrap();
+    assert_eq!(due.previous, b);
+    let again = ba
+        .accept(
+            &mut la,
+            Incoming {
+                previous: a,
+                ..inc(1_000)
+            },
+            1,
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!(again.previous, a);
+    assert_eq!(ba.owed_to(&id), Some(b));
+    // The ledger dropped the item behind the book's back: the relieving ack reports the store's Unknown.
+    let offer = ba.offer(&id, b).unwrap();
+    la.release(&id.store_key());
+    let ack = CustodyAck::sign(id, a, offer, Hlc::new(1, 0), &b_key).unwrap();
+    assert_eq!(
+        ba.on_ack(&mut la, &ack).err(),
+        Some(CustodyError::Store(StoreError::Unknown))
+    );
+    assert!(ba.is_empty());
 }
