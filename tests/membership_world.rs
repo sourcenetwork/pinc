@@ -158,15 +158,39 @@ pub struct EnvSnap {
 /// One call into a machine.
 #[derive(Debug, Clone)]
 pub enum Op {
-    Start { hub: bool, hubs: Vec<NodeId>, wall: u64, floor: u64, ret: &'static str },
-    Up { peer: NodeId, incoming: bool },
-    Down { peer: NodeId, code: u64 },
-    Bytes { peer: NodeId, bytes: Vec<u8>, used: usize, bad: bool },
+    Start {
+        hub: bool,
+        hubs: Vec<NodeId>,
+        wall: u64,
+        floor: u64,
+        ret: &'static str,
+    },
+    Up {
+        peer: NodeId,
+        incoming: bool,
+    },
+    Down {
+        peer: NodeId,
+        code: u64,
+    },
+    Bytes {
+        peer: NodeId,
+        bytes: Vec<u8>,
+        used: usize,
+        bad: bool,
+    },
     Timeout,
-    CarrierGone { member: NodeId },
-    CarrierReturn { member: NodeId },
+    CarrierGone {
+        member: NodeId,
+    },
+    CarrierReturn {
+        member: NodeId,
+    },
     Leave,
-    Revoke { member: NodeId, ok: bool },
+    Revoke {
+        member: NodeId,
+        ok: bool,
+    },
     Moved,
 }
 
@@ -400,14 +424,22 @@ impl World {
             .insert(id(member), Carrier::Gone { since, sleep: None });
         self.dead_default.insert(key(hub, member));
         let mid = id(member);
-        self.call(hub, |m, h, now| m.carrier_gone(h, now, &mid), |()| Op::CarrierGone { member: mid });
+        self.call(
+            hub,
+            |m, h, now| m.carrier_gone(h, now, &mid),
+            |()| Op::CarrierGone { member: mid },
+        );
     }
 
     pub fn set_carrier_open(&mut self, hub: usize, member: usize) {
         self.nodes[hub].h.carriers.insert(id(member), Carrier::Open);
         self.dead_default.remove(&key(hub, member));
         let mid = id(member);
-        self.call(hub, |m, h, now| m.carrier_return(h, now, &mid), |()| Op::CarrierReturn { member: mid });
+        self.call(
+            hub,
+            |m, h, now| m.carrier_return(h, now, &mid),
+            |()| Op::CarrierReturn { member: mid },
+        );
     }
 
     /// Refresh a node's host-side evidence table: session set, directness.
@@ -493,7 +525,20 @@ impl World {
             let hub = self.nodes[i].is_hub;
             let hubs: Vec<NodeId> = (0..self.hubs).map(id).collect();
             let wall = 1_000_000 + u64::try_from(i).unwrap();
-            let call = self.make_call(i, self.now, Op::Start { hub, hubs, wall, floor: 0, ret: "ok" }, env, (0, 0, 0), (events, traces));
+            let call = self.make_call(
+                i,
+                self.now,
+                Op::Start {
+                    hub,
+                    hubs,
+                    wall,
+                    floor: 0,
+                    ret: "ok",
+                },
+                env,
+                (0, 0, 0),
+                (events, traces),
+            );
             if let Some(r) = self.rec.as_mut() {
                 r.record(call);
             }
@@ -520,7 +565,12 @@ impl World {
         let h = &self.nodes[i].h;
         EnvSnap {
             ev: h.ev.iter().map(|(k, v)| (*k, *v)).collect(),
-            car: h.carriers.iter().filter(|(_, c)| **c != Carrier::Unknown).map(|(k, v)| (*k, *v)).collect(),
+            car: h
+                .carriers
+                .iter()
+                .filter(|(_, c)| **c != Carrier::Unknown)
+                .map(|(k, v)| (*k, *v))
+                .collect(),
             acc: h.sessions.iter().copied().collect(),
             ver: h.version,
             tk: h.ticket,
@@ -608,7 +658,11 @@ impl World {
     /// Tell hub `hub` that `member`'s carrier closed, without touching the network (recorded).
     pub fn notice_gone(&mut self, hub: usize, member: usize) {
         let mid = id(member);
-        self.call(hub, |m, h, now| m.carrier_gone(h, now, &mid), |()| Op::CarrierGone { member: mid });
+        self.call(
+            hub,
+            |m, h, now| m.carrier_gone(h, now, &mid),
+            |()| Op::CarrierGone { member: mid },
+        );
     }
 
     /// Revoke the wide id number `k` at node `i` (recorded): 30 zero bytes and `k` as a big-endian 16-bit number.
@@ -659,7 +713,12 @@ impl World {
             ..Host::default()
         };
         self.sessions.retain(|&(a, b)| a != i && b != i);
-        let cfg = Config { me: id(i), is_hub, hubs: &hub_ids, trace: true };
+        let cfg = Config {
+            me: id(i),
+            is_hub,
+            hubs: &hub_ids,
+            trace: true,
+        };
         let now = self.now;
         self.nodes[i].h = h;
         self.sync(i);
@@ -683,7 +742,13 @@ impl World {
             let call = self.make_call(
                 i,
                 now,
-                Op::Start { hub: is_hub, hubs: hub_ids, wall: wall_ms, floor, ret },
+                Op::Start {
+                    hub: is_hub,
+                    hubs: hub_ids,
+                    wall: wall_ms,
+                    floor,
+                    ret,
+                },
                 env,
                 (0, 0, 0),
                 (events, traces),
@@ -703,7 +768,12 @@ impl World {
         let n = self.call(
             to,
             |m, h, now| m.on_bytes(h, now, &peer, bytes),
-            |r| Op::Bytes { peer, bytes: bytes.to_vec(), used: r.as_ref().map_or(0, |n| *n), bad: r.is_err() },
+            |r| Op::Bytes {
+                peer,
+                bytes: bytes.to_vec(),
+                used: r.as_ref().map_or(0, |n| *n),
+                bad: r.is_err(),
+            },
         );
         let n = n.expect("frame parses");
         assert_eq!(n, bytes.len(), "whole frame consumed");
@@ -715,7 +785,12 @@ impl World {
         self.call(
             to,
             |m, h, now| m.on_bytes(h, now, &peer, bytes),
-            |r| Op::Bytes { peer, bytes: bytes.to_vec(), used: r.as_ref().map_or(0, |n| *n), bad: r.is_err() },
+            |r| Op::Bytes {
+                peer,
+                bytes: bytes.to_vec(),
+                used: r.as_ref().map_or(0, |n| *n),
+                bad: r.is_err(),
+            },
         )
     }
 
@@ -753,15 +828,33 @@ impl World {
                 self.sync(a);
                 self.sync(b);
                 let (ia, ib) = (id(a), id(b));
-                self.call(b, |m, h, now| m.session_up(h, now, &ia, true), |()| Op::Up { peer: ia, incoming: true });
-                self.call(a, |m, h, now| m.session_up(h, now, &ib, false), |()| Op::Up { peer: ib, incoming: false });
+                self.call(
+                    b,
+                    |m, h, now| m.session_up(h, now, &ia, true),
+                    |()| Op::Up {
+                        peer: ia,
+                        incoming: true,
+                    },
+                );
+                self.call(
+                    a,
+                    |m, h, now| m.session_up(h, now, &ib, false),
+                    |()| Op::Up {
+                        peer: ib,
+                        incoming: false,
+                    },
+                );
             }
             Ev::SessionDown { to, from, code } => {
                 if !self.nodes[to].up {
                     return;
                 }
                 let pf = id(from);
-                self.call(to, |m, h, now| m.session_down(h, now, &pf, code), |()| Op::Down { peer: pf, code });
+                self.call(
+                    to,
+                    |m, h, now| m.session_down(h, now, &pf, code),
+                    |()| Op::Down { peer: pf, code },
+                );
             }
         }
     }
@@ -845,7 +938,10 @@ impl World {
 
     /// A call into a node's machine with its host synced, then flushed.
     pub fn with<R>(&mut self, i: usize, f: impl FnOnce(&mut Membership, &mut Host, u64) -> R) -> R {
-        assert!(self.rec.is_none(), "a call through `with` would be missing from the recorded trace");
+        assert!(
+            self.rec.is_none(),
+            "a call through `with` would be missing from the recorded trace"
+        );
         self.sync(i);
         let now = self.now;
         let Node { m, h, .. } = &mut self.nodes[i];

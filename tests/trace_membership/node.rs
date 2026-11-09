@@ -78,7 +78,9 @@ fn steady(c: &mut Ctx) {
             assert_eq!(w.has(m, x), x != m, "member {m} lists {x}");
         }
     }
-    let suppressed: usize = (2..5).map(|m| traces(&w, m, |t| matches!(t, Trace::HelloSuppressed { .. }))).sum();
+    let suppressed: usize = (2..5)
+        .map(|m| traces(&w, m, |t| matches!(t, Trace::HelloSuppressed { .. })))
+        .sum();
     assert!(suppressed > 0, "PULSE skipped periodic HELLOs");
     assert!(w.nodes[0].m.roster_len() >= 4, "leases stay alive");
 }
@@ -95,7 +97,10 @@ fn churn(c: &mut Ctx) {
     w.run(5 * SEC);
     for i in [3, 4, 5] {
         assert!(!w.has(i, 2), "member {i} dropped the leaver");
-        assert_eq!(w.count_events(i, |e| matches!(e, Event::MemberLeft { member } if *member == id(2))), 1);
+        assert_eq!(
+            w.count_events(i, |e| matches!(e, Event::MemberLeft { member } if *member == id(2))),
+            1
+        );
         assert_eq!(w.count_events(i, |e| matches!(e, Event::MemberConfirmedDown { .. })), 0);
     }
     assert!(w.nodes[0].h.bc.contains(&Bc::Release(id(2))) && !w.nodes[0].h.bc.contains(&Bc::Hold(id(2))));
@@ -134,7 +139,10 @@ fn lossy(c: &mut Ctx) {
         w.set_carrier_gone(hub, victim);
     }
     let live: Vec<usize> = (2..8).filter(|&i| i != victim).collect();
-    assert!(w.run_until(145 * SEC, |w| live.iter().all(|&i| !w.has(i, victim))), "within the awareness bound");
+    assert!(
+        w.run_until(145 * SEC, |w| live.iter().all(|&i| !w.has(i, victim))),
+        "within the awareness bound"
+    );
     assert!(w.now - t < 145 * SEC);
 }
 
@@ -171,7 +179,13 @@ fn partition_heal(c: &mut Ctx) {
     }
     w.run(2 * SEC);
     assert!(w.has(m, p), "a snapshot never removes a member");
-    assert_eq!(w.count_events(m, |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(p))), 0);
+    assert_eq!(
+        w.count_events(
+            m,
+            |e| matches!(e, Event::MemberConfirmedDown { member } if *member == id(p))
+        ),
+        0
+    );
     for hub in 0..2 {
         w.close_session(p, hub, 0);
     }
@@ -192,14 +206,24 @@ fn hub_stale_heal(c: &mut Ctx) {
     w.cut.insert((1, m));
     w.cut.insert((1, 0));
     w.run(90 * SEC);
-    assert!(traces(&w, m, |t| matches!(t, Trace::HubStale { .. })) >= 1, "the silent hub's copy was dropped");
+    assert!(
+        traces(&w, m, |t| matches!(t, Trace::HubStale { .. })) >= 1,
+        "the silent hub's copy was dropped"
+    );
     w.cut.remove(&(1, m));
     w.cut.remove(&(1, 0));
     w.close_session(m, 1, 0);
     w.run(SEC);
     w.connect(m, 1);
     w.run(40 * SEC);
-    assert!(traces(&w, m, |t| matches!(t, Trace::Quiet { cause: QuietCause::Heal })) >= 1);
+    assert!(
+        traces(&w, m, |t| matches!(
+            t,
+            Trace::Quiet {
+                cause: QuietCause::Heal
+            }
+        )) >= 1
+    );
 }
 
 /// A slow member (twelve times too slow to answer a probe) whose transport still answers; probes on every path.
@@ -223,16 +247,29 @@ fn lost_probe(c: &mut Ctx) {
     let mut w = c.started(2, 2);
     w.run(40 * SEC);
     w.drop_once.push((0, 2, 12));
-    w.nodes[0].h.carriers.insert(id(2), Carrier::Gone { since: w.now, sleep: None });
+    w.nodes[0].h.carriers.insert(
+        id(2),
+        Carrier::Gone {
+            since: w.now,
+            sleep: None,
+        },
+    );
     w.notice_gone(0, 2);
     w.run(10 * SEC);
-    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })), 0, "the other probe was answered");
+    assert_eq!(
+        traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })),
+        0,
+        "the other probe was answered"
+    );
     // Now the member really is gone and a hub's relay path to it is dead too.
     w.crash(3);
     w.direct.insert((0, 3));
     w.set_carrier_gone(0, 3);
     assert!(w.run_until(10 * SEC, |w| w.nodes[0].m.lease_of(&id(3)).is_none()));
-    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { member } if *member == id(3))), 1);
+    assert_eq!(
+        traces(&w, 0, |t| matches!(t, Trace::Confirmed { member } if *member == id(3))),
+        1
+    );
 }
 
 /// A confirmation on a direct path, on a relay path, and the lone hub that has no independent path.
@@ -264,7 +301,13 @@ fn sleeper(c: &mut Ctx) {
     let mut w = c.started(2, 1);
     w.run(30 * SEC);
     let since = w.now;
-    w.nodes[0].h.carriers.insert(id(2), Carrier::Gone { since, sleep: Some(since - SEC) });
+    w.nodes[0].h.carriers.insert(
+        id(2),
+        Carrier::Gone {
+            since,
+            sleep: Some(since - SEC),
+        },
+    );
     w.notice_gone(0, 2);
     w.run(30 * SEC);
     assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })), 0);
@@ -344,8 +387,14 @@ fn carrier_return(c: &mut Ctx) {
     assert_eq!(w.nodes[0].m.roster_len(), 2, "the entry is back");
     assert!(w.nodes[0].h.bc.contains(&Bc::Restore(id(2))));
     w.run(2 * SEC);
-    assert!(w.nodes[2].h.bc.contains(&Bc::Resub(id(0))), "the member subscribed again");
-    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::CarrierReturned { restored: true, .. })), 1);
+    assert!(
+        w.nodes[2].h.bc.contains(&Bc::Resub(id(0))),
+        "the member subscribed again"
+    );
+    assert_eq!(
+        traces(&w, 0, |t| matches!(t, Trace::CarrierReturned { restored: true, .. })),
+        1
+    );
     // A second drop, with the lease running out before the carrier returns.
     w.run(30 * SEC);
     w.cut.insert((1, 2));
@@ -353,7 +402,10 @@ fn carrier_return(c: &mut Ctx) {
     assert!(w.run_until(5 * SEC, |w| w.nodes[0].m.roster_len() == 1));
     w.run(85 * SEC);
     w.set_carrier_open(0, 2);
-    assert!(w.nodes[0].h.bc.contains(&Bc::Release(id(2))), "released at the lease end");
+    assert!(
+        w.nodes[0].h.bc.contains(&Bc::Release(id(2))),
+        "released at the lease end"
+    );
     assert!(traces(&w, 0, |t| matches!(t, Trace::CarrierReturned { restored: false, .. })) >= 1);
     // A return that nothing was held for.
     w.set_carrier_open(0, 2);
@@ -509,7 +561,15 @@ fn suspension(c: &mut Ctx) {
     let hub = hub_of(&w, m);
     w.jump(20 * SEC);
     w.run(50 * MS);
-    assert_eq!(traces(&w, m, |t| matches!(t, Trace::Quiet { cause: QuietCause::LateTimer })), 1);
+    assert_eq!(
+        traces(&w, m, |t| matches!(
+            t,
+            Trace::Quiet {
+                cause: QuietCause::LateTimer
+            }
+        )),
+        1
+    );
     assert!(w.revoke(hub, x));
     w.run(100 * MS);
     assert!(w.has(m, x), "the removal is queued, not believed");
@@ -541,7 +601,11 @@ fn primary_switch(c: &mut Ctx) {
     assert_eq!(w.nodes[m].m.primary(), Some(&id(1)));
     w.set_rtt(m, 0, 120 * MS);
     w.run(20 * SEC);
-    assert_eq!(w.nodes[m].m.primary(), Some(&id(1)), "120 + 20 is not under three quarters of 150");
+    assert_eq!(
+        w.nodes[m].m.primary(),
+        Some(&id(1)),
+        "120 + 20 is not under three quarters of 150"
+    );
     w.set_rtt(m, 0, 70 * MS);
     w.run(20 * SEC);
     assert_eq!(w.nodes[m].m.primary(), Some(&id(0)));
@@ -581,7 +645,12 @@ fn big_snapshot(c: &mut Ctx) {
     w.attach_all();
     w.run(6 * SEC);
     assert_eq!(w.nodes[1].m.member_count(), 70);
-    assert!(w.frames.iter().any(|(_, _, _, bytes)| bytes[4] == 4 && bytes[6] & 2 != 0), "a snapshot of several frames");
+    assert!(
+        w.frames
+            .iter()
+            .any(|(_, _, _, bytes)| bytes[4] == 4 && bytes[6] & 2 != 0),
+        "a snapshot of several frames"
+    );
 }
 
 /// Malformed input, frames of other types, frames a node has no use for, frames from a revoked peer.
@@ -663,7 +732,10 @@ fn leaving(c: &mut Ctx) {
 /// Record every node scenario into `membership.ndjson`.
 pub fn run(tw: &mut TraceWriter) {
     let sink: Sink = Rc::new(RefCell::new(Vec::new()));
-    let mut c = Ctx { run: 0, sink: Rc::clone(&sink) };
+    let mut c = Ctx {
+        run: 0,
+        sink: Rc::clone(&sink),
+    };
     steady(&mut c);
     churn(&mut c);
     lossy(&mut c);

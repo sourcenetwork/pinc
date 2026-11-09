@@ -13,6 +13,21 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation,
     clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::type_complexity,
+    clippy::struct_excessive_bools,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::manual_is_multiple_of,
+    clippy::single_match_else,
+    clippy::match_wildcard_for_single_variants,
+    clippy::cast_lossless,
+    clippy::doc_markdown,
+    clippy::unused_self,
+    clippy::redundant_closure_for_method_calls,
+    dead_code,
     unreachable_pub
 )]
 

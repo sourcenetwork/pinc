@@ -18,7 +18,10 @@ pub fn nid(id: &NodeId) -> u32 {
     if id.iter().all(|x| *x == id[0]) {
         return u32::from(id[0]);
     }
-    assert!(id[..30].iter().all(|x| *x == 0), "ids of the traces are 32 equal bytes or wide");
+    assert!(
+        id[..30].iter().all(|x| *x == 0),
+        "ids of the traces are 32 equal bytes or wide"
+    );
     256 + u32::from(u16::from_be_bytes([id[30], id[31]]))
 }
 
@@ -45,7 +48,12 @@ fn entry_json(e: &Entry<'_>) -> String {
 }
 
 fn down_json(d: &Down<'_>) -> String {
-    let pr: Vec<String> = d.proof.probes().iter().map(|p| format!("[{},{}]", p.age_ms, p.path as u8)).collect();
+    let pr: Vec<String> = d
+        .proof
+        .probes()
+        .iter()
+        .map(|p| format!("[{},{}]", p.age_ms, p.path as u8))
+        .collect();
     format!(
         "{{\"k\":\"down\",\"m\":{},\"inc\":{},\"sil\":{},\"pr\":[{}]}}",
         nid(d.member),
@@ -118,13 +126,22 @@ fn opt_id(x: Option<&NodeId>) -> String {
 fn bc_json(c: &Bc) -> String {
     match c {
         Bc::Frame(from, ty, topic, rest) => {
-            format!("{{\"k\":\"frame\",\"from\":{},\"ty\":{ty},\"topic\":{},\"rest\":{}}}", nid(from), list(topic), list(rest))
+            format!(
+                "{{\"k\":\"frame\",\"from\":{},\"ty\":{ty},\"topic\":{},\"rest\":{}}}",
+                nid(from),
+                list(topic),
+                list(rest)
+            )
         }
         Bc::Hold(m) => format!("{{\"k\":\"hold\",\"m\":{}}}", nid(m)),
         Bc::Restore(m) => format!("{{\"k\":\"restore\",\"m\":{}}}", nid(m)),
         Bc::Release(m) => format!("{{\"k\":\"release\",\"m\":{}}}", nid(m)),
         Bc::Resub(h) => format!("{{\"k\":\"resub\",\"hub\":{}}}", nid(h)),
-        Bc::Primary(old, new) => format!("{{\"k\":\"primary\",\"old\":{},\"new\":{}}}", opt_id(old.as_ref()), nid(new)),
+        Bc::Primary(old, new) => format!(
+            "{{\"k\":\"primary\",\"old\":{},\"new\":{}}}",
+            opt_id(old.as_ref()),
+            nid(new)
+        ),
     }
 }
 
@@ -193,18 +210,34 @@ fn trace_json(t: &Trace) -> String {
         Trace::DownSent { member } => format!("{{\"k\":\"down_sent\",\"member\":{}}}", nid(member)),
         Trace::DownAccepted { member } => format!("{{\"k\":\"down_accepted\",\"member\":{}}}", nid(member)),
         Trace::DownRefused { member, why } => {
-            format!("{{\"k\":\"down_refused\",\"member\":{},\"why\":{}}}", nid(member), refusal(*why))
+            format!(
+                "{{\"k\":\"down_refused\",\"member\":{},\"why\":{}}}",
+                nid(member),
+                refusal(*why)
+            )
         }
         Trace::CarrierReturned { member, restored } => {
-            format!("{{\"k\":\"carrier_returned\",\"member\":{},\"restored\":{}}}", nid(member), b(*restored))
+            format!(
+                "{{\"k\":\"carrier_returned\",\"member\":{},\"restored\":{}}}",
+                nid(member),
+                b(*restored)
+            )
         }
         Trace::SelfDelta { hub } => format!("{{\"k\":\"self_delta\",\"hub\":{}}}", nid(hub)),
         Trace::SnapApplied { hub, entries, more } => {
-            format!("{{\"k\":\"snap_applied\",\"hub\":{},\"entries\":{entries},\"more\":{}}}", nid(hub), b(*more))
+            format!(
+                "{{\"k\":\"snap_applied\",\"hub\":{},\"entries\":{entries},\"more\":{}}}",
+                nid(hub),
+                b(*more)
+            )
         }
         Trace::Absent { member } => format!("{{\"k\":\"absent\",\"member\":{}}}", nid(member)),
         Trace::Removed { member, why } => {
-            format!("{{\"k\":\"removed\",\"member\":{},\"why\":{}}}", nid(member), removal(*why))
+            format!(
+                "{{\"k\":\"removed\",\"member\":{},\"why\":{}}}",
+                nid(member),
+                removal(*why)
+            )
         }
         Trace::Deferred { member } => format!("{{\"k\":\"deferred\",\"member\":{}}}", nid(member)),
         Trace::Quiet { cause } => {
@@ -223,21 +256,20 @@ fn trace_json(t: &Trace) -> String {
 }
 
 fn env_json(e: &EnvSnap) -> String {
-    let ev: Vec<String> = e
-        .ev
-        .iter()
-        .map(|(p, v)| {
-            format!(
-                "[{},{{\"rx\":{},\"srtt\":{},\"pto\":{},\"inf\":{},\"direct\":{}}}]",
-                nid(p),
-                limbs(v.last_rx),
-                limbs(v.srtt),
-                v.pto,
-                v.inflight,
-                b(v.direct)
-            )
-        })
-        .collect();
+    let ev: Vec<String> =
+        e.ev.iter()
+            .map(|(p, v)| {
+                format!(
+                    "[{},{{\"rx\":{},\"srtt\":{},\"pto\":{},\"inf\":{},\"direct\":{}}}]",
+                    nid(p),
+                    limbs(v.last_rx),
+                    limbs(v.srtt),
+                    v.pto,
+                    v.inflight,
+                    b(v.direct)
+                )
+            })
+            .collect();
     let car: Vec<String> = e
         .car
         .iter()
@@ -274,7 +306,11 @@ fn st_json(s: &StSnap) -> String {
         .iter()
         .map(|(m, r)| format!("[{},{},{},{}]", nid(m), limbs(r.inc), r.ver, list(&r.thash)))
         .collect();
-    let roster: Vec<String> = s.roster.iter().map(|(m, t)| format!("[{},{}]", nid(m), limbs(*t))).collect();
+    let roster: Vec<String> = s
+        .roster
+        .iter()
+        .map(|(m, t)| format!("[{},{}]", nid(m), limbs(*t)))
+        .collect();
     format!(
         "{{\"members\":[{}],\"epoch\":{},\"primary\":{},\"inc\":{},\"roster\":[{}],\"sealfailed\":{}}}",
         members.join(","),
@@ -290,7 +326,13 @@ fn st_json(s: &StSnap) -> String {
 fn op_json(c: &Call) -> String {
     let now = limbs(c.now);
     match &c.op {
-        Op::Start { hub, hubs, wall, floor, ret } => {
+        Op::Start {
+            hub,
+            hubs,
+            wall,
+            floor,
+            ret,
+        } => {
             let hs: Vec<String> = hubs.iter().map(|h| nid(h).to_string()).collect();
             format!(
                 "\"op\":\"start\",\"me\":{},\"hub\":{},\"hubs\":[{}],\"now\":{now},\"wall\":{},\"floor\":{},\"ret\":\"{ret}\"",
@@ -302,14 +344,26 @@ fn op_json(c: &Call) -> String {
             )
         }
         Op::Up { peer, incoming } => {
-            format!("\"op\":\"up\",\"peer\":{},\"inc\":{},\"now\":{now}", nid(peer), b(*incoming))
+            format!(
+                "\"op\":\"up\",\"peer\":{},\"inc\":{},\"now\":{now}",
+                nid(peer),
+                b(*incoming)
+            )
         }
-        Op::Down { peer, code } => format!("\"op\":\"dn\",\"peer\":{},\"code\":{},\"now\":{now}", nid(peer), limbs(*code)),
+        Op::Down { peer, code } => format!(
+            "\"op\":\"dn\",\"peer\":{},\"code\":{},\"now\":{now}",
+            nid(peer),
+            limbs(*code)
+        ),
         Op::Bytes { peer, bytes, used, bad } => {
             let mut fs = Vec::new();
             let mut at = 0;
             while let Ok(Some((f, n))) = Frame::read(&bytes[at..]) {
-                fs.push(format!("{{\"f\":{},\"hex\":\"{}\"}}", frame_json(&f), hex(&bytes[at..at + n])));
+                fs.push(format!(
+                    "{{\"f\":{},\"hex\":\"{}\"}}",
+                    frame_json(&f),
+                    hex(&bytes[at..at + n])
+                ));
                 at += n;
                 if fs.len() == vinc_membership::MAX_FRAMES_PER_CALL {
                     break;
@@ -331,7 +385,11 @@ fn op_json(c: &Call) -> String {
         Op::CarrierReturn { member } => format!("\"op\":\"cr\",\"member\":{},\"now\":{now}", nid(member)),
         Op::Leave => "\"op\":\"lv\"".to_owned(),
         Op::Revoke { member, ok } => {
-            format!("\"op\":\"rv\",\"member\":{},\"now\":{now},\"ret\":\"{}\"", nid(member), if *ok { "ok" } else { "full" })
+            format!(
+                "\"op\":\"rv\",\"member\":{},\"now\":{now},\"ret\":\"{}\"",
+                nid(member),
+                if *ok { "ok" } else { "full" }
+            )
         }
         Op::Moved => format!("\"op\":\"mv\",\"now\":{now}"),
     }
@@ -342,13 +400,26 @@ fn out_json(c: &Call) -> String {
         .sent
         .iter()
         .map(|(to, route, bytes, ok)| {
-            let (f, n) = Frame::read(bytes).expect("a sent frame parses").expect("a sent frame is whole");
+            let (f, n) = Frame::read(bytes)
+                .expect("a sent frame parses")
+                .expect("a sent frame is whole");
             assert_eq!(n, bytes.len());
-            format!("{{\"to\":{},{},\"f\":{},\"hex\":\"{}\",\"ok\":{}}}", nid(to), route_json(route), frame_json(&f), hex(bytes), b(*ok))
+            format!(
+                "{{\"to\":{},{},\"f\":{},\"hex\":\"{}\",\"ok\":{}}}",
+                nid(to),
+                route_json(route),
+                frame_json(&f),
+                hex(bytes),
+                b(*ok)
+            )
         })
         .collect();
     let bc: Vec<String> = c.bc.iter().map(bc_json).collect();
-    let cl: Vec<String> = c.closed.iter().map(|(p, r)| format!("[{},\"{}\"]", nid(p), close_name(*r))).collect();
+    let cl: Vec<String> = c
+        .closed
+        .iter()
+        .map(|(p, r)| format!("[{},\"{}\"]", nid(p), close_name(*r)))
+        .collect();
     let ev: Vec<String> = c.events.iter().map(event_json).collect();
     let tr: Vec<String> = c.traces.iter().map(trace_json).collect();
     format!(
@@ -385,4 +456,3 @@ impl Recorder for JsonRec {
         self.sink.borrow_mut().push(line);
     }
 }
-

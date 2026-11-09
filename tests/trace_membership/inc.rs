@@ -12,9 +12,9 @@
 //! strictly increase for a persistent store whatever the wall clock does, an epoch never exceeds 48 bits, and a
 //! failure leaves the value and the word unchanged.
 
+use vinc_membership::Local;
 use vinc_membership::incarnation::{AddressTag, Incarnation, IncarnationError, MOVE_SETTLE};
 use vinc_membership::session::StoreError;
-use vinc_membership::Local;
 use vinc_tests::SplitMix64;
 
 use crate::common::{TraceWriter, b, limbs, opt_limbs};
@@ -46,7 +46,11 @@ impl Local for Host {
         self.persistent
     }
     fn unseal_counter(&mut self) -> Result<Option<u64>, StoreError> {
-        if self.read_fails { Err(StoreError) } else { Ok(self.sealed) }
+        if self.read_fails {
+            Err(StoreError)
+        } else {
+            Ok(self.sealed)
+        }
     }
     fn seal_counter(&mut self, epoch: u64) -> Result<(), StoreError> {
         if self.seal_fails {
@@ -67,8 +71,17 @@ fn err_name(e: &IncarnationError) -> &'static str {
 /// The result part of an event: ok, error name, word after, store after.
 fn outcome(r: &Result<u64, IncarnationError>, h: &Host) -> String {
     match r {
-        Ok(w) => format!("\"ok\":true,\"err\":\"\",\"w\":{},\"sl2\":{}", limbs(*w), opt_limbs(h.sealed)),
-        Err(e) => format!("\"ok\":false,\"err\":\"{}\",\"w\":{},\"sl2\":{}", err_name(e), limbs(0), opt_limbs(h.sealed)),
+        Ok(w) => format!(
+            "\"ok\":true,\"err\":\"\",\"w\":{},\"sl2\":{}",
+            limbs(*w),
+            opt_limbs(h.sealed)
+        ),
+        Err(e) => format!(
+            "\"ok\":false,\"err\":\"{}\",\"w\":{},\"sl2\":{}",
+            err_name(e),
+            limbs(0),
+            opt_limbs(h.sealed)
+        ),
     }
 }
 
@@ -95,7 +108,13 @@ struct Life {
 
 impl Life {
     fn new(run: usize, host: Host) -> Self {
-        Self { run, host, inc: None, top: None, heard: 0 }
+        Self {
+            run,
+            host,
+            inc: None,
+            top: None,
+            heard: 0,
+        }
     }
 
     /// The store was replaced behind the node's back (a lost or rewound store): a new lineage.
@@ -124,7 +143,12 @@ impl Life {
         };
         tw.line(
             FILE,
-            &format!("{pre},\"wall\":{},\"fl\":{},{}}}", limbs(wall), limbs(floor), outcome(&res, &self.host)),
+            &format!(
+                "{pre},\"wall\":{},\"fl\":{},{}}}",
+                limbs(wall),
+                limbs(floor),
+                outcome(&res, &self.host)
+            ),
         );
         match r {
             Ok(i) => {
@@ -133,9 +157,15 @@ impl Life {
                 assert_eq!(i.word() & 0xffff, 0, "a new life starts at sequence 0");
                 if self.host.persistent {
                     assert_eq!(self.host.sealed, Some(e), "sealed before use");
-                    assert!(before.is_none_or(|s| e > s) && e > floor, "above the counter and the floor");
+                    assert!(
+                        before.is_none_or(|s| e > s) && e > floor,
+                        "above the counter and the floor"
+                    );
                 } else {
-                    assert!(e > floor && e > wall.min(EPOCH_MAX), "the clock fallback is above the floor");
+                    assert!(
+                        e > floor && e > wall.min(EPOCH_MAX),
+                        "the clock fallback is above the floor"
+                    );
                 }
                 self.announce(word.unwrap_or(0));
                 self.inc = Some(i);
@@ -185,7 +215,10 @@ impl Life {
                 Err(_) => break,
             }
         }
-        tw.line(FILE, &format!("{pre},\"n\":{n},\"done\":{done},{}}}", outcome(&last, &self.host)));
+        tw.line(
+            FILE,
+            &format!("{pre},\"n\":{n},\"done\":{done},{}}}", outcome(&last, &self.host)),
+        );
         self.inc = Some(i);
     }
 
@@ -198,7 +231,15 @@ impl Life {
             Ok(c) => (Ok(i.word()), *c),
             Err(e) => (Err(*e), false),
         };
-        tw.line(FILE, &format!("{pre},\"seen\":{},\"ch\":{},{}}}", limbs(seen), b(ch), outcome(&res, &self.host)));
+        tw.line(
+            FILE,
+            &format!(
+                "{pre},\"seen\":{},\"ch\":{},{}}}",
+                limbs(seen),
+                b(ch),
+                outcome(&res, &self.host)
+            ),
+        );
         match r {
             Ok(true) => {
                 assert!(seen < i.word() && w0 < i.word());
@@ -256,7 +297,13 @@ fn seens(rng: &mut SplitMix64, own: u64) -> u64 {
 
 fn lineage(tw: &mut TraceWriter, run: usize, persistent: bool, seed: u64) {
     let mut rng = SplitMix64::new(seed);
-    let mut life = Life::new(run, Host { persistent, ..Host::default() });
+    let mut life = Life::new(
+        run,
+        Host {
+            persistent,
+            ..Host::default()
+        },
+    );
     for _ in 0..14 {
         // Failures come and go with the host.
         life.host.read_fails = rng.next_u64() % 6 == 0;
@@ -295,7 +342,14 @@ fn lineage(tw: &mut TraceWriter, run: usize, persistent: bool, seed: u64) {
 /// The epoch space running out, and its edges.
 fn edges(tw: &mut TraceWriter, run: usize) {
     // A persistent store one below the end: the last epoch is issued, then the sequence rolls into exhaustion.
-    let mut life = Life::new(run, Host { persistent: true, sealed: Some(EPOCH_MAX - 2), ..Host::default() });
+    let mut life = Life::new(
+        run,
+        Host {
+            persistent: true,
+            sealed: Some(EPOCH_MAX - 2),
+            ..Host::default()
+        },
+    );
     life.start(tw, 0, 0);
     life.next_n(tw, 70_000);
     life.observe(tw, u64::MAX);
@@ -322,7 +376,15 @@ fn edges(tw: &mut TraceWriter, run: usize) {
     hlc.next(tw);
     hlc.observe(tw, u64::MAX);
     // A store that cannot be read, and one that cannot be written, at start.
-    let mut bad = Life::new(run + 2, Host { persistent: true, sealed: Some(7), read_fails: true, ..Host::default() });
+    let mut bad = Life::new(
+        run + 2,
+        Host {
+            persistent: true,
+            sealed: Some(7),
+            read_fails: true,
+            ..Host::default()
+        },
+    );
     bad.start(tw, 1, 0);
     bad.host.read_fails = false;
     bad.host.seal_fails = true;
@@ -339,7 +401,10 @@ fn edges(tw: &mut TraceWriter, run: usize) {
 /// The address tag.
 fn tags(tw: &mut TraceWriter, run: usize, seed: u64) {
     let mut rng = SplitMix64::new(seed);
-    let mut host = Host { ticket: 9, ..Host::default() };
+    let mut host = Host {
+        ticket: 9,
+        ..Host::default()
+    };
     let mut tag = AddressTag::default();
     let mut now = 1_000u64;
     let mut moves = 0u8;
@@ -359,7 +424,10 @@ fn tags(tw: &mut TraceWriter, run: usize, seed: u64) {
             host.ticket = u8::try_from(rng.next_u64() % 200).unwrap_or(0);
         }
         if step % 2 == 0 || rng.next_u64() % 3 == 0 {
-            tw.line(FILE, &format!("{{\"t\":\"mi\",\"run\":{run},\"op\":\"mv\",\"now\":{}}}", limbs(now)));
+            tw.line(
+                FILE,
+                &format!("{{\"t\":\"mi\",\"run\":{run},\"op\":\"mv\",\"now\":{}}}", limbs(now)),
+            );
             tag.moved(now);
             if moved_at != Some(now) {
                 moves = moves.wrapping_add(1);
@@ -384,7 +452,10 @@ fn tags(tw: &mut TraceWriter, run: usize, seed: u64) {
             Some(prev) if settling => prev,
             _ => host.address_hash(moves),
         };
-        assert_eq!(t, expect, "the tag is the previous one while settling, the hash of the moves after");
+        assert_eq!(
+            t, expect,
+            "the tag is the previous one while settling, the hash of the moves after"
+        );
         cur = Some(t);
     }
     assert!(moves < 255 || tag.moves() == moves);
