@@ -509,6 +509,7 @@ proptest! {
 
 #[test]
 fn datagrams_round_trip_and_are_strict() {
+    const SPU_TYPE: u8 = 9;
     let a = nid(1);
     let addr: SocketAddr = "203.0.113.7:4433".parse().unwrap();
     let v6: SocketAddr = "[2001:db8::1]:443".parse().unwrap();
@@ -566,24 +567,98 @@ fn datagrams_round_trip_and_are_strict() {
         packet: &max,
     };
     assert_eq!(Datagram::decode(&connect_common::dg(&d)).unwrap(), d);
+    // the bytes of an over-long or empty packet are refused by the decoder, and the encoder refuses to write them
     let over = vec![0x41u8; MAX_TUNNEL_DATAGRAM - 34];
     let mut buf = vec![0u8; 2048];
-    let n = Datagram::Spu {
-        dst: a,
-        flag: 0,
-        packet: &over,
+    let mut head = vec![SPU_TYPE];
+    head.extend_from_slice(&connect_common::node_bytes(&a));
+    head.push(0);
+    head.extend_from_slice(&over);
+    assert_eq!(Datagram::decode(&head).unwrap_err(), DatagramError::PacketSize);
+    assert_eq!(
+        Datagram::Spu {
+            dst: a,
+            flag: 0,
+            packet: &over
+        }
+        .encode(&mut buf),
+        Err(DatagramError::PacketSize)
+    );
+    assert_eq!(
+        Datagram::Spl {
+            src: a,
+            flag: 0,
+            packet: &[]
+        }
+        .encode(&mut buf),
+        Err(DatagramError::PacketSize)
+    );
+}
+
+/// `Datagram::encode` refuses every field the decoder refuses: a tunnelled packet that is empty or does not fit the
+/// datagram, a record or a notice that is empty or too long. (It once wrote them, and the datagram then failed to
+/// decode at the receiver.)
+#[test]
+fn datagram_encode_refuses_what_decode_refuses() {
+    let a = nid(1);
+    let mut buf = vec![0u8; 4 * 1024];
+    let too_long_packet = vec![1u8; MAX_TUNNEL_DATAGRAM - 34];
+    let fits = vec![1u8; MAX_TUNNEL_DATAGRAM - 35];
+    let long_record = vec![1u8; MAX_RECORD_LEN + 1];
+    let long_notice = vec![1u8; MAX_NOTICE_LEN + 1];
+    let refused = [
+        (
+            Datagram::Spl {
+                src: a,
+                flag: 0,
+                packet: &[],
+            },
+            DatagramError::PacketSize,
+        ),
+        (
+            Datagram::Spu {
+                dst: a,
+                flag: 0,
+                packet: &too_long_packet,
+            },
+            DatagramError::PacketSize,
+        ),
+        (
+            Datagram::Sleep { notice: &[] },
+            DatagramError::Frame(FrameError::BodySize),
+        ),
+        (
+            Datagram::Sleep { notice: &long_notice },
+            DatagramError::Frame(FrameError::BodySize),
+        ),
+        (
+            Datagram::DnsReply {
+                peer: a,
+                answer: DnsAnswer::Record(&[]),
+            },
+            DatagramError::Frame(FrameError::BodySize),
+        ),
+        (
+            Datagram::DnsReply {
+                peer: a,
+                answer: DnsAnswer::Record(&long_record),
+            },
+            DatagramError::Frame(FrameError::BodySize),
+        ),
+    ];
+    let mut big = vec![0u8; 16 * 1024];
+    for (d, e) in &refused {
+        assert_eq!(d.encode(&mut big), Err(*e), "{d:?}");
+        assert_eq!(d.encode(&mut buf), Err(*e), "{d:?}");
     }
-    .encode(&mut buf)
-    .unwrap();
-    assert_eq!(Datagram::decode(&buf[..n]).unwrap_err(), DatagramError::PacketSize);
-    let n = Datagram::Spl {
+    // and what fits is written and decodes back
+    let ok = Datagram::Spl {
         src: a,
-        flag: 0,
-        packet: &[],
-    }
-    .encode(&mut buf)
-    .unwrap();
-    assert_eq!(Datagram::decode(&buf[..n]).unwrap_err(), DatagramError::PacketSize);
+        flag: 3,
+        packet: &fits,
+    };
+    let n = ok.encode(&mut buf).unwrap();
+    assert_eq!(Datagram::decode(&buf[..n]).unwrap(), ok);
 }
 
 fn fields<'a>(addrs: &'a [SocketAddr], hints: &'a [u8]) -> RecordFields<'a> {

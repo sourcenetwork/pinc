@@ -133,6 +133,15 @@ import Vinc.ValuesSchedSteal
 import Vinc.ValuesSchedEvict
 import Vinc.ValuesSchedTerm
 import Vinc.TraceValuesSched
+import Vinc.ConnectFrameErr
+import Vinc.ConnectDatagram
+import Vinc.ConnectRecord
+import Vinc.ConnectSigned
+import Vinc.ConnectTicket
+import Vinc.ConnectTicketText
+import Vinc.ConnectBase32
+import Vinc.ConnectTicketTextPf
+import Vinc.TraceConnectCodec
 import Vinc.ConnectAudit
 import Vinc.DtnGf
 import Vinc.DtnGfField

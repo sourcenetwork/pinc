@@ -19,6 +19,7 @@ import Vinc.ValuesVerifyTrace
 import Vinc.ValuesTimeTrace
 import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
+import Vinc.TraceConnectCodec
 import Vinc.TraceConnect
 import Vinc.TraceTranscript
 import Vinc.TraceCrypto
@@ -308,6 +309,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnect.replayEvent j crl with
           | .ok w' =>
             crl := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectCodec.isTag t then
+          -- Wire format events (`trace_connect_codec`): the Lean frame, datagram, record, beacon, notice and ticket codecs.
+          match TraceConnectCodec.replayEvent j with
+          | .ok () =>
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

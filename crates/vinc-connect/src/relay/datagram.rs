@@ -131,6 +131,22 @@ fn packet<'a>(r: &mut Reader<'a>, max: usize) -> Result<&'a [u8], DatagramError>
     Ok(r.read_bytes(n)?)
 }
 
+/// A record or notice the decoder would accept: 1 to `max` bytes.
+fn check_body(body: &[u8], max: usize) -> Result<(), DatagramError> {
+    if body.is_empty() || body.len() > max {
+        return Err(DatagramError::Frame(FrameError::BodySize));
+    }
+    Ok(())
+}
+
+/// A tunnelled packet the decoder would accept: at least one byte, and the header with it within the datagram bound.
+fn check_tunnel_packet(packet: &[u8]) -> Result<(), DatagramError> {
+    if packet.is_empty() || packet.len().saturating_add(35) > MAX_TUNNEL_DATAGRAM {
+        return Err(DatagramError::PacketSize);
+    }
+    Ok(())
+}
+
 impl<'a> Datagram<'a> {
     /// Decode one datagram from exactly `buf`.
     ///
@@ -198,7 +214,8 @@ impl<'a> Datagram<'a> {
     /// Encode into `out` and return the length.
     ///
     /// # Errors
-    /// A [`DatagramError`] if `out` is short or a field would not decode.
+    /// A [`DatagramError`] if `out` is short or a field would not decode (an empty or oversized packet, record or
+    /// notice); nothing is returned for a datagram the decoder would refuse.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, DatagramError> {
         let mut w = Writer::new(out);
         match *self {
@@ -222,6 +239,7 @@ impl<'a> Datagram<'a> {
                     DnsAnswer::Absent => w.put_u8(0)?,
                     DnsAnswer::Record(rec) => {
                         w.put_u8(1)?;
+                        check_body(rec, MAX_RECORD_LEN)?;
                         w.put_slice(rec)?;
                     }
                     DnsAnswer::TooLarge => w.put_u8(2)?,
@@ -229,18 +247,21 @@ impl<'a> Datagram<'a> {
             }
             Self::Sleep { notice } => {
                 w.put_u8(kind::SLEEP)?;
+                check_body(notice, MAX_NOTICE_LEN)?;
                 w.put_slice(notice)?;
             }
             Self::Spl { src, flag, packet } => {
                 w.put_u8(kind::SPL)?;
                 node::write(&mut w, &src)?;
                 w.put_u8(flag)?;
+                check_tunnel_packet(packet)?;
                 w.put_slice(packet)?;
             }
             Self::Spu { dst, flag, packet } => {
                 w.put_u8(kind::SPU)?;
                 node::write(&mut w, &dst)?;
                 w.put_u8(flag)?;
+                check_tunnel_packet(packet)?;
                 w.put_slice(packet)?;
             }
         }
