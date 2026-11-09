@@ -31,7 +31,13 @@ const G: u64 = GROUP;
 
 fn releases(sim: &Sim) -> Vec<(u64, Release)> {
     sim.rec
-        .traces_of(|t| if let Trace::Released { off, why } = t { Some((*off, *why)) } else { None })
+        .traces_of(|t| {
+            if let Trace::Released { off, why } = t {
+                Some((*off, *why))
+            } else {
+                None
+            }
+        })
         .into_iter()
         .map(|(_, r)| r)
         .collect()
@@ -165,9 +171,13 @@ fn a_provider_that_never_sends_is_redialled() {
         .rec
         .traces_of(|t| matches!(t, Trace::Requested { .. }).then_some(()))[0]
         .0;
-    let (at, wait) = sim
-        .rec
-        .traces_of(|t| if let Trace::StallRedial { wait, .. } = t { Some(*wait) } else { None })[0];
+    let (at, wait) = sim.rec.traces_of(|t| {
+        if let Trace::StallRedial { wait, .. } = t {
+            Some(*wait)
+        } else {
+            None
+        }
+    })[0];
     assert_eq!(wait, 4 * SEC);
     assert_eq!(at, first + 4 * SEC, "the wait counts from the first request");
 }
@@ -182,11 +192,20 @@ fn a_wrong_proof_frame_evicts_its_provider() {
     );
     sim.start();
     sim.run_until(SEC, |s| {
-        s.rec.traces.iter().filter(|(_, t)| matches!(t, Trace::Requested { .. })).count() >= 2
+        s.rec
+            .traces
+            .iter()
+            .filter(|(_, t)| matches!(t, Trace::Requested { .. }))
+            .count()
+            >= 2
     });
-    let (victim, stream) = sim
-        .rec
-        .traces_of(|t| if let Trace::Requested { provider, stream, .. } = t { Some((*provider, *stream)) } else { None })[0]
+    let (victim, stream) = sim.rec.traces_of(|t| {
+        if let Trace::Requested { provider, stream, .. } = t {
+            Some((*provider, *stream))
+        } else {
+            None
+        }
+    })[0]
         .1;
     // A well-formed head for a value one byte longer than the one fetched.
     let mut body = [0u8; 64];
@@ -196,11 +215,25 @@ fn a_wrong_proof_frame_evicts_its_provider() {
         store: &mut sim.store,
         out: &mut sim.rec,
     };
-    sim.fetch.on_event(&mut io, sim.now, &In::Ext { ty: ext::PROOF, body: &body[..n] });
-    let liars = sim
-        .rec
-        .traces_of(|t| if let Trace::Liar { provider, why } = t { Some((*provider, *why)) } else { None });
-    assert_eq!(liars.iter().map(|l| l.1).collect::<Vec<_>>(), vec![(victim, LiarWhy::Protocol)]);
+    sim.fetch.on_event(
+        &mut io,
+        sim.now,
+        &In::Ext {
+            ty: ext::PROOF,
+            body: &body[..n],
+        },
+    );
+    let liars = sim.rec.traces_of(|t| {
+        if let Trace::Liar { provider, why } = t {
+            Some((*provider, *why))
+        } else {
+            None
+        }
+    });
+    assert_eq!(
+        liars.iter().map(|l| l.1).collect::<Vec<_>>(),
+        vec![(victim, LiarWhy::Protocol)]
+    );
     // The other provider finishes the fetch.
     sim.run(120);
     assert!(sim.rec.complete());

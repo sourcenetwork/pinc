@@ -17,32 +17,32 @@ namespace Vinc.ValuesSys
 open Classical
 
 /-- What the once-only announcement needs on top of `Inv`. -/
-structure Inv2 (s : St) : Prop where
+structure Once (s : St) : Prop where
   annLe : ∀ g, s.ann g ≤ 1
   hdFresh : ∀ g, s.hd = some g → s.ann g = 0
   pdFresh : ∀ d, s.pd = some d → s.ver d.g = false
   idle : s.run = .idle → (∀ g, s.ann g = 0) ∧ s.hd = none ∧ s.pd = none
 
-theorem Inv2.init (c : Cfg) (rs : Nat) : Inv2 (init c rs) := by
+theorem Once.init (c : Cfg) (rs : Nat) : Once (init c rs) := by
   refine ⟨?_, ?_, ?_, ?_⟩ <;> simp [Vinc.ValuesSys.init]
 
-theorem Inv2.finish {s : St} (h : Inv2 s) (t : St) (f : Final) (ha : t.ann = s.ann) (hh : t.hd = s.hd) :
-    Inv2 (finish t f) := by
+theorem Once.finish {s : St} (h : Once s) (t : St) (f : Final) (ha : t.ann = s.ann) (hh : t.hd = s.hd) :
+    Once (finish t f) := by
   refine ⟨?_, ?_, ?_, ?_⟩
   · intro g; simpa [Vinc.ValuesSys.finish, ha] using h.annLe g
   · intro g hg; simp only [Vinc.ValuesSys.finish, hh] at hg; simpa [Vinc.ValuesSys.finish, ha] using h.hdFresh g hg
   · intro d hd; simp [Vinc.ValuesSys.finish] at hd
   · intro e; simp [Vinc.ValuesSys.finish] at e
 
-theorem Inv2.view {s s' : St} (h : Inv2 s) (ha : s'.ann = s.ann) (hh : s'.hd = s.hd) (hp : s'.pd = s.pd)
-    (hv : s'.ver = s.ver) (hr : s'.run ≠ .idle) : Inv2 s' := by
+theorem Once.view {s s' : St} (h : Once s) (ha : s'.ann = s.ann) (hh : s'.hd = s.hd) (hp : s'.pd = s.pd)
+    (hv : s'.ver = s.ver) (hr : s'.run ≠ .idle) : Once s' := by
   refine ⟨?_, ?_, ?_, ?_⟩
   · intro g; simpa [ha] using h.annLe g
   · intro g hg; rw [hh] at hg; simpa [ha] using h.hdFresh g hg
   · intro d hd; rw [hp] at hd; have := h.pdFresh d hd; rwa [hv]
   · intro e; exact absurd e hr
 
-theorem Inv2.step {c : Cfg} {s s' : St} (hi : Inv c s) (h : Inv2 s) (st : Step c s s') : Inv2 s' := by
+theorem Once.step {c : Cfg} {s s' : St} (hi : Inv c s) (h : Once s) (st : Step c s s') : Once s' := by
   cases st with
   | startBadRoot h1 h2 h3 => exact h.finish _ _ rfl rfl
   | startComplete h1 h2 h3 => exact h.finish _ _ rfl rfl
@@ -111,7 +111,7 @@ theorem Inv2.step {c : Cfg} {s s' : St} (hi : Inv c s) (h : Inv2 s) (st : Step c
     · intro d hd; have := h.pdFresh d (by simpa [readable] using hd); simpa [readable] using this
     · intro e; simp [readable, h1] at e
   | check h1 h2 h3 =>
-    have hr : Inv2 (releaseHd s) := by
+    have hr : Once (releaseHd s) := by
       unfold releaseHd
       cases hh : s.hd with
       | none => exact h
@@ -131,17 +131,17 @@ theorem Inv2.step {c : Cfg} {s s' : St} (hi : Inv c s) (h : Inv2 s) (st : Step c
   | restart h1 h2 =>
     refine ⟨?_, ?_, ?_, ?_⟩ <;> simp [Vinc.ValuesSys.init]
 
-theorem reach_inv2 {c : Cfg} {rs : Nat} {s : St} (h : Reach c rs s) : Inv2 s := by
+theorem reach_once {c : Cfg} {rs : Nat} {s : St} (h : Reach c rs s) : Once s := by
   induction h with
-  | init => exact Inv2.init c rs
+  | init => exact Once.init c rs
   | step s s' hr st ih => exact ih.step (reach_inv hr) st
 
 /-- A group has at most one `Readable` event in every execution. -/
-theorem ann_once {c : Cfg} {rs : Nat} {s : St} (h : Reach c rs s) (g : Nat) : s.ann g ≤ 1 := (reach_inv2 h).annLe g
+theorem ann_once {c : Cfg} {rs : Nat} {s : St} (h : Reach c rs s) (g : Nat) : s.ann g ≤ 1 := (reach_once h).annLe g
 
 /-- The held first granule has not been announced. -/
 theorem held_not_announced {c : Cfg} {rs : Nat} {s : St} (h : Reach c rs s) (g : Nat) (hg : s.hd = some g) :
-    s.ann g = 0 := (reach_inv2 h).hdFresh g hg
+    s.ann g = 0 := (reach_once h).hdFresh g hg
 
 end Vinc.ValuesSys
 
