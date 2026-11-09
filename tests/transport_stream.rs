@@ -1245,3 +1245,77 @@ fn source_frame_building_does_not_allocate() {
     });
     assert_eq!(stats.count(), 0);
 }
+
+#[test]
+fn a_stop_request_is_one_control_frame_sent_again_only_when_lost() {
+    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 0, 0, b"hello", false).unwrap();
+    t.stop_sending(0, 5).unwrap();
+    let frame = ControlFrame::StopSending { id: 0, error_code: 5 };
+    assert_eq!(drain_control(&mut t), [frame]);
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "the request was repeated without a loss"
+    );
+    t.stop_sending(0, 6).unwrap();
+    assert!(drain_control(&mut t).is_empty(), "a second request replaced the first");
+    t.on_control_lost(&frame);
+    assert_eq!(drain_control(&mut t), [frame], "a lost request is not sent again");
+    t.on_control_acked(&mut pool, &frame);
+    t.on_control_lost(&frame);
+    assert!(drain_control(&mut t).is_empty(), "an acknowledged request came back");
+}
+
+#[test]
+fn a_stop_request_is_dropped_once_the_peer_ended_the_stream() {
+    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 4, 0, b"x", true).unwrap();
+    t.stop_sending(4, 1).unwrap();
+    assert!(drain_control(&mut t).is_empty(), "a finished stream was asked to stop");
+    t.on_stream_frame(&mut pool, 8, 0, b"y", false).unwrap();
+    t.stop_sending(8, 2).unwrap();
+    let frame = ControlFrame::StopSending { id: 8, error_code: 2 };
+    assert_eq!(drain_control(&mut t), [frame]);
+    t.on_reset_stream(&mut pool, 8, 2, 1).unwrap();
+    t.on_control_lost(&frame);
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "a reset stream was asked to stop again"
+    );
+}
+
+#[test]
+fn a_stop_request_resets_a_send_half_once_and_refuses_what_has_no_send_half() {
+    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    let id = t.open_stream(true).unwrap();
+    t.write(&mut pool, id, b"data", NO_CAP).unwrap();
+    assert_eq!(t.on_stop_sending(&mut pool, id, 9), Ok(true));
+    assert_eq!(
+        t.on_stop_sending(&mut pool, id, 10),
+        Ok(false),
+        "a second stop reset the stream again"
+    );
+    assert!(
+        drain_control(&mut t)
+            .iter()
+            .any(|f| matches!(f, ControlFrame::ResetStream { id: i, error_code: 9, .. } if *i == id))
+    );
+    assert_eq!(t.write(&mut pool, id, b"more", NO_CAP), Err(StreamError::Finished));
+    // A unidirectional stream of the peer has no send half here; one of ours has no receive half.
+    assert_eq!(t.on_stop_sending(&mut pool, 2, 1), Err(StreamError::StreamState));
+    let uni = t.open_stream(false).unwrap();
+    assert_eq!(t.stop_sending(uni, 1), Err(StreamError::StreamState));
+    assert_eq!(t.stop_sending(99, 1), Err(StreamError::UnknownStream));
+    // A stream of the peer that was never heard of is opened by the stop (with the ones below it), and reset at once.
+    assert_eq!(t.on_stop_sending(&mut pool, 8, 3), Ok(true));
+    assert_eq!(t.peer_opened(8), 3);
+}
+
+#[test]
+fn a_stop_request_for_a_stream_far_beyond_the_limit_is_a_violation() {
+    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    assert_eq!(
+        t.on_stop_sending(&mut pool, 4 * 10_000, 1),
+        Err(StreamError::StreamLimit)
+    );
+}

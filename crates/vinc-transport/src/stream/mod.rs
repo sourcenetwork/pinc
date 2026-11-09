@@ -152,6 +152,13 @@ pub enum ControlFrame {
         /// The new limit.
         max: u64,
     },
+    /// A request to the sender to stop sending on a stream.
+    StopSending {
+        /// The stream.
+        id: StreamId,
+        /// The application error code the sender resets with.
+        error_code: u64,
+    },
     /// A stream reset.
     ResetStream {
         /// The stream.

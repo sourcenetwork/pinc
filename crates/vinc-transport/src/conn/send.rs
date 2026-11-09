@@ -891,6 +891,7 @@ fn implicit_stream_len(frames: &mut [u8], at: usize, head: usize) -> Option<usiz
 fn control_frame(cf: &ControlFrame) -> Frame<'static> {
     match *cf {
         ControlFrame::MaxStreamData { id, max } => Frame::MaxStreamData { id, max },
+        ControlFrame::StopSending { id, error_code } => Frame::StopSending { id, error: error_code },
         ControlFrame::ResetStream {
             id,
             error_code,

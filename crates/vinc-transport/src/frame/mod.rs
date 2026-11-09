@@ -11,6 +11,7 @@
 //! | `0x01` | PING | none |
 //! | `0x02` | ACK | largest, `range_count`, `first_range`, (gap, length)* |
 //! | `0x04` | `RESET_STREAM` | stream id, error code, final size |
+//! | `0x05` | `STOP_SENDING` | stream id, error code |
 //! | `0x08`-`0x0f` | STREAM | stream id, offset (optional), length (optional), data |
 //! | `0x11` | `MAX_STREAM_DATA` | stream id, max |
 //! | `0x1a`, `0x1b` | `PATH_CHALLENGE`, `PATH_RESPONSE` | 8 bytes |
@@ -23,7 +24,7 @@
 //! | `0x3f` | `NEW_TICKETS` | a ticket batch: count (1 byte, 0 to 4), then per ticket the id (16 bytes) and the lifetime in seconds (4 bytes) |
 //! | `0x40` and up | extension | length (varint), body bytes |
 //!
-//! There is no connection-level credit frame, no blocked frame, no stream-count frame, no stop frame and no frame for
+//! There is no connection-level credit frame, no blocked frame, no stream-count frame, no frame to stop a connection, and no frame for
 //! connection ids: the receiver grants credit per stream with `MAX_STREAM_DATA`, refuses a stream it cannot hold with
 //! `RESET_STREAM`, and a connection id is derived from the session secret. An ACK carries no delay.
 //!
@@ -79,6 +80,8 @@ pub mod ty {
     pub const ACK: u64 = 0x02;
     /// `RESET_STREAM`.
     pub const RESET_STREAM: u64 = 0x04;
+    /// `STOP_SENDING`.
+    pub const STOP_SENDING: u64 = 0x05;
     /// STREAM with no flag bits; OR in [`STREAM_OFF`], [`STREAM_LEN`] and [`STREAM_FIN`].
     pub const STREAM: u64 = 0x08;
     /// STREAM flag: an offset is present.
@@ -173,6 +176,13 @@ pub enum Frame<'a> {
         error: u64,
         /// The final size of the stream.
         final_size: u64,
+    },
+    /// `STOP_SENDING`: the receiver asks the sender to abandon the stream; the sender resets it with `error`.
+    StopSending {
+        /// The stream.
+        id: u64,
+        /// The application error code the sender resets with.
+        error: u64,
     },
     /// STREAM.
     Stream {

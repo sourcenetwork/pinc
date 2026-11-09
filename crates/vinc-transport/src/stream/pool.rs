@@ -40,7 +40,7 @@ impl Chunk {
 enum Slab<'p> {
     Borrowed(&'p mut [RawChunk]),
     #[cfg(feature = "alloc")]
-    Boxed(alloc::boxed::Box<[RawChunk]>),
+    Boxed(alloc::boxed::Box<[u8]>),
 }
 
 impl Slab<'_> {
@@ -48,7 +48,7 @@ impl Slab<'_> {
         match self {
             Slab::Borrowed(s) => s,
             #[cfg(feature = "alloc")]
-            Slab::Boxed(b) => b,
+            Slab::Boxed(b) => b.as_chunks().0,
         }
     }
 
@@ -56,7 +56,7 @@ impl Slab<'_> {
         match self {
             Slab::Borrowed(s) => s,
             #[cfg(feature = "alloc")]
-            Slab::Boxed(b) => b,
+            Slab::Boxed(b) => b.as_chunks_mut().0,
         }
     }
 }
@@ -91,7 +91,9 @@ impl<'p> BufferPool<'p> {
     /// A heap-backed pool of `chunks` chunks; the budget is all of them.
     #[cfg(feature = "alloc")]
     pub fn new_boxed(chunks: usize) -> Self {
-        let slab = alloc::vec![[0u8; CHUNK_SIZE]; chunks].into_boxed_slice();
+        // A flat zeroed byte buffer is a calloc the system commits lazily at any optimisation level; a vec of
+        // arrays is filled by hand in an unoptimised build and would touch every page.
+        let slab = alloc::vec![0u8; chunks * CHUNK_SIZE].into_boxed_slice();
         Self::with_slab(Slab::Boxed(slab))
     }
 

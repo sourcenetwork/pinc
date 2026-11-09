@@ -122,6 +122,9 @@ ep_impl! {
             Command::Reset { session, stream, error } => {
                 self.with_conn(session, now, |c| c.reset(stream, error).map_err(CommandError::Stream))
             }
+            Command::StopSending { session, stream, error } => {
+                self.with_conn(session, now, |c| c.stop_sending(stream, error).map_err(CommandError::Stream))
+            }
             Command::Consume { session, stream, n } => {
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;

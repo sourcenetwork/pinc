@@ -148,6 +148,15 @@ pub enum Event {
         /// The application error code.
         error: u64,
     },
+    /// The peer asked this side to stop sending on a stream; the stream is reset with `error`.
+    StreamStopped {
+        /// The session.
+        session: SessionId,
+        /// The stream.
+        stream: StreamId,
+        /// The application error code the peer gave.
+        error: u64,
+    },
     /// A datagram arrived.
     DatagramReceived {
         /// The session.
@@ -360,6 +369,15 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
     },
     /// Abandon the send side of a stream.
     Reset {
+        /// The session.
+        session: SessionId,
+        /// The stream.
+        stream: StreamId,
+        /// The application error code.
+        error: u64,
+    },
+    /// Ask the peer to stop sending on a stream; it resets the stream with `error`.
+    StopSending {
         /// The session.
         session: SessionId,
         /// The stream.

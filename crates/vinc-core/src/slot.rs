@@ -46,6 +46,7 @@ impl HeldEvent {
     pub(crate) const WRITABLE: u8 = 2;
     pub(crate) const RESET: u8 = 3;
     pub(crate) const DATAGRAM: u8 = 4;
+    pub(crate) const STOPPED: u8 = 5;
 
     pub(crate) const fn of(ev: &Event) -> Option<Self> {
         let (kind, stream, error) = match *ev {
@@ -53,6 +54,7 @@ impl HeldEvent {
             Event::StreamReadable { stream, .. } => (Self::READABLE, stream, 0),
             Event::StreamWritable { stream, .. } => (Self::WRITABLE, stream, 0),
             Event::StreamReset { stream, error, .. } => (Self::RESET, stream, error),
+            Event::StreamStopped { stream, error, .. } => (Self::STOPPED, stream, error),
             Event::DatagramReceived { .. } => (Self::DATAGRAM, 0, 0),
             _ => return None,
         };
@@ -66,6 +68,11 @@ impl HeldEvent {
             Self::READABLE => Event::StreamReadable { session, stream },
             Self::WRITABLE => Event::StreamWritable { session, stream },
             Self::RESET => Event::StreamReset {
+                session,
+                stream,
+                error: self.error,
+            },
+            Self::STOPPED => Event::StreamStopped {
                 session,
                 stream,
                 error: self.error,

@@ -131,6 +131,13 @@ pub enum Event<'a> {
     },
     /// The peer opened a stream.
     StreamOpened(StreamId),
+    /// The peer asked this side to stop sending on a stream; the stream is reset with `error` and takes no more writes.
+    StreamStopped {
+        /// The stream.
+        id: StreamId,
+        /// The application error code the peer gave.
+        error: u64,
+    },
     /// A stream has bytes to read.
     StreamReadable(StreamId),
     /// A stream may accept more writes.
@@ -188,6 +195,7 @@ pub(crate) enum Ev {
     Readable(StreamId),
     Writable(StreamId),
     Reset(StreamId, u64),
+    Stopped(StreamId, u64),
     Datagram,
     Extension,
     ExtensionUndeliverable(u64, usize),
@@ -216,6 +224,7 @@ impl Ev {
         match (self, other) {
             (Self::Opened(a), Self::Opened(b))
             | (Self::Reset(a, _), Self::Reset(b, _))
+            | (Self::Stopped(a, _), Self::Stopped(b, _))
             | (Self::Readable(a), Self::Readable(b))
             | (Self::Writable(a), Self::Writable(b)) => *a == *b,
             (Self::PathValidated(a), Self::PathValidated(b)) | (Self::PathFailed(a), Self::PathFailed(b)) => a.0 == b.0,
@@ -234,7 +243,7 @@ impl Ev {
 
 /// The places of the event queue.
 pub(crate) const QUEUE: usize = 256;
-/// Events that cannot be recovered and may be queued at once besides one `Opened` and one `Reset` per stream slot and
+/// Events that cannot be recovered and may be queued at once besides one `Opened`, one `Reset` and one `Stopped` per stream slot and
 /// one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake, wake
 /// unanswered, closed and the undeliverable extension frames of the 8 extension slots.
 pub(crate) const FIXED_EVENTS: usize = 16;
@@ -242,7 +251,7 @@ pub(crate) const FIXED_EVENTS: usize = 16;
 /// Whether `streams` stream slots and `paths` paths leave room for every unrecoverable event: with the repeats of
 /// [`Ev::same_as`] dropped, no more than this many can be queued, so a full queue always holds a notification to give up.
 pub(crate) const fn queue_fits(streams: usize, paths: usize) -> bool {
-    2 * streams + 2 * paths + FIXED_EVENTS <= QUEUE
+    3 * streams + 2 * paths + FIXED_EVENTS <= QUEUE
 }
 
 /// A fixed ring of pending events. A repeat of an event the application learns nothing more from is not queued. When

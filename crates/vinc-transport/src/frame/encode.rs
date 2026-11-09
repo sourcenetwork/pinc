@@ -36,7 +36,7 @@ impl Frame<'_> {
     fn varint_fields(&self) -> [u64; 3] {
         match *self {
             Self::ResetStream { id, error, final_size } => [id, error, final_size],
-            Self::MaxStreamData { id, max: error } => [id, error, 0],
+            Self::MaxStreamData { id, max: error } | Self::StopSending { id, error } => [id, error, 0],
             Self::Stream { id, offset, .. } => [id, offset, 0],
             Self::Close { error: v } | Self::Extension { ty: v, .. } => [v, 0, 0],
             Self::Rekey(r) => [r.switch_pn, 0, 0],
@@ -58,7 +58,7 @@ impl Frame<'_> {
                 implicit_len,
                 ..
             } => stream_overhead(id, offset, data.len(), implicit_len) + data.len(),
-            Self::MaxStreamData { id, max: v } => 1 + vlen(id) + vlen(v),
+            Self::MaxStreamData { id, max: v } | Self::StopSending { id, error: v } => 1 + vlen(id) + vlen(v),
             Self::PathChallenge(_) | Self::PathResponse(_) => 1 + 8,
             Self::Close { error } => 1 + vlen(error),
             Self::Datagram { data, implicit_len } => datagram_overhead(data.len(), implicit_len) + data.len(),
@@ -111,6 +111,7 @@ impl Frame<'_> {
                 ack.write_body(w)?;
             }
             Self::ResetStream { id, error, final_size } => put(w, ty::RESET_STREAM, &[id, error, final_size])?,
+            Self::StopSending { id, error } => put(w, ty::STOP_SENDING, &[id, error])?,
             Self::Stream { .. } => self.write_stream(w)?,
             Self::MaxStreamData { id, max } => put(w, ty::MAX_STREAM_DATA, &[id, max])?,
             Self::PathChallenge(data) => {

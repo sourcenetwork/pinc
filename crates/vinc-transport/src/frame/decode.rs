@@ -35,6 +35,10 @@ impl<'a> Frame<'a> {
                 error: r.read_varint()?,
                 final_size: r.read_varint()?,
             },
+            ty::STOP_SENDING => Self::StopSending {
+                id: r.read_varint()?,
+                error: r.read_varint()?,
+            },
             ty::STREAM..=ty::STREAM_LAST => Self::decode_stream(t, r)?,
             ty::MAX_STREAM_DATA => Self::MaxStreamData {
                 id: r.read_varint()?,

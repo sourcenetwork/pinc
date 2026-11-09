@@ -9,6 +9,15 @@ use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
 use super::{MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
 
+/// A request to the sender to stop, and where it stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    None,
+    Pending(u64),
+    Sent(u64),
+    Acked,
+}
+
 #[derive(Debug)]
 pub(super) struct Recv<const C: usize> {
     pub(super) open: bool,
@@ -20,6 +29,7 @@ pub(super) struct Recv<const C: usize> {
     final_size: Option<u64>,
     pub(super) win: Window,
     reset: Option<u64>,
+    stop: Stop,
     /// The application has seen the end (a consume after the final size, or a reset).
     observed: bool,
 }
@@ -35,6 +45,7 @@ impl<const C: usize> Recv<C> {
         final_size: None,
         win: Window::new(0),
         reset: None,
+        stop: Stop::None,
         observed: false,
     };
 
@@ -54,6 +65,40 @@ impl<const C: usize> Recv<C> {
     /// Nothing more will be stored or read, and the application has seen the end.
     pub(super) fn is_done(&self) -> bool {
         !self.open || (self.observed && self.status() != RecvStatus::Open)
+    }
+
+    /// Ask the sender to stop with `code`. Nothing is queued if the sender already ended the stream or a request was made.
+    pub(super) fn request_stop(&mut self, code: u64) {
+        if self.open && self.reset.is_none() && self.final_size.is_none() && self.stop == Stop::None {
+            self.stop = Stop::Pending(code);
+        }
+    }
+
+    pub(super) const fn stop_pending(&self) -> bool {
+        matches!(self.stop, Stop::Pending(_))
+    }
+
+    /// The stop request to send now, if one waits.
+    pub(super) fn take_stop(&mut self) -> Option<u64> {
+        let Stop::Pending(code) = self.stop else { return None };
+        self.stop = Stop::Sent(code);
+        Some(code)
+    }
+
+    /// The request was lost: send it again unless the sender has ended the stream meanwhile.
+    pub(super) fn stop_lost(&mut self) {
+        if let Stop::Sent(code) = self.stop
+            && self.reset.is_none()
+            && self.final_size.is_none()
+        {
+            self.stop = Stop::Pending(code);
+        }
+    }
+
+    pub(super) fn stop_acked(&mut self) {
+        if matches!(self.stop, Stop::Sent(_) | Stop::Pending(_)) {
+            self.stop = Stop::Acked;
+        }
     }
 
     pub(super) fn release_all(&mut self, pool: &mut BufferPool<'_>) {

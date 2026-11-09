@@ -204,7 +204,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     fn refresh(&mut self, i: usize) {
         let Some(slot) = self.slots.get(i) else { return };
         let (retx, new) = slot.send.wants();
-        let ctl = (slot.recv.win.pending && slot.recv.open) || slot.send.control_pending();
+        let ctl = (slot.recv.win.pending && slot.recv.open) || slot.recv.stop_pending() || slot.send.control_pending();
         let hot = (u8::from(retx) * HOT_RETX) | (u8::from(new) * HOT_NEW) | (u8::from(ctl) * HOT_CTL);
         if let Some(h) = self.hot.get_mut(i) {
             *h = hot;
@@ -337,6 +337,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         Ok(last)
     }
 
+    /// How many streams of `id`'s kind and initiator the peer has opened so far: the index the next one will have.
+    /// An arriving stream opens every lower one implicitly, so the ids from here up to the arriving one are all new.
+    pub fn peer_opened(&self, id: StreamId) -> u64 {
+        self.remote_next.get(class(id)).copied().unwrap_or(0)
+    }
+
     fn require(&self, id: StreamId) -> Result<usize, StreamError> {
         self.find(id).ok_or(StreamError::UnknownStream)
     }
@@ -395,6 +401,48 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let result = slot.recv.on_data(pool, offset, data, fin);
         self.settle(pool, i);
         result
+    }
+
+    /// A stop request arrived for a stream we send on: reset it with `error_code`. Returns whether this call reset it
+    /// (false if it was already reset, finished or gone).
+    ///
+    /// # Errors
+    /// [`StreamError::StreamState`] for a stream we cannot send on; the errors of opening a peer stream as in
+    /// [`Streams::on_stream_frame`].
+    pub fn on_stop_sending(
+        &mut self,
+        pool: &mut BufferPool<'_>,
+        id: StreamId,
+        error_code: u64,
+    ) -> Result<bool, StreamError> {
+        if is_uni(id) && !self.is_local(id) {
+            return Err(StreamError::StreamState);
+        }
+        let Some(i) = self.locate(pool, id)? else {
+            return Ok(false);
+        };
+        let fresh = self.slots.get(i).is_some_and(|s| s.send.can_stop());
+        let result = self
+            .with_send(i, |send| send.reset(pool, error_code))
+            .unwrap_or(Err(StreamError::UnknownStream));
+        self.settle(pool, i);
+        result.map(|()| fresh)
+    }
+
+    /// Ask the peer to stop sending on a stream we receive on; it resets the stream with `error_code`. The request is
+    /// queued as a control frame and sent again if lost. Nothing is queued if the peer already ended the stream.
+    ///
+    /// # Errors
+    /// [`StreamError::UnknownStream`], or [`StreamError::StreamState`] for a stream we cannot receive on.
+    pub fn stop_sending(&mut self, id: StreamId, error_code: u64) -> Result<(), StreamError> {
+        let i = self.require(id)?;
+        let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
+        if !slot.recv.open {
+            return Err(StreamError::StreamState);
+        }
+        slot.recv.request_stop(error_code);
+        self.refresh(i);
+        Ok(())
     }
 
     /// A stream reset frame arrived.
@@ -692,6 +740,14 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                     self.refresh(i);
                 }
             }
+            ControlFrame::StopSending { id, .. } => {
+                if let Some(i) = self.find(id) {
+                    if let Some(slot) = self.slots.get_mut(i) {
+                        slot.recv.stop_lost();
+                    }
+                    self.refresh(i);
+                }
+            }
             ControlFrame::ResetStream { id, .. } => {
                 if let Some(r) = self.refused.iter_mut().flatten().find(|r| r.id == id) {
                     r.sent = false;
@@ -708,7 +764,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// A control frame was acknowledged. Only a stream reset matters: the stream may close once it is acknowledged, and
     /// a refused stream is forgotten.
     pub fn on_control_acked(&mut self, pool: &mut BufferPool<'_>, frame: &ControlFrame) {
-        if let ControlFrame::ResetStream { id, .. } = *frame {
+        if let ControlFrame::StopSending { id, .. } = *frame {
+            if let Some(slot) = self.find(id).and_then(|i| self.slots.get_mut(i)) {
+                slot.recv.stop_acked();
+            }
+        } else if let ControlFrame::ResetStream { id, .. } = *frame {
             if let Some(e) = self.refused.iter_mut().find(|e| e.is_some_and(|r| r.id == id)) {
                 *e = None;
                 // The opener knows the stream is refused and opens its next one after it. If the refused stream was
@@ -746,6 +806,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             let frame = self.slots.get_mut(i).and_then(|slot| {
                 if let Some(f) = slot.send.take_control(id) {
                     return Some(f);
+                }
+                if let Some(error_code) = slot.recv.take_stop() {
+                    return Some(ControlFrame::StopSending { id, error_code });
                 }
                 if slot.recv.win.pending {
                     slot.recv.win.pending = false;

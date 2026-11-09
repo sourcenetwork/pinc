@@ -480,6 +480,7 @@ pub enum Rec {
     Readable(u64),
     Writable(u64),
     Reset(u64, u64),
+    Stopped(u64, u64),
     Datagram,
     Extension(u64, Vec<u8>),
     ExtensionUndeliverable(u64, usize),
@@ -568,6 +569,7 @@ impl<'a, const C: usize> Node<'a, C> {
                     }
                     Event::StreamWritable(id) => Rec::Writable(id),
                     Event::StreamReset { id, error } => Rec::Reset(id, error),
+                    Event::StreamStopped { id, error } => Rec::Stopped(id, error),
                     Event::DatagramReceived => {
                         datagram = true;
                         Rec::Datagram

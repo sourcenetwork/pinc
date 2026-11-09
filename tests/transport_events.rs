@@ -128,7 +128,7 @@ proptest! {
 fn gated_pair(f: impl FnOnce(&mut Net<'_, '_, RING>) + Send + 'static) {
     big_stack(move || {
         let mut w = World::new(IdentityAlg::Ed25519);
-        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let (mut sa, mut sb) = (Store::new(true), Store::with_chunks(false, 20_000));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(7, Params::new(5 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
         let t = net.now + SEC;
@@ -185,5 +185,132 @@ fn a_gated_connection_still_takes_acknowledgements_and_a_close() {
         let t = net.now + 2 * SEC;
         net.run(t, |_| false);
         assert!(net.a.conn.is_closed(), "the close was refused by the gate");
+    });
+}
+
+/// A packet of the given frames injected into B at `pn`; the opened streams B reported, in order.
+fn opened_by(net: &mut Net<'_, '_, RING>, pn: u64, frames: &[Frame<'_>]) -> Vec<u64> {
+    let mut buf = vec![0u8; 2000];
+    let mut w = Writer::new(&mut buf);
+    for f in frames {
+        f.write(&mut w).unwrap();
+    }
+    let n = w.written().len();
+    let now = net.now;
+    net.b
+        .with_env(now, |c, env| c.inject_payload(env, PathId(1), now, pn, &buf[..n]))
+        .unwrap();
+    let mut opened = Vec::new();
+    while let Some(ev) = net.b.conn.poll_event() {
+        if let Event::StreamOpened(id) = ev {
+            opened.push(id);
+        }
+    }
+    opened
+}
+
+fn data(id: u64) -> Frame<'static> {
+    Frame::Stream {
+        id,
+        offset: 0,
+        fin: false,
+        data: b"x",
+        implicit_len: false,
+    }
+}
+
+#[test]
+fn a_stream_that_arrives_first_opens_every_lower_stream_of_its_kind_with_an_event() {
+    gated_pair(|net| {
+        while net.b.conn.poll_event().is_some() {}
+        // The client opened bidirectional streams 0, 4 and 8 and unidirectional 2, 6 and 10; the last of each kind
+        // arrives alone: the earlier ones are opened by it and each is reported once.
+        assert_eq!(opened_by(net, 5000, &[data(8)]), [0, 4, 8]);
+        assert_eq!(opened_by(net, 5001, &[data(10)]), [2, 6, 10]);
+        // A frame for a stream already reported opens nothing, and the next stream is reported alone.
+        assert_eq!(opened_by(net, 5002, &[data(4), data(12)]), [12]);
+        // A reset opens the streams below it the same way.
+        let reset = Frame::ResetStream {
+            id: 24,
+            error: 5,
+            final_size: 0,
+        };
+        assert_eq!(opened_by(net, 5003, &[reset]), [16, 20, 24]);
+        // Out of order within one packet: each id is reported once, in order.
+        assert_eq!(opened_by(net, 5004, &[data(22), data(18), data(14)]), [14, 18, 22]);
+    });
+}
+
+#[test]
+fn a_stop_request_resets_the_sender_with_its_code_and_both_sides_hear_it() {
+    gated_pair(|net| {
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &vec![7u8; 50_000]).unwrap();
+        let t = net.now + SEC;
+        net.run(t, |n| n.b.read.get(&id).is_some_and(|d| !d.is_empty()));
+        net.b.conn.stop_sending(id, 77).unwrap();
+        let t = net.now + 2 * SEC;
+        net.run(t, |_| false);
+        assert!(
+            net.a.saw(|r| matches!(r, Rec::Stopped(i, 77) if *i == id)),
+            "the writer did not hear the stop"
+        );
+        assert!(
+            net.b.saw(|r| matches!(r, Rec::Reset(i, 77) if *i == id)),
+            "the stopper did not see the reset"
+        );
+        assert_eq!(net.a.log.iter().filter(|r| matches!(r, Rec::Stopped(..))).count(), 1);
+        assert!(net.a.conn.write(id, b"more").is_err(), "a stopped stream took a write");
+    });
+}
+
+#[test]
+fn a_lost_stop_request_is_sent_again_and_a_stop_for_an_ended_stream_is_ignored() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Params::new(5 * MS);
+        link.loss_ppm = 400_000;
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(11, link));
+        assert!(net.connect(net.now + 30 * SEC));
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &vec![7u8; 20_000]).unwrap();
+        let t = net.now + 5 * SEC;
+        net.run(t, |n| n.b.read.get(&id).is_some_and(|d| !d.is_empty()));
+        net.b.conn.stop_sending(id, 9).unwrap();
+        let t = net.now + 30 * SEC;
+        assert!(
+            net.run(t, |n| n.a.saw(|r| matches!(r, Rec::Stopped(i, 9) if *i == id))),
+            "the stop never arrived over a lossy link"
+        );
+        // A stop request for a stream the peer already finished sends nothing and fails nothing.
+        let id2 = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id2, b"done").unwrap();
+        net.a.conn.finish(id2).unwrap();
+        let t = net.now + 30 * SEC;
+        assert!(net.run(t, |n| n.b.fin.contains(&id2)));
+        // The stream may already be gone (read to its end): either answer is fine, and nothing reaches the sender.
+        let _ = net.b.conn.stop_sending(id2, 1);
+        let t = net.now + SEC;
+        net.run(t, |_| false);
+        assert!(!net.a.saw(|r| matches!(r, Rec::Stopped(i, 1) if *i == id2)));
+    });
+}
+
+#[test]
+fn a_stop_request_for_a_stream_the_peer_cannot_send_on_is_a_violation() {
+    gated_pair(|net| {
+        while net.b.conn.poll_event().is_some() {}
+        let stop = Frame::StopSending { id: 2, error: 1 };
+        let mut buf = vec![0u8; 64];
+        let mut w = Writer::new(&mut buf);
+        stop.write(&mut w).unwrap();
+        let n = w.written().len();
+        let now = net.now;
+        // Id 2 is a client-initiated unidirectional stream: B, the server, has no send half on it.
+        let r = net
+            .b
+            .with_env(now, |c, env| c.inject_payload(env, PathId(1), now, 6000, &buf[..n]));
+        assert_eq!(r, Err(Drop::Closed));
     });
 }

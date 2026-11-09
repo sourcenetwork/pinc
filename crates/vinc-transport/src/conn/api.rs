@@ -87,6 +87,7 @@ conn_impl! {
                 Ev::Readable(id) => Event::StreamReadable(id),
                 Ev::Writable(id) => Event::StreamWritable(id),
                 Ev::Reset(id, error) => Event::StreamReset { id, error },
+                Ev::Stopped(id, error) => Event::StreamStopped { id, error },
                 Ev::Datagram => Event::DatagramReceived,
                 Ev::PathValidated(p) => Event::PathValidated(p),
                 Ev::PathFailed(p) => Event::PathFailed(p),
@@ -174,6 +175,15 @@ conn_impl! {
     /// The errors of [`Streams::reset`](crate::stream::Streams::reset).
     pub fn reset(&mut self, id: StreamId, error: u64) -> Result<(), StreamError> {
         self.streams.reset(&mut self.pool, id, error)
+    }
+
+    /// Ask the peer to stop sending on a stream; it resets the stream with `error`, which arrives as a reset. The
+    /// request is repeated until acknowledged. Nothing happens if the peer already ended the stream.
+    ///
+    /// # Errors
+    /// The errors of [`Streams::stop_sending`](crate::stream::Streams::stop_sending).
+    pub fn stop_sending(&mut self, id: StreamId, error: u64) -> Result<(), StreamError> {
+        self.streams.stop_sending(id, error)
     }
 
     /// The readable bytes of a stream, borrowed from the pool. Release them with [`consume`](Self::consume).

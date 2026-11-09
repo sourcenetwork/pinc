@@ -40,6 +40,7 @@ enum Co {
     Readable(u64),
     Writable(u64),
     Reset(u64, u64),
+    Stopped(u64, u64),
     Datagram,
     Extension { ty: u64, len: usize, body: [u8; EXT_KEEP] },
     Undeliverable(u64),
@@ -80,6 +81,7 @@ ep_impl! {
                 ConnEvent::StreamReadable(id) => Co::Readable(id),
                 ConnEvent::StreamWritable(id) => Co::Writable(id),
                 ConnEvent::StreamReset { id, error } => Co::Reset(id, error),
+                ConnEvent::StreamStopped { id, error } => Co::Stopped(id, error),
                 ConnEvent::DatagramReceived => Co::Datagram,
                 ConnEvent::Extension { ty, body } => {
                     let mut buf = [0u8; EXT_KEEP];
@@ -115,6 +117,7 @@ ep_impl! {
             }
             Co::Writable(stream) => self.app_event(i, now, Event::StreamWritable { session, stream }),
             Co::Reset(stream, error) => self.app_event(i, now, Event::StreamReset { session, stream, error }),
+            Co::Stopped(stream, error) => self.app_event(i, now, Event::StreamStopped { session, stream, error }),
             Co::Datagram => self.app_event(i, now, Event::DatagramReceived { session }),
             Co::Extension { ty, len, body } => {
                 if ty == ext::SUB_SESSION_OPEN && len > 0 {

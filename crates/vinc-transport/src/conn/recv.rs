@@ -56,6 +56,7 @@ const fn raises_event(f: &Frame<'_>) -> bool {
     matches!(
         f,
         Frame::ResetStream { .. }
+            | Frame::StopSending { .. }
             | Frame::Stream { .. }
             | Frame::MaxStreamData { .. }
             | Frame::PathResponse(_)
@@ -488,28 +489,37 @@ conn_impl! {
             Frame::Padding { .. } | Frame::Ping | Frame::Wake => {}
             Frame::Ack(ack) => self.on_ack(pi, now, &ack)?,
             Frame::ResetStream { id, error, final_size } => {
-                let new = self.is_new_peer_stream(id);
+                let first = self.first_unopened(id);
                 match self.streams.on_reset_stream(&mut self.pool, id, error, final_size) {
                     Ok(()) => {}
                     Err(StreamError::Busy) => return Ok(()),
                     Err(e) => return Err(stream_fault(e)),
                 }
-                if new {
-                    self.push(Ev::Opened(id));
-                }
+                self.push_opened(id, first);
                 self.push(Ev::Reset(id, error));
             }
+            Frame::StopSending { id, error } => {
+                let first = self.first_unopened(id);
+                match self.streams.on_stop_sending(&mut self.pool, id, error) {
+                    Ok(fresh) => {
+                        self.push_opened(id, first);
+                        if fresh {
+                            self.push(Ev::Stopped(id, error));
+                        }
+                    }
+                    Err(StreamError::Busy) => {}
+                    Err(e) => return Err(stream_fault(e)),
+                }
+            }
             Frame::Stream { id, offset, fin, data, .. } => {
-                let new = self.is_new_peer_stream(id);
+                let first = self.first_unopened(id);
                 match self.streams.on_stream_frame(&mut self.pool, id, offset, data, fin) {
                     Ok(()) => {}
                     // Refused and answered with a reset: the packet still counts as received.
                     Err(StreamError::Busy) => return Ok(()),
                     Err(e) => return Err(stream_fault(e)),
                 }
-                if new {
-                    self.push(Ev::Opened(id));
-                }
+                self.push_opened(id, first);
                 self.push(Ev::Readable(id));
             }
             Frame::MaxStreamData { id, max } => {
@@ -550,8 +560,17 @@ conn_impl! {
         Ok(())
     }
 
-    fn is_new_peer_stream(&self, id: u64) -> bool {
-        crate::stream::is_client_initiated(id) != self.client && self.streams.recv_status(id).is_none()
+    /// For a stream the peer opens: the index of the first stream of its kind not yet reported as opened.
+    fn first_unopened(&self, id: u64) -> Option<u64> {
+        (crate::stream::is_client_initiated(id) != self.client).then(|| self.streams.peer_opened(id))
+    }
+
+    /// Report every stream the arrival of `id` opened: the peer opens streams in order, so a stream that arrives
+    /// first opens each lower one of its kind that was not opened yet.
+    fn push_opened(&mut self, id: u64, first: Option<u64>) {
+        for n in first.into_iter().flat_map(|f| f..=id >> 2) {
+            self.push(Ev::Opened((n << 2) | (id & 3)));
+        }
     }
 
     /// Copy an extension body into the bounded queue, with its type in front.

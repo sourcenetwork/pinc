@@ -109,6 +109,11 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             || (self.fin == Fin::Acked && self.final_size == Some(self.acked_prefix))
     }
 
+    /// Whether a stop request would reset this half now: it is open and neither reset nor finished with.
+    pub(super) fn can_stop(&self) -> bool {
+        self.open && matches!(self.reset, Reset::None) && !self.is_done()
+    }
+
     /// Whether a frame is waiting: a retransmission, or the end marker (bit 0), or fresh data (bit 1).
     pub(super) fn wants(&self) -> (bool, bool) {
         if !self.live() {

@@ -113,6 +113,14 @@ fn frames_have_the_documented_bytes() {
             vec![0x0f, 1, 7, 0],
         ),
         (Frame::MaxStreamData { id: 8, max: 5 }, vec![0x11, 8, 5]),
+        (Frame::StopSending { id: 4, error: 9 }, vec![0x05, 4, 9]),
+        (
+            Frame::StopSending {
+                id: 1 << 20,
+                error: 300,
+            },
+            vec![0x05, 0x80, 0x80, 0x40, 0xac, 0x02],
+        ),
         (
             Frame::PathChallenge([1, 2, 3, 4, 5, 6, 7, 8]),
             vec![0x1a, 1, 2, 3, 4, 5, 6, 7, 8],
@@ -224,8 +232,8 @@ fn stream_off_bit_with_zero_offset_is_accepted_and_re_encoded_canonically() {
 #[test]
 fn unassigned_types_below_0x40_are_errors() {
     let assigned = [
-        0x00u64, 0x01, 0x02, 0x04, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x11, 0x1a, 0x1b, 0x1c, 0x30, 0x31,
-        0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+        0x00u64, 0x01, 0x02, 0x04, 0x05, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x11, 0x1a, 0x1b, 0x1c, 0x30,
+        0x31, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
     ];
     for t in 0..0x40u64 {
         let mut payload = vec![t as u8];
@@ -323,6 +331,12 @@ fn validation_errors() {
     let mut w = Writer::new(&mut buf);
     assert_eq!(big.write(&mut w), Err(FrameError::Wire(WireError::VarintOverflow)));
     assert!(w.written().is_empty());
+    let big = Frame::StopSending { id: 0, error: 1 << 63 };
+    let mut w = Writer::new(&mut buf);
+    assert_eq!(big.write(&mut w), Err(FrameError::Wire(WireError::VarintOverflow)));
+    assert!(w.written().is_empty());
+    // A stop frame cut short is an error, not a frame.
+    assert!(matches!(decode_all(&[0x05, 4]).as_slice(), [Err(FrameError::Wire(_))]));
 }
 
 proptest! {
@@ -535,7 +549,7 @@ fn spec() -> impl Strategy<Value = Spec> {
         })
 }
 
-const KINDS: u8 = 25;
+const KINDS: u8 = 26;
 
 impl Spec {
     fn token_share(&self) -> [u8; 32] {
@@ -567,6 +581,7 @@ fn frame(s: &Spec) -> Frame<'_> {
             implicit_len: s.implicit,
         },
         7 => Frame::MaxStreamData { id: a, max: b },
+        25 => Frame::StopSending { id: a, error: b },
         14 => Frame::PathChallenge(s.path),
         15 => Frame::PathResponse(s.path),
         16 => Frame::Close { error: a },
@@ -693,6 +708,7 @@ fn frame_paths_allocate_nothing() {
             implicit_len: false,
         },
         Frame::MaxStreamData { id: 4, max: 1 << 20 },
+        Frame::StopSending { id: 4, error: 7 },
         Frame::PathChallenge([1; 8]),
         Frame::PathResponse([1; 8]),
         Frame::Close { error: 1 },
