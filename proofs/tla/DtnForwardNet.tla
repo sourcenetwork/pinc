@@ -23,23 +23,26 @@
 (* by a node that already finished the bundle (flag Replayed), which is the *)
 (* finding of DtnForward_rehold: config DtnForwardNet_replay shows such a    *)
 (* hold being accepted. With three nodes the replayed copies do not yet    *)
-(* exceed the budget (the releasing node kept nothing that others hold); a *)
-(* fourth node holding copies the releasing node had handed on would make  *)
-(* the sum exceed it, which is argued here and not model checked.         *)
+(* exceed the budget; with four (config DtnForwardNet_over) the releasing  *)
+(* node had handed copies on, and the sum exceeds the budget.             *)
 (* Lean counterpart: Vinc/DtnForwardInv.lean (balance, per node) and        *)
 (* Vinc/DtnForwardWitness.lean.                                             *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
-CONSTANTS Budget, MaxTime, Retry, MaxSends, Loss, MaxMsgs
+CONSTANTS Budget, MaxTime, Retry, MaxSends, Loss, MaxMsgs, NN, L, T
 VARIABLES nf, msgs, t, dropped, released, delivered, replayed, seq
 vars == <<nf, msgs, t, dropped, released, delivered, replayed, seq>>
 
-Nodes == 1..3
-Dest == 3
-F == INSTANCE DtnForwardOps WITH B <- 1, L <- 2, T <- 2
+Nodes == 1..NN
+Dest == NN
+\* the contacts that can happen: all pairs of three nodes, or a source, a relay, a neighbour and the destination
+Edges == IF NN = 3 THEN {<<1, 2>>, <<1, 3>>, <<2, 3>>} ELSE {<<1, 2>>, <<2, 3>>, <<2, 4>>}
+F == INSTANCE DtnForwardOps WITH B <- 1
 
-Held == F!CopiesHeld(nf[1], 1) + F!CopiesHeld(nf[2], 1) + F!CopiesHeld(nf[3], 1)
+RECURSIVE SumH(_)
+SumH(X) == IF X = {} THEN 0 ELSE LET n == CHOOSE n \in X : TRUE IN F!CopiesHeld(nf[n], 1) + SumH(X \ {n})
+Held == SumH(Nodes)
 InFlight == LET fresh == {m \in msgs : m.fresh} IN
     IF fresh = {} THEN 0 ELSE LET RECURSIVE S(_) S(X) == IF X = {} THEN 0 ELSE LET m == CHOOSE m \in X : TRUE IN m.copies + S(X \ {m}) IN S(fresh)
 
@@ -50,7 +53,7 @@ SetN(n, g) == [nf EXCEPT ![n] = g]
 
 \* a contact between a and b: both nodes learn the link state
 Contact(a, b, up) ==
-    /\ a < b
+    /\ a < b /\ <<a, b>> \in Edges
     /\ LET k == IF up THEN "up" ELSE "down"
            ra == F!Step(nf[a], t, [k |-> k, peer |-> b])
            rb == F!Step(nf[b], t, [k |-> k, peer |-> a]) IN
@@ -111,4 +114,6 @@ HeldLeBudget == ~replayed => Held <= Budget
 Misc == \A n \in Nodes : \A i \in 1..1 : nf[n].bs[i].full => nf[n].bs[i].copies >= 1
 \* the finding: a replayed hold is accepted
 NoReplay == ~replayed
+\* the budget itself is exceeded: the replayed hold re-creates copies that a third node still holds
+HeldAlways == Held <= Budget
 =============================================================================
