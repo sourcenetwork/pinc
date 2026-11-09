@@ -80,7 +80,12 @@ pub struct TpmStore<T: Transport> {
     config: TpmConfig,
     primary: u32,
     keys: HashMap<u64, Slot>,
+    /// Transient handles whose flush the TPM refused, retried before the next command that loads an object.
+    stale: Vec<u32>,
 }
+
+/// The most refused-flush handles remembered; a TPM holds only a few transient objects, so more is a wedged TPM.
+const MAX_STALE: usize = 8;
 
 impl<T: Transport> core::fmt::Debug for TpmStore<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -170,6 +175,7 @@ impl<T: Transport> TpmStore<T> {
             config,
             primary,
             keys: HashMap::new(),
+            stale: Vec::new(),
         })
     }
 
@@ -183,6 +189,23 @@ impl<T: Transport> TpmStore<T> {
         self.keys.get(&key.id()).map(|s| s.handle)
     }
 
+    /// Flush the transient `handle`; if the TPM refuses, remember it so [`Self::reclaim`] tries again.
+    fn discard(&mut self, handle: u32) -> Result<()> {
+        let flushed = self.client.flush_context(handle);
+        if flushed.is_err() && self.stale.len() < MAX_STALE {
+            self.stale.push(handle);
+        }
+        flushed
+    }
+
+    /// Retry the flushes the TPM refused earlier, so a transient refusal does not strand a handle.
+    fn reclaim(&mut self) {
+        for handle in std::mem::take(&mut self.stale) {
+            // A refusal puts the handle back on the list.
+            let _ = self.discard(handle);
+        }
+    }
+
     /// Create an identity key of `alg` inside the TPM and load it.
     ///
     /// # Errors
@@ -191,6 +214,7 @@ impl<T: Transport> TpmStore<T> {
         if alg != IdentityAlg::EcdsaP256 {
             return Err(KeyStoreError::Unsupported);
         }
+        self.reclaim();
         let blob = self.client.create(
             self.primary,
             &[],
@@ -244,8 +268,8 @@ impl<T: Transport> TpmStore<T> {
             Ok(p) => p,
             Err(e) => {
                 if !persistent {
-                    // The read failure is the error to report; a flush failure here would only hide it.
-                    let _ = self.client.flush_context(handle);
+                    // The read failure is the error to report; a refused flush is remembered, not reported.
+                    let _ = self.discard(handle);
                 }
                 return Err(e);
             }
@@ -274,6 +298,9 @@ impl<T: Transport> Drop for TpmStore<T> {
             let _ = self.client.flush_context(slot.handle);
         }
         let _ = self.client.flush_context(self.primary);
+        for handle in &self.stale {
+            let _ = self.client.flush_context(*handle);
+        }
     }
 }
 
@@ -325,9 +352,10 @@ impl<T: Transport> KeyStore for TpmStore<T> {
 
     fn unseal(&mut self, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         let (blob, header_len) = parse_sealed(sealed)?;
+        self.reclaim();
         let handle = self.client.load(self.primary, &[], &blob)?;
         let dek = self.client.unseal(handle, &self.config.key_auth);
-        let flushed = self.client.flush_context(handle);
+        let flushed = self.discard(handle);
         let dek = dek?;
         flushed?;
         let dek: [u8; sealed::KEY_LEN] = dek.as_slice().try_into().map_err(|_| KeyStoreError::InvalidSealed)?;

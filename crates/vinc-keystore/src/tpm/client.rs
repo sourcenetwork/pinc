@@ -5,6 +5,8 @@
 //! checked before the body is read, so a failure is a [`KeyStoreError::Tpm`] carrying the code; buffers that held
 //! commands or responses with secrets are zeroized.
 
+use std::time::Duration;
+
 use tpm2_protocol::basic::{TpmHandle, TpmUint16};
 use tpm2_protocol::constant::TPM_MAX_COMMAND_SIZE;
 use tpm2_protocol::data::{
@@ -32,6 +34,55 @@ pub const MAX_AUTH_LEN: usize = 64;
 /// `TPM_RC_INITIALIZE`: the TPM was already started.
 pub const RC_INITIALIZE: u32 = 0x100;
 
+/// `TPM_RC_YIELDED`: the TPM gave up the command to let others run; send it again.
+pub const RC_YIELDED: u32 = 0x908;
+/// `TPM_RC_TESTING`: a self test is still running; send the command again.
+pub const RC_TESTING: u32 = 0x90A;
+/// `TPM_RC_RETRY`: the TPM was busy; send the command again.
+pub const RC_RETRY: u32 = 0x922;
+
+/// Whether `code` is a warning the TPM 2.0 specification defines as "send the same command again".
+const fn is_resend(code: u32) -> bool {
+    matches!(code, RC_YIELDED | RC_TESTING | RC_RETRY)
+}
+
+/// How often and how long a command is resent when the TPM answers "send it again".
+///
+/// A command is sent at most `attempts` times. Before send `n + 1` the client waits `first_wait * 2^(n-1)`, never
+/// more than `max_wait`, so the whole wait is bounded by `(attempts - 1) * max_wait`. The default is 8 sends and
+/// waits of 1, 2, 4, 8, 16, 32 and 50 ms: 113 ms in all, enough for a TPM to finish a self test slice or yield,
+/// short enough that a wedged TPM is reported promptly as [`KeyStoreError::TpmBusy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryPolicy {
+    /// The most times one command is sent; `0` is treated as `1`.
+    pub attempts: u32,
+    /// The wait before the first resend.
+    pub first_wait: Duration,
+    /// The longest single wait.
+    pub max_wait: Duration,
+}
+
+impl RetryPolicy {
+    /// Resend at once, as often as `attempts` allows, without waiting.
+    pub const fn immediate(attempts: u32) -> Self {
+        Self {
+            attempts,
+            first_wait: Duration::ZERO,
+            max_wait: Duration::ZERO,
+        }
+    }
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            attempts: 8,
+            first_wait: Duration::from_millis(1),
+            max_wait: Duration::from_millis(50),
+        }
+    }
+}
+
 const HEADER_LEN: usize = 10;
 /// `GetRandom` returns at most one digest of the TPM's largest hash; ask for no more than SHA-256's size.
 const RANDOM_CHUNK: u16 = 32;
@@ -55,6 +106,7 @@ pub struct EccPoint {
 /// A TPM 2.0 command client over a [`Transport`].
 pub struct TpmClient<T: Transport> {
     transport: T,
+    retry: RetryPolicy,
 }
 
 impl<T: Transport> core::fmt::Debug for TpmClient<T> {
@@ -109,7 +161,17 @@ fn pad32(bytes: &[u8]) -> Result<[u8; 32]> {
 impl<T: Transport> TpmClient<T> {
     /// A client that sends commands over `transport`.
     pub fn new(transport: T) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            retry: RetryPolicy::default(),
+        }
+    }
+
+    /// Replace the policy for resending a command the TPM asked to be sent again.
+    #[must_use]
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// Marshal `cmd` with `sessions`, send it, check the response and read its body as `R`.
@@ -122,30 +184,51 @@ impl<T: Transport> TpmClient<T> {
             TpmSt::Sessions
         };
         tpm_marshal_command(cmd, tag, sessions, &mut w).map_err(proto)?;
-        let rsp = Zeroizing::new(
-            self.transport
-                .transmit(w.as_bytes())
-                .map_err(|e| KeyStoreError::Transport(e.kind()))?,
-        );
-        let header = rsp.get(..HEADER_LEN).ok_or(KeyStoreError::Protocol)?;
-        let size = header
-            .get(2..6)
-            .and_then(|b| <[u8; 4]>::try_from(b).ok())
-            .map(u32::from_be_bytes);
-        let code = header
-            .get(6..10)
-            .and_then(|b| <[u8; 4]>::try_from(b).ok())
-            .map(u32::from_be_bytes);
-        let (Some(size), Some(code)) = (size, code) else {
-            return Err(KeyStoreError::Protocol);
-        };
-        if usize::try_from(size) != Ok(rsp.len()) {
-            return Err(KeyStoreError::Protocol);
-        }
-        if code != 0 {
-            return Err(KeyStoreError::Tpm { code });
-        }
+        let rsp = self.exchange(w.as_bytes())?;
         TpmResponse::cast(&rsp).map_err(proto)?.unmarshal::<R>().map_err(proto)
+    }
+
+    /// Send `command` and return its whole response, resending the same bytes while the TPM answers one of the
+    /// warnings that mean "send it again" ([`RC_RETRY`], [`RC_YIELDED`], [`RC_TESTING`]), within the [`RetryPolicy`].
+    /// Every command goes through here. Any other nonzero code is returned as [`KeyStoreError::Tpm`].
+    fn exchange(&mut self, command: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        let attempts = self.retry.attempts.max(1);
+        let mut wait = self.retry.first_wait;
+        for attempt in 1..=attempts {
+            let rsp = Zeroizing::new(
+                self.transport
+                    .transmit(command)
+                    .map_err(|e| KeyStoreError::Transport(e.kind()))?,
+            );
+            let header = rsp.get(..HEADER_LEN).ok_or(KeyStoreError::Protocol)?;
+            let size = header
+                .get(2..6)
+                .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                .map(u32::from_be_bytes);
+            let code = header
+                .get(6..10)
+                .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                .map(u32::from_be_bytes);
+            let (Some(size), Some(code)) = (size, code) else {
+                return Err(KeyStoreError::Protocol);
+            };
+            if usize::try_from(size) != Ok(rsp.len()) {
+                return Err(KeyStoreError::Protocol);
+            }
+            if is_resend(code) {
+                if attempt == attempts {
+                    return Err(KeyStoreError::TpmBusy { code });
+                }
+                std::thread::sleep(wait);
+                wait = wait.saturating_mul(2).min(self.retry.max_wait);
+                continue;
+            }
+            if code != 0 {
+                return Err(KeyStoreError::Tpm { code });
+            }
+            return Ok(rsp);
+        }
+        Err(KeyStoreError::Protocol)
     }
 
     /// `TPM2_Startup(TPM_SU_CLEAR)`. A TPM that is already running answers [`RC_INITIALIZE`].
@@ -342,3 +425,76 @@ impl<T: Transport> TpmClient<T> {
 }
 
 const _: () = assert!(MAX_AUTH_LEN == tpm2_protocol::constant::MAX_DIGEST_SIZE);
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    /// Answers each command from a script of response codes (the last repeats), recording what it was sent.
+    struct Scripted {
+        codes: Vec<u32>,
+        sent: Vec<Vec<u8>>,
+    }
+
+    impl Transport for Scripted {
+        fn transmit(&mut self, command: &[u8]) -> io::Result<Vec<u8>> {
+            let i = self.sent.len().min(self.codes.len() - 1);
+            self.sent.push(command.to_vec());
+            let mut rsp = vec![0x80, 0x01, 0, 0, 0, 10];
+            rsp.extend_from_slice(&self.codes[i].to_be_bytes());
+            Ok(rsp)
+        }
+    }
+
+    fn client(codes: &[u32], attempts: u32) -> TpmClient<Scripted> {
+        let t = Scripted {
+            codes: codes.to_vec(),
+            sent: Vec::new(),
+        };
+        TpmClient::new(t).with_retry(RetryPolicy::immediate(attempts))
+    }
+
+    #[test]
+    fn retry_twice_then_success_resends_the_same_bytes() {
+        let mut c = client(&[RC_RETRY, RC_RETRY, 0], 8);
+        c.flush_context(0x8000_0000).unwrap();
+        let sent = &c.transport.sent;
+        assert_eq!(sent.len(), 3);
+        assert!(sent.iter().all(|s| *s == sent[0]));
+    }
+
+    #[test]
+    fn every_resend_warning_is_retried() {
+        for code in [RC_RETRY, RC_YIELDED, RC_TESTING] {
+            let mut c = client(&[code, 0], 2);
+            c.flush_context(0x8000_0000).unwrap();
+            assert_eq!(c.transport.sent.len(), 2, "{code:#x}");
+        }
+    }
+
+    #[test]
+    fn never_succeeding_gives_the_typed_error_after_the_bound() {
+        let mut c = client(&[RC_YIELDED], 5);
+        assert_eq!(
+            c.flush_context(0x8000_0000),
+            Err(KeyStoreError::TpmBusy { code: RC_YIELDED })
+        );
+        assert_eq!(c.transport.sent.len(), 5);
+    }
+
+    #[test]
+    fn other_codes_are_not_retried() {
+        let mut c = client(&[0x9A2], 8);
+        assert_eq!(c.flush_context(0x8000_0000), Err(KeyStoreError::Tpm { code: 0x9A2 }));
+        assert_eq!(c.transport.sent.len(), 1);
+    }
+
+    #[test]
+    fn default_policy_wait_is_bounded() {
+        let p = RetryPolicy::default();
+        assert!(p.max_wait.saturating_mul(p.attempts) <= Duration::from_secs(1));
+    }
+}

@@ -41,6 +41,12 @@ pub enum KeyStoreError {
         /// The TPM response code (`TPM_RC_*`), as sent on the wire.
         code: u32,
     },
+    /// The TPM kept answering "send the command again" until the retry bound ran out; `code` is the last answer.
+    #[cfg(feature = "hwenc")]
+    TpmBusy {
+        /// The TPM warning code (`TPM_RC_RETRY`, `TPM_RC_YIELDED` or `TPM_RC_TESTING`).
+        code: u32,
+    },
 }
 
 impl fmt::Display for KeyStoreError {
@@ -62,6 +68,11 @@ impl fmt::Display for KeyStoreError {
             Self::Protocol => f.write_str("the TPM message is not valid"),
             #[cfg(feature = "hwenc")]
             Self::Tpm { code } => write!(f, "the TPM refused the command (response code {code:#06x})"),
+            #[cfg(feature = "hwenc")]
+            Self::TpmBusy { code } => write!(
+                f,
+                "the TPM stayed busy and did not take the command (response code {code:#06x})"
+            ),
         }
     }
 }
