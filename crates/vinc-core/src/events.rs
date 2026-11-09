@@ -157,9 +157,18 @@ ep_impl! {
 
     /// An application event: emitted if the session is allowed and not waiting for READY, held otherwise.
     fn app_event(&mut self, i: usize, now: u64, ev: Event) {
+        // An allowed session whose peer's answer lapsed holds its events and asks again: nothing leaves on an answer
+        // that no longer stands.
+        let lapsed = self
+            .slots
+            .get(i)
+            .is_some_and(|s| s.m.allowed && s.m.peer.is_some_and(|p| self.acp_cached(&p, now).is_none()));
+        if lapsed {
+            self.ask_acp(i, now, true);
+        }
         let Some(slot) = self.slots.get_mut(i) else { return };
         // Behind earlier held events the new one waits too, so the order holds.
-        if slot.m.allowed && slot.m.hold != 2 && slot.m.held.len() == 0 {
+        if slot.m.allowed && slot.m.hold != 2 && slot.m.held.len() == 0 && !lapsed {
             self.emit(ev);
             return;
         }

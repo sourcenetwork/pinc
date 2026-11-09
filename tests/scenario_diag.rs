@@ -31,7 +31,7 @@ fn diag() {
         println!("CUT {c:?}");
     }
     for n in &nodes {
-        println!("SITE n{n} {}", w.nodes[*n].site);
+        println!("SITE n{n} {} clock {:?}", w.nodes[*n].site, w.nodes[*n].clock);
     }
     let (r, ev) = run_watching(&w, driver, LayerSet::NONE, &nodes).unwrap();
     for l in ev {

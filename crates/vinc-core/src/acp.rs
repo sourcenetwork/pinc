@@ -13,7 +13,7 @@
 //!   READY, which the server sends once its own answer is in, so the first stream write is served one way later.
 //!
 //! Invariants: a session is allowed or denied exactly once per answer; no application event leaves a session before it
-//! is allowed; at most one check is pending per peer.
+//! is allowed, nor after its peer's answer lapsed until a fresh allow comes; at most one check is pending per peer.
 
 use vinc_crypto::NodeId;
 use vinc_transport::conn::code;
@@ -72,7 +72,9 @@ ep_impl! {
                     }
                     return;
                 }
-                _ => return,
+                Some(_) => return,
+                // The answer expired before the re-ask came (the host did not run the endpoint for a while): ask.
+                None => {}
             }
         }
         if self.check_of.contains(&peer) {
@@ -182,10 +184,18 @@ ep_impl! {
         let mut i = self.by_peer.get(&peer).copied();
         while let Some(idx) = i {
             let Some(s) = self.slots.get_mut(idx as usize) else { break };
-            if s.m.allowed && allow {
+            let was_allowed = s.m.allowed;
+            if was_allowed && allow {
                 s.m.acp_recheck = Some(until);
             }
+            let release = was_allowed && allow && s.m.hold != 2 && s.m.held.len() > 0;
             i = Some(s.m.peer_next).filter(|n| *n != crate::slot::NIL);
+            // An allowed session whose answer lapsed held its events for this one: they go out, or the session closes.
+            if release {
+                self.release_held(idx as usize, now);
+            } else if was_allowed && !allow {
+                self.deny_session(idx as usize, now);
+            }
             self.settle(idx as usize, now);
         }
         Ok(())

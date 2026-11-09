@@ -466,3 +466,82 @@ fn a_stalled_session_still_takes_a_close_and_the_peers_acks() {
         assert_eq!(net.nodes[b].ep.node_stats().events_lost, 0);
     });
 }
+
+/// Opens a unidirectional stream on `n`'s session `s` and writes `data` to it.
+fn write_once(net: &mut CoreNet, n: usize, s: vinc_core::SessionId, data: &[u8]) {
+    let t = net.now;
+    let Value::Stream(id) = net.nodes[n]
+        .cmd(
+            t,
+            Command::OpenStream {
+                session: s,
+                bidi: false,
+            },
+        )
+        .unwrap()
+        .value
+    else {
+        panic!()
+    };
+    net.nodes[n]
+        .cmd(
+            t,
+            Command::Write {
+                session: s,
+                stream: id,
+                data,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_lapsed_answer_holds_an_allowed_sessions_events_until_it_is_asked_again() {
+    big_stack(|| {
+        let mut net = CoreNet::new(FAST);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.nodes[b].acp = Acp::Manual;
+        // The host did not run the endpoints for a minute (a suspension): the cached answer of 30 s lapsed.
+        net.now += 60 * SEC_NS;
+        let t = net.now;
+        write_once(&mut net, a, sa, b"late");
+        net.run_for(SEC_NS);
+        assert!(!net.nodes[b].checks.is_empty(), "no new check was raised");
+        let delivered = |net: &CoreNet| {
+            net.nodes[b]
+                .events
+                .iter()
+                .any(|(at, e)| *at >= t && matches!(e, Event::StreamOpened { .. } | Event::StreamReadable { .. }))
+        };
+        assert!(!delivered(&net), "data reached the application on a lapsed answer");
+        let (check, _) = net.nodes[b].checks[0];
+        let now = net.now;
+        net.nodes[b]
+            .cmd(now, Command::AcpAnswer { check, allow: true })
+            .unwrap();
+        net.run_for(SEC_NS);
+        assert!(delivered(&net), "the held data was not released by the fresh answer");
+    });
+}
+
+#[test]
+fn a_deny_after_a_lapsed_answer_closes_the_allowed_session() {
+    big_stack(|| {
+        let mut net = CoreNet::new(FAST);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.nodes[b].acp = Acp::Manual;
+        net.now += 60 * SEC_NS;
+        write_once(&mut net, a, sa, b"late");
+        net.run_for(SEC_NS);
+        let (check, _) = net.nodes[b].checks[0];
+        let now = net.now;
+        net.nodes[b]
+            .cmd(now, Command::AcpAnswer { check, allow: false })
+            .unwrap();
+        net.run_for(SEC_NS);
+        assert!(net.nodes[b].saw(|e| matches!(e, Event::Closed { .. })));
+        assert!(!net.nodes[b].saw(|e| matches!(e, Event::StreamReadable { .. })));
+    });
+}
