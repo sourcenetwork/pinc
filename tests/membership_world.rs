@@ -52,11 +52,16 @@ pub struct Host {
     pub persistent: bool,
     pub sealed: Option<u64>,
     pub fail_seal: bool,
+    pub fail_unseal: bool,
+    /// Every `send` the machine made, with whether a session took it (for the proof traces).
+    pub sent_log: Vec<(NodeId, Route, Vec<u8>, bool)>,
 }
 
 impl Session for Host {
     fn send(&mut self, peer: &NodeId, route: Route, frame: &[u8]) -> bool {
-        if !self.sessions.contains(peer) {
+        let ok = self.sessions.contains(peer);
+        self.sent_log.push((*peer, route, frame.to_vec(), ok));
+        if !ok {
             return false;
         }
         self.out.push((*peer, route, frame.to_vec()));
@@ -112,6 +117,9 @@ impl Local for Host {
         self.persistent
     }
     fn unseal_counter(&mut self) -> Result<Option<u64>, StoreError> {
+        if self.fail_unseal {
+            return Err(StoreError);
+        }
         Ok(self.sealed)
     }
     fn seal_counter(&mut self, epoch: u64) -> Result<(), StoreError> {
@@ -130,6 +138,68 @@ pub struct Node {
     /// Application processing delay for arriving frames (a slow CPU); transport acknowledgements are not delayed.
     pub cpu: u64,
     pub is_hub: bool,
+}
+
+/// What the host looked like when a call into a machine was made (for the proof traces).
+#[derive(Debug, Clone)]
+pub struct EnvSnap {
+    pub ev: Vec<(NodeId, Evidence)>,
+    pub car: Vec<(NodeId, Carrier)>,
+    pub acc: Vec<NodeId>,
+    pub ver: u16,
+    pub tk: u8,
+    pub refl: bool,
+    pub pers: bool,
+    pub sealed: Option<u64>,
+    pub failseal: bool,
+    pub failunseal: bool,
+}
+
+/// One call into a machine.
+#[derive(Debug, Clone)]
+pub enum Op {
+    Start { hub: bool, hubs: Vec<NodeId>, wall: u64, floor: u64, ret: &'static str },
+    Up { peer: NodeId, incoming: bool },
+    Down { peer: NodeId, code: u64 },
+    Bytes { peer: NodeId, bytes: Vec<u8>, used: usize, bad: bool },
+    Timeout,
+    CarrierGone { member: NodeId },
+    CarrierReturn { member: NodeId },
+    Leave,
+    Revoke { member: NodeId, ok: bool },
+    Moved,
+}
+
+/// The public state of a machine after a call.
+#[derive(Debug, Clone)]
+pub struct StSnap {
+    pub members: Vec<(NodeId, vinc_membership::Record)>,
+    pub epoch: u64,
+    pub primary: Option<NodeId>,
+    pub inc: u64,
+    pub roster: Vec<(NodeId, u64)>,
+    pub seal_failed: bool,
+}
+
+/// A recorded call: its inputs, what the machine asked of the host and what it reported.
+#[derive(Debug, Clone)]
+pub struct Call {
+    pub node: usize,
+    pub now: u64,
+    pub op: Op,
+    pub env: EnvSnap,
+    pub sent: Vec<(NodeId, Route, Vec<u8>, bool)>,
+    pub bc: Vec<Bc>,
+    pub closed: Vec<(NodeId, CloseReason)>,
+    pub events: Vec<Event>,
+    pub traces: Vec<Trace>,
+    pub sealed_after: Option<u64>,
+    pub st: StSnap,
+}
+
+/// Receives every call into a machine of a world, when installed with [`World::set_recorder`].
+pub trait Recorder {
+    fn record(&mut self, c: Call);
 }
 
 #[derive(Debug)]
@@ -165,6 +235,7 @@ pub struct World {
     pub srtt: BTreeMap<(usize, usize), u64>,
     pub lat_pair: BTreeMap<(usize, usize), u64>,
     last_at: BTreeMap<(usize, usize), u64>,
+    rec: Option<Box<dyn Recorder>>,
 }
 
 fn key(a: usize, b: usize) -> (usize, usize) {
@@ -224,6 +295,7 @@ impl World {
             srtt: BTreeMap::new(),
             lat_pair: BTreeMap::new(),
             last_at: BTreeMap::new(),
+            rec: None,
         }
     }
 
@@ -327,19 +399,15 @@ impl World {
             .carriers
             .insert(id(member), Carrier::Gone { since, sleep: None });
         self.dead_default.insert(key(hub, member));
-        self.sync(hub);
-        let Node { m, h, .. } = &mut self.nodes[hub];
-        m.carrier_gone(h, self.now, &id(member));
-        self.flush(hub);
+        let mid = id(member);
+        self.call(hub, |m, h, now| m.carrier_gone(h, now, &mid), |()| Op::CarrierGone { member: mid });
     }
 
     pub fn set_carrier_open(&mut self, hub: usize, member: usize) {
         self.nodes[hub].h.carriers.insert(id(member), Carrier::Open);
         self.dead_default.remove(&key(hub, member));
-        self.sync(hub);
-        let Node { m, h, .. } = &mut self.nodes[hub];
-        m.carrier_return(h, self.now, &id(member));
-        self.flush(hub);
+        let mid = id(member);
+        self.call(hub, |m, h, now| m.carrier_return(h, now, &mid), |()| Op::CarrierReturn { member: mid });
     }
 
     /// Refresh a node's host-side evidence table: session set, directness.
@@ -416,16 +484,239 @@ impl World {
         }
     }
 
+    /// Install a recorder. The nodes already started are recorded as `Start` calls, with what they queued.
+    pub fn set_recorder(&mut self, rec: Box<dyn Recorder>) {
+        self.rec = Some(rec);
+        for i in 0..self.nodes.len() {
+            let env = self.snap_env(i);
+            let (events, traces) = self.take_queues(i);
+            let hub = self.nodes[i].is_hub;
+            let hubs: Vec<NodeId> = (0..self.hubs).map(id).collect();
+            let wall = 1_000_000 + u64::try_from(i).unwrap();
+            let call = self.make_call(i, self.now, Op::Start { hub, hubs, wall, floor: 0, ret: "ok" }, env, (0, 0, 0), (events, traces));
+            if let Some(r) = self.rec.as_mut() {
+                r.record(call);
+            }
+        }
+    }
+
+    pub fn take_recorder(&mut self) -> Option<Box<dyn Recorder>> {
+        self.rec.take()
+    }
+
+    fn take_queues(&mut self, i: usize) -> (Vec<Event>, Vec<Trace>) {
+        let mut events = Vec::new();
+        let mut traces = Vec::new();
+        while let Some(e) = self.nodes[i].m.poll_event() {
+            events.push(e);
+        }
+        while let Some(t) = self.nodes[i].m.poll_trace() {
+            traces.push(t);
+        }
+        (events, traces)
+    }
+
+    fn snap_env(&self, i: usize) -> EnvSnap {
+        let h = &self.nodes[i].h;
+        EnvSnap {
+            ev: h.ev.iter().map(|(k, v)| (*k, *v)).collect(),
+            car: h.carriers.iter().filter(|(_, c)| **c != Carrier::Unknown).map(|(k, v)| (*k, *v)).collect(),
+            acc: h.sessions.iter().copied().collect(),
+            ver: h.version,
+            tk: h.ticket,
+            refl: h.reflexive,
+            pers: h.persistent,
+            sealed: h.sealed,
+            failseal: h.fail_seal,
+            failunseal: h.fail_unseal,
+        }
+    }
+
+    fn st_snap(&self, i: usize) -> StSnap {
+        let m = &self.nodes[i].m;
+        let roster = (0..self.nodes.len())
+            .filter_map(|j| m.lease_of(&id(j)).map(|t| (id(j), t)))
+            .collect();
+        StSnap {
+            members: m.members().map(|(k, r)| (*k, *r)).collect(),
+            epoch: m.view_epoch(),
+            primary: m.primary().copied(),
+            inc: m.incarnation(),
+            roster,
+            seal_failed: m.seal_failed(),
+        }
+    }
+
+    /// Build the record of a call: the tails of the logs since `marks` (sent, bc, closed), the queues drained.
+    fn make_call(
+        &mut self,
+        i: usize,
+        now: u64,
+        op: Op,
+        env: EnvSnap,
+        marks: (usize, usize, usize),
+        q: (Vec<Event>, Vec<Trace>),
+    ) -> Call {
+        let h = &self.nodes[i].h;
+        Call {
+            node: i,
+            now,
+            op,
+            env,
+            sent: h.sent_log[marks.0..].to_vec(),
+            bc: h.bc[marks.1..].to_vec(),
+            closed: h.closed[marks.2..].to_vec(),
+            events: q.0,
+            traces: q.1,
+            sealed_after: h.sealed,
+            st: self.st_snap(i),
+        }
+    }
+
+    /// One call into node `i`'s machine, with its host synced and flushed afterwards; recorded when a recorder is on.
+    /// `op` names the call after it ran (some calls know their result only then).
+    fn call<R>(
+        &mut self,
+        i: usize,
+        f: impl FnOnce(&mut Membership, &mut Host, u64) -> R,
+        op: impl FnOnce(&R) -> Op,
+    ) -> R {
+        self.sync(i);
+        let now = self.now;
+        let recording = self.rec.is_some();
+        let env = if recording { Some(self.snap_env(i)) } else { None };
+        let marks = {
+            let h = &self.nodes[i].h;
+            (h.sent_log.len(), h.bc.len(), h.closed.len())
+        };
+        let (ne, nt) = (self.events[i].len(), self.traces[i].len());
+        let Node { m, h, .. } = &mut self.nodes[i];
+        let r = f(m, h, now);
+        let opv = op(&r);
+        self.flush(i);
+        if let Some(env) = env {
+            let events = self.events[i][ne..].iter().map(|(_, e)| *e).collect();
+            let traces = self.traces[i][nt..].to_vec();
+            let call = self.make_call(i, now, opv, env, marks, (events, traces));
+            if let Some(rc) = self.rec.as_mut() {
+                rc.record(call);
+            }
+        }
+        r
+    }
+
+    /// Tell hub `hub` that `member`'s carrier closed, without touching the network (recorded).
+    pub fn notice_gone(&mut self, hub: usize, member: usize) {
+        let mid = id(member);
+        self.call(hub, |m, h, now| m.carrier_gone(h, now, &mid), |()| Op::CarrierGone { member: mid });
+    }
+
+    /// Revoke the wide id number `k` at node `i` (recorded): 30 zero bytes and `k` as a big-endian 16-bit number.
+    pub fn revoke_raw(&mut self, i: usize, k: u16) -> bool {
+        let mut mid = [0u8; 32];
+        mid[30..].copy_from_slice(&k.to_be_bytes());
+        self.call(
+            i,
+            |m, h, now| m.revoke(h, now, &mid).is_ok(),
+            |ok| Op::Revoke { member: mid, ok: *ok },
+        )
+    }
+
+    /// The node `i` leaves the group (recorded).
+    pub fn leave(&mut self, i: usize) {
+        self.call(i, |m, h, _| m.leave(h), |()| Op::Leave);
+    }
+
+    /// The access-control layer revokes `member` at node `i` (recorded).
+    pub fn revoke(&mut self, i: usize, member: usize) -> bool {
+        let mid = id(member);
+        self.call(
+            i,
+            |m, h, now| m.revoke(h, now, &mid).is_ok(),
+            |ok| Op::Revoke { member: mid, ok: *ok },
+        )
+    }
+
+    /// The address of node `i` changed (recorded).
+    pub fn moved(&mut self, i: usize) {
+        self.call(i, |m, _, now| m.address_changed(now), |()| Op::Moved);
+    }
+
+    /// Restart node `i` as a new process on the same host store: the sessions and logs of the old life are gone.
+    pub fn restart(&mut self, i: usize, wall_ms: u64, floor: u64) -> &'static str {
+        let hub_ids: Vec<NodeId> = (0..self.hubs).map(id).collect();
+        let is_hub = self.nodes[i].is_hub;
+        let old = &self.nodes[i].h;
+        let h = Host {
+            me: id(i),
+            version: old.version,
+            ticket: old.ticket,
+            reflexive: old.reflexive,
+            persistent: old.persistent,
+            sealed: old.sealed,
+            fail_seal: old.fail_seal,
+            fail_unseal: old.fail_unseal,
+            ..Host::default()
+        };
+        self.sessions.retain(|&(a, b)| a != i && b != i);
+        let cfg = Config { me: id(i), is_hub, hubs: &hub_ids, trace: true };
+        let now = self.now;
+        self.nodes[i].h = h;
+        self.sync(i);
+        let env = self.snap_env(i);
+        let r = Membership::start(&cfg, &mut self.nodes[i].h, now, wall_ms, floor);
+        let ret = match &r {
+            Ok(_) => "ok",
+            Err(vinc_membership::StartError::TooManyHubs) => "toomany",
+            Err(vinc_membership::StartError::NoHubs) => "nohubs",
+            Err(vinc_membership::StartError::Incarnation(e)) => match e {
+                vinc_membership::incarnation::IncarnationError::Store(_) => "store",
+                vinc_membership::incarnation::IncarnationError::Exhausted => "exhausted",
+            },
+        };
+        if let Ok(m) = r {
+            self.nodes[i].m = m;
+            self.nodes[i].up = true;
+        }
+        let (events, traces) = self.take_queues(i);
+        if self.rec.is_some() {
+            let call = self.make_call(
+                i,
+                now,
+                Op::Start { hub: is_hub, hubs: hub_ids, wall: wall_ms, floor, ret },
+                env,
+                (0, 0, 0),
+                (events, traces),
+            );
+            if let Some(rc) = self.rec.as_mut() {
+                rc.record(call);
+            }
+        }
+        ret
+    }
+
     fn process(&mut self, to: usize, from: usize, bytes: &[u8]) {
         if !self.nodes[to].up {
             return;
         }
-        self.sync(to);
-        let now = self.now;
-        let Node { m, h, .. } = &mut self.nodes[to];
-        let n = m.on_bytes(h, now, &id(from), bytes).expect("frame parses");
+        let peer = id(from);
+        let n = self.call(
+            to,
+            |m, h, now| m.on_bytes(h, now, &peer, bytes),
+            |r| Op::Bytes { peer, bytes: bytes.to_vec(), used: r.as_ref().map_or(0, |n| *n), bad: r.is_err() },
+        );
+        let n = n.expect("frame parses");
         assert_eq!(n, bytes.len(), "whole frame consumed");
-        self.flush(to);
+    }
+
+    /// Deliver bytes that need not be a whole frame to `to` as if `from` sent them, now; returns what `on_bytes` said.
+    pub fn inject_bytes(&mut self, to: usize, from: usize, bytes: &[u8]) -> Result<usize, vinc_membership::FrameError> {
+        let peer = id(from);
+        self.call(
+            to,
+            |m, h, now| m.on_bytes(h, now, &peer, bytes),
+            |r| Op::Bytes { peer, bytes: bytes.to_vec(), used: r.as_ref().map_or(0, |n| *n), bad: r.is_err() },
+        )
     }
 
     fn step_event(&mut self, ev: Ev) {
@@ -461,23 +752,16 @@ impl World {
                 }
                 self.sync(a);
                 self.sync(b);
-                let now = self.now;
-                let Node { m, h, .. } = &mut self.nodes[b];
-                m.session_up(h, now, &id(a), true);
-                self.flush(b);
-                let Node { m, h, .. } = &mut self.nodes[a];
-                m.session_up(h, now, &id(b), false);
-                self.flush(a);
+                let (ia, ib) = (id(a), id(b));
+                self.call(b, |m, h, now| m.session_up(h, now, &ia, true), |()| Op::Up { peer: ia, incoming: true });
+                self.call(a, |m, h, now| m.session_up(h, now, &ib, false), |()| Op::Up { peer: ib, incoming: false });
             }
             Ev::SessionDown { to, from, code } => {
                 if !self.nodes[to].up {
                     return;
                 }
-                self.sync(to);
-                let now = self.now;
-                let Node { m, h, .. } = &mut self.nodes[to];
-                m.session_down(h, now, &id(from), code);
-                self.flush(to);
+                let pf = id(from);
+                self.call(to, |m, h, now| m.session_down(h, now, &pf, code), |()| Op::Down { peer: pf, code });
             }
         }
     }
@@ -485,11 +769,7 @@ impl World {
     fn timers(&mut self) {
         for i in 0..self.nodes.len() {
             if self.nodes[i].up && self.nodes[i].m.poll_timeout() <= self.now {
-                self.sync(i);
-                let now = self.now;
-                let Node { m, h, .. } = &mut self.nodes[i];
-                m.on_timeout(h, now);
-                self.flush(i);
+                self.call(i, |m, h, now| m.on_timeout(h, now), |()| Op::Timeout);
             }
         }
     }
@@ -565,6 +845,7 @@ impl World {
 
     /// A call into a node's machine with its host synced, then flushed.
     pub fn with<R>(&mut self, i: usize, f: impl FnOnce(&mut Membership, &mut Host, u64) -> R) -> R {
+        assert!(self.rec.is_none(), "a call through `with` would be missing from the recorded trace");
         self.sync(i);
         let now = self.now;
         let Node { m, h, .. } = &mut self.nodes[i];

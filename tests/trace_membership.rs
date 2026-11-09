@@ -20,10 +20,17 @@
 mod common;
 #[path = "trace_membership/inc.rs"]
 mod inc;
+#[path = "trace_membership/node.rs"]
+mod node;
+#[path = "trace_membership/node_rec.rs"]
+mod node_rec;
+#[path = "membership_world.rs"]
+mod world;
 
 #[test]
 fn membership_traces() {
     let mut tw = common::TraceWriter::new();
     inc::run(&mut tw);
+    node::run(&mut tw);
     tw.finish();
 }
