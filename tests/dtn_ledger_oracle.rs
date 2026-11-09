@@ -1,7 +1,9 @@
 //! A reference ledger for the delay-tolerant trace tests: the behaviour of `vinc_dtn::store::Ledger` written from its
 //! documented rules, sharing no code with it. It is stated the way the proofs state it: after the expired items left,
 //! an admission is accepted exactly when the custody items leave room for it in bytes (summed in 128 bits, so nothing
-//! saturates) and in slots; it then evicts transit items, oldest admission first, only as many as needed.
+//! saturates) and in slots; it then evicts transit items, oldest admission first, only as many as needed. The order of
+//! the checks is the documented one: the expired items leave first, then a key still kept is a duplicate, then an item
+//! that is itself expired (`exp <= now`) is refused, then the room test. Every refusal reports the expired items.
 #![allow(dead_code, missing_docs, unreachable_pub)]
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +19,7 @@ pub struct Ent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
     Dup,
+    Expired,
     Custody,
     Full,
 }
@@ -70,10 +73,13 @@ impl Oracle {
         exp: u64,
         now: u64,
     ) -> (Result<(), Refusal>, Vec<Ent>) {
-        if self.contains(space, id) {
-            return (Err(Refusal::Dup), vec![]);
-        }
         let mut ev = self.expire(now);
+        if self.contains(space, id) {
+            return (Err(Refusal::Dup), ev);
+        }
+        if exp <= now {
+            return (Err(Refusal::Expired), ev);
+        }
         let hard: Vec<Ent> = self.ents().into_iter().filter(|e| e.custody).collect();
         let hard_bytes: u128 = hard.iter().map(|e| u128::from(e.bytes)).sum();
         if hard_bytes + u128::from(bytes) > u128::from(self.budget) || hard.len() >= self.n {

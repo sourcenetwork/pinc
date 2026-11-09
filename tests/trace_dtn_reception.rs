@@ -103,7 +103,7 @@ impl Bundle {
             let mut head = *signed.head();
             head.root = root;
             signed = SignedHead::sign(head, &signer).unwrap();
-            faulty.push(sym / 4);
+            faulty.push(sym);
         }
         Self {
             signed,
@@ -259,10 +259,25 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
                 r#"{{"t":"rx","run":{id},"op":"feed","a":{a2},"b":{b2},"kind":"{kind}","res":"{rc}",{snap}}}"#
             ));
         } else if pick < 85 {
-            // finish
+            // finish: a wrong-sized outboard or scratch is refused with nothing changed; otherwise the real call
             let mut ob = vec![0; b.layout.outboard_len().unwrap() as usize];
+            let mut scratch = vec![0; rx.scratch_len().unwrap()];
+            if rng.next_u64() % 4 == 0 {
+                let before_buf = rx.sealed().to_vec();
+                let res = if rng.next_u64() % 2 == 0 {
+                    rx.finish(&mut ob[1..], &mut scratch)
+                } else {
+                    rx.finish(&mut ob, &mut scratch[1..])
+                };
+                assert_eq!(res_class(&res), "buffer");
+                assert_eq!(rx.sealed(), &before_buf[..], "a refused finish writes nothing");
+                let (snap, now_held) = snapshot(&rx);
+                assert_eq!(now_held, held);
+                out.push(format!(r#"{{"t":"rx","run":{id},"op":"finbuf","res":"buffer",{snap}}}"#));
+                continue;
+            }
             let was_held = held.clone();
-            let res = rx.finish(&mut ob);
+            let res = rx.finish(&mut ob, &mut scratch);
             let rc = res_class(&res);
             let decodable = (0..2u64).all(|bl| {
                 let (lo, hi, k) = if bl == 0 { (0, 4, 2) } else { (4, 7, 1) };
@@ -275,6 +290,10 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
             );
             if b.faulty.is_empty() {
                 assert_ne!(rc, "inconsistent", "an honest sender is never inconsistent");
+            }
+            for (sym, _) in was_held.iter().enumerate().filter(|(_, h)| **h) {
+                let r = sym * G as usize..(sym + 1) * G as usize;
+                assert_eq!(&rx.sealed()[r.clone()], &b.sealed[r], "finish never writes a held symbol");
             }
             if rc == "ok" {
                 finished_ok = true;

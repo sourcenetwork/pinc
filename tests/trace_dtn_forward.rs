@@ -3,18 +3,22 @@
 //! check (`TraceDtnForward.tla`) and the Lean replay (`Vinc/TraceDtnForward.lean`).
 //!
 //! The world is small so that every branch is met: three peers (node ids 1 to 3), three bundles (ids 1 to 3), tables of
-//! two bundles, two links and two transfers, retry 3 ms and 3 sends, times of a few tens of milliseconds (time also
+//! two bundles, two links and two transfers, a memory table of two accepted bundles, retry 3 ms and 3 sends, times of a few tens of milliseconds (time also
 //! goes backwards in a call, which the forwarder must ignore). A run mixes the inputs in a seeded order: ticks, holds
-//! (with zero copies, repeated, with full tables), links up and down (also a third link on a two-link table),
+//! (with zero copies, repeated, again after the bundle was released or forgotten, with full tables), links up and down (also a third link on a two-link table),
 //! acknowledgements (also of nothing), forgets (also of nothing), and polls that drain the machine or stop early.
 //!
 //! What is recorded is what an observer sees: the input with its time, the error it returned, the action each poll
 //! returned, and after every call `ch` (copies held per bundle, 0 for none), `cd` (copies handed per bundle) and `tm`
-//! (the timer of each (bundle, peer) transfer plus one, 0 for no running timer). The links, the delivered flag and
-//! the transfer phases are not readable, so the model has to reproduce them for the later observations to match.
+//! (the timer of each (bundle, peer) transfer plus one, 0 for no running timer) and `mm` (per bundle, the expiry of
+//! its live memory entry, 0 for none). The memory table is private, so `mm` is read through its behaviour on a copy of
+//! the forwarder: the earliest time at which a hold of the bundle (after a forget of it, so that it is not a
+//! duplicate) is no longer refused as finished. The links, the delivered flag, the transfer phases and the slots of
+//! expired memory entries (indistinguishable from free ones) are not readable, so the model has to reproduce them
+//! for the later observations to match.
 //!
 //! The test asserts everything itself against a tracker written here that does not share code with the forwarder
-//! (copy balance per bundle, the halving rule, one transfer per (bundle, peer), the send count of a transfer, timers
+//! (copy balance per bundle, the memory of accepted bundles, the halving rule, one transfer per (bundle, peer), the send count of a transfer, timers
 //! frozen on a down link, the release order, the quiet condition, the give-up condition), and that every branch of the
 //! forwarder was met, so it is meaningful without the proof tools. The main world goes to `dtn_forward.ndjson` and is
 //! checked by both TLA+ and Lean; `dtn_forward_edge.ndjson` holds other capacities and policies (a retry of 0, a
@@ -66,11 +70,15 @@ fn id_of(b: &BundleId) -> u8 {
     b.0[0]
 }
 
-const BRANCHES: [&str; 22] = [
+const BRANCHES: [&str; 26] = [
     "hold_ok",
     "hold_nocopies",
     "hold_duplicate",
     "hold_full",
+    "hold_full_memory",
+    "hold_finished_delivered",
+    "hold_finished_forgotten",
+    "hold_after_expiry",
     "link_new",
     "link_toggle",
     "link_full",
@@ -98,6 +106,7 @@ fn err_name(e: Result<(), ForwardError>) -> &'static str {
         Err(ForwardError::Full) => "Full",
         Err(ForwardError::NoCopies) => "NoCopies",
         Err(ForwardError::Unknown) => "Unknown",
+        Err(ForwardError::Finished) => "Finished",
     }
 }
 
@@ -132,16 +141,56 @@ struct Track {
     known: HashSet<u8>,
     /// Running timers (link-up milliseconds left) of transfers that still send.
     timer: HashMap<(u8, u8), u64>,
+    /// Every accepted hold as (bundle, expiry): the memory of accepted bundles, live while the expiry is ahead.
+    seen: Vec<(u8, u64)>,
+    /// How each bundle that is no longer held was finished.
+    how: HashMap<u8, &'static str>,
 }
 
-struct Run<const B: usize, const L: usize, const T: usize> {
-    f: Forwarder<B, L, T>,
+struct Run<const B: usize, const L: usize, const T: usize, const F: usize> {
+    f: Forwarder<B, L, T, F>,
     tr: Track,
     lines: Vec<String>,
     cover: HashSet<&'static str>,
 }
 
-fn snap<const B: usize, const L: usize, const T: usize>(f: &Forwarder<B, L, T>) -> String {
+/// The expiry of the live memory entry of bundle `id` (0 for none), read through the forwarder's behaviour on a copy:
+/// the earliest time at which a hold of the bundle, once forgotten, is not refused as finished.
+fn memory_expiry<const B: usize, const L: usize, const T: usize, const F: usize>(
+    f: &Forwarder<B, L, T, F>,
+    id: u8,
+    now: u64,
+) -> u64 {
+    let mut c = f.clone();
+    let _ = c.step(now, Input::Forget(bid(id)));
+    let finished = |t: u64| {
+        let mut probe = c.clone();
+        probe.step(
+            t,
+            Input::Hold(Held {
+                id: bid(id),
+                destination: node(1),
+                expires: t.saturating_add(1),
+                copies: 1,
+            }),
+        ) == Err(ForwardError::Finished)
+    };
+    if !finished(now) {
+        return 0;
+    }
+    let (mut lo, mut hi) = (now, u64::MAX);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if finished(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
+}
+
+fn snap<const B: usize, const L: usize, const T: usize, const F: usize>(f: &Forwarder<B, L, T, F>, now: u64) -> String {
     let ch: Vec<String> = (1..=IDS)
         .map(|i| f.copies_held(&bid(i)).unwrap_or(0).to_string())
         .collect();
@@ -154,18 +203,20 @@ fn snap<const B: usize, const L: usize, const T: usize>(f: &Forwarder<B, L, T>) 
             format!("[{}]", row.join(","))
         })
         .collect();
+    let mm: Vec<String> = (1..=IDS).map(|i| memory_expiry(f, i, now).to_string()).collect();
     format!(
-        r#""ch":[{}],"cd":[{}],"tm":[{}]"#,
+        r#""ch":[{}],"cd":[{}],"tm":[{}],"mm":[{}]"#,
         ch.join(","),
         cd.join(","),
-        tm.join(",")
+        tm.join(","),
+        mm.join(",")
     )
 }
 
-impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
+impl<const B: usize, const L: usize, const T: usize, const F: usize> Run<B, L, T, F> {
     fn new(policy: Policy, now: u64) -> Self {
         let lines = vec![format!(
-            r#"{{"t":"fw","e":"new","b":{B},"l":{L},"tt":{T},"retry":{},"max":{},"now":{now}}}"#,
+            r#"{{"t":"fw","e":"new","b":{B},"l":{L},"tt":{T},"d":{F},"retry":{},"max":{},"now":{now}}}"#,
             policy.retry_ms, policy.max_sends
         )];
         Self {
@@ -179,13 +230,16 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
                 up: HashSet::new(),
                 known: HashSet::new(),
                 timer: HashMap::new(),
+                seen: Vec::new(),
+                how: HashMap::new(),
             },
             lines,
             cover: HashSet::new(),
         }
     }
 
-    fn forget(&mut self, id: u8) {
+    fn forget(&mut self, id: u8, how: &'static str) {
+        self.tr.how.insert(id, how);
         self.tr.rcv.remove(&id);
         self.tr.delivered.remove(&id);
         self.tr.sends.retain(|(i, _), _| *i != id);
@@ -217,12 +271,28 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
                 } else if self.tr.rcv.contains_key(&id) {
                     assert_eq!(res, Err(ForwardError::Duplicate), "a repeated hold is ignored");
                     self.cover.insert("hold_duplicate");
-                } else if self.tr.rcv.len() == B {
+                } else if self.tr.seen.iter().any(|&(i, e)| i == id && e > self.tr.now) {
+                    assert_eq!(res, Err(ForwardError::Finished), "a finished bundle is not held again");
+                    self.cover.insert(match self.tr.how[&id] {
+                        "forgotten" => "hold_finished_forgotten",
+                        _ => "hold_finished_delivered",
+                    });
+                } else if self.tr.seen.iter().filter(|&&(_, e)| e > self.tr.now).count() == F
+                    || self.tr.rcv.len() == B
+                {
                     assert_eq!(res, Err(ForwardError::Full));
-                    self.cover.insert("hold_full");
+                    self.cover.insert(if self.tr.rcv.len() == B {
+                        "hold_full"
+                    } else {
+                        "hold_full_memory"
+                    });
                 } else {
                     assert_eq!(res, Ok(()));
+                    if self.tr.seen.iter().any(|&(i, _)| i == id) {
+                        self.cover.insert("hold_after_expiry");
+                    }
                     self.tr.rcv.insert(id, (h.copies, peer_of(&h.destination), h.expires));
+                    self.tr.seen.push((id, h.expires));
                     self.cover.insert("hold_ok");
                 }
             }
@@ -265,7 +335,7 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
                 let id = id_of(&b);
                 if self.tr.rcv.contains_key(&id) {
                     assert_eq!(res, Ok(()));
-                    self.forget(id);
+                    self.forget(id, "forgotten");
                     self.cover.insert("forget_ok");
                 } else {
                     assert_eq!(res, Err(ForwardError::Unknown));
@@ -277,7 +347,7 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
             r#"{{"t":"fw","e":"step","now":{now},"in":{},"err":"{}",{}}}"#,
             input_json(&inp),
             err_name(res),
-            snap(&self.f)
+            snap(&self.f, self.tr.now)
         ));
         self.check_books();
     }
@@ -301,6 +371,15 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
                 assert_eq!(self.f.copies_held(&bid(id)), None);
                 assert_eq!(self.f.copies_handed(&bid(id)), 0);
             }
+            let expected = self
+                .tr
+                .seen
+                .iter()
+                .filter(|&&(i, e)| i == id && e > self.tr.now)
+                .map(|&(_, e)| e)
+                .max()
+                .unwrap_or(0);
+            assert_eq!(memory_expiry(&self.f, id, self.tr.now), expected, "memory of bundle {id}");
             for p in 1..=PEERS {
                 let seen = self.f.timer_remaining(&node(p), &bid(id));
                 assert_eq!(seen, self.tr.timer.get(&(id, p)).copied(), "timer of ({id}, {p})");
@@ -366,7 +445,7 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
                 } else {
                     "release_expired"
                 });
-                self.forget(id);
+                self.forget(id, "delivered");
                 format!(r#"{{"k":"release","bundle":{id}}}"#)
             }
             Some(Action::Send {
@@ -415,7 +494,7 @@ impl<const B: usize, const L: usize, const T: usize> Run<B, L, T> {
             self.settle_gave_up(false);
         }
         self.lines
-            .push(format!(r#"{{"t":"fw","e":"poll","act":{line},{}}}"#, snap(&self.f)));
+            .push(format!(r#"{{"t":"fw","e":"poll","act":{line},{}}}"#, snap(&self.f, self.tr.now)));
         self.check_books();
         act.is_some()
     }
@@ -517,7 +596,7 @@ fn the_forwarder_matches_its_models() {
     let mut lines = vec![];
     let mut cover = HashSet::new();
     for seed in 0..40u64 {
-        let mut run = Run::<2, 2, 2>::new(policy, 0);
+        let mut run = Run::<2, 2, 2, 2>::new(policy, 0);
         run.drive(&mut SplitMix64::new(seed), 70, 0);
         lines.append(&mut run.lines);
         cover.extend(run.cover);
@@ -538,16 +617,20 @@ fn other_capacities_policies_and_times_near_the_limit() {
         };
         for seed in 0..6u64 {
             let s = seed + 100 * n as u64;
-            let mut a = Run::<1, 1, 1>::new(policy, 0);
+            let mut a = Run::<1, 1, 1, 1>::new(policy, 0);
             a.drive(&mut SplitMix64::new(s), 60, 0);
-            let mut b = Run::<3, 2, 4>::new(policy, 5);
+            let mut b = Run::<3, 2, 4, 2>::new(policy, 5);
             b.drive(&mut SplitMix64::new(s + 7), 60, 5);
             // Times next to u64::MAX: the clock saturates and timers never wrap.
-            let mut c = Run::<2, 2, 2>::new(policy, u64::MAX - 80);
+            let mut c = Run::<2, 2, 2, 2>::new(policy, u64::MAX - 80);
             c.drive(&mut SplitMix64::new(s + 13), 60, u64::MAX - 80);
+            // A memory table of no slot refuses every hold: the Full branch of the memory.
+            let mut d = Run::<2, 2, 2, 0>::new(policy, 0);
+            d.drive(&mut SplitMix64::new(s + 21), 40, 0);
             lines.append(&mut a.lines);
             lines.append(&mut b.lines);
             lines.append(&mut c.lines);
+            lines.append(&mut d.lines);
         }
     }
     write("dtn_forward_edge", &lines);

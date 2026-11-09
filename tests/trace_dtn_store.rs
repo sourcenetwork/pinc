@@ -5,7 +5,9 @@
 //! The world is small so that every branch is met: ledgers of one to four slots, a budget of ten bytes, two spaces
 //! (bundles and mailbox items) with five ids each, sizes of 0 to 12 bytes, both classes, lifetimes and clocks of 0 to
 //! 6 (a clock may go back between calls, and an item expires exactly when `expires <= now`). A run mixes admissions
-//! (also of a key already kept), expiries, releases and reclasses in a seeded order.
+//! (also of a key already kept, of a key that expired but was not swept, and of an item that is already expired),
+//! expiries, releases and reclasses in a seeded order. An admission sweeps the expired items first; every refusal (a
+//! duplicate and an expired item included) reports them as its evictions.
 //!
 //! What is recorded is what an observer sees: the call, what it returned (the error, the evicted entries in the order
 //! the callback saw them, the entry released), and after every call the kept entries in slot order (`snap`) and the
@@ -66,6 +68,9 @@ fn view(e: &Ent) -> (u8, u8, u64, bool, u64) {
 #[derive(Default)]
 struct Seen {
     dup: u32,
+    dup_swept: u32,
+    expired: u32,
+    fresh_after_sweep: u32,
     custody_refused: u32,
     full: u32,
     ok: u32,
@@ -122,10 +127,15 @@ fn run<const N: usize>(
                     now,
                     |e| gone.push(*e),
                 );
+                let was_expired_key = model
+                    .ents()
+                    .iter()
+                    .any(|e| e.space == space && e.id == id && e.exp <= now);
                 let (mr, mev) = model.admit(space, id, bytes, custody, exp, now);
                 let err = match (&r, mr) {
                     (Ok(()), Ok(())) => "ok",
                     (Err(StoreError::Duplicate), Err(Refusal::Dup)) => "dup",
+                    (Err(StoreError::Expired), Err(Refusal::Expired)) => "expired",
                     (Err(StoreError::CustodyRefused), Err(Refusal::Custody)) => "cust",
                     (Err(StoreError::Full), Err(Refusal::Full)) => "full",
                     other => panic!("admit differs from the reference: {other:?}"),
@@ -135,9 +145,12 @@ fn run<const N: usize>(
                     mev.iter().map(view).collect::<Vec<_>>(),
                     "evictions"
                 );
+                seen.fresh_after_sweep += u32::from(was_expired_key && err != "dup");
+                seen.dup_swept += u32::from(err == "dup" && !mev.is_empty());
                 match err {
                     "ok" => seen.ok += 1,
                     "dup" => seen.dup += 1,
+                    "expired" => seen.expired += 1,
                     "cust" => seen.custody_refused += 1,
                     _ => seen.full += 1,
                 }
@@ -231,6 +244,9 @@ fn ledger_runs_match_the_reference_and_are_recorded() {
     }
     for (name, n) in [
         ("duplicates", seen.dup),
+        ("duplicates with a sweep", seen.dup_swept),
+        ("expired items refused", seen.expired),
+        ("expired keys admitted fresh", seen.fresh_after_sweep),
         ("custody refusals", seen.custody_refused),
         ("transit refusals", seen.full),
         ("accepted", seen.ok),

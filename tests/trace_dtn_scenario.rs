@@ -61,7 +61,7 @@ const PB: u64 = 2;
 const TIGHT: usize = 2;
 const BUNDLE: BundleId = BundleId([1; 32]);
 
-type Fwd = Forwarder<1, 3, 3>;
+type Fwd = Forwarder<1, 3, 3, 2>;
 type Book = CustodyBook<2>;
 type Led = Ledger<3>;
 
@@ -76,6 +76,8 @@ struct Node {
     fwd: Fwd,
     book: Book,
     led: Led,
+    /// The offer id last made to each peer, repeated by a retransmission.
+    last_offer: [u64; N],
 }
 
 #[derive(Clone)]
@@ -86,6 +88,7 @@ enum Msg {
         to: usize,
         copies: u16,
         fresh: bool,
+        off: u64,
     },
     Ack {
         id: u64,
@@ -147,6 +150,7 @@ impl Sim {
                 fwd: Fwd::new(policy(), 0),
                 book: Book::new(),
                 led: Led::new(if i == TIGHT { 0 } else { LEDGER_BUDGET }),
+                last_offer: [0; N],
             })
             .collect();
         let n0 = &mut nodes[0];
@@ -158,6 +162,7 @@ impl Sim {
                     bytes: 1,
                     expires: EXP,
                     previous: ids[0],
+                    offer: 0,
                 },
                 0,
                 |_| {},
@@ -359,25 +364,31 @@ impl Sim {
                 ..
             }) => {
                 let to = self.idx(&peer);
+                let mut off = if retransmit { self.nodes[i].last_offer[to] } else { 0 };
+                if copies > 0 && !retransmit && to > i {
+                    // A relieved node still sprays its copies but holds no record to offer from.
+                    match self.nodes[i].book.offer(&BUNDLE, peer) {
+                        Ok(id) => {
+                            off = id;
+                            self.nodes[i].last_offer[to] = id;
+                            self.meet("offer");
+                        }
+                        Err(CustodyError::Unknown) => self.meet("offer_unknown"),
+                        Err(e) => panic!("unexpected {e:?}"),
+                    }
+                }
                 self.net.push(Msg::Bun {
                     id: mid,
                     from: i,
                     to,
                     copies,
                     fresh: !retransmit,
+                    off,
                 });
                 self.seq += 1;
-                if copies > 0 && !retransmit && to > i {
-                    // A relieved node still sprays its copies but holds no record to offer from.
-                    match self.nodes[i].book.offer(&BUNDLE, peer) {
-                        Ok(()) => self.meet("offer"),
-                        Err(CustodyError::Unknown) => self.meet("offer_unknown"),
-                        Err(e) => panic!("unexpected {e:?}"),
-                    }
-                }
                 self.meet(if retransmit { "retransmit" } else { "send" });
                 format!(
-                    r#""e":"poll","n":{},"a":"send","p":{},"c":{},"r":{},"mid":{mid}"#,
+                    r#""e":"poll","n":{},"a":"send","p":{},"c":{},"r":{},"mid":{mid},"off":{off}"#,
                     i + 1,
                     to + 1,
                     copies,
@@ -412,6 +423,7 @@ impl Sim {
                 to,
                 copies,
                 fresh,
+                off,
             } => {
                 let outcome;
                 if to == N - 1 {
@@ -428,6 +440,7 @@ impl Sim {
                             bytes: 1,
                             expires: EXP,
                             previous: prev,
+                            offer: off,
                         },
                         t,
                         |_| {},
@@ -445,6 +458,12 @@ impl Sim {
                             }
                             outcome = "capacity";
                         }
+                        Err(CustodyError::Store(StoreError::Expired)) => {
+                            if fresh {
+                                self.dropped += u32::from(copies);
+                            }
+                            outcome = "other";
+                        }
                         Err(e) => panic!("unexpected {e:?}"),
                         Ok(_) => {
                             let held = Held {
@@ -460,7 +479,7 @@ impl Sim {
                                     }
                                     outcome = "held";
                                 }
-                                Err(ForwardError::Duplicate | ForwardError::Full | ForwardError::NoCopies) => {
+                                Err(ForwardError::Duplicate | ForwardError::Full | ForwardError::NoCopies | ForwardError::Finished) => {
                                     if fresh {
                                         self.dropped += u32::from(copies);
                                     }
@@ -472,8 +491,8 @@ impl Sim {
                     }
                     self.meet(outcome);
                 }
-                if outcome != "refused" && outcome != "capacity" {
-                    let ack = CustodyAck::sign(BUNDLE, self.ids[from], Hlc::new(t, 0), &self.nodes[to].kp).unwrap();
+                if outcome != "refused" && outcome != "capacity" && outcome != "other" {
+                    let ack = CustodyAck::sign(BUNDLE, self.ids[from], off, Hlc::new(t, 0), &self.nodes[to].kp).unwrap();
                     let mut bytes = vec![0; ack.encoded_len()];
                     ack.encode(&mut bytes).unwrap();
                     let aid = self.seq;
@@ -490,7 +509,7 @@ impl Sim {
                     false,
                 )
             }
-            Msg::Ack { id, from, to, bytes } => {
+            Msg::Ack { id, from, to, bytes, .. } => {
                 let ack = CustodyAck::decode(&bytes).unwrap();
                 ack.verify().unwrap();
                 assert_eq!(self.idx(&ack.custodian), from);
@@ -570,7 +589,7 @@ impl Sim {
 
     /// An ack whose signature does not verify: dropped by the glue, nothing moves.
     fn forged(&mut self, from: usize, to: usize) {
-        let ack = CustodyAck::sign(BUNDLE, self.ids[to], Hlc::new(self.t, 0), &self.nodes[from].kp).unwrap();
+        let ack = CustodyAck::sign(BUNDLE, self.ids[to], 0, Hlc::new(self.t, 0), &self.nodes[from].kp).unwrap();
         let mut bytes = vec![0; ack.encoded_len()];
         ack.encode(&mut bytes).unwrap();
         let last = bytes.len() - 1;
@@ -789,7 +808,7 @@ fn a_sealed_bundle_crosses_a_chain_and_opens() {
         rx.feed(0..total, &stream).unwrap();
         assert!(rx.is_complete());
         let mut outboard = vec![0; layout.outboard_len().unwrap() as usize];
-        rx.finish(&mut outboard).unwrap();
+        dtn_common::finish(&mut rx, &mut outboard).unwrap();
         carried_sealed = rx.sealed().to_vec();
         carried_outboard = outboard;
     }
