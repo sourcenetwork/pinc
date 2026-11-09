@@ -265,7 +265,7 @@ fn an_empty_pool_refuses_data_without_storing_any() {
 }
 
 #[test]
-fn a_grant_waits_for_pool_room_and_is_issued_after_a_later_consume() {
+fn a_grant_waits_for_pool_room_and_is_issued_when_the_pool_gives_it_back() {
     // 16 chunks: 256 KiB. Windows of 64 KiB.
     let (mut pool, mut t) = setup(16, |c| c.initial_stream_window = 64 * 1024);
     assert_eq!(t.recv_window(), 64 * 1024);
@@ -281,11 +281,41 @@ fn a_grant_waits_for_pool_room_and_is_issued_after_a_later_consume() {
     for c in hog {
         pool.free_chunk(c);
     }
-    // Room is back: the next consume issues the deferred grant.
-    t.consume(&mut pool, 0, 0, 0, 0).unwrap();
+    // Room is back (the datagram queues and the early-data buffer give chunks back outside the table): the
+    // connection retries before it writes control frames, with nothing left to read.
+    t.regrant(&pool);
     assert_eq!(
         drain_control(&mut t),
         [ControlFrame::MaxStreamData { id: 0, max: 112 * 1024 }]
+    );
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+}
+
+#[test]
+fn a_deferred_grant_is_issued_when_acknowledged_send_data_gives_the_pool_back() {
+    // Regression: the grant was retried only after a consume, so a peer blocked at its limit, with nothing left to
+    // read, waited forever once the pool refilled by an acknowledgement.
+    let (mut pool, mut t) = setup(16, |c| c.initial_stream_window = 64 * 1024);
+    t.on_stream_frame(&mut pool, 0, 0, &vec![1; 48 * 1024], false).unwrap();
+    let sid = t.open_stream(true).unwrap();
+    assert_eq!(
+        t.write(&mut pool, sid, &vec![2; 13 * CHUNK_SIZE], NO_CAP).unwrap(),
+        13 * CHUNK_SIZE
+    );
+    assert_eq!(read_all(&mut t, &mut pool, 0).len(), 48 * 1024);
+    assert!(
+        drain_control(&mut t).is_empty(),
+        "no grant while the send buffer holds the pool"
+    );
+    let sent = drain_frames(&mut t, &pool, 1 << 20);
+    assert!(!sent.is_empty());
+    for (c, _) in &sent {
+        t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);
+    }
+    assert_eq!(
+        drain_control(&mut t),
+        [ControlFrame::MaxStreamData { id: 0, max: 112 * 1024 }],
+        "the acknowledgement freed the pool, so the grant goes without a read"
     );
     assert!(t.granted_unreceived() <= pool.available_bytes());
 }

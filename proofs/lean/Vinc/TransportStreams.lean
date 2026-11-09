@@ -1,0 +1,375 @@
+/-!
+# The stream table: the receive and credit path
+
+A model of `vinc-transport` `stream/table.rs`, `recv.rs`, `flow.rs`, `ranges.rs` and `pool.rs`, operation for
+operation as `proofs/tla/StreamsOps.tla` has them (the same operators, with unbounded `Nat` offsets and arbitrary
+sizes in `P`: the chunk size `ch`, the ring `ring`, the stored-range cap `rr`, the slots `n`, the pool `b` in
+chunks). `Vinc.TraceStreams` replays the recorded calls of the real code through these functions; the theorems
+about them are in `Vinc.TransportStreamsThm`.
+
+A slot's `held` is the ascending list of chunk numbers its ring holds, `rs` the ascending stored ranges. The
+pool use of the streams is the number of chunks their rings hold; `ext` is what everything else holds (send
+buffers, datagram queues, the early-data buffer), charged to the same pool.
+-/
+
+namespace Vinc.TransportStreams
+
+/-- The constants of a table: `CH`, `RING`, `RR`, slots, peer-stream cap, pool chunks, initial and ceiling window,
+the cap of streams this side opens, the cells of the refused queue, and whether a deferred grant is retried after a
+release of pool chunks (the code does). -/
+structure P where
+  ch : Nat
+  ring : Nat
+  rr : Nat
+  n : Nat
+  maxrem : Nat
+  b : Nat
+  swc : Nat
+  mswc : Nat
+  pm : Nat
+  rf : Nat
+  maxoff : Nat
+  retry : Bool
+
+def P.half (p : P) : Nat := p.b * p.ch / 2 / p.ch * p.ch
+/-- The ceiling of a stream window: the configured one, `(C - 1)` chunks, and half the pool. -/
+def P.maxStream (p : P) : Nat := min p.mswc (min ((p.ring - 1) * p.ch) p.half)
+/-- The initial window. -/
+def P.sw (p : P) : Nat := min p.swc p.maxStream
+
+structure Slot where
+  id : Option Nat
+  open_ : Bool
+  held : List Nat
+  rs : List (Nat × Nat)
+  read : Nat
+  hi : Nat
+  contig : Nat
+  fin : Option Nat
+  limit : Nat
+  size : Nat
+  pend : Bool
+  defer : Bool
+  rst : Option Nat
+  obs : Bool
+  sdone : Bool
+  srst : Nat
+  deriving DecidableEq, Repr, Inhabited
+
+def Slot.new : Slot :=
+  { id := none, open_ := false, held := [], rs := [], read := 0, hi := 0, contig := 0, fin := none, limit := 0,
+    size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0 }
+
+structure Tab where
+  slots : List Slot
+  rn : Nat × Nat
+  lo : Nat × Nat
+  rl : Nat
+  ll : Nat
+  ref : List (Option (Nat × Bool))
+  ext : Nat
+  tgt : Nat
+  ms : Option Nat
+  mb : Nat
+  mr : Nat
+  deriving DecidableEq, Repr, Inhabited
+
+def Tab.init (p : P) : Tab :=
+  { slots := List.replicate p.n Slot.new, rn := (0, 0), lo := (0, 0), rl := 0, ll := 0,
+    ref := List.replicate p.rf none, ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0 }
+
+/-! ### Identifiers -/
+def isUni (id : Nat) : Bool := id / 2 % 2 == 1
+def isLocal (id : Nat) : Bool := id % 2 == 1
+def cls (id : Nat) : Nat := if isUni id then 1 else 0
+def idx (id : Nat) : Nat := id / 4
+def cget (c : Nat × Nat) (k : Nat) : Nat := if k == 0 then c.1 else c.2
+def cset (c : Nat × Nat) (k v : Nat) : Nat × Nat := if k == 0 then (v, c.2) else (c.1, v)
+
+/-! ### The range set (`ranges.rs`) -/
+def insertR (rr : Nat) (rs : List (Nat × Nat)) (s e : Nat) : Option (List (Nat × Nat)) :=
+  if s ≥ e then some rs
+  else
+    let fr := (rs.filter (fun iv => iv.2 < s)).length
+    let to := (rs.filter (fun iv => iv.1 ≤ e)).length
+    let merged := if fr < to then (min (rs.getD fr (0, 0)).1 s, max (rs.getD (to - 1) (0, 0)).2 e) else (s, e)
+    if rs.length - (to - fr) + 1 > rr then none else some (rs.take fr ++ [merged] ++ rs.drop to)
+
+def overlaps (rs : List (Nat × Nat)) (lo e : Nat) : Bool := rs.any (fun iv => iv.1 < e && iv.2 > lo)
+def first0 (rs : List (Nat × Nat)) : Nat :=
+  match rs with
+  | (0, e) :: _ => e
+  | _ => 0
+
+/-! ### The receive half -/
+/-- 0 open, 1 finished, 2 reset. -/
+def Slot.status (r : Slot) : Nat :=
+  if r.rst.isSome then 2 else if r.fin == some r.read then 1 else 0
+def Slot.readable (r : Slot) : Nat := if r.rst.isSome then 0 else r.contig - r.read
+def Slot.recvDone (r : Slot) : Bool := !r.open_ || (r.obs && r.status != 0)
+def Slot.sendDone (r : Slot) : Bool := r.sdone || r.srst == 3
+
+def Slot.reach (r : Slot) (l : Nat) : Nat := match r.fin with | none => l | some f => min f l
+
+/-- `pool_demand`: the pool bytes credit up to `l` may still claim. -/
+def poolDemand (p : P) (r : Slot) (l : Nat) : Nat :=
+  if !r.open_ || r.reach l ≤ r.read then 0
+  else ((r.reach l - 1) / p.ch - r.read / p.ch + 1 - r.held.length) * p.ch
+
+def Slot.unreceived (p : P) (r : Slot) : Nat := poolDemand p r r.limit
+
+/-- `due`: the limit the window is due to move to, once an eighth of it was freed. -/
+def Slot.due (p : P) (r : Slot) : Option Nat :=
+  if !r.open_ then none
+  else
+    let cap := match r.fin with | none => p.maxoff | some f => f
+    let cand := min (r.read + r.size) cap
+    if cand > r.limit && cand ≥ r.limit + r.size / 8 then some cand else none
+
+/-! ### The pool -/
+def heldTotal (T : Tab) : Nat := (T.slots.map (·.held.length)).sum
+def used (T : Tab) : Nat := heldTotal T + T.ext
+def availC (p : P) (T : Tab) : Nat := p.b - used T
+def avail (p : P) (T : Tab) : Nat := availC p T * p.ch
+def gu (p : P) (T : Tab) : Nat := (T.slots.map (·.unreceived p)).sum
+
+def setSlot (T : Tab) (i : Nat) (r : Slot) : Tab := { T with slots := T.slots.set i r }
+def findSlot (T : Tab) (id : Nat) : Option Nat := T.slots.findIdx? (·.id == some id)
+def firstFree (T : Tab) : Option Nat := T.slots.findIdx? (·.id == none)
+def Slot.hot (r : Slot) : Bool := (r.pend && r.open_) || r.srst == 1
+def anyDefer (T : Tab) : Bool := T.slots.any (·.defer)
+def refIdx (T : Tab) (id : Nat) : Option Nat := T.ref.findIdx? (fun c => c.map (·.1) == some id)
+
+/-! ### The window grant (`Streams::grant`) -/
+/-- The slot with its window size raised to the target. -/
+def Slot.grown (r : Slot) (tgt : Nat) : Slot := { r with size := max r.size tgt }
+
+/-- The window moved to `c`, the update queued. -/
+def Slot.raised (r : Slot) (c : Nat) : Slot := { r with limit := c, pend := true, defer := false }
+/-- The grant marked deferred, or not. -/
+def Slot.parked (r : Slot) (d : Bool) : Slot := { r with defer := d }
+
+/-- The new slot of one grant step, given the credit sum `g`, the bytes the pool has left `a` and the window target. -/
+def grantSlot (p : P) (tgt g a : Nat) (r : Slot) : Slot :=
+  match (r.grown tgt).due p with
+  | none => (r.grown tgt).parked false
+  | some c =>
+    if g - r.unreceived p + poolDemand p (r.grown tgt) c ≤ a
+    then (r.grown tgt).raised c
+    else (r.grown tgt).parked true
+
+def grantOne (p : P) (first : Nat) (T : Tab) (i : Nat) : Tab :=
+  let r := T.slots.getD i Slot.new
+  if !r.open_ || !(i == first || r.defer) then T else setSlot T i (grantSlot p T.tgt (gu p T) (avail p T) r)
+
+def grantRun (p : P) (T : Tab) (first : Nat) : Tab := (List.range p.n).foldl (grantOne p first) T
+def regrant (p : P) (T : Tab) : Tab := if p.retry && anyDefer T then grantRun p T p.n else T
+
+/-! ### Slots -/
+def freeSlot (T : Tab) (i : Nat) : Tab :=
+  let r := T.slots.getD i Slot.new
+  let T1 := setSlot T i Slot.new
+  match r.id with
+  | none => T1
+  | some id => if isLocal id then { T1 with ll := T1.ll - 1 } else { T1 with rl := T1.rl - 1 }
+
+def settle (p : P) (T : Tab) (i : Nat) : Tab :=
+  let r := T.slots.getD i Slot.new
+  regrant p (if r.recvDone && r.sendDone then freeSlot T i else T)
+
+def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
+  match firstFree T with
+  | none => T
+  | some i =>
+    let lcl := isLocal id
+    let recvOn := !isUni id || !lcl
+    let sendOn := !isUni id || lcl
+    let r := { Slot.new with id := some id, open_ := recvOn, limit := if recvOn then p.sw else 0,
+                             size := if recvOn then p.sw else 0, sdone := !sendOn }
+    let T1 := setSlot T i r
+    if lcl then { T1 with ll := T1.ll + 1 } else { T1 with rl := T1.rl + 1 }
+
+/-! ### Admission of peer streams -/
+def admits (p : P) (T : Tab) (c next count : Nat) : Bool :=
+  let free := (T.slots.filter (·.id == none)).length
+  let window := count * ((p.sw + p.ch - 1) / p.ch * p.ch)
+  let behind := T.ref.any (fun e => match e with
+    | some (rid, _) => cls rid == c && idx rid ≥ next && idx rid < next + count
+    | none => false)
+  !behind && T.rl + count ≤ p.maxrem && free ≥ count && gu p T + window ≤ avail p T
+
+/-- `Locate`: the table, the slot found (if any) and the error ("ok" when none). -/
+def locate (p : P) (T : Tab) (id : Nat) : Tab × Option Nat × String :=
+  let c := cls id
+  let ix := idx id
+  let next := cget T.rn c
+  if isLocal id then
+    if ix ≥ cget T.lo c then (T, none, "StreamState") else (T, findSlot T id, "ok")
+  else if ix < next then (T, findSlot T id, "ok")
+  else if (refIdx T id).isSome then (T, none, "Busy")
+  else if ix ≥ next + p.maxrem then (T, none, "StreamLimit")
+  else if !admits p T c next (ix - next + 1) then
+    match T.ref.findIdx? Option.isNone with
+    | none => (T, none, "Exhausted")
+    | some j => ({ T with ref := T.ref.set j (some (id, false)) }, none, "Busy")
+  else
+    let T2 := (List.range (ix - next + 1)).foldl (fun T k => allocSlot p T ((next + k) * 4 + id % 4)) T
+    let T3 := { T2 with rn := cset T2.rn c (ix + 1) }
+    (T3, findSlot T3 id, "ok")
+
+/-! ### on_data -/
+/-- `Recv::store`: the slot and the error ("ok" when none). -/
+def storeStep (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) : Slot × String :=
+  let e := off + len
+  let lo := max off r.read
+  let first := lo / p.ch
+  let last := (e - 1) / p.ch
+  let missing := ((List.range (last + 1 - first)).map (first + ·)).filter (fun k => !r.held.contains k)
+  if lo ≥ e then (r, "ok")
+  else if last - r.read / p.ch ≥ p.ring then (r, "FlowControl")
+  else if lo < r.hi && diff && overlaps r.rs lo e then (r, "Conflict")
+  else if missing.length > availC p T then (r, "Exhausted")
+  else match insertR p.rr r.rs lo e with
+    | none => (r, "Fragmented")
+    | some rs' =>
+      ({ r with held := r.held.filter (· < first) ++ (List.range (last + 1 - first)).map (first + ·) ++
+                        r.held.filter (· > last),
+                rs := rs', contig := first0 rs' }, "ok")
+
+def onData (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) : Slot × String :=
+  let e := off + len
+  let store := storeStep p T r off len diff
+  let done := { store.1 with hi := max store.1.hi e, fin := if fin then some e else store.1.fin }
+  if e > p.maxoff then (r, "FlowControl")
+  else if r.fin.any (fun f => e > f || (fin && e != f)) then (r, "FinalSize")
+  else if r.fin.isNone && fin && e < r.hi then (r, "FinalSize")
+  else if e > r.limit then (r, "FlowControl")
+  else if r.rst.isNone && store.2 != "ok" then (r, store.2)
+  else if r.rst.isNone then (done, "ok")
+  else ({ r with hi := max r.hi e, fin := if fin then some e else r.fin }, "ok")
+
+def frame (p : P) (T : Tab) (id off len : Nat) (fin diff : Bool) : Tab × String :=
+  let (T1, i, err) := locate p T id
+  match i with
+  | none => (T1, err)
+  | some i =>
+    if err != "ok" then (T1, err)
+    else
+      let (r, e2) := onData p T1 (T1.slots.getD i Slot.new) off len fin diff
+      (settle p (setSlot T1 i r) i, e2)
+
+/-! ### on_reset -/
+def onReset (p : P) (r : Slot) (code fs : Nat) : Slot × String :=
+  if fs > p.maxoff || r.fin.any (· != fs) || fs < r.hi then (r, "FinalSize")
+  else if fs > r.limit then (r, "FlowControl")
+  else if r.rst.isSome then (r, "ok")
+  else ({ r with hi := fs, fin := some fs, rst := some code, read := fs, contig := fs, held := [], rs := [] }, "ok")
+
+def reset (p : P) (T : Tab) (id code fs : Nat) : Tab × String :=
+  let (T1, i, err) := locate p T id
+  match i with
+  | none => (T1, err)
+  | some i =>
+    if err != "ok" then (T1, err)
+    else
+      let (r, e2) := onReset p (T1.slots.getD i Slot.new) code fs
+      (settle p (setSlot T1 i r) i, e2)
+
+/-! ### consume -/
+def meterStep (ms : Option Nat) (mb mr n now srtt : Nat) : Option Nat × Nat × Nat :=
+  let st := ms.getD now
+  let by_ := mb + n
+  let el := if now ≥ st then now - st else 0
+  if srtt > 0 && el ≥ srtt then (some now, 0, by_ * srtt / el) else (some st, by_, mr)
+
+def consume (p : P) (T : Tab) (id n now srtt : Nat) : Tab × String :=
+  match findSlot T id with
+  | none => (T, "UnknownStream")
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    if n > r.readable then (T, "InvalidConsume")
+    else
+      let nr := r.read + n
+      let cut := r.fin == some nr
+      let r1 := { r with read := nr,
+                         held := if cut then [] else r.held.filter (fun k => !(r.read / p.ch ≤ k && k < nr / p.ch)),
+                         rs := if cut then [] else r.rs }
+      let r2 := { r1 with obs := r1.obs || r1.status != 0 }
+      let (ms, mb, mr) := meterStep T.ms T.mb T.mr n now srtt
+      let T1 := { setSlot T i r2 with ms := ms, mb := mb, mr := mr, tgt := min (max (mr * 2) p.sw) p.maxStream }
+      (settle p (grantRun p T1 i) i, "ok")
+
+/-! ### Control frames -/
+/-- `pending_control`: the table, the kind ("none", "reset", "msd"), the stream and the limit. -/
+def pending (T : Tab) : Tab × String × Nat × Nat :=
+  match T.ref.findIdx? (fun e => match e with | some (_, sent) => !sent | none => false) with
+  | some j =>
+    let id := match T.ref.getD j none with | some (id, _) => id | none => 0
+    ({ T with ref := T.ref.set j (some (id, true)) }, "reset", id, 0)
+  | none =>
+    match T.slots.findIdx? Slot.hot with
+    | none => (T, "none", 0, 0)
+    | some i =>
+      let r := T.slots.getD i Slot.new
+      let id := r.id.getD 0
+      if r.srst == 1 then (setSlot T i { r with srst := 2 }, "reset", id, 0)
+      else (setSlot T i { r with pend := false }, "msd", id, r.limit)
+
+def ctlLostMsd (T : Tab) (id mx : Nat) : Tab :=
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    if mx ≥ r.limit then setSlot T i { r with pend := true } else T
+
+def ctlLostReset (T : Tab) (id : Nat) : Tab :=
+  match refIdx T id with
+  | some j => { T with ref := T.ref.set j (some (id, false)) }
+  | none =>
+    match findSlot T id with
+    | none => T
+    | some i =>
+      let r := T.slots.getD i Slot.new
+      if r.srst == 2 then setSlot T i { r with srst := 1 } else T
+
+def ctlAckedReset (p : P) (T : Tab) (id : Nat) : Tab :=
+  match refIdx T id with
+  | some j => { T with ref := T.ref.set j none }
+  | none =>
+    match findSlot T id with
+    | none => T
+    | some i =>
+      let r := T.slots.getD i Slot.new
+      settle p (setSlot T i { r with srst := if r.srst == 1 || r.srst == 2 then 3 else r.srst }) i
+
+/-! ### The send half, as far as the receive side sees it -/
+def openLocal (p : P) (T : Tab) : Tab :=
+  if T.ll ≥ p.pm || (firstFree T).isNone then T
+  else { allocSlot p T (T.lo.1 * 4 + 1) with lo := (T.lo.1 + 1, T.lo.2) }
+
+def Slot.sendOpen (r : Slot) : Bool := !(r.id.any (fun id => isUni id && !isLocal id))
+
+def appReset (p : P) (T : Tab) (id ext2 : Nat) : Tab :=
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    let T1 := if r.sendOpen && r.srst == 0 && !r.sdone then { setSlot T i { r with srst := 1 } with ext := ext2 } else T
+    settle p T1 i
+
+def finish (p : P) (T : Tab) (id ext2 : Nat) (done : Bool) : Tab :=
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    settle p { setSlot T i { r with sdone := r.sdone || (done && r.srst == 0) } with ext := ext2 } i
+
+def extTo (p : P) (T : Tab) (ext2 : Nat) : Tab :=
+  if ext2 > T.ext && ext2 - T.ext > availC p T then T
+  else if ext2 ≥ T.ext then { T with ext := ext2 }
+  else regrant p { T with ext := ext2 }
+
+def closeAll (p : P) (T : Tab) (ext2 : Nat) : Tab :=
+  { Tab.init p with ext := ext2, tgt := T.tgt, lo := T.lo, rn := T.rn, ms := T.ms, mb := T.mb, mr := T.mr }
+
+end Vinc.TransportStreams

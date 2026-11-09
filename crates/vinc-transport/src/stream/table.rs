@@ -64,6 +64,8 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     open: usize,
     buffered: u64,
     stats: StreamStats,
+    /// Some slot's grant was deferred at the last pass; a stale `true` costs one pass that clears it.
+    stalled: bool,
 }
 
 impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
@@ -90,6 +92,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             open: 0,
             buffered: 0,
             stats: StreamStats::default(),
+            stalled: false,
         };
         streams.set_peer_limits(&config.peer);
         streams
@@ -126,6 +129,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.open = 0;
         self.buffered = 0;
         self.stats = StreamStats::default();
+        self.stalled = false;
         self.set_peer_limits(&config.peer);
     }
 
@@ -156,6 +160,36 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.slots
             .iter()
             .fold(0, |sum, s| sum.saturating_add(s.recv.unreceived()))
+    }
+
+    /// The state the receive and credit path works on, for trace validation.
+    #[cfg(feature = "trace")]
+    pub fn trace_view(&self, pool: &BufferPool<'_>) -> super::trace::TableView {
+        let slots: alloc::vec::Vec<_> = self
+            .slots
+            .iter()
+            .zip(&self.ids)
+            .map(|(s, &id)| {
+                let mut v = s.recv.trace_view();
+                let (done, reset) = s.send.trace_state();
+                v.id = id;
+                v.send_done = done;
+                v.send_reset = reset;
+                v
+            })
+            .collect();
+        let held: u64 = slots.iter().map(|v| v.held.len() as u64).sum();
+        super::trace::TableView {
+            slots,
+            remote_next: self.remote_next,
+            local_opened: self.local_opened,
+            remote_live: self.remote_live,
+            local_live: self.local_live,
+            refused: self.refused.iter().map(|r| r.map(|r| (r.id, r.sent))).collect(),
+            ext: (pool.used_chunks() as u64).saturating_sub(held),
+            target: self.target,
+            meter: self.meter.view(),
+        }
     }
 
     /// The bytes written and not yet acknowledged, over all buffered streams.
@@ -215,6 +249,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let done = self.slots.get(i).is_some_and(|s| s.recv.is_done() && s.send.is_done());
         if !done {
             self.refresh(i);
+            self.regrant(pool);
             return;
         }
         let id = self.ids.get(i).copied().unwrap_or(NONE);
@@ -238,6 +273,19 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 &mut self.remote_live
             };
             *live = live.saturating_sub(1);
+        }
+        self.regrant(pool);
+    }
+
+    /// Try the window grants that were deferred for want of pool room again. Every release of pool chunks and every
+    /// change of the credit ledger calls it (the end of `settle`, and the connection before it writes control
+    /// frames, which covers chunks the datagram queues and the early-data buffer gave back), so a grant is never
+    /// left waiting for the application to read something: with nothing readable it never would.
+    // vertexia: one pass of the table per call while a grant is deferred; gate on the pool's free bytes if a long
+    // shortage with many streams shows up in a profile.
+    pub fn regrant(&mut self, pool: &BufferPool<'_>) {
+        if self.stalled {
+            self.grant(pool, N);
         }
     }
 
@@ -499,6 +547,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             }
             self.refresh(i);
         }
+        self.stalled = self.slots.iter().any(|s| s.recv.win.deferred);
     }
 
     /// Whether the bytes `offset..offset + len` of a stream are acknowledged (an empty range asks about the end
@@ -791,5 +840,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.buffered = 0;
         self.local_live = 0;
         self.remote_live = 0;
+        self.stalled = false;
     }
 }

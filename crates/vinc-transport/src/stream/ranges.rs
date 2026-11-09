@@ -29,6 +29,12 @@ impl<const N: usize> RangeSet<N> {
         self.items.get(..self.len).unwrap_or(&[])
     }
 
+    /// The stored intervals, ascending.
+    #[cfg(feature = "trace")]
+    pub(super) fn to_vec(&self) -> alloc::vec::Vec<Interval> {
+        self.live().to_vec()
+    }
+
     pub(super) const fn is_empty(&self) -> bool {
         self.len == 0
     }

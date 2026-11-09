@@ -43,6 +43,12 @@ impl Meter {
         rate: 0,
     };
 
+    /// The epoch start, the bytes in the epoch and the last rate.
+    #[cfg(feature = "trace")]
+    pub(super) const fn view(&self) -> (Option<u64>, u64, u64) {
+        (self.start, self.bytes, self.rate)
+    }
+
     /// `n` more bytes were consumed at `now`; returns the latest completed per-round-trip rate (zero before the first
     /// epoch closes). `now` and `srtt` share one unit; a zero `srtt` never closes an epoch.
     pub(super) fn consumed(&mut self, n: u64, now: u64, srtt: u64) -> u64 {

@@ -251,6 +251,12 @@ impl<const C: usize> Ring<C> {
         (first..=last).filter(|&k| !self.has(k)).count()
     }
 
+    /// The chunk numbers held, given the lowest number that can be live (the live numbers span fewer than `C`).
+    #[cfg(feature = "trace")]
+    pub(super) fn numbers(&self, base: u64) -> alloc::vec::Vec<u64> {
+        (base..base + C as u64).filter(|&k| self.has(k)).collect()
+    }
+
     /// Release chunk number `k`, if held.
     pub(super) fn release(&mut self, pool: &mut BufferPool<'_>, k: u64) {
         if let Some(chunk) = self.slots.get_mut(ring_index(k, C)).and_then(Option::take) {

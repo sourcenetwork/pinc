@@ -663,6 +663,7 @@ conn_impl! {
             }
         }
         self.fill_extensions(payload, pos, out);
+        self.streams.regrant(&self.pool);
         while out.refs.len() < MAX_FRAME_REFS && payload.len() - *pos >= MIN_ROOM {
             let Some(cf) = self.streams.pending_control() else { break };
             let Some(key) = self.ctl.track(cf) else {

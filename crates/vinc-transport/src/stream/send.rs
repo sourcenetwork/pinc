@@ -102,6 +102,20 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         self.ring.release_all(pool);
     }
 
+    /// Whether the send half is closed or its end and every byte are acknowledged, and the state of its reset
+    /// (0 none, 1 pending, 2 sent, 3 acknowledged).
+    #[cfg(feature = "trace")]
+    pub(super) fn trace_state(&self) -> (bool, u8) {
+        let fin_done = !self.open || (self.fin == Fin::Acked && self.final_size == Some(self.acked_prefix));
+        let reset = match self.reset {
+            Reset::None => 0,
+            Reset::Pending { .. } => 1,
+            Reset::Sent { .. } => 2,
+            Reset::Acked => 3,
+        };
+        (fin_done, reset)
+    }
+
     /// Nothing more will be sent or retransmitted.
     pub(super) fn is_done(&self) -> bool {
         !self.open

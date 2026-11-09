@@ -8,6 +8,7 @@ import Vinc.SecurityTrace
 import Vinc.HandshakeTrace
 import Vinc.TraceKeyRoll
 import Vinc.TraceKeyLayer
+import Vinc.TraceStreams
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -150,6 +151,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut dsc : TraceDtnScenario.W := {}
   let mut mis : TraceMembershipInc.W := {}
   let mut mems : TraceMembership.W := {}
+  let mut sts : TraceStreams.St := {}
   let mut lineNo := 0
   for line in text.splitOn "\n" do
     lineNo := lineNo + 1
@@ -353,6 +355,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if t == "st" then
+          -- Stream table events (`st`, written by `trace_streams`): the receive and credit path of the stream layer.
+          match TraceStreams.replayEvent j sts with
+          | .ok s' =>
+            sts := s'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

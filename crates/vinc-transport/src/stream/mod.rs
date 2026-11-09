@@ -26,6 +26,8 @@ mod table;
 pub mod datagram;
 pub mod pool;
 mod ranges;
+#[cfg(feature = "trace")]
+pub mod trace;
 
 use core::fmt;
 

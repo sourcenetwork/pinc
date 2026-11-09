@@ -54,6 +54,29 @@ impl<const C: usize> Recv<C> {
         self.win = Window::new(size);
     }
 
+    /// The slot view of the receive half; the table fills in the id and the send half.
+    #[cfg(feature = "trace")]
+    pub(super) fn trace_view(&self) -> super::trace::SlotView {
+        super::trace::SlotView {
+            id: u64::MAX,
+            open: self.open,
+            held: self.ring.numbers(self.read_off / CHUNK_SIZE as u64),
+            ranges: self.ranges.to_vec(),
+            read: self.read_off,
+            highest: self.highest,
+            contig: self.contig,
+            fin: self.final_size,
+            limit: self.win.limit,
+            size: self.win.size,
+            pending: self.win.pending,
+            deferred: self.win.deferred,
+            reset: self.reset,
+            observed: self.observed,
+            send_done: false,
+            send_reset: 0,
+        }
+    }
+
     pub(super) fn status(&self) -> RecvStatus {
         match (self.reset, self.final_size) {
             (Some(code), _) => RecvStatus::Reset(code),
