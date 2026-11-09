@@ -607,6 +607,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
 
 [[package]]
+name = "futures-io"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
+
+[[package]]
 name = "futures-task"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -761,6 +767,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kovan"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daa9f1b7bd4e214a839ec477347103f4265810e25cab696762ac65bd8701963b"
+dependencies = [
+ "once_cell",
+ "portable-atomic",
+]
+
+[[package]]
+name = "kovan-channel"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9132bf6a8ccf1d07adaf2e53383167b26938c6bee94aefef9f386a804b5b9e9d"
+dependencies = [
+ "crossbeam-utils",
+ "kovan",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -909,6 +935,12 @@ dependencies = [
  "universal-hash",
  "zeroize",
 ]
+
+[[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "primefield"
@@ -1370,11 +1402,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc"
+version = "0.1.0"
+dependencies = [
+ "futures-io",
+ "vinc-crypto",
+ "vinc-driver",
+ "vinc-keystore",
+]
+
+[[package]]
 name = "vinc-benches"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
+ "vinc",
  "vinc-broadcast",
  "vinc-connect",
  "vinc-core",
@@ -1452,6 +1495,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinc-driver"
+version = "0.1.0"
+dependencies = [
+ "kovan-channel",
+ "vinc-core",
+ "vinc-crypto",
+ "vinc-keystore",
+ "vinc-security",
+ "vinc-transport",
+]
+
+[[package]]
 name = "vinc-dtn"
 version = "0.1.0"
 dependencies = [
@@ -1513,14 +1568,17 @@ name = "vinc-tests"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "futures-io",
  "ml-dsa",
  "ml-kem",
  "proptest",
+ "vinc",
  "vinc-broadcast",
  "vinc-connect",
  "vinc-core",
  "vinc-crypto",
  "vinc-dag",
+ "vinc-driver",
  "vinc-dtn",
  "vinc-keystore",
  "vinc-membership",

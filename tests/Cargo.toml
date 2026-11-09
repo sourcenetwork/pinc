@@ -30,6 +30,9 @@ vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
+vinc-driver = { workspace = true }
+vinc = { workspace = true }
+futures-io = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -425,6 +428,30 @@ path = "scenario_leak.rs"
 [[test]]
 name = "scenario_crypto"
 path = "scenario_crypto.rs"
+
+[[test]]
+name = "vinc_blocking"
+path = "vinc_blocking.rs"
+
+[[test]]
+name = "vinc_async"
+path = "vinc_async.rs"
+
+[[test]]
+name = "vinc_cancel"
+path = "vinc_cancel.rs"
+
+[[test]]
+name = "driver_loop"
+path = "driver_loop.rs"
+
+[[test]]
+name = "vinc_examples"
+path = "vinc_examples.rs"
+
+[[test]]
+name = "vinc_api"
+path = "vinc_api.rs"
 
 [[test]]
 name = "transport_wide"

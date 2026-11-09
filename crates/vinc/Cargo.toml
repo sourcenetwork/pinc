@@ -1,0 +1,22 @@
+[package]
+name = "vinc"
+description = "VINC for applications: one entry point with a builder, connections, streams that implement futures-io, a blocking mirror, access hooks and a typed protocol registration"
+keywords = ["p2p", "transport", "facade"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+vinc-driver = { workspace = true }
+vinc-crypto = { workspace = true }
+vinc-keystore = { workspace = true }
+futures-io = { workspace = true }
+
+[features]
+# Lets a TPM key store (`vinc-keystore`) hold the identity: pass it to `Builder::key_store`.
+hwenc = ["vinc-keystore/hwenc"]
+
+[lints]
+workspace = true

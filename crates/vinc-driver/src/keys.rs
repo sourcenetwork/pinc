@@ -1,0 +1,161 @@
+//! The node's keys: an identity in a key store that anyone may ask to sign, and the prekeys that stay in software.
+//!
+//! The identity key lives in a [`KeyStore`] behind a lock, because signing takes `&mut` and both the engine (the
+//! handshake) and the application (signing its own messages) sign. The ML-KEM prekeys always live in the engine's own
+//! [`SoftwareStore`], as a TPM cannot hold them; the two newest generations are kept so a handshake that began under
+//! the old prekey still completes.
+//!
+//! Invariants: no private key leaves a store; a rotated-out prekey is removed, which zeroizes it; errors name the
+//! failed operation and never a key.
+
+use std::sync::{Arc, Mutex, PoisonError};
+
+use vinc_crypto::{IdentityAlg, Keypair, NodeId};
+use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
+use vinc_security::{KeyHandle as WireHandle, LocalIdentity, PrekeyInfo};
+
+use crate::error::{Error, ErrorKind, Result};
+
+/// The handle the handshake uses for the identity key.
+const IDENTITY: WireHandle = WireHandle(0);
+/// How long a prekey serves new dials: 10 minutes.
+pub(crate) const PREKEY_LIFE: u64 = 600_000_000_000;
+
+/// The node's identity: a key in a store, and the public facts about it.
+#[derive(Clone)]
+pub struct Identity {
+    // vertexia: one lock for the store, as a store signs with `&mut`; a per-key signer thread if signing contends.
+    store: Arc<Mutex<dyn KeyStore>>,
+    handle: KeyHandle,
+    node: NodeId,
+    public: Arc<[u8]>,
+}
+
+impl core::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Identity")
+            .field("alg", &self.node.alg)
+            .finish_non_exhaustive()
+    }
+}
+
+fn key_error(_: vinc_keystore::KeyStoreError) -> Error {
+    Error::new(ErrorKind::Config, "the key store refused the request")
+}
+
+impl Identity {
+    /// The identity of the Ed25519 key made from `seed`, held in a new in-memory store.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the store cannot start or the seed is refused.
+    pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
+        let mut store = SoftwareStore::new().map_err(key_error)?;
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, seed)
+            .map_err(|_| Error::config("the identity seed is not valid"))?;
+        let handle = store.insert(kp);
+        Self::from_store(store, handle)
+    }
+
+    /// A new Ed25519 identity from operating system randomness, held in a new in-memory store.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the operating system has no randomness or the store cannot start.
+    pub fn generate() -> Result<Self> {
+        let mut store = SoftwareStore::new().map_err(key_error)?;
+        let handle = store.generate(IdentityAlg::Ed25519).map_err(key_error)?;
+        Self::from_store(store, handle)
+    }
+
+    /// The identity of the key `handle` in `store`.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the store does not hold an identity key under `handle`.
+    pub fn from_store(store: impl KeyStore + 'static, handle: KeyHandle) -> Result<Self> {
+        let (alg, public) = store.public(&handle).map_err(key_error)?;
+        let node = NodeId::from_public(alg, &public).map_err(|_| Error::config("the identity key is not valid"))?;
+        Ok(Self {
+            store: Arc::new(Mutex::new(store)),
+            handle,
+            node,
+            public: public.into(),
+        })
+    }
+
+    /// The node id.
+    pub const fn node_id(&self) -> NodeId {
+        self.node
+    }
+
+    /// The public key bytes.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public
+    }
+
+    /// Sign `msg` with the identity key.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the store fails.
+    pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>> {
+        let mut s = self.store.lock().unwrap_or_else(PoisonError::into_inner);
+        s.sign(&self.handle, msg)
+            .map(vinc_keystore::Signature::into_bytes)
+            .map_err(key_error)
+    }
+
+    /// Fill `out` with random bytes from the store.
+    pub(crate) fn random(&self, out: &mut [u8]) -> Result<()> {
+        self.store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .random(out)
+            .map_err(key_error)
+    }
+
+    pub(crate) fn local(&self) -> Result<LocalIdentity> {
+        LocalIdentity::new(self.node.alg, &self.public, IDENTITY)
+            .map_err(|_| Error::config("the identity key is not valid"))
+    }
+}
+
+/// The engine's prekeys: the newest and the one before.
+pub(crate) struct Prekeys {
+    store: SoftwareStore,
+    held: Vec<(u64, KeyHandle)>,
+    next: u64,
+    pub(crate) rotate_at: u64,
+}
+
+impl Prekeys {
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self {
+            store: SoftwareStore::new().map_err(key_error)?,
+            held: Vec::new(),
+            next: 1,
+            rotate_at: 0,
+        })
+    }
+
+    /// A new prekey to set on the endpoint; drops all but the previous one.
+    pub(crate) fn rotate(&mut self, now: u64) -> Result<PrekeyInfo> {
+        let (h, ek) = self.store.generate_kem().map_err(key_error)?;
+        let gen_id = self.next;
+        self.next += 1;
+        self.held.push((gen_id, h));
+        while self.held.len() > 2 {
+            let (_, old) = self.held.remove(0);
+            self.store.remove(&old);
+        }
+        self.rotate_at = now.saturating_add(PREKEY_LIFE);
+        Ok(PrekeyInfo::new(ek, WireHandle(gen_id)))
+    }
+
+    pub(crate) fn decapsulate(&mut self, key: WireHandle, ct: &[u8]) -> Option<vinc_crypto::Secret<32>> {
+        let (_, h) = self.held.iter().find(|(g, _)| *g == key.0)?;
+        self.store.decapsulate(h, ct).ok()
+    }
+}
+
+/// Whether a wire handle names the identity key.
+pub(crate) const fn is_identity(key: WireHandle) -> bool {
+    key.0 == IDENTITY.0
+}

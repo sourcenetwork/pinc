@@ -20,6 +20,7 @@ vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc"] }
 vinc-connect = { workspace = true }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
+vinc = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -79,6 +80,10 @@ harness = false
 
 [[bench]]
 name = "broadcast"
+harness = false
+
+[[bench]]
+name = "vinc_loopback"
 harness = false
 
 [lints]
