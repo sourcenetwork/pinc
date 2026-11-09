@@ -573,3 +573,39 @@ required-features = ["hwenc"]
 [[test]]
 name = "connect_client_noalloc"
 path = "connect_client_noalloc.rs"
+
+[[test]]
+name = "trace_dtn_codec"
+path = "trace_dtn_codec.rs"
+
+[[test]]
+name = "trace_dtn_custody"
+path = "trace_dtn_custody.rs"
+
+[[test]]
+name = "trace_dtn_forward"
+path = "trace_dtn_forward.rs"
+
+[[test]]
+name = "trace_dtn_layout"
+path = "trace_dtn_layout.rs"
+
+[[test]]
+name = "trace_dtn_reception"
+path = "trace_dtn_reception.rs"
+
+[[test]]
+name = "trace_dtn_rs"
+path = "trace_dtn_rs.rs"
+
+[[test]]
+name = "trace_dtn_scenario"
+path = "trace_dtn_scenario.rs"
+
+[[test]]
+name = "trace_dtn_seal"
+path = "trace_dtn_seal.rs"
+
+[[test]]
+name = "trace_dtn_store"
+path = "trace_dtn_store.rs"
