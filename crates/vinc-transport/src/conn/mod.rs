@@ -78,6 +78,8 @@ use vinc_security::{
 };
 
 pub use api::ExtensionError;
+#[cfg(feature = "trace")]
+pub use cid::trace::{CidTable, CidView};
 pub use config::{
     ClientParams, Config, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
 };

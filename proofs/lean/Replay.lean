@@ -11,6 +11,7 @@ import Vinc.TraceKeyLayer
 import Vinc.TraceStreams
 import Vinc.TraceRecovery
 import Vinc.TraceRx
+import Vinc.TraceCid
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -166,6 +167,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut sts : TraceStreams.St := {}
   let mut rcs : TraceRecovery.St' := {}
   let mut rxw : TraceRx.W := {}
+  let mut cidw : TransportCid.C := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
   let mut ksw : TraceKeystore.W := {}
@@ -433,6 +435,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceValuesPlan.replayEvent j vps with
           | .ok v' =>
             vps := v'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceCid.isTag t then
+          -- Connection id events (`txcid`, written by `trace_cid`): issuance, lookahead and retirement of derived ids.
+          match TraceCid.replayEvent j cidw with
+          | .ok w' =>
+            cidw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

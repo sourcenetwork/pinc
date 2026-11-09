@@ -863,3 +863,11 @@ path = "layers_dtn_restart.rs"
 [[test]]
 name = "trace_rx"
 path = "trace_rx.rs"
+
+[[test]]
+name = "transport_cid"
+path = "transport_cid.rs"
+
+[[test]]
+name = "trace_cid"
+path = "trace_cid.rs"

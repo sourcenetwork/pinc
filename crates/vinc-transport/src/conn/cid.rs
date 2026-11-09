@@ -9,7 +9,9 @@
 //! of the previous path was lost.
 //!
 //! Invariants: the table holds at most [`LOCAL_SLOTS`] derived ids; when it is full the least recently used one that
-//! is not a lookahead entry makes room; a received id is only a candidate (another session of the same endpoint may
+//! is not a lookahead entry makes room (an entry used by a packet, or stale: below the highest index seen and never
+//! used, as the peer's path that was to use it never delivered); the lookahead entries are never evicted, so the
+//! indices after the highest one seen are always held once the secret is installed; a received id is only a candidate (another session of the same endpoint may
 //! derive the same four bytes): the packet's authentication decides which session owns it.
 
 use vinc_crypto::extract;
@@ -106,7 +108,7 @@ impl Cids {
                     .entries
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, e)| e.filter(|e| e.seen).map(|e| (e.used, i)))
+                    .filter_map(|(i, e)| e.filter(|e| e.seen || e.index <= self.highest).map(|e| (e.used, i)))
                     .min()
                 {
                     Some((_, i)) => i,
@@ -169,5 +171,116 @@ impl Cids {
         };
         self.next_send += 1;
         Some((index, cid))
+    }
+}
+
+/// Test-only drivers of the connection id tables, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+pub(super) mod trace {
+    use super::{Cids, ConnId, LOCAL_SLOTS, derive};
+
+    /// The state of a table: per slot the derived index, the tick of its last use and whether a packet used it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CidView {
+        /// The slots.
+        pub entries: [Option<(u64, u64, bool)>; LOCAL_SLOTS],
+        /// The highest index seen on an authenticated packet.
+        pub highest: u64,
+        /// The use counter.
+        pub tick: u64,
+        /// The next index the sender takes.
+        pub next_send: u64,
+        /// Whether the session secret is installed.
+        pub secret: bool,
+        /// Whether the peer's first id is known.
+        pub first_remote: bool,
+        /// The epoch number.
+        pub epoch: u64,
+    }
+
+    /// A connection id table driven by index: the id of index `i` is the one the code derives for it.
+    #[derive(Debug)]
+    pub struct CidTable {
+        cids: Cids,
+        secret: Option<[u8; 32]>,
+        client: bool,
+    }
+
+    impl CidTable {
+        /// A table for a client or a server whose first id is `first_local`.
+        pub fn new(client: bool, first_local: &[u8]) -> Option<Self> {
+            Some(Self {
+                cids: Cids::new(client, ConnId::new(first_local)?),
+                secret: None,
+                client,
+            })
+        }
+
+        /// The peer's first id is known.
+        pub fn set_first_remote(&mut self, first_remote: &[u8]) {
+            if let Some(id) = ConnId::new(first_remote) {
+                self.cids.set_first_remote(id);
+            }
+        }
+
+        /// Install the session secret.
+        pub fn install(&mut self, secret: &[u8; 32]) {
+            self.secret = Some(*secret);
+            self.cids.install(secret);
+        }
+
+        fn id_of(&self, index: u64) -> Option<ConnId> {
+            if index == 0 {
+                return Some(self.cids.first_local());
+            }
+            derive(
+                &self.secret?,
+                self.client,
+                index,
+                self.cids.first_local().as_bytes().len(),
+            )
+        }
+
+        /// A packet addressed to the id of `index` authenticated.
+        pub fn on_authenticated(&mut self, index: u64) {
+            // an index the table cannot derive (no secret yet) is an id it does not hold
+            let id = self.id_of(index).unwrap_or_default();
+            self.cids.on_authenticated(&id);
+        }
+
+        /// Whether the id of `index` is one this side accepts.
+        pub fn is_local(&self, index: u64) -> bool {
+            self.id_of(index).is_some_and(|id| self.cids.is_local(&id))
+        }
+
+        /// The ids this side accepts now: the first and every derived one held.
+        pub fn local_count(&self) -> usize {
+            self.cids.local().count()
+        }
+
+        /// The id the sender takes for a path of its own: its index and whether the id is the one derived for that index
+        /// (index 0 is the peer's first id).
+        pub fn claim_remote(&mut self) -> Option<(u64, bool)> {
+            let (index, id) = self.cids.claim_remote()?;
+            let derived = index == 0
+                || self
+                    .secret
+                    .and_then(|s| derive(&s, !self.client, index, id.as_bytes().len()))
+                    .is_some_and(|want| want == id);
+            Some((index, derived))
+        }
+
+        /// The state of the table.
+        pub fn view(&self) -> CidView {
+            CidView {
+                entries: self.cids.entries.map(|e| e.map(|e| (e.index, e.used, e.seen))),
+                highest: self.cids.highest,
+                tick: self.cids.tick,
+                next_send: self.cids.next_send,
+                secret: self.cids.secret.is_some(),
+                first_remote: self.cids.first_remote.is_some(),
+                epoch: self.cids.epoch(),
+            }
+        }
     }
 }
