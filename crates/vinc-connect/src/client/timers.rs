@@ -181,9 +181,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                     r.link.want_dial(now, &mut self.shared, &ctx)
                 }
             });
-            match act {
-                Some(a) => self.act_pub(now, i, a),
-                None => {}
+            if let Some(a) = act {
+                self.act_pub(now, i, a);
             }
         }
     }

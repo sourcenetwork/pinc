@@ -1,5 +1,8 @@
 //! First-flight rules: B8 (direct first) and B9 (THIN_HS, RLY_ONCE, THIN_HS0).
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,

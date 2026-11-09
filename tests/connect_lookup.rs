@@ -1,5 +1,8 @@
 //! The lookup client: query timing, CARRIER_DNS, DIAL_PRUNE and the verification of a returned record.
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,

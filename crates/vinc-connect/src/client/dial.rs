@@ -30,6 +30,8 @@ pub const HUB_FIRST_ADDRS: usize = 1;
 pub const TG_SLOW: u64 = 250_000_000;
 /// The longest a relayed flight is not queued again.
 pub const RLY_ONCE: u64 = 30_000_000_000;
+/// THIN_HS0: a hub-session Initial resent within this long of the dial goes by relay paths only.
+pub const THIN_HS0_WAIT: u64 = 4_000_000_000;
 /// The floor of that wait.
 pub const RLY_ONCE_MIN: u64 = 4_000_000_000;
 

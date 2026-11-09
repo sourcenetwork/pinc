@@ -1,6 +1,9 @@
 //! The client carrier state machine at its boundary numbers: retry, watchdog, keepalive, check, lease, stale send
 //! and the restart defer.
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,

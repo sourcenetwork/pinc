@@ -3,11 +3,11 @@
 //! [`Connectivity`] is SANS-IO. The host feeds it time, UDP datagrams, stream events and stream bytes, and key
 //! answers; it hands back UDP datagrams, stream bytes, stream requests, packets for the endpoint and notices. The
 //! parts that need the `vinc-core` endpoint (dialing, first flights, hole punching, the hub tunnel) are in
-//! [`super::drive`]; this file is everything that does not.
+//! the drive module; this file is everything that does not.
 //!
 //! Relay paths. A packet to or from a peer through a relay has no UDP address; the endpoint names the path with a
 //! synthetic address ([`vinc_core::relay_addr`]), one per (relay, peer) pair. The host sends what the endpoint
-//! transmits to such an address with [`Connectivity::send_relayed`], and gives the endpoint what
+//! transmits to such an address with `Connectivity::route`, and gives the endpoint what
 //! [`Connectivity::poll_inbound`] yields.
 //!
 //! Carriers. For each relay a [`Link`] keeps the timing and a [`ProtectedCarrier`] the secured stream. The fallback
@@ -22,20 +22,19 @@
 use core::net::SocketAddr;
 
 use vinc_core::{SessionId, relay_addr, relay_parts};
-use vinc_crypto::{Keypair, NodeId, Provider};
-use vinc_security::{ConnId, CreditRecord, Env, InitiatorParams, KeyRequest, KeyResponse, LocalIdentity, PrekeyInfo};
+use vinc_crypto::{NodeId, Provider};
+use vinc_security::{Env, LocalIdentity, PrekeyInfo};
 
-use super::link::{Act, Ctx, Link, Shared, State};
+use super::link::{Link, Shared, State};
 use super::lookup::{Ask, Found, LookupError, Lookups};
-use super::netcheck::{self, HomeStep, Netcheck, Observed};
-use super::tunnel::{Splices, Via};
+use super::netcheck::{self, Netcheck, Observed};
+use super::tunnel::Splices;
 use crate::carrier::frame::{DnsAnswer, MAX_PACKET_LEN};
-use crate::carrier::session::{ALPN, CarrierError, Poll, ProtectedCarrier};
+use crate::carrier::session::ProtectedCarrier;
 use crate::carrier::{AliasTable, Frame};
 use crate::local::Duty;
-use crate::record::{self, MAX_ADDRS, Reach, RecordFields};
+use crate::record::{MAX_ADDRS, Reach};
 use crate::relay::datagram::Datagram;
-use crate::relay::{rule, sleep};
 
 /// Frames kept for a carrier that is not open.
 pub const QUEUED: usize = 8;
@@ -143,7 +142,6 @@ pub enum Notice {
 #[derive(Clone, Copy)]
 pub(super) struct Queued {
     pub(super) dst: NodeId,
-    pub(super) flag: u8,
     pub(super) len: usize,
     pub(super) data: [u8; MAX_PACKET_LEN],
 }
@@ -398,11 +396,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     pub fn candidates(&self, out: &mut [SocketAddr; MAX_ADDRS]) -> usize {
         let mut n = self.net.reflexive_into(out);
         for a in self.local.iter().flatten() {
-            if n < MAX_ADDRS && !out.get(..n).unwrap_or_default().contains(a) {
-                if let Some(d) = out.get_mut(n) {
-                    *d = *a;
-                    n += 1;
-                }
+            if n < MAX_ADDRS
+                && !out.get(..n).unwrap_or_default().contains(a)
+                && let Some(d) = out.get_mut(n)
+            {
+                *d = *a;
+                n += 1;
             }
         }
         n

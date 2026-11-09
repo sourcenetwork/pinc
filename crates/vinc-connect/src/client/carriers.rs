@@ -1,18 +1,13 @@
 //! The stream side of [`Connectivity`]: carriers opening, closing and moving frames, and the timers that drive them.
 
-use vinc_core::relay_parts;
-use vinc_crypto::{Keypair, NodeId, Provider};
+use vinc_crypto::{NodeId, Provider};
 use vinc_security::{ConnId, CreditRecord, Env, InitiatorParams, KeyRequest, KeyResponse};
 
-use super::conn::{Connectivity, IO_QUEUE, Io, Kind, Notice, Queued, pop, push};
+use super::conn::{Connectivity, Io, Kind, Notice, Queued, pop, push};
 use super::link::{Act, Ctx, State};
-use super::netcheck::HomeStep;
 use crate::carrier::Frame;
 use crate::carrier::frame::{DnsAnswer, MAX_PACKET_LEN};
 use crate::carrier::session::{ALPN, CarrierError, Poll, ProtectedCarrier};
-use crate::record::{self, MAX_ADDRS, RecordFields};
-use crate::relay::datagram::Datagram;
-use crate::relay::{rule, sleep};
 
 /// What one polled frame asks of the connectivity layer, copied out so the carrier borrow ends.
 enum Got {
@@ -201,7 +196,6 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let Some(r) = self.rly.get_mut(i) else { return };
         let mut item = Queued {
             dst: *dst,
-            flag: 0,
             len: packet.len(),
             data: [0; MAX_PACKET_LEN],
         };
@@ -445,7 +439,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                     }
                 }
                 g @ (Got::Recv(..) | Got::Pong | Got::Ping | Got::Dns(..)) => {
-                    self.apply_got(now, relay, g, &scratch, &rec)
+                    self.apply_got(now, relay, g, &scratch, &rec);
                 }
             }
         }

@@ -19,7 +19,7 @@ use vinc_crypto::{Keypair, NodeId, Provider};
 use vinc_security::Env;
 use vinc_transport::stream::StreamSource;
 
-use super::conn::{Connectivity, LOCAL_PEERS, Notice, SESSIONS};
+use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
 use super::dial::{Cand, HUB_FIRST_ADDRS, HUB_RELAY_DELAY, RelayView, Try, direct_first, select};
 use super::punch::{self, Puncher, Step, View};
 use super::tunnel::{self, HubSession, Rides, ThinSplice, Via};
@@ -33,8 +33,8 @@ use crate::relay::datagram::Datagram;
 pub(super) struct Sess {
     id: SessionId,
     node: NodeId,
-    dialer: bool,
     hub: Option<usize>,
+    dialed: u64,
     punch: Puncher,
     handshaking: bool,
     tries: u32,
@@ -79,8 +79,6 @@ pub trait Port {
 }
 
 impl<
-    's,
-    'a,
     P,
     S,
     const N: usize,
@@ -92,7 +90,7 @@ impl<
     const PK: usize,
     const TK: usize,
     const CT: usize,
-> Port for Endpoint<'s, 'a, P, S, N, C, F, NP, K, D, PK, TK, CT>
+> Port for Endpoint<'_, '_, P, S, N, C, F, NP, K, D, PK, TK, CT>
 where
     P: Provider,
     S: StreamSource,
@@ -135,13 +133,12 @@ drive_impl! {
     /// The candidate paths for a dial to `node`: its known UDP addresses, then the relay path.
     fn candidates_for(&mut self, node: &NodeId, hints: &[SocketAddr], out: &mut [Cand; 16]) -> usize {
         let mut n = 0;
-        let mut add = |c: Cand, out: &mut [Cand; 16], n: &mut usize| {
-            if *n < out.len() && !out.get(..*n).unwrap_or_default().contains(&c) {
-                if let Some(s) = out.get_mut(*n) {
+        let add = |c: Cand, out: &mut [Cand; 16], n: &mut usize| {
+            if *n < out.len() && !out.get(..*n).unwrap_or_default().contains(&c)
+                && let Some(s) = out.get_mut(*n) {
                     *s = c;
                     *n += 1;
                 }
-            }
         };
         for a in hints {
             add(Cand::Udp(*a), out, &mut n);
@@ -244,8 +241,8 @@ drive_impl! {
         let entry = Sess {
             id,
             node,
-            dialer: true,
             hub,
+            dialed: now,
             punch: Puncher::off(),
             handshaking: true,
             tries: 1,
@@ -280,8 +277,8 @@ drive_impl! {
                     *slot = Some(Sess {
                         id: session,
                         node,
-                        dialer,
                         hub,
+                        dialed: now,
                         punch: Puncher::off(),
                         handshaking: false,
                         tries: 0,
@@ -451,7 +448,7 @@ drive_impl! {
             tries: s.tries,
             link_rtt: self.net.best_rtt(),
             no_rtt: self.node_rtt == 0,
-            hs0: s.hub.is_some() && s.tries > 1 && false,
+            hs0: s.hub.is_some() && s.tries > 1 && now.saturating_sub(s.dialed) < super::dial::THIN_HS0_WAIT,
             last_relay: s.last_relay,
         };
         let mut chosen = [Cand::Relay(0); 16];
@@ -529,14 +526,13 @@ drive_impl! {
             && let Some(to) = tunnel_to
         {
             let d = Datagram::Spu { dst: peer, flag: 0, packet };
-            if packet.len() <= crate::relay::datagram::MAX_TUNNEL_DATAGRAM - 35 && self.enqueue_udp_pub(to, &d) {
-                if via == Via::Tunnel {
-                    // Not queued for the carrier; the dial goes on.
-                    self.dial_if_down(now, relay);
-                    return true;
-                }
-            } else if via == Via::Tunnel {
-                via = Via::Carrier;
+            if packet.len() <= crate::relay::datagram::MAX_TUNNEL_DATAGRAM - 35
+                && self.enqueue_udp_pub(to, &d)
+                && via == Via::Tunnel
+            {
+                // Not queued for the carrier; the dial goes on.
+                self.dial_if_down(now, relay);
+                return true;
             }
         }
         let _ = relay_id;

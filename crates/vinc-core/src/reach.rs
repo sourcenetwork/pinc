@@ -1,4 +1,4 @@
-//! REACH_OUT bodies received from peers, held until the application reads them.
+//! `REACH_OUT` bodies received from peers, held until the application reads them.
 //!
 //! The body is the peer's candidate addresses, encoded by the layer above; the endpoint only carries it. A ring of
 //! [`REACH_SLOTS`] bodies holds the latest per session, oldest overwritten first, so a host that reads on
@@ -8,7 +8,7 @@
 
 use crate::api::SessionId;
 
-/// The longest REACH_OUT body: a count byte and eight addresses of 19 bytes.
+/// The longest `REACH_OUT` body: a count byte and eight addresses of 19 bytes.
 pub const REACH_BODY_MAX: usize = 1 + 8 * 19;
 /// Bodies held at once.
 pub(crate) const REACH_SLOTS: usize = 4;

@@ -1,5 +1,8 @@
 //! Local discovery: the signed beacon, the duty cycle and the radio adapter.
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
@@ -52,7 +55,7 @@ fn a_forged_or_altered_beacon_is_refused() {
     // a beacon naming another node with this key's signature
     let other = ed(4);
     let mut buf2 = [0u8; MAX_LEN];
-    let n2 = sign(&other, 1, &addrs(), &[], &mut buf2).unwrap();
+    let _n2 = sign(&other, 1, &addrs(), &[], &mut buf2).unwrap();
     let mut forged = buf[..n].to_vec();
     forged[8..41].copy_from_slice(&buf2[8..41]);
     assert!(Beacon::parse_verified(&forged).is_err());

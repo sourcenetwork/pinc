@@ -1,5 +1,8 @@
 //! Hole punching: the REACH_OUT body, the probe schedule and the punch timer.
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,

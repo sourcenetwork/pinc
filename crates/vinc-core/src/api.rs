@@ -428,7 +428,7 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The wait before the flight is sent again.
         delay: u64,
     },
-    /// Send the peer a REACH_OUT: an opaque body (the candidate addresses, at most [`crate::REACH_BODY_MAX`]
+    /// Send the peer a `REACH_OUT`: an opaque body (the candidate addresses, at most [`crate::REACH_BODY_MAX`]
     /// bytes) the layer above encodes.
     ReachOut {
         /// The session.
@@ -482,7 +482,7 @@ pub enum Query {
     Node,
     /// The ledger entry of an address.
     Ledger(SocketAddr),
-    /// The body of the latest REACH_OUT this session received.
+    /// The body of the latest `REACH_OUT` this session received.
     ReachOut(SessionId),
 }
 
@@ -586,6 +586,6 @@ pub enum Answer<'q> {
     Node(NodeStats),
     /// A ledger entry.
     Ledger(LedgerEntry),
-    /// A REACH_OUT body, borrowed from the endpoint.
+    /// A `REACH_OUT` body, borrowed from the endpoint.
     ReachOut(&'q [u8]),
 }

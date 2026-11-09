@@ -1,5 +1,8 @@
 //! Address discovery, home relay selection and the reachability classes.
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,

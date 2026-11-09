@@ -9,7 +9,20 @@
 //! - [`tunnel`]: the member side of the hub tunnel, SPLICE_LIVE and THIN_SPLICE;
 //! - [`punch`]: REACH_OUT and the punch timer.
 
-#![allow(clippy::doc_markdown, reason = "rule names are written as the rules call them")]
+#![allow(
+    clippy::large_stack_arrays,
+    clippy::needless_pass_by_value,
+    clippy::unused_self,
+    clippy::wrong_self_convention,
+    clippy::match_same_arms,
+    reason = "the machines hold their buffers inline by design; the host boxes them"
+)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    reason = "rule names are written as the rules call them; the machines read well in small scopes"
+)]
 
 mod carriers;
 pub mod conn;

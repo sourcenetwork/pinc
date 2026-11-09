@@ -1,5 +1,8 @@
 //! Tickets: the binary form, the base32 text form and refusals.
 #![allow(
+    clippy::doc_markdown,
+    clippy::unnested_or_patterns,
+    clippy::nonminimal_bool,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
