@@ -100,7 +100,8 @@ ep_impl! {
             note(plan.review_at);
             slot.m.pulse_due = slot.m.pulse && plan.ping_at.is_some_and(|p| p <= now);
             if slot.m.pulse {
-                note(plan.ping_at);
+                // A keepalive already due waits for the layer above; only a later one is a deadline.
+                note(plan.ping_at.filter(|p| *p > now));
             }
             let active = conn.active_path();
             for p in slot.m.paths.iter().flatten() {

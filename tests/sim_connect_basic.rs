@@ -74,3 +74,40 @@ fn a_direct_dial_between_public_nodes_connects() {
         assert!(w.connected(a).is_some());
     });
 }
+
+/// Everything observable about a run: the simulator's trace and each node's events, as text.
+fn run_once(seed: u64) -> String {
+    let mut w = World::new(seed);
+    let (r, rs) = w.relay(1, relay_ip(10));
+    let nat_a = w.nat(NatKind::PortRestricted, ext(1), 120 * SEC, 7200 * SEC);
+    let nat_b = w.nat(NatKind::Symmetric, ext(2), 120 * SEC, 7200 * SEC);
+    let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat_a);
+    let b = w.client_behind(&client_spec(0xb1, priv_addr(2), &[rs]), nat_b);
+    w.run(secs(5));
+    w.dial(secs(5), a, b, vec![]);
+    w.run(secs(12));
+    let sa = w.connected(a).expect("connected");
+    w.sim.command(
+        secs(12),
+        a,
+        vinc_tests::Cmd::Send {
+            session: sa,
+            data: vec![7; 5000],
+        },
+    );
+    w.sim.command(secs(13), a, vinc_tests::Cmd::Suspend);
+    w.sim.suspend(secs(14), a);
+    w.sim.resume(secs(30), a);
+    w.run(secs(40));
+    format!("{}\n{}\n{}\n{}", w.sim.trace(), w.dump(a), w.dump(b), w.dump(r))
+}
+
+#[test]
+fn the_same_seed_gives_the_same_run_and_the_trace_is_not_empty() {
+    big(|| {
+        let first = run_once(5);
+        let second = run_once(5);
+        assert!(first.len() > 10_000, "a real trace: {}", first.len());
+        assert_eq!(first, second, "two runs of one seed differ");
+    });
+}

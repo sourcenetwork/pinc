@@ -569,3 +569,7 @@ path = "connect_keyhost.rs"
 name = "connect_keyhost_tpm"
 path = "connect_keyhost_tpm.rs"
 required-features = ["hwenc"]
+
+[[test]]
+name = "connect_client_noalloc"
+path = "connect_client_noalloc.rs"

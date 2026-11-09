@@ -611,6 +611,7 @@ fn the_endpoint_sends_a_dialing_flight_on_the_paths_it_is_told() {
                 Command::FlightPaths {
                     session: sa,
                     addrs: &[second],
+                    skip_primary: false,
                 },
             )
             .unwrap();
@@ -633,8 +634,113 @@ fn the_endpoint_sends_a_dialing_flight_on_the_paths_it_is_told() {
                 Command::FlightPaths {
                     session: sa,
                     addrs: &[],
+                    skip_primary: false,
                 },
             )
             .unwrap();
+    });
+}
+
+#[test]
+fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
+    big_stack(|| {
+        use vinc_security::ClientTickets;
+        let w = World::new(vinc_crypto::IdentityAlg::Ed25519);
+        let mut store = Store::new(true);
+        let mut client = w.client(&mut store, None, ClientTickets::new());
+        let now = T0;
+        let second = PathId(2);
+        client.with_env(now, |c, env| c.add_path(env, second, PathInfo::default()).unwrap());
+        // With the skip set, even the first flight leaves on the listed path only.
+        client.conn.set_flight_fanout(&[second]);
+        client.conn.set_flight_skip_primary(true);
+        let mut buf = vec![0u8; 65_536];
+        let mut paths = Vec::new();
+        while let Some(t) = client.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) {
+            paths.push((t.path, t.len));
+        }
+        assert!(
+            !paths.is_empty() && paths.iter().all(|(p, _)| *p == second),
+            "{paths:?}"
+        );
+        // The resend after the timer goes the same way, and only there.
+        paths.clear();
+        let later = now + 600 * MS;
+        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
+            paths.push((t.path, t.len));
+        }
+        assert!(
+            !paths.is_empty() && paths.iter().all(|(p, _)| *p == second),
+            "{paths:?}"
+        );
+        // With no fan-out path the skip sends nothing at all in that try.
+        client.conn.set_flight_fanout(&[]);
+        paths.clear();
+        let later = later + 2 * SEC_NS;
+        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
+            paths.push((t.path, t.len));
+        }
+        assert!(paths.is_empty(), "a try with no path sends nothing: {paths:?}");
+        // Turned off, the flight returns to the primary path.
+        client.conn.set_flight_skip_primary(false);
+        let later = later + 10 * SEC_NS;
+        client.with_env(later, vinc_transport::conn::Connection::handle_timeout);
+        while let Some(t) = client.with_env(later, |c, env| c.poll_transmit(env, &mut buf)) {
+            paths.push((t.path, t.len));
+        }
+        assert!(paths.iter().any(|(p, _)| *p == PathId(1)), "{paths:?}");
+    });
+}
+
+#[test]
+fn a_session_handed_to_the_carrier_pulse_sends_no_keepalive_and_reports_when_one_is_due() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, sb) = net.connect_pair(a, b, ALPN_A, Role::Hub);
+        net.nodes[b]
+            .cmd(
+                net.now,
+                Command::SetRole {
+                    session: sb,
+                    role: Role::Member,
+                },
+            )
+            .unwrap();
+        net.run_for(30 * S);
+        let t0 = net.now;
+        net.nodes[a]
+            .cmd(t0, Command::SetPulse { session: sa, on: true })
+            .unwrap();
+        net.run_for(40 * S);
+        assert!(sends(&net, a, t0, 0.5, 40.0).is_empty(), "no keepalive of its own");
+        let stats = |net: &CoreNet| {
+            let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(sa)) else {
+                panic!("the session ended")
+            };
+            st
+        };
+        assert!(stats(&net).pulse_due, "a keepalive is due and the layer above is told");
+        // The carrier answered: the session counts it as traffic both ways and the next one is due later.
+        let now = net.now;
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::Pulse {
+                    session: sa,
+                    sent: true,
+                },
+            )
+            .unwrap();
+        assert!(!stats(&net).pulse_due);
+        // Handed back, the endpoint sends its own keepalive again.
+        net.nodes[a]
+            .cmd(net.now, Command::SetPulse { session: sa, on: false })
+            .unwrap();
+        let before = net.nodes[a].sent.len();
+        net.run_for(30 * S);
+        assert!(net.nodes[a].sent.len() > before, "the endpoint pinged again");
     });
 }

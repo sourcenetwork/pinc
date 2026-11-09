@@ -4,6 +4,7 @@
 
 mod connect_common;
 mod connect_keyhost_common;
+mod connect_rig;
 
 use vinc_crypto::IdentityAlg;
 use vinc_keystore::{KeyHost, TpmConfig};
