@@ -215,7 +215,13 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             return;
         }
         let mut buf = [0u8; crate::carrier::frame::MAX_PACKET_LEN];
-        while let Some(m) = self.mailbox.pop(now, node, &mut buf) {
+        // A packet too long for a datagram stays held until the member's carrier is open.
+        let fit = if open {
+            crate::carrier::frame::MAX_PACKET_LEN
+        } else {
+            MAX_TUNNEL_DATAGRAM - 35
+        };
+        while let Some(m) = self.mailbox.pop_fitting(now, node, &mut buf, fit) {
             let body = buf.get(..m.len).unwrap_or_default();
             let sent = if open {
                 self.deliver_client(

@@ -233,6 +233,18 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
     /// Remove the oldest live message of `node` and copy its body into `buf`. The message is gone: it is delivered
     /// at most once, whatever the host does with it.
     pub fn pop(&mut self, now: u64, node: &NodeId, buf: &mut [u8; MAX_PACKET_LEN]) -> Option<Delivered> {
+        self.pop_fitting(now, node, buf, MAX_PACKET_LEN)
+    }
+
+    /// Like [`Mailbox::pop`], but an oldest live message with a body longer than `max_len` stays held, in front, and
+    /// `None` is returned: the caller has no way to deliver it now (a UDP datagram is shorter than a carrier packet).
+    pub fn pop_fitting(
+        &mut self,
+        now: u64,
+        node: &NodeId,
+        buf: &mut [u8; MAX_PACKET_LEN],
+        max_len: usize,
+    ) -> Option<Delivered> {
         let Self {
             held,
             max_age_ns,
@@ -241,7 +253,7 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         } = self;
         let h = held.get_mut(node)?;
         Self::expire(h, stats, now, *max_age_ns);
-        let out = h.front().and_then(|(src, flag, len, _, seq)| {
+        let out = h.front().filter(|f| f.2 <= max_len).and_then(|(src, flag, len, _, seq)| {
             let dst = buf.get_mut(..len)?;
             h.copy_out(h.head + ENTRY_HEAD, dst);
             h.skip_front();

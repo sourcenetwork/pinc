@@ -603,3 +603,42 @@ fn held_packets_expire_after_the_maximum_age() {
     assert_eq!(fx.r.mailbox_stats().expired, 1);
     assert_eq!(fx.r.mailbox_stats().delivered, 1);
 }
+
+#[test]
+fn a_held_packet_too_long_for_a_datagram_stays_held_until_the_carrier_reopens() {
+    let mut fx = Fx::new();
+    let a = nid(0xa1);
+    let sa = fx.open(T0, a);
+    let kp = ed(0x61);
+    let m = id(&kp);
+    let sm = fx.open(T0, m);
+    let me = fx.me;
+    fx.r.sleep_notice(T0, &notice(&kp, &me, T0 / 1_000_000), None, &mut fx.s)
+        .unwrap();
+    fx.r.carrier_closed(T0 + SEC, &m, sm, &mut fx.s);
+    let long = vec![9u8; MAX_TUNNEL_DATAGRAM - 34];
+    fx.send(
+        T0 + 2 * SEC,
+        a,
+        sa,
+        &Frame::Send {
+            dst: m,
+            flag: 1,
+            packet: &long,
+        },
+    )
+    .unwrap();
+    fx.fx();
+    // the member wakes over UDP: the packet cannot go down a datagram, so it stays held (it was dropped before)
+    fx.r.udp_heard(&m, T0 + 3 * SEC).unwrap();
+    fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
+    assert!(fx.fx().is_empty());
+    assert_eq!(fx.r.mailbox_pending(&m).0, 1, "still held");
+    assert_eq!(fx.r.mailbox_stats().delivered, 0);
+    // its carrier reopens: the packet is delivered there, once
+    fx.open(T0 + 4 * SEC, m);
+    let out = fx.fx();
+    assert!(out.iter().any(|r| matches!(r, Rec::Carrier(n, _) if *n == m)), "{out:?}");
+    assert_eq!(fx.r.mailbox_pending(&m).0, 0);
+    assert_eq!(fx.r.mailbox_stats().delivered, 1);
+}
