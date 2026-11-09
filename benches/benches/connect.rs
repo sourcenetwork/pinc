@@ -419,7 +419,7 @@ fn bench_route(c: &mut Criterion) {
             t += 1_000;
             black_box(conn.route(t, &*ep, to, black_box(&packet)));
             // keep the write buffer drained, as the host does after each step
-            if t % 16_000 == 0 {
+            if t.is_multiple_of(16_000) {
                 black_box(conn.poll_stream(0, &mut out));
             }
         });

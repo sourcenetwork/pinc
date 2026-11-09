@@ -790,5 +790,5 @@ fn a_batch_resumes_from_its_state_and_keeps_its_limits() {
     };
     assert_eq!(b.frames().count(), BATCH_MAX_FRAMES);
     assert!(sealed.len() <= MAX_FRAME_LEN);
-    assert!(st.len() > 0 && !st.is_empty());
+    assert!(!st.is_empty());
 }
