@@ -8,9 +8,9 @@ The Lean half of the trace validation of the receive and credit path of the stre
 `recv.rs`, `flow.rs`, `ranges.rs`, `pool.rs`), the port of `proofs/tla/TraceStreams.tla`. It reads the `st` events
 written by the Rust test `trace_streams` and replays every call through the functions of `Vinc.TransportStreams`
 (`frame`, `reset`, `consume`, `pending`, `ctlLostMsd`, `ctlLostReset`, `ctlAckedReset`, `openLocal`, `appReset`,
-`finish`, `extTo`, `closeAll`): the state the model computes must be the state recorded, and the error it computes
+`finish`, `extTo`, `closeAll`, and the stop-sending ones `stopReq`, `onStop`, `ctlLostStop`, `ctlAckedStop`): the state the model computes must be the state recorded, and the error it computes
 the error the call returned. The constants are those of the test: chunks of 16384 bytes, a ring of 5, 96 ranges,
-4 slots, 2 peer streams, a pool of 8 chunks, windows of 2 and 4 chunks, 2 local streams, 16 refused cells.
+4 slots, 2 peer streams, a pool of 8 chunks, windows of 2 and 4 chunks, 2 local streams.
 -/
 
 namespace Vinc.TraceStreams
@@ -18,7 +18,7 @@ open Vinc.Json Vinc.TransportStreams
 
 /-- The constants of `trace_streams`. -/
 def params : P :=
-  { ch := 16384, ring := 5, rr := 96, n := 4, maxrem := 2, b := 8, swc := 32768, mswc := 65536, pm := 2, rf := 16,
+  { ch := 16384, ring := 5, rr := 96, n := 4, maxrem := 2, b := 8, swc := 32768, mswc := 65536, pm := 2,
     maxoff := 2000000000, retry := true }
 
 def optNat (j : J) (k : String) : Except String (Option Nat) := do
@@ -32,32 +32,21 @@ def slotOf (j : J) : Except String Slot := do
            rs := ← pairList (← field j "rs"), read := ← natF j "read", hi := ← natF j "hi",
            contig := ← natF j "contig", fin := ← optNat j "fin", limit := ← natF j "limit",
            size := ← natF j "size", pend := ← boolF j "pend", defer := ← boolF j "defer",
-           rst := ← optNat j "rst", obs := ← boolF j "obs", sdone := ← boolF j "sdone", srst := ← natF j "srst" }
+           rst := ← optNat j "rst", obs := ← boolF j "obs", sdone := ← boolF j "sdone", srst := ← natF j "srst",
+           stop := ← natF j "stop", qcode := ← optNat j "qcode", scode := ← optNat j "scode" }
 
 def pairN (j : J) (k : String) : Except String (Nat × Nat) := do
   match ← natList (← field j k) with
   | [a, b] => pure (a, b)
   | _ => throw s!"{k} is not a pair"
 
-def refOf (p : P) (j : J) : Except String (List (Option (Nat × Bool))) := do
-  let cells ← match j.arr? with | some a => pure a.toList | none => throw "ref is not an array"
-  let mut out : List (Option (Nat × Bool)) := List.replicate p.rf none
-  for c in cells do
-    match c.arr? with
-    | some #[a, b, s] =>
-      match a.nat?, b.nat?, s.bool? with
-      | some a, some b, some s => out := out.set (a - 1) (some (b, s))
-      | _, _, _ => throw "bad ref cell"
-    | _ => throw "bad ref cell"
-  pure out
-
 /-- The table a recorded view shows. -/
-def tabOf (p : P) (v : J) : Except String Tab := do
+def tabOf (v : J) : Except String Tab := do
   let slots ← match (← field v "slots").arr? with
     | some a => a.toList.mapM slotOf
     | none => throw "slots is not an array"
   pure { slots, rn := ← pairN v "rn", lo := ← pairN v "lo", rl := ← natF v "rl", ll := ← natF v "ll",
-         ref := ← refOf p (← field v "ref"), ext := ← natF v "ext", tgt := ← natF v "tgt",
+         ext := ← natF v "ext", tgt := ← natF v "tgt",
          ms := ← optNat v "ms", mb := ← natF v "mb", mr := ← natF v "mr" }
 
 /-- The replay state: the table, and whether a run is open. -/
@@ -66,7 +55,7 @@ structure St where
   run : Nat := 0
 
 def same (T : Tab) (v : J) (what : String) : Except String Unit := do
-  let rec' ← tabOf params v
+  let rec' ← tabOf v
   if T == rec' then pure () else throw s!"{what}: the model computes {repr T}, the code recorded {repr rec'}"
 
 def replayEvent (j : J) (st : St) : Except String St := do
@@ -108,9 +97,20 @@ def replayEvent (j : J) (st : St) : Except String St := do
       upd T2 "pending"
     | "lostmsd" => upd (ctlLostMsd T (← natF j "id") (← natF j "max")) "lostmsd"
     | "lostreset" => upd (ctlLostReset T (← natF j "id")) "lostreset"
+    | "loststop" => upd (ctlLostStop T (← natF j "id")) "loststop"
+    | "ackedstop" => upd (ctlAckedStop T (← natF j "id")) "ackedstop"
+    | "stopreq" =>
+      let (T2, err) := stopReq T (← natF j "id") (← natF j "code")
+      check (err == (← strF j "err")) s!"stopreq: the model answers {err}, the code {← strF j "err"}"
+      upd T2 "stopreq"
+    | "onstop" =>
+      let (T2, err, fresh) := onStop p T (← natF j "id") (← natF j "code") (← natF v "ext")
+      check (err == (← strF j "err")) s!"onstop: the model answers {err}, the code {← strF j "err"}"
+      check (fresh == (← boolF j "fresh")) "onstop: the model and the code differ on whether the stop reset the stream"
+      upd T2 "onstop"
     | "ackedreset" => upd (ctlAckedReset p T (← natF j "id")) "ackedreset"
     | "open" => upd (openLocal p T) "open"
-    | "appreset" => upd (appReset p T (← natF j "id") (← natF v "ext")) "appreset"
+    | "appreset" => upd (appReset p T (← natF j "id") (← natF j "code") (← natF v "ext")) "appreset"
     | "finish" => upd (finish p T (← natF j "id") (← natF v "ext") (← boolF j "done")) "finish"
     | "ext" => upd (extTo p T (← natF j "ext")) "ext"
     | "close" => upd (closeAll p T (← natF v "ext")) "close"

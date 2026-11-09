@@ -15,7 +15,7 @@ buffers, datagram queues, the early-data buffer), charged to the same pool.
 namespace Vinc.TransportStreams
 
 /-- The constants of a table: `CH`, `RING`, `RR`, slots, peer-stream cap, pool chunks, initial and ceiling window,
-the cap of streams this side opens, the cells of the refused queue, and whether a deferred grant is retried after a
+the cap of streams this side opens, and whether a deferred grant is retried after a
 release of pool chunks (the code does). -/
 structure P where
   ch : Nat
@@ -27,7 +27,6 @@ structure P where
   swc : Nat
   mswc : Nat
   pm : Nat
-  rf : Nat
   maxoff : Nat
   retry : Bool
 
@@ -54,11 +53,15 @@ structure Slot where
   obs : Bool
   sdone : Bool
   srst : Nat
+  /-- The stop request of the receive half: 0 none, 1 pending, 2 sent, 3 acknowledged. -/
+  stop : Nat
+  qcode : Option Nat
+  scode : Option Nat
   deriving DecidableEq, Repr, Inhabited
 
 def Slot.new : Slot :=
   { id := none, open_ := false, held := [], rs := [], read := 0, hi := 0, contig := 0, fin := none, limit := 0,
-    size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0 }
+    size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0, stop := 0, qcode := none, scode := none }
 
 structure Tab where
   slots : List Slot
@@ -66,7 +69,6 @@ structure Tab where
   lo : Nat × Nat
   rl : Nat
   ll : Nat
-  ref : List (Option (Nat × Bool))
   ext : Nat
   tgt : Nat
   ms : Option Nat
@@ -76,7 +78,7 @@ structure Tab where
 
 def Tab.init (p : P) : Tab :=
   { slots := List.replicate p.n Slot.new, rn := (0, 0), lo := (0, 0), rl := 0, ll := 0,
-    ref := List.replicate p.rf none, ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0 }
+    ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0 }
 
 /-! ### Identifiers -/
 def isUni (id : Nat) : Bool := id / 2 % 2 == 1
@@ -136,9 +138,8 @@ def gu (p : P) (T : Tab) : Nat := (T.slots.map (·.unreceived p)).sum
 def setSlot (T : Tab) (i : Nat) (r : Slot) : Tab := { T with slots := T.slots.set i r }
 def findSlot (T : Tab) (id : Nat) : Option Nat := T.slots.findIdx? (·.id == some id)
 def firstFree (T : Tab) : Option Nat := T.slots.findIdx? (·.id == none)
-def Slot.hot (r : Slot) : Bool := (r.pend && r.open_) || r.srst == 1
+def Slot.hot (r : Slot) : Bool := (r.pend && r.open_) || r.srst == 1 || r.stop == 1
 def anyDefer (T : Tab) : Bool := T.slots.any (·.defer)
-def refIdx (T : Tab) (id : Nat) : Option Nat := T.ref.findIdx? (fun c => c.map (·.1) == some id)
 
 /-! ### The window grant (`Streams::grant`) -/
 /-- The slot with its window size raised to the target. -/
@@ -193,12 +194,10 @@ def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
 def admits (p : P) (T : Tab) (c next count : Nat) : Bool :=
   let free := (T.slots.filter (·.id == none)).length
   let window := count * ((p.sw + p.ch - 1) / p.ch * p.ch)
-  let behind := T.ref.any (fun e => match e with
-    | some (rid, _) => cls rid == c && idx rid ≥ next && idx rid < next + count
-    | none => false)
-  !behind && T.rl + count ≤ p.maxrem && free ≥ count && gu p T + window ≤ avail p T
+  T.rl + count ≤ p.maxrem && free ≥ count && gu p T + window ≤ avail p T
 
-/-- `Locate`: the table, the slot found (if any) and the error ("ok" when none). -/
+/-- `Locate`: the table, the slot found (if any) and the error ("ok" when none). A peer stream that does not fit is
+held back: "Exhausted" and the table unchanged. -/
 def locate (p : P) (T : Tab) (id : Nat) : Tab × Option Nat × String :=
   let c := cls id
   let ix := idx id
@@ -206,12 +205,8 @@ def locate (p : P) (T : Tab) (id : Nat) : Tab × Option Nat × String :=
   if isLocal id then
     if ix ≥ cget T.lo c then (T, none, "StreamState") else (T, findSlot T id, "ok")
   else if ix < next then (T, findSlot T id, "ok")
-  else if (refIdx T id).isSome then (T, none, "Busy")
   else if ix ≥ next + p.maxrem then (T, none, "StreamLimit")
-  else if !admits p T c next (ix - next + 1) then
-    match T.ref.findIdx? Option.isNone with
-    | none => (T, none, "Exhausted")
-    | some j => ({ T with ref := T.ref.set j (some (id, false)) }, none, "Busy")
+  else if !admits p T c next (ix - next + 1) then (T, none, "Exhausted")
   else
     let T2 := (List.range (ix - next + 1)).foldl (fun T k => allocSlot p T ((next + k) * 4 + id % 4)) T
     let T3 := { T2 with rn := cset T2.rn c (ix + 1) }
@@ -300,20 +295,18 @@ def consume (p : P) (T : Tab) (id n now srtt : Nat) : Tab × String :=
       (settle p (grantRun p T1 i) i, "ok")
 
 /-! ### Control frames -/
-/-- `pending_control`: the table, the kind ("none", "reset", "msd"), the stream and the limit. -/
+/-- `pending_control`: the table, the kind ("none", "reset", "stop", "msd"), the stream and the number: the limit of an
+msd, the error code of a reset or a stop. The first slot with a frame to send gives one: its stream reset first, then
+its stop request, then its limit. -/
 def pending (T : Tab) : Tab × String × Nat × Nat :=
-  match T.ref.findIdx? (fun e => match e with | some (_, sent) => !sent | none => false) with
-  | some j =>
-    let id := match T.ref.getD j none with | some (id, _) => id | none => 0
-    ({ T with ref := T.ref.set j (some (id, true)) }, "reset", id, 0)
-  | none =>
-    match T.slots.findIdx? Slot.hot with
-    | none => (T, "none", 0, 0)
-    | some i =>
-      let r := T.slots.getD i Slot.new
-      let id := r.id.getD 0
-      if r.srst == 1 then (setSlot T i { r with srst := 2 }, "reset", id, 0)
-      else (setSlot T i { r with pend := false }, "msd", id, r.limit)
+  match T.slots.findIdx? Slot.hot with
+  | none => (T, "none", 0, 0)
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    let id := r.id.getD 0
+    if r.srst == 1 then (setSlot T i { r with srst := 2 }, "reset", id, r.scode.getD 0)
+    else if r.stop == 1 then (setSlot T i { r with stop := 2 }, "stop", id, r.qcode.getD 0)
+    else (setSlot T i { r with pend := false }, "msd", id, r.limit)
 
 def ctlLostMsd (T : Tab) (id mx : Nat) : Tab :=
   match findSlot T id with
@@ -323,24 +316,34 @@ def ctlLostMsd (T : Tab) (id mx : Nat) : Tab :=
     if mx ≥ r.limit then setSlot T i { r with pend := true } else T
 
 def ctlLostReset (T : Tab) (id : Nat) : Tab :=
-  match refIdx T id with
-  | some j => { T with ref := T.ref.set j (some (id, false)) }
-  | none =>
-    match findSlot T id with
-    | none => T
-    | some i =>
-      let r := T.slots.getD i Slot.new
-      if r.srst == 2 then setSlot T i { r with srst := 1 } else T
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    if r.srst == 2 then setSlot T i { r with srst := 1 } else T
 
 def ctlAckedReset (p : P) (T : Tab) (id : Nat) : Tab :=
-  match refIdx T id with
-  | some j => { T with ref := T.ref.set j none }
-  | none =>
-    match findSlot T id with
-    | none => T
-    | some i =>
-      let r := T.slots.getD i Slot.new
-      settle p (setSlot T i { r with srst := if r.srst == 1 || r.srst == 2 then 3 else r.srst }) i
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    let acked := r.srst == 1 || r.srst == 2
+    settle p (setSlot T i { r with srst := if acked then 3 else r.srst, scode := if acked then none else r.scode }) i
+
+/-- A lost stop request is sent again unless the sender ended the stream meanwhile. -/
+def ctlLostStop (T : Tab) (id : Nat) : Tab :=
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    if r.stop == 2 && r.rst.isNone && r.fin.isNone then setSlot T i { r with stop := 1 } else T
+
+def ctlAckedStop (T : Tab) (id : Nat) : Tab :=
+  match findSlot T id with
+  | none => T
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    if r.stop == 1 || r.stop == 2 then setSlot T i { r with stop := 3, qcode := none } else T
 
 /-! ### The send half, as far as the receive side sees it -/
 def openLocal (p : P) (T : Tab) : Tab :=
@@ -349,13 +352,39 @@ def openLocal (p : P) (T : Tab) : Tab :=
 
 def Slot.sendOpen (r : Slot) : Bool := !(r.id.any (fun id => isUni id && !isLocal id))
 
-def appReset (p : P) (T : Tab) (id ext2 : Nat) : Tab :=
+def appReset (p : P) (T : Tab) (id code ext2 : Nat) : Tab :=
   match findSlot T id with
   | none => T
   | some i =>
     let r := T.slots.getD i Slot.new
-    let T1 := if r.sendOpen && r.srst == 0 && !r.sdone then { setSlot T i { r with srst := 1 } with ext := ext2 } else T
+    let T1 := if r.sendOpen && r.srst == 0 && !r.sdone
+              then { setSlot T i { r with srst := 1, scode := some code } with ext := ext2 } else T
     settle p T1 i
+
+/-- `Streams::stop_sending`: queue a stop request once; nothing if the sender already ended the stream. -/
+def stopReq (T : Tab) (id code : Nat) : Tab × String :=
+  match findSlot T id with
+  | none => (T, "UnknownStream")
+  | some i =>
+    let r := T.slots.getD i Slot.new
+    if !r.open_ then (T, "StreamState")
+    else if r.rst.isNone && r.fin.isNone && r.stop == 0 then (setSlot T i { r with stop := 1, qcode := some code }, "ok")
+    else (T, "ok")
+
+/-- `Streams::on_stop_sending`: the table, the error and whether this call reset the send half with `code`. -/
+def onStop (p : P) (T : Tab) (id code ext2 : Nat) : Tab × String × Bool :=
+  if isUni id && !isLocal id then (T, "StreamState", false)
+  else
+    let (T1, i, err) := locate p T id
+    if err != "ok" then (T1, err, false)
+    else
+      match i with
+      | none => (T1, "ok", false)
+      | some i =>
+        let r := T1.slots.getD i Slot.new
+        let fresh := r.sendOpen && r.srst == 0 && !r.sdone
+        let T2 := if fresh then { setSlot T1 i { r with srst := 1, scode := some code } with ext := ext2 } else T1
+        (settle p T2 i, "ok", fresh)
 
 def finish (p : P) (T : Tab) (id ext2 : Nat) (done : Bool) : Tab :=
   match findSlot T id with

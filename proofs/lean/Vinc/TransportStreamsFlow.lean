@@ -10,13 +10,16 @@ Unbounded theorems about the receive half and the table of `Vinc.TransportStream
   the limit that are not held, so holes below the highest byte are counted). With `grantOne_ledger`
   (`Vinc.TransportStreamsGrant`), which keeps the sum of those counts within the pool bytes left whenever a limit is
   raised, credit never exceeds the ledger (POOL_GRANT).
-* `admits_cap`, `locate_busy_recorded`, `locate_error_stores_nothing`, `frame_busy_stores_nothing`: a peer stream
-  is admitted only under the cap, an excess stream is remembered for a reset and never stored (STREAM_CAP).
+* `admits_cap`, `locate_error_pure`, `locate_held_back`, `frame_held_back`, `locate_ok_next`: a peer stream is
+  admitted only under the cap; one that does not fit is held back (the call answers `Exhausted`, the table is
+  unchanged, nothing is stored or charged, no counter moves, the packet goes unacknowledged), so its retransmission
+  meets the table the first arrival met; an admitted stream moves the next index past its own id (STREAM_CAP).
 * `onReset_ok`, `onReset_final_fixed`, `onData_final_fixed`: a reset frees the buffered bytes, leaves nothing
   readable and fixes the final size, and a final size once fixed never changes.
 * `Content`, `exactly_once_in_order`, `stored_immutable`: with the checks of `Recv::store` (a byte received twice
   must be identical) and the rule that a consume stays inside the stored prefix, the bytes delivered are the bytes
-  stored, in offset order, each once.
+  stored, in offset order, each once; `held_back_delivers_once`: a held-back first arrival changes nothing and its
+  retransmission is delivered exactly once.
 -/
 
 namespace Vinc.TransportStreams
@@ -77,93 +80,52 @@ theorem admits_cap (p : P) (T : Tab) (c next count : Nat) (h : admits p T c next
     T.rl + count ≤ p.maxrem := by
   unfold admits at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-  exact h.1.1.2
+  exact h.1.1
 
-/-- A locate that answers with an error leaves the slots as they were: nothing of a refused or invalid stream is
-stored. -/
-theorem locate_error_stores_nothing (p : P) (T : Tab) (id : Nat) (h : (locate p T id).2.2 ≠ "ok") :
-    (locate p T id).1.slots = T.slots := by
+/-- A locate that answers with an error leaves the table exactly as it was and finds no slot: nothing of a stream
+that does not fit (or is invalid) is stored, no pool chunk is charged and no counter moves. -/
+theorem locate_error_pure (p : P) (T : Tab) (id : Nat) (h : (locate p T id).2.2 ≠ "ok") :
+    (locate p T id).1 = T ∧ (locate p T id).2.1 = none := by
   by_cases h1 : isLocal id = true
   · by_cases h2 : idx id ≥ cget T.lo (cls id)
     · simp [locate, h1, h2]
     · simp [locate, h1, h2] at h
   · by_cases h2 : idx id < cget T.rn (cls id)
     · simp [locate, h1, h2] at h
-    · by_cases h3 : (refIdx T id).isSome = true
-      · simp [locate, h1, h2, h3]
-      · by_cases h4 : idx id ≥ cget T.rn (cls id) + p.maxrem
-        · simp [locate, h1, h2, h3, h4]
-        · by_cases h5 : admits p T (cls id) (cget T.rn (cls id)) (idx id - cget T.rn (cls id) + 1) = true
-          · simp [locate, h1, h2, h3, h4, h5] at h
-          · cases hf : T.ref.findIdx? Option.isNone <;> simp [locate, h1, h2, h3, h4, h5, hf]
+    · by_cases h4 : idx id ≥ cget T.rn (cls id) + p.maxrem
+      · simp [locate, h1, h2, h4]
+      · by_cases h5 : admits p T (cls id) (cget T.rn (cls id)) (idx id - cget T.rn (cls id) + 1) = true
+        · simp [locate, h1, h2, h4, h5] at h
+        · simp [locate, h1, h2, h4, h5]
 
-/-- An excess peer stream is remembered, so a reset answers it: a locate that answers `Busy` has the stream in the
-refused queue. -/
-theorem locate_busy_recorded (p : P) (T : Tab) (id : Nat) (h : (locate p T id).2.2 = "Busy") :
-    (refIdx (locate p T id).1 id).isSome = true := by
-  by_cases h1 : isLocal id = true
-  · by_cases h2 : idx id ≥ cget T.lo (cls id) <;> simp [locate, h1, h2] at h
-  · by_cases h2 : idx id < cget T.rn (cls id)
-    · simp [locate, h1, h2] at h
-    · by_cases h3 : (refIdx T id).isSome = true
-      · simp [locate, h1, h2, h3]
-      · by_cases h4 : idx id ≥ cget T.rn (cls id) + p.maxrem
-        · simp [locate, h1, h2, h3, h4] at h
-        · by_cases h5 : admits p T (cls id) (cget T.rn (cls id)) (idx id - cget T.rn (cls id) + 1) = true
-          · simp [locate, h1, h2, h3, h4, h5] at h
-          · cases hf : T.ref.findIdx? Option.isNone with
-            | none => simp [locate, h1, h2, h3, h4, h5, hf] at h
-            | some j =>
-              have hj : j < T.ref.length := by simpa using (List.findIdx?_eq_some_iff_getElem.mp hf).1
-              have hloc : locate p T id = ({ T with ref := T.ref.set j (some (id, false)) }, none, "Busy") := by
-                simp [locate, h1, h2, h3, h4, h5, hf]
-              rw [hloc]
-              unfold refIdx
-              simp only [List.findIdx?_isSome, List.any_eq_true]
-              exact ⟨_, List.mem_set hj _, by simp⟩
+theorem locate_error_stores_nothing (p : P) (T : Tab) (id : Nat) (h : (locate p T id).2.2 ≠ "ok") :
+    (locate p T id).1.slots = T.slots := by
+  rw [(locate_error_pure p T id h).1]
 
-theorem storeStep_not_busy (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) :
-    (storeStep p T r off len diff).2 ≠ "Busy" := by
-  unfold storeStep
-  dsimp only
-  repeat' split
-  all_goals simp
+/-- A peer stream that does not fit yet is held back: the locate answers `Exhausted` with the table unchanged, so
+the opener's retransmission on the same id meets the table the first arrival met. -/
+theorem locate_held_back (p : P) (T : Tab) (id : Nat) (h : (locate p T id).2.2 = "Exhausted") :
+    locate p T id = (T, none, "Exhausted") := by
+  have hp := locate_error_pure p T id (by rw [h]; decide)
+  exact Prod.ext hp.1 (Prod.ext hp.2 h)
 
-theorem onData_not_busy (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) :
-    (onData p T r off len fin diff).2 ≠ "Busy" := by
-  have := storeStep_not_busy p T r off len diff
-  unfold onData
-  dsimp only
-  repeat' split
-  all_goals simp_all
+/-- A frame for a held-back stream changes nothing: not a slot, not a pool charge, not a counter. -/
+theorem frame_held_back (p : P) (T : Tab) (id off len : Nat) (fin diff : Bool)
+    (h : (locate p T id).2.2 = "Exhausted") : frame p T id off len fin diff = (T, "Exhausted") := by
+  unfold frame
+  rw [locate_held_back p T id h]
 
-/-- A frame refused as busy changes no slot. -/
-theorem frame_busy_stores_nothing (p : P) (T : Tab) (id off len : Nat) (fin diff : Bool)
-    (h : (frame p T id off len fin diff).2 = "Busy") :
-    (frame p T id off len fin diff).1.slots = T.slots := by
-  unfold frame at h ⊢
-  cases hl : locate p T id with
-  | mk T1 rest =>
-    obtain ⟨i, err⟩ := rest
-    have hs : T1.slots = T.slots ∨ err = "ok" := by
-      by_cases he : err = "ok"
-      · exact Or.inr he
-      · left
-        have := locate_error_stores_nothing p T id (by rw [hl]; exact he)
-        rw [hl] at this
-        exact this
-    cases i with
-    | none => simp [hl] at h ⊢; rcases hs with hs | hs <;> simp_all
-    | some i =>
-      simp only [hl] at h ⊢
-      by_cases he : err = "ok"
-      · simp only [he] at h ⊢
-        simp at h
-        exact absurd h (onData_not_busy p _ _ _ _ _ _)
-      · simp [he] at h ⊢
-        rcases hs with hs | hs
-        · exact hs
-        · exact absurd hs he
+/-- An arriving peer stream that is admitted moves the next index of its kind past its own id: every lower id was
+opened, one event each (the count of new ids is the distance moved). -/
+theorem locate_ok_next (p : P) (T : Tab) (id : Nat) (hl : isLocal id = false) (h2 : ¬ idx id < cget T.rn (cls id))
+    (h4 : ¬ idx id ≥ cget T.rn (cls id) + p.maxrem)
+    (h5 : admits p T (cls id) (cget T.rn (cls id)) (idx id - cget T.rn (cls id) + 1) = true) :
+    cget (locate p T id).1.rn (cls id) = idx id + 1 := by
+  have hl' : ¬ isLocal id = true := by simp [hl]
+  have hn : ¬ (!admits p T (cls id) (cget T.rn (cls id)) (idx id - cget T.rn (cls id) + 1)) = true := by simp [h5]
+  simp only [locate, hl', h2, h4, hn, if_false]
+  unfold cget cset
+  by_cases hk : cls id = 0 <;> simp [hk]
 
 /-! ### Reset and the final size -/
 /-- A peer reset frees the buffered bytes, leaves nothing readable, fixes the final size and the read position
@@ -281,5 +243,15 @@ log has one byte per offset below the read position, and the byte at an offset i
 theorem exactly_once_in_order {c : Content} (h : Reaches Content.init c) :
     c.log.length = c.read ∧ ∀ o, o < c.read → c.log[o]? = c.st o :=
   inv_reaches ⟨rfl, fun o ho => by simp [Content.init] at ho⟩ h
+
+/-- A held-back frame stores nothing (`frame_held_back`), so it is the identity on the content, and its
+retransmission, once the stream is admitted, stores the same bytes as the first arrival would have: the bytes
+delivered are the bytes stored, in offset order, each once, whether or not the first arrival was held back. -/
+theorem held_back_delivers_once {c : Content} (h : Reaches Content.init c) (lo e : Nat) (g : Nat → Nat)
+    (hok : ∀ o, lo ≤ o → o < e → ∀ v, c.st o = some v → v = g o) :
+    Reaches c c ∧ Reaches c (c.store lo e g) ∧ (c.store lo e g).log.length = (c.store lo e g).read ∧
+      ∀ o, o < (c.store lo e g).read → (c.store lo e g).log[o]? = (c.store lo e g).st o :=
+  ⟨Reaches.refl c, Reaches.step (Reaches.refl c) (Step.store c lo e g hok),
+    exactly_once_in_order (Reaches.step h (Step.store c lo e g hok))⟩
 
 end Vinc.TransportStreams
