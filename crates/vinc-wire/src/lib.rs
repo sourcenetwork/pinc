@@ -7,6 +7,7 @@
 
 pub mod cbor;
 pub mod error;
+pub mod hlc;
 pub mod reader;
 pub mod varint;
 pub mod writer;

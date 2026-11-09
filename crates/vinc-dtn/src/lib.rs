@@ -20,7 +20,6 @@ pub mod error;
 pub mod forward;
 pub mod gf256;
 pub mod head;
-pub mod hlc;
 pub mod labels;
 pub mod layout;
 pub mod rs;
@@ -28,3 +27,5 @@ pub mod seal;
 pub mod store;
 
 pub use error::DtnError;
+/// The hybrid logical clock lives in `vinc-wire`; it is re-exported so this crate's API is unchanged.
+pub use vinc_wire::hlc;
