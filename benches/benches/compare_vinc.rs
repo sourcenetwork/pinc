@@ -93,7 +93,7 @@ type H = IoHost<Net, SoftwareStore, AllowAll>;
 type Ep = Endpoint<H>;
 type Conn = Connection<H>;
 
-async fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
+fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
     // Socket buffers as a busy host sizes them (the system clamps them to its limit): the default of about 200 KiB
     // drops the first flights of a few hundred peers dialing at once.
     let builder = UdpSocketBuilder::new_v4()?;
@@ -163,7 +163,7 @@ impl Lib for Vinc1 {
     }
 
     async fn serve() -> io::Result<String> {
-        let ep = bind(Limits::default(), true).await?;
+        let ep = bind(Limits::default(), true)?;
         let addr = ep.addr().ticket();
         nuclei::spawn_local(async move {
             while let Some(inc) = ep.accept().await {
@@ -191,7 +191,6 @@ impl Lib for Vinc1 {
             },
             false,
         )
-        .await
     }
 
     async fn connect(ep: &Ep, addr: &str) -> io::Result<Conn> {
