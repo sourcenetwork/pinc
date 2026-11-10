@@ -1,33 +1,36 @@
 //! The builder and the endpoint handle.
 //!
 //! [`Vinc::builder`] collects an identity, protocols, relays, discovery, limits and an access hook;
-//! [`bind`](Builder::bind) takes the host's datagram socket and timer and returns the [`Endpoint`] and the
-//! [`Driver`](vinc_driver::Driver) future. The host spawns the driver on its own executor, on the core that owns the
-//! socket; the library starts no thread and runs no loop of its own. The endpoint is `Clone + Send + Sync + 'static`;
-//! every method is an async call into the driver through bounded queues.
+//! [`build`](Builder::build) takes the host's three async closures (receive a datagram, send a datagram, sleep until an
+//! instant) and returns the [`Endpoint`]. The library starts no thread and no task: the futures of the handles drive
+//! the endpoint when the host polls them, on the host's executor, so an endpoint with no future being polled makes no
+//! progress. A host with nothing else to await on the endpoint (a server between accepts, connections that only need
+//! their keepalives) awaits [`Endpoint::run`].
 //!
-//! The endpoint runs while any handle to it, to a connection of it or to a stream of it lives, or until
-//! [`close`](Endpoint::close).
+//! The endpoint is `Clone + Send + Sync + 'static` when the closures are. It lives while any handle to it, to a
+//! connection of it or to a stream of it lives; dropping the last handle drops its state without sending anything, so
+//! close what should be told first ([`Endpoint::close`], [`Connection::close`]).
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Instant;
 
 use vinc_crypto::NodeId;
-pub use vinc_driver::AllowAll;
-use vinc_driver::{
-    Ctl, Datagrams, Driver, Identity, Limits, LoopStats, Receiver, Request, Result, SessionShared, Settings, Timer,
-};
 use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
 
 use crate::addr::NodeAddr;
 use crate::conn::{Connection, Incoming};
+use crate::drive::{Shared, T0};
+pub use crate::engine::AllowAll;
+pub use crate::engine::{Admit as Admission, Direction};
+use crate::engine::{Core, CoreConfig, Try};
+use crate::error::{Error, ErrorKind, Result};
+use crate::host::{BatchHost, Host, Hosted};
+use crate::keys::Identity;
+use crate::mem::Limits;
 use crate::protocol::{Protocol, Registered};
-
-pub use vinc_driver::Direction;
-// The access hook: whether a peer may connect, be dialed or be a gossip neighbour. It runs on the driver's task for
-// connections and must not block.
-pub use vinc_driver::Admit as Admission;
+use crate::start::build;
 
 /// Finds addresses for a node the caller gave none for. It may do I/O; it runs before the dial starts, so dropping the
 /// dial while it runs leaves nothing behind.
@@ -46,9 +49,6 @@ impl Discovery for NoDiscovery {
     }
 }
 
-/// What [`Builder::bind`] makes: the endpoint and the future that drives it.
-pub type Bound<D, A, U, T, S> = (Endpoint<D, A>, Driver<U, T, S, Arc<A>>);
-
 /// The entry point: `Vinc::builder()`.
 #[derive(Debug, Clone, Copy)]
 pub struct Vinc;
@@ -64,6 +64,7 @@ impl Vinc {
             limits: Limits::default(),
             admission: AllowAll,
             batch: 8,
+            local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
         }
     }
 }
@@ -78,6 +79,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll> {
     limits: Limits,
     admission: A,
     batch: usize,
+    local: SocketAddr,
 }
 
 impl<S, D, A> core::fmt::Debug for Builder<S, D, A> {
@@ -117,6 +119,7 @@ impl<S, D, A> Builder<S, D, A> {
             limits: self.limits,
             admission: self.admission,
             batch: self.batch,
+            local: self.local,
         }
     }
 
@@ -124,6 +127,15 @@ impl<S, D, A> Builder<S, D, A> {
     #[must_use]
     pub fn alpn(mut self, alpn: impl Into<Vec<u8>>) -> Self {
         self.alpns.push(alpn.into());
+        self
+    }
+
+    /// The address the host's socket is bound to. It is what [`Endpoint::addr`] tells peers, and an IPv6 address makes
+    /// the endpoint hand the socket IPv4 peers as mapped addresses. Without it the endpoint uses the IPv4 wildcard
+    /// address and port 0.
+    #[must_use]
+    pub const fn local_addr(mut self, addr: SocketAddr) -> Self {
+        self.local = addr;
         self
     }
 
@@ -146,6 +158,7 @@ impl<S, D, A> Builder<S, D, A> {
             limits: self.limits,
             admission: self.admission,
             batch: self.batch,
+            local: self.local,
         }
     }
 
@@ -167,10 +180,11 @@ impl<S, D, A> Builder<S, D, A> {
             limits: self.limits,
             admission: hook,
             batch: self.batch,
+            local: self.local,
         }
     }
 
-    /// The most same-size datagrams the endpoint batches into one send before the host splits them: 1 turns it off.
+    /// The most same-size datagrams the endpoint batches into one transmit before the facade splits them: 1 turns it off.
     #[must_use]
     pub const fn batch(mut self, n: usize) -> Self {
         self.batch = n;
@@ -178,93 +192,155 @@ impl<S, D, A> Builder<S, D, A> {
     }
 }
 
-impl<S: KeyStore, D: Discovery, A: Admission> Builder<S, D, A> {
-    /// Make the endpoint and its driver over the host's datagram socket and timer. Nothing runs until the host spawns
-    /// [`Driver::run`] on its executor; await the driver's future on the core that owns the socket.
+/// The endpoint that [`Builder::build`] makes over the closures `R`, `S` and `Z`.
+pub type Built<R, S, Z, K, D, A> = Endpoint<Host<R, S, Z, K, A>, D>;
+
+/// The endpoint that [`Builder::build_batched`] makes over the closures `R`, `S` and `Z`.
+pub type BatchBuilt<R, S, Z, K, D, A> = Endpoint<BatchHost<R, S, Z, K, A>, D>;
+
+impl<K: KeyStore + Send, D: Discovery, A: Admission> Builder<K, D, A> {
+    /// Make the endpoint over the host's I/O, one datagram per call: `recv` receives one datagram into the buffer and
+    /// returns its length and sender, `send` sends one datagram to an address, `sleep` sleeps until an instant. The
+    /// closures are called from whichever task polls a future of the endpoint. `recv` must lose no datagram when its
+    /// future is dropped before it completes, as a readiness-based receive does. A host with segmentation offload or
+    /// coalesced receives calls [`build_batched`](Self::build_batched) instead.
+    ///
+    /// The endpoint is a large value, built on the calling thread's stack once: size the stack for the `connections`
+    /// limit (see [`Limits`]).
     ///
     /// # Errors
-    /// [`crate::ErrorKind::Config`] for an invalid setting or no identity, [`crate::ErrorKind::Unreachable`] if the
-    /// socket has no address.
-    pub fn bind<U: Datagrams, T: Timer>(self, udp: U, timer: T) -> Result<Bound<D, A, U, T, S>> {
-        let identity = self.identity.ok_or(vinc_driver::Error::config(
-            "the system has no randomness for a node identity",
-        ))?;
-        let public: Arc<[u8]> = identity.public_key().into();
-        let admission = Arc::new(self.admission);
-        let (h, driver) = vinc_driver::open(
-            Settings {
-                identity,
-                alpns: self.alpns,
-                limits: self.limits,
-                admit: Arc::clone(&admission),
-                batch: self.batch,
-            },
-            udp,
-            timer,
-        )?;
-        let ep = Endpoint(Arc::new(Inner {
-            remote: h.remote,
-            incoming: h.incoming,
-            local: h.local,
-            node: h.node,
-            public,
-            stats: h.stats,
-            discovery: self.discovery,
-            admission,
-            relays: self.relays,
-        }));
-        Ok((ep, driver))
+    /// [`crate::ErrorKind::Config`] for an invalid setting or no identity.
+    pub fn build<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<Built<R, S, Z, K, D, A>>
+    where
+        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr)> + Send + Sync,
+        S: AsyncFn(&[u8], SocketAddr) -> std::io::Result<usize> + Send + Sync,
+        Z: AsyncFn(Instant) + Send + Sync,
+    {
+        // One datagram per send: the endpoint does not batch for a host that sends one at a time.
+        let (inner, core, local) = self.assemble(1)?;
+        Ok(Endpoint(Arc::new(inner.finish(
+            Host::new(recv, send, sleep),
+            core,
+            local,
+        ))))
     }
 
-    /// [`bind`](Self::bind) over a UDP socket bound to `addr` on the current nuclei runtime.
+    /// As [`build`](Self::build) for a host that can move several datagrams in one call. `send` gets a whole transmit: a
+    /// buffer of equal-size datagrams (the last may be shorter), the address and the segment size, as `sendmsg` with
+    /// `UDP_SEGMENT` takes it, and returns how many datagrams went; the endpoint batches up to [`batch`](Self::batch)
+    /// datagrams per transmit. `recv` fills the buffer and returns the length filled, the sender and the segment size, as
+    /// a receive with `UDP_GRO` gives them (the length again if it coalesced nothing).
     ///
     /// # Errors
-    /// As [`bind`](Self::bind), and [`crate::ErrorKind::Unreachable`] if the address cannot be bound.
-    #[cfg(feature = "nuclei")]
-    pub async fn bind_nuclei(
-        self,
-        addr: SocketAddr,
-    ) -> Result<(
-        Endpoint<D, A>,
-        Driver<vinc_nuclei::Socket, vinc_nuclei::Clock, S, Arc<A>>,
-    )> {
-        let socket = vinc_nuclei::Socket::bind(addr)
-            .await
-            .map_err(|_| vinc_driver::Error::new(vinc_driver::ErrorKind::Unreachable, "the address cannot be bound"))?;
-        self.bind(socket, vinc_nuclei::Clock::new())
+    /// As [`build`](Self::build).
+    pub fn build_batched<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<BatchBuilt<R, S, Z, K, D, A>>
+    where
+        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr, usize)> + Send + Sync,
+        S: AsyncFn(&[u8], SocketAddr, usize) -> std::io::Result<usize> + Send + Sync,
+        Z: AsyncFn(Instant) + Send + Sync,
+    {
+        let batch = self.batch;
+        let (inner, core, local) = self.assemble(batch)?;
+        Ok(Endpoint(Arc::new(inner.finish(
+            BatchHost::new(recv, send, sleep),
+            core,
+            local,
+        ))))
+    }
+
+    /// Everything but the host: the core, built with transmits of up to `gso` datagrams.
+    fn assemble(self, gso: usize) -> Result<(Parts<D>, Core<K, A>, SocketAddr)> {
+        let Builder {
+            identity,
+            alpns,
+            relays,
+            discovery,
+            limits,
+            admission,
+            batch: _,
+            local,
+        } = self;
+        let identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
+        let public: Arc<[u8]> = identity.public_key().into();
+        let node = identity.node_id();
+        let cfg = CoreConfig {
+            identity,
+            alpns,
+            limits,
+            admit: admission,
+            max_gso: gso,
+            locals: interfaces(local),
+        };
+        let core = build(cfg, T0)?;
+        Ok((
+            Parts {
+                node,
+                public,
+                discovery,
+                relays,
+            },
+            core,
+            local,
+        ))
     }
 }
 
-struct Inner<D, A> {
-    remote: vinc_driver::Remote,
-    incoming: Receiver<Arc<SessionShared>>,
-    local: SocketAddr,
+/// What an endpoint holds besides its host and its core.
+struct Parts<D> {
     node: NodeId,
     public: Arc<[u8]>,
-    stats: Arc<LoopStats>,
     discovery: D,
-    admission: Arc<A>,
     relays: Vec<String>,
 }
 
-/// A running endpoint: dial, accept, sign, and reach the layers above.
-pub struct Endpoint<D = NoDiscovery, A = AllowAll>(Arc<Inner<D, A>>);
+impl<D> Parts<D> {
+    fn finish<H: Hosted>(self, host: H, core: Core<H::Keys, H::Access>, local: SocketAddr) -> Inner<H, D> {
+        Inner {
+            shared: Arc::new(Shared::new(host, core, local)),
+            node: self.node,
+            public: self.public,
+            discovery: self.discovery,
+            relays: self.relays,
+        }
+    }
+}
 
-impl<D, A> Clone for Endpoint<D, A> {
+/// The local addresses the endpoint knows: one per family the socket can carry.
+fn interfaces(local: SocketAddr) -> Vec<SocketAddr> {
+    match local {
+        SocketAddr::V6(a) if a.ip().is_unspecified() => {
+            vec![local, SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), a.port())]
+        }
+        a => vec![a],
+    }
+}
+
+struct Inner<H: Hosted, D> {
+    shared: Arc<Shared<H>>,
+    node: NodeId,
+    public: Arc<[u8]>,
+    discovery: D,
+    relays: Vec<String>,
+}
+
+/// An endpoint: dial, accept, sign, and reach the layers above.
+pub struct Endpoint<H: Hosted, D = NoDiscovery>(Arc<Inner<H, D>>);
+
+impl<H: Hosted, D> Clone for Endpoint<H, D> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<D, A> core::fmt::Debug for Endpoint<D, A> {
+impl<H: Hosted, D> core::fmt::Debug for Endpoint<H, D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Endpoint")
-            .field("local", &self.0.local)
+            .field("local", &self.0.shared.local())
             .finish_non_exhaustive()
     }
 }
 
-impl<D: Discovery, A: Admission> Endpoint<D, A> {
+impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// This node's id (for Ed25519, its public key).
     pub fn id(&self) -> NodeId {
         self.0.node
@@ -275,18 +351,17 @@ impl<D: Discovery, A: Admission> Endpoint<D, A> {
         &self.0.public
     }
 
-    /// Sign `data` with the node's identity key (Ed25519: 64 bytes). The driver signs it, so the driver must be running.
+    /// Sign `data` with the node's identity key (Ed25519: 64 bytes).
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the key store fails, [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
     pub async fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
-        let data = data.to_vec();
-        self.remote().call(|reply| Request::Sign { data, reply }).await?
+        self.0.shared.run(|core, _| Try::Done(core.sign(data))).await
     }
 
-    /// The address the socket is bound to. For a wildcard bind the IP is the wildcard.
+    /// The address the host said its socket is bound to. For a wildcard bind the IP is the wildcard.
     pub fn local_addr(&self) -> SocketAddr {
-        self.0.local
+        self.0.shared.local()
     }
 
     /// This node's address as peers can use it: the id, the bound address with a wildcard IP replaced by loopback, and
@@ -307,8 +382,18 @@ impl<D: Discovery, A: Admission> Endpoint<D, A> {
         }
     }
 
-    pub(crate) fn remote(&self) -> &vinc_driver::Remote {
-        &self.0.remote
+    /// Drive the endpoint until it stops, and do nothing else. For a host with nothing else pending on the endpoint: a
+    /// server between accepts, or connections that only need their keepalives. The host awaits or spawns it on its own
+    /// executor if it wants it; nothing starts it. An endpoint with no future being polled makes no progress.
+    ///
+    /// # Errors
+    /// The reason the endpoint failed, if the host's socket did; `Ok` after [`close`](Self::close).
+    pub async fn run(&self) -> Result<()> {
+        self.0.shared.run(|core, _| core.idle_poll()).await;
+        match self.0.shared.lock().stopped() {
+            Some(e) if e.kind() != ErrorKind::Shutdown => Err(e),
+            _ => Ok(()),
+        }
     }
 
     /// Dial `to` for `alpn`. A peer already connected gets a sub-session at once, with no round trip. Without direct
@@ -319,19 +404,19 @@ impl<D: Discovery, A: Admission> Endpoint<D, A> {
     /// [`crate::ErrorKind::Unreachable`] when no address works or the handshake fails, [`crate::ErrorKind::TimedOut`] when the peer does
     /// not answer, [`crate::ErrorKind::Refused`] when the access hook refused the peer, [`crate::ErrorKind::Busy`] when the connection
     /// table is full.
-    pub async fn connect(&self, to: impl Into<NodeAddr>, alpn: &[u8]) -> Result<Connection> {
+    pub async fn connect(&self, to: impl Into<NodeAddr>, alpn: &[u8]) -> Result<Connection<H>> {
         let to: NodeAddr = to.into();
         let mut addrs = to.direct;
         if addrs.is_empty() {
             addrs = self.0.discovery.lookup(&to.node).await;
         }
-        Connection::dial(self.remote(), to.node, alpn, addrs).await
+        Connection::dial(&self.0.shared, to.node, alpn, addrs).await
     }
 
     /// Wait for the next session a peer opened on a protocol of the builder's list. `None` once the endpoint stopped.
-    pub async fn accept(&self) -> Option<Incoming> {
-        let shared = self.0.incoming.recv_async().await?;
-        Some(Connection::incoming(shared, self.remote().clone()))
+    pub async fn accept(&self) -> Option<Incoming<H>> {
+        let info = self.0.shared.run(|core, _| core.accept_route(0)).await?;
+        Some(Connection::incoming(&self.0.shared, info))
     }
 
     /// The peers with a session now.
@@ -339,51 +424,69 @@ impl<D: Discovery, A: Admission> Endpoint<D, A> {
     /// # Errors
     /// [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
     pub async fn peers(&self) -> Result<Vec<NodeId>> {
-        self.remote().call(|reply| Request::Peers { reply }).await
+        self.0
+            .shared
+            .run(|core, _| Try::Done(core.stopped().map_or_else(|| Ok(core.peers()), Err)))
+            .await
     }
 
     /// Close every session with `peer`.
-    pub fn close_peer(&self, peer: &NodeId) {
-        self.remote().ctl(Ctl::ClosePeer(*peer));
+    pub async fn close_peer(&self, peer: &NodeId) {
+        let sh = &self.0.shared;
+        sh.run(|core, now| {
+            core.close_peer(now, peer);
+            Try::Done(())
+        })
+        .await;
     }
 
     /// Remember an address for `node`; dials to it use it when they carry none.
     pub fn add_address(&self, node: NodeId, addr: SocketAddr) {
-        self.remote().ctl(Ctl::AddAddr(node, addr));
+        self.0.shared.lock().add_address(node, addr);
     }
 
     /// Tell the endpoint the network changed (a new address, a link back): it probes the paths again.
-    pub fn network_change(&self) {
-        self.remote().ctl(Ctl::NetworkChange);
+    pub async fn network_change(&self) {
+        let sh = &self.0.shared;
+        sh.run(|core, now| {
+            core.network_change(now);
+            Try::Done(())
+        })
+        .await;
     }
 
     /// The node sleeps: established sessions tell their peers.
-    pub fn suspend(&self) {
-        self.remote().ctl(Ctl::Suspend);
+    pub async fn suspend(&self) {
+        let sh = &self.0.shared;
+        sh.run(|core, now| {
+            core.suspend(now);
+            Try::Done(())
+        })
+        .await;
     }
 
     /// The node woke; `moved` says its address changed meanwhile, which makes its sessions close so they are dialed again.
-    pub fn resume(&self, moved: bool) {
-        self.remote().ctl(Ctl::Resume(moved));
+    pub async fn resume(&self, moved: bool) {
+        let sh = &self.0.shared;
+        sh.run(|core, now| {
+            core.resume(now, moved);
+            Try::Done(())
+        })
+        .await;
     }
 
     /// Ask the access hook about `peer` the way the endpoint does for connections, for a layer that takes neighbours
     /// itself. With no hook everyone is admitted.
     pub fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
-        self.0.admission.admit(peer, alpn, dir)
+        self.0.shared.lock().admits(peer, alpn, dir)
     }
 
     /// The node-wide counters of the endpoint.
     ///
     /// # Errors
     /// [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
-    pub async fn node_stats(&self) -> Result<vinc_driver::NodeStats> {
-        self.remote().call(|reply| Request::Node { reply }).await
-    }
-
-    /// The counters of the driver: wakeups, datagrams and timers.
-    pub fn loop_stats(&self) -> Arc<LoopStats> {
-        Arc::clone(&self.0.stats)
+    pub async fn node_stats(&self) -> Result<crate::NodeStats> {
+        self.0.shared.run(|core, _| Try::Done(core.node_stats())).await
     }
 
     /// Serve `protocol` on its ALPN: every session a peer opens on it goes to the returned [`Registered`], not to
@@ -392,15 +495,21 @@ impl<D: Discovery, A: Admission> Endpoint<D, A> {
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the ALPN is empty, too long, already registered, or one too many.
-    pub async fn register<P: Protocol>(&self, protocol: Arc<P>) -> Result<Registered<P>> {
-        let alpn = protocol.alpn().to_vec();
-        let rx = self.remote().call(|reply| Request::Listen { alpn, reply }).await??;
-        Ok(Registered::new(rx, self.remote().downgrade(), protocol))
+    pub async fn register<P: Protocol>(&self, protocol: Arc<P>) -> Result<Registered<P, H>> {
+        let alpn = protocol.alpn();
+        let route = self.0.shared.run(|core, _| Try::Done(core.listen(alpn))).await?;
+        Ok(Registered::new(&self.0.shared, route, protocol))
     }
 
     /// Close every session with a goodbye code and stop the endpoint; returns when the sessions are closed or a second has
     /// passed.
     pub async fn close(&self) {
-        let _ = self.remote().call(|reply| Request::Shutdown { reply }).await;
+        self.0
+            .shared
+            .run(|core, now| {
+                core.begin_shutdown(now);
+                core.shutdown_poll()
+            })
+            .await;
     }
 }

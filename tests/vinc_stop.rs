@@ -10,14 +10,13 @@
 mod vinc_common;
 
 use vinc::ErrorKind;
-use vinc::Vinc;
 use vinc_common::{ECHO, bind, within};
 
 #[nuclei::test]
 async fn a_stopped_reader_makes_the_writer_fail_with_its_code() {
     within(60, async {
-        let server = bind(Vinc::builder().alpn(ECHO)).await;
-        let client = bind(Vinc::builder().alpn(ECHO)).await;
+        let server = bind(vinc_common::builder().alpn(ECHO)).await;
+        let client = bind(vinc_common::builder().alpn(ECHO)).await;
         let c = client.connect(server.addr(), ECHO).await.unwrap();
         let (mut tx, _rx) = c.open_bi().await.unwrap();
         tx.write_all(b"first").await.unwrap();
@@ -25,7 +24,7 @@ async fn a_stopped_reader_makes_the_writer_fail_with_its_code() {
         let (_stx, mut srx) = s.accept_bi().await.unwrap();
         let mut got = [0u8; 5];
         srx.read_exact(&mut got).await.unwrap();
-        srx.stop(77);
+        srx.stop(77).await;
         assert_eq!(
             srx.read_exact(&mut got).await.unwrap_err().kind(),
             ErrorKind::Stopped(77)

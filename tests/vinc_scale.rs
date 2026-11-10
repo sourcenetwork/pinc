@@ -20,9 +20,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use nuclei::sync::Semaphore;
-use vinc::Vinc;
-use vinc_common::{ECHO, Svc, bind, eventually, register, within};
-use vinc_driver::{AllowAll, EngineConfig, Identity, Limits, chan, plane, run};
+use vinc::{Limits, Vinc};
+use vinc_common::{ECHO, Svc, bind, bind_idle, eventually, register, within};
 
 const SESSIONS: usize = 1000;
 /// The most handshakes in flight at once.
@@ -52,7 +51,7 @@ async fn client(
         .acquire()
         .await
         .map_err(|_| "the dial window closed".to_owned())?;
-    let ep = bind(Vinc::builder().limits(small())).await;
+    let ep = bind(vinc_common::builder().limits(small())).await;
     let mut last = String::new();
     let mut conn = None;
     for _ in 0..5 {
@@ -88,10 +87,21 @@ async fn client(
     Ok(())
 }
 
-#[nuclei::test]
-async fn a_thousand_sessions_in_one_process_all_move_data() {
+/// The endpoint of 1024 sessions is built on the stack of the thread that calls `build`: the test runs on a thread
+/// with the stack of a nuclei worker, as a host would build it at startup.
+#[test]
+fn a_thousand_sessions_in_one_process_all_move_data() {
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(|| nuclei::block_on(a_thousand_sessions()))
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn a_thousand_sessions() {
     within(900, async {
-        let server = bind(Vinc::builder().limits(Limits {
+        let server = bind(vinc_common::builder().limits(Limits {
             connections: 1024,
             pool_chunks: 32,
             stream_window: 32 * 1024,
@@ -108,7 +118,7 @@ async fn a_thousand_sessions_in_one_process_all_move_data() {
         );
         let clients: Vec<_> = (0..SESSIONS)
             .map(|i| {
-                nuclei::spawn(client(
+                nuclei::spawn_local(client(
                     i,
                     addr.clone(),
                     Arc::clone(&dialing),
@@ -143,31 +153,23 @@ async fn a_thousand_sessions_in_one_process_all_move_data() {
     .await;
 }
 
-#[nuclei::test]
-async fn the_engine_builds_on_a_nuclei_worker_with_the_default_stack() {
-    // A nuclei worker has the runtime's default stack; the endpoint of 1024 sessions is over a megabyte and its stream
-    // tables are far larger.
-    for connections in [1, 1024] {
-        let sessions = nuclei::spawn(async move {
-            let (_remote, plane) = plane(8);
-            let (queue, _incoming) = chan(4);
-            let cfg = EngineConfig {
-                identity: Identity::from_seed(&[5; 32]).unwrap(),
-                alpns: vec![ECHO.to_vec()],
-                limits: Limits {
-                    connections,
+/// The endpoint of 1024 sessions builds, drives and drops on a thread with the default stack of a nuclei worker (8 MiB).
+#[test]
+fn the_endpoint_builds_on_a_nuclei_worker_with_the_default_stack() {
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(|| {
+            nuclei::block_on(async {
+                let limits = Limits {
+                    connections: 1024,
                     pool_chunks: 16,
                     ..Limits::default()
-                },
-                admit: AllowAll,
-                max_gso: 1,
-                locals: vec!["10.0.0.1:4433".parse().unwrap()],
-            };
-            run(cfg, plane, queue, 10_000_000_000, async |e| e.node_stats().sessions)
-                .await
-                .unwrap()
+                };
+                let ep = bind_idle(Vinc::builder().alpn(ECHO).limits(limits)).await;
+                assert_eq!(ep.node_stats().await.unwrap().sessions, 0);
+            });
         })
-        .await;
-        assert_eq!(sessions, 0);
-    }
+        .unwrap()
+        .join()
+        .unwrap();
 }

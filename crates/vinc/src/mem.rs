@@ -59,18 +59,10 @@ pub struct Limits {
     pub stream_window: u64,
     /// The most streams the peer may have open at once on a session (at most 64).
     pub streams: u16,
-    /// The most blocks of 16 KiB a stream holds in each direction outside the endpoint (at least 1).
-    pub stream_blocks: usize,
     /// The most streams the peer may open that the application has not accepted, per session.
     pub accept_streams: usize,
     /// The most sessions accepted but not yet taken by the application.
     pub accept_sessions: usize,
-    /// The most received datagrams one session holds for the application. A datagram is at most one packet, about 1.4 KB
-    /// on a typical path (9 KB on a jumbo-frame path), so a session holds at most this many times that. Once it is
-    /// full the endpoint's own bounded queue takes over and drops the oldest, counting each drop.
-    pub datagrams: usize,
-    /// The most requests waiting for the engine.
-    pub requests: usize,
 }
 
 impl Default for Limits {
@@ -80,11 +72,8 @@ impl Default for Limits {
             pool_chunks: 512,
             stream_window: 256 * 1024,
             streams: 64,
-            stream_blocks: 16,
             accept_streams: 64,
             accept_sessions: 64,
-            datagrams: 64,
-            requests: 1024,
         }
     }
 }
@@ -97,13 +86,10 @@ impl Limits {
     pub fn check(&self) -> Result<()> {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
             && (8..=65_536).contains(&self.pool_chunks)
-            && (1..=1024).contains(&self.stream_blocks)
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
             && (1..=64).contains(&self.streams)
             && self.accept_streams >= 1
-            && self.accept_sessions >= 1
-            && self.datagrams >= 1
-            && self.requests >= 1;
+            && self.accept_sessions >= 1;
         if ok {
             Ok(())
         } else {
@@ -112,40 +98,37 @@ impl Limits {
     }
 }
 
-/// The streams and loss average the slots borrow.
-pub(crate) struct Memory {
-    streams: Vec<Streams<NoSource, STREAMS, RING>>,
-    loss: LossEstimate,
-}
+/// A table of `K` slots over memory that lives for the rest of the process. The endpoint borrows its slots for its whole
+/// life, so the memory is allocated once and handed back through [`Endpoint::into_slots`](vinc_core::Endpoint) to the
+/// process-wide pool of [`node`](crate::node), where the next endpoint of the same shape takes it; it is never returned
+/// to the system.
+// vertexia: the pool holds the peak number of live endpoints; a slot table that owns its memory in vinc-core would free it
+pub(crate) type Table<const K: usize> = &'static mut [EpSlot<'static>; K];
 
-impl Memory {
-    /// The stream tables of `sessions` slots.
-    pub(crate) fn new(sessions: usize) -> Self {
-        let pool = BufferPool::new_boxed(1);
-        let cfg = stream::Config::new(false);
-        let streams = (0..sessions).map(|_| Streams::new(&cfg, &pool)).collect();
-        Self {
-            streams,
-            loss: LossEstimate::new(),
-        }
-    }
-
-    /// The slot table over this memory.
-    pub(crate) fn slots<const K: usize>(&mut self, chunks: usize) -> Result<Box<[EpSlot<'_>; K]>> {
-        let loss = &self.loss;
-        let v: Vec<EpSlot<'_>> = self
-            .streams
-            .iter_mut()
-            .map(|s| {
-                Slot::new(Resources {
-                    pool: BufferPool::new_boxed(chunks),
-                    streams: s,
-                    loss,
-                })
+/// A new table of `K` slots with `chunks` pool chunks each.
+///
+/// # Errors
+/// [`ErrorKind::Config`](crate::ErrorKind::Config) if the table cannot be made.
+#[inline(never)]
+pub(crate) fn new_table<const K: usize>(chunks: usize) -> Result<Table<K>> {
+    let pool = BufferPool::new_boxed(1);
+    let cfg = stream::Config::new(false);
+    let streams: &'static mut [Streams<NoSource, STREAMS, RING>] =
+        Box::leak((0..K).map(|_| Streams::new(&cfg, &pool)).collect());
+    let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
+    let v: Vec<EpSlot<'static>> = streams
+        .iter_mut()
+        .map(|s| {
+            Slot::new(Resources {
+                pool: BufferPool::new_boxed(chunks),
+                streams: s,
+                loss,
             })
-            .collect();
-        v.into_boxed_slice()
-            .try_into()
-            .map_err(|_| Error::config("the slot table has the wrong size"))
-    }
+        })
+        .collect();
+    let boxed: Box<[EpSlot<'static>; K]> = v
+        .into_boxed_slice()
+        .try_into()
+        .map_err(|_| Error::config("the slot table has the wrong size"))?;
+    Ok(Box::leak(boxed))
 }

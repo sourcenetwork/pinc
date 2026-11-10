@@ -128,7 +128,8 @@ impl AllocStats {
         self.allocs + self.reallocs
     }
 
-    fn now() -> Self {
+    /// What the allocator has counted on the current thread so far.
+    pub fn now() -> Self {
         Self {
             allocs: ALLOCS.with(Cell::get),
             reallocs: REALLOCS.with(Cell::get),

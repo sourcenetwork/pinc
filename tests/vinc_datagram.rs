@@ -17,7 +17,7 @@ mod vinc_common;
 
 use std::time::Duration;
 
-use vinc::{Connection, Endpoint, ErrorKind, Vinc};
+use vinc::{Connection, Endpoint, ErrorKind, Hosted};
 use vinc_common::{ECHO, bind, poll_drop, within};
 
 /// A datagram of `seq` and padding to `len` bytes.
@@ -32,9 +32,14 @@ fn seq(d: &[u8]) -> u32 {
 }
 
 /// A connected pair; the endpoints are returned so they live as long as the connections.
-async fn pair() -> (Endpoint, Endpoint, Connection, Connection) {
-    let server = bind(Vinc::builder().alpn(ECHO)).await;
-    let client = bind(Vinc::builder().alpn(ECHO)).await;
+async fn pair() -> (
+    Endpoint<impl Hosted>,
+    Endpoint<impl Hosted>,
+    Connection<impl Hosted>,
+    Connection<impl Hosted>,
+) {
+    let server = bind(vinc_common::builder().alpn(ECHO)).await;
+    let client = bind(vinc_common::builder().alpn(ECHO)).await;
     let c = client.connect(server.addr(), ECHO).await.unwrap();
     // The session reaches the server's queue once the client opened a stream.
     let (mut tx, _rx) = c.open_bi().await.unwrap();
@@ -57,7 +62,7 @@ async fn datagrams_arrive_in_order_with_their_bytes() {
         // A datagram sent the other way arrives too, and one that ends the connection ends the wait.
         s.send_datagram(&dgram(9, 30)).await.unwrap();
         assert_eq!(c.read_datagram().await.unwrap(), dgram(9, 30));
-        c.close(5);
+        c.close(5).await;
         assert!(s.read_datagram().await.is_err());
     })
     .await;
@@ -68,7 +73,7 @@ async fn a_large_burst_arrives_in_order_and_what_is_lost_is_lost_whole() {
     within(120, async {
         let (_server, _client, c, s) = pair().await;
         const N: u32 = 5000;
-        let reader = nuclei::spawn(async move {
+        let reader = nuclei::spawn_local(async move {
             let (mut prev, mut got): (Option<u32>, usize) = (None, 0);
             while let Ok(d) = s.read_datagram().await {
                 let n = seq(&d);
@@ -86,7 +91,7 @@ async fn a_large_burst_arrives_in_order_and_what_is_lost_is_lost_whole() {
             }
         }
         nuclei::time::sleep(Duration::from_secs(2)).await;
-        c.close(0);
+        c.close(0).await;
         let n = reader.await;
         assert!(n > 0 && n <= N as usize, "{n} datagrams of {N}");
     })
@@ -127,7 +132,7 @@ async fn datagrams_arrive_in_order_and_a_dropped_read_loses_nothing() {
         for i in 0..40u32 {
             assert_eq!(s.read_datagram().await.unwrap(), dgram(i, 64));
         }
-        c.close(3);
+        c.close(3).await;
         assert!(matches!(
             s.read_datagram().await.unwrap_err().kind(),
             ErrorKind::Closed { .. }

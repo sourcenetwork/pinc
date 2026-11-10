@@ -11,6 +11,7 @@
     clippy::indexing_slicing
 )]
 
+#[macro_use]
 mod vinc_common;
 
 use std::future::Future;
@@ -18,24 +19,43 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use vinc::{Admission, Direction, Discovery, ErrorKind, NodeAddr, NodeId, Vinc, node_from_str, node_to_string};
+use vinc::{Admission, Direction, Discovery, ErrorKind, NodeAddr, NodeId, node_from_str, node_to_string};
 use vinc_common::{ECHO, Svc, bind, client, node, register, serve_conn, within};
 
-fn assert_send_sync<T: Send + Sync + 'static>() {}
+fn assert_send_sync<T: Send + Sync + 'static>(_: &T) {}
+fn assert_send<T: Send>(_: &T) {}
 
-#[test]
-fn handles_are_send_sync_static() {
-    assert_send_sync::<vinc::Endpoint>();
-    assert_send_sync::<vinc::Connection>();
-    assert_send_sync::<vinc::Incoming>();
-    assert_send_sync::<vinc::SendStream>();
-    assert_send_sync::<vinc::RecvStream>();
-    assert_send_sync::<vinc::Error>();
+/// The handles are `Send + Sync + 'static` and every future of the facade is `Send`, for closures that are: the endpoint
+/// is built here, where the closures' types are known.
+#[nuclei::test]
+async fn handles_are_send_sync_static() {
+    let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO));
+    assert_send_sync(&ep);
+    let server = node().await;
+    let conn = ep.connect(server.addr(), ECHO).await.unwrap();
+    assert_send_sync(&conn);
+    let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+    assert_send_sync(&tx);
+    assert_send_sync(&rx);
+    assert_send(&ep.sign(b"x"));
+    assert_send(&ep.run());
+    assert_send(&ep.accept());
+    assert_send(&ep.connect(server.addr(), ECHO));
+    assert_send(&conn.open_bi());
+    assert_send(&conn.accept_bi());
+    assert_send(&conn.read_datagram());
+    assert_send(&conn.send_datagram(b"x"));
+    assert_send(&conn.closed());
+    assert_send(&tx.write(b"x"));
+    assert_send(&tx.finish());
+    assert_send(&rx.read(&mut [0u8; 1]));
+    assert_send(&rx.read_to_end(1));
+    assert_send_sync(&conn.close_reason());
 }
 
 #[nuclei::test]
 async fn addresses_round_trip() {
-    let node = bind(Vinc::builder().seed(&[9; 32]).unwrap()).await.id();
+    let node = bind(vinc_common::builder().seed(&[9; 32]).unwrap()).await.id();
     let text = node_to_string(&node);
     assert_eq!(text.len(), 64);
     assert_eq!(node_from_str(&text).unwrap(), node);
@@ -51,8 +71,8 @@ async fn addresses_round_trip() {
 
 #[nuclei::test]
 async fn identity_is_the_seed_and_signs() {
-    let a = bind(Vinc::builder().seed(&[5; 32]).unwrap()).await;
-    let b = bind(Vinc::builder().seed(&[5; 32]).unwrap()).await;
+    let a = bind(vinc_common::builder().seed(&[5; 32]).unwrap()).await;
+    let b = bind(vinc_common::builder().seed(&[5; 32]).unwrap()).await;
     assert_eq!(a.id(), b.id());
     assert_eq!(a.public_key(), &a.id().bytes);
     let sig = within(30, a.sign(b"message")).await.unwrap();
@@ -75,17 +95,17 @@ impl Admission for Gate {
 
 #[nuclei::test]
 async fn access_hook_refuses_on_accept_and_on_dial_and_serves_gossip_checks() {
-    let denied = bind(Vinc::builder().seed(&[7; 32]).unwrap().alpn(ECHO)).await;
+    let denied = bind(vinc_common::builder().seed(&[7; 32]).unwrap().alpn(ECHO)).await;
     let seen = Arc::new(AtomicUsize::new(0));
-    let server = bind(Vinc::builder().alpn(ECHO).acp(Gate {
+    let server = bind(vinc_common::builder().alpn(ECHO).acp(Gate {
         seen: Arc::clone(&seen),
         deny: Some(denied.id()),
     }))
     .await;
     let s = server.clone();
-    nuclei::spawn(async move {
+    nuclei::spawn_local(async move {
         while let Some(i) = s.accept().await {
-            nuclei::spawn(serve_conn(i.into_connection())).detach();
+            nuclei::spawn_local(serve_conn(i.into_connection())).detach();
         }
     })
     .detach();
@@ -137,22 +157,22 @@ impl Discovery for Book {
 
 #[nuclei::test]
 async fn discovery_unreachable_and_self_dial_errors() {
-    let server = bind(Vinc::builder().seed(&[3; 32]).unwrap().alpn(ECHO)).await;
+    let server = bind(vinc_common::builder().seed(&[3; 32]).unwrap().alpn(ECHO)).await;
     let s = server.clone();
-    nuclei::spawn(async move {
+    nuclei::spawn_local(async move {
         while let Some(i) = s.accept().await {
             std::mem::forget(i);
         }
     })
     .detach();
     let book = Book(server.local_addr(), server.id());
-    let client = bind(Vinc::builder().discovery(book)).await;
+    let client = bind(vinc_common::builder().discovery(book)).await;
     within(120, async {
         // No address given: discovery supplies it.
         let c = client.connect(server.id(), ECHO).await.unwrap();
         assert_eq!(c.remote(), server.id());
         // An unknown node with no address cannot be reached.
-        let nobody = bind(Vinc::builder().seed(&[4; 32]).unwrap()).await.id();
+        let nobody = bind(vinc_common::builder().seed(&[4; 32]).unwrap()).await.id();
         assert_eq!(
             client.connect(nobody, ECHO).await.unwrap_err().kind(),
             ErrorKind::Unreachable
@@ -173,8 +193,8 @@ async fn discovery_unreachable_and_self_dial_errors() {
 
 #[nuclei::test]
 async fn registered_protocols_tags_and_alpn_limits() {
-    let server = bind(Vinc::builder()).await;
-    let client = bind(Vinc::builder()).await;
+    let server = bind(vinc_common::builder()).await;
+    let client = bind(vinc_common::builder()).await;
     within(120, async {
         for a in [&b"t/a"[..], b"t/b", b"t/c", b"t/d"] {
             let a: &'static [u8] = Box::leak(a.to_vec().into_boxed_slice());
@@ -204,7 +224,7 @@ async fn registered_protocols_tags_and_alpn_limits() {
             first.open_bi_tagged(&[1u8; 65]).await.unwrap_err().kind(),
             ErrorKind::Config
         );
-        tx.reset(9);
+        tx.reset(9).await;
     })
     .await;
 }
@@ -215,7 +235,7 @@ async fn close_peer_and_shutdown() {
     let client = client().await;
     within(120, async {
         let c = client.connect(server.addr(), ECHO).await.unwrap();
-        client.close_peer(&server.id());
+        client.close_peer(&server.id()).await;
         let why = c.closed().await;
         assert!(matches!(why.kind(), ErrorKind::Closed { .. }), "{why:?}");
         assert_eq!(c.open_bi().await.unwrap_err().kind(), why.kind());

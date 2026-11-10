@@ -1,71 +1,73 @@
-//! Thread-per-core: an endpoint on each of two nuclei workers, each with its own socket and its driver on its own worker,
+//! Thread-per-core: an endpoint on each of two nuclei workers, each with its own socket and polled on its own worker,
 //! exchange streams and datagrams.
 #![allow(
     clippy::semicolon_if_nothing_returned,
-    clippy::items_after_statements,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
 )]
 
+#[macro_use]
 mod vinc_common;
 
 use nuclei::RuntimeHandle;
 use nuclei::runtime::worker_index;
 use nuclei::sync::oneshot;
-use vinc::{Endpoint, Vinc};
-use vinc_common::{ECHO, lo, serve_conn, within};
-use vinc_nuclei::spawn_on_worker;
-
-/// Build an endpoint on `worker` and run its driver there; the endpoint and the worker the driver runs on come back.
-fn on_worker(handle: &RuntimeHandle, worker: usize) -> oneshot::Receiver<(Endpoint, Option<usize>)> {
-    let (up, ready) = oneshot::channel();
-    spawn_on_worker(handle, worker, async move {
-        let (ep, driver) = Vinc::builder().alpn(ECHO).bind_nuclei(lo()).await.unwrap();
-        up.send((ep, worker_index())).ok().unwrap();
-        driver.run().await
-    })
-    .unwrap()
-    .detach();
-    ready
-}
+use vinc::NodeAddr;
+use vinc_common::{ECHO, serve_conn, within};
 
 #[nuclei::test(threads = 2)]
 async fn endpoints_on_different_workers_exchange_streams_and_datagrams() {
     within(60, async {
         let handle = RuntimeHandle::try_current().unwrap();
         assert_eq!(handle.workers(), 2);
-        let ((a, wa), (b, wb)) = (
-            on_worker(&handle, 0).await.unwrap(),
-            on_worker(&handle, 1).await.unwrap(),
-        );
-        assert_eq!((wa, wb), (Some(0), Some(1)), "each driver runs on its own worker");
+        let (addr_tx, addr_rx) = oneshot::channel::<(NodeAddr, Option<usize>)>();
+        let (go_tx, go_rx) = oneshot::channel::<NodeAddr>();
 
-        let s = b.clone();
-        nuclei::spawn(async move {
-            while let Some(i) = s.accept().await {
-                nuclei::spawn(serve_conn(i.into_connection())).detach();
-            }
-        })
-        .detach();
+        // Worker 1: the server, its endpoint and everything it serves stay on this worker.
+        let server = handle
+            .spawn_on_worker(1, async move {
+                let b = lo_endpoint!(vinc_common::builder().alpn(ECHO));
+                addr_tx.send((b.addr(), worker_index())).ok().unwrap();
+                let a_addr = go_rx.await.unwrap();
+                let s = b.clone();
+                nuclei::spawn_local(async move {
+                    while let Some(i) = s.accept().await {
+                        nuclei::spawn_local(serve_conn(i.into_connection())).detach();
+                    }
+                })
+                .detach();
+                // A datagram each way, on a session this endpoint dials.
+                let back = b.connect(a_addr, ECHO).await.unwrap();
+                let (mut tx, _rx) = back.open_bi().await.unwrap();
+                tx.write_all(b"x").await.unwrap();
+                back.send_datagram(b"across workers").await.unwrap();
+                assert_eq!(back.read_datagram().await.unwrap(), b"and back");
+                worker_index()
+            })
+            .unwrap();
 
-        let conn = a.connect(b.addr(), ECHO).await.unwrap();
-        let (mut tx, mut rx) = conn.open_bi().await.unwrap();
-        let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 249) as u8).collect();
-        tx.write_all(&payload).await.unwrap();
-        tx.finish().await.unwrap();
-        assert_eq!(rx.read_to_end(1 << 20).await.unwrap(), payload);
-
-        // A datagram each way, on a session the first endpoint accepts.
-        let back = b.connect(a.addr(), ECHO).await.unwrap();
-        let (mut tx3, _rx3) = back.open_bi().await.unwrap();
-        tx3.write_all(b"x").await.unwrap();
-        let inc = a.accept().await.unwrap().into_connection();
-        back.send_datagram(b"across workers").await.unwrap();
-        assert_eq!(inc.read_datagram().await.unwrap(), b"across workers");
-        inc.send_datagram(b"and back").await.unwrap();
-        assert_eq!(back.read_datagram().await.unwrap(), b"and back");
+        // Worker 0: the client.
+        let (b_addr, wb) = addr_rx.await.unwrap();
+        let client = handle
+            .spawn_on_worker(0, async move {
+                let a = lo_endpoint!(vinc_common::builder().alpn(ECHO));
+                go_tx.send(a.addr()).ok().unwrap();
+                let conn = a.connect(b_addr, ECHO).await.unwrap();
+                let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+                let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 249) as u8).collect();
+                tx.write_all(&payload).await.unwrap();
+                tx.finish().await.unwrap();
+                assert_eq!(rx.read_to_end(1 << 20).await.unwrap(), payload);
+                let inc = a.accept().await.unwrap().into_connection();
+                assert_eq!(inc.read_datagram().await.unwrap(), b"across workers");
+                inc.send_datagram(b"and back").await.unwrap();
+                worker_index()
+            })
+            .unwrap();
+        assert_eq!((client.await, server.await, wb), (Some(0), Some(1), Some(1)));
     })
     .await;
 }

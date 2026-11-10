@@ -21,10 +21,10 @@ use std::time::{Duration, Instant};
 
 use nuclei::Task;
 use nuclei::sync::oneshot;
-use vinc::{Endpoint, NodeAddr, Vinc};
+use vinc::{Discovery, Endpoint, Hosted, NodeAddr};
 use vinc_common::{ECHO, bind, client, eventually, node, pattern, poll_drop, within};
 
-async fn echo_once(client: &Endpoint, addr: &NodeAddr) {
+async fn echo_once<H: Hosted + 'static, D: Discovery>(client: &Endpoint<H, D>, addr: &NodeAddr) {
     let conn = client.connect(addr.clone(), ECHO).await.unwrap();
     let (mut tx, mut rx) = conn.open_bi().await.unwrap();
     tx.write_all(b"alive").await.unwrap();
@@ -33,9 +33,13 @@ async fn echo_once(client: &Endpoint, addr: &NodeAddr) {
 }
 
 /// Background traffic that must not be disturbed by the dropped futures; resolves to its rounds when stopped.
-fn load(client: &Endpoint, addr: &NodeAddr, stop: &Arc<AtomicBool>) -> Task<u64> {
+fn load<H: Hosted + 'static, D: Discovery>(
+    client: &Endpoint<H, D>,
+    addr: &NodeAddr,
+    stop: &Arc<AtomicBool>,
+) -> Task<u64> {
     let (client, addr, stop) = (client.clone(), addr.clone(), Arc::clone(stop));
-    nuclei::spawn(async move {
+    nuclei::spawn_local(async move {
         let conn = client.connect(addr, ECHO).await.unwrap();
         let mut rounds = 0;
         while !stop.load(Ordering::Relaxed) {
@@ -77,7 +81,7 @@ async fn dropped_connect_leaves_nothing_open() {
         let addr2 = server2.addr();
         let mut fresh = Vec::new();
         for _ in 0..12 {
-            fresh.push(bind(Vinc::builder().alpn(ECHO)).await);
+            fresh.push(bind(vinc_common::builder().alpn(ECHO)).await);
         }
         for (polls, f) in fresh.iter().enumerate() {
             let _ = poll_drop(f.connect(addr2.clone(), ECHO), polls).await;
@@ -129,9 +133,9 @@ async fn dropped_open_accept_and_stats_lose_no_stream() {
         echo_once(&client, &addr).await;
 
         // accept_bi dropped at every poll count loses no stream: a peer opens five, the other side collects them all.
-        let b = bind(Vinc::builder().alpn(ECHO)).await;
+        let b = bind(vinc_common::builder().alpn(ECHO)).await;
         let (a, addr_b) = (client.clone(), b.addr());
-        let sender = nuclei::spawn(async move {
+        let sender = nuclei::spawn_local(async move {
             let conn = a.connect(addr_b, ECHO).await.unwrap();
             let mut keep = Vec::new();
             for i in 0..5u8 {
@@ -165,12 +169,12 @@ async fn dropped_open_accept_and_stats_lose_no_stream() {
 #[nuclei::test]
 async fn dropped_write_accepts_exactly_what_it_reported() {
     within(120, async {
-        let server = bind(Vinc::builder().alpn(ECHO)).await;
+        let server = bind(vinc_common::builder().alpn(ECHO)).await;
         let client = client().await;
         let s = server.clone();
         // The server accepts a stream and does not read it until told to: the writer stalls on flow control.
         let (go_tx, go_rx) = oneshot::channel::<()>();
-        let reader = nuclei::spawn(async move {
+        let reader = nuclei::spawn_local(async move {
             let conn = s.accept().await.unwrap().into_connection();
             let (_tx, mut rx) = conn.accept_bi().await.unwrap();
             go_rx.await.unwrap();
@@ -232,7 +236,7 @@ async fn dropped_read_loses_no_bytes() {
         let (mut tx, mut rx) = conn.open_bi().await.unwrap();
         let payload: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
         let sent = payload.clone();
-        let writer = nuclei::spawn(async move {
+        let writer = nuclei::spawn_local(async move {
             tx.write_all(&sent).await.unwrap();
             tx.finish().await.unwrap();
         });

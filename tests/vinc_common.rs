@@ -21,18 +21,30 @@
 )]
 
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use vinc::{Admission, Builder, Connection, Discovery, Endpoint, Protocol, RecvStream, SendStream, Vinc};
+use nuclei::Handle;
+use vinc::{
+    Admission, Builder, Connection, Discovery, Endpoint, Hosted, Limits, Protocol, RecvStream, SendStream, Vinc,
+};
 use vinc_keystore::KeyStore;
 use vinc_tests::SplitMix64;
 
 pub const ECHO: &[u8] = b"t/echo";
 pub const SINK: &[u8] = b"t/sink";
 pub const GEN: &[u8] = b"t/gen";
+
+/// A builder with room for 64 sessions: the endpoint is built on the test thread's stack, and the default 1024 sessions
+/// need more of it than a test thread has.
+pub fn builder() -> Builder {
+    Vinc::builder().limits(Limits {
+        connections: 64,
+        ..Limits::default()
+    })
+}
 
 pub fn lo() -> SocketAddr {
     ([127, 0, 0, 1], 0).into()
@@ -71,7 +83,7 @@ pub fn pattern_hash(seed: u64, len: u64) -> [u8; 32] {
 
 // ---- the services (async) ----
 
-pub async fn echo_stream(mut tx: SendStream, mut rx: RecvStream) {
+pub async fn echo_stream<H: Hosted + 'static>(mut tx: SendStream<H>, mut rx: RecvStream<H>) {
     let mut buf = vec![0u8; 16 * 1024];
     while let Ok(Some(n)) = rx.read(&mut buf).await {
         if tx.write_all(&buf[..n]).await.is_err() {
@@ -81,7 +93,7 @@ pub async fn echo_stream(mut tx: SendStream, mut rx: RecvStream) {
     let _ = tx.finish().await;
 }
 
-pub async fn sink_stream(mut tx: SendStream, mut rx: RecvStream) {
+pub async fn sink_stream<H: Hosted + 'static>(mut tx: SendStream<H>, mut rx: RecvStream<H>) {
     let mut h = blake3::Hasher::new();
     let mut total = 0u64;
     let mut buf = vec![0u8; 64 * 1024];
@@ -95,7 +107,7 @@ pub async fn sink_stream(mut tx: SendStream, mut rx: RecvStream) {
     let _ = tx.finish().await;
 }
 
-pub async fn gen_stream(mut tx: SendStream, mut rx: RecvStream) {
+pub async fn gen_stream<H: Hosted + 'static>(mut tx: SendStream<H>, mut rx: RecvStream<H>) {
     let mut req = [0u8; 16];
     if rx.read_exact(&mut req).await.is_err() {
         return;
@@ -116,10 +128,10 @@ pub async fn gen_stream(mut tx: SendStream, mut rx: RecvStream) {
 }
 
 /// Serve one session of any test protocol.
-pub async fn serve_conn(conn: Connection) {
+pub async fn serve_conn<H: Hosted + 'static>(conn: Connection<H>) {
     while let Ok((tx, rx)) = conn.accept_bi().await {
         let alpn = conn.alpn().to_vec();
-        nuclei::spawn(async move {
+        nuclei::spawn_local(async move {
             match alpn.as_slice() {
                 ECHO => echo_stream(tx, rx).await,
                 SINK => sink_stream(tx, rx).await,
@@ -137,40 +149,85 @@ impl Protocol for Svc {
         self.0
     }
 
-    async fn serve(self: Arc<Self>, conn: Connection) {
+    async fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) {
         serve_conn(conn).await;
     }
 }
 
-/// Register `protocol` and serve each session it gets, on nuclei tasks.
-pub async fn register<D: Discovery, A: Admission, P: Protocol>(
-    ep: &Endpoint<D, A>,
+/// Register `protocol` and serve each session it gets, on nuclei tasks of this worker.
+pub async fn register<H: Hosted + 'static, D: Discovery, P: Protocol>(
+    ep: &Endpoint<H, D>,
     protocol: Arc<P>,
 ) -> vinc::Result<()> {
     let registered = ep.register(protocol).await?;
-    nuclei::spawn(async move {
+    nuclei::spawn_local(async move {
         while let Some(conn) = registered.accept().await {
-            nuclei::spawn(registered.protocol().serve(conn)).detach();
+            nuclei::spawn_local(registered.protocol().serve(conn)).detach();
         }
     })
     .detach();
     Ok(())
 }
 
-/// Bind `builder` on loopback and spawn its driver on the nuclei runtime.
-pub async fn bind<S: KeyStore + 'static, D: Discovery, A: Admission>(builder: Builder<S, D, A>) -> Endpoint<D, A> {
-    let (ep, driver) = builder.bind_nuclei(lo()).await.unwrap();
-    nuclei::spawn(driver.run()).detach();
+/// Bind `builder` on a loopback UDP socket of the nuclei runtime and build its endpoint over the socket's I/O; nothing
+/// drives it yet.
+pub async fn bind_idle<S: KeyStore + Send + 'static, D: Discovery, A: Admission>(
+    builder: Builder<S, D, A>,
+) -> Endpoint<impl Hosted, D> {
+    let sock = Arc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
+    let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
+    builder
+        .local_addr(sock.local_addr().unwrap())
+        .build(
+            async move |buf: &mut [u8]| r.recv_from(buf).await,
+            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+            async |at: Instant| nuclei::time::sleep_until_precise(at).await,
+        )
+        .unwrap()
+}
+
+/// The endpoint of `$builder` over a new loopback UDP socket of the nuclei runtime, written out where it is used so
+/// the closure types are known there (a future that holds it can then be sent to another worker).
+#[macro_export]
+macro_rules! lo_endpoint {
+    ($builder:expr) => {{
+        let sock = ::std::sync::Arc::new(
+            ::nuclei::Handle::<::std::net::UdpSocket>::bind($crate::vinc_common::lo())
+                .await
+                .unwrap(),
+        );
+        let (r, s) = (::std::sync::Arc::clone(&sock), ::std::sync::Arc::clone(&sock));
+        $builder
+            .local_addr(sock.local_addr().unwrap())
+            .build(
+                async move |buf: &mut [u8]| r.recv_from(buf).await,
+                async move |pkt: &[u8], to: ::std::net::SocketAddr| s.send_to(pkt, to).await,
+                async |at: ::std::time::Instant| ::nuclei::time::sleep_until_precise(at).await,
+            )
+            .unwrap()
+    }};
+}
+
+/// [`bind_idle`] and a task that runs the endpoint, as a host would that has nothing else to await on it.
+pub async fn bind<S: KeyStore + Send + 'static, D: Discovery, A: Admission>(
+    builder: Builder<S, D, A>,
+) -> Endpoint<impl Hosted, D> {
+    let ep = bind_idle(builder).await;
+    let e = ep.clone();
+    nuclei::spawn_local(async move {
+        let _ = e.run().await;
+    })
+    .detach();
     ep
 }
 
 /// An endpoint serving the test protocols, accepting and serving every session it gets.
-pub async fn node() -> Endpoint {
-    let ep = bind(Vinc::builder().alpn(ECHO).alpn(SINK).alpn(GEN)).await;
+pub async fn node() -> Endpoint<impl Hosted> {
+    let ep = bind(builder().alpn(ECHO).alpn(SINK).alpn(GEN)).await;
     let s = ep.clone();
-    nuclei::spawn(async move {
+    nuclei::spawn_local(async move {
         while let Some(i) = s.accept().await {
-            nuclei::spawn(serve_conn(i.into_connection())).detach();
+            nuclei::spawn_local(serve_conn(i.into_connection())).detach();
         }
     })
     .detach();
@@ -178,8 +235,8 @@ pub async fn node() -> Endpoint {
 }
 
 /// A client endpoint that serves nothing.
-pub async fn client() -> Endpoint {
-    bind(Vinc::builder().alpn(ECHO)).await
+pub async fn client() -> Endpoint<impl Hosted> {
+    bind(builder().alpn(ECHO)).await
 }
 
 /// Fail the test if `f` does not finish in `secs`: a stuck await must fail loudly.
@@ -216,10 +273,8 @@ pub async fn eventually<F: Future<Output = bool>>(secs: u64, what: &str, mut che
 }
 
 /// Run all of `futs` as nuclei tasks; the outputs come back in order.
-pub async fn join_all<T: Send + 'static>(
-    futs: impl IntoIterator<Item = impl Future<Output = T> + Send + 'static>,
-) -> Vec<T> {
-    let tasks: Vec<_> = futs.into_iter().map(nuclei::spawn).collect();
+pub async fn join_all<T: 'static>(futs: impl IntoIterator<Item = impl Future<Output = T> + 'static>) -> Vec<T> {
+    let tasks: Vec<_> = futs.into_iter().map(nuclei::spawn_local).collect();
     let mut out = Vec::with_capacity(tasks.len());
     for t in tasks {
         out.push(t.await);

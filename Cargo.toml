@@ -28,8 +28,6 @@ vinc-dtn = { path = "crates/vinc-dtn", version = "0.1.0" }
 vinc-values = { path = "crates/vinc-values", version = "0.1.0" }
 vinc-core = { path = "crates/vinc-core", version = "0.1.0" }
 vinc-broadcast = { path = "crates/vinc-broadcast", version = "0.1.0" }
-vinc-driver = { path = "crates/vinc-driver", version = "0.1.0" }
-vinc-nuclei = { path = "crates/vinc-nuclei", version = "0.1.0" }
 vinc = { path = "crates/vinc", version = "0.1.0" }
 vinc-node = { path = "crates/vinc-node", version = "0.1.0" }
 
@@ -51,9 +49,9 @@ ml-dsa = { version = "0.1.2", default-features = false }
 getrandom = { version = "0.4.3", default-features = false }
 tpm2-protocol = { version = "1.2.3", default-features = false }
 
-futures-io = { version = "0.3.34", default-features = false, features = ["std"] }
-kovan-channel = "0.2.3"
 nuclei = "0.5.8"
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros"] }
+smol = "2.0.2"
 
 criterion = "0.7.0"
 proptest = "1.12.0"
@@ -105,6 +103,11 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.vinc-core]
+opt-level = 3
+
+# The facade builds the endpoint, a very large value, straight into its heap allocation; unoptimised code would build it
+# on the stack first.
+[profile.dev.package.vinc]
 opt-level = 3
 
 [profile.dev.package.vinc-sim]
