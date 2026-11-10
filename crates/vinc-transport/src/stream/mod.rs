@@ -53,6 +53,17 @@ pub const RANGES: usize = 16;
 /// add: the deepest reordering scenario measured needed 65 at 128 packet ranges, and 96 leaves room.
 pub const RECV_RANGES: usize = 96;
 
+/// What the send half of a stream knows, for a host that paces work on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendView {
+    /// One past the highest stream offset sent so far.
+    pub sent: u64,
+    /// The lowest stream offset that was declared lost and waits to be sent again.
+    pub lost: Option<u64>,
+    /// Nothing more will be sent or sent again: the end and every byte are acknowledged, or the half is closed.
+    pub done: bool,
+}
+
 /// Whether `id` is unidirectional.
 pub const fn is_uni(id: StreamId) -> bool {
     id & 2 != 0

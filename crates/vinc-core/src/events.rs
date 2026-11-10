@@ -25,7 +25,7 @@ use crate::slot::{HeldEvent, State};
 use crate::trace::trace;
 
 /// The largest extension body kept for the endpoint to parse.
-const EXT_KEEP: usize = crate::reach::REACH_BODY_MAX;
+const EXT_KEEP: usize = crate::ext_in::EXT_BODY_MAX;
 /// Application data above this many bytes counts as activity on a quiet session.
 const CTRL_SMALL: usize = 72;
 /// The round trip below which a client waits for READY before it reports the session (20 ms).
@@ -105,6 +105,10 @@ ep_impl! {
         }
     }
 
+    #[allow(
+        clippy::large_types_passed_by_value,
+        reason = "the event carries a frame body inline so that nothing is allocated; it is moved once"
+    )]
     fn on_conn_event(&mut self, i: usize, now: u64, co: Co) {
         let session = self.session_id(i);
         match co {
@@ -120,11 +124,21 @@ ep_impl! {
             Co::Stopped(stream, error) => self.app_event(i, now, Event::StreamStopped { session, stream, error }),
             Co::Datagram => self.app_event(i, now, Event::DatagramReceived { session }),
             Co::Extension { ty, len, body } => {
+                let body = body.get(..len).unwrap_or_default();
                 if ty == ext::SUB_SESSION_OPEN && len > 0 {
-                    self.sub_accept(i, now, body.get(..len).unwrap_or_default());
-                } else if ty == ext::REACH_OUT && len > 0 {
-                    self.reach_in.put(session, body.get(..len).unwrap_or_default());
+                    self.sub_accept(i, now, body);
+                } else if ty == ext::REACH_OUT && len > 0 && len <= crate::reach::REACH_BODY_MAX {
+                    self.reach_in.put(session, body);
                     self.emit(Event::ReachOut { session });
+                } else if ty != ext::SUB_SESSION_OPEN
+                    && ty != ext::REACH_OUT
+                    && len > 0
+                    && self.slots.get(i).is_some_and(|s| s.m.allowed)
+                {
+                    // A frame of a session the access check has not allowed is dropped (the branch above); the
+                    // application protocols carry hints in extension frames and ask again. A body too long to keep
+                    // is dropped too.
+                    let _ = self.ext_in.put(session, ty, body);
                 }
             }
             Co::Undeliverable(ty) => {

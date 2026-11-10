@@ -7,7 +7,7 @@ use core::fmt;
 use std::io;
 
 use vinc_core::{CommandError, ConnectFailure, EndReason};
-use vinc_transport::conn::CloseReason;
+use vinc_transport::conn::{CloseReason, ExtensionError};
 use vinc_transport::stream::StreamError;
 use vinc_transport::stream::datagram::DatagramError;
 
@@ -159,6 +159,15 @@ impl Error {
             }
             CommandError::Stream(s) => Self::stream(s),
             CommandError::Datagram(d) => Self::datagram(d),
+            CommandError::Extension(ExtensionError::TooLarge { .. }) => {
+                Self::new(ErrorKind::TooLarge, "the extension frame is too large")
+            }
+            CommandError::Extension(ExtensionError::Exhausted) => {
+                Self::new(ErrorKind::Busy, "the extension queue is full")
+            }
+            CommandError::Extension(ExtensionError::BadType) => {
+                Self::new(ErrorKind::Config, "the extension frame type is not valid")
+            }
             CommandError::BadAlpn => Self::new(ErrorKind::Config, "the protocol name is empty or too long"),
             CommandError::NoCheck | CommandError::NoKeyRequest => {
                 Self::new(ErrorKind::Config, "no such request is waiting")

@@ -488,6 +488,28 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.slot(self.find(id)?)?.recv.read_chunk(pool)
     }
 
+    /// The stored bytes of a stream from absolute offset `at` (up to the end of one chunk), borrowed from the pool.
+    /// They may lie beyond a hole: the stream's readable bytes are only the contiguous prefix.
+    pub fn read_at<'a>(&self, pool: &'a BufferPool<'_>, id: StreamId, at: u64) -> Option<&'a [u8]> {
+        self.slot(self.find(id)?)?.recv.read_at(pool, at)
+    }
+
+    /// The first run of stored bytes of a stream that reaches past `from` (and the read position), cut to begin at
+    /// `from` or later. Bytes beyond the first hole show up here before they are readable.
+    pub fn stored_after(&self, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
+        self.slot(self.find(id)?)?.recv.stored_after(from)
+    }
+
+    /// The state of a stream's send half; `None` if the stream is unknown or closed.
+    pub fn send_view(&self, id: StreamId) -> Option<super::SendView> {
+        Some(self.slot(self.find(id)?)?.send.view())
+    }
+
+    /// The urgency of a stream; `None` if it is unknown.
+    pub fn urgency(&self, id: StreamId) -> Option<u8> {
+        Some(self.slot(self.find(id)?)?.urgency)
+    }
+
     /// Release `n` readable bytes of a stream, freeing the chunks they filled and moving the peer's window forward.
     /// `now` and `srtt` are the monotonic time and smoothed round trip in the same unit; they feed the delivery-rate
     /// meter that sizes the windows. Consuming zero bytes after the end (or a reset) was seen lets the stream close.

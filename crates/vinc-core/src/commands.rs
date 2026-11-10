@@ -21,8 +21,8 @@ use vinc_transport::recovery::PathKind;
 
 use crate::acp::ACP_RECHECK;
 use crate::api::{
-    Answer, Command, CommandError, ConnectFailure, Event, Events, PeerInfo, Query, Reply, SessionId, SessionStats,
-    Value,
+    Answer, Command, CommandError, ConnectFailure, Event, Events, PeerInfo, Query, Reply, SendState, SessionId,
+    SessionStats, Value,
 };
 use crate::endpoint::{env, ep_impl};
 use crate::keepalive::{LATE_START, MTU_PROBE_DELAY, Role};
@@ -32,6 +32,9 @@ use crate::trace::trace;
 
 /// A short Initial is used only while a validated UDP path was heard within this long (90 s).
 pub const UDP_FRESH: u64 = 90_000_000_000;
+/// The urgency of the second broadcast stream of a gossip session. Data written to it does not count as activity on
+/// a quiet session, so a secondary hub session stays quiet.
+pub const FAN_URGENCY: u8 = 2;
 /// Application data above this many bytes counts as activity on a quiet session.
 const CTRL_SMALL: usize = 72;
 
@@ -88,6 +91,18 @@ ep_impl! {
         Ok(Some(len))
     }
 
+    /// Copy the oldest extension frame held for the application into `out` and remove it: its session, its type and
+    /// its length. `Ok(None)` means none is waiting. Read until `None` after each input call (no event announces a
+    /// frame); a ring that filled up has dropped its oldest frame. A frame of a session the access check has not
+    /// allowed is not kept.
+    ///
+    /// # Errors
+    /// [`CommandError::BufferTooSmall`] if the frame is longer than `out` (it stays held; read it again with a larger
+    /// buffer, [`EXT_BODY_MAX`](crate::EXT_BODY_MAX) always fits).
+    pub fn read_extension(&mut self, out: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, CommandError> {
+        self.ext_in.take(out).map_err(|len| CommandError::BufferTooSmall { len })
+    }
+
     fn live(&self, id: SessionId) -> Result<usize, CommandError> {
         self.slot_of(id).ok_or(CommandError::NoSession)
     }
@@ -107,7 +122,7 @@ ep_impl! {
                 let slot = self.slots.get_mut(i).ok_or(CommandError::NoSession)?;
                 let conn = slot.conn.as_mut().ok_or(CommandError::NoSession)?;
                 let n = conn.write(stream, data).map_err(CommandError::Stream)?;
-                if !slot.m.role.quiet() || data.len() > CTRL_SMALL {
+                if !slot.m.role.quiet() || (data.len() > CTRL_SMALL && conn.urgency(stream) != Some(FAN_URGENCY)) {
                     slot.m.last_app = now;
                 }
                 self.settle(i, now);
@@ -115,6 +130,12 @@ ep_impl! {
             }
             Command::WriteSource { session, stream, source, len } => {
                 self.with_conn(session, now, |c| c.write_source(stream, source, len).map_err(CommandError::Stream))
+            }
+            Command::SetUrgency { session, stream, urgency } => {
+                self.with_conn(session, now, |c| c.set_urgency(stream, urgency).map_err(CommandError::Stream))
+            }
+            Command::SendExtension { session, ty, body } => {
+                self.with_conn(session, now, |c| c.send_extension(ty, body).map_err(CommandError::Extension))
             }
             Command::Finish { session, stream } => {
                 self.with_conn(session, now, |c| c.finish(stream).map_err(CommandError::Stream))
@@ -421,6 +442,26 @@ ep_impl! {
                 .and_then(|s| s.conn.as_ref())
                 .and_then(|c| c.read_chunk(stream))
                 .map_or(Answer::None, Answer::Chunk),
+            Query::ReadAt { session, stream, offset } => self
+                .conn_of(session)
+                .and_then(|c| c.read_at(stream, offset))
+                .map_or(Answer::None, Answer::Chunk),
+            Query::StoredAfter { session, stream, from } => self
+                .conn_of(session)
+                .and_then(|c| c.stored_after(stream, from))
+                .map_or(Answer::None, Answer::Stored),
+            Query::SendState { session, stream } => self.conn_of(session).map_or(Answer::None, |c| {
+                let v = c.send_view(stream);
+                Answer::SendState(SendState {
+                    sent: v.map_or(0, |v| v.sent),
+                    lost: v.and_then(|v| v.lost),
+                    window: c.recovery().cwnd(),
+                    done: v.is_none_or(|v| v.done),
+                })
+            }),
+            Query::InFlight(id) => self
+                .conn_of(id)
+                .map_or(Answer::None, |c| Answer::InFlight(c.recovery().bytes_in_flight())),
             Query::KeyRequest(id) => self
                 .slot_of(id)
                 .and_then(|i| self.slots.get(i))
@@ -431,6 +472,11 @@ ep_impl! {
             Query::ReachOut(id) => self.reach_in.get(id).map_or(Answer::None, Answer::ReachOut),
             Query::Ledger(a) => self.ledger.get(&a).map_or(Answer::None, Answer::Ledger),
         }
+    }
+
+    /// The connection of a live session.
+    fn conn_of(&self, id: SessionId) -> Option<&Connection<'a, P, S, N, C, F, NP>> {
+        self.slot_of(id).and_then(|i| self.slots.get(i)).and_then(|s| s.conn.as_ref())
     }
 
     fn stats_of(&self, i: usize) -> Answer<'_> {

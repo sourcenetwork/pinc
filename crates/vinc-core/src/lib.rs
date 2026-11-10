@@ -51,6 +51,7 @@ mod api;
 mod commands;
 mod endpoint;
 mod events;
+mod ext_in;
 mod heap;
 mod iface;
 mod keepalive;
@@ -71,12 +72,13 @@ mod tx;
 pub use acp::{ACP_RECHECK, ACP_TTL};
 pub use api::{
     Answer, Command, CommandError, ConnectFailure, EndReason, Event, Events, NodeStats, PathState, PeerInfo, Query,
-    Reply, SessionId, SessionStats, Value,
+    Reply, SendState, SessionId, SessionStats, Value,
 };
-pub use commands::UDP_FRESH;
+pub use commands::{FAN_URGENCY, UDP_FRESH};
 pub use endpoint::{
     ACP_ENTRIES, CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PREKEY_PEERS, SUBS_SEEN,
 };
+pub use ext_in::EXT_BODY_MAX;
 pub use heap::DeadlineHeap;
 pub use iface::{IfaceEvent, IfaceId};
 pub use keepalive::{

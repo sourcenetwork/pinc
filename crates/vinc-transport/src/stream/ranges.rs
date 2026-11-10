@@ -130,6 +130,21 @@ impl<const N: usize> RangeSet<N> {
         Ok(())
     }
 
+    /// The interval that holds `at`.
+    pub(super) fn containing(&self, at: u64) -> Option<Range<u64>> {
+        let items = self.live();
+        items
+            .get(items.partition_point(|iv| iv.1 <= at))
+            .filter(|iv| iv.0 <= at)
+            .map(|iv| iv.0..iv.1)
+    }
+
+    /// The lowest interval that ends after `from`.
+    pub(super) fn first_ending_after(&self, from: u64) -> Option<Range<u64>> {
+        let items = self.live();
+        items.get(items.partition_point(|iv| iv.1 <= from)).map(|iv| iv.0..iv.1)
+    }
+
     /// Take up to `max` offsets from the lowest interval.
     pub(super) fn take_front(&mut self, max: u64) -> Option<Range<u64>> {
         let (start, end) = *self.live().first()?;

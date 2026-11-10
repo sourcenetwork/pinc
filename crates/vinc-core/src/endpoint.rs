@@ -167,6 +167,7 @@ pub struct Endpoint<
     /// The latest time an entry point was called with.
     pub(crate) last_now: u64,
     pub(crate) reach_in: crate::reach::ReachRing,
+    pub(crate) ext_in: crate::ext_in::ExtRing,
     pub(crate) capture: Option<Events>,
     pub(crate) scratch: [u8; MAX_DATAGRAM],
     pub(crate) stash: [u8; MAX_DATAGRAM],
@@ -270,6 +271,7 @@ ep_impl! {
             parked_len: 0,
             last_now: now,
             reach_in: crate::reach::ReachRing::new(),
+            ext_in: crate::ext_in::ExtRing::new(),
             capture: None,
             scratch: [0; MAX_DATAGRAM],
             stash: [0; MAX_DATAGRAM],

@@ -84,6 +84,7 @@ pub enum Acp {
 thread_local! {
     static METER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static METERED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static METERED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Count the heap allocations of every endpoint call from now on (needs the counting allocator in the test target).
@@ -96,14 +97,32 @@ pub fn take_metered_allocs() -> u64 {
     METERED.with(|c| c.replace(0))
 }
 
+/// The heap bytes requested since the counter was last taken; resets it.
+pub fn take_metered_bytes() -> u64 {
+    METERED_BYTES.with(|c| c.replace(0))
+}
+
 /// Run an endpoint call, counting its allocations while metering is on.
+#[track_caller]
 pub fn metered<R>(f: impl FnOnce() -> R) -> R {
+    let loc = std::panic::Location::caller();
     if !METER.with(std::cell::Cell::get) {
         return f();
     }
     let mut out = None;
     let st = crate::measure(|| out = Some(f()));
+    if st.count() > 0 {
+        if std::env::var_os("VINC_ALLOC_TRACE").is_some() {
+            eprintln!(
+                "metered call at {} allocated {} times, {} bytes",
+                loc,
+                st.count(),
+                st.bytes
+            );
+        }
+    }
     METERED.with(|c| c.set(c.get() + st.count()));
+    METERED_BYTES.with(|c| c.set(c.get() + st.bytes));
     out.unwrap()
 }
 

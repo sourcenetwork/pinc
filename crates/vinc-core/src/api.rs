@@ -13,7 +13,7 @@ use core::net::SocketAddr;
 
 use vinc_crypto::NodeId;
 use vinc_security::{Alpn, Failure, KeyRequest, KeyResponse};
-use vinc_transport::conn::{CloseReason, PathId, Stats};
+use vinc_transport::conn::{CloseReason, ExtensionError, PathId, Stats};
 use vinc_transport::stream::datagram::DatagramError;
 use vinc_transport::stream::{RecvStatus, StreamError, StreamId};
 
@@ -300,6 +300,8 @@ pub enum CommandError {
     Stream(StreamError),
     /// The datagram layer refused.
     Datagram(DatagramError),
+    /// The extension frame could not be queued.
+    Extension(ExtensionError),
     /// The handshake machine refused.
     Failure(Failure),
     /// The protocol name is empty or longer than a protocol name may be.
@@ -348,6 +350,26 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         stream: StreamId,
         /// The bytes.
         data: &'c [u8],
+    },
+    /// Set the urgency of a stream: streams are served lowest number first (3 by default), then by id.
+    SetUrgency {
+        /// The session.
+        session: SessionId,
+        /// The stream.
+        stream: StreamId,
+        /// The urgency.
+        urgency: u8,
+    },
+    /// Send the peer an extension frame (type 0x40 and up, an assigned one from
+    /// [`vinc_transport::frame::ext`]). It leaves ahead of stream data and is sent again until a packet carrying it is
+    /// acknowledged. It must fit one packet.
+    SendExtension {
+        /// The session.
+        session: SessionId,
+        /// The frame type.
+        ty: u64,
+        /// The body.
+        body: &'c [u8],
     },
     /// Back a stream with storage of `len` bytes the endpoint reads from when it builds packets.
     WriteSource {
@@ -513,6 +535,38 @@ pub enum Query {
         /// The stream.
         stream: StreamId,
     },
+    /// The stored bytes of a stream from an absolute offset, up to the end of the run holding them or of one chunk;
+    /// the run may lie beyond a hole. Nothing is copied. Release bytes with [`Command::Consume`], which moves through
+    /// the contiguous prefix only.
+    ReadAt {
+        /// The session.
+        session: SessionId,
+        /// The stream.
+        stream: StreamId,
+        /// The absolute stream offset of the first byte.
+        offset: u64,
+    },
+    /// The first run of stored bytes of a stream that reaches past `from`, cut to begin at `from` or later: how a
+    /// host finds bytes that arrived beyond a hole.
+    StoredAfter {
+        /// The session.
+        session: SessionId,
+        /// The stream.
+        stream: StreamId,
+        /// The absolute stream offset to look from.
+        from: u64,
+    },
+    /// What the send half of a stream knows: how far it sent, the lowest byte waiting to be sent again, the
+    /// connection's congestion window, and whether the stream is done (every byte and its end acknowledged by the
+    /// peer, or the stream gone).
+    SendState {
+        /// The session.
+        session: SessionId,
+        /// The stream.
+        stream: StreamId,
+    },
+    /// The bytes the session has sent that are neither acknowledged nor declared lost.
+    InFlight(SessionId),
     /// The key operation a session waits for.
     KeyRequest(SessionId),
     /// The node-wide numbers.
@@ -562,6 +616,19 @@ pub struct SessionStats {
     pub pulse_due: bool,
     /// The transport counters, with the smoothed round trip in `srtt`.
     pub transport: Stats,
+}
+
+/// The send half of a stream, as [`Query::SendState`] answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendState {
+    /// One past the highest stream offset sent so far.
+    pub sent: u64,
+    /// The lowest stream offset declared lost that waits to be sent again.
+    pub lost: Option<u64>,
+    /// The connection's congestion window in bytes.
+    pub window: u64,
+    /// Every byte and the end are acknowledged, or the stream is gone: nothing more will be sent.
+    pub done: bool,
 }
 
 /// The node-wide numbers.
@@ -619,6 +686,12 @@ pub enum Answer<'q> {
     Peer(PeerInfo),
     /// Readable stream bytes, borrowed from the session's pool.
     Chunk(&'q [u8]),
+    /// A run of stored stream bytes by absolute offsets.
+    Stored(core::ops::Range<u64>),
+    /// The send half of a stream.
+    SendState(SendState),
+    /// Bytes in flight.
+    InFlight(u64),
     /// A key operation, borrowed from the session.
     KeyRequest(KeyRequest<'q>),
     /// The node-wide numbers.

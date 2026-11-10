@@ -123,6 +123,15 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             || (self.fin == Fin::Acked && self.final_size == Some(self.acked_prefix))
     }
 
+    /// What the host may pace on: how far it sent, the lowest byte waiting to be sent again, and whether it is done.
+    pub(super) fn view(&self) -> super::SendView {
+        super::SendView {
+            sent: self.sent_max,
+            lost: self.lost.first().map(|r| r.start),
+            done: self.is_done(),
+        }
+    }
+
     /// Whether a stop request would reset this half now: it is open and neither reset nor finished with.
     pub(super) fn can_stop(&self) -> bool {
         self.open && matches!(self.reset, Reset::None) && !self.is_done()

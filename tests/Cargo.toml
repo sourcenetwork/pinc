@@ -839,3 +839,7 @@ path = "layers_noalloc.rs"
 [[test]]
 name = "layers_determinism"
 path = "layers_determinism.rs"
+
+[[test]]
+name = "core_extras"
+path = "core_extras.rs"

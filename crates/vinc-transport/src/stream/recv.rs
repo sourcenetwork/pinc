@@ -248,6 +248,27 @@ impl<const C: usize> Recv<C> {
         self.ring.span(pool, self.read_off / CHUNK_SIZE as u64, at, len)
     }
 
+    /// The stored bytes from absolute offset `at`, to the end of the stored run holding it or of its chunk; the run
+    /// may lie beyond a hole. `None` below the read position, past a reset, or where nothing is stored.
+    pub(super) fn read_at<'a>(&self, pool: &'a BufferPool<'_>, at: u64) -> Option<&'a [u8]> {
+        if self.reset.is_some() || at < self.read_off {
+            return None;
+        }
+        let run = self.ranges.containing(at)?;
+        let chunk = CHUNK_SIZE as u64;
+        let len = usize::try_from((run.end - at).min(chunk - at % chunk)).ok()?;
+        self.ring.span(pool, at / chunk, (at % chunk) as usize, len)
+    }
+
+    /// The first stored run that reaches past `from`, cut to start at `from` or later.
+    pub(super) fn stored_after(&self, from: u64) -> Option<core::ops::Range<u64>> {
+        if self.reset.is_some() {
+            return None;
+        }
+        let from = from.max(self.read_off);
+        self.ranges.first_ending_after(from).map(|r| r.start.max(from)..r.end)
+    }
+
     /// Release `n` readable bytes.
     pub(super) fn consume(&mut self, pool: &mut BufferPool<'_>, n: u64) -> Result<(), StreamError> {
         if n > self.readable() {

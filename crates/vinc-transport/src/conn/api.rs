@@ -191,6 +191,28 @@ conn_impl! {
         self.streams.read_chunk(&self.pool, id)
     }
 
+    /// The stored bytes of a stream from absolute offset `at`, up to the end of the run holding them or of one chunk,
+    /// borrowed from the pool. The run may lie beyond a hole, so a host can check bytes as they arrive out of order.
+    /// Release bytes only through [`consume`](Self::consume), which moves through the contiguous prefix.
+    pub fn read_at(&self, id: StreamId, at: u64) -> Option<&[u8]> {
+        self.streams.read_at(&self.pool, id, at)
+    }
+
+    /// The first run of stored bytes of a stream that reaches past `from`, cut to begin at `from` or later.
+    pub fn stored_after(&self, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
+        self.streams.stored_after(id, from)
+    }
+
+    /// The urgency of a stream; `None` if it is unknown.
+    pub fn urgency(&self, id: StreamId) -> Option<u8> {
+        self.streams.urgency(id)
+    }
+
+    /// The state of a stream's send half; `None` if the stream is unknown or already closed.
+    pub fn send_view(&self, id: StreamId) -> Option<crate::stream::SendView> {
+        self.streams.send_view(id)
+    }
+
     /// Release `n` readable bytes of a stream; consuming 0 after the end was read lets the stream close. The clock
     /// and the round trip drive the autotuning of the receive window.
     ///
