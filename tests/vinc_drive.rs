@@ -198,9 +198,9 @@ async fn a_request_and_response_cost_a_bounded_number_of_polls_and_no_timer() {
             rx.read_exact(&mut buf).await.unwrap();
         }
         let (r, s, t) = (c(|x| &x.recvs) - r0, c(|x| &x.sends) - s0, c(|x| &x.timers) - t0);
-        // One receive started per request, at most one more for a stray acknowledgement; one datagram sent per request
+        // One receive that gets the response and one that finds nothing more (the driver reads until the host has nothing); one datagram sent per request
         // plus the acknowledgements; no timer fires.
-        assert!(r <= N + N / 10, "{r} receives for {N} requests");
+        assert!(r <= 2 * N + N / 10, "{r} receives for {N} requests");
         assert!(s <= 2 * N, "{s} datagrams for {N} requests");
         assert!(t <= N / 20, "{t} timers ran for {N} requests");
     })

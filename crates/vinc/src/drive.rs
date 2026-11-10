@@ -35,6 +35,8 @@ use crate::standby::Ticket;
 pub(crate) const T0: u64 = 10_000_000_000;
 /// The largest datagram received, and the buffer one transmit call fills.
 const BUF: usize = 65_536;
+/// The most datagrams read in one burst before the endpoint runs.
+const DRAIN: usize = 256;
 /// The most buffers the pool keeps.
 const POOLED: usize = 8;
 
@@ -242,13 +244,15 @@ impl<H: Hosted> Shared<H> {
                     slept = None;
                     progressed = true;
                 }
-                'recv: {
+                // Read what the host already has before anything is sent: a burst that finds no reader overflows the
+                // socket's buffer and the datagrams are lost.
+                for _ in 0..DRAIN {
                     if rx.is_none() {
                         let b = spare.take().unwrap_or_else(|| self.buf());
                         rx.set(Some(recv_owned(&self.host, b)));
                     }
                     let Some(Poll::Ready((res, mut buf))) = rx.as_mut().as_pin_mut().map(|f| f.poll(cx)) else {
-                        break 'recv;
+                        break;
                     };
                     rx.set(None);
                     progressed = true;
@@ -270,8 +274,6 @@ impl<H: Hosted> Shared<H> {
                         }
                     }
                     spare = Some(buf);
-                    // Serve what this datagram changed before reading another: when it finished an operation, no
-                    // receive is started again.
                 }
                 if progressed {
                     Poll::Ready(Step::Io)
