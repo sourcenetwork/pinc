@@ -281,3 +281,52 @@ fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
         );
     });
 }
+
+#[test]
+fn a_session_on_a_relay_path_keeps_punching_every_minute_though_idle() {
+    use vinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
+    big(|| {
+        let mut w = World::new(98);
+        let (_r, rs) = w.relay(1, relay_ip(10));
+        // A is behind a middlebox that drops UDP: its sessions go by the relay.
+        let lan = w.sim.add_lan(LanConfig {
+            udp_block: true,
+            ..LanConfig::default()
+        });
+        let nat = w.sim.add_nat_in(
+            NatConfig {
+                kind: NatKind::PortRestricted,
+                ext_ip: ext(1),
+                mapping_timeout: 120 * SEC,
+                tcp_timeout: 7200 * SEC,
+                refresh_on_inbound: true,
+                port_base: 20_000,
+                ports: PortPolicy::Sequential,
+                no_punch: false,
+            },
+            lan,
+        );
+        let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat);
+        let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
+        w.run(secs(10));
+        w.dial(secs(10), a, b, vec![]);
+        w.run(secs(150));
+        assert!(w.connected(a).is_some(), "{}", w.dump(a));
+        let sa = w.connected(a).unwrap();
+        assert!(
+            w.client(a)
+                .session_stats(sa)
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| vinc_core::is_relay_addr(&r))),
+            "the session rides the relay"
+        );
+        // The session carries no data after the first seconds, yet a round goes out a minute after the last.
+        assert!(
+            reach_outs(&w, b, secs(65), secs(80)) > 0,
+            "a round a minute after the first"
+        );
+        assert!(
+            reach_outs(&w, b, secs(125), secs(140)) > 0,
+            "and another a minute later"
+        );
+    });
+}
