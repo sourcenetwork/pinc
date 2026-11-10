@@ -144,6 +144,8 @@ pub(super) struct Core {
     pub(super) timer_violations: u64,
     /// The last call ran the node's timers: the endpoint's deadline is checked once the host has drained its output.
     pub(super) timer_check: bool,
+    /// The address the request being answered came to: replies leave from it.
+    pub(super) reply_from: Option<SocketAddr>,
     /// The last connectivity notices, for diagnosis.
     pub(super) notices: VecDeque<String>,
     /// The due deadline the endpoint showed after the previous timer call, to tell a stuck timer from a due one.
@@ -225,6 +227,7 @@ impl Core {
             next_sample: 0,
             timer_violations: 0,
             timer_check: false,
+            reply_from: None,
             notices: VecDeque::new(),
             stale_deadline: None,
             shared,
@@ -282,6 +285,15 @@ impl Core {
         self.ifaces
             .iter()
             .find(|e| e.up && e.udp)
+            .map(|e| SocketAddr::new(e.ip, e.port))
+    }
+
+    /// The UDP address a datagram to `to` leaves from: the first interface that is up in the family of `to` (a datagram
+    /// from the other family does not arrive), else the first interface that is up.
+    pub(super) fn udp_addr_for(&self, to: &SocketAddr) -> Option<SocketAddr> {
+        let up = || self.ifaces.iter().filter(|e| e.up && e.udp);
+        up().find(|e| e.ip.is_ipv4() == to.is_ipv4())
+            .or_else(|| up().next())
             .map(|e| SocketAddr::new(e.ip, e.port))
     }
 

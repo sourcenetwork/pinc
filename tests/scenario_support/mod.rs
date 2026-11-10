@@ -132,21 +132,20 @@ pub fn vinc_entries(ids: &[&str]) -> Vec<Entry> {
     run_all(&jobs)
 }
 
-/// Whether the world of `v` has intents that owe must deliveries, and intents that give small-message latency samples,
-/// among those the node's layers run (fetches and reconciles wait for their layers).
+/// Whether the world of `v` has intents that owe must deliveries, and intents that give small-message latency samples.
 fn expected_samples(v: &Variant) -> (bool, bool) {
     let world = build(v).unwrap();
     let (mut must, mut small) = (false, false);
     for it in &world.intents {
         let others: Vec<usize> = match it.kind {
             IntentKind::Publish => it.receivers.iter().copied().filter(|&r| r != it.node).collect(),
-            IntentKind::Push | IntentKind::Docsync | IntentKind::Manage => {
+            IntentKind::Push | IntentKind::Docsync | IntentKind::Manage | IntentKind::Reconcile => {
                 it.to.into_iter().filter(|&r| r != it.node).collect()
             }
             IntentKind::Echo => it.to.into_iter().collect(),
-            IntentKind::Fetch | IntentKind::Reconcile => continue,
+            IntentKind::Fetch => vec![it.node],
         };
-        let is_small = !matches!(it.kind, IntentKind::Echo);
+        let is_small = !matches!(it.kind, IntentKind::Echo | IntentKind::Fetch);
         small |= is_small && !others.is_empty();
         must |= match &it.must {
             Must::Flag(f) => *f && !others.is_empty(),

@@ -223,19 +223,15 @@ impl Core {
 
     /// Sends the connectivity layer's own datagrams (relay probes, lookups, beacons).
     pub(super) fn udp_step(&mut self) -> bool {
-        let from = self.udp_addr();
-        let (Some(node), wire) = (self.node.as_mut(), &mut self.wire) else {
-            return false;
-        };
         let mut did = false;
         let mut buf = vec![0u8; 2048];
-        while let Some((to, n)) = node.poll_udp(&mut buf) {
+        while let Some((to, n)) = self.node.as_mut().and_then(|node| node.poll_udp(&mut buf)) {
             did = true;
             if to.port() == vinc_connect::local::PORT {
                 continue;
             }
-            if let (Some(from), Some(d)) = (from, buf.get(..n)) {
-                wire.datagrams.push_back((from, to, d.to_vec()));
+            if let (Some(from), Some(d)) = (self.udp_addr_for(&to), buf.get(..n)) {
+                self.wire.datagrams.push_back((from, to, d.to_vec()));
             }
         }
         did

@@ -118,7 +118,9 @@ impl Core {
                 if item.write_ndjson(&mut line).is_ok() {
                     self.shared.note_trace(format!("n{} true{} {line}", self.idx, self.now));
                 }
-            } else if super::in_trace_window(self.now) {
+            } else if super::in_trace_window(self.now)
+                || matches!(item.body, vinc_node::Body::Values(_, t) if !matches!(t, vinc_values::trace::Trace::Verified { .. }))
+            {
                 self.shared.note_trace(format!("n{} true{} {:?}", self.idx, self.now, item.body));
             }
         }

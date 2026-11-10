@@ -1588,13 +1588,17 @@ name = "vinc-sim"
 version = "0.1.0"
 dependencies = [
  "blake2",
+ "blake3",
  "vinc-connect",
  "vinc-core",
  "vinc-crypto",
+ "vinc-dag",
  "vinc-membership",
  "vinc-node",
+ "vinc-reconcile",
  "vinc-security",
  "vinc-transport",
+ "vinc-values",
 ]
 
 [[package]]

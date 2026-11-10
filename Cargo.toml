@@ -127,3 +127,12 @@ opt-level = 3
 
 [profile.dev.package.vinc-sim]
 opt-level = 3
+
+[profile.dev.package.vinc-dag]
+opt-level = 3
+
+[profile.dev.package.vinc-values]
+opt-level = 3
+
+[profile.dev.package.vinc-reconcile]
+opt-level = 3

@@ -326,6 +326,15 @@ impl<L: Layers> Node for SuiteNode<L> {
             .rec
             .borrow_mut()
             .udp_received(self.core.idx, now, remote, size, 0);
+        if self.core.shared.is_watched(self.core.idx) && in_trace_window(self.core.now) {
+            let first = data.first().copied().unwrap_or(0);
+            self.core.shared.note_trace(format!(
+                "n{} true{} RX {remote} -> {local} len {} first {first:#x}",
+                self.core.idx,
+                self.core.now,
+                data.len()
+            ));
+        }
         self.core.handle_datagram(local, remote, data);
         self.settle();
     }
@@ -337,6 +346,13 @@ impl<L: Layers> Node for SuiteNode<L> {
         self.enter(now);
         loop {
             if let Some((local, remote, len)) = self.core.next_datagram(buf) {
+                if self.core.shared.is_watched(self.core.idx) && in_trace_window(self.core.now) {
+                    let first = buf.first().copied().unwrap_or(0);
+                    self.core.shared.note_trace(format!(
+                        "n{} true{} TX {local} -> {remote} len {len} first {first:#x}",
+                        self.core.idx, self.core.now
+                    ));
+                }
                 self.core.record_wire(remote, local, buf.get(..len)?);
                 return Some(Transmit {
                     local,

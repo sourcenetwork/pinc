@@ -171,10 +171,6 @@ impl Core {
         u16::try_from(i).unwrap_or(u16::MAX)
     }
 
-    fn member_addr(&self, node: &NodeId) -> Option<SocketAddr> {
-        self.node.as_ref()?.member_addr(node)
-    }
-
     /// A datagram reached this hub: a relay request, or traffic for the node.
     pub(super) fn hub_datagram(&mut self, local: SocketAddr, remote: SocketAddr, data: &mut [u8]) {
         let now = self.local;
@@ -186,7 +182,9 @@ impl Core {
                 // A refused request is dropped and traced by the relay itself.
                 let _ = h.relay.datagram(now, remote, member.as_ref(), data, &mut s);
             }
+            self.reply_from = Some(local);
             self.apply(s);
+            self.reply_from = None;
             return;
         }
         if data.first().is_some_and(|b| *b >= 0x40)
@@ -253,12 +251,15 @@ impl Core {
                 Eff::Carrier(to, plain) => self.write_frame(&to, &plain),
                 Eff::Peer(to, plain) => self.write_peer(&to, &plain),
                 Eff::Udp(UdpTarget::Reply(a), d) => {
-                    if let Some(f) = from {
+                    // From the address the request came to: a reply from another family or interface is lost.
+                    if let Some(f) = self.reply_from.or(from) {
                         self.wire.datagrams.push_back((f, a, d));
                     }
                 }
                 Eff::Udp(UdpTarget::Member(n), d) => {
-                    if let (Some(a), Some(f)) = (self.member_addr(&n), from) {
+                    // From the address of the member's session, to its address: a member reached over IPv6 is not
+                    // reached from the hub's IPv4 address.
+                    if let Some((f, a)) = self.node.as_ref().and_then(|node| node.member_route(&n)) {
                         self.wire.datagrams.push_back((f, a, d));
                     }
                 }
@@ -285,7 +286,14 @@ impl Core {
 
     fn relay_trace(&mut self, t: &Trace) {
         if self.shared.is_watched(self.idx) && super::in_trace_window(self.now) {
-            self.shared.note_trace(format!("n{} true{} Relay({t:?})", self.idx, self.now));
+            let ix = |id: &NodeId| self.shared.index_of(id).map_or(usize::MAX, |i| i);
+            let line = match t {
+                Trace::Routed { src, dst, route, bytes } => {
+                    format!("Routed {} -> {} {route:?} {bytes}", ix(src), ix(dst))
+                }
+                other => format!("{other:?}"),
+            };
+            self.shared.note_trace(format!("n{} true{} Relay({line})", self.idx, self.now));
         }
         let now = self.local;
         if let Some(node) = self.node.as_mut() {

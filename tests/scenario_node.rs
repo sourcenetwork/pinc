@@ -173,7 +173,12 @@ impl Layers for TestLayer {
             LayerEvent::StreamOpened { .. }
             | LayerEvent::StreamReset { .. }
             | LayerEvent::Message { .. }
-            | LayerEvent::Member(_) => {}
+            | LayerEvent::Member(_)
+            | LayerEvent::ValueReadable { .. }
+            | LayerEvent::ValueComplete { .. }
+            | LayerEvent::ValueFailed { .. }
+            | LayerEvent::ReconcileDone { .. }
+            | LayerEvent::ReconcileFailed { .. } => {}
         }
     }
     fn timeout(&mut self, _now: u64, _host: &mut dyn Host) {}
@@ -463,10 +468,12 @@ fn a_persisted_restart_resumes_and_a_stateless_one_does_not() {
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(resumed(1), vec![false, true], "a restored ticket resumes the session");
+        // Each incarnation dials the hub for its own protocol as well as the test's, so a node reports two sessions
+        // to node 0 per incarnation: a restored ticket resumes one of them, a stateless restart none.
+        assert_eq!(resumed(1), vec![false, false, true, false], "a restored ticket resumes the session");
         assert_eq!(
             resumed(2),
-            vec![false, false],
+            vec![false, false, false, false],
             "a stateless restart starts from scratch"
         );
         assert!(r.clean());
@@ -655,14 +662,14 @@ fn the_same_seed_gives_the_same_trace_and_recorder_hash() {
 }
 
 #[test]
-fn a_dial_of_a_node_with_no_public_address_is_left_to_the_connectivity_layer() {
+fn a_dial_of_a_node_with_no_public_address_is_carried_by_the_connectivity_layer() {
     big_stack(|| {
         let mut r = build(make_world(3, 60 * NS, |_| {}), 10, false);
         r.echo(5 * NS, 1, 2);
         r.sim.run_until(20 * NS);
-        // The dial is accepted: with no relay in this world nothing can find the node, so no echo happens.
+        // The dial is accepted and the node is found through the hub, though it has no public address.
         assert_eq!(r.stats[1].borrow().refused, 0);
-        assert_eq!(r.stats[1].borrow().echoes, 0);
+        assert_eq!(r.stats[1].borrow().echoes, 1, "{:?}", r.events(1));
         assert_eq!(r.shared.public_addrs(2).len(), 0);
         assert_eq!(
             r.shared.public_addrs(0),
