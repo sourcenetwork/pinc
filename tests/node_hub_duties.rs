@@ -193,6 +193,10 @@ fn hub_sessions_with_a_stream_each_way_live_in_a_small_pool() {
                 }
             }
         }
+    });
+}
+
+#[test]
 fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_reconnect_repairs_it() {
     big(|| {
         let seed = 431u64;
