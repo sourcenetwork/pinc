@@ -32,6 +32,8 @@ pub const UPGRADE_INTERVAL: u64 = 60_000_000_000;
 pub const GOOD_LATENCY: u64 = 10_000_000;
 /// The delay before the first punch of an established session.
 pub const FIRST_DELAY: u64 = 1_000_000;
+/// The delay before the punch timer fires after a session fell back to its relay path.
+pub const FALLBACK_PUNCH: u64 = 2_000_000_000;
 /// Application silence after which a session only waits another interval.
 pub const ACTIVE_KEEP: u64 = 20_000_000_000;
 

@@ -19,7 +19,8 @@
 use core::net::SocketAddr;
 
 use vinc_core::{
-    Answer, Command, CommandError, Endpoint, Event, Query, Reply, Role, SessionId, SessionStats, Value, is_relay_addr,
+    Answer, Command, CommandError, Endpoint, Event, PathState, Query, Reply, Role, SessionId, SessionStats, Value,
+    is_relay_addr,
 };
 use vinc_crypto::{NodeId, Provider};
 use vinc_security::Env;
@@ -52,6 +53,8 @@ pub(super) struct Sess {
     pulse_on: bool,
     last_relay: Option<(u8, u64, u64)>,
     primary: Option<SocketAddr>,
+    /// The active path was a relay path when the layer last looked.
+    relay_route: bool,
 }
 
 /// A peer heard by local discovery.
@@ -304,6 +307,7 @@ drive_impl! {
             pulse_on: false,
             last_relay: carried.map(|(r, g)| (r, g, now)),
             primary,
+            relay_route: false,
         };
         if let Some(s) = self.sess.iter_mut().find(|s| s.is_none()) {
             *s = Some(entry);
@@ -348,8 +352,11 @@ drive_impl! {
                         pulse_on: false,
                         last_relay: None,
                         primary: None,
+                        relay_route: false,
                     });
                 }
+                let st = ep.stats(session);
+                let late = self.first_dial.is_some_and(|f| self.late_start(f));
                 if let Some(s) = self.sess_mut(session) {
                     s.punch.established(now);
                 }
@@ -357,6 +364,7 @@ drive_impl! {
                     let _ = self.cmd(ep, now, Command::SetRole { session, role: Role::Hub });
                 }
             }
+            Event::PathChanged { session, state: PathState::Failed, .. } => self.path_failed(now, ep, session),
             Event::Closed { session, .. } => {
                 for s in &mut self.sess {
                     if s.is_some_and(|s| s.id == session) {
@@ -458,6 +466,37 @@ drive_impl! {
         let _ = f;
     }
 
+    /// A session's active path stopped answering (three probe timeouts in a row). On a relay path the carrier of that
+    /// relay and the home relay are checked. Off a relay path the session falls back to its relay path: one is
+    /// registered if the session has none, the peer is looked up if there is no relay to name, and the punch timer
+    /// is armed 2 s out.
+    fn path_failed<E: Port>(&mut self, now: u64, ep: &mut E, session: SessionId) {
+        let Some(s) = self.sess.iter().flatten().find(|s| s.id == session).copied() else { return };
+        if s.relay_route {
+            if let Some(st) = ep.stats(session)
+                && let Some((_, remote)) = st.route
+                && let Some((r, _)) = self.path_parts(&remote)
+            {
+                self.check_carrier(now, r);
+            }
+            if let Some(h) = self.home() {
+                self.check_carrier(now, h);
+            }
+            return;
+        }
+        let mut cands = [Cand::Relay(0); 16];
+        let nc = self.candidates_for(&s.node, &[], &mut cands);
+        if cands.get(..nc).unwrap_or_default().iter().any(|c| matches!(c, Cand::Relay(_))) {
+            self.add_paths(now, ep, &s);
+        } else {
+            self.lookups.answered(&s.node);
+            self.lookup(now, &s.node);
+        }
+        if let Some(x) = self.sess_mut(session) {
+            x.punch.arm(now.saturating_add(punch::FALLBACK_PUNCH));
+        }
+    }
+
     fn each_session<E: Port>(&mut self, now: u64, ep: &mut E) {
         for i in 0..SESSIONS {
             let Some(mut s) = self.sess.get(i).copied().flatten() else { continue };
@@ -495,11 +534,10 @@ drive_impl! {
                 s.tries = tries;
                 self.reselect(now, ep, &mut s);
             }
+            s.relay_route = st.route.is_some_and(|(_, r)| is_relay_addr(&r));
             // Hole punching.
             if st.established && s.punch.deadline().is_some() {
-                let relay_active = st.route.is_some_and(|(_, r)| is_relay_addr(&r));
-                // vertexia: a session always counts as busy; the endpoint reports no application idle time yet, so the
-                // 20 s idle rule of the punch timer never applies. Upgrade: add the idle time to the session statistics.
+                let relay_active = s.relay_route;
                 let v = View {
                     app_idle: 0,
                     direct: !relay_active && st.path_validated,

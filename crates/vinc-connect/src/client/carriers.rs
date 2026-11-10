@@ -68,6 +68,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.act(now, i, a);
     }
 
+    /// Check that the carrier of `i` still answers, as a session packet or a PING would.
+    pub(super) fn check_carrier(&mut self, now: u64, i: usize) {
+        self.act(now, i, Act::Check);
+    }
+
     pub(super) fn close_pub(&mut self, i: usize) {
         self.close_stream(i);
     }

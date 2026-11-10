@@ -63,3 +63,34 @@ fn pair_lans(
     (w, a, b, r, [lan, lan_b])
 }
 
+#[test]
+fn a_path_that_stops_answering_brings_the_relay_path_and_a_punch_two_seconds_later() {
+    big(|| {
+        let (mut w, a, b, _r, lans) = pair_lans(95);
+        let baddr = w.client(b).addr;
+        w.dial(secs(20), a, b, vec![baddr]);
+        w.run(secs(30));
+        let sa = w.connected(a).unwrap();
+        // The direct path between A and B goes dark; A keeps sending.
+        w.sim.partition_lans(secs(40), secs(300), &[lans[0]], &[lans[1]], true);
+        for t in 41..70 {
+            w.sim.command(
+                secs(t),
+                a,
+                Cmd::Datagrams {
+                    session: sa,
+                    count: 1,
+                    len: 100,
+                },
+            );
+        }
+        w.run(secs(78));
+        assert_eq!(reach_outs(&w, b, secs(30), secs(40)), 0);
+        assert!(
+            reach_outs(&w, b, secs(41), secs(78)) > 0,
+            "after falling back to the relay path the punch ran again\n{}",
+            w.dump(b)
+        );
+    });
+}
+
