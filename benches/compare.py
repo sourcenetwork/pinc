@@ -289,6 +289,8 @@ def main():
     profiles = a.profiles.split(",")
     scen = a.scenarios.split(",")
 
+    # A SIGTERM ends the run the way SIGINT does, so the `finally` below always removes the qdisc.
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     info = host_info()
     date = datetime.date.today().isoformat()
     out = a.out or os.path.join(ROOT, "benches", "results", f"{date}-{info['host']}")
@@ -298,8 +300,10 @@ def main():
     info["tc"] = sh("sudo -n tc -V").stdout.strip() if have_tc else "not available"
     info["profiles"] = {k: {"netem": v[0], "what": v[1]} for k, v in PROFILES.items() if k in profiles}
     info["tc_commands"] = {k: [f"sudo tc qdisc add dev lo root netem {v[0]}", "sudo tc qdisc del dev lo root"] for k, v in PROFILES.items() if v[0]}
-    results = {}  # (scenario, profile, lib) -> list of lines, or a status string
-    raw = open(os.path.join(out, "raw.jsonl"), "w")
+    run = int(time.time())
+    # Appended to, so a run split over several invocations (one per profile, say) fills one directory.
+    raw = open(os.path.join(out, "raw.jsonl"), "a")
+    status_log = open(os.path.join(out, "status.jsonl"), "a")
     try:
         for prof in profiles:
             netem = PROFILES[prof][0]
@@ -307,7 +311,7 @@ def main():
                 if not have_tc:
                     for s in scen:
                         for name, _, _ in libs:
-                            results[(s, prof, name)] = "not measured: tc (iproute-tc) or sudo is not available on this host"
+                            note(status_log, s, prof, name, run, "not measured: tc (iproute-tc) or sudo is not available on this host")
                     continue
                 ok, err = netem_set(netem)
                 if not ok:
@@ -321,7 +325,7 @@ def main():
                 args = scaled(args, a.scale)
                 reps = a.reps or reps
                 for name, bench, variant in libs:
-                    lines, status = [], "ok"
+                    status = "ok"
                     for r in range(reps):
                         la = open("/proc/loadavg").read().split()[0]
                         got, st = run_once(exes[bench], variant, args, timeout, extra)
@@ -330,20 +334,51 @@ def main():
                             print(f"{prof} {s} {name} rep {r}: {st}", flush=True)
                             break
                         for g in got:
-                            g.update(profile=prof, rep=r, load1=la, args=args)
+                            g.update(profile=prof, rep=r, load1=la, args=args, sid=s, run=run, name=name)
                             raw.write(json.dumps(g) + "\n")
                             raw.flush()
-                            lines.append(g)
                         print(f"{prof} {s} {name} rep {r}: ok", flush=True)
-                    results[(s, prof, name)] = lines if lines else f"not measured: {status}"
+                    if status != "ok":
+                        note(status_log, s, prof, name, run, f"not measured: {status}")
             if netem:
                 netem_clear()
     finally:
         netem_clear()
         raw.close()
-    json.dump(info, open(os.path.join(out, "run.json"), "w"), indent=2)
-    write_md(out, info, libs, profiles, scen, results, a)
+        status_log.close()
+    json.dump(info, open(os.path.join(out, f"run-{run}.json"), "w"), indent=2)
+    write_md(out, info, libs, profiles, scen, collect(out), a)
     print("wrote", out)
+
+
+def note(log, sid, prof, name, run, text):
+    log.write(json.dumps({"sid": sid, "profile": prof, "name": name, "run": run, "status": text}) + "\n")
+    log.flush()
+
+
+def collect(out):
+    """Read the raw lines and the failure notes of this directory: (scenario, profile, lib) -> the newest run's lines, or
+    a status string when the newest word on it is a failure."""
+    by_args = {(tuple(v[0]), p): s for s, d in SCENARIOS.items() for p, v in d.items()}
+    best = {}  # key -> (run, lines or status)
+    for fname, is_note in (("raw.jsonl", False), ("status.jsonl", True)):
+        path = os.path.join(out, fname)
+        if not os.path.exists(path):
+            continue
+        for line in open(path):
+            try:
+                g = json.loads(line)
+            except ValueError:
+                continue
+            sid = g.get("sid") or by_args.get((tuple(g.get("args", [])), g.get("profile")))
+            key = (sid, g.get("profile"), g.get("name") or g.get("lib"))
+            run = g.get("run", 0)
+            cur = best.get(key)
+            if cur is None or run > cur[0]:
+                cur = best[key] = (run, [] if not is_note else g["status"])
+            if run == cur[0] and not is_note and isinstance(cur[1], list):
+                cur[1].append(g)
+    return {k: v[1] for k, v in best.items()}
 
 
 def write_md(out, info, libs, profiles, scen, results, a):
