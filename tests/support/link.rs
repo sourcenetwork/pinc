@@ -830,6 +830,10 @@ pub struct Net<'a, 'b, const C: usize = RING> {
     pub drop_finish: bool,
     pub b_rx: u64,
     pub b_tx: u64,
+    /// Virtual CPU time each handled or sent datagram takes (0: instant), so a burst occupies a stretch of time.
+    pub cost_ns: u64,
+    /// With a cost, keep stamping a burst with the time it began (a driver that reads the clock once per wake).
+    pub stale_clock: bool,
 }
 
 pub const T0: u64 = 1_000_000_000_000;
@@ -851,6 +855,8 @@ impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
             drop_finish: false,
             b_rx: 0,
             b_tx: 0,
+            cost_ns: 0,
+            stale_clock: false,
         }
     }
 
@@ -859,7 +865,7 @@ impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
         let mut moved = false;
         loop {
             let mut progress = false;
-            let now = self.now;
+            let mut now = self.now;
             while let Some((p, mut d)) = self.link.pop_b(now) {
                 self.b_rx += d.len() as u64;
                 let mut env = Env {
@@ -871,6 +877,10 @@ impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
                     self.rx_drops.push((false, e));
                 }
                 progress = true;
+                self.now += self.cost_ns;
+                if !self.stale_clock {
+                    now = self.now;
+                }
             }
             while let Some((p, mut d)) = self.link.pop_a(now) {
                 let mut env = Env {
@@ -882,6 +892,10 @@ impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
                     self.rx_drops.push((true, e));
                 }
                 progress = true;
+                self.now += self.cost_ns;
+                if !self.stale_clock {
+                    now = self.now;
+                }
             }
             if self.drop_finish && self.a.conn.is_connected() && !self.b.conn.is_connected() {
                 self.link.route(PathId(1)).ab.drop_next(1);
@@ -926,6 +940,10 @@ impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
                             self.link.send_a(now, path, seg);
                         } else {
                             self.link.send_b(now, path, seg);
+                        }
+                        self.now += self.cost_ns;
+                        if !self.stale_clock {
+                            now = self.now;
                         }
                     }
                 }
