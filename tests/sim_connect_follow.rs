@@ -28,12 +28,27 @@ fn reach_outs(w: &World, n: vinc_sim::NodeId, from: Time, to: Time) -> usize {
         .count()
 }
 
-/// A on a LAN with a 100 ms round trip, B on another, one relay; both have started and found their home.
+/// A and B public on links with a 120 ms round trip (too slow for a direct path to count as good), one relay; both
+/// have started and found their home.
 fn pair(seed: u64) -> (World, vinc_sim::NodeId, vinc_sim::NodeId, vinc_sim::NodeId) {
-    let (w, a, b, r, _) = pair_lans(seed);
+    let mut w = World {
+        sim: vinc_sim::Sim::with_config(
+            seed,
+            vinc_sim::SimConfig {
+                default_link: Some(link(60 * MS)),
+                trace: true,
+                ..vinc_sim::SimConfig::default()
+            },
+        ),
+    };
+    let (r, rs) = w.relay(1, relay_ip(10));
+    let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs]));
+    let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
+    w.run(secs(20));
     (w, a, b, r)
 }
 
+/// As [`pair`], with B on a LAN of its own so that a partition can cut the two apart.
 fn pair_lans(
     seed: u64,
 ) -> (
@@ -75,23 +90,11 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
         assert!(reach_outs(&w, b, secs(20), secs(21)) > 0, "the first punch");
         w.sim.command(secs(30), a, Cmd::LinkChanged);
         w.run(secs(31));
-        // The punch sends the candidates and probes to the peer's address.
-        let to_b = |from: Time, to: Time| {
-            w.client(a)
-                .tx_log
-                .iter()
-                .filter(|(t, dst, _)| *t >= from && *t < to && *dst == baddr)
-                .count()
-        };
-        assert_eq!(to_b(secs(30), secs(30) + 99 * MS), 0, "not before 100 ms");
+        assert_eq!(reach_outs(&w, b, secs(30), secs(30) + 100 * MS), 0, "not before 100 ms");
         assert!(
-            to_b(secs(30) + 100 * MS, secs(30) + 400 * MS) > 0,
-            "the punch ran after the change: {:?}",
-            w.client(a)
-                .tx_log
-                .iter()
-                .filter(|(t, _, _)| *t >= secs(29) && *t < secs(31))
-                .collect::<Vec<_>>()
+            reach_outs(&w, b, secs(30) + 100 * MS, secs(31)) > 0,
+            "the punch ran after the change\n{}",
+            w.dump(b)
         );
     });
 }
@@ -99,16 +102,52 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
 #[test]
 fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round() {
     big(|| {
-        let (mut w, a, b, _r) = pair(92);
-        let baddr = w.client(b).addr;
-        w.dial(secs(20), a, b, vec![baddr]);
-        w.run(secs(160));
-        assert!(w.connected(a).is_some());
-        assert!(reach_outs(&w, b, secs(20), secs(21)) > 0, "the first punch");
+        // A and the hub on links with a 120 ms round trip: too slow for a direct path to count as good, so the
+        // punching goes on every minute unless the idle rule stops it.
+        let mut w = World {
+            sim: vinc_sim::Sim::with_config(
+                92,
+                vinc_sim::SimConfig {
+                    default_link: Some(link(60 * MS)),
+                    trace: true,
+                    ..vinc_sim::SimConfig::default()
+                },
+            ),
+        };
+        let (r, rs) = w.relay(1, relay_ip(10));
+        let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs]));
+        let hub = w.relay_node(r).id();
+        w.sim.command(
+            secs(5),
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![rs.udp.unwrap()],
+                role: vinc_core::Role::Hub,
+            },
+        );
+        w.run(secs(10));
+        let sa = w.connected(a).unwrap();
+        assert!(
+            w.client(a)
+                .session_stats(sa)
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r))),
+            "the session runs on the direct path: {:?}",
+            w.client(a).session_stats(sa)
+        );
+        assert!(reach_outs(&w, r, secs(5), secs(6)) > 0, "the first punch");
+        w.run(secs(100));
+        assert!(
+            w.client(a)
+                .session_stats(sa)
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r))),
+            "the session still runs on the direct path: {:?}",
+            w.client(a).session_stats(sa)
+        );
         assert_eq!(
-            reach_outs(&w, b, secs(30), secs(160)) + reach_outs(&w, a, secs(30), secs(160)),
+            reach_outs(&w, r, secs(10), secs(100)),
             0,
-            "an idle session does not punch again"
+            "a session idle for 20 s does not punch again"
         );
     });
 }

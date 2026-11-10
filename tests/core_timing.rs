@@ -387,14 +387,14 @@ fn a_ping_command_sends_one_acknowledgement_eliciting_packet_at_once_and_an_idle
     big_stack(|| {
         let mut net = CoreNet::new(10 * MS_NS);
         let (a, b) = (net.add(1), net.add(2));
-        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
-        net.run_for(5 * S);
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Hub);
+        net.run_for(3 * S);
         let sent = |net: &CoreNet| match net.nodes[a].ep.query(Query::Stats(sa)) {
             Answer::Stats(s) => s.transport.packets_sent,
             _ => panic!("no session"),
         };
         let idle = sent(&net);
-        net.run_for(S);
+        net.run_for(2 * S);
         assert_eq!(sent(&net), idle, "an idle session sends nothing");
         let now = net.now;
         net.nodes[a].cmd(now, Command::Ping { session: sa }).unwrap();
