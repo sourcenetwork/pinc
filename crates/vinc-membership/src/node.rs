@@ -417,7 +417,7 @@ impl Membership {
 
     pub(crate) fn delta_to<H: Host>(&mut self, h: &mut H, peer: &NodeId, m: &NodeId, rec: Record, alive: Alive) {
         let f = Frame::Delta(Entry { member: m, rec, alive });
-        self.tx(h, peer, Route::Session, &f);
+        self.tx(h, peer, Route::Reply, &f);
     }
 
     /// Whether `hub` is a hub this node knows.

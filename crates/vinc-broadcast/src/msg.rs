@@ -28,7 +28,7 @@ impl Topics {
 
     fn send_pack<H: Host>(&mut self, h: &mut H, to: &NodeId, mid: [u8; 8]) {
         if wire::build(&mut self.scratch, ty::PACK, &[], &[&mid]).is_ok() {
-            h.send(to, Lane::Main, &self.scratch);
+            h.send(to, Lane::Reply, &self.scratch);
         }
     }
 
@@ -150,7 +150,7 @@ impl Topics {
             if let Some(st) = self.topics.get(topic) {
                 for (p, live) in &st.subs {
                     // A floor advances only for a message a session took: one nobody carried was never delivered.
-                    if *live && Some(p) != sender && p != head.origin && h.send(p, Lane::Main, &self.scratch) {
+                    if *live && Some(p) != sender && p != head.origin && h.send(p, Lane::Reply, &self.scratch) {
                         self.sent.note(p, head.ts, head.origin);
                     }
                 }

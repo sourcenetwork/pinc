@@ -175,7 +175,7 @@ fn a_dropped_carrier_is_confirmed_at_the_drop_plus_one_second_on_two_paths() {
         .filter(|s| s.1 == 0 && s.2 == 2 && s.3 == ty::PROBE)
         .collect();
     assert_eq!(probes.len(), 2, "one probe on the session, one on the independent path");
-    assert!(probes.iter().any(|p| p.4 == Route::Session) && probes.iter().any(|p| p.4 == Route::Direct));
+    assert!(probes.iter().any(|p| p.4 == Route::Reply) && probes.iter().any(|p| p.4 == Route::Direct));
     assert_eq!(w.count_events(0, |e| matches!(e, Event::MemberSuspected { .. })), 1);
     assert!(
         w.nodes[0].h.bc.contains(&Bc::Hold(id(2))),

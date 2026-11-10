@@ -130,7 +130,7 @@ impl Membership {
             return;
         };
         let mut buf = [0u8; 4 + 3 + SNAP_CHUNK * ENTRY_LEN];
-        self.tx_buf(h, peer, Route::Session, &Frame::Snap(snap), &mut buf);
+        self.tx_buf(h, peer, Route::Reply, &Frame::Snap(snap), &mut buf);
     }
 
     /// `FLOOR_PUSH`: a hub that has just accepted a session of a member sends its replay floor at once, with its first
@@ -154,7 +154,7 @@ impl Membership {
             topic: &[],
             rest,
         });
-        self.tx_buf(h, peer, Route::Session, &f, &mut buf);
+        self.tx_buf(h, peer, Route::Reply, &f, &mut buf);
     }
 
     /// A HELLO from `peer`.
@@ -180,7 +180,7 @@ impl Membership {
         if hello.snap || new_attach {
             self.send_snapshot(h, now, peer);
         } else {
-            self.tx(h, peer, Route::Session, &Frame::Ack);
+            self.tx(h, peer, Route::Reply, &Frame::Ack);
         }
         if let Some(held) = self.roster.get(peer).copied()
             && hello.rec.inc < held.rec.inc
@@ -242,7 +242,7 @@ impl Membership {
                         inc: lease.rec.inc,
                         proof,
                     });
-                    if self.tx(h, &hub, Route::Session, &f) {
+                    if self.tx(h, &hub, Route::Reply, &f) {
                         self.trace(Trace::DownSent { member: *member });
                     }
                 }
@@ -432,7 +432,7 @@ impl Membership {
                     return;
                 }
                 let wait = PROBE_WAIT_MIN.max(ev.map_or(0, |e| e.srtt.saturating_mul(3)));
-                self.tx(h, m, Route::Session, &Frame::Probe);
+                self.tx(h, m, Route::Reply, &Frame::Probe);
                 self.trace(Trace::ProbeSent {
                     member: *m,
                     path: Path::Session,

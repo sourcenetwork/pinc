@@ -121,7 +121,7 @@ impl Topics {
             if let Some(o) = old.filter(|o| **o != self.me && h.hub_up(o))
                 && wire::build(&mut self.scratch, ty::UNSUB, k, &[]).is_ok()
             {
-                h.send(o, Lane::Main, &self.scratch);
+                h.send(o, Lane::Reply, &self.scratch);
             }
             self.send_sub(h, new, k, since, false);
         }
@@ -193,7 +193,7 @@ impl Topics {
             let count = u16::try_from(self.ids.len() / 8).unwrap_or(u16::MAX);
             for hub in &self.hubs {
                 if h.hub_up(hub) {
-                    h.send(hub, Lane::Main, &self.scratch);
+                    h.send(hub, Lane::Reply, &self.scratch);
                     self.tq.push(|| Trace::HaveSent {
                         peer: *hub,
                         topic: topic_tag(k),
@@ -222,7 +222,7 @@ impl Topics {
                 self.ids.extend_from_slice(&mid.to_le_bytes());
             }
             if !self.ids.is_empty() && wire::build(&mut self.scratch, ty::HAVE, k, &[&self.ids]).is_ok() {
-                h.send(member, Lane::Main, &self.scratch);
+                h.send(member, Lane::Reply, &self.scratch);
             }
         }
         self.topics = topics;
@@ -255,7 +255,7 @@ impl Topics {
                     };
                     if head.origin != from
                         && wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok()
-                        && h.send(from, Lane::Main, &self.scratch)
+                        && h.send(from, Lane::Reply, &self.scratch)
                     {
                         self.sent.note(from, head.ts, head.origin);
                     }
@@ -266,7 +266,7 @@ impl Topics {
                     self.ids.extend_from_slice(&mid.to_le_bytes());
                 }
                 if !self.ids.is_empty() && wire::build(&mut self.scratch, ty::HAVE, topic, &[&self.ids]).is_ok() {
-                    h.send(from, Lane::Main, &self.scratch);
+                    h.send(from, Lane::Reply, &self.scratch);
                     let count = u16::try_from(self.ids.len() / 8).unwrap_or(u16::MAX);
                     self.tq.push(|| Trace::HaveSent {
                         peer: *from,
@@ -316,7 +316,7 @@ impl Topics {
             }
         }
         if !self.ids.is_empty() && wire::build(&mut self.scratch, ty::GET, topic, &[&self.ids]).is_ok() {
-            h.send(from, Lane::Main, &self.scratch);
+            h.send(from, Lane::Reply, &self.scratch);
             let count = u16::try_from(self.ids.len() / 8).unwrap_or(u16::MAX);
             self.trace(|| Trace::GetSent {
                 peer: *from,
@@ -338,7 +338,8 @@ impl Topics {
             let Ok((head, _)) = Head::parse(l) else {
                 continue;
             };
-            if wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok() && h.send(from, Lane::Main, &self.scratch) {
+            if wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok() && h.send(from, Lane::Reply, &self.scratch)
+            {
                 self.sent.note(from, head.ts, head.origin);
             }
         }

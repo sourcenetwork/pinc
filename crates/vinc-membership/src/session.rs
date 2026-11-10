@@ -50,6 +50,9 @@ pub enum Carrier {
 pub enum Route {
     /// The session as the transport routes it.
     Session,
+    /// The session as the transport routes it, for an answer or a push: with no session up the frame is dropped and
+    /// nothing is queued or dialed.
+    Reply,
     /// The validated direct UDP path.
     Direct,
     /// Through the relay of the named hub.

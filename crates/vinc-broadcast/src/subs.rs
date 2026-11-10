@@ -64,7 +64,7 @@ fn announce<H: Host>(
         let live = st.subs.iter().filter(|(_, l)| **l).map(|(p, _)| p);
         let others = st.pubs.iter().filter(|p| !st.subs.contains_key(*p));
         for p in live.chain(others) {
-            h.send(p, Lane::Main, scratch);
+            h.send(p, Lane::Reply, scratch);
         }
     }
     if build_subs(scratch, nodes, st, topic, true, max) {
@@ -113,7 +113,7 @@ impl Topics {
             self.limits.max_subscribers,
         ) && !self.nodes.is_empty()
         {
-            h.send(from, Lane::Main, &self.scratch);
+            h.send(from, Lane::Reply, &self.scratch);
         }
     }
 
@@ -152,7 +152,7 @@ impl Topics {
             {
                 topics = topics.saturating_add(1);
                 if wire::build(&mut self.scratch, ty::RESTORED, k, &[]).is_ok() {
-                    h.send(member, Lane::Main, &self.scratch);
+                    h.send(member, Lane::Reply, &self.scratch);
                 }
                 announce(
                     h,
@@ -240,7 +240,7 @@ impl Topics {
                 .map(|(p, _)| p)
                 .chain(st.pubs.iter())
             {
-                h.send(p, Lane::Main, &self.scratch);
+                h.send(p, Lane::Reply, &self.scratch);
             }
         }
     }

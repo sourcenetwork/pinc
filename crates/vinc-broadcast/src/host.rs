@@ -14,6 +14,9 @@ use vinc_membership::NodeId;
 pub enum Lane {
     /// The session's main stream (the hub stream).
     Main,
+    /// The session's main stream for an answer or a push: with no stream up the frame is dropped and nothing is
+    /// queued or dialed.
+    Reply,
     /// A second stream at urgency 2, whose writes do not keep the session active: the copies of a publish a
     /// publisher fans to the hubs that are not its primary.
     Fan,

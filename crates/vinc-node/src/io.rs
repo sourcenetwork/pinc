@@ -435,7 +435,7 @@ impl<E: Ep, St: Store> Io<E, St> {
         }
         let target = self.links.get(peer).and_then(|l| {
             let conn = l.conn?;
-            Some((conn, if lane == Lane::Main { l.out } else { l.fan }))
+            Some((conn, if lane == Lane::Fan { l.fan } else { l.out }))
         });
         match (lane, target) {
             (_, Some((conn, Some(s)))) => self.write(conn, s, frame),
@@ -448,7 +448,7 @@ impl<E: Ep, St: Store> Io<E, St> {
                 }
                 self.write(conn, s, frame)
             }
-            (Lane::Fan, None) => false,
+            (Lane::Fan, None) | (Lane::Reply, _) => false,
             (Lane::Main, _) => self.enqueue(peer, frame),
         }
     }

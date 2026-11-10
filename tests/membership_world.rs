@@ -376,7 +376,7 @@ impl World {
     fn path_ok(&self, a: usize, b: usize, route: &Route) -> bool {
         let session = self.net_ok(a, b) && !self.dead_default.contains(&key(a, b));
         match route {
-            Route::Session => {
+            Route::Session | Route::Reply => {
                 if self.is_hub(a) {
                     session
                 } else {

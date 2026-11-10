@@ -104,7 +104,7 @@ pub fn frame_json(f: &Frame<'_>) -> String {
 
 fn route_json(r: &Route) -> String {
     match r {
-        Route::Session => "\"r\":\"s\",\"via\":0".to_owned(),
+        Route::Session | Route::Reply => "\"r\":\"s\",\"via\":0".to_owned(),
         Route::Direct => "\"r\":\"d\",\"via\":0".to_owned(),
         Route::Via(x) => format!("\"r\":\"v\",\"via\":{}", nid(x)),
     }
