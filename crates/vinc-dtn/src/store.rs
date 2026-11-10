@@ -154,6 +154,11 @@ impl<const N: usize> Ledger<N> {
         Some(entry)
     }
 
+    /// The earliest expiry of any item kept, if there is one.
+    pub fn next_expiry(&self) -> Option<u64> {
+        self.slots.iter().flatten().map(|e| e.expires).min()
+    }
+
     /// Remove every item expired at `now` (`expires <= now`), reporting each to `on_evict`; returns how many.
     pub fn expire(&mut self, now: u64, mut on_evict: impl FnMut(&Entry)) -> usize {
         let mut n = 0;

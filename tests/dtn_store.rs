@@ -503,3 +503,14 @@ fn an_ack_for_a_dropped_item_reports_the_store_unknown_and_an_expired_bundle_is_
     );
     assert!(ba.is_empty());
 }
+
+#[test]
+fn the_next_expiry_is_the_earliest_of_what_is_kept() {
+    let mut l = Ledger::<8>::new(100);
+    assert_eq!(l.next_expiry(), None);
+    l.admit(key(1), 10, Class::Transit, 900, 0, |_| {}).unwrap();
+    l.admit(key(2), 10, Class::Custody, 400, 0, |_| {}).unwrap();
+    assert_eq!(l.next_expiry(), Some(400));
+    l.expire(400, |_| {});
+    assert_eq!(l.next_expiry(), Some(900));
+}

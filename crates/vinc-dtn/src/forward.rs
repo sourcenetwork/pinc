@@ -287,6 +287,20 @@ impl<const B: usize, const L: usize, const T: usize, const F: usize> Forwarder<B
         Some(())
     }
 
+    /// The physical time (milliseconds) at which the machine next has something to do without any input: the first
+    /// bundle expiry, or the first retransmission timer of a transfer whose link is up (a timer on a down link waits
+    /// for its link). `None` when neither exists.
+    pub fn poll_timeout(&self) -> Option<u64> {
+        let expiry = self.bundles.iter().flatten().map(|b| b.held.expires);
+        let retry = self.transfers.iter().flatten().filter_map(|t| match t.phase {
+            Phase::Sent { remaining, .. } if self.links.iter().flatten().any(|l| l.up && l.peer == t.peer) => {
+                Some(self.now.saturating_add(remaining))
+            }
+            _ => None,
+        });
+        expiry.chain(retry).min()
+    }
+
     /// The next action to perform, or `None` when the machine is quiet. Call until `None` after every `step`.
     ///
     /// Order: a finished or expired bundle is released first; then due retransmissions on links that are up; then

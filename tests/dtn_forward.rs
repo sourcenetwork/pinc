@@ -432,3 +432,26 @@ fn a_forgotten_bundle_stays_finished_and_a_full_memory_refuses_new_holds() {
     assert_eq!(f.step(49, Input::Hold(held(9, 3, 50))), Err(ForwardError::Finished));
     assert_eq!(f.step(50, Input::Hold(other)), Ok(()));
 }
+
+#[test]
+fn the_next_timeout_is_the_first_expiry_or_the_first_timer_on_a_live_link() {
+    let mut f = Fwd::new(POLICY, 0);
+    assert_eq!(f.poll_timeout(), None);
+    f.step(0, Input::Hold(held(9, 4, 10_000))).unwrap();
+    assert_eq!(f.poll_timeout(), Some(10_000));
+    f.step(0, Input::LinkUp(node(1))).unwrap();
+    drain(&mut f);
+    assert_eq!(
+        f.poll_timeout(),
+        Some(100),
+        "the retransmission timer of the transfer just sent"
+    );
+    // A link that goes down freezes its timer: 40 ms were charged, 60 are left, and they do not run while it is down.
+    f.step(40, Input::LinkDown(node(1))).unwrap();
+    assert_eq!(f.poll_timeout(), Some(10_000));
+    f.step(500, Input::LinkUp(node(1))).unwrap();
+    assert_eq!(f.poll_timeout(), Some(560));
+    // At that moment the machine has the retransmission to make.
+    f.step(560, Input::Tick).unwrap();
+    assert_eq!(drain(&mut f), vec![send(1, 2, true)]);
+}
