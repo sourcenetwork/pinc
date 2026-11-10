@@ -214,16 +214,27 @@ ep_impl! {
             Command::FlightPaths { session, addrs, skip_primary } => {
                 let i = self.live(session)?;
                 let mut ids: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
-                for (d, a) in ids.iter_mut().zip(addrs) {
+                // The table holds NP paths, the dial's own among them. A relay path reaches any peer that has a
+                // carrier, a direct address only a peer that can be reached there, so when the list is longer than the
+                // table the relay paths go first and the direct ones follow in the order given.
+                let relay_first = addrs
+                    .iter()
+                    .filter(|a| is_relay_addr(a))
+                    .chain(addrs.iter().filter(|a| !is_relay_addr(a)));
+                for (d, a) in ids.iter_mut().zip(relay_first) {
                     *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
                 }
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
+                // A full table makes room by dropping its oldest unvalidated path, so the paths are added from the
+                // least wanted to the most wanted, and the fan-out names the ones that are still tracked.
+                for (id, info) in ids.iter().flatten().rev() {
+                    let _ = conn.add_path(&mut env, *id, *info);
+                }
                 let mut list: [vinc_transport::conn::PathId; NP] = [vinc_transport::conn::PathId(0); NP];
                 let mut n = 0;
-                for (id, info) in ids.iter().flatten() {
-                    // A path the connection cannot track is left out of the fan-out.
-                    if conn.add_path(&mut env, *id, *info).is_ok()
+                for (id, _) in ids.iter().flatten() {
+                    if conn.path_last_rx(*id).is_some()
                         && let Some(s) = list.get_mut(n)
                     {
                         *s = *id;

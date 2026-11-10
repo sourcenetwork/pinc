@@ -732,6 +732,43 @@ fn the_endpoint_sends_a_dialing_flight_on_the_paths_it_is_told() {
 }
 
 #[test]
+fn a_relay_path_at_the_end_of_a_long_list_of_flight_paths_still_carries_the_flight() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (peer, first, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, first, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        // More direct addresses than the path table holds, then the relay path that is sure to reach the peer.
+        let mut addrs: Vec<SocketAddr> = (1..=6).map(|i| format!("10.0.9.{i}:4433").parse().unwrap()).collect();
+        let relay = vinc_core::relay_addr(false, 0, 7);
+        addrs.push(relay);
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: sa,
+                    addrs: &addrs,
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        net.pump(a);
+        let to_relay: usize = net
+            .tapped
+            .iter()
+            .filter(|t| t.0 == now && t.2 == relay)
+            .map(|t| t.3)
+            .sum();
+        let all: Vec<_> = net.tapped.iter().filter(|t| t.0 == now).map(|t| (t.2, t.3)).collect();
+        assert!(
+            to_relay > 1000,
+            "the flight did not leave on the relay path: {to_relay} bytes, sent {all:?}"
+        );
+    });
+}
+
+#[test]
 fn a_flight_can_skip_the_primary_path_and_leave_on_the_listed_ones_only() {
     big_stack(|| {
         use vinc_security::ClientTickets;
