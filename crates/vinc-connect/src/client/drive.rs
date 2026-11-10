@@ -26,6 +26,7 @@ use vinc_security::Env;
 use vinc_transport::stream::StreamSource;
 
 use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
+use super::dial::HUB_RELAY_PATH_DELAY;
 use super::dial::{Cand, HUB_FIRST_ADDRS, HUB_RELAY_DELAY, RelayView, Try, direct_first, select};
 use super::punch::{self, Puncher, Step, View};
 use super::tunnel::{self, HubSession, Rides, ThinSplice, Via};
@@ -46,6 +47,8 @@ pub(super) struct Sess {
     handshaking: bool,
     tries: u32,
     relay_at: Option<u64>,
+    /// A direct-first hub dial gets its relay path back at this time once established.
+    readd_at: Option<u64>,
     pulse_on: bool,
     last_relay: Option<(u8, u64, u64)>,
     primary: Option<SocketAddr>,
@@ -156,6 +159,17 @@ drive_impl! {
         self.sess.iter_mut().flatten().find(|s| s.id == id)
     }
 
+    /// The first instant a followed session has something to do on its own: the relay copy of a direct-first dial,
+    /// the relay path that follows it, or a punch round.
+    pub(super) fn session_deadline(&self) -> Option<u64> {
+        self.sess
+            .iter()
+            .flatten()
+            .flat_map(|s| [s.relay_at, s.readd_at, s.punch.deadline()])
+            .flatten()
+            .min()
+    }
+
     /// The candidate paths for a dial to `node`: its known UDP addresses, then the relay path.
     fn candidates_for(&mut self, node: &NodeId, hints: &[SocketAddr], out: &mut [Cand; 16]) -> usize {
         let mut n = 0;
@@ -263,9 +277,11 @@ drive_impl! {
             );
         }
         let mut relay_at = None;
+        let mut readd_at = None;
         if direct {
             let _ = self.cmd(ep, now, Command::FirstResend { session: id, delay: HUB_RELAY_DELAY });
             relay_at = Some(now.saturating_add(HUB_RELAY_DELAY));
+            readd_at = Some(now.saturating_add(HUB_RELAY_PATH_DELAY));
         }
         let entry = Sess {
             id,
@@ -276,6 +292,7 @@ drive_impl! {
             handshaking: true,
             tries: 1,
             relay_at,
+            readd_at,
             pulse_on: false,
             last_relay: carried.map(|(r, g)| (r, g, now)),
             primary,
@@ -313,6 +330,7 @@ drive_impl! {
                         handshaking: false,
                         tries: 0,
                         relay_at: None,
+                        readd_at: None,
                         pulse_on: false,
                         last_relay: None,
                         primary: None,
@@ -429,28 +447,32 @@ drive_impl! {
     fn each_session<E: Port>(&mut self, now: u64, ep: &mut E) {
         for i in 0..SESSIONS {
             let Some(mut s) = self.sess.get(i).copied().flatten() else { continue };
-            let Some(st) = ep.stats(s.id) else { continue };
+            let Some(st) = ep.stats(s.id) else {
+                // The endpoint no longer has the session (a dial that failed raises no close event): its timers go
+                // with it, or they would stay due forever.
+                if let Some(slot) = self.sess.get_mut(i) {
+                    *slot = None;
+                }
+                continue;
+            };
             // B8: the relay copy joins the flight of a direct-first dial at its first resend.
             if let Some(at) = s.relay_at
                 && now >= at
             {
                 s.relay_at = None;
                 if !st.established {
-                    let mut cands = [Cand::Relay(0); 16];
-                    let nc = self.candidates_for(&s.node, &[], &mut cands);
-                    let mut addrs = [self.me_addr_pub(); 16];
-                    let mut na = 0;
-                    for c in cands.get(..nc).unwrap_or_default() {
-                        let a = self.to_addr(c, &s.node);
-                        if Some(a) != s.primary && let Some(d) = addrs.get_mut(na) {
-                            *d = a;
-                            na += 1;
-                        }
-                    }
-                    let _ = self.cmd(ep,
-                        now,
-                        Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default(), skip_primary: false },
-                    );
+                    self.add_paths(now, ep, &s);
+                }
+            }
+            // An established hub session dialed direct-first gets its relay path back, whatever the
+            // first flight did.
+            if let Some(at) = s.readd_at
+                && now >= at
+            {
+                // A session still in its handshake got every path from the resends already.
+                s.readd_at = None;
+                if st.established {
+                    self.add_paths(now, ep, &s);
                 }
             }
             // B9: later tries of a handshake choose their paths again.
@@ -481,6 +503,25 @@ drive_impl! {
                 *slot = Some(s);
             }
         }
+    }
+
+    /// Register every known path of the session's peer but its first one, and fan the flight out over them.
+    fn add_paths<E: Port>(&mut self, now: u64, ep: &mut E, s: &Sess) {
+        let mut cands = [Cand::Relay(0); 16];
+        let nc = self.candidates_for(&s.node, &[], &mut cands);
+        let mut addrs = [self.me_addr_pub(); 16];
+        let mut na = 0;
+        for c in cands.get(..nc).unwrap_or_default() {
+            let a = self.to_addr(c, &s.node);
+            if Some(a) != s.primary && let Some(d) = addrs.get_mut(na) {
+                *d = a;
+                na += 1;
+            }
+        }
+        let _ = self.cmd(ep,
+            now,
+            Command::FlightPaths { session: s.id, addrs: addrs.get(..na).unwrap_or_default(), skip_primary: false },
+        );
     }
 
     /// Whether the active path of `st` is the relay path to relay `h` itself (a hub session on the hub's carrier).

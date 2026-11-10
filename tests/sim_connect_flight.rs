@@ -182,3 +182,47 @@ fn on_a_slow_uplink_each_try_goes_out_on_one_path_rotating_by_try() {
         let _ = b;
     });
 }
+
+#[test]
+fn a_direct_first_hub_session_that_came_up_at_once_gets_its_relay_path_two_seconds_after_creation() {
+    big(|| {
+        let mut w = World::new(74);
+        let (r, rs) = w.relay(1, relay_ip(10));
+        let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs]));
+        w.run(secs(15));
+        let hub = w.relay_node(r).id();
+        let t0 = secs(15);
+        w.sim.command(
+            t0,
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![rs.udp.unwrap()],
+                role: vinc_core::Role::Hub,
+            },
+        );
+        w.run(t0 + secs(5));
+        let est = w
+            .when(a, |e| {
+                matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::Connected { .. }))
+            })
+            .unwrap();
+        assert!(
+            est < t0 + 300 * MS,
+            "the direct flight was answered before the first resend"
+        );
+        let relay_tx: Vec<Time> = w
+            .client(a)
+            .tx_log
+            .iter()
+            .filter(|(t, to, _)| *t >= t0 && is_relay_addr(to))
+            .map(|(t, _, _)| *t - t0)
+            .collect();
+        assert!(
+            relay_tx
+                .first()
+                .is_some_and(|t| *t >= 2 * SEC && *t < 2 * SEC + 200 * MS),
+            "the relay path joins at 2 s, not before: {relay_tx:?}"
+        );
+    });
+}

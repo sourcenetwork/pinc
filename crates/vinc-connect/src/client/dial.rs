@@ -24,6 +24,8 @@ use vinc_crypto::NodeId;
 pub const HUB_RELAY_DELAY: u64 = 300_000_000;
 /// A node whose first dial came after this long is a late start.
 pub const LATE_START: u64 = 10_000_000_000;
+/// A direct-first hub session gets its relay path this long after its creation.
+pub const HUB_RELAY_PATH_DELAY: u64 = 2_000_000_000;
 /// Direct addresses in a direct-first flight.
 pub const HUB_FIRST_ADDRS: usize = 1;
 /// The link round trip from which a link is slow.

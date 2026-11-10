@@ -25,6 +25,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.class.is_some()),
             Some(self.duty.deadline()),
             self.close_deadline(),
+            self.session_deadline(),
         ]
         .into_iter()
         .flatten()
