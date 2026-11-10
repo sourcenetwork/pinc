@@ -96,11 +96,12 @@ impl Lib for Iroh {
     fn run<T>(f: impl Future<Output = T>) -> T {
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build();
         RT.get_or_init(|| rt.unwrap_or_else(|e| panic!("the runtime did not start: {e}")))
-            .block_on(f)
+            .block_on(tokio::task::LocalSet::new().run_until(f))
     }
 
-    fn spawn(f: impl Future<Output = ()> + Send + 'static) {
-        tokio::spawn(f);
+    fn spawn(f: impl Future<Output = ()> + 'static) {
+        // The scenarios run on the thread that drives them; the library's own tasks use the runtime's threads.
+        tokio::task::spawn_local(f);
     }
 
     async fn sleep(d: Duration) {

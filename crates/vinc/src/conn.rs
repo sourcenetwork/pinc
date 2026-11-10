@@ -1,15 +1,15 @@
 //! Connections: a session with one peer for one protocol.
 //!
-//! A [`Connection`] is a cheap handle (`Clone + Send + Sync` when the host's closures are). The session lives while any
+//! A [`Connection`] is a cheap handle (`Clone`, `!Send`: it stays on the thread that built the endpoint). The session lives while any
 //! handle to it, or to a stream of it, lives; dropping the last one closes it with code 0 (the close leaves with the
 //! next future that runs the endpoint). Streams, datagrams, counters and the close are all operations on the handle.
 //!
-//! Invariants: an operation on a session that ended fails with the reason it ended; no operation holds a lock while it
-//! waits; a dial whose future is dropped before it finishes closes the session it started, so nothing is left open
+//! Invariants: an operation on a session that ended fails with the reason it ended; no operation holds a borrow of the
+//! core while it waits; a dial whose future is dropped before it finishes closes the session it started, so nothing is left open
 //! that no one holds.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use vinc_core::SessionId;
@@ -23,25 +23,27 @@ use crate::protocol::{read_tag, write_tag};
 use crate::stream::{RecvStream, SendStream};
 
 pub(crate) struct ConnInner<H: Hosted> {
-    pub(crate) sh: Arc<Shared<H>>,
-    pub(crate) info: Arc<SessInfo>,
+    pub(crate) sh: Rc<Shared<H>>,
+    pub(crate) info: Rc<SessInfo>,
 }
 
 impl<H: Hosted> Drop for ConnInner<H> {
     fn drop(&mut self) {
         if self.info.ended.get().is_none() {
             let now = self.sh.now();
-            self.sh.lock().close_session(now, self.info.id, 0);
+            if let Some(mut core) = self.sh.lock() {
+                core.close_session(now, self.info.id, 0);
+            }
         }
     }
 }
 
 /// A connection to one peer for one protocol.
-pub struct Connection<H: Hosted>(pub(crate) Arc<ConnInner<H>>);
+pub struct Connection<H: Hosted>(pub(crate) Rc<ConnInner<H>>);
 
 impl<H: Hosted> Clone for Connection<H> {
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self(Rc::clone(&self.0))
     }
 }
 
@@ -129,27 +131,29 @@ impl<H: Hosted> Drop for DialGuard<'_, H> {
     fn drop(&mut self) {
         if let Some(s) = self.session {
             let now = self.sh.now();
-            self.sh.lock().dial_cancel(now, s);
+            if let Some(mut core) = self.sh.lock() {
+                core.dial_cancel(now, s);
+            }
         }
     }
 }
 
 impl<H: Hosted> Connection<H> {
-    pub(crate) fn new(sh: &Arc<Shared<H>>, info: Arc<SessInfo>) -> Self {
-        Self(Arc::new(ConnInner {
-            sh: Arc::clone(sh),
+    pub(crate) fn new(sh: &Rc<Shared<H>>, info: Rc<SessInfo>) -> Self {
+        Self(Rc::new(ConnInner {
+            sh: Rc::clone(sh),
             info,
         }))
     }
 
-    pub(crate) fn incoming(sh: &Arc<Shared<H>>, info: Arc<SessInfo>) -> Incoming<H> {
+    pub(crate) fn incoming(sh: &Rc<Shared<H>>, info: Rc<SessInfo>) -> Incoming<H> {
         Incoming {
             conn: Self::new(sh, info),
         }
     }
 
     /// Dial `node` for `alpn`, trying `addrs`. A peer already connected gets a sub-session at once.
-    pub(crate) async fn dial(sh: &Arc<Shared<H>>, node: NodeId, alpn: &[u8], addrs: Vec<SocketAddr>) -> Result<Self> {
+    pub(crate) async fn dial(sh: &Rc<Shared<H>>, node: NodeId, alpn: &[u8], addrs: Vec<SocketAddr>) -> Result<Self> {
         let mut guard = DialGuard { sh, session: None };
         let info = sh
             .run(|core, now| {

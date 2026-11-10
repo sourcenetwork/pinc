@@ -14,7 +14,7 @@
 //! Invariants: nothing here is specific to one library; a number is printed only when it was measured in this run;
 //! a failure is counted and printed, never dropped.
 
-#![allow(unreachable_pub, dead_code)]
+#![allow(unreachable_pub, dead_code, unsafe_code)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
@@ -168,17 +168,17 @@ impl Rec {
 }
 
 /// The send half of a stream.
-pub trait Tx: Send + 'static {
+pub trait Tx: 'static {
     /// Write all of `b`.
-    fn write_all(&mut self, b: &[u8]) -> impl Future<Output = io::Result<()>> + Send;
+    fn write_all(&mut self, b: &[u8]) -> impl Future<Output = io::Result<()>>;
     /// End the send half.
-    fn finish(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+    fn finish(&mut self) -> impl Future<Output = io::Result<()>>;
 }
 
 /// The receive half of a stream.
-pub trait Rx: Send + 'static {
+pub trait Rx: 'static {
     /// Read into `b`: the byte count, 0 at the end of the stream.
-    fn read(&mut self, b: &mut [u8]) -> impl Future<Output = io::Result<usize>> + Send;
+    fn read(&mut self, b: &mut [u8]) -> impl Future<Output = io::Result<usize>>;
 }
 
 /// Fill `b` or fail.
@@ -200,9 +200,9 @@ pub trait Lib: Sized + 'static {
     /// Whether the library resumes a connection with data in the first flight.
     const RESUMES: bool;
     /// An endpoint (a socket, an identity and the library's state).
-    type Ep: Send + Sync + 'static;
+    type Ep: 'static;
     /// An established connection.
-    type Conn: Clone + Send + Sync + 'static;
+    type Conn: Clone + 'static;
     /// The send half of a stream.
     type Tx: Tx;
     /// The receive half of a stream.
@@ -211,23 +211,23 @@ pub trait Lib: Sized + 'static {
     /// Run `f` to the end on the library's runtime.
     fn run<T>(f: impl Future<Output = T>) -> T;
     /// Start `f` on the runtime.
-    fn spawn(f: impl Future<Output = ()> + Send + 'static);
+    fn spawn(f: impl Future<Output = ()> + 'static);
     /// Wait.
-    fn sleep(d: Duration) -> impl Future<Output = ()> + Send;
+    fn sleep(d: Duration) -> impl Future<Output = ()>;
     /// Bind a server on loopback, start serving [`handle`] on every stream, return its address as text.
-    fn serve() -> impl Future<Output = io::Result<String>> + Send;
+    fn serve() -> impl Future<Output = io::Result<String>>;
     /// A fresh client endpoint: new identity, no tickets, no cached session.
-    fn client() -> impl Future<Output = io::Result<Self::Ep>> + Send;
+    fn client() -> impl Future<Output = io::Result<Self::Ep>>;
     /// Dial `addr`.
-    fn connect(ep: &Self::Ep, addr: &str) -> impl Future<Output = io::Result<Self::Conn>> + Send;
+    fn connect(ep: &Self::Ep, addr: &str) -> impl Future<Output = io::Result<Self::Conn>>;
     /// Open a bidirectional stream.
-    fn open(conn: &Self::Conn) -> impl Future<Output = io::Result<(Self::Tx, Self::Rx)>> + Send;
+    fn open(conn: &Self::Conn) -> impl Future<Output = io::Result<(Self::Tx, Self::Rx)>>;
     /// Close one connection.
-    fn close(ep: &Self::Ep, conn: &Self::Conn) -> impl Future<Output = ()> + Send;
+    fn close(ep: &Self::Ep, conn: &Self::Conn) -> impl Future<Output = ()>;
     /// Stop an endpoint and free what it holds.
-    fn shutdown(ep: Self::Ep) -> impl Future<Output = ()> + Send;
+    fn shutdown(ep: Self::Ep) -> impl Future<Output = ()>;
     /// Dial `addr` and exchange the first byte; `resumed` asks for the library's resumption path when it has one.
-    fn hello(ep: &Self::Ep, addr: &str, resumed: bool) -> impl Future<Output = io::Result<Self::Conn>> + Send {
+    fn hello(ep: &Self::Ep, addr: &str, resumed: bool) -> impl Future<Output = io::Result<Self::Conn>> {
         let _ = resumed;
         async move {
             let c = Self::connect(ep, addr).await?;

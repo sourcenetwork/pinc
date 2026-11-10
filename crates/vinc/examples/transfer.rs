@@ -16,6 +16,7 @@
 )]
 
 use std::net::{SocketAddr, UdpSocket};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -41,7 +42,7 @@ impl Protocol for Sink {
         ALPN
     }
 
-    async fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) {
+    async fn serve<H: Hosted + 'static>(self: Rc<Self>, conn: Connection<H>) {
         while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
             let (mut total, mut h) = (0u64, 0xcbf2_9ce4_8422_2325_u64);
             while let Ok(Some(chunk)) = rx.read_chunk(64 * 1024).await {
@@ -61,7 +62,7 @@ pub async fn run(len: usize) -> vinc::Result<(u64, bool)> {
     let server = endpoint(Vinc::builder()).await?;
     let client = endpoint(Vinc::builder()).await?;
     {
-        let registered = server.register(Arc::new(Sink)).await?;
+        let registered = server.register(Rc::new(Sink)).await?;
         nuclei::spawn_local(async move {
             while let Some(conn) = registered.accept().await {
                 nuclei::spawn_local(registered.protocol().serve(conn)).detach();

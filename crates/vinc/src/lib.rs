@@ -39,8 +39,16 @@
 //!
 //! # Thread per core
 //!
-//! One endpoint per core, each with its own socket and identity, and each polled on its core. The handles are
-//! `Send + Sync + 'static` when the closures are, so a work-stealing executor works too.
+//! One endpoint per core, each with its own socket and identity, and each polled on its core. The handles are `Rc`-based
+//! and `!Send`: they stay on the thread that built the endpoint, and the host spawns the futures with its executor's local
+//! spawn (`nuclei::spawn_local`, a tokio `LocalSet`, a smol `LocalExecutor`). Nothing in the crate is synchronised.
+//!
+//! ```compile_fail
+//! fn needs_send<T: Send>(_: &T) {}
+//! fn check<H: vinc::Hosted>(conn: vinc::Connection<H>) {
+//!     needs_send(&conn);
+//! }
+//! ```
 #![forbid(unsafe_code)]
 
 /// The README's examples, compiled and run as doctests so they cannot drift.
@@ -66,11 +74,11 @@ pub mod stream;
 pub use addr::{NodeAddr, node_from_str, node_to_string};
 pub use conn::{ConnStats, Connection, Incoming};
 pub use endpoint::{
-    Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, NoDiscovery, Vinc,
+    Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, NoDiscovery, Vinc,
 };
 pub use engine::{Admit, BUSY};
 pub use error::{Error, ErrorKind, Result};
-pub use host::{BatchHost, Host, Hosted};
+pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;
 pub use mem::{Limits, MAX_CONNECTIONS, RING, STREAMS};
 pub use node::CAPACITIES;

@@ -11,7 +11,11 @@
 //!   segment size, and sends it in one call; `recv` may return several datagrams of one sender that it received in one
 //!   call, as the length filled and the segment size. A host without those features uses [`Builder::build`].
 //!
-//! [`Host`] and [`BatchHost`] are the types the closures (with the key store and the access hook) make; [`Hosted`] is how
+//! - [`Builder::build_io`](crate::Builder::build_io): the same batched contract as a trait ([`Io`]) instead of closures,
+//!   for a host that must name the endpoint's type, because it keeps the endpoint in a struct field, say. A closure's
+//!   type cannot be written; a type that implements [`Io`] can.
+//!
+//! [`Host`], [`BatchHost`] and [`IoHost`] are the types the closures (with the key store and the access hook) make; [`Hosted`] is how
 //! the facade's types name them, so a handle is generic over one parameter instead of five.
 //!
 //! The closures may borrow from the caller; the handles are `'static` exactly when the closures are.
@@ -33,10 +37,10 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// The host's I/O and settings as one type; only [`Host`] and [`BatchHost`] implement it.
-pub trait Hosted: sealed::Sealed + Send + Sync {
+/// The host's I/O and settings as one type; only [`Host`], [`BatchHost`] and [`IoHost`] implement it.
+pub trait Hosted: sealed::Sealed {
     /// The key store that holds the identity.
-    type Keys: KeyStore + Send;
+    type Keys: KeyStore;
     /// The access hook.
     type Access: Admit;
 
@@ -96,10 +100,10 @@ host_new!(Host, BatchHost);
 
 impl<R, S, Z, K, A> Hosted for Host<R, S, Z, K, A>
 where
-    R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr)> + Send + Sync,
-    S: AsyncFn(&[u8], SocketAddr) -> io::Result<usize> + Send + Sync,
-    Z: AsyncFn(Instant) + Send + Sync,
-    K: KeyStore + Send,
+    R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr)>,
+    S: AsyncFn(&[u8], SocketAddr) -> io::Result<usize>,
+    Z: AsyncFn(Instant),
+    K: KeyStore,
     A: Admit,
 {
     type Keys = K;
@@ -126,10 +130,10 @@ where
 
 impl<R, S, Z, K, A> Hosted for BatchHost<R, S, Z, K, A>
 where
-    R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr, usize)> + Send + Sync,
-    S: AsyncFn(&[u8], SocketAddr, usize) -> io::Result<usize> + Send + Sync,
-    Z: AsyncFn(Instant) + Send + Sync,
-    K: KeyStore + Send,
+    R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr, usize)>,
+    S: AsyncFn(&[u8], SocketAddr, usize) -> io::Result<usize>,
+    Z: AsyncFn(Instant),
+    K: KeyStore,
     A: Admit,
 {
     type Keys = K;
@@ -145,5 +149,60 @@ where
 
     async fn sleep(&self, at: Instant) {
         (self.sleep)(at).await;
+    }
+}
+
+/// The host's I/O as a trait, with the contract of [`Builder::build_batched`](crate::Builder::build_batched): `recv` fills
+/// the buffer and returns the length, the sender and the segment size; `send` gets a whole transmit and its segment
+/// size and returns how many datagrams went; `sleep` waits until an instant. A host that handles one datagram per call
+/// returns the length as the segment size and sends the buffer as one datagram when the segment size is its length.
+pub trait Io {
+    /// Receive into `buf`: the length filled, the sender and the size of each datagram in the filled part.
+    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>>;
+
+    /// Send equal-size datagrams of `segment` bytes (the last may be shorter) to `to`.
+    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = io::Result<usize>>;
+
+    /// Sleep until `at`.
+    fn sleep(&self, at: Instant) -> impl Future<Output = ()>;
+}
+
+/// A host that implements [`Io`], with the type of the key store and of the access hook.
+pub struct IoHost<N, K, A> {
+    io: N,
+    _types: PhantomData<fn() -> (K, A)>,
+}
+
+impl<N, K, A> IoHost<N, K, A> {
+    pub(crate) const fn new(io: N) -> Self {
+        Self {
+            io,
+            _types: PhantomData,
+        }
+    }
+}
+
+impl<N, K, A> core::fmt::Debug for IoHost<N, K, A> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("IoHost")
+    }
+}
+
+impl<N, K, A> sealed::Sealed for IoHost<N, K, A> {}
+
+impl<N: Io, K: KeyStore, A: Admit> Hosted for IoHost<N, K, A> {
+    type Keys = K;
+    type Access = A;
+
+    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>> {
+        self.io.recv(buf)
+    }
+
+    fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> impl Future<Output = io::Result<usize>> {
+        self.io.send(buf, to, segment)
+    }
+
+    fn sleep(&self, at: Instant) -> impl Future<Output = ()> {
+        self.io.sleep(at)
     }
 }

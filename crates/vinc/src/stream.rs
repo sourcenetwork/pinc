@@ -16,7 +16,7 @@
 //! Dropping a [`SendStream`] without finishing it finishes it after the bytes already written (a clean end). Dropping a
 //! [`RecvStream`] discards what the peer still sends.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::conn::ConnInner;
 use crate::engine::Try;
@@ -28,14 +28,14 @@ pub const BLOCK: usize = 16 * 1024;
 
 /// The sending half of a stream.
 pub struct SendStream<H: Hosted> {
-    conn: Arc<ConnInner<H>>,
+    conn: Rc<ConnInner<H>>,
     id: u64,
     finished: bool,
 }
 
 /// The receiving half of a stream.
 pub struct RecvStream<H: Hosted> {
-    conn: Arc<ConnInner<H>>,
+    conn: Rc<ConnInner<H>>,
     id: u64,
     /// How the stream ended for this reader: `Ok` for the end of the data, else why not.
     end: Option<Result<()>>,
@@ -59,9 +59,9 @@ impl<H: Hosted> core::fmt::Debug for RecvStream<H> {
 }
 
 impl<H: Hosted> SendStream<H> {
-    pub(crate) fn new(conn: &Arc<ConnInner<H>>, id: u64) -> Self {
+    pub(crate) fn new(conn: &Rc<ConnInner<H>>, id: u64) -> Self {
         Self {
-            conn: Arc::clone(conn),
+            conn: Rc::clone(conn),
             id,
             finished: false,
         }
@@ -129,17 +129,16 @@ impl<H: Hosted> SendStream<H> {
 impl<H: Hosted> Drop for SendStream<H> {
     fn drop(&mut self) {
         let now = self.conn.sh.now();
-        self.conn
-            .sh
-            .lock()
-            .drop_send(now, &self.conn.info, self.id, self.finished);
+        if let Some(mut core) = self.conn.sh.lock() {
+            core.drop_send(now, &self.conn.info, self.id, self.finished);
+        }
     }
 }
 
 impl<H: Hosted> RecvStream<H> {
-    pub(crate) fn new(conn: &Arc<ConnInner<H>>, id: u64) -> Self {
+    pub(crate) fn new(conn: &Rc<ConnInner<H>>, id: u64) -> Self {
         Self {
-            conn: Arc::clone(conn),
+            conn: Rc::clone(conn),
             id,
             end: None,
             stopped: None,
@@ -238,7 +237,9 @@ impl<H: Hosted> Drop for RecvStream<H> {
     fn drop(&mut self) {
         if self.end.is_none() && self.stopped.is_none() {
             let now = self.conn.sh.now();
-            self.conn.sh.lock().drop_recv(now, &self.conn.info, self.id);
+            if let Some(mut core) = self.conn.sh.lock() {
+                core.drop_recv(now, &self.conn.info, self.id);
+            }
         }
     }
 }

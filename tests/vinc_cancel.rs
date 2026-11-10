@@ -24,7 +24,7 @@ use nuclei::sync::oneshot;
 use vinc::{Discovery, Endpoint, Hosted, NodeAddr};
 use vinc_common::{ECHO, bind, client, eventually, node, pattern, poll_drop, within};
 
-async fn echo_once<H: Hosted + 'static, D: Discovery>(client: &Endpoint<H, D>, addr: &NodeAddr) {
+async fn echo_once<H: Hosted + 'static, D: Discovery + 'static>(client: &Endpoint<H, D>, addr: &NodeAddr) {
     let conn = client.connect(addr.clone(), ECHO).await.unwrap();
     let (mut tx, mut rx) = conn.open_bi().await.unwrap();
     tx.write_all(b"alive").await.unwrap();
@@ -33,7 +33,7 @@ async fn echo_once<H: Hosted + 'static, D: Discovery>(client: &Endpoint<H, D>, a
 }
 
 /// Background traffic that must not be disturbed by the dropped futures; resolves to its rounds when stopped.
-fn load<H: Hosted + 'static, D: Discovery>(
+fn load<H: Hosted + 'static, D: Discovery + 'static>(
     client: &Endpoint<H, D>,
     addr: &NodeAddr,
     stop: &Arc<AtomicBool>,

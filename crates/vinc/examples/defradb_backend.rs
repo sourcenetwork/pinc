@@ -21,9 +21,11 @@
     reason = "an example favours the short form"
 )]
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use nuclei::Handle;
@@ -66,18 +68,18 @@ pub struct Request<T> {
 pub struct VincTransport<H: Hosted> {
     ep: Endpoint<H>,
     // One connection per peer for every protocol.
-    conns: Arc<Mutex<HashMap<String, Connection<H>>>>,
+    conns: Rc<RefCell<HashMap<String, Connection<H>>>>,
     inbox: UnboundedSender<Request<SendStream<H>>>,
-    requests: Arc<AsyncMutex<UnboundedReceiver<Request<SendStream<H>>>>>,
+    requests: Rc<AsyncMutex<UnboundedReceiver<Request<SendStream<H>>>>>,
 }
 
 impl<H: Hosted> Clone for VincTransport<H> {
     fn clone(&self) -> Self {
         Self {
             ep: self.ep.clone(),
-            conns: Arc::clone(&self.conns),
+            conns: Rc::clone(&self.conns),
             inbox: self.inbox.clone(),
-            requests: Arc::clone(&self.requests),
+            requests: Rc::clone(&self.requests),
         }
     }
 }
@@ -115,19 +117,16 @@ impl<H: Hosted + 'static> VincTransport<H> {
         let (inbox, requests) = unbounded_channel();
         let t = Self {
             ep,
-            conns: Arc::default(),
+            conns: Rc::default(),
             inbox,
-            requests: Arc::new(AsyncMutex::new(requests)),
+            requests: Rc::new(AsyncMutex::new(requests)),
         };
         let me = t.clone();
         nuclei::spawn_local(async move {
             while let Some(inc) = me.ep.accept().await {
                 let peer = node_to_string(&inc.remote());
                 let conn = inc.into_connection();
-                me.conns
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(peer.clone(), conn.clone());
+                me.conns.borrow_mut().insert(peer.clone(), conn.clone());
                 nuclei::spawn_local(serve(conn, peer, me.inbox.clone())).detach();
             }
         })
@@ -141,11 +140,7 @@ impl<H: Hosted + 'static> VincTransport<H> {
     }
 
     fn conn(&self, peer: &str) -> Option<Connection<H>> {
-        self.conns
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(peer)
-            .cloned()
+        self.conns.borrow_mut().get(peer).cloned()
     }
 }
 
@@ -180,19 +175,13 @@ impl<H: Hosted + 'static> Transport for VincTransport<H> {
         let mut to = NodeAddr::new(node_from_str(peer)?);
         to.direct = hints;
         let conn = self.ep.connect(to, MUX).await?;
-        self.conns
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(peer.to_owned(), conn);
+        self.conns.borrow_mut().insert(peer.to_owned(), conn);
         Ok(())
     }
 
     async fn disconnect(&self, peer: &str) -> Result<(), Error> {
         self.ep.close_peer(&node_from_str(peer)?).await;
-        self.conns
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(peer);
+        self.conns.borrow_mut().remove(peer);
         Ok(())
     }
 

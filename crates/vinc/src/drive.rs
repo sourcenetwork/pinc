@@ -3,24 +3,26 @@
 //!
 //! Every facade future is one call of [`Shared::run`]. It locks the core, serves what is due, and tries its operation;
 //! if the operation must wait it registers a ticket under the thing it waits for and then looks for the driving role:
-//! an atomic flag that exactly one waiting future holds. The holder keeps the host's pending receive and sleep
+//! a flag that exactly one waiting future holds. The holder keeps the host's pending receive and sleep
 //! futures inside its own state, so a datagram or a deadline wakes the holder's task; it feeds the datagram to the
 //! core, which wakes the futures the datagram is for. The role is sticky: the holder keeps it while it waits. When it
 //! finishes or is dropped it clears the flag and wakes the oldest waiting future, which takes the role if it still
 //! waits. A future that does not hold the role only waits on its ticket; a future that has its result sends what the
 //! endpoint wants to send before it returns.
 //!
-//! Invariants: at most one future holds the role; the flag, the baton and a ticket's registration change under the
-//! core's lock, so a wake is never lost between a failed attempt and the wait; no lock is held across an await; the
+//! Everything runs on the thread that built the endpoint, so the flag is a `Cell` and the core a `RefCell`.
+//!
+//! Invariants: at most one future holds the role; the flag, the baton and a ticket's registration change in one
+//! borrow of the core, so a wake is never lost between a failed attempt and the wait; no borrow is held across an await
+//! or a call of a host closure; the
 //! receive future owns its buffer and returns it to a pool when dropped; with no future polled the endpoint makes no
 //! progress, which is the SANS-IO contract.
 
+use std::cell::{Cell, RefCell, RefMut};
 use std::future::poll_fn;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
@@ -41,22 +43,24 @@ pub(crate) struct Shared<H: Hosted> {
     pub(crate) host: H,
     start: Instant,
     local: SocketAddr,
-    driving: AtomicBool,
-    core: Mutex<Core<H::Keys, H::Access>>,
-    bufs: Mutex<Vec<Vec<u8>>>,
+    driving: Cell<bool>,
+    core: RefCell<Core<H::Keys, H::Access>>,
+    bufs: RefCell<Vec<Vec<u8>>>,
 }
 
 /// A receive buffer that goes back to the pool when dropped.
 struct Buf<'a> {
     v: Vec<u8>,
-    home: &'a Mutex<Vec<Vec<u8>>>,
+    home: &'a RefCell<Vec<Vec<u8>>>,
 }
 
 impl Drop for Buf<'_> {
     fn drop(&mut self) {
         let v = std::mem::take(&mut self.v);
-        let mut pool = self.home.lock().unwrap_or_else(PoisonError::into_inner);
-        if pool.len() < POOLED {
+        // A pool borrowed at this moment is never: the borrows are short and nothing calls out while holding one.
+        if let Ok(mut pool) = self.home.try_borrow_mut()
+            && pool.len() < POOLED
+        {
             pool.push(v);
         }
     }
@@ -109,7 +113,10 @@ struct Turn<'a, H: Hosted> {
 impl<H: Hosted> Drop for Turn<'_, H> {
     fn drop(&mut self) {
         let Some(t) = self.ticket else { return };
-        let mut core = self.sh.lock();
+        if self.driving {
+            self.sh.driving.set(false);
+        }
+        let Some(mut core) = self.sh.lock() else { return };
         if let Some(w) = self.wait {
             core.forget(w, t);
         }
@@ -117,9 +124,8 @@ impl<H: Hosted> Drop for Turn<'_, H> {
         if self.driving {
             core.driver = None;
             core.armed = u64::MAX;
-            self.sh.driving.store(false, Ordering::Release);
             core.standby.baton();
-        } else if !self.sh.driving.load(Ordering::Acquire) {
+        } else if !self.sh.driving.get() {
             // This future may have been the one the baton was offered to: offer it on.
             core.standby.baton();
         }
@@ -132,9 +138,9 @@ impl<H: Hosted> Shared<H> {
             host,
             start: Instant::now(),
             local,
-            driving: AtomicBool::new(false),
-            core: Mutex::new(core),
-            bufs: Mutex::new(Vec::new()),
+            driving: Cell::new(false),
+            core: RefCell::new(core),
+            bufs: RefCell::new(Vec::new()),
         }
     }
 
@@ -142,9 +148,10 @@ impl<H: Hosted> Shared<H> {
         self.local
     }
 
-    /// The core, locked. A poisoned lock is taken as it is: a panic in a host closure never holds it.
-    pub(crate) fn lock(&self) -> MutexGuard<'_, Core<H::Keys, H::Access>> {
-        self.core.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The core, borrowed for a short section. `None` only if a borrow is already open, which nothing that runs on this
+    /// thread can arrange: no borrow is held across an await or a call of a host closure.
+    pub(crate) fn lock(&self) -> Option<RefMut<'_, Core<H::Keys, H::Access>>> {
+        self.core.try_borrow_mut().ok()
     }
 
     /// The endpoint's clock: nanoseconds since the endpoint was made, after a fixed offset.
@@ -157,7 +164,7 @@ impl<H: Hosted> Shared<H> {
     }
 
     fn buf(&self) -> Buf<'_> {
-        let v = self.bufs.lock().unwrap_or_else(PoisonError::into_inner).pop();
+        let v = self.bufs.try_borrow_mut().ok().and_then(|mut b| b.pop());
         Buf {
             v: v.unwrap_or_else(|| vec![0; BUF]),
             home: &self.bufs,
@@ -184,7 +191,10 @@ impl<H: Hosted> Shared<H> {
         loop {
             let step = poll_fn(|cx| {
                 let now = self.now();
-                let mut core = self.lock();
+                let Some(mut core) = self.lock() else {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                };
                 if core.service(now) > 0 {
                     return Poll::Ready(Step::Io);
                 }
@@ -206,12 +216,7 @@ impl<H: Hosted> Shared<H> {
                 }
                 core.add_wait(w, t);
                 core.standby.arm(t, cx.waker());
-                if !turn.driving
-                    && self
-                        .driving
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                {
+                if !turn.driving && !self.driving.replace(true) {
                     turn.driving = true;
                     core.driver = Some(t);
                 }
@@ -250,16 +255,18 @@ impl<H: Hosted> Shared<H> {
                     match res {
                         Ok((n, from, segment)) => {
                             let now = self.now();
-                            let mut core = self.lock();
                             let from = canon(from);
-                            for d in buf.v.get_mut(..n).unwrap_or_default().chunks_mut(segment.max(1)) {
-                                core.ep.handle_datagram(now, self.local, from, d);
+                            if let Some(mut core) = self.lock() {
+                                for d in buf.v.get_mut(..n).unwrap_or_default().chunks_mut(segment.max(1)) {
+                                    core.ep.handle_datagram(now, self.local, from, d);
+                                }
                             }
                         }
                         Err(e) if transient(&e) => {}
                         Err(_) => {
-                            self.lock()
-                                .fail(Error::new(crate::ErrorKind::Unreachable, "the socket failed"));
+                            if let Some(mut core) = self.lock() {
+                                core.fail(Error::new(crate::ErrorKind::Unreachable, "the socket failed"));
+                            }
                         }
                     }
                     spare = Some(buf);
@@ -289,7 +296,7 @@ impl<H: Hosted> Shared<H> {
         loop {
             let (t, b) = {
                 let now = self.now();
-                let mut core = self.lock();
+                let Some(mut core) = self.lock() else { return };
                 let moved = core.service(now);
                 let mut b = buf
                     .take()
