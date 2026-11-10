@@ -335,3 +335,49 @@ fn at_most_four_thousand_ninety_six_roots_are_provided() {
         assert!(node.values_provide(&root(u32::MAX)), "a freed place is reusable");
     });
 }
+
+#[test]
+fn a_cancelled_fetch_reports_nothing_more_and_its_streams_are_gone() {
+    big(|| {
+        let seed = 271u64;
+        let mut w = LWorld::build_with(seed, 2, 3, 4_000_000, true, values_on);
+        let m = w.members.clone();
+        let value = data(seed, 4 << 20);
+        let root = w.provide(m[1], value.clone());
+        w.sim.command(
+            secs(30),
+            m[0],
+            NCmd::ValuesFetch {
+                root,
+                length: value.len() as u64,
+                ranges: vec![],
+                providers: ids(&w, &m[1..2]),
+            },
+        );
+        // The first fetch of a node is number 1; cancel it while it is still receiving.
+        w.sim.command(secs(32), m[0], NCmd::ValuesCancel(1));
+        w.run(secs(120));
+        let cancelled = w
+            .sim
+            .node(m[0])
+            .traces
+            .iter()
+            .filter(|(_, t)| matches!(t.body, Body::Node(NodeTrace::ValuesCancel { fetch: 1 })))
+            .count();
+        assert_eq!(cancelled, 1, "the cancel took effect once");
+        assert_eq!(
+            completes(&w, m[0]) + fails(&w, m[0]),
+            0,
+            "a cancelled fetch reported an end"
+        );
+        assert!(
+            w.apps(m[0]).values.covered(&root) < value.len() as u64,
+            "a cancelled fetch kept receiving"
+        );
+        assert_eq!(w.sim.node(m[0]).node.values_running(), 0);
+        assert!(
+            !w.sim.node_mut(m[0]).node.values_cancel(secs(121), 1),
+            "a finished cancel finds nothing"
+        );
+    });
+}

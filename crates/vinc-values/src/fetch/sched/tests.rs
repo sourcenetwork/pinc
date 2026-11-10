@@ -157,6 +157,60 @@ fn a_steal_moves_the_tail_of_a_slow_victim_to_a_fast_thief() {
     assert!(f.rx[0].is_none() || f.rx.iter().flatten().all(|r| r.stream != 7));
 }
 
+/// Byte liveness: bytes arriving are progress. The stall wait grows to three times the gap between stream bytes (twice the
+/// delay of the first bytes after the first request), up to the cap, and the stall clock counts from the last bytes.
+#[test]
+fn stream_bytes_stretch_the_stall_wait_by_their_own_gaps_and_restart_its_clock() {
+    use crate::knobs::{BYTE_GAP_CAP, STALL_WAIT};
+    let mut f = world(0, 0);
+    let (mut net, mut st, mut out) = (Net::default(), Empty, Sink);
+    let mut io = Io {
+        session: &mut net,
+        store: &mut st,
+        out: &mut out,
+    };
+    f.treq = NS;
+    f.sw = STALL_WAIT;
+    // First bytes 5 s after the request: twice that delay.
+    f.on_readable(&mut io, 6 * NS, 7, 100);
+    assert_eq!((f.sw, f.lastb), (10 * NS, 6 * NS));
+    // A 4 s gap: three times the gap.
+    f.on_readable(&mut io, 10 * NS, 7, 100);
+    assert_eq!((f.sw, f.lastb), (12 * NS, 10 * NS));
+    // The wait never shrinks, and an empty read is not progress.
+    f.on_readable(&mut io, 11 * NS, 7, 0);
+    assert_eq!((f.sw, f.lastb), (12 * NS, 10 * NS));
+    // The stall clock counts from the last bytes.
+    assert_eq!(f.poll_timeout(), Some(10 * NS + 12 * NS));
+    // A long gap is capped.
+    f.on_readable(&mut io, 100 * NS, 7, 100);
+    assert_eq!(f.sw, BYTE_GAP_CAP);
+    assert_eq!(f.poll_timeout(), Some(100 * NS + BYTE_GAP_CAP));
+}
+
+/// The steal re-check timer is armed also when no provider is a candidate for a steal yet (the busy one is fast and not idle),
+/// and the call at that time looks again: by then it has been idle long enough to be robbed.
+#[test]
+fn the_steal_recheck_timer_is_armed_for_a_busy_provider_and_fires_a_new_look() {
+    let mut f = world(1_000_000_000, 10_000);
+    let (mut net, mut st, mut out) = (Net::default(), Empty, Sink);
+    let mut io = Io {
+        session: &mut net,
+        store: &mut st,
+        out: &mut out,
+    };
+    // One second after its last granule the victim is not idle: nothing to steal, the look is scheduled.
+    let new = f.steal(&mut io, 10 * NS, 0);
+    assert!(new.is_empty());
+    let recheck = 10 * NS + crate::knobs::STEAL_IDLE / 2;
+    assert_eq!(f.tw, recheck, "the re-check is armed");
+    assert_eq!(f.poll_timeout(), Some(recheck), "and offered to the host");
+    // At that time the victim has been silent for two seconds: the call looks again and its work moves.
+    f.on_timeout(&mut io, recheck);
+    assert!(net.resets >= 1, "the idle victim's stream was reset by the new look");
+    assert!(net.opened >= 1, "its work was requested again from another provider");
+}
+
 /// A provider is not limited to a few request streams: a fifth is opened while four are in use, bounded only by the
 /// fetch's table of streams.
 #[test]
