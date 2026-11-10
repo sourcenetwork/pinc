@@ -64,7 +64,7 @@ fn dump(w: &LWorld, a: vinc_sim::NodeId, c: vinc_sim::NodeId) {
                 || line.contains("LayerDown")
                 || line.contains("LayerDial")
             {
-                eprintln!("{name} {:.3}s {line}", *at as f64 / 1e9);
+                eprintln!("{name} {} ms {line}", *at / 1_000_000);
             }
         }
     }

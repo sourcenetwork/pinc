@@ -103,24 +103,12 @@ pub fn take_metered_bytes() -> u64 {
 }
 
 /// Run an endpoint call, counting its allocations while metering is on.
-#[track_caller]
 pub fn metered<R>(f: impl FnOnce() -> R) -> R {
-    let loc = std::panic::Location::caller();
     if !METER.with(std::cell::Cell::get) {
         return f();
     }
     let mut out = None;
     let st = crate::measure(|| out = Some(f()));
-    if st.count() > 0 {
-        if std::env::var_os("VINC_ALLOC_TRACE").is_some() {
-            eprintln!(
-                "metered call at {} allocated {} times, {} bytes",
-                loc,
-                st.count(),
-                st.bytes
-            );
-        }
-    }
     METERED.with(|c| c.set(c.get() + st.count()));
     METERED_BYTES.with(|c| c.set(c.get() + st.bytes));
     out.unwrap()
