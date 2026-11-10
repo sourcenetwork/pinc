@@ -139,6 +139,13 @@ impl LWorld {
         self.sim.run_until(until);
     }
 
+    /// Put `value` in the store of `n` and register its root for serving; returns the root.
+    pub fn provide(&mut self, n: SimId, value: Vec<u8>) -> [u8; 32] {
+        let root = self.apps(n).values.provide(value);
+        assert!(self.sim.node_mut(n).node.values_provide(&root));
+        root
+    }
+
     pub fn apps(&mut self, n: SimId) -> &mut LayerApps {
         self.sim.node_mut(n).node.apps_mut()
     }
@@ -176,7 +183,7 @@ pub fn all_layers(seed: u64, until: Time) -> LWorld {
     SplitMix64::new(seed).fill(&mut value);
     let mut root = [0; 32];
     for p in &m[1..3] {
-        root = w.apps(*p).values.provide(value.clone());
+        root = w.provide(*p, value.clone());
     }
     w.apps(m[2]).values.lie(Some(Lie::EveryRead));
     let providers = vec![w.id(m[1]), w.id(m[2])];

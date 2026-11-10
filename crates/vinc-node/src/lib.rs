@@ -71,6 +71,8 @@ mod relay;
 pub mod trace;
 mod values;
 mod values_frames;
+mod values_provide;
+mod values_types;
 
 pub use apps::{Apps, DtnApp, Enabled, NoApps, NoDtn, NoIndex, NoSets, NoValues, Recipient, ServeSource, SetsApp};
 pub use config::{
@@ -86,4 +88,5 @@ pub use node::{Node, StartError};
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
 pub use relay::{MemberNotice, is_relay_request};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
-pub use values::{FETCHES, ValuesError, ValuesRequest};
+pub use values_provide::PROVIDED_MAX;
+pub use values_types::{FETCHES, ValuesError, ValuesRequest};

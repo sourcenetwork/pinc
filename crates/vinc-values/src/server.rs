@@ -13,7 +13,8 @@
 //! # Invariants
 //!
 //! - At most `S` requests are held; a request beyond that is refused with a reset, never queued.
-//! - A request is answered only for a value the store holds whole; anything else is reset as unavailable.
+//! - A request is answered only for a value the host provides and the store holds whole; anything else is reset as
+//!   unavailable.
 //! - A newer request from the same peer for the same value that overlaps an older response supersedes it.
 //! - Nothing here allocates; a request that breaks the wire format is reset and its slot freed.
 
@@ -308,9 +309,10 @@ impl<H: ValueRead + Clone, const S: usize> Server<H, S> {
         spans: &[Span],
         req_len: usize,
     ) {
-        let plan = self
-            .store
-            .servable_len(&root)
+        let plan = se
+            .provided(&root)
+            .then(|| self.store.servable_len(&root))
+            .flatten()
             .and_then(|len| Plan::new(len, spans).ok());
         let Some(plan) = plan else {
             return self.refuse(se, out, now, i, code::UNAVAILABLE);

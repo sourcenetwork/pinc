@@ -37,7 +37,7 @@ fn the_receive_path_requests_a_fraction_of_the_value_size_from_the_heap() {
             let m = w.members.clone();
             let mut value = vec![0u8; 8 << 20];
             SplitMix64::new(seed).fill(&mut value);
-            let root = w.apps(m[1]).values.provide(value.clone());
+            let root = w.provide(m[1], value.clone());
             // The store's own writes are not what is measured.
             w.apps(m[0]).values.reserve(&root, value.len());
             w.run(secs(29));

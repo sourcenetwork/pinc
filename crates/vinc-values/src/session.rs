@@ -77,6 +77,12 @@ pub trait Outbound: Session {
 
 /// The serving side: back a stream with a store-reading source.
 pub trait Inbound<H: ValueRead>: Session {
+    /// Whether the host serves the value under `root` at all. A request for a root that is not provided is refused
+    /// as unavailable even if the store holds it. The default serves every value the store holds whole.
+    fn provided(&self, _root: &[u8; 32]) -> bool {
+        true
+    }
+
     /// Make `stream` send `len` bytes read from `source` when frames are built, and end it after the last.
     /// False if the stream is gone.
     fn serve(&mut self, stream: StreamId, source: ValueSource<H>, len: u64) -> bool;
