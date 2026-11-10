@@ -902,3 +902,7 @@ path = "trace_reasm.rs"
 [[test]]
 name = "trace_mtu"
 path = "trace_mtu.rs"
+
+[[test]]
+name = "transport_wedge"
+path = "transport_wedge.rs"
