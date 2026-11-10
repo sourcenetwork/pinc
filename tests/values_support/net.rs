@@ -64,6 +64,8 @@ pub struct ClientSession {
     pub live: bool,
     pub pto: bool,
     pub max_open: usize,
+    /// The most request streams one provider had open at once.
+    pub peak: usize,
     pub dials: Vec<usize>,
     streams: HashMap<StreamId, CStream>,
     next: StreamId,
@@ -81,6 +83,7 @@ impl ClientSession {
             live: false,
             pto: false,
             max_open: usize::MAX,
+            peak: 0,
             dials: Vec::new(),
             streams: HashMap::new(),
             next: 0,
@@ -239,6 +242,12 @@ impl Outbound for ClientSession {
                 ..CStream::default()
             },
         );
+        let open = self
+            .streams
+            .values()
+            .filter(|s| !s.dead && !s.finished && s.prov == i)
+            .count();
+        self.peak = self.peak.max(open);
         self.outbox.push((i, ToProv::Open(id)));
         Ok(id)
     }

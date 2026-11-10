@@ -156,3 +156,28 @@ fn a_steal_moves_the_tail_of_a_slow_victim_to_a_fast_thief() {
     assert_eq!(net.resets, 1);
     assert!(f.rx[0].is_none() || f.rx.iter().flatten().all(|r| r.stream != 7));
 }
+
+/// A provider is not limited to a few request streams: a fifth is opened while four are in use, bounded only by the
+/// fetch's table of streams.
+#[test]
+fn a_provider_with_four_request_streams_open_is_given_a_fifth() {
+    let mut f = world(0, 0);
+    let plan = Plan::new(f.length, &[Span { off: 0, len: GROUP }]).unwrap();
+    for (i, stream) in (8..11).enumerate() {
+        f.rx[i + 1] = Some(Rx::new(1, stream, plan.clone(), &f.root));
+    }
+    assert_eq!(f.streams_of(1), 4);
+    let (mut net, mut st, mut out) = (Net::default(), Empty, Sink);
+    let mut io = Io {
+        session: &mut net,
+        store: &mut st,
+        out: &mut out,
+    };
+    assert!(f.open_request(&mut io, 10 * NS, 1, &[Span { off: 0, len: GROUP }]));
+    assert_eq!(f.streams_of(1), 5);
+    // The table of the fetch still bounds it.
+    for slot in f.rx.iter_mut().filter(|s| s.is_none()) {
+        *slot = Some(Rx::new(1, 99, plan.clone(), &f.root));
+    }
+    assert!(!f.open_request(&mut io, 10 * NS, 1, &[Span { off: 0, len: GROUP }]));
+}

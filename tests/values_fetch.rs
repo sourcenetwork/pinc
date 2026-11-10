@@ -153,6 +153,21 @@ fn more_than_four_providers_use_the_first_four() {
 }
 
 #[test]
+fn request_streams_of_one_provider_are_bounded_only_by_the_table_on_a_long_fat_link() {
+    let store = PStore::random(5, 48 << 20);
+    let cfgs: Vec<_> = (0..4)
+        .map(|_| ProvCfg::new(store.clone(), 40_000).latency(100 * MS))
+        .collect();
+    let mut sim = Sim::new(cfgs, ClientStore::new());
+    sim.start();
+    sim.run(300);
+    assert!(sim.rec.complete(), "fetch failed: {:?}", sim.rec.failed());
+    sim.store.assert_matches(sim.provs[0].cfg.store.content());
+    eprintln!("peak request streams of one provider: {}", sim.sess.peak);
+    assert!(sim.sess.peak <= vinc_values::fetch::MAX_STREAMS);
+}
+
+#[test]
 fn loss_and_reordering_are_repaired_and_write_through_verifies_ahead() {
     let store = PStore::random(5, 8 << 20);
     let cfg = ProvCfg::new(store, 6000).loss(30).reorder(4);

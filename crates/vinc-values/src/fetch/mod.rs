@@ -44,8 +44,6 @@ use wt::ProofCache;
 /// The most request streams a fetch has open at once, over all providers: the size of its table. One provider may use
 /// any number of them; the session's own stream limit and credit decide how many it admits.
 pub const MAX_STREAMS: usize = 16;
-/// The most request streams one provider has open at once.
-pub const STREAMS_PER_PROVIDER: usize = 4;
 /// The wanted ranges of a fetch.
 const WANT: usize = MAX_REQ_RANGES;
 /// The spans a provider's assigned work holds.

@@ -4,7 +4,7 @@
 //! [`Fetch`]. Every cut of work is a whole number of groups, so a byte range is never asked of two providers for the
 //! sake of a split. Providers are visited in slot order, which is the order the fetch named them.
 
-use super::{ASSIGN, Env, Fetch, MAX_STREAMS, STREAMS_PER_PROVIDER, State};
+use super::{ASSIGN, Env, Fetch, MAX_STREAMS, State};
 use crate::knobs::{
     GROUP, MAX_REQ_RANGES, MIN_TARGET_GROUPS, MS, OPEN_RETRY, RATE_HORIZON, RATE_WARMUP, STEAL_ETA_MS,
     STEAL_ETA_STALLED_MS, STEAL_IDLE, STEAL_MIN, STRIPE_CHUNK, TGT_MAX, TGT0, URGENCY, code,
@@ -111,7 +111,7 @@ impl Fetch {
         p.assign.retain_missing(&*st, &root);
         let (outstanding, conn, id) = (p.assign.total(), p.conn, p.id);
         let tgt = self.target(pi, now);
-        if outstanding >= tgt / 2 || self.streams_of(pi) >= STREAMS_PER_PROVIDER {
+        if outstanding >= tgt / 2 {
             return;
         }
         let mut want = tgt - outstanding;
@@ -288,9 +288,6 @@ impl Fetch {
 
     /// Open a stream to provider `pi` and send a request for `ranges`; false if it could not be sent.
     fn open_request<E: Env>(&mut self, io: &mut E, now: u64, pi: usize, ranges: &[Span]) -> bool {
-        if self.streams_of(pi) >= STREAMS_PER_PROVIDER {
-            return false;
-        }
         let Some(slot) = self.rx.iter().position(Option::is_none).filter(|&i| i < MAX_STREAMS) else {
             return false;
         };
