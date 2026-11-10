@@ -52,8 +52,9 @@ pub enum Direction {
     Gossip,
 }
 
-/// The access hook: whether a peer may connect or be a neighbour. It runs while the endpoint is locked, so it must not
-/// block and must not call back into the endpoint.
+/// The access hook: whether a peer may connect or be a neighbour. The endpoint asks it while it handles an event, in a
+/// short section on the thread that drives it, so it must not block and must not call back into the endpoint. It
+/// holds no endpoint state: [`Endpoint::admit`](crate::Endpoint::admit) asks the same hook at any time.
 pub trait Admit {
     /// Whether `peer` may use `alpn` in `dir`.
     fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool;
@@ -172,7 +173,8 @@ pub(crate) struct Core<S, A> {
     pub(crate) ep: AnyEp,
     identity: Identity<S>,
     prekeys: Prekeys,
-    admit: A,
+    /// The access hook, shared with the endpoint's handles so they can ask it without borrowing the core.
+    admit: Rc<A>,
     pub(crate) limits: Limits,
     sessions: HashMap<SessionId, Sess>,
     dials: HashMap<SessionId, Dial>,
@@ -204,7 +206,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             ep,
             identity: cfg.identity,
             prekeys,
-            admit: cfg.admit,
+            admit: Rc::new(cfg.admit),
             limits: cfg.limits,
             sessions: HashMap::new(),
             dials: HashMap::new(),
@@ -943,9 +945,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
     }
 
-    /// The access hook's answer for the endpoint's own gossip checks.
-    pub(crate) fn admits(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
-        self.admit.admit(peer, alpn, dir)
+    /// The access hook, for the handles to ask without the core.
+    pub(crate) fn hook(&self) -> Rc<A> {
+        Rc::clone(&self.admit)
     }
 
     pub(crate) fn peers(&self) -> Vec<NodeId> {

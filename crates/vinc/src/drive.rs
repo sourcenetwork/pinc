@@ -23,6 +23,7 @@ use std::future::poll_fn;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
+use std::rc::Rc;
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
@@ -46,6 +47,8 @@ pub(crate) struct Shared<H: Hosted> {
     start: Instant,
     local: SocketAddr,
     driving: Cell<bool>,
+    /// The access hook, the same one the core asks; it holds no endpoint state, so it is asked without the core.
+    pub(crate) admit: Rc<H::Access>,
     core: RefCell<Core<H::Keys, H::Access>>,
     bufs: RefCell<Vec<Vec<u8>>>,
 }
@@ -141,6 +144,7 @@ impl<H: Hosted> Shared<H> {
             start: Instant::now(),
             local,
             driving: Cell::new(false),
+            admit: core.hook(),
             core: RefCell::new(core),
             bufs: RefCell::new(Vec::new()),
         }

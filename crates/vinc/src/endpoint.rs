@@ -509,10 +509,9 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     }
 
     /// Ask the access hook about `peer` the way the endpoint does for connections, for a layer that takes neighbours
-    /// itself. With no hook everyone is admitted.
+    /// itself. With no hook everyone is admitted. The hook is always asked, whatever the endpoint is doing.
     pub fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
-        // The hook is asked without the core when a borrow is open: it is the same hook, and holds no endpoint state.
-        self.0.shared.lock().is_none_or(|core| core.admits(peer, alpn, dir))
+        self.0.shared.admit.admit(peer, alpn, dir)
     }
 
     /// The node-wide counters of the endpoint.
@@ -545,5 +544,55 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
                 core.shutdown_poll()
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use std::io;
+
+    use vinc_crypto::IdentityAlg;
+
+    use super::*;
+
+    /// A hook that refuses everyone.
+    struct Refuse;
+
+    impl Admission for Refuse {
+        fn admit(&self, _peer: &NodeId, _alpn: &[u8], _dir: Direction) -> bool {
+            false
+        }
+    }
+
+    /// The access hook is asked even while the endpoint's core is borrowed (a check made from inside a section of
+    /// the endpoint, such as from a hook it is running): the answer is the hook's, never a default that admits.
+    #[test]
+    fn admit_asks_the_hook_while_the_core_is_borrowed() {
+        let ep = Vinc::builder()
+            .acp(Refuse)
+            .limits(Limits {
+                connections: 1,
+                ..Limits::default()
+            })
+            .build(
+                async |_buf: &mut [u8]| -> io::Result<(usize, SocketAddr)> { Err(io::ErrorKind::WouldBlock.into()) },
+                async |pkt: &[u8], _to: SocketAddr| -> io::Result<usize> { Ok(pkt.len()) },
+                async |_at: Instant| {},
+            )
+            .unwrap();
+        let peer = NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [7; 32],
+        };
+        assert!(!ep.admit(&peer, b"t", Direction::Gossip));
+        let held = ep.0.shared.lock();
+        assert!(held.is_some(), "the core is free before the test borrows it");
+        assert!(
+            !ep.admit(&peer, b"t", Direction::Gossip),
+            "a borrowed core admitted a refused peer"
+        );
+        assert!(!ep.admit(&peer, b"t", Direction::Inbound));
+        drop(held);
     }
 }
