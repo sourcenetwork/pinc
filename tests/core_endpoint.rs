@@ -136,6 +136,95 @@ fn a_bulk_transfer_is_batched_and_arrives_whole() {
     });
 }
 
+/// The largest datagram each of two nodes sends while 2 MiB cross a path of `delay` one way, when both interfaces
+/// carry datagrams of up to `mtu` bytes: `(dialer, acceptor)`.
+fn largest_datagrams(mtu: u16, delay: u64) -> (usize, usize) {
+    let mut net = CoreNet::new(delay);
+    let now = net.now;
+    for tag in [1u8, 2] {
+        let addr: std::net::SocketAddr = ([10, 0, 0, tag], 4433).into();
+        net.nodes
+            .push(TNode::with_mtu(tag, addr, now, vinc_crypto::IdentityAlg::Ed25519, mtu));
+    }
+    let (a, b) = (0, 1);
+    let (sa, _sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
+    // Time for the datagram size probes of both ends.
+    net.run_for(3 * SEC_NS);
+    let data = pattern(2 << 20, 9);
+    let now = net.now;
+    let Value::Stream(id) = net.nodes[a]
+        .cmd(
+            now,
+            Command::OpenStream {
+                session: sa,
+                bidi: false,
+            },
+        )
+        .unwrap()
+        .value
+    else {
+        panic!()
+    };
+    let mut off = 0;
+    let end = now + 60 * SEC_NS;
+    assert!(net.run(end, |n| {
+        let t = n.now;
+        while off < data.len() {
+            let Ok(rep) = n.nodes[a].cmd(
+                t,
+                Command::Write {
+                    session: sa,
+                    stream: id,
+                    data: &data[off..],
+                },
+            ) else {
+                break;
+            };
+            let Value::Written(w) = rep.value else { break };
+            if w == 0 {
+                break;
+            }
+            off += w;
+        }
+        if off == data.len() {
+            let _ = n.nodes[a].cmd(
+                t,
+                Command::Finish {
+                    session: sa,
+                    stream: id,
+                },
+            );
+        }
+        n.nodes[b].fin.len() == 1
+    }));
+    assert_eq!(net.nodes[b].read.values().next().unwrap(), &data);
+    let largest = |i: usize| net.nodes[i].sent.iter().map(|s| s.2).max().unwrap_or(0);
+    (largest(a), largest(b))
+}
+
+#[test]
+fn a_wide_interface_on_a_fast_path_carries_jumbo_datagrams_from_both_ends() {
+    big_stack(|| {
+        // A round trip of half a millisecond and interfaces of 9000 bytes: both ends probe and use the large size,
+        // the acceptor too, whose path the endpoint learned by receiving on it.
+        let (dialer, acceptor) = largest_datagrams(9000, MS_NS / 4);
+        assert!(dialer > 8000, "the dialer's largest datagram was {dialer}");
+        assert!(acceptor > 8000, "the acceptor's largest datagram was {acceptor}");
+        // The default interface never carries one.
+        let (dialer, acceptor) = largest_datagrams(1500, MS_NS / 4);
+        assert!(
+            dialer <= 1452 && acceptor <= 1452,
+            "{dialer} and {acceptor} on a 1500 byte interface"
+        );
+        // Nor does a path that is not a low-latency one.
+        let (dialer, acceptor) = largest_datagrams(9000, 5 * MS_NS);
+        assert!(
+            dialer <= 1452 && acceptor <= 1452,
+            "{dialer} and {acceptor} at a 10 ms round trip"
+        );
+    });
+}
+
 #[test]
 fn a_restart_keeps_tickets_and_round_trips_and_the_first_dial_resumes_with_early_data() {
     big_stack(|| {

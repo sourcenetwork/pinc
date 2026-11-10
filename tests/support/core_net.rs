@@ -142,12 +142,18 @@ impl TNode {
 
     /// A node whose identity uses `alg`.
     pub fn with_alg(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg) -> Self {
+        Self::with_mtu(tag, addr, now, alg, 1500)
+    }
+
+    /// A node whose identity uses `alg` and whose interface carries datagrams of up to `mtu` bytes.
+    pub fn with_mtu(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16) -> Self {
         let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
         let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
         let prov = Caps(Software, true);
         let mut drbg = Drbg::new(&[tag ^ 0x5a; 32]);
         let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
         cfg.conn.max_gso = 4;
+        cfg.conn.interface_mtu = mtu;
         let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
         let mut ep = Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots()));
         let mut env = Env {
