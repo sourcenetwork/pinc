@@ -642,6 +642,10 @@ name = "connect_netcheck"
 path = "connect_netcheck.rs"
 
 [[test]]
+name = "connect_publish_wait"
+path = "connect_publish_wait.rs"
+
+[[test]]
 name = "connect_lookup"
 path = "connect_lookup.rs"
 

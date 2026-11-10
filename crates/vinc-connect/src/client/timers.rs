@@ -25,7 +25,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
         for d in [
             self.lookups.next_deadline(),
-            Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.class.is_some()),
+            // A record due while the home carrier is not open waits for the carrier: its opening re-arms the time.
+            Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.can_publish()),
             Some(self.duty.deadline()),
             self.close_deadline(),
             self.session_deadline(),
@@ -125,14 +126,22 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         {
             return;
         }
-        let (Some(home), Some(_)) = (self.net.home(), self.class) else {
-            return;
-        };
-        if self.rly.get(home).is_some_and(|r| r.link.is_open()) {
+        if self.can_publish() {
             self.sign.want_record();
             // Disarmed until the signature is answered.
             self.next_publish = u64::MAX;
         }
+    }
+
+    /// Whether a record can be asked for now: the class is known and the carrier of the home relay is open. The one
+    /// rule the publish step and its deadline share.
+    fn can_publish(&self) -> bool {
+        self.class.is_some()
+            && self
+                .net
+                .home()
+                .and_then(|h| self.rly.get(h))
+                .is_some_and(|r| r.link.is_open())
     }
 
     pub(super) fn me_addr_pub(&self) -> core::net::SocketAddr {
