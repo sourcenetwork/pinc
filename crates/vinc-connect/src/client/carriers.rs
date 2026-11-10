@@ -3,11 +3,17 @@
 use vinc_crypto::{NodeId, Provider};
 use vinc_security::{ConnId, CreditRecord, Env, InitiatorParams, KeyRequest, KeyResponse};
 
-use super::conn::{Connectivity, Io, Kind, Notice, Queued, pop, push};
+use super::conn::{Connectivity, Io, Kind, Notice, pop, push};
 use super::link::{Act, Ctx, State};
+use super::queue::Held;
 use crate::carrier::frame::{BatchBuilder, BatchState, DnsAnswer, MAX_PACKET_LEN, Offer};
 use crate::carrier::session::{ALPN, CarrierError, Poll, ProtectedCarrier};
 use crate::carrier::{AliasTable, Frame};
+
+/// A node whose peak round trip is this long is on a very slow link: queued handshake copies are deduplicated.
+pub(super) const DEDUPE_PEAK_RTT: u64 = 3_500_000_000;
+/// The short-header packets kept when the carrier of a slow node opens.
+pub(super) const KEPT_SHORT: usize = 8;
 
 /// What one polled frame asks of the connectivity layer, copied out so the carrier borrow ends.
 enum Got {
@@ -31,7 +37,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             rtt: self.node_rtt,
             udp_any: self.udp_any,
             rides: self.rly.get(i).is_some_and(|r| r.rides),
-            queued: self.rly.get(i).is_some_and(|r| r.q.iter().any(Option::is_some)),
+            queued: self.rly.get(i).is_some_and(|r| !r.q.is_empty()),
         }
     }
 
@@ -284,20 +290,52 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     fn hold(&mut self, i: usize, dst: &NodeId, packet: &[u8]) {
         let Some(r) = self.rly.get_mut(i) else { return };
-        let mut item = Queued {
-            dst: *dst,
-            len: packet.len(),
-            data: [0; MAX_PACKET_LEN],
-        };
-        let Some(d) = item.data.get_mut(..packet.len()) else {
-            return;
-        };
-        d.copy_from_slice(packet);
-        if !push(&mut r.q, item) {
-            pop(&mut r.q);
-            self.dropped += 1;
-            let _ = push(&mut r.q, item);
+        self.dropped += r.q.push(dst, packet) as u64;
+    }
+
+    /// Send everything held for the carrier of `relay`, oldest first.
+    pub(super) fn drain_held(&mut self, now: u64, relay: usize) {
+        let mut buf = [0u8; MAX_PACKET_LEN];
+        // A packet the carrier cannot take goes back into the queue behind these, so only the ones held now are sent.
+        for _ in 0..self.rly.get(relay).map_or(0, |r| r.q.len()) {
+            let Some((dst, n)) = self.rly.get_mut(relay).and_then(|r| r.q.pop(&mut buf)) else {
+                break;
+            };
+            self.send_packet(now, relay, &dst, buf.get(..n).unwrap_or_default());
         }
+    }
+
+    /// Thin the packets held for `relay` on a slow node: with `dedupe`, first-flight handshake packets of sessions
+    /// that are `done` and identical copies of a handshake packet (only the newest stays); then all but the newest
+    /// [`KEPT_SHORT`] short-header packets for peers. Handshake packets and packets for the relay itself stay.
+    pub(super) fn trim_held(&mut self, relay: usize, dedupe: bool, mut done: impl FnMut(&Held<'_>) -> bool) {
+        let relay_id = self.relay_cfg(relay).map(|c| c.id);
+        let Some(r) = self.rly.get_mut(relay) else { return };
+        let long = |h: &Held<'_>| h.packet.first().is_some_and(|b| b & 0x80 != 0);
+        let short_send = |h: &Held<'_>| Some(h.dst) != relay_id && !long(h) && !h.packet.is_empty();
+        if dedupe {
+            r.q.retain(|q, i, h| {
+                if !long(h) || h.packet.len() < 10 {
+                    return true;
+                }
+                if h.packet.len() >= usize::from(vinc_transport::conn::MIN_MTU) && done(h) {
+                    return false;
+                }
+                !(i + 1..q.len()).any(|j| q.get(j).is_some_and(|o| o.dst == h.dst && o.packet == h.packet))
+            });
+        }
+        let mut surplus = (0..r.q.len())
+            .filter(|i| r.q.get(*i).is_some_and(|h| short_send(&h)))
+            .count()
+            .saturating_sub(KEPT_SHORT);
+        r.q.retain(|_, _, h| {
+            if surplus > 0 && short_send(h) {
+                surplus -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 
     fn drain_handshake(&mut self, i: usize) {
@@ -493,12 +531,20 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let was = r.link.opened(now);
         r.ta = crate::carrier::AliasTable::new();
         r.ra = crate::carrier::AliasTable::new();
+        r.reverify = was;
         self.notice(Notice::CarrierUp(relay));
-        let _ = was;
-        // What waited for the carrier goes out first, in order.
-        while let Some(q) = self.rly.get_mut(relay).and_then(|r| pop(&mut r.q)) {
-            let packet = q.data.get(..q.len).unwrap_or_default();
-            self.send_packet(now, relay, &q.dst, packet);
+        // What waited for the carrier goes out first, in order. On a slow node the stale copies are thinned first;
+        // when that needs to know which sessions are established, the host loop does it with the endpoint.
+        let slow = self.node_rtt >= super::dial::TG_SLOW;
+        if slow && self.node_tgr >= DEDUPE_PEAK_RTT {
+            if let Some(r) = self.rly.get_mut(relay) {
+                r.drain_due = true;
+            }
+        } else {
+            if slow {
+                self.trim_held(relay, false, |_| false);
+            }
+            self.drain_held(now, relay);
         }
         if self.net.home() == Some(relay) {
             self.next_publish = now;

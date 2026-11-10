@@ -44,8 +44,6 @@ use crate::local::Duty;
 use crate::record::{MAX_ADDRS, Reach};
 use crate::relay::datagram::Datagram;
 
-/// Frames kept for a carrier that is not open.
-pub const QUEUED: usize = 8;
 /// The size of a carrier's write buffer.
 pub const OUT_LEN: usize = 24 * 1024;
 /// UDP datagrams waiting to leave.
@@ -157,13 +155,10 @@ pub enum Notice {
     SignFailed,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct Queued {
-    pub(super) dst: NodeId,
-    pub(super) len: usize,
-    pub(super) data: [u8; MAX_PACKET_LEN],
-}
-
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the carrier, not a state"
+)]
 pub(super) struct Rly<P: Provider> {
     pub(super) cfg: Option<RelayCfg>,
     pub(super) link: Link,
@@ -174,7 +169,7 @@ pub(super) struct Rly<P: Provider> {
     pub(super) out_len: usize,
     pub(super) bbuf: [u8; MAX_FRAME_LEN],
     pub(super) bst: BatchState,
-    pub(super) q: [Option<Queued>; QUEUED],
+    pub(super) q: super::queue::HeldQueue,
     pub(super) keyreq: bool,
     pub(super) ta: AliasTable,
     pub(super) ra: AliasTable,
@@ -183,6 +178,10 @@ pub(super) struct Rly<P: Provider> {
     pub(super) etx: Option<u64>,
     /// A PONG arrived that the sessions riding this carrier have not yet been told about (CARRIER_PULSE).
     pub(super) pong: bool,
+    /// The carrier re-opened after an earlier life and the sessions riding it are still to be pinged.
+    pub(super) reverify: bool,
+    /// The carrier opened on a very slow node and its held packets wait for the endpoint's view before they go out.
+    pub(super) drain_due: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -234,6 +233,8 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) found_q: [Option<NodeId>; 4],
     pub(super) beacons: [Option<super::drive::LocalPeer>; LOCAL_PEERS],
     pub(super) node_rtt: u64,
+    /// The node's peak handshake round trip.
+    pub(super) node_tgr: u64,
     pub(super) sign: super::signing::Signing,
     pub(super) evq: [Option<vinc_core::Event>; 16],
     /// The latest time any call carried.
@@ -295,13 +296,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 out_len: 0,
                 bbuf: [0; MAX_FRAME_LEN],
                 bst: BatchState::new(),
-                q: [None; QUEUED],
+                q: super::queue::HeldQueue::new(),
                 keyreq: false,
                 ta: AliasTable::new(),
                 ra: AliasTable::new(),
                 rides: false,
                 etx: None,
                 pong: false,
+                reverify: false,
+                drain_due: false,
             }),
             shared,
             net: Netcheck::new(),
@@ -329,6 +332,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             found_q: [None; 4],
             beacons: [None; LOCAL_PEERS],
             node_rtt: 0,
+            node_tgr: 0,
             sign: super::signing::Signing::new(),
             evq: [None; 16],
             clock: cfg.start,

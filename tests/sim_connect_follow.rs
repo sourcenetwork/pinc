@@ -94,3 +94,52 @@ fn a_path_that_stops_answering_brings_the_relay_path_and_a_punch_two_seconds_lat
     });
 }
 
+#[test]
+fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
+    use vinc_connect::client::Notice;
+    use vinc_core::is_relay_addr;
+    use vinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
+    big(|| {
+        let mut w = World::new(97);
+        let (_r, rs) = w.relay(1, relay_ip(10));
+        // A is behind a middlebox that forgets idle TCP flows after 20 s: its carrier dies silently now and then.
+        let lan = w.sim.add_lan(LanConfig {
+            udp_block: true,
+            ..LanConfig::default()
+        });
+        let nat = w.sim.add_nat_in(
+            NatConfig {
+                kind: NatKind::PortRestricted,
+                ext_ip: ext(1),
+                mapping_timeout: 120 * SEC,
+                tcp_timeout: 20 * SEC,
+                refresh_on_inbound: true,
+                port_base: 20_000,
+                ports: PortPolicy::Sequential,
+                no_punch: false,
+            },
+            lan,
+        );
+        let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat);
+        let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
+        w.run(secs(10));
+        w.dial(secs(10), a, b, vec![]);
+        w.run(secs(40));
+        assert!(w.connected(a).is_some(), "{}", w.dump(a));
+        w.run(secs(400));
+        let ups: Vec<Time> = w
+            .notices(a)
+            .into_iter()
+            .filter(|(_, n)| matches!(n, Notice::CarrierUp(0)))
+            .map(|(t, _)| t)
+            .collect();
+        assert!(ups.len() >= 2, "the carrier re-opened: {ups:?}");
+        let pinged = ups.iter().skip(1).any(|up| {
+            w.client(a)
+                .tx_log
+                .iter()
+                .any(|(t, to, _)| *t >= *up && *t < *up + 50 * MS && is_relay_addr(to))
+        });
+        assert!(pinged, "no session packet left when a carrier came back: {ups:?}");
+    });
+}

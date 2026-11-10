@@ -46,9 +46,10 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         Some(t)
     }
 
-    /// Set the larger of the node's round trip figures (the endpoint's `tgr` and `lrtt`).
-    pub fn set_node_rtt(&mut self, rtt: u64) {
+    /// Set the node's round trip figures: the larger of the endpoint's `tgr` and `lrtt`, and `tgr` itself.
+    pub fn set_node_rtt(&mut self, rtt: u64, peak: u64) {
         self.node_rtt = rtt;
+        self.node_tgr = peak;
     }
 
     /// Say which relays a session rides (their carriers are kept checked).

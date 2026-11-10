@@ -292,6 +292,10 @@ ep_impl! {
                 self.settle(i, now);
                 Ok(Value::None)
             }
+            Command::Ping { session } => self.with_conn(session, now, |c| {
+                c.ping();
+                Ok(())
+            }),
             Command::SetGossip { session, gossip } => {
                 let i = self.live(session)?;
                 if let Some(s) = self.slots.get_mut(i) {
@@ -480,6 +484,11 @@ ep_impl! {
             Query::Node => Answer::Node(self.node_stats()),
             Query::ReachOut(id) => self.reach_in.get(id).map_or(Answer::None, Answer::ReachOut),
             Query::Ledger(a) => self.ledger.get(&a).map_or(Answer::None, Answer::Ledger),
+            Query::ByConnId(cid) => self
+                .slots
+                .iter()
+                .position(|s| s.m.in_use && s.conn.is_some() && s.m.cids.contains(&Some(cid)))
+                .map_or(Answer::None, |i| self.stats_of(i)),
         }
     }
 

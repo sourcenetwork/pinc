@@ -12,7 +12,7 @@
 use core::net::SocketAddr;
 
 use vinc_crypto::NodeId;
-use vinc_security::{Alpn, Failure, KeyRequest, KeyResponse};
+use vinc_security::{Alpn, ConnId, Failure, KeyRequest, KeyResponse};
 use vinc_transport::conn::{CloseReason, ExtensionError, PathId, Stats};
 use vinc_transport::stream::datagram::DatagramError;
 use vinc_transport::stream::{RecvStatus, StreamError, StreamId};
@@ -520,6 +520,12 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The role.
         role: Role,
     },
+    /// Send the peer an acknowledgement-eliciting PING on the session's active path, to learn whether it still holds the
+    /// session.
+    Ping {
+        /// The session.
+        session: SessionId,
+    },
     /// Mark a session as carrying broadcast traffic, which is flushed after the others.
     SetGossip {
         /// The session.
@@ -585,6 +591,8 @@ pub enum Query {
     Node,
     /// The ledger entry of an address.
     Ledger(SocketAddr),
+    /// The counters of the session that accepts datagrams for this connection id, if any.
+    ByConnId(ConnId),
     /// The body of the latest `REACH_OUT` this session received.
     ReachOut(SessionId),
 }

@@ -129,6 +129,13 @@ conn_impl! {
         self.resume(env.now);
     }
 
+    /// Send one acknowledgement-eliciting PING on the active path with the next packet.
+    pub fn ping(&mut self) {
+        if self.phase == Phase::Connected {
+            self.life.ping_owed = true;
+        }
+    }
+
     /// The endpoint saw the network link go down (`true`) or come back (`false`). While it is down for up to 30 s the
     /// probe backoff does not grow and the connection does not give up; when it returns the connection resumes as
     /// after [`wake`](Self::wake).

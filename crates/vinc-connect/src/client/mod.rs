@@ -7,7 +7,8 @@
 //! - [`lookup`]: the lookup client and the verification of a record;
 //! - [`dial`]: pending dials (DIAL_PRUNE) and the first-flight rules;
 //! - [`tunnel`]: the member side of the hub tunnel, SPLICE_LIVE and THIN_SPLICE;
-//! - [`punch`]: REACH_OUT and the punch timer.
+//! - [`punch`]: REACH_OUT and the punch timer;
+//! - [`queue`]: the packets a closed carrier holds.
 
 #![allow(
     clippy::large_stack_arrays,
@@ -32,6 +33,7 @@ pub mod link;
 pub mod lookup;
 pub mod netcheck;
 pub mod punch;
+pub mod queue;
 mod signing;
 mod timers;
 pub mod tunnel;

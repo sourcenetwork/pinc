@@ -39,6 +39,8 @@ pub const RLY_ONCE: u64 = 30_000_000_000;
 pub const THIN_HS0_WAIT: u64 = 4_000_000_000;
 /// The floor of that wait.
 pub const RLY_ONCE_MIN: u64 = 4_000_000_000;
+/// A session that heard nothing for this long is pinged when its carrier comes back.
+pub const REVERIFY_AGE: u64 = 10_000_000_000;
 
 /// A candidate path of a flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -23,7 +23,7 @@ use vinc_core::{
     is_relay_addr,
 };
 use vinc_crypto::{NodeId, Provider};
-use vinc_security::Env;
+use vinc_security::{ConnId, Env};
 use vinc_transport::stream::StreamSource;
 
 use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
@@ -36,6 +36,7 @@ use crate::carrier::frame::MAX_PACKET_LEN;
 use crate::local::{self, Beacon};
 use crate::record::MAX_ADDRS;
 use crate::relay::datagram::Datagram;
+use vinc_transport::packet::LongHeader;
 
 /// A session the layer follows.
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +93,8 @@ pub trait Port {
     fn peer(&self, node: &NodeId) -> Option<vinc_core::PeerInfo>;
     /// The body of the latest REACH_OUT of a session, copied into `out`; returns its length.
     fn reach_body(&self, session: SessionId, out: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize;
+    /// The session that accepts datagrams for this connection id, if any.
+    fn by_conn_id(&self, cid: &ConnId) -> Option<SessionStats>;
 }
 
 impl<
@@ -143,6 +146,12 @@ where
                 n
             }
             _ => 0,
+        }
+    }
+    fn by_conn_id(&self, cid: &ConnId) -> Option<SessionStats> {
+        match self.query(Query::ByConnId(*cid)) {
+            Answer::Stats(s) => Some(s),
+            _ => None,
         }
     }
 }
@@ -391,7 +400,7 @@ drive_impl! {
     /// signatures it needs are requested through [`Connectivity::sign_request`].
     pub fn drive<E: Port>(&mut self, now: u64, ep: &mut E, env: &mut Env<'_, P>, wall_ms: Option<u64>) {
         if let Some(n) = ep.node() {
-            self.set_node_rtt(n.tgr.max(n.lrtt));
+            self.set_node_rtt(n.tgr.max(n.lrtt), n.tgr);
         }
         let mut rides = [false; R];
         for s in self.sess.iter().flatten() {
@@ -438,6 +447,7 @@ drive_impl! {
         while let Some(p) = super::conn::pop(&mut self.found_q) {
             self.found_dial(now, ep, &p);
         }
+        self.carrier_follow_up(now, ep);
         self.each_session(now, ep);
         self.pulse_pongs(now, ep);
         self.beacon(now, wall_ms);
@@ -620,6 +630,36 @@ drive_impl! {
                 let Some(s) = self.sess.get(i).copied().flatten().filter(|s| s.hub == Some(h)) else { continue };
                 if ep.stats(s.id).is_some_and(|st| st.established && self.rides_own_relay(&st, h)) {
                     let _ = self.cmd(ep, now, Command::Pulse { session: s.id, sent: false });
+                }
+            }
+        }
+    }
+
+    /// Work the carriers' held packets and re-opened carriers need the endpoint for.
+    fn carrier_follow_up<E: Port>(&mut self, now: u64, ep: &mut E) {
+        for h in 0..R {
+            if self.rly.get_mut(h).is_some_and(|r| core::mem::take(&mut r.drain_due)) {
+                self.trim_held(h, true, |held| {
+                    LongHeader::parse(held.packet)
+                        .ok()
+                        .and_then(|(hdr, _)| ep.by_conn_id(&hdr.scid))
+                        .is_some_and(|st| st.established && st.dialer)
+                });
+                self.drain_held(now, h);
+            }
+            if !self.rly.get_mut(h).is_some_and(|r| core::mem::take(&mut r.reverify)) {
+                continue;
+            }
+            // A carrier that came back: a session riding it that heard nothing for a while asks its peer whether it
+            // still holds the session.
+            for i in 0..SESSIONS {
+                let Some(s) = self.sess.get(i).copied().flatten() else { continue };
+                let Some(st) = ep.stats(s.id) else { continue };
+                if st.established
+                    && now.saturating_sub(st.heard) > super::dial::REVERIFY_AGE
+                    && st.route.is_some_and(|(_, r)| self.path_parts(&r).is_some_and(|(rr, _)| rr == h))
+                {
+                    let _ = self.cmd(ep, now, Command::Ping { session: s.id });
                 }
             }
         }
