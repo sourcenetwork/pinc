@@ -41,8 +41,13 @@ impl Core {
                     let due = self.now + self.shared.world.acp_latency_ns;
                     self.acp.push_back((due, Check::Broadcast(id), allow));
                 }
-                NEv::Connect(_)
-                | NEv::PublishAcked { .. }
+                NEv::Connect(n) => {
+                    if self.notices.len() == 40 {
+                        self.notices.pop_front();
+                    }
+                    self.notices.push_back(format!("t{} {n:?}", self.now));
+                }
+                NEv::PublishAcked { .. }
                 | NEv::PublishGaveUp { .. }
                 | NEv::GapRepaired { .. }
                 | NEv::Fallback { .. }

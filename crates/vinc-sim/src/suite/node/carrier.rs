@@ -84,6 +84,15 @@ impl Keys<'_> {
     }
 }
 
+/// Who asked for a stream the simulator is opening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Dial {
+    /// The carrier of relay `n` of the node's client.
+    Client(usize),
+    /// A relay-to-relay carrier of a hub.
+    Peer,
+}
+
 /// What the node has queued for the simulator and the state of its carriers.
 #[derive(Default)]
 pub(super) struct Wire {
@@ -92,7 +101,8 @@ pub(super) struct Wire {
     /// Stream operations, each with the record a write carries.
     pub(super) ops: VecDeque<(StreamOp, Vec<u8>)>,
     streams: [Option<StreamId>; NRL],
-    opening: [Option<SocketAddr>; NRL],
+    /// Streams asked for and not yet named by the simulator, with their target.
+    pub(super) connects: VecDeque<(Dial, SocketAddr)>,
     kinds: [Option<Kind>; NRL],
     decoders: [Option<Decoder>; NRL],
 }
@@ -118,6 +128,22 @@ pub(super) fn ws_payloads(dec: &mut Decoder, data: &mut [u8]) -> Vec<Vec<u8>> {
 }
 
 impl Core {
+    /// How many carrier streams are open and being opened, for diagnosis.
+    pub(super) fn wire_summary(&self) -> String {
+        let open = self.wire.streams.iter().flatten().count();
+        let opening = self.wire.connects.len();
+        let hub = self.hub.as_ref().map_or(String::new(), |h| {
+            format!(
+                " hub: records {} peers up {} peers out {:?} streams {}",
+                h.relay.record_count(),
+                h.peer_by_node.len(),
+                h.peers_out.iter().map(|p| p.stream.is_some()).collect::<Vec<_>>(),
+                h.streams.len()
+            )
+        });
+        format!("carriers open {open} opening {opening}{hub}")
+    }
+
     /// Serves the key operations the node waits for: the carrier handshakes and its own signatures.
     pub(super) fn keys_step(&mut self) -> bool {
         let keys = Keys {
@@ -165,10 +191,10 @@ impl Core {
                         node.stream_closed(local, relay);
                         continue;
                     };
-                    if let (Some(k), Some(o)) = (wire.kinds.get_mut(relay), wire.opening.get_mut(relay)) {
+                    if let Some(k) = wire.kinds.get_mut(relay) {
                         *k = Some(kind);
-                        *o = Some(to);
                     }
+                    wire.connects.push_back((Dial::Client(relay), to));
                     let kind = match kind {
                         Kind::Tcp => StreamKind::Tcp,
                         Kind::Ws => StreamKind::Ws,
@@ -185,8 +211,8 @@ impl Core {
                     if let Some(s) = wire.streams.get_mut(relay).and_then(Option::take) {
                         wire.ops.push_back((StreamOp::Close { stream: s }, Vec::new()));
                     }
-                    if let (Some(o), Some(d)) = (wire.opening.get_mut(relay), wire.decoders.get_mut(relay)) {
-                        *o = None;
+                    wire.connects.retain(|(d, _)| *d != Dial::Client(relay));
+                    if let Some(d) = wire.decoders.get_mut(relay) {
                         *d = None;
                     }
                 }
@@ -273,9 +299,17 @@ impl Core {
         match event {
             StreamEvent::Pending { stream, remote } => {
                 let w = &mut self.wire;
-                if let Some(i) = w.opening.iter().position(|o| *o == Some(remote)) {
-                    w.streams[i] = Some(stream);
-                    w.opening[i] = None;
+                if let Some(at) = w.connects.iter().position(|(_, a)| *a == remote)
+                    && let Some((who, _)) = w.connects.remove(at)
+                {
+                    match who {
+                        Dial::Client(i) => {
+                            if let Some(s) = w.streams.get_mut(i) {
+                                *s = Some(stream);
+                            }
+                        }
+                        Dial::Peer => self.hub_peer_pending(stream, remote),
+                    }
                 }
             }
             StreamEvent::Opened { stream, .. } => {
@@ -285,6 +319,8 @@ impl Core {
                     if let Some(node) = self.node.as_mut() {
                         node.stream_opened(local, i);
                     }
+                } else if self.hub_is_peer_dial(stream) {
+                    self.hub_peer_dialed(stream);
                 } else {
                     self.hub_accept(stream);
                 }

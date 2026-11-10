@@ -49,6 +49,7 @@ mod cost;
 mod events;
 mod layer;
 mod mem;
+mod peers;
 mod relay;
 mod shared;
 
@@ -211,6 +212,8 @@ impl<L: Layers> SuiteNode<L> {
             return vec!["stopped".to_owned()];
         };
         let mut out = vec![format!("{:?}", ep.node_stats())];
+        out.extend(self.core.notices.iter().map(|n| format!("notice {n}")));
+        out.push(self.core.wire_summary());
         for n in 0..SESSIONS {
             if let vinc_core::Answer::Stats(st) = ep.query(vinc_core::Query::SessionAt(n)) {
                 out.push(format!(

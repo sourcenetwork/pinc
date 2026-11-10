@@ -113,6 +113,7 @@ pub(super) struct Core {
     pub(super) phase: Phase,
     pub(super) node: Option<Box<NodeT>>,
     pub(super) prekeys: Option<SoftPrekeys<Tracked>>,
+    pub(super) prekey_info: Option<vinc_security::PrekeyInfo>,
     pub(super) drbg: Drbg,
     pub(super) hub_drbg: Drbg,
     pub(super) hub: Option<Box<HubSide>>,
@@ -143,6 +144,8 @@ pub(super) struct Core {
     pub(super) timer_violations: u64,
     /// The last call ran the node's timers: the endpoint's deadline is checked once the host has drained its output.
     pub(super) timer_check: bool,
+    /// The last connectivity notices, for diagnosis.
+    pub(super) notices: VecDeque<String>,
     /// The due deadline the endpoint showed after the previous timer call, to tell a stuck timer from a due one.
     pub(super) stale_deadline: Option<u64>,
 }
@@ -194,6 +197,7 @@ impl Core {
             phase: Phase::Stopped,
             node: None,
             prekeys: None,
+            prekey_info: None,
             drbg: Drbg::new(&derive(b"suite-keys", world_seed, idx as u64, 0)),
             hub_drbg: Drbg::new(&derive(b"suite-hub", world_seed, idx as u64, 0)),
             hub: None,
@@ -221,6 +225,7 @@ impl Core {
             next_sample: 0,
             timer_violations: 0,
             timer_check: false,
+            notices: VecDeque::new(),
             stale_deadline: None,
             shared,
         })
@@ -329,6 +334,7 @@ impl Core {
                 match keys.acquire(&mut env) {
                     Ok(info) => {
                         ep.set_prekey(info.clone());
+                        self.prekey_info = Some(info.clone());
                         prekey = Some(info);
                     }
                     Err(_) => self.violation("G-SPEC", "the node could not make a prekey"),
@@ -376,6 +382,8 @@ impl Core {
         if self.shared.is_hub(self.idx) {
             let me = self.identity.node_id();
             self.hub = Some(Box::new(HubSide::new(me, derive_seed(world_seed, self.idx, inc))));
+            self.hub_peers_init();
+            self.hub_dial_peers();
         }
         self.refresh_local(false);
         self.phase = Phase::Running;
@@ -386,7 +394,12 @@ impl Core {
     #[allow(clippy::default_trait_access, reason = "the default limits of the node's broadcast")]
     fn build_node(&mut self, ep: Ep, prekey: vinc_security::PrekeyInfo, now: u64) -> Result<Box<NodeT>, String> {
         let mut relays: [Option<RelayCfg>; NRL] = [None; NRL];
-        for (d, r) in relays.iter_mut().zip(self.shared.relays()) {
+        // A node is never its own relay: a hub lists the other hubs only.
+        let me = self.identity.node_id();
+        for (d, r) in relays
+            .iter_mut()
+            .zip(self.shared.relays().iter().filter(|r| r.id != me))
+        {
             *d = Some(RelayCfg {
                 udp: r.udp.filter(|_| self.udp),
                 tcp: r.tcp.filter(|_| !self.browser),
