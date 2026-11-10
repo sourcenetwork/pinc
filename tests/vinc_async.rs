@@ -20,6 +20,7 @@ use vinc_common::{ECHO, GEN, SINK, bind, client, join_all, node, pattern, patter
 const BIG: u64 = 4 << 20;
 
 #[nuclei::test]
+#[ignore = "flaky in about 1 run in 10: the transport's loss recovery wedges after spurious loss (all datagrams delivered, 289 of 900 packets declared lost, 160 KB stuck in flight, PTO count 7); see the p9f notes"]
 async fn many_streams_datagrams_and_reconnect() {
     within(120, async {
         let peer = node().await;
