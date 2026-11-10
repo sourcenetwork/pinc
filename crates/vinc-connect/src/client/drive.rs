@@ -536,6 +536,14 @@ drive_impl! {
                 }
                 continue;
             };
+            if let Some(h) = s.hub
+                && st.established
+                && st.path_validated
+                && let Some((_, remote)) = st.route
+                && !is_relay_addr(&remote)
+            {
+                self.relay_seen_at(h, remote);
+            }
             // B8: the relay copy joins the flight of a direct-first dial at its first resend.
             if let Some(at) = s.relay_at
                 && now >= at

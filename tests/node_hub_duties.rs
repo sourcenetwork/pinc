@@ -251,3 +251,30 @@ fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_recon
         }
     });
 }
+
+#[test]
+fn a_hub_names_the_route_a_datagram_to_a_member_takes() {
+    use vinc_crypto::{IdentityAlg, NodeId};
+    big(|| {
+        let mut w = World::build(411, 1, 2);
+        w.run(secs(30));
+        let (hub, addr) = w.hubs[0];
+        for m in w.members.clone() {
+            let id = NodeId {
+                alg: IdentityAlg::Ed25519,
+                bytes: w.id(m),
+            };
+            let node = &w.sim.node(hub).node;
+            // The datagram leaves from the address of the member's session and goes to the member's address, so a
+            // member reached on one address family is not sent to from another.
+            let (local, remote) = node
+                .member_route(&id)
+                .expect("the member has a validated direct session");
+            assert_eq!(
+                local, addr.udp,
+                "the datagram leaves from the hub address the session uses"
+            );
+            assert_eq!(Some(remote), node.member_addr(&id));
+        }
+    });
+}

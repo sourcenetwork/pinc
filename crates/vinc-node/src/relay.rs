@@ -86,11 +86,26 @@ where
     /// The direct address of `member`'s hub session, if it has a validated one: where the relay sends a datagram to
     /// the member.
     pub fn member_addr(&self, member: &NodeId) -> Option<SocketAddr> {
-        let sid = self.io.links.get(&member.bytes).and_then(|l| l.conn)?;
-        let st = self.io.ep.stats(sid)?;
-        st.route
-            .map(|(_, r)| r)
-            .filter(|r| st.path_validated && !is_relay_addr(r))
+        self.member_route(member).map(|(_, remote)| remote)
+    }
+
+    /// The route of `member`'s hub session, `(local, remote)`, if it has a validated direct one: the address a datagram
+    /// to the member leaves from and the address it goes to. A host with several addresses sends from the one the
+    /// session uses, since a datagram from another family or interface does not reach the member. Any session of the
+    /// member counts, as in [`Node::member_at`], the one heard last, so what the relay believes about the member's
+    /// UDP session and where the datagram goes come from the same sessions.
+    pub fn member_route(&self, member: &NodeId) -> Option<(SocketAddr, SocketAddr)> {
+        self.io
+            .sess
+            .iter()
+            .filter(|(_, s)| s.incoming && s.peer == member.bytes)
+            .filter_map(|(sid, _)| {
+                let st = self.io.ep.stats(*sid)?;
+                let route = st.route.filter(|(_, r)| st.path_validated && !is_relay_addr(r))?;
+                Some((st.heard, route))
+            })
+            .max_by_key(|(heard, _)| *heard)
+            .map(|(_, route)| route)
     }
 
     /// The next thing the hub's relay should learn about a member, oldest first.

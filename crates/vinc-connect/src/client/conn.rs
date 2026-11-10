@@ -182,6 +182,8 @@ pub(super) struct Rly<P: Provider> {
     pub(super) reverify: bool,
     /// The carrier opened on a very slow node and its held packets wait for the endpoint's view before they go out.
     pub(super) drain_due: bool,
+    /// Another address the relay answers from: the one its member session runs over when it is not the configured one.
+    pub(super) alt_udp: Option<SocketAddr>,
 }
 
 #[derive(Clone, Copy)]
@@ -307,6 +309,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 pong: false,
                 reverify: false,
                 drain_due: false,
+                alt_udp: None,
             }),
             shared,
             net: Netcheck::new(),
@@ -357,6 +360,22 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     fn relay_by_udp(&self, a: &SocketAddr) -> Option<usize> {
         self.rly.iter().position(|r| r.cfg.is_some_and(|c| c.udp == Some(*a)))
+    }
+
+    fn relay_by_alt(&self, a: &SocketAddr) -> Option<usize> {
+        self.rly.iter().position(|r| r.alt_udp == Some(*a))
+    }
+
+    /// Relay `relay` answers from `addr` as well as from the address it is configured with: a dual-stack relay's
+    /// session with this node may run over the other family, and the relay's datagrams (tunnelled packets, address
+    /// answers) then come from there. Learned from a validated hub session; nothing else names an address a relay
+    /// control datagram may come from.
+    pub fn relay_seen_at(&mut self, relay: usize, addr: SocketAddr) {
+        if let Some(r) = self.rly.get_mut(relay)
+            && r.cfg.is_some_and(|c| c.udp != Some(addr))
+        {
+            r.alt_udp = Some(addr);
+        }
     }
 
     /// The position of `peer` in the table of peers named on relay paths, assigning one if needed.
@@ -551,10 +570,16 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         if data.first().is_none_or(|b| *b >= 0x40) {
             return false;
         }
-        let Some(relay) = self.relay_by_udp(&from) else {
+        let configured = self.relay_by_udp(&from);
+        let Some(relay) = configured.or_else(|| self.relay_by_alt(&from)) else {
             return false;
         };
-        let Ok(d) = Datagram::decode(data) else { return true };
+        let Ok(d) = Datagram::decode(data) else { return configured.is_some() };
+        // From the other address of the relay only tunnelled packets are the layer's: its answers about this node's
+        // address and its lookups are about the configured one.
+        if configured.is_none() && !matches!(d, Datagram::Spl { .. }) {
+            return false;
+        }
         self.udp_any = true;
         self.shared.restarted = false;
         match d {

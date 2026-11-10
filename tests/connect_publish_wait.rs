@@ -70,3 +70,34 @@ fn a_record_due_while_the_home_carrier_is_not_open_is_no_deadline() {
         }
     });
 }
+
+#[test]
+fn a_relay_datagram_from_the_address_its_session_runs_over_is_taken() {
+    use vinc_connect::relay::datagram::Datagram;
+    big_stack(|| {
+        let host = Box::new(Host::new(0x31, "192.168.1.2:4433".parse().unwrap(), 1000 * SEC));
+        let (identity, prekey) = (host.identity, host.prekey_info.clone());
+        let mut rig = Rig::new(&identity, prekey);
+        let other: SocketAddr = "[fd00::1]:4433".parse().unwrap();
+        let src = vinc_crypto::NodeId {
+            alg: vinc_crypto::IdentityAlg::Ed25519,
+            bytes: [7; 32],
+        };
+        let mut buf = [0u8; 256];
+        let n = Datagram::Spl {
+            src,
+            flag: 0,
+            packet: &[0x41; 40],
+        }
+        .encode(&mut buf)
+        .unwrap();
+        // A relay datagram from an address the relay was not configured with is not the layer's.
+        assert!(!rig.conn.handle_udp(1000 * SEC, other, &buf[..n]));
+        // Once a session of the relay is known to run over that address, a tunnelled packet from it is.
+        rig.conn.relay_seen_at(0, other);
+        assert!(rig.conn.handle_udp(1000 * SEC, other, &buf[..n]));
+        // Its other datagrams are still about the configured address only.
+        let n = Datagram::Qad { nonce: [1; 8] }.encode(&mut buf).unwrap();
+        assert!(!rig.conn.handle_udp(1000 * SEC, other, &buf[..n]));
+    });
+}
