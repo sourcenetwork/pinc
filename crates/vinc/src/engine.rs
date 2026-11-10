@@ -13,10 +13,11 @@
 //! to what changed, never to a table's capacity.
 
 use std::cell::OnceCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
+use rapidhash::RapidHashMap;
 use vinc_core::{
     Answer, Command, CommandError, Event, IfaceEvent, IfaceId, MAX_ALPNS, NodeStats, Query, Reply, Role, SessionId,
     SessionStats, Value,
@@ -176,12 +177,12 @@ pub(crate) struct Core<S, A> {
     /// The access hook, shared with the endpoint's handles so they can ask it without borrowing the core.
     admit: Rc<A>,
     pub(crate) limits: Limits,
-    sessions: HashMap<SessionId, Sess>,
-    dials: HashMap<SessionId, Dial>,
-    dial_by_peer: HashMap<(NodeId, Alpn), SessionId>,
+    sessions: RapidHashMap<SessionId, Sess>,
+    dials: RapidHashMap<SessionId, Dial>,
+    dial_by_peer: RapidHashMap<(NodeId, Alpn), SessionId>,
     /// The accept queues: the first takes every protocol no registered one claims.
     routes: Vec<Route>,
-    book: HashMap<NodeId, Vec<SocketAddr>>,
+    book: RapidHashMap<NodeId, Vec<SocketAddr>>,
     backlog: VecDeque<Event>,
     ifaces: Vec<IfaceId>,
     shutdown: Option<u64>,
@@ -206,14 +207,14 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             prekeys,
             admit: Rc::new(cfg.admit),
             limits: cfg.limits,
-            sessions: HashMap::new(),
-            dials: HashMap::new(),
-            dial_by_peer: HashMap::new(),
+            sessions: RapidHashMap::default(),
+            dials: RapidHashMap::default(),
+            dial_by_peer: RapidHashMap::default(),
             routes: vec![Route {
                 alpn: Vec::new(),
                 queue: VecDeque::new(),
             }],
-            book: HashMap::new(),
+            book: RapidHashMap::default(),
             backlog: VecDeque::new(),
             ifaces,
             shutdown: None,
