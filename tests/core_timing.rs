@@ -383,60 +383,25 @@ fn a_resume_to_a_restarted_hub_resends_after_the_remembered_round_trip() {
 }
 
 #[test]
-fn the_first_resend_the_connectivity_layer_asks_for_does_not_cut_the_remembered_round_trip_wait_of_a_hub_resume() {
+fn a_ping_command_sends_one_acknowledgement_eliciting_packet_at_once_and_an_idle_session_sends_nothing() {
     big_stack(|| {
-        let ms = MS_NS;
-        let mut net = CoreNet::new(150 * ms);
-        net.capture = true;
+        let mut net = CoreNet::new(10 * MS_NS);
         let (a, b) = (net.add(1), net.add(2));
-        net.run_for(11 * S);
-        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Hub);
-        net.run_for(2 * S);
-        let t = net.now;
-        net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
-        net.run_for(2 * S);
-        let krtt = net.nodes[a].ep.rtt().krtt(&net.nodes[b].node).unwrap();
-        assert!(krtt >= 300 * ms - 1 && krtt < 320 * ms, "krtt {krtt}");
-        net.loss = Some(Box::new(|_, _, _| true));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(5 * S);
+        let sent = |net: &CoreNet| match net.nodes[a].ep.query(Query::Stats(sa)) {
+            Answer::Stats(s) => s.transport.packets_sent,
+            _ => panic!("no session"),
+        };
+        let idle = sent(&net);
+        net.run_for(S);
+        assert_eq!(sent(&net), idle, "an idle session sends nothing");
         let now = net.now;
-        net.tapped.clear();
-        let id = dial(&mut net, a, b, ALPN_A, Role::Hub);
-        // The layer asks for the 300 ms wait of a direct-first dial; a resumed session is already up on its side and
-        // goes by the longer wait from the remembered round trip.
-        net.nodes[a]
-            .cmd(
-                now,
-                Command::FirstResend {
-                    session: id,
-                    delay: 300 * ms,
-                },
-            )
-            .unwrap();
-        net.run_for(3 * S);
-        let first = net.tapped.iter().map(|t| t.0 - now).find(|t| *t > 0).unwrap();
-        // max(300 ms, 1.5 x krtt + 20 ms)
-        let want = krtt / 2 * 3 + 20 * ms;
-        assert!(
-            (want..want + 10 * ms).contains(&first),
-            "resend at {first}, wanted {want}"
-        );
-        // A dial with no remembered round trip takes the layer's wait as given.
-        let c = net.add(3);
-        let now = net.now;
-        net.tapped.clear();
-        let id = dial(&mut net, a, c, ALPN_A, Role::Hub);
-        net.nodes[a]
-            .cmd(
-                now,
-                Command::FirstResend {
-                    session: id,
-                    delay: 300 * ms,
-                },
-            )
-            .unwrap();
-        net.run_for(3 * S);
-        let first = net.tapped.iter().map(|t| t.0 - now).find(|t| *t > 0).unwrap();
-        assert!((300 * ms..310 * ms).contains(&first), "resend at {first}");
+        net.nodes[a].cmd(now, Command::Ping { session: sa }).unwrap();
+        net.run_for(S / 10);
+        assert_eq!(sent(&net), idle + 1, "the ping left in one packet");
+        net.run_for(S);
+        assert_eq!(sent(&net), idle + 1, "and only one");
     });
 }
 
