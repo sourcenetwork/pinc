@@ -62,14 +62,25 @@ fn measure(chunks: usize) -> (u16, usize, u64) {
             }
         }
         // The receiver ends its half of every stream whose data arrived whole, as an echo service would.
-        let ended: Vec<u64> = ids.iter().copied().filter(|id| n.b.fin.contains(id) && !closed.contains(id)).collect();
+        let ended: Vec<u64> = ids
+            .iter()
+            .copied()
+            .filter(|id| n.b.fin.contains(id) && !closed.contains(id))
+            .collect();
         for id in ended {
             n.b.conn.finish(id).unwrap();
             closed.push(id);
         }
         first.iter().all(Option::is_some)
     });
-    assert!(done, "pool {chunks}: credit {credit}, opened {}, first bytes {} of {STREAMS}, at {} ms, receiver ended {}", ids.len(), first.iter().flatten().count(), (net.now - t0) / MS, closed.len());
+    assert!(
+        done,
+        "pool {chunks}: credit {credit}, opened {}, first bytes {} of {STREAMS}, at {} ms, receiver ended {}",
+        ids.len(),
+        first.iter().flatten().count(),
+        (net.now - t0) / MS,
+        closed.len()
+    );
     let last = first.iter().flatten().max().copied().unwrap();
     (credit, waves, (last - t0) / MS)
 }

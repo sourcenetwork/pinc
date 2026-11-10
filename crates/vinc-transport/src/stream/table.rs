@@ -352,9 +352,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
         let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.window_bytes();
         let cap = self.max_remote.min((N as u64 / 2).max(1));
-        cap.saturating_sub(self.remote_live)
-            .min(free)
-            .min(admit_fit(fit))
+        cap.saturating_sub(self.remote_live).min(free).min(admit_fit(fit))
     }
 
     /// Queue a raise of the stream credit when the room grew enough (see [`Admit::update`]).
