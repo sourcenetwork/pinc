@@ -219,7 +219,7 @@ where
         };
         let Resources {
             mut pool,
-            streams,
+            mut streams,
             loss,
         } = res;
         streams.set_advertised(u64::from(local_credit.max_streams));
