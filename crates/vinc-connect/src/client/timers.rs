@@ -184,6 +184,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.net.restart();
         self.next_probe = now.saturating_add(NETCHECK_DELAY);
         self.duty.restart(now);
+        for i in 0..R {
+            self.check_carrier(now, i);
+        }
+        self.arm_punches(now);
+    }
+
+    /// Sessions of this protocol carry broadcast traffic: the endpoint flushes them after the others.
+    pub fn set_gossip_alpn(&mut self, alpn: &[u8]) {
+        self.gossip_alpn = vinc_security::Alpn::new(alpn);
     }
 
     /// Whether the node's first dial counts as a late start.

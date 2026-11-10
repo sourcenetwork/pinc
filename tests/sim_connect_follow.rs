@@ -198,6 +198,23 @@ fn a_path_that_stops_answering_brings_the_relay_path_and_a_punch_two_seconds_lat
 }
 
 #[test]
+fn a_session_of_the_broadcast_protocol_is_marked_so_it_is_flushed_last() {
+    big(|| {
+        let (mut w, a, b, _r) = pair(96);
+        for n in [a, b] {
+            w.sim.node_mut(n).client_mut().conn.set_gossip_alpn(b"vinc/a");
+        }
+        let baddr = w.client(b).addr;
+        w.dial(secs(20), a, b, vec![baddr]);
+        w.run(secs(25));
+        let sa = w.connected(a).unwrap();
+        let sb = w.incoming(b).unwrap();
+        assert!(w.client(a).session_stats(sa).unwrap().gossip);
+        assert!(w.client(b).session_stats(sb).unwrap().gossip);
+    });
+}
+
+#[test]
 fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
     use vinc_connect::client::Notice;
     use vinc_core::is_relay_addr;

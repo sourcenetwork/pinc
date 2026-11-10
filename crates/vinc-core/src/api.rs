@@ -608,6 +608,8 @@ pub struct SessionStats {
     pub alpn: Option<Alpn>,
     /// The role.
     pub role: Role,
+    /// The session carries broadcast traffic and is flushed after the others ([`Command::SetGossip`]).
+    pub gossip: bool,
     /// Whether this side dialed.
     pub dialer: bool,
     /// Whether the session is established.

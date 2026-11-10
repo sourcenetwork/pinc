@@ -179,7 +179,8 @@ where
             }
         }
         let max_frame = 2 + vinc_broadcast::consts::MAX_TOPIC + vinc_broadcast::wire::MAX_HEAD + cfg.limits.max_body;
-        let conn = Box::new(Connectivity::new(cfg.connect, prekey, prov.clone(), seed));
+        let mut conn = Box::new(Connectivity::new(cfg.connect, prekey, prov.clone(), seed));
+        conn.set_gossip_alpn(cfg.alpn);
         let mut io = Io::new(
             ep,
             store,

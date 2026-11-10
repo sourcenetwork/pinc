@@ -508,6 +508,7 @@ ep_impl! {
             node: slot.m.peer,
             alpn: slot.m.alpn,
             role: slot.m.role,
+            gossip: slot.m.gossip,
             dialer: slot.m.client,
             established: slot.m.state == State::Established,
             allowed: slot.m.allowed,

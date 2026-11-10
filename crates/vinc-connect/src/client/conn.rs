@@ -241,6 +241,8 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) clock: u64,
     /// Packets dropped because a queue was full.
     pub dropped: u64,
+    /// The protocol whose sessions carry broadcast traffic and are flushed after the others.
+    pub(super) gossip_alpn: Option<vinc_security::Alpn>,
 }
 
 impl<P: Provider, const R: usize, const PEERS: usize> core::fmt::Debug for Connectivity<P, R, PEERS> {
@@ -337,6 +339,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             evq: [None; 16],
             clock: cfg.start,
             dropped: 0,
+            gossip_alpn: None,
         }
     }
 

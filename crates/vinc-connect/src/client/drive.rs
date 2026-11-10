@@ -380,6 +380,9 @@ drive_impl! {
                 if hub.is_some() && dialer {
                     let _ = self.cmd(ep, now, Command::SetRole { session, role: Role::Hub });
                 }
+                if st.and_then(|st| st.alpn).is_some_and(|a| self.gossip_alpn == Some(a)) {
+                    let _ = self.cmd(ep, now, Command::SetGossip { session, gossip: true });
+                }
             }
             Event::PathChanged { session, state: PathState::Failed, .. } => self.path_failed(now, ep, session),
             Event::Closed { session, .. } => {
