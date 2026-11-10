@@ -602,8 +602,12 @@ conn_impl! {
             out.len = pos;
             return out;
         }
-        // Control frames.
-        self.fill_control(payload, &mut pos, &mut out, fill);
+        // Control frames. Every one of them is recorded in flight, so none is written while the ring has no slot for the
+        // packet: the packet would be refused whole and the acknowledgement in it would never leave.
+        let ring_room = self.rec.ring_has_room();
+        if ring_room {
+            self.fill_control(payload, &mut pos, &mut out, fill);
+        }
         // PATH frames.
         self.fill_path(payload, &mut pos, &mut out, ti, fill.now);
         // Retransmissions and new stream data.
@@ -611,7 +615,7 @@ conn_impl! {
             self.fill_streams(payload, &mut pos, &mut out);
             self.fill_datagrams(payload, &mut pos, &mut out);
         }
-        if fill.force && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
+        if fill.force && ring_room && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
             if ti == self.paths.active {
                 out.strong();
             } else {

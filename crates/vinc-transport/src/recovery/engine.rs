@@ -310,6 +310,12 @@ impl<const N: usize> Recovery<N> {
         self.acct.in_flight.saturating_add(self.mtu) <= self.cc.cwnd() && self.ring.has_room()
     }
 
+    /// Whether the sent ring has a slot to record one more packet. With none, only what is never recorded (an
+    /// acknowledgement, a path validation packet) can leave.
+    pub fn ring_has_room(&self) -> bool {
+        self.ring.has_room()
+    }
+
     /// Cumulative bytes of recorded packets sent.
     pub const fn bytes_sent(&self) -> u128 {
         self.acct.sent
