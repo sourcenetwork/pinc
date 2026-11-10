@@ -13,7 +13,9 @@ VINC is a library, not a framework:
 - **The host owns the runtime.** You pass the facade your I/O as three async closures (receive a datagram, send a
   datagram, sleep until an instant) and call async methods. It starts no thread, no task and no socket loop: the futures
   you await drive the endpoint, on your executor and your core. tokio, smol and nuclei all work.
-- **Concurrency** is lock-free, through the [kovan](https://crates.io/crates/kovan) crates.
+- **One endpoint per core.** An endpoint's handles stay on the thread that built it, so nothing is shared between
+  threads and nothing is locked: the host spawns their futures with its executor's local spawn and runs one endpoint
+  per core.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
 > **Status: pre-release.** Most crates are built and tested, and their proofs land crate by crate. The Status column
