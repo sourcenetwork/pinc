@@ -283,6 +283,7 @@ def main():
     ap.add_argument("--reps", type=int, default=None, help="override the repetitions (a smoke run uses 1)")
     ap.add_argument("--scale", type=float, default=1.0, help="multiply every count and size (a smoke run uses 0.01)")
     ap.add_argument("--cargo", default="cargo")
+    ap.add_argument("--max-timeout", type=int, default=None, help="cap every run's timeout in seconds (keeps a window short)")
     a = ap.parse_args()
     libs = [l for l in LIBS if l[0] in a.libs.split(",")]
     profiles = a.profiles.split(",")
@@ -315,6 +316,8 @@ def main():
                 if prof not in SCENARIOS[s]:
                     continue
                 args, reps, timeout, extra = SCENARIOS[s][prof]
+                if a.max_timeout:
+                    timeout = min(timeout, a.max_timeout)
                 args = scaled(args, a.scale)
                 reps = a.reps or reps
                 for name, bench, variant in libs:
