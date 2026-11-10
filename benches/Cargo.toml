@@ -24,6 +24,12 @@ vinc-broadcast = { workspace = true, features = ["alloc"] }
 vinc = { workspace = true }
 nuclei = { workspace = true }
 
+iroh = { workspace = true }
+libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros"] }
+libp2p-stream = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
+futures = { workspace = true, features = ["std", "async-await"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 blake3 = { workspace = true, features = ["std"] }
@@ -93,4 +99,16 @@ workspace = true
 
 [[bench]]
 name = "connect"
+harness = false
+
+[[bench]]
+name = "compare_vinc"
+harness = false
+
+[[bench]]
+name = "compare_iroh"
+harness = false
+
+[[bench]]
+name = "compare_libp2p"
 harness = false

@@ -116,12 +116,19 @@ no-std:
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
 
-# Fail if any build script compiled C (run after a build; checks cargo's real target directory).
+# Fail if any build script compiled C (run after a build; checks cargo's real target directory). `ring`, the TLS
+# provider of the libraries the comparison harness measures, is the one exception; `python3 scripts/deps.py` proves no
+# VINC crate reaches it.
 pure:
     dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'); \
     [ -d "$dir" ] || { echo "pure: no build output in $dir; build first" >&2; exit 1; }; \
-    ! find "$dir" -path '*/build/*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
+    ! find "$dir" -path '*/build/*' ! -path '*/build/ring-*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
         || { echo "a build script compiled C (listed above); VINC is pure Rust" >&2; exit 1; }
+
+# Measure VINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.
+# Run it on the benchmark host with nothing else running: VINC_JOB_EXCLUSIVE=1 vinc-job just compare. Needs sudo and tc.
+compare *args:
+    python3 benches/compare.py {{args}}
 
 # Every test, hwenc included (the TPM tests need `swtpm`). Extra arguments go to nextest.
 test *args:
