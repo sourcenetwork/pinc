@@ -8,6 +8,9 @@ use super::conn::{Connectivity, Notice};
 use super::netcheck::{HOME_RETRY_NS, HomeStep};
 use crate::relay::rule;
 
+/// The wait before address discovery starts again after the node's link changed.
+const NETCHECK_DELAY: u64 = 50_000_000;
+
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
     /// The first instant [`Connectivity::tick`] has something to do.
     pub fn next_deadline(&self, now: u64) -> Option<u64> {
@@ -179,7 +182,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// beacon again.
     pub fn link_changed(&mut self, now: u64) {
         self.net.restart();
-        self.next_probe = now;
+        self.next_probe = now.saturating_add(NETCHECK_DELAY);
         self.duty.restart(now);
     }
 

@@ -28,6 +28,8 @@ pub const PROBE_BASE: u64 = 33_300_000;
 pub const PROBE_CAP: u64 = 2_000_000_000;
 /// The wait between punch rounds.
 pub const UPGRADE_INTERVAL: u64 = 60_000_000_000;
+/// The delay before a session punches again after the node's address changed.
+pub const LINK_PUNCH: u64 = 100_000_000;
 /// A direct path at least this fast is good enough.
 pub const GOOD_LATENCY: u64 = 10_000_000;
 /// The delay before the first punch of an established session.

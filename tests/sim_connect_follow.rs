@@ -64,6 +64,39 @@ fn pair_lans(
 }
 
 #[test]
+fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
+    big(|| {
+        let (mut w, a, b, _r) = pair(91);
+        let baddr = w.client(b).addr;
+        w.dial(secs(20), a, b, vec![baddr]);
+        w.run(secs(30));
+        assert!(w.connected(a).is_some(), "{}", w.dump(a));
+        // The first punch ran when the session came up, the next is a minute later.
+        assert!(reach_outs(&w, b, secs(20), secs(21)) > 0, "the first punch");
+        w.sim.command(secs(30), a, Cmd::LinkChanged);
+        w.run(secs(31));
+        // The punch sends the candidates and probes to the peer's address.
+        let to_b = |from: Time, to: Time| {
+            w.client(a)
+                .tx_log
+                .iter()
+                .filter(|(t, dst, _)| *t >= from && *t < to && *dst == baddr)
+                .count()
+        };
+        assert_eq!(to_b(secs(30), secs(30) + 99 * MS), 0, "not before 100 ms");
+        assert!(
+            to_b(secs(30) + 100 * MS, secs(30) + 400 * MS) > 0,
+            "the punch ran after the change: {:?}",
+            w.client(a)
+                .tx_log
+                .iter()
+                .filter(|(t, _, _)| *t >= secs(29) && *t < secs(31))
+                .collect::<Vec<_>>()
+        );
+    });
+}
+
+#[test]
 fn a_path_that_stops_answering_brings_the_relay_path_and_a_punch_two_seconds_later() {
     big(|| {
         let (mut w, a, b, _r, lans) = pair_lans(95);

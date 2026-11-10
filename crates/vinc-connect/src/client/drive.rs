@@ -847,8 +847,13 @@ drive_impl! {
     pub fn resume_all<E: Port>(&mut self, now: u64, ep: &mut E, moved: bool) {
         let _ = self.cmd(ep, now, Command::Resume { moved });
         self.resume(now);
+        self.arm_punches(now);
+    }
+
+    /// Every followed session punches again a tenth of a second from `now` (the node's address changed).
+    pub(super) fn arm_punches(&mut self, now: u64) {
         for s in self.sess.iter_mut().flatten() {
-            s.punch.arm(now.saturating_add(100_000_000));
+            s.punch.arm(now.saturating_add(punch::LINK_PUNCH));
         }
     }
 
