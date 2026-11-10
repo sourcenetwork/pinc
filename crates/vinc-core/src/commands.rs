@@ -122,7 +122,11 @@ ep_impl! {
                 let slot = self.slots.get_mut(i).ok_or(CommandError::NoSession)?;
                 let conn = slot.conn.as_mut().ok_or(CommandError::NoSession)?;
                 let n = conn.write(stream, data).map_err(CommandError::Stream)?;
-                if !slot.m.role.quiet() || (data.len() > CTRL_SMALL && conn.urgency(stream) != Some(FAN_URGENCY)) {
+                // A quiet session is armed only by the dialing side's own writes above a control message, and
+                // never on the fan stream.
+                if !slot.m.role.quiet()
+                    || (slot.m.client && data.len() > CTRL_SMALL && conn.urgency(stream) != Some(FAN_URGENCY))
+                {
                     slot.m.last_app = now;
                 }
                 self.settle(i, now);

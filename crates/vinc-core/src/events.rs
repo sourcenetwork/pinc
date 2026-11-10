@@ -26,8 +26,6 @@ use crate::trace::trace;
 
 /// The largest extension body kept for the endpoint to parse.
 const EXT_KEEP: usize = crate::ext_in::EXT_BODY_MAX;
-/// Application data above this many bytes counts as activity on a quiet session.
-const CTRL_SMALL: usize = 72;
 /// The round trip below which a client waits for READY before it reports the session (20 ms).
 const READY_RTT: u64 = 20_000_000;
 
@@ -118,7 +116,7 @@ ep_impl! {
             Co::Connected(resumed) => self.on_established(i, now, resumed),
             Co::Opened(stream) => self.app_event(i, now, Event::StreamOpened { session, stream }),
             Co::Readable(stream) => {
-                self.note_app_data(i, now, stream);
+                self.note_app_data(i, now);
                 self.app_event(i, now, Event::StreamReadable { session, stream });
             }
             Co::Writable(stream) => self.app_event(i, now, Event::StreamWritable { session, stream }),
@@ -165,12 +163,11 @@ ep_impl! {
         }
     }
 
-    /// Application data arrived on `stream`: it counts as activity unless the session is quiet and the data is only
-    /// a control message.
-    fn note_app_data(&mut self, i: usize, now: u64, stream: u64) {
+    /// Application data arrived: it counts as activity on a session that is not quiet. On a quiet session received
+    /// data never arms the active keepalive: only the dialing side's own writes do.
+    fn note_app_data(&mut self, i: usize, now: u64) {
         let Some(slot) = self.slots.get_mut(i) else { return };
-        let n = slot.conn.as_ref().and_then(|c| c.read_chunk(stream)).map_or(0, <[u8]>::len);
-        if !slot.m.role.quiet() || n > CTRL_SMALL {
+        if !slot.m.role.quiet() {
             slot.m.last_app = now;
         }
     }

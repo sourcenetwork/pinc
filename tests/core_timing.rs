@@ -96,6 +96,73 @@ fn a_quiet_dialer_holds_a_direct_path_every_fourteen_seconds_and_only_the_dialer
     });
 }
 
+/// A quiet hub session at 130 s idle: `writer` (0 the dialer, 1 the acceptor) sends one 1 KiB frame. Returns the sends
+/// of the dialer and of the acceptor after it, as seconds after the write.
+fn quiet_session_after_a_frame(writer: usize) -> (Vec<f64>, Vec<f64>) {
+    big_stack(move || {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, sb) = net.connect_pair(a, b, ALPN_A, Role::Hub);
+        net.nodes[b]
+            .cmd(
+                net.now,
+                Command::SetRole {
+                    session: sb,
+                    role: Role::Member,
+                },
+            )
+            .unwrap();
+        net.run_for(130 * S);
+        let at = net.now;
+        let (n, session) = if writer == 0 { (a, sa) } else { (b, sb) };
+        let Value::Stream(stream) = net.nodes[n]
+            .cmd(at, Command::OpenStream { session, bidi: true })
+            .unwrap()
+            .value
+        else {
+            panic!("no stream")
+        };
+        net.nodes[n]
+            .cmd(
+                at,
+                Command::Write {
+                    session,
+                    stream,
+                    data: &[7u8; 1024],
+                },
+            )
+            .unwrap();
+        net.run_for(170 * S);
+        (sends(&net, a, at, 0.5, 170.0), sends(&net, b, at, 0.5, 170.0))
+    })
+}
+
+#[test]
+fn data_from_the_acceptor_does_not_arm_the_keepalive_of_a_quiet_session() {
+    let (dialer, acceptor) = quiet_session_after_a_frame(1);
+    // The dialer keeps its 60 s schedule after data it only received.
+    assert!((2..=4).contains(&dialer.len()), "{dialer:?}");
+    assert!(
+        dialer.windows(2).all(|g| (g[1] - g[0] - 60.0).abs() < 1.0),
+        "{dialer:?}"
+    );
+    // The acceptor's own write does not make it ping: each of its sends answers a datagram of the dialer.
+    for t in acceptor {
+        assert!(
+            dialer.iter().any(|p| t >= *p && t - *p < 0.1) || t < 0.6,
+            "the accepting side sent on its own at {t}"
+        );
+    }
+}
+
+#[test]
+fn a_dialers_own_frame_arms_the_five_second_keepalive_of_a_quiet_session() {
+    let (dialer, _) = quiet_session_after_a_frame(0);
+    let early: Vec<f64> = dialer.iter().copied().filter(|t| *t < 20.0).collect();
+    assert!(early.len() >= 3, "{dialer:?}");
+    assert!(early.windows(2).all(|g| (g[1] - g[0] - 5.0).abs() < 0.5), "{dialer:?}");
+}
+
 #[test]
 fn a_plain_session_pings_every_five_seconds_then_stops_and_lapses() {
     big_stack(|| {
