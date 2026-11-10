@@ -37,6 +37,7 @@ def fwdBack : Nat := 30 * sec
 def sleepWin : Nat := 10 * sec
 def goneTtl : Nat := 600 * sec
 def sweepNs : Nat := 1 * sec
+def pingNs : Nat := 600 * sec
 def recTtl : Nat := 3 * (1800 * sec)
 def wakeRearm : Nat := 30 * sec
 def skewMs : Nat := 10000
@@ -122,6 +123,7 @@ structure RS where
   mb : ConnectMailbox.MB := ConnectMailbox.MB.empty
   ns : Nat := 0
   ls : Nat := 0
+  np : Nat := 0
 
 def RS.new (cf : CF) : RS :=
   { tb := ConnectTable.T.new cf.C, fb := List.replicate cf.C ⟨0, 0, 0⟩ }
@@ -373,10 +375,22 @@ def sweepC (cf : CF) (now : Nat) : Nat → Nat → RS → Ef → RS × Ef
                              gone := if acan r.gone k cf.C then aput r.gone k now else r.gone }
           sweepC cf now fuel i r1 (acc ++ [[.s "t", .s "expired", .n k], [.s "close", .n k, .n c.id, .s "session"]])
 
-def timeout (cf : CF) (r : RS) (now : Nat) : Out :=
-  if now - r.ls < sweepNs then okOut r []
+/-- The PING written on every client carrier, in slot order. -/
+def pingC (cf : CF) (r : RS) : Nat → Nat → Ef → Ef
+  | 0, _, acc => acc
+  | fuel + 1, i, acc =>
+    if i ≥ cf.C then acc
+    else
+      let k := (ConnectTable.getS r.tb.s i).k
+      pingC cf r fuel (i + 1) (if k == 0 then acc else acc ++ [[.s "car", .n k, .s "ping"]])
+
+def timeout (cf : CF) (r0 : RS) (now : Nat) : Out :=
+  let due := decide (r0.np ≤ now)
+  let pf := if due then pingC cf r0 (cf.C + 1) 0 [] else []
+  let r := if due then { r0 with np := now + pingNs } else r0
+  if now - r.ls < sweepNs then okOut r pf
   else
-    let (r1, ef) := sweepC cf now (2 * cf.C + 2) 0 r []
+    let (r1, ef) := sweepC cf now (2 * cf.C + 2) 0 r pf
     let gone2 := r1.gone.filter (fun p => now - p.2 < goneTtl)
     let sl2 := r1.sl.filter (fun p => now - p.2.at_ < goneTtl)
     let recs2 := r1.recs.filter (fun p => now - p.2.rcv < recTtl)

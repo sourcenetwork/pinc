@@ -59,6 +59,8 @@ pub mod rule {
     pub const GONE_TTL_NS: u64 = 600_000_000_000;
     /// A woken-up member that still has held messages is signalled again after this long.
     pub const WAKE_REARM_NS: u64 = 30_000_000_000;
+    /// The relay pings every client carrier this often.
+    pub const CLIENT_PING_NS: u64 = 600_000_000_000;
     /// The relay sweeps its tables at most this often.
     pub const SWEEP_NS: u64 = 1_000_000_000;
     /// The most authenticated peer relays.
@@ -416,6 +418,7 @@ pub struct Relay<const C: usize, const R: usize, const MN: usize, const MB: usiz
     pub(crate) next_session: u64,
     pub(crate) next_publish: u64,
     pub(crate) last_sweep: u64,
+    pub(crate) next_ping: u64,
     pub(crate) stats: Stats,
 }
 
@@ -435,6 +438,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             next_session: 0,
             next_publish: 0,
             last_sweep: 0,
+            next_ping: 0,
             stats: Stats::default(),
         }
     }

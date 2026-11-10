@@ -602,8 +602,19 @@ fn a_session_is_closed_at_the_time_limit() {
     let sa = fx.open(T0, a);
     fx.open(T0 + 50 * SEC, b);
     fx.fx();
+    // the first timer writes the 600 s PING to both carriers and closes nothing
     fx.r.handle_timeout(T0 + 99 * SEC, &mut fx.s);
-    assert!(fx.fx().is_empty());
+    let ping = enc(&Frame::Ping);
+    let mut to: Vec<_> = fx
+        .fx()
+        .into_iter()
+        .map(|r| match r {
+            Rec::Carrier(n, b) if b == ping => n,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    to.sort_by_key(|n| n.bytes);
+    assert_eq!(to, [a, b]);
     fx.r.handle_timeout(T0 + 100 * SEC, &mut fx.s);
     assert_eq!(fx.fx(), [Rec::Close(a, CloseReason::SessionTime)]);
     assert_eq!(

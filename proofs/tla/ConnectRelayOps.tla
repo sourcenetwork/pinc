@@ -34,6 +34,7 @@ FWDB == 30       \* FWD_BACK_NS
 SWIN == 10       \* SLEEP_WIN_NS
 GONET == 600     \* GONE_TTL_NS
 SWEEP == 1       \* SWEEP_NS
+PING == 600      \* CLIENT_PING_NS
 RECTTL == 5400   \* RECORD_TTL_NS = 3 * 1800 s
 REARM == 30      \* WAKE_REARM_NS
 SKEWMS == 10000  \* SKEW_MS
@@ -60,7 +61,7 @@ Resolve(a, al) == IF al < AM THEN a.sl[al] ELSE 0
 NewRelay(cf) == [bk |-> [x \in {} |-> 0], tb |-> NewTable(cf.C), cd |-> [x \in {} |-> 0], gone |-> [x \in {} |-> 0],
                  sl |-> [x \in {} |-> 0], udp |-> [x \in {} |-> 0],
                  fb |-> [i \in 0..(cf.C - 1) |-> [n |-> 0, rel |-> 0, at |-> 0]],
-                 peers |-> [i \in 1..MAXPEERS |-> 0], rec |-> [x \in {} |-> 0], mb |-> Empty, ns |-> 0, ls |-> 0]
+                 peers |-> [i \in 1..MAXPEERS |-> 0], rec |-> [x \in {} |-> 0], mb |-> Empty, ns |-> 0, ls |-> 0, np |-> 0]
 
 HasC(cf, R, n) == Find(cf.C, R.bk, R.tb, n) >= 0
 IsPeer(R, n) == \E i \in 1..MAXPEERS : R.peers[i] = n
@@ -286,9 +287,19 @@ SweepC(cf, R, now, i, acc, dummy) ==
                                        !.gone = IF CanPut(R.gone, k, cf.C) THEN Put(R.gone, k, now) ELSE R.gone]
                    IN SweepC(cf, R1, now, i, acc \o <<<<"t", "expired", k>>, <<"close", k, c.id, "session">>>>, 0)
 
-Timeout(cf, R, now) ==
-    IF Sat(now - R.ls) < SWEEP THEN [R |-> R, res |-> "ok", ef |-> <<>>]
-    ELSE LET sw == SweepC(cf, R, now, 0, <<>>, 0)
+(* clients.rs handle_timeout: every client carrier is written a PING, in slot order, every PING seconds *)
+RECURSIVE PingC(_, _, _, _)
+PingC(cf, R, i, acc) ==
+    IF i >= cf.C THEN acc
+    ELSE LET k == R.tb.s[i].k IN PingC(cf, R, i + 1, IF k = 0 THEN acc ELSE Append(acc, <<"car", k, "ping">>))
+
+Timeout(cf, R0, now) ==
+    LET due == now >= R0.np
+        pf == IF due THEN PingC(cf, R0, 0, <<>>) ELSE <<>>
+        R == IF due THEN [R0 EXCEPT !.np = now + PING] ELSE R0
+    IN
+    IF Sat(now - R.ls) < SWEEP THEN [R |-> R, res |-> "ok", ef |-> pf]
+    ELSE LET sw == SweepC(cf, R, now, 0, pf, 0)
              R1 == sw.R
              R2 == [R1 EXCEPT !.ls = now,
                     !.gone = [x \in {y \in DOMAIN R1.gone : Sat(now - R1.gone[y]) < GONET} |-> R1.gone[x]],

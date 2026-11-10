@@ -113,6 +113,7 @@ impl Sink for Rec<'_> {
                     format!(r#"["car",{},"ra",{alias},{flag},{}]"#, n(&to), packet.len())
                 }
                 Frame::Pong => format!(r#"["car",{},"pong"]"#, n(&to)),
+                Frame::Ping => format!(r#"["car",{},"ping"]"#, n(&to)),
                 Frame::SelfRecv { packet } => format!(r#"["car",{},"sr",{}]"#, n(&to), packet.len()),
                 other => panic!("unexpected carrier frame {other:?}"),
             },

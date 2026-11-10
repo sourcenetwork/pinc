@@ -316,6 +316,15 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     /// Sweep the tables and run the timers; call it when [`Relay::next_deadline`] is reached.
     pub fn handle_timeout<S: Sink>(&mut self, now: u64, sink: &mut S) {
         self.republish_due(now, sink);
+        if now >= self.next_ping {
+            self.next_ping = now.saturating_add(rule::CLIENT_PING_NS);
+            for (node, _) in self.clients.iter() {
+                sink.emit(Effect::Carrier {
+                    to: *node,
+                    frame: Frame::Ping,
+                });
+            }
+        }
         if now.saturating_sub(self.last_sweep) < rule::SWEEP_NS {
             return;
         }
@@ -344,7 +353,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
 
     /// The next time [`Relay::handle_timeout`] has work, or `None` if nothing is scheduled.
     pub fn next_deadline(&self) -> Option<u64> {
-        let sweep = self.last_sweep.saturating_add(rule::SWEEP_NS);
+        let sweep = self.last_sweep.saturating_add(rule::SWEEP_NS).min(self.next_ping);
         Some(if self.next_publish == 0 {
             sweep
         } else {

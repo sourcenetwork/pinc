@@ -645,3 +645,32 @@ fn a_held_packet_too_long_for_a_datagram_stays_held_until_the_carrier_reopens() 
     assert_eq!(fx.r.mailbox_pending(&m).0, 0);
     assert_eq!(fx.r.mailbox_stats().delivered, 1);
 }
+
+#[test]
+fn the_relay_pings_every_client_carrier_every_600_seconds() {
+    assert_eq!(rule::CLIENT_PING_NS, 600 * SEC);
+    let mut fx = Fx::new();
+    let (a, b) = (nid(0xa1), nid(0xa2));
+    fx.open(T0, a);
+    fx.open(T0, b);
+    fx.fx();
+    let ping = enc(&Frame::Ping);
+    let pings = |fx: &mut Fx, at: u64| {
+        fx.r.handle_timeout(at, &mut fx.s);
+        let mut to: Vec<vinc_crypto::NodeId> = fx
+            .fx()
+            .into_iter()
+            .filter_map(|r| match r {
+                Rec::Carrier(n, bytes) if bytes == ping => Some(n),
+                _ => None,
+            })
+            .collect();
+        to.sort_by_key(|n| n.bytes);
+        to
+    };
+    assert_eq!(pings(&mut fx, T0), [a, b], "the first timer pings every client");
+    assert!(pings(&mut fx, T0 + 599 * SEC).is_empty());
+    assert_eq!(pings(&mut fx, T0 + 600 * SEC), [a, b]);
+    assert!(pings(&mut fx, T0 + 601 * SEC).is_empty());
+    assert!(fx.r.next_deadline().is_some_and(|d| d <= T0 + 1200 * SEC));
+}
