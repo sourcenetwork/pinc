@@ -702,7 +702,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             return;
         };
         let carrier_open = self.rly.get(home).is_some_and(|r| r.link.is_open());
-        match self.lookups.ask(now, peer, self.udp_any, carrier_open) {
+        // A thin node (reference round trip of the node: its handshake figures or its best address-discovery round
+        // trip) repeats a query only after twice that.
+        let rtt = self.node_rtt.max(self.net.best_rtt());
+        let thin = (rtt >= super::dial::TG_SLOW).then_some(rtt);
+        match self.lookups.ask(now, peer, self.udp_any, carrier_open, thin) {
             Ask::Skip | Ask::Later => {}
             Ask::Carrier => {
                 self.frame_to(now, home, &Frame::DnsQuery { peer: *peer });

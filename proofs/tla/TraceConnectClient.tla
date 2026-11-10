@@ -79,7 +79,7 @@ Ev1 ==
                             /\ r.dropped = Ev.res /\ PendView([PE EXCEPT !.items = r.items]) /\ PE' = [PE EXCEPT !.items = r.items]
                             /\ Step /\ UNCHANGED <<P, T, LK, NC>>
       [] Ev.m = "lnew" -> /\ LK' = NewLookups(Ev.n) /\ Step /\ UNCHANGED <<P, T, PE, NC>>
-      [] Ev.m = "ask" -> LET r == LAsk(LK, Ev.now, Ev.peer, Ev.udp, Ev.car) IN
+      [] Ev.m = "ask" -> LET r == LAsk(LK, Ev.now, Ev.peer, Ev.udp, Ev.car, Ev.thin) IN
                          /\ r.res = Ev.res /\ LookView(r.T) /\ LK' = r.T /\ Step /\ UNCHANGED <<P, T, PE, NC>>
       [] Ev.m = "answered" /\ "relay" \notin DOMAIN Ev ->
            /\ LookView(LAnswered(LK, Ev.peer)) /\ LK' = LAnswered(LK, Ev.peer) /\ Step /\ UNCHANGED <<P, T, PE, NC>>

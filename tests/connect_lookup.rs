@@ -19,7 +19,7 @@ mod connect_common;
 use connect_common::{ed, id, nid};
 use vinc_connect::carrier::frame::DnsAnswer;
 use vinc_connect::client::dial::Pending;
-use vinc_connect::client::lookup::{Ask, CARRIER_WAIT_NS, LookupError, Lookups, RETRY_NS, verify};
+use vinc_connect::client::lookup::{Ask, CARRIER_WAIT_NS, LookupError, Lookups, RETRY_NS, THIN_WAIT_MAX_NS, verify};
 use vinc_connect::record::{self, Reach, RecordFields};
 
 const MS: u64 = 1_000_000;
@@ -28,10 +28,10 @@ const MS: u64 = 1_000_000;
 fn a_query_repeats_after_300ms_and_the_repeat_goes_to_every_relay() {
     let mut l = Lookups::<4>::new();
     let p = nid(7);
-    assert_eq!(l.ask(0, &p, true, false), Ask::Udp { others: false });
-    assert_eq!(l.ask(RETRY_NS - 1, &p, true, false), Ask::Skip);
-    assert_eq!(l.ask(RETRY_NS, &p, true, false), Ask::Udp { others: true });
-    assert_eq!(l.ask(RETRY_NS + 1, &p, true, false), Ask::Skip);
+    assert_eq!(l.ask(0, &p, true, false, None), Ask::Udp { others: false });
+    assert_eq!(l.ask(RETRY_NS - 1, &p, true, false, None), Ask::Skip);
+    assert_eq!(l.ask(RETRY_NS, &p, true, false, None), Ask::Udp { others: true });
+    assert_eq!(l.ask(RETRY_NS + 1, &p, true, false, None), Ask::Skip);
     // due is strictly after the wait
     assert_eq!(l.due(2 * RETRY_NS).count(), 0);
     assert_eq!(l.due(2 * RETRY_NS + 1).collect::<Vec<_>>(), vec![p]);
@@ -41,46 +41,76 @@ fn a_query_repeats_after_300ms_and_the_repeat_goes_to_every_relay() {
 }
 
 #[test]
+fn a_thin_node_repeats_a_query_after_twice_its_round_trip_at_most_eight_seconds() {
+    let mut l = Lookups::<4>::new();
+    let p = nid(7);
+    let rtt = 1_200 * MS;
+    assert_eq!(l.ask(0, &p, true, false, Some(rtt)), Ask::Udp { others: false });
+    assert_eq!(l.ask(RETRY_NS, &p, true, false, Some(rtt)), Ask::Skip);
+    assert_eq!(l.ask(2 * rtt - 1, &p, true, false, Some(rtt)), Ask::Skip);
+    // the table does not call the query due before then either
+    assert_eq!(l.due(2 * rtt).count(), 0);
+    assert_eq!(l.next_deadline(), Some(2 * rtt + 1));
+    assert_eq!(l.ask(2 * rtt, &p, true, false, Some(rtt)), Ask::Udp { others: true });
+    // the wait is capped
+    let q = nid(8);
+    let slow = 10_000 * MS;
+    assert_eq!(l.ask(0, &q, true, false, Some(slow)), Ask::Udp { others: false });
+    assert_eq!(l.ask(THIN_WAIT_MAX_NS - 1, &q, true, false, Some(slow)), Ask::Skip);
+    assert_eq!(
+        l.ask(THIN_WAIT_MAX_NS, &q, true, false, Some(slow)),
+        Ask::Udp { others: true }
+    );
+    // a round trip under 150 ms never shortens the 300 ms wait
+    let r = nid(9);
+    assert_eq!(l.ask(0, &r, true, false, Some(100 * MS)), Ask::Udp { others: false });
+    assert_eq!(
+        l.ask(RETRY_NS, &r, true, false, Some(100 * MS)),
+        Ask::Udp { others: true }
+    );
+}
+
+#[test]
 fn a_dark_node_asks_over_the_carrier_and_waits_two_seconds() {
     let mut l = Lookups::<4>::new();
     let p = nid(7);
-    assert_eq!(l.ask(0, &p, false, true), Ask::Carrier);
-    assert_eq!(l.ask(CARRIER_WAIT_NS - 1, &p, false, true), Ask::Skip);
+    assert_eq!(l.ask(0, &p, false, true, None), Ask::Carrier);
+    assert_eq!(l.ask(CARRIER_WAIT_NS - 1, &p, false, true, None), Ask::Skip);
     assert_eq!(
-        l.ask(CARRIER_WAIT_NS, &p, false, true),
+        l.ask(CARRIER_WAIT_NS, &p, false, true, None),
         Ask::Carrier,
         "repeated after at least 2 s"
     );
     // never to every relay, and with no carrier nothing is sent after the first try
     let q = nid(8);
     assert_eq!(
-        l.ask(0, &q, false, false),
+        l.ask(0, &q, false, false, None),
         Ask::Udp { others: false },
         "the first query goes out over UDP"
     );
-    assert_eq!(l.ask(CARRIER_WAIT_NS - RETRY_NS, &q, false, false), Ask::Later);
-    assert_eq!(l.ask(CARRIER_WAIT_NS - RETRY_NS + 1, &q, false, false), Ask::Skip);
+    assert_eq!(l.ask(CARRIER_WAIT_NS - RETRY_NS, &q, false, false, None), Ask::Later);
+    assert_eq!(l.ask(CARRIER_WAIT_NS - RETRY_NS + 1, &q, false, false, None), Ask::Skip);
 }
 
 #[test]
 fn a_too_large_answer_is_asked_again_over_the_carrier() {
     let mut l = Lookups::<4>::new();
     let p = nid(7);
-    assert_eq!(l.ask(0, &p, true, true), Ask::Udp { others: false });
+    assert_eq!(l.ask(0, &p, true, true, None), Ask::Udp { others: false });
     l.too_large(&p);
-    assert_eq!(l.ask(1, &p, true, true), Ask::Carrier);
+    assert_eq!(l.ask(1, &p, true, true, None), Ask::Carrier);
 }
 
 #[test]
 fn the_table_is_bounded_and_clear_forgets_everything() {
     let mut l = Lookups::<2>::new();
-    assert_eq!(l.ask(0, &nid(1), true, false), Ask::Udp { others: false });
-    assert_eq!(l.ask(0, &nid(2), true, false), Ask::Udp { others: false });
-    assert_eq!(l.ask(0, &nid(3), true, false), Ask::Skip);
+    assert_eq!(l.ask(0, &nid(1), true, false, None), Ask::Udp { others: false });
+    assert_eq!(l.ask(0, &nid(2), true, false, None), Ask::Udp { others: false });
+    assert_eq!(l.ask(0, &nid(3), true, false, None), Ask::Skip);
     assert_eq!(l.len(), 2);
     l.clear();
     assert!(l.is_empty());
-    assert_eq!(l.ask(0, &nid(3), true, false), Ask::Udp { others: false });
+    assert_eq!(l.ask(0, &nid(3), true, false, None), Ask::Udp { others: false });
 }
 
 #[test]

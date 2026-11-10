@@ -13,7 +13,7 @@ For every instant, every view and every state:
   `seen_age` (a splice just seen has age 0);
 * dial: the selection is a sublist of the candidates (`select_sublist`), at most `cap` and at most one on a thin try
   (`select_cap`, `select_thin`); `add_size` (the pending table keeps its size), `take_clears`;
-* lookup: `ask_size` (the table keeps its size), `ask_retry_wait`, `answered_removes`, `deadline_due`, and
+* lookup: `ask_size` (the table keeps its size), `answered_removes`, `deadline_due`, and
   `verify_found`: an answer is accepted only if the record parses, its signature verifies and it names the peer asked
   about;
 * netcheck: `classify_blocked`, `answered_home` (the home moves only to a relay with a strictly lower round trip or
@@ -144,7 +144,7 @@ theorem add_size (p : Pending) (peer s : Nat) : (p.add peer s).2.items.length = 
 
 /-! ## Lookups -/
 
-theorem ask_size (t : Lookups) (now peer : Nat) (u c : Bool) : (t.ask now peer u c).2.items.length = t.items.length := by
+theorem ask_size (t : Lookups) (now peer : Nat) (u c : Bool) (th : Nat) : (t.ask now peer u c th).2.items.length = t.items.length := by
   unfold Lookups.ask
   dsimp only
   repeat' split
@@ -172,7 +172,7 @@ theorem deadline_due (t : Lookups) (d now : Nat) (h : t.nextDeadline = some d) (
     unfold Lookups.due
     intro hnil
     have hmem : i.peer ∈ t.items.filterMap (fun e => match e with
-        | some i => if now > i.at_ + lookupRetry then some i.peer else none
+        | some i => if now > i.at_ + i.wait then some i.peer else none
         | none => none) := by
       rw [List.mem_filterMap]
       refine ⟨some i, he, ?_⟩

@@ -113,7 +113,7 @@ DoPending ==
     \/ \E k \in 0..1 : P' = [P EXCEPT !.items = PruneAll(P.items, 1, k, <<>>).items]
 
 DoLookups ==
-    \/ \E pe \in Peers, now \in Times, u \in BOOLEAN, c \in BOOLEAN : LK' = LAsk(LK, now, pe, u, c).T
+    \/ \E pe \in Peers, now \in Times, u \in BOOLEAN, c \in BOOLEAN, th \in {0, 500000} : LK' = LAsk(LK, now, pe, u, c, th).T
     \/ \E pe \in Peers : LK' = LAnswered(LK, pe)
     \/ \E pe \in Peers : LK' = LTooLarge(LK, pe)
     \/ LK' = LClear(LK)
@@ -141,10 +141,10 @@ LookupsOK ==
     /\ Len(LK.items) = 2
     /\ \A i, j \in 1..2 : (i # j /\ LK.items[i].e /\ LK.items[j].e) => LK.items[i].peer # LK.items[j].peer
     /\ \A pe \in Peers, now \in Times :
-         LET a == LAsk(LK, now, pe, TRUE, TRUE) IN
-         (\E i \in 1..2 : LK.items[i].e /\ LK.items[i].peer = pe /\ ~LK.items[i].again /\ now < LK.items[i].at + LRETRY) => a.res = "skip"
+         LET a == LAsk(LK, now, pe, TRUE, TRUE, 0) IN
+         (\E i \in 1..2 : LK.items[i].e /\ LK.items[i].peer = pe /\ ~LK.items[i].again /\ now < LK.items[i].at + LK.items[i].wait) => a.res = "skip"
     /\ \A now \in Times : \A pe \in {LDue(LK, now)[k] : k \in 1..Len(LDue(LK, now))} :
-         \E i \in 1..2 : LK.items[i].e /\ LK.items[i].peer = pe /\ now > LK.items[i].at + LRETRY
+         \E i \in 1..2 : LK.items[i].e /\ LK.items[i].peer = pe /\ now > LK.items[i].at + LK.items[i].wait
     /\ \A now \in Times : (LNext(LK) >= 0 /\ LNext(LK) <= now) => LDue(LK, now) # <<>>
 
 NetOK ==

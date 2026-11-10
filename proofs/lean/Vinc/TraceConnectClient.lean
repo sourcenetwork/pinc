@@ -166,7 +166,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     pendView j w p
   | "lnew" => pure { w with lk := Lookups.new (← natF j "n") }
   | "ask" =>
-    let (a, l) := w.lk.ask (← ns j "now") (← natF j "peer") (← boolF j "udp") (← boolF j "car")
+    let (a, l) := w.lk.ask (← ns j "now") (← natF j "peer") (← boolF j "udp") (← boolF j "car") (← ns j "thin")
     sameStr "ask" j (match a with | .skip => "skip" | .udp false => "udp" | .udp true => "udpall" | .carrier => "carrier" | .later => "later")
     lkView j w l
   | "answered" =>

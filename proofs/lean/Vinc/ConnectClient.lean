@@ -262,6 +262,7 @@ def Pending.prune (p : Pending) (inHs : Nat → Bool) : List Nat × Pending :=
 
 def lookupRetry : Nat := 300000000
 def carrierWait : Nat := 2 * sec
+def thinWaitMax : Nat := 8 * sec
 
 structure Item where
   peer : Nat
@@ -269,6 +270,7 @@ structure Item where
   tried : Bool
   carrierOnly : Bool
   again : Bool
+  wait : Nat
   deriving DecidableEq, Repr
 
 inductive Ask where
@@ -288,8 +290,8 @@ def Lookups.len (t : Lookups) : Nat := (t.items.filter Option.isSome).length
 def Lookups.contains (t : Lookups) (peer : Nat) : Bool :=
   t.items.any fun e => match e with | some i => i.peer == peer | none => false
 
-/-- `Lookups::ask`. -/
-def Lookups.ask (t : Lookups) (now peer : Nat) (udpAny carrierOpen : Bool) : Ask × Lookups :=
+/-- `Lookups::ask`; `thin` is the node's round trip when the node is thin and `0` otherwise. -/
+def Lookups.ask (t : Lookups) (now peer : Nat) (udpAny carrierOpen : Bool) (thin : Nat) : Ask × Lookups :=
   let slot := match t.items.findIdx? (fun e => match e with | some i => i.peer == peer | none => false) with
     | some i => some i
     | none => t.items.findIdx? fun e => Option.isNone e
@@ -297,11 +299,12 @@ def Lookups.ask (t : Lookups) (now peer : Nat) (udpAny carrierOpen : Bool) : Ask
   | none => (.skip, t)
   | some at_ =>
     let cur := t.items.getD at_ none
-    let item := cur.getD ⟨peer, 0, false, false, false⟩
-    if cur.isSome ∧ ¬ item.again ∧ now < item.at_ + lookupRetry then (.skip, t)
+    let item := cur.getD ⟨peer, 0, false, false, false, lookupRetry⟩
+    if cur.isSome ∧ ¬ item.again ∧ now < item.at_ + item.wait then (.skip, t)
     else
       let retry := item.tried
-      let item := { item with again := false, tried := true, at_ := now }
+      let item := { item with again := false, tried := true, at_ := now,
+                              wait := max lookupRetry (min thinWaitMax (2 * thin)) }
       let byCarrier := ¬ udpAny ∨ item.carrierOnly
       let (out, item) :=
         if byCarrier then
@@ -324,11 +327,11 @@ def Lookups.clear (t : Lookups) : Lookups := ⟨t.items.map fun _ => none⟩
 
 def Lookups.due (t : Lookups) (now : Nat) : List Nat :=
   t.items.filterMap fun e => match e with
-    | some i => if now > i.at_ + lookupRetry then some i.peer else none
+    | some i => if now > i.at_ + i.wait then some i.peer else none
     | none => none
 
 def Lookups.nextDeadline (t : Lookups) : Option Nat :=
-  (t.items.filterMap fun e => e.map fun i => i.at_ + lookupRetry + 1).min?
+  (t.items.filterMap fun e => e.map fun i => i.at_ + i.wait + 1).min?
 
 /-! ## Netcheck -/
 

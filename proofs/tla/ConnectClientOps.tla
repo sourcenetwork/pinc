@@ -157,16 +157,18 @@ PHas(P, k) == \E i \in 1..Len(P.items) : P.items[i].e /\ P.items[i].peer = k
 (* ---- lookup.rs ---- *)
 LRETRY == 300000
 CWAIT == 2 * SEC
-NewLookups(n) == [items |-> [i \in 1..n |-> [e |-> FALSE, peer |-> 0, at |-> 0, tried |-> FALSE, conly |-> FALSE, again |-> FALSE]]]
+THINMAX == 8 * SEC
+NewLookups(n) == [items |-> [i \in 1..n |-> [e |-> FALSE, peer |-> 0, at |-> 0, tried |-> FALSE, conly |-> FALSE, again |-> FALSE, wait |-> LRETRY]]]
 LSlot(items, peer) == SlotOf(items, peer)
-LAsk(T, now, peer, udp, car) ==
+LAsk(T, now, peer, udp, car, thin) ==
     LET i == LSlot(T.items, peer) IN
     IF i < 0 THEN [res |-> "skip", T |-> T]
     ELSE LET cur == T.items[i]
-             item == IF cur.e THEN cur ELSE [e |-> TRUE, peer |-> peer, at |-> 0, tried |-> FALSE, conly |-> FALSE, again |-> FALSE]
-         IN IF cur.e /\ ~item.again /\ now < item.at + LRETRY THEN [res |-> "skip", T |-> T]
+             item == IF cur.e THEN cur ELSE [e |-> TRUE, peer |-> peer, at |-> 0, tried |-> FALSE, conly |-> FALSE, again |-> FALSE, wait |-> LRETRY]
+         IN IF cur.e /\ ~item.again /\ now < item.at + item.wait THEN [res |-> "skip", T |-> T]
             ELSE LET retry == item.tried
-                     i1 == [item EXCEPT !.again = FALSE, !.tried = TRUE, !.at = now]
+                     thinWait == IF thin = 0 THEN 0 ELSE IF 2 * thin < THINMAX THEN 2 * thin ELSE THINMAX
+                     i1 == [item EXCEPT !.again = FALSE, !.tried = TRUE, !.at = now, !.wait = IF thinWait > LRETRY THEN thinWait ELSE LRETRY]
                      byCar == ~udp \/ i1.conly
                      r == IF byCar
                           THEN LET i2 == [i1 EXCEPT !.at = now + (CWAIT - LRETRY)] IN
@@ -181,9 +183,9 @@ LTooLarge(T, peer) == [items |-> [i \in 1..Len(T.items) |->
 LClear(T) == [items |-> [i \in 1..Len(T.items) |-> [T.items[i] EXCEPT !.e = FALSE]]]
 LLen(T) == Cardinality({i \in 1..Len(T.items) : T.items[i].e})
 LHas(T, k) == \E i \in 1..Len(T.items) : T.items[i].e /\ T.items[i].peer = k
-LDue(T, now) == LET RECURSIVE F(_, _) F(i, acc) == IF i > Len(T.items) THEN acc ELSE F(i + 1, IF T.items[i].e /\ now > T.items[i].at + LRETRY THEN Append(acc, T.items[i].peer) ELSE acc) IN F(1, <<>>)
+LDue(T, now) == LET RECURSIVE F(_, _) F(i, acc) == IF i > Len(T.items) THEN acc ELSE F(i + 1, IF T.items[i].e /\ now > T.items[i].at + T.items[i].wait THEN Append(acc, T.items[i].peer) ELSE acc) IN F(1, <<>>)
 LNext(T) == LET S == {i \in 1..Len(T.items) : T.items[i].e} IN
-            IF S = {} THEN -1 ELSE (CHOOSE m \in {T.items[i].at + LRETRY + 1 : i \in S} : \A x \in {T.items[i].at + LRETRY + 1 : i \in S} : m <= x)
+            IF S = {} THEN -1 ELSE (CHOOSE m \in {T.items[i].at + T.items[i].wait + 1 : i \in S} : \A x \in {T.items[i].at + T.items[i].wait + 1 : i \in S} : m <= x)
 
 (* ---- netcheck.rs ---- *)
 MISSLIMIT == 3

@@ -6,6 +6,9 @@
 //! repeated to every relay and a new one waits at least [`CARRIER_WAIT_NS`]; with no carrier open nothing is sent
 //! and the query is asked again once one opens. An answer too large for a datagram is asked again over the carrier.
 //!
+//! A thin node (round trip of 250 ms or more) repeats a query only after twice its round trip, at most
+//! [`THIN_WAIT_MAX_NS`], so the repeat does not leave before the answer could have arrived.
+//!
 //! The asker never trusts the relay: [`verify`] parses the returned record and checks its signature, and the record
 //! must belong to the peer asked about.
 //!
@@ -22,6 +25,8 @@ use crate::record::{MAX_ADDRS, Reach, Record, RecordError};
 
 /// The wait before a lookup is repeated over UDP.
 pub const RETRY_NS: u64 = 300_000_000;
+/// The longest wait before a thin node repeats a lookup.
+pub const THIN_WAIT_MAX_NS: u64 = 8_000_000_000;
 /// The least wait before a lookup is repeated over a carrier.
 pub const CARRIER_WAIT_NS: u64 = 2_000_000_000;
 
@@ -49,6 +54,8 @@ struct Item {
     tried: bool,
     carrier_only: bool,
     again: bool,
+    /// The wait after `at` before the query is repeated.
+    wait: u64,
 }
 
 /// The outstanding queries, at most `N`.
@@ -85,8 +92,10 @@ impl<const N: usize> Lookups<N> {
     }
 
     /// Ask for `peer` at `now`. `udp_any` says a UDP datagram was ever heard; `carrier_open` that the home carrier is
-    /// open. Returns how to send, or [`Ask::Skip`] when the previous query is still inside its wait.
-    pub fn ask(&mut self, now: u64, peer: &NodeId, udp_any: bool, carrier_open: bool) -> Ask {
+    /// open. `thin` is the node's round trip when the node is thin, else `None`: a repeat then waits for twice that
+    /// (at most [`THIN_WAIT_MAX_NS`]) if longer than [`RETRY_NS`]. Returns how to send, or [`Ask::Skip`] when the
+    /// previous query is still inside its wait.
+    pub fn ask(&mut self, now: u64, peer: &NodeId, udp_any: bool, carrier_open: bool, thin: Option<u64>) -> Ask {
         let at = match self.items.iter().position(|i| i.is_some_and(|i| i.peer == *peer)) {
             Some(p) => p,
             None => match self.items.iter().position(Option::is_none) {
@@ -103,11 +112,13 @@ impl<const N: usize> Lookups<N> {
             tried: false,
             carrier_only: false,
             again: false,
+            wait: RETRY_NS,
         });
-        if slot.is_some() && !item.again && now < item.at.saturating_add(RETRY_NS) {
+        if slot.is_some() && !item.again && now < item.at.saturating_add(item.wait) {
             return Ask::Skip;
         }
         item.again = false;
+        item.wait = RETRY_NS.max(thin.map_or(0, |r| THIN_WAIT_MAX_NS.min(r.saturating_mul(2))));
         let retry = item.tried;
         item.tried = true;
         item.at = now;
@@ -160,7 +171,7 @@ impl<const N: usize> Lookups<N> {
         self.items
             .iter()
             .flatten()
-            .filter(move |i| now > i.at.saturating_add(RETRY_NS))
+            .filter(move |i| now > i.at.saturating_add(i.wait))
             .map(|i| i.peer)
     }
 
@@ -169,7 +180,7 @@ impl<const N: usize> Lookups<N> {
         self.items
             .iter()
             .flatten()
-            .map(|i| i.at.saturating_add(RETRY_NS).saturating_add(1))
+            .map(|i| i.at.saturating_add(i.wait).saturating_add(1))
             .min()
     }
 }

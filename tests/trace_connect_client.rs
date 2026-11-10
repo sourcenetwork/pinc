@@ -396,7 +396,13 @@ fn lookup_events(out: &mut Vec<String>) {
                 0..=6 => {
                     let udp = rng.next_u64().is_multiple_of(2);
                     let car = rng.next_u64().is_multiple_of(2);
-                    let a = l.ask(now, &nid(peer), udp, car);
+                    // A thin node (a round trip of 250 ms or more, in whole microseconds) now and then.
+                    let th = if rng.next_u64().is_multiple_of(3) {
+                        250_000 + rng.next_u64() % 4_750_000
+                    } else {
+                        0
+                    };
+                    let a = l.ask(now, &nid(peer), udp, car, (th != 0).then_some(th * 1000));
                     let res = match a {
                         Ask::Skip => "skip",
                         Ask::Udp { others: false } => "udp",
@@ -405,7 +411,7 @@ fn lookup_events(out: &mut Vec<String>) {
                         Ask::Later => "later",
                     };
                     format!(
-                        r#"{{"t":"cl","m":"ask","now":{},"peer":{peer},"udp":{udp},"car":{car},"res":"{res}""#,
+                        r#"{{"t":"cl","m":"ask","now":{},"peer":{peer},"udp":{udp},"car":{car},"thin":{th},"res":"{res}""#,
                         us(now)
                     )
                 }
