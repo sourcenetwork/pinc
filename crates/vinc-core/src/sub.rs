@@ -87,7 +87,7 @@ ep_impl! {
             cs,
             identity: self.identity,
             path,
-            path_info: PathInfo::default(),
+            path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() },
         };
         let mut env = env!(self, now);
         let conn = match Connection::sub_session(cfg, open, mem, &mut env) {
@@ -194,7 +194,7 @@ ep_impl! {
             .ok_or(CommandError::NoRoute)?;
         let (child, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
         let cfg = self.conn_config(Some(&peer));
-        let open = SubWait { alpn, cc, cs, identity: self.identity, path, path_info: PathInfo::default() };
+        let open = SubWait { alpn, cc, cs, identity: self.identity, path, path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() } };
         let mut env = env!(self, now);
         let conn = match Connection::sub_pending(cfg, open, mem, &mut env) {
             Ok(c) => c,
@@ -298,7 +298,7 @@ ep_impl! {
             cs,
             identity: self.identity,
             path,
-            path_info: PathInfo::default(),
+            path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() },
         };
         let mut env = env!(self, now);
         let Ok(conn) = Connection::sub_session(cfg, open, mem, &mut env) else {

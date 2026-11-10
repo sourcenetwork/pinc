@@ -87,6 +87,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub admit: A,
     /// The most same-size datagrams one transmit batches (1 turns batching off).
     pub max_gso: usize,
+    /// The largest datagram the host's socket can send.
+    pub mtu: u16,
     /// The local addresses datagrams are sent from and received on.
     pub locals: Vec<SocketAddr>,
 }

@@ -79,6 +79,9 @@ pub struct Config {
     /// Acknowledge every this-many ack-eliciting packets instead of every 2nd (3rd for bulk): 4 for a member's
     /// session with a hub. `None` keeps the default policy.
     pub ack_every: Option<u32>,
+    /// The largest datagram the host's socket sends (the interface MTU); it bounds the datagram size probes on
+    /// paths the connection learns of by receiving on them. 1500 unless the host says otherwise.
+    pub interface_mtu: u16,
     /// What this endpoint tells the peer about its limits (see [`CreditRecord`]); the window and the stream limit
     /// are clamped to what the stream table can hold. The idle timeout is not part of it: it is the fixed [`IDLE_TIMEOUT`].
     pub credit: CreditRecord,
@@ -100,6 +103,7 @@ impl Config {
             flight_split: false,
             gate_slack: None,
             ack_every: None,
+            interface_mtu: 1500,
             credit: credit_for_streams(&stream::Config::new(false)),
         }
     }

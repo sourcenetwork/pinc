@@ -52,6 +52,7 @@ where
     cfg.identity.random(&mut seed)?;
     let mut ecfg = vinc_core::EndpointConfig::new(u64::from_le_bytes(seed));
     ecfg.conn.max_gso = cfg.max_gso.max(1);
+    ecfg.conn.interface_mtu = cfg.mtu;
     ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
     let (drbg, identity) = (Drbg::new(&rnd), cfg.identity.local()?);
     let mut ep = Box::new(Ep::<K, D>::new(now, Software, drbg, identity, ecfg, slots));
@@ -87,6 +88,7 @@ mod tests {
             },
             admit: AllowAll,
             max_gso: 1,
+            mtu: 1500,
             locals: vec!["127.0.0.1:1".parse().unwrap()],
         }
     }

@@ -408,6 +408,15 @@ conn_impl! {
     }
 
     /// Track a new path, evicting an unvalidated standby path if the table is full.
+    /// What is assumed of a path the connection learns of by receiving on it: direct, and as wide as the host's
+    /// interface.
+    pub(super) fn learned_path(&self) -> PathInfo {
+        PathInfo {
+            interface_mtu: self.cfg.interface_mtu,
+            ..PathInfo::default()
+        }
+    }
+
     pub(super) fn new_path_slot(&mut self, id: PathId, info: PathInfo, now: u64) -> Option<usize> {
         let active = self.paths.active;
         let free = self

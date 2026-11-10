@@ -65,6 +65,7 @@ impl Vinc {
             limits: Limits::default(),
             admission: AllowAll,
             batch: 8,
+            mtu: 1500,
             local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
         }
     }
@@ -80,6 +81,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll> {
     limits: Limits,
     admission: A,
     batch: usize,
+    mtu: u16,
     local: SocketAddr,
 }
 
@@ -120,6 +122,7 @@ impl<S, D, A> Builder<S, D, A> {
             limits: self.limits,
             admission: self.admission,
             batch: self.batch,
+            mtu: self.mtu,
             local: self.local,
         }
     }
@@ -159,6 +162,7 @@ impl<S, D, A> Builder<S, D, A> {
             limits: self.limits,
             admission: self.admission,
             batch: self.batch,
+            mtu: self.mtu,
             local: self.local,
         }
     }
@@ -181,8 +185,18 @@ impl<S, D, A> Builder<S, D, A> {
             limits: self.limits,
             admission: hook,
             batch: self.batch,
+            mtu: self.mtu,
             local: self.local,
         }
+    }
+
+    /// The largest datagram the host's socket can send: the MTU of its interface (1500 when not set). On a path with a
+    /// round trip under 2 ms the endpoint probes datagrams of up to 8952 bytes when this allows it, so say 9000 on a
+    /// jumbo-frame network and 65535 on loopback, and give the receive closure a buffer that large.
+    #[must_use]
+    pub const fn mtu(mut self, mtu: u16) -> Self {
+        self.mtu = mtu;
+        self
     }
 
     /// The most same-size datagrams the endpoint batches into one transmit before the facade splits them: 1 turns it off.
@@ -273,6 +287,7 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
             limits,
             admission,
             batch: _,
+            mtu,
             local,
         } = self;
         let identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
@@ -284,6 +299,7 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
             limits,
             admit: admission,
             max_gso: gso,
+            mtu,
             locals: interfaces(local),
         };
         let core = build(cfg, T0)?;

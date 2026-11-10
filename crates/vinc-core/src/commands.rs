@@ -39,7 +39,7 @@ pub const FAN_URGENCY: u8 = 2;
 const CTRL_SMALL: usize = 72;
 
 /// What the endpoint knows about the path to `remote`: through a relay, and the address family.
-pub(crate) fn path_info(remote: &SocketAddr) -> PathInfo {
+pub(crate) fn path_info(remote: &SocketAddr, interface_mtu: u16) -> PathInfo {
     PathInfo {
         kind: if is_relay_addr(remote) {
             PathKind::Relay
@@ -47,7 +47,7 @@ pub(crate) fn path_info(remote: &SocketAddr) -> PathInfo {
             PathKind::Direct
         },
         v6: remote.is_ipv6(),
-        ..PathInfo::default()
+        interface_mtu,
     }
 }
 
@@ -215,7 +215,7 @@ ep_impl! {
                 let i = self.live(session)?;
                 let mut ids: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
                 for (d, a) in ids.iter_mut().zip(addrs) {
-                    *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a)));
+                    *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
                 }
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
@@ -279,7 +279,7 @@ ep_impl! {
                 let pid = self.path_id(local, addr);
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
-                conn.punch(&mut env, pid, path_info(&addr)).map_err(|_| CommandError::Full)?;
+                conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu)).map_err(|_| CommandError::Full)?;
                 self.settle(i, now);
                 Ok(Value::None)
             }
@@ -369,7 +369,7 @@ ep_impl! {
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
         let mut extra: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
         for (d, a) in extra.iter_mut().zip(addrs.iter().filter(|a| **a != first)) {
-            *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a)));
+            *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
         }
         let cfg = self.conn_config(Some(&node));
         let params = ClientParams {
@@ -380,7 +380,7 @@ ep_impl! {
             peer_has_prekey,
             ticket,
             path: pid,
-            path_info: path_info(&first),
+            path_info: path_info(&first, self.cfg.conn.interface_mtu),
         };
         let mut env = env!(self, now);
         let mut conn = match Connection::client(cfg, params, mem, &mut env) {

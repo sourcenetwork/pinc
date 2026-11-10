@@ -14,7 +14,7 @@ use vinc_crypto::Provider;
 use vinc_security::{Env, ResponderStores};
 use vinc_wire::varint;
 
-use super::config::{MIN_MTU, PathId, PathInfo};
+use super::config::{MIN_MTU, PathId};
 use super::ctl::{Outcome, apply};
 use super::event::{Drop, Ev, code};
 use super::path::RJ_THIN_GAP;
@@ -172,7 +172,7 @@ conn_impl! {
         let dlen = dgram.len();
         let mut known = self.paths.find(path);
         if known.is_none() && !self.client && self.paths.iter().next().is_none() {
-            known = self.new_path_slot(path, PathInfo::default(), now);
+            known = self.new_path_slot(path, self.learned_path(), now);
         }
         if let Some(p) = known.and_then(|i| self.paths.get_mut(i)) {
             p.amp.on_receive(dlen as u64);
@@ -395,7 +395,7 @@ conn_impl! {
         let pi = if let Some(i) = ctx.path {
             i
         } else {
-            let i = self.new_path_slot(ctx.path_id, PathInfo::default(), now).ok_or(Drop::NoPath)?;
+            let i = self.new_path_slot(ctx.path_id, self.learned_path(), now).ok_or(Drop::NoPath)?;
             ctx.path = Some(i);
             if let Some(p) = self.paths.get_mut(i) {
                 p.amp.on_receive(ctx.dlen as u64);

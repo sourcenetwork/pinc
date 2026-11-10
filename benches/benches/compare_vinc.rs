@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 
 use compare::{Counting, Lib, Rx, Tx};
 use nuclei::Handle;
+use nuclei::net::UdpSocketBuilder;
 use vinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, RecvStream, SendStream, Vinc};
 use vinc_keystore::SoftwareStore;
 
@@ -45,6 +46,8 @@ use vinc_keystore::SoftwareStore;
 static ALLOC: Counting = Counting;
 
 const ALPN: &[u8] = b"bench/1";
+/// What the socket's send and receive buffers are asked to hold.
+const SOCKET_BUFFER: u32 = 8 << 20;
 
 fn io_err(e: vinc::Error) -> io::Error {
     io::Error::other(e.to_string())
@@ -57,14 +60,25 @@ struct Net {
 
 impl Io for Net {
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
-        let (n, from) = self.sock.recv_from(buf).await?;
+        // A datagram that is already there costs one system call; only an empty socket is waited on.
+        let (n, from) = match self.sock.try_recv_from(buf) {
+            Ok(got) => got,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.recv_from(buf).await?,
+            Err(e) => return Err(e),
+        };
         Ok((n, from, n))
     }
 
     async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> io::Result<usize> {
         let mut sent = 0;
         for d in buf.chunks(segment.max(1)) {
-            self.sock.send_to(d, to).await?;
+            match self.sock.try_send_to(d, to) {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    self.sock.send_to(d, to).await?;
+                }
+                Err(e) => return Err(e),
+            }
             sent += 1;
         }
         Ok(sent)
@@ -80,11 +94,18 @@ type Ep = Endpoint<H>;
 type Conn = Connection<H>;
 
 async fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
-    let sock = Rc::new(Handle::<UdpSocket>::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?);
+    // Socket buffers as a busy host sizes them (the system clamps them to its limit): the default of about 200 KiB
+    // drops the first flights of a few hundred peers dialing at once.
+    let builder = UdpSocketBuilder::new_v4()?;
+    builder.set_recv_buffer_size(SOCKET_BUFFER)?;
+    builder.set_send_buffer_size(SOCKET_BUFFER)?;
+    let sock = Rc::new(builder.bind(SocketAddr::from(([127, 0, 0, 1], 0)))?);
     let ep = Vinc::builder()
         .alpn(ALPN.to_vec())
         .limits(limits)
         .local_addr(sock.local_addr()?)
+        // The loopback device carries datagrams of any size, so the endpoint may probe its largest.
+        .mtu(u16::MAX)
         .batch(1)
         .build_io(Net { sock })
         .map_err(io_err)?;

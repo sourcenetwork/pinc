@@ -117,7 +117,7 @@ ep_impl! {
             let pid = self.path_id(new, remote);
             if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 let mut env = env!(self, now);
-                let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote));
+                let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
                 // The old local address is gone: the session leaves its path as soon as the new one validates.
                 let _ = conn.path_lost(active);
                 // The link went away and came back on the new address: the peer is woken on the new path.
