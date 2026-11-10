@@ -19,14 +19,11 @@ const CLOSE_DENIED: u64 = 3;
 impl Core {
     /// Handle every event the node and the last commands produced. Returns whether there was any.
     pub(super) fn service<L: Layers>(&mut self, layers: &mut L) -> bool {
-        let mut any = false;
+        let mut any = self.hub_members();
         while let Some(ev) = self.node.as_mut().and_then(|n| n.poll_event()) {
             any = true;
             match ev {
-                NEv::Endpoint(e) => {
-                    self.hub_event(&e);
-                    self.on_event(layers, e);
-                }
+                NEv::Endpoint(e) => self.on_event(layers, e),
                 NEv::Member(m) => self.on_member(layers, &m),
                 NEv::Message { origin, body, .. } => {
                     if self.deliver() {
@@ -64,6 +61,7 @@ impl Core {
                 | NEv::DtnDelivered { .. }
                 | NEv::DtnExpired { .. } => {}
             }
+            self.hub_members();
         }
         any
     }

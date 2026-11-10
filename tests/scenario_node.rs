@@ -119,6 +119,9 @@ impl Layers for TestLayer {
     }
     fn event(&mut self, _now: u64, host: &mut dyn Host, ev: LayerEvent<'_>) {
         match ev {
+            // The node's own hub sessions come through here too; only the test protocol is this layer's.
+            LayerEvent::Incoming { alpn, .. } | LayerEvent::Connected { alpn, .. } | LayerEvent::ConnectFailed { alpn, .. }
+                if alpn != ALPN => {}
             LayerEvent::Incoming { .. } => self.stats.borrow_mut().incoming += 1,
             LayerEvent::Connected { session, peer, .. } => {
                 self.stats.borrow_mut().connected += 1;
@@ -250,6 +253,8 @@ fn make_world(
     "cloud".clone_into(&mut w.nodes[0].kind);
     w.nodes[0].ifaces = vec![iface("udp4", 1_000_000, true)];
     w.clouds = vec![0];
+    // Node 0 is the one hub: the others find each other through it, since a dial names a node and nothing else.
+    w.bootstrap = vec![0];
     for i in 1..n {
         w.nodes[i].ifaces = vec![iface("udp4", 3_000_000 + i as u64 * 256, false)];
         w.homes.push(i);

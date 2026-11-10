@@ -15,10 +15,10 @@ use std::net::SocketAddr;
 use vinc_connect::carrier::MAX_FRAME_LEN;
 use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole};
-use vinc_connect::relay::datagram::Datagram;
 use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
-use vinc_core::{Answer, Command, Event, Query, SessionId, is_relay_addr, relay_addr};
+use vinc_core::relay_addr;
 use vinc_crypto::NodeId;
+use vinc_node::{MemberNotice, is_relay_request};
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, ResponderStores, SoftKeys};
 
 use super::core::Core;
@@ -117,7 +117,6 @@ pub(super) struct HubSide {
     pub(super) peers_out: Vec<super::peers::PeerOut>,
     stores: ResponderStores<4, 4>,
     slots: Vec<NodeId>,
-    members: BTreeMap<SessionId, NodeId>,
     pub(super) scid: u64,
 }
 
@@ -131,7 +130,6 @@ impl HubSide {
             peers_out: Vec::new(),
             stores: ResponderStores::default(),
             slots: Vec::new(),
-            members: BTreeMap::new(),
             scid: 0,
         }
     }
@@ -173,40 +171,16 @@ impl Core {
         u16::try_from(i).unwrap_or(u16::MAX)
     }
 
-    /// The remote address of a member's validated session, if it is not a relay path.
-    fn session_remote(&self, sid: SessionId) -> Option<SocketAddr> {
-        let ep = self.node.as_ref()?.endpoint();
-        match ep.query(Query::Stats(sid)) {
-            Answer::Stats(st) if st.path_validated => st.route.map(|(_, r)| r).filter(|r| !is_relay_addr(r)),
-            _ => None,
-        }
-    }
-
     fn member_addr(&self, node: &NodeId) -> Option<SocketAddr> {
-        let hub = self.hub.as_ref()?;
-        let (sid, _) = hub.members.iter().find(|(_, n)| *n == node)?;
-        self.session_remote(*sid)
-    }
-
-    fn member_at(&self, src: &SocketAddr) -> Option<NodeId> {
-        let hub = self.hub.as_ref()?;
-        hub.members
-            .iter()
-            .find(|(sid, _)| self.session_remote(**sid) == Some(*src))
-            .map(|(_, n)| *n)
+        self.node.as_ref()?.member_addr(node)
     }
 
     /// A datagram reached this hub: a relay request, or traffic for the node.
     pub(super) fn hub_datagram(&mut self, local: SocketAddr, remote: SocketAddr, data: &mut [u8]) {
         let now = self.local;
-        let request = self.hub.is_some()
-            && data.first().is_some_and(|b| *b < 0x40)
-            && !matches!(
-                Datagram::decode(data),
-                Ok(Datagram::Qadr { .. } | Datagram::DnsReply { .. } | Datagram::Spl { .. })
-            );
+        let request = self.hub.is_some() && is_relay_request(data);
         if request {
-            let member = self.member_at(&remote);
+            let member = self.node.as_ref().and_then(|n| n.member_at(&remote));
             let mut s = Collect::default();
             if let Some(h) = self.hub.as_mut() {
                 // A refused request is dropped and traced by the relay itself.
@@ -216,7 +190,7 @@ impl Core {
             return;
         }
         if data.first().is_some_and(|b| *b >= 0x40)
-            && let Some(n) = self.member_at(&remote)
+            && let Some(n) = self.node.as_ref().and_then(|n| n.member_at(&remote))
             && let Some(h) = self.hub.as_mut()
         {
             let _ = h.relay.udp_heard(&n, now);
@@ -239,28 +213,23 @@ impl Core {
         self.apply(s);
     }
 
-    /// The hub's view of an endpoint event about a session with a member.
-    pub(super) fn hub_event(&mut self, ev: &Event) {
+    /// What the node told the hub's relay about its members since the last call. True if there was any.
+    pub(super) fn hub_members(&mut self) -> bool {
         let now = self.local;
-        let Some(h) = self.hub.as_mut() else { return };
-        match *ev {
-            Event::Incoming { session, node, .. } => {
-                h.members.insert(session, node);
-            }
-            Event::Closed { session, .. } => {
-                if let Some(n) = h.members.remove(&session) {
-                    h.relay.udp_gone(&n);
-                }
-            }
-            Event::PeerAwake { session } => {
-                if let Some(n) = h.members.get(&session).copied() {
+        let mut any = false;
+        while let Some(notice) = self.node.as_mut().and_then(|n| n.poll_member()) {
+            any = true;
+            let Some(h) = self.hub.as_mut() else { continue };
+            match notice {
+                MemberNotice::Gone(n) => h.relay.udp_gone(&n),
+                MemberNotice::Awake(n) => {
                     let mut s = Collect::default();
                     h.relay.member_returned(now, &n, &mut s);
                     self.apply(s);
                 }
             }
-            _ => {}
         }
+        any
     }
 
     /// The relay's timers.
@@ -309,30 +278,15 @@ impl Core {
                         self.wire.ops.push_back((StreamOp::Close { stream: sid }, Vec::new()));
                     }
                 }
-                Eff::Trace(t) => self.relay_trace(t),
+                Eff::Trace(t) => self.relay_trace(&t),
             }
         }
     }
 
-    fn relay_trace(&mut self, t: Trace) {
+    fn relay_trace(&mut self, t: &Trace) {
         let now = self.local;
-        let Some(node) = self.node.as_mut() else { return };
-        match t {
-            Trace::CarrierOpened { node: m, .. } => node.member_carrier_opened(now, &m.bytes),
-            Trace::CarrierClosed { node: m, asleep } => {
-                node.member_carrier_closed(now, &m.bytes, asleep.then_some(now));
-            }
-            Trace::Pulse { node: m } => {
-                let sid = self
-                    .hub
-                    .as_ref()
-                    .and_then(|h| h.members.iter().find(|(_, n)| **n == m).map(|(s, _)| *s));
-                if let Some(session) = sid {
-                    // A pulse for a session that just closed is refused; there is nothing to repair.
-                    let _ = node.command(now, Command::Pulse { session, sent: true });
-                }
-            }
-            _ => {}
+        if let Some(node) = self.node.as_mut() {
+            node.relay_trace(now, t);
         }
     }
 
