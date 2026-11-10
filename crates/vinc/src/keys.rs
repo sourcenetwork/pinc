@@ -21,6 +21,8 @@ use crate::error::{Error, ErrorKind, Result};
 const IDENTITY: WireHandle = WireHandle(0);
 /// How long a prekey serves new dials: 10 minutes.
 pub(crate) const PREKEY_LIFE: u64 = 600_000_000_000;
+/// How many handshakes one prekey serves before it is replaced.
+pub(crate) const PREKEY_USES: u32 = 64;
 
 /// The node's identity: a key in a store, and the public facts about it.
 pub struct Identity<S = SoftwareStore> {
@@ -119,7 +121,9 @@ pub(crate) struct Prekeys {
     store: SoftwareStore,
     held: Vec<(u64, KeyHandle)>,
     next: u64,
-    pub(crate) rotate_at: u64,
+    rotate_at: u64,
+    /// Handshakes the newest prekey has served.
+    used: u32,
 }
 
 impl Prekeys {
@@ -129,6 +133,7 @@ impl Prekeys {
             held: Vec::new(),
             next: 1,
             rotate_at: 0,
+            used: 0,
         })
     }
 
@@ -143,10 +148,19 @@ impl Prekeys {
             self.store.remove(&old);
         }
         self.rotate_at = now.saturating_add(PREKEY_LIFE);
+        self.used = 0;
         Ok(PrekeyInfo::new(ek, WireHandle(gen_id)))
     }
 
+    /// Whether the newest prekey is past its lifetime or has served [`PREKEY_USES`] handshakes.
+    pub(crate) const fn due(&self, now: u64) -> bool {
+        now >= self.rotate_at || self.used >= PREKEY_USES
+    }
+
     pub(crate) fn decapsulate(&mut self, key: WireHandle, ct: &[u8]) -> Option<vinc_crypto::Secret<32>> {
+        if key.0 == self.next.saturating_sub(1) {
+            self.used = self.used.saturating_add(1);
+        }
         let (_, h) = self.held.iter().find(|(g, _)| *g == key.0)?;
         self.store.decapsulate(h, ct).ok()
     }
@@ -155,4 +169,31 @@ impl Prekeys {
 /// Whether a wire handle names the identity key.
 pub(crate) const fn is_identity(key: WireHandle) -> bool {
     key.0 == IDENTITY.0
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_prekey_is_replaced_after_64_handshakes_or_its_lifetime() {
+        let mut p = Prekeys::new().unwrap();
+        assert!(p.due(0), "no prekey yet");
+        p.rotate(1).unwrap();
+        assert!(!p.due(2));
+        let newest = WireHandle(1);
+        for _ in 0..PREKEY_USES - 1 {
+            let _ = p.decapsulate(newest, &[]);
+        }
+        assert!(!p.due(2), "63 handshakes");
+        let _ = p.decapsulate(newest, &[]);
+        assert!(p.due(2), "the 64th");
+        p.rotate(3).unwrap();
+        assert!(!p.due(4), "a new prekey starts at zero");
+        // A handshake that began under the previous prekey does not count against the new one.
+        let _ = p.decapsulate(newest, &[]);
+        assert!(!p.due(4));
+        assert!(p.due(3 + PREKEY_LIFE), "its lifetime");
+    }
 }

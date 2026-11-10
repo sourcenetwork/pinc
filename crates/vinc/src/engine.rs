@@ -257,7 +257,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     /// Handle everything waiting: due timers, events and the answers they need, until none is left or the budget runs
     /// out. Returns how many items it handled; the caller goes on until it returns 0.
     pub(crate) fn service(&mut self, now: u64) -> usize {
-        if now >= self.prekeys.rotate_at
+        if self.prekeys.due(now)
             && let Ok(p) = self.prekeys.rotate(now)
         {
             self.ep.set_prekey(p);
