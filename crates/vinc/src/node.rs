@@ -18,7 +18,7 @@ use vinc_core::{
 use vinc_security::PrekeyInfo;
 use vinc_transport::stream::NoSource;
 
-use std::sync::Mutex;
+use std::cell::RefCell;
 
 use crate::mem::{Ep, EpSlot};
 
@@ -82,7 +82,8 @@ macro_rules! define {
                     Self::Gone => None,
                 };
                 if let Some(t) = t {
-                    POOL.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(t);
+                    // A thread that is ending has no pool any more; its table is then dropped with the endpoint's other memory.
+                    let _ = POOL.try_with(|pool| pool.borrow_mut().push(t));
                 }
             }
 
@@ -127,8 +128,10 @@ macro_rules! define {
 }
 ladder!(define);
 
-/// The slot tables of ended endpoints, for the next endpoint of the same shape.
-static POOL: Mutex<Vec<Idle>> = Mutex::new(Vec::new());
+// The slot tables of ended endpoints of this thread, for the next endpoint of the same shape.
+thread_local! {
+    static POOL: RefCell<Vec<Idle>> = const { RefCell::new(Vec::new()) };
+}
 
 /// A table of `K` slots with `chunks` pool chunks each: one an ended endpoint left, else a new one.
 ///
@@ -138,10 +141,10 @@ pub(crate) fn table<const K: usize>(chunks: usize) -> crate::Result<&'static mut
 where
     Ladder: Rung<K>,
 {
-    let idle = <Ladder as Rung<K>>::take(
-        &mut POOL.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
-        chunks,
-    );
+    let idle = POOL
+        .try_with(|pool| <Ladder as Rung<K>>::take(&mut pool.borrow_mut(), chunks))
+        .ok()
+        .flatten();
     match idle {
         Some(t) => Ok(t),
         None => crate::mem::new_table::<K>(chunks),

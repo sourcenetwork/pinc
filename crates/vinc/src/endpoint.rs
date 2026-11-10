@@ -7,13 +7,14 @@
 //! progress. A host with nothing else to await on the endpoint (a server between accepts, connections that only need
 //! their keepalives) awaits [`Endpoint::run`].
 //!
-//! The endpoint is `Clone + Send + Sync + 'static` when the closures are. It lives while any handle to it, to a
+//! The endpoint is `Clone` and `!Send`: one endpoint per core, and its handles stay on the thread that built it, where the host
+//! spawns the futures with its executor's local spawn. It lives while any handle to it, to a
 //! connection of it or to a stream of it lives; dropping the last handle drops its state without sending anything, so
 //! close what should be told first ([`Endpoint::close`], [`Connection::close`]).
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Instant;
 
 use vinc_crypto::NodeId;
@@ -26,7 +27,7 @@ pub use crate::engine::AllowAll;
 pub use crate::engine::{Admit as Admission, Direction};
 use crate::engine::{Core, CoreConfig, Try};
 use crate::error::{Error, ErrorKind, Result};
-use crate::host::{BatchHost, Host, Hosted};
+use crate::host::{BatchHost, Host, Hosted, Io, IoHost};
 use crate::keys::Identity;
 use crate::mem::Limits;
 use crate::protocol::{Protocol, Registered};
@@ -34,9 +35,9 @@ use crate::start::build;
 
 /// Finds addresses for a node the caller gave none for. It may do I/O; it runs before the dial starts, so dropping the
 /// dial while it runs leaves nothing behind.
-pub trait Discovery: Send + Sync + 'static {
+pub trait Discovery {
     /// The addresses `node` may be reached at; empty if unknown.
-    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> + Send;
+    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>>;
 }
 
 /// No discovery: a dial without addresses uses the address book only.
@@ -44,7 +45,7 @@ pub trait Discovery: Send + Sync + 'static {
 pub struct NoDiscovery;
 
 impl Discovery for NoDiscovery {
-    fn lookup(&self, _node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> + Send {
+    fn lookup(&self, _node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> {
         std::future::ready(Vec::new())
     }
 }
@@ -195,10 +196,13 @@ impl<S, D, A> Builder<S, D, A> {
 /// The endpoint that [`Builder::build`] makes over the closures `R`, `S` and `Z`.
 pub type Built<R, S, Z, K, D, A> = Endpoint<Host<R, S, Z, K, A>, D>;
 
+/// The endpoint that [`Builder::build_io`] makes over a host `N`.
+pub type IoBuilt<N, K, D, A> = Endpoint<IoHost<N, K, A>, D>;
+
 /// The endpoint that [`Builder::build_batched`] makes over the closures `R`, `S` and `Z`.
 pub type BatchBuilt<R, S, Z, K, D, A> = Endpoint<BatchHost<R, S, Z, K, A>, D>;
 
-impl<K: KeyStore + Send, D: Discovery, A: Admission> Builder<K, D, A> {
+impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
     /// Make the endpoint over the host's I/O, one datagram per call: `recv` receives one datagram into the buffer and
     /// returns its length and sender, `send` sends one datagram to an address, `sleep` sleeps until an instant. The
     /// closures are called from whichever task polls a future of the endpoint. `recv` must lose no datagram when its
@@ -212,13 +216,13 @@ impl<K: KeyStore + Send, D: Discovery, A: Admission> Builder<K, D, A> {
     /// [`crate::ErrorKind::Config`] for an invalid setting or no identity.
     pub fn build<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<Built<R, S, Z, K, D, A>>
     where
-        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr)> + Send + Sync,
-        S: AsyncFn(&[u8], SocketAddr) -> std::io::Result<usize> + Send + Sync,
-        Z: AsyncFn(Instant) + Send + Sync,
+        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr)>,
+        S: AsyncFn(&[u8], SocketAddr) -> std::io::Result<usize>,
+        Z: AsyncFn(Instant),
     {
         // One datagram per send: the endpoint does not batch for a host that sends one at a time.
         let (inner, core, local) = self.assemble(1)?;
-        Ok(Endpoint(Arc::new(inner.finish(
+        Ok(Endpoint(Rc::new(inner.finish(
             Host::new(recv, send, sleep),
             core,
             local,
@@ -235,17 +239,28 @@ impl<K: KeyStore + Send, D: Discovery, A: Admission> Builder<K, D, A> {
     /// As [`build`](Self::build).
     pub fn build_batched<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<BatchBuilt<R, S, Z, K, D, A>>
     where
-        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr, usize)> + Send + Sync,
-        S: AsyncFn(&[u8], SocketAddr, usize) -> std::io::Result<usize> + Send + Sync,
-        Z: AsyncFn(Instant) + Send + Sync,
+        R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr, usize)>,
+        S: AsyncFn(&[u8], SocketAddr, usize) -> std::io::Result<usize>,
+        Z: AsyncFn(Instant),
     {
         let batch = self.batch;
         let (inner, core, local) = self.assemble(batch)?;
-        Ok(Endpoint(Arc::new(inner.finish(
+        Ok(Endpoint(Rc::new(inner.finish(
             BatchHost::new(recv, send, sleep),
             core,
             local,
         ))))
+    }
+
+    /// As [`build_batched`](Self::build_batched) for a host that implements [`Io`], so that the endpoint's type can be
+    /// written down.
+    ///
+    /// # Errors
+    /// As [`build`](Self::build).
+    pub fn build_io<N: Io>(self, io: N) -> Result<IoBuilt<N, K, D, A>> {
+        let batch = self.batch;
+        let (inner, core, local) = self.assemble(batch)?;
+        Ok(Endpoint(Rc::new(inner.finish(IoHost::new(io), core, local))))
     }
 
     /// Everything but the host: the core, built with transmits of up to `gso` datagrams.
@@ -261,7 +276,7 @@ impl<K: KeyStore + Send, D: Discovery, A: Admission> Builder<K, D, A> {
             local,
         } = self;
         let identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
-        let public: Arc<[u8]> = identity.public_key().into();
+        let public: Rc<[u8]> = identity.public_key().into();
         let node = identity.node_id();
         let cfg = CoreConfig {
             identity,
@@ -288,7 +303,7 @@ impl<K: KeyStore + Send, D: Discovery, A: Admission> Builder<K, D, A> {
 /// What an endpoint holds besides its host and its core.
 struct Parts<D> {
     node: NodeId,
-    public: Arc<[u8]>,
+    public: Rc<[u8]>,
     discovery: D,
     relays: Vec<String>,
 }
@@ -296,7 +311,7 @@ struct Parts<D> {
 impl<D> Parts<D> {
     fn finish<H: Hosted>(self, host: H, core: Core<H::Keys, H::Access>, local: SocketAddr) -> Inner<H, D> {
         Inner {
-            shared: Arc::new(Shared::new(host, core, local)),
+            shared: Rc::new(Shared::new(host, core, local)),
             node: self.node,
             public: self.public,
             discovery: self.discovery,
@@ -316,19 +331,19 @@ fn interfaces(local: SocketAddr) -> Vec<SocketAddr> {
 }
 
 struct Inner<H: Hosted, D> {
-    shared: Arc<Shared<H>>,
+    shared: Rc<Shared<H>>,
     node: NodeId,
-    public: Arc<[u8]>,
+    public: Rc<[u8]>,
     discovery: D,
     relays: Vec<String>,
 }
 
 /// An endpoint: dial, accept, sign, and reach the layers above.
-pub struct Endpoint<H: Hosted, D = NoDiscovery>(Arc<Inner<H, D>>);
+pub struct Endpoint<H: Hosted, D = NoDiscovery>(Rc<Inner<H, D>>);
 
 impl<H: Hosted, D> Clone for Endpoint<H, D> {
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self(Rc::clone(&self.0))
     }
 }
 
@@ -390,7 +405,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// The reason the endpoint failed, if the host's socket did; `Ok` after [`close`](Self::close).
     pub async fn run(&self) -> Result<()> {
         self.0.shared.run(|core, _| core.idle_poll()).await;
-        match self.0.shared.lock().stopped() {
+        match self.0.shared.lock().and_then(|c| c.stopped()) {
             Some(e) if e.kind() != ErrorKind::Shutdown => Err(e),
             _ => Ok(()),
         }
@@ -442,7 +457,9 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// Remember an address for `node`; dials to it use it when they carry none.
     pub fn add_address(&self, node: NodeId, addr: SocketAddr) {
-        self.0.shared.lock().add_address(node, addr);
+        if let Some(mut core) = self.0.shared.lock() {
+            core.add_address(node, addr);
+        }
     }
 
     /// Tell the endpoint the network changed (a new address, a link back): it probes the paths again.
@@ -478,7 +495,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// Ask the access hook about `peer` the way the endpoint does for connections, for a layer that takes neighbours
     /// itself. With no hook everyone is admitted.
     pub fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
-        self.0.shared.lock().admits(peer, alpn, dir)
+        // The hook is asked without the core when a borrow is open: it is the same hook, and holds no endpoint state.
+        self.0.shared.lock().is_none_or(|core| core.admits(peer, alpn, dir))
     }
 
     /// The node-wide counters of the endpoint.
@@ -495,7 +513,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the ALPN is empty, too long, already registered, or one too many.
-    pub async fn register<P: Protocol>(&self, protocol: Arc<P>) -> Result<Registered<P, H>> {
+    pub async fn register<P: Protocol>(&self, protocol: Rc<P>) -> Result<Registered<P, H>> {
         let alpn = protocol.alpn();
         let route = self.0.shared.run(|core, _| Try::Done(core.listen(alpn))).await?;
         Ok(Registered::new(&self.0.shared, route, protocol))

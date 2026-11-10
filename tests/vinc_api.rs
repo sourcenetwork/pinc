@@ -16,42 +16,12 @@ mod vinc_common;
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use vinc::{Admission, Direction, Discovery, ErrorKind, NodeAddr, NodeId, node_from_str, node_to_string};
 use vinc_common::{ECHO, Svc, bind, client, node, register, serve_conn, within};
-
-fn assert_send_sync<T: Send + Sync + 'static>(_: &T) {}
-fn assert_send<T: Send>(_: &T) {}
-
-/// The handles are `Send + Sync + 'static` and every future of the facade is `Send`, for closures that are: the endpoint
-/// is built here, where the closures' types are known.
-#[nuclei::test]
-async fn handles_are_send_sync_static() {
-    let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO));
-    assert_send_sync(&ep);
-    let server = node().await;
-    let conn = ep.connect(server.addr(), ECHO).await.unwrap();
-    assert_send_sync(&conn);
-    let (mut tx, mut rx) = conn.open_bi().await.unwrap();
-    assert_send_sync(&tx);
-    assert_send_sync(&rx);
-    assert_send(&ep.sign(b"x"));
-    assert_send(&ep.run());
-    assert_send(&ep.accept());
-    assert_send(&ep.connect(server.addr(), ECHO));
-    assert_send(&conn.open_bi());
-    assert_send(&conn.accept_bi());
-    assert_send(&conn.read_datagram());
-    assert_send(&conn.send_datagram(b"x"));
-    assert_send(&conn.closed());
-    assert_send(&tx.write(b"x"));
-    assert_send(&tx.finish());
-    assert_send(&rx.read(&mut [0u8; 1]));
-    assert_send(&rx.read_to_end(1));
-    assert_send_sync(&conn.close_reason());
-}
 
 #[nuclei::test]
 async fn addresses_round_trip() {
@@ -150,7 +120,7 @@ async fn access_hook_refuses_on_accept_and_on_dial_and_serves_gossip_checks() {
 
 struct Book(SocketAddr, NodeId);
 impl Discovery for Book {
-    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> + Send {
+    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> {
         std::future::ready(if *node == self.1 { vec![self.0] } else { Vec::new() })
     }
 }
@@ -198,15 +168,15 @@ async fn registered_protocols_tags_and_alpn_limits() {
     within(120, async {
         for a in [&b"t/a"[..], b"t/b", b"t/c", b"t/d"] {
             let a: &'static [u8] = Box::leak(a.to_vec().into_boxed_slice());
-            register(&server, Arc::new(Svc(a))).await.unwrap();
+            register(&server, Rc::new(Svc(a))).await.unwrap();
         }
         // A fifth, a repeat and a bad name are refused.
         assert_eq!(
-            register(&server, Arc::new(Svc(b"t/e"))).await.unwrap_err().kind(),
+            register(&server, Rc::new(Svc(b"t/e"))).await.unwrap_err().kind(),
             ErrorKind::Config
         );
         assert_eq!(
-            register(&server, Arc::new(Svc(b"t/a"))).await.unwrap_err().kind(),
+            register(&server, Rc::new(Svc(b"t/a"))).await.unwrap_err().kind(),
             ErrorKind::Config
         );
 

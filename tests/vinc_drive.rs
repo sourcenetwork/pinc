@@ -303,61 +303,43 @@ async fn messages_allocate_nothing_in_the_facade() {
     .await;
 }
 
-/// The endpoint is built, and connected (the handshake's cryptography wants a big stack), on a thread with a big
-/// stack, then handed to a thread with a small one, which exchanges bytes, closes and drops it: no poll function and no
-/// drop holds the endpoint's tables on its stack.
-fn on_a_small_stack(kib: usize) {
-    let big = |f: Box<dyn FnOnce() + Send>| std::thread::Builder::new().stack_size(256 << 20).spawn(f).unwrap();
-    let (addr_tx, addr_rx) = std::sync::mpsc::channel::<vinc::NodeAddr>();
-    let server = big(Box::new(move || {
-        nuclei::block_on(async move {
-            let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO).limits(small()));
-            addr_tx.send(ep.addr()).unwrap();
-            let conn = ep.accept().await.unwrap().into_connection();
-            vinc_common::serve_conn(conn.clone()).await;
-            drop(conn);
-        })
-    }));
-    let to = addr_rx.recv().unwrap();
-    let (ep_tx, ep_rx) = std::sync::mpsc::channel();
-    big(Box::new(move || {
-        nuclei::block_on(async move {
-            let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO).limits(small()));
-            let conn = ep.connect(to, ECHO).await.unwrap();
-            // The server's session reaches its accept queue once a stream is open.
-            let (mut tx, mut rx) = conn.open_bi().await.unwrap();
-            tx.write_all(b"warm").await.unwrap();
-            let mut four = [0u8; 4];
-            rx.read_exact(&mut four).await.unwrap();
-            ep_tx.send((ep, conn, tx, rx)).ok().unwrap();
-        })
-    }))
-    .join()
-    .unwrap();
-    let (ep, conn, tx, rx) = ep_rx.recv().unwrap();
-    let small_stack = std::thread::Builder::new()
+/// Two endpoints are built, connected, used and dropped on one thread with a small stack: no poll function and no drop
+/// holds an endpoint's tables on its stack.
+fn on_a_stack(kib: usize) {
+    std::thread::Builder::new()
         .stack_size(kib << 10)
-        .spawn(move || {
+        .spawn(|| {
             nuclei::block_on(async move {
-                let (mut tx, mut rx) = (tx, rx);
+                let server = lo_endpoint!(vinc_common::builder().alpn(ECHO).limits(small()));
+                let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO).limits(small()));
+                let to = server.addr();
+                let s = server.clone();
+                nuclei::spawn_local(async move {
+                    while let Some(i) = s.accept().await {
+                        nuclei::spawn_local(vinc_common::serve_conn(i.into_connection())).detach();
+                    }
+                })
+                .detach();
+                let conn = ep.connect(to, ECHO).await.unwrap();
+                let (mut tx, mut rx) = conn.open_bi().await.unwrap();
                 tx.write_all(b"small stack").await.unwrap();
                 tx.finish().await.unwrap();
                 assert_eq!(rx.read_to_end(100).await.unwrap(), b"small stack");
                 conn.close(0).await;
                 drop((tx, rx, conn));
                 drop(ep);
-            })
+            });
         })
+        .unwrap()
+        .join()
         .unwrap();
-    small_stack.join().unwrap();
-    server.join().unwrap();
 }
 
-/// 1 MiB is what the cryptography and the transport underneath need for a data exchange; the endpoint itself is hundreds
-/// of times larger, so any frame that held it would overflow this stack at once.
+/// The cryptography and the transport underneath a data exchange need about 1 MiB; the endpoint itself is larger than
+/// that, so any frame that held it would overflow this stack at once.
 #[test]
-fn a_thread_with_a_1_mib_stack_drives_and_drops_an_endpoint() {
-    on_a_small_stack(1024);
+fn a_thread_with_a_small_stack_builds_drives_and_drops_endpoints() {
+    on_a_stack(2048);
 }
 
 fn small() -> Limits {

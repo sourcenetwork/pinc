@@ -15,6 +15,7 @@
 
 mod vinc_common;
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -109,7 +110,7 @@ async fn a_thousand_sessions() {
             ..Limits::default()
         }))
         .await;
-        register(&server, Arc::new(Svc(ECHO))).await.unwrap();
+        register(&server, Rc::new(Svc(ECHO))).await.unwrap();
         let addr = server.addr();
         let (done, release, dialing) = (
             Arc::new(AtomicUsize::new(0)),

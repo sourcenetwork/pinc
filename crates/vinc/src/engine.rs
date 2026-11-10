@@ -12,9 +12,10 @@
 //! holds an entry only while its session or stream lives, so nothing grows with history; per-poll work is proportional
 //! to what changed, never to a table's capacity.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::rc::Rc;
 
 use vinc_core::{
     Answer, Command, CommandError, Event, IfaceEvent, IfaceId, MAX_ALPNS, NodeStats, Query, Reply, Role, SessionId,
@@ -53,12 +54,12 @@ pub enum Direction {
 
 /// The access hook: whether a peer may connect or be a neighbour. It runs while the endpoint is locked, so it must not
 /// block and must not call back into the endpoint.
-pub trait Admit: Send + Sync + 'static {
+pub trait Admit {
     /// Whether `peer` may use `alpn` in `dir`.
     fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool;
 }
 
-impl<T: Admit> Admit for Arc<T> {
+impl<T: Admit + ?Sized> Admit for Rc<T> {
     fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
         (**self).admit(peer, alpn, dir)
     }
@@ -98,7 +99,7 @@ pub(crate) struct SessInfo {
     pub alpn: Alpn,
     pub dialer: bool,
     /// Why the session ended, set once when it leaves the table.
-    pub ended: OnceLock<Error>,
+    pub ended: OnceCell<Error>,
 }
 
 impl SessInfo {
@@ -143,7 +144,7 @@ pub(crate) enum Try<T> {
 }
 
 struct Sess {
-    info: Arc<SessInfo>,
+    info: Rc<SessInfo>,
     accept_bi: VecDeque<StreamId>,
     accept_uni: VecDeque<StreamId>,
     waits: Vec<(SKey, Ticket)>,
@@ -156,12 +157,12 @@ struct Sess {
 struct Dial {
     node: NodeId,
     alpn: Alpn,
-    result: Option<Result<Arc<SessInfo>>>,
+    result: Option<Result<Rc<SessInfo>>>,
 }
 
 struct Route {
     alpn: Vec<u8>,
-    queue: VecDeque<Arc<SessInfo>>,
+    queue: VecDeque<Rc<SessInfo>>,
 }
 
 /// The core; see the module docs.
@@ -470,12 +471,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool) {
-        let info = Arc::new(SessInfo {
+        let info = Rc::new(SessInfo {
             id: session,
             node,
             alpn,
             dialer,
-            ended: OnceLock::new(),
+            ended: OnceCell::new(),
         });
         let route = self.route_of(&alpn);
         if !dialer {
@@ -495,7 +496,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.sessions.insert(
             session,
             Sess {
-                info: Arc::clone(&info),
+                info: Rc::clone(&info),
                 accept_bi: VecDeque::new(),
                 accept_uni: VecDeque::new(),
                 waits: Vec::new(),
@@ -512,7 +513,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
     }
 
-    fn dial_done(&mut self, session: SessionId, result: Result<Arc<SessInfo>>) {
+    fn dial_done(&mut self, session: SessionId, result: Result<Rc<SessInfo>>) {
         if let Some(d) = self.dials.get_mut(&session)
             && d.result.is_none()
         {
@@ -690,7 +691,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     /// The state of a dial: its session once up, or why not, else a wait.
-    pub(crate) fn dial_poll(&mut self, session: SessionId) -> Try<Result<Arc<SessInfo>>> {
+    pub(crate) fn dial_poll(&mut self, session: SessionId) -> Try<Result<Rc<SessInfo>>> {
         match self.dials.get(&session).map(|d| d.result.is_some()) {
             Some(true) => match self.dials.remove(&session).and_then(|d| d.result) {
                 Some(r) => Try::Done(r),
@@ -715,7 +716,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     /// The next session on accept queue `route`, or `None` once the endpoint stopped, else a wait.
-    pub(crate) fn accept_route(&mut self, route: usize) -> Try<Option<Arc<SessInfo>>> {
+    pub(crate) fn accept_route(&mut self, route: usize) -> Try<Option<Rc<SessInfo>>> {
         if let Some(i) = self.routes.get_mut(route).and_then(|r| r.queue.pop_front()) {
             return Try::Done(Some(i));
         }

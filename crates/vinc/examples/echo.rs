@@ -16,6 +16,7 @@
 )]
 
 use std::net::{SocketAddr, UdpSocket};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,7 +34,7 @@ impl Protocol for Echo {
         ALPN
     }
 
-    async fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) {
+    async fn serve<H: Hosted + 'static>(self: Rc<Self>, conn: Connection<H>) {
         while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
             while let Ok(Some(chunk)) = rx.read_chunk(4096).await {
                 if tx.write_all(&chunk).await.is_err() {
@@ -50,7 +51,7 @@ pub async fn run() -> vinc::Result<Vec<u8>> {
     let server = endpoint(Vinc::builder()).await?;
     let client = endpoint(Vinc::builder()).await?;
 
-    let registered = server.register(Arc::new(Echo)).await?;
+    let registered = server.register(Rc::new(Echo)).await?;
     nuclei::spawn_local(async move {
         while let Some(conn) = registered.accept().await {
             nuclei::spawn_local(registered.protocol().serve(conn)).detach();

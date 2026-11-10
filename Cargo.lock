@@ -5466,6 +5466,7 @@ dependencies = [
  "vinc-crypto",
  "vinc-dag",
  "vinc-dtn",
+ "vinc-keystore",
  "vinc-reconcile",
  "vinc-security",
  "vinc-sim",

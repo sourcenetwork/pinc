@@ -23,6 +23,7 @@
 use std::future::Future;
 use std::net::{SocketAddr, UdpSocket};
 use std::pin::pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -149,15 +150,15 @@ impl Protocol for Svc {
         self.0
     }
 
-    async fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) {
+    async fn serve<H: Hosted + 'static>(self: Rc<Self>, conn: Connection<H>) {
         serve_conn(conn).await;
     }
 }
 
 /// Register `protocol` and serve each session it gets, on nuclei tasks of this worker.
-pub async fn register<H: Hosted + 'static, D: Discovery, P: Protocol>(
+pub async fn register<H: Hosted + 'static, D: Discovery + 'static, P: Protocol>(
     ep: &Endpoint<H, D>,
-    protocol: Arc<P>,
+    protocol: Rc<P>,
 ) -> vinc::Result<()> {
     let registered = ep.register(protocol).await?;
     nuclei::spawn_local(async move {
@@ -171,7 +172,7 @@ pub async fn register<H: Hosted + 'static, D: Discovery, P: Protocol>(
 
 /// Bind `builder` on a loopback UDP socket of the nuclei runtime and build its endpoint over the socket's I/O; nothing
 /// drives it yet.
-pub async fn bind_idle<S: KeyStore + Send + 'static, D: Discovery, A: Admission>(
+pub async fn bind_idle<S: KeyStore + 'static, D: Discovery + 'static, A: Admission + 'static>(
     builder: Builder<S, D, A>,
 ) -> Endpoint<impl Hosted, D> {
     let sock = Arc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
@@ -209,7 +210,7 @@ macro_rules! lo_endpoint {
 }
 
 /// [`bind_idle`] and a task that runs the endpoint, as a host would that has nothing else to await on it.
-pub async fn bind<S: KeyStore + Send + 'static, D: Discovery, A: Admission>(
+pub async fn bind<S: KeyStore + 'static, D: Discovery + 'static, A: Admission + 'static>(
     builder: Builder<S, D, A>,
 ) -> Endpoint<impl Hosted, D> {
     let ep = bind_idle(builder).await;

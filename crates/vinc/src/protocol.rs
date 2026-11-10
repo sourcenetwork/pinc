@@ -13,7 +13,7 @@
 //! Invariants: a tag is never empty and never longer than 64 bytes; reading a tag consumes exactly its bytes.
 
 use std::future::Future;
-use std::sync::{Arc, Weak};
+use std::rc::{Rc, Weak};
 
 use crate::conn::Connection;
 use crate::drive::Shared;
@@ -25,13 +25,13 @@ use crate::stream::{RecvStream, SendStream};
 pub const MAX_TAG: usize = 64;
 
 /// A protocol served on its own ALPN.
-pub trait Protocol: Send + Sync + 'static {
+pub trait Protocol: 'static {
     /// The ALPN: 1 to 32 bytes.
     fn alpn(&self) -> &'static [u8];
 
     /// Serve one session a peer opened. The host spawns the future; the session closes when the last handle to it is
     /// dropped.
-    fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) -> impl Future<Output = ()>;
+    fn serve<H: Hosted + 'static>(self: Rc<Self>, conn: Connection<H>) -> impl Future<Output = ()>;
 }
 
 /// The sessions a registered [`Protocol`] is to serve. Holds the endpoint only weakly, so a registered protocol does not
@@ -39,21 +39,21 @@ pub trait Protocol: Send + Sync + 'static {
 pub struct Registered<P, H: Hosted> {
     shared: Weak<Shared<H>>,
     route: usize,
-    protocol: Arc<P>,
+    protocol: Rc<P>,
 }
 
 impl<P: Protocol, H: Hosted> Registered<P, H> {
-    pub(crate) fn new(shared: &Arc<Shared<H>>, route: usize, protocol: Arc<P>) -> Self {
+    pub(crate) fn new(shared: &Rc<Shared<H>>, route: usize, protocol: Rc<P>) -> Self {
         Self {
-            shared: Arc::downgrade(shared),
+            shared: Rc::downgrade(shared),
             route,
             protocol,
         }
     }
 
     /// The protocol.
-    pub fn protocol(&self) -> Arc<P> {
-        Arc::clone(&self.protocol)
+    pub fn protocol(&self) -> Rc<P> {
+        Rc::clone(&self.protocol)
     }
 
     /// Wait for the next session a peer opened on the protocol's ALPN. `None` once the endpoint stopped. The host runs

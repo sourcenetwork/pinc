@@ -3,15 +3,11 @@
 //! Defaults: `Vinc::builder()` with the default limits on the server (1024 sessions, 512 chunks of 16 KiB per session,
 //! 256 KiB stream windows). A client endpoint holds one session, so it asks for exactly one (`connections: 1`); the
 //! endpoint reserves its tables for the smallest shape that holds the request, which is what the documentation tells a
-//! host to do. The harness needs types it can name, and the closures of an endpoint have none, so the endpoint,
-//! its connections and its streams are held behind small object-safe traits; every call through them boxes its
-//! future, which costs one allocation per call that a host calling the facade directly does not pay (the
-//! `messages_allocate_nothing_in_the_facade` test measures the facade itself). The futures are marked `Send`
-//! without proof because the proof is not available for an unnamed closure type: every task of this bench runs on the
-//! one thread that spawned it (`spawn_local`), so nothing is ever sent. Run with `just compare`; the binary is not meant to be started by hand.
+//! host to do. The endpoint's three I/O calls are a type here (`Net`, an `Io`), not closures, only so the harness can
+//! write the endpoint's type down; the facade's own calls are made directly, with no boxing and no `unsafe`. Everything
+//! runs on the thread that started it, one endpoint per thread, as the facade is meant to be used.
 #![allow(
     missing_docs,
-    unsafe_code,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
@@ -37,14 +33,13 @@ mod compare;
 use std::future::Future;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use compare::{Counting, Lib, Rx, Tx};
 use nuclei::Handle;
-use vinc::{Connection, Endpoint, Hosted, Limits, NodeAddr, NodeId, RecvStream, SendStream, Vinc};
+use vinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, RecvStream, SendStream, Vinc};
+use vinc_keystore::SoftwareStore;
 
 #[global_allocator]
 static ALLOC: Counting = Counting;
@@ -55,133 +50,68 @@ fn io_err(e: vinc::Error) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-/// A future declared `Send` without proof; see the module docs for why that holds here.
-struct Local<F>(F);
+/// The endpoint's socket and timer: nuclei's, called directly.
+struct Net {
+    sock: Rc<Handle<UdpSocket>>,
+}
 
-// SAFETY: every future wrapped here is created and polled on one thread (the bench spawns with `spawn_local` and runs
-// on a single `block_on`), so it never crosses threads.
-#[allow(unsafe_code)]
-unsafe impl<F> Send for Local<F> {}
+impl Io for Net {
+    async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
+        let (n, from) = self.sock.recv_from(buf).await?;
+        Ok((n, from, n))
+    }
 
-impl<F: Future> Future for Local<F> {
-    type Output = F::Output;
+    async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> io::Result<usize> {
+        let mut sent = 0;
+        for d in buf.chunks(segment.max(1)) {
+            self.sock.send_to(d, to).await?;
+            sent += 1;
+        }
+        Ok(sent)
+    }
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        // SAFETY: the field is never moved out of the pinned wrapper.
-        #[allow(unsafe_code)]
-        unsafe { self.map_unchecked_mut(|l| &mut l.0) }.poll(cx)
+    async fn sleep(&self, at: Instant) {
+        nuclei::time::sleep_until_precise(at).await;
     }
 }
 
-type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-type Streams = (Box<dyn TxDyn>, Box<dyn RxDyn>);
+type H = IoHost<Net, SoftwareStore, AllowAll>;
+type Ep = Endpoint<H>;
+type Conn = Connection<H>;
 
-fn erase<'a, T>(f: impl Future<Output = T> + 'a) -> Fut<'a, T> {
-    Box::pin(Local(f))
-}
-
-trait TxDyn: Send {
-    fn write_all<'a>(&'a mut self, b: &'a [u8]) -> Fut<'a, io::Result<()>>;
-    fn finish(&mut self) -> Fut<'_, io::Result<()>>;
-}
-
-trait RxDyn: Send {
-    fn read<'a>(&'a mut self, b: &'a mut [u8]) -> Fut<'a, io::Result<usize>>;
-}
-
-trait ConnDyn: Send + Sync {
-    fn remote(&self) -> NodeId;
-    fn open(&self) -> Fut<'_, io::Result<Streams>>;
-}
-
-trait EpDyn: Send + Sync {
-    fn connect(&self, addr: NodeAddr) -> Fut<'_, io::Result<Arc<dyn ConnDyn>>>;
-    fn close_peer(&self, node: NodeId) -> Fut<'_, ()>;
-    fn shutdown(&self) -> Fut<'_, ()>;
-}
-
-impl<H: Hosted + 'static> TxDyn for SendStream<H> {
-    fn write_all<'a>(&'a mut self, b: &'a [u8]) -> Fut<'a, io::Result<()>> {
-        erase(async move { SendStream::write_all(self, b).await.map_err(io_err) })
-    }
-
-    fn finish(&mut self) -> Fut<'_, io::Result<()>> {
-        erase(async move { SendStream::finish(self).await.map_err(io_err) })
-    }
-}
-
-impl<H: Hosted + 'static> RxDyn for RecvStream<H> {
-    fn read<'a>(&'a mut self, b: &'a mut [u8]) -> Fut<'a, io::Result<usize>> {
-        erase(async move { RecvStream::read(self, b).await.map(|n| n.unwrap_or(0)).map_err(io_err) })
-    }
-}
-
-impl<H: Hosted + 'static> ConnDyn for Connection<H> {
-    fn remote(&self) -> NodeId {
-        Connection::remote(self)
-    }
-
-    fn open(&self) -> Fut<'_, io::Result<Streams>> {
-        erase(async move {
-            let (tx, rx) = self.open_bi().await.map_err(io_err)?;
-            Ok((Box::new(tx) as Box<dyn TxDyn>, Box::new(rx) as Box<dyn RxDyn>))
-        })
-    }
-}
-
-impl<H: Hosted + 'static> EpDyn for Endpoint<H> {
-    fn connect(&self, addr: NodeAddr) -> Fut<'_, io::Result<Arc<dyn ConnDyn>>> {
-        erase(async move {
-            let c = Endpoint::connect(self, addr, ALPN).await.map_err(io_err)?;
-            Ok(Arc::new(c) as Arc<dyn ConnDyn>)
-        })
-    }
-
-    fn close_peer(&self, node: NodeId) -> Fut<'_, ()> {
-        erase(async move { Endpoint::close_peer(self, &node).await })
-    }
-
-    fn shutdown(&self) -> Fut<'_, ()> {
-        erase(async move { Endpoint::close(self).await })
-    }
-}
-
-async fn bind(limits: Limits) -> io::Result<Arc<dyn EpDyn>> {
-    let sock = Arc::new(Handle::<UdpSocket>::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?);
-    let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
+async fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
+    let sock = Rc::new(Handle::<UdpSocket>::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?);
     let ep = Vinc::builder()
         .alpn(ALPN.to_vec())
         .limits(limits)
         .local_addr(sock.local_addr()?)
-        .build(
-            async move |buf: &mut [u8]| r.recv_from(buf).await,
-            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
-            async |at: Instant| nuclei::time::sleep_until_precise(at).await,
-        )
+        .batch(1)
+        .build_io(Net { sock })
         .map_err(io_err)?;
-    let runner = ep.clone();
-    nuclei::spawn_local(async move {
-        let _ = runner.run().await;
-    })
-    .detach();
-    Ok(Arc::new(ep))
+    if run {
+        let runner = ep.clone();
+        nuclei::spawn_local(async move {
+            let _ = runner.run().await;
+        })
+        .detach();
+    }
+    Ok(ep)
 }
 
 struct Vinc1;
 
-impl Tx for Box<dyn TxDyn> {
+impl Tx for SendStream<H> {
     async fn write_all(&mut self, b: &[u8]) -> io::Result<()> {
-        TxDyn::write_all(&mut **self, b).await
+        SendStream::write_all(self, b).await.map_err(io_err)
     }
-
     async fn finish(&mut self) -> io::Result<()> {
-        TxDyn::finish(&mut **self).await
+        SendStream::finish(self).await.map_err(io_err)
     }
 }
 
-impl Rx for Box<dyn RxDyn> {
+impl Rx for RecvStream<H> {
     async fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
-        RxDyn::read(&mut **self, b).await
+        RecvStream::read(self, b).await.map(|n| n.unwrap_or(0)).map_err(io_err)
     }
 }
 
@@ -191,10 +121,10 @@ impl Lib for Vinc1 {
     }
 
     const RESUMES: bool = true;
-    type Ep = Arc<dyn EpDyn>;
-    type Conn = Arc<dyn ConnDyn>;
-    type Tx = Box<dyn TxDyn>;
-    type Rx = Box<dyn RxDyn>;
+    type Ep = Ep;
+    type Conn = Conn;
+    type Tx = SendStream<H>;
+    type Rx = RecvStream<H>;
 
     fn run<T>(f: impl Future<Output = T>) -> T {
         match nuclei::Builder::new().build() {
@@ -203,8 +133,7 @@ impl Lib for Vinc1 {
         }
     }
 
-    fn spawn(f: impl Future<Output = ()> + Send + 'static) {
-        // One endpoint per core: its tasks stay on the thread that started them.
+    fn spawn(f: impl Future<Output = ()> + 'static) {
         nuclei::spawn_local(f).detach();
     }
 
@@ -213,17 +142,7 @@ impl Lib for Vinc1 {
     }
 
     async fn serve() -> io::Result<String> {
-        let sock = Arc::new(Handle::<UdpSocket>::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?);
-        let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
-        let ep = Vinc::builder()
-            .alpn(ALPN.to_vec())
-            .local_addr(sock.local_addr()?)
-            .build(
-                async move |buf: &mut [u8]| r.recv_from(buf).await,
-                async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
-                async |at: Instant| nuclei::time::sleep_until_precise(at).await,
-            )
-            .map_err(io_err)?;
+        let ep = bind(Limits::default(), true).await?;
         let addr = ep.addr().ticket();
         nuclei::spawn_local(async move {
             while let Some(inc) = ep.accept().await {
@@ -231,8 +150,7 @@ impl Lib for Vinc1 {
                 nuclei::spawn_local(async move {
                     while let Ok((tx, rx)) = conn.accept_bi().await {
                         nuclei::spawn_local(async move {
-                            let _ =
-                                compare::handle(Box::new(tx) as Box<dyn TxDyn>, Box::new(rx) as Box<dyn RxDyn>).await;
+                            let _ = compare::handle(tx, rx).await;
                         })
                         .detach();
                     }
@@ -244,28 +162,32 @@ impl Lib for Vinc1 {
         Ok(addr)
     }
 
-    async fn client() -> io::Result<Arc<dyn EpDyn>> {
-        bind(Limits {
-            connections: 1,
-            ..Limits::default()
-        })
+    async fn client() -> io::Result<Ep> {
+        bind(
+            Limits {
+                connections: 1,
+                ..Limits::default()
+            },
+            false,
+        )
         .await
     }
 
-    async fn connect(ep: &Arc<dyn EpDyn>, addr: &str) -> io::Result<Arc<dyn ConnDyn>> {
-        ep.connect(NodeAddr::parse(addr).map_err(io_err)?).await
+    async fn connect(ep: &Ep, addr: &str) -> io::Result<Conn> {
+        let addr = NodeAddr::parse(addr).map_err(io_err)?;
+        ep.connect(addr, ALPN).await.map_err(io_err)
     }
 
-    async fn open(conn: &Arc<dyn ConnDyn>) -> io::Result<Streams> {
-        conn.open().await
+    async fn open(conn: &Conn) -> io::Result<(SendStream<H>, RecvStream<H>)> {
+        conn.open_bi().await.map_err(io_err)
     }
 
-    async fn close(ep: &Arc<dyn EpDyn>, conn: &Arc<dyn ConnDyn>) {
-        ep.close_peer(conn.remote()).await;
+    async fn close(ep: &Ep, conn: &Conn) {
+        ep.close_peer(&conn.remote()).await;
     }
 
-    async fn shutdown(ep: Arc<dyn EpDyn>) {
-        ep.shutdown().await;
+    async fn shutdown(ep: Ep) {
+        ep.close().await;
     }
 }
 

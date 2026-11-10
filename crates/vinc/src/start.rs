@@ -108,13 +108,7 @@ mod tests {
 
     /// The default 1024 sessions need a stack of about twice the endpoint (2.2 MiB) to build, and nothing to drop.
     #[test]
-    fn a_default_endpoint_builds_on_six_mebibytes_and_drops_on_one() {
-        let core = std::thread::Builder::new()
-            .stack_size(6 << 20)
-            .spawn(|| build(cfg(1024), 1).unwrap())
-            .unwrap()
-            .join()
-            .unwrap();
-        on_stack(1024, move || drop(core));
+    fn a_default_endpoint_builds_and_drops_on_six_mebibytes() {
+        on_stack(6144, || drop(build(cfg(1024), 1).unwrap()));
     }
 }

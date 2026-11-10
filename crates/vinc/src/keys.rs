@@ -9,7 +9,7 @@
 //! Invariants: no private key leaves a store; a rotated-out prekey is removed, which zeroizes it; errors name the
 //! failed operation and never a key.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use vinc_crypto::{IdentityAlg, Keypair, NodeId};
 use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
@@ -29,7 +29,7 @@ pub struct Identity<S = SoftwareStore> {
     store: S,
     handle: KeyHandle,
     node: NodeId,
-    public: Arc<[u8]>,
+    public: Rc<[u8]>,
 }
 
 impl<S> core::fmt::Debug for Identity<S> {
