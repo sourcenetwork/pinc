@@ -91,6 +91,11 @@ pub enum NodeTrace {
         /// The hub's tag.
         peer: u64,
     },
+    /// A membership frame was refused because the stream's backlog was full, so the session was closed to be repaired.
+    BacklogClosed {
+        /// The peer's tag.
+        peer: u64,
+    },
     /// A stream broke the framing and was reset.
     StreamReset {
         /// The peer's tag.
@@ -260,6 +265,7 @@ impl NodeTrace {
             Self::Adopted { .. } => "adopted",
             Self::StreamRepaired { .. } => "stream_repaired",
             Self::Watchdog { .. } => "watchdog",
+            Self::BacklogClosed { .. } => "backlog_closed",
             Self::StreamReset { .. } => "stream_reset",
             Self::Carrier { .. } => "carrier",
             Self::Revoked { .. } => "revoked",
@@ -296,6 +302,7 @@ impl NodeTrace {
             | Self::Adopted { peer }
             | Self::StreamRepaired { peer }
             | Self::Watchdog { peer }
+            | Self::BacklogClosed { peer }
             | Self::StreamReset { peer }
             | Self::ValuesSuperseded { peer } => ([("peer", peer), z, z], 1),
             Self::Backoff { peer, wait_ms, denied } => ([("peer", peer), ("wait_ms", wait_ms), ("denied", denied)], 3),

@@ -605,9 +605,9 @@ impl<E: Ep, St: Store> Io<E, St> {
     }
 
     /// Close the current session with `peer`.
-    pub(crate) fn close_peer(&mut self, peer: &NodeId, reason: CloseReason) {
+    pub(crate) fn close_peer(&mut self, peer: &NodeId, reason: CloseReason) -> bool {
         let Some(session) = self.links.get(peer).and_then(|l| l.conn) else {
-            return;
+            return false;
         };
         let error = match reason {
             CloseReason::NoAck | CloseReason::Stale => 0,
@@ -615,6 +615,28 @@ impl<E: Ep, St: Store> Io<E, St> {
             CloseReason::Revoked => DENIED_CODE,
         };
         // A refused close leaves the session to the transport's own timeout.
-        let _ = self.cmd(Command::Close { session, error });
+        self.cmd(Command::Close { session, error }).is_ok()
+    }
+
+    /// Hand a membership frame to the stream of `peer`. A frame the stream's backlog refuses because it is full is
+    /// never lost silently: the session is closed (and counted), so the reconnect and the new HELLO repair what the
+    /// frame carried.
+    pub(crate) fn send_membership(&mut self, peer: &NodeId, lane: Lane, frame: &[u8]) -> bool {
+        if self.send_stream(peer, lane, frame) {
+            return true;
+        }
+        if self.backlog_full(peer, frame.len()) && self.close_peer(peer, CloseReason::Stale) {
+            self.trace(NodeTrace::BacklogClosed { peer: tag(peer) });
+        }
+        false
+    }
+
+    fn backlog_full(&self, peer: &NodeId, len: usize) -> bool {
+        let Some((conn, out)) = self.links.get(peer).and_then(|l| Some((l.conn?, l.out?))) else {
+            return false;
+        };
+        self.strm
+            .get(&(conn, out))
+            .is_some_and(|st| st.pending().saturating_add(len) > self.out_cap)
     }
 }

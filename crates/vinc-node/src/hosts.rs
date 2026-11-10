@@ -43,8 +43,8 @@ impl<E: Ep, St: Store> MemHost<'_, E, St> {
 impl<E: Ep, St: Store> Session for MemHost<'_, E, St> {
     fn send(&mut self, peer: &NodeId, route: Route, frame: &[u8]) -> bool {
         match route {
-            Route::Session | Route::Direct => self.io.send_stream(peer, Lane::Main, frame),
-            Route::Reply => self.io.send_stream(peer, Lane::Reply, frame),
+            Route::Session | Route::Direct => self.io.send_membership(peer, Lane::Main, frame),
+            Route::Reply => self.io.send_membership(peer, Lane::Reply, frame),
             Route::Via(hub) => {
                 if self.io.probes.len() >= PROBES_MAX {
                     return false;

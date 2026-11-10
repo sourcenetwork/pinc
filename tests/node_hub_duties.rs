@@ -227,3 +227,59 @@ fn a_hub_pushing_to_a_member_whose_session_closed_does_not_dial_it() {
         assert!(got.contains(&body(300, 5)));
     });
 }
+
+#[test]
+fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_reconnect_repairs_it() {
+    big(|| {
+        let seed = 431u64;
+        let max_body = 250_000;
+        let limits = Limits {
+            max_body,
+            log_bytes: 12 * max_body,
+            ..Limits::default()
+        };
+        let mut w = World::build_with(seed, 1, 2, |w| {
+            w.limits = limits;
+            w.trace = true;
+        });
+        let (hub, _) = w.hubs[0];
+        let m = w.members.clone();
+        // The member is cut off from the hub, so nothing it writes drains. It then fills the backlog of its hub
+        // stream with big bodies, then smaller ones, then the smallest frames the node writes, until the next
+        // frame of any kind is refused.
+        w.sim.partition(secs(41), &[&[hub, m[1]], &[m[0]]]);
+        let publish = |w: &mut World, len: usize, n: usize| {
+            for i in 0..n {
+                w.sim.command(
+                    secs(43),
+                    m[0],
+                    NCmd::Publish {
+                        topic: TOPIC.to_vec(),
+                        body: body(len, i as u8),
+                    },
+                );
+            }
+        };
+        publish(&mut w, max_body, 12);
+        publish(&mut w, 4096, 100);
+        publish(&mut w, 64, 100);
+        for _ in 0..60 {
+            w.sim.command(secs(43), m[0], NCmd::Subscribe(b"n".to_vec()));
+            w.sim.command(secs(43), m[0], NCmd::Unsubscribe(b"n".to_vec()));
+        }
+        w.sim.heal(secs(110));
+        w.run(secs(330));
+        let closed = w
+            .sim
+            .node(m[0])
+            .traces
+            .iter()
+            .filter(|(_, t)| matches!(t.body, Body::Node(NodeTrace::BacklogClosed { .. })))
+            .count();
+        assert!(closed >= 1, "the refused membership frame did not close the session");
+        // The reconnect repaired it: every node lists every other again.
+        for n in [hub, m[0], m[1]] {
+            assert_eq!(w.view(n), w.others(n), "the view of {n:?} after the repair");
+        }
+    });
+}
