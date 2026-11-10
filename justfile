@@ -116,13 +116,15 @@ no-std:
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
 
-# Fail if any build script compiled C (run after a build; checks cargo's real target directory). `ring`, the TLS
-# provider of the libraries the comparison harness measures, is the one exception; `python3 scripts/deps.py` proves no
-# VINC crate reaches it.
+# Fail if any build script compiled C (run after a build; checks cargo's real target directory). `ring` and
+# `aws-lc-sys`, the TLS providers of the libraries the comparison harness measures, are the exceptions, and the
+# first check proves no crate other than that harness reaches either.
 pure:
     dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'); \
     [ -d "$dir" ] || { echo "pure: no build output in $dir; build first" >&2; exit 1; }; \
-    ! find "$dir" -path '*/build/*' ! -path '*/build/ring-*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
+    ! cargo tree --workspace --exclude vinc-benches --all-features -e normal,build,dev --prefix none | grep -E '^(ring|aws-lc-sys) ' \
+        || { echo "a crate other than the comparison benches depends on C code (listed above)" >&2; exit 1; }; \
+    ! find "$dir" -path '*/build/*' ! -path '*/build/ring-*' ! -path '*/build/aws-lc-sys-*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
         || { echo "a build script compiled C (listed above); VINC is pure Rust" >&2; exit 1; }
 
 # Measure VINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.
