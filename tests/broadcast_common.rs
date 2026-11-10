@@ -195,6 +195,8 @@ pub struct Net {
     pub filter: Option<Box<dyn FnMut(usize, usize, &mut Vec<u8>) -> bool>>,
     /// Every frame delivered, as `(time, from, to, type, member session?)`.
     pub log: Vec<(u64, usize, usize, u8, bool)>,
+    /// Every frame handed to a host, as `(from, to, type, lane)`.
+    pub lanes: Vec<(usize, usize, u8, Lane)>,
 }
 
 impl Net {
@@ -282,6 +284,7 @@ impl Net {
             queue: VecDeque::new(),
             filter: None,
             log: Vec::new(),
+            lanes: Vec::new(),
         };
         if hubs > 0 {
             for i in hubs..net.nodes.len() {
@@ -369,6 +372,7 @@ impl Net {
                 let outs = std::mem::take(&mut self.nodes[i].h.out);
                 for o in outs {
                     let to = self.index_of(&o.to);
+                    self.lanes.push((i, to, o.bytes.get(4).copied().unwrap_or(0), o.lane));
                     self.queue.push_back((i, to, o.member, o.bytes));
                 }
             }

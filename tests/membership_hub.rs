@@ -856,3 +856,27 @@ fn a_returning_carrier_never_grows_a_full_roster_past_its_bound() {
         "the subscriptions held for the member are released"
     );
 }
+
+#[test]
+fn answers_and_pushes_take_the_reply_route_and_a_hello_the_session_route() {
+    let mut w = started(1, 2);
+    w.run(40 * SEC);
+    let (mut hellos, mut answers) = (0, 0);
+    for s in &w.sent_types {
+        match s.3 {
+            t if t == ty::HELLO => {
+                hellos += 1;
+                assert_eq!(s.4, Route::Session, "a hello may dial the hub");
+            }
+            t if t == ty::ACK || t == ty::SNAP || t == ty::DELTA || t == ty::FLOOR => {
+                answers += 1;
+                assert_eq!(s.4, Route::Reply, "frame type {t} from node {} never dials", s.1);
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        hellos > 0 && answers > 0,
+        "the run sent {hellos} hellos and {answers} answers"
+    );
+}

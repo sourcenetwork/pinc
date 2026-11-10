@@ -193,42 +193,6 @@ fn hub_sessions_with_a_stream_each_way_live_in_a_small_pool() {
                 }
             }
         }
-    });
-}
-
-#[test]
-fn a_hub_pushing_to_a_member_whose_session_closed_does_not_dial_it() {
-    big(|| {
-        let mut w = World::build_with(421, 1, 3, |w| w.trace = true);
-        let m = w.members.clone();
-        let (hub, _) = w.hubs[0];
-        for s in &m[..2] {
-            w.sim.command(secs(20), *s, NCmd::Subscribe(TOPIC.to_vec()));
-        }
-        w.sim.crash(secs(40), m[0]);
-        for i in 0..6u8 {
-            w.sim.command(
-                secs(41 + u64::from(i)),
-                m[2],
-                NCmd::Publish {
-                    topic: TOPIC.to_vec(),
-                    body: body(300, i),
-                },
-            );
-        }
-        w.run(secs(60));
-        let gone = w.id(m[0]);
-        let dialed = w.sim.node(hub).traces.iter().any(
-            |(_, t)| matches!(&t.body, Body::Node(NodeTrace::Dial { peer }) if *peer == vinc_node::trace::tag(&gone)),
-        );
-        assert!(!dialed, "the hub dialed a member to deliver a push");
-        // The live subscriber still got every message.
-        let got: Vec<Vec<u8>> = w.messages(m[1]).into_iter().map(|(_, _, _, b)| b).collect();
-        assert!(got.contains(&body(300, 5)));
-    });
-}
-
-#[test]
 fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_reconnect_repairs_it() {
     big(|| {
         let seed = 431u64;

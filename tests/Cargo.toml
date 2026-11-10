@@ -519,6 +519,10 @@ name = "broadcast_publish"
 path = "broadcast_publish.rs"
 
 [[test]]
+name = "broadcast_lanes"
+path = "broadcast_lanes.rs"
+
+[[test]]
 name = "broadcast_auth"
 path = "broadcast_auth.rs"
 
