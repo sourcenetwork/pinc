@@ -440,6 +440,11 @@ ep_impl! {
                 .peers()
                 .nth(n)
                 .map_or(Answer::None, |(node, krtt)| Answer::Peer(PeerInfo { node: *node, krtt: *krtt })),
+            Query::Peer(node) => self
+                .rtt
+                .krtt(&node)
+                .filter(|r| *r > 0)
+                .map_or(Answer::None, |krtt| Answer::Peer(PeerInfo { node, krtt })),
             Query::Read { session, stream } => self
                 .slot_of(session)
                 .and_then(|i| self.slots.get(i))

@@ -85,6 +85,8 @@ pub trait Port {
     fn stats(&self, session: SessionId) -> Option<SessionStats>;
     /// Read the node-wide numbers.
     fn node(&self) -> Option<vinc_core::NodeStats>;
+    /// The remembered round trip of a peer, if the endpoint holds one.
+    fn peer(&self, node: &NodeId) -> Option<vinc_core::PeerInfo>;
     /// The body of the latest REACH_OUT of a session, copied into `out`; returns its length.
     fn reach_body(&self, session: SessionId, out: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize;
 }
@@ -119,6 +121,12 @@ where
     fn node(&self) -> Option<vinc_core::NodeStats> {
         match self.query(Query::Node) {
             Answer::Node(n) => Some(n),
+            _ => None,
+        }
+    }
+    fn peer(&self, node: &NodeId) -> Option<vinc_core::PeerInfo> {
+        match self.query(Query::Peer(*node)) {
+            Answer::Peer(p) => Some(p),
             _ => None,
         }
     }
@@ -305,6 +313,12 @@ drive_impl! {
             self.lookup(now, &node);
         }
         Ok(id)
+    }
+
+    /// The node has no round trip of any kind yet (no address-discovery answer, no handshake average or
+    /// peak, none remembered for `peer`).
+    fn heard_nothing<E: Port>(&self, ep: &E, peer: &NodeId) -> bool {
+        self.net.best_rtt() == 0 && self.node_rtt == 0 && ep.peer(peer).is_none()
     }
 
     fn relay_live(&self, r: usize) -> bool {
@@ -582,7 +596,12 @@ drive_impl! {
             tries: s.tries,
             link_rtt: self.net.best_rtt(),
             no_rtt: self.node_rtt == 0,
-            hs0: s.hub.is_some() && s.tries > 1 && now.saturating_sub(s.dialed) < super::dial::THIN_HS0_WAIT,
+            hs0: super::dial::hs0(
+                s.hub.is_some(),
+                s.tries,
+                now.saturating_sub(s.dialed),
+                self.heard_nothing(ep, &s.node),
+            ),
             last_relay: s.last_relay,
         };
         let mut chosen = [Cand::Relay(0); 16];

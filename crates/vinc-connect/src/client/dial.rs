@@ -8,7 +8,10 @@
 //! **The first flight.** [`select`] picks the candidate paths one handshake try is sent on:
 //! - *B8, HUB_DIRECT_FIRST* ([`direct_first`]): a late-starting node (its first dial came after 10 s) sends the
 //!   first flight to a hub on its known UDP address only, and the relay copy joins at the first resend 300 ms later.
-//! - *B9, THIN_HS0*: while a hub-session Initial is resent under the 4 s wait, only relay paths carry it.
+//! - *B9, THIN_HS0*: while a hub-session Initial is resent under the 4 s wait, only relay paths carry it, but only on
+//!   a node that has heard nothing yet (no round trip of any kind).
+//! - *Relay path of a direct-first session*: it is withheld at creation and registered 2 s later on an established
+//!   session ([`HUB_RELAY_PATH_DELAY`]).
 //! - *B9, RLY_ONCE*: on a slow link a flight already handed to a relay carrier that was not reset since is not
 //!   queued again for `min(30 s, max(4 s, 3 x link rtt))`; the carrier's stream delivers it.
 //! - *B9, THIN_HS*: on a slow uplink (link rtt of 250 ms or more, or two tries with no round trip known at all)
@@ -49,6 +52,12 @@ pub enum Cand {
 /// B8: whether the first flight of this dial goes to the hub's direct address only.
 pub const fn direct_first(first_try: bool, is_hub: bool, first_dial_at: u64, started: u64) -> bool {
     first_try && is_hub && first_dial_at.saturating_sub(started) > LATE_START
+}
+
+/// Whether this send of a hub-session Initial goes by relay paths only: a resend inside the first
+/// [`THIN_HS0_WAIT`] of the dial, on a node that has not heard a round trip of any kind yet.
+pub const fn hs0(hub: bool, tries: u32, since_dial: u64, heard_nothing: bool) -> bool {
+    hub && tries > 1 && since_dial < THIN_HS0_WAIT && heard_nothing
 }
 
 /// What a flight knows about the relay carrier a relay candidate would use.

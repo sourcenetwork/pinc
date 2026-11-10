@@ -14,7 +14,9 @@
     clippy::many_single_char_names
 )]
 
-use vinc_connect::client::dial::{Cand, HUB_RELAY_DELAY, RelayView, TG_SLOW, Try, direct_first, select};
+use vinc_connect::client::dial::{
+    Cand, HUB_RELAY_DELAY, RelayView, TG_SLOW, THIN_HS0_WAIT, Try, direct_first, hs0, select,
+};
 
 const S: u64 = 1_000_000_000;
 const MS: u64 = 1_000_000;
@@ -161,4 +163,19 @@ fn the_selection_reports_the_relay_that_now_holds_the_flight() {
     assert_eq!(carried, Some((3, 9)));
     let (_, none) = select(&c[..1], &base(), |_| None, &mut out);
     assert_eq!(none, None);
+}
+
+#[test]
+fn a_hub_initial_goes_by_relay_paths_only_while_nothing_at_all_has_been_heard() {
+    assert_eq!(THIN_HS0_WAIT, 4 * S);
+    // a resend of a hub session inside the first four seconds, on a node that heard no round trip of any kind
+    assert!(hs0(true, 2, 0, true));
+    assert!(hs0(true, 5, 4 * S - 1, true));
+    // a round trip of any kind (an address-discovery answer, a handshake average or peak, one remembered for the
+    // peer) ends it
+    assert!(!hs0(true, 2, 0, false));
+    // the first send, a later one, another peer, and the first resend after the wait are unchanged
+    assert!(!hs0(true, 1, 0, true));
+    assert!(!hs0(true, 2, 4 * S, true));
+    assert!(!hs0(false, 2, 0, true));
 }

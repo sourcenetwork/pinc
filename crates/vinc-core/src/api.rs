@@ -538,6 +538,8 @@ pub enum Query {
     SessionAt(usize),
     /// The peer at position `i` of the round-trip table.
     PeerAt(usize),
+    /// A peer of the round-trip table by node id; nothing when it holds no round trip of that peer.
+    Peer(NodeId),
     /// The readable bytes of a stream.
     Read {
         /// The session.
