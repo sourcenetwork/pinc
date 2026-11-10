@@ -640,3 +640,6 @@ impl<E: Ep, St: Store> Io<E, St> {
             .is_some_and(|st| st.pending().saturating_add(len) > self.out_cap)
     }
 }
+
+#[cfg(test)]
+mod tests;
