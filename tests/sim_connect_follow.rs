@@ -243,7 +243,17 @@ fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
         let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat);
         let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
         w.run(secs(10));
-        w.dial(secs(10), a, b, vec![]);
+        // A quiet session: its keepalive is a minute apart, so it is silent for long stretches.
+        let peer = w.client(b).host.me;
+        w.sim.command(
+            secs(10),
+            a,
+            Cmd::Dial {
+                node: peer,
+                hints: vec![],
+                role: vinc_core::Role::Hub,
+            },
+        );
         w.run(secs(40));
         assert!(w.connected(a).is_some(), "{}", w.dump(a));
         w.run(secs(400));
@@ -260,6 +270,14 @@ fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
                 .iter()
                 .any(|(t, to, _)| *t >= *up && *t < *up + 50 * MS && is_relay_addr(to))
         });
-        assert!(pinged, "no session packet left when a carrier came back: {ups:?}");
+        assert!(
+            pinged,
+            "no session packet left when a carrier came back: {ups:?}; around the second {:?}",
+            w.client(a)
+                .tx_log
+                .iter()
+                .filter(|(t, _, _)| *t + 3 * SEC >= ups[1] && *t <= ups[1] + 3 * SEC)
+                .collect::<Vec<_>>()
+        );
     });
 }
