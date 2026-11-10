@@ -10,7 +10,8 @@
    I/O as three async closures, so it needs none; nuclei, the runtime its documentation and examples run on, is a
    dev-dependency of `vinc` only. The tests and benches may use nuclei, tokio and smol; every other member refuses all
    of them, as a dependency of any kind.
-5. Pure Rust: no crate that compiles or links C (crypto or otherwise) is anywhere in the workspace graph.
+5. Pure Rust: no crate that compiles or links C (crypto or otherwise) is anywhere in the graph of any member except the
+   comparison harness (its libraries use `ring` for TLS).
 6. No QUIC library in VINC: no member except the comparison harness (`vinc-benches`, which measures iroh and
    rust-libp2p, both built on QUIC stacks) may depend, directly or transitively, on a QUIC implementation.
 """
@@ -87,16 +88,11 @@ for pkg in meta["packages"]:
     if bad:
         failed.append(f"{pkg['name']}: depends on an async runtime ({', '.join(bad)}); VINC crates must stay runtime-free")
 
-C_CRATES = {"alloca", "openssl", "openssl-sys", "ring", "aws-lc-rs", "aws-lc-sys", "tss-esapi", "tss-esapi-sys", "cryptoki",
-            "cryptoki-sys", "libsodium-sys", "pqcrypto", "pqcrypto-internals"} | {n for n in names.values() if n.startswith("libcrux")}
-bad = sorted({n for n in names.values() if n in C_CRATES})
-if bad:
-    failed.append(f"pure Rust: crates that compile or link C are in the graph: {', '.join(bad)}")
-
 QUIC = {"quinn", "quinn-proto", "quinn-udp", "quiche", "s2n-quic", "s2n-quic-core", "noq", "noq-proto", "noq-udp",
         "msquic", "neqo-transport", "neqo-crypto", "tquic", "lsquic", "quic-rpc", "iroh-quinn", "iroh-quinn-proto",
         "libp2p-quic", "h3", "h3-quinn", "quicly", "ngtcp2", "ngtcp2-sys"}
 COMPARISON = {"vinc-benches"}
+vinc_graph = set()
 for pkg in meta["packages"]:
     if pkg["id"] not in members or pkg["name"] in COMPARISON:
         continue
@@ -107,9 +103,16 @@ for pkg in meta["packages"]:
             if dep["pkg"] not in seen:
                 seen.add(dep["pkg"])
                 stack.append(dep["pkg"])
+    vinc_graph |= seen
     bad = sorted(names[d] for d in seen if names[d] in QUIC)
     if bad:
         failed.append(f"{pkg['name']}: depends on a QUIC library ({', '.join(bad)}); VINC uses no QUIC implementation")
+
+C_CRATES = {"alloca", "openssl", "openssl-sys", "ring", "aws-lc-rs", "aws-lc-sys", "tss-esapi", "tss-esapi-sys", "cryptoki",
+            "cryptoki-sys", "libsodium-sys", "pqcrypto", "pqcrypto-internals"} | {n for n in names.values() if n.startswith("libcrux")}
+bad = sorted({names[d] for d in vinc_graph if names[d] in C_CRATES})
+if bad:
+    failed.append(f"pure Rust: crates that compile or link C are in the graph: {', '.join(bad)}")
 
 for line in failed:
     print(line, file=sys.stderr)
