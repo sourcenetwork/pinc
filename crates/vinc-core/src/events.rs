@@ -326,7 +326,9 @@ ep_impl! {
     fn on_closed(&mut self, i: usize, now: u64, reason: CloseReason) {
         let session = self.session_id(i);
         let Some(slot) = self.slots.get_mut(i) else { return };
-        let was_visible = slot.m.allowed || slot.m.optimistic;
+        // Closed follows a Connected or Incoming; a dial that ended before it was reported fails instead. A session
+        // allowed while it waited for its peer's READY was not reported yet.
+        let was_visible = slot.m.announced;
         let (client, denied, orphaned, redial) = (slot.m.client, slot.m.denied, slot.m.orphaned, slot.m.redial);
         let (node, alpn) = (slot.m.peer, slot.m.alpn);
         let has_sub = slot.m.has_sub;

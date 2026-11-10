@@ -151,6 +151,27 @@ fn a_deny_closes_with_code_three_on_either_side() {
 }
 
 #[test]
+fn a_dial_the_peer_denies_while_the_client_waits_for_ready_fails_and_is_never_reported_closed() {
+    big_stack(|| {
+        // A fast link holds the client's Connected until the server answers; the server's deny arrives instead.
+        let mut net = CoreNet::new(FAST);
+        let (a, b) = (net.add(1), net.add(2));
+        net.nodes[b].acp = Acp::Deny;
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        assert!(net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Closed { .. } | Event::ConnectFailed { .. }))
+        }));
+        assert!(!net.nodes[a].saw(is_connected));
+        assert!(
+            !net.nodes[a].saw(|e| matches!(e, Event::Closed { .. })),
+            "a session the application never saw is not reported closed"
+        );
+        assert!(net.nodes[a].saw(|e| matches!(e, Event::ConnectFailed { .. })));
+    });
+}
+
+#[test]
 fn the_answer_is_cached_for_thirty_seconds_and_asked_again_five_seconds_before() {
     big_stack(|| {
         let mut net = CoreNet::new(SLOW);
