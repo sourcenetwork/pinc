@@ -143,14 +143,20 @@ def aged (c : List Iv) (now : Nat) : List Iv := c.takeWhile (fun e => decide (sa
 
 def floorAt (x : X) (now : Nat) : Option Nat := maxOf (aged x.conf now) x.cf
 
+/-- The second-newest range ends below the confirmed floor: only the newest range is reported. -/
+def onlyNewest (x : X) (now : Nat) : Bool :=
+  match floorAt x now with
+  | some f =>
+    decide (1 < x.items.length) &&
+      (match x.items[x.items.length - 2]? with | some iv => decide (iv.2 - 1 < f) | none => false)
+  | none => false
+
 /-- `ack_ranges`: largest first, as inclusive pairs. -/
 def ackRanges (x : X) (now : Nat) : List Iv :=
-  let n := x.items.length
-  let only := match floorAt x now with
-    | some f => decide (1 < n) && (match x.items[n - 2]? with | some iv => decide (iv.2 - 1 < f) | none => false)
-    | none => false
-  let take := if only then 1 else maxack
-  (x.items.reverse.take take).map (fun iv => (iv.1, iv.2 - 1))
+  (x.items.reverse.take (if onlyNewest x now then 1 else maxack)).map (fun iv => (iv.1, iv.2 - 1))
+
+/-- The table of our acknowledgement packets, the oldest forgotten when it is full. -/
+def sentTrim (s : List Iv) : List Iv := if s.length == sentn then s.drop 1 else s
 
 /-- `on_ack_sent`. -/
 def ackSent (x : X) (apn now : Nat) : X :=
@@ -158,16 +164,23 @@ def ackSent (x : X) (apn now : Nat) : X :=
   | none => x
   | some lg =>
     let ag := aged x.conf now
-    let s0 := if x.sent.length == sentn then x.sent.drop 1 else x.sent
-    { x with pending := 0, due := none, cf := maxOf ag x.cf, conf := x.conf.drop ag.length, sent := s0 ++ [(apn, lg)] }
+    { x with pending := 0, due := none, cf := maxOf ag x.cf, conf := x.conf.drop ag.length,
+             sent := sentTrim x.sent ++ [(apn, lg)] }
+
+/-- The largest of a list of numbers, if any. -/
+def maxOpt (l : List Nat) : Option Nat :=
+  l.foldl (fun a b => some (match a with | some a => max a b | none => b)) none
+
+/-- Our acknowledgement packet `e` is at or below `lg` and inside one of the acknowledged inclusive ranges. -/
+def peerHit (rgs : List Iv) (lg : Nat) (e : Iv) : Bool :=
+  decide (e.1 ≤ lg) && rgs.any (fun r => decide (r.1 ≤ e.1 ∧ e.1 ≤ r.2))
 
 /-- `on_peer_ack` with the acknowledged inclusive ranges. -/
 def peerAck (x : X) (now : Nat) (rgs : List Iv) : X :=
-  match (rgs.map (·.2)).foldl (fun a b => some (match a with | some a => max a b | none => b)) none with
+  match maxOpt (rgs.map (·.2)) with
   | none => x
   | some lg =>
-    let hits := x.sent.filter (fun e => decide (e.1 ≤ lg) && rgs.any (fun r => decide (r.1 ≤ e.1 ∧ e.1 ≤ r.2)))
-    match hits.map (·.2) |>.foldl (fun a b => some (match a with | some a => max a b | none => b)) none with
+    match maxOpt ((x.sent.filter (peerHit rgs lg)).map (·.2)) with
     | none => x
     | some best =>
       { x with sent := x.sent.filter (fun e => decide (lg < e.1)),

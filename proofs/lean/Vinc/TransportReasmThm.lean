@@ -19,12 +19,19 @@ What the model proves about `Reassembly`, over unbounded messages and any run of
 namespace Vinc.TransportReasm
 open Vinc.TransportRx (WF Cov wf_append wf_cons cov_append cov_cons cov_nil)
 
+theorem shuf1 {P A B C R : Prop} (h : P ↔ (A ∨ B) ∨ C ∨ R) : P ↔ A ∨ (B ∨ C) ∨ R := by grind
+
+theorem shuf2 {P A B C D : Prop} (h : P ↔ A ∨ B ∨ (C ∨ D)) : P ↔ A ∨ (D ∨ B) ∨ C := by grind
+
 theorem insertRun_mem (iv v : Iv) : ∀ (l : List Iv), v ∈ insertRun l iv ↔ v = iv ∨ v ∈ l
   | [] => by simp [insertRun]
   | x :: t => by
     unfold insertRun
     split
-    · simp [insertRun_mem iv v t]; tauto
+    · simp only [List.mem_cons, insertRun_mem iv v t]
+      constructor
+      · rintro (h | h | h) <;> simp [h]
+      · rintro (h | h | h) <;> simp [h]
     · simp
 
 theorem insertRun_length (iv : Iv) : ∀ (l : List Iv), (insertRun l iv).length = l.length + 1
@@ -45,13 +52,9 @@ theorem insertRun_cov (iv : Iv) : ∀ (l : List Iv) (n : Nat), Cov (insertRun l 
     unfold insertRun
     split
     · rw [cov_cons, cov_cons, insertRun_cov iv t n]
-      constructor
-      · rintro (h | h | h) <;> tauto
-      · rintro ((h | h) | h) <;> tauto
+      grind
     · rw [cov_cons, cov_cons]
-      constructor
-      · rintro (h | h | h) <;> tauto
-      · rintro ((h | h) | h) <;> tauto
+      grind
 
 theorem insertRun_wf (iv : Iv) (hiv : iv.1 < iv.2) : ∀ (l : List Iv), WF l → (∀ k ∈ l, k.2 < iv.1 ∨ iv.2 < k.1) →
     WF (insertRun l iv)
@@ -134,8 +137,9 @@ theorem mergeRuns_spec (rs : List Iv) : ∀ (keep : List Iv) (lo hi : Nat) (keep
       refine ⟨c1, c2, c3, c4, c5, fun n => ?_, ?_, fun k hk' => ?_,
         fun B hB hr => c9 B hB (fun r hr' => hr r (List.mem_cons_of_mem _ hr'))⟩
       · have := c6 n
-        simp only [cov_append, cov_single, cov_cons] at this ⊢
-        grind
+        rw [cov_append, cov_single] at this
+        rw [cov_cons]
+        exact shuf1 this
       · simp at c7 ⊢; omega
       · rcases c8 k hk' with h | h
         · rcases List.mem_append.1 h with h | h
@@ -158,8 +162,8 @@ theorem mergeRuns_spec (rs : List Iv) : ∀ (keep : List Iv) (lo hi : Nat) (keep
       · have := c6 n
         have heq : (min lo s ≤ n ∧ n < max hi e) ↔ ((lo ≤ n ∧ n < hi) ∨ (s ≤ n ∧ n < e)) := by omega
         rw [heq] at this
-        simp only [cov_cons] at this ⊢
-        grind
+        rw [cov_cons]
+        exact shuf2 this
       · rcases c8 k hk' with h | h
         · exact Or.inl h
         · exact Or.inr (List.mem_cons_of_mem _ h)
@@ -193,7 +197,11 @@ theorem add_inv (r : R) (mx nr total off dlen : Nat) (hr : Inv mx nr r) :
       split
       · exact ⟨⟨fun iv h => by simp at h, List.Pairwise.nil⟩, by simp, fun iv h => by simp at h, h0'.2⟩
       · exact hr
-    generalize hr1def : (if total ≠ r.total then ({ runs := [], total } : R) else r) = r1 at hr1 h
+    have hr1t : (if total ≠ r.total then ({ runs := [], total } : R) else r).total = total := by
+      split
+      · rfl
+      · rename_i hh; omega
+    generalize hr1def : (if total ≠ r.total then ({ runs := [], total } : R) else r) = r1 at hr1 h hr1t
     by_cases h1 : min (off + dlen) total ≤ off
     · rw [if_pos h1] at h
       simp only [Prod.mk.injEq] at h
@@ -226,7 +234,7 @@ theorem add_inv (r : R) (mx nr total off dlen : Nat) (hr : Inv mx nr r) :
             exact (c5 k hk).2
           refine ⟨hwf, by rw [insertRun_length]; omega, fun iv hiv => ?_, ht1⟩
           rcases (insertRun_mem (lo', hi') iv keep').1 hiv with rfl | hiv
-          · exact c9 r1.total (by omega) hb1
+          · exact c9 r1.total (by rw [hr1t]; exact Nat.min_le_right _ _) hb1
           · rcases c8 iv hiv with h | h
             · simp at h
             · exact hb1 iv h

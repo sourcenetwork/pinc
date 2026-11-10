@@ -147,11 +147,22 @@ theorem owed_ackSent (x : X) (lim : Option Nat) (clk apn now : Nat) (ho : Owed x
     simp only [hl, Option.isSome_some, if_true]
     exact ⟨fun _ => rfl, fun h => by simp at h⟩
 
+theorem peerAck_cases (x : X) (now : Nat) (rgs : List Iv) : ∀ r, peerAck x now rgs = r → r = x ∨ ∃ lg best, r =
+      { x with sent := x.sent.filter (fun e => decide (lg < e.1)),
+               conf := if x.conf.length < confn then x.conf ++ [(now, best)] else x.conf } := by
+  intro r h
+  unfold peerAck at h
+  split at h
+  · exact Or.inl h.symm
+  · split at h
+    · exact Or.inl h.symm
+    · exact Or.inr ⟨_, _, h.symm⟩
+
 theorem peerAck_keeps (x : X) (now : Nat) (rgs : List Iv) :
     (peerAck x now rgs).pending = x.pending ∧ (peerAck x now rgs).due = x.due := by
-  unfold peerAck
-  repeat' split
-  all_goals simp
+  rcases peerAck_cases x now rgs _ rfl with h | ⟨lg, best, h⟩
+  · rw [h]; exact ⟨rfl, rfl⟩
+  · rw [h]; exact ⟨rfl, rfl⟩
 
 /-- Setting the round trip or the interval and taking the peer's acknowledgements leave the owed deadline alone. -/
 theorem owed_other (x : X) (lim : Option Nat) (clk : Nat) (ho : Owed x lim clk) :
@@ -183,35 +194,54 @@ theorem dueNext_fire (now due2 : Nat) (od : Option Nat) : dueNext true now due2 
 theorem ackRanges_length_le (x : X) (now : Nat) : (ackRanges x now).length ≤ maxack := by
   unfold ackRanges
   simp only [List.length_map, List.length_take]
-  split <;> simp [maxack]
+  by_cases h : onlyNewest x now = true
+  · rw [if_pos h]; unfold maxack; omega
+  · rw [if_neg h]; exact Nat.min_le_left _ _
 
 theorem ackRanges_ne_nil (x : X) (now : Nat) (h : x.items ≠ []) : ackRanges x now ≠ [] := by
   unfold ackRanges
-  simp only [ne_eq, List.map_eq_nil_iff, List.take_eq_nil_iff, List.reverse_eq_nil_iff, not_or]
-  refine ⟨h, ?_⟩
-  split <;> simp [maxack]
+  intro hnil
+  have h1 := congrArg List.length hnil
+  simp only [List.length_map, List.length_take, List.length_reverse, List.length_nil] at h1
+  have hpos : 0 < x.items.length := Nat.pos_of_ne_zero (fun h0 => h (List.eq_nil_of_length_eq_zero h0))
+  by_cases ho : onlyNewest x now = true
+  · rw [if_pos ho] at h1; omega
+  · rw [if_neg ho] at h1; unfold maxack at h1; omega
+
+theorem sentTrim_len (s : List Iv) (h : s.length ≤ sentn) : (sentTrim s ++ [(0, 0)]).length ≤ sentn := by
+  have hs : 0 < sentn := by unfold sentn; decide
+  unfold sentTrim
+  by_cases hh : (s.length == sentn) = true
+  · rw [if_pos hh]
+    simp only [beq_iff_eq] at hh
+    simp only [List.length_append, List.length_drop, List.length_singleton]
+    omega
+  · rw [if_neg hh]
+    simp only [beq_iff_eq] at hh
+    simp only [List.length_append, List.length_singleton]
+    omega
 
 theorem ackSent_tables (x : X) (apn now : Nat) (h1 : x.sent.length ≤ sentn) (h2 : x.conf.length ≤ confn) :
     (ackSent x apn now).sent.length ≤ sentn ∧ (ackSent x apn now).conf.length ≤ confn := by
   unfold ackSent
-  cases largest x with
+  cases hl : largest x with
   | none => exact ⟨h1, h2⟩
   | some lg =>
-    simp only [List.length_drop, List.length_append, List.length_singleton]
-    refine ⟨?_, by omega⟩
-    split
-    · rename_i h; simp only [beq_iff_eq] at h; simp [sentn] at h ⊢; omega
-    · rename_i h; simp only [beq_iff_eq] at h; simp [sentn] at h1 h ⊢; omega
+    refine ⟨?_, ?_⟩
+    · have := sentTrim_len x.sent h1
+      simpa using this
+    · show (x.conf.drop (aged x.conf now).length).length ≤ confn
+      rw [List.length_drop]; omega
 
 theorem peerAck_tables (x : X) (now : Nat) (rgs : List Iv) (h1 : x.sent.length ≤ sentn) (h2 : x.conf.length ≤ confn) :
     (peerAck x now rgs).sent.length ≤ sentn ∧ (peerAck x now rgs).conf.length ≤ confn := by
-  unfold peerAck
-  repeat' split
-  all_goals first
-    | exact ⟨h1, h2⟩
-    | exact ⟨Nat.le_trans (List.length_filter_le _ _) h1, by
-        split
-        · simp only [List.length_append, List.length_singleton]; omega
-        · exact h2⟩
+  rcases peerAck_cases x now rgs _ rfl with h | ⟨lg, best, h⟩
+  · rw [h]; exact ⟨h1, h2⟩
+  · rw [h]
+    refine ⟨Nat.le_trans (List.length_filter_le _ _) h1, ?_⟩
+    show (if x.conf.length < confn then x.conf ++ [(now, best)] else x.conf).length ≤ confn
+    by_cases hc : x.conf.length < confn
+    · rw [if_pos hc]; simp only [List.length_append, List.length_singleton]; omega
+    · rw [if_neg hc]; exact h2
 
 end Vinc.TransportRx
