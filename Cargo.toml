@@ -53,7 +53,7 @@ tpm2-protocol = { version = "1.2.3", default-features = false }
 
 futures-io = { version = "0.3.34", default-features = false, features = ["std"] }
 kovan-channel = "0.2.3"
-nuclei = "0.5.7"
+nuclei = "0.5.8"
 
 criterion = "0.7.0"
 proptest = "1.12.0"
