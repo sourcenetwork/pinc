@@ -30,6 +30,17 @@ struct Slot<S, const C: usize> {
     urgency: u8,
 }
 
+/// How many of `fit` initial windows the credit may promise: half of them, but never more than leave three windows for
+/// the streams already open (their windows slide through whole chunks) and for our own, and one when a window fits at
+/// all. A pool of 4 windows promises 1, one of 6 promises 3, one of 25 promises 12.
+const fn admit_fit(fit: u64) -> u64 {
+    let spare = fit.saturating_sub(3);
+    let half = fit / 2;
+    let most = if spare < half { spare } else { half };
+    let one = if fit < 1 { fit } else { 1 };
+    if most > one { most } else { one }
+}
+
 impl<S: StreamSource, const C: usize> Slot<S, C> {
     const NEW: Self = Self {
         recv: Recv::NEW,
@@ -335,15 +346,15 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// How many more peer streams could be admitted now, counting the credit already given: the live-stream cap (at
     /// most half the slots, so the rest stay free for the streams we open) less the live ones, the free slots, and as
-    /// many initial windows as fit in a quarter of the pool bytes left (one at least when a window fits at all), so
-    /// the credit never keeps idle more than a quarter of the pool from the streams already open and from our own.
+    /// many initial windows as [`admit_fit`] allows of those that fit in the pool bytes left beside the credit already
+    /// granted.
     fn admit_room(&self, pool: &BufferPool<'_>) -> u64 {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
         let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.window_bytes();
         let cap = self.max_remote.min((N as u64 / 2).max(1));
         cap.saturating_sub(self.remote_live)
             .min(free)
-            .min((fit / 4).max(fit.min(1)))
+            .min(admit_fit(fit))
     }
 
     /// Queue a raise of the stream credit when the room grew enough (see [`Admit::update`]).

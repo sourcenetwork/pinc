@@ -37,12 +37,12 @@ def P.maxStream (p : P) : Nat := min p.mswc (min ((p.ring - 1) * p.ch) p.half)
 def P.sw (p : P) : Nat := min p.swc p.maxStream
 /-- The initial window in whole chunks. -/
 def P.winC (p : P) : Nat := (p.sw + p.ch - 1) / p.ch * p.ch
-/-- A quarter of `f` windows, one at least when one fits. -/
-def quarterFit (f : Nat) : Nat := max (f / 4) (min f 1)
+/-- Half of `f` windows, but three stay free, and one at least when one fits (`admit_fit`). -/
+def admitFit (f : Nat) : Nat := max (min (f - 3) (f / 2)) (min f 1)
 /-- The live peer streams the table admits: at most half the slots, so the rest stay free for its own streams. -/
 def P.capLive (p : P) : Nat := min p.maxrem (max (p.n / 2) 1)
 /-- The stream credit the handshake gives the peer (`Streams::admit_cap` on an empty table). -/
-def P.adv0 (p : P) : Nat := min p.capLive (quarterFit (p.b * p.ch / p.winC))
+def P.adv0 (p : P) : Nat := min p.capLive (admitFit (p.b * p.ch / p.winC))
 
 structure Slot where
   id : Option Nat
@@ -189,7 +189,7 @@ def grantRun (p : P) (T : Tab) (first : Nat) : Tab := (List.range p.n).foldl (gr
 /-- `Streams::admit_room`: how many more peer streams could be admitted now. -/
 def freeSlots (T : Tab) : Nat := (T.slots.filter (·.id == none)).length
 def admitRoom (p : P) (T : Tab) : Nat :=
-  min (min (p.capLive - T.rl) (freeSlots T)) (quarterFit ((avail p T - gu p T) / p.winC))
+  min (min (p.capLive - T.rl) (freeSlots T)) (admitFit ((avail p T - gu p T) / p.winC))
 
 /-- `Streams::refresh_admit`: queue a raise of the credit when the room grew by an eighth of the credit last given, or at
 once when the opener used all of it. -/

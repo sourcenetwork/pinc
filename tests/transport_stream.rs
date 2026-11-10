@@ -1394,8 +1394,8 @@ fn deliver(from: &mut Table, from_pool: &BufferPool<'_>, to: &mut Table, to_pool
 
 #[test]
 fn the_opener_stops_at_the_credit_and_resumes_on_a_raise() {
-    // The receiver: 32 chunks, windows of 4 chunks: eight windows fit, a quarter of them are credit, so it tells the opener 2.
-    let (mut rpool, mut rx) = setup_credit(32, |c| c.initial_stream_window = 64 * 1024);
+    // The receiver: 20 chunks, windows of 4 chunks: five windows fit, two are credit (three stay free), so it tells the opener 2.
+    let (mut rpool, mut rx) = setup_credit(20, |c| c.initial_stream_window = 64 * 1024);
     assert_eq!(rx.advertised_streams(), 2);
     let mut opener = Config::new(true);
     opener.peer = PeerLimits {
@@ -1446,11 +1446,11 @@ fn the_opener_stops_at_the_credit_and_resumes_on_a_raise() {
 
 #[test]
 fn the_credit_given_to_the_peer_keeps_its_windows_in_the_pool() {
-    // 32 chunks, windows of 4 chunks, credit for 2 streams: 8 chunks stay free for them.
-    let (mut pool, mut t) = setup_credit(32, |c| c.initial_stream_window = 64 * 1024);
+    // 20 chunks, windows of 4 chunks, credit for 2 streams: 8 chunks stay free for them.
+    let (mut pool, mut t) = setup_credit(20, |c| c.initial_stream_window = 64 * 1024);
     assert_eq!(t.advertised_streams(), 2);
-    // Our own streams may take the rest only: 24 chunks, then the next would touch the reserved 8.
-    for _ in 0..6 {
+    // Our own streams may take the rest only: 12 chunks, then the next would touch the reserved 8.
+    for _ in 0..3 {
         t.open_stream(&pool, true).unwrap();
     }
     assert_eq!(t.open_stream(&pool, true), Err(StreamError::Exhausted));
@@ -1458,5 +1458,5 @@ fn the_credit_given_to_the_peer_keeps_its_windows_in_the_pool() {
     // The two streams the peer may open are admitted, and nothing is held back.
     t.on_stream_frame(&mut pool, 0, 0, &[1; 10], false).unwrap();
     t.on_stream_frame(&mut pool, 4, 0, &[1; 10], false).unwrap();
-    assert_eq!(t.open_streams(), 8);
+    assert_eq!(t.open_streams(), 5);
 }

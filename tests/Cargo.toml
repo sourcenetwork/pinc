@@ -151,6 +151,10 @@ name = "transport_credit"
 path = "transport_credit.rs"
 
 [[test]]
+name = "transport_credit_cost"
+path = "transport_credit_cost.rs"
+
+[[test]]
 name = "transport_stream"
 path = "transport_stream.rs"
 

@@ -77,9 +77,9 @@ NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi 
             stop |-> 0, qcode |-> -1, scode |-> -1]
 
 WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
-QuarterFit(f) == Max(f \div 4, Min(f, 1))   \* a quarter of f windows, one at least when one fits
+AdmitFit(f) == Max(Min(Max(f - 3, 0), f \div 2), Min(f, 1))   \* half of f windows, three left free, one at least when one fits
 CapLive == Min(MAXREM, Max(N \div 2, 1))     \* the live peer streams: at most half the slots
-Adv0 == Min(CapLive, QuarterFit((B * CH) \div WinC))
+Adv0 == Min(CapLive, AdmitFit((B * CH) \div WinC))
 
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
           rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW,
@@ -153,7 +153,7 @@ GrantRun(T, first) == GrantFrom(T, 1, first)
 (* admit_room / refresh_admit (Streams): the streams that could be admitted now, and the raise to queue *)
 FreeSlots(T) == Cardinality({i \in 1..N : T.slots[i].id = -1})
 AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div WinC
-                IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), QuarterFit(fit))
+                IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), AdmitFit(fit))
 RefreshAdmit(T) ==
     LET now == AdmittedN(T) + AdmitRoom(T)
         usedUp == T.ad.adv <= AdmittedN(T)
