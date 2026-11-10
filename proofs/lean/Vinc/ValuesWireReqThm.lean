@@ -18,10 +18,10 @@ theorem take34 (buf : List Nat) (h : 34 ≤ buf.length) :
     getD_drop_zero]
   simp
 
-/-- The parse accepts exactly the strings with the type byte, a count of at most 32 and all the range bytes. -/
+/-- The parse accepts exactly the strings with the type byte, a count of at most 255 and all the range bytes. -/
 theorem req_accept_iff (buf : List Nat) :
     (∃ r n, reqParse buf = .ok (r, n)) ↔
-      34 ≤ buf.length ∧ buf.getD 0 0 = 1 ∧ buf.getD 33 0 ≤ 32 ∧ 34 + 16 * buf.getD 33 0 ≤ buf.length := by
+      34 ≤ buf.length ∧ buf.getD 0 0 = 1 ∧ buf.getD 33 0 ≤ 255 ∧ 34 + 16 * buf.getD 33 0 ≤ buf.length := by
   rw [reqParse_eq]
   constructor
   · rintro ⟨r, n, h⟩
@@ -34,7 +34,7 @@ theorem req_accept_iff (buf : List Nat) :
     have a2 : ¬ buf.getD 0 0 ≠ 1 := by omega
     have a3 : ¬ buf.length < 33 := by omega
     have a4 : ¬ buf.length = 33 := by omega
-    have a5 : ¬ buf.getD 33 0 > 32 := by omega
+    have a5 : ¬ buf.getD 33 0 > 255 := by omega
     have a6 : ¬ buf.length < 34 + 16 * buf.getD 33 0 := by omega
     simp only [a1, a2, a3, a4, a5, a6, ↓reduceIte]
 
@@ -48,7 +48,7 @@ theorem req_total (buf : List Nat) : (∃ r n, reqParse buf = .ok (r, n)) ∨ �
 theorem req_canonical (buf : List Nat) (hv : ValidBytes buf) (r : Req) (n : Nat)
     (h : reqParse buf = .ok (r, n)) :
     n ≤ buf.length ∧ n = 34 + r.ranges.length ∧ r.root.length = 32 ∧ r.ranges.length = 16 * (r.ranges.length / 16) ∧
-      r.ranges.length / 16 ≤ 32 ∧
+      r.ranges.length / 16 ≤ 255 ∧
       reqBytes r.root (spansOf (r.ranges.length / 16) r.ranges) = buf.take n := by
   have hacc := (req_accept_iff buf).1 ⟨r, n, h⟩
   obtain ⟨h1, h2, h3, h4⟩ := hacc
@@ -57,7 +57,7 @@ theorem req_canonical (buf : List Nat) (hv : ValidBytes buf) (r : Req) (n : Nat)
   have a2 : ¬ buf.getD 0 0 ≠ 1 := by omega
   have a3 : ¬ buf.length < 33 := by omega
   have a4 : ¬ buf.length = 33 := by omega
-  have a5 : ¬ buf.getD 33 0 > 32 := by omega
+  have a5 : ¬ buf.getD 33 0 > 255 := by omega
   have a6 : ¬ buf.length < 34 + 16 * buf.getD 33 0 := by omega
   simp only [a1, a2, a3, a4, a5, a6, ↓reduceIte, Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl⟩ := h
@@ -91,7 +91,7 @@ theorem length_reqBytes (root : List Nat) (spans : List (Nat × Nat)) (hr : root
 /-- Round trip: parsing an encoded request, with anything after it, returns the request and its length, and the
 ranges read back are the ranges encoded (every offset and length below `2 ^ 64`, the `u64` range). -/
 theorem req_roundtrip (root : List Nat) (spans : List (Nat × Nat)) (rest : List Nat) (hr : root.length = 32)
-    (hn : spans.length ≤ 32) (hs : ∀ s ∈ spans, s.1 < 2 ^ 64 ∧ s.2 < 2 ^ 64) :
+    (hn : spans.length ≤ 255) (hs : ∀ s ∈ spans, s.1 < 2 ^ 64 ∧ s.2 < 2 ^ 64) :
     reqParse (reqBytes root spans ++ rest) = .ok (⟨root, spans.flatMap spanBytes⟩, 34 + 16 * spans.length) ∧
       spansOf spans.length (spans.flatMap spanBytes) = spans := by
   refine ⟨?_, spansOf_flatMap spans hs⟩
@@ -114,33 +114,33 @@ theorem req_roundtrip (root : List Nat) (spans : List (Nat × Nat)) (rest : List
   have a1 : ¬ (reqBytes root spans ++ rest).length = 0 := by omega
   have a3 : ¬ (reqBytes root spans ++ rest).length < 33 := by omega
   have a4 : ¬ (reqBytes root spans ++ rest).length = 33 := by omega
-  have a5 : ¬ spans.length > 32 := by omega
+  have a5 : ¬ spans.length > 255 := by omega
   have a6 : ¬ (reqBytes root spans ++ rest).length < 34 + 16 * spans.length := by omega
   simp only [a1, a3, a4, a5, a6, ne_eq, not_true_eq_false, ↓reduceIte]
   rw [d1, d34, List.take_left' hr, List.take_left' hF]
 
 /-! ## The encoder -/
 
-/-- More than 32 ranges (or more than 255, which does not fit the count byte) is refused and nothing is written. -/
+/-- More than 255 ranges (which does not fit the count byte) is refused and nothing is written. -/
 theorem reqEncode_too_many (root : List Nat) (spans : List (Nat × Nat)) (out : List Nat)
-    (h : 32 < spans.length) : reqEncode root spans out = (.error (.unexpected "too many ranges"), out) := by
+    (h : 255 < spans.length) : reqEncode root spans out = (.error (.unexpected "too many ranges"), out) := by
   simp [reqEncode, h]
 
 /-- A buffer shorter than the request is refused with the exact shortfall, and nothing is written. -/
 theorem reqEncode_short (root : List Nat) (spans : List (Nat × Nat)) (out : List Nat) (hr : root.length = 32)
-    (hn : spans.length ≤ 32) (h : out.length < 34 + 16 * spans.length) :
+    (hn : spans.length ≤ 255) (h : out.length < 34 + 16 * spans.length) :
     reqEncode root spans out = (.error (.bufferTooSmall (34 + 16 * spans.length - out.length)), out) := by
   have hl := length_reqBytes root spans hr
-  have : ¬ spans.length > 32 := by omega
+  have : ¬ spans.length > 255 := by omega
   simp only [reqEncode, this, ↓reduceIte]
   rw [put_err (by omega), hl]
 
 /-- Otherwise the encoder writes exactly the request and leaves the rest of the buffer alone. -/
 theorem reqEncode_ok (root : List Nat) (spans : List (Nat × Nat)) (out : List Nat) (hr : root.length = 32)
-    (hn : spans.length ≤ 32) (h : 34 + 16 * spans.length ≤ out.length) :
+    (hn : spans.length ≤ 255) (h : 34 + 16 * spans.length ≤ out.length) :
     reqEncode root spans out = (.ok (34 + 16 * spans.length), reqBytes root spans ++ out.drop (34 + 16 * spans.length)) := by
   have hl := length_reqBytes root spans hr
-  have : ¬ spans.length > 32 := by omega
+  have : ¬ spans.length > 255 := by omega
   simp only [reqEncode, this, ↓reduceIte]
   rw [put_ok (by omega), hl]
 
@@ -150,7 +150,7 @@ theorem reqEncode_parse (root : List Nat) (spans : List (Nat × Nat)) (out after
     (h : reqEncode root spans out = (.ok k, after)) :
     k = 34 + 16 * spans.length ∧
       reqParse after = .ok (⟨root, spans.flatMap spanBytes⟩, k) ∧ spansOf spans.length (spans.flatMap spanBytes) = spans := by
-  by_cases hn : spans.length ≤ 32
+  by_cases hn : spans.length ≤ 255
   · by_cases ho : 34 + 16 * spans.length ≤ out.length
     · rw [reqEncode_ok root spans out hr hn ho] at h
       simp only [Prod.mk.injEq, Except.ok.injEq] at h
@@ -170,8 +170,8 @@ theorem req_reject_type (t : Nat) (r : List Nat) (h : t ≠ 1) :
   rw [reqParse_eq]
   simp [h]
 
-/-- A count over 32 is refused, whatever follows. -/
-theorem req_reject_count (buf : List Nat) (h1 : 34 ≤ buf.length) (h2 : buf.getD 0 0 = 1) (h3 : 32 < buf.getD 33 0) :
+/-- A count over 255 is refused, whatever follows. -/
+theorem req_reject_count (buf : List Nat) (h1 : 34 ≤ buf.length) (h2 : buf.getD 0 0 = 1) (h3 : 255 < buf.getD 33 0) :
     reqParse buf = .error (.unexpected "too many ranges") := by
   rw [reqParse_eq]
   have a1 : ¬ buf.length = 0 := by omega
@@ -180,14 +180,14 @@ theorem req_reject_count (buf : List Nat) (h1 : 34 ≤ buf.length) (h2 : buf.get
   simp only [a1, a3, a4, h2, ne_eq, not_true_eq_false, ↓reduceIte, gt_iff_lt, h3]
 
 /-- An input shorter than the request its count asks for is refused as truncated, with the shortfall. -/
-theorem req_reject_short (buf : List Nat) (h1 : 34 ≤ buf.length) (h2 : buf.getD 0 0 = 1) (h3 : buf.getD 33 0 ≤ 32)
+theorem req_reject_short (buf : List Nat) (h1 : 34 ≤ buf.length) (h2 : buf.getD 0 0 = 1) (h3 : buf.getD 33 0 ≤ 255)
     (h4 : buf.length < 34 + 16 * buf.getD 33 0) :
     reqParse buf = .error (.truncated (34 + 16 * buf.getD 33 0 - buf.length)) := by
   rw [reqParse_eq]
   have a1 : ¬ buf.length = 0 := by omega
   have a3 : ¬ buf.length < 33 := by omega
   have a4 : ¬ buf.length = 33 := by omega
-  have a5 : ¬ buf.getD 33 0 > 32 := by omega
+  have a5 : ¬ buf.getD 33 0 > 255 := by omega
   simp only [a1, a3, a4, a5, h2, h4, ne_eq, not_true_eq_false, ↓reduceIte]
 
 /-- Truncation at every length: every strict prefix of an accepted request is refused as truncated, with a
@@ -202,7 +202,7 @@ theorem req_prefix_truncated (buf : List Nat) (hv : ValidBytes buf) (r : Req) (n
     have a1 : ¬ buf.length = 0 := by omega
     have a3 : ¬ buf.length < 33 := by omega
     have a4 : ¬ buf.length = 33 := by omega
-    have a5 : ¬ buf.getD 33 0 > 32 := by omega
+    have a5 : ¬ buf.getD 33 0 > 255 := by omega
     have a6 : ¬ buf.length < 34 + 16 * buf.getD 33 0 := by omega
     simp only [a1, h2, a3, a4, a5, a6, ne_eq, not_true_eq_false, ↓reduceIte, Except.ok.injEq, Prod.mk.injEq] at h
     exact h.2.symm
@@ -220,7 +220,7 @@ theorem req_prefix_truncated (buf : List Nat) (hv : ValidBytes buf) (r : Req) (n
     refine ⟨1, Nat.le_refl _, by omega, ?_⟩
     simp only [m0, m33, g0, ne_eq, not_true_eq_false, ↓reduceIte]
   · have g33 : (buf.take m).getD 33 0 = buf.getD 33 0 := getD_take (by omega)
-    have a5 : ¬ buf.getD 33 0 > 32 := by omega
+    have a5 : ¬ buf.getD 33 0 > 255 := by omega
     refine ⟨34 + 16 * buf.getD 33 0 - m, by omega, by omega, ?_⟩
     have a6 : m < 34 + 16 * buf.getD 33 0 := by omega
     simp only [m0, m33, m33', g0, g33, a5, a6, ne_eq, not_true_eq_false, ↓reduceIte]
@@ -233,7 +233,7 @@ theorem totalLen_short (head : List Nat) (h : head.length < 34) :
 
 theorem totalLen_eq (head : List Nat) (h : 34 ≤ head.length) :
     reqTotalLen head =
-      if head.getD 0 0 ≠ 1 ∨ head.getD 33 0 > 32 then .error (.unexpected "bad request header")
+      if head.getD 0 0 ≠ 1 ∨ head.getD 33 0 > 255 then .error (.unexpected "bad request header")
       else .ok (34 + 16 * head.getD 33 0) := by
   have : ¬ head.length < 34 := by omega
   unfold reqTotalLen
@@ -247,7 +247,7 @@ theorem reqParse_n (buf : List Nat) (r : Req) (n : Nat) (h : reqParse buf = .ok 
   have a1 : ¬ buf.length = 0 := by omega
   have a3 : ¬ buf.length < 33 := by omega
   have a4 : ¬ buf.length = 33 := by omega
-  have a5 : ¬ buf.getD 33 0 > 32 := by omega
+  have a5 : ¬ buf.getD 33 0 > 255 := by omega
   have a6 : ¬ buf.length < 34 + 16 * buf.getD 33 0 := by omega
   simp only [a1, h2, a3, a4, a5, a6, ne_eq, not_true_eq_false, ↓reduceIte, Except.ok.injEq, Prod.mk.injEq] at h
   exact h.2.symm
@@ -258,7 +258,7 @@ theorem totalLen_of_parse (buf : List Nat) (r : Req) (n : Nat) (h : reqParse buf
   obtain ⟨h1, h2, h3, h4⟩ := (req_accept_iff buf).1 ⟨r, n, h⟩
   have hnc := reqParse_n buf r n h
   rw [totalLen_eq buf h1]
-  have a : ¬ (buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 32) := by omega
+  have a : ¬ (buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 255) := by omega
   simp only [a, ↓reduceIte, hnc]
 
 /-- When `total_len` accepts a head, the request is accepted exactly when the input is at least that long, and then
@@ -270,12 +270,12 @@ theorem totalLen_agrees (buf : List Nat) (N : Nat) (h : reqTotalLen buf = .ok N)
   · rw [totalLen_short buf a] at h; cases h
   have a' : 34 ≤ buf.length := by omega
   rw [totalLen_eq buf a'] at h
-  by_cases hh : buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 32
+  by_cases hh : buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 255
   · simp only [hh, ↓reduceIte] at h; cases h
-  have hh' : ¬ (buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 32) := hh
+  have hh' : ¬ (buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 255) := hh
   simp only [hh', ↓reduceIte, Except.ok.injEq] at h
   have g0 : buf.getD 0 0 = 1 := by omega
-  have g33 : buf.getD 33 0 ≤ 32 := by omega
+  have g33 : buf.getD 33 0 ≤ 255 := by omega
   constructor
   · intro hl
     obtain ⟨r, n, hp⟩ := (req_accept_iff buf).2 ⟨a', g0, g33, by omega⟩
@@ -291,7 +291,7 @@ theorem totalLen_reject_parse_reject (buf : List Nat) (m : String) (h : reqTotal
   · rw [totalLen_short buf a] at h; cases h
   have a' : 34 ≤ buf.length := by omega
   rw [totalLen_eq buf a'] at h
-  by_cases hc : buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 32
+  by_cases hc : buf.getD 0 0 ≠ 1 ∨ buf.getD 33 0 > 255
   · rcases hc with hc | hc
     · rcases buf with _ | ⟨t, r⟩
       · simp at a'

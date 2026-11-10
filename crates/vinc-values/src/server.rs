@@ -1,6 +1,6 @@
 //! The value server: GHOST_FLIGHT and the proof side of WRITE_THROUGH.
 //!
-//! A request stream is collected (a REQ is at most 546 bytes), checked against the store, and answered by handing the
+//! A request stream is collected (a REQ is at most 4114 bytes), checked against the store, and answered by handing the
 //! session a [`ValueSource`]: queued and in-flight response bytes are only `(offset)` descriptors, and every packet
 //! build or retransmission reads the store again, so the server buffers nothing. The source keeps a window of
 //! [`SERVE_BATCH`](crate::knobs::SERVE_BATCH) = 16 frame descriptors.

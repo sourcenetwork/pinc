@@ -137,15 +137,15 @@ proptest! {
 
 #[test]
 fn strictness_cases() {
-    // A request: wrong type, too many ranges, oversized count byte.
+    // A request: wrong type, the largest count, too many ranges to encode.
     let mut buf = [0u8; REQ_MAX + 16];
     Req::encode(&[1; 32], &[], &mut buf).unwrap();
     buf[0] = 2;
     assert!(Req::parse(&buf).is_err());
     buf[0] = 1;
-    buf[33] = (MAX_REQ_RANGES + 1) as u8;
-    assert!(matches!(Req::parse(&buf), Err(WireError::Unexpected(_))));
-    assert!(Req::total_len(&buf[..REQ_FIXED]).is_err());
+    buf[33] = MAX_REQ_RANGES as u8;
+    assert_eq!(Req::parse(&buf).map(|(_, n)| n), Ok(REQ_MAX));
+    assert_eq!(Req::total_len(&buf[..REQ_FIXED]), Ok(REQ_MAX));
     assert!(Req::encode(&[1; 32], &vec![Span::default(); MAX_REQ_RANGES + 1], &mut buf).is_err());
     let mut small = [0u8; 40];
     assert!(Req::encode(&[1; 32], &[Span::default(); 4], &mut small).is_err());

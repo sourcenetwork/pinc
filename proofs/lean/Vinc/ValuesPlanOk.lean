@@ -7,7 +7,7 @@ import Vinc.ValuesPlanModel
 offset `s` to `t`: each is a non-empty group interval inside the value and starts where the framed encodings
 before it end (`refSize`). `planNew_ok` proves that a plan `Plan::new` accepts satisfies it from offset 0, that
 its ranges are the spans rounded out to whole groups (empty spans dropped), that every span lies inside the value,
-that at most 32 spans were given and that the response is at most `2^62 - 1` bytes.
+that at most 255 spans were given and that the response is at most `2^62 - 1` bytes.
 -/
 
 set_option linter.deprecated false

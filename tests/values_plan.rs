@@ -19,7 +19,7 @@ use proptest::prelude::*;
 use values_support::*;
 use vinc_dag::tree::{Layout, PARENT_LEN, RangeEncoder, Step, build_outboard_vec, encoded_len};
 use vinc_transport::stream::StreamSource;
-use vinc_values::knobs::SERVE_BATCH;
+use vinc_values::knobs::{MAX_REQ_RANGES, SERVE_BATCH};
 use vinc_values::plan::Plan;
 use vinc_values::source::ValueSource;
 use vinc_values::span::Span;
@@ -182,7 +182,8 @@ fn the_plan_is_closed_form_at_any_size() {
         Plan::new(huge, &[Span { off: 0, len: huge }; 32]).is_err(),
         "a response over 2^62 - 1 bytes is refused"
     );
-    assert!(Plan::new(10, &[Span { off: 0, len: 1 }; 33]).is_err());
+    assert!(Plan::new(10, &vec![Span { off: 0, len: 1 }; MAX_REQ_RANGES]).is_ok());
+    assert!(Plan::new(10, &vec![Span { off: 0, len: 1 }; MAX_REQ_RANGES + 1]).is_err());
 }
 
 #[test]

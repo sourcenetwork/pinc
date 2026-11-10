@@ -1,6 +1,6 @@
 //! The geometry of a response stream, in closed form.
 //!
-//! A response to a request of up to 32 ranges is, per range, a sequence of GROUP frames: a 16-byte header, the
+//! A response to a request of up to 255 ranges is, per range, a sequence of GROUP frames: a 16-byte header, the
 //! parent pairs the previous group leaves open, then the group bytes. Which stream offset holds which byte of which
 //! frame is a pure function of the value length and the ranges, so the server re-reads any byte of a response from
 //! the store (no buffering) and the receiver places out-of-order bytes without parsing. Both ends call [`Plan`].

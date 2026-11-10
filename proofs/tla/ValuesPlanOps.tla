@@ -14,7 +14,7 @@
 (* checked_mul is checked against it), the response limit MaxS (2^62 - 1   *)
 (* of the code) and the request limit MaxR are constants: the code has     *)
 (* G = 16384, HDR = 16, PAR = 64, MaxU = 2^64 - 1, MaxS = 2^62 - 1,        *)
-(* MaxR = 32, and TLC integers are 32 bits, so the model checks run the    *)
+(* MaxR = 255, and TLC integers are 32 bits, so the model checks run the    *)
 (* same arithmetic at a small G and word (every overflow branch of the     *)
 (* code is reached: the Lean proofs cover the 64-bit word, ValuesPlan*.lean).*)
 (*                                                                         *)

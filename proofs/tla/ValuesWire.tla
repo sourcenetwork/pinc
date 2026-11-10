@@ -21,7 +21,7 @@
 (* on the byte positions and on the exact sum of the bytes times powers of *)
 (* 256, never on the code's operators):                                    *)
 (*  - an input is accepted exactly when the conditions of the format hold  *)
-(*    (type byte, count at most 32, flag 0 or 1, length not 0, proof a     *)
+(*    (type byte, count at most 255, flag 0 or 1, length not 0, proof a     *)
 (*    whole number of pairs and at most 1100 bytes, no trailing byte after *)
 (*    a PROOF_REQ, a canonical varint); the fields equal the big-endian    *)
 (*    values of their bytes; the error kind and msg of a refusal are the   *)
@@ -31,21 +31,22 @@
 (*    parse consumed (the whole input for a PROOF_REQ, the prefix of n     *)
 (*    bytes for the others);                                               *)
 (*  - round trip: parse of an encode is the value, with any rest after it; *)
-(*  - an encode refuses more than 32 ranges and a short buffer with the    *)
+(*  - an encode refuses more than 255 ranges and a short buffer with the    *)
 (*    exact error and writes nothing then; on success it writes exactly    *)
 (*    the bytes and leaves the rest of the buffer alone;                   *)
 (*  - every strict prefix of a valid input is refused as truncated;        *)
 (*  - total_len agrees with parse.                                         *)
 (*                                                                         *)
 (* Checked by TLC (ValuesWire.cfg) over a machine whose root has one       *)
-(* successor per seed, each seed standing for a family of cases (172901    *)
+(* successor per seed, each seed standing for a family of cases (172303    *)
 (* distinct states in all):                                                *)
 (*  REQ    - every type byte 0..255 (count 2) at the cut lengths           *)
 (*           0,1,2,33,34,66,67; every count byte 0..255 (type 1) at every  *)
-(*           cut length from 0 to 1 past the full string (a count over 32  *)
-(*           has 17 body bytes); each full string has 32 root bytes and    *)
-(*           16*count range bytes that are all different, so a wrong byte  *)
-(*           order or field offset shows;                                  *)
+(*           cut length from 0 to 1 past the full string for counts up to  *)
+(*           33, and at the cuts 0 1 2 32 33 34 35 49 50 and around the     *)
+(*           full size for the larger counts; each full string has 32 root *)
+(*           bytes and 16*count range bytes that are all different, so a   *)
+(*           wrong byte order or field offset shows;                       *)
 (*  GROUP  - every combination of 5 type bytes {0,1,2,3,255}, 4 offset     *)
 (*           words, 6 length words, 10 proof-length words and 5 flag bytes *)
 (*           {0,1,2,128,255}; every type byte, every flag byte and every   *)
@@ -105,7 +106,7 @@ VARIABLE c
 
 ReqFixed == 34
 GroupHdr == 16
-MaxReq == 32
+MaxReq == 255
 ParentLen == 64
 WtPmax == 1100
 TReq == 1
@@ -181,7 +182,7 @@ SpanBytes(spans) ==
     IF spans = <<>> THEN <<>>
     ELSE BeBytes(Head(spans).off, 8) \o BeBytes(Head(spans).len, 8) \o SpanBytes(Tail(spans))
 
-(* Req::encode: refuses over 32 ranges (a count past 255 does not fit the u8 either), checks the room, then writes *)
+(* Req::encode: refuses over 255 ranges (a count past 255 does not fit the u8), checks the room, then writes *)
 ReqEncode(root, spans, out) ==
     IF Len(spans) > MaxReq
     THEN [ok |-> FALSE, err |-> "unexpected", msg |-> "too many ranges", needed |-> 0, after |-> out]
@@ -461,6 +462,10 @@ Alpha == {0, 1, 2, 64, 127, 128, 129, 192, 255}
 ReqStr(t, cnt, salt) ==
     <<t>> \o Fill(32, salt) \o <<cnt>> \o Fill(IF cnt <= MaxReq THEN 16 * cnt ELSE 17, salt + 1)
 
+(* the cut lengths of a request string for count n: every one for a small count, the edges for a large one *)
+ReqCuts(n) == IF n <= 33 THEN 0..(Len(ReqStr(1, n, 5)) + 1)
+              ELSE {0, 1, 2, 32, 33, 34, 35, 49, 50, 34 + 16 * n - 17, 34 + 16 * n - 16, 34 + 16 * n - 1, 34 + 16 * n, 34 + 16 * n + 1}
+
 (* a case: the codec, the input and, for a cut of a valid input, the length of the valid input (else -1) *)
 Cs(k, s, full) == [t |-> "case", k |-> k, s |-> s, full |-> full]
 
@@ -502,7 +507,7 @@ Expand(sd) ==
     CASE sd.f = "reqtype" ->
            Cuts("REQ", ReqStr(sd.t, 2, 11), IF sd.t = TReq THEN 66 ELSE -1, {0, 1, 2, 33, 34, 66, 67})
       [] sd.f = "reqcnt" ->
-           Cuts("REQ", ReqStr(1, sd.n, 5), IF sd.n <= MaxReq THEN 34 + 16 * sd.n ELSE -1, 0..(Len(ReqStr(1, sd.n, 5)) + 1))
+           Cuts("REQ", ReqStr(1, sd.n, 5), IF sd.n <= MaxReq THEN 34 + 16 * sd.n ELSE -1, ReqCuts(sd.n))
       [] sd.f = "gh" ->
            {Cs("GH", GhPieces(sd.a, sd.b, ty, p, fl), -1) : ty \in {0, 1, 2, 3, 255}, p \in GhPlens, fl \in {0, 1, 2, 128, 255}}
       [] sd.f = "ghplen" ->

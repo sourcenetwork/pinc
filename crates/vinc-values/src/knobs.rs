@@ -20,8 +20,9 @@ pub const GROUP_BYTES: usize = 16 * 1024;
 
 /// The most providers one fetch uses.
 pub const MAX_PROVIDERS: usize = 4;
-/// The most ranges in one request (and in one fetch).
-pub const MAX_REQ_RANGES: usize = 32;
+/// The most ranges in one request (and in one fetch): the largest count the one-byte count field of a request holds.
+/// A request is at most [`REQ_MAX`](crate::wire::REQ_MAX) = 4114 bytes and each of the server's request slots holds one.
+pub const MAX_REQ_RANGES: usize = 255;
 /// The group frames the server prepares per step: the size of the frame window a response source keeps.
 pub const SERVE_BATCH: usize = 16;
 

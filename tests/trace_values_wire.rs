@@ -166,7 +166,7 @@ fn ref_req(b: &[u8]) -> Ref<(Vec<u8>, Vec<Span>, usize)> {
         return Ref::Truncated(short(&[33, 34], b.len()).unwrap());
     }
     let c = usize::from(b[33]);
-    if c > 32 {
+    if c > 255 {
         return Ref::Unexpected("too many ranges");
     }
     let n = 34 + 16 * c;
@@ -318,7 +318,7 @@ fn ev_req_enc(tr: &mut Trace, root: &[u8; 32], spans: &[Span], cap: usize) {
     let total = REQ_FIXED + 16 * spans.len();
     match &r {
         Ok(n) => {
-            assert!(spans.len() <= 32 && cap >= total && *n == total);
+            assert!(spans.len() <= 255 && cap >= total && *n == total);
             assert!(
                 out[*n..].iter().all(|&b| b == SENTINEL),
                 "the rest of the buffer is left alone"
@@ -330,11 +330,11 @@ fn ev_req_enc(tr: &mut Trace, root: &[u8; 32], spans: &[Span], cap: usize) {
             );
         }
         Err(WireError::Unexpected("too many ranges")) => {
-            assert!(spans.len() > 32);
+            assert!(spans.len() > 255);
             assert!(out.iter().all(|&b| b == SENTINEL), "a refused encode writes nothing");
         }
         Err(WireError::BufferTooSmall { needed }) => {
-            assert!(spans.len() <= 32 && *needed == total - cap);
+            assert!(spans.len() <= 255 && *needed == total - cap);
             assert!(out.iter().all(|&b| b == SENTINEL), "a failed encode writes nothing");
         }
         Err(e) => panic!("{e:?}"),
@@ -560,7 +560,7 @@ fn value_wire_trace() {
 
     // ---- REQ ----
     let mut reqs: Vec<Vec<u8>> = Vec::new();
-    for k in (0..=34).chain([40, 100, 255]) {
+    for k in (0..=34).chain([40, 100, 255, 256]) {
         for _ in 0..2 {
             let root: [u8; 32] = rand_bytes(&mut rng, 32).try_into().unwrap();
             let spans: Vec<Span> = (0..k)
@@ -570,7 +570,7 @@ fn value_wire_trace() {
                 })
                 .collect();
             ev_req_enc(&mut tr, &root, &spans, REQ_FIXED + 16 * k.min(33));
-            if k <= 32 {
+            if k <= 255 {
                 let mut buf = vec![0u8; REQ_FIXED + 16 * k];
                 Req::encode(&root, &spans, &mut buf).unwrap();
                 reqs.push(buf);
@@ -620,7 +620,7 @@ fn value_wire_trace() {
         let mut b = vec![1u8];
         b.extend(rand_bytes(&mut rng, 32));
         b.push(c);
-        b.extend(rand_bytes(&mut rng, if c <= 32 { 16 * usize::from(c) } else { 17 }));
+        b.extend(rand_bytes(&mut rng, 16 * usize::from(c)));
         ev_req(&mut tr, &b);
         ev_req(&mut tr, &b[..34]);
     }

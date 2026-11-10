@@ -37,7 +37,7 @@ abbrev PARL : Nat := 64
 /-- The largest stream offset, `2^62 - 1`. -/
 def MAXS : Nat := 2 ^ 62 - 1
 /-- `MAX_REQ_RANGES`. -/
-abbrev MAXR : Nat := 32
+abbrev MAXR : Nat := 255
 
 theorem G_pos : 0 < G := groupLen_pos lg
 

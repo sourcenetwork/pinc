@@ -42,7 +42,7 @@ VARIABLES i, srv, tab
 vars == <<i, srv, tab>>
 
 MaxU == 1073741824
-Ops == INSTANCE ValuesPlanOps WITH G <- 16384, HDR <- 16, PAR <- 64, MaxU <- MaxU, MaxS <- 268435455, MaxR <- 32
+Ops == INSTANCE ValuesPlanOps WITH G <- 16384, HDR <- 16, PAR <- 64, MaxU <- MaxU, MaxS <- 268435455, MaxR <- 255
 PR == INSTANCE ValuesPlanProofs WITH G <- 16384, PMax <- 1100, MaxK <- 16, MinK <- 4, MaxF <- 48, Lead <- 524288,
                                      MaxU <- MaxU, BodyHead <- 22,
                                      ln <- 0, st <- 0, vfront <- 0, window <- 0, armed <- 0, ok <- 0, fired <- 0

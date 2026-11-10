@@ -471,7 +471,7 @@ fn ranges_in_any_order_and_overlapping_are_all_fetched() {
 fn bad_specs_are_refused_and_change_nothing() {
     let mut sim = Sim::uniform(1, 10_000, 100);
     let ps = sim.all_providers();
-    let too_many = vec![Span { off: 0, len: 1 }; 33];
+    let too_many = vec![Span { off: 0, len: 1 }; vinc_values::knobs::MAX_REQ_RANGES + 1];
     let spec = sim.spec(&too_many, &ps);
     {
         let mut io = vinc_values::fetch::Io {

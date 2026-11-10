@@ -240,7 +240,7 @@ fn err_code(e: PlanError) -> u8 {
 /// The expected refusal, from the spans alone (independent of `Plan`): too many, past the value, or over 2^62 - 1 with
 /// the sizes of the encoder (`size` gives the framed bytes of the groups `[first, last)`).
 fn expected(len: u64, spans: &[Span], size: impl Fn(u64, u64) -> u128) -> Result<u128, PlanError> {
-    if spans.len() > 32 {
+    if spans.len() > 255 {
         return Err(PlanError::TooManyRanges);
     }
     let mut total = 0u128;
@@ -597,8 +597,8 @@ fn big_plans(sink: &mut Sink, rng: &mut SplitMix64) {
                     len: len - len / 2,
                 },
             ],
+            vec![Span { off: 0, len: 1 }; 256],
             vec![Span { off: 0, len: 1 }; 33],
-            vec![Span { off: 0, len: 1 }; 32],
         ];
         cases.push(vec![Span {
             off: (ng / 2) * GROUP,
@@ -897,8 +897,8 @@ fn plan_source_and_server_agree_with_the_encoder_and_are_traced() {
         }],
         vec![Span { off: u64::MAX, len: 2 }],
         vec![Span { off: 3, len: u64::MAX }],
+        vec![Span { off: 0, len: 1 }; 256],
         vec![Span { off: 0, len: 1 }; 33],
-        vec![Span { off: 0, len: 1 }; 32],
     ] {
         plan_run(&mut sink, &mut rng, &store, &spans);
     }

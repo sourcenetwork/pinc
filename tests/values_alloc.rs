@@ -375,5 +375,6 @@ fn the_machines_have_a_fixed_size() {
     let server = std::mem::size_of::<Server<PStore, 32>>();
     eprintln!("Fetch is {fetch} bytes, Server<_, 32> is {server} bytes");
     assert!(fetch < 256 * 1024, "a fetch is {fetch} bytes");
-    assert!(server < 128 * 1024, "a server is {server} bytes");
+    // 32 request slots of one 4114 byte request buffer or one 255 range plan each.
+    assert!(server < 256 * 1024, "a server is {server} bytes");
 }

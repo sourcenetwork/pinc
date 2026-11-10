@@ -13,7 +13,7 @@ namespace Vinc.ValuesWire
 open Vinc Varint
 
 /-! The constants of the code are written as numbers: the type byte of a REQ is 1, a REQ without ranges is 34 bytes
-(`REQ_FIXED`), at most 32 ranges (`MAX_REQ_RANGES`). -/
+(`REQ_FIXED`), at most 255 ranges (`MAX_REQ_RANGES`). -/
 
 /-- A parsed REQ: the root and the raw bytes of the ranges (`Req`, which borrows both). -/
 structure Req where
@@ -33,7 +33,7 @@ def reqParse (buf : List Nat) : Except Err (Req × Nat) :=
       match readBe 1 r2 with
       | .error e => .error e
       | .ok (cnt, r3) =>
-        if cnt > 32 then .error (.unexpected "too many ranges") else
+        if cnt > 255 then .error (.unexpected "too many ranges") else
         match readBytes (16 * cnt) r3 with
         | .error e => .error e
         | .ok (rg, _) => .ok (⟨root, rg⟩, 34 + 16 * cnt)
@@ -41,7 +41,7 @@ def reqParse (buf : List Nat) : Except Err (Req × Nat) :=
 /-- `Req::total_len`: how many bytes a REQ whose first 34 bytes are `head` takes in all. -/
 def reqTotalLen (head : List Nat) : Except Err Nat :=
   if head.length < 34 then .error (.truncated (34 - head.length))
-  else if head.getD 0 0 ≠ 1 ∨ head.getD 33 0 > 32 then .error (.unexpected "bad request header")
+  else if head.getD 0 0 ≠ 1 ∨ head.getD 33 0 > 255 then .error (.unexpected "bad request header")
   else .ok (34 + 16 * head.getD 33 0)
 
 /-- `Req::ranges`: the `(offset, length)` of each 16-byte chunk, `k` of them. -/
@@ -56,10 +56,9 @@ def spanBytes (s : Nat × Nat) : List Nat := beBytes 8 s.1 ++ beBytes 8 s.2
 def reqBytes (root : List Nat) (spans : List (Nat × Nat)) : List Nat :=
   [1] ++ root ++ [spans.length] ++ spans.flatMap spanBytes
 
-/-- `Req::encode` into `out`: the result and the buffer afterwards. More than 32 ranges (a count over 255 does not
-fit the `u8` either) is refused before anything else; the room is checked before the first write. -/
+/-- `Req::encode` into `out`: the result and the buffer afterwards. More than 255 ranges (a count past the `u8` field) is refused before anything else; the room is checked before the first write. -/
 def reqEncode (root : List Nat) (spans : List (Nat × Nat)) (out : List Nat) : Except Err Nat × List Nat :=
-  if spans.length > 32 then (.error (.unexpected "too many ranges"), out)
+  if spans.length > 255 then (.error (.unexpected "too many ranges"), out)
   else put (reqBytes root spans) out
 
 /-! ## The parse in closed form -/
@@ -70,7 +69,7 @@ theorem reqParse_eq (buf : List Nat) :
       else if buf.getD 0 0 ≠ 1 then .error (.unexpected "not a request")
       else if buf.length < 33 then .error (.truncated (33 - buf.length))
       else if buf.length = 33 then .error (.truncated 1)
-      else if buf.getD 33 0 > 32 then .error (.unexpected "too many ranges")
+      else if buf.getD 33 0 > 255 then .error (.unexpected "too many ranges")
       else if buf.length < 34 + 16 * buf.getD 33 0 then
         .error (.truncated (34 + 16 * buf.getD 33 0 - buf.length))
       else .ok (⟨(buf.drop 1).take 32, (buf.drop 34).take (16 * buf.getD 33 0)⟩, 34 + 16 * buf.getD 33 0) := by
@@ -97,7 +96,7 @@ theorem reqParse_eq (buf : List Nat) :
         rw [e3]
         have hn2 : ¬ buf.length = 33 := by simp only [List.length_drop] at h3; omega
         simp only [hn2, ↓reduceIte]
-        by_cases hc : buf.getD 33 0 > 32
+        by_cases hc : buf.getD 33 0 > 255
         · simp only [hc, ↓reduceIte]
         · simp only [hc, ↓reduceIte]
           by_cases h4 : 16 * buf.getD 33 0 ≤ (buf.drop 34).length

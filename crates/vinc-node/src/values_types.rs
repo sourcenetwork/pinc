@@ -32,7 +32,7 @@ pub enum ValuesError {
     Off,
     /// [`FETCHES`] fetches are running.
     Busy,
-    /// More than 32 ranges were asked for.
+    /// More than 255 ranges were asked for.
     TooManyRanges,
     /// A range runs past the end of the value.
     OutOfBounds,
@@ -45,7 +45,7 @@ impl fmt::Display for ValuesError {
         f.write_str(match self {
             Self::Off => "the values layer is not enabled on this node",
             Self::Busy => "too many fetches are running",
-            Self::TooManyRanges => "a fetch takes at most 32 ranges",
+            Self::TooManyRanges => "a fetch takes at most 255 ranges",
             Self::OutOfBounds => "a range runs past the end of the value",
             Self::Providers => "too many providers are known to this node",
         })

@@ -20,7 +20,7 @@
 //!
 //! - Only bytes that hashed to the value's root are written to the store, and a range is committed only after its
 //!   bytes are written: a crash leaves the verified set a subset of the truth.
-//! - All state is in fixed arrays: 4 providers, 16 request streams, 32 wanted ranges, a 64-span queue. A full range
+//! - All state is in fixed arrays: 4 providers, 16 request streams, 255 wanted ranges, a 64-span queue. A full range
 //!   list widens a span over a gap, which asks twice and never skips a byte.
 //! - The machine never reads a clock, allocates or blocks; every input carries `now`.
 
@@ -41,7 +41,8 @@ use rx::Rx;
 pub use stall::Timers;
 use wt::ProofCache;
 
-/// The most request streams a fetch has open at once, over all providers.
+/// The most request streams a fetch has open at once, over all providers: the size of its table. One provider may use
+/// any number of them; the session's own stream limit and credit decide how many it admits.
 pub const MAX_STREAMS: usize = 16;
 /// The most request streams one provider has open at once.
 pub const STREAMS_PER_PROVIDER: usize = 4;
@@ -104,7 +105,7 @@ pub struct FetchSpec<'a> {
 pub enum StartError {
     /// A fetch is already running on this machine.
     Busy,
-    /// More than 32 ranges were asked for.
+    /// More than 255 ranges were asked for.
     TooManyRanges,
     /// A range runs past the end of the value.
     OutOfBounds,

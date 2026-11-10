@@ -36,7 +36,7 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS G, PMax, MaxK, MinK, MaxF, Lead, MaxU, BodyHead
 
-Ops == INSTANCE ValuesPlanOps WITH HDR <- 16, PAR <- 64, MaxS <- 1000000, MaxR <- 32
+Ops == INSTANCE ValuesPlanOps WITH HDR <- 16, PAR <- 64, MaxS <- 1000000, MaxR <- 255
 
 \* x.checked_ilog2().map_or(0, |b| b + 1): the number of bits of x
 RECURSIVE BitsGo(_, _)
