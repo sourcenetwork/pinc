@@ -39,6 +39,7 @@ enum Co {
     Opened(u64),
     Readable(u64),
     Writable(u64),
+    OpenReady,
     Reset(u64, u64),
     Stopped(u64, u64),
     Datagram,
@@ -80,6 +81,7 @@ ep_impl! {
                 ConnEvent::StreamOpened(id) => Co::Opened(id),
                 ConnEvent::StreamReadable(id) => Co::Readable(id),
                 ConnEvent::StreamWritable(id) => Co::Writable(id),
+                ConnEvent::OpenReady => Co::OpenReady,
                 ConnEvent::StreamReset { id, error } => Co::Reset(id, error),
                 ConnEvent::StreamStopped { id, error } => Co::Stopped(id, error),
                 ConnEvent::DatagramReceived => Co::Datagram,
@@ -120,6 +122,7 @@ ep_impl! {
                 self.app_event(i, now, Event::StreamReadable { session, stream });
             }
             Co::Writable(stream) => self.app_event(i, now, Event::StreamWritable { session, stream }),
+            Co::OpenReady => self.app_event(i, now, Event::OpenReady { session }),
             Co::Reset(stream, error) => self.app_event(i, now, Event::StreamReset { session, stream, error }),
             Co::Stopped(stream, error) => self.app_event(i, now, Event::StreamStopped { session, stream, error }),
             Co::Datagram => self.app_event(i, now, Event::DatagramReceived { session }),

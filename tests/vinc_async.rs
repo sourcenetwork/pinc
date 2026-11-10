@@ -73,7 +73,6 @@ async fn many_streams_datagrams_and_reconnect() {
 /// A peer whose pool covers the windows of only a few streams: the streams opened beyond that wait for room instead
 /// of failing, and every stream's bytes arrive once and in order.
 #[nuclei::test]
-#[ignore = "waits on the receiver-advertised stream credit of the transport: an open that finds no room must wait"]
 async fn streams_beyond_the_peer_pool_are_delivered() {
     within(120, async {
         let small = Limits {

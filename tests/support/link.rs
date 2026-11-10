@@ -479,6 +479,7 @@ pub enum Rec {
     Opened(u64),
     Readable(u64),
     Writable(u64),
+    OpenReady,
     Reset(u64, u64),
     Stopped(u64, u64),
     Datagram,
@@ -568,6 +569,7 @@ impl<'a, const C: usize> Node<'a, C> {
                         Rec::Readable(id)
                     }
                     Event::StreamWritable(id) => Rec::Writable(id),
+                    Event::OpenReady => Rec::OpenReady,
                     Event::StreamReset { id, error } => Rec::Reset(id, error),
                     Event::StreamStopped { id, error } => Rec::Stopped(id, error),
                     Event::DatagramReceived => {

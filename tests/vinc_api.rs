@@ -162,7 +162,6 @@ async fn discovery_unreachable_and_self_dial_errors() {
 }
 
 #[nuclei::test]
-#[ignore = "waits on the facade rework: an open that finds no stream credit or pool room must wait, not fail"]
 async fn registered_protocols_tags_and_alpn_limits() {
     let server = bind(vinc_common::builder()).await;
     let client = bind(vinc_common::builder()).await;

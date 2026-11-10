@@ -139,6 +139,13 @@ pub enum Event {
         /// The stream.
         stream: StreamId,
     },
+    /// A stream open that was refused for want of stream credit or buffer room may succeed now. The application may lose
+    /// this notification, like a read or write notification, and recover it by trying the open again; it is raised once
+    /// per refusal.
+    OpenReady {
+        /// The session.
+        session: SessionId,
+    },
     /// The peer reset a stream.
     StreamReset {
         /// The session.
@@ -214,7 +221,10 @@ impl Event {
     /// Whether the application can recover the event by reading state, so a full queue may drop it. A datagram
     /// cannot be recovered: each notification stands for one datagram.
     pub(crate) const fn lossy(&self) -> bool {
-        matches!(self, Self::StreamReadable { .. } | Self::StreamWritable { .. })
+        matches!(
+            self,
+            Self::StreamReadable { .. } | Self::StreamWritable { .. } | Self::OpenReady { .. }
+        )
     }
 }
 

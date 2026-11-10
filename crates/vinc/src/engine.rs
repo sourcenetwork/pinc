@@ -409,6 +409,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.wake_s(session, SKey::Write(stream));
                 self.wake_s(session, SKey::Open);
             }
+            Event::OpenReady { session } => self.wake_s(session, SKey::Open),
             Event::AcpCheck { check, node, alpn } => {
                 let dir = if self.dial_by_peer.contains_key(&(node, alpn)) {
                     Direction::Outbound
@@ -752,8 +753,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 ..
             }) => Try::Done(Ok(id)),
             Ok(_) => Try::Done(Err(Error::new(ErrorKind::Busy, "the stream did not open"))),
-            // No room for the stream's window yet: wait until some returns.
-            Err(CommandError::Stream(StreamError::Exhausted)) => Try::Wait(Wait::S(session, SKey::Open)),
+            // No stream credit or no room for the stream's window yet: wait for the connection's open-ready event.
+            Err(CommandError::Stream(StreamError::StreamLimit | StreamError::Exhausted)) => {
+                Try::Wait(Wait::S(session, SKey::Open))
+            }
             Err(e) => Try::Done(Err(Error::command(e))),
         }
     }

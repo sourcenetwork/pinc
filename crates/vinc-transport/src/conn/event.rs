@@ -142,6 +142,11 @@ pub enum Event<'a> {
     StreamReadable(StreamId),
     /// A stream may accept more writes.
     StreamWritable(StreamId),
+    /// A stream open that was refused with [`StreamError::StreamLimit`](crate::stream::StreamError::StreamLimit) or
+    /// [`StreamError::Exhausted`](crate::stream::StreamError::Exhausted) may succeed now: the peer raised the number of
+    /// streams it admits, or buffer room returned. The host may lose this notification and recover it by asking
+    /// [`open_ready`](super::Connection::open_ready) again; it is raised once per refusal, not once per change.
+    OpenReady,
     /// The peer reset a stream it sends on.
     StreamReset {
         /// The stream.
@@ -194,6 +199,7 @@ pub(crate) enum Ev {
     Opened(StreamId),
     Readable(StreamId),
     Writable(StreamId),
+    OpenReady,
     Reset(StreamId, u64),
     Stopped(StreamId, u64),
     Datagram,
@@ -214,7 +220,7 @@ impl Ev {
     const fn lossy(&self) -> bool {
         matches!(
             self,
-            Self::Readable(_) | Self::Writable(_) | Self::Datagram | Self::Extension
+            Self::Readable(_) | Self::Writable(_) | Self::OpenReady | Self::Datagram | Self::Extension
         )
     }
 
@@ -230,6 +236,7 @@ impl Ev {
             (Self::PathValidated(a), Self::PathValidated(b)) | (Self::PathFailed(a), Self::PathFailed(b)) => a.0 == b.0,
             (Self::KeyRequest, Self::KeyRequest)
             | (Self::Connected(_), Self::Connected(_))
+            | (Self::OpenReady, Self::OpenReady)
             | (Self::PeerAsleep, Self::PeerAsleep)
             | (Self::PeerAwake, Self::PeerAwake)
             | (Self::WakeUnanswered, Self::WakeUnanswered)

@@ -179,6 +179,8 @@ pub struct Connection<
     resumed: bool,
     confirmed: bool,
     ext_release: bool,
+    /// Kinds of stream (bit 0 unidirectional, bit 1 bidirectional) whose open was refused for want of credit or room.
+    open_wait: u8,
     paced_until: Option<u64>,
     degraded_told: bool,
     local_credit: CreditRecord,
@@ -273,6 +275,7 @@ where
             resumed: false,
             confirmed: false,
             ext_release: false,
+            open_wait: 0,
             paced_until: None,
             degraded_told: false,
             local_credit,

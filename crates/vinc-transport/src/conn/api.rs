@@ -65,6 +65,7 @@ conn_impl! {
             self.ext.release(&mut self.pool);
             self.ext_release = false;
         }
+        self.notify_open_ready();
         loop {
             let ev = self.events.pop()?;
             return Some(match ev {
@@ -86,6 +87,7 @@ conn_impl! {
                 Ev::Opened(id) => Event::StreamOpened(id),
                 Ev::Readable(id) => Event::StreamReadable(id),
                 Ev::Writable(id) => Event::StreamWritable(id),
+                Ev::OpenReady => Event::OpenReady,
                 Ev::Reset(id, error) => Event::StreamReset { id, error },
                 Ev::Stopped(id, error) => Event::StreamStopped { id, error },
                 Ev::Datagram => Event::DatagramReceived,
@@ -129,7 +131,7 @@ conn_impl! {
     /// [`StreamError::Exhausted`] when the stream's receive window does not fit in the buffer pool yet.
     pub fn open_bi(&mut self) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
-        self.streams.open_stream(&self.pool, true)
+        self.opened(true)
     }
 
     /// Open a unidirectional stream.
@@ -138,7 +140,32 @@ conn_impl! {
     /// As [`open_bi`](Self::open_bi).
     pub fn open_uni(&mut self) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
-        self.streams.open_stream(&self.pool, false)
+        self.opened(false)
+    }
+
+    /// Open a stream; a refusal for want of credit or room is remembered, so [`Event::OpenReady`] follows once an open
+    /// of that kind would work.
+    fn opened(&mut self, bidi: bool) -> Result<StreamId, StreamError> {
+        let r = self.streams.open_stream(&self.pool, bidi);
+        if matches!(r, Err(StreamError::StreamLimit | StreamError::Exhausted)) {
+            self.open_wait |= 1 << u8::from(bidi);
+        }
+        r
+    }
+
+    /// Queue [`Event::OpenReady`] when an open that was refused would work now. One check of two flags per poll while
+    /// no open waits.
+    fn notify_open_ready(&mut self) {
+        if self.open_wait == 0 {
+            return;
+        }
+        for bidi in [false, true] {
+            let bit = 1 << u8::from(bidi);
+            if self.open_wait & bit != 0 && self.open_ready(bidi).is_ok() {
+                self.open_wait &= !bit;
+                self.events.push(Ev::OpenReady);
+            }
+        }
     }
 
     /// How much written data may wait for its acknowledgement at once: the smaller of the window the peer granted

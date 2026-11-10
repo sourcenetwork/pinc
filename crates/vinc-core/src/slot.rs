@@ -47,6 +47,7 @@ impl HeldEvent {
     pub(crate) const RESET: u8 = 3;
     pub(crate) const DATAGRAM: u8 = 4;
     pub(crate) const STOPPED: u8 = 5;
+    pub(crate) const OPEN_READY: u8 = 6;
 
     pub(crate) const fn of(ev: &Event) -> Option<Self> {
         let (kind, stream, error) = match *ev {
@@ -55,6 +56,7 @@ impl HeldEvent {
             Event::StreamWritable { stream, .. } => (Self::WRITABLE, stream, 0),
             Event::StreamReset { stream, error, .. } => (Self::RESET, stream, error),
             Event::StreamStopped { stream, error, .. } => (Self::STOPPED, stream, error),
+            Event::OpenReady { .. } => (Self::OPEN_READY, 0, 0),
             Event::DatagramReceived { .. } => (Self::DATAGRAM, 0, 0),
             _ => return None,
         };
@@ -67,6 +69,7 @@ impl HeldEvent {
             Self::OPENED => Event::StreamOpened { session, stream },
             Self::READABLE => Event::StreamReadable { session, stream },
             Self::WRITABLE => Event::StreamWritable { session, stream },
+            Self::OPEN_READY => Event::OpenReady { session },
             Self::RESET => Event::StreamReset {
                 session,
                 stream,
@@ -83,7 +86,7 @@ impl HeldEvent {
 
     /// Whether reading state tells the application what the event did, so a full ring may drop it.
     pub(crate) const fn lossy(&self) -> bool {
-        matches!(self.kind, Self::READABLE | Self::WRITABLE)
+        matches!(self.kind, Self::READABLE | Self::WRITABLE | Self::OPEN_READY)
     }
 }
 

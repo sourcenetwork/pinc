@@ -600,6 +600,7 @@ impl Core {
                 }
             }
             Event::DatagramReceived { .. }
+            | Event::OpenReady { .. }
             | Event::PathChanged { .. }
             | Event::PeerAsleep { .. }
             | Event::PeerAwake { .. }

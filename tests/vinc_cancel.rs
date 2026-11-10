@@ -110,7 +110,6 @@ async fn dropped_connect_leaves_nothing_open() {
 }
 
 #[nuclei::test]
-#[ignore = "waits on the facade rework: an open that finds no stream credit or pool room must wait, not fail"]
 async fn dropped_open_accept_and_stats_lose_no_stream() {
     within(120, async {
         let (server, client) = (node().await, client().await);
