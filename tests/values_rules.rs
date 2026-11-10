@@ -90,6 +90,9 @@ fn the_numbers_are_the_tuned_ones() {
     assert_eq!(knobs::ARK_PACE_CAP, 40 * SEC);
     assert_eq!(knobs::BYTE_GAP_CAP, 60 * SEC);
     assert_eq!(knobs::STALL_RTT, 4);
+    // The most the one-byte count of a request holds, and the size of the largest request it allows.
+    assert_eq!(knobs::MAX_REQ_RANGES, 255);
+    assert_eq!(vinc_values::wire::REQ_MAX, 34 + 16 * 255);
 }
 
 #[test]
