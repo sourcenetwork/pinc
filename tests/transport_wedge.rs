@@ -38,7 +38,8 @@ fn run(hold: u64, window: u64, cost: u64, stale: bool) -> Outcome {
         assert!(net.connect(net.now + 10 * SEC));
         net.cost_ns = cost;
         net.stale_clock = stale;
-        let ids: Vec<u64> = (0..STREAMS).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        // One-way streams, opened as the peer's credit allows: each frees its place when it is read to its end.
+        let mut ids: Vec<u64> = Vec::with_capacity(STREAMS);
         let data = pattern(PER_STREAM, 3);
         let mut off = [0usize; STREAMS];
         let mut fin = [false; STREAMS];
@@ -55,6 +56,11 @@ fn run(hold: u64, window: u64, cost: u64, stale: bool) -> Outcome {
             // Write while anything moves, as an application woken by every writable event would.
             loop {
                 let mut wrote = false;
+                while ids.len() < STREAMS {
+                    let Ok(id) = n.a.conn.open_uni() else { break };
+                    ids.push(id);
+                    wrote = true;
+                }
                 for (i, id) in ids.iter().enumerate() {
                     while off[i] < data.len() {
                         let k = n.a.conn.write(*id, &data[off[i]..]).unwrap();
@@ -75,7 +81,7 @@ fn run(hold: u64, window: u64, cost: u64, stale: bool) -> Outcome {
                     break;
                 }
             }
-            ids.iter().all(|id| n.b.fin.contains(id))
+            ids.len() == STREAMS && ids.iter().all(|id| n.b.fin.contains(id))
         });
         let st = net.a.conn.stats();
         Outcome {
