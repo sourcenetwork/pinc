@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 
 /// The chunk every library moves bulk data in.
 pub const CHUNK: usize = 64 * 1024;
@@ -212,6 +212,13 @@ pub trait Lib: Sized + 'static {
     fn run<T>(f: impl Future<Output = T>) -> T;
     /// Start `f` on the runtime.
     fn spawn(f: impl Future<Output = ()> + 'static);
+    /// Start the future `make` builds for client `i` of a crowd. A library whose endpoints belong to the thread that
+    /// made them runs it on a worker of its own (the client's endpoint is made there); the default starts it here, as
+    /// [`spawn`](Self::spawn) does.
+    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) {
+        let _ = i;
+        Self::spawn(make());
+    }
     /// Wait.
     fn sleep(d: Duration) -> impl Future<Output = ()>;
     /// Bind a server on loopback, start serving [`handle`] on every stream, return its address as text.
@@ -548,6 +555,11 @@ async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
 
 /// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
 /// while every connection is still open.
+///
+/// Each client is one job that [`Lib::spawn_client`] starts (on a worker of its own for a library whose endpoints
+/// belong to one thread): it makes its endpoint, waits for the start, connects and uploads, then holds its connection
+/// until it is released. The readings are the same for every library: the client's memory after every endpoint is made
+/// and while every connection is open, the time from the start to the last upload.
 async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
     let Ok(ctl_ep) = L::client().await else { return };
     let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
@@ -558,42 +570,82 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
     };
     let s_base = server_stats::<L>(&ctl).await.unwrap_or_default();
     let c_base = Stats::now();
-    let mut eps = Vec::with_capacity(n);
+    let (made, mut made_rx) = mpsc::unbounded::<bool>();
+    let (done, mut results) = mpsc::unbounded::<Result<Duration, String>>();
+    let (ended, mut ended_rx) = mpsc::unbounded::<()>();
+    let (mut go, mut release) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    for i in 0..n {
+        let (go_tx, go_rx) = oneshot::channel::<Instant>();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        go.push(go_tx);
+        release.push(release_tx);
+        let (addr, made, done, ended) = (addr.to_owned(), made.clone(), done.clone(), ended.clone());
+        L::spawn_client(i, move || async move {
+            // Each sender goes as soon as it has spoken: a job that ends early closes its channels instead of leaving
+            // the crowd waiting for it.
+            let Ok(ep) = L::client().await else {
+                let _ = made.unbounded_send(false);
+                return;
+            };
+            let _ = made.unbounded_send(true);
+            drop(made);
+            let held = match go_rx.await {
+                Ok(t) => {
+                    let r = async {
+                        let c = L::hello(&ep, &addr, false).await?;
+                        let up = t.elapsed();
+                        upload::<L>(&c, each).await?;
+                        io::Result::Ok((up, c))
+                    }
+                    .await;
+                    let held = match r {
+                        Ok((up, c)) => {
+                            let _ = done.unbounded_send(Ok(up));
+                            Some(c)
+                        }
+                        Err(e) => {
+                            let _ = done.unbounded_send(Err(e.to_string()));
+                            None
+                        }
+                    };
+                    drop(done);
+                    held
+                }
+                Err(_) => None,
+            };
+            let _ = release_rx.await;
+            if let Some(c) = held {
+                L::close(&ep, &c).await;
+            }
+            L::shutdown(ep).await;
+            let _ = ended.unbounded_send(());
+        });
+    }
+    drop((made, done, ended));
     let mut no_endpoint = 0u32;
     for _ in 0..n {
-        match L::client().await {
-            Ok(e) => eps.push(e),
-            Err(_) => no_endpoint += 1,
+        match made_rx.next().await {
+            Some(true) => {}
+            Some(false) | None => no_endpoint += 1,
         }
     }
     let c_made = Stats::now();
     let t = Instant::now();
-    let (done, mut results) = mpsc::unbounded();
-    for ep in eps {
-        let (addr, done) = (addr.to_owned(), done.clone());
-        L::spawn(async move {
-            let r = async {
-                let c = L::hello(&ep, &addr, false).await?;
-                let up = t.elapsed();
-                upload::<L>(&c, each).await?;
-                io::Result::Ok((up, c))
-            }
-            .await;
-            let _ = done.unbounded_send((ep, r.map_err(|e| e.to_string())));
-        });
+    for g in go {
+        let _ = g.send(t);
     }
-    drop(done);
-    let (mut held, mut up, mut failed, mut why) = (Vec::with_capacity(n), Vec::new(), no_endpoint, String::new());
-    while let Some((ep, r)) = results.next().await {
-        match r {
-            Ok((u, c)) => {
+    let (mut ok, mut up, mut failed, mut why) = (0u32, Vec::new(), no_endpoint, String::new());
+    for _ in 0..n.saturating_sub(no_endpoint as usize) {
+        match results.next().await {
+            Some(Ok(u)) => {
                 up.push(us(u));
-                held.push((ep, c));
+                ok += 1;
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 failed += 1;
                 why = e;
             }
+            None => break,
         }
     }
     let secs = t.elapsed().as_secs_f64();
@@ -601,7 +653,7 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
     L::sleep(Duration::from_millis(500)).await;
     let (s1, c1) = (server_stats::<L>(&ctl).await.unwrap_or(s_base), Stats::now());
     up.sort_by(f64::total_cmp);
-    let ok = held.len() as f64;
+    let ok = f64::from(ok);
     Rec::new(L::name(), "many")
         .n("requested", n as f64)
         .n("connected_and_moved", ok)
@@ -624,10 +676,10 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
         .n("client_cpu_s", c1.cpu_secs_since(c_made))
         .s("last_error", &why)
         .emit();
-    for (ep, c) in held {
-        L::close(&ep, &c).await;
-        L::shutdown(ep).await;
+    for r in release {
+        let _ = r.send(());
     }
+    while ended_rx.next().await.is_some() {}
     L::shutdown(ctl_ep).await;
 }
 

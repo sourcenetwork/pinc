@@ -23,6 +23,7 @@ vinc-connect = { workspace = true }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
 vinc = { workspace = true }
 vinc-keystore = { workspace = true }
+getrandom = { workspace = true }
 nuclei = { workspace = true }
 
 iroh = { workspace = true }

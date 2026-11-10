@@ -5454,6 +5454,7 @@ dependencies = [
  "blake3",
  "criterion",
  "futures",
+ "getrandom 0.4.3",
  "iroh",
  "libp2p",
  "libp2p-stream",
