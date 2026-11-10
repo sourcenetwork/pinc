@@ -206,6 +206,39 @@ async fn a_request_and_response_cost_a_bounded_number_of_polls_and_no_timer() {
     .await;
 }
 
+/// An endpoint none of whose futures is polled makes no progress: while its host polls nothing of it, it neither
+/// receives, sends nor sleeps, though the peer's echo arrives at its socket meanwhile. Once polled again it loses nothing:
+/// every byte of the echo is read back in order.
+#[nuclei::test]
+async fn an_endpoint_no_one_polls_makes_no_progress_and_loses_nothing() {
+    within(60, async {
+        let server = node().await;
+        let counts = Arc::new(Counts::default());
+        let ep = counted_endpoint!(vinc_common::builder().alpn(ECHO), counts);
+        let conn = ep.connect(server.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+        let mut data = vec![0u8; 64 * 1024];
+        pattern(5, 0, &mut data);
+        tx.write_all(&data).await.unwrap();
+        tx.finish().await.unwrap();
+
+        let c = |f: fn(&Counts) -> &AtomicUsize| f(&counts).load(Ordering::Relaxed);
+        let before = (c(|x| &x.recvs), c(|x| &x.sends), c(|x| &x.timers));
+        // Only the server's tasks run: the echo leaves for this endpoint's socket, and nothing of the endpoint runs.
+        nuclei::time::sleep(Duration::from_millis(500)).await;
+        let after = (c(|x| &x.recvs), c(|x| &x.sends), c(|x| &x.timers));
+        assert_eq!(
+            before, after,
+            "the endpoint ran its host's calls (receives, sends, sleeps) with no future polled"
+        );
+
+        let back = rx.read_to_end(data.len()).await.unwrap();
+        assert_eq!(back.len(), data.len());
+        assert!(back == data, "the echo came back changed");
+    })
+    .await;
+}
+
 /// The CPU time of a round trip on an established connection is bounded: no per-poll cost that grows with the
 /// endpoint's size (such as a large frame probed on every poll).
 #[nuclei::test]
@@ -297,6 +330,34 @@ async fn messages_allocate_nothing_in_the_facade() {
         assert!(
             stream <= bare,
             "stream: {stream} allocations for {N} round trips against {bare} bare"
+        );
+
+        // Datagrams: both ends are in the test, each sends one datagram per round and reads the other's.
+        let dserver = bind(vinc_common::builder().alpn(ECHO)).await;
+        let dclient = bind(vinc_common::builder().alpn(ECHO)).await;
+        let c = dclient.connect(dserver.addr(), ECHO).await.unwrap();
+        // The session reaches the server's accept queue once the client sent something on it.
+        let (mut hi, _hi_rx) = c.open_bi().await.unwrap();
+        hi.write_all(b"hi").await.unwrap();
+        let s = dserver.accept().await.unwrap().into_connection();
+        let mut dbuf = [0u8; 128];
+        let round = async |c: &vinc::Connection<_>, s: &vinc::Connection<_>, dbuf: &mut [u8]| {
+            c.send_datagram(&[1u8; 64]).await.unwrap();
+            assert_eq!(s.recv_datagram(dbuf).await.unwrap(), 64);
+            s.send_datagram(&[2u8; 64]).await.unwrap();
+            assert_eq!(c.recv_datagram(dbuf).await.unwrap(), 64);
+        };
+        for _ in 0..100 {
+            round(&c, &s, &mut dbuf).await;
+        }
+        let from = AllocStats::now();
+        for _ in 0..N {
+            round(&c, &s, &mut dbuf).await;
+        }
+        let datagram = used(from);
+        assert!(
+            datagram <= bare,
+            "datagram: {datagram} allocations for {N} round trips against {bare} bare"
         );
     })
     .await;
