@@ -68,7 +68,7 @@ async fn start<S: KeyStore, A: Admit, R, const K: usize, const D: usize>(
     ecfg.conn.max_gso = cfg.max_gso.max(1);
     ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
     let (drbg, identity) = (Drbg::new(&rnd), cfg.identity.local()?);
-    let mut ep = Box::new(Ep::<K, D>::new(now, Software, drbg, identity, ecfg, &mut slots));
+    let mut ep = build::<K, D>(now, drbg, identity, ecfg, &mut slots);
     let mut prekeys = Prekeys::new()?;
     ep.set_prekey(prekeys.rotate(now)?);
     for a in &cfg.alpns {
@@ -79,4 +79,20 @@ async fn start<S: KeyStore, A: Admit, R, const K: usize, const D: usize>(
     let ifaces = cfg.locals.iter().filter_map(|l| ep.add_iface(*l)).collect();
     let mut engine = Engine::new(wrap(ep), cfg, prekeys, plane, default_queue, ifaces, now);
     Ok(f(&mut engine).await)
+}
+
+/// Build the endpoint on the heap from a plain function. The endpoint's tables are large (megabytes at the default
+/// capacity): built inside the async function they would sit in the frame of its poll function, and the stack probe
+/// of that frame would touch every page on every poll of the driver.
+// The endpoint takes these by value; they are moved once, at start.
+#[allow(clippy::large_types_passed_by_value)]
+#[inline(never)]
+fn build<'s, 'a, const K: usize, const D: usize>(
+    now: u64,
+    drbg: Drbg,
+    identity: vinc_security::LocalIdentity,
+    ecfg: vinc_core::EndpointConfig,
+    slots: &'s mut [crate::mem::EpSlot<'a>; K],
+) -> Box<Ep<'s, 'a, K, D>> {
+    Box::new(Ep::<K, D>::new(now, Software, drbg, identity, ecfg, slots))
 }
