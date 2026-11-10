@@ -693,7 +693,8 @@ impl<A: SimApps> SimNode<A> {
 
     fn streams_out_step(&mut self) -> bool {
         let mut did = false;
-        let mut buf = vec![0u8; 20_000];
+        // One WebSocket frame carries at most one record's payload.
+        let mut buf = vec![0u8; 20_000.min(ws::MAX_PAYLOAD)];
         for i in 0..NRL {
             let Some(stream) = self.streams[i] else { continue };
             loop {
