@@ -89,7 +89,11 @@ fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC> {
     let streams: &'static mut Streams<S, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
     let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
-    Resources { pool, streams, loss }
+    Resources {
+        pool,
+        streams: streams.into(),
+        loss: loss.into(),
+    }
 }
 
 fn node_slots<S: StreamSource + 'static>() -> &'static mut [Slot<'static, Caps, S, CN, CC, CF, CNP>; NK] {

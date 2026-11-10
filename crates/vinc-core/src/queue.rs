@@ -13,6 +13,7 @@
 //! one event per session twice over and a few more, which the headroom covers for any `K`.
 
 use crate::api::Event;
+use crate::store::{Store, filled, store_fn};
 
 /// The places of the event queue besides the four rows of `K`.
 pub const EVENT_BASE: usize = 1024;
@@ -30,8 +31,8 @@ pub const fn event_headroom(sessions: usize) -> usize {
 /// A fixed ring of events for a table of `K` sessions.
 #[derive(Debug)]
 pub(crate) struct EventRing<const K: usize> {
-    base: [Option<Event>; EVENT_BASE],
-    rows: [[Option<Event>; K]; 4],
+    base: Store<Option<Event>, EVENT_BASE>,
+    rows: [Store<Option<Event>, K>; 4],
     head: usize,
     len: usize,
     /// How many of the queued events the application can recover by reading state.
@@ -44,17 +45,19 @@ pub(crate) struct EventRing<const K: usize> {
 impl<const K: usize> EventRing<K> {
     const CAP: usize = event_queue(K);
 
-    pub(crate) const fn new() -> Self {
+    store_fn! {
+    pub(crate) fn new() -> Self {
         const { assert!(event_queue(K) >= 2 * event_headroom(K)) };
         Self {
-            base: [None; EVENT_BASE],
-            rows: [[None; K]; 4],
+            base: filled(None),
+            rows: [filled(None), filled(None), filled(None), filled(None)],
             head: 0,
             len: 0,
             lossy_len: 0,
             dropped: 0,
             lost: 0,
         }
+    }
     }
 
     /// The place of the `i`th queued event, counting from the oldest.

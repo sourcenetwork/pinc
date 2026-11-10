@@ -76,7 +76,6 @@ async fn many_streams_datagrams_and_reconnect() {
 async fn streams_beyond_the_peer_pool_are_delivered() {
     within(120, async {
         let small = Limits {
-            connections: 64,
             pool_chunks: 8,
             stream_window: 64 * 1024,
             ..Limits::default()

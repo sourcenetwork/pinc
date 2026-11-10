@@ -8,13 +8,15 @@
 //! Invariants: `pos[id]` names the heap index of `id` or is `NONE`; `heap[pos[id]] == id`; for every heap index `i`
 //! the key of `heap[i]` is not less than the key of its parent.
 
+use crate::store::{Store, filled, store_fn};
+
 const NONE: u32 = u32::MAX;
 
 /// An indexed min-heap of `(deadline, id)` pairs for ids below `N`.
 pub struct DeadlineHeap<const N: usize> {
-    heap: [u32; N],
-    pos: [u32; N],
-    at: [u64; N],
+    heap: Store<u32, N>,
+    pos: Store<u32, N>,
+    at: Store<u64, N>,
     len: usize,
 }
 
@@ -27,15 +29,17 @@ impl<const N: usize> core::fmt::Debug for DeadlineHeap<N> {
 }
 
 impl<const N: usize> DeadlineHeap<N> {
+    store_fn! {
     /// An empty heap.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         const { assert!(N < NONE as usize) };
         Self {
-            heap: [0; N],
-            pos: [NONE; N],
-            at: [0; N],
+            heap: filled(0),
+            pos: filled(NONE),
+            at: filled(0),
             len: 0,
         }
+    }
     }
 
     /// How many ids have a deadline.

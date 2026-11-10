@@ -45,8 +45,8 @@ fn memory() -> Resources<'static, NoSource, 2, 2> {
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
     Resources {
         pool,
-        streams,
-        loss: Box::leak(Box::new(LossEstimate::new())),
+        streams: streams.into(),
+        loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
     }
 }
 

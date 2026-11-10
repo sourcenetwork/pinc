@@ -23,7 +23,7 @@ use std::time::Instant;
 use nuclei::Handle;
 use nuclei::time::sleep_until_precise;
 
-use vinc::{Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Limits, Protocol, Vinc};
+use vinc::{Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Protocol, Vinc};
 
 const ALPN: &[u8] = b"example/transfer/1";
 
@@ -98,18 +98,11 @@ async fn endpoint(builder: Builder) -> vinc::Result<Endpoint<impl Hosted>> {
     let local = sock
         .local_addr()
         .map_err(|_| Error::new(ErrorKind::Unreachable, "the socket has no address"))?;
-    // Room for 64 sessions keeps the endpoint small enough to build on any thread's stack.
-    builder
-        .limits(Limits {
-            connections: 64,
-            ..Limits::default()
-        })
-        .local_addr(local)
-        .build(
-            async move |buf: &mut [u8]| r.recv_from(buf).await,
-            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
-            async |at: Instant| sleep_until_precise(at).await,
-        )
+    builder.local_addr(local).build(
+        async move |buf: &mut [u8]| r.recv_from(buf).await,
+        async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+        async |at: Instant| sleep_until_precise(at).await,
+    )
 }
 
 #[allow(dead_code)]

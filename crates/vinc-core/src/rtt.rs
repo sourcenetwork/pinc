@@ -38,14 +38,16 @@ pub struct NodeRtt {
 }
 
 impl NodeRtt {
+    crate::store::store_fn! {
     /// No round trip known yet; the table hash is keyed by `seed`.
-    pub const fn new(seed: u64) -> Self {
+    pub fn new(seed: u64) -> Self {
         Self {
             krtt: Table::new(seed),
             lrtt: 0,
             tgr: 0,
             hs_floor: 0,
         }
+    }
     }
 
     /// A handshake to `peer` took `rtt` nanoseconds without a resend (0 means no sample). Zero is ignored;

@@ -33,8 +33,7 @@ use nuclei::sync::Mutex as AsyncMutex;
 use nuclei::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use nuclei::time::sleep_until_precise;
 use vinc::{
-    Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Limits, NodeAddr, SendStream, Vinc, node_from_str,
-    node_to_string,
+    Builder, Connection, Endpoint, Error, ErrorKind, Hosted, NodeAddr, SendStream, Vinc, node_from_str, node_to_string,
 };
 use vinc::{RecvStream, read_tag};
 
@@ -248,18 +247,11 @@ async fn endpoint(builder: Builder, bind: SocketAddr) -> Result<Endpoint<impl Ho
     let local = sock
         .local_addr()
         .map_err(|_| Error::new(ErrorKind::Unreachable, "the socket has no address"))?;
-    // Room for 64 sessions keeps the endpoint small enough to build on any thread's stack.
-    builder
-        .limits(Limits {
-            connections: 64,
-            ..Limits::default()
-        })
-        .local_addr(local)
-        .build(
-            async move |buf: &mut [u8]| r.recv_from(buf).await,
-            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
-            async |at: Instant| sleep_until_precise(at).await,
-        )
+    builder.local_addr(local).build(
+        async move |buf: &mut [u8]| r.recv_from(buf).await,
+        async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+        async |at: Instant| sleep_until_precise(at).await,
+    )
 }
 
 #[allow(dead_code)]

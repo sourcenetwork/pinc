@@ -3,8 +3,8 @@
 //! The endpoint's tables are const-generic, so the driver builds one of a ladder of shapes: the smallest of
 //! [`CAPACITIES`](crate::CAPACITIES) that holds [`Limits::connections`] sessions. Every shape has [`STREAMS`] stream slots per session
 //! and [`RING`] chunk entries per stream half. What varies at run time is the pool of 16 KiB chunks each session may
-//! use ([`Limits::pool_chunks`]). The memory is allocated once, when the engine starts, and freed when it stops;
-//! nothing is leaked.
+//! use ([`Limits::pool_chunks`]). The endpoint owns all of it: it is allocated once, when the endpoint is built, on the
+//! heap and piece by piece, and freed when the endpoint is dropped; nothing is leaked and nothing is shared.
 //!
 //! # Memory
 //!
@@ -18,12 +18,9 @@
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
 
-use vinc_core::{Endpoint, Slot};
+use vinc_core::Endpoint;
 use vinc_crypto::Software;
-use vinc_transport::conn::Resources;
-use vinc_transport::recovery::LossEstimate;
-use vinc_transport::stream::pool::BufferPool;
-use vinc_transport::stream::{self, NoSource, Streams};
+use vinc_transport::stream::NoSource;
 
 use crate::error::{Error, Result};
 
@@ -42,8 +39,6 @@ pub(crate) const CLIENT_TICKETS: usize = 32;
 /// The endpoint a driver runs, for a table of `K` sessions and `D` connection id entries (ten per session).
 pub(crate) type Ep<'s, 'a, const K: usize, const D: usize> =
     Endpoint<'s, 'a, Software, NoSource, STREAMS, RING, FLIGHT, PATHS, K, D, PREKEYS, TICKETS, CLIENT_TICKETS>;
-/// One slot of its table.
-pub(crate) type EpSlot<'a> = Slot<'a, Software, NoSource, STREAMS, RING, FLIGHT, PATHS>;
 
 /// The sizes a driver runs with; each has a default and a hard ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,39 +91,4 @@ impl Limits {
             Err(Error::config("a limit is out of range"))
         }
     }
-}
-
-/// A table of `K` slots over memory that lives for the rest of the process. The endpoint borrows its slots for its whole
-/// life, so the memory is allocated once and handed back through [`Endpoint::into_slots`](vinc_core::Endpoint) to the
-/// process-wide pool of [`node`](crate::node), where the next endpoint of the same shape takes it; it is never returned
-/// to the system.
-// vertexia: the pool holds the peak number of live endpoints; a slot table that owns its memory in vinc-core would free it
-pub(crate) type Table<const K: usize> = &'static mut [EpSlot<'static>; K];
-
-/// A new table of `K` slots with `chunks` pool chunks each.
-///
-/// # Errors
-/// [`ErrorKind::Config`](crate::ErrorKind::Config) if the table cannot be made.
-#[inline(never)]
-pub(crate) fn new_table<const K: usize>(chunks: usize) -> Result<Table<K>> {
-    let pool = BufferPool::new_boxed(1);
-    let cfg = stream::Config::new(false);
-    let streams: &'static mut [Streams<NoSource, STREAMS, RING>] =
-        Box::leak((0..K).map(|_| Streams::new(&cfg, &pool)).collect());
-    let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
-    let v: Vec<EpSlot<'static>> = streams
-        .iter_mut()
-        .map(|s| {
-            Slot::new(Resources {
-                pool: BufferPool::new_boxed(chunks),
-                streams: s,
-                loss,
-            })
-        })
-        .collect();
-    let boxed: Box<[EpSlot<'static>; K]> = v
-        .into_boxed_slice()
-        .try_into()
-        .map_err(|_| Error::config("the slot table has the wrong size"))?;
-    Ok(Box::leak(boxed))
 }

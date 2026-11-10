@@ -11,17 +11,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use vinc::{Limits, Vinc};
+use vinc::Vinc;
 
 const ALPN: &[u8] = b"hosts/echo";
-
-fn small() -> Limits {
-    Limits {
-        connections: 4,
-        pool_chunks: 16,
-        ..Limits::default()
-    }
-}
 
 #[tokio::test(flavor = "current_thread")]
 async fn an_echo_on_tokio() {
@@ -30,7 +22,6 @@ async fn an_echo_on_tokio() {
         let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
         Vinc::builder()
             .alpn(ALPN)
-            .limits(small())
             .local_addr(sock.local_addr().unwrap())
             .build(
                 async move |buf: &mut [u8]| r.recv_from(buf).await,
@@ -70,7 +61,6 @@ fn an_echo_on_smol() {
         let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
         Vinc::builder()
             .alpn(ALPN)
-            .limits(small())
             .local_addr(sock.get_ref().local_addr().unwrap())
             .build(
                 async move |buf: &mut [u8]| r.recv_from(buf).await,
@@ -117,7 +107,6 @@ async fn a_batching_host_gets_whole_transmits() {
         let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
         Vinc::builder()
             .alpn(ALPN)
-            .limits(small())
             .batch(8)
             .local_addr(sock.local_addr().unwrap())
             .build_batched(

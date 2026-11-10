@@ -12,6 +12,8 @@
 
 use core::hash::{Hash, Hasher};
 
+use crate::store::{Store, filled, store_fn};
+
 const NIL: u32 = u32::MAX;
 
 /// A keyed 64-bit hasher: each 8-byte word is mixed in with a multiply and a rotation, and the result is finalised.
@@ -84,8 +86,8 @@ impl<K, V> Entry<K, V> {
 /// A bounded hash table of up to `CAP` entries; see the module docs.
 pub struct Table<K, V, const CAP: usize> {
     seed: u64,
-    heads: [u32; CAP],
-    entries: [Entry<K, V>; CAP],
+    heads: Store<u32, CAP>,
+    entries: Store<Entry<K, V>, CAP>,
     free: u32,
     oldest: u32,
     newest: u32,
@@ -102,14 +104,15 @@ impl<K, V, const CAP: usize> core::fmt::Debug for Table<K, V, CAP> {
 }
 
 impl<K: Hash + Eq + Copy, V: Copy, const CAP: usize> Table<K, V, CAP> {
+    store_fn! {
     /// An empty table whose hash is keyed by `seed`.
     #[allow(
         clippy::indexing_slicing,
-        reason = "a const initialiser; the loop bound keeps the index in range"
+        reason = "an initialiser; the loop bound keeps the index in range"
     )]
-    pub const fn new(seed: u64) -> Self {
+    pub fn new(seed: u64) -> Self {
         const { assert!(CAP >= 1 && CAP < NIL as usize) };
-        let mut entries = [Entry::EMPTY; CAP];
+        let mut entries: Store<Entry<K, V>, CAP> = filled(Entry::EMPTY);
         // Thread the free list through the `chain` links.
         let mut i = 0;
         while i + 1 < CAP {
@@ -118,13 +121,14 @@ impl<K: Hash + Eq + Copy, V: Copy, const CAP: usize> Table<K, V, CAP> {
         }
         Self {
             seed,
-            heads: [NIL; CAP],
+            heads: filled(NIL),
             entries,
             free: 0,
             oldest: NIL,
             newest: NIL,
             len: 0,
         }
+    }
     }
 
     /// How many entries the table holds.

@@ -223,8 +223,8 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
     /// future is dropped before it completes, as a readiness-based receive does. A host with segmentation offload or
     /// coalesced receives calls [`build_batched`](Self::build_batched) instead.
     ///
-    /// The endpoint is a large value, built on the calling thread's stack once: size the stack for the `connections`
-    /// limit (see [`Limits`]).
+    /// The endpoint owns its tables and builds them on the heap, so the calling thread needs no large stack: the default
+    /// limits build and run on a 1 MiB stack. The memory the `connections` limit reserves is described at [`Limits`].
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] for an invalid setting or no identity.
@@ -520,7 +520,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// # Errors
     /// [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
     pub async fn node_stats(&self) -> Result<crate::NodeStats> {
-        self.0.shared.run(|core, _| Try::Done(core.node_stats())).await
+        self.0.shared.run(|core, _| Try::Done(Ok(core.node_stats()))).await
     }
 
     /// Serve `protocol` on its ALPN: every session a peer opens on it goes to the returned [`Registered`], not to

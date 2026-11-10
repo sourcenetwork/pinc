@@ -111,8 +111,8 @@ opt-level = 3
 [profile.dev.package.vinc-core]
 opt-level = 3
 
-# The facade builds the endpoint, a very large value, straight into its heap allocation; unoptimised code would build it
-# on the stack first.
+# The facade builds the endpoint's slot table on the heap, one slot at a time; unoptimised code would keep several
+# copies of a slot and of a stream table (hundreds of kilobytes each) on the stack while it does.
 [profile.dev.package.vinc]
 opt-level = 3
 

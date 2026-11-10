@@ -276,8 +276,8 @@ fn endpoint(tag: u8) -> (Box<Ep>, LocalIdentity) {
                 Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
             Slot::new(Resources {
                 pool,
-                streams,
-                loss: Box::leak(Box::new(LossEstimate::new())),
+                streams: streams.into(),
+                loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
             })
         })
         .collect::<Vec<_>>()

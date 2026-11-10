@@ -39,11 +39,13 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    crate::store::store_fn! {
     /// An empty ledger whose table hash is keyed by `seed`.
-    pub const fn new(seed: u64) -> Self {
+    pub fn new(seed: u64) -> Self {
         Self {
             table: Table::new(seed),
         }
+    }
     }
 
     /// How many addresses are tracked.
