@@ -74,6 +74,7 @@ impl<F: Future> Future for Local<F> {
 }
 
 type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+type Streams = (Box<dyn TxDyn>, Box<dyn RxDyn>);
 
 fn erase<'a, T>(f: impl Future<Output = T> + 'a) -> Fut<'a, T> {
     Box::pin(Local(f))
@@ -90,7 +91,7 @@ trait RxDyn: Send {
 
 trait ConnDyn: Send + Sync {
     fn remote(&self) -> NodeId;
-    fn open(&self) -> Fut<'_, io::Result<(Box<dyn TxDyn>, Box<dyn RxDyn>)>>;
+    fn open(&self) -> Fut<'_, io::Result<Streams>>;
 }
 
 trait EpDyn: Send + Sync {
@@ -120,7 +121,7 @@ impl<H: Hosted + 'static> ConnDyn for Connection<H> {
         Connection::remote(self)
     }
 
-    fn open(&self) -> Fut<'_, io::Result<(Box<dyn TxDyn>, Box<dyn RxDyn>)>> {
+    fn open(&self) -> Fut<'_, io::Result<Streams>> {
         erase(async move {
             let (tx, rx) = self.open_bi().await.map_err(io_err)?;
             Ok((Box::new(tx) as Box<dyn TxDyn>, Box::new(rx) as Box<dyn RxDyn>))
@@ -255,7 +256,7 @@ impl Lib for Vinc1 {
         ep.connect(NodeAddr::parse(addr).map_err(io_err)?).await
     }
 
-    async fn open(conn: &Arc<dyn ConnDyn>) -> io::Result<(Box<dyn TxDyn>, Box<dyn RxDyn>)> {
+    async fn open(conn: &Arc<dyn ConnDyn>) -> io::Result<Streams> {
         conn.open().await
     }
 
