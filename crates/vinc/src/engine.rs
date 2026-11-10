@@ -195,12 +195,6 @@ pub(crate) struct Core<S, A> {
     pub(crate) tx_spare: Option<Vec<u8>>,
 }
 
-impl<S, A> Drop for Core<S, A> {
-    fn drop(&mut self) {
-        self.ep.recycle(self.limits.pool_chunks);
-    }
-}
-
 impl<S: KeyStore, A: Admit> Core<S, A> {
     /// A core over `ep`, which already holds the prekey, the protocols and the interfaces `ifaces`.
     pub(crate) fn new(ep: AnyEp, cfg: CoreConfig<S, A>, prekeys: Prekeys, ifaces: Vec<IfaceId>) -> Self {
@@ -270,7 +264,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
         n += self.drain(now);
         if n > 0 {
-            let dropped = self.ep.node_stats().map_or(0, |s| s.events_dropped);
+            let dropped = self.ep.node_stats().events_dropped;
             if dropped != self.last_dropped {
                 // A dropped event may have been for any waiter: they all look again.
                 self.last_dropped = dropped;
@@ -990,8 +984,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         let _ = self.cmd(now, || Command::Resume { moved });
     }
 
-    pub(crate) fn node_stats(&self) -> Result<NodeStats> {
-        self.ep.node_stats().ok_or_else(Error::shutdown)
+    pub(crate) fn node_stats(&self) -> NodeStats {
+        self.ep.node_stats()
     }
 
     pub(crate) fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
@@ -1011,7 +1005,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     fn check_finished(&mut self, now: u64) {
         let Some(at) = self.shutdown else { return };
-        if self.ep.node_stats().is_some_and(|s| s.sessions > 0) && now < at {
+        if self.ep.node_stats().sessions > 0 && now < at {
             return;
         }
         self.stop(Error::shutdown());

@@ -1,5 +1,5 @@
-//! A server that holds a thousand sessions in one process over loopback, all moving data; and the engine building on
-//! a nuclei worker with its default stack size.
+//! A server that holds a thousand sessions in one process over loopback, all moving data; and an endpoint of 1024
+//! sessions that builds and drops in a plain test.
 #![allow(
     clippy::semicolon_if_nothing_returned,
     clippy::zombie_processes,
@@ -88,16 +88,10 @@ async fn client(
     Ok(())
 }
 
-/// The endpoint of 1024 sessions is built on the stack of the thread that calls `build`: the test runs on a thread
-/// with the stack of a nuclei worker, as a host would build it at startup.
-#[test]
-fn a_thousand_sessions_in_one_process_all_move_data() {
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(|| nuclei::block_on(a_thousand_sessions()))
-        .unwrap()
-        .join()
-        .unwrap();
+/// A server of 1024 sessions and a thousand clients, each with an endpoint of its own, in one process.
+#[nuclei::test]
+async fn a_thousand_sessions_in_one_process_all_move_data() {
+    a_thousand_sessions().await;
 }
 
 async fn a_thousand_sessions() {
@@ -154,23 +148,9 @@ async fn a_thousand_sessions() {
     .await;
 }
 
-/// The endpoint of 1024 sessions builds, drives and drops on a thread with the default stack of a nuclei worker (8 MiB).
-#[test]
-fn the_endpoint_builds_on_a_nuclei_worker_with_the_default_stack() {
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(|| {
-            nuclei::block_on(async {
-                let limits = Limits {
-                    connections: 1024,
-                    pool_chunks: 16,
-                    ..Limits::default()
-                };
-                let ep = bind_idle(Vinc::builder().alpn(ECHO).limits(limits)).await;
-                assert_eq!(ep.node_stats().await.unwrap().sessions, 0);
-            });
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+/// An endpoint of the default 1024 sessions builds and drops in a plain test, on the test thread's own stack.
+#[nuclei::test]
+async fn a_default_endpoint_builds_in_a_plain_test() {
+    let ep = bind_idle(Vinc::builder().alpn(ECHO)).await;
+    assert_eq!(ep.node_stats().await.unwrap().sessions, 0);
 }

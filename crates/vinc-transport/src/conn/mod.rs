@@ -62,6 +62,7 @@ mod ctl;
 mod drive;
 mod event;
 mod handshake;
+mod held;
 mod hooks;
 mod keys;
 mod life;
@@ -85,6 +86,7 @@ pub use config::{
     ClientParams, Config, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
 };
 pub use event::{CloseReason, Drop, Event, code};
+pub use held::{Held, Shared};
 pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
 pub use keys::trace::{KeyEvent, KeysView, Slot};
@@ -121,9 +123,9 @@ pub struct Resources<'a, S: StreamSource, const N: usize, const C: usize> {
     /// The pool every buffer of the connection is charged to.
     pub pool: BufferPool<'a>,
     /// The stream table, created with `Config::new(is_client)` of the stream layer.
-    pub streams: &'a mut Streams<S, N, C>,
+    pub streams: Held<'a, Streams<S, N, C>>,
     /// The node-wide loss average that decides tail repair.
-    pub loss: &'a LossEstimate,
+    pub loss: Shared<'a, LossEstimate>,
 }
 
 /// Where the connection is in its life.
@@ -153,8 +155,8 @@ pub struct Connection<
     cfg: Config,
     phase: Phase,
     pool: BufferPool<'a>,
-    streams: &'a mut Streams<S, N, C>,
-    loss: &'a LossEstimate,
+    streams: Held<'a, Streams<S, N, C>>,
+    loss: Shared<'a, LossEstimate>,
     dgrams: Datagrams,
     ext: Datagrams<16, 4>,
     early: EarlyData,
@@ -322,7 +324,7 @@ where
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = Self::random_cid(env, 8)?;
-        let local = Self::advertise(&cfg, res.streams);
+        let local = Self::advertise(&cfg, &res.streams);
         let remembered = params.ticket.as_ref().map(|t| *t.peer_credit());
         let init = Initiator::new(
             env,
@@ -367,7 +369,7 @@ where
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = ConnId::default();
-        let local = Self::advertise(&cfg, res.streams);
+        let local = Self::advertise(&cfg, &res.streams);
         let mut rc = ResponderConfig::new(params.identity, cid, params.alpns);
         rc.tickets_per_session = params.tickets_per_session;
         rc.ticket_lifetime_s = params.ticket_lifetime_s;

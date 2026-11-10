@@ -3,24 +3,22 @@
 //! The endpoint's tables are const-generic, so the facade builds one of a ladder of shapes (see
 //! [`CAPACITIES`]). [`AnyEp`] is the enum of those shapes: the core holds an `AnyEp` and is the same type whatever the
 //! capacity, and each method is one `match` that forwards to the endpoint method of the same name. The ladder is
-//! written once, in [`ladder!`], and everything that depends on it (the enum, the list of capacities, the pool that
-//! recycles slot tables and the function that builds a core for the smallest rung that holds `n` sessions) is generated
-//! from that one list.
+//! written once, in [`ladder!`], and everything that depends on it (the enum, the list of capacities and the function
+//! that builds the endpoint of the smallest rung that holds `n` sessions) is generated from that one list.
 //!
-//! Invariants: every method forwards to the endpoint method of the same name and adds nothing; the `Gone` rung, left
-//! behind when the endpoint is recycled, answers nothing.
+//! Invariants: every method forwards to the endpoint method of the same name and adds nothing.
 
 use std::net::SocketAddr;
 
 use vinc_core::{
-    Answer, Command, CommandError, Event, IfaceEvent, IfaceId, NodeStats, Query, Reply, SessionId, Transmit,
+    Answer, Command, CommandError, EndpointConfig, Event, IfaceEvent, IfaceId, NodeStats, Query, Reply, SessionId,
+    Transmit,
 };
-use vinc_security::PrekeyInfo;
+use vinc_crypto::{Drbg, Software};
+use vinc_security::{LocalIdentity, PrekeyInfo};
 use vinc_transport::stream::NoSource;
 
-use std::cell::RefCell;
-
-use crate::mem::{Ep, EpSlot};
+use crate::mem::Ep;
 
 /// Call `$m!` with the ladder of `variant capacity` pairs.
 macro_rules! ladder {
@@ -31,7 +29,6 @@ macro_rules! ladder {
         }
     };
 }
-pub(crate) use ladder;
 
 macro_rules! define {
     ($($v:ident $k:literal),+) => {
@@ -44,109 +41,68 @@ macro_rules! define {
                 #[doc = concat!("An endpoint for ", stringify!($k), " sessions.")]
                 $v(Box<Ep<'static, 'static, $k, { $k * 10 }>>),
             )+
-            /// The endpoint was handed back to the pool.
-            Gone,
         }
-
-        /// A slot table of one shape, waiting in the pool for the next endpoint.
-        pub(crate) enum Idle {
-            $($v(&'static mut [EpSlot<'static>; $k], usize),)+
-        }
-
-        /// The shapes the pool can hand a table of: one impl per rung.
-        pub(crate) trait Rung<const K: usize> {
-            fn take(pool: &mut Vec<Idle>, chunks: usize) -> Option<&'static mut [EpSlot<'static>; K]>;
-        }
-
-        /// The ladder as a type, to hang [`Rung`] on.
-        pub(crate) struct Ladder;
-
-        $(
-            impl Rung<$k> for Ladder {
-                fn take(pool: &mut Vec<Idle>, chunks: usize) -> Option<&'static mut [EpSlot<'static>; $k]> {
-                    let at = pool.iter().position(|t| matches!(t, Idle::$v(_, c) if *c == chunks))?;
-                    match pool.swap_remove(at) {
-                        Idle::$v(t, _) => Some(t),
-                        _ => None,
-                    }
-                }
-            }
-        )+
 
         impl AnyEp {
-            /// End the endpoint and give its slot table back to the pool.
-            pub(crate) fn recycle(&mut self, chunks: usize) {
-                // vertexia: the pool never shrinks (see `crate::mem::Table`)
-                let t = match std::mem::replace(self, Self::Gone) {
-                    $(Self::$v(e) => e.into_slots_boxed().map(|t| Idle::$v(t, chunks)),)+
-                    Self::Gone => None,
-                };
-                if let Some(t) = t {
-                    // A thread that is ending has no pool any more; its table is then dropped with the endpoint's other memory.
-                    let _ = POOL.try_with(|pool| pool.borrow_mut().push(t));
+            /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
+            /// session and `pool_chunks` chunks for each; `None` above the ladder. It is not generic, so it is compiled
+            /// once, here, and optimised whatever the host's types: no host's build keeps a copy of a slot on the stack.
+            #[inline(never)]
+            pub(crate) fn new(
+                connections: usize,
+                now: u64,
+                drbg: Drbg,
+                identity: LocalIdentity,
+                cfg: EndpointConfig,
+                pool_chunks: usize,
+            ) -> Option<Self> {
+                match connections {
+                    $(n if n <= $k => Some(Self::$v(Ep::<$k, { $k * 10 }>::new_owned(
+                        now, Software, drbg, identity, cfg, pool_chunks,
+                    ))),)+
+                    _ => None,
                 }
             }
-
+            pub(crate) fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
+                match self { $(Self::$v(e) => e.add_iface(local),)+ }
+            }
             pub(crate) fn handle_datagram(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
-                match self { $(Self::$v(e) => e.handle_datagram(now, local, remote, buf),)+ Self::Gone => {} }
+                match self { $(Self::$v(e) => e.handle_datagram(now, local, remote, buf),)+ }
             }
             pub(crate) fn handle_timeout(&mut self, now: u64) {
-                match self { $(Self::$v(e) => e.handle_timeout(now),)+ Self::Gone => {} }
+                match self { $(Self::$v(e) => e.handle_timeout(now),)+ }
             }
             pub(crate) fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit> {
-                match self { $(Self::$v(e) => e.poll_transmit(now, out),)+ Self::Gone => None }
+                match self { $(Self::$v(e) => e.poll_transmit(now, out),)+ }
             }
             pub(crate) fn poll_timeout(&self) -> Option<u64> {
-                match self { $(Self::$v(e) => e.poll_timeout(),)+ Self::Gone => None }
+                match self { $(Self::$v(e) => e.poll_timeout(),)+ }
             }
             pub(crate) fn poll_event(&mut self) -> Option<Event> {
-                match self { $(Self::$v(e) => e.poll_event(),)+ Self::Gone => None }
+                match self { $(Self::$v(e) => e.poll_event(),)+ }
             }
             pub(crate) fn command(&mut self, now: u64, c: Command<'_, NoSource>) -> Result<Reply, CommandError> {
-                match self { $(Self::$v(e) => e.command(now, c),)+ Self::Gone => Err(CommandError::NoSession) }
+                match self { $(Self::$v(e) => e.command(now, c),)+ }
             }
             pub(crate) fn query(&self, q: Query) -> Answer<'_> {
-                match self { $(Self::$v(e) => e.query(q),)+ Self::Gone => Answer::None }
+                match self { $(Self::$v(e) => e.query(q),)+ }
             }
             pub(crate) fn read_datagram(&mut self, session: SessionId, out: &mut [u8]) -> Result<Option<usize>, CommandError> {
-                match self { $(Self::$v(e) => e.read_datagram(session, out),)+ Self::Gone => Err(CommandError::NoSession) }
+                match self { $(Self::$v(e) => e.read_datagram(session, out),)+ }
             }
-            pub(crate) fn node_stats(&self) -> Option<NodeStats> {
-                match self { $(Self::$v(e) => Some(e.node_stats()),)+ Self::Gone => None }
+            pub(crate) fn node_stats(&self) -> NodeStats {
+                match self { $(Self::$v(e) => e.node_stats(),)+ }
             }
             pub(crate) fn set_prekey(&mut self, prekey: PrekeyInfo) {
-                match self { $(Self::$v(e) => e.set_prekey(prekey),)+ Self::Gone => {} }
+                match self { $(Self::$v(e) => e.set_prekey(prekey),)+ }
             }
             pub(crate) fn register_alpn(&mut self, alpn: &[u8]) -> bool {
-                match self { $(Self::$v(e) => e.register_alpn(alpn),)+ Self::Gone => false }
+                match self { $(Self::$v(e) => e.register_alpn(alpn),)+ }
             }
             pub(crate) fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent) {
-                match self { $(Self::$v(e) => e.iface_event(now, id, ev),)+ Self::Gone => {} }
+                match self { $(Self::$v(e) => e.iface_event(now, id, ev),)+ }
             }
         }
     };
 }
 ladder!(define);
-
-// The slot tables of ended endpoints of this thread, for the next endpoint of the same shape.
-thread_local! {
-    static POOL: RefCell<Vec<Idle>> = const { RefCell::new(Vec::new()) };
-}
-
-/// A table of `K` slots with `chunks` pool chunks each: one an ended endpoint left, else a new one.
-///
-/// # Errors
-/// [`ErrorKind::Config`](crate::ErrorKind::Config) if the table cannot be made.
-pub(crate) fn table<const K: usize>(chunks: usize) -> crate::Result<&'static mut [EpSlot<'static>; K]>
-where
-    Ladder: Rung<K>,
-{
-    let idle = POOL
-        .try_with(|pool| <Ladder as Rung<K>>::take(&mut pool.borrow_mut(), chunks))
-        .ok()
-        .flatten();
-    match idle {
-        Some(t) => Ok(t),
-        None => crate::mem::new_table::<K>(chunks),
-    }
-}

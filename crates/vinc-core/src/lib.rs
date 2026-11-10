@@ -18,8 +18,10 @@
 //!
 //! After any input call `poll_transmit` until it returns `None`; there are no hidden wakeups.
 //!
-//! The crate is `no_std`, forbids unsafe code, uses no `dyn`, allocates nothing per packet (nothing at all), and never
-//! panics on input. Every table has a fixed bound. With the `trace` feature every decision is also recorded as an
+//! The crate is `no_std`, forbids unsafe code, uses no `dyn`, allocates nothing per packet, and never panics on input.
+//! Every table has a fixed bound. Without the `alloc` feature it allocates nothing at all; with it the endpoint's tables
+//! are allocated once, when it is built, and [`Endpoint::new_owned`] also allocates the slot table and the memory of
+//! every slot, all freed when the endpoint is dropped. With the `trace` feature every decision is also recorded as an
 //! ndjson-ready [`TraceRecord`] for model checking and proof of the same rules.
 #![no_std]
 #![forbid(unsafe_code)]
@@ -66,6 +68,7 @@ mod rtt;
 mod rx;
 mod slot;
 mod state;
+mod store;
 mod sub;
 mod table;
 mod timers;

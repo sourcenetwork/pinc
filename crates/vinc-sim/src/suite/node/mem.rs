@@ -90,5 +90,9 @@ fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, NoSource, STREA
     let streams: &'static mut Streams<NoSource, STREAMS, CHUNK_RING> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
     let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
-    Resources { pool, streams, loss }
+    Resources {
+        pool,
+        streams: streams.into(),
+        loss: loss.into(),
+    }
 }

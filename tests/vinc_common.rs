@@ -28,9 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
-use vinc::{
-    Admission, Builder, Connection, Discovery, Endpoint, Hosted, Limits, Protocol, RecvStream, SendStream, Vinc,
-};
+use vinc::{Admission, Builder, Connection, Discovery, Endpoint, Hosted, Protocol, RecvStream, SendStream, Vinc};
 use vinc_keystore::KeyStore;
 use vinc_tests::SplitMix64;
 
@@ -38,13 +36,9 @@ pub const ECHO: &[u8] = b"t/echo";
 pub const SINK: &[u8] = b"t/sink";
 pub const GEN: &[u8] = b"t/gen";
 
-/// A builder with room for 64 sessions: the endpoint is built on the test thread's stack, and the default 1024 sessions
-/// need more of it than a test thread has.
+/// The builder the tests start from: the default limits, 1024 sessions, which a test thread of the default stack builds.
 pub fn builder() -> Builder {
-    Vinc::builder().limits(Limits {
-        connections: 64,
-        ..Limits::default()
-    })
+    Vinc::builder()
 }
 
 pub fn lo() -> SocketAddr {

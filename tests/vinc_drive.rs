@@ -23,7 +23,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
-use vinc::Limits;
 use vinc_common::{ECHO, SINK, bind, bind_idle, client, join_all, node, pattern, pattern_hash, poll_drop, within};
 
 vinc_tests::install_counting_allocator!();
@@ -310,8 +309,8 @@ fn on_a_stack(kib: usize) {
         .stack_size(kib << 10)
         .spawn(|| {
             nuclei::block_on(async move {
-                let server = lo_endpoint!(vinc_common::builder().alpn(ECHO).limits(small()));
-                let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO).limits(small()));
+                let server = lo_endpoint!(vinc_common::builder().alpn(ECHO));
+                let ep = lo_endpoint!(vinc_common::builder().alpn(ECHO));
                 let to = server.addr();
                 let s = server.clone();
                 nuclei::spawn_local(async move {
@@ -335,19 +334,11 @@ fn on_a_stack(kib: usize) {
         .unwrap();
 }
 
-/// The cryptography and the transport underneath a data exchange need about 1 MiB; the endpoint itself is larger than
-/// that, so any frame that held it would overflow this stack at once.
+/// Endpoints of the default 1024 sessions are built, connected, used and dropped on a 1 MiB stack. The endpoint is far
+/// larger than that, so any frame that held it would overflow this stack at once.
 #[test]
-fn a_thread_with_a_small_stack_builds_drives_and_drops_endpoints() {
-    on_a_stack(2048);
-}
-
-fn small() -> Limits {
-    Limits {
-        connections: 8,
-        pool_chunks: 16,
-        ..Limits::default()
-    }
+fn a_default_endpoint_builds_drives_and_drops_on_a_one_mebibyte_stack() {
+    on_a_stack(1024);
 }
 
 #[allow(dead_code)]

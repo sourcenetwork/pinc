@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nuclei::Handle;
-use vinc::{Endpoint, Hosted, Limits, NodeAddr, Vinc};
+use vinc::{Endpoint, Hosted, NodeAddr, Vinc};
 
 const BULK: usize = 256 << 20;
 const PINGS: usize = 20_000;
@@ -32,10 +32,6 @@ async fn node() -> Endpoint<impl Hosted> {
     let (r, t) = (Arc::clone(&sock), Arc::clone(&sock));
     let ep = Vinc::builder()
         .alpn(b"bench/1".to_vec())
-        .limits(Limits {
-            connections: 64,
-            ..Limits::default()
-        })
         .local_addr(sock.local_addr().unwrap())
         .build(
             async move |buf: &mut [u8]| r.recv_from(buf).await,

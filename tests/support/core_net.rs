@@ -62,7 +62,11 @@ pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC> {
     let streams: &'static mut Streams<NoSource, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(client), &pool)));
     let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
-    Resources { pool, streams, loss }
+    Resources {
+        pool,
+        streams: streams.into(),
+        loss: loss.into(),
+    }
 }
 
 /// A leaked slot table of `CK` free slots.

@@ -7,10 +7,13 @@
 //!
 //! # Memory
 //!
-//! The caller owns the connection table: a `[Slot; K]` where every slot carries the memory (a buffer pool and a stream
-//! table) its connections run in, so the endpoint never allocates and the caller chooses where the memory lives. An
-//! endpoint is large (it holds the ticket stores, the ledger and every lookup table inline): place it in a `Box` or a
-//! static. A slot whose memory a failed construction consumed is retired for good and counted in [`NodeStats`].
+//! The connection table is a `[Slot; K]` where every slot carries the memory (a buffer pool and a stream table) its
+//! connections run in. With [`Endpoint::new`] the caller owns it and chooses where the memory lives, and the endpoint
+//! itself never allocates without the `alloc` feature; such an endpoint is large (it holds the ticket stores, the ledger
+//! and every lookup table inline): place it in a `Box` or a static. With `alloc` the lookup tables are on the heap and
+//! [`Endpoint::new_owned`] builds an endpoint that owns its table and the memory of every slot, built on the heap
+//! piece by piece. A slot whose memory a failed construction consumed is retired for good and counted in
+//! [`NodeStats`].
 //!
 //! # The rules
 //!
@@ -43,6 +46,7 @@ use crate::ledger::Ledger;
 use crate::queue::EventRing;
 use crate::rtt::NodeRtt;
 use crate::slot::{MAX_CIDS, NIL, Slot, State};
+use crate::store::{Store, filled};
 use crate::table::Table;
 use crate::trace::{TraceLog, TraceRecord};
 
@@ -134,7 +138,7 @@ pub struct Endpoint<
     pub(crate) prekey: Option<PrekeyInfo>,
     pub(crate) cfg: EndpointConfig,
     pub(crate) alpns: [Option<Alpn>; MAX_ALPNS],
-    pub(crate) slots: &'s mut [Slot<'a, P, S, N, C, F, NP>; K],
+    pub(crate) slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
     pub(crate) free: u32,
     pub(crate) live: usize,
     pub(crate) half_open: usize,
@@ -159,10 +163,10 @@ pub struct Endpoint<
     pub(crate) subs_seen: Table<ConnId, (), SUBS_SEEN>,
     pub(crate) events: EventRing<K>,
     /// The sessions with `parked` work, each at most once.
-    pub(crate) parked: [u32; K],
+    pub(crate) parked: Store<u32, K>,
     /// Whether session slot `i` is in `parked`; kept beside the list, not in the slot, so a slot reused while listed
     /// is not listed twice and the list never outgrows `K`.
-    pub(crate) is_parked: [bool; K],
+    pub(crate) is_parked: Store<bool, K>,
     pub(crate) parked_len: usize,
     /// The latest time an entry point was called with.
     pub(crate) last_now: u64,
@@ -180,6 +184,35 @@ pub struct Endpoint<
     pub(crate) moved: bool,
     pub(crate) counters: Counters,
     pub(crate) trace: TraceLog,
+}
+
+/// The connection table: lent by the caller, or (with `alloc`) owned by the endpoint.
+pub(crate) enum Slots<'s, T, const K: usize> {
+    Borrowed(&'s mut [T; K]),
+    #[cfg(feature = "alloc")]
+    Owned(alloc::boxed::Box<[T; K]>),
+}
+
+impl<T, const K: usize> core::ops::Deref for Slots<'_, T, K> {
+    type Target = [T; K];
+
+    fn deref(&self) -> &[T; K] {
+        match self {
+            Self::Borrowed(r) => r,
+            #[cfg(feature = "alloc")]
+            Self::Owned(b) => b,
+        }
+    }
+}
+
+impl<T, const K: usize> core::ops::DerefMut for Slots<'_, T, K> {
+    fn deref_mut(&mut self) -> &mut [T; K] {
+        match self {
+            Self::Borrowed(r) => r,
+            #[cfg(feature = "alloc")]
+            Self::Owned(b) => b,
+        }
+    }
 }
 
 /// A datagram built for a destination other than the one being batched, kept for the next call.
@@ -205,6 +238,69 @@ macro_rules! ep_impl {
 }
 pub(crate) use ep_impl;
 
+#[cfg(feature = "alloc")]
+impl<
+    P,
+    S,
+    const N: usize,
+    const C: usize,
+    const F: usize,
+    const NP: usize,
+    const K: usize,
+    const D: usize,
+    const PK: usize,
+    const TK: usize,
+    const CT: usize,
+> Endpoint<'static, 'static, P, S, N, C, F, NP, K, D, PK, TK, CT>
+where
+    P: Provider,
+    S: StreamSource,
+{
+    /// A new endpoint that owns its connection table and the memory of every slot: `pool_chunks` buffer chunks and a
+    /// stream table each, and one loss estimate they share. Nothing outlives the endpoint and nothing is borrowed, so
+    /// dropping it frees everything. The endpoint is built on the heap, piece by piece: no table of megabytes is ever
+    /// formed on the stack. `D` must be at least ten times `K`.
+    pub fn new_owned(
+        now: u64,
+        provider: P,
+        drbg: Drbg,
+        identity: LocalIdentity,
+        cfg: EndpointConfig,
+        pool_chunks: usize,
+    ) -> alloc::boxed::Box<Self> {
+        use alloc::{boxed::Box, rc::Rc, vec::Vec};
+
+        use vinc_transport::conn::{Held, Shared};
+        use vinc_transport::recovery::LossEstimate;
+        use vinc_transport::stream::Streams;
+        use vinc_transport::stream::pool::BufferPool;
+
+        let loss = Rc::new(LossEstimate::new());
+        let stream_cfg = stream::Config::new(false);
+        let probe = BufferPool::new_boxed(1);
+        let slots: Vec<Slot<'static, P, S, N, C, F, NP>> = (0..K)
+            .map(|_| {
+                Slot::new(Resources {
+                    pool: BufferPool::new_boxed(pool_chunks),
+                    streams: Held::Owned(Box::new(Streams::new(&stream_cfg, &probe))),
+                    loss: Shared::Counted(Rc::clone(&loss)),
+                })
+            })
+            .collect();
+        let Ok(table) = slots.into_boxed_slice().try_into() else {
+            unreachable!("a vector of K slots converts to an array of K")
+        };
+        Box::new(Self::with_slots(
+            now,
+            provider,
+            drbg,
+            identity,
+            cfg,
+            Slots::Owned(table),
+        ))
+    }
+}
+
 /// The environment a connection call needs, borrowing only the provider and the generator.
 macro_rules! env {
     ($s:ident, $now:expr) => {
@@ -226,8 +322,20 @@ ep_impl! {
         provider: P,
         drbg: Drbg,
         identity: LocalIdentity,
-        mut cfg: EndpointConfig,
+        cfg: EndpointConfig,
         slots: &'s mut [Slot<'a, P, S, N, C, F, NP>; K],
+    ) -> Self {
+        Self::with_slots(now, provider, drbg, identity, cfg, Slots::Borrowed(slots))
+    }
+
+    #[allow(clippy::large_types_passed_by_value, reason = "moved once into the endpoint, as `new` takes it")]
+    fn with_slots(
+        now: u64,
+        provider: P,
+        drbg: Drbg,
+        identity: LocalIdentity,
+        mut cfg: EndpointConfig,
+        mut slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
     ) -> Self {
         cfg.conn.cid_len = CID_LEN;
         let seed = cfg.seed;
@@ -266,8 +374,8 @@ ep_impl! {
             ifaces: [None; MAX_IFACES],
             subs_seen: Table::new(seed ^ 0x0A),
             events: EventRing::new(),
-            parked: [0; K],
-            is_parked: [false; K],
+            parked: filled(0),
+            is_parked: filled(false),
             parked_len: 0,
             last_now: now,
             reach_in: crate::reach::ReachRing::new(),
@@ -289,26 +397,22 @@ ep_impl! {
 
     /// End the endpoint and give its connection table back with every session closed and every slot's memory
     /// returned, so another endpoint can run in the same memory. `None` when a failed construction took a slot's
-    /// memory for good (see [`Endpoint::retired_slots`]): the table is then not whole and must not be reused.
+    /// memory for good (see [`Endpoint::retired_slots`]): the table is then not whole and must not be reused. `None`
+    /// also for an endpoint that owns its table ([`Endpoint::new_owned`]): there is nothing to give back, and dropping
+    /// the endpoint frees it.
     pub fn into_slots(mut self) -> Option<&'s mut [Slot<'a, P, S, N, C, F, NP>; K]> {
         let now = self.last_now;
         for i in 0..K {
             self.free_slot(i, now);
         }
-        self.slots.iter().all(|s| s.mem.is_some()).then_some(self.slots)
-    }
-
-    /// As [`into_slots`](Self::into_slots) for an endpoint on the heap: the endpoint is a very large value, and this
-    /// ends it where it is instead of moving it onto the stack.
-    #[cfg(feature = "alloc")]
-    #[allow(clippy::boxed_local, reason = "the point is to keep the large endpoint in its box")]
-    pub fn into_slots_boxed(mut self: alloc::boxed::Box<Self>) -> Option<&'s mut [Slot<'a, P, S, N, C, F, NP>; K]> {
-        let now = self.last_now;
-        for i in 0..K {
-            self.free_slot(i, now);
+        if !self.slots.iter().all(|s| s.mem.is_some()) {
+            return None;
         }
-        let whole = self.slots.iter().all(|s| s.mem.is_some());
-        whole.then_some(self.slots)
+        match self.slots {
+            Slots::Borrowed(table) => Some(table),
+            #[cfg(feature = "alloc")]
+            Slots::Owned(_) => None,
+        }
     }
 
     /// Set the prekey new dials carry; the host rotates it.

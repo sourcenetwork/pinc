@@ -1,51 +1,28 @@
 //! Building a core: the endpoint of the right capacity, over the memory its sessions use.
 //!
-//! [`build`] picks the smallest rung of [`CAPACITIES`](crate::CAPACITIES) that holds
-//! [`Limits::connections`](crate::Limits) and builds the endpoint for it with `start` (repeated once per rung by the
-//! ladder macro). The endpoint is a large value: it is built by this synchronous function, which no future ever
-//! contains, and moved to the heap, so the frame of every poll function stays small. The thread that calls
-//! [`build`] needs a stack as large as the endpoint of the capacity asked for, once; nothing else does.
+//! [`build`] draws the endpoint's randomness from the identity, then [`AnyEp::new`] builds the endpoint of the smallest
+//! rung of [`CAPACITIES`](crate::CAPACITIES) that holds [`Limits::connections`](crate::Limits). The endpoint owns its
+//! slot table and the memory of every slot (`Endpoint::new_owned` of `vinc-core`), built on the heap piece by piece,
+//! so no table is ever formed on the stack, and the construction is not generic over the host's types, so it is
+//! compiled once, optimised, in this crate: the default 1024 sessions build, run and drop on a 1 MiB stack.
 //!
-//! Invariants: the endpoint is built once; its connection id table holds ten entries per session; the slot table it
-//! borrows comes from the pool of ended endpoints or is new.
+//! Invariants: the endpoint is built once; its connection id table holds ten entries per session; everything it uses is
+//! freed when it is dropped.
 
-use vinc_crypto::{Drbg, Software};
+use vinc_crypto::Drbg;
 use vinc_keystore::KeyStore;
 
 use crate::engine::{Admit, Core, CoreConfig};
 use crate::error::{Error, Result};
 use crate::keys::Prekeys;
-use crate::mem::Ep;
-use crate::node::{AnyEp, Ladder, Rung, ladder, table};
+use crate::node::AnyEp;
 
-macro_rules! define_build {
-    ($($v:ident $k:literal),+) => {
-        /// Build a core at time `now`.
-        ///
-        /// # Errors
-        /// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits or the keys are not usable.
-        pub(crate) fn build<S: KeyStore, A: Admit>(cfg: CoreConfig<S, A>, now: u64) -> Result<Core<S, A>> {
-            cfg.limits.check()?;
-            match cfg.limits.connections {
-                $(n if n <= $k => start::<S, A, $k, { $k * 10 }>(cfg, now, AnyEp::$v),)+
-                _ => Err(Error::config("a limit is out of range")),
-            }
-        }
-    };
-}
-ladder!(define_build);
-
-#[inline(never)]
-fn start<S: KeyStore, A: Admit, const K: usize, const D: usize>(
-    mut cfg: CoreConfig<S, A>,
-    now: u64,
-    wrap: fn(Box<Ep<'static, 'static, K, D>>) -> AnyEp,
-) -> Result<Core<S, A>>
-where
-    Ladder: Rung<K>,
-{
-    const { assert!(D >= 10 * K) };
-    let slots = table::<K>(cfg.limits.pool_chunks)?;
+/// Build a core at time `now`.
+///
+/// # Errors
+/// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits or the keys are not usable.
+pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) -> Result<Core<S, A>> {
+    cfg.limits.check()?;
     let mut rnd = [0u8; 32];
     cfg.identity.random(&mut rnd)?;
     let mut seed = [0u8; 8];
@@ -54,7 +31,15 @@ where
     ecfg.conn.max_gso = cfg.max_gso.max(1);
     ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
     let (drbg, identity) = (Drbg::new(&rnd), cfg.identity.local()?);
-    let mut ep = Box::new(Ep::<K, D>::new(now, Software, drbg, identity, ecfg, slots));
+    let mut ep = AnyEp::new(
+        cfg.limits.connections,
+        now,
+        drbg,
+        identity,
+        ecfg,
+        cfg.limits.pool_chunks,
+    )
+    .ok_or_else(|| Error::config("a limit is out of range"))?;
     let mut prekeys = Prekeys::new()?;
     ep.set_prekey(prekeys.rotate(now)?);
     for a in &cfg.alpns {
@@ -63,7 +48,7 @@ where
         }
     }
     let ifaces = cfg.locals.iter().filter_map(|l| ep.add_iface(*l)).collect();
-    Ok(Core::new(wrap(ep), cfg, prekeys, ifaces))
+    Ok(Core::new(ep, cfg, prekeys, ifaces))
 }
 
 #[cfg(test)]
@@ -106,9 +91,9 @@ mod tests {
         on_stack(1024, || drop(build(cfg(4), 1).unwrap()));
     }
 
-    /// The default 1024 sessions need a stack of about twice the endpoint (2.2 MiB) to build, and nothing to drop.
+    /// The default 1024 sessions build and drop on a 1 MiB stack: the tables are built on the heap, piece by piece.
     #[test]
-    fn a_default_endpoint_builds_and_drops_on_six_mebibytes() {
-        on_stack(6144, || drop(build(cfg(1024), 1).unwrap()));
+    fn a_default_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
+        on_stack(1024, || drop(build(cfg(1024), 1).unwrap()));
     }
 }

@@ -139,8 +139,8 @@ impl Store {
     fn resources(&mut self) -> Resources<'_, NoSource, 16, 257> {
         Resources {
             pool: self.pool.take().unwrap(),
-            streams: &mut self.streams,
-            loss: &self.loss,
+            streams: (&mut *self.streams).into(),
+            loss: (&self.loss).into(),
         }
     }
 }
