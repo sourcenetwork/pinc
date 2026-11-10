@@ -18,7 +18,8 @@ use std::net::SocketAddr;
 
 use proptest::prelude::*;
 use vinc_connect::client::punch::{
-    ACTIVE_KEEP, FIRST_DELAY, GOOD_LATENCY, PROBES, Puncher, Step, UPGRADE_INTERVAL, View, decode, encode, probe_gaps,
+    ACTIVE_KEEP, Born, FIRST_DELAY, GOOD_LATENCY, MTU_DEFER, PROBES, Puncher, Step, UPGRADE_INTERVAL, View, decode,
+    encode, probe_gaps,
 };
 
 const S: u64 = 1_000_000_000;
@@ -142,4 +143,19 @@ fn an_idle_session_only_waits_and_a_quiet_window_defers() {
     assert_eq!(p.deadline(), Some(10 * S + 1));
     p.arm(0);
     assert_eq!(p.deadline(), None);
+}
+
+#[test]
+fn a_session_is_placed_for_the_punch_timer_by_how_it_was_born() {
+    assert_eq!(MTU_DEFER, 3 * S);
+    assert_eq!(
+        Puncher::born(10 * S, Born::Plain).deadline(),
+        Some(10 * S + FIRST_DELAY)
+    );
+    assert_eq!(Puncher::born(10 * S, Born::LateHubDirect).deadline(), Some(13 * S));
+    assert_eq!(
+        Puncher::born(10 * S, Born::SubDirect).deadline(),
+        None,
+        "a sub-session on a direct path never punches"
+    );
 }

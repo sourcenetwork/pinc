@@ -634,6 +634,11 @@ pub struct SessionStats {
     pub heard: u64,
     /// The keepalive was handed to the connectivity layer ([`Command::SetPulse`]) and is due now.
     pub pulse_due: bool,
+    /// When the application last moved data on the session, in the endpoint's clock (a quiet role's small control
+    /// writes do not count).
+    pub last_app: u64,
+    /// This is a sub-session of another session to the same peer.
+    pub sub: bool,
     /// The transport counters, with the smoothed round trip in `srtt`.
     pub transport: Stats,
 }

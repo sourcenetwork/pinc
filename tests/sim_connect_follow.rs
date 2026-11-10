@@ -97,6 +97,76 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
 }
 
 #[test]
+fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round() {
+    big(|| {
+        let (mut w, a, b, _r) = pair(92);
+        let baddr = w.client(b).addr;
+        w.dial(secs(20), a, b, vec![baddr]);
+        w.run(secs(160));
+        assert!(w.connected(a).is_some());
+        assert!(reach_outs(&w, b, secs(20), secs(21)) > 0, "the first punch");
+        assert_eq!(
+            reach_outs(&w, b, secs(30), secs(160)) + reach_outs(&w, a, secs(30), secs(160)),
+            0,
+            "an idle session does not punch again"
+        );
+    });
+}
+
+#[test]
+fn a_late_start_hub_session_on_a_direct_path_punches_three_seconds_after_it_came_up() {
+    big(|| {
+        let mut w = World::new(93);
+        let (r, rs) = w.relay(1, relay_ip(10));
+        let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs]));
+        w.run(secs(15));
+        let hub = w.relay_node(r).id();
+        w.sim.command(
+            secs(15),
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![rs.udp.unwrap()],
+                role: vinc_core::Role::Hub,
+            },
+        );
+        w.run(secs(25));
+        assert!(w.connected(a).is_some());
+        let at = |from: Time, to: Time| {
+            w.sim
+                .events(r)
+                .iter()
+                .filter(|(t, e)| *t >= from && *t < to && reach_out(e))
+                .count()
+        };
+        assert_eq!(at(secs(15), secs(18)), 0, "nothing in the first three seconds");
+        assert!(at(secs(18), secs(19)) > 0, "the punch ran at three seconds");
+    });
+}
+
+#[test]
+fn a_sub_session_on_a_validated_direct_path_does_not_punch() {
+    big(|| {
+        let (mut w, a, b, _r) = pair(94);
+        let baddr = w.client(b).addr;
+        w.dial(secs(20), a, b, vec![baddr]);
+        w.run(secs(40));
+        let before = reach_outs(&w, b, secs(0), secs(100)) + reach_outs(&w, a, secs(0), secs(100));
+        w.dial(secs(40), a, b, vec![baddr]);
+        w.run(secs(50));
+        assert_eq!(w.client(a).dialed.len(), 2);
+        let sub = w.client(a).dialed[1];
+        assert!(
+            w.client(a).session_stats(sub).is_some_and(|s| s.sub && s.established),
+            "{}",
+            w.dump(a)
+        );
+        let after = reach_outs(&w, b, secs(0), secs(100)) + reach_outs(&w, a, secs(0), secs(100));
+        assert_eq!(before, after, "the sub-session sent no reach-out");
+    });
+}
+
+#[test]
 fn a_path_that_stops_answering_brings_the_relay_path_and_a_punch_two_seconds_later() {
     big(|| {
         let (mut w, a, b, _r, lans) = pair_lans(95);

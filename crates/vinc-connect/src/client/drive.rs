@@ -29,6 +29,7 @@ use vinc_transport::stream::StreamSource;
 use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
 use super::dial::HUB_RELAY_PATH_DELAY;
 use super::dial::{Cand, HUB_FIRST_ADDRS, HUB_RELAY_DELAY, RelayView, Try, direct_first, select};
+use super::punch::Born;
 use super::punch::{self, Puncher, Step, View};
 use super::tunnel::{self, HubSession, Rides, ThinSplice, Via};
 use crate::carrier::Frame;
@@ -367,7 +368,14 @@ drive_impl! {
                 let st = ep.stats(session);
                 let late = self.first_dial.is_some_and(|f| self.late_start(f));
                 if let Some(s) = self.sess_mut(session) {
-                    s.punch.established(now);
+                    s.relay_route = st.is_some_and(|st| st.route.is_some_and(|(_, r)| is_relay_addr(&r)));
+                    let udp = st.is_some_and(|st| st.route.is_some_and(|(_, r)| !is_relay_addr(&r)));
+                    let born = match st {
+                        Some(st) if st.sub && udp && st.path_validated => Born::SubDirect,
+                        Some(st) if !st.sub && dialer && hub.is_some() && late && udp => Born::LateHubDirect,
+                        _ => Born::Plain,
+                    };
+                    s.punch = Puncher::born(now, born);
                 }
                 if hub.is_some() && dialer {
                     let _ = self.cmd(ep, now, Command::SetRole { session, role: Role::Hub });
@@ -549,7 +557,7 @@ drive_impl! {
             if st.established && s.punch.deadline().is_some() {
                 let relay_active = s.relay_route;
                 let v = View {
-                    app_idle: 0,
+                    app_idle: now.saturating_sub(st.last_app),
                     direct: !relay_active && st.path_validated,
                     rtt: st.transport.srtt,
                     quiet_until: 0,

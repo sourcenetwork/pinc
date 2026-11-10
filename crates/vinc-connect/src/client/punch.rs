@@ -38,6 +38,20 @@ pub const FIRST_DELAY: u64 = 1_000_000;
 pub const FALLBACK_PUNCH: u64 = 2_000_000_000;
 /// Application silence after which a session only waits another interval.
 pub const ACTIVE_KEEP: u64 = 20_000_000_000;
+/// The delay before the first punch of a late-start node's hub session that already runs on a direct path.
+pub const MTU_DEFER: u64 = 3_000_000_000;
+
+/// How a session that just came up is placed for the punch timer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Born {
+    /// An ordinary session, or a sub-session born on a relay path: punch [`FIRST_DELAY`] later.
+    Plain,
+    /// A hub session this node dialed after a late start, already on a direct path: the hub's other addresses are
+    /// validated [`MTU_DEFER`] later, outside the window in which the application's first bytes flow.
+    LateHubDirect,
+    /// A sub-session born on a validated direct path: nothing to upgrade, the timer stays off.
+    SubDirect,
+}
 
 /// The gaps between the [`PROBES`] probes of a path whose smoothed round trip is `srtt`.
 pub fn probe_gaps(srtt: u64) -> [u64; PROBES as usize] {
@@ -111,6 +125,19 @@ impl Puncher {
     /// The session was established: punch [`FIRST_DELAY`] later.
     pub const fn established(&mut self, now: u64) {
         self.at = now.saturating_add(FIRST_DELAY);
+    }
+
+    /// The timer of a session that just came up, by how it was born.
+    pub const fn born(now: u64, how: Born) -> Self {
+        match how {
+            Born::Plain => Self {
+                at: now.saturating_add(FIRST_DELAY),
+            },
+            Born::LateHubDirect => Self {
+                at: now.saturating_add(MTU_DEFER),
+            },
+            Born::SubDirect => Self::off(),
+        }
     }
 
     /// Punch at `at` (for example 100 ms after a resume).

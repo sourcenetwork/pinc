@@ -521,6 +521,8 @@ ep_impl! {
             path_validated: path.is_some_and(|p| conn.path_validated(p)),
             heard: path.and_then(|p| conn.path_last_rx(p)).unwrap_or(0),
             pulse_due: slot.m.pulse_due,
+            last_app: slot.m.last_app,
+            sub: slot.m.sub,
             transport,
         })
     }
