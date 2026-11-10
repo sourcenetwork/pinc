@@ -418,4 +418,4 @@ These items are still open; they are listed so nothing is hidden:
   fairness (the link and client rules have bounded-response checks only). The pending, lookup and netcheck tables
   are model checked and traced, with Lean theorems for their sizes and single decisions only.
 - The endpoint's cap on half-open sessions and their lifetime (`vinc-core`) is not modelled or proved yet.
-- The facade `vinc` and `vinc-driver` are built; their proofs follow.
+- The facade `vinc` is built; its proofs follow.

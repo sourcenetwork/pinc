@@ -1,44 +1,54 @@
 //! Connections: a session with one peer for one protocol.
 //!
-//! A [`Connection`] is a cheap handle (`Clone + Send + Sync`). The session lives while any handle to it, or to a stream
-//! of it, lives; dropping the last one closes it with code 0. Streams, datagrams, counters and the close are all
-//! operations on the handle.
+//! A [`Connection`] is a cheap handle (`Clone + Send + Sync` when the host's closures are). The session lives while any
+//! handle to it, or to a stream of it, lives; dropping the last one closes it with code 0 (the close leaves with the
+//! next future that runs the endpoint). Streams, datagrams, counters and the close are all operations on the handle.
 //!
-//! Invariants: an operation on a session that ended fails with the reason it ended; a handle never blocks the engine
-//! thread; a dial whose future is dropped before it finishes closes the session it started, so nothing is left open
+//! Invariants: an operation on a session that ended fails with the reason it ended; no operation holds a lock while it
+//! waits; a dial whose future is dropped before it finishes closes the session it started, so nothing is left open
 //! that no one holds.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use vinc_core::SessionId;
 use vinc_crypto::NodeId;
-use vinc_driver::{Ctl, Error, ErrorKind, Remote, Request, Result, SessionShared};
 
+use crate::drive::Shared;
+use crate::engine::{SessInfo, Try};
+use crate::error::{Error, Result};
+use crate::host::Hosted;
 use crate::protocol::{read_tag, write_tag};
-use crate::stream::{RecvStream, SendStream, halves};
+use crate::stream::{RecvStream, SendStream};
 
-pub(crate) struct ConnInner {
-    pub(crate) shared: Arc<SessionShared>,
-    pub(crate) remote: Remote,
+pub(crate) struct ConnInner<H: Hosted> {
+    pub(crate) sh: Arc<Shared<H>>,
+    pub(crate) info: Arc<SessInfo>,
 }
 
-impl Drop for ConnInner {
+impl<H: Hosted> Drop for ConnInner<H> {
     fn drop(&mut self) {
-        if self.shared.ended.get().is_none() {
-            self.remote.ctl(Ctl::Close(self.shared.id, 0));
+        if self.info.ended.get().is_none() {
+            let now = self.sh.now();
+            self.sh.lock().close_session(now, self.info.id, 0);
         }
     }
 }
 
 /// A connection to one peer for one protocol.
-#[derive(Clone)]
-pub struct Connection(pub(crate) Arc<ConnInner>);
+pub struct Connection<H: Hosted>(pub(crate) Arc<ConnInner<H>>);
 
-impl core::fmt::Debug for Connection {
+impl<H: Hosted> Clone for Connection<H> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<H: Hosted> core::fmt::Debug for Connection<H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Connection")
-            .field("session", &self.0.shared.id)
+            .field("session", &self.0.info.id)
             .finish_non_exhaustive()
     }
 }
@@ -69,12 +79,25 @@ pub struct ConnStats {
 }
 
 /// A session a peer opened on a protocol this node serves.
-#[derive(Debug, Clone)]
-pub struct Incoming {
-    conn: Connection,
+pub struct Incoming<H: Hosted> {
+    conn: Connection<H>,
 }
 
-impl Incoming {
+impl<H: Hosted> Clone for Incoming<H> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+        }
+    }
+}
+
+impl<H: Hosted> core::fmt::Debug for Incoming<H> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Incoming").field("conn", &self.conn).finish()
+    }
+}
+
+impl<H: Hosted> Incoming<H> {
     /// The peer, as the handshake authenticated it.
     pub fn remote(&self) -> NodeId {
         self.conn.remote()
@@ -86,106 +109,102 @@ impl Incoming {
     }
 
     /// The connection.
-    pub const fn connection(&self) -> &Connection {
+    pub const fn connection(&self) -> &Connection<H> {
         &self.conn
     }
 
     /// Take the connection.
-    pub fn into_connection(self) -> Connection {
+    pub fn into_connection(self) -> Connection<H> {
         self.conn
     }
 }
 
-impl Connection {
-    pub(crate) fn new(shared: Arc<SessionShared>, remote: Remote) -> Self {
-        Self(Arc::new(ConnInner { shared, remote }))
+/// A dial in flight: if the future that started it is dropped, the dial is given up.
+struct DialGuard<'a, H: Hosted> {
+    sh: &'a Shared<H>,
+    session: Option<SessionId>,
+}
+
+impl<H: Hosted> Drop for DialGuard<'_, H> {
+    fn drop(&mut self) {
+        if let Some(s) = self.session {
+            let now = self.sh.now();
+            self.sh.lock().dial_cancel(now, s);
+        }
+    }
+}
+
+impl<H: Hosted> Connection<H> {
+    pub(crate) fn new(sh: &Arc<Shared<H>>, info: Arc<SessInfo>) -> Self {
+        Self(Arc::new(ConnInner {
+            sh: Arc::clone(sh),
+            info,
+        }))
     }
 
-    pub(crate) fn incoming(shared: Arc<SessionShared>, remote: Remote) -> Incoming {
+    pub(crate) fn incoming(sh: &Arc<Shared<H>>, info: Arc<SessInfo>) -> Incoming<H> {
         Incoming {
-            conn: Self::new(shared, remote),
+            conn: Self::new(sh, info),
         }
     }
 
-    /// Dial `node` for `alpn` through `remote`, trying `addrs`. A peer already connected gets a sub-session at once.
-    pub(crate) async fn dial(remote: &Remote, node: NodeId, alpn: &[u8], addrs: Vec<SocketAddr>) -> Result<Self> {
-        let alpn = alpn.to_vec();
-        let shared = remote
-            .call(|reply| Request::Connect {
-                node,
-                alpn,
-                addrs,
-                reply,
+    /// Dial `node` for `alpn`, trying `addrs`. A peer already connected gets a sub-session at once.
+    pub(crate) async fn dial(sh: &Arc<Shared<H>>, node: NodeId, alpn: &[u8], addrs: Vec<SocketAddr>) -> Result<Self> {
+        let mut guard = DialGuard { sh, session: None };
+        let info = sh
+            .run(|core, now| {
+                let session = match guard.session {
+                    Some(s) => s,
+                    None => match core.connect_start(now, node, alpn, &addrs) {
+                        Ok(s) => *guard.session.insert(s),
+                        Err(e) => return Try::Done(Err(e)),
+                    },
+                };
+                core.dial_poll(session)
             })
-            .await??;
-        Ok(Self::new(shared, remote.clone()))
+            .await;
+        guard.session = None;
+        Ok(Self::new(sh, info?))
     }
 
     /// The peer, as the handshake authenticated it.
     pub fn remote(&self) -> NodeId {
-        self.0.shared.node
+        self.0.info.node
     }
 
     /// The protocol of this connection.
     pub fn alpn(&self) -> &[u8] {
-        self.0.shared.alpn.as_bytes()
+        self.0.info.alpn.as_bytes()
     }
 
     /// Whether this node dialed.
     pub fn is_dialer(&self) -> bool {
-        self.0.shared.dialer
+        self.0.info.dialer
     }
 
-    fn ended(&self) -> Error {
-        self.0.shared.ended.get().copied().unwrap_or_else(Error::shutdown)
-    }
-
-    /// Open a stream both sides can write.
+    /// Open a stream both sides can write. Waits while the connection has no room for another stream.
     ///
     /// # Errors
     /// [`crate::ErrorKind::Busy`] if the peer's stream limit is reached; the reason the connection ended if it did.
-    pub async fn open_bi(&self) -> Result<(SendStream, RecvStream)> {
-        let session = self.0.shared.id;
-        let n = self
-            .0
-            .remote
-            .call(|reply| Request::Open {
-                session,
-                bidi: true,
-                reply,
-            })
-            .await??;
-        match halves(&self.0, n) {
-            (Some(s), Some(r)) => Ok((s, r)),
-            _ => Err(Error::new(ErrorKind::Busy, "the stream did not open")),
-        }
+    pub async fn open_bi(&self) -> Result<(SendStream<H>, RecvStream<H>)> {
+        let id = self.0.sh.run(|core, now| core.open(now, &self.0.info, true)).await?;
+        Ok((SendStream::new(&self.0, id), RecvStream::new(&self.0, id)))
     }
 
     /// Open a stream this side writes and the peer reads.
     ///
     /// # Errors
     /// As [`open_bi`](Self::open_bi).
-    pub async fn open_uni(&self) -> Result<SendStream> {
-        let session = self.0.shared.id;
-        let n = self
-            .0
-            .remote
-            .call(|reply| Request::Open {
-                session,
-                bidi: false,
-                reply,
-            })
-            .await??;
-        halves(&self.0, n)
-            .0
-            .ok_or(Error::new(ErrorKind::Busy, "the stream did not open"))
+    pub async fn open_uni(&self) -> Result<SendStream<H>> {
+        let id = self.0.sh.run(|core, now| core.open(now, &self.0.info, false)).await?;
+        Ok(SendStream::new(&self.0, id))
     }
 
     /// Open a stream and write `tag` at its start.
     ///
     /// # Errors
     /// As [`open_bi`](Self::open_bi), or [`crate::ErrorKind::Config`] for a tag that is empty or over 64 bytes.
-    pub async fn open_bi_tagged(&self, tag: &[u8]) -> Result<(SendStream, RecvStream)> {
+    pub async fn open_bi_tagged(&self, tag: &[u8]) -> Result<(SendStream<H>, RecvStream<H>)> {
         let (mut s, r) = self.open_bi().await?;
         write_tag(&mut s, tag).await?;
         Ok((s, r))
@@ -195,34 +214,25 @@ impl Connection {
     ///
     /// # Errors
     /// The reason the connection ended.
-    pub async fn accept_bi(&self) -> Result<(SendStream, RecvStream)> {
-        match self.0.shared.accept_bi.recv_async().await {
-            Some(n) => match halves(&self.0, n) {
-                (Some(s), Some(r)) => Ok((s, r)),
-                _ => Err(Error::new(ErrorKind::Busy, "the stream did not open")),
-            },
-            None => Err(self.ended()),
-        }
+    pub async fn accept_bi(&self) -> Result<(SendStream<H>, RecvStream<H>)> {
+        let id = self.0.sh.run(|core, _| core.accept_stream(&self.0.info, true)).await?;
+        Ok((SendStream::new(&self.0, id), RecvStream::new(&self.0, id)))
     }
 
     /// Wait for the next stream the peer opened that it only writes.
     ///
     /// # Errors
     /// The reason the connection ended.
-    pub async fn accept_uni(&self) -> Result<RecvStream> {
-        match self.0.shared.accept_uni.recv_async().await {
-            Some(n) => halves(&self.0, n)
-                .1
-                .ok_or(Error::new(ErrorKind::Busy, "the stream did not open")),
-            None => Err(self.ended()),
-        }
+    pub async fn accept_uni(&self) -> Result<RecvStream<H>> {
+        let id = self.0.sh.run(|core, _| core.accept_stream(&self.0.info, false)).await?;
+        Ok(RecvStream::new(&self.0, id))
     }
 
     /// Wait for the next stream the peer opened and read its tag.
     ///
     /// # Errors
     /// As [`accept_bi`](Self::accept_bi), or the error of reading the tag.
-    pub async fn accept_bi_tagged(&self) -> Result<(Vec<u8>, SendStream, RecvStream)> {
+    pub async fn accept_bi_tagged(&self) -> Result<(Vec<u8>, SendStream<H>, RecvStream<H>)> {
         let (s, mut r) = self.accept_bi().await?;
         let tag = read_tag(&mut r).await?;
         Ok((tag, s, r))
@@ -233,27 +243,39 @@ impl Connection {
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] if it does not fit one packet; the reason the connection ended if it did.
     pub async fn send_datagram(&self, data: &[u8]) -> Result<()> {
-        let session = self.0.shared.id;
-        let data = data.to_vec();
         self.0
-            .remote
-            .call(|reply| Request::Datagram { session, data, reply })
-            .await?
+            .sh
+            .run(|core, now| Try::Done(core.send_datagram(now, &self.0.info, data)))
+            .await
     }
 
-    /// Wait for the next datagram the peer sent, in the order they arrived. Datagrams are unreliable: one that arrives
-    /// while `Limits::datagrams` are already waiting is dropped by the endpoint, which counts it. Cancel safe.
+    /// Wait for the next datagram the peer sent into `buf`, in the order they arrived, and return its length. The
+    /// endpoint holds a bounded number of datagrams for a session and drops the oldest when a new one arrives, counting
+    /// each drop. Allocates nothing. Cancel safe.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::TooLarge`] if the datagram does not fit `buf` (it stays queued); the reason the connection
+    /// ended, once the datagrams that arrived before are read.
+    pub async fn recv_datagram(&self, buf: &mut [u8]) -> Result<usize> {
+        self.0.sh.run(|core, _| core.read_datagram(&self.0.info, buf)).await
+    }
+
+    /// Wait for the next datagram the peer sent, in the order they arrived. Allocates the datagram; use
+    /// [`recv_datagram`](Self::recv_datagram) to reuse a buffer. Cancel safe.
     ///
     /// # Errors
     /// The reason the connection ended, once the datagrams that arrived before are read.
     pub async fn read_datagram(&self) -> Result<Vec<u8>> {
-        match self.0.shared.datagrams.recv_async().await {
-            Some(d) => {
-                self.0.remote.nudge_datagrams(&self.0.shared);
-                Ok(d)
+        let mut buf = vec![0u8; 2048];
+        let n = match self.recv_datagram(&mut buf).await {
+            Err(e) if e.kind() == crate::ErrorKind::TooLarge => {
+                buf.resize(vinc_core::MAX_DATAGRAM, 0);
+                self.recv_datagram(&mut buf).await?
             }
-            None => Err(self.ended()),
-        }
+            r => r?,
+        };
+        buf.truncate(n);
+        Ok(buf)
     }
 
     /// Open a second protocol to the same peer. It costs no round trip, as the peer is already connected.
@@ -261,7 +283,7 @@ impl Connection {
     /// # Errors
     /// As [`Endpoint::connect`](crate::Endpoint::connect).
     pub async fn open_protocol(&self, alpn: &[u8]) -> Result<Self> {
-        Self::dial(&self.0.remote, self.remote(), alpn, Vec::new()).await
+        Self::dial(&self.0.sh, self.remote(), alpn, Vec::new()).await
     }
 
     /// The counters of the connection.
@@ -269,8 +291,7 @@ impl Connection {
     /// # Errors
     /// The reason the connection ended if it did.
     pub async fn stats(&self) -> Result<ConnStats> {
-        let session = self.0.shared.id;
-        let s = self.0.remote.call(|reply| Request::Stats { session, reply }).await??;
+        let s = self.0.sh.run(|core, _| Try::Done(core.stats(&self.0.info))).await?;
         Ok(ConnStats {
             remote: self.remote(),
             dialed_by_us: s.dialer,
@@ -286,18 +307,24 @@ impl Connection {
     }
 
     /// Close the connection with `code`. The peer sees the code; streams fail with the connection's error.
-    pub fn close(&self, code: u64) {
-        self.0.remote.ctl(Ctl::Close(self.0.shared.id, code));
+    pub async fn close(&self, code: u64) {
+        let id = self.0.info.id;
+        self.0
+            .sh
+            .run(|core, now| {
+                core.close_session(now, id, code);
+                Try::Done(())
+            })
+            .await;
     }
 
     /// Wait until the connection ends and return why.
     pub async fn closed(&self) -> Error {
-        let _ = self.0.shared.gone.recv_async().await;
-        self.ended()
+        self.0.sh.run(|core, _| core.closed(&self.0.info)).await
     }
 
     /// Why the connection ended, or `None` while it lives.
     pub fn close_reason(&self) -> Option<Error> {
-        self.0.shared.ended.get().copied()
+        self.0.info.ended.get().copied()
     }
 }

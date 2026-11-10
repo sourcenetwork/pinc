@@ -1,0 +1,319 @@
+//! The driving: how the futures of the facade run the endpoint with the host's three closures, with no task, no channel
+//! and no thread of the library's own.
+//!
+//! Every facade future is one call of [`Shared::run`]. It locks the core, serves what is due, and tries its operation;
+//! if the operation must wait it registers a ticket under the thing it waits for and then looks for the driving role:
+//! an atomic flag that exactly one waiting future holds. The holder keeps the host's pending receive and sleep
+//! futures inside its own state, so a datagram or a deadline wakes the holder's task; it feeds the datagram to the
+//! core, which wakes the futures the datagram is for. The role is sticky: the holder keeps it while it waits. When it
+//! finishes or is dropped it clears the flag and wakes the oldest waiting future, which takes the role if it still
+//! waits. A future that does not hold the role only waits on its ticket; a future that has its result sends what the
+//! endpoint wants to send before it returns.
+//!
+//! Invariants: at most one future holds the role; the flag, the baton and a ticket's registration change under the
+//! core's lock, so a wake is never lost between a failed attempt and the wait; no lock is held across an await; the
+//! receive future owns its buffer and returns it to a pool when dropped; with no future polled the endpoint makes no
+//! progress, which is the SANS-IO contract.
+
+use std::future::poll_fn;
+use std::io;
+use std::net::{IpAddr, SocketAddr};
+use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::task::Poll;
+use std::time::{Duration, Instant};
+
+use crate::engine::{Core, Try, Wait};
+use crate::error::Error;
+use crate::host::Hosted;
+use crate::standby::Ticket;
+
+/// The first time the endpoint sees, so no time is zero.
+pub(crate) const T0: u64 = 10_000_000_000;
+/// The largest datagram received, and the buffer one transmit call fills.
+const BUF: usize = 65_536;
+/// The most buffers the pool keeps.
+const POOLED: usize = 8;
+
+/// The state every handle of an endpoint shares.
+pub(crate) struct Shared<H: Hosted> {
+    pub(crate) host: H,
+    start: Instant,
+    local: SocketAddr,
+    driving: AtomicBool,
+    core: Mutex<Core<H::Keys, H::Access>>,
+    bufs: Mutex<Vec<Vec<u8>>>,
+}
+
+/// A receive buffer that goes back to the pool when dropped.
+struct Buf<'a> {
+    v: Vec<u8>,
+    home: &'a Mutex<Vec<Vec<u8>>>,
+}
+
+impl Drop for Buf<'_> {
+    fn drop(&mut self) {
+        let v = std::mem::take(&mut self.v);
+        let mut pool = self.home.lock().unwrap_or_else(PoisonError::into_inner);
+        if pool.len() < POOLED {
+            pool.push(v);
+        }
+    }
+}
+
+/// What one poll of an operation decided.
+enum Step<T> {
+    Done(T),
+    Io,
+}
+
+/// The errors of a receive that lose one datagram and nothing else.
+fn transient(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::Interrupted | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionRefused
+    )
+}
+
+/// The address as the endpoint sees it: a mapped IPv4 address on a dual-stack socket is IPv4.
+fn canon(a: SocketAddr) -> SocketAddr {
+    SocketAddr::new(a.ip().to_canonical(), a.port())
+}
+
+/// The address as the socket takes it.
+fn wire(a: SocketAddr, socket_v6: bool) -> SocketAddr {
+    match (a.ip(), socket_v6) {
+        (IpAddr::V4(v4), true) => SocketAddr::new(v4.to_ipv6_mapped().into(), a.port()),
+        _ => a,
+    }
+}
+
+async fn recv_owned<'a, H: Hosted>(host: &H, mut buf: Buf<'a>) -> (io::Result<(usize, SocketAddr, usize)>, Buf<'a>) {
+    let r = host.recv(buf.v.as_mut_slice()).await;
+    (r, buf)
+}
+
+async fn sleep_owned<H: Hosted>(host: &H, at: Instant) {
+    host.sleep(at).await;
+}
+
+/// The guard of one operation: what it registered and whether it holds the driving role, undone when it ends.
+struct Turn<'a, H: Hosted> {
+    sh: &'a Shared<H>,
+    ticket: Option<Ticket>,
+    wait: Option<Wait>,
+    driving: bool,
+}
+
+impl<H: Hosted> Drop for Turn<'_, H> {
+    fn drop(&mut self) {
+        let Some(t) = self.ticket else { return };
+        let mut core = self.sh.lock();
+        if let Some(w) = self.wait {
+            core.forget(w, t);
+        }
+        core.standby.release(t);
+        if self.driving {
+            core.driver = None;
+            core.armed = u64::MAX;
+            self.sh.driving.store(false, Ordering::Release);
+            core.standby.baton();
+        } else if !self.sh.driving.load(Ordering::Acquire) {
+            // This future may have been the one the baton was offered to: offer it on.
+            core.standby.baton();
+        }
+    }
+}
+
+impl<H: Hosted> Shared<H> {
+    pub(crate) fn new(host: H, core: Core<H::Keys, H::Access>, local: SocketAddr) -> Self {
+        Self {
+            host,
+            start: Instant::now(),
+            local,
+            driving: AtomicBool::new(false),
+            core: Mutex::new(core),
+            bufs: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(crate) const fn local(&self) -> SocketAddr {
+        self.local
+    }
+
+    /// The core, locked. A poisoned lock is taken as it is: a panic in a host closure never holds it.
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Core<H::Keys, H::Access>> {
+        self.core.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The endpoint's clock: nanoseconds since the endpoint was made, after a fixed offset.
+    pub(crate) fn now(&self) -> u64 {
+        T0.saturating_add(u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX))
+    }
+
+    fn instant(&self, at: u64) -> Instant {
+        self.start + Duration::from_nanos(at.saturating_sub(T0))
+    }
+
+    fn buf(&self) -> Buf<'_> {
+        let v = self.bufs.lock().unwrap_or_else(PoisonError::into_inner).pop();
+        Buf {
+            v: v.unwrap_or_else(|| vec![0; BUF]),
+            home: &self.bufs,
+        }
+    }
+
+    /// Run `attempt` until it is done. Each time it cannot finish it names what it waits for; the future is woken when
+    /// that changes, and meanwhile drives the endpoint if it holds the role. The attempt must be safe to repeat.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one poll function: the registration, the role and the host's I/O share its state"
+    )]
+    pub(crate) async fn run<T>(&self, mut attempt: impl FnMut(&mut Core<H::Keys, H::Access>, u64) -> Try<T>) -> T {
+        let mut turn = Turn {
+            sh: self,
+            ticket: None,
+            wait: None,
+            driving: false,
+        };
+        let mut rx = pin!(None);
+        let mut sl = pin!(None);
+        let mut slept: Option<u64> = None;
+        let mut spare: Option<Buf<'_>> = None;
+        loop {
+            let step = poll_fn(|cx| {
+                let now = self.now();
+                let mut core = self.lock();
+                if core.service(now) > 0 {
+                    return Poll::Ready(Step::Io);
+                }
+                let w = match attempt(&mut core, now) {
+                    Try::Done(v) => {
+                        core.kick();
+                        return Poll::Ready(Step::Done(v));
+                    }
+                    Try::Wait(w) => w,
+                };
+                if core.take_dirty() {
+                    return Poll::Ready(Step::Io);
+                }
+                let t = *turn.ticket.get_or_insert_with(|| core.standby.alloc());
+                if let Some(old) = turn.wait.replace(w)
+                    && old != w
+                {
+                    core.forget(old, t);
+                }
+                core.add_wait(w, t);
+                core.standby.arm(t, cx.waker());
+                if !turn.driving
+                    && self
+                        .driving
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                {
+                    turn.driving = true;
+                    core.driver = Some(t);
+                }
+                if !turn.driving {
+                    return Poll::Pending;
+                }
+                let want = core.deadline();
+                core.armed = want.unwrap_or(u64::MAX);
+                drop(core);
+
+                let mut progressed = false;
+                if want != slept {
+                    slept = want;
+                    match want {
+                        Some(d) => sl.set(Some(sleep_owned(&self.host, self.instant(d)))),
+                        None => sl.set(None),
+                    }
+                }
+                if let Some(f) = sl.as_mut().as_pin_mut()
+                    && f.poll(cx).is_ready()
+                {
+                    sl.set(None);
+                    slept = None;
+                    progressed = true;
+                }
+                'recv: {
+                    if rx.is_none() {
+                        let b = spare.take().unwrap_or_else(|| self.buf());
+                        rx.set(Some(recv_owned(&self.host, b)));
+                    }
+                    let Some(Poll::Ready((res, mut buf))) = rx.as_mut().as_pin_mut().map(|f| f.poll(cx)) else {
+                        break 'recv;
+                    };
+                    rx.set(None);
+                    progressed = true;
+                    match res {
+                        Ok((n, from, segment)) => {
+                            let now = self.now();
+                            let mut core = self.lock();
+                            let from = canon(from);
+                            for d in buf.v.get_mut(..n).unwrap_or_default().chunks_mut(segment.max(1)) {
+                                core.ep.handle_datagram(now, self.local, from, d);
+                            }
+                        }
+                        Err(e) if transient(&e) => {}
+                        Err(_) => {
+                            self.lock()
+                                .fail(Error::new(crate::ErrorKind::Unreachable, "the socket failed"));
+                        }
+                    }
+                    spare = Some(buf);
+                    // Serve what this datagram changed before reading another: when it finished an operation, no
+                    // receive is started again.
+                }
+                if progressed {
+                    Poll::Ready(Step::Io)
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+            match step {
+                Step::Done(v) => {
+                    self.flush().await;
+                    return v;
+                }
+                Step::Io => self.flush().await,
+            }
+        }
+    }
+
+    /// Serve the endpoint and send everything it wants to send, until it wants nothing more.
+    pub(crate) async fn flush(&self) {
+        let mut buf: Option<Vec<u8>> = None;
+        loop {
+            let (t, b) = {
+                let now = self.now();
+                let mut core = self.lock();
+                let moved = core.service(now);
+                let mut b = buf
+                    .take()
+                    .or_else(|| core.tx_spare.take())
+                    .unwrap_or_else(|| vec![0; BUF]);
+                if let Some(t) = core.ep.poll_transmit(now, &mut b) {
+                    (t, b)
+                } else {
+                    core.kick();
+                    if moved == 0 {
+                        core.tx_spare = Some(b);
+                        return;
+                    }
+                    buf = Some(b);
+                    continue;
+                }
+            };
+            let to = wire(t.remote, self.local.is_ipv6());
+            // A datagram the socket refuses is a lost datagram: the transport sends it again.
+            let _ = self
+                .host
+                .send(b.get(..t.len).unwrap_or_default(), to, t.segment_size)
+                .await;
+            buf = Some(b);
+        }
+    }
+}

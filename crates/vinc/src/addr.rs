@@ -12,8 +12,8 @@ use core::fmt;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
+use crate::error::{Error, ErrorKind, Result};
 use vinc_crypto::{IdentityAlg, NodeId};
-use vinc_driver::{Error, ErrorKind, Result};
 
 /// The text form of a node id.
 pub fn node_to_string(id: &NodeId) -> String {

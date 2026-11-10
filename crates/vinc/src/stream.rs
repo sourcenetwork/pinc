@@ -1,164 +1,87 @@
-//! Streams: a [`SendStream`] and a [`RecvStream`] that implement the `futures-io` traits.
+//! Streams: a [`SendStream`] and a [`RecvStream`].
 //!
-//! Bytes cross to the driver in blocks of at most 16 KiB through bounded channels, so a stream holds at most
-//! `Limits::stream_blocks` blocks per direction outside the endpoint. Every wait registers the task's waker on a signal
-//! of the stream and checks again, so a dropped future never loses bytes and never leaves the stream half updated.
+//! Bytes cross between the caller's buffer and the endpoint directly: a write hands the caller's slice to the
+//! endpoint and a read copies out of the endpoint's chunk into the caller's buffer, so a stream holds nothing of its
+//! own and an established stream allocates nothing per message. Every wait is woken by the stream's own events, and
+//! the waiting future drives the endpoint when no other future does.
 //!
 //! # Cancel safety
 //!
-//! - [`SendStream::write`], [`SendStream::finish`], [`RecvStream::read`], [`RecvStream::read_chunk`] and
-//!   [`poll_write`](futures_io::AsyncWrite::poll_write) / [`poll_read`](futures_io::AsyncRead::poll_read): dropping the
-//!   future after it was polled changes nothing the stream did not already report; a write that returned `Pending`
-//!   accepted no bytes.
+//! - [`SendStream::write`], [`SendStream::finish`], [`RecvStream::read`] and [`RecvStream::read_chunk`]: dropping the
+//!   future before it returns something changes nothing, except that the bytes of a write the endpoint already took
+//!   stay written when the future is dropped while the packets they caused are still being sent by the host.
 //! - [`SendStream::write_all`], [`RecvStream::read_exact`] and [`RecvStream::read_to_end`]: dropping the future leaves
-//!   the stream consistent, with the bytes moved so far moved (the write is partial, the read consumed what it
-//!   filled), as for any loop of reads or writes.
+//!   the stream consistent, with the bytes moved so far moved, as for any loop of reads or writes.
 //!
 //! Dropping a [`SendStream`] without finishing it finishes it after the bytes already written (a clean end). Dropping a
 //! [`RecvStream`] discards what the peer still sends.
 
-use std::future::poll_fn;
-use std::io;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::task::{Context, Poll};
-
-use futures_io::{AsyncRead, AsyncWrite};
-use vinc_driver::{BLOCK, Ctl, Error, ErrorKind, Item, NewStream, Receiver, Result, Sender, StreamShared};
 
 use crate::conn::ConnInner;
+use crate::engine::Try;
+use crate::error::{Error, ErrorKind, Result};
+use crate::host::Hosted;
 
-fn io_err(e: Error) -> io::Error {
-    e.into()
-}
+/// The most bytes one [`RecvStream::read_chunk`] allocates and one [`RecvStream::read_to_end`] step reads.
+pub const BLOCK: usize = 16 * 1024;
 
 /// The sending half of a stream.
-pub struct SendStream {
-    conn: Arc<ConnInner>,
-    shared: Arc<StreamShared>,
-    tx: Sender<Item>,
+pub struct SendStream<H: Hosted> {
+    conn: Arc<ConnInner<H>>,
+    id: u64,
     finished: bool,
 }
 
 /// The receiving half of a stream.
-pub struct RecvStream {
-    conn: Arc<ConnInner>,
-    shared: Arc<StreamShared>,
-    rx: Option<Receiver<Vec<u8>>>,
-    cur: Vec<u8>,
-    pos: usize,
-    done: bool,
-    stopped: u64,
+pub struct RecvStream<H: Hosted> {
+    conn: Arc<ConnInner<H>>,
+    id: u64,
+    /// How the stream ended for this reader: `Ok` for the end of the data, else why not.
+    end: Option<Result<()>>,
+    stopped: Option<u64>,
 }
 
-impl core::fmt::Debug for SendStream {
+impl<H: Hosted> core::fmt::Debug for SendStream<H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SendStream")
-            .field("id", &self.shared.id)
+            .field("id", &self.id)
             .finish_non_exhaustive()
     }
 }
 
-impl core::fmt::Debug for RecvStream {
+impl<H: Hosted> core::fmt::Debug for RecvStream<H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RecvStream")
-            .field("id", &self.shared.id)
+            .field("id", &self.id)
             .finish_non_exhaustive()
     }
 }
 
-/// The stream ends of a new stream, as the two halves (either may be absent for a one-way stream).
-pub(crate) fn halves(conn: &Arc<ConnInner>, n: NewStream) -> (Option<SendStream>, Option<RecvStream>) {
-    let send = n.tx.map(|tx| SendStream {
-        conn: Arc::clone(conn),
-        shared: Arc::clone(&n.shared),
-        tx,
-        finished: false,
-    });
-    let recv = n.rx.map(|rx| RecvStream {
-        conn: Arc::clone(conn),
-        shared: n.shared,
-        rx: Some(rx),
-        cur: Vec::new(),
-        pos: 0,
-        done: false,
-        stopped: 0,
-    });
-    (send, recv)
-}
+impl<H: Hosted> SendStream<H> {
+    pub(crate) fn new(conn: &Arc<ConnInner<H>>, id: u64) -> Self {
+        Self {
+            conn: Arc::clone(conn),
+            id,
+            finished: false,
+        }
+    }
 
-impl SendStream {
     /// The stream id.
-    pub fn id(&self) -> u64 {
-        self.shared.id
+    pub const fn id(&self) -> u64 {
+        self.id
     }
 
-    fn failed(&self) -> Option<Error> {
-        self.shared.tx_err.get().copied()
-    }
-
-    /// Wait until the channel has room for one more item, or the stream has failed (the caller looks).
-    fn poll_room(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let ready = || !self.tx.is_full() || self.shared.tx_err.get().is_some();
-        if ready() {
-            return Poll::Ready(());
-        }
-        self.shared.writable.register(cx.waker());
-        if ready() {
-            return Poll::Ready(());
-        }
-        // The driver may be idle with a full channel: make sure it looks.
-        self.conn.remote.nudge(&self.shared);
-        Poll::Pending
-    }
-
-    fn poll_write_inner(&mut self, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
-        if let Some(e) = self.failed() {
-            return Poll::Ready(Err(e));
-        }
-        if self.finished {
-            return Poll::Ready(Err(Error::new(ErrorKind::Stopped(0), "the stream is finished")));
-        }
-        if buf.is_empty() {
-            return Poll::Ready(Ok(0));
-        }
-        if self.poll_room(cx).is_pending() {
-            return Poll::Pending;
-        }
-        if let Some(e) = self.failed() {
-            return Poll::Ready(Err(e));
-        }
-        let n = buf.len().min(BLOCK);
-        self.tx.send(Item::Data(buf.get(..n).unwrap_or_default().to_vec()));
-        self.conn.remote.nudge(&self.shared);
-        Poll::Ready(self.failed().map_or(Ok(n), Err))
-    }
-
-    fn poll_close_inner(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        if let Some(e) = self.failed() {
-            return Poll::Ready(Err(e));
-        }
-        if !self.finished {
-            if self.poll_room(cx).is_pending() {
-                return Poll::Pending;
-            }
-            if let Some(e) = self.failed() {
-                return Poll::Ready(Err(e));
-            }
-            self.finished = true;
-            self.tx.send(Item::Fin);
-            self.conn.remote.nudge(&self.shared);
-        }
-        Poll::Ready(self.failed().map_or(Ok(()), Err))
-    }
-
-    /// Write some of `buf`; returns how many bytes were taken (at most 16 KiB). Cancel safe.
+    /// Write some of `buf`; returns how many bytes were taken. Waits while the stream has no room.
     ///
     /// # Errors
     /// The error that ended the stream: a reset, or a closed connection.
     pub async fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        poll_fn(|cx| self.poll_write_inner(cx, buf)).await
+        if self.finished {
+            return Err(Error::new(ErrorKind::Stopped(0), "the stream is finished"));
+        }
+        let (c, id) = (&self.conn, self.id);
+        c.sh.run(|core, now| core.write(now, &c.info, id, buf)).await
     }
 
     /// Write all of `buf`.
@@ -173,103 +96,85 @@ impl SendStream {
         Ok(())
     }
 
-    /// End the stream after the bytes written: the peer reads them and then the end. Cancel safe.
+    /// End the stream after the bytes written: the peer reads them and then the end.
     ///
     /// # Errors
     /// The error that ended the stream.
     pub async fn finish(&mut self) -> Result<()> {
-        poll_fn(|cx| self.poll_close_inner(cx)).await
+        if self.finished {
+            return Ok(());
+        }
+        let (c, id) = (&self.conn, self.id);
+        let fin = &mut self.finished;
+        c.sh.run(|core, now| {
+            let r = core.finish(now, &c.info, id);
+            *fin |= r.is_ok();
+            Try::Done(r)
+        })
+        .await
     }
 
     /// Abandon the stream: bytes not yet sent are dropped and the peer sees a reset with `code`.
-    pub fn reset(&mut self, code: u64) {
+    pub async fn reset(&mut self, code: u64) {
         self.finished = true;
-        self.conn
-            .remote
-            .ctl(Ctl::Reset(self.shared.session, self.shared.id, code));
+        let (c, id) = (&self.conn, self.id);
+        c.sh.run(|core, now| {
+            core.reset(now, &c.info, id, code);
+            Try::Done(())
+        })
+        .await;
     }
 }
 
-impl RecvStream {
+impl<H: Hosted> Drop for SendStream<H> {
+    fn drop(&mut self) {
+        let now = self.conn.sh.now();
+        self.conn
+            .sh
+            .lock()
+            .drop_send(now, &self.conn.info, self.id, self.finished);
+    }
+}
+
+impl<H: Hosted> RecvStream<H> {
+    pub(crate) fn new(conn: &Arc<ConnInner<H>>, id: u64) -> Self {
+        Self {
+            conn: Arc::clone(conn),
+            id,
+            end: None,
+            stopped: None,
+        }
+    }
+
     /// The stream id.
-    pub fn id(&self) -> u64 {
-        self.shared.id
+    pub const fn id(&self) -> u64 {
+        self.id
     }
 
-    fn end(&self) -> Result<Option<usize>> {
-        match self.shared.rx_end.get() {
-            Some(Ok(())) => Ok(None),
-            Some(Err(e)) => Err(*e),
-            None => Err(Error::shutdown()),
-        }
-    }
-
-    /// Take the next block into `cur`; `Ready(false)` at the end of the stream. The end is the stream's reason, set
-    /// after the last block was sent, so blocks are drained once more after it is seen.
-    fn poll_block(&mut self, cx: &mut Context<'_>) -> Poll<Result<bool>> {
-        let Some(rx) = self.rx.as_ref() else {
-            return Poll::Ready(Err(Error::new(
-                ErrorKind::Stopped(self.stopped),
-                "the stream was stopped",
-            )));
-        };
-        let mut registered = false;
-        loop {
-            let ended = self.shared.rx_end.get().is_some();
-            if let Some(b) = rx.try_recv() {
-                self.cur = b;
-                self.pos = 0;
-                // The channel has room again: wake the engine if it stopped for lack of it.
-                if self.shared.starved.swap(false, Ordering::SeqCst) {
-                    self.conn.remote.nudge(&self.shared);
-                }
-                return Poll::Ready(Ok(true));
-            }
-            if ended {
-                self.done = true;
-                return self.end().map(|_| false).into();
-            }
-            if registered {
-                return Poll::Pending;
-            }
-            self.shared.readable.register(cx.waker());
-            registered = true;
-        }
-    }
-
-    fn poll_read_inner(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<Option<usize>>> {
-        loop {
-            if let Some(avail) = self.cur.get(self.pos..).filter(|a| !a.is_empty()) {
-                let n = avail.len().min(buf.len());
-                if let (Some(d), Some(s)) = (buf.get_mut(..n), avail.get(..n)) {
-                    d.copy_from_slice(s);
-                }
-                self.pos += n;
-                return Poll::Ready(Ok(Some(n)));
-            }
-            if self.done {
-                return Poll::Ready(self.end());
-            }
-            if buf.is_empty() {
-                return Poll::Ready(Ok(Some(0)));
-            }
-            match self.poll_block(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                Poll::Ready(Ok(_)) => {}
-            }
-        }
-    }
-
-    /// Read some bytes into `buf`; `Ok(None)` at the end of the stream. Cancel safe.
+    /// Read some bytes into `buf`; `Ok(None)` at the end of the stream. Waits while the stream has none.
     ///
     /// # Errors
     /// [`crate::ErrorKind::Reset`] if the peer reset the stream, or the error that closed the connection.
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
-        poll_fn(|cx| self.poll_read_inner(cx, buf)).await
+        if let Some(code) = self.stopped {
+            return Err(Error::new(ErrorKind::Stopped(code), "the stream was stopped"));
+        }
+        if let Some(end) = self.end {
+            return end.map(|()| None);
+        }
+        let (c, id) = (&self.conn, self.id);
+        let (n, end) = c.sh.run(|core, now| core.read(now, &c.info, id, buf)).await?;
+        if end.is_some() {
+            self.end = end;
+        }
+        if n > 0 || buf.is_empty() {
+            return Ok(Some(n));
+        }
+        // The read saw the end and no bytes: the end is the answer.
+        self.end.map_or(Ok(Some(0)), |e| e.map(|()| None))
     }
 
-    /// Read the next bytes the stream has, at most `max`; `Ok(None)` at the end. Cancel safe.
+    /// Read the next bytes the stream has, at most `max`; `Ok(None)` at the end. Allocates the chunk.
     ///
     /// # Errors
     /// As [`read`](Self::read).
@@ -306,55 +211,34 @@ impl RecvStream {
     /// As [`read`](Self::read), or [`crate::ErrorKind::TooLarge`] if the stream is longer than `limit`.
     pub async fn read_to_end(&mut self, limit: usize) -> Result<Vec<u8>> {
         let mut out = Vec::new();
-        while let Some(chunk) = self.read_chunk(BLOCK).await? {
-            if out.len() + chunk.len() > limit {
+        let mut buf = vec![0u8; BLOCK];
+        while let Some(n) = self.read(&mut buf).await? {
+            if out.len() + n > limit {
                 return Err(Error::new(ErrorKind::TooLarge, "the stream is longer than the limit"));
             }
-            out.extend_from_slice(&chunk);
+            out.extend_from_slice(buf.get(..n).unwrap_or_default());
         }
         Ok(out)
     }
 
     /// Stop reading: what the peer still sends is discarded and later reads fail with [`crate::ErrorKind::Stopped`].
     /// The peer is told with `code`: it resets the stream and its writer sees [`crate::ErrorKind::Stopped`] with the code.
-    pub fn stop(&mut self, code: u64) {
-        self.rx = None;
-        self.stopped = code;
-        self.cur.clear();
-        self.conn
-            .remote
-            .ctl(Ctl::Stop(self.shared.session, self.shared.id, code));
+    pub async fn stop(&mut self, code: u64) {
+        self.stopped = Some(code);
+        let (c, id) = (&self.conn, self.id);
+        c.sh.run(|core, now| {
+            core.stop_recv(now, &c.info, id, code);
+            Try::Done(())
+        })
+        .await;
     }
 }
 
-impl Drop for RecvStream {
+impl<H: Hosted> Drop for RecvStream<H> {
     fn drop(&mut self) {
-        if self.rx.is_some() && !self.done {
-            self.rx = None;
-            self.conn.remote.nudge(&self.shared);
+        if self.end.is_none() && self.stopped.is_none() {
+            let now = self.conn.sh.now();
+            self.conn.sh.lock().drop_recv(now, &self.conn.info, self.id);
         }
-    }
-}
-
-impl AsyncWrite for SendStream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        self.get_mut().poll_write_inner(cx, buf).map_err(io_err)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let _ = cx;
-        Poll::Ready(self.failed().map_or(Ok(()), |e| Err(io_err(e))))
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.get_mut().poll_close_inner(cx).map_err(io_err)
-    }
-}
-
-impl AsyncRead for RecvStream {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
-        self.get_mut()
-            .poll_read_inner(cx, buf)
-            .map(|r| r.map(|n| n.unwrap_or(0)).map_err(io_err))
     }
 }

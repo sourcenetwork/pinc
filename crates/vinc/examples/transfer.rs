@@ -15,9 +15,14 @@
     reason = "an example favours the short form"
 )]
 
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
+use std::time::Instant;
 
-use vinc::{Connection, Protocol, Vinc};
+use nuclei::Handle;
+use nuclei::time::sleep_until_precise;
+
+use vinc::{Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Limits, Protocol, Vinc};
 
 const ALPN: &[u8] = b"example/transfer/1";
 
@@ -36,7 +41,7 @@ impl Protocol for Sink {
         ALPN
     }
 
-    async fn serve(self: Arc<Self>, conn: Connection) {
+    async fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) {
         while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
             let (mut total, mut h) = (0u64, 0xcbf2_9ce4_8422_2325_u64);
             while let Ok(Some(chunk)) = rx.read_chunk(64 * 1024).await {
@@ -53,16 +58,13 @@ impl Protocol for Sink {
 
 /// Send `len` bytes; returns `(bytes the server counted, whether its checksum matches ours)`.
 pub async fn run(len: usize) -> vinc::Result<(u64, bool)> {
-    let lo = ([127, 0, 0, 1], 0).into();
-    let (server, driver) = Vinc::builder().bind_nuclei(lo).await?;
-    nuclei::spawn(driver.run()).detach();
-    let (client, driver) = Vinc::builder().bind_nuclei(lo).await?;
-    nuclei::spawn(driver.run()).detach();
+    let server = endpoint(Vinc::builder()).await?;
+    let client = endpoint(Vinc::builder()).await?;
     {
         let registered = server.register(Arc::new(Sink)).await?;
-        nuclei::spawn(async move {
+        nuclei::spawn_local(async move {
             while let Some(conn) = registered.accept().await {
-                nuclei::spawn(registered.protocol().serve(conn)).detach();
+                nuclei::spawn_local(registered.protocol().serve(conn)).detach();
             }
         })
         .detach();
@@ -82,6 +84,31 @@ pub async fn run(len: usize) -> vinc::Result<(u64, bool)> {
         let theirs = u64::from_le_bytes(reply[8..16].try_into().unwrap_or_default());
         Ok((total, theirs == h))
     }
+}
+
+/// An endpoint over a UDP socket of the nuclei runtime: the three closures are the whole of the host's I/O.
+async fn endpoint(builder: Builder) -> vinc::Result<Endpoint<impl Hosted>> {
+    let sock = Arc::new(
+        Handle::<UdpSocket>::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .map_err(|_| Error::new(ErrorKind::Unreachable, "the address cannot be bound"))?,
+    );
+    let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
+    let local = sock
+        .local_addr()
+        .map_err(|_| Error::new(ErrorKind::Unreachable, "the socket has no address"))?;
+    // Room for 64 sessions keeps the endpoint small enough to build on any thread's stack.
+    builder
+        .limits(Limits {
+            connections: 64,
+            ..Limits::default()
+        })
+        .local_addr(local)
+        .build(
+            async move |buf: &mut [u8]| r.recv_from(buf).await,
+            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+            async |at: Instant| sleep_until_precise(at).await,
+        )
 }
 
 #[allow(dead_code)]

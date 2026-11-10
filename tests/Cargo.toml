@@ -31,11 +31,10 @@ vinc-dtn = { workspace = true }
 vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
-vinc-driver = { workspace = true }
-vinc = { workspace = true, features = ["nuclei"] }
-vinc-nuclei = { workspace = true }
+vinc = { workspace = true }
 nuclei = { workspace = true }
-futures-io = { workspace = true }
+tokio = { workspace = true }
+smol = { workspace = true }
 vinc-node = { workspace = true, features = ["trace"] }
 
 [dev-dependencies]
@@ -476,8 +475,12 @@ name = "vinc_cancel"
 path = "vinc_cancel.rs"
 
 [[test]]
-name = "driver_loop"
-path = "driver_loop.rs"
+name = "vinc_drive"
+path = "vinc_drive.rs"
+
+[[test]]
+name = "vinc_hosts"
+path = "vinc_hosts.rs"
 
 [[test]]
 name = "vinc_examples"

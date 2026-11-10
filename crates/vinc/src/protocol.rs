@@ -13,13 +13,12 @@
 //! Invariants: a tag is never empty and never longer than 64 bytes; reading a tag consumes exactly its bytes.
 
 use std::future::Future;
-use std::sync::Arc;
-
-use vinc_driver::{Error, ErrorKind, Result};
+use std::sync::{Arc, Weak};
 
 use crate::conn::Connection;
-use vinc_driver::{Receiver, SessionShared, WeakRemote};
-
+use crate::drive::Shared;
+use crate::error::{Error, ErrorKind, Result};
+use crate::host::Hosted;
 use crate::stream::{RecvStream, SendStream};
 
 /// The longest stream tag.
@@ -32,20 +31,24 @@ pub trait Protocol: Send + Sync + 'static {
 
     /// Serve one session a peer opened. The host spawns the future; the session closes when the last handle to it is
     /// dropped.
-    fn serve(self: Arc<Self>, conn: Connection) -> impl Future<Output = ()> + Send;
+    fn serve<H: Hosted + 'static>(self: Arc<Self>, conn: Connection<H>) -> impl Future<Output = ()>;
 }
 
 /// The sessions a registered [`Protocol`] is to serve. Holds the endpoint only weakly, so a registered protocol does not
-/// keep the endpoint running.
-pub struct Registered<P> {
-    rx: Receiver<Arc<SessionShared>>,
-    remote: WeakRemote,
+/// keep the endpoint alive.
+pub struct Registered<P, H: Hosted> {
+    shared: Weak<Shared<H>>,
+    route: usize,
     protocol: Arc<P>,
 }
 
-impl<P: Protocol> Registered<P> {
-    pub(crate) const fn new(rx: Receiver<Arc<SessionShared>>, remote: WeakRemote, protocol: Arc<P>) -> Self {
-        Self { rx, remote, protocol }
+impl<P: Protocol, H: Hosted> Registered<P, H> {
+    pub(crate) fn new(shared: &Arc<Shared<H>>, route: usize, protocol: Arc<P>) -> Self {
+        Self {
+            shared: Arc::downgrade(shared),
+            route,
+            protocol,
+        }
     }
 
     /// The protocol.
@@ -55,9 +58,10 @@ impl<P: Protocol> Registered<P> {
 
     /// Wait for the next session a peer opened on the protocol's ALPN. `None` once the endpoint stopped. The host runs
     /// `registered.protocol().serve(conn)` on its executor.
-    pub async fn accept(&self) -> Option<Connection> {
-        let shared = self.rx.recv_async().await?;
-        Some(Connection::new(shared, self.remote.upgrade()?))
+    pub async fn accept(&self) -> Option<Connection<H>> {
+        let shared = self.shared.upgrade()?;
+        let info = shared.run(|core, _| core.accept_route(self.route)).await?;
+        Some(Connection::new(&shared, info))
     }
 }
 
@@ -65,7 +69,7 @@ impl<P: Protocol> Registered<P> {
 ///
 /// # Errors
 /// [`crate::ErrorKind::Config`] if the tag is empty or longer than [`MAX_TAG`]; the stream's error otherwise.
-pub async fn write_tag(send: &mut SendStream, tag: &[u8]) -> Result<()> {
+pub async fn write_tag<H: Hosted>(send: &mut SendStream<H>, tag: &[u8]) -> Result<()> {
     let len = u8::try_from(tag.len()).ok().filter(|l| (1..=64).contains(l));
     let Some(len) = len else {
         return Err(Error::new(ErrorKind::Config, "a stream tag is 1 to 64 bytes"));
@@ -80,7 +84,7 @@ pub async fn write_tag(send: &mut SendStream, tag: &[u8]) -> Result<()> {
 ///
 /// # Errors
 /// [`crate::ErrorKind::Config`] if the tag length is not 1 to 64; the stream's error otherwise.
-pub async fn read_tag(recv: &mut RecvStream) -> Result<Vec<u8>> {
+pub async fn read_tag<H: Hosted>(recv: &mut RecvStream<H>) -> Result<Vec<u8>> {
     let mut len = [0u8; 1];
     recv.read_exact(&mut len).await?;
     let [n] = len;

@@ -1,6 +1,6 @@
 [package]
 name = "vinc"
-description = "VINC for applications: one entry point with a builder, connections, streams that implement futures-io, access hooks and a typed protocol registration, all async and driven by the host's runtime"
+description = "VINC for applications: one entry point with a builder, connections, streams, datagrams, access hooks and a typed protocol registration, all async, with the host passing its I/O as three async closures"
 keywords = ["p2p", "transport", "facade"]
 version.workspace = true
 authors.workspace = true
@@ -10,11 +10,11 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-vinc-driver = { workspace = true }
 vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
 vinc-keystore = { workspace = true }
-vinc-nuclei = { workspace = true, optional = true }
-futures-io = { workspace = true }
+vinc-transport = { workspace = true, features = ["alloc"] }
+vinc-core = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 nuclei = { workspace = true }
@@ -22,20 +22,15 @@ nuclei = { workspace = true }
 [features]
 # Lets a TPM key store (`vinc-keystore`) hold the identity: pass it to `Builder::key_store`.
 hwenc = ["vinc-keystore/hwenc"]
-# `Builder::bind_nuclei` and `vinc::nuclei`: the driver's sockets and timers on the nuclei runtime.
-nuclei = ["dep:vinc-nuclei"]
 
 [lints]
 workspace = true
 
 [[example]]
 name = "echo"
-required-features = ["nuclei"]
 
 [[example]]
 name = "transfer"
-required-features = ["nuclei"]
 
 [[example]]
 name = "defradb_backend"
-required-features = ["nuclei"]

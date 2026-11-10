@@ -43,6 +43,9 @@
     reason = "answers are returned by value; boxing would allocate"
 )]
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 #[cfg(test)]
 extern crate std;
 

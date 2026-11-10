@@ -22,25 +22,31 @@
 )]
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use nuclei::Handle;
 use nuclei::sync::Mutex as AsyncMutex;
 use nuclei::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use vinc::{Connection, Endpoint, Error, ErrorKind, NodeAddr, SendStream, Vinc, node_from_str, node_to_string};
+use nuclei::time::sleep_until_precise;
+use vinc::{
+    Builder, Connection, Endpoint, Error, ErrorKind, Hosted, Limits, NodeAddr, SendStream, Vinc, node_from_str,
+    node_to_string,
+};
 use vinc::{RecvStream, read_tag};
 
 const MUX: &[u8] = b"example/mux/1";
 const MAX_MSG: usize = 16 << 20;
 
 /// The seam: what the engine above needs from a backend.
-pub trait Transport: Clone + Send + Sync + 'static {
+pub trait Transport: Clone + 'static {
     /// The send half of a request's stream, used to reply on it.
-    type ResponseToken: Send + 'static;
+    type ResponseToken: 'static;
     fn local_peer_id(&self) -> String;
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error>;
     async fn dial(&self, peer: &str, hints: Vec<SocketAddr>) -> Result<(), Error>;
-    fn disconnect(&self, peer: &str) -> Result<(), Error>;
+    async fn disconnect(&self, peer: &str) -> Result<(), Error>;
     async fn connected_peers(&self) -> Result<Vec<String>, Error>;
     async fn request(&self, peer: &str, tag: &[u8], body: Vec<u8>) -> Result<Vec<u8>, Error>;
     async fn next_request(&self) -> Option<Request<Self::ResponseToken>>;
@@ -57,16 +63,26 @@ pub struct Request<T> {
 }
 
 /// The VINC backend.
-#[derive(Clone)]
-pub struct VincTransport {
-    ep: Endpoint,
+pub struct VincTransport<H: Hosted> {
+    ep: Endpoint<H>,
     // One connection per peer for every protocol.
-    conns: Arc<Mutex<HashMap<String, Connection>>>,
-    inbox: UnboundedSender<Request<SendStream>>,
-    requests: Arc<AsyncMutex<UnboundedReceiver<Request<SendStream>>>>,
+    conns: Arc<Mutex<HashMap<String, Connection<H>>>>,
+    inbox: UnboundedSender<Request<SendStream<H>>>,
+    requests: Arc<AsyncMutex<UnboundedReceiver<Request<SendStream<H>>>>>,
 }
 
-async fn write_msg(tx: &mut SendStream, body: &[u8]) -> Result<(), Error> {
+impl<H: Hosted> Clone for VincTransport<H> {
+    fn clone(&self) -> Self {
+        Self {
+            ep: self.ep.clone(),
+            conns: Arc::clone(&self.conns),
+            inbox: self.inbox.clone(),
+            requests: Arc::clone(&self.requests),
+        }
+    }
+}
+
+async fn write_msg<H: Hosted>(tx: &mut SendStream<H>, body: &[u8]) -> Result<(), Error> {
     tx.write_all(
         &u32::try_from(body.len())
             .map_err(|_| Error::new(ErrorKind::TooLarge, "message too large"))?
@@ -76,7 +92,7 @@ async fn write_msg(tx: &mut SendStream, body: &[u8]) -> Result<(), Error> {
     tx.write_all(body).await
 }
 
-async fn read_msg(rx: &mut RecvStream) -> Result<Vec<u8>, Error> {
+async fn read_msg<H: Hosted>(rx: &mut RecvStream<H>) -> Result<Vec<u8>, Error> {
     let mut len = [0u8; 4];
     rx.read_exact(&mut len).await?;
     let len = u32::from_be_bytes(len) as usize;
@@ -88,20 +104,23 @@ async fn read_msg(rx: &mut RecvStream) -> Result<Vec<u8>, Error> {
     Ok(body)
 }
 
-impl VincTransport {
-    /// Bind an endpoint with the given 32-byte seed, spawn its driver and start serving inbound streams.
-    pub async fn start(seed: &[u8; 32], bind: SocketAddr) -> Result<Self, Error> {
-        let (ep, driver) = Vinc::builder().seed(seed)?.alpn(MUX).bind_nuclei(bind).await?;
-        nuclei::spawn(driver.run()).detach();
+impl<H: Hosted + 'static> VincTransport<H> {
+    /// Start serving inbound streams of `ep`, and run it.
+    pub fn new(ep: Endpoint<H>) -> Self {
+        let runner = ep.clone();
+        nuclei::spawn_local(async move {
+            let _ = runner.run().await;
+        })
+        .detach();
         let (inbox, requests) = unbounded_channel();
         let t = Self {
-            ep: ep.clone(),
+            ep,
             conns: Arc::default(),
             inbox,
             requests: Arc::new(AsyncMutex::new(requests)),
         };
         let me = t.clone();
-        nuclei::spawn(async move {
+        nuclei::spawn_local(async move {
             while let Some(inc) = me.ep.accept().await {
                 let peer = node_to_string(&inc.remote());
                 let conn = inc.into_connection();
@@ -109,11 +128,11 @@ impl VincTransport {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(peer.clone(), conn.clone());
-                nuclei::spawn(serve(conn, peer, me.inbox.clone())).detach();
+                nuclei::spawn_local(serve(conn, peer, me.inbox.clone())).detach();
             }
         })
         .detach();
-        Ok(t)
+        t
     }
 
     /// The address to give peers.
@@ -121,7 +140,7 @@ impl VincTransport {
         self.ep.addr()
     }
 
-    fn conn(&self, peer: &str) -> Option<Connection> {
+    fn conn(&self, peer: &str) -> Option<Connection<H>> {
         self.conns
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -130,7 +149,7 @@ impl VincTransport {
     }
 }
 
-async fn serve(conn: Connection, peer: String, inbox: UnboundedSender<Request<SendStream>>) {
+async fn serve<H: Hosted>(conn: Connection<H>, peer: String, inbox: UnboundedSender<Request<SendStream<H>>>) {
     while let Ok((tx, mut rx)) = conn.accept_bi().await {
         let Ok(tag) = read_tag(&mut rx).await else { continue };
         let Ok(body) = read_msg(&mut rx).await else { continue };
@@ -143,8 +162,8 @@ async fn serve(conn: Connection, peer: String, inbox: UnboundedSender<Request<Se
     }
 }
 
-impl Transport for VincTransport {
-    type ResponseToken = SendStream;
+impl<H: Hosted + 'static> Transport for VincTransport<H> {
+    type ResponseToken = SendStream<H>;
 
     fn local_peer_id(&self) -> String {
         node_to_string(&self.ep.id())
@@ -168,8 +187,8 @@ impl Transport for VincTransport {
         Ok(())
     }
 
-    fn disconnect(&self, peer: &str) -> Result<(), Error> {
-        self.ep.close_peer(&node_from_str(peer)?);
+    async fn disconnect(&self, peer: &str) -> Result<(), Error> {
+        self.ep.close_peer(&node_from_str(peer)?).await;
         self.conns
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -191,11 +210,11 @@ impl Transport for VincTransport {
         read_msg(&mut rx).await
     }
 
-    async fn next_request(&self) -> Option<Request<SendStream>> {
+    async fn next_request(&self) -> Option<Request<SendStream<H>>> {
         self.requests.lock().await.recv().await
     }
 
-    async fn respond(&self, mut token: SendStream, body: Vec<u8>) -> Result<(), Error> {
+    async fn respond(&self, mut token: SendStream<H>, body: Vec<u8>) -> Result<(), Error> {
         write_msg(&mut token, &body).await?;
         token.finish().await
     }
@@ -208,10 +227,10 @@ impl Transport for VincTransport {
 /// Two backends on loopback: one asks, the other answers on the request's own stream. Returns the reply.
 pub async fn run() -> Result<Vec<u8>, Error> {
     let lo: SocketAddr = ([127, 0, 0, 1], 0).into();
-    let a = VincTransport::start(&[1; 32], lo).await?;
-    let b = VincTransport::start(&[2; 32], lo).await?;
+    let a = VincTransport::new(endpoint(Vinc::builder().seed(&[1; 32])?.alpn(MUX), lo).await?);
+    let b = VincTransport::new(endpoint(Vinc::builder().seed(&[2; 32])?.alpn(MUX), lo).await?);
     let b2 = b.clone();
-    nuclei::spawn(async move {
+    nuclei::spawn_local(async move {
         while let Some(req) = b2.next_request().await {
             let mut reply = req.tag.clone();
             reply.extend_from_slice(b"/");
@@ -227,6 +246,31 @@ pub async fn run() -> Result<Vec<u8>, Error> {
     let reply = a.request(&b.local_peer_id(), b"pushlog", b"payload".to_vec()).await?;
     a.shutdown().await;
     Ok(reply)
+}
+
+/// An endpoint over a UDP socket of the nuclei runtime bound to `bind`: the three closures are the whole of the host's I/O.
+async fn endpoint(builder: Builder, bind: SocketAddr) -> Result<Endpoint<impl Hosted>, Error> {
+    let sock = Arc::new(
+        Handle::<UdpSocket>::bind(bind)
+            .await
+            .map_err(|_| Error::new(ErrorKind::Unreachable, "the address cannot be bound"))?,
+    );
+    let (r, s) = (Arc::clone(&sock), Arc::clone(&sock));
+    let local = sock
+        .local_addr()
+        .map_err(|_| Error::new(ErrorKind::Unreachable, "the socket has no address"))?;
+    // Room for 64 sessions keeps the endpoint small enough to build on any thread's stack.
+    builder
+        .limits(Limits {
+            connections: 64,
+            ..Limits::default()
+        })
+        .local_addr(local)
+        .build(
+            async move |buf: &mut [u8]| r.recv_from(buf).await,
+            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+            async |at: Instant| sleep_until_precise(at).await,
+        )
 }
 
 #[allow(dead_code)]

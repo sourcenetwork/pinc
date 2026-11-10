@@ -13,20 +13,41 @@
     clippy::cast_possible_truncation
 )]
 
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use vinc::{Endpoint, NodeAddr, Vinc};
+use nuclei::Handle;
+use vinc::{Endpoint, Hosted, Limits, NodeAddr, Vinc};
 
 const BULK: usize = 256 << 20;
 const PINGS: usize = 20_000;
 
-async fn node() -> Endpoint {
-    let (ep, driver) = Vinc::builder()
+async fn node() -> Endpoint<impl Hosted> {
+    let sock = Arc::new(
+        Handle::<UdpSocket>::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap(),
+    );
+    let (r, t) = (Arc::clone(&sock), Arc::clone(&sock));
+    let ep = Vinc::builder()
         .alpn(b"bench/1".to_vec())
-        .bind_nuclei(([127, 0, 0, 1], 0).into())
-        .await
+        .limits(Limits {
+            connections: 64,
+            ..Limits::default()
+        })
+        .local_addr(sock.local_addr().unwrap())
+        .build(
+            async move |buf: &mut [u8]| r.recv_from(buf).await,
+            async move |pkt: &[u8], to: SocketAddr| t.send_to(pkt, to).await,
+            async |at: Instant| nuclei::time::sleep_until_precise(at).await,
+        )
         .unwrap();
-    nuclei::spawn(driver.run()).detach();
+    let runner = ep.clone();
+    nuclei::spawn_local(async move {
+        let _ = runner.run().await;
+    })
+    .detach();
     ep
 }
 
@@ -40,12 +61,12 @@ fn pct(v: &mut [Duration], p: f64) -> Duration {
 }
 
 /// Serve: a bulk sink (counts bytes, replies with the count) and a ping stream (echoes every byte).
-async fn serve(server: Endpoint) {
+async fn serve<H: Hosted + 'static>(server: Endpoint<H>) {
     while let Some(inc) = server.accept().await {
         let conn = inc.into_connection();
-        nuclei::spawn(async move {
+        nuclei::spawn_local(async move {
             while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
-                nuclei::spawn(async move {
+                nuclei::spawn_local(async move {
                     let mut total = 0u64;
                     let mut buf = vec![0u8; 64 * 1024];
                     // A ping stream echoes at once; a bulk stream is counted. The first byte says which.
@@ -77,7 +98,7 @@ async fn main() {
     println!("load average before: {}", loadavg());
     let (server, client) = (node().await, node().await);
     let addr: NodeAddr = server.addr();
-    nuclei::spawn(serve(server.clone())).detach();
+    nuclei::spawn_local(serve(server.clone())).detach();
 
     let conn = client.connect(addr, b"bench/1").await.unwrap();
 
@@ -121,9 +142,5 @@ async fn main() {
     );
     tx.finish().await.unwrap();
 
-    let c = client.loop_stats().counts();
-    let s = server.loop_stats().counts();
-    println!("client driver: {c:?}");
-    println!("server driver: {s:?}");
     println!("load average after: {}", loadavg());
 }

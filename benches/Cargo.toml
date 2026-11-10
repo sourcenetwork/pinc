@@ -21,7 +21,7 @@ vinc-values = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc"] }
 vinc-connect = { workspace = true }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
-vinc = { workspace = true, features = ["nuclei"] }
+vinc = { workspace = true }
 nuclei = { workspace = true }
 
 [dev-dependencies]

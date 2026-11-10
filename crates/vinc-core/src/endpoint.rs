@@ -298,6 +298,19 @@ ep_impl! {
         self.slots.iter().all(|s| s.mem.is_some()).then_some(self.slots)
     }
 
+    /// As [`into_slots`](Self::into_slots) for an endpoint on the heap: the endpoint is a very large value, and this
+    /// ends it where it is instead of moving it onto the stack.
+    #[cfg(feature = "alloc")]
+    #[allow(clippy::boxed_local, reason = "the point is to keep the large endpoint in its box")]
+    pub fn into_slots_boxed(mut self: alloc::boxed::Box<Self>) -> Option<&'s mut [Slot<'a, P, S, N, C, F, NP>; K]> {
+        let now = self.last_now;
+        for i in 0..K {
+            self.free_slot(i, now);
+        }
+        let whole = self.slots.iter().all(|s| s.mem.is_some());
+        whole.then_some(self.slots)
+    }
+
     /// Set the prekey new dials carry; the host rotates it.
     pub fn set_prekey(&mut self, prekey: PrekeyInfo) {
         self.prekey = Some(prekey);

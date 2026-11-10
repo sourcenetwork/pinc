@@ -10,9 +10,9 @@ microcontroller to a data centre and in the browser, and you write your own prot
 VINC is a library, not a framework:
 - **No runtime dependency.** The protocol crates are state machines: you give them bytes, time and commands, and they
   give back packets to send, timers and events. VINC depends on no async runtime.
-- **The host owns the runtime.** The facade starts no thread and runs no socket loop: its driver is a future your
-  executor spawns, on the core that owns the socket, and every method is `async`. nuclei is the runtime it is built and
-  tested on.
+- **The host owns the runtime.** You pass the facade your I/O as three async closures (receive a datagram, send a
+  datagram, sleep until an instant) and call async methods. It starts no thread, no task and no socket loop: the futures
+  you await drive the endpoint, on your executor and your core. tokio, smol and nuclei all work.
 - **Concurrency** is lock-free, through the [kovan](https://crates.io/crates/kovan) crates.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
@@ -21,31 +21,42 @@ VINC is a library, not a framework:
 
 ## Usage
 
-An echo on [nuclei](https://crates.io/crates/nuclei): the driver is a future the host spawns, and every call is async.
-Hosts with no executor drive the SANS-IO crates (`vinc-core`) directly.
+An echo over loopback. The host's whole contribution is the three closures; here they sit on a
+[nuclei](https://crates.io/crates/nuclei) UDP socket. Hosts with no executor drive the SANS-IO crates (`vinc-core`)
+directly.
 
 ```rust
-use vinc::{RecvStream, SendStream, Vinc};
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
+use std::time::Instant;
+
+use nuclei::Handle;
+use nuclei::time::sleep_until_precise;
+use vinc::{Endpoint, Hosted, Vinc};
 
 const ALPN: &[u8] = b"echo/1";
 
+async fn bind() -> vinc::Result<Endpoint<impl Hosted>> {
+    let any = SocketAddr::from(([127, 0, 0, 1], 0));
+    let sock = Arc::new(Handle::<UdpSocket>::bind(any).await.expect("bind"));
+    let (rx, tx) = (Arc::clone(&sock), Arc::clone(&sock));
+    Vinc::builder().alpn(ALPN).local_addr(sock.local_addr().expect("address")).build(
+        async move |buf: &mut [u8]| rx.recv_from(buf).await,         // receive a datagram
+        async move |pkt: &[u8], to: SocketAddr| tx.send_to(pkt, to).await, // send a datagram
+        async |at: Instant| sleep_until_precise(at).await,           // sleep until a deadline
+    )
+}
+
 #[nuclei::main]
 async fn main() -> vinc::Result<()> {
-    let lo = ([127, 0, 0, 1], 0).into();
-    let (server, driver) = Vinc::builder().alpn(ALPN).bind_nuclei(lo).await?;
-    nuclei::spawn(driver.run()).detach();
-    let (client, driver) = Vinc::builder().bind_nuclei(lo).await?;
-    nuclei::spawn(driver.run()).detach();
+    let (server, client) = (bind().await?, bind().await?);
     let addr = server.addr(); // node id and socket address
 
-    let echo = async |mut tx: SendStream, mut rx: RecvStream| -> vinc::Result<()> {
-        tx.write_all(&rx.read_to_end(1 << 20).await?).await?;
-        tx.finish().await
-    };
-    let accept = nuclei::spawn(async move {
+    let accept = nuclei::spawn_local(async move {
         let conn = server.accept().await.expect("endpoint stopped").into_connection();
-        let (tx, rx) = conn.accept_bi().await?;
-        echo(tx, rx).await?;
+        let (mut tx, mut rx) = conn.accept_bi().await?;
+        tx.write_all(&rx.read_to_end(1 << 20).await?).await?;
+        tx.finish().await?;
         conn.closed().await; // dropping a connection closes it: wait for the client to finish reading
         vinc::Result::Ok(())
     });
@@ -55,10 +66,14 @@ async fn main() -> vinc::Result<()> {
     tx.write_all(b"hello, vinc").await?;
     tx.finish().await?;
     assert_eq!(rx.read_to_end(1 << 20).await?, b"hello, vinc");
-    drop((conn, tx, rx));
+    conn.close(0).await;
     accept.await
 }
 ```
+
+An endpoint with no future being polled makes no progress, which is the SANS-IO contract. Every call drives the endpoint
+while it waits; a host with nothing else pending on it (a server between accepts, connections that only need their
+keepalives) awaits `Endpoint::run()`.
 
 ## Layout
 
@@ -75,7 +90,7 @@ async fn main() -> vinc::Result<()> {
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `vinc` | the facade: a builder, connections, `futures-io` streams and datagrams, all async and driven by the host's runtime | std | built; proofs being closed |
+| `vinc` | the facade: a builder, connections, streams and datagrams, all async, over the host's receive, send and sleep closures | std | built; proofs being closed |
 | `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
 | `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
 | `vinc-crypto` | RustCrypto primitives behind one static `Provider`: AEADs, X25519, ML-KEM-768, Ed25519, P-256 and ML-DSA-65 identities, BLAKE3 KDF and transcript hash | yes | built; proofs being closed |
@@ -90,8 +105,6 @@ async fn main() -> vinc::Result<()> {
 | `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proofs being closed |
 | `vinc-reconcile` | range-based set reconciliation whose cost scales with the difference, exact by a final check | yes | built; proofs being closed |
 | `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody and copy-limited forwarding | yes | built, proven |
-| `vinc-driver` | the reference driver: the endpoint as a future over the host's async sockets and timers | no | built; proofs being closed |
-| `vinc-nuclei` | the driver's sockets and timers on the nuclei runtime | no | built |
 | `vinc-sim` | deterministic network simulator and scenario suite: links, sites, NAT, partitions, clocks, adversaries | no | built |
 
 **proven**: every property has a TLA+ model, a Lean theorem and trace validation ([docs/PROOFS.md](docs/PROOFS.md)).
