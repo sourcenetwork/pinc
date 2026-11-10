@@ -178,6 +178,8 @@ pub struct Stats {
     pub key_updates: u64,
     /// Probe timeouts that fired.
     pub ptos: u64,
+    /// Peer streams held back for want of room (see `StreamStats::held_back`).
+    pub held_back: u64,
     /// Repair packets sent.
     pub repairs: u64,
     /// Datagrams dropped from the send queue to make room.

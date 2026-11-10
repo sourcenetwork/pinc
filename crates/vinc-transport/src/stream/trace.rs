@@ -75,4 +75,9 @@ pub struct TableView {
     pub target: u64,
     /// The delivery meter: the epoch start, the bytes in it, the last rate.
     pub meter: (Option<u64>, u64, u64),
+    /// The stream credit: the limit on the streams we may open in all, the limit last advertised, and the streams
+    /// admitted when it was set.
+    pub admit: [u64; 3],
+    /// A `MAX_STREAMS` frame is waiting to be sent.
+    pub admit_pend: bool,
 }

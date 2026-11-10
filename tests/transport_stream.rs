@@ -38,9 +38,24 @@ fn setup(chunks: usize, edit: impl FnOnce(&mut Config)) -> (BufferPool<'static>,
     let pool = BufferPool::new_boxed(chunks);
     let mut config = Config::new(false);
     config.peer = peer();
+    // These tests exercise the pool and window rules on their own; the stream credit has its own tests.
+    config.credit = false;
     edit(&mut config);
     let table = Box::new(Table::new(&config, &pool));
     (pool, table)
+}
+
+/// A server-side table with the stream credit on, over a heap pool of `chunks` chunks.
+fn setup_credit(chunks: usize, edit: impl FnOnce(&mut Config)) -> (BufferPool<'static>, Box<Table>) {
+    setup(chunks, |c| {
+        c.credit = true;
+        edit(c);
+    })
+}
+
+/// The next control frame, the stream-credit raises (see the credit tests) left out.
+fn next_control<S: StreamSource, const N: usize, const C: usize>(t: &mut Streams<S, N, C>) -> Option<ControlFrame> {
+    std::iter::from_fn(|| t.pending_control()).find(|f| !matches!(f, ControlFrame::MaxStreams { .. }))
 }
 
 fn pattern(len: usize, seed: u64) -> Vec<u8> {
@@ -64,8 +79,11 @@ fn read_all<S: StreamSource, const N: usize, const C: usize>(
     out
 }
 
+/// Every control frame the table wants to send, the stream-credit raises left out (see `credit_raises`).
 fn drain_control(t: &mut Table) -> Vec<ControlFrame> {
-    std::iter::from_fn(|| t.pending_control()).collect()
+    std::iter::from_fn(|| t.pending_control())
+        .filter(|f| !matches!(f, ControlFrame::MaxStreams { .. }))
+        .collect()
 }
 
 /// Build every frame the table wants to send now, copying out the data.
@@ -83,7 +101,7 @@ fn drain_frames(t: &mut Table, pool: &BufferPool<'_>, budget: usize) -> Vec<(Str
 
 #[test]
 fn in_order_data_is_read_back_and_chunks_return() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     let data = pattern(50_000, 1);
     for (i, part) in data.chunks(1400).enumerate() {
         let off = (i * 1400) as u64;
@@ -104,7 +122,7 @@ fn in_order_data_is_read_back_and_chunks_return() {
 
 #[test]
 fn the_reader_sees_bytes_at_most_one_chunk_at_a_time() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 0, &vec![1; 3 * CHUNK_SIZE], false)
         .unwrap();
     assert_eq!(t.read_chunk(&pool, 0).unwrap().len(), CHUNK_SIZE);
@@ -119,7 +137,7 @@ fn the_reader_sees_bytes_at_most_one_chunk_at_a_time() {
 
 #[test]
 fn out_of_order_data_waits_for_the_hole() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 1000, &[2; 500], false).unwrap();
     assert!(t.read_chunk(&pool, 0).is_none());
     t.on_stream_frame(&mut pool, 0, 0, &[1; 1000], false).unwrap();
@@ -132,7 +150,7 @@ proptest! {
     /// Any permutation of overlapping and duplicated segments is read back exactly once, in order.
     #[test]
     fn reassembly_matches_the_model(len in 1usize..60_000, seed in any::<u64>(), extra in 0usize..30) {
-        let (mut pool, mut t) = setup(64, |_| {});
+        let (mut pool, mut t) = setup(1024, |_| {});
         let data = pattern(len, seed);
         let mut rng = SplitMix64::new(seed ^ 0xABCD);
         let mut segs: Vec<(usize, usize)> = Vec::new();
@@ -176,7 +194,7 @@ proptest! {
 
 #[test]
 fn conflicting_overlap_is_detected_and_changes_nothing() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 0, &[1; 100], false).unwrap();
     let mut bad = vec![1u8; 100];
     bad[10] = 9;
@@ -191,7 +209,7 @@ fn conflicting_overlap_is_detected_and_changes_nothing() {
 
 #[test]
 fn conflict_inside_a_hole_neighbour_is_detected() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 100, &[5; 50], false).unwrap();
     let mut spanning = vec![7u8; 100];
     spanning[..].fill(7);
@@ -205,7 +223,7 @@ fn conflict_inside_a_hole_neighbour_is_detected() {
 
 #[test]
 fn final_size_rules() {
-    let (mut pool, mut t) = setup(256, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 0, 0, &[1; 100], true).unwrap();
     assert_eq!(
         t.on_stream_frame(&mut pool, 0, 100, &[1; 10], false),
@@ -233,7 +251,7 @@ fn final_size_rules() {
 
 #[test]
 fn stream_credit_is_enforced() {
-    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 4096);
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 4096);
     t.on_stream_frame(&mut pool, 0, 0, &[1; 4096], false).unwrap();
     assert_eq!(
         t.on_stream_frame(&mut pool, 0, 4096, &[1; 1], false),
@@ -297,7 +315,7 @@ fn a_deferred_grant_is_issued_when_acknowledged_send_data_gives_the_pool_back() 
     // read, waited forever once the pool refilled by an acknowledgement.
     let (mut pool, mut t) = setup(16, |c| c.initial_stream_window = 64 * 1024);
     t.on_stream_frame(&mut pool, 0, 0, &vec![1; 48 * 1024], false).unwrap();
-    let sid = t.open_stream(true).unwrap();
+    let sid = t.open_stream(&pool, true).unwrap();
     assert_eq!(
         t.write(&mut pool, sid, &vec![2; 13 * CHUNK_SIZE], NO_CAP).unwrap(),
         13 * CHUNK_SIZE
@@ -364,7 +382,7 @@ fn a_held_back_peer_stream_is_admitted_once_room_returns_with_its_bytes_intact()
     // the room.
     let (mut pool, mut t) = setup(24, |_| {});
     // This side opens a stream of its own at the same moment (its receive half is granted a window too).
-    let own = t.open_stream(true).unwrap();
+    let own = t.open_stream(&pool, true).unwrap();
     let theirs = own ^ 1;
     t.on_stream_frame(&mut pool, theirs, 0, &[1; 10], true).unwrap();
     let held = pattern(30_000, 7);
@@ -381,8 +399,8 @@ fn a_held_back_peer_stream_is_admitted_once_room_returns_with_its_bytes_intact()
     // The first stream is done and gave its grant back: the retransmitted stream is admitted, once, with every byte.
     t.on_stream_frame(&mut pool, theirs + 4, 0, &held, true).unwrap();
     assert_eq!(read_all(&mut t, &mut pool, theirs + 4), held);
-    let (mut roomy, mut t) = setup(256, |_| {});
-    let own = t.open_stream(true).unwrap();
+    let (mut roomy, mut t) = setup(1024, |_| {});
+    let own = t.open_stream(&roomy, true).unwrap();
     t.on_stream_frame(&mut roomy, own ^ 1, 0, &[1; 10], false).unwrap();
     t.on_stream_frame(&mut roomy, (own ^ 1) + 4, 0, &[2; 10], false)
         .unwrap();
@@ -393,7 +411,7 @@ fn a_held_back_peer_stream_is_admitted_once_room_returns_with_its_bytes_intact()
 
 #[test]
 fn max_stream_data_is_sent_after_an_eighth_of_the_window() {
-    let (mut pool, mut t) = setup(256, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     let window = 1_310_720u64;
     let eighth = (window / 8) as usize;
     t.on_stream_frame(&mut pool, 0, 0, &vec![1; eighth + 100], false)
@@ -421,7 +439,7 @@ fn max_stream_data_is_sent_after_an_eighth_of_the_window() {
 
 #[test]
 fn a_grant_is_bounded_by_the_final_size() {
-    let (mut pool, mut t) = setup(256, |c| c.initial_stream_window = 64 * 1024);
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
     t.on_stream_frame(&mut pool, 0, 0, &vec![1; 40_000], true).unwrap();
     assert_eq!(read_all(&mut t, &mut pool, 0).len(), 40_000);
     assert!(
@@ -477,7 +495,7 @@ fn the_window_never_passes_the_ceiling() {
 
 #[test]
 fn a_slowly_consumed_window_does_not_grow() {
-    let (mut pool, mut t) = setup(256, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     let rtt = 1_000u64;
     let mut sent = 0u64;
     let mut now = 0u64;
@@ -499,8 +517,8 @@ fn a_slowly_consumed_window_does_not_grow() {
 
 #[test]
 fn write_is_bounded_by_the_peer_window() {
-    let (mut pool, mut t) = setup(64, |c| c.peer.window = 5000);
-    let id = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |c| c.peer.window = 5000);
+    let id = t.open_stream(&pool, true).unwrap();
     assert_eq!(id, 1);
     assert_eq!(t.write(&mut pool, id, &[1; 8000], NO_CAP).unwrap(), 5000);
     assert!(drain_control(&mut t).is_empty(), "nothing is sent about a full window");
@@ -518,9 +536,9 @@ fn write_is_bounded_by_the_peer_window() {
 
 #[test]
 fn write_is_bounded_by_the_buffer_cap_and_acks_wake_the_writer() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let a = t.open_stream(true).unwrap();
-    let b = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let a = t.open_stream(&pool, true).unwrap();
+    let b = t.open_stream(&pool, true).unwrap();
     assert_eq!(t.write(&mut pool, a, &[1; 5000], 3000).unwrap(), 3000);
     assert_eq!(t.buffered(), 3000);
     assert_eq!(t.write(&mut pool, a, &[1; 10], 3000).unwrap(), 0);
@@ -548,8 +566,8 @@ fn write_is_bounded_by_the_buffer_cap_and_acks_wake_the_writer() {
 
 #[test]
 fn a_cap_of_zero_room_accepts_nothing() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let id = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
     assert_eq!(t.write(&mut pool, id, &[1; 10], 0).unwrap(), 0);
     assert_eq!(t.poll_writable(0), None);
     assert_eq!(t.poll_writable(1), Some(id));
@@ -558,7 +576,7 @@ fn a_cap_of_zero_room_accepts_nothing() {
 #[test]
 fn write_stops_when_the_pool_is_empty() {
     let (mut pool, mut t) = setup(2, |_| {});
-    let id = t.open_stream(false).unwrap();
+    let id = t.open_stream(&pool, false).unwrap();
     assert_eq!(
         t.write(&mut pool, id, &vec![1; 3 * CHUNK_SIZE], NO_CAP).unwrap(),
         2 * CHUNK_SIZE
@@ -569,8 +587,8 @@ fn write_stops_when_the_pool_is_empty() {
 
 #[test]
 fn lost_ranges_go_first_lowest_hole_first() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let id = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
     let data = pattern(6000, 3);
     t.write(&mut pool, id, &data, NO_CAP).unwrap();
     let frames = drain_frames(&mut t, &pool, 1000);
@@ -602,8 +620,8 @@ fn lost_ranges_go_first_lowest_hole_first() {
 
 #[test]
 fn a_late_ack_cancels_the_queued_retransmission() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let id = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
     t.write(&mut pool, id, &pattern(3000, 5), NO_CAP).unwrap();
     assert_eq!(drain_frames(&mut t, &pool, 1000).len(), 3);
     t.on_lost(id, 1000, 1000, false);
@@ -618,8 +636,8 @@ fn a_late_ack_cancels_the_queued_retransmission() {
 
 #[test]
 fn acked_data_returns_its_chunks_and_a_finished_stream_closes() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let id = t.open_stream(false).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, false).unwrap();
     let data = pattern(3 * CHUNK_SIZE + 100, 6);
     assert_eq!(t.write(&mut pool, id, &data, NO_CAP).unwrap(), data.len());
     t.finish(id).unwrap();
@@ -643,8 +661,8 @@ fn acked_data_returns_its_chunks_and_a_finished_stream_closes() {
 
 #[test]
 fn a_lost_end_marker_is_sent_again_on_its_own() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let id = t.open_stream(false).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, false).unwrap();
     t.write(&mut pool, id, &[1; 100], NO_CAP).unwrap();
     let frames = drain_frames(&mut t, &pool, 1000);
     t.on_acked(&mut pool, id, 0, 100, false);
@@ -683,7 +701,7 @@ fn a_source_backed_stream_buffers_nothing_and_rereads_lost_ranges() {
     let mut config = Config::new(false);
     config.peer = peer();
     let mut t = Box::new(Streams::<Src<'_>, 4, 65>::new(&config, &pool));
-    let id = t.open_stream(false).unwrap();
+    let id = t.open_stream(&pool, false).unwrap();
     t.open_source(id, Src { data: &data, log: &log }, data.len() as u64)
         .unwrap();
     assert_eq!(t.write(&mut pool, id, &[1], NO_CAP), Err(StreamError::WrongKind));
@@ -729,7 +747,7 @@ fn a_short_source_read_requeues_the_range() {
     let mut config = Config::new(false);
     config.peer = peer();
     let mut t = Box::new(Streams::<Src<'_>, 2, 65>::new(&config, &pool));
-    let id = t.open_stream(false).unwrap();
+    let id = t.open_stream(&pool, false).unwrap();
     // Claim more than the source holds: the second frame's read comes up short.
     t.open_source(id, Src { data: &data, log: &log }, 2000).unwrap();
     let mut buf = [0u8; 1500];
@@ -754,14 +772,14 @@ fn source_credit_is_charged_at_first_transmission() {
     config.peer = peer();
     config.peer.window = 3000;
     let mut t = Box::new(Streams::<Src<'_>, 2, 65>::new(&config, &pool));
-    let id = t.open_stream(false).unwrap();
+    let id = t.open_stream(&pool, false).unwrap();
     t.open_source(id, Src { data: &data, log: &log }, 10_000).unwrap();
     let mut total = 0;
     while let Some(c) = t.next_stream_frame(1200) {
         total += c.len;
     }
     assert_eq!(total, 3000);
-    assert!(t.pending_control().is_none());
+    assert!(next_control(&mut t).is_none());
     t.on_lost(id, 0, 1200, false);
     assert_eq!(
         t.next_stream_frame(1200).unwrap().len,
@@ -777,13 +795,13 @@ fn source_credit_is_charged_at_first_transmission() {
 
 #[test]
 fn reset_drops_buffers_and_closes_when_acknowledged() {
-    let (mut pool, mut t) = setup(64, |_| {});
-    let id = t.open_stream(false).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, false).unwrap();
     t.write(&mut pool, id, &vec![1; 40_000], NO_CAP).unwrap();
     assert!(pool.used_chunks() > 0);
     t.reset(&mut pool, id, 77).unwrap();
     assert_eq!(pool.used_chunks(), 0);
-    let frame = t.pending_control().unwrap();
+    let frame = next_control(&mut t).unwrap();
     assert_eq!(
         frame,
         ControlFrame::ResetStream {
@@ -795,7 +813,7 @@ fn reset_drops_buffers_and_closes_when_acknowledged() {
     assert!(t.next_stream_frame(1000).is_none());
     assert_eq!(t.write(&mut pool, id, &[1], NO_CAP), Err(StreamError::Finished));
     t.on_control_lost(&frame);
-    assert_eq!(t.pending_control(), Some(frame));
+    assert_eq!(next_control(&mut t), Some(frame));
     assert_eq!(t.open_streams(), 1);
     t.on_control_acked(&mut pool, &frame);
     assert_eq!(t.open_streams(), 0);
@@ -803,7 +821,7 @@ fn reset_drops_buffers_and_closes_when_acknowledged() {
 
 #[test]
 fn a_peer_reset_frees_the_buffer() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     t.on_stream_frame(&mut pool, 2, 0, &[1; 30_000], false).unwrap();
     assert!(pool.used_chunks() > 0);
     t.on_reset_stream(&mut pool, 2, 5, 60_000).unwrap();
@@ -825,20 +843,28 @@ fn a_peer_reset_frees_the_buffer() {
 fn stream_ids_follow_the_bit_layout() {
     let pool = BufferPool::new_boxed(8);
     let mut client = Config::new(true);
+    client.credit = false;
     client.peer = peer();
     let mut c = Box::new(Table::new(&client, &pool));
     let mut server = Config::new(false);
+    server.credit = false;
     server.peer = peer();
     let mut s = Box::new(Table::new(&server, &pool));
-    assert_eq!([c.open_stream(true), c.open_stream(true)], [Ok(0), Ok(4)]);
-    assert_eq!([c.open_stream(false), c.open_stream(false)], [Ok(2), Ok(6)]);
-    assert_eq!([s.open_stream(true), s.open_stream(true)], [Ok(1), Ok(5)]);
-    assert_eq!([s.open_stream(false), s.open_stream(false)], [Ok(3), Ok(7)]);
+    assert_eq!([c.open_stream(&pool, true), c.open_stream(&pool, true)], [Ok(0), Ok(4)]);
+    assert_eq!(
+        [c.open_stream(&pool, false), c.open_stream(&pool, false)],
+        [Ok(2), Ok(6)]
+    );
+    assert_eq!([s.open_stream(&pool, true), s.open_stream(&pool, true)], [Ok(1), Ok(5)]);
+    assert_eq!(
+        [s.open_stream(&pool, false), s.open_stream(&pool, false)],
+        [Ok(3), Ok(7)]
+    );
 }
 
 #[test]
 fn a_stream_over_the_cap_is_held_back_until_one_closes() {
-    let (mut pool, mut t) = setup(256, |c| c.max_streams = 2);
+    let (mut pool, mut t) = setup(1024, |c| c.max_streams = 2);
     t.on_stream_frame(&mut pool, 2, 0, &[1; 10], true).unwrap();
     t.on_stream_frame(&mut pool, 6, 0, &[1; 10], false).unwrap();
     let used = pool.used_chunks();
@@ -884,13 +910,13 @@ fn held_back_streams_cost_the_table_nothing_however_often_they_are_retried() {
             );
         }
     }
-    assert!(t.pending_control().is_none());
+    assert!(next_control(&mut t).is_none());
     assert_eq!(t.open_streams(), 20);
 }
 
 #[test]
 fn a_stream_id_far_beyond_the_next_is_a_violation() {
-    let (mut pool, mut t) = setup(256, |c| {
+    let (mut pool, mut t) = setup(1024, |c| {
         c.max_streams = 4;
         c.initial_stream_window = 16 * 1024;
     });
@@ -918,7 +944,7 @@ fn a_stream_id_far_beyond_the_next_is_a_violation() {
 
 #[test]
 fn frames_for_the_wrong_direction_or_unopened_local_streams_are_errors() {
-    let (mut pool, mut t) = setup(64, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     // Stream 3 is server-initiated unidirectional: the peer cannot send on it, and we never opened it.
     assert_eq!(
         t.on_stream_frame(&mut pool, 3, 0, &[1], false),
@@ -937,42 +963,47 @@ fn frames_for_the_wrong_direction_or_unopened_local_streams_are_errors() {
 #[test]
 fn locally_opened_streams_are_capped_by_the_peer_and_the_cap_grows() {
     let (mut pool, mut t) = setup(8, |c| c.peer.max_streams = 2);
-    assert_eq!(t.open_stream(false), Ok(3));
-    assert_eq!(t.open_stream(true), Ok(1));
-    assert_eq!(t.open_stream(false), Err(StreamError::StreamLimit));
+    assert_eq!(t.open_stream(&pool, false), Ok(3));
+    assert_eq!(t.open_stream(&pool, true), Ok(1));
+    assert_eq!(t.open_stream(&pool, false), Err(StreamError::StreamLimit));
     assert!(drain_control(&mut t).is_empty());
     // A closed stream frees a place.
     t.write(&mut pool, 3, &[1; 10], NO_CAP).unwrap();
     t.finish(3).unwrap();
     let frame = t.next_stream_frame(100).unwrap();
     t.on_acked(&mut pool, 3, frame.offset, frame.len as u64, frame.fin);
-    assert_eq!(t.open_stream(false), Ok(7));
-    assert_eq!(t.open_stream(false), Err(StreamError::StreamLimit));
+    // The place is free, but the peer has given credit for two streams in all: it raises that as its streams end.
+    assert_eq!(t.open_stream(&pool, false), Err(StreamError::StreamLimit));
+    t.on_max_streams(3);
+    assert_eq!(t.open_stream(&pool, false), Ok(7));
+    assert_eq!(t.open_stream(&pool, false), Err(StreamError::StreamLimit));
     // Limits only grow.
+    t.on_max_streams(1);
     t.set_peer_limits(&PeerLimits {
         window: 1,
         max_streams: 1,
     });
-    assert_eq!(t.open_stream(false), Err(StreamError::StreamLimit));
+    assert_eq!(t.open_stream(&pool, false), Err(StreamError::StreamLimit));
     t.set_peer_limits(&PeerLimits {
         window: 1,
-        max_streams: 3,
+        max_streams: 4,
     });
-    assert_eq!(t.open_stream(false), Ok(11));
+    assert_eq!(t.open_stream(&pool, false), Ok(11));
 }
 
 #[test]
 fn the_table_is_bounded() {
-    let (mut pool, mut t) = setup(64, |c| c.max_streams = 100);
+    // A pool that covers the receive window of the eight streams we open.
+    let (mut pool, mut t) = setup(1024, |c| c.max_streams = 100);
     // The peer's stream limit is clamped to the table size.
     assert_eq!(
         t.on_stream_frame(&mut pool, 4 * 8, 0, &[1], false),
         Err(StreamError::StreamLimit)
     );
     for _ in 0..8 {
-        t.open_stream(true).unwrap();
+        t.open_stream(&pool, true).unwrap();
     }
-    assert_eq!(t.open_stream(true), Err(StreamError::TableFull));
+    assert_eq!(t.open_stream(&pool, true), Err(StreamError::TableFull));
     assert_eq!(
         t.on_stream_frame(&mut pool, 0, 0, &[1], false),
         Err(StreamError::Exhausted),
@@ -983,13 +1014,13 @@ fn the_table_is_bounded() {
 
 #[test]
 fn closing_every_stream_returns_every_chunk() {
-    let (mut pool, mut t) = setup(256, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     for sid in [0u64, 4, 8] {
         t.on_stream_frame(&mut pool, sid, 5, &pattern(30_000, sid), false)
             .unwrap();
     }
-    let a = t.open_stream(true).unwrap();
-    let b = t.open_stream(false).unwrap();
+    let a = t.open_stream(&pool, true).unwrap();
+    let b = t.open_stream(&pool, false).unwrap();
     t.write(&mut pool, a, &pattern(50_000, 1), NO_CAP).unwrap();
     t.write(&mut pool, b, &pattern(50_000, 2), NO_CAP).unwrap();
     assert!(pool.used_chunks() > 0);
@@ -1002,9 +1033,9 @@ fn closing_every_stream_returns_every_chunk() {
 
 #[test]
 fn streams_are_served_in_urgency_then_id_order() {
-    let (mut pool, mut t) = setup(256, |_| {});
+    let (mut pool, mut t) = setup(1024, |_| {});
     // Ids 1, 5 and 9: (urgency 3, id 1), (3, 5) and (1, 9).
-    let ids = [1u64, 5, 9].map(|_| t.open_stream(true).unwrap());
+    let ids = [1u64, 5, 9].map(|_| t.open_stream(&pool, true).unwrap());
     assert_eq!(ids, [1, 5, 9]);
     t.set_urgency(9, 1).unwrap();
     assert_eq!(t.set_urgency(99, 1), Err(StreamError::UnknownStream));
@@ -1021,9 +1052,9 @@ fn streams_are_served_in_urgency_then_id_order() {
 
 #[test]
 fn retransmissions_precede_new_data_within_a_stream_and_urgency_beats_both() {
-    let (mut pool, mut t) = setup(256, |_| {});
-    let a = t.open_stream(true).unwrap();
-    let b = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let a = t.open_stream(&pool, true).unwrap();
+    let b = t.open_stream(&pool, true).unwrap();
     t.set_urgency(b, 5).unwrap();
     t.write(&mut pool, a, &pattern(3000, 1), NO_CAP).unwrap();
     t.write(&mut pool, b, &pattern(3000, 2), NO_CAP).unwrap();
@@ -1059,8 +1090,8 @@ fn a_stream_without_credit_does_not_hold_up_a_worse_one() {
     config.peer = peer();
     config.peer.window = 2000;
     let mut t = Box::new(Streams::<Src<'_>, 4, 65>::new(&config, &pool));
-    let a = t.open_stream(false).unwrap();
-    let b = t.open_stream(false).unwrap();
+    let a = t.open_stream(&pool, false).unwrap();
+    let b = t.open_stream(&pool, false).unwrap();
     t.set_urgency(a, 0).unwrap();
     t.open_source(a, Src { data: &data, log: &log }, 10_000).unwrap();
     t.open_source(b, Src { data: &data, log: &log }, 1000).unwrap();
@@ -1154,7 +1185,7 @@ proptest! {
                 }
             }
             // Acknowledge refusals so the queue turns over.
-            while let Some(f) = t.pending_control() {
+            while let Some(f) = next_control(&mut t) {
                 if matches!(f, ControlFrame::ResetStream { .. }) {
                     t.on_control_acked(&mut pool, &f);
                 }
@@ -1169,8 +1200,8 @@ proptest! {
 
 #[test]
 fn hot_paths_do_not_allocate() {
-    let (mut pool, mut t) = setup(256, |_| {});
-    let id = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
     let payload = [3u8; 1400];
     let mut buf = [0u8; 1500];
     let stats = measure(|| {
@@ -1192,7 +1223,7 @@ fn hot_paths_do_not_allocate() {
             t.copy_out(&pool, &again, &mut buf).unwrap();
             t.on_acked(&mut pool, id, again.offset, again.len as u64, false);
             let _ = t.poll_writable(1 << 20);
-            while t.pending_control().is_some() {}
+            while next_control(&mut t).is_some() {}
         }
     });
     assert_eq!(stats.count(), 0);
@@ -1200,7 +1231,7 @@ fn hot_paths_do_not_allocate() {
 
 #[test]
 fn holding_a_stream_back_does_not_allocate() {
-    let (mut pool, mut t) = setup(64, |c| {
+    let (mut pool, mut t) = setup(1024, |c| {
         c.max_streams = 1;
         c.initial_stream_window = 16 * 1024;
     });
@@ -1211,7 +1242,7 @@ fn holding_a_stream_back_does_not_allocate() {
                 t.on_stream_frame(&mut pool, 4, 0, &[1; 10], false),
                 Err(StreamError::Exhausted)
             );
-            assert!(t.pending_control().is_none());
+            assert!(next_control(&mut t).is_none());
         }
     });
     assert_eq!(stats.count(), 0);
@@ -1233,7 +1264,7 @@ fn source_frame_building_does_not_allocate() {
     let mut config = Config::new(false);
     config.peer = peer();
     let mut t = Box::new(Streams::<Plain<'_>, 2, 65>::new(&config, &pool));
-    let id = t.open_stream(false).unwrap();
+    let id = t.open_stream(&pool, false).unwrap();
     t.open_source(id, Plain(&data), data.len() as u64).unwrap();
     let mut buf = [0u8; 1500];
     let stats = measure(|| {
@@ -1246,7 +1277,7 @@ fn source_frame_building_does_not_allocate() {
 
 #[test]
 fn a_stop_request_is_one_control_frame_sent_again_only_when_lost() {
-    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
     t.on_stream_frame(&mut pool, 0, 0, b"hello", false).unwrap();
     t.stop_sending(0, 5).unwrap();
     let frame = ControlFrame::StopSending { id: 0, error_code: 5 };
@@ -1266,7 +1297,7 @@ fn a_stop_request_is_one_control_frame_sent_again_only_when_lost() {
 
 #[test]
 fn a_stop_request_is_dropped_once_the_peer_ended_the_stream() {
-    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
     t.on_stream_frame(&mut pool, 4, 0, b"x", true).unwrap();
     t.stop_sending(4, 1).unwrap();
     assert!(drain_control(&mut t).is_empty(), "a finished stream was asked to stop");
@@ -1284,8 +1315,8 @@ fn a_stop_request_is_dropped_once_the_peer_ended_the_stream() {
 
 #[test]
 fn a_stop_request_resets_a_send_half_once_and_refuses_what_has_no_send_half() {
-    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
-    let id = t.open_stream(true).unwrap();
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
+    let id = t.open_stream(&pool, true).unwrap();
     t.write(&mut pool, id, b"data", NO_CAP).unwrap();
     assert_eq!(t.on_stop_sending(&mut pool, id, 9), Ok(true));
     assert_eq!(
@@ -1301,7 +1332,7 @@ fn a_stop_request_resets_a_send_half_once_and_refuses_what_has_no_send_half() {
     assert_eq!(t.write(&mut pool, id, b"more", NO_CAP), Err(StreamError::Finished));
     // A unidirectional stream of the peer has no send half here; one of ours has no receive half.
     assert_eq!(t.on_stop_sending(&mut pool, 2, 1), Err(StreamError::StreamState));
-    let uni = t.open_stream(false).unwrap();
+    let uni = t.open_stream(&pool, false).unwrap();
     assert_eq!(t.stop_sending(uni, 1), Err(StreamError::StreamState));
     assert_eq!(t.stop_sending(99, 1), Err(StreamError::UnknownStream));
     // A stream of the peer that was never heard of is opened by the stop (with the ones below it), and reset at once.
@@ -1311,9 +1342,121 @@ fn a_stop_request_resets_a_send_half_once_and_refuses_what_has_no_send_half() {
 
 #[test]
 fn a_stop_request_for_a_stream_far_beyond_the_limit_is_a_violation() {
-    let (mut pool, mut t) = setup(64, |c| c.initial_stream_window = 64 * 1024);
+    let (mut pool, mut t) = setup(1024, |c| c.initial_stream_window = 64 * 1024);
     assert_eq!(
         t.on_stop_sending(&mut pool, 4 * 10_000, 1),
         Err(StreamError::StreamLimit)
     );
+}
+
+#[test]
+fn a_local_stream_window_is_charged_to_the_ledger() {
+    // Regression: a peer stream stored an eighth of the window and the application read it, so its window moved to a
+    // span that is not chunk-aligned (three chunks, one held, two of credit). Opening a local stream then added two chunks of
+    // credit the ledger never checked, and the credit granted exceeded what the pool could cover.
+    let chunk = CHUNK_SIZE as u64;
+    let (mut pool, mut t) = setup(4, |c| {
+        c.initial_stream_window = 2 * chunk;
+        c.max_stream_window = 3 * chunk;
+    });
+    let eighth = (2 * chunk / 8) as usize;
+    t.on_stream_frame(&mut pool, 0, 0, &vec![1; eighth], false).unwrap();
+    assert_eq!(read_all(&mut t, &mut pool, 0).len(), eighth);
+    assert_eq!(t.granted_unreceived(), 2 * chunk);
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+    assert_eq!(t.open_stream(&pool, true), Err(StreamError::Exhausted));
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+    // A stream with no receive half takes no credit, so it opens.
+    t.open_stream(&pool, false).unwrap();
+    // The credit comes back when the peer stream ends: the local stream then opens and is counted.
+    t.on_stream_frame(&mut pool, 0, eighth as u64, b"", true).unwrap();
+    assert_eq!(t.recv_status(0), Some(RecvStatus::Finished));
+    t.consume(&mut pool, 0, 0, 0, 0).unwrap();
+    let id = t.open_stream(&pool, true).unwrap();
+    assert_eq!(t.stream_recv_window(id), Some((2 * chunk, 2 * chunk)));
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+}
+
+// ---- stream credit --------------------------------------------------------------------------------------------
+
+/// Move every frame `from` wants to send to `to`, as an honest network would.
+fn deliver(from: &mut Table, from_pool: &BufferPool<'_>, to: &mut Table, to_pool: &mut BufferPool<'_>) {
+    while let Some(c) = from.next_stream_frame(1200) {
+        let mut buf = vec![0u8; c.len];
+        assert_eq!(from.copy_out(from_pool, &c, &mut buf).unwrap(), c.len);
+        assert_eq!(
+            to.on_stream_frame(to_pool, c.id, c.offset, &buf, c.fin),
+            Ok(()),
+            "a stream inside the credit was held back"
+        );
+    }
+}
+
+#[test]
+fn the_opener_stops_at_the_credit_and_resumes_on_a_raise() {
+    // The receiver: 32 chunks, windows of 4 chunks: eight windows fit, a quarter of them are credit, so it tells the opener 2.
+    let (mut rpool, mut rx) = setup_credit(32, |c| c.initial_stream_window = 64 * 1024);
+    assert_eq!(rx.advertised_streams(), 2);
+    let mut opener = Config::new(true);
+    opener.peer = PeerLimits {
+        window: 64 * 1024,
+        max_streams: rx.advertised_streams(),
+    };
+    let mut opool = BufferPool::new_boxed(16);
+    let mut tx = Box::new(Table::new(&opener, &opool));
+    let first = [
+        tx.open_stream(&opool, false).unwrap(),
+        tx.open_stream(&opool, false).unwrap(),
+    ];
+    assert_eq!(
+        tx.open_stream(&opool, false),
+        Err(StreamError::StreamLimit),
+        "no credit for a third"
+    );
+    for id in first {
+        tx.write(&mut opool, id, &[7; 100], NO_CAP).unwrap();
+        tx.finish(id).unwrap();
+    }
+    deliver(&mut tx, &opool, &mut rx, &mut rpool);
+    assert_eq!(rx.open_streams(), 2);
+    // The receiver reads both to their end: the streams end and it has room for two more.
+    for id in first {
+        assert_eq!(read_all(&mut rx, &mut rpool, id).len(), 100);
+    }
+    assert_eq!(rx.open_streams(), 0);
+    rx.regrant(&rpool);
+    let raise = std::iter::from_fn(|| rx.pending_control()).find_map(|f| match f {
+        ControlFrame::MaxStreams { limit } => Some(limit),
+        _ => None,
+    });
+    assert_eq!(raise, Some(4), "two admitted plus room for two more");
+    tx.on_max_streams(4);
+    let more = [
+        tx.open_stream(&opool, false).unwrap(),
+        tx.open_stream(&opool, false).unwrap(),
+    ];
+    assert_eq!(tx.open_stream(&opool, false), Err(StreamError::StreamLimit));
+    for id in more {
+        tx.write(&mut opool, id, &[9; 50], NO_CAP).unwrap();
+        tx.finish(id).unwrap();
+    }
+    deliver(&mut tx, &opool, &mut rx, &mut rpool);
+    assert_eq!(rx.open_streams(), 2);
+}
+
+#[test]
+fn the_credit_given_to_the_peer_keeps_its_windows_in_the_pool() {
+    // 32 chunks, windows of 4 chunks, credit for 2 streams: 8 chunks stay free for them.
+    let (mut pool, mut t) = setup_credit(32, |c| c.initial_stream_window = 64 * 1024);
+    assert_eq!(t.advertised_streams(), 2);
+    // Our own streams may take the rest only: 24 chunks, then the next would touch the reserved 8.
+    for _ in 0..6 {
+        t.open_stream(&pool, true).unwrap();
+    }
+    assert_eq!(t.open_stream(&pool, true), Err(StreamError::Exhausted));
+    assert!(t.granted_unreceived() <= pool.available_bytes());
+    // The two streams the peer may open are admitted, and nothing is held back.
+    t.on_stream_frame(&mut pool, 0, 0, &[1; 10], false).unwrap();
+    t.on_stream_frame(&mut pool, 4, 0, &[1; 10], false).unwrap();
+    assert_eq!(t.open_streams(), 8);
 }

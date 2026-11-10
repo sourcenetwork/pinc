@@ -105,7 +105,7 @@ fn view_json(v: &TableView) -> String {
     let slots: Vec<String> = v.slots.iter().map(slot_json).collect();
     let (ms, mb, mr) = v.meter;
     format!(
-        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"ms":{},"mb":{mb},"mr":{mr}}}"#,
+        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"ms":{},"mb":{mb},"mr":{mr},"ad":[{},{},{}],"adp":{}}}"#,
         slots.join(","),
         v.remote_next[0],
         v.remote_next[1],
@@ -115,7 +115,11 @@ fn view_json(v: &TableView) -> String {
         v.local_live,
         v.ext,
         v.target,
-        opt(ms)
+        opt(ms),
+        v.admit[0],
+        v.admit[1],
+        v.admit[2],
+        b(v.admit_pend)
     )
 }
 
@@ -350,6 +354,10 @@ impl Run<'_> {
                 self.control.push(ControlFrame::StopSending { id, error_code });
                 format!(r#""op":"pending","kind":"stop","fid":{id},"max":{error_code}"#)
             }
+            Some(ControlFrame::MaxStreams { limit }) => {
+                self.control.push(ControlFrame::MaxStreams { limit });
+                format!(r#""op":"pending","kind":"msts","fid":-1,"max":{limit}"#)
+            }
         };
         self.log(&head);
     }
@@ -382,7 +390,11 @@ impl Run<'_> {
                 self.t.on_control_acked(&mut self.pool, &f);
                 self.log(&format!(r#""op":"ackedstop","id":{id}"#));
             }
-            (ControlFrame::MaxStreamData { .. }, false) => {}
+            (ControlFrame::MaxStreams { limit }, true) => {
+                self.t.on_control_lost(&f);
+                self.log(&format!(r#""op":"lostmsts","limit":{limit}"#));
+            }
+            (ControlFrame::MaxStreamData { .. } | ControlFrame::MaxStreams { .. }, false) => {}
         }
     }
 
@@ -428,8 +440,15 @@ impl Run<'_> {
         ));
     }
 
+    /// The peer raised the number of streams we may open (`MAX_STREAMS`).
+    fn max_streams(&mut self) {
+        let limit = 2 + self.below(3);
+        self.t.on_max_streams(limit);
+        self.log(&format!(r#""op":"maxstreams","limit":{limit}"#));
+    }
+
     fn open_local(&mut self) {
-        let _ = self.t.open_stream(true);
+        let _ = self.t.open_stream(&self.pool, true);
         self.log(r#""op":"open""#);
     }
 
@@ -509,6 +528,7 @@ impl Run<'_> {
             92..=93 => self.stop_request(),
             94..=95 => self.peer_stop(),
             96..=97 => self.ext_users(),
+            98 if self.below(2) == 0 => self.max_streams(),
             98 => self.burst(),
             _ => {
                 self.t.close_all(&mut self.pool);
@@ -558,7 +578,7 @@ fn run(seed: u64, out: &mut String, run: u32) {
 fn stream_table_runs_match_the_models() {
     big_stack(|| {
         let mut out = String::new();
-        for run_id in 1..=14u32 {
+        for run_id in 1..=24u32 {
             run(0x5354_5245_414d_0000 + u64::from(run_id), &mut out, run_id);
         }
         for op in [
@@ -566,6 +586,8 @@ fn stream_table_runs_match_the_models() {
             "consume",
             "pending",
             "lostmsd",
+            "lostmsts",
+            "maxstreams",
             "lostreset",
             "ackedreset",
             "reset",
@@ -594,6 +616,7 @@ fn stream_table_runs_match_the_models() {
             r#""err":"Exhausted""#,
             r#""defer":true"#,
             r#""kind":"msd""#,
+            r#""kind":"msts""#,
             r#""kind":"reset""#,
         ] {
             assert!(out.contains(needle), "the runs never reach {needle}");

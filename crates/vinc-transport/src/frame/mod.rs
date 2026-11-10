@@ -14,6 +14,7 @@
 //! | `0x05` | `STOP_SENDING` | stream id, error code |
 //! | `0x08`-`0x0f` | STREAM | stream id, offset (optional), length (optional), data |
 //! | `0x11` | `MAX_STREAM_DATA` | stream id, max |
+//! | `0x12` | `MAX_STREAMS` | limit: the streams the receiver admits in all, of every kind |
 //! | `0x1a`, `0x1b` | `PATH_CHALLENGE`, `PATH_RESPONSE` | 8 bytes |
 //! | `0x1c` | CLOSE | error code (see [`code`](crate::conn::code)) |
 //! | `0x30`, `0x31` | DATAGRAM | without length (data to the end of the packet), with length (varint, then data) |
@@ -24,9 +25,10 @@
 //! | `0x3f` | `NEW_TICKETS` | a ticket batch: count (1 byte, 0 to 4), then per ticket the id (16 bytes) and the lifetime in seconds (4 bytes) |
 //! | `0x40` and up | extension | length (varint), body bytes |
 //!
-//! There is no connection-level credit frame, no blocked frame, no stream-count frame, no frame to stop a connection, and no frame for
-//! connection ids: the receiver grants credit per stream with `MAX_STREAM_DATA`, leaves a stream it cannot hold yet
-//! unacknowledged so its opener retransmits it, and a connection id is derived from the session secret. An ACK carries no delay.
+//! There is no connection-level credit frame, no blocked frame, no frame to stop a connection, and no frame for
+//! connection ids: the receiver grants credit per stream with `MAX_STREAM_DATA` and says how many streams it admits with
+//! `MAX_STREAMS`, so an opener never sends a stream the receiver has no room for; a stream that arrives anyway and
+//! does not fit is left unacknowledged so its opener retransmits it, and a connection id is derived from the session secret. An ACK carries no delay.
 //!
 //! STREAM type bits: `0x04` OFF (an offset follows the stream id; absent means 0), `0x02` LEN (a length follows;
 //! absent means the data runs to the end of the packet, so the frame must be the last), `0x01` FIN. The stream end
@@ -94,6 +96,8 @@ pub mod ty {
     pub const STREAM_LAST: u64 = 0x0f;
     /// `MAX_STREAM_DATA`.
     pub const MAX_STREAM_DATA: u64 = 0x11;
+    /// `MAX_STREAMS`.
+    pub const MAX_STREAMS: u64 = 0x12;
     /// `PATH_CHALLENGE`.
     pub const PATH_CHALLENGE: u64 = 0x1a;
     /// `PATH_RESPONSE`.
@@ -203,6 +207,11 @@ pub enum Frame<'a> {
         id: u64,
         /// The new stream-level limit.
         max: u64,
+    },
+    /// `MAX_STREAMS`.
+    MaxStreams {
+        /// The streams the sender admits in all, of every kind.
+        limit: u64,
     },
     /// `PATH_CHALLENGE`.
     PathChallenge([u8; 8]),

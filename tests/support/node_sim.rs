@@ -47,10 +47,22 @@ use crate::Caps;
 use crate::connect_host::{Outbox, answer_parts};
 use crate::core_net::{CC, CCT, CF, CN, CNP, CPK, CTK, metered};
 
-/// The chunks of each session's buffer pool. A hub session carries a stream in each direction (the hub opens its own as
-/// soon as it accepts, to send the replay floor), and a stream is admitted only while the pool covers the receive
-/// window of every stream: the pool holds two windows (256 KiB each) and the send buffers.
+/// The chunks of each session's buffer pool unless a test asks for fewer. A hub session carries a stream in each
+/// direction (the hub opens its own as soon as it accepts, to send the replay floor), each with its receive window
+/// charged to the pool, beside the send buffers.
 const CHUNKS_PER_CONN: usize = 64;
+
+thread_local! {
+    static POOL_CHUNKS: std::cell::Cell<usize> = const { std::cell::Cell::new(CHUNKS_PER_CONN) };
+}
+
+/// Run `f`, which builds its nodes, with `chunks` chunks in every session's buffer pool.
+pub fn with_pool_chunks<T>(chunks: usize, f: impl FnOnce() -> T) -> T {
+    let before = POOL_CHUNKS.replace(chunks);
+    let out = f();
+    POOL_CHUNKS.set(before);
+    out
+}
 
 pub const NK: usize = 24;
 pub const ND: usize = 384;
@@ -73,7 +85,7 @@ impl SimApps for NoApps {
 const LOCAL_RELAY: u8 = 0xFE;
 
 fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC> {
-    let pool = BufferPool::new_boxed(CHUNKS_PER_CONN);
+    let pool = BufferPool::new_boxed(POOL_CHUNKS.get());
     let streams: &'static mut Streams<S, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
     let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));

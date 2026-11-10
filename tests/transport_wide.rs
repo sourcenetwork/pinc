@@ -22,7 +22,7 @@ const WIDE_RING: usize = 2600;
 /// The granted window: just above the 40 MB at which the packet number grows to 3 bytes.
 const WINDOW: u64 = 41_000_000;
 /// Pool chunks: the table clamps a window to half the pool.
-const WIDE_CHUNKS: usize = 5120;
+const WIDE_CHUNKS: usize = 10_240;
 /// Enough data for more than 2^16 packets from A at 1452 bytes per datagram.
 const BULK: usize = 100_000_000;
 

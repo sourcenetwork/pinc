@@ -45,9 +45,12 @@ def tabOf (v : J) : Except String Tab := do
   let slots ← match (← field v "slots").arr? with
     | some a => a.toList.mapM slotOf
     | none => throw "slots is not an array"
+  let ad ← natList (← field v "ad")
+  check (ad.length == 3) "ad is not a triple"
   pure { slots, rn := ← pairN v "rn", lo := ← pairN v "lo", rl := ← natF v "rl", ll := ← natF v "ll",
          ext := ← natF v "ext", tgt := ← natF v "tgt",
-         ms := ← optNat v "ms", mb := ← natF v "mb", mr := ← natF v "mr" }
+         ms := ← optNat v "ms", mb := ← natF v "mb", mr := ← natF v "mr",
+         adlim := ad[0]!, adv := ad[1]!, adat := ad[2]!, adpend := ← boolF v "adp" }
 
 /-- The replay state: the table, and whether a run is open. -/
 structure St where
@@ -92,10 +95,12 @@ def replayEvent (j : J) (st : St) : Except String St := do
     | "pending" =>
       let (T2, kind, id, mx) := pending T
       check (kind == (← strF j "kind")) s!"pending: kind {kind}"
-      check ((if kind == "none" then -1 else (id : Int)) == (← intF j "fid")) "pending: stream"
+      check ((if kind == "none" || kind == "msts" then -1 else (id : Int)) == (← intF j "fid")) "pending: stream"
       check (mx == (← natF j "max")) "pending: limit"
       upd T2 "pending"
     | "lostmsd" => upd (ctlLostMsd T (← natF j "id") (← natF j "max")) "lostmsd"
+    | "lostmsts" => upd (ctlLostMsts T (← natF j "limit")) "lostmsts"
+    | "maxstreams" => upd (recvMaxStreams T (← natF j "limit")) "maxstreams"
     | "lostreset" => upd (ctlLostReset T (← natF j "id")) "lostreset"
     | "loststop" => upd (ctlLostStop T (← natF j "id")) "loststop"
     | "ackedstop" => upd (ctlAckedStop T (← natF j "id")) "ackedstop"

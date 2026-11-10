@@ -18,6 +18,7 @@
     reason = "offsets are reduced modulo a chunk or ring size before narrowing"
 )]
 
+mod credit;
 mod flow;
 mod recv;
 mod send;
@@ -167,6 +168,11 @@ pub enum ControlFrame {
         /// The application error code the sender resets with.
         error_code: u64,
     },
+    /// A new limit on the streams the peer may have opened in all (`MAX_STREAMS`).
+    MaxStreams {
+        /// The new limit.
+        limit: u64,
+    },
     /// A stream reset.
     ResetStream {
         /// The stream.
@@ -227,6 +233,9 @@ pub struct Config {
     pub max_streams: u64,
     /// The peer's limits, if already known; otherwise set them with [`Streams::set_peer_limits`].
     pub peer: PeerLimits,
+    /// Whether the table gives the peer stream credit and keeps the pool for it. Turn it off only for a table used on
+    /// its own, with no peer that honours the credit: it then advertises none.
+    pub credit: bool,
 }
 
 impl Config {
@@ -241,6 +250,7 @@ impl Config {
                 window: 0,
                 max_streams: 0,
             },
+            credit: true,
         }
     }
 }
@@ -250,4 +260,7 @@ impl Config {
 pub struct StreamStats {
     /// Range maps that were full, so a lost range was widened or an acknowledgement turned back into a retransmission.
     pub range_overflows: u64,
+    /// Peer streams held back for want of a slot or of room in the pool (their packet went unacknowledged). Nonzero
+    /// means the peer opened streams beyond the credit it was given, or other users of the pool took the room.
+    pub held_back: u64,
 }

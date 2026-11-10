@@ -113,6 +113,8 @@ fn frames_have_the_documented_bytes() {
             vec![0x0f, 1, 7, 0],
         ),
         (Frame::MaxStreamData { id: 8, max: 5 }, vec![0x11, 8, 5]),
+        (Frame::MaxStreams { limit: 9 }, vec![0x12, 9]),
+        (Frame::MaxStreams { limit: 300 }, vec![0x12, 0xac, 0x02]),
         (Frame::StopSending { id: 4, error: 9 }, vec![0x05, 4, 9]),
         (
             Frame::StopSending {
@@ -232,8 +234,8 @@ fn stream_off_bit_with_zero_offset_is_accepted_and_re_encoded_canonically() {
 #[test]
 fn unassigned_types_below_0x40_are_errors() {
     let assigned = [
-        0x00u64, 0x01, 0x02, 0x04, 0x05, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x11, 0x1a, 0x1b, 0x1c, 0x30,
-        0x31, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+        0x00u64, 0x01, 0x02, 0x04, 0x05, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x11, 0x12, 0x1a, 0x1b, 0x1c,
+        0x30, 0x31, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
     ];
     for t in 0..0x40u64 {
         let mut payload = vec![t as u8];
@@ -328,6 +330,10 @@ fn validation_errors() {
         Err(FrameError::UnknownType(0x3f))
     );
     let big = Frame::MaxStreamData { id: 0, max: 1 << 63 };
+    let mut w = Writer::new(&mut buf);
+    assert_eq!(big.write(&mut w), Err(FrameError::Wire(WireError::VarintOverflow)));
+    assert!(w.written().is_empty());
+    let big = Frame::MaxStreams { limit: 1 << 63 };
     let mut w = Writer::new(&mut buf);
     assert_eq!(big.write(&mut w), Err(FrameError::Wire(WireError::VarintOverflow)));
     assert!(w.written().is_empty());

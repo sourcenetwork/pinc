@@ -185,8 +185,8 @@ fn deep_reordering_at_a_large_window_drops_nothing_for_room_or_as_a_duplicate() 
 fn many_concurrent_streams_in_both_directions() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
-        // Every admitted stream is charged its whole window, so the pool must hold the windows of all 48 at once.
-        let (mut sa, mut sb) = (Store::with_chunks(true, 4096), Store::with_chunks(false, 4096));
+        // Every admitted stream is charged its whole window, so the pool must hold the windows of all 40 at once.
+        let (mut sa, mut sb) = (Store::with_chunks(true, 8192), Store::with_chunks(false, 8192));
         let mut net = setup(
             &mut w,
             &mut sa,
@@ -194,12 +194,15 @@ fn many_concurrent_streams_in_both_directions() {
             Link::new(31, Params::new(5 * MS).loss(0.5).reorder(1.0, 2 * MS)),
         );
         assert!(net.connect(net.now + 10 * SEC));
-        let a_ids: Vec<u64> = (0..40).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        // The table keeps half its slots free for the credit it gave, so 32 of the 64 are ours to open. Both ends open far more than the credit of the handshake: the test is about delivery under loss.
+        net.a.conn.raise_stream_credit(100);
+        net.b.conn.raise_stream_credit(100);
+        let a_ids: Vec<u64> = (0..32).map(|_| net.a.conn.open_bi().unwrap()).collect();
         let b_ids: Vec<u64> = (0..8).map(|_| net.b.conn.open_uni().unwrap()).collect();
-        let a_data: Vec<Vec<u8>> = (0..40).map(|i| pattern(100_000 + i * 1_000, 100 + i as u64)).collect();
+        let a_data: Vec<Vec<u8>> = (0..32).map(|i| pattern(100_000 + i * 1_000, 100 + i as u64)).collect();
         let b_data: Vec<Vec<u8>> = (0..8).map(|i| pattern(60_000 + i * 500, 200 + i as u64)).collect();
-        let (mut ao, mut bo) = (vec![0usize; 40], vec![0usize; 8]);
-        let (mut a_fin, mut b_fin) = (vec![false; 40], vec![false; 8]);
+        let (mut ao, mut bo) = (vec![0usize; 32], vec![0usize; 8]);
+        let (mut a_fin, mut b_fin) = (vec![false; 32], vec![false; 8]);
         let ok = net.run(net.now + 600 * SEC, |n| {
             for (i, id) in a_ids.iter().enumerate() {
                 while ao[i] < a_data[i].len() {

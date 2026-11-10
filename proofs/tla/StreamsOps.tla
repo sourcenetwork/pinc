@@ -10,7 +10,8 @@
 (* Reset (on_reset_stream), Consume, Pending (pending_control), CtlLostMsd *)
 (* CtlLostReset and CtlLostStop (on_control_lost), CtlAckedReset and       *)
 (* CtlAckedStop (on_control_acked), StopReq (stop_sending), OnStop         *)
-(* (on_stop_sending), OpenLocal (open_stream, bidirectional), AppReset     *)
+(* (on_stop_sending), OpenLocal (open_stream, bidirectional), RecvMaxStreams *)
+(* (on_max_streams) and CtlLostMsts (on_control_lost, MAX_STREAMS), AppReset *)
 (* (reset), Finish (the                                                    *)
 (* send half completing), ExtTo (the other users of the pool: send         *)
 (* buffers, datagram queues, the early-data buffer, which the code charges *)
@@ -29,6 +30,20 @@
 (* users released); an earlier version retried it only after a consume,    *)
 (* which stalled a stream when the application had nothing left to read.   *)
 (* RETRY = FALSE is that earlier behaviour (a witness config).             *)
+(*                                                                         *)
+(* Local streams. A bidirectional stream this endpoint opens has the receive *)
+(* window the connection advertised, which cannot be smaller, so OpenLocal *)
+(* opens it only when that window fits beside the credit granted           *)
+(* (Streams_local.cfg is the finding this closed, now a passing check).    *)
+(*                                                                         *)
+(* Stream credit. The receiver tells the opener how many streams it admits *)
+(* in all (T.ad.adv: the handshake value, raised by MAX_STREAMS), keeps the *)
+(* windows of the streams the opener has not opened yet in the pool         *)
+(* (Resv), and the opener never opens beyond the limit it was given        *)
+(* (T.ad.lim). A raise is sent when the room grew by an eighth of the      *)
+(* credit last given, or at once when the opener used all of it. The       *)
+(* held-back rule below stays as the net for a peer that ignores the       *)
+(* credit and for other users of the pool.                                 *)
 (*                                                                         *)
 (* Held back streams. A peer stream the table has no room for yet is      *)
 (* stored nowhere, answered with nothing and never acknowledged: Locate    *)
@@ -61,9 +76,15 @@ NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi 
             sdone |-> TRUE, srst |-> 0,
             stop |-> 0, qcode |-> -1, scode |-> -1]
 
+WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
+QuarterFit(f) == Max(f \div 4, Min(f, 1))   \* a quarter of f windows, one at least when one fits
+CapLive == Min(MAXREM, Max(N \div 2, 1))     \* the live peer streams: at most half the slots
+Adv0 == Min(CapLive, QuarterFit((B * CH) \div WinC))
+
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
           rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW,
-          m |-> [start |-> -1, bytes |-> 0, rate |-> 0]]
+          m |-> [start |-> -1, bytes |-> 0, rate |-> 0],
+          ad |-> [lim |-> PM, adv |-> Adv0, at |-> 0, pend |-> FALSE]]
 
 (* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most RR ---- *)
 InsertR(rs, s, e) ==
@@ -106,6 +127,9 @@ Used(T) == HeldTotal(T) + T.ext
 AvailC(T) == B - Used(T)
 Avail(T) == AvailC(T) * CH
 GU(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Unreceived(T.slots[i]) IN f[N]
+AdmittedN(T) == T.rn[0] + T.rn[1]                    \* the peer streams admitted in all
+CreditLeft(T) == Max(T.ad.adv - AdmittedN(T), 0)     \* the streams the peer may still open inside the credit
+Resv(T) == CreditLeft(T) * WinC                     \* the pool bytes kept for them
 
 SetSlot(T, i, r) == [T EXCEPT !.slots[i] = r]
 FindSlot(T, id) == IF \E i \in 1..N : T.slots[i].id = id THEN CHOOSE i \in 1..N : T.slots[i].id = id ELSE 0
@@ -120,13 +144,24 @@ GrantOne(T, i, first) ==
              c == Due(r1)
          IN IF c = -1 THEN SetSlot(T, i, [r1 EXCEPT !.defer = FALSE])
             ELSE LET demand == GU(T) - Unreceived(r) + PoolDemand(r1, c)
-                 IN IF demand <= Avail(T)
+                 IN IF demand + Resv(T) <= Avail(T)
                        THEN SetSlot(T, i, [r1 EXCEPT !.limit = c, !.pend = TRUE, !.defer = FALSE])
                        ELSE SetSlot(T, i, [r1 EXCEPT !.defer = TRUE])
 GrantFrom(T, i, first) ==
     LET f[k \in 0..N] == IF k = 0 THEN T ELSE GrantOne(f[k - 1], k, first) IN f[N]
 GrantRun(T, first) == GrantFrom(T, 1, first)
-Regrant(T) == IF RETRY /\ AnyDefer(T) THEN GrantRun(T, 0) ELSE T
+(* admit_room / refresh_admit (Streams): the streams that could be admitted now, and the raise to queue *)
+FreeSlots(T) == Cardinality({i \in 1..N : T.slots[i].id = -1})
+AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div WinC
+                IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), QuarterFit(fit))
+RefreshAdmit(T) ==
+    LET now == AdmittedN(T) + AdmitRoom(T)
+        usedUp == T.ad.adv <= AdmittedN(T)
+        step == Max((T.ad.adv - T.ad.at) \div 8, 1)
+    IN IF now > T.ad.adv /\ (usedUp \/ now - T.ad.adv >= step)
+          THEN [T EXCEPT !.ad.adv = now, !.ad.at = AdmittedN(T), !.ad.pend = TRUE]
+          ELSE T
+Regrant(T) == LET T1 == RefreshAdmit(T) IN IF RETRY /\ AnyDefer(T1) THEN GrantRun(T1, 0) ELSE T1
 
 (* ---- slots ---- *)
 FreeSlot(T, i) ==
@@ -150,10 +185,12 @@ AllocSlot(T, id) ==
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
 (* ---- admission of peer streams (Streams::admits, locate) ---- *)
+(* the initial windows of count new streams, in whole chunks, fit beside the credit granted (Streams::windows_fit):
+   the one test for a peer stream and for a local one *)
+WindowsFit(T, k) == GU(T) + k * WinC <= Avail(T)
 Admits(T, c, next, count) ==
     LET free == Cardinality({i \in 1..N : T.slots[i].id = -1})
-        window == count * (((SW + CH - 1) \div CH) * CH)
-    IN T.rl + count <= MAXREM /\ free >= count /\ GU(T) + window <= Avail(T)
+    IN T.rl + count <= MAXREM /\ free >= count /\ WindowsFit(T, Max(count, CreditLeft(T)))
 
 (* Locate: the new table, the slot (0 = none), the error ("ok" when none) *)
 Locate(T, id) ==
@@ -244,7 +281,8 @@ Consume(T, id, n, now, srtt) ==
    reset first, then its stop request, then its limit. *)
 PendingSlot(T) == IF \E i \in 1..N : Hot(T.slots[i]) THEN CHOOSE i \in 1..N : (Hot(T.slots[i]) /\ \A j \in 1..(i - 1) : ~Hot(T.slots[j])) ELSE 0
 Pending(T) ==
-    LET i == PendingSlot(T)
+    IF T.ad.pend THEN [t |-> [T EXCEPT !.ad.pend = FALSE], kind |-> "msts", id |-> -1, max |-> T.ad.adv]
+    ELSE LET i == PendingSlot(T)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
     IN IF i = 0 THEN [t |-> T, kind |-> "none", id |-> -1, max |-> 0]
        ELSE IF r.srst = 1 THEN [t |-> SetSlot(T, i, [r EXCEPT !.srst = 2]), kind |-> "reset", id |-> r.id, max |-> r.scode]
@@ -276,11 +314,18 @@ CtlAckedStop(T, id) ==
        ELSE IF T.slots[i].stop \in {1, 2} THEN SetSlot(T, i, [T.slots[i] EXCEPT !.stop = 3, !.qcode = -1]) ELSE T
 
 (* ---- the send half, as far as the receive side sees it ---- *)
+\* the opener: a stream opens only inside the credit the peer gave (T.ad.lim, in all), and with its slot and its window
+\* in the pool beside the slots and windows kept for the peer's credit
 OpenLocal(T) ==
     LET c == 0
         id == T.lo[c] * 4 + 1
-    IN IF T.ll >= PM \/ FirstFree(T) = 0 THEN T
+    IN IF T.lo[0] + T.lo[1] >= T.ad.lim \/ FirstFree(T) = 0 \/ FreeSlots(T) <= CreditLeft(T)
+          \/ ~WindowsFit(T, CreditLeft(T) + 1) THEN T
        ELSE [AllocSlot(T, id) EXCEPT !.lo[c] = @ + 1]
+\* a MAX_STREAMS frame arrived: the limit on the streams we may open only grows
+RecvMaxStreams(T, l) == [T EXCEPT !.ad.lim = Max(@, l)]
+\* a MAX_STREAMS frame was lost: send the current limit again unless a later one superseded it
+CtlLostMsts(T, l) == IF l >= T.ad.adv THEN [T EXCEPT !.ad.pend = TRUE] ELSE T
 SendOpen(r) == ~(IsUni(r.id) /\ ~IsLocal(r.id))
 (* Streams::reset: queue a stream reset on the send half, the send buffers released (ext2 <= ext) *)
 AppReset(T, id, code, ext2) ==
@@ -321,5 +366,5 @@ ExtTo(T, ext2) ==
     IF ext2 > T.ext /\ ext2 - T.ext > AvailC(T) THEN T
     ELSE IF ext2 >= T.ext THEN [T EXCEPT !.ext = ext2]
     ELSE Regrant([T EXCEPT !.ext = ext2])
-CloseAll(T, ext2) == [Init0 EXCEPT !.ext = ext2, !.m = T.m, !.tgt = T.tgt, !.lo = T.lo, !.rn = T.rn]
+CloseAll(T, ext2) == [Init0 EXCEPT !.ext = ext2, !.m = T.m, !.tgt = T.tgt, !.lo = T.lo, !.rn = T.rn, !.ad = T.ad]
 =============================================================================

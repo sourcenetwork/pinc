@@ -48,6 +48,7 @@ import Vinc.TraceKeyLayer
 import Vinc.TransportStreams
 import Vinc.TransportStreamsGrant
 import Vinc.TransportStreamsFlow
+import Vinc.TransportStreamsLocal
 import Vinc.TraceStreams
 import Vinc.TransportRecovery
 import Vinc.TransportRecoveryAcct

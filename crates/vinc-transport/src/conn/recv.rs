@@ -59,6 +59,7 @@ const fn raises_event(f: &Frame<'_>) -> bool {
             | Frame::StopSending { .. }
             | Frame::Stream { .. }
             | Frame::MaxStreamData { .. }
+            | Frame::MaxStreams { .. }
             | Frame::PathResponse(_)
             | Frame::Datagram { .. }
             | Frame::Sleep
@@ -530,6 +531,7 @@ conn_impl! {
                     Err(e) => return Err(stream_fault(e)),
                 }
             }
+            Frame::MaxStreams { limit } => self.streams.on_max_streams(limit),
             Frame::PathChallenge(d) => {
                 if let Some(p) = self.paths.get_mut(pi) {
                     p.response = Some(d);

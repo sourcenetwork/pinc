@@ -110,16 +110,21 @@ where
         if l.out.is_some() || now.saturating_sub(l.opened) <= STREAM_REPAIR {
             return;
         }
-        if let Some(s) = self.io.open_stream_at(session, crate::config::HUB_URGENCY) {
-            if let Some(x) = self.io.links.get_mut(hub) {
-                x.out = Some(s);
+        match self.io.try_open_stream_at(session, crate::config::HUB_URGENCY) {
+            Ok(s) => {
+                if let Some(x) = self.io.links.get_mut(hub) {
+                    x.out = Some(s);
+                }
+                self.io.flush_queue(hub, session, s);
+                self.io.trace(NodeTrace::StreamRepaired { peer: tag(hub) });
             }
-            self.io.flush_queue(hub, session, s);
-            self.io.trace(NodeTrace::StreamRepaired { peer: tag(hub) });
-        } else {
-            let _ = self.io.cmd(Command::Close { session, error: 0 });
-            let (m, mut h) = self.mem_host();
-            m.session_down(&mut h, now, hub, 0);
+            // No pool room for the window yet: the link is fine, so ask again on the next duty pass.
+            Err(true) => {}
+            Err(false) => {
+                let _ = self.io.cmd(Command::Close { session, error: 0 });
+                let (m, mut h) = self.mem_host();
+                m.session_down(&mut h, now, hub, 0);
+            }
         }
     }
 

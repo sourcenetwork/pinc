@@ -8,6 +8,7 @@
 //! its opener holds and retransmits it until there is room;
 //! stream ids of a class are opened in order and never reused.
 
+use super::credit::Admit;
 use super::flow::Meter;
 use super::pool::{BufferPool, CHUNK_SIZE};
 use super::recv::Recv;
@@ -64,6 +65,7 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     open: usize,
     buffered: u64,
     stats: StreamStats,
+    admit: Admit,
     /// Some slot's grant was deferred at the last pass; a stale `true` costs one pass that clears it.
     stalled: bool,
 }
@@ -92,10 +94,43 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             open: 0,
             buffered: 0,
             stats: StreamStats::default(),
+            admit: Admit {
+                on: config.credit,
+                ..Admit::NEW
+            },
             stalled: false,
         };
         streams.set_peer_limits(&config.peer);
+        streams.set_advertised(streams.admit_cap(pool));
         streams
+    }
+
+    /// The streams this table tells the peer it admits at the start: the room an empty table has.
+    pub fn admit_cap(&self, pool: &BufferPool<'_>) -> u64 {
+        if self.admit.on { self.admit_room(pool) } else { 0 }
+    }
+
+    /// The initial receive window in whole chunks, in bytes (at least one chunk).
+    fn window_bytes(&self) -> u64 {
+        let chunk = CHUNK_SIZE as u64;
+        self.stream_window.div_ceil(chunk).max(1) * chunk
+    }
+
+    /// The streams admitted in all, of both kinds.
+    fn admitted(&self) -> u64 {
+        self.remote_next.iter().sum()
+    }
+
+    /// The streams the peer may open in all, as last advertised: the handshake value until a raise is sent.
+    pub const fn advertised_streams(&self) -> u64 {
+        self.admit.adv
+    }
+
+    /// Record the stream credit the handshake gave the peer (the connection may lower it to its own cap).
+    pub fn set_advertised(&mut self, streams: u64) {
+        self.admit.adv = streams;
+        self.admit.adv_at = 0;
+        self.admit.pend = false;
     }
 
     /// The window ceiling and the initial window `config` gives against `pool`.
@@ -129,8 +164,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.open = 0;
         self.buffered = 0;
         self.stats = StreamStats::default();
+        self.admit = Admit {
+            on: config.credit,
+            ..Admit::NEW
+        };
         self.stalled = false;
         self.set_peer_limits(&config.peer);
+        self.set_advertised(self.admit_cap(pool));
     }
 
     /// Counters of absorbed events.
@@ -189,6 +229,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             ext: (pool.used_chunks() as u64).saturating_sub(held),
             target: self.target,
             meter: self.meter.view(),
+            admit: [self.admit.limit, self.admit.adv, self.admit.adv_at],
+            admit_pend: self.admit.pend,
         }
     }
 
@@ -201,6 +243,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     pub fn set_peer_limits(&mut self, limits: &PeerLimits) {
         self.peer.window = self.peer.window.max(limits.window);
         self.peer.max_streams = self.peer.max_streams.max(limits.max_streams);
+        self.admit.raise_limit(limits.max_streams);
         let window = self.peer.window;
         for slot in &mut self.slots {
             if slot.send.open {
@@ -284,9 +327,31 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     // vertexia: one pass of the table per call while a grant is deferred; gate on the pool's free bytes if a long
     // shortage with many streams shows up in a profile.
     pub fn regrant(&mut self, pool: &BufferPool<'_>) {
+        self.refresh_admit(pool);
         if self.stalled {
             self.grant(pool, N);
         }
+    }
+
+    /// How many more peer streams could be admitted now, counting the credit already given: the live-stream cap (at
+    /// most half the slots, so the rest stay free for the streams we open) less the live ones, the free slots, and as
+    /// many initial windows as fit in a quarter of the pool bytes left (one at least when a window fits at all), so
+    /// the credit never keeps idle more than a quarter of the pool from the streams already open and from our own.
+    fn admit_room(&self, pool: &BufferPool<'_>) -> u64 {
+        let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
+        let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.window_bytes();
+        let cap = self.max_remote.min((N as u64 / 2).max(1));
+        cap.saturating_sub(self.remote_live)
+            .min(free)
+            .min((fit / 4).max(fit.min(1)))
+    }
+
+    /// Queue a raise of the stream credit when the room grew enough (see [`Admit::update`]).
+    // vertexia: one scan of the slots per call, which the connection makes once per packet it writes; gate on a
+    // changed pool or slot count if a profile shows it.
+    fn refresh_admit(&mut self, pool: &BufferPool<'_>) {
+        let (admitted, room) = (self.admitted(), self.admit_room(pool));
+        self.admit.update(admitted, room);
     }
 
     fn alloc_slot(&mut self, id: StreamId) -> Result<usize, StreamError> {
@@ -313,15 +378,36 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         Ok(i)
     }
 
-    /// Whether `count` more peer streams of class `c` starting at index `next` can be admitted: under the cap, with
-    /// slots, with their initial windows covered by the pool.
+    /// The pool bytes reserved for the stream credit given to the peer and not yet used: the initial windows of the
+    /// streams it may still open. Window grants and local streams leave them alone, so a stream inside the credit
+    /// always finds its window.
+    fn reserved(&self) -> u64 {
+        self.admit
+            .adv
+            .saturating_sub(self.admitted())
+            .saturating_mul(self.window_bytes())
+    }
+
+    /// The streams the peer may still open inside the credit.
+    fn credit_left(&self) -> u64 {
+        self.admit.adv.saturating_sub(self.admitted())
+    }
+
+    /// Whether `streams` initial receive windows, in whole chunks, fit in the pool bytes left beside the credit
+    /// already granted. The one test for a peer stream and for a local one, so they cannot differ.
+    fn windows_fit(&self, pool: &BufferPool<'_>, streams: u64) -> bool {
+        self.granted_unreceived()
+            .saturating_add(streams.saturating_mul(self.window_bytes()))
+            <= pool.available_bytes()
+    }
+
+    /// Whether `count` more peer streams can be admitted: under the cap, with slots, with their windows covered by
+    /// the pool. The credit already given counts as taken, so a stream inside it is always admitted.
     fn admits(&self, pool: &BufferPool<'_>, count: u64) -> bool {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
-        let chunk = CHUNK_SIZE as u64;
-        let window = count.saturating_mul(self.stream_window.div_ceil(chunk).saturating_mul(chunk));
         self.remote_live + count <= self.max_remote
             && free >= count
-            && self.granted_unreceived().saturating_add(window) <= pool.available_bytes()
+            && self.windows_fit(pool, count.max(self.credit_left()))
     }
 
     /// The slot of `id`, opening peer streams implicitly; `None` if it was already closed.
@@ -341,6 +427,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             return Err(StreamError::StreamLimit);
         }
         if !self.admits(pool, index - next + 1) {
+            self.stats.held_back += 1;
             return Err(StreamError::Exhausted);
         }
         let mut last = None;
@@ -364,15 +451,35 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.find(id).ok_or(StreamError::UnknownStream)
     }
 
-    /// Open a stream we initiate.
+    /// Whether a stream we initiate could open now, by the same test [`Streams::open_stream`] applies: a host that got
+    /// [`StreamError::StreamLimit`] or [`StreamError::Exhausted`] asks again after each input until this is `Ok`.
     ///
     /// # Errors
-    /// [`StreamError::StreamLimit`] when the live streams we opened are already as many as the peer allows,
-    /// [`StreamError::TableFull`] when the table has no slot.
-    pub fn open_stream(&mut self, bidi: bool) -> Result<StreamId, StreamError> {
-        if self.local_live >= self.peer.max_streams {
+    /// The error `open_stream` would return.
+    pub fn can_open(&self, pool: &BufferPool<'_>, bidi: bool) -> Result<(), StreamError> {
+        if !self.admit.allows(self.local_opened.iter().sum()) {
             return Err(StreamError::StreamLimit);
         }
+        // The slot and the window of every stream inside the credit given to the peer stay free.
+        let left = self.credit_left();
+        let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
+        if (free > 0 && free <= left) || (bidi && !self.windows_fit(pool, left + 1)) {
+            return Err(StreamError::Exhausted);
+        }
+        Ok(())
+    }
+
+    /// Open a stream we initiate. A bidirectional stream's receive window is the one the connection advertised, so it
+    /// cannot be made smaller: it is charged to the credit ledger like any grant, and the stream opens only when it
+    /// fits in `pool`.
+    ///
+    /// # Errors
+    /// [`StreamError::StreamLimit`] when the peer has not given credit for one more stream yet (it says how many it
+    /// admits in the handshake and raises that as its streams end),
+    /// [`StreamError::TableFull`] when the table has no slot, [`StreamError::Exhausted`] when a bidirectional stream's
+    /// receive window does not fit in the pool yet; try again once the application has read or chunks were released.
+    pub fn open_stream(&mut self, pool: &BufferPool<'_>, bidi: bool) -> Result<StreamId, StreamError> {
+        self.can_open(pool, bidi)?;
         let c = usize::from(!bidi);
         let opened = self.local_opened.get(c).copied().unwrap_or(0);
         let id = (opened << 2) | if bidi { 0 } else { 2 } | u64::from(!self.is_client);
@@ -543,6 +650,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// otherwise the slot stays deferred and is tried again after a later consume.
     fn grant(&mut self, pool: &BufferPool<'_>, first: usize) {
         let mut granted: Option<u64> = None;
+        let reserve = self.reserved();
         for i in 0..N {
             let target = self.target;
             let Some(slot) = self.slots.get_mut(i) else { continue };
@@ -559,7 +667,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             let demand = sum
                 .saturating_sub(slot.recv.unreceived())
                 .saturating_add(slot.recv.pool_demand(candidate));
-            if demand <= pool.available_bytes() {
+            if demand.saturating_add(reserve) <= pool.available_bytes() {
                 slot.recv.win.limit = candidate;
                 slot.recv.win.pending = true;
                 slot.recv.win.deferred = false;
@@ -780,6 +888,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                     self.refresh(i);
                 }
             }
+            ControlFrame::MaxStreams { limit } => self.admit.lost(limit),
             ControlFrame::StopSending { id, .. } => {
                 if let Some(i) = self.find(id) {
                     if let Some(slot) = self.slots.get_mut(i) {
@@ -818,6 +927,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// The next control frame to send, if any. The frame counts as sent; if it is not sent after all, give it back
     /// with [`Streams::on_control_lost`].
     pub fn pending_control(&mut self) -> Option<ControlFrame> {
+        if let Some(limit) = self.admit.take() {
+            return Some(ControlFrame::MaxStreams { limit });
+        }
         for i in 0..N {
             if self.hot.get(i).is_none_or(|h| h & HOT_CTL == 0) {
                 continue;
@@ -863,5 +975,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.local_live = 0;
         self.remote_live = 0;
         self.stalled = false;
+    }
+
+    /// The peer raised the number of streams we may have opened in all (`MAX_STREAMS`).
+    pub fn on_max_streams(&mut self, limit: u64) {
+        self.admit.raise_limit(limit);
     }
 }

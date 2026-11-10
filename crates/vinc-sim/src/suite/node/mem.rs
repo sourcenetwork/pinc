@@ -37,7 +37,7 @@ pub(super) const TICKETS: usize = 16;
 /// Tickets this node holds as a client.
 pub(super) const CLIENT_TICKETS: usize = 8;
 /// Pool chunks (16 KiB each) per connection.
-pub const CHUNKS_PER_CONN: usize = 16;
+pub const CHUNKS_PER_CONN: usize = 64;
 
 /// The endpoint of a suite node.
 pub type Ep = Endpoint<

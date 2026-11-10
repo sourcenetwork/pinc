@@ -46,7 +46,7 @@ pub const CD: usize = 128;
 pub const CPK: usize = 8;
 pub const CTK: usize = 16;
 pub const CCT: usize = 8;
-pub const CHUNKS_PER_CONN: usize = 24;
+pub const CHUNKS_PER_CONN: usize = 128;
 pub const SEC_NS: u64 = 1_000_000_000;
 pub const MS_NS: u64 = 1_000_000;
 

@@ -15,6 +15,7 @@
 (* step the operators of StreamsOps.tla compute from the state before it   *)
 (* (Frame, Reset, Consume, Pending, CtlLostMsd, CtlLostReset,              *)
 (* CtlAckedReset, CtlLostStop, CtlAckedStop, StopReq, OnStop, OpenLocal,   *)
+(* CtlLostMsts, RecvMaxStreams,                                            *)
 (* AppReset, Finish, ExtTo, CloseAll), with the                            *)
 (* error the call returned, and the state the model computes must be the   *)
 (* state recorded. The constants are the real ones of the test: chunks of  *)
@@ -45,7 +46,8 @@ TOf(v) ==
     [slots |-> [k \in 1..N |-> SlotOf(v.slots[k])],
      rn |-> [c \in 0..1 |-> v.rn[c + 1]], lo |-> [c \in 0..1 |-> v.lo[c + 1]],
      rl |-> v.rl, ll |-> v.ll,
-     ext |-> v.ext, tgt |-> v.tgt, m |-> [start |-> v.ms, bytes |-> v.mb, rate |-> v.mr]]
+     ext |-> v.ext, tgt |-> v.tgt, m |-> [start |-> v.ms, bytes |-> v.mb, rate |-> v.mr],
+     ad |-> [lim |-> v.ad[1], adv |-> v.ad[2], at |-> v.ad[3], pend |-> v.adp]]
 
 InitEv == /\ Ev.op = "init" /\ TOf(Ev.v) = Init0 /\ rs' = TOf(Ev.v)
 EndEv == /\ Ev.op = "end" /\ rs' = rs
@@ -60,6 +62,10 @@ PendingEv == LET P == Pending(rs)
                 /\ TOf(Ev.v) = P.t /\ rs' = P.t
 LostMsdEv == LET R == CtlLostMsd(rs, Ev.id, Ev.max)
              IN /\ Ev.op = "lostmsd" /\ TOf(Ev.v) = R /\ rs' = R
+LostMstsEv == LET R == CtlLostMsts(rs, Ev.limit)
+              IN /\ Ev.op = "lostmsts" /\ TOf(Ev.v) = R /\ rs' = R
+MaxStreamsEv == LET R == RecvMaxStreams(rs, Ev.limit)
+                IN /\ Ev.op = "maxstreams" /\ TOf(Ev.v) = R /\ rs' = R
 LostResetEv == LET R == CtlLostReset(rs, Ev.id)
                IN /\ Ev.op = "lostreset" /\ TOf(Ev.v) = R /\ rs' = R
 AckedResetEv == LET R == CtlAckedReset(rs, Ev.id)
@@ -88,7 +94,7 @@ Init == i = 1 /\ rs = Init0
 Step ==
     /\ i <= Len(Trace)
     /\ Ev.t = "st"
-    /\ \/ InitEv \/ EndEv \/ FrameEv \/ ResetEv \/ ConsumeEv \/ PendingEv \/ LostMsdEv \/ LostResetEv
+    /\ \/ InitEv \/ EndEv \/ FrameEv \/ ResetEv \/ ConsumeEv \/ PendingEv \/ LostMsdEv \/ LostMstsEv \/ MaxStreamsEv \/ LostResetEv
        \/ AckedResetEv \/ LostStopEv \/ AckedStopEv \/ StopReqEv \/ OnStopEv \/ OpenEv \/ AppResetEv \/ FinishEv \/ ExtEv \/ CloseEv
     /\ i' = i + 1
 

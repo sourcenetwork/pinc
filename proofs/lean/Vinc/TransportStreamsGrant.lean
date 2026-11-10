@@ -198,7 +198,7 @@ theorem grantOne_skip (p : P) (first : Nat) (T : Tab) (i : Nat)
 
 theorem grantOne_proc (p : P) (first : Nat) (T : Tab) (i : Nat)
     (hs : ¬ (!(T.slots.getD i Slot.new).open_ || !(i == first || (T.slots.getD i Slot.new).defer)) = true) :
-    grantOne p first T i = setSlot T i (grantSlot p T.tgt (gu p T) (avail p T) (T.slots.getD i Slot.new)) := by
+    grantOne p first T i = setSlot T i (grantSlot p T.tgt (gu p T + resv p T) (avail p T) (T.slots.getD i Slot.new)) := by
   unfold grantOne
   dsimp only
   rw [if_neg hs]
@@ -220,21 +220,21 @@ theorem grantOne_limit_mono (p : P) (first : Nat) (T : Tab) (i j : Nat) :
     · subst_vars; exact grantSlot_mono _ _ _ _ _
     · exact Nat.le_refl _
 
-theorem ledger_arith (SU SU' u pd SH SH' ext b ch : Nat) (hu : u ≤ SU) (h1 : SU' + u = SU + pd) (h2 : SH' = SH)
-    (hfit : SU - u + pd ≤ (b - (SH + ext)) * ch) : SU' ≤ (b - (SH' + ext)) * ch := by
+theorem ledger_arith (SU SU' u pd R SH SH' ext b ch : Nat) (hu : u ≤ SU) (h1 : SU' + u = SU + pd) (h2 : SH' = SH)
+    (hfit : SU + R - u + pd ≤ (b - (SH + ext)) * ch) : SU' + R ≤ (b - (SH' + ext)) * ch := by
   subst h2
   omega
 
-/-- Credit never exceeds the ledger: when a grant raises a limit, what is granted and not yet received fits in the
-pool bytes left. -/
+/-- Credit never exceeds the ledger: when a grant raises a limit, what is granted and not yet received, with the
+windows kept for the credit given to the peer, fits in the pool bytes left. -/
 theorem grantOne_ledger (p : P) (first : Nat) (T : Tab) (i : Nat)
     (h : (T.slots.getD i Slot.new).limit < ((grantOne p first T i).slots.getD i Slot.new).limit) :
-    gu p (grantOne p first T i) ≤ avail p (grantOne p first T i) := by
+    gu p (grantOne p first T i) + resv p (grantOne p first T i) ≤ avail p (grantOne p first T i) := by
   by_cases hs : (!(T.slots.getD i Slot.new).open_ || !(i == first || (T.slots.getD i Slot.new).defer)) = true
   · rw [grantOne_skip p first T i hs] at h; exact absurd h (Nat.lt_irrefl _)
   · have hl := lt_of_open _ _ (proc_open p first T i hs)
     rw [grantOne_proc p first T i hs, getD_setSlot _ _ _ _ hl, if_pos rfl] at h
-    obtain ⟨c, hc, hfit, he⟩ := grantSlot_raise p T.tgt (gu p T) (avail p T) _ h
+    obtain ⟨c, hc, hfit, he⟩ := grantSlot_raise p T.tgt (gu p T + resv p T) (avail p T) _ h
     rw [grantOne_proc p first T i hs, he]
     have hsum := sum_map_set (fun s => s.unreceived p) T.slots i
       (((T.slots.getD i Slot.new).grown T.tgt).raised c) hl
@@ -245,9 +245,9 @@ theorem grantOne_ledger (p : P) (first : Nat) (T : Tab) (i : Nat)
         = poolDemand p ((T.slots.getD i Slot.new).grown T.tgt) c := by
       simp [Slot.unreceived, poolDemand, Slot.reach, Slot.raised]
     simp only [hpd] at hsum
-    simp only [gu, avail, availC, used, heldTotal, setSlot] at hsum hup hheld hfit ⊢
+    simp only [gu, avail, availC, used, heldTotal, setSlot, resv, creditLeft, admitted] at hsum hup hheld hfit ⊢
     simp only [raised_held, grown_held] at hheld
-    refine ledger_arith _ _ _ _ _ _ _ _ _ hup hsum ?_ hfit
+    refine ledger_arith _ _ _ _ _ _ _ _ _ _ hup hsum ?_ hfit
     omega
 
 theorem grantOne_other (p : P) (first : Nat) (T : Tab) (i j : Nat) (hji : j ≠ i) :
@@ -283,8 +283,8 @@ theorem grantOne_defers_only_when_unfit (p : P) (first : Nat) (T : Tab) (i : Nat
     (hp : ¬ (!(T.slots.getD i Slot.new).open_ || !(i == first || (T.slots.getD i Slot.new).defer)) = true) :
     (((T.slots.getD i Slot.new).grown T.tgt).due p = none) ∨
     ∃ c, (((T.slots.getD i Slot.new).grown T.tgt).due p = some c) ∧
-      ¬ (gu p T - (T.slots.getD i Slot.new).unreceived p + poolDemand p ((T.slots.getD i Slot.new).grown T.tgt) c
-          ≤ avail p T) := by
+      ¬ (gu p T + resv p T - (T.slots.getD i Slot.new).unreceived p
+          + poolDemand p ((T.slots.getD i Slot.new).grown T.tgt) c ≤ avail p T) := by
   have hl := lt_of_open _ _ (proc_open p first T i hp)
   rw [grantOne_proc p first T i hp, getD_setSlot _ _ _ _ hl, if_pos rfl] at h
   exact grantSlot_defers p _ _ _ _ h

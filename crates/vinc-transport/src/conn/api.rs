@@ -104,13 +104,32 @@ conn_impl! {
         }
     }
 
+    /// Raise by hand the number of streams this side may open in all, for a peer known to admit more than it said.
+    /// The peer's held-back rule then applies to the streams beyond its room: they wait unacknowledged until it has
+    /// some.
+    pub fn raise_stream_credit(&mut self, limit: u64) {
+        self.streams.on_max_streams(limit);
+    }
+
+    /// Whether a stream of the given kind could open now. A host whose open got [`StreamError::StreamLimit`] (no
+    /// credit yet) or [`StreamError::Exhausted`] (no pool room for the window) keeps the open and asks again after each
+    /// input it feeds the connection, until this is `Ok`; credit and room return only through such inputs.
+    ///
+    /// # Errors
+    /// The error an open would return.
+    pub fn open_ready(&self, bidi: bool) -> Result<(), StreamError> {
+        self.ensure_open()?;
+        self.streams.can_open(&self.pool, bidi)
+    }
+
     /// Open a bidirectional stream.
     ///
     /// # Errors
-    /// [`StreamError::StreamLimit`] at the peer's limit, [`StreamError::TableFull`] when the table has no slot.
+    /// [`StreamError::StreamLimit`] at the peer's limit, [`StreamError::TableFull`] when the table has no slot,
+    /// [`StreamError::Exhausted`] when the stream's receive window does not fit in the buffer pool yet.
     pub fn open_bi(&mut self) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
-        self.streams.open_stream(true)
+        self.streams.open_stream(&self.pool, true)
     }
 
     /// Open a unidirectional stream.
@@ -119,7 +138,7 @@ conn_impl! {
     /// As [`open_bi`](Self::open_bi).
     pub fn open_uni(&mut self) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
-        self.streams.open_stream(false)
+        self.streams.open_stream(&self.pool, false)
     }
 
     /// How much written data may wait for its acknowledgement at once: the smaller of the window the peer granted

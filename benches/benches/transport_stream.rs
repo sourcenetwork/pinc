@@ -88,7 +88,7 @@ fn bench_write(c: &mut Criterion) {
     let payload = [0xA5u8; FRAME];
     let mut pool = BufferPool::new_boxed(256);
     let mut table = Box::new(Streams::<NoSource, 4, 1025>::new(&config(), &pool));
-    let id = table.open_stream(false).unwrap();
+    let id = table.open_stream(&pool, false).unwrap();
     let mut out = [0u8; FRAME];
     g.bench_function("buffered_write_build_ack_1400", |b| {
         b.iter(|| {
@@ -123,7 +123,7 @@ fn bench_source(c: &mut Criterion) {
     let block = vec![0x3Cu8; FRAME * 64];
     let pool = BufferPool::new_boxed(4);
     let mut table = Box::new(Streams::<Repeating<'_>, 2, 65>::new(&config(), &pool));
-    let id = table.open_stream(false).unwrap();
+    let id = table.open_stream(&pool, false).unwrap();
     table.open_source(id, Repeating(&block), 1 << 50).unwrap();
     let mut out = [0u8; FRAME];
     g.bench_function("source_backed_build_1400", |b| {

@@ -44,6 +44,9 @@ impl<'a> Frame<'a> {
                 id: r.read_varint()?,
                 max: r.read_varint()?,
             },
+            ty::MAX_STREAMS => Self::MaxStreams {
+                limit: r.read_varint()?,
+            },
             ty::PATH_CHALLENGE => Self::PathChallenge(r.read_array()?),
             ty::PATH_RESPONSE => Self::PathResponse(r.read_array()?),
             ty::CLOSE => Self::Close {

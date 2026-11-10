@@ -218,6 +218,7 @@ where
             streams,
             loss,
         } = res;
+        streams.set_advertised(u64::from(local_credit.max_streams));
         let timing = Timing {
             thin: cfg.thin,
             remembered_rtt: cfg.remembered_rtt,
@@ -293,7 +294,11 @@ where
                 .credit
                 .window_units
                 .min(CreditRecord::new(per_stream, 0, 0).window_units),
-            max_streams: cfg.credit.max_streams.min(u16::try_from(N).unwrap_or(u16::MAX)),
+            max_streams: cfg
+                .credit
+                .max_streams
+                .min(u16::try_from(N).unwrap_or(u16::MAX))
+                .min(u16::try_from(streams.advertised_streams()).unwrap_or(u16::MAX)),
             max_datagram: cfg.credit.max_datagram,
         }
     }
@@ -413,6 +418,7 @@ where
         s.datagrams_dropped_send = self.dgrams.send_dropped();
         s.datagrams_dropped_recv = self.dgrams.recv_dropped();
         s.events_lost = self.events.lost;
+        s.held_back = self.streams.stats().held_back;
         s
     }
 

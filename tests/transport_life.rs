@@ -115,6 +115,8 @@ fn a_held_back_stream_does_not_discard_the_frames_behind_it_in_its_packet() {
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(5, Params::new(10 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
         net.b.auto_read = false;
+        // The opener ignores the credit the server gave: the held-back rule is the net under test.
+        net.a.conn.raise_stream_credit(100);
         let parked = net.a.conn.open_bi().unwrap();
         net.a.conn.write(parked, &[9; 100]).unwrap();
         net.run(net.now + SEC, |_| false);
@@ -151,6 +153,8 @@ fn a_stream_the_pool_cannot_hold_waits_unacknowledged_and_is_delivered_once_ther
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
         assert!(net.connect(net.now + 10 * SEC));
         net.b.auto_read = false;
+        // The opener ignores the credit the server gave: the held-back rule is the net under test.
+        net.a.conn.raise_stream_credit(100);
         let ids: Vec<u64> = (0..5).map(|_| net.a.conn.open_bi().unwrap()).collect();
         let data: Vec<Vec<u8>> = (0..5).map(|i| pattern(20_000 + 1_000 * i, 50 + i as u64)).collect();
         for (id, d) in ids.iter().zip(&data) {
@@ -512,7 +516,7 @@ fn a_thin_node_rechallenges_an_idle_direct_path_on_a_backoff() {
 fn the_pool_budget_is_never_exceeded() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
-        let (mut sa, mut sb) = (Store::with_chunks(true, 160), Store::with_chunks(false, 160));
+        let (mut sa, mut sb) = (Store::with_chunks(true, 320), Store::with_chunks(false, 320));
         let p = Params::new(10 * MS).loss(2.0).reorder(2.0, 3 * MS);
         let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(17, p));
         let data = pattern(16 << 20, 18);
@@ -544,7 +548,7 @@ fn the_pool_budget_is_never_exceeded() {
         assert!(ok && net.b.read[&id] == data);
         let budget = net.a.conn.pool().budget_bytes();
         assert!(
-            max_a <= budget && max_b <= budget && budget == 160 * 16 * 1024,
+            max_a <= budget && max_b <= budget && budget == 320 * 16 * 1024,
             "{max_a} {max_b} {budget}"
         );
         // The send buffer holds at most max(192 KiB, 1.5 x the window), so the sender uses a fraction of the pool.

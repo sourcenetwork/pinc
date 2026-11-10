@@ -20,7 +20,7 @@ use vinc_core::{
 use vinc_crypto::IdentityAlg;
 use vinc_membership::NodeId;
 use vinc_membership::session::{Carrier, CloseReason, DENIED_CODE, Evidence, LEAVE_CODE};
-use vinc_transport::stream::StreamId;
+use vinc_transport::stream::{StreamError, StreamId};
 
 use crate::bound;
 use crate::config::{
@@ -273,30 +273,43 @@ impl<E: Ep, St: Store> Io<E, St> {
         }
     }
 
+    /// Open a bidirectional stream on `session`. `Err(true)` means the peer has not given credit for another stream yet, or
+    /// the buffer pool has no room for its receive window: the caller keeps what it wanted and asks again on a later
+    /// tick, when the peer raised its credit, streams have closed or data was read.
+    pub(crate) fn try_open_stream(&mut self, session: SessionId) -> Result<StreamId, bool> {
+        match self.cmd(Command::OpenStream { session, bidi: true }) {
+            Ok(Value::Stream(s)) => {
+                self.register_stream(session, s);
+                self.strm.contains_key(&(session, s)).then_some(s).ok_or(false)
+            }
+            Err(CommandError::Stream(StreamError::Exhausted | StreamError::StreamLimit)) => Err(true),
+            _ => Err(false),
+        }
+    }
+
     /// Open a bidirectional stream on `session`.
     pub(crate) fn open_stream(&mut self, session: SessionId) -> Option<StreamId> {
-        let Ok(Value::Stream(s)) = self.cmd(Command::OpenStream { session, bidi: true }) else {
-            return None;
+        self.try_open_stream(session).ok()
+    }
+
+    /// Like `try_open_stream`, at `urgency` (a lower number is sent first).
+    pub(crate) fn try_open_stream_at(&mut self, session: SessionId, urgency: u8) -> Result<StreamId, bool> {
+        let s = self.try_open_stream(session)?;
+        let set = Command::SetUrgency {
+            session,
+            stream: s,
+            urgency,
         };
-        self.register_stream(session, s);
-        self.strm.contains_key(&(session, s)).then_some(s)
+        if self.cmd(set).is_err() {
+            self.drop_strm(session, s);
+            return Err(false);
+        }
+        Ok(s)
     }
 
     /// Open a bidirectional stream on `session` at `urgency` (a lower number is sent first).
     pub(crate) fn open_stream_at(&mut self, session: SessionId, urgency: u8) -> Option<StreamId> {
-        let s = self.open_stream(session)?;
-        if self
-            .cmd(Command::SetUrgency {
-                session,
-                stream: s,
-                urgency,
-            })
-            .is_err()
-        {
-            self.drop_strm(session, s);
-            return None;
-        }
-        Some(s)
+        self.try_open_stream_at(session, urgency).ok()
     }
 
     /// Write `data` to a stream behind whatever it already holds. False if the stream is gone or full.

@@ -35,6 +35,14 @@ def P.half (p : P) : Nat := p.b * p.ch / 2 / p.ch * p.ch
 def P.maxStream (p : P) : Nat := min p.mswc (min ((p.ring - 1) * p.ch) p.half)
 /-- The initial window. -/
 def P.sw (p : P) : Nat := min p.swc p.maxStream
+/-- The initial window in whole chunks. -/
+def P.winC (p : P) : Nat := (p.sw + p.ch - 1) / p.ch * p.ch
+/-- A quarter of `f` windows, one at least when one fits. -/
+def quarterFit (f : Nat) : Nat := max (f / 4) (min f 1)
+/-- The live peer streams the table admits: at most half the slots, so the rest stay free for its own streams. -/
+def P.capLive (p : P) : Nat := min p.maxrem (max (p.n / 2) 1)
+/-- The stream credit the handshake gives the peer (`Streams::admit_cap` on an empty table). -/
+def P.adv0 (p : P) : Nat := min p.capLive (quarterFit (p.b * p.ch / p.winC))
 
 structure Slot where
   id : Option Nat
@@ -74,11 +82,19 @@ structure Tab where
   ms : Option Nat
   mb : Nat
   mr : Nat
+  /-- The limit on the streams we may open in all, as the peer last said. -/
+  adlim : Nat
+  /-- The limit on the streams the peer may open in all, as last advertised. -/
+  adv : Nat
+  /-- The streams admitted when `adv` was set. -/
+  adat : Nat
+  /-- A `MAX_STREAMS` frame is waiting to be sent. -/
+  adpend : Bool
   deriving DecidableEq, Repr, Inhabited
 
 def Tab.init (p : P) : Tab :=
   { slots := List.replicate p.n Slot.new, rn := (0, 0), lo := (0, 0), rl := 0, ll := 0,
-    ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0 }
+    ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0, adlim := p.pm, adv := p.adv0, adat := 0, adpend := false }
 
 /-! ### Identifiers -/
 def isUni (id : Nat) : Bool := id / 2 % 2 == 1
@@ -134,6 +150,12 @@ def used (T : Tab) : Nat := heldTotal T + T.ext
 def availC (p : P) (T : Tab) : Nat := p.b - used T
 def avail (p : P) (T : Tab) : Nat := availC p T * p.ch
 def gu (p : P) (T : Tab) : Nat := (T.slots.map (·.unreceived p)).sum
+/-- The peer streams admitted in all. -/
+def admitted (T : Tab) : Nat := T.rn.1 + T.rn.2
+/-- The streams the peer may still open inside the credit it was given. -/
+def creditLeft (T : Tab) : Nat := T.adv - admitted T
+/-- The pool bytes kept for them. -/
+def resv (p : P) (T : Tab) : Nat := creditLeft T * p.winC
 
 def setSlot (T : Tab) (i : Nat) (r : Slot) : Tab := { T with slots := T.slots.set i r }
 def findSlot (T : Tab) (id : Nat) : Option Nat := T.slots.findIdx? (·.id == some id)
@@ -161,10 +183,24 @@ def grantSlot (p : P) (tgt g a : Nat) (r : Slot) : Slot :=
 
 def grantOne (p : P) (first : Nat) (T : Tab) (i : Nat) : Tab :=
   let r := T.slots.getD i Slot.new
-  if !r.open_ || !(i == first || r.defer) then T else setSlot T i (grantSlot p T.tgt (gu p T) (avail p T) r)
+  if !r.open_ || !(i == first || r.defer) then T else setSlot T i (grantSlot p T.tgt (gu p T + resv p T) (avail p T) r)
 
 def grantRun (p : P) (T : Tab) (first : Nat) : Tab := (List.range p.n).foldl (grantOne p first) T
-def regrant (p : P) (T : Tab) : Tab := if p.retry && anyDefer T then grantRun p T p.n else T
+/-- `Streams::admit_room`: how many more peer streams could be admitted now. -/
+def freeSlots (T : Tab) : Nat := (T.slots.filter (·.id == none)).length
+def admitRoom (p : P) (T : Tab) : Nat :=
+  min (min (p.capLive - T.rl) (freeSlots T)) (quarterFit ((avail p T - gu p T) / p.winC))
+
+/-- `Streams::refresh_admit`: queue a raise of the credit when the room grew by an eighth of the credit last given, or at
+once when the opener used all of it. -/
+def refreshAdmit (p : P) (T : Tab) : Tab :=
+  let now := admitted T + admitRoom p T
+  if now > T.adv && (decide (T.adv ≤ admitted T) || decide (now - T.adv ≥ max ((T.adv - T.adat) / 8) 1))
+  then { T with adv := now, adat := admitted T, adpend := true } else T
+
+def regrant (p : P) (T : Tab) : Tab :=
+  let T1 := refreshAdmit p T
+  if p.retry && anyDefer T1 then grantRun p T1 p.n else T1
 
 /-! ### Slots -/
 def freeSlot (T : Tab) (i : Nat) : Tab :=
@@ -191,10 +227,14 @@ def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
     if lcl then { T1 with ll := T1.ll + 1 } else { T1 with rl := T1.rl + 1 }
 
 /-! ### Admission of peer streams -/
+/-- `Streams::windows_fit`: the initial windows of `count` new streams, in whole chunks, fit beside the credit granted.
+The one test for a peer stream and for a local one. -/
+def windowsFit (p : P) (T : Tab) (count : Nat) : Bool :=
+  gu p T + count * p.winC ≤ avail p T
+
 def admits (p : P) (T : Tab) (c next count : Nat) : Bool :=
   let free := (T.slots.filter (·.id == none)).length
-  let window := count * ((p.sw + p.ch - 1) / p.ch * p.ch)
-  T.rl + count ≤ p.maxrem && free ≥ count && gu p T + window ≤ avail p T
+  T.rl + count ≤ p.maxrem && free ≥ count && windowsFit p T (max count (creditLeft T))
 
 /-- `Locate`: the table, the slot found (if any) and the error ("ok" when none). A peer stream that does not fit is
 held back: "Exhausted" and the table unchanged. -/
@@ -299,6 +339,7 @@ def consume (p : P) (T : Tab) (id n now srtt : Nat) : Tab × String :=
 msd, the error code of a reset or a stop. The first slot with a frame to send gives one: its stream reset first, then
 its stop request, then its limit. -/
 def pending (T : Tab) : Tab × String × Nat × Nat :=
+  if T.adpend then ({ T with adpend := false }, "msts", 0, T.adv) else
   match T.slots.findIdx? Slot.hot with
   | none => (T, "none", 0, 0)
   | some i =>
@@ -307,6 +348,12 @@ def pending (T : Tab) : Tab × String × Nat × Nat :=
     if r.srst == 1 then (setSlot T i { r with srst := 2 }, "reset", id, r.scode.getD 0)
     else if r.stop == 1 then (setSlot T i { r with stop := 2 }, "stop", id, r.qcode.getD 0)
     else (setSlot T i { r with pend := false }, "msd", id, r.limit)
+
+/-- A lost `MAX_STREAMS` frame is sent again unless a later limit superseded it. -/
+def ctlLostMsts (T : Tab) (l : Nat) : Tab := if l ≥ T.adv then { T with adpend := true } else T
+
+/-- A `MAX_STREAMS` frame arrived: the limit on the streams we may open only grows. -/
+def recvMaxStreams (T : Tab) (l : Nat) : Tab := { T with adlim := max T.adlim l }
 
 def ctlLostMsd (T : Tab) (id mx : Nat) : Tab :=
   match findSlot T id with
@@ -347,7 +394,8 @@ def ctlAckedStop (T : Tab) (id : Nat) : Tab :=
 
 /-! ### The send half, as far as the receive side sees it -/
 def openLocal (p : P) (T : Tab) : Tab :=
-  if T.ll ≥ p.pm || (firstFree T).isNone then T
+  if T.lo.1 + T.lo.2 ≥ T.adlim || (firstFree T).isNone || decide (freeSlots T ≤ creditLeft T)
+      || !windowsFit p T (creditLeft T + 1) then T
   else { allocSlot p T (T.lo.1 * 4 + 1) with lo := (T.lo.1 + 1, T.lo.2) }
 
 def Slot.sendOpen (r : Slot) : Bool := !(r.id.any (fun id => isUni id && !isLocal id))
@@ -399,6 +447,6 @@ def extTo (p : P) (T : Tab) (ext2 : Nat) : Tab :=
   else regrant p { T with ext := ext2 }
 
 def closeAll (p : P) (T : Tab) (ext2 : Nat) : Tab :=
-  { Tab.init p with ext := ext2, tgt := T.tgt, lo := T.lo, rn := T.rn, ms := T.ms, mb := T.mb, mr := T.mr }
+  { T with slots := (Tab.init p).slots, rl := 0, ll := 0, ext := ext2 }
 
 end Vinc.TransportStreams

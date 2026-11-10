@@ -39,8 +39,9 @@
 (*    and the code of a reset never changes (CodeKept);                    *)
 (*  - RESET: a reset fixes the final size, frees the buffered bytes and    *)
 (*    leaves the stream readable to its end (nothing more is readable).    *)
-(* The local-stream witness Streams_local shows that the initial window of *)
-(* a stream this endpoint opens is not in the ledger.                      *)
+(* Streams_local (a pool with no other user, a peer stream and a local    *)
+(* one) holds LedgerAlways: the initial window of a stream this endpoint   *)
+(* opens is counted in the ledger like a peer stream's (WindowsFit).       *)
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -66,6 +67,8 @@ LostMsdOp == \E id \in Ids, mx \in 0..HOR : T' = CtlLostMsd(T, id, mx) /\ UNCHAN
 LostResetOp == \E id \in Ids : T' = CtlLostReset(T, id) /\ UNCHANGED clock
 AckedResetOp == \E id \in Ids : T' = CtlAckedReset(T, id) /\ UNCHANGED clock
 OpenOp == T' = OpenLocal(T) /\ UNCHANGED clock
+MaxStreamsOp == /\ LocIds # {} /\ PM >= 2 /\ \E l \in 0..(PM + 2) : T' = RecvMaxStreams(T, l) /\ UNCHANGED clock
+LostMstsOp == T' = CtlLostMsts(T, T.ad.adv) /\ UNCHANGED clock   \* the latest frame lost; an older one is a no-op
 AppResetOp == \E id \in Ids, e2 \in 0..T.ext : T' = AppReset(T, id, 9, e2) /\ UNCHANGED clock
 LostStopOp == \E id \in Ids : T' = CtlLostStop(T, id) /\ UNCHANGED clock
 AckedStopOp == \E id \in Ids : T' = CtlAckedStop(T, id) /\ UNCHANGED clock
@@ -77,6 +80,7 @@ CloseOp == \E e2 \in 0..T.ext : T' = CloseAll(T, e2) /\ UNCHANGED clock
 
 Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ LostResetOp \/ AckedResetOp \/ OpenOp
         \/ AppResetOp \/ FinishOp \/ ExtOp \/ CloseOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp
+        \/ MaxStreamsOp \/ LostMstsOp
 Spec == Init /\ [][Next]_vars
 
 \* the other users of the pool eventually let go (the liveness config only)
@@ -116,7 +120,7 @@ Unique == \A i, j \in 1..N : (i # j /\ T.slots[i].id # -1) => T.slots[i].id # T.
 FreeIsNew == \A i \in 1..N : T.slots[i].id = -1 => T.slots[i] = NewSlot
 Counters == /\ T.rl = Cardinality({i \in Live : ~IsLocal(T.slots[i].id)})
             /\ T.ll = Cardinality({i \in Live : IsLocal(T.slots[i].id)})
-            /\ T.rl <= MAXREM /\ T.ll <= PM
+            /\ T.rl <= MAXREM /\ T.ll <= T.lo[0] + T.lo[1]
 Admitted == \A i \in Live : ~IsLocal(T.slots[i].id) => Idx(T.slots[i].id) < T.rn[Class(T.slots[i].id)]
 \* a peer stream that does not fit is held back: any error answer of locate leaves the table as it was
 LocatePure == \A id \in Ids : Locate(T, id).err # "ok" => Locate(T, id).t = T
@@ -141,11 +145,18 @@ NoMissedGrant == \A i \in Live : T.slots[i].open => (Due(T.slots[i]) = -1 \/ T.s
 GrantFits(i) == LET r == T.slots[i]
                     r1 == [r EXCEPT !.size = Max(r.size, T.tgt)]
                     c == Due(r1)
-                IN c # -1 /\ GU(T) - Unreceived(r) + PoolDemand(r1, c) <= Avail(T)
+                IN c # -1 /\ GU(T) - Unreceived(r) + PoolDemand(r1, c) + Resv(T) <= Avail(T)
 \* a deferred grant that now fits is never left waiting for a consume
 NoStuckGrant == \A i \in Live : T.slots[i].defer => ~GrantFits(i)
-\* the ledger in every state: holds when no other user shares the pool and every stream was admitted
-LedgerAlways == GU(T) <= Avail(T)
+\* the ledger in every state: holds when no other user shares the pool and every stream was admitted; the windows kept
+\* in the pool for the credit given to the peer count as granted
+LedgerAlways == GU(T) + Resv(T) <= Avail(T)
+\* the opener never has more streams open in all than the peer gave credit for
+OpenerInside == T.lo[0] + T.lo[1] <= T.ad.lim
+\* a peer stream that arrives inside the credit it was given is never held back (no other user of the pool, and no
+\* stream of ours taking the slots)
+NoHeldWithinCredit == \A id \in RemIds : LET L == Locate(T, id) IN
+    (Idx(id) >= T.rn[Class(id)] /\ AdmittedN(T) + (Idx(id) - T.rn[Class(id)] + 1) <= T.ad.adv) => L.err # "Exhausted"
 \* a frame inside the credit needs no more chunks than the ledger counted for its stream
 NeedCovered == \A i \in Live : T.slots[i].open =>
     \A e \in (T.slots[i].read + 1)..Reach(T.slots[i]) :
@@ -168,7 +179,9 @@ EighthRule == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].limit > T.slots[i].l
                     T'.slots[i].limit >= T.slots[i].limit + T'.slots[i].size \div 8]_vars
 \* a grant or an admission leaves the credit within the pool
 LedgerOnGrant == [][((\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) \/ T'.rl > T.rl)
-                    => GU(T') <= Avail(T')]_vars
+                    => GU(T') + Resv(T') <= Avail(T')]_vars
+\* the credit and the limit on what we may open only grow
+CreditMonotone == [][T'.ad.adv >= T.ad.adv /\ T'.ad.lim >= T.ad.lim]_vars
 \* a pool charge happens only within the budget
 PoolOnAlloc == [][Used(T') > Used(T) => Used(T') <= B]_vars
 \* the limits never exceed the pool a stream may hold
