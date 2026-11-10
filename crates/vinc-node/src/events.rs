@@ -14,7 +14,9 @@ use vinc_membership::session::LEAVE_CODE;
 use vinc_transport::conn::CloseReason as TransportClose;
 use vinc_transport::stream::StreamId;
 
-use crate::config::{DENIED, Nanos, REDIAL_SOON, SESSION_LIVED, SURVIVOR, SURVIVOR_HAVE, Store, TABLE_MAX};
+use crate::config::{
+    DENIED, HUB_URGENCY, Nanos, REDIAL_SOON, SESSION_LIVED, SURVIVOR, SURVIVOR_HAVE, Store, TABLE_MAX,
+};
 use crate::ep::Ep;
 use crate::event::NodeEvent;
 use crate::io::{Link, Sess};
@@ -79,6 +81,13 @@ where
             }
             Event::Closed { session, reason } if self.io.sess.contains_key(&session) => {
                 self.hub_closed(now, session, reason);
+                self.io.emit(NodeEvent::Endpoint(ev));
+            }
+            Event::PeerAwake { session } if self.io.is_hub && self.io.sess.contains_key(&session) => {
+                if let Some(peer) = self.io.sess.get(&session).map(|s| s.peer) {
+                    let full = self.io.full_id(&peer);
+                    self.io.notice(crate::relay::MemberNotice::Awake(full));
+                }
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
             Event::StreamOpened { session, stream } if self.io.sess.contains_key(&session) => {
@@ -151,7 +160,7 @@ where
             }
         }
         self.attach(now, session, peer, false);
-        if let Some(s) = self.io.open_stream(session) {
+        if let Some(s) = self.io.open_stream_at(session, HUB_URGENCY) {
             if let Some(l) = self.io.links.get_mut(&peer) {
                 l.out = Some(s);
             }
@@ -193,6 +202,27 @@ where
         self.attach(now, session, peer, true);
         let (m, mut h) = self.mem_host();
         m.session_up(&mut h, now, &peer, true);
+        self.floor_push(session, &peer);
+    }
+
+    /// `FLOOR_PUSH`: a hub that accepted a member's session opens its own write stream and sends the replay floor at
+    /// once, in the flight that answers the dial.
+    fn floor_push(&mut self, session: SessionId, peer: &NodeId) {
+        if !self.io.is_hub || self.io.is_hub_id(peer) || self.io.revoked.contains(peer) {
+            return;
+        }
+        if self.io.links.get(peer).and_then(|l| l.conn) != Some(session) {
+            return;
+        }
+        let Some(s) = self.io.open_stream_at(session, HUB_URGENCY) else {
+            return;
+        };
+        if let Some(l) = self.io.links.get_mut(peer) {
+            l.out = Some(s);
+        }
+        self.io.flush_queue(peer, session, s);
+        let (m, mut h) = self.mem_host();
+        m.push_floor(&mut h, peer);
     }
 
     /// Close a session that duplicates the one in use. It is remembered as a hub-protocol session so its close is
@@ -236,6 +266,10 @@ where
         let Some(s) = self.io.sess.remove(&session) else {
             return;
         };
+        if self.io.is_hub && s.incoming && !self.io.is_hub_id(&s.peer) {
+            let full = self.io.full_id(&s.peer);
+            self.io.notice(crate::relay::MemberNotice::Gone(full));
+        }
         self.io.drop_session_streams(session);
         self.io.rx_seen.remove(&session);
         let peer = s.peer;
@@ -300,7 +334,7 @@ where
                 opened: old.map_or(now, |l| l.opened),
             },
         );
-        if let Some(s) = self.io.open_stream(alt) {
+        if let Some(s) = self.io.open_stream_at(alt, HUB_URGENCY) {
             if let Some(l) = self.io.links.get_mut(peer) {
                 l.out = Some(s);
             }

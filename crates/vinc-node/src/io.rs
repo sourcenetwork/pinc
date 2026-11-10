@@ -134,6 +134,7 @@ pub(crate) struct Io<E: Ep, St: Store> {
     /// The dial backoff of a layer's peer: when the next dial may start, and the wait that was used.
     pub(crate) lfailed: BTreeMap<(Layer, NodeId), (Nanos, Nanos)>,
     pub(crate) evq: VecDeque<Event>,
+    pub(crate) members: VecDeque<crate::relay::MemberNotice>,
     pub(crate) out: EventQueue,
     pub(crate) tq: TraceQueue,
     pub(crate) ticket: [u8; TICKET_MAX],
@@ -194,6 +195,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             ldials: Vec::new(),
             lfailed: BTreeMap::new(),
             evq: VecDeque::with_capacity(64),
+            members: VecDeque::new(),
             out: EventQueue::with_capacity(256),
             tq: TraceQueue::new(trace),
             ticket: [0; TICKET_MAX],
@@ -214,6 +216,14 @@ impl<E: Ep, St: Store> Io<E, St> {
     /// The host reports the wall clock.
     pub(crate) fn set_wall(&mut self, wall_ms: u64) {
         self.wall = (self.now, wall_ms);
+    }
+
+    /// Queue a notice for the hub's relay; a full queue drops the oldest.
+    pub(crate) fn notice(&mut self, n: crate::relay::MemberNotice) {
+        if self.members.len() >= TABLE_MAX {
+            self.members.pop_front();
+        }
+        self.members.push_back(n);
     }
 
     pub(crate) fn emit(&mut self, e: NodeEvent) {
@@ -270,6 +280,23 @@ impl<E: Ep, St: Store> Io<E, St> {
         };
         self.register_stream(session, s);
         self.strm.contains_key(&(session, s)).then_some(s)
+    }
+
+    /// Open a bidirectional stream on `session` at `urgency` (a lower number is sent first).
+    pub(crate) fn open_stream_at(&mut self, session: SessionId, urgency: u8) -> Option<StreamId> {
+        let s = self.open_stream(session)?;
+        if self
+            .cmd(Command::SetUrgency {
+                session,
+                stream: s,
+                urgency,
+            })
+            .is_err()
+        {
+            self.drop_strm(session, s);
+            return None;
+        }
+        Some(s)
     }
 
     /// Write `data` to a stream behind whatever it already holds. False if the stream is gone or full.
@@ -400,7 +427,7 @@ impl<E: Ep, St: Store> Io<E, St> {
         match (lane, target) {
             (_, Some((conn, Some(s)))) => self.write(conn, s, frame),
             (Lane::Fan, Some((conn, None))) => {
-                let Some(s) = self.open_stream(conn) else {
+                let Some(s) = self.open_stream_at(conn, vinc_core::FAN_URGENCY) else {
                     return false;
                 };
                 if let Some(l) = self.links.get_mut(peer) {
@@ -465,13 +492,6 @@ impl<E: Ep, St: Store> Io<E, St> {
         }
     }
 
-    fn pending_bytes(&self, session: SessionId) -> usize {
-        self.strm
-            .range((session, StreamId::MIN)..=(session, StreamId::MAX))
-            .map(|(_, s)| s.pending())
-            .sum()
-    }
-
     // ---------------------------------------------------------------- evidence and backoff
 
     /// Look at every hub-protocol session's packet count and note when it last moved. The transport reports when the
@@ -502,7 +522,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             last_rx: st.heard.max(extra),
             srtt: st.transport.srtt,
             pto: st.pto_count,
-            inflight: u32::try_from(self.pending_bytes(sid)).unwrap_or(u32::MAX),
+            inflight: u32::try_from(self.ep.in_flight(sid).unwrap_or(0)).unwrap_or(u32::MAX),
             direct: st.path_validated && st.route.is_some_and(|(_, r)| !is_relay_addr(&r)),
         })
     }

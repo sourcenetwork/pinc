@@ -11,19 +11,22 @@
 //! a newer request for bytes an older response from the same peer is still sending supersedes that response; the
 //! second rule is the server's, the first is here.
 //!
-//! The endpoint hands the node the in-order bytes of a stream only, so the node keeps what the verifier has not
-//! released in a buffer of its own per stream, and the out-of-order write-through of range proofs is not used: a lost
-//! packet delays the groups behind it until its retransmission.
+//! The bytes of a response stay where the endpoint received them: the verifier reads them in place (the endpoint hands
+//! out borrowed slices, also of bytes that arrived beyond a hole) and releases them as it verifies, so the node copies
+//! nothing. Write-through: bytes beyond a hole are reported to the fetch, which asks the provider for range proofs
+//! (extension frames), and a provider that sees bytes lost sends proofs ahead of the retransmission, so the groups
+//! behind a lost packet verify without waiting for it. The stream id in a proof frame is the endpoint's stream id,
+//! which both ends share; the layer's own handle for a stream is local to the node.
 //!
-//! Invariants: every table is bounded; a stream buffer never exceeds [`STREAM_CAP`]; only bytes the fetcher verified
-//! reach the store; a fetch that finished leaves no stream behind.
+//! Invariants: every table is bounded; only bytes the fetcher verified reach the store; a fetch that finished leaves
+//! no stream behind; a served response slot is freed when the response is acknowledged.
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::fmt;
 
-use vinc_core::{Command, SessionId};
+use vinc_core::{Command, SessionId, Value};
 use vinc_membership::NodeId;
 use vinc_transport::stream::{RecvStatus, StreamId};
 use vinc_values::fetch::{Fetch, FetchSpec, In, Io as FetchIo, StartError};
@@ -43,15 +46,12 @@ use crate::io::Io;
 use crate::layer::Layer;
 use crate::node::Node;
 use crate::trace::{Body, NodeTrace, tag};
+use crate::values_frames::{AHEAD_RUNS, EXT_MAX, head_sid, new_parts, stored_runs, with_sid};
 
 /// The most fetches running at once.
 pub const FETCHES: usize = 8;
 /// The most requests the server holds at once.
 const SERVERS: usize = 32;
-/// The most bytes a stream's receive buffer holds before the stream is reset.
-const STREAM_CAP: usize = 4 << 20;
-/// The reset code of a stream that overflowed its buffer.
-const OVERFLOW: u64 = 5;
 
 /// What a fetch is asked to get.
 #[derive(Debug, Clone, Copy)]
@@ -109,12 +109,22 @@ struct VStream {
     session: SessionId,
     stream: StreamId,
     owner: Owner,
-    buf: Vec<u8>,
-    /// The absolute stream offset of `buf[0]`.
+    /// The absolute stream offset up to which the layer released the bytes.
     base: u64,
-    /// The absolute offset of the end of the stream, once its end arrived.
-    fin: Option<u64>,
+    /// The end of the contiguous bytes last reported to the fetch.
+    seen: u64,
+    /// The runs of bytes beyond a hole last reported to the fetch.
+    ahead: [(u64, u64); AHEAD_RUNS],
     announced: bool,
+    /// For a served response: what the server was last told about its sending.
+    pace: Pace,
+}
+
+/// What the server was last told of a response it serves.
+#[derive(Debug, Clone, Copy, Default)]
+struct Pace {
+    sent: u64,
+    lost: Option<u64>,
 }
 
 /// The streams of the layer, found by a node-wide number (the value layer's stream handle) or by session and stream.
@@ -156,10 +166,11 @@ impl Net {
                 session,
                 stream,
                 owner,
-                buf: Vec::new(),
                 base: 0,
-                fin: None,
+                seen: 0,
+                ahead: [(0, 0); AHEAD_RUNS],
                 announced: false,
+                pace: Pace::default(),
             },
         );
         self.by_real.insert((session, stream), lid);
@@ -256,37 +267,78 @@ impl<E: Ep, St: Store> VSess<'_, E, St> {
     }
 }
 
+impl<E: Ep, St: Store> VSess<'_, E, St> {
+    /// The endpoint's session and stream of a layer stream.
+    fn real(&self, stream: StreamId) -> Option<(SessionId, StreamId)> {
+        self.net.streams.get(&stream).map(|s| (s.session, s.stream))
+    }
+}
+
 impl<E: Ep, St: Store> Session for VSess<'_, E, St> {
     fn visit<F: FnMut(&[u8]) -> usize>(&mut self, stream: StreamId, from: u64, mut f: F) {
-        let Some(s) = self.net.streams.get(&stream) else {
+        let Some((session, real)) = self.real(stream) else {
             return;
         };
-        let Some(rel) = from.checked_sub(s.base).and_then(|r| usize::try_from(r).ok()) else {
-            return;
-        };
-        if let Some(rest) = s.buf.get(rel..).filter(|r| !r.is_empty()) {
-            f(rest);
+        let mut at = from;
+        while let Some(piece) = self.io.ep.read_at(session, real, at).filter(|p| !p.is_empty()) {
+            let n = f(piece);
+            at = at.saturating_add(n as u64);
+            if n < piece.len() {
+                break;
+            }
         }
     }
 
     fn has(&self, stream: StreamId, from: u64, len: u64) -> bool {
-        self.net
-            .streams
-            .get(&stream)
-            .is_some_and(|s| from >= s.base && from.saturating_add(len) <= s.base + s.buf.len() as u64)
+        let Some((session, real)) = self.real(stream) else {
+            return false;
+        };
+        let (mut at, end) = (from, from.saturating_add(len));
+        while at < end {
+            let Some(piece) = self.io.ep.read_at(session, real, at).filter(|p| !p.is_empty()) else {
+                return false;
+            };
+            at = at.saturating_add(piece.len() as u64);
+        }
+        true
     }
 
     fn consume(&mut self, stream: StreamId, upto: u64) {
+        let Some((session, real)) = self.real(stream) else {
+            return;
+        };
         let Some(s) = self.net.streams.get_mut(&stream) else {
             return;
         };
-        let n = usize::try_from(upto.saturating_sub(s.base)).map_or(s.buf.len(), |n| n.min(s.buf.len()));
-        s.buf.drain(..n);
-        s.base += n as u64;
+        let mut want = upto.saturating_sub(s.base);
+        while want > 0 {
+            let Some(n) = self
+                .io
+                .ep
+                .read_chunk(session, real)
+                .map(|c| c.len().min(usize::try_from(want).unwrap_or(usize::MAX)))
+                .filter(|n| *n > 0)
+            else {
+                break;
+            };
+            if self
+                .io
+                .cmd(Command::Consume {
+                    session,
+                    stream: real,
+                    n,
+                })
+                .is_err()
+            {
+                break;
+            }
+            s.base += n as u64;
+            want -= n as u64;
+        }
     }
 
     fn write(&mut self, stream: StreamId, data: &[u8], fin: bool) -> bool {
-        let Some((session, real)) = self.net.streams.get(&stream).map(|s| (s.session, s.stream)) else {
+        let Some((session, real)) = self.real(stream) else {
             return false;
         };
         self.io.write(session, real, data) && (!fin || self.io.finish(session, real))
@@ -296,10 +348,22 @@ impl<E: Ep, St: Store> Session for VSess<'_, E, St> {
         self.abandon(stream, code);
     }
 
-    // vertexia: the endpoint has no command for a range-proof frame, so write-through is off and a lost packet
-    // delays the groups behind it; a `send_extension` command on the endpoint turns it on.
-    fn send_ext(&mut self, _stream: StreamId, _ty: u64, _body: &[u8]) -> bool {
-        false
+    fn send_ext(&mut self, stream: StreamId, ty: u64, body: &[u8]) -> bool {
+        let Some((session, real)) = self.real(stream) else {
+            return false;
+        };
+        let mut out = [0u8; EXT_MAX];
+        let Some(n) = with_sid(body, real, &mut out) else {
+            return false;
+        };
+        let Some(frame) = out.get(..n) else { return false };
+        self.io
+            .cmd(Command::SendExtension {
+                session,
+                ty,
+                body: frame,
+            })
+            .is_ok()
     }
 }
 
@@ -329,16 +393,14 @@ impl<E: Ep, St: Store> Outbound for VSess<'_, E, St> {
         }
     }
 
-    // vertexia: the endpoint has no stream urgency command, so every request stream runs at its default urgency;
-    // the second class of the reference needs that command.
-    fn open_stream(&mut self, provider: Provider, _urgency: u8) -> Result<StreamId, OpenError> {
+    fn open_stream(&mut self, provider: Provider, urgency: u8) -> Result<StreamId, OpenError> {
         let peer = self.net.peer_of(provider).ok_or(OpenError::NotConnected)?;
         let session = *self
             .io
             .lout
             .get(&(Layer::Values, peer))
             .ok_or(OpenError::NotConnected)?;
-        let real = self.io.open_stream(session).ok_or(OpenError::Busy)?;
+        let real = self.io.open_stream_at(session, urgency).ok_or(OpenError::Busy)?;
         if let Some(lid) = self.net.add(session, real, self.owner) {
             Ok(lid)
         } else {
@@ -594,17 +656,6 @@ where
         let Some(prov) = v.net.provider(&peer) else {
             return;
         };
-        // The endpoint tells us nothing when a response is fully acknowledged, so a full server recycles its oldest
-        // response: the response itself goes on in the endpoint, only the bookkeeping for proofs and for superseding
-        // it is dropped.
-        if v.server.held() >= SERVERS
-            && let Some(old) = v.net.served.pop_front()
-        {
-            self.server_in(now, &ServerIn::Done(old));
-            if let Some(v) = self.vals.as_deref_mut() {
-                v.net.drop_stream(old);
-            }
-        }
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
@@ -643,54 +694,46 @@ where
         let Some(s) = v.net.streams.get_mut(&lid) else {
             return;
         };
-        let before = s.buf.len();
-        let (status, over) = self.io.drain_stream(session, stream, &mut s.buf, STREAM_CAP);
-        let added = s.buf.len() - before;
-        if status == RecvStatus::Finished {
-            s.fin = Some(s.base + s.buf.len() as u64);
-        }
         let owner = s.owner;
-        if over {
-            let mut se = VSess {
-                io: &mut self.io,
-                net: &mut v.net,
-                owner,
-            };
-            se.abandon(lid, OVERFLOW);
-            if let Owner::Fetch(fid) = owner {
-                self.fetch_in(
-                    now,
-                    fid,
-                    &In::Reset {
-                        stream: lid,
-                        code: OVERFLOW,
-                    },
-                );
-            } else {
-                self.server_in(now, &ServerIn::Reset(lid));
-            }
+        let Owner::Fetch(fid) = owner else {
+            self.server_in(now, &ServerIn::Readable(lid));
             return;
+        };
+        let (contig, runs, n) = stored_runs(&self.io.ep, session, stream, s.base);
+        let added = contig.saturating_sub(s.seen.max(s.base));
+        s.seen = s.seen.max(contig);
+        let mut fresh = [(0u64, 0u64); AHEAD_RUNS * 4];
+        let fresh_n = new_parts(runs.get(..n).unwrap_or_default(), &s.ahead, &mut fresh);
+        s.ahead = [(0, 0); AHEAD_RUNS];
+        for (d, r) in s.ahead.iter_mut().zip(runs.iter().take(n)) {
+            *d = *r;
         }
-        match owner {
-            Owner::Serve => self.server_in(now, &ServerIn::Readable(lid)),
-            Owner::Fetch(fid) => {
-                if added > 0 {
-                    self.fetch_in(
-                        now,
-                        fid,
-                        &In::Readable {
-                            stream: lid,
-                            bytes: added,
-                        },
-                    );
-                }
-                self.announce_end(now, lid);
-            }
+        if added > 0 {
+            self.fetch_in(
+                now,
+                fid,
+                &In::Readable {
+                    stream: lid,
+                    bytes: usize::try_from(added).unwrap_or(usize::MAX),
+                },
+            );
         }
+        for (off, end) in fresh.iter().take(fresh_n) {
+            self.fetch_in(
+                now,
+                fid,
+                &In::Ahead {
+                    stream: lid,
+                    offset: *off,
+                    len: end - off,
+                },
+            );
+        }
+        self.announce_end(now, session, stream, lid);
     }
 
     /// Tell the fetch a stream ended, once the end arrived and the value layer released every byte before it.
-    fn announce_end(&mut self, now: Nanos, lid: u64) {
+    fn announce_end(&mut self, now: Nanos, session: SessionId, real: StreamId, lid: u64) {
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
@@ -698,7 +741,19 @@ where
             return;
         };
         let Owner::Fetch(fid) = s.owner else { return };
-        if s.announced || s.fin.is_none_or(|end| s.base < end) {
+        if s.announced {
+            return;
+        }
+        // Consuming nothing reads the state of the end: finished once the end arrived and every byte was consumed.
+        let finished = matches!(
+            self.io.cmd(Command::Consume {
+                session,
+                stream: real,
+                n: 0
+            }),
+            Ok(Value::Recv(RecvStatus::Finished))
+        );
+        if !finished {
             return;
         }
         s.announced = true;
@@ -732,6 +787,112 @@ where
             ),
             Owner::Serve => self.server_in(now, &ServerIn::Reset(lid)),
         }
+    }
+
+    // ---------------------------------------------------------------- frames and pacing
+
+    /// What the endpoint holds for the layer: the range-proof frames that arrived, and the sending state of the
+    /// responses being served (a response fully acknowledged frees its slot; bytes found lost make the server send
+    /// proofs ahead of the retransmission). True if anything was fed to the layer.
+    pub(crate) fn values_step(&mut self, now: Nanos) -> bool {
+        if self.vals.is_none() {
+            return false;
+        }
+        let a = self.values_extensions(now);
+        let b = self.values_pacing(now);
+        a | b
+    }
+
+    /// Route the extension frames the endpoint holds to the stream they name.
+    fn values_extensions(&mut self, now: Nanos) -> bool {
+        let mut did = false;
+        let mut buf = [0u8; vinc_core::EXT_BODY_MAX];
+        while let Ok(Some((session, ty, len))) = self.io.ep.read_extension(&mut buf) {
+            did = true;
+            let Some(body) = buf.get(..len) else { continue };
+            if self.io.lsess.get(&session).map(|s| s.layer) != Some(Layer::Values) {
+                continue;
+            }
+            let Some(v) = self.vals.as_deref() else { continue };
+            let Some(lid) = head_sid(body).and_then(|real| v.net.by_real.get(&(session, real)).copied()) else {
+                continue;
+            };
+            let Some(owner) = v.net.streams.get(&lid).map(|s| s.owner) else {
+                continue;
+            };
+            let mut local = [0u8; EXT_MAX];
+            let Some(frame) = with_sid(body, lid, &mut local).and_then(|n| local.get(..n)) else {
+                continue;
+            };
+            match owner {
+                Owner::Fetch(fid) => self.fetch_in(now, fid, &In::Ext { ty, body: frame }),
+                Owner::Serve => self.server_in(now, &ServerIn::Ext { ty, body: frame }),
+            }
+        }
+        did
+    }
+
+    /// Tell the server how each served response is going, and free the ones the peer fully acknowledged.
+    fn values_pacing(&mut self, now: Nanos) -> bool {
+        let Some(v) = self.vals.as_deref() else {
+            return false;
+        };
+        if v.net.served.is_empty() {
+            return false;
+        }
+        let mut lids = [0u64; SERVERS];
+        let mut n = 0;
+        for (d, l) in lids.iter_mut().zip(v.net.served.iter()) {
+            *d = *l;
+            n += 1;
+        }
+        let mut did = false;
+        for lid in lids.iter().take(n) {
+            let Some(v) = self.vals.as_deref_mut() else { break };
+            let Some(s) = v.net.streams.get_mut(lid) else {
+                v.net.served.retain(|x| x != lid);
+                continue;
+            };
+            let (session, real, pace) = (s.session, s.stream, s.pace);
+            let state = self.io.ep.send_state(session, real);
+            if state.is_none_or(|st| st.done) {
+                did = true;
+                self.server_in(now, &ServerIn::Done(*lid));
+                if let Some(v) = self.vals.as_deref_mut() {
+                    v.net.drop_stream(*lid);
+                }
+                self.io.drop_strm(session, real);
+                continue;
+            }
+            let Some(st) = state else { continue };
+            let ev = if st.lost.is_some() && st.lost != pace.lost {
+                st.lost.map(|offset| ServerIn::Loss {
+                    stream: *lid,
+                    offset,
+                    sent: st.sent,
+                    window: st.window,
+                })
+            } else if st.sent > pace.sent {
+                Some(ServerIn::Sent {
+                    stream: *lid,
+                    sent: st.sent,
+                    window: st.window,
+                })
+            } else {
+                None
+            };
+            if let Some(s) = self.vals.as_deref_mut().and_then(|v| v.net.streams.get_mut(lid)) {
+                s.pace = Pace {
+                    sent: st.sent,
+                    lost: st.lost,
+                };
+            }
+            if let Some(ev) = ev {
+                did = true;
+                self.server_in(now, &ev);
+            }
+        }
+        did
     }
 
     // ---------------------------------------------------------------- timers

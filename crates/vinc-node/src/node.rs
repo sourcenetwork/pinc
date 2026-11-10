@@ -312,6 +312,7 @@ where
             self.refresh_alive(now);
             let mut busy = self.service(now);
             busy |= self.events_step(now);
+            busy |= self.values_step(now);
             self.drive(now);
             busy |= self.inbound_step(now);
             busy |= self.notices_step();
@@ -369,6 +370,7 @@ where
         }
         while let Some(e) = self.mem.poll_event() {
             did = true;
+            self.dtn_contacts_changed();
             self.io.emit(NodeEvent::Member(e));
         }
         if self.io.tq.on() {

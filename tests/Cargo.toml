@@ -412,6 +412,10 @@ name = "core_endpoint"
 path = "core_endpoint.rs"
 
 [[test]]
+name = "core_extras"
+path = "core_extras.rs"
+
+[[test]]
 name = "core_demux"
 path = "core_demux.rs"
 
@@ -841,5 +845,17 @@ name = "layers_determinism"
 path = "layers_determinism.rs"
 
 [[test]]
-name = "core_extras"
-path = "core_extras.rs"
+name = "node_pto"
+path = "node_pto.rs"
+
+[[test]]
+name = "layers_copies"
+path = "layers_copies.rs"
+
+[[test]]
+name = "node_hub_duties"
+path = "node_hub_duties.rs"
+
+[[test]]
+name = "layers_dtn_restart"
+path = "layers_dtn_restart.rs"

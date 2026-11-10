@@ -15,7 +15,7 @@ mod layers_common;
 use layers_common::{LWorld, big, secs};
 use vinc_node::trace::{Body, NodeTrace};
 use vinc_node::{Enabled, NodeEvent};
-use vinc_sim::NodeId as SimId;
+use vinc_sim::{Loss, NodeId as SimId};
 use vinc_tests::{LayerApps, Lie, NCmd, SplitMix64};
 
 fn values_on(tag: u8) -> LayerApps {
@@ -206,5 +206,59 @@ fn a_peer_that_dials_again_supersedes_its_older_incoming_session() {
         assert!(superseded >= 1, "the provider superseded the older session of its peer");
         assert_eq!(completes(&w, m[0]), 1);
         assert_eq!(w.apps(m[0]).values.fetched(&root, value.len() as u64), Some(value));
+    });
+}
+
+/// How many groups the requester verified out of order against a range proof, from its traces.
+fn ahead_groups(w: &LWorld, n: SimId) -> usize {
+    w.sim
+        .node(n)
+        .traces
+        .iter()
+        .filter(|(_, t)| {
+            matches!(
+                &t.body,
+                Body::Values(_, vinc_values::trace::Trace::Verified { ahead: true, .. })
+            )
+        })
+        .count()
+}
+
+#[test]
+fn groups_behind_a_lost_packet_verify_through_range_proofs_and_nothing_is_copied() {
+    big(|| {
+        for seed in [241u64, 242, 243] {
+            let mut ahead = Vec::new();
+            for loss in [Loss::None, Loss::Bernoulli(0.03)] {
+                let mut w = LWorld::build_lossy(seed, 2, 3, 0, true, loss, values_on);
+                let m = w.members.clone();
+                let value = data(seed, 3 << 20);
+                let root = w.apps(m[1]).values.provide(value.clone());
+                let providers = ids(&w, &m[1..2]);
+                w.sim.command(
+                    secs(30),
+                    m[0],
+                    NCmd::ValuesFetch {
+                        root,
+                        length: value.len() as u64,
+                        ranges: vec![],
+                        providers,
+                    },
+                );
+                w.run(secs(150));
+                assert_eq!(completes(&w, m[0]), 1, "seed {seed} {loss:?}");
+                assert_eq!(fails(&w, m[0]), 0, "seed {seed} {loss:?}");
+                assert_eq!(
+                    w.apps(m[0]).values.fetched(&root, value.len() as u64),
+                    Some(value),
+                    "seed {seed} {loss:?}"
+                );
+                ahead.push(ahead_groups(&w, m[0]));
+            }
+            assert!(
+                ahead[1] > ahead[0],
+                "seed {seed}: groups behind a lost packet were verified from their proofs: {ahead:?}"
+            );
+        }
     });
 }

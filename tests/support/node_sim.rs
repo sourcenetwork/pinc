@@ -27,15 +27,15 @@ use vinc_connect::carrier::MAX_FRAME_LEN;
 use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
 use vinc_connect::client::{Config as ConnCfg, Io, Kind, RelayCfg};
-use vinc_connect::relay::datagram::Datagram;
 use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
-use vinc_core::{
-    Command, Endpoint, EndpointConfig, Event, Query, SessionId, Slot, is_relay_addr, relay_addr, relay_parts,
-};
+use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, Slot, relay_addr, relay_parts};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
 use vinc_keystore::{KeyStore, SoftwareStore};
 use vinc_membership::session::StoreError;
-use vinc_node::{Apps, Config as NodeConfig, HUB_ALPN, NoApps, Node, NodeEvent, ServeSource, Store, TraceItem};
+use vinc_node::{
+    Apps, Config as NodeConfig, DtnRestored, HUB_ALPN, MemberNotice, NoApps, Node, NodeEvent, ServeSource, Store,
+    TraceItem, is_relay_request,
+};
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
 use vinc_transport::conn::Resources;
@@ -45,7 +45,12 @@ use vinc_transport::stream::{self, NoSource, StreamSource, Streams};
 
 use crate::Caps;
 use crate::connect_host::{Outbox, answer_parts};
-use crate::core_net::{CC, CCT, CF, CHUNKS_PER_CONN, CN, CNP, CPK, CTK, metered};
+use crate::core_net::{CC, CCT, CF, CN, CNP, CPK, CTK, metered};
+
+/// The chunks of each session's buffer pool. A hub session carries a stream in each direction (the hub opens its own as
+/// soon as it accepts, to send the replay floor), and a stream is admitted only while the pool covers the receive
+/// window of every stream: the pool holds two windows (256 KiB each) and the send buffers.
+const CHUNKS_PER_CONN: usize = 64;
 
 pub const NK: usize = 24;
 pub const ND: usize = 384;
@@ -254,7 +259,6 @@ struct HubSide {
     by_node: HashMap<NodeId, StreamId>,
     stores: ResponderStores<4, 4>,
     slots: Vec<NodeId>,
-    members: HashMap<SessionId, NodeId>,
     scid: u64,
 }
 
@@ -300,6 +304,8 @@ pub struct SimNode<A: SimApps = NoApps> {
     pub out: Outbox,
     pub events: VecDeque<NEv>,
     pub traces: Vec<(Time, TraceItem)>,
+    /// What the last restart found in the delay-tolerant records.
+    pub restored: DtnRestored,
     now: Time,
     down: bool,
     pub addr: SocketAddr,
@@ -410,7 +416,6 @@ impl<A: SimApps> SimNode<A> {
             by_node: HashMap::new(),
             stores: ResponderStores::default(),
             slots: Vec::new(),
-            members: HashMap::new(),
             scid: 0,
         });
         let mut n = Self {
@@ -435,6 +440,7 @@ impl<A: SimApps> SimNode<A> {
             out: Outbox::default(),
             events: VecDeque::new(),
             traces: Vec::new(),
+            restored: DtnRestored::default(),
             now: spec.start,
             down: false,
             addr: spec.addr,
@@ -456,25 +462,12 @@ impl<A: SimApps> SimNode<A> {
         u16::try_from(i).unwrap()
     }
 
-    fn session_remote(&self, sid: SessionId) -> Option<SocketAddr> {
-        match self.node.endpoint().query(Query::Stats(sid)) {
-            vinc_core::Answer::Stats(st) if st.path_validated => st.route.map(|(_, r)| r).filter(|r| !is_relay_addr(r)),
-            _ => None,
-        }
-    }
-
     fn member_addr(&self, node: &NodeId) -> Option<SocketAddr> {
-        let hub = self.hub.as_ref()?;
-        let (sid, _) = hub.members.iter().find(|(_, n)| *n == node)?;
-        self.session_remote(*sid)
+        self.node.member_addr(node)
     }
 
     fn member_at(&self, src: &SocketAddr) -> Option<NodeId> {
-        let hub = self.hub.as_ref()?;
-        hub.members
-            .iter()
-            .find(|(sid, _)| self.session_remote(**sid) == Some(*src))
-            .map(|(_, n)| *n)
+        self.node.member_at(src)
     }
 
     /// One turn of the host loop, repeated until nothing moves.
@@ -487,6 +480,7 @@ impl<A: SimApps> SimNode<A> {
         for _ in 0..128 {
             metered(|| self.node.poll(now));
             let mut busy = self.events_step(now);
+            busy |= self.members_step(now);
             busy |= self.keys_step(now);
             busy |= self.io_step(now);
             busy |= self.tx_step(now);
@@ -561,29 +555,26 @@ impl<A: SimApps> SimNode<A> {
                 let allow = !self.deny;
                 let _ = self.node.command(now, Command::AcpAnswer { check, allow });
             }
-            Event::Incoming { session, node, .. } => {
-                if let Some(h) = self.hub.as_mut() {
-                    h.members.insert(session, node);
-                }
-            }
-            Event::Closed { session, .. } => {
-                if let Some(h) = self.hub.as_mut()
-                    && let Some(n) = h.members.remove(&session)
-                {
-                    h.relay.udp_gone(&n);
-                }
-            }
-            Event::PeerAwake { session } => {
-                if let Some(h) = self.hub.as_mut()
-                    && let Some(n) = h.members.get(&session).copied()
-                {
+            _ => {}
+        }
+    }
+
+    /// What the node tells the hub's relay about its members: a session ended, a member woke.
+    fn members_step(&mut self, now: u64) -> bool {
+        let mut did = false;
+        while let Some(n) = self.node.poll_member() {
+            did = true;
+            let Some(h) = self.hub.as_mut() else { continue };
+            match n {
+                MemberNotice::Gone(m) => h.relay.udp_gone(&m),
+                MemberNotice::Awake(m) => {
                     let mut s = Collect::default();
-                    h.relay.member_returned(now, &n, &mut s);
+                    h.relay.member_returned(now, &m, &mut s);
                     self.apply(now, s);
                 }
             }
-            _ => {}
         }
+        did
     }
 
     fn keys_step(&mut self, now: u64) -> bool {
@@ -757,22 +748,7 @@ impl<A: SimApps> SimNode<A> {
                     }
                 }
                 Eff::Trace(t) => {
-                    match t {
-                        Trace::CarrierOpened { node, .. } => self.node.member_carrier_opened(now, &node.bytes),
-                        Trace::CarrierClosed { node, asleep } => {
-                            self.node.member_carrier_closed(now, &node.bytes, asleep.then_some(now));
-                        }
-                        Trace::Pulse { node } => {
-                            let sid = self
-                                .hub
-                                .as_ref()
-                                .and_then(|h| h.members.iter().find(|(_, n)| **n == node).map(|(s, _)| *s));
-                            if let Some(session) = sid {
-                                let _ = self.node.command(now, Command::Pulse { session, sent: true });
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.node.relay_trace(now, &t);
                     self.events.push_back(NEv::Relay(t));
                 }
             }
@@ -922,12 +898,7 @@ impl<A: SimApps> SimNode<A> {
             return;
         }
         self.node.set_wall_ms(now, self.wall_ms(now));
-        let request = self.hub.is_some()
-            && data.first().is_some_and(|b| *b < 0x40)
-            && !matches!(
-                Datagram::decode(data),
-                Ok(Datagram::Qadr { .. } | Datagram::DnsReply { .. } | Datagram::Spl { .. })
-            );
+        let request = self.hub.is_some() && is_relay_request(data);
         if request {
             let member = self.member_at(&remote);
             let mut s = Collect::default();
@@ -1174,6 +1145,8 @@ impl<A: SimApps> SimNode<A> {
     pub fn crash(&mut self, _now: Time) -> Vec<u8> {
         self.down = true;
         self.out = Outbox::default();
+        // What the host keeps (its stores and records) survives the crash; the node's memory does not.
+        self.apps = self.node.apps_mut().clone();
         self.seal.blob.borrow().clone()
     }
 
@@ -1185,6 +1158,8 @@ impl<A: SimApps> SimNode<A> {
         let incs = std::mem::take(&mut self.incarnations);
         let mut fresh = Self::with_seal(self.apps.clone(), &spec, seal, true);
         fresh.clock = self.clock.clone();
+        fresh.node.set_wall_ms(now, fresh.wall_ms(now));
+        fresh.restored = fresh.node.dtn_restore(now);
         fresh.incarnations = incs;
         let last = fresh.node.membership().incarnation();
         fresh.incarnations.push(last);

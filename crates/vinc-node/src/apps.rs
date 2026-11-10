@@ -131,6 +131,27 @@ pub trait DtnApp<P: Provider> {
     fn in_contact(&self, _peer: &NodeId, _wall_ms: u64) -> bool {
         true
     }
+
+    /// The wall clock (milliseconds) at which [`in_contact`](Self::in_contact) next changes for any peer, if the rule
+    /// follows the clock (a contact window opening or closing); the node looks at its contacts at that moment and not
+    /// before. `None`, the default, says the rule does not change by itself.
+    fn next_contact_change(&self, _wall_ms: u64) -> Option<u64> {
+        None
+    }
+
+    /// Keep the node's record of a bundle (opaque bytes) under `id`, replacing the earlier one. The node saves a
+    /// record when it makes a bundle, takes custody, hands copies on, and as a partial bundle grows; it drops the
+    /// record with [`drop_record`](Self::drop_record). A host that keeps them (with the bundles it stores) lets the
+    /// node resume after a restart with [`Node::dtn_restore`](crate::Node::dtn_restore). The default keeps nothing.
+    fn save_record(&mut self, _id: &BundleId, _record: &[u8]) {}
+
+    /// Forget the record of a bundle.
+    fn drop_record(&mut self, _id: &BundleId) {}
+
+    /// The `n`th record kept, in any order but the same each time, for [`Node::dtn_restore`](crate::Node::dtn_restore).
+    fn record_at(&self, _n: usize) -> Option<(BundleId, &[u8])> {
+        None
+    }
 }
 
 /// The three host interfaces of the layers above the sessions.

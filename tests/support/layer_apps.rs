@@ -83,6 +83,17 @@ impl VStore {
         self.0.borrow_mut().lie = lie;
     }
 
+    /// Make room for a value of `len` bytes ahead of its fetch, so the store's writes allocate nothing.
+    pub fn reserve(&self, root: &[u8; 32], len: usize) {
+        self.0
+            .borrow_mut()
+            .fetched
+            .entry(*root)
+            .or_default()
+            .data
+            .resize(len, 0);
+    }
+
     pub fn covered(&self, root: &[u8; 32]) -> u64 {
         self.0
             .borrow()
@@ -213,6 +224,8 @@ pub struct DtnStore {
     pub key: Rc<Keypair>,
     pub secrets: Rc<Secrets>,
     pub bundles: BTreeMap<BundleId, (Vec<u8>, Vec<u8>)>,
+    /// The node's records of the bundles it looks after, kept across a restart.
+    pub records: BTreeMap<BundleId, Vec<u8>>,
     /// Contact windows `(peer, from_ms, to_ms)` in simulated milliseconds; `None` means every peer, always.
     pub windows: Option<Vec<([u8; 32], u64, u64)>>,
     pub budget: u64,
@@ -245,6 +258,7 @@ impl DtnStore {
             key: Rc::new(key),
             secrets: Rc::new(Secrets { keys, dk, xs }),
             bundles: BTreeMap::new(),
+            records: BTreeMap::new(),
             windows: None,
             budget: 8 << 20,
             policy: Policy {
@@ -287,6 +301,29 @@ impl DtnApp<Caps> for DtnStore {
 
     fn budget(&self) -> u64 {
         self.budget
+    }
+
+    fn next_contact_change(&self, wall_ms: u64) -> Option<u64> {
+        let w = self.windows.as_ref()?;
+        let epoch = WALL_EPOCH / 1_000_000;
+        let t = wall_ms.saturating_sub(epoch);
+        w.iter()
+            .flat_map(|(_, a, b)| [*a, *b])
+            .filter(|e| *e > t)
+            .min()
+            .map(|e| e + epoch)
+    }
+
+    fn save_record(&mut self, id: &BundleId, record: &[u8]) {
+        self.records.insert(*id, record.to_vec());
+    }
+
+    fn drop_record(&mut self, id: &BundleId) {
+        self.records.remove(id);
+    }
+
+    fn record_at(&self, n: usize) -> Option<(BundleId, &[u8])> {
+        self.records.iter().nth(n).map(|(id, r)| (*id, r.as_slice()))
     }
 
     fn policy(&self) -> Policy {

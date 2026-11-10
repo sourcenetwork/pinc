@@ -133,6 +133,15 @@ impl Membership {
         self.tx_buf(h, peer, Route::Session, &Frame::Snap(snap), &mut buf);
     }
 
+    /// `FLOOR_PUSH`: a hub that has just accepted a session of a member sends its replay floor at once, with its first
+    /// flight, instead of waiting for the member's HELLO, so a restarted member's floor gathering completes a round
+    /// trip earlier per hub. The HELLO that follows sends it again for a new attachment; the member keeps the later.
+    pub fn push_floor<H: Host>(&mut self, h: &mut H, peer: &NodeId) {
+        if self.is_hub && !self.is_boot(peer) {
+            self.send_floor(h, peer);
+        }
+    }
+
     fn send_floor<H: Host>(&mut self, h: &mut H, peer: &NodeId) {
         let mut body = [0u8; FLOOR_MAX];
         let n = h.floor(peer, &mut body).min(FLOOR_MAX);

@@ -6,8 +6,12 @@
 
 use core::net::SocketAddr;
 
+use core::ops::Range;
 use vinc_connect::client::Port;
-use vinc_core::{Answer, Endpoint, Event, Query, SessionId, SessionStats, TraceRecord, Transmit};
+
+use vinc_core::{
+    Answer, CommandError, Endpoint, Event, Query, SendState, SessionId, SessionStats, TraceRecord, Transmit,
+};
 use vinc_crypto::Provider;
 use vinc_transport::stream::{StreamId, StreamSource};
 
@@ -27,6 +31,19 @@ pub trait Ep: Port {
     fn register_alpn(&mut self, alpn: &[u8]) -> bool;
     /// The next received bytes of a stream, not yet consumed.
     fn read_chunk(&self, session: SessionId, stream: StreamId) -> Option<&[u8]>;
+    /// The stored bytes of a stream from an absolute offset, possibly beyond a hole, borrowed.
+    fn read_at(&self, session: SessionId, stream: StreamId, offset: u64) -> Option<&[u8]>;
+    /// The first run of stored bytes of a stream that reaches past `from`.
+    fn stored_after(&self, session: SessionId, stream: StreamId, from: u64) -> Option<Range<u64>>;
+    /// The send half of a stream.
+    fn send_state(&self, session: SessionId, stream: StreamId) -> Option<SendState>;
+    /// The bytes a session has in flight.
+    fn in_flight(&self, session: SessionId) -> Option<u64>;
+    /// Copy the oldest extension frame held for the application into `out`.
+    ///
+    /// # Errors
+    /// The endpoint's refusal when the frame does not fit `out`.
+    fn read_extension(&mut self, out: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, CommandError>;
     /// The `n`th live session.
     fn session_at(&self, n: usize) -> Option<SessionStats>;
     /// The next trace record of the endpoint (always `None` without the endpoint's `trace` feature).
@@ -79,6 +96,42 @@ where
             Answer::Chunk(c) => Some(c),
             _ => None,
         }
+    }
+
+    fn read_at(&self, session: SessionId, stream: StreamId, offset: u64) -> Option<&[u8]> {
+        match self.query(Query::ReadAt {
+            session,
+            stream,
+            offset,
+        }) {
+            Answer::Chunk(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    fn stored_after(&self, session: SessionId, stream: StreamId, from: u64) -> Option<Range<u64>> {
+        match self.query(Query::StoredAfter { session, stream, from }) {
+            Answer::Stored(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    fn send_state(&self, session: SessionId, stream: StreamId) -> Option<SendState> {
+        match self.query(Query::SendState { session, stream }) {
+            Answer::SendState(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn in_flight(&self, session: SessionId) -> Option<u64> {
+        match self.query(Query::InFlight(session)) {
+            Answer::InFlight(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    fn read_extension(&mut self, out: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, CommandError> {
+        Endpoint::read_extension(self, out)
     }
 
     fn session_at(&self, n: usize) -> Option<SessionStats> {

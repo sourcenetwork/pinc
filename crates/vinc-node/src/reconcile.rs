@@ -366,7 +366,7 @@ where
             self.round_put(round);
             return;
         };
-        let Some(stream) = self.io.open_stream(session) else {
+        let Some(stream) = self.io.open_stream_at(session, crate::config::SETS_URGENCY) else {
             // No stream credit now: the attempt is lost.
             round.attempt += 1;
             self.round_put(round);

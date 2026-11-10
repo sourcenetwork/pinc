@@ -110,7 +110,7 @@ where
         if l.out.is_some() || now.saturating_sub(l.opened) <= STREAM_REPAIR {
             return;
         }
-        if let Some(s) = self.io.open_stream(session) {
+        if let Some(s) = self.io.open_stream_at(session, crate::config::HUB_URGENCY) {
             if let Some(x) = self.io.links.get_mut(hub) {
                 x.out = Some(s);
             }

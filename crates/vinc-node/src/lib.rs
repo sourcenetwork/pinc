@@ -24,6 +24,15 @@
 //!   means a partition healed ([`bound::give_up`]); membership then opens its quiet window.
 //! - **Independent probes.** A probe on [`Route::Via`](vinc_membership::session::Route) is a path challenge through
 //!   the named hub's relay; the member's answer is evidence from the transport.
+//! - **Urgency.** A hub session's write stream goes first (1), the broadcast fan stream of a gossip session next (2,
+//!   and its writes do not keep the session awake), then reconcile (2), the endpoint default (3) and the value
+//!   requests (4).
+//! - **`FLOOR_PUSH`.** A hub that accepted a member's session opens its own stream and sends the replay floor at once.
+//! - **Relay duties.** A hub that runs a relay for its members gets the carrier evidence, the told-apart datagrams
+//!   and the member notices from the node ([`relay_trace`](Node::relay_trace), [`is_relay_request`],
+//!   [`member_at`](Node::member_at), [`poll_member`](Node::poll_member)).
+//! - **Restart.** The host's bundle records bring held and partial bundles, with their copies and custody, back
+//!   ([`dtn_restore`](Node::dtn_restore)).
 //! - **Revocation and leave.** A revoked peer loses every session within the call; a leave closes every hub session
 //!   with code 0x4C and then every other session.
 //!
@@ -47,6 +56,7 @@ pub mod bound;
 mod config;
 mod dtn;
 mod dtn_rx;
+mod dtn_save;
 mod dtn_wire;
 mod duties;
 mod ep;
@@ -57,19 +67,23 @@ mod io;
 mod layer;
 mod node;
 mod reconcile;
+mod relay;
 pub mod trace;
 mod values;
+mod values_frames;
 
 pub use apps::{Apps, DtnApp, Enabled, NoApps, NoDtn, NoIndex, NoSets, NoValues, Recipient, ServeSource, SetsApp};
 pub use config::{
-    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, Config, DENY_CAP, DENY_FIRST, DTN_ALPN, HUB_ALPN, Nanos, QUEUE_FRAMES,
-    SESSION_LIVED, SETS_ALPN, STREAM_REPAIR, SURVIVOR, SURVIVOR_HAVE, Store, VALUES_ALPN,
+    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, Config, DENY_CAP, DENY_FIRST, DTN_ALPN, HUB_ALPN, HUB_URGENCY, Nanos,
+    QUEUE_FRAMES, SESSION_LIVED, SETS_ALPN, SETS_URGENCY, STREAM_REPAIR, SURVIVOR, SURVIVOR_HAVE, Store, VALUES_ALPN,
 };
 pub use dtn::{BUNDLES, DtnPlan, DtnSendError};
+pub use dtn_save::DtnRestored;
 pub use ep::Ep;
 pub use event::{NodeEvent, ReconcileFailure};
 pub use layer::Layer;
 pub use node::{Node, StartError};
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
+pub use relay::{MemberNotice, is_relay_request};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
 pub use values::{FETCHES, ValuesError, ValuesRequest};

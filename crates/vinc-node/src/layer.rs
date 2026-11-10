@@ -237,6 +237,10 @@ where
                 if self.io.lfailed.len() < TABLE_MAX || self.io.lfailed.contains_key(&key) {
                     self.io.lfailed.insert(key, (now.saturating_add(back), back));
                 }
+                if let Some(d) = self.dtn.as_deref_mut() {
+                    let at = now.saturating_add(back);
+                    d.redial_at = Some(d.redial_at.map_or(at, |t| t.min(at)));
+                }
             }
         }
     }

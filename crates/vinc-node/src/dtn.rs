@@ -56,8 +56,6 @@ pub(crate) const STREAMS: usize = 64;
 const INTERVALS: usize = 64;
 /// The bytes of symbols one request asks for.
 const CHUNK_BYTES: u64 = 64 << 10;
-/// The wall-clock interval of the expiry and contact sweep while the node holds bundles.
-const TICK_MS: u64 = 1000;
 
 type Fwd = Forwarder<BUNDLES, 32, 64, 64>;
 type Book = CustodyBook<BUNDLES>;
@@ -153,7 +151,14 @@ pub(crate) struct Dtn {
     pub(crate) received: BTreeMap<BundleId, u64>,
     pub(crate) partials: BTreeMap<BundleId, Partial>,
     pub(crate) streams: BTreeMap<(SessionId, StreamId), DStream>,
-    pub(crate) next_tick: u64,
+    /// The contacts must be looked at: a member appeared, a bundle was made, a session ended.
+    pub(crate) contacts_due: bool,
+    /// When the host's rule of contact next changes (wall milliseconds), as the host said at the last look.
+    pub(crate) contact_at: Option<u64>,
+    /// When a delay-tolerant dial that failed may be made again (node time).
+    pub(crate) redial_at: Option<Nanos>,
+    /// The verified bytes of each partial bundle at its last saved record.
+    pub(crate) saved: BTreeMap<BundleId, u64>,
     pub(crate) tx: Vec<u8>,
 }
 
@@ -170,13 +175,26 @@ impl Dtn {
             received: BTreeMap::new(),
             partials: BTreeMap::new(),
             streams: BTreeMap::new(),
-            next_tick: wall_ms,
+            contacts_due: true,
+            contact_at: None,
+            redial_at: None,
+            saved: BTreeMap::new(),
             tx: Vec::new(),
         }
     }
 
     fn has_work(&self) -> bool {
-        !self.heads.is_empty() || !self.partials.is_empty()
+        !self.heads.is_empty() || !self.partials.is_empty() || !self.received.is_empty()
+    }
+
+    /// The wall-clock millisecond at which the node next has something to do on its own: a bundle or ledger entry
+    /// expiring, a retransmission timer running out on a live link, or the end of a delivery memory.
+    fn due_ms(&self) -> Option<u64> {
+        let mem = self.received.values().copied().min();
+        [self.fwd.poll_timeout(), self.led.next_expiry(), mem]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Forget a bundle everywhere: heads, partial reception, offers, the forwarder and the host's store.
@@ -192,7 +210,9 @@ impl Dtn {
         self.offers.retain(|(_, b), _| b != id);
         // The forwarder may not know it (a partial reception): nothing to forget then.
         let _ = self.fwd.step(wall, Input::Forget(*id));
+        self.saved.remove(id);
         app.remove(id);
+        app.drop_record(id);
         held
     }
 
@@ -351,6 +371,8 @@ where
             return Err(DtnSendError::NoRoom);
         }
         d.heads.insert(id, signed);
+        d.contacts_due = true;
+        self.dtn_save_held(&id);
         self.io.trace(NodeTrace::DtnCreated {
             bundle: btag(&id.0),
             copies: u64::from(plan.copies),
@@ -384,10 +406,12 @@ where
         let wall = self.io.wall_ms();
         let full = self.io.full_id(peer);
         let last = self.layer_session(Layer::Dtn, peer).is_none();
+        self.dtn_save_grown();
         let Some(d) = self.dtn.as_deref_mut() else {
             return;
         };
         d.streams.retain(|(s, _), _| *s != session);
+        d.contacts_due = true;
         if last {
             let _ = d.fwd.step(wall, Input::LinkDown(full));
         }
@@ -426,36 +450,64 @@ where
 
     // ---------------------------------------------------------------- the clock
 
-    /// Run the expiry and contact sweep if it is due.
+    /// Run what is due: bundle expiry, retransmission timers, the ledger, and the contacts when something changed
+    /// them. Nothing runs on a fixed interval: [`Node::dtn_deadline`] names the next exact moment.
     pub(crate) fn dtn_timeout(&mut self, now: Nanos) {
         let wall = self.io.wall_ms();
         let Some(d) = self.dtn.as_deref_mut() else {
             return;
         };
-        if wall < d.next_tick || !d.has_work() {
+        if d.redial_at.is_some_and(|t| now >= t) {
+            d.redial_at = None;
+            d.contacts_due = true;
+        }
+        if d.contact_at.is_some_and(|t| t <= wall) {
+            d.contacts_due = true;
+        }
+        let timer_due = d.due_ms().is_some_and(|t| t <= wall);
+        if !timer_due && !d.contacts_due {
             return;
         }
-        d.next_tick = wall.saturating_add(TICK_MS);
-        let _ = d.fwd.step(wall, Input::Tick);
-        let mut evicted: Vec<Key> = Vec::new();
-        d.book.expire(&mut d.led, wall, |e| evicted.push(e.key));
-        d.received.retain(|_, exp| *exp > wall);
-        let app = self.apps.dtn();
-        let mut expired: Vec<BundleId> = Vec::new();
-        for k in evicted.iter().filter(|k| k.space == Space::DTN) {
-            let id = BundleId(k.id);
-            if d.forget(app, wall, &id) {
-                expired.push(id);
+        if timer_due {
+            let _ = d.fwd.step(wall, Input::Tick);
+            let mut evicted: Vec<Key> = Vec::new();
+            d.book.expire(&mut d.led, wall, |e| evicted.push(e.key));
+            let app = self.apps.dtn();
+            d.received.retain(|id, exp| {
+                let keep = *exp > wall;
+                if !keep {
+                    app.drop_record(id);
+                }
+                keep
+            });
+            let mut expired: Vec<BundleId> = Vec::new();
+            for k in evicted.iter().filter(|k| k.space == Space::DTN) {
+                let id = BundleId(k.id);
+                if d.forget(app, wall, &id) {
+                    expired.push(id);
+                }
+            }
+            for id in expired {
+                self.io.trace(NodeTrace::DtnReleased {
+                    bundle: btag(&id.0),
+                    delivered: 0,
+                });
+                self.io.emit(NodeEvent::DtnExpired { bundle: id.0 });
             }
         }
-        for id in expired {
-            self.io.trace(NodeTrace::DtnReleased {
-                bundle: btag(&id.0),
-                delivered: 0,
-            });
-            self.io.emit(NodeEvent::DtnExpired { bundle: id.0 });
+        if self.dtn.as_deref().is_some_and(|d| d.contacts_due) {
+            if let Some(d) = self.dtn.as_deref_mut() {
+                d.contacts_due = false;
+            }
+            self.dtn_contacts(now, wall);
         }
-        self.dtn_contacts(now, wall);
+    }
+
+    /// Something that decides whom to dial changed: look at the contacts at the next call.
+    pub(crate) fn dtn_contacts_changed(&mut self) {
+        if let Some(d) = self.dtn.as_deref_mut() {
+            d.contacts_due = true;
+        }
     }
 
     /// Dial the peers in contact while bundles are held, and end the sessions of peers no longer in contact.
@@ -486,11 +538,22 @@ where
         }
     }
 
-    /// When the sweep is next due (node time), while the node has anything to look after.
+    /// When the next timer is due (node time): the earliest of the layer's own timers, the host's next change of
+    /// contact, and the end of a dial backoff; `None` when the node has nothing to look after.
     pub(crate) fn dtn_deadline(&self) -> Option<Nanos> {
-        let d = self.dtn.as_deref().filter(|d| d.has_work())?;
-        let wait = d.next_tick.saturating_sub(self.io.wall_ms()).saturating_mul(1_000_000);
-        Some(self.io.now.saturating_add(wait))
+        let d = self.dtn.as_deref()?;
+        if d.contacts_due {
+            return Some(self.io.now);
+        }
+        let wall = self.io.wall_ms();
+        let own = d.has_work().then(|| d.due_ms()).flatten();
+        let contact = if d.heads.is_empty() { None } else { d.contact_at };
+        let wall_due = [own, contact].into_iter().flatten().min().map(|ms| {
+            self.io
+                .now
+                .saturating_add(ms.saturating_sub(wall).saturating_mul(1_000_000))
+        });
+        [wall_due, d.redial_at].into_iter().flatten().min()
     }
 
     // ---------------------------------------------------------------- the holder
@@ -498,6 +561,11 @@ where
     /// Run what the forwarder decided: hand copies to the peers in contact, retransmit, release.
     pub(crate) fn dtn_step(&mut self, _now: Nanos) -> bool {
         let mut did = false;
+        let wall = self.io.wall_ms();
+        let at = self.apps.dtn().next_contact_change(wall);
+        if let Some(d) = self.dtn.as_deref_mut() {
+            d.contact_at = at;
+        }
         loop {
             let Some(d) = self.dtn.as_deref_mut() else {
                 return did;
@@ -597,6 +665,7 @@ where
                 inb: Vec::new(),
             },
         );
+        self.dtn_save_held(&bundle);
         self.io.trace(NodeTrace::DtnOffer {
             bundle: btag(&bundle.0),
             peer: tag(&peer.bytes),
@@ -782,6 +851,7 @@ where
             relieved: u64::from(relieved),
         });
         if relieved {
+            self.dtn_save_held(bundle);
             self.io.emit(NodeEvent::DtnHandedOff {
                 bundle: bundle.0,
                 to: *peer,

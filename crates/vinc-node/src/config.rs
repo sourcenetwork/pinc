@@ -56,6 +56,11 @@ pub const SETS_ALPN: &[u8] = b"vinc/reconcile";
 /// The protocol id of the delay-tolerant layer.
 pub const DTN_ALPN: &[u8] = b"vinc/dtn";
 
+/// The urgency of the write stream of a hub session: membership and broadcast frames go before everything else on it.
+pub const HUB_URGENCY: u8 = 1;
+/// The urgency of a set reconciliation stream.
+pub const SETS_URGENCY: u8 = 2;
+
 /// Where the incarnation epoch survives a restart. The host backs it with the key store's `seal` and `unseal` (the
 /// epoch is eight bytes), or with nothing.
 pub trait Store {

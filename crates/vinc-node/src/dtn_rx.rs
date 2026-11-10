@@ -195,6 +195,16 @@ where
             peer: tag(&ctx.from.bytes),
             first,
         });
+        let grown = self.dtn.as_deref().and_then(|d| {
+            d.partials.get(&id).map(|p| {
+                p.have
+                    .covered_len()
+                    .saturating_sub(d.saved.get(&id).copied().unwrap_or(0))
+            })
+        });
+        if grown.is_some_and(|g| g >= crate::dtn_save::SAVE_BYTES) {
+            self.dtn_save_partial(&id);
+        }
         self.dtn_advance(session, stream, rx)
     }
 
@@ -208,6 +218,9 @@ where
         let Some(mut p) = d.partials.remove(&id) else {
             return Stop::Break;
         };
+        d.unmark(&id);
+        // The partial record gives way to the bundle's own: held, delivered here, or none if it is refused.
+        self.apps.dtn().drop_record(&id);
         let refuse = |why| Stop::Refuse(id, why);
         let signed = p.signed.clone();
         let Ok(layout) = signed.head().layout() else {
@@ -255,6 +268,8 @@ where
                 return refuse(Refusal::CannotOpen);
             };
             d.received.insert(id, signed.head().expires_at());
+            d.unmark(&id);
+            self.dtn_save_received(&id, signed.head().expires_at());
             self.io.emit(NodeEvent::DtnReceived {
                 bundle: id.0,
                 source: signed.head().source.bytes,
@@ -326,6 +341,7 @@ where
                 }),
             );
             d.heads.entry(id).or_insert_with(|| signed.clone());
+            d.unmark(&id);
             Some(due)
         };
         let Some(key) = self.apps.dtn().signer() else {
@@ -351,6 +367,7 @@ where
             peer: tag(&ctx.from.bytes),
         });
         if !to_me {
+            self.dtn_save_held(&id);
             self.io.emit(NodeEvent::DtnCustody {
                 bundle: id.0,
                 from: ctx.from.bytes,

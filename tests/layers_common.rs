@@ -17,7 +17,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use vinc_broadcast::Limits;
 use vinc_node::{Enabled, NodeEvent};
-use vinc_sim::{LinkConfig, MS, NodeId as SimId, SEC, Sim, SimConfig, StreamKind, Time};
+use vinc_sim::{LinkConfig, Loss, MS, NodeId as SimId, SEC, Sim, SimConfig, StreamKind, Time};
 use vinc_tests::{HubAddr, LayerApps, NCmd, NEv, NodeSpec, SimNode, hub_addr, id_of};
 
 pub const OWD: Time = 10 * MS;
@@ -55,6 +55,19 @@ impl LWorld {
 
     /// As [`LWorld::build`] with a line rate in bits per second (0 for none) and optional node traces.
     pub fn build_with(seed: u64, h: usize, m: usize, bps: u64, trace: bool, mk: impl Fn(u8) -> LayerApps) -> Self {
+        Self::build_lossy(seed, h, m, bps, trace, Loss::None, mk)
+    }
+
+    /// As [`LWorld::build_with`] with a loss model on every link.
+    pub fn build_lossy(
+        seed: u64,
+        h: usize,
+        m: usize,
+        bps: u64,
+        trace: bool,
+        loss: Loss,
+        mk: impl Fn(u8) -> LayerApps,
+    ) -> Self {
         let mut sim = Sim::with_config(
             seed,
             SimConfig {
@@ -62,6 +75,7 @@ impl LWorld {
                     delay: OWD / 2,
                     bandwidth_bps: bps,
                     queue_bytes: 4 << 20,
+                    loss,
                     ..LinkConfig::default()
                 }),
                 ..SimConfig::default()
