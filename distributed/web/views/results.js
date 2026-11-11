@@ -43,7 +43,7 @@ function rawRows(rows) {
         h("td", {}, hostCell),
         keys.map((k) => h("td", { class: "v" }, num(r.node[k]))),
         h("td", { class: "v" }, num(c.cpu_s)), h("td", { class: "v" }, num(sv.cpu_s)), h("td", { class: "v" }, num(c.peak_mib)),
-        h("td", { class: "v" }, c.eth0 ? num(c.eth0.tx_bytes + c.eth0.rx_bytes) : "—"));
+        h("td", { class: "v" }, c.eth0 ? num(c.eth0.tx_bytes + c.eth0.rx_bytes) : "-"));
     }))));
 }
 

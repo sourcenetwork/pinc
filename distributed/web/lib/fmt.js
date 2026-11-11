@@ -1,6 +1,6 @@
 // Numbers as an instrument shows them: real units, no needless digits.
 export function num(v, digits) {
-  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  if (v === null || v === undefined || !Number.isFinite(v)) return "-";
   const a = Math.abs(v);
   if (digits !== undefined) return v.toFixed(digits);
   if (Number.isInteger(v) && a < 1e9) return v.toLocaleString("en-US");
@@ -12,14 +12,14 @@ export function num(v, digits) {
 }
 
 export function bits(bps) {
-  if (bps === null || bps === undefined || !Number.isFinite(bps)) return "—";
+  if (bps === null || bps === undefined || !Number.isFinite(bps)) return "-";
   const units = [["Gbit/s", 1e9], ["Mbit/s", 1e6], ["kbit/s", 1e3]];
   for (const [u, f] of units) if (Math.abs(bps) >= f) return `${num(bps / f)} ${u}`;
   return `${num(bps)} bit/s`;
 }
 
 export function bytes(b) {
-  if (b === null || b === undefined || !Number.isFinite(b)) return "—";
+  if (b === null || b === undefined || !Number.isFinite(b)) return "-";
   const units = [["GiB", 2 ** 30], ["MiB", 2 ** 20], ["KiB", 2 ** 10]];
   for (const [u, f] of units) if (Math.abs(b) >= f) return `${num(b / f)} ${u}`;
   return `${num(b)} B`;
@@ -46,7 +46,7 @@ export function clock(ms) {
 }
 
 export function when(unixSecs) {
-  if (!unixSecs) return "—";
+  if (!unixSecs) return "-";
   const d = new Date(unixSecs * 1000);
   return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
