@@ -20,7 +20,7 @@ use vinc_core::{
 use vinc_crypto::IdentityAlg;
 use vinc_membership::NodeId;
 use vinc_membership::session::{Carrier, CloseReason, DENIED_CODE, Evidence, LEAVE_CODE};
-use vinc_transport::stream::{StreamError, StreamId};
+use vinc_transport::stream::{RecvStatus, StreamError, StreamId};
 
 use crate::bound;
 use crate::config::{
@@ -398,6 +398,17 @@ impl<E: Ep, St: Store> Io<E, St> {
         self.cmd(Command::Finish { session, stream }).is_ok()
     }
 
+    /// Release the first `n` unread bytes of a stream and report its receive state after that; `None` if the endpoint
+    /// refused. Consuming nothing reads the state of the end: finished once the end arrived and every byte was
+    /// consumed. The consume that releases the last byte is the one to read the end from: the endpoint forgets a
+    /// stream once both of its sides are done, so a later call finds no stream.
+    pub(crate) fn consume(&mut self, session: SessionId, stream: StreamId, n: usize) -> Option<RecvStatus> {
+        match self.cmd(Command::Consume { session, stream, n }) {
+            Ok(Value::Recv(st)) => Some(st),
+            _ => None,
+        }
+    }
+
     /// Read what the endpoint holds for a stream into `into`, consuming it, and report the stream's receive state.
     /// `cap` bounds what `into` may hold; past it the stream is left unread and the second value is true.
     pub(crate) fn drain_stream(
@@ -406,8 +417,8 @@ impl<E: Ep, St: Store> Io<E, St> {
         stream: StreamId,
         into: &mut Vec<u8>,
         cap: usize,
-    ) -> (vinc_transport::stream::RecvStatus, bool) {
-        let mut over = false;
+    ) -> (RecvStatus, bool) {
+        let (mut over, mut last) = (false, None);
         while let Some(chunk) = self.ep.read_chunk(session, stream).filter(|c| !c.is_empty()) {
             let n = chunk.len();
             if into.len().saturating_add(n) > cap {
@@ -415,14 +426,14 @@ impl<E: Ep, St: Store> Io<E, St> {
                 break;
             }
             into.extend_from_slice(chunk);
-            if self.cmd(Command::Consume { session, stream, n }).is_err() {
+            last = self.consume(session, stream, n);
+            if last.is_none() {
                 break;
             }
         }
-        // Consuming nothing reads the state of the end: finished once the end arrived and every byte was consumed.
-        let status = match self.cmd(Command::Consume { session, stream, n: 0 }) {
-            Ok(Value::Recv(st)) => st,
-            _ => vinc_transport::stream::RecvStatus::Open,
+        let status = match last {
+            Some(st) if st != RecvStatus::Open => st,
+            _ => self.consume(session, stream, 0).unwrap_or(RecvStatus::Open),
         };
         (status, over)
     }

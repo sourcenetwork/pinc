@@ -22,6 +22,7 @@ use vinc_membership::NodeId;
 use vinc_reconcile::limits::FRAME_MAX;
 use vinc_reconcile::{Error, Initiator, Limits, Responder, Step, first_set_ref, frame_len};
 use vinc_transport::stream::{RecvStatus, StreamId};
+use vinc_values::knobs::OPEN_RETRY;
 
 use crate::apps::{Apps, ServeSource, SetsApp};
 use crate::config::{Nanos, Store};
@@ -73,6 +74,8 @@ struct Round {
     init: Box<Initiator>,
     attempt: u8,
     active: Option<(SessionId, StreamId)>,
+    /// A stream could not be opened on the session yet: the attempt is tried again at this time.
+    open_at: Option<Nanos>,
     inb: Vec<u8>,
 }
 
@@ -186,6 +189,7 @@ where
             init: Box::new(Initiator::new(sets.limits())),
             attempt: 0,
             active: None,
+            open_at: None,
             inb: Vec::new(),
         });
         self.round_begin(now, id);
@@ -206,6 +210,29 @@ where
     /// How many rounds this node started and has not finished.
     pub fn sets_running(&self) -> usize {
         self.recs.as_deref().map_or(0, |r| r.rounds.len())
+    }
+
+    /// The earliest time a round whose stream could not be opened tries again.
+    pub(crate) fn sets_deadline(&self) -> Option<Nanos> {
+        self.recs.as_deref()?.rounds.iter().filter_map(|r| r.open_at).min()
+    }
+
+    /// Try again the rounds whose stream could not be opened, once their time comes.
+    pub(crate) fn sets_timeout(&mut self, now: Nanos) {
+        let due: Vec<u32> = self
+            .recs
+            .as_deref()
+            .map(|r| {
+                r.rounds
+                    .iter()
+                    .filter(|x| x.open_at.is_some_and(|t| now >= t))
+                    .map(|x| x.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for id in due {
+            self.round_begin(now, id);
+        }
     }
 
     // ---------------------------------------------------------------- the node's events
@@ -358,6 +385,7 @@ where
         let Some(mut round) = self.recs.as_deref_mut().and_then(|r| r.take(id)) else {
             return;
         };
+        round.open_at = None;
         let Some(session) = self.layer_session(Layer::Sets, &round.peer) else {
             let key = (Layer::Sets, round.peer);
             if !self.io.lconn.contains(&key) && !self.io.ldials.contains(&key) {
@@ -367,10 +395,11 @@ where
             return;
         };
         let Some(stream) = self.io.open_stream_at(session, crate::config::SETS_URGENCY) else {
-            // No stream credit now: the attempt is lost.
-            round.attempt += 1;
+            // No stream credit now (a session reported before its handshake ends has none until the peer's limits
+            // arrive): the attempt waits and is tried again, as a refused open of the values layer is. It is not
+            // counted: only a reset stream or a closed session spends an attempt.
+            round.open_at = Some(now.saturating_add(OPEN_RETRY));
             self.round_put(round);
-            self.round_retry(now, id);
             return;
         };
         let Some(rec) = self.recs.as_deref_mut() else {

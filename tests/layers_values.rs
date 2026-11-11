@@ -95,6 +95,95 @@ fn a_fetch_from_four_providers_survives_a_liar_and_a_stalled_provider() {
     });
 }
 
+/// The value traces of node `n` that match `f`.
+fn value_traces(w: &LWorld, n: SimId, f: impl Fn(&vinc_values::trace::Trace) -> bool) -> usize {
+    w.sim
+        .node(n)
+        .traces
+        .iter()
+        .filter(|(_, t)| matches!(&t.body, Body::Values(_, v) if f(v)))
+        .count()
+}
+
+#[test]
+fn a_second_fetch_from_a_provider_uses_the_session_the_first_one_dialed() {
+    big(|| {
+        for seed in [261u64, 262] {
+            let mut w = LWorld::build_with(seed, 2, 3, 8_000_000, false, values_on);
+            let m = w.members.clone();
+            let (first, second) = (data(seed, 1 << 20), data(seed + 100, 1 << 20));
+            let a = w.provide(m[1], first.clone());
+            let b = w.provide(m[1], second.clone());
+            for (at, root, len) in [(30, a, first.len()), (60, b, second.len())] {
+                w.sim.command(
+                    secs(at),
+                    m[0],
+                    NCmd::ValuesFetch {
+                        root,
+                        length: len as u64,
+                        ranges: vec![],
+                        providers: ids(&w, &m[1..2]),
+                    },
+                );
+            }
+            w.run(secs(90));
+            assert_eq!(completes(&w, m[0]), 2, "seed {seed}: both fetches complete");
+            assert_eq!(
+                w.apps(m[0]).values.fetched(&a, first.len() as u64),
+                Some(first),
+                "seed {seed}"
+            );
+            assert_eq!(
+                w.apps(m[0]).values.fetched(&b, second.len() as u64),
+                Some(second),
+                "seed {seed}"
+            );
+        }
+    });
+}
+
+#[test]
+fn a_striped_fetch_asks_again_as_each_request_stream_ends() {
+    // A stream whose end arrived with its last bytes must still free its place among the fetch's request streams, or
+    // the fetch waits for the stall timer once the table is full.
+    big(|| {
+        for seed in [251u64, 252] {
+            let mut w = LWorld::build_with(seed, 2, 4, 8_000_000, true, values_on);
+            let m = w.members.clone();
+            let value = data(seed, 12 << 20);
+            let mut root = [0; 32];
+            for p in &m[1..3] {
+                root = w.provide(*p, value.clone());
+            }
+            let providers = ids(&w, &m[1..3]);
+            w.sim.command(
+                secs(30),
+                m[0],
+                NCmd::ValuesFetch {
+                    root,
+                    length: value.len() as u64,
+                    ranges: vec![],
+                    providers,
+                },
+            );
+            w.run(secs(120));
+            assert_eq!(completes(&w, m[0]), 1, "seed {seed}");
+            assert_eq!(
+                w.apps(m[0]).values.fetched(&root, value.len() as u64),
+                Some(value),
+                "seed {seed}"
+            );
+            let asked = value_traces(&w, m[0], |t| matches!(t, vinc_values::trace::Trace::Requested { .. }));
+            let stalls = value_traces(&w, m[0], |t| matches!(t, vinc_values::trace::Trace::StallRedial { .. }));
+            assert!(
+                asked > 8,
+                "seed {seed}: the providers were asked again ({asked} requests)"
+            );
+            assert_eq!(stalls, 0, "seed {seed}: the fetch never waited for its stall timer");
+        }
+    });
+}
+
 #[test]
 fn a_value_larger_than_the_session_windows_arrives_whole() {
     big(|| {

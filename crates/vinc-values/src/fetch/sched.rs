@@ -266,6 +266,11 @@ impl Fetch {
     pub(super) fn request<E: Env>(&mut self, io: &mut E, now: u64, pi: usize, only: Option<&RangeList<ASSIGN>>) {
         let (se, st, _) = io.split();
         let Some(p) = self.provs.get_mut(pi) else { return };
+        if !p.conn && se.is_connected(p.id) {
+            // The sessions belong to the layer, not to a fetch: one an earlier fetch dialed serves this one too.
+            p.conn = true;
+            p.dialing = false;
+        }
         if !p.conn {
             if !p.dialing {
                 p.dialing = true;

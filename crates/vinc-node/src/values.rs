@@ -25,7 +25,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 
-use vinc_core::{Command, SessionId, Value};
+use vinc_core::{Command, SessionId};
 use vinc_membership::NodeId;
 use vinc_transport::stream::{RecvStatus, StreamId};
 use vinc_values::fetch::{Fetch, FetchSpec, In, Io as FetchIo, StartError};
@@ -69,6 +69,8 @@ struct VStream {
     seen: u64,
     /// The runs of bytes beyond a hole last reported to the fetch.
     ahead: [(u64, u64); AHEAD_RUNS],
+    /// A consume found the end arrived and every byte consumed (the endpoint may forget the stream at that moment).
+    ended: bool,
     announced: bool,
     /// For a served response: what the server was last told about its sending.
     pace: Pace,
@@ -124,6 +126,7 @@ impl Net {
                 base: 0,
                 seen: 0,
                 ahead: [(0, 0); AHEAD_RUNS],
+                ended: false,
                 announced: false,
                 pace: Pace::default(),
             },
@@ -276,17 +279,10 @@ impl<E: Ep, St: Store> Session for VSess<'_, E, St> {
             else {
                 break;
             };
-            if self
-                .io
-                .cmd(Command::Consume {
-                    session,
-                    stream: real,
-                    n,
-                })
-                .is_err()
-            {
+            let Some(st) = self.io.consume(session, real, n) else {
                 break;
-            }
+            };
+            s.ended |= st == RecvStatus::Finished;
             s.base += n as u64;
             want -= n as u64;
         }
@@ -703,16 +699,7 @@ where
         if s.announced {
             return;
         }
-        // Consuming nothing reads the state of the end: finished once the end arrived and every byte was consumed.
-        let finished = matches!(
-            self.io.cmd(Command::Consume {
-                session,
-                stream: real,
-                n: 0
-            }),
-            Ok(Value::Recv(RecvStatus::Finished))
-        );
-        if !finished {
+        if !s.ended && self.io.consume(session, real, 0) != Some(RecvStatus::Finished) {
             return;
         }
         s.announced = true;

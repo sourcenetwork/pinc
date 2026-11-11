@@ -420,6 +420,7 @@ where
             t.on_timer(&mut h, now);
         }
         self.values_timeout(now);
+        self.sets_timeout(now);
         self.dtn_timeout(now);
         if now >= self.next_duty {
             self.duties(now);
@@ -436,6 +437,7 @@ where
             Some(self.mem.poll_timeout()),
             self.topics.poll_timeout(),
             self.values_deadline(),
+            self.sets_deadline(),
             self.dtn_deadline(),
             Some(self.next_duty),
         ]

@@ -160,3 +160,68 @@ fn a_round_over_a_set_the_peer_lacks_fails_without_retrying() {
         assert_eq!(failed, 1);
     });
 }
+
+#[test]
+fn a_round_on_a_session_reported_before_its_handshake_ends_waits_for_stream_credit() {
+    // The first round rides a sub-session of a values session, so no reconcile ticket is issued. The peer restarts;
+    // the second round dials it again while its access answer is still cached: the session is reported at once,
+    // holds no ticket and so no stream credit until the peer's limits arrive. The round waits for that credit
+    // instead of spending its attempts.
+    big(|| {
+        for seed in [331u64, 332] {
+            let mut w = LWorld::build(seed, 2, 3, |tag| {
+                LayerApps::new(
+                    tag,
+                    Enabled {
+                        sets: true,
+                        values: true,
+                        ..Enabled::NONE
+                    },
+                )
+            });
+            let m = w.members.clone();
+            w.apps(m[0]).sets.insert(SET, &[b"a".to_vec(), b"b".to_vec()]);
+            w.apps(m[1]).sets.insert(SET, &[b"b".to_vec(), b"c".to_vec()]);
+            let value = vec![7u8; 64 << 10];
+            let root = w.apps(m[1]).values.provide(value.clone());
+            let peer = w.id(m[1]);
+            w.sim.command(
+                secs(30),
+                m[0],
+                NCmd::ValuesFetch {
+                    root,
+                    length: value.len() as u64,
+                    ranges: vec![],
+                    providers: vec![peer],
+                },
+            );
+            for at in [32, 36] {
+                w.sim.command(
+                    secs(at),
+                    m[0],
+                    NCmd::SetsStart {
+                        peer,
+                        set_ref: SET.to_vec(),
+                    },
+                );
+            }
+            w.sim.crash(secs(33), m[1]);
+            w.sim.restart(secs(34), m[1]);
+            w.run(secs(120));
+            let ev = w.node_events(m[0]);
+            let failed: Vec<_> = ev
+                .iter()
+                .filter_map(|(_, e)| match e {
+                    NodeEvent::ReconcileFailed { reason, .. } => Some(*reason),
+                    _ => None,
+                })
+                .collect();
+            assert!(failed.is_empty(), "seed {seed}: a round failed: {failed:?}");
+            let done = ev
+                .iter()
+                .filter(|(_, e)| matches!(e, NodeEvent::ReconcileDone { .. }))
+                .count();
+            assert_eq!(done, 2, "seed {seed}: both rounds report");
+        }
+    });
+}
