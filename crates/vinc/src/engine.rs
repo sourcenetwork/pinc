@@ -1039,8 +1039,22 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if !self.admit.bar(node) {
             return Err(Error::new(ErrorKind::Busy, "too many peers are revoked"));
         }
+        self.forget_acp(now, node);
         self.close_sessions(now, node, DENIED);
         Ok(())
+    }
+
+    /// Lift the bar on `node`; whether it was barred. Its cached answer goes with it, so a deny cached while it was
+    /// revoked does not refuse it once lifted.
+    pub(crate) fn unrevoke(&mut self, now: u64, node: &NodeId) -> bool {
+        let lifted = self.admit.lift(node);
+        self.forget_acp(now, node);
+        lifted
+    }
+
+    /// Drop the endpoint's cached answer for `node`: its next session asks the gate again.
+    pub(crate) fn forget_acp(&mut self, now: u64, node: &NodeId) {
+        let _ = self.cmd_once(now, Command::AcpForget { node: *node });
     }
 
     pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) {

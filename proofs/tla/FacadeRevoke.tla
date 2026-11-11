@@ -26,6 +26,11 @@
 (* admit, which answered yes whenever the core was borrowed: AdmitSound     *)
 (* fails. Backstop = FALSE drops the revoked check in session_up: a revoked *)
 (* peer comes back on the endpoint's cached allow and NoLiveRevoked fails.  *)
+(*                                                                         *)
+(* The code also drops the cached answer on revoke and unrevoke and refuses *)
+(* a dial to a revoked peer up front; FacadeAcpForget models those. Here    *)
+(* the cache outlives both and dials go out, so the backstop is shown to   *)
+(* hold on its own.                                                        *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 

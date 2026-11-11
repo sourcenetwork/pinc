@@ -472,6 +472,12 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// Whether the peer may connect.
         allow: bool,
     },
+    /// Drop the cached answer of the access check for `node`: its next session raises [`Event::AcpCheck`] again, and
+    /// an allowed session of it holds its next event until a fresh allow comes. A check already pending is kept.
+    AcpForget {
+        /// The peer.
+        node: NodeId,
+    },
     /// Answer an [`Event::KeyRequest`].
     KeyResponse {
         /// The session.

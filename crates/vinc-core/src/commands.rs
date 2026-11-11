@@ -201,6 +201,10 @@ ep_impl! {
                 Ok(Value::None)
             }
             Command::AcpAnswer { check, allow } => self.acp_answer(check, allow, now).map(|()| Value::None),
+            Command::AcpForget { node } => {
+                self.acp.remove(&node);
+                Ok(Value::None)
+            }
             Command::KeyResponse { session, response } => {
                 let i = self.live(session)?;
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
