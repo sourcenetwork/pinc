@@ -1,15 +1,14 @@
-//! The host-side duties of membership: dialing the hubs, repairing a hub session without a write stream, closing a
-//! hub session the transport has stopped hearing, and probing a member along another hub's relay.
+//! The host-side duties of membership: dialing the hubs, repairing a hub session without a write stream, and probing a
+//! member along another hub's relay.
 //!
 //! They run on the node's own cadence (half a second for a member, a second for a hub) and when a layer asks for a
 //! dial by sending a frame to a peer with no session.
 //!
 //! Invariants: a peer is dialed once at a time and never inside its backoff window; a peer that refused us is
-//! redialed only after the deny backoff; no duty closes a session that received within its watchdog window.
+//! redialed only after the deny backoff; no duty closes a session for silence (membership does, on an unanswered HELLO).
 
 use vinc_core::{Command, Role};
 use vinc_membership::NodeId;
-use vinc_membership::consts::{ACK_WAIT, HS_GRACE, RTT_QUIET};
 
 use crate::config::{DUTY_HUB, DUTY_MEMBER, GONE_TTL, Nanos, STREAM_REPAIR, Store};
 use crate::ep::Ep;
@@ -94,9 +93,6 @@ where
             }
             self.dial_peer(now, &hub);
             self.repair_stream(now, &hub);
-            if !self.io.is_hub {
-                self.watchdog(now, &hub);
-            }
         }
         self.prune(now);
     }
@@ -125,27 +121,6 @@ where
                 let (m, mut h) = self.mem_host();
                 m.session_down(&mut h, now, hub, 0);
             }
-        }
-    }
-
-    /// A hub session that keeps timing out and has received nothing for the HELLO wait is dead: close it so the
-    /// next dial makes a fresh one.
-    fn watchdog(&mut self, now: Nanos, hub: &NodeId) {
-        let Some(l) = self.io.links.get(hub).copied().filter(|l| l.conn.is_some()) else {
-            return;
-        };
-        if now.saturating_sub(l.opened) <= HS_GRACE {
-            return;
-        }
-        let Some(ev) = self.io.evidence_of(hub) else {
-            return;
-        };
-        let wait = ACK_WAIT.max(ev.srtt.saturating_mul(4));
-        if ev.pto >= 2 && now.saturating_sub(ev.last_rx) > wait && ev.inflight <= RTT_QUIET {
-            self.io.trace(NodeTrace::Watchdog { peer: tag(hub) });
-            self.io.close_peer(hub, vinc_membership::session::CloseReason::NoAck);
-            let (m, mut h) = self.mem_host();
-            m.session_down(&mut h, now, hub, 0);
         }
     }
 

@@ -19,7 +19,8 @@
 //!   hub adopts it: a fresh write stream, a snapshot, and the ids of the last 90 s of each subscribed topic. The
 //!   same happens when a member writes on a session that is not the hub's current one.
 //! - **Stream repair.** A hub session without our write stream gets a fresh one after 10 s.
-//! - **Watchdog.** A hub session with two probe timeouts and nothing received for the HELLO wait is closed.
+//! - **No transport watchdog.** A hub session is closed for want of an answer only by membership, when its HELLO goes
+//!   unanswered; probe timeouts alone do not close it, the transport gives up on a silent session by itself.
 //! - **Heal detection.** A hub heard again after longer than the transport's give-up bound at the last round trip
 //!   means a partition healed ([`bound::give_up`]); membership then opens its quiet window.
 //! - **Independent probes.** A probe on [`Route::Via`](vinc_membership::session::Route) is a path challenge through

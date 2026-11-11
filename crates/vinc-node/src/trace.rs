@@ -86,11 +86,6 @@ pub enum NodeTrace {
         /// The peer's tag.
         peer: u64,
     },
-    /// The watchdog closed a hub session that kept timing out and received nothing.
-    Watchdog {
-        /// The hub's tag.
-        peer: u64,
-    },
     /// A membership frame was refused because the stream's backlog was full, so the session was closed to be repaired.
     BacklogClosed {
         /// The peer's tag.
@@ -264,7 +259,6 @@ impl NodeTrace {
             Self::DuplicateClosed { .. } => "duplicate_closed",
             Self::Adopted { .. } => "adopted",
             Self::StreamRepaired { .. } => "stream_repaired",
-            Self::Watchdog { .. } => "watchdog",
             Self::BacklogClosed { .. } => "backlog_closed",
             Self::StreamReset { .. } => "stream_reset",
             Self::Carrier { .. } => "carrier",
@@ -301,7 +295,6 @@ impl NodeTrace {
             | Self::DuplicateClosed { peer }
             | Self::Adopted { peer }
             | Self::StreamRepaired { peer }
-            | Self::Watchdog { peer }
             | Self::BacklogClosed { peer }
             | Self::StreamReset { peer }
             | Self::ValuesSuperseded { peer } => ([("peer", peer), z, z], 1),
