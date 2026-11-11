@@ -358,7 +358,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         r.out.copy_within(n..r.out_len, 0);
         r.out_len -= n;
         // Room was made: packets held because the buffer was full while the carrier was open go in behind it.
-        if n > 0 && !r.q.is_empty() && r.link.is_open() {
+        if n > 0 && !r.q.is_empty() && r.link.is_open() && !r.drain_due {
             self.drain_held(self.clock, relay);
         }
         n
