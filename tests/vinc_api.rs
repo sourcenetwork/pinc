@@ -166,24 +166,24 @@ async fn registered_protocols_tags_and_alpn_limits() {
     let server = bind(vinc_common::builder()).await;
     let client = bind(vinc_common::builder()).await;
     within(120, async {
-        for a in [&b"t/a"[..], b"t/b", b"t/c", b"t/d"] {
+        for a in [&b"t/0"[..], b"t/1", b"t/2", b"t/3", b"t/4", b"t/5", b"t/6", b"t/7"] {
             let a: &'static [u8] = Box::leak(a.to_vec().into_boxed_slice());
             register(&server, Rc::new(Svc(a))).await.unwrap();
         }
-        // A fifth, a repeat and a bad name are refused.
+        // A ninth, a repeat and a bad name are refused.
         assert_eq!(
-            register(&server, Rc::new(Svc(b"t/e"))).await.unwrap_err().kind(),
+            register(&server, Rc::new(Svc(b"t/8"))).await.unwrap_err().kind(),
             ErrorKind::Config
         );
         assert_eq!(
-            register(&server, Rc::new(Svc(b"t/a"))).await.unwrap_err().kind(),
+            register(&server, Rc::new(Svc(b"t/0"))).await.unwrap_err().kind(),
             ErrorKind::Config
         );
 
         // Two protocols to the same peer: the second is a sub-session.
-        let first = client.connect(server.addr(), b"t/a").await.unwrap();
-        let second = first.open_protocol(b"t/b").await.unwrap();
-        assert_eq!(second.alpn(), b"t/b");
+        let first = client.connect(server.addr(), b"t/0").await.unwrap();
+        let second = first.open_protocol(b"t/1").await.unwrap();
+        assert_eq!(second.alpn(), b"t/1");
         assert_eq!(second.remote(), first.remote());
         assert_eq!(client.peers().await.unwrap(), vec![server.id()]);
 

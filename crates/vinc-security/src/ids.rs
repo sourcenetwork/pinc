@@ -15,8 +15,8 @@ pub const VERSION: u8 = 1;
 pub const MAX_CID_LEN: usize = 20;
 /// The longest ALPN.
 pub const MAX_ALPN_LEN: usize = 32;
-/// The most ALPNs a responder serves.
-pub const MAX_ALPNS: usize = 4;
+/// The most ALPNs a responder serves: the hub protocol of the node and the application's protocols.
+pub const MAX_ALPNS: usize = 8;
 
 /// A connection id of 0 to [`MAX_CID_LEN`] bytes, stored inline.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

@@ -298,10 +298,21 @@ fn an_unregistered_protocol_is_refused_and_the_dial_fails() {
         assert!(!net.nodes[a].saw(|e| matches!(e, Event::Connected { .. })));
         // The registry is bounded and ignores empty names.
         assert!(!net.nodes[b].ep.register_alpn(b""));
-        for i in 0..4u8 {
+        for i in 0..vinc_core::MAX_ALPNS as u8 {
             let _ = net.nodes[b].ep.register_alpn(&[b'x', i]);
         }
         assert!(!net.nodes[b].ep.register_alpn(b"overflow"));
+    });
+}
+
+#[test]
+fn a_node_serves_the_hub_protocol_and_four_application_protocols() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let b = net.add(2);
+        net.nodes[b].ep.unregister_alpn(ALPN_B);
+        let names: [&[u8]; 5] = [b"vinc/hub", b"/app/a", b"/app/b", b"/app/c", b"/app/d"];
+        assert!(names.iter().all(|n| net.nodes[b].ep.register_alpn(n)));
     });
 }
 
