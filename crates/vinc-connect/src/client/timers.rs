@@ -14,7 +14,7 @@ const NETCHECK_DELAY: u64 = 50_000_000;
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
     /// The first instant [`Connectivity::tick`] has something to do.
     pub fn next_deadline(&self, now: u64) -> Option<u64> {
-        let mut t = self.next_probe;
+        let mut t = if self.has_relays() { self.next_probe } else { u64::MAX };
         for i in 0..R {
             let ctx = self.ctx(i);
             if let Some(r) = self.rly.get(i).filter(|r| r.cfg.is_some())
@@ -27,7 +27,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.lookups.next_deadline(),
             // A record due while the home carrier is not open waits for the carrier: its opening re-arms the time.
             Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.can_publish()),
-            Some(self.duty.deadline()),
+            Some(self.duty.deadline()).filter(|_| self.beacons_on),
             self.close_deadline(),
             self.session_deadline(),
         ]
@@ -47,7 +47,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 t = t.min(at);
             }
         }
-        Some(t)
+        (t != u64::MAX).then_some(t)
     }
 
     /// Set the node's round trip figures: the larger of the endpoint's `tgr` and `lrtt`, and `tgr` itself.

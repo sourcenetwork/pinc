@@ -353,6 +353,8 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub dropped: u64,
     /// The protocol whose sessions carry broadcast traffic and are flushed after the others.
     pub(super) gossip_alpn: Option<vinc_security::Alpn>,
+    /// Whether the node announces itself on the local link (beacons); on by default.
+    pub(super) beacons_on: bool,
 }
 
 impl<P: Provider, const R: usize, const PEERS: usize> core::fmt::Debug for Connectivity<P, R, PEERS> {
@@ -431,7 +433,19 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             clock: cfg.start,
             dropped: 0,
             gossip_alpn: None,
+            beacons_on: true,
         }
+    }
+
+    /// Turn the beacons of local discovery on or off (they are on by default). With them off and no relay named, the layer
+    /// has nothing to do on its own and arms no timer.
+    pub const fn set_local_discovery(&mut self, on: bool) {
+        self.beacons_on = on;
+    }
+
+    /// Whether any relay is named.
+    pub(super) fn has_relays(&self) -> bool {
+        self.rly.iter().any(|r| r.cfg.is_some())
     }
 
     // ---- tables ----

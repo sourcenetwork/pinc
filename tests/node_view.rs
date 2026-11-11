@@ -33,3 +33,17 @@ fn every_view_lists_everyone() {
         }
     });
 }
+
+#[test]
+fn a_node_with_no_hub_is_alone_and_arms_no_timer() {
+    big(|| {
+        let mut w = World::new(1);
+        let n = w.add_member(0x40, &[], 0);
+        // The beacons of local discovery are the one thing a lone node would still send.
+        w.sim.node_mut(n).node.set_local_discovery(false);
+        w.run(secs(120));
+        assert!(w.view(n).is_empty());
+        assert_eq!(w.sim.node(n).poll_timeout(), None, "an idle node arms no timer");
+        assert!(w.member_events(n).is_empty(), "an idle node reports no member event");
+    });
+}

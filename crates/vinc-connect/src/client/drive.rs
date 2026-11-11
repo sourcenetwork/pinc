@@ -894,7 +894,7 @@ drive_impl! {
     // ---- local discovery ----
 
     fn beacon(&mut self, now: u64, wall_ms: Option<u64>) {
-        if wall_ms.is_some() && self.duty.poll(now) {
+        if self.beacons_on && wall_ms.is_some() && self.duty.poll(now) {
             self.sign.want_beacon();
         }
         self.start_jobs(now);

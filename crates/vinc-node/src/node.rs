@@ -265,6 +265,24 @@ where
 
     // ---------------------------------------------------------------- the loop
 
+    /// Whether the node is in a group: it is a hub, or it names a hub to attach to. A member with no hub is alone, and
+    /// membership has nothing to do for it.
+    pub(crate) fn in_group(&self) -> bool {
+        self.io.is_hub || !self.io.hubs.is_empty()
+    }
+
+    /// Whether the periodic duties have anything to keep: a group to attach to, a layer above broadcast, or tables
+    /// of sessions and backoffs. An idle node arms no timer of its own.
+    pub(crate) fn duty_needed(&self) -> bool {
+        self.in_group()
+            || self.vals.is_some()
+            || self.recs.is_some()
+            || self.dtn.is_some()
+            || !self.io.sess.is_empty()
+            || !self.io.failed.is_empty()
+            || !self.io.carriers.is_empty()
+    }
+
     /// Take the time of a call.
     pub(crate) fn begin(&mut self, now: Nanos) {
         self.io.now = self.io.now.max(now);
@@ -410,7 +428,7 @@ where
         self.io.ep.handle_timeout(now);
         self.io.sample_rx();
         self.refresh_alive(now);
-        if now >= self.mem.poll_timeout() {
+        if self.in_group() && now >= self.mem.poll_timeout() {
             self.refresh_ticket();
             let (m, mut h) = self.mem_host();
             m.on_timeout(&mut h, now);
@@ -422,7 +440,7 @@ where
         self.values_timeout(now);
         self.sets_timeout(now);
         self.dtn_timeout(now);
-        if now >= self.next_duty {
+        if self.duty_needed() && now >= self.next_duty {
             self.duties(now);
         }
         self.settle(now);
@@ -434,12 +452,12 @@ where
         [
             self.io.ep.poll_timeout(),
             self.conn.next_deadline(now),
-            Some(self.mem.poll_timeout()),
+            self.in_group().then(|| self.mem.poll_timeout()),
             self.topics.poll_timeout(),
             self.values_deadline(),
             self.sets_deadline(),
             self.dtn_deadline(),
-            Some(self.next_duty),
+            self.duty_needed().then_some(self.next_duty),
         ]
         .into_iter()
         .flatten()
@@ -544,6 +562,12 @@ where
     /// End the node and give the endpoint back, so a host that recycles its connection memory can reuse it.
     pub fn into_endpoint(self) -> E {
         self.io.ep
+    }
+
+    /// The endpoint, for the calls the node does not wrap (reading a datagram, an interface event, a new prekey).
+    /// Commands go through [`Node::command`], so the node sees their effects.
+    pub const fn endpoint_mut(&mut self) -> &mut E {
+        &mut self.io.ep
     }
 
     /// The connectivity client, for queries.
@@ -698,6 +722,11 @@ where
         self.begin(now);
         self.io.ep.iface_event(now, id, ev);
         self.settle(now);
+    }
+
+    /// Turn the beacons of local discovery on or off (they are on by default).
+    pub fn set_local_discovery(&mut self, on: bool) {
+        self.conn.set_local_discovery(on);
     }
 
     /// Set the node's own addresses.
