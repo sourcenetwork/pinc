@@ -19,16 +19,17 @@ use std::rc::Rc;
 
 use rapidhash::RapidHashMap;
 use vinc_core::{Answer, Command, CommandError, Event, IfaceId, Query, SessionId, Value};
-use vinc_crypto::NodeId;
+use vinc_crypto::{NodeId, Secret};
 use vinc_keystore::KeyStore;
 use vinc_node::NodeEvent;
 use vinc_security::{Alpn, KeyRequest, KeyResponse};
 use vinc_transport::stream::{NoSource, RecvStatus, StreamId, is_uni};
 
+use crate::carriers::Relay;
 use crate::error::{Error, ErrorKind, Result};
 use crate::keys::{Identity, Prekeys, is_identity};
 use crate::mem::Limits;
-use crate::node::FacadeNode;
+use crate::node::{FacadeNode, RELAYS};
 use crate::standby::{Standby, Ticket};
 
 mod gate;
@@ -47,6 +48,39 @@ const BUDGET: usize = 4096;
 /// The most stopped streams of a session remembered for their writers, and discarded streams tracked.
 const TRACKED: usize = 128;
 
+/// A key answer that owns its bytes, so the request it answers can be dropped first.
+enum Answered {
+    Signature(Vec<u8>),
+    Secret(Secret<32>),
+    Failed,
+}
+
+impl Answered {
+    fn with<T>(self, f: impl FnOnce(KeyResponse<'_>) -> T) -> T {
+        match self {
+            Self::Signature(sig) => f(KeyResponse::Signature(&sig)),
+            Self::Secret(s) => f(KeyResponse::SharedSecret(s)),
+            Self::Failed => f(KeyResponse::Failed),
+        }
+    }
+}
+
+/// Answer a key operation from the identity key or the prekeys.
+fn answer<S: KeyStore>(identity: &mut Identity<S>, prekeys: &mut Prekeys, req: KeyRequest<'_>) -> Answered {
+    match req {
+        KeyRequest::Sign { key, message, .. } => {
+            match is_identity(key).then(|| identity.sign(message).ok()).flatten() {
+                Some(sig) => Answered::Signature(sig),
+                None => Answered::Failed,
+            }
+        }
+        KeyRequest::Decapsulate { key, ct } => match prekeys.decapsulate(key, ct) {
+            Some(s) => Answered::Secret(s),
+            None => Answered::Failed,
+        },
+    }
+}
+
 /// What a core is built from.
 pub(crate) struct CoreConfig<S, A> {
     /// The node's identity.
@@ -63,6 +97,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub mtu: u16,
     /// The local addresses datagrams are sent from and received on.
     pub locals: Vec<SocketAddr>,
+    /// The relays, in the order the node numbers them.
+    pub relays: Vec<Relay>,
 }
 
 /// What both the core and the handles of a session read.
@@ -225,7 +261,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if self.prekeys.due(now)
             && let Ok(p) = self.prekeys.rotate(now)
         {
-            self.node.endpoint_mut().set_prekey(p);
+            self.node.endpoint_mut().set_prekey(p.clone());
+            self.node.set_prekey(p);
         }
         let mut n = 0;
         if self.node.poll_timeout().is_some_and(|d| d <= now) {
@@ -233,6 +270,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             n += 1;
         }
         n += self.answer_signatures(now);
+        n += self.answer_relay_keys(now);
         n += self.drain(now);
         if n > 0 {
             let dropped = self.node.endpoint().node_stats().events_dropped;
@@ -423,30 +461,27 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     fn answer_key(&mut self, now: u64, session: SessionId) {
-        enum Owned {
-            Sign(vinc_security::KeyHandle, Vec<u8>),
-            Decap(vinc_security::KeyHandle, Vec<u8>),
-        }
-        let req = match self.node.endpoint().query(Query::KeyRequest(session)) {
-            Answer::KeyRequest(KeyRequest::Sign { key, message, .. }) => Owned::Sign(key, message.to_vec()),
-            Answer::KeyRequest(KeyRequest::Decapsulate { key, ct }) => Owned::Decap(key, ct.to_vec()),
+        let answered = match self.node.endpoint().query(Query::KeyRequest(session)) {
+            Answer::KeyRequest(req) => answer(&mut self.identity, &mut self.prekeys, req),
             _ => return,
         };
-        let sig;
-        let response = match req {
-            Owned::Sign(key, msg) => match is_identity(key).then(|| self.identity.sign(&msg).ok()).flatten() {
-                Some(s) => {
-                    sig = s;
-                    KeyResponse::Signature(&sig)
-                }
-                None => KeyResponse::Failed,
-            },
-            Owned::Decap(key, ct) => match self.prekeys.decapsulate(key, &ct) {
-                Some(s) => KeyResponse::SharedSecret(s),
-                None => KeyResponse::Failed,
-            },
-        };
-        let _ = self.cmd_once(now, Command::KeyResponse { session, response });
+        answered.with(|response| {
+            let _ = self.cmd_once(now, Command::KeyResponse { session, response });
+        });
+    }
+
+    /// Answer the key operations the carrier handshakes of the relays wait for.
+    fn answer_relay_keys(&mut self, now: u64) -> usize {
+        let mut n = 0;
+        for relay in 0..RELAYS {
+            let Some(req) = self.node.key_request(relay) else {
+                continue;
+            };
+            let answered = answer(&mut self.identity, &mut self.prekeys, req);
+            answered.with(|resp| self.node.key_response(now, relay, resp));
+            n += 1;
+        }
+        n
     }
 
     fn route_of(&self, alpn: &Alpn) -> usize {

@@ -724,6 +724,11 @@ where
         self.settle(now);
     }
 
+    /// Use `prekey` in the carrier handshakes that start from now on (the endpoint's own prekey rotates).
+    pub fn set_prekey(&mut self, prekey: PrekeyInfo) {
+        self.conn.set_prekey(prekey);
+    }
+
     /// Turn the beacons of local discovery on or off (they are on by default).
     pub fn set_local_discovery(&mut self, on: bool) {
         self.conn.set_local_discovery(on);

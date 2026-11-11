@@ -31,6 +31,7 @@ use std::time::Instant;
 
 use vinc_keystore::KeyStore;
 
+use crate::carriers::{Carriers, NoCarriers};
 use crate::engine::Admit;
 
 mod sealed {
@@ -43,6 +44,8 @@ pub trait Hosted: sealed::Sealed {
     type Keys: KeyStore;
     /// The access hook.
     type Access: Admit;
+    /// The carriers to relays.
+    type Carriers: Carriers;
 
     /// The most bytes one receive can fill: one datagram one byte longer than the endpoint takes (so a longer one shows
     /// itself whole and is dropped), or, for a host that may coalesce several, a whole UDP payload.
@@ -60,59 +63,68 @@ pub trait Hosted: sealed::Sealed {
     /// Sleep until `at`.
     #[doc(hidden)]
     fn sleep(&self, at: Instant) -> impl Future<Output = ()>;
+
+    /// The host's carriers to relays.
+    #[doc(hidden)]
+    fn carriers(&self) -> &Self::Carriers;
 }
 
 /// The host's three closures, one datagram per call, with the type of the key store and of the access hook.
-pub struct Host<R, S, Z, K, A> {
+pub struct Host<R, S, Z, K, A, C = NoCarriers> {
     recv: R,
     send: S,
     sleep: Z,
+    carriers: C,
     _types: PhantomData<fn() -> (K, A)>,
 }
 
 /// The host's three closures, a whole transmit per send and possibly several datagrams per receive, with the type of the
 /// key store and of the access hook.
-pub struct BatchHost<R, S, Z, K, A> {
+pub struct BatchHost<R, S, Z, K, A, C = NoCarriers> {
     recv: R,
     send: S,
     sleep: Z,
+    carriers: C,
     _types: PhantomData<fn() -> (K, A)>,
 }
 
 macro_rules! host_new {
     ($($t:ident),+) => {$(
-        impl<R, S, Z, K, A> $t<R, S, Z, K, A> {
-            pub(crate) const fn new(recv: R, send: S, sleep: Z) -> Self {
+        impl<R, S, Z, K, A, C> $t<R, S, Z, K, A, C> {
+            pub(crate) const fn new(recv: R, send: S, sleep: Z, carriers: C) -> Self {
                 Self {
                     recv,
                     send,
                     sleep,
+                    carriers,
                     _types: PhantomData,
                 }
             }
         }
 
-        impl<R, S, Z, K, A> core::fmt::Debug for $t<R, S, Z, K, A> {
+        impl<R, S, Z, K, A, C> core::fmt::Debug for $t<R, S, Z, K, A, C> {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str(stringify!($t))
             }
         }
 
-        impl<R, S, Z, K, A> sealed::Sealed for $t<R, S, Z, K, A> {}
+        impl<R, S, Z, K, A, C> sealed::Sealed for $t<R, S, Z, K, A, C> {}
     )+};
 }
 host_new!(Host, BatchHost);
 
-impl<R, S, Z, K, A> Hosted for Host<R, S, Z, K, A>
+impl<R, S, Z, K, A, C> Hosted for Host<R, S, Z, K, A, C>
 where
     R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr)>,
     S: AsyncFn(&[u8], SocketAddr) -> io::Result<usize>,
     Z: AsyncFn(Instant),
     K: KeyStore,
     A: Admit,
+    C: Carriers,
 {
     type Keys = K;
     type Access = A;
+    type Carriers = C;
     const RECV_MAX: usize = vinc_core::MAX_DATAGRAM + 1;
 
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
@@ -132,18 +144,24 @@ where
     async fn sleep(&self, at: Instant) {
         (self.sleep)(at).await;
     }
+
+    fn carriers(&self) -> &C {
+        &self.carriers
+    }
 }
 
-impl<R, S, Z, K, A> Hosted for BatchHost<R, S, Z, K, A>
+impl<R, S, Z, K, A, C> Hosted for BatchHost<R, S, Z, K, A, C>
 where
     R: AsyncFn(&mut [u8]) -> io::Result<(usize, SocketAddr, usize)>,
     S: AsyncFn(&[u8], SocketAddr, usize) -> io::Result<usize>,
     Z: AsyncFn(Instant),
     K: KeyStore,
     A: Admit,
+    C: Carriers,
 {
     type Keys = K;
     type Access = A;
+    type Carriers = C;
     const RECV_MAX: usize = 65_536;
 
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
@@ -156,6 +174,10 @@ where
 
     async fn sleep(&self, at: Instant) {
         (self.sleep)(at).await;
+    }
+
+    fn carriers(&self) -> &C {
+        &self.carriers
     }
 }
 
@@ -175,31 +197,34 @@ pub trait Io {
 }
 
 /// A host that implements [`Io`], with the type of the key store and of the access hook.
-pub struct IoHost<N, K, A> {
+pub struct IoHost<N, K, A, C = NoCarriers> {
     io: N,
+    carriers: C,
     _types: PhantomData<fn() -> (K, A)>,
 }
 
-impl<N, K, A> IoHost<N, K, A> {
-    pub(crate) const fn new(io: N) -> Self {
+impl<N, K, A, C> IoHost<N, K, A, C> {
+    pub(crate) const fn new(io: N, carriers: C) -> Self {
         Self {
             io,
+            carriers,
             _types: PhantomData,
         }
     }
 }
 
-impl<N, K, A> core::fmt::Debug for IoHost<N, K, A> {
+impl<N, K, A, C> core::fmt::Debug for IoHost<N, K, A, C> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("IoHost")
     }
 }
 
-impl<N, K, A> sealed::Sealed for IoHost<N, K, A> {}
+impl<N, K, A, C> sealed::Sealed for IoHost<N, K, A, C> {}
 
-impl<N: Io, K: KeyStore, A: Admit> Hosted for IoHost<N, K, A> {
+impl<N: Io, K: KeyStore, A: Admit, C: Carriers> Hosted for IoHost<N, K, A, C> {
     type Keys = K;
     type Access = A;
+    type Carriers = C;
     const RECV_MAX: usize = 65_536;
 
     fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>> {
@@ -212,5 +237,9 @@ impl<N: Io, K: KeyStore, A: Admit> Hosted for IoHost<N, K, A> {
 
     fn sleep(&self, at: Instant) -> impl Future<Output = ()> {
         self.io.sleep(at)
+    }
+
+    fn carriers(&self) -> &C {
+        &self.carriers
     }
 }

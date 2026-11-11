@@ -525,6 +525,8 @@ path = "vinc_api.rs"
 [[test]]
 name = "vinc_revoke"
 path = "vinc_revoke.rs"
+name = "vinc_relay"
+path = "vinc_relay.rs"
 
 [[test]]
 name = "transport_wide"

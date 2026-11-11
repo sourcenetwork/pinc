@@ -24,6 +24,8 @@ use vinc_crypto::NodeId;
 use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
 
 use crate::addr::NodeAddr;
+use crate::carrier::CarrierKind;
+use crate::carriers::{CarrierFns, Carriers, NoCarriers, Relay};
 use crate::conn::{Connection, Incoming};
 use crate::drive::{Shared, T0};
 pub use crate::engine::AllowAll;
@@ -33,6 +35,7 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::host::{BatchHost, Host, Hosted, Io, IoHost};
 use crate::keys::Identity;
 use crate::mem::Limits;
+use crate::node::RELAYS;
 use crate::protocol::{Protocol, Registered};
 use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
 use crate::start::build;
@@ -71,31 +74,33 @@ impl Vinc {
             batch: 8,
             mtu: 1500,
             local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
+            carriers: NoCarriers,
         }
     }
 }
 
 /// Collects the settings of an endpoint. The key store `S`, the discovery `D` and the access hook `A` are types the
 /// setters change; the defaults are an in-memory store, no discovery and a hook that admits everyone.
-pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll> {
+pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarriers> {
     identity: Option<Identity<S>>,
     alpns: Vec<Vec<u8>>,
-    relays: Vec<String>,
+    relays: Vec<Relay>,
     discovery: D,
     limits: Limits,
     admission: A,
     batch: usize,
     mtu: u16,
     local: SocketAddr,
+    carriers: C,
 }
 
-impl<S, D, A> core::fmt::Debug for Builder<S, D, A> {
+impl<S, D, A, C> core::fmt::Debug for Builder<S, D, A, C> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Builder").finish_non_exhaustive()
     }
 }
 
-impl<D, A> Builder<SoftwareStore, D, A> {
+impl<D, A, C> Builder<SoftwareStore, D, A, C> {
     /// Use the Ed25519 identity made from this 32-byte seed. The node id is its public key.
     ///
     /// # Errors
@@ -106,18 +111,18 @@ impl<D, A> Builder<SoftwareStore, D, A> {
     }
 }
 
-impl<S, D, A> Builder<S, D, A> {
+impl<S, D, A, C> Builder<S, D, A, C> {
     /// Use the identity key `handle` of `store`, such as a TPM store (`hwenc` feature of `vinc-keystore`).
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the store holds no identity key under `handle`.
-    pub fn key_store<K: KeyStore>(self, store: K, handle: KeyHandle) -> Result<Builder<K, D, A>> {
+    pub fn key_store<K: KeyStore>(self, store: K, handle: KeyHandle) -> Result<Builder<K, D, A, C>> {
         Ok(self.identity(Identity::from_store(store, handle)?))
     }
 
     /// Use an identity built elsewhere.
     #[must_use]
-    pub fn identity<K: KeyStore>(self, identity: Identity<K>) -> Builder<K, D, A> {
+    pub fn identity<K: KeyStore>(self, identity: Identity<K>) -> Builder<K, D, A, C> {
         Builder {
             identity: Some(identity),
             alpns: self.alpns,
@@ -128,6 +133,7 @@ impl<S, D, A> Builder<S, D, A> {
             batch: self.batch,
             mtu: self.mtu,
             local: self.local,
+            carriers: self.carriers,
         }
     }
 
@@ -147,17 +153,51 @@ impl<S, D, A> Builder<S, D, A> {
         self
     }
 
-    /// Relay URLs. They go into [`Endpoint::addr`] so peers can be told about them; no relay client is wired into the
-    /// endpoint yet, so a dial uses direct addresses only.
+    /// The relays this endpoint uses: it keeps a carrier to each, asks them for the address of a peer dialed by id, and
+    /// reaches a peer through the first one until a direct path works. They are also the hubs of membership and topic
+    /// broadcast. At most four; with none the endpoint reaches peers directly only. Their carriers need the host's
+    /// closures: see [`carriers`](Self::carriers).
     #[must_use]
-    pub fn relays(mut self, relays: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.relays = relays.into_iter().map(Into::into).collect();
+    pub fn relays(mut self, relays: impl IntoIterator<Item = Relay>) -> Self {
+        self.relays = relays.into_iter().collect();
         self
+    }
+
+    /// The host's carriers to the relays: `open` a byte stream of a [`CarrierKind`] to a relay (the TCP connect, or the
+    /// HTTP upgrade of a WebSocket, is the host's work), `read` into a vector, `write` a vector from an offset, and
+    /// `close`. The buffers are owned and come back with the result; see [`Carriers`](crate::Carriers) for what a
+    /// dropped operation may leave. Without them a relay is reached by UDP only.
+    #[must_use]
+    pub fn carriers<O, R, W, Cl, St>(
+        self,
+        open: O,
+        read: R,
+        write: W,
+        close: Cl,
+    ) -> Builder<S, D, A, CarrierFns<O, R, W, Cl, St>>
+    where
+        O: AsyncFn(&Relay, CarrierKind) -> std::io::Result<St>,
+        R: AsyncFn(&St, Vec<u8>) -> (std::io::Result<usize>, Vec<u8>),
+        W: AsyncFn(&St, Vec<u8>, usize) -> (std::io::Result<usize>, Vec<u8>),
+        Cl: AsyncFn(St),
+    {
+        Builder {
+            identity: self.identity,
+            alpns: self.alpns,
+            relays: self.relays,
+            discovery: self.discovery,
+            limits: self.limits,
+            admission: self.admission,
+            batch: self.batch,
+            mtu: self.mtu,
+            local: self.local,
+            carriers: CarrierFns::new(open, read, write, close),
+        }
     }
 
     /// Find addresses for nodes dialed without any.
     #[must_use]
-    pub fn discovery<N: Discovery>(self, discovery: N) -> Builder<S, N, A> {
+    pub fn discovery<N: Discovery>(self, discovery: N) -> Builder<S, N, A, C> {
         Builder {
             identity: self.identity,
             alpns: self.alpns,
@@ -168,6 +208,7 @@ impl<S, D, A> Builder<S, D, A> {
             batch: self.batch,
             mtu: self.mtu,
             local: self.local,
+            carriers: self.carriers,
         }
     }
 
@@ -180,7 +221,7 @@ impl<S, D, A> Builder<S, D, A> {
 
     /// Set the access hook: it is asked on accept, on dial, and by [`Endpoint::admit`] for gossip neighbours.
     #[must_use]
-    pub fn acp<N: Admission>(self, hook: N) -> Builder<S, D, N> {
+    pub fn acp<N: Admission>(self, hook: N) -> Builder<S, D, N, C> {
         Builder {
             identity: self.identity,
             alpns: self.alpns,
@@ -191,6 +232,7 @@ impl<S, D, A> Builder<S, D, A> {
             batch: self.batch,
             mtu: self.mtu,
             local: self.local,
+            carriers: self.carriers,
         }
     }
 
@@ -212,15 +254,15 @@ impl<S, D, A> Builder<S, D, A> {
 }
 
 /// The endpoint that [`Builder::build`] makes over the closures `R`, `S` and `Z`.
-pub type Built<R, S, Z, K, D, A> = Endpoint<Host<R, S, Z, K, A>, D>;
+pub type Built<R, S, Z, K, D, A, C = NoCarriers> = Endpoint<Host<R, S, Z, K, A, C>, D>;
 
 /// The endpoint that [`Builder::build_io`] makes over a host `N`.
-pub type IoBuilt<N, K, D, A> = Endpoint<IoHost<N, K, A>, D>;
+pub type IoBuilt<N, K, D, A, C = NoCarriers> = Endpoint<IoHost<N, K, A, C>, D>;
 
 /// The endpoint that [`Builder::build_batched`] makes over the closures `R`, `S` and `Z`.
-pub type BatchBuilt<R, S, Z, K, D, A> = Endpoint<BatchHost<R, S, Z, K, A>, D>;
+pub type BatchBuilt<R, S, Z, K, D, A, C = NoCarriers> = Endpoint<BatchHost<R, S, Z, K, A, C>, D>;
 
-impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
+impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
     /// Make the endpoint over the host's I/O, one datagram per call: `recv` receives one datagram into the buffer and
     /// returns its length and sender, `send` sends one datagram to an address, `sleep` sleeps until an instant. The
     /// closures are called from whichever task polls a future of the endpoint. `recv` must lose no datagram when its
@@ -232,16 +274,16 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] for an invalid setting or no identity.
-    pub fn build<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<Built<R, S, Z, K, D, A>>
+    pub fn build<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<Built<R, S, Z, K, D, A, C>>
     where
         R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr)>,
         S: AsyncFn(&[u8], SocketAddr) -> std::io::Result<usize>,
         Z: AsyncFn(Instant),
     {
         // One datagram per send: the endpoint does not batch for a host that sends one at a time.
-        let (inner, core, local) = self.assemble(1)?;
+        let (inner, carriers, core, local) = self.assemble(1)?;
         Ok(Endpoint(Rc::new(inner.finish(
-            Host::new(recv, send, sleep),
+            Host::new(recv, send, sleep, carriers),
             core,
             local,
             1,
@@ -256,16 +298,16 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
     ///
     /// # Errors
     /// As [`build`](Self::build).
-    pub fn build_batched<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<BatchBuilt<R, S, Z, K, D, A>>
+    pub fn build_batched<R, S, Z>(self, recv: R, send: S, sleep: Z) -> Result<BatchBuilt<R, S, Z, K, D, A, C>>
     where
         R: AsyncFn(&mut [u8]) -> std::io::Result<(usize, SocketAddr, usize)>,
         S: AsyncFn(&[u8], SocketAddr, usize) -> std::io::Result<usize>,
         Z: AsyncFn(Instant),
     {
         let batch = self.batch;
-        let (inner, core, local) = self.assemble(batch)?;
+        let (inner, carriers, core, local) = self.assemble(batch)?;
         Ok(Endpoint(Rc::new(inner.finish(
-            BatchHost::new(recv, send, sleep),
+            BatchHost::new(recv, send, sleep, carriers),
             core,
             local,
             batch,
@@ -277,14 +319,19 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
     ///
     /// # Errors
     /// As [`build`](Self::build).
-    pub fn build_io<N: Io>(self, io: N) -> Result<IoBuilt<N, K, D, A>> {
+    pub fn build_io<N: Io>(self, io: N) -> Result<IoBuilt<N, K, D, A, C>> {
         let batch = self.batch;
-        let (inner, core, local) = self.assemble(batch)?;
-        Ok(Endpoint(Rc::new(inner.finish(IoHost::new(io), core, local, batch))))
+        let (inner, carriers, core, local) = self.assemble(batch)?;
+        Ok(Endpoint(Rc::new(inner.finish(
+            IoHost::new(io, carriers),
+            core,
+            local,
+            batch,
+        ))))
     }
 
     /// Everything but the host: the core, built with transmits of up to `gso` datagrams.
-    fn assemble(self, gso: usize) -> Result<(Parts<D>, Core<K, A>, SocketAddr)> {
+    fn assemble(self, gso: usize) -> Result<Assembled<D, C, K, A>> {
         let Builder {
             identity,
             alpns,
@@ -295,7 +342,11 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
             batch: _,
             mtu,
             local,
+            carriers,
         } = self;
+        if relays.len() > RELAYS {
+            return Err(Error::config("at most four relays"));
+        }
         let identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
         let public: Rc<[u8]> = identity.public_key().into();
         let node = identity.node_id();
@@ -307,6 +358,7 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
             max_gso: gso,
             mtu,
             locals: interfaces(local),
+            relays: relays.clone(),
         };
         let core = build(cfg, T0)?;
         Ok((
@@ -316,28 +368,32 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
                 discovery,
                 relays,
             },
+            carriers,
             core,
             local,
         ))
     }
 }
 
+/// What `assemble` makes: the endpoint's parts, the host's carriers, the core and the bound address.
+type Assembled<D, C, K, A> = (Parts<D>, C, Core<K, A>, SocketAddr);
+
 /// What an endpoint holds besides its host and its core.
 struct Parts<D> {
     node: NodeId,
     public: Rc<[u8]>,
     discovery: D,
-    relays: Vec<String>,
+    relays: Vec<Relay>,
 }
 
 impl<D> Parts<D> {
     fn finish<H: Hosted>(self, host: H, core: Core<H::Keys, H::Access>, local: SocketAddr, gso: usize) -> Inner<H, D> {
         Inner {
-            shared: Rc::new(Shared::new(host, core, local, gso)),
+            shared: Rc::new(Shared::new(host, core, local, gso, self.relays.clone())),
             node: self.node,
             public: self.public,
             discovery: self.discovery,
-            relays: self.relays,
+            relays: self.relays.iter().map(Relay::url).collect(),
         }
     }
 }

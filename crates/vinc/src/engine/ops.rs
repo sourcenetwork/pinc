@@ -432,4 +432,51 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             Try::Wait(Wait::G(GKey::Idle))
         }
     }
+
+    // ---- relays and their carriers ----
+
+    /// The next request of the connectivity layer for a carrier.
+    pub(crate) fn carrier_io(&mut self) -> Option<vinc_connect::client::Io> {
+        self.node.poll_io()
+    }
+
+    /// The carrier of `relay` is open.
+    pub(crate) fn carrier_opened(&mut self, now: u64, relay: usize) {
+        self.node.stream_opened(now, relay);
+        self.dirty = true;
+    }
+
+    /// The carrier of `relay` closed or could not be opened.
+    pub(crate) fn carrier_closed(&mut self, now: u64, relay: usize) {
+        self.node.stream_closed(now, relay);
+        self.dirty = true;
+    }
+
+    /// Bytes arrived on the carrier of `relay`; how many the node took.
+    pub(crate) fn carrier_in(&mut self, now: u64, relay: usize, bytes: &[u8]) -> usize {
+        self.dirty = true;
+        self.node.stream_data(now, relay, bytes)
+    }
+
+    /// The next bytes the node wants on the carrier of `relay`.
+    pub(crate) fn carrier_out(&mut self, relay: usize, buf: &mut [u8]) -> usize {
+        self.node.poll_stream(relay, buf)
+    }
+
+    /// The next UDP datagram the connectivity layer wants sent: its address and length in `buf`.
+    pub(crate) fn poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        self.node.poll_udp(buf)
+    }
+
+    /// Random bytes from the identity's source; zeros if it fails (a mask or a nonce nothing depends on).
+    pub(crate) fn random(&mut self, out: &mut [u8]) {
+        let _ = self.identity.random(out);
+    }
+
+    /// Wake the future that drives, if there is one.
+    pub(crate) fn wake_driver(&mut self) {
+        if let Some(t) = self.driver {
+            self.standby.notify(t);
+        }
+    }
 }

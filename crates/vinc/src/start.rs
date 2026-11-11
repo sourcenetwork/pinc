@@ -67,11 +67,15 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         .locals
         .first()
         .ok_or_else(|| Error::config("the endpoint has no local address"))?;
+    let mut relays = [None; RELAYS];
+    for (slot, relay) in relays.iter_mut().zip(&cfg.relays) {
+        *slot = Some(relay.cfg());
+    }
     let node_cfg = NodeConfig {
         connect: ConnectConfig {
             me,
             identity: cfg.identity.local()?,
-            relays: [None; RELAYS],
+            relays,
             phone: false,
             restarted: false,
             start: now,
@@ -129,6 +133,7 @@ mod tests {
             max_gso: 1,
             mtu: 1500,
             locals: vec!["127.0.0.1:1".parse().unwrap()],
+            relays: Vec::new(),
         }
     }
 

@@ -443,6 +443,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.beacons_on = on;
     }
 
+    /// Use `prekey` in the carrier handshakes that start from now on.
+    pub fn set_prekey(&mut self, prekey: PrekeyInfo) {
+        self.prekey = prekey;
+    }
+
     /// Whether any relay is named.
     pub(super) fn has_relays(&self) -> bool {
         self.rly.iter().any(|r| r.cfg.is_some())

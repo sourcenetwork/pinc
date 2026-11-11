@@ -28,6 +28,9 @@ use std::rc::Rc;
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
+mod carrier_io;
+
+use crate::carriers::{Carriers, Relay};
 use crate::engine::{Core, Try, Wait};
 use crate::error::Error;
 use crate::host::Hosted;
@@ -51,6 +54,12 @@ pub(crate) struct Shared<H: Hosted> {
     /// The access hook, the same one the core asks; it holds no endpoint state, so it is asked without the core.
     pub(crate) admit: Rc<crate::engine::Gate<H::Access>>,
     core: RefCell<Core<H::Keys, H::Access>>,
+    /// The relays, in the order the node numbers them.
+    relays: Vec<Relay>,
+    /// The state of the carriers to the relays; see [`carrier_io`].
+    carriers: RefCell<carrier_io::Slots<<H::Carriers as Carriers>::Stream>>,
+    /// A carrier moved bytes or changed state during the last poll: the endpoint has more to do.
+    cdirty: Cell<bool>,
     rx_bufs: RefCell<Vec<Vec<u8>>>,
     tx_bufs: RefCell<Vec<Vec<u8>>>,
     /// The size of a transmit buffer: the endpoint's batch of datagrams of the largest size.
@@ -152,7 +161,13 @@ impl<H: Hosted> Drop for Turn<'_, H> {
 
 impl<H: Hosted> Shared<H> {
     /// The shared state of an endpoint whose transmits batch up to `gso` datagrams.
-    pub(crate) fn new(host: H, core: Core<H::Keys, H::Access>, local: SocketAddr, gso: usize) -> Self {
+    pub(crate) fn new(
+        host: H,
+        core: Core<H::Keys, H::Access>,
+        local: SocketAddr,
+        gso: usize,
+        relays: Vec<Relay>,
+    ) -> Self {
         Self {
             host,
             start: Instant::now(),
@@ -160,6 +175,9 @@ impl<H: Hosted> Shared<H> {
             driving: Cell::new(false),
             admit: core.hook(),
             core: RefCell::new(core),
+            relays,
+            carriers: RefCell::new(carrier_io::slots()),
+            cdirty: Cell::new(false),
             rx_bufs: RefCell::new(Vec::new()),
             tx_bufs: RefCell::new(Vec::new()),
             tx_len: gso.clamp(1, UDP_MAX / vinc_core::MAX_DATAGRAM) * vinc_core::MAX_DATAGRAM,
@@ -210,6 +228,7 @@ impl<H: Hosted> Shared<H> {
         let mut sl = pin!(None);
         let mut slept: Option<u64> = None;
         let mut spare: Option<Buf<'_>> = None;
+        let mut carriers = pin!(None);
         loop {
             let step = poll_fn(|cx| {
                 let now = self.now();
@@ -295,6 +314,16 @@ impl<H: Hosted> Shared<H> {
                     }
                     spare = Some(buf);
                 }
+                if !self.relays.is_empty() {
+                    if carriers.is_none() {
+                        carriers.set(Some(self.carriers_task()));
+                    }
+                    if let Some(f) = carriers.as_mut().as_pin_mut() {
+                        // It never completes: it holds the operations in flight and polls them.
+                        let _ = f.poll(cx);
+                    }
+                    progressed |= self.cdirty.take();
+                }
                 if progressed {
                     Poll::Ready(Step::Io)
                 } else {
@@ -316,14 +345,20 @@ impl<H: Hosted> Shared<H> {
     pub(crate) async fn flush(&self) {
         let mut buf: Option<Buf<'_>> = None;
         loop {
-            let (t, b) = {
+            let (to, len, segment, b) = {
                 let now = self.now();
                 let Some(mut core) = self.lock() else { return };
                 let moved = core.service(now);
                 let mut b = buf.take().unwrap_or_else(|| self.tx_buf());
-                if let Some(t) = core.node.poll_transmit(now, &mut b.v) {
-                    (t, b)
+                let next = core
+                    .node
+                    .poll_transmit(now, &mut b.v)
+                    .map(|t| (t.remote, t.len, t.segment_size))
+                    .or_else(|| core.poll_udp(&mut b.v).map(|(to, n)| (to, n, n)));
+                if let Some((to, len, segment)) = next {
+                    (to, len, segment, b)
                 } else {
+                    self.pump_carriers(&mut core, true);
                     core.kick();
                     if moved == 0 {
                         return;
@@ -332,12 +367,9 @@ impl<H: Hosted> Shared<H> {
                     continue;
                 }
             };
-            let to = wire(t.remote, self.local.is_ipv6());
+            let to = wire(to, self.local.is_ipv6());
             // A datagram the socket refuses is a lost datagram: the transport sends it again.
-            let _ = self
-                .host
-                .send(b.v.get(..t.len).unwrap_or_default(), to, t.segment_size)
-                .await;
+            let _ = self.host.send(b.v.get(..len).unwrap_or_default(), to, segment).await;
             buf = Some(b);
         }
     }
