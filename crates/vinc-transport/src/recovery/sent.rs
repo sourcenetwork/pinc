@@ -84,6 +84,9 @@ const EMPTY: Slot = Slot {
     state: State::Done,
 };
 
+/// The places a ring starts with.
+const FIRST_CAP: usize = 32;
+
 /// A ring of at most `N` sent packets: the table of a connection's packets in flight. A connection is handed one in its
 /// [`Resources`](crate::conn::Resources) and gives it back with them, so a new session builds no table.
 #[derive(Debug, Clone)]
@@ -95,6 +98,9 @@ pub struct SentRing<const N: usize> {
     /// the head is dropped), and a scan for the oldest packet in flight starts here instead of at the head, however
     /// many acknowledged packets wait behind a ghost.
     lead: usize,
+    /// The places the ring wraps at, at most `N`: it starts small and doubles when it is full, so the part of the table
+    /// ever written follows the most packets that were in flight at once.
+    cap: usize,
 }
 
 impl<const N: usize> Default for SentRing<N> {
@@ -112,6 +118,7 @@ impl<const N: usize> SentRing<N> {
             head: 0,
             len: 0,
             lead: 0,
+            cap: FIRST_CAP.min(N),
         }
     }
 
@@ -121,10 +128,24 @@ impl<const N: usize> SentRing<N> {
         self.head = 0;
         self.len = 0;
         self.lead = 0;
+        self.cap = FIRST_CAP.min(N);
     }
 
     fn phys(&self, i: usize) -> usize {
-        (self.head + i) % N
+        (self.head + i) % self.cap
+    }
+
+    /// Double the places the full ring wraps at: the packets move to the start of the table in order.
+    fn grow(&mut self) -> bool {
+        let new = self.cap.saturating_mul(2).min(N);
+        let head = self.head;
+        let Some(whole) = self.slots.prefix_mut(self.cap) else {
+            return false;
+        };
+        whole.rotate_left(head);
+        self.head = 0;
+        self.cap = new;
+        true
     }
 
     pub(crate) fn get(&self, i: usize) -> Option<&Slot> {
@@ -190,7 +211,7 @@ impl<const N: usize> SentRing<N> {
 
     fn pop_front(&mut self) {
         if self.len > 0 {
-            self.head = if self.len == 1 { 0 } else { (self.head + 1) % N };
+            self.head = if self.len == 1 { 0 } else { (self.head + 1) % self.cap };
             self.len -= 1;
             self.lead = self.lead.saturating_sub(1);
         }
@@ -240,7 +261,10 @@ impl<const N: usize> SentRing<N> {
 
     /// Append a packet. Returns false when the ring is full of packets still in flight.
     pub(crate) fn push(&mut self, sent: Sent) -> bool {
-        while self.len == N {
+        while self.len == self.cap {
+            if self.cap < N && self.grow() {
+                continue;
+            }
             if self.get(0).is_some_and(|s| s.state == State::InFlight) {
                 return false;
             }
@@ -280,31 +304,72 @@ mod tests {
         (0..r.len).find(|&i| r.get(i).is_some_and(|s| s.state == State::InFlight))
     }
 
-    #[test]
-    fn the_oldest_packet_in_flight_is_found_from_the_cached_prefix_as_from_the_head() {
-        let mut r = SentRing::<8>::new();
+    /// A random run of pushes, settlements out of order and trims on a ring of `N`: the oldest packet in flight is the
+    /// one a scan from the head finds, a push is refused exactly when the ring is full of packets in flight, and
+    /// the packets keep their order whatever the ring grew through.
+    fn run<const N: usize>() {
+        let mut r = SentRing::<N>::new();
         let (mut pn, mut x) = (0u64, 0x2545_f491_4f6c_dd1du64);
-        for step in 0..4000 {
+        let mut most = 0;
+        for step in 0..20_000 {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
-            match x % 4 {
-                0 | 1 => {
-                    if r.push(sent(pn)) {
+            match x % 8 {
+                0..=3 => {
+                    let room = r.len < N || r.get(0).is_some_and(|s| s.state != State::InFlight);
+                    assert_eq!(r.push(sent(pn)), room, "step {step}");
+                    if room {
                         pn += 1;
                     }
                 }
-                2 => {
+                4 | 5 => {
                     // Settle a slot out of order, as a late or out-of-order acknowledgement does.
                     let i = (x >> 8) as usize % (r.len + 1);
                     if let Some(s) = r.get_mut(i).filter(|s| s.state == State::InFlight) {
                         s.state = if x & 0x100 == 0 { State::Done } else { State::Lost(step) };
                     }
                 }
-                _ => r.trim(step + 10 * GHOST_RETENTION * u64::from(x & 1 == 0)),
+                6 => r.trim(step + 10 * GHOST_RETENTION * u64::from(x & 1 == 0)),
+                _ => {
+                    // Settle the whole front so that the ring drains now and then.
+                    for i in 0..r.len.min(1 + (x >> 8) as usize % 40) {
+                        if let Some(s) = r.get_mut(i) {
+                            s.state = State::Done;
+                        }
+                    }
+                }
             }
+            most = most.max(r.len);
             assert_eq!(r.first_in_flight(), naive(&r), "step {step}");
-            assert!(r.lead <= r.len);
+            assert!(r.lead <= r.len && r.len <= N && r.len <= r.cap);
+            assert!(
+                (0..r.len).map(|i| r.get(i).map(|s| s.sent.pn)).is_sorted(),
+                "step {step}"
+            );
         }
+        assert!(most > 1, "the run never held two packets");
+    }
+
+    #[test]
+    fn the_ring_finds_the_oldest_packet_in_flight_refuses_only_when_full_and_keeps_order_through_its_growth() {
+        run::<8>();
+        run::<100>();
+        run::<300>();
+    }
+
+    #[test]
+    fn a_ring_that_never_holds_many_packets_writes_few_records_and_a_cleared_ring_starts_small() {
+        let mut r = SentRing::<8192>::new();
+        for pn in 0..20 {
+            assert!(r.push(sent(pn)));
+        }
+        assert_eq!(r.cap, FIRST_CAP);
+        for pn in 20..100 {
+            assert!(r.push(sent(pn)));
+        }
+        assert_eq!(r.cap, 128);
+        r.clear();
+        assert_eq!((r.cap, r.len, r.head), (FIRST_CAP, 0, 0));
     }
 }

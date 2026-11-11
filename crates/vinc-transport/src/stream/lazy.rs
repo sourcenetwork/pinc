@@ -71,6 +71,11 @@ impl<T: Blank, const N: usize> Lazy<T, N> {
         self.written.iter_mut()
     }
 
+    /// The first `n` entries as a slice, if all of them were written.
+    pub(crate) fn prefix_mut(&mut self, n: usize) -> Option<&mut [T]> {
+        self.written.get_mut(..n)
+    }
+
     /// Make every entry blank again, keeping the reserved room.
     pub(crate) fn clear(&mut self) {
         self.written.clear();
@@ -109,6 +114,11 @@ impl<T: Blank, const N: usize> Lazy<T, N> {
     /// Every entry, in order.
     pub(crate) fn written_iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.all.iter_mut()
+    }
+
+    /// The first `n` entries as a slice.
+    pub(crate) fn prefix_mut(&mut self, n: usize) -> Option<&mut [T]> {
+        self.all.get_mut(..n)
     }
 
     /// Make every entry blank again.
