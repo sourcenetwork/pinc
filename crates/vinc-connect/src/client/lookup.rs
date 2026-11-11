@@ -21,7 +21,7 @@ use core::net::SocketAddr;
 use vinc_crypto::NodeId;
 
 use crate::carrier::frame::DnsAnswer;
-use crate::record::{MAX_ADDRS, Reach, Record, RecordError};
+use crate::record::{MAX_ADDRS, MAX_HINT_LEN, Reach, Record, RecordError};
 
 /// The wait before a lookup is repeated over UDP.
 pub const RETRY_NS: u64 = 300_000_000;
@@ -195,9 +195,16 @@ pub struct Found {
     /// The record's sequence number.
     pub seq: u64,
     addrs: [Option<SocketAddr>; MAX_ADDRS],
+    hints: [u8; MAX_HINT_LEN],
+    hint_len: u8,
 }
 
 impl Found {
+    /// The ticket hints the peer published, at most [`MAX_HINT_LEN`] bytes.
+    pub fn hints(&self) -> &[u8] {
+        self.hints.get(..usize::from(self.hint_len)).unwrap_or_default()
+    }
+
     /// The peer's addresses.
     pub fn addrs(&self) -> impl Iterator<Item = SocketAddr> + '_ {
         self.addrs.iter().flatten().copied()
@@ -232,11 +239,18 @@ pub fn verify(peer: &NodeId, answer: &DnsAnswer<'_>) -> Result<Option<Found>, Lo
             for (d, a) in addrs.iter_mut().zip(r.addrs()) {
                 *d = Some(a);
             }
+            let mut hints = [0u8; MAX_HINT_LEN];
+            let hint_len = r.hints.len().min(MAX_HINT_LEN);
+            if let (Some(d), Some(s)) = (hints.get_mut(..hint_len), r.hints.get(..hint_len)) {
+                d.copy_from_slice(s);
+            }
             Ok(Some(Found {
                 home: r.home,
                 reach: r.reach,
                 seq: r.seq,
                 addrs,
+                hints,
+                hint_len: u8::try_from(hint_len).unwrap_or(0),
             }))
         }
     }

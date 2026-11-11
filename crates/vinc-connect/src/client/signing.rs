@@ -243,7 +243,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             seq: wall_ms,
             reach: class,
             addrs: addrs.get(..n).unwrap_or_default(),
-            hints: &[],
+            hints: self.hints.get(..self.hint_len).unwrap_or_default(),
         };
         let mut job = Self::blank(Kind::Record, home);
         job.signed = record::prepare(&self.me, self.identity.public_key(), &fields, &mut job.buf).ok()?;

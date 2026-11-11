@@ -355,6 +355,9 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) gossip_alpn: Option<vinc_security::Alpn>,
     /// Whether the node announces itself on the local link (beacons); on by default.
     pub(super) beacons_on: bool,
+    /// The ticket hints the node's record carries.
+    pub(super) hints: [u8; crate::record::MAX_HINT_LEN],
+    pub(super) hint_len: usize,
 }
 
 impl<P: Provider, const R: usize, const PEERS: usize> core::fmt::Debug for Connectivity<P, R, PEERS> {
@@ -434,6 +437,8 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             dropped: 0,
             gossip_alpn: None,
             beacons_on: true,
+            hints: [0; crate::record::MAX_HINT_LEN],
+            hint_len: 0,
         }
     }
 
@@ -441,6 +446,23 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// has nothing to do on its own and arms no timer.
     pub const fn set_local_discovery(&mut self, on: bool) {
         self.beacons_on = on;
+    }
+
+    /// Put `hints` (at most [`MAX_HINT_LEN`](crate::record::MAX_HINT_LEN) bytes) in the node's record and publish it
+    /// again. False, and nothing changed, if they are too long.
+    pub fn set_hints(&mut self, hints: &[u8]) -> bool {
+        let Some(d) = self.hints.get_mut(..hints.len()) else {
+            return false;
+        };
+        d.copy_from_slice(hints);
+        self.hint_len = hints.len();
+        self.sign.want_record();
+        true
+    }
+
+    /// The ticket hints the node's record carries.
+    pub fn hints(&self) -> &[u8] {
+        self.hints.get(..self.hint_len).unwrap_or_default()
     }
 
     /// Use `prekey` in the carrier handshakes that start from now on.
