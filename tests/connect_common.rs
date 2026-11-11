@@ -94,6 +94,11 @@ pub struct Rig {
 impl Rig {
     /// A dialer that expects `expect` (the relay's node id; pass `None` for the real one).
     pub fn new(expect: Option<NodeId>) -> Box<Self> {
+        Self::with_alpn(expect, ALPN)
+    }
+
+    /// As [`Rig::new`], with the dialer asking for `alpn`.
+    pub fn with_alpn(expect: Option<NodeId>, alpn: &[u8]) -> Box<Self> {
         let prov = Software;
         let client_kp = ed(0x31);
         let relay_kp = ed(0x32);
@@ -112,7 +117,7 @@ impl Rig {
             &mut env,
             InitiatorParams {
                 peer: expect.unwrap_or_else(|| id(&relay_kp)),
-                alpn: ALPN,
+                alpn,
                 scid: ConnId::new(b"client00").unwrap(),
                 identity: &cid,
                 prekey: &prekey,

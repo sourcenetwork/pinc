@@ -28,7 +28,7 @@ use core::fmt;
 use vinc_crypto::{Aead, NodeId, Provider};
 use vinc_security::message::MAX_MESSAGE_LEN;
 use vinc_security::{
-    AlpnList, ConnId, Env, Established, Event, Failure, Initiator, InitiatorParams, KeyRequest, KeyResponse,
+    Alpn, AlpnList, ConnId, Env, Established, Event, Failure, Initiator, InitiatorParams, KeyRequest, KeyResponse,
     LocalIdentity, Output, PacketKey, RecordError, Responder, ResponderConfig, ResponderStores, SoftKeys,
 };
 
@@ -36,6 +36,9 @@ use super::frame::{Frame, FrameError, MAX_FRAME_LEN};
 
 /// The application protocol name both ends of a carrier handshake use.
 pub const ALPN: &[u8] = b"vinc-carrier/1";
+/// The protocol name of a relay-to-relay carrier: its dialer is a peer relay, and its frames are the relays' own
+/// (forwarded packets, record replicas, pings), not a client's.
+pub const PEER_ALPN: &[u8] = b"vinc-relay/1";
 /// The longest unit after the 2-byte length: a record of the longest frame and its tag.
 pub const MAX_UNIT_LEN: usize = MAX_FRAME_LEN + Aead::TAG_LEN;
 /// The size of the inbound buffer.
@@ -47,12 +50,12 @@ pub const IN_LEN: usize = 2 + if MAX_UNIT_LEN > MAX_MESSAGE_LEN {
 /// The size of the buffered handshake output: two full messages with their length prefixes.
 pub const OUT_LEN: usize = 2 * (2 + MAX_MESSAGE_LEN);
 
-/// A responder configuration for a relay: serves [`ALPN`] and issues no resumption tickets.
+/// A responder configuration for a relay: serves [`ALPN`] and [`PEER_ALPN`] and issues no resumption tickets.
 ///
 /// # Errors
 /// [`Failure::InvalidParameter`] if [`ALPN`] is not a valid protocol name (it always is).
 pub fn responder_config(identity: LocalIdentity, scid: ConnId) -> Result<ResponderConfig, Failure> {
-    let alpns = AlpnList::new(&[ALPN]).ok_or(Failure::InvalidParameter)?;
+    let alpns = AlpnList::new(&[ALPN, PEER_ALPN]).ok_or(Failure::InvalidParameter)?;
     let mut cfg = ResponderConfig::new(identity, scid, alpns);
     cfg.tickets_per_session = 0;
     Ok(cfg)
@@ -144,6 +147,7 @@ pub struct ProtectedCarrier<P: Provider> {
     send_pn: u64,
     recv_pn: u64,
     peer: Option<NodeId>,
+    alpn: Option<Alpn>,
     input: [u8; IN_LEN],
     in_len: usize,
     consume: usize,
@@ -206,6 +210,7 @@ impl<P: Provider> ProtectedCarrier<P> {
             send_pn: 0,
             recv_pn: 0,
             peer: None,
+            alpn: None,
             input: [0; IN_LEN],
             in_len: 0,
             consume: 0,
@@ -245,6 +250,11 @@ impl<P: Provider> ProtectedCarrier<P> {
     /// The authenticated peer, once open.
     pub const fn peer(&self) -> Option<NodeId> {
         self.peer
+    }
+
+    /// Whether the handshake negotiated [`PEER_ALPN`]: the other end is a peer relay, not a client.
+    pub fn is_peer_relay(&self) -> bool {
+        self.alpn.is_some_and(|a| a.as_bytes() == PEER_ALPN)
     }
 
     /// How many bytes [`ProtectedCarrier::receive`] would take now.
@@ -400,6 +410,7 @@ impl<P: Provider> ProtectedCarrier<P> {
                         self.send = Some(s.packet);
                         self.recv = Some(r.packet);
                         self.peer = Some(est.peer);
+                        self.alpn = Some(est.alpn);
                         self.stage = Stage::Open;
                         Ok(Poll::Open(est.peer))
                     }

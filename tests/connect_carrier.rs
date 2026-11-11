@@ -21,7 +21,7 @@ mod connect_common;
 
 use connect_common::{Out, Rig, big_stack, enc, id, nid};
 use proptest::prelude::*;
-use vinc_connect::carrier::session::{CarrierError, IN_LEN, MAX_UNIT_LEN};
+use vinc_connect::carrier::session::{CarrierError, IN_LEN, MAX_UNIT_LEN, PEER_ALPN};
 use vinc_connect::carrier::ws::{self, Decoder, MAX_PAYLOAD, Opcode, Role, WsError, WsFrame};
 use vinc_connect::carrier::{BatchBuilder, Frame, MAX_FRAME_LEN, Offer};
 
@@ -61,6 +61,19 @@ fn the_handshake_authenticates_both_ends_and_frames_flow_both_ways() {
         assert_eq!(unit.len(), 2 + enc(&r).len() + 16, "length prefix, frame, tag");
         rig.feed_client(&unit);
         assert_eq!(rig.poll_client().unwrap(), Out::Frame(enc(&r)));
+    });
+}
+
+#[test]
+fn the_responder_tells_a_peer_relay_from_a_client_by_the_protocol_name() {
+    big_stack(|| {
+        let mut client = Rig::new(None);
+        client.handshake();
+        assert!(!client.relay.is_peer_relay(), "a client dials the carrier protocol");
+        let mut peer = Rig::with_alpn(None, PEER_ALPN);
+        peer.handshake();
+        assert!(peer.relay.is_peer_relay(), "a relay dials the peer protocol");
+        assert!(peer.client.peer().is_some());
     });
 }
 
