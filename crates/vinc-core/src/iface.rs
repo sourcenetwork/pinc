@@ -7,6 +7,7 @@
 //! changed address while suspended, and a session that was already timing out when its SLEEP went out, cannot be woken
 //! reliably, so those sessions close at once with `Redial` and the application dials again instead of waiting for an
 //! answer that will not come.
+//! A link that comes back also reaches the sessions still in their handshake: a dialing side sends its flight at once.
 //!
 //! After any resume or link return no keepalive is sent for 10 s unless something is in flight.
 //!
@@ -71,10 +72,11 @@ ep_impl! {
         }
     }
 
-    /// The link of the sessions that leave from `local` went down (`down`) or came back.
+    /// The link of the sessions that leave from `local` went down (`down`) or came back, those still in their
+    /// handshake included.
     fn link(&mut self, now: u64, local: SocketAddr, down: bool) {
         for i in 0..K {
-            if !self.leaves_from(i, &local) {
+            if !self.leaves_from(i, &local, true) {
                 continue;
             }
             if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
@@ -85,11 +87,14 @@ ep_impl! {
         }
     }
 
-    /// Whether session `i` is live and its active path leaves from `local`.
-    fn leaves_from(&self, i: usize, local: &SocketAddr) -> bool {
+    /// Whether session `i` is established (or, with `handshaking`, still in its handshake) and its active path leaves
+    /// from `local`.
+    fn leaves_from(&self, i: usize, local: &SocketAddr, handshaking: bool) -> bool {
         self.slots
             .get(i)
-            .filter(|s| s.m.in_use && s.m.state == State::Established)
+            .filter(|s| {
+                s.m.in_use && (s.m.state == State::Established || (handshaking && s.m.state == State::Handshaking))
+            })
             .and_then(|s| s.conn.as_ref())
             .and_then(vinc_transport::conn::Connection::active_path)
             .and_then(|p| self.path_addrs(p))
@@ -105,7 +110,7 @@ ep_impl! {
         }
         self.quiet_until = now.saturating_add(RESUME_QUIET);
         for i in 0..K {
-            if !self.leaves_from(i, &old) {
+            if !self.leaves_from(i, &old, false) {
                 continue;
             }
             let active = self

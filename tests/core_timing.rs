@@ -15,7 +15,9 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Answer, Command, ConnectFailure, EndReason, Event, Query, Role, SessionId, Value};
+use vinc_core::{
+    Answer, Command, ConnectFailure, EndReason, Event, IfaceEvent, IfaceId, Query, Role, SessionId, Value,
+};
 use vinc_crypto::NodeId;
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, PathId, PathInfo};
@@ -448,6 +450,33 @@ fn the_short_initial_is_used_only_for_a_peer_known_to_cache_the_prekey_on_a_fres
             Some(1),
             "a stale path still used the short Initial"
         );
+    });
+}
+
+#[test]
+fn a_link_return_resends_a_dial_still_in_its_handshake_at_once() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        // The first flight is lost; the link goes down 100 ms after the dial and returns 100 ms later.
+        net.loss = Some(Box::new(|_, _, _| true));
+        let t0 = net.now;
+        dial(&mut net, a, b, ALPN_A, Role::Other);
+        net.run_for(100 * MS_NS);
+        let now = net.now;
+        net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
+        net.run_for(100 * MS_NS);
+        net.loss = None;
+        let now = net.now;
+        net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Up);
+        net.run_for(5 * MS_NS);
+        let resent = sends(&net, a, t0, 0.15, 0.5);
+        assert!(
+            resent.first().is_some_and(|t| *t < 0.21),
+            "the flight waited for its resend timer: {resent:?}"
+        );
+        assert!(net.run(t0 + S, |n| n.nodes[a].saw(is_connected)));
+        assert!(net.now - t0 < 300 * MS_NS, "connected at {} ms", (net.now - t0) / MS_NS);
     });
 }
 
