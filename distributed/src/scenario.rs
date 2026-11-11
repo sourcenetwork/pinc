@@ -297,6 +297,16 @@ pub enum TransportTest {
         /// Round trips measured.
         round_trips: u32,
     },
+    /// `requests` requests of `size` bytes each way, `concurrency` in flight on one connection, each on a stream of its
+    /// own, as a request-response protocol sends them.
+    Requests {
+        /// Bytes each way.
+        size: u32,
+        /// Requests measured.
+        requests: u32,
+        /// Requests in flight at once.
+        concurrency: u32,
+    },
     /// Upload `bytes` over `streams` concurrent streams of one connection.
     Throughput {
         /// Bytes in all.
@@ -320,6 +330,16 @@ impl TransportTest {
             Self::Setup { count } => vec!["setup".into(), count.to_string()],
             Self::Resume { count } => vec!["resume".into(), count.to_string()],
             Self::Latency { size, round_trips } => vec!["latency".into(), size.to_string(), round_trips.to_string()],
+            Self::Requests {
+                size,
+                requests,
+                concurrency,
+            } => vec![
+                "requests".into(),
+                size.to_string(),
+                requests.to_string(),
+                concurrency.to_string(),
+            ],
             Self::Throughput { bytes, streams } => vec!["throughput".into(), bytes.to_string(), streams.to_string()],
             Self::Many {
                 connections,
@@ -334,6 +354,7 @@ impl TransportTest {
             Self::Setup { .. } => "setup".into(),
             Self::Resume { .. } => "resume".into(),
             Self::Latency { size, .. } => format!("latency_{size}b"),
+            Self::Requests { size, concurrency, .. } => format!("requests_{size}b_c{concurrency}"),
             Self::Throughput { streams, .. } => format!("throughput_{streams}s"),
             Self::Many { .. } => "many".into(),
         }
@@ -345,6 +366,11 @@ impl TransportTest {
             Self::Latency { size, round_trips } => {
                 (1..=1 << 20).contains(&size) && (1..=10_000_000).contains(&round_trips)
             }
+            Self::Requests {
+                size,
+                requests,
+                concurrency,
+            } => (1..=1 << 20).contains(&size) && (1..=10_000_000).contains(&requests) && (1..=1024).contains(&concurrency),
             Self::Throughput { bytes, streams } => (1..=1 << 40).contains(&bytes) && (1..=256).contains(&streams),
             Self::Many {
                 connections,

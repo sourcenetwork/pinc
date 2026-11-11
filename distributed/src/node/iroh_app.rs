@@ -38,7 +38,7 @@ use crate::scenario::Role;
 
 /// The UDP port of every iroh node.
 pub const PORT: u16 = 4435;
-/// The largest gossip message the program sets up (the library's default is 4 KiB).
+/// The largest gossip message the program sets up, unless told to keep the library's default of 4 KiB.
 const MAX_MESSAGE: usize = 1 << 20;
 
 /// One iroh node.
@@ -84,7 +84,12 @@ impl App {
             .bind()
             .await
             .map_err(|e| format!("the iroh endpoint did not start: {e}"))?;
-        let gossip = Gossip::builder().max_message_size(MAX_MESSAGE).spawn(ep.clone());
+        let mut gossip = Gossip::builder();
+        if !init.library_limits {
+            gossip = gossip.max_message_size(MAX_MESSAGE);
+        }
+        let gossip = gossip.spawn(ep.clone());
+        let limit = if init.library_limits { "the library's default of 4 KiB" } else { "1 MiB" };
         let store = MemStore::new();
         let downloader = store.downloader(&ep);
         let router = Router::builder(ep.clone())
@@ -94,10 +99,11 @@ impl App {
         let ready = Ready {
             stack: "iroh".into(),
             id: ep.id().to_string(),
-            config: "the iroh endpoint with its gossip protocol (messages up to 1 MiB) and blob protocol (in-memory store, \
-                     downloader, one provider at a time); relay and discovery services off, every node's address in the endpoint's address book; \
-                     bootstrap through the hub and relay nodes"
-                .into(),
+            config: format!(
+                "the iroh endpoint with its gossip protocol (messages up to {limit}) and blob protocol (in-memory store, \
+                 downloader, one provider at a time); relay and discovery services off, every node's address in the endpoint's address book; \
+                 bootstrap through the hub and relay nodes"
+            ),
         };
         let me = me_spec.index;
         Ok((

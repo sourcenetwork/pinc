@@ -9,7 +9,7 @@
 //!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
 //! with `k` (the first byte of a connection), `S` is a sink that answers the byte count, `E` echoes everything it reads
-//! until the end of the stream, and `T` answers the server's own resource counters (resident memory, CPU time,
+//! until the end of the stream (the `requests` scenario opens one such stream per request), and `T` answers the server's own resource counters (resident memory, CPU time,
 //! allocations) so the client can read what the server paid for a phase. The scenarios are written once against the
 //! [`Lib`] trait; each library's module (`vinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream
 //! types onto it.
@@ -529,6 +529,87 @@ async fn latency<L: Lib>(addr: &str, size: usize, count: usize) {
     L::shutdown(ep).await;
 }
 
+/// One request of a request-response protocol: a stream of its own, the request, the end of the send half, the
+/// echoed response.
+async fn request<L: Lib>(c: &L::Conn, req: &[u8], resp: &mut [u8]) -> io::Result<()> {
+    let (mut tx, mut rx) = L::open(c).await?;
+    tx.write_all(req).await?;
+    tx.finish().await?;
+    read_exact(&mut rx, resp).await
+}
+
+/// `count` requests of `size` bytes each way over one connection, `concurrency` in flight at once, each on a stream
+/// of its own (as a request-response protocol opens one per request); a latency includes opening the stream.
+async fn requests<L: Lib>(addr: &str, size: usize, count: usize, concurrency: usize) {
+    let concurrency = concurrency.max(1);
+    let name = format!("requests_{size}b_c{concurrency}");
+    let Ok(ep) = L::client().await else {
+        Rec::new(L::name(), &name).s("status", "failed: no endpoint").emit();
+        return;
+    };
+    let Ok(conn) = L::hello(&ep, addr, false).await else {
+        Rec::new(L::name(), &name).s("status", "failed: no connection").emit();
+        return;
+    };
+    let mut req = vec![0xa5u8; size + 1];
+    req[0] = b'E';
+    let req = &req[..];
+    // The requests left to start, shared by the workers, which all run on this one task.
+    let left = std::cell::Cell::new(count.min(1000));
+    let worker = |conn: L::Conn| {
+        let left = &left;
+        async move {
+            let (mut v, mut failed, mut why) = (Vec::new(), 0u32, None);
+            let mut resp = vec![0u8; size];
+            while left.get() > 0 {
+                left.set(left.get() - 1);
+                let t = Instant::now();
+                match request::<L>(&conn, req, &mut resp).await {
+                    Ok(()) => v.push(us(t.elapsed())),
+                    Err(e) => {
+                        failed += 1;
+                        why.get_or_insert_with(|| e.to_string());
+                    }
+                }
+            }
+            (v, failed, why)
+        }
+    };
+    // Warm-up: the same mix, unmeasured.
+    futures::future::join_all((0..concurrency).map(|_| worker(conn.clone()))).await;
+    let (s0, c0) = (server_stats::<L>(&conn).await.unwrap_or_default(), Stats::now());
+    left.set(count);
+    let wall = Instant::now();
+    let done = futures::future::join_all((0..concurrency).map(|_| worker(conn.clone()))).await;
+    let secs = wall.elapsed().as_secs_f64();
+    let (c1, s1) = (Stats::now(), server_stats::<L>(&conn).await.unwrap_or(s0));
+    let (mut v, mut failed, mut why) = (Vec::with_capacity(count), 0u32, None);
+    for (lat, f, w) in done {
+        v.extend(lat);
+        failed += f;
+        why = why.or(w);
+    }
+    v.sort_by(f64::total_cmp);
+    let n = v.len().max(1) as f64;
+    let mut r = Rec::new(L::name(), &name)
+        .n("requests", v.len() as f64)
+        .n("failed", f64::from(failed))
+        .n("size", size as f64)
+        .n("concurrency", concurrency as f64)
+        .n("p50_us", pct(&v, 0.5))
+        .n("p99_us", pct(&v, 0.99))
+        .n("max_us", pct(&v, 1.0))
+        .n("rate_per_s", n / secs)
+        .n("client_cpu_us_per_req", c1.cpu_secs_since(c0) * 1e6 / n)
+        .n("server_cpu_us_per_req", s1.cpu_secs_since(s0) * 1e6 / n);
+    if let Some(e) = why {
+        r = r.s("status", &format!("{failed} requests failed, the first: {e}"));
+    }
+    r.emit();
+    L::close(&ep, &conn).await;
+    L::shutdown(ep).await;
+}
+
 /// Allocations per bulk message: upload `total` bytes in [`CHUNK`] writes with counting on at both ends.
 async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
     let Ok(ep) = L::client().await else { return };
@@ -712,6 +793,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
                     "resume" => setup::<L>(&addr, num(a, 0, 200), true).await,
                     "throughput" => throughput::<L>(&addr, num(a, 0, 1 << 30), num(a, 1, 1)).await,
                     "latency" => latency::<L>(&addr, num(a, 0, 64), num(a, 1, 100_000)).await,
+                    "requests" => requests::<L>(&addr, num(a, 0, 512), num(a, 1, 10_000), num(a, 2, 1)).await,
                     "allocs" => {
                         count_allocs();
                         latency::<L>(&addr, 64, num(a, 0, 20_000)).await;
@@ -727,7 +809,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
         }
         _ => {
             eprintln!(
-                "usage: server [--count-allocs] | client <addr> <setup|resume|throughput|latency|allocs|many> [numbers]"
+                "usage: server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
             );
             std::process::exit(2);
         }

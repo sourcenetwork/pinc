@@ -55,6 +55,9 @@ pub struct Init {
     pub mtu: u32,
     /// The most nodes that may be in the group: sizes the VINC endpoint.
     pub sessions: u32,
+    /// Keep the library's default largest pubsub message instead of the harness's (see `Pubsub::library_limits`).
+    #[serde(default)]
+    pub library_limits: bool,
 }
 
 impl Init {
