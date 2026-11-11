@@ -100,7 +100,6 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
 }
 
 #[test]
-#[ignore = "the idle punch rule is off: with it on, the quiet hub sessions of an idle network go stale and are dialed again"]
 fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round() {
     big(|| {
         // A and the hub on links with a 120 ms round trip: too slow for a direct path to count as good, so the
@@ -323,7 +322,7 @@ fn a_carrier_that_comes_back_makes_the_sessions_riding_it_ping_at_once() {
 }
 
 #[test]
-fn a_session_on_a_relay_path_keeps_punching_every_minute_though_idle() {
+fn a_session_on_a_relay_path_that_carries_data_keeps_punching_every_minute() {
     use vinc_sim::{NatConfig, NatKind, PortPolicy, SEC};
     big(|| {
         let mut w = World::new(98);
@@ -350,16 +349,29 @@ fn a_session_on_a_relay_path_keeps_punching_every_minute_though_idle() {
         let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
         w.run(secs(10));
         w.dial(secs(10), a, b, vec![]);
+        w.run(secs(20));
+        let sa = w.connected(a).expect("the session is up");
+        // A datagram every ten seconds: the session is never idle for the twenty seconds that stop the rounds.
+        for t in (21..160).step_by(10) {
+            w.sim.command(
+                secs(t),
+                a,
+                Cmd::Datagrams {
+                    session: sa,
+                    count: 1,
+                    len: 16,
+                },
+            );
+        }
         w.run(secs(150));
         assert!(w.connected(a).is_some(), "{}", w.dump(a));
-        let sa = w.connected(a).unwrap();
         assert!(
             w.client(a)
                 .session_stats(sa)
                 .is_some_and(|s| s.route.is_some_and(|(_, r)| vinc_core::is_relay_addr(&r))),
             "the session rides the relay"
         );
-        // The session carries no data after the first seconds, yet a round goes out a minute after the last.
+        // A round goes out a minute after the last.
         assert!(
             reach_outs(&w, b, secs(65), secs(80)) > 0,
             "a round a minute after the first"

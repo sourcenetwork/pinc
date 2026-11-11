@@ -573,18 +573,9 @@ drive_impl! {
             }
             // Hole punching.
             if st.established && s.punch.deadline().is_some() {
-                let relay_active = s.relay_route;
-                // vertexia: the 20 s idle rule applies to a session on a direct path only. A relayed session keeps
-                // punching every 60 s: with the rule on those too, the node layer's churn scenario loses a member's
-                // failure (it passes with the rule off for relayed or for quiet sessions). Upgrade: apply it to every
-                // path once the node layer no longer depends on those rounds.
                 let v = View {
-                    // vertexia: the idle time is not passed yet, so the idle punch rule stays off. With it on, the
-                    // quiet hub sessions of an idle network are declared stale and dialed again (two hubs and
-                    // four members: eight sessions down and up in five quiet minutes). Pass the time since
-                    // `st.last_app` on direct paths once that is understood and fixed.
-                    app_idle: 0,
-                    direct: !relay_active && st.path_validated,
+                    app_idle: now.saturating_sub(st.last_app),
+                    direct: !s.relay_route && st.path_validated,
                     rtt: st.transport.srtt,
                     quiet_until: 0,
                 };
