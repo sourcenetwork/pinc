@@ -138,7 +138,7 @@ async fn a_publish_that_waits_for_a_neighbour_times_out_when_none_joins() {
         );
         // Without a wait the same publish goes out at once.
         a.publish(b"nobody", b"x", None).await.unwrap();
-        assert!(a.neighbors(b"nobody").is_empty());
+        assert_eq!(a.neighbors(b"nobody"), [] as [vinc::NodeId; 0]);
     })
     .await;
 }
