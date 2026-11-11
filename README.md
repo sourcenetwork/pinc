@@ -128,6 +128,7 @@ just tla-tools    # install the pinned TLA+ tools the proofs use
 just bench        # micro benchmarks
 just compare      # VINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
 just distributed run distributed/scenarios/wan.toml   # a scenario on an emulated network (Docker and sudo)
+just distributed run distributed/scenarios/wan.toml --hosts fleet.toml   # the same on real machines over SSH (see distributed/infra)
 just distributed serve                                # the dashboard, on http://127.0.0.1:7878
 just distributed clean                                # remove whatever a run left
 just e2e          # the harness end to end: a two-node scenario, every stack (Docker and sudo)
@@ -145,6 +146,12 @@ one or several providers, and reconciling two sets, each for VINC (the node on a
 `distributed/src/node/vinc`), iroh (gossip and blobs) and rust-libp2p (gossipsub and a request-response protocol),
 configured as each documents and said so in the results; where a stack has no equivalent the table says "not
 available". One machine emulates the whole network, and every table says so.
+
+The same run can place the nodes on real machines over SSH (`--hosts fleet.toml`, the file `distributed/infra` writes or
+one written by hand): each node is a program in its own systemd scope with its own CPUs and memory, the network is the
+machines' own, and `tc netem` on their egress adds the scenario's shapes between sites. It has run on one machine (the
+build host as a fleet of one, where there is no network between nodes to shape) and its shaping commands were checked
+on a virtual link pair; it has not run on several machines.
 
 `just compare` and `just distributed` compile every stack for the machine that runs them (`-C target-cpu=native`) and
 say so in their results. A host gets the same from VINC by building its own binary that way: on an x86-64 CPU with

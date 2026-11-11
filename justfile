@@ -160,7 +160,7 @@ test-distributed *args:
 
 # The distributed harness end to end: a two-node scenario on containers of this machine (needs Docker and sudo).
 e2e:
-    cargo nextest run {{dist}} --run-ignored only
+    cargo nextest run {{dist}} --run-ignored only -E 'binary(e2e)'
 
 # The distributed harness: `just distributed run distributed/scenarios/wan.toml`, `just distributed clean`. A
 # measurement wants an otherwise idle machine. Results go to distributed/results/.

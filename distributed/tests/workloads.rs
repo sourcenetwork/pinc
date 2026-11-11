@@ -109,6 +109,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
         ip: Ipv4Addr::new(127, net, 0, 1),
         public_ip: Ipv4Addr::new(127, net, 0, 1),
         role: Role::Hub,
+        slot: 0,
     }];
     for i in 1..=peers {
         specs.push(PeerSpec {
@@ -117,6 +118,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
             ip: Ipv4Addr::new(127, net, 0, u8::try_from(i + 1).unwrap()),
             public_ip: Ipv4Addr::new(127, net, 0, u8::try_from(i + 1).unwrap()),
             role: Role::Peer,
+            slot: 0,
         });
     }
     specs
@@ -200,9 +202,12 @@ fn libp2p_delivers_every_message_once() {
     pubsub_on(Stack::Libp2p, 103);
 }
 
-/// A value held by two providers reaches a third node whole.
-fn sync_on(stack: Stack, net: u8) {
-    let mut progs: Vec<Prog> = group(stack, net, 3).iter().map(|(i, _)| Prog::start(i)).collect();
+/// A value held by `providers` providers reaches another node whole.
+fn sync_on(stack: Stack, net: u8, providers: u16, size: u64) {
+    let mut progs: Vec<Prog> = group(stack, net, providers + 1)
+        .iter()
+        .map(|(i, _)| Prog::start(i))
+        .collect();
     for p in &mut progs {
         p.ok(
             Cmd::Join {
@@ -212,15 +217,15 @@ fn sync_on(stack: Stack, net: u8) {
             60,
         );
     }
-    let size = 3 * (1 << 20) + 17;
     let mut value = Value::Null;
-    for i in [1, 2] {
-        value = progs[i].ok(Cmd::Provide { size, seed: 9 }, 120);
+    for p in progs.iter_mut().skip(1).take(usize::from(providers)) {
+        value = p.ok(Cmd::Provide { size, seed: 9 }, 120);
     }
-    let got = progs[3].ok(
+    let names: Vec<String> = (1..=providers).map(|i| format!("p-{i}")).collect();
+    let got = progs[usize::from(providers) + 1].ok(
         Cmd::Fetch {
             value,
-            providers: vec!["p-1".into(), "p-2".into()],
+            providers: names,
             timeout_ms: 60_000,
         },
         90,
@@ -231,17 +236,31 @@ fn sync_on(stack: Stack, net: u8) {
 
 #[test]
 fn vinc_fetches_a_value_from_two_providers() {
-    sync_on(Stack::Vinc, 104);
+    sync_on(Stack::Vinc, 104, 2, 3 * (1 << 20) + 17);
 }
 
 #[test]
 fn iroh_fetches_a_value_from_two_providers() {
-    sync_on(Stack::Iroh, 105);
+    sync_on(Stack::Iroh, 105, 2, 3 * (1 << 20) + 17);
 }
 
 #[test]
 fn libp2p_fetches_a_value_from_two_providers() {
-    sync_on(Stack::Libp2p, 106);
+    sync_on(Stack::Libp2p, 106, 2, 3 * (1 << 20) + 17);
+}
+
+#[test]
+fn vinc_fetches_a_small_value_from_three_providers() {
+    sync_on(Stack::Vinc, 110, 3, 3 << 20);
+}
+
+/// Found by the harness: a value of 48 MiB held by two providers does not reach the consumer in a minute over real
+/// sockets on loopback, where one provider takes a few seconds and three providers of 3 MiB are fast. The scenario
+/// `sync-multi` shows it on containers. Kept to fail when the values layer finishes it, not hidden.
+#[test]
+#[ignore = "known: a large value from several providers does not finish; see the report of the harness stream"]
+fn vinc_fetches_a_large_value_from_two_providers() {
+    sync_on(Stack::Vinc, 111, 2, 48 << 20);
 }
 
 /// Two sets that differ in a few items on each side reconcile to exactly that difference.
