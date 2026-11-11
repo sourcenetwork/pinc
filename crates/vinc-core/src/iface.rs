@@ -8,6 +8,8 @@
 //! reliably, so those sessions close at once with `Redial` and the application dials again instead of waiting for an
 //! answer that will not come.
 //! A link that comes back also reaches the sessions still in their handshake: a dialing side sends its flight at once.
+//! A node that lost its link and was suspended before the link came back is in doubt too: its sessions close at once
+//! with `Redial` on resume.
 //!
 //! After any resume or link return no keepalive is sent for 10 s unless something is in flight.
 //!
@@ -61,12 +63,20 @@ ep_impl! {
     pub fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent) {
         let Some(local) = self.ifaces.get(id.0).copied().flatten() else { return };
         match ev {
-            IfaceEvent::Down => self.link(now, local, true),
+            IfaceEvent::Down => {
+                self.dark = true;
+                self.link(now, local, true);
+            }
             IfaceEvent::Up => {
+                // While suspended the link coming back changes nothing yet: the resume is the return.
+                self.dark &= self.suspended;
                 self.quiet_until = now.saturating_add(RESUME_QUIET);
                 self.link(now, local, false);
             }
-            IfaceEvent::AddrChange(new) => self.addr_change(now, id.0, local, new),
+            IfaceEvent::AddrChange(new) => {
+                self.dark &= self.suspended;
+                self.addr_change(now, id.0, local, new);
+            }
             IfaceEvent::Suspend => self.suspend(now),
             IfaceEvent::Resume { moved } => self.resume(now, moved),
         }
@@ -142,7 +152,7 @@ ep_impl! {
                 continue;
             }
             let Some(conn) = slot.conn.as_mut() else { continue };
-            slot.m.sleep_doubt = conn.recovery().pto_count() > 0;
+            slot.m.sleep_doubt = conn.recovery().pto_count() > 0 || self.dark;
             let mut env = env!(self, now);
             conn.sleep(&mut env);
             self.settle(i, now);
@@ -154,6 +164,7 @@ ep_impl! {
         let moved = moved || self.moved;
         self.moved = false;
         self.suspended = false;
+        self.dark = false;
         self.quiet_until = now.saturating_add(RESUME_QUIET);
         for i in 0..K {
             let Some(slot) = self.slots.get_mut(i) else { break };

@@ -566,6 +566,49 @@ fn a_resume_that_cannot_be_woken_closes_at_once_for_a_redial() {
 }
 
 #[test]
+fn a_session_suspended_while_its_link_is_down_is_redialled_on_resume() {
+    big_stack(|| {
+        // The link went down and the node was suspended before it came back: the session closes for a redial.
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].ep.iface_event(t, IfaceId(0), IfaceEvent::Down);
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Suspend).unwrap();
+        net.run_for(2 * S);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Resume { moved: false }).unwrap();
+        net.nodes[a].service(t);
+        assert!(
+            net.nodes[a].saw(|e| matches!(e, Event::Closed { session, reason: EndReason::Redial } if *session == sa)),
+            "a session that went to sleep in the dark was woken"
+        );
+        // A link that came back before the suspension leaves no doubt: the session wakes.
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].ep.iface_event(t, IfaceId(0), IfaceEvent::Down);
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].ep.iface_event(t, IfaceId(0), IfaceEvent::Up);
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Suspend).unwrap();
+        net.run_for(2 * S);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Resume { moved: false }).unwrap();
+        net.run_for(5 * S);
+        assert!(!net.nodes[a].saw(|e| matches!(e, Event::Closed { .. })));
+        assert!(net.nodes[b].saw(|e| matches!(e, Event::PeerAwake { .. })));
+    });
+}
+
+#[test]
 fn ordinary_sessions_are_flushed_before_broadcast_ones() {
     big_stack(|| {
         let mut net = CoreNet::new(10 * MS_NS);

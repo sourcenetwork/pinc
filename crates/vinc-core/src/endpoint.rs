@@ -188,6 +188,8 @@ pub struct Endpoint<
     pub(crate) quiet_until: u64,
     pub(crate) suspended: bool,
     pub(crate) moved: bool,
+    /// The node lost its link and has not seen it return, its address change or a resume since.
+    pub(crate) dark: bool,
     pub(crate) counters: Counters,
     pub(crate) trace: TraceLog,
 }
@@ -400,6 +402,7 @@ ep_impl! {
             quiet_until: 0,
             suspended: false,
             moved: false,
+            dark: false,
             counters: Counters::default(),
             trace: TraceLog::new(),
         }
