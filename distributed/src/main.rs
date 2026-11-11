@@ -32,7 +32,9 @@ const USAGE: &str = "usage:
   vinc-distributed node transport --stack <vinc|iroh|libp2p> server|client ...";
 
 fn flag(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1).cloned())
 }
 
 fn load(path: &str) -> Result<Scenario, String> {
@@ -49,7 +51,10 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 }
 
 fn logs() {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).with_target(false).init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .init();
 }
 
 fn results_root() -> PathBuf {
@@ -72,7 +77,9 @@ fn run(args: &[String]) -> Result<(), String> {
         quiet: thresholds(args)?,
     };
     logs();
-    let out = runtime()?.block_on(orchestrate::run(sc, opts)).map_err(|e| e.to_string())?;
+    let out = runtime()?
+        .block_on(orchestrate::run(sc, opts))
+        .map_err(|e| e.to_string())?;
     println!("results: {}", out.dir.display());
     if !out.left.is_empty() {
         return Err(format!(
@@ -89,7 +96,9 @@ fn run(args: &[String]) -> Result<(), String> {
 fn dashboard(args: &[String]) -> Result<(), String> {
     let bind = flag(args, "--bind").unwrap_or_else(|| "127.0.0.1:7878".into());
     let opts = ServeOptions {
-        bind: bind.parse().map_err(|_| format!("--bind takes an address and port, such as 127.0.0.1:7878, not {bind}"))?,
+        bind: bind
+            .parse()
+            .map_err(|_| format!("--bind takes an address and port, such as 127.0.0.1:7878, not {bind}"))?,
         token: flag(args, "--token"),
         root: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         image: flag(args, "--image").unwrap_or_else(|| IMAGE.into()),
@@ -133,13 +142,22 @@ fn plan(args: &[String]) -> Result<(), String> {
     let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let p = Plan::new(&sc, "RUN", cpus);
     for s in &p.sites {
-        println!("# router {} ({}), LAN {}/24, cpus {}", s.router.name, s.name, s.lan, s.router.cpus);
+        println!(
+            "# router {} ({}), LAN {}/24, cpus {}",
+            s.router.name, s.name, s.lan, s.router.cpus
+        );
     }
     for n in &p.nodes {
-        println!("# node {} at {}, cpus {}, {} MiB", n.container.name, n.ip, n.container.cpus, n.container.memory_mib);
+        println!(
+            "# node {} at {}, cpus {}, {} MiB",
+            n.container.name, n.ip, n.container.cpus, n.container.memory_mib
+        );
     }
     for v in &p.veths {
-        println!("ip link add {} netns <{:?}> type veth peer name {} netns <{:?}>", v.a.1, v.a.0, v.b.1, v.b.0);
+        println!(
+            "ip link add {} netns <{:?}> type veth peer name {} netns <{:?}>",
+            v.a.1, v.a.0, v.b.1, v.b.0
+        );
     }
     for (ns, cmds) in &p.setup {
         for c in cmds {

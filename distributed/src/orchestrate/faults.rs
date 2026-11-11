@@ -64,7 +64,9 @@ impl FaultRunner {
                 Ok(format!("link {a} to {c} restored"))
             }
             FaultAction::Partition { site } | FaultAction::Heal { site } => {
-                let s = plan.site(site).ok_or_else(|| Error::Node(format!("there is no site {site}")))?;
+                let s = plan
+                    .site(site)
+                    .ok_or_else(|| Error::Node(format!("there is no site {site}")))?;
                 let heal = matches!(f, FaultAction::Heal { .. });
                 for other in plan.site_links(s) {
                     for (p, shape) in link(site, &other)? {
@@ -156,7 +158,11 @@ pub(crate) async fn during<T>(
         for f in order {
             tokio::time::sleep_until(start + Duration::from_secs_f64(f.at_s.max(0.0))).await;
             match runner.apply(b, &ctx.plan, &f.action, launches).await {
-                Ok(what) => ctx.emit(Event::Fault { at_s: f.at_s, what, action: f.action.clone() }),
+                Ok(what) => ctx.emit(Event::Fault {
+                    at_s: f.at_s,
+                    what,
+                    action: f.action.clone(),
+                }),
                 Err(e) => return e,
             }
         }

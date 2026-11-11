@@ -46,7 +46,9 @@ pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<
     let total = u32::try_from(t.pairs.len() * t.tests.len() * ctx.sc.stacks.len()).unwrap_or(u32::MAX) * ctx.reps;
     let mut index = 0;
     for pair in &t.pairs {
-        let (Some(ci), Some(si)) = (ctx.plan.node(&pair.client), ctx.plan.node(&pair.server)) else { continue };
+        let (Some(ci), Some(si)) = (ctx.plan.node(&pair.client), ctx.plan.node(&pair.server)) else {
+            continue;
+        };
         let label = format!("{}>{}", pair.client, pair.server);
         for test in &t.tests {
             for rep in 0..ctx.reps {
@@ -71,10 +73,19 @@ pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<
                         };
                         let why = format!(
                             "the host was busy (other processes {:.1}% of a core, steal {:.2}%, most: {})",
-                            u.other_pct, u.steal_pct, if u.top.is_empty() { "none" } else { u.top.as_str() }
+                            u.other_pct,
+                            u.steal_pct,
+                            if u.top.is_empty() { "none" } else { u.top.as_str() }
                         );
-                        row.status = if attempt < tries { format!("{DISCARDED}: {why}") } else { format!("not measured: {why}") };
-                        ctx.log("warn", format!("{} {} rep {}: {}", row.test, row.stack, rep + 1, row.status));
+                        row.status = if attempt < tries {
+                            format!("{DISCARDED}: {why}")
+                        } else {
+                            format!("not measured: {why}")
+                        };
+                        ctx.log(
+                            "warn",
+                            format!("{} {} rep {}: {}", row.test, row.stack, rep + 1, row.status),
+                        );
                         ctx.record(row)?;
                     }
                     index += 1;
@@ -127,17 +138,35 @@ async fn one(
     for i in [ci, si] {
         b.peak_reset(i).await?;
     }
-    let (c0, s0, d0) = (b.reading(ci).await?, b.reading(si).await?, drops(b, ctx.plan.sites.len()).await);
+    let (c0, s0, d0) = (
+        b.reading(ci).await?,
+        b.reading(si).await?,
+        drops(b, ctx.plan.sites.len()).await,
+    );
     let mut client_args = vec!["client".into(), addr];
     client_args.extend(test.client_args());
     let client_args = args(stack, &client_args);
     let quiet_from = Snapshot::take();
     let mut cli = b.spawn(ci, &client_args, &node_env(client.ip))?;
-    let launches = [Launch { node: si, args: server_args, env: server_env }];
-    let (lines, ended) =
-        faults::during(ctx, b, &ctx.sc.faults, &launches, cli.drain(Duration::from_secs(timeout_s))).await?;
+    let launches = [Launch {
+        node: si,
+        args: server_args,
+        env: server_env,
+    }];
+    let (lines, ended) = faults::during(
+        ctx,
+        b,
+        &ctx.sc.faults,
+        &launches,
+        cli.drain(Duration::from_secs(timeout_s)),
+    )
+    .await?;
     row.host = Some(ctx.monitor.usage(&quiet_from, &Snapshot::take()));
-    let (c1, s1, d1) = (b.reading(ci).await?, b.reading(si).await?, drops(b, ctx.plan.sites.len()).await);
+    let (c1, s1, d1) = (
+        b.reading(ci).await?,
+        b.reading(si).await?,
+        drops(b, ctx.plan.sites.len()).await,
+    );
     let (pc, ps) = (b.peak_read(ci).await?, b.peak_read(si).await?);
     if !ended {
         row.status = format!("not measured: timed out after {timeout_s} s");
@@ -165,7 +194,10 @@ async fn one(
             row.node = m;
         }
         None if row.status == "ok" => {
-            row.status = format!("not measured: the client printed no result ({})", tail.lines().last().unwrap_or("no error output"));
+            row.status = format!(
+                "not measured: the client printed no result ({})",
+                tail.lines().last().unwrap_or("no error output")
+            );
         }
         None => {}
     }

@@ -342,7 +342,9 @@ impl TransportTest {
     fn check(&self, path: &str, out: &mut Vec<Problem>) {
         let ok = match *self {
             Self::Setup { count } | Self::Resume { count } => (1..=100_000).contains(&count),
-            Self::Latency { size, round_trips } => (1..=1 << 20).contains(&size) && (1..=10_000_000).contains(&round_trips),
+            Self::Latency { size, round_trips } => {
+                (1..=1 << 20).contains(&size) && (1..=10_000_000).contains(&round_trips)
+            }
             Self::Throughput { bytes, streams } => (1..=1 << 40).contains(&bytes) && (1..=256).contains(&streams),
             Self::Many {
                 connections,
@@ -529,7 +531,8 @@ pub struct NodeSpec {
 fn valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 32
-        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !s.starts_with('-')
 }
 
@@ -552,10 +555,17 @@ impl Scenario {
 
     /// The nodes, groups expanded, in order.
     pub fn expand(&self) -> Vec<NodeSpec> {
-        let sites: BTreeMap<&str, usize> = self.sites.iter().enumerate().map(|(i, s)| (s.name.as_str(), i)).collect();
+        let sites: BTreeMap<&str, usize> = self
+            .sites
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.name.as_str(), i))
+            .collect();
         let mut out = Vec::new();
         for g in &self.nodes {
-            let Some(&site) = sites.get(g.site.as_str()) else { continue };
+            let Some(&site) = sites.get(g.site.as_str()) else {
+                continue;
+            };
             let base = self.sites.get(site).map_or_else(Shape::lan, |s| s.lan);
             let link = g.link.map_or(base, |p| base.patched(&p));
             for i in 1..=g.count {
@@ -579,7 +589,10 @@ impl Scenario {
     pub fn validate(&self) -> Vec<Problem> {
         let mut out = Vec::new();
         if !valid_name(&self.name) {
-            out.push(Problem::new("name", "use 1 to 32 lower-case letters, digits and dashes"));
+            out.push(Problem::new(
+                "name",
+                "use 1 to 32 lower-case letters, digits and dashes",
+            ));
         }
         if self.stacks.is_empty() {
             out.push(Problem::new("stacks", "name at least one stack: vinc, iroh or libp2p"));
@@ -588,7 +601,10 @@ impl Scenario {
             out.push(Problem::new("stacks", "a stack is named twice"));
         }
         if !(1..=100).contains(&self.repetitions) {
-            out.push(Problem::new("repetitions", "use 1 to 100 repetitions (3 or more to report a spread)"));
+            out.push(Problem::new(
+                "repetitions",
+                "use 1 to 100 repetitions (3 or more to report a spread)",
+            ));
         }
         if !(1..=64).contains(&self.resources.cpus) {
             out.push(Problem::new("resources.cpus", "use 1 to 64 CPUs per node"));
@@ -617,7 +633,10 @@ impl Scenario {
         }
         for (i, s) in self.sites.iter().enumerate() {
             if !valid_name(&s.name) {
-                out.push(Problem::new(format!("sites[{i}].name"), "use 1 to 32 lower-case letters, digits and dashes"));
+                out.push(Problem::new(
+                    format!("sites[{i}].name"),
+                    "use 1 to 32 lower-case letters, digits and dashes",
+                ));
             }
             if names.insert(s.name.as_str(), i).is_some() {
                 out.push(Problem::new(format!("sites[{i}].name"), "another site has this name"));
@@ -631,7 +650,10 @@ impl Scenario {
         let mut per_site = vec![0usize; self.sites.len()];
         for (i, g) in self.nodes.iter().enumerate() {
             if !valid_name(&g.name) {
-                out.push(Problem::new(format!("nodes[{i}].name"), "use 1 to 32 lower-case letters, digits and dashes"));
+                out.push(Problem::new(
+                    format!("nodes[{i}].name"),
+                    "use 1 to 32 lower-case letters, digits and dashes",
+                ));
             }
             match sites.get(g.site.as_str()) {
                 Some(&s) => {
@@ -642,18 +664,27 @@ impl Scenario {
                 None => out.push(Problem::new(format!("nodes[{i}].site"), "no site has this name")),
             }
             if g.count == 0 {
-                out.push(Problem::new(format!("nodes[{i}].count"), "a group has at least one node"));
+                out.push(Problem::new(
+                    format!("nodes[{i}].count"),
+                    "a group has at least one node",
+                ));
             }
             if let Some(p) = g.link {
                 Shape::lan().patched(&p).check(&format!("nodes[{i}].link"), out);
             }
             if sites.contains_key(g.name.as_str()) {
-                out.push(Problem::new(format!("nodes[{i}].name"), "a site has this name; links and faults name both"));
+                out.push(Problem::new(
+                    format!("nodes[{i}].name"),
+                    "a site has this name; links and faults name both",
+                ));
             }
         }
         for (s, n) in per_site.iter().enumerate() {
             if *n > MAX_SITE_NODES {
-                out.push(Problem::new(format!("sites[{s}]"), format!("a site holds at most {MAX_SITE_NODES} nodes")));
+                out.push(Problem::new(
+                    format!("sites[{s}]"),
+                    format!("a site holds at most {MAX_SITE_NODES} nodes"),
+                ));
             }
         }
         let nodes = self.expand();
@@ -685,7 +716,10 @@ impl Scenario {
             }
             let key = if l.a < l.b { (&l.a, &l.b) } else { (&l.b, &l.a) };
             if !pairs.insert(key) {
-                out.push(Problem::new(format!("links[{i}]"), "these two sites are already linked"));
+                out.push(Problem::new(
+                    format!("links[{i}]"),
+                    "these two sites are already linked",
+                ));
             }
             l.shape.check(&format!("links[{i}].shape"), out);
             l.reverse_shape().check(&format!("links[{i}].reverse"), out);
@@ -694,12 +728,19 @@ impl Scenario {
 
     /// The sites reachable from `from` over links, `from` included.
     pub fn reachable(&self, from: usize) -> BTreeSet<usize> {
-        let idx: BTreeMap<&str, usize> = self.sites.iter().enumerate().map(|(i, s)| (s.name.as_str(), i)).collect();
+        let idx: BTreeMap<&str, usize> = self
+            .sites
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.name.as_str(), i))
+            .collect();
         let mut seen = BTreeSet::from([from]);
         let mut stack = vec![from];
         while let Some(s) = stack.pop() {
             for l in &self.links {
-                let (Some(&a), Some(&b)) = (idx.get(l.a.as_str()), idx.get(l.b.as_str())) else { continue };
+                let (Some(&a), Some(&b)) = (idx.get(l.a.as_str()), idx.get(l.b.as_str())) else {
+                    continue;
+                };
                 for (x, y) in [(a, b), (b, a)] {
                     if x == s && seen.insert(y) {
                         stack.push(y);
@@ -712,7 +753,10 @@ impl Scenario {
 
     fn check_transport(&self, t: &Transport, nodes: &BTreeMap<&str, &NodeSpec>, out: &mut Vec<Problem>) {
         if t.pairs.is_empty() {
-            out.push(Problem::new("workload.pairs", "add at least one client and server pair"));
+            out.push(Problem::new(
+                "workload.pairs",
+                "add at least one client and server pair",
+            ));
         }
         if t.tests.is_empty() {
             out.push(Problem::new("workload.tests", "add at least one test"));
@@ -725,15 +769,24 @@ impl Scenario {
         }
         for (i, p) in t.pairs.iter().enumerate() {
             let (Some(c), Some(s)) = (nodes.get(p.client.as_str()), nodes.get(p.server.as_str())) else {
-                out.push(Problem::new(format!("workload.pairs[{i}]"), "both ends must be nodes of the scenario"));
+                out.push(Problem::new(
+                    format!("workload.pairs[{i}]"),
+                    "both ends must be nodes of the scenario",
+                ));
                 continue;
             };
             if p.client == p.server {
-                out.push(Problem::new(format!("workload.pairs[{i}]"), "the client and the server are different nodes"));
+                out.push(Problem::new(
+                    format!("workload.pairs[{i}]"),
+                    "the client and the server are different nodes",
+                ));
                 continue;
             }
             if !self.reachable(c.site).contains(&s.site) {
-                out.push(Problem::new(format!("workload.pairs[{i}]"), "no link path joins the two nodes' sites"));
+                out.push(Problem::new(
+                    format!("workload.pairs[{i}]"),
+                    "no link path joins the two nodes' sites",
+                ));
             }
             let behind_nat = self.sites.get(s.site).is_some_and(|x| x.nat != Nat::None);
             if behind_nat && c.site != s.site {
@@ -760,7 +813,9 @@ impl Scenario {
                         ));
                     }
                     if let FaultAction::Set { shape, .. } = &f.action {
-                        Shape::default().patched(shape).check(&format!("{path}.action.shape"), out);
+                        Shape::default()
+                            .patched(shape)
+                            .check(&format!("{path}.action.shape"), out);
                     }
                 }
                 FaultAction::Partition { site } | FaultAction::Heal { site } => {
@@ -784,6 +839,9 @@ impl Scenario {
         let access = |n: &str, s: &str| nodes.get(n).is_some_and(|n| sites.get(s) == Some(&n.site));
         access(a, b)
             || access(b, a)
-            || self.links.iter().any(|l| (l.a == a && l.b == b) || (l.a == b && l.b == a))
+            || self
+                .links
+                .iter()
+                .any(|l| (l.a == a && l.b == b) || (l.a == b && l.b == a))
     }
 }

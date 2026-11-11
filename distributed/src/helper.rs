@@ -91,9 +91,23 @@ pub fn host_ns_allowed(tool: &str, args: &[String]) -> bool {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match (tool, a.as_slice()) {
         // ip link add <name> netns <pid> type veth peer name <name> netns <pid>
-        ("ip", ["link", "add", _, "netns", p1, "type", "veth", "peer", "name", _, "netns", p2]) => {
-            p1.bytes().all(|b| b.is_ascii_digit()) && p2.bytes().all(|b| b.is_ascii_digit())
-        }
+        (
+            "ip",
+            [
+                "link",
+                "add",
+                _,
+                "netns",
+                p1,
+                "type",
+                "veth",
+                "peer",
+                "name",
+                _,
+                "netns",
+                p2,
+            ],
+        ) => p1.bytes().all(|b| b.is_ascii_digit()) && p2.bytes().all(|b| b.is_ascii_digit()),
         ("ip", ["-o", "link", "show"]) | ("tc", ["qdisc", "show"]) => true,
         _ => false,
     }
@@ -179,16 +193,20 @@ pub fn serve() -> std::io::Result<()> {
     for line in stdin.lock().lines() {
         let line = line?;
         let Ok(env) = serde_json::from_str::<Envelope>(&line) else {
-            writeln!(stdout, "{}", serde_json::json!({"id": 0, "ok": false, "out": "", "err": "a request the helper does not understand"}))?;
+            writeln!(
+                stdout,
+                "{}",
+                serde_json::json!({"id": 0, "ok": false, "out": "", "err": "a request the helper does not understand"})
+            )?;
             stdout.flush()?;
             continue;
         };
         let result = match env.req {
             Req::Run { ns, tool, args } => run_tool(ns, &tool, &args),
-            Req::Read { path } if readable(&path) => {
-                std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
-            }
-            Req::PeakReset { path } | Req::PeakRead { path } if !(readable(&path) && path.ends_with("/memory.peak")) => {
+            Req::Read { path } if readable(&path) => std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}")),
+            Req::PeakReset { path } | Req::PeakRead { path }
+                if !(readable(&path) && path.ends_with("/memory.peak")) =>
+            {
                 Err(format!("the helper does not touch {path}"))
             }
             Req::PeakReset { path } => {
@@ -217,8 +235,18 @@ pub fn serve() -> std::io::Result<()> {
             Req::Ifb { load } => ifb(load),
         };
         let resp = match result {
-            Ok(out) => Resp { id: env.id, ok: true, out, err: String::new() },
-            Err(err) => Resp { id: env.id, ok: false, out: String::new(), err },
+            Ok(out) => Resp {
+                id: env.id,
+                ok: true,
+                out,
+                err: String::new(),
+            },
+            Err(err) => Resp {
+                id: env.id,
+                ok: false,
+                out: String::new(),
+                err,
+            },
         };
         writeln!(stdout, "{}", serde_json::to_string(&resp).unwrap_or_default())?;
         stdout.flush()?;
@@ -261,13 +289,20 @@ impl Helper {
             while let Some((req, reply)) = rx.recv().await {
                 id += 1;
                 let line = serde_json::to_string(&Envelope { id, req }).unwrap_or_default();
-                let fail = |err: &str| Resp { id, ok: false, out: String::new(), err: err.to_owned() };
+                let fail = |err: &str| Resp {
+                    id,
+                    ok: false,
+                    out: String::new(),
+                    err: err.to_owned(),
+                };
                 if input.write_all(format!("{line}\n").as_bytes()).await.is_err() {
                     let _ = reply.send(fail("the helper stopped (sudo may have refused: check `sudo -n true`)"));
                     continue;
                 }
                 let resp = match lines.next_line().await {
-                    Ok(Some(l)) => serde_json::from_str(&l).unwrap_or_else(|_| fail("the helper answered something unreadable")),
+                    Ok(Some(l)) => {
+                        serde_json::from_str(&l).unwrap_or_else(|_| fail("the helper answered something unreadable"))
+                    }
                     _ => fail("the helper stopped (sudo may have refused: check `sudo -n true`)"),
                 };
                 let _ = reply.send(resp);
@@ -293,7 +328,10 @@ impl Helper {
         if resp.ok {
             Ok(resp.out)
         } else {
-            Err(Error::Command { cmd: what, stderr: resp.err })
+            Err(Error::Command {
+                cmd: what,
+                stderr: resp.err,
+            })
         }
     }
 
@@ -303,11 +341,15 @@ impl Helper {
     /// The tool failed.
     pub async fn run(&self, ns: Option<u32>, tool: &str, args: Vec<String>) -> Result<String> {
         let line = format!("{tool} {}", args.join(" "));
-        self.call(Req::Run { ns, tool: tool.to_owned(), args })
-            .await
-            .map_err(|e| match e {
-                Error::Command { stderr, .. } => Error::Command { cmd: line, stderr },
-                other => other,
-            })
+        self.call(Req::Run {
+            ns,
+            tool: tool.to_owned(),
+            args,
+        })
+        .await
+        .map_err(|e| match e {
+            Error::Command { stderr, .. } => Error::Command { cmd: line, stderr },
+            other => other,
+        })
     }
 }

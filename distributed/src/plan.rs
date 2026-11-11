@@ -212,7 +212,9 @@ pub fn cpu_sets(nodes: usize, per: u32, cpus: usize) -> (Vec<String>, bool) {
     let shared = nodes * per > pool.len();
     let sets = (0..nodes)
         .map(|i| {
-            let mut set: Vec<usize> = (0..per).filter_map(|k| pool.get((i * per + k) % pool.len()).copied()).collect();
+            let mut set: Vec<usize> = (0..per)
+                .filter_map(|k| pool.get((i * per + k) % pool.len()).copied())
+                .collect();
             set.sort_unstable();
             set.dedup();
             set.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
@@ -318,7 +320,11 @@ fn next_hops(sites: usize, links: &[LinkPlan]) -> Vec<BTreeMap<usize, usize>> {
                     if let Some(dv) = dist.get_mut(v) {
                         *dv = nd;
                     }
-                    let via = if u == src { Some(k) } else { first.get(u).copied().flatten() };
+                    let via = if u == src {
+                        Some(k)
+                    } else {
+                        first.get(u).copied().flatten()
+                    };
                     if let Some(f) = first.get_mut(v) {
                         *f = via;
                     }
@@ -457,31 +463,52 @@ impl Plan {
             Cmd::new(Tool::Ip, &["link", "set", "lan", "up"]),
         ];
         for n in self.nodes.iter().filter(|n| n.site == s) {
-            c.push(Cmd::new(Tool::Ip, &["link", "set", &n.port, "mtu", &mtu, "master", "lan", "up"]));
+            c.push(Cmd::new(
+                Tool::Ip,
+                &["link", "set", &n.port, "mtu", &mtu, "master", "lan", "up"],
+            ));
             c.push(shape_cmd(&n.port, &n.link, false));
             c.push(Cmd::new(Tool::Ip, &["link", "add", &n.ifb, "type", "ifb"]));
             c.push(Cmd::new(Tool::Ip, &["link", "set", &n.ifb, "mtu", &mtu, "up"]));
             c.push(shape_cmd(&n.ifb, &n.link, false));
-            c.push(Cmd::new(Tool::Tc, &["qdisc", "add", "dev", &n.port, "handle", "ffff:", "ingress"]));
+            c.push(Cmd::new(
+                Tool::Tc,
+                &["qdisc", "add", "dev", &n.port, "handle", "ffff:", "ingress"],
+            ));
             // The u32 classifier with an empty match takes every packet; a distribution kernel may not ship the
             // match-all classifier (Amazon Linux 2023 does not).
             c.push(Cmd::new(
                 Tool::Tc,
                 &[
-                    "filter", "add", "dev", &n.port, "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0", "0",
-                    "action", "mirred", "egress", "redirect", "dev", &n.ifb,
+                    "filter", "add", "dev", &n.port, "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0",
+                    "0", "action", "mirred", "egress", "redirect", "dev", &n.ifb,
                 ],
             ));
         }
         let lan = format!("{}/24", site.lan);
         for l in self.links.iter().filter(|l| l.a == s || l.b == s) {
-            let (mine, shape) = if l.a == s { (l.ip_a, l.forward) } else { (l.ip_b, l.reverse) };
+            let (mine, shape) = if l.a == s {
+                (l.ip_a, l.forward)
+            } else {
+                (l.ip_b, l.reverse)
+            };
             let addr = format!("{mine}/30");
             c.push(Cmd::new(Tool::Ip, &["addr", "add", &addr, "dev", &l.dev]));
             c.push(Cmd::new(Tool::Ip, &["link", "set", &l.dev, "mtu", &mtu, "up"]));
             c.push(shape_cmd(&l.dev, &shape, false));
             if site.nat != Nat::None {
-                let mut args = vec!["-t", "nat", "-A", "POSTROUTING", "-s", lan.as_str(), "-o", l.dev.as_str(), "-j", "MASQUERADE"];
+                let mut args = vec![
+                    "-t",
+                    "nat",
+                    "-A",
+                    "POSTROUTING",
+                    "-s",
+                    lan.as_str(),
+                    "-o",
+                    l.dev.as_str(),
+                    "-j",
+                    "MASQUERADE",
+                ];
                 if site.nat == Nat::Symmetric {
                     args.push("--random-fully");
                 }
@@ -506,7 +533,10 @@ impl Plan {
             let Some(k) = hop else { continue };
             let Some(l) = self.links.get(*k) else { continue };
             let via = if l.a == s { l.ip_b } else { l.ip_a }.to_string();
-            c.push(Cmd::new(Tool::Ip, &["route", "add", &prefix, "via", &via, "dev", &l.dev]));
+            c.push(Cmd::new(
+                Tool::Ip,
+                &["route", "add", &prefix, "via", &via, "dev", &l.dev],
+            ));
         }
         c
     }
@@ -528,8 +558,20 @@ impl Plan {
             let n = self.nodes.get(self.node(node)?)?;
             (Some(n.site) == self.site(site)).then(|| {
                 [
-                    (ShapePoint { ns: Ns::Router(n.site), dev: n.port.clone() }, n.link),
-                    (ShapePoint { ns: Ns::Router(n.site), dev: n.ifb.clone() }, n.link),
+                    (
+                        ShapePoint {
+                            ns: Ns::Router(n.site),
+                            dev: n.port.clone(),
+                        },
+                        n.link,
+                    ),
+                    (
+                        ShapePoint {
+                            ns: Ns::Router(n.site),
+                            dev: n.ifb.clone(),
+                        },
+                        n.link,
+                    ),
                 ]
             })
         };
@@ -537,12 +579,27 @@ impl Plan {
             return Some(p);
         }
         let (sa, sb) = (self.site(a)?, self.site(b)?);
-        self.links.iter().find(|l| (l.a == sa && l.b == sb) || (l.a == sb && l.b == sa)).map(|l| {
-            [
-                (ShapePoint { ns: Ns::Router(l.a), dev: l.dev.clone() }, l.forward),
-                (ShapePoint { ns: Ns::Router(l.b), dev: l.dev.clone() }, l.reverse),
-            ]
-        })
+        self.links
+            .iter()
+            .find(|l| (l.a == sa && l.b == sb) || (l.a == sb && l.b == sa))
+            .map(|l| {
+                [
+                    (
+                        ShapePoint {
+                            ns: Ns::Router(l.a),
+                            dev: l.dev.clone(),
+                        },
+                        l.forward,
+                    ),
+                    (
+                        ShapePoint {
+                            ns: Ns::Router(l.b),
+                            dev: l.dev.clone(),
+                        },
+                        l.reverse,
+                    ),
+                ]
+            })
     }
 
     /// Every link of a site to other sites, by the other site's name.

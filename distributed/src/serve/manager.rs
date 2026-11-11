@@ -69,9 +69,21 @@ struct State {
 impl State {
     fn push(&mut self, ev: Event, out: &broadcast::Sender<Numbered>) {
         self.seq += 1;
-        let n = Numbered { seq: self.seq, at_ms: now_ms(), ev };
-        let keep = if matches!(n.ev, Event::Sample(_)) { &mut self.samples } else { &mut self.recent };
-        let cap = if matches!(n.ev, Event::Sample(_)) { KEEP_SAMPLES } else { KEEP };
+        let n = Numbered {
+            seq: self.seq,
+            at_ms: now_ms(),
+            ev,
+        };
+        let keep = if matches!(n.ev, Event::Sample(_)) {
+            &mut self.samples
+        } else {
+            &mut self.recent
+        };
+        let cap = if matches!(n.ev, Event::Sample(_)) {
+            KEEP_SAMPLES
+        } else {
+            KEEP
+        };
         if keep.len() == cap {
             keep.pop_front();
         }
@@ -101,7 +113,13 @@ impl Manager {
         };
         let fan = out.clone();
         tokio::spawn(async move {
-            let mut st = State { seq: 0, recent: VecDeque::new(), samples: VecDeque::new(), scenario: None, run: None };
+            let mut st = State {
+                seq: 0,
+                recent: VecDeque::new(),
+                samples: VecDeque::new(),
+                scenario: None,
+                run: None,
+            };
             loop {
                 tokio::select! {
                     ev = from_runs.recv() => match ev {
@@ -172,7 +190,10 @@ impl Manager {
     /// A run is already going.
     pub async fn start_run(&self, sc: Scenario, reps: Option<u32>) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
-        self.tx.send(Cmd::Start(Box::new(sc), reps, tx)).await.map_err(|_| "the server is stopping".to_owned())?;
+        self.tx
+            .send(Cmd::Start(Box::new(sc), reps, tx))
+            .await
+            .map_err(|_| "the server is stopping".to_owned())?;
         rx.await.map_err(|_| "the server is stopping".to_owned())?
     }
 

@@ -48,16 +48,25 @@ fn reply(status: StatusCode, ctype: &str, body: impl Into<Bytes>) -> Resp {
 }
 
 fn json_ok(v: &Value) -> Resp {
-    reply(StatusCode::OK, "application/json", serde_json::to_vec(v).unwrap_or_default())
+    reply(
+        StatusCode::OK,
+        "application/json",
+        serde_json::to_vec(v).unwrap_or_default(),
+    )
 }
 
 fn fail(status: StatusCode, msg: &str) -> Resp {
-    reply(status, "application/json", serde_json::to_vec(&json!({ "error": msg })).unwrap_or_default())
+    reply(
+        status,
+        "application/json",
+        serde_json::to_vec(&json!({ "error": msg })).unwrap_or_default(),
+    )
 }
 
 fn cookie_token(req: &Request<Incoming>) -> Option<String> {
     let c = req.headers().get(COOKIE)?.to_str().ok()?;
-    c.split(';').find_map(|kv| kv.trim().strip_prefix("vd=").map(str::to_owned))
+    c.split(';')
+        .find_map(|kv| kv.trim().strip_prefix("vd=").map(str::to_owned))
 }
 
 fn query(req: &Request<Incoming>, key: &str) -> Option<String> {
@@ -74,26 +83,38 @@ fn guard(app: &App, req: &Request<Incoming>) -> Result<Option<Resp>, Resp> {
         Some(t) => {
             if req.uri().path() == "/" && query(req, "token").as_deref() == Some(t.as_str()) {
                 let mut r = reply(StatusCode::SEE_OTHER, "text/plain", "");
-                if let (Ok(c), Ok(l)) = (format!("vd={t}; HttpOnly; SameSite=Strict; Path=/").parse(), "/".parse()) {
+                if let (Ok(c), Ok(l)) = (
+                    format!("vd={t}; HttpOnly; SameSite=Strict; Path=/").parse(),
+                    "/".parse(),
+                ) {
                     r.headers_mut().insert(SET_COOKIE, c);
                     r.headers_mut().insert(LOCATION, l);
                 }
                 return Ok(Some(r));
             }
             if cookie_token(req).as_deref() != Some(t.as_str()) {
-                return Err(fail(StatusCode::UNAUTHORIZED, "open the dashboard with ?token=<the token it was started with>"));
+                return Err(fail(
+                    StatusCode::UNAUTHORIZED,
+                    "open the dashboard with ?token=<the token it was started with>",
+                ));
             }
         }
         None => {
             let host = req.headers().get(HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
             let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
             if !matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
-                return Err(fail(StatusCode::FORBIDDEN, "the dashboard answers only to localhost; reach it through an SSH tunnel"));
+                return Err(fail(
+                    StatusCode::FORBIDDEN,
+                    "the dashboard answers only to localhost; reach it through an SSH tunnel",
+                ));
             }
         }
     }
     if req.method() != Method::GET && !req.headers().contains_key("x-vd") {
-        return Err(fail(StatusCode::FORBIDDEN, "this request did not come from the dashboard"));
+        return Err(fail(
+            StatusCode::FORBIDDEN,
+            "this request did not come from the dashboard",
+        ));
     }
     Ok(None)
 }
@@ -151,12 +172,22 @@ fn scenario_dir(app: &App) -> PathBuf {
 fn scenarios(app: &App) -> Resp {
     let mut out = Vec::new();
     let mut files: Vec<PathBuf> = std::fs::read_dir(scenario_dir(app))
-        .map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect())
+        .map(|d| {
+            d.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .collect()
+        })
         .unwrap_or_default();
     files.sort();
     for f in files {
-        let file = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let entry = match std::fs::read_to_string(&f).map_err(|e| e.to_string()).and_then(|t| Scenario::parse(&t)) {
+        let file = f
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let entry = match std::fs::read_to_string(&f)
+            .map_err(|e| e.to_string())
+            .and_then(|t| Scenario::parse(&t))
+        {
             Ok(sc) => {
                 let problems = sc.validate();
                 let kind = match &sc.workload {
@@ -179,7 +210,10 @@ fn scenarios(app: &App) -> Resp {
 
 fn scenario(app: &App, name: &str) -> Resp {
     if !safe_name(name) {
-        return fail(StatusCode::BAD_REQUEST, "a scenario name has letters, digits and dashes only");
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "a scenario name has letters, digits and dashes only",
+        );
     }
     let path = scenario_dir(app).join(format!("{name}.toml"));
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -193,7 +227,10 @@ fn scenario(app: &App, name: &str) -> Resp {
 
 async fn save(app: &App, name: &str, req: Request<Incoming>) -> Resp {
     if !safe_name(name) {
-        return fail(StatusCode::BAD_REQUEST, "a scenario name has letters, digits and dashes only");
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "a scenario name has letters, digits and dashes only",
+        );
     }
     let b = match body(req).await {
         Ok(b) => b,
@@ -208,8 +245,12 @@ async fn save(app: &App, name: &str, req: Request<Incoming>) -> Resp {
         Err(e) => return fail(StatusCode::BAD_REQUEST, &e),
     };
     let dir = scenario_dir(app);
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(format!("{name}.toml")), text)) {
-        return fail(StatusCode::INTERNAL_SERVER_ERROR, &format!("the file could not be written: {e}"));
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(format!("{name}.toml")), text))
+    {
+        return fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("the file could not be written: {e}"),
+        );
     }
     json_ok(&json!({ "saved": name, "problems": sc.validate() }))
 }
@@ -235,9 +276,14 @@ async fn validate(req: Request<Incoming>) -> Resp {
         .iter()
         .map(|n| json!({ "name": n.name, "ip": n.ip.to_string(), "cpus": n.container.cpus, "memory_mib": n.container.memory_mib }))
         .collect();
-    let sites: Vec<Value> =
-        plan.sites.iter().map(|s| json!({ "name": s.name, "lan": format!("{}/24", s.lan), "gateway": s.gateway.to_string() })).collect();
-    json_ok(&json!({ "problems": [], "toml": toml, "plan": { "nodes": nodes, "sites": sites, "shared_cpus": plan.shared_cpus } }))
+    let sites: Vec<Value> = plan
+        .sites
+        .iter()
+        .map(|s| json!({ "name": s.name, "lan": format!("{}/24", s.lan), "gateway": s.gateway.to_string() }))
+        .collect();
+    json_ok(
+        &json!({ "problems": [], "toml": toml, "plan": { "nodes": nodes, "sites": sites, "shared_cpus": plan.shared_cpus } }),
+    )
 }
 
 async fn start(app: &App, req: Request<Incoming>) -> Resp {
@@ -249,15 +295,26 @@ async fn start(app: &App, req: Request<Incoming>) -> Resp {
     let Some(name) = v.get("scenario").and_then(Value::as_str).filter(|n| safe_name(n)) else {
         return fail(StatusCode::BAD_REQUEST, "name the scenario to run");
     };
-    let reps = v.get("reps").and_then(Value::as_u64).and_then(|r| u32::try_from(r).ok());
+    let reps = v
+        .get("reps")
+        .and_then(Value::as_u64)
+        .and_then(|r| u32::try_from(r).ok());
     let path = scenario_dir(app).join(format!("{name}.toml"));
-    let sc = match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Scenario::parse(&t)) {
+    let sc = match std::fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|t| Scenario::parse(&t))
+    {
         Ok(s) => s,
         Err(e) => return fail(StatusCode::BAD_REQUEST, &format!("the scenario cannot be read: {e}")),
     };
     let problems = sc.validate();
     if !problems.is_empty() {
-        return reply(StatusCode::BAD_REQUEST, "application/json", serde_json::to_vec(&json!({ "error": "the scenario has problems", "problems": problems })).unwrap_or_default());
+        return reply(
+            StatusCode::BAD_REQUEST,
+            "application/json",
+            serde_json::to_vec(&json!({ "error": "the scenario has problems", "problems": problems }))
+                .unwrap_or_default(),
+        );
     }
     match app.runs.start_run(sc, reps).await {
         Ok(()) => json_ok(&json!({ "started": name })),
@@ -287,7 +344,12 @@ async fn events(app: &Arc<App>) -> Resp {
         return fail(StatusCode::SERVICE_UNAVAILABLE, "the server is stopping");
     };
     let last = status.recent.last().map_or(0, |n| n.seq);
-    let st = Sse { rx, app: app.clone(), pending: Some(frame(Some("snapshot"), &status)), last };
+    let st = Sse {
+        rx,
+        app: app.clone(),
+        pending: Some(frame(Some("snapshot"), &status)),
+        last,
+    };
     let stream = futures::stream::unfold(st, |mut st| async move {
         if let Some(p) = st.pending.take() {
             return Some((Ok::<_, Infallible>(Frame::data(p)), st));
@@ -324,12 +386,19 @@ fn results_dir(app: &App) -> PathBuf {
 }
 
 fn read_json(p: &Path) -> Value {
-    std::fs::read(p).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null)
+    std::fs::read(p)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null)
 }
 
 fn list_results(app: &App) -> Resp {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(results_dir(app))
-        .map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
+        .map(|d| {
+            d.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect()
+        })
         .unwrap_or_default();
     dirs.sort();
     dirs.reverse();
@@ -350,7 +419,9 @@ fn list_results(app: &App) -> Resp {
 }
 
 fn result_path(app: &App, dir: &str) -> Option<PathBuf> {
-    safe_name(dir).then(|| results_dir(app).join(dir)).filter(|p| p.is_dir())
+    safe_name(dir)
+        .then(|| results_dir(app).join(dir))
+        .filter(|p| p.is_dir())
 }
 
 fn stacks_of(dir: &Path, rows: &[Row]) -> Vec<String> {
@@ -417,10 +488,16 @@ fn export(app: &App, dir: &str, csv: bool) -> Resp {
     }
     out.push_str(",shaper_drops\n");
     for r in &rows {
-        let mut line = [r.run.as_str(), &r.stack, &r.test, &r.pair].iter().map(|s| csv_cell(s)).collect::<Vec<_>>().join(",");
+        let mut line = [r.run.as_str(), &r.stack, &r.test, &r.pair]
+            .iter()
+            .map(|s| csv_cell(s))
+            .collect::<Vec<_>>()
+            .join(",");
         let _ = write!(line, ",{},{}", r.rep, csv_cell(&r.status));
         for k in &keys {
-            let v = r.node.get(k).map_or(String::new(), |v| v.as_str().map_or_else(|| v.to_string(), str::to_owned));
+            let v = r.node.get(k).map_or(String::new(), |v| {
+                v.as_str().map_or_else(|| v.to_string(), str::to_owned)
+            });
             let _ = write!(line, ",{}", csv_cell(&v));
         }
         for role in ["client", "server"] {
@@ -446,12 +523,26 @@ fn export(app: &App, dir: &str, csv: bool) -> Resp {
 
 async fn host(app: &App) -> Resp {
     let info = HostInfo::read();
-    let docker_version = docker::docker(&["version", "--format", "{{.Server.Version}}"]).await.map(|s| s.trim().to_owned());
+    let docker_version = docker::docker(&["version", "--format", "{{.Server.Version}}"])
+        .await
+        .map(|s| s.trim().to_owned());
     let containers = docker::labelled().await.unwrap_or_default();
-    let image = docker::docker(&["image", "inspect", "--format", "{{.Id}} {{.Size}}", &app.opts.image]).await.ok();
-    let qdiscs = tokio::process::Command::new("tc").args(["qdisc", "show"]).output().await.ok();
+    let image = docker::docker(&["image", "inspect", "--format", "{{.Id}} {{.Size}}", &app.opts.image])
+        .await
+        .ok();
+    let qdiscs = tokio::process::Command::new("tc")
+        .args(["qdisc", "show"])
+        .output()
+        .await
+        .ok();
     let host_netem: Vec<String> = qdiscs
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.contains("netem")).map(str::to_owned).collect())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| l.contains("netem"))
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default();
     let status = app.runs.status().await;
     json_ok(&json!({
@@ -468,7 +559,10 @@ async fn host(app: &App) -> Resp {
 
 async fn clean(app: &App) -> Resp {
     if app.runs.status().await.is_some_and(|s| s.running) {
-        return fail(StatusCode::CONFLICT, "a run is going; stop it first (its teardown removes what it created)");
+        return fail(
+            StatusCode::CONFLICT,
+            "a run is going; stop it first (its teardown removes what it created)",
+        );
     }
     match containers::clean().await {
         Ok(c) => json_ok(&serde_json::to_value(&c).unwrap_or(Value::Null)),

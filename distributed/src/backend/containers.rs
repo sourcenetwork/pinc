@@ -197,10 +197,22 @@ impl Containers {
         for v in &plan.veths {
             let (pa, pb) = (self.pid(v.a.0)?.to_string(), self.pid(v.b.0)?.to_string());
             let args = [
-                "link", "add", v.a.1.as_str(), "netns", pa.as_str(), "type", "veth", "peer", "name", v.b.1.as_str(), "netns",
+                "link",
+                "add",
+                v.a.1.as_str(),
+                "netns",
+                pa.as_str(),
+                "type",
+                "veth",
+                "peer",
+                "name",
+                v.b.1.as_str(),
+                "netns",
                 pb.as_str(),
             ];
-            self.helper.run(None, "ip", args.iter().map(|s| (*s).to_owned()).collect()).await?;
+            self.helper
+                .run(None, "ip", args.iter().map(|s| (*s).to_owned()).collect())
+                .await?;
         }
         for (ns, cmds) in &plan.setup {
             let pid = self.pid(*ns)?;
@@ -216,7 +228,8 @@ impl Containers {
             Ns::Router(i) => self.routers.get(i),
             Ns::Node(i) => self.nodes.get(i),
         };
-        s.map(|s| s.pid).ok_or_else(|| Error::Host("a namespace of the plan has no container".into()))
+        s.map(|s| s.pid)
+            .ok_or_else(|| Error::Host("a namespace of the plan has no container".into()))
     }
 
     /// The cgroup names of every container of the run, as `/proc/<pid>/cgroup` shows them.
@@ -238,7 +251,10 @@ impl Containers {
     /// # Errors
     /// The node does not exist or Docker failed.
     pub fn spawn(&self, i: usize, args: &[String], env: &[(String, String)]) -> Result<Proc> {
-        let n = self.nodes.get(i).ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
+        let n = self
+            .nodes
+            .get(i)
+            .ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
         let mut cmd = Command::new("docker");
         cmd.arg("exec").arg("-i");
         for (k, v) in env {
@@ -253,7 +269,10 @@ impl Containers {
     /// # Errors
     /// Docker failed.
     pub async fn stop(&self, i: usize) -> Result<()> {
-        let n = self.nodes.get(i).ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
+        let n = self
+            .nodes
+            .get(i)
+            .ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
         // `kill -1` signals every process but the caller and the namespace's first process.
         docker::docker(&["exec", &n.name, "sh", "-c", "kill -9 -1 2>/dev/null; true"]).await?;
         Ok(())
@@ -264,7 +283,10 @@ impl Containers {
     /// # Errors
     /// Docker failed.
     pub async fn pause(&self, i: usize, pause: bool) -> Result<()> {
-        let n = self.nodes.get(i).ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
+        let n = self
+            .nodes
+            .get(i)
+            .ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
         docker::docker(&[if pause { "pause" } else { "unpause" }, &n.name]).await?;
         Ok(())
     }
@@ -274,9 +296,17 @@ impl Containers {
     /// # Errors
     /// The files cannot be read.
     pub async fn reading(&self, i: usize) -> Result<Reading> {
-        let n = self.nodes.get(i).ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
+        let n = self
+            .nodes
+            .get(i)
+            .ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
         let cpu = tokio::fs::read_to_string(n.cgroup.join("cpu.stat")).await?;
-        let dev = self.helper.call(Req::Read { path: format!("/proc/{}/net/dev", n.pid) }).await?;
+        let dev = self
+            .helper
+            .call(Req::Read {
+                path: format!("/proc/{}/net/dev", n.pid),
+            })
+            .await?;
         Ok(Reading {
             cpu_usec: metrics::parse_cpu_usec(&cpu),
             eth0: metrics::parse_net_dev(&dev).get("eth0").copied(),
@@ -284,7 +314,10 @@ impl Containers {
     }
 
     fn peak_path(&self, i: usize) -> Result<String> {
-        let n = self.nodes.get(i).ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
+        let n = self
+            .nodes
+            .get(i)
+            .ok_or_else(|| Error::Node(format!("there is no node {i}")))?;
         Ok(n.cgroup.join("memory.peak").display().to_string())
     }
 
@@ -293,7 +326,12 @@ impl Containers {
     /// # Errors
     /// The helper refused.
     pub async fn peak_reset(&self, i: usize) -> Result<()> {
-        self.helper.call(Req::PeakReset { path: self.peak_path(i)? }).await.map(|_| ())
+        self.helper
+            .call(Req::PeakReset {
+                path: self.peak_path(i)?,
+            })
+            .await
+            .map(|_| ())
     }
 
     /// Node `i`'s peak memory in bytes since [`Self::peak_reset`].
@@ -301,7 +339,15 @@ impl Containers {
     /// # Errors
     /// The helper refused.
     pub async fn peak_read(&self, i: usize) -> Result<Option<u64>> {
-        Ok(self.helper.call(Req::PeakRead { path: self.peak_path(i)? }).await?.trim().parse().ok())
+        Ok(self
+            .helper
+            .call(Req::PeakRead {
+                path: self.peak_path(i)?,
+            })
+            .await?
+            .trim()
+            .parse()
+            .ok())
     }
 
     /// The counters of every shaper of site `s`'s router.
@@ -312,7 +358,11 @@ impl Containers {
         let pid = self.pid(Ns::Router(s))?;
         let out = self
             .helper
-            .run(Some(pid), "tc", vec!["-s".into(), "-j".into(), "qdisc".into(), "show".into()])
+            .run(
+                Some(pid),
+                "tc",
+                vec!["-s".into(), "-j".into(), "qdisc".into(), "show".into()],
+            )
             .await?;
         Ok(metrics::parse_tc(&out))
     }
@@ -323,7 +373,13 @@ impl Containers {
     /// tc failed.
     pub async fn reshape(&self, at: &ShapePoint, shape: &Shape) -> Result<()> {
         let pid = self.pid(at.ns)?;
-        let mut args = vec!["qdisc".into(), "change".into(), "dev".into(), at.dev.clone(), "root".into()];
+        let mut args = vec![
+            "qdisc".into(),
+            "change".into(),
+            "dev".into(),
+            at.dev.clone(),
+            "root".into(),
+        ];
         args.extend(netem_args(shape));
         self.helper.run(Some(pid), "tc", args).await.map(|_| ())
     }
@@ -350,8 +406,14 @@ impl Containers {
 /// What a run of the harness may have left on this machine: its containers, links in the host's namespace with the
 /// harness's names, and network emulators in the host's namespace.
 async fn leftovers(helper: &Helper) -> Result<Vec<String>> {
-    let mut left: Vec<String> = docker::labelled().await?.into_iter().map(|(n, r)| format!("container {n} (run {r})")).collect();
-    let links = helper.run(None, "ip", vec!["-o".into(), "link".into(), "show".into()]).await?;
+    let mut left: Vec<String> = docker::labelled()
+        .await?
+        .into_iter()
+        .map(|(n, r)| format!("container {n} (run {r})"))
+        .collect();
+    let links = helper
+        .run(None, "ip", vec!["-o".into(), "link".into(), "show".into()])
+        .await?;
     for l in links.lines() {
         let name = l.split(':').nth(1).map_or("", str::trim);
         let name = name.split('@').next().unwrap_or(name);
@@ -390,7 +452,9 @@ pub async fn clean() -> Result<Cleaned> {
     out.removed = found.iter().map(|(n, _)| n.clone()).collect();
     docker::remove(&out.removed).await?;
     let helper = Helper::start().await?;
-    let state: Option<State> = std::fs::read(state_path()).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let state: Option<State> = std::fs::read(state_path())
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
     if state.as_ref().is_some_and(|s| s.ifb_loaded) {
         helper.call(Req::Ifb { load: false }).await?;
         out.unloaded_ifb = true;

@@ -103,7 +103,19 @@ impl Snapshot {
     pub fn from_parts(at: Instant, procs: &[(u32, u32, &str, u64)], total: u64, steal: u64) -> Self {
         Self {
             at,
-            procs: procs.iter().map(|(pid, ppid, name, ticks)| (*pid, Proc { ticks: *ticks, ppid: *ppid, name: (*name).to_owned() })).collect(),
+            procs: procs
+                .iter()
+                .map(|(pid, ppid, name, ticks)| {
+                    (
+                        *pid,
+                        Proc {
+                            ticks: *ticks,
+                            ppid: *ppid,
+                            name: (*name).to_owned(),
+                        },
+                    )
+                })
+                .collect(),
             total,
             steal,
         }
@@ -114,14 +126,25 @@ impl Snapshot {
         let mut procs = HashMap::new();
         if let Ok(dir) = std::fs::read_dir("/proc") {
             for e in dir.flatten() {
-                let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
-                if let Some(p) = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().as_deref().and_then(parse_stat) {
+                let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+                    continue;
+                };
+                if let Some(p) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .as_deref()
+                    .and_then(parse_stat)
+                {
                     procs.insert(pid, p);
                 }
             }
         }
         let (total, steal) = machine();
-        Self { at: Instant::now(), procs, total, steal }
+        Self {
+            at: Instant::now(),
+            procs,
+            total,
+            steal,
+        }
     }
 }
 
@@ -151,7 +174,18 @@ pub struct Monitor {
 
 // Kernel threads that move the run's packets, the SSH daemon that carries its output, and the container runtime that
 // serves its `docker exec` calls (`runc` runs once per call).
-const OURS: [&str; 10] = ["ksoftirqd", "kworker", "rcu_", "migration", "sshd", "dockerd", "containerd", "docker-init", "runc", "idle_inject"];
+const OURS: [&str; 10] = [
+    "ksoftirqd",
+    "kworker",
+    "rcu_",
+    "migration",
+    "sshd",
+    "dockerd",
+    "containerd",
+    "docker-init",
+    "runc",
+    "idle_inject",
+];
 
 impl Monitor {
     fn is_run(&self, pid: u32, snap: &Snapshot, me: u32, cache: &mut HashMap<u32, bool>) -> bool {
@@ -215,7 +249,11 @@ impl Monitor {
         Usage {
             other_pct,
             steal_pct,
-            top: if top.1.is_empty() { String::new() } else { format!("{} {top_pct:.1}%", top.1) },
+            top: if top.1.is_empty() {
+                String::new()
+            } else {
+                format!("{} {top_pct:.1}%", top.1)
+            },
             secs,
             clean: other_pct <= self.limits.other_pct && steal_pct <= self.limits.steal_pct,
         }

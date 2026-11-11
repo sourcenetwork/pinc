@@ -1,7 +1,13 @@
 //! The orchestration logic that needs no root: scenario parsing and validation, the network plan (addresses, names,
 //! routes, translation, CPU sets), the shaping commands, the helper's checks, the kernel-metric parsers and the result
 //! aggregation.
-#![allow(missing_docs, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    missing_docs,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::collections::BTreeSet;
 
@@ -58,7 +64,11 @@ fn a_transport_server_behind_translation_is_refused_with_the_reason() {
     let Workload::Transport(t) = &mut sc.workload;
     t.pairs[0].server = "n2".into();
     let p = sc.validate();
-    assert!(p.iter().any(|p| p.path == "workload.pairs[0].server" && p.message.contains("address translation")), "{p:?}");
+    assert!(
+        p.iter()
+            .any(|p| p.path == "workload.pairs[0].server" && p.message.contains("address translation")),
+        "{p:?}"
+    );
 }
 
 #[test]
@@ -92,8 +102,14 @@ fn every_node_has_its_site_gateway_as_default_route() {
     for (i, n) in p.nodes.iter().enumerate() {
         let gw = p.sites[n.site].gateway.to_string();
         let cmds = &p.setup.iter().find(|(ns, _)| *ns == Ns::Node(i)).unwrap().1;
-        assert!(cmds.iter().any(|c| c.tool == Tool::Ip && c.args == ["route", "add", "default", "via", gw.as_str()]));
-        assert!(cmds.iter().any(|c| c.args.contains(&"gso_max_segs".to_owned())), "offloaded batches must be segmented in the node");
+        assert!(
+            cmds.iter()
+                .any(|c| c.tool == Tool::Ip && c.args == ["route", "add", "default", "via", gw.as_str()])
+        );
+        assert!(
+            cmds.iter().any(|c| c.args.contains(&"gso_max_segs".to_owned())),
+            "offloaded batches must be segmented in the node"
+        );
     }
 }
 
@@ -103,28 +119,56 @@ fn routers_use_the_direct_link_and_route_every_routed_lan() {
     let p = Plan::new(&sc, "r", 16);
     let a = p.site("a").unwrap();
     let cmds = &p.setup.iter().find(|(ns, _)| *ns == Ns::Router(a)).unwrap().1;
-    let routes: Vec<&Vec<String>> = cmds.iter().filter(|c| c.args.first().map(String::as_str) == Some("route")).map(|c| &c.args).collect();
+    let routes: Vec<&Vec<String>> = cmds
+        .iter()
+        .filter(|c| c.args.first().map(String::as_str) == Some("route"))
+        .map(|c| &c.args)
+        .collect();
     // c's LAN is 10.3.0.0/24, and the a-c link is w2: a detour through b has less delay, but the direct link is taken.
-    assert!(routes.iter().any(|r| r[2] == "10.3.0.0/24" && r[6] == "w2"), "{routes:?}");
-    assert!(routes.iter().any(|r| r[2] == "10.2.0.0/24" && r[6] == "w0"), "{routes:?}");
+    assert!(
+        routes.iter().any(|r| r[2] == "10.3.0.0/24" && r[6] == "w2"),
+        "{routes:?}"
+    );
+    assert!(
+        routes.iter().any(|r| r[2] == "10.2.0.0/24" && r[6] == "w0"),
+        "{routes:?}"
+    );
 }
 
 #[test]
 fn translated_sites_masquerade_and_are_not_routed() {
     let sc = scenario("home-routers");
     let p = Plan::new(&sc, "r", 16);
-    let (h1, h2, public) = (p.site("home1").unwrap(), p.site("home2").unwrap(), p.site("public").unwrap());
+    let (h1, h2, public) = (
+        p.site("home1").unwrap(),
+        p.site("home2").unwrap(),
+        p.site("public").unwrap(),
+    );
     assert_eq!(p.sites[h1].nat, Nat::PortRestricted);
     let rules = |s: usize| -> Vec<Vec<String>> {
-        p.setup.iter().find(|(ns, _)| *ns == Ns::Router(s)).unwrap().1.iter().filter(|c| c.tool == Tool::Iptables).map(|c| c.args.clone()).collect()
+        p.setup
+            .iter()
+            .find(|(ns, _)| *ns == Ns::Router(s))
+            .unwrap()
+            .1
+            .iter()
+            .filter(|c| c.tool == Tool::Iptables)
+            .map(|c| c.args.clone())
+            .collect()
     };
     assert_eq!(rules(h1).len(), 1);
     assert!(!rules(h1)[0].contains(&"--random-fully".to_owned()));
-    assert!(rules(h2)[0].contains(&"--random-fully".to_owned()), "the symmetric translation picks a random port per destination");
+    assert!(
+        rules(h2)[0].contains(&"--random-fully".to_owned()),
+        "the symmetric translation picks a random port per destination"
+    );
     assert!(rules(public).is_empty());
     let public_cmds = &p.setup.iter().find(|(ns, _)| *ns == Ns::Router(public)).unwrap().1;
     let lan1 = format!("{}/24", p.sites[h1].lan);
-    assert!(!public_cmds.iter().any(|c| c.args.contains(&lan1)), "a translated LAN must not be routed");
+    assert!(
+        !public_cmds.iter().any(|c| c.args.contains(&lan1)),
+        "a translated LAN must not be routed"
+    );
 }
 
 #[test]
@@ -136,18 +180,36 @@ fn both_directions_of_every_link_are_shaped_in_a_router() {
     assert!((fs.delay_ms - 25.0).abs() < 1e-9 && (rs.loss_pct - 1.0).abs() < 1e-9);
     let [(down, _), (up, _)] = p.link_points("n1", "east").unwrap();
     assert_eq!((down.dev.as_str(), up.dev.as_str()), ("p0", "u0"));
-    assert!(p.link_points("n1", "west").is_none(), "n1 has no link to the other site's router");
+    assert!(
+        p.link_points("n1", "west").is_none(),
+        "n1 has no link to the other site's router"
+    );
 }
 
 #[test]
 fn netem_arguments_are_exact_integers() {
-    let s = Shape { delay_ms: 25.0, jitter_ms: 0.0, loss_pct: 1.0, rate_mbit: Some(100.0), queue_ms: None };
+    let s = Shape {
+        delay_ms: 25.0,
+        jitter_ms: 0.0,
+        loss_pct: 1.0,
+        rate_mbit: Some(100.0),
+        queue_ms: None,
+    };
     let a = netem_args(&s);
     assert_eq!(a[..3], ["netem", "delay", "25000us"]);
     assert!(a.windows(2).any(|w| w == ["loss", "1%"]));
     assert!(a.windows(2).any(|w| w == ["rate", "100000kbit"]));
-    let j = netem_args(&Shape { delay_ms: 100.0, jitter_ms: 30.0, loss_pct: 5.0, rate_mbit: Some(10.0), queue_ms: None });
-    assert_eq!(j[..6], ["netem", "delay", "100000us", "30000us", "distribution", "normal"]);
+    let j = netem_args(&Shape {
+        delay_ms: 100.0,
+        jitter_ms: 30.0,
+        loss_pct: 5.0,
+        rate_mbit: Some(10.0),
+        queue_ms: None,
+    });
+    assert_eq!(
+        j[..6],
+        ["netem", "delay", "100000us", "30000us", "distribution", "normal"]
+    );
     let lan = netem_args(&Shape::lan());
     assert_eq!(lan[2], "50us");
     assert!(!lan.contains(&"loss".to_owned()));
@@ -156,9 +218,17 @@ fn netem_arguments_are_exact_integers() {
 #[test]
 fn queue_limit_holds_the_path_and_the_buffer() {
     // 100 Mbit/s over 25 ms plus 50 ms of buffer: 625 kB, about 417 packets of 1500 bytes, plus the margin.
-    let s = Shape { delay_ms: 25.0, rate_mbit: Some(100.0), ..Shape::default() };
+    let s = Shape {
+        delay_ms: 25.0,
+        rate_mbit: Some(100.0),
+        ..Shape::default()
+    };
     assert_eq!(queue_limit(&s), 625 + 16);
-    let tiny = Shape { delay_ms: 0.05, rate_mbit: Some(1.0), ..Shape::default() };
+    let tiny = Shape {
+        delay_ms: 0.05,
+        rate_mbit: Some(1.0),
+        ..Shape::default()
+    };
     assert_eq!(queue_limit(&tiny), 64 + 16);
 }
 
@@ -177,9 +247,20 @@ fn cpu_sets_are_disjoint_when_the_host_has_room_and_shared_when_not() {
 #[test]
 fn the_helper_runs_nothing_else_in_the_host_namespace() {
     let s = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
-    assert!(host_ns_allowed("ip", &s(&["link", "add", "eth0", "netns", "12", "type", "veth", "peer", "name", "p0", "netns", "34"])));
-    assert!(!host_ns_allowed("ip", &s(&["link", "add", "eth0", "type", "veth", "peer", "name", "p0"])));
-    assert!(!host_ns_allowed("tc", &s(&["qdisc", "add", "dev", "lo", "root", "netem", "delay", "1ms"])));
+    assert!(host_ns_allowed(
+        "ip",
+        &s(&[
+            "link", "add", "eth0", "netns", "12", "type", "veth", "peer", "name", "p0", "netns", "34"
+        ])
+    ));
+    assert!(!host_ns_allowed(
+        "ip",
+        &s(&["link", "add", "eth0", "type", "veth", "peer", "name", "p0"])
+    ));
+    assert!(!host_ns_allowed(
+        "tc",
+        &s(&["qdisc", "add", "dev", "lo", "root", "netem", "delay", "1ms"])
+    ));
     assert!(!host_ns_allowed("iptables", &s(&["-F"])));
     assert!(readable("/proc/123/net/dev"));
     assert!(!readable("/proc/self/net/dev"));
@@ -191,27 +272,64 @@ fn the_helper_runs_nothing_else_in_the_host_namespace() {
 fn kernel_counters_parse() {
     let dev = "Inter-|   Receive\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n  eth0: 1000 10 0 2 0 0 0 0 5000 20 0 1 0 0 0 0\n";
     let m = parse_net_dev(dev);
-    assert_eq!(m["eth0"], Iface { rx_bytes: 1000, rx_packets: 10, rx_drops: 2, tx_bytes: 5000, tx_packets: 20, tx_drops: 1 });
+    assert_eq!(
+        m["eth0"],
+        Iface {
+            rx_bytes: 1000,
+            rx_packets: 10,
+            rx_drops: 2,
+            tx_bytes: 5000,
+            tx_packets: 20,
+            tx_drops: 1
+        }
+    );
     assert_eq!(parse_cpu_usec("usage_usec 123456\nuser_usec 1\n"), Some(123_456));
     assert_eq!(parse_cpu_usec("nothing"), None);
     let tc = r#"[{"kind":"netem","handle":"8001:","dev":"w0","root":true,"bytes":10,"packets":2,"drops":3,"overlimits":0,"requeues":0,"backlog":0,"qlen":0}]"#;
     let q = parse_tc(tc);
     assert_eq!((q[0].dev.as_str(), q[0].drops), ("w0", 3));
     let u = NodeUse::between(
-        &Reading { cpu_usec: Some(1_000_000), eth0: Some(Iface { tx_bytes: 100, ..Iface::default() }) },
-        &Reading { cpu_usec: Some(3_500_000), eth0: Some(Iface { tx_bytes: 600, ..Iface::default() }) },
+        &Reading {
+            cpu_usec: Some(1_000_000),
+            eth0: Some(Iface {
+                tx_bytes: 100,
+                ..Iface::default()
+            }),
+        },
+        &Reading {
+            cpu_usec: Some(3_500_000),
+            eth0: Some(Iface {
+                tx_bytes: 600,
+                ..Iface::default()
+            }),
+        },
         Some(2 * 1_048_576),
     );
     assert_eq!(u.cpu_s, Some(2.5));
     assert_eq!(u.peak_mib, Some(2.0));
     assert_eq!(u.eth0.unwrap().tx_bytes, 500);
-    assert_eq!(NodeUse::between(&Reading::default(), &Reading::default(), None).cpu_s, None, "unmeasured is absent, not zero");
+    assert_eq!(
+        NodeUse::between(&Reading::default(), &Reading::default(), None).cpu_s,
+        None,
+        "unmeasured is absent, not zero"
+    );
 }
 
 fn row(stack: &str, rep: u32, p50: f64) -> Row {
     let mut node = serde_json::Map::new();
     node.insert("p50_us".into(), p50.into());
-    Row { run: "r".into(), stack: stack.into(), test: "setup".into(), pair: "a>b".into(), rep, status: "ok".into(), node, kernel: Default::default(), shaper_drops: Some(0), host: None }
+    Row {
+        run: "r".into(),
+        stack: stack.into(),
+        test: "setup".into(),
+        pair: "a>b".into(),
+        rep,
+        status: "ok".into(),
+        node,
+        kernel: Default::default(),
+        shaper_drops: Some(0),
+        host: None,
+    }
 }
 
 #[test]
@@ -225,7 +343,12 @@ fn spread_is_median_min_max() {
 
 #[test]
 fn summary_marks_the_best_and_keeps_what_was_not_measured() {
-    let mut rows = vec![row("vinc", 0, 900.0), row("vinc", 1, 1100.0), row("vinc", 2, 1000.0), row("iroh", 0, 1200.0)];
+    let mut rows = vec![
+        row("vinc", 0, 900.0),
+        row("vinc", 1, 1100.0),
+        row("vinc", 2, 1000.0),
+        row("iroh", 0, 1200.0),
+    ];
     let mut missing = row("libp2p", 0, 0.0);
     missing.status = "not measured: the library has no resumption with early data".into();
     missing.node.clear();
@@ -242,14 +365,24 @@ fn summary_marks_the_best_and_keeps_what_was_not_measured() {
 #[test]
 fn discarded_measurements_count_for_nothing_and_are_noted() {
     let mut busy = row("vinc", 0, 5.0);
-    busy.status = "discarded: the host was busy (other processes 40.0% of a core, steal 0.00%, most: rsync 40.0%)".into();
+    busy.status =
+        "discarded: the host was busy (other processes 40.0% of a core, steal 0.00%, most: rsync 40.0%)".into();
     let rows = vec![busy, row("vinc", 0, 900.0), row("iroh", 0, 1000.0)];
     let stacks = vec!["vinc".to_owned(), "iroh".to_owned()];
     let t = &summarize(&rows, &stacks)[0];
-    assert_eq!(fmt_cell(&t.lines[0].cells[0]), "900", "the discarded value must not count");
-    assert!(t.notes.iter().any(|n| n.contains("1 measurement(s) discarded")), "{:?}", t.notes);
+    assert_eq!(
+        fmt_cell(&t.lines[0].cells[0]),
+        "900",
+        "the discarded value must not count"
+    );
+    assert!(
+        t.notes.iter().any(|n| n.contains("1 measurement(s) discarded")),
+        "{:?}",
+        t.notes
+    );
     let mut gone = row("libp2p", 0, 1.0);
-    gone.status = "not measured: the host was busy (other processes 9.0% of a core, steal 0.00%, most: cc1 9.0%)".into();
+    gone.status =
+        "not measured: the host was busy (other processes 9.0% of a core, steal 0.00%, most: cc1 9.0%)".into();
     let t = &summarize(&[gone], &["libp2p".to_owned()])[0];
     assert!(matches!(&t.lines[0].cells[0], Cell::Missing(m) if m.contains("host was busy")));
 }
@@ -259,9 +392,32 @@ fn the_quiet_check_counts_only_what_is_not_the_run() {
     let me = std::process::id();
     let t0 = std::time::Instant::now();
     let t1 = t0 + std::time::Duration::from_secs(1);
-    let a = Snapshot::from_parts(t0, &[(9001, 1, "rsync", 0), (9002, 2, "kworker/3:1", 0), (9003, me, "docker", 0), (me, 1, "vinc-distributed", 0)], 0, 0);
-    let b = Snapshot::from_parts(t1, &[(9001, 1, "rsync", 50), (9002, 2, "kworker/3:1", 80), (9003, me, "docker", 70), (me, 1, "vinc-distributed", 90)], 1600, 8);
-    let m = Monitor { containers: Vec::new(), limits: Thresholds::default() };
+    let a = Snapshot::from_parts(
+        t0,
+        &[
+            (9001, 1, "rsync", 0),
+            (9002, 2, "kworker/3:1", 0),
+            (9003, me, "docker", 0),
+            (me, 1, "vinc-distributed", 0),
+        ],
+        0,
+        0,
+    );
+    let b = Snapshot::from_parts(
+        t1,
+        &[
+            (9001, 1, "rsync", 50),
+            (9002, 2, "kworker/3:1", 80),
+            (9003, me, "docker", 70),
+            (me, 1, "vinc-distributed", 90),
+        ],
+        1600,
+        8,
+    );
+    let m = Monitor {
+        containers: Vec::new(),
+        limits: Thresholds::default(),
+    };
     let u = m.usage(&a, &b);
     assert!((u.other_pct - 50.0).abs() < 1e-6, "only rsync counts: {u:?}");
     assert!((u.steal_pct - 0.5).abs() < 1e-6);
@@ -273,7 +429,10 @@ fn the_quiet_check_counts_only_what_is_not_the_run() {
 
 #[test]
 fn proc_stat_lines_parse_with_odd_names() {
-    assert_eq!(parse_stat_line("42 (tokio (rt) w) S 7 1 1 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 1 1 1"), Some(("tokio (rt) w".to_owned(), 7, 300)));
+    assert_eq!(
+        parse_stat_line("42 (tokio (rt) w) S 7 1 1 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 1 1 1"),
+        Some(("tokio (rt) w".to_owned(), 7, 300))
+    );
     assert_eq!(parse_stat_line("garbage"), None);
 }
 

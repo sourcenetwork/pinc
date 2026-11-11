@@ -51,7 +51,8 @@ pub(crate) struct App {
 pub async fn serve(opts: ServeOptions) -> Result<()> {
     if !opts.bind.ip().is_loopback() && opts.token.as_deref().is_none_or(str::is_empty) {
         return Err(Error::Host(
-            "binding an address other than the loopback needs --token; or keep the default and use an SSH tunnel".into(),
+            "binding an address other than the loopback needs --token; or keep the default and use an SSH tunnel"
+                .into(),
         ));
     }
     let listener = TcpListener::bind(opts.bind)

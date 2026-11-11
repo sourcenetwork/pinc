@@ -45,7 +45,9 @@ impl Iface {
 pub fn parse_net_dev(text: &str) -> BTreeMap<String, Iface> {
     let mut out = BTreeMap::new();
     for line in text.lines() {
-        let Some((name, rest)) = line.split_once(':') else { continue };
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
         let f: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
         // receive: bytes packets errs drop fifo frame compressed multicast; transmit: bytes packets errs drop ...
         if f.len() < 12 {
@@ -69,7 +71,8 @@ pub fn parse_net_dev(text: &str) -> BTreeMap<String, Iface> {
 
 /// The CPU time a cgroup has used, in microseconds, from its `cpu.stat`.
 pub fn parse_cpu_usec(text: &str) -> Option<u64> {
-    text.lines().find_map(|l| l.strip_prefix("usage_usec ")?.trim().parse().ok())
+    text.lines()
+        .find_map(|l| l.strip_prefix("usage_usec ")?.trim().parse().ok())
 }
 
 /// The counters of one queueing discipline.

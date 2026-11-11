@@ -195,12 +195,30 @@ impl Ctx {
             Event::Log { level, msg } if level == "error" => tracing::error!("{msg}"),
             Event::Log { level, msg } if level == "warn" => tracing::warn!("{msg}"),
             Event::Log { msg, .. } | Event::Phase { what: msg } => tracing::info!("{msg}"),
-            Event::Progress { test, stack, rep, reps, pair, .. } => {
+            Event::Progress {
+                test,
+                stack,
+                rep,
+                reps,
+                pair,
+                ..
+            } => {
                 tracing::info!(test, stack, rep = rep + 1, reps, pair, "measuring");
             }
-            Event::Row(r) => tracing::info!(test = r.test, stack = r.stack, rep = r.rep + 1, status = r.status, "measured"),
+            Event::Row(r) => tracing::info!(
+                test = r.test,
+                stack = r.stack,
+                rep = r.rep + 1,
+                status = r.status,
+                "measured"
+            ),
             Event::Fault { at_s, what, .. } => tracing::info!(at_s, "fault: {what}"),
-            Event::Quiet(u) if !u.clean => tracing::warn!(other_pct = u.other_pct, steal_pct = u.steal_pct, top = u.top, "the host is busy"),
+            Event::Quiet(u) if !u.clean => tracing::warn!(
+                other_pct = u.other_pct,
+                steal_pct = u.steal_pct,
+                top = u.top,
+                "the host is busy"
+            ),
             Event::Started { .. } | Event::Ended { .. } | Event::Topology(_) | Event::Sample(_) | Event::Quiet(_) => {}
         }
         if let Some(tx) = &self.events {
@@ -209,7 +227,10 @@ impl Ctx {
     }
 
     pub(crate) fn log(&self, level: &str, msg: impl Into<String>) {
-        self.emit(Event::Log { level: level.into(), msg: msg.into() });
+        self.emit(Event::Log {
+            level: level.into(),
+            msg: msg.into(),
+        });
     }
 
     /// Keep one window of the quiet-host check in the results and show it.
@@ -271,7 +292,9 @@ pub async fn signalled() {
 
 /// Resolves when `cancel` turns true; never without one.
 async fn cancelled(cancel: Option<watch::Receiver<bool>>) {
-    let Some(mut rx) = cancel else { return std::future::pending().await };
+    let Some(mut rx) = cancel else {
+        return std::future::pending().await;
+    };
     if rx.wait_for(|c| *c).await.is_err() {
         std::future::pending::<()>().await;
     }
@@ -302,9 +325,18 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
     let run = run_id();
     let plan = Plan::new(&sc, &run, host.cpus);
     let dir = results::fresh_dir(&opts.results, &sc.name)?;
-    std::fs::write(dir.join("scenario.toml"), sc.to_toml().map_err(|e| Error::Io(std::io::Error::other(e)))?)?;
-    let raw = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("raw.jsonl"))?;
-    let quiet_log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("quiet.jsonl"))?;
+    std::fs::write(
+        dir.join("scenario.toml"),
+        sc.to_toml().map_err(|e| Error::Io(std::io::Error::other(e)))?,
+    )?;
+    let raw = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("raw.jsonl"))?;
+    let quiet_log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("quiet.jsonl"))?;
     let reps = opts.reps.unwrap_or(sc.repetitions);
     // The orchestrator, its helper and the Docker command lines it starts run on CPU 0, which no node uses.
     if host.cpus > 1
@@ -319,7 +351,10 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
         events: opts.events.clone(),
         raw,
         quiet_log,
-        monitor: Monitor { containers: Vec::new(), limits: opts.quiet },
+        monitor: Monitor {
+            containers: Vec::new(),
+            limits: opts.quiet,
+        },
     };
     let total = match &ctx.sc.workload {
         Workload::Transport(t) => t.pairs.len() * t.tests.len(),
@@ -367,7 +402,9 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
                     ctx.monitor.limits.wait_s, u.other_pct, u.steal_pct, u.top
                 )));
             }
-            ctx.emit(Event::Phase { what: "the host is quiet; measuring".into() });
+            ctx.emit(Event::Phase {
+                what: "the host is quiet; measuring".into(),
+            });
             let watch = quiet_sampler(ctx.monitor.clone(), ctx.quiet_log.try_clone()?, opts.events.clone());
             let sampling = async {
                 match &opts.events {
@@ -392,7 +429,9 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
             () = cancelled(opts.cancel.clone()) => Err(Error::Interrupted),
         }
     };
-    ctx.emit(Event::Phase { what: "tearing down".into() });
+    ctx.emit(Event::Phase {
+        what: "tearing down".into(),
+    });
     let image_id = backend.as_ref().map(|b| b.image_id().to_owned());
     let left = match backend.as_mut() {
         Some(b) => b.down().await,
@@ -400,7 +439,17 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
     }
     .unwrap_or_else(|e| vec![format!("the teardown failed: {e}")]);
     let error = result.err();
-    write_run(&dir, &ctx, &host, &run, image_id, started, error.as_ref(), &left, opts.reps)?;
+    write_run(
+        &dir,
+        &ctx,
+        &host,
+        &run,
+        image_id,
+        started,
+        error.as_ref(),
+        &left,
+        opts.reps,
+    )?;
     let rows = results::read_rows(&dir).unwrap_or_default();
     let stacks: Vec<String> = ctx.sc.stacks.iter().map(|s| s.name().to_owned()).collect();
     let tables = results::summarize(&rows, &stacks);
@@ -428,10 +477,27 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
             "Every interface has an MTU of {MTU}. Each node: {} CPU(s) of its own set, {} MiB; CPU sets {}{}.",
             ctx.sc.resources.cpus,
             ctx.sc.resources.memory_mib,
-            ctx.plan.nodes.iter().map(|n| format!("{} {}", n.name, n.container.cpus)).collect::<Vec<_>>().join(", "),
-            if ctx.plan.shared_cpus { " (shared: the machine has fewer CPUs than the scenario asks)" } else { "" }
+            ctx.plan
+                .nodes
+                .iter()
+                .map(|n| format!("{} {}", n.name, n.container.cpus))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if ctx.plan.shared_cpus {
+                " (shared: the machine has fewer CPUs than the scenario asks)"
+            } else {
+                ""
+            }
         ),
-        format!("Versions: {}; VINC at commit {}.", versions().iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "), git_commit()),
+        format!(
+            "Versions: {}; VINC at commit {}.",
+            versions()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            git_commit()
+        ),
         format!(
             "Isolation: one stack at a time on the same cores; repetitions alternate the stacks ({}), all in this one run of one build. The orchestrator runs on CPU 0, which no node uses.",
             ctx.sc.stacks.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ")
@@ -516,7 +582,9 @@ fn git_commit() -> String {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
     };
     match git(&["rev-parse", "--short", "HEAD"]) {
-        Some(c) if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) => format!("{c}+changes"),
+        Some(c) if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) => {
+            format!("{c}+changes")
+        }
         Some(c) => c,
         None => "unknown".into(),
     }

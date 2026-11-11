@@ -113,12 +113,31 @@ impl Topology {
     pub fn of(plan: &Plan, pos: &[Option<[f64; 2]>]) -> Self {
         let mut shapers = Vec::new();
         for (i, n) in plan.nodes.iter().enumerate() {
-            shapers.push(TShaper { site: n.site, dev: n.port.clone(), of: ShaperOf::Down { node: i } });
-            shapers.push(TShaper { site: n.site, dev: n.ifb.clone(), of: ShaperOf::Up { node: i } });
+            shapers.push(TShaper {
+                site: n.site,
+                dev: n.port.clone(),
+                of: ShaperOf::Down { node: i },
+            });
+            shapers.push(TShaper {
+                site: n.site,
+                dev: n.ifb.clone(),
+                of: ShaperOf::Up { node: i },
+            });
         }
         for (k, l) in plan.links.iter().enumerate() {
-            shapers.push(TShaper { site: l.a, dev: l.dev.clone(), of: ShaperOf::Link { link: k, forward: true } });
-            shapers.push(TShaper { site: l.b, dev: l.dev.clone(), of: ShaperOf::Link { link: k, forward: false } });
+            shapers.push(TShaper {
+                site: l.a,
+                dev: l.dev.clone(),
+                of: ShaperOf::Link { link: k, forward: true },
+            });
+            shapers.push(TShaper {
+                site: l.b,
+                dev: l.dev.clone(),
+                of: ShaperOf::Link {
+                    link: k,
+                    forward: false,
+                },
+            });
         }
         Self {
             sites: plan
@@ -145,7 +164,16 @@ impl Topology {
                     link: n.link,
                 })
                 .collect(),
-            links: plan.links.iter().map(|l| TLink { a: l.a, b: l.b, forward: l.forward, reverse: l.reverse }).collect(),
+            links: plan
+                .links
+                .iter()
+                .map(|l| TLink {
+                    a: l.a,
+                    b: l.b,
+                    forward: l.forward,
+                    reverse: l.reverse,
+                })
+                .collect(),
             shapers,
         }
     }
@@ -189,7 +217,11 @@ pub(crate) async fn sampler(b: &Containers, topo: &Topology, tx: broadcast::Send
     let start = tokio::time::Instant::now();
     let mut tick = tokio::time::interval(EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut last: Option<(tokio::time::Instant, Vec<Reading>, BTreeMap<(usize, String), (u64, u64)>)> = None;
+    let mut last: Option<(
+        tokio::time::Instant,
+        Vec<Reading>,
+        BTreeMap<(usize, String), (u64, u64)>,
+    )> = None;
     loop {
         tick.tick().await;
         let now = tokio::time::Instant::now();
@@ -199,7 +231,13 @@ pub(crate) async fn sampler(b: &Containers, topo: &Topology, tx: broadcast::Send
         }
         let mut q: BTreeMap<(usize, String), (u64, u64, u64)> = BTreeMap::new();
         for s in 0..topo.sites.len() {
-            for d in b.shapers(s).await.unwrap_or_default().into_iter().filter(|d| d.kind == "netem") {
+            for d in b
+                .shapers(s)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| d.kind == "netem")
+            {
                 q.insert((s, d.dev), (d.bytes, d.drops, d.backlog));
             }
         }

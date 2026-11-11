@@ -130,7 +130,12 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
             m(Node("all_done_s"), "all done", "s", Lower),
             m(Node("first_byte_p50_ms"), "first byte p50", "ms", Lower),
             m(Node("first_byte_p99_ms"), "first byte p99", "ms", Lower),
-            m(Node("server_kib_per_conn"), "server memory per connection", "KiB", Lower),
+            m(
+                Node("server_kib_per_conn"),
+                "server memory per connection",
+                "KiB",
+                Lower,
+            ),
         ],
         _ => Vec::new(),
     };
@@ -182,7 +187,11 @@ pub fn spread(mut v: Vec<f64>) -> Option<Spread> {
     v.sort_by(f64::total_cmp);
     let n = v.len();
     let mid = |i: usize| v.get(i).copied().unwrap_or(f64::NAN);
-    let median = if n % 2 == 1 { mid(n / 2) } else { f64::midpoint(mid(n / 2 - 1), mid(n / 2)) };
+    let median = if n % 2 == 1 {
+        mid(n / 2)
+    } else {
+        f64::midpoint(mid(n / 2 - 1), mid(n / 2))
+    };
     Some(Spread {
         median,
         min: mid(0),
@@ -284,7 +293,9 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
             notes.dedup();
             let discarded = mine.iter().filter(|r| r.status.starts_with(DISCARDED)).count();
             if discarded > 0 {
-                notes.push(format!("{discarded} measurement(s) discarded and repeated: the host was busy"));
+                notes.push(format!(
+                    "{discarded} measurement(s) discarded and repeated: the host was busy"
+                ));
             }
             Table {
                 test,
@@ -301,7 +312,13 @@ fn best_of(cells: &[Cell], better: Better) -> Option<usize> {
     let vals: Vec<(usize, f64)> = cells
         .iter()
         .enumerate()
-        .filter_map(|(i, c)| if let Cell::Value(s) = c { Some((i, s.median)) } else { None })
+        .filter_map(|(i, c)| {
+            if let Cell::Value(s) = c {
+                Some((i, s.median))
+            } else {
+                None
+            }
+        })
         .collect();
     if vals.len() < 2 {
         return None;
@@ -362,18 +379,36 @@ pub fn markdown(title: &str, conditions: &[String], tables: &[Table]) -> String 
     for c in conditions {
         let _ = writeln!(md, "{c}");
     }
-    md.push_str("\nEvery cell is the median over the repetitions with [min..max]; the best value of a row is in bold.\n");
+    md.push_str(
+        "\nEvery cell is the median over the repetitions with [min..max]; the best value of a row is in bold.\n",
+    );
     for t in tables {
-        let _ = write!(md, "\n## {} ({})\n\n| metric | {} |\n|---|", t.test, t.pair, t.stacks.join(" | "));
+        let _ = write!(
+            md,
+            "\n## {} ({})\n\n| metric | {} |\n|---|",
+            t.test,
+            t.pair,
+            t.stacks.join(" | ")
+        );
         md.push_str(&"---|".repeat(t.stacks.len()));
         md.push('\n');
         for l in &t.lines {
-            let unit = if l.unit.is_empty() { String::new() } else { format!(" ({})", l.unit) };
+            let unit = if l.unit.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", l.unit)
+            };
             let cells: Vec<String> = l
                 .cells
                 .iter()
                 .enumerate()
-                .map(|(i, c)| if l.best == Some(i) { format!("**{}**", fmt_cell(c)) } else { fmt_cell(c) })
+                .map(|(i, c)| {
+                    if l.best == Some(i) {
+                        format!("**{}**", fmt_cell(c))
+                    } else {
+                        fmt_cell(c)
+                    }
+                })
                 .collect();
             let _ = writeln!(md, "| {}{} | {} |", l.label, unit, cells.join(" | "));
         }
@@ -432,5 +467,7 @@ pub fn fresh_dir(root: &Path, scenario: &str) -> std::io::Result<PathBuf> {
             Err(e) => return Err(e),
         }
     }
-    Err(std::io::Error::other("too many results directories for this scenario today"))
+    Err(std::io::Error::other(
+        "too many results directories for this scenario today",
+    ))
 }

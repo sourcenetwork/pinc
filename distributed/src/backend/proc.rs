@@ -134,7 +134,9 @@ impl Proc {
 
     /// The last lines of the program's error output (once it ended), or a note that there were none.
     pub async fn stderr_tail(&mut self) -> String {
-        let Some(t) = self.tail.take() else { return String::new() };
+        let Some(t) = self.tail.take() else {
+            return String::new();
+        };
         match tokio::time::timeout(Duration::from_secs(2), t).await {
             Ok(Ok(s)) if !s.is_empty() => s,
             _ => "no error output".into(),

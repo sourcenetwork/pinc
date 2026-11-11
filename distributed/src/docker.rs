@@ -16,7 +16,11 @@ pub async fn docker(args: &[&str]) -> Result<String> {
         .stdin(Stdio::null())
         .output()
         .await
-        .map_err(|e| Error::Host(format!("docker did not start ({e}); install Docker and add this user to the docker group")))?;
+        .map_err(|e| {
+            Error::Host(format!(
+                "docker did not start ({e}); install Docker and add this user to the docker group"
+            ))
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -77,7 +81,9 @@ pub async fn inspect(names: &[String]) -> Result<Vec<Info>> {
     if infos.len() == names.len() {
         Ok(infos)
     } else {
-        Err(Error::Host("a container stopped right after it started; see `docker logs`".into()))
+        Err(Error::Host(
+            "a container stopped right after it started; see `docker logs`".into(),
+        ))
     }
 }
 
@@ -103,5 +109,8 @@ pub async fn ensure_image(image: &str) -> Result<String> {
         return Ok(id.trim().to_owned());
     }
     docker(&["pull", "--quiet", image]).await?;
-    Ok(docker(&["image", "inspect", "--format", "{{.Id}}", image]).await?.trim().to_owned())
+    Ok(docker(&["image", "inspect", "--format", "{{.Id}}", image])
+        .await?
+        .trim()
+        .to_owned())
 }
