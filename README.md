@@ -144,8 +144,7 @@ subscribe fan-out (delivery latency, losses, duplicates, bytes on the wire per d
 one or several providers, and reconciling two sets, each for VINC (the node on a real-socket host in
 `distributed/src/node/vinc`), iroh (gossip and blobs) and rust-libp2p (gossipsub and a request-response protocol),
 configured as each documents and said so in the results; where a stack has no equivalent the table says "not
-available". Faults (a link cut, a site partitioned and healed, a node paused, killed and started again, a node told to
-sleep) run on top of any workload at their times. One machine emulates the whole network, and every table says so.
+available". One machine emulates the whole network, and every table says so.
 
 `just compare` and `just distributed` compile every stack for the machine that runs them (`-C target-cpu=native`) and
 say so in their results. A host gets the same from VINC by building its own binary that way: on an x86-64 CPU with
