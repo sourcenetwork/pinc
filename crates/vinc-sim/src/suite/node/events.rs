@@ -44,8 +44,45 @@ impl Core {
             .note_trace(format!("D {:.3} n{} {kind} n{peer}", self.now as f64 / 1e9, self.idx));
     }
 
+    /// On the first call in each 5 s of true time, one line of the decision trace: the path each session of the node
+    /// runs on (`udp` for a direct path, `relay` for one through a relay carrier), by peer.
+    fn snapshot(&mut self) {
+        let slot = self.now / 5_000_000_000;
+        if slot <= self.snap_slot {
+            return;
+        }
+        self.snap_slot = slot;
+        self.shared
+            .note_trace(format!("S {} n{} {}", slot * 5, self.idx, self.path_kinds().join(" ")));
+    }
+
+    /// The path each visible session of the node runs on, by peer, sorted: `udp` for a direct path, `relay` for one
+    /// through a relay carrier.
+    fn path_kinds(&self) -> Vec<String> {
+        let mut kinds: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| !s.hidden)
+            .map(|(sid, s)| {
+                let route = match self.endpoint().map(|e| e.query(Query::Stats(*sid))) {
+                    Some(Answer::Stats(st)) => st.route,
+                    _ => None,
+                };
+                let kind = route.map_or("-", |(_, r)| if vinc_core::is_relay_addr(&r) { "relay" } else { "udp" });
+                format!("n{}:{kind}", s.peer)
+            })
+            .collect();
+        kinds.sort();
+        kinds.dedup();
+        kinds
+    }
+
     /// Handle every event the node and the last commands produced. Returns whether there was any.
+    #[allow(clippy::too_many_lines, reason = "one match over every event of the node")]
     pub(super) fn service<L: Layers>(&mut self, layers: &mut L) -> bool {
+        if super::decision_trace() {
+            self.snapshot();
+        }
         let mut any = self.hub_members();
         while let Some(ev) = self.node.as_mut().and_then(|n| n.poll_event()) {
             any = true;
@@ -109,6 +146,19 @@ impl Core {
                     }
                 }
                 NEv::Connect(n) => {
+                    if super::decision_trace()
+                        && let vinc_connect::client::Notice::CarrierDown(i) = n
+                        && let Some(peer) = self.relay_ids.get(i).and_then(|id| self.shared.index_of(id))
+                    {
+                        self.decision("CarrierDown", peer);
+                        let line = format!(
+                            "C {:.3} n{} paths {}",
+                            self.now as f64 / 1e9,
+                            self.idx,
+                            self.path_kinds().join(" ")
+                        );
+                        self.shared.note_trace(line);
+                    }
                     if self.notices.len() == 40 {
                         self.notices.pop_front();
                     }

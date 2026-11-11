@@ -48,7 +48,10 @@ fn diag() {
         println!("SITE n{n} {} clock {:?}", w.nodes[*n].site, w.nodes[*n].clock);
     }
     let (r, ev) = run_watching(&w, driver, LayerSet::NODE, &nodes).unwrap();
-    for l in ev.iter().filter(|l| !decisions || l.starts_with("D ")) {
+    for l in ev
+        .iter()
+        .filter(|l| !decisions || l.starts_with("D ") || l.starts_with("C ") || l.starts_with("S "))
+    {
         println!("{l}");
     }
     if decisions {

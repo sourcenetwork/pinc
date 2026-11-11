@@ -341,6 +341,12 @@ impl Core {
             self.hub_record(stream, data);
             return;
         };
+        if super::decision_trace()
+            && self.shared.is_watched(self.idx)
+            && let Some(peer) = self.relay_ids.get(relay).and_then(|id| self.shared.index_of(id))
+        {
+            self.decision("CarrierRx", peer);
+        }
         let payloads = match self.wire.decoders.get_mut(relay).and_then(Option::as_mut) {
             Some(dec) => ws_payloads(dec, data),
             None => vec![data.to_vec()],

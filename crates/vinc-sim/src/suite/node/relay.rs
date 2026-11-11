@@ -295,6 +295,12 @@ impl Core {
     }
 
     fn relay_trace(&mut self, t: &Trace) {
+        if super::decision_trace()
+            && let Trace::CarrierClosed { node, .. } = t
+            && let Some(peer) = self.shared.index_of(node)
+        {
+            self.decision("CarrierGone", peer);
+        }
         if self.shared.is_watched(self.idx) && super::in_trace_window(self.now) {
             let ix = |id: &NodeId| self.shared.index_of(id).unwrap_or(usize::MAX);
             let line = match t {

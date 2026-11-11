@@ -168,6 +168,10 @@ pub(super) struct Core {
     pub(super) reply_from: Option<SocketAddr>,
     /// The last connectivity notices, for diagnosis.
     pub(super) notices: VecDeque<String>,
+    /// The ids of the relays the node was started with, by slot: what a carrier notice's number names.
+    pub(super) relay_ids: Vec<vinc_crypto::NodeId>,
+    /// The 5 s slot of true time the last path snapshot of the decision trace was taken in.
+    pub(super) snap_slot: u64,
     /// The due deadline the endpoint showed after the previous timer call, to tell a stuck timer from a due one.
     pub(super) stale_deadline: Option<u64>,
 }
@@ -250,6 +254,8 @@ impl Core {
             timer_check: false,
             reply_from: None,
             notices: VecDeque::new(),
+            relay_ids: Vec::new(),
+            snap_slot: 0,
             stale_deadline: None,
             shared,
         })
@@ -442,6 +448,7 @@ impl Core {
                 ..*r
             });
         }
+        self.relay_ids = relays.iter().flatten().map(|r| r.id).collect();
         let spec = self
             .shared
             .world
