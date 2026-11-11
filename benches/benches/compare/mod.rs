@@ -1,15 +1,18 @@
-//! The shared harness of the comparison benches (`compare_vinc`, `compare_iroh`, `compare_libp2p`).
+//! The shared harness of the comparison benches (`compare_vinc`, `compare_iroh`, `compare_libp2p`), also built into the
+//! distributed harness's node program, which runs the same scenarios between the nodes of an emulated or real network.
 //!
-//! One library is measured per binary, and a binary is either the server or the client of a scenario:
+//! One library is measured per process, and a process is either the server or the client of a scenario:
 //!
-//! - `<bin> server [--count-allocs]` binds on 127.0.0.1, prints `ADDR <text>` and serves until it is killed.
-//! - `<bin> client <addr> <scenario> [numbers]` runs one scenario against it and prints one JSON line per result.
+//! - `server [--count-allocs]` binds on `VINC_BENCH_BIND` (an IP address; 127.0.0.1 when unset), prints `ADDR <text>`
+//!   and serves until it is killed.
+//! - `client <addr> <scenario> [numbers]` runs one scenario against it and prints one JSON line per result.
 //!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
 //! with `k` (the first byte of a connection), `S` is a sink that answers the byte count, `E` echoes everything it reads
 //! until the end of the stream, and `T` answers the server's own resource counters (resident memory, CPU time,
 //! allocations) so the client can read what the server paid for a phase. The scenarios are written once against the
-//! [`Lib`] trait; each library file only maps its own endpoint, connection and stream types onto it.
+//! [`Lib`] trait; each library's module (`vinc`, `iroh`, `libp2p`) only maps its own endpoint, connection and stream
+//! types onto it.
 //!
 //! Invariants: nothing here is specific to one library; a number is printed only when it was measured in this run;
 //! a failure is counted and printed, never dropped.
@@ -19,12 +22,17 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
 use std::io;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::channel::mpsc;
+
+pub mod iroh;
+pub mod libp2p;
+pub mod vinc;
 
 /// The chunk every library moves bulk data in.
 pub const CHUNK: usize = 64 * 1024;
@@ -642,9 +650,26 @@ fn num<T: std::str::FromStr>(a: &[String], i: usize, default: T) -> T {
     a.get(i).and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
+/// The address every socket of this process binds: `VINC_BENCH_BIND`, loopback when it is not set.
+///
+/// # Errors
+/// The variable is set but is not an IP address.
+pub fn bind_ip() -> io::Result<IpAddr> {
+    match std::env::var("VINC_BENCH_BIND") {
+        Ok(v) => v
+            .parse()
+            .map_err(|_| io::Error::other(format!("VINC_BENCH_BIND is not an IP address: {v}"))),
+        Err(_) => Ok(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+    }
+}
+
 /// The entry point of every comparison binary.
 pub fn main<L: Lib>() {
-    let mut args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--bench").collect();
+    run_args::<L>(std::env::args().skip(1).filter(|a| a != "--bench").collect());
+}
+
+/// Run the server or the client named by `args` (`server ...` or `client <addr> <scenario> ...`) to the end.
+pub fn run_args<L: Lib>(mut args: Vec<String>) {
     if let Some(i) = args.iter().position(|a| a.starts_with("--variant=")) {
         let _ = VARIANT.set(args.remove(i).trim_start_matches("--variant=").to_owned());
     }

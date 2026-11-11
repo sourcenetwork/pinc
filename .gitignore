@@ -7,3 +7,4 @@
 states/
 *.ndjson
 *_TTrace_*
+/target-harness

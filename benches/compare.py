@@ -150,9 +150,11 @@ def netem_set(args):
     return r.returncode == 0, r.stderr.strip()
 
 
-def build(cargo):
-    """Build the benches once and return {bench name: executable}."""
-    cmd = [cargo, "bench", "-p", "vinc-benches", "--no-run", "--message-format=json"]
+def build(cargo, target_dir):
+    """Build the benches once and return {bench name: executable}. The benches are a workspace of their own."""
+    cmd = [cargo, "bench", "--manifest-path", os.path.join(ROOT, "benches", "Cargo.toml"), "--no-run", "--message-format=json"]
+    if target_dir:
+        cmd += ["--target-dir", target_dir]
     for b in ("compare_vinc", "compare_iroh", "compare_libp2p"):
         cmd += ["--bench", b]
     p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
@@ -283,6 +285,7 @@ def main():
     ap.add_argument("--reps", type=int, default=None, help="override the repetitions (a smoke run uses 1)")
     ap.add_argument("--scale", type=float, default=1.0, help="multiply every count and size (a smoke run uses 0.01)")
     ap.add_argument("--cargo", default="cargo")
+    ap.add_argument("--target-dir", default=None, help="cargo's build directory for the benches workspace")
     ap.add_argument("--max-timeout", type=int, default=None, help="cap every run's timeout in seconds (keeps a window short)")
     a = ap.parse_args()
     libs = [l for l in LIBS if l[0] in a.libs.split(",")]
@@ -295,7 +298,7 @@ def main():
     date = datetime.date.today().isoformat()
     out = a.out or os.path.join(ROOT, "benches", "results", f"{date}-{info['host']}")
     os.makedirs(out, exist_ok=True)
-    exes = build(a.cargo)
+    exes = build(a.cargo, a.target_dir)
     have_tc = sh("sudo -n tc -V").returncode == 0
     info["tc"] = sh("sudo -n tc -V").stdout.strip() if have_tc else "not available"
     info["profiles"] = {k: {"netem": v[0], "what": v[1]} for k, v in PROFILES.items() if k in profiles}

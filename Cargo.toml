@@ -1,7 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tests", "benches"]
-exclude = ["distributed"]
+members = ["crates/*", "tests"]
+# The benchmarks and the distributed harness are workspaces of their own: the libraries they measure VINC against, their
+# runtimes and their C code stay out of the library's graph and lockfile.
+exclude = ["benches", "distributed"]
 
 [workspace.package]
 version = "0.1.0"
@@ -53,14 +55,6 @@ rapidhash = "4.5.1"
 nuclei = "0.5.8"
 tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros"] }
 smol = "2.0.2"
-
-criterion = "0.7.0"
-
-# The comparison harness only (`vinc-benches`): the libraries VINC is measured against and the runtime they need.
-iroh = "1.4.1"
-libp2p = { version = "0.57.1", default-features = false }
-libp2p-stream = "0.5.0-alpha"
-futures = { version = "0.3.34", default-features = false }
 proptest = "1.12.0"
 
 [workspace.lints.rust]

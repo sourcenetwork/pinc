@@ -4,6 +4,13 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 tla_home := env_var_or_default("TLA_HOME", env_var("HOME") / ".local/share/tla")
 no_std_targets := "thumbv7em-none-eabihf wasm32-unknown-unknown"
+# The benchmarks and the distributed harness are workspaces of their own (the libraries they measure VINC against,
+# their runtime and their C code stay out of the library's graph). They build into one directory beside the library's,
+# so the library's build output, which `pure` scans, never holds the comparators' C code.
+target := env_var_or_default("CARGO_TARGET_DIR", justfile_directory() / "target")
+harness_target := target + "-harness"
+benches := "--manifest-path benches/Cargo.toml --target-dir " + harness_target
+dist := "--manifest-path distributed/Cargo.toml --target-dir " + harness_target
 
 # List the recipes.
 default:
@@ -71,7 +78,7 @@ _lean:
     (cd proofs/lean && lake --version)
 
 # Everything a change must pass before it is pushed.
-gate: checks test doctest proofs
+gate: checks test test-distributed doctest proofs
     @echo "gate: ok"
 
 # Every static check: dependency rules, format, lints, docs, no_std builds, pure Rust.
@@ -92,23 +99,32 @@ hygiene:
 # Format every crate.
 fmt:
     cargo fmt --all
+    cargo fmt --all --manifest-path benches/Cargo.toml
+    cargo fmt --all --manifest-path distributed/Cargo.toml
 
 # Fail if any file is not formatted.
 fmt-check:
     cargo fmt --all --check
+    cargo fmt --all --check --manifest-path benches/Cargo.toml
+    cargo fmt --all --check --manifest-path distributed/Cargo.toml
 
 # Lints on every target and feature, warnings as errors.
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy {{benches}} --all-targets --all-features -- -D warnings
+    cargo clippy {{dist}} --all-targets --all-features -- -D warnings
 
 # Build every target, benches and examples included: post-monomorphization checks (const assertions in generic
 # code) are evaluated only by a real build, not by clippy or by building the tests.
 build:
     cargo build --workspace --all-targets --all-features
+    cargo build {{benches}} --all-targets --all-features
+    cargo build {{dist}} --all-targets --all-features
 
 # Build the docs, warnings as errors.
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+    RUSTDOCFLAGS="-D warnings" cargo doc {{dist}} --no-deps
 
 # Build every no_std crate for a microcontroller and for wasm.
 no-std:
@@ -116,25 +132,35 @@ no-std:
         for t in {{no_std_targets}}; do cargo build -q -p "$c" --no-default-features --target "$t"; done; \
     done
 
-# Fail if any build script compiled C (run after a build; checks cargo's real target directory). `ring` and
-# `aws-lc-sys`, the TLS providers of the libraries the comparison harness measures, are the exceptions, and the
-# first check proves no crate other than that harness reaches either.
+# Fail if any build script of the library's workspace compiled C (run after a build; checks cargo's real target
+# directory). The comparators' C code builds in the benchmarks' own workspace and directory, never here.
 pure:
     dir=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])'); \
     [ -d "$dir" ] || { echo "pure: no build output in $dir; build first" >&2; exit 1; }; \
-    ! cargo tree --workspace --exclude vinc-benches --all-features -e normal,build,dev --prefix none | grep -E '^(ring|aws-lc-sys) ' \
-        || { echo "a crate other than the comparison benches depends on C code (listed above)" >&2; exit 1; }; \
-    ! find "$dir" -path '*/build/*' ! -path '*/build/ring-*' ! -path '*/build/aws-lc-sys-*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
+    ! find "$dir" -path '*/build/*' \( -name '*.o' -o -name '*.a' -o -name '*.so' -o -name '*.obj' \) | grep . \
         || { echo "a build script compiled C (listed above); VINC is pure Rust" >&2; exit 1; }
 
 # Measure VINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.
 # Run it on the benchmark host with nothing else running: VINC_JOB_EXCLUSIVE=1 vinc-job just compare. Needs sudo and tc.
 compare *args:
-    python3 benches/compare.py {{args}}
+    python3 benches/compare.py --target-dir {{harness_target}} {{args}}
 
 # Every test, hwenc included (the TPM tests need `swtpm`). Extra arguments go to nextest.
 test *args:
     cargo nextest run --workspace --all-features --profile ci {{args}}
+
+# The distributed harness's own tests (the orchestration logic; no root, no Docker).
+test-distributed *args:
+    cargo nextest run {{dist}} {{args}}
+
+# The distributed harness end to end: a two-node scenario on containers of this machine (needs Docker and sudo).
+e2e:
+    cargo nextest run {{dist}} --run-ignored only
+
+# The distributed harness: `just distributed run distributed/scenarios/wan.toml`, `just distributed clean`. A
+# measurement wants an otherwise idle machine. Results go to distributed/results/.
+distributed *args:
+    cargo run -q --release {{dist}} -- {{args}}
 
 # Every test without the hwenc feature, for machines without `swtpm`.
 test-default *args:
@@ -154,7 +180,7 @@ lean:
 
 # Micro benchmarks. Extra arguments go to criterion, e.g. `just bench -- verif`.
 bench *args:
-    cargo bench -p vinc-benches {{args}}
+    cargo bench {{benches}} {{args}}
 
 # Install the pinned TLA+ tools the proofs use (checksums verified) and a `tlc` wrapper in ~/.local/bin.
 tla-tools:

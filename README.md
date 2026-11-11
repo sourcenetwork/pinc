@@ -84,7 +84,8 @@ keepalives) awaits `Endpoint::run()`.
 | `crates/` | the library, one crate per component |
 | `proofs/` | TLA+ specifications (TLC) and Lean 4 proofs, both validated against traces of the real code |
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
-| `benches/` | micro benchmarks: per packet, allocations, copies |
+| `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with iroh and rust-libp2p; a workspace of its own |
+| `distributed/` | the distributed test harness: one binary that builds an emulated or real network, runs VINC, iroh and rust-libp2p nodes on it with faults, and measures them; a workspace of its own |
 | `docs/` | [PROOFS.md](docs/PROOFS.md): what is proven, how it is checked, the assumptions |
 | `scripts/` | the gate and the proof runner |
 
@@ -124,10 +125,20 @@ just test         # every test with cargo-nextest (the hwenc TPM tests need swtp
 just proofs       # Lean proofs, TLC model checking and trace validation
 just tla-tools    # install the pinned TLA+ tools the proofs use
 just bench        # micro benchmarks
+just compare      # VINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
+just distributed run distributed/scenarios/wan.toml   # a scenario on an emulated network (Docker and sudo)
+just distributed clean                                # remove whatever a run left
 ```
 
-Every dependency is declared once, in the root `Cargo.toml`, and every crate has the one workspace version. The
-gate also checks that no crate under `crates/` depends on an async runtime and that nothing in the build compiles C.
+The distributed harness gives every node its own container and network stack, wired by veth pairs, bridges and a
+router per site, with an MTU of 1500, `tc netem` shaping each direction of each link, and address translation where a
+scenario puts a node behind a home router. Scenarios are TOML files in `distributed/scenarios/`; each run writes its
+raw rows, its conditions (machine, CPU sets, versions) and a summary table to `distributed/results/`.
+
+Every dependency is declared once, in its workspace's root `Cargo.toml`, and every crate has the one version. The
+benchmarks are a workspace of their own, so iroh, rust-libp2p, their runtime and their C code never enter the
+library's graph. The gate also checks that no crate under `crates/` depends on an async runtime and that nothing in
+the library's build compiles C.
 
 ## Proofs
 
@@ -143,4 +154,3 @@ checked, the assumptions and what is still being closed.
 - `vinc-values`: five corrections found by its proofs are being made.
 - The scenario suite passes every gate on every seed it runs; the two scenarios that need the values and reconcile
   layers in one composition wait for them.
-- The comparisons with iroh and rust-libp2p, and the distributed tests, are not in the tree yet.
