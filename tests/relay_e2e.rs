@@ -17,6 +17,7 @@
     missing_docs
 )]
 
+mod relay_members;
 mod vinc_common;
 
 use std::cell::RefCell;
@@ -26,9 +27,12 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use vinc::relay::{Carriers, Clock, MemStore, Peer, Relay as RelayHost, Stats, Udp};
+use relay_members::{Member, on_big_stack};
+use vinc::relay::{Carriers, Clock, Limits, MemStore, Peer, Relay as RelayHost, Stats, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity, Relay};
-use vinc_common::{ECHO, eventually, lo, serve_conn, within};
+use vinc_common::{ECHO, SINK, eventually, lo, serve_conn, within};
+use vinc_connect::carrier::session::ALPN;
+use vinc_connect::relay::Quota;
 
 fn failed(_: io::Error) -> Error {
     Error::new(ErrorKind::Unreachable, "the socket failed")
@@ -144,10 +148,19 @@ struct Ports {
 }
 
 async fn bind_ports() -> Ports {
-    let listener = Rc::new(Handle::<TcpListener>::bind(lo()).await.unwrap());
-    let addr = listener.get_ref().local_addr().unwrap();
-    let sock = Rc::new(Handle::<UdpSocket>::bind(addr).await.unwrap());
-    Ports { listener, sock, addr }
+    // the UDP port of the same number may be taken by another test process: try another number
+    for _ in 0..50 {
+        let listener = Rc::new(Handle::<TcpListener>::bind(lo()).await.unwrap());
+        let addr = listener.get_ref().local_addr().unwrap();
+        if let Ok(sock) = Handle::<UdpSocket>::bind(addr).await {
+            return Ports {
+                listener,
+                sock: Rc::new(sock),
+                addr,
+            };
+        }
+    }
+    panic!("no port is free for both TCP and UDP");
 }
 
 /// A relay host run as a local task.
@@ -161,11 +174,17 @@ struct Host {
 
 impl Host {
     fn start(ports: &Ports, seed: u8, peers: &[Peer]) -> Self {
+        Self::start_limits(ports, seed, peers, Limits::default())
+    }
+
+    fn start_limits(ports: &Ports, seed: u8, peers: &[Peer], limits: Limits) -> Self {
         let t0 = Instant::now();
         let base = wall_ns();
         let l = Rc::clone(&ports.listener);
         let (s1, s2) = (Rc::clone(&ports.sock), Rc::clone(&ports.sock));
-        let mut builder = RelayHost::builder().identity(Identity::from_seed(&[seed; 32]).unwrap());
+        let mut builder = RelayHost::builder()
+            .identity(Identity::from_seed(&[seed; 32]).unwrap())
+            .limits(limits);
         for p in peers {
             builder = builder.peer(*p);
         }
@@ -242,14 +261,24 @@ impl Host {
 
 /// A facade endpoint with seed `seed` that knows only `relay`, over a new loopback UDP socket and the test carriers.
 macro_rules! endpoint {
-    ($seed:expr, $relay:expr) => {{
+    ($seed:expr, $relay:expr) => {
+        endpoint!($seed, $relay, false)
+    };
+    ($seed:expr, $relay:expr, $relayed_only:expr) => {{
+        let relay: Relay = $relay;
+        let only: bool = $relayed_only;
         let sock = Rc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
         let (r, s) = (Rc::clone(&sock), Rc::clone(&sock));
         let ep = vinc_common::builder()
             .seed(&[$seed; 32])
             .unwrap()
             .alpn(ECHO)
-            .relays([$relay])
+            .alpn(SINK)
+            .limits(vinc::Limits {
+                connections: 8,
+                ..vinc::Limits::default()
+            })
+            .relays([relay])
             .local_addr(sock.local_addr().unwrap())
             .carriers(
                 async |relay: &Relay, kind: CarrierKind| {
@@ -262,7 +291,14 @@ macro_rules! endpoint {
             )
             .build(
                 async move |buf: &mut [u8]| r.recv_from(buf).await,
-                async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+                // with `only`, every datagram that is not for the relay is dropped: no direct path can form
+                async move |pkt: &[u8], to: SocketAddr| {
+                    if only && Some(to) != relay.udp {
+                        Ok(pkt.len())
+                    } else {
+                        s.send_to(pkt, to).await
+                    }
+                },
                 async |at: Instant| nuclei::time::sleep_until_precise(at).await,
             )
             .unwrap();
@@ -368,4 +404,131 @@ async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_reach_each_other() {
         reach_and_move!(a, b, stops);
     })
     .await;
+}
+
+/// What one run of the indication measured.
+struct Numbers {
+    median_us: u128,
+    p99_us: u128,
+    mean_us: u128,
+    mib_s: f64,
+    stats: Stats,
+}
+
+/// A 64-byte round trip a thousand times and a 64 MiB transfer between two endpoints that know only a relay host
+/// carrying `idle` other carriers; `relayed_only` drops every datagram that is not for the relay, so no direct path forms.
+async fn measure(relayed_only: bool, idle: usize) -> Numbers {
+    let ports = bind_ports().await;
+    let limits = Limits {
+        carriers: idle + 8,
+        quota: Quota {
+            bytes: u64::MAX / 2,
+            ..Quota::DEFAULT
+        },
+        ..Limits::default()
+    };
+    let mut host = Host::start_limits(&ports, 0x7a, &[], limits);
+    let mut idles = Vec::new();
+    let relay = host.relay(CarrierKind::Tcp);
+    let a = endpoint!(1, relay, relayed_only);
+    let b = endpoint!(2, relay, relayed_only);
+    let numbers = within(600, async {
+        for n in 0..idle {
+            let mut seed = [0u8; 32];
+            seed[..4].copy_from_slice(&(u32::try_from(n).unwrap() + 1000).to_be_bytes());
+            idles.push(
+                Member::connect_prefixed(
+                    host.addr,
+                    host.id,
+                    seed,
+                    CarrierKind::Tcp,
+                    ALPN,
+                    &[marker(CarrierKind::Tcp)],
+                )
+                .await,
+            );
+        }
+        eventually(60, "both endpoints are up at the relay", || {
+            let up = (host.stats)().carriers;
+            async move { up >= idle + 2 }
+        })
+        .await;
+        let conn = a.connect(b.id(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+        let direct = |conn: &vinc::Connection<_>| {
+            let conn = conn.clone();
+            async move {
+                conn.stats()
+                    .await
+                    .is_ok_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r)))
+            }
+        };
+        if relayed_only {
+            tx.write_all(b"x").await.unwrap();
+            rx.read_exact(&mut [0u8; 1]).await.unwrap();
+            nuclei::time::sleep(Duration::from_secs(2)).await;
+            assert!(
+                !direct(&conn).await,
+                "a direct path formed although every datagram but the relay's is dropped"
+            );
+        } else {
+            eventually(60, "the connection moves to a direct path", || direct(&conn)).await;
+        }
+        let mut rtts = Vec::new();
+        let mut buf = [0u8; 64];
+        for _ in 0..1000 {
+            let t = Instant::now();
+            tx.write_all(&[7u8; 64]).await.unwrap();
+            rx.read_exact(&mut buf).await.unwrap();
+            rtts.push(t.elapsed().as_micros());
+        }
+        rtts.sort_unstable();
+        let sink = a.connect(b.id(), SINK).await.unwrap();
+        let (mut stx, mut srx) = sink.open_bi().await.unwrap();
+        let chunk = vec![9u8; 64 * 1024];
+        let t = Instant::now();
+        for _ in 0..1024 {
+            stx.write_all(&chunk).await.unwrap();
+        }
+        stx.finish().await.unwrap();
+        let mut reply = [0u8; 40];
+        srx.read_exact(&mut reply).await.unwrap();
+        assert_eq!(u64::from_le_bytes(reply[..8].try_into().unwrap()), 64 << 20);
+        let secs = t.elapsed().as_secs_f64();
+        Numbers {
+            median_us: rtts[rtts.len() / 2],
+            p99_us: rtts[rtts.len() * 99 / 100],
+            mean_us: rtts.iter().sum::<u128>() / rtts.len() as u128,
+            mib_s: 64.0 / secs,
+            stats: (host.stats)(),
+        }
+    })
+    .await;
+    a.close().await;
+    b.close().await;
+    drop(idles);
+    host.stop().await;
+    numbers
+}
+
+/// An indication of what the relay costs, printed and not asserted: run with `--run-ignored all --no-capture` on a
+/// machine that is not busy; the numbers of a loaded host are not to be quoted.
+#[test]
+#[ignore = "an indication on the machine it runs on, not a check"]
+fn what_the_relay_costs() {
+    on_big_stack(|| async {
+        for (label, relayed_only, idle) in [
+            ("direct", false, 0),
+            ("relayed", true, 0),
+            ("relayed, 250 idle carriers", true, 250),
+            ("relayed, 1000 idle carriers", true, 1000),
+        ] {
+            let n = measure(relayed_only, idle).await;
+            let polls = n.stats.stream_polls / n.stats.wakes.max(1);
+            eprintln!(
+                "BENCH {label}: 64 B round trip median {} us, p99 {} us, mean {} us; 64 MiB at {:.1} MiB/s; the relay woke {} times and looked at {polls} streams per wake",
+                n.median_us, n.p99_us, n.mean_us, n.mib_s, n.stats.wakes
+            );
+        }
+    });
 }
