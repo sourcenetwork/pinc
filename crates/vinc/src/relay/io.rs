@@ -64,8 +64,8 @@ where
     Wr: AsyncFn(&T, Vec<u8>, usize) -> (Result<usize>, Vec<u8>),
     Cl: AsyncFn(T),
 {
-    /// `accept` waits for the next stream; `read(&s, buf)` fills `buf` from its start, up to its length, and returns
-    /// the count (zero when the peer closed); `write(&s, buf, from)` writes `buf` from `from` to its end and returns
+    /// `accept` waits for the next stream; `read(&s, buf)` fills at most `buf.len()` bytes from the start of `buf`
+    /// and returns the count (zero when the peer closed; the length of `buf` does not change); `write(&s, buf, from)` writes `buf` from `from` to its end and returns
     /// the count it wrote; `close(s)` ends the stream. Read and write return the buffer.
     pub const fn new(accept: A, read: Rd, write: Wr, close: Cl) -> Self {
         Self {

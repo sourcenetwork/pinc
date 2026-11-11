@@ -8,11 +8,15 @@
 //!
 //! A carrier operation can outlive any one caller, so the buffers are owned and come back with the result:
 //!
-//! - `read(&S, Vec<u8>) -> (Result<usize>, Vec<u8>)`: fills the vector's spare room up to its capacity (clearing it
-//!   first) and returns the byte count; zero means the peer closed.
-//! - `write(&S, Vec<u8>, usize) -> (Result<usize>, Vec<u8>)`: writes the vector from the given offset and returns how
-//!   many bytes went out.
+//! - `read(&S, Vec<u8>) -> (Result<usize>, Vec<u8>)`: fills at most `buf.len()` bytes from the start of the vector and
+//!   returns the count; the vector's length is not changed and its contents past the count are unspecified; zero means
+//!   the peer closed. A host implements it with `read(&mut buf[..])` on any runtime.
+//! - `write(&S, Vec<u8>, usize) -> (Result<usize>, Vec<u8>)`: writes the vector from the given offset to its end and
+//!   returns how many bytes went out, which may be fewer; the caller writes the rest.
 //! - `close(S)`: ends the stream.
+//!
+//! On a [`CarrierKind::WsMessages`] stream a read returns at most one message and every write is one message; on the
+//! other kinds the bytes are a plain stream and the boundaries of reads and writes mean nothing.
 //!
 //! The same names and shapes serve the client side (`open(&Relay, CarrierKind)`) and the server side of the relay.
 
