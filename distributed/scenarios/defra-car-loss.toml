@@ -1,0 +1,42 @@
+name = "defra-car-loss"
+about = "One 64 MiB CAR file, as a DefraDB backup or a large document DAG moves, from one provider to one consumer through a hub on a lossy WAN without reordering: 50 ms round trip, 1% loss per packet each way, 100 Mbit/s, MTU 1500."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 2
+memory_mib = 2048
+
+[[sites]]
+name = "east"
+pos = [120, 160]
+
+[[sites]]
+name = "west"
+pos = [520, 160]
+
+[[nodes]]
+name = "hub"
+site = "east"
+role = "hub"
+
+[[nodes]]
+name = "provider"
+site = "east"
+
+[[nodes]]
+name = "consumer"
+site = "west"
+
+[[links]]
+a = "east"
+b = "west"
+shape = { delay_ms = 25, loss_pct = 1, rate_mbit = 100 }
+
+[workload]
+kind = "sync"
+providers = ["provider"]
+consumers = ["consumer"]
+sizes = [67108864]
+timeout_s = 600
+warmup_s = 8
