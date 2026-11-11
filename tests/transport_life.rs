@@ -296,6 +296,22 @@ fn an_unanswered_wake_is_reported_after_800_ms() {
 }
 
 #[test]
+fn a_link_return_does_not_wait_800_ms_for_an_answer() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(9, Params::new(10 * MS)));
+        let now = net.now;
+        net.link.route(PathId(1)).up = false;
+        net.a.with_env(now, |c, env| c.set_link_down(env, true));
+        net.run(now + 2 * SEC, |_| false);
+        let at = net.now;
+        net.a.with_env(at, |c, env| c.set_link_down(env, false));
+        assert!(!net.run(at + 5 * SEC, |n| n.a.saw(|r| *r == Rec::WakeUnanswered)));
+    });
+}
+
+#[test]
 fn a_link_outage_freezes_the_probe_backoff() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

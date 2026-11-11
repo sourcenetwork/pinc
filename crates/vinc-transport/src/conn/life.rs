@@ -126,7 +126,7 @@ conn_impl! {
         if self.phase != Phase::Connected || self.life.local_asleep.take().is_none() {
             return;
         }
-        self.resume(env.now);
+        self.resume(env.now, true);
     }
 
     /// Send one acknowledgement-eliciting PING on the active path with the next packet.
@@ -138,7 +138,7 @@ conn_impl! {
 
     /// The endpoint saw the network link go down (`true`) or come back (`false`). While it is down for up to 30 s the
     /// probe backoff does not grow and the connection does not give up; when it returns the connection resumes as
-    /// after [`wake`](Self::wake).
+    /// after [`wake`](Self::wake), except that it does not report an unanswered wake after 800 ms.
     pub fn set_link_down(&mut self, env: &mut Env<'_, P>, down: bool) {
         if self.phase == Phase::Handshaking && !down {
             self.hs.link_return(env.now);
@@ -150,17 +150,21 @@ conn_impl! {
         if down {
             self.life.link_down.get_or_insert(env.now);
         } else if self.life.link_down.take().is_some() {
-            self.resume(env.now);
+            self.resume(env.now, false);
         }
         self.suspend_probes();
     }
 
-    /// The common part of a local wake and a link return.
-    fn resume(&mut self, now: u64) {
+    /// The common part of a local wake and a link return. Only a wake from a suspension starts the wait for the peer's
+    /// answer (800 ms): after a link return or an address change the answer may legitimately take longer than that,
+    /// and a wait already running is left as it is.
+    fn resume(&mut self, now: u64, suspended: bool) {
         self.life.wake_tx = true;
         self.life.ping_owed = true;
         self.life.ack_now = self.rx.ack_pending();
-        self.life.wake_deadline = Some(now.saturating_add(WAKE_WAIT));
+        if suspended {
+            self.life.wake_deadline = Some(now.saturating_add(WAKE_WAIT));
+        }
         self.life.wake_until = now.saturating_add(WAKE_SPAN);
         self.life.qr_until = now.saturating_add(QUIET_RESUME);
         self.life.last_activity = now;
