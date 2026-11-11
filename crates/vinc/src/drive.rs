@@ -282,7 +282,7 @@ impl<H: Hosted> Shared<H> {
                             let from = canon(from);
                             if let Some(mut core) = self.lock() {
                                 for d in buf.v.get_mut(..n).unwrap_or_default().chunks_mut(segment.max(1)) {
-                                    core.ep.handle_datagram(now, self.local, from, d);
+                                    core.node.handle_datagram(now, self.local, from, d);
                                 }
                             }
                         }
@@ -321,7 +321,7 @@ impl<H: Hosted> Shared<H> {
                 let Some(mut core) = self.lock() else { return };
                 let moved = core.service(now);
                 let mut b = buf.take().unwrap_or_else(|| self.tx_buf());
-                if let Some(t) = core.ep.poll_transmit(now, &mut b.v) {
+                if let Some(t) = core.node.poll_transmit(now, &mut b.v) {
                     (t, b)
                 } else {
                     core.kick();

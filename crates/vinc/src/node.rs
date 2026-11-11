@@ -6,19 +6,33 @@
 //! written once, in [`ladder!`], and everything that depends on it (the enum, the list of capacities and the function
 //! that builds the endpoint of the smallest rung that holds `n` sessions) is generated from that one list.
 //!
+//! [`AnyEp`] implements the connectivity client's `Port` and the node's `Ep`, so the node runs over it unchanged.
+//!
 //! Invariants: every method forwards to the endpoint method of the same name and adds nothing.
 
 use std::net::SocketAddr;
+use std::ops::Range;
 
+use vinc_connect::client::Port;
 use vinc_core::{
-    Answer, Command, CommandError, EndpointConfig, Event, IfaceEvent, IfaceId, NodeStats, Query, Reply, SessionId,
-    Transmit,
+    Answer, Command, CommandError, EndpointConfig, Event, IfaceEvent, IfaceId, NodeStats, PeerInfo, Query,
+    REACH_BODY_MAX, Reply, SendState, SessionId, SessionStats, TraceRecord, Transmit,
 };
-use vinc_crypto::{Drbg, Software};
-use vinc_security::{LocalIdentity, PrekeyInfo};
-use vinc_transport::stream::NoSource;
+use vinc_crypto::{Drbg, NodeId, Software};
+use vinc_node::Ep as NodeEp;
+use vinc_security::{ConnId, LocalIdentity, PrekeyInfo};
+use vinc_transport::stream::{NoSource, StreamId};
 
 use crate::mem::Ep;
+
+/// The relays a node can name at once.
+pub(crate) const RELAYS: usize = 4;
+/// The peers the connectivity layer tracks.
+pub(crate) const PEERS: usize = 32;
+
+/// The node the facade runs: the endpoint of the right capacity under the connectivity client, membership and
+/// broadcast.
+pub(crate) type FacadeNode = vinc_node::Node<AnyEp, Software, (), RELAYS, PEERS>;
 
 /// Call `$m!` with the ladder of `variant capacity` pairs.
 macro_rules! ladder {
@@ -66,24 +80,6 @@ macro_rules! define {
             pub(crate) fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
                 match self { $(Self::$v(e) => e.add_iface(local),)+ }
             }
-            pub(crate) fn handle_datagram(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
-                match self { $(Self::$v(e) => e.handle_datagram(now, local, remote, buf),)+ }
-            }
-            pub(crate) fn handle_timeout(&mut self, now: u64) {
-                match self { $(Self::$v(e) => e.handle_timeout(now),)+ }
-            }
-            pub(crate) fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit> {
-                match self { $(Self::$v(e) => e.poll_transmit(now, out),)+ }
-            }
-            pub(crate) fn poll_timeout(&self) -> Option<u64> {
-                match self { $(Self::$v(e) => e.poll_timeout(),)+ }
-            }
-            pub(crate) fn poll_event(&mut self) -> Option<Event> {
-                match self { $(Self::$v(e) => e.poll_event(),)+ }
-            }
-            pub(crate) fn command(&mut self, now: u64, c: Command<'_, NoSource>) -> Result<Reply, CommandError> {
-                match self { $(Self::$v(e) => e.command(now, c),)+ }
-            }
             pub(crate) fn query(&self, q: Query) -> Answer<'_> {
                 match self { $(Self::$v(e) => e.query(q),)+ }
             }
@@ -96,11 +92,75 @@ macro_rules! define {
             pub(crate) fn set_prekey(&mut self, prekey: PrekeyInfo) {
                 match self { $(Self::$v(e) => e.set_prekey(prekey),)+ }
             }
-            pub(crate) fn register_alpn(&mut self, alpn: &[u8]) -> bool {
-                match self { $(Self::$v(e) => e.register_alpn(alpn),)+ }
-            }
             pub(crate) fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent) {
                 match self { $(Self::$v(e) => e.iface_event(now, id, ev),)+ }
+            }
+        }
+
+        impl Port for AnyEp {
+            type Src = NoSource;
+            fn command(&mut self, now: u64, cmd: Command<'_, NoSource>) -> Result<Reply, CommandError> {
+                match self { $(Self::$v(e) => Port::command(&mut **e, now, cmd),)+ }
+            }
+            fn stats(&self, session: SessionId) -> Option<SessionStats> {
+                match self { $(Self::$v(e) => Port::stats(&**e, session),)+ }
+            }
+            fn node(&self) -> Option<NodeStats> {
+                match self { $(Self::$v(e) => Port::node(&**e),)+ }
+            }
+            fn peer(&self, node: &NodeId) -> Option<PeerInfo> {
+                match self { $(Self::$v(e) => Port::peer(&**e, node),)+ }
+            }
+            fn reach_body(&self, session: SessionId, out: &mut [u8; REACH_BODY_MAX]) -> usize {
+                match self { $(Self::$v(e) => Port::reach_body(&**e, session, out),)+ }
+            }
+            fn by_conn_id(&self, cid: &ConnId) -> Option<SessionStats> {
+                match self { $(Self::$v(e) => Port::by_conn_id(&**e, cid),)+ }
+            }
+        }
+
+        impl NodeEp for AnyEp {
+            fn handle_datagram(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+                match self { $(Self::$v(e) => NodeEp::handle_datagram(&mut **e, now, local, remote, buf),)+ }
+            }
+            fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit> {
+                match self { $(Self::$v(e) => NodeEp::poll_transmit(&mut **e, now, out),)+ }
+            }
+            fn poll_event(&mut self) -> Option<Event> {
+                match self { $(Self::$v(e) => NodeEp::poll_event(&mut **e),)+ }
+            }
+            fn poll_timeout(&self) -> Option<u64> {
+                match self { $(Self::$v(e) => NodeEp::poll_timeout(&**e),)+ }
+            }
+            fn handle_timeout(&mut self, now: u64) {
+                match self { $(Self::$v(e) => NodeEp::handle_timeout(&mut **e, now),)+ }
+            }
+            fn register_alpn(&mut self, alpn: &[u8]) -> bool {
+                match self { $(Self::$v(e) => NodeEp::register_alpn(&mut **e, alpn),)+ }
+            }
+            fn read_chunk(&self, session: SessionId, stream: StreamId) -> Option<&[u8]> {
+                match self { $(Self::$v(e) => NodeEp::read_chunk(&**e, session, stream),)+ }
+            }
+            fn read_at(&self, session: SessionId, stream: StreamId, offset: u64) -> Option<&[u8]> {
+                match self { $(Self::$v(e) => NodeEp::read_at(&**e, session, stream, offset),)+ }
+            }
+            fn stored_after(&self, session: SessionId, stream: StreamId, from: u64) -> Option<Range<u64>> {
+                match self { $(Self::$v(e) => NodeEp::stored_after(&**e, session, stream, from),)+ }
+            }
+            fn send_state(&self, session: SessionId, stream: StreamId) -> Option<SendState> {
+                match self { $(Self::$v(e) => NodeEp::send_state(&**e, session, stream),)+ }
+            }
+            fn in_flight(&self, session: SessionId) -> Option<u64> {
+                match self { $(Self::$v(e) => NodeEp::in_flight(&**e, session),)+ }
+            }
+            fn read_extension(&mut self, out: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, CommandError> {
+                match self { $(Self::$v(e) => NodeEp::read_extension(&mut **e, out),)+ }
+            }
+            fn session_at(&self, n: usize) -> Option<SessionStats> {
+                match self { $(Self::$v(e) => NodeEp::session_at(&**e, n),)+ }
+            }
+            fn poll_trace(&mut self) -> Option<TraceRecord> {
+                match self { $(Self::$v(e) => NodeEp::poll_trace(&mut **e),)+ }
             }
         }
     };

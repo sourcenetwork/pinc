@@ -18,20 +18,25 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 use rapidhash::RapidHashMap;
-use vinc_core::{
-    Answer, Command, CommandError, Event, IfaceEvent, IfaceId, MAX_ALPNS, NodeStats, Query, Reply, Role, SessionId,
-    SessionStats, Value,
-};
+use vinc_core::{Answer, Command, CommandError, Event, IfaceId, Query, SessionId, Value};
 use vinc_crypto::NodeId;
 use vinc_keystore::KeyStore;
+use vinc_node::NodeEvent;
 use vinc_security::{Alpn, KeyRequest, KeyResponse};
-use vinc_transport::stream::{NoSource, RecvStatus, StreamError, StreamId, is_uni};
+use vinc_transport::stream::{NoSource, RecvStatus, StreamId, is_uni};
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::keys::{Identity, Prekeys, is_identity};
 use crate::mem::Limits;
-use crate::node::AnyEp;
+use crate::node::FacadeNode;
 use crate::standby::{Standby, Ticket};
+
+mod gate;
+mod ops;
+
+pub use gate::AllowAll;
+pub(crate) use gate::Gate;
+pub use gate::{Admit, DENIED, Direction, REVOKED_MAX};
 
 /// The close code sent for a session or stream refused because a queue was full.
 pub const BUSY: u64 = 0x42;
@@ -41,85 +46,6 @@ const SHUTDOWN_GRACE: u64 = 1_000_000_000;
 const BUDGET: usize = 4096;
 /// The most stopped streams of a session remembered for their writers, and discarded streams tracked.
 const TRACKED: usize = 128;
-
-/// Which way a connection was made, as the access hook is told.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    /// A peer dialed this node.
-    Inbound,
-    /// This node dialed the peer.
-    Outbound,
-    /// A broadcast layer asks to take the peer as a neighbour or to reach it.
-    Gossip,
-}
-
-/// The access hook: whether a peer may connect or be a neighbour. The endpoint asks it while it handles an event, in a
-/// short section on the thread that drives it, so it must not block and must not call back into the endpoint. It
-/// holds no endpoint state: [`Endpoint::admit`](crate::Endpoint::admit) asks the same hook at any time.
-pub trait Admit {
-    /// Whether `peer` may use `alpn` in `dir`.
-    fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool;
-}
-
-impl<T: Admit + ?Sized> Admit for Rc<T> {
-    fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
-        (**self).admit(peer, alpn, dir)
-    }
-}
-
-/// The close code of a session whose peer is not admitted.
-pub const DENIED: u64 = 3;
-/// The most peers that can be revoked at once.
-pub const REVOKED_MAX: usize = 4096;
-
-/// The host's access hook behind the bar of revoked peers. The handles and the core share it; the bar is borrowed only
-/// for a lookup or an update and never while the hook runs, so asking it never depends on what the endpoint is doing.
-pub(crate) struct Gate<A> {
-    hook: A,
-    revoked: core::cell::RefCell<rapidhash::RapidHashSet<NodeId>>,
-}
-
-impl<A: Admit> Gate<A> {
-    fn new(hook: A) -> Self {
-        Self {
-            hook,
-            revoked: core::cell::RefCell::new(rapidhash::RapidHashSet::default()),
-        }
-    }
-
-    /// Whether `peer` is barred.
-    pub(crate) fn is_revoked(&self, peer: &NodeId) -> bool {
-        self.revoked.try_borrow().is_ok_and(|r| r.contains(peer))
-    }
-
-    /// Whether `peer` may use `alpn` in `dir`: never while it is revoked, else what the host's hook says.
-    pub(crate) fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
-        !self.is_revoked(peer) && self.hook.admit(peer, alpn, dir)
-    }
-
-    /// Bar `peer`; false when the table is full and it is not in it.
-    fn bar(&self, peer: &NodeId) -> bool {
-        let Ok(mut r) = self.revoked.try_borrow_mut() else {
-            return false;
-        };
-        r.contains(peer) || (r.len() < REVOKED_MAX && r.insert(*peer))
-    }
-
-    /// Lift the bar on `peer`; whether it was barred.
-    pub(crate) fn lift(&self, peer: &NodeId) -> bool {
-        self.revoked.try_borrow_mut().is_ok_and(|mut r| r.remove(peer))
-    }
-}
-
-/// The access hook that admits everyone.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AllowAll;
-
-impl Admit for AllowAll {
-    fn admit(&self, _peer: &NodeId, _alpn: &[u8], _dir: Direction) -> bool {
-        true
-    }
-}
 
 /// What a core is built from.
 pub(crate) struct CoreConfig<S, A> {
@@ -215,7 +141,7 @@ struct Route {
 
 /// The core; see the module docs.
 pub(crate) struct Core<S, A> {
-    pub(crate) ep: AnyEp,
+    pub(crate) node: Box<FacadeNode>,
     identity: Identity<S>,
     prekeys: Prekeys,
     /// The access hook, shared with the endpoint's handles so they can ask it without borrowing the core.
@@ -227,7 +153,6 @@ pub(crate) struct Core<S, A> {
     /// The accept queues: the first takes every protocol no registered one claims.
     routes: Vec<Route>,
     book: RapidHashMap<NodeId, Vec<SocketAddr>>,
-    backlog: VecDeque<Event>,
     ifaces: Vec<IfaceId>,
     shutdown: Option<u64>,
     stopped: Option<Error>,
@@ -243,10 +168,10 @@ pub(crate) struct Core<S, A> {
 }
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
-    /// A core over `ep`, which already holds the prekey, the protocols and the interfaces `ifaces`.
-    pub(crate) fn new(ep: AnyEp, cfg: CoreConfig<S, A>, prekeys: Prekeys, ifaces: Vec<IfaceId>) -> Self {
+    /// A core over `node`, whose endpoint already holds the prekey, the protocols and the interfaces `ifaces`.
+    pub(crate) fn new(node: Box<FacadeNode>, cfg: CoreConfig<S, A>, prekeys: Prekeys, ifaces: Vec<IfaceId>) -> Self {
         Self {
-            ep,
+            node,
             identity: cfg.identity,
             prekeys,
             admit: Rc::new(Gate::new(cfg.admit)),
@@ -259,7 +184,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 queue: VecDeque::new(),
             }],
             book: RapidHashMap::default(),
-            backlog: VecDeque::new(),
             ifaces,
             shutdown: None,
             stopped: None,
@@ -280,7 +204,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// The next time the endpoint needs to run, in the clock the host feeds it; `None` if only an input can wake it.
     pub(crate) fn deadline(&self) -> Option<u64> {
-        match (self.ep.poll_timeout(), self.shutdown) {
+        match (self.node.poll_timeout(), self.shutdown) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
@@ -301,16 +225,17 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if self.prekeys.due(now)
             && let Ok(p) = self.prekeys.rotate(now)
         {
-            self.ep.set_prekey(p);
+            self.node.endpoint_mut().set_prekey(p);
         }
         let mut n = 0;
-        if self.ep.poll_timeout().is_some_and(|d| d <= now) {
-            self.ep.handle_timeout(now);
+        if self.node.poll_timeout().is_some_and(|d| d <= now) {
+            self.node.handle_timeout(now);
             n += 1;
         }
+        n += self.answer_signatures(now);
         n += self.drain(now);
         if n > 0 {
-            let dropped = self.ep.node_stats().events_dropped;
+            let dropped = self.node.endpoint().node_stats().events_dropped;
             if dropped != self.last_dropped {
                 // A dropped event may have been for any waiter: they all look again.
                 self.last_dropped = dropped;
@@ -330,10 +255,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.draining = true;
         let mut n = 0;
         while n < BUDGET {
-            let Some(ev) = self.backlog.pop_front().or_else(|| self.ep.poll_event()) else {
+            let Some(ev) = self.node.poll_event() else {
                 break;
             };
-            self.on_event(now, ev);
+            self.on_node_event(now, &ev);
             n += 1;
         }
         self.draining = false;
@@ -346,7 +271,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         &mut self,
         now: u64,
         make: impl Fn() -> Command<'c, NoSource>,
-    ) -> core::result::Result<Reply, CommandError> {
+    ) -> core::result::Result<Value, CommandError> {
         let mut r = self.cmd_once(now, make());
         if matches!(r, Err(CommandError::EventsPending)) && !self.draining {
             self.drain(now);
@@ -355,13 +280,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         r
     }
 
-    fn cmd_once(&mut self, now: u64, c: Command<'_, NoSource>) -> core::result::Result<Reply, CommandError> {
+    fn cmd_once(&mut self, now: u64, c: Command<'_, NoSource>) -> core::result::Result<Value, CommandError> {
         let quiet = matches!(c, Command::Consume { n: 0, .. } | Command::OpenStream { .. });
-        let r = self.ep.command(now, c);
-        if let Ok(rep) = &r {
+        let r = self.node.command(now, c);
+        if let Ok(v) = &r {
             // A write that took nothing queued nothing: sending again would only loop.
-            self.dirty |= !quiet && !matches!(rep.value, Value::Written(0));
-            self.backlog.extend(rep.events.iter().copied());
+            self.dirty |= !quiet && !matches!(v, Value::Written(0));
         }
         r
     }
@@ -428,6 +352,27 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     // ---- events ----
 
+    /// One event of the node. The endpoint's events are the sessions and streams of the handles; the node's own
+    /// (membership, broadcast, connectivity) are surfaced by the calls that use them.
+    fn on_node_event(&mut self, now: u64, ev: &NodeEvent) {
+        if let NodeEvent::Endpoint(ev) = ev {
+            self.on_event(now, *ev);
+        }
+    }
+
+    /// Answer the signatures the connectivity layer waits for (its record, a sleep notice, a beacon).
+    fn answer_signatures(&mut self, now: u64) -> usize {
+        let Some(KeyRequest::Sign { message, .. }) = self.node.sign_request() else {
+            return 0;
+        };
+        let message = message.to_vec();
+        match self.identity.sign(&message) {
+            Ok(sig) => self.node.sign_response(now, KeyResponse::Signature(&sig)),
+            Err(_) => self.node.sign_response(now, KeyResponse::Failed),
+        }
+        1
+    }
+
     fn on_event(&mut self, now: u64, ev: Event) {
         match ev {
             Event::Connected {
@@ -482,7 +427,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             Sign(vinc_security::KeyHandle, Vec<u8>),
             Decap(vinc_security::KeyHandle, Vec<u8>),
         }
-        let req = match self.ep.query(Query::KeyRequest(session)) {
+        let req = match self.node.endpoint().query(Query::KeyRequest(session)) {
             Answer::KeyRequest(KeyRequest::Sign { key, message, .. }) => Owned::Sign(key, message.to_vec()),
             Answer::KeyRequest(KeyRequest::Decapsulate { key, ct }) => Owned::Decap(key, ct.to_vec()),
             _ => return,
@@ -660,14 +605,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             return;
         }
         loop {
-            let n = match self.ep.query(Query::Read { session, stream: id }) {
+            let n = match self.node.endpoint().query(Query::Read { session, stream: id }) {
                 Answer::Chunk(c) => c.len(),
                 _ => 0,
             };
             let status = match self.cmd(now, || Command::Consume { session, stream: id, n }) {
-                Ok(Reply {
-                    value: Value::Recv(st), ..
-                }) => st,
+                Ok(Value::Recv(st)) => st,
                 Ok(_) => RecvStatus::Open,
                 Err(_) => RecvStatus::Finished,
             };
@@ -680,433 +623,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             if n == 0 {
                 return;
             }
-        }
-    }
-
-    // ---- operations the handles run ----
-
-    /// Start a dial to `node` for `alpn`; the answer comes through [`dial_poll`](Self::dial_poll).
-    pub(crate) fn connect_start(
-        &mut self,
-        now: u64,
-        node: NodeId,
-        alpn: &[u8],
-        addrs: &[SocketAddr],
-    ) -> Result<SessionId> {
-        if let Some(e) = self.stopped {
-            return Err(e);
-        }
-        if self.shutdown.is_some() {
-            return Err(Error::shutdown());
-        }
-        if self.sessions.len() >= self.limits.connections {
-            return Err(Error::new(ErrorKind::Busy, "the connection table is full"));
-        }
-        let mut all = addrs.to_vec();
-        for a in self.book.get(&node).into_iter().flatten() {
-            if !all.contains(a) {
-                all.push(*a);
-            }
-        }
-        let key = Alpn::new(alpn).ok_or_else(|| Error::config("the protocol name is empty or too long"))?;
-        match self.cmd(now, || Command::Connect {
-            node,
-            alpn,
-            addrs: &all,
-            role: Role::Other,
-        }) {
-            Ok(Reply {
-                value: Value::Session(session),
-                ..
-            }) => {
-                self.dials.insert(
-                    session,
-                    Dial {
-                        node,
-                        alpn: key,
-                        result: None,
-                    },
-                );
-                self.dial_by_peer.insert((node, key), session);
-                Ok(session)
-            }
-            Ok(_) => Err(Error::new(ErrorKind::Unreachable, "the dial did not start")),
-            Err(e) => Err(Error::command(e)),
-        }
-    }
-
-    /// The state of a dial: its session once up, or why not, else a wait.
-    pub(crate) fn dial_poll(&mut self, session: SessionId) -> Try<Result<Rc<SessInfo>>> {
-        match self.dials.get(&session).map(|d| d.result.is_some()) {
-            Some(true) => match self.dials.remove(&session).and_then(|d| d.result) {
-                Some(r) => Try::Done(r),
-                None => Try::Done(Err(Error::shutdown())),
-            },
-            Some(false) => Try::Wait(Wait::G(GKey::Dial(session))),
-            None => Try::Done(Err(self.stopped.unwrap_or_else(Error::shutdown))),
-        }
-    }
-
-    /// Give up a dial whose future was dropped: a session that came up meanwhile is closed.
-    pub(crate) fn dial_cancel(&mut self, now: u64, session: SessionId) {
-        if let Some(d) = self.dials.remove(&session) {
-            self.dial_by_peer.remove(&(d.node, d.alpn));
-            if let Some(Ok(info)) = d.result
-                && self.sessions.contains_key(&info.id)
-            {
-                let id = info.id;
-                let _ = self.cmd(now, || Command::Close { session: id, error: 0 });
-            }
-        }
-    }
-
-    /// The next session on accept queue `route`, or `None` once the endpoint stopped, else a wait.
-    pub(crate) fn accept_route(&mut self, route: usize) -> Try<Option<Rc<SessInfo>>> {
-        if let Some(i) = self.routes.get_mut(route).and_then(|r| r.queue.pop_front()) {
-            return Try::Done(Some(i));
-        }
-        if self.stopped.is_some() {
-            return Try::Done(None);
-        }
-        Try::Wait(Wait::G(GKey::Route(route)))
-    }
-
-    /// Send sessions for `alpn` to a queue of their own; returns its index.
-    pub(crate) fn listen(&mut self, alpn: &[u8]) -> Result<usize> {
-        if self.routes.iter().any(|r| r.alpn == alpn) || self.routes.len() > MAX_ALPNS {
-            return Err(Error::config("the protocol is already registered or too many are"));
-        }
-        if !self.ep.register_alpn(alpn) {
-            return Err(Error::config("the protocol name is empty, too long or one too many"));
-        }
-        self.routes.push(Route {
-            alpn: alpn.to_vec(),
-            queue: VecDeque::new(),
-        });
-        Ok(self.routes.len() - 1)
-    }
-
-    pub(crate) fn open(&mut self, now: u64, info: &SessInfo, bidi: bool) -> Try<Result<StreamId>> {
-        if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
-        }
-        let session = info.id;
-        match self.cmd(now, || Command::OpenStream { session, bidi }) {
-            Ok(Reply {
-                value: Value::Stream(id),
-                ..
-            }) => Try::Done(Ok(id)),
-            Ok(_) => Try::Done(Err(Error::new(ErrorKind::Busy, "the stream did not open"))),
-            // No stream credit or no room for the stream's window yet: wait for the connection's open-ready event.
-            Err(CommandError::Stream(StreamError::StreamLimit | StreamError::Exhausted)) => {
-                Try::Wait(Wait::S(session, SKey::Open))
-            }
-            Err(e) => Try::Done(Err(Error::command(e))),
-        }
-    }
-
-    pub(crate) fn accept_stream(&mut self, info: &SessInfo, bidi: bool) -> Try<Result<StreamId>> {
-        let Some(s) = self.sessions.get_mut(&info.id) else {
-            return Try::Done(Err(info.gone()));
-        };
-        let q = if bidi { &mut s.accept_bi } else { &mut s.accept_uni };
-        match q.pop_front() {
-            Some(id) => Try::Done(Ok(id)),
-            None => Try::Wait(Wait::S(info.id, if bidi { SKey::AcceptBi } else { SKey::AcceptUni })),
-        }
-    }
-
-    pub(crate) fn write(&mut self, now: u64, info: &SessInfo, stream: StreamId, data: &[u8]) -> Try<Result<usize>> {
-        if let Some(e) = self.send_failure(info.id, stream) {
-            return Try::Done(Err(e));
-        }
-        if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
-        }
-        let session = info.id;
-        match self.cmd(now, || Command::Write { session, stream, data }) {
-            Ok(Reply {
-                value: Value::Written(0),
-                ..
-            }) if !data.is_empty() => Try::Wait(Wait::S(session, SKey::Write(stream))),
-            Ok(Reply {
-                value: Value::Written(n),
-                ..
-            }) => Try::Done(Ok(n)),
-            Ok(_) => Try::Done(Ok(0)),
-            Err(CommandError::Stream(StreamError::Exhausted)) => Try::Wait(Wait::S(session, SKey::Write(stream))),
-            Err(e) => Try::Done(Err(Error::command(e))),
-        }
-    }
-
-    pub(crate) fn finish(&mut self, now: u64, info: &SessInfo, stream: StreamId) -> Result<()> {
-        if let Some(e) = self.send_failure(info.id, stream) {
-            return Err(e);
-        }
-        if !self.sessions.contains_key(&info.id) {
-            return Err(info.gone());
-        }
-        let session = info.id;
-        self.cmd(now, || Command::Finish { session, stream })
-            .map(|_| ())
-            .map_err(Error::command)
-    }
-
-    /// Abandon the send side of a stream, for `code`.
-    /// Set how urgent `stream` is among the streams of its session: lower numbers are sent first.
-    pub(crate) fn set_urgency(&mut self, now: u64, info: &SessInfo, stream: StreamId, urgency: u8) -> Result<()> {
-        if !self.sessions.contains_key(&info.id) {
-            return Err(info.gone());
-        }
-        let session = info.id;
-        self.cmd(now, || Command::SetUrgency {
-            session,
-            stream,
-            urgency,
-        })
-        .map(|_| ())
-        .map_err(Error::command)
-    }
-
-    pub(crate) fn reset(&mut self, now: u64, info: &SessInfo, stream: StreamId, code: u64) {
-        let session = info.id;
-        let _ = self.cmd(now, || Command::Reset {
-            session,
-            stream,
-            error: code,
-        });
-        self.send_failed(
-            session,
-            stream,
-            Error::new(ErrorKind::Stopped(code), "the stream was reset"),
-        );
-        self.wake_s(session, SKey::Write(stream));
-    }
-
-    /// The send half of a stream is dropped: end it after the bytes written, and forget its failure.
-    pub(crate) fn drop_send(&mut self, now: u64, info: &SessInfo, stream: StreamId, finished: bool) {
-        let session = info.id;
-        if !finished && self.send_failure(session, stream).is_none() {
-            let _ = self.cmd(now, || Command::Finish { session, stream });
-        }
-        if let Some(s) = self.sessions.get_mut(&session) {
-            s.send_fail.retain(|(i, _)| *i != stream);
-        }
-    }
-
-    /// Read what a stream has into `buf`: how many bytes, and how the stream ended if this read saw its end.
-    pub(crate) fn read(
-        &mut self,
-        now: u64,
-        info: &SessInfo,
-        stream: StreamId,
-        buf: &mut [u8],
-    ) -> Try<Result<(usize, Option<Result<()>>)>> {
-        if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
-        }
-        if buf.is_empty() {
-            return Try::Done(Ok((0, None)));
-        }
-        let session = info.id;
-        let n = match self.ep.query(Query::Read { session, stream }) {
-            Answer::Chunk(c) => {
-                let n = c.len().min(buf.len());
-                if let (Some(d), Some(s)) = (buf.get_mut(..n), c.get(..n)) {
-                    d.copy_from_slice(s);
-                }
-                n
-            }
-            _ => 0,
-        };
-        let status = match self.cmd(now, || Command::Consume { session, stream, n }) {
-            Ok(Reply {
-                value: Value::Recv(st), ..
-            }) => st,
-            Ok(_) => RecvStatus::Open,
-            Err(e) => return Try::Done(Err(Error::command(e))),
-        };
-        let end = match status {
-            RecvStatus::Open => None,
-            RecvStatus::Finished => Some(Ok(())),
-            RecvStatus::Reset(e) => Some(Err(Error::new(ErrorKind::Reset(e), "the peer reset the stream"))),
-        };
-        if n > 0 {
-            self.wake_s(session, SKey::Open);
-            Try::Done(Ok((n, end)))
-        } else if end.is_some() {
-            Try::Done(Ok((0, end)))
-        } else {
-            Try::Wait(Wait::S(session, SKey::Read(stream)))
-        }
-    }
-
-    /// Stop reading a stream: tell the peer, and throw away what still arrives.
-    pub(crate) fn stop_recv(&mut self, now: u64, info: &SessInfo, stream: StreamId, code: u64) {
-        let session = info.id;
-        let _ = self.cmd(now, || Command::StopSending {
-            session,
-            stream,
-            error: code,
-        });
-        self.drop_recv(now, info, stream);
-    }
-
-    /// The receive half of a stream is dropped before its end: throw away what arrives until the stream ends.
-    pub(crate) fn drop_recv(&mut self, now: u64, info: &SessInfo, stream: StreamId) {
-        if let Some(s) = self.sessions.get_mut(&info.id)
-            && s.discard.len() < TRACKED
-            && !s.discard.contains(&stream)
-        {
-            s.discard.push(stream);
-        }
-        self.discard_if_dropped(now, info.id, stream);
-    }
-
-    pub(crate) fn send_datagram(&mut self, now: u64, info: &SessInfo, data: &[u8]) -> Result<()> {
-        if !self.sessions.contains_key(&info.id) {
-            return Err(info.gone());
-        }
-        let session = info.id;
-        self.cmd(now, || Command::SendDatagram { session, data })
-            .map(|_| ())
-            .map_err(Error::command)
-    }
-
-    pub(crate) fn read_datagram(&mut self, info: &SessInfo, out: &mut [u8]) -> Try<Result<usize>> {
-        if !self.sessions.contains_key(&info.id) {
-            return Try::Done(Err(info.gone()));
-        }
-        match self.ep.read_datagram(info.id, out) {
-            Ok(Some(n)) => Try::Done(Ok(n)),
-            Ok(None) => Try::Wait(Wait::S(info.id, SKey::Datagram)),
-            Err(e) => Try::Done(Err(Error::command(e))),
-        }
-    }
-
-    pub(crate) fn stats(&self, info: &SessInfo) -> Result<SessionStats> {
-        match self.ep.query(Query::Stats(info.id)) {
-            Answer::Stats(s) if self.sessions.contains_key(&info.id) => Ok(s),
-            _ => Err(info.gone()),
-        }
-    }
-
-    pub(crate) fn close_session(&mut self, now: u64, session: SessionId, code: u64) {
-        if self.sessions.contains_key(&session) {
-            let _ = self.cmd(now, || Command::Close { session, error: code });
-        }
-    }
-
-    /// Whether the session is gone (its reason), else a wait.
-    pub(crate) fn closed(&self, info: &SessInfo) -> Try<Error> {
-        if self.sessions.contains_key(&info.id) {
-            Try::Wait(Wait::S(info.id, SKey::Closed))
-        } else {
-            Try::Done(info.gone())
-        }
-    }
-
-    /// The access hook, for the handles to ask without the core.
-    pub(crate) fn hook(&self) -> Rc<Gate<A>> {
-        Rc::clone(&self.admit)
-    }
-
-    pub(crate) fn peers(&self) -> Vec<NodeId> {
-        let mut v: Vec<NodeId> = self.sessions.values().map(|s| s.info.node).collect();
-        v.sort_by_key(|n| n.bytes);
-        v.dedup();
-        v
-    }
-
-    pub(crate) fn close_peer(&mut self, now: u64, node: &NodeId) {
-        self.close_sessions(now, node, 0);
-    }
-
-    fn close_sessions(&mut self, now: u64, node: &NodeId, error: u64) {
-        let all: Vec<SessionId> = self
-            .sessions
-            .iter()
-            .filter(|(_, r)| r.info.node == *node)
-            .map(|(s, _)| *s)
-            .collect();
-        for session in all {
-            let _ = self.cmd(now, || Command::Close { session, error });
-        }
-    }
-
-    /// Bar `node` and end every session with it, with the code [`DENIED`].
-    pub(crate) fn revoke(&mut self, now: u64, node: &NodeId) -> Result<()> {
-        if !self.admit.bar(node) {
-            return Err(Error::new(ErrorKind::Busy, "too many peers are revoked"));
-        }
-        self.close_sessions(now, node, DENIED);
-        Ok(())
-    }
-
-    pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) {
-        let v = self.book.entry(node).or_default();
-        if !v.contains(&addr) && v.len() < 8 {
-            v.push(addr);
-        }
-    }
-
-    pub(crate) fn network_change(&mut self, now: u64) {
-        for id in self.ifaces.clone() {
-            self.ep.iface_event(now, id, IfaceEvent::Down);
-            self.ep.iface_event(now, id, IfaceEvent::Up);
-        }
-    }
-
-    pub(crate) fn suspend(&mut self, now: u64) {
-        let _ = self.cmd(now, || Command::Suspend);
-    }
-
-    pub(crate) fn resume(&mut self, now: u64, moved: bool) {
-        let _ = self.cmd(now, || Command::Resume { moved });
-    }
-
-    pub(crate) fn node_stats(&self) -> NodeStats {
-        self.ep.node_stats()
-    }
-
-    pub(crate) fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
-        if let Some(e) = self.stopped {
-            return Err(e);
-        }
-        self.identity.sign(data)
-    }
-
-    /// Begin the shutdown: every session closes, and the endpoint stops when they are gone or the grace ran out.
-    pub(crate) fn begin_shutdown(&mut self, now: u64) {
-        if self.shutdown.is_none() && self.stopped.is_none() {
-            self.shutdown = Some(now.saturating_add(SHUTDOWN_GRACE));
-            let _ = self.cmd(now, || Command::Shutdown);
-        }
-    }
-
-    fn check_finished(&mut self, now: u64) {
-        let Some(at) = self.shutdown else { return };
-        if self.ep.node_stats().sessions > 0 && now < at {
-            return;
-        }
-        self.stop(Error::shutdown());
-    }
-
-    /// Whether the endpoint stopped, else a wait for the shutdown.
-    pub(crate) fn shutdown_poll(&self) -> Try<()> {
-        if self.stopped.is_some() {
-            Try::Done(())
-        } else {
-            Try::Wait(Wait::G(GKey::Shutdown))
-        }
-    }
-
-    /// Whether the endpoint stopped, else a wait that only a stop ends.
-    pub(crate) fn idle_poll(&self) -> Try<()> {
-        if self.stopped.is_some() {
-            Try::Done(())
-        } else {
-            Try::Wait(Wait::G(GKey::Idle))
         }
     }
 }

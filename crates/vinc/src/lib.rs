@@ -60,6 +60,7 @@ pub struct ReadmeDoctests;
 
 mod addr;
 pub mod carrier;
+mod clock;
 mod conn;
 mod drive;
 mod endpoint;

@@ -30,6 +30,9 @@ pub struct Identity<S = SoftwareStore> {
     handle: KeyHandle,
     node: NodeId,
     public: Rc<[u8]>,
+    /// The seed of the software key the broadcast layer signs with, when the identity was made from a seed this crate
+    /// holds; given up once, by [`take_signer`](Self::take_signer). A key pair is far larger than a seed.
+    seed: Option<[u8; 32]>,
 }
 
 impl<S> core::fmt::Debug for Identity<S> {
@@ -54,7 +57,9 @@ impl Identity {
         let kp = Keypair::from_seed(IdentityAlg::Ed25519, seed)
             .map_err(|_| Error::config("the identity seed is not valid"))?;
         let handle = store.insert(kp);
-        Self::from_store(store, handle)
+        let mut id = Self::from_store(store, handle)?;
+        id.seed = Some(*seed);
+        Ok(id)
     }
 
     /// A new Ed25519 identity from operating system randomness, held in a new in-memory store.
@@ -62,9 +67,14 @@ impl Identity {
     /// # Errors
     /// [`ErrorKind::Config`] if the operating system has no randomness or the store cannot start.
     pub fn generate() -> Result<Self> {
-        let mut store = SoftwareStore::new().map_err(key_error)?;
-        let handle = store.generate(IdentityAlg::Ed25519).map_err(key_error)?;
-        Self::from_store(store, handle)
+        let mut seed = [0u8; 32];
+        SoftwareStore::new()
+            .map_err(key_error)?
+            .random(&mut seed)
+            .map_err(key_error)?;
+        let id = Self::from_seed(&seed);
+        seed.fill(0);
+        id
     }
 }
 
@@ -81,7 +91,17 @@ impl<S: KeyStore> Identity<S> {
             handle,
             node,
             public: public.into(),
+            seed: None,
         })
+    }
+
+    /// The software key the node's broadcast layer signs with, given up once: `None` for an identity that lives in a
+    /// key store the crate cannot take a key out of, or after the key was taken.
+    pub(crate) fn take_signer(&mut self) -> Option<Box<Keypair>> {
+        let mut seed = self.seed.take()?;
+        let key = Keypair::from_seed(IdentityAlg::Ed25519, &seed).ok().map(Box::new);
+        seed.fill(0);
+        key
     }
 
     /// The node id.

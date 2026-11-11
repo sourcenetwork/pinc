@@ -537,8 +537,9 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// The node sleeps: established sessions tell their peers.
     pub async fn suspend(&self) {
         let sh = &self.0.shared;
+        let wall = crate::clock::wall_ms();
         sh.run(|core, now| {
-            core.suspend(now);
+            core.suspend(now, wall);
             Try::Done(())
         })
         .await;

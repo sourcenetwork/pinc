@@ -9,13 +9,17 @@
 //! Invariants: the endpoint is built once; its connection id table holds ten entries per session; everything it uses is
 //! freed when it is dropped.
 
-use vinc_crypto::Drbg;
+use vinc_broadcast::Limits as BroadcastLimits;
+use vinc_connect::client::Config as ConnectConfig;
+use vinc_crypto::{Drbg, Software};
 use vinc_keystore::KeyStore;
+use vinc_node::{Config as NodeConfig, Ep as _, HUB_ALPN, Node};
 
+use crate::clock::wall_ms;
 use crate::engine::{Admit, Core, CoreConfig};
 use crate::error::{Error, Result};
 use crate::keys::Prekeys;
-use crate::node::AnyEp;
+use crate::node::{AnyEp, PEERS, RELAYS};
 
 /// Build a core at time `now`.
 ///
@@ -27,6 +31,10 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     cfg.identity.random(&mut rnd)?;
     let mut seed = [0u8; 8];
     cfg.identity.random(&mut seed)?;
+    let mut node_rnd = [0u8; 32];
+    cfg.identity.random(&mut node_rnd)?;
+    let mut node_seed = [0u8; 8];
+    cfg.identity.random(&mut node_seed)?;
     let mut ecfg = vinc_core::EndpointConfig::new(u64::from_le_bytes(seed));
     ecfg.conn.max_gso = cfg.max_gso.max(1);
     ecfg.conn.interface_mtu = cfg.mtu;
@@ -43,14 +51,59 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     )
     .ok_or_else(|| Error::config("a limit is out of range"))?;
     let mut prekeys = Prekeys::new()?;
-    ep.set_prekey(prekeys.rotate(now)?);
+    let prekey = prekeys.rotate(now)?;
+    ep.set_prekey(prekey.clone());
     for a in &cfg.alpns {
         if !ep.register_alpn(a) {
             return Err(Error::config("a protocol name is empty, too long or one too many"));
         }
     }
     let ifaces = cfg.locals.iter().filter_map(|l| ep.add_iface(*l)).collect();
-    Ok(Core::new(ep, cfg, prekeys, ifaces))
+    let key = cfg.identity.take_signer().ok_or_else(|| {
+        Error::config("the identity key is held where the broadcast layer cannot sign with it; use a seed or a generated identity")
+    })?;
+    let me = cfg.identity.node_id();
+    let local = *cfg
+        .locals
+        .first()
+        .ok_or_else(|| Error::config("the endpoint has no local address"))?;
+    let node_cfg = NodeConfig {
+        connect: ConnectConfig {
+            me,
+            identity: cfg.identity.local()?,
+            relays: [None; RELAYS],
+            phone: false,
+            restarted: false,
+            start: now,
+            v6: false,
+            keep_learn: false,
+        },
+        is_hub: false,
+        version: 1,
+        alpn: HUB_ALPN,
+        limits: BroadcastLimits::default(),
+        wall_ms: wall_ms(),
+        local,
+        trace: false,
+    };
+    let mut node = Node::<AnyEp, Software, (), RELAYS, PEERS>::new(
+        &node_cfg,
+        ep,
+        prekey,
+        Software,
+        Drbg::new(&node_rnd),
+        key,
+        (),
+        u64::from_le_bytes(node_seed),
+    )
+    .map_err(|e| match e {
+        vinc_node::StartError::Alpn => Error::config("a protocol name is empty, too long or one too many"),
+        vinc_node::StartError::Membership(_) => Error::config("the membership layer could not start"),
+        vinc_node::StartError::Broadcast(_) => Error::config("the broadcast layer could not start"),
+    })?;
+    // The endpoint has no multicast group to announce itself on, and a listener for others' beacons is not wired.
+    node.set_local_discovery(false);
+    Ok(Core::new(Box::new(node), cfg, prekeys, ifaces))
 }
 
 #[cfg(test)]
