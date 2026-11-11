@@ -57,6 +57,7 @@
 pub struct ReadmeDoctests;
 
 mod addr;
+pub mod carrier;
 mod conn;
 mod drive;
 mod endpoint;
@@ -72,6 +73,7 @@ mod start;
 pub mod stream;
 
 pub use addr::{NodeAddr, node_from_str, node_to_string};
+pub use carrier::CarrierKind;
 pub use conn::{ConnStats, Connection, Incoming};
 pub use endpoint::{
     Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, NoDiscovery, Vinc,
