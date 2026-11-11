@@ -27,7 +27,7 @@ use vinc_broadcast::{Config as BcConfig, Refused, StartError as BcStartError, To
 use vinc_connect::client::{Connectivity, Io as CarrierIo};
 use vinc_connect::record::MAX_ADDRS;
 use vinc_connect::ticket::Ticket;
-use vinc_core::{Command, CommandError, Role, SessionId, Transmit, Value, is_relay_addr};
+use vinc_core::{Command, CommandError, IfaceEvent, IfaceId, Role, SessionId, Transmit, Value, is_relay_addr};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Provider};
 use vinc_membership::session::Carrier;
 use vinc_membership::{Config as MemConfig, Membership, NodeId, StartError as MemStartError, TableFull};
@@ -539,6 +539,11 @@ where
         &self.io.ep
     }
 
+    /// End the node and give the endpoint back, so a host that recycles its connection memory can reuse it.
+    pub fn into_endpoint(self) -> E {
+        self.io.ep
+    }
+
     /// The connectivity client, for queries.
     pub fn connectivity(&self) -> &Connectivity<P, R, PEERS> {
         &self.conn
@@ -679,6 +684,19 @@ where
     }
 
     // ---------------------------------------------------------------- the connectivity client
+
+    /// Add an interface to the endpoint; `None` when its table is full. A host calls it for an interface that appears
+    /// after the node started, and tells the node about the new address with [`Node::set_local`].
+    pub fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
+        self.io.ep.add_iface(local)
+    }
+
+    /// An interface of the endpoint came up, went down or changed its address.
+    pub fn iface_event(&mut self, now: Nanos, id: IfaceId, ev: IfaceEvent) {
+        self.begin(now);
+        self.io.ep.iface_event(now, id, ev);
+        self.settle(now);
+    }
 
     /// Set the node's own addresses.
     pub fn set_local(&mut self, addrs: &[SocketAddr]) {

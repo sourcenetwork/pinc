@@ -18,8 +18,8 @@ use core::ops::Range;
 use vinc_broadcast::Lane;
 use vinc_connect::client::Port;
 use vinc_core::{
-    Command, CommandError, Event, Events, NodeStats, Reply, SendState, SessionId, SessionStats, TraceRecord, Transmit,
-    Value,
+    Command, CommandError, Event, Events, IfaceEvent, IfaceId, NodeStats, Reply, SendState, SessionId, SessionStats,
+    TraceRecord, Transmit, Value,
 };
 use vinc_crypto::IdentityAlg;
 use vinc_transport::stream::{NoSource, StreamId};
@@ -106,6 +106,10 @@ impl Ep for Stub {
     fn poll_trace(&mut self) -> Option<TraceRecord> {
         None
     }
+    fn add_iface(&mut self, _local: SocketAddr) -> Option<IfaceId> {
+        None
+    }
+    fn iface_event(&mut self, _now: u64, _id: IfaceId, _ev: IfaceEvent) {}
 }
 
 const PEER: [u8; 32] = [7; 32];

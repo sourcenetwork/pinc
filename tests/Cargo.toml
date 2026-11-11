@@ -803,6 +803,10 @@ name = "node_view"
 path = "node_view.rs"
 
 [[test]]
+name = "node_iface"
+path = "node_iface.rs"
+
+[[test]]
 name = "node_churn"
 path = "node_churn.rs"
 

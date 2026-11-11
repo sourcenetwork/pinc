@@ -10,7 +10,8 @@ use core::ops::Range;
 use vinc_connect::client::Port;
 
 use vinc_core::{
-    Answer, CommandError, Endpoint, Event, Query, SendState, SessionId, SessionStats, TraceRecord, Transmit,
+    Answer, CommandError, Endpoint, Event, IfaceEvent, IfaceId, Query, SendState, SessionId, SessionStats, TraceRecord,
+    Transmit,
 };
 use vinc_crypto::Provider;
 use vinc_transport::stream::{StreamId, StreamSource};
@@ -48,6 +49,10 @@ pub trait Ep: Port {
     fn session_at(&self, n: usize) -> Option<SessionStats>;
     /// The next trace record of the endpoint (always `None` without the endpoint's `trace` feature).
     fn poll_trace(&mut self) -> Option<TraceRecord>;
+    /// Add an interface; `None` when the table is full.
+    fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId>;
+    /// An interface came up, went down or changed its address.
+    fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent);
 }
 
 impl<
@@ -143,5 +148,13 @@ where
 
     fn poll_trace(&mut self) -> Option<TraceRecord> {
         Endpoint::poll_trace(self)
+    }
+
+    fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
+        Endpoint::add_iface(self, local)
+    }
+
+    fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent) {
+        Endpoint::iface_event(self, now, id, ev);
     }
 }
