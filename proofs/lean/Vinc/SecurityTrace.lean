@@ -135,11 +135,17 @@ def replayPad (j : J) : Except String Unit := do
     check ((← natF j "pk") == a.publicKeyLen && (← natF j "sig") == a.signatureLen)
       s!"pad key or signature length of {repr a}: model {a.publicKeyLen}/{a.signatureLen}"
     check ((← natF j "reply") == Padding.replyLen a) s!"pad reply_len of {repr a}: model {Padding.replyLen a}"
+    check ((← natF j "dgs") == Padding.replyDatagrams (Padding.replyLen a))
+      s!"pad reply_datagrams of {repr a}: model {Padding.replyDatagrams (Padding.replyLen a)}"
     check ((← natF j "min") == Padding.minInitialLen form a)
       s!"pad min_initial_len {repr form} {repr a}: model {Padding.minInitialLen form a}, code {← natF j "min"}"
   | "const" =>
     check ((← natF j "full") == Padding.fullInitialMin && (← natF j "short") == Padding.shortInitialMin &&
-        (← natF j "dg") == Padding.minDatagram) "pad: the Initial floors or MIN_DATAGRAM differ from the model"
+        (← natF j "dg") == Padding.minDatagram && (← natF j "frag") == Padding.fragmentHeader &&
+        (← natF j "whole") == Padding.wholeReplyMax && (← natF j "splitcid") == Padding.splitCidMax)
+      "pad: the Initial floors, MIN_DATAGRAM, FRAGMENT_HEADER, WHOLE_REPLY_MAX or SPLIT_CID_MAX differ from the model"
+    check ((← natF j "txcid") ≤ Padding.splitCidMax && (← natF j "epcid") ≤ Padding.splitCidMax)
+      "pad: a default connection id is longer than SPLIT_CID_MAX"
     check ((← natF j "idsig") == Padding.maxIdSigLen && (← natF j "sealed") == Padding.maxSealedLen &&
         (← natF j "msg") == Padding.maxMessageLen)
       s!"pad: MAX_ID_SIG_LEN/MAX_SEALED_LEN/MAX_MESSAGE_LEN differ from the model ({Padding.maxIdSigLen}/{Padding.maxSealedLen}/{Padding.maxMessageLen})"

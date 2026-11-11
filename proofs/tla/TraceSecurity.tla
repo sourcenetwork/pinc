@@ -77,9 +77,12 @@ PadOK(ev) ==
     THEN /\ ev.pk = P!Pk[ev.alg]
          /\ ev.sig = P!Sig[ev.alg]
          /\ ev.reply = P!ReplyLen(ev.alg)
+         /\ ev.dgs = P!Datagrams(ev.reply)
          /\ ev.min = P!MinInitial(ev.form, ev.alg)
     ELSE /\ ev.op = "const"
          /\ ev.full = P!FullMin /\ ev.short = P!ShortMin /\ ev.dg = P!MinDatagram
+         /\ ev.frag = P!FragHeader /\ ev.whole = P!WholeReplyMax /\ ev.splitcid = P!SplitCidMax
+         /\ ev.txcid <= P!SplitCidMax /\ ev.epcid <= P!SplitCidMax
          /\ ev.idsig = P!MaxIdSig /\ ev.sealed = P!MaxSealed /\ ev.msg = P!MaxMessage
          /\ ev.overhead = P!Overhead /\ ev.factor = P!Factor
          /\ ev.maxpk = P!MaxPk /\ ev.maxsig = P!MaxSig

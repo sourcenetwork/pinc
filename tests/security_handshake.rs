@@ -18,7 +18,7 @@
 
 use vinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
 use vinc_crypto::{Aead, Drbg, IdentityAlg, NodeId, Software};
-use vinc_security::message::{MAX_MESSAGE_LEN, min_initial_len, reply_len};
+use vinc_security::message::{FRAGMENT_HEADER, MAX_MESSAGE_LEN, min_initial_len, reply_datagrams, reply_len};
 use vinc_security::{
     CreditRecord, Env, Event, Failure, InitialForm, KeyRequest, KeyResponse, Output, PrekeyCache, ResponderStores,
     SoftKeys,
@@ -110,8 +110,11 @@ fn message_sizes_and_padding() {
             // Three times the padded Initial covers the Reply and its per-datagram overhead.
             for form in [InitialForm::Full, InitialForm::Short] {
                 let min = min_initial_len(form, alg);
-                let datagrams = reply_len(alg).div_ceil(1200);
-                assert!(3 * min >= reply_len(alg) + 48 * datagrams, "{alg:?} {form:?}");
+                let datagrams = reply_datagrams(reply_len(alg));
+                assert!(
+                    3 * min >= reply_len(alg) + (48 + FRAGMENT_HEADER) * datagrams,
+                    "{alg:?} {form:?}"
+                );
             }
             let (full, short) = (
                 min_initial_len(InitialForm::Full, alg),
@@ -119,12 +122,12 @@ fn message_sizes_and_padding() {
             );
             match alg {
                 IdentityAlg::Ed25519 => {
-                    // The short Initial is 464 bytes: 3 x 464 = 1392 covers the 1268-byte Reply (two datagrams, 48
-                    // bytes of overhead each) with room to spare, and 463 would not.
+                    // The short Initial is 464 bytes: 3 x 464 = 1392 covers the 1268-byte Reply sent whole (48 bytes
+                    // of overhead and 50 of framing), and cut into two 1200-byte datagrams with ids of up to 5 bytes.
                     assert_eq!((full, short), (1200, 464));
                     assert_eq!(reply_len(alg), 1268);
-                    assert_eq!((reply_len(alg) + 2 * 48).div_ceil(3), 455);
-                    assert!(3 * short >= reply_len(alg) + 2 * 48);
+                    assert_eq!((reply_len(alg) + 48 + FRAGMENT_HEADER).div_ceil(3), 456);
+                    assert!(3 * short >= reply_len(alg) + 48 + FRAGMENT_HEADER);
                 }
                 IdentityAlg::EcdsaP256 => assert!(full == 1200 && short >= 464),
                 _ => assert!(full > 1200 && short > 464 && full == short),

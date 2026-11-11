@@ -3,7 +3,7 @@
 //! The later part of a first message that arrives before the part that starts it waits in a small table (at most 4
 //! datagrams for the whole endpoint, for at most 1 s, the oldest given up first) and goes only to the session that the
 //! start of the same message from the same address creates; holding it sends nothing. An answer that overtakes the
-//! Reply that brings its keys waits for them.
+//! Reply that brings its keys waits for them. The Reply of every identity leaves on the budget of the first Initial.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -17,10 +17,11 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 use vinc_core::{Answer, Command, Event, NodeStats, Query, Role, Value};
+use vinc_crypto::IdentityAlg;
 use vinc_security::ConnId;
 use vinc_tests::*;
 use vinc_transport::packet::{LongHeader, LongType};
-use vinc_wire::Writer;
+use vinc_wire::{Reader, Writer};
 
 const MS: u64 = MS_NS;
 
@@ -44,6 +45,14 @@ fn fragment(odcid: u64, offset: u64, len: usize) -> Vec<u8> {
     w.put_varint(offset).unwrap();
     w.put_u8(1).unwrap();
     d
+}
+
+/// The message type a first-flight datagram starts with, if it starts a message.
+fn message_type(d: &[u8]) -> Option<u8> {
+    let (h, n) = LongHeader::parse(d).ok()?;
+    let mut r = Reader::new(d.get(n..n + h.body_len)?);
+    r.read_varint().ok()?;
+    (r.read_varint().ok()? == 0).then(|| r.read_u8().ok()).flatten()
 }
 
 /// Keep back the datagrams `from` sends from now on for which `hold` says so (`hold(k)` for the `k`th, from 0); the
@@ -295,5 +304,58 @@ fn an_answer_that_overtakes_the_resume_reply_waits_for_its_keys() {
             st.transport.early_buffered >= 1,
             "the answer did not arrive ahead of the Reply"
         );
+    });
+}
+
+#[test]
+fn the_reply_of_every_identity_leaves_on_the_budget_of_the_first_initial() {
+    big_stack(|| {
+        for alg in [
+            IdentityAlg::Ed25519,
+            IdentityAlg::EcdsaP256,
+            IdentityAlg::MlDsa65,
+            IdentityAlg::Hybrid,
+        ] {
+            let mut net = CoreNet::new(10 * MS);
+            net.capture = true;
+            let (a, b) = (net.add(1), net.add_with_alg(2, alg));
+            let from = net.nodes[a].addr;
+            let first_type = |net: &CoreNet| {
+                net.captured
+                    .iter()
+                    .rev()
+                    .find(|(f, _, d)| *f == from && message_type(d).is_some_and(|m| matches!(m, 1 | 2)))
+                    .and_then(|(_, _, d)| message_type(d))
+            };
+            let t0 = net.now;
+            let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+            assert_eq!(first_type(&net), Some(1));
+            assert!(
+                net.now - t0 < 100 * MS,
+                "{alg:?} full Initial: connected at {} ms",
+                (net.now - t0) / MS
+            );
+            // The short Initial to a larger identity is padded across datagrams, and its padding-only datagram names
+            // no session, so the responder's budget does not count it: only the short Initial that fits one
+            // datagram is checked here.
+            if !matches!(alg, IdentityAlg::Ed25519 | IdentityAlg::EcdsaP256) {
+                continue;
+            }
+            // A second dial without a ticket, to a peer known to hold the prekey: the short Initial.
+            net.run_for(SEC_NS);
+            let t = net.now;
+            net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+            net.run_for(SEC_NS);
+            let (peer, now) = (net.nodes[b].node, net.now);
+            while net.nodes[a].ep.tickets().take(&peer, ALPN_A, now).is_some() {}
+            let t0 = net.now;
+            net.connect_pair(a, b, ALPN_A, Role::Other);
+            assert_eq!(first_type(&net), Some(2));
+            assert!(
+                net.now - t0 < 100 * MS,
+                "{alg:?} short Initial: connected at {} ms",
+                (net.now - t0) / MS
+            );
+        }
     });
 }

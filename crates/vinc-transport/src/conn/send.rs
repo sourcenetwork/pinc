@@ -51,6 +51,11 @@ const MIN_ROOM: usize = 24;
 const LONG_HDR_MAX: usize = 1 + 1 + 1 + 20 + 1 + 20 + 8 + 4;
 /// The room a whole first handshake flight needs besides the flight itself (long header and fragment varints).
 const FLIGHT_OVERHEAD: usize = 64;
+// The Initial padding rule counts a Reply that a whole first flight carries as one datagram, and covers it cut into
+// minimum-size datagrams only with short ids (see `vinc_security::message::SPLIT_CID_MAX`).
+const _: () = assert!(vinc_security::message::WHOLE_REPLY_MAX == PROBE_MTU as usize - FLIGHT_OVERHEAD);
+const _: () = assert!(vinc_security::message::MIN_DATAGRAM == MIN_MTU as usize);
+const _: () = assert!(super::config::Config::new().cid_len <= vinc_security::message::SPLIT_CID_MAX);
 
 /// The kind of packet being built.
 #[derive(Clone, Copy, PartialEq, Eq)]

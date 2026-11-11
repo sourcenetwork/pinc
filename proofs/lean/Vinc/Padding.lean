@@ -4,18 +4,26 @@ import Vinc.Credit
 /-!
 # Initial padding and message sizes
 
-A model of the size functions of `vinc-security/src/message.rs`: `sealed_len`, `reply_len`, `min_initial_len`
-and the constants `FULL_INITIAL_MIN` (1200), `SHORT_INITIAL_MIN` (464), `MIN_DATAGRAM` (1200), `MAX_ID_SIG_LEN`,
-`MAX_SEALED_LEN` and `MAX_MESSAGE_LEN`. The key and signature lengths of the four identity algorithms are those of
-`vinc-crypto` (`IdentityAlg::public_key_len`, `signature_len`); the KEM ciphertext is 1088 bytes, the AEAD tag 16, the
-credit record 6, a connection id at most 20.
+A model of the size functions of `vinc-security/src/message.rs`: `sealed_len`, `reply_len`, `reply_datagrams`,
+`min_initial_len` and the constants `FULL_INITIAL_MIN` (1200), `SHORT_INITIAL_MIN` (464), `MIN_DATAGRAM` (1200),
+`FRAGMENT_HEADER` (50), `WHOLE_REPLY_MAX` (1388), `SPLIT_CID_MAX` (5), `MAX_ID_SIG_LEN`, `MAX_SEALED_LEN` and
+`MAX_MESSAGE_LEN`. The key and signature lengths of the four identity algorithms are those of `vinc-crypto`
+(`IdentityAlg::public_key_len`, `signature_len`); the KEM ciphertext is 1088 bytes, the AEAD tag 16, the credit
+record 6, a connection id at most 20.
 
-The statements: for every algorithm and both forms, three times `min_initial_len` covers the Reply plus the
-overhead of its datagrams (`budget_covers_reply`), and so a responder that received a padded Initial can send its whole
-Reply under the anti-amplification budget (`reply_sendable`, in terms of `Amp.canSend`, for any split of the Reply
-into datagrams); `min_initial_len` is never below the floor of its form; the short Initial of a 32-byte identity is
-exactly 464 bytes and 464 x 3 covers its Reply; `MAX_MESSAGE_LEN = 6529` bounds every `reply_len`; and every
-`sealed_len` is at most `MAX_SEALED_LEN`.
+The statements: for every algorithm and both forms, three times `min_initial_len` covers the Reply plus the framing
+and the overhead of every datagram `reply_datagrams` counts (`budget_covers_reply`); `min_initial_len` is never below
+the floor of its form; the short Initial of a 32-byte identity is exactly 464 bytes and 464 x 3 covers its Reply;
+`MAX_MESSAGE_LEN = 6529` bounds every `reply_len`; and every `sealed_len` is at most `MAX_SEALED_LEN`.
+
+What the responder can send: under the budget of a path that received `min_initial_len` bytes, any split of the
+Reply into datagrams is allowed by `Amp.canSend` when only the datagram sizes are recorded (`reply_sendable`); and
+the transport, which records every datagram's size plus the 48-byte overhead (`finish_datagram`), can send the Reply
+in at most `reply_datagrams` datagrams that carry it with their framing (`reply_sendable_charged`). The transport's
+default cuts every first flight into `MIN_DATAGRAM`-byte datagrams, so a Reply counted as one datagram may take two;
+with connection ids of at most `SPLIT_CID_MAX` bytes (both the transport's default and the endpoint use 4) that cut
+fits too, for every algorithm and both forms (`budget_covers_split`, `split_sendable_charged`), and 6-byte ids would
+not fit the short Initial of a 32-byte identity (`split_cid_max_tight`).
 -/
 
 namespace Vinc.Padding
@@ -62,6 +70,12 @@ def fullInitialMin : Nat := 1200
 def shortInitialMin : Nat := 464
 /-- `MIN_DATAGRAM`. -/
 def minDatagram : Nat := 1200
+/-- `FRAGMENT_HEADER`: the long header with two 20-byte ids and a two-byte length, and two two-byte varints. -/
+def fragmentHeader : Nat := 1 + 1 + 2 * (1 + maxCidLen) + 2 + 2 + 2
+/-- `WHOLE_REPLY_MAX`: the 1452-byte probe size less the room the transport keeps. -/
+def wholeReplyMax : Nat := 1452 - 64
+/-- `SPLIT_CID_MAX`. -/
+def splitCidMax : Nat := 5
 
 /-- `MAX_ID_SIG_LEN`. -/
 def maxIdSigLen : Nat := 1 + 2 + maxPublicKeyLen + 2 + maxSignatureLen + Credit.recordLen
@@ -79,11 +93,16 @@ def replyLen (a : Alg) : Nat :=
 /-- `usize::div_ceil` for a positive divisor, as the standard library writes it. -/
 def divCeil (a b : Nat) : Nat := a / b + if a % b > 0 then 1 else 0
 
+/-- `reply_datagrams`: one for a Reply a whole first flight carries, else as many `MIN_DATAGRAM`-byte datagrams as
+carry it with their framing. -/
+def replyDatagrams (reply : Nat) : Nat :=
+  if reply ≤ wholeReplyMax then 1 else divCeil reply (minDatagram - fragmentHeader)
+
 /-- `min_initial_len`. -/
 def minInitialLen (f : Form) (a : Alg) : Nat :=
   let reply := replyLen a
-  let datagrams := divCeil reply minDatagram
-  let needed := divCeil (reply + datagrams * Amp.overhead) 3
+  let datagrams := replyDatagrams reply
+  let needed := divCeil (reply + datagrams * (Amp.overhead + fragmentHeader)) 3
   let floor := match f with
     | .full => fullInitialMin
     | .short => shortInitialMin
@@ -91,6 +110,15 @@ def minInitialLen (f : Form) (a : Alg) : Nat :=
 
 /-- `MAX_MESSAGE_LEN = reply_len(Hybrid)`. -/
 def maxMessageLen : Nat := replyLen .hybrid
+
+/-- The Reply when the responder's connection id is `c` bytes long instead of the 20 `reply_len` allows for. -/
+def replyLenWith (a : Alg) (c : Nat) : Nat := replyLen a - (maxCidLen - c)
+
+/-- The framing of a handshake datagram whose two connection ids are `c` bytes long (`write_handshake`). -/
+def framingWith (c : Nat) : Nat := 1 + 1 + 2 * (1 + c) + 2 + 2 + 2
+
+/-- The datagrams of `MIN_DATAGRAM` bytes the transport cuts a Reply of `reply` bytes into, with ids of `c` bytes. -/
+def splitDatagrams (reply c : Nat) : Nat := divCeil reply (minDatagram - framingWith c)
 
 theorem divCeil_ge (a b : Nat) (hb : 0 < b) : a ≤ b * divCeil a b := by
   unfold divCeil
@@ -122,30 +150,52 @@ theorem minInitialLen_ge_floor (f : Form) (a : Alg) :
     (f = .full → fullInitialMin ≤ minInitialLen f a) ∧ (f = .short → shortInitialMin ≤ minInitialLen f a) := by
   cases f <;> cases a <;> decide
 
-/-- Three times `min_initial_len` covers the Reply and the overhead of each datagram it needs, for every
-algorithm and both forms. -/
+/-- Three times `min_initial_len` covers the Reply and the framing and overhead of each datagram it needs, for
+every algorithm and both forms. -/
 theorem budget_covers_reply (f : Form) (a : Alg) :
-    replyLen a + divCeil (replyLen a) minDatagram * Amp.overhead ≤ 3 * minInitialLen f a := by
+    replyLen a + replyDatagrams (replyLen a) * (Amp.overhead + fragmentHeader) ≤ 3 * minInitialLen f a := by
   cases f <;> cases a <;> decide
 
 /-- The same for any Reply length, from the definition: the padding rule is correct for every reply size. -/
 theorem budget_covers_any (f : Form) (reply : Nat) :
-    let datagrams := divCeil reply minDatagram
-    let needed := divCeil (reply + datagrams * Amp.overhead) 3
+    let datagrams := replyDatagrams reply
+    let needed := divCeil (reply + datagrams * (Amp.overhead + fragmentHeader)) 3
     let floor := match f with
       | .full => fullInitialMin
       | .short => shortInitialMin
-    reply + datagrams * Amp.overhead ≤ 3 * (if needed > floor then needed else floor) := by
+    reply + datagrams * (Amp.overhead + fragmentHeader) ≤ 3 * (if needed > floor then needed else floor) := by
   intro datagrams needed floor
-  have := divCeil_ge (reply + datagrams * Amp.overhead) 3 (by decide)
+  have := divCeil_ge (reply + datagrams * (Amp.overhead + fragmentHeader)) 3 (by decide)
   split <;> omega
+
+/-- With connection ids of at most `SPLIT_CID_MAX` bytes, three times `min_initial_len` also covers the Reply cut
+into `MIN_DATAGRAM`-byte datagrams with the framing and overhead of each, for every algorithm and both forms. -/
+theorem budget_covers_split_table :
+    ∀ c ∈ List.range (splitCidMax + 1), ∀ f ∈ Form.all, ∀ a ∈ Alg.all,
+      replyLenWith a c + splitDatagrams (replyLenWith a c) c * (Amp.overhead + framingWith c) ≤
+        3 * minInitialLen f a := by
+  decide
+
+theorem budget_covers_split (f : Form) (a : Alg) (c : Nat) (hc : c ≤ splitCidMax) :
+    replyLenWith a c + splitDatagrams (replyLenWith a c) c * (Amp.overhead + framingWith c) ≤
+      3 * minInitialLen f a :=
+  budget_covers_split_table c (List.mem_range.2 (Nat.lt_succ_of_le hc)) f (Form.mem_all f) a (Alg.mem_all a)
+
+/-- `SPLIT_CID_MAX` is the largest such length: with 6-byte ids the cut Reply of a 32-byte identity exceeds three
+times the short Initial. -/
+theorem split_cid_max_tight :
+    3 * minInitialLen .short .ed25519 <
+      replyLenWith .ed25519 (splitCidMax + 1) +
+        splitDatagrams (replyLenWith .ed25519 (splitCidMax + 1)) (splitCidMax + 1) *
+          (Amp.overhead + framingWith (splitCidMax + 1)) := by
+  decide
 
 /-- The short Initial of a 32-byte identity (Ed25519) is 464 bytes, and 464 x 3 covers its Reply. -/
 theorem short_ed25519 : minInitialLen .short .ed25519 = 464 ∧ replyLen .ed25519 ≤ 3 * 464 := by decide
 
 /-- The values of every combination, as the code computes them. -/
 theorem min_initial_values :
-    Form.all.flatMap (fun f => Alg.all.map (fun a => minInitialLen f a)) = [1200, 1200, 2241, 2273, 464, 464, 2241, 2273] := by
+    Form.all.flatMap (fun f => Alg.all.map (fun a => minInitialLen f a)) = [1200, 1200, 2341, 2373, 464, 464, 2341, 2373] := by
   decide
 
 /-! ## The Reply fits the budget -/
@@ -156,14 +206,19 @@ def sendable : Amp.Budget → List Nat → Bool
   | b, n :: ns => Amp.canSend b n && sendable (Amp.onSend b n) ns
 
 /-- Under the budget of a path that received `min_initial_len` bytes, any split of the Reply into datagrams (any
-list of sizes whose sum is at most the Reply) is allowed by `can_send` at every send. -/
-theorem reply_sendable (f : Form) (a : Alg) (ns : List Nat) (hs : ns.sum ≤ replyLen a) :
+list of sizes whose sum is at most the Reply and the framing of the datagrams that carry it) is allowed by
+`can_send` at every send. -/
+theorem reply_sendable (f : Form) (a : Alg)
+    (ns : List Nat) (hs : ns.sum ≤ replyLen a + replyDatagrams (replyLen a) * fragmentHeader) :
     sendable (Amp.onReceive Amp.Budget.new (minInitialLen f a)) ns = true := by
   have hcov := budget_covers_reply f a
   have h6529 : replyLen a ≤ 6529 := by cases a <;> decide
-  have hdg : 1 ≤ divCeil (replyLen a) minDatagram := by cases a <;> decide
+  have hdg : 1 ≤ replyDatagrams (replyLen a) := by cases a <;> decide
+  have hdg6 : replyDatagrams (replyLen a) ≤ 6 := by cases a <;> decide
   have hov : Amp.overhead = 48 := rfl
-  rw [hov] at hcov
+  have hfh : fragmentHeader = 50 := rfl
+  rw [hov, hfh] at hcov
+  rw [hfh] at hs
   have hmin : minInitialLen f a ≤ Amp.u64max := by cases f <;> cases a <;> decide
   have hrx : (Amp.onReceive Amp.Budget.new (minInitialLen f a)).rx = minInitialLen f a := by
     show Amp.satAdd 0 (minInitialLen f a) = _
@@ -207,6 +262,67 @@ theorem reply_sendable (f : Form) (a : Alg) (ns : List Nat) (hs : ns.sum ≤ rep
     unfold Amp.u64max
     omega
 
+/-- Sending datagrams of the given sizes one after another as the transport does (`finish_datagram`): each send is
+allowed by `can_send` and records the datagram's size plus the 48-byte overhead. -/
+def sendableCharged : Amp.Budget → List Nat → Bool
+  | _, [] => true
+  | b, n :: ns => Amp.canSend b n && sendableCharged (Amp.onSend b (n + Amp.overhead)) ns
+
+/-- From any unvalidated budget, datagrams whose sizes plus 48 bytes each fit in what is left are all sent. -/
+theorem charged_from (ns : List Nat) : ∀ b : Amp.Budget, b.validated = false →
+    b.tx + ns.sum + ns.length * Amp.overhead ≤ b.rx * Amp.factor → sendableCharged b ns = true := by
+  induction ns with
+  | nil => intro _ _ _; rfl
+  | cons n ns ih =>
+    intro b hv h
+    simp only [sendableCharged, Bool.and_eq_true]
+    simp only [List.sum_cons, List.length_cons, Nat.add_mul, Nat.one_mul] at h
+    refine ⟨(Amp.canSend_iff b n hv).2 (by omega), ih _ hv ?_⟩
+    have hx := Amp.onSend_tx_le b (n + Amp.overhead)
+    have hr : (Amp.onSend b (n + Amp.overhead)).rx = b.rx := rfl
+    rw [hr]
+    omega
+
+/-- A path that received `rx` bytes lets the transport send any datagrams whose sizes plus 48 bytes each total at
+most three times `rx`. -/
+theorem charged_sendable (rx : Nat) (hrx : rx ≤ Amp.u64max) (ns : List Nat)
+    (h : ns.sum + ns.length * Amp.overhead ≤ 3 * rx) :
+    sendableCharged (Amp.onReceive Amp.Budget.new rx) ns = true := by
+  apply charged_from ns _ rfl
+  have hr : (Amp.onReceive Amp.Budget.new rx).rx = rx := by
+    show Amp.satAdd 0 rx = rx
+    unfold Amp.satAdd
+    omega
+  have ht : (Amp.onReceive Amp.Budget.new rx).tx = 0 := rfl
+  rw [hr, ht]
+  unfold Amp.factor
+  omega
+
+/-- The step shared by both cuts: `d` datagrams with `k` bytes of framing each carry a message of `q` bytes within
+three times `rx`, so any at most `d` datagrams that carry the message with their framing are sent. -/
+theorem cut_sendable (rx q d k : Nat) (hrx : rx ≤ Amp.u64max) (hcov : q + d * (Amp.overhead + k) ≤ 3 * rx)
+    (ns : List Nat) (hlen : ns.length ≤ d) (hs : ns.sum ≤ q + ns.length * k) :
+    sendableCharged (Amp.onReceive Amp.Budget.new rx) ns = true := by
+  apply charged_sendable rx hrx ns
+  have h1 : ns.length * (Amp.overhead + k) ≤ d * (Amp.overhead + k) := Nat.mul_le_mul_right _ hlen
+  simp only [Nat.mul_add] at h1 hcov
+  omega
+
+/-- The responder sends its Reply, in at most `reply_datagrams` datagrams that carry it with their framing, under
+the budget of a path that received `min_initial_len` bytes, charged as the transport charges. -/
+theorem reply_sendable_charged (f : Form) (a : Alg) (ns : List Nat)
+    (hlen : ns.length ≤ replyDatagrams (replyLen a)) (hs : ns.sum ≤ replyLen a + ns.length * fragmentHeader) :
+    sendableCharged (Amp.onReceive Amp.Budget.new (minInitialLen f a)) ns = true :=
+  cut_sendable _ _ _ _ (by cases f <;> cases a <;> decide) (budget_covers_reply f a) ns hlen hs
+
+/-- The same for the transport's default cut into `MIN_DATAGRAM`-byte datagrams with ids of at most
+`SPLIT_CID_MAX` bytes. -/
+theorem split_sendable_charged (f : Form) (a : Alg) (c : Nat) (hc : c ≤ splitCidMax) (ns : List Nat)
+    (hlen : ns.length ≤ splitDatagrams (replyLenWith a c) c)
+    (hs : ns.sum ≤ replyLenWith a c + ns.length * framingWith c) :
+    sendableCharged (Amp.onReceive Amp.Budget.new (minInitialLen f a)) ns = true :=
+  cut_sendable _ _ _ _ (by cases f <;> cases a <;> decide) (budget_covers_split f a c hc) ns hlen hs
+
 end Vinc.Padding
 
 #audit_axioms Vinc.Padding.constants
@@ -216,6 +332,10 @@ end Vinc.Padding
 #audit_axioms Vinc.Padding.lens_le_max
 #audit_axioms Vinc.Padding.minInitialLen_ge_floor
 #audit_axioms Vinc.Padding.budget_covers_reply
+#audit_axioms Vinc.Padding.budget_covers_split
+#audit_axioms Vinc.Padding.split_cid_max_tight
+#audit_axioms Vinc.Padding.reply_sendable_charged
+#audit_axioms Vinc.Padding.split_sendable_charged
 #audit_axioms Vinc.Padding.budget_covers_any
 #audit_axioms Vinc.Padding.short_ed25519
 #audit_axioms Vinc.Padding.min_initial_values

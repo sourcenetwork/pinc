@@ -55,6 +55,8 @@ use crate::trace::{TraceLog, TraceRecord};
 
 /// The length of every connection id the endpoint issues.
 pub const CID_LEN: usize = 4;
+// The Initial padding covers a Reply cut into minimum-size datagrams only with ids this short.
+const _: () = assert!(CID_LEN <= vinc_security::message::SPLIT_CID_MAX);
 /// The largest datagram the endpoint takes in; a longer one is dropped.
 pub const MAX_DATAGRAM: usize = 9216;
 /// The most interfaces.

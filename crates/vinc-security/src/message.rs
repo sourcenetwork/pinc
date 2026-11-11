@@ -48,8 +48,19 @@ use crate::tickets::TicketBatch;
 pub const FULL_INITIAL_MIN: usize = 1200;
 /// The short Initial is padded to at least this many bytes: 464 x 3 covers the Reply of a 32-byte identity.
 pub const SHORT_INITIAL_MIN: usize = 464;
-/// The datagram size the padding rule assumes when it counts the datagrams of a Reply.
+/// The datagram size the padding rule assumes when it counts the datagrams of a Reply: the transport cuts a flight to
+/// this size while the path is not probed.
 pub const MIN_DATAGRAM: usize = 1200;
+/// The bytes a handshake datagram spends besides its part of the message: the long header (two connection ids of at
+/// most 20 bytes and a two-byte length) and the fragment head (the message length and the offset, two-byte varints).
+pub const FRAGMENT_HEADER: usize = 1 + 1 + 2 * (1 + MAX_CID_LEN) + 2 + 2 + 2;
+/// The longest Reply the padding rule counts as one datagram: the 1452-byte probe size less the room the transport
+/// keeps, the most a first flight sent whole carries.
+pub const WHOLE_REPLY_MAX: usize = 1452 - 64;
+/// The longest connection id with which a Reply of at most [`WHOLE_REPLY_MAX`] bytes still fits its budget when the
+/// transport cuts it into [`MIN_DATAGRAM`]-byte datagrams instead of sending it whole (two datagrams with the framing
+/// of such ids); the transport's default ids and the endpoint's are 4 bytes.
+pub const SPLIT_CID_MAX: usize = 5;
 /// The longest plaintext of a sealed identity and signature.
 pub const MAX_ID_SIG_LEN: usize = 1 + 2 + MAX_PUBLIC_KEY_LEN + 2 + MAX_SIGNATURE_LEN + CREDIT_RECORD_LEN;
 /// The longest sealed identity and signature, tag included.
@@ -74,15 +85,25 @@ pub const fn reply_len(alg: IdentityAlg) -> usize {
     1 + (1 + MAX_CID_LEN) + 1 + 32 + KEM_CIPHERTEXT_LEN + 2 + sealed_len(alg)
 }
 
+/// How many datagrams the padding rule counts for a Reply of `reply` bytes: one for a Reply of at most
+/// [`WHOLE_REPLY_MAX`] bytes, else as many as carry it at [`MIN_DATAGRAM`] bytes less the [`FRAGMENT_HEADER`] each.
+pub const fn reply_datagrams(reply: usize) -> usize {
+    if reply <= WHOLE_REPLY_MAX {
+        1
+    } else {
+        reply.div_ceil(MIN_DATAGRAM - FRAGMENT_HEADER)
+    }
+}
+
 /// The least number of bytes the datagrams of an Initial of `form` must total, so that three times that covers the
-/// responder's Reply (with the per-datagram overhead of [`crate::amp`]) when the responder uses identity `alg`.
+/// responder's Reply with the framing ([`FRAGMENT_HEADER`]) and the per-datagram overhead of [`crate::amp`] of every
+/// datagram [`reply_datagrams`] counts, when the responder uses identity `alg`.
 ///
-/// The bound is 1200 bytes for the full form and 480 for the short form, raised for a responder whose Reply is
-/// larger (ML-DSA-65 and hybrid identities).
+/// The bound is 1200 bytes for the full form and 464 for the short form, raised for a responder whose Reply is
+/// larger (2341 bytes for ML-DSA-65 and 2373 for hybrid identities, whose Replies take six datagrams).
 pub const fn min_initial_len(form: InitialForm, responder: IdentityAlg) -> usize {
     let reply = reply_len(responder);
-    let datagrams = reply.div_ceil(MIN_DATAGRAM);
-    let needed = (reply + datagrams * crate::amp::OVERHEAD).div_ceil(3);
+    let needed = (reply + reply_datagrams(reply) * (crate::amp::OVERHEAD + FRAGMENT_HEADER)).div_ceil(3);
     let floor = match form {
         InitialForm::Full => FULL_INITIAL_MIN,
         InitialForm::Short => SHORT_INITIAL_MIN,

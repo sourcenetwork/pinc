@@ -8,8 +8,9 @@
 //!   `covers` of pairs of records. Every result is also asserted here against an independent computation.
 //! * `amp`: one `on_receive`, `on_send`, `validate` or `can_send` of an `AmpBudget`, with the counters after it (as
 //!   limbs). A send is recorded only when the sender kept the discipline, or in a run that exercises saturation.
-//! * `pad`: `min_initial_len` and `reply_len` for every identity algorithm and both Initial forms, with the key and
-//!   signature lengths of the algorithm, and the public size constants.
+//! * `pad`: `min_initial_len`, `reply_len` and `reply_datagrams` for every identity algorithm and both Initial forms,
+//!   with the key and signature lengths of the algorithm, and the public size constants with the connection id lengths
+//!   of the transport's default and of the endpoint.
 //!
 //! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
@@ -29,8 +30,8 @@ use vinc_security::credit::{CREDIT_RECORD_LEN, CreditRecord, WINDOW_UNIT};
 use vinc_security::ids::MAX_CID_LEN;
 use vinc_security::labels;
 use vinc_security::message::{
-    FULL_INITIAL_MIN, InitialForm, MAX_ID_SIG_LEN, MAX_MESSAGE_LEN, MAX_SEALED_LEN, MIN_DATAGRAM, SHORT_INITIAL_MIN,
-    min_initial_len, reply_len,
+    FRAGMENT_HEADER, FULL_INITIAL_MIN, InitialForm, MAX_ID_SIG_LEN, MAX_MESSAGE_LEN, MAX_SEALED_LEN, MIN_DATAGRAM,
+    SHORT_INITIAL_MIN, SPLIT_CID_MAX, WHOLE_REPLY_MAX, min_initial_len, reply_datagrams, reply_len,
 };
 use vinc_tests::SplitMix64;
 
@@ -291,16 +292,16 @@ fn pad_trace(out: &mut String) {
             ("short", InitialForm::Short, SHORT_INITIAL_MIN),
         ] {
             let min = min_initial_len(form, alg);
-            let datagrams = reply.div_ceil(MIN_DATAGRAM);
+            let datagrams = reply_datagrams(reply);
             assert!(min >= floor);
             assert!(
-                3 * min >= reply + datagrams * OVERHEAD,
+                3 * min >= reply + datagrams * (OVERHEAD + FRAGMENT_HEADER),
                 "{name} {alg:?}: the budget does not cover the Reply"
             );
             assert!(reply <= MAX_MESSAGE_LEN);
             let _ = writeln!(
                 out,
-                r#"{{"t":"pad","op":"min","form":"{name}","alg":{},"pk":{},"sig":{},"reply":{reply},"min":{min}}}"#,
+                r#"{{"t":"pad","op":"min","form":"{name}","alg":{},"pk":{},"sig":{},"reply":{reply},"dgs":{datagrams},"min":{min}}}"#,
                 alg.tag(),
                 alg.public_key_len(),
                 alg.signature_len()
@@ -313,7 +314,9 @@ fn pad_trace(out: &mut String) {
     assert_eq!(MAX_MESSAGE_LEN, reply_len(IdentityAlg::Hybrid));
     let _ = writeln!(
         out,
-        r#"{{"t":"pad","op":"const","full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"dg":{MIN_DATAGRAM},"idsig":{MAX_ID_SIG_LEN},"sealed":{MAX_SEALED_LEN},"msg":{MAX_MESSAGE_LEN},"overhead":{OVERHEAD},"factor":{FACTOR},"maxpk":{},"maxsig":{},"kemct":{KEM_CIPHERTEXT_LEN},"tag":{},"credit":{CREDIT_RECORD_LEN},"cid":{MAX_CID_LEN}}}"#,
+        r#"{{"t":"pad","op":"const","full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"dg":{MIN_DATAGRAM},"frag":{FRAGMENT_HEADER},"whole":{WHOLE_REPLY_MAX},"splitcid":{SPLIT_CID_MAX},"txcid":{},"epcid":{},"idsig":{MAX_ID_SIG_LEN},"sealed":{MAX_SEALED_LEN},"msg":{MAX_MESSAGE_LEN},"overhead":{OVERHEAD},"factor":{FACTOR},"maxpk":{},"maxsig":{},"kemct":{KEM_CIPHERTEXT_LEN},"tag":{},"credit":{CREDIT_RECORD_LEN},"cid":{MAX_CID_LEN}}}"#,
+        vinc_transport::conn::Config::new().cid_len,
+        vinc_core::CID_LEN,
         vinc_crypto::identity::MAX_PUBLIC_KEY_LEN,
         vinc_crypto::identity::MAX_SIGNATURE_LEN,
         Aead::TAG_LEN
