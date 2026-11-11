@@ -1130,6 +1130,12 @@ proptest! {
     /// yet received, and the first charges kept for the streams it may still open) fit the pool, or are no more than
     /// they were before the operation: another user of the pool taking chunks (a `Hog`: the send buffers and the datagram
     /// queues do) can put the promises past what is left, and no admission or grant may add to that.
+    ///
+    /// This is not a weaker guarantee for the peer's data. A frame that arrives inside a granted window when the pool
+    /// has no chunk left for it (another holder took it) is refused by `Recv::on_data` as `StreamError::Exhausted`
+    /// before anything is stored; the connection treats that as a shortage, drops the packet unacknowledged and counts
+    /// it in `held_back`, and the peer sends it again once chunks are free. Nothing is lost, and the pool is never over
+    /// its budget.
     #[test]
     fn granted_credit_fits_the_pool_at_every_admission_and_grant(ops in prop::collection::vec(op(), 1..150)) {
         let mut pool = BufferPool::new_boxed(24);
