@@ -4,7 +4,7 @@
 
 use vinc_transport::recovery::{Event, FrameRef, FrameRefs, Health, MS, Recovery, SECOND, Sent, Summary, Timeout};
 
-use crate::{MSS, Rec, ack, assert_conserved, describe, established, fire, lost_ev, one, sent, stream_frame};
+use crate::{MSS, Rec, ack, assert_conserved, describe, established, fire, lost_ev, on_path, one, sent, stream_frame};
 
 // ---------------------------------------------------------------------------------------------------------------
 // The probe timer
@@ -301,6 +301,32 @@ fn flushing_declares_everything_lost_without_a_response_and_resets_the_count() {
     assert_eq!(rec.cwnd(), cwnd, "the window is untouched");
     assert_eq!(rec.bytes_in_flight(), 0);
     assert_eq!(rec.next_timeout(), None);
+    assert_conserved(&rec);
+}
+
+#[test]
+fn an_abandoned_path_that_answers_again_resends_the_oldest_eight_packets_of_the_other_path_and_resets_the_count() {
+    let mut rec = established();
+    // Twelve packets went out on path 1 (the relay), one on path 0, and a probe timeout fired and doubled the timer.
+    for pn in 1..=12 {
+        rec.on_packet_sent(on_path(pn, 200 * MS + pn, 1)).unwrap();
+    }
+    rec.on_packet_sent(on_path(13, 200 * MS + 13, 0)).unwrap();
+    fire(&mut rec);
+    let cwnd = rec.cwnd();
+    let before = rec.pto_count();
+    assert!(before > 0);
+    let mut log = Vec::new();
+    let s = rec.resend_off_path(SECOND, 0, 8, |e| log.push(describe(&e)));
+    // The first probe timeout already declared pn 1 lost; the next eight in flight on the other path follow it.
+    assert_eq!(s.lost_packets, 8);
+    assert_eq!(
+        log,
+        (2..=9).map(lost_ev).collect::<Vec<_>>(),
+        "the oldest first, none from path 0"
+    );
+    assert_eq!(rec.pto_count(), 0, "the count is reset");
+    assert_eq!(rec.cwnd(), cwnd, "no congestion response");
     assert_conserved(&rec);
 }
 

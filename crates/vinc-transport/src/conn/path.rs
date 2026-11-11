@@ -45,6 +45,8 @@ const PROBE_CAP: u64 = 2 * SECOND;
 const REJOIN_GAP: u64 = 60 * MS;
 /// The number of re-join challenges (at [`REJOIN_GAP`], 6 s).
 const REJOIN_PROBES: u64 = 100;
+/// How many of the oldest packets sent on another path are sent again at once when an abandoned path answers.
+const REJOIN_RESEND: usize = 8;
 /// The shortest gap between re-join challenges on a thin node, and the shortest wait for a migration challenge.
 pub(crate) const RJ_THIN_GAP: u64 = SECOND;
 /// The cadence of the re-challenge of an idled-out direct path on a thin node.
@@ -484,6 +486,7 @@ conn_impl! {
         let Some(p) = self.paths.get_mut(i) else { return };
         let Some(sent_at) = p.challenge_time(data) else { return };
         let was = p.validated;
+        let rejoining = p.rejoin;
         p.sent = [None; CHALLENGES];
         p.challenge = None;
         p.send_challenge = false;
@@ -498,6 +501,58 @@ conn_impl! {
             self.mtu_event(i);
         }
         self.choose_path();
+        if rejoining {
+            let rtt = self.paths.get(i).map_or(0, |p| p.rtt);
+            self.life.rejoined = Some((id, rtt));
+            self.rejoin_resend(now, i);
+        }
+    }
+
+    /// The path of slot `i` was abandoned and answers again: if it is the active path, what went out on the other path
+    /// is sent again now.
+    fn rejoin_resend(&mut self, now: u64, i: usize) {
+        if i != self.paths.active {
+            return;
+        }
+        let Ok(slot) = u8::try_from(i) else { return };
+        let mut out = super::ctl::Outcome::default();
+        let (streams, pool, ctl) = (&mut *self.streams, &mut self.pool, &mut self.ctl);
+        self.rec
+            .resend_off_path(now, slot, REJOIN_RESEND, |ev| super::ctl::apply(&ev, streams, pool, ctl, &mut out));
+        self.life.probes = 0;
+        self.degraded_told = false;
+        self.after_feedback(out, now);
+    }
+
+    /// The path a session of this peer's abandoned address validated again, with its round trip, once; the endpoint
+    /// hands it to the peer's other sessions with [`Connection::path_returned`].
+    pub fn take_rejoined(&mut self) -> Option<(PathId, u64)> {
+        self.life.rejoined.take()
+    }
+
+    /// Another session to the same peer validated the address of path `id` again: if this session waits for it on a
+    /// path it abandoned, that path is valid at once with the round trip `rtt`, and what went out on the other path is
+    /// sent again. Returns whether the path was taken.
+    pub fn path_returned(&mut self, id: PathId, rtt: u64, now: u64) -> bool {
+        let Some(i) = self.paths.find(id) else { return false };
+        let Some(p) = self.paths.get_mut(i) else { return false };
+        if !p.rejoin || p.validated {
+            return false;
+        }
+        p.sent = [None; CHALLENGES];
+        p.challenge = None;
+        p.send_challenge = false;
+        p.validated = true;
+        p.amp.validate();
+        p.probes_left = 0;
+        p.rtt = rtt;
+        p.rejoin = false;
+        p.last_rx = now;
+        self.events.push(Ev::PathValidated(id));
+        self.mtu_event(i);
+        self.choose_path();
+        self.rejoin_resend(now, i);
+        true
     }
 
     /// Make slot `i` the active path by our own choice.

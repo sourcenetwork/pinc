@@ -20,13 +20,14 @@ use core::net::SocketAddr;
 use vinc_security::message::{FULL_INITIAL_MIN, MAX_MESSAGE_LEN, MessageType, SHORT_INITIAL_MIN};
 use vinc_security::responder::hello_opens_ticket;
 use vinc_security::{ConnId, Env, Failure};
-use vinc_transport::conn::{Connection, Drop, ServerParams};
+use vinc_transport::conn::{Connection, Drop, PathId, ServerParams};
 use vinc_transport::packet::{LongHeader, LongType, short_dcid};
 use vinc_wire::Reader;
 
 use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl};
 use crate::orphan::ORPHAN_MAX;
 use crate::relay_net::is_relay_addr;
+use crate::slot::State;
 use crate::trace::trace;
 
 /// The most sessions that may hold the same four bytes and still be tried.
@@ -186,6 +187,7 @@ ep_impl! {
         let mut env = env!(self, now);
         let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
         self.counters.stalled_in += u64::from(r == Err(Drop::Gated));
+        let returned = conn.take_rejoined();
         if r.is_ok() {
             // The connection took the path of a first packet to be direct; the address says if it is a relay's.
             if is_relay_addr(&remote) {
@@ -200,7 +202,27 @@ ep_impl! {
             }
         }
         self.settle(i, now);
+        if let Some((path, rtt)) = returned {
+            self.share_rejoin(i, path, rtt, now);
+        }
         r
+    }
+
+    /// Session `i` found the address of `path` working again after it abandoned it: the peer's other sessions that wait
+    /// for the same address take it back at once.
+    fn share_rejoin(&mut self, i: usize, path: PathId, rtt: u64, now: u64) {
+        let Some(peer) = self.slots.get(i).and_then(|s| s.m.peer) else { return };
+        let mut at = self.by_peer.get(&peer).copied();
+        while let Some(idx) = at {
+            let Some(s) = self.slots.get_mut(idx as usize) else { break };
+            at = Some(s.m.peer_next).filter(|n| *n != crate::slot::NIL);
+            if idx as usize == i || s.m.state != State::Established {
+                continue;
+            }
+            if s.conn.as_mut().is_some_and(|c| c.path_returned(path, rtt, now)) {
+                self.settle(idx as usize, now);
+            }
+        }
     }
 
     /// A datagram for an id no session holds: it may start a server session.

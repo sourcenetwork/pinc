@@ -595,14 +595,43 @@ impl<const N: usize> Recovery<N> {
 
     /// Declare every packet in flight lost with no congestion response and reset the probe backoff: the peer woke
     /// from sleep, the link came back, or early data was rejected. Each packet is reported as lost and to be requeued.
-    pub fn flush_in_flight<F: FnMut(Event<'_>)>(&mut self, now: u64, mut on_event: F) -> Summary {
+    pub fn flush_in_flight<F: FnMut(Event<'_>)>(&mut self, now: u64, on_event: F) -> Summary {
+        let s = self.lose_in_flight(now, usize::MAX, None, on_event);
+        self.loss_time = None;
+        self.pto_count = 0;
+        self.last_pto = 0;
+        self.saved_window = None;
+        s
+    }
+
+    /// A path that was abandoned answers again and is the active path: declare the oldest `limit` packets in flight
+    /// that were sent on another path than `path` lost, with no congestion response, so they are sent again at once and
+    /// not at the next backed-off probe timeout, and reset the probe timeout count. Each is reported as lost and to be
+    /// requeued.
+    pub fn resend_off_path<F: FnMut(Event<'_>)>(&mut self, now: u64, path: u8, limit: usize, on_event: F) -> Summary {
+        let s = self.lose_in_flight(now, limit, Some(path), on_event);
+        self.pto_count = 0;
+        s
+    }
+
+    /// Lose up to `limit` packets in flight, oldest first, skipping those sent on `keep`.
+    fn lose_in_flight<F: FnMut(Event<'_>)>(
+        &mut self,
+        now: u64,
+        limit: usize,
+        keep: Option<u8>,
+        mut on_event: F,
+    ) -> Summary {
         self.clock = self.clock.max(now);
         let mut s = Summary::default();
         let mut i = 0;
         while let Some(slot) = self.ring.get_mut(i) {
             i += 1;
-            if slot.state != super::sent::State::InFlight {
+            if slot.state != super::sent::State::InFlight || keep == Some(slot.sent.path) {
                 continue;
+            }
+            if s.lost_packets as usize >= limit {
+                break;
             }
             slot.state = super::sent::State::Lost(now);
             let sent = slot.sent;
@@ -620,10 +649,6 @@ impl<const N: usize> Recovery<N> {
                 mtu_probe: sent.is_mtu_probe,
             });
         }
-        self.loss_time = None;
-        self.pto_count = 0;
-        self.last_pto = 0;
-        self.saved_window = None;
         s
     }
 
