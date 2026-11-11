@@ -12,11 +12,13 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
+use vinc_connect::client::Port;
 use vinc_core::{
     Answer, Command, EndpointConfig, Event, Query, Role, SessionId, Transmit, is_relay_addr, relay_addr, relay_parts,
 };
 use vinc_crypto::{Drbg, NodeId};
 use vinc_keystore::KeyStore;
+use vinc_node::Ep as NodeEp;
 use vinc_security::{KeyRequest, KeyResponse, LocalIdentity};
 
 use super::limits::Limits;

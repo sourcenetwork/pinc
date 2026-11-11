@@ -162,6 +162,12 @@ macro_rules! define {
             fn poll_trace(&mut self) -> Option<TraceRecord> {
                 match self { $(Self::$v(e) => NodeEp::poll_trace(&mut **e),)+ }
             }
+            fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
+                match self { $(Self::$v(e) => NodeEp::add_iface(&mut **e, local),)+ }
+            }
+            fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent) {
+                match self { $(Self::$v(e) => NodeEp::iface_event(&mut **e, now, id, ev),)+ }
+            }
         }
     };
 }
