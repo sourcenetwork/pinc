@@ -502,7 +502,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             reflexive: refl.get(..nr).unwrap_or_default(),
             mapped: mapped.get(..nm).unwrap_or_default(),
             udp_heard: self.udp_any,
-            since_probe: self.net.first_probe().map_or(0, |t| now.saturating_sub(t)),
+            // A node none of whose relays takes UDP (a browser) has nothing to probe: UDP is blocked from the start.
+            since_probe: if (0..R).any(|i| self.relay_udp(i).is_some()) {
+                self.net.first_probe().map_or(0, |t| now.saturating_sub(t))
+            } else {
+                u64::MAX
+            },
             watchdog: super::link::dial_wait(self.rtt()),
         };
         let class = netcheck::classify(&o);
@@ -574,7 +579,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let Some(relay) = configured.or_else(|| self.relay_by_alt(&from)) else {
             return false;
         };
-        let Ok(d) = Datagram::decode(data) else { return configured.is_some() };
+        let Ok(d) = Datagram::decode(data) else {
+            return configured.is_some();
+        };
         // From the other address of the relay only tunnelled packets are the layer's: its answers about this node's
         // address and its lookups are about the configured one.
         if configured.is_none() && !matches!(d, Datagram::Spl { .. }) {
@@ -706,10 +713,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     // ---- address discovery and lookups ----
 
+    /// The UDP address of relay `i`, if it takes UDP.
+    fn relay_udp(&self, i: usize) -> Option<SocketAddr> {
+        self.rly.get(i).and_then(|r| r.cfg).and_then(|c| c.udp)
+    }
+
     /// Send a QAD probe to every relay with a UDP address.
     pub fn probe_all(&mut self, now: u64, env: &mut Env<'_, P>) {
         for i in 0..R {
-            let Some(udp) = self.rly.get(i).and_then(|r| r.cfg).and_then(|c| c.udp) else {
+            let Some(udp) = self.relay_udp(i) else {
                 continue;
             };
             let Ok(nonce) = env.random::<8>() else { continue };

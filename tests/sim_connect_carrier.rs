@@ -67,6 +67,29 @@ fn udp_blocked_forces_a_carrier_that_falls_back_from_tcp_to_websocket_and_still_
 }
 
 #[test]
+fn a_node_whose_relays_take_no_udp_is_blocked_at_once_and_can_be_found() {
+    big(|| {
+        let mut w = World::new(23);
+        let (_, rs) = w.relay(1, relay_ip(10));
+        let lan = w.sim.add_lan(LanConfig {
+            udp_block: true,
+            ..LanConfig::default()
+        });
+        // A browser: no relay has a UDP address for it, so it sends no probe and waits for no answer.
+        let carrier_only = vinc_tests::RelaySpec { udp: None, ..rs };
+        let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[carrier_only]), lan);
+        let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
+        w.run(secs(5));
+        assert_eq!(w.client(a).conn.class(), Some(Reach::UdpBlocked), "{}", w.dump(a));
+        // With a class it publishes its record, so a peer that only knows its id finds it through the relay.
+        w.dial(secs(5), b, a, vec![]);
+        w.run(secs(20));
+        assert!(w.connected(b).is_some(), "{}", w.dump(b));
+        assert!(w.incoming(a).is_some(), "{}", w.dump(a));
+    });
+}
+
+#[test]
 fn a_node_that_hears_udp_looks_peers_up_over_udp() {
     big(|| {
         let mut w = World::new(22);

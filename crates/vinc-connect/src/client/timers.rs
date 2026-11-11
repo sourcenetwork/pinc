@@ -91,7 +91,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.check_failover(now);
             self.next_probe = now.saturating_add(HOME_RETRY_NS);
             if self.net.home().is_none() {
-                let first = (0..R).find(|i| self.rly.get(*i).is_some_and(|r| r.cfg.is_some_and(|c| c.udp.is_some())));
+                // A node none of whose relays takes UDP (a browser) has no probe to wait for: its first relay is home.
+                let configured = |i: &usize| self.rly.get(*i).is_some_and(|r| r.cfg.is_some());
+                let first = (0..R)
+                    .find(|i| self.rly.get(*i).is_some_and(|r| r.cfg.is_some_and(|c| c.udp.is_some())))
+                    .or_else(|| (0..R).find(configured));
                 if let HomeStep::Fallback(f) = self.net.home_missing(first) {
                     self.notice(Notice::Home(f));
                 }
