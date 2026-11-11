@@ -128,9 +128,12 @@ impl<const RANGES: usize> ReceivedPackets<RANGES> {
         self.live().last().map(|iv| iv.1 - 1)
     }
 
-    /// Whether `pn` was received (or is too old to tell).
+    /// Whether `pn` was received, or is too old to tell: below the floor, or below every tracked range when the table
+    /// is full and cannot take it, so a replay of it is dropped instead of processed.
     pub fn contains(&self, pn: u64) -> bool {
-        pn < self.floor || self.live().iter().any(|iv| iv.0 <= pn && pn < iv.1)
+        pn < self.floor
+            || self.live().iter().any(|iv| iv.0 <= pn && pn < iv.1)
+            || (self.len == RANGES && self.live().first().is_some_and(|iv| pn.saturating_add(1) < iv.0))
     }
 
     /// The number of tracked ranges.

@@ -386,3 +386,17 @@ fn a_confirmation_takes_effect_two_seconds_after_it_was_made() {
     assert_eq!(ranges(&r, 7 * SECOND - 1).len(), 3);
     assert_eq!(ranges(&r, 7 * SECOND), vec![(10, 11)]);
 }
+
+#[test]
+fn a_packet_below_a_full_table_is_a_duplicate_before_it_is_processed() {
+    let mut r = ReceivedPackets::<4>::new();
+    // Four separate ranges fill the table; 0 is then older than anything it can keep.
+    for pn in [10, 20, 30, 40] {
+        assert_eq!(r.on_packet_received(bulk(pn, 0)), Ok(RxOutcome::New));
+    }
+    // The number just below the lowest range extends it and is still new.
+    assert!(!r.contains(9));
+    assert_eq!(r.on_packet_received(bulk(9, 1)), Ok(RxOutcome::New));
+    assert!(r.contains(0), "a number the table cannot track is treated as received");
+    assert_eq!(r.on_packet_received(bulk(0, 2)), Ok(RxOutcome::Duplicate));
+}
