@@ -254,13 +254,17 @@ fn vinc_fetches_a_small_value_from_three_providers() {
     sync_on(Stack::Vinc, 110, 3, 3 << 20);
 }
 
-/// Found by the harness: a value of 48 MiB held by two providers does not reach the consumer in a minute over real
-/// sockets on loopback, where one provider takes a few seconds and three providers of 3 MiB are fast. The scenario
-/// `sync-multi` shows it on containers. Kept to fail when the values layer finishes it, not hidden.
+/// A value of 48 MiB held by two providers reaches the consumer over real sockets on loopback. It once did not finish
+/// in a minute: a provider's session that began on the relay never moved to the direct path, and the relay's quota ran
+/// out.
 #[test]
-#[ignore = "known: a large value from several providers does not finish; see the report of the harness stream"]
 fn vinc_fetches_a_large_value_from_two_providers() {
     sync_on(Stack::Vinc, 111, 2, 48 << 20);
+}
+
+#[test]
+fn vinc_fetches_a_large_value_from_one_provider() {
+    sync_on(Stack::Vinc, 112, 1, 48 << 20);
 }
 
 /// Two sets that differ in a few items on each side reconcile to exactly that difference.
