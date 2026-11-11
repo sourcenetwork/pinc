@@ -1200,6 +1200,28 @@ proptest! {
     }
 }
 
+#[test]
+fn a_stream_has_data_to_send_while_new_bytes_or_a_retransmission_wait() {
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
+    assert!(!t.has_data_to_send());
+    t.write(&mut pool, id, &[1u8; 2800], 1 << 20).unwrap();
+    assert!(t.has_data_to_send(), "new bytes wait");
+    let mut frames = Vec::new();
+    while let Some(f) = t.next_stream_frame(1400) {
+        frames.push((f.offset, f.len as u64));
+    }
+    assert_eq!(frames.len(), 2);
+    assert!(!t.has_data_to_send(), "everything is sent and nothing is lost");
+    t.on_lost(id, frames[0].0, frames[0].1, false);
+    assert!(t.has_data_to_send(), "a lost range waits to be sent again");
+    let again = t.next_stream_frame(1400).unwrap();
+    assert!(!t.has_data_to_send());
+    t.on_acked(&mut pool, id, again.offset, again.len as u64, false);
+    t.on_acked(&mut pool, id, frames[1].0, frames[1].1, false);
+    assert!(!t.has_data_to_send());
+}
+
 // ---- allocation ---------------------------------------------------------------------------------------------------
 
 #[test]
