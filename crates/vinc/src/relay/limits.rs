@@ -102,15 +102,21 @@ mod tests {
     fn a_relay_builds_and_drops_on_a_one_mebibyte_stack() {
         use vinc_keystore::SoftwareStore;
 
+        use alloc::rc::Rc;
+        use core::cell::RefCell;
+
+        use super::super::access::AllowAll;
         use super::super::state::Core;
         use crate::keys::Identity;
 
         std::thread::Builder::new()
             .stack_size(1 << 20)
             .spawn(|| {
-                let id = Identity::from_seed(&[3; 32]).unwrap();
-                let hub = Some(("127.0.0.1:1".parse().unwrap(), vec![b"t".to_vec()]));
-                drop(Core::<(), SoftwareStore>::new(id, &[], Limits::default(), hub, 1).unwrap());
+                let id = Rc::new(RefCell::new(Identity::from_seed(&[3; 32]).unwrap()));
+                let tunnel = Some("127.0.0.1:1".parse().unwrap());
+                drop(
+                    Core::<(), SoftwareStore, AllowAll>::new(id, AllowAll, &[], Limits::default(), tunnel, 1).unwrap(),
+                );
             })
             .unwrap()
             .join()

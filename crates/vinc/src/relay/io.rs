@@ -3,9 +3,9 @@
 //! The relay opens no socket and starts no timer. The host passes:
 //!
 //! - [`Udp`]: `recv` fills a buffer with one datagram and returns its length and sender; `send` sends one datagram.
-//! - [`Carriers`]: the byte streams members open and the relay opens to its peers, as a completion queue (see
-//!   [`Carriers`]); [`CarrierFns`] builds it from async closures. The host has done the TCP accept, or the HTTP upgrade
-//!   of a WebSocket.
+//! - [`Carriers`], given to the builder beside these: the byte streams members open and the relay opens to its peers, as
+//!   a completion queue (see [`Carriers`]); [`CarrierFns`] builds it from async closures. The host has done the TCP
+//!   accept, or the HTTP upgrade of a WebSocket.
 //! - [`Clock`]: a clock in nanoseconds since the Unix epoch that never goes backward, and a sleep until an instant of it.
 //!
 //! The closures may borrow from the caller. The stream type is the host's own, kept in an `Rc`. Dropping the future of
@@ -14,6 +14,7 @@
 
 use alloc::rc::Rc;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 use core::net::SocketAddr;
 use core::task::{Context, Poll};
 
@@ -71,8 +72,6 @@ pub trait Hosted: sealed::Sealed {
     type Streams: Carriers<Stream = Self::Stream>;
 
     #[doc(hidden)]
-    fn carriers(&self) -> &Self::Streams;
-    #[doc(hidden)]
     fn recv(&self, buf: &mut [u8]) -> impl Future<Output = Result<(usize, SocketAddr)>>;
     #[doc(hidden)]
     fn send(&self, pkt: &[u8], to: SocketAddr) -> impl Future<Output = Result<usize>>;
@@ -85,13 +84,17 @@ pub trait Hosted: sealed::Sealed {
 /// The host's I/O, grouped as [`Udp`], [`Carriers`] and [`Clock`].
 pub struct Host<R, S, C, N, Z> {
     udp: Udp<R, S>,
-    carriers: C,
     clock: Clock<N, Z>,
+    carriers: PhantomData<fn() -> C>,
 }
 
 impl<R, S, C, N, Z> Host<R, S, C, N, Z> {
-    pub(crate) const fn new(udp: Udp<R, S>, carriers: C, clock: Clock<N, Z>) -> Self {
-        Self { udp, carriers, clock }
+    pub(crate) const fn new(udp: Udp<R, S>, clock: Clock<N, Z>) -> Self {
+        Self {
+            udp,
+            clock,
+            carriers: PhantomData,
+        }
     }
 }
 
@@ -113,10 +116,6 @@ where
 {
     type Stream = C::Stream;
     type Streams = C;
-
-    fn carriers(&self) -> &C {
-        &self.carriers
-    }
 
     async fn recv(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         (self.udp.recv)(buf).await
@@ -182,10 +181,6 @@ impl sealed::Sealed for Unbuilt {}
 impl Hosted for Unbuilt {
     type Stream = ();
     type Streams = NoCarriers;
-
-    fn carriers(&self) -> &NoCarriers {
-        match *self {}
-    }
 
     async fn recv(&self, _: &mut [u8]) -> Result<(usize, SocketAddr)> {
         match *self {}

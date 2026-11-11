@@ -100,6 +100,10 @@ pub enum Closed {
     Full,
     /// The relay stopped.
     Shutdown,
+    /// The access policy refused the node.
+    Denied,
+    /// The access policy withdrew the node's right to hold a carrier.
+    Revoked,
 }
 
 /// Something that happened, for an operator to log.
@@ -160,6 +164,8 @@ pub struct Stats {
     pub carriers_opened: u64,
     /// Carriers that ended, by any cause.
     pub carriers_closed: u64,
+    /// Carriers the access policy refused after their handshake.
+    pub carriers_denied: u64,
     /// Carriers whose handshake or records failed.
     pub protocol_failures: u64,
     /// Carriers closed for not draining their queue.
@@ -213,6 +219,7 @@ pub(crate) struct Counters {
     pub(crate) stream_ops: u64,
     pub(crate) carriers_opened: u64,
     pub(crate) carriers_closed: u64,
+    pub(crate) carriers_denied: u64,
     pub(crate) protocol_failures: u64,
     pub(crate) slow_closed: u64,
     pub(crate) timed_out: u64,

@@ -204,4 +204,9 @@ where
     fn drive(&self) -> impl Future<Output = ()> {
         self.run()
     }
+
+    fn ended(&self) {
+        self.reqs.borrow_mut().clear();
+        self.done.borrow_mut().clear();
+    }
 }

@@ -18,6 +18,7 @@ use vinc_connect::relay::rule::RECORD_TTL_NS;
 use vinc_crypto::{IdentityAlg, NodeId};
 
 use super::Core;
+use crate::relay::access::Access;
 use crate::relay::limits::MAILBOX_MEMBERS;
 use crate::relay::store::Kept;
 use vinc_keystore::KeyStore;
@@ -79,7 +80,7 @@ fn decode(mut blob: &[u8]) -> impl Iterator<Item = (NodeId, u8, u64, &[u8])> {
     })
 }
 
-impl<S, K: KeyStore> Core<S, K> {
+impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     /// A record was stored: write it, and remember the store has it.
     pub(super) fn note_record(&mut self, node: NodeId) {
         if self.keep.restoring {

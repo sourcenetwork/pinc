@@ -11,6 +11,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::rc::Rc;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::net::SocketAddr;
 
 use vinc_connect::carrier::ProtectedCarrier;
@@ -21,10 +22,10 @@ use vinc_crypto::{Drbg, NodeId, Software};
 use vinc_keystore::KeyStore;
 use vinc_security::{ConnId, Env, KeyRequest, KeyResponse, LocalIdentity, PrekeyInfo, ResponderStores};
 
+use super::access::Access;
 use super::carriers::{Completion, Done, Tag};
 use super::conn::Conn;
 use super::fx::{Fx, Item};
-use super::hub::{Hub, Note, Target};
 use super::limits::{Limits, Machine};
 use super::peers::{Peer, Slot};
 use super::stats::{Closed, Counters, Event, Events, Reason, Stats};
@@ -34,6 +35,7 @@ use crate::keys::{Identity, Prekeys, is_identity};
 
 mod keep;
 mod mesh;
+mod tunnel;
 
 pub(crate) use keep::Job;
 
@@ -56,12 +58,13 @@ enum Step {
     Gone,
 }
 
-pub(crate) struct Core<S, K: KeyStore> {
+pub(crate) struct Core<S, K: KeyStore, A> {
     pub(crate) sm: Box<Machine>,
     pub(crate) conns: Vec<Option<Conn<S>>>,
     free: Vec<usize>,
     by_node: BTreeMap<[u8; 33], usize>,
-    identity: Identity<K>,
+    identity: Rc<RefCell<Identity<K>>>,
+    access: A,
     local: LocalIdentity,
     drbg: Drbg,
     stores: Box<ResponderStores<4, 4>>,
@@ -88,9 +91,7 @@ pub(crate) struct Core<S, K: KeyStore> {
     accept_out: bool,
     accept_pause: u64,
     pub(crate) stopping: bool,
-    hub: Option<Hub>,
-    notes: Vec<Note>,
-    hub_tx: Vec<u8>,
+    hub: Option<tunnel::Tunnel>,
     last_now: u64,
 }
 
@@ -99,35 +100,36 @@ fn new_machine(cfg: Config) -> Box<Machine> {
     Box::new(Machine::new(cfg))
 }
 
-impl<S, K: KeyStore> Core<S, K> {
+impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     pub(crate) fn new(
-        mut identity: Identity<K>,
+        identity: Rc<RefCell<Identity<K>>>,
+        access: A,
         peers: &[Peer],
         limits: Limits,
-        hub: Option<(SocketAddr, Vec<Vec<u8>>)>,
+        tunnel: Option<SocketAddr>,
         now: u64,
     ) -> crate::Result<Self> {
         let mut seed = [0u8; 32];
-        identity.random(&mut seed)?;
         let mut key = [0u8; 8];
-        identity.random(&mut key)?;
-        let mut cfg = Config::new(identity.node_id(), u64::from_le_bytes(key));
+        let (id, local) = {
+            let mut ident = identity.borrow_mut();
+            ident.random(&mut seed)?;
+            ident.random(&mut key)?;
+            (ident.node_id(), ident.local()?)
+        };
+        let mut cfg = Config::new(id, u64::from_le_bytes(key));
         cfg.quota = limits.quota;
         cfg.mailbox_max_age_ns = limits.mailbox_max_age_ns;
-        let local = identity.local()?;
         let mut prekeys = Prekeys::new()?;
         let dial_prekey = prekeys.rotate(now)?;
-        let peers = mesh::slots(&identity.node_id(), peers, now);
-        let hub = match hub {
-            Some((addr, alpns)) => Some(Hub::new(addr, &alpns, &mut identity, &limits, now)?),
-            None => None,
-        };
+        let peers = mesh::slots(&id, peers, now);
         Ok(Self {
             sm: new_machine(cfg),
             conns: Vec::new(),
             free: Vec::new(),
             by_node: BTreeMap::new(),
             identity,
+            access,
             local,
             drbg: Drbg::new(&seed),
             stores: Box::default(),
@@ -153,15 +155,21 @@ impl<S, K: KeyStore> Core<S, K> {
             accept_out: false,
             accept_pause: 0,
             stopping: false,
-            hub,
-            notes: Vec::new(),
-            hub_tx: alloc::vec![0; vinc_core::MAX_DATAGRAM + 64],
+            hub: tunnel.map(tunnel::Tunnel::new),
             last_now: now,
         })
     }
 
+    pub(crate) fn identity(&self) -> Rc<RefCell<Identity<K>>> {
+        Rc::clone(&self.identity)
+    }
+
+    pub(crate) const fn now_hint(&self) -> u64 {
+        self.last_now
+    }
+
     pub(crate) fn node_id(&self) -> NodeId {
-        self.identity.node_id()
+        self.identity.borrow().node_id()
     }
 
     pub(crate) fn pop_event(&mut self) -> Option<Event> {
@@ -199,7 +207,8 @@ impl<S, K: KeyStore> Core<S, K> {
             datagrams_out: c.datagrams_out,
             datagrams_dropped: c.datagrams_dropped,
             hub_dropped: c.hub_dropped,
-            hub_sessions: self.hub.as_ref().map_or(0, Hub::sessions),
+            hub_sessions: self.hub.as_ref().map_or(0, tunnel::Tunnel::sessions),
+            carriers_denied: c.carriers_denied,
             records: self.sm.record_count(),
             store_errors: c.store_errors,
             events_dropped: c.events_dropped,
@@ -426,7 +435,6 @@ impl<S, K: KeyStore> Core<S, K> {
             c.put_read(buf);
         }
         self.mark(slot);
-        self.pump_hub(now);
     }
 
     fn read_ws(&mut self, slot: usize, now: u64, buf: &[u8], n: usize) {
@@ -547,7 +555,9 @@ impl<S, K: KeyStore> Core<S, K> {
         };
         let polled = if c.carrier.key_request().is_some() {
             let (sig, secret) = match c.carrier.key_request() {
-                Some(KeyRequest::Sign { key, message, .. }) if is_identity(key) => (identity.sign(message).ok(), None),
+                Some(KeyRequest::Sign { key, message, .. }) if is_identity(key) => {
+                    (identity.borrow_mut().sign(message).ok(), None)
+                }
                 Some(KeyRequest::Decapsulate { key, ct }) => (None, prekeys.decapsulate(key, ct)),
                 _ => (None, None),
             };
@@ -609,6 +619,11 @@ impl<S, K: KeyStore> Core<S, K> {
                 return;
             }
         } else {
+            if !self.access.admit(&peer) {
+                self.counters.carriers_denied += 1;
+                self.dying(slot, Closed::Denied);
+                return;
+            }
             if !self.by_node.contains_key(&key) && self.sm.sessions() >= self.limits.carriers {
                 self.counters.refused_carriers_full += 1;
                 self.dying(slot, Closed::Full);
@@ -702,13 +717,9 @@ impl<S, K: KeyStore> Core<S, K> {
                 }
                 Item::Udp(UdpTarget::Reply(addr), s, e) => self.queue_udp(addr, fx.arena.get(s..e).unwrap_or_default()),
                 Item::Udp(UdpTarget::Member(node), s, e) => {
-                    let addr = self.hub.as_ref().and_then(|h| h.member_addr(&node));
-                    match addr {
-                        Some(a) => self.queue_udp(a, fx.arena.get(s..e).unwrap_or_default()),
-                        None => self.counters.datagrams_dropped += 1,
-                    }
+                    self.queue_member_udp(&node, fx.arena.get(s..e).unwrap_or_default());
                 }
-                Item::Local(from, s, e) => self.local_packet(&from, fx.arena.get(s..e).unwrap_or_default()),
+                Item::Local(from, s, e) => self.queue_local(&from, fx.arena.get(s..e).unwrap_or_default()),
                 Item::Close(node, session, reason) => self.close_session(&node, session, reason),
                 Item::Wake(node) => self.event(Event::Wake { node }),
                 Item::Trace(t) => self.trace(t),
@@ -718,55 +729,6 @@ impl<S, K: KeyStore> Core<S, K> {
         fx.lost = 0;
         fx.arena.clear();
         self.fx = fx;
-    }
-
-    fn local_packet(&mut self, from: &NodeId, packet: &[u8]) {
-        let now = self.last_now;
-        match self.hub.as_mut() {
-            Some(h) => h.local_packet(now, from, packet),
-            None => self.counters.hub_dropped += 1,
-        }
-    }
-
-    /// Answer the hub endpoint's events and send what it wants to send.
-    fn pump_hub(&mut self, now: u64) {
-        for _ in 0..STEP_BUDGET {
-            let mut did = false;
-            let Self {
-                hub, identity, notes, ..
-            } = self;
-            let Some(hub) = hub.as_mut() else { return };
-            notes.clear();
-            hub.events(now, identity, notes);
-            for note in core::mem::take(&mut self.notes) {
-                did = true;
-                match note {
-                    Note::Awake(n) => {
-                        self.sm.member_returned(now, &n, &mut self.fx);
-                        self.flush();
-                    }
-                    Note::Gone(n) => self.sm.udp_gone(&n),
-                }
-            }
-            let mut buf = core::mem::take(&mut self.hub_tx);
-            while let Some((target, len)) = self.hub.as_mut().and_then(|h| h.transmit(now, &mut buf)) {
-                did = true;
-                let bytes = buf.get(..len).unwrap_or_default();
-                match target {
-                    Target::Udp(a) => self.queue_udp(a, bytes),
-                    Target::Member(n) => {
-                        // vertexia: a refused packet is counted and traced by the machine
-                        let _ = self.sm.send_local(now, &n, 0, bytes, &mut self.fx);
-                        self.flush();
-                    }
-                    Target::Nowhere => self.counters.hub_dropped += 1,
-                }
-            }
-            self.hub_tx = buf;
-            if !did {
-                return;
-            }
-        }
     }
 
     fn close_session(&mut self, node: &NodeId, session: SessionId, reason: CloseReason) {
@@ -803,12 +765,7 @@ impl<S, K: KeyStore> Core<S, K> {
                     node: Some(node),
                 });
             }
-            Trace::Pulse { node } => {
-                let now = self.last_now;
-                if let Some(h) = self.hub.as_mut() {
-                    h.pulse(now, &node);
-                }
-            }
+            Trace::Pulse { node } => self.queue_pulse(node),
             Trace::RecordStored { node, seq, .. } => {
                 self.note_record(node);
                 self.event(Event::RecordStored { node, seq });
@@ -844,7 +801,7 @@ impl<S, K: KeyStore> Core<S, K> {
         }
     }
 
-    fn queue_udp(&mut self, to: SocketAddr, bytes: &[u8]) {
+    pub(crate) fn queue_udp(&mut self, to: SocketAddr, bytes: &[u8]) {
         if self.udp_out.len() >= UDP_BACKLOG {
             self.counters.datagrams_dropped += 1;
             return;
@@ -872,24 +829,23 @@ impl<S, K: KeyStore> Core<S, K> {
         }
     }
 
-    /// A datagram arrived from `src`.
-    pub(crate) fn on_datagram(&mut self, now: u64, src: SocketAddr, bytes: &mut [u8]) {
+    /// A datagram arrived from `src`, which the hub endpoint knows as `member`. Whether it was the relay's own (the
+    /// machine took it); if not, the endpoint's owner takes it.
+    pub(crate) fn on_datagram(&mut self, now: u64, src: SocketAddr, member: Option<NodeId>, bytes: &mut [u8]) -> bool {
         self.last_now = now;
         self.counters.datagrams_in += 1;
-        let member = self.hub.as_ref().and_then(|h| h.member_at(&src));
         if bytes.first().is_some_and(|b| *b < 0x40) {
             // vertexia: the machine counts and traces a refused datagram; nothing else to do with the result
             let _ = self.sm.datagram(now, src, member.as_ref(), bytes, &mut self.fx);
             self.flush();
-        } else if let Some(hub) = self.hub.as_mut() {
-            if let Some(n) = member {
-                let _ = self.sm.udp_heard(&n, now);
-            }
-            hub.handle_datagram(now, src, bytes);
-        } else {
-            self.counters.hub_dropped += 1;
+            return true;
         }
-        self.pump_hub(now);
+        if self.hub.is_none() {
+            self.counters.hub_dropped += 1;
+        } else if let Some(n) = member {
+            let _ = self.sm.udp_heard(&n, now);
+        }
+        false
     }
 
     /// Run the machine's timers and the checks of stream deadlines.
@@ -898,10 +854,6 @@ impl<S, K: KeyStore> Core<S, K> {
         self.sm.handle_timeout(now, &mut self.fx);
         self.flush();
         self.note_sweep();
-        if let Some(h) = self.hub.as_mut() {
-            h.handle_timeout(now);
-        }
-        self.pump_hub(now);
         if now < self.check_at {
             return;
         }
@@ -921,14 +873,8 @@ impl<S, K: KeyStore> Core<S, K> {
 
     /// When the loop must call [`Core::on_timeout`].
     pub(crate) fn next_wake(&self) -> u64 {
-        let hub = self.hub.as_ref().and_then(Hub::next_timeout).unwrap_or(u64::MAX);
         let dial = self.next_dial_at();
-        self.sm
-            .next_deadline()
-            .unwrap_or(u64::MAX)
-            .min(self.check_at)
-            .min(hub)
-            .min(dial)
+        self.sm.next_deadline().unwrap_or(u64::MAX).min(self.check_at).min(dial)
     }
 
     pub(crate) fn store_failed(&mut self) {

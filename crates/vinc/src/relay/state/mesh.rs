@@ -12,6 +12,7 @@ use vinc_security::{ConnId, CreditRecord, Env, InitiatorParams};
 
 use super::Core;
 use crate::carrier::CarrierKind;
+use crate::relay::access::Access;
 use crate::relay::conn::Conn;
 use crate::relay::peers::{Link, Peer, REDIAL_NS, Slot, dials};
 use crate::relay::stats::{Closed, Event};
@@ -31,7 +32,7 @@ pub(super) fn slots(me: &NodeId, peers: &[Peer], now: u64) -> Vec<Slot> {
     out
 }
 
-impl<S, K: KeyStore> Core<S, K> {
+impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     /// Whether `node` is listed as a peer relay.
     pub(super) fn is_listed(&self, node: &NodeId) -> bool {
         self.peers.iter().any(|s| s.peer.id == *node)
@@ -43,7 +44,7 @@ impl<S, K: KeyStore> Core<S, K> {
         if self.stopping {
             return None;
         }
-        let me = self.identity.node_id();
+        let me = self.identity.borrow().node_id();
         let i = self.peers.iter().position(|s| {
             matches!(s.link, Link::Idle(at) if at <= now) && dials(&me, &s.peer.id) && s.peer.kind().is_some()
         })?;
@@ -121,7 +122,7 @@ impl<S, K: KeyStore> Core<S, K> {
 
     /// When the next peer is due to be dialed.
     pub(super) fn next_dial_at(&self) -> u64 {
-        let me = self.identity.node_id();
+        let me = self.identity.borrow().node_id();
         self.peers
             .iter()
             .filter(|s| dials(&me, &s.peer.id) && s.peer.kind().is_some())

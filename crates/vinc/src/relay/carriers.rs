@@ -97,4 +97,11 @@ pub trait Carriers {
     /// Work the host does in the relay's own task: the relay polls this future for as long as it runs and it never
     /// finishes. A host whose operations run in tasks of its own returns [`core::future::pending`].
     fn drive(&self) -> impl Future<Output = ()>;
+
+    /// The relay's run (or the part that holds these carriers) has ended or been dropped: abandon every operation still
+    /// in flight and drop the queued completions. The relay has dropped its streams without calling [`Carriers::close`],
+    /// so a stream whose last drop ends its connection is closed once the host lets go of its clones. It can be called
+    /// more than once; the default does nothing, which suits a host whose operations are futures the relay's own task
+    /// owns.
+    fn ended(&self) {}
 }
