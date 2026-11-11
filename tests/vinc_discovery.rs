@@ -89,7 +89,7 @@ async fn a_dial_by_node_id_succeeds_once_the_peer_published_and_its_hints_round_
         assert_eq!(client.lookup(&server.id()).await.unwrap(), None);
 
         server.set_hints(&POINTER).unwrap();
-        server.publish().await.unwrap();
+        server.publish_record().await.unwrap();
 
         let c = client.connect(server.id(), ECHO).await.unwrap();
         assert_eq!(c.remote(), server.id());
@@ -113,7 +113,7 @@ async fn hints_are_bounded_and_a_republish_replaces_them() {
             ErrorKind::TooLarge
         );
         server.set_hints(&[7; MAX_HINTS]).unwrap();
-        server.publish().await.unwrap();
+        server.publish_record().await.unwrap();
         let old = table.held.borrow()[&server.id()].clone();
         assert_eq!(
             client.lookup(&server.id()).await.unwrap().unwrap().hints,
@@ -121,7 +121,7 @@ async fn hints_are_bounded_and_a_republish_replaces_them() {
         );
 
         server.set_hints(b"v2").unwrap();
-        server.publish().await.unwrap();
+        server.publish_record().await.unwrap();
         let new = client.lookup(&server.id()).await.unwrap().unwrap();
         assert_eq!(new.hints, b"v2");
 
@@ -137,7 +137,7 @@ async fn hints_are_bounded_and_a_republish_replaces_them() {
 async fn a_silent_rendezvous_fails_the_dial_inside_the_deadline() {
     let table = Table::default();
     let server = peer(&table).await;
-    server.publish().await.unwrap();
+    server.publish_record().await.unwrap();
     table.silent.set(true);
     let client = bind(builder().alpn(ECHO).discovery(Records::new(table.clone()))).await;
     within(60, async {
@@ -214,7 +214,7 @@ async fn a_forged_record_is_refused_before_any_packet_and_a_stale_one_costs_one_
         .await
         .unwrap();
         let (id, at) = (real.id(), real.addr().direct[0]);
-        real.publish().await.unwrap();
+        real.publish_record().await.unwrap();
         let genuine = table.held.borrow()[&id].clone();
         let other = bind(
             builder()
@@ -223,7 +223,7 @@ async fn a_forged_record_is_refused_before_any_packet_and_a_stale_one_costs_one_
                 .discovery(Records::new(table.clone())),
         )
         .await;
-        other.publish().await.unwrap();
+        other.publish_record().await.unwrap();
         let foreign = table.held.borrow()[&other.id()].clone();
 
         // A record whose signature is broken: refused, and nothing reaches the address it names.

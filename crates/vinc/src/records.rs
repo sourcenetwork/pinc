@@ -9,7 +9,7 @@
 //! fails and nothing is accepted from it.
 //!
 //! [`Records`] is the [`Discovery`] the builder takes (`Builder::discovery(Records::new(store))`); the endpoint then
-//! has [`publish`](crate::Endpoint::publish), [`set_hints`](crate::Endpoint::set_hints) and
+//! has [`publish_record`](crate::Endpoint::publish_record), [`set_hints`](crate::Endpoint::set_hints) and
 //! [`lookup`](crate::Endpoint::lookup). The store is the host's: an in-process table for tests, and the node's home
 //! relay once the connectivity client runs under the facade.
 //!

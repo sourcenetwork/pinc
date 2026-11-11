@@ -244,7 +244,7 @@ impl<H: Hosted + 'static> VincTransport<H> {
     /// Put `DefraDB`'s service-record pointer in this node's record and publish it.
     pub async fn set_service_pointer(&self, pointer: &[u8; POINTER_LEN]) -> Result<(), Error> {
         self.ep.set_hints(pointer)?;
-        self.ep.publish().await
+        self.ep.publish_record().await
     }
 
     /// The service-record pointer `peer` published, if it published one.

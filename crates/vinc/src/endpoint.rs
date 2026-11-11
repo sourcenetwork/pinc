@@ -680,8 +680,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 pub const LOOKUP_WAIT: Duration = Duration::from_secs(3);
 
 impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
-    /// Set the hints the next [`publish`](Self::publish) puts in this node's record: at most [`MAX_HINTS`] bytes the
-    /// application gives meaning to (a pointer to its service records, say). Empty by default.
+    /// Set the hints the next [`publish_record`](Self::publish_record) puts in this node's record: at most
+    /// [`MAX_HINTS`] bytes the application gives meaning to (a pointer to its service records, say). Empty by default.
     ///
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] for more than [`MAX_HINTS`] bytes; the hints are unchanged then.
@@ -703,8 +703,9 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
         Ok(())
     }
 
-    /// This node's record as [`publish`](Self::publish) sends it: its address ([`addr`](Self::addr)), its hints and a
-    /// sequence number above every earlier one (the wall clock in milliseconds, or one more than the last), signed
+    /// This node's record as [`publish_record`](Self::publish_record) sends it: its address ([`addr`](Self::addr)),
+    /// its hints and a sequence number above every earlier one (the wall clock in milliseconds, or one more than the
+    /// last), signed
     /// with its identity. With no relay client in the endpoint yet, the home relay field names this node and the
     /// reachability class says public; the connectivity client fills both once it runs under the facade.
     ///
@@ -745,7 +746,7 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
     ///
     /// # Errors
     /// As [`signed_record`](Self::signed_record), and the store's own error.
-    pub async fn publish(&self) -> Result<()> {
+    pub async fn publish_record(&self) -> Result<()> {
         let record = self.signed_record().await?;
         self.0.discovery.put(&record).await
     }
