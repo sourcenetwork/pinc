@@ -169,6 +169,8 @@ impl<S, K: KeyStore> Core<S, K> {
                 .filter(|c| c.peer && c.node.is_some() && c.dying.is_none())
                 .count(),
             peer_dial_failures: c.peer_dial_failures,
+            wakes: c.wakes,
+            stream_polls: c.stream_polls,
             carriers_opened: c.carriers_opened,
             carriers_closed: c.carriers_closed,
             protocol_failures: c.protocol_failures,

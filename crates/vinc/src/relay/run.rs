@@ -186,6 +186,7 @@ where
     poll_fn(|cx| {
         *inner.waker.borrow_mut() = Some(cx.waker().clone());
         let mut core = inner.core.borrow_mut();
+        core.counters.wakes += 1;
         if inner.stop.get() && !core.stopping {
             core.begin_shutdown();
         }
@@ -233,6 +234,7 @@ where
             }
 
             ops.resize_with(core.conns.len(), Ops::default);
+            core.counters.stream_polls += ops.len() as u64;
             for slot in 0..ops.len() {
                 if let Some(o) = ops.get_mut(slot) {
                     progressed |= poll_conn(&mut *core, o, slot, cx, now, &mk_r, &mk_w);
