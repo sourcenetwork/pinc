@@ -357,7 +357,7 @@ tr.sel td { background: var(--accent-weak); }
 .log .warn { color: var(--warn); }
 .log .error { color: var(--bad); }
 .log .fault { color: var(--ink); }
-.log .fault::before { content: "\26A1 "; }
+.log .fault span::before { content: "\26A1 "; }
 
 /* --- results --- */
 .results { grid-template-columns: 300px minmax(0, 1fr); }
