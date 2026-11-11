@@ -1,7 +1,8 @@
 //! `vinc-distributed`: one binary, several modes.
 //!
 //! ```text
-//! vinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>]
+//! vinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>] [--hosts <fleet.toml>]
+//!     [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
 //! vinc-distributed run <scenario.toml> [--image <image>] [--results <dir>] [--reps <n>]
 //!     [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
 //! vinc-distributed validate <scenario.toml>
@@ -15,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use vinc_distributed::backend::containers::{self, IMAGE};
+use vinc_distributed::backend::fleet::Fleet;
+use vinc_distributed::backend::ssh;
 use vinc_distributed::orchestrate::{self, Options};
 use vinc_distributed::plan::Plan;
 use vinc_distributed::quiet::Thresholds;
@@ -23,12 +26,13 @@ use vinc_distributed::serve::{ServeOptions, serve};
 use vinc_distributed::{helper, node};
 
 const USAGE: &str = "usage:
-  vinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>]
-  vinc-distributed run <scenario.toml> [--image <image>] [--results <dir>] [--reps <n>]
+  vinc-distributed serve [--bind <addr:port>] [--token <token>] [--image <image>] [--hosts <fleet.toml>]
+      [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
+  vinc-distributed run <scenario.toml> [--image <image>] [--hosts <fleet.toml>] [--results <dir>] [--reps <n>]
       [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
   vinc-distributed validate <scenario.toml>
   vinc-distributed plan <scenario.toml>
-  vinc-distributed clean
+  vinc-distributed clean [--hosts <fleet.toml>]
   vinc-distributed node transport --stack <vinc|iroh|libp2p> server|client ...";
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -75,6 +79,7 @@ fn run(args: &[String]) -> Result<(), String> {
         events: None,
         cancel: None,
         quiet: thresholds(args)?,
+        hosts: fleet(args)?,
     };
     logs();
     let out = runtime()?
@@ -102,9 +107,26 @@ fn dashboard(args: &[String]) -> Result<(), String> {
         token: flag(args, "--token"),
         root: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         image: flag(args, "--image").unwrap_or_else(|| IMAGE.into()),
+        hosts: fleet(args)?,
+        quiet: thresholds(args)?,
     };
     logs();
     runtime()?.block_on(serve(opts)).map_err(|e| e.to_string())
+}
+
+/// The fleet file named by `--hosts`, if any.
+fn fleet(args: &[String]) -> Result<Option<Fleet>, String> {
+    let Some(path) = flag(args, "--hosts") else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    let f = Fleet::parse(&text).map_err(|e| format!("{path}: {e}"))?;
+    let problems = f.validate();
+    if problems.is_empty() {
+        Ok(Some(f))
+    } else {
+        Err(problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))
+    }
 }
 
 fn thresholds(args: &[String]) -> Result<Thresholds, String> {
@@ -167,8 +189,18 @@ fn plan(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn clean() -> Result<(), String> {
+fn clean(args: &[String]) -> Result<(), String> {
     logs();
+    if let Some(f) = fleet(args)? {
+        let removed = runtime()?.block_on(ssh::clean(&f)).map_err(|e| e.to_string())?;
+        if removed.is_empty() {
+            println!("nothing to clean");
+        }
+        for r in removed {
+            println!("removed {r}");
+        }
+        return Ok(());
+    }
     let c = runtime()?.block_on(containers::clean()).map_err(|e| e.to_string())?;
     if c.removed.is_empty() && !c.unloaded_ifb {
         println!("nothing to clean");
@@ -196,7 +228,7 @@ fn main() -> ExitCode {
         "serve" => dashboard(rest),
         "validate" => validate(rest),
         "plan" => plan(rest),
-        "clean" => clean(),
+        "clean" => clean(rest),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

@@ -52,8 +52,8 @@ fn peer_of(name: &str) -> Result<PeerId, String> {
     keypair(name).map(|k| k.public().to_peer_id())
 }
 
-fn addr_of(ip: std::net::Ipv4Addr, peer: &PeerId) -> Result<Multiaddr, String> {
-    format!("/ip4/{ip}/udp/{PORT}/quic-v1/p2p/{peer}")
+fn addr_of(ip: std::net::Ipv4Addr, port: u16, peer: &PeerId) -> Result<Multiaddr, String> {
+    format!("/ip4/{ip}/udp/{port}/quic-v1/p2p/{peer}")
         .parse()
         .map_err(|e| format!("an address could not be made: {e}"))
 }
@@ -382,7 +382,7 @@ impl App {
             .map_err(|e| format!("the swarm did not start: {e}"))?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(300)))
             .build();
-        let listen: Multiaddr = format!("/ip4/{}/udp/{PORT}/quic-v1", me_spec.ip)
+        let listen: Multiaddr = format!("/ip4/{}/udp/{}/quic-v1", me_spec.ip, me_spec.port(PORT))
             .parse()
             .map_err(|e| format!("the listen address is not valid: {e}"))?;
         swarm
@@ -392,7 +392,7 @@ impl App {
         let mut bootstrap = Vec::new();
         for p in init.peers.iter().filter(|p| p.name != init.name) {
             let id = peer_of(&p.name)?;
-            let addr = addr_of(p.public_ip, &id)?;
+            let addr = addr_of(p.public_ip, p.port(PORT), &id)?;
             swarm.add_peer_address(id, addr.clone());
             if p.role != Role::Peer {
                 bootstrap.push((id, addr));

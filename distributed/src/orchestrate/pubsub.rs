@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::backend::containers::Containers;
+use crate::backend::Cluster;
 use crate::error::Result;
 use crate::node::data::wall_ns;
 use crate::node::proto::{Cmd, PubSubReport};
@@ -24,7 +24,7 @@ use crate::workloads::Pubsub;
 /// The first message leaves this long after the schedule starts, so every publisher is ready for it.
 const LEAD_NS: u64 = 1_000_000_000;
 
-pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, w: &Pubsub) -> Result<()> {
+pub(crate) async fn run(ctx: &mut Ctx, b: &Cluster, w: &Pubsub) -> Result<()> {
     let nodes = ctx.sc.expand();
     let subs = w.subscribers_of(&nodes);
     let label = format!(
@@ -76,7 +76,7 @@ fn base_row(ctx: &Ctx, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Row {
     }
 }
 
-async fn one(ctx: &Ctx, b: &Containers, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Result<Row> {
+async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Result<Row> {
     let mut row = base_row(ctx, stack, w, rep, pair);
     let set = AppSet::new(b, &ctx.plan, stack, MTU);
     let outcome = body(ctx, b, &set, w, &mut row).await;
@@ -90,7 +90,7 @@ async fn one(ctx: &Ctx, b: &Containers, stack: Stack, w: &Pubsub, rep: u32, pair
     Ok(row)
 }
 
-async fn body(ctx: &Ctx, b: &Containers, set: &AppSet<'_>, w: &Pubsub, row: &mut Row) -> Result<()> {
+async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, row: &mut Row) -> Result<()> {
     set.start_all().await?;
     set.join_all(&w.topic, w.join_s * 1000).await?;
     tokio::time::sleep(Duration::from_secs_f64(w.warmup_s)).await;

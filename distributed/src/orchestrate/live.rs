@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use crate::backend::containers::Containers;
+use crate::backend::Cluster;
 use crate::metrics::Reading;
 use crate::orchestrate::Event;
 use crate::plan::Plan;
@@ -220,7 +220,7 @@ type Previous = (
     BTreeMap<(usize, String), (u64, u64)>,
 );
 
-pub(crate) async fn sampler(b: &Containers, topo: &Topology, tx: broadcast::Sender<Event>) {
+pub(crate) async fn sampler(b: &Cluster, topo: &Topology, tx: broadcast::Sender<Event>) {
     let start = tokio::time::Instant::now();
     let mut tick = tokio::time::interval(EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

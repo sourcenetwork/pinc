@@ -35,6 +35,10 @@ pub struct ServeOptions {
     pub root: PathBuf,
     /// The node image.
     pub image: String,
+    /// The machines to run on over SSH instead of containers.
+    pub hosts: Option<crate::backend::fleet::Fleet>,
+    /// When the machine counts as quiet enough to measure, for the runs the dashboard starts.
+    pub quiet: crate::quiet::Thresholds,
 }
 
 /// What every handler shares.
@@ -58,7 +62,12 @@ pub async fn serve(opts: ServeOptions) -> Result<()> {
     let listener = TcpListener::bind(opts.bind)
         .await
         .map_err(|e| Error::Host(format!("cannot listen on {}: {e}", opts.bind)))?;
-    let runs = Manager::start(opts.image.clone(), opts.root.join("results"));
+    let runs = Manager::start(
+        opts.image.clone(),
+        opts.root.join("results"),
+        opts.hosts.clone(),
+        opts.quiet,
+    );
     let app = Arc::new(App { opts, runs });
     tracing::info!("dashboard on http://{}", app.opts.bind);
     loop {

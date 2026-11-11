@@ -5,8 +5,8 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use crate::backend::Cluster;
 use crate::backend::Proc;
-use crate::backend::containers::Containers;
 use crate::error::{Error, Result};
 use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::{Ctx, Event};
@@ -44,7 +44,7 @@ impl FaultRunner {
     )]
     pub(crate) async fn apply(
         &mut self,
-        b: &Containers,
+        b: &Cluster,
         plan: &Plan,
         f: &FaultAction,
         launches: &[Launch],
@@ -133,7 +133,7 @@ impl FaultRunner {
         }
     }
 
-    async fn reshape(&mut self, b: &Containers, p: ShapePoint, to: Shape, original: Shape) -> Result<()> {
+    async fn reshape(&mut self, b: &Cluster, p: ShapePoint, to: Shape, original: Shape) -> Result<()> {
         b.reshape(&p, &to).await?;
         if !self.changed.iter().any(|(q, _)| q == &p) {
             self.changed.push((p, original));
@@ -145,7 +145,7 @@ impl FaultRunner {
     ///
     /// # Errors
     /// The backend failed; the first error is returned after every undo was tried.
-    pub async fn reset(&mut self, b: &Containers) -> Result<()> {
+    pub async fn reset(&mut self, b: &Cluster) -> Result<()> {
         let mut first = None;
         for (p, s) in self.changed.drain(..) {
             if let Err(e) = b.reshape(&p, &s).await {
@@ -170,7 +170,7 @@ impl FaultRunner {
 /// A fault could not be applied or undone (the workload's own result is returned otherwise).
 pub(crate) async fn during<T>(
     ctx: &Ctx,
-    b: &Containers,
+    b: &Cluster,
     faults: &[Fault],
     launches: &[Launch],
     apps: Option<&AppSet<'_>>,

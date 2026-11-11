@@ -71,7 +71,7 @@ impl App {
         for p in init.peers.iter().filter(|p| p.name != init.name) {
             book.add_endpoint_info(
                 EndpointAddr::new(secret(&p.name).public())
-                    .with_ip_addr(SocketAddr::new(IpAddr::V4(p.public_ip), PORT)),
+                    .with_ip_addr(SocketAddr::new(IpAddr::V4(p.public_ip), p.port(PORT))),
             );
         }
         let ep = Endpoint::builder(presets::Minimal)
@@ -79,7 +79,7 @@ impl App {
             .secret_key(secret(&init.name))
             .address_lookup(book)
             .clear_ip_transports()
-            .bind_addr(SocketAddr::new(IpAddr::V4(me_spec.ip), PORT))
+            .bind_addr(SocketAddr::new(IpAddr::V4(me_spec.ip), me_spec.port(PORT)))
             .map_err(|e| format!("the address {} is not usable: {e}", me_spec.ip))?
             .bind()
             .await

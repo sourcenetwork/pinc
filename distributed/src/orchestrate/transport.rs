@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::backend::containers::{Containers, READY};
+use crate::backend::Cluster;
+use crate::backend::containers::READY;
 use crate::error::Result;
 use crate::metrics::NodeUse;
 use crate::orchestrate::faults::{self, Launch};
@@ -33,7 +34,7 @@ fn args(stack: Stack, rest: &[String]) -> Vec<String> {
     a
 }
 
-pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<()> {
+pub(crate) async fn run(ctx: &mut Ctx, b: &Cluster, t: &Transport) -> Result<()> {
     let total = u32::try_from(t.pairs.len() * t.tests.len() * ctx.sc.stacks.len()).unwrap_or(u32::MAX) * ctx.reps;
     let mut index = 0;
     for pair in &t.pairs {
@@ -70,7 +71,7 @@ pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn one(
     ctx: &Ctx,
-    b: &Containers,
+    b: &Cluster,
     (ci, si): (usize, usize),
     stack: Stack,
     test: &TransportTest,
@@ -90,12 +91,12 @@ async fn one(
         shaper_drops: None,
         host: None,
     };
-    let (Some(client), Some(server)) = (ctx.plan.nodes.get(ci), ctx.plan.nodes.get(si)) else {
+    if ctx.plan.nodes.get(ci).is_none() || ctx.plan.nodes.get(si).is_none() {
         row.status = "not measured: the pair's nodes are not in the plan".into();
         return Ok(row);
-    };
+    }
     let server_args = args(stack, &["server".into()]);
-    let server_env = node_env(server.ip);
+    let server_env = node_env(b.address(&ctx.plan, si).0);
     let mut srv = b.spawn(si, &server_args, &server_env)?;
     let addr = match srv.expect("ADDR ", READY).await {
         Ok(a) => a,
@@ -118,7 +119,7 @@ async fn one(
     client_args.extend(test.client_args());
     let client_args = args(stack, &client_args);
     let quiet_from = Snapshot::take();
-    let mut cli = b.spawn(ci, &client_args, &node_env(client.ip))?;
+    let mut cli = b.spawn(ci, &client_args, &node_env(b.address(&ctx.plan, ci).0))?;
     let launches = [Launch {
         node: si,
         args: server_args,
@@ -133,7 +134,7 @@ async fn one(
         cli.drain(Duration::from_secs(timeout_s)),
     )
     .await?;
-    row.host = Some(ctx.monitor.usage(&quiet_from, &Snapshot::take()));
+    row.host = (!matches!(b, Cluster::Ssh(_))).then(|| ctx.monitor.usage(&quiet_from, &Snapshot::take()));
     let (c1, s1, d1) = (
         b.reading(ci).await?,
         b.reading(si).await?,

@@ -103,8 +103,13 @@ impl State {
 }
 
 impl Manager {
-    /// Start the manager. Runs use `image` and write results under `results`.
-    pub fn start(image: String, results: PathBuf) -> Self {
+    /// Start the manager. Runs use `image` (or the machines of `hosts` over SSH) and write results under `results`.
+    pub fn start(
+        image: String,
+        results: PathBuf,
+        hosts: Option<crate::backend::fleet::Fleet>,
+        quiet: crate::quiet::Thresholds,
+    ) -> Self {
         let (tx, mut rx) = mpsc::channel::<Cmd>(64);
         let (out, _) = broadcast::channel::<Numbered>(4096);
         let (events, mut from_runs) = {
@@ -147,7 +152,8 @@ impl Manager {
                                 reps,
                                 events: Some(events.clone()),
                                 cancel: Some(cancel),
-                                quiet: crate::quiet::Thresholds::default(),
+                                quiet,
+                                hosts: hosts.clone(),
                             };
                             let ev = events.clone();
                             let handle = tokio::spawn(async move {

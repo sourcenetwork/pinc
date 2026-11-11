@@ -18,7 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
+use crate::backend::Cluster;
 use crate::backend::containers::{self, Containers};
+use crate::backend::fleet::Fleet;
+use crate::backend::ssh::Ssh;
 use crate::error::{Error, Result};
 use crate::plan::{MTU, Plan};
 use crate::quiet::{self, Monitor, Snapshot, Thresholds, Usage};
@@ -122,6 +125,8 @@ pub struct Options {
     pub cancel: Option<watch::Receiver<bool>>,
     /// When the host counts as quiet enough to measure.
     pub quiet: Thresholds,
+    /// The machines to run on over SSH instead of containers on this one.
+    pub hosts: Option<Fleet>,
 }
 
 /// The machine the backend runs on.
@@ -202,6 +207,8 @@ pub(crate) struct Ctx {
     raw: std::fs::File,
     quiet_log: std::fs::File,
     pub(crate) monitor: Monitor,
+    /// The machines of the run when it is on real machines.
+    pub(crate) fleet: Option<Fleet>,
 }
 
 impl Ctx {
@@ -403,6 +410,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
             containers: Vec::new(),
             limits: opts.quiet,
         },
+        fleet: opts.hosts.clone(),
     };
     let total = match &ctx.sc.workload {
         Workload::Transport(t) => t.pairs.len() * t.tests.len(),
@@ -421,17 +429,29 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
         faults: ctx.sc.faults.clone(),
     });
     let started = now_s();
-    let mut backend: Option<Containers> = None;
+    let mut backend: Option<Cluster> = None;
     let result = {
         let work = async {
-            ctx.emit(Event::Phase {
-                what: format!(
-                    "creating {} node and {} router containers and wiring them",
-                    ctx.plan.nodes.len(),
-                    ctx.plan.sites.len()
-                ),
-            });
-            let b: &Containers = backend.insert(Containers::up(&ctx.plan, &opts.image).await?);
+            let cluster = if let Some(fleet) = &opts.hosts {
+                ctx.emit(Event::Phase {
+                    what: format!(
+                        "putting {} nodes on {} machine(s) over SSH",
+                        ctx.plan.nodes.len(),
+                        fleet.hosts.len()
+                    ),
+                });
+                Cluster::Ssh(Box::new(Ssh::up(&ctx.sc, &ctx.plan, fleet.clone(), &run).await?))
+            } else {
+                ctx.emit(Event::Phase {
+                    what: format!(
+                        "creating {} node and {} router containers and wiring them",
+                        ctx.plan.nodes.len(),
+                        ctx.plan.sites.len()
+                    ),
+                });
+                Cluster::Containers(Containers::up(&ctx.plan, &opts.image).await?)
+            };
+            let b: &Cluster = backend.insert(cluster);
             let pos: Vec<Option<[f64; 2]>> = ctx.sc.sites.iter().map(|s| s.pos).collect();
             let topo = live::Topology::of(&ctx.plan, &pos);
             ctx.emit(Event::Topology(Box::new(topo.clone())));
@@ -443,7 +463,12 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
                 ),
             });
             let mut windows = Vec::new();
-            let waited = ctx.monitor.wait_quiet(|u| windows.push(u.clone())).await;
+            // Real machines are not this harness's to keep quiet: the check is of the machine that runs the containers.
+            let waited: Result<(), Usage> = if matches!(b, Cluster::Ssh(_)) {
+                Ok(())
+            } else {
+                ctx.monitor.wait_quiet(|u| windows.push(u.clone())).await.map(|_| ())
+            };
             for u in &windows {
                 ctx.quiet("before the run", u);
             }
@@ -486,7 +511,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
     ctx.emit(Event::Phase {
         what: "tearing down".into(),
     });
-    let image_id = backend.as_ref().map(|b| b.image_id().to_owned());
+    let image_id = backend.as_ref().map(Cluster::image_id);
     let left = match backend.as_mut() {
         Some(b) => b.down().await,
         None => containers::clean().await.map(|c| c.left),
@@ -523,26 +548,42 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
     let mut c = vec![
         ctx.sc.about.clone(),
         String::new(),
-        format!(
-            "Backend: containers on one machine ({}, {} CPUs, {} GiB, kernel {}). One kernel and its CPUs emulate the whole network: every node, router and shaper shares them.",
-            host.cpu, host.cpus, host.mem_gib, host.kernel
-        ),
-        format!(
-            "Every interface has an MTU of {MTU}. Each node: {} CPU(s) of its own set, {} MiB; CPU sets {}{}.",
-            ctx.sc.resources.cpus,
-            ctx.sc.resources.memory_mib,
-            ctx.plan
-                .nodes
-                .iter()
-                .map(|n| format!("{} {}", n.name, n.container.cpus))
-                .collect::<Vec<_>>()
-                .join(", "),
-            if ctx.plan.shared_cpus {
-                " (shared: the machine has fewer CPUs than the scenario asks)"
-            } else {
-                ""
-            }
-        ),
+        match &ctx.fleet {
+            None => format!(
+                "Backend: containers on one machine ({}, {} CPUs, {} GiB, kernel {}). One kernel and its CPUs emulate the whole network: every node, router and shaper shares them.",
+                host.cpu, host.cpus, host.mem_gib, host.kernel
+            ),
+            Some(f) => format!(
+                "Backend: real machines over SSH ({}). The network is theirs; where the scenario gives a link between sites a shape, tc netem on the machines' egress adds it per destination machine (a node's own access link is not shaped). The harness did not check that the machines were quiet; interface counters are read only for a machine that runs one node (traffic between the nodes of a machine does not cross its interface) and peak memory is the scope's since its program started.",
+                f.hosts
+                    .iter()
+                    .map(|h| format!("{} at {}", h.name, h.address))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
+        match &ctx.fleet {
+            None => format!(
+                "Every interface has an MTU of {MTU}. Each node: {} CPU(s) of its own set, {} MiB; CPU sets {}{}.",
+                ctx.sc.resources.cpus,
+                ctx.sc.resources.memory_mib,
+                ctx.plan
+                    .nodes
+                    .iter()
+                    .map(|n| format!("{} {}", n.name, n.container.cpus))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if ctx.plan.shared_cpus {
+                    " (shared: the machine has fewer CPUs than the scenario asks)"
+                } else {
+                    ""
+                }
+            ),
+            Some(_) => format!(
+                "Each node: {} CPU(s) of its own set on its machine, {} MiB; the stacks are told an interface size of {MTU}.",
+                ctx.sc.resources.cpus, ctx.sc.resources.memory_mib
+            ),
+        },
         format!(
             "Versions: {}; VINC at commit {}. Every stack compiled for {}.",
             versions()
@@ -553,15 +594,29 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
             git_commit(),
             built_for()
         ),
-        format!(
-            "Isolation: one stack at a time on the same cores; repetitions alternate the stacks ({}), all in this one run of one build. The orchestrator runs on CPU 0, which no node uses.",
-            ctx.sc.stacks.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ")
-        ),
-        format!(
-            "Quiet host: a measurement counts only when other processes used at most {}% of one core and steal was at most {}% over it; one that was not clean is repeated up to {} times, then reported as not measured. Repetitions: {}.",
-            ctx.monitor.limits.other_pct, ctx.monitor.limits.steal_pct, ctx.monitor.limits.retries, ctx.reps
-        ),
+        if ctx.fleet.is_some() {
+            format!(
+                "Isolation: one stack at a time on the same machines; repetitions alternate the stacks ({}), all in this one run of one build. Quiet host: not checked on real machines. Repetitions: {}.",
+                ctx.sc.stacks.iter().map(|s| s.name()).collect::<Vec<_>>().join(", "),
+                ctx.reps
+            )
+        } else {
+            [
+format!(
+                "Isolation: one stack at a time on the same cores; repetitions alternate the stacks ({}), all in this one run of one build. The orchestrator runs on CPU 0, which no node uses.",
+                ctx.sc.stacks.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ")
+            ),
+            format!(
+                "Quiet host: a measurement counts only when other processes used at most {}% of one core and steal was at most {}% over it; one that was not clean is repeated up to {} times, then reported as not measured. Repetitions: {}.",
+                ctx.monitor.limits.other_pct, ctx.monitor.limits.steal_pct, ctx.monitor.limits.retries, ctx.reps
+            ),
+            ]
+            .join("\n")
+        },
     ];
+    if ctx.fleet.as_ref().is_some_and(|f| f.hosts.len() == 1) && !ctx.sc.links.is_empty() {
+        c.push("The fleet is one machine, so every node talks to the others over its own network stack and the scenario's link shapes are not applied: this run measures the stacks, not a network.".into());
+    }
     if reps_override.is_some() {
         c.push("**A reduced run (fewer repetitions than the scenario asks): do not quote it.**".into());
     }
@@ -594,8 +649,8 @@ fn write_run(
     let v = serde_json::json!({
         "run": run,
         "scenario": ctx.sc.name,
-        "backend": "containers",
-        "about_backend": "one machine emulates the network: nodes, routers and shapers share its kernel and CPUs",
+        "backend": if ctx.fleet.is_some() { "ssh" } else { "containers" },
+        "about_backend": if ctx.fleet.is_some() { "real machines over SSH: the network is theirs, with tc netem added between sites where the scenario shapes a link" } else { "one machine emulates the network: nodes, routers and shapers share its kernel and CPUs" },
         "host": host,
         "image": image,
         "mtu": MTU,

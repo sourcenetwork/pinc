@@ -30,6 +30,16 @@ pub struct PeerSpec {
     pub public_ip: Ipv4Addr,
     /// Its role.
     pub role: Role,
+    /// Among the nodes of its machine, from 0: ports of its stacks are spaced by this.
+    #[serde(default)]
+    pub slot: u16,
+}
+
+impl PeerSpec {
+    /// The port of a stack whose base port is `base` for this node.
+    pub fn port(&self, base: u16) -> u16 {
+        crate::backend::fleet::port(base, self.slot)
+    }
 }
 
 /// What a node program is started with, as its first input line.

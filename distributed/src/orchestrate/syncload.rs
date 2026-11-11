@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use crate::backend::containers::Containers;
+use crate::backend::Cluster;
 use crate::error::{Error, Result};
 use crate::node::proto::Cmd;
 use crate::orchestrate::apps::AppSet;
@@ -51,7 +51,7 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
     }
 }
 
-pub(crate) async fn run_sync(ctx: &mut Ctx, b: &Containers, w: &ValueSync) -> Result<()> {
+pub(crate) async fn run_sync(ctx: &mut Ctx, b: &Cluster, w: &ValueSync) -> Result<()> {
     let label = format!("{}>{}", w.providers.join("+"), w.consumers.join("+"));
     let total = u32::try_from(w.sizes.len() * ctx.sc.stacks.len()).unwrap_or(u32::MAX) * ctx.reps;
     let mut index = 0;
@@ -80,15 +80,7 @@ pub(crate) async fn run_sync(ctx: &mut Ctx, b: &Containers, w: &ValueSync) -> Re
     Ok(())
 }
 
-async fn sync_one(
-    ctx: &Ctx,
-    b: &Containers,
-    stack: Stack,
-    w: &ValueSync,
-    size: u64,
-    rep: u32,
-    pair: &str,
-) -> Result<Row> {
+async fn sync_one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &ValueSync, size: u64, rep: u32, pair: &str) -> Result<Row> {
     let mut r = row(ctx, stack, &ValueSync::id(size), pair, rep);
     let set = AppSet::new(b, &ctx.plan, stack, MTU);
     let outcome = sync_body(ctx, b, &set, w, size, &mut r).await;
@@ -102,7 +94,7 @@ async fn sync_one(
     Ok(r)
 }
 
-async fn sync_body(ctx: &Ctx, b: &Containers, set: &AppSet<'_>, w: &ValueSync, size: u64, r: &mut Row) -> Result<()> {
+async fn sync_body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &ValueSync, size: u64, r: &mut Row) -> Result<()> {
     set.start_all().await?;
     set.join_all("sync", 60_000).await?;
     let providers: Vec<usize> = w.providers.iter().filter_map(|p| ctx.plan.node(p)).collect();
@@ -173,7 +165,7 @@ async fn sync_body(ctx: &Ctx, b: &Containers, set: &AppSet<'_>, w: &ValueSync, s
     Ok(())
 }
 
-pub(crate) async fn run_reconcile(ctx: &mut Ctx, b: &Containers, w: &Reconcile) -> Result<()> {
+pub(crate) async fn run_reconcile(ctx: &mut Ctx, b: &Cluster, w: &Reconcile) -> Result<()> {
     let label = format!("{}>{}", w.b, w.a);
     let cases: Vec<(u32, u32)> = w
         .items
@@ -209,7 +201,7 @@ pub(crate) async fn run_reconcile(ctx: &mut Ctx, b: &Containers, w: &Reconcile) 
 
 async fn rec_one(
     ctx: &Ctx,
-    b: &Containers,
+    b: &Cluster,
     stack: Stack,
     w: &Reconcile,
     (items, diff): (u32, u32),
@@ -235,7 +227,7 @@ async fn rec_one(
 )]
 async fn rec_body(
     ctx: &Ctx,
-    b: &Containers,
+    b: &Cluster,
     set: &AppSet<'_>,
     w: &Reconcile,
     (items, diff): (u32, u32),

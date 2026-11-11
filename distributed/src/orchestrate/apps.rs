@@ -13,7 +13,8 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::backend::containers::{Containers, READY};
+use crate::backend::Cluster;
+use crate::backend::containers::READY;
 use crate::error::{Error, Result};
 use crate::node::proto::{Cmd, Init, PeerSpec, Ready, Reply, Request};
 use crate::plan::Plan;
@@ -34,7 +35,7 @@ pub(crate) struct AppNode {
 
 impl AppNode {
     /// Start the program in node `i` with `init` and wait until its stack is up.
-    pub(crate) async fn start(b: &Containers, i: usize, init: &Init) -> Result<Self> {
+    pub(crate) async fn start(b: &Cluster, i: usize, init: &Init) -> Result<Self> {
         let mut proc = b.spawn(i, &["node".to_owned(), "app".to_owned()], &[])?;
         let line = serde_json::to_string(init).map_err(|e| Error::Node(e.to_string()))?;
         proc.send(&line).await?;
@@ -126,7 +127,7 @@ impl AppNode {
 
 /// The node programs of one repetition.
 pub(crate) struct AppSet<'a> {
-    b: &'a Containers,
+    b: &'a Cluster,
     plan: &'a Plan,
     inits: Vec<Init>,
     slots: Vec<tokio::sync::Mutex<Option<AppNode>>>,
@@ -141,17 +142,21 @@ pub(crate) const QUICK: Duration = Duration::from_secs(60);
 
 impl<'a> AppSet<'a> {
     /// The set-up of every node of the plan for `stack`.
-    pub(crate) fn new(b: &'a Containers, plan: &'a Plan, stack: Stack, mtu: u32) -> Self {
+    pub(crate) fn new(b: &'a Cluster, plan: &'a Plan, stack: Stack, mtu: u32) -> Self {
         let peers: Vec<PeerSpec> = plan
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| PeerSpec {
-                name: n.name.clone(),
-                index: u16::try_from(i).unwrap_or(u16::MAX),
-                ip: n.ip,
-                public_ip: plan.public_ip(i),
-                role: n.role,
+            .map(|(i, n)| {
+                let (ip, public_ip, slot) = b.address(plan, i);
+                PeerSpec {
+                    name: n.name.clone(),
+                    index: u16::try_from(i).unwrap_or(u16::MAX),
+                    ip,
+                    public_ip,
+                    slot,
+                    role: n.role,
+                }
             })
             .collect();
         let sessions = u32::try_from(peers.len() + 8).unwrap_or(u32::MAX);
