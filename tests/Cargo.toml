@@ -938,3 +938,7 @@ path = "connect_held.rs"
 [[test]]
 name = "relay_host"
 path = "relay_host.rs"
+
+[[test]]
+name = "vinc_access"
+path = "vinc_access.rs"
