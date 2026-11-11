@@ -1010,7 +1010,8 @@ mod tests {
     /// every slot blank again without writing any.
     #[test]
     fn only_the_slots_streams_took_are_written() {
-        let pool = BufferPool::new_boxed(64);
+        // Room for the windows of the streams opened here beside the credit the peer was given.
+        let pool = BufferPool::new_boxed(512);
         let mut cfg = Config::new(true);
         cfg.peer = PeerLimits {
             window: 64 * 1024,
