@@ -1,0 +1,490 @@
+//! The relay a hub runs for its members: the host side of `vinc_connect::relay`.
+//!
+//! A hub accepts the carriers its members open (plain TCP or WebSocket streams), runs the authenticated handshake on
+//! each, hands the decoded frames to the relay and writes the relay's frames back. Datagrams that are relay requests
+//! (address discovery, lookups) go to the relay; the packets the relay delivers to the hub's own node reach it as
+//! datagrams from a synthetic relay address, and the packets the node sends to a member's synthetic address are
+//! handed to the relay.
+//!
+//! Invariants: a member has at most one live carrier at the hub (a newer one replaces the older); every carrier that
+//! ends is reported to the relay and to the node exactly once; the relay and the node see the same local time.
+
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+
+use vinc_connect::carrier::MAX_FRAME_LEN;
+use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
+use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole};
+use vinc_connect::relay::datagram::Datagram;
+use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
+use vinc_core::{Answer, Command, Event, Query, SessionId, is_relay_addr, relay_addr};
+use vinc_crypto::NodeId;
+use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, ResponderStores, SoftKeys};
+
+use super::core::Core;
+use crate::suite::crypto::Tracked;
+use crate::{StreamId, StreamOp};
+
+/// The relay-path index the hub's own relay uses for its members: an index no client has.
+pub(super) const LOCAL_RELAY: u8 = 0xFE;
+
+type HubRelay = Relay<{ super::SESSIONS }, 128, 16, 4096>;
+
+enum Eff {
+    Carrier(NodeId, Vec<u8>),
+    Udp(UdpTarget, Vec<u8>),
+    Local(NodeId, Vec<u8>),
+    Close(NodeId, RSession),
+    Trace(Trace),
+}
+
+#[derive(Default)]
+struct Collect(Vec<Eff>);
+
+impl Sink for Collect {
+    fn emit(&mut self, e: Effect<'_>) {
+        self.0.push(match e {
+            Effect::Carrier { to, frame } => {
+                let mut b = vec![0u8; MAX_FRAME_LEN];
+                let Ok(n) = frame.encode(&mut b) else { return };
+                b.truncate(n);
+                Eff::Carrier(to, b)
+            }
+            Effect::Udp { to, datagram } => {
+                let mut b = vec![0u8; 2048];
+                let Ok(n) = datagram.encode(&mut b) else { return };
+                b.truncate(n);
+                Eff::Udp(to, b)
+            }
+            Effect::Local { from, packet } => Eff::Local(from, packet.to_vec()),
+            Effect::Close { node, session, .. } => Eff::Close(node, session),
+            Effect::PeerRelay { .. } | Effect::Wake { .. } => return,
+            Effect::Trace(t) => Eff::Trace(t),
+        });
+    }
+}
+
+struct RStream {
+    carrier: Box<ProtectedCarrier<Tracked>>,
+    node: Option<NodeId>,
+    session: Option<RSession>,
+    ws: Option<Decoder>,
+    sniffed: bool,
+}
+
+enum Step {
+    Idle,
+    Flush,
+    Frame,
+    Open(NodeId),
+    Dead,
+}
+
+/// The relay of a hub and the carriers it serves.
+pub(super) struct HubSide {
+    relay: Box<HubRelay>,
+    streams: BTreeMap<StreamId, RStream>,
+    by_node: BTreeMap<[u8; 32], StreamId>,
+    stores: ResponderStores<4, 4>,
+    slots: Vec<NodeId>,
+    members: BTreeMap<SessionId, NodeId>,
+    scid: u64,
+}
+
+impl HubSide {
+    pub(super) fn new(me: NodeId, seed: u64) -> Self {
+        Self {
+            relay: Box::new(HubRelay::new(RelayConfig::new(me, seed))),
+            streams: BTreeMap::new(),
+            by_node: BTreeMap::new(),
+            stores: ResponderStores::default(),
+            slots: Vec::new(),
+            members: BTreeMap::new(),
+            scid: 0,
+        }
+    }
+
+    /// The relay's next deadline, in local time.
+    pub(super) fn next_deadline(&self) -> Option<u64> {
+        self.relay.next_deadline()
+    }
+}
+
+fn wrap(rs: &RStream, bytes: &[u8]) -> Vec<u8> {
+    if rs.ws.is_some() {
+        let mut f = vec![0u8; bytes.len() + 16];
+        let n = ws::encode(Opcode::Binary, bytes, None, &mut f).unwrap_or(0);
+        f.truncate(n);
+        f
+    } else {
+        bytes.to_vec()
+    }
+}
+
+impl Core {
+    fn write_op(&mut self, stream: StreamId, data: Vec<u8>) {
+        let op = StreamOp::Write {
+            stream,
+            len: data.len(),
+            send_at: None,
+        };
+        self.wire.ops.push_back((op, data));
+    }
+
+    /// The slot a member has in the relay's synthetic address space.
+    fn slot(hub: &mut HubSide, n: &NodeId) -> u16 {
+        let i = hub.slots.iter().position(|x| x == n).unwrap_or_else(|| {
+            hub.slots.push(*n);
+            hub.slots.len() - 1
+        });
+        u16::try_from(i).unwrap_or(u16::MAX)
+    }
+
+    /// The remote address of a member's validated session, if it is not a relay path.
+    fn session_remote(&self, sid: SessionId) -> Option<SocketAddr> {
+        let ep = self.node.as_ref()?.endpoint();
+        match ep.query(Query::Stats(sid)) {
+            Answer::Stats(st) if st.path_validated => st.route.map(|(_, r)| r).filter(|r| !is_relay_addr(r)),
+            _ => None,
+        }
+    }
+
+    fn member_addr(&self, node: &NodeId) -> Option<SocketAddr> {
+        let hub = self.hub.as_ref()?;
+        let (sid, _) = hub.members.iter().find(|(_, n)| *n == node)?;
+        self.session_remote(*sid)
+    }
+
+    fn member_at(&self, src: &SocketAddr) -> Option<NodeId> {
+        let hub = self.hub.as_ref()?;
+        hub.members
+            .iter()
+            .find(|(sid, _)| self.session_remote(**sid) == Some(*src))
+            .map(|(_, n)| *n)
+    }
+
+    /// A datagram reached this hub: a relay request, or traffic for the node.
+    pub(super) fn hub_datagram(&mut self, local: SocketAddr, remote: SocketAddr, data: &mut [u8]) {
+        let now = self.local;
+        let request = self.hub.is_some()
+            && data.first().is_some_and(|b| *b < 0x40)
+            && !matches!(
+                Datagram::decode(data),
+                Ok(Datagram::Qadr { .. } | Datagram::DnsReply { .. } | Datagram::Spl { .. })
+            );
+        if request {
+            let member = self.member_at(&remote);
+            let mut s = Collect::default();
+            if let Some(h) = self.hub.as_mut() {
+                // A refused request is dropped and traced by the relay itself.
+                let _ = h.relay.datagram(now, remote, member.as_ref(), data, &mut s);
+            }
+            self.apply(s);
+            return;
+        }
+        if data.first().is_some_and(|b| *b >= 0x40)
+            && let Some(n) = self.member_at(&remote)
+            && let Some(h) = self.hub.as_mut()
+        {
+            let _ = h.relay.udp_heard(&n, now);
+        }
+        if let Some(node) = self.node.as_mut() {
+            node.handle_datagram(now, local, remote, data);
+        }
+    }
+
+    /// The node sent a packet to the synthetic address of a member of its own relay.
+    pub(super) fn hub_send_local(&mut self, slot: u16, packet: &[u8]) {
+        let now = self.local;
+        let mut s = Collect::default();
+        if let Some(h) = self.hub.as_mut()
+            && let Some(node) = h.slots.get(usize::from(slot)).copied()
+        {
+            // No route to a member that left is the relay's refusal; the packet is lost as on a real path.
+            let _ = h.relay.send_local(now, &node, 0, packet, &mut s);
+        }
+        self.apply(s);
+    }
+
+    /// The hub's view of an endpoint event about a session with a member.
+    pub(super) fn hub_event(&mut self, ev: &Event) {
+        let now = self.local;
+        let Some(h) = self.hub.as_mut() else { return };
+        match *ev {
+            Event::Incoming { session, node, .. } => {
+                h.members.insert(session, node);
+            }
+            Event::Closed { session, .. } => {
+                if let Some(n) = h.members.remove(&session) {
+                    h.relay.udp_gone(&n);
+                }
+            }
+            Event::PeerAwake { session } => {
+                if let Some(n) = h.members.get(&session).copied() {
+                    let mut s = Collect::default();
+                    h.relay.member_returned(now, &n, &mut s);
+                    self.apply(s);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The relay's timers.
+    pub(super) fn hub_timeout(&mut self) {
+        let now = self.local;
+        let mut s = Collect::default();
+        if let Some(h) = self.hub.as_mut()
+            && h.relay.next_deadline().is_some_and(|d| d <= now)
+        {
+            h.relay.handle_timeout(now, &mut s);
+        }
+        self.apply(s);
+    }
+
+    fn apply(&mut self, s: Collect) {
+        let now = self.local;
+        let from = self.udp_addr();
+        for e in s.0 {
+            match e {
+                Eff::Carrier(to, plain) => self.write_frame(&to, &plain),
+                Eff::Udp(UdpTarget::Reply(a), d) => {
+                    if let Some(f) = from {
+                        self.wire.datagrams.push_back((f, a, d));
+                    }
+                }
+                Eff::Udp(UdpTarget::Member(n), d) => {
+                    if let (Some(a), Some(f)) = (self.member_addr(&n), from) {
+                        self.wire.datagrams.push_back((f, a, d));
+                    }
+                }
+                Eff::Local(f, mut packet) => {
+                    let slot = self.hub.as_mut().map_or(0, |h| Self::slot(h, &f));
+                    if let (Some(node), Some(local)) = (self.node.as_mut(), from) {
+                        node.handle_datagram(now, local, relay_addr(false, LOCAL_RELAY, slot), &mut packet);
+                    }
+                }
+                Eff::Close(node, session) => {
+                    let Some(h) = self.hub.as_mut() else { continue };
+                    if let Some(sid) = h.by_node.get(&node.bytes).copied()
+                        && h.streams.get(&sid).and_then(|r| r.session) == Some(session)
+                    {
+                        h.streams.remove(&sid);
+                        h.by_node.remove(&node.bytes);
+                        self.wire.ops.push_back((StreamOp::Close { stream: sid }, Vec::new()));
+                    }
+                }
+                Eff::Trace(t) => self.relay_trace(t),
+            }
+        }
+    }
+
+    fn relay_trace(&mut self, t: Trace) {
+        let now = self.local;
+        let Some(node) = self.node.as_mut() else { return };
+        match t {
+            Trace::CarrierOpened { node: m, .. } => node.member_carrier_opened(now, &m.bytes),
+            Trace::CarrierClosed { node: m, asleep } => {
+                node.member_carrier_closed(now, &m.bytes, asleep.then_some(now));
+            }
+            Trace::Pulse { node: m } => {
+                let sid = self
+                    .hub
+                    .as_ref()
+                    .and_then(|h| h.members.iter().find(|(_, n)| **n == m).map(|(s, _)| *s));
+                if let Some(session) = sid {
+                    // A pulse for a session that just closed is refused; there is nothing to repair.
+                    let _ = node.command(now, Command::Pulse { session, sent: true });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn write_frame(&mut self, to: &NodeId, plain: &[u8]) {
+        let prov = self.provider();
+        let Some(hub) = self.hub.as_mut() else { return };
+        let Some(sid) = hub.by_node.get(&to.bytes).copied() else {
+            return;
+        };
+        let Some(rs) = hub.streams.get_mut(&sid) else { return };
+        let mut out = vec![0u8; MAX_FRAME_LEN + 64];
+        let Ok(n) = rs.carrier.seal_bytes(&prov, plain, &mut out) else {
+            return;
+        };
+        out.truncate(n);
+        let data = wrap(rs, &out);
+        self.write_op(sid, data);
+    }
+
+    fn flush_handshake(&mut self, sid: StreamId) {
+        let Some(hub) = self.hub.as_mut() else { return };
+        let Some(rs) = hub.streams.get_mut(&sid) else { return };
+        let mut buf = vec![0u8; 32 * 1024];
+        let mut out = Vec::new();
+        loop {
+            let n = rs.carrier.transmit(&mut buf);
+            let Some(b) = buf.get(..n).filter(|b| !b.is_empty()) else {
+                break;
+            };
+            out.push(wrap(rs, b));
+        }
+        for data in out {
+            self.write_op(sid, data);
+        }
+    }
+
+    fn drain(&mut self, sid: StreamId) {
+        for _ in 0..1024 {
+            let now = self.local;
+            let prov = self.provider();
+            let mut sink = Collect::default();
+            let step = {
+                let Some(hub) = self.hub.as_mut() else { return };
+                let Some(rs) = hub.streams.get_mut(&sid) else { return };
+                let mut env = Env {
+                    provider: &prov,
+                    now,
+                    drbg: &mut self.hub_drbg,
+                };
+                match rs.carrier.poll(&mut env, &mut hub.stores) {
+                    Ok(Poll::Idle) => Step::Idle,
+                    Ok(Poll::KeyRequest) => {
+                        let soft = SoftKeys {
+                            signer: Some((KeyHandle(1), &self.kp)),
+                            prekeys: None,
+                        };
+                        if rs.carrier.answer_soft(&mut env, &soft).is_ok() {
+                            Step::Flush
+                        } else {
+                            Step::Dead
+                        }
+                    }
+                    Ok(Poll::Open(peer)) => Step::Open(peer),
+                    Ok(Poll::Frame(f)) => {
+                        if let (Some(node), Some(sess)) = (rs.node, rs.session) {
+                            // A refused frame is dropped and traced by the relay; the session stays up.
+                            let _ = hub.relay.carrier_frame(now, &node, sess, &f, &mut sink);
+                        }
+                        Step::Frame
+                    }
+                    Err(e) if e.is_fatal() => Step::Dead,
+                    Ok(Poll::Handshake) | Err(_) => Step::Flush,
+                }
+            };
+            match step {
+                Step::Idle => {
+                    self.flush_handshake(sid);
+                    return;
+                }
+                Step::Flush => self.flush_handshake(sid),
+                Step::Frame => self.apply(sink),
+                Step::Open(peer) => self.hub_open(sid, peer),
+                Step::Dead => {
+                    self.wire.ops.push_back((StreamOp::Close { stream: sid }, Vec::new()));
+                    self.hub_closed(sid);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn hub_open(&mut self, sid: StreamId, peer: NodeId) {
+        let now = self.local;
+        self.flush_handshake(sid);
+        let mut s = Collect::default();
+        let mut replaced = None;
+        if let Some(hub) = self.hub.as_mut()
+            && let Ok(sess) = hub.relay.carrier_opened(now, peer, &mut s)
+        {
+            if let Some(rs) = hub.streams.get_mut(&sid) {
+                rs.node = Some(peer);
+                rs.session = Some(sess);
+            }
+            if let Some(old) = hub.by_node.insert(peer.bytes, sid)
+                && old != sid
+            {
+                hub.streams.remove(&old);
+                replaced = Some(old);
+            }
+        }
+        if let Some(old) = replaced {
+            self.wire.ops.push_back((StreamOp::Close { stream: old }, Vec::new()));
+        }
+        self.apply(s);
+    }
+
+    /// A carrier stream of this hub ended.
+    pub(super) fn hub_closed(&mut self, sid: StreamId) {
+        let now = self.local;
+        let mut s = Collect::default();
+        if let Some(hub) = self.hub.as_mut()
+            && let Some(rs) = hub.streams.remove(&sid)
+            && let (Some(node), Some(sess)) = (rs.node, rs.session)
+        {
+            if hub.by_node.get(&node.bytes) == Some(&sid) {
+                hub.by_node.remove(&node.bytes);
+            }
+            hub.relay.carrier_closed(now, &node, sess, &mut s);
+        }
+        self.apply(s);
+    }
+
+    /// A member opened a carrier stream to this hub.
+    pub(super) fn hub_accept(&mut self, stream: StreamId) {
+        let Ok(identity) = LocalIdentity::from_keypair(&self.kp, KeyHandle(1)) else {
+            return;
+        };
+        let Some(hub) = self.hub.as_mut() else { return };
+        hub.scid += 1;
+        let Some(scid) = ConnId::new(&hub.scid.to_be_bytes()) else {
+            return;
+        };
+        let Ok(cfg) = session::responder_config(identity, scid) else {
+            return;
+        };
+        hub.streams.insert(
+            stream,
+            RStream {
+                carrier: Box::new(ProtectedCarrier::accept(cfg)),
+                node: None,
+                session: None,
+                ws: None,
+                sniffed: false,
+            },
+        );
+    }
+
+    /// A record arrived on a carrier stream of this hub.
+    pub(super) fn hub_record(&mut self, stream: StreamId, data: &mut [u8]) {
+        let Some(hub) = self.hub.as_mut() else { return };
+        let Some(rs) = hub.streams.get_mut(&stream) else {
+            return;
+        };
+        if !rs.sniffed {
+            rs.sniffed = true;
+            // A WebSocket frame starts 0x82 (final binary); a handshake unit starts with a length below 0x8000.
+            if data.first() == Some(&0x82) {
+                rs.ws = Some(Decoder::new(WsRole::Client));
+            }
+        }
+        let payloads = match rs.ws.as_mut() {
+            Some(dec) => super::carrier::ws_payloads(dec, data),
+            None => vec![data.to_vec()],
+        };
+        for p in payloads {
+            let mut rest: &[u8] = &p;
+            for _ in 0..64 {
+                let Some(rs) = self.hub.as_mut().and_then(|h| h.streams.get_mut(&stream)) else {
+                    return;
+                };
+                let n = rs.carrier.receive(rest);
+                rest = rest.get(n..).unwrap_or_default();
+                self.drain(stream);
+                if rest.is_empty() || n == 0 {
+                    break;
+                }
+            }
+        }
+    }
+}

@@ -1,5 +1,5 @@
 //! Diagnosis aid, ignored by default: runs one variant in process and prints the environment actions and session
-//! events of chosen nodes. `SUITE_ID=S13 SUITE_SEED=81320 SUITE_NODES=17,1 cargo test --test scenario_diag -- --ignored --nocapture`
+//! events of chosen nodes. `VINC_DIAG_ID=S13 VINC_DIAG_SEED=81320 VINC_DIAG_NODES=17,1 cargo test --test scenario_diag -- --ignored --nocapture`
 #![allow(missing_docs, clippy::unwrap_used, clippy::indexing_slicing)]
 
 use vinc_sim::Driver;
@@ -7,16 +7,16 @@ use vinc_sim::suite::run::{LayerSet, run_watching};
 use vinc_sim::suite::world::{build, variants};
 
 #[test]
-#[ignore = "diagnosis aid; needs SUITE_ID, SUITE_SEED and SUITE_NODES"]
+#[ignore = "diagnosis aid; needs VINC_DIAG_ID, VINC_DIAG_SEED and VINC_DIAG_NODES"]
 fn diag() {
-    let id = std::env::var("SUITE_ID").unwrap();
-    let seed: u64 = std::env::var("SUITE_SEED").unwrap().parse().unwrap();
-    let nodes: Vec<usize> = std::env::var("SUITE_NODES")
+    let id = std::env::var("VINC_DIAG_ID").unwrap();
+    let seed: u64 = std::env::var("VINC_DIAG_SEED").unwrap().parse().unwrap();
+    let nodes: Vec<usize> = std::env::var("VINC_DIAG_NODES")
         .unwrap()
         .split(',')
         .filter_map(|x| x.parse().ok())
         .collect();
-    let driver = if std::env::var("SUITE_REF").is_ok() {
+    let driver = if std::env::var("VINC_DIAG_REF").is_ok() {
         Driver::Reference
     } else {
         Driver::Vinc
@@ -33,10 +33,14 @@ fn diag() {
     for n in &nodes {
         println!("SITE n{n} {} clock {:?}", w.nodes[*n].site, w.nodes[*n].clock);
     }
-    let (r, ev) = run_watching(&w, driver, LayerSet::NONE, &nodes).unwrap();
+    let (r, ev) = run_watching(&w, driver, LayerSet::NODE, &nodes).unwrap();
     for l in ev {
         println!("{l}");
     }
     println!("{:?}\n{:?}", r.gates.failed(), r.late);
     println!("{:?}", r.stats);
+    println!("{:?}", r.samples);
+    for v in &r.violations {
+        println!("VIOLATION {v:?}");
+    }
 }

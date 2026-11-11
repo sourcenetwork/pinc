@@ -14,12 +14,24 @@ publish.workspace = true
 reference = ["dep:blake2"]
 # The scenario suite: the reference harness's worlds, protocols, gates and metrics run against the real `vinc-core`
 # endpoint with real crypto.
-suite = ["reference", "dep:vinc-core", "dep:vinc-crypto", "dep:vinc-security", "dep:vinc-transport"]
+suite = [
+    "reference",
+    "dep:vinc-connect",
+    "dep:vinc-core",
+    "dep:vinc-crypto",
+    "dep:vinc-membership",
+    "dep:vinc-node",
+    "dep:vinc-security",
+    "dep:vinc-transport",
+]
 
 [dependencies]
 blake2 = { workspace = true, optional = true }
+vinc-connect = { workspace = true, optional = true }
 vinc-core = { workspace = true, optional = true, features = ["alloc"] }
 vinc-crypto = { workspace = true, optional = true, features = ["derive-trace"] }
+vinc-membership = { workspace = true, optional = true, features = ["alloc"] }
+vinc-node = { workspace = true, optional = true }
 vinc-security = { workspace = true, optional = true }
 vinc-transport = { workspace = true, optional = true, features = ["alloc"] }
 

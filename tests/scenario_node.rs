@@ -167,7 +167,10 @@ impl Layers for TestLayer {
                 }
             }
             LayerEvent::StreamWritable { session, stream } => self.push_out(host, (session, stream)),
-            LayerEvent::StreamOpened { .. } | LayerEvent::StreamReset { .. } => {}
+            LayerEvent::StreamOpened { .. }
+            | LayerEvent::StreamReset { .. }
+            | LayerEvent::Message { .. }
+            | LayerEvent::Member(_) => {}
         }
     }
     fn timeout(&mut self, _now: u64, _host: &mut dyn Host) {}
@@ -647,12 +650,13 @@ fn the_same_seed_gives_the_same_trace_and_recorder_hash() {
 }
 
 #[test]
-fn nodes_without_a_public_address_cannot_be_dialed() {
+fn a_dial_of_a_node_with_no_public_address_is_left_to_the_connectivity_layer() {
     big_stack(|| {
         let mut r = build(make_world(3, 60 * NS, |_| {}), 10, false);
         r.echo(5 * NS, 1, 2);
         r.sim.run_until(20 * NS);
-        assert_eq!(r.stats[1].borrow().refused, 1);
+        // The dial is accepted: with no relay in this world nothing can find the node, so no echo happens.
+        assert_eq!(r.stats[1].borrow().refused, 0);
         assert_eq!(r.stats[1].borrow().echoes, 0);
         assert_eq!(r.shared.public_addrs(2).len(), 0);
         assert_eq!(

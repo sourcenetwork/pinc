@@ -36,6 +36,10 @@ pub trait Host {
     fn close(&mut self, session: SessionId, code: u64);
     /// The world index of the peer of a session, once known.
     fn peer_of(&self, session: SessionId) -> Option<usize>;
+    /// Receive the messages of a topic. Returns false when the node refused.
+    fn subscribe(&mut self, topic: &[u8]) -> bool;
+    /// Publish a whole message to a topic. Returns false when the node refused.
+    fn publish(&mut self, topic: &[u8], msg: &[u8]) -> bool;
 }
 
 /// An event for the layers. Stream bytes are read and consumed by the adapter before delivery.
@@ -103,6 +107,15 @@ pub enum LayerEvent<'a> {
         /// The stream.
         stream: StreamId,
     },
+    /// A broadcast message arrived; `origin` is the world index of its claimed publisher (`None`: not a known node).
+    Message {
+        /// The claimed publisher.
+        origin: Option<usize>,
+        /// The message bytes as delivered.
+        body: &'a [u8],
+    },
+    /// A membership event of the node.
+    Member(crate::suite::rec::MemberEvent),
 }
 
 /// The protocol layers and the application of one node, as the node adapter drives them.

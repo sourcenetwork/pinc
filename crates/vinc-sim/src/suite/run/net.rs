@@ -9,6 +9,7 @@
 //! site gets one interface per family and site, all but the current ones down; addresses are those of
 //! [`iface_ip`] and of the reference's after-handover formulas.
 
+use std::net::SocketAddr;
 use std::rc::Rc;
 
 use crate::reference::RefRng;
@@ -17,7 +18,7 @@ use crate::suite::proto::Stack;
 use crate::suite::world::model::{Addr, EnvArg, EnvKind, IfaceSpec, NatSpec, NodeSpec, World};
 use crate::{
     Clock, IfaceId, LanConfig, LanId, LinkConfig, NatConfig, NatId, NatKind, NodeId, PortPolicy, Sim, SimConfig,
-    StreamPolicy, TapSpec,
+    StreamKind, StreamPolicy, TapSpec,
 };
 
 use super::RunError;
@@ -187,7 +188,15 @@ pub fn build(
         let mut per_site = Vec::new();
         for (k, &site) in sites.iter().enumerate() {
             let mut ifaces = Vec::new();
-            for f in spec.ifaces.iter().filter(|f| f.kind.starts_with("udp")) {
+            // A node with no UDP interface (a browser) sits on the network by its stream interface.
+            let has_udp = spec.ifaces.iter().any(|f| f.kind.starts_with("udp"));
+            for f in spec.ifaces.iter().filter(|f| {
+                if has_udp {
+                    f.kind.starts_with("udp")
+                } else {
+                    f.kind == "ws"
+                }
+            }) {
                 let v6 = f.kind == "udp6";
                 let addr = if k == 0 {
                     f.addr.clone()
@@ -232,6 +241,20 @@ pub fn build(
             .and_then(|m| m.portal_ns)
         {
             sim.set_portal(id, p);
+        }
+        for f in spec
+            .ifaces
+            .iter()
+            .filter(|f| f.public && matches!(f.kind.as_str(), "tcp" | "ws"))
+        {
+            if let Some(ip) = iface_ip(&f.addr) {
+                let kind = if f.kind == "ws" {
+                    StreamKind::Ws
+                } else {
+                    StreamKind::Tcp
+                };
+                sim.listen(id, SocketAddr::new(ip, f.addr.port), kind);
+            }
         }
         ids.push(id);
         at_site.push(per_site);

@@ -27,7 +27,7 @@ fn a_rerun_world_does_not_grow_the_process() {
     let world = build(&v).unwrap();
     let mut seen = Vec::new();
     for _ in 0..4 {
-        let r = run(&world, Driver::Vinc, LayerSet::NONE).unwrap();
+        let r = run(&world, Driver::Vinc, LayerSet::NODE).unwrap();
         assert!(r.ran);
         seen.push(resident());
     }

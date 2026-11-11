@@ -23,6 +23,7 @@ use vinc_sim::suite::grade::GateStatus;
 use vinc_sim::suite::run::codec::{decode, encode};
 use vinc_sim::suite::run::report::{Entry, RefTerms, failures, full as full_report, gate_table};
 use vinc_sim::suite::run::{LayerSet, Status, run};
+use vinc_sim::suite::world::model::{IntentKind, Must};
 use vinc_sim::suite::world::{SeedSet, Variant, build, variants};
 
 pub const REFERENCE_TERMS: &str = include_str!("../data/reference_terms.txt");
@@ -65,7 +66,7 @@ pub fn child_main() {
     let driver = if drv == "r" { Driver::Reference } else { Driver::Vinc };
     let world = build(&v).unwrap();
     let t0 = Instant::now();
-    let res = run(&world, driver, LayerSet::NONE).unwrap();
+    let res = run(&world, driver, LayerSet::NODE).unwrap();
     println!("{BEGIN}\nwall\t{}\n{}{END}", t0.elapsed().as_secs_f64(), encode(&res));
 }
 
@@ -131,6 +132,30 @@ pub fn vinc_entries(ids: &[&str]) -> Vec<Entry> {
     run_all(&jobs)
 }
 
+/// Whether the world of `v` has intents that owe must deliveries, and intents that give small-message latency samples,
+/// among those the node's layers run (fetches and reconciles wait for their layers).
+fn expected_samples(v: &Variant) -> (bool, bool) {
+    let world = build(v).unwrap();
+    let (mut must, mut small) = (false, false);
+    for it in &world.intents {
+        let others: Vec<usize> = match it.kind {
+            IntentKind::Publish => it.receivers.iter().copied().filter(|&r| r != it.node).collect(),
+            IntentKind::Push | IntentKind::Docsync | IntentKind::Manage => {
+                it.to.into_iter().filter(|&r| r != it.node).collect()
+            }
+            IntentKind::Echo => it.to.into_iter().collect(),
+            IntentKind::Fetch | IntentKind::Reconcile => continue,
+        };
+        let is_small = !matches!(it.kind, IntentKind::Echo);
+        small |= is_small && !others.is_empty();
+        must |= match &it.must {
+            Must::Flag(f) => *f && !others.is_empty(),
+            Must::Set(set) => set.iter().any(|&r| r != it.node),
+        };
+    }
+    (must, small)
+}
+
 /// What every Vinc-mode run must show: a waiting scenario is listed and not run; a run that ran passes every gate
 /// that was evaluated, has samples, and keeps its not-evaluated gates visible.
 pub fn assert_entries(entries: &[Entry]) {
@@ -165,18 +190,15 @@ pub fn assert_entries(entries: &[Entry]) {
             r.id,
             r.seed
         );
+        // Samples are required where the world has the intents that produce them: a world with no small push has no
+        // small-message latency to measure.
+        let (must, small) = expected_samples(&e.variant);
         assert!(
-            r.samples.must_owed > 0 && r.samples.small > 0,
+            (r.samples.must_owed > 0 || !must) && (r.samples.small > 0 || !small),
             "{} seed {}: no samples (vacuous): {:?}",
             r.id,
             r.seed,
             r.samples
-        );
-        assert!(
-            matches!(r.status, Status::Partial(_)),
-            "{} seed {}: a run without its layers claims to be complete",
-            r.id,
-            r.seed
         );
         if !r.gates.failed().is_empty() {
             bad.push(format!("{} seed {}", r.id, r.seed));

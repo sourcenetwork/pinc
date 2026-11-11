@@ -1,10 +1,13 @@
-//! The node adapter: a real `vinc-core` endpoint with instrumented crypto, driven as a simulator [`Node`].
+//! The node adapter: a `vinc-node` node (the real endpoint with instrumented crypto, the connectivity client, membership
+//! and broadcast) driven as a simulator [`Node`].
 //!
-//! [`SuiteNode`] wraps one endpoint (rebuilt on every restart) and the protocol layers of the node
-//! ([`Layers`]). It answers the endpoint's key requests with a deterministic
-//! software identity, answers its access checks through the recorder's oracle after the world's latency, splits
-//! the endpoint's batched transmits into single datagrams, reports every datagram and every state sample to the
-//! recorder, and implements [`Host`](crate::suite::proto::host::Host) so the layers can dial, open streams and write.
+//! [`SuiteNode`] wraps one node (rebuilt on every restart) and the protocol layers of the application ([`Layers`]). It
+//! answers the key requests of the endpoint and of the carrier handshakes with a deterministic software identity,
+//! answers access checks through the recorder's oracle after the world's latency, splits the endpoint's batched
+//! transmits into single datagrams, reports every datagram and every state sample to the recorder, and implements
+//! [`Host`](crate::suite::proto::host::Host) so the layers can dial, open streams, write, subscribe and publish. A
+//! bootstrap node is a hub: it also runs the relay for its members. Every node opens carrier streams to its relays
+//! over the simulator's TCP and WebSocket connections; a browser opens WebSocket carriers only and sends no datagram.
 //! [`Shared`] holds what all nodes of a run share; [`SuiteCost`] is the simulator's cost model for the suite.
 //!
 //! # What the runner does
@@ -29,7 +32,8 @@
 //!
 //! # Limits of the adapter
 //!
-//! Only UDP interfaces are used (the endpoint has no stream carrier). The state size reported to the recorder is an
+//! The endpoint uses the UDP interfaces of the world; streams carry only the connectivity client's relay carriers. The
+//! state size reported to the recorder is an
 //! estimate built from counts the endpoint exposes (see [`SESSION_STATE_BYTES`]). The redundant-bytes count of a datagram
 //! is zero here: the value store, which knows what it already holds, sits above the adapter. The endpoint's connection
 //! memory (about 16 MiB per node: the slot table is resident, the buffer pools only as far as they are used) is
@@ -39,10 +43,17 @@
 //! Invariants: the endpoint sees the node's local clock, the layers and the recorder see true time; a node's identity is created once
 //! and kept across restarts; nothing here reads a clock, a socket or a random source of the machine.
 
+mod carrier;
 mod core;
 mod cost;
+mod events;
+mod layer;
 mod mem;
+mod relay;
 mod shared;
+
+/// How many turns of the host loop a call may take before the node is reported as not settling.
+const SETTLE_ROUNDS: usize = 128;
 
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
@@ -50,11 +61,12 @@ use std::rc::Rc;
 use self::core::{Core, Phase};
 pub use self::core::{LEDGER_ENTRY_BYTES, LOCAL_BASE, MAX_GSO, PEER_ENTRY_BYTES, SESSION_STATE_BYTES};
 pub use self::cost::{HANDLER_CALL_NS, SuiteCost};
+pub use self::layer::NodeLayer;
 pub use self::mem::{CHUNKS_PER_CONN, Ep, SESSIONS};
 pub use self::shared::{SetupError, Shared, identity_seed, iface_ip};
 use crate::suite::proto::host::Layers;
 use crate::suite::world::model::Intent;
-use crate::{Clock, IfaceEvent, Node, Time, Transmit, Work};
+use crate::{Clock, IfaceEvent, Node, StreamEvent, StreamId, StreamOp, Time, Transmit, Work};
 
 /// A scenario command for a suite node.
 #[derive(Debug)]
@@ -193,9 +205,34 @@ impl<L: Layers> SuiteNode<L> {
         self.core.state_bytes()
     }
 
+    /// The endpoint's numbers and its sessions, one line each, for diagnosis.
+    pub fn describe(&self) -> Vec<String> {
+        let Some(ep) = self.core.endpoint() else {
+            return vec!["stopped".to_owned()];
+        };
+        let mut out = vec![format!("{:?}", ep.node_stats())];
+        for n in 0..SESSIONS {
+            if let vinc_core::Answer::Stats(st) = ep.query(vinc_core::Query::SessionAt(n)) {
+                out.push(format!(
+                    "session {:?} peer {:?} alpn {:?} dialer {} established {} allowed {} held {} route {:?} heard {} pto_count {}",
+                    st.session,
+                    st.node.map(|n| self.core.shared.index_of(&n)),
+                    st.alpn.map(|a| String::from_utf8_lossy(a.as_bytes()).into_owned()),
+                    st.dialer, st.established, st.allowed, st.held, st.route, st.heard, st.pto_count
+                ));
+            }
+        }
+        out
+    }
+
     /// Sessions the endpoint holds now.
     pub fn sessions(&self) -> usize {
         self.core.endpoint().map_or(0, |e| e.node_stats().sessions)
+    }
+
+    /// The membership view as `(epoch, members)` with members as world indices; `None` when the node is stopped.
+    pub fn view(&self) -> Option<(u64, Vec<usize>)> {
+        self.core.view()
     }
 
     /// The node's address changed while it was suspended or stopped: the next resume says it moved.
@@ -217,9 +254,30 @@ impl<L: Layers> SuiteNode<L> {
         self.core.tick(now);
     }
 
+    /// One turn of the host loop: the node's pending work, its events for the layers, the key answers, streams and
+    /// datagrams it asked for. Returns whether anything moved.
+    fn pump(&mut self) -> bool {
+        let mut did = false;
+        if let Some(node) = self.core.node.as_mut() {
+            node.poll(self.core.local);
+        }
+        did |= self.core.service(&mut self.layers);
+        did |= self.core.keys_step();
+        did |= self.core.io_step();
+        did |= self.core.udp_step();
+        did |= self.core.streams_out_step();
+        did
+    }
+
     /// Handle the events of the last call until none is left, then sample the state size.
     fn settle(&mut self) {
-        self.core.service(&mut self.layers);
+        for _ in 0..SETTLE_ROUNDS {
+            if !self.pump() {
+                self.core.sample();
+                return;
+            }
+        }
+        self.core.violation("G-SPEC", "the host loop of a node does not settle");
         self.core.sample();
     }
 
@@ -267,9 +325,9 @@ impl<L: Layers> Node for SuiteNode<L> {
                     send_at: None,
                 });
             }
-            // The endpoint may have events of its own (a closed session, a writable stream) that make the layers
+            // The node may have events of its own (a closed session, a writable stream) that make the layers
             // write more; handle them before saying nothing is left.
-            if !self.core.service(&mut self.layers) {
+            if !self.pump() {
                 self.core.sample();
                 return None;
             }
@@ -279,6 +337,16 @@ impl<L: Layers> Node for SuiteNode<L> {
     fn poll_timeout(&mut self) -> Option<Time> {
         if !self.core.running() {
             return None;
+        }
+        if std::mem::take(&mut self.core.timer_check) {
+            // A deadline that is already due is normal while the host has not yet called back; one that the call just
+            // made did not move is a timer the endpoint cannot act on.
+            let local = self.core.local;
+            let due = self.core.endpoint().and_then(Ep::poll_timeout).filter(|d| *d <= local);
+            if due.is_some() && due == self.core.stale_deadline {
+                self.core.timer_violations += 1;
+            }
+            self.core.stale_deadline = due;
         }
         let layers = self.layers.poll_timeout().filter(|_| self.core.deliver());
         self.core.next_deadline().into_iter().chain(layers).min()
@@ -307,7 +375,10 @@ impl<L: Layers> Node for SuiteNode<L> {
         match cmd {
             Cmd::Persist => self.core.persisted = self.core.export(),
             Cmd::Shutdown => {
-                let _ = self.core.cmd(vinc_core::Command::Shutdown);
+                let local = self.core.local;
+                if let Some(node) = self.core.node.as_mut() {
+                    node.leave(local);
+                }
                 self.core.persisted = self.core.export();
                 self.graceful_stop(now);
             }
@@ -374,7 +445,10 @@ impl<L: Layers> Node for SuiteNode<L> {
             return;
         }
         self.enter(now);
-        let _ = self.core.cmd(vinc_core::Command::Suspend);
+        let (local, wall) = (self.core.local, self.core.wall_ms());
+        if let Some(node) = self.core.node.as_mut() {
+            node.suspend(local, wall);
+        }
         self.core.events.push_back(NodeEvent::Suspended);
         self.settle();
     }
@@ -385,7 +459,10 @@ impl<L: Layers> Node for SuiteNode<L> {
         }
         self.enter(now);
         let moved = std::mem::take(&mut self.core.moved);
-        let _ = self.core.cmd(vinc_core::Command::Resume { moved });
+        let local = self.core.local;
+        if let Some(node) = self.core.node.as_mut() {
+            node.resume(local, moved);
+        }
         self.core.events.push_back(NodeEvent::Resumed);
         let open = self.layers.has_open_intents(self.core.now);
         self.core.shared.rec.borrow_mut().resumed(self.core.idx, now, open);
@@ -423,5 +500,31 @@ impl<L: Layers> Node for SuiteNode<L> {
 
     fn clock_changed(&mut self, _now: Time, clock: &Clock) {
         self.core.clock = clock.clone();
+    }
+
+    fn poll_stream(&mut self, _now: Time, buf: &mut [u8]) -> Option<StreamOp> {
+        let (op, data) = self.core.wire.ops.pop_front()?;
+        buf.get_mut(..data.len())?.copy_from_slice(&data);
+        Some(op)
+    }
+
+    fn handle_stream_event(&mut self, now: Time, event: StreamEvent) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        self.core.calls += 1;
+        self.core.stream_event(event);
+        self.settle();
+    }
+
+    fn handle_stream_record(&mut self, now: Time, stream: StreamId, data: &mut [u8]) {
+        if !self.core.running() {
+            return;
+        }
+        self.enter(now);
+        self.core.calls += 1;
+        self.core.stream_record(stream, data);
+        self.settle();
     }
 }

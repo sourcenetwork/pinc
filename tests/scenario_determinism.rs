@@ -45,8 +45,8 @@ fn same_seed_same_trace_hash() {
 fn same_seed_same_trace_hash_in_one_process() {
     let v = selected(&["S5"]).remove(0);
     let world = build(&v).unwrap();
-    let a = run(&world, Driver::Vinc, LayerSet::NONE).unwrap();
-    let b = run(&world, Driver::Vinc, LayerSet::NONE).unwrap();
+    let a = run(&world, Driver::Vinc, LayerSet::NODE).unwrap();
+    let b = run(&world, Driver::Vinc, LayerSet::NODE).unwrap();
     assert!(matches!(a.status, Status::Partial(_)));
     assert_eq!(gate_det(&a.trace_hash, &b.trace_hash), GateStatus::Pass);
 }

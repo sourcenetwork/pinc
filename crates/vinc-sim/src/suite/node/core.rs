@@ -1,43 +1,49 @@
-//! The part of a suite node that owns the endpoint: its keys, sessions, interfaces and the host duties.
+//! The part of a suite node that owns the VINC node: its keys, sessions, interfaces and the host duties.
 //!
 //! [`Core`] is everything except the protocol layers, so a layer can be handed `&mut Core` as its
-//! [`Host`](crate::suite::proto::host::Host) while the layers themselves stay a separate field of the node. The
-//! endpoint is SANS-IO: every command's reply events and every polled event end up in one queue that
-//! [`Core::service`] drains, answering key requests and access checks itself and turning the rest into
-//! [`LayerEvent`]s.
+//! [`Host`](crate::suite::proto::host::Host) while the layers themselves stay a separate field of the node. The node
+//! (`vinc_node::Node`: the endpoint, the connectivity client, membership and broadcast) is SANS-IO: the events of
+//! every command and every poll end up in one queue that [`Core::service`] drains, answering key requests and access
+//! checks itself and turning the rest into layer events. A hub also runs the relay for its members (`relay.rs`), and
+//! every node serves the carrier streams of its relays (`carrier.rs`).
 //!
-//! Invariants: all endpoint time is the node's local time (the simulator's clock for this node plus a fixed base so it
-//! is never negative, and never going backward); no borrow of the recorder is held across a call into a layer; a
-//! session the node closed on its own (a revoked or unknown peer) is hidden from the layers for its whole life.
+//! Invariants: all node time is the node's local time (the simulator's clock for this node plus a fixed base so it is
+//! never negative, and never going backward); no borrow of the recorder is held across a call into a layer; a session
+//! the node closed on its own (a revoked or unknown peer) is hidden from the layers for its whole life.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 
+use vinc_connect::client::{Config as ConnCfg, RelayCfg};
 use vinc_core::{
-    Answer, Command, CommandError, EndpointConfig, Event, IfaceEvent as EpIfaceEvent, IfaceId, Query, Reply, Role,
-    SessionId, Value, state_len,
+    Command, CommandError, EndpointConfig, IfaceEvent as EpIfaceEvent, IfaceId, SessionId, Value, relay_parts,
+    state_len,
 };
-use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_crypto::{Drbg, Keypair, Software};
-use vinc_security::{Alpn, Env, KeyHandle, KeyRequest, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_transport::stream::{NoSource, RecvStatus};
+use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+use vinc_node::{Config as NodeConfig, HUB_ALPN, Node};
+use vinc_security::{Env, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+use vinc_transport::stream::NoSource;
 
+use super::carrier::Wire;
 use super::mem::{CLIENT_TICKETS, Ep, recycle, slots};
+use super::relay::{HubSide, LOCAL_RELAY};
 use super::shared::{Shared, derive, make_identity};
 use super::{NodeEvent, SetupError};
-use crate::Clock;
 use crate::suite::crypto::{DeviceCosts, Tracked};
-use crate::suite::proto::host::{Host, LayerEvent, Layers};
+use crate::{Clock, WALL_EPOCH};
 
 /// The local time of a node at true time zero with a perfect clock: one hour, so a negative clock offset never
 /// makes the endpoint's time negative.
 pub const LOCAL_BASE: u64 = 3_600_000_000_000;
 /// The most same-size datagrams the endpoint batches into one transmit.
 pub const MAX_GSO: usize = 8;
-/// The close code of a session the node ends because the peer is revoked or unknown (the access-denied code).
-const CLOSE_DENIED: u64 = 3;
 const SECOND: u64 = 1_000_000_000;
+
+/// The relays a node can be configured with.
+pub(super) const NRL: usize = 4;
+/// The peers the connectivity layer remembers.
+const NPEERS: usize = 64;
 
 /// The estimate of the memory one live session holds, in bytes: one pool chunk plus its tables. The endpoint keeps no
 /// byte accounting of its own, so the state size the node reports is built from counts it does expose.
@@ -47,37 +53,54 @@ pub const LEDGER_ENTRY_BYTES: u64 = 64;
 /// The size of one remembered round trip in the exported state format, used as its memory estimate.
 pub const PEER_ENTRY_BYTES: u64 = 41;
 
+type NodeT = Node<Ep, Tracked, (), NRL, NPEERS>;
+
 /// One interface of the node as the endpoint sees it.
 pub(super) struct IfEntry {
     ip: IpAddr,
     port: u16,
     up: bool,
     id: Option<IfaceId>,
+    /// A UDP interface of the world; false for the stand-in of a node that has none (a browser).
+    udp: bool,
 }
 
 /// Where an incarnation is in its life.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Phase {
-    /// No endpoint.
+    /// No node.
     Stopped,
-    /// The endpoint runs and the layers get events.
+    /// The node runs and the layers get events.
     Running,
-    /// The node left on purpose: the endpoint still sends its closes, the layers are stopped.
+    /// The node left on purpose: it still sends its closes, the layers are stopped.
     Left,
 }
 
-struct Sess {
-    peer: usize,
-    hidden: bool,
+pub(super) struct Sess {
+    pub(super) peer: usize,
+    pub(super) hidden: bool,
 }
 
 /// How the node knows a session an event names.
-enum Known {
+pub(super) enum Known {
     Visible(usize),
     Hidden,
     Unknown,
 }
 
+/// An access check waiting for its answer time.
+#[derive(Clone, Copy)]
+pub(super) enum Check {
+    /// A session's check, by the endpoint's id.
+    Endpoint(u64),
+    /// A broadcast origin's check, by the node's id.
+    Broadcast(u32),
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the node, not a state"
+)]
 pub(super) struct Core {
     pub(super) shared: Rc<Shared>,
     pub(super) idx: usize,
@@ -88,19 +111,25 @@ pub(super) struct Core {
     pub(super) incarnation: u64,
     pub(super) last_start: u64,
     pub(super) phase: Phase,
-    ep: Option<Box<Ep>>,
-    prekeys: Option<SoftPrekeys<Tracked>>,
-    drbg: Drbg,
-    sessions: BTreeMap<SessionId, Sess>,
-    queue: VecDeque<Event>,
-    acp: VecDeque<(u64, u64, bool)>,
+    pub(super) node: Option<Box<NodeT>>,
+    pub(super) prekeys: Option<SoftPrekeys<Tracked>>,
+    pub(super) drbg: Drbg,
+    pub(super) hub_drbg: Drbg,
+    pub(super) hub: Option<Box<HubSide>>,
+    pub(super) wire: Wire,
+    pub(super) sessions: BTreeMap<SessionId, Sess>,
+    pub(super) acp: VecDeque<(u64, Check, bool)>,
     pub(super) clock: Clock,
     pub(super) now: u64,
     pub(super) local: u64,
     pub(super) revoked: BTreeSet<usize>,
     pub(super) ifaces: Vec<IfEntry>,
+    /// The node can send UDP: a browser cannot.
+    pub(super) udp: bool,
+    /// The node is a browser: WebSocket carriers only.
+    pub(super) browser: bool,
     pub(super) moved: bool,
-    scratch: Vec<u8>,
+    pub(super) scratch: Vec<u8>,
     pub(super) events: VecDeque<NodeEvent>,
     stash: Vec<u8>,
     stash_at: usize,
@@ -112,13 +141,17 @@ pub(super) struct Core {
     pub(super) max_export: usize,
     pub(super) next_sample: u64,
     pub(super) timer_violations: u64,
+    /// The last call ran the node's timers: the endpoint's deadline is checked once the host has drained its output.
+    pub(super) timer_check: bool,
+    /// The due deadline the endpoint showed after the previous timer call, to tell a stuck timer from a due one.
+    pub(super) stale_deadline: Option<u64>,
 }
 
 impl Core {
     pub(super) fn new(shared: Rc<Shared>, idx: usize) -> Result<Self, SetupError> {
         let spec = shared.world.nodes.get(idx).ok_or(SetupError::NoSuchNode(idx))?;
         let (kp, identity) = make_identity(shared.world.seed, idx)?;
-        let ifaces = spec
+        let mut ifaces: Vec<IfEntry> = spec
             .ifaces
             .iter()
             .filter(|f| f.kind.starts_with("udp"))
@@ -128,11 +161,28 @@ impl Core {
                     port: f.addr.port,
                     up: true,
                     id: None,
+                    udp: true,
                 })
             })
             .collect();
+        let udp = !ifaces.is_empty();
+        if !udp {
+            // A node with no UDP interface (a browser) is still somewhere on the network: its carriers leave from
+            // the address of its stream interface, which the endpoint also needs as the address relay paths arrive at.
+            ifaces.extend(spec.ifaces.iter().filter_map(|f| {
+                Some(IfEntry {
+                    ip: super::shared::iface_ip(&f.addr)?,
+                    port: 4433,
+                    up: true,
+                    id: None,
+                    udp: false,
+                })
+            }));
+            ifaces.truncate(1);
+        }
         let costs = shared.costs(idx);
         let seed = super::shared::identity_seed(shared.world.seed, idx);
+        let world_seed = shared.world.seed;
         Ok(Self {
             idx,
             costs,
@@ -142,17 +192,21 @@ impl Core {
             incarnation: 0,
             last_start: 0,
             phase: Phase::Stopped,
-            ep: None,
+            node: None,
             prekeys: None,
-            drbg: Drbg::new(&derive(b"suite-keys", shared.world.seed, idx as u64, 0)),
+            drbg: Drbg::new(&derive(b"suite-keys", world_seed, idx as u64, 0)),
+            hub_drbg: Drbg::new(&derive(b"suite-hub", world_seed, idx as u64, 0)),
+            hub: None,
+            wire: Wire::default(),
             sessions: BTreeMap::new(),
-            queue: VecDeque::new(),
             acp: VecDeque::new(),
             clock: Clock::default(),
             now: 0,
             local: LOCAL_BASE,
             revoked: BTreeSet::new(),
             ifaces,
+            udp,
+            browser: spec.device == "browser",
             moved: false,
             scratch: Vec::new(),
             events: VecDeque::new(),
@@ -166,6 +220,8 @@ impl Core {
             max_export: 0,
             next_sample: 0,
             timer_violations: 0,
+            timer_check: false,
+            stale_deadline: None,
             shared,
         })
     }
@@ -177,6 +233,16 @@ impl Core {
         self.shared.registry.enter(self.idx);
         let local = u64::try_from(i128::from(self.clock.local(now)) + i128::from(LOCAL_BASE)).unwrap_or(0);
         self.local = self.local.max(local);
+        let (local, wall) = (self.local, self.wall_ms());
+        if let Some(node) = self.node.as_mut() {
+            node.set_wall_ms(local, wall);
+        }
+    }
+
+    /// The wall clock in milliseconds, as the node's own clock reads it.
+    pub(super) fn wall_ms(&self) -> u64 {
+        let ns = i128::from(WALL_EPOCH) + i128::from(self.clock.local(self.now));
+        u64::try_from(ns.max(0) / 1_000_000).unwrap_or(0)
     }
 
     /// The true time at which the local time `deadline` is reached.
@@ -195,21 +261,37 @@ impl Core {
     }
 
     pub(super) fn endpoint(&self) -> Option<&Ep> {
-        self.ep.as_deref()
+        self.node.as_deref().map(Node::endpoint)
     }
 
     pub(super) fn violation(&self, gate: &str, msg: &str) {
         self.shared.rec.borrow_mut().violation(self.now, gate, self.idx, msg);
     }
 
-    fn provider(&self) -> Tracked {
+    pub(super) fn provider(&self) -> Tracked {
         Tracked::new(self.shared.registry, self.idx, Software)
+    }
+
+    /// The UDP address of the node: its first interface that is up.
+    pub(super) fn udp_addr(&self) -> Option<SocketAddr> {
+        self.ifaces
+            .iter()
+            .find(|e| e.up && e.udp)
+            .map(|e| SocketAddr::new(e.ip, e.port))
+    }
+
+    /// The address carrier streams leave from: the first IPv4 interface that is up, else any.
+    pub(super) fn stream_local(&self) -> Option<SocketAddr> {
+        let up = || self.ifaces.iter().filter(|e| e.up);
+        up().find(|e| e.ip.is_ipv4())
+            .or_else(|| up().next())
+            .map(|e| SocketAddr::new(e.ip, e.port))
     }
 
     // ---- life ----
 
-    /// Build a fresh endpoint, restore `persisted` unless this restart keeps no state, and register `alpns`.
-    /// Returns whether state was restored; `None` if the endpoint could not be built.
+    /// Build a fresh node, restore `persisted` into its endpoint unless this restart keeps no state, and register
+    /// `alpns`. Returns whether state was restored; `None` if the node could not be built.
     pub(super) fn begin(&mut self, now: u64, persisted: &[u8], alpns: &[&'static [u8]]) -> Option<bool> {
         self.tick(now);
         self.incarnation += 1;
@@ -233,17 +315,22 @@ impl Core {
         let ep_drbg = Drbg::new(&derive(b"suite-endpoint", world_seed, self.idx as u64, inc));
         let mut ep = Box::new(Ep::new(self.local, prov, ep_drbg, self.identity, cfg, table));
         self.drbg = Drbg::new(&derive(b"suite-keys", world_seed, self.idx as u64, inc));
+        self.hub_drbg = Drbg::new(&derive(b"suite-hub", world_seed, self.idx as u64, inc));
         let mut env = Env {
             provider: &prov,
             now: self.local,
             drbg: &mut self.drbg,
         };
+        let mut prekey = None;
         match SoftPrekeys::new(&mut env, PrekeyPolicy::default()) {
             Ok(mut keys) => {
                 // vertexia: one prekey per incarnation, never rotated; ceiling is an incarnation longer than the
                 // policy lifetime (10 minutes) still using it, upgrade path is a rotation timer calling `acquire`.
                 match keys.acquire(&mut env) {
-                    Ok(info) => ep.set_prekey(info),
+                    Ok(info) => {
+                        ep.set_prekey(info.clone());
+                        prekey = Some(info);
+                    }
                     Err(_) => self.violation("G-SPEC", "the node could not make a prekey"),
                 }
                 self.prekeys = Some(keys);
@@ -274,19 +361,96 @@ impl Core {
                 e.id = ep.add_iface(SocketAddr::new(e.ip, e.port));
             }
         }
-        self.ep = Some(ep);
+        let Some(prekey) = prekey else {
+            recycle(*ep);
+            return None;
+        };
+        let node = match self.build_node(*ep, prekey, now) {
+            Ok(n) => n,
+            Err(msg) => {
+                self.violation("G-SPEC", &msg);
+                return None;
+            }
+        };
+        self.node = Some(node);
+        if self.shared.is_hub(self.idx) {
+            let me = self.identity.node_id();
+            self.hub = Some(Box::new(HubSide::new(me, derive_seed(world_seed, self.idx, inc))));
+        }
+        self.refresh_local(false);
         self.phase = Phase::Running;
         self.next_sample = 0;
         Some(restored)
     }
 
+    #[allow(clippy::default_trait_access, reason = "the default limits of the node's broadcast")]
+    fn build_node(&mut self, ep: Ep, prekey: vinc_security::PrekeyInfo, now: u64) -> Result<Box<NodeT>, String> {
+        let mut relays: [Option<RelayCfg>; NRL] = [None; NRL];
+        for (d, r) in relays.iter_mut().zip(self.shared.relays()) {
+            *d = Some(RelayCfg {
+                udp: r.udp.filter(|_| self.udp),
+                tcp: r.tcp.filter(|_| !self.browser),
+                ..*r
+            });
+        }
+        let spec = self
+            .shared
+            .world
+            .nodes
+            .get(self.idx)
+            .ok_or("the node is not in the world".to_owned())?;
+        let local = self
+            .udp_addr()
+            .or_else(|| self.stream_local())
+            .ok_or("the node has no interface".to_owned())?;
+        let cfg = NodeConfig {
+            connect: ConnCfg {
+                me: self.identity.node_id(),
+                identity: self.identity,
+                relays,
+                phone: spec.device == "phone",
+                restarted: self.incarnation > 1,
+                start: self.local,
+                v6: false,
+                keep_learn: false,
+            },
+            is_hub: self.shared.is_hub(self.idx),
+            version: self.shared.version_at(self.idx, now),
+            alpn: HUB_ALPN,
+            limits: Default::default(),
+            wall_ms: self.wall_ms(),
+            local,
+            trace: false,
+        };
+        let key = Keypair::from_seed(IdentityAlg::Ed25519, &self.seed)
+            .map(Box::new)
+            .map_err(|_| "the node key could not be made".to_owned())?;
+        let drbg = Drbg::new(&derive(
+            b"suite-node",
+            self.shared.world.seed,
+            self.idx as u64,
+            self.incarnation,
+        ));
+        let seed = u64::from_be_bytes(first8(&derive(
+            b"suite-conn",
+            self.shared.world.seed,
+            self.idx as u64,
+            self.incarnation,
+        )));
+        let prov = self.provider();
+        Node::new(&cfg, ep, prekey, prov, drbg, key, (), seed)
+            .map(Box::new)
+            .map_err(|e| format!("the node could not start: {e}"))
+    }
+
     fn clear_volatile(&mut self) {
-        if let Some(ep) = self.ep.take() {
-            recycle(*ep);
+        if let Some(node) = self.node.take() {
+            recycle(node.into_endpoint());
         }
         self.prekeys = None;
+        self.hub = None;
+        self.wire = Wire::default();
         self.sessions.clear();
-        self.queue.clear();
         self.acp.clear();
         self.stash.clear();
         self.stash_at = 0;
@@ -307,52 +471,67 @@ impl Drop for Core {
 }
 
 impl Core {
-    // ---- commands to the endpoint ----
+    // ---- commands to the node ----
 
-    pub(super) fn cmd(&mut self, c: Command<'_, NoSource>) -> Result<Reply, CommandError> {
-        let ep = self.ep.as_mut().ok_or(CommandError::NoSession)?;
-        let r = ep.command(self.local, c)?;
-        self.queue.extend(r.events.iter().copied());
-        Ok(r)
+    pub(super) fn cmd(&mut self, c: Command<'_, NoSource>) -> Result<Value, CommandError> {
+        let local = self.local;
+        self.node.as_mut().ok_or(CommandError::NoSession)?.command(local, c)
     }
 
     pub(super) fn handle_datagram(&mut self, local: SocketAddr, remote: SocketAddr, data: &mut [u8]) {
-        if let Some(ep) = self.ep.as_mut() {
-            ep.handle_datagram(self.local, local, remote, data);
+        if self.hub.is_some() {
+            self.hub_datagram(local, remote, data);
+        } else if let Some(node) = self.node.as_mut() {
+            node.handle_datagram(self.local, local, remote, data);
         }
     }
 
-    /// Run the endpoint timers that are due and answer the access checks whose answer time has come. Returns
-    /// whether the endpoint's own timer was due.
+    /// Run the timers that are due and answer the access checks whose answer time has come. Returns whether the
+    /// node's own timer was due.
     pub(super) fn run_timers(&mut self) -> bool {
         while self.acp.front().is_some_and(|&(due, ..)| due <= self.now) {
-            if let Some((_, check, allow)) = self.acp.pop_front() {
+            let Some((_, check, allow)) = self.acp.pop_front() else {
+                break;
+            };
+            let local = self.local;
+            match check {
                 // An answer for a check the endpoint dropped meanwhile is refused; there is nothing to repair.
-                let _ = self.cmd(Command::AcpAnswer { check, allow });
+                Check::Endpoint(check) => {
+                    let _ = self.cmd(Command::AcpAnswer { check, allow });
+                }
+                Check::Broadcast(id) => {
+                    if let Some(node) = self.node.as_mut() {
+                        node.broadcast_acp_answer(local, id, allow);
+                    }
+                }
             }
         }
+        self.hub_timeout();
         let local = self.local;
-        let Some(ep) = self.ep.as_mut() else { return false };
-        let due = ep.poll_timeout().is_some_and(|d| d <= local);
+        let Some(node) = self.node.as_mut() else { return false };
+        let due = node.poll_timeout().is_some_and(|d| d <= local);
         if due {
-            ep.handle_timeout(local);
-            if ep.poll_timeout().is_some_and(|d| d <= local) {
-                self.timer_violations += 1;
-            }
+            node.handle_timeout(local);
         }
+        self.timer_check = due;
         due
     }
 
-    /// The next true time the endpoint or an access answer wants a call.
+    /// The next true time the node, the relay or an access answer wants a call.
     pub(super) fn next_deadline(&self) -> Option<u64> {
-        let ep = self.ep.as_ref().and_then(|e| e.poll_timeout()).map(|d| self.to_true(d));
+        let node = self.node.as_ref().and_then(|n| n.poll_timeout());
+        let relay = self.hub.as_ref().and_then(|h| h.next_deadline());
         let acp = self.acp.front().map(|&(due, ..)| due);
-        ep.into_iter().chain(acp).min()
+        node.into_iter().chain(relay).map(|d| self.to_true(d)).chain(acp).min()
     }
 
-    /// Next datagram: the rest of a batch, or a fresh batch from the endpoint (one transmit call recorded). The
-    /// datagram is written to `buf`; returns `(local, remote, len)`.
+    /// Next datagram: a queued one of the relay or the connectivity layer, the rest of a batch, or a fresh batch from
+    /// the endpoint (one transmit call recorded). The datagram is written to `buf`; returns `(local, remote, len)`.
     pub(super) fn next_datagram(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, SocketAddr, usize)> {
+        if let Some((local, remote, data)) = self.wire.datagrams.pop_front() {
+            buf.get_mut(..data.len())?.copy_from_slice(&data);
+            return Some((local, remote, data.len()));
+        }
         if let Some((local, remote, seg)) = self.stash_route {
             let rest = self.stash.get(self.stash_at..)?;
             let n = rest.len().min(seg);
@@ -365,19 +544,35 @@ impl Core {
             }
             return Some((local, remote, n));
         }
-        let ep = self.ep.as_mut()?;
-        let tx = ep.poll_transmit(self.local, buf)?;
-        let segs = tx.len.div_ceil(tx.segment_size.max(1));
-        self.shared.rec.borrow_mut().transmit_call(self.idx, self.now);
-        self.io_acc += self.costs.io_call + self.costs.io_seg * segs as f64;
-        let first = tx.len.min(tx.segment_size.max(1));
-        if tx.len > first {
-            self.stash.clear();
-            self.stash.extend_from_slice(buf.get(first..tx.len)?);
-            self.stash_at = 0;
-            self.stash_route = Some((tx.local, tx.remote, tx.segment_size));
+        loop {
+            let local = self.local;
+            let tx = self.node.as_mut()?.poll_transmit(local, buf)?;
+            let seg = tx.segment_size.max(1);
+            if let Some((relay, slot)) = relay_parts(&tx.remote)
+                && relay == LOCAL_RELAY
+            {
+                let data = buf.get(..tx.len).unwrap_or_default().to_vec();
+                for chunk in data.chunks(seg) {
+                    self.hub_send_local(slot, chunk);
+                }
+                continue;
+            }
+            if !self.udp {
+                // A browser has no datagram socket: whatever the endpoint tried to send directly is lost.
+                continue;
+            }
+            let segs = tx.len.div_ceil(seg);
+            self.shared.rec.borrow_mut().transmit_call(self.idx, self.now);
+            self.io_acc += self.costs.io_call + self.costs.io_seg * segs as f64;
+            let first = tx.len.min(seg);
+            if tx.len > first {
+                self.stash.clear();
+                self.stash.extend_from_slice(buf.get(first..tx.len)?);
+                self.stash_at = 0;
+                self.stash_route = Some((tx.local, tx.remote, seg));
+            }
+            return Some((tx.local, tx.remote, first));
         }
-        Some((tx.local, tx.remote, first))
     }
 
     /// Record a datagram the node puts on the wire: wire bytes, plaintext payload and third-party bytes.
@@ -400,7 +595,7 @@ impl Core {
 
     /// The endpoint's exported state, or nothing if it is down or the export failed.
     pub(super) fn export(&mut self) -> Vec<u8> {
-        let Some(ep) = self.ep.as_ref() else { return Vec::new() };
+        let Some(ep) = self.endpoint() else { return Vec::new() };
         let mut out = vec![0u8; state_len(CLIENT_TICKETS)];
         if let Ok(n) = ep.export_state(self.local, &mut out) {
             out.truncate(n);
@@ -415,11 +610,21 @@ impl Core {
     /// The estimate of the node's live state in bytes: sessions, ledger entries and remembered round trips at the
     /// documented per-item sizes. The endpoint holds no byte accounting of its own.
     pub(super) fn state_bytes(&self) -> u64 {
-        let Some(ep) = self.ep.as_ref() else { return 0 };
+        let Some(ep) = self.endpoint() else { return 0 };
         let st = ep.node_stats();
         st.sessions as u64 * SESSION_STATE_BYTES
             + st.ledger as u64 * LEDGER_ENTRY_BYTES
             + ep.rtt().peers().count() as u64 * PEER_ENTRY_BYTES
+    }
+
+    /// The membership view as `(epoch, members)` with members resolved to world indices.
+    pub(super) fn view(&self) -> Option<(u64, Vec<usize>)> {
+        let m = self.node.as_ref()?.membership();
+        let members = m
+            .members()
+            .filter_map(|(id, _)| self.shared.index_of_bytes(id))
+            .collect();
+        Some((m.view_epoch(), members))
     }
 
     /// Report the state size to the recorder at most once per virtual second.
@@ -434,18 +639,44 @@ impl Core {
 
     // ---- interfaces ----
 
-    pub(super) fn iface_up(&mut self, ip: IpAddr) {
-        let (local, ep) = (self.local, self.ep.as_mut());
-        if let Some(e) = self.ifaces.iter_mut().find(|e| e.ip == ip) {
-            e.up = true;
-            if let Some(ep) = ep {
-                if e.id.is_none() {
-                    e.id = ep.add_iface(SocketAddr::new(e.ip, e.port));
-                }
-                if let Some(id) = e.id {
-                    ep.iface_event(local, id, EpIfaceEvent::Up);
-                }
+    /// Tell the node the addresses it has now, and that they changed when `changed` says so.
+    fn refresh_local(&mut self, changed: bool) {
+        let addrs: Vec<SocketAddr> = self
+            .ifaces
+            .iter()
+            .filter(|e| e.up && e.udp)
+            .map(|e| SocketAddr::new(e.ip, e.port))
+            .collect();
+        let local = self.local;
+        if let Some(node) = self.node.as_mut() {
+            node.set_local(&addrs);
+            if changed {
+                node.address_changed(local);
             }
+        }
+    }
+
+    fn iface_event_to_node(&mut self, id: IfaceId, ev: EpIfaceEvent) {
+        let local = self.local;
+        if let Some(node) = self.node.as_mut() {
+            node.iface_event(local, id, ev);
+        }
+    }
+
+    fn add_iface_to_node(&mut self, addr: SocketAddr) -> Option<IfaceId> {
+        self.node.as_mut().and_then(|n| n.add_iface(addr))
+    }
+
+    pub(super) fn iface_up(&mut self, ip: IpAddr) {
+        if let Some(i) = self.ifaces.iter().position(|e| e.ip == ip) {
+            self.ifaces[i].up = true;
+            let (port, id) = (self.ifaces[i].port, self.ifaces[i].id);
+            let id = id.or_else(|| self.add_iface_to_node(SocketAddr::new(ip, port)));
+            self.ifaces[i].id = id;
+            if let Some(id) = id {
+                self.iface_event_to_node(id, EpIfaceEvent::Up);
+            }
+            self.refresh_local(true);
             return;
         }
         // An address the node does not have: a handover. The interface of the same family that is down takes the new
@@ -456,311 +687,49 @@ impl Core {
             .iter()
             .find(|e| e.ip.is_ipv4() == v4)
             .map_or(4433, |e| e.port);
-        let slot = self.ifaces.iter_mut().find(|e| e.ip.is_ipv4() == v4 && !e.up);
-        match (slot, ep) {
-            (Some(e), Some(ep)) => {
-                e.ip = ip;
-                e.up = true;
-                match e.id {
-                    Some(id) => {
-                        ep.iface_event(local, id, EpIfaceEvent::AddrChange(SocketAddr::new(ip, e.port)));
-                        ep.iface_event(local, id, EpIfaceEvent::Up);
-                    }
-                    None => e.id = ep.add_iface(SocketAddr::new(ip, e.port)),
+        if let Some(i) = self.ifaces.iter().position(|e| e.ip.is_ipv4() == v4 && !e.up) {
+            self.ifaces[i].ip = ip;
+            self.ifaces[i].up = true;
+            let (port, id) = (self.ifaces[i].port, self.ifaces[i].id);
+            match id {
+                Some(id) => {
+                    self.iface_event_to_node(id, EpIfaceEvent::AddrChange(SocketAddr::new(ip, port)));
+                    self.iface_event_to_node(id, EpIfaceEvent::Up);
                 }
+                None => self.ifaces[i].id = self.add_iface_to_node(SocketAddr::new(ip, port)),
             }
-            (Some(e), None) => {
-                e.ip = ip;
-                e.up = true;
-            }
-            (None, ep) => {
-                let id = ep.and_then(|ep| ep.add_iface(SocketAddr::new(ip, port)));
-                self.ifaces.push(IfEntry { ip, port, up: true, id });
-            }
+        } else {
+            let id = self.add_iface_to_node(SocketAddr::new(ip, port));
+            self.ifaces.push(IfEntry {
+                ip,
+                port,
+                up: true,
+                id,
+                udp: self.udp,
+            });
         }
+        self.refresh_local(true);
     }
 
     pub(super) fn iface_down(&mut self, ip: IpAddr) {
-        let (local, ep) = (self.local, self.ep.as_mut());
-        if let Some(e) = self.ifaces.iter_mut().find(|e| e.ip == ip) {
-            e.up = false;
-            if let (Some(ep), Some(id)) = (ep, e.id) {
-                ep.iface_event(local, id, EpIfaceEvent::Down);
+        if let Some(i) = self.ifaces.iter().position(|e| e.ip == ip) {
+            self.ifaces[i].up = false;
+            if let Some(id) = self.ifaces[i].id {
+                self.iface_event_to_node(id, EpIfaceEvent::Down);
             }
+            self.refresh_local(false);
         }
     }
 
     pub(super) fn iface_changed(&mut self, old: IpAddr, new: IpAddr) {
-        let (local, ep) = (self.local, self.ep.as_mut());
-        if let Some(e) = self.ifaces.iter_mut().find(|e| e.ip == old) {
-            e.ip = new;
-            if let (Some(ep), Some(id)) = (ep, e.id) {
-                ep.iface_event(local, id, EpIfaceEvent::AddrChange(SocketAddr::new(new, e.port)));
+        if let Some(i) = self.ifaces.iter().position(|e| e.ip == old) {
+            self.ifaces[i].ip = new;
+            if let Some(id) = self.ifaces[i].id {
+                let port = self.ifaces[i].port;
+                self.iface_event_to_node(id, EpIfaceEvent::AddrChange(SocketAddr::new(new, port)));
             }
+            self.refresh_local(true);
         }
-    }
-
-    // ---- events ----
-
-    /// Handle every event the endpoint and the last commands produced. Returns whether there was any.
-    pub(super) fn service<L: Layers>(&mut self, layers: &mut L) -> bool {
-        let mut any = false;
-        loop {
-            let ev = match self.ep.as_mut().and_then(|e| e.poll_event()) {
-                Some(e) => e,
-                None => match self.queue.pop_front() {
-                    Some(e) => e,
-                    None => return any,
-                },
-            };
-            any = true;
-            self.on_event(layers, ev);
-        }
-    }
-
-    fn known(&self, session: SessionId) -> Known {
-        match self.sessions.get(&session) {
-            Some(s) if s.hidden => Known::Hidden,
-            Some(s) => Known::Visible(s.peer),
-            None => Known::Unknown,
-        }
-    }
-
-    fn visible(&mut self, session: SessionId) -> Option<usize> {
-        match self.known(session) {
-            Known::Visible(p) => Some(p),
-            Known::Hidden => None,
-            Known::Unknown => {
-                self.violation("G-SPEC", "the endpoint named a session the node never opened");
-                None
-            }
-        }
-    }
-
-    fn on_event<L: Layers>(&mut self, layers: &mut L, ev: Event) {
-        match ev {
-            Event::KeyRequest { session } => self.answer_keys(session),
-            Event::AcpCheck { check, node, .. } => {
-                let principal = self.shared.index_of(&node);
-                let (allow, _) = self.shared.rec.borrow_mut().acp_decide(self.now, self.idx, principal);
-                self.acp
-                    .push_back((self.now + self.shared.world.acp_latency_ns, check, allow));
-            }
-            Event::Connected {
-                session,
-                node,
-                alpn,
-                resumed,
-            } => self.on_open(layers, session, node, alpn, true, resumed),
-            Event::Incoming { session, node, alpn } => self.on_open(layers, session, node, alpn, false, false),
-            Event::ConnectFailed { node, alpn, reason } => {
-                if let Some(peer) = self.shared.index_of(&node) {
-                    self.events.push_back(NodeEvent::ConnectFailed {
-                        peer,
-                        reason: Some(reason),
-                    });
-                    if self.deliver() {
-                        let (local, bytes) = (self.now, alpn.as_bytes());
-                        layers.event(local, self, LayerEvent::ConnectFailed { peer, alpn: bytes });
-                    }
-                }
-            }
-            Event::Closed { session, .. } => match self.sessions.remove(&session) {
-                Some(s) if !s.hidden => {
-                    self.events.push_back(NodeEvent::Closed { peer: s.peer });
-                    if self.deliver() {
-                        let local = self.now;
-                        layers.event(local, self, LayerEvent::Closed { session });
-                    }
-                }
-                Some(_) => {}
-                None => self.violation("G-SPEC", "the endpoint named a session the node never opened"),
-            },
-            Event::StreamOpened { session, stream } => {
-                if self.visible(session).is_some() && self.deliver() {
-                    let local = self.now;
-                    layers.event(local, self, LayerEvent::StreamOpened { session, stream });
-                }
-            }
-            Event::StreamReadable { session, stream } => {
-                if self.visible(session).is_some() {
-                    self.read_stream(layers, session, stream);
-                }
-            }
-            Event::StreamWritable { session, stream } => {
-                if self.visible(session).is_some() && self.deliver() {
-                    let local = self.now;
-                    layers.event(local, self, LayerEvent::StreamWritable { session, stream });
-                }
-            }
-            Event::StreamReset { session, stream, .. } => {
-                if self.visible(session).is_some() && self.deliver() {
-                    let local = self.now;
-                    layers.event(local, self, LayerEvent::StreamReset { session, stream });
-                }
-            }
-            Event::DatagramReceived { .. }
-            | Event::OpenReady { .. }
-            | Event::PathChanged { .. }
-            | Event::PeerAsleep { .. }
-            | Event::PeerAwake { .. }
-            | Event::ReachOut { .. }
-            | Event::StreamStopped { .. }
-            | Event::TicketsReceived { .. } => {}
-        }
-    }
-
-    fn on_open<L: Layers>(
-        &mut self,
-        layers: &mut L,
-        session: SessionId,
-        node: vinc_crypto::NodeId,
-        alpn: Alpn,
-        dialed: bool,
-        resumed: bool,
-    ) {
-        let peer = self.shared.index_of(&node);
-        let hide = peer.is_none_or(|p| self.revoked.contains(&p));
-        self.sessions.insert(
-            session,
-            Sess {
-                peer: peer.unwrap_or(usize::MAX),
-                hidden: hide,
-            },
-        );
-        let Some(peer) = peer.filter(|_| !hide) else {
-            let _ = self.cmd(Command::Close {
-                session,
-                error: CLOSE_DENIED,
-            });
-            if dialed && let Some(peer) = peer {
-                self.events.push_back(NodeEvent::ConnectFailed { peer, reason: None });
-                if self.deliver() {
-                    let local = self.now;
-                    layers.event(
-                        local,
-                        self,
-                        LayerEvent::ConnectFailed {
-                            peer,
-                            alpn: alpn.as_bytes(),
-                        },
-                    );
-                }
-            }
-            return;
-        };
-        let (local, bytes) = (self.now, alpn.as_bytes());
-        if dialed {
-            self.events.push_back(NodeEvent::Connected { peer, resumed });
-            if self.deliver() {
-                layers.event(
-                    local,
-                    self,
-                    LayerEvent::Connected {
-                        session,
-                        peer,
-                        alpn: bytes,
-                    },
-                );
-            }
-        } else {
-            self.events.push_back(NodeEvent::Incoming { peer });
-            if self.deliver() {
-                layers.event(
-                    local,
-                    self,
-                    LayerEvent::Incoming {
-                        session,
-                        peer,
-                        alpn: bytes,
-                    },
-                );
-            }
-        }
-    }
-
-    /// Read everything readable on a stream, consume it, and hand it to the layers in one piece.
-    fn read_stream<L: Layers>(&mut self, layers: &mut L, session: SessionId, stream: u64) {
-        let mut buf = std::mem::take(&mut self.scratch);
-        buf.clear();
-        let mut fin = false;
-        loop {
-            let n = match self.ep.as_ref().map(|e| e.query(Query::Read { session, stream })) {
-                Some(Answer::Chunk(c)) if !c.is_empty() => {
-                    buf.extend_from_slice(c);
-                    c.len()
-                }
-                _ => break,
-            };
-            match self.cmd(Command::Consume { session, stream, n }) {
-                Ok(rep) => fin |= rep.value == Value::Recv(RecvStatus::Finished),
-                Err(_) => break,
-            }
-        }
-        if !fin && let Ok(rep) = self.cmd(Command::Consume { session, stream, n: 0 }) {
-            fin = rep.value == Value::Recv(RecvStatus::Finished);
-        }
-        if self.deliver() && (!buf.is_empty() || fin) {
-            let local = self.now;
-            layers.event(
-                local,
-                self,
-                LayerEvent::StreamData {
-                    session,
-                    stream,
-                    data: &buf,
-                    fin,
-                },
-            );
-        }
-        self.scratch = buf;
-    }
-
-    /// Answer the key request of `session` with the node's software keys.
-    fn answer_keys(&mut self, session: SessionId) {
-        let prov = self.provider();
-        let reg = self.shared.registry;
-        let (Some(ep), Some(prekeys)) = (self.ep.as_ref(), self.prekeys.as_ref()) else {
-            return;
-        };
-        let Answer::KeyRequest(req) = ep.query(Query::KeyRequest(session)) else {
-            return;
-        };
-        if let KeyRequest::Sign { message, .. } = req {
-            // Both ends sign and verify in the handshake, so a signature made is charged with one verified.
-            reg.note_sign(self.idx, message.len());
-            reg.note_verify(self.idx, message.len());
-        }
-        let soft = SoftKeys {
-            signer: Some((KeyHandle(1), &self.kp)),
-            prekeys: Some(prekeys),
-        };
-        let mut env = Env {
-            provider: &prov,
-            now: self.local,
-            drbg: &mut self.drbg,
-        };
-        let mut sig = [0u8; MAX_SIGNATURE_LEN];
-        let response = soft.answer(&mut env, &req, &mut sig);
-        let _ = self.cmd(Command::KeyResponse { session, response });
-    }
-
-    /// The oracle revoked `peer`: end its sessions now and refuse it from here on.
-    pub(super) fn revoke(&mut self, peer: usize) {
-        self.revoked.insert(peer);
-        let open: Vec<SessionId> = self
-            .sessions
-            .iter()
-            .filter(|(_, s)| s.peer == peer && !s.hidden)
-            .map(|(id, _)| *id)
-            .collect();
-        for session in open {
-            let _ = self.cmd(Command::Close {
-                session,
-                error: CLOSE_DENIED,
-            });
-        }
-        self.events.push_back(NodeEvent::Revoked { peer });
     }
 }
 
@@ -770,65 +739,7 @@ fn first8(b: &[u8; 32]) -> [u8; 8] {
     out
 }
 
-impl Host for Core {
-    fn idx(&self) -> usize {
-        self.idx
-    }
-
-    fn registry(&self) -> &'static crate::suite::crypto::Registry {
-        self.shared.registry
-    }
-
-    fn connect(&mut self, peer: usize, alpn: &'static [u8]) -> bool {
-        let shared = Rc::clone(&self.shared);
-        let addrs = shared.public_addrs(peer);
-        let Some(node) = shared.node_id(peer) else { return false };
-        if peer == self.idx || addrs.is_empty() || self.revoked.contains(&peer) {
-            return false;
-        }
-        self.cmd(Command::Connect {
-            node,
-            alpn,
-            addrs,
-            role: Role::Other,
-        })
-        .is_ok()
-    }
-
-    fn open_stream(&mut self, session: SessionId) -> Option<vinc_transport::stream::StreamId> {
-        match self.cmd(Command::OpenStream { session, bidi: true }).ok()?.value {
-            Value::Stream(id) => Some(id),
-            _ => None,
-        }
-    }
-
-    fn write(&mut self, session: SessionId, stream: vinc_transport::stream::StreamId, data: &[u8]) -> usize {
-        match self.cmd(Command::Write { session, stream, data }) {
-            Ok(Reply {
-                value: Value::Written(n),
-                ..
-            }) => n,
-            _ => 0,
-        }
-    }
-
-    fn finish(&mut self, session: SessionId, stream: vinc_transport::stream::StreamId) {
-        let _ = self.cmd(Command::Finish { session, stream });
-    }
-
-    fn reset(&mut self, session: SessionId, stream: vinc_transport::stream::StreamId, code: u64) {
-        let _ = self.cmd(Command::Reset {
-            session,
-            stream,
-            error: code,
-        });
-    }
-
-    fn close(&mut self, session: SessionId, code: u64) {
-        let _ = self.cmd(Command::Close { session, error: code });
-    }
-
-    fn peer_of(&self, session: SessionId) -> Option<usize> {
-        self.sessions.get(&session).filter(|s| !s.hidden).map(|s| s.peer)
-    }
+/// The seed of a hub's relay tables: one per node and incarnation.
+fn derive_seed(world_seed: u64, idx: usize, inc: u64) -> u64 {
+    u64::from_be_bytes(first8(&derive(b"suite-relay", world_seed, idx as u64, inc)))
 }

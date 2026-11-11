@@ -9,9 +9,9 @@
 //!
 //! # Layers
 //!
-//! This branch carries the four harness protocols over core UDP only. The layers that do not exist yet are listed in
-//! [`LayerSet`] and registered in exactly one place, `make_stack`: setting a flag and handing the `Stack` its layer
-//! there is all that adding one takes. A flag that is set without a registration is an error ([`RunError::NotWired`]),
+//! Every node of a run is a `vinc_node::Node`: the endpoint, the connectivity client with its relays, membership and
+//! broadcast. The layers it carries are listed in [`LayerSet::NODE`] and registered in exactly one place,
+//! `make_stack`: setting a flag and handing the `Stack` its layer there is all that adding one takes. A flag that is set without a registration is an error ([`RunError::NotWired`]),
 //! never a silent pass. With a flag false the intents that need the layer are not scheduled (they are in
 //! [`RunResult::excluded`]), the gates that would need them have no samples, and the status says `Partial`.
 //!
@@ -50,7 +50,7 @@ use crate::suite::grade::{
     FairSamples, GateReport, GateStatus, NodeFacts, RunFacts, SecFacts, Terms, compute_fair_terms, compute_terms,
     evaluate_gates,
 };
-use crate::suite::node::{SetupError, Shared};
+use crate::suite::node::{NodeLayer, SetupError, Shared};
 use crate::suite::proto::{Durable, MsgIntents, Stack};
 use crate::suite::rec::{Rec, Violation};
 use crate::suite::world::model::{IntentKind, World};
@@ -184,17 +184,17 @@ const STACK_BYTES: usize = 256 << 20;
 /// stack here and let [`check_wiring`] accept its flag.
 fn make_stack(idx: usize, world: &Rc<World>, rec: &Rc<RefCell<Rec>>, msgs: &MsgIntents) -> Stack {
     let durable = Rc::new(RefCell::new(Durable::sharing(Rc::clone(msgs))));
-    // Broadcast layer: `.with_broadcast(Box::new(..))` goes here once the layer exists.
+    // Broadcast and membership: the node carries both; its slot turns publishes into node calls and the node's messages
+    // and member events into the application's accounting.
     // Values layer: `.with_values(Box::new(..), ids)` goes here, with the world's values and providers registered.
     // Reconcile layer: `.with_reconcile(Box::new(..))` goes here.
-    // Membership: the layers report member events through `OnTopEvent::Member`; no registration of its own.
-    // Connectivity (relay, rendezvous, hole punching, carriers): the node adapter's dial path takes it; nothing here.
-    Stack::new(idx, Rc::clone(world), Rc::clone(rec), durable)
+    // Connectivity (relay, rendezvous, hole punching, carriers): the node and its adapter take it; nothing here.
+    Stack::new(idx, Rc::clone(world), Rc::clone(rec), durable).with_broadcast(Box::new(NodeLayer::default()))
 }
 
 /// The layers `make_stack` registers. Adding a layer there means setting its flag here.
 const fn wired() -> LayerSet {
-    LayerSet::NONE
+    LayerSet::NODE
 }
 
 /// Fails when a flag claims a layer the runner has no registration for.
@@ -347,12 +347,20 @@ fn execute(
             .iter()
             .filter_map(|&n| exec.net.ids.get(n).map(|&id| (n, id)))
             .flat_map(|(n, id)| {
-                exec.net
+                let ev = exec
+                    .net
                     .sim
                     .events(id)
                     .iter()
-                    .map(move |(t, e)| format!("n{n} t{t} {e:?}"))
-                    .collect::<Vec<_>>()
+                    .map(move |(t, e)| format!("n{n} t{t} {e:?}"));
+                let end = exec
+                    .net
+                    .sim
+                    .node(id)
+                    .describe()
+                    .into_iter()
+                    .map(move |l| format!("n{n} END {l}"));
+                ev.chain(end).collect::<Vec<_>>()
             })
             .collect();
         Ok((finish(world, driver, layers, p, &exec, &rec, reg), events))
@@ -375,6 +383,10 @@ fn finish(
     let sim = &exec.net.sim;
     let mut facts = RunFacts::new(world);
     facts.has_membership = layers.membership;
+    if layers.membership {
+        facts.awareness_bound_ns = vinc_membership::consts::AWARENESS_BOUND;
+        facts.false_suspicion_per_member_hour = vinc_membership::consts::FALSE_SUSPICION_PER_MEMBER_HOUR;
+    }
     let (mut cpu_ns, mut stack_waiting) = (0.0_f64, BTreeMap::new());
     {
         let mut r = rec.borrow_mut();
@@ -400,7 +412,7 @@ fn finish(
                     device: f.device.clone(),
                     site: exec.cur_site.get(i).copied().unwrap_or(f.site),
                     state_peak: 0,
-                    view: None,
+                    view: n.view(),
                     alive_at_end: st != NodeState::Crashed,
                     suspended_at_end: st == NodeState::Suspended,
                     export_max: n.max_export() as u64,

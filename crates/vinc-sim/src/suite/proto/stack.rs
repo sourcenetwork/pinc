@@ -388,6 +388,7 @@ impl Stack {
                 self.on_stream_end(now, (session, stream), p, true);
             }
             LayerEvent::StreamWritable { session, stream } => self.flush(host, (session, stream)),
+            LayerEvent::Message { .. } | LayerEvent::Member(_) => {}
         }
     }
 }
@@ -425,6 +426,8 @@ impl Layers for Stack {
 
     fn event(&mut self, now: u64, host: &mut dyn Host, ev: LayerEvent<'_>) {
         let owner = match &ev {
+            // The node's broadcast messages and membership events belong to the broadcast slot.
+            LayerEvent::Message { .. } | LayerEvent::Member(_) => Some(Owner::OnTop(Slot::Broadcast)),
             LayerEvent::Incoming { alpn, .. }
             | LayerEvent::Connected { alpn, .. }
             | LayerEvent::ConnectFailed { alpn, .. } => self.owner_of_alpn(alpn),

@@ -1588,8 +1588,11 @@ name = "vinc-sim"
 version = "0.1.0"
 dependencies = [
  "blake2",
+ "vinc-connect",
  "vinc-core",
  "vinc-crypto",
+ "vinc-membership",
+ "vinc-node",
  "vinc-security",
  "vinc-transport",
 ]

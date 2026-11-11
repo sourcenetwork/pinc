@@ -40,6 +40,8 @@ pub struct TestHost {
     pub resets: Vec<(SessionId, u64, u64)>,
     pub connects: Vec<(usize, Vec<u8>)>,
     pub open_ok: bool,
+    pub subscribed: Vec<Vec<u8>>,
+    pub published: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl TestHost {
@@ -56,6 +58,8 @@ impl TestHost {
             resets: Vec::new(),
             connects: Vec::new(),
             open_ok: true,
+            subscribed: Vec::new(),
+            published: Vec::new(),
         }
     }
 
@@ -108,6 +112,14 @@ impl Host for TestHost {
     }
     fn peer_of(&self, session: SessionId) -> Option<usize> {
         self.peers.get(&session).copied()
+    }
+    fn subscribe(&mut self, topic: &[u8]) -> bool {
+        self.subscribed.push(topic.to_vec());
+        true
+    }
+    fn publish(&mut self, topic: &[u8], msg: &[u8]) -> bool {
+        self.published.push((topic.to_vec(), msg.to_vec()));
+        true
     }
 }
 

@@ -41,13 +41,23 @@ pub struct LayerSet {
 }
 
 impl LayerSet {
-    /// No layer: the four harness protocols over core UDP only (what this branch carries).
+    /// No layer: the four harness protocols over core UDP only.
     pub const NONE: Self = Self {
         broadcast: false,
         values: false,
         reconcile: false,
         membership: false,
         connectivity: false,
+    };
+
+    /// What the VINC node carries: broadcast, membership and the connectivity client with its relays. Values and
+    /// reconcile are not in the node yet.
+    pub const NODE: Self = Self {
+        broadcast: true,
+        values: false,
+        reconcile: false,
+        membership: true,
+        connectivity: true,
     };
 }
 

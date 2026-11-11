@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::rc::Rc;
 
+use vinc_connect::client::RelayCfg;
 use vinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId, Provider, Software};
 use vinc_security::{KeyHandle, LocalIdentity};
 
@@ -98,6 +99,7 @@ pub struct Shared {
     costs: Vec<DeviceCosts>,
     stateless: BTreeSet<(usize, u64)>,
     restarts: BTreeSet<(usize, u64)>,
+    relays: Vec<RelayCfg>,
 }
 
 impl Shared {
@@ -137,6 +139,7 @@ impl Shared {
             .filter(|a| a.kind == EnvKind::Restart)
             .map(|a| (a.node, a.t))
             .collect();
+        let relays = relay_cfgs(&world, &ids);
         Ok(Rc::new(Self {
             world,
             rec,
@@ -147,6 +150,7 @@ impl Shared {
             costs,
             stateless,
             restarts,
+            relays,
         }))
     }
 
@@ -158,6 +162,35 @@ impl Shared {
     /// The world index of a node id, if it is a node of the world.
     pub fn index_of(&self, id: &NodeId) -> Option<usize> {
         self.by_id.get(&id.bytes).copied()
+    }
+
+    /// The world index of a node id given as its bytes, if it is a node of the world.
+    pub fn index_of_bytes(&self, id: &[u8; 32]) -> Option<usize> {
+        self.by_id.get(id).copied()
+    }
+
+    /// The relays every node is configured with: the bootstrap nodes, reachable on UDP, TCP and WebSocket.
+    pub fn relays(&self) -> &[RelayCfg] {
+        &self.relays
+    }
+
+    /// Whether node `idx` is a hub (a bootstrap node, which also runs the relay).
+    pub fn is_hub(&self, idx: usize) -> bool {
+        self.world.bootstrap.contains(&idx)
+    }
+
+    /// The stack version node `idx` announces when it starts at `t`: 1, or the version of the last upgrade before `t`.
+    pub fn version_at(&self, idx: usize, t: u64) -> u16 {
+        self.world
+            .env
+            .iter()
+            .filter(|a| a.node == idx && a.kind == EnvKind::Upgrade && a.t < t)
+            .filter_map(|a| match a.arg {
+                EnvArg::Num(v) => u16::try_from(v).ok(),
+                _ => None,
+            })
+            .next_back()
+            .unwrap_or(1)
     }
 
     /// The public socket addresses of node `idx` (empty for a node with no public interface), IPv4 first.
@@ -181,6 +214,30 @@ impl Shared {
     pub(super) fn restarts_stateless(&self, idx: usize, after: u64, at: u64) -> bool {
         after < at && self.stateless.range((idx, after + 1)..=(idx, at)).next().is_some()
     }
+}
+
+/// The relay entry of each bootstrap node: its public UDP address and the TCP and WebSocket carrier addresses of the
+/// same host.
+fn relay_cfgs(world: &World, ids: &[NodeId]) -> Vec<RelayCfg> {
+    world
+        .bootstrap
+        .iter()
+        .filter_map(|&h| {
+            let node = world.nodes.get(h)?;
+            let addr = |kind: &str| {
+                node.ifaces
+                    .iter()
+                    .find(|f| f.kind == kind && f.public)
+                    .and_then(|f| Some(SocketAddr::new(iface_ip(&f.addr)?, f.addr.port)))
+            };
+            Some(RelayCfg {
+                id: *ids.get(h)?,
+                udp: addr("udp4"),
+                tcp: addr("tcp"),
+                ws: addr("ws"),
+            })
+        })
+        .collect()
 }
 
 /// The key pair and the local identity of node `idx`.
