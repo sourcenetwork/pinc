@@ -367,7 +367,10 @@ async fn a_dial_to_an_id_no_relay_knows_fails_inside_the_deadline() {
         let stranger = vinc_crypto::Keypair::from_seed(vinc_crypto::IdentityAlg::Ed25519, &[9; 32])
             .unwrap()
             .node_id();
-        assert!(a.lookup(&stranger).await.unwrap().is_none(), "no relay has a record of it");
+        assert!(
+            a.lookup(&stranger).await.unwrap().is_none(),
+            "no relay has a record of it"
+        );
         let t0 = Instant::now();
         let e = a.connect(stranger, ECHO).await.unwrap_err();
         assert_eq!(e.kind(), vinc::ErrorKind::TimedOut, "{e:?}");

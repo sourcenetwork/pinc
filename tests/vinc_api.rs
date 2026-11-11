@@ -371,12 +371,20 @@ async fn a_peer_the_hook_refused_is_admitted_at_once_after_admission_changed() {
 /// A dial to an address nobody answers at ends inside the builder's connect timeout, not at the transport's own.
 #[nuclei::test]
 async fn a_dial_nobody_answers_ends_inside_the_connect_timeout() {
-    let client = bind(vinc_common::builder().alpn(ECHO).connect_timeout(std::time::Duration::from_millis(800))).await;
+    let client = bind(
+        vinc_common::builder()
+            .alpn(ECHO)
+            .connect_timeout(std::time::Duration::from_millis(800)),
+    )
+    .await;
     within(60, async {
         let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let t0 = std::time::Instant::now();
         let e = client
-            .connect(NodeAddr::new(node().await.id()).with_direct(silent.local_addr().unwrap()), ECHO)
+            .connect(
+                NodeAddr::new(node().await.id()).with_direct(silent.local_addr().unwrap()),
+                ECHO,
+            )
             .await
             .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::TimedOut, "{e:?}");

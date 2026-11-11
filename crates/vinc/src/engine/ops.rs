@@ -513,7 +513,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .map(|(s, _)| *s)
             .collect();
         for session in due {
-            self.fail_dial(now, session, Error::new(ErrorKind::TimedOut, "the peer did not answer in time"));
+            self.fail_dial(
+                now,
+                session,
+                Error::new(ErrorKind::TimedOut, "the peer did not answer in time"),
+            );
         }
     }
 
@@ -585,7 +589,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             return Try::Done(Ok(None));
         }
         if now >= deadline {
-            return Try::Done(Err(Error::new(ErrorKind::TimedOut, "the relays did not answer in time")));
+            return Try::Done(Err(Error::new(
+                ErrorKind::TimedOut,
+                "the relays did not answer in time",
+            )));
         }
         self.deadlines.insert(deadline);
         Try::Wait(Wait::G(GKey::Lookup))
