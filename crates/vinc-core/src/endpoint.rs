@@ -25,6 +25,9 @@
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
 //!   An unauthenticated session lives 30 s.
+//! - **Reordered first flights.** A later part of a first message that arrives before its start is held: at most 4
+//!   datagrams of at most 1500 bytes for the whole endpoint, for at most 1 s, the oldest given up first, and handed
+//!   only to the session the start of the same message from the same address creates.
 //! - **Round trips.** See [`NodeRtt`](crate::rtt::NodeRtt); the endpoint feeds them to every connection.
 //! - **Access check.** An established session raises [`Event::AcpCheck`] unless a cached answer (30 s) exists; its
 //!   application events are held until the answer allows it.
@@ -174,6 +177,7 @@ pub struct Endpoint<
     pub(crate) ext_in: crate::ext_in::ExtRing,
     pub(crate) capture: Option<Events>,
     pub(crate) scratch: [u8; MAX_DATAGRAM],
+    pub(crate) orphans: crate::orphan::Orphans,
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
     pub(crate) udp_heard: Option<u64>,
@@ -382,6 +386,7 @@ ep_impl! {
             ext_in: crate::ext_in::ExtRing::new(),
             capture: None,
             scratch: [0; MAX_DATAGRAM],
+            orphans: crate::orphan::Orphans::new(),
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
             udp_heard: None,
@@ -505,6 +510,11 @@ ep_impl! {
             stalled_in: self.counters.stalled_in,
             events_dropped: self.events.dropped,
             events_lost: self.events.lost,
+            fragments_held: self.orphans.counts.held,
+            fragments_replayed: self.orphans.counts.replayed,
+            fragments_expired: self.orphans.counts.expired,
+            fragments_evicted: self.orphans.counts.evicted,
+            fragments_waiting: self.orphans.waiting(),
         }
     }
 

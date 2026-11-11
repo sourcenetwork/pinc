@@ -353,6 +353,9 @@ These items are still open; they are listed so nothing is hidden:
   that took effect); the typed error after the last resend is covered by unit tests, not by the TPM model.
 - The TLC models are bounded as listed (the Lean theorems are not); the trace checks cover the recorded runs only.
 - The proofs of `vinc-core` are being written. Until they are here, that crate is tested, not proven.
+  This includes the half-open cap and the table of first-flight fragments held until their start arrives (at most 4
+  datagrams of at most 1500 bytes per endpoint, for at most 1 s, given only to the session the start of the same
+  message from the same address creates).
 - `vinc-reconcile`: the refinement of the byte-level handlers to the abstract part system is proved for the split,
   the leaf rule and the frame, keep and round bounds, not end to end (that link rests on TLC and the traces); the bytes
   and rounds cost bounds are checked by TLC only; that no stale state survives across attempts is checked by TLC and

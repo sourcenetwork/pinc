@@ -61,6 +61,7 @@ mod heap;
 mod iface;
 mod keepalive;
 mod ledger;
+mod orphan;
 mod queue;
 mod reach;
 mod relay_net;

@@ -130,6 +130,7 @@ ep_impl! {
     /// Run every timer that is due at `now`.
     pub fn handle_timeout(&mut self, now: u64) {
         self.last_now = now;
+        self.orphans.expire(now);
         for _ in 0..K {
             if self.events.stalled() {
                 return;

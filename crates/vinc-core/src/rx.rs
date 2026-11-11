@@ -7,15 +7,17 @@
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
 //! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
 //! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
-//! forged or replayed one included, counts like a full Initial.
+//! forged or replayed one included, counts like a full Initial. A later part of a first message that arrives before
+//! the part that starts it is held for a moment in the endpoint's small table of such datagrams (see `orphan`) and
+//! handed to the session once the first part has created it.
 //!
 //! Invariants: a datagram larger than [`MAX_DATAGRAM`] or shorter than a header is dropped and counted; a datagram
-//! that cannot create a session and matches none is dropped and counted; the copy used for trials is the only extra
-//! buffer, held inside the endpoint.
+//! that cannot create a session, matches none and is not held is dropped and counted; the copy used for trials and
+//! the held datagrams are the only extra buffers, held inside the endpoint.
 
 use core::net::SocketAddr;
 
-use vinc_security::message::{FULL_INITIAL_MIN, MessageType, SHORT_INITIAL_MIN};
+use vinc_security::message::{FULL_INITIAL_MIN, MAX_MESSAGE_LEN, MessageType, SHORT_INITIAL_MIN};
 use vinc_security::responder::hello_opens_ticket;
 use vinc_security::{ConnId, Env, Failure};
 use vinc_transport::conn::{Connection, Drop, ServerParams};
@@ -23,6 +25,7 @@ use vinc_transport::packet::{LongHeader, LongType, short_dcid};
 use vinc_wire::Reader;
 
 use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl};
+use crate::orphan::ORPHAN_MAX;
 use crate::trace::trace;
 
 /// The most sessions that may hold the same four bytes and still be tried.
@@ -35,6 +38,8 @@ pub const HALF_OPEN_LIFE: u64 = 30_000_000_000;
 /// What the first packet of an unroutable datagram says.
 struct First<'a> {
     odcid: ConnId,
+    /// The length of the whole message.
+    total: u64,
     kind: MessageType,
     /// The whole message when this packet carries all of it.
     message: Option<&'a [u8]>,
@@ -68,9 +73,25 @@ fn classify(buf: &[u8]) -> Option<First<'_>> {
     let message = usize::try_from(total).ok().and_then(|t| data.get(..t));
     Some(First {
         odcid: h.dcid,
+        total,
         kind,
         message,
     })
+}
+
+/// The destination id and message length of a long Handshake packet that carries a part of a message other than its
+/// start.
+fn later_part(buf: &[u8]) -> Option<(ConnId, u64)> {
+    let (h, hlen) = LongHeader::parse(buf).ok()?;
+    if h.ty != LongType::Handshake {
+        return None;
+    }
+    let body = buf.get(hlen..hlen.checked_add(h.body_len)?)?;
+    let mut r = Reader::new(body);
+    let total = r.read_varint().ok()?;
+    let off = r.read_varint().ok()?;
+    let plausible = off != 0 && off < total && usize::try_from(total).is_ok_and(|t| t <= MAX_MESSAGE_LEN);
+    plausible.then_some((h.dcid, total))
 }
 
 ep_impl! {
@@ -186,7 +207,10 @@ ep_impl! {
             return;
         }
         let Some(first) = classify(buf) else {
-            self.counters.dropped_in += 1;
+            // A later part of a first message that overtook the part that starts it waits a moment for its session.
+            let held = later_part(buf)
+                .is_some_and(|(dcid, total)| self.orphans.hold(now, dcid, total, local, remote, buf));
+            self.counters.dropped_in += u64::from(!held);
             return;
         };
         let floor = match first.kind {
@@ -209,12 +233,28 @@ ep_impl! {
             self.counters.dropped_in += 1;
             return;
         }
-        let Some(i) = self.accept(now, first.odcid, resume) else {
+        let (odcid, total) = (first.odcid, first.total);
+        let Some(i) = self.accept(now, odcid, resume) else {
             self.counters.dropped_in += 1;
             return;
         };
         // A drop reason is counted by the connection itself.
         let _ = self.deliver(i, now, local, remote, buf);
+        self.replay_held(i, now, odcid, total, remote);
+    }
+
+    /// Give session `i`, just created by the first part of a message of `total` bytes for `odcid` from `remote`, the
+    /// later parts of that message held from the same address, oldest first, while the session lives.
+    fn replay_held(&mut self, i: usize, now: u64, odcid: ConnId, total: u64, remote: SocketAddr) {
+        let id = self.session_id(i);
+        let mut held = [0u8; ORPHAN_MAX];
+        while self.slot_of(id).is_some() {
+            let Some((local, n)) = self.orphans.take(now, &odcid, total, &remote, &mut held) else { return };
+            if let Some(d) = held.get_mut(..n) {
+                // A drop reason is counted by the connection itself.
+                let _ = self.deliver(i, now, local, remote, d);
+            }
+        }
     }
 
     /// A first message differs from the one the half-open session `i` holds under the same ids: the held one was

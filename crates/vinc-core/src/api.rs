@@ -691,6 +691,16 @@ pub struct NodeStats {
     /// Events the application cannot recover that were dropped because the event queue held nothing else to give up;
     /// the endpoint keeps this at 0 by holding work back while the queue is near full.
     pub events_lost: u64,
+    /// Handshake datagrams held because they carried a later part of a first message whose start had not arrived.
+    pub fragments_held: u64,
+    /// Held handshake datagrams given to the session that the start of their message created.
+    pub fragments_replayed: u64,
+    /// Held handshake datagrams let go because the start of their message did not come within 1 s.
+    pub fragments_expired: u64,
+    /// Held handshake datagrams let go to make room for a newer one.
+    pub fragments_evicted: u64,
+    /// Handshake datagrams held now (at most 4).
+    pub fragments_waiting: usize,
 }
 
 /// A peer in the round-trip table.
