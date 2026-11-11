@@ -300,3 +300,45 @@ async fn a_peer_connects_at_once_after_its_revocation_is_lifted() {
     })
     .await;
 }
+
+/// An allowlist the test edits while the server runs.
+struct Listed(Arc<std::sync::atomic::AtomicBool>);
+
+impl Admission for Listed {
+    fn admit(&self, _peer: &NodeId, _alpn: &[u8], _dir: Direction) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// A peer the hook refused is let in on its next dial once the host says the hook's answer changed: the cached deny
+/// goes, and the server serves the session the dialer was told is up.
+#[nuclei::test]
+async fn a_peer_the_hook_refused_is_admitted_at_once_after_admission_changed() {
+    let listed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = bind(vinc_common::builder().alpn(ECHO).acp(Listed(Arc::clone(&listed)))).await;
+    let s = server.clone();
+    nuclei::spawn_local(async move {
+        while let Some(i) = s.accept().await {
+            nuclei::spawn_local(serve_conn(i.into_connection())).detach();
+        }
+    })
+    .detach();
+    let client = client().await;
+    within(20, async {
+        if let Ok(refused) = client.connect(server.addr(), ECHO).await {
+            let why = refused.closed().await;
+            assert!(
+                matches!(why.kind(), ErrorKind::Closed { .. } | ErrorKind::Refused),
+                "a session the hook refused came up: {why:?}"
+            );
+        }
+        listed.store(true, Ordering::SeqCst);
+        server.admission_changed(&client.id());
+        let c = client.connect(server.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = c.open_bi().await.unwrap();
+        tx.write_all(b"listed").await.unwrap();
+        tx.finish().await.unwrap();
+        assert_eq!(rx.read_to_end(64).await.unwrap(), b"listed");
+    })
+    .await;
+}

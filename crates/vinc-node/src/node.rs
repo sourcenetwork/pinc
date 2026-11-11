@@ -650,6 +650,14 @@ where
         a | b | c
     }
 
+    /// The access-control layer's answer for `peer` changed: forget the endpoint's cached answer, so the peer's next
+    /// session is checked afresh and a session already up is checked again at its next event.
+    pub fn forget_access(&mut self, peer: &NodeId) {
+        let _ = self.io.cmd(Command::AcpForget {
+            peer: self.io.full_id(peer),
+        });
+    }
+
     /// The access-control layer revoked `peer`: forget it in the view, the roster and the subscriptions, and close
     /// every session with it. Effective within this call.
     ///

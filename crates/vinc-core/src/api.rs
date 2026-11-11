@@ -465,8 +465,9 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
     },
     /// Close every session with the code that says this node leaves the network on purpose (0x4C).
     Shutdown,
-    /// Forget the cached access answer of a peer, so its next session is checked afresh (a revoke and its lifting
-    /// call it).
+    /// Drop the cached answer of the access check for `peer`: its next session raises [`Event::AcpCheck`] again, and
+    /// an allowed session of it holds its next event until a fresh allow comes. A check already pending is kept. A
+    /// revoke, its lifting and a change of the access hook's answer call it.
     AcpForget {
         /// The peer.
         peer: NodeId,

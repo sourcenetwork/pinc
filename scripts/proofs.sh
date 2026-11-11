@@ -403,6 +403,11 @@ par witness_tlc facade_revoke_failopen FacadeRevoke FacadeRevoke_failopen AdmitS
 par witness_tlc facade_revoke_nobackstop FacadeRevoke FacadeRevoke_nobackstop NoLiveRevoked
 par run_tlc facade_records FacadeRecords FacadeRecords
 par witness_tlc facade_records_noseq FacadeRecords FacadeRecords_noseq NoRollback
+par run_tlc facade_acp_forget FacadeAcpForget FacadeAcpForget
+par witness_tlc facade_acp_forget_nolift FacadeAcpForget FacadeAcpForget_nolift DecideFresh
+par witness_tlc facade_acp_forget_norevoke FacadeAcpForget FacadeAcpForget_norevoke DecideFresh
+par witness_tlc facade_acp_forget_nodial FacadeAcpForget FacadeAcpForget_nodial NoDialRevoked
+par witness_tlc facade_acp_forget_nohook FacadeAcpForget FacadeAcpForget_nohook DecideFresh
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"

@@ -375,6 +375,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.node.unrevoke(node);
     }
 
+    /// Drop the endpoint's cached access answer for `node`: its next session asks the gate again.
+    pub(crate) fn forget_access(&mut self, node: &[u8; 32]) {
+        self.node.forget_access(node);
+    }
+
     pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) {
         let v = self.book.entry(node).or_default();
         if !v.contains(&addr) && v.len() < 8 {

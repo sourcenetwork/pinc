@@ -515,10 +515,15 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     ///
     /// # Errors
     /// [`crate::ErrorKind::Unreachable`] when no address works or the handshake fails, [`crate::ErrorKind::TimedOut`] when the peer does
-    /// not answer or discovery did not answer in time, [`crate::ErrorKind::Refused`] when the access hook refused the peer, [`crate::ErrorKind::Busy`] when the connection
-    /// table is full.
+    /// not answer or discovery did not answer in time, [`crate::ErrorKind::Refused`] when the access hook refused the peer or it is revoked (then nothing is sent),
+    /// [`crate::ErrorKind::Busy`] when the connection table is full.
     pub async fn connect(&self, to: impl Into<NodeAddr>, alpn: &[u8]) -> Result<Connection<H>> {
         let to: NodeAddr = to.into();
+        // A dial that went out would reach the peer as a session it holds until our deny arrives, long enough for its
+        // own dial to ride it as a sub-session and fail after an unrevoke.
+        if self.0.shared.admit.is_revoked(&to.node) {
+            return Err(Error::new(ErrorKind::Refused, "the peer is revoked"));
+        }
         let mut addrs = to.direct;
         if addrs.is_empty() {
             addrs = self
@@ -583,7 +588,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         sh.run(|core, now| Try::Done(core.revoke(now, peer))).await
     }
 
-    /// Lift the revocation of `peer`; whether it was revoked. The access hook decides about it again.
+    /// Lift the revocation of `peer`; whether it was revoked. The access hook decides about it again, from its next
+    /// session on: an answer cached while it was revoked is dropped.
     pub fn unrevoke(&self, peer: &NodeId) -> bool {
         let lifted = self.0.shared.admit.lift(peer);
         // vertexia: a lift made from inside the access hook finds the core busy and leaves the node's table
@@ -592,6 +598,17 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
             core.unrevoke(&peer.bytes);
         }
         lifted
+    }
+
+    /// The access hook's answer for `peer` changed (an allowlist edit): drop the answer the endpoint cached for it, so
+    /// its next session asks the hook again instead of waiting out the 30 s. A session already up asks again at its
+    /// next event, and closes if the hook now refuses.
+    pub fn admission_changed(&self, peer: &NodeId) {
+        // vertexia: called from inside the access hook the core is busy and the cached answer lasts its 30 s; call
+        // it from outside the hook.
+        if let Some(mut core) = self.0.shared.lock() {
+            core.forget_access(&peer.bytes);
+        }
     }
 
     /// Whether `peer` is revoked.
