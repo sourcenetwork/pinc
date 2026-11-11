@@ -459,6 +459,32 @@ fn tail_repair_covers_a_lost_last_packet() {
 }
 
 #[test]
+fn a_tail_repair_of_a_small_packet_is_not_padded_to_the_full_size_when_datagrams_are_batched() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        w.cfg.max_gso = 8;
+        w.cfg.probe_mtu = false;
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(14, Params::new(10 * MS).loss(8.0)));
+        let before = net.a.tx_log.len();
+        for round in 0..300u64 {
+            let data = pattern(100, round);
+            let id = net.a.conn.open_uni().unwrap();
+            net.a.conn.write(id, &data).unwrap();
+            net.a.conn.finish(id).unwrap();
+            assert!(net.run(net.now + 60 * SEC, |n| n.b.fin.contains(&id)), "round {round}");
+            net.run(net.now + 30 * MS, |_| false);
+        }
+        assert!(net.a.conn.stats().repairs > 0, "{:?}", net.a.conn.stats());
+        let biggest = net.a.tx_log.iter().skip(before).map(|t| t.1).max().unwrap();
+        assert!(
+            biggest < 600,
+            "a 100 byte message never leaves in a datagram of {biggest} bytes"
+        );
+    });
+}
+
+#[test]
 fn every_path_gets_its_own_connection_id() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

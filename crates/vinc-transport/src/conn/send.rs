@@ -396,8 +396,8 @@ conn_impl! {
         // Pad so the header-protection sample exists and any minimum size holds.
         let mut payload_len = filled.len;
         // With GSO on, a packet that leaves more stream data queued is padded to the full size so the next one can
-        // follow it in the same batch.
-        let batchable = self.cfg.max_gso > 1 && filled.streams && !filled.drained;
+        // follow it in the same batch. A repair takes no new stream data, so nothing follows it.
+        let batchable = self.cfg.max_gso > 1 && filled.streams && !filled.drained && fill.repair.is_none();
         let want_total = if batchable { size_cap } else { fill.min_total };
         let min_payload = want_total.saturating_sub(hdr_cap + 16).max(4usize.saturating_sub(pn_len));
         if payload_len < min_payload {
