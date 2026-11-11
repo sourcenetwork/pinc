@@ -20,6 +20,17 @@ use super::{Admit, Core, Dial, GKey, Gate, Route, SHUTDOWN_GRACE, SKey, SessInfo
 use crate::error::{Error, ErrorKind, Result};
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
+    /// Whether the endpoint still takes new work, else why not.
+    pub(crate) fn running(&self) -> Result<()> {
+        if let Some(e) = self.stopped {
+            return Err(e);
+        }
+        if self.shutdown.is_some() {
+            return Err(Error::shutdown());
+        }
+        Ok(())
+    }
+
     /// Start a dial to `node` for `alpn`; the answer comes through [`dial_poll`](Self::dial_poll).
     pub(crate) fn connect_start(
         &mut self,
@@ -28,12 +39,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         alpn: &[u8],
         addrs: &[SocketAddr],
     ) -> Result<SessionId> {
-        if let Some(e) = self.stopped {
-            return Err(e);
-        }
-        if self.shutdown.is_some() {
-            return Err(Error::shutdown());
-        }
+        self.running()?;
         if self.sessions.len() >= self.limits.connections {
             return Err(Error::new(ErrorKind::Busy, "the connection table is full"));
         }

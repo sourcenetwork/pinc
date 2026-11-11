@@ -75,6 +75,7 @@ impl Vinc {
             mtu: 1500,
             local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
             carriers: NoCarriers,
+            hub: false,
         }
     }
 }
@@ -92,6 +93,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarri
     mtu: u16,
     local: SocketAddr,
     carriers: C,
+    hub: bool,
 }
 
 impl<S, D, A, C> core::fmt::Debug for Builder<S, D, A, C> {
@@ -134,6 +136,7 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             mtu: self.mtu,
             local: self.local,
             carriers: self.carriers,
+            hub: self.hub,
         }
     }
 
@@ -192,6 +195,7 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             mtu: self.mtu,
             local: self.local,
             carriers: CarrierFns::new(open, read, write, close),
+            hub: self.hub,
         }
     }
 
@@ -209,7 +213,16 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             mtu: self.mtu,
             local: self.local,
             carriers: self.carriers,
+            hub: self.hub,
         }
+    }
+
+    /// Run this endpoint as a hub: the relays of the other endpoints are hubs, and a hub keeps the roster of its members
+    /// and a log of each topic's recent messages for them. List the other hubs, if any, with [`relays`](Self::relays).
+    #[must_use]
+    pub const fn hub(mut self) -> Self {
+        self.hub = true;
+        self
     }
 
     /// The sizes: connections, buffers and queues.
@@ -233,6 +246,7 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             mtu: self.mtu,
             local: self.local,
             carriers: self.carriers,
+            hub: self.hub,
         }
     }
 
@@ -343,6 +357,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
             mtu,
             local,
             carriers,
+            hub,
         } = self;
         if relays.len() > RELAYS {
             return Err(Error::config("at most four relays"));
@@ -359,6 +374,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
             mtu,
             locals: interfaces(local),
             relays: relays.clone(),
+            hub,
         };
         let core = build(cfg, T0)?;
         Ok((
@@ -367,6 +383,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
                 public,
                 discovery,
                 relays,
+                max_message: limits.topic_message,
             },
             carriers,
             core,
@@ -384,6 +401,7 @@ struct Parts<D> {
     public: Rc<[u8]>,
     discovery: D,
     relays: Vec<Relay>,
+    max_message: usize,
 }
 
 impl<D> Parts<D> {
@@ -394,6 +412,7 @@ impl<D> Parts<D> {
             public: self.public,
             discovery: self.discovery,
             relays: self.relays.iter().map(Relay::url).collect(),
+            max_message: self.max_message,
         }
     }
 }
@@ -408,16 +427,17 @@ fn interfaces(local: SocketAddr) -> Vec<SocketAddr> {
     }
 }
 
-struct Inner<H: Hosted, D> {
-    shared: Rc<Shared<H>>,
-    node: NodeId,
+pub(crate) struct Inner<H: Hosted, D> {
+    pub(crate) shared: Rc<Shared<H>>,
+    pub(crate) node: NodeId,
     public: Rc<[u8]>,
-    discovery: D,
+    pub(crate) discovery: D,
     relays: Vec<String>,
+    pub(crate) max_message: usize,
 }
 
 /// An endpoint: dial, accept, sign, and reach the layers above.
-pub struct Endpoint<H: Hosted, D = NoDiscovery>(Rc<Inner<H, D>>);
+pub struct Endpoint<H: Hosted, D = NoDiscovery>(pub(crate) Rc<Inner<H, D>>);
 
 impl<H: Hosted, D> Clone for Endpoint<H, D> {
     fn clone(&self) -> Self {

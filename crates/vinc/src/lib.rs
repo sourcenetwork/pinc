@@ -65,8 +65,10 @@ mod clock;
 mod conn;
 mod drive;
 mod endpoint;
+mod endpoint_topics;
 mod engine;
 mod error;
+mod event;
 mod host;
 mod keys;
 mod mem;
@@ -88,6 +90,7 @@ pub use endpoint::{
 };
 pub use engine::{Admit, BUSY, DENIED, REVOKED_MAX};
 pub use error::{Error, ErrorKind, Result};
+pub use event::{Event, MessageId};
 pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;
 pub use mem::{Limits, MAX_CONNECTIONS, RING, STREAMS};

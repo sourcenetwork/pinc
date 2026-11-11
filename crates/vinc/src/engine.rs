@@ -13,7 +13,7 @@
 //! to what changed, never to a table's capacity.
 
 use std::cell::OnceCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -21,12 +21,13 @@ use rapidhash::RapidHashMap;
 use vinc_core::{Answer, Command, CommandError, Event, IfaceId, Query, SessionId, Value};
 use vinc_crypto::{NodeId, Secret};
 use vinc_keystore::KeyStore;
-use vinc_node::NodeEvent;
+use vinc_node::HUB_ALPN;
 use vinc_security::{Alpn, KeyRequest, KeyResponse};
 use vinc_transport::stream::{NoSource, RecvStatus, StreamId, is_uni};
 
 use crate::carriers::Relay;
 use crate::error::{Error, ErrorKind, Result};
+use crate::event::Event as TopicEvent;
 use crate::keys::{Identity, Prekeys, is_identity};
 use crate::mem::Limits;
 use crate::node::{FacadeNode, RELAYS};
@@ -34,6 +35,7 @@ use crate::standby::{Standby, Ticket};
 
 mod gate;
 mod ops;
+mod topics;
 
 pub use gate::AllowAll;
 pub(crate) use gate::Gate;
@@ -99,6 +101,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub locals: Vec<SocketAddr>,
     /// The relays, in the order the node numbers them.
     pub relays: Vec<Relay>,
+    /// The endpoint is a hub of membership and broadcast.
+    pub hub: bool,
 }
 
 /// What both the core and the handles of a session read.
@@ -138,6 +142,10 @@ pub(crate) enum GKey {
     Route(usize),
     Shutdown,
     Idle,
+    /// A topic event was queued.
+    Events,
+    /// The neighbours of a topic changed, or a deadline passed.
+    Topic,
 }
 
 /// A wait a future registers.
@@ -201,6 +209,17 @@ pub(crate) struct Core<S, A> {
     /// The ticket of the future that drives, and the deadline it sleeps for.
     pub(crate) driver: Option<Ticket>,
     pub(crate) armed: u64,
+    /// The events for the host, oldest first, and how many were dropped since the host last read.
+    events: VecDeque<TopicEvent>,
+    lost: u32,
+    /// The topics joined, with the neighbours last reported for each.
+    topics: BTreeMap<Vec<u8>, Vec<NodeId>>,
+    /// The sessions of the hub protocol, by session, with their peer.
+    hub_sessions: RapidHashMap<SessionId, NodeId>,
+    neighbors_dirty: bool,
+    look_at: u64,
+    /// The instants futures wait for: a deadline passing wakes them to look again.
+    deadlines: BTreeSet<u64>,
 }
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
@@ -230,6 +249,13 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             standby: Standby::default(),
             driver: None,
             armed: u64::MAX,
+            events: VecDeque::new(),
+            lost: 0,
+            topics: BTreeMap::new(),
+            hub_sessions: RapidHashMap::default(),
+            neighbors_dirty: false,
+            look_at: 0,
+            deadlines: BTreeSet::new(),
         }
     }
 
@@ -240,10 +266,15 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// The next time the endpoint needs to run, in the clock the host feeds it; `None` if only an input can wake it.
     pub(crate) fn deadline(&self) -> Option<u64> {
-        match (self.node.poll_timeout(), self.shutdown) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [
+            self.node.poll_timeout(),
+            self.shutdown,
+            self.look_deadline(),
+            self.deadlines.first().copied(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Wake the driving future if the endpoint now needs to run sooner than it sleeps.
@@ -280,6 +311,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.standby.notify_all();
             }
         }
+        self.look(now);
         if self.shutdown.is_some() {
             self.check_finished(now);
         }
@@ -296,7 +328,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             let Some(ev) = self.node.poll_event() else {
                 break;
             };
-            self.on_node_event(now, &ev);
+            self.on_node_event(now, ev);
             n += 1;
         }
         self.draining = false;
@@ -390,14 +422,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     // ---- events ----
 
-    /// One event of the node. The endpoint's events are the sessions and streams of the handles; the node's own
-    /// (membership, broadcast, connectivity) are surfaced by the calls that use them.
-    fn on_node_event(&mut self, now: u64, ev: &NodeEvent) {
-        if let NodeEvent::Endpoint(ev) = ev {
-            self.on_event(now, *ev);
-        }
-    }
-
     /// Answer the signatures the connectivity layer waits for (its record, a sleep notice, a beacon).
     fn answer_signatures(&mut self, now: u64) -> usize {
         let Some(KeyRequest::Sign { message, .. }) = self.node.sign_request() else {
@@ -422,7 +446,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                     self.dial_done(sid, Err(Error::dial(reason)));
                 }
             }
-            Event::Closed { session, reason } => self.session_down(session, Error::ended(reason)),
+            Event::Closed { session, reason } => {
+                self.hub_session_down(session);
+                self.session_down(session, Error::ended(reason));
+            }
             Event::StreamOpened { session, stream } => self.stream_opened(now, session, stream),
             Event::StreamReadable { session, stream } | Event::StreamReset { session, stream, .. } => {
                 self.discard_if_dropped(now, session, stream);
@@ -434,7 +461,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             }
             Event::OpenReady { session } => self.wake_s(session, SKey::Open),
             Event::AcpCheck { check, node, alpn } => {
-                let dir = if self.dial_by_peer.contains_key(&(node, alpn)) {
+                let dir = if alpn.as_bytes() == HUB_ALPN {
+                    Direction::Gossip
+                } else if self.dial_by_peer.contains_key(&(node, alpn)) {
                     Direction::Outbound
                 } else {
                     Direction::Inbound
@@ -492,6 +521,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool) {
+        if alpn.as_bytes() == HUB_ALPN {
+            self.hub_session_up(session, node);
+            return;
+        }
         let info = Rc::new(SessInfo {
             id: session,
             node,

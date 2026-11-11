@@ -63,6 +63,11 @@ pub struct Limits {
     pub accept_streams: usize,
     /// The most sessions accepted but not yet taken by the application.
     pub accept_sessions: usize,
+    /// The largest message [`Endpoint::publish`](crate::Endpoint::publish) takes, in bytes (at most 16 MiB). Larger data
+    /// belongs behind a reference: publish a root or an id and fetch the bytes over a stream.
+    pub topic_message: usize,
+    /// The most topics the endpoint tracks at once.
+    pub topics: usize,
 }
 
 impl Default for Limits {
@@ -75,6 +80,8 @@ impl Default for Limits {
             streams: 64,
             accept_streams: 64,
             accept_sessions: 64,
+            topic_message: 65_536,
+            topics: 128,
         }
     }
 }
@@ -91,7 +98,9 @@ impl Limits {
             && (16 * 1024..=1 << 30).contains(&self.send_window)
             && (1..=64).contains(&self.streams)
             && self.accept_streams >= 1
-            && self.accept_sessions >= 1;
+            && self.accept_sessions >= 1
+            && (1..=16 * 1024 * 1024).contains(&self.topic_message)
+            && (1..=4096).contains(&self.topics);
         if ok {
             Ok(())
         } else {
