@@ -28,6 +28,9 @@ use crate::node::{AnyEp, PEERS, RELAYS};
 /// [`ErrorKind::Config`](crate::ErrorKind::Config) if the limits or the keys are not usable.
 pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) -> Result<Core<S, A>> {
     cfg.limits.check()?;
+    if cfg.alpns.len() > crate::mem::MAX_PROTOCOLS {
+        return Err(Error::config("an endpoint serves at most eight protocols"));
+    }
     let mut rnd = [0u8; 32];
     cfg.identity.random(&mut rnd)?;
     let mut seed = [0u8; 8];

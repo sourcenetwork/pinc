@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 use vinc_core::{
-    Answer, Command, CommandError, IfaceEvent, MAX_ALPNS, NodeStats, Query, Role, SessionId, SessionStats, Value,
+    Answer, Command, CommandError, IfaceEvent, NodeStats, Query, Role, SessionId, SessionStats, Value,
 };
 use vinc_crypto::NodeId;
 use vinc_keystore::KeyStore;
@@ -40,6 +40,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         addrs: &[SocketAddr],
     ) -> Result<SessionId> {
         self.running()?;
+        if self.admit.is_revoked(&node) {
+            return Err(Error::new(ErrorKind::Refused, "the peer is revoked"));
+        }
         if self.sessions.len() >= self.limits.connections {
             return Err(Error::new(ErrorKind::Busy, "the connection table is full"));
         }
@@ -52,6 +55,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         let key = Alpn::new(alpn).ok_or_else(|| Error::config("the protocol name is empty or too long"))?;
         match self.node.dial(now, node, alpn, Role::Other, &all) {
             Ok(session) => {
+                // The first flight is queued: the future that started the dial sends it.
+                self.dirty = true;
                 self.dials.insert(
                     session,
                     Dial {
@@ -105,7 +110,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Send sessions for `alpn` to a queue of their own; returns its index.
     pub(crate) fn listen(&mut self, alpn: &[u8]) -> Result<usize> {
-        if self.routes.iter().any(|r| r.alpn == alpn) || self.routes.len() > MAX_ALPNS {
+        if self.routes.iter().any(|r| r.alpn == alpn) || self.user_alpns >= crate::mem::MAX_PROTOCOLS {
             return Err(Error::config("the protocol is already registered or too many are"));
         }
         if !self.node.endpoint_mut().register_alpn(alpn) {
@@ -115,6 +120,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             alpn: alpn.to_vec(),
             queue: VecDeque::new(),
         });
+        self.user_alpns += 1;
         Ok(self.routes.len() - 1)
     }
 
@@ -365,6 +371,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .map_err(|_| Error::new(ErrorKind::Busy, "too many peers are revoked"))?;
         self.dirty = true;
         Ok(())
+    }
+
+    pub(crate) fn unrevoke(&mut self, node: &[u8; 32]) {
+        self.node.unrevoke(node);
     }
 
     pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) {

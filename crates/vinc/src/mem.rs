@@ -24,6 +24,8 @@ use vinc_transport::stream::NoSource;
 
 use crate::error::{Error, Result};
 
+/// The most protocols (ALPNs) an endpoint serves for the application: those the builder lists and those registered.
+pub const MAX_PROTOCOLS: usize = 8;
 /// The most sessions an engine can hold: the top of [`CAPACITIES`](crate::CAPACITIES).
 pub const MAX_CONNECTIONS: usize = 65_536;
 /// The stream slots of a session, both directions of opening counted.

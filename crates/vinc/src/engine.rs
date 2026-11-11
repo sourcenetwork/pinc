@@ -87,7 +87,7 @@ fn answer<S: KeyStore>(identity: &mut Identity<S>, prekeys: &mut Prekeys, req: K
 pub(crate) struct CoreConfig<S, A> {
     /// The node's identity.
     pub identity: Identity<S>,
-    /// The protocols served; at most [`MAX_ALPNS`] with those added later.
+    /// The protocols served; at most [`MAX_PROTOCOLS`](crate::MAX_PROTOCOLS) with those added later.
     pub alpns: Vec<Vec<u8>>,
     /// The sizes.
     pub limits: Limits,
@@ -196,6 +196,8 @@ pub(crate) struct Core<S, A> {
     dial_by_peer: RapidHashMap<(NodeId, Alpn), SessionId>,
     /// The accept queues: the first takes every protocol no registered one claims.
     routes: Vec<Route>,
+    /// The protocols served for the application: those the builder listed and those registered since.
+    user_alpns: usize,
     book: RapidHashMap<NodeId, Vec<SocketAddr>>,
     ifaces: Vec<IfaceId>,
     shutdown: Option<u64>,
@@ -234,6 +236,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             sessions: RapidHashMap::default(),
             dials: RapidHashMap::default(),
             dial_by_peer: RapidHashMap::default(),
+            user_alpns: cfg.alpns.len(),
             routes: vec![Route {
                 alpn: Vec::new(),
                 queue: VecDeque::new(),
