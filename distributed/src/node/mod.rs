@@ -25,14 +25,11 @@ pub fn main(args: &[String]) -> i32 {
     };
     let mut rest = rest.to_vec();
     rest.drain(stack_at..stack_at + 2);
-    match kind.as_str() {
-        "transport" => {
-            transport::run(stack, rest);
-            0
-        }
-        _ => {
-            eprintln!("{usage}");
-            2
-        }
+    if kind == "transport" {
+        transport::run(stack, rest);
+        0
+    } else {
+        eprintln!("{usage}");
+        2
     }
 }

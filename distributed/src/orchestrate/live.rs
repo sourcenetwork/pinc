@@ -213,15 +213,18 @@ pub struct Sample {
 }
 
 /// Sample every node and shaper until dropped.
+/// The reading before this one: when it was taken, each node's reading and each interface's byte counters.
+type Previous = (
+    tokio::time::Instant,
+    Vec<Reading>,
+    BTreeMap<(usize, String), (u64, u64)>,
+);
+
 pub(crate) async fn sampler(b: &Containers, topo: &Topology, tx: broadcast::Sender<Event>) {
     let start = tokio::time::Instant::now();
     let mut tick = tokio::time::interval(EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut last: Option<(
-        tokio::time::Instant,
-        Vec<Reading>,
-        BTreeMap<(usize, String), (u64, u64)>,
-    )> = None;
+    let mut last: Option<Previous> = None;
     loop {
         tick.tick().await;
         let now = tokio::time::Instant::now();

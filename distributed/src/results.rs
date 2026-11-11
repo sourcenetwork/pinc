@@ -329,7 +329,7 @@ fn best_of(cells: &[Cell], better: Better) -> Option<usize> {
         Better::None => None,
     }?;
     // A tie is not a win.
-    (vals.iter().filter(|v| v.1 == pick.1).count() == 1).then_some(pick.0)
+    (vals.iter().filter(|v| v.1.total_cmp(&pick.1).is_eq()).count() == 1).then_some(pick.0)
 }
 
 /// A number as tables show it: no needless digits.

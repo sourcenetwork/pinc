@@ -90,16 +90,12 @@ impl Proc {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-            match self.line(left).await? {
-                Some(l) => {
-                    if let Some(rest) = l.strip_prefix(prefix) {
-                        return Ok(rest.trim().to_owned());
-                    }
-                }
-                None => {
-                    let tail = self.stderr_tail().await;
-                    return Err(Error::Node(format!("{} ended before it was ready: {tail}", self.what)));
-                }
+            let Some(l) = self.line(left).await? else {
+                let tail = self.stderr_tail().await;
+                return Err(Error::Node(format!("{} ended before it was ready: {tail}", self.what)));
+            };
+            if let Some(rest) = l.strip_prefix(prefix) {
+                return Ok(rest.trim().to_owned());
             }
         }
     }

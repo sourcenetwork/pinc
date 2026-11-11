@@ -117,7 +117,7 @@ fn every_node_has_its_site_gateway_as_default_route() {
 fn routers_use_the_direct_link_and_route_every_routed_lan() {
     let sc = scenario("three-site");
     let p = Plan::new(&sc, "r", 16);
-    let a = p.site("a").unwrap();
+    let a = p.site("site-a").unwrap();
     let cmds = &p.setup.iter().find(|(ns, _)| *ns == Ns::Router(a)).unwrap().1;
     let routes: Vec<&Vec<String>> = cmds
         .iter()
@@ -162,7 +162,7 @@ fn translated_sites_masquerade_and_are_not_routed() {
         rules(h2)[0].contains(&"--random-fully".to_owned()),
         "the symmetric translation picks a random port per destination"
     );
-    assert!(rules(public).is_empty());
+    assert_eq!(rules(public), Vec::<Vec<String>>::new());
     let public_cmds = &p.setup.iter().find(|(ns, _)| *ns == Ns::Router(public)).unwrap().1;
     let lan1 = format!("{}/24", p.sites[h1].lan);
     assert!(
@@ -326,7 +326,7 @@ fn row(stack: &str, rep: u32, p50: f64) -> Row {
         rep,
         status: "ok".into(),
         node,
-        kernel: Default::default(),
+        kernel: std::collections::BTreeMap::default(),
         shaper_drops: Some(0),
         host: None,
     }

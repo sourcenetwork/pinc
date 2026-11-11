@@ -133,21 +133,18 @@ fn run_tool(ns: Option<u32>, tool: &str, args: &[String]) -> std::result::Result
     let Some(path) = find_tool(tool) else {
         return Err(format!("{tool} is not installed"));
     };
-    let mut cmd = match ns {
-        Some(pid) => {
-            let Some(nsenter) = find_tool("nsenter") else {
-                return Err("nsenter is not installed".into());
-            };
-            let mut c = Command::new(nsenter);
-            c.arg(format!("--net=/proc/{pid}/ns/net")).arg("--").arg(path);
-            c
+    let mut cmd = if let Some(pid) = ns {
+        let Some(nsenter) = find_tool("nsenter") else {
+            return Err("nsenter is not installed".into());
+        };
+        let mut c = Command::new(nsenter);
+        c.arg(format!("--net=/proc/{pid}/ns/net")).arg("--").arg(path);
+        c
+    } else {
+        if !host_ns_allowed(tool, args) {
+            return Err("in the host's namespace the helper only creates veth pairs between two other namespaces and reads links and queues".into());
         }
-        None => {
-            if !host_ns_allowed(tool, args) {
-                return Err("in the host's namespace the helper only creates veth pairs between two other namespaces and reads links and queues".into());
-            }
-            Command::new(path)
-        }
+        Command::new(path)
     };
     let out = cmd
         .args(args)
@@ -263,11 +260,11 @@ pub struct Helper {
 }
 
 impl Helper {
-    /// Start the helper with `sudo -n`.
+    /// Start the helper with `sudo -n`, on the runtime of the caller.
     ///
     /// # Errors
     /// sudo refuses or the binary cannot start.
-    pub async fn start() -> Result<Self> {
+    pub fn start() -> Result<Self> {
         let exe = std::env::current_exe()?;
         let mut child = tokio::process::Command::new("sudo")
             .arg("-n")

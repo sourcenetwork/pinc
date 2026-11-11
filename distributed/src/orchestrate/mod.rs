@@ -316,6 +316,10 @@ pub struct Outcome {
 /// # Errors
 /// The scenario does not validate, or its results directory cannot be written. Failures after the network is up
 /// end the run, are written to the results and returned in [`Outcome::error`].
+#[allow(
+    clippy::too_many_lines,
+    reason = "one run from validation to teardown, read top to bottom"
+)]
 pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
     let problems = sc.validate();
     if !problems.is_empty() {
@@ -444,7 +448,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
         &ctx,
         &host,
         &run,
-        image_id,
+        image_id.as_deref(),
         started,
         error.as_ref(),
         &left,
@@ -519,7 +523,7 @@ fn write_run(
     ctx: &Ctx,
     host: &HostInfo,
     run: &str,
-    image: Option<String>,
+    image: Option<&str>,
     started: u64,
     error: Option<&Error>,
     left: &[String],

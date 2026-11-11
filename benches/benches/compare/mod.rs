@@ -17,7 +17,19 @@
 //! Invariants: nothing here is specific to one library; a number is printed only when it was measured in this run;
 //! a failure is counted and printed, never dropped.
 
-#![allow(unreachable_pub, dead_code, unsafe_code)]
+// Measurement code: counters become floats for the report, and argument and buffer positions are checked by the
+// harness that passes them.
+#![allow(
+    unreachable_pub,
+    dead_code,
+    unsafe_code,
+    clippy::indexing_slicing,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::unreadable_literal,
+    clippy::format_push_string
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;

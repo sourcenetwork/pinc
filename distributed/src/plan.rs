@@ -292,16 +292,13 @@ fn next_hops(sites: usize, links: &[LinkPlan]) -> Vec<BTreeMap<usize, usize>> {
         if let Some(d) = dist.get_mut(src) {
             *d = 0.0;
         }
-        loop {
-            let Some((u, du)) = dist
-                .iter()
-                .enumerate()
-                .filter(|(i, d)| !done.get(*i).copied().unwrap_or(true) && d.is_finite())
-                .min_by(|x, y| x.1.total_cmp(y.1))
-                .map(|(i, d)| (i, *d))
-            else {
-                break;
-            };
+        while let Some((u, du)) = dist
+            .iter()
+            .enumerate()
+            .filter(|(i, d)| !done.get(*i).copied().unwrap_or(true) && d.is_finite())
+            .min_by(|x, y| x.1.total_cmp(y.1))
+            .map(|(i, d)| (i, *d))
+        {
             if let Some(d) = done.get_mut(u) {
                 *d = true;
             }

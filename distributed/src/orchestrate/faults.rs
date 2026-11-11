@@ -37,6 +37,10 @@ impl FaultRunner {
     ///
     /// # Errors
     /// The backend failed to apply it.
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "the two ends of a link are a and c, as in the scenario file"
+    )]
     pub async fn apply(&mut self, b: &Containers, plan: &Plan, f: &FaultAction, launches: &[Launch]) -> Result<String> {
         let link = |a: &str, c: &str| {
             plan.link_points(a, c)

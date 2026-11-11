@@ -133,7 +133,7 @@ impl Containers {
     pub async fn up(plan: &Plan, image: &str) -> Result<Self> {
         Self::preflight().await?;
         let image_id = docker::ensure_image(image).await?;
-        let helper = Helper::start().await?;
+        let helper = Helper::start()?;
         let ifb_loaded = helper.call(Req::Ifb { load: true }).await? == "loaded";
         let mut me = Self {
             helper,
@@ -451,7 +451,7 @@ pub async fn clean() -> Result<Cleaned> {
     let found = docker::labelled().await?;
     out.removed = found.iter().map(|(n, _)| n.clone()).collect();
     docker::remove(&out.removed).await?;
-    let helper = Helper::start().await?;
+    let helper = Helper::start()?;
     let state: Option<State> = std::fs::read(state_path())
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok());

@@ -78,36 +78,34 @@ fn query(req: &Request<Incoming>, key: &str) -> Option<String> {
 
 /// The checks every request passes: the token (when one is set), the local `Host` (when none is), and the header
 /// that marks a request as the dashboard's own for anything that changes state.
+#[allow(clippy::result_large_err, reason = "the error is the response to send")]
 fn guard(app: &App, req: &Request<Incoming>) -> Result<Option<Resp>, Resp> {
-    match &app.opts.token {
-        Some(t) => {
-            if req.uri().path() == "/" && query(req, "token").as_deref() == Some(t.as_str()) {
-                let mut r = reply(StatusCode::SEE_OTHER, "text/plain", "");
-                if let (Ok(c), Ok(l)) = (
-                    format!("vd={t}; HttpOnly; SameSite=Strict; Path=/").parse(),
-                    "/".parse(),
-                ) {
-                    r.headers_mut().insert(SET_COOKIE, c);
-                    r.headers_mut().insert(LOCATION, l);
-                }
-                return Ok(Some(r));
+    if let Some(t) = &app.opts.token {
+        if req.uri().path() == "/" && query(req, "token").as_deref() == Some(t.as_str()) {
+            let mut r = reply(StatusCode::SEE_OTHER, "text/plain", "");
+            if let (Ok(c), Ok(l)) = (
+                format!("vd={t}; HttpOnly; SameSite=Strict; Path=/").parse(),
+                "/".parse(),
+            ) {
+                r.headers_mut().insert(SET_COOKIE, c);
+                r.headers_mut().insert(LOCATION, l);
             }
-            if cookie_token(req).as_deref() != Some(t.as_str()) {
-                return Err(fail(
-                    StatusCode::UNAUTHORIZED,
-                    "open the dashboard with ?token=<the token it was started with>",
-                ));
-            }
+            return Ok(Some(r));
         }
-        None => {
-            let host = req.headers().get(HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
-            let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
-            if !matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
-                return Err(fail(
-                    StatusCode::FORBIDDEN,
-                    "the dashboard answers only to localhost; reach it through an SSH tunnel",
-                ));
-            }
+        if cookie_token(req).as_deref() != Some(t.as_str()) {
+            return Err(fail(
+                StatusCode::UNAUTHORIZED,
+                "open the dashboard with ?token=<the token it was started with>",
+            ));
+        }
+    } else {
+        let host = req.headers().get(HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
+        let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
+        if !matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
+            return Err(fail(
+                StatusCode::FORBIDDEN,
+                "the dashboard answers only to localhost; reach it through an SSH tunnel",
+            ));
         }
     }
     if req.method() != Method::GET && !req.headers().contains_key("x-vd") {
@@ -153,6 +151,7 @@ pub(crate) async fn handle(app: Arc<App>, req: Request<Incoming>) -> Result<Resp
     })
 }
 
+#[allow(clippy::result_large_err, reason = "the error is the response to send")]
 async fn body(req: Request<Incoming>) -> Result<Bytes, Resp> {
     Limited::new(req.into_body(), MAX_BODY)
         .collect()

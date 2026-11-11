@@ -194,11 +194,10 @@ impl Monitor {
         }
         let mut v = false;
         if let Some(p) = snap.procs.get(&pid) {
-            if OURS.iter().any(|n| p.name.starts_with(n)) {
-                v = true;
-            } else if !self.containers.is_empty()
-                && std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
-                    .is_ok_and(|c| self.containers.iter().any(|id| c.contains(id.as_str())))
+            if OURS.iter().any(|n| p.name.starts_with(n))
+                || (!self.containers.is_empty()
+                    && std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+                        .is_ok_and(|c| self.containers.iter().any(|id| c.contains(id.as_str()))))
             {
                 v = true;
             } else {
