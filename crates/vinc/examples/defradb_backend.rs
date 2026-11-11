@@ -18,9 +18,12 @@
 //!   hints finds the peer through that record. The rendezvous here is an in-process directory; with the relay client
 //!   in the facade it is the node's home relay.
 //!
-//! Not here yet: raw topic pubsub (`publish_raw`, `subscribe_raw`, `register_pubsub_rpc_topic`, which `DefraDB`'s KMS
-//! uses for its key requests and their `encryption/<peer>/_response` replies). It waits for topic pubsub in the
-//! facade, which needs the facade to run on `vinc-node`.
+//! - **Raw pubsub.** `subscribe_raw` joins a topic and `publish_raw` publishes opaque bytes to it, through a hub: any
+//!   endpoint built with the hub role (here a third endpoint of the same process) that the others name as their relay.
+//!   `register_pubsub_rpc_topic` answers every message on a topic on the requester's own response topic
+//!   ([`response_topic`]: `<topic>/<peer>/_response`), the way `DefraDB`'s KMS answers key requests. Every message is
+//!   signed by its publisher and the endpoint verifies it before it is delivered. An endpoint has one queue of topic
+//!   events: read it in one place (`next_raw`, or the task an RPC topic starts).
 //!
 //! Run with `cargo run -p vinc --example defradb_backend`.
 
@@ -43,7 +46,7 @@ use std::future::Future;
 use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nuclei::Handle;
 use nuclei::sync::Mutex as AsyncMutex;
@@ -60,6 +63,11 @@ const MUX: &[u8] = b"example/mux/1";
 const MAX_MSG: usize = 16 << 20;
 /// The length of `DefraDB`'s service-record pointer.
 pub const POINTER_LEN: usize = 38;
+
+/// Where `requester` hears the answers to what it published on the RPC topic `topic`.
+pub fn response_topic(topic: &[u8], requester: &str) -> Vec<u8> {
+    [topic, b"/", requester.as_bytes(), b"/_response"].concat()
+}
 
 /// The urgency of a stream by its tag: control first, block transfers last, everything else at the default.
 pub fn urgency_of(tag: &[u8]) -> u8 {
@@ -212,6 +220,51 @@ impl<H: Hosted + 'static> VincTransport<H> {
         self.ep.addr()
     }
 
+    /// Join `topic`: its messages arrive through [`next_raw`](Self::next_raw).
+    pub async fn subscribe_raw(&self, topic: &[u8]) -> Result<(), Error> {
+        self.ep.join(topic, &[]).await.map(drop)
+    }
+
+    /// Publish `payload` to `topic`; with `wait`, only once a member of the topic this endpoint has a session with is
+    /// known, or fail when the wait passes.
+    pub async fn publish_raw(&self, topic: &[u8], payload: &[u8], wait: Option<Duration>) -> Result<(), Error> {
+        self.ep.publish(topic, payload, wait).await.map(drop)
+    }
+
+    /// The next raw message: its topic, the peer that signed it and its bytes. `None` once the endpoint stopped.
+    pub async fn next_raw(&self) -> Option<(Vec<u8>, String, Vec<u8>)> {
+        loop {
+            if let vinc::Event::Message {
+                topic, origin, payload, ..
+            } = self.ep.event().await?
+            {
+                return Some((topic, node_to_string(&origin), payload));
+            }
+        }
+    }
+
+    /// Join `topic` and answer every message on it with `handler`'s reply, published on the requester's response topic.
+    /// The task this starts reads the endpoint's topic events from then on.
+    pub async fn register_pubsub_rpc_topic(
+        &self,
+        topic: &[u8],
+        handler: impl Fn(&[u8]) -> Vec<u8> + 'static,
+    ) -> Result<(), Error> {
+        self.subscribe_raw(topic).await?;
+        let (me, topic) = (self.clone(), topic.to_vec());
+        nuclei::spawn_local(async move {
+            while let Some((on, from, body)) = me.next_raw().await {
+                if on == topic {
+                    let _ = me
+                        .publish_raw(&response_topic(&topic, &from), &handler(&body), None)
+                        .await;
+                }
+            }
+        })
+        .detach();
+        Ok(())
+    }
+
     fn conn(&self, peer: &str) -> Option<Connection<H>> {
         self.conns.borrow_mut().get(peer).cloned()
     }
@@ -328,18 +381,31 @@ impl<H: Hosted + 'static> Transport for VincTransport<H> {
     }
 }
 
-/// Two backends on loopback sharing a directory. `b` publishes its service pointer; `a` dials it by peer id alone,
-/// reads the pointer, sends a control request and a push, each answered on its own stream; then `b` denies `a`, which
-/// loses its connection at once and cannot come back. Returns the push's reply.
+/// Two backends on loopback sharing a directory, and a third endpoint that is their hub. `b` publishes its service
+/// pointer; `a` dials it by peer id alone, reads the pointer, sends a control request and a push, each answered on its
+/// own stream, and asks for a key over raw pubsub, answered on its response topic; then `b` denies `a`, which loses its
+/// connection at once and cannot come back. Returns the push's reply.
 pub async fn run() -> Result<Vec<u8>, Error> {
     let lo: SocketAddr = ([127, 0, 0, 1], 0).into();
     let dir = Directory::default();
+    // The hub: an endpoint like the others that also carries topics for those that name it as their relay.
+    let hub = endpoint(Vinc::builder().seed(&[3; 32])?.alpn(MUX).hub(), lo).await?;
+    let h = hub.clone();
+    nuclei::spawn_local(async move {
+        let _ = h.run().await;
+    })
+    .detach();
+    let via = vinc::Relay::new(hub.id()).with_udp(hub.local_addr());
     let (aa, ba) = (Allowlist::default(), Allowlist::explicit());
+    if let Some(l) = ba.only.borrow_mut().as_mut() {
+        l.insert(hub.id());
+    }
     let a = VincTransport::new(
         endpoint(
             Vinc::builder()
                 .seed(&[1; 32])?
                 .alpn(MUX)
+                .relays([via])
                 .discovery(Records::new(dir.clone()))
                 .acp(aa.clone()),
             lo,
@@ -352,6 +418,7 @@ pub async fn run() -> Result<Vec<u8>, Error> {
             Vinc::builder()
                 .seed(&[2; 32])?
                 .alpn(MUX)
+                .relays([via])
                 .discovery(Records::new(dir.clone()))
                 .acp(ba.clone()),
             lo,
@@ -388,6 +455,27 @@ pub async fn run() -> Result<Vec<u8>, Error> {
     );
     let reply = a.request(&b.local_peer_id(), b"pushlog", b"payload".to_vec()).await?;
 
+    // Raw pubsub the way the KMS asks for keys: `b` answers every request on the requester's response topic.
+    let kms = b"encryption".to_vec();
+    let answers = response_topic(&kms, &a.local_peer_id());
+    b.register_pubsub_rpc_topic(&kms, |doc| [b"key for ", doc].concat())
+        .await?;
+    a.subscribe_raw(&answers).await?;
+    // A subscription takes a moment to reach the hub: ask until the answer comes.
+    let mut answer = None;
+    for _ in 0..100 {
+        a.publish_raw(&kms, b"doc-1", None).await?;
+        if let Ok(Some(m)) = nuclei::time::timeout(Duration::from_millis(300), a.next_raw()).await {
+            answer = Some(m);
+            break;
+        }
+    }
+    assert_eq!(
+        answer,
+        Some((answers, b.local_peer_id(), b"key for doc-1".to_vec())),
+        "no answer on the response topic"
+    );
+
     b.deny_peer(&a.local_peer_id()).await?;
     assert!(b.is_peer_revoked(&a.local_peer_id())?);
     assert!(!b.connected_peers().await?.contains(&a.local_peer_id()));
@@ -399,6 +487,7 @@ pub async fn run() -> Result<Vec<u8>, Error> {
 
     a.shutdown().await;
     b.shutdown().await;
+    hub.close().await;
     Ok(reply)
 }
 
