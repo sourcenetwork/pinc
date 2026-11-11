@@ -539,6 +539,10 @@ name = "transport_wide"
 path = "transport_wide.rs"
 
 [[test]]
+name = "transport_pacing_timer"
+path = "transport_pacing_timer.rs"
+
+[[test]]
 name = "transport_long_path"
 path = "transport_long_path.rs"
 
