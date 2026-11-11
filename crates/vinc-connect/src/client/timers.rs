@@ -27,7 +27,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.lookups.next_deadline(),
             // A record due while the home carrier is not open waits for the carrier: its opening re-arms the time.
             Some(self.next_publish).filter(|p| *p != 0 && *p != u64::MAX && self.can_publish()),
-            Some(self.duty.deadline()).filter(|_| self.beacons_on),
+            self.beacons_on.then(|| self.duty.deadline()),
             self.close_deadline(),
             self.session_deadline(),
         ]
