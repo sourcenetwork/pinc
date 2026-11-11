@@ -247,6 +247,7 @@ def host_info():
         "mem_gib": round(int(mem) / 1048576, 1),
         "kernel": platform.release(),
         "rustc": sh("rustc -V").stdout.strip(),
+        "rustflags": os.environ.get("RUSTFLAGS", ""),
         "git": sh(f"git -C {ROOT} rev-parse --short HEAD").stdout.strip(),
         "versions": {n: cargo_lock_version(n) for n in ("iroh", "noq", "libp2p", "libp2p-quic", "libp2p-stream", "quinn", "tokio", "nuclei")},
         "loadavg_at_start": open("/proc/loadavg").read().strip(),
@@ -387,7 +388,7 @@ def collect(out):
 def write_md(out, info, libs, profiles, scen, results, a):
     md = [f"# VINC against iroh and rust-libp2p\n"]
     md.append(f"Date {datetime.date.today().isoformat()}, host `{info['host']}`: {info['cpu']}, {info['cores']} cores, {info['mem_gib']} GiB, kernel {info['kernel']}, {info['rustc']}, commit {info['git']}.")
-    md.append("Versions: " + ", ".join(f"{k} {v}" for k, v in info["versions"].items()) + ".")
+    md.append("Versions: " + ", ".join(f"{k} {v}" for k, v in info["versions"].items()) + ". Every library compiled with `RUSTFLAGS=" + (info.get("rustflags") or "") + "`.")
     md.append("Every cell is the median over the repetitions with the range [min..max]; a single value is one run. The client and the server are two processes on loopback.")
     if a.scale != 1.0 or a.reps:
         md.append(f"\n**This is a reduced run (scale {a.scale}, reps {a.reps}); do not quote it.**")

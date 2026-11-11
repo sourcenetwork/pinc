@@ -154,6 +154,16 @@ impl HostInfo {
     }
 }
 
+/// What the three stacks in this binary were compiled for: the instruction set of the machine that built it, or the
+/// baseline every machine of the architecture has. It decides which vector code the stacks' ciphers use.
+pub const fn built_for() -> &'static str {
+    if cfg!(all(target_arch = "x86_64", target_feature = "avx2")) {
+        "the build machine's CPU (target-cpu=native)"
+    } else {
+        "the baseline CPU of the architecture"
+    }
+}
+
 /// The versions of the stacks this binary was built with, from its lockfile.
 pub fn versions() -> Vec<(String, String)> {
     let lock = include_str!("../../Cargo.lock");
@@ -494,13 +504,14 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
             }
         ),
         format!(
-            "Versions: {}; VINC at commit {}.",
+            "Versions: {}; VINC at commit {}. Every stack compiled for {}.",
             versions()
                 .iter()
                 .map(|(k, v)| format!("{k} {v}"))
                 .collect::<Vec<_>>()
                 .join(", "),
-            git_commit()
+            git_commit(),
+            built_for()
         ),
         format!(
             "Isolation: one stack at a time on the same cores; repetitions alternate the stacks ({}), all in this one run of one build. The orchestrator runs on CPU 0, which no node uses.",
@@ -549,6 +560,7 @@ fn write_run(
         "image": image,
         "mtu": MTU,
         "versions": versions().into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+        "built_for": built_for(),
         "git": git_commit(),
         "stack_code": {
             "vinc": format!("this repository at {}", git_commit()),

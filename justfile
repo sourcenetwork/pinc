@@ -11,6 +11,11 @@ target := env_var_or_default("CARGO_TARGET_DIR", justfile_directory() / "target"
 harness_target := target + "-harness"
 benches := "--manifest-path benches/Cargo.toml --target-dir " + harness_target
 dist := "--manifest-path distributed/Cargo.toml --target-dir " + harness_target
+# A measurement compiles every stack for the machine that runs it, so each stack's ciphers use the widest vector code
+# the CPU has (the library's own AES otherwise stays on 128-bit vectors on a CPU with VAES and no AVX-512). Its own
+# build directory, so the gate's builds are not rebuilt.
+native := "-C target-cpu=native"
+measure_target := target + "-measure"
 
 # List the recipes.
 default:
@@ -143,7 +148,7 @@ pure:
 # Measure VINC against iroh and rust-libp2p on this machine (loopback, then netem-shaped); writes benches/results/.
 # Run it on the benchmark host with nothing else running: VINC_JOB_EXCLUSIVE=1 vinc-job just compare. Needs sudo and tc.
 compare *args:
-    python3 benches/compare.py --target-dir {{harness_target}} {{args}}
+    RUSTFLAGS="{{native}}" python3 benches/compare.py --target-dir {{measure_target}} {{args}}
 
 # Every test, hwenc included (the TPM tests need `swtpm`). Extra arguments go to nextest.
 test *args:
@@ -160,7 +165,7 @@ e2e:
 # The distributed harness: `just distributed run distributed/scenarios/wan.toml`, `just distributed clean`. A
 # measurement wants an otherwise idle machine. Results go to distributed/results/.
 distributed *args:
-    cargo run -q --release {{dist}} -- {{args}}
+    RUSTFLAGS="{{native}}" cargo run -q --release --manifest-path distributed/Cargo.toml --target-dir {{measure_target}} -- {{args}}
 
 # Every test without the hwenc feature, for machines without `swtpm`.
 test-default *args:

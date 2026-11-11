@@ -142,6 +142,10 @@ results. Today the harness runs the transport tests (connection setup, resumed s
 stream throughput, many connections) with link changes during a run; one machine emulates the whole network, and
 every table says so.
 
+`just compare` and `just distributed` compile every stack for the machine that runs them (`-C target-cpu=native`) and
+say so in their results. A host gets the same from VINC by building its own binary that way: on an x86-64 CPU with
+VAES and no AVX-512 the AES code VINC uses takes its 256-bit path only when it is compiled for that CPU.
+
 Every dependency is declared once, in its workspace's root `Cargo.toml`, and every crate has the one version. The
 benchmarks are a workspace of their own, so iroh, rust-libp2p, their runtime and their C code never enter the
 library's graph. The gate also checks that no crate under `crates/` depends on an async runtime and that nothing in
