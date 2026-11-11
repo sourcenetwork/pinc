@@ -28,7 +28,7 @@ use vinc_transport::stream::StreamSource;
 
 use super::conn::{Connectivity, LOCAL_PEERS, SESSIONS};
 use super::dial::HUB_RELAY_PATH_DELAY;
-use super::dial::{Cand, HUB_FIRST_ADDRS, HUB_RELAY_DELAY, RelayView, Try, direct_first, select};
+use super::dial::{Cand, HUB_FIRST_ADDRS, HUB_RELAY_DELAY, RelayView, Try, direct_first, flight_relays, select};
 use super::punch::Born;
 use super::punch::{self, Puncher, Step, View};
 use super::tunnel::{self, HubSession, Rides, ThinSplice, Via};
@@ -215,10 +215,17 @@ drive_impl! {
                 add(Cand::Udp(a), out, &mut n);
             }
         }
-        // The peer's own relay when the record named one, otherwise ours (RELAY_FORWARD on the first flight).
-        let rid = found.and_then(|f| self.relay_of(&f.home)).or(self.home()).or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()));
-        if let Some(r) = rid {
-            add(Cand::Relay(u8::try_from(r).unwrap_or(0)), out, &mut n);
+        // The peer's own relay when the record named one, and ours (RELAY_FORWARD on the first flight).
+        let peer = found.and_then(|f| self.relay_of(&f.home)).and_then(|r| u8::try_from(r).ok());
+        let own = self
+            .home()
+            .or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()))
+            .and_then(|r| u8::try_from(r).ok());
+        for r in flight_relays(peer, own, |r| self.carrier_state(usize::from(r)) == super::link::State::Open)
+            .into_iter()
+            .flatten()
+        {
+            add(Cand::Relay(r), out, &mut n);
         }
         n
     }

@@ -51,6 +51,23 @@ pub enum Cand {
     Relay(u8),
 }
 
+/// The relays a flight to a peer goes through: the peer's own relay, when the record named one, and ours (the first flight
+/// of `RELAY_FORWARD` reaches the peer's relay through ours). A relay we hold an open carrier to reaches the other end
+/// in one hop, so the peer's relay comes first only when that carrier is open; otherwise the packet to it would leave
+/// as an unauthenticated datagram and be refused, and ours comes first. A relay named twice is listed once.
+pub fn flight_relays(peer: Option<u8>, own: Option<u8>, open: impl Fn(u8) -> bool) -> [Option<u8>; 2] {
+    match (peer, own) {
+        (Some(p), Some(o)) if p != o => {
+            if open(p) {
+                [Some(p), Some(o)]
+            } else {
+                [Some(o), Some(p)]
+            }
+        }
+        (p, o) => [p.or(o), None],
+    }
+}
+
 /// B8: whether the first flight of this dial goes to the hub's direct address only.
 pub const fn direct_first(first_try: bool, is_hub: bool, first_dial_at: u64, started: u64) -> bool {
     first_try && is_hub && first_dial_at.saturating_sub(started) > LATE_START

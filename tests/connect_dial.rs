@@ -15,7 +15,7 @@
 )]
 
 use vinc_connect::client::dial::{
-    Cand, HUB_RELAY_DELAY, RelayView, TG_SLOW, THIN_HS0_WAIT, Try, direct_first, hs0, select,
+    Cand, HUB_RELAY_DELAY, RelayView, TG_SLOW, THIN_HS0_WAIT, Try, direct_first, flight_relays, hs0, select,
 };
 
 const S: u64 = 1_000_000_000;
@@ -178,4 +178,18 @@ fn a_hub_initial_goes_by_relay_paths_only_while_nothing_at_all_has_been_heard() 
     assert!(!hs0(true, 1, 0, true));
     assert!(!hs0(true, 2, 4 * S, true));
     assert!(!hs0(false, 2, 0, true));
+}
+
+#[test]
+fn a_flight_goes_through_the_relay_it_has_a_carrier_to_and_through_the_peers() {
+    // The peer's relay carries it in one hop when our carrier to it is open; the record's relay and ours are both tried.
+    assert_eq!(flight_relays(Some(1), Some(0), |_| true), [Some(1), Some(0)]);
+    // Without a carrier to the peer's relay, a packet to it would be an unauthenticated datagram: ours goes first and
+    // forwards.
+    assert_eq!(flight_relays(Some(1), Some(0), |r| r == 0), [Some(0), Some(1)]);
+    // One relay named twice, or only one known, is listed once.
+    assert_eq!(flight_relays(Some(2), Some(2), |_| false), [Some(2), None]);
+    assert_eq!(flight_relays(None, Some(0), |_| false), [Some(0), None]);
+    assert_eq!(flight_relays(Some(3), None, |_| false), [Some(3), None]);
+    assert_eq!(flight_relays(None, None, |_| true), [None, None]);
 }
