@@ -131,7 +131,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
                     peers: specs.clone(),
                     mtu: 1500,
                     sessions: 16,
-                    library_limits: false,
+                    iroh_gossip_max: None,
                 },
                 s.role,
             )

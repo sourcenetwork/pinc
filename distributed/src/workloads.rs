@@ -42,10 +42,10 @@ pub struct Pubsub {
     /// Seconds after the last message before the counts are read.
     #[serde(default = "drain_default")]
     pub drain_s: f64,
-    /// Keep each stack's library default for the largest message (iroh gossip 4 KiB, rust-libp2p gossipsub 64 KiB)
-    /// instead of the harness's 1 MiB, so the counts show what a deployment on the defaults delivers.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub library_limits: bool,
+    /// The largest iroh gossip message, as an application on iroh sets it (defradb.rs keeps iroh-gossip's default of
+    /// 4096 bytes); unset, the harness's 1 MiB. A message over it is not delivered, and the counts show that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iroh_gossip_max: Option<u32>,
 }
 
 fn topic_default() -> String {
@@ -169,6 +169,9 @@ impl Pubsub {
             if !(v.is_finite() && (0.0..=3600.0).contains(&v)) {
                 out.push(Problem::new(format!("workload.{field}"), "use 0 to 3600 seconds"));
             }
+        }
+        if self.iroh_gossip_max.is_some_and(|m| !(512..=(1 << 20)).contains(&m)) {
+            out.push(Problem::new("workload.iroh_gossip_max", "use 512 bytes to 1 MiB"));
         }
         if self.topic.is_empty() || self.topic.len() > 64 {
             out.push(Problem::new("workload.topic", "use a topic of 1 to 64 characters"));

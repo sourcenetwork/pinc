@@ -35,7 +35,7 @@ use crate::scenario::Role;
 
 /// The UDP port of every libp2p node.
 pub const PORT: u16 = 4436;
-/// The largest gossipsub message the program sets up, unless told to keep the library's default of 64 KiB.
+/// The largest gossipsub message the program sets up (the library's default is 64 KiB).
 const MAX_MESSAGE: usize = 1 << 20;
 /// Bytes of one block of a fetched value.
 const BLOCK: u64 = 256 << 10;
@@ -361,12 +361,8 @@ impl App {
             .clone();
         let key = keypair(&init.name)?;
         let peer_id = key.public().to_peer_id();
-        let mut gcfg = gossipsub::ConfigBuilder::default();
-        if !init.library_limits {
-            gcfg.max_transmit_size(MAX_MESSAGE);
-        }
-        let limit = if init.library_limits { "the library's default of 64 KiB" } else { "1 MiB" };
-        let gcfg = gcfg
+        let gcfg = gossipsub::ConfigBuilder::default()
+            .max_transmit_size(MAX_MESSAGE)
             .build()
             .map_err(|e| format!("the gossipsub settings were refused: {e}"))?;
         let mut swarm = SwarmBuilder::with_existing_identity(key.clone())
@@ -442,11 +438,11 @@ impl App {
         let ready = Ready {
             stack: "libp2p".into(),
             id: peer_id.to_string(),
-            config: format!(
-                "rust-libp2p over QUIC with signed gossipsub (default mesh and heartbeat, messages up to {limit}) and a \
-                 request-response protocol for values (256 KiB blocks, 16 requests in flight per provider, hash \
-                 checked at the end); the hub and relay nodes are dialled as bootstrap peers"
-            ),
+            config:
+                "rust-libp2p over QUIC with signed gossipsub (default mesh and heartbeat, messages up to 1 MiB) and a \
+                     request-response protocol for values (256 KiB blocks, 16 requests in flight per provider, hash \
+                     checked at the end); the hub and relay nodes are dialled as bootstrap peers"
+                    .into(),
         };
         Ok((app, ready))
     }
