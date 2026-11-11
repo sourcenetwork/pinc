@@ -147,6 +147,10 @@ async fn large_transfer_in_both_directions() {
 
 /// On a link slower than the application writes, a stream made urgent overtakes a bulk transfer already in flight and
 /// a less urgent stream that was opened and written before it.
+///
+/// The order is decided among the data that waits to be sent. A write that finds room sends at once, so the test first
+/// lets the bulk fill the congestion window (the acknowledgements are held back at the sender's host), writes the two
+/// small streams while nothing can leave, and only then lets the acknowledgements in.
 #[nuclei::test]
 async fn an_urgent_stream_overtakes_bulk_and_a_less_urgent_stream() {
     use std::cell::{Cell, RefCell};
@@ -196,11 +200,18 @@ async fn an_urgent_stream_overtakes_bulk_and_a_less_urgent_stream() {
         // The sending side's link is slow: its host waits before every datagram, so data queues in the connection.
         let sock = Arc::new(nuclei::Handle::<UdpSocket>::bind(vinc_common::lo()).await.unwrap());
         let (r, tx) = (Arc::clone(&sock), Arc::clone(&sock));
+        let hold = Rc::new(Cell::new(false));
+        let hold_rx = Rc::clone(&hold);
         let ep = vinc_common::builder()
             .alpn(ECHO)
             .local_addr(sock.local_addr().unwrap())
             .build(
-                async move |buf: &mut [u8]| r.recv_from(buf).await,
+                async move |buf: &mut [u8]| {
+                    while hold_rx.get() {
+                        nuclei::time::sleep(Duration::from_micros(200)).await;
+                    }
+                    r.recv_from(buf).await
+                },
                 async move |pkt: &[u8], to: SocketAddr| {
                     nuclei::time::sleep(Duration::from_micros(500)).await;
                     tx.send_to(pkt, to).await
@@ -231,15 +242,40 @@ async fn an_urgent_stream_overtakes_bulk_and_a_less_urgent_stream() {
         })
         .await;
 
-        // The less urgent stream is opened and written first.
+        // The two small streams are opened, the less urgent first, and their urgencies set.
         let (mut low, _lr) = conn.open_bi().await.unwrap();
         let (mut high, _hr) = conn.open_bi().await.unwrap();
         low.set_urgency(7).await.unwrap();
         high.set_urgency(0).await.unwrap();
-        low.write_all(&[b'L'; 1024]).await.unwrap();
-        low.finish().await.unwrap();
-        high.write_all(&[b'H'; 1024]).await.unwrap();
-        high.finish().await.unwrap();
+
+        // The acknowledgements stop reaching the sender: it sends until its congestion window is full and then the bulk
+        // waits in the connection, with nothing able to leave.
+        hold.set(true);
+        let mut seen = u64::MAX;
+        for _ in 0..100 {
+            nuclei::time::sleep(Duration::from_millis(100)).await;
+            let now = bulk.get();
+            if now == seen {
+                break;
+            }
+            seen = now;
+        }
+        assert!(bulk.get() < TOTAL, "the bulk ended before the congestion window filled");
+
+        // The less urgent stream is written first. Both writes wait for room in the connection behind the bulk writer,
+        // in the order they were made; the acknowledgements come back after both are waiting.
+        let low_task = nuclei::spawn_local(async move {
+            low.write_all(&[b'L'; 1024]).await.unwrap();
+            low.finish().await.unwrap();
+        });
+        let high_task = nuclei::spawn_local(async move {
+            high.write_all(&[b'H'; 1024]).await.unwrap();
+            high.finish().await.unwrap();
+        });
+        nuclei::time::sleep(Duration::from_millis(100)).await;
+        hold.set(false);
+        low_task.await;
+        high_task.await;
 
         vinc_common::eventually(100, "both control messages arrive", || {
             let o = Rc::clone(&order);
