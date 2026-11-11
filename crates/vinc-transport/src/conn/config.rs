@@ -80,6 +80,10 @@ pub struct Config {
     /// Acknowledge every this-many ack-eliciting packets instead of every 2nd (3rd for bulk): 4 for a member's
     /// session with a hub. `None` keeps the default policy.
     pub ack_every: Option<u32>,
+    /// The most data the connection keeps written and not yet acknowledged, over all its streams: the cap is
+    /// `min(send_window, max(192 KiB, 1.5 x the congestion window))`. A path whose bandwidth times round trip is larger
+    /// than this needs a larger value.
+    pub send_window: u64,
     /// The largest datagram the host's socket sends (the interface MTU); it bounds the datagram size probes on
     /// paths the connection learns of by receiving on them. 1500 unless the host says otherwise.
     pub interface_mtu: u16,
@@ -87,6 +91,9 @@ pub struct Config {
     /// are clamped to what the stream table can hold. The idle timeout is not part of it: it is the fixed [`IDLE_TIMEOUT`].
     pub credit: CreditRecord,
 }
+
+/// The default [`Config::send_window`] (1.25 MiB).
+pub const DEFAULT_SEND_WINDOW: u64 = 1_310_720;
 
 impl Config {
     /// The defaults.
@@ -105,6 +112,7 @@ impl Config {
             gate_slack: None,
             ack_every: None,
             interface_mtu: 1500,
+            send_window: DEFAULT_SEND_WINDOW,
             credit: credit_for_streams(&stream::Config::new(false)),
         }
     }

@@ -54,6 +54,9 @@ pub struct Limits {
     /// The pool is charged the window of a stream from its first byte, so a raised window needs a raised
     /// `pool_chunks` to keep as many streams busy at once.
     pub stream_window: u64,
+    /// The most data a session keeps written and unacknowledged, over all its streams (default 1,310,720, 1.25 MiB);
+    /// a path whose bandwidth times round trip is larger needs a larger value.
+    pub send_window: u64,
     /// The most streams the peer may have open at once on a session (at most 64).
     pub streams: u16,
     /// The most streams the peer may open that the application has not accepted, per session.
@@ -68,6 +71,7 @@ impl Default for Limits {
             connections: 1024,
             pool_chunks: 512,
             stream_window: 1_310_720,
+            send_window: 1_310_720,
             streams: 64,
             accept_streams: 64,
             accept_sessions: 64,
@@ -84,6 +88,7 @@ impl Limits {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
             && (8..=65_536).contains(&self.pool_chunks)
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
+            && (16 * 1024..=1 << 30).contains(&self.send_window)
             && (1..=64).contains(&self.streams)
             && self.accept_streams >= 1
             && self.accept_sessions >= 1;

@@ -30,6 +30,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     let mut ecfg = vinc_core::EndpointConfig::new(u64::from_le_bytes(seed));
     ecfg.conn.max_gso = cfg.max_gso.max(1);
     ecfg.conn.interface_mtu = cfg.mtu;
+    ecfg.conn.send_window = cfg.limits.send_window;
     ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
     let (drbg, identity) = (Drbg::new(&rnd), cfg.identity.local()?);
     let mut ep = AnyEp::new(

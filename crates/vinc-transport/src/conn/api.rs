@@ -169,11 +169,11 @@ conn_impl! {
         }
     }
 
-    /// How much written data may wait for its acknowledgement at once: the smaller of the window the peer granted
-    /// and `max(192 KiB, 1.5 x the congestion window)`.
+    /// How much written data may wait for its acknowledgement at once, over all streams: the smaller of
+    /// [`Config::send_window`] and `max(192 KiB, 1.5 x the congestion window)`. The window the peer granted bounds
+    /// each stream on its own.
     pub(super) fn send_buffer_cap(&self) -> u64 {
-        let window = self.peer_credit.window_bytes();
-        window.min(BUFFER_FLOOR.max(self.rec.cwnd().saturating_mul(3) / 2))
+        self.cfg.send_window.min(BUFFER_FLOOR.max(self.rec.cwnd().saturating_mul(3) / 2))
     }
 
     /// Buffer bytes for sending on a stream; returns how many were accepted (0 when the peer's credit, the pool,

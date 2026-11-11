@@ -85,7 +85,8 @@ pub use api::ExtensionError;
 #[cfg(feature = "trace")]
 pub use cid::trace::{CidTable, CidView};
 pub use config::{
-    ClientParams, Config, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo, ServerParams, Stats,
+    ClientParams, Config, DEFAULT_SEND_WINDOW, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo,
+    ServerParams, Stats,
 };
 pub use event::{CloseReason, Drop, Event, code};
 pub use held::{Held, Shared};
