@@ -277,3 +277,28 @@ async fn a_revoked_peer_loses_every_session_and_stays_out() {
     })
     .await;
 }
+
+/// A peer that dialed while revoked is let in on its next dial once the revocation is lifted: the deny the endpoint
+/// cached for it then (30 s) goes with the revocation.
+#[nuclei::test]
+async fn an_unrevoked_peer_is_admitted_at_once_after_a_denied_dial() {
+    let server = node().await;
+    let client = client().await;
+    within(20, async {
+        server.revoke(&client.id()).await.unwrap();
+        if let Ok(refused) = client.connect(server.addr(), ECHO).await {
+            let why = refused.closed().await;
+            assert!(
+                matches!(why.kind(), ErrorKind::Closed { .. } | ErrorKind::Refused),
+                "a session with a revoked peer came up: {why:?}"
+            );
+        }
+        assert!(server.unrevoke(&client.id()));
+        let c = client.connect(server.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = c.open_bi().await.unwrap();
+        tx.write_all(b"back").await.unwrap();
+        tx.finish().await.unwrap();
+        assert_eq!(rx.read_to_end(64).await.unwrap(), b"back");
+    })
+    .await;
+}
