@@ -29,7 +29,7 @@ pub const MAX_CONNECTIONS: usize = 65_536;
 /// The stream slots of a session, both directions of opening counted.
 pub const STREAMS: usize = 72;
 /// The chunk entries of one stream half.
-pub const RING: usize = 65;
+pub const RING: usize = 81;
 pub(crate) const FLIGHT: usize = vinc_transport::recovery::SENT_PACKETS;
 pub(crate) const PATHS: usize = 4;
 pub(crate) const PREKEYS: usize = 8;
@@ -49,8 +49,10 @@ pub struct Limits {
     /// The 16 KiB chunks one session may hold for its streams and datagrams (at least 8). The default of 512 is 8 MiB:
     /// the pool of every session is reserved at start, so raise it for a few busy sessions, not for thousands.
     pub pool_chunks: usize,
-    /// The receive window of each stream in bytes. The pool must cover the window of every stream the peer may open at
-    /// once (`streams` times this), or the peer's extra streams are refused as busy.
+    /// The receive window of each stream in bytes, at most `(RING - 1) * 16 KiB`, which is the default 1,310,720 (1.25
+    /// MiB): a stream moves at most one window per round trip, so on a 150 ms path one stream tops out at 8.7 MB/s.
+    /// The pool is charged the window of a stream from its first byte, so a raised window needs a raised
+    /// `pool_chunks` to keep as many streams busy at once.
     pub stream_window: u64,
     /// The most streams the peer may have open at once on a session (at most 64).
     pub streams: u16,
@@ -65,7 +67,7 @@ impl Default for Limits {
         Self {
             connections: 1024,
             pool_chunks: 512,
-            stream_window: 256 * 1024,
+            stream_window: 1_310_720,
             streams: 64,
             accept_streams: 64,
             accept_sessions: 64,
