@@ -56,7 +56,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.node_tgr = peak;
     }
 
-    /// Say which relays a session rides (their carriers are kept checked).
+    /// Whether the carrier of `relay` is kept checked besides the home carrier (the node has a session).
+    pub fn is_kept_checked(&self, relay: usize) -> bool {
+        self.rly.get(relay).is_some_and(|r| r.rides)
+    }
+
+    /// Say whether the carrier of `relay` is kept checked besides the home carrier (the node has a session).
     pub fn set_rides(&mut self, relay: usize, rides: bool) {
         if let Some(r) = self.rly.get_mut(relay) {
             r.rides = rides;

@@ -422,18 +422,11 @@ drive_impl! {
         if let Some(n) = ep.node() {
             self.set_node_rtt(n.tgr.max(n.lrtt), n.tgr);
         }
-        let mut rides = [false; R];
-        for s in self.sess.iter().flatten() {
-            let Some(st) = ep.stats(s.id) else { continue };
-            if let Some((_, remote)) = st.route
-                && let Some((r, _)) = self.path_parts(&remote)
-                && let Some(x) = rides.get_mut(r)
-            {
-                *x = true;
-            }
-        }
-        for (i, r) in rides.iter().enumerate() {
-            self.set_rides(i, *r);
+        // A node with any session keeps every open carrier checked: a carrier nobody rides now is the way back when a
+        // direct path dies, and a silent one must be found dead before that day.
+        let any_session = ep.node().is_some_and(|n| n.sessions > 0);
+        for i in 0..R {
+            self.set_rides(i, any_session);
         }
         self.tick(now, env, wall_ms);
         // DIAL_PRUNE: pending dials keep only the sessions still in handshake; a dial that ended drops its lookup.

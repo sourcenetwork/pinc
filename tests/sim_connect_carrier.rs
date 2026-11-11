@@ -224,6 +224,37 @@ fn the_lease_converges_below_the_middlebox_timeout_then_a_stale_send_resets_a_ca
 }
 
 #[test]
+fn a_carrier_nobody_rides_is_checked_while_the_node_has_a_session() {
+    big(|| {
+        let mut w = World::new(42);
+        let (_r1, rs1) = w.relay(1, relay_ip(10));
+        let (_r2, rs2) = w.relay(2, relay_ip(20));
+        let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs1, rs2]));
+        let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs1, rs2]));
+        w.run(secs(6));
+        // No session yet: the carrier of the relay that is not the home is not kept checked.
+        assert!(!w.client(a).conn.is_kept_checked(1), "{}", w.dump(a));
+        // A session on a direct path, riding no relay: every carrier is kept checked from now on.
+        let baddr = w.client(b).addr;
+        w.dial(secs(6), a, b, vec![baddr]);
+        w.run(secs(20));
+        let s = w.connected(a).expect("connected");
+        assert!(
+            w.client(a)
+                .session_stats(s)
+                .is_some_and(|st| st.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r))),
+            "the session runs on the direct path: {}",
+            w.dump(a)
+        );
+        assert!(
+            w.client(a).conn.is_kept_checked(0) && w.client(a).conn.is_kept_checked(1),
+            "{}",
+            w.dump(a)
+        );
+    });
+}
+
+#[test]
 fn the_home_moves_to_the_second_relay_when_the_first_dies() {
     big(|| {
         use vinc_sim::NatKind;

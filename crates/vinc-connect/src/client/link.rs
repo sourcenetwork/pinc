@@ -11,8 +11,8 @@
 //! - **Dial watchdog.** A dial that has not opened `max(8 s, 8 x rtt)` after it started (never more than 30 s) is
 //!   closed and tried again at once. `rtt` is the larger of the node's two round-trip figures.
 //! - **Keepalive (KEEP_SENSE).** A silent open carrier is checked after 30 s on a phone or within 10 minutes of a
-//!   carrier dying silently, and after 65 s otherwise. Only the home carrier is checked for its own sake; another
-//!   carrier is checked only while a session rides it.
+//!   carrier dying silently, and after 65 s otherwise. The home carrier is checked for its own sake; another
+//!   carrier is checked while the node has any session.
 //! - **Learned keepalive (KEEP_LEARN).** When enabled, every carrier that dies silently sets `keep_iv` to half the
 //!   silence it had endured (at least 15 s, never rising above half of an earlier value); every keepalive wait is
 //!   then at most `keep_iv`.
@@ -121,7 +121,7 @@ pub struct Ctx {
     pub rtt: u64,
     /// A UDP datagram was ever heard: the lease rules do not apply.
     pub udp_any: bool,
-    /// A session rides this carrier.
+    /// The node has a session, so this carrier is worth keeping checked.
     pub rides: bool,
     /// Frames wait for this carrier to open.
     pub queued: bool,
