@@ -849,6 +849,14 @@ where
         self.settle(now);
     }
 
+    /// Put `hints` (at most 64 bytes) in this node's record and publish it again. False if they are too long.
+    pub fn set_hints(&mut self, now: Nanos, hints: &[u8]) -> bool {
+        self.begin(now);
+        let ok = self.conn.set_hints(hints);
+        self.settle(now);
+        ok
+    }
+
     /// Ask the relays for `peer`'s record.
     pub fn lookup(&mut self, now: Nanos, peer: &vinc_crypto::NodeId) {
         self.begin(now);

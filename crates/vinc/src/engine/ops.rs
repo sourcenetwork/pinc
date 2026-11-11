@@ -55,12 +55,15 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             Ok(session) => {
                 // The first flight is queued: the future that started the dial sends it.
                 self.dirty = true;
+                let deadline = now.saturating_add(self.connect_timeout);
+                self.deadlines.insert(deadline);
                 self.dials.insert(
                     session,
                     Dial {
                         node,
                         alpn: key,
                         result: None,
+                        deadline,
                     },
                 );
                 self.dial_by_peer.insert((node, key), session);
@@ -497,5 +500,94 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(t) = self.driver {
             self.standby.notify(t);
         }
+    }
+
+    // ---- records and lookups ----
+
+    /// Give up the dials whose deadline passed: they fail with a timeout and their session is closed.
+    pub(super) fn expire_dials(&mut self, now: u64) {
+        let due: Vec<SessionId> = self
+            .dials
+            .iter()
+            .filter(|(_, d)| d.result.is_none() && d.deadline <= now)
+            .map(|(s, _)| *s)
+            .collect();
+        for session in due {
+            self.fail_dial(now, session, Error::new(ErrorKind::TimedOut, "the peer did not answer in time"));
+        }
+    }
+
+    /// End the dial of `session` with `err` and close its session.
+    fn fail_dial(&mut self, now: u64, session: SessionId, err: Error) {
+        if let Some(d) = self.dials.get(&session) {
+            self.dial_by_peer.remove(&(d.node, d.alpn));
+        }
+        self.dial_done(session, Err(err));
+        let _ = self.cmd(now, || Command::Close { session, error: 0 });
+    }
+
+    /// The addresses this node can be reached at besides the one it is bound to: those the relays reported.
+    pub(crate) fn candidates(&self) -> Vec<SocketAddr> {
+        let any = SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), 0);
+        let mut c = [any; vinc_connect::record::MAX_ADDRS];
+        let n = self.node.connectivity().candidates(&mut c);
+        c.get(..n).unwrap_or_default().to_vec()
+    }
+
+    /// Put `hints` in the record the relays hold for this node.
+    pub(crate) fn set_hints(&mut self, now: u64, hints: &[u8]) {
+        if self.node.set_hints(now, hints) {
+            self.dirty = true;
+            self.wake_driver();
+        }
+    }
+
+    /// Ask the relays for the record of `peer`.
+    pub(crate) fn lookup_start(&mut self, now: u64, peer: &NodeId) {
+        self.node.lookup(now, peer);
+        self.dirty = true;
+    }
+
+    /// A notice of the connectivity layer: an answer to a lookup wakes the futures that wait for one. A dial to a peer
+    /// no relay knows yet is not ended by the answer, since the peer may publish a moment later: its deadline ends it.
+    pub(super) fn on_notice(&mut self, n: &vinc_connect::client::Notice) {
+        use vinc_connect::client::Notice;
+        match n {
+            Notice::Found(_) => {}
+            Notice::Missing(p) | Notice::BadRecord(p) => {
+                if self.lookup_failed.len() >= 16 {
+                    self.lookup_failed.pop_front();
+                }
+                self.lookup_failed.push_back(*p);
+            }
+            _ => return,
+        }
+        self.wake_g(GKey::Lookup);
+    }
+
+    /// The verified record a relay found for `peer`, or that it has none, or a timeout at `deadline`, else a wait.
+    pub(crate) fn lookup_poll(
+        &mut self,
+        peer: &NodeId,
+        deadline: u64,
+        now: u64,
+    ) -> Try<Result<Option<crate::records::PeerRecord>>> {
+        if let Some(f) = self.node.connectivity().found(peer) {
+            return Try::Done(Ok(Some(crate::records::PeerRecord {
+                node: *peer,
+                seq: f.seq,
+                addrs: f.addrs().collect(),
+                hints: f.hints().to_vec(),
+            })));
+        }
+        if let Some(at) = self.lookup_failed.iter().position(|p| p == peer) {
+            self.lookup_failed.remove(at);
+            return Try::Done(Ok(None));
+        }
+        if now >= deadline {
+            return Try::Done(Err(Error::new(ErrorKind::TimedOut, "the relays did not answer in time")));
+        }
+        self.deadlines.insert(deadline);
+        Try::Wait(Wait::G(GKey::Lookup))
     }
 }

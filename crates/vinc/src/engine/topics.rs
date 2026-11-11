@@ -54,6 +54,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.dirty = true;
             }
             NodeEvent::Member(_) => self.neighbors_dirty = true,
+            NodeEvent::Connect(n) => self.on_notice(&n),
             NodeEvent::Lost { count } => self.lost = self.lost.saturating_add(count),
             _ => {}
         }
@@ -222,7 +223,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             }
         }
         if woke {
+            self.expire_dials(now);
             self.wake_g(GKey::Topic);
+            self.wake_g(GKey::Lookup);
         }
     }
 

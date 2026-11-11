@@ -287,3 +287,91 @@ async fn endpoints_that_know_only_a_relay_reach_each_other_and_move_to_a_direct_
 async fn the_same_over_a_websocket_carrier_the_facade_frames_itself() {
     reach_through_the_relay(|rig| Relay::new(rig.id()).with_udp(rig.addr).with_ws(rig.addr)).await;
 }
+
+/// An endpoint that knows only the relay of `rig`, driven by its own task.
+macro_rules! on_the_relay {
+    ($rig:expr, $seed:expr, $timeout:expr) => {{
+        let relay = Relay::new($rig.id()).with_udp($rig.addr).with_tcp($rig.addr);
+        let ep = relay_endpoint!(
+            vinc_common::builder()
+                .seed(&[$seed; 32])
+                .unwrap()
+                .alpn(ECHO)
+                .relays([relay])
+                .connect_timeout($timeout),
+            $rig
+        );
+        let run = ep.clone();
+        nuclei::spawn_local(async move {
+            let _ = run.run().await;
+        })
+        .detach();
+        ep
+    }};
+}
+
+#[nuclei::test]
+async fn a_peer_is_found_through_the_relay_by_its_id_with_its_hints_and_dialed_by_it() {
+    let rig = Rig::start().await;
+    let a = on_the_relay!(rig, 1, Duration::from_secs(10));
+    let b = on_the_relay!(rig, 2, Duration::from_secs(10));
+    let server = b.clone();
+    nuclei::spawn_local(async move {
+        while let Some(i) = server.accept().await {
+            nuclei::spawn_local(serve_conn(i.into_connection())).detach();
+        }
+    })
+    .detach();
+    within(120, async {
+        let pointer = [0xAB; 38];
+        b.set_hints(&pointer).unwrap();
+        assert_eq!(
+            b.set_hints(&[0; 65]).unwrap_err().kind(),
+            vinc::ErrorKind::TooLarge,
+            "more than 64 bytes of hints are refused"
+        );
+        // Once B's record is at the relay, A reads it back, hints included.
+        let (a2, bid) = (a.clone(), b.id());
+        eventually(60, "the relay holds B's record with its hints", || {
+            let (a2, pointer) = (a2.clone(), pointer);
+            async move {
+                a2.lookup(&bid)
+                    .await
+                    .is_ok_and(|r| r.is_some_and(|r| r.hints == pointer && r.node == bid))
+            }
+        })
+        .await;
+        // The id is all A needs to dial B.
+        let conn = a.connect(b.id(), ECHO).await.unwrap();
+        assert_eq!(conn.remote(), b.id());
+        let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+        tx.write_all(b"by id").await.unwrap();
+        let mut got = [0u8; 5];
+        rx.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got, b"by id");
+    })
+    .await;
+}
+
+#[nuclei::test]
+async fn a_dial_to_an_id_no_relay_knows_fails_inside_the_deadline() {
+    let rig = Rig::start().await;
+    let a = on_the_relay!(rig, 1, Duration::from_secs(2));
+    within(120, async {
+        let rig2 = Rc::clone(&rig);
+        eventually(60, "the carrier is open at the relay", || {
+            let rig2 = Rc::clone(&rig2);
+            async move { rig2.carriers_open() >= 1 }
+        })
+        .await;
+        let stranger = vinc_crypto::Keypair::from_seed(vinc_crypto::IdentityAlg::Ed25519, &[9; 32])
+            .unwrap()
+            .node_id();
+        assert!(a.lookup(&stranger).await.unwrap().is_none(), "no relay has a record of it");
+        let t0 = Instant::now();
+        let e = a.connect(stranger, ECHO).await.unwrap_err();
+        assert_eq!(e.kind(), vinc::ErrorKind::TimedOut, "{e:?}");
+        assert!(t0.elapsed() < Duration::from_secs(5), "the dial outlived its deadline");
+    })
+    .await;
+}

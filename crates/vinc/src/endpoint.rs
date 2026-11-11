@@ -76,9 +76,13 @@ impl Vinc {
             local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
             carriers: NoCarriers,
             hub: false,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
 }
+
+/// How long a dial may take unless [`Builder::connect_timeout`] says otherwise.
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Collects the settings of an endpoint. The key store `S`, the discovery `D` and the access hook `A` are types the
 /// setters change; the defaults are an in-memory store, no discovery and a hook that admits everyone.
@@ -94,6 +98,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarri
     local: SocketAddr,
     carriers: C,
     hub: bool,
+    connect_timeout: Duration,
 }
 
 impl<S, D, A, C> core::fmt::Debug for Builder<S, D, A, C> {
@@ -137,6 +142,7 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             local: self.local,
             carriers: self.carriers,
             hub: self.hub,
+            connect_timeout: self.connect_timeout,
         }
     }
 
@@ -196,6 +202,7 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             local: self.local,
             carriers: CarrierFns::new(open, read, write, close),
             hub: self.hub,
+            connect_timeout: self.connect_timeout,
         }
     }
 
@@ -214,7 +221,16 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             local: self.local,
             carriers: self.carriers,
             hub: self.hub,
+            connect_timeout: self.connect_timeout,
         }
+    }
+
+    /// How long a [`connect`](Endpoint::connect) may take from the call to an open session, the lookup of the peer
+    /// included (default 20 s). A dial that is not up by then fails with [`crate::ErrorKind::TimedOut`].
+    #[must_use]
+    pub const fn connect_timeout(mut self, wait: Duration) -> Self {
+        self.connect_timeout = wait;
+        self
     }
 
     /// Run this endpoint as a hub: the relays of the other endpoints are hubs, and a hub keeps the roster of its members
@@ -247,6 +263,7 @@ impl<S, D, A, C> Builder<S, D, A, C> {
             local: self.local,
             carriers: self.carriers,
             hub: self.hub,
+            connect_timeout: self.connect_timeout,
         }
     }
 
@@ -358,6 +375,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
             local,
             carriers,
             hub,
+            connect_timeout,
         } = self;
         if relays.len() > RELAYS {
             return Err(Error::config("at most four relays"));
@@ -375,6 +393,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
             locals: interfaces(local),
             relays: relays.clone(),
             hub,
+            connect_timeout: u64::try_from(connect_timeout.as_nanos()).unwrap_or(u64::MAX),
         };
         let core = build(cfg, T0)?;
         Ok((
@@ -382,6 +401,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers> Builder<K, D, A, C> {
                 node,
                 public,
                 discovery,
+                home: relays.first().map_or(node, |r| r.id),
                 relays,
                 max_message: limits.topic_message,
             },
@@ -402,6 +422,7 @@ struct Parts<D> {
     discovery: D,
     relays: Vec<Relay>,
     max_message: usize,
+    home: NodeId,
 }
 
 impl<D> Parts<D> {
@@ -413,6 +434,7 @@ impl<D> Parts<D> {
             discovery: self.discovery,
             relays: self.relays.iter().map(Relay::url).collect(),
             max_message: self.max_message,
+            home: self.home,
         }
     }
 }
@@ -434,6 +456,8 @@ pub(crate) struct Inner<H: Hosted, D> {
     pub(crate) discovery: D,
     relays: Vec<String>,
     pub(crate) max_message: usize,
+    /// The node whose relay the record names as home: the first relay, else this node.
+    home: NodeId,
 }
 
 /// An endpoint: dial, accept, sign, and reach the layers above.
@@ -717,6 +741,8 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
             .map_err(|_| Error::new(ErrorKind::Busy, "the hints are being read"))?;
         h.clear();
         h.extend_from_slice(hints);
+        drop(h);
+        self.push_hints(hints);
         Ok(())
     }
 
@@ -741,9 +767,17 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
             .try_borrow()
             .map(|h| h.clone())
             .map_err(|_| Error::new(ErrorKind::Busy, "the hints are being changed"))?;
-        let addrs = self.addr().direct;
+        let mut addrs = self.addr().direct;
+        if self.has_relays() {
+            let seen = self.0.shared.run(|core, _| Try::Done(core.candidates())).await;
+            for a in seen {
+                if !addrs.contains(&a) {
+                    addrs.push(a);
+                }
+            }
+        }
         let fields = RecordFields {
-            home: self.id(),
+            home: self.0.home,
             seq,
             reach: Reach::Public,
             addrs: addrs.get(..addrs.len().min(MAX_ADDRS)).unwrap_or_default(),
@@ -774,9 +808,76 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
     /// # Errors
     /// [`crate::ErrorKind::TimedOut`] if the store does not answer within [`LOOKUP_WAIT`].
     pub async fn lookup(&self, node: &NodeId) -> Result<Option<PeerRecord>> {
-        self.within(LOOKUP_WAIT, self.0.discovery.find(node))
+        let stored = self
+            .within(LOOKUP_WAIT, self.0.discovery.find(node))
             .await
-            .ok_or(Error::new(ErrorKind::TimedOut, "the rendezvous did not answer in time"))
+            .ok_or(Error::new(ErrorKind::TimedOut, "the rendezvous did not answer in time"))?;
+        if stored.is_some() || !self.has_relays() {
+            return Ok(stored);
+        }
+        self.relay_record(node).await
+    }
+}
+
+impl<H: Hosted> Endpoint<H, NoDiscovery> {
+    /// Set the hints this node's record carries: at most [`MAX_HINTS`] bytes the application gives meaning to. The
+    /// relays hold the record and republish it as the addresses change; with no relay it is kept nowhere.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::TooLarge`] for more than [`MAX_HINTS`] bytes; the hints are unchanged then.
+    pub fn set_hints(&self, hints: &[u8]) -> Result<()> {
+        if hints.len() > MAX_HINTS {
+            return Err(Error::new(
+                ErrorKind::TooLarge,
+                "a record carries at most 64 bytes of hints",
+            ));
+        }
+        self.push_hints(hints);
+        Ok(())
+    }
+
+    /// The verified record of `node` that the relays hold, hints included. `None` if no relay has one that checks out.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::TimedOut`] if no relay answers within [`LOOKUP_WAIT`].
+    pub async fn lookup(&self, node: &NodeId) -> Result<Option<PeerRecord>> {
+        if self.has_relays() {
+            self.relay_record(node).await
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<H: Hosted, D: Discovery> Endpoint<H, D> {
+    fn has_relays(&self) -> bool {
+        !self.0.relays.is_empty()
+    }
+
+    /// Hand `hints` to the connectivity client, which puts them in the record the relays hold.
+    fn push_hints(&self, hints: &[u8]) {
+        let sh = &self.0.shared;
+        let now = sh.now();
+        if let Some(mut core) = sh.lock() {
+            core.set_hints(now, hints);
+        }
+    }
+
+    /// The record the relays hold for `node`: asked of the home relay, answered within [`LOOKUP_WAIT`].
+    async fn relay_record(&self, node: &NodeId) -> Result<Option<PeerRecord>> {
+        let (mut deadline, mut started) = (None, false);
+        let wait = u64::try_from(LOOKUP_WAIT.as_nanos()).unwrap_or(u64::MAX);
+        self.0
+            .shared
+            .run(|core, now| {
+                let at = *deadline.get_or_insert_with(|| now.saturating_add(wait));
+                if !started {
+                    started = true;
+                    core.lookup_start(now, node);
+                }
+                core.lookup_poll(node, at, now)
+            })
+            .await
     }
 }
 

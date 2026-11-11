@@ -103,6 +103,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub relays: Vec<Relay>,
     /// The endpoint is a hub of membership and broadcast.
     pub hub: bool,
+    /// How long a dial may take, in nanoseconds.
+    pub connect_timeout: u64,
 }
 
 /// What both the core and the handles of a session read.
@@ -144,6 +146,8 @@ pub(crate) enum GKey {
     Idle,
     /// A topic event was queued.
     Events,
+    /// A relay answered a lookup.
+    Lookup,
     /// The neighbours of a topic changed, or a deadline passed.
     Topic,
 }
@@ -176,6 +180,8 @@ struct Dial {
     node: NodeId,
     alpn: Alpn,
     result: Option<Result<Rc<SessInfo>>>,
+    /// When the dial gives up, in the endpoint's clock.
+    deadline: u64,
 }
 
 struct Route {
@@ -218,6 +224,10 @@ pub(crate) struct Core<S, A> {
     topics: BTreeMap<Vec<u8>, Vec<NodeId>>,
     /// The sessions of the hub protocol, by session, with their peer.
     hub_sessions: RapidHashMap<SessionId, NodeId>,
+    /// How long a dial may take, in nanoseconds.
+    connect_timeout: u64,
+    /// The peers a relay had no record for or sent a bad one for, oldest first.
+    lookup_failed: VecDeque<NodeId>,
     neighbors_dirty: bool,
     look_at: u64,
     /// The instants futures wait for: a deadline passing wakes them to look again.
@@ -256,6 +266,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             lost: 0,
             topics: BTreeMap::new(),
             hub_sessions: RapidHashMap::default(),
+            connect_timeout: cfg.connect_timeout,
+            lookup_failed: VecDeque::new(),
             neighbors_dirty: false,
             look_at: 0,
             deadlines: BTreeSet::new(),
