@@ -1,0 +1,91 @@
+# The distributed test harness: one binary that builds an emulated or real network, runs VINC, iroh and rust-libp2p
+# nodes on it, injects faults, measures, and serves a dashboard. A workspace of its own, outside the library's, so the
+# comparators, their runtime (tokio) and their C code (ring, aws-lc-sys) never enter the library's dependency graph or
+# lockfile. The VINC crates come in by path; every dependency is declared once, below.
+[workspace]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Theo M. Bulut <theo@source.network>"]
+edition = "2024"
+rust-version = "1.99"
+repository = "https://github.com/sourcenetwork/vinc"
+publish = false
+
+[workspace.dependencies]
+vinc = { path = "../crates/vinc", version = "0.1.0" }
+vinc-keystore = { path = "../crates/vinc-keystore", version = "0.1.0" }
+
+nuclei = "0.5.8"
+tokio = { version = "1.54.1", default-features = false }
+futures = { version = "0.3.34", default-features = false }
+serde = { version = "1.0.229", default-features = false }
+serde_json = "1.0.154"
+toml = "1.2.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false }
+# The dashboard's HTTP server.
+hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+# The libraries VINC is measured against.
+iroh = "1.4.1"
+libp2p = { version = "0.57.1", default-features = false }
+libp2p-stream = "0.5.0-alpha"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "warn"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# The node programs are measured: the same optimisation as the library's own benchmarks.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[package]
+name = "vinc-distributed"
+description = "The distributed test harness: VINC, iroh and rust-libp2p nodes on an emulated or real network, with faults, kernel metrics and a live dashboard"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+vinc = { workspace = true }
+vinc-keystore = { workspace = true }
+nuclei = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "process", "signal", "fs"] }
+futures = { workspace = true, features = ["std", "async-await"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "std", "ansi"] }
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+iroh = { workspace = true }
+libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros"] }
+libp2p-stream = { workspace = true }
+
+[lints]
+workspace = true

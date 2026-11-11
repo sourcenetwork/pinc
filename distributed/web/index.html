@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vinc distributed</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script>
+  // The theme (from ?theme= on a shared link, else the saved one) applies before the first paint, so a dark page never
+  // flashes light.
+  try {
+    const t = new URLSearchParams(location.search).get("theme") || localStorage.getItem("vd-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (_) {}
+</script>
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <a class="mark" href="#/compose" aria-label="vinc distributed, home">
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="4" cy="10" r="2.2"/><circle cx="16" cy="4.5" r="2.2"/><circle cx="16" cy="15.5" r="2.2"/><path d="M6 9.2 14 5.3M6 10.8l8 3.9M16 6.7v6.6"/></svg>
+    <span class="mark-name">vinc</span><span class="mark-sub">distributed</span>
+  </a>
+  <nav class="tabs" aria-label="Views">
+    <a href="#/compose" data-view="compose"><kbd>1</kbd>Compose</a>
+    <a href="#/live" data-view="live"><kbd>2</kbd>Live</a>
+    <a href="#/results" data-view="results"><kbd>3</kbd>Results</a>
+    <a href="#/host" data-view="host"><kbd>4</kbd>Host</a>
+  </nav>
+  <div class="runstate" id="runstate" aria-live="polite"><span class="dot" aria-hidden="true"></span><span class="txt">Connecting</span></div>
+  <button class="theme" id="theme" type="button" title="Theme">Auto</button>
+</header>
+<main id="view" tabindex="-1"></main>
+</body>
+</html>

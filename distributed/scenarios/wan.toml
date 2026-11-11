@@ -1,0 +1,57 @@
+name = "wan"
+about = "Two nodes in two sites across a WAN: 50 ms round trip, 1% loss per packet each way, 100 Mbit/s each way."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 2
+memory_mib = 2048
+
+[[sites]]
+name = "east"
+pos = [120, 160]
+
+[[sites]]
+name = "west"
+pos = [520, 160]
+
+[[nodes]]
+name = "n1"
+site = "east"
+
+[[nodes]]
+name = "n2"
+site = "west"
+
+[[links]]
+a = "east"
+b = "west"
+shape = { delay_ms = 25, loss_pct = 1, rate_mbit = 100 }
+
+[workload]
+kind = "transport"
+timeout_s = 240
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "setup"
+count = 20
+
+[[workload.tests]]
+test = "resume"
+count = 20
+
+[[workload.tests]]
+test = "latency"
+size = 64
+round_trips = 100
+
+[[workload.tests]]
+test = "throughput"
+bytes = 8388608
+streams = 1
+
+[[workload.tests]]
+test = "throughput"
+bytes = 8388608
+streams = 16
