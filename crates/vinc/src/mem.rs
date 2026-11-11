@@ -56,8 +56,8 @@ pub struct Limits {
     /// The pool is charged the window of a stream from its first byte, so a raised window needs a raised
     /// `pool_chunks` to keep as many streams busy at once.
     pub stream_window: u64,
-    /// The most data a session keeps written and unacknowledged, over all its streams (default 1,310,720, 1.25 MiB);
-    /// a path whose bandwidth times round trip is larger needs a larger value.
+    /// The most data a session keeps written and unacknowledged, over all its streams (default 16 MiB): the smaller of
+    /// this and 1.5 times the congestion window, which is what binds on any path under about 1 Gbit/s at 100 ms.
     pub send_window: u64,
     /// The most streams the peer may have open at once on a session (at most 64).
     pub streams: u16,
@@ -78,7 +78,12 @@ impl Default for Limits {
             connections: 1024,
             pool_chunks: 512,
             stream_window: 1_310_720,
-            send_window: 1_310_720,
+            // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
+            // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
+            // whatever its congestion window. This is a deliberate departure from the reference's constant at the
+            // product surface only: the cap stays `min(send_window, max(192 KiB, 1.5 x cwnd))`, and below a congestion
+            // window of 873,813 bytes it is the same. Upgrade path: none needed; a host can set the reference's value.
+            send_window: 16 * 1024 * 1024,
             streams: 64,
             accept_streams: 64,
             accept_sessions: 64,

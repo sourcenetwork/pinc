@@ -1,63 +1,31 @@
-//! A long clean path: the packets in flight are bounded by the congestion window and the stream window, not by the
-//! size of the table of sent packets. A 150 ms round trip at 200 Mbit/s, the facade's sizes: a 32 MiB transfer on one
-//! stream at the rate the stream window allows.
+//! Long clean paths at the facade's defaults: the packets in flight are bounded by the congestion window and the
+//! windows of the streams, not by the table of sent packets, the send window or the pool. A 150 ms round trip at
+//! 200 Mbit/s and at 1 Gbit/s, one stream and 16, with the facade's sizes.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::cast_precision_loss,
     clippy::manual_assert_eq // a failing comparison of megabytes must not print them
 )]
 
 use vinc_crypto::IdentityAlg;
+use vinc_security::CreditRecord;
 use vinc_tests::*;
-use vinc_transport::conn::{DEFAULT_SEND_WINDOW, credit_for_streams};
 use vinc_transport::recovery::SENT_PACKETS;
-use vinc_transport::stream::{self, DEFAULT_INITIAL_WINDOW};
+use vinc_transport::stream;
 
-/// Chunk-ring entries per stream half of the facade: one more than the chunks of the default window.
-const RING_FACADE: usize = 81;
-/// Pool chunks: the table clamps a window to half the pool.
-const CHUNKS_FACADE: usize = 1024;
-const TRANSFER: usize = 32 << 20;
-
-fn store(client: bool) -> Store<RING_FACADE, SENT_PACKETS> {
-    Store::sized(CHUNKS_FACADE, &stream::Config::new(client))
-}
-
-#[test]
-fn a_150_ms_200_mbit_path_runs_at_the_rate_the_stream_window_allows() {
-    big_stack(|| {
-        let mut w = World::new(IdentityAlg::Ed25519);
-        w.cfg.credit = credit_for_streams(&stream::Config::new(false));
-        let (mut sa, mut sb) = (store(true), store(false));
-        let mut link = Params::new(75 * MS);
-        link.bps = 200_000_000;
-        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(7, link));
-        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
-        assert_eq!(net.a.conn.peer_credit().window_bytes(), DEFAULT_INITIAL_WINDOW);
-        let data = pattern(TRANSFER, 5);
-        let (elapsed, _) = bulk(&mut net, &data, 600 * SEC);
-        // The stream window over the round trip is 8.7 MB/s; a table of 128 sent packets holds 186 KB per round trip,
-        // 1.2 MB/s, and takes 27 s for this transfer. Half the window's rate is 8 s including the slow start.
-        assert!(
-            elapsed < 8 * SEC,
-            "32 MiB took {} ms, the window allows 8.7 MB/s (3.9 s and the slow start)",
-            elapsed / MS
-        );
-    });
-}
-
-/// `streams` bidirectional streams of `each` bytes sent at once from A; the time until B has every byte of all of them.
-fn many_streams(streams: usize, each: usize, send_window: u64) -> u64 {
+/// `streams` streams of `each` bytes at once from A on a clean path of `rtt_ms` round trip at `bps`, with the sizes of
+/// the facade and the limits `limits`; the virtual time until B has every byte.
+fn transfer(bps: u64, rtt_ms: u64, streams: usize, each: usize, limits: vinc::Limits) -> u64 {
     let mut w = World::new(IdentityAlg::Ed25519);
-    w.cfg.send_window = send_window;
-    w.cfg.credit = credit_for_streams(&stream::Config::new(false));
-    // The facade's default pool: 512 chunks of 16 KiB.
-    let mut sa = Store::<RING_FACADE, SENT_PACKETS>::sized(512, &stream::Config::new(true));
-    let mut sb = Store::<RING_FACADE, SENT_PACKETS>::sized(512, &stream::Config::new(false));
-    let mut link = Params::new(75 * MS);
-    link.bps = 200_000_000;
+    w.cfg.send_window = limits.send_window;
+    w.cfg.credit = CreditRecord::new(limits.stream_window, limits.streams, u16::MAX);
+    let mut sa = Store::<{ vinc::RING }, SENT_PACKETS>::sized(limits.pool_chunks, &stream::Config::new(true));
+    let mut sb = Store::<{ vinc::RING }, SENT_PACKETS>::sized(limits.pool_chunks, &stream::Config::new(false));
+    let mut link = Params::new(rtt_ms * MS / 2);
+    link.bps = bps;
     let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(7, link));
     assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
     let data = pattern(each, 9);
@@ -68,7 +36,7 @@ fn many_streams(streams: usize, each: usize, send_window: u64) -> u64 {
     let finished = net.run(net.now + 600 * SEC, |n| {
         for (k, id) in ids.iter().enumerate() {
             while off[k] < data.len() {
-                let end = (off[k] + 64 * 1024).min(data.len());
+                let end = (off[k] + 256 * 1024).min(data.len());
                 let w = n.a.conn.write(*id, &data[off[k]..end]).unwrap();
                 if w == 0 {
                     break;
@@ -89,32 +57,67 @@ fn many_streams(streams: usize, each: usize, send_window: u64) -> u64 {
     net.now - start
 }
 
+fn mib_s(total: usize, elapsed: u64) -> f64 {
+    (total as f64 / 1_048_576.0) / (elapsed as f64 / 1e9)
+}
+
+/// Before the send window, the stream windows and the pool were raised these took 6.7, 6.9, 7.6 and 7.9 MiB/s: one
+/// window of data per round trip, 1.25 MiB over 150 ms. The link allows 23.8 MiB/s and 119 MiB/s, and the transfers
+/// are short enough for the slow start to take a good part of them.
 #[test]
-fn the_send_window_bounds_the_streams_together_and_a_raised_one_lets_them_fill_the_congestion_window() {
+fn the_facade_defaults_fill_long_paths() {
     big_stack(|| {
-        // 16 streams of 2 MiB: the 32 MiB of the single stream. With the default send window the written data waiting
-        // for acknowledgement is 1.25 MiB at most, one window per round trip: 3.9 s and the slow start. With 8 MiB
-        // the streams together fill the congestion window, up to the 200 Mbit/s of the path.
-        let default = many_streams(16, 2 << 20, DEFAULT_SEND_WINDOW);
+        let l = vinc::Limits::default;
+        for (bps, total, one, many, label) in [
+            (200_000_000u64, 32usize << 20, 10.0, 10.0, "200 Mbit/s"),
+            (1_000_000_000, 128 << 20, 16.0, 32.0, "1 Gbit/s"),
+        ] {
+            for (streams, floor) in [(1usize, one), (16, many)] {
+                let elapsed = transfer(bps, 150, streams, total / streams, l());
+                let rate = mib_s(total, elapsed);
+                assert!(
+                    rate >= floor,
+                    "{label} 150 ms, {streams} streams: {rate:.1} MiB/s, expected at least {floor}"
+                );
+            }
+        }
+    });
+}
+
+/// The transport's default is the reference's cap, and the facade's is not: the same 16 streams on the same path.
+#[test]
+fn the_transports_send_window_is_the_references_and_the_facades_lets_the_congestion_window_bind() {
+    use vinc_transport::conn::{Config, DEFAULT_SEND_WINDOW};
+    big_stack(|| {
+        assert_eq!(DEFAULT_SEND_WINDOW, 1_310_720);
+        assert_eq!(Config::new().send_window, DEFAULT_SEND_WINDOW);
+        assert_eq!(vinc::Limits::default().send_window, 16 << 20);
+        let reference = vinc::Limits {
+            send_window: DEFAULT_SEND_WINDOW,
+            ..vinc::Limits::default()
+        };
+        let held = transfer(200_000_000, 150, 16, 2 << 20, reference);
+        let free = transfer(200_000_000, 150, 16, 2 << 20, vinc::Limits::default());
+        // 1.25 MiB over 150 ms is 8.3 MiB/s: 32 MiB take 3.8 s and the slow start.
         assert!(
-            (3800 * MS..8 * SEC).contains(&default),
-            "32 MiB over 16 streams took {} ms with the default send window",
-            default / MS
+            held >= 3800 * MS,
+            "32 MiB over 16 streams took {} ms with a send window of 1.25 MiB",
+            held / MS
         );
-        let raised = many_streams(16, 2 << 20, 8 << 20);
         assert!(
-            raised < 3500 * MS,
-            "32 MiB over 16 streams took {} ms with 8 MiB",
-            raised / MS
+            held * 3 >= free * 4,
+            "the facade's default took {} ms against {} ms",
+            free / MS,
+            held / MS
         );
     });
 }
 
 #[test]
-fn the_facades_default_pool_carries_every_stream_the_connection_opens() {
+fn the_default_pool_carries_every_stream_the_connection_opens() {
     big_stack(|| {
-        // 32 streams open at once with 1 MiB each, each granted the 1.25 MiB window: none is refused and all arrive.
-        let elapsed = many_streams(32, 1 << 20, DEFAULT_SEND_WINDOW);
-        assert!(elapsed < 8 * SEC, "32 MiB over 32 streams took {} ms", elapsed / MS);
+        // 32 streams of 1 MiB at once, each granted the window of 1.25 MiB: none is refused and all arrive.
+        let elapsed = transfer(200_000_000, 150, 32, 1 << 20, vinc::Limits::default());
+        assert!(elapsed < 4 * SEC, "32 MiB over 32 streams took {} ms", elapsed / MS);
     });
 }

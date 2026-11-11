@@ -92,7 +92,7 @@ pub struct Config {
     pub credit: CreditRecord,
 }
 
-/// The default [`Config::send_window`] (1.25 MiB).
+/// The default [`Config::send_window`] (1.25 MiB, the figure the reference's rule uses).
 pub const DEFAULT_SEND_WINDOW: u64 = 1_310_720;
 
 impl Config {
