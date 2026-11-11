@@ -24,13 +24,14 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Relay, Stats, Store, Udp};
+use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Reason, Relay, Stats, Store, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity};
 use vinc_common::{client, eventually, within};
 use vinc_connect::carrier::session::{ALPN, Poll};
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role, WsFrame};
 use vinc_connect::carrier::{DnsAnswer, Frame, MAX_FRAME_LEN, ProtectedCarrier};
 use vinc_connect::record::{self, Reach, RecordFields};
+use vinc_connect::relay::datagram::Datagram;
 use vinc_connect::relay::{Quota, sleep};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
 use vinc_security::{
@@ -70,6 +71,10 @@ struct TestRelay {
 }
 
 async fn start(seed: u8, limits: Limits, store: MemStore) -> TestRelay {
+    start_with(seed, limits, store, &[]).await
+}
+
+async fn start_with(seed: u8, limits: Limits, store: MemStore, peers: &[NodeId]) -> TestRelay {
     let listener = Rc::new(Handle::<TcpListener>::bind(vinc_common::lo()).await.unwrap());
     let addr = listener.get_ref().local_addr().unwrap();
     let sock = Rc::new(Handle::<UdpSocket>::bind(addr).await.unwrap());
@@ -78,9 +83,13 @@ async fn start(seed: u8, limits: Limits, store: MemStore) -> TestRelay {
     let base = wall_ns();
     let (k, l) = (Rc::clone(&kinds), Rc::clone(&listener));
     let (s1, s2) = (Rc::clone(&sock), Rc::clone(&sock));
-    let relay = Relay::builder()
+    let mut builder = Relay::builder()
         .identity(Identity::from_seed(&[seed; 32]).unwrap())
-        .limits(limits)
+        .limits(limits);
+    for p in peers {
+        builder = builder.peer(*p);
+    }
+    let relay = builder
         .store(store)
         .hub(addr, &[HUB])
         .build(
@@ -781,6 +790,168 @@ fn the_relay_holds_as_many_members_and_records_as_the_state_machine_allows() {
                 other => panic!("{other:?}"),
             }
             assert_eq!((r.stats)().refused_carriers_full, 0);
+        })
+    });
+}
+
+#[test]
+fn a_packet_crosses_between_a_member_and_a_peer_relay_both_ways() {
+    on_big_stack(|| {
+        within(60, async {
+            // the peer relay is played by a node the relay trusts as a relay; its member is a record homed there
+            let peer_kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0xb1; 32]).unwrap();
+            let r = start_with(0x7b, Limits::default(), MemStore::new(), &[peer_kp.node_id()]).await;
+            let mut peer = Member::connect(&r, 0xb1, CarrierKind::Tcp).await;
+            let mut a = Member::connect(&r, 0xa1, CarrierKind::Tcp).await;
+            a.publish(1).await;
+            let (far, far_record) = signed_record(0xb2, peer.id, 1);
+            peer.send(&Frame::Sync { record: &far_record }).await;
+            stats_where(&r, "both records stored", |s| s.records == 2).await;
+
+            // a member of this relay writes to a node homed at the peer: the relay forwards one hop
+            a.send(&Frame::Send {
+                dst: far,
+                flag: 5,
+                packet: b"to the far side",
+            })
+            .await;
+            // (the relay also replicates the record `a` published to its peer; that arrives first)
+            let forwarded = loop {
+                let frame = peer.recv().await.unwrap();
+                if matches!(decode(&frame), Frame::Forward { .. }) {
+                    break frame;
+                }
+            };
+            match decode(&forwarded) {
+                Frame::Forward { src, dst, flag, packet } => {
+                    assert_eq!((src, dst, flag, packet), (a.id, far, 5, &b"to the far side"[..]));
+                }
+                other => panic!("{other:?}"),
+            }
+            // and the peer forwards a packet for this relay's member, who receives it from the far node
+            peer.send(&Frame::Forward {
+                src: far,
+                dst: a.id,
+                flag: 6,
+                packet: b"from the far side",
+            })
+            .await;
+            match decode(&a.recv().await.unwrap()) {
+                Frame::Recv { src, flag, packet } | Frame::RecvNew { src, flag, packet, .. } => {
+                    assert_eq!((src, flag, packet), (far, 6, &b"from the far side"[..]));
+                }
+                other => panic!("{other:?}"),
+            }
+            let s = (r.stats)();
+            assert_eq!(s.machine.peer, 1);
+
+            // a packet that came from a peer is never sent on to another relay
+            peer.send(&Frame::Forward {
+                src: far,
+                dst: far,
+                flag: 0,
+                packet: b"loop",
+            })
+            .await;
+            stats_where(&r, "the loop is refused", |s| s.refused(Reason::NoRoute) == 1).await;
+            // a member may not speak the relay-to-relay frames
+            a.send(&Frame::Forward {
+                src: far,
+                dst: a.id,
+                flag: 0,
+                packet: b"forged",
+            })
+            .await;
+            stats_where(&r, "a member's forward is refused", |s| {
+                s.refused(Reason::UnexpectedFrame) == 1
+            })
+            .await;
+        })
+    });
+}
+
+#[test]
+fn packets_cross_the_hub_tunnel_up_and_down_between_a_udp_session_and_a_carrier() {
+    on_big_stack(|| {
+        within(60, async {
+            let r = start(0x7c, Limits::default(), MemStore::new()).await;
+            // member `a` is a facade endpoint with a validated UDP session to the relay; its socket is also used for
+            // the tunnel datagrams, and the datagrams the relay tunnels down to it are set aside
+            let sock = Rc::new(Handle::<UdpSocket>::bind(vinc_common::lo()).await.unwrap());
+            let down: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::default();
+            let (rs, ss, rd) = (Rc::clone(&sock), Rc::clone(&sock), Rc::clone(&down));
+            let ep = vinc::Vinc::builder()
+                .alpn(HUB)
+                .local_addr(sock.local_addr().unwrap())
+                .build(
+                    async move |buf: &mut [u8]| loop {
+                        let (n, from) = rs.recv_from(buf).await?;
+                        if buf.first().is_some_and(|b| *b < 0x40) {
+                            rd.borrow_mut().push_back(buf[..n].to_vec());
+                        } else {
+                            return Ok((n, from));
+                        }
+                    },
+                    async move |pkt: &[u8], to: SocketAddr| ss.send_to(pkt, to).await,
+                    async |at: Instant| nuclei::time::sleep_until_precise(at).await,
+                )
+                .unwrap();
+            let runner = ep.clone();
+            nuclei::spawn_local(async move {
+                let _ = runner.run().await;
+            })
+            .detach();
+            let _session = ep
+                .connect(vinc::NodeAddr::new(r.id).with_direct(r.addr), HUB)
+                .await
+                .unwrap();
+            stats_where(&r, "the hub holds the session", |s| s.hub_sessions == 1).await;
+            let mut b = Member::connect(&r, 0xc1, CarrierKind::Tcp).await;
+            b.publish(1).await;
+            stats_where(&r, "the carrier is up and its record stored", |s| {
+                s.carriers == 1 && s.records == 1
+            })
+            .await;
+
+            // up: a datagram on the session reaches the carrier of the destination
+            let mut buf = [0u8; 256];
+            let n = Datagram::Spu {
+                dst: b.id,
+                flag: 3,
+                packet: b"up the tunnel",
+            }
+            .encode(&mut buf)
+            .unwrap();
+            sock.send_to(&buf[..n], r.addr).await.unwrap();
+            let up = vinc_common::poll_drop(b.recv(), 2500)
+                .await
+                .unwrap_or_else(|| panic!("nothing came up the tunnel: {:?}", (r.stats)()))
+                .unwrap();
+            match decode(&up) {
+                Frame::Recv { src, flag, packet } | Frame::RecvNew { src, flag, packet, .. } => {
+                    assert_eq!((src, flag, packet), (ep.id(), 3, &b"up the tunnel"[..]));
+                }
+                other => panic!("{other:?}"),
+            }
+            // down: a packet for the member, who has no carrier, comes down the session as a tunnel datagram
+            b.send(&Frame::Send {
+                dst: ep.id(),
+                flag: 4,
+                packet: b"down the tunnel",
+            })
+            .await;
+            eventually(10, "the tunnelled packet reaches the session", || async {
+                !down.borrow().is_empty()
+            })
+            .await;
+            let got = down.borrow_mut().pop_front().unwrap();
+            match Datagram::decode(&got).unwrap() {
+                Datagram::Spl { src, flag, packet } => {
+                    assert_eq!((src, flag, packet), (b.id, 4, &b"down the tunnel"[..]));
+                }
+                other => panic!("{other:?}"),
+            }
+            assert!((r.stats)().machine.tunnel >= 1);
         })
     });
 }
