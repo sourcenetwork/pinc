@@ -16,6 +16,18 @@ publish = false
 [workspace.dependencies]
 vinc = { path = "../crates/vinc", version = "0.1.0" }
 vinc-keystore = { path = "../crates/vinc-keystore", version = "0.1.0" }
+# The layers the VINC node program composes; each is the library's own crate, by path.
+vinc-node = { path = "../crates/vinc-node", version = "0.1.0" }
+vinc-core = { path = "../crates/vinc-core", version = "0.1.0" }
+vinc-crypto = { path = "../crates/vinc-crypto", version = "0.1.0" }
+vinc-security = { path = "../crates/vinc-security", version = "0.1.0" }
+vinc-connect = { path = "../crates/vinc-connect", version = "0.1.0" }
+vinc-membership = { path = "../crates/vinc-membership", version = "0.1.0" }
+vinc-broadcast = { path = "../crates/vinc-broadcast", version = "0.1.0" }
+vinc-values = { path = "../crates/vinc-values", version = "0.1.0" }
+vinc-reconcile = { path = "../crates/vinc-reconcile", version = "0.1.0" }
+vinc-dag = { path = "../crates/vinc-dag", version = "0.1.0" }
+vinc-transport = { path = "../crates/vinc-transport", version = "0.1.0" }
 
 nuclei = "0.5.8"
 tokio = { version = "1.54.1", default-features = false }
@@ -32,6 +44,9 @@ http-body-util = "0.1.5"
 bytes = "1.12.1"
 # The libraries VINC is measured against.
 iroh = "1.4.1"
+iroh-gossip = { version = "0.102.0", default-features = false, features = ["net"] }
+iroh-blobs = { version = "0.104.1", default-features = false }
+blake3 = "1.8.7"
 libp2p = { version = "0.57.1", default-features = false }
 libp2p-stream = "0.5.0-alpha"
 # Segmented UDP sends and coalesced receives for the VINC host, the calls the compared libraries use.
@@ -56,6 +71,11 @@ dbg_macro = "deny"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 
+# The tests run the node programs for real, with the stacks' cryptography: unoptimised dependencies are an order of
+# magnitude too slow for them. Debug assertions and overflow checks stay on.
+[profile.dev.package."*"]
+opt-level = 3
+
 # The node programs are measured: the same optimisation as the library's own benchmarks.
 [profile.release]
 lto = "fat"
@@ -73,6 +93,17 @@ publish = false
 [dependencies]
 vinc = { workspace = true }
 vinc-keystore = { workspace = true }
+vinc-node = { workspace = true }
+vinc-core = { workspace = true, features = ["alloc"] }
+vinc-crypto = { workspace = true }
+vinc-security = { workspace = true }
+vinc-connect = { workspace = true }
+vinc-membership = { workspace = true, features = ["alloc"] }
+vinc-broadcast = { workspace = true, features = ["alloc"] }
+vinc-values = { workspace = true }
+vinc-reconcile = { workspace = true, features = ["alloc"] }
+vinc-dag = { workspace = true, features = ["alloc"] }
+vinc-transport = { workspace = true, features = ["alloc"] }
 nuclei = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "process", "signal", "fs"] }
 futures = { workspace = true, features = ["std", "async-await"] }
@@ -86,7 +117,10 @@ hyper-util = { workspace = true, features = ["tokio"] }
 http-body-util = { workspace = true }
 bytes = { workspace = true }
 iroh = { workspace = true }
-libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros"] }
+iroh-gossip = { workspace = true }
+iroh-blobs = { workspace = true }
+blake3 = { workspace = true }
+libp2p = { workspace = true, features = ["tokio", "quic", "tcp", "noise", "yamux", "macros", "gossipsub", "request-response"] }
 libp2p-stream = { workspace = true }
 quinn-udp = { workspace = true }
 

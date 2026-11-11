@@ -1,0 +1,1045 @@
+//! The VINC host without a runtime: one `vinc_node::Node` over real addresses, with every duty the node leaves to its
+//! host. It answers the endpoint's key requests and access checks, serves the connectivity client's relay carriers
+//! (TCP streams the runtime layer moves bytes of), and, on a hub, runs the relay that accepts the carriers of its
+//! members.
+//!
+//! The runtime layer calls `handle_datagram`, `handle_timeout`, `command` and `stream_event`, then drains
+//! `poll_transmit`, the stream operations in [`Core::ops`] and the application events in [`Core::events`]. Time is
+//! the node's own clock in nanoseconds; the wall clock is read from the system when the node asks for it.
+//!
+//! Invariants: nothing here blocks, spawns or locks; every queue is drained by the layer that owns the runtime and is
+//! bounded by the node's own limits; a failure of a carrier stream is reported to the node as a close, which it repairs
+//! by its own rules.
+
+use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
+
+use vinc_connect::carrier::MAX_FRAME_LEN;
+use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
+use vinc_connect::client::{Config as ConnCfg, Io, Kind, RelayCfg};
+use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
+use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, relay_addr, relay_parts};
+use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Secret, Software};
+use vinc_node::{Config as NodeConfig, HUB_ALPN, MemberNotice, Node, NodeEvent, ValuesRequest, is_relay_request};
+use vinc_security::{
+    ConnId, Env, KeyHandle, KeyRequest, KeyResponse, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys,
+    SoftPrekeys,
+};
+use vinc_values::source::ValueSource;
+
+use super::apps::{VApps, VStore};
+use crate::node::data::{seed_bytes, seed32};
+
+/// Relays (hubs) a node knows.
+pub const NRL: usize = 4;
+/// Peers the connectivity client keeps records of.
+pub const NPEERS: usize = 128;
+/// The relay a hub runs for its members.
+type HubRelay = Relay<24, 16, 8, 4096>;
+
+/// The endpoint's shape: the facade's, with the stream source of the values layer.
+pub type Ep<const K: usize, const D: usize> =
+    Endpoint<'static, 'static, Software, ValueSource<VStore>, 72, 65, 128, 4, K, D, 8, 64, 32>;
+/// The node over that endpoint.
+pub type VNode<const K: usize, const D: usize> = Node<Ep<K, D>, Software, (), NRL, NPEERS, VApps>;
+
+/// The relay-path address family and index the hub's own relay uses for its members: an index no client has.
+const LOCAL_RELAY: u8 = 0xFE;
+
+/// A stream the layer above moves bytes of.
+pub type StreamId = u64;
+
+/// How to reach a hub.
+#[derive(Debug, Clone, Copy)]
+pub struct HubAddr {
+    /// Its identity.
+    pub id: NodeId,
+    /// Its UDP address.
+    pub udp: SocketAddr,
+    /// Its TCP address for relay carriers.
+    pub tcp: SocketAddr,
+}
+
+/// How a core is built.
+#[derive(Debug, Clone)]
+pub struct Spec {
+    /// The node's name; its keys derive from it.
+    pub name: String,
+    /// Where it listens (UDP and TCP).
+    pub addr: SocketAddr,
+    /// The hubs, this node's own entry included when it is one.
+    pub hubs: Vec<HubAddr>,
+    /// Whether this node is a hub.
+    pub is_hub: bool,
+    /// The interface size the endpoint is told.
+    pub mtu: u16,
+    /// Datagrams per transmit (segmentation offload), at least 1.
+    pub batch: usize,
+    /// The 16 KiB buffer chunks each session may hold.
+    pub pool_chunks: usize,
+}
+
+/// What the core asks the runtime layer to do with a stream.
+#[derive(Debug)]
+pub enum Op {
+    /// Open a TCP connection to `to`; the layer reports [`StreamEv::Opened`] or [`StreamEv::Failed`] for `stream`.
+    Connect {
+        /// The stream's id.
+        stream: StreamId,
+        /// The address.
+        to: SocketAddr,
+    },
+    /// Write bytes.
+    Write {
+        /// The stream.
+        stream: StreamId,
+        /// The bytes.
+        data: Vec<u8>,
+    },
+    /// Close the stream.
+    Close {
+        /// The stream.
+        stream: StreamId,
+    },
+}
+
+/// What happened to a stream.
+#[derive(Debug)]
+pub enum StreamEv {
+    /// A connection arrived at the hub's listener.
+    Accepted(StreamId),
+    /// A connection the core asked for is open.
+    Opened(StreamId),
+    /// A connection the core asked for could not be opened.
+    Failed(StreamId),
+    /// The stream ended.
+    Closed(StreamId),
+    /// Bytes arrived.
+    Data(StreamId, Vec<u8>),
+}
+
+/// A command for the node.
+#[derive(Debug)]
+pub enum NCmd {
+    /// Subscribe to a topic.
+    Subscribe(Vec<u8>),
+    /// Publish a message.
+    Publish(Vec<u8>, Vec<u8>),
+    /// Fetch a value.
+    Fetch {
+        /// Its root.
+        root: [u8; 32],
+        /// Its length.
+        length: u64,
+        /// The providers.
+        providers: Vec<[u8; 32]>,
+    },
+    /// Start a reconcile round.
+    Reconcile {
+        /// The peer.
+        peer: [u8; 32],
+        /// The set.
+        set: Vec<u8>,
+    },
+    /// Serve a value.
+    Provide([u8; 32]),
+    /// The node sleeps.
+    Suspend,
+    /// The node wakes.
+    Resume,
+    /// Leave the group.
+    Leave,
+}
+
+enum Eff {
+    Carrier(NodeId, Vec<u8>),
+    Udp(UdpTarget, Vec<u8>),
+    Local(NodeId, Vec<u8>),
+    Close(NodeId, RSession),
+    Trace(Trace),
+}
+
+#[derive(Default)]
+struct Collect(Vec<Eff>);
+
+impl Sink for Collect {
+    fn emit(&mut self, e: Effect<'_>) {
+        let eff = match e {
+            Effect::Carrier { to, frame } => {
+                let mut b = vec![0u8; MAX_FRAME_LEN];
+                let Ok(n) = frame.encode(&mut b) else { return };
+                b.truncate(n);
+                Eff::Carrier(to, b)
+            }
+            Effect::Udp { to, datagram } => {
+                let mut b = vec![0u8; 2048];
+                let Ok(n) = datagram.encode(&mut b) else { return };
+                b.truncate(n);
+                Eff::Udp(to, b)
+            }
+            Effect::Local { from, packet } => Eff::Local(from, packet.to_vec()),
+            Effect::Close { node, session, .. } => Eff::Close(node, session),
+            Effect::PeerRelay { .. } | Effect::Wake { .. } => return,
+            Effect::Trace(t) => Eff::Trace(t),
+        };
+        self.0.push(eff);
+    }
+}
+
+struct RStream {
+    carrier: Box<ProtectedCarrier<Software>>,
+    node: Option<NodeId>,
+    session: Option<RSession>,
+}
+
+/// The relay a hub runs for its members.
+struct HubSide {
+    relay: Box<HubRelay>,
+    streams: HashMap<StreamId, RStream>,
+    by_node: HashMap<NodeId, StreamId>,
+    stores: ResponderStores<4, 4>,
+    slots: Vec<NodeId>,
+    scid: u64,
+}
+
+enum Step {
+    Idle,
+    Flush,
+    Frame,
+    Open(NodeId),
+    Dead,
+}
+
+/// A key answer that owns its bytes, so the request it answers can be dropped first.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "built once per key request and dropped at once"
+)]
+enum Answer {
+    Sig([u8; vinc_crypto::identity::MAX_SIGNATURE_LEN], usize),
+    Secret(Secret<32>),
+    Failed,
+}
+
+impl Answer {
+    fn response(&self) -> KeyResponse<'_> {
+        match self {
+            Self::Sig(b, n) => KeyResponse::Signature(b.get(..*n).unwrap_or_default()),
+            Self::Secret(s) => KeyResponse::SharedSecret(Secret::new(*s.expose())),
+            Self::Failed => KeyResponse::Failed,
+        }
+    }
+}
+
+fn answer(
+    prov: Software,
+    kp: &Keypair,
+    prekeys: &SoftPrekeys<Software>,
+    drbg: &mut Drbg,
+    now: u64,
+    req: &KeyRequest<'_>,
+) -> Answer {
+    let soft = SoftKeys {
+        signer: Some((KeyHandle(1), kp)),
+        prekeys: Some(prekeys),
+    };
+    let mut env = Env {
+        provider: &prov,
+        now,
+        drbg,
+    };
+    let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+    match soft.answer(&mut env, req, &mut sig) {
+        KeyResponse::Signature(s) => {
+            let n = s.len();
+            let mut out = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
+            if let (Some(d), Some(src)) = (out.get_mut(..n), s.get(..n)) {
+                d.copy_from_slice(src);
+            }
+            Answer::Sig(out, n)
+        }
+        KeyResponse::SharedSecret(s) => Answer::Secret(s),
+        KeyResponse::Failed => Answer::Failed,
+    }
+}
+
+/// The identity key of a node name.
+///
+/// # Errors
+/// The key could not be made from the name's seed.
+pub fn keypair(name: &str) -> Result<Keypair, String> {
+    let alg = IdentityAlg::Ed25519;
+    Keypair::from_seed(alg, &seed_bytes(name, "vinc-identity", alg.seed_len()))
+        .map_err(|_| format!("the identity of {name} could not be made"))
+}
+
+/// The node id of a node name.
+///
+/// # Errors
+/// The key could not be made from the name's seed.
+pub fn node_id(name: &str) -> Result<NodeId, String> {
+    keypair(name).map(|k| k.node_id())
+}
+
+/// One transmit for the runtime layer to send.
+#[derive(Debug, Clone, Copy)]
+pub struct Tx {
+    /// Where to.
+    pub remote: SocketAddr,
+    /// Bytes in the buffer.
+    pub len: usize,
+    /// The size of each datagram.
+    pub segment: usize,
+}
+
+/// The host core. See the module docs.
+pub struct Core<const K: usize, const D: usize> {
+    /// The node.
+    pub node: Box<VNode<K, D>>,
+    prov: Software,
+    kp: Keypair,
+    prekeys: SoftPrekeys<Software>,
+    hdrbg: Drbg,
+    addr: SocketAddr,
+    is_hub: bool,
+    /// This node's id.
+    pub me: NodeId,
+    streams: [Option<StreamId>; NRL],
+    next_stream: StreamId,
+    hub: Option<HubSide>,
+    small: VecDeque<(SocketAddr, Vec<u8>)>,
+    /// What the layer above does with streams, oldest first.
+    pub ops: VecDeque<Op>,
+    /// What the application layer reads, oldest first.
+    pub events: VecDeque<NodeEvent>,
+    start: std::time::Instant,
+    dirty: bool,
+}
+
+/// Build the node of `spec` over `apps`.
+fn build<const K: usize, const D: usize>(
+    spec: &Spec,
+    now: u64,
+    apps: VApps,
+) -> Result<(Box<VNode<K, D>>, Keypair, SoftPrekeys<Software>, Drbg), String> {
+    let kp = keypair(&spec.name)?;
+    let identity =
+        LocalIdentity::from_keypair(&kp, KeyHandle(1)).map_err(|_| "the identity key was refused".to_owned())?;
+    let prov = Software;
+    let mut drbg = Drbg::new(&seed32(&spec.name, "vinc-drbg"));
+    let mut cfg = EndpointConfig::new(u64::from_le_bytes(
+        seed_bytes(&spec.name, "vinc-endpoint", 8)
+            .try_into()
+            .map_err(|_| "seed".to_owned())?,
+    ));
+    cfg.conn.max_gso = spec.batch.max(1);
+    cfg.conn.interface_mtu = spec.mtu;
+    cfg.conn.credit = vinc_security::CreditRecord::new(1 << 20, 16, u16::MAX);
+    let ep_drbg = Drbg::new(&seed32(&spec.name, "vinc-ep-drbg"));
+    let mut ep: Box<Ep<K, D>> = Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, spec.pool_chunks);
+    let mut env = Env {
+        provider: &prov,
+        now,
+        drbg: &mut drbg,
+    };
+    let mut prekeys =
+        SoftPrekeys::new(&mut env, PrekeyPolicy::default()).map_err(|_| "the prekeys could not be made".to_owned())?;
+    let prekey_info = prekeys
+        .acquire(&mut env)
+        .map_err(|_| "the prekeys could not be made".to_owned())?;
+    ep.set_prekey(prekey_info.clone());
+    ep.add_iface(spec.addr)
+        .ok_or_else(|| "the interface could not be added to the endpoint".to_owned())?;
+    let mut relays: [Option<RelayCfg>; NRL] = [None; NRL];
+    for (d, h) in relays.iter_mut().zip(spec.hubs.iter().filter(|h| h.id != kp.node_id())) {
+        *d = Some(RelayCfg {
+            id: h.id,
+            udp: Some(h.udp),
+            tcp: Some(h.tcp),
+            ws: None,
+        });
+    }
+    let wall_ms = wall_ms();
+    let ncfg = NodeConfig {
+        connect: ConnCfg {
+            me: kp.node_id(),
+            identity,
+            relays,
+            phone: false,
+            restarted: false,
+            start: now,
+            v6: false,
+            keep_learn: false,
+        },
+        is_hub: spec.is_hub,
+        version: 1,
+        alpn: HUB_ALPN,
+        limits: vinc_broadcast::Limits::default(),
+        wall_ms,
+        local: spec.addr,
+        trace: false,
+    };
+    let drbg2 = Drbg::new(&seed32(&spec.name, "vinc-node-drbg"));
+    let kp2 = keypair(&spec.name)?;
+    let node = Node::with_apps(
+        &ncfg,
+        *ep,
+        prekey_info,
+        prov,
+        drbg2,
+        kp2,
+        (),
+        u64::from_le_bytes(
+            seed_bytes(&spec.name, "vinc-conn", 8)
+                .try_into()
+                .map_err(|_| "seed".to_owned())?,
+        ),
+        apps,
+    )
+    .map_err(|e| format!("the node did not start: {e}"))?;
+    Ok((Box::new(node), kp, prekeys, drbg))
+}
+
+fn wall_ms() -> u64 {
+    crate::node::data::wall_ns() / 1_000_000
+}
+
+impl<const K: usize, const D: usize> Core<K, D> {
+    /// Build a core. The caller runs it on a thread with a large stack: the node holds its buffers inline.
+    ///
+    /// # Errors
+    /// Why the node could not start.
+    pub fn new(spec: &Spec, apps: VApps) -> Result<Self, String> {
+        let start = std::time::Instant::now();
+        let now = Self::epoch_ns();
+        let (node, kp, prekeys, hdrbg) = build::<K, D>(spec, now, apps)?;
+        let me = kp.node_id();
+        let hub = spec.is_hub.then(|| HubSide {
+            relay: Box::new(HubRelay::new(RelayConfig::new(
+                me,
+                u64::from_le_bytes(seed_bytes(&spec.name, "vinc-relay", 8).try_into().unwrap_or([0; 8])),
+            ))),
+            streams: HashMap::new(),
+            by_node: HashMap::new(),
+            stores: ResponderStores::default(),
+            slots: Vec::new(),
+            scid: 0,
+        });
+        let mut me_core = Self {
+            node,
+            prov: Software,
+            kp,
+            prekeys,
+            hdrbg,
+            addr: spec.addr,
+            is_hub: spec.is_hub,
+            me,
+            streams: [None; NRL],
+            next_stream: 1,
+            hub,
+            small: VecDeque::new(),
+            ops: VecDeque::new(),
+            events: VecDeque::new(),
+            start,
+            dirty: false,
+        };
+        me_core.node.set_local(&[spec.addr]);
+        let now = me_core.now();
+        me_core.pump(now);
+        Ok(me_core)
+    }
+
+    /// A start point for the node's clock that is never zero.
+    const fn epoch_ns() -> u64 {
+        1_000_000_000
+    }
+
+    /// The node's clock now, in nanoseconds.
+    pub fn now(&self) -> u64 {
+        Self::epoch_ns() + u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
+
+    /// The `Instant` at which the node's clock reads `t`.
+    pub fn instant_of(&self, t: u64) -> std::time::Instant {
+        self.start + std::time::Duration::from_nanos(t.saturating_sub(Self::epoch_ns()))
+    }
+
+    fn slot(&mut self, n: &NodeId) -> Option<u16> {
+        let hub = self.hub.as_mut()?;
+        let i = hub.slots.iter().position(|x| x == n).unwrap_or_else(|| {
+            hub.slots.push(*n);
+            hub.slots.len() - 1
+        });
+        u16::try_from(i).ok()
+    }
+
+    /// One turn of the host duties, repeated until nothing moves.
+    pub fn pump(&mut self, now: u64) {
+        self.node.set_wall_ms(now, wall_ms());
+        for _ in 0..128 {
+            self.node.poll(now);
+            let mut busy = self.events_step(now);
+            busy |= self.members_step(now);
+            busy |= self.keys_step(now);
+            busy |= self.io_step(now);
+            busy |= self.udp_step();
+            busy |= self.streams_out_step();
+            busy |= std::mem::take(&mut self.dirty);
+            if !busy {
+                return;
+            }
+        }
+    }
+
+    fn events_step(&mut self, now: u64) -> bool {
+        let mut did = false;
+        while let Some(ev) = self.node.poll_event() {
+            did = true;
+            match ev {
+                NodeEvent::Endpoint(e) => self.duty(now, e),
+                NodeEvent::BroadcastAcpCheck { id, .. } => self.node.broadcast_acp_answer(now, id, true),
+                NodeEvent::Message { .. }
+                | NodeEvent::PublishAcked { .. }
+                | NodeEvent::PublishGaveUp { .. }
+                | NodeEvent::GapRepaired { .. }
+                | NodeEvent::Fallback { .. }
+                | NodeEvent::Restored { .. }
+                | NodeEvent::Member(_)
+                | NodeEvent::ValueComplete { .. }
+                | NodeEvent::ValueFailed { .. }
+                | NodeEvent::ReconcileDone { .. }
+                | NodeEvent::ReconcileFailed { .. }
+                | NodeEvent::Lost { .. } => self.events.push_back(ev),
+                _ => {}
+            }
+        }
+        did
+    }
+
+    /// The host duties of one endpoint event: key requests and access checks.
+    fn duty(&mut self, now: u64, ev: Event) {
+        match ev {
+            Event::KeyRequest { session } => {
+                let owned = match self.node.endpoint().query(Query::KeyRequest(session)) {
+                    vinc_core::Answer::KeyRequest(req) => {
+                        Some(answer(self.prov, &self.kp, &self.prekeys, &mut self.hdrbg, now, &req))
+                    }
+                    _ => None,
+                };
+                if let Some(owned) = owned {
+                    // A refused answer leaves the handshake to time out, which the node reports.
+                    let _ = self.node.command(
+                        now,
+                        Command::KeyResponse {
+                            session,
+                            response: owned.response(),
+                        },
+                    );
+                }
+            }
+            Event::AcpCheck { check, .. } => {
+                let _ = self.node.command(now, Command::AcpAnswer { check, allow: true });
+            }
+            _ => {}
+        }
+    }
+
+    /// What the node tells the hub's relay about its members: a session ended, a member woke.
+    fn members_step(&mut self, now: u64) -> bool {
+        let mut did = false;
+        while let Some(n) = self.node.poll_member() {
+            did = true;
+            let Some(h) = self.hub.as_mut() else { continue };
+            match n {
+                MemberNotice::Gone(m) => h.relay.udp_gone(&m),
+                MemberNotice::Awake(m) => {
+                    let mut s = Collect::default();
+                    h.relay.member_returned(now, &m, &mut s);
+                    self.apply(now, s);
+                }
+            }
+        }
+        did
+    }
+
+    fn keys_step(&mut self, now: u64) -> bool {
+        let mut did = false;
+        for i in 0..NRL {
+            for _ in 0..8 {
+                let owned = self
+                    .node
+                    .key_request(i)
+                    .map(|r| answer(self.prov, &self.kp, &self.prekeys, &mut self.hdrbg, now, &r));
+                let Some(owned) = owned else { break };
+                did = true;
+                self.node.key_response(now, i, owned.response());
+            }
+        }
+        for _ in 0..8 {
+            let owned = self
+                .node
+                .sign_request()
+                .map(|r| answer(self.prov, &self.kp, &self.prekeys, &mut self.hdrbg, now, &r));
+            let Some(owned) = owned else { break };
+            did = true;
+            self.node.sign_response(now, owned.response());
+        }
+        did
+    }
+
+    fn io_step(&mut self, now: u64) -> bool {
+        let mut did = false;
+        while let Some(io) = self.node.poll_io() {
+            did = true;
+            match io {
+                Io::Open { relay, kind, to } => {
+                    if kind == Kind::Tcp {
+                        let stream = self.next_stream;
+                        self.next_stream += 1;
+                        if let Some(s) = self.streams.get_mut(relay) {
+                            *s = Some(stream);
+                        }
+                        self.ops.push_back(Op::Connect { stream, to });
+                    } else {
+                        // Only TCP carriers are configured (the hubs' WebSocket address is left out), so this does
+                        // not happen; a refusal now is the node's cue to try its next way.
+                        self.node.stream_closed(now, relay);
+                    }
+                }
+                Io::Close { relay } => {
+                    if let Some(s) = self.streams.get_mut(relay).and_then(Option::take) {
+                        self.ops.push_back(Op::Close { stream: s });
+                    }
+                }
+            }
+        }
+        did
+    }
+
+    fn udp_step(&mut self) -> bool {
+        let mut did = false;
+        let mut buf = [0u8; 2048];
+        while let Some((to, n)) = self.node.poll_udp(&mut buf) {
+            did = true;
+            if to.port() == vinc_connect::local::PORT {
+                continue;
+            }
+            if let Some(d) = buf.get(..n) {
+                self.small.push_back((to, d.to_vec()));
+            }
+        }
+        did
+    }
+
+    fn streams_out_step(&mut self) -> bool {
+        let mut did = false;
+        let mut buf = vec![0u8; 20_000];
+        for i in 0..NRL {
+            let Some(stream) = self.streams.get(i).copied().flatten() else {
+                continue;
+            };
+            loop {
+                let n = self.node.poll_stream(i, &mut buf);
+                if n == 0 {
+                    break;
+                }
+                did = true;
+                if let Some(d) = buf.get(..n) {
+                    self.ops.push_back(Op::Write {
+                        stream,
+                        data: d.to_vec(),
+                    });
+                }
+            }
+        }
+        did
+    }
+
+    /// The next datagram, or run of datagrams of one size, to send; fills `buf`.
+    pub fn poll_transmit(&mut self, now: u64, buf: &mut [u8]) -> Option<Tx> {
+        if let Some((remote, data)) = self.small.pop_front() {
+            let dst = buf.get_mut(..data.len())?;
+            dst.copy_from_slice(&data);
+            return Some(Tx {
+                remote,
+                len: data.len(),
+                segment: data.len(),
+            });
+        }
+        loop {
+            let t = self.node.poll_transmit(now, buf)?;
+            if let Some((relay, slot)) = relay_parts(&t.remote)
+                && relay == LOCAL_RELAY
+            {
+                let node = self.hub.as_ref().and_then(|h| h.slots.get(usize::from(slot)).copied());
+                if let (Some(node), Some(data), Some(h)) = (node, buf.get(..t.len), self.hub.as_mut()) {
+                    let mut s = Collect::default();
+                    let _ = h.relay.send_local(now, &node, 0, data, &mut s);
+                    self.apply(now, s);
+                    self.dirty = true;
+                }
+                continue;
+            }
+            return Some(Tx {
+                remote: t.remote,
+                len: t.len,
+                segment: t.segment_size.max(1),
+            });
+        }
+    }
+
+    // ---------------------------------------------------------------- the relay of a hub
+
+    fn apply(&mut self, now: u64, s: Collect) {
+        for e in s.0 {
+            match e {
+                Eff::Carrier(to, plain) => self.write_frame(to, &plain),
+                Eff::Udp(UdpTarget::Reply(a), d) => self.small.push_back((a, d)),
+                Eff::Udp(UdpTarget::Member(n), d) => {
+                    if let Some(a) = self.node.member_addr(&n) {
+                        self.small.push_back((a, d));
+                    }
+                }
+                Eff::Local(from, packet) => {
+                    if let Some(slot) = self.slot(&from) {
+                        let mut p = packet;
+                        self.node
+                            .handle_datagram(now, self.addr, relay_addr(false, LOCAL_RELAY, slot), &mut p);
+                    }
+                }
+                Eff::Close(node, session) => {
+                    let Some(hub) = self.hub.as_mut() else { continue };
+                    if let Some(sid) = hub.by_node.get(&node).copied()
+                        && hub.streams.get(&sid).and_then(|r| r.session) == Some(session)
+                    {
+                        self.ops.push_back(Op::Close { stream: sid });
+                        hub.streams.remove(&sid);
+                        hub.by_node.remove(&node);
+                    }
+                }
+                Eff::Trace(t) => self.node.relay_trace(now, &t),
+            }
+        }
+    }
+
+    fn write_frame(&mut self, to: NodeId, plain: &[u8]) {
+        let Some(hub) = self.hub.as_mut() else { return };
+        let Some(sid) = hub.by_node.get(&to).copied() else {
+            return;
+        };
+        let Some(rs) = hub.streams.get_mut(&sid) else { return };
+        let mut out = vec![0u8; MAX_FRAME_LEN + 64];
+        let Ok(n) = rs.carrier.seal_bytes(&self.prov, plain, &mut out) else {
+            return;
+        };
+        out.truncate(n);
+        self.ops.push_back(Op::Write { stream: sid, data: out });
+    }
+
+    fn flush_handshake(&mut self, sid: StreamId) {
+        let Some(hub) = self.hub.as_mut() else { return };
+        let Some(rs) = hub.streams.get_mut(&sid) else { return };
+        let mut buf = vec![0u8; 32 * 1024];
+        loop {
+            let n = rs.carrier.transmit(&mut buf);
+            if n == 0 {
+                break;
+            }
+            if let Some(d) = buf.get(..n) {
+                self.ops.push_back(Op::Write {
+                    stream: sid,
+                    data: d.to_vec(),
+                });
+            }
+        }
+    }
+
+    fn drain(&mut self, now: u64, sid: StreamId) {
+        for _ in 0..1024 {
+            let mut sink = Collect::default();
+            let step = {
+                let Some(hub) = self.hub.as_mut() else { return };
+                let Some(rs) = hub.streams.get_mut(&sid) else { return };
+                let mut env = Env {
+                    provider: &self.prov,
+                    now,
+                    drbg: &mut self.hdrbg,
+                };
+                match rs.carrier.poll(&mut env, &mut hub.stores) {
+                    Ok(Poll::Idle) => Step::Idle,
+                    Ok(Poll::Handshake) => Step::Flush,
+                    Ok(Poll::KeyRequest) => {
+                        let soft = SoftKeys {
+                            signer: Some((KeyHandle(1), &self.kp)),
+                            prekeys: None,
+                        };
+                        if rs.carrier.answer_soft(&mut env, &soft).is_ok() {
+                            Step::Flush
+                        } else {
+                            Step::Dead
+                        }
+                    }
+                    Ok(Poll::Open(peer)) => Step::Open(peer),
+                    Ok(Poll::Frame(f)) => {
+                        if let (Some(node), Some(sess)) = (rs.node, rs.session) {
+                            let _ = hub.relay.carrier_frame(now, &node, sess, &f, &mut sink);
+                        }
+                        Step::Frame
+                    }
+                    Err(e) => {
+                        if e.is_fatal() {
+                            Step::Dead
+                        } else {
+                            Step::Flush
+                        }
+                    }
+                }
+            };
+            match step {
+                Step::Idle => {
+                    self.flush_handshake(sid);
+                    return;
+                }
+                Step::Flush => self.flush_handshake(sid),
+                Step::Frame => self.apply(now, sink),
+                Step::Open(peer) => {
+                    self.flush_handshake(sid);
+                    let mut s = Collect::default();
+                    let Some(hub) = self.hub.as_mut() else { return };
+                    if let Ok(sess) = hub.relay.carrier_opened(now, peer, &mut s) {
+                        if let Some(rs) = hub.streams.get_mut(&sid) {
+                            rs.node = Some(peer);
+                            rs.session = Some(sess);
+                        }
+                        if let Some(old) = hub.by_node.insert(peer, sid)
+                            && old != sid
+                        {
+                            hub.streams.remove(&old);
+                            self.ops.push_back(Op::Close { stream: old });
+                        }
+                    }
+                    self.apply(now, s);
+                }
+                Step::Dead => {
+                    self.ops.push_back(Op::Close { stream: sid });
+                    self.drop_stream(now, sid);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn drop_stream(&mut self, now: u64, sid: StreamId) {
+        let Some(hub) = self.hub.as_mut() else { return };
+        if let Some(rs) = hub.streams.remove(&sid)
+            && let (Some(node), Some(sess)) = (rs.node, rs.session)
+        {
+            if hub.by_node.get(&node) == Some(&sid) {
+                hub.by_node.remove(&node);
+            }
+            let mut s = Collect::default();
+            hub.relay.carrier_closed(now, &node, sess, &mut s);
+            self.apply(now, s);
+        }
+    }
+
+    // ---------------------------------------------------------------- inputs
+
+    fn relay_of_stream(&self, s: StreamId) -> Option<usize> {
+        self.streams.iter().position(|x| *x == Some(s))
+    }
+
+    /// A datagram arrived from `remote`.
+    pub fn handle_datagram(&mut self, now: u64, remote: SocketAddr, data: &mut [u8]) {
+        self.node.set_wall_ms(now, wall_ms());
+        let request = self.hub.is_some() && is_relay_request(data);
+        if request {
+            let member = self.node.member_at(&remote);
+            let mut s = Collect::default();
+            if let Some(h) = self.hub.as_mut() {
+                let _ = h.relay.datagram(now, remote, member.as_ref(), data, &mut s);
+            }
+            self.apply(now, s);
+        } else {
+            if self.hub.is_some()
+                && data.first().is_some_and(|b| *b >= 0x40)
+                && let Some(n) = self.node.member_at(&remote)
+                && let Some(h) = self.hub.as_mut()
+            {
+                let _ = h.relay.udp_heard(&n, now);
+            }
+            self.node.handle_datagram(now, self.addr, remote, data);
+        }
+        self.pump(now);
+    }
+
+    /// When the node next needs `handle_timeout`.
+    pub fn poll_timeout(&self) -> Option<u64> {
+        [
+            self.node.poll_timeout(),
+            self.hub.as_ref().and_then(|h| h.relay.next_deadline()),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// Time passed.
+    pub fn handle_timeout(&mut self, now: u64) {
+        self.node.set_wall_ms(now, wall_ms());
+        if let Some(h) = self.hub.as_mut()
+            && h.relay.next_deadline().is_some_and(|d| d <= now)
+        {
+            let mut s = Collect::default();
+            h.relay.handle_timeout(now, &mut s);
+            self.apply(now, s);
+        }
+        self.node.handle_timeout(now);
+        self.pump(now);
+    }
+
+    /// Apply a command of the application; the id of the fetch or round it started, else 0.
+    ///
+    /// # Errors
+    /// What the node refused, in a sentence.
+    pub fn command(&mut self, now: u64, cmd: NCmd) -> Result<u32, String> {
+        self.node.set_wall_ms(now, wall_ms());
+        let mut id = 0;
+        match cmd {
+            NCmd::Subscribe(t) => {
+                self.node
+                    .subscribe(now, &t)
+                    .map_err(|e| format!("the topic was refused: {e:?}"))?;
+            }
+            NCmd::Publish(t, b) => {
+                self.node
+                    .publish(now, &t, &b)
+                    .map_err(|e| format!("the message was refused: {e:?}"))?;
+            }
+            NCmd::Fetch {
+                root,
+                length,
+                providers,
+            } => {
+                let req = ValuesRequest {
+                    root,
+                    length,
+                    ranges: &[],
+                    providers: &providers,
+                    deadline: None,
+                };
+                id = self.node.values_fetch(now, &req).map_err(|e| e.to_string())?;
+            }
+            NCmd::Reconcile { peer, set } => {
+                id = self
+                    .node
+                    .sets_start(now, &peer, &set)
+                    .map_err(|e| format!("the round did not start: {e:?}"))?;
+            }
+            NCmd::Provide(root) => {
+                if !self.node.values_provide(&root) {
+                    return Err("the node serves too many values already".into());
+                }
+            }
+            NCmd::Suspend => self.node.suspend(now, wall_ms()),
+            NCmd::Resume => self.node.resume(now, false),
+            NCmd::Leave => self.node.leave(now),
+        }
+        self.pump(now);
+        Ok(id)
+    }
+
+    /// A stream event from the runtime layer.
+    pub fn stream_event(&mut self, now: u64, ev: StreamEv) {
+        self.node.set_wall_ms(now, wall_ms());
+        match ev {
+            StreamEv::Accepted(stream) => {
+                if let Some(h) = self.hub.as_mut() {
+                    h.scid += 1;
+                    let scid = ConnId::new(&h.scid.to_be_bytes());
+                    let identity = LocalIdentity::from_keypair(&self.kp, KeyHandle(1));
+                    if let (Some(scid), Ok(identity)) = (scid, identity)
+                        && let Ok(cfg) = session::responder_config(identity, scid)
+                    {
+                        h.streams.insert(
+                            stream,
+                            RStream {
+                                carrier: Box::new(ProtectedCarrier::accept(cfg)),
+                                node: None,
+                                session: None,
+                            },
+                        );
+                    } else {
+                        self.ops.push_back(Op::Close { stream });
+                    }
+                } else {
+                    self.ops.push_back(Op::Close { stream });
+                }
+            }
+            StreamEv::Opened(stream) => {
+                if let Some(i) = self.relay_of_stream(stream) {
+                    self.node.stream_opened(now, i);
+                }
+            }
+            StreamEv::Failed(stream) | StreamEv::Closed(stream) => {
+                if let Some(i) = self.relay_of_stream(stream) {
+                    if let Some(s) = self.streams.get_mut(i) {
+                        *s = None;
+                    }
+                    self.node.stream_closed(now, i);
+                } else {
+                    self.drop_stream(now, stream);
+                }
+            }
+            StreamEv::Data(stream, data) => self.stream_data(now, stream, &data),
+        }
+        self.pump(now);
+    }
+
+    fn stream_data(&mut self, now: u64, stream: StreamId, data: &[u8]) {
+        if let Some(i) = self.relay_of_stream(stream) {
+            let mut bytes = data;
+            for _ in 0..64 {
+                let n = self.node.stream_data(now, i, bytes);
+                bytes = bytes.get(n..).unwrap_or_default();
+                self.keys_step(now);
+                if bytes.is_empty() || (n == 0 && self.node.key_request(i).is_none()) {
+                    return;
+                }
+            }
+            return;
+        }
+        let mut rest = data;
+        for _ in 0..64 {
+            let Some(rs) = self.hub.as_mut().and_then(|h| h.streams.get_mut(&stream)) else {
+                return;
+            };
+            let n = rs.carrier.receive(rest);
+            rest = rest.get(n..).unwrap_or_default();
+            self.drain(now, stream);
+            if rest.is_empty() || n == 0 {
+                break;
+            }
+        }
+    }
+
+    /// Whether this node is a hub.
+    pub const fn is_hub(&self) -> bool {
+        self.is_hub
+    }
+}
+
+impl<const K: usize, const D: usize> Core<K, D> {
+    /// The value store the node serves from and fetches into.
+    pub fn values(&self) -> VStore {
+        self.node.apps().values.clone()
+    }
+
+    /// Hold a set under `name`.
+    ///
+    /// # Errors
+    /// The set could not be indexed.
+    pub fn hold_set(&mut self, name: &[u8], items: Vec<[u8; 32]>) -> Result<(), String> {
+        self.node.apps_mut().sets.insert(name, items)
+    }
+}
