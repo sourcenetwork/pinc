@@ -410,6 +410,18 @@ impl Membership {
         }
         match self.susp.get(m).copied() {
             Some(mut sp) if sp.since == since => {
+                // A carrier that closed on a member that is still there (a slow link reset it) is answered by the
+                // probe within the wait; only a member silent for the wait is reported suspected.
+                if !sp.announced {
+                    let at = sp.probe_a.saturating_add(sp.wait);
+                    if now >= at {
+                        sp.announced = true;
+                        self.susp.insert(*m, sp);
+                        self.emit(Event::MemberSuspected { member: *m });
+                    } else {
+                        self.schedule_confirm(now, at);
+                    }
+                }
                 if sp.probe_b.is_none()
                     && let Some((route, path)) = self.independent_route(now, m, ev)
                 {
@@ -437,7 +449,6 @@ impl Membership {
                     member: *m,
                     path: Path::Session,
                 });
-                self.emit(Event::MemberSuspected { member: *m });
                 let probe_b = self.independent_route(now, m, ev).map(|(route, path)| {
                     self.tx(h, m, route, &Frame::Probe);
                     self.trace(Trace::ProbeSent { member: *m, path });
@@ -448,8 +459,10 @@ impl Membership {
                     probe_a: now,
                     probe_b,
                     wait,
+                    announced: false,
                 };
                 self.susp.insert(*m, sp);
+                self.schedule_confirm(now, now.saturating_add(wait));
                 if let Some((tb, _)) = probe_b {
                     let dl = (since + CONFIRM).max(now + wait).max(tb + wait);
                     self.schedule_confirm(now, dl);

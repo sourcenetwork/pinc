@@ -111,6 +111,8 @@ pub(crate) struct Susp {
     pub(crate) probe_a: Nanos,
     pub(crate) probe_b: Option<(Nanos, Path)>,
     pub(crate) wait: Nanos,
+    /// The member was reported suspected: its first probe went unanswered for the wait.
+    pub(crate) announced: bool,
 }
 
 /// The first key of `m` strictly after `after` (or the first key when `after` is `None`).

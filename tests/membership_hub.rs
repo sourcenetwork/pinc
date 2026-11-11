@@ -228,6 +228,27 @@ fn a_member_that_answers_on_either_path_is_never_confirmed() {
 }
 
 #[test]
+fn a_member_that_answers_the_probe_after_its_carrier_closed_is_never_reported_suspected() {
+    let mut w = started(2, 1);
+    w.run(40 * SEC);
+    w.nodes[0].h.carriers.insert(
+        id(2),
+        Carrier::Gone {
+            since: w.now,
+            sleep: None,
+        },
+    );
+    w.with(0, |m, h, now| m.carrier_gone(h, now, &id(2)));
+    w.run(10 * SEC);
+    assert_eq!(w.nodes[0].m.roster_len(), 2, "the member is kept");
+    assert_eq!(
+        w.count_events(0, |e| matches!(e, Event::MemberSuspected { .. })),
+        0,
+        "a member that is there is not suspected for a closed carrier"
+    );
+}
+
+#[test]
 fn a_single_lost_probe_does_not_confirm() {
     let mut w = started(2, 1);
     w.run(40 * SEC);
