@@ -334,7 +334,9 @@ conn_impl! {
         let kind = if self.keys.send.is_some() { Kind::Short } else { Kind::ZeroRtt };
         let suspended_data = self.life.local_asleep.is_some();
         let cc_ok = self.rec.can_send() && self.rec.pacer().next_release(now) <= now;
-        if !cc_ok && self.rec.can_send() {
+        // The pacing timer is for data that waits for its turn: with nothing to send, a poll inside the pacing gap
+        // would arm a timer that wakes the endpoint for no reason.
+        if !cc_ok && self.rec.can_send() && (self.streams.has_data_to_send() || self.dgrams.peek_send(&self.pool).is_some()) {
             self.paced_until = Some(self.rec.pacer().next_release(now));
         }
         let probes = self.life.probes > 0;

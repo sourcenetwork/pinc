@@ -828,6 +828,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             .min()
     }
 
+    /// Whether any stream has data or a retransmission to send.
+    pub fn has_data_to_send(&self) -> bool {
+        self.next_hot(None).is_some()
+    }
+
     /// The next stream frame of at most `budget` data bytes: the first stream in (urgency, id) order that has anything
     /// to send, its retransmissions first (lowest hole first), then new data. A better stream drains before a worse
     /// one gets anything. Copy its data with [`Streams::copy_out`].
