@@ -286,7 +286,10 @@ async fn a_peer_connects_at_once_after_its_revocation_is_lifted() {
     within(20, async {
         server.revoke(&client.id()).await.unwrap();
         if let Ok(c) = client.connect(server.addr(), ECHO).await {
-            assert!(matches!(c.closed().await.kind(), ErrorKind::Closed { .. } | ErrorKind::Refused));
+            assert!(matches!(
+                c.closed().await.kind(),
+                ErrorKind::Closed { .. } | ErrorKind::Refused
+            ));
         }
         assert!(server.unrevoke(&client.id()));
         let c = client.connect(server.addr(), ECHO).await.unwrap();

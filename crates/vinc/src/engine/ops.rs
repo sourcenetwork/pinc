@@ -7,9 +7,7 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use vinc_core::{
-    Answer, Command, CommandError, IfaceEvent, NodeStats, Query, Role, SessionId, SessionStats, Value,
-};
+use vinc_core::{Answer, Command, CommandError, IfaceEvent, NodeStats, Query, Role, SessionId, SessionStats, Value};
 use vinc_crypto::NodeId;
 use vinc_keystore::KeyStore;
 use vinc_node::Ep as _;

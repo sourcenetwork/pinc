@@ -644,7 +644,9 @@ where
         let b = self.topics.unrevoke(peer);
         let c = self.io.revoked.remove(peer);
         // The deny given while it was revoked must not outlive the revocation.
-        let _ = self.io.cmd(Command::AcpForget { peer: self.io.full_id(peer) });
+        let _ = self.io.cmd(Command::AcpForget {
+            peer: self.io.full_id(peer),
+        });
         a | b | c
     }
 
@@ -659,7 +661,9 @@ where
         m.revoke(&mut h, now, peer)?;
         self.topics.revoke(peer);
         // A cached allow would admit the peer's next session before the check could refuse it.
-        let _ = self.io.cmd(Command::AcpForget { peer: self.io.full_id(peer) });
+        let _ = self.io.cmd(Command::AcpForget {
+            peer: self.io.full_id(peer),
+        });
         if self.io.revoked.len() < crate::config::TABLE_MAX {
             self.io.revoked.insert(*peer);
         }
