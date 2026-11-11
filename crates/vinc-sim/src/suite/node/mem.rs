@@ -8,7 +8,8 @@
 //! never touches are never resident.
 //!
 //! Invariants: the table sizes are constants shared by every node; `D` is ten times `K` as the endpoint requires; a
-//! table in the free list has every slot free and its memory in place.
+//! table in the free list has every slot free and its memory in place; the slots of a table share one loss estimate,
+//! as the slots of an endpoint do, and it starts at zero whenever a table is handed out.
 
 use vinc_core::{Endpoint, Slot};
 use vinc_transport::conn::{Resources, Tables};
@@ -66,20 +67,39 @@ pub type Ep = Endpoint<
 type NodeSlot = Slot<'static, Tracked, Src, STREAMS, CHUNK_RING, IN_FLIGHT, PATHS>;
 
 thread_local! {
-    /// The tables ended endpoints gave back, ready for the next one.
-    static FREE: std::cell::RefCell<Vec<&'static mut [NodeSlot; SESSIONS]>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The tables ended endpoints gave back, by the node (index in its world) that last used each.
+    static FREE: std::cell::RefCell<std::collections::BTreeMap<usize, &'static mut [NodeSlot; SESSIONS]>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The loss estimate shared by the slots of each table, by the table's address.
+    static LOSS: std::cell::RefCell<std::collections::BTreeMap<usize, &'static LossEstimate>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 }
 
-/// End `ep` and keep its connection table for the next endpoint on this thread.
-pub(super) fn recycle(ep: Ep) {
+/// End `ep` of node `owner` and keep its connection table for the next endpoint on this thread.
+pub(super) fn recycle(owner: usize, ep: Ep) {
     if let Some(table) = ep.into_slots() {
-        FREE.with(|f| f.borrow_mut().push(table));
+        FREE.with(|f| f.borrow_mut().insert(owner, table));
     }
 }
 
-/// A table of `SESSIONS` free slots, each with its own memory: one given back, else a new leaked one.
-pub(super) fn slots() -> Option<&'static mut [NodeSlot; SESSIONS]> {
-    FREE.with(|f| f.borrow_mut().pop()).or_else(new_table)
+/// A table of `SESSIONS` free slots, each with its own memory: the one `owner` gave back, else any given back, else a
+/// new leaked one. A node gets its own table again in the next incarnation and in the next run of the same world, so
+/// the memory a run touched is the memory the next one touches and the process stays flat.
+pub(super) fn slots(owner: usize) -> Option<&'static mut [NodeSlot; SESSIONS]> {
+    let table = FREE
+        .with(|f| {
+            let mut f = f.borrow_mut();
+            let key = if f.contains_key(&owner) {
+                Some(owner)
+            } else {
+                f.keys().next().copied()
+            };
+            key.and_then(|k| f.remove(&k))
+        })
+        .or_else(new_table)?;
+    let key = std::ptr::from_ref::<[NodeSlot; SESSIONS]>(table) as usize;
+    if let Some(loss) = LOSS.with(|l| l.borrow().get(&key).copied()) {
+        loss.reset();
+    }
+    Some(table)
 }
 
 fn new_table() -> Option<&'static mut [NodeSlot; SESSIONS]> {
@@ -87,16 +107,27 @@ fn new_table() -> Option<&'static mut [NodeSlot; SESSIONS]> {
     // zeroed arrays is not lazy in a debug build), so the chunks a connection never uses are never resident.
     let bytes: &'static mut [u8] = Box::leak(vec![0u8; SESSIONS * CHUNKS_PER_CONN * CHUNK_SIZE].into_boxed_slice());
     let (slab, _) = bytes.as_chunks_mut::<CHUNK_SIZE>();
-    let table: Vec<NodeSlot> = slab.chunks_mut(CHUNKS_PER_CONN).map(|c| Slot::new(memory(c))).collect();
+    let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
+    let table: Vec<NodeSlot> = slab
+        .chunks_mut(CHUNKS_PER_CONN)
+        .map(|c| Slot::new(memory(c, loss)))
+        .collect();
     let boxed: Box<[NodeSlot; SESSIONS]> = table.into_boxed_slice().try_into().ok()?;
-    Some(Box::leak(boxed))
+    let table = Box::leak(boxed);
+    LOSS.with(|l| {
+        l.borrow_mut()
+            .insert(std::ptr::from_ref::<[NodeSlot; SESSIONS]>(table) as usize, loss)
+    });
+    Some(table)
 }
 
-fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, Src, STREAMS, CHUNK_RING, IN_FLIGHT> {
+fn memory(
+    chunks: &'static mut [RawChunk],
+    loss: &'static LossEstimate,
+) -> Resources<'static, Src, STREAMS, CHUNK_RING, IN_FLIGHT> {
     let pool = BufferPool::from_slab(chunks);
     let streams: &'static mut Streams<Src, STREAMS, CHUNK_RING> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
-    let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
     Resources {
         pool,
         streams: streams.into(),

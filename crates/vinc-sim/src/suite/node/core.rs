@@ -339,7 +339,7 @@ impl Core {
             values.forget();
         }
         self.clear_volatile();
-        let Some(table) = slots() else {
+        let Some(table) = slots(self.idx) else {
             self.violation("G-SPEC", "the node could not allocate its connection memory");
             return None;
         };
@@ -404,7 +404,7 @@ impl Core {
             }
         }
         let Some(prekey) = prekey else {
-            recycle(*ep);
+            recycle(self.idx, *ep);
             return None;
         };
         let node = match self.build_node(*ep, prekey, now) {
@@ -502,7 +502,7 @@ impl Core {
 
     fn clear_volatile(&mut self) {
         if let Some(node) = self.node.take() {
-            recycle(node.into_endpoint());
+            recycle(self.idx, node.into_endpoint());
         }
         self.prekeys = None;
         self.hub = None;

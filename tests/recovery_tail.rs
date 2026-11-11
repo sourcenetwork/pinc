@@ -21,6 +21,19 @@ fn model(mut v: u32, acked: u32, lost: u32) -> u32 {
 }
 
 #[test]
+fn a_reset_loss_estimate_is_the_estimate_of_a_new_endpoint() {
+    let e = LossEstimate::new();
+    e.record(500, 0);
+    assert!(e.get() >= REPAIR_THRESHOLD);
+    e.reset();
+    assert_eq!(e.get(), LossEstimate::new().get());
+    assert!(
+        !e.should_send_repair(REPAIR_MIN_AGE, true, true),
+        "a reset estimate repairs nothing"
+    );
+}
+
+#[test]
 fn the_loss_estimate_steps_once_per_packet_with_gain_1_32() {
     let e = LossEstimate::new();
     assert_eq!(e.get(), 0);

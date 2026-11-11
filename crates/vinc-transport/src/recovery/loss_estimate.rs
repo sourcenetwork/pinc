@@ -35,6 +35,11 @@ impl LossEstimate {
         }
     }
 
+    /// Forget every packet seen: the estimate of a new endpoint, for memory that is handed on to the next one.
+    pub fn reset(&self) {
+        self.value.store(0, Ordering::Relaxed);
+    }
+
     /// The current estimate in units of 1/65536.
     pub fn get(&self) -> u32 {
         self.value.load(Ordering::Relaxed)
