@@ -100,6 +100,7 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
 }
 
 #[test]
+#[ignore = "the idle punch rule is off: with it on, the quiet hub sessions of an idle network go stale and are dialed again"]
 fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round() {
     big(|| {
         // A and the hub on links with a 120 ms round trip: too slow for a direct path to count as good, so the

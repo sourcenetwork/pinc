@@ -564,7 +564,11 @@ drive_impl! {
                 // failure (it passes with the rule off for relayed or for quiet sessions). Upgrade: apply it to every
                 // path once the node layer no longer depends on those rounds.
                 let v = View {
-                    app_idle: if relay_active { 0 } else { now.saturating_sub(st.last_app) },
+                    // vertexia: the idle time is not passed yet, so the idle punch rule stays off. With it on, the
+                    // quiet hub sessions of an idle network are declared stale and dialed again (two hubs and
+                    // four members: eight sessions down and up in five quiet minutes). Pass the time since
+                    // `st.last_app` on direct paths once that is understood and fixed.
+                    app_idle: 0,
                     direct: !relay_active && st.path_validated,
                     rtt: st.transport.srtt,
                     quiet_until: 0,
