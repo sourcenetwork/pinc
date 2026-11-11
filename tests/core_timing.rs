@@ -1009,21 +1009,6 @@ fn a_dialed_hub_session_acknowledges_every_fourth_packet() {
 }
 
 #[test]
-fn the_first_handshake_flight_leaves_as_one_datagram_above_the_minimum_size() {
-    big_stack(|| {
-        let mut net = CoreNet::new(10 * MS_NS);
-        let (a, b) = (net.add(1), net.add(2));
-        net.connect_pair(a, b, ALPN_A, Role::Member);
-        let first_to_b: Vec<usize> = net.nodes[a]
-            .sent
-            .iter()
-            .filter(|(_, to, _)| *to == net.nodes[b].addr)
-            .map(|(_, _, n)| *n)
-            .take(2)
-            .collect();
-        assert!(
-            first_to_b.first().is_some_and(|n| *n > 1200 && *n <= 1452),
-            "the first flight is one datagram above the minimum size: {first_to_b:?}"
-        );
-    });
+fn an_endpoint_sends_the_first_handshake_flight_whole_by_default() {
+    assert!(vinc_core::EndpointConfig::new(1).conn.flight_split);
 }

@@ -168,6 +168,8 @@ impl TNode {
         let mut drbg = Drbg::new(&[tag ^ 0x5a; 32]);
         let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
         cfg.conn.max_gso = 4;
+        // The reassembly and fan-out tests need a first flight in several datagrams.
+        cfg.conn.flight_split = false;
         cfg.conn.interface_mtu = mtu;
         let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
         let mut ep = Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots()));
