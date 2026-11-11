@@ -14,29 +14,24 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 
-use vinc_connect::carrier::MAX_FRAME_LEN;
-use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
+use vinc_connect::carrier::session::{self, ProtectedCarrier};
 use vinc_connect::client::{Config as ConnCfg, Io, Kind, RelayCfg};
-use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
-use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, relay_addr, relay_parts};
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Secret, Software};
+use vinc_connect::relay::Config as RelayConfig;
+use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, relay_parts};
+use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
 use vinc_node::{Config as NodeConfig, HUB_ALPN, MemberNotice, Node, NodeEvent, ValuesRequest, is_relay_request};
-use vinc_security::{
-    ConnId, Env, KeyHandle, KeyRequest, KeyResponse, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys,
-    SoftPrekeys,
-};
+use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftPrekeys};
 use vinc_values::source::ValueSource;
 
 use super::apps::{VApps, VStore};
+use super::hub::{Collect, HubRelay, HubSide, RStream};
+use super::keys::answer;
 use crate::node::data::{seed_bytes, seed32};
 
 /// Relays (hubs) a node knows.
 pub const NRL: usize = 4;
 /// Peers the connectivity client keeps records of.
 pub const NPEERS: usize = 128;
-/// The relay a hub runs for its members.
-type HubRelay = Relay<24, 16, 8, 4096>;
-
 /// The endpoint's shape: the facade's, with the stream source of the values layer.
 pub type Ep<const K: usize, const D: usize> =
     Endpoint<'static, 'static, Software, ValueSource<VStore>, 72, 65, 128, 4, K, D, 8, 64, 32>;
@@ -44,7 +39,7 @@ pub type Ep<const K: usize, const D: usize> =
 pub type VNode<const K: usize, const D: usize> = Node<Ep<K, D>, Software, (), NRL, NPEERS, VApps>;
 
 /// The relay-path address family and index the hub's own relay uses for its members: an index no client has.
-const LOCAL_RELAY: u8 = 0xFE;
+pub(super) const LOCAL_RELAY: u8 = 0xFE;
 
 /// A stream the layer above moves bytes of.
 pub type StreamId = u64;
@@ -151,118 +146,6 @@ pub enum NCmd {
     Leave,
 }
 
-enum Eff {
-    Carrier(NodeId, Vec<u8>),
-    Udp(UdpTarget, Vec<u8>),
-    Local(NodeId, Vec<u8>),
-    Close(NodeId, RSession),
-    Trace(Trace),
-}
-
-#[derive(Default)]
-struct Collect(Vec<Eff>);
-
-impl Sink for Collect {
-    fn emit(&mut self, e: Effect<'_>) {
-        let eff = match e {
-            Effect::Carrier { to, frame } => {
-                let mut b = vec![0u8; MAX_FRAME_LEN];
-                let Ok(n) = frame.encode(&mut b) else { return };
-                b.truncate(n);
-                Eff::Carrier(to, b)
-            }
-            Effect::Udp { to, datagram } => {
-                let mut b = vec![0u8; 2048];
-                let Ok(n) = datagram.encode(&mut b) else { return };
-                b.truncate(n);
-                Eff::Udp(to, b)
-            }
-            Effect::Local { from, packet } => Eff::Local(from, packet.to_vec()),
-            Effect::Close { node, session, .. } => Eff::Close(node, session),
-            Effect::PeerRelay { .. } | Effect::Wake { .. } => return,
-            Effect::Trace(t) => Eff::Trace(t),
-        };
-        self.0.push(eff);
-    }
-}
-
-struct RStream {
-    carrier: Box<ProtectedCarrier<Software>>,
-    node: Option<NodeId>,
-    session: Option<RSession>,
-}
-
-/// The relay a hub runs for its members.
-struct HubSide {
-    relay: Box<HubRelay>,
-    streams: HashMap<StreamId, RStream>,
-    by_node: HashMap<NodeId, StreamId>,
-    stores: ResponderStores<4, 4>,
-    slots: Vec<NodeId>,
-    scid: u64,
-}
-
-enum Step {
-    Idle,
-    Flush,
-    Frame,
-    Open(NodeId),
-    Dead,
-}
-
-/// A key answer that owns its bytes, so the request it answers can be dropped first.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "built once per key request and dropped at once"
-)]
-enum Answer {
-    Sig([u8; vinc_crypto::identity::MAX_SIGNATURE_LEN], usize),
-    Secret(Secret<32>),
-    Failed,
-}
-
-impl Answer {
-    fn response(&self) -> KeyResponse<'_> {
-        match self {
-            Self::Sig(b, n) => KeyResponse::Signature(b.get(..*n).unwrap_or_default()),
-            Self::Secret(s) => KeyResponse::SharedSecret(Secret::new(*s.expose())),
-            Self::Failed => KeyResponse::Failed,
-        }
-    }
-}
-
-fn answer(
-    prov: Software,
-    kp: &Keypair,
-    prekeys: &SoftPrekeys<Software>,
-    drbg: &mut Drbg,
-    now: u64,
-    req: &KeyRequest<'_>,
-) -> Answer {
-    let soft = SoftKeys {
-        signer: Some((KeyHandle(1), kp)),
-        prekeys: Some(prekeys),
-    };
-    let mut env = Env {
-        provider: &prov,
-        now,
-        drbg,
-    };
-    let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
-    match soft.answer(&mut env, req, &mut sig) {
-        KeyResponse::Signature(s) => {
-            let n = s.len();
-            let mut out = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
-            if let (Some(d), Some(src)) = (out.get_mut(..n), s.get(..n)) {
-                d.copy_from_slice(src);
-            }
-            Answer::Sig(out, n)
-        }
-        KeyResponse::SharedSecret(s) => Answer::Secret(s),
-        KeyResponse::Failed => Answer::Failed,
-    }
-}
-
 /// The identity key of a node name.
 ///
 /// # Errors
@@ -296,24 +179,24 @@ pub struct Tx {
 pub struct Core<const K: usize, const D: usize> {
     /// The node.
     pub node: Box<VNode<K, D>>,
-    prov: Software,
-    kp: Keypair,
-    prekeys: SoftPrekeys<Software>,
-    hdrbg: Drbg,
-    addr: SocketAddr,
-    is_hub: bool,
+    pub(super) prov: Software,
+    pub(super) kp: Keypair,
+    pub(super) prekeys: SoftPrekeys<Software>,
+    pub(super) hdrbg: Drbg,
+    pub(super) addr: SocketAddr,
+    pub(super) is_hub: bool,
     /// This node's id.
     pub me: NodeId,
-    streams: [Option<StreamId>; NRL],
-    next_stream: StreamId,
-    hub: Option<HubSide>,
-    small: VecDeque<(SocketAddr, Vec<u8>)>,
+    pub(super) streams: [Option<StreamId>; NRL],
+    pub(super) next_stream: StreamId,
+    pub(super) hub: Option<HubSide>,
+    pub(super) small: VecDeque<(SocketAddr, Vec<u8>)>,
     /// What the layer above does with streams, oldest first.
     pub ops: VecDeque<Op>,
     /// What the application layer reads, oldest first.
     pub events: VecDeque<NodeEvent>,
-    start: std::time::Instant,
-    dirty: bool,
+    pub(super) start: std::time::Instant,
+    pub(super) dirty: bool,
 }
 
 /// Build the node of `spec` over `apps`.
@@ -462,15 +345,6 @@ impl<const K: usize, const D: usize> Core<K, D> {
     /// The `Instant` at which the node's clock reads `t`.
     pub fn instant_of(&self, t: u64) -> std::time::Instant {
         self.start + std::time::Duration::from_nanos(t.saturating_sub(Self::epoch_ns()))
-    }
-
-    fn slot(&mut self, n: &NodeId) -> Option<u16> {
-        let hub = self.hub.as_mut()?;
-        let i = hub.slots.iter().position(|x| x == n).unwrap_or_else(|| {
-            hub.slots.push(*n);
-            hub.slots.len() - 1
-        });
-        u16::try_from(i).ok()
     }
 
     /// One turn of the host duties, repeated until nothing moves.
@@ -687,163 +561,6 @@ impl<const K: usize, const D: usize> Core<K, D> {
             });
         }
     }
-
-    // ---------------------------------------------------------------- the relay of a hub
-
-    fn apply(&mut self, now: u64, s: Collect) {
-        for e in s.0 {
-            match e {
-                Eff::Carrier(to, plain) => self.write_frame(to, &plain),
-                Eff::Udp(UdpTarget::Reply(a), d) => self.small.push_back((a, d)),
-                Eff::Udp(UdpTarget::Member(n), d) => {
-                    if let Some(a) = self.node.member_addr(&n) {
-                        self.small.push_back((a, d));
-                    }
-                }
-                Eff::Local(from, packet) => {
-                    if let Some(slot) = self.slot(&from) {
-                        let mut p = packet;
-                        self.node
-                            .handle_datagram(now, self.addr, relay_addr(false, LOCAL_RELAY, slot), &mut p);
-                    }
-                }
-                Eff::Close(node, session) => {
-                    let Some(hub) = self.hub.as_mut() else { continue };
-                    if let Some(sid) = hub.by_node.get(&node).copied()
-                        && hub.streams.get(&sid).and_then(|r| r.session) == Some(session)
-                    {
-                        self.ops.push_back(Op::Close { stream: sid });
-                        hub.streams.remove(&sid);
-                        hub.by_node.remove(&node);
-                    }
-                }
-                Eff::Trace(t) => self.node.relay_trace(now, &t),
-            }
-        }
-    }
-
-    fn write_frame(&mut self, to: NodeId, plain: &[u8]) {
-        let Some(hub) = self.hub.as_mut() else { return };
-        let Some(sid) = hub.by_node.get(&to).copied() else {
-            return;
-        };
-        let Some(rs) = hub.streams.get_mut(&sid) else { return };
-        let mut out = vec![0u8; MAX_FRAME_LEN + 64];
-        let Ok(n) = rs.carrier.seal_bytes(&self.prov, plain, &mut out) else {
-            return;
-        };
-        out.truncate(n);
-        self.ops.push_back(Op::Write { stream: sid, data: out });
-    }
-
-    fn flush_handshake(&mut self, sid: StreamId) {
-        let Some(hub) = self.hub.as_mut() else { return };
-        let Some(rs) = hub.streams.get_mut(&sid) else { return };
-        let mut buf = vec![0u8; 32 * 1024];
-        loop {
-            let n = rs.carrier.transmit(&mut buf);
-            if n == 0 {
-                break;
-            }
-            if let Some(d) = buf.get(..n) {
-                self.ops.push_back(Op::Write {
-                    stream: sid,
-                    data: d.to_vec(),
-                });
-            }
-        }
-    }
-
-    fn drain(&mut self, now: u64, sid: StreamId) {
-        for _ in 0..1024 {
-            let mut sink = Collect::default();
-            let step = {
-                let Some(hub) = self.hub.as_mut() else { return };
-                let Some(rs) = hub.streams.get_mut(&sid) else { return };
-                let mut env = Env {
-                    provider: &self.prov,
-                    now,
-                    drbg: &mut self.hdrbg,
-                };
-                match rs.carrier.poll(&mut env, &mut hub.stores) {
-                    Ok(Poll::Idle) => Step::Idle,
-                    Ok(Poll::Handshake) => Step::Flush,
-                    Ok(Poll::KeyRequest) => {
-                        let soft = SoftKeys {
-                            signer: Some((KeyHandle(1), &self.kp)),
-                            prekeys: None,
-                        };
-                        if rs.carrier.answer_soft(&mut env, &soft).is_ok() {
-                            Step::Flush
-                        } else {
-                            Step::Dead
-                        }
-                    }
-                    Ok(Poll::Open(peer)) => Step::Open(peer),
-                    Ok(Poll::Frame(f)) => {
-                        if let (Some(node), Some(sess)) = (rs.node, rs.session) {
-                            let _ = hub.relay.carrier_frame(now, &node, sess, &f, &mut sink);
-                        }
-                        Step::Frame
-                    }
-                    Err(e) => {
-                        if e.is_fatal() {
-                            Step::Dead
-                        } else {
-                            Step::Flush
-                        }
-                    }
-                }
-            };
-            match step {
-                Step::Idle => {
-                    self.flush_handshake(sid);
-                    return;
-                }
-                Step::Flush => self.flush_handshake(sid),
-                Step::Frame => self.apply(now, sink),
-                Step::Open(peer) => {
-                    self.flush_handshake(sid);
-                    let mut s = Collect::default();
-                    let Some(hub) = self.hub.as_mut() else { return };
-                    if let Ok(sess) = hub.relay.carrier_opened(now, peer, &mut s) {
-                        if let Some(rs) = hub.streams.get_mut(&sid) {
-                            rs.node = Some(peer);
-                            rs.session = Some(sess);
-                        }
-                        if let Some(old) = hub.by_node.insert(peer, sid)
-                            && old != sid
-                        {
-                            hub.streams.remove(&old);
-                            self.ops.push_back(Op::Close { stream: old });
-                        }
-                    }
-                    self.apply(now, s);
-                }
-                Step::Dead => {
-                    self.ops.push_back(Op::Close { stream: sid });
-                    self.drop_stream(now, sid);
-                    return;
-                }
-            }
-        }
-    }
-
-    fn drop_stream(&mut self, now: u64, sid: StreamId) {
-        let Some(hub) = self.hub.as_mut() else { return };
-        if let Some(rs) = hub.streams.remove(&sid)
-            && let (Some(node), Some(sess)) = (rs.node, rs.session)
-        {
-            if hub.by_node.get(&node) == Some(&sid) {
-                hub.by_node.remove(&node);
-            }
-            let mut s = Collect::default();
-            hub.relay.carrier_closed(now, &node, sess, &mut s);
-            self.apply(now, s);
-        }
-    }
-
-    // ---------------------------------------------------------------- inputs
 
     fn relay_of_stream(&self, s: StreamId) -> Option<usize> {
         self.streams.iter().position(|x| *x == Some(s))

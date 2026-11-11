@@ -1,6 +1,7 @@
 //! The VINC node program: `vinc_node::Node` on real sockets, driven by one task on the nuclei runtime.
 //!
-//! - [`core`]: the host without a runtime (duties, relay of a hub, key answers).
+//! - [`core`]: the host without a runtime (duties, the node's inputs and outputs); `hub` is the relay a hub runs for its
+//!   members and `keys` answers key requests.
 //! - [`apps`]: the value and set stores.
 //! - [`net`]: the UDP socket and TCP streams.
 //! - [`agent`]: the workload commands and the loop that owns the node.
@@ -12,6 +13,8 @@
 pub mod agent;
 pub mod apps;
 pub mod core;
+mod hub;
+mod keys;
 pub mod net;
 
 use crate::node::app::for_each_request;

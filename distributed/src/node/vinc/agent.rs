@@ -95,13 +95,13 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             .me()
             .ok_or_else(|| format!("{} is not a node of the scenario", init.name))?
             .clone();
-        let addr = SocketAddr::new(IpAddr::V4(me_spec.ip), UDP_PORT);
+        let addr = SocketAddr::new(IpAddr::V4(me_spec.ip), me_spec.port(UDP_PORT));
         let mut hubs = Vec::new();
         for p in init.peers.iter().filter(|p| p.role != Role::Peer) {
             hubs.push(HubAddr {
                 id: node_id(&p.name)?,
-                udp: SocketAddr::new(IpAddr::V4(p.public_ip), UDP_PORT),
-                tcp: SocketAddr::new(IpAddr::V4(p.public_ip), TCP_PORT),
+                udp: SocketAddr::new(IpAddr::V4(p.public_ip), p.port(UDP_PORT)),
+                tcp: SocketAddr::new(IpAddr::V4(p.public_ip), p.port(TCP_PORT)),
             });
         }
         if hubs.is_empty() {
@@ -491,14 +491,14 @@ pub async fn serve<const K: usize, const D: usize>(
     let me_spec = init
         .me()
         .ok_or_else(|| format!("{} is not a node of the scenario", init.name))?;
-    let bind = SocketAddr::new(IpAddr::V4(me_spec.ip), UDP_PORT);
+    let bind = SocketAddr::new(IpAddr::V4(me_spec.ip), me_spec.port(UDP_PORT));
     let net = Net::bind(bind).map_err(|e| format!("the UDP socket on {bind} could not be opened: {e}"))?;
     let batch = net.batch();
     let mtu = u16::try_from(init.mtu).unwrap_or(1500);
     let (mut agent, ready) = Agent::<K, D>::new(&init, mtu, batch)?;
     let (streams, mut wire) = Streams::new();
     if agent.core.is_hub() {
-        let tcp = SocketAddr::new(bind.ip(), TCP_PORT);
+        let tcp = SocketAddr::new(bind.ip(), me_spec.port(TCP_PORT));
         let listener = nuclei::net::TcpListener::bind(tcp)
             .await
             .map_err(|e| format!("the TCP listener on {tcp} could not be opened: {e}"))?;
