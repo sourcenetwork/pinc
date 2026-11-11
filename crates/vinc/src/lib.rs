@@ -68,6 +68,7 @@ mod keys;
 mod mem;
 mod node;
 mod protocol;
+mod records;
 mod standby;
 mod start;
 pub mod stream;
@@ -76,7 +77,8 @@ pub use addr::{NodeAddr, node_from_str, node_to_string};
 pub use carrier::CarrierKind;
 pub use conn::{ConnStats, Connection, Incoming};
 pub use endpoint::{
-    Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, NoDiscovery, Vinc,
+    Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, LOOKUP_WAIT, NoDiscovery,
+    Vinc,
 };
 pub use engine::{Admit, BUSY, DENIED, REVOKED_MAX};
 pub use error::{Error, ErrorKind, Result};
@@ -85,6 +87,7 @@ pub use keys::Identity;
 pub use mem::{Limits, MAX_CONNECTIONS, RING, STREAMS};
 pub use node::CAPACITIES;
 pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
+pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
 pub use stream::{RecvStream, SendStream};
 pub use vinc_core::NodeStats;
 pub use vinc_crypto::NodeId;

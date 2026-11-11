@@ -507,6 +507,10 @@ name = "vinc_datagram"
 path = "vinc_datagram.rs"
 
 [[test]]
+name = "vinc_discovery"
+path = "vinc_discovery.rs"
+
+[[test]]
 name = "vinc_scale"
 path = "vinc_scale.rs"
 

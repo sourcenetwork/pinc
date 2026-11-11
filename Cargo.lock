@@ -1448,6 +1448,7 @@ version = "0.1.0"
 dependencies = [
  "nuclei",
  "rapidhash",
+ "vinc-connect",
  "vinc-core",
  "vinc-crypto",
  "vinc-keystore",

@@ -12,11 +12,14 @@
 //! connection of it or to a stream of it lives; dropping the last handle drops its state without sending anything, so
 //! close what should be told first ([`Endpoint::close`], [`Connection::close`]).
 
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::net::{Ipv4Addr, SocketAddr};
+use std::pin::pin;
 use std::rc::Rc;
-use std::time::Instant;
+use std::task::Poll;
+use std::time::{Duration, Instant};
 
+use vinc_connect::record::{self, MAX_ADDRS, MAX_RECORD_LEN, Reach, RecordFields};
 use vinc_crypto::NodeId;
 use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};
 
@@ -31,6 +34,7 @@ use crate::host::{BatchHost, Host, Hosted, Io, IoHost};
 use crate::keys::Identity;
 use crate::mem::Limits;
 use crate::protocol::{Protocol, Registered};
+use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
 use crate::start::build;
 
 /// Finds addresses for a node the caller gave none for. It may do I/O; it runs before the dial starts, so dropping the
@@ -430,20 +434,39 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     }
 
     /// Dial `to` for `alpn`. A peer already connected gets a sub-session at once, with no round trip. Without direct
-    /// addresses in `to` the discovery hook and the address book are used. Dropping the future closes a session that
-    /// was about to open.
+    /// addresses in `to` the discovery hook and the address book are used; the hook has [`LOOKUP_WAIT`] to answer.
+    /// Dropping the future closes a session that was about to open.
     ///
     /// # Errors
     /// [`crate::ErrorKind::Unreachable`] when no address works or the handshake fails, [`crate::ErrorKind::TimedOut`] when the peer does
-    /// not answer, [`crate::ErrorKind::Refused`] when the access hook refused the peer, [`crate::ErrorKind::Busy`] when the connection
+    /// not answer or discovery did not answer in time, [`crate::ErrorKind::Refused`] when the access hook refused the peer, [`crate::ErrorKind::Busy`] when the connection
     /// table is full.
     pub async fn connect(&self, to: impl Into<NodeAddr>, alpn: &[u8]) -> Result<Connection<H>> {
         let to: NodeAddr = to.into();
         let mut addrs = to.direct;
         if addrs.is_empty() {
-            addrs = self.0.discovery.lookup(&to.node).await;
+            addrs = self
+                .within(LOOKUP_WAIT, self.0.discovery.lookup(&to.node))
+                .await
+                .ok_or(Error::new(ErrorKind::TimedOut, "discovery did not answer in time"))?;
         }
         Connection::dial(&self.0.shared, to.node, alpn, addrs).await
+    }
+
+    /// `f`'s output, or `None` if `wait` passes first; the wait is the host's sleep.
+    async fn within<T>(&self, wait: Duration, f: impl Future<Output = T>) -> Option<T> {
+        let mut f = pin!(f);
+        let mut sleep = pin!(self.0.shared.host.sleep(Instant::now() + wait));
+        poll_fn(|cx| {
+            if let Poll::Ready(v) = f.as_mut().poll(cx) {
+                return Poll::Ready(Some(v));
+            }
+            if sleep.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(None);
+            }
+            Poll::Pending
+        })
+        .await
     }
 
     /// Wait for the next session a peer opened on a protocol of the builder's list. `None` once the endpoint stopped.
@@ -567,6 +590,92 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
                 core.shutdown_poll()
             })
             .await;
+    }
+}
+
+/// How long a dial by node id alone, and [`Endpoint::lookup`], wait for discovery.
+pub const LOOKUP_WAIT: Duration = Duration::from_secs(3);
+
+impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
+    /// Set the hints the next [`publish`](Self::publish) puts in this node's record: at most [`MAX_HINTS`] bytes the
+    /// application gives meaning to (a pointer to its service records, say). Empty by default.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::TooLarge`] for more than [`MAX_HINTS`] bytes; the hints are unchanged then.
+    pub fn set_hints(&self, hints: &[u8]) -> Result<()> {
+        if hints.len() > MAX_HINTS {
+            return Err(Error::new(
+                ErrorKind::TooLarge,
+                "a record carries at most 64 bytes of hints",
+            ));
+        }
+        let mut h = self
+            .0
+            .discovery
+            .hints
+            .try_borrow_mut()
+            .map_err(|_| Error::new(ErrorKind::Busy, "the hints are being read"))?;
+        h.clear();
+        h.extend_from_slice(hints);
+        Ok(())
+    }
+
+    /// This node's record as [`publish`](Self::publish) sends it: its address ([`addr`](Self::addr)), its hints and a
+    /// sequence number above every earlier one (the wall clock in milliseconds, or one more than the last), signed
+    /// with its identity. With no relay client in the endpoint yet, the home relay field names this node and the
+    /// reachability class says public; the connectivity client fills both once it runs under the facade.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::Config`] if the key store refuses to sign, [`crate::ErrorKind::Shutdown`] if the endpoint
+    /// stopped.
+    pub async fn signed_record(&self) -> Result<Vec<u8>> {
+        let records = &self.0.discovery;
+        let clock = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let seq = clock.max(records.seq.get().saturating_add(1));
+        records.seq.set(seq);
+        let hints = records
+            .hints
+            .try_borrow()
+            .map(|h| h.clone())
+            .map_err(|_| Error::new(ErrorKind::Busy, "the hints are being changed"))?;
+        let addrs = self.addr().direct;
+        let fields = RecordFields {
+            home: self.id(),
+            seq,
+            reach: Reach::Public,
+            addrs: addrs.get(..addrs.len().min(MAX_ADDRS)).unwrap_or_default(),
+            hints: &hints,
+        };
+        let bad = |_| Error::config("the record could not be built");
+        let mut out = vec![0u8; MAX_RECORD_LEN];
+        let signed = record::prepare(&self.id(), self.public_key(), &fields, &mut out).map_err(bad)?;
+        let sig = self.sign(out.get(..signed).unwrap_or_default()).await?;
+        let len = record::finish(&mut out, signed, &sig).map_err(bad)?;
+        out.truncate(len);
+        Ok(out)
+    }
+
+    /// Publish this node's record ([`signed_record`](Self::signed_record)) to the rendezvous, so a peer can dial it by
+    /// node id alone. Publish again after the address or the hints change.
+    ///
+    /// # Errors
+    /// As [`signed_record`](Self::signed_record), and the store's own error.
+    pub async fn publish(&self) -> Result<()> {
+        let record = self.signed_record().await?;
+        self.0.discovery.put(&record).await
+    }
+
+    /// The newest verified record of `node`, hints included: what the rendezvous holds now if it is newer than what
+    /// this endpoint saw before. `None` if the store has no record of `node` that verifies.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::TimedOut`] if the store does not answer within [`LOOKUP_WAIT`].
+    pub async fn lookup(&self, node: &NodeId) -> Result<Option<PeerRecord>> {
+        self.within(LOOKUP_WAIT, self.0.discovery.find(node))
+            .await
+            .ok_or(Error::new(ErrorKind::TimedOut, "the rendezvous did not answer in time"))
     }
 }
 

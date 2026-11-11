@@ -401,6 +401,8 @@ par witness_tlc broadcast_node_helddup BroadcastNode BroadcastNode_heldDup OnceN
 par run_tlc facade_revoke FacadeRevoke FacadeRevoke
 par witness_tlc facade_revoke_failopen FacadeRevoke FacadeRevoke_failopen AdmitSound
 par witness_tlc facade_revoke_nobackstop FacadeRevoke FacadeRevoke_nobackstop NoLiveRevoked
+par run_tlc facade_records FacadeRecords FacadeRecords
+par witness_tlc facade_records_noseq FacadeRecords FacadeRecords_noseq NoRollback
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"

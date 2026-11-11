@@ -16,6 +16,7 @@ vinc-keystore = { workspace = true }
 vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-core = { workspace = true, features = ["alloc"] }
 rapidhash = { workspace = true }
+vinc-connect = { workspace = true }
 
 [dev-dependencies]
 nuclei = { workspace = true }
