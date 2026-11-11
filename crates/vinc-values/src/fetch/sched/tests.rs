@@ -170,6 +170,8 @@ fn stream_bytes_stretch_the_stall_wait_by_their_own_gaps_and_restart_its_clock()
         out: &mut out,
     };
     f.treq = NS;
+    // The stall clock runs once a granule was verified.
+    f.lastp = NS;
     f.sw = STALL_WAIT;
     // First bytes 5 s after the request: twice that delay.
     f.on_readable(&mut io, 6 * NS, 7, 100);
