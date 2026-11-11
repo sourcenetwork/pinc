@@ -787,6 +787,10 @@ name = "scenario_internet"
 path = "scenario_internet.rs"
 
 [[test]]
+name = "scenario_lowband"
+path = "scenario_lowband.rs"
+
+[[test]]
 name = "scenario_mobile"
 path = "scenario_mobile.rs"
 

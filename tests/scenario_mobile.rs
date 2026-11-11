@@ -6,5 +6,5 @@ mod scenario_support;
 
 scenario_target!(
     ["S3"],
-    "S3 seed 31337 fails G-INT, G-ORDER, G-LIVE and G-CONNECT: echoes, docsyncs and fetches toward nodes that moved never connect or complete"
+    "S3 seed 31337 fails G-ORDER, G-LIVE, G-AWARE and G-CONNECT: echoes and docsyncs toward nodes that moved never connect, and a few live members are reported suspected"
 );
