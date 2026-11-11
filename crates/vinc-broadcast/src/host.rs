@@ -54,6 +54,8 @@ pub enum Event<'a> {
         topic: &'a [u8],
         /// The origin's node id.
         origin: &'a NodeId,
+        /// The peer whose session delivered it: a hub, or the origin itself when it sent the message straight.
+        hop: &'a NodeId,
         /// The message id.
         mid: [u8; 8],
         /// The body, already checked against the signature.

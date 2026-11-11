@@ -244,7 +244,15 @@ impl Topics {
     }
 
     /// Hold a message until the floors are known, unless it is already held. Returns whether it was taken.
-    pub(crate) fn hold_for_floor(&mut self, mid: [u8; 8], origin: &NodeId, ts: Hlc, topic: &[u8], body: &[u8]) {
+    pub(crate) fn hold_for_floor(
+        &mut self,
+        mid: [u8; 8],
+        origin: &NodeId,
+        hop: &NodeId,
+        ts: Hlc,
+        topic: &[u8],
+        body: &[u8],
+    ) {
         if self.gather.fhold.len() >= FHOLD_MAX || self.gather.fhold.iter().any(|x| x.mid == mid) {
             return;
         }
@@ -256,6 +264,7 @@ impl Topics {
         self.gather.fhold.push(Held {
             mid,
             origin: *origin,
+            hop: *hop,
             ts,
             data,
         });

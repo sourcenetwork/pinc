@@ -41,6 +41,8 @@ pub enum NodeEvent {
         topic: Vec<u8>,
         /// The origin's node id.
         origin: NodeId,
+        /// The peer whose session delivered it: a hub, or the origin itself when it sent the message straight.
+        hop: NodeId,
         /// The message id.
         mid: [u8; 8],
         /// The body.

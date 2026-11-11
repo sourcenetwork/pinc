@@ -94,7 +94,7 @@ impl Topics {
                 self.send_pack(h, from, mid);
             }
         } else {
-            self.offer(h, now, topic, mid, head.origin, body, head.ts);
+            self.offer(h, now, topic, mid, head.origin, from, body, head.ts);
         }
     }
 
@@ -165,7 +165,8 @@ impl Topics {
         }
         let subscribed = self.topics.get(topic).is_some_and(|st| st.sub);
         if subscribed && *head.origin != self.me {
-            self.offer(h, now, topic, head.mid, head.origin, body, head.ts);
+            let hop = sender.copied().unwrap_or(self.me);
+            self.offer(h, now, topic, head.mid, head.origin, &hop, body, head.ts);
         } else if let Some(st) = self.topics.get_mut(topic) {
             st.seen.insert(key, now, true);
         }
@@ -182,6 +183,7 @@ impl Topics {
         topic: &[u8],
         mid: [u8; 8],
         origin: &NodeId,
+        hop: &NodeId,
         body: &[u8],
         ts: Hlc,
     ) {
@@ -201,7 +203,7 @@ impl Topics {
         let old = self.is_old(origin, ts);
         if self.gather.gathering() && !self.is_hub {
             // Until every hub reported its floor, a message cannot be told from one an earlier life delivered.
-            self.hold_for_floor(mid, origin, ts, topic, body);
+            self.hold_for_floor(mid, origin, hop, ts, topic, body);
             return;
         }
         let verdict = self.acp.get(origin).copied().filter(|(_, exp)| *exp >= now);
@@ -224,7 +226,7 @@ impl Topics {
         }
         if let Some((allow, _)) = verdict {
             if allow {
-                self.deliver(h, topic, mid, origin, body);
+                self.deliver(h, topic, mid, origin, hop, body);
             }
             return;
         }
@@ -235,6 +237,7 @@ impl Topics {
                 self.held.push(Held {
                     mid,
                     origin: *origin,
+                    hop: *hop,
                     ts,
                     data,
                 });
@@ -262,15 +265,16 @@ impl Topics {
         if let Some((topic, body)) = Self::unpack(&e.data)
             && !self.is_dup(topic, u64::from_le_bytes(e.mid), now)
         {
-            self.offer(h, now, topic, e.mid, &e.origin, body, e.ts);
+            self.offer(h, now, topic, e.mid, &e.origin, &e.hop, body, e.ts);
         }
         self.give_buf(e.data);
     }
 
-    fn deliver<H: Host>(&mut self, h: &mut H, topic: &[u8], mid: [u8; 8], origin: &NodeId, body: &[u8]) {
+    fn deliver<H: Host>(&mut self, h: &mut H, topic: &[u8], mid: [u8; 8], origin: &NodeId, hop: &NodeId, body: &[u8]) {
         h.event(Event::Message {
             topic,
             origin,
+            hop,
             mid,
             body,
         });
@@ -299,7 +303,7 @@ impl Topics {
             }
             let e = self.held.remove(i);
             if allow && let Some((topic, body)) = Self::unpack(&e.data) {
-                self.deliver(h, topic, e.mid, &e.origin, body);
+                self.deliver(h, topic, e.mid, &e.origin, &e.hop, body);
             }
             self.give_buf(e.data);
         }

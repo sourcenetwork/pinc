@@ -200,6 +200,7 @@ pub(crate) struct Pending {
 pub(crate) struct Held {
     pub(crate) mid: [u8; 8],
     pub(crate) origin: NodeId,
+    pub(crate) hop: NodeId,
     pub(crate) ts: Hlc,
     pub(crate) data: Vec<u8>,
 }
@@ -379,6 +380,26 @@ impl Topics {
     /// The subscribers a node knows for `topic`, for the member-to-member fallback.
     pub fn known_subscribers(&self, topic: &[u8]) -> &[NodeId] {
         self.topics.get(topic).map_or(&[], |t| t.peers.as_slice())
+    }
+
+    /// Take `member` as a subscriber of `topic` that this node may send to straight when no hub is reachable (a join
+    /// hint). A hub's list of subscribers replaces it. False if the topic table or the subscriber list is full.
+    pub fn hint(&mut self, topic: &[u8], member: &NodeId) -> bool {
+        if *member == self.me || !self.ensure_topic(topic) {
+            return false;
+        }
+        let max = self.limits.max_subscribers;
+        let Some(st) = self.topics.get_mut(topic) else {
+            return false;
+        };
+        if st.peers.contains(member) {
+            return true;
+        }
+        if st.peers.len() >= max {
+            return false;
+        }
+        st.peers.push(*member);
+        true
     }
 
     /// The next trace record.

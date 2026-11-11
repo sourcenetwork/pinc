@@ -610,6 +610,11 @@ where
         self.settle(now);
     }
 
+    /// Take `member` as a subscriber of `topic` to send to straight when no hub is reachable.
+    pub fn hint_subscriber(&mut self, topic: &[u8], member: &NodeId) -> bool {
+        self.topics.hint(topic, member)
+    }
+
     /// The access-control layer answered a broadcast check ([`NodeEvent::BroadcastAcpCheck`]).
     pub fn broadcast_acp_answer(&mut self, now: Nanos, id: u32, allow: bool) {
         self.begin(now);
@@ -886,6 +891,11 @@ where
     A: Apps<P>,
     E::Src: ServeSource<A::Values>,
 {
+    /// The full id of the peer whose short id is `id`: the algorithm learned from a session or a configured relay.
+    pub fn full_id(&self, id: &NodeId) -> vinc_crypto::NodeId {
+        self.io.full_id(id)
+    }
+
     /// This node's full id.
     pub const fn id(&self) -> &vinc_crypto::NodeId {
         &self.ident

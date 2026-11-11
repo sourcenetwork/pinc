@@ -139,6 +139,7 @@ impl Host for NodeHost {
                 origin,
                 mid,
                 body,
+                ..
             } => Ev::Msg {
                 topic: topic.to_vec(),
                 origin: *origin,

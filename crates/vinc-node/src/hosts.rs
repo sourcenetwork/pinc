@@ -191,11 +191,13 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
             BcEvent::Message {
                 topic,
                 origin,
+                hop,
                 mid,
                 body,
             } => NodeEvent::Message {
                 topic: topic.to_vec(),
                 origin: *origin,
+                hop: *hop,
                 mid,
                 body: body.to_vec(),
             },
