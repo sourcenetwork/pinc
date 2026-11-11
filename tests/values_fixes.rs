@@ -153,33 +153,21 @@ fn a_granule_two_streams_race_on_is_announced_once() {
     cst.assert_verified_is_true(store.content());
 }
 
-/// A provider that connects and never sends is redialled: the stall wait counts from the first request.
+/// The stall rule starts at the first verified granule: a fetch that has not received one is not redialled by it,
+/// however long the provider stays silent (a slow link may still be sending the first granule).
 #[test]
-fn a_provider_that_never_sends_is_redialled() {
+fn a_fetch_with_no_verified_granule_yet_is_not_redialled_by_the_stall_rule() {
     let store = PStore::random(63, 2 << 20);
     let mut sim = Sim::new(vec![ProvCfg::new(store, 1000).stall_after(0)], ClientStore::new());
     sim.start();
+    sim.run_until(60 * SEC, |_| false);
     assert!(
-        sim.run_until(60 * SEC, |s| s
-            .rec
+        !sim.rec
             .traces
             .iter()
-            .any(|(_, t)| matches!(t, Trace::StallRedial { .. }))),
-        "a provider that never sent was never redialled"
+            .any(|(_, t)| matches!(t, Trace::StallRedial { .. })),
+        "a fetch that never received a granule was redialled"
     );
-    let first = sim
-        .rec
-        .traces_of(|t| matches!(t, Trace::Requested { .. }).then_some(()))[0]
-        .0;
-    let (at, wait) = sim.rec.traces_of(|t| {
-        if let Trace::StallRedial { wait, .. } = t {
-            Some(*wait)
-        } else {
-            None
-        }
-    })[0];
-    assert_eq!(wait, 4 * SEC);
-    assert_eq!(at, first + 4 * SEC, "the wait counts from the first request");
 }
 
 /// A PROOF frame that does not fit the value evicts the provider whose stream it names.

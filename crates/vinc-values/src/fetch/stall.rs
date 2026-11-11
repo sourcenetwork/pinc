@@ -64,10 +64,10 @@ impl Fetch {
         self.want.as_slice().last().map_or(0, crate::span::Span::end)
     }
 
-    /// The moment the stall wait counts from: the later of the last verified granule, the last stream bytes and the
-    /// first request (so a provider that connects and never sends is redialled too); `None` before the first request.
+    /// The moment the stall wait counts from: the later of the last verified granule and the last stream bytes;
+    /// `None` before the first granule, so a fetch that has not yet received one is never redialled by the stall rule.
     fn stall_base(&self) -> Option<u64> {
-        (self.treq != 0).then(|| self.lastp.max(self.lastb).max(self.treq))
+        (self.lastp != 0).then(|| self.lastp.max(self.lastb))
     }
 
     /// The next time [`Fetch::on_timeout`] has something to do, if any.
@@ -98,7 +98,7 @@ impl Fetch {
         if !late && STALL_WAIT != 0 && base.is_some_and(|b| now >= b.saturating_add(self.sw)) {
             let w = self.stall_rtt(io);
             let lv = self.stall_live(io, now);
-            let lp = self.lastp.max(self.treq);
+            let lp = self.lastp;
             if w > self.sw && lp.saturating_add(w) > now {
                 self.sw = w;
             } else if lv != 0 {
@@ -168,7 +168,7 @@ impl Fetch {
             if r < SLOW_RTT
                 || info.pto
                 || now.saturating_sub(info.last_rx) > (2 * NS).max(r.saturating_mul(2))
-                || now.saturating_sub(self.lastp.max(self.treq)) > LIVE_CAP
+                || now.saturating_sub(self.lastp) > LIVE_CAP
             {
                 return 0;
             }
