@@ -7,8 +7,8 @@
 
 use vinc_core::{Answer, Command, Event, Query, Role, SessionId, Value};
 use vinc_node::{NodeEvent as NEv, ValuesRequest};
-use vinc_values::span::Span;
 use vinc_transport::stream::RecvStatus;
+use vinc_values::span::Span;
 
 use super::NodeEvent;
 use super::core::{Check, Core, Known, LOCAL_BASE, Sess};
@@ -121,7 +121,8 @@ impl Core {
             } else if super::in_trace_window(self.now)
                 || matches!(item.body, vinc_node::Body::Values(_, t) if !matches!(t, vinc_values::trace::Trace::Verified { .. }))
             {
-                self.shared.note_trace(format!("n{} true{} {:?}", self.idx, self.now, item.body));
+                let line = self.shared.name_ids(&format!("{:?}", item.body));
+                self.shared.note_trace(format!("n{} true{} {line}", self.idx, self.now));
             }
         }
     }
@@ -129,7 +130,9 @@ impl Core {
     /// Tell the recorder what the node's value store gained since the last call, and flag bytes that are not the
     /// value's body.
     fn record_commits(&mut self) {
-        let Some(store) = self.shared.values_of(self.idx) else { return };
+        let Some(store) = self.shared.values_of(self.idx) else {
+            return;
+        };
         let commits = store.take_commits();
         let mut rec = self.shared.rec.borrow_mut();
         for c in commits {
@@ -217,8 +220,15 @@ impl Core {
                     }
                 }
             }
-            Event::Closed { session, .. } => match self.sessions.remove(&session) {
+            Event::Closed { session, reason } => match self.sessions.remove(&session) {
                 Some(s) if !s.hidden => {
+                    if self.shared.is_watched(self.idx) {
+                        let line = format!(
+                            "n{} true{} session with {} closed: {reason:?}",
+                            self.idx, self.now, s.peer
+                        );
+                        self.shared.note_trace(line);
+                    }
                     self.events.push_back(NodeEvent::Closed { peer: s.peer });
                     if self.deliver() {
                         let local = self.now;
@@ -302,6 +312,14 @@ impl Core {
             return;
         };
         let (local, bytes) = (self.now, alpn.as_bytes());
+        if self.shared.is_watched(self.idx) {
+            let (how, name) = (
+                if dialed { "dialed" } else { "accepted" },
+                String::from_utf8_lossy(bytes),
+            );
+            self.shared
+                .note_trace(format!("n{} true{} {how} {name} with {peer}", self.idx, self.now));
+        }
         if dialed {
             self.events.push_back(NodeEvent::Connected { peer, resumed });
             if self.deliver() {

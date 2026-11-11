@@ -113,7 +113,11 @@ pub struct Shared {
     stores: Vec<(VStore, SetStore)>,
     watched: RefCell<BTreeSet<usize>>,
     node_trace: RefCell<Vec<String>>,
+    net: RefCell<NetSums>,
 }
+
+/// Datagram counts and bytes per (node, second, received, remote address), for a wide trace window.
+type NetSums = BTreeMap<(usize, u64, bool, SocketAddr), (u64, u64)>;
 
 impl Shared {
     /// The shared state of a run of `world` reporting to `rec` and `registry`.
@@ -176,6 +180,7 @@ impl Shared {
             stores,
             watched: RefCell::default(),
             node_trace: RefCell::default(),
+            net: RefCell::default(),
         }))
     }
 
@@ -194,6 +199,35 @@ impl Shared {
         self.by_id.get(id).copied()
     }
 
+    /// `text` with every 32-byte array that is a node's id written as `n<index>`, for the diagnosis lines.
+    pub fn name_ids(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(open) = rest.find('[') {
+            let (head, tail) = rest.split_at(open);
+            out.push_str(head);
+            let Some(close) = tail.find(']') else {
+                out.push_str(tail);
+                return out;
+            };
+            let inner = tail.get(1..close).unwrap_or_default();
+            let bytes: Vec<u8> = inner.split(", ").filter_map(|x| x.trim().parse().ok()).collect();
+            let name = <[u8; 32]>::try_from(bytes.as_slice())
+                .ok()
+                .and_then(|id| self.index_of_bytes(&id));
+            match name {
+                Some(i) => {
+                    out.push('n');
+                    out.push_str(&i.to_string());
+                }
+                None => out.push_str(tail.get(..=close).unwrap_or_default()),
+            }
+            rest = tail.get(close + 1..).unwrap_or_default();
+        }
+        out.push_str(rest);
+        out
+    }
+
     /// Record the decisions of the nodes `nodes` (their trace is built and kept), for diagnosis.
     pub fn watch(&self, nodes: &[usize]) {
         self.watched.borrow_mut().extend(nodes.iter().copied());
@@ -209,9 +243,22 @@ impl Shared {
         self.node_trace.borrow_mut().push(line);
     }
 
-    /// The lines recorded since the last call.
+    /// Add a datagram of node `idx` at true time `now` to the per-second sums of a wide trace window.
+    pub(super) fn note_net(&self, idx: usize, rx: bool, now: u64, remote: SocketAddr, len: usize) {
+        let mut m = self.net.borrow_mut();
+        let e = m.entry((idx, now / 1_000_000_000, rx, remote)).or_default();
+        e.0 += 1;
+        e.1 += len as u64;
+    }
+
+    /// The lines recorded since the last call, then the per-second sums of datagrams.
     pub fn take_trace(&self) -> Vec<String> {
-        std::mem::take(&mut self.node_trace.borrow_mut())
+        let mut out = std::mem::take(&mut *self.node_trace.borrow_mut());
+        for ((idx, sec, rx, remote), (n, bytes)) in std::mem::take(&mut *self.net.borrow_mut()) {
+            let dir = if rx { "RX from" } else { "TX to" };
+            out.push(format!("net n{idx} sec{sec} {dir} {remote}: {n} datagrams {bytes} B"));
+        }
+        out
     }
 
     /// The value store of node `idx`.

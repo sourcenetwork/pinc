@@ -97,6 +97,23 @@ pub(super) enum Check {
     Broadcast(u32),
 }
 
+/// The CPU a node was charged, by part, for the run's statistics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CpuParts {
+    /// Nanoseconds of the instrumented crypto.
+    pub crypto_ns: u64,
+    /// Handler calls (datagrams, timeouts, commands, carrier events).
+    pub calls: u64,
+    /// Nanoseconds of transmit I/O.
+    pub io_ns: u64,
+    /// AEAD calls.
+    pub aead: u64,
+    /// Bytes sealed or opened.
+    pub aead_bytes: u64,
+    /// Bytes hashed.
+    pub hash_bytes: u64,
+}
+
 #[allow(
     clippy::struct_excessive_bools,
     reason = "independent facts about the node, not a state"
@@ -138,6 +155,9 @@ pub(super) struct Core {
     pub(super) io_acc: f64,
     pub(super) calls: u64,
     pub(super) cpu_ns: u64,
+    /// The CPU charged so far by part: crypto, handler calls and transmit I/O, in nanoseconds, and the bytes sealed or
+    /// opened and hashed.
+    pub(super) cpu_parts: CpuParts,
     pub(super) persisted: Vec<u8>,
     pub(super) max_export: usize,
     pub(super) next_sample: u64,
@@ -222,6 +242,7 @@ impl Core {
             io_acc: 0.0,
             calls: 0,
             cpu_ns: 0,
+            cpu_parts: CpuParts::default(),
             persisted: Vec::new(),
             max_export: 0,
             next_sample: 0,

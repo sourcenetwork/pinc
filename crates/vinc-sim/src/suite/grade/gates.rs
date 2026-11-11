@@ -465,17 +465,22 @@ fn aware(world: &World, rec: &Rec, facts: &RunFacts, d: &mut Details) {
                     ChangeKind::Revoke => "revoke",
                     ChangeKind::Addr => "addr",
                 };
-                fail(
-                    d,
-                    "G-AWARE",
-                    &format!("a {name} was not reported to every live member within the stated bound"),
+                let msg = format!(
+                    "a {name} was not reported to every live member within the stated bound: node {j} about node {x} at {t0} ns"
                 );
+                fail(d, "G-AWARE", &msg);
                 continue 'change;
             }
         }
     }
-    // accuracy
-    let false_n = rec
+    accuracy(world, rec, n, bi, rate_bound, d);
+    convergence(rec, facts, n, b, endi, d);
+}
+
+/// G-AWARE accuracy: suspicions and confirmations of live, settled members stay under the stated rate.
+fn accuracy(world: &World, rec: &Rec, n: usize, bi: i128, rate_bound: f64, d: &mut Details) {
+    let (denied, end) = (&rec.denied, rec.end);
+    let falses: Vec<_> = rec
         .membership
         .iter()
         .filter(|m| matches!(m.kind, MemberKind::Suspected | MemberKind::ConfirmedDown))
@@ -489,13 +494,29 @@ fn aware(world: &World, rec: &Rec, facts: &RunFacts, d: &mut Details) {
                     && !cut(world, m.node, x, i128::from(m.t) - bi, i128::from(m.t))
             })
         })
-        .count();
+        .collect();
+    let false_n = falses.len();
     let hours = (end as f64 / HOUR as f64).max(1e-9);
     let members = n.saturating_sub(denied.len()).max(1);
     if false_n as f64 / (members as f64 * hours) > rate_bound && false_n > 2 {
-        fail(d, "G-AWARE", "false suspicions of live members above the stated rate");
+        let first: Vec<String> = falses
+            .iter()
+            .take(4)
+            .map(|m| {
+                format!(
+                    "node {} about node {} at {} ns",
+                    m.node,
+                    m.member.unwrap_or(usize::MAX),
+                    m.t
+                )
+            })
+            .collect();
+        let msg = format!(
+            "false suspicions of live members above the stated rate: {false_n}, first {}",
+            first.join(", ")
+        );
+        fail(d, "G-AWARE", &msg);
     }
-    convergence(rec, facts, n, b, endi, d);
 }
 
 fn convergence(rec: &Rec, facts: &RunFacts, n: usize, b: u64, endi: i128, d: &mut Details) {
@@ -521,13 +542,15 @@ fn convergence(rec: &Rec, facts: &RunFacts, n: usize, b: u64, endi: i128, d: &mu
             fail(d, "G-AWARE", "view() did not return (epoch, members)");
             return;
         };
-        if live.iter().any(|&i| i != j && !susp(i) && !members.contains(&i)) {
-            fail(d, "G-AWARE", "membership views did not converge within a component");
+        if let Some(i) = live.iter().find(|&&i| i != j && !susp(i) && !members.contains(&i)) {
+            let msg = format!("membership views did not converge: node {j} does not list live node {i}");
+            fail(d, "G-AWARE", &msg);
             return;
         }
         let gone = |i: usize| (!node(i).is_some_and(|f| f.alive_at_end) || rec.revoked.contains_key(&i)) && !susp(i);
-        if members.iter().any(|&i| i < n && gone(i)) {
-            fail(d, "G-AWARE", "a view still lists departed, crashed or revoked members");
+        if let Some(i) = members.iter().find(|&&i| i < n && gone(i)) {
+            let msg = format!("a view still lists departed, crashed or revoked members: node {j} lists node {i}");
+            fail(d, "G-AWARE", &msg);
             return;
         }
     }
@@ -576,11 +599,14 @@ fn surface(world: &World, rec: &Rec, facts: &RunFacts, d: &mut Details) {
             && let Some(base) = base_rtt(world, facts, it.node, z)
             && i128::from(c) - i128::from(it.t) > i128::from(base / 2)
         {
-            fail(
-                d,
-                "G-SURFACE",
-                "a second protocol to an already connected peer added a round trip",
+            let msg = format!(
+                "a second protocol to an already connected peer added a round trip: echo {} from node {} to node {z} \
+                 connected after {} ns, base round trip {base} ns",
+                it.iid,
+                it.node,
+                i128::from(c) - i128::from(it.t)
             );
+            fail(d, "G-SURFACE", &msg);
         }
         if let (Some(w), Some(s), Some(&done)) = (e.written, e.served, it.delivered.get(&it.node)) {
             let fwd = i128::from(s) - i128::from(w);

@@ -1,6 +1,12 @@
 //! Diagnosis aid, ignored by default: runs one variant in process and prints the environment actions and session
 //! events of chosen nodes. `VINC_DIAG_ID=S13 VINC_DIAG_SEED=81320 VINC_DIAG_NODES=17,1 cargo test --test scenario_diag -- --ignored --nocapture`
-#![allow(missing_docs, clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(
+    missing_docs,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 
 use vinc_sim::Driver;
 use vinc_sim::suite::run::{LayerSet, run_watching};
@@ -42,6 +48,11 @@ fn diag() {
         println!("{l}");
     }
     println!("{:?}\n{:?}", r.gates.failed(), r.late);
+    for (g, st) in &r.gates.gates {
+        if let vinc_sim::suite::grade::GateStatus::Fail(msgs) = st {
+            println!("GATE {g} {msgs:?}");
+        }
+    }
     println!("{:?}", r.stats);
     println!("{:?}", r.samples);
     for v in &r.violations {

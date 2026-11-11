@@ -212,7 +212,9 @@ impl Default for NodeSets {
 
 /// A set's items as 40-byte items; an item of another length is dropped, which the exactness check then reports.
 fn items(v: &[Vec<u8>]) -> Vec<[u8; 40]> {
-    v.iter().filter_map(|i| <[u8; 40]>::try_from(i.as_slice()).ok()).collect()
+    v.iter()
+        .filter_map(|i| <[u8; 40]>::try_from(i.as_slice()).ok())
+        .collect()
 }
 
 impl OnTop for NodeSets {

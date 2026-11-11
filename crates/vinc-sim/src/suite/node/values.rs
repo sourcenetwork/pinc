@@ -444,6 +444,7 @@ impl ValueStore for VStore {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::many_single_char_names)]
 mod tests {
     use super::*;
 

@@ -222,6 +222,22 @@ fn cost(world: &World, rec: &Rec, facts: &RunFacts, t: &mut Terms) {
 
 /// L5: change to matching event at every affected live node; the slowest 5%.
 fn awareness_lags(world: &World, rec: &Rec) -> Option<f64> {
+    let lags: Vec<i64> = aware_samples(world, rec).iter().map(|s| s.lag).collect();
+    tail_mean(&lags)
+}
+
+/// One L5 sample: a change, a live node that should notice it, and how long that took (capped, the run's end when
+/// it never did).
+struct AwareSample {
+    kind: ChangeKind,
+    member: usize,
+    node: usize,
+    t0: u64,
+    lag: i64,
+    seen: bool,
+}
+
+fn aware_samples(world: &World, rec: &Rec) -> Vec<AwareSample> {
     let end = rec.end;
     let mut by = BTreeMap::<(usize, usize), Vec<(u64, MemberKind, Option<u64>)>>::new();
     for m in &rec.membership {
@@ -230,7 +246,7 @@ fn awareness_lags(world: &World, rec: &Rec) -> Option<f64> {
         }
     }
     let cap = i64::try_from(world.awareness_bound_cap_ns.saturating_mul(2)).unwrap_or(i64::MAX);
-    let mut lags = Vec::<i64>::new();
+    let mut out = Vec::new();
     for ch in &rec.changes {
         let (t0, kind, idx) = (ch.t, ch.kind, ch.node);
         for j in 0..world.nodes.len() {
@@ -250,10 +266,37 @@ fn awareness_lags(world: &World, rec: &Rec) -> Option<f64> {
                     })
                     .map(|&(t, _, _)| t)
             });
-            lags.push(diff(first.unwrap_or(end), t0).min(cap));
+            out.push(AwareSample {
+                kind,
+                member: idx,
+                node: j,
+                t0,
+                lag: diff(first.unwrap_or(end), t0).min(cap),
+                seen: first.is_some(),
+            });
         }
     }
-    tail_mean(&lags)
+    out
+}
+
+/// The `n` slowest L5 samples of a finished run, one line each, for diagnosis.
+pub fn slowest_awareness(world: &World, rec: &Rec, n: usize) -> Vec<String> {
+    let mut s = aware_samples(world, rec);
+    s.sort_by_key(|x| core::cmp::Reverse(x.lag));
+    s.iter()
+        .take(n)
+        .map(|x| {
+            format!(
+                "L5 {:?} of {} at {} ns: node {} after {} ns{}",
+                x.kind,
+                x.member,
+                x.t0,
+                x.node,
+                x.lag,
+                if x.seen { "" } else { " (never)" }
+            )
+        })
+        .collect()
 }
 
 /// Sample counts of the current and the fair rule, for the report.

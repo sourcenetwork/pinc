@@ -13,7 +13,8 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -21,7 +22,9 @@ use std::time::Instant;
 use vinc_sim::Driver;
 use vinc_sim::suite::grade::GateStatus;
 use vinc_sim::suite::run::codec::{decode, encode};
-use vinc_sim::suite::run::report::{Entry, RefTerms, failures, full as full_report, gate_table};
+use vinc_sim::suite::run::report::{
+    Entry, RefTerms, failures, full as full_report, gate_table, score_table, terms_table,
+};
 use vinc_sim::suite::run::{LayerSet, Status, run};
 use vinc_sim::suite::world::model::{IntentKind, Must};
 use vinc_sim::suite::world::{SeedSet, Variant, build, variants};
@@ -160,6 +163,7 @@ fn expected_samples(v: &Variant) -> (bool, bool) {
 pub fn assert_entries(entries: &[Entry]) {
     assert!(!entries.is_empty(), "no run was selected");
     eprintln!("{}", gate_table(entries));
+    write_tables(entries);
     let mut bad = Vec::new();
     for e in entries {
         let r = &e.result;
@@ -204,6 +208,45 @@ pub fn assert_entries(entries: &[Entry]) {
         }
     }
     assert!(bad.is_empty(), "gates failed on {bad:?}:\n{}", failures(entries));
+}
+
+/// With `VINC_SUITE_OUT` naming a directory, the gate, failure, term and score tables of these runs are written there,
+/// one file per test target, whatever the gates say: a passing run keeps its terms too. The terms are pooled per seed
+/// set and over all sets.
+fn write_tables(entries: &[Entry]) {
+    let Ok(dir) = std::env::var("VINC_SUITE_OUT") else {
+        return;
+    };
+    let ids: BTreeSet<&str> = entries.iter().map(|e| e.result.id.as_str()).collect();
+    let mut o = gate_table(entries);
+    o += &failures(entries);
+    for id in &ids {
+        for set in [SeedSet::Matrix, SeedSet::Extra1, SeedSet::Noise, SeedSet::Extra2] {
+            let sub: Vec<Entry> = entries
+                .iter()
+                .filter(|e| e.result.id == *id && e.variant.set == set)
+                .cloned()
+                .collect();
+            if !sub.is_empty() {
+                let _ = writeln!(o, "--- {id} {set:?}");
+                o += &terms_table(id, &sub);
+            }
+        }
+        let _ = writeln!(o, "--- {id} all sets");
+        o += &terms_table(id, entries);
+    }
+    o += "--- runs: wire and application bytes, CPU by part\n";
+    for e in entries {
+        let (r, t) = (&e.result, &e.result.stats);
+        let _ = writeln!(
+            o,
+            "{} {:?} {} wire {} app {} third {} cpu {:?}",
+            r.id, e.variant.set, r.seed, t.wire_bytes, t.app_bytes, t.third_bytes, t.cpu
+        );
+    }
+    o += &score_table(entries, &RefTerms::parse(REFERENCE_TERMS).unwrap());
+    let name = ids.into_iter().collect::<Vec<_>>().join("-");
+    std::fs::write(format!("{dir}/{name}.txt"), o).unwrap_or_else(|e| panic!("writing the tables to {dir}: {e}"));
 }
 
 /// Reference-mode runs of the selected seeds: they must finish and run; their gates are printed, not asserted.

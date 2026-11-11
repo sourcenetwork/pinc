@@ -15,6 +15,7 @@ use std::net::SocketAddr;
 use vinc_connect::carrier::MAX_FRAME_LEN;
 use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole};
+use vinc_connect::relay::datagram::Datagram;
 use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
 use vinc_core::relay_addr;
 use vinc_crypto::NodeId;
@@ -180,7 +181,16 @@ impl Core {
             let mut s = Collect::default();
             if let Some(h) = self.hub.as_mut() {
                 // A refused request is dropped and traced by the relay itself.
-                let _ = h.relay.datagram(now, remote, member.as_ref(), data, &mut s);
+                let refused = h.relay.datagram(now, remote, member.as_ref(), data, &mut s).is_err();
+                if refused
+                    && self.shared.is_watched(self.idx)
+                    && super::in_trace_window(self.now)
+                    && let Ok(Datagram::Spu { dst, .. }) = Datagram::decode(data)
+                {
+                    let to = self.shared.index_of(&dst).unwrap_or(usize::MAX);
+                    let line = format!("n{} true{} refused a tunnel packet to {to}", self.idx, self.now);
+                    self.shared.note_trace(line);
+                }
             }
             self.reply_from = Some(local);
             self.apply(s);
@@ -286,14 +296,15 @@ impl Core {
 
     fn relay_trace(&mut self, t: &Trace) {
         if self.shared.is_watched(self.idx) && super::in_trace_window(self.now) {
-            let ix = |id: &NodeId| self.shared.index_of(id).map_or(usize::MAX, |i| i);
+            let ix = |id: &NodeId| self.shared.index_of(id).unwrap_or(usize::MAX);
             let line = match t {
                 Trace::Routed { src, dst, route, bytes } => {
                     format!("Routed {} -> {} {route:?} {bytes}", ix(src), ix(dst))
                 }
-                other => format!("{other:?}"),
+                other => self.shared.name_ids(&format!("{other:?}")),
             };
-            self.shared.note_trace(format!("n{} true{} Relay({line})", self.idx, self.now));
+            self.shared
+                .note_trace(format!("n{} true{} Relay({line})", self.idx, self.now));
         }
         let now = self.local;
         if let Some(node) = self.node.as_mut() {

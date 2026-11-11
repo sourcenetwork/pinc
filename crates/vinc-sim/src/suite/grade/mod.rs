@@ -21,7 +21,7 @@ pub use delivery::{DeliveryShares, delivery_share, delivery_shares};
 pub use gates::{GATES, GateReport, GateStatus, evaluate_gates, gate_det};
 pub use noise::{NOISE_DRAWS, NoiseError, is_better, noise_floor};
 pub use score::{GROUPS, ScenarioRuns, ScenarioScore, ScoreReport, WEIGHTS, pool, scenario_score, score, total};
-pub use terms::{FairSamples, compute_fair_terms, compute_terms, with_fair};
+pub use terms::{FairSamples, compute_fair_terms, compute_terms, slowest_awareness, with_fair};
 
 use crate::suite::rec::Rec;
 use crate::suite::world::model::World;

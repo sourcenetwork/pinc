@@ -70,6 +70,12 @@ fn in_trace_window(now: u64) -> bool {
     (TRACE_FROM.load(Relaxed)..TRACE_TO.load(Relaxed)).contains(&now)
 }
 
+/// Whether the window is wide: datagrams are then summed per second and address, not listed.
+fn wide_window() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    TRACE_TO.load(Relaxed).saturating_sub(TRACE_FROM.load(Relaxed)) > 4_000_000_000
+}
+
 /// How many turns of the host loop a call may take before the node is reported as not settling.
 const SETTLE_ROUNDS: usize = 128;
 
@@ -77,7 +83,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 
 use self::core::{Core, Phase};
-pub use self::core::{LEDGER_ENTRY_BYTES, LOCAL_BASE, MAX_GSO, PEER_ENTRY_BYTES, SESSION_STATE_BYTES};
+pub use self::core::{CpuParts, LEDGER_ENTRY_BYTES, LOCAL_BASE, MAX_GSO, PEER_ENTRY_BYTES, SESSION_STATE_BYTES};
 pub use self::cost::{HANDLER_CALL_NS, SuiteCost};
 pub use self::layer::{NodeLayer, NodeSets, NodeValues};
 pub use self::mem::{CHUNKS_PER_CONN, Ep, SESSIONS};
@@ -218,6 +224,11 @@ impl<L: Layers> SuiteNode<L> {
         self.core.cpu_ns
     }
 
+    /// The CPU the node was charged, by part.
+    pub fn cpu_parts(&self) -> CpuParts {
+        self.core.cpu_parts
+    }
+
     /// The estimate of the live state in bytes (see [`SESSION_STATE_BYTES`]); zero when stopped.
     pub fn state_bytes(&self) -> u64 {
         self.core.state_bytes()
@@ -226,7 +237,8 @@ impl<L: Layers> SuiteNode<L> {
     /// The endpoint's numbers and its sessions, one line each, for diagnosis.
     pub fn describe(&self) -> Vec<String> {
         let Some(ep) = self.core.endpoint() else {
-            return vec!["stopped".to_owned()];
+            let notices = self.core.notices.iter().map(|n| format!("notice {n}"));
+            return std::iter::once("stopped".to_owned()).chain(notices).collect();
         };
         let mut out = vec![format!("{:?}", ep.node_stats())];
         out.extend(self.core.notices.iter().map(|n| format!("notice {n}")));
@@ -327,13 +339,19 @@ impl<L: Layers> Node for SuiteNode<L> {
             .borrow_mut()
             .udp_received(self.core.idx, now, remote, size, 0);
         if self.core.shared.is_watched(self.core.idx) && in_trace_window(self.core.now) {
-            let first = data.first().copied().unwrap_or(0);
-            self.core.shared.note_trace(format!(
-                "n{} true{} RX {remote} -> {local} len {} first {first:#x}",
-                self.core.idx,
-                self.core.now,
-                data.len()
-            ));
+            if wide_window() {
+                self.core
+                    .shared
+                    .note_net(self.core.idx, true, self.core.now, remote, data.len());
+            } else {
+                let first = data.first().copied().unwrap_or(0);
+                self.core.shared.note_trace(format!(
+                    "n{} true{} RX {remote} -> {local} len {} first {first:#x}",
+                    self.core.idx,
+                    self.core.now,
+                    data.len()
+                ));
+            }
         }
         self.core.handle_datagram(local, remote, data);
         self.settle();
@@ -347,11 +365,17 @@ impl<L: Layers> Node for SuiteNode<L> {
         loop {
             if let Some((local, remote, len)) = self.core.next_datagram(buf) {
                 if self.core.shared.is_watched(self.core.idx) && in_trace_window(self.core.now) {
-                    let first = buf.first().copied().unwrap_or(0);
-                    self.core.shared.note_trace(format!(
-                        "n{} true{} TX {local} -> {remote} len {len} first {first:#x}",
-                        self.core.idx, self.core.now
-                    ));
+                    if wide_window() {
+                        self.core
+                            .shared
+                            .note_net(self.core.idx, false, self.core.now, remote, len);
+                    } else {
+                        let first = buf.first().copied().unwrap_or(0);
+                        self.core.shared.note_trace(format!(
+                            "n{} true{} TX {local} -> {remote} len {len} first {first:#x}",
+                            self.core.idx, self.core.now
+                        ));
+                    }
                 }
                 self.core.record_wire(remote, local, buf.get(..len)?);
                 return Some(Transmit {
@@ -526,11 +550,20 @@ impl<L: Layers> Node for SuiteNode<L> {
     }
 
     fn take_work(&mut self) -> Work {
+        let w = self.core.shared.registry.peek_work(self.core.idx);
         let crypto = self.core.shared.registry.take_work(self.core.idx, &self.core.costs);
         let io = self.core.io_acc.floor();
         self.core.io_acc -= io;
-        let ns = crypto + std::mem::take(&mut self.core.calls) * HANDLER_CALL_NS + io as u64;
+        let calls = std::mem::take(&mut self.core.calls);
+        let ns = crypto + calls * HANDLER_CALL_NS + io as u64;
         self.core.cpu_ns += ns;
+        let p = &mut self.core.cpu_parts;
+        p.crypto_ns += crypto;
+        p.calls += calls;
+        p.io_ns += io as u64;
+        p.aead += w.aead;
+        p.aead_bytes += w.aead_bytes;
+        p.hash_bytes += w.hash_bytes;
         Work { ticks: 0, ns }
     }
 

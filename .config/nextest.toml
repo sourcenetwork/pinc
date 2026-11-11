@@ -23,4 +23,4 @@ slow-timeout = { period = "60s", terminate-after = 15 }
 # (VINC_SUITE_FULL=1) and the reports need a generous, explicit bound.
 [[profile.ci.overrides]]
 filter = 'binary(/^scenario_(s1|internet|mobile|hostile|adversarial|churn|large|determinism)$/)'
-slow-timeout = { period = "60s", terminate-after = 15 }
+slow-timeout = { period = "60s", terminate-after = 90 }

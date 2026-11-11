@@ -133,6 +133,9 @@ pub struct Stats {
     pub drops: BTreeMap<String, u64>,
     /// Intents the stacks saw for a layer that is not registered.
     pub stack_waiting: BTreeMap<String, u64>,
+    /// The CPU charged over all nodes by part (`crypto_ns`, `handler_calls`, `io_ns`) and the crypto volume
+    /// (`aead_calls`, `aead_bytes`, `hash_bytes`): what R1 is made of.
+    pub cpu: BTreeMap<String, u64>,
 }
 
 /// Everything a finished run reports. Plain data: it can leave the run's thread.
@@ -371,8 +374,13 @@ fn execute(
                 ev.chain(end).collect::<Vec<_>>()
             })
             .chain(shared.take_trace())
-            .collect();
-        Ok((finish(world, driver, layers, p, &exec, &rec, reg), events))
+            .collect::<Vec<_>>();
+        let result = finish(world, driver, layers, p, &exec, &rec, reg);
+        let mut events = events;
+        if !watch.is_empty() {
+            events.extend(crate::suite::grade::slowest_awareness(world, &rec.borrow(), 25));
+        }
+        Ok((result, events))
     })();
     Registry::uninstall();
     reg.clear();
@@ -397,12 +405,20 @@ fn finish(
         facts.false_suspicion_per_member_hour = vinc_membership::consts::FALSE_SUSPICION_PER_MEMBER_HOUR;
     }
     let (mut cpu_ns, mut stack_waiting) = (0.0_f64, BTreeMap::new());
+    let mut parts = crate::suite::node::CpuParts::default();
     {
         let mut r = rec.borrow_mut();
         for (i, &id) in exec.net.ids.iter().enumerate() {
             let n = sim.node(id);
             let st = sim.state(id);
             cpu_ns += n.cpu_ns() as f64;
+            let p = n.cpu_parts();
+            parts.crypto_ns += p.crypto_ns;
+            parts.calls += p.calls;
+            parts.io_ns += p.io_ns;
+            parts.aead += p.aead;
+            parts.aead_bytes += p.aead_bytes;
+            parts.hash_bytes += p.hash_bytes;
             if n.running() {
                 r.state_sample(end, i, n.state_bytes());
             }
@@ -487,6 +503,17 @@ fn finish(
                 .map(|r| (r.name().to_owned(), sim.metrics().dropped(*r)))
                 .collect(),
             stack_waiting,
+            cpu: [
+                ("crypto_ns", parts.crypto_ns),
+                ("handler_calls", parts.calls),
+                ("io_ns", parts.io_ns),
+                ("aead_calls", parts.aead),
+                ("aead_bytes", parts.aead_bytes),
+                ("hash_bytes", parts.hash_bytes),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect(),
         },
         late: late_of(&r),
     }

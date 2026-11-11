@@ -136,6 +136,7 @@ pub fn encode(r: &RunResult) -> String {
     map_lines("adv", &t.adversary, &mut o);
     map_lines("drop", &t.drops, &mut o);
     map_lines("sw", &t.stack_waiting, &mut o);
+    map_lines("cpu", &t.cpu, &mut o);
     for l in &r.late {
         let _ = writeln!(o, "late\t{}", esc(l));
     }
@@ -218,13 +219,14 @@ pub fn decode(text: &str) -> Result<RunResult, String> {
                     _ => return Err(bad()),
                 };
             }
-            "excluded" | "scheduled" | "adv" | "drop" | "sw" => {
+            "excluded" | "scheduled" | "adv" | "drop" | "sw" | "cpu" => {
                 let (k, v) = (unesc(f.get(1).ok_or_else(bad)?), num::<u64>(f.get(2))?);
                 match f[0] {
                     "excluded" => r.excluded.insert(k, v),
                     "scheduled" => r.scheduled.insert(k, v),
                     "adv" => r.stats.adversary.insert(k, v),
                     "drop" => r.stats.drops.insert(k, v),
+                    "cpu" => r.stats.cpu.insert(k, v),
                     _ => r.stats.stack_waiting.insert(k, v),
                 };
             }

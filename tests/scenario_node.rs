@@ -120,7 +120,9 @@ impl Layers for TestLayer {
     fn event(&mut self, _now: u64, host: &mut dyn Host, ev: LayerEvent<'_>) {
         match ev {
             // The node's own hub sessions come through here too; only the test protocol is this layer's.
-            LayerEvent::Incoming { alpn, .. } | LayerEvent::Connected { alpn, .. } | LayerEvent::ConnectFailed { alpn, .. }
+            LayerEvent::Incoming { alpn, .. }
+            | LayerEvent::Connected { alpn, .. }
+            | LayerEvent::ConnectFailed { alpn, .. }
                 if alpn != ALPN => {}
             LayerEvent::Incoming { .. } => self.stats.borrow_mut().incoming += 1,
             LayerEvent::Connected { session, peer, .. } => {
@@ -470,7 +472,11 @@ fn a_persisted_restart_resumes_and_a_stateless_one_does_not() {
         };
         // Each incarnation dials the hub for its own protocol as well as the test's, so a node reports two sessions
         // to node 0 per incarnation: a restored ticket resumes one of them, a stateless restart none.
-        assert_eq!(resumed(1), vec![false, false, true, false], "a restored ticket resumes the session");
+        assert_eq!(
+            resumed(1),
+            vec![false, false, true, false],
+            "a restored ticket resumes the session"
+        );
         assert_eq!(
             resumed(2),
             vec![false, false, false, false],
