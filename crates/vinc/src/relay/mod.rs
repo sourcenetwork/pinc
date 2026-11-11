@@ -46,6 +46,7 @@ mod fx;
 mod hub;
 mod io;
 mod limits;
+mod peers;
 mod run;
 mod state;
 mod stats;
@@ -60,6 +61,7 @@ use vinc_keystore::{KeyStore, SoftwareStore};
 
 pub use self::io::{Carriers, Clock, Host, Hosted, Udp, Unbuilt};
 pub use self::limits::{CARRIERS, Limits, MAILBOX_BYTES, MAILBOX_MEMBERS, RECORDS};
+pub use self::peers::Peer;
 use self::run::Inner;
 use self::state::Core;
 pub use self::stats::{Closed, Event, Reason, Stats};
@@ -100,14 +102,14 @@ impl Relay<Unbuilt, SoftwareStore, MemStore> {
 }
 
 /// The relay [`Builder::build`] makes over the host's closures.
-pub type Built<R, S, A, Rd, Wr, Cl, N, Z, T, K, St> = Relay<Host<R, S, A, Rd, Wr, Cl, N, Z, T>, K, St>;
+pub type Built<R, S, A, O, Rd, Wr, Cl, N, Z, T, K, St> = Relay<Host<R, S, A, O, Rd, Wr, Cl, N, Z, T>, K, St>;
 
 /// Configures a relay: its identity, limits, store and trusted peer relays.
 pub struct Builder<K: KeyStore = SoftwareStore, St: Store = MemStore> {
     identity: Option<Identity<K>>,
     limits: Limits,
     store: St,
-    peers: Vec<NodeId>,
+    peers: Vec<Peer>,
     hub: Option<(::core::net::SocketAddr, Vec<Vec<u8>>)>,
 }
 
@@ -147,11 +149,13 @@ impl<K: KeyStore, St: Store> Builder<K, St> {
         }
     }
 
-    /// Trust `relay` as a peer relay: a carrier it opens carries relay-to-relay traffic (forwarded packets and
-    /// replicated records) instead of a member's. At most 32.
+    /// List `peer` as a peer relay: a carrier it opens with the peer protocol carries relay-to-relay traffic
+    /// (forwarded packets and replicated records) instead of a member's, and when its node id is higher than this
+    /// relay's, this relay opens a carrier to it with the host's `open` and keeps it up, dialing again after a failure.
+    /// A relay never peers with itself, so one list can be given to every relay of a mesh. At most 32 other relays.
     #[must_use]
-    pub fn peer(mut self, relay: NodeId) -> Self {
-        self.peers.push(relay);
+    pub fn peer(mut self, peer: Peer) -> Self {
+        self.peers.push(peer);
         self
     }
 
@@ -170,24 +174,26 @@ impl<K: KeyStore, St: Store> Builder<K, St> {
     /// [`ErrorKind::Config`](crate::ErrorKind::Config) if a limit is out of range, there are more than 32 peers, or
     /// the key store fails.
     #[allow(clippy::type_complexity, reason = "the host's closures are named once, here")]
-    pub fn build<R, S, A, Rd, Wr, Cl, N, Z, T>(
+    pub fn build<R, S, A, O, Rd, Wr, Cl, N, Z, T>(
         self,
         udp: Udp<R, S>,
-        carriers: Carriers<A, Rd, Wr, Cl, T>,
+        carriers: Carriers<A, O, Rd, Wr, Cl, T>,
         clock: Clock<N, Z>,
-    ) -> Result<Built<R, S, A, Rd, Wr, Cl, N, Z, T, K, St>>
+    ) -> Result<Built<R, S, A, O, Rd, Wr, Cl, N, Z, T, K, St>>
     where
-        Host<R, S, A, Rd, Wr, Cl, N, Z, T>: Hosted<Stream = T>,
+        Host<R, S, A, O, Rd, Wr, Cl, N, Z, T>: Hosted<Stream = T>,
     {
         self.limits.check()?;
-        if self.peers.len() > vinc_connect::relay::rule::MAX_PEERS {
-            return Err(Error::config("a relay trusts at most 32 peer relays"));
-        }
         let Some(identity) = self.identity else {
             return Err(Error::config("a relay needs an identity: pass one to the builder"));
         };
+        let identity_id = identity.node_id();
+        let others = self.peers.iter().filter(|p| p.id != identity_id).count();
+        if others > vinc_connect::relay::rule::MAX_PEERS {
+            return Err(Error::config("a relay trusts at most 32 peer relays"));
+        }
         let host = Host::new(udp, carriers, clock);
-        let core = Core::new(identity, self.peers, self.limits, self.hub, host.now())?;
+        let core = Core::new(identity, &self.peers, self.limits, self.hub, host.now())?;
         Ok(Relay {
             inner: Rc::new(Inner {
                 host,

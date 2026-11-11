@@ -1,7 +1,9 @@
 //! A relay on real sockets, on nuclei: one UDP socket and one TCP listener on the same address.
 //!
 //! Run with `cargo run -p vinc --example relay -- 0.0.0.0:4433 <64 hex digits of the identity seed> [protocol...]`.
-//! Each protocol name given after the seed is accepted on the hub (UDP sessions that members tunnel through).
+//! Each argument after the seed is either `<node id>@<tcp address>`, a peer relay this relay joins (the relay with the lower
+//! node id dials the other and keeps the carrier up; a relay never peers with itself, so every relay can be given the same
+//! list), or a protocol name accepted on the hub (UDP sessions that members tunnel through).
 //!
 //! The listener serves two kinds of members on one port, told apart by the first bytes: a raw VINC carrier over TCP,
 //! and a WebSocket carrier. The WebSocket upgrade is done here in a few lines: it accepts a `GET` request with a
@@ -27,7 +29,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nuclei::Handle;
 use nuclei::time::{sleep_until_precise, timeout};
 
-use vinc::relay::{Carriers, Clock, Relay, Udp};
+use vinc::relay::{Carriers, Clock, Peer, Relay, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity};
 
 type Stream = Handle<TcpStream>;
@@ -147,7 +149,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (Some(addr), Some(seed)) = (args.next(), args.next()) else {
         return Err("usage: relay <address> <64 hex digits of the identity seed>".into());
     };
-    let protocols: Vec<String> = args.collect();
+    let (peers, protocols): (Vec<String>, Vec<String>) = args.partition(|a| a.contains('@'));
+    let mut listed = Vec::new();
+    for p in &peers {
+        let (id, at) = p.split_once('@').ok_or("a peer is <node id>@<tcp address>")?;
+        listed.push(Peer::new(vinc::node_from_str(id)?).with_tcp(at.parse()?));
+    }
     let addr: SocketAddr = addr.parse()?;
     let mut bytes = [0u8; 32];
     if seed.len() != 64 {
@@ -164,6 +171,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let base = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         let alpns: Vec<&[u8]> = protocols.iter().map(String::as_bytes).collect();
         let mut builder = Relay::builder().identity(Identity::from_seed(&bytes)?);
+        for p in listed {
+            builder = builder.peer(p);
+        }
         if !alpns.is_empty() {
             builder = builder.hub(sock.get_ref().local_addr()?, &alpns);
         }
@@ -174,6 +184,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
             Carriers::new(
                 async move || accept_one(&l).await,
+                async |p: &Peer, _kind| match p.tcp {
+                    Some(to) => Handle::<TcpStream>::connect(to).await.map_err(io_err),
+                    None => Err(Error::new(
+                        ErrorKind::Unreachable,
+                        "the example dials TCP carriers only",
+                    )),
+                },
                 async |s: &Stream, mut buf: Vec<u8>| {
                     let r = s.recv(&mut buf).await.map_err(io_err);
                     (r, buf)

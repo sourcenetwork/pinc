@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::net::SocketAddr;
 
+use super::peers::Peer;
 use crate::carrier::CarrierKind;
 use crate::error::Result;
 
@@ -43,33 +44,38 @@ where
 }
 
 /// The carrier side, for a stream type `T` of the host's.
-pub struct Carriers<A, Rd, Wr, Cl, T> {
+pub struct Carriers<A, O, Rd, Wr, Cl, T> {
     pub(crate) accept: A,
+    pub(crate) open: O,
     pub(crate) read: Rd,
     pub(crate) write: Wr,
     pub(crate) close: Cl,
     _stream: PhantomData<fn() -> T>,
 }
 
-impl<A, Rd, Wr, Cl, T> core::fmt::Debug for Carriers<A, Rd, Wr, Cl, T> {
+impl<A, O, Rd, Wr, Cl, T> core::fmt::Debug for Carriers<A, O, Rd, Wr, Cl, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Carriers")
     }
 }
 
-impl<A, Rd, Wr, Cl, T> Carriers<A, Rd, Wr, Cl, T>
+impl<A, O, Rd, Wr, Cl, T> Carriers<A, O, Rd, Wr, Cl, T>
 where
     A: AsyncFn() -> Result<(T, CarrierKind)>,
+    O: AsyncFn(&Peer, CarrierKind) -> Result<T>,
     Rd: AsyncFn(&T, Vec<u8>) -> (Result<usize>, Vec<u8>),
     Wr: AsyncFn(&T, Vec<u8>, usize) -> (Result<usize>, Vec<u8>),
     Cl: AsyncFn(T),
 {
-    /// `accept` waits for the next stream; `read(&s, buf)` fills at most `buf.len()` bytes from the start of `buf`
+    /// `accept` waits for the next stream; `open(&peer, kind)` opens a stream of `kind` to a peer relay (the TCP
+    /// connect, or the HTTP upgrade of a WebSocket, are the host's work; a host that dials no peers passes a closure
+    /// that fails); `read(&s, buf)` fills at most `buf.len()` bytes from the start of `buf`
     /// and returns the count (zero when the peer closed; the length of `buf` does not change); `write(&s, buf, from)` writes `buf` from `from` to its end and returns
     /// the count it wrote; `close(s)` ends the stream. Read and write return the buffer.
-    pub const fn new(accept: A, read: Rd, write: Wr, close: Cl) -> Self {
+    pub const fn new(accept: A, open: O, read: Rd, write: Wr, close: Cl) -> Self {
         Self {
             accept,
+            open,
             read,
             write,
             close,
@@ -109,6 +115,8 @@ pub trait Hosted: sealed::Sealed {
     #[doc(hidden)]
     fn accept(&self) -> impl Future<Output = Result<(Self::Stream, CarrierKind)>>;
     #[doc(hidden)]
+    fn open(&self, peer: &Peer, kind: CarrierKind) -> impl Future<Output = Result<Self::Stream>>;
+    #[doc(hidden)]
     fn read(&self, s: &Self::Stream, buf: Vec<u8>) -> impl Future<Output = (Result<usize>, Vec<u8>)>;
     #[doc(hidden)]
     fn write(&self, s: &Self::Stream, buf: Vec<u8>, from: usize) -> impl Future<Output = (Result<usize>, Vec<u8>)>;
@@ -121,31 +129,32 @@ pub trait Hosted: sealed::Sealed {
 }
 
 /// The host's closures, grouped as [`Udp`], [`Carriers`] and [`Clock`].
-pub struct Host<R, S, A, Rd, Wr, Cl, N, Z, T> {
+pub struct Host<R, S, A, O, Rd, Wr, Cl, N, Z, T> {
     udp: Udp<R, S>,
-    carriers: Carriers<A, Rd, Wr, Cl, T>,
+    carriers: Carriers<A, O, Rd, Wr, Cl, T>,
     clock: Clock<N, Z>,
 }
 
-impl<R, S, A, Rd, Wr, Cl, N, Z, T> Host<R, S, A, Rd, Wr, Cl, N, Z, T> {
-    pub(crate) const fn new(udp: Udp<R, S>, carriers: Carriers<A, Rd, Wr, Cl, T>, clock: Clock<N, Z>) -> Self {
+impl<R, S, A, O, Rd, Wr, Cl, N, Z, T> Host<R, S, A, O, Rd, Wr, Cl, N, Z, T> {
+    pub(crate) const fn new(udp: Udp<R, S>, carriers: Carriers<A, O, Rd, Wr, Cl, T>, clock: Clock<N, Z>) -> Self {
         Self { udp, carriers, clock }
     }
 }
 
-impl<R, S, A, Rd, Wr, Cl, N, Z, T> core::fmt::Debug for Host<R, S, A, Rd, Wr, Cl, N, Z, T> {
+impl<R, S, A, O, Rd, Wr, Cl, N, Z, T> core::fmt::Debug for Host<R, S, A, O, Rd, Wr, Cl, N, Z, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Host")
     }
 }
 
-impl<R, S, A, Rd, Wr, Cl, N, Z, T> sealed::Sealed for Host<R, S, A, Rd, Wr, Cl, N, Z, T> {}
+impl<R, S, A, O, Rd, Wr, Cl, N, Z, T> sealed::Sealed for Host<R, S, A, O, Rd, Wr, Cl, N, Z, T> {}
 
-impl<R, S, A, Rd, Wr, Cl, N, Z, T> Hosted for Host<R, S, A, Rd, Wr, Cl, N, Z, T>
+impl<R, S, A, O, Rd, Wr, Cl, N, Z, T> Hosted for Host<R, S, A, O, Rd, Wr, Cl, N, Z, T>
 where
     R: AsyncFn(&mut [u8]) -> Result<(usize, SocketAddr)>,
     S: AsyncFn(&[u8], SocketAddr) -> Result<usize>,
     A: AsyncFn() -> Result<(T, CarrierKind)>,
+    O: AsyncFn(&Peer, CarrierKind) -> Result<T>,
     Rd: AsyncFn(&T, Vec<u8>) -> (Result<usize>, Vec<u8>),
     Wr: AsyncFn(&T, Vec<u8>, usize) -> (Result<usize>, Vec<u8>),
     Cl: AsyncFn(T),
@@ -164,6 +173,10 @@ where
 
     async fn accept(&self) -> Result<(T, CarrierKind)> {
         (self.carriers.accept)().await
+    }
+
+    async fn open(&self, peer: &Peer, kind: CarrierKind) -> Result<T> {
+        (self.carriers.open)(peer, kind).await
     }
 
     async fn read(&self, s: &T, buf: Vec<u8>) -> (Result<usize>, Vec<u8>) {
@@ -207,6 +220,10 @@ impl Hosted for Unbuilt {
     }
 
     async fn accept(&self) -> Result<((), CarrierKind)> {
+        match *self {}
+    }
+
+    async fn open(&self, _: &Peer, _: CarrierKind) -> Result<()> {
         match *self {}
     }
 

@@ -94,6 +94,8 @@ pub enum Closed {
     SessionTime,
     /// The same node opened a newer carrier.
     Replaced,
+    /// A carrier that asked for the peer relay protocol came from a node that is not a listed peer.
+    Untrusted,
     /// The relay has as many carriers as its limit allows.
     Full,
     /// The relay stopped.
@@ -145,6 +147,10 @@ pub enum Event {
 pub struct Stats {
     /// Authenticated member carriers up now.
     pub carriers: usize,
+    /// Peer relays with a carrier up now.
+    pub peers_up: usize,
+    /// Dials of a peer relay that failed to open the stream.
+    pub peer_dial_failures: u64,
     /// Carriers that finished their handshake.
     pub carriers_opened: u64,
     /// Carriers that ended, by any cause.
@@ -197,6 +203,7 @@ impl Stats {
 /// The counters the host loop keeps itself; [`Stats`] adds the state machine's.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Counters {
+    pub(crate) peer_dial_failures: u64,
     pub(crate) carriers_opened: u64,
     pub(crate) carriers_closed: u64,
     pub(crate) protocol_failures: u64,

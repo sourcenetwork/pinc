@@ -110,7 +110,7 @@ mod tests {
             .spawn(|| {
                 let id = Identity::from_seed(&[3; 32]).unwrap();
                 let hub = Some(("127.0.0.1:1".parse().unwrap(), vec![b"t".to_vec()]));
-                drop(Core::<(), SoftwareStore>::new(id, Vec::new(), Limits::default(), hub, 1).unwrap());
+                drop(Core::<(), SoftwareStore>::new(id, &[], Limits::default(), hub, 1).unwrap());
             })
             .unwrap()
             .join()

@@ -28,6 +28,10 @@ pub(crate) struct Conn<S> {
     pub(crate) session: Option<SessionId>,
     /// The stream is a session with a peer relay, not a member.
     pub(crate) peer: bool,
+    /// This relay opened the stream (to a peer relay), and its WebSocket frames are masked.
+    pub(crate) dialer: bool,
+    /// The peer slot this stream dials.
+    pub(crate) dial: Option<usize>,
     /// When the handshake must have finished.
     pub(crate) deadline: u64,
     pub(crate) last_rx: u64,
@@ -51,6 +55,8 @@ impl<S> Conn<S> {
             node: None,
             session: None,
             peer: false,
+            dialer: false,
+            dial: None,
             deadline,
             last_rx: 0,
             dying: None,
@@ -94,7 +100,7 @@ impl<S> Conn<S> {
     }
 
     /// The next bytes to write and the offset to write from, if there are any and no write is in flight.
-    pub(crate) fn take_write(&mut self) -> Option<(Vec<u8>, usize)> {
+    pub(crate) fn take_write(&mut self, mask: Option<[u8; 4]>) -> Option<(Vec<u8>, usize)> {
         if self.dying.is_some() {
             return None;
         }
@@ -104,7 +110,7 @@ impl<S> Conn<S> {
         }
         buf.clear();
         self.woff = 0;
-        if self.fill(&mut buf) {
+        if self.fill(&mut buf, mask) {
             Some((buf, 0))
         } else {
             self.wbuf = Some(buf);
@@ -118,7 +124,7 @@ impl<S> Conn<S> {
         self.wbuf = Some(buf);
     }
 
-    fn fill(&mut self, buf: &mut Vec<u8>) -> bool {
+    fn fill(&mut self, buf: &mut Vec<u8>, mask: Option<[u8; 4]>) -> bool {
         if !self.ctl.is_empty() {
             buf.append(&mut self.ctl);
             return true;
@@ -139,7 +145,7 @@ impl<S> Conn<S> {
             };
             if self.kind == CarrierKind::Ws {
                 buf.resize(n + ws::MAX_HEADER, 0);
-                let Ok(used) = ws::encode(Opcode::Binary, unit, None, buf) else {
+                let Ok(used) = ws::encode(Opcode::Binary, unit, mask, buf) else {
                     return false;
                 };
                 buf.truncate(used);

@@ -19,18 +19,20 @@ use vinc_connect::carrier::ws::{self, Opcode, WsFrame};
 use vinc_connect::relay::{CloseReason, Config, SessionId, Trace, UdpTarget};
 use vinc_crypto::{Drbg, NodeId, Software};
 use vinc_keystore::KeyStore;
-use vinc_security::{ConnId, Env, KeyRequest, KeyResponse, LocalIdentity, ResponderStores};
+use vinc_security::{ConnId, Env, KeyRequest, KeyResponse, LocalIdentity, PrekeyInfo, ResponderStores};
 
 use super::conn::Conn;
 use super::fx::{Fx, Item};
 use super::hub::{Hub, Note, Target};
 use super::limits::{Limits, Machine};
+use super::peers::{Peer, Slot};
 use super::stats::{Closed, Counters, Event, Events, Reason, Stats};
 use super::store::node_key;
 use crate::carrier::CarrierKind;
-use crate::keys::{Identity, is_identity};
+use crate::keys::{Identity, Prekeys, is_identity};
 
 mod keep;
+mod mesh;
 
 pub(crate) use keep::Job;
 
@@ -61,7 +63,9 @@ pub(crate) struct Core<S, K: KeyStore> {
     drbg: Drbg,
     stores: Box<ResponderStores<4, 4>>,
     scid: u64,
-    trusted: Vec<NodeId>,
+    peers: Vec<Slot>,
+    prekeys: Prekeys,
+    dial_prekey: PrekeyInfo,
     pub(crate) limits: Limits,
     pub(crate) counters: Counters,
     events: Events,
@@ -88,7 +92,7 @@ fn new_machine(cfg: Config) -> Box<Machine> {
 impl<S, K: KeyStore> Core<S, K> {
     pub(crate) fn new(
         mut identity: Identity<K>,
-        trusted: Vec<NodeId>,
+        peers: &[Peer],
         limits: Limits,
         hub: Option<(SocketAddr, Vec<Vec<u8>>)>,
         now: u64,
@@ -101,6 +105,9 @@ impl<S, K: KeyStore> Core<S, K> {
         cfg.quota = limits.quota;
         cfg.mailbox_max_age_ns = limits.mailbox_max_age_ns;
         let local = identity.local()?;
+        let mut prekeys = Prekeys::new()?;
+        let dial_prekey = prekeys.rotate(now)?;
+        let peers = mesh::slots(&identity.node_id(), peers, now);
         let hub = match hub {
             Some((addr, alpns)) => Some(Hub::new(addr, &alpns, &mut identity, &limits, now)?),
             None => None,
@@ -115,7 +122,9 @@ impl<S, K: KeyStore> Core<S, K> {
             drbg: Drbg::new(&seed),
             stores: Box::default(),
             scid: 0,
-            trusted,
+            peers,
+            prekeys,
+            dial_prekey,
             limits,
             counters: Counters::default(),
             events: Events::new(limits.events),
@@ -153,6 +162,13 @@ impl<S, K: KeyStore> Core<S, K> {
         let c = &self.counters;
         Stats {
             carriers: self.sm.sessions(),
+            peers_up: self
+                .conns
+                .iter()
+                .flatten()
+                .filter(|c| c.peer && c.node.is_some() && c.dying.is_none())
+                .count(),
+            peer_dial_failures: c.peer_dial_failures,
             carriers_opened: c.carriers_opened,
             carriers_closed: c.carriers_closed,
             protocol_failures: c.protocol_failures,
@@ -201,14 +217,19 @@ impl<S, K: KeyStore> Core<S, K> {
         );
         conn.last_rx = now;
         self.handshaking += 1;
+        Ok(self.place(conn))
+    }
+
+    /// Put a stream in a free slot.
+    fn place(&mut self, conn: Conn<S>) -> usize {
         if let Some(slot) = self.free.pop()
             && let Some(entry) = self.conns.get_mut(slot)
         {
             *entry = Some(conn);
-            return Ok(slot);
+            return slot;
         }
         self.conns.push(Some(conn));
-        Ok(self.conns.len() - 1)
+        self.conns.len() - 1
     }
 
     /// The stream and read buffer of a read to start, if the stream wants one.
@@ -220,9 +241,17 @@ impl<S, K: KeyStore> Core<S, K> {
 
     /// The stream, bytes and offset of a write to start, if the stream has something to write.
     pub(crate) fn take_write(&mut self, slot: usize) -> Option<(Rc<S>, Vec<u8>, usize)> {
+        let masked = self.conn(slot).is_some_and(|c| c.dialer && c.kind == CarrierKind::Ws);
+        let mask = self.mask(masked);
         let c = self.conn(slot)?;
-        let (buf, from) = c.take_write()?;
+        let (buf, from) = c.take_write(mask)?;
         Some((Rc::clone(&c.stream), buf, from))
+    }
+
+    /// A WebSocket mask key if `masked` (this relay is the client of the stream).
+    fn mask(&mut self, masked: bool) -> Option<[u8; 4]> {
+        let mut m = [0u8; 4];
+        (masked && self.drbg.fill(&mut m).is_ok()).then_some(m)
     }
 
     /// A write finished.
@@ -274,9 +303,11 @@ impl<S, K: KeyStore> Core<S, K> {
                     pos += used;
                 }
                 Ok(Some((WsFrame::Ping(p), used))) => {
-                    let mut f = [0u8; 2 + 125];
+                    let mut f = [0u8; 2 + 4 + 125];
+                    let masked = self.conn(slot).is_some_and(|c| c.dialer);
+                    let mask = self.mask(masked);
                     if let Some(c) = self.conn(slot)
-                        && let Ok(len) = ws::encode(Opcode::Pong, p, None, &mut f)
+                        && let Ok(len) = ws::encode(Opcode::Pong, p, mask, &mut f)
                     {
                         c.push_ctl(f.get(..len).unwrap_or_default());
                     }
@@ -357,6 +388,7 @@ impl<S, K: KeyStore> Core<S, K> {
             drbg,
             stores,
             identity,
+            prekeys,
             fx,
             ..
         } = self;
@@ -372,13 +404,15 @@ impl<S, K: KeyStore> Core<S, K> {
             drbg,
         };
         let polled = if c.carrier.key_request().is_some() {
-            let sig = match c.carrier.key_request() {
-                Some(KeyRequest::Sign { key, message, .. }) if is_identity(key) => identity.sign(message).ok(),
-                _ => None,
+            let (sig, secret) = match c.carrier.key_request() {
+                Some(KeyRequest::Sign { key, message, .. }) if is_identity(key) => (identity.sign(message).ok(), None),
+                Some(KeyRequest::Decapsulate { key, ct }) => (None, prekeys.decapsulate(key, ct)),
+                _ => (None, None),
             };
-            match &sig {
-                Some(s) => c.carrier.key_response(&mut env, KeyResponse::Signature(s)),
-                None => c.carrier.key_response(&mut env, KeyResponse::Failed),
+            match (sig, secret) {
+                (Some(s), _) => c.carrier.key_response(&mut env, KeyResponse::Signature(&s)),
+                (None, Some(s)) => c.carrier.key_response(&mut env, KeyResponse::SharedSecret(s)),
+                (None, None) => c.carrier.key_response(&mut env, KeyResponse::Failed),
             }
         } else {
             c.carrier.poll(&mut env, stores)
@@ -425,14 +459,11 @@ impl<S, K: KeyStore> Core<S, K> {
             return;
         };
         let key = node_key(&peer);
-        if self.trusted.contains(&peer) {
-            if let Some(c) = self.conn(slot) {
-                c.node = Some(peer);
-                c.peer = true;
+        if self.conn(slot).is_some_and(|c| c.dialer || c.carrier.is_peer_relay()) {
+            self.peer_open(slot, peer, kind);
+            if self.conn(slot).is_some_and(|c| c.dying.is_some()) {
+                return;
             }
-            self.handshaking -= 1;
-            self.by_node.insert(key, slot);
-            self.sm.add_peer(peer);
         } else {
             if !self.by_node.contains_key(&key) && self.sm.sessions() >= self.limits.carriers {
                 self.counters.refused_carriers_full += 1;
@@ -451,9 +482,9 @@ impl<S, K: KeyStore> Core<S, K> {
             }
             self.handshaking -= 1;
             self.by_node.insert(key, slot);
+            self.counters.carriers_opened += 1;
+            self.event(Event::CarrierUp { node: peer, kind });
         }
-        self.counters.carriers_opened += 1;
-        self.event(Event::CarrierUp { node: peer, kind });
         self.flush();
     }
 
@@ -488,14 +519,14 @@ impl<S, K: KeyStore> Core<S, K> {
         if c.node.is_none() {
             self.handshaking -= 1;
         }
-        if let Some(node) = c.node {
+        if c.peer || c.dial.is_some() {
+            self.peer_closed(slot, c.node, c.dial, now);
+        } else if let Some(node) = c.node {
             let key = node_key(&node);
             if self.by_node.get(&key) == Some(&slot) {
                 self.by_node.remove(&key);
             }
-            if c.peer {
-                self.sm.remove_peer(&node);
-            } else if let Some(session) = c.session {
+            if let Some(session) = c.session {
                 self.sm.carrier_closed(now, &node, session, &mut self.fx);
                 self.flush();
             }
@@ -750,7 +781,13 @@ impl<S, K: KeyStore> Core<S, K> {
     /// When the loop must call [`Core::on_timeout`].
     pub(crate) fn next_wake(&self) -> u64 {
         let hub = self.hub.as_ref().and_then(Hub::next_timeout).unwrap_or(u64::MAX);
-        self.sm.next_deadline().unwrap_or(u64::MAX).min(self.check_at).min(hub)
+        let dial = self.next_dial_at();
+        self.sm
+            .next_deadline()
+            .unwrap_or(u64::MAX)
+            .min(self.check_at)
+            .min(hub)
+            .min(dial)
     }
 
     pub(crate) fn store_failed(&mut self) {

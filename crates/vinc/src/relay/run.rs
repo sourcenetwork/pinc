@@ -20,8 +20,10 @@ use core::task::{Context, Poll, Waker};
 use vinc_keystore::KeyStore;
 
 use super::io::Hosted;
+use super::peers::Peer;
 use super::state::{Core, Job};
 use super::store::Store;
+use crate::carrier::CarrierKind;
 use crate::error::Result;
 
 /// The most completions handled in one pass before the loop yields.
@@ -78,6 +80,16 @@ async fn recv_owned<H: Hosted>(h: &H, mut buf: Vec<u8>) -> (Result<(usize, Socke
 async fn send_owned<H: Hosted>(h: &H, buf: Vec<u8>, to: SocketAddr) -> (Result<usize>, Vec<u8>) {
     let r = h.send(&buf, to).await;
     (r, buf)
+}
+
+async fn open_owned<H: Hosted>(
+    h: &H,
+    i: usize,
+    peer: Peer,
+    kind: CarrierKind,
+) -> (usize, CarrierKind, Result<H::Stream>) {
+    let r = h.open(&peer, kind).await;
+    (i, kind, r)
 }
 
 async fn close_owned<H: Hosted>(h: &H, s: H::Stream) {
@@ -167,6 +179,7 @@ where
     let mut rbuf = Some(alloc::vec![0u8; DATAGRAM_BUF]);
     let mut send = None;
     let mut closes = Vec::new();
+    let mut opens = Vec::new();
     let mut persist = None;
     let mut sleep: Option<(u64, Pin<Box<_>>)> = None;
 
@@ -226,6 +239,26 @@ where
                 }
             }
 
+            while let Some((i, peer, kind)) = core.next_dial(now) {
+                opens.push(Box::pin(open_owned(h, i, peer, kind)));
+                progressed = true;
+            }
+            let before = opens.len();
+            opens.retain_mut(|f| match f.as_mut().poll(cx) {
+                Poll::Ready((i, kind, Ok(s))) => {
+                    if let Err(s) = core.dialed(i, s, kind, now) {
+                        closes.push(Box::pin(close_owned(h, s)));
+                    }
+                    false
+                }
+                Poll::Ready((i, _, Err(_))) => {
+                    core.dial_failed(i, now);
+                    false
+                }
+                Poll::Pending => true,
+            });
+            progressed |= opens.len() != before;
+
             let dead: Vec<usize> = core.dying_slots().collect();
             for slot in dead {
                 if let Some(o) = ops.get_mut(slot) {
@@ -276,7 +309,7 @@ where
             }
 
             if !progressed {
-                if core.stopping && core.idle() && closes.is_empty() {
+                if core.stopping && core.idle() && closes.is_empty() && opens.is_empty() {
                     return Poll::Ready(Ok(()));
                 }
                 return Poll::Pending;

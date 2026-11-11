@@ -24,10 +24,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Reason, Relay, Stats, Store, Udp};
+use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity};
 use vinc_common::{client, eventually, within};
-use vinc_connect::carrier::session::{ALPN, Poll};
+use vinc_connect::carrier::session::{ALPN, PEER_ALPN, Poll};
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role, WsFrame};
 use vinc_connect::carrier::{DnsAnswer, Frame, MAX_FRAME_LEN, ProtectedCarrier};
 use vinc_connect::record::{self, Reach, RecordFields};
@@ -59,6 +59,21 @@ fn wall_ns() -> u64 {
     u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()).unwrap()
 }
 
+/// The sockets of a relay on loopback; a restarted relay is built on the same ones, so its address stays.
+#[derive(Clone)]
+struct Ports {
+    listener: Rc<Handle<TcpListener>>,
+    sock: Rc<Handle<UdpSocket>>,
+    addr: SocketAddr,
+}
+
+async fn bind_ports() -> Ports {
+    let listener = Rc::new(Handle::<TcpListener>::bind(vinc_common::lo()).await.unwrap());
+    let addr = listener.get_ref().local_addr().unwrap();
+    let sock = Rc::new(Handle::<UdpSocket>::bind(addr).await.unwrap());
+    Ports { listener, sock, addr }
+}
+
 /// A relay on loopback, run as a local task; dropping `task` drops the run.
 struct TestRelay {
     addr: SocketAddr,
@@ -74,15 +89,17 @@ async fn start(seed: u8, limits: Limits, store: MemStore) -> TestRelay {
     start_with(seed, limits, store, &[]).await
 }
 
-async fn start_with(seed: u8, limits: Limits, store: MemStore, peers: &[NodeId]) -> TestRelay {
-    let listener = Rc::new(Handle::<TcpListener>::bind(vinc_common::lo()).await.unwrap());
-    let addr = listener.get_ref().local_addr().unwrap();
-    let sock = Rc::new(Handle::<UdpSocket>::bind(addr).await.unwrap());
+async fn start_with(seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -> TestRelay {
+    start_on(bind_ports().await, seed, limits, store, peers)
+}
+
+fn start_on(ports: Ports, seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -> TestRelay {
+    let addr = ports.addr;
     let kinds = Rc::new(RefCell::new(VecDeque::new()));
     let t0 = Instant::now();
     let base = wall_ns();
-    let (k, l) = (Rc::clone(&kinds), Rc::clone(&listener));
-    let (s1, s2) = (Rc::clone(&sock), Rc::clone(&sock));
+    let (k, l) = (Rc::clone(&kinds), Rc::clone(&ports.listener));
+    let (s1, s2) = (Rc::clone(&ports.sock), Rc::clone(&ports.sock));
     let mut builder = Relay::builder()
         .identity(Identity::from_seed(&[seed; 32]).unwrap())
         .limits(limits);
@@ -102,6 +119,12 @@ async fn start_with(seed: u8, limits: Limits, store: MemStore, peers: &[NodeId])
                     let (s, _) = l.accept().await.map_err(io_err)?;
                     let kind = k.borrow_mut().pop_front().unwrap_or(CarrierKind::Tcp);
                     Ok((s, kind))
+                },
+                async |p: &Peer, _kind: CarrierKind| {
+                    let to = p
+                        .tcp
+                        .ok_or_else(|| Error::new(ErrorKind::Unreachable, "the peer has no address"))?;
+                    Handle::<TcpStream>::connect(to).await.map_err(io_err)
                 },
                 async |s: &Handle<TcpStream>, mut buf: Vec<u8>| {
                     let r = s.recv(&mut buf).await.map_err(io_err);
@@ -140,6 +163,7 @@ fn dial_carrier(
     kp: &Keypair,
     tag: u8,
     relay: NodeId,
+    alpn: &'static [u8],
 ) -> (Box<ProtectedCarrier<Software>>, Drbg, Box<SoftPrekeys<Software>>) {
     let identity = LocalIdentity::from_keypair(kp, KeyHandle(1)).unwrap();
     let mut drbg = Drbg::new(&[tag ^ 0x55; 32]);
@@ -156,7 +180,7 @@ fn dial_carrier(
             &mut env,
             InitiatorParams {
                 peer: relay,
-                alpn: ALPN,
+                alpn,
                 scid: ConnId::new(&[tag; 8]).unwrap(),
                 identity: &identity,
                 prekey: &prekey,
@@ -186,10 +210,15 @@ struct Member {
 
 impl Member {
     async fn connect(r: &TestRelay, tag: u8, kind: CarrierKind) -> Self {
+        Self::connect_as(r, tag, kind, ALPN).await
+    }
+
+    /// Connect with the carrier protocol name of a member (`ALPN`) or of a peer relay (`PEER_ALPN`).
+    async fn connect_as(r: &TestRelay, tag: u8, kind: CarrierKind, alpn: &'static [u8]) -> Self {
         r.kinds.borrow_mut().push_back(kind);
         let stream = Handle::<TcpStream>::connect(r.addr).await.unwrap();
         let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
-        let (carrier, drbg, prekeys) = dial_carrier(&kp, tag, r.id);
+        let (carrier, drbg, prekeys) = dial_carrier(&kp, tag, r.id, alpn);
         let mut m = Self {
             id: kp.node_id(),
             kp,
@@ -800,8 +829,14 @@ fn a_packet_crosses_between_a_member_and_a_peer_relay_both_ways() {
         within(60, async {
             // the peer relay is played by a node the relay trusts as a relay; its member is a record homed there
             let peer_kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0xb1; 32]).unwrap();
-            let r = start_with(0x7b, Limits::default(), MemStore::new(), &[peer_kp.node_id()]).await;
-            let mut peer = Member::connect(&r, 0xb1, CarrierKind::Tcp).await;
+            let r = start_with(
+                0x7b,
+                Limits::default(),
+                MemStore::new(),
+                &[Peer::new(peer_kp.node_id())],
+            )
+            .await;
+            let mut peer = Member::connect_as(&r, 0xb1, CarrierKind::Tcp, PEER_ALPN).await;
             let mut a = Member::connect(&r, 0xa1, CarrierKind::Tcp).await;
             a.publish(1).await;
             let (far, far_record) = signed_record(0xb2, peer.id, 1);
@@ -952,6 +987,108 @@ fn packets_cross_the_hub_tunnel_up_and_down_between_a_udp_session_and_a_carrier(
                 other => panic!("{other:?}"),
             }
             assert!((r.stats)().machine.tunnel >= 1);
+        })
+    });
+}
+
+/// A packet from `from` to `to`, received as a packet from `from`.
+async fn deliver(from: &mut Member, to: &mut Member, tag: u8) {
+    let (src, dst) = (from.id, to.id);
+    from.send(&Frame::Send {
+        dst,
+        flag: tag,
+        packet: &[tag; 64],
+    })
+    .await;
+    match decode(&to.recv().await.unwrap()) {
+        Frame::Recv { src: s, flag, packet }
+        | Frame::RecvNew {
+            src: s, flag, packet, ..
+        } => {
+            assert_eq!((s, flag, packet), (src, tag, &[tag; 64][..]));
+        }
+        Frame::RecvAlias { flag, packet, .. } => assert_eq!((flag, packet), (tag, &[tag; 64][..])),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A packet from `a` to `b` and one back.
+async fn cross(a: &mut Member, b: &mut Member, tag: u8) {
+    deliver(a, b, tag).await;
+    deliver(b, a, tag).await;
+}
+
+#[test]
+fn two_relay_hosts_form_a_mesh_by_themselves_and_it_comes_back_after_each_restarts() {
+    on_big_stack(|| {
+        within(120, async {
+            let (pa, pb) = (bind_ports().await, bind_ports().await);
+            let ids = [
+                Identity::from_seed(&[0x51; 32]).unwrap().node_id(),
+                Identity::from_seed(&[0x52; 32]).unwrap().node_id(),
+            ];
+            // the whole list goes to both relays; each skips itself, and the one with the lower node id dials
+            let list = [Peer::new(ids[0]).with_tcp(pa.addr), Peer::new(ids[1]).with_tcp(pb.addr)];
+            let (sa, sb) = (MemStore::new(), MemStore::new());
+            let mut ra = start_on(pa.clone(), 0x51, Limits::default(), sa.clone(), &list);
+            let mut rb = start_on(pb.clone(), 0x52, Limits::default(), sb.clone(), &list);
+            stats_where(&ra, "the mesh is up at a", |s| s.peers_up == 1).await;
+            stats_where(&rb, "the mesh is up at b", |s| s.peers_up == 1).await;
+
+            let mut ma = Member::connect(&ra, 0x61, CarrierKind::Tcp).await;
+            let mut mb = Member::connect(&rb, 0x62, CarrierKind::Tcp).await;
+            ma.publish(1).await;
+            mb.publish(1).await;
+            stats_where(&ra, "both records at a", |s| s.records == 2).await;
+            stats_where(&rb, "both records at b", |s| s.records == 2).await;
+            cross(&mut ma, &mut mb, 1).await;
+            assert!((ra.stats)().machine.peer >= 1 && (rb.stats)().machine.peer >= 1);
+
+            // b restarts on its sockets and its store; the mesh comes back by itself
+            drop(rb.task.take());
+            assert!(mb.recv().await.is_none());
+            rb = start_on(pb.clone(), 0x52, Limits::default(), sb.clone(), &list);
+            stats_where(&ra, "the mesh is back at a", |s| s.peers_up == 1).await;
+            stats_where(&rb, "the mesh is back at b", |s| s.peers_up == 1).await;
+            let mut mb = Member::connect(&rb, 0x62, CarrierKind::Tcp).await;
+            mb.publish(1).await;
+            cross(&mut ma, &mut mb, 2).await;
+
+            // and a restarts
+            drop(ra.task.take());
+            assert!(ma.recv().await.is_none());
+            ra = start_on(pa.clone(), 0x51, Limits::default(), sa.clone(), &list);
+            stats_where(&ra, "the mesh is back at a again", |s| s.peers_up == 1).await;
+            stats_where(&rb, "the mesh is back at b again", |s| s.peers_up == 1).await;
+            let mut ma = Member::connect(&ra, 0x61, CarrierKind::Tcp).await;
+            ma.publish(1).await;
+            cross(&mut ma, &mut mb, 3).await;
+            assert_eq!((ra.stats)().peer_dial_failures + (rb.stats)().peer_dial_failures, 0);
+        })
+    });
+}
+
+#[test]
+fn a_relay_never_peers_with_itself_and_an_unlisted_relay_is_refused() {
+    on_big_stack(|| {
+        within(60, async {
+            let me = Identity::from_seed(&[0x53; 32]).unwrap().node_id();
+            let ports = bind_ports().await;
+            // listing itself, with its own address, changes nothing: nothing is dialed
+            let r = start_on(
+                ports.clone(),
+                0x53,
+                Limits::default(),
+                MemStore::new(),
+                &[Peer::new(me).with_tcp(ports.addr)],
+            );
+            nuclei::time::sleep(Duration::from_millis(300)).await;
+            let s = (r.stats)();
+            assert_eq!((s.peers_up, s.carriers_opened, s.peer_dial_failures), (0, 0, 0));
+            // a node that asks for the peer protocol without being listed is closed, not made a peer
+            let mut stranger = Member::connect_as(&r, 0x54, CarrierKind::Tcp, PEER_ALPN).await;
+            assert!(stranger.recv().await.is_none());
+            assert_eq!((r.stats)().peers_up, 0);
         })
     });
 }
