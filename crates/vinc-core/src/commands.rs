@@ -337,6 +337,8 @@ ep_impl! {
         self.ifaces.iter().flatten().find(|l| l.is_ipv4() == remote.is_ipv4()).copied()
     }
 
+    // Out of line, as `free_slot`: a whole connection moves here.
+    #[inline(never)]
     fn connect(
         &mut self,
         now: u64,

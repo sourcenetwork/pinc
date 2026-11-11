@@ -62,6 +62,8 @@ ep_impl! {
     }
 
     /// Open a sub-session over session `parent` towards `peer` for `alpn` and return it.
+    // Out of line, as `free_slot`: a whole connection moves here.
+    #[inline(never)]
     pub(crate) fn open_sub(
         &mut self,
         parent: usize,
@@ -175,6 +177,8 @@ ep_impl! {
 
     /// Open a sub-session towards `peer` for `alpn` over session `parent`, which is still in its handshake. The
     /// application is told `Connected` at once and may write; the keys come when the parent is allowed.
+    // Out of line, as `free_slot`: a whole connection moves here.
+    #[inline(never)]
     pub(crate) fn open_sub_wait(
         &mut self,
         parent: usize,
@@ -262,6 +266,8 @@ ep_impl! {
     }
 
     /// Accept a sub-session open that arrived in session `parent`.
+    // Out of line, as `free_slot`: a whole connection moves here.
+    #[inline(never)]
     pub(crate) fn sub_accept(&mut self, parent: usize, now: u64, body: &[u8]) {
         let Some(&alen) = body.first() else { return };
         let alen = usize::from(alen);

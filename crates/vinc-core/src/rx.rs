@@ -233,6 +233,8 @@ ep_impl! {
     }
 
     /// Create the server session for a first handshake message.
+    // Out of line, as `free_slot`: a whole connection moves here.
+    #[inline(never)]
     fn accept(&mut self, now: u64, odcid: ConnId, resume: bool) -> Option<usize> {
         let alpns = self.alpn_list()?;
         let (i, mem) = self.alloc_slot(false, now)?;

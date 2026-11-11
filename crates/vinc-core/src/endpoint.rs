@@ -643,6 +643,9 @@ ep_impl! {
     }
 
     /// End session `i`: unregister it, return its memory to the slot and put the slot on the free list.
+    // Out of line: it moves a whole connection (a value of over a hundred kilobytes); a caller that inlined it would
+    // reserve and probe that much stack on every call, on its hot path too. The same holds where a connection is built.
+    #[inline(never)]
     pub(crate) fn free_slot(&mut self, i: usize, now: u64) {
         let Ok(idx) = u32::try_from(i) else { return };
         let Some(slot) = self.slots.get_mut(i) else { return };
