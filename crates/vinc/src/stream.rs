@@ -116,7 +116,7 @@ impl<H: Hosted> SendStream<H> {
 
     /// Set the stream's urgency among the streams of its connection. A lower number is sent first, so a control
     /// message on an urgent stream overtakes a bulk transfer already queued on another; streams of equal urgency are
-    /// served in the order they were opened. A stream starts at [`DEFAULT_URGENCY`].
+    /// served in the order they were opened. A stream starts at [`DEFAULT_URGENCY`](crate::DEFAULT_URGENCY).
     ///
     /// # Errors
     /// The connection or the stream has ended.
