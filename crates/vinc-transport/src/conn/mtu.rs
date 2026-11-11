@@ -211,6 +211,14 @@ conn_impl! {
     /// Settle a black-hole suspicion once its round trip has passed: if no full-size packet at or after the suspect one
     /// was acknowledged, the path carries small packets only. Drop the active path to the minimum size.
     pub(super) fn mtu_black_hole_check(&mut self, now: u64) {
+        // A suspicion belongs to the path that carried the PING; once the connection has left that path nothing settles
+        // it, and its deadline would stay in the past and keep the driver spinning.
+        let active = self.paths.active;
+        for (i, slot) in self.paths.slots.iter_mut().enumerate() {
+            if let Some(p) = slot.as_mut().filter(|_| i != active) {
+                p.mtu.suspect = None;
+            }
+        }
         let Some(p) = self.paths.active_mut() else { return };
         if p.mtu.black_hole_check(now) {
             self.rec.set_max_datagram_size(u64::from(MIN_MTU));
