@@ -132,6 +132,10 @@ pub struct TNode {
     pub events: Vec<(u64, Event)>,
     pub acp: Acp,
     pub auto_read: bool,
+    /// Close every incoming session as soon as it is reported, as a host that refuses a duplicate does.
+    pub close_incoming: bool,
+    /// Bytes written on a new stream of every dialed session as soon as it is reported connected.
+    pub write_on_connect: Option<Vec<u8>>,
     pub read: HashMap<(SessionId, u64), Vec<u8>>,
     pub fin: Vec<(SessionId, u64)>,
     pub checks: Vec<(u64, NodeId)>,
@@ -183,6 +187,8 @@ impl TNode {
             events: Vec::new(),
             acp: Acp::Allow,
             auto_read: true,
+            close_incoming: false,
+            write_on_connect: None,
             read: HashMap::new(),
             fin: Vec::new(),
             checks: Vec::new(),
@@ -283,6 +289,25 @@ impl TNode {
                 Acp::Manual => self.checks.push((check, node)),
             },
             Event::StreamReadable { session, stream } if self.auto_read => self.read_stream(now, session, stream),
+            Event::Incoming { session, .. } if self.close_incoming => {
+                let _ = self.cmd(now, Command::Close { session, error: 0 });
+            }
+            Event::Connected { session, .. } if self.write_on_connect.is_some() => {
+                let data = self.write_on_connect.clone().unwrap_or_default();
+                if let Ok(Value::Stream(stream)) = self
+                    .cmd(now, Command::OpenStream { session, bidi: true })
+                    .map(|r| r.value)
+                {
+                    let _ = self.cmd(
+                        now,
+                        Command::Write {
+                            session,
+                            stream,
+                            data: &data,
+                        },
+                    );
+                }
+            }
             _ => {}
         }
     }

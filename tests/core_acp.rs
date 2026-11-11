@@ -566,3 +566,53 @@ fn a_deny_after_a_lapsed_answer_closes_the_allowed_session() {
         assert!(!net.nodes[b].saw(|e| matches!(e, Event::StreamReadable { .. })));
     });
 }
+
+#[test]
+fn a_session_the_host_closes_when_it_is_reported_names_nothing_after_its_closed() {
+    big_stack(|| {
+        let mut net = CoreNet::new(FAST);
+        let (a, b) = (net.add(1), net.add(2));
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        // A first session leaves the access answer cached at the peer and a ticket at the dialer, then ends.
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        let first = net.nodes[a].session(&rep);
+        assert!(net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::TicketsReceived { .. }))
+        }));
+        let t = net.now;
+        net.nodes[a]
+            .cmd(
+                t,
+                Command::Close {
+                    session: first,
+                    error: 0,
+                },
+            )
+            .unwrap();
+        net.run_for(SEC_NS);
+        // A second session resumes and writes at once: the peer reports it together with its first stream, from one
+        // flight, and its host closes it as soon as it is reported.
+        net.nodes[b].close_incoming = true;
+        net.nodes[a].write_on_connect = Some(b"first bytes".to_vec());
+        let t = net.now;
+        net.nodes[a].connect(t, peer, ALPN_A, to, Role::Other).unwrap();
+        net.run_for(2 * SEC_NS);
+        let ev: Vec<Event> = net.nodes[b].events.iter().map(|(_, e)| *e).collect();
+        let incoming: Vec<_> = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::Incoming { session, .. } => Some(*session),
+                _ => None,
+            })
+            .collect();
+        // The first session, then the second; the dialer may try again after the second is closed.
+        assert!(incoming.len() >= 2, "both sessions were reported");
+        let sb = incoming[1];
+        let at = ev
+            .iter()
+            .position(|e| matches!(e, Event::Closed { session, .. } if *session == sb))
+            .expect("it was closed");
+        let after: Vec<&Event> = ev[at + 1..].iter().filter(|e| e.session() == Some(sb)).collect();
+        assert!(after.is_empty(), "events named the session after its Closed: {after:?}");
+    });
+}

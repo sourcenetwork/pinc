@@ -63,7 +63,16 @@ ep_impl! {
         let r = self.apply(now, cmd);
         let events = self.capture.take().unwrap_or_default();
         match r {
-            Ok(value) => Ok(Reply { value, events }),
+            Ok(value) => {
+                // A Closed in the reply reaches the host ahead of the session's events still queued from before the
+                // command: they would name the session after its Closed, so they go.
+                for ev in events.iter() {
+                    if let Event::Closed { session, .. } = *ev {
+                        self.events.purge(session);
+                    }
+                }
+                Ok(Reply { value, events })
+            }
             Err(e) => {
                 for ev in events.iter() {
                     self.events.push(*ev);

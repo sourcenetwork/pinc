@@ -226,6 +226,29 @@ impl Event {
             Self::StreamReadable { .. } | Self::StreamWritable { .. } | Self::OpenReady { .. }
         )
     }
+
+    /// The session the event names, if any.
+    pub const fn session(&self) -> Option<SessionId> {
+        match *self {
+            Self::Connected { session, .. }
+            | Self::Incoming { session, .. }
+            | Self::Closed { session, .. }
+            | Self::StreamOpened { session, .. }
+            | Self::StreamReadable { session, .. }
+            | Self::StreamWritable { session, .. }
+            | Self::OpenReady { session }
+            | Self::StreamReset { session, .. }
+            | Self::StreamStopped { session, .. }
+            | Self::DatagramReceived { session }
+            | Self::KeyRequest { session }
+            | Self::PathChanged { session, .. }
+            | Self::ReachOut { session }
+            | Self::PeerAsleep { session }
+            | Self::PeerAwake { session }
+            | Self::TicketsReceived { session, .. } => Some(session),
+            Self::ConnectFailed { .. } | Self::AcpCheck { .. } => None,
+        }
+    }
 }
 
 /// The events one command produced.

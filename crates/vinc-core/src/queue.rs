@@ -12,7 +12,7 @@
 //! the endpoint takes without checking the queue again (one connection event, one timer, one command) emits at most
 //! one event per session twice over and a few more, which the headroom covers for any `K`.
 
-use crate::api::Event;
+use crate::api::{Event, SessionId};
 use crate::store::{Store, filled, store_fn};
 
 /// The places of the event queue besides the four rows of `K`.
@@ -125,6 +125,28 @@ impl<const K: usize> EventRing<K> {
         self.lossy_len -= usize::from(e.is_some_and(|e| e.lossy()));
         e
     }
+
+    /// Drop the queued events that name `session`, except its `Closed`, keeping the order of the rest. For a session
+    /// whose `Closed` the host already received: nothing may name it afterwards.
+    pub(crate) fn purge(&mut self, session: SessionId) {
+        let stale = |e: &Event| e.session() == Some(session) && !matches!(e, Event::Closed { .. });
+        let mut kept = 0;
+        for i in 0..self.len {
+            let (from, to) = (self.at(i), self.at(kept));
+            let Some(ev) = self.cell(from).and_then(Option::take) else {
+                continue;
+            };
+            if stale(&ev) {
+                self.lossy_len -= usize::from(ev.lossy());
+                continue;
+            }
+            if let Some(s) = self.cell(to) {
+                *s = Some(ev);
+            }
+            kept += 1;
+        }
+        self.len = kept;
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +256,38 @@ mod tests {
             }
             prop_assert_eq!(delivered, offered, "an event that cannot be recovered was lost or reordered");
         }
+    }
+
+    #[test]
+    fn a_purge_drops_what_names_the_session_but_its_closed_and_keeps_the_rest_in_order() {
+        let mut ring: EventRing<K_T> = EventRing::new();
+        let (s, t) = (SessionId::new(3, 1), SessionId::new(4, 1));
+        let closed = Event::Closed {
+            session: s,
+            reason: EndReason::Orphaned,
+        };
+        let evs = [
+            Event::StreamOpened { session: s, stream: 0 },
+            Event::StreamOpened { session: t, stream: 0 },
+            Event::StreamReadable { session: s, stream: 0 },
+            closed,
+            Event::StreamReadable { session: t, stream: 0 },
+            Event::DatagramReceived { session: s },
+        ];
+        for e in evs {
+            ring.push(e);
+        }
+        ring.purge(s);
+        let left: Vec<Event> = core::iter::from_fn(|| ring.pop()).collect();
+        assert_eq!(
+            left,
+            [
+                Event::StreamOpened { session: t, stream: 0 },
+                closed,
+                Event::StreamReadable { session: t, stream: 0 },
+            ]
+        );
+        assert_eq!(ring.lossy_len, 0, "the recoverable count follows the purge");
     }
 
     #[test]
