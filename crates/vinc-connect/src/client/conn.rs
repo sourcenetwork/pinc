@@ -202,7 +202,10 @@ pub(super) struct Inbound {
 
 impl<P: Provider> Rly<P> {
     /// Whether the carrier is open.
-    #[allow(clippy::redundant_closure_for_method_calls, reason = "the carrier is boxed with alloc")]
+    #[allow(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the carrier is boxed with alloc"
+    )]
     pub(super) fn carrier_open(&self) -> bool {
         self.carrier.as_ref().is_some_and(|c| c.is_open())
     }

@@ -187,7 +187,10 @@ fn a_key_that_is_not_the_nodes_is_refused_at_start() {
         trace: false,
         limits: vinc_broadcast::Limits::default(),
     };
-    assert_eq!(Topics::start(&cfg, Box::new(key), SEC, 1).unwrap_err(), StartError::KeyMismatch);
+    assert_eq!(
+        Topics::start(&cfg, Box::new(key), SEC, 1).unwrap_err(),
+        StartError::KeyMismatch
+    );
 }
 
 #[test]

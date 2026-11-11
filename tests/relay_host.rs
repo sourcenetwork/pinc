@@ -754,3 +754,33 @@ fn a_restored_record_keeps_its_remaining_lifetime_and_a_dropped_one_leaves_the_s
         })
     });
 }
+
+#[test]
+fn the_relay_holds_as_many_members_and_records_as_the_state_machine_allows() {
+    on_big_stack(|| {
+        within(120, async {
+            let r = start(0x7a, Limits::default(), MemStore::new()).await;
+            let mut members = Vec::new();
+            for tag in 1..=150u8 {
+                let mut m = Member::connect(&r, tag, CarrierKind::Tcp).await;
+                m.publish(1).await;
+                members.push(m);
+            }
+            stats_where(&r, "150 carriers and records", |s| {
+                s.carriers == 150 && s.records == 150
+            })
+            .await;
+            let last = members.last().map(|m| m.id).unwrap();
+            let first = members.first_mut().unwrap();
+            first.send(&Frame::DnsQuery { peer: last }).await;
+            match decode(&first.recv().await.unwrap()) {
+                Frame::DnsReply {
+                    answer: DnsAnswer::Record(_),
+                    ..
+                } => {}
+                other => panic!("{other:?}"),
+            }
+            assert_eq!((r.stats)().refused_carriers_full, 0);
+        })
+    });
+}

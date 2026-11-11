@@ -6,7 +6,8 @@
 //!
 //! Invariants: the capacity `N` is fixed at compile time and never exceeded; the hash is keyed by a seed the host
 //! chooses, so a peer that grinds node ids cannot aim them at one bucket without knowing it; every operation is
-//! deterministic and terminates after at most `N` probes; nothing allocates or panics.
+//! deterministic and terminates after at most `N` probes; nothing panics, and nothing allocates but the slots of a table
+//! built with the `alloc` feature, once, when it is made.
 
 use vinc_crypto::NodeId;
 
@@ -26,10 +27,31 @@ fn bucket<const N: usize>(seed: u64, k: &NodeId) -> usize {
     (hash(seed, k) % N as u64) as usize
 }
 
+/// The slots of a table. With the `alloc` feature they live on the heap, built in place, so a table of thousands of
+/// entries is a few words on the stack and a relay builds on a small stack; without it they are inline.
+#[cfg(feature = "alloc")]
+type Slots<V, const N: usize> = alloc::boxed::Box<[Option<(NodeId, V)>; N]>;
+#[cfg(not(feature = "alloc"))]
+type Slots<V, const N: usize> = [Option<(NodeId, V)>; N];
+
+#[cfg(feature = "alloc")]
+fn slots<V, const N: usize>() -> Slots<V, N> {
+    let all: alloc::vec::Vec<Option<(NodeId, V)>> = (0..N).map(|_| None).collect();
+    match Slots::<V, N>::try_from(all.into_boxed_slice()) {
+        Ok(slots) => slots,
+        Err(_) => alloc::boxed::Box::new(core::array::from_fn(|_| None)),
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
+fn slots<V, const N: usize>() -> Slots<V, N> {
+    core::array::from_fn(|_| None)
+}
+
 /// A bounded hash table from node id to `V`.
 #[derive(Debug)]
 pub struct Table<V, const N: usize> {
-    slots: [Option<(NodeId, V)>; N],
+    slots: Slots<V, N>,
     len: usize,
     seed: u64,
 }
@@ -39,7 +61,7 @@ impl<V, const N: usize> Table<V, N> {
     pub fn new(seed: u64) -> Self {
         const { assert!(N > 0, "a table needs room for one entry") };
         Self {
-            slots: core::array::from_fn(|_| None),
+            slots: slots(),
             len: 0,
             seed,
         }
@@ -185,7 +207,7 @@ impl<V, const N: usize> Table<V, N> {
 /// A direct-mapped cache from node id to `V`: one slot per bucket, a collision replaces the occupant.
 #[derive(Debug)]
 pub struct Cache<V, const N: usize> {
-    slots: [Option<(NodeId, V)>; N],
+    slots: Slots<V, N>,
     seed: u64,
 }
 
@@ -193,10 +215,7 @@ impl<V, const N: usize> Cache<V, N> {
     /// An empty cache hashing with `seed`.
     pub fn new(seed: u64) -> Self {
         const { assert!(N > 0, "a cache needs room for one entry") };
-        Self {
-            slots: core::array::from_fn(|_| None),
-            seed,
-        }
+        Self { slots: slots(), seed }
     }
 
     /// The bucket `k` hashes to: where a probe for `k` starts.

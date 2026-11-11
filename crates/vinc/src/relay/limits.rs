@@ -4,20 +4,17 @@ use vinc_connect::relay::Quota;
 
 use crate::error::{Error, Result};
 
-// vertexia: the tables are a compile-time shape small enough to build by value on a 1 MiB stack; heap-backed tables in
-// `vinc-connect` (its `alloc` feature) lift it to the state machine's own constants
 /// The most member sessions the relay holds: the table size of the state machine.
-pub const CARRIERS: usize = 64;
+pub const CARRIERS: usize = 1024;
 /// The most signed records the relay stores.
-pub const RECORDS: usize = 64;
+pub const RECORDS: usize = 1024;
 /// The most sleeping members whose packets the mailbox holds.
-pub const MAILBOX_MEMBERS: usize = 8;
+pub const MAILBOX_MEMBERS: usize = 256;
 /// The bytes the mailbox holds for each sleeping member.
-pub const MAILBOX_BYTES: usize = 8192;
+pub const MAILBOX_BYTES: usize = 16_384;
 
-/// The state machine, in the shape the relay runs. A record slot holds a post-quantum key and signature (about 5.8 KiB),
-/// and the machine is built by value before it moves to the heap, so the shape is bounded to what a 1 MiB stack builds
-/// (see the test below).
+/// The state machine, in the shape the relay runs. Its tables live on the heap (the `alloc` feature of `vinc-connect`),
+/// so a relay of any of these sizes builds on a 1 MiB stack (see the test below).
 pub(crate) type Machine = vinc_connect::relay::Relay<CARRIERS, RECORDS, MAILBOX_MEMBERS, MAILBOX_BYTES>;
 
 /// The sizes and rates a relay runs with; each has a default.
