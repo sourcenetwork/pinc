@@ -1,6 +1,6 @@
 //! The relay host: the relay side of `vinc-connect` running on the host's sockets.
 //!
-//! A [`Relay`] accepts the byte streams members open ([`CarrierKind`]), authenticates each by a VINC handshake to the
+//! A [`Relay`] accepts the byte streams members open ([`CarrierKind`](crate::CarrierKind)), authenticates each by a VINC handshake to the
 //! relay's identity, and forwards their packets, serves signed records and lookups, answers address queries, holds
 //! packets for sleeping members and notes their sleep notices, all by the state machine of `vinc-connect`. It starts no
 //! thread or task and owns no runtime: the host passes its I/O as async closures ([`Udp`], [`Carriers`], [`Clock`])
