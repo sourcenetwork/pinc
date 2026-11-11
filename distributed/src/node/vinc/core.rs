@@ -270,7 +270,7 @@ fn build<const K: usize, const D: usize>(
         prekey_info,
         prov,
         drbg2,
-        kp2,
+        Box::new(kp2),
         (),
         u64::from_le_bytes(
             seed_bytes(&spec.name, "vinc-conn", 8)
