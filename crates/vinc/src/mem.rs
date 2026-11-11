@@ -8,13 +8,13 @@
 //!
 //! # Memory
 //!
-//! Per session, reserved up front for every slot of the shape: about 360 KiB of tables (a connection of 156 KiB and a
-//! stream table of 203 KiB, both built when the engine starts) plus the endpoint's own tables of about 1 KiB. The
-//! 16 KiB chunk pool of a session is zero-filled memory the system commits only as it is used, so an idle session
-//! costs address space for `pool_chunks` chunks and almost no resident memory beyond its tables. Per endpoint, besides
-//! the sessions: about 470 KiB of fixed tables. So the default 1024 sessions hold about 370 MiB of tables, 4096 hold
-//! about 1.4 GiB, and the ceiling of 65536 holds about 23 GiB. The shape is rounded up to the next capacity of the
-//! ladder, which doubles at each step: ask for what you need, not for a round number above it.
+//! Per session, every slot of the shape reserves a connection, a stream table of [`STREAMS`] slots (a slot is a few KiB
+//! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of
+//! [`Limits::pool_chunks`] chunks of 16 KiB. The pool, the stream table and the table of sent packets are zero-filled
+//! or reserved memory the system commits only as it is used, so an idle session costs address space and almost no
+//! resident memory, and a busy one costs what its streams and packets in flight touched. The shape is rounded up to
+//! the next capacity of the ladder, which doubles at each step: ask for what you need, not for a round number above
+//! it.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
 
@@ -31,7 +31,7 @@ pub const MAX_CONNECTIONS: usize = 65_536;
 /// The stream slots of a session, both directions of opening counted.
 pub const STREAMS: usize = 72;
 /// The chunk entries of one stream half.
-pub const RING: usize = 81;
+pub const RING: usize = 257;
 pub(crate) const FLIGHT: usize = vinc_transport::recovery::SENT_PACKETS;
 pub(crate) const PATHS: usize = 4;
 pub(crate) const PREKEYS: usize = 8;
@@ -48,13 +48,15 @@ pub struct Limits {
     /// The most sessions at once (at most [`MAX_CONNECTIONS`]). The memory for the next capacity of [`CAPACITIES`](crate::CAPACITIES)
     /// at or above it is reserved when the engine starts; see the module docs for what that costs.
     pub connections: usize,
-    /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 512 is 8 MiB:
-    /// the pool of every session is reserved at start, so raise it for a few busy sessions, not for thousands.
+    /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 1024 is 16 MiB:
+    /// the pool of every session is reserved at start (address space; memory is used as chunks are), so raise it for a
+    /// few busy sessions, not for thousands. Streams that move data at once are charged their whole window, so a path
+    /// whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
-    /// The receive window of each stream in bytes, at most `(RING - 1) * 16 KiB`, which is the default 1,310,720 (1.25
-    /// MiB): a stream moves at most one window per round trip, so on a 150 ms path one stream tops out at 8.7 MB/s.
-    /// The pool is charged the window of a stream from its first byte, so a raised window needs a raised
-    /// `pool_chunks` to keep as many streams busy at once.
+    /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice the
+    /// delivery rate while the stream is read, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
+    /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
+    /// window needs a raised `pool_chunks` to keep as many streams busy at once.
     pub stream_window: u64,
     /// The most data a session keeps written and unacknowledged, over all its streams (default 16 MiB): the smaller of
     /// this and 1.5 times the congestion window, which is what binds on any path under about 1 Gbit/s at 100 ms.
@@ -76,7 +78,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             connections: 1024,
-            pool_chunks: 512,
+            pool_chunks: 1024,
             stream_window: 1_310_720,
             // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
             // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path
