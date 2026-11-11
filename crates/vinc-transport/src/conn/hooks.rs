@@ -151,11 +151,13 @@ conn_impl! {
 
     /// A keepalive that is not a transport PING stood for this connection's (an authenticated carrier answered for
     /// it): count it as traffic received, and as traffic sent when `sent`, so neither the idle timeout nor the next
-    /// keepalive fires meanwhile.
+    /// keepalive fires meanwhile. An answer that arrived (`sent` false) is also a datagram heard on the active path.
     pub fn pulse(&mut self, now: u64, sent: bool) {
         self.life.last_activity = now;
         if sent {
             self.life.last_sent = now;
+        } else if let Some(p) = self.paths.get_mut(self.paths.active) {
+            p.last_rx = now;
         }
     }
 

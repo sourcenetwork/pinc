@@ -862,6 +862,22 @@ fn a_session_handed_to_the_carrier_pulse_sends_no_keepalive_and_reports_when_one
             )
             .unwrap();
         assert!(!stats(&net).pulse_due);
+        // An answer that arrived is also a datagram heard on the active path; a ping that left is not.
+        let before = stats(&net).heard;
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::Pulse {
+                    session: sa,
+                    sent: false,
+                },
+            )
+            .unwrap();
+        assert!(
+            before < now && stats(&net).heard == now,
+            "heard {before} then {}",
+            stats(&net).heard
+        );
         // Handed back, the endpoint sends its own keepalive again.
         net.nodes[a]
             .cmd(net.now, Command::SetPulse { session: sa, on: false })

@@ -62,6 +62,7 @@ where
                 let session: Option<SessionId> = self.io.links.get(&node.bytes).and_then(|l| l.conn);
                 if let Some(session) = session {
                     // A refused pulse means the session is gone, which the node learns from its own events.
+                    let _ = self.io.cmd(Command::Pulse { session, sent: false });
                     let _ = self.io.cmd(Command::Pulse { session, sent: true });
                     self.settle(now);
                 }
