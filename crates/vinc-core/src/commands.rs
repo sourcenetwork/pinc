@@ -200,6 +200,10 @@ ep_impl! {
                 }
                 Ok(Value::None)
             }
+            Command::AcpForget { peer } => {
+                self.acp.remove(&peer);
+                Ok(Value::None)
+            }
             Command::AcpAnswer { check, allow } => self.acp_answer(check, allow, now).map(|()| Value::None),
             Command::KeyResponse { session, response } => {
                 let i = self.live(session)?;

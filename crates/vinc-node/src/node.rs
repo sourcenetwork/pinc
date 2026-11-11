@@ -637,6 +637,17 @@ where
         self.settle(now);
     }
 
+    /// The access-control layer lifted the revocation of `peer`; whether it was revoked. Its place in every
+    /// revocation table is free again.
+    pub fn unrevoke(&mut self, peer: &NodeId) -> bool {
+        let a = self.mem.unrevoke(peer);
+        let b = self.topics.unrevoke(peer);
+        let c = self.io.revoked.remove(peer);
+        // The deny given while it was revoked must not outlive the revocation.
+        let _ = self.io.cmd(Command::AcpForget { peer: self.io.full_id(peer) });
+        a | b | c
+    }
+
     /// The access-control layer revoked `peer`: forget it in the view, the roster and the subscriptions, and close
     /// every session with it. Effective within this call.
     ///
@@ -647,6 +658,8 @@ where
         let (m, mut h) = self.mem_host();
         m.revoke(&mut h, now, peer)?;
         self.topics.revoke(peer);
+        // A cached allow would admit the peer's next session before the check could refuse it.
+        let _ = self.io.cmd(Command::AcpForget { peer: self.io.full_id(peer) });
         if self.io.revoked.len() < crate::config::TABLE_MAX {
             self.io.revoked.insert(*peer);
         }

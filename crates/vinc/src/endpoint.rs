@@ -585,7 +585,13 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// Lift the revocation of `peer`; whether it was revoked. The access hook decides about it again.
     pub fn unrevoke(&self, peer: &NodeId) -> bool {
-        self.0.shared.admit.lift(peer)
+        let lifted = self.0.shared.admit.lift(peer);
+        // vertexia: a lift made from inside the access hook finds the core busy and leaves the node's table
+        // holding the peer until the next restart; lift from outside the hook.
+        if let Some(mut core) = self.0.shared.lock() {
+            core.unrevoke(&peer.bytes);
+        }
+        lifted
     }
 
     /// Whether `peer` is revoked.

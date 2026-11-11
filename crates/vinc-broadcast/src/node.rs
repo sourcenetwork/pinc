@@ -477,6 +477,11 @@ impl Topics {
         }
     }
 
+    /// Trust `peer` again; whether it was revoked.
+    pub fn unrevoke(&mut self, peer: &NodeId) -> bool {
+        self.revoked.remove(peer)
+    }
+
     /// Stop trusting `peer`: forget its subscriptions and refuse its messages.
     pub fn revoke(&mut self, peer: &NodeId) {
         if self.revoked.len() < crate::consts::TABLE_MAX {

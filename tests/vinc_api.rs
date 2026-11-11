@@ -277,3 +277,23 @@ async fn a_revoked_peer_loses_every_session_and_stays_out() {
     })
     .await;
 }
+
+/// The deny an endpoint gave while a peer was revoked does not outlive the revocation: the peer connects at once.
+#[nuclei::test]
+async fn a_peer_connects_at_once_after_its_revocation_is_lifted() {
+    let server = node().await;
+    let client = client().await;
+    within(20, async {
+        server.revoke(&client.id()).await.unwrap();
+        if let Ok(c) = client.connect(server.addr(), ECHO).await {
+            assert!(matches!(c.closed().await.kind(), ErrorKind::Closed { .. } | ErrorKind::Refused));
+        }
+        assert!(server.unrevoke(&client.id()));
+        let c = client.connect(server.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = c.open_bi().await.unwrap();
+        tx.write_all(b"now").await.unwrap();
+        tx.finish().await.unwrap();
+        assert_eq!(rx.read_to_end(64).await.unwrap(), b"now");
+    })
+    .await;
+}

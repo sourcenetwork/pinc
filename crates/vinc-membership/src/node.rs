@@ -518,6 +518,11 @@ impl Membership {
         }
     }
 
+    /// Lift the revocation of `member`; whether it was revoked. Frees its place in the revocation table.
+    pub fn unrevoke(&mut self, member: &NodeId) -> bool {
+        self.revoked.remove(member)
+    }
+
     /// The access-control layer revoked `member`: drop it from the view and the roster, forget its subscriptions and
     /// close every session with it. Effective within this call.
     ///
