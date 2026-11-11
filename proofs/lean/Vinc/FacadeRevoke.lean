@@ -13,8 +13,9 @@ What must never happen: a live session of a revoked peer; the access query sayin
 refuses; more revoked peers than the bound.
 
 This is a transcription of `proofs/tla/FacadeRevoke.tla` over any number of peers, slots and steps. The Rust code is
-`crates/vinc/src/engine.rs` (`Gate::{bar, lift, is_revoked}`, `Core::revoke`, `Core::session_up`, the `AcpCheck` arm
-of `on_event`) and `crates/vinc/src/endpoint.rs` (`Endpoint::revoke`, `unrevoke`, `Endpoint`'s access query).
+`crates/vinc/src/engine/gate.rs` (`Gate::{bar, lift, is_revoked}`), `crates/vinc/src/engine/ops.rs` (`Core::revoke`),
+`crates/vinc/src/engine.rs` (`Core::session_up`, the `AcpCheck` arm of `on_event`) and `crates/vinc/src/endpoint.rs`
+(`Endpoint::revoke`, `unrevoke`, `Endpoint`'s access query).
 
 Main theorems: `inv_reach` (with the code's settings every reachable state keeps the three promises),
 `failOpen_bad` (the old access query, which said yes while the core was borrowed, breaks the query promise) and
