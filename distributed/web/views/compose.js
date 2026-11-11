@@ -13,6 +13,20 @@ const TESTS = {
   throughput: { label: "throughput", params: [["bytes", "bytes", "B"], ["streams", "streams", ""]], init: { bytes: 16777216, streams: 1 } },
   many: { label: "many connections", params: [["connections", "clients", ""], ["bytes_each", "bytes each", "B"]], init: { connections: 200, bytes_each: 65536 } },
 };
+const KINDS = [["transport", "Transport tests"], ["pubsub", "Publish and subscribe"], ["sync", "Sync a value"], ["reconcile", "Reconcile sets"]];
+const HINTS = {
+  transport: "Transport tests: the comparison benches' scenarios between a client and a server node; each pair runs every test, every stack, every repetition.",
+  pubsub: "Every node joins the topic through the hubs; the publishers send at their rate and the subscribers' deliveries are counted: latency, losses, duplicates, bytes on the wire.",
+  sync: "The providers hold a value of each size in turn; the consumers fetch it at once. Time, goodput and bytes on the wire per payload byte.",
+  reconcile: "Two nodes hold sets of the same size that differ in a few items on each side; the second starts the round. Only stacks with a reconciliation protocol are measured.",
+};
+// What a workload of each kind starts as, from the names of the nodes.
+const WORKLOADS = {
+  transport: (n) => ({ kind: "transport", timeout_s: 300, pairs: [{ client: n[0] || "", server: n[1] || "" }], tests: [{ test: "setup", count: 20 }] }),
+  pubsub: (n) => ({ kind: "pubsub", topic: "bench", publishers: n[0] ? [n[0]] : [], subscribers: [], messages: 1000, size: 256, rate_hz: 50, join_s: 30, warmup_s: 5, drain_s: 5 }),
+  sync: (n) => ({ kind: "sync", providers: n[0] ? [n[0]] : [], consumers: n[1] ? [n[1]] : [], sizes: [1048576], timeout_s: 300, warmup_s: 5 }),
+  reconcile: (n) => ({ kind: "reconcile", a: n[0] || "", b: n[1] || "", items: [1000], differences: [10], timeout_s: 120, warmup_s: 5 }),
+};
 const FAULTS = {
   set: "reshape a link", cut: "cut a link", restore: "restore a link", partition: "partition a site", heal: "heal a site",
   pause: "pause a node", resume: "resume a node", kill: "kill a node", restart: "restart a node",
@@ -233,7 +247,12 @@ function renameEverywhere(kind, from, to) {
     sc.links.forEach((l) => { if (l.a === from) l.a = to; if (l.b === from) l.b = to; });
   }
   sc.faults.forEach((f) => { for (const k of ["a", "b", "site", "node"]) if (f.action[k] === from) f.action[k] = to; });
-  if (kind === "node") sc.workload.pairs.forEach((p) => { if (p.client === from) p.client = to; if (p.server === from) p.server = to; });
+  if (kind === "node") {
+    const w = sc.workload;
+    (w.pairs || []).forEach((p) => { if (p.client === from) p.client = to; if (p.server === from) p.server = to; });
+    for (const k of ["publishers", "subscribers", "providers", "consumers"]) if (w[k]) w[k] = w[k].map((x) => (x === from ? to : x));
+    for (const k of ["a", "b"]) if (w[k] === from) w[k] = to;
+  }
 }
 
 function drawInspector() {
@@ -370,7 +389,67 @@ function drawWorkload(body) {
   const w = st.sc.workload;
   const nodes = expand(st.sc).map((n) => [n.name, n.name]);
   const redraw = () => { changed({ topo: false }); drawDock(); };
-  body.append(h("p", { class: "hint" }, "Transport tests: the comparison benches' scenarios between a client and a server node; each pair runs every test, every stack, every repetition."));
+  body.append(h("div", { class: "row" },
+    selectField("Workload", w.kind, KINDS, (v) => { st.sc.workload = WORKLOADS[v](nodes.map((n) => n[0])); redraw(); }),
+    h("span", { class: "spacer" })));
+  body.append(h("p", { class: "hint" }, HINTS[w.kind] || ""));
+  if (w.kind === "pubsub") drawPubsub(body, w, nodes, redraw);
+  else if (w.kind === "sync") drawSync(body, w, nodes, redraw);
+  else if (w.kind === "reconcile") drawReconcile(body, w, nodes);
+  else drawTransport(body, w, nodes, redraw);
+}
+
+// A set of node names as a row of check boxes.
+function nodeSet(label, arr, nodes, note) {
+  const boxes = nodes.map(([v, text]) => h("label", { class: "chip" },
+    h("input", { type: "checkbox", checked: arr.includes(v), onchange: (e) => {
+      const at = arr.indexOf(v);
+      if (e.target.checked && at < 0) arr.push(v);
+      if (!e.target.checked && at >= 0) arr.splice(at, 1);
+      changed({ topo: false });
+    } }), text));
+  return h("fieldset", { class: "field" }, h("legend", {}, label, note ? h("span", { class: "unit" }, note) : null), h("div", { class: "chips" }, boxes));
+}
+
+// A list of numbers typed as "1, 2, 3".
+function listField(label, obj, key, { unit = "" } = {}) {
+  return h("label", { class: "field" }, h("span", {}, label, unit ? h("span", { class: "unit" }, unit) : null),
+    h("input", { type: "text", value: (obj[key] || []).join(", "), spellcheck: "false", oninput: (e) => {
+      obj[key] = e.target.value.split(/[ ,]+/).filter(Boolean).map(Number).filter((x) => Number.isFinite(x));
+      changed({ topo: false });
+    } }));
+}
+
+function drawPubsub(body, w, nodes) {
+  const c = () => changed({ topo: false });
+  body.append(h("div", { class: "grid2" }, textField("Topic", w, "topic", { onchange: c }),
+    numField("Messages per publisher", w, "messages", { min: 1, step: 1, onchange: c }),
+    numField("Size", w, "size", { unit: "B", min: 16, step: 1, onchange: c }),
+    numField("Rate per publisher", w, "rate_hz", { unit: "msg/s", min: 0.01, onchange: c }),
+    numField("Longest wait to join", w, "join_s", { unit: "s", min: 1, step: 1, onchange: c }),
+    numField("Settle before the first", w, "warmup_s", { unit: "s", min: 0, onchange: c }),
+    numField("Drain after the last", w, "drain_s", { unit: "s", min: 0, onchange: c })));
+  body.append(nodeSet("Publishers", w.publishers, nodes), nodeSet("Subscribers", w.subscribers, nodes, "none ticked: every peer"));
+}
+
+function drawSync(body, w, nodes) {
+  const c = () => changed({ topo: false });
+  body.append(h("div", { class: "grid2" }, listField("Sizes", w, "sizes", { unit: "B" }),
+    numField("Longest fetch", w, "timeout_s", { unit: "s", min: 1, step: 1, onchange: c }),
+    numField("Settle before the first", w, "warmup_s", { unit: "s", min: 0, onchange: c })));
+  body.append(nodeSet("Providers", w.providers, nodes, "several: fetched from all"), nodeSet("Consumers", w.consumers, nodes));
+}
+
+function drawReconcile(body, w, nodes) {
+  const c = () => changed({ topo: false });
+  body.append(h("div", { class: "grid2" },
+    selectField("Holder", w.a, nodes, (v) => { w.a = v; c(); }), selectField("Starts the round", w.b, nodes, (v) => { w.b = v; c(); }),
+    listField("Set sizes", w, "items", { unit: "items" }), listField("Differences", w, "differences", { unit: "items each side" }),
+    numField("Longest round", w, "timeout_s", { unit: "s", min: 1, step: 1, onchange: c }),
+    numField("Settle before the first", w, "warmup_s", { unit: "s", min: 0, onchange: c })));
+}
+
+function drawTransport(body, w, nodes, redraw) {
   body.append(h("div", { class: "row" }, h("h3", {}, "Pairs"), h("span", { class: "spacer" }),
     numField("timeout per client run", w, "timeout_s", { unit: "s", min: 1, step: 1, onchange: () => changed({ topo: false }) }),
     h("button", { class: "btn", type: "button", disabled: nodes.length < 2, onclick: () => { w.pairs.push({ client: nodes[0][0], server: nodes[1][0] }); redraw(); } }, "Add pair")));
@@ -430,7 +509,8 @@ function drawFaults(body) {
     return h("tr", {},
       h("td", { style: { width: "7rem" } }, numField("", x, "at_s", { unit: "s", min: 0, onchange: () => changed({ topo: false }) })),
       h("td", {}, kindSel),
-      h("td", {}, targets, a.do === "set" ? shapeFields(a.shape, { optional: true, onchange: () => changed({ topo: false }) }) : null),
+      h("td", {}, targets, a.do === "set" ? shapeFields(a.shape, { optional: true, onchange: () => changed({ topo: false }) }) : null,
+        a.do === "pause" || a.do === "resume" ? h("label", { class: "chip" }, h("input", { type: "checkbox", checked: !!a.graceful, onchange: (e) => { if (e.target.checked) a.graceful = true; else delete a.graceful; changed({ topo: false }); } }), "tell the group (VINC)") : null),
       h("td", {}, h("button", { class: "x", type: "button", "aria-label": "remove fault", onclick: () => { f.splice(i, 1); redraw(); } }, "✕")));
   }))));
 }

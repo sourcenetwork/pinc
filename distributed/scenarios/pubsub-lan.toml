@@ -1,0 +1,31 @@
+name = "pubsub-lan"
+about = "Publish and subscribe on one LAN: a hub and eight peers, one publisher sending 2000 messages of 256 bytes at 200 a second, every peer subscribed."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "office"
+lan = { delay_ms = 0.05, rate_mbit = 1000 }
+
+[[nodes]]
+name = "hub"
+site = "office"
+role = "hub"
+
+[[nodes]]
+name = "p"
+site = "office"
+count = 8
+
+[workload]
+kind = "pubsub"
+publishers = ["p-1"]
+messages = 2000
+size = 256
+rate_hz = 200
+warmup_s = 8
+drain_s = 5

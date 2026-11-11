@@ -543,6 +543,30 @@ impl Plan {
         self.nodes.iter().position(|n| n.name == name)
     }
 
+    /// The address other sites see node `i` at: its own when its site is routed, else its router's address on the
+    /// first link of the site (what the translation shows them).
+    pub fn public_ip(&self, i: usize) -> Ipv4Addr {
+        let Some(n) = self.nodes.get(i) else {
+            return Ipv4Addr::UNSPECIFIED;
+        };
+        let translated = self.sites.get(n.site).is_some_and(|s| s.nat != Nat::None);
+        if !translated {
+            return n.ip;
+        }
+        self.links
+            .iter()
+            .find_map(|l| {
+                if l.a == n.site {
+                    Some(l.ip_a)
+                } else if l.b == n.site {
+                    Some(l.ip_b)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(n.ip)
+    }
+
     /// The site with this name.
     pub fn site(&self, name: &str) -> Option<usize> {
         self.sites.iter().position(|s| s.name == name)

@@ -1,0 +1,41 @@
+name = "reconcile-wan"
+about = "Two nodes across a WAN (50 ms round trip, 100 Mbit/s) reconcile sets of 1000 and 100000 items that differ in 10 and 1000 items on each side."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 2
+memory_mib = 2048
+
+[[sites]]
+name = "east"
+
+[[sites]]
+name = "west"
+
+[[nodes]]
+name = "hub"
+site = "east"
+role = "hub"
+
+[[nodes]]
+name = "a"
+site = "east"
+
+[[nodes]]
+name = "b"
+site = "west"
+
+[[links]]
+a = "east"
+b = "west"
+shape = { delay_ms = 25, rate_mbit = 100 }
+
+[workload]
+kind = "reconcile"
+a = "a"
+b = "b"
+items = [1000, 100000]
+differences = [10, 1000]
+timeout_s = 120
+warmup_s = 8

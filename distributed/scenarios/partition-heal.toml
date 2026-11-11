@@ -1,0 +1,79 @@
+name = "partition-heal"
+about = "Publish and subscribe while a site is cut off and rejoined: three sites with a hub and two peers each, a publisher in the first, the third cut off from 10 s to 25 s of a 40 s run at 50 messages a second."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "site-a"
+
+[[sites]]
+name = "site-b"
+
+[[sites]]
+name = "site-c"
+
+[[nodes]]
+name = "a-hub"
+site = "site-a"
+role = "hub"
+
+[[nodes]]
+name = "a"
+site = "site-a"
+count = 2
+
+[[nodes]]
+name = "b-hub"
+site = "site-b"
+role = "hub"
+
+[[nodes]]
+name = "b"
+site = "site-b"
+count = 2
+
+[[nodes]]
+name = "c-hub"
+site = "site-c"
+role = "hub"
+
+[[nodes]]
+name = "c"
+site = "site-c"
+count = 2
+
+[[links]]
+a = "site-a"
+b = "site-b"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[[links]]
+a = "site-b"
+b = "site-c"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[[links]]
+a = "site-a"
+b = "site-c"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["a-1"]
+messages = 2000
+size = 256
+rate_hz = 50
+warmup_s = 12
+drain_s = 15
+
+[[faults]]
+at_s = 10
+action = { do = "partition", site = "site-c" }
+
+[[faults]]
+at_s = 25
+action = { do = "heal", site = "site-c" }

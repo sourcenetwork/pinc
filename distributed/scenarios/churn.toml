@@ -1,0 +1,63 @@
+name = "churn"
+about = "Publish and subscribe while peers leave and come back: one hub and eight peers, a publisher sending 50 messages a second for 40 s, four peers killed one after another and started again 8 s later."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "office"
+
+[[nodes]]
+name = "hub"
+site = "office"
+role = "hub"
+
+[[nodes]]
+name = "p"
+site = "office"
+count = 8
+
+[workload]
+kind = "pubsub"
+publishers = ["p-1"]
+subscribers = ["p-2", "p-3", "p-4", "p-5", "p-6", "p-7", "p-8"]
+messages = 2000
+size = 256
+rate_hz = 50
+warmup_s = 10
+drain_s = 12
+
+[[faults]]
+at_s = 5
+action = { do = "kill", node = "p-2" }
+
+[[faults]]
+at_s = 10
+action = { do = "kill", node = "p-3" }
+
+[[faults]]
+at_s = 13
+action = { do = "restart", node = "p-2" }
+
+[[faults]]
+at_s = 15
+action = { do = "kill", node = "p-4" }
+
+[[faults]]
+at_s = 18
+action = { do = "restart", node = "p-3" }
+
+[[faults]]
+at_s = 20
+action = { do = "kill", node = "p-5" }
+
+[[faults]]
+at_s = 23
+action = { do = "restart", node = "p-4" }
+
+[[faults]]
+at_s = 28
+action = { do = "restart", node = "p-5" }

@@ -12,10 +12,11 @@ use crate::backend::containers::{Containers, READY};
 use crate::error::Result;
 use crate::metrics::NodeUse;
 use crate::orchestrate::faults::{self, Launch};
+use crate::orchestrate::window::drops;
 use crate::orchestrate::{Ctx, Event};
 use crate::plan::MTU;
 use crate::quiet::Snapshot;
-use crate::results::{DISCARDED, Row};
+use crate::results::Row;
 use crate::scenario::{Stack, Transport, TransportTest};
 
 /// The environment of a node program: the address it binds and the interface size VINC states.
@@ -30,16 +31,6 @@ fn args(stack: Stack, rest: &[String]) -> Vec<String> {
     let mut a = vec!["node".into(), "transport".into(), "--stack".into(), stack.name().into()];
     a.extend_from_slice(rest);
     a
-}
-
-async fn drops(b: &Containers, sites: usize) -> u64 {
-    let mut total = 0;
-    for s in 0..sites {
-        if let Ok(q) = b.shapers(s).await {
-            total += q.iter().filter(|q| q.kind == "netem").map(|q| q.drops).sum::<u64>();
-        }
-    }
-    total
 }
 
 pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<()> {
@@ -62,31 +53,11 @@ pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<
                         reps: ctx.reps,
                         pair: label.clone(),
                     });
-                    // A measurement counts only on a quiet host: one that was not clean is kept as discarded and
-                    // repeated, and after the last try it is reported as not measured.
-                    let tries = ctx.monitor.limits.retries + 1;
-                    for attempt in 1..=tries {
-                        let mut row = one(ctx, b, (ci, si), stack, test, rep, t.timeout_s, &label).await?;
-                        let Some(u) = row.host.clone().filter(|u| !u.clean) else {
-                            ctx.record(row)?;
+                    for attempt in 1.. {
+                        let row = one(ctx, b, (ci, si), stack, test, rep, t.timeout_s, &label).await?;
+                        if ctx.conclude(row, rep, attempt)? {
                             break;
-                        };
-                        let why = format!(
-                            "the host was busy (other processes {:.1}% of a core, steal {:.2}%, most: {})",
-                            u.other_pct,
-                            u.steal_pct,
-                            if u.top.is_empty() { "none" } else { u.top.as_str() }
-                        );
-                        row.status = if attempt < tries {
-                            format!("{DISCARDED}: {why}")
-                        } else {
-                            format!("not measured: {why}")
-                        };
-                        ctx.log(
-                            "warn",
-                            format!("{} {} rep {}: {}", row.test, row.stack, rep + 1, row.status),
-                        );
-                        ctx.record(row)?;
+                        }
                     }
                     index += 1;
                 }
@@ -96,7 +67,7 @@ pub(crate) async fn run(ctx: &mut Ctx, b: &Containers, t: &Transport) -> Result<
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn one(
     ctx: &Ctx,
     b: &Containers,
@@ -158,6 +129,7 @@ async fn one(
         b,
         &ctx.sc.faults,
         &launches,
+        None,
         cli.drain(Duration::from_secs(timeout_s)),
     )
     .await?;

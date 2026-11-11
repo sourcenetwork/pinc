@@ -23,7 +23,22 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 5] = ["lan", "wan", "lossy", "home-routers", "three-site"];
+const EXAMPLES: [&str; 14] = [
+    "lan",
+    "wan",
+    "lossy",
+    "home-routers",
+    "three-site",
+    "pubsub-lan",
+    "pubsub-wan",
+    "sync-wan",
+    "sync-multi",
+    "reconcile-wan",
+    "partition-heal",
+    "churn",
+    "suspend-resume",
+    "nat-reach",
+];
 
 #[test]
 fn every_example_scenario_validates_and_round_trips() {
@@ -33,6 +48,73 @@ fn every_example_scenario_validates_and_round_trips() {
         let again = Scenario::parse(&sc.to_toml().unwrap()).unwrap();
         assert_eq!(again, sc, "{name} does not survive a save and a load");
     }
+}
+
+#[test]
+fn workload_problems_name_their_fields() {
+    let mut sc = scenario("pubsub-lan");
+    if let Workload::Pubsub(w) = &mut sc.workload {
+        w.publishers = vec!["nobody".into()];
+        w.messages = 0;
+        w.size = 4;
+        w.rate_hz = 0.0;
+    }
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    for want in [
+        "workload.publishers[0]",
+        "workload.messages",
+        "workload.size",
+        "workload.rate_hz",
+    ] {
+        assert!(paths.contains(want), "no problem reported at {want}: {paths:?}");
+    }
+
+    // Every stack joins through a hub or relay node: without one the scenario cannot run.
+    let mut sc = scenario("sync-wan");
+    sc.nodes.retain(|g| g.name != "hub");
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    assert!(paths.contains("nodes"), "{paths:?}");
+
+    // A value larger than the node can hold, and a node that both provides and fetches.
+    let mut sc = scenario("sync-wan");
+    if let Workload::Sync(w) = &mut sc.workload {
+        w.sizes = vec![4 << 30];
+        w.consumers.push("provider".into());
+    }
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    assert!(paths.contains("workload.sizes[0]"), "{paths:?}");
+    assert!(paths.contains("workload.consumers"), "{paths:?}");
+
+    // More differences than items.
+    let mut sc = scenario("reconcile-wan");
+    if let Workload::Reconcile(w) = &mut sc.workload {
+        w.differences = vec![5000];
+    }
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    assert!(paths.contains("workload.differences"), "{paths:?}");
+}
+
+#[test]
+fn a_node_behind_translation_is_known_by_its_routers_address() {
+    let sc = scenario("nat-reach");
+    let p = Plan::new(&sc, "RUN", 16);
+    let n1 = p.node("n1").unwrap();
+    let rv = p.node("rv").unwrap();
+    assert_eq!(
+        p.public_ip(rv),
+        p.nodes[rv].ip,
+        "a routed node is reached at its own address"
+    );
+    assert_ne!(
+        p.public_ip(n1),
+        p.nodes[n1].ip,
+        "a translated node is seen at its router's"
+    );
+    assert!(
+        p.links
+            .iter()
+            .any(|l| l.ip_a == p.public_ip(n1) || l.ip_b == p.public_ip(n1))
+    );
 }
 
 #[test]
@@ -61,7 +143,9 @@ fn validation_reports_every_problem_with_its_path() {
 #[test]
 fn a_transport_server_behind_translation_is_refused_with_the_reason() {
     let mut sc = scenario("home-routers");
-    let Workload::Transport(t) = &mut sc.workload;
+    let Workload::Transport(t) = &mut sc.workload else {
+        panic!("the wan scenario is a transport scenario");
+    };
     t.pairs[0].server = "n2".into();
     let p = sc.validate();
     assert!(

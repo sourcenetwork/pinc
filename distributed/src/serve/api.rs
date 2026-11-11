@@ -191,6 +191,9 @@ fn scenarios(app: &App) -> Resp {
                 let problems = sc.validate();
                 let kind = match &sc.workload {
                     crate::scenario::Workload::Transport(_) => "transport",
+                    crate::scenario::Workload::Pubsub(_) => "pubsub",
+                    crate::scenario::Workload::Sync(_) => "sync",
+                    crate::scenario::Workload::Reconcile(_) => "reconcile",
                 };
                 json!({
                     "file": file, "name": sc.name, "about": sc.about, "stacks": sc.stacks,

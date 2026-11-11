@@ -1,0 +1,74 @@
+name = "pubsub-wan"
+about = "Publish and subscribe across three sites (20, 80 and 150 ms round trips, 100 Mbit/s each way): a hub and three peers per site, one publisher in the first site, 1000 messages of 1 KiB at 100 a second."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "site-a"
+pos = [120, 120]
+
+[[sites]]
+name = "site-b"
+pos = [480, 120]
+
+[[sites]]
+name = "site-c"
+pos = [300, 400]
+
+[[nodes]]
+name = "a-hub"
+site = "site-a"
+role = "hub"
+
+[[nodes]]
+name = "a"
+site = "site-a"
+count = 3
+
+[[nodes]]
+name = "b-hub"
+site = "site-b"
+role = "hub"
+
+[[nodes]]
+name = "b"
+site = "site-b"
+count = 3
+
+[[nodes]]
+name = "c-hub"
+site = "site-c"
+role = "hub"
+
+[[nodes]]
+name = "c"
+site = "site-c"
+count = 3
+
+[[links]]
+a = "site-a"
+b = "site-b"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[[links]]
+a = "site-b"
+b = "site-c"
+shape = { delay_ms = 40, rate_mbit = 100 }
+
+[[links]]
+a = "site-a"
+b = "site-c"
+shape = { delay_ms = 75, rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["a-1"]
+messages = 1000
+size = 1024
+rate_hz = 100
+warmup_s = 15
+drain_s = 8

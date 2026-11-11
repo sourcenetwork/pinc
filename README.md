@@ -138,9 +138,14 @@ router per site, with an MTU of 1500, `tc netem` shaping each direction of each 
 scenario puts a node behind a home router. Scenarios are TOML files in `distributed/scenarios/`; each run writes its
 raw rows, its conditions (machine, CPU sets, versions) and a summary table to `distributed/results/`. A run measures
 only on a quiet machine and says so when it could not. The dashboard composes scenarios, shows a run live and compares
-results. Today the harness runs the transport tests (connection setup, resumed setup, request latency, one and 16
-stream throughput, many connections) with link changes during a run; one machine emulates the whole network, and
-every table says so.
+results. The harness runs the transport tests (connection setup, resumed setup, request latency, one and 16 stream
+throughput, many connections) and the layers above them on nodes that stay up for a whole repetition: publish and
+subscribe fan-out (delivery latency, losses, duplicates, bytes on the wire per delivered message), syncing a value from
+one or several providers, and reconciling two sets, each for VINC (the node on a real-socket host in
+`distributed/src/node/vinc`), iroh (gossip and blobs) and rust-libp2p (gossipsub and a request-response protocol),
+configured as each documents and said so in the results; where a stack has no equivalent the table says "not
+available". Faults (a link cut, a site partitioned and healed, a node paused, killed and started again, a node told to
+sleep) run on top of any workload at their times. One machine emulates the whole network, and every table says so.
 
 `just compare` and `just distributed` compile every stack for the machine that runs them (`-C target-cpu=native`) and
 say so in their results. A host gets the same from VINC by building its own binary that way: on an x86-64 CPU with
@@ -166,8 +171,8 @@ checked, the assumptions and what is still being closed.
   do not.
 - **Performance.** Against iroh and rust-libp2p on the same machine VINC is not ahead on every row yet (memory per
   connection is one it loses). `just compare` and the harness print every row, the ones VINC loses included.
-- **The harness** does not yet run the layers above the transport (broadcast, value transfer, reconciliation, churn)
-  or nodes on separate machines; the Terraform for those machines is in `distributed/infra/` and has not been applied.
+- **The harness** has run on no machine but the build host's containers; the Terraform for separate machines is in
+  `distributed/infra/` and has not been applied.
 - **The proofs** listed under [Being closed](docs/PROOFS.md#being-closed).
 - `vinc-values`: five corrections found by its proofs are being made.
 - **The scenario suite** passes every gate on every seed it runs; the two scenarios that need the values and reconcile

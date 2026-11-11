@@ -73,6 +73,16 @@ pub enum Source {
     WirePerByte,
     /// Packets the shapers dropped.
     Drops,
+    /// CPU seconds the kernel counted, summed over every node.
+    CpuSum,
+    /// The largest peak memory of any node.
+    PeakMax,
+    /// Bytes every node sent on its interface, summed: what crossed the wire.
+    WireTotal,
+    /// Bytes on the wire per distinct message delivered.
+    WirePerDelivered,
+    /// Bytes on the wire per payload byte the consumers fetched.
+    WirePerPayload,
 }
 
 /// A metric of a test.
@@ -108,7 +118,42 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
         m(Peak("server"), "server peak memory (kernel)", "MiB", Lower),
         m(Drops, "shaper drops", "packets", Better::None),
     ];
+    let workload = [
+        m(Source::CpuSum, "CPU, all nodes (kernel)", "s", Lower),
+        m(Source::PeakMax, "peak memory, largest node (kernel)", "MiB", Lower),
+        m(Drops, "shaper drops", "packets", Better::None),
+    ];
     let mut v = match test {
+        "pubsub" => {
+            let mut x = vec![
+                m(Node("p50_us"), "delivery latency p50", "us", Lower),
+                m(Node("p99_us"), "delivery latency p99", "us", Lower),
+                m(Node("loss_pct"), "messages lost", "%", Lower),
+                m(Node("duplicates"), "duplicate deliveries", "", Lower),
+                m(Node("gap_max_ms"), "longest silence between deliveries", "ms", Lower),
+                m(Source::WirePerDelivered, "wire bytes per delivered message", "", Lower),
+            ];
+            x.extend(workload);
+            return x;
+        }
+        t if t.starts_with("sync_") => {
+            let mut x = vec![
+                m(Node("fetch_ms"), "fetch time, median consumer", "ms", Lower),
+                m(Node("fetch_ms_slowest"), "fetch time, slowest consumer", "ms", Lower),
+                m(Node("mib_s"), "goodput, median consumer", "MiB/s", Higher),
+                m(Source::WirePerPayload, "wire bytes per payload byte", "", Lower),
+            ];
+            x.extend(workload);
+            return x;
+        }
+        t if t.starts_with("reconcile_") => {
+            let mut x = vec![
+                m(Node("round_ms"), "round time", "ms", Lower),
+                m(Source::WireTotal, "bytes on the wire", "B", Lower),
+            ];
+            x.extend(workload);
+            return x;
+        }
         "setup" | "resume" => vec![
             m(Node("p50_us"), "time to first byte p50", "us", Lower),
             m(Node("p99_us"), "time to first byte p99", "us", Lower),
@@ -161,7 +206,40 @@ impl Row {
                 Some((e.tx_bytes + e.rx_bytes) as f64 / moved)
             }
             Source::Drops => self.shaper_drops.map(|d| d as f64),
+            Source::CpuSum => {
+                let v: Vec<f64> = self.kernel.values().filter_map(|k| k.cpu_s).collect();
+                (!v.is_empty()).then(|| v.iter().sum())
+            }
+            Source::PeakMax => self.kernel.values().filter_map(|k| k.peak_mib).reduce(f64::max),
+            Source::WireTotal => self.wire_total(),
+            Source::WirePerDelivered => {
+                let d = self
+                    .node
+                    .get("delivered")
+                    .and_then(Value::as_f64)
+                    .filter(|d| *d > 0.0)?;
+                self.wire_total().map(|w| w / d)
+            }
+            Source::WirePerPayload => {
+                let b = self.node.get("bytes").and_then(Value::as_f64).filter(|b| *b > 0.0)?;
+                self.wire_total().map(|w| w / b)
+            }
         }
+    }
+}
+
+impl Row {
+    /// Bytes every node sent on its interface, when each node's counters were read.
+    // Counters of one run fit an f64's integer range.
+    #[allow(clippy::cast_precision_loss)]
+    fn wire_total(&self) -> Option<f64> {
+        if self.kernel.is_empty() {
+            return None;
+        }
+        self.kernel
+            .values()
+            .map(|k| k.eth0.map(|e| e.tx_bytes as f64))
+            .sum::<Option<f64>>()
     }
 }
 

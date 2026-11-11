@@ -380,6 +380,12 @@ fn timeout_default() -> u64 {
 pub enum Workload {
     /// The comparison benches' transport scenarios between pairs of nodes.
     Transport(Transport),
+    /// Publish and subscribe on a topic every node takes part in.
+    Pubsub(crate::workloads::Pubsub),
+    /// Fetching a value from provider nodes.
+    Sync(crate::workloads::ValueSync),
+    /// Reconciling two sets that differ in a few items.
+    Reconcile(crate::workloads::Reconcile),
 }
 
 /// A change to the network or a node during a repetition.
@@ -423,11 +429,18 @@ pub enum FaultAction {
     Pause {
         /// The node.
         node: String,
+        /// Tell the group the node is going to sleep first, for the stacks that have that notion (VINC does; the
+        /// others are frozen all the same).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        graceful: bool,
     },
     /// Thaw a paused node.
     Resume {
         /// The node.
         node: String,
+        /// Tell the group the node is awake again, as `graceful` told it was asleep.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        graceful: bool,
     },
     /// Kill a node's processes.
     Kill {
@@ -501,7 +514,7 @@ pub struct Problem {
 }
 
 impl Problem {
-    fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             path: path.into(),
             message: message.into(),
@@ -618,6 +631,9 @@ impl Scenario {
         let node_names: BTreeMap<&str, &NodeSpec> = nodes.iter().map(|n| (n.name.as_str(), n)).collect();
         match &self.workload {
             Workload::Transport(t) => self.check_transport(t, &node_names, &mut out),
+            Workload::Pubsub(w) => w.check(self, &node_names, &mut out),
+            Workload::Sync(w) => w.check(self, &node_names, &mut out),
+            Workload::Reconcile(w) => w.check(self, &node_names, &mut out),
         }
         self.check_faults(&site_names, &node_names, &mut out);
         out
@@ -823,8 +839,8 @@ impl Scenario {
                         out.push(Problem::new(format!("{path}.action.site"), "no site has this name"));
                     }
                 }
-                FaultAction::Pause { node }
-                | FaultAction::Resume { node }
+                FaultAction::Pause { node, .. }
+                | FaultAction::Resume { node, .. }
                 | FaultAction::Kill { node }
                 | FaultAction::Restart { node } => {
                     if !nodes.contains_key(node.as_str()) {

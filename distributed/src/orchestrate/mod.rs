@@ -3,9 +3,14 @@
 //!
 //! Everything it does is also published as [`Event`]s, which the dashboard streams; `run` logs them.
 
+mod agg;
+mod apps;
 mod faults;
 pub mod live;
+mod pubsub;
+mod syncload;
 mod transport;
+mod window;
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -249,6 +254,35 @@ impl Ctx {
         self.emit(Event::Quiet(Box::new(u.clone())));
     }
 
+    /// Settle one try of a measurement. A row whose window was clean is recorded and the measurement is done (true). One
+    /// that was not is kept as discarded and the caller tries again (false), until the last try, which is recorded as not
+    /// measured (true). `attempt` counts from 1.
+    pub(crate) fn conclude(&mut self, mut row: Row, rep: u32, attempt: u32) -> Result<bool> {
+        let tries = self.monitor.limits.retries + 1;
+        let Some(u) = row.host.clone().filter(|u| !u.clean) else {
+            self.record(row)?;
+            return Ok(true);
+        };
+        let why = format!(
+            "the host was busy (other processes {:.1}% of a core, steal {:.2}%, most: {})",
+            u.other_pct,
+            u.steal_pct,
+            if u.top.is_empty() { "none" } else { u.top.as_str() }
+        );
+        let last = attempt >= tries;
+        row.status = if last {
+            format!("not measured: {why}")
+        } else {
+            format!("{}: {why}", results::DISCARDED)
+        };
+        self.log(
+            "warn",
+            format!("{} {} rep {}: {}", row.test, row.stack, rep + 1, row.status),
+        );
+        self.record(row)?;
+        Ok(last)
+    }
+
     pub(crate) fn record(&mut self, row: Row) -> Result<()> {
         use std::io::Write;
         let line = serde_json::to_string(&row).map_err(|e| Error::Io(std::io::Error::other(e)))?;
@@ -372,6 +406,9 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
     };
     let total = match &ctx.sc.workload {
         Workload::Transport(t) => t.pairs.len() * t.tests.len(),
+        Workload::Pubsub(_) => 1,
+        Workload::Sync(w) => w.sizes.len(),
+        Workload::Reconcile(w) => w.items.len() * w.differences.len(),
     } * ctx.sc.stacks.len()
         * reps as usize;
     ctx.emit(Event::Started {
@@ -429,6 +466,9 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
             let workload = async {
                 match ctx.sc.workload.clone() {
                     Workload::Transport(t) => transport::run(&mut ctx, b, &t).await,
+                    Workload::Pubsub(w) => pubsub::run(&mut ctx, b, &w).await,
+                    Workload::Sync(w) => syncload::run_sync(&mut ctx, b, &w).await,
+                    Workload::Reconcile(w) => syncload::run_reconcile(&mut ctx, b, &w).await,
                 }
             };
             tokio::select! {

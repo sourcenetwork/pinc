@@ -1,0 +1,42 @@
+name = "sync-wan"
+about = "Syncing a value from one provider to one consumer across a WAN (50 ms round trip, 100 Mbit/s each way) through a hub, for sizes from 1 KiB to 256 MiB."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 2
+memory_mib = 2048
+
+[[sites]]
+name = "east"
+pos = [120, 160]
+
+[[sites]]
+name = "west"
+pos = [520, 160]
+
+[[nodes]]
+name = "hub"
+site = "east"
+role = "hub"
+
+[[nodes]]
+name = "provider"
+site = "east"
+
+[[nodes]]
+name = "consumer"
+site = "west"
+
+[[links]]
+a = "east"
+b = "west"
+shape = { delay_ms = 25, rate_mbit = 100 }
+
+[workload]
+kind = "sync"
+providers = ["provider"]
+consumers = ["consumer"]
+sizes = [1024, 1048576, 67108864, 268435456]
+timeout_s = 300
+warmup_s = 8

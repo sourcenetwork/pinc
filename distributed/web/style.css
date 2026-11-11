@@ -404,3 +404,10 @@ pre.out { margin: 0; padding: var(--space-3); background: var(--paper-2); border
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; }
 }
+
+/* A set of nodes ticked in a row (workload editor). */
+fieldset.field { border: 0; padding: 0; margin: 0; min-width: 0; }
+fieldset.field legend { padding: 0; color: var(--ink-2); font-size: var(--text-xs); margin-bottom: var(--space-1); }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.chips .chip, label.chip { display: inline-flex; align-items: center; gap: var(--space-1); cursor: pointer; }
+.chips input[type="checkbox"], label.chip input[type="checkbox"] { margin: 0; }

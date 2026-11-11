@@ -1,0 +1,64 @@
+name = "sync-multi"
+about = "Syncing a 64 MiB value from three providers in three sites to one consumer on a LAN link of 200 Mbit/s per provider site."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 2
+memory_mib = 2048
+
+[[sites]]
+name = "core"
+
+[[sites]]
+name = "s1"
+
+[[sites]]
+name = "s2"
+
+[[sites]]
+name = "s3"
+
+[[nodes]]
+name = "hub"
+site = "core"
+role = "hub"
+
+[[nodes]]
+name = "consumer"
+site = "core"
+
+[[nodes]]
+name = "prov-1"
+site = "s1"
+
+[[nodes]]
+name = "prov-2"
+site = "s2"
+
+[[nodes]]
+name = "prov-3"
+site = "s3"
+
+[[links]]
+a = "core"
+b = "s1"
+shape = { delay_ms = 10, rate_mbit = 200 }
+
+[[links]]
+a = "core"
+b = "s2"
+shape = { delay_ms = 10, rate_mbit = 200 }
+
+[[links]]
+a = "core"
+b = "s3"
+shape = { delay_ms = 10, rate_mbit = 200 }
+
+[workload]
+kind = "sync"
+providers = ["prov-1", "prov-2", "prov-3"]
+consumers = ["consumer"]
+sizes = [67108864]
+timeout_s = 300
+warmup_s = 8

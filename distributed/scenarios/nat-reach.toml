@@ -1,0 +1,54 @@
+name = "nat-reach"
+about = "Publish and subscribe between nodes behind home routers (one port-restricted, one symmetric) through a public hub: 20 and 15 ms one way, 50 and 20 Mbit/s up."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home1"
+nat = "port-restricted"
+
+[[sites]]
+name = "home2"
+nat = "symmetric"
+
+[[sites]]
+name = "public"
+
+[[nodes]]
+name = "n1"
+site = "home1"
+
+[[nodes]]
+name = "n2"
+site = "home2"
+
+[[nodes]]
+name = "rv"
+site = "public"
+role = "relay"
+
+[[links]]
+a = "home1"
+b = "public"
+shape = { delay_ms = 10, rate_mbit = 50 }
+reverse = { rate_mbit = 200 }
+
+[[links]]
+a = "home2"
+b = "public"
+shape = { delay_ms = 15, rate_mbit = 20 }
+reverse = { rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["n1"]
+subscribers = ["n2"]
+messages = 1000
+size = 512
+rate_hz = 50
+warmup_s = 10
+drain_s = 8

@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::backend::Proc;
 use crate::backend::containers::Containers;
 use crate::error::{Error, Result};
+use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::{Ctx, Event};
 use crate::plan::{Plan, ShapePoint, cut};
 use crate::scenario::{Fault, FaultAction, Shape};
@@ -23,7 +24,7 @@ pub struct FaultRunner {
 
 /// How a node's program is started, for `restart`.
 #[derive(Debug, Clone)]
-pub struct Launch {
+pub(crate) struct Launch {
     /// The node.
     pub node: usize,
     /// The program's arguments.
@@ -41,7 +42,14 @@ impl FaultRunner {
         clippy::many_single_char_names,
         reason = "the two ends of a link are a and c, as in the scenario file"
     )]
-    pub async fn apply(&mut self, b: &Containers, plan: &Plan, f: &FaultAction, launches: &[Launch]) -> Result<String> {
+    pub(crate) async fn apply(
+        &mut self,
+        b: &Containers,
+        plan: &Plan,
+        f: &FaultAction,
+        launches: &[Launch],
+        apps: Option<&AppSet<'_>>,
+    ) -> Result<String> {
         let link = |a: &str, c: &str| {
             plan.link_points(a, c)
                 .ok_or_else(|| Error::Node(format!("there is no link between {a} and {c}")))
@@ -84,24 +92,37 @@ impl FaultRunner {
                 }
                 Ok(format!("site {site} {}", if heal { "healed" } else { "partitioned" }))
             }
-            FaultAction::Pause { node: n } => {
+            FaultAction::Pause { node: n, graceful } => {
                 let i = node(n)?;
+                if let (true, Some(apps)) = (*graceful, apps) {
+                    apps.sleep(i, true).await?;
+                }
                 b.pause(i, true).await?;
                 self.paused.insert(i);
                 Ok(format!("node {n} paused"))
             }
-            FaultAction::Resume { node: n } => {
+            FaultAction::Resume { node: n, graceful } => {
                 let i = node(n)?;
                 b.pause(i, false).await?;
                 self.paused.remove(&i);
+                if let (true, Some(apps)) = (*graceful, apps) {
+                    apps.sleep(i, false).await?;
+                }
                 Ok(format!("node {n} resumed"))
             }
             FaultAction::Kill { node: n } => {
-                b.stop(node(n)?).await?;
+                match apps {
+                    Some(apps) => apps.kill(node(n)?).await?,
+                    None => b.stop(node(n)?).await?,
+                }
                 Ok(format!("node {n} killed"))
             }
             FaultAction::Restart { node: n } => {
                 let i = node(n)?;
+                if let Some(apps) = apps {
+                    apps.restart(i).await?;
+                    return Ok(format!("node {n} restarted"));
+                }
                 let l = launches
                     .iter()
                     .find(|l| l.node == i)
@@ -152,6 +173,7 @@ pub(crate) async fn during<T>(
     b: &Containers,
     faults: &[Fault],
     launches: &[Launch],
+    apps: Option<&AppSet<'_>>,
     work: impl Future<Output = T>,
 ) -> Result<T> {
     let mut runner = FaultRunner::default();
@@ -161,7 +183,7 @@ pub(crate) async fn during<T>(
     let schedule = async {
         for f in order {
             tokio::time::sleep_until(start + Duration::from_secs_f64(f.at_s.max(0.0))).await;
-            match runner.apply(b, &ctx.plan, &f.action, launches).await {
+            match runner.apply(b, &ctx.plan, &f.action, launches, apps).await {
                 Ok(what) => ctx.emit(Event::Fault {
                     at_s: f.at_s,
                     what,

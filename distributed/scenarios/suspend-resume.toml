@@ -1,0 +1,39 @@
+name = "suspend-resume"
+about = "Publish and subscribe while a subscriber sleeps and wakes: it announces its sleep where the stack has the notion (VINC), is frozen from 10 s to 25 s, then thawed; one hub, four peers, 50 messages a second for 40 s."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "office"
+
+[[nodes]]
+name = "hub"
+site = "office"
+role = "hub"
+
+[[nodes]]
+name = "p"
+site = "office"
+count = 4
+
+[workload]
+kind = "pubsub"
+publishers = ["p-1"]
+subscribers = ["p-2", "p-3", "p-4"]
+messages = 2000
+size = 256
+rate_hz = 50
+warmup_s = 10
+drain_s = 15
+
+[[faults]]
+at_s = 10
+action = { do = "pause", node = "p-2", graceful = true }
+
+[[faults]]
+at_s = 25
+action = { do = "resume", node = "p-2", graceful = true }

@@ -8,6 +8,7 @@
 //! - [`node`]: what runs inside each node.
 //! - [`serve`]: the dashboard.
 //! - [`metrics`], [`results`]: the kernel's numbers, and the result files and tables.
+//! - [`workloads`]: the real workloads (publish and subscribe, syncing a value, reconciling sets) of a scenario.
 //! - [`quiet`]: no measurement on a busy machine.
 //!
 //! Invariants: a run always tears down what it created (also on a signal or a failed node) and refuses to start over
@@ -26,3 +27,4 @@ pub mod quiet;
 pub mod results;
 pub mod scenario;
 pub mod serve;
+pub mod workloads;
