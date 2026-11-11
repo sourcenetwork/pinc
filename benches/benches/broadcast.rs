@@ -102,7 +102,7 @@ impl Rig {
                 trace: false,
                 limits: vinc_broadcast::Limits::default(),
             };
-            Topics::start(&cfg, it.next().unwrap(), 1_000_000_000, WALL).unwrap()
+            Topics::start(&cfg, Box::new(it.next().unwrap()), 1_000_000_000, WALL).unwrap()
         };
         let (hub, sub, publisher) = (mk(0), mk(1), mk(2));
         let pipe = || Pipe {

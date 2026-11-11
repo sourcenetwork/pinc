@@ -271,7 +271,12 @@ impl Topics {
     ///
     /// # Errors
     /// [`StartError`] for too many hubs or a key that is not the node's.
-    pub fn start(cfg: &Config<'_>, key: Keypair, now: Nanos, wall_ms: u64) -> Result<Self, StartError> {
+    pub fn start(
+        cfg: &Config<'_>,
+        key: alloc::boxed::Box<Keypair>,
+        now: Nanos,
+        wall_ms: u64,
+    ) -> Result<Self, StartError> {
         let mut hubs: Vec<NodeId> = Vec::with_capacity(cfg.hubs.len());
         for h in cfg.hubs {
             if *h != cfg.me && !hubs.contains(h) {
@@ -295,7 +300,7 @@ impl Topics {
             is_hub: cfg.is_hub,
             hubs,
             limits: cfg.limits,
-            key: alloc::boxed::Box::new(key),
+            key,
             alg,
             pk,
             inc: cfg.incarnation,

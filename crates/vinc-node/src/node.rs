@@ -119,7 +119,7 @@ where
         prekey: PrekeyInfo,
         prov: P,
         drbg: Drbg,
-        key: Keypair,
+        key: Box<Keypair>,
         store: St,
         seed: u64,
     ) -> Result<Self, StartError> {
@@ -151,7 +151,7 @@ where
         prekey: PrekeyInfo,
         prov: P,
         drbg: Drbg,
-        key: Keypair,
+        key: Box<Keypair>,
         store: St,
         seed: u64,
         mut apps: A,

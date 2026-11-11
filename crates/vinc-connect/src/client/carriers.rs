@@ -3,7 +3,7 @@
 use vinc_crypto::{NodeId, Provider};
 use vinc_security::{ConnId, CreditRecord, Env, InitiatorParams, KeyRequest, KeyResponse};
 
-use super::conn::{Connectivity, Io, Kind, Notice, pop, push};
+use super::conn::{Connectivity, Io, Kind, Notice, Rly, pop, push};
 use super::link::{Act, Ctx, State};
 use super::queue::Held;
 use crate::carrier::frame::{BatchBuilder, BatchState, DnsAnswer, MAX_PACKET_LEN, Offer};
@@ -89,7 +89,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             Act::Close => {
                 self.lookups.clear();
                 if let Some(r) = self.rly.get_mut(i)
-                    && !r.carrier.as_ref().is_some_and(ProtectedCarrier::is_open)
+                    && !r.carrier_open()
                 {
                     // The dial watchdog: a dial that never opened tries the other kind next.
                     r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
@@ -121,7 +121,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let mut dial_failed = false;
         if let Some(r) = self.rly.get_mut(i) {
             let was = r.link.state();
-            went_down = was == State::Open || r.carrier.as_ref().is_some_and(ProtectedCarrier::is_open);
+            went_down = was == State::Open || r.carrier_open();
             if was != State::Down {
                 if was != State::Open {
                     r.kind = if r.kind == Kind::Tcp { Kind::Ws } else { Kind::Tcp };
@@ -149,12 +149,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// (up to 64 frames and 16 KiB); a long-header packet closes the batch and leaves alone. Returns false if the
     /// carrier is not open or the frame was dropped (counted in `dropped`).
     pub(super) fn frame_to(&mut self, now: u64, i: usize, frame: &Frame<'_>) -> bool {
-        if !self
-            .rly
-            .get(i)
-            .and_then(|r| r.carrier.as_ref())
-            .is_some_and(ProtectedCarrier::is_open)
-        {
+        if !self.rly.get(i).is_some_and(Rly::carrier_open) {
             return false;
         }
         if let Some(r) = self.rly.get_mut(i) {
@@ -180,7 +175,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     fn offer(&mut self, i: usize, frame: &Frame<'_>) -> Result<Offer, crate::carrier::FrameError> {
         let r = self.rly.get_mut(i).ok_or(crate::carrier::FrameError::NoRoom)?;
-        let mut b = BatchBuilder::resume(&mut r.bbuf, r.bst);
+        let mut b = BatchBuilder::resume(r.bbuf.as_mut_slice(), r.bst);
         let o = b.offer(frame)?;
         if o == Offer::Added {
             r.bst = b.state();
@@ -220,7 +215,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             r.bst = BatchState::new();
             return false;
         };
-        let Ok(Some(plain)) = BatchBuilder::resume(&mut r.bbuf, r.bst).finish() else {
+        let Ok(Some(plain)) = BatchBuilder::resume(r.bbuf.as_mut_slice(), r.bst).finish() else {
             r.bst = BatchState::new();
             return false;
         };
@@ -386,7 +381,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         match ProtectedCarrier::dial(env, params) {
             Ok(c) => {
                 if let Some(r) = self.rly.get_mut(relay) {
-                    r.carrier = Some(c);
+                    r.carrier = Some(super::conn::carrier(c));
                     r.out_len = 0;
                     r.bst = BatchState::new();
                     r.keyreq = false;
@@ -518,7 +513,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let opened = self
             .rly
             .get(relay)
-            .is_some_and(|r| r.carrier.as_ref().is_some_and(ProtectedCarrier::is_open) && !r.link.is_open());
+            .is_some_and(|r| r.carrier_open() && !r.link.is_open());
         if opened {
             self.carrier_open(now, relay);
         }

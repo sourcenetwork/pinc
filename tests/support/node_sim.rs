@@ -399,7 +399,7 @@ fn build<A: SimApps>(
         prekey_info,
         prov,
         drbg2,
-        kp2,
+        Box::new(kp2),
         seal.clone(),
         u64::from(tag) << 32,
         apps,

@@ -260,7 +260,7 @@ impl Net {
                 trace: true,
                 limits,
             };
-            let t = Topics::start(&cfg, k, start, WALL0 + start / 1_000_000).unwrap();
+            let t = Topics::start(&cfg, Box::new(k), start, WALL0 + start / 1_000_000).unwrap();
             let h = NodeHost {
                 reach: ids.iter().copied().filter(|x| *x != ids[i]).collect(),
                 hubs: hub_ids.iter().copied().collect(),
@@ -310,7 +310,7 @@ impl Net {
         let skew = self.nodes[i].h.skew_ms;
         let wall = WALL0.saturating_add_signed(skew + i64::try_from(at / 1_000_000).unwrap());
         let k = keypair(self.algs[i], u8::try_from(i + 1).unwrap());
-        self.nodes[i].t = Topics::start(&cfg, k, at, wall).unwrap();
+        self.nodes[i].t = Topics::start(&cfg, Box::new(k), at, wall).unwrap();
         self.nodes[i].h.events.clear();
         self.nodes[i].h.out.clear();
         // The hubs saw the old session close: they forget its subscriptions.

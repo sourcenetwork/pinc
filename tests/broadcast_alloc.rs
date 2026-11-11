@@ -91,17 +91,17 @@ fn world(alg: IdentityAlg) -> World {
     let now = SEC;
     let wall = 1_700_000_000_000;
     let mut w = World {
-        hub: Topics::start(&cfg(hub_id, true), hk, now, wall).unwrap(),
+        hub: Topics::start(&cfg(hub_id, true), Box::new(hk), now, wall).unwrap(),
         hub_h: Sink {
             wall,
             ..Sink::default()
         },
-        member: Topics::start(&cfg(member_id, false), mk, now, wall).unwrap(),
+        member: Topics::start(&cfg(member_id, false), Box::new(mk), now, wall).unwrap(),
         member_h: Sink {
             wall,
             ..Sink::default()
         },
-        publisher: Topics::start(&cfg(pub_id, false), pk, now, wall).unwrap(),
+        publisher: Topics::start(&cfg(pub_id, false), Box::new(pk), now, wall).unwrap(),
         pub_h: Sink {
             wall,
             ..Sink::default()

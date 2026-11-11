@@ -30,7 +30,7 @@ fn start(limits: Limits) -> Result<Topics, StartError> {
         trace: false,
         limits,
     };
-    Topics::start(&cfg, key, SEC, 1)
+    Topics::start(&cfg, Box::new(key), SEC, 1)
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn a_node_refuses_a_received_body_over_its_own_limit() {
         trace: false,
         limits: small,
     };
-    net.nodes[2].t = Topics::start(&cfg, key, SEC, common::WALL0 + 1000).unwrap();
+    net.nodes[2].t = Topics::start(&cfg, Box::new(key), SEC, common::WALL0 + 1000).unwrap();
     net.set_primary(2, 0);
     net.attach(2);
     net.subscribe(2, T);

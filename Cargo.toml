@@ -111,7 +111,18 @@ opt-level = 3
 [profile.dev.package.vinc]
 opt-level = 3
 
+# The node composes the connectivity layer, membership and broadcast, which hold their buffers inline; built unoptimised
+# they keep several copies of the node on the stack while the facade builds it on the heap.
+[profile.dev.package.vinc-node]
+opt-level = 3
+
 [profile.dev.package.vinc-connect]
+opt-level = 3
+
+[profile.dev.package.vinc-membership]
+opt-level = 3
+
+[profile.dev.package.vinc-broadcast]
 opt-level = 3
 
 [profile.dev.package.vinc-sim]

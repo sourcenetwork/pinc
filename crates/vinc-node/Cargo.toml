@@ -20,7 +20,7 @@ vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-transport = { workspace = true }
 vinc-core = { workspace = true, features = ["alloc"] }
-vinc-connect = { workspace = true }
+vinc-connect = { workspace = true, features = ["alloc"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
 vinc-dag = { workspace = true }

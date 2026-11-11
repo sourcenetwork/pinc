@@ -162,14 +162,14 @@ pub enum Notice {
 pub(super) struct Rly<P: Provider> {
     pub(super) cfg: Option<RelayCfg>,
     pub(super) link: Link,
-    pub(super) carrier: Option<ProtectedCarrier<P>>,
+    pub(super) carrier: Option<Carrier<P>>,
     pub(super) kind: Kind,
     pub(super) generation: u64,
-    pub(super) out: [u8; OUT_LEN],
+    pub(super) out: Buf<OUT_LEN>,
     pub(super) out_len: usize,
-    pub(super) bbuf: [u8; MAX_FRAME_LEN],
+    pub(super) bbuf: Buf<MAX_FRAME_LEN>,
     pub(super) bst: BatchState,
-    pub(super) q: super::queue::HeldQueue,
+    pub(super) q: HeldQ,
     pub(super) keyreq: bool,
     pub(super) ta: AliasTable,
     pub(super) ra: AliasTable,
@@ -200,6 +200,111 @@ pub(super) struct Inbound {
     pub(super) data: [u8; MAX_PACKET_LEN],
 }
 
+impl<P: Provider> Rly<P> {
+    /// Whether the carrier is open.
+    #[allow(clippy::redundant_closure_for_method_calls, reason = "the carrier is boxed with alloc")]
+    pub(super) fn carrier_open(&self) -> bool {
+        self.carrier.as_ref().is_some_and(|c| c.is_open())
+    }
+
+    fn new(cfg: Option<RelayCfg>) -> Self {
+        Self {
+            cfg,
+            link: Link::new(),
+            carrier: None,
+            kind: Kind::Tcp,
+            generation: 0,
+            out: buf(),
+            out_len: 0,
+            bbuf: buf(),
+            bst: BatchState::new(),
+            q: held_q(),
+            keyreq: false,
+            ta: AliasTable::new(),
+            ra: AliasTable::new(),
+            rides: false,
+            etx: None,
+            pong: false,
+            reverify: false,
+            drain_due: false,
+            alt_udp: None,
+        }
+    }
+}
+
+/// A buffer of a relay's. With `alloc` it lives on the heap, so a relay is a few kilobytes and the layer builds on a small
+/// stack.
+#[cfg(feature = "alloc")]
+pub(super) type Buf<const N: usize> = alloc::boxed::Box<[u8; N]>;
+#[cfg(not(feature = "alloc"))]
+pub(super) type Buf<const N: usize> = [u8; N];
+
+#[cfg(feature = "alloc")]
+fn buf<const N: usize>() -> Buf<N> {
+    match alloc::vec![0u8; N].into_boxed_slice().try_into() {
+        Ok(b) => b,
+        Err(_) => alloc::boxed::Box::new([0; N]),
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
+const fn buf<const N: usize>() -> Buf<N> {
+    [0; N]
+}
+
+/// The packets held for a relay's carrier.
+#[cfg(feature = "alloc")]
+pub(super) type HeldQ = alloc::boxed::Box<super::queue::HeldQueue>;
+#[cfg(not(feature = "alloc"))]
+pub(super) type HeldQ = super::queue::HeldQueue;
+
+#[cfg(feature = "alloc")]
+fn held_q() -> HeldQ {
+    alloc::boxed::Box::new(super::queue::HeldQueue::new())
+}
+
+#[cfg(not(feature = "alloc"))]
+const fn held_q() -> HeldQ {
+    super::queue::HeldQueue::new()
+}
+
+/// A relay's carrier, on the heap with `alloc` (it holds some 55 KiB of buffers).
+#[cfg(feature = "alloc")]
+pub(super) type Carrier<P> = alloc::boxed::Box<ProtectedCarrier<P>>;
+#[cfg(not(feature = "alloc"))]
+pub(super) type Carrier<P> = ProtectedCarrier<P>;
+
+#[cfg(feature = "alloc")]
+pub(super) fn carrier<P: Provider>(c: ProtectedCarrier<P>) -> Carrier<P> {
+    alloc::boxed::Box::new(c)
+}
+
+#[cfg(not(feature = "alloc"))]
+pub(super) const fn carrier<P: Provider>(c: ProtectedCarrier<P>) -> Carrier<P> {
+    c
+}
+
+/// The relays' state. With `alloc` it lives on the heap, built one relay at a time: a relay holds some 170 KiB of
+/// buffers, and the layer is far too large to build on a small stack.
+#[cfg(feature = "alloc")]
+pub(super) type RlyTable<P, const R: usize> = alloc::boxed::Box<[Rly<P>; R]>;
+#[cfg(not(feature = "alloc"))]
+pub(super) type RlyTable<P, const R: usize> = [Rly<P>; R];
+
+#[cfg(feature = "alloc")]
+fn rly_table<P: Provider, const R: usize>(cfgs: &[Option<RelayCfg>; R]) -> RlyTable<P, R> {
+    let all: alloc::vec::Vec<Rly<P>> = cfgs.iter().map(|c| Rly::new(*c)).collect();
+    match RlyTable::<P, R>::try_from(all.into_boxed_slice()) {
+        Ok(table) => table,
+        Err(_) => alloc::boxed::Box::new(core::array::from_fn(|i| Rly::new(cfgs.get(i).copied().flatten()))),
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
+fn rly_table<P: Provider, const R: usize>(cfgs: &[Option<RelayCfg>; R]) -> RlyTable<P, R> {
+    core::array::from_fn(|i| Rly::new(cfgs.get(i).copied().flatten()))
+}
+
 /// The connectivity layer of one node, with `R` relays and `PEERS` peers named on relay paths.
 pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) me: NodeId,
@@ -208,7 +313,7 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) prekey: PrekeyInfo,
     pub(super) v6: bool,
     pub(super) start: u64,
-    pub(super) rly: [Rly<P>; R],
+    pub(super) rly: RlyTable<P, R>,
     pub(super) shared: Shared,
     pub(super) net: Netcheck<R>,
     pub(super) lookups: Lookups<LOOKUPS>,
@@ -290,27 +395,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             prekey,
             v6: cfg.v6,
             start: cfg.start,
-            rly: core::array::from_fn(|i| Rly {
-                cfg: cfg.relays.get(i).copied().flatten(),
-                link: Link::new(),
-                carrier: None,
-                kind: Kind::Tcp,
-                generation: 0,
-                out: [0; OUT_LEN],
-                out_len: 0,
-                bbuf: [0; MAX_FRAME_LEN],
-                bst: BatchState::new(),
-                q: super::queue::HeldQueue::new(),
-                keyreq: false,
-                ta: AliasTable::new(),
-                ra: AliasTable::new(),
-                rides: false,
-                etx: None,
-                pong: false,
-                reverify: false,
-                drain_due: false,
-                alt_udp: None,
-            }),
+            rly: rly_table(&cfg.relays),
             shared,
             net: Netcheck::new(),
             lookups: Lookups::new(),
