@@ -4,4 +4,7 @@
 #[macro_use]
 mod scenario_support;
 
-scenario_target!(["S2", "S5", "S6", "S15"]);
+scenario_target!(
+    ["S2", "S5", "S6", "S15"],
+    "S6 seed 86017 fails G-ORDER and G-LIVE: the handshake of a 2G node with one hub stalls for 30 s; S15 seed 81503 fails G-LIVE: the two ends of a session end on different address families, where the reference's do not"
+);

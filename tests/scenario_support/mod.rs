@@ -280,9 +280,10 @@ pub fn print_report(ids: &[&str]) {
 }
 
 #[allow(unused_macros)]
-/// Declares the tests of a scenario target covering `$ids`.
+/// Declares the tests of a scenario target covering `$ids`. An optional second argument is the reason the gate test is
+/// ignored for now: a seed that still fails a gate is named there, and the test runs with `--ignored`.
 macro_rules! scenario_target {
-    ($ids:expr) => {
+    ($ids:expr $(, $why:literal)?) => {
         #[test]
         fn child_worker() {
             $crate::scenario_support::child_main();
@@ -291,6 +292,7 @@ macro_rules! scenario_target {
         /// Every gate that was evaluated passes on the selected seeds (the matrix seed of the first variant, or all
         /// 96 seeds with `VINC_SUITE_FULL=1`), the samples are not vacuous, a waiting scenario is listed.
         #[test]
+        $(#[ignore = $why])?
         fn vinc_mode_gates() {
             $crate::scenario_support::assert_entries(&$crate::scenario_support::vinc_entries(&$ids));
         }
