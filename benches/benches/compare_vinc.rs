@@ -104,8 +104,14 @@ fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
         .alpn(ALPN.to_vec())
         .limits(limits)
         .local_addr(sock.local_addr()?)
-        // The loopback device carries datagrams of any size, so the endpoint may probe its largest.
-        .mtu(u16::MAX)
+        // The loopback device carries datagrams of any size, so the endpoint may probe its largest. `VINC_BENCH_MTU`
+        // states another interface size, such as the 1500 bytes of an ordinary network.
+        .mtu(
+            std::env::var("VINC_BENCH_MTU")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(u16::MAX),
+        )
         .batch(1)
         .build_io(Net { sock })
         .map_err(io_err)?;
