@@ -10,6 +10,7 @@
 
 use super::credit::Admit;
 use super::flow::Meter;
+use super::lazy::{Blank, Lazy};
 use super::pool::{BufferPool, CHUNK_SIZE};
 use super::recv::Recv;
 use super::send::Send;
@@ -49,6 +50,10 @@ impl<S: StreamSource, const C: usize> Slot<S, C> {
     };
 }
 
+impl<S: StreamSource, const C: usize> Blank for Slot<S, C> {
+    const BLANK: Self = Self::NEW;
+}
+
 /// The class index of a stream id: 0 for bidirectional, 1 for unidirectional.
 const fn class(id: StreamId) -> usize {
     if is_uni(id) { 1 } else { 0 }
@@ -56,13 +61,15 @@ const fn class(id: StreamId) -> usize {
 
 /// The stream table of a connection: `N` slots, each with receive and send chunk rings of `C` entries.
 ///
-/// All bytes live in the [`BufferPool`] passed to the mutating calls; the table itself is a fixed-size value that never
-/// allocates. A slot is about `8 * C` bytes plus a few hundred, so a large `C` wants the value boxed or static.
+/// All bytes live in the [`BufferPool`] passed to the mutating calls. A slot is about `8 * C` bytes plus a few hundred.
+/// Without `alloc` the table is a fixed-size value that never allocates, so a large `C` wants it boxed or static; with
+/// `alloc` the room for the `N` slots is allocated once, when the table is made, and a slot's memory is written only when
+/// a stream first takes it, so a table costs the most streams it held at once, not `N`.
 pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: usize = 1025> {
     is_client: bool,
     ids: [u64; N],
     hot: [u8; N],
-    slots: [Slot<S, C>; N],
+    slots: Lazy<Slot<S, C>, N>,
     stream_window: u64,
     max_stream_window: u64,
     target: u64,
@@ -91,7 +98,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             is_client: config.is_client,
             ids: [NONE; N],
             hot: [0; N],
-            slots: [const { Slot::NEW }; N],
+            slots: Lazy::new(),
             stream_window,
             max_stream_window: max_stream,
             target: stream_window,
@@ -156,9 +163,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// pool must be fresh (every chunk the old streams held is gone), so no chunk is released here.
     pub fn reinit(&mut self, config: &Config, pool: &BufferPool<'_>) {
         let (max_stream, stream_window) = Self::windows(config, pool);
-        for slot in &mut self.slots {
-            *slot = Slot::NEW;
-        }
+        self.slots.clear();
         self.is_client = config.is_client;
         self.ids = [NONE; N];
         self.hot = [0; N];
@@ -256,7 +261,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.peer.max_streams = self.peer.max_streams.max(limits.max_streams);
         self.admit.raise_limit(limits.max_streams);
         let window = self.peer.window;
-        for slot in &mut self.slots {
+        for slot in self.slots.written_iter_mut() {
             if slot.send.open {
                 slot.send.raise_limit(window);
             }
@@ -662,7 +667,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let reserve = self.reserved();
         for i in 0..N {
             let target = self.target;
-            let Some(slot) = self.slots.get_mut(i) else { continue };
+            let Some(slot) = self.slots.written_mut(i) else {
+                continue;
+            };
             if !slot.recv.open || !(i == first || slot.recv.win.deferred) {
                 continue;
             }
@@ -970,13 +977,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// Close every stream and return all their chunks to the pool (the connection is going away).
     pub fn close_all(&mut self, pool: &mut BufferPool<'_>) {
-        for i in 0..N {
-            if let Some(slot) = self.slots.get_mut(i) {
-                slot.recv.release_all(pool);
-                slot.send.release_all(pool);
-                *slot = Slot::NEW;
-            }
+        for slot in self.slots.written_iter_mut() {
+            slot.recv.release_all(pool);
+            slot.send.release_all(pool);
         }
+        self.slots.clear();
         self.ids = [NONE; N];
         self.hot = [0; N];
         self.open = 0;
@@ -989,5 +994,41 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// The peer raised the number of streams we may have opened in all (`MAX_STREAMS`).
     pub fn on_max_streams(&mut self, limit: u64) {
         self.admit.raise_limit(limit);
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    fn written<const N: usize, const C: usize>(t: &mut Streams<NoSource, N, C>) -> usize {
+        t.slots.written_iter_mut().count()
+    }
+
+    /// A table of 72 slots writes only the slots its streams took, the lowest first, and a new connection's reset makes
+    /// every slot blank again without writing any.
+    #[test]
+    fn only_the_slots_streams_took_are_written() {
+        let pool = BufferPool::new_boxed(64);
+        let mut cfg = Config::new(true);
+        cfg.peer = PeerLimits {
+            window: 64 * 1024,
+            max_streams: 16,
+        };
+        let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
+        assert_eq!(written(&mut t), 0);
+        assert_eq!(t.slots.iter().count(), 72);
+        let first = t.open_stream(true).unwrap();
+        t.open_stream(true).unwrap();
+        t.open_stream(false).unwrap();
+        assert_eq!(written(&mut t), 3);
+        assert_eq!(t.open_streams(), 3);
+        assert!(t.send_view(first).is_some());
+        t.reinit(&cfg, &pool);
+        assert_eq!((written(&mut t), t.open_streams()), (0, 0));
+        assert!(t.send_view(first).is_none());
+        t.open_stream(true).unwrap();
+        assert_eq!(written(&mut t), 1);
     }
 }

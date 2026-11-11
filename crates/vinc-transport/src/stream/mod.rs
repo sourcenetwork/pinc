@@ -20,6 +20,7 @@
 
 mod credit;
 mod flow;
+mod lazy;
 mod recv;
 mod send;
 mod table;
