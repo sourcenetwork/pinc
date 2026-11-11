@@ -9,7 +9,7 @@
 //! ```ignore
 //! let relay = Relay::builder().limits(Limits::default()).build(
 //!     Udp::new(async |buf| recv(buf).await, async |pkt, to| send(pkt, to).await),
-//!     Carriers::new(accept, read, write, close),
+//!     CarrierFns::new(accept, open, read, write, close),
 //!     Clock::new(now_ns, sleep_until_ns),
 //! )?;
 //! relay.run().await?;
@@ -41,6 +41,8 @@
 //! Dropping the future of [`Relay::run`] drops every stream without calling `close`; call [`Relay::stop`] and await
 //! the run to close them one by one.
 
+mod carrier_fns;
+mod carriers;
 mod conn;
 mod fx;
 mod hub;
@@ -59,7 +61,9 @@ use alloc::vec::Vec;
 use vinc_crypto::NodeId;
 use vinc_keystore::{KeyStore, SoftwareStore};
 
-pub use self::io::{Carriers, Clock, Host, Hosted, Udp, Unbuilt};
+pub use self::carrier_fns::CarrierFns;
+pub use self::carriers::{Carriers, Completion, Done, Tag};
+pub use self::io::{Clock, Host, Hosted, NoCarriers, Udp, Unbuilt};
 pub use self::limits::{CARRIERS, Limits, MAILBOX_BYTES, MAILBOX_MEMBERS, RECORDS};
 pub use self::peers::Peer;
 use self::run::Inner;
@@ -102,7 +106,7 @@ impl Relay<Unbuilt, SoftwareStore, MemStore> {
 }
 
 /// The relay [`Builder::build`] makes over the host's closures.
-pub type Built<R, S, A, O, Rd, Wr, Cl, N, Z, T, K, St> = Relay<Host<R, S, A, O, Rd, Wr, Cl, N, Z, T>, K, St>;
+pub type Built<R, S, C, N, Z, K, St> = Relay<Host<R, S, C, N, Z>, K, St>;
 
 /// Configures a relay: its identity, limits, store and trusted peer relays.
 pub struct Builder<K: KeyStore = SoftwareStore, St: Store = MemStore> {
@@ -174,14 +178,15 @@ impl<K: KeyStore, St: Store> Builder<K, St> {
     /// [`ErrorKind::Config`](crate::ErrorKind::Config) if a limit is out of range, there are more than 32 peers, or
     /// the key store fails.
     #[allow(clippy::type_complexity, reason = "the host's closures are named once, here")]
-    pub fn build<R, S, A, O, Rd, Wr, Cl, N, Z, T>(
+    pub fn build<R, S, C, N, Z>(
         self,
         udp: Udp<R, S>,
-        carriers: Carriers<A, O, Rd, Wr, Cl, T>,
+        carriers: C,
         clock: Clock<N, Z>,
-    ) -> Result<Built<R, S, A, O, Rd, Wr, Cl, N, Z, T, K, St>>
+    ) -> Result<Built<R, S, C, N, Z, K, St>>
     where
-        Host<R, S, A, O, Rd, Wr, Cl, N, Z, T>: Hosted<Stream = T>,
+        Host<R, S, C, N, Z>: Hosted<Stream = C::Stream>,
+        C: Carriers,
     {
         self.limits.check()?;
         let Some(identity) = self.identity else {

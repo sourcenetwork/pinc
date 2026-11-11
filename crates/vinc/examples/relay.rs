@@ -21,15 +21,18 @@
     reason = "an example favours the short form"
 )]
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io;
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
 use nuclei::time::{sleep_until_precise, timeout};
 
-use vinc::relay::{Carriers, Clock, Peer, Relay, Udp};
+use vinc::relay::{Carriers, Clock, Completion, Done, Peer, Relay, Tag, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity};
 
 type Stream = Handle<TcpStream>;
@@ -144,6 +147,94 @@ async fn accept_one(listener: &Handle<TcpListener>) -> Result<(Stream, CarrierKi
     }
 }
 
+/// The relay's carriers on nuclei, in the completion form: each operation the relay submits becomes a task of this
+/// thread, and its result goes on a queue the relay reads. This is all a host writes; the relay does O(1) work for each
+/// result however many streams are idle.
+#[derive(Clone)]
+struct Io {
+    listener: Rc<Handle<TcpListener>>,
+    done: Rc<RefCell<VecDeque<Completion<Stream>>>>,
+    waker: Rc<RefCell<Option<Waker>>>,
+}
+
+impl Io {
+    fn new(listener: Rc<Handle<TcpListener>>) -> Self {
+        Self {
+            listener,
+            done: Rc::default(),
+            waker: Rc::default(),
+        }
+    }
+
+    /// Run `op` as a task; its result is the completion of `tag`.
+    fn spawn(&self, tag: Tag, op: impl Future<Output = Done<Stream>> + 'static) {
+        let io = self.clone();
+        nuclei::spawn_local(async move {
+            let done = op.await;
+            io.done.borrow_mut().push_back(Completion { tag, done });
+            if let Some(w) = io.waker.borrow_mut().take() {
+                w.wake();
+            }
+        })
+        .detach();
+    }
+}
+
+impl Carriers for Io {
+    type Stream = Stream;
+
+    fn submit_accept(&self, tag: Tag) {
+        let l = Rc::clone(&self.listener);
+        self.spawn(tag, async move { Done::Accepted(accept_one(&l).await) });
+    }
+
+    fn submit_open(&self, tag: Tag, peer: &Peer, _kind: CarrierKind) {
+        let to = peer.tcp;
+        self.spawn(tag, async move {
+            Done::Opened(match to {
+                Some(to) => Handle::<TcpStream>::connect(to).await.map_err(io_err),
+                None => Err(Error::new(
+                    ErrorKind::Unreachable,
+                    "the example dials TCP carriers only",
+                )),
+            })
+        });
+    }
+
+    fn submit_read(&self, stream: &Rc<Stream>, tag: Tag, mut buf: Vec<u8>) {
+        let s = Rc::clone(stream);
+        self.spawn(tag, async move {
+            let r = s.recv(&mut buf).await.map_err(io_err);
+            Done::Read(r, buf)
+        });
+    }
+
+    fn submit_write(&self, stream: &Rc<Stream>, tag: Tag, buf: Vec<u8>, from: usize) {
+        let s = Rc::clone(stream);
+        self.spawn(tag, async move {
+            let r = s.send(&buf[from..]).await.map_err(io_err);
+            Done::Written(r, buf)
+        });
+    }
+
+    fn close(&self, _tag: Tag, stream: Rc<Stream>) {
+        // ends the operations still in flight on the stream: they fail, and the relay ignores their completions
+        let _ = stream.get_ref().shutdown(Shutdown::Both);
+    }
+
+    fn poll_completed(&self, cx: &mut Context<'_>) -> Poll<Completion<Stream>> {
+        if let Some(c) = self.done.borrow_mut().pop_front() {
+            return Poll::Ready(c);
+        }
+        *self.waker.borrow_mut() = Some(cx.waker().clone());
+        Poll::Pending
+    }
+
+    fn drive(&self) -> impl Future<Output = ()> {
+        std::future::pending()
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let (Some(addr), Some(seed)) = (args.next(), args.next()) else {
@@ -166,7 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     nuclei::block_on(async move {
         let sock = Rc::new(Handle::<UdpSocket>::bind(addr).await?);
         let listener = Rc::new(Handle::<TcpListener>::bind(addr).await?);
-        let (s1, s2, l) = (Rc::clone(&sock), Rc::clone(&sock), Rc::clone(&listener));
+        let (s1, s2) = (Rc::clone(&sock), Rc::clone(&sock));
         let t0 = Instant::now();
         let base = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos())?;
         let alpns: Vec<&[u8]> = protocols.iter().map(String::as_bytes).collect();
@@ -182,25 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 async move |buf: &mut [u8]| s1.recv_from(buf).await.map_err(io_err),
                 async move |pkt: &[u8], to| s2.send_to(pkt, to).await.map_err(io_err),
             ),
-            Carriers::new(
-                async move || accept_one(&l).await,
-                async |p: &Peer, _kind| match p.tcp {
-                    Some(to) => Handle::<TcpStream>::connect(to).await.map_err(io_err),
-                    None => Err(Error::new(
-                        ErrorKind::Unreachable,
-                        "the example dials TCP carriers only",
-                    )),
-                },
-                async |s: &Stream, mut buf: Vec<u8>| {
-                    let r = s.recv(&mut buf).await.map_err(io_err);
-                    (r, buf)
-                },
-                async |s: &Stream, buf: Vec<u8>, from: usize| {
-                    let r = s.send(&buf[from..]).await.map_err(io_err);
-                    (r, buf)
-                },
-                async |_s: Stream| {},
-            ),
+            Io::new(Rc::clone(&listener)),
             Clock::new(
                 move || base.saturating_add(u64::try_from(t0.elapsed().as_nanos()).unwrap_or(u64::MAX)),
                 async move |at: u64| sleep_until_precise(t0 + Duration::from_nanos(at.saturating_sub(base))).await,

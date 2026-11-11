@@ -1,15 +1,16 @@
-//! The loop that runs a relay: one future that polls every pending operation of the host's closures.
+//! The loop that runs a relay: one future that works through the completions of the host's carriers and polls its few
+//! single operations.
 //!
-//! There is no task, thread or channel: [`drive`] keeps the in-flight accept, UDP receive, UDP send, stream reads and
-//! writes, closes, store write and sleep in its own locals and polls them all with the waker of the future that is
-//! running it. A completed operation is handled at once by the synchronous state in `core`.
+//! There is no task, thread or channel: [`drive`] keeps the host's driving future, the UDP receive and send, the store
+//! write and the sleep in its own locals and polls them with the waker of the future that is running it. The streams are
+//! not polled: the relay submits an operation and the host reports its completion ([`Carriers`]), so a wake costs
+//! O(completions), not O(streams). A completion is handled at once by the synchronous state in `state`.
 //!
 //! Invariants: no borrow of the state is held across an await; each pass handles at most `BUDGET` completions and then
-//! yields, so a busy socket cannot starve the others; dropping the future drops every operation and stream, which is
-//! safe at any await because each operation owns its buffers.
+//! yields, so a busy socket cannot starve the others; the loop touches only the streams on its work lists (an
+//! operation to start, a stream to close), never all of them.
 
 use alloc::boxed::Box;
-use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::future::poll_fn;
@@ -19,19 +20,16 @@ use core::task::{Context, Poll, Waker};
 
 use vinc_keystore::KeyStore;
 
+use super::carriers::{Carriers, Tag};
 use super::io::Hosted;
-use super::peers::Peer;
 use super::state::{Core, Job};
 use super::store::Store;
-use crate::carrier::CarrierKind;
 use crate::error::Result;
 
 /// The most completions handled in one pass before the loop yields.
 const BUDGET: usize = 512;
 /// The size of the buffer a datagram is received into.
 const DATAGRAM_BUF: usize = 4096;
-/// How long accepting pauses after a failed accept, in nanoseconds.
-const ACCEPT_PAUSE_NS: u64 = 100_000_000;
 
 /// Everything a relay shares between its handles.
 pub(crate) struct Inner<H: Hosted, K: KeyStore, St> {
@@ -43,35 +41,6 @@ pub(crate) struct Inner<H: Hosted, K: KeyStore, St> {
     pub(crate) running: Cell<bool>,
 }
 
-struct Done {
-    r: Result<usize>,
-    buf: Vec<u8>,
-}
-
-struct Ops<R, W> {
-    read: Option<Pin<Box<R>>>,
-    write: Option<Pin<Box<W>>>,
-}
-
-impl<R, W> Default for Ops<R, W> {
-    fn default() -> Self {
-        Self {
-            read: None,
-            write: None,
-        }
-    }
-}
-
-async fn read_owned<H: Hosted>(h: &H, s: Rc<H::Stream>, buf: Vec<u8>) -> Done {
-    let (r, buf) = h.read(&s, buf).await;
-    Done { r, buf }
-}
-
-async fn write_owned<H: Hosted>(h: &H, s: Rc<H::Stream>, buf: Vec<u8>, from: usize) -> Done {
-    let (r, buf) = h.write(&s, buf, from).await;
-    Done { r, buf }
-}
-
 async fn recv_owned<H: Hosted>(h: &H, mut buf: Vec<u8>) -> (Result<(usize, SocketAddr)>, Vec<u8>) {
     let r = h.recv(&mut buf).await;
     (r, buf)
@@ -80,20 +49,6 @@ async fn recv_owned<H: Hosted>(h: &H, mut buf: Vec<u8>) -> (Result<(usize, Socke
 async fn send_owned<H: Hosted>(h: &H, buf: Vec<u8>, to: SocketAddr) -> (Result<usize>, Vec<u8>) {
     let r = h.send(&buf, to).await;
     (r, buf)
-}
-
-async fn open_owned<H: Hosted>(
-    h: &H,
-    i: usize,
-    peer: Peer,
-    kind: CarrierKind,
-) -> (usize, CarrierKind, Result<H::Stream>) {
-    let r = h.open(&peer, kind).await;
-    (i, kind, r)
-}
-
-async fn close_owned<H: Hosted>(h: &H, s: H::Stream) {
-    h.close(s).await;
 }
 
 async fn keep_owned<St: Store>(st: &St, job: Job) -> Result<()> {
@@ -115,45 +70,6 @@ fn poll_opt<F: Future>(slot: &mut Option<Pin<Box<F>>>, cx: &mut Context<'_>) -> 
     }
 }
 
-/// Poll the read and the write of one stream; whether either finished.
-fn poll_conn<S, K, R, W>(
-    core: &mut Core<S, K>,
-    ops: &mut Ops<R, W>,
-    slot: usize,
-    cx: &mut Context<'_>,
-    now: u64,
-    mk_r: &impl Fn(Rc<S>, Vec<u8>) -> R,
-    mk_w: &impl Fn(Rc<S>, Vec<u8>, usize) -> W,
-) -> bool
-where
-    K: KeyStore,
-    R: Future<Output = Done>,
-    W: Future<Output = Done>,
-{
-    let mut progressed = false;
-    if ops.read.is_none()
-        && let Some((s, buf)) = core.take_read(slot)
-    {
-        ops.read = Some(Box::pin(mk_r(s, buf)));
-    }
-    if let Some(d) = poll_opt(&mut ops.read, cx) {
-        core.on_read(slot, now, d.r, d.buf);
-        progressed = true;
-    }
-    if ops.write.is_none()
-        && let Some((s, buf, from)) = core.take_write(slot)
-    {
-        ops.write = Some(Box::pin(mk_w(s, buf, from)));
-    }
-    if let Some(d) = poll_opt(&mut ops.write, cx) {
-        core.on_write(slot, d.r, d.buf);
-        progressed = true;
-    }
-    progressed
-}
-
-// vertexia: every pending operation is polled on every wake, O(streams) per wake; per-operation wakers would need `Arc`
-// or `unsafe`, so the upgrade is a readiness source the host passes (one wake per ready stream)
 /// Run the relay until it is stopped.
 #[allow(
     clippy::too_many_lines,
@@ -166,20 +82,15 @@ where
     St: Store,
 {
     let h = &inner.host;
+    let streams = h.carriers();
     let kept = inner.store.load().await?;
     inner.core.borrow_mut().restore(h.now(), &kept);
     drop(kept);
 
-    let mk_r = |s: Rc<H::Stream>, b: Vec<u8>| read_owned(h, s, b);
-    let mk_w = |s: Rc<H::Stream>, b: Vec<u8>, from: usize| write_owned(h, s, b, from);
-    let mut ops: Vec<Ops<_, _>> = Vec::new();
-    let mut accept = None;
-    let mut accept_pause = 0u64;
+    let mut driver = Box::pin(streams.drive());
     let mut recv = None;
     let mut rbuf = Some(alloc::vec![0u8; DATAGRAM_BUF]);
     let mut send = None;
-    let mut closes = Vec::new();
-    let mut opens = Vec::new();
     let mut persist = None;
     let mut sleep: Option<(u64, Pin<Box<_>>)> = None;
 
@@ -194,18 +105,20 @@ where
             let now = h.now();
             let mut progressed = false;
 
-            if accept.is_none() && !core.stopping && now >= accept_pause {
-                accept = Some(Box::pin(h.accept()));
+            // the host's own work comes first: the operations it finishes show up as completions below
+            let _ = driver.as_mut().poll(cx);
+
+            if core.want_accept(now) {
+                streams.submit_accept(Tag::new(0));
             }
-            if let Some(r) = poll_opt(&mut accept, cx) {
+            let mut handled = 0;
+            while handled < BUDGET
+                && let Poll::Ready(done) = streams.poll_completed(cx)
+            {
+                handled += 1;
                 progressed = true;
-                if let Ok((s, kind)) = r {
-                    if let Err(s) = core.add_conn(s, kind, now) {
-                        closes.push(Box::pin(close_owned(h, s)));
-                    }
-                } else {
-                    core.accept_failed();
-                    accept_pause = now.saturating_add(ACCEPT_PAUSE_NS);
+                if let Some((tag, stream)) = core.complete(done, now) {
+                    streams.close(tag, stream);
                 }
             }
 
@@ -233,49 +146,30 @@ where
                 core.udp_sent(r.is_ok(), buf);
             }
 
-            ops.resize_with(core.conns.len(), Ops::default);
-            core.counters.stream_polls += ops.len() as u64;
-            for slot in 0..ops.len() {
-                if let Some(o) = ops.get_mut(slot) {
-                    progressed |= poll_conn(&mut *core, o, slot, cx, now, &mk_r, &mk_w);
+            while let Some(slot) = core.pop_submit() {
+                if let Some((stream, buf)) = core.take_read(slot) {
+                    streams.submit_read(&stream, core.tag(slot), buf);
+                    core.counters.stream_ops += 1;
                 }
+                if let Some((stream, buf, from)) = core.take_write(slot) {
+                    streams.submit_write(&stream, core.tag(slot), buf, from);
+                    core.counters.stream_ops += 1;
+                }
+                progressed = true;
             }
 
             while let Some((i, peer, kind)) = core.next_dial(now) {
-                opens.push(Box::pin(open_owned(h, i, peer, kind)));
+                streams.submit_open(Tag::new(i as u64), &peer, kind);
                 progressed = true;
             }
-            let before = opens.len();
-            opens.retain_mut(|f| match f.as_mut().poll(cx) {
-                Poll::Ready((i, kind, Ok(s))) => {
-                    if let Err(s) = core.dialed(i, s, kind, now) {
-                        closes.push(Box::pin(close_owned(h, s)));
-                    }
-                    false
-                }
-                Poll::Ready((i, _, Err(_))) => {
-                    core.dial_failed(i, now);
-                    false
-                }
-                Poll::Pending => true,
-            });
-            progressed |= opens.len() != before;
 
-            let dead: Vec<usize> = core.dying_slots().collect();
-            for slot in dead {
-                if let Some(o) = ops.get_mut(slot) {
-                    *o = Ops::default();
-                }
-                if let Some(rc) = core.finish(slot, now)
-                    && let Ok(s) = Rc::try_unwrap(rc)
-                {
-                    closes.push(Box::pin(close_owned(h, s)));
+            while let Some(slot) = core.pop_reap() {
+                let tag = core.tag(slot);
+                if let Some(stream) = core.finish(slot, now) {
+                    streams.close(tag, stream);
                 }
                 progressed = true;
             }
-            let before = closes.len();
-            closes.retain_mut(|f| f.as_mut().poll(cx).is_pending());
-            progressed |= closes.len() != before;
 
             if persist.is_none()
                 && let Some(job) = core.next_job()
@@ -290,8 +184,8 @@ where
             }
 
             let mut want = core.next_wake();
-            if accept.is_none() && !core.stopping && accept_pause > now {
-                want = want.min(accept_pause);
+            if core.accept_paused(now) {
+                want = want.min(core.accept_resume());
             }
             if want <= now {
                 core.on_timeout(now);
@@ -311,7 +205,7 @@ where
             }
 
             if !progressed {
-                if core.stopping && core.idle() && closes.is_empty() && opens.is_empty() {
+                if core.stopping && core.idle() {
                     return Poll::Ready(Ok(()));
                 }
                 return Poll::Pending;

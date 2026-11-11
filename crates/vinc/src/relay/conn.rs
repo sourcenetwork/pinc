@@ -22,6 +22,10 @@ const CTL_MAX: usize = 1024;
 
 pub(crate) struct Conn<S> {
     pub(crate) stream: Rc<S>,
+    /// A number no other stream of this relay ever had; completions carry it with the slot.
+    pub(crate) id: u64,
+    /// The slot is on the list of streams with an operation to start.
+    pub(crate) queued: bool,
     pub(crate) kind: CarrierKind,
     pub(crate) carrier: Box<ProtectedCarrier<Software>>,
     pub(crate) node: Option<NodeId>,
@@ -52,6 +56,8 @@ impl<S> Conn<S> {
     pub(crate) fn new(stream: S, kind: CarrierKind, carrier: Box<ProtectedCarrier<Software>>, deadline: u64) -> Self {
         Self {
             stream: Rc::new(stream),
+            id: 0,
+            queued: false,
             kind,
             carrier,
             node: None,

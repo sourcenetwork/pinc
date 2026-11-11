@@ -149,8 +149,9 @@ pub struct Stats {
     pub carriers: usize,
     /// Times the run loop woke.
     pub wakes: u64,
-    /// Streams the run loop looked at, summed over its passes (the cost of a wake grows with the streams).
-    pub stream_polls: u64,
+    /// Operations on streams the run loop started or saw finish: its work, which grows with the traffic and not with the
+    /// number of streams.
+    pub stream_ops: u64,
     /// Peer relays with a carrier up now.
     pub peers_up: usize,
     /// Dials of a peer relay that failed to open the stream.
@@ -209,7 +210,7 @@ impl Stats {
 pub(crate) struct Counters {
     pub(crate) peer_dial_failures: u64,
     pub(crate) wakes: u64,
-    pub(crate) stream_polls: u64,
+    pub(crate) stream_ops: u64,
     pub(crate) carriers_opened: u64,
     pub(crate) carriers_closed: u64,
     pub(crate) protocol_failures: u64,

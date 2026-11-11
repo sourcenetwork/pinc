@@ -21,14 +21,18 @@ mod relay_members;
 mod vinc_common;
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io;
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
 use relay_members::{Member, on_big_stack};
-use vinc::relay::{Carriers, Clock, Limits, MemStore, Peer, Relay as RelayHost, Stats, Udp};
+use vinc::relay::{
+    CarrierFns, Carriers, Clock, Completion, Done, Limits, MemStore, Peer, Relay as RelayHost, Stats, Tag, Udp,
+};
 use vinc::{CarrierKind, Error, ErrorKind, Identity, Relay};
 use vinc_common::{ECHO, SINK, eventually, lo, serve_conn, within};
 use vinc_connect::carrier::session::ALPN;
@@ -172,15 +176,145 @@ struct Host {
     task: Option<nuclei::Task<vinc::Result<()>>>,
 }
 
-impl Host {
-    fn start(ports: &Ports, seed: u8, peers: &[Peer]) -> Self {
-        Self::start_limits(ports, seed, peers, Limits::default())
+/// The relay's carriers in the completion form on nuclei: a task per operation and a queue the relay reads.
+#[derive(Clone)]
+struct Native {
+    listener: Rc<Handle<TcpListener>>,
+    done: Rc<RefCell<VecDeque<Completion<Wire>>>>,
+    waker: Rc<RefCell<Option<Waker>>>,
+}
+
+impl Native {
+    fn new(listener: Rc<Handle<TcpListener>>) -> Self {
+        Self {
+            listener,
+            done: Rc::default(),
+            waker: Rc::default(),
+        }
     }
 
-    fn start_limits(ports: &Ports, seed: u8, peers: &[Peer], limits: Limits) -> Self {
+    fn spawn(&self, tag: Tag, op: impl Future<Output = Done<Wire>> + 'static) {
+        let io = self.clone();
+        nuclei::spawn_local(async move {
+            let done = op.await;
+            io.done.borrow_mut().push_back(Completion { tag, done });
+            if let Some(w) = io.waker.borrow_mut().take() {
+                w.wake();
+            }
+        })
+        .detach();
+    }
+}
+
+impl Carriers for Native {
+    type Stream = Wire;
+
+    fn submit_accept(&self, tag: Tag) {
+        let l = Rc::clone(&self.listener);
+        self.spawn(tag, async move { Done::Accepted(accept_wire(&l).await) });
+    }
+
+    fn submit_open(&self, tag: Tag, peer: &Peer, kind: CarrierKind) {
+        let to = peer.tcp;
+        self.spawn(tag, async move {
+            Done::Opened(match to {
+                Some(to) => open_wire(to, kind).await.map_err(failed),
+                None => Err(Error::new(ErrorKind::Unreachable, "the peer has no address")),
+            })
+        });
+    }
+
+    fn submit_read(&self, stream: &Rc<Wire>, tag: Tag, buf: Vec<u8>) {
+        let w = Rc::clone(stream);
+        self.spawn(tag, async move {
+            let (r, buf) = w.read(buf).await;
+            Done::Read(r.map_err(failed), buf)
+        });
+    }
+
+    fn submit_write(&self, stream: &Rc<Wire>, tag: Tag, buf: Vec<u8>, from: usize) {
+        let w = Rc::clone(stream);
+        self.spawn(tag, async move {
+            let (r, buf) = w.write(buf, from).await;
+            Done::Written(r.map_err(failed), buf)
+        });
+    }
+
+    fn close(&self, _tag: Tag, stream: Rc<Wire>) {
+        let _ = stream.tcp.get_ref().shutdown(Shutdown::Both);
+    }
+
+    fn poll_completed(&self, cx: &mut Context<'_>) -> Poll<Completion<Wire>> {
+        if let Some(c) = self.done.borrow_mut().pop_front() {
+            return Poll::Ready(c);
+        }
+        *self.waker.borrow_mut() = Some(cx.waker().clone());
+        Poll::Pending
+    }
+
+    fn drive(&self) -> impl Future<Output = ()> {
+        std::future::pending()
+    }
+}
+
+/// Accept a TCP stream and read the byte that says which kind of carrier it is.
+async fn accept_wire(l: &Handle<TcpListener>) -> vinc::Result<(Wire, CarrierKind)> {
+    let (tcp, _) = l.accept().await.map_err(failed)?;
+    let mut m = [0u8; 1];
+    let kind = if tcp.recv(&mut m).await.map_err(failed)? == 1 {
+        kind_of(m[0])
+    } else {
+        CarrierKind::Tcp
+    };
+    Ok((Wire::new(tcp, kind), kind))
+}
+
+impl Host {
+    fn start(ports: &Ports, seed: u8, peers: &[Peer]) -> Self {
+        Self::start_limits(ports, seed, peers, Limits::default(), false)
+    }
+
+    /// Like [`Host::start`], with the carriers in the completion form.
+    fn start_native(ports: &Ports, seed: u8, peers: &[Peer]) -> Self {
+        Self::start_limits(ports, seed, peers, Limits::default(), true)
+    }
+
+    /// A relay host whose carriers are closures (`native` false) or the completion form on nuclei (`native` true).
+    fn start_limits(ports: &Ports, seed: u8, peers: &[Peer], limits: Limits, native: bool) -> Self {
+        if native {
+            return Self::from_carriers(ports, seed, peers, limits, Native::new(Rc::clone(&ports.listener)));
+        }
+        let l = Rc::clone(&ports.listener);
+        let fns = CarrierFns::new(
+            async move || accept_wire(&l).await,
+            async |p: &Peer, kind: CarrierKind| {
+                let to = p
+                    .tcp
+                    .ok_or_else(|| Error::new(ErrorKind::Unreachable, "the peer has no address"))?;
+                open_wire(to, kind).await.map_err(failed)
+            },
+            async |w: &Wire, buf: Vec<u8>| {
+                let (r, buf) = w.read(buf).await;
+                (r.map_err(failed), buf)
+            },
+            async |w: &Wire, buf: Vec<u8>, from: usize| {
+                let (r, buf) = w.write(buf, from).await;
+                (r.map_err(failed), buf)
+            },
+            async |_w: Wire| {},
+        );
+        Self::from_carriers(ports, seed, peers, limits, fns)
+    }
+
+    fn from_carriers<C: Carriers<Stream = Wire> + 'static>(
+        ports: &Ports,
+        seed: u8,
+        peers: &[Peer],
+        limits: Limits,
+        carriers: C,
+    ) -> Self {
         let t0 = Instant::now();
         let base = wall_ns();
-        let l = Rc::clone(&ports.listener);
         let (s1, s2) = (Rc::clone(&ports.sock), Rc::clone(&ports.sock));
         let mut builder = RelayHost::builder()
             .identity(Identity::from_seed(&[seed; 32]).unwrap())
@@ -196,33 +330,7 @@ impl Host {
                     async move |buf: &mut [u8]| s1.recv_from(buf).await.map_err(failed),
                     async move |pkt: &[u8], to| s2.send_to(pkt, to).await.map_err(failed),
                 ),
-                Carriers::new(
-                    async move || {
-                        let (tcp, _) = l.accept().await.map_err(failed)?;
-                        let mut m = [0u8; 1];
-                        let kind = if tcp.recv(&mut m).await.map_err(failed)? == 1 {
-                            kind_of(m[0])
-                        } else {
-                            CarrierKind::Tcp
-                        };
-                        Ok((Wire::new(tcp, kind), kind))
-                    },
-                    async |p: &Peer, kind: CarrierKind| {
-                        let to = p
-                            .tcp
-                            .ok_or_else(|| Error::new(ErrorKind::Unreachable, "the peer has no address"))?;
-                        open_wire(to, kind).await.map_err(failed)
-                    },
-                    async |w: &Wire, buf: Vec<u8>| {
-                        let (r, buf) = w.read(buf).await;
-                        (r.map_err(failed), buf)
-                    },
-                    async |w: &Wire, buf: Vec<u8>, from: usize| {
-                        let (r, buf) = w.write(buf, from).await;
-                        (r.map_err(failed), buf)
-                    },
-                    async |_w: Wire| {},
-                ),
+                carriers,
                 Clock::new(
                     move || base + u64::try_from(t0.elapsed().as_nanos()).unwrap(),
                     async move |at: u64| {
@@ -348,9 +456,9 @@ macro_rules! reach_and_move {
     }};
 }
 
-async fn through_one_relay(kind: CarrierKind) {
+async fn through_one_relay(kind: CarrierKind, native: bool) {
     let ports = bind_ports().await;
-    let host = Host::start(&ports, 0x71, &[]);
+    let host = Host::start_limits(&ports, 0x71, &[], Limits::default(), native);
     let relay = host.relay(kind);
     let a = endpoint!(1, relay);
     let b = endpoint!(2, relay);
@@ -368,17 +476,56 @@ async fn through_one_relay(kind: CarrierKind) {
 
 #[nuclei::test]
 async fn endpoints_that_know_only_a_relay_reach_each_other_through_the_relay_host_over_tcp() {
-    through_one_relay(CarrierKind::Tcp).await;
+    through_one_relay(CarrierKind::Tcp, false).await;
 }
 
 #[nuclei::test]
 async fn the_same_over_a_websocket_the_facade_frames_itself() {
-    through_one_relay(CarrierKind::Ws).await;
+    through_one_relay(CarrierKind::Ws, false).await;
 }
 
 #[nuclei::test]
 async fn the_same_over_the_whole_message_websocket_of_a_browser() {
-    through_one_relay(CarrierKind::WsMessages).await;
+    through_one_relay(CarrierKind::WsMessages, false).await;
+}
+
+#[nuclei::test]
+async fn the_same_with_the_carriers_in_the_completion_form_over_tcp() {
+    through_one_relay(CarrierKind::Tcp, true).await;
+}
+
+#[nuclei::test]
+async fn the_same_with_the_carriers_in_the_completion_form_over_a_websocket() {
+    through_one_relay(CarrierKind::Ws, true).await;
+}
+
+#[nuclei::test]
+async fn the_same_with_the_carriers_in_the_completion_form_over_whole_messages() {
+    through_one_relay(CarrierKind::WsMessages, true).await;
+}
+
+#[nuclei::test]
+async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_of_completion_form_hosts_reach_each_other() {
+    let (pa, pb) = (bind_ports().await, bind_ports().await);
+    let ids = [
+        Identity::from_seed(&[0x74; 32]).unwrap().node_id(),
+        Identity::from_seed(&[0x75; 32]).unwrap().node_id(),
+    ];
+    let list = [Peer::new(ids[0]).with_tcp(pa.addr), Peer::new(ids[1]).with_tcp(pb.addr)];
+    let host_a = Host::start_native(&pa, 0x74, &list);
+    let host_b = Host::start_native(&pb, 0x75, &list);
+    let a = endpoint!(1, host_a.relay(CarrierKind::Tcp));
+    let b = endpoint!(2, host_b.relay(CarrierKind::Tcp));
+    within(120, async {
+        eventually(60, "the mesh is up and each endpoint has its carrier", || {
+            let (sa, sb) = ((host_a.stats)(), (host_b.stats)());
+            async move { sa.peers_up == 1 && sb.peers_up == 1 && sa.carriers == 1 && sb.carriers == 1 }
+        })
+        .await;
+        let mut stops = [host_a, host_b];
+        reach_and_move!(a, b, stops);
+    })
+    .await;
 }
 
 #[nuclei::test]
@@ -417,7 +564,7 @@ struct Numbers {
 
 /// A 64-byte round trip a thousand times and a 64 MiB transfer between two endpoints that know only a relay host
 /// carrying `idle` other carriers; `relayed_only` drops every datagram that is not for the relay, so no direct path forms.
-async fn measure(relayed_only: bool, idle: usize) -> Numbers {
+async fn measure(relayed_only: bool, idle: usize, native: bool) -> Numbers {
     let ports = bind_ports().await;
     let limits = Limits {
         carriers: idle + 8,
@@ -427,7 +574,7 @@ async fn measure(relayed_only: bool, idle: usize) -> Numbers {
         },
         ..Limits::default()
     };
-    let mut host = Host::start_limits(&ports, 0x7a, &[], limits);
+    let mut host = Host::start_limits(&ports, 0x7a, &[], limits, native);
     let mut idles = Vec::new();
     let relay = host.relay(CarrierKind::Tcp);
     let a = endpoint!(1, relay, relayed_only);
@@ -504,10 +651,13 @@ async fn measure(relayed_only: bool, idle: usize) -> Numbers {
         }
     })
     .await;
-    a.close().await;
-    b.close().await;
-    drop(idles);
-    host.stop().await;
+    within(60, async {
+        a.close().await;
+        b.close().await;
+        drop(idles);
+        host.stop().await;
+    })
+    .await;
     numbers
 }
 
@@ -517,16 +667,19 @@ async fn measure(relayed_only: bool, idle: usize) -> Numbers {
 #[ignore = "an indication on the machine it runs on, not a check"]
 fn what_the_relay_costs() {
     on_big_stack(|| async {
-        for (label, relayed_only, idle) in [
-            ("direct", false, 0),
-            ("relayed", true, 0),
-            ("relayed, 250 idle carriers", true, 250),
-            ("relayed, 1000 idle carriers", true, 1000),
+        for (label, relayed_only, idle, native) in [
+            ("direct", false, 0, true),
+            ("relayed, closures", true, 0, false),
+            ("relayed, closures, 250 idle carriers", true, 250, false),
+            ("relayed, closures, 1000 idle carriers", true, 1000, false),
+            ("relayed, completions", true, 0, true),
+            ("relayed, completions, 250 idle carriers", true, 250, true),
+            ("relayed, completions, 1000 idle carriers", true, 1000, true),
         ] {
-            let n = measure(relayed_only, idle).await;
-            let polls = n.stats.stream_polls / n.stats.wakes.max(1);
+            let n = measure(relayed_only, idle, native).await;
+            let ops = n.stats.stream_ops / n.stats.wakes.max(1);
             eprintln!(
-                "BENCH {label}: 64 B round trip median {} us, p99 {} us, mean {} us; 64 MiB at {:.1} MiB/s; the relay woke {} times and looked at {polls} streams per wake",
+                "BENCH {label}: 64 B round trip median {} us, p99 {} us, mean {} us; 64 MiB at {:.1} MiB/s; the relay woke {} times and handled {ops} stream operations per wake",
                 n.median_us, n.p99_us, n.mean_us, n.mib_s, n.stats.wakes
             );
         }

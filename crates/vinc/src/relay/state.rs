@@ -21,6 +21,7 @@ use vinc_crypto::{Drbg, NodeId, Software};
 use vinc_keystore::KeyStore;
 use vinc_security::{ConnId, Env, KeyRequest, KeyResponse, LocalIdentity, PrekeyInfo, ResponderStores};
 
+use super::carriers::{Completion, Done, Tag};
 use super::conn::Conn;
 use super::fx::{Fx, Item};
 use super::hub::{Hub, Note, Target};
@@ -42,6 +43,8 @@ const UDP_BACKLOG: usize = 256;
 const STEP_BUDGET: usize = 256;
 /// The interval of the checks of stream deadlines.
 const CHECK_NS: u64 = 1_000_000_000;
+/// How long accepting pauses after a failed accept, in nanoseconds.
+const ACCEPT_PAUSE_NS: u64 = 100_000_000;
 
 /// What one step of a stream's carrier found.
 enum Step {
@@ -77,6 +80,13 @@ pub(crate) struct Core<S, K: KeyStore> {
     udp_out: VecDeque<(SocketAddr, Vec<u8>)>,
     udp_pool: Vec<Vec<u8>>,
     keep: keep::Keep,
+    /// Slots with a read or a write to start, and slots to close: the loop works through these and never scans the streams.
+    pub(crate) submit: Vec<usize>,
+    reap: Vec<(usize, u64)>,
+    next_conn: u64,
+    live: usize,
+    accept_out: bool,
+    accept_pause: u64,
     pub(crate) stopping: bool,
     hub: Option<Hub>,
     notes: Vec<Note>,
@@ -136,6 +146,12 @@ impl<S, K: KeyStore> Core<S, K> {
             udp_out: VecDeque::new(),
             udp_pool: Vec::new(),
             keep: keep::Keep::default(),
+            submit: Vec::new(),
+            reap: Vec::new(),
+            next_conn: 0,
+            live: 0,
+            accept_out: false,
+            accept_pause: 0,
             stopping: false,
             hub,
             notes: Vec::new(),
@@ -170,7 +186,7 @@ impl<S, K: KeyStore> Core<S, K> {
                 .count(),
             peer_dial_failures: c.peer_dial_failures,
             wakes: c.wakes,
-            stream_polls: c.stream_polls,
+            stream_ops: c.stream_ops,
             carriers_opened: c.carriers_opened,
             carriers_closed: c.carriers_closed,
             protocol_failures: c.protocol_failures,
@@ -223,15 +239,131 @@ impl<S, K: KeyStore> Core<S, K> {
     }
 
     /// Put a stream in a free slot.
-    fn place(&mut self, conn: Conn<S>) -> usize {
-        if let Some(slot) = self.free.pop()
-            && let Some(entry) = self.conns.get_mut(slot)
-        {
-            *entry = Some(conn);
-            return slot;
+    fn place(&mut self, mut conn: Conn<S>) -> usize {
+        self.next_conn += 1;
+        conn.id = self.next_conn;
+        self.live += 1;
+        let slot = match self.free.pop() {
+            Some(slot) if self.conns.get(slot).is_some() => {
+                if let Some(entry) = self.conns.get_mut(slot) {
+                    *entry = Some(conn);
+                }
+                slot
+            }
+            _ => {
+                self.conns.push(Some(conn));
+                self.conns.len() - 1
+            }
+        };
+        self.mark(slot);
+        slot
+    }
+
+    /// The stream in `slot` has an operation to start: a read to repeat, or bytes to write.
+    pub(crate) fn mark(&mut self, slot: usize) {
+        let Some(c) = self.conn(slot) else { return };
+        if !c.queued {
+            c.queued = true;
+            self.submit.push(slot);
         }
-        self.conns.push(Some(conn));
-        self.conns.len() - 1
+    }
+
+    /// The tag of an operation on the stream in `slot`.
+    pub(crate) fn tag(&self, slot: usize) -> Tag {
+        let id = self.conns.get(slot).and_then(Option::as_ref).map_or(0, |c| c.id);
+        Tag::new(id << 16 | slot as u64)
+    }
+
+    /// The slot a tag names, if its stream is still the one the operation was started on.
+    fn slot_of(&self, tag: Tag) -> Option<usize> {
+        let slot = usize::try_from(tag.conn() & 0xffff).ok()?;
+        let c = self.conns.get(slot)?.as_ref()?;
+        (c.id == tag.conn() >> 16).then_some(slot)
+    }
+
+    /// The next stream with an operation to start; `take_read` and `take_write` give the operations.
+    pub(crate) fn pop_submit(&mut self) -> Option<usize> {
+        let slot = self.submit.pop()?;
+        if let Some(c) = self.conn(slot) {
+            c.queued = false;
+        }
+        Some(slot)
+    }
+
+    /// The next stream to close.
+    pub(crate) fn pop_reap(&mut self) -> Option<usize> {
+        while let Some((slot, id)) = self.reap.pop() {
+            if self
+                .conns
+                .get(slot)
+                .and_then(Option::as_ref)
+                .is_some_and(|c| c.id == id)
+            {
+                return Some(slot);
+            }
+        }
+        None
+    }
+
+    /// Whether the loop should submit an accept.
+    pub(crate) fn want_accept(&mut self, now: u64) -> bool {
+        let want = !self.accept_out && !self.stopping && now >= self.accept_pause;
+        self.accept_out |= want;
+        want
+    }
+
+    /// Whether accepting waits for a time after a failed accept.
+    pub(crate) fn accept_paused(&self, now: u64) -> bool {
+        !self.accept_out && !self.stopping && self.accept_pause > now
+    }
+
+    /// When accepting resumes after a failed accept.
+    pub(crate) const fn accept_resume(&self) -> u64 {
+        self.accept_pause
+    }
+
+    /// A finished operation; the stream to close, if one was refused.
+    pub(crate) fn complete(&mut self, c: Completion<S>, now: u64) -> Option<(Tag, Rc<S>)> {
+        let tag = c.tag;
+        self.counters.stream_ops += 1;
+        match c.done {
+            Done::Accepted(r) => {
+                self.accept_out = false;
+                if let Ok((s, kind)) = r {
+                    self.add_conn(s, kind, now).err().map(|s| (tag, Rc::new(s)))
+                } else {
+                    self.accept_failed();
+                    self.accept_pause = now.saturating_add(ACCEPT_PAUSE_NS);
+                    None
+                }
+            }
+            Done::Opened(r) => {
+                let i = usize::try_from(tag.conn()).unwrap_or(usize::MAX);
+                if let Ok(s) = r {
+                    let kind = self
+                        .peers
+                        .get(i)
+                        .and_then(|p| p.peer.kind())
+                        .unwrap_or(CarrierKind::Tcp);
+                    self.dialed(i, s, kind, now).err().map(|s| (tag, Rc::new(s)))
+                } else {
+                    self.dial_failed(i, now);
+                    None
+                }
+            }
+            Done::Read(r, buf) => {
+                if let Some(slot) = self.slot_of(tag) {
+                    self.on_read(slot, now, r, buf);
+                }
+                None
+            }
+            Done::Written(r, buf) => {
+                if let Some(slot) = self.slot_of(tag) {
+                    self.on_write(slot, r, buf);
+                }
+                None
+            }
+        }
     }
 
     /// The stream and read buffer of a read to start, if the stream wants one.
@@ -265,6 +397,7 @@ impl<S, K: KeyStore> Core<S, K> {
                 if c.peer && !c.sync.is_empty() {
                     self.pump_sync(slot);
                 }
+                self.mark(slot);
             }
             _ => {
                 c.wrote(buf, 0);
@@ -292,6 +425,7 @@ impl<S, K: KeyStore> Core<S, K> {
         if let Some(c) = self.conn(slot) {
             c.put_read(buf);
         }
+        self.mark(slot);
         self.pump_hub(now);
     }
 
@@ -317,6 +451,7 @@ impl<S, K: KeyStore> Core<S, K> {
                         && let Ok(len) = ws::encode(Opcode::Pong, p, mask, &mut f)
                     {
                         c.push_ctl(f.get(..len).unwrap_or_default());
+                        self.mark(slot);
                     }
                     pos += used;
                 }
@@ -456,7 +591,9 @@ impl<S, K: KeyStore> Core<S, K> {
             }
             ok &= c.push(hs.get(..n).unwrap_or_default(), limit);
         }
-        if !ok {
+        if ok {
+            self.mark(slot);
+        } else {
             self.dying(slot, Closed::Slow);
         }
     }
@@ -502,6 +639,8 @@ impl<S, K: KeyStore> Core<S, K> {
             return;
         }
         c.dying = Some(why);
+        let id = c.id;
+        self.reap.push((slot, id));
         match why {
             Closed::Protocol => self.counters.protocol_failures += 1,
             Closed::Slow => self.counters.slow_closed += 1,
@@ -510,18 +649,11 @@ impl<S, K: KeyStore> Core<S, K> {
         }
     }
 
-    /// The slots of streams that are to be closed.
-    pub(crate) fn dying_slots(&self) -> impl Iterator<Item = usize> + '_ {
-        self.conns
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| c.as_ref().filter(|c| c.dying.is_some()).map(|_| i))
-    }
-
     /// End a stream whose operations have been dropped: tell the machine and return the stream to close.
     pub(crate) fn finish(&mut self, slot: usize, now: u64) -> Option<Rc<S>> {
         let c = self.conns.get_mut(slot)?.take()?;
         self.free.push(slot);
+        self.live -= 1;
         let why = c.dying.unwrap_or(Closed::Peer);
         if c.node.is_none() {
             self.handshaking -= 1;
@@ -705,7 +837,9 @@ impl<S, K: KeyStore> Core<S, K> {
             return;
         };
         let ok = c.push(unit.get(..n).unwrap_or_default(), limit);
-        if !ok {
+        if ok {
+            self.mark(slot);
+        } else {
             self.dying(slot, Closed::Slow);
         }
     }
@@ -808,6 +942,6 @@ impl<S, K: KeyStore> Core<S, K> {
 
     /// Streams and datagrams are all gone and nothing is left to close.
     pub(crate) fn idle(&self) -> bool {
-        self.conns.iter().all(Option::is_none)
+        self.live == 0
     }
 }

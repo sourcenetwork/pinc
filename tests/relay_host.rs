@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use nuclei::Handle;
 use relay_members::{Member, decode, on_big_stack, wall_ns};
-use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store, Udp};
+use vinc::relay::{CarrierFns, Clock, Event, Limits, MemStore, Peer, Reason, Relay, Stats, Store, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity};
 use vinc_common::{client, eventually, within};
 use vinc_connect::carrier::session::{ALPN, PEER_ALPN};
@@ -106,7 +106,7 @@ fn start_on(ports: &Ports, seed: u8, limits: Limits, store: MemStore, peers: &[P
                 async move |buf: &mut [u8]| s1.recv_from(buf).await.map_err(io_err),
                 async move |pkt: &[u8], to| s2.send_to(pkt, to).await.map_err(io_err),
             ),
-            Carriers::new(
+            CarrierFns::new(
                 async move || {
                     let (s, _) = l.accept().await.map_err(io_err)?;
                     let kind = k.borrow_mut().pop_front().unwrap_or(CarrierKind::Tcp);
