@@ -24,7 +24,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nuclei::Handle;
-use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Relay, Stats, Udp};
+use vinc::relay::{Carriers, Clock, Event, Limits, MemStore, Relay, Stats, Store, Udp};
 use vinc::{CarrierKind, Error, ErrorKind, Identity};
 use vinc_common::{client, eventually, within};
 use vinc_connect::carrier::session::{ALPN, Poll};
@@ -631,6 +631,126 @@ fn a_member_with_a_udp_session_to_the_hub_is_counted_and_released() {
             stats_where(&r, "the hub holds the session", |s| s.hub_sessions == 1).await;
             conn.close(0).await;
             stats_where(&r, "the session is released", |s| s.hub_sessions == 0).await;
+        })
+    });
+}
+
+fn signed_record(tag: u8, relay: NodeId, seq: u64) -> (NodeId, Vec<u8>) {
+    let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
+    let mut out = vec![0u8; record::MAX_RECORD_LEN];
+    let n = record::sign(
+        &kp,
+        &RecordFields {
+            home: relay,
+            seq,
+            reach: Reach::UdpBlocked,
+            addrs: &[],
+            hints: &[],
+        },
+        &mut out,
+    )
+    .unwrap();
+    out.truncate(n);
+    (kp.node_id(), out)
+}
+
+#[test]
+fn the_packets_held_for_a_sleeping_member_survive_a_restart() {
+    on_big_stack(|| {
+        within(60, async {
+            let store = MemStore::new();
+            let mut r = start(0x78, Limits::default(), store.clone()).await;
+            let mut a = Member::connect(&r, 0x81, CarrierKind::Tcp).await;
+            let mut b = Member::connect(&r, 0x82, CarrierKind::Tcp).await;
+            a.publish(1).await;
+            b.publish(1).await;
+            eventually(10, "both records kept", || async { store.len() == 2 }).await;
+            let mut notice = [0u8; 512];
+            let n = sleep::sign(&b.kp, &r.id, wall_ns() / 1_000_000, &mut notice).unwrap();
+            b.send(&Frame::Sleep { notice: &notice[..n] }).await;
+            let (bid, aid) = (b.id, a.id);
+            drop(b);
+            stats_where(&r, "member b gone", |s| s.carriers == 1).await;
+            for i in 0..3u8 {
+                a.send(&Frame::Send {
+                    dst: bid,
+                    flag: i,
+                    packet: &[i; 1000],
+                })
+                .await;
+            }
+            stats_where(&r, "three packets held", |s| s.mailbox.stored == 3).await;
+            let entry = 33 + 1 + 8 + 2 + 1000;
+            eventually(10, "the held packets are kept", || async {
+                store.mailbox_bytes() == 3 * entry
+            })
+            .await;
+
+            // the relay restarts between the packets and the member's wake
+            drop(r.task.take());
+            assert!(a.recv().await.is_none());
+            let r2 = start(0x78, Limits::default(), store.clone()).await;
+            let mut b2 = Member::connect(&r2, 0x82, CarrierKind::Tcp).await;
+            for i in 0..3u8 {
+                match decode(&b2.recv().await.unwrap()) {
+                    Frame::Recv { src, flag, packet } | Frame::RecvNew { src, flag, packet, .. } => {
+                        assert_eq!((flag, packet), (i, &[i; 1000][..]));
+                        assert_eq!(src, aid);
+                    }
+                    Frame::RecvAlias { flag, packet, .. } => assert_eq!((flag, packet), (i, &[i; 1000][..])),
+                    other => panic!("{other:?}"),
+                }
+            }
+            // exactly those three, and nothing more is held or kept
+            b2.send(&Frame::Ping).await;
+            assert_eq!(decode(&b2.recv().await.unwrap()), Frame::Pong);
+            assert_eq!((r2.stats)().mailbox.delivered, 3);
+            eventually(10, "the store forgets the delivered packets", || async {
+                store.mailboxes() == 0
+            })
+            .await;
+        })
+    });
+}
+
+#[test]
+fn a_restored_record_keeps_its_remaining_lifetime_and_a_dropped_one_leaves_the_store() {
+    on_big_stack(|| {
+        within(60, async {
+            let relay_id = Identity::from_seed(&[0x79; 32]).unwrap().node_id();
+            let ttl = vinc_connect::relay::rule::RECORD_TTL_NS;
+            let now = wall_ns();
+            let store = MemStore::new();
+            let (almost, rec_almost) = signed_record(0x91, relay_id, 1);
+            let (expired, rec_expired) = signed_record(0x92, relay_id, 1);
+            let (fresh, rec_fresh) = signed_record(0x93, relay_id, 1);
+            let fresh_at = now - 10_000_000_000;
+            store
+                .put(&almost, &rec_almost, now - ttl + 2_500_000_000)
+                .await
+                .unwrap();
+            store
+                .put(&expired, &rec_expired, now - ttl - 1_000_000_000)
+                .await
+                .unwrap();
+            store.put(&fresh, &rec_fresh, fresh_at).await.unwrap();
+            let r = start(0x79, Limits::default(), store.clone()).await;
+            assert_eq!(r.id, relay_id);
+            eventually(10, "the expired record leaves the store", || async {
+                store.received(&expired).is_none()
+            })
+            .await;
+            // the one with 2.5 s left was restored with them, and is dropped by lifetime a few seconds later
+            eventually(15, "the almost expired record is dropped and removed", || async {
+                store.received(&almost).is_none()
+            })
+            .await;
+            assert_eq!(
+                store.received(&fresh),
+                Some(fresh_at),
+                "a live record is kept as it was received"
+            );
+            assert_eq!((r.stats)().records, 1);
         })
     });
 }

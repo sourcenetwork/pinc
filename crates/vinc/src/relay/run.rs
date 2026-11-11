@@ -17,11 +17,10 @@ use core::net::SocketAddr;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use vinc_crypto::NodeId;
 use vinc_keystore::KeyStore;
 
 use super::io::Hosted;
-use super::state::Core;
+use super::state::{Core, Job};
 use super::store::Store;
 use crate::error::Result;
 
@@ -85,8 +84,12 @@ async fn close_owned<H: Hosted>(h: &H, s: H::Stream) {
     h.close(s).await;
 }
 
-async fn put_owned<St: Store>(st: &St, node: NodeId, rec: Vec<u8>) -> Result<()> {
-    st.put(&node, &rec).await
+async fn keep_owned<St: Store>(st: &St, job: Job) -> Result<()> {
+    match job {
+        Job::Put(node, rec, received) => st.put(&node, &rec, received).await,
+        Job::Remove(node) => st.remove(&node).await,
+        Job::Mail(node, packets) => st.put_mailbox(&node, &packets).await,
+    }
 }
 
 fn poll_opt<F: Future>(slot: &mut Option<Pin<Box<F>>>, cx: &mut Context<'_>) -> Option<F::Output> {
@@ -151,9 +154,9 @@ where
     St: Store,
 {
     let h = &inner.host;
-    let records = inner.store.load().await?;
-    inner.core.borrow_mut().restore(h.now(), &records);
-    drop(records);
+    let kept = inner.store.load().await?;
+    inner.core.borrow_mut().restore(h.now(), &kept);
+    drop(kept);
 
     let mk_r = |s: Rc<H::Stream>, b: Vec<u8>| read_owned(h, s, b);
     let mk_w = |s: Rc<H::Stream>, b: Vec<u8>, from: usize| write_owned(h, s, b, from);
@@ -240,10 +243,9 @@ where
             progressed |= closes.len() != before;
 
             if persist.is_none()
-                && let Some(node) = core.persist.pop()
-                && let Some(rec) = core.record(now, &node)
+                && let Some(job) = core.next_job()
             {
-                persist = Some(Box::pin(put_owned(&inner.store, node, rec)));
+                persist = Some(Box::pin(keep_owned(&inner.store, job)));
             }
             if let Some(r) = poll_opt(&mut persist, cx) {
                 progressed = true;

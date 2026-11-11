@@ -161,12 +161,14 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         self.store(now, bytes, RecordOrigin::Replica, None, sink)
     }
 
-    /// Install a record this relay stored before a restart. It is verified like a replica and not replicated again.
+    /// Install a record this relay stored before a restart, received at `received`: it ends
+    /// [`super::rule::RECORD_TTL_NS`] after that, not after the restart. It is verified like a replica and not
+    /// replicated again. The host does not restore a record that has expired.
     ///
     /// # Errors
     /// [`Reject::BadRecord`], [`Reject::StaleRecord`] or [`Reject::StoreFull`].
-    pub fn restore_record<S: Sink>(&mut self, now: u64, bytes: &[u8], sink: &mut S) -> Result<(), Reject> {
-        self.replica(now, bytes, sink)
+    pub fn restore_record<S: Sink>(&mut self, received: u64, bytes: &[u8], sink: &mut S) -> Result<(), Reject> {
+        self.replica(received, bytes, sink)
     }
 
     /// Install this relay's own signed record, send it to every peer relay and arm the republish timer.

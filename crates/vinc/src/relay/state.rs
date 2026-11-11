@@ -24,11 +24,15 @@ use vinc_security::{ConnId, Env, KeyRequest, KeyResponse, LocalIdentity, Respond
 use super::conn::Conn;
 use super::fx::{Fx, Item};
 use super::hub::{Hub, Note, Target};
-use super::limits::{Limits, Machine, RECORDS};
+use super::limits::{Limits, Machine};
 use super::stats::{Closed, Counters, Event, Events, Reason, Stats};
 use super::store::node_key;
 use crate::carrier::CarrierKind;
 use crate::keys::{Identity, is_identity};
+
+mod keep;
+
+pub(crate) use keep::Job;
 
 /// The most control datagrams waiting for the socket.
 const UDP_BACKLOG: usize = 256;
@@ -68,8 +72,7 @@ pub(crate) struct Core<S, K: KeyStore> {
     check_at: u64,
     udp_out: VecDeque<(SocketAddr, Vec<u8>)>,
     udp_pool: Vec<Vec<u8>>,
-    pub(crate) persist: Vec<NodeId>,
-    restoring: bool,
+    keep: keep::Keep,
     pub(crate) stopping: bool,
     hub: Option<Hub>,
     notes: Vec<Note>,
@@ -123,8 +126,7 @@ impl<S, K: KeyStore> Core<S, K> {
             check_at: now.saturating_add(CHECK_NS),
             udp_out: VecDeque::new(),
             udp_pool: Vec::new(),
-            persist: Vec::new(),
-            restoring: false,
+            keep: keep::Keep::default(),
             stopping: false,
             hub,
             notes: Vec::new(),
@@ -638,15 +640,10 @@ impl<S, K: KeyStore> Core<S, K> {
                 }
             }
             Trace::RecordStored { node, seq, .. } => {
-                if !self.restoring && !self.persist.contains(&node) {
-                    if self.persist.len() < 4 * RECORDS {
-                        self.persist.push(node);
-                    } else {
-                        self.counters.store_errors += 1;
-                    }
-                }
+                self.note_record(node);
                 self.event(Event::RecordStored { node, seq });
             }
+            Trace::MailboxStored { node, .. } | Trace::MailboxDelivered { node, .. } => self.note_mail(node),
             _ => {}
         }
     }
@@ -728,6 +725,7 @@ impl<S, K: KeyStore> Core<S, K> {
         self.last_now = now;
         self.sm.handle_timeout(now, &mut self.fx);
         self.flush();
+        self.note_sweep();
         if let Some(h) = self.hub.as_mut() {
             h.handle_timeout(now);
         }
@@ -753,26 +751,6 @@ impl<S, K: KeyStore> Core<S, K> {
     pub(crate) fn next_wake(&self) -> u64 {
         let hub = self.hub.as_ref().and_then(Hub::next_timeout).unwrap_or(u64::MAX);
         self.sm.next_deadline().unwrap_or(u64::MAX).min(self.check_at).min(hub)
-    }
-
-    /// Install records the store kept; returns how many the machine took.
-    pub(crate) fn restore(&mut self, now: u64, records: &[Vec<u8>]) -> usize {
-        self.restoring = true;
-        let mut kept = 0;
-        for r in records {
-            if self.sm.restore_record(now, r, &mut self.fx).is_ok() {
-                kept += 1;
-            }
-            self.flush();
-        }
-        self.restoring = false;
-        self.persist.clear();
-        kept
-    }
-
-    /// The stored record of `node`, copied for the store.
-    pub(crate) fn record(&self, now: u64, node: &NodeId) -> Option<Vec<u8>> {
-        self.sm.lookup(now, node).map(<[u8]>::to_vec)
     }
 
     pub(crate) fn store_failed(&mut self) {

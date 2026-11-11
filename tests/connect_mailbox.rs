@@ -60,6 +60,47 @@ fn messages_leave_in_order_and_only_once() {
 }
 
 #[test]
+fn held_messages_can_be_read_in_order_and_put_back_with_their_arrival_time() {
+    let mut m = M::new(100 * SEC, 1);
+    let to = nid(1);
+    // a ring that has wrapped, so the read walks across the end
+    for i in 0..9u8 {
+        m.push(u64::from(i) * SEC, &to, &nid(10 + i), i, &[i; 150]);
+    }
+    let (count, _) = m.pending(&to);
+    assert!(count > 0 && count < 9, "the quota pushed some out: {count}");
+    let mut buf = [0u8; MAX_PACKET_LEN];
+    let mut seen = Vec::new();
+    for i in 0..count {
+        let (d, at) = m.peek(&to, i, &mut buf).unwrap();
+        assert_eq!(buf[..d.len], vec![d.flag; 150]);
+        seen.push((d.src.bytes[0], d.flag, buf[..d.len].to_vec(), at));
+    }
+    assert!(m.peek(&to, count, &mut buf).is_none());
+    assert!(seen.windows(2).all(|w| w[0].3 < w[1].3), "oldest first");
+
+    // put them back in a mailbox of a restarted relay: same order, and the age counts from the arrival
+    let mut r = M::new(100 * SEC, 2);
+    for (src, flag, body, at) in &seen {
+        let p = r.restore(50 * SEC, *at, &to, &nid(*src), *flag, body);
+        assert!(matches!(p, Push::Stored { .. }), "{p:?}");
+    }
+    assert_eq!(r.pending(&to), m.pending(&to));
+    for (src, flag, body, _) in &seen {
+        let (s, f, b, _) = pop(&mut r, 50 * SEC, 1).unwrap();
+        assert_eq!((s, f, &b), (*src, *flag, body));
+    }
+    // a restored message expires 100 s after it arrived, not after it was restored
+    r.restore(107 * SEC, 6 * SEC, &to, &nid(9), 0, &[1; 10]);
+    r.restore(107 * SEC, 8 * SEC, &to, &nid(9), 1, &[2; 10]);
+    assert_eq!(
+        pop(&mut r, 107 * SEC, 1).map(|p| p.1),
+        Some(1),
+        "the one that arrived at 6 s has expired at 107 s"
+    );
+}
+
+#[test]
 fn the_byte_quota_includes_headers_and_drops_oldest_first() {
     let mut m = M::new(100 * SEC, 1);
     let to = nid(1);

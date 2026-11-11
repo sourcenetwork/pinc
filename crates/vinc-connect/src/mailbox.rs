@@ -179,6 +179,44 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
 
     /// Store `body` from `src` for `node`.
     pub fn push(&mut self, now: u64, node: &NodeId, src: &NodeId, flag: u8, body: &[u8]) -> Push {
+        self.push_at(now, now, node, src, flag, body)
+    }
+
+    /// Store a message that arrived at `at`, which is before `now` when the host restores what it kept across a
+    /// restart: the message expires `max_age` after `at`. The host does not restore a message that has expired, and
+    /// restores a member's messages oldest first so their order and the quota's choice of what to push out hold.
+    pub fn restore(&mut self, now: u64, at: u64, node: &NodeId, src: &NodeId, flag: u8, body: &[u8]) -> Push {
+        self.push_at(now, at, node, src, flag, body)
+    }
+
+    /// The `index`th message held for `node`, oldest first: its body is copied into `buf` and its header returned
+    /// together with the time it arrived. Walks from the oldest, so a host exporting a member's messages reads
+    /// indexes `0..count` ([`Mailbox::pending`]).
+    pub fn peek(&self, node: &NodeId, index: usize, buf: &mut [u8; MAX_PACKET_LEN]) -> Option<(Delivered, u64)> {
+        let h = self.held.get(node)?;
+        if index >= h.count {
+            return None;
+        }
+        let mut at_off = h.head;
+        for i in 0..=index {
+            let mut head = [0u8; ENTRY_HEAD];
+            h.copy_out(at_off, &mut head);
+            let mut r = Reader::new(&head);
+            let src = node::read(&mut r).ok()?;
+            let flag = r.read_u8().ok()?;
+            let len = usize::from(r.read_u16().ok()?);
+            let at = r.read_u64().ok()?;
+            let seq = r.read_u64().ok()?;
+            if i == index {
+                h.copy_out(at_off + ENTRY_HEAD, buf.get_mut(..len)?);
+                return Some((Delivered { src, flag, len, seq }, at));
+            }
+            at_off = (at_off + ENTRY_HEAD + len) % BYTES;
+        }
+        None
+    }
+
+    fn push_at(&mut self, now: u64, at: u64, node: &NodeId, src: &NodeId, flag: u8, body: &[u8]) -> Push {
         let size = ENTRY_HEAD + body.len();
         if body.is_empty() || body.len() > MAX_PACKET_LEN || size > BYTES {
             self.stats.refused_oversize += 1;
@@ -214,7 +252,7 @@ impl<const NODES: usize, const BYTES: usize> Mailbox<NODES, BYTES> {
         let wrote = node::write(&mut w, src)
             .and_then(|()| w.put_u8(flag))
             .and_then(|()| w.put_u16(u16::try_from(body.len()).unwrap_or(0)))
-            .and_then(|()| w.put_u64(now))
+            .and_then(|()| w.put_u64(at))
             .and_then(|()| w.put_u64(*next_seq));
         if wrote.is_err() {
             return Push::TooLarge;

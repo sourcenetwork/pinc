@@ -15,6 +15,13 @@
 //! relay.run().await?;
 //! ```
 //!
+//! # Embedded, not a service
+//!
+//! The relay is a role an ordinary node takes inside its own process, never a separate service: it owns no process,
+//! socket, runtime or timer. It runs on the closures the host passes, so the host can share one UDP socket and one
+//! executor with its other endpoints, await [`Relay::run`] next to them, and stop it with [`Relay::stop`] without
+//! ending anything else. The example binary is only an example of such a host.
+//!
 //! # What it keeps
 //!
 //! The identity is the host's key store. Signed records are handed to a [`Store`] as they are stored and restored from
@@ -56,7 +63,7 @@ pub use self::limits::{CARRIERS, Limits, MAILBOX_BYTES, MAILBOX_MEMBERS, RECORDS
 use self::run::Inner;
 use self::state::Core;
 pub use self::stats::{Closed, Event, Reason, Stats};
-pub use self::store::{MemStore, Store};
+pub use self::store::{Kept, KeptRecord, MemStore, Store};
 use crate::error::{Error, Result};
 use crate::keys::Identity;
 

@@ -468,6 +468,46 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         self.mailbox.members()
     }
 
+    /// The `index`th packet held for `node`, oldest first: its body goes into `buf`; the header and the time it
+    /// arrived come back. A host keeps these across a restart and gives them back with [`Relay::restore_held`].
+    pub fn held_packet(
+        &self,
+        node: &NodeId,
+        index: usize,
+        buf: &mut [u8; crate::carrier::frame::MAX_PACKET_LEN],
+    ) -> Option<(mailbox::Delivered, u64)> {
+        self.mailbox.peek(node, index, buf)
+    }
+
+    /// Put back a packet for `node` that arrived at `at` and was kept across a restart. Restore a member's packets
+    /// oldest first; one older than the mailbox's maximum age is refused.
+    ///
+    /// # Errors
+    /// [`Reject::MailboxRefused`] if the packet is expired, empty, too long, or no member slot is free.
+    pub fn restore_held(
+        &mut self,
+        now: u64,
+        at: u64,
+        node: &NodeId,
+        src: &NodeId,
+        flag: u8,
+        body: &[u8],
+    ) -> Result<(), Reject> {
+        if now.saturating_sub(at) >= self.cfg.mailbox_max_age_ns {
+            return Err(Reject::MailboxRefused);
+        }
+        match self.mailbox.restore(now, at, node, src, flag, body) {
+            mailbox::Push::Stored { .. } => Ok(()),
+            mailbox::Push::TooLarge | mailbox::Push::NoSlot => Err(Reject::MailboxRefused),
+        }
+    }
+
+    /// The time the stored record of `node` was received or last restored, if one is stored (it ends
+    /// [`rule::RECORD_TTL_NS`] later unless refreshed).
+    pub fn record_received(&self, node: &NodeId) -> Option<u64> {
+        self.records.get(node).map(|s| s.received)
+    }
+
     /// How many records are stored.
     pub const fn record_count(&self) -> usize {
         self.records.len()
