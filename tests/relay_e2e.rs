@@ -215,7 +215,7 @@ impl Carriers for Native {
     }
 
     fn submit_open(&self, tag: Tag, peer: &Peer, kind: CarrierKind) {
-        let to = peer.tcp;
+        let to = peer.tcp.or(peer.ws);
         self.spawn(tag, async move {
             Done::Opened(match to {
                 Some(to) => open_wire(to, kind).await.map_err(failed),
@@ -270,15 +270,6 @@ async fn accept_wire(l: &Handle<TcpListener>) -> vinc::Result<(Wire, CarrierKind
 }
 
 impl Host {
-    fn start(ports: &Ports, seed: u8, peers: &[Peer]) -> Self {
-        Self::start_limits(ports, seed, peers, Limits::default(), false)
-    }
-
-    /// Like [`Host::start`], with the carriers in the completion form.
-    fn start_native(ports: &Ports, seed: u8, peers: &[Peer]) -> Self {
-        Self::start_limits(ports, seed, peers, Limits::default(), true)
-    }
-
     /// A relay host whose carriers are closures (`native` false) or the completion form on nuclei (`native` true).
     fn start_limits(ports: &Ports, seed: u8, peers: &[Peer], limits: Limits, native: bool) -> Self {
         if native {
@@ -290,6 +281,7 @@ impl Host {
             async |p: &Peer, kind: CarrierKind| {
                 let to = p
                     .tcp
+                    .or(p.ws)
                     .ok_or_else(|| Error::new(ErrorKind::Unreachable, "the peer has no address"))?;
                 open_wire(to, kind).await.map_err(failed)
             },
@@ -504,40 +496,23 @@ async fn the_same_with_the_carriers_in_the_completion_form_over_whole_messages()
     through_one_relay(CarrierKind::WsMessages, true).await;
 }
 
-#[nuclei::test]
-async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_of_completion_form_hosts_reach_each_other() {
+/// Two relay hosts that list each other with carriers of `kind`: the one with the lower node id dials the other over that
+/// kind, an endpoint is homed at each, and they reach each other through the mesh, then directly.
+async fn through_a_mesh(kind: CarrierKind, native: bool, seeds: [u8; 2]) {
     let (pa, pb) = (bind_ports().await, bind_ports().await);
-    let ids = [
-        Identity::from_seed(&[0x74; 32]).unwrap().node_id(),
-        Identity::from_seed(&[0x75; 32]).unwrap().node_id(),
-    ];
-    let list = [Peer::new(ids[0]).with_tcp(pa.addr), Peer::new(ids[1]).with_tcp(pb.addr)];
-    let host_a = Host::start_native(&pa, 0x74, &list);
-    let host_b = Host::start_native(&pb, 0x75, &list);
-    let a = endpoint!(1, host_a.relay(CarrierKind::Tcp));
-    let b = endpoint!(2, host_b.relay(CarrierKind::Tcp));
-    within(120, async {
-        eventually(60, "the mesh is up and each endpoint has its carrier", || {
-            let (sa, sb) = ((host_a.stats)(), (host_b.stats)());
-            async move { sa.peers_up == 1 && sb.peers_up == 1 && sa.carriers == 1 && sb.carriers == 1 }
-        })
-        .await;
-        let mut stops = [host_a, host_b];
-        reach_and_move!(a, b, stops);
-    })
-    .await;
-}
-
-#[nuclei::test]
-async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_reach_each_other() {
-    let (pa, pb) = (bind_ports().await, bind_ports().await);
-    let ids = [
-        Identity::from_seed(&[0x72; 32]).unwrap().node_id(),
-        Identity::from_seed(&[0x73; 32]).unwrap().node_id(),
-    ];
-    let list = [Peer::new(ids[0]).with_tcp(pa.addr), Peer::new(ids[1]).with_tcp(pb.addr)];
-    let host_a = Host::start(&pa, 0x72, &list);
-    let host_b = Host::start(&pb, 0x73, &list);
+    let ids = seeds.map(|s| Identity::from_seed(&[s; 32]).unwrap().node_id());
+    let listed = |id, addr| {
+        let p = Peer::new(id);
+        match kind {
+            CarrierKind::Tcp => p.with_tcp(addr),
+            CarrierKind::Ws => p.with_ws(addr),
+            CarrierKind::WsMessages => p.with_ws(addr).with_messages(),
+        }
+    };
+    let list = [listed(ids[0], pa.addr), listed(ids[1], pb.addr)];
+    let start = |ports: &Ports, seed| Host::start_limits(ports, seed, &list, Limits::default(), native);
+    let host_a = start(&pa, seeds[0]);
+    let host_b = start(&pb, seeds[1]);
     // `a` knows only the first relay and `b` only the second
     let a = endpoint!(1, host_a.relay(CarrierKind::Tcp));
     let b = endpoint!(2, host_b.relay(CarrierKind::Tcp));
@@ -547,10 +522,39 @@ async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_reach_each_other() {
             async move { sa.peers_up == 1 && sb.peers_up == 1 && sa.carriers == 1 && sb.carriers == 1 }
         })
         .await;
+        assert_eq!(
+            (host_a.stats)().peer_dial_failures + (host_b.stats)().peer_dial_failures,
+            0
+        );
         let mut stops = [host_a, host_b];
         reach_and_move!(a, b, stops);
     })
     .await;
+}
+
+#[nuclei::test]
+async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_reach_each_other() {
+    through_a_mesh(CarrierKind::Tcp, false, [0x72, 0x73]).await;
+}
+
+#[nuclei::test]
+async fn endpoints_homed_at_two_relay_hosts_in_a_mesh_of_completion_form_hosts_reach_each_other() {
+    through_a_mesh(CarrierKind::Tcp, true, [0x74, 0x75]).await;
+}
+
+#[nuclei::test]
+async fn two_relay_hosts_dial_each_other_over_a_websocket_the_relay_frames_itself() {
+    through_a_mesh(CarrierKind::Ws, false, [0x76, 0x77]).await;
+}
+
+#[nuclei::test]
+async fn the_same_with_hosts_in_the_completion_form() {
+    through_a_mesh(CarrierKind::Ws, true, [0x78, 0x79]).await;
+}
+
+#[nuclei::test]
+async fn two_relay_hosts_dial_each_other_over_whole_message_websockets() {
+    through_a_mesh(CarrierKind::WsMessages, false, [0x7a, 0x7b]).await;
 }
 
 /// What one run of the indication measured.
@@ -661,27 +665,34 @@ async fn measure(relayed_only: bool, idle: usize, native: bool) -> Numbers {
     numbers
 }
 
-/// An indication of what the relay costs, printed and not asserted: run with `--run-ignored all --no-capture` on a
-/// machine that is not busy; the numbers of a loaded host are not to be quoted.
-#[test]
-#[ignore = "an indication on the machine it runs on, not a check"]
-fn what_the_relay_costs() {
-    on_big_stack(|| async {
-        for (label, relayed_only, idle, native) in [
-            ("direct", false, 0, true),
-            ("relayed, closures", true, 0, false),
-            ("relayed, closures, 250 idle carriers", true, 250, false),
-            ("relayed, closures, 1000 idle carriers", true, 1000, false),
-            ("relayed, completions", true, 0, true),
-            ("relayed, completions, 250 idle carriers", true, 250, true),
-            ("relayed, completions, 1000 idle carriers", true, 1000, true),
-        ] {
-            let n = measure(relayed_only, idle, native).await;
-            let ops = n.stats.stream_ops / n.stats.wakes.max(1);
-            eprintln!(
-                "BENCH {label}: 64 B round trip median {} us, p99 {} us, mean {} us; 64 MiB at {:.1} MiB/s; the relay woke {} times and handled {ops} stream operations per wake",
-                n.median_us, n.p99_us, n.mean_us, n.mib_s, n.stats.wakes
-            );
+/// One row of the indication: print what the relay costs for `label`.
+async fn row(label: &str, relayed_only: bool, idle: usize, native: bool) {
+    let n = measure(relayed_only, idle, native).await;
+    let ops = n.stats.stream_ops / n.stats.wakes.max(1);
+    eprintln!(
+        "BENCH {label}: 64 B round trip median {} us, p99 {} us, mean {} us; 64 MiB at {:.1} MiB/s; the relay woke {} times and handled {ops} stream operations per wake",
+        n.median_us, n.p99_us, n.mean_us, n.mib_s, n.stats.wakes
+    );
+}
+
+macro_rules! rows {
+    ($($name:ident: $label:expr, $relayed_only:expr, $idle:expr, $native:expr;)+) => {$(
+        /// An indication of what the relay costs, printed and not asserted: run with `--run-ignored only --no-capture` on
+        /// a machine that is not busy; the numbers of a loaded host are not to be quoted.
+        #[test]
+        #[ignore = "an indication on the machine it runs on, not a check"]
+        fn $name() {
+            on_big_stack(|| row($label, $relayed_only, $idle, $native));
         }
-    });
+    )+};
+}
+
+rows! {
+    cost_direct: "direct", false, 0, true;
+    cost_relayed_closures: "relayed, closures", true, 0, false;
+    cost_relayed_closures_250: "relayed, closures, 250 idle carriers", true, 250, false;
+    cost_relayed_closures_1000: "relayed, closures, 1000 idle carriers", true, 1000, false;
+    cost_relayed_completions: "relayed, completions", true, 0, true;
+    cost_relayed_completions_250: "relayed, completions, 250 idle carriers", true, 250, true;
+    cost_relayed_completions_1000: "relayed, completions, 1000 idle carriers", true, 1000, true;
 }
