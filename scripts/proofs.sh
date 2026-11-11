@@ -349,7 +349,6 @@ par run_tlc streams_live Streams Streams_live
 par run_tlc streams_live_mid Streams Streams_live_mid
 par run_tlc streams_live_ext Streams Streams_live_ext
 par witness_live_tlc streams_live_stall Streams Streams_live_stall
-par witness_live_tlc streams_live_stall Streams Streams_live_stall
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags
