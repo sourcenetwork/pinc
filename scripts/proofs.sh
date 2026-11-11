@@ -344,6 +344,10 @@ par witness_live_tlc streams_held_w Streams Streams_held_w
 par witness_tlc streams_two_w Streams Streams_two_w NoJump
 par run_tlc streams_local Streams Streams_local
 par run_tlc streams_local_ctl Streams Streams_local_ctl
+par run_tlc streams_lazy_ledger Streams Streams_lazy_ledger
+par run_tlc streams_lazy_two Streams Streams_lazy_two
+par run_tlc streams_lazy_jump Streams Streams_lazy_jump
+par witness_tlc streams_lazy_over_w Streams Streams_lazy_over_w LedgerAlways
 par witness_tlc streams_stall Streams Streams_stall NoStuckGrant
 par run_tlc streams_live Streams Streams_live
 par run_tlc streams_live_mid Streams Streams_live_mid

@@ -5,11 +5,12 @@ import Vinc.TransportStreamsGrant
 
 Unbounded theorems about `Vinc.TransportStreams.openLocal`, which is `Streams::open_stream` for a bidirectional
 stream. Its receive window is the one the connection advertised, so it cannot be made smaller: the stream opens only
-when `windowsFit` says the window, in whole chunks, fits beside the credit already granted, the same test a peer
-stream meets in `admits`.
+when `windowsFit` says its first charge fits beside the credit already granted, the same test a peer stream beyond
+the credit meets in `admits`; the whole window is counted from the stream's first byte.
 
-* `poolDemand_fresh`: a fresh receive half (read position 0, nothing held, no final size) with credit up to `l`
-  claims at most `l` rounded up to whole chunks, which is what `windowsFit` counts for it.
+* `poolDemand_fresh`, `fresh_unreceived_le`: a fresh receive half (read position 0, nothing held, no final size)
+  with credit up to `l` claims at most `l` rounded up to whole chunks; having carried no data, it counts at most its
+  first charge, which is what `windowsFit` counts for it.
 * `openLocal_ledger`: if the credit granted, with the windows kept for the credit given to the peer, fits in the pool
   before, it fits after a local stream opens (or is refused). Together with `grantOne_ledger` and the peer admission,
   no way of granting credit, local streams included, takes the credit beyond the pool bytes left. A free slot is a
@@ -37,13 +38,36 @@ theorem allocSlot_tab (p : P) (T : Tab) (id i : Nat) (hf : firstFree T = some i)
     ∃ r : Slot, (allocSlot p T id).slots = T.slots.set i r ∧ (allocSlot p T id).ext = T.ext ∧
       (allocSlot p T id).rn = T.rn ∧ (allocSlot p T id).adv = T.adv ∧
       r.open_ = (!isUni id || !isLocal id) ∧ r.limit = (if (!isUni id || !isLocal id) = true then p.sw else 0) ∧
-      r.read = 0 ∧ r.held = [] ∧ r.fin = none := by
+      r.read = 0 ∧ r.held = [] ∧ r.fin = none ∧ r.hi = 0 ∧ r.id = some id := by
   refine ⟨{ Slot.new with id := some id, open_ := !isUni id || !isLocal id,
                           limit := if (!isUni id || !isLocal id) = true then p.sw else 0,
                           size := if (!isUni id || !isLocal id) = true then p.sw else 0,
-                          sdone := !(!isUni id || isLocal id) }, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl⟩ <;>
+                          sdone := !(!isUni id || isLocal id) }, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ <;>
   · simp only [allocSlot, hf, setSlot]
     split <;> rfl
+
+/-- A receiving slot `allocSlot` opens counts at most its first charge in the ledger: it has carried no data, so the
+ledger counts the first `firstk` chunks of its window, or the window if smaller. -/
+theorem fresh_unreceived_le (p : P) (r : Slot) (hch : 0 < p.ch) (ho : r.open_ = true) (hlim : r.limit = p.sw)
+    (hread : r.read = 0) (hheld : r.held = []) (hfin : r.fin = none) (hhi : r.hi = 0) :
+    r.unreceived p ≤ p.firstW := by
+  have hd := poolDemand_fresh p r (min p.sw (p.firstk * p.ch)) hch ho hread hheld hfin
+  have hm : r.chargeTo p r.limit = min p.sw (p.firstk * p.ch) := by
+    simp [Slot.chargeTo, hhi, hlim]
+  have hu : r.unreceived p = poolDemand p r (min p.sw (p.firstk * p.ch)) := by
+    unfold Slot.unreceived Slot.demandTo
+    rw [hm]
+  rw [hu]
+  refine Nat.le_trans hd ?_
+  unfold P.firstW P.winC
+  refine Nat.le_min.mpr ⟨?_, ?_⟩
+  · exact Nat.mul_le_mul_right _ (Nat.div_le_div_right (by omega))
+  · have h1 : (min p.sw (p.firstk * p.ch) + p.ch - 1) / p.ch < p.firstk + 1 := by
+      apply (Nat.div_lt_iff_lt_mul hch).2
+      rw [Nat.add_mul, Nat.one_mul]
+      have := Nat.min_le_right p.sw (p.firstk * p.ch)
+      omega
+    exact Nat.mul_le_mul_right _ (by omega)
 
 /-- Opening a local stream keeps the credit granted within the pool bytes left. -/
 theorem openLocal_ledger (p : P) (T : Tab) (hch : 0 < p.ch)
@@ -77,17 +101,13 @@ theorem openLocal_ledger (p : P) (T : Tab) (hch : 0 < p.ch)
       have hid2 : isLocal (T.lo.1 * 4 + 1) = true := by
         have : (T.lo.1 * 4 + 1) % 2 = 1 := by omega
         simp [isLocal, this]
-      obtain ⟨r, hsl, hext, hrn, hadv, ho, hlim, hread, hheld, hfin⟩ := allocSlot_tab p T (T.lo.1 * 4 + 1) i hf
+      obtain ⟨r, hsl, hext, hrn, hadv, ho, hlim, hread, hheld, hfin, hhi, -⟩ := allocSlot_tab p T (T.lo.1 * 4 + 1) i hf
       simp [hid1, hid2] at ho hlim
       have hsu := sum_map_set (fun s => s.unreceived p) T.slots i r hlt
       have hsh := sum_map_set (fun s => s.held.length) T.slots i r hlt
       rw [hfi] at hsu hsh
-      have hu0 : Slot.unreceived p Slot.new = 0 := by simp [Slot.unreceived, poolDemand, Slot.new]
-      have hur : r.unreceived p ≤ p.winC := by
-        have := poolDemand_fresh p r p.sw hch ho hread hheld hfin
-        unfold Slot.unreceived P.winC
-        rw [hlim]
-        exact this
+      have hu0 : Slot.unreceived p Slot.new = 0 := by simp [Slot.unreceived, Slot.demandTo, poolDemand, Slot.new]
+      have hur := fresh_unreceived_le p r hch ho hlim hread hheld hfin hhi
       simp only [hu0, hheld, List.length_nil] at hsu hsh
       have hh0 : (Slot.new).held.length = 0 := rfl
       simp only [hh0] at hsh

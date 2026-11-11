@@ -5,9 +5,10 @@ import Vinc.TransportStreamsGrant
 
 Unbounded theorems about the receive half and the table of `Vinc.TransportStreams`.
 
-* `missing_le`, `frame_needs_no_more_than_ledger`: the pool chunks a frame inside the credit still has to take are
-  at most what the ledger counted for the stream (`pool_demand`: the chunks of the span from the read position to
-  the limit that are not held, so holes below the highest byte are counted). With `grantOne_ledger`
+* `missing_le`, `frame_needs_no_more_than_ledger`: the pool chunks a frame inside the span the ledger counts still has
+  to take are at most what the ledger counted for the stream (`pool_demand` up to `chargeTo`: the chunks of the span
+  from the read position to the limit that are not held, so holes below the highest byte are counted; the first
+  `firstk` chunks only while the stream has carried no data). With `grantOne_ledger`
   (`Vinc.TransportStreamsGrant`), which keeps the sum of those counts within the pool bytes left whenever a limit is
   raised, credit never exceeds the ledger (POOL_GRANT).
 * `admits_cap`, `locate_error_pure`, `locate_held_back`, `frame_held_back`, `locate_ok_next`: a peer stream is
@@ -56,20 +57,22 @@ theorem missing_le (a b : Nat) (held : List Nat) (hnd : held.Nodup) (hb : ∀ k 
   simp at this
   omega
 
-/-- A frame inside the credit needs no more fresh chunks than the ledger counts for its stream. -/
+/-- A frame inside the span the ledger counts (`chargeTo`: the whole window of a stream that has carried data, the first
+`firstk` chunks of one that has not) needs no more fresh chunks than the ledger counts for its stream. -/
 theorem frame_needs_no_more_than_ledger (p : P) (r : Slot) (hch : 0 < p.ch) (hnd : r.held.Nodup)
-    (hopen : r.open_ = true) (hr : r.read < r.reach r.limit)
-    (hheld : ∀ k ∈ r.held, r.read / p.ch ≤ k ∧ k ≤ (r.reach r.limit - 1) / p.ch)
-    (lo e : Nat) (hlo : r.read ≤ lo) (hlt : lo < e) (he : e ≤ r.reach r.limit) :
+    (hopen : r.open_ = true) (hr : r.read < r.reach (r.chargeTo p r.limit))
+    (hheld : ∀ k ∈ r.held, r.read / p.ch ≤ k ∧ k ≤ (r.reach (r.chargeTo p r.limit) - 1) / p.ch)
+    (lo e : Nat) (hlo : r.read ≤ lo) (hlt : lo < e) (he : e ≤ r.reach (r.chargeTo p r.limit)) :
     (((List.range ((e - 1) / p.ch + 1 - lo / p.ch)).map (lo / p.ch + ·)).filter
         (fun k => !r.held.contains k)).length * p.ch ≤ r.unreceived p := by
   have h1 : r.read / p.ch ≤ lo / p.ch := Nat.div_le_div_right hlo
-  have h2 : (e - 1) / p.ch ≤ (r.reach r.limit - 1) / p.ch := Nat.div_le_div_right (by omega)
-  have h3 : r.read / p.ch ≤ (r.reach r.limit - 1) / p.ch := Nat.div_le_div_right (by omega)
-  have key := missing_le (r.read / p.ch) ((r.reach r.limit - 1) / p.ch) r.held hnd hheld (lo / p.ch)
+  have h2 : (e - 1) / p.ch ≤ (r.reach (r.chargeTo p r.limit) - 1) / p.ch := Nat.div_le_div_right (by omega)
+  have h3 : r.read / p.ch ≤ (r.reach (r.chargeTo p r.limit) - 1) / p.ch := Nat.div_le_div_right (by omega)
+  have key := missing_le (r.read / p.ch) ((r.reach (r.chargeTo p r.limit) - 1) / p.ch) r.held hnd hheld (lo / p.ch)
     ((e - 1) / p.ch) h1 h2
-  have hd : r.unreceived p = ((r.reach r.limit - 1) / p.ch - r.read / p.ch + 1 - r.held.length) * p.ch := by
-    unfold Slot.unreceived poolDemand
+  have hd : r.unreceived p
+      = ((r.reach (r.chargeTo p r.limit) - 1) / p.ch - r.read / p.ch + 1 - r.held.length) * p.ch := by
+    unfold Slot.unreceived Slot.demandTo poolDemand
     simp [hopen, Nat.not_le.mpr hr]
   rw [hd]
   apply Nat.mul_le_mul_right

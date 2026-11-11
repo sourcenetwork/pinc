@@ -1,5 +1,7 @@
 //! Stream credit end to end: an opener that opens far more streams than the receiver's pool holds waits for the
-//! credit instead of sending them, every stream arrives with its bytes, and the receiver holds none back.
+//! credit instead of sending them, every stream arrives with its bytes, and the receiver holds none back; a frame that
+//! opens many silent streams at once is admitted; and, on a table, a window charged to the ledger from its stream's
+//! first byte.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -12,6 +14,35 @@ use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::credit_for_streams;
 use vinc_transport::stream;
+use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE};
+use vinc_transport::stream::{ControlFrame, StreamError};
+
+type Table = stream::Streams<stream::NoSource, 8, 1025>;
+
+/// A server table with the stream credit on and windows of `window` chunks, over a pool of `chunks`.
+fn table(chunks: usize, window: u64) -> (BufferPool<'static>, Box<Table>) {
+    let pool = BufferPool::new_boxed(chunks);
+    let mut cfg = stream::Config::new(false);
+    cfg.initial_stream_window = window * CHUNK_SIZE as u64;
+    cfg.peer = stream::PeerLimits {
+        window: 1 << 20,
+        max_streams: 100,
+    };
+    let t = Box::new(Table::new(&cfg, &pool));
+    (pool, t)
+}
+
+/// Read a stream to its end and let it see the end; returns the bytes read.
+fn read_to_end(t: &mut Table, pool: &mut BufferPool<'_>, id: u64) -> usize {
+    let mut n = 0;
+    while let Some(c) = t.read_chunk(pool, id) {
+        let k = c.len();
+        n += k;
+        t.consume(pool, id, k, 0, 0).unwrap();
+    }
+    t.consume(pool, id, 0, 0, 0).unwrap();
+    n
+}
 
 /// Streams the opener wants open in all; the receiver's pool holds the windows of a few.
 const STREAMS: usize = 60;
@@ -30,7 +61,7 @@ fn an_opener_far_beyond_the_credit_delivers_every_stream_and_the_receiver_holds_
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         w.cfg.credit = credit_for_streams(&config(false));
-        // The receiver's pool is 16 chunks: windows of 4 chunks, so it tells the opener it admits two to start.
+        // The receiver's pool is 16 chunks: it tells the opener it admits a few to start, fewer than the streams wanted.
         let (mut sa, mut sb) = (
             Store::<RING>::sized(256, &config(true)),
             Store::<RING>::sized(16, &config(false)),
@@ -77,4 +108,94 @@ fn an_opener_far_beyond_the_credit_delivers_every_stream_and_the_receiver_holds_
         }
         assert_eq!(net.b.conn.stats().held_back, 0, "the receiver held a stream back");
     });
+}
+
+/// A frame for a high stream index opens every skipped lower index at once. The skipped streams cost the pool only what
+/// the ledger counts for a stream that has not carried data, which the credit already set aside: nothing is refused.
+#[test]
+fn a_first_frame_on_the_highest_of_many_streams_opens_the_silent_ones_below_it_without_a_refusal() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        // A pool of 128 chunks: the default window is cut to half of it (64 chunks), so two windows charged whole fill it.
+        let (mut sa, mut sb) = (Store::with_chunks(true, 1024), Store::with_chunks(false, 128));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(43, Params::new(5 * MS)));
+        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+        net.run(net.now + SEC, |_| false);
+        let credit = usize::from(net.a.conn.peer_credit().max_streams);
+        assert!(credit >= 12, "the handshake credit is {credit}");
+        let ids: Vec<u64> = (0..12).map(|_| net.a.conn.open_uni().unwrap()).collect();
+        let last = *ids.last().unwrap();
+        let data = pattern(LEN, 77);
+        assert_eq!(net.a.conn.write(last, &data).unwrap(), LEN);
+        net.a.conn.finish(last).unwrap();
+        let done = net.run(net.now + 30 * SEC, |n| n.b.fin.contains(&last));
+        assert!(done, "the stream with the high index was not delivered");
+        assert!(net.b.read[&last] == data, "the stream's bytes differ");
+        assert_eq!(net.b.conn.stats().held_back, 0, "a skipped stream was refused");
+    });
+}
+
+/// The ledger counts the first four chunks of a stream that has carried no data and its whole window from its first
+/// byte. A stream inside the credit is admitted however full the ledger is, skipped streams included, and nothing more
+/// is committed (no stream of ours, no raise of the credit, no stream beyond it) until the ledger fits again.
+#[test]
+fn a_window_is_charged_from_its_first_byte_and_the_credit_admits_past_a_full_ledger() {
+    let chunk = CHUNK_SIZE as u64;
+    // Windows of 16 chunks against a pool of 32: charged at admission, two streams would fill it.
+    let (mut pool, mut t) = table(32, 16);
+    assert_eq!(
+        t.advertised_streams(),
+        4,
+        "eight first charges fit: half of them, and 4 of the 8 slots"
+    );
+    t.on_stream_frame(&mut pool, 0, 0, &[1], false).unwrap();
+    assert_eq!(
+        t.granted_unreceived(),
+        15 * chunk,
+        "the whole window less the chunk it holds"
+    );
+    // The second window does not fit beside the first and the credit left; its bytes are stored all the same.
+    t.on_stream_frame(&mut pool, 4, 0, &[2], false).unwrap();
+    // A frame on index 3 opens index 2 as well, inside the credit: admitted, the silent one counted at four chunks.
+    t.on_stream_frame(&mut pool, 12, 0, &[3], false).unwrap();
+    assert_eq!(t.open_streams(), 4);
+    assert_eq!(t.granted_unreceived(), (3 * 15 + 4) * chunk);
+    assert!(
+        t.granted_unreceived() > pool.available_bytes(),
+        "the ledger is past the pool"
+    );
+    assert_eq!(t.stats().held_back, 0);
+    // Nothing more is committed while the ledger is past the pool.
+    assert_eq!(t.open_stream(&pool, true), Err(StreamError::Exhausted));
+    t.regrant(&pool);
+    assert!(std::iter::from_fn(|| t.pending_control()).all(|f| !matches!(f, ControlFrame::MaxStreams { .. })));
+    assert_eq!(
+        t.on_stream_frame(&mut pool, 16, 0, &[4], false),
+        Err(StreamError::Exhausted),
+        "a stream beyond the credit is held back"
+    );
+    assert_eq!(t.stats().held_back, 1);
+    // The silent stream stores what arrives while chunks are free.
+    t.on_stream_frame(&mut pool, 8, 0, &[5; 1000], false).unwrap();
+    // The streams end and are read, our halves end too: the ledger drains and the credit is raised.
+    for (id, len) in [(0u64, 1usize), (4, 1), (8, 1000), (12, 1)] {
+        t.on_stream_frame(&mut pool, id, len as u64, &[], true).unwrap();
+        assert_eq!(read_to_end(&mut t, &mut pool, id), len);
+        t.finish(id).unwrap();
+    }
+    while let Some(c) = t.next_stream_frame(1200) {
+        let mut buf = vec![0u8; c.len];
+        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);
+    }
+    assert_eq!(t.open_streams(), 0);
+    assert_eq!(t.granted_unreceived(), 0);
+    t.regrant(&pool);
+    let raise = std::iter::from_fn(|| t.pending_control()).find_map(|f| match f {
+        ControlFrame::MaxStreams { limit } => Some(limit),
+        _ => None,
+    });
+    assert_eq!(raise, Some(8), "four admitted and room for four more");
+    t.on_stream_frame(&mut pool, 16, 0, &[4], false).unwrap();
+    assert_eq!(t.stats().held_back, 1);
 }

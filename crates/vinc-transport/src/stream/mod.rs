@@ -6,8 +6,17 @@
 //!
 //! Invariants:
 //! - every chunk a stream, queue or buffer holds is charged to the pool and returned when its owner closes or drains;
-//! - a receive window grant (and the initial window of an admitted peer stream) is made only while the credit already
-//!   granted and not yet received, plus the new grant, fits in the bytes the pool has left;
+//! - the bytes buffered never exceed the pool: a frame takes free chunks or is held back (answered with nothing, so its
+//!   sender repeats it) and counted in `StreamStats::held_back`;
+//! - the pool ledger counts, for each receive half, the chunks its credit may still claim: the first [`FIRST_CHARGE`]
+//!   bytes of its window while the stream has carried no data, its whole window from the first byte on; the stream
+//!   credit keeps [`FIRST_CHARGE`] for each stream the peer may still open. A window grant, a raise of the stream
+//!   credit and a stream we open are made only while the ledger, with them, fits the bytes the pool has left. A peer
+//!   stream inside the credit is admitted with no pool test (it takes no chunk, and the credit kept its first charge),
+//!   so a frame that opens many skipped streams at once is never held back for them. The ledger passes the pool only
+//!   when streams start to carry data whose windows do not fit together, or when other users of the pool take chunks;
+//!   nothing more is granted until it fits again, so each of those streams stays within the window it has. The window
+//!   the peer may use is the full one from the first byte, and the sum of the windows may exceed the pool;
 //! - a limit, once advertised or received, never shrinks, and a final size, once fixed, never changes;
 //! - the number of live streams each side opened never exceeds its cap; an excess peer stream is stored nowhere and
 //!   its packet goes unacknowledged, so its opener retransmits it from the start once there is room;
@@ -46,6 +55,9 @@ pub const DEFAULT_MAX_STREAMS: u64 = 100;
 pub const DEFAULT_INITIAL_WINDOW: u64 = 1_310_720;
 /// The default per-stream window ceiling (16 MiB).
 pub const DEFAULT_MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
+/// The bytes of a receive window the pool ledger counts while the stream has carried no data (4 chunks), and the room
+/// the stream credit keeps for each stream the peer may still open. The whole window is counted from the first byte.
+pub const FIRST_CHARGE: u64 = 4 * pool::CHUNK_SIZE as u64;
 /// The urgency a stream starts with; a lower number is served first.
 pub const DEFAULT_URGENCY: u8 = 3;
 /// The most disjoint ranges a stream tracks per range map of the send side (acknowledged, lost).
@@ -261,7 +273,8 @@ impl Config {
 pub struct StreamStats {
     /// Range maps that were full, so a lost range was widened or an acknowledgement turned back into a retransmission.
     pub range_overflows: u64,
-    /// Peer streams held back for want of a slot or of room in the pool (their packet went unacknowledged). Nonzero
-    /// means the peer opened streams beyond the credit it was given, or other users of the pool took the room.
+    /// Peer stream frames held back for want of a slot or of a free chunk in the pool (their packet went
+    /// unacknowledged). Nonzero means the peer opened streams beyond the credit it was given, or the pool was full:
+    /// other users took it, or more windows were in use at once than it holds.
     pub held_back: u64,
 }

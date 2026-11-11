@@ -10,14 +10,22 @@
 (*    without holes (read <= contig, the readable bytes are held in the    *)
 (*    pool), the read position never moves back, the stored ranges are     *)
 (*    sorted, disjoint, non-adjacent and at most RR;                       *)
-(*  - POOL_GRANT: the pool is never over its budget; a limit is     *)
-(*    raised and a peer stream admitted only when the credit granted and   *)
-(*    not yet received, with the new grant, fits in the bytes the pool     *)
-(*    has left (LedgerOnGrant); the held chunks lie inside the span the    *)
-(*    credit covers, so a frame inside the credit never needs more chunks  *)
-(*    than the ledger counted (HeldInSpan, NeedCovered); when the pool has *)
-(*    no other user the ledger holds in every state (LedgerAlways, config  *)
-(*    Streams_ledger, with NeedCovered);                                   *)
+(*  - POOL_GRANT: the pool is never over its budget; a limit is raised,   *)
+(*    the stream credit raised and a local stream opened only when the     *)
+(*    ledger (the credit granted and not yet received, as Charged counts   *)
+(*    it, with the first charges kept for the credit) fits in the bytes    *)
+(*    the pool has left with them (LedgerOnGrant); an admission inside the *)
+(*    credit never adds to the ledger, one beyond it only within the pool  *)
+(*    (LedgerOnAdmit); the ledger passes the pool, or goes further past    *)
+(*    it, only when a stream carries its first data or another user takes  *)
+(*    chunks (OverOnlyByFirstData); the held chunks lie inside the span    *)
+(*    the credit covers, so a frame inside the counted span never needs    *)
+(*    more chunks than the ledger counted (HeldInSpan, NeedCovered); when  *)
+(*    the pool has no other user and FIRSTK covers the windows the ledger  *)
+(*    holds in every state (LedgerAlways, Streams_ledger, Streams_two,     *)
+(*    Streams_local); a peer stream inside the credit is never held back,  *)
+(*    whatever the pool holds (NoHeldWithinCredit), and the Streams_lazy   *)
+(*    configs check all of it with a window larger than FIRSTK;            *)
 (*  - RATE_WINDOW: the window size stays between the initial window *)
 (*    and the ceiling, which is at most half the pool; the limit stays     *)
 (*    within one window of the read position;                              *)
@@ -45,8 +53,10 @@
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
+\* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
+CONSTANT STOPS
 VARIABLES T, clock
 vars == <<T, clock>>
 
@@ -78,9 +88,9 @@ FinishOp == \E id \in Ids, e2 \in 0..T.ext, dn \in BOOLEAN : T' = Finish(T, id, 
 ExtOp == \E e2 \in 0..EXTMAX : T' = ExtTo(T, e2) /\ UNCHANGED clock
 CloseOp == \E e2 \in 0..T.ext : T' = CloseAll(T, e2) /\ UNCHANGED clock
 
-Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ LostResetOp \/ AckedResetOp \/ OpenOp
-        \/ AppResetOp \/ FinishOp \/ ExtOp \/ CloseOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp
+Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ OpenOp \/ FinishOp \/ ExtOp \/ CloseOp
         \/ MaxStreamsOp \/ LostMstsOp
+        \/ (STOPS /\ (LostResetOp \/ AckedResetOp \/ AppResetOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp))
 Spec == Init /\ [][Next]_vars
 
 \* the other users of the pool eventually let go (the liveness config only)
@@ -145,21 +155,26 @@ NoMissedGrant == \A i \in Live : T.slots[i].open => (Due(T.slots[i]) = -1 \/ T.s
 GrantFits(i) == LET r == T.slots[i]
                     r1 == [r EXCEPT !.size = Max(r.size, T.tgt)]
                     c == Due(r1)
-                IN c # -1 /\ GU(T) - Unreceived(r) + PoolDemand(r1, c) + Resv(T) <= Avail(T)
+                IN c # -1 /\ GU(T) - Unreceived(r) + PoolDemand(r1, Charged(r1, c)) + Resv(T) <= Avail(T)
 \* a deferred grant that now fits is never left waiting for a consume
 NoStuckGrant == \A i \in Live : T.slots[i].defer => ~GrantFits(i)
-\* the ledger in every state: holds when no other user shares the pool and every stream was admitted; the windows kept
-\* in the pool for the credit given to the peer count as granted
+\* the ledger in every state: holds when no other user shares the pool and every window fits when its stream first
+\* carries data (FIRSTK covers the windows); the first charges kept for the credit given to the peer count as granted
 LedgerAlways == GU(T) + Resv(T) <= Avail(T)
 \* the opener never has more streams open in all than the peer gave credit for
 OpenerInside == T.lo[0] + T.lo[1] <= T.ad.lim
-\* a peer stream that arrives inside the credit it was given is never held back (no other user of the pool, and no
-\* stream of ours taking the slots)
+\* a peer stream that arrives inside the credit it was given is never held back, whatever the pool holds, however many
+\* lower ids its frame opens with it
 NoHeldWithinCredit == \A id \in RemIds : LET L == Locate(T, id) IN
     (Idx(id) >= T.rn[Class(id)] /\ AdmittedN(T) + (Idx(id) - T.rn[Class(id)] + 1) <= T.ad.adv) => L.err # "Exhausted"
-\* a frame inside the credit needs no more chunks than the ledger counted for its stream
+\* an admission (the streams a frame opens, before its data) never takes the ledger past the pool, nor further past it:
+\* inside the credit it adds nothing, beyond it the first charges must fit
+LedgerOnAdmit == \A id \in RemIds : LET L == Locate(T, id) IN
+    (L.err = "ok" /\ L.t.rl > T.rl) => GU(L.t) + Resv(L.t) <= Max(GU(T) + Resv(T), Avail(T))
+\* a frame inside the span the ledger counts (the whole window of a stream that carried data, the first FIRSTK chunks
+\* of one that has not) needs no more chunks than the ledger counted for its stream
 NeedCovered == \A i \in Live : T.slots[i].open =>
-    \A e \in (T.slots[i].read + 1)..Reach(T.slots[i]) :
+    \A e \in (T.slots[i].read + 1)..Charged(T.slots[i], Reach(T.slots[i])) :
         Cardinality({k \in (T.slots[i].read \div CH)..((e - 1) \div CH) : k \notin T.slots[i].held}) * CH
             <= Unreceived(T.slots[i])
 
@@ -177,9 +192,15 @@ FinalFixed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].fin # -1) => T'.slots
 \* a limit moves only by at least an eighth of the window
 EighthRule == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) =>
                     T'.slots[i].limit >= T.slots[i].limit + T'.slots[i].size \div 8]_vars
-\* a grant or an admission leaves the credit within the pool
-LedgerOnGrant == [][((\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) \/ T'.rl > T.rl)
+\* a grant, a raise of the stream credit or a local stream leaves the ledger within the pool
+LedgerOnGrant == [][((\E i \in 1..N : SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit)
+                     \/ T'.ad.adv > T.ad.adv \/ T'.ll > T.ll)
                     => GU(T') + Resv(T') <= Avail(T')]_vars
+\* the ledger passes the pool, or goes further past it, only when a stream carries its first data or another user of
+\* the pool takes chunks
+Excess(S) == GU(S) + Resv(S) - Avail(S)
+FirstData == \E i \in 1..N : T'.slots[i].hi > 0 /\ (T.slots[i].hi = 0 \/ T.slots[i].id # T'.slots[i].id)
+OverOnlyByFirstData == [][Excess(T') > Max(Excess(T), 0) => (FirstData \/ T'.ext > T.ext)]_vars
 \* the credit and the limit on what we may open only grow
 CreditMonotone == [][T'.ad.adv >= T.ad.adv /\ T'.ad.lim >= T.ad.lim]_vars
 \* a pool charge happens only within the budget

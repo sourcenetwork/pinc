@@ -15,8 +15,8 @@ use super::pool::{BufferPool, CHUNK_SIZE};
 use super::recv::Recv;
 use super::send::Send;
 use super::{
-    Config, ControlFrame, DEFAULT_URGENCY, NoSource, PeerLimits, RecvStatus, StreamChunk, StreamError, StreamId,
-    StreamSource, StreamStats, is_uni,
+    Config, ControlFrame, DEFAULT_URGENCY, FIRST_CHARGE, NoSource, PeerLimits, RecvStatus, StreamChunk, StreamError,
+    StreamId, StreamSource, StreamStats, is_uni,
 };
 
 const NONE: u64 = u64::MAX;
@@ -31,9 +31,9 @@ struct Slot<S, const C: usize> {
     urgency: u8,
 }
 
-/// How many of `fit` initial windows the credit may promise: half of them, but never more than leave three windows for
-/// the streams already open (their windows slide through whole chunks) and for our own, and one when a window fits at
-/// all. A pool of 4 windows promises 1, one of 6 promises 3, one of 25 promises 12.
+/// How many of `fit` first charges the credit may promise: half of them, but never more than leave three for the
+/// streams already open (their windows slide through whole chunks) and for our own, and one when a charge fits at all.
+/// A pool of 4 promises 1, one of 6 promises 3, one of 25 promises 12.
 const fn admit_fit(fit: u64) -> u64 {
     let spare = fit.saturating_sub(3);
     let half = fit / 2;
@@ -128,10 +128,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if self.admit.on { self.admit_room(pool) } else { 0 }
     }
 
-    /// The initial receive window in whole chunks, in bytes (at least one chunk).
-    fn window_bytes(&self) -> u64 {
+    /// What the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit: its
+    /// initial window or [`FIRST_CHARGE`], whichever is less, in whole chunks, at least one.
+    fn first_charge(&self) -> u64 {
         let chunk = CHUNK_SIZE as u64;
-        self.stream_window.div_ceil(chunk).max(1) * chunk
+        self.stream_window.min(FIRST_CHARGE).div_ceil(chunk).max(1) * chunk
     }
 
     /// The streams admitted in all, of both kinds.
@@ -351,11 +352,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// How many more peer streams could be admitted now, counting the credit already given: the live-stream cap (at
     /// most half the slots, so the rest stay free for the streams we open) less the live ones, the free slots, and as
-    /// many initial windows as [`admit_fit`] allows of those that fit in the pool bytes left beside the credit already
+    /// many first charges as [`admit_fit`] allows of those that fit in the pool bytes left beside the credit already
     /// granted.
     fn admit_room(&self, pool: &BufferPool<'_>) -> u64 {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
-        let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.window_bytes();
+        let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.first_charge();
         let cap = self.max_remote.min((N as u64 / 2).max(1));
         cap.saturating_sub(self.remote_live).min(free).min(admit_fit(fit))
     }
@@ -392,14 +393,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         Ok(i)
     }
 
-    /// The pool bytes reserved for the stream credit given to the peer and not yet used: the initial windows of the
-    /// streams it may still open. Window grants and local streams leave them alone, so a stream inside the credit
-    /// always finds its window.
+    /// The pool bytes reserved for the stream credit given to the peer and not yet used: the first charges of the
+    /// streams it may still open. Window grants and local streams leave them alone.
     fn reserved(&self) -> u64 {
         self.admit
             .adv
             .saturating_sub(self.admitted())
-            .saturating_mul(self.window_bytes())
+            .saturating_mul(self.first_charge())
     }
 
     /// The streams the peer may still open inside the credit.
@@ -407,21 +407,23 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.admit.adv.saturating_sub(self.admitted())
     }
 
-    /// Whether `streams` initial receive windows, in whole chunks, fit in the pool bytes left beside the credit
-    /// already granted. The one test for a peer stream and for a local one, so they cannot differ.
+    /// Whether the first charges of `streams` new streams fit in the pool bytes left beside the credit already
+    /// granted. The one test for a peer stream beyond the credit and for a local one, so they cannot differ.
     fn windows_fit(&self, pool: &BufferPool<'_>, streams: u64) -> bool {
         self.granted_unreceived()
-            .saturating_add(streams.saturating_mul(self.window_bytes()))
+            .saturating_add(streams.saturating_mul(self.first_charge()))
             <= pool.available_bytes()
     }
 
-    /// Whether `count` more peer streams can be admitted: under the cap, with slots, with their windows covered by
-    /// the pool. The credit already given counts as taken, so a stream inside it is always admitted.
+    /// Whether `count` more peer streams can be admitted: under the cap and with slots. Inside the credit no pool test
+    /// is made (a new stream takes no chunk, and the credit kept its first charge), so a frame that opens many skipped
+    /// streams at once is never held back for them; beyond it their first charges must fit beside the credit left.
     fn admits(&self, pool: &BufferPool<'_>, count: u64) -> bool {
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
+        let inside = self.admitted().saturating_add(count) <= self.admit.adv;
         self.remote_live + count <= self.max_remote
             && free >= count
-            && self.windows_fit(pool, count.max(self.credit_left()))
+            && (inside || self.windows_fit(pool, count.max(self.credit_left())))
     }
 
     /// The slot of `id`, opening peer streams implicitly; `None` if it was already closed.
@@ -474,7 +476,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if !self.admit.allows(self.local_opened.iter().sum()) {
             return Err(StreamError::StreamLimit);
         }
-        // The slot and the window of every stream inside the credit given to the peer stay free.
+        // The slot and the first charge of every stream inside the credit given to the peer stay free.
         let left = self.credit_left();
         let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
         if (free > 0 && free <= left) || (bidi && !self.windows_fit(pool, left + 1)) {
@@ -484,14 +486,15 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// Open a stream we initiate. A bidirectional stream's receive window is the one the connection advertised, so it
-    /// cannot be made smaller: it is charged to the credit ledger like any grant, and the stream opens only when it
-    /// fits in `pool`.
+    /// cannot be made smaller: it is charged to the credit ledger like a peer stream's (its first charge now, the whole
+    /// window from its first byte), and the stream opens only when the first charge fits in `pool`.
     ///
     /// # Errors
     /// [`StreamError::StreamLimit`] when the peer has not given credit for one more stream yet (it says how many it
     /// admits in the handshake and raises that as its streams end),
-    /// [`StreamError::TableFull`] when the table has no slot, [`StreamError::Exhausted`] when a bidirectional stream's
-    /// receive window does not fit in the pool yet; try again once the application has read or chunks were released.
+    /// [`StreamError::TableFull`] when the table has no slot, [`StreamError::Exhausted`] when the first charge of a
+    /// bidirectional stream's receive window does not fit in the pool beside the credit granted yet; try again once the
+    /// application has read or chunks were released.
     pub fn open_stream(&mut self, pool: &BufferPool<'_>, bidi: bool) -> Result<StreamId, StreamError> {
         self.can_open(pool, bidi)?;
         let c = usize::from(!bidi);
@@ -537,6 +540,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let Some(i) = self.locate(pool, id)? else { return Ok(()) };
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         let result = slot.recv.on_data(pool, offset, data, fin);
+        self.stats.held_back += u64::from(result == Err(StreamError::Exhausted));
         self.settle(pool, i);
         result
     }
@@ -682,7 +686,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             let Some(slot) = self.slots.get_mut(i) else { continue };
             let demand = sum
                 .saturating_sub(slot.recv.unreceived())
-                .saturating_add(slot.recv.pool_demand(candidate));
+                .saturating_add(slot.recv.charged_demand(candidate));
             if demand.saturating_add(reserve) <= pool.available_bytes() {
                 slot.recv.win.limit = candidate;
                 slot.recv.win.pending = true;

@@ -31,19 +31,30 @@
 (* which stalled a stream when the application had nothing left to read.   *)
 (* RETRY = FALSE is that earlier behaviour (a witness config).             *)
 (*                                                                         *)
+(* The ledger (Unreceived, GU). A receive half counts the chunks its credit *)
+(* may still claim: the first FIRSTK chunks of its window while the stream *)
+(* has carried no data (Charged, FIRST_CHARGE in the code), its whole      *)
+(* window from its first byte on. A window grant, a raise of the stream    *)
+(* credit and a local stream are made only while the ledger with them fits *)
+(* the pool; the first byte of a stream is never refused for the ledger,   *)
+(* so the ledger can pass the pool then (the pool itself never: a frame    *)
+(* takes free chunks or is held back). With FIRSTK at or above the windows *)
+(* this is the rule that charged the whole window at admission.            *)
+(*                                                                         *)
 (* Local streams. A bidirectional stream this endpoint opens has the receive *)
 (* window the connection advertised, which cannot be smaller, so OpenLocal *)
-(* opens it only when that window fits beside the credit granted           *)
+(* opens it only when its first charge fits beside the credit granted       *)
 (* (Streams_local.cfg is the finding this closed, now a passing check).    *)
 (*                                                                         *)
 (* Stream credit. The receiver tells the opener how many streams it admits *)
 (* in all (T.ad.adv: the handshake value, raised by MAX_STREAMS), keeps the *)
-(* windows of the streams the opener has not opened yet in the pool         *)
+(* first charges of the streams the opener has not opened yet in the pool  *)
 (* (Resv), and the opener never opens beyond the limit it was given        *)
 (* (T.ad.lim). A raise is sent when the room grew by an eighth of the      *)
-(* credit last given, or at once when the opener used all of it. The       *)
-(* held-back rule below stays as the net for a peer that ignores the       *)
-(* credit and for other users of the pool.                                 *)
+(* credit last given, or at once when the opener used all of it. A peer    *)
+(* stream inside the credit is admitted with no pool test, however many    *)
+(* lower ids its frame opens with it. The held-back rule below stays as    *)
+(* the net for a peer that ignores the credit and for a full pool.         *)
 (*                                                                         *)
 (* Held back streams. A peer stream the table has no room for yet is      *)
 (* stored nowhere, answered with nothing and never acknowledged: Locate    *)
@@ -57,7 +68,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -77,9 +88,15 @@ NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi 
             stop |-> 0, qcode |-> -1, scode |-> -1]
 
 WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
+\* what the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit
+\* (FIRST_CHARGE: FIRSTK chunks, 4 in the code): the initial window or that, whichever is less
+FirstW == Min(WinC, FIRSTK * CH)
+\* how far into a window the ledger counts it (Recv::charged_demand): the first FIRSTK chunks while the stream has
+\* carried no data, the whole window from its first byte on
+Charged(r, l) == IF r.hi = 0 THEN Min(l, FIRSTK * CH) ELSE l
 AdmitFit(f) == Max(Min(Max(f - 3, 0), f \div 2), Min(f, 1))   \* half of f windows, three left free, one at least when one fits
 CapLive == Min(MAXREM, Max(N \div 2, 1))     \* the live peer streams: at most half the slots
-Adv0 == Min(CapLive, AdmitFit((B * CH) \div WinC))
+Adv0 == Min(CapLive, AdmitFit((B * CH) \div FirstW))
 
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
           rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW,
@@ -112,7 +129,7 @@ PoolDemand(r, l) ==
     IN IF ~r.open \/ reach <= r.read THEN 0
        ELSE LET span == (reach - 1) \div CH - r.read \div CH + 1
             IN Max(span - Cardinality(r.held), 0) * CH
-Unreceived(r) == PoolDemand(r, r.limit)
+Unreceived(r) == PoolDemand(r, Charged(r, r.limit))
 
 (* due: the limit the window is due to move to, once an eighth of the window was freed *)
 Due(r) ==
@@ -129,7 +146,7 @@ Avail(T) == AvailC(T) * CH
 GU(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Unreceived(T.slots[i]) IN f[N]
 AdmittedN(T) == T.rn[0] + T.rn[1]                    \* the peer streams admitted in all
 CreditLeft(T) == Max(T.ad.adv - AdmittedN(T), 0)     \* the streams the peer may still open inside the credit
-Resv(T) == CreditLeft(T) * WinC                     \* the pool bytes kept for them
+Resv(T) == CreditLeft(T) * FirstW                     \* the pool bytes kept for them
 
 SetSlot(T, i, r) == [T EXCEPT !.slots[i] = r]
 FindSlot(T, id) == IF \E i \in 1..N : T.slots[i].id = id THEN CHOOSE i \in 1..N : T.slots[i].id = id ELSE 0
@@ -143,7 +160,7 @@ GrantOne(T, i, first) ==
     ELSE LET r1 == [r EXCEPT !.size = Max(r.size, T.tgt)]
              c == Due(r1)
          IN IF c = -1 THEN SetSlot(T, i, [r1 EXCEPT !.defer = FALSE])
-            ELSE LET demand == GU(T) - Unreceived(r) + PoolDemand(r1, c)
+            ELSE LET demand == GU(T) - Unreceived(r) + PoolDemand(r1, Charged(r1, c))
                  IN IF demand + Resv(T) <= Avail(T)
                        THEN SetSlot(T, i, [r1 EXCEPT !.limit = c, !.pend = TRUE, !.defer = FALSE])
                        ELSE SetSlot(T, i, [r1 EXCEPT !.defer = TRUE])
@@ -152,7 +169,7 @@ GrantFrom(T, i, first) ==
 GrantRun(T, first) == GrantFrom(T, 1, first)
 (* admit_room / refresh_admit (Streams): the streams that could be admitted now, and the raise to queue *)
 FreeSlots(T) == Cardinality({i \in 1..N : T.slots[i].id = -1})
-AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div WinC
+AdmitRoom(T) == LET fit == Max(Avail(T) - GU(T), 0) \div FirstW
                 IN Min(Min(Max(CapLive - T.rl, 0), FreeSlots(T)), AdmitFit(fit))
 RefreshAdmit(T) ==
     LET now == AdmittedN(T) + AdmitRoom(T)
@@ -185,12 +202,14 @@ AllocSlot(T, id) ==
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
 (* ---- admission of peer streams (Streams::admits, locate) ---- *)
-(* the initial windows of count new streams, in whole chunks, fit beside the credit granted (Streams::windows_fit):
-   the one test for a peer stream and for a local one *)
-WindowsFit(T, k) == GU(T) + k * WinC <= Avail(T)
+(* the first charges of k new streams fit beside the credit granted (Streams::windows_fit): the one test for a peer
+   stream beyond the credit and for a local one *)
+WindowsFit(T, k) == GU(T) + k * FirstW <= Avail(T)
+(* inside the credit no pool test is made: the new streams take no chunk and the credit kept their first charges *)
 Admits(T, c, next, count) ==
     LET free == Cardinality({i \in 1..N : T.slots[i].id = -1})
-    IN T.rl + count <= MAXREM /\ free >= count /\ WindowsFit(T, Max(count, CreditLeft(T)))
+    IN T.rl + count <= MAXREM /\ free >= count
+       /\ (AdmittedN(T) + count <= T.ad.adv \/ WindowsFit(T, Max(count, CreditLeft(T))))
 
 (* Locate: the new table, the slot (0 = none), the error ("ok" when none) *)
 Locate(T, id) ==

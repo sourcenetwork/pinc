@@ -97,8 +97,9 @@ fn the_cost_of_the_credit_to_an_opener_of_sixteen_streams() {
                 r
             })
             .collect();
-        // Measured on this link (the same run on the tree before the credit: credit 64, 1 wave, 260 ms for every pool).
-        // With a quarter of the room as credit it was (1, 16, 784), (3, 14, 385) and (6, 11, 273).
-        assert_eq!(got, [(3, 14, 385), (6, 11, 281), (12, 5, 260)]);
+        // Measured on this link. The same run on the tree before the credit gives credit 64, 1 wave, 260 ms for every
+        // pool; the credit with a window charged at admission gave (3, 14, 385), (6, 11, 281) and (12, 5, 260); with
+        // a quarter of the room as credit (1, 16, 784), (3, 14, 385) and (6, 11, 273).
+        assert_eq!(got, [(32, 1, 260), (32, 1, 260), (32, 1, 260)]);
     });
 }

@@ -126,7 +126,7 @@ theorem grantSlot_mono (p : P) (tgt g a : Nat) (r : Slot) : r.limit ≤ (grantSl
 
 theorem grantSlot_raise (p : P) (tgt g a : Nat) (r : Slot) (h : r.limit < (grantSlot p tgt g a r).limit) :
     ∃ c, (r.grown tgt).due p = some c ∧
-      g - r.unreceived p + poolDemand p (r.grown tgt) c ≤ a ∧
+      g - r.unreceived p + (r.grown tgt).demandTo p c ≤ a ∧
       grantSlot p tgt g a r = (r.grown tgt).raised c := by
   unfold grantSlot at h ⊢
   split at h
@@ -157,7 +157,7 @@ theorem grantSlot_ok (p : P) (tgt g a : Nat) (r : Slot) :
 theorem grantSlot_defers (p : P) (tgt g a : Nat) (r : Slot) (h : (grantSlot p tgt g a r).defer = true) :
     ((r.grown tgt).due p = none) ∨
     ∃ c, (r.grown tgt).due p = some c ∧
-      ¬ (g - r.unreceived p + poolDemand p (r.grown tgt) c ≤ a) := by
+      ¬ (g - r.unreceived p + (r.grown tgt).demandTo p c ≤ a) := by
   unfold grantSlot at h
   split at h
   · simp at h
@@ -242,8 +242,8 @@ theorem grantOne_ledger (p : P) (first : Nat) (T : Tab) (i : Nat)
     have hheld := sum_map_set (fun s => s.held.length) T.slots i
       (((T.slots.getD i Slot.new).grown T.tgt).raised c) hl
     have hpd : (((T.slots.getD i Slot.new).grown T.tgt).raised c).unreceived p
-        = poolDemand p ((T.slots.getD i Slot.new).grown T.tgt) c := by
-      simp [Slot.unreceived, poolDemand, Slot.reach, Slot.raised]
+        = ((T.slots.getD i Slot.new).grown T.tgt).demandTo p c := by
+      simp [Slot.unreceived, Slot.demandTo, Slot.chargeTo, poolDemand, Slot.reach, Slot.raised, Slot.grown]
     simp only [hpd] at hsum
     simp only [gu, avail, availC, used, heldTotal, setSlot, resv, creditLeft, admitted] at hsum hup hheld hfit ⊢
     simp only [raised_held, grown_held] at hheld
@@ -284,7 +284,7 @@ theorem grantOne_defers_only_when_unfit (p : P) (first : Nat) (T : Tab) (i : Nat
     (((T.slots.getD i Slot.new).grown T.tgt).due p = none) ∨
     ∃ c, (((T.slots.getD i Slot.new).grown T.tgt).due p = some c) ∧
       ¬ (gu p T + resv p T - (T.slots.getD i Slot.new).unreceived p
-          + poolDemand p ((T.slots.getD i Slot.new).grown T.tgt) c ≤ avail p T) := by
+          + ((T.slots.getD i Slot.new).grown T.tgt).demandTo p c ≤ avail p T) := by
   have hl := lt_of_open _ _ (proc_open p first T i hp)
   rw [grantOne_proc p first T i hp, getD_setSlot _ _ _ _ hl, if_pos rfl] at h
   exact grantSlot_defers p _ _ _ _ h

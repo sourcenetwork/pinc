@@ -18,7 +18,7 @@ open Vinc.Json Vinc.TransportStreams
 
 /-- The constants of `trace_streams`. -/
 def params : P :=
-  { ch := 16384, ring := 5, rr := 96, n := 4, maxrem := 2, b := 8, swc := 32768, mswc := 65536, pm := 2,
+  { ch := 16384, ring := 7, rr := 96, n := 4, maxrem := 2, b := 20, swc := 81920, mswc := 98304, pm := 2, firstk := 4,
     maxoff := 2000000000, retry := true }
 
 def optNat (j : J) (k : String) : Except String (Option Nat) := do

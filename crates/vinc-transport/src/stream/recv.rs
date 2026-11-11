@@ -7,7 +7,7 @@
 use super::flow::Window;
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
-use super::{MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
+use super::{FIRST_CHARGE, MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
 
 /// A request to the sender to stop, and where it stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,11 +140,23 @@ impl<const C: usize> Recv<C> {
         self.ranges.clear();
     }
 
-    /// The pool bytes the credit up to the granted limit may still claim: every chunk of the span from the read
-    /// position to the limit that is not held yet. A byte received out of order claims its whole chunk, and a hole
-    /// below the highest byte received is credit not yet used, so neither is counted by bytes.
+    /// The pool bytes the credit up to the granted limit may still claim, as the ledger counts them
+    /// ([`Recv::charged_demand`]): every chunk of the span from the read position to the limit that is not held yet. A
+    /// byte received out of order claims its whole chunk, and a hole below the highest byte received is credit not yet
+    /// used, so neither is counted by bytes.
     pub(super) fn unreceived(&self) -> u64 {
-        self.pool_demand(self.win.limit)
+        self.charged_demand(self.win.limit)
+    }
+
+    /// The pool bytes credit up to `limit` may claim, as the ledger counts them: the first [`FIRST_CHARGE`] bytes while
+    /// the stream has carried no data, the whole span once it has.
+    pub(super) fn charged_demand(&self, limit: u64) -> u64 {
+        let reach = if self.highest == 0 {
+            limit.min(FIRST_CHARGE)
+        } else {
+            limit
+        };
+        self.pool_demand(reach)
     }
 
     /// The pool bytes credit up to `limit` may claim, as [`Recv::unreceived`].

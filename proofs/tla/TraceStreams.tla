@@ -5,7 +5,7 @@
 (* (Streams, Recv, Window, Meter, RangeSet, Ring over the buffer pool).    *)
 (*                                                                         *)
 (* The Rust test tests/trace_streams.rs drives real tables (built with the *)
-(* cargo feature `trace`) over a pool of 8 chunks through seeded runs of   *)
+(* cargo feature `trace`) over a pool of 20 chunks through seeded runs of  *)
 (* the calls a connection makes: stream frames (out of order, overlapping, *)
 (* past the credit, after the final size, with differing bytes, tiny ones  *)
 (* that fragment the stored ranges), resets, consumes, pending control     *)
@@ -19,14 +19,16 @@
 (* AppReset, Finish, ExtTo, CloseAll), with the                            *)
 (* error the call returned, and the state the model computes must be the   *)
 (* state recorded. The constants are the real ones of the test: chunks of  *)
-(* 16384 bytes, a ring of 5, 96 stored ranges, 4 slots, a pool of 8.       *)
+(* 16384 bytes, a ring of 7, 96 stored ranges, 4 slots, a pool of 20, and  *)
+(* windows of 5 to 6 chunks, above the 4 the ledger counts for a stream    *)
+(* that has carried no data.                                               *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds streams.ndjson.       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK
 VARIABLES i, rs
 vars == <<i, rs>>
 

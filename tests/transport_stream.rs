@@ -362,8 +362,8 @@ fn credit_is_charged_in_whole_chunks_including_the_holes_below_the_highest_byte(
 
 #[test]
 fn a_peer_stream_whose_window_does_not_fit_the_pool_is_held_back() {
-    let (mut pool, mut t) = setup(16, |c| c.initial_stream_window = 96 * 1024);
-    // Half of the pool is 128 KiB, so the window is 96 KiB; two do not fit in 256 KiB less a stored chunk.
+    let (mut pool, mut t) = setup(12, |c| c.initial_stream_window = 96 * 1024);
+    // The ledger counts 64 KiB for a new stream: two fit in 192 KiB less a stored chunk, three do not.
     t.on_stream_frame(&mut pool, 0, 0, &[1; 10], false).unwrap();
     t.on_stream_frame(&mut pool, 4, 0, &[], false).unwrap();
     assert_eq!(
@@ -377,10 +377,10 @@ fn a_peer_stream_whose_window_does_not_fit_the_pool_is_held_back() {
 
 #[test]
 fn a_held_back_peer_stream_is_admitted_once_room_returns_with_its_bytes_intact() {
-    // A pool of 24 chunks gives each stream half of it (192 KiB): two do not fit, so the second is held back
-    // (unacknowledged, so the opener retransmits it from the start), but the same two streams fit a pool that has
-    // the room.
-    let (mut pool, mut t) = setup(24, |_| {});
+    // The ledger counts 64 KiB for each stream: in a pool of 8 chunks our own stream and the first of theirs fit, the
+    // second of theirs is held back (unacknowledged, so the opener retransmits it from the start), but the same streams
+    // fit a pool that has the room.
+    let (mut pool, mut t) = setup(8, |_| {});
     // This side opens a stream of its own at the same moment (its receive half is granted a window too).
     let own = t.open_stream(&pool, true).unwrap();
     let theirs = own ^ 1;

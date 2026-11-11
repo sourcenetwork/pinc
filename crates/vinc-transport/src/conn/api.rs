@@ -128,7 +128,8 @@ conn_impl! {
     ///
     /// # Errors
     /// [`StreamError::StreamLimit`] at the peer's limit, [`StreamError::TableFull`] when the table has no slot,
-    /// [`StreamError::Exhausted`] when the stream's receive window does not fit in the buffer pool yet.
+    /// [`StreamError::Exhausted`] when the first charge of the stream's receive window does not fit in the buffer pool
+    /// yet.
     pub fn open_bi(&mut self) -> Result<StreamId, StreamError> {
         self.ensure_open()?;
         self.opened(true)

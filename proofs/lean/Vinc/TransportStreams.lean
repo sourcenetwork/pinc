@@ -29,6 +29,9 @@ structure P where
   pm : Nat
   maxoff : Nat
   retry : Bool
+  /-- The chunks of a window the ledger counts while the stream has carried no data, and keeps for each stream inside
+  the credit (`FIRST_CHARGE`, 4 in the code). -/
+  firstk : Nat
 
 def P.half (p : P) : Nat := p.b * p.ch / 2 / p.ch * p.ch
 /-- The ceiling of a stream window: the configured one, `(C - 1)` chunks, and half the pool. -/
@@ -37,12 +40,15 @@ def P.maxStream (p : P) : Nat := min p.mswc (min ((p.ring - 1) * p.ch) p.half)
 def P.sw (p : P) : Nat := min p.swc p.maxStream
 /-- The initial window in whole chunks. -/
 def P.winC (p : P) : Nat := (p.sw + p.ch - 1) / p.ch * p.ch
+/-- What the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit: its
+initial window, or `firstk` chunks, whichever is less. -/
+def P.firstW (p : P) : Nat := min p.winC (p.firstk * p.ch)
 /-- Half of `f` windows, but three stay free, and one at least when one fits (`admit_fit`). -/
 def admitFit (f : Nat) : Nat := max (min (f - 3) (f / 2)) (min f 1)
 /-- The live peer streams the table admits: at most half the slots, so the rest stay free for its own streams. -/
 def P.capLive (p : P) : Nat := min p.maxrem (max (p.n / 2) 1)
 /-- The stream credit the handshake gives the peer (`Streams::admit_cap` on an empty table). -/
-def P.adv0 (p : P) : Nat := min p.capLive (admitFit (p.b * p.ch / p.winC))
+def P.adv0 (p : P) : Nat := min p.capLive (admitFit (p.b * p.ch / p.firstW))
 
 structure Slot where
   id : Option Nat
@@ -134,7 +140,14 @@ def poolDemand (p : P) (r : Slot) (l : Nat) : Nat :=
   if !r.open_ || r.reach l ≤ r.read then 0
   else ((r.reach l - 1) / p.ch - r.read / p.ch + 1 - r.held.length) * p.ch
 
-def Slot.unreceived (p : P) (r : Slot) : Nat := poolDemand p r r.limit
+/-- How far into a window the ledger counts it: the first `firstk` chunks while the stream has carried no data, the
+whole window from its first byte on. -/
+def Slot.chargeTo (p : P) (r : Slot) (l : Nat) : Nat := if r.hi = 0 then min l (p.firstk * p.ch) else l
+
+/-- `charged_demand`: the pool bytes credit up to `l` may claim, as the ledger counts them. -/
+def Slot.demandTo (p : P) (r : Slot) (l : Nat) : Nat := poolDemand p r (r.chargeTo p l)
+
+def Slot.unreceived (p : P) (r : Slot) : Nat := r.demandTo p r.limit
 
 /-- `due`: the limit the window is due to move to, once an eighth of it was freed. -/
 def Slot.due (p : P) (r : Slot) : Option Nat :=
@@ -155,7 +168,7 @@ def admitted (T : Tab) : Nat := T.rn.1 + T.rn.2
 /-- The streams the peer may still open inside the credit it was given. -/
 def creditLeft (T : Tab) : Nat := T.adv - admitted T
 /-- The pool bytes kept for them. -/
-def resv (p : P) (T : Tab) : Nat := creditLeft T * p.winC
+def resv (p : P) (T : Tab) : Nat := creditLeft T * p.firstW
 
 def setSlot (T : Tab) (i : Nat) (r : Slot) : Tab := { T with slots := T.slots.set i r }
 def findSlot (T : Tab) (id : Nat) : Option Nat := T.slots.findIdx? (·.id == some id)
@@ -177,7 +190,7 @@ def grantSlot (p : P) (tgt g a : Nat) (r : Slot) : Slot :=
   match (r.grown tgt).due p with
   | none => (r.grown tgt).parked false
   | some c =>
-    if g - r.unreceived p + poolDemand p (r.grown tgt) c ≤ a
+    if g - r.unreceived p + (r.grown tgt).demandTo p c ≤ a
     then (r.grown tgt).raised c
     else (r.grown tgt).parked true
 
@@ -189,7 +202,7 @@ def grantRun (p : P) (T : Tab) (first : Nat) : Tab := (List.range p.n).foldl (gr
 /-- `Streams::admit_room`: how many more peer streams could be admitted now. -/
 def freeSlots (T : Tab) : Nat := (T.slots.filter (·.id == none)).length
 def admitRoom (p : P) (T : Tab) : Nat :=
-  min (min (p.capLive - T.rl) (freeSlots T)) (admitFit ((avail p T - gu p T) / p.winC))
+  min (min (p.capLive - T.rl) (freeSlots T)) (admitFit ((avail p T - gu p T) / p.firstW))
 
 /-- `Streams::refresh_admit`: queue a raise of the credit when the room grew by an eighth of the credit last given, or at
 once when the opener used all of it. -/
@@ -227,14 +240,17 @@ def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
     if lcl then { T1 with ll := T1.ll + 1 } else { T1 with rl := T1.rl + 1 }
 
 /-! ### Admission of peer streams -/
-/-- `Streams::windows_fit`: the initial windows of `count` new streams, in whole chunks, fit beside the credit granted.
-The one test for a peer stream and for a local one. -/
+/-- `Streams::windows_fit`: the first charges of `count` new streams fit beside the credit granted. The one test for a
+peer stream beyond the credit and for a local one. -/
 def windowsFit (p : P) (T : Tab) (count : Nat) : Bool :=
-  gu p T + count * p.winC ≤ avail p T
+  gu p T + count * p.firstW ≤ avail p T
 
+/-- `Streams::admits`: under the cap and with slots; inside the credit with no pool test (the new streams take no
+chunk, and the credit kept their first charges), beyond it with their first charges fitting. -/
 def admits (p : P) (T : Tab) (c next count : Nat) : Bool :=
   let free := (T.slots.filter (·.id == none)).length
-  T.rl + count ≤ p.maxrem && free ≥ count && windowsFit p T (max count (creditLeft T))
+  T.rl + count ≤ p.maxrem && free ≥ count &&
+    (decide (admitted T + count ≤ T.adv) || windowsFit p T (max count (creditLeft T)))
 
 /-- `Locate`: the table, the slot found (if any) and the error ("ok" when none). A peer stream that does not fit is
 held back: "Exhausted" and the table unchanged. -/

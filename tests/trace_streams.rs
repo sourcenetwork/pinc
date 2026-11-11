@@ -35,9 +35,11 @@ use vinc_transport::stream::trace::{SlotView, TableView};
 use vinc_transport::stream::{Config, ControlFrame, NoSource, PeerLimits, StreamError, Streams};
 
 const N: usize = 4;
-const C: usize = 5;
-const POOL: usize = 8;
+const C: usize = 7;
+const POOL: usize = 20;
 const CH: u64 = CHUNK_SIZE as u64;
+/// The initial window: above the four chunks the ledger counts for a stream that has carried no data.
+const WINDOW: u64 = 5 * CH;
 type Table = Streams<NoSource, N, C>;
 
 const REMOTE: [u64; 6] = [0, 4, 8, 12, 2, 6];
@@ -143,6 +145,8 @@ struct Run<'o> {
     max_limit: std::collections::HashMap<u64, u64>,
     /// Peer streams whose frame was held back (no slot, answered `Exhausted`) and not admitted since.
     held: std::collections::HashSet<u64>,
+    /// A frame opened a skipped lower stream with its own, inside the credit.
+    jumped: bool,
 }
 
 impl Run<'_> {
@@ -211,6 +215,8 @@ impl Run<'_> {
         let after = self.view();
         let class = usize::from(id & 2 != 0);
         let opened = after.remote_next[class] - before.remote_next[class];
+        let admitted_before: u64 = before.remote_next.iter().sum();
+        self.jumped |= res.is_ok() && opened >= 2 && admitted_before + opened <= before.admit[1];
         // A peer stream that does not fit is held back: nothing is stored, charged or counted, and the packet goes
         // unacknowledged; the opener's retransmission is admitted once there is room.
         let held_back = res == Err(StreamError::Exhausted) && after.slots.iter().all(|s| s.id != id);
@@ -254,7 +260,7 @@ impl Run<'_> {
         let ids: Vec<u64> = REMOTE.iter().chain(LOCAL.iter()).copied().collect();
         let id = ids[self.below(ids.len() as u64) as usize];
         let s = self.slot(id);
-        let (read, limit) = s.as_ref().map_or((0, 2 * CH), |s| (s.read, s.limit));
+        let (read, limit) = s.as_ref().map_or((0, WINDOW), |s| (s.read, s.limit));
         let (off, len) = match self.below(10) {
             0 => (limit.saturating_sub(self.below(64)), 1 + self.below(200)),
             1 => (read + self.below(4 * CH), 1 + self.below(32)),
@@ -275,7 +281,7 @@ impl Run<'_> {
     fn burst(&mut self) {
         // Many one-byte frames at even offsets of one stream fragment its stored ranges past the 96 it can track.
         let id = REMOTE[self.below(4) as usize];
-        let limit = self.slot(id).map_or(2 * CH, |s| s.limit);
+        let limit = self.slot(id).map_or(WINDOW, |s| s.limit);
         for k in 0..110u64 {
             let off = 2 * k + 8;
             if off < limit {
@@ -542,10 +548,11 @@ impl Run<'_> {
     }
 }
 
-fn run(seed: u64, out: &mut String, run: u32) {
+/// One seeded run; returns whether a frame opened a skipped lower stream inside the credit.
+fn run(seed: u64, out: &mut String, run: u32) -> bool {
     let mut config = Config::new(false);
-    config.initial_stream_window = 2 * CH;
-    config.max_stream_window = 4 * CH;
+    config.initial_stream_window = WINDOW;
+    config.max_stream_window = 6 * CH;
     config.max_streams = 2;
     config.peer = PeerLimits {
         window: 1 << 20,
@@ -566,21 +573,25 @@ fn run(seed: u64, out: &mut String, run: u32) {
         inflight: Vec::new(),
         max_limit: std::collections::HashMap::new(),
         held: std::collections::HashSet::new(),
+        jumped: false,
     };
     r.log(r#""op":"init""#);
     for _ in 0..220 {
         r.step();
     }
     r.log(r#""op":"end""#);
+    r.jumped
 }
 
 #[test]
 fn stream_table_runs_match_the_models() {
     big_stack(|| {
         let mut out = String::new();
+        let mut jumped = false;
         for run_id in 1..=24u32 {
-            run(0x5354_5245_414d_0000 + u64::from(run_id), &mut out, run_id);
+            jumped |= run(0x5354_5245_414d_0000 + u64::from(run_id), &mut out, run_id);
         }
+        assert!(jumped, "no frame opened a skipped stream inside the credit");
         for op in [
             "frame",
             "consume",
