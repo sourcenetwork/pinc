@@ -153,6 +153,29 @@ impl<S, K: KeyStore> Core<S, K> {
         }
         self.counters.carriers_opened += 1;
         self.event(Event::CarrierUp { node: peer, kind });
+        // The peer may have joined after the records were published here: send it the ones homed at this relay.
+        let mut nodes: Vec<NodeId> = self.sm.record_nodes().collect();
+        nodes.reverse();
+        if let Some(c) = self.conn(slot) {
+            c.sync = nodes;
+        }
+        self.pump_sync(slot);
+    }
+
+    /// Send the records still owed to the peer on `slot` while its queue is less than half full, so a large table does
+    /// not pass the backlog limit and a slow peer is not flooded.
+    pub(super) fn pump_sync(&mut self, slot: usize) {
+        let half = self.limits.write_backlog / 2;
+        loop {
+            let Some(c) = self.conn(slot) else { return };
+            let (Some(peer), true) = (c.node, c.backlog() < half) else {
+                return;
+            };
+            let Some(node) = c.sync.pop() else { return };
+            if self.sm.sync_record(&peer, &node, &mut self.fx) {
+                self.flush();
+            }
+        }
     }
 
     /// A peer's stream ended: the machine forgets the peer if this was its current carrier, and a stream this relay

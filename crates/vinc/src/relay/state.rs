@@ -258,7 +258,12 @@ impl<S, K: KeyStore> Core<S, K> {
     pub(crate) fn on_write(&mut self, slot: usize, r: crate::Result<usize>, buf: Vec<u8>) {
         let Some(c) = self.conn(slot) else { return };
         match r {
-            Ok(n) if n > 0 => c.wrote(buf, n),
+            Ok(n) if n > 0 => {
+                c.wrote(buf, n);
+                if c.peer && !c.sync.is_empty() {
+                    self.pump_sync(slot);
+                }
+            }
             _ => {
                 c.wrote(buf, 0);
                 self.dying(slot, Closed::Peer);

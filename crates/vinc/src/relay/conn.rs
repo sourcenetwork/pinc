@@ -32,6 +32,8 @@ pub(crate) struct Conn<S> {
     pub(crate) dialer: bool,
     /// The peer slot this stream dials.
     pub(crate) dial: Option<usize>,
+    /// Records still to send to the peer relay on this stream, last first.
+    pub(crate) sync: Vec<NodeId>,
     /// When the handshake must have finished.
     pub(crate) deadline: u64,
     pub(crate) last_rx: u64,
@@ -57,6 +59,7 @@ impl<S> Conn<S> {
             peer: false,
             dialer: false,
             dial: None,
+            sync: Vec::new(),
             deadline,
             last_rx: 0,
             dying: None,
@@ -90,6 +93,11 @@ impl<S> Conn<S> {
         }
         self.q.extend_from_slice(wire);
         true
+    }
+
+    /// Bytes queued and not yet handed to a write.
+    pub(crate) fn backlog(&self) -> usize {
+        self.q.len() - self.qpos
     }
 
     /// Queue a WebSocket control reply.

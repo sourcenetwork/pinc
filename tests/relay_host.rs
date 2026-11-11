@@ -1092,3 +1092,37 @@ fn a_relay_never_peers_with_itself_and_an_unlisted_relay_is_refused() {
         })
     });
 }
+
+#[test]
+fn a_relay_that_joins_the_mesh_late_receives_the_records_homed_at_the_others() {
+    on_big_stack(|| {
+        within(60, async {
+            let (pa, pb) = (bind_ports().await, bind_ports().await);
+            let ids = [
+                Identity::from_seed(&[0x55; 32]).unwrap().node_id(),
+                Identity::from_seed(&[0x56; 32]).unwrap().node_id(),
+            ];
+            let list = [Peer::new(ids[0]).with_tcp(pa.addr), Peer::new(ids[1]).with_tcp(pb.addr)];
+            // a is alone when its member publishes
+            let ra = start_on(&pa, 0x55, Limits::default(), MemStore::new(), &list);
+            let mut ma = Member::connect(&ra, 0x71, CarrierKind::Tcp).await;
+            ma.publish(1).await;
+            stats_where(&ra, "the record is stored", |s| s.records == 1).await;
+            // b starts later and learns it when the mesh forms
+            let rb = start_on(&pb, 0x56, Limits::default(), MemStore::new(), &list);
+            stats_where(&rb, "the record reached the relay that joined late", |s| {
+                s.records == 1 && s.peers_up == 1
+            })
+            .await;
+            let mut mb = Member::connect(&rb, 0x72, CarrierKind::Tcp).await;
+            mb.send(&Frame::DnsQuery { peer: ma.id }).await;
+            match decode(&mb.recv().await.unwrap()) {
+                Frame::DnsReply {
+                    answer: DnsAnswer::Record(_),
+                    ..
+                } => {}
+                other => panic!("{other:?}"),
+            }
+        })
+    });
+}

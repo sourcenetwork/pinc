@@ -204,6 +204,27 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         sink.emit(Effect::Trace(Trace::Republished { peers }));
     }
 
+    /// The nodes whose record is stored.
+    pub fn record_nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.records.table.iter().map(|(k, _)| *k)
+    }
+
+    /// Send the stored record of `node` to the peer relay `to` as a replica, if the record is homed at this relay and
+    /// `to` is an authenticated peer. A host calls it for [`Relay::record_nodes`] when a session with a peer relay
+    /// comes up, so a relay that joined late or restarted learns the records it missed; a record homed elsewhere is
+    /// that relay's to send. Returns whether a frame was emitted.
+    pub fn sync_record<S: Sink>(&self, to: &NodeId, node: &NodeId, sink: &mut S) -> bool {
+        let me = self.cfg.me;
+        let Some(s) = self.records.get(node).filter(|s| s.home == me && self.is_peer(to)) else {
+            return false;
+        };
+        sink.emit(Effect::PeerRelay {
+            to: *to,
+            frame: Frame::Sync { record: s.bytes() },
+        });
+        true
+    }
+
     /// The stored record of `peer` if it is fresh.
     pub fn lookup(&self, now: u64, peer: &NodeId) -> Option<&[u8]> {
         self.records
