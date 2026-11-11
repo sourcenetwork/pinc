@@ -35,8 +35,6 @@ pub struct Config<'a> {
 pub enum StartError {
     /// More than [`MAX_HUBS`] hubs.
     TooManyHubs,
-    /// A member with no hub has nothing to attach to.
-    NoHubs,
     /// The incarnation could not be issued.
     Incarnation(IncarnationError),
 }
@@ -51,7 +49,6 @@ impl core::fmt::Display for StartError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::TooManyHubs => f.write_str("more hubs than the node supports"),
-            Self::NoHubs => f.write_str("a member needs at least one hub"),
             Self::Incarnation(e) => e.fmt(f),
         }
     }
@@ -209,9 +206,6 @@ impl Membership {
         }
         if boot.len() > MAX_HUBS {
             return Err(StartError::TooManyHubs);
-        }
-        if !cfg.is_hub && boot.is_empty() {
-            return Err(StartError::NoHubs);
         }
         let inc = Incarnation::start(host, wall_ms, floor)?;
         let mut tag = AddressTag::default();

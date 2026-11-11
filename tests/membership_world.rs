@@ -766,7 +766,6 @@ impl World {
         let ret = match &r {
             Ok(_) => "ok",
             Err(vinc_membership::StartError::TooManyHubs) => "toomany",
-            Err(vinc_membership::StartError::NoHubs) => "nohubs",
             Err(vinc_membership::StartError::Incarnation(e)) => match e {
                 vinc_membership::incarnation::IncarnationError::Store(_) => "store",
                 vinc_membership::incarnation::IncarnationError::Exhausted => "exhausted",

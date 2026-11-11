@@ -24,7 +24,7 @@ Dedup(hubs) ==
                      ELSE IF \E j \in 1..Len(acc) : acc[j] = hubs[i] THEN D(i + 1, acc) ELSE D(i + 1, Append(acc, hubs[i]))
     IN D(1, <<>>)
 
-\* returns [err, S]; err is "ok", "toomany", "nohubs", "store" or "exhausted"; a failed start has no state
+\* returns [err, S]; err is "ok", "toomany", "store" or "exhausted"; a failed start has no state
 StartOp(cfg, env, now, wall, floor) ==
     LET b0 == Dedup(cfg.hubs)
         boot == IF cfg.isHub /\ ~(\E j \in 1..Len(b0) : b0[j] = cfg.me) THEN Append(b0, cfg.me) ELSE b0
@@ -43,7 +43,6 @@ StartOp(cfg, env, now, wall, floor) ==
                nextConf |-> <<>>, tracing |-> TRUE, loc |-> r.loc,
                sent |-> <<>>, bc |-> <<>>, cl |-> <<>>, ev |-> <<>>, tr |-> <<>>, lostE |-> 0, lostT |-> 0]
     IN IF Len(boot) > MAX_HUBS THEN [err |-> "toomany"]
-       ELSE IF ~cfg.isHub /\ boot = <<>> THEN [err |-> "nohubs"]
        ELSE IF r.err # "ok" THEN [err |-> r.err]
        ELSE [err |-> "ok", S |-> Drain(Trace(S0, [k |-> "started", inc |-> INC!Word(r.inc)]))]
 

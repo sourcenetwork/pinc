@@ -291,7 +291,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
       pure (slotSet w k n.drained.clearOut)
     | .error err =>
       let want := match err with
-        | .tooManyHubs => "toomany" | .noHubs => "nohubs" | .store => "store" | .exhausted => "exhausted"
+        | .tooManyHubs => "toomany" | .store => "store" | .exhausted => "exhausted"
       check (ret == want) s!"start: model {want}, code {ret}"
       pure w
   else

@@ -180,24 +180,21 @@ theorem inv_start {e : Env} {me : Nat} {isHub : Bool} {hubs : List Nat} {tracing
   by_cases h1 : MAX_HUBS < boot.length
   · rw [if_pos h1] at h; cases h
   · rw [if_neg h1] at h
-    by_cases h2 : (!isHub && boot.isEmpty) = true
-    · rw [if_pos h2] at h; cases h
-    · rw [if_neg h2] at h
-      split at h
-      · cases h
-      · cases h
-      · rename_i inc loc hs
-        injection h with h
-        subst h
-        refine ⟨boot, inv_trace (B := boot) ?_ _⟩
-        refine ⟨Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil,
-          KBnd.nil, KBnd.nil, KBnd.nil, KBnd.nil, ?_, rfl, Nat.le_of_not_lt h1, hnd, ?_, ?_⟩
-        · dsimp only
-          split
-          · refine HvB.insert HvB.nil _ _ Bnd.nil (Or.inl ?_)
-            decide
-          · exact HvB.nil
-        · simp
-        · simp
+    split at h
+    · cases h
+    · cases h
+    · rename_i inc loc hs
+      injection h with h
+      subst h
+      refine ⟨boot, inv_trace (B := boot) ?_ _⟩
+      refine ⟨Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil, Bnd.nil,
+        KBnd.nil, KBnd.nil, KBnd.nil, KBnd.nil, ?_, rfl, Nat.le_of_not_lt h1, hnd, ?_, ?_⟩
+      · dsimp only
+        split
+        · refine HvB.insert HvB.nil _ _ Bnd.nil (Or.inl ?_)
+          decide
+        · exact HvB.nil
+      · simp
+      · simp
 
 end Vinc.Membership

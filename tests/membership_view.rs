@@ -582,3 +582,12 @@ fn a_restart_with_a_newer_incarnation_rejoins() {
         2
     );
 }
+
+#[test]
+fn a_member_with_no_hub_starts_alone_and_sends_nothing() {
+    // An endpoint that names no relay is a member with no hub to attach to: it runs, and it says nothing to anyone.
+    let mut w = World::new(0, 1, START);
+    w.run(120 * SEC);
+    assert!(w.frames.is_empty(), "{} frames", w.frames.len());
+    assert!(w.nodes[0].m.poll_event().is_none());
+}

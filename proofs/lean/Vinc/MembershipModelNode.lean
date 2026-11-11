@@ -254,7 +254,7 @@ def N.addressChanged (n : N) (now : Nat) : N := { n with tag := n.tag.moved now 
 /-! ## Start -/
 
 inductive StartErr where
-  | tooManyHubs | noHubs | store | exhausted
+  | tooManyHubs | store | exhausted
   deriving DecidableEq, Repr
 
 /-- `Membership::start`: `hubs` in the host's preference order. -/
@@ -263,7 +263,6 @@ def N.start (e : Env) (me : Nat) (isHub : Bool) (hubs : List Nat) (tracing : Boo
   let boot0 := hubs.foldl (fun acc h => if acc.contains h then acc else acc ++ [h]) []
   let boot := if isHub && !boot0.contains me then boot0 ++ [me] else boot0
   if MAX_HUBS < boot.length then .error .tooManyHubs
-  else if !isHub && boot.isEmpty then .error .noHubs
   else
     match Vinc.MemInc.start e.loc wall floor with
     | .error .store => .error .store
