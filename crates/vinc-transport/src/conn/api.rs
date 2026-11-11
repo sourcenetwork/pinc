@@ -4,7 +4,7 @@ use vinc_crypto::Provider;
 use vinc_security::Env;
 use vinc_wire::varint;
 
-use super::ctl::EXT_BODY_MAX;
+use super::ctl::{Ctl, EXT_BODY_MAX};
 use super::event::{Ev, Event};
 use super::path::CTRL_SMALL;
 use super::{Connection, MIN_MTU, Phase};
@@ -319,7 +319,7 @@ conn_impl! {
             let Some((ty, len)) = self.ctl.ext.get(i).and_then(|s| s.as_ref().map(|s| (s.ty, s.len))) else { continue };
             if len > self.max_extension_size(ty) {
                 if let Some(s) = self.ctl.ext.get_mut(i) {
-                    *s = None;
+                    Ctl::free_ext(s, &mut self.pool);
                 }
                 self.events.push(Ev::ExtensionUndeliverable(ty, len));
             }

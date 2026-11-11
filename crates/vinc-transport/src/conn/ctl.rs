@@ -2,17 +2,19 @@
 //!
 //! A [`FrameRef::Control`] carries only a kind and one number, so the frames with a payload (the stream layer's flow
 //! control and reset frames) live in a small table keyed by that number, and the extension frames in a second one
-//! that keeps their bodies. The frames fully described by a flag (READY, tickets, REKEY) are re-derived from their
+//! whose bodies are kept in chunks of the connection's buffer pool, charged like every other buffer and touched only
+//! while a frame is held. The frames fully described by a flag (READY, tickets, REKEY) are re-derived from their
 //! owners.
 //!
 //! Invariants: the tables hold at most [`TABLE`] stream frames and [`EXT_SLOTS`] extension frames in flight, so a
 //! packet that cannot record one more stops adding them; an entry is removed when its packet is acknowledged, and a
-//! lost entry hands its frame back to the layer that produced it or is sent again.
+//! lost entry hands its frame back to the layer that produced it or is sent again; a held extension frame owns exactly
+//! one pool chunk, freed when its slot is.
 
 use vinc_security::TicketBatch;
 
 use crate::recovery::{Event, FrameRef};
-use crate::stream::pool::BufferPool;
+use crate::stream::pool::{BufferPool, Chunk};
 use crate::stream::{ControlFrame, StreamSource, Streams};
 
 /// A stream-layer control frame; the id keys the table.
@@ -33,12 +35,13 @@ pub(crate) const EXT_SLOTS: usize = 8;
 pub(crate) const EXT_BODY_MAX: usize = super::config::JUMBO_MTU as usize;
 
 /// An extension frame waiting for its acknowledgement.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(crate) struct ExtSlot {
     pub(crate) key: u64,
     pub(crate) ty: u64,
     pub(crate) len: usize,
-    pub(crate) body: [u8; EXT_BODY_MAX],
+    /// The pool chunk the body is kept in, its first `len` bytes.
+    pub(crate) chunk: Chunk,
     /// Whether the frame waits to be (re)sent; false while a packet carries it.
     pub(crate) pending: bool,
 }
@@ -76,10 +79,6 @@ pub(crate) struct Ctl {
 }
 
 impl Ctl {
-    #[allow(
-        clippy::large_stack_arrays,
-        reason = "the extension table holds one packet's body per slot"
-    )]
     pub(crate) const fn new() -> Self {
         Self {
             table: [None; TABLE],
@@ -87,19 +86,26 @@ impl Ctl {
             ready: false,
             tickets: None,
             tickets_pending: false,
-            ext: [None; EXT_SLOTS],
+            ext: [const { None }; EXT_SLOTS],
             next_ext: 1,
         }
     }
 
-    /// Keep an extension frame for sending and resending until acknowledged. Returns false when every slot is busy
-    /// or the body is too long.
-    pub(crate) fn hold_ext(&mut self, ty: u64, body: &[u8]) -> bool {
+    /// Keep an extension frame for sending and resending until acknowledged, its body in a chunk of `pool`. Returns
+    /// false when every slot is busy, the body is too long or the pool has no chunk to spare; the frame then waits in
+    /// its queue for a later try.
+    pub(crate) fn hold_ext(&mut self, pool: &mut BufferPool<'_>, ty: u64, body: &[u8]) -> bool {
         let Some(slot) = self.ext.iter_mut().find(|s| s.is_none()) else {
             return false;
         };
-        let mut buf = [0u8; EXT_BODY_MAX];
-        let Some(dst) = buf.get_mut(..body.len()) else {
+        if body.len() > EXT_BODY_MAX {
+            return false;
+        }
+        let Ok(chunk) = pool.alloc_chunk() else {
+            return false;
+        };
+        let Some(dst) = pool.bytes_mut(&chunk).get_mut(..body.len()) else {
+            pool.free_chunk(chunk);
             return false;
         };
         dst.copy_from_slice(body);
@@ -107,11 +113,25 @@ impl Ctl {
             key: self.next_ext,
             ty,
             len: body.len(),
-            body: buf,
+            chunk,
             pending: true,
         });
         self.next_ext += 1;
         true
+    }
+
+    /// Empty extension slot `slot` and give its chunk back to `pool`.
+    pub(crate) fn free_ext(slot: &mut Option<ExtSlot>, pool: &mut BufferPool<'_>) {
+        if let Some(s) = slot.take() {
+            pool.free_chunk(s.chunk);
+        }
+    }
+
+    /// Give back every held extension frame's chunk (the connection is going away).
+    pub(crate) fn release_ext(&mut self, pool: &mut BufferPool<'_>) {
+        for slot in &mut self.ext {
+            Self::free_ext(slot, pool);
+        }
     }
 
     /// The extension slot with `key`.
@@ -226,8 +246,8 @@ fn acked<S: StreamSource, const N: usize, const C: usize>(
             }
         }
         K_EXT => {
-            if let Some(s) = ctl.ext.iter_mut().find(|s| s.is_some_and(|s| s.key == id)) {
-                *s = None;
+            if let Some(s) = ctl.ext.iter_mut().find(|s| s.as_ref().is_some_and(|s| s.key == id)) {
+                Ctl::free_ext(s, pool);
             }
         }
         K_TICKETS => {
@@ -267,5 +287,44 @@ fn lost<S: StreamSource, const N: usize, const C: usize>(
         K_TICKETS => ctl.tickets_pending = ctl.tickets.is_some(),
         K_READY => ctl.ready = true,
         _ => {}
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    /// A held extension frame keeps its body in exactly one pool chunk, read back intact, and gives it back when its
+    /// slot is freed; with no chunk to spare the frame is not held (it stays queued), and a closing connection gives
+    /// every chunk back.
+    #[test]
+    fn a_held_extension_frame_owns_one_pool_chunk_until_its_slot_is_freed() {
+        let mut pool = BufferPool::new_boxed(3);
+        let mut ctl = Ctl::new();
+        assert!(ctl.hold_ext(&mut pool, 0x41, b"one"));
+        assert!(ctl.hold_ext(&mut pool, 0x42, b"two"));
+        assert_eq!(pool.used_chunks(), 2);
+        let held = ctl.ext.iter().flatten().find(|s| s.ty == 0x41).unwrap();
+        assert_eq!(pool.bytes(&held.chunk).get(..held.len), Some(&b"one"[..]));
+        let key = held.key;
+        let slot = ctl
+            .ext
+            .iter_mut()
+            .find(|s| s.as_ref().is_some_and(|s| s.key == key))
+            .unwrap();
+        Ctl::free_ext(slot, &mut pool);
+        assert_eq!(pool.used_chunks(), 1);
+        assert!(ctl.hold_ext(&mut pool, 0x43, b"three"));
+        assert!(ctl.hold_ext(&mut pool, 0x44, b"four"));
+        assert!(
+            !ctl.hold_ext(&mut pool, 0x45, b"five"),
+            "a frame was held with no chunk to keep it in"
+        );
+        assert!(!ctl.hold_ext(&mut pool, 0x46, &[0; EXT_BODY_MAX + 1]));
+        assert_eq!(ctl.ext.iter().flatten().count(), 3);
+        ctl.release_ext(&mut pool);
+        assert_eq!(pool.used_chunks(), 0);
+        assert!(ctl.ext.iter().all(Option::is_none));
     }
 }

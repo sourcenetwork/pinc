@@ -238,6 +238,7 @@ conn_impl! {
         self.streams.close_all(&mut self.pool);
         self.dgrams.clear(&mut self.pool);
         self.ext.clear(&mut self.pool);
+        self.ctl.release_ext(&mut self.pool);
         self.early.clear(&mut self.pool);
     }
 

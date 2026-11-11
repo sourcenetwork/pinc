@@ -21,7 +21,7 @@ use vinc_security::amp::{FACTOR, OVERHEAD};
 use vinc_wire::Writer;
 
 use super::config::{MIN_MTU, PROBE_MTU, PathId};
-use super::ctl::{K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
+use super::ctl::{EXT_BODY_MAX, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
 use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
@@ -684,27 +684,13 @@ conn_impl! {
     /// go is sent, to stay in the table until its packet is acknowledged.
     fn fill_extensions(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled) {
         self.shed_extensions();
-        while let Some(entry) = self.ext.peek_send(&self.pool) {
-            let Ok((ty, n)) = vinc_wire::varint::decode(entry) else {
-                self.ext.pop_send(&mut self.pool);
-                continue;
-            };
-            let len = entry.len() - n;
-            if len > self.max_extension_size(ty) {
-                self.ext.pop_send(&mut self.pool);
-                self.events.push(Ev::ExtensionUndeliverable(ty, len));
-                continue;
-            }
-            if !self.ctl.hold_ext(ty, entry.get(n..).unwrap_or_default()) {
-                break;
-            }
-            self.ext.pop_send(&mut self.pool);
-        }
+        while self.hold_queued_extension() {}
         for slot in self.ctl.ext.iter_mut().flatten() {
             if !slot.pending || out.refs.len() >= MAX_FRAME_REFS {
                 continue;
             }
-            let f = Frame::Extension { ty: slot.ty, body: slot.body.get(..slot.len).unwrap_or_default() };
+            let body = self.pool.bytes(&slot.chunk).get(..slot.len).unwrap_or_default();
+            let f = Frame::Extension { ty: slot.ty, body };
             if f.encoded_len() > payload.len().saturating_sub(*pos) || !put(payload, pos, &f) {
                 continue;
             }
@@ -712,6 +698,33 @@ conn_impl! {
             let _ = out.refs.push(FrameRef::Control { kind: K_EXT, id: slot.key });
             out.strong();
         }
+    }
+
+    /// Move the oldest queued extension frame into the retransmission table, or drop it if it cannot be sent at all.
+    /// Returns whether the queue moved, so the caller tries the next; false when it is empty or the table has no room.
+    // Out of line: its buffer for one frame body stays off the stack of every packet built.
+    #[inline(never)]
+    fn hold_queued_extension(&mut self) -> bool {
+        let Some(entry) = self.ext.peek_send(&self.pool) else { return false };
+        let Ok((ty, n)) = vinc_wire::varint::decode(entry) else {
+            self.ext.pop_send(&mut self.pool);
+            return true;
+        };
+        let len = entry.len() - n;
+        if len > self.max_extension_size(ty) {
+            self.ext.pop_send(&mut self.pool);
+            self.events.push(Ev::ExtensionUndeliverable(ty, len));
+            return true;
+        }
+        // The queue and the held slot both live in the pool: the body is copied out of the queue first.
+        let mut body = [0u8; EXT_BODY_MAX];
+        let Some(dst) = body.get_mut(..len) else { return false };
+        dst.copy_from_slice(entry.get(n..).unwrap_or_default());
+        if !self.ctl.hold_ext(&mut self.pool, ty, body.get(..len).unwrap_or_default()) {
+            return false;
+        }
+        self.ext.pop_send(&mut self.pool);
+        true
     }
 
     fn fill_path(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, ti: usize, now: u64) {
