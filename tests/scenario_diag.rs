@@ -17,8 +17,12 @@ use vinc_sim::suite::world::{build, variants};
 fn diag() {
     let id = std::env::var("VINC_DIAG_ID").unwrap();
     let seed: u64 = std::env::var("VINC_DIAG_SEED").unwrap().parse().unwrap();
+    // VINC_DIAG_DECISIONS=1 prints only the decision lines of every node, in the form the reference side prints, for
+    // comparing the two runs of one world (nodes need not be named).
+    let decisions = std::env::var("VINC_DIAG_DECISIONS").is_ok();
+    vinc_sim::suite::node::set_decision_trace(decisions);
     let nodes: Vec<usize> = std::env::var("VINC_DIAG_NODES")
-        .unwrap()
+        .unwrap_or_default()
         .split(',')
         .filter_map(|x| x.parse().ok())
         .collect();
@@ -44,8 +48,11 @@ fn diag() {
         println!("SITE n{n} {} clock {:?}", w.nodes[*n].site, w.nodes[*n].clock);
     }
     let (r, ev) = run_watching(&w, driver, LayerSet::NODE, &nodes).unwrap();
-    for l in ev {
+    for l in ev.iter().filter(|l| !decisions || l.starts_with("D ")) {
         println!("{l}");
+    }
+    if decisions {
+        return;
     }
     println!("{:?}\n{:?}", r.gates.failed(), r.late);
     for (g, st) in &r.gates.gates {

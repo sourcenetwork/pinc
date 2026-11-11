@@ -19,6 +19,31 @@ use crate::suite::rec::MemberEvent;
 const CLOSE_DENIED: u64 = 3;
 
 impl Core {
+    /// Queue a node event for the host, and record it as a decision when the decision trace is on.
+    pub(super) fn push_event(&mut self, e: NodeEvent) {
+        if super::decision_trace() {
+            let (kind, peer) = match &e {
+                NodeEvent::Incoming { peer } => ("Incoming", Some(*peer)),
+                NodeEvent::Connected { peer, .. } => ("Connected", Some(*peer)),
+                NodeEvent::ConnectFailed { peer, .. } => ("ConnectFailed", Some(*peer)),
+                NodeEvent::Closed { peer } => ("Closed", Some(*peer)),
+                NodeEvent::Revoked { peer } => ("Revoked", Some(*peer)),
+                _ => ("", None),
+            };
+            if let Some(peer) = peer {
+                self.decision(kind, peer);
+            }
+        }
+        self.events.push_back(e);
+    }
+
+    /// One line of the decision trace: the true time in seconds, the node, what happened and the peer. The reference
+    /// side prints the same form, so the two runs can be compared line by line.
+    pub(super) fn decision(&self, kind: &str, peer: usize) {
+        self.shared
+            .note_trace(format!("D {:.3} n{} {kind} n{peer}", self.now as f64 / 1e9, self.idx));
+    }
+
     /// Handle every event the node and the last commands produced. Returns whether there was any.
     pub(super) fn service<L: Layers>(&mut self, layers: &mut L) -> bool {
         let mut any = self.hub_members();
@@ -161,6 +186,18 @@ impl Core {
             M::ViewChanged { epoch, .. } => MemberEvent::ViewChanged { epoch },
             M::Lost { .. } => return,
         };
+        if super::decision_trace() {
+            let (kind, peer) = match &ev {
+                MemberEvent::Joined(p) => ("MemberJoined", *p),
+                MemberEvent::Suspected(p) => ("MemberSuspected", *p),
+                MemberEvent::ConfirmedDown(p) => ("MemberConfirmedDown", *p),
+                MemberEvent::Left(p) => ("MemberLeft", *p),
+                _ => ("", None),
+            };
+            if let Some(peer) = peer {
+                self.decision(kind, peer);
+            }
+        }
         if self.deliver() {
             let local = self.now;
             layers.event(local, self, LayerEvent::Member(ev));
@@ -210,7 +247,7 @@ impl Core {
             Event::Incoming { session, node, alpn } => self.on_open(layers, session, node, alpn, false, false),
             Event::ConnectFailed { node, alpn, reason } => {
                 if let Some(peer) = self.shared.index_of(&node) {
-                    self.events.push_back(NodeEvent::ConnectFailed {
+                    self.push_event(NodeEvent::ConnectFailed {
                         peer,
                         reason: Some(reason),
                     });
@@ -229,7 +266,7 @@ impl Core {
                         );
                         self.shared.note_trace(line);
                     }
-                    self.events.push_back(NodeEvent::Closed { peer: s.peer });
+                    self.push_event(NodeEvent::Closed { peer: s.peer });
                     if self.deliver() {
                         let local = self.now;
                         layers.event(local, self, LayerEvent::Closed { session });
@@ -296,7 +333,7 @@ impl Core {
                 error: CLOSE_DENIED,
             });
             if dialed && let Some(peer) = peer {
-                self.events.push_back(NodeEvent::ConnectFailed { peer, reason: None });
+                self.push_event(NodeEvent::ConnectFailed { peer, reason: None });
                 if self.deliver() {
                     let local = self.now;
                     layers.event(
@@ -321,7 +358,7 @@ impl Core {
                 .note_trace(format!("n{} true{} {how} {name} with {peer}", self.idx, self.now));
         }
         if dialed {
-            self.events.push_back(NodeEvent::Connected { peer, resumed });
+            self.push_event(NodeEvent::Connected { peer, resumed });
             if self.deliver() {
                 layers.event(
                     local,
@@ -334,7 +371,7 @@ impl Core {
                 );
             }
         } else {
-            self.events.push_back(NodeEvent::Incoming { peer });
+            self.push_event(NodeEvent::Incoming { peer });
             if self.deliver() {
                 layers.event(
                     local,
@@ -430,7 +467,7 @@ impl Core {
                 error: CLOSE_DENIED,
             });
         }
-        self.events.push_back(NodeEvent::Revoked { peer });
+        self.push_event(NodeEvent::Revoked { peer });
     }
 }
 

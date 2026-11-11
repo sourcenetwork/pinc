@@ -70,6 +70,19 @@ fn in_trace_window(now: u64) -> bool {
     (TRACE_FROM.load(Relaxed)..TRACE_TO.load(Relaxed)).contains(&now)
 }
 
+static DECISIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record the decisions of every node (sessions opening, ending and failing, members joining and going down) as lines
+/// `D <seconds> n<node> <what> n<peer>`, whatever nodes are watched. Process-wide and off until set; the reference
+/// side prints the same form, so two runs of one world can be compared for their first difference.
+pub fn set_decision_trace(on: bool) {
+    DECISIONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn decision_trace() -> bool {
+    DECISIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether the window is wide: datagrams are then summed per second and address, not listed.
 fn wide_window() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
