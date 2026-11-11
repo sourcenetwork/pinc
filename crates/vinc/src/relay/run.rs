@@ -137,6 +137,8 @@ where
     progressed
 }
 
+// vertexia: every pending operation is polled on every wake, O(streams) per wake; per-operation wakers would need `Arc`
+// or `unsafe`, so the upgrade is a readiness source the host passes (one wake per ready stream)
 /// Run the relay until it is stopped.
 #[allow(
     clippy::too_many_lines,

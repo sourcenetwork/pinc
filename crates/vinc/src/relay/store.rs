@@ -14,6 +14,8 @@ use vinc_crypto::NodeId;
 
 use crate::error::Result;
 
+// vertexia: a restored record gets a fresh lifetime and a record the machine dropped by lifetime stays in the store; keep
+// the receive time with each record and delete on expiry (needs a wall-clock stamp in `put` and a `remove`)
 /// Storage for the relay's signed records. Methods take `&self`: an implementation keeps its own interior state.
 pub trait Store {
     /// Every record stored so far, each as the bytes the publisher signed. The set is bounded by

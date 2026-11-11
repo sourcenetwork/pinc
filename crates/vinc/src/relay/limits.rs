@@ -4,6 +4,8 @@ use vinc_connect::relay::Quota;
 
 use crate::error::{Error, Result};
 
+// vertexia: the tables are a compile-time shape small enough to build by value on a 1 MiB stack; heap-backed tables in
+// `vinc-connect` (its `alloc` feature) lift it to the state machine's own constants
 /// The most member sessions the relay holds: the table size of the state machine.
 pub const CARRIERS: usize = 64;
 /// The most signed records the relay stores.
