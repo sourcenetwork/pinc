@@ -566,6 +566,11 @@ drive_impl! {
                 self.reselect(now, ep, &mut s);
             }
             s.relay_route = st.route.is_some_and(|(_, r)| is_relay_addr(&r));
+            // A session still in its handshake has nothing to punch for: its establishment arms the timer again. Left
+            // armed, a timer that is due would keep the node waking for it until the handshake ends.
+            if !st.established && s.punch.deadline().is_some_and(|d| d <= now) {
+                s.punch = Puncher::off();
+            }
             // Hole punching.
             if st.established && s.punch.deadline().is_some() {
                 let relay_active = s.relay_route;

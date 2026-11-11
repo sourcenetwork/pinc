@@ -509,3 +509,37 @@ fn a_server_session_that_began_on_a_relay_moves_to_the_direct_path_that_validate
         assert_eq!(w.apps(m[0]).values.fetched(&root, value.len() as u64), Some(value));
     });
 }
+
+#[test]
+fn a_dial_still_in_its_handshake_does_not_keep_the_node_awake() {
+    // A node whose address changed arms the punch timer of every session it follows, the ones still in their
+    // handshake included. A session that cannot be punched yet must not leave that timer due, or the host wakes the
+    // node again and again for nothing while the peer cannot be reached.
+    big(|| {
+        let mut w = LWorld::build_with(7, 1, 3, 0, false, values_on);
+        let (m, hub) = (w.members.clone(), w.hubs[0].0);
+        let value = data(7, 64 << 10);
+        let root = w.provide(m[1], value.clone());
+        w.run(secs(10));
+        w.sim.partition(secs(10), &[&[m[1]], &[m[0], m[2], hub]]);
+        w.sim.command(
+            secs(11),
+            m[0],
+            NCmd::ValuesFetch {
+                root,
+                length: value.len() as u64,
+                ranges: vec![],
+                providers: ids(&w, &m[1..2]),
+            },
+        );
+        w.sim.command(secs(12), m[0], NCmd::AddressChanged);
+        w.run(secs(14));
+        let before = w.sim.node(m[0]).timeouts;
+        w.run(secs(24));
+        let woke = w.sim.node(m[0]).timeouts - before;
+        assert!(
+            woke < 1000,
+            "the node woke {woke} times in ten seconds while waiting for a dial"
+        );
+    });
+}

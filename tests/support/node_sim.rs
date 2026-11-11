@@ -323,6 +323,8 @@ pub struct SimNode<A: SimApps = NoApps> {
     pub out: Outbox,
     pub events: VecDeque<NEv>,
     pub traces: Vec<(Time, TraceItem)>,
+    /// How many times the host called `handle_timeout`.
+    pub timeouts: u64,
     /// What the last restart found in the delay-tolerant records.
     pub restored: DtnRestored,
     now: Time,
@@ -459,6 +461,7 @@ impl<A: SimApps> SimNode<A> {
             out: Outbox::default(),
             events: VecDeque::new(),
             traces: Vec::new(),
+            timeouts: 0,
             restored: DtnRestored::default(),
             now: spec.start,
             down: false,
@@ -969,6 +972,7 @@ impl<A: SimApps> SimNode<A> {
         if self.down {
             return;
         }
+        self.timeouts += 1;
         self.node.set_wall_ms(now, self.wall_ms(now));
         if let Some(h) = self.hub.as_mut()
             && h.relay.next_deadline().is_some_and(|d| d <= now)
