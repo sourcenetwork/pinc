@@ -1,12 +1,28 @@
 //! The sketch of a VINC backend for a peer-to-peer transport trait shaped like DefraDB.rs's `P2PTransport`, with no
-//! dependency on it.
+//! dependency on it: the contract a `DefraDB` backend implements against.
 //!
 //! The trait below keeps the shape that matters: a cloneable handle, a text peer id equal to the hex of the public key,
-//! `sign`, `dial` with address hints, `disconnect`, `connected_peers`, a request that returns its reply, an inbound
-//! request that carries a response token (the send half of the request's own stream), and `shutdown`. Protocols are
-//! per-stream tags on one connection per peer, so a failure on one stream never closes the connection.
+//! `sign`, `dial` with address hints or by peer id alone, `disconnect`, `connected_peers`, a request that returns its
+//! reply, an inbound request that carries a response token (the send half of the request's own stream), and
+//! `shutdown`. Protocols are per-stream tags on one connection per peer, so a failure on one stream never closes the
+//! connection. Beside the trait sit the calls `DefraDB`'s peer assembly makes on its transport directly:
 //!
-//! Run with `cargo run -p vinc --features nuclei --example defradb_backend`.
+//! - **Service classes.** Each tag has an urgency ([`urgency_of`]): control traffic (KMS, peer info) at 0, document
+//!   pushes at the default 3, block transfers at 7, so a key request is not queued behind a 64 MiB CAR reply on the
+//!   same connection. Both the request and the reply stream take the class of their tag.
+//! - **Admission.** An allowlist (accept everyone, or only the listed peers) is the endpoint's access hook;
+//!   `allow_peer` adds to it and lifts a revocation, `deny_peer` revokes the peer, which ends every session with it, and
+//!   `is_peer_revoked` reads the bar. The hook is asked on accept, on dial and for any neighbour a layer takes.
+//! - **Service records.** A node publishes a signed record of its addresses with up to 64 bytes of hints; `DefraDB`
+//!   keeps a 38-byte pointer to its service records there (`set_service_pointer`, `service_pointer`). A dial with no
+//!   hints finds the peer through that record. The rendezvous here is an in-process directory; with the relay client
+//!   in the facade it is the node's home relay.
+//!
+//! Not here yet: raw topic pubsub (`publish_raw`, `subscribe_raw`, `register_pubsub_rpc_topic`, which `DefraDB`'s KMS
+//! uses for its key requests and their `encryption/<peer>/_response` replies). It waits for topic pubsub in the
+//! facade, which needs the facade to run on `vinc-node`.
+//!
+//! Run with `cargo run -p vinc --example defradb_backend`.
 
 #![allow(
     missing_docs,
@@ -22,7 +38,8 @@
 )]
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -33,12 +50,25 @@ use nuclei::sync::Mutex as AsyncMutex;
 use nuclei::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use nuclei::time::sleep_until_precise;
 use vinc::{
-    Builder, Connection, Endpoint, Error, ErrorKind, Hosted, NodeAddr, SendStream, Vinc, node_from_str, node_to_string,
+    Admission, Builder, Connection, Direction, Discovery, Endpoint, Error, ErrorKind, Hosted, NodeAddr, NodeId,
+    Records, Rendezvous, SendStream, Vinc, node_from_str, node_to_string,
 };
 use vinc::{RecvStream, read_tag};
+use vinc_keystore::KeyStore;
 
 const MUX: &[u8] = b"example/mux/1";
 const MAX_MSG: usize = 16 << 20;
+/// The length of `DefraDB`'s service-record pointer.
+pub const POINTER_LEN: usize = 38;
+
+/// The urgency of a stream by its tag: control first, block transfers last, everything else at the default.
+pub fn urgency_of(tag: &[u8]) -> u8 {
+    match tag {
+        b"kms" | b"peerinfo" | b"replicator" => 0,
+        b"car" | b"blocks" => 7,
+        _ => vinc::DEFAULT_URGENCY,
+    }
+}
 
 /// The seam: what the engine above needs from a backend.
 pub trait Transport: Clone + 'static {
@@ -46,6 +76,7 @@ pub trait Transport: Clone + 'static {
     type ResponseToken: 'static;
     fn local_peer_id(&self) -> String;
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, Error>;
+    /// Dial `peer`; with no hints the peer is found through its published record.
     async fn dial(&self, peer: &str, hints: Vec<SocketAddr>) -> Result<(), Error>;
     async fn disconnect(&self, peer: &str) -> Result<(), Error>;
     async fn connected_peers(&self) -> Result<Vec<String>, Error>;
@@ -63,9 +94,50 @@ pub struct Request<T> {
     pub token: T,
 }
 
+/// The access hook: everyone, or only the listed peers (`DefraDB`'s `AcceptAll` and `Explicit`).
+#[derive(Clone, Default)]
+pub struct Allowlist {
+    only: Rc<RefCell<Option<HashSet<NodeId>>>>,
+}
+
+impl Allowlist {
+    /// Admit only the peers `allow_peer` lists.
+    pub fn explicit() -> Self {
+        Self {
+            only: Rc::new(RefCell::new(Some(HashSet::new()))),
+        }
+    }
+}
+
+impl Admission for Allowlist {
+    fn admit(&self, peer: &NodeId, _alpn: &[u8], _dir: Direction) -> bool {
+        self.only.borrow().as_ref().is_none_or(|l| l.contains(peer))
+    }
+}
+
+/// The rendezvous: an in-process directory of signed records, which checks nothing (the endpoint verifies).
+#[derive(Clone, Default)]
+pub struct Directory(Rc<RefCell<HashMap<NodeId, Vec<u8>>>>);
+
+impl Rendezvous for Directory {
+    fn publish(&self, record: &[u8]) -> impl Future<Output = Result<(), Error>> {
+        let stored = vinc_connect::record::Record::parse(record)
+            .map(|r| {
+                self.0.borrow_mut().insert(r.node, record.to_vec());
+            })
+            .map_err(|_| Error::new(ErrorKind::Config, "not a record"));
+        std::future::ready(stored)
+    }
+
+    fn fetch(&self, node: &NodeId) -> impl Future<Output = Option<Vec<u8>>> {
+        std::future::ready(self.0.borrow().get(node).cloned())
+    }
+}
+
 /// The VINC backend.
 pub struct VincTransport<H: Hosted> {
-    ep: Endpoint<H>,
+    ep: Endpoint<H, Records<Directory>>,
+    allow: Allowlist,
     // One connection per peer for every protocol.
     conns: Rc<RefCell<HashMap<String, Connection<H>>>>,
     inbox: UnboundedSender<Request<SendStream<H>>>,
@@ -76,6 +148,7 @@ impl<H: Hosted> Clone for VincTransport<H> {
     fn clone(&self) -> Self {
         Self {
             ep: self.ep.clone(),
+            allow: self.allow.clone(),
             conns: Rc::clone(&self.conns),
             inbox: self.inbox.clone(),
             requests: Rc::clone(&self.requests),
@@ -106,8 +179,8 @@ async fn read_msg<H: Hosted>(rx: &mut RecvStream<H>) -> Result<Vec<u8>, Error> {
 }
 
 impl<H: Hosted + 'static> VincTransport<H> {
-    /// Start serving inbound streams of `ep`, and run it.
-    pub fn new(ep: Endpoint<H>) -> Self {
+    /// Start serving inbound streams of `ep`, and run it. `allow` must be the hook `ep` was built with.
+    pub fn new(ep: Endpoint<H, Records<Directory>>, allow: Allowlist) -> Self {
         let runner = ep.clone();
         nuclei::spawn_local(async move {
             let _ = runner.run().await;
@@ -116,6 +189,7 @@ impl<H: Hosted + 'static> VincTransport<H> {
         let (inbox, requests) = unbounded_channel();
         let t = Self {
             ep,
+            allow,
             conns: Rc::default(),
             inbox,
             requests: Rc::new(AsyncMutex::new(requests)),
@@ -141,12 +215,53 @@ impl<H: Hosted + 'static> VincTransport<H> {
     fn conn(&self, peer: &str) -> Option<Connection<H>> {
         self.conns.borrow_mut().get(peer).cloned()
     }
+
+    /// Let `peer` in: add it to an explicit allowlist and lift a revocation of it.
+    pub fn allow_peer(&self, peer: &str) -> Result<(), Error> {
+        let id = node_from_str(peer)?;
+        if let Some(l) = self.allow.only.borrow_mut().as_mut() {
+            l.insert(id);
+        }
+        self.ep.unrevoke(&id);
+        Ok(())
+    }
+
+    /// Bar `peer` until `allow_peer` lets it in again: every session with it ends.
+    pub async fn deny_peer(&self, peer: &str) -> Result<(), Error> {
+        let id = node_from_str(peer)?;
+        if let Some(l) = self.allow.only.borrow_mut().as_mut() {
+            l.remove(&id);
+        }
+        self.ep.revoke(&id).await?;
+        self.conns.borrow_mut().remove(peer);
+        Ok(())
+    }
+
+    pub fn is_peer_revoked(&self, peer: &str) -> Result<bool, Error> {
+        Ok(self.ep.is_revoked(&node_from_str(peer)?))
+    }
+
+    /// Put `DefraDB`'s service-record pointer in this node's record and publish it.
+    pub async fn set_service_pointer(&self, pointer: &[u8; POINTER_LEN]) -> Result<(), Error> {
+        self.ep.set_hints(pointer)?;
+        self.ep.publish().await
+    }
+
+    /// The service-record pointer `peer` published, if it published one.
+    pub async fn service_pointer(&self, peer: &str) -> Result<Option<Vec<u8>>, Error> {
+        let rec = self.ep.lookup(&node_from_str(peer)?).await?;
+        Ok(rec.map(|r| r.hints).filter(|h| h.len() == POINTER_LEN))
+    }
 }
 
 async fn serve<H: Hosted>(conn: Connection<H>, peer: String, inbox: UnboundedSender<Request<SendStream<H>>>) {
-    while let Ok((tx, mut rx)) = conn.accept_bi().await {
+    while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
         let Ok(tag) = read_tag(&mut rx).await else { continue };
         let Ok(body) = read_msg(&mut rx).await else { continue };
+        // The reply leaves at the class of its request.
+        if tx.set_urgency(urgency_of(&tag)).await.is_err() {
+            continue;
+        }
         let _ = inbox.send(Request {
             peer: peer.clone(),
             tag,
@@ -193,6 +308,7 @@ impl<H: Hosted + 'static> Transport for VincTransport<H> {
             .conn(peer)
             .ok_or(Error::new(ErrorKind::Unreachable, "not connected"))?;
         let (mut tx, mut rx) = conn.open_bi_tagged(tag).await?;
+        tx.set_urgency(urgency_of(tag)).await?;
         write_msg(&mut tx, &body).await?;
         tx.finish().await?;
         read_msg(&mut rx).await
@@ -212,11 +328,37 @@ impl<H: Hosted + 'static> Transport for VincTransport<H> {
     }
 }
 
-/// Two backends on loopback: one asks, the other answers on the request's own stream. Returns the reply.
+/// Two backends on loopback sharing a directory. `b` publishes its service pointer; `a` dials it by peer id alone,
+/// reads the pointer, sends a control request and a push, each answered on its own stream; then `b` denies `a`, which
+/// loses its connection at once and cannot come back. Returns the push's reply.
 pub async fn run() -> Result<Vec<u8>, Error> {
     let lo: SocketAddr = ([127, 0, 0, 1], 0).into();
-    let a = VincTransport::new(endpoint(Vinc::builder().seed(&[1; 32])?.alpn(MUX), lo).await?);
-    let b = VincTransport::new(endpoint(Vinc::builder().seed(&[2; 32])?.alpn(MUX), lo).await?);
+    let dir = Directory::default();
+    let (aa, ba) = (Allowlist::default(), Allowlist::explicit());
+    let a = VincTransport::new(
+        endpoint(
+            Vinc::builder()
+                .seed(&[1; 32])?
+                .alpn(MUX)
+                .discovery(Records::new(dir.clone()))
+                .acp(aa.clone()),
+            lo,
+        )
+        .await?,
+        aa,
+    );
+    let b = VincTransport::new(
+        endpoint(
+            Vinc::builder()
+                .seed(&[2; 32])?
+                .alpn(MUX)
+                .discovery(Records::new(dir.clone()))
+                .acp(ba.clone()),
+            lo,
+        )
+        .await?,
+        ba,
+    );
     let b2 = b.clone();
     nuclei::spawn_local(async move {
         while let Some(req) = b2.next_request().await {
@@ -227,17 +369,44 @@ pub async fn run() -> Result<Vec<u8>, Error> {
         }
     })
     .detach();
-    a.dial(&b.local_peer_id(), b.addr().direct).await?;
+
+    let pointer: [u8; POINTER_LEN] = *b"defra/service-records/1:0123456789abcd";
+    b.set_service_pointer(&pointer).await?;
+    b.allow_peer(&a.local_peer_id())?;
+    a.dial(&b.local_peer_id(), Vec::new()).await?;
     assert!(a.connected_peers().await?.contains(&b.local_peer_id()));
+    assert_eq!(
+        a.service_pointer(&b.local_peer_id()).await?.as_deref(),
+        Some(&pointer[..])
+    );
     let sig = a.sign(b"message").await?;
     assert_eq!(sig.len(), 64);
+
+    assert_eq!(
+        a.request(&b.local_peer_id(), b"kms", b"key?".to_vec()).await?,
+        b"kms/key?"
+    );
     let reply = a.request(&b.local_peer_id(), b"pushlog", b"payload".to_vec()).await?;
+
+    b.deny_peer(&a.local_peer_id()).await?;
+    assert!(b.is_peer_revoked(&a.local_peer_id())?);
+    assert!(!b.connected_peers().await?.contains(&a.local_peer_id()));
+    assert!(
+        a.request(&b.local_peer_id(), b"pushlog", b"again".to_vec())
+            .await
+            .is_err()
+    );
+
     a.shutdown().await;
+    b.shutdown().await;
     Ok(reply)
 }
 
 /// An endpoint over a UDP socket of the nuclei runtime bound to `bind`: the three closures are the whole of the host's I/O.
-async fn endpoint(builder: Builder, bind: SocketAddr) -> Result<Endpoint<impl Hosted>, Error> {
+async fn endpoint<S: KeyStore + 'static, D: Discovery + 'static, A: Admission + 'static>(
+    builder: Builder<S, D, A>,
+    bind: SocketAddr,
+) -> Result<Endpoint<impl Hosted<Access = A>, D>, Error> {
     let sock = Arc::new(
         Handle::<UdpSocket>::bind(bind)
             .await
