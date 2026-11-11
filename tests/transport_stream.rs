@@ -1126,7 +1126,10 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 proptest! {
-    /// Whenever a stream is admitted or a window grows, the credit granted and not yet received fits the pool.
+    /// Whenever a stream is admitted or a window grows, the pool bytes promised to the peer (the credit granted and not
+    /// yet received, and the first charges kept for the streams it may still open) fit the pool, or are no more than
+    /// they were before the operation: another user of the pool taking chunks (a `Hog`: the send buffers and the datagram
+    /// queues do) can put the promises past what is left, and no admission or grant may add to that.
     #[test]
     fn granted_credit_fits_the_pool_at_every_admission_and_grant(ops in prop::collection::vec(op(), 1..150)) {
         let mut pool = BufferPool::new_boxed(24);
@@ -1145,6 +1148,7 @@ proptest! {
             };
             let before = limits(&t);
             let opened_before = t.open_streams();
+            let promised_before = t.promised();
             match op {
                 Op::Open(k) => {
                     match t.on_stream_frame(&mut pool, 4 * k as u64, sent[k], &[], false) {
@@ -1152,7 +1156,7 @@ proptest! {
                         Err(e) => prop_assert!(false, "unexpected {e}"),
                     }
                     if t.open_streams() > opened_before {
-                        prop_assert!(t.granted_unreceived() <= pool.available_bytes());
+                        prop_assert!(t.promised() <= pool.available_bytes().max(promised_before));
                     }
                 }
                 Op::Frame(k, n) => {
@@ -1170,7 +1174,7 @@ proptest! {
                     let _ = t.consume(&mut pool, id, n, now, 2000);
                     let after = limits(&t);
                     if before.iter().zip(&after).any(|(b, a)| a > b && b.is_some()) {
-                        prop_assert!(t.granted_unreceived() <= pool.available_bytes());
+                        prop_assert!(t.promised() <= pool.available_bytes().max(promised_before));
                     }
                 }
                 Op::Hog => {

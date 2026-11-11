@@ -219,6 +219,16 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             .fold(0, |sum, s| sum.saturating_add(s.recv.unreceived()))
     }
 
+    /// The pool bytes promised to the peer: the credit granted and not yet received, plus the first charges kept for the
+    /// streams it may still open. Admitting a stream inside the credit moves a first charge from the second part to the
+    /// first and leaves the sum alone; a window grant, a stream beyond the credit and a local stream are the only things
+    /// that raise it, and each of them first checks that the sum with the new part fits the pool. Other users of the pool
+    /// (the send buffers, the datagram queues) take chunks without asking, so the sum can pass what the pool has left
+    /// without any promise having grown; it falls again as those chunks come back or the peer's credit is received.
+    pub fn promised(&self) -> u64 {
+        self.granted_unreceived().saturating_add(self.reserved())
+    }
+
     /// The state the receive and credit path works on, for trace validation.
     #[cfg(feature = "trace")]
     pub fn trace_view(&self, pool: &BufferPool<'_>) -> super::trace::TableView {
