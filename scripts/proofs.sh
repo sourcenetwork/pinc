@@ -357,6 +357,7 @@ par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags
 par run_tlc recovery_tail Recovery Recovery_tail
+par run_tlc recovery_lose Recovery Recovery_lose
 par run_tlc rx Rx Rx
 par run_tlc rx_wide Rx Rx_wide
 par run_tlc cid Cid Cid
