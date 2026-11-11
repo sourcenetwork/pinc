@@ -5157,10 +5157,12 @@ name = "vinc"
 version = "0.1.0"
 dependencies = [
  "rapidhash",
+ "vinc-broadcast",
  "vinc-connect",
  "vinc-core",
  "vinc-crypto",
  "vinc-keystore",
+ "vinc-node",
  "vinc-security",
  "vinc-transport",
 ]
@@ -5279,6 +5281,25 @@ dependencies = [
 name = "vinc-membership"
 version = "0.1.0"
 dependencies = [
+ "vinc-wire",
+]
+
+[[package]]
+name = "vinc-node"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "vinc-broadcast",
+ "vinc-connect",
+ "vinc-core",
+ "vinc-crypto",
+ "vinc-dag",
+ "vinc-dtn",
+ "vinc-membership",
+ "vinc-reconcile",
+ "vinc-security",
+ "vinc-transport",
+ "vinc-values",
  "vinc-wire",
 ]
 

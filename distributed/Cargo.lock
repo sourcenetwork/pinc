@@ -5519,10 +5519,12 @@ name = "vinc"
 version = "0.1.0"
 dependencies = [
  "rapidhash",
+ "vinc-broadcast",
  "vinc-connect",
  "vinc-core",
  "vinc-crypto",
  "vinc-keystore",
+ "vinc-node",
  "vinc-security",
  "vinc-transport",
 ]
