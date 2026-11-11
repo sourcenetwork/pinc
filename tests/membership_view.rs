@@ -31,7 +31,7 @@ mod world;
 use vinc_membership::codec::{Alive, Down, Entry, Frame, Path, Probe, Proof, Record, Snap, entry_bytes, ty};
 use vinc_membership::event::{QuietCause, Removal};
 use vinc_membership::{Event, NodeId, Trace};
-use world::{Bc, MS, SEC, World, id};
+use world::{Bc, LEAVE, MS, SEC, World, id};
 
 const START: u64 = 100 * SEC;
 
@@ -235,6 +235,42 @@ fn a_snapshot_never_removes_it_suspects_and_a_lease_without_a_listing_ends_it() 
                 ..
             }
         )) == 1
+    );
+}
+
+#[test]
+fn the_first_snapshot_of_a_new_home_never_brings_back_a_member_that_left() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let home = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let other = 1 - home;
+    // The member leaves; only the home sends the view's deltas, so the other hub's copy here still lists it.
+    w.leave(x);
+    for hub in 0..2 {
+        w.close_session(x, hub, LEAVE);
+    }
+    w.run(5 * SEC);
+    assert!(!w.has(m, x), "the home told the member");
+    // The home goes away and the other hub becomes the home; its snapshot omits the member that left.
+    w.cut.insert((home, m));
+    w.close_session(m, home, 0);
+    assert!(w.run_until(120 * SEC, |w| w.nodes[m].m.primary() == Some(&id(other))));
+    w.snapshot_to(other, m);
+    w.run(5 * SEC);
+    assert!(
+        !w.has(m, x),
+        "an omission keeps a listed member, it never lists one again"
+    );
+    assert_eq!(
+        traces(&w, m, |t| matches!(t, Trace::Absent { member } if *member == id(x))),
+        0
+    );
+    assert_eq!(
+        w.count_events(
+            m,
+            |e| matches!(e, Event::MemberSuspected { member } if *member == id(x))
+        ),
+        0
     );
 }
 

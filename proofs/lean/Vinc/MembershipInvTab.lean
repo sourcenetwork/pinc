@@ -196,6 +196,13 @@ theorem erase (h : Bnd m) (k : Nat) : Bnd (m.erase k) :=
 theorem modify (h : Bnd m) (k : Nat) (f : α → α) : Bnd (m.modify k f) := by
   refine ⟨by rw [AMap.keys_modify]; exact h.1, ?_⟩
   rw [AMap.length_modify]; exact h.2
+
+/-- A table filtered by any test (`retain`). -/
+theorem filter (h : Bnd m) (f : Nat × α → Bool) : Bnd (m.filter f) := by
+  refine ⟨?_, Nat.le_trans (List.length_filter_le _ _) h.2⟩
+  have h1 := h.1
+  unfold AMap.keys at h1 ⊢
+  exact List.Pairwise.sublist (List.Sublist.map _ List.filter_sublist) h1
 end Bnd
 
 namespace KBnd

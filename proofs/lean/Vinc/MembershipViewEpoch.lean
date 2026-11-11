@@ -237,6 +237,9 @@ theorem applyDelta_epoch (e : Env) (n : N) (now hub m : Nat) (rc : Rec) (a : Ali
   · exact applyDeltaCore_epoch ..
 
 /-- The fold of `recompute_one` over members keeps the epoch (it never bumps). -/
+@[simp] theorem dropGone_epoch (n : N) (hub round : Nat) : (n.dropGone hub round).epoch = n.epoch := by
+  unfold N.dropGone; split <;> rfl
+
 theorem markAbsent_epoch (e : Env) (n : N) (now hub round : Nat) : (N.markAbsent e n now hub round).1.epoch = n.epoch := by
   unfold N.markAbsent
   refine foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ _ _ ?_ rfl
@@ -285,7 +288,7 @@ def snapFin (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat) (a : 
         | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
         | none => n
       let (n, changed) := if !partial_ then
-          let (n', ch) := N.markAbsent e n now hub round
+          let (n', ch) := N.markAbsent e (n.dropGone hub round) now hub round
           (n', changed || ch)
         else (n, changed)
       let n := if n.primary == some hub then n.bc (.resub hub) else n
@@ -334,7 +337,7 @@ theorem snapFin_ep (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat
   dsimp only
   apply ite_ge_bump
   repeat' split
-  all_goals (unfold EpGe; simp [trace_epoch, N.bc, markAbsent_epoch])
+  all_goals (unfold EpGe; simp [trace_epoch, N.bc, markAbsent_epoch, dropGone_epoch])
 
 
 theorem applySnap_epoch (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) :

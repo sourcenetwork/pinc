@@ -100,6 +100,15 @@ theorem inv_applyDown {e : Env} {n : N} (hx : Inv B n) (now hub member inc : Nat
   inv_go
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_applyDown)
 
+theorem inv_dropGone {n : N} (hx : Inv B n) (hub round : Nat) : Inv B (n.dropGone hub round) := by
+  unfold N.dropGone
+  split
+  · rename_i c hc
+    inv_keep hx
+    exact hx.hv.insert hub _ ((hx.hv.entries hub c hc).filter _) (Or.inr (AMap.has_of_get? _ _ _ hc))
+  · exact hx
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_dropGone)
+
 theorem inv_markAbsent {e : Env} {n : N} (hx : Inv B n) (now hub round : Nat) : Inv B (N.markAbsent e n now hub round).1 := by
   unfold N.markAbsent
   inv_go

@@ -93,6 +93,9 @@ theorem pushDelta_susp'' (e : Env) (n : N) (now m : Nat) (rc : Rec) (a : Alive) 
 @[simp] theorem applyDown_susp (e : Env) (n : N) (now hub member inc : Nat) : (N.applyDown e n now hub member inc).susp = n.susp := by
   unfold N.applyDown; exact applyDelta_susp ..
 
+@[simp] theorem dropGone_susp (n : N) (hub round : Nat) : (n.dropGone hub round).susp = n.susp := by
+  unfold N.dropGone; split <;> rfl
+
 @[simp] theorem markAbsent_susp (e : Env) (n : N) (now hub round : Nat) : (N.markAbsent e n now hub round).1.susp = n.susp := by
   unfold N.markAbsent
   apply foldl_su2

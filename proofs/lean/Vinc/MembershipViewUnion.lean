@@ -80,8 +80,9 @@ theorem hdIf_members (e : Env) (n : N) (m : Nat) (b0 : Rec) (c : Bool) :
 /-- **A snapshot never removes a member on its own** (view side). If an eligible hub copy lists the member and its
 omission, if any, has not lasted a full lease, then recomputing the member keeps it in the view (or the view table is
 full and the member was not in it: a full table refuses a new member and evicts nobody). `applySnap` only inserts
-entries into the sender's copy or marks them omitted (`MembershipViewSnap.lean`), and an omission that has just been
-marked is not expired, so a snapshot alone cannot make a listed member leave. -/
+entries into the sender's copy, marks the omitted entries of members the view lists, and drops the omitted entries of
+members it does not list (`MembershipViewSnap.lean`); an omission that has just been marked is not expired, so a
+snapshot alone cannot make a listed member leave. -/
 theorem recomputeOne_listed_stays (e : Env) (n : N) (now m : Nat)
     (h : (n.candidates now (n.source now) m).1 ≠ none) :
     (N.recomputeOne e n now m).1.members.has m = true ∨ (n.members.has m = false ∧ MAX_TABLE ≤ n.members.len) := by

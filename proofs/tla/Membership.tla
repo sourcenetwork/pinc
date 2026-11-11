@@ -482,6 +482,14 @@ SnapLoop(S, env, now, hub, round, es, i, ch) ==
                        r == RecomputeOne(s1, env, now, e.m)
                    IN SnapLoop(r.S, env, now, hub, round, es, i + 1, ch \/ r.ch)
 
+\* a complete snapshot of hub listed round `round`: an earlier entry of a member the view does not list is dropped from
+\* the copy (view.rs drop_gone)
+DropGone(S, hub, round) ==
+    IF hub \notin DOMAIN S.hv THEN S
+    ELSE LET es == S.hv[hub].entries
+         IN [S EXCEPT !.hv[hub].entries =
+                [m \in {k \in DOMAIN es : es[k].round = round \/ k \in DOMAIN S.members} |-> es[m]]]
+
 \* a complete snapshot of hub listed round `round`: everything else in its copy is absent, which starts that member's
 \* lease clock without removing it
 RECURSIVE MarkAbsent(_, _, _, _, _, _, _)
@@ -506,7 +514,8 @@ ApplySnap(S, env, now, hub, sn) ==
              s3 == Trace(r.S, [k |-> "snap_applied", hub |-> hub, entries |-> Len(sn.es), more |-> sn.more])
          IN IF sn.more THEN (IF r.ch THEN Bump(s3) ELSE s3)
             ELSE LET s4 == IF hub \in DOMAIN s3.hv THEN [s3 EXCEPT !.hv[hub].open = FALSE] ELSE s3
-                     m == IF ~sn.partial THEN MarkAbsent(s4, env, now, hub, round, NONE, r.ch) ELSE [S |-> s4, ch |-> r.ch]
+                     m == IF ~sn.partial THEN MarkAbsent(DropGone(s4, hub, round), env, now, hub, round, NONE, r.ch)
+                          ELSE [S |-> s4, ch |-> r.ch]
                      s5 == IF m.S.primary = <<hub>> THEN Bc(m.S, [k |-> "resub", hub |-> hub]) ELSE m.S
                  IN IF m.ch THEN Bump(s5) ELSE s5
 

@@ -245,6 +245,13 @@ def N.applyDelta (e : Env) (n : N) (now hub : Nat) (m : Nat) (rc : Rec) (a : Ali
 def N.applyDown (e : Env) (n : N) (now hub member inc : Nat) : N :=
   N.applyDelta e n now hub member ⟨inc, 0, [0, 0, 0, 0, 0, 0, 0, 0]⟩ .down
 
+/-- `drop_gone`: a complete snapshot of `hub` listed round `round`; an earlier entry of a member the view does not list
+is dropped from the copy (the code's `retain`). -/
+def N.dropGone (n : N) (hub round : Nat) : N :=
+  match n.hv.get? hub with
+  | some c => { n with hv := n.hv.insert hub { c with entries := c.entries.filter (fun p => p.2.round == round || n.members.has p.1) } }
+  | none => n
+
 /-- `mark_absent`: a complete snapshot of `hub` listed round `round`; everything else in its copy is omitted. -/
 def N.markAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
   let ks := match n.hv.get? hub with | some c => c.entries.keys | none => []
@@ -306,7 +313,7 @@ def N.applySnap (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : L
           | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
           | none => n
         let (n, changed) := if !partial_ then
-            let (n', ch) := N.markAbsent e n now hub round
+            let (n', ch) := N.markAbsent e (n.dropGone hub round) now hub round
             (n', changed || ch)
           else (n, changed)
         let n := if n.primary == some hub then n.bc (.resub hub) else n

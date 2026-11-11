@@ -351,6 +351,7 @@ impl Membership {
                 c.open = false;
             }
             if !s.partial {
+                self.drop_gone(hub, round);
                 changed |= self.mark_absent(h, now, hub, round);
             }
             if self.primary.as_ref() == Some(hub) {
@@ -360,6 +361,18 @@ impl Membership {
         }
         if changed {
             self.bump();
+        }
+    }
+
+    /// A complete snapshot of `hub` listed round `round`: an earlier entry of a member the view does not list is
+    /// dropped from the copy, as a snapshot that replaces the copy drops it. The omission lease below keeps a member
+    /// the view lists; it must not bring back one the view let go. The copy of a hub that was not this node's home
+    /// got no deltas, so its entries are stale: when that hub becomes the home, its first snapshot would otherwise
+    /// mark a long-gone member omitted and list it again for a lease.
+    fn drop_gone(&mut self, hub: &NodeId, round: u32) {
+        let members = &self.members;
+        if let Some(c) = self.hv.get_mut(hub) {
+            c.entries.retain(|m, ce| ce.round == round || members.contains_key(m));
         }
     }
 
