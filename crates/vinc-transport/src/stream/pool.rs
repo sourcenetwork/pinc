@@ -212,9 +212,13 @@ impl<'p> BufferPool<'p> {
 
 /// A sparse run of pool chunks indexed by chunk number modulo `C`: the stream layers keep their reassembly and send
 /// buffers in one. The owner guarantees that the live chunk numbers span fewer than `C`.
+///
+/// An entry is the number of the pool chunk it holds (1 for the first chunk, 0 for none) in 16 bits, so a ring of 257
+/// entries is half the size it would be with the handle of the pool; the pool is therefore used up to its 65,535th
+/// chunk by streams, and a chunk beyond it is refused as exhausted.
 #[derive(Debug)]
 pub(super) struct Ring<const C: usize> {
-    slots: [Option<Chunk>; C],
+    slots: [u16; C],
     held: usize,
 }
 
@@ -227,18 +231,17 @@ const fn ring_index(k: u64, c: usize) -> usize {
 }
 
 impl<const C: usize> Ring<C> {
-    pub(super) const EMPTY: Self = Self {
-        slots: [const { None }; C],
-        held: 0,
-    };
+    pub(super) const EMPTY: Self = Self { slots: [0; C], held: 0 };
 
     /// How many chunks are held.
     pub(super) const fn held(&self) -> usize {
         self.held
     }
 
-    fn slot(&self, k: u64) -> Option<&Chunk> {
-        self.slots.get(ring_index(k, C)).and_then(Option::as_ref)
+    /// The handle of chunk number `k`, if held. The ring keeps the ownership: the handle is only shown to the pool.
+    fn slot(&self, k: u64) -> Option<Chunk> {
+        let raw = *self.slots.get(ring_index(k, C))?;
+        NonZeroU32::new(u32::from(raw)).map(Chunk)
     }
 
     /// Whether chunk number `k` is held.
@@ -259,7 +262,9 @@ impl<const C: usize> Ring<C> {
 
     /// Release chunk number `k`, if held.
     pub(super) fn release(&mut self, pool: &mut BufferPool<'_>, k: u64) {
-        if let Some(chunk) = self.slots.get_mut(ring_index(k, C)).and_then(Option::take) {
+        if let Some(raw) = self.slots.get_mut(ring_index(k, C)).map(core::mem::take)
+            && let Some(chunk) = NonZeroU32::new(u32::from(raw)).map(Chunk)
+        {
             self.held -= 1;
             pool.free_chunk(chunk);
         }
@@ -267,8 +272,10 @@ impl<const C: usize> Ring<C> {
 
     /// Release every chunk.
     pub(super) fn release_all(&mut self, pool: &mut BufferPool<'_>) {
-        for chunk in self.slots.iter_mut().filter_map(Option::take) {
-            pool.free_chunk(chunk);
+        for raw in &mut self.slots {
+            if let Some(chunk) = NonZeroU32::new(u32::from(core::mem::take(raw))).map(Chunk) {
+                pool.free_chunk(chunk);
+            }
         }
         self.held = 0;
     }
@@ -276,7 +283,7 @@ impl<const C: usize> Ring<C> {
     /// The bytes of chunk number `k` from `from` to `from + len`, clipped to the chunk.
     pub(super) fn span<'a>(&self, pool: &'a BufferPool<'_>, k: u64, from: usize, len: usize) -> Option<&'a [u8]> {
         let chunk = self.slot(k)?;
-        pool.bytes(chunk).get(from..from.checked_add(len)?)
+        pool.bytes(&chunk).get(from..from.checked_add(len)?)
     }
 
     /// Store `src` at absolute position `pos`, allocating missing chunks.
@@ -288,13 +295,18 @@ impl<const C: usize> Ring<C> {
             let at = (pos % CHUNK_SIZE as u64) as usize;
             let take = rest.len().min(CHUNK_SIZE - at);
             let slot = self.slots.get_mut(ring_index(k, C)).ok_or(PoolExhausted)?;
-            if slot.is_none() {
-                *slot = Some(pool.alloc_chunk()?);
+            if *slot == 0 {
+                let chunk = pool.alloc_chunk()?;
+                let Ok(raw) = u16::try_from(chunk.0.get()) else {
+                    pool.free_chunk(chunk);
+                    return Err(PoolExhausted);
+                };
+                *slot = raw;
                 self.held += 1;
             }
-            let dst = slot
-                .as_ref()
-                .and_then(|chunk| pool.bytes_mut(chunk).get_mut(at..at + take))
+            let dst = NonZeroU32::new(u32::from(*slot))
+                .map(Chunk)
+                .and_then(|chunk| pool.bytes_mut(&chunk).get_mut(at..at + take))
                 .ok_or(PoolExhausted)?;
             let (head, tail) = rest.split_at(take);
             dst.copy_from_slice(head);
@@ -339,5 +351,30 @@ impl<const C: usize> Ring<C> {
             pos += take as u64;
         }
         true
+    }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_ring_refuses_the_chunk_beyond_its_16_bit_handle_and_gives_it_back() {
+        let mut pool = BufferPool::new_boxed(65_537);
+        let held: alloc::vec::Vec<Chunk> = (0..65_535).map(|_| pool.alloc_chunk().unwrap()).collect();
+        let mut ring = Ring::<4>::EMPTY;
+        // The 65,536th chunk of the pool cannot be named in 16 bits.
+        assert!(ring.write(&mut pool, 0, &[1]).is_err());
+        assert_eq!(ring.held(), 0);
+        assert_eq!(pool.available_chunks(), 2);
+        for c in held {
+            pool.free_chunk(c);
+        }
+        // With the pool back at its start, the same ring stores and reads a byte.
+        assert!(ring.write(&mut pool, 0, &[7]).is_ok());
+        let mut out = [0u8; 1];
+        assert_eq!(ring.read(&pool, 0, &mut out), 1);
+        assert_eq!(out, [7]);
     }
 }

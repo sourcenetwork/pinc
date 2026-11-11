@@ -20,11 +20,13 @@ pub enum QueueError {
     Exhausted,
 }
 
+/// Where one queued datagram sits: its chunk slot, and its offset and length in the chunk (a chunk is 16 KiB, so both
+/// fit 16 bits). Six bytes, because a queue holds many.
 #[derive(Debug, Clone, Copy)]
 struct Entry {
-    slot: usize,
-    at: usize,
-    len: usize,
+    slot: u8,
+    at: u16,
+    len: u16,
 }
 
 /// A bounded FIFO of byte strings packed into pool chunks: at most `Q` entries in at most `C` chunks.
@@ -81,11 +83,15 @@ impl<const Q: usize, const C: usize> PackedQueue<Q, C> {
         };
         dst.copy_from_slice(data);
         let at_entry = (self.head + self.len) % Q;
+        let (Ok(slot8), Ok(at16), Ok(len16)) = (u8::try_from(slot), u16::try_from(at), u16::try_from(data.len()))
+        else {
+            return Err(QueueError::TooLarge);
+        };
         if let Some(e) = self.entries.get_mut(at_entry) {
             *e = Entry {
-                slot,
-                at,
-                len: data.len(),
+                slot: slot8,
+                at: at16,
+                len: len16,
             };
         }
         self.tail_at += data.len();
@@ -114,8 +120,9 @@ impl<const Q: usize, const C: usize> PackedQueue<Q, C> {
             return None;
         }
         let e = self.entries.get(self.head)?;
-        let chunk = self.chunks.get(e.slot)?.as_ref()?;
-        pool.bytes(chunk).get(e.at..e.at + e.len)
+        let chunk = self.chunks.get(usize::from(e.slot))?.as_ref()?;
+        pool.bytes(chunk)
+            .get(usize::from(e.at)..usize::from(e.at) + usize::from(e.len))
     }
 
     /// Remove the oldest entry; returns whether there was one.
@@ -193,7 +200,7 @@ impl<const Q: usize, const C: usize> Default for Datagrams<Q, C> {
 impl<const Q: usize, const C: usize> Datagrams<Q, C> {
     /// Empty queues.
     pub const fn new() -> Self {
-        const { assert!(Q >= 1 && C >= 1) };
+        const { assert!(Q >= 1 && C >= 1 && C <= 255) };
         Self {
             send: PackedQueue::NEW,
             recv: PackedQueue::NEW,

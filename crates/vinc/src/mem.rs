@@ -48,7 +48,7 @@ pub struct Limits {
     /// The most sessions at once (at most [`MAX_CONNECTIONS`]). The memory for the next capacity of [`CAPACITIES`](crate::CAPACITIES)
     /// at or above it is reserved when the engine starts; see the module docs for what that costs.
     pub connections: usize,
-    /// The 16 KiB chunks one session may hold for its streams and datagrams (at least 8). The default of 512 is 8 MiB:
+    /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 512 is 8 MiB:
     /// the pool of every session is reserved at start, so raise it for a few busy sessions, not for thousands.
     pub pool_chunks: usize,
     /// The receive window of each stream in bytes, at most `(RING - 1) * 16 KiB`, which is the default 1,310,720 (1.25
@@ -100,7 +100,7 @@ impl Limits {
     /// [`ErrorKind::Config`](crate::ErrorKind::Config) naming the limit that is out of range.
     pub fn check(&self) -> Result<()> {
         let ok = (1..=MAX_CONNECTIONS).contains(&self.connections)
-            && (8..=65_536).contains(&self.pool_chunks)
+            && (8..=65_535).contains(&self.pool_chunks)
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
             && (16 * 1024..=1 << 30).contains(&self.send_window)
             && (1..=64).contains(&self.streams)
@@ -113,5 +113,20 @@ impl Limits {
         } else {
             Err(Error::config("a limit is out of range"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pool_of_more_chunks_than_a_stream_ring_can_name_is_refused() {
+        let limits = |pool_chunks| Limits {
+            pool_chunks,
+            ..Limits::default()
+        };
+        assert!(limits(65_535).check().is_ok());
+        assert!(limits(65_536).check().is_err());
     }
 }
