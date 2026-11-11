@@ -232,7 +232,8 @@ def scaled(args, k):
 
 
 def cargo_lock_version(name):
-    text = open(os.path.join(ROOT, "Cargo.lock")).read()
+    # The compared libraries are in the benches workspace's own lockfile.
+    text = open(os.path.join(ROOT, "benches", "Cargo.lock")).read()
     m = re.search(r'name = "%s"\nversion = "([^"]+)"' % re.escape(name), text)
     return m.group(1) if m else "unknown"
 

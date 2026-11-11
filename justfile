@@ -91,7 +91,7 @@ checks: deps hygiene fmt-check clippy build doc no-std pure
 
 # Dependency rules: declared only at the root, one version, unsafe forbidden, no async runtime, no C.
 deps:
-    python3 scripts/deps.py
+    $(command -v python3.11 || command -v python3) scripts/deps.py
 
 # Public-repository hygiene: no internal project names and no em-dash or en-dash in any tracked file.
 hygiene:
