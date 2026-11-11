@@ -135,7 +135,8 @@ setInterval(() => {
 
 let current = null;
 function route() {
-  const name = (location.hash.replace(/^#\//, "").split("/")[0]) || "compose";
+  const [first, arg] = location.hash.replace(/^#\//, "").split("/");
+  const name = first || "compose";
   const view = VIEWS[name] ? name : "compose";
   for (const a of document.querySelectorAll(".tabs a")) {
     if (a.dataset.view === view) a.setAttribute("aria-current", "page");
@@ -144,7 +145,7 @@ function route() {
   current?.unmount?.();
   const main = clear(document.getElementById("view"));
   current = VIEWS[view];
-  current.mount(main, { store, on, go: (v) => { location.hash = `#/${v}`; } });
+  current.mount(main, { store, on, arg: arg ? decodeURIComponent(arg) : null, go: (v) => { location.hash = `#/${v}`; } });
 }
 
 const THEMES = ["auto", "light", "dark"];
@@ -162,7 +163,7 @@ document.getElementById("theme").addEventListener("click", () => {
   const cur = document.documentElement.dataset.theme || "auto";
   setTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
 });
-setTheme(document.documentElement.dataset.theme || "auto");
+setTheme(new URLSearchParams(location.search).get("theme") || document.documentElement.dataset.theme || "auto");
 
 document.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;

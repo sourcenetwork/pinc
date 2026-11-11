@@ -108,7 +108,7 @@ async function loadList(select) {
     toast(`The scenarios could not be listed: ${e.message}`, true);
   }
   drawList();
-  const pick = select || st.file || st.list.find((x) => x.name)?.file;
+  const pick = select || st.file || st.ctx.arg || st.list.find((x) => x.name)?.file;
   if (!st.sc && pick) openScenario(pick);
   else if (!st.sc) openScenario(null);
 }
@@ -376,8 +376,15 @@ function removeSite(i) {
 function drawDock() {
   const D = clear(st.el.dock);
   const tabs = [["workload", "Workload"], ["faults", `Faults (${st.sc.faults.length})`], ["file", "File"]];
+  // The tab that is open closes the dock when pressed again, which gives the diagram the room.
+  D.classList.toggle("closed", !!st.dockShut);
   D.append(h("div", { class: "dock-tabs", role: "tablist" }, tabs.map(([k, label]) =>
-    h("button", { type: "button", role: "tab", "aria-selected": st.dock === k ? "true" : "false", onclick: () => { st.dock = k; drawDock(); } }, label))));
+    h("button", { type: "button", role: "tab", "aria-selected": !st.dockShut && st.dock === k ? "true" : "false", onclick: () => {
+      st.dockShut = !st.dockShut && st.dock === k;
+      st.dock = k;
+      drawDock();
+    } }, label))));
+  if (st.dockShut) return;
   const body = h("div", { class: "dock-body" });
   D.append(body);
   if (st.dock === "workload") drawWorkload(body);

@@ -4,7 +4,10 @@
 import { s, clear } from "./dom.js";
 import { bits, num, shape } from "./fmt.js";
 
-const CELL_W = 30, CELL_H = 34, PAD = 12, HEAD = 36;
+const CELL_W = 36, CELL_H = 36, PAD = 12, HEAD = 36;
+// The diagram fills its canvas but is never drawn larger than this many pixels per unit: one site of two nodes is a
+// large readable block, not a poster.
+const MAX_ZOOM = 2.5;
 
 function shortName(node, site) {
   const n = node.name;
@@ -12,8 +15,10 @@ function shortName(node, site) {
   return n.length > 6 ? `${n.slice(0, 5)}…` : n;
 }
 
-function boxOf(site, count) {
-  const cols = Math.max(2, Math.min(6, Math.ceil(Math.sqrt(count * 1.6))));
+// A site's box for `count` nodes. `wide` is how much wider than tall the room for one site is, so many nodes spread over
+// the canvas's shape and not into a column.
+function boxOf(site, count, wide) {
+  const cols = Math.max(2, Math.min(16, Math.round(Math.sqrt(count * wide * (CELL_H / CELL_W)))));
   const rows = Math.max(1, Math.ceil(count / cols));
   return { cols, w: Math.max(150, cols * CELL_W + PAD * 2), h: HEAD + rows * CELL_H + PAD };
 }
@@ -32,32 +37,50 @@ export class Topo {
     this.svg = s("svg", { role: "img", "aria-label": "Network topology" });
     el.append(this.svg);
     this.model = null;
+    this.sel = null;
     this.linkEls = [];
     this.nodeEls = [];
     this.siteEls = [];
+    // The diagram follows its canvas: the boxes' shape depends on the canvas's, and the view fits it.
+    this.size = [0, 0];
+    if (typeof ResizeObserver !== "undefined") {
+      this.watch = new ResizeObserver(() => {
+        const [w, h] = [el.clientWidth, el.clientHeight];
+        if (!w || !h || (Math.abs(w - this.size[0]) < 2 && Math.abs(h - this.size[1]) < 2)) return;
+        if (this.model) this.render(this.model, this.sel);
+      });
+      this.watch.observe(el);
+    }
   }
 
   render(model, sel) {
     this.model = model;
+    this.sel = sel;
+    const W = this.el.clientWidth || 1000, H = this.el.clientHeight || 520;
+    this.size = [W, H];
+    // How many sites share a row, roughly: the room for one is the canvas's width over that.
+    const across = Math.max(1, Math.ceil(Math.sqrt(model.sites.length)));
+    const wide = Math.max(0.6, (W / across) / (H / Math.max(1, Math.ceil(model.sites.length / across))));
     clear(this.svg);
     this.linkEls = [];
     this.nodeEls = [];
     this.siteEls = [];
     const counts = model.sites.map((_, i) => model.nodes.filter((n) => n.site === i).length);
     const geo = model.sites.map((site, i) => {
-      const b = boxOf(site, counts[i]);
+      const b = boxOf(site, counts[i], wide);
       const [cx, cy] = site.pos || autoPos(i, model.sites.length);
       return { ...b, cx, cy, x: cx - b.w / 2, y: cy - b.h / 2 };
     });
+    this.f = this.compact(geo);
     this.geo = geo;
     if (!geo.length) {
       this.svg.setAttribute("viewBox", "0 0 400 200");
       this.svg.append(s("text", { x: 200, y: 100, "text-anchor": "middle", fill: "currentColor", class: "sub" }, "Add a site to start"));
       return;
     }
-    const minX = Math.min(...geo.map((g) => g.x)) - 120, minY = Math.min(...geo.map((g) => g.y)) - 60;
-    const maxX = Math.max(...geo.map((g) => g.x + g.w)) + 120, maxY = Math.max(...geo.map((g) => g.y + g.h)) + 60;
-    this.svg.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+    const minX = Math.min(...geo.map((g) => g.x)) - 60, minY = Math.min(...geo.map((g) => g.y)) - 40;
+    const maxX = Math.max(...geo.map((g) => g.x + g.w)) + 60, maxY = Math.max(...geo.map((g) => g.y + g.h)) + 50;
+    this.fit(minX, minY, maxX - minX, maxY - minY, W, H);
     const links = s("g", {});
     const sites = s("g", {});
     const labels = s("g", {});
@@ -126,6 +149,46 @@ export class Topo {
     this.fitLabels();
   }
 
+  // Pull the sites together while no two boxes (with room for the links' labels between them) overlap, so a diagram
+  // whose sites were placed far apart for a small scenario is not drawn small for a large one. Returns the factor
+  // applied to the distances from the centre, which dragging undoes.
+  compact(geo) {
+    if (geo.length < 2) return 1;
+    const mx = geo.reduce((a, g) => a + g.cx, 0) / geo.length, my = geo.reduce((a, g) => a + g.cy, 0) / geo.length;
+    this.centre = [mx, my];
+    const gap = 70;
+    const clash = (f) => geo.some((a, i) => geo.some((b, j) => j > i
+      && Math.abs((a.cx - b.cx) * f) < (a.w + b.w) / 2 + gap && Math.abs((a.cy - b.cy) * f) < (a.h + b.h) / 2 + gap));
+    if (clash(1)) return 1;
+    let lo = 0.1, hi = 1;
+    for (let i = 0; i < 16; i++) {
+      const mid = (lo + hi) / 2;
+      if (clash(mid)) lo = mid; else hi = mid;
+    }
+    for (const g of geo) {
+      g.cx = mx + (g.cx - mx) * hi; g.cy = my + (g.cy - my) * hi;
+      g.x = g.cx - g.w / 2; g.y = g.cy - g.h / 2;
+    }
+    return hi;
+  }
+
+  // The view: the content's box grown to the canvas's shape and centred, and never zoomed in past MAX_ZOOM.
+  fit(x, y, w, h, W, H) {
+    let vw = w, vh = h;
+    if (W / H > vw / vh) vw = (vh * W) / H;
+    else vh = (vw * H) / W;
+    const zoom = W / vw;
+    if (zoom > MAX_ZOOM) {
+      vw = W / MAX_ZOOM;
+      vh = H / MAX_ZOOM;
+    }
+    this.svg.setAttribute("viewBox", `${x + w / 2 - vw / 2} ${y + h / 2 - vh / 2} ${vw} ${vh}`);
+    // A diagram drawn smaller than its design still shows its node labels at a readable size: they grow in the
+    // diagram's units as it shrinks (the cells hold labels of up to four characters at fifteen units).
+    const k = W / vw;
+    this.svg.style.setProperty("--label", `${Math.min(15, Math.max(10, 10.5 / Math.min(k, 1)))}px`);
+  }
+
   fitLabels() {
     for (const e of this.linkEls) {
       if (!e) continue;
@@ -170,7 +233,9 @@ export class Topo {
       if (!start) return;
       const [x, y] = pt(ev);
       const moved = start.moved;
-      const pos = [Math.round(start.cx + x - start.p[0]), Math.round(start.cy + y - start.p[1])];
+      const f = this.f || 1, [mx, my] = this.centre || [0, 0];
+      // The box was drawn pulled towards the centre by `f`: the position kept in the file is the undrawn one.
+      const pos = [Math.round(mx + (start.cx + x - start.p[0] - mx) / f), Math.round(my + (start.cy + y - start.p[1] - my) / f)];
       start = null;
       if (moved) this.o.onMove(i, pos);
       else this.o.onSelect({ kind: "site", index: i });

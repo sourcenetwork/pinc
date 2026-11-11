@@ -283,7 +283,7 @@ tr.sel td { background: var(--accent-weak); }
 .topo .node rect { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1.2; }
 .topo .node.hub rect { stroke-width: 2; }
 .topo .node.relay rect { stroke-dasharray: 2 2; }
-.topo .node text { fill: var(--ink-2); font: 9px var(--font-mono); }
+.topo .node text { fill: var(--ink-2); font: var(--label, 10px) var(--font-mono); }
 .topo .node .cpu { fill: var(--accent); }
 .topo .node.active rect { fill: var(--accent-weak); stroke: var(--accent); }
 .topo .node.paused rect { fill: var(--warn-weak); stroke: var(--warn); stroke-dasharray: 3 2; }
@@ -310,7 +310,8 @@ tr.sel td { background: var(--accent-weak); }
 /* --- compose --- */
 .compose { grid-template-columns: 260px minmax(0, 1fr) 340px; }
 .compose-center { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-height: 0; }
-.dock { border-top: 1px solid var(--rule); max-height: 46vh; overflow: auto; }
+.dock { border-top: 1px solid var(--rule); max-height: 38vh; overflow: auto; }
+.dock.closed { max-height: none; }
 .dock-tabs { display: flex; gap: 2px; padding: var(--space-2) var(--space-3) 0; border-bottom: 1px solid var(--rule); position: sticky; top: 0; background: var(--paper); z-index: 2; }
 .dock-tabs button { border: 0; background: none; font: 500 var(--text-sm) var(--font-sans); color: var(--ink-2); padding: var(--space-2) var(--space-3); cursor: pointer; border-bottom: 2px solid transparent; }
 .dock-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
