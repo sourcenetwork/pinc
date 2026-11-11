@@ -56,8 +56,9 @@ impl<const N: usize> Recovery<N> {
     /// Declare lost every packet in flight at or below `largest` that crossed its threshold, arm the loss timer for
     /// the next one to cross, and reduce the window once if any loss counts.
     ///
-    /// vertexia: scans from the ring head to `largest` on every acknowledgement, O(ring); an index of the packets
-    /// in flight would make it O(losses) if profiles show it.
+    /// vertexia: scans from the oldest packet in flight to `largest` on every acknowledgement, O(packets in flight
+    /// below `largest`, acknowledged ones among them); an index of the packets in flight would make it O(losses) if
+    /// profiles show it.
     pub(super) fn detect_lost<F: FnMut(Event<'_>)>(
         &mut self,
         now: u64,
@@ -73,7 +74,7 @@ impl<const N: usize> Recovery<N> {
         let delay = sat(u128::from(rtt) * 9 / 8).max(MS);
         self.loss_time = None;
         let mut newest_lost: Option<u64> = None;
-        let mut i = 0;
+        let mut i = self.ring.lead();
         while let Some(slot) = self.ring.get(i) {
             if slot.sent.pn > largest {
                 break;

@@ -40,7 +40,7 @@ use vinc_security::{
 use vinc_transport::conn::{
     ClientParams, CloseReason, Config, Connection, Drop, Event, PathId, PathInfo, Resources, ServerParams, Transmit,
 };
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
@@ -148,13 +148,15 @@ pub type Stores = ResponderStores<PK, TK>;
 /// Chunk-ring slots per stream of the default table: it caps the granted window at 4 MiB.
 pub const RING: usize = 257;
 pub type Table<const C: usize = RING> = Streams<NoSource, 64, C>;
-pub type Conn<'a, const C: usize = RING> = Connection<'a, Caps, NoSource, 64, C, 512, 4>;
+pub type Conn<'a, const C: usize = RING, const F: usize = 512> = Connection<'a, Caps, NoSource, 64, C, F, 4>;
 
 /// Storage a connection borrows: its stream table, its loss average and its pool.
-pub struct Store<const C: usize = RING> {
+pub struct Store<const C: usize = RING, const F: usize = 512> {
     pub streams: Box<Table<C>>,
     pub loss: LossEstimate,
     pub pool: Option<BufferPool<'static>>,
+    /// The sent-packet slots of the connection this store serves.
+    flight: core::marker::PhantomData<[(); F]>,
 }
 
 impl Store {
@@ -170,7 +172,7 @@ impl Store {
     }
 }
 
-impl<const C: usize> Store<C> {
+impl<const C: usize, const F: usize> Store<C, F> {
     /// A store with `C` chunk-ring slots per stream, whose table is built from `cfg`.
     pub fn sized(chunks: usize, cfg: &stream::Config) -> Self {
         let pool = BufferPool::new_boxed(chunks);
@@ -179,13 +181,15 @@ impl<const C: usize> Store<C> {
             streams,
             loss: LossEstimate::new(),
             pool: Some(BufferPool::new_boxed(chunks)),
+            flight: core::marker::PhantomData,
         }
     }
-    pub fn resources(&mut self) -> Resources<'_, NoSource, 64, C> {
+    pub fn resources(&mut self) -> Resources<'_, NoSource, 64, C, F> {
         Resources {
             pool: self.pool.take().unwrap(),
             streams: (&mut *self.streams).into(),
             loss: (&self.loss).into(),
+            sent: SentRing::new(),
         }
     }
 }
@@ -223,8 +227,8 @@ pub enum Deferred {
 }
 
 /// An endpoint under test: a connection, its provider and keys, and what it saw.
-pub struct Node<'a, const C: usize = RING> {
-    pub conn: Conn<'a, C>,
+pub struct Node<'a, const C: usize = RING, const F: usize = 512> {
+    pub conn: Conn<'a, C, F>,
     pub prov: Caps,
     pub drbg: Drbg,
     pub kp: Keypair,
@@ -244,7 +248,7 @@ pub struct Node<'a, const C: usize = RING> {
     pub fail_keys: bool,
 }
 
-impl<'a, const C: usize> Node<'a, C> {
+impl<'a, const C: usize, const F: usize> Node<'a, C, F> {
     /// Drain events: answer key requests, store tickets, read streams and datagrams.
     pub fn service(&mut self, now: u64) {
         loop {
@@ -361,7 +365,7 @@ impl<'a, const C: usize> Node<'a, C> {
     }
 
     /// Call `f` with the connection and an `Env` at time `now`.
-    pub fn with_env<R>(&mut self, now: u64, f: impl FnOnce(&mut Conn<'a, C>, &mut Env<'_, Caps>) -> R) -> R {
+    pub fn with_env<R>(&mut self, now: u64, f: impl FnOnce(&mut Conn<'a, C, F>, &mut Env<'_, Caps>) -> R) -> R {
         let mut env = Env {
             provider: &self.prov,
             now,
@@ -440,12 +444,12 @@ impl World {
         }
     }
 
-    pub fn client<'a, const C: usize>(
+    pub fn client<'a, const C: usize, const F: usize>(
         &self,
-        store: &'a mut Store<C>,
+        store: &'a mut Store<C, F>,
         ticket: Option<vinc_security::Ticket>,
         tickets: ClientTickets<8>,
-    ) -> Node<'a, C> {
+    ) -> Node<'a, C, F> {
         let prov = Caps(Software, self.hw);
         let mut drbg = Drbg::new(&[0x11 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x21; self.alg.seed_len()]).unwrap();
@@ -456,7 +460,7 @@ impl World {
         };
         let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
         let prekey = prekeys.acquire(&mut env).unwrap();
-        let conn = Conn::<C>::client(
+        let conn = Conn::<C, F>::client(
             self.client_cfg.unwrap_or(self.cfg),
             ClientParams {
                 peer: self.rp.id.node_id(),
@@ -491,7 +495,7 @@ impl World {
         }
     }
 
-    pub fn server<'a, const C: usize>(&self, store: &'a mut Store<C>) -> Node<'a, C> {
+    pub fn server<'a, const C: usize, const F: usize>(&self, store: &'a mut Store<C, F>) -> Node<'a, C, F> {
         let prov = Caps(Software, self.hw);
         let mut drbg = Drbg::new(&[0x33 ^ self.seed; 32]);
         let kp = Keypair::from_seed(self.alg, &vec![0x22; self.alg.seed_len()]).unwrap();
@@ -500,7 +504,7 @@ impl World {
             now: T0,
             drbg: &mut drbg,
         };
-        let conn = Conn::<C>::server(
+        let conn = Conn::<C, F>::server(
             self.cfg,
             &ServerParams {
                 identity: self.rp.id,
@@ -533,9 +537,9 @@ impl World {
 }
 
 /// Two nodes on a link, on virtual time.
-pub struct Net<'a, 'b, const C: usize = RING> {
-    pub a: Node<'a, C>,
-    pub b: Node<'a, C>,
+pub struct Net<'a, 'b, const C: usize = RING, const F: usize = 512> {
+    pub a: Node<'a, C, F>,
+    pub b: Node<'a, C, F>,
     pub link: Link,
     pub stores: &'b mut Stores,
     pub now: u64,
@@ -560,8 +564,8 @@ pub const T0: u64 = 1_000_000_000_000;
 pub const MS: u64 = 1_000_000;
 pub const SEC: u64 = 1_000_000_000;
 
-impl<'a, 'b, const C: usize> Net<'a, 'b, C> {
-    pub fn new(a: Node<'a, C>, b: Node<'a, C>, link: Link, stores: &'b mut Stores) -> Self {
+impl<'a, 'b, const C: usize, const F: usize> Net<'a, 'b, C, F> {
+    pub fn new(a: Node<'a, C, F>, b: Node<'a, C, F>, link: Link, stores: &'b mut Stores) -> Self {
         Self {
             a,
             b,
@@ -758,12 +762,12 @@ pub fn pattern(len: usize, seed: u64) -> Vec<u8> {
 }
 
 /// A client and a server on `link`, not yet connected.
-pub fn setup<'a, const C: usize>(
+pub fn setup<'a, const C: usize, const F: usize>(
     w: &'a mut World,
-    sa: &'a mut Store<C>,
-    sb: &'a mut Store<C>,
+    sa: &'a mut Store<C, F>,
+    sb: &'a mut Store<C, F>,
     link: Link,
-) -> Net<'a, 'a, C> {
+) -> Net<'a, 'a, C, F> {
     let a = w.client(sa, None, ClientTickets::new());
     let b = w.server(sb);
     Net::new(a, b, link, &mut w.stores)
@@ -771,7 +775,7 @@ pub fn setup<'a, const C: usize>(
 
 /// Send `data` on a new bidirectional stream from A and run until B has read it all and A has nothing in flight.
 /// Returns the virtual time the transfer took and the stream id.
-pub fn bulk<const C: usize>(net: &mut Net<'_, '_, C>, data: &[u8], timeout: u64) -> (u64, u64) {
+pub fn bulk<const C: usize, const F: usize>(net: &mut Net<'_, '_, C, F>, data: &[u8], timeout: u64) -> (u64, u64) {
     let id = net.a.conn.open_bi().unwrap();
     let mut off = 0;
     let mut finished = false;

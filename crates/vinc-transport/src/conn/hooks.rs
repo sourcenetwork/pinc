@@ -72,8 +72,8 @@ pub struct SubWait {
 
 conn_impl! {
     /// Give back the memory this connection used, for the next one. The pool is not reset here.
-    pub fn into_resources(self) -> Resources<'a, S, N, C> {
-        Resources { pool: self.pool, streams: self.streams, loss: self.loss }
+    pub fn into_resources(self) -> Resources<'a, S, N, C, F> {
+        Resources { pool: self.pool, streams: self.streams, loss: self.loss, sent: self.rec.into_ring() }
     }
 
     /// The key operation the handshake waits for, if any, after an [`Event::KeyRequest`](super::Event::KeyRequest).
@@ -175,7 +175,7 @@ conn_impl! {
     pub fn sub_session(
         cfg: Config,
         open: SubOpen<'_>,
-        res: Resources<'a, S, N, C>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubOpen { client, parent, alpn, cc, cs, identity, path, path_info } = open;
@@ -192,7 +192,7 @@ conn_impl! {
     pub fn sub_pending(
         cfg: Config,
         open: SubWait,
-        res: Resources<'a, S, N, C>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let SubWait { alpn, cc, cs, identity, path, path_info } = open;
@@ -268,7 +268,7 @@ conn_impl! {
         identity: &LocalIdentity,
         path: PathId,
         path_info: PathInfo,
-        res: Resources<'a, S, N, C>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };

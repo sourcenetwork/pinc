@@ -30,7 +30,7 @@ pub const MAX_CONNECTIONS: usize = 65_536;
 pub const STREAMS: usize = 72;
 /// The chunk entries of one stream half.
 pub const RING: usize = 65;
-pub(crate) const FLIGHT: usize = 128;
+pub(crate) const FLIGHT: usize = vinc_transport::recovery::SENT_PACKETS;
 pub(crate) const PATHS: usize = 4;
 pub(crate) const PREKEYS: usize = 8;
 pub(crate) const TICKETS: usize = 64;

@@ -15,7 +15,7 @@ pub(crate) trait Blank {
 }
 
 /// `N` entries of `T`; see the module docs.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Lazy<T, const N: usize> {
     /// The entries written so far, a prefix of the table; its capacity is `N` from the start.
     #[cfg(feature = "alloc")]

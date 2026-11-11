@@ -48,7 +48,7 @@ pub use loss_estimate::{LossEstimate, REPAIR_MIN_AGE, REPAIR_THRESHOLD, SCALE as
 pub use pacer::{BURST_PACKETS, Pacer};
 pub use recv::{MAX_ACK_RANGES, ReceivedPackets, RxOutcome, RxPacket};
 pub use rtt::{INITIAL_RTT, RttEstimator, max_ack_delay};
-pub use sent::Sent;
+pub use sent::{SENT_PACKETS, Sent, SentRing};
 pub use tail::{REPAIR_BURST, REPAIR_FRAME_BYTES, REPAIR_OVERHEAD, REPAIR_PACKET_BYTES, TailRepair};
 
 use core::fmt;

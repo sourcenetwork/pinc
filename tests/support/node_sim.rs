@@ -39,7 +39,7 @@ use vinc_node::{
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
 use vinc_transport::conn::Resources;
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, StreamSource, Streams};
 
@@ -84,7 +84,7 @@ impl SimApps for NoApps {
 /// The relay-path address family and index the hub's own relay uses for its members: an index no client has.
 const LOCAL_RELAY: u8 = 0xFE;
 
-fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC> {
+fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC, CF> {
     let pool = BufferPool::new_boxed(POOL_CHUNKS.get());
     let streams: &'static mut Streams<S, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
@@ -93,6 +93,7 @@ fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC> {
         pool,
         streams: streams.into(),
         loss: loss.into(),
+        sent: SentRing::new(),
     }
 }
 

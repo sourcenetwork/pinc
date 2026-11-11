@@ -523,6 +523,10 @@ name = "transport_wide"
 path = "transport_wide.rs"
 
 [[test]]
+name = "transport_long_path"
+path = "transport_long_path.rs"
+
+[[test]]
 name = "broadcast_publish"
 path = "broadcast_publish.rs"
 

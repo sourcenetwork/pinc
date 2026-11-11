@@ -108,7 +108,7 @@ use self::keys::Keys;
 use self::life::Life;
 use self::path::Paths;
 use crate::packet::PN_LEN_BASE;
-use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, TailRepair};
+use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, SentRing, TailRepair};
 use crate::stream::datagram::{Datagrams, EarlyData};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE};
 use crate::stream::{NoSource, StreamSource, Streams};
@@ -121,13 +121,16 @@ use crate::stream::{NoSource, StreamSource, Streams};
 const RX_RANGES: usize = 128;
 
 /// Everything a connection borrows or is handed: the buffer pool, the stream table and the shared loss average.
-pub struct Resources<'a, S: StreamSource, const N: usize, const C: usize> {
+pub struct Resources<'a, S: StreamSource, const N: usize, const C: usize, const F: usize> {
     /// The pool every buffer of the connection is charged to.
     pub pool: BufferPool<'a>,
     /// The stream table, created with `Config::new(is_client)` of the stream layer.
     pub streams: Held<'a, Streams<S, N, C>>,
     /// The node-wide loss average that decides tail repair.
     pub loss: Shared<'a, LossEstimate>,
+    /// The table of sent packets, empty (see [`SentRing::clear`]): the connection records at most `F` packets in
+    /// flight.
+    pub sent: SentRing<F>,
 }
 
 /// Where the connection is in its life.
@@ -206,7 +209,7 @@ where
     fn base(
         client: bool,
         cfg: Config,
-        res: Resources<'a, S, N, C>,
+        res: Resources<'a, S, N, C, F>,
         machine: Machine,
         first_cid: ConnId,
         odcid: ConnId,
@@ -223,6 +226,7 @@ where
             mut pool,
             mut streams,
             loss,
+            sent,
         } = res;
         streams.set_advertised(u64::from(local_credit.max_streams));
         let timing = Timing {
@@ -234,7 +238,7 @@ where
         let hs = Handshake::new(machine, &mut pool, now, timing)?;
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
-        let mut rec = Recovery::new(u64::from(MIN_MTU));
+        let mut rec = Recovery::with_ring(u64::from(MIN_MTU), sent);
         if let Some(r) = cfg.node_peak_rtt {
             rec.set_node_rtt(r);
         }
@@ -329,7 +333,7 @@ where
     pub fn client(
         cfg: Config,
         params: ClientParams<'_>,
-        res: Resources<'a, S, N, C>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
@@ -374,7 +378,7 @@ where
     pub fn server(
         cfg: Config,
         params: &ServerParams,
-        res: Resources<'a, S, N, C>,
+        res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;

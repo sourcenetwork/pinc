@@ -34,7 +34,7 @@ use vinc_security::{
     SoftPrekeys,
 };
 use vinc_transport::conn::Resources;
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, Streams};
 
@@ -278,6 +278,7 @@ fn endpoint(tag: u8) -> (Box<Ep>, LocalIdentity) {
                 pool,
                 streams: streams.into(),
                 loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
+                sent: SentRing::new(),
             })
         })
         .collect::<Vec<_>>()

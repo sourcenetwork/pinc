@@ -5,11 +5,22 @@
 //! at the head are dropped at once; ghosts at the head are dropped once older than [`GHOST_RETENTION`] or when the ring needs
 //! the room. At most [`MAX_GHOSTS`] ghosts are kept. A ring full of packets still in flight refuses new ones.
 //!
+//! The slots are a [`Lazy`] table: with `alloc` the room for all of them is reserved and a slot is written the first
+//! time the ring reaches it, so a connection that never has many packets in flight never touches most of the memory.
+//! An empty ring starts again at the first slot to keep the written part small.
+//!
 //! Only packets that need an acknowledgement and count toward bytes in flight are recorded here: acknowledgement-only
 //! packets and probes are not.
 
 use super::SECOND;
 use super::frame_ref::{FrameRef, FrameRefs};
+use crate::stream::lazy::{Blank, Lazy};
+
+/// The packets in flight a connection of the facade can track: 8,192 packets of 1,452 bytes are 11.9 MB, the window of
+/// a 1 Gbit/s path of 95 ms (a 150 ms path holds 200 Mbit/s). The window the congestion controller grants bounds the
+/// packets in flight first; this table is the ceiling behind it. With `alloc` the room is reserved and a record is
+/// written only as far as the ring reaches, so a connection that never has many packets in flight touches few.
+pub const SENT_PACKETS: usize = 8192;
 
 /// How long a packet declared lost stays recognisable to a late acknowledgement (2 s).
 pub(crate) const GHOST_RETENTION: u64 = 2 * SECOND;
@@ -56,6 +67,10 @@ pub(crate) struct Slot {
     pub(crate) state: State,
 }
 
+impl Blank for Slot {
+    const BLANK: Self = EMPTY;
+}
+
 const EMPTY: Slot = Slot {
     sent: Sent {
         pn: 0,
@@ -69,22 +84,43 @@ const EMPTY: Slot = Slot {
     state: State::Done,
 };
 
-/// A ring of at most `N` sent packets.
+/// A ring of at most `N` sent packets: the table of a connection's packets in flight. A connection is handed one in its
+/// [`Resources`](crate::conn::Resources) and gives it back with them, so a new session builds no table.
 #[derive(Debug, Clone)]
-pub(crate) struct SentRing<const N: usize> {
-    slots: [Slot; N],
+pub struct SentRing<const N: usize> {
+    slots: Lazy<Slot, N>,
     head: usize,
     len: usize,
+    /// No slot before this index is in flight. A slot only leaves the in-flight state, so the prefix only grows (until
+    /// the head is dropped), and a scan for the oldest packet in flight starts here instead of at the head, however
+    /// many acknowledged packets wait behind a ghost.
+    lead: usize,
+}
+
+impl<const N: usize> Default for SentRing<N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<const N: usize> SentRing<N> {
-    pub(crate) const fn new() -> Self {
+    /// An empty table.
+    pub fn new() -> Self {
         const { assert!(N >= 1 && N <= (1 << 31)) };
         Self {
-            slots: [EMPTY; N],
+            slots: Lazy::new(),
             head: 0,
             len: 0,
+            lead: 0,
         }
+    }
+
+    /// Forget every packet, keeping the room: the table is ready for the next connection.
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.head = 0;
+        self.len = 0;
+        self.lead = 0;
     }
 
     fn phys(&self, i: usize) -> usize {
@@ -120,9 +156,18 @@ impl<const N: usize> SentRing<N> {
         lo
     }
 
+    /// The index before which no packet is in flight.
+    pub(crate) fn lead(&mut self) -> usize {
+        while self.get(self.lead).is_some_and(|s| s.state != State::InFlight) {
+            self.lead += 1;
+        }
+        self.lead
+    }
+
     /// The index of the oldest packet still in flight.
-    pub(crate) fn first_in_flight(&self) -> Option<usize> {
-        (0..self.len).find(|&i| self.get(i).is_some_and(|s| s.state == State::InFlight))
+    pub(crate) fn first_in_flight(&mut self) -> Option<usize> {
+        let i = self.lead();
+        (i < self.len).then_some(i)
     }
 
     /// The send time of the newest packet still in flight.
@@ -145,8 +190,9 @@ impl<const N: usize> SentRing<N> {
 
     fn pop_front(&mut self) {
         if self.len > 0 {
-            self.head = (self.head + 1) % N;
+            self.head = if self.len == 1 { 0 } else { (self.head + 1) % N };
             self.len -= 1;
+            self.lead = self.lead.saturating_sub(1);
         }
     }
 
@@ -209,5 +255,56 @@ impl<const N: usize> SentRing<N> {
         }
         self.len += 1;
         true
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    fn sent(pn: u64) -> Sent {
+        Sent {
+            pn,
+            time: pn,
+            size: 1200,
+            path: 0,
+            is_repair: false,
+            is_mtu_probe: false,
+            frames: FrameRefs::new(),
+        }
+    }
+
+    /// The oldest packet in flight the slow way.
+    fn naive<const N: usize>(r: &SentRing<N>) -> Option<usize> {
+        (0..r.len).find(|&i| r.get(i).is_some_and(|s| s.state == State::InFlight))
+    }
+
+    #[test]
+    fn the_oldest_packet_in_flight_is_found_from_the_cached_prefix_as_from_the_head() {
+        let mut r = SentRing::<8>::new();
+        let (mut pn, mut x) = (0u64, 0x2545_f491_4f6c_dd1du64);
+        for step in 0..4000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            match x % 4 {
+                0 | 1 => {
+                    if r.push(sent(pn)) {
+                        pn += 1;
+                    }
+                }
+                2 => {
+                    // Settle a slot out of order, as a late or out-of-order acknowledgement does.
+                    let i = (x >> 8) as usize % (r.len + 1);
+                    if let Some(s) = r.get_mut(i).filter(|s| s.state == State::InFlight) {
+                        s.state = if x & 0x100 == 0 { State::Done } else { State::Lost(step) };
+                    }
+                }
+                _ => r.trim(step + 10 * GHOST_RETENTION * u64::from(x & 1 == 0)),
+            }
+            assert_eq!(r.first_in_flight(), naive(&r), "step {step}");
+            assert!(r.lead <= r.len);
+        }
     }
 }

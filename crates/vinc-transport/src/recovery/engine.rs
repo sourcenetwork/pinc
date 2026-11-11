@@ -237,8 +237,13 @@ pub struct Recovery<const N: usize> {
 impl<const N: usize> Recovery<N> {
     /// A recovery state for a path datagram size of `mtu` (clamped to 1200..=65535), path 0 active and direct.
     pub fn new(mtu: u64) -> Self {
+        Self::with_ring(mtu, SentRing::new())
+    }
+
+    /// A recovery state that records its packets in `ring`, which must be empty.
+    pub fn with_ring(mtu: u64, ring: SentRing<N>) -> Self {
         Self {
-            ring: SentRing::new(),
+            ring,
             rtt: RttEstimator::new(),
             cc: Cubic::new(),
             pacer: Pacer::new(),
@@ -267,6 +272,11 @@ impl<const N: usize> Recovery<N> {
             limited_at: None,
             largest_acked_time: 0,
         }
+    }
+
+    /// Give back the table of sent packets, for the next connection (see [`SentRing::clear`]).
+    pub fn into_ring(self) -> SentRing<N> {
+        self.ring
     }
 
     // ---- read access ----

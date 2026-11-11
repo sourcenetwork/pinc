@@ -277,7 +277,7 @@ where
         use alloc::{boxed::Box, rc::Rc, vec::Vec};
 
         use vinc_transport::conn::{Held, Shared};
-        use vinc_transport::recovery::LossEstimate;
+        use vinc_transport::recovery::{LossEstimate, SentRing};
         use vinc_transport::stream::Streams;
         use vinc_transport::stream::pool::BufferPool;
 
@@ -290,6 +290,7 @@ where
                     pool: BufferPool::new_boxed(pool_chunks),
                     streams: Held::Owned(Box::new(Streams::new(&stream_cfg, &probe))),
                     loss: Shared::Counted(Rc::clone(&loss)),
+                    sent: SentRing::new(),
                 })
             })
             .collect();
@@ -600,13 +601,14 @@ ep_impl! {
     // ---- the slot table ----
 
     /// Take a free slot for a new session and prepare its memory for `client`'s role.
-    pub(crate) fn alloc_slot(&mut self, client: bool, now: u64) -> Option<(usize, Resources<'a, S, N, C>)> {
+    pub(crate) fn alloc_slot(&mut self, client: bool, now: u64) -> Option<(usize, Resources<'a, S, N, C, F>)> {
         let i = self.free as usize;
         let slot = self.slots.get_mut(i)?;
         let mut mem = slot.mem.take()?;
         self.free = slot.m.next_free;
         mem.pool.reset();
         mem.streams.reinit(&stream::Config::new(client), &mem.pool);
+        mem.sent.clear();
         slot.m.begin(client, now);
         self.live += 1;
         Some((i, mem))

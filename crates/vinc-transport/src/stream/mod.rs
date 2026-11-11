@@ -29,7 +29,7 @@
 
 mod credit;
 mod flow;
-mod lazy;
+pub(crate) mod lazy;
 mod recv;
 mod send;
 mod table;

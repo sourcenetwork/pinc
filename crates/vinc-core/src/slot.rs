@@ -363,7 +363,7 @@ impl<const NP: usize> Meta<NP> {
 /// One entry of the connection table. Build one per connection the endpoint may hold, each with its own memory.
 pub struct Slot<'a, P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usize, const NP: usize> {
     pub(crate) conn: Option<Connection<'a, P, S, N, C, F, NP>>,
-    pub(crate) mem: Option<Resources<'a, S, N, C>>,
+    pub(crate) mem: Option<Resources<'a, S, N, C, F>>,
     pub(crate) m: Meta<NP>,
 }
 
@@ -371,7 +371,7 @@ impl<'a, P: Provider, S: StreamSource, const N: usize, const C: usize, const F: 
     Slot<'a, P, S, N, C, F, NP>
 {
     /// A free slot that will run its connections in `memory`.
-    pub fn new(memory: Resources<'a, S, N, C>) -> Self {
+    pub fn new(memory: Resources<'a, S, N, C, F>) -> Self {
         Self {
             conn: None,
             mem: Some(memory),

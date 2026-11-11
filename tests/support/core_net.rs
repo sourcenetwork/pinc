@@ -31,7 +31,7 @@ use vinc_core::{
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
 use vinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
 use vinc_transport::conn::Resources;
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
@@ -57,7 +57,7 @@ pub const ALPN_A: &[u8] = b"vinc/a";
 pub const ALPN_B: &[u8] = b"vinc/b";
 
 /// The memory of one connection, leaked for the life of the test.
-pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC> {
+pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC, CF> {
     let pool = BufferPool::new_boxed(CHUNKS_PER_CONN);
     let streams: &'static mut Streams<NoSource, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(client), &pool)));
@@ -66,6 +66,7 @@ pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC> {
         pool,
         streams: streams.into(),
         loss: loss.into(),
+        sent: SentRing::new(),
     }
 }
 

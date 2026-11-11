@@ -23,7 +23,7 @@ use vinc_security::{ConnId, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys
 use vinc_tests::*;
 use vinc_transport::conn::Resources;
 use vinc_transport::packet::{LongHeader, LongType};
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, Streams};
 use vinc_wire::Writer;
@@ -107,7 +107,7 @@ const BK: usize = MAX_HALF_OPEN + 44;
 type BigEp = Endpoint<'static, 'static, Caps, NoSource, 1, 2, 16, 1, BK, { BK * 10 }, 4, 4, 2>;
 type BigSlot = Slot<'static, Caps, NoSource, 1, 2, 16, 1>;
 
-fn small_memory() -> Resources<'static, NoSource, 1, 2> {
+fn small_memory() -> Resources<'static, NoSource, 1, 2, 16> {
     let pool = BufferPool::new_boxed(4);
     let streams: &'static mut Streams<NoSource, 1, 2> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
@@ -115,6 +115,7 @@ fn small_memory() -> Resources<'static, NoSource, 1, 2> {
         pool,
         streams: streams.into(),
         loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
+        sent: SentRing::new(),
     }
 }
 

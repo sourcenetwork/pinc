@@ -12,7 +12,7 @@
 
 use vinc_core::{Endpoint, Slot};
 use vinc_transport::conn::Resources;
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, RawChunk};
 use vinc_transport::stream::{self, NoSource, Streams};
 
@@ -85,7 +85,7 @@ fn new_table() -> Option<&'static mut [NodeSlot; SESSIONS]> {
     Some(Box::leak(boxed))
 }
 
-fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, NoSource, STREAMS, CHUNK_RING> {
+fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, NoSource, STREAMS, CHUNK_RING, IN_FLIGHT> {
     let pool = BufferPool::from_slab(chunks);
     let streams: &'static mut Streams<NoSource, STREAMS, CHUNK_RING> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
@@ -94,5 +94,6 @@ fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, NoSource, STREA
         pool,
         streams: streams.into(),
         loss: loss.into(),
+        sent: SentRing::new(),
     }
 }

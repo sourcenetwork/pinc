@@ -25,7 +25,7 @@ use vinc_crypto::provider::{KEM_CIPHERTEXT_LEN, KEM_ENCAPS_KEY_LEN};
 use vinc_crypto::{Aead, Capabilities, CryptoError, Drbg, IdentityAlg, Keypair, Provider, Secret, Software};
 use vinc_security::{AlpnList, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use vinc_transport::conn::{ClientParams, Config, Connection, Event, PathId, PathInfo, Resources, ServerParams};
-use vinc_transport::recovery::LossEstimate;
+use vinc_transport::recovery::{LossEstimate, SentRing};
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, Streams};
 
@@ -136,11 +136,12 @@ impl Store {
             pool: Some(BufferPool::new_boxed(chunks)),
         }
     }
-    fn resources(&mut self) -> Resources<'_, NoSource, 16, 257> {
+    fn resources(&mut self) -> Resources<'_, NoSource, 16, 257, 512> {
         Resources {
             pool: self.pool.take().unwrap(),
             streams: (&mut *self.streams).into(),
             loss: (&self.loss).into(),
+            sent: SentRing::new(),
         }
     }
 }
