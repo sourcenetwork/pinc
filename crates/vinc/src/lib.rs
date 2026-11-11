@@ -76,7 +76,7 @@ pub use conn::{ConnStats, Connection, Incoming};
 pub use endpoint::{
     Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, NoDiscovery, Vinc,
 };
-pub use engine::{Admit, BUSY};
+pub use engine::{Admit, BUSY, DENIED, REVOKED_MAX};
 pub use error::{Error, ErrorKind, Result};
 pub use host::{BatchHost, Host, Hosted, Io, IoHost};
 pub use keys::Identity;

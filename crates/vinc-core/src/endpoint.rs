@@ -61,8 +61,6 @@ const _: () = assert!(CID_LEN <= vinc_security::message::SPLIT_CID_MAX);
 pub const MAX_DATAGRAM: usize = 9216;
 /// The most interfaces.
 pub const MAX_IFACES: usize = 8;
-/// The most peers whose access answer is cached, and the most checks waiting.
-pub const ACP_ENTRIES: usize = 256;
 /// Sub-session ids remembered so a repeated open is not accepted twice.
 pub const SUBS_SEEN: usize = 1024;
 /// The most protocols the registry holds.
@@ -156,9 +154,11 @@ pub struct Endpoint<
     pub(crate) rtt: NodeRtt,
     pub(crate) node_ver: u64,
     pub(crate) ekk: Table<NodeId, [u8; 32], PREKEY_PEERS>,
-    pub(crate) acp: Table<NodeId, AcpAnswer, ACP_ENTRIES>,
-    pub(crate) checks: Table<u64, NodeId, ACP_ENTRIES>,
-    pub(crate) check_of: Table<NodeId, u64, ACP_ENTRIES>,
+    /// The cached access answers, the pending checks and the check of each peer: `D` entries each, ten per session
+    /// of the endpoint's capacity (10 240 at the default capacity of 1024 sessions).
+    pub(crate) acp: Table<NodeId, AcpAnswer, D>,
+    pub(crate) checks: Table<u64, NodeId, D>,
+    pub(crate) check_of: Table<NodeId, u64, D>,
     pub(crate) next_check: u64,
     pub(crate) stores: ResponderStores<PK, TK>,
     pub(crate) tickets: ClientTickets<CT>,

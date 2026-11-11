@@ -473,6 +473,27 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         .await;
     }
 
+    /// Revoke `peer`: every session with it ends within this call with the code [`DENIED`](crate::DENIED), a transfer
+    /// in flight included, and until [`unrevoke`](Self::unrevoke) no session with it comes up, whatever the access
+    /// hook would say and whichever side dials.
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::Busy`] if [`REVOKED_MAX`](crate::REVOKED_MAX) peers are revoked already; nothing changed.
+    pub async fn revoke(&self, peer: &NodeId) -> Result<()> {
+        let sh = &self.0.shared;
+        sh.run(|core, now| Try::Done(core.revoke(now, peer))).await
+    }
+
+    /// Lift the revocation of `peer`; whether it was revoked. The access hook decides about it again.
+    pub fn unrevoke(&self, peer: &NodeId) -> bool {
+        self.0.shared.admit.lift(peer)
+    }
+
+    /// Whether `peer` is revoked.
+    pub fn is_revoked(&self, peer: &NodeId) -> bool {
+        self.0.shared.admit.is_revoked(peer)
+    }
+
     /// Remember an address for `node`; dials to it use it when they carry none.
     pub fn add_address(&self, node: NodeId, addr: SocketAddr) {
         if let Some(mut core) = self.0.shared.lock() {

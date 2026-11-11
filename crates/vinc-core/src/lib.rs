@@ -82,9 +82,7 @@ pub use api::{
     Reply, SendState, SessionId, SessionStats, Value,
 };
 pub use commands::{FAN_URGENCY, UDP_FRESH};
-pub use endpoint::{
-    ACP_ENTRIES, CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PREKEY_PEERS, SUBS_SEEN,
-};
+pub use endpoint::{CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PREKEY_PEERS, SUBS_SEEN};
 pub use ext_in::EXT_BODY_MAX;
 pub use heap::DeadlineHeap;
 pub use iface::{IfaceEvent, IfaceId};

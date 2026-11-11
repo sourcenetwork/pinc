@@ -67,6 +67,50 @@ impl<T: Admit + ?Sized> Admit for Rc<T> {
     }
 }
 
+/// The close code of a session whose peer is not admitted.
+pub const DENIED: u64 = 3;
+/// The most peers that can be revoked at once.
+pub const REVOKED_MAX: usize = 4096;
+
+/// The host's access hook behind the bar of revoked peers. The handles and the core share it; the bar is borrowed only
+/// for a lookup or an update and never while the hook runs, so asking it never depends on what the endpoint is doing.
+pub(crate) struct Gate<A> {
+    hook: A,
+    revoked: core::cell::RefCell<rapidhash::RapidHashSet<NodeId>>,
+}
+
+impl<A: Admit> Gate<A> {
+    fn new(hook: A) -> Self {
+        Self {
+            hook,
+            revoked: core::cell::RefCell::new(rapidhash::RapidHashSet::default()),
+        }
+    }
+
+    /// Whether `peer` is barred.
+    pub(crate) fn is_revoked(&self, peer: &NodeId) -> bool {
+        self.revoked.try_borrow().is_ok_and(|r| r.contains(peer))
+    }
+
+    /// Whether `peer` may use `alpn` in `dir`: never while it is revoked, else what the host's hook says.
+    pub(crate) fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool {
+        !self.is_revoked(peer) && self.hook.admit(peer, alpn, dir)
+    }
+
+    /// Bar `peer`; false when the table is full and it is not in it.
+    fn bar(&self, peer: &NodeId) -> bool {
+        let Ok(mut r) = self.revoked.try_borrow_mut() else {
+            return false;
+        };
+        r.contains(peer) || (r.len() < REVOKED_MAX && r.insert(*peer))
+    }
+
+    /// Lift the bar on `peer`; whether it was barred.
+    pub(crate) fn lift(&self, peer: &NodeId) -> bool {
+        self.revoked.try_borrow_mut().is_ok_and(|mut r| r.remove(peer))
+    }
+}
+
 /// The access hook that admits everyone.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AllowAll;
@@ -175,7 +219,7 @@ pub(crate) struct Core<S, A> {
     identity: Identity<S>,
     prekeys: Prekeys,
     /// The access hook, shared with the endpoint's handles so they can ask it without borrowing the core.
-    admit: Rc<A>,
+    admit: Rc<Gate<A>>,
     pub(crate) limits: Limits,
     sessions: RapidHashMap<SessionId, Sess>,
     dials: RapidHashMap<SessionId, Dial>,
@@ -205,7 +249,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             ep,
             identity: cfg.identity,
             prekeys,
-            admit: Rc::new(cfg.admit),
+            admit: Rc::new(Gate::new(cfg.admit)),
             limits: cfg.limits,
             sessions: RapidHashMap::default(),
             dials: RapidHashMap::default(),
@@ -475,6 +519,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             dialer,
             ended: OnceCell::new(),
         });
+        if self.admit.is_revoked(&node) {
+            let _ = self.cmd(now, || Command::Close { session, error: DENIED });
+            return;
+        }
         let route = self.route_of(&alpn);
         if !dialer {
             let full = self
@@ -959,7 +1007,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     /// The access hook, for the handles to ask without the core.
-    pub(crate) fn hook(&self) -> Rc<A> {
+    pub(crate) fn hook(&self) -> Rc<Gate<A>> {
         Rc::clone(&self.admit)
     }
 
@@ -971,6 +1019,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     pub(crate) fn close_peer(&mut self, now: u64, node: &NodeId) {
+        self.close_sessions(now, node, 0);
+    }
+
+    fn close_sessions(&mut self, now: u64, node: &NodeId, error: u64) {
         let all: Vec<SessionId> = self
             .sessions
             .iter()
@@ -978,8 +1030,17 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .map(|(s, _)| *s)
             .collect();
         for session in all {
-            let _ = self.cmd(now, || Command::Close { session, error: 0 });
+            let _ = self.cmd(now, || Command::Close { session, error });
         }
+    }
+
+    /// Bar `node` and end every session with it, with the code [`DENIED`].
+    pub(crate) fn revoke(&mut self, now: u64, node: &NodeId) -> Result<()> {
+        if !self.admit.bar(node) {
+            return Err(Error::new(ErrorKind::Busy, "too many peers are revoked"));
+        }
+        self.close_sessions(now, node, DENIED);
+        Ok(())
     }
 
     pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) {

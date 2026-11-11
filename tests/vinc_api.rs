@@ -219,3 +219,61 @@ async fn close_peer_and_shutdown() {
     })
     .await;
 }
+
+/// A revoke ends every session with the peer within the call, a transfer in flight included; the peer stays out,
+/// whichever side dials and whatever the access hook says, until the revocation is lifted.
+#[nuclei::test]
+async fn a_revoked_peer_loses_every_session_and_stays_out() {
+    let server = node().await;
+    let client = client().await;
+    within(120, async {
+        let c = client.connect(server.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = c.open_bi().await.unwrap();
+        tx.write_all(&[7u8; 4096]).await.unwrap();
+        let mut back = [0u8; 4096];
+        rx.read_exact(&mut back).await.unwrap();
+
+        assert!(!server.is_revoked(&client.id()));
+        server.revoke(&client.id()).await.unwrap();
+        assert!(server.is_revoked(&client.id()));
+        assert!(
+            !server.admit(&client.id(), ECHO, Direction::Gossip),
+            "a revoked peer is no neighbour either"
+        );
+        let why = c.closed().await;
+        assert_eq!(
+            why.kind(),
+            ErrorKind::Closed {
+                code: vinc::DENIED,
+                by_peer: true
+            },
+            "the session ended with the denied code"
+        );
+        assert!(
+            tx.write_all(&[7u8; 4096]).await.is_err(),
+            "the transfer in flight ended with it"
+        );
+
+        // The revoked peer dials again: no session with it stays up.
+        if let Ok(again) = client.connect(server.addr(), ECHO).await {
+            let why = again.closed().await;
+            assert!(
+                matches!(why.kind(), ErrorKind::Closed { .. } | ErrorKind::Refused),
+                "a session with a revoked peer came up: {why:?}"
+            );
+        }
+        // Nor does the revoking side reach it.
+        assert!(server.connect(client.addr(), ECHO).await.is_err());
+
+        // Revoking twice changes nothing; lifting it lets the peer in again.
+        server.revoke(&client.id()).await.unwrap();
+        assert!(server.unrevoke(&client.id()));
+        assert!(!server.unrevoke(&client.id()));
+        let c = client.connect(server.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = c.open_bi().await.unwrap();
+        tx.write_all(b"again").await.unwrap();
+        tx.finish().await.unwrap();
+        assert_eq!(rx.read_to_end(64).await.unwrap(), b"again");
+    })
+    .await;
+}

@@ -49,7 +49,7 @@ pub(crate) struct Shared<H: Hosted> {
     local: SocketAddr,
     driving: Cell<bool>,
     /// The access hook, the same one the core asks; it holds no endpoint state, so it is asked without the core.
-    pub(crate) admit: Rc<H::Access>,
+    pub(crate) admit: Rc<crate::engine::Gate<H::Access>>,
     core: RefCell<Core<H::Keys, H::Access>>,
     rx_bufs: RefCell<Vec<Vec<u8>>>,
     tx_bufs: RefCell<Vec<Vec<u8>>>,
