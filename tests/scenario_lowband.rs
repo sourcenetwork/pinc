@@ -6,5 +6,5 @@ mod scenario_support;
 
 scenario_target!(
     ["S6"],
-    "S6 seed 86017 fails G-INT, G-ORDER and G-LIVE: the handshake of a 2G node with one hub stalls for 30 s on a thin link and a fetch never completes"
+    "S6 seed 86017 fails G-INT and G-LIVE: a fetch and two echoes of nodes on a 2G link finish late once a session dialed to a hub acknowledges every 4th packet; with every 2nd it passes every gate"
 );
