@@ -23,7 +23,7 @@
 
 use vinc_crypto::NodeId;
 use vinc_security::{Alpn, ConnId, Failure};
-use vinc_transport::conn::{Connection, PathInfo, SubOpen, SubWait};
+use vinc_transport::conn::{Connection, PathId, PathInfo, SubOpen, SubWait};
 use vinc_transport::frame::ext;
 
 use crate::api::{CommandError, SessionId};
@@ -108,6 +108,7 @@ ep_impl! {
             s.m.sub = true;
             s.m.role = role;
         }
+        self.follow_parent_paths(parent, child, now);
         self.sync_cids(child, true);
         // The open leaves in the parent ahead of anything the child sends.
         let queued = self.queue_sub_open(parent, alpn, cc, cs);
@@ -123,6 +124,25 @@ ep_impl! {
         }
         self.redial(child, now);
         Err(CommandError::NoSession)
+    }
+
+    /// Sub-session `child` runs where session `parent` runs: it takes the parent's paths, with what the endpoint said
+    /// of each and whether each is validated, its active path and its round-trip estimate.
+    fn follow_parent_paths(&mut self, parent: usize, child: usize, now: u64) {
+        let Some(pc) = self.slots.get(parent).and_then(|s| s.conn.as_ref()) else { return };
+        let Some(active) = pc.active_path() else { return };
+        let mut list = [(PathId(0), PathInfo::default(), false); NP];
+        let mut n = 0;
+        for (d, p) in list.iter_mut().zip(pc.path_list()) {
+            *d = p;
+            n += 1;
+        }
+        let rtt = pc.rtt_estimate();
+        let mut env = env!(self, now);
+        if let Some(k) = self.slots.get_mut(child).and_then(|s| s.conn.as_mut()) {
+            k.adopt_paths(&mut env, list.get(..n).unwrap_or_default(), active);
+            k.adopt_rtt(rtt);
+        }
     }
 
     /// Queue the sub-session open extension in `parent`. Returns whether it was queued.
@@ -250,6 +270,9 @@ ep_impl! {
             if let Some(s) = self.slots.get_mut(c) {
                 s.m.waiting = false;
             }
+            if activated {
+                self.follow_parent_paths(parent, c, now);
+            }
             if activated && self.queue_sub_open(parent, alpn, ids.0, ids.1) {
                 self.settle(parent, now);
             } else {
@@ -322,6 +345,7 @@ ep_impl! {
         if let Some(s) = self.slots.get_mut(parent) {
             s.m.has_sub = true;
         }
+        self.follow_parent_paths(parent, child, now);
         self.sync_cids(child, true);
         trace!(self, now, Sub { step: 1, parent: parent as u64, child: child as u64 });
         self.settle(child, now);

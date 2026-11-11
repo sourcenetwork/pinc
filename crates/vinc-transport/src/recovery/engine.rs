@@ -283,6 +283,14 @@ impl<const N: usize> Recovery<N> {
         self.rtt.seed(rtt);
     }
 
+    /// Take another connection's round-trip estimate when this one has none yet: a sub-session starts from its
+    /// parent's.
+    pub fn adopt_rtt(&mut self, rtt: RttEstimator) {
+        if !self.rtt.has_sample() {
+            self.rtt = rtt;
+        }
+    }
+
     /// The congestion controller.
     pub const fn cc(&self) -> &Cubic {
         &self.cc

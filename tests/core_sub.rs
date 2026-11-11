@@ -484,3 +484,47 @@ fn a_big_answer_reaches_a_peer_that_moved_even_when_the_first_path_check_is_lost
         );
     });
 }
+
+#[test]
+fn a_child_that_waited_for_its_parent_runs_on_the_path_the_parent_settled_on() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        // The peer's first address drops everything; its second one works. The dial's flight goes to both and the
+        // answer comes back on the second, where the parent session continues.
+        let second: std::net::SocketAddr = "10.0.1.2:4433".parse().unwrap();
+        net.nodes[b].extra.push(second);
+        net.nodes[b].ep.add_iface(second).unwrap();
+        let first = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == first));
+        let (peer, now) = (net.nodes[b].node, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, first, Role::Other).unwrap();
+        let parent = net.nodes[a].session(&rep);
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::FlightPaths {
+                    session: parent,
+                    addrs: &[second],
+                    skip_primary: false,
+                },
+            )
+            .unwrap();
+        // A second protocol dialed before any answer: it waits for the parent, on the path the parent dialed first.
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        assert_ne!(child, parent);
+        assert!(net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+        }));
+        write_new(&mut net, a, child, b"after the wait");
+        let end = net.now + 5 * SEC_NS;
+        assert!(
+            net.run(end, |n| n.nodes[b].fin.len() == 1),
+            "the child's bytes never left on the path its parent uses"
+        );
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(child)) else {
+            panic!()
+        };
+        assert_eq!(st.route.map(|(_, r)| r), Some(second), "{st:?}");
+    });
+}

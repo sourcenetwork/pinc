@@ -22,6 +22,7 @@ use super::config::{Config, PathId, PathInfo};
 use super::handshake::Machine;
 use super::params::peer_limits;
 use super::{Connection, Phase, Resources};
+use crate::recovery::RttEstimator;
 use crate::stream::StreamSource;
 
 /// What the application may queue on a pending sub-session before the peer's record is known: one window unit
@@ -201,6 +202,48 @@ conn_impl! {
         c.peer_credit = CreditRecord::new(PENDING_WINDOW, PENDING_STREAMS, 0);
         c.streams.set_peer_limits(&peer_limits(&c.peer_credit));
         Ok(c)
+    }
+
+    /// The round-trip estimate of this connection.
+    pub const fn rtt_estimate(&self) -> RttEstimator {
+        *self.rec.rtt()
+    }
+
+    /// Start from `rtt` when this connection has measured nothing yet: a sub-session runs on its parent's paths.
+    pub fn adopt_rtt(&mut self, rtt: RttEstimator) {
+        self.rec.adopt_rtt(rtt);
+    }
+
+    /// The paths this connection tracks: the id, what the endpoint said of it, and whether it is validated.
+    pub fn path_list(&self) -> impl Iterator<Item = (PathId, PathInfo, bool)> + '_ {
+        self.paths.iter().map(|(_, p)| (p.id, p.info, p.validated))
+    }
+
+    /// Run where the parent session runs: take its paths with their validation, and its active path. A path of this
+    /// connection the parent does not hold validated is no longer validated here. A sub-session born while its parent
+    /// was in its handshake took the path the parent dialed first, which the handshake may have left for another.
+    pub fn adopt_paths(&mut self, env: &mut Env<'_, P>, parent: &[(PathId, PathInfo, bool)], active: PathId) {
+        for slot in self.paths.slots.iter_mut().flatten() {
+            if !parent.iter().any(|(id, _, v)| *id == slot.id && *v) {
+                slot.validated = false;
+            }
+        }
+        for &(id, info, validated) in parent {
+            let Some(i) = self.paths.find(id).or_else(|| self.new_path_slot(id, info, env.now)) else {
+                continue;
+            };
+            if let Some(p) = self.paths.get_mut(i) {
+                p.info = info;
+                if validated {
+                    p.validated = true;
+                    p.amp.validate();
+                }
+            }
+            self.sync_kind(i);
+        }
+        if let Some(i) = self.paths.find(active) {
+            self.switch_active(i);
+        }
     }
 
     /// The parent of a pending sub-session is established: derive the keys from its secrets and open for data.
