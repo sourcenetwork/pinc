@@ -374,6 +374,7 @@ drive_impl! {
                 }
                 let st = ep.stats(session);
                 let late = self.first_dial.is_some_and(|f| self.late_start(f));
+                let has_relays = self.has_relays();
                 if let Some(s) = self.sess_mut(session) {
                     s.relay_route = st.is_some_and(|st| st.route.is_some_and(|(_, r)| is_relay_addr(&r)));
                     let udp = st.is_some_and(|st| st.route.is_some_and(|(_, r)| !is_relay_addr(&r)));
@@ -382,7 +383,8 @@ drive_impl! {
                         Some(st) if !st.sub && dialer && hub.is_some() && late && udp => Born::LateHubDirect,
                         _ => Born::Plain,
                     };
-                    s.punch = Puncher::born(now, born);
+                    // Punching coordinates through a relay or a hub: with neither, no round ever helps.
+                    s.punch = if has_relays || hub.is_some() { Puncher::born(now, born) } else { Puncher::off() };
                 }
                 if hub.is_some() && dialer {
                     let _ = self.cmd(ep, now, Command::SetRole { session, role: Role::Hub });
@@ -701,7 +703,15 @@ drive_impl! {
 
     fn reselect<E: Port>(&mut self, now: u64, ep: &mut E, s: &mut Sess) {
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&s.node, &[], &mut cands);
+        let mut nc = self.candidates_for(&s.node, &[], &mut cands);
+        // A peer with no record and no relay is dialed at the address the caller gave: a retry keeps to it.
+        if nc == 0
+            && let Some(p) = s.primary
+            && let Some(c) = cands.first_mut()
+        {
+            *c = Cand::Udp(p);
+            nc = 1;
+        }
         let t = Try {
             now,
             dialer: true,
