@@ -111,5 +111,8 @@ opt-level = 3
 [profile.dev.package.vinc]
 opt-level = 3
 
+[profile.dev.package.vinc-connect]
+opt-level = 3
+
 [profile.dev.package.vinc-sim]
 opt-level = 3

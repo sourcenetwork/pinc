@@ -463,6 +463,11 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         self.mailbox.pending(node)
     }
 
+    /// Members with packets held in the mailbox.
+    pub const fn mailbox_members(&self) -> usize {
+        self.mailbox.members()
+    }
+
     /// How many records are stored.
     pub const fn record_count(&self) -> usize {
         self.records.len()

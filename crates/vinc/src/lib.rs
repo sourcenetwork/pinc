@@ -51,6 +51,8 @@
 //! ```
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
 /// The README's examples, compiled and run as doctests so they cannot drift.
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
@@ -68,6 +70,7 @@ mod keys;
 mod mem;
 mod node;
 mod protocol;
+pub mod relay;
 mod standby;
 mod start;
 pub mod stream;

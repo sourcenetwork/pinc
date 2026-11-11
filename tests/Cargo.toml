@@ -930,3 +930,7 @@ path = "sim_connect_follow.rs"
 [[test]]
 name = "connect_held"
 path = "connect_held.rs"
+
+[[test]]
+name = "relay_host"
+path = "relay_host.rs"

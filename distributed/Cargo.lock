@@ -5519,6 +5519,7 @@ name = "vinc"
 version = "0.1.0"
 dependencies = [
  "rapidhash",
+ "vinc-connect",
  "vinc-core",
  "vinc-crypto",
  "vinc-keystore",
