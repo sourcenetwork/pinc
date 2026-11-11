@@ -18,6 +18,8 @@
 
 use core::net::SocketAddr;
 
+use vinc_transport::conn::PathId;
+
 use crate::endpoint::{MAX_IFACES, env, ep_impl};
 use crate::keepalive::RESUME_QUIET;
 use crate::slot::State;
@@ -120,22 +122,30 @@ ep_impl! {
         }
         self.quiet_until = now.saturating_add(RESUME_QUIET);
         for i in 0..K {
-            if !self.leaves_from(i, &old, false) {
-                continue;
+            let wake = self.leaves_from(i, &old, false);
+            // Every path of the session that leaves from the old address is dead, not only the active one: a standby
+            // path left on it would be chosen again later and carry nothing.
+            for j in 0..D {
+                let Some(((l, remote), generation)) = self.paths.at_index(j).map(|(k, g)| (*k, *g)) else { continue };
+                if l != old {
+                    continue;
+                }
+                let lost = PathId(u64::from(generation) << 32 | j as u64);
+                let held = self.slots.get(i).and_then(|s| s.conn.as_ref()).is_some_and(|c| c.has_path(lost));
+                if !held {
+                    continue;
+                }
+                let pid = self.path_id(new, remote);
+                if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
+                    let mut env = env!(self, now);
+                    let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
+                    // The old local address is gone: the session leaves the path as soon as the new one validates.
+                    let _ = conn.path_lost(lost);
+                }
             }
-            let active = self
-                .slots
-                .get(i)
-                .and_then(|s| s.conn.as_ref())
-                .and_then(vinc_transport::conn::Connection::active_path);
-            let Some((active, remote)) = active.and_then(|p| self.path_addrs(p).map(|(_, r)| (p, r))) else { continue };
-            let pid = self.path_id(new, remote);
-            if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
-                let mut env = env!(self, now);
-                let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
-                // The old local address is gone: the session leaves its path as soon as the new one validates.
-                let _ = conn.path_lost(active);
+            if wake && let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 // The link went away and came back on the new address: the peer is woken on the new path.
+                let mut env = env!(self, now);
                 conn.set_link_down(&mut env, true);
                 conn.set_link_down(&mut env, false);
             }

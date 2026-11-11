@@ -418,6 +418,41 @@ fn a_session_goes_on_when_its_node_changes_address() {
 }
 
 #[test]
+fn a_standby_path_that_leaves_from_the_old_address_moves_with_the_address() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let b2: std::net::SocketAddr = ([10, 0, 0, 22], 4433).into();
+        net.nodes[b].extra.push(b2);
+        let (sa, _sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Punch { session: sa, addr: b2 }).unwrap();
+        net.run_for(2 * SEC_NS);
+        // The node moves. The old address reaches nobody, and the new address reaches the peer only at its second
+        // address: the session can go on only if its standby path to that address moved with the node.
+        let new: std::net::SocketAddr = ([10, 0, 9, 1], 4433).into();
+        let old = net.nodes[a].addr;
+        let b1 = net.nodes[b].addr;
+        net.nodes[a].addr = new;
+        net.loss = Some(Box::new(move |from, to, _| {
+            from == old || (from == new && to == b1) || (from == b1 && to == new)
+        }));
+        let now = net.now;
+        net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
+        net.nodes[a]
+            .ep
+            .iface_event(now, IfaceId(0), IfaceEvent::AddrChange(new));
+        net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Up);
+        open_and_send(&mut net, a, sa, b"after");
+        let t0 = net.now;
+        assert!(
+            net.run(t0 + 6 * SEC_NS, |n| !n.nodes[b].fin.is_empty()),
+            "nothing from the moved node"
+        );
+    });
+}
+
+#[test]
 fn an_ended_endpoint_gives_its_table_back_with_every_session_closed() {
     use vinc_core::{Endpoint, EndpointConfig};
     use vinc_crypto::Drbg;

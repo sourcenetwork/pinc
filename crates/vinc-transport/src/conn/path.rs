@@ -382,6 +382,11 @@ conn_impl! {
         }
     }
 
+    /// Whether the connection tracks path `id`.
+    pub fn has_path(&self, id: PathId) -> bool {
+        self.paths.find(id).is_some()
+    }
+
     /// The path packets leave on, if any.
     pub fn active_path(&self) -> Option<PathId> {
         self.paths.active().map(|p| p.id)
