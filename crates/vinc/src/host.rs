@@ -44,6 +44,11 @@ pub trait Hosted: sealed::Sealed {
     /// The access hook.
     type Access: Admit;
 
+    /// The most bytes one receive can fill: one datagram one byte longer than the endpoint takes (so a longer one shows
+    /// itself whole and is dropped), or, for a host that may coalesce several, a whole UDP payload.
+    #[doc(hidden)]
+    const RECV_MAX: usize;
+
     /// Receive into `buf`: the length filled, the sender and the size of each datagram in the filled part.
     #[doc(hidden)]
     fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>>;
@@ -108,6 +113,7 @@ where
 {
     type Keys = K;
     type Access = A;
+    const RECV_MAX: usize = vinc_core::MAX_DATAGRAM + 1;
 
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
         let (n, from) = (self.recv)(buf).await?;
@@ -138,6 +144,7 @@ where
 {
     type Keys = K;
     type Access = A;
+    const RECV_MAX: usize = 65_536;
 
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
         (self.recv)(buf).await
@@ -193,6 +200,7 @@ impl<N, K, A> sealed::Sealed for IoHost<N, K, A> {}
 impl<N: Io, K: KeyStore, A: Admit> Hosted for IoHost<N, K, A> {
     type Keys = K;
     type Access = A;
+    const RECV_MAX: usize = 65_536;
 
     fn recv(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<(usize, SocketAddr, usize)>> {
         self.io.recv(buf)

@@ -15,8 +15,9 @@
 //! Invariants: at most one future holds the role; the flag, the baton and a ticket's registration change in one
 //! borrow of the core, so a wake is never lost between a failed attempt and the wait; no borrow is held across an await
 //! or a call of a host closure; the
-//! receive future owns its buffer and returns it to a pool when dropped; with no future polled the endpoint makes no
-//! progress, which is the SANS-IO contract.
+//! receive and transmit buffers come from two small pools and go back when dropped, so steady traffic allocates none,
+//! however many futures send at once; with no future polled the endpoint makes no progress, which is the SANS-IO
+//! contract.
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::future::poll_fn;
@@ -34,11 +35,11 @@ use crate::standby::Ticket;
 
 /// The first time the endpoint sees, so no time is zero.
 pub(crate) const T0: u64 = 10_000_000_000;
-/// The largest datagram received, and the buffer one transmit call fills.
-const BUF: usize = 65_536;
+/// The largest UDP payload: the most a coalesced receive or a batched transmit holds.
+const UDP_MAX: usize = 65_536;
 /// The most datagrams read in one burst before the endpoint runs.
 const DRAIN: usize = 256;
-/// The most buffers the pool keeps.
+/// The most buffers each pool keeps.
 const POOLED: usize = 8;
 
 /// The state every handle of an endpoint shares.
@@ -50,10 +51,13 @@ pub(crate) struct Shared<H: Hosted> {
     /// The access hook, the same one the core asks; it holds no endpoint state, so it is asked without the core.
     pub(crate) admit: Rc<H::Access>,
     core: RefCell<Core<H::Keys, H::Access>>,
-    bufs: RefCell<Vec<Vec<u8>>>,
+    rx_bufs: RefCell<Vec<Vec<u8>>>,
+    tx_bufs: RefCell<Vec<Vec<u8>>>,
+    /// The size of a transmit buffer: the endpoint's batch of datagrams of the largest size.
+    tx_len: usize,
 }
 
-/// A receive buffer that goes back to the pool when dropped.
+/// A buffer that goes back to its pool when dropped.
 struct Buf<'a> {
     v: Vec<u8>,
     home: &'a RefCell<Vec<Vec<u8>>>,
@@ -98,6 +102,15 @@ fn wire(a: SocketAddr, socket_v6: bool) -> SocketAddr {
     }
 }
 
+/// A buffer of `len` bytes from `home`, or a new one.
+fn pooled(home: &RefCell<Vec<Vec<u8>>>, len: usize) -> Buf<'_> {
+    let v = home.try_borrow_mut().ok().and_then(|mut b| b.pop());
+    Buf {
+        v: v.unwrap_or_else(|| vec![0; len]),
+        home,
+    }
+}
+
 async fn recv_owned<'a, H: Hosted>(host: &H, mut buf: Buf<'a>) -> (io::Result<(usize, SocketAddr, usize)>, Buf<'a>) {
     let r = host.recv(buf.v.as_mut_slice()).await;
     (r, buf)
@@ -138,7 +151,8 @@ impl<H: Hosted> Drop for Turn<'_, H> {
 }
 
 impl<H: Hosted> Shared<H> {
-    pub(crate) fn new(host: H, core: Core<H::Keys, H::Access>, local: SocketAddr) -> Self {
+    /// The shared state of an endpoint whose transmits batch up to `gso` datagrams.
+    pub(crate) fn new(host: H, core: Core<H::Keys, H::Access>, local: SocketAddr, gso: usize) -> Self {
         Self {
             host,
             start: Instant::now(),
@@ -146,7 +160,9 @@ impl<H: Hosted> Shared<H> {
             driving: Cell::new(false),
             admit: core.hook(),
             core: RefCell::new(core),
-            bufs: RefCell::new(Vec::new()),
+            rx_bufs: RefCell::new(Vec::new()),
+            tx_bufs: RefCell::new(Vec::new()),
+            tx_len: gso.clamp(1, UDP_MAX / vinc_core::MAX_DATAGRAM) * vinc_core::MAX_DATAGRAM,
         }
     }
 
@@ -169,12 +185,12 @@ impl<H: Hosted> Shared<H> {
         self.start + Duration::from_nanos(at.saturating_sub(T0))
     }
 
-    fn buf(&self) -> Buf<'_> {
-        let v = self.bufs.try_borrow_mut().ok().and_then(|mut b| b.pop());
-        Buf {
-            v: v.unwrap_or_else(|| vec![0; BUF]),
-            home: &self.bufs,
-        }
+    fn rx_buf(&self) -> Buf<'_> {
+        pooled(&self.rx_bufs, H::RECV_MAX)
+    }
+
+    fn tx_buf(&self) -> Buf<'_> {
+        pooled(&self.tx_bufs, self.tx_len)
     }
 
     /// Run `attempt` until it is done. Each time it cannot finish it names what it waits for; the future is woken when
@@ -252,7 +268,7 @@ impl<H: Hosted> Shared<H> {
                 // socket's buffer and the datagrams are lost.
                 for _ in 0..DRAIN {
                     if rx.is_none() {
-                        let b = spare.take().unwrap_or_else(|| self.buf());
+                        let b = spare.take().unwrap_or_else(|| self.rx_buf());
                         rx.set(Some(recv_owned(&self.host, b)));
                     }
                     let Some(Poll::Ready((res, mut buf))) = rx.as_mut().as_pin_mut().map(|f| f.poll(cx)) else {
@@ -298,22 +314,18 @@ impl<H: Hosted> Shared<H> {
 
     /// Serve the endpoint and send everything it wants to send, until it wants nothing more.
     pub(crate) async fn flush(&self) {
-        let mut buf: Option<Vec<u8>> = None;
+        let mut buf: Option<Buf<'_>> = None;
         loop {
             let (t, b) = {
                 let now = self.now();
                 let Some(mut core) = self.lock() else { return };
                 let moved = core.service(now);
-                let mut b = buf
-                    .take()
-                    .or_else(|| core.tx_spare.take())
-                    .unwrap_or_else(|| vec![0; BUF]);
-                if let Some(t) = core.ep.poll_transmit(now, &mut b) {
+                let mut b = buf.take().unwrap_or_else(|| self.tx_buf());
+                if let Some(t) = core.ep.poll_transmit(now, &mut b.v) {
                     (t, b)
                 } else {
                     core.kick();
                     if moved == 0 {
-                        core.tx_spare = Some(b);
                         return;
                     }
                     buf = Some(b);
@@ -324,7 +336,7 @@ impl<H: Hosted> Shared<H> {
             // A datagram the socket refuses is a lost datagram: the transport sends it again.
             let _ = self
                 .host
-                .send(b.get(..t.len).unwrap_or_default(), to, t.segment_size)
+                .send(b.v.get(..t.len).unwrap_or_default(), to, t.segment_size)
                 .await;
             buf = Some(b);
         }

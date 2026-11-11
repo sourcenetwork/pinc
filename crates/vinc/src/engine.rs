@@ -195,8 +195,6 @@ pub(crate) struct Core<S, A> {
     /// The ticket of the future that drives, and the deadline it sleeps for.
     pub(crate) driver: Option<Ticket>,
     pub(crate) armed: u64,
-    /// The buffer a transmit fills, kept between sends so none allocates.
-    pub(crate) tx_spare: Option<Vec<u8>>,
 }
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
@@ -227,7 +225,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             standby: Standby::default(),
             driver: None,
             armed: u64::MAX,
-            tx_spare: None,
         }
     }
 

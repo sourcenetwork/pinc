@@ -240,6 +240,7 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
             Host::new(recv, send, sleep),
             core,
             local,
+            1,
         ))))
     }
 
@@ -263,6 +264,7 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
             BatchHost::new(recv, send, sleep),
             core,
             local,
+            batch,
         ))))
     }
 
@@ -274,7 +276,7 @@ impl<K: KeyStore, D: Discovery, A: Admission> Builder<K, D, A> {
     pub fn build_io<N: Io>(self, io: N) -> Result<IoBuilt<N, K, D, A>> {
         let batch = self.batch;
         let (inner, core, local) = self.assemble(batch)?;
-        Ok(Endpoint(Rc::new(inner.finish(IoHost::new(io), core, local))))
+        Ok(Endpoint(Rc::new(inner.finish(IoHost::new(io), core, local, batch))))
     }
 
     /// Everything but the host: the core, built with transmits of up to `gso` datagrams.
@@ -325,9 +327,9 @@ struct Parts<D> {
 }
 
 impl<D> Parts<D> {
-    fn finish<H: Hosted>(self, host: H, core: Core<H::Keys, H::Access>, local: SocketAddr) -> Inner<H, D> {
+    fn finish<H: Hosted>(self, host: H, core: Core<H::Keys, H::Access>, local: SocketAddr, gso: usize) -> Inner<H, D> {
         Inner {
-            shared: Rc::new(Shared::new(host, core, local)),
+            shared: Rc::new(Shared::new(host, core, local, gso)),
             node: self.node,
             public: self.public,
             discovery: self.discovery,
