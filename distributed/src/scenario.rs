@@ -370,7 +370,11 @@ impl TransportTest {
                 size,
                 requests,
                 concurrency,
-            } => (1..=1 << 20).contains(&size) && (1..=10_000_000).contains(&requests) && (1..=1024).contains(&concurrency),
+            } => {
+                (1..=1 << 20).contains(&size)
+                    && (1..=10_000_000).contains(&requests)
+                    && (1..=1024).contains(&concurrency)
+            }
             Self::Throughput { bytes, streams } => (1..=1 << 40).contains(&bytes) && (1..=256).contains(&streams),
             Self::Many {
                 connections,

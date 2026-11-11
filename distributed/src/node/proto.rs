@@ -55,9 +55,9 @@ pub struct Init {
     pub mtu: u32,
     /// The most nodes that may be in the group: sizes the VINC endpoint.
     pub sessions: u32,
-    /// Keep the library's default largest pubsub message instead of the harness's (see `Pubsub::library_limits`).
-    #[serde(default)]
-    pub library_limits: bool,
+    /// The largest iroh gossip message, when the workload sets one (see `Pubsub::iroh_gossip_max`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iroh_gossip_max: Option<u32>,
 }
 
 impl Init {

@@ -169,7 +169,7 @@ impl<'a> AppSet<'a> {
                 peers: peers.clone(),
                 mtu,
                 sessions,
-                library_limits: false,
+                iroh_gossip_max: None,
             })
             .collect();
         Self {
@@ -182,10 +182,10 @@ impl<'a> AppSet<'a> {
         }
     }
 
-    /// Tell every node to keep its library's default largest pubsub message (see `Pubsub::library_limits`).
-    pub(crate) fn with_library_limits(mut self, on: bool) -> Self {
+    /// Set the largest iroh gossip message of every node (see `Pubsub::iroh_gossip_max`).
+    pub(crate) fn with_iroh_gossip_max(mut self, max: Option<u32>) -> Self {
         for i in &mut self.inits {
-            i.library_limits = on;
+            i.iroh_gossip_max = max;
         }
         self
     }
