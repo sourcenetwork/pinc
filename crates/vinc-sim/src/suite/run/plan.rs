@@ -50,12 +50,12 @@ impl LayerSet {
         connectivity: false,
     };
 
-    /// What the VINC node carries: broadcast, membership and the connectivity client with its relays. Values and
-    /// reconcile are not in the node yet.
+    /// What the VINC node carries: broadcast, values, reconcile, membership and the connectivity client with its
+    /// relays.
     pub const NODE: Self = Self {
         broadcast: true,
-        values: false,
-        reconcile: false,
+        values: true,
+        reconcile: true,
         membership: true,
         connectivity: true,
     };

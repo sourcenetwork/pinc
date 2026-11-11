@@ -21,6 +21,10 @@ fn diag() {
     } else {
         Driver::Vinc
     };
+    if let (Ok(a), Ok(b)) = (std::env::var("VINC_DIAG_FROM_S"), std::env::var("VINC_DIAG_TO_S")) {
+        let ns = |x: String| x.parse::<f64>().unwrap() * 1e9;
+        vinc_sim::suite::node::set_trace_window(ns(a) as u64, ns(b) as u64);
+    }
     let v = variants().into_iter().find(|v| v.id == id && v.seed == seed).unwrap();
     let w = build(&v).unwrap();
     for e in w.env.iter().filter(|e| nodes.contains(&e.node)) {

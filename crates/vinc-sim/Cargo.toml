@@ -19,21 +19,29 @@ suite = [
     "dep:vinc-connect",
     "dep:vinc-core",
     "dep:vinc-crypto",
+    "dep:blake3",
+    "dep:vinc-dag",
     "dep:vinc-membership",
     "dep:vinc-node",
+    "dep:vinc-reconcile",
     "dep:vinc-security",
     "dep:vinc-transport",
+    "dep:vinc-values",
 ]
 
 [dependencies]
 blake2 = { workspace = true, optional = true }
+blake3 = { workspace = true, optional = true }
 vinc-connect = { workspace = true, optional = true }
 vinc-core = { workspace = true, optional = true, features = ["alloc"] }
 vinc-crypto = { workspace = true, optional = true, features = ["derive-trace"] }
+vinc-dag = { workspace = true, optional = true, features = ["alloc"] }
 vinc-membership = { workspace = true, optional = true, features = ["alloc"] }
 vinc-node = { workspace = true, optional = true }
+vinc-reconcile = { workspace = true, optional = true, features = ["alloc"] }
 vinc-security = { workspace = true, optional = true }
 vinc-transport = { workspace = true, optional = true, features = ["alloc"] }
+vinc-values = { workspace = true, optional = true }
 
 [lints]
 workspace = true

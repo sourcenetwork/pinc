@@ -428,7 +428,7 @@ impl Stack {
         }
     }
 
-    fn fetch_event(&self, now: u64, fetch_id: u64, name: &str, readable: Option<(u64, u64)>) {
+    fn fetch_event(&mut self, now: u64, fetch_id: u64, name: &str, readable: Option<(u64, u64)>) {
         let info = self.fetch_ids.get(&fetch_id).and_then(|iid| {
             let rec = self.rec.borrow();
             let it = rec.intents.get(iid)?;
@@ -448,6 +448,10 @@ impl Stack {
                 self.violation(now, "G-INT", "ValueReadable for bytes that are not verified");
             }
             _ => {}
+        }
+        // Delivery is store-based: every event that follows a write looks at what the store holds now.
+        if name != "FetchFailed" {
+            self.value_progress(now, value);
         }
     }
 
@@ -503,10 +507,11 @@ impl Stack {
             }
             let ranges = it.meta.ranges.clone().unwrap_or_else(|| vec![(0, it.size)]);
             let contiguous = ranges.first().map_or(0, |&(o0, _)| store.contiguous_from(value, o0));
-            if contiguous > 0 && it.meta.first_byte.is_none() {
-                it.meta.first_byte = Some(now);
+            if contiguous > 0 {
+                // A sample with nothing available says nothing the stall fraction does not already assume.
+                it.meta.first_byte.get_or_insert(now);
+                it.meta.progress.push((now, contiguous));
             }
-            it.meta.progress.push((now, contiguous));
             if !ranges.iter().all(|&(o, n)| store.holds(value, o, n)) {
                 continue;
             }

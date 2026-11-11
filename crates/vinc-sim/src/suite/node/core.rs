@@ -23,10 +23,10 @@ use vinc_core::{
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use vinc_node::{Config as NodeConfig, HUB_ALPN, Node};
 use vinc_security::{Env, LocalIdentity, PrekeyPolicy, SoftPrekeys};
-use vinc_transport::stream::NoSource;
 
+use super::apps::SuiteApps;
 use super::carrier::Wire;
-use super::mem::{CLIENT_TICKETS, Ep, recycle, slots};
+use super::mem::{CLIENT_TICKETS, Ep, Src, recycle, slots};
 use super::relay::{HubSide, LOCAL_RELAY};
 use super::shared::{Shared, derive, make_identity};
 use super::{NodeEvent, SetupError};
@@ -53,7 +53,7 @@ pub const LEDGER_ENTRY_BYTES: u64 = 64;
 /// The size of one remembered round trip in the exported state format, used as its memory estimate.
 pub const PEER_ENTRY_BYTES: u64 = 41;
 
-type NodeT = Node<Ep, Tracked, (), NRL, NPEERS>;
+type NodeT = Node<Ep, Tracked, (), NRL, NPEERS, SuiteApps>;
 
 /// One interface of the node as the endpoint sees it.
 pub(super) struct IfEntry {
@@ -302,6 +302,9 @@ impl Core {
         self.incarnation += 1;
         let stateless = self.shared.restarts_stateless(self.idx, self.last_start, now);
         self.last_start = now;
+        if stateless && let Some(values) = self.shared.values_of(self.idx) {
+            values.forget();
+        }
         self.clear_volatile();
         let Some(table) = slots() else {
             self.violation("G-SPEC", "the node could not allocate its connection memory");
@@ -433,7 +436,7 @@ impl Core {
             limits: Default::default(),
             wall_ms: self.wall_ms(),
             local,
-            trace: false,
+            trace: self.shared.is_watched(self.idx),
         };
         let key = Keypair::from_seed(IdentityAlg::Ed25519, &self.seed)
             .map(Box::new)
@@ -451,9 +454,17 @@ impl Core {
             self.incarnation,
         )));
         let prov = self.provider();
-        Node::new(&cfg, ep, prekey, prov, drbg, key, (), seed)
-            .map(Box::new)
-            .map_err(|e| format!("the node could not start: {e}"))
+        let (Some(values), Some(sets)) = (self.shared.values_of(self.idx), self.shared.sets_of(self.idx)) else {
+            return Err("the node has no stores".to_owned());
+        };
+        let apps = SuiteApps::new(values.clone(), sets.clone());
+        let mut node = Node::with_apps(&cfg, ep, prekey, prov, drbg, key, (), seed, apps)
+            .map_err(|e| format!("the node could not start: {e}"))?;
+        // The node answers a value only if the host registered its root.
+        for root in values.served_roots() {
+            node.values_provide(&root);
+        }
+        Ok(Box::new(node))
     }
 
     fn clear_volatile(&mut self) {
@@ -486,7 +497,7 @@ impl Drop for Core {
 impl Core {
     // ---- commands to the node ----
 
-    pub(super) fn cmd(&mut self, c: Command<'_, NoSource>) -> Result<Value, CommandError> {
+    pub(super) fn cmd(&mut self, c: Command<'_, Src>) -> Result<Value, CommandError> {
         let local = self.local;
         self.node.as_mut().ok_or(CommandError::NoSession)?.command(local, c)
     }

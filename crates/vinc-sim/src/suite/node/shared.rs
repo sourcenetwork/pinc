@@ -17,6 +17,8 @@ use vinc_connect::client::RelayCfg;
 use vinc_crypto::{CryptoError, IdentityAlg, Keypair, NodeId, Provider, Software};
 use vinc_security::{KeyHandle, LocalIdentity};
 
+use super::apps::SetStore;
+use super::values::{Catalog, VStore};
 use crate::suite::crypto::{DeviceCosts, Registry};
 use crate::suite::rec::Rec;
 use crate::suite::world::model::{Addr, EnvArg, EnvKind, World};
@@ -32,6 +34,10 @@ pub enum SetupError {
     BadAddress(usize),
     /// The identity key could not be made.
     Identity(CryptoError),
+    /// A value of the world could not be built.
+    Value,
+    /// A set of node `n` is not sorted.
+    Set(usize),
 }
 
 impl core::fmt::Display for SetupError {
@@ -41,6 +47,8 @@ impl core::fmt::Display for SetupError {
             Self::UnknownDevice(i) => write!(f, "node {i} has an unknown device class"),
             Self::BadAddress(i) => write!(f, "node {i} has an interface address of an unknown kind"),
             Self::Identity(e) => write!(f, "the node identity could not be made: {e}"),
+            Self::Value => write!(f, "a value of the world could not be built"),
+            Self::Set(i) => write!(f, "a set of node {i} is not sorted"),
         }
     }
 }
@@ -100,6 +108,11 @@ pub struct Shared {
     stateless: BTreeSet<(usize, u64)>,
     restarts: BTreeSet<(usize, u64)>,
     relays: Vec<RelayCfg>,
+    /// The values of the world.
+    pub catalog: Catalog,
+    stores: Vec<(VStore, SetStore)>,
+    watched: RefCell<BTreeSet<usize>>,
+    node_trace: RefCell<Vec<String>>,
 }
 
 impl Shared {
@@ -140,6 +153,14 @@ impl Shared {
             .map(|a| (a.node, a.t))
             .collect();
         let relays = relay_cfgs(&world, &ids);
+        let catalog = Catalog::build(&world, registry)?;
+        let stores = (0..world.nodes.len())
+            .map(|i| {
+                let provides = world.provides.get(&i).map_or(&[][..], Vec::as_slice);
+                let sets = SetStore::of(&world, i).map_err(|_| SetupError::Set(i))?;
+                Ok((VStore::new(&catalog, provides), sets))
+            })
+            .collect::<Result<Vec<_>, SetupError>>()?;
         Ok(Rc::new(Self {
             world,
             rec,
@@ -151,6 +172,10 @@ impl Shared {
             stateless,
             restarts,
             relays,
+            catalog,
+            stores,
+            watched: RefCell::default(),
+            node_trace: RefCell::default(),
         }))
     }
 
@@ -167,6 +192,36 @@ impl Shared {
     /// The world index of a node id given as its bytes, if it is a node of the world.
     pub fn index_of_bytes(&self, id: &[u8; 32]) -> Option<usize> {
         self.by_id.get(id).copied()
+    }
+
+    /// Record the decisions of the nodes `nodes` (their trace is built and kept), for diagnosis.
+    pub fn watch(&self, nodes: &[usize]) {
+        self.watched.borrow_mut().extend(nodes.iter().copied());
+    }
+
+    /// Whether the decisions of node `idx` are recorded.
+    pub(super) fn is_watched(&self, idx: usize) -> bool {
+        self.watched.borrow().contains(&idx)
+    }
+
+    /// Keep one line of a watched node's trace.
+    pub(super) fn note_trace(&self, line: String) {
+        self.node_trace.borrow_mut().push(line);
+    }
+
+    /// The lines recorded since the last call.
+    pub fn take_trace(&self) -> Vec<String> {
+        std::mem::take(&mut self.node_trace.borrow_mut())
+    }
+
+    /// The value store of node `idx`.
+    pub fn values_of(&self, idx: usize) -> Option<&VStore> {
+        self.stores.get(idx).map(|s| &s.0)
+    }
+
+    /// The sets of node `idx`.
+    pub fn sets_of(&self, idx: usize) -> Option<&SetStore> {
+        self.stores.get(idx).map(|s| &s.1)
     }
 
     /// The relays every node is configured with: the bootstrap nodes, reachable on UDP, TCP and WebSocket.

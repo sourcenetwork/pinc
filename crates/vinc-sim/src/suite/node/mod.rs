@@ -35,14 +35,15 @@
 //! The endpoint uses the UDP interfaces of the world; streams carry only the connectivity client's relay carriers. The
 //! state size reported to the recorder is an
 //! estimate built from counts the endpoint exposes (see [`SESSION_STATE_BYTES`]). The redundant-bytes count of a datagram
-//! is zero here: the value store, which knows what it already holds, sits above the adapter. The endpoint's connection
-//! memory (about 16 MiB per node: the slot table is resident, the buffer pools only as far as they are used) is
+//! is zero here: only the node's value layer sees which bytes of a payload it already held. The endpoint's connection
+//! memory (the slot table is resident, the buffer pools only as far as they are used) is
 //! allocated once per table and handed from an ended endpoint to the next one on the same thread, so a restart or a
-//! later run does not allocate again; an idle node holds about 17 MiB. The endpoint is half a megabyte, so build a node on a thread with a stack of a few megabytes.
+//! later run does not allocate again; an idle node holds about 17 MiB of it. The endpoint is half a megabyte, so build a node on a thread with a stack of a few megabytes.
 //!
 //! Invariants: the endpoint sees the node's local clock, the layers and the recorder see true time; a node's identity is created once
 //! and kept across restarts; nothing here reads a clock, a socket or a random source of the machine.
 
+mod apps;
 mod carrier;
 mod core;
 mod cost;
@@ -52,6 +53,22 @@ mod mem;
 mod peers;
 mod relay;
 mod shared;
+mod values;
+
+static TRACE_FROM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+static TRACE_TO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Also record the endpoint, membership and broadcast records of watched nodes between the true times `from` and
+/// `to` (nanoseconds), for diagnosis. The window is process-wide and off until set.
+pub fn set_trace_window(from: u64, to: u64) {
+    TRACE_FROM.store(from, std::sync::atomic::Ordering::Relaxed);
+    TRACE_TO.store(to, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn in_trace_window(now: u64) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    (TRACE_FROM.load(Relaxed)..TRACE_TO.load(Relaxed)).contains(&now)
+}
 
 /// How many turns of the host loop a call may take before the node is reported as not settling.
 const SETTLE_ROUNDS: usize = 128;
@@ -62,7 +79,7 @@ use std::rc::Rc;
 use self::core::{Core, Phase};
 pub use self::core::{LEDGER_ENTRY_BYTES, LOCAL_BASE, MAX_GSO, PEER_ENTRY_BYTES, SESSION_STATE_BYTES};
 pub use self::cost::{HANDLER_CALL_NS, SuiteCost};
-pub use self::layer::NodeLayer;
+pub use self::layer::{NodeLayer, NodeSets, NodeValues};
 pub use self::mem::{CHUNKS_PER_CONN, Ep, SESSIONS};
 pub use self::shared::{SetupError, Shared, identity_seed, iface_ip};
 use crate::suite::proto::host::Layers;

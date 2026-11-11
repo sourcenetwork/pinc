@@ -14,9 +14,14 @@ use vinc_core::{Endpoint, Slot};
 use vinc_transport::conn::{Resources, Tables};
 use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, RawChunk};
-use vinc_transport::stream::{self, NoSource, Streams};
+use vinc_transport::stream::{self, Streams};
+use vinc_values::source::ValueSource;
 
+use super::values::VStore;
 use crate::suite::crypto::Tracked;
+
+/// The stream source of the endpoint: values served from the node's store.
+pub(super) type Src = ValueSource<VStore>;
 
 /// Streams per connection.
 pub(super) const STREAMS: usize = 8;
@@ -36,7 +41,9 @@ pub(super) const PREKEYS: usize = 8;
 pub(super) const TICKETS: usize = 16;
 /// Tickets this node holds as a client.
 pub(super) const CLIENT_TICKETS: usize = 8;
-/// Pool chunks (16 KiB each) per connection.
+/// Pool chunks (16 KiB each) per connection. A stream is admitted only while the pool covers the receive window of
+/// every stream, and a hub session carries a stream in each direction, so a session needs room for two windows and the
+/// send buffers.
 pub const CHUNKS_PER_CONN: usize = 64;
 
 /// The endpoint of a suite node.
@@ -44,7 +51,7 @@ pub type Ep = Endpoint<
     'static,
     'static,
     Tracked,
-    NoSource,
+    Src,
     STREAMS,
     CHUNK_RING,
     IN_FLIGHT,
@@ -56,7 +63,7 @@ pub type Ep = Endpoint<
     CLIENT_TICKETS,
 >;
 
-type NodeSlot = Slot<'static, Tracked, NoSource, STREAMS, CHUNK_RING, IN_FLIGHT, PATHS>;
+type NodeSlot = Slot<'static, Tracked, Src, STREAMS, CHUNK_RING, IN_FLIGHT, PATHS>;
 
 thread_local! {
     /// The tables ended endpoints gave back, ready for the next one.
@@ -85,9 +92,9 @@ fn new_table() -> Option<&'static mut [NodeSlot; SESSIONS]> {
     Some(Box::leak(boxed))
 }
 
-fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, NoSource, STREAMS, CHUNK_RING, IN_FLIGHT> {
+fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, Src, STREAMS, CHUNK_RING, IN_FLIGHT> {
     let pool = BufferPool::from_slab(chunks);
-    let streams: &'static mut Streams<NoSource, STREAMS, CHUNK_RING> =
+    let streams: &'static mut Streams<Src, STREAMS, CHUNK_RING> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
     let loss: &'static LossEstimate = Box::leak(Box::new(LossEstimate::new()));
     Resources {

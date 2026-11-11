@@ -6,11 +6,13 @@
 //! the recorder is held across a call into a layer; every access check is answered once, after the world's latency.
 
 use vinc_core::{Answer, Command, Event, Query, Role, SessionId, Value};
-use vinc_node::NodeEvent as NEv;
+use vinc_node::{NodeEvent as NEv, ValuesRequest};
+use vinc_values::span::Span;
 use vinc_transport::stream::RecvStatus;
 
 use super::NodeEvent;
-use super::core::{Check, Core, Known, Sess};
+use super::core::{Check, Core, Known, LOCAL_BASE, Sess};
+use crate::suite::crypto::MsgId;
 use crate::suite::proto::host::{Host, LayerEvent, Layers};
 use crate::suite::rec::MemberEvent;
 
@@ -38,6 +40,49 @@ impl Core {
                     let due = self.now + self.shared.world.acp_latency_ns;
                     self.acp.push_back((due, Check::Broadcast(id), allow));
                 }
+                NEv::ValueReadable { fetch, off, len } => {
+                    self.record_commits();
+                    if self.deliver() {
+                        let local = self.now;
+                        layers.event(local, self, LayerEvent::ValueReadable { fetch, off, len });
+                    }
+                }
+                NEv::ValueComplete { fetch } => {
+                    self.record_commits();
+                    if self.deliver() {
+                        let local = self.now;
+                        layers.event(local, self, LayerEvent::ValueComplete { fetch });
+                    }
+                }
+                NEv::ValueFailed { fetch, .. } => {
+                    self.record_commits();
+                    if self.deliver() {
+                        let local = self.now;
+                        layers.event(local, self, LayerEvent::ValueFailed { fetch });
+                    }
+                }
+                NEv::ReconcileDone {
+                    round,
+                    missing_here,
+                    missing_there,
+                    ..
+                } => {
+                    if self.deliver() {
+                        let local = self.now;
+                        let ev = LayerEvent::ReconcileDone {
+                            round,
+                            missing_here: &missing_here,
+                            missing_there: &missing_there,
+                        };
+                        layers.event(local, self, ev);
+                    }
+                }
+                NEv::ReconcileFailed { round, .. } => {
+                    if self.deliver() {
+                        let local = self.now;
+                        layers.event(local, self, LayerEvent::ReconcileFailed { round });
+                    }
+                }
                 NEv::Connect(n) => {
                     if self.notices.len() == 40 {
                         self.notices.pop_front();
@@ -50,11 +95,6 @@ impl Core {
                 | NEv::Fallback { .. }
                 | NEv::Restored { .. }
                 | NEv::Lost { .. }
-                | NEv::ValueReadable { .. }
-                | NEv::ValueComplete { .. }
-                | NEv::ValueFailed { .. }
-                | NEv::ReconcileDone { .. }
-                | NEv::ReconcileFailed { .. }
                 | NEv::DtnReceived { .. }
                 | NEv::DtnCustody { .. }
                 | NEv::DtnHandedOff { .. }
@@ -63,7 +103,40 @@ impl Core {
             }
             self.hub_members();
         }
+        self.note_watched_trace();
         any
+    }
+
+    /// Keep the node's own decisions of a watched node as ndjson lines, with the node and the true time.
+    fn note_watched_trace(&mut self) {
+        if !self.shared.is_watched(self.idx) {
+            return;
+        }
+        while let Some(item) = self.node.as_mut().and_then(|n| n.poll_trace()) {
+            if matches!(item.body, vinc_node::Body::Node(_)) {
+                let mut line = String::new();
+                if item.write_ndjson(&mut line).is_ok() {
+                    self.shared.note_trace(format!("n{} true{} {line}", self.idx, self.now));
+                }
+            } else if super::in_trace_window(self.now) {
+                self.shared.note_trace(format!("n{} true{} {:?}", self.idx, self.now, item.body));
+            }
+        }
+    }
+
+    /// Tell the recorder what the node's value store gained since the last call, and flag bytes that are not the
+    /// value's body.
+    fn record_commits(&mut self) {
+        let Some(store) = self.shared.values_of(self.idx) else { return };
+        let commits = store.take_commits();
+        let mut rec = self.shared.rec.borrow_mut();
+        for c in commits {
+            rec.value_bytes_written(self.now, self.idx, c.id.0, c.off, c.len, c.new);
+        }
+        drop(rec);
+        if store.bad_writes() > 0 {
+            self.violation("G-INT", "the node stored bytes that are not the value's body");
+        }
     }
 
     fn on_member<L: Layers>(&mut self, layers: &mut L, m: &vinc_membership::Event) {
@@ -401,6 +474,33 @@ impl Host for Core {
     fn subscribe(&mut self, topic: &[u8]) -> bool {
         let local = self.local;
         self.node.as_mut().is_some_and(|n| n.subscribe(local, topic).is_ok())
+    }
+
+    fn fetch(&mut self, value: MsgId, ranges: &[(u64, u64)], providers: &[usize], deadline: u64) -> Option<u32> {
+        let shared = std::rc::Rc::clone(&self.shared);
+        let v = shared.catalog.get(value)?;
+        let ids: Vec<[u8; 32]> = providers
+            .iter()
+            .filter(|&&p| p != self.idx)
+            .filter_map(|&p| shared.node_id(p).map(|id| id.bytes))
+            .collect();
+        let spans: Vec<Span> = ranges.iter().map(|&(off, len)| Span { off, len }).collect();
+        let deadline = u64::try_from(i128::from(self.clock.local(deadline)) + i128::from(LOCAL_BASE)).ok();
+        let local = self.local;
+        let req = ValuesRequest {
+            root: v.root,
+            length: v.len,
+            ranges: &spans,
+            providers: &ids,
+            deadline,
+        };
+        self.node.as_mut()?.values_fetch(local, &req).ok()
+    }
+
+    fn reconcile(&mut self, peer: usize, set_ref: &[u8]) -> Option<u32> {
+        let id = self.shared.node_id(peer)?.bytes;
+        let local = self.local;
+        self.node.as_mut()?.sets_start(local, &id, set_ref).ok()
     }
 
     fn publish(&mut self, topic: &[u8], msg: &[u8]) -> bool {

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
 use vinc_core::SessionId;
-use vinc_sim::suite::crypto::Registry;
+use vinc_sim::suite::crypto::{MsgId, Registry};
 use vinc_sim::suite::grade::fixture::blank_world;
 use vinc_sim::suite::proto::host::{Host, LayerEvent, Layers};
 use vinc_sim::suite::proto::{Durable, MsgIntents, Stack};
@@ -120,6 +120,12 @@ impl Host for TestHost {
     fn publish(&mut self, topic: &[u8], msg: &[u8]) -> bool {
         self.published.push((topic.to_vec(), msg.to_vec()));
         true
+    }
+    fn fetch(&mut self, _: MsgId, _: &[(u64, u64)], _: &[usize], _: u64) -> Option<u32> {
+        None
+    }
+    fn reconcile(&mut self, _: usize, _: &[u8]) -> Option<u32> {
+        None
     }
 }
 

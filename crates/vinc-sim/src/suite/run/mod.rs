@@ -10,7 +10,7 @@
 //! # Layers
 //!
 //! Every node of a run is a `vinc_node::Node`: the endpoint, the connectivity client with its relays, membership and
-//! broadcast. The layers it carries are listed in [`LayerSet::NODE`] and registered in exactly one place,
+//! broadcast, values and reconcile. The layers it carries are listed in [`LayerSet::NODE`] and registered in exactly one place,
 //! `make_stack`: setting a flag and handing the `Stack` its layer there is all that adding one takes. A flag that is set without a registration is an error ([`RunError::NotWired`]),
 //! never a silent pass. With a flag false the intents that need the layer are not scheduled (they are in
 //! [`RunResult::excluded`]), the gates that would need them have no samples, and the status says `Partial`.
@@ -50,7 +50,7 @@ use crate::suite::grade::{
     FairSamples, GateReport, GateStatus, NodeFacts, RunFacts, SecFacts, Terms, compute_fair_terms, compute_terms,
     evaluate_gates,
 };
-use crate::suite::node::{NodeLayer, SetupError, Shared};
+use crate::suite::node::{NodeLayer, NodeSets, NodeValues, SetupError, Shared};
 use crate::suite::proto::{Durable, MsgIntents, Stack};
 use crate::suite::rec::{Rec, Violation};
 use crate::suite::world::model::{IntentKind, World};
@@ -182,14 +182,21 @@ const STACK_BYTES: usize = 256 << 20;
 
 /// Registers the layers of a node. This is the one place a layer is added: when a layer exists, hand its box to the
 /// stack here and let [`check_wiring`] accept its flag.
-fn make_stack(idx: usize, world: &Rc<World>, rec: &Rc<RefCell<Rec>>, msgs: &MsgIntents) -> Stack {
+fn make_stack(idx: usize, world: &Rc<World>, rec: &Rc<RefCell<Rec>>, msgs: &MsgIntents, shared: &Rc<Shared>) -> Stack {
     let durable = Rc::new(RefCell::new(Durable::sharing(Rc::clone(msgs))));
     // Broadcast and membership: the node carries both; its slot turns publishes into node calls and the node's messages
     // and member events into the application's accounting.
-    // Values layer: `.with_values(Box::new(..), ids)` goes here, with the world's values and providers registered.
-    // Reconcile layer: `.with_reconcile(Box::new(..))` goes here.
+    // Values and reconcile: the node carries both; its slots turn the application's fetches and sessions into node
+    // calls and the node's progress into the application's accounting. The values the node serves were handed to its
+    // store when the run was built.
     // Connectivity (relay, rendezvous, hole punching, carriers): the node and its adapter take it; nothing here.
-    Stack::new(idx, Rc::clone(world), Rc::clone(rec), durable).with_broadcast(Box::new(NodeLayer::default()))
+    Stack::new(idx, Rc::clone(world), Rc::clone(rec), durable)
+        .with_broadcast(Box::new(NodeLayer::default()))
+        .with_values(
+            Box::new(NodeValues::new(Rc::clone(shared), idx)),
+            Rc::clone(&shared.catalog.ids),
+        )
+        .with_reconcile(Box::new(NodeSets::new()))
 }
 
 /// The layers `make_stack` registers. Adding a layer there means setting its flag here.
@@ -333,13 +340,14 @@ fn execute(
     reg.install();
     let out = (|| {
         let shared = Shared::new(Rc::clone(&world_rc), Rc::clone(&rec), reg)?;
+        shared.watch(watch);
         let msgs: MsgIntents = Rc::default();
         let cfg = SimConfig {
             driver,
             default_link: Some(LinkConfig::default()),
             ..SimConfig::default()
         };
-        let net = net::build(world, &shared, cfg, |i| make_stack(i, &world_rc, &rec, &msgs))?;
+        let net = net::build(world, &shared, cfg, |i| make_stack(i, &world_rc, &rec, &msgs, &shared))?;
         let mut exec = drive::Exec::new(world, net, &shared);
         exec.schedule(&p.scheduled);
         exec.run();
@@ -362,6 +370,7 @@ fn execute(
                     .map(move |l| format!("n{n} END {l}"));
                 ev.chain(end).collect::<Vec<_>>()
             })
+            .chain(shared.take_trace())
             .collect();
         Ok((finish(world, driver, layers, p, &exec, &rec, reg), events))
     })();

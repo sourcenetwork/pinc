@@ -11,7 +11,7 @@
 use vinc_core::SessionId;
 use vinc_transport::stream::StreamId;
 
-use crate::suite::crypto::Registry;
+use crate::suite::crypto::{MsgId, Registry};
 use crate::suite::world::model::Intent;
 
 /// What a layer can ask of the endpoint.
@@ -40,6 +40,12 @@ pub trait Host {
     fn subscribe(&mut self, topic: &[u8]) -> bool;
     /// Publish a whole message to a topic. Returns false when the node refused.
     fn publish(&mut self, topic: &[u8], msg: &[u8]) -> bool;
+    /// Fetch `ranges` (`(offset, length)`; none is the whole value) of the value `value` from `providers` before the
+    /// node-time `deadline`. Returns the fetch number its events name, or `None` when the node refused.
+    fn fetch(&mut self, value: MsgId, ranges: &[(u64, u64)], providers: &[usize], deadline: u64) -> Option<u32>;
+    /// Reconcile the set `set_ref` with `peer`. Returns the round number its events name, or `None` when the node
+    /// refused.
+    fn reconcile(&mut self, peer: usize, set_ref: &[u8]) -> Option<u32>;
 }
 
 /// An event for the layers. Stream bytes are read and consumed by the adapter before delivery.
@@ -116,6 +122,39 @@ pub enum LayerEvent<'a> {
     },
     /// A membership event of the node.
     Member(crate::suite::rec::MemberEvent),
+    /// Bytes `off..off + len` of a fetched value are verified and stored.
+    ValueReadable {
+        /// The fetch.
+        fetch: u32,
+        /// The first byte.
+        off: u64,
+        /// The number of bytes.
+        len: u64,
+    },
+    /// Every byte a fetch wanted is verified and stored.
+    ValueComplete {
+        /// The fetch.
+        fetch: u32,
+    },
+    /// A fetch failed.
+    ValueFailed {
+        /// The fetch.
+        fetch: u32,
+    },
+    /// A reconcile round finished with the exact difference.
+    ReconcileDone {
+        /// The round.
+        round: u32,
+        /// The items the peer has and this node lacks.
+        missing_here: &'a [Vec<u8>],
+        /// The items this node has and the peer lacks.
+        missing_there: &'a [Vec<u8>],
+    },
+    /// A reconcile round failed.
+    ReconcileFailed {
+        /// The round.
+        round: u32,
+    },
 }
 
 /// The protocol layers and the application of one node, as the node adapter drives them.

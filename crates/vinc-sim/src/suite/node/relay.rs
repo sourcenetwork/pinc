@@ -284,6 +284,9 @@ impl Core {
     }
 
     fn relay_trace(&mut self, t: &Trace) {
+        if self.shared.is_watched(self.idx) && super::in_trace_window(self.now) {
+            self.shared.note_trace(format!("n{} true{} Relay({t:?})", self.idx, self.now));
+        }
         let now = self.local;
         if let Some(node) = self.node.as_mut() {
             node.relay_trace(now, t);
