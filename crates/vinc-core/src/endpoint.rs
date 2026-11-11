@@ -84,10 +84,14 @@ pub struct EndpointConfig {
 }
 
 impl EndpointConfig {
-    /// The defaults, hashing with `seed`.
+    /// The defaults, hashing with `seed`. A first handshake flight that fits one datagram leaves whole; only its
+    /// retransmissions are cut to the minimum datagram size, so a path that drops the larger datagram still connects.
     pub const fn new(seed: u64) -> Self {
         Self {
-            conn: Config::new(),
+            conn: Config {
+                flight_split: true,
+                ..Config::new()
+            },
             seed,
             tickets_per_session: 1,
             ticket_lifetime_s: vinc_security::tickets::DEFAULT_TICKET_LIFETIME_S,
