@@ -970,3 +970,7 @@ path = "vinc_access.rs"
 [[test]]
 name = "relay_e2e"
 path = "relay_e2e.rs"
+
+[[test]]
+name = "vinc_state"
+path = "vinc_state.rs"

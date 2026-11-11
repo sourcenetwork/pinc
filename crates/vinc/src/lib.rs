@@ -65,6 +65,7 @@ mod clock;
 mod conn;
 mod drive;
 mod endpoint;
+mod endpoint_state;
 mod endpoint_topics;
 mod engine;
 mod error;
@@ -88,7 +89,7 @@ pub use endpoint::{
     Admission, AllowAll, BatchBuilt, Builder, Built, Direction, Discovery, Endpoint, IoBuilt, LOOKUP_WAIT, NoDiscovery,
     Vinc,
 };
-pub use engine::{Admit, BUSY, DENIED, REVOKED_MAX};
+pub use engine::{Admit, BUSY, DENIED, REVOKED_MAX, Restored};
 pub use error::{Error, ErrorKind, Result};
 pub use event::{Event, MessageId};
 pub use host::{BatchHost, Host, Hosted, Io, IoHost};

@@ -16,7 +16,7 @@ use std::ops::Range;
 use vinc_connect::client::Port;
 use vinc_core::{
     Answer, Command, CommandError, EndpointConfig, Event, IfaceEvent, IfaceId, NodeStats, PeerInfo, Query,
-    REACH_BODY_MAX, Reply, SendState, SessionId, SessionStats, TraceRecord, Transmit,
+    REACH_BODY_MAX, Reply, Restored, SendState, SessionId, SessionStats, StateError, TraceRecord, Transmit,
 };
 use vinc_crypto::{Drbg, NodeId, Software};
 use vinc_node::Ep as NodeEp;
@@ -91,6 +91,12 @@ macro_rules! define {
             }
             pub(crate) fn set_prekey(&mut self, prekey: PrekeyInfo) {
                 match self { $(Self::$v(e) => e.set_prekey(prekey),)+ }
+            }
+            pub(crate) fn export_state(&self, now: u64, out: &mut [u8]) -> Result<usize, StateError> {
+                match self { $(Self::$v(e) => e.export_state(now, out),)+ }
+            }
+            pub(crate) fn restore_state(&mut self, now: u64, bytes: &[u8]) -> Result<Restored, StateError> {
+                match self { $(Self::$v(e) => e.restore_state(now, bytes),)+ }
             }
             pub(crate) fn iface_event(&mut self, now: u64, id: IfaceId, ev: IfaceEvent) {
                 match self { $(Self::$v(e) => e.iface_event(now, id, ev),)+ }

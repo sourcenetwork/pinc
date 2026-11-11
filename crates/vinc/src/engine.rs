@@ -35,7 +35,9 @@ use crate::standby::{Standby, Ticket};
 
 mod gate;
 mod ops;
+mod state;
 mod topics;
+pub use state::Restored;
 
 pub use gate::AllowAll;
 pub(crate) use gate::Gate;
@@ -114,6 +116,8 @@ pub(crate) struct SessInfo {
     pub node: NodeId,
     pub alpn: Alpn,
     pub dialer: bool,
+    /// The session resumed an earlier one with a ticket (known on the dialing side).
+    pub resumed: bool,
     /// Why the session ended, set once when it leaves the table.
     pub ended: OnceCell<Error>,
 }
@@ -453,9 +457,13 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     fn on_event(&mut self, now: u64, ev: Event) {
         match ev {
             Event::Connected {
-                session, node, alpn, ..
-            } => self.session_up(now, session, node, alpn, true),
-            Event::Incoming { session, node, alpn } => self.session_up(now, session, node, alpn, false),
+                session,
+                node,
+                alpn,
+                resumed,
+                ..
+            } => self.session_up(now, session, node, alpn, true, resumed),
+            Event::Incoming { session, node, alpn } => self.session_up(now, session, node, alpn, false, false),
             Event::ConnectFailed { node, alpn, reason } => {
                 if let Some(sid) = self.dial_by_peer.remove(&(node, alpn)) {
                     self.dial_done(sid, Err(Error::dial(reason)));
@@ -535,7 +543,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .unwrap_or(0)
     }
 
-    fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool) {
+    fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool, resumed: bool) {
         if alpn.as_bytes() == HUB_ALPN {
             self.hub_session_up(session, node);
             return;
@@ -545,6 +553,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             node,
             alpn,
             dialer,
+            resumed,
             ended: OnceCell::new(),
         });
         if self.admit.is_revoked(&node) {

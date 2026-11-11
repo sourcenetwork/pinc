@@ -125,6 +125,22 @@ impl<S: KeyStore> Identity<S> {
             .map_err(key_error)
     }
 
+    /// Seal `plain` for storage at rest with the key store; only a store holding the same sealing key opens it.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the store fails.
+    pub fn seal(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
+        self.store.seal(plain).map_err(key_error)
+    }
+
+    /// Open bytes made by [`seal`](Self::seal).
+    ///
+    /// # Errors
+    /// [`ErrorKind::Config`] if the bytes were altered or sealed by another store.
+    pub fn unseal(&mut self, sealed: &[u8]) -> Result<Vec<u8>> {
+        self.store.unseal(sealed).map(|z| z.to_vec()).map_err(key_error)
+    }
+
     /// Fill `out` with random bytes from the store.
     pub(crate) fn random(&mut self, out: &mut [u8]) -> Result<()> {
         self.store.random(out).map_err(key_error)

@@ -383,11 +383,20 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.node.forget_access(node);
     }
 
-    pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) {
-        let v = self.book.entry(node).or_default();
-        if !v.contains(&addr) && v.len() < 8 {
-            v.push(addr);
+    /// Remember an address of `node`; false if the book is full of other nodes or the node has eight already.
+    pub(crate) fn add_address(&mut self, node: NodeId, addr: SocketAddr) -> bool {
+        if !self.book.contains_key(&node) && self.book.len() >= super::state::BOOK_MAX {
+            return false;
         }
+        let v = self.book.entry(node).or_default();
+        if v.contains(&addr) {
+            return true;
+        }
+        if v.len() >= super::state::ADDRS_MAX {
+            return false;
+        }
+        v.push(addr);
+        true
     }
 
     pub(crate) fn network_change(&mut self, now: u64) {
@@ -411,6 +420,14 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     pub(crate) fn node_stats(&self) -> NodeStats {
         self.node.endpoint().node_stats()
+    }
+
+    pub(crate) fn seal(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
+        self.identity.seal(plain)
+    }
+
+    pub(crate) fn unseal(&mut self, sealed: &[u8]) -> Result<Vec<u8>> {
+        self.identity.unseal(sealed)
     }
 
     pub(crate) fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {

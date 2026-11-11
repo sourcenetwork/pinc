@@ -186,6 +186,12 @@ impl<H: Hosted> Connection<H> {
         self.0.info.dialer
     }
 
+    /// Whether this node's dial resumed an earlier session with a ticket, which saves a round trip and lets data go in
+    /// the first flight. Only the dialing side knows; the accepting side reports `false`.
+    pub fn resumed(&self) -> bool {
+        self.0.info.resumed
+    }
+
     /// Open a stream both sides can write. Waits while the connection has no room for another stream.
     ///
     /// # Errors
