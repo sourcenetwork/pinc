@@ -962,3 +962,7 @@ path = "relay_host.rs"
 [[test]]
 name = "vinc_access"
 path = "vinc_access.rs"
+
+[[test]]
+name = "relay_e2e"
+path = "relay_e2e.rs"
