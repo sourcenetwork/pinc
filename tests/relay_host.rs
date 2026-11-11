@@ -90,10 +90,10 @@ async fn start(seed: u8, limits: Limits, store: MemStore) -> TestRelay {
 }
 
 async fn start_with(seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -> TestRelay {
-    start_on(bind_ports().await, seed, limits, store, peers)
+    start_on(&bind_ports().await, seed, limits, store, peers)
 }
 
-fn start_on(ports: Ports, seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -> TestRelay {
+fn start_on(ports: &Ports, seed: u8, limits: Limits, store: MemStore, peers: &[Peer]) -> TestRelay {
     let addr = ports.addr;
     let kinds = Rc::new(RefCell::new(VecDeque::new()));
     let t0 = Instant::now();
@@ -1030,8 +1030,8 @@ fn two_relay_hosts_form_a_mesh_by_themselves_and_it_comes_back_after_each_restar
             // the whole list goes to both relays; each skips itself, and the one with the lower node id dials
             let list = [Peer::new(ids[0]).with_tcp(pa.addr), Peer::new(ids[1]).with_tcp(pb.addr)];
             let (sa, sb) = (MemStore::new(), MemStore::new());
-            let mut ra = start_on(pa.clone(), 0x51, Limits::default(), sa.clone(), &list);
-            let mut rb = start_on(pb.clone(), 0x52, Limits::default(), sb.clone(), &list);
+            let mut ra = start_on(&pa, 0x51, Limits::default(), sa.clone(), &list);
+            let mut rb = start_on(&pb, 0x52, Limits::default(), sb.clone(), &list);
             stats_where(&ra, "the mesh is up at a", |s| s.peers_up == 1).await;
             stats_where(&rb, "the mesh is up at b", |s| s.peers_up == 1).await;
 
@@ -1047,7 +1047,7 @@ fn two_relay_hosts_form_a_mesh_by_themselves_and_it_comes_back_after_each_restar
             // b restarts on its sockets and its store; the mesh comes back by itself
             drop(rb.task.take());
             assert!(mb.recv().await.is_none());
-            rb = start_on(pb.clone(), 0x52, Limits::default(), sb.clone(), &list);
+            rb = start_on(&pb, 0x52, Limits::default(), sb.clone(), &list);
             stats_where(&ra, "the mesh is back at a", |s| s.peers_up == 1).await;
             stats_where(&rb, "the mesh is back at b", |s| s.peers_up == 1).await;
             let mut mb = Member::connect(&rb, 0x62, CarrierKind::Tcp).await;
@@ -1057,7 +1057,7 @@ fn two_relay_hosts_form_a_mesh_by_themselves_and_it_comes_back_after_each_restar
             // and a restarts
             drop(ra.task.take());
             assert!(ma.recv().await.is_none());
-            ra = start_on(pa.clone(), 0x51, Limits::default(), sa.clone(), &list);
+            ra = start_on(&pa, 0x51, Limits::default(), sa.clone(), &list);
             stats_where(&ra, "the mesh is back at a again", |s| s.peers_up == 1).await;
             stats_where(&rb, "the mesh is back at b again", |s| s.peers_up == 1).await;
             let mut ma = Member::connect(&ra, 0x61, CarrierKind::Tcp).await;
@@ -1076,7 +1076,7 @@ fn a_relay_never_peers_with_itself_and_an_unlisted_relay_is_refused() {
             let ports = bind_ports().await;
             // listing itself, with its own address, changes nothing: nothing is dialed
             let r = start_on(
-                ports.clone(),
+                &ports,
                 0x53,
                 Limits::default(),
                 MemStore::new(),
