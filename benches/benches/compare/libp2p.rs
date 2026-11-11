@@ -252,4 +252,3 @@ impl Lib for Libp2p {
         let _ = ep.cmds.unbounded_send(Cmd::Stop);
     }
 }
-

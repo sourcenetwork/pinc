@@ -197,4 +197,3 @@ fn parse(addr: &str) -> io::Result<EndpointAddr> {
     let id: EndpointId = id.parse().map_err(io_err)?;
     Ok(EndpointAddr::new(id).with_ip_addr(sock.parse().map_err(io_err)?))
 }
-

@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 use super::{Lib, Rx, Tx};
 use nuclei::Handle;
 use nuclei::net::UdpSocketBuilder;
+use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use vinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, RecvStream, SendStream, Vinc};
 use vinc_keystore::SoftwareStore;
 
@@ -51,32 +52,50 @@ fn io_err(e: vinc::Error) -> io::Error {
 /// The endpoint's socket and timer: nuclei's, called directly.
 pub struct Net {
     sock: Rc<Handle<UdpSocket>>,
+    /// The socket's offload state: segmented sends and coalesced receives where the system has them.
+    udp: UdpSocketState,
 }
 
 impl Io for Net {
     async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
-        // A datagram that is already there costs one system call; only an empty socket is waited on.
-        let (n, from) = match self.sock.try_recv_from(buf) {
-            Ok(got) => got,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.recv_from(buf).await?,
-            Err(e) => return Err(e),
-        };
-        Ok((n, from, n))
+        // One call takes every datagram of one sender the system coalesced; only an empty socket is waited on.
+        loop {
+            let mut meta = [RecvMeta::default()];
+            let got = self.udp.recv(
+                UdpSockRef::from(&*self.sock),
+                &mut [io::IoSliceMut::new(buf)],
+                &mut meta,
+            );
+            match got {
+                Ok(_) => {
+                    let [m] = meta;
+                    if m.len > 0 {
+                        return Ok((m.len, m.addr, m.stride.max(1)));
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.readable().await?,
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     async fn send(&self, buf: &[u8], to: SocketAddr, segment: usize) -> io::Result<usize> {
-        let mut sent = 0;
-        for d in buf.chunks(segment.max(1)) {
-            match self.sock.try_send_to(d, to) {
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    self.sock.send_to(d, to).await?;
-                }
+        // One call sends the whole run of equal-size datagrams; the system cuts it into datagrams of `segment`.
+        let count = buf.len().div_ceil(segment.max(1));
+        let transmit = Transmit {
+            destination: to,
+            ecn: None,
+            contents: buf,
+            segment_size: (count > 1).then_some(segment),
+            src_ip: None,
+        };
+        loop {
+            match self.udp.try_send(UdpSockRef::from(&*self.sock), &transmit) {
+                Ok(()) => return Ok(count),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.writable().await?,
                 Err(e) => return Err(e),
             }
-            sent += 1;
         }
-        Ok(sent)
     }
 
     async fn sleep(&self, at: Instant) {
@@ -95,6 +114,9 @@ fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
     builder.set_recv_buffer_size(SOCKET_BUFFER)?;
     builder.set_send_buffer_size(SOCKET_BUFFER)?;
     let sock = Rc::new(builder.bind(SocketAddr::new(super::bind_ip()?, 0))?);
+    let udp = UdpSocketState::new(UdpSockRef::from(&*sock))?;
+    // As many datagrams per transmit as the system sends in one call and the endpoint's 64 KiB buffer holds.
+    let batch = udp.max_gso_segments().clamp(1, 40);
     let ep = Vinc::builder()
         .alpn(ALPN.to_vec())
         .limits(limits)
@@ -107,8 +129,8 @@ fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(u16::MAX),
         )
-        .batch(1)
-        .build_io(Net { sock })
+        .batch(batch)
+        .build_io(Net { sock, udp })
         .map_err(io_err)?;
     if run {
         let runner = ep.clone();
@@ -212,4 +234,3 @@ impl Lib for Vinc1 {
         ep.close().await;
     }
 }
-
