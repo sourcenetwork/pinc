@@ -1,0 +1,40 @@
+name = "defra-pushlog-streams"
+about = "DefraDB's pushlog burst over direct streams, as defradb.rs sends it: 2000 updates of 4 KiB from a writer to one replicator across a WAN (20 ms round trip, 100 Mbit/s), each on a stream of its own, 64 and 256 in flight; the replicator echoes each update, so twice the bytes cross."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[[sites]]
+name = "writer"
+
+[[sites]]
+name = "replicas"
+
+[[nodes]]
+name = "w"
+site = "writer"
+
+[[nodes]]
+name = "r"
+site = "replicas"
+
+[[links]]
+a = "writer"
+b = "replicas"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[workload]
+kind = "transport"
+timeout_s = 300
+pairs = [{ client = "w", server = "r" }]
+
+[[workload.tests]]
+test = "requests"
+size = 4096
+requests = 2000
+concurrency = 64
+
+[[workload.tests]]
+test = "requests"
+size = 4096
+requests = 2000
+concurrency = 256
