@@ -398,6 +398,9 @@ par witness_tlc broadcast_node_ackearly BroadcastNode BroadcastNode_ackEarly Ack
 par witness_tlc broadcast_node_evict BroadcastNode BroadcastNode_evict EvictedSeen
 par witness_tlc broadcast_node_heldfull BroadcastNode BroadcastNode_heldFull SeenAccounted
 par witness_tlc broadcast_node_helddup BroadcastNode BroadcastNode_heldDup OnceNoDup
+par run_tlc facade_revoke FacadeRevoke FacadeRevoke
+par witness_tlc facade_revoke_failopen FacadeRevoke FacadeRevoke_failopen AdmitSound
+par witness_tlc facade_revoke_nobackstop FacadeRevoke FacadeRevoke_nobackstop NoLiveRevoked
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"
