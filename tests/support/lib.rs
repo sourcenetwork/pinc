@@ -11,6 +11,7 @@ mod core_net;
 mod layer_apps;
 mod link;
 mod node_sim;
+mod route;
 mod swtpm;
 pub use connect_client::*;
 pub use connect_host::*;
@@ -22,6 +23,7 @@ pub use layer_apps::*;
 pub use link::*;
 pub use node_sim::*;
 pub use pair::*;
+pub use route::*;
 #[cfg(feature = "hwenc")]
 pub use swtpm::Swtpm;
 

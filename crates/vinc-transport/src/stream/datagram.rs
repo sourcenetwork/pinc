@@ -272,10 +272,10 @@ impl<const Q: usize, const C: usize> Datagrams<Q, C> {
     }
 }
 
-/// The most early 1-RTT packets a responder holds before the peer is authenticated.
+/// The most packets a connection holds that arrived before the keys to open them (early 1-RTT and 0-RTT packets).
 pub const MAX_EARLY_PACKETS: usize = 8;
 
-/// Early 1-RTT packets held, as received, until the handshake authenticates the peer. At most
+/// Packets held, as received, until the handshake gives the keys that open them. At most
 /// [`MAX_EARLY_PACKETS`] are held; further ones are dropped and counted.
 #[derive(Debug)]
 pub struct EarlyData {
@@ -303,6 +303,16 @@ impl EarlyData {
         let kept = self.queue.push(pool, packet).is_ok();
         self.dropped += u64::from(!kept);
         kept
+    }
+
+    /// How many packets are held.
+    pub const fn len(&self) -> usize {
+        self.queue.len
+    }
+
+    /// Whether no packet is held.
+    pub const fn is_empty(&self) -> bool {
+        self.queue.len == 0
     }
 
     /// The oldest held packet.

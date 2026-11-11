@@ -562,6 +562,68 @@ fn resumption_delivers_zero_rtt_data() {
 }
 
 #[test]
+fn zero_rtt_data_that_overtakes_the_hello_waits_for_its_keys() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let mut tickets = first_session(&mut w);
+        let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let b = w.server(&mut sb);
+        let mut link = Link::new(9, Params::new(10 * MS));
+        // The datagram with the Hello arrives 5 ms after the 0-RTT datagrams sent right behind it.
+        link.route(PathId(1)).ab.delay_index(1, 5 * MS);
+        let mut net = Net::new(a, b, link, &mut w.stores);
+        let data = pattern(3000, 1);
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, &data).unwrap();
+        net.a.conn.finish(id).unwrap();
+        let t0 = net.now;
+        assert!(
+            net.run(t0 + 16 * MS, |n| n.b.fin.contains(&id)),
+            "the 0-RTT data waited for a retransmission: {:?}",
+            net.rx_drops
+        );
+        assert_eq!(net.b.read[&id], data);
+        assert!(net.b.conn.stats().early_buffered >= 1);
+        assert_eq!(net.b.conn.stats().early_dropped, 0);
+    });
+}
+
+#[test]
+fn an_answer_that_overtakes_the_resume_reply_waits_for_its_keys() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let mut tickets = first_session(&mut w);
+        let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+        let b = w.server(&mut sb);
+        let mut link = Link::new(10, Params::new(10 * MS));
+        // The server's first datagram (the Reply) arrives 5 ms after the answer sent right behind it.
+        link.route(PathId(1)).ba.delay_index(1, 5 * MS);
+        let mut net = Net::new(a, b, link, &mut w.stores);
+        let id = net.a.conn.open_bi().unwrap();
+        net.a.conn.write(id, b"ping").unwrap();
+        net.a.conn.finish(id).unwrap();
+        let t0 = net.now;
+        let mut answered = false;
+        let ok = net.run(t0 + 26 * MS, |n| {
+            if !answered && n.b.fin.contains(&id) {
+                n.b.conn.write(id, b"pong").unwrap();
+                n.b.conn.finish(id).unwrap();
+                answered = true;
+            }
+            n.a.fin.contains(&id)
+        });
+        assert!(ok, "the answer waited for a retransmission: {:?}", net.rx_drops);
+        assert_eq!(net.a.read[&id], b"pong");
+        assert!(net.a.conn.stats().early_buffered >= 1);
+        assert!(net.a.conn.session().unwrap().resumed);
+    });
+}
+
+#[test]
 fn zero_rtt_replay_is_rejected() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

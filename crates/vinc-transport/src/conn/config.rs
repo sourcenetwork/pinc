@@ -47,6 +47,7 @@ impl Default for PathInfo {
 
 /// How a connection behaves. [`Config::new`] holds the defaults.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools, reason = "independent switches of one connection")]
 pub struct Config {
     /// The length of the connection ids this endpoint issues, 1 to 20 (4 by default).
     pub cid_len: usize,
@@ -172,9 +173,10 @@ pub struct Stats {
     pub duplicates: u64,
     /// Received packets that did not authenticate.
     pub undecryptable: u64,
-    /// Early 1-RTT packets kept until the peer was authenticated.
+    /// Packets kept because they arrived before the handshake gave the keys to open them (0-RTT packets ahead of
+    /// the Hello, 1-RTT packets ahead of the message that establishes the session).
     pub early_buffered: u64,
-    /// Early 1-RTT packets dropped because the buffer was full.
+    /// Such packets dropped because the buffer was full.
     pub early_dropped: u64,
     /// Handshake flights sent again on the timer.
     pub handshake_retransmits: u64,

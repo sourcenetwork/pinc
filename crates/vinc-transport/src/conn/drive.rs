@@ -3,7 +3,7 @@
 
 use vinc_crypto::Provider;
 use vinc_security::{
-    ClientTickets, Env, Event as SecEvent, Failure, KeyResponse, ServerTickets, SoftKeys, TicketBatch,
+    ClientTickets, Env, Event as SecEvent, Failure, KeyResponse, ResponderStores, ServerTickets, SoftKeys, TicketBatch,
 };
 
 use super::event::{CloseReason, Ev};
@@ -12,6 +12,7 @@ use super::keys::Dir;
 use super::params::{CreditRecord, peer_limits};
 use super::recv::Rx;
 use super::{Connection, Phase};
+use crate::packet::packets;
 use crate::stream::StreamSource;
 
 /// The largest early packet replayed: the biggest datagram a path carries.
@@ -107,6 +108,8 @@ conn_impl! {
         match ev {
             SecEvent::EarlyKeys(e) => match Dir::early(env.provider, &e) {
                 Ok(d) if self.client => self.keys.early_send = Some(d),
+                // The 0-RTT packets held for these keys are processed once the session is established, which the
+                // same Hello reports next, as the 0-RTT packets that follow the Hello in its datagram are.
                 Ok(d) => self.keys.early_recv = Some(d),
                 Err(err) => self.silent_close(CloseReason::Handshake(Failure::Crypto(err))),
             },
@@ -173,24 +176,19 @@ conn_impl! {
         &self.peer_credit
     }
 
-    /// Process the early 1-RTT packets held while the peer was not yet authenticated.
+    /// Process the packets held for want of keys, oldest first, now that the session is established: each is tried
+    /// once, and one that does not open is lost (its sender sends the data again).
     fn drain_early(&mut self, env: &mut Env<'_, P>) {
         let mut buf = [0u8; EARLY_MAX];
-        while let Some(front) = self.early.front(&self.pool) {
+        for _ in 0..self.early.len() {
+            let Some(front) = self.early.front(&self.pool) else { break };
             let n = front.len();
-            let ok = match (buf.get_mut(..n), front.get(..n)) {
-                (Some(dst), Some(src)) => {
-                    dst.copy_from_slice(src);
-                    true
-                }
-                _ => false,
-            };
+            let copied = buf.get_mut(..n).map(|dst| dst.copy_from_slice(front)).is_some();
             self.early.pop(&mut self.pool);
-            if !ok {
+            if !copied {
                 continue;
             }
-            let Some(pkt) = buf.get_mut(..n) else { continue };
-            let pn_off = 1 + self.cfg.cid_len;
+            let Some(bytes) = buf.get_mut(..n) else { continue };
             let mut ctx = Rx {
                 path_id: self.paths.active().map_or(super::PathId(0), |p| p.id),
                 path: Some(self.paths.active),
@@ -198,8 +196,12 @@ conn_impl! {
                 now: env.now,
                 old_key: false,
             };
-            // A packet that does not open now is simply lost: the peer sends its data again.
-            let _ = self.on_short(env, &mut ctx, pn_off, pkt);
+            if let Some(Ok(mut pkt)) = packets(bytes, self.cfg.cid_len).next() {
+                let _ = self.on_packet(env, None::<&mut ResponderStores<0, 0>>, &mut ctx, &mut pkt);
+            }
+            if matches!(self.phase, Phase::Closed | Phase::Closing) {
+                break;
+            }
         }
     }
 }

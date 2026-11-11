@@ -1,8 +1,9 @@
-//! A first flight that reaches an endpoint out of order.
+//! A first flight or an answer that reaches an endpoint out of order.
 //!
 //! The later part of a first message that arrives before the part that starts it waits in a small table (at most 4
 //! datagrams for the whole endpoint, for at most 1 s, the oldest given up first) and goes only to the session that the
-//! start of the same message from the same address creates; holding it sends nothing.
+//! start of the same message from the same address creates; holding it sends nothing. An answer that overtakes the
+//! Reply that brings its keys waits for them.
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
@@ -15,7 +16,7 @@ use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use vinc_core::{Event, NodeStats, Role};
+use vinc_core::{Answer, Command, Event, NodeStats, Query, Role, Value};
 use vinc_security::ConnId;
 use vinc_tests::*;
 use vinc_transport::packet::{LongHeader, LongType};
@@ -211,5 +212,88 @@ fn a_forged_part_given_to_a_new_session_does_not_stop_the_real_dial() {
         let s = net.nodes[b].ep.node_stats();
         assert_eq!((s.sessions, s.half_open, s.fragments_waiting), (1, 0, 0));
         assert!(balanced(&s));
+    });
+}
+
+#[test]
+fn an_answer_that_overtakes_the_resume_reply_waits_for_its_keys() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let deadline = net.now + 5 * SEC_NS;
+        assert!(
+            net.run(deadline, |n| !n.nodes[a].ep.tickets().is_empty()),
+            "no ticket arrived"
+        );
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+        net.run_for(SEC_NS);
+        for n in &mut net.nodes {
+            n.read.clear();
+        }
+        let (from_b, to_a, to_b, peer) = (
+            net.nodes[b].addr,
+            net.nodes[a].addr,
+            net.nodes[b].addr,
+            net.nodes[b].node,
+        );
+        // The server's first datagram, the Reply, is kept back and arrives 5 ms after the answer sent behind it.
+        let kept = hold_back(&mut net, from_b, |k| k == 0);
+        let t0 = net.now;
+        let rep = net.nodes[a].connect(t0, peer, ALPN_A, to_b, Role::Other).unwrap();
+        let s = net.nodes[a].session(&rep);
+        let Value::Stream(id) = net.nodes[a]
+            .cmd(t0, Command::OpenStream { session: s, bidi: true })
+            .unwrap()
+            .value
+        else {
+            panic!("no stream")
+        };
+        net.nodes[a]
+            .cmd(
+                t0,
+                Command::Write {
+                    session: s,
+                    stream: id,
+                    data: b"H",
+                },
+            )
+            .unwrap();
+        let (mut released, mut answered) = (false, false);
+        let ok = net.run(t0 + 30 * MS, |n| {
+            if !released && !kept.borrow().is_empty() {
+                let reply = kept.borrow()[0].clone();
+                n.loss = None;
+                n.inject(from_b, to_a, reply, 15 * MS);
+                released = true;
+            }
+            if !answered && let Some((sb, sid)) = n.nodes[b].read.iter().find(|(_, v)| !v.is_empty()).map(|(k, _)| *k) {
+                let t = n.now;
+                n.nodes[b]
+                    .cmd(
+                        t,
+                        Command::Write {
+                            session: sb,
+                            stream: sid,
+                            data: b"k",
+                        },
+                    )
+                    .unwrap();
+                // As a host does after every call: the answer leaves now, right behind the Reply.
+                n.pump(b);
+                answered = true;
+            }
+            n.nodes[a].read.get(&(s, id)).is_some_and(|v| v == b"k")
+        });
+        assert!(released && answered);
+        assert!(ok, "the answer waited for a retransmission");
+        let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(s)) else {
+            panic!("no session")
+        };
+        assert!(
+            st.transport.early_buffered >= 1,
+            "the answer did not arrive ahead of the Reply"
+        );
     });
 }

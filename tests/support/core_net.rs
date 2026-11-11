@@ -378,6 +378,8 @@ pub struct CoreNet {
     wires: BinaryHeap<Wire>,
     pub now: u64,
     pub delay: u64,
+    /// Up to this much extra delay per datagram, drawn independently, so datagrams may overtake each other.
+    pub jitter: u64,
     seq: u64,
     pub loss: Option<LossFn>,
     /// A NAT in front of one node: `(inside, outside)`. Datagrams the node sends carry the outside address as their
@@ -400,6 +402,7 @@ impl CoreNet {
             wires: BinaryHeap::new(),
             now: 10 * SEC_NS,
             delay,
+            jitter: 0,
             seq: 0,
             loss: None,
             nat: None,
@@ -474,8 +477,13 @@ impl CoreNet {
                         Some((inside, outside)) if local == inside => outside,
                         _ => local,
                     };
+                    let extra = if self.jitter > 0 {
+                        self.rng.next_u64() % self.jitter
+                    } else {
+                        0
+                    };
                     self.wires.push(Wire {
-                        at: now + self.delay,
+                        at: now + self.delay + extra,
                         seq: self.seq,
                         to: remote,
                         from,

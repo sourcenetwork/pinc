@@ -373,6 +373,9 @@ These items are still open; they are listed so nothing is hidden:
   scenario models. The last three act on the whole `Connection`: a trace of them needs a view of the connection
   (its paths, timers, phase and streams) and a scripted pair of connections, which this round did not build; the
   frame and header codecs need a model of every frame type and of the strict parser's errors.
+  Not modelled either: the buffer of packets that arrive before their keys (at most 8 per connection, 0-RTT packets
+  ahead of the Hello on a server and 1-RTT packets ahead of the message that establishes the session on either side,
+  processed once it is established).
 - The congestion controller's cubic term (the origin `K` and the target) is checked at full width by the Lean replay
   only; TLC checks the bounded step of congestion avoidance (see the row above). The handshake fragment theorems
   prove that a message is handed over only when covered and that the runs are exact; that every complete set of

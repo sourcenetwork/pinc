@@ -25,7 +25,9 @@
 //! Handshake messages travel in long Handshake packets, cut into datagram-sized fragments (see the `handshake`
 //! module). With a ticket the client sends ZeroRtt packets under the early keys in the same datagrams as its Hello;
 //! if the server rejects the ticket, everything sent early is declared lost without a congestion response and goes
-//! out again under the 1-RTT keys. A server buffers at most 8 early 1-RTT packets until the peer is authenticated.
+//! out again under the 1-RTT keys. A connection holds at most 8 packets that
+//! arrived ahead of their keys (a 0-RTT or 1-RTT packet reordered ahead of the handshake message that brings the keys)
+//! and processes them once the keys exist.
 //!
 //! # Extension frames
 //!

@@ -201,7 +201,7 @@ conn_impl! {
         if ok { Ok(()) } else { Err(first_err.unwrap_or(Drop::Empty)) }
     }
 
-    fn on_packet<const PK: usize, const TK: usize>(
+    pub(super) fn on_packet<const PK: usize, const TK: usize>(
         &mut self,
         env: &mut Env<'_, P>,
         stores: Option<&mut ResponderStores<PK, TK>>,
@@ -212,7 +212,13 @@ conn_impl! {
         match pkt.header {
             Header::Long { header, header_len } => match header.ty {
                 LongType::Handshake => self.on_handshake(env, stores, ctx, &header, header_len, pkt.bytes),
-                LongType::ZeroRtt => self.on_zero_rtt(env, ctx, pn_off, pkt.bytes),
+                LongType::ZeroRtt => {
+                    // Reordered ahead of the Hello that brings its keys: keep it for when they arrive.
+                    if self.keys.early_recv.is_none() && !self.client && self.phase == Phase::Handshaking {
+                        return self.hold_early(pkt.bytes);
+                    }
+                    self.on_zero_rtt(env, ctx, pn_off, pkt.bytes)
+                }
             },
             Header::Short { dcid } => {
                 if !self.cids.is_local(&dcid) {
@@ -266,6 +272,16 @@ conn_impl! {
         r.map_err(Drop::Handshake)
     }
 
+    /// Keep a packet that arrived before the keys to open it, for [`drain_early`](Self::drain_early).
+    fn hold_early(&mut self, bytes: &[u8]) -> Result<(), Drop> {
+        if self.early.push(&mut self.pool, bytes) {
+            self.stats.early_buffered += 1;
+            return Err(Drop::Buffered);
+        }
+        self.stats.early_dropped += 1;
+        Err(Drop::Undecryptable)
+    }
+
     fn on_zero_rtt(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn_off: usize, bytes: &mut [u8]) -> Result<(), Drop> {
         let p = env.provider;
         ctx.old_key = false;
@@ -283,12 +299,8 @@ conn_impl! {
         let p = env.provider;
         let now = ctx.now;
         if self.keys.recv.is_none() {
-            if !self.client && self.phase == Phase::Handshaking {
-                if self.early.push(&mut self.pool, bytes) {
-                    self.stats.early_buffered += 1;
-                    return Err(Drop::Buffered);
-                }
-                self.stats.early_dropped += 1;
+            if self.phase == Phase::Handshaking {
+                return self.hold_early(bytes);
             }
             return Err(Drop::Undecryptable);
         }

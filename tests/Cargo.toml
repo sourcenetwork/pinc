@@ -427,6 +427,10 @@ name = "core_demux"
 path = "core_demux.rs"
 
 [[test]]
+name = "core_setup"
+path = "core_setup.rs"
+
+[[test]]
 name = "core_defense"
 path = "core_defense.rs"
 
