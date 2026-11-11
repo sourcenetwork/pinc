@@ -122,6 +122,13 @@ conn_impl! {
         self.life.qr_until = self.life.qr_until.max(until);
     }
 
+    /// Acknowledge every `every`-th ack-eliciting packet instead of the default policy (`None`), as
+    /// [`Config::ack_every`]: 4 for a dialed session to a hub.
+    pub fn set_ack_every(&mut self, every: Option<u32>) {
+        self.cfg.ack_every = every;
+        self.rx.set_every(every);
+    }
+
     /// Send every handshake flight, and each resend of it, on the given paths as well as the active one. The flight
     /// leaves on the active path first, then on each listed path in turn; paths the connection does not track are
     /// ignored. An empty list turns the fan-out off.

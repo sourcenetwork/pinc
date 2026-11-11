@@ -37,6 +37,8 @@ pub const UDP_FRESH: u64 = 90_000_000_000;
 pub const FAN_URGENCY: u8 = 2;
 /// Application data above this many bytes counts as activity on a quiet session.
 const CTRL_SMALL: usize = 72;
+/// A session this node dialed to a hub acknowledges every this many ack-eliciting packets.
+const HUB_ACK_EVERY: u32 = 4;
 
 /// What the endpoint knows about the path to `remote`: through a relay, and the address family.
 pub(crate) fn path_info(remote: &SocketAddr, interface_mtu: u16) -> PathInfo {
@@ -312,6 +314,7 @@ ep_impl! {
                 if let Some(s) = self.slots.get_mut(i) {
                     s.m.role = role;
                 }
+                self.sync_ack_every(i);
                 self.defer_mtu_for_quiet(i);
                 self.settle(i, now);
                 Ok(Value::None)
@@ -342,6 +345,16 @@ ep_impl! {
         f(conn)?;
         self.settle(i, now);
         Ok(Value::None)
+    }
+
+    /// The acknowledgement policy of session `i` follows its role: a session this node dialed to a hub acknowledges
+    /// every 4th ack-eliciting packet, any other the transport's default.
+    pub(crate) fn sync_ack_every(&mut self, i: usize) {
+        if let Some(s) = self.slots.get_mut(i)
+            && let Some(c) = s.conn.as_mut()
+        {
+            c.set_ack_every((s.m.client && s.m.role == Role::Hub).then_some(HUB_ACK_EVERY));
+        }
     }
 
     /// A late-start quiet session defers its first path MTU probe by 3 s from its creation.
@@ -445,6 +458,7 @@ ep_impl! {
         trace!(self, now, Session { slot: i as u64, step: 0, dialer: 1 });
         self.link_peer(node, u32::try_from(i).unwrap_or(0));
         self.sync_cids(i, true);
+        self.sync_ack_every(i);
         self.defer_mtu_for_quiet(i);
         if optimistic {
             trace!(self, now, Early { slot: i as u64, rule: 1 });

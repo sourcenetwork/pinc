@@ -396,13 +396,15 @@ fn a_ping_command_sends_one_acknowledgement_eliciting_packet_at_once_and_an_idle
             _ => panic!("no session"),
         };
         let idle = sent(&net);
-        net.run_for(2 * S);
+        // The sessions' own 5 s keepalives fall 2 s on, a dialer that acknowledges every 4th packet one of them at
+        // 35 ms after the other end's: the window stays clear of them.
+        net.run_for(S);
         assert_eq!(sent(&net), idle, "an idle session sends nothing");
         let now = net.now;
         net.nodes[a].cmd(now, Command::Ping { session: sa }).unwrap();
         net.run_for(S / 10);
         assert_eq!(sent(&net), idle + 1, "the ping left in one packet");
-        net.run_for(S);
+        net.run_for(S * 8 / 10);
         assert_eq!(sent(&net), idle + 1, "and only one");
     });
 }
@@ -914,5 +916,51 @@ fn a_session_handed_to_the_carrier_pulse_sends_no_keepalive_and_reports_when_one
         let before = net.nodes[a].sent.len();
         net.run_for(30 * S);
         assert!(net.nodes[a].sent.len() > before, "the endpoint pinged again");
+    });
+}
+
+#[test]
+fn a_dialed_hub_session_acknowledges_every_fourth_packet() {
+    big_stack(|| {
+        // The acknowledgements the dialer sends for eight small packets (not bulk) that arrive 1 ms apart.
+        let acks = |role: Role| {
+            let mut net = CoreNet::new(5 * MS_NS);
+            let (a, b) = (net.add(1), net.add(2));
+            let (_, sb) = net.connect_pair(a, b, ALPN_A, role);
+            net.run_for(3 * S);
+            let t = net.now;
+            let Value::Stream(id) = net.nodes[b]
+                .cmd(
+                    t,
+                    Command::OpenStream {
+                        session: sb,
+                        bidi: false,
+                    },
+                )
+                .unwrap()
+                .value
+            else {
+                panic!("no stream")
+            };
+            let before = net.nodes[a].sent.len();
+            for k in 0..8u8 {
+                let t = net.now;
+                net.nodes[b]
+                    .cmd(
+                        t,
+                        Command::Write {
+                            session: sb,
+                            stream: id,
+                            data: &[k; 100],
+                        },
+                    )
+                    .unwrap();
+                net.pump(b);
+                net.run_for(MS_NS);
+            }
+            net.run_for(6 * MS_NS);
+            net.nodes[a].sent.len() - before
+        };
+        assert_eq!((acks(Role::Hub), acks(Role::Other)), (2, 4));
     });
 }

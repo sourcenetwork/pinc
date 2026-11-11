@@ -110,6 +110,7 @@ ep_impl! {
         }
         self.follow_parent_paths(parent, child, now);
         self.sync_cids(child, true);
+        self.sync_ack_every(child);
         // The open leaves in the parent ahead of anything the child sends.
         let queued = self.queue_sub_open(parent, alpn, cc, cs);
         trace!(self, now, Sub { step: 0, parent: parent as u64, child: child as u64 });
@@ -244,6 +245,7 @@ ep_impl! {
         }
         self.link_peer(peer, u32::try_from(child).unwrap_or(0));
         self.sync_cids(child, true);
+        self.sync_ack_every(child);
         trace!(self, now, Sub { step: 0, parent: parent as u64, child: child as u64 });
         self.announce(child);
         self.settle(child, now);
