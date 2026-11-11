@@ -543,3 +543,36 @@ fn a_dial_still_in_its_handshake_does_not_keep_the_node_awake() {
         );
     });
 }
+
+#[test]
+fn a_burst_for_a_relay_carrier_is_held_and_sent_not_lost() {
+    // The first flight of a fetch is dozens of packets in one step, more than the carrier's output buffer holds. The
+    // ones that do not fit wait and leave as the host drains the buffer; none is lost, so no probe timeout fires
+    // and the window is not cut while the transfer starts.
+    big(|| {
+        use vinc_node::Ep;
+        let mut w = LWorld::build_with(301, 2, 3, 400_000_000, false, values_on);
+        let m = w.members.clone();
+        let value = data(301, 16 << 20);
+        let root = w.provide(m[1], value.clone());
+        w.sim.command(
+            secs(30),
+            m[0],
+            NCmd::ValuesFetch {
+                root,
+                length: value.len() as u64,
+                ranges: vec![],
+                providers: ids(&w, &m[1..2]),
+            },
+        );
+        w.run(secs(30) + 300_000_000);
+        let ep = w.sim.node(m[1]).node.endpoint();
+        let busy: Vec<_> = (0..)
+            .map_while(|n| ep.session_at(n))
+            .filter(|s| s.transport.bytes_sent > 100_000)
+            .collect();
+        assert_eq!(busy.len(), 1, "the provider is serving the value");
+        let t = &busy[0].transport;
+        assert_eq!((t.ptos, t.packets_lost), (0, 0), "nothing of the first burst was lost");
+    });
+}
