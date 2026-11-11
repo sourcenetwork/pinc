@@ -18,8 +18,9 @@ VINC is a library, not a framework:
   per core.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
-> **Status: pre-release.** Most crates are built and tested, and their proofs land crate by crate. The Status column
-> below says where each crate stands and [Open items](#open-items) lists what is not done.
+> **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. The facade
+> serves direct connections today; relays, broadcast and lookup exist in the crates below it and are not yet reachable
+> through it. The Status column says where each crate stands and [Open items](#open-items) lists what is not done.
 
 ## Usage
 
@@ -85,7 +86,7 @@ keepalives) awaits `Endpoint::run()`.
 | `proofs/` | TLA+ specifications (TLC) and Lean 4 proofs, both validated against traces of the real code |
 | `tests/` | every test (integration, property, scenario, trace), run with [cargo-nextest](https://nexte.st) |
 | `benches/` | micro benchmarks (per packet, allocations, copies) and the loopback comparison with iroh and rust-libp2p; a workspace of its own |
-| `distributed/` | the distributed test harness: one binary that builds an emulated or real network, runs VINC, iroh and rust-libp2p nodes on it with faults, and measures them; a workspace of its own |
+| `distributed/` | the distributed test harness: one binary that builds an emulated network of containers, runs VINC, iroh and rust-libp2p nodes on it with faults, measures them and serves a dashboard; a workspace of its own |
 | `docs/` | [PROOFS.md](docs/PROOFS.md): what is proven, how it is checked, the assumptions |
 | `scripts/` | the gate and the proof runner |
 
@@ -93,7 +94,7 @@ keepalives) awaits `Endpoint::run()`.
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `vinc` | the facade: a builder, connections, streams and datagrams, all async, over the host's receive, send and sleep closures | std | built; proofs being closed |
+| `vinc` | the facade: a builder, connections, streams with urgencies, datagrams, an access hook and revocation, all async, over the host's receive, send and sleep closures | std | built for direct connections; proofs being closed |
 | `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
 | `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
 | `vinc-crypto` | RustCrypto primitives behind one static `Provider`: AEADs, X25519, ML-KEM-768, Ed25519, P-256 and ML-DSA-65 identities, BLAKE3 KDF and transcript hash | yes | built; proofs being closed |
@@ -127,13 +128,19 @@ just tla-tools    # install the pinned TLA+ tools the proofs use
 just bench        # micro benchmarks
 just compare      # VINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
 just distributed run distributed/scenarios/wan.toml   # a scenario on an emulated network (Docker and sudo)
+just distributed serve                                # the dashboard, on http://127.0.0.1:7878
 just distributed clean                                # remove whatever a run left
+just e2e          # the harness end to end: a two-node scenario, every stack (Docker and sudo)
 ```
 
 The distributed harness gives every node its own container and network stack, wired by veth pairs, bridges and a
 router per site, with an MTU of 1500, `tc netem` shaping each direction of each link, and address translation where a
 scenario puts a node behind a home router. Scenarios are TOML files in `distributed/scenarios/`; each run writes its
-raw rows, its conditions (machine, CPU sets, versions) and a summary table to `distributed/results/`.
+raw rows, its conditions (machine, CPU sets, versions) and a summary table to `distributed/results/`. A run measures
+only on a quiet machine and says so when it could not. The dashboard composes scenarios, shows a run live and compares
+results. Today the harness runs the transport tests (connection setup, resumed setup, request latency, one and 16
+stream throughput, many connections) with link changes during a run; one machine emulates the whole network, and
+every table says so.
 
 Every dependency is declared once, in its workspace's root `Cargo.toml`, and every crate has the one version. The
 benchmarks are a workspace of their own, so iroh, rust-libp2p, their runtime and their C code never enter the
@@ -150,7 +157,14 @@ checked, the assumptions and what is still being closed.
 
 ## Open items
 
-- The proofs listed under [Being closed](docs/PROOFS.md#being-closed).
+- **The facade** serves direct connections. Not yet reachable through it: relays and hole punching, topic broadcast,
+  lookup of a peer by its id, and the export and restore of an endpoint's state. It needs `std`; the crates below it
+  do not.
+- **Performance.** Against iroh and rust-libp2p on the same machine VINC is not ahead on every row yet (memory per
+  connection is one it loses). `just compare` and the harness print every row, the ones VINC loses included.
+- **The harness** does not yet run the layers above the transport (broadcast, value transfer, reconciliation, churn)
+  or nodes on separate machines; the Terraform for those machines is in `distributed/infra/` and has not been applied.
+- **The proofs** listed under [Being closed](docs/PROOFS.md#being-closed).
 - `vinc-values`: five corrections found by its proofs are being made.
-- The scenario suite passes every gate on every seed it runs; the two scenarios that need the values and reconcile
+- **The scenario suite** passes every gate on every seed it runs; the two scenarios that need the values and reconcile
   layers in one composition wait for them.
