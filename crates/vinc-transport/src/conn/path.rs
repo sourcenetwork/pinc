@@ -396,6 +396,21 @@ conn_impl! {
         self.paths.get(i).map(|p| p.rtt).filter(|r| *r > 0)
     }
 
+    /// Say what the endpoint knows of a path the connection already tracks. A server learns the path of its first packet
+    /// by receiving on it and takes it to be direct; the endpoint knows when the address is a relay's, and a relay
+    /// path must rank behind every direct one, or the session never leaves it for a direct path that validates. A path
+    /// the connection does not track is left alone: the amplification limit still guards it.
+    pub fn set_path_info(&mut self, id: PathId, info: PathInfo) {
+        let Some(i) = self.paths.find(id) else { return };
+        if let Some(p) = self.paths.get_mut(i)
+            && p.info != info
+        {
+            p.info = info;
+            self.sync_kind(i);
+            self.choose_path();
+        }
+    }
+
     /// Whether a path is validated.
     pub fn path_validated(&self, id: PathId) -> bool {
         self.paths.find(id).and_then(|i| self.paths.get(i)).is_some_and(|p| p.validated)

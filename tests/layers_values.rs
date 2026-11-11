@@ -470,3 +470,42 @@ fn a_cancelled_fetch_reports_nothing_more_and_its_streams_are_gone() {
         );
     });
 }
+
+#[test]
+fn a_server_session_that_began_on_a_relay_moves_to_the_direct_path_that_validates() {
+    // The consumer's first flight reaches the provider through the hub's relay, so the provider's session starts on a
+    // relay path. A direct path validates within milliseconds; the provider must take it, or a bulk transfer rides the
+    // relay's quota and stalls when it is used up.
+    big(|| {
+        use vinc_node::Ep;
+        let mut w = LWorld::build_with(301, 2, 3, 400_000_000, false, values_on);
+        let m = w.members.clone();
+        let value = data(301, 16 << 20);
+        let root = w.provide(m[1], value.clone());
+        w.sim.command(
+            secs(30),
+            m[0],
+            NCmd::ValuesFetch {
+                root,
+                length: value.len() as u64,
+                ranges: vec![],
+                providers: ids(&w, &m[1..2]),
+            },
+        );
+        w.run(secs(30) + 400_000_000);
+        let ep = w.sim.node(m[1]).node.endpoint();
+        let busy: Vec<_> = (0..)
+            .map_while(|n| ep.session_at(n))
+            .filter(|s| s.transport.bytes_sent > 100_000)
+            .collect();
+        assert_eq!(busy.len(), 1, "the provider is serving the value");
+        let route = busy[0].route.map(|(_, r)| r);
+        assert!(
+            route.is_some_and(|r| !vinc_core::is_relay_addr(&r)),
+            "the provider's session is on a direct path 400 ms after the fetch began, not {route:?}"
+        );
+        w.run(secs(60));
+        assert_eq!(completes(&w, m[0]), 1);
+        assert_eq!(w.apps(m[0]).values.fetched(&root, value.len() as u64), Some(value));
+    });
+}

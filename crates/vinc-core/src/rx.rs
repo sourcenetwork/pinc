@@ -26,6 +26,7 @@ use vinc_wire::Reader;
 
 use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl};
 use crate::orphan::ORPHAN_MAX;
+use crate::relay_net::is_relay_addr;
 use crate::trace::trace;
 
 /// The most sessions that may hold the same four bytes and still be tried.
@@ -186,6 +187,10 @@ ep_impl! {
         let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
         self.counters.stalled_in += u64::from(r == Err(Drop::Gated));
         if r.is_ok() {
+            // The connection took the path of a first packet to be direct; the address says if it is a relay's.
+            if is_relay_addr(&remote) {
+                conn.set_path_info(pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
+            }
             slot.m.last_rx = now;
             if let Some(p) = slot.m.stamp(pid) {
                 p.rx = now;
