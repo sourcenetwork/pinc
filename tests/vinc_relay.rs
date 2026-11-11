@@ -103,19 +103,18 @@ impl Rig {
     }
 
     /// The relay's UDP side: datagrams in, timers.
+    #[allow(clippy::needless_continue, reason = "the select macro's own expansion")]
     async fn serve(self: Rc<Self>) {
         let mut buf = vec![0u8; 65_536];
         loop {
             let wait = {
                 let now = self.now();
-                let due = self
-                    .relay
+                self.relay
                     .borrow()
                     .poll_timeout()
                     .map_or(Duration::from_millis(20), |t| {
                         Duration::from_nanos(t.saturating_sub(now)).min(Duration::from_millis(20))
-                    });
-                due
+                    })
             };
             nuclei::select! {
                 r = self.sock.recv_from(&mut buf) => {
