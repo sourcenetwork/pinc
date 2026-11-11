@@ -53,6 +53,12 @@ impl Port for Stub {
     fn stats(&self, _session: SessionId) -> Option<SessionStats> {
         None
     }
+    fn peer(&self, _node: &vinc_crypto::NodeId) -> Option<vinc_core::PeerInfo> {
+        None
+    }
+    fn by_conn_id(&self, _cid: &vinc_security::ConnId) -> Option<SessionStats> {
+        None
+    }
     fn node(&self) -> Option<NodeStats> {
         None
     }

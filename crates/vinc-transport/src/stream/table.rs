@@ -1019,16 +1019,16 @@ mod tests {
         let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
         assert_eq!(written(&mut t), 0);
         assert_eq!(t.slots.iter().count(), 72);
-        let first = t.open_stream(true).unwrap();
-        t.open_stream(true).unwrap();
-        t.open_stream(false).unwrap();
+        let first = t.open_stream(&pool, true).unwrap();
+        t.open_stream(&pool, true).unwrap();
+        t.open_stream(&pool, false).unwrap();
         assert_eq!(written(&mut t), 3);
         assert_eq!(t.open_streams(), 3);
         assert!(t.send_view(first).is_some());
         t.reinit(&cfg, &pool);
         assert_eq!((written(&mut t), t.open_streams()), (0, 0));
         assert!(t.send_view(first).is_none());
-        t.open_stream(true).unwrap();
+        t.open_stream(&pool, true).unwrap();
         assert_eq!(written(&mut t), 1);
     }
 }
