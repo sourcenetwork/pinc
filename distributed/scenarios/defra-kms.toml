@@ -1,0 +1,52 @@
+name = "defra-kms"
+about = "DefraDB's KMS key requests between two peers across a WAN (20 ms round trip, 100 Mbit/s): 512-byte requests and replies, each on a stream of its own, 1, 4, 16 and 64 in flight on one connection."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[[sites]]
+name = "near"
+
+[[sites]]
+name = "far"
+
+[[nodes]]
+name = "n1"
+site = "near"
+
+[[nodes]]
+name = "n2"
+site = "far"
+
+[[links]]
+a = "near"
+b = "far"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[workload]
+kind = "transport"
+timeout_s = 300
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "requests"
+size = 512
+requests = 500
+concurrency = 1
+
+[[workload.tests]]
+test = "requests"
+size = 512
+requests = 2000
+concurrency = 4
+
+[[workload.tests]]
+test = "requests"
+size = 512
+requests = 4000
+concurrency = 16
+
+[[workload.tests]]
+test = "requests"
+size = 512
+requests = 8000
+concurrency = 64

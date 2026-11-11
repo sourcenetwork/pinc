@@ -169,6 +169,7 @@ impl<'a> AppSet<'a> {
                 peers: peers.clone(),
                 mtu,
                 sessions,
+                library_limits: false,
             })
             .collect();
         Self {
@@ -179,6 +180,14 @@ impl<'a> AppSet<'a> {
             rejoin: Mutex::new(None),
             archived: Mutex::new(vec![Vec::new(); plan.nodes.len()]),
         }
+    }
+
+    /// Tell every node to keep its library's default largest pubsub message (see `Pubsub::library_limits`).
+    pub(crate) fn with_library_limits(mut self, on: bool) -> Self {
+        for i in &mut self.inits {
+            i.library_limits = on;
+        }
+        self
     }
 
     /// The nodes with a hub or relay role first, then the rest: the others join through them.

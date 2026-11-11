@@ -1,0 +1,45 @@
+name = "defra-pushlog-100"
+about = "DefraDB's pushlog fan-out at 100 replicators: one writer pushes 1000 updates of 512 bytes at 50 a second across a WAN (20 ms round trip, 100 Mbit/s each way)."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 192
+
+[[sites]]
+name = "writer"
+pos = [120, 200]
+
+[[sites]]
+name = "replicas"
+pos = [520, 200]
+
+[[nodes]]
+name = "hub"
+site = "writer"
+role = "hub"
+
+[[nodes]]
+name = "w"
+site = "writer"
+
+[[nodes]]
+name = "r"
+site = "replicas"
+count = 100
+
+[[links]]
+a = "writer"
+b = "replicas"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["w"]
+messages = 1000
+size = 512
+rate_hz = 50
+join_s = 120
+warmup_s = 20
+drain_s = 15

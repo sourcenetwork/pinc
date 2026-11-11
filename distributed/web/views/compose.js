@@ -10,6 +10,7 @@ const TESTS = {
   setup: { label: "connection setup", params: [["count", "connections", ""]], init: { count: 20 } },
   resume: { label: "resumed setup", params: [["count", "connections", ""]], init: { count: 20 } },
   latency: { label: "request latency", params: [["size", "size", "B"], ["round_trips", "round trips", ""]], init: { size: 64, round_trips: 200 } },
+  requests: { label: "concurrent requests", params: [["size", "size", "B"], ["requests", "requests", ""], ["concurrency", "in flight", ""]], init: { size: 512, requests: 2000, concurrency: 16 } },
   throughput: { label: "throughput", params: [["bytes", "bytes", "B"], ["streams", "streams", ""]], init: { bytes: 16777216, streams: 1 } },
   many: { label: "many connections", params: [["connections", "clients", ""], ["bytes_each", "bytes each", "B"]], init: { connections: 200, bytes_each: 65536 } },
 };

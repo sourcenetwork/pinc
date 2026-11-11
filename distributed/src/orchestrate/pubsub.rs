@@ -78,7 +78,7 @@ fn base_row(ctx: &Ctx, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Row {
 
 async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Result<Row> {
     let mut row = base_row(ctx, stack, w, rep, pair);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU);
+    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_library_limits(w.library_limits);
     let outcome = body(ctx, b, &set, w, &mut row).await;
     if let Some(note) = set.configs().await.into_iter().next() {
         row.node.insert("note".into(), Value::String(note));

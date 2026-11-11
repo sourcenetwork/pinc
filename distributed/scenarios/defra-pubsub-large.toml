@@ -1,0 +1,45 @@
+name = "defra-pubsub-large"
+about = "Topic pubsub with DefraDB-sized documents above iroh gossip's 4 KiB default: one publisher sends 500 messages of 16 KiB at 20 a second to 10 peers across a WAN (20 ms round trip), every stack on its library's default largest message."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 512
+
+[[sites]]
+name = "writer"
+pos = [120, 200]
+
+[[sites]]
+name = "replicas"
+pos = [520, 200]
+
+[[nodes]]
+name = "hub"
+site = "writer"
+role = "hub"
+
+[[nodes]]
+name = "w"
+site = "writer"
+
+[[nodes]]
+name = "r"
+site = "replicas"
+count = 10
+
+[[links]]
+a = "writer"
+b = "replicas"
+shape = { delay_ms = 10, rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["w"]
+messages = 500
+size = 16384
+rate_hz = 20
+warmup_s = 8
+drain_s = 8
+library_limits = true

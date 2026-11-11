@@ -165,6 +165,12 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
             m(Node("p999_us"), "round trip p99.9", "us", Lower),
             m(Node("round_trips"), "round trips", "", Better::None),
         ],
+        t if t.starts_with("requests_") => vec![
+            m(Node("p50_us"), "request p50", "us", Lower),
+            m(Node("p99_us"), "request p99", "us", Lower),
+            m(Node("rate_per_s"), "requests per second", "", Higher),
+            m(Node("failed"), "failed", "", Lower),
+        ],
         t if t.starts_with("throughput_") => vec![
             m(Node("mib_s"), "goodput", "MiB/s", Higher),
             m(Node("streams_ok"), "streams done", "", Higher),

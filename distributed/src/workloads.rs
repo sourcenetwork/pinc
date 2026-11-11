@@ -42,6 +42,10 @@ pub struct Pubsub {
     /// Seconds after the last message before the counts are read.
     #[serde(default = "drain_default")]
     pub drain_s: f64,
+    /// Keep each stack's library default for the largest message (iroh gossip 4 KiB, rust-libp2p gossipsub 64 KiB)
+    /// instead of the harness's 1 MiB, so the counts show what a deployment on the defaults delivers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub library_limits: bool,
 }
 
 fn topic_default() -> String {
