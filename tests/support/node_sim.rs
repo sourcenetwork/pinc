@@ -38,8 +38,8 @@ use vinc_node::{
 };
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftKeys, SoftPrekeys};
 use vinc_sim::{Clock, IfaceEvent, StreamEvent, StreamId, StreamKind, StreamOp, Time, WALL_EPOCH};
-use vinc_transport::conn::Resources;
-use vinc_transport::recovery::{LossEstimate, SentRing};
+use vinc_transport::conn::{Machines, Resources, Tables};
+use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, StreamSource, Streams};
 
@@ -84,7 +84,7 @@ impl SimApps for NoApps {
 /// The relay-path address family and index the hub's own relay uses for its members: an index no client has.
 const LOCAL_RELAY: u8 = 0xFE;
 
-fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC, CF> {
+fn memory_of<S: StreamSource + 'static>(machines: &Machines) -> Resources<'static, S, CN, CC, CF> {
     let pool = BufferPool::new_boxed(POOL_CHUNKS.get());
     let streams: &'static mut Streams<S, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
@@ -93,12 +93,14 @@ fn memory_of<S: StreamSource + 'static>() -> Resources<'static, S, CN, CC, CF> {
         pool,
         streams: streams.into(),
         loss: loss.into(),
-        sent: SentRing::new(),
+        tables: Tables::sharing(machines),
     }
 }
 
 fn node_slots<S: StreamSource + 'static>() -> &'static mut [Slot<'static, Caps, S, CN, CC, CF, CNP>; NK] {
-    let v: Vec<Slot<'static, Caps, S, CN, CC, CF, CNP>> = (0..NK).map(|_| Slot::new(memory_of::<S>())).collect();
+    let machines = Machines::new();
+    let v: Vec<Slot<'static, Caps, S, CN, CC, CF, CNP>> =
+        (0..NK).map(|_| Slot::new(memory_of::<S>(&machines))).collect();
     let b: Box<[Slot<'static, Caps, S, CN, CC, CF, CNP>; NK]> = v.into_boxed_slice().try_into().ok().unwrap();
     Box::leak(b)
 }

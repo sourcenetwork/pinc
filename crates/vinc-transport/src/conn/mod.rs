@@ -74,6 +74,7 @@ mod path;
 mod reasm;
 mod recv;
 mod send;
+mod tables;
 mod timer;
 
 use vinc_crypto::Provider;
@@ -88,7 +89,8 @@ pub use config::{
     ClientParams, Config, DEFAULT_SEND_WINDOW, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo,
     ServerParams, Stats,
 };
-pub use event::{CloseReason, Drop, Event, code};
+pub use event::{CloseReason, Drop, Event, EventTable, code};
+pub use handshake::Machines;
 pub use held::{Held, Shared};
 pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
@@ -100,6 +102,7 @@ pub use path::PathError;
 #[cfg(feature = "trace")]
 pub use reasm::trace::{ReasmProbe, ReasmView};
 pub use send::Transmit;
+pub use tables::Tables;
 
 use self::cid::Cids;
 use self::ctl::Ctl;
@@ -109,7 +112,7 @@ use self::keys::Keys;
 use self::life::Life;
 use self::path::Paths;
 use crate::packet::PN_LEN_BASE;
-use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, SentRing, TailRepair};
+use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, TailRepair};
 use crate::stream::datagram::{Datagrams, EarlyData};
 use crate::stream::pool::{BufferPool, CHUNK_SIZE};
 use crate::stream::{NoSource, StreamSource, Streams};
@@ -129,9 +132,8 @@ pub struct Resources<'a, S: StreamSource, const N: usize, const C: usize, const 
     pub streams: Held<'a, Streams<S, N, C>>,
     /// The node-wide loss average that decides tail repair.
     pub loss: Shared<'a, LossEstimate>,
-    /// The table of sent packets, empty (see [`SentRing::clear`]): the connection records at most `F` packets in
-    /// flight.
-    pub sent: SentRing<F>,
+    /// The tables the connection builds on, cleared (see [`Tables::clear`]): it records at most `F` packets in flight.
+    pub tables: Tables<F>,
 }
 
 /// Where the connection is in its life.
@@ -227,7 +229,7 @@ where
             mut pool,
             mut streams,
             loss,
-            sent,
+            tables,
         } = res;
         streams.set_advertised(u64::from(local_credit.max_streams));
         let timing = Timing {
@@ -236,7 +238,8 @@ where
             node_rtt: cfg.node_rtt,
             node_peak_rtt: cfg.node_peak_rtt,
         };
-        let hs = Handshake::new(machine, &mut pool, now, timing)?;
+        let Tables { sent, events, machines } = tables;
+        let hs = Handshake::new(machine, machines, &mut pool, now, timing)?;
         let mut life = Life::new(now);
         life.keepalive = cfg.keepalive;
         let mut rec = Recovery::with_ring(u64::from(MIN_MTU), sent);
@@ -274,7 +277,7 @@ where
             paths: Paths::new(),
             sess_amp: AmpBudget::new(),
             pn_len: PN_LEN_BASE,
-            events: EvQueue::new(),
+            events: EvQueue::new(events),
             gated: false,
             life,
             stats: Stats::default(),

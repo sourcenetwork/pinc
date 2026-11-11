@@ -9,7 +9,7 @@
 //! The send and receive buffers are one chunk of the connection's buffer pool, held only while the handshake needs
 //! them: the receive buffer is released when the session is established (a resumed responder keeps it, with the send
 //! buffer, to answer a repeated Hello), the send buffer when the peer has shown it holds the session (the first
-//! 1-RTT packet), and at once for a responder of a full handshake. Nothing here allocates.
+//! 1-RTT packet), and at once for a responder of a full handshake. Nothing here allocates per packet.
 //!
 //! # Timers
 //!
@@ -24,8 +24,14 @@
 //! - When the link returns, a dialing side's pending flight is resent at once.
 //! - The round trip of the first flight, if it was answered without a resend, is offered once as an RTT sample.
 //!
+//! The state machine is large and needed only until the peer shows it holds the session. With the `alloc` feature it is
+//! boxed, and the box comes from a [`Machines`] pool that the connections of a node share and goes back to it when the
+//! handshake is over or the connection ends, so an established session holds no machine and a new handshake takes a box
+//! that exists already. Without `alloc` the machine stays in place and sheds its secrets.
+//!
 //! Invariants: the reassembly buffer never holds more than [`MAX_MESSAGE_LEN`] bytes and a message is handed to the
-//! state machine only when complete; a timer is reported only while it can still act.
+//! state machine only when complete; a timer is reported only while it can still act; a box returned to the pool holds
+//! no secrets.
 
 use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
 use vinc_crypto::{IdentityAlg, Provider};
@@ -135,6 +141,105 @@ pub(crate) enum Machine {
     Server(Responder),
 }
 
+/// The boxes of the handshake state machines a node's connections share, so that an established session holds none and
+/// a new handshake takes one that exists already. A handle: cloning it shares the pool. Without the `alloc` feature it
+/// holds nothing and the machine stays in the connection.
+#[derive(Clone)]
+pub struct Machines {
+    #[cfg(feature = "alloc")]
+    free: alloc::rc::Rc<[core::cell::Cell<Option<alloc::boxed::Box<Machine>>>; MACHINE_BOXES]>,
+}
+
+/// The most idle boxes a [`Machines`] pool keeps; a handshake that finds it empty allocates, and a box that finds it
+/// full is freed.
+#[cfg(feature = "alloc")]
+const MACHINE_BOXES: usize = 64;
+
+impl core::fmt::Debug for Machines {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Machines").finish_non_exhaustive()
+    }
+}
+
+impl Default for Machines {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl Machines {
+    /// An empty pool.
+    pub fn new() -> Self {
+        Self {
+            free: alloc::rc::Rc::new(core::array::from_fn(|_| core::cell::Cell::new(None))),
+        }
+    }
+
+    fn take(&self) -> Option<alloc::boxed::Box<Machine>> {
+        self.free.iter().find_map(core::cell::Cell::take)
+    }
+
+    fn put(&self, b: alloc::boxed::Box<Machine>) {
+        let empty = self.free.iter().find(|cell| {
+            let held = cell.take();
+            let vacant = held.is_none();
+            cell.set(held);
+            vacant
+        });
+        if let Some(cell) = empty {
+            cell.set(Some(b));
+        }
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
+impl Machines {
+    /// An empty pool.
+    pub const fn new() -> Self {
+        Self {}
+    }
+}
+
+#[cfg(feature = "alloc")]
+type MachineBox = alloc::boxed::Box<Machine>;
+#[cfg(not(feature = "alloc"))]
+type MachineBox = Machine;
+
+#[cfg(feature = "alloc")]
+fn boxed(machines: &Machines, machine: Machine) -> MachineBox {
+    match machines.take() {
+        Some(mut b) => {
+            *b = machine;
+            b
+        }
+        None => alloc::boxed::Box::new(machine),
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
+fn boxed(_: &Machines, machine: Machine) -> MachineBox {
+    machine
+}
+
+/// The machine a slot holds. A function of the slot alone, so a caller can keep its other fields borrowed.
+#[cfg(feature = "alloc")]
+fn machine_of(slot: &mut Option<MachineBox>) -> Option<&mut Machine> {
+    slot.as_deref_mut()
+}
+
+/// The machine a slot holds.
+#[cfg(not(feature = "alloc"))]
+fn machine_of(slot: &mut Option<MachineBox>) -> Option<&mut Machine> {
+    slot.as_mut()
+}
+
+impl Drop for Handshake {
+    fn drop(&mut self) {
+        self.retire_machine();
+    }
+}
+
 /// An owned copy of a key request, so it can be shown as an event after the machine's borrow ended.
 #[allow(clippy::large_enum_variant, reason = "held inline so nothing allocates")]
 pub(crate) enum OwnedRequest {
@@ -180,7 +285,9 @@ enum Stage {
     reason = "independent flags of the buffers and timers"
 )]
 pub(crate) struct Handshake {
-    pub(crate) machine: Machine,
+    /// The state machine, until the peer shows it holds the session (see [`Machines`]).
+    machine: Option<MachineBox>,
+    machines: Machines,
     client: bool,
     timing: Timing,
     chunk: Option<Chunk>,
@@ -223,12 +330,19 @@ impl Handshake {
     ///
     /// # Errors
     /// [`Failure::OutOfMemory`] if the pool has no free chunk.
-    pub(crate) fn new(machine: Machine, pool: &mut BufferPool<'_>, now: u64, timing: Timing) -> Result<Self, Failure> {
+    pub(crate) fn new(
+        machine: Machine,
+        machines: Machines,
+        pool: &mut BufferPool<'_>,
+        now: u64,
+        timing: Timing,
+    ) -> Result<Self, Failure> {
         let client = matches!(machine, Machine::Client(_));
         let chunk = pool.alloc_chunk().map_err(|_| Failure::OutOfMemory)?;
         let (first, sends) = if client { (timing.first(), 1) } else { (SERVER_FIRST, 0) };
         Ok(Self {
-            machine,
+            machine: Some(boxed(&machines, machine)),
+            machines,
             client,
             timing,
             chunk: Some(chunk),
@@ -262,10 +376,20 @@ impl Handshake {
         })
     }
 
+    /// The pool the machine came from.
+    pub(crate) const fn machines(&self) -> &Machines {
+        &self.machines
+    }
+
+    /// The state machine, while the peer has not shown it holds the session.
+    pub(crate) fn machine_mut(&mut self) -> Option<&mut Machine> {
+        machine_of(&mut self.machine)
+    }
+
     /// Drain the machine until it reports an event. Messages and key requests are copied out; the event is returned.
     pub(crate) fn step(&mut self, pool: &mut BufferPool<'_>) -> Option<SecEvent> {
         loop {
-            let out = match &mut self.machine {
+            let out = match machine_of(&mut self.machine)? {
                 Machine::Client(m) => m.poll_output(),
                 Machine::Server(m) => m.poll_output(),
             };
@@ -526,7 +650,7 @@ impl Handshake {
             .get(MAX_MESSAGE_LEN..)
             .and_then(|b| b.get(..len))
             .ok_or(Failure::InvalidParameter)?;
-        let r = match (&mut self.machine, stores) {
+        let r = match (machine_of(&mut self.machine).ok_or(Failure::Closed)?, stores) {
             (Machine::Client(m), _) => m.handle(env, msg),
             (Machine::Server(m), Some(stores)) => m.handle(env, stores, msg),
             (Machine::Server(_), None) => Err(Failure::InvalidParameter),
@@ -593,13 +717,14 @@ impl Handshake {
                 .min(self.timing.first().saturating_mul(1 << (self.sends - 1).min(MAX_SHIFT))),
             (_, false) => SERVER_CAP.min(SERVER_FIRST.saturating_mul(1 << self.sends.min(SERVER_SHIFT))),
         };
-        match &mut self.machine {
-            Machine::Client(m) => {
+        match machine_of(&mut self.machine) {
+            Some(Machine::Client(m)) => {
                 // The machine's own failure (a fallback that cannot get randomness) stops it and surfaces as its
                 // event; there is nothing to do here.
                 let _ = m.retransmit(env);
             }
-            Machine::Server(m) => m.retransmit(),
+            Some(Machine::Server(m)) => m.retransmit(),
+            None => {}
         }
         self.retransmitting = true;
         // A fallback or a reject restarts the schedule when its event is drained; otherwise the delay stands.
@@ -619,14 +744,24 @@ impl Handshake {
     pub(crate) fn confirm(&mut self, pool: &mut BufferPool<'_>) {
         self.retx_at = None;
         self.stage = Stage::Done;
-        match &mut self.machine {
-            Machine::Client(m) => m.shed(),
-            Machine::Server(m) => m.shed(),
-        }
+        self.retire_machine();
         self.tx_live = false;
         self.rx_live = false;
         self.tx_active = false;
         self.release(pool);
+    }
+
+    /// Shed what the machine holds and, with `alloc`, give its box back to the pool.
+    pub(crate) fn retire_machine(&mut self) {
+        match machine_of(&mut self.machine) {
+            Some(Machine::Client(m)) => m.shed(),
+            Some(Machine::Server(m)) => m.shed(),
+            None => return,
+        }
+        #[cfg(feature = "alloc")]
+        if let Some(b) = self.machine.take() {
+            self.machines.put(b);
+        }
     }
 
     /// Whether a responder still holds its Reply to answer a repeated Hello.

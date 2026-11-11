@@ -277,11 +277,13 @@ where
         use alloc::{boxed::Box, rc::Rc, vec::Vec};
 
         use vinc_transport::conn::{Held, Shared};
-        use vinc_transport::recovery::{LossEstimate, SentRing};
+        use vinc_transport::conn::{Machines, Tables};
+        use vinc_transport::recovery::LossEstimate;
         use vinc_transport::stream::Streams;
         use vinc_transport::stream::pool::BufferPool;
 
         let loss = Rc::new(LossEstimate::new());
+        let machines = Machines::new();
         let stream_cfg = stream::Config::new(false);
         let probe = BufferPool::new_boxed(1);
         let slots: Vec<Slot<'static, P, S, N, C, F, NP>> = (0..K)
@@ -290,7 +292,7 @@ where
                     pool: BufferPool::new_boxed(pool_chunks),
                     streams: Held::Owned(Box::new(Streams::new(&stream_cfg, &probe))),
                     loss: Shared::Counted(Rc::clone(&loss)),
-                    sent: SentRing::new(),
+                    tables: Tables::sharing(&machines),
                 })
             })
             .collect();
@@ -608,7 +610,7 @@ ep_impl! {
         self.free = slot.m.next_free;
         mem.pool.reset();
         mem.streams.reinit(&stream::Config::new(client), &mem.pool);
-        mem.sent.clear();
+        mem.tables.clear();
         slot.m.begin(client, now);
         self.live += 1;
         Some((i, mem))

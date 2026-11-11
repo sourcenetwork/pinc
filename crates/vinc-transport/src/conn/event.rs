@@ -7,6 +7,7 @@ use vinc_security::{Failure, KeyRequest, TicketBatch};
 use super::config::PathId;
 use crate::packet::PacketError;
 use crate::stream::StreamId;
+use crate::stream::lazy::{Blank, Lazy};
 
 /// The codes a CLOSE frame carries. 0 and 3 are the codes of the protocol itself; 0x4C means the sender is leaving
 /// the network on purpose; the rest are VINC's own and say which rule the peer broke. An application may close with
@@ -267,7 +268,7 @@ pub(crate) const fn queue_fits(streams: usize, paths: usize) -> bool {
 /// [`EvQueue::lost`].
 #[derive(Debug)]
 pub(crate) struct EvQueue {
-    items: [Option<Ev>; QUEUE],
+    items: Lazy<Option<Ev>, QUEUE>,
     head: usize,
     len: usize,
     /// Unrecoverable events dropped because the queue held nothing else; 0 while the queue is sized by [`queue_fits`].
@@ -276,10 +277,37 @@ pub(crate) struct EvQueue {
     pub(crate) tickets: Option<TicketBatch>,
 }
 
+impl Blank for Option<Ev> {
+    const BLANK: Self = None;
+}
+
+/// The room of a connection's event queue, handed over with its [`Resources`](super::Resources): with `alloc` it is
+/// reserved once and written only as far as events were queued, so a new session builds none.
+#[derive(Debug, Clone)]
+pub struct EventTable(Lazy<Option<Ev>, QUEUE>);
+
+impl Default for EventTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventTable {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self(Lazy::new())
+    }
+
+    /// Forget every queued event, keeping the room.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 impl EvQueue {
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new(table: EventTable) -> Self {
         Self {
-            items: [None; QUEUE],
+            items: table.0,
             head: 0,
             len: 0,
             lost: 0,
@@ -310,7 +338,7 @@ impl EvQueue {
                 *s = moved;
             }
         }
-        self.head = (self.head + 1) % QUEUE;
+        self.head = if self.len == 1 { 0 } else { (self.head + 1) % QUEUE };
         self.len -= 1;
     }
 
@@ -348,12 +376,17 @@ impl EvQueue {
         self.push(Ev::Tickets);
     }
 
+    /// The room of the queue, for the next connection.
+    pub(crate) fn into_table(self) -> EventTable {
+        EventTable(self.items)
+    }
+
     pub(crate) fn pop(&mut self) -> Option<Ev> {
         if self.len == 0 {
             return None;
         }
-        let ev = self.items.get_mut(self.head).and_then(Option::take);
-        self.head = (self.head + 1) % QUEUE;
+        let ev = self.items.written_mut(self.head).and_then(Option::take);
+        self.head = if self.len == 1 { 0 } else { (self.head + 1) % QUEUE };
         self.len -= 1;
         ev
     }

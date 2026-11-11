@@ -30,8 +30,8 @@ use vinc_core::{
 };
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
 use vinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_transport::conn::Resources;
-use vinc_transport::recovery::{LossEstimate, SentRing};
+use vinc_transport::conn::{Machines, Resources, Tables};
+use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
@@ -58,6 +58,11 @@ pub const ALPN_B: &[u8] = b"vinc/b";
 
 /// The memory of one connection, leaked for the life of the test.
 pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC, CF> {
+    memory_sharing(client, &Machines::new())
+}
+
+/// The memory of one connection whose handshake machines come from the node's pool `machines`.
+pub fn memory_sharing(client: bool, machines: &Machines) -> Resources<'static, NoSource, CN, CC, CF> {
     let pool = BufferPool::new_boxed(CHUNKS_PER_CONN);
     let streams: &'static mut Streams<NoSource, CN, CC> =
         Box::leak(Box::new(Streams::new(&stream::Config::new(client), &pool)));
@@ -66,13 +71,14 @@ pub fn memory(client: bool) -> Resources<'static, NoSource, CN, CC, CF> {
         pool,
         streams: streams.into(),
         loss: loss.into(),
-        sent: SentRing::new(),
+        tables: Tables::sharing(machines),
     }
 }
 
 /// A leaked slot table of `CK` free slots.
 pub fn slots() -> &'static mut [CoreSlot; CK] {
-    let v: Vec<CoreSlot> = (0..CK).map(|_| Slot::new(memory(false))).collect();
+    let machines = Machines::new();
+    let v: Vec<CoreSlot> = (0..CK).map(|_| Slot::new(memory_sharing(false, &machines))).collect();
     let b: Box<[CoreSlot; CK]> = v.into_boxed_slice().try_into().ok().unwrap();
     Box::leak(b)
 }

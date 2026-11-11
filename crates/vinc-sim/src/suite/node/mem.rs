@@ -11,8 +11,8 @@
 //! table in the free list has every slot free and its memory in place.
 
 use vinc_core::{Endpoint, Slot};
-use vinc_transport::conn::Resources;
-use vinc_transport::recovery::{LossEstimate, SentRing};
+use vinc_transport::conn::{Resources, Tables};
+use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::{BufferPool, CHUNK_SIZE, RawChunk};
 use vinc_transport::stream::{self, NoSource, Streams};
 
@@ -94,6 +94,6 @@ fn memory(chunks: &'static mut [RawChunk]) -> Resources<'static, NoSource, STREA
         pool,
         streams: streams.into(),
         loss: loss.into(),
-        sent: SentRing::new(),
+        tables: Tables::new(),
     }
 }

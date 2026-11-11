@@ -21,7 +21,7 @@ use vinc_security::{
 use super::config::{Config, PathId, PathInfo};
 use super::handshake::Machine;
 use super::params::peer_limits;
-use super::{Connection, Phase, Resources};
+use super::{Connection, Phase, Resources, Tables};
 use crate::recovery::RttEstimator;
 use crate::stream::StreamSource;
 
@@ -73,7 +73,16 @@ pub struct SubWait {
 conn_impl! {
     /// Give back the memory this connection used, for the next one. The pool is not reset here.
     pub fn into_resources(self) -> Resources<'a, S, N, C, F> {
-        Resources { pool: self.pool, streams: self.streams, loss: self.loss, sent: self.rec.into_ring() }
+        Resources {
+            pool: self.pool,
+            streams: self.streams,
+            loss: self.loss,
+            tables: Tables {
+                sent: self.rec.into_ring(),
+                events: self.events.into_table(),
+                machines: self.hs.machines().clone(),
+            },
+        }
     }
 
     /// The key operation the handshake waits for, if any, after an [`Event::KeyRequest`](super::Event::KeyRequest).
@@ -307,6 +316,7 @@ conn_impl! {
             cid_secret: sub_session_secret(&parent.cid_secret, a, cc.as_bytes(), cs.as_bytes()),
         };
         self.hs.on_event(&mut self.pool, &SecEvent::Established(est.clone()));
+        self.hs.retire_machine();
         self.on_hs_event(env, SecEvent::Established(est));
         self.confirmed = true;
         self.hs.confirm(&mut self.pool);

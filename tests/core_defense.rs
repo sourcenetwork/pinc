@@ -21,9 +21,9 @@ use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use vinc_security::{ConnId, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys};
 use vinc_tests::*;
-use vinc_transport::conn::Resources;
+use vinc_transport::conn::{Resources, Tables};
 use vinc_transport::packet::{LongHeader, LongType};
-use vinc_transport::recovery::{LossEstimate, SentRing};
+use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, Streams};
 use vinc_wire::Writer;
@@ -115,7 +115,7 @@ fn small_memory() -> Resources<'static, NoSource, 1, 2, 16> {
         pool,
         streams: streams.into(),
         loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
-        sent: SentRing::new(),
+        tables: Tables::new(),
     }
 }
 

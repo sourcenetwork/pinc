@@ -38,9 +38,10 @@ use vinc_security::{
     TicketBatch,
 };
 use vinc_transport::conn::{
-    ClientParams, CloseReason, Config, Connection, Drop, Event, PathId, PathInfo, Resources, ServerParams, Transmit,
+    ClientParams, CloseReason, Config, Connection, Drop, Event, PathId, PathInfo, Resources, ServerParams, Tables,
+    Transmit,
 };
-use vinc_transport::recovery::{LossEstimate, SentRing};
+use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
@@ -189,7 +190,7 @@ impl<const C: usize, const F: usize> Store<C, F> {
             pool: self.pool.take().unwrap(),
             streams: (&mut *self.streams).into(),
             loss: (&self.loss).into(),
-            sent: SentRing::new(),
+            tables: Tables::new(),
         }
     }
 }

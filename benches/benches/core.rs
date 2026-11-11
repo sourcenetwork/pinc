@@ -29,8 +29,8 @@ use criterion::{Criterion, Throughput};
 use vinc_core::{Answer, Command, DeadlineHeap, Endpoint, EndpointConfig, Event, Query, Role, SessionId, Slot};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use vinc_security::{Env, KeyHandle, KeyResponse, LocalIdentity, PrekeyPolicy, SoftKeys, SoftPrekeys};
-use vinc_transport::conn::Resources;
-use vinc_transport::recovery::{LossEstimate, SentRing};
+use vinc_transport::conn::{Resources, Tables};
+use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, Streams};
 
@@ -47,7 +47,7 @@ fn memory() -> Resources<'static, NoSource, 2, 2, 16> {
         pool,
         streams: streams.into(),
         loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
-        sent: SentRing::new(),
+        tables: Tables::new(),
     }
 }
 
