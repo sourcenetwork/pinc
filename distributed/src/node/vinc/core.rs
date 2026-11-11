@@ -34,7 +34,14 @@ pub const NRL: usize = 4;
 pub const NPEERS: usize = 128;
 /// The endpoint's shape: the facade's, with the stream source of the values layer.
 pub type Ep<const K: usize, const D: usize> =
-    Endpoint<'static, 'static, Software, ValueSource<VStore>, 72, 65, 128, 4, K, D, 8, 64, 32>;
+    Endpoint<'static, 'static, Software, ValueSource<VStore>, 72, 65, FLIGHT, 4, K, D, 8, 64, 32>;
+
+/// The packets in flight one session can track: the facade's ceiling. The ring bounds the bytes in flight at this many
+/// packets, so a smaller one caps a transfer at that many packets per round trip whatever the window allows (128
+/// packets held a 50 ms path to 3.5 MiB/s).
+pub const FLIGHT: usize = vinc_transport::recovery::SENT_PACKETS;
+// A 1 Gbit/s path of 50 ms holds about 4,300 packets of 1,452 bytes.
+const _: () = assert!(FLIGHT >= 4_300);
 /// The node over that endpoint.
 pub type VNode<const K: usize, const D: usize> = Node<Ep<K, D>, Software, (), NRL, NPEERS, VApps>;
 
