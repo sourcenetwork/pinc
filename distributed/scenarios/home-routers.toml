@@ -46,11 +46,11 @@ pairs = [{ client = "n1", server = "rv" }, { client = "n2", server = "rv" }]
 
 [[workload.tests]]
 test = "setup"
-count = 20
+count = 200
 
 [[workload.tests]]
 test = "resume"
-count = 20
+count = 200
 
 [[workload.tests]]
 test = "throughput"
