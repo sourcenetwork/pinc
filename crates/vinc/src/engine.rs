@@ -805,6 +805,21 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     /// Abandon the send side of a stream, for `code`.
+    /// Set how urgent `stream` is among the streams of its session: lower numbers are sent first.
+    pub(crate) fn set_urgency(&mut self, now: u64, info: &SessInfo, stream: StreamId, urgency: u8) -> Result<()> {
+        if !self.sessions.contains_key(&info.id) {
+            return Err(info.gone());
+        }
+        let session = info.id;
+        self.cmd(now, || Command::SetUrgency {
+            session,
+            stream,
+            urgency,
+        })
+        .map(|_| ())
+        .map_err(Error::command)
+    }
+
     pub(crate) fn reset(&mut self, now: u64, info: &SessInfo, stream: StreamId, code: u64) {
         let session = info.id;
         let _ = self.cmd(now, || Command::Reset {

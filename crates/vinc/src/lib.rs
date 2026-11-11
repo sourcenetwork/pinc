@@ -86,3 +86,5 @@ pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use stream::{RecvStream, SendStream};
 pub use vinc_core::NodeStats;
 pub use vinc_crypto::NodeId;
+/// The urgency a stream starts with; see [`SendStream::set_urgency`].
+pub use vinc_transport::stream::DEFAULT_URGENCY;

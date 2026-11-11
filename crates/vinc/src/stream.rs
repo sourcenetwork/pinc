@@ -114,6 +114,18 @@ impl<H: Hosted> SendStream<H> {
         .await
     }
 
+    /// Set the stream's urgency among the streams of its connection. A lower number is sent first, so a control
+    /// message on an urgent stream overtakes a bulk transfer already queued on another; streams of equal urgency are
+    /// served in the order they were opened. A stream starts at [`DEFAULT_URGENCY`].
+    ///
+    /// # Errors
+    /// The connection or the stream has ended.
+    pub async fn set_urgency(&mut self, urgency: u8) -> Result<()> {
+        let (c, id) = (&self.conn, self.id);
+        c.sh.run(|core, now| Try::Done(core.set_urgency(now, &c.info, id, urgency)))
+            .await
+    }
+
     /// Abandon the stream: bytes not yet sent are dropped and the peer sees a reset with `code`.
     pub async fn reset(&mut self, code: u64) {
         self.finished = true;
