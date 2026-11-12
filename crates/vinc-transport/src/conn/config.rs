@@ -91,7 +91,9 @@ pub struct Config {
     /// paths the connection learns of by receiving on them. 1500 unless the host says otherwise.
     pub interface_mtu: u16,
     /// What this endpoint tells the peer about its limits (see [`CreditRecord`]); the window and the stream limit
-    /// are clamped to what the stream table can hold. The idle timeout is not part of it: it is the fixed [`IDLE_TIMEOUT`].
+    /// are clamped to what the stream table can hold, and the table runs with them: the window is the one every stream
+    /// starts with, the stream limit the most streams the peer has live at once. The idle timeout is not part of it:
+    /// it is the fixed [`IDLE_TIMEOUT`].
     pub credit: CreditRecord,
 }
 

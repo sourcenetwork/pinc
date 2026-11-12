@@ -207,6 +207,16 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.stream_window
     }
 
+    /// Run with the limits the connection advertises to its peer, for a table with no stream open yet: `window` as the
+    /// receive window every stream starts with (at most the ceiling the table was made with) and `streams` as the most
+    /// peer streams live at once (at most the cap it was made with). The stream credit is derived again from them.
+    pub fn adopt(&mut self, pool: &BufferPool<'_>, window: u64, streams: u64) {
+        self.stream_window = window.min(self.max_stream_window);
+        self.target = self.stream_window;
+        self.max_remote = self.max_remote.min(streams);
+        self.set_advertised(self.admit_cap(pool));
+    }
+
     /// The receive window size and advertised limit of a stream.
     pub fn stream_recv_window(&self, id: StreamId) -> Option<(u64, u64)> {
         let win = &self.slot(self.find(id)?)?.recv.win;

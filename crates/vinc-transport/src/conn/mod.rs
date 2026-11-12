@@ -114,7 +114,7 @@ use self::path::Paths;
 use crate::packet::PN_LEN_BASE;
 use crate::recovery::{LossEstimate, ReceivedPackets, Recovery, TailRepair};
 use crate::stream::datagram::{Datagrams, EarlyData};
-use crate::stream::pool::{BufferPool, CHUNK_SIZE};
+use crate::stream::pool::BufferPool;
 use crate::stream::{NoSource, StreamSource, Streams};
 
 /// The received packet-number ranges tracked. Below the floor a packet counts as a duplicate, so this must hold the
@@ -299,21 +299,19 @@ where
         })
     }
 
-    /// What this endpoint advertises: the configured credit record with the stream window clamped to what this
-    /// stream table and pool can hold, and the stream limit to the table's slots.
-    fn advertise(cfg: &Config, streams: &Streams<S, N, C>) -> CreditRecord {
-        let conn = streams.recv_window();
-        let per_stream = conn.min((C as u64).saturating_sub(1) * CHUNK_SIZE as u64);
+    /// What this endpoint advertises, which its stream table then runs with: the configured credit record with the
+    /// stream window clamped to what this stream table and pool can hold, and the stream limit to the table's slots
+    /// and to the streams the pool has room to promise. One record for both, so the window a peer is told is the one
+    /// enforced and counted here, and the configured stream limit is the most streams the peer ever has live.
+    fn advertise(cfg: &Config, streams: &mut Streams<S, N, C>, pool: &BufferPool<'_>) -> CreditRecord {
+        let slots = cfg.credit.max_streams.min(u16::try_from(N).unwrap_or(u16::MAX));
+        streams.adopt(pool, cfg.credit.window_bytes(), u64::from(slots));
         CreditRecord {
             window_units: cfg
                 .credit
                 .window_units
-                .min(CreditRecord::new(per_stream, 0, 0).window_units),
-            max_streams: cfg
-                .credit
-                .max_streams
-                .min(u16::try_from(N).unwrap_or(u16::MAX))
-                .min(u16::try_from(streams.advertised_streams()).unwrap_or(u16::MAX)),
+                .min(CreditRecord::new(streams.recv_window(), 0, 0).window_units),
+            max_streams: slots.min(u16::try_from(streams.advertised_streams()).unwrap_or(u16::MAX)),
             max_datagram: cfg.credit.max_datagram,
         }
     }
@@ -337,12 +335,12 @@ where
     pub fn client(
         cfg: Config,
         params: ClientParams<'_>,
-        res: Resources<'a, S, N, C, F>,
+        mut res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = Self::random_cid(env, 8)?;
-        let local = Self::advertise(&cfg, &res.streams);
+        let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
         let remembered = params.ticket.as_ref().map(|t| *t.peer_credit());
         let init = Initiator::new(
             env,
@@ -382,12 +380,12 @@ where
     pub fn server(
         cfg: Config,
         params: &ServerParams,
-        res: Resources<'a, S, N, C, F>,
+        mut res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let cid = Self::random_cid(env, cfg.cid_len)?;
         let odcid = ConnId::default();
-        let local = Self::advertise(&cfg, &res.streams);
+        let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
         let mut rc = ResponderConfig::new(params.identity, cid, params.alpns);
         rc.tickets_per_session = params.tickets_per_session;
         rc.ticket_lifetime_s = params.ticket_lifetime_s;

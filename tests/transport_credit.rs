@@ -1,7 +1,8 @@
 //! Stream credit end to end: an opener that opens far more streams than the receiver's pool holds waits for the
 //! credit instead of sending them, every stream arrives with its bytes, and the receiver holds none back; a frame that
-//! opens many silent streams at once is admitted; and, on a table, a window charged to the ledger from its stream's
-//! first byte.
+//! opens many silent streams at once is admitted; a stream that ends gives the opener one more while every other one
+//! stays live; the configured window is the one advertised and the one the streams run with; and, on a table, a
+//! window charged to the ledger from its stream's first byte.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -107,6 +108,94 @@ fn an_opener_far_beyond_the_credit_delivers_every_stream_and_the_receiver_holds_
             assert!(net.b.read[id] == pattern(LEN, 1000 + k as u64), "stream {id} differs");
         }
         assert_eq!(net.b.conn.stats().held_back, 0, "the receiver held a stream back");
+    });
+}
+
+/// The opener has as many streams live as the credit allows, each with data on it and none finished. One of them ends
+/// on both sides: the receiver raises the credit by that one stream and the opener opens another.
+#[test]
+fn a_stream_that_ends_gives_the_opener_one_more_while_every_other_stream_stays_live() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        w.cfg.credit = credit_for_streams(&config(false));
+        let (mut sa, mut sb) = (
+            Store::<RING>::sized(1024, &config(true)),
+            Store::<RING>::sized(1024, &config(false)),
+        );
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(47, Params::new(5 * MS)));
+        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+        net.run(net.now + SEC, |_| false);
+        let credit = usize::from(net.a.conn.peer_credit().max_streams);
+        assert_eq!(credit, 32, "half the slots of the table");
+        let ids: Vec<u64> = (0..credit).map(|_| net.a.conn.open_bi().unwrap()).collect();
+        for id in &ids {
+            assert_eq!(net.a.conn.write(*id, &[7]).unwrap(), 1);
+        }
+        assert_eq!(net.a.conn.open_bi(), Err(StreamError::StreamLimit));
+        let all = net.run(net.now + 10 * SEC, |n| ids.iter().all(|id| n.b.read.contains_key(id)));
+        assert!(all, "the receiver saw {} of {credit} streams", net.b.read.len());
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(net.a.conn.open_ready(true), Err(StreamError::StreamLimit));
+
+        let last = *ids.last().unwrap();
+        net.a.conn.finish(last).unwrap();
+        net.b.conn.finish(last).unwrap();
+        let again = net.run(net.now + 10 * SEC, |n| n.a.conn.open_ready(true).is_ok());
+        assert!(
+            again,
+            "the stream ended and no credit came back: {:?}",
+            net.a.conn.open_ready(true)
+        );
+        let id = net.a.conn.open_bi().unwrap();
+        assert_eq!(net.a.conn.write(id, &[8]).unwrap(), 1);
+        let seen = net.run(net.now + 10 * SEC, |n| n.b.read.contains_key(&id));
+        assert!(seen, "the new stream did not arrive");
+        assert_eq!(net.b.conn.stats().held_back, 0, "the receiver held a stream back");
+    });
+}
+
+/// The window in the credit record an endpoint is configured with is the window its streams run with: the one its
+/// peer is told, the one it enforces and the one it counts. A window far under the default delivers a stream many
+/// windows long (the grants follow the reader), and a window above the default is advertised whole.
+#[test]
+fn the_configured_stream_window_is_the_one_advertised_and_the_one_the_streams_run_with() {
+    big_stack(|| {
+        const LONG: usize = 1 << 20;
+        for window in [64 * 1024u64, 2 << 20] {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            w.cfg.credit = vinc_security::CreditRecord::new(window, 100, u16::MAX);
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(53, Params::new(5 * MS)));
+            assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+            net.run(net.now + SEC, |_| false);
+            assert_eq!(
+                net.a.conn.peer_credit().window_bytes(),
+                window,
+                "the window the opener was told"
+            );
+            let id = net.a.conn.open_uni().unwrap();
+            let data = pattern(LONG, 9);
+            let (mut sent, mut ended) = (0, false);
+            let done = net.run(net.now + 60 * SEC, |n| {
+                while sent < LONG {
+                    let k = n.a.conn.write(id, &data[sent..]).unwrap();
+                    if k == 0 {
+                        break;
+                    }
+                    sent += k;
+                }
+                if sent == LONG && !ended {
+                    n.a.conn.finish(id).unwrap();
+                    ended = true;
+                }
+                n.b.fin.contains(&id)
+            });
+            assert!(
+                done,
+                "a window of {window}: {sent} of {LONG} bytes written, the stream did not end"
+            );
+            assert!(net.b.read[&id] == data, "the stream's bytes differ");
+        }
     });
 }
 

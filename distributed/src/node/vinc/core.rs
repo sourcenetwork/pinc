@@ -235,7 +235,7 @@ fn build<const K: usize, const D: usize>(
     ));
     cfg.conn.max_gso = spec.batch.max(1);
     cfg.conn.interface_mtu = spec.mtu;
-    cfg.conn.credit = vinc_security::CreditRecord::new(1 << 20, 16, u16::MAX);
+    cfg.conn.credit = vinc_security::CreditRecord::new(1 << 20, vinc::Limits::default().streams, u16::MAX);
     let ep_drbg = Drbg::new(&seed32(&spec.name, "vinc-ep-drbg"));
     let mut ep: Box<Ep<K, D>> = Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, spec.pool_chunks);
     let mut env = Env {

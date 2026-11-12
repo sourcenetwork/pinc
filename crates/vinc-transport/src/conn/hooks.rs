@@ -292,11 +292,11 @@ conn_impl! {
         identity: &LocalIdentity,
         path: PathId,
         path_info: PathInfo,
-        res: Resources<'a, S, N, C, F>,
+        mut res: Resources<'a, S, N, C, F>,
         env: &mut Env<'_, P>,
     ) -> Result<Self, Failure> {
         let (first_local, first_remote) = if client { (cc, cs) } else { (cs, cc) };
-        let local = Self::advertise(&cfg, &res.streams);
+        let local = Self::advertise(&cfg, &mut res.streams, &res.pool);
         let alpns = AlpnList::new(&[alpn.as_bytes()]).ok_or(Failure::InvalidParameter)?;
         let shell = Machine::Server(Responder::new(ResponderConfig::new(*identity, first_local, alpns)));
         let mut c = Self::base(client, cfg, res, shell, first_local, ConnId::default(), env.now, local)?;

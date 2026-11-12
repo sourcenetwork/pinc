@@ -172,11 +172,13 @@ fn wired_end(
     tx: smol::channel::Sender<Wire>,
     coalesced: Arc<std::sync::atomic::AtomicUsize>,
     lose: usize,
+    limits: vinc::Limits,
 ) -> vinc::Endpoint<impl vinc::Hosted> {
     let sent = std::cell::Cell::new(0usize);
     Vinc::builder()
         .alpn(ALPN)
         .batch(8)
+        .limits(limits)
         .local_addr(me)
         .build_batched(
             async move |buf: &mut [u8]| {
@@ -211,11 +213,27 @@ fn wired_pair_losing(
     coalesced: Arc<std::sync::atomic::AtomicUsize>,
     lose: usize,
 ) -> (vinc::Endpoint<impl vinc::Hosted>, vinc::Endpoint<impl vinc::Hosted>) {
+    wired_pair_with(coalesced, lose, vinc::Limits::default())
+}
+
+/// As [`wired_pair_losing`], both endpoints running with `limits`.
+fn wired_pair_with(
+    coalesced: Arc<std::sync::atomic::AtomicUsize>,
+    lose: usize,
+    limits: vinc::Limits,
+) -> (vinc::Endpoint<impl vinc::Hosted>, vinc::Endpoint<impl vinc::Hosted>) {
     let (a, b): (SocketAddr, SocketAddr) = ("10.0.0.1:7".parse().unwrap(), "10.0.0.2:7".parse().unwrap());
     let ((to_a, at_a), (to_b, at_b)) = (smol::channel::unbounded(), smol::channel::unbounded());
     (
-        wired_end(a, at_a, to_b, coalesced, 0),
-        wired_end(b, at_b, to_a, Arc::new(std::sync::atomic::AtomicUsize::new(0)), lose),
+        wired_end(a, at_a, to_b, coalesced, 0, limits),
+        wired_end(
+            b,
+            at_b,
+            to_a,
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            lose,
+            limits,
+        ),
     )
 }
 
@@ -387,4 +405,67 @@ async fn a_stream_sends_an_owned_body_whole_and_again_after_loss() {
             })
             .await;
     }
+}
+
+/// A client opens `live` streams on one session and keeps them open, each with a byte on it. One more waits; when one
+/// of them ends on both sides, it opens.
+async fn as_many_streams_live_as_the_limit_says(limits: vinc::Limits, live: usize) {
+    use std::time::Duration;
+
+    let (server, client) = wired_pair_with(Arc::new(std::sync::atomic::AtomicUsize::new(0)), 0, limits);
+    let addr = server.addr();
+    let (tried, go) = smol::channel::bounded::<()>(1);
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let serve = tokio::task::spawn_local(async move {
+                let conn = server.accept().await.unwrap().into_connection();
+                let mut held = Vec::new();
+                for _ in 0..live {
+                    held.push(conn.accept_bi().await.unwrap());
+                }
+                // The client has tried one more and found no room. End one stream: its slot is free again.
+                go.recv().await.unwrap();
+                let (mut tx, mut rx) = held.pop().unwrap();
+                tx.finish().await.unwrap();
+                assert_eq!(rx.read_to_end(16).await.unwrap().len(), 1);
+                held.push(conn.accept_bi().await.unwrap());
+                conn.closed().await;
+                held.len()
+            });
+            let conn = client.connect(addr, ALPN).await.unwrap();
+            let mut mine = Vec::new();
+            for i in 0..live {
+                let (mut tx, rx) = conn.open_bi().await.unwrap();
+                tx.write_all(&[u8::try_from(i).unwrap()]).await.unwrap();
+                mine.push((tx, rx));
+            }
+            let extra = tokio::time::timeout(Duration::from_millis(300), conn.open_bi()).await;
+            assert!(extra.is_err(), "one more stream opened while {live} were live");
+            tried.send(()).await.unwrap();
+            let (mut tx, mut rx) = mine.pop().unwrap();
+            tx.finish().await.unwrap();
+            assert_eq!(rx.read_to_end(16).await.unwrap().len(), 0);
+            let (mut tx, _rx) = tokio::time::timeout(Duration::from_secs(10), conn.open_bi())
+                .await
+                .expect("a stream ended, so another opens")
+                .unwrap();
+            tx.write_all(b"x").await.unwrap();
+            // The server holds as many again and has seen the new one.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            conn.close(0).await;
+            assert_eq!(serve.await.unwrap(), live);
+        })
+        .await;
+}
+
+/// The stream limit of an endpoint is the most streams its peer ever has open at once, not only the number it may
+/// open first.
+#[tokio::test(flavor = "current_thread")]
+async fn a_peer_never_has_more_streams_open_than_the_limit() {
+    let limits = vinc::Limits {
+        streams: 4,
+        ..vinc::Limits::default()
+    };
+    as_many_streams_live_as_the_limit_says(limits, 4).await;
 }
