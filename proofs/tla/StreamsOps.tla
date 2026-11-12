@@ -102,8 +102,18 @@ CapLive == Min(MAXREM, Max(N \div 2, 1))     \* the live peer streams: at most h
 CapIgnoringLimit == Max(N \div 2, 1)
 Adv0 == Min(CapLive, AdmitFit((B * CH) \div FirstW))
 
+\* hw is the mark of the slots (Streams::top in the code): the highest slot a stream holds, 0 with none. The scans
+\* for a stream to send and for control frames (next_hot, pending_control, poll_writable) stop at it, so a slot above
+\* it must be new: it has nothing to send and no control frame. Taking a slot raises the mark to it; freeing the top
+\* slot walks it down to the highest slot still held (MarkOnFree), freeing a lower one leaves it.
+\* Streams_mark_w.cfg plants a free that lowers it below a slot still held (MarkOnFreeLow).
+TopHeld(S) == IF \E k \in 1..N : S[k].id # -1
+              THEN CHOOSE k \in 1..N : S[k].id # -1 /\ \A j \in (k + 1)..N : S[j].id = -1
+              ELSE 0
+MarkOnFree(S, hw, i) == IF i = hw THEN TopHeld(S) ELSE hw
+MarkOnFreeLow(S, hw, i) == Min(hw, i - 1)
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
-          rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW,
+          rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW, hw |-> 0,
           m |-> [start |-> -1, bytes |-> 0, rate |-> 0],
           ad |-> [lim |-> PM, adv |-> Adv0, at |-> 0, pend |-> FALSE]]
 
@@ -187,7 +197,8 @@ Regrant(T) == LET T1 == RefreshAdmit(T) IN IF RETRY /\ AnyDefer(T1) THEN GrantRu
 (* ---- slots ---- *)
 FreeSlot(T, i) ==
     LET id == T.slots[i].id
-        T1 == [T EXCEPT !.slots[i] = NewSlot]
+        S1 == [T.slots EXCEPT ![i] = NewSlot]
+        T1 == [T EXCEPT !.slots = S1, !.hw = MarkOnFree(S1, T.hw, i)]
     IN IF id = -1 THEN T1
        ELSE IF IsLocal(id) THEN [T1 EXCEPT !.ll = Max(@ - 1, 0)] ELSE [T1 EXCEPT !.rl = Max(@ - 1, 0)]
 Settle(T, i) ==
@@ -202,7 +213,7 @@ AllocSlot(T, id) ==
         sendOn == ~IsUni(id) \/ local
         r == [NewSlot EXCEPT !.id = id, !.open = recvOn, !.limit = IF recvOn THEN SW ELSE 0,
                               !.size = IF recvOn THEN SW ELSE 0, !.sdone = ~sendOn]
-        T1 == SetSlot(T, i, r)
+        T1 == [SetSlot(T, i, r) EXCEPT !.hw = Max(@, i)]   \* taking a slot writes it: the mark rises to it
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
 (* ---- admission of peer streams (Streams::admits, locate) ---- *)

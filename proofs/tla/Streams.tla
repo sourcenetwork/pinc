@@ -166,6 +166,12 @@ OpenerInside == T.lo[0] + T.lo[1] <= T.ad.lim
 \* the credit given never lets a peer that keeps to it have more streams live than the configured limit MAXREM: the
 \* streams it may still open plus those live are at most MAXREM (Streams_cap_w.cfg plants the cap that ignored it)
 CreditInLimit == T.ad.adv > AdmittedN(T) => T.ad.adv - AdmittedN(T) + T.rl <= MAXREM
+\* every slot above the mark is new, so the scans that stop at the mark miss no stream with data, a retransmission or
+\* a control frame to send, after any run of frees, reuses and resets; and the mark is tight: its own slot is held, so
+\* a scan covers no more slots than the highest live stream (Streams_mark_w.cfg plants a free that lowers the mark)
+NothingAboveMark == /\ T.hw \in 0..N
+                    /\ \A k \in 1..N : k > T.hw => T.slots[k] = NewSlot
+                    /\ T.hw > 0 => T.slots[T.hw].id # -1
 \* a peer stream that arrives inside the credit it was given is never held back, whatever the pool holds, however many
 \* lower ids its frame opens with it
 NoHeldWithinCredit == \A id \in RemIds : LET L == Locate(T, id) IN

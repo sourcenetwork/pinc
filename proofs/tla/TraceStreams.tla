@@ -48,7 +48,7 @@ TOf(v) ==
     [slots |-> [k \in 1..N |-> SlotOf(v.slots[k])],
      rn |-> [c \in 0..1 |-> v.rn[c + 1]], lo |-> [c \in 0..1 |-> v.lo[c + 1]],
      rl |-> v.rl, ll |-> v.ll,
-     ext |-> v.ext, tgt |-> v.tgt, m |-> [start |-> v.ms, bytes |-> v.mb, rate |-> v.mr],
+     ext |-> v.ext, tgt |-> v.tgt, hw |-> v.hw, m |-> [start |-> v.ms, bytes |-> v.mb, rate |-> v.mr],
      ad |-> [lim |-> v.ad[1], adv |-> v.ad[2], at |-> v.ad[3], pend |-> v.adp]]
 
 InitEv == /\ Ev.op = "init" /\ TOf(Ev.v) = Init0 /\ rs' = TOf(Ev.v)

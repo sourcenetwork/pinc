@@ -339,6 +339,8 @@ par run_tlc streams_ext Streams Streams_ext
 par run_tlc streams_caps Streams Streams_caps
 par run_tlc streams_cap Streams Streams_cap
 par witness_tlc streams_cap_w Streams Streams_cap_w CreditInLimit
+par run_tlc streams_mark Streams Streams_mark
+par witness_tlc streams_mark_w Streams Streams_mark_w NothingAboveMark
 par run_tlc streams_ledger Streams Streams_ledger
 par run_tlc streams_two Streams Streams_two
 par run_tlc streams_held Streams Streams_held
