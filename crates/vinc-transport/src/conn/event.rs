@@ -249,7 +249,13 @@ impl Ev {
     }
 }
 
+/// The places of the event queue. With `alloc` a place is written when an event first uses it, so the queue is sized
+/// for a session of 200 stream slots; without it the queue is inline in the connection and stays at 256, which
+/// [`queue_fits`] holds a session of up to 77 slots to.
+#[cfg(feature = "alloc")]
+pub(crate) const QUEUE: usize = 640;
 /// The places of the event queue.
+#[cfg(not(feature = "alloc"))]
 pub(crate) const QUEUE: usize = 256;
 /// Events that cannot be recovered and may be queued at once besides one `Opened`, one `Reset` and one `Stopped` per stream slot and
 /// one validated and one failed event per path: connected, key request, tickets, ready, asleep, awake, wake

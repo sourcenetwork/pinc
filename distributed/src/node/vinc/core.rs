@@ -38,9 +38,10 @@ pub const TOPIC_LOG_BYTES: usize = 16 << 20;
 pub const NRL: usize = 4;
 /// Peers the connectivity client keeps records of.
 pub const NPEERS: usize = 128;
-/// The endpoint's shape: the facade's, with the stream source of the values layer.
+/// The endpoint's shape: the facade's stream slots and tables, with the stream source of the values layer and
+/// stream rings of 65 chunks (windows of at most 1 MiB).
 pub type Ep<const K: usize, const D: usize> =
-    Endpoint<'static, 'static, Software, ValueSource<VStore>, 72, 65, FLIGHT, 4, K, D, 8, 64, 32>;
+    Endpoint<'static, 'static, Software, ValueSource<VStore>, { vinc::STREAMS }, 65, FLIGHT, 4, K, D, 8, 64, 32>;
 
 /// The packets in flight one session can track: the facade's ceiling. The ring bounds the bytes in flight at this many
 /// packets, so a smaller one caps a transfer at that many packets per round trip whatever the window allows (128

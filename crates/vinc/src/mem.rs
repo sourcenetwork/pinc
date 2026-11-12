@@ -27,8 +27,10 @@ use crate::error::{Error, Result};
 pub const MAX_PROTOCOLS: usize = 8;
 /// The most sessions an engine can hold: the top of [`CAPACITIES`](crate::CAPACITIES).
 pub const MAX_CONNECTIONS: usize = 65_536;
-/// The stream slots of a session, both directions of opening counted.
-pub const STREAMS: usize = 72;
+/// The stream slots of a session, both directions of opening counted. Half are for the streams the peer opens, so a
+/// session carries up to 100 of them at once each way. A slot is written when a stream first uses it, so a session
+/// with few streams pays for few.
+pub const STREAMS: usize = 200;
 /// The chunk entries of one stream half.
 pub const RING: usize = 257;
 pub(crate) const FLIGHT: usize = vinc_transport::recovery::SENT_PACKETS;
@@ -60,7 +62,11 @@ pub struct Limits {
     /// The most data a session keeps written and unacknowledged, over all its streams (default 16 MiB): the smaller of
     /// this and 1.5 times the congestion window, which is what binds on any path under about 1 Gbit/s at 100 ms.
     pub send_window: u64,
-    /// The most streams the peer may have open at once on a session (at most 64).
+    /// The most streams the peer may have open at once on a session (at most 100, half the slots of
+    /// [`STREAMS`]). A peer that sends one request a stream has this many requests in flight on a session. A stream
+    /// that has carried data and is not finished is charged its whole window to the pool, and a new stream waits
+    /// while those charges pass the pool: with the default window and pool that is about twelve such streams at once,
+    /// so a session that keeps many streams open and busy wants a smaller `stream_window` or more `pool_chunks`.
     pub streams: u16,
     /// The most streams the peer may open that the application has not accepted, per session.
     pub accept_streams: usize,
@@ -90,8 +96,8 @@ impl Default for Limits {
             // product surface only: the cap stays `min(send_window, max(192 KiB, 1.5 x cwnd))`, and below a congestion
             // window of 873,813 bytes it is the same. Upgrade path: none needed; a host can set the reference's value.
             send_window: 16 * 1024 * 1024,
-            streams: 64,
-            accept_streams: 64,
+            streams: 100,
+            accept_streams: 100,
             accept_sessions: 64,
             topic_message: 65_536,
             topic_log: 4 << 20,
@@ -110,7 +116,7 @@ impl Limits {
             && (8..=65_535).contains(&self.pool_chunks)
             && (16 * 1024..=16 * 1024 * 1024).contains(&self.stream_window)
             && (16 * 1024..=1 << 30).contains(&self.send_window)
-            && (1..=64).contains(&self.streams)
+            && (1..=STREAMS / 2).contains(&usize::from(self.streams))
             && self.accept_streams >= 1
             && self.accept_sessions >= 1
             && (1..=16 * 1024 * 1024).contains(&self.topic_message)
