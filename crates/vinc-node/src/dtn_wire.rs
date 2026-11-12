@@ -63,23 +63,6 @@ impl Refusal {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use vinc_dtn::DtnError;
-
-    use super::Refusal;
-
-    #[test]
-    fn a_full_range_set_is_fragmented_not_a_bad_proof() {
-        assert_eq!(Refusal::for_feed(DtnError::ReceptionFull), Refusal::Fragmented);
-        assert_eq!(Refusal::for_feed(DtnError::Expired), Refusal::Expired);
-        assert_eq!(Refusal::for_feed(DtnError::Tree(vinc_dag::tree::TreeError::Incomplete)), Refusal::BadProof);
-        // The three map to three distinct wire codes.
-        assert_eq!(Refusal::Fragmented as u8, 9);
-        assert_ne!(Refusal::Fragmented as u8, Refusal::BadProof as u8);
-    }
-}
-
 /// Start a frame of type `ty` in `out` (cleared first); [`finish`] writes its length.
 pub(crate) fn start(out: &mut Vec<u8>, ty: u8) {
     out.clear();
@@ -147,5 +130,24 @@ mod tests {
         let mut out = alloc::vec![DATA];
         out.extend_from_slice(&u32::try_from(BODY_MAX + 1).unwrap_or(u32::MAX).to_be_bytes());
         assert_eq!(next(&out), Err(()));
+    }
+
+    #[test]
+    fn a_full_range_set_is_fragmented_not_a_bad_proof() {
+        // An honest bundle that overflows the reception's range set is Fragmented, never BadProof: the holder must
+        // not read "too fragmented here" as "you sent bad data". Expired stays Expired; every other feed error is a
+        // bad proof.
+        assert_eq!(
+            Refusal::for_feed(vinc_dtn::DtnError::ReceptionFull),
+            Refusal::Fragmented
+        );
+        assert_eq!(Refusal::for_feed(vinc_dtn::DtnError::Expired), Refusal::Expired);
+        assert_eq!(
+            Refusal::for_feed(vinc_dtn::DtnError::Tree(vinc_dag::tree::TreeError::Incomplete)),
+            Refusal::BadProof
+        );
+        // Three distinct wire codes, and Fragmented is new (9), not an alias of BadProof (4).
+        assert_eq!(Refusal::Fragmented as u8, 9);
+        assert_ne!(Refusal::Fragmented as u8, Refusal::BadProof as u8);
     }
 }

@@ -896,6 +896,10 @@ name = "layers_dtn"
 path = "layers_dtn.rs"
 
 [[test]]
+name = "layers_dtn_fragment"
+path = "layers_dtn_fragment.rs"
+
+[[test]]
 name = "layers_noalloc"
 path = "layers_noalloc.rs"
 
