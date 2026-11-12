@@ -25,14 +25,14 @@ use core::cell::Cell;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use vinc_broadcast::{Config as BcConfig, Refused, StartError as BcStartError, Topics};
-use vinc_connect::client::{Connectivity, Io as CarrierIo};
+use vinc_connect::client::Connectivity;
 use vinc_connect::record::MAX_ADDRS;
 use vinc_connect::ticket::Ticket;
-use vinc_core::{Command, CommandError, IfaceEvent, IfaceId, Role, SessionId, Transmit, Value, is_relay_addr};
+use vinc_core::{Command, CommandError, Role, SessionId, Transmit, Value, is_relay_addr};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Provider};
 use vinc_membership::session::Carrier;
 use vinc_membership::{Config as MemConfig, Membership, NodeId, StartError as MemStartError, TableFull};
-use vinc_security::{Env, KeyRequest, KeyResponse, PrekeyInfo};
+use vinc_security::{Env, PrekeyInfo};
 
 use crate::apps::{Apps, DtnApp, NoApps, ServeSource};
 use crate::config::{Config, Nanos, Store};
@@ -69,6 +69,15 @@ impl core::fmt::Display for StartError {
 
 impl core::error::Error for StartError {}
 
+/// What [`Node::poll_timeout`] last answered, while no call could have moved it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Due {
+    /// A call since the last answer could have moved the deadline.
+    Stale,
+    /// The deadline, or none.
+    Known(Option<Nanos>),
+}
+
 /// The node. See the module docs for the driving contract.
 pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize, A: Apps<P> = NoApps> {
     pub(crate) io: Io<E, St>,
@@ -86,7 +95,7 @@ pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEE
     pub(crate) local_addrs: [Option<SocketAddr>; MAX_ADDRS],
     pub(crate) next_duty: Nanos,
     /// What [`Node::poll_timeout`] answers, until a call that could move it: every such call clears this.
-    pub(crate) deadline: Cell<Option<Option<Nanos>>>,
+    pub(crate) deadline: Cell<Due>,
     pub(crate) leaving: bool,
 }
 
@@ -260,7 +269,7 @@ where
             local: cfg.local,
             local_addrs,
             next_duty: now,
-            deadline: Cell::new(None),
+            deadline: Cell::new(Due::Stale),
             leaving: false,
         };
         node.refresh_alive(now);
@@ -290,7 +299,7 @@ where
     /// Take the time of a call.
     pub(crate) fn begin(&mut self, now: Nanos) {
         self.io.now = self.io.now.max(now);
-        self.deadline.set(None);
+        self.deadline.set(Due::Stale);
     }
 
     /// Refresh what the layers read of the node: which hubs are alive, the ticket the address hash covers.
@@ -479,7 +488,7 @@ where
     /// When the host should next call [`Node::handle_timeout`].
     pub fn poll_timeout(&self) -> Option<Nanos> {
         // A host asks many times between two calls that could move the answer: it is worked out once for them all.
-        if let Some(d) = self.deadline.get() {
+        if let Due::Known(d) = self.deadline.get() {
             debug_assert_eq!(
                 d,
                 self.next_deadline(),
@@ -488,7 +497,7 @@ where
             return d;
         }
         let d = self.next_deadline();
-        self.deadline.set(Some(d));
+        self.deadline.set(Due::Known(d));
         d
     }
 
@@ -614,7 +623,7 @@ where
 
     /// The host's stores, for the host to fill: add a value to serve, a set item, a bundle's key.
     pub fn apps_mut(&mut self) -> &mut A {
-        self.deadline.set(None);
+        self.deadline.set(Due::Stale);
         &mut self.apps
     }
 
@@ -631,7 +640,7 @@ where
     /// The endpoint, for the calls the node does not wrap (reading a datagram, an interface event, a new prekey).
     /// Commands go through [`Node::command`], so the node sees their effects.
     pub fn endpoint_mut(&mut self) -> &mut E {
-        self.deadline.set(None);
+        self.deadline.set(Due::Stale);
         &mut self.io.ep
     }
 
@@ -677,7 +686,7 @@ where
 
     /// Take `member` as a subscriber of `topic` to send to straight when no hub is reachable.
     pub fn hint_subscriber(&mut self, topic: &[u8], member: &NodeId) -> bool {
-        self.deadline.set(None);
+        self.deadline.set(Due::Stale);
         self.topics.hint(topic, member)
     }
 
@@ -706,7 +715,7 @@ where
     /// The access-control layer lifted the revocation of `peer`; whether it was revoked. Its place in every
     /// revocation table is free again.
     pub fn unrevoke(&mut self, peer: &NodeId) -> bool {
-        self.deadline.set(None);
+        self.deadline.set(Due::Stale);
         let a = self.mem.unrevoke(peer);
         let b = self.topics.unrevoke(peer);
         let c = self.io.revoked.remove(peer);
@@ -720,7 +729,7 @@ where
     /// The access-control layer's answer for `peer` changed: forget the endpoint's cached answer, so the peer's next
     /// session is checked afresh and a session already up is checked again at its next event.
     pub fn forget_access(&mut self, peer: &NodeId) {
-        self.deadline.set(None);
+        self.deadline.set(Due::Stale);
         let _ = self.io.cmd(Command::AcpForget {
             peer: self.io.full_id(peer),
         });
@@ -804,164 +813,6 @@ where
         });
         let (m, mut h) = self.mem_host();
         m.carrier_gone(&mut h, now, member);
-        self.settle(now);
-    }
-
-    // ---------------------------------------------------------------- the connectivity client
-
-    /// Add an interface to the endpoint; `None` when its table is full. A host calls it for an interface that appears
-    /// after the node started, and tells the node about the new address with [`Node::set_local`].
-    pub fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
-        self.deadline.set(None);
-        self.io.ep.add_iface(local)
-    }
-
-    /// An interface of the endpoint came up, went down or changed its address.
-    pub fn iface_event(&mut self, now: Nanos, id: IfaceId, ev: IfaceEvent) {
-        self.begin(now);
-        self.io.ep.iface_event(now, id, ev);
-        self.settle(now);
-    }
-
-    /// Use `prekey` in the carrier handshakes that start from now on (the endpoint's own prekey rotates).
-    pub fn set_prekey(&mut self, prekey: PrekeyInfo) {
-        self.deadline.set(None);
-        self.conn.set_prekey(prekey);
-    }
-
-    /// Turn the beacons of local discovery on or off (they are on by default).
-    pub fn set_local_discovery(&mut self, on: bool) {
-        self.deadline.set(None);
-        self.conn.set_local_discovery(on);
-    }
-
-    /// Set the node's own addresses.
-    pub fn set_local(&mut self, addrs: &[SocketAddr]) {
-        self.deadline.set(None);
-        self.local_addrs = [None; MAX_ADDRS];
-        for (d, a) in self.local_addrs.iter_mut().zip(addrs) {
-            *d = Some(*a);
-        }
-        self.conn.set_local(addrs);
-    }
-
-    /// The next request for a carrier stream.
-    pub fn poll_io(&mut self) -> Option<CarrierIo> {
-        self.deadline.set(None);
-        self.conn.poll_io()
-    }
-
-    /// The carrier stream of `relay` is open.
-    pub fn stream_opened(&mut self, now: Nanos, relay: usize) {
-        self.begin(now);
-        let mut env = Env {
-            provider: &self.prov,
-            now,
-            drbg: &mut self.drbg,
-        };
-        self.conn.stream_opened(now, &mut env, relay);
-        self.settle(now);
-    }
-
-    /// The carrier stream of `relay` closed.
-    pub fn stream_closed(&mut self, now: Nanos, relay: usize) {
-        self.begin(now);
-        self.conn.stream_closed(now, relay);
-        self.settle(now);
-    }
-
-    /// Bytes arrived on the carrier stream of `relay`; returns how many were used.
-    pub fn stream_data(&mut self, now: Nanos, relay: usize, bytes: &[u8]) -> usize {
-        self.begin(now);
-        let mut env = Env {
-            provider: &self.prov,
-            now,
-            drbg: &mut self.drbg,
-        };
-        let n = self.conn.stream_data(now, &mut env, relay, bytes);
-        self.settle(now);
-        n
-    }
-
-    /// The next bytes to write on the carrier stream of `relay`.
-    pub fn poll_stream(&mut self, relay: usize, buf: &mut [u8]) -> usize {
-        self.deadline.set(None);
-        self.conn.poll_stream(relay, buf)
-    }
-
-    /// The next UDP datagram of the connectivity layer (a relay probe, a lookup, a beacon).
-    pub fn poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
-        self.deadline.set(None);
-        self.conn.poll_udp(buf)
-    }
-
-    /// A key operation the carrier handshake of `relay` waits for.
-    pub fn key_request(&self, relay: usize) -> Option<KeyRequest<'_>> {
-        self.conn.key_request(relay)
-    }
-
-    /// The answer to [`Node::key_request`].
-    pub fn key_response(&mut self, now: Nanos, relay: usize, resp: KeyResponse<'_>) {
-        self.begin(now);
-        let mut env = Env {
-            provider: &self.prov,
-            now,
-            drbg: &mut self.drbg,
-        };
-        self.conn.key_response(now, &mut env, relay, resp);
-        self.settle(now);
-    }
-
-    /// A signature the connectivity layer waits for (its record, a sleep notice or a beacon).
-    pub fn sign_request(&self) -> Option<KeyRequest<'_>> {
-        self.conn.sign_request()
-    }
-
-    /// The answer to [`Node::sign_request`].
-    pub fn sign_response(&mut self, now: Nanos, resp: KeyResponse<'_>) {
-        self.begin(now);
-        self.conn.sign_response(now, resp);
-        self.settle(now);
-    }
-
-    /// Put `hints` (at most 64 bytes) in this node's record and publish it again. False if they are too long.
-    pub fn set_hints(&mut self, now: Nanos, hints: &[u8]) -> bool {
-        self.begin(now);
-        let ok = self.conn.set_hints(hints);
-        self.settle(now);
-        ok
-    }
-
-    /// Ask the relays for `peer`'s record.
-    pub fn lookup(&mut self, now: Nanos, peer: &vinc_crypto::NodeId) {
-        self.begin(now);
-        self.conn.lookup(now, peer);
-        self.settle(now);
-    }
-
-    /// A beacon of local discovery arrived.
-    pub fn handle_beacon(&mut self, now: Nanos, bytes: &[u8]) -> Option<vinc_crypto::NodeId> {
-        self.begin(now);
-        let r = self.conn.handle_beacon(now, bytes);
-        self.settle(now);
-        r
-    }
-
-    /// The node is suspended (the app froze or the device sleeps).
-    pub fn suspend(&mut self, now: Nanos, wall_ms: u64) {
-        self.begin(now);
-        self.io.set_wall(wall_ms);
-        self.conn.suspend_all(now, &mut self.io.ep, wall_ms);
-        self.settle(now);
-    }
-
-    /// The node runs again; `moved` says the address changed meanwhile.
-    pub fn resume(&mut self, now: Nanos, moved: bool) {
-        self.begin(now);
-        self.conn.resume_all(now, &mut self.io.ep, moved);
-        if moved {
-            self.mem.address_changed(now);
-        }
         self.settle(now);
     }
 }

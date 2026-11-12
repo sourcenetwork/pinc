@@ -55,6 +55,7 @@ extern crate alloc;
 mod apps;
 pub mod bound;
 mod config;
+mod connect;
 mod dtn;
 mod dtn_rx;
 mod dtn_save;
