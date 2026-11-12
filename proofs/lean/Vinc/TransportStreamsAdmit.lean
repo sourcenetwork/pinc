@@ -30,6 +30,18 @@ theorem admits_inside_credit (p : P) (T : Tab) (c next count : Nat) (hcap : T.rl
   unfold freeSlots at hfree
   simpa [admits, hcap, hin] using hfree
 
+/-- A raise of the stream credit keeps to the configured limit: the streams the peer may still open plus those live
+stay at most `maxrem` (`CreditInLimit` in `Streams.tla`). -/
+theorem refreshAdmit_within_limit (p : P) (T : Tab) (h : T.adv ≤ admitted T + (p.maxrem - T.rl)) :
+    (refreshAdmit p T).adv ≤ admitted T + (p.maxrem - T.rl) := by
+  have h1 : admitRoom p T ≤ p.capLive - T.rl := Nat.le_trans (Nat.min_le_left _ _) (Nat.min_le_left _ _)
+  have h2 : p.capLive ≤ p.maxrem := Nat.min_le_left _ _
+  unfold refreshAdmit
+  split
+  · show admitted T + admitRoom p T ≤ _
+    omega
+  · exact h
+
 /-- Opening one peer stream: the ledger grows by at most one first charge, no chunk is taken, the counters the ledger
 reads stay, and every free slot stays new. -/
 theorem allocSlot_peer (p : P) (T : Tab) (id : Nat) (hch : 0 < p.ch) (hpeer : isLocal id = false)

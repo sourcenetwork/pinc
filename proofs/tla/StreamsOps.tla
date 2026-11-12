@@ -95,7 +95,11 @@ FirstW == Min(WinC, FIRSTK * CH)
 \* carried no data, the whole window from its first byte on
 Charged(r, l) == IF r.hi = 0 THEN Min(l, FIRSTK * CH) ELSE l
 AdmitFit(f) == Max(Min(Max(f - 3, 0), f \div 2), Min(f, 1))   \* half of f windows, three left free, one at least when one fits
+\* MAXREM is the limit the connection gives the peer: Streams::limit_remote, called by Connection::base with the
+\* credit record's max_streams (Limits::streams at the facade), lowers the table's max_remote to it
 CapLive == Min(MAXREM, Max(N \div 2, 1))     \* the live peer streams: at most half the slots
+\* the earlier cap, which never saw the configured limit (only the table's own default of 100), for Streams_cap_w.cfg
+CapIgnoringLimit == Max(N \div 2, 1)
 Adv0 == Min(CapLive, AdmitFit((B * CH) \div FirstW))
 
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
