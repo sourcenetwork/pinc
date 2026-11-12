@@ -150,8 +150,24 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, row: &mut Ro
             report: (!lives.is_empty()).then(|| merge_lives(&lives, &published)),
         });
     }
+    // What each node counted besides deliveries (a stack that counts nothing reports nothing).
+    let mut counters = Map::new();
+    for (i, n) in ctx.plan.nodes.iter().enumerate() {
+        let mut sum: BTreeMap<String, u64> = BTreeMap::new();
+        for v in set.reports(i).await {
+            for (k, x) in v.get("counters").and_then(Value::as_object).into_iter().flatten() {
+                *sum.entry(k.clone()).or_insert(0) += x.as_u64().unwrap_or(0);
+            }
+        }
+        if !sum.is_empty() {
+            counters.insert(n.name.clone(), serde_json::json!(sum));
+        }
+    }
     window.close(ctx, b, row).await?;
     row.node = pubsub_figures(&subs, &published);
+    if !counters.is_empty() {
+        row.node.insert("counters".into(), Value::Object(counters));
+    }
     if !notes.is_empty() {
         row.node.insert("faults_note".into(), Value::String(notes.join("; ")));
     }

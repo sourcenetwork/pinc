@@ -43,6 +43,10 @@ struct PubRun {
     interval_ns: u64,
     sent: u32,
     next: u64,
+    /// A message the node had no room to track, with the time in its header unchanged: it is offered again first.
+    held: Option<Vec<u8>>,
+    /// The run waits for one of the node's publishes to end before it offers `held` again.
+    blocked: bool,
 }
 
 struct Wait {
@@ -213,6 +217,8 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     interval_ns: interval_us * 1000,
                     sent: 0,
                     next: now + lead,
+                    held: None,
+                    blocked: false,
                 });
             }
             Cmd::Provide { size, seed } => {
@@ -324,6 +330,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     id,
                     json!({
                         "pubsub": self.stats.report(),
+                        "counters": self.core.counters,
                         "members": self.core.node.membership().member_count(),
                         "dtn": dtn,
                     }),
@@ -389,6 +396,12 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             self.dtn.event(wall_ns() / 1_000_000, &ev);
             match ev {
                 NodeEvent::Message { body, .. } => self.stats.record(&body, wall_ns()),
+                // The node tracks one publish fewer: a run that waited for room offers its message again.
+                NodeEvent::PublishAcked { .. } | NodeEvent::PublishGaveUp { .. } => {
+                    for run in &mut self.pubs {
+                        run.blocked = false;
+                    }
+                }
                 NodeEvent::ValueComplete { fetch } => {
                     if let Some(w) = self.finish(Kind::Fetch, fetch) {
                         out.push(Reply::ok(
@@ -446,15 +459,26 @@ impl<const K: usize, const D: usize> Agent<K, D> {
         let mut finished = Vec::new();
         for (i, run) in self.pubs.iter_mut().enumerate() {
             let mut burst = 0;
-            while run.sent < run.count && run.next <= now && burst < BURST {
-                let header = crate::node::data::Header {
-                    origin: self.me,
-                    seq: run.sent,
-                    sent_ns: wall_ns(),
-                };
-                let body = header.body(run.size);
-                if self.core.command(now, NCmd::Publish(run.topic.clone(), body)).is_ok() {
-                    self.stats.published();
+            while run.sent < run.count && run.next <= now && burst < BURST && !run.blocked {
+                let body = run.held.take().unwrap_or_else(|| {
+                    crate::node::data::Header {
+                        origin: self.me,
+                        seq: run.sent,
+                        sent_ns: wall_ns(),
+                    }
+                    .body(run.size)
+                });
+                match self.core.publish(now, &run.topic, &body) {
+                    Ok(()) => self.stats.published(),
+                    // The publisher waits as a caller of an awaited publish does: the same message, with the time
+                    // it was first offered, goes again when the node has room to track it.
+                    Err(vinc_broadcast::Refused::Backlog) => {
+                        *self.core.counters.entry("publish_waited").or_insert(0) += 1;
+                        run.held = Some(body);
+                        run.blocked = true;
+                        break;
+                    }
+                    Err(_) => *self.core.counters.entry("publish_refused").or_insert(0) += 1,
                 }
                 run.sent += 1;
                 run.next += run.interval_ns;
@@ -488,7 +512,11 @@ impl<const K: usize, const D: usize> Agent<K, D> {
     }
 
     fn next_deadline(&self) -> Option<u64> {
-        let pubs = self.pubs.iter().filter(|p| p.sent < p.count).map(|p| p.next);
+        let pubs = self
+            .pubs
+            .iter()
+            .filter(|p| p.sent < p.count && !p.blocked)
+            .map(|p| p.next);
         let waits = self.waits.iter().map(|w| w.deadline);
         // A join is also re-checked soon: hub liveness has no event of its own.
         let joins = self

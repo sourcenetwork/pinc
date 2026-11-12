@@ -11,7 +11,7 @@
 //! bounded by the node's own limits; a failure of a carrier stream is reported to the node as a close, which it repairs
 //! by its own rules.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 
 use vinc_connect::carrier::session::{self, ProtectedCarrier};
@@ -137,8 +137,6 @@ pub enum StreamEv {
 pub enum NCmd {
     /// Subscribe to a topic.
     Subscribe(Vec<u8>),
-    /// Publish a message.
-    Publish(Vec<u8>, Vec<u8>),
     /// Fetch a value.
     Fetch {
         /// Its root.
@@ -217,6 +215,11 @@ pub struct Core<const K: usize, const D: usize> {
     /// The delay-tolerant layer's trace records with the wall clock (milliseconds) they were read at, oldest first;
     /// empty unless delay-tolerant delivery is on.
     pub dtn_trace: VecDeque<(u64, NodeTrace)>,
+    /// What the node did besides delivering, counted by name: sessions that came up and ended, publishes
+    /// acknowledged, given up, made to wait or refused, repairs, and, while the node's trace is on, the retries,
+    /// rejected messages and closed backlogs its trace records. Reported with the node's counts, so a loss in a result
+    /// can be traced to what happened on which node.
+    pub counters: BTreeMap<&'static str, u64>,
     /// What the node restored from a kept bundle store when it started.
     pub restored: DtnRestored,
     pub(super) start: std::time::Instant,
@@ -362,6 +365,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
             ops: VecDeque::new(),
             events: VecDeque::new(),
             dtn_trace: VecDeque::new(),
+            counters: BTreeMap::new(),
             restored,
             start,
             dirty: false,
@@ -406,10 +410,29 @@ impl<const K: usize, const D: usize> Core<K, D> {
         }
     }
 
-    /// Keep the delay-tolerant layer's trace records (and the count of records lost), drop the others.
+    /// Keep the delay-tolerant layer's trace records (and the count of records lost), count the records that say
+    /// why a message may not have arrived, drop the others. The trace is on only with the delay-tolerant layer.
     fn trace_step(&mut self) {
+        use vinc_broadcast::Trace as Bc;
+
         let wall = wall_ms();
         while let Some(item) = self.node.poll_trace() {
+            let counted = match item.body {
+                Body::Node(NodeTrace::BacklogClosed { .. }) => Some(("backlog_closed", 1)),
+                Body::Node(NodeTrace::DuplicateClosed { .. }) => Some(("duplicate_closed", 1)),
+                Body::Node(NodeTrace::StreamReset { .. }) => Some(("stream_reset", 1)),
+                Body::Node(NodeTrace::Backoff { .. }) => Some(("dial_backoff", 1)),
+                Body::Node(NodeTrace::Lost { count }) => Some(("trace_lost", count)),
+                Body::Broadcast(Bc::Lost { count }) => Some(("trace_lost", u64::from(count))),
+                Body::Broadcast(Bc::PubRetry { .. }) => Some(("publish_retry", 1)),
+                Body::Broadcast(Bc::Rejected { .. }) => Some(("message_rejected", 1)),
+                Body::Broadcast(Bc::SubSent { .. }) => Some(("subscribe_sent", 1)),
+                Body::Broadcast(Bc::GetSent { .. }) => Some(("repair_asked", 1)),
+                _ => None,
+            };
+            if let Some((name, n)) = counted {
+                *self.counters.entry(name).or_insert(0) += n;
+            }
             if let Body::Node(
                 t @ (NodeTrace::DtnCreated { .. }
                 | NodeTrace::DtnOffer { .. }
@@ -448,6 +471,18 @@ impl<const K: usize, const D: usize> Core<K, D> {
         let mut did = false;
         while let Some(ev) = self.node.poll_event() {
             did = true;
+            let counted = match &ev {
+                NodeEvent::PublishAcked { .. } => Some("publish_acked"),
+                NodeEvent::PublishGaveUp { .. } => Some("publish_gave_up"),
+                NodeEvent::GapRepaired { .. } => Some("gap_repaired"),
+                NodeEvent::Lost { .. } => Some("events_lost"),
+                NodeEvent::Endpoint(Event::Closed { .. }) => Some("session_closed"),
+                NodeEvent::Endpoint(Event::Connected { .. } | Event::Incoming { .. }) => Some("session_up"),
+                _ => None,
+            };
+            if let Some(name) = counted {
+                *self.counters.entry(name).or_insert(0) += 1;
+            }
             match ev {
                 NodeEvent::Endpoint(e) => self.duty(now, e),
                 NodeEvent::BroadcastAcpCheck { id, .. } => self.node.broadcast_acp_answer(now, id, true),
@@ -699,6 +734,18 @@ impl<const K: usize, const D: usize> Core<K, D> {
         self.pump(now);
     }
 
+    /// Publish `body` to `topic`.
+    ///
+    /// # Errors
+    /// What the node refused. [`vinc_broadcast::Refused::Backlog`] means as many publishes as the node tracks are
+    /// waiting for a hub: the message is to be offered again when one of them is acknowledged or given up.
+    pub fn publish(&mut self, now: u64, topic: &[u8], body: &[u8]) -> Result<(), vinc_broadcast::Refused> {
+        self.node.set_wall_ms(now, wall_ms());
+        let r = self.node.publish(now, topic, body).map(|_| ());
+        self.pump(now);
+        r
+    }
+
     /// Apply a command of the application; the id of the fetch or round it started, else 0.
     ///
     /// # Errors
@@ -711,11 +758,6 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 self.node
                     .subscribe(now, &t)
                     .map_err(|e| format!("the topic was refused: {e:?}"))?;
-            }
-            NCmd::Publish(t, b) => {
-                self.node
-                    .publish(now, &t, &b)
-                    .map_err(|e| format!("the message was refused: {e:?}"))?;
             }
             NCmd::Fetch {
                 root,
