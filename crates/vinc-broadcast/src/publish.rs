@@ -6,6 +6,10 @@
 //! it. A hub acknowledges with PACK; without one the publisher retries on the next hub every [`PUB_RETRY`] and gives
 //! up after [`PUB_GIVEUP`].
 //!
+//! A burst faster than the path to the hub fills the hub's stream. A publish the stream has no room for is not sent
+//! and not dropped: it stays in the pending table marked unsent, the publishes after it wait behind it so the hub
+//! gets them in order, and they go out when the host says the stream has room again ([`Topics::peer_writable`]).
+//!
 //! The fallback covers the case where publisher and subscriber are both cut off from every hub but can reach each
 //! other: while no hub is reachable the publisher sends the message over a member session (`MEMBER_PUSH`) to the
 //! subscribers of the topic that the membership view still lists, at most [`FALLBACK_BATCH`] per step, one step at
@@ -13,7 +17,8 @@
 //!
 //! Invariants: a publish is signed over the topic, id and body hash before any byte leaves; at most
 //! [`PENDING_MAX`] publishes wait, and a publish past that is refused, so every accepted publish ends acknowledged or
-//! given up; the fallback sends to no node outside the topic's subscriber set.
+//! given up; an unsent publish is sent before any publish accepted after it; the fallback sends to no node outside
+//! the topic's subscriber set.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -61,6 +66,17 @@ fn fallback_step<H: Host>(
         }
     }
     sent
+}
+
+/// What became of a publish handed to its first hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Handed {
+    /// The hub's session took the frame.
+    Taken,
+    /// The session did not take it and will not later: the retry covers it.
+    Refused,
+    /// The hub's stream has no room now; the host says when it has.
+    NoRoom,
 }
 
 impl Topics {
@@ -140,18 +156,46 @@ impl Topics {
             self.give_buf(data);
             return Ok(mid);
         }
-        let mode = self.send_publish(h, topic, &data, tlen, hlen);
+        // Behind publishes that wait for room in the hub's stream this one waits too, so the hub gets them in order.
+        let (mode, handed) = if self.unsent > 0 {
+            (self.publish_mode(h), Handed::NoRoom)
+        } else {
+            self.send_publish(h, topic, &data, tlen, hlen)
+        };
         self.trace(|| Trace::Published {
             topic: topic_tag(topic),
             mid,
             mode,
         });
+        let served = self.first_fallback(h, topic, mid, &data, tlen, hlen);
+        self.track(Pending {
+            mid,
+            data,
+            tlen,
+            hlen,
+            t0: now,
+            next_try: now.saturating_add(PUB_RETRY),
+            idx: 0,
+            served,
+            unsent: handed == Handed::NoRoom,
+        });
+        Ok(mid)
+    }
+
+    /// While no hub is reachable, the first fallback step of a fresh publish; the subscribers it was sent to.
+    fn first_fallback<H: Host>(
+        &mut self,
+        h: &mut H,
+        topic: &[u8],
+        mid: [u8; 8],
+        data: &[u8],
+        tlen: usize,
+        hlen: usize,
+    ) -> Vec<NodeId> {
         let mut served = Vec::new();
         if !self.any_hub_up(h) {
-            let (head, body) = data
-                .get(tlen..)
-                .unwrap_or_default()
-                .split_at(hlen.min(data.len() - tlen));
+            let rest = data.get(tlen..).unwrap_or_default();
+            let (head, body) = rest.split_at(hlen.min(rest.len()));
             fallback_step(
                 h,
                 &mut self.scratch,
@@ -165,49 +209,98 @@ impl Topics {
             );
             self.trace_fallback(mid, &served);
         }
-        if self.pending.len() < PENDING_MAX && !self.hubs.is_empty() {
-            self.pending.push(Pending {
-                mid,
-                data,
-                tlen,
-                hlen,
-                t0: now,
-                next_try: now.saturating_add(PUB_RETRY),
-                idx: 0,
-                served,
-            });
-        } else {
-            self.give_buf(data);
-        }
-        Ok(mid)
+        served
     }
 
-    /// Hand a fresh publish to the hubs: FANP to the primary and FAN to the others when all are up, else PUB.
-    fn send_publish<H: Host>(&mut self, h: &mut H, topic: &[u8], data: &[u8], tlen: usize, hlen: usize) -> PublishMode {
-        let rest = data.get(tlen..).unwrap_or_default();
-        let (head, body) = rest.split_at(hlen.min(rest.len()));
-        let Some(first) = self
-            .primary
+    /// Keep a publish until a hub acknowledges it. A node with no hub list tracks none.
+    fn track(&mut self, p: Pending) {
+        if self.pending.len() < PENDING_MAX && !self.hubs.is_empty() {
+            self.unsent += usize::from(p.unsent);
+            self.pending.push(p);
+        } else {
+            self.give_buf(p.data);
+        }
+    }
+
+    /// The hub a fresh publish goes to first: the primary, or the first of the list.
+    fn first_hub(&self) -> Option<NodeId> {
+        self.primary
             .filter(|p| self.hubs.contains(p))
             .or_else(|| self.hubs.first().copied())
-        else {
-            return PublishMode::Single;
-        };
-        if self.hubs.iter().all(|x| h.hub_up(x)) {
-            if wire::build(&mut self.scratch, ty::FANP, topic, &[head, body]).is_ok() {
-                h.send(&first, Lane::Main, &self.scratch);
-            }
-            if wire::build(&mut self.scratch, ty::FAN, topic, &[head, body]).is_ok() {
-                for x in self.hubs.iter().filter(|x| **x != first) {
-                    h.send(x, Lane::Fan, &self.scratch);
-                }
-            }
+    }
+
+    /// How a fresh publish is handed over now: to every hub at once when all are up, else to one.
+    fn publish_mode<H: Host>(&self, h: &H) -> PublishMode {
+        if self.first_hub().is_some() && self.hubs.iter().all(|x| h.hub_up(x)) {
             PublishMode::Fan
         } else {
-            if wire::build(&mut self.scratch, ty::PUB, topic, &[head, body]).is_ok() {
-                h.send(&first, Lane::Main, &self.scratch);
-            }
             PublishMode::Single
+        }
+    }
+
+    /// Hand a fresh publish to the hubs: FANP to the primary and FAN to the others when all are up, else PUB. Returns
+    /// the mode and what became of the frame for the first hub. When its stream has no room nothing is sent to any
+    /// hub: the publish waits and goes to all of them later.
+    fn send_publish<H: Host>(
+        &mut self,
+        h: &mut H,
+        topic: &[u8],
+        data: &[u8],
+        tlen: usize,
+        hlen: usize,
+    ) -> (PublishMode, Handed) {
+        let rest = data.get(tlen..).unwrap_or_default();
+        let (head, body) = rest.split_at(hlen.min(rest.len()));
+        let mode = self.publish_mode(h);
+        let Some(first) = self.first_hub() else {
+            return (mode, Handed::Refused);
+        };
+        let kind = if mode == PublishMode::Fan { ty::FANP } else { ty::PUB };
+        let handed = if wire::build(&mut self.scratch, kind, topic, &[head, body]).is_err() {
+            Handed::Refused
+        } else if h.send(&first, Lane::Main, &self.scratch) {
+            Handed::Taken
+        } else if h.backlogged(&first, self.scratch.len()) {
+            Handed::NoRoom
+        } else {
+            Handed::Refused
+        };
+        if mode == PublishMode::Fan
+            && handed != Handed::NoRoom
+            && wire::build(&mut self.scratch, ty::FAN, topic, &[head, body]).is_ok()
+        {
+            for x in self.hubs.iter().filter(|x| **x != first) {
+                h.send(x, Lane::Fan, &self.scratch);
+            }
+        }
+        (mode, handed)
+    }
+
+    /// The stream of hub `peer` has room again: hand over the publishes that waited for it, oldest first, until it is
+    /// full again. Each starts its retry time when it is sent.
+    pub(crate) fn send_unsent<H: Host>(&mut self, h: &mut H, now: Nanos, peer: &NodeId) {
+        if self.unsent == 0 || !self.hubs.contains(peer) {
+            return;
+        }
+        let mut i = 0;
+        while self.unsent > 0 {
+            let Some(p) = self.pending.get_mut(i) else { break };
+            if !p.unsent {
+                i += 1;
+                continue;
+            }
+            let (data, tlen, hlen) = (core::mem::take(&mut p.data), p.tlen, p.hlen);
+            let (_, handed) = self.send_publish(h, data.get(..tlen).unwrap_or_default(), &data, tlen, hlen);
+            let Some(p) = self.pending.get_mut(i) else { break };
+            p.data = data;
+            // Still no room, or the session is gone: the retry finds it another hub.
+            if handed != Handed::Taken {
+                break;
+            }
+            p.unsent = false;
+            p.next_try = now.saturating_add(PUB_RETRY);
+            self.unsent -= 1;
+            i += 1;
         }
     }
 
@@ -224,7 +317,7 @@ impl Topics {
         let mut i = 0;
         while let Some(p) = self.pending.get(i) {
             if now.saturating_sub(p.t0) > PUB_GIVEUP || self.hubs.is_empty() {
-                let p = self.pending.remove(i);
+                let p = self.take_pending(i);
                 let mid = p.mid;
                 self.give_buf(p.data);
                 h.event(Event::PublishGaveUp { mid });
@@ -243,7 +336,11 @@ impl Topics {
                 if let Some(hub) = hub
                     && wire::build(&mut self.scratch, ty::PUB, topic, &[head, body]).is_ok()
                 {
-                    h.send(&hub, Lane::Main, &self.scratch);
+                    // A publish that never left for want of room leaves here if this hub's stream takes it.
+                    if h.send(&hub, Lane::Main, &self.scratch) && p.unsent {
+                        p.unsent = false;
+                        self.unsent -= 1;
+                    }
                     let mid = p.mid;
                     self.tq.push(|| Trace::PubRetry { hub, mid });
                 }

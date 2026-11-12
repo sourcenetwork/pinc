@@ -200,6 +200,9 @@ pub(crate) struct Pending {
     pub(crate) idx: usize,
     /// Subscribers the fallback already sent it to.
     pub(crate) served: Vec<NodeId>,
+    /// The hub's stream had no room for it, so nothing was sent yet: it goes out when the stream has room again
+    /// ([`Topics::peer_writable`]), or at its next retry.
+    pub(crate) unsent: bool,
 }
 
 /// A message set aside until a decision arrives: `topic_len | topic | body`.
@@ -232,6 +235,8 @@ pub struct Topics {
     pub(crate) primary: Option<NodeId>,
     pub(crate) topics: BTreeMap<Vec<u8>, Topic>,
     pub(crate) pending: Vec<Pending>,
+    /// How many of `pending` are [`Pending::unsent`]. While it is not zero a new publish waits behind them.
+    pub(crate) unsent: usize,
     pub(crate) acp: BTreeMap<NodeId, (bool, Nanos)>,
     pub(crate) checks: Vec<(u32, NodeId)>,
     pub(crate) next_check: u32,
@@ -321,6 +326,7 @@ impl Topics {
             primary: cfg.is_hub.then_some(cfg.me),
             topics: BTreeMap::new(),
             pending: Vec::new(),
+            unsent: 0,
             acp: BTreeMap::new(),
             checks: Vec::new(),
             next_check: 1,
@@ -380,6 +386,18 @@ impl Topics {
     /// How many publishes still wait for an acknowledgement.
     pub fn pending_len(&self) -> usize {
         self.pending.len()
+    }
+
+    /// How many of them wait for room in a hub's stream and were not sent yet.
+    pub const fn unsent_len(&self) -> usize {
+        self.unsent
+    }
+
+    /// Take the pending publish at `i` out of the table.
+    pub(crate) fn take_pending(&mut self, i: usize) -> Pending {
+        let p = self.pending.remove(i);
+        self.unsent -= usize::from(p.unsent);
+        p
     }
 
     /// Whether a hub holds subscriptions for `member` that are live (`Some(true)`), held (`Some(false)`) or absent.

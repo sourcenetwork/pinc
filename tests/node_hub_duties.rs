@@ -204,8 +204,8 @@ fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_recon
         let (hub, _) = w.hubs[0];
         let m = w.members.clone();
         // The member is cut off from the hub, so nothing it writes drains. It then fills the backlog of its hub
-        // stream with big bodies, then smaller ones, then the smallest frames the node writes, until the next
-        // frame of any kind is refused.
+        // stream with big bodies (the ones the backlog has no room for wait in the publisher, unsent), then with the
+        // subscriptions to topics with long names, until the next frame of any kind is refused.
         w.sim.partition(secs(41), &[&[hub, m[1]], &[m[0]]]);
         let publish = |w: &mut World, len: usize, n: usize| {
             for i in 0..n {
@@ -220,11 +220,10 @@ fn a_membership_frame_refused_by_a_full_backlog_closes_the_session_and_the_recon
             }
         };
         publish(&mut w, max_body, 12);
-        publish(&mut w, 4096, 100);
-        publish(&mut w, 64, 100);
-        for _ in 0..60 {
-            w.sim.command(secs(43), m[0], NCmd::Subscribe(b"n".to_vec()));
-            w.sim.command(secs(43), m[0], NCmd::Unsubscribe(b"n".to_vec()));
+        // The room the last body that fitted left is under one body: 600 pairs of these frames are more than that.
+        for _ in 0..600 {
+            w.sim.command(secs(43), m[0], NCmd::Subscribe(vec![b'n'; 250]));
+            w.sim.command(secs(43), m[0], NCmd::Unsubscribe(vec![b'n'; 250]));
         }
         w.sim.heal(secs(110));
         w.run(secs(330));

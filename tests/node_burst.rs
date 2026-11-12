@@ -66,7 +66,6 @@ fn count(w: &World, n: vinc_sim::NodeId, until: Time, f: impl Fn(&NodeEvent) -> 
 /// Every publish of a burst is refused to its caller or ends acknowledged or given up, even with more of them in
 /// flight than the publisher tracks: here the writer, not the hub, is behind the slow path.
 #[test]
-#[ignore = "waits for the rule that refuses a publish the pending table cannot track"]
 fn every_publish_of_a_burst_is_acked_or_given_up() {
     big(|| {
         let mut w = World::build_with(92, 1, 2, |w| {

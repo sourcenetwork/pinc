@@ -41,7 +41,7 @@ impl Topics {
         }
         // vertexia: a linear scan of at most PENDING_MAX entries; an index by id if the bound is raised.
         if let Some(pos) = self.pending.iter().position(|p| p.mid == mid) {
-            let p = self.pending.remove(pos);
+            let p = self.take_pending(pos);
             self.give_buf(p.data);
             h.event(Event::PublishAcked { mid });
             self.trace(|| Trace::PubAcked { mid });

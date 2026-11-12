@@ -15,7 +15,7 @@
 //! logged messages in log order, each at most once from here, and none it published itself; a place never points
 //! before the oldest logged message when it is used.
 
-use vinc_membership::NodeId;
+use vinc_membership::{Nanos, NodeId};
 
 use crate::host::{Host, Lane};
 use crate::node::Topics;
@@ -42,10 +42,12 @@ impl Topics {
         }
     }
 
-    /// The stream of `peer` has room again. A hub sends the subscriber the logged messages it is behind on, in order,
-    /// in every topic, until the stream is full again. The host calls this whenever a stream it reported as
-    /// [`backlogged`](Host::backlogged) took more bytes; calling it at any other time is harmless.
-    pub fn peer_writable<H: Host>(&mut self, h: &mut H, peer: &NodeId) {
+    /// The stream of `peer` has room again. A publisher hands its hub the publishes that waited for room, oldest first;
+    /// a hub sends the subscriber the logged messages it is behind on, in order, in every topic; each until the stream
+    /// is full again. The host calls this whenever a stream it reported as [`backlogged`](Host::backlogged) took more
+    /// bytes; calling it at any other time is harmless.
+    pub fn peer_writable<H: Host>(&mut self, h: &mut H, now: Nanos, peer: &NodeId) {
+        self.send_unsent(h, now, peer);
         if !self.lagging.contains(peer) {
             return;
         }

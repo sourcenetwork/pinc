@@ -1,5 +1,6 @@
 //! A hub and a subscriber whose stream has no room: the hub keeps the subscriber's place in the topic's log, drops
-//! nothing, and sends everything in order once the stream has room again.
+//! nothing, and sends everything in order once the stream has room again. And a publisher whose hub's stream has no
+//! room: it keeps its publishes, sends them in order when there is room, and refuses one it cannot track.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -34,8 +35,9 @@ fn set_full(net: &mut Net, i: usize, full: bool) {
         net.nodes[0].h.full.insert(id);
     } else {
         net.nodes[0].h.full.remove(&id);
+        let now = net.now;
         let n = &mut net.nodes[0];
-        n.t.peer_writable(&mut n.h, &id);
+        n.t.peer_writable(&mut n.h, now, &id);
         net.pump();
     }
 }
@@ -162,4 +164,86 @@ fn a_refusal_that_is_not_a_full_stream_keeps_no_place() {
     net.publish(1, T, b"while away");
     net.advance(SEC / 10);
     assert_eq!(net.nodes[0].t.behind_count(T), 0);
+}
+
+/// Say whether the hub's stream at publisher 1 is full; when it gets room, the host tells the publisher.
+fn set_hub_full(net: &mut Net, full: bool) {
+    let hub = net.id(0);
+    if full {
+        net.nodes[1].h.full.insert(hub);
+    } else {
+        net.nodes[1].h.full.remove(&hub);
+        let now = net.now;
+        let n = &mut net.nodes[1];
+        n.t.peer_writable(&mut n.h, now, &hub);
+        net.pump();
+    }
+}
+
+/// A burst faster than the path to the hub: the publisher sends nothing its hub's stream has no room for and drops
+/// nothing. When the stream has room, every publish goes out in the order it was made, and each is acknowledged.
+#[test]
+fn a_publisher_whose_hub_stream_is_full_sends_every_publish_in_order_once_it_has_room() {
+    let mut net = net();
+    let first = net.publish(1, T, &body(0));
+    net.advance(SEC / 10);
+    assert_eq!(net.delivered(2), vec![first]);
+    assert_eq!(net.nodes[1].t.pending_len(), 0, "the first publish was acknowledged");
+
+    set_hub_full(&mut net, true);
+    let mut sent = vec![first];
+    for k in 1..=300 {
+        sent.push(net.publish(1, T, &body(k)));
+        net.advance(SEC / 1000);
+    }
+    assert_eq!(net.delivered(2), vec![first], "nothing left for a full stream");
+    assert_eq!(net.nodes[1].t.unsent_len(), 300, "every publish is kept, none was sent");
+    // The retry time passes with the stream still full: the publishes are still kept.
+    net.advance(4 * SEC);
+    assert_eq!(net.nodes[1].t.unsent_len(), 300);
+    assert_eq!(net.delivered(2), vec![first]);
+
+    set_hub_full(&mut net, false);
+    assert_eq!(net.nodes[1].t.unsent_len(), 0);
+    assert_eq!(
+        net.delivered(2),
+        sent,
+        "every publish arrived once, in the order it was made"
+    );
+    assert_eq!(net.delivered(3), sent);
+    net.advance(SEC / 10);
+    assert_eq!(net.nodes[1].t.pending_len(), 0, "the hub acknowledged every one");
+}
+
+/// While older publishes wait for room, a new one waits behind them even if the stream would take it now, so the hub
+/// gets them in order; and past the publishes the node tracks, a publish is refused to its caller.
+#[test]
+fn a_publish_waits_behind_the_unsent_ones_and_one_past_the_tracked_ones_is_refused() {
+    let mut net = net();
+    set_hub_full(&mut net, true);
+    let a = net.publish(1, T, &body(0));
+    // The stream has room again, but the host has not said so yet: the next publish must not overtake.
+    let hub = net.id(0);
+    net.nodes[1].h.full.remove(&hub);
+    let b = net.publish(1, T, &body(1));
+    net.advance(SEC / 1000);
+    assert!(net.delivered(2).is_empty());
+    assert_eq!(net.nodes[1].t.unsent_len(), 2);
+    set_hub_full(&mut net, false);
+    assert_eq!(net.delivered(2), vec![a, b]);
+
+    set_hub_full(&mut net, true);
+    let now = net.now;
+    let n = &mut net.nodes[1];
+    let mut taken = 0;
+    let refused = loop {
+        match n.t.publish(&mut n.h, now, T, &body(taken)) {
+            Ok(_) => taken += 1,
+            Err(e) => break e,
+        }
+        assert!(taken <= 4096, "no publish was ever refused");
+    };
+    assert_eq!(refused, vinc_broadcast::Refused::Backlog);
+    assert_eq!(taken, n.t.pending_len(), "every publish that was taken is tracked");
+    assert_eq!(n.t.unsent_len(), taken);
 }

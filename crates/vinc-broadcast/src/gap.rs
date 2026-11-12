@@ -98,11 +98,13 @@ impl Topics {
     }
 
     /// Membership asks the node to subscribe again at `hub` (a snapshot, a new session or a restored entry).
-    pub fn resubscribe<H: Host>(&mut self, h: &mut H, _now: Nanos, hub: &NodeId) {
+    pub fn resubscribe<H: Host>(&mut self, h: &mut H, now: Nanos, hub: &NodeId) {
         if !self.is_hub && self.primary == Some(*hub) {
             let since = self.since_ms();
             self.resub_all(h, hub, since);
         }
+        // A new session has a new stream: the publishes that waited for room in the old one go out now.
+        self.send_unsent(h, now, hub);
     }
 
     /// The primary hub changed: leave the old one and subscribe at the new one with gap repair.
