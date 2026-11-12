@@ -291,6 +291,13 @@ ep_impl! {
                 self.settle(i, now);
                 Ok(Value::None)
             }
+            Command::HoldFlight { session, hold } => {
+                let i = self.live(session)?;
+                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                conn.hold_first_flight(hold);
+                self.settle(i, now);
+                Ok(Value::None)
+            }
             Command::ReachOut { session, body } => {
                 if body.is_empty() || body.len() > crate::reach::REACH_BODY_MAX {
                     return Err(CommandError::BadAlpn);

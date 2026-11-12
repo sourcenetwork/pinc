@@ -55,6 +55,8 @@ const CAP: u64 = 16 * SECOND;
 const CAP_THIN: u64 = 8 * SECOND;
 /// A node whose round trip is at least this is thin whatever its configuration says.
 const THIN_RTT: u64 = 250 * MS;
+/// How often a held flight is looked at again.
+const HELD_RECHECK: u64 = 500 * MS;
 /// How long an unestablished handshake lasts.
 const CONNECT_TIMEOUT: u64 = 30 * SECOND;
 /// The first resend delay of a responder: three times the 333 ms initial round trip.
@@ -312,6 +314,8 @@ pub(crate) struct Handshake {
     pub(crate) request_announced: bool,
     stage: Stage,
     retx_at: Option<u64>,
+    /// The resends wait: the peer's address is still being looked up.
+    held: bool,
     sends: u32,
     pto: u64,
     srtt: u64,
@@ -363,6 +367,7 @@ impl Handshake {
             request_announced: false,
             stage: Stage::Open,
             retx_at: client.then(|| now.saturating_add(first)),
+            held: false,
             sends,
             pto: 0,
             srtt: 0,
@@ -533,6 +538,11 @@ impl Handshake {
         true
     }
 
+    /// Hold the resends of a dialing side, or let them go on.
+    pub(crate) const fn set_held(&mut self, held: bool) {
+        self.held = held;
+    }
+
     /// Move the pending resend of a dialing side to `at`; ignored once the handshake is past its first flight.
     pub(crate) const fn set_retransmit_at(&mut self, at: u64) {
         if self.client && matches!(self.stage, Stage::Open) && self.retx_at.is_some() {
@@ -691,6 +701,10 @@ impl Handshake {
             return true;
         }
         if self.retx_at.is_none_or(|t| t > now) {
+            return false;
+        }
+        if self.held && self.client && self.stage == Stage::Open {
+            self.retx_at = Some(now.saturating_add(HELD_RECHECK));
             return false;
         }
         self.sends = self.sends.saturating_add(1);

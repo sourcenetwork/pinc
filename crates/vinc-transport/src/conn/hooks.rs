@@ -117,6 +117,12 @@ conn_impl! {
         self.hs.set_retransmit_at(at);
     }
 
+    /// Hold the resends of the flight of a dialing handshake (the peer's address is still being looked up), or let
+    /// them go on. While held the timer fires every 500 ms and sends nothing.
+    pub fn hold_first_flight(&mut self, hold: bool) {
+        self.hs.set_held(hold);
+    }
+
     /// No path MTU probe is sent before `until`.
     pub fn defer_mtu_probe(&mut self, until: u64) {
         self.life.qr_until = self.life.qr_until.max(until);

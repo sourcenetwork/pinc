@@ -188,6 +188,11 @@ impl<T: Copy + PartialEq, const N: usize, const H: usize> Pending<T, N, H> {
         self.items.iter().flatten().any(|e| e.peer == *peer)
     }
 
+    /// Whether `session` waits for its peer's address.
+    pub fn holds(&self, session: T) -> bool {
+        self.items.iter().flatten().any(|e| e.waiting.contains(&Some(session)))
+    }
+
     /// The peers that have waiting sessions.
     pub fn peers(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.items.iter().flatten().map(|e| e.peer)

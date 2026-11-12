@@ -527,6 +527,14 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The wait before the flight is sent again.
         delay: u64,
     },
+    /// Hold the resends of the flight of a session still dialing while the address of its peer is looked up, or let
+    /// them go on again. A held flight is checked again every 500 ms and sent when released.
+    HoldFlight {
+        /// The session.
+        session: SessionId,
+        /// Whether to hold.
+        hold: bool,
+    },
     /// Send the peer a `REACH_OUT`: an opaque body (the candidate addresses, at most [`crate::REACH_BODY_MAX`]
     /// bytes) the layer above encodes.
     ReachOut {

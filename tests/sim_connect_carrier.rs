@@ -281,7 +281,9 @@ fn dial_over_a_silently_dead_carrier(seed: u64) -> Option<u64> {
     let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs1, rs2]), nat);
     let b = w.client_public(&client_spec(0xb1, priv_addr(9), &[rs1, rs2]));
     w.run(secs(30));
-    w.dial(secs(30), a, b, vec![]);
+    // The address is a hint, so the dial is not held for a lookup; the node is UDP-dark, so only the relay carries it.
+    let baddr = w.client(b).addr;
+    w.dial(secs(30), a, b, vec![baddr]);
     w.run(secs(100));
     w.sim
         .events(a)
@@ -447,6 +449,44 @@ fn a_pending_dial_that_ended_drops_its_lookup() {
             0,
             "DIAL_PRUNE dropped the lookup of the ended dial"
         );
+    });
+}
+
+#[test]
+fn a_dial_waiting_for_its_peers_address_does_not_resend_its_flight() {
+    big(|| {
+        // The relay is down, so the lookup of the dial stays unanswered for as long as the dial lives.
+        let mut w = World::new(93);
+        let (r, rs) = w.relay(1, relay_ip(10));
+        w.sim.crash(0, r);
+        let lan = w.sim.add_lan(LanConfig {
+            udp_block: true,
+            ..LanConfig::default()
+        });
+        let a = w.client_in(&client_spec(0xa1, priv_addr(1), &[rs]), lan);
+        w.run(secs(15));
+        let ghost = vinc_tests::Client::new(&client_spec(0xee, priv_addr(9), &[])).host.me;
+        w.sim.command(
+            secs(15),
+            a,
+            vinc_tests::Cmd::Dial {
+                node: ghost,
+                hints: vec![],
+                role: vinc_core::Role::Other,
+            },
+        );
+        w.run(secs(30));
+        assert_eq!(
+            w.client(a).conn.lookups_outstanding(),
+            1,
+            "the dial still waits for the lookup"
+        );
+        let session = w.client(a).dialed[0];
+        let resends = w
+            .client(a)
+            .session_stats(session)
+            .map(|st| st.transport.handshake_retransmits);
+        assert_eq!(resends, Some(0), "the flight was resent while the lookup was pending");
     });
 }
 

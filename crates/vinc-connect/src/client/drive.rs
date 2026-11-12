@@ -60,6 +60,8 @@ pub(super) struct Sess {
     primary: Option<SocketAddr>,
     /// The active path was a relay path when the layer last looked.
     relay_route: bool,
+    /// The flight's resends are held while the peer's address is looked up.
+    held: bool,
 }
 
 /// A peer heard by local discovery.
@@ -328,6 +330,7 @@ drive_impl! {
             last_relay: carried.map(|(r, g)| (r, g, now)),
             primary,
             relay_route: false,
+            held: false,
         };
         if let Some(s) = self.sess.iter_mut().find(|s| s.is_none()) {
             *s = Some(entry);
@@ -373,6 +376,7 @@ drive_impl! {
                         last_relay: None,
                         primary: None,
                         relay_route: false,
+                        held: false,
                     });
                 }
                 let st = ep.stats(session);
@@ -541,6 +545,13 @@ drive_impl! {
                 && !is_relay_addr(&remote)
             {
                 self.relay_seen_at(h, remote);
+            }
+            // A dial still waiting for its peer's address resends nothing: the flight left once, and the next try is
+            // held until the lookup answers.
+            let hold = !st.established && st.dialer && self.pending.holds(s.id);
+            if hold != s.held {
+                s.held = hold;
+                let _ = self.cmd(ep, now, Command::HoldFlight { session: s.id, hold });
             }
             // B8: the relay copy joins the flight of a direct-first dial at its first resend.
             if let Some(at) = s.relay_at
