@@ -309,6 +309,43 @@ fn relay_carries_a_penalty_and_takes_over_when_the_direct_path_dies() {
 }
 
 #[test]
+fn a_session_with_a_long_round_trip_challenges_its_lost_direct_path_at_most_once_a_second() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        // The direct path takes 600 ms round trip: this session is thin although the node is not configured so.
+        let mut link = Link::new(16, Params::new(300 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let relay = PathInfo {
+            kind: PathKind::Relay,
+            ..PathInfo::default()
+        };
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
+        net.b.with_env(now, |c, env| c.add_path(env, PathId(4), relay)).unwrap();
+        assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
+        net.link.route(PathId(1)).up = false;
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(100_000, 23)).unwrap();
+        assert!(net.run(net.now + 120 * SEC, |n| n.a.conn.active_path() == Some(PathId(3))));
+        let mark = net.a.tx_log.len();
+        net.run(net.now + 15 * SEC, |_| false);
+        let challenges: Vec<u64> = net.a.tx_log[mark..]
+            .iter()
+            .filter(|t| t.2 == PathId(1) && t.1 < 100)
+            .map(|t| t.0)
+            .collect();
+        assert!(challenges.len() >= 2, "{challenges:?}");
+        assert!(
+            challenges[1] - challenges[0] >= 900 * MS,
+            "the first two re-join challenges were {} ms apart",
+            (challenges[1] - challenges[0]) / MS
+        );
+    });
+}
+
+#[test]
 fn switching_needs_a_gain_above_5_ms_on_the_raw_round_trip() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

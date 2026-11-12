@@ -17,8 +17,13 @@
 //!
 //! A challenge sent to a new or abandoned path follows a cadence that depends on why: a new path is probed 9 times
 //! from `max(33.3 ms, srtt / 8)`, doubling up to 2 s; a path abandoned after probe timeouts is probed at a flat gap
-//! for about 12 s; on a thin node an idled-out direct path is re-challenged every 20 s, backing off to 160 s while the
-//! session is quiet. A path that never answers stays unvalidated and is only removed when its slot is needed.
+//! for about 12 s, and not set up again while such a re-join is still running; on a thin session an idled-out direct
+//! path is re-challenged every 20 s, backing off to 160 s while the session is quiet. A session is thin when the host
+//! declared the node thin, it has no round trip yet, or the node's, its minimum or half its smoothed round trip
+//! reaches 250 ms. A thin session's re-join challenge waits for the floor the endpoint sets
+//! ([`Connection::set_rejoin_floor`]) and is reported to it ([`Connection::take_rejoin_fired`]), so the sessions of
+//! one node space their re-join challenges to one address. A path that never answers stays
+//! unvalidated and is only removed when its slot is needed.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
 //! amplification budget; a path is validated only by an answer to a challenge sent to it.
@@ -48,7 +53,7 @@ const REJOIN_PROBES: u64 = 100;
 /// How many of the oldest packets sent on another path are sent again at once when an abandoned path answers.
 const REJOIN_RESEND: usize = 8;
 /// The shortest gap between re-join challenges on a thin node, and the shortest wait for a migration challenge.
-pub(crate) const RJ_THIN_GAP: u64 = SECOND;
+pub const RJ_THIN_GAP: u64 = SECOND;
 /// The cadence of the re-challenge of an idled-out direct path on a thin node.
 const RJ_RETRY: u64 = 20 * SECOND;
 /// The longest back-off of that cadence.
@@ -122,6 +127,11 @@ pub(crate) struct Path {
     pub(crate) probe_gap: u64,
     pub(crate) rejoin: bool,
     pub(crate) rj_back: u64,
+    /// No re-join challenge of a thin session leaves before this time: the node's other thin sessions challenged the
+    /// same address (the endpoint sets it before each timer).
+    pub(crate) rj_floor: u64,
+    /// A re-join challenge of a thin session left since the endpoint last asked.
+    pub(crate) rj_fired: bool,
     /// The smoothed round trip of the path, 0 while unknown.
     pub(crate) rtt: u64,
     /// When a datagram last arrived on this path, 0 for never.
@@ -152,6 +162,8 @@ impl Path {
             probe_gap: PROBE_BASE,
             rejoin: false,
             rj_back: 0,
+            rj_floor: 0,
+            rj_fired: false,
             rtt: 0,
             last_rx: 0,
             dcid: None,
@@ -304,6 +316,37 @@ conn_impl! {
             self.start_punch(env, i);
         }
         Ok(())
+    }
+
+    /// Whether the session counts as thin for its path rules: the host declared the node thin, or the session has no
+    /// round trip yet, or the node's, its minimum or half its smoothed round trip reaches 250 ms.
+    fn thin_session(&self) -> bool {
+        self.cfg.thin || self.rec.is_thin()
+    }
+
+    /// The paths whose re-join challenges the connection spaces against its node's other thin sessions: those still
+    /// being re-challenged on a thin session. The endpoint sets their floors with [`Connection::set_rejoin_floor`].
+    pub fn rejoin_paths(&self) -> impl Iterator<Item = PathId> + '_ {
+        let thin = self.thin_session();
+        self.paths
+            .iter()
+            .filter(move |(_, p)| thin && p.rejoin && p.probes_left > 0)
+            .map(|(_, p)| p.id)
+    }
+
+    /// No re-join challenge on path `id` leaves before `at`: another session of the node challenged the same address
+    /// within the spacing. 0 lifts the wait. Ignored for a path the connection does not track.
+    pub fn set_rejoin_floor(&mut self, id: PathId, at: u64) {
+        if let Some(p) = self.paths.find(id).and_then(|i| self.paths.get_mut(i)) {
+            p.rj_floor = at;
+        }
+    }
+
+    /// A path on which a re-join challenge of a thin session left since the last call, once per challenge.
+    pub fn take_rejoin_fired(&mut self) -> Option<PathId> {
+        let p = self.paths.slots.iter_mut().flatten().find(|p| p.rj_fired)?;
+        p.rj_fired = false;
+        Some(p.id)
     }
 
     /// Whether the active path runs through a relay.
@@ -704,7 +747,7 @@ conn_impl! {
             p.validated = false;
         }
         let quiet = self.quiet_ok(now);
-        let thin = self.cfg.thin;
+        let thin = self.thin_session();
         if thin && self.paths.get(i).is_some_and(|p| p.probes_left == 0) {
             self.set_challenge(env, i);
             if let Some(p) = self.paths.get_mut(i) {
@@ -725,16 +768,22 @@ conn_impl! {
         }
     }
 
-    /// Send the probe of path `i` that is due and plan the next one.
-    // vertexia: the protocol also spaces re-join challenges per destination address across sessions; that table
-    // belongs to the endpoint, which owns the sessions that share an address.
+    /// Send the probe of path `i` that is due and plan the next one. A re-join challenge of a thin session waits for
+    /// the floor the endpoint set, and is reported to it once it leaves.
     fn fire_probe(&mut self, env: &mut Env<'_, P>, i: usize) {
         let now = env.now;
         let srtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
         let slow = self.rec.rtt().min_rtt().unwrap_or(0) >= SLOW_RTT;
         let quiet = self.quiet_ok(now);
-        let thin = self.cfg.thin;
+        let thin = self.thin_session();
         let Some(p) = self.paths.get_mut(i) else { return };
+        if p.rejoin && thin {
+            if now < p.rj_floor {
+                p.next_probe = p.rj_floor;
+                return;
+            }
+            p.rj_fired = true;
+        }
         p.probes_left -= 1;
         p.next_probe = now.saturating_add(p.probe_gap);
         p.probe_gap = if p.rejoin {
@@ -762,14 +811,15 @@ conn_impl! {
         let i = self.paths.active;
         let srtt = if self.rec.rtt().has_sample() { self.rec.rtt().smoothed() } else { 0 };
         let slow = self.rec.rtt().min_rtt().unwrap_or(0) >= SLOW_RTT;
-        let thin = self.cfg.thin;
+        let thin = self.thin_session();
         let node = self.rec.peak_rtt();
         let Some(p) = self.paths.get_mut(i) else { return };
         if p.info.kind != PathKind::Direct || !p.validated {
             return;
         }
         p.validated = false;
-        if !(thin && p.rejoin && p.probes_left > 0) {
+        // A re-join already running is not set up again.
+        if !(p.rejoin && p.probes_left > 0) {
             let mut gap = REJOIN_GAP.max(if slow { srtt } else { srtt / 2 });
             let mut probes = 4.max(REJOIN_PROBES * REJOIN_GAP / gap);
             if thin {

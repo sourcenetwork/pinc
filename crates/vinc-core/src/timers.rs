@@ -8,10 +8,14 @@
 //! heap; [`Endpoint::handle_timeout`](crate::Endpoint::handle_timeout) pops the sessions that are due, each at most
 //! once per call.
 //!
+//! Before a session's timer runs, the endpoint also tells it how long its re-join challenges must wait for those the
+//! node's other thin sessions sent to the same address: one per address per `max(1 s, node peak round trip)`, the last
+//! 200 addresses remembered.
+//!
 //! Invariants: a session has at most one entry in the heap; a settled session that has ended is freed; a deadline
 //! after a timer is strictly later than the time of the call, so a timer cannot spin.
 
-use vinc_transport::conn::Config;
+use vinc_transport::conn::{Config, PathId, RJ_THIN_GAP};
 
 use crate::endpoint::{CLOSE_GRACE, env, ep_impl};
 use crate::keepalive::{Inputs, standby_due};
@@ -161,6 +165,7 @@ ep_impl! {
             slot.m.acp_recheck = None;
             self.ask_acp(i, now, true);
         }
+        let floors = self.rejoin_floors(i);
         let Some(slot) = self.slots.get_mut(i) else { return };
         let Some(conn) = slot.conn.as_mut() else { return };
         // A standby path that carried nothing for 5 s while data moves is challenged to keep its mapping open.
@@ -184,7 +189,33 @@ ep_impl! {
                 p.tx = now;
             }
         }
+        for (id, at) in floors.into_iter().flatten() {
+            conn.set_rejoin_floor(id, at);
+        }
         conn.handle_timeout(&mut env);
+        let mut fired: [Option<PathId>; NP] = [None; NP];
+        for f in &mut fired {
+            *f = conn.take_rejoin_fired();
+        }
+        let remotes = fired.map(|f| f.and_then(|id| self.path_addrs(id)).map(|(_, remote)| remote));
+        for remote in remotes.into_iter().flatten() {
+            // The newest goes to the end of the order, so a full table forgets the oldest address.
+            self.rejoin_sent.remove(&remote);
+            self.rejoin_sent.insert(remote, now);
+        }
         self.settle(i, now);
+    }
+
+    /// For each path of session `i` still being re-challenged on a thin session, when the spacing to the last re-join
+    /// challenge of this node to the same address ends (0 when there was none).
+    fn rejoin_floors(&self, i: usize) -> [Option<(PathId, u64)>; NP] {
+        let mut out = [None; NP];
+        let Some(conn) = self.slots.get(i).and_then(|s| s.conn.as_ref()) else { return out };
+        let gap = RJ_THIN_GAP.max(self.rtt.tgr());
+        for (d, id) in out.iter_mut().zip(conn.rejoin_paths()) {
+            let last = self.path_addrs(id).and_then(|(_, remote)| self.rejoin_sent.get(&remote).copied());
+            *d = Some((id, last.map_or(0, |t| t.saturating_add(gap))));
+        }
+        out
     }
 }

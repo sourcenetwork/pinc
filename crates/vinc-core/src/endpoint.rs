@@ -68,6 +68,8 @@ pub const SUBS_SEEN: usize = 1024;
 pub const MAX_ALPNS: usize = vinc_security::ids::MAX_ALPNS;
 /// The peers whose prekey cache knowledge is remembered.
 pub const PREKEY_PEERS: usize = 256;
+/// The addresses whose last re-join challenge is remembered.
+pub(crate) const REJOIN_ADDRS: usize = 200;
 /// How long a closing session may wait for its CLOSE to leave before it is dropped.
 pub(crate) const CLOSE_GRACE: u64 = 1_000_000_000;
 
@@ -198,6 +200,9 @@ pub struct Endpoint<
     pub(crate) moved: bool,
     /// The node lost its link and has not seen it return, its address change or a resume since.
     pub(crate) dark: bool,
+    /// The remote address of a re-join challenge of a thin session, and when it was last sent: the node's thin
+    /// sessions space their re-join challenges to one address.
+    pub(crate) rejoin_sent: Table<SocketAddr, u64, REJOIN_ADDRS>,
     pub(crate) counters: Counters,
     pub(crate) trace: TraceLog,
 }
@@ -439,6 +444,7 @@ ep_impl! {
             suspended: false,
             moved: false,
             dark: false,
+            rejoin_sent: Table::new(seed ^ 0x0B),
             counters: Counters::default(),
             trace: TraceLog::new(),
         }

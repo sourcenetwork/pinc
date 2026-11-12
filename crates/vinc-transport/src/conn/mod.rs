@@ -98,7 +98,7 @@ pub use keys::trace::{KeyEvent, KeysView, Slot};
 #[cfg(feature = "trace")]
 pub use mtu::trace::{MtuProbe, MtuView};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
-pub use path::PathError;
+pub use path::{PathError, RJ_THIN_GAP};
 #[cfg(feature = "trace")]
 pub use reasm::trace::{ReasmProbe, ReasmView};
 pub use send::Transmit;

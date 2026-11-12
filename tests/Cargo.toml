@@ -539,6 +539,10 @@ name = "vinc_relay_role"
 path = "vinc_relay_role.rs"
 
 [[test]]
+name = "core_relay_paths"
+path = "core_relay_paths.rs"
+
+[[test]]
 name = "transport_wide"
 path = "transport_wide.rs"
 
