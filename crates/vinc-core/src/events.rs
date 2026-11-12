@@ -300,7 +300,7 @@ ep_impl! {
         match slot.m.hold {
             2 => {
                 slot.m.hold = 0;
-                let report = !slot.m.optimistic && slot.m.state == State::Established;
+                let report = !slot.m.announced && slot.m.state == State::Established;
                 trace!(self, now, Early { slot: i as u64, rule: 2 });
                 if report {
                     self.announce(i);

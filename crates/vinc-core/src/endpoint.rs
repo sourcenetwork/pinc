@@ -84,6 +84,10 @@ pub struct EndpointConfig {
     pub tickets_per_session: u8,
     /// How long an issued ticket lives, in seconds.
     pub ticket_lifetime_s: u32,
+    /// Whether a dial towards a peer with a cached allow reports `Connected` before its handshake, so its first data
+    /// leaves at once. Off, it reports once the handshake is done: a peer that stopped without closing is then never
+    /// reported, and the dial fails as a handshake timeout.
+    pub early_report: bool,
 }
 
 impl EndpointConfig {
@@ -98,6 +102,7 @@ impl EndpointConfig {
             seed,
             tickets_per_session: 1,
             ticket_lifetime_s: vinc_security::tickets::DEFAULT_TICKET_LIFETIME_S,
+            early_report: true,
         }
     }
 }

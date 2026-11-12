@@ -8,7 +8,8 @@
 //!
 //! - **Gate.** Application events of a session are held until the session is allowed; a deny closes it with code 3.
 //! - **Optimistic.** A dial towards a peer with a cached allow that has more than 5 s left reports `Connected` at once,
-//!   before the handshake; if the check then denies, the session closes and `Closed` follows.
+//!   before the handshake; if the check then denies, the session closes and `Closed` follows. With
+//!   [`early_report`](crate::EndpointConfig::early_report) off it reports once the handshake is done, as any dial.
 //! - **READY hold.** A client whose handshake round trip was under 20 ms reports `Connected` only after the server's
 //!   READY, which the server sends once its own answer is in, so the first stream write is served one way later.
 //!
@@ -104,7 +105,7 @@ ep_impl! {
         let Some(slot) = self.slots.get_mut(i) else { return };
         trace!(self, now, Acp { slot: i as u64, step: 2 });
         slot.m.denied = true;
-        let announce_failure = slot.m.client && !slot.m.optimistic;
+        let announce_failure = slot.m.client && !slot.m.announced;
         let (peer, alpn) = (slot.m.peer, slot.m.alpn);
         if slot.m.client {
             // The dialer's Finish is still queued; it leaves first, so the peer knows whom it is closing on.
@@ -143,7 +144,7 @@ ep_impl! {
         {
             slot.m.acp_recheck = Some(recheck_at(a.until));
         }
-        let (client, optimistic) = (slot.m.client, slot.m.optimistic);
+        let (client, announced) = (slot.m.client, slot.m.announced);
         let has_sub = slot.m.has_sub;
         if !client && !slot.m.sub && let Some(conn) = slot.conn.as_mut() {
             conn.send_ready();
@@ -156,7 +157,7 @@ ep_impl! {
             slot.m.hold = 0;
         }
         let session = self.session_id(i);
-        if client && !optimistic {
+        if client && !announced {
             self.announce(i);
         } else if !client {
             let Some(slot) = self.slots.get_mut(i) else { return };
