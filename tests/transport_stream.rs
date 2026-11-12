@@ -1228,6 +1228,26 @@ fn a_stream_has_data_to_send_while_new_bytes_or_a_retransmission_wait() {
     assert!(!t.has_data_to_send());
 }
 
+#[test]
+fn sixty_four_holes_of_acknowledged_ranges_are_remembered_without_sending_any_again() {
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
+    t.write(&mut pool, id, &[1u8; 1400 * 130], 1 << 20).unwrap();
+    let mut frames = Vec::new();
+    while let Some(f) = t.next_stream_frame(1400) {
+        frames.push((f.offset, f.len as u64));
+    }
+    assert_eq!(frames.len(), 130);
+    // Every second frame is acknowledged first: 64 disjoint ranges above the hole at the start.
+    for &(offset, len) in frames.iter().skip(1).step_by(2).take(64) {
+        t.on_acked(&mut pool, id, offset, len, false);
+    }
+    assert!(!t.has_data_to_send(), "an acknowledged range was queued to be sent again");
+    for &(offset, len) in frames.iter().skip(1).step_by(2).take(64) {
+        assert!(t.is_acked(id, offset, len));
+    }
+}
+
 // ---- allocation ---------------------------------------------------------------------------------------------------
 
 #[test]

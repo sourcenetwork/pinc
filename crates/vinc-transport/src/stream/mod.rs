@@ -60,8 +60,11 @@ pub const DEFAULT_MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
 pub const FIRST_CHARGE: u64 = 4 * pool::CHUNK_SIZE as u64;
 /// The urgency a stream starts with; a lower number is served first.
 pub const DEFAULT_URGENCY: u8 = 3;
-/// The most disjoint ranges a stream tracks per range map of the send side (acknowledged, lost).
+/// The most disjoint ranges a stream tracks of what it declared lost.
 pub const RANGES: usize = 16;
+/// The most disjoint ranges a stream tracks of what the peer acknowledged. Past it a range is sent again, so the
+/// acknowledgement can be taken in order.
+pub const ACKED_RANGES: usize = 64;
 /// The most disjoint ranges a stream tracks of what it received. A packet that does not fit is dropped unacknowledged,
 /// so under deep reordering this must cover the holes of the packet-number tracking and the splits retransmissions
 /// add: the deepest reordering scenario measured needed 65 at 128 packet ranges, and 96 leaves room.

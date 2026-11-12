@@ -7,7 +7,7 @@
 
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
-use super::{ControlFrame, MAX_OFFSET, RANGES, StreamChunk, StreamError, StreamId, StreamSource};
+use super::{ACKED_RANGES, ControlFrame, MAX_OFFSET, RANGES, StreamChunk, StreamError, StreamId, StreamSource};
 
 /// The end-of-stream marker's life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub(super) struct Send<S, const C: usize> {
     sent_max: u64,
     pub(super) limit: u64,
     lost: RangeSet<RANGES>,
-    acked: RangeSet<RANGES>,
+    acked: RangeSet<ACKED_RANGES>,
     acked_prefix: u64,
     final_size: Option<u64>,
     fin: Fin,
