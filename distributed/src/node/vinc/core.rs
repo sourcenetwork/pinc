@@ -36,6 +36,11 @@ use crate::node::data::{seed_bytes, seed32};
 pub const TOPIC_LOG_BYTES: usize = 16 << 20;
 /// Relays (hubs) a node knows.
 pub const NRL: usize = 4;
+
+/// The most streams a peer has open at once on a session: the facade's default.
+pub fn stream_limit() -> u16 {
+    vinc::Limits::default().streams
+}
 /// Peers the connectivity client keeps records of.
 pub const NPEERS: usize = 128;
 /// The endpoint's shape: the facade's stream slots and tables, with the stream source of the values layer and
@@ -236,7 +241,7 @@ fn build<const K: usize, const D: usize>(
     ));
     cfg.conn.max_gso = spec.batch.max(1);
     cfg.conn.interface_mtu = spec.mtu;
-    cfg.conn.credit = vinc_security::CreditRecord::new(1 << 20, vinc::Limits::default().streams, u16::MAX);
+    cfg.conn.credit = vinc_security::CreditRecord::new(1 << 20, stream_limit(), u16::MAX);
     let ep_drbg = Drbg::new(&seed32(&spec.name, "vinc-ep-drbg"));
     let mut ep: Box<Ep<K, D>> = Endpoint::new_owned(now, prov, ep_drbg, identity, cfg, spec.pool_chunks);
     let mut env = Env {
