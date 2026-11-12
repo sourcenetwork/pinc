@@ -52,8 +52,14 @@ pub const BUNDLES: usize = 32;
 const LEDGER: usize = 64;
 /// The most transfer streams open at once.
 pub(crate) const STREAMS: usize = 64;
-/// The most disjoint intervals a partial reception tracks.
-const INTERVALS: usize = 64;
+/// The most disjoint intervals a partial reception tracks. Reed-Solomon parity sits between the data of consecutive
+/// erasure blocks, so a data-only reception records one range per block; this bounds how many blocks a bundle may
+/// have to be received here. At `k` data symbols a block, 256 covers a bundle of up to `256 * k` data slices: about
+/// 1 MiB at 4 KiB slices (k=4), or 4 MiB at 16 KiB slices. Each interval is 16 bytes, so this set is 4 KiB per
+/// in-flight reception (up to [`BUNDLES`] of them); raising it from 64 cost about 3 KiB more each. A bundle with more
+/// blocks than this still overflows (reported as [`Refusal::Fragmented`]); the real fix is to stop tracking ranges
+/// per block (issue #79).
+const INTERVALS: usize = 256;
 /// The bytes of symbols one request asks for.
 const CHUNK_BYTES: u64 = 64 << 10;
 
