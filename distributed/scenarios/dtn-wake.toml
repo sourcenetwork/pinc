@@ -1,0 +1,60 @@
+name = "dtn-wake"
+about = "KNOWN GAP (carrier redial): the real DefraDB case of a device that sleeps and wakes with no contact schedule. The phone is paused when the update is sent and resumed later; the laptop hands the update and custody to the cloud carrier and then sleeps itself. The carrier holds custody but never re-dials the phone when it wakes, so the update is not delivered. This asserts today's real behaviour; a fix is tracked as a gap (see the PR). VINC only."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home"
+
+[[nodes]]
+name = "hub"
+site = "home"
+role = "hub"
+
+[[nodes]]
+name = "laptop"
+site = "home"
+
+[[nodes]]
+name = "cloud"
+site = "home"
+
+[[nodes]]
+name = "phone"
+site = "home"
+
+[workload]
+kind = "dtn"
+sizes = [1024, 65536]
+duration_s = 50
+
+[[workload.sends]]
+at_s = 2
+from = "laptop"
+to = "phone"
+copies = 2
+lifetime_s = 200
+
+[[workload.checks]]
+rule = "custody"
+moves = [{ from = "laptop", to = "cloud" }]
+
+[[workload.checks]]
+rule = "not-delivered"
+to = "phone"
+
+[[faults]]
+at_s = 0
+action = { do = "pause", node = "phone" }
+
+[[faults]]
+at_s = 12
+action = { do = "pause", node = "laptop" }
+
+[[faults]]
+at_s = 20
+action = { do = "resume", node = "phone" }
