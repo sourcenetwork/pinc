@@ -44,6 +44,7 @@ const CARRIER_CHECK_TRIES: u32 = 3;
 
 /// A session the layer follows.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts about one session")]
 pub(super) struct Sess {
     id: SessionId,
     node: NodeId,
