@@ -2,9 +2,10 @@
 //!
 //! The reception keeps at most `INTERVALS = 64` disjoint verified ranges. Reed-Solomon parity sits between the data
 //! of consecutive erasure blocks, so a data-only reception records one range per block; a bundle of more than 64
-//! blocks overflows the set. With `k = 1` every data slice is its own block, so a 65-slice payload makes 65 blocks
-//! on a tiny bundle. The receiver must refuse it with the `Fragmented` reason (wire code 9), never `BadProof` (4):
-//! the data is honest, and a holder that reads "bad proof" has reason to distrust a copy that is actually fine.
+//! blocks overflows the set. With `k = 1` every data slice is its own block, so a 300-slice payload makes 300 blocks
+//! on a tiny bundle — well past the cap, so it stays an overflow even if the cap is later raised. The receiver must
+//! refuse it with the `Fragmented` reason (wire code 9), never `BadProof` (4): the data is honest, and a holder that
+//! reads "bad proof" has reason to distrust a copy that is actually fine.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -38,9 +39,9 @@ fn a_bundle_of_too_many_blocks_is_refused_as_fragmented_not_a_bad_proof() {
         });
         let (src, dst) = (w.members[0], w.members[1]);
         let keys = w.apps(dst).dtn.keys();
-        // 65 data slices at k = 1 is 65 erasure blocks, one over the 64-range cap. slice_log 0: 1008 plain bytes a
-        // slice, so the payload is tiny.
-        let mut payload = vec![0u8; 65 * 1008];
+        // 300 data slices at k = 1 is 300 erasure blocks, well past the 64-range cap (and past a raised 256). slice_log
+        // 0: 1008 plain bytes a slice, so the payload is still tiny.
+        let mut payload = vec![0u8; 300 * 1008];
         SplitMix64::new(1).fill(&mut payload);
         w.sim.command(
             secs(2),
