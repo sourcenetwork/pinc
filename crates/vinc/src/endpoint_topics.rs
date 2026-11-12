@@ -38,7 +38,9 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     }
 
     /// Publish `payload` to `topic`; the topic need not be joined. With `wait`, first waits up to that long for a member of
-    /// the topic this endpoint has a session with (see [`neighbors`](Self::neighbors)).
+    /// the topic this endpoint has a session with (see [`neighbors`](Self::neighbors)). A burst is held back, not
+    /// dropped: while 1,024 publishes still wait for a hub to acknowledge them, the call waits until one of them is
+    /// acknowledged or given up (after 90 seconds).
     ///
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] when `payload` is over [`max_message`](Self::max_message),
@@ -54,7 +56,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
             })
             .await?;
         }
-        sh.run(|core, now| Try::Done(core.publish(now, topic, payload))).await
+        sh.run(|core, now| core.publish(now, topic, payload)).await
     }
 
     /// The members of `topic` this endpoint has a session with now, sorted by id.

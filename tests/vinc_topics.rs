@@ -240,3 +240,38 @@ async fn a_message_from_a_peer_a_member_refuses_is_not_delivered_to_it() {
     })
     .await;
 }
+
+/// A burst is held back, not dropped and not failed: once the endpoint tracks as many publishes as it can, the next
+/// one waits, and it goes through when the hub acknowledges earlier ones.
+#[nuclei::test]
+async fn a_publish_past_the_tracked_ones_waits_for_the_hub_and_then_goes() {
+    /// The publishes an endpoint tracks while they wait for a hub.
+    const TRACKED: usize = 1024;
+    let hub = lo_endpoint!(vinc_common::builder().seed(&[10; 32]).unwrap().hub());
+    let relay = hub_relay(hub.local_addr(), hub.id());
+    let a = lo_endpoint!(vinc_common::builder().seed(&[1; 32]).unwrap().relays([relay]));
+    run(&a);
+    let topic = b"burst".to_vec();
+    within(120, async {
+        // The hub is not running yet: nothing is acknowledged, so the endpoint's table fills.
+        for k in 0..TRACKED {
+            a.publish(&topic, format!("message {k}").as_bytes(), None)
+                .await
+                .unwrap();
+        }
+        let (ep, t) = (a.clone(), topic.clone());
+        let mut one_more = Box::pin(async move { ep.publish(&t, b"one more", None).await });
+        let early = nuclei::time::timeout(Duration::from_millis(300), &mut one_more).await;
+        assert!(
+            early.is_err(),
+            "a publish the endpoint cannot track came back: {early:?}"
+        );
+        // The hub starts and acknowledges: the waiting publish is taken.
+        run(&hub);
+        nuclei::time::timeout(Duration::from_secs(60), one_more)
+            .await
+            .expect("the publish still waits although the hub acknowledges")
+            .unwrap();
+    })
+    .await;
+}

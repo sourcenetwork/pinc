@@ -161,6 +161,8 @@ pub(crate) enum GKey {
     Lookup,
     /// The neighbours of a topic changed, or a deadline passed.
     Topic,
+    /// A publish was acknowledged or given up: the node has room to track another.
+    Publish,
 }
 
 /// A wait a future registers.

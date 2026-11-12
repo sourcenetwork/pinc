@@ -59,6 +59,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             NodeEvent::Member(_) => self.neighbors_dirty = true,
             NodeEvent::Connect(n) => self.on_notice(&n),
             NodeEvent::Lost { count } => self.lost = self.lost.saturating_add(count),
+            NodeEvent::PublishAcked { .. } | NodeEvent::PublishGaveUp { .. } => self.wake_g(GKey::Publish),
             _ => {}
         }
     }
@@ -124,12 +125,20 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         was
     }
 
-    /// Publish `body` to `topic`.
-    pub(crate) fn publish(&mut self, now: u64, topic: &[u8], body: &[u8]) -> Result<MessageId> {
-        self.running()?;
-        let mid = self.node.publish(now, topic, body).map_err(refused)?;
-        self.dirty = true;
-        Ok(mid)
+    /// Publish `body` to `topic`, or a wait while the node tracks as many publishes as it can: room returns when a hub
+    /// acknowledges one of them or one is given up.
+    pub(crate) fn publish(&mut self, now: u64, topic: &[u8], body: &[u8]) -> Try<Result<MessageId>> {
+        if let Err(e) = self.running() {
+            return Try::Done(Err(e));
+        }
+        match self.node.publish(now, topic, body) {
+            Ok(mid) => {
+                self.dirty = true;
+                Try::Done(Ok(mid))
+            }
+            Err(vinc_broadcast::Refused::Backlog) => Try::Wait(Wait::G(GKey::Publish)),
+            Err(e) => Try::Done(Err(refused(e))),
+        }
     }
 
     /// The members of `topic` this endpoint has a session with.
