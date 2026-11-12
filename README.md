@@ -172,11 +172,18 @@ checked, the assumptions and what is still being closed.
 
 ## Open items
 
-- **The facade** serves direct connections. Not yet reachable through it: relays and hole punching, topic broadcast,
-  lookup of a peer by its id, and the export and restore of an endpoint's state. It needs `std`; the crates below it
-  do not.
-- **Performance.** Against iroh and rust-libp2p on the same machine VINC is not ahead on every row yet (memory per
-  connection is one it loses). `just compare` and the harness print every row, the ones VINC loses included.
+- **The facade** reaches peers directly and through relays, and has topic broadcast through a hub, lookup of a peer
+  by its id through signed records, export and restore of its state, revocation, stream urgency, and two stream calls
+  that pass a buffer instead of copying it (`RecvStream::read_with`, `SendStream::send_owned`). Not yet: the relay
+  role (`vinc::relay`) run by the endpoint's own driver, so that one endpoint is hub and relay with nothing beside it;
+  an owned buffer written in the middle of a stream; a build without `std` (the crates below the facade have one).
+- **Performance.** On loopback on the build host (12 November 2026, commit `38301fc`, all three in one quiet window)
+  VINC leads iroh and rust-libp2p on bulk throughput (699 against 518 and 462 MiB/s on one stream), on CPU per byte
+  (2.71 against 4.75 and 5.14 ns), on the 64-byte round trip (68 against 93 and 78 microseconds) and on connection
+  setup. It is behind on the memory of an idle endpoint (6.3 MiB against 3.3 and 0.6), on a client's memory per
+  connection (277 KiB against 185 and 107) and on the time to the first byte when 1000 connections start at once
+  (834 ms against iroh's 323). The emulated-network scenarios were last measured before these changes. `just compare`
+  and the harness print every row, the ones VINC loses included.
 - **The harness** has run on no machine but the build host's containers; the Terraform for separate machines is in
   `distributed/infra/` and has not been applied.
 - **The proofs** listed under [Being closed](docs/PROOFS.md#being-closed).
