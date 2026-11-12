@@ -95,16 +95,16 @@ FirstW == Min(WinC, FIRSTK * CH)
 \* carried no data, the whole window from its first byte on
 Charged(r, l) == IF r.hi = 0 THEN Min(l, FIRSTK * CH) ELSE l
 AdmitFit(f) == Max(Min(Max(f - 3, 0), f \div 2), Min(f, 1))   \* half of f windows, three left free, one at least when one fits
-\* MAXREM is the limit the connection gives the peer: Streams::limit_remote, called by Connection::base with the
+\* MAXREM is the limit the connection gives the peer: Streams::adopt, called by Connection::advertise with the
 \* credit record's max_streams (Limits::streams at the facade), lowers the table's max_remote to it
 CapLive == Min(MAXREM, Max(N \div 2, 1))     \* the live peer streams: at most half the slots
 \* the earlier cap, which never saw the configured limit (only the table's own default of 100), for Streams_cap_w.cfg
 CapIgnoringLimit == Max(N \div 2, 1)
 Adv0 == Min(CapLive, AdmitFit((B * CH) \div FirstW))
 
-\* hw is the mark of the slots (Streams::top in the code): the highest slot a stream holds, 0 with none. The scans
-\* for a stream to send and for control frames (next_hot, pending_control, poll_writable) stop at it, so a slot above
-\* it must be new: it has nothing to send and no control frame. Taking a slot raises the mark to it; freeing the top
+\* hw is the mark of the slots (Streams::used in the code): the highest slot a stream holds, 0 with none. The scans a
+\* connection makes for each packet (next_hot, pending_control, poll_writable, grant, granted_unreceived, find) stop
+\* at it, so a slot above it must be new: it has nothing to send, no control frame and no credit outstanding. Taking a slot raises the mark to it; freeing the top
 \* slot walks it down to the highest slot still held (MarkOnFree), freeing a lower one leaves it.
 \* Streams_mark_w.cfg plants a free that lowers it below a slot still held (MarkOnFreeLow).
 TopHeld(S) == IF \E k \in 1..N : S[k].id # -1
