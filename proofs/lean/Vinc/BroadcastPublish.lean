@@ -212,6 +212,29 @@ def run (cap : Nat) (l : List Nat) : Option Nat → List Nat
 theorem push_bounded (cap : Nat) (l : List Nat) (x : Nat) (h : l.length ≤ cap) : (push cap l x).length ≤ cap := by
   unfold push; split <;> simp_all <;> omega
 
+/-- `Topics::publish` on the list: `none` is `Refused::Backlog`, returned to the caller when the list is full;
+`some` is the list with the new publish tracked. -/
+def publish (cap : Nat) (l : List Nat) (x : Nat) : Option (List Nat) := if l.length < cap then some (x :: l) else none
+
+/-- A publish the caller is answered for with an id is in the list, and the list stays within `cap`. -/
+theorem publish_tracked (cap : Nat) (l l' : List Nat) (x : Nat) (hp : publish cap l x = some l') :
+    x ∈ l' ∧ l'.length ≤ cap := by
+  unfold publish at hp
+  split at hp
+  · cases hp; simp; omega
+  · cases hp
+
+/-- The caller is refused exactly when the list is full. -/
+theorem publish_refused_iff (cap : Nat) (l : List Nat) (x : Nat) : publish cap l x = none ↔ cap ≤ l.length := by
+  unfold publish; split <;> simp_all <;> omega
+
+/-- The finding behind the fix: the old `push` with a full list leaves a new publish out of it, so the publish was
+answered with an id and never retried, acknowledged or given up. -/
+theorem push_drops (cap : Nat) (l : List Nat) (x : Nat) (hf : cap ≤ l.length) (hx : x ∉ l) : x ∉ push cap l x := by
+  unfold push; split
+  · omega
+  · exact hx
+
 /-- Starting empty, any sequence of publishes and removals keeps the list within `cap`. -/
 theorem pending_bounded (cap : Nat) (ops : List (Option Nat)) : (ops.foldl (run cap) []).length ≤ cap := by
   suffices ∀ l, l.length ≤ cap → (ops.foldl (run cap) l).length ≤ cap from this [] (by simp)

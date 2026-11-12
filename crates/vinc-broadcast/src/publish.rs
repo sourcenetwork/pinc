@@ -12,7 +12,8 @@
 //! publish and one at each retry, and never twice to the same subscriber. Receivers dedupe by message id.
 //!
 //! Invariants: a publish is signed over the topic, id and body hash before any byte leaves; at most
-//! [`PENDING_MAX`] publishes wait; the fallback sends to no node outside the topic's subscriber set.
+//! [`PENDING_MAX`] publishes wait, and a publish past that is refused, so every accepted publish ends acknowledged or
+//! given up; the fallback sends to no node outside the topic's subscriber set.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -63,14 +64,25 @@ fn fallback_step<H: Host>(
 }
 
 impl Topics {
+    /// A publish the pending table cannot track would get no retry and no outcome, so it is refused before anything
+    /// leaves. A hub stores its own publishes, and a node with no hub list tracks none.
+    fn room_to_track(&self) -> Result<(), Refused> {
+        if !self.is_hub && !self.hubs.is_empty() && self.pending.len() >= PENDING_MAX {
+            return Err(Refused::Backlog);
+        }
+        Ok(())
+    }
+
     /// Sign `body` and publish it to `topic`; returns the message id.
     ///
     /// # Errors
-    /// [`Refused`] for a topic over 255 bytes, a body over the limit, a full topic table or a signing failure.
+    /// [`Refused`] for a topic over 255 bytes, a body over the limit, a full topic table, [`PENDING_MAX`] publishes
+    /// still waiting for a hub ([`Refused::Backlog`]: publish again once some are acknowledged) or a signing failure.
     pub fn publish<H: Host>(&mut self, h: &mut H, now: Nanos, topic: &[u8], body: &[u8]) -> Result<[u8; 8], Refused> {
         if topic.len() > MAX_TOPIC {
             return Err(Refused::TopicTooLong);
         }
+        self.room_to_track()?;
         if body.len() > self.limits.max_body {
             return Err(Refused::BodyTooLarge {
                 limit: self.limits.max_body,

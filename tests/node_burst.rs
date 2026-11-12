@@ -11,7 +11,9 @@
 mod node_common;
 
 use node_common::{OWD, World, big, secs};
+use vinc_broadcast::Trace as BTrace;
 use vinc_node::NodeEvent;
+use vinc_node::trace::Body;
 use vinc_sim::{LinkConfig, MS, Sim, SimConfig, Time};
 use vinc_tests::{NCmd, NEv};
 
@@ -61,13 +63,13 @@ fn count(w: &World, n: vinc_sim::NodeId, until: Time, f: impl Fn(&NodeEvent) -> 
         .count()
 }
 
-/// Every publish of a burst ends acknowledged or given up, even with more of them in flight than the publisher
-/// tracks: here the writer, not the hub, is behind the slow path.
+/// Every publish of a burst is refused to its caller or ends acknowledged or given up, even with more of them in
+/// flight than the publisher tracks: here the writer, not the hub, is behind the slow path.
 #[test]
-#[ignore = "waits for the rule that refuses a publish the pending table cannot track"]
 fn every_publish_of_a_burst_is_acked_or_given_up() {
     big(|| {
         let mut w = World::build_with(92, 1, 2, |w| {
+            w.trace = true;
             w.sim = Sim::with_config(
                 92,
                 SimConfig {
@@ -98,11 +100,23 @@ fn every_publish_of_a_burst_is_acked_or_given_up() {
         w.run(end);
         let acked = count(&w, writer, end, |e| matches!(e, NodeEvent::PublishAcked { .. }));
         let gave_up = count(&w, writer, end, |e| matches!(e, NodeEvent::PublishGaveUp { .. }));
-        eprintln!("publisher: acked {acked} gave_up {gave_up} of {N}");
+        // The publishes the node took; the others were refused to the caller.
+        let accepted = w
+            .sim
+            .node(writer)
+            .traces
+            .iter()
+            .filter(|(_, t)| matches!(t.body, Body::Broadcast(BTrace::Published { .. })))
+            .count();
+        eprintln!(
+            "publisher: accepted {accepted} refused {} acked {acked} gave_up {gave_up} of {N}",
+            N - accepted
+        );
+        assert!(accepted > 0, "the publisher took no publish");
         assert_eq!(
             acked + gave_up,
-            N,
-            "a publish ended with no outcome the publisher heard"
+            accepted,
+            "an accepted publish ended with no outcome the publisher heard"
         );
     });
 }
