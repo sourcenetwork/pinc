@@ -3,7 +3,7 @@
 //! The reception keeps at most `INTERVALS = 64` disjoint verified ranges. Reed-Solomon parity sits between the data
 //! of consecutive erasure blocks, so a data-only reception records one range per block; a bundle of more than 64
 //! blocks overflows the set. With `k = 1` every data slice is its own block, so a 300-slice payload makes 300 blocks
-//! on a tiny bundle — well past the cap, so it stays an overflow even if the cap is later raised. The receiver must
+//! on a tiny bundle, well past the cap, so it stays an overflow even if the cap is later raised. The receiver must
 //! refuse it with the `Fragmented` reason (wire code 9), never `BadProof` (4): the data is honest, and a holder that
 //! reads "bad proof" has reason to distrust a copy that is actually fine.
 #![allow(
