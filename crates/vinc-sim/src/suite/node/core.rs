@@ -359,7 +359,7 @@ impl Core {
             inc,
         ))));
         cfg.conn.max_gso = MAX_GSO;
-        // A hub runs the relay of its members: the reference sends no tail repair on the sessions of a relay server.
+        // A hub runs the relay of its members, and a node that serves a relay sends no tail repair on its sessions.
         cfg.conn.tail_repair = !self.shared.is_hub(self.idx);
         let ep_drbg = Drbg::new(&derive(b"suite-endpoint", world_seed, self.idx as u64, inc));
         let mut ep = Box::new(Ep::new(self.local, prov, ep_drbg, self.identity, cfg, table));
