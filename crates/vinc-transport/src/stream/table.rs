@@ -829,13 +829,27 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// The slot after `floor` in (urgency, id) order that has a frame to send, with its key.
     fn next_hot(&self, floor: Option<(u8, u64)>) -> Option<((u8, u64), usize)> {
-        (0..N)
-            .filter(|&i| self.hot.get(i).is_some_and(|h| h & (HOT_RETX | HOT_NEW) != 0))
-            .filter_map(|i| {
-                let key = (self.slots.get(i)?.urgency, self.ids.get(i).copied()?);
-                floor.is_none_or(|f| key > f).then_some((key, i))
+        // The order as one number, urgency above id. Folding the pair itself cost a stalled load for every slot, hot or
+        // not: a sixth of a sender's time on a bulk transfer, where this runs twice for each packet.
+        let rank = |(urgency, id): (u8, u64)| (u128::from(urgency) << 64) | u128::from(id);
+        let floor = floor.map(rank);
+        let (r, i) = self
+            .hot
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| **h & (HOT_RETX | HOT_NEW) != 0)
+            .filter_map(|(i, _)| {
+                let r = rank((self.slots.get(i)?.urgency, self.ids.get(i).copied()?));
+                floor.is_none_or(|f| r > f).then_some((r, i))
             })
-            .min()
+            .min()?;
+        Some((
+            (
+                u8::try_from(r >> 64).ok()?,
+                u64::try_from(r & u128::from(u64::MAX)).ok()?,
+            ),
+            i,
+        ))
     }
 
     /// Whether any stream has data or a retransmission to send.
