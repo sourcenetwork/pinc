@@ -7,39 +7,95 @@
 //! that place, in order, until the stream is full again or the subscriber has everything, and then pushes live
 //! again.
 //!
-//! What it costs is one number for each subscriber that is behind in a topic. What still bounds it is the log: a
-//! subscriber that falls further behind than the log holds continues from the oldest message the log still has, and
-//! learns of the ones before it as any subscriber that was away does, through the gap repair.
+//! The log must not evict what a subscriber is still owed, or a message the publisher heard acknowledged is lost.
+//! So a store that would evict an owed message is refused ([`Topics::room_to_store`]): the hub does not acknowledge
+//! it and the publisher retries it. One subscriber must not pace the topic for ever, so a subscriber whose stream took
+//! nothing for [`PUSH_STALL_MS`], or that is owed a message older than [`PUSH_OWED_MAX`], is let go: it is held, no
+//! longer counts for the refusal, and keeps being served from the log. If the log evicted anything it was owed, it is
+//! told with RESTORED once it has caught up, as a member whose held subscription comes back is.
+//!
+//! What it costs is one small record for each subscriber that is behind in a topic.
 //!
 //! Invariants: a subscriber is in a topic's `behind` only while it is a live subscriber of that topic; it is sent the
-//! logged messages in log order, each at most once from here, and none it published itself; a place never points
-//! before the oldest logged message when it is used.
+//! logged messages in log order, each at most once from here, and none it published itself; the log evicts no
+//! message owed to a subscriber that is behind and not held; a subscriber that skipped evicted messages is told.
 
 use vinc_membership::{Nanos, NodeId};
 
+use crate::consts::{PUSH_OWED_MAX, PUSH_STALL_MS};
 use crate::host::{Host, Lane};
+use crate::log::HubLog;
 use crate::node::Topics;
 use crate::wire::{self, Head, ty};
+
+/// A hub's place in a topic's log for one subscriber that is behind.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Behind {
+    /// The sequence number of the first logged message it has not been sent.
+    pub(crate) next: u64,
+    /// When its stream last took a message from here, or it fell behind (the hub's wall clock, milliseconds).
+    pub(crate) progress_ms: u64,
+    /// Let go: it no longer holds back the log, which may evict what it is owed.
+    pub(crate) held: bool,
+    /// The log evicted a message it was owed: it is told with RESTORED once caught up.
+    pub(crate) lost: bool,
+}
 
 /// What became of a subscriber's place after a turn.
 enum Place {
     /// The stream is full again: go on from here at the next call.
     Keep,
-    /// Everything logged was sent, or the session is gone and its next subscribe repairs the rest.
-    Done,
+    /// Everything logged was sent.
+    Caught,
+    /// The session is gone; its next subscribe repairs the rest.
+    Gone,
 }
 
 impl Topics {
     /// The streams of `peers` had no room for the message just logged in `topic`: each continues from it later.
-    pub(crate) fn fall_behind(&mut self, topic: &[u8], peers: &[NodeId]) {
+    pub(crate) fn fall_behind(&mut self, topic: &[u8], peers: &[NodeId], wall_ms: u64) {
         let Some(st) = self.topics.get_mut(topic) else { return };
         let Some(last) = st.log.as_ref().and_then(|l| l.end().checked_sub(1)) else {
             return;
         };
         for p in peers {
-            st.behind.insert(*p, last);
+            st.behind.insert(
+                *p,
+                Behind {
+                    next: last,
+                    progress_ms: wall_ms,
+                    held: false,
+                    lost: false,
+                },
+            );
             self.lagging.insert(*p);
         }
+    }
+
+    /// Whether `log` may take a message of `n` bytes: it may unless that evicts a message still owed to a subscriber
+    /// that is behind and not held. A subscriber that stalled or is owed too old a message is let go first.
+    pub(crate) fn room_to_store(
+        behind: &mut alloc::collections::BTreeMap<NodeId, Behind>,
+        log: &HubLog,
+        n: usize,
+        now: Nanos,
+        wall_ms: u64,
+    ) -> bool {
+        let first_kept = log.base() + u64::try_from(log.evicts(n)).unwrap_or(u64::MAX);
+        let blocks = |b: &Behind| !b.held && b.next < first_kept;
+        if !behind.values().any(blocks) {
+            return true;
+        }
+        for b in behind.values_mut() {
+            let stalled = wall_ms.saturating_sub(b.progress_ms) > PUSH_STALL_MS;
+            let old = log
+                .logged_at(b.next)
+                .is_none_or(|at| now.saturating_sub(at) > PUSH_OWED_MAX);
+            if blocks(&*b) && (stalled || old) {
+                b.held = true;
+            }
+        }
+        !behind.values().any(blocks)
     }
 
     /// The stream of `peer` has room again. A publisher hands its hub the publishes that waited for room, oldest first;
@@ -51,16 +107,21 @@ impl Topics {
         if !self.lagging.contains(peer) {
             return;
         }
+        let wall = h.wall_ms();
         let mut still = false;
         for (topic, st) in &mut self.topics {
-            let Some(mut next) = st.behind.get(peer).copied() else {
+            let Some(mut b) = st.behind.get(peer).copied() else {
                 continue;
             };
+            let from = b.next;
             let place = loop {
-                let Some(log) = st.log.as_ref() else { break Place::Done };
-                // Messages that left the log are the gap repair's: go on from the oldest one still here.
-                next = next.max(log.base());
-                let Some(l) = log.at(next) else { break Place::Done };
+                let Some(log) = st.log.as_ref() else { break Place::Gone };
+                // Messages that left the log are missed: go on from the oldest one still here, and tell the subscriber.
+                if b.next < log.base() {
+                    b.lost = true;
+                    b.next = log.base();
+                }
+                let Some(l) = log.at(b.next) else { break Place::Caught };
                 if let Ok((head, _)) = Head::parse(l)
                     && head.origin != peer
                     && wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok()
@@ -69,19 +130,28 @@ impl Topics {
                         break if h.backlogged(peer, self.scratch.len()) {
                             Place::Keep
                         } else {
-                            Place::Done
+                            Place::Gone
                         };
                     }
                     self.sent.note(peer, head.ts, head.origin);
                 }
-                next += 1;
+                b.next += 1;
             };
+            if b.next > from {
+                b.progress_ms = wall;
+            }
             match place {
                 Place::Keep => {
-                    st.behind.insert(*peer, next);
+                    st.behind.insert(*peer, b);
                     still = true;
                 }
-                Place::Done => {
+                Place::Caught => {
+                    st.behind.remove(peer);
+                    if b.lost && wire::build(&mut self.scratch, ty::RESTORED, topic, &[]).is_ok() {
+                        h.send(peer, Lane::Reply, &self.scratch);
+                    }
+                }
+                Place::Gone => {
                     st.behind.remove(peer);
                 }
             }

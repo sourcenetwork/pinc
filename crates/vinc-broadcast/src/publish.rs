@@ -93,7 +93,8 @@ impl Topics {
     ///
     /// # Errors
     /// [`Refused`] for a topic over 255 bytes, a body over the limit, a full topic table, [`PENDING_MAX`] publishes
-    /// still waiting for a hub ([`Refused::Backlog`]: publish again once some are acknowledged) or a signing failure.
+    /// still waiting for a hub, or on a hub a log full of messages its subscribers are still owed ([`Refused::Backlog`]:
+    /// publish again later), or a signing failure.
     pub fn publish<H: Host>(&mut self, h: &mut H, now: Nanos, topic: &[u8], body: &[u8]) -> Result<[u8; 8], Refused> {
         if topic.len() > MAX_TOPIC {
             return Err(Refused::TopicTooLong);
@@ -148,13 +149,12 @@ impl Topics {
                 mid,
                 mode: PublishMode::Local,
             });
-            if let Some(rest) = data.get(tlen..)
-                && let Ok((head, body)) = Head::parse(rest)
-            {
-                let _ = self.hub_store(h, now, None, false, topic, &head, rest, body);
-            }
+            let rest = data.get(tlen..).unwrap_or_default();
+            // Not stored: the log can evict nothing for it, because subscribers that are behind are still owed the rest.
+            let stored =
+                Head::parse(rest).is_ok_and(|(hd, b)| self.hub_store(h, now, None, false, topic, &hd, rest, b));
             self.give_buf(data);
-            return Ok(mid);
+            return if stored { Ok(mid) } else { Err(Refused::Backlog) };
         }
         // Behind publishes that wait for room in the hub's stream this one waits too, so the hub gets them in order.
         let (mode, handed) = if self.unsent > 0 {

@@ -6,7 +6,8 @@
 //!
 //! Invariants: a message is delivered at most once per id within the dedupe window; a message from an origin the
 //! access-control layer has not yet answered for is held (at most [`HELD_MAX`]) and delivered or dropped on the
-//! answer; the steady path (verify, log, push, deliver) allocates nothing.
+//! answer; the steady path (verify, log, push, deliver) allocates nothing; a hub stores (and so acknowledges) no
+//! message whose eviction would drop one still owed to a subscriber that is behind (see `behind.rs`).
 
 use alloc::vec::Vec;
 
@@ -129,9 +130,15 @@ impl Topics {
         let Some(st) = self.topics.get_mut(topic) else {
             return false;
         };
-        let (log, seen) = (&mut st.log, &mut st.seen);
+        let (log, seen, behind) = (&mut st.log, &mut st.seen, &mut st.behind);
         let log = log.get_or_insert_with(|| HubLog::new(log_bytes));
         let head_bytes = rest.get(..head.len()).unwrap_or_default();
+        // A message still owed to a subscriber that is behind is not evicted: the new one is refused, so it is not
+        // acknowledged and its publisher retries it.
+        if !Self::room_to_store(behind, log, head_bytes.len() + body.len(), now, wall) {
+            self.note_reject(head.mid, Reject::LogFull);
+            return false;
+        }
         let stored = log.push(key, now, wall, head_bytes, body, |old| {
             // Only an id the set lost needs a record: a second one at the same instant would leave the id forgotten
             // when the first is popped.
@@ -166,7 +173,7 @@ impl Topics {
                 }
             }
             if !fell.is_empty() {
-                self.fall_behind(topic, &fell);
+                self.fall_behind(topic, &fell, wall);
             }
             if !fanned && sender.is_none_or(|s| !self.hubs.contains(s)) {
                 for hub in &self.hubs {
