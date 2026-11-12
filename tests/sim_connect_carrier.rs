@@ -254,6 +254,52 @@ fn a_carrier_nobody_rides_is_checked_while_the_node_has_a_session() {
     });
 }
 
+/// A dial of a UDP-dark node whose carrier died silently (its NAT forgot the idle TCP flow after 20 s) at 30 s: when
+/// the dial is connected, or `None` by 100 s.
+fn dial_over_a_silently_dead_carrier(seed: u64) -> Option<u64> {
+    use vinc_sim::{NatConfig, NatKind, PortPolicy};
+    let mut w = World::new(seed);
+    let (_r1, rs1) = w.relay(1, relay_ip(10));
+    let (_r2, rs2) = w.relay(2, relay_ip(20));
+    let lan = w.sim.add_lan(LanConfig {
+        udp_block: true,
+        ..LanConfig::default()
+    });
+    let nat = w.sim.add_nat_in(
+        NatConfig {
+            kind: NatKind::PortRestricted,
+            ext_ip: ext(1),
+            mapping_timeout: 120 * SEC,
+            tcp_timeout: 20 * SEC,
+            refresh_on_inbound: true,
+            port_base: 20_000,
+            ports: PortPolicy::Sequential,
+            no_punch: false,
+        },
+        lan,
+    );
+    let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs1, rs2]), nat);
+    let b = w.client_public(&client_spec(0xb1, priv_addr(9), &[rs1, rs2]));
+    w.run(secs(30));
+    w.dial(secs(30), a, b, vec![]);
+    w.run(secs(100));
+    w.sim
+        .events(a)
+        .iter()
+        .find_map(|(t, e)| matches!(e, vinc_tests::Ev::Ep(vinc_core::Event::Connected { .. })).then_some(*t))
+}
+
+#[test]
+fn a_dial_at_its_third_try_checks_its_carriers_and_replaces_one_that_died_silently() {
+    big(|| {
+        let at = dial_over_a_silently_dead_carrier(32);
+        assert!(
+            at.is_some_and(|t| t < secs(45)),
+            "the dial waited for the carrier keepalive: {at:?}"
+        );
+    });
+}
+
 #[test]
 fn the_home_moves_to_the_second_relay_when_the_first_dies() {
     big(|| {

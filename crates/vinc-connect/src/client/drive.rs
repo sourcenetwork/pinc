@@ -39,6 +39,9 @@ use crate::record::MAX_ADDRS;
 use crate::relay::datagram::Datagram;
 use vinc_transport::packet::LongHeader;
 
+/// The handshake try (the first flight is the first) from which an unanswered dial checks the carriers it could ride.
+const CARRIER_CHECK_TRIES: u32 = 3;
+
 /// A session the layer follows.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Sess {
@@ -564,6 +567,9 @@ drive_impl! {
             if !st.established && st.dialer && tries != s.tries && s.relay_at.is_none() {
                 s.tries = tries;
                 self.reselect(now, ep, &mut s);
+                if tries >= CARRIER_CHECK_TRIES {
+                    self.check_dial_carriers(now, &s.node);
+                }
             }
             s.relay_route = st.route.is_some_and(|(_, r)| is_relay_addr(&r));
             // A session still in its handshake has nothing to punch for: its establishment arms the timer again. Left
@@ -687,6 +693,22 @@ drive_impl! {
                     let _ = self.cmd(ep, now, Command::Ping { session: s.id });
                 }
             }
+        }
+    }
+
+    /// From its third try on, a handshake that has not been answered checks the carriers it could ride: the relays
+    /// among the peer's candidate paths and the home relay. A carrier that died without a close is found and dialed
+    /// again at once, not at its keepalive.
+    fn check_dial_carriers(&mut self, now: u64, node: &NodeId) {
+        let mut cands = [Cand::Relay(0); 16];
+        let nc = self.candidates_for(node, &[], &mut cands);
+        for c in cands.get(..nc).unwrap_or_default() {
+            if let Cand::Relay(r) = c {
+                self.check_carrier(now, usize::from(*r));
+            }
+        }
+        if let Some(h) = self.net.home() {
+            self.check_carrier(now, h);
         }
     }
 
