@@ -45,6 +45,39 @@ pub(crate) enum Refusal {
     NoSigner = 7,
     /// A table of this node is full.
     Busy = 8,
+    /// The reception holds as many disjoint verified ranges as it can and cannot record another: the bundle is too
+    /// fragmented for this node to receive, not tampered with. The holder may offer it to another node.
+    Fragmented = 9,
+}
+
+impl Refusal {
+    /// The refusal that reports a feed or reception error to the holder. A full range set is [`Refusal::Fragmented`],
+    /// an expired bundle is [`Refusal::Expired`], and anything else is a failed proof. The distinction matters: a
+    /// holder must not read "too fragmented here" as "you sent bad data" and stop offering.
+    pub(crate) fn for_feed(e: vinc_dtn::DtnError) -> Self {
+        match e {
+            vinc_dtn::DtnError::Expired => Self::Expired,
+            vinc_dtn::DtnError::ReceptionFull => Self::Fragmented,
+            _ => Self::BadProof,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use vinc_dtn::DtnError;
+
+    use super::Refusal;
+
+    #[test]
+    fn a_full_range_set_is_fragmented_not_a_bad_proof() {
+        assert_eq!(Refusal::for_feed(DtnError::ReceptionFull), Refusal::Fragmented);
+        assert_eq!(Refusal::for_feed(DtnError::Expired), Refusal::Expired);
+        assert_eq!(Refusal::for_feed(DtnError::Tree(vinc_dag::tree::TreeError::Incomplete)), Refusal::BadProof);
+        // The three map to three distinct wire codes.
+        assert_eq!(Refusal::Fragmented as u8, 9);
+        assert_ne!(Refusal::Fragmented as u8, Refusal::BadProof as u8);
+    }
 }
 
 /// Start a frame of type `ty` in `out` (cleared first); [`finish`] writes its length.

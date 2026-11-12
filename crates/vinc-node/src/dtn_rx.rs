@@ -181,14 +181,7 @@ where
             Err(e) => Err(e),
         };
         if let Err(e) = fed {
-            return Err(Stop::Refuse(
-                id,
-                if e == DtnLibError::Expired {
-                    Refusal::Expired
-                } else {
-                    Refusal::BadProof
-                },
-            ));
+            return Err(Stop::Refuse(id, Refusal::for_feed(e)));
         }
         self.io.trace(NodeTrace::DtnSymbols {
             bundle: btag(&id.0),
