@@ -20,9 +20,9 @@ VINC is a library, not a framework:
 
 > **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. The facade
 > reaches peers directly and through relays, broadcasts on topics through a hub, looks a peer up by its id, and can
-> itself be the hub and relay of other nodes. Broadcast still loses messages in two measured cases, which is the work
-> in hand. The Status column says where each crate stands and [Open items](#open-items) lists what is not done, with
-> the issue that tracks each.
+> itself be the hub and relay of other nodes. The two measured cases in which broadcast lost messages lose none now.
+> The Status column says where each crate stands and [Open items](#open-items) lists what is not done, with the issue
+> that tracks each.
 
 ## Usage
 
@@ -174,13 +174,18 @@ checked, the assumptions and what is still being closed.
 
 ## Open items
 
-As of 12 November 2026, `master` at `d1706d9`. Every item names the issue that tracks it.
+As of 13 November 2026, `master` at `1191fe8`. Every item names the issue that tracks it.
 
-- **Message loss in broadcast (the work in hand).** A burst of 2,000 messages of 4 KiB through a hub to ten
-  subscribers loses 1.35% to 14.9% of them in the harness, where iroh and rust-libp2p lose none (51% before the hub
-  kept each subscriber's place in its topic log): [#74](https://github.com/sourcenetwork/vinc/issues/74). A partition
-  that heals lost 6.4% when it was last measured, against none for iroh and 15.8% for rust-libp2p:
-  [#101](https://github.com/sourcenetwork/vinc/issues/101).
+- **Message loss in broadcast.** The two cases that lost messages lose none now, in three repetitions each in the
+  harness. A burst of 2,000 messages of 4 KiB through a hub to ten subscribers lost 1.35% to 21% and loses 0, as
+  iroh and rust-libp2p do ([#109](https://github.com/sourcenetwork/vinc/pull/109)): a publisher keeps what its hub's
+  stream has no room for and `publish` waits, and a subscriber no longer resets a stream after a lost packet. A site
+  cut off for 15 seconds lost 1.4% to 6.6% and loses 0, where rust-libp2p loses 15.8%
+  ([#111](https://github.com/sourcenetwork/vinc/pull/111)): hubs offer each other every message they hold, not the
+  newest 512. Still open: a hub's log of a topic holds 2,048 messages whatever its byte limit, so a longer burst to a
+  subscriber that cannot keep up loses its oldest ([#110](https://github.com/sourcenetwork/vinc/issues/110), with a
+  fix proposed in [#75](https://github.com/sourcenetwork/vinc/pull/75)). The burst's median delivery time is 3.5 s
+  against 1.6 s for iroh and 3.6 s for rust-libp2p.
 - **The facade** reaches peers directly and through relays, and has topic broadcast through a hub, lookup of a peer
   by its id through signed records, export and restore of its state, revocation, stream urgency, and two stream calls
   that pass a buffer instead of copying it (`RecvStream::read_with`, `SendStream::send_owned`). One endpoint can be
