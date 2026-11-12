@@ -62,11 +62,11 @@ logarithm.
 
 ## What it doesn't say
 
-It counts parts; it doesn't count bytes or messages. Those two bounds are checked by the model checker for fixed
-sizes, and nobody has proved them in Lean yet. Also, the theorems talk about the part rules of the code. The last
-link, from the functions that actually read and write bytes down to those rules, is proved for the split and for the
-leaf rule but not from end to end (`ReconcileCorrect` lists what's open). And I suspect the 16-way cut really
-satisfies something like `D * log (n / D)`, which would be better still, but that isn't proved here either.
+It counts parts. Bytes and messages have their own file, `ReconcileCostBytes`, which proves the same kind of bound
+for both. Also, the theorems talk about the part rules of the code. The last link, from the functions that actually
+read and write bytes down to those rules, is proved for the split and for the leaf rule but not from end to end
+(`ReconcileCorrect` lists what's open). And I suspect the 16-way cut really satisfies something like
+`D * log (n / D)`, which would be better still, but that isn't proved here either.
 -/
 
 namespace Vinc.Reconcile
