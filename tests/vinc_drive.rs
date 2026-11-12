@@ -347,7 +347,9 @@ async fn messages_allocate_nothing_in_the_facade() {
             s.send_datagram(&[2u8; 64]).await.unwrap();
             assert_eq!(c.recv_datagram(dbuf).await.unwrap(), 64);
         };
-        for _ in 0..100 {
+        // A session's buffers are allocated a segment at a time until they hold what the session works with; this
+        // exchange comes to need a second segment after about a hundred rounds, and nothing after that.
+        for _ in 0..400 {
             round(&c, &s, &mut dbuf).await;
         }
         let from = AllocStats::now();

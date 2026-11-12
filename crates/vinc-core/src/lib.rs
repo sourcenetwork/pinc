@@ -20,8 +20,8 @@
 //!
 //! The crate is `no_std`, forbids unsafe code, uses no `dyn`, allocates nothing per packet, and never panics on input.
 //! Every table has a fixed bound. Without the `alloc` feature it allocates nothing at all; with it the endpoint's tables
-//! are allocated once, when it is built, and [`Endpoint::new_owned`] also allocates the slot table and the memory of
-//! every slot, all freed when the endpoint is dropped. With the `trace` feature every decision is also recorded as an
+//! are allocated once, when it is built, and [`Endpoint::new_owned`] also allocates the slot table then and the memory
+//! of a slot when the slot is first taken, all freed when the endpoint is dropped. With the `trace` feature every decision is also recorded as an
 //! ndjson-ready [`TraceRecord`] for model checking and proof of the same rules.
 #![no_std]
 #![forbid(unsafe_code)]

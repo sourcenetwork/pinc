@@ -11,9 +11,10 @@
 //! connections run in. With [`Endpoint::new`] the caller owns it and chooses where the memory lives, and the endpoint
 //! itself never allocates without the `alloc` feature; such an endpoint is large (it holds the ticket stores, the ledger
 //! and every lookup table inline): place it in a `Box` or a static. With `alloc` the lookup tables are on the heap and
-//! [`Endpoint::new_owned`] builds an endpoint that owns its table and the memory of every slot, built on the heap
-//! piece by piece. A slot whose memory a failed construction consumed is retired for good and counted in
-//! [`NodeStats`].
+//! [`Endpoint::new_owned`] builds an endpoint that owns its table, built on the heap piece by piece, and makes the
+//! memory of a slot when the slot is first taken: it holds the memory of the most sessions it has had at once
+//! ([`Endpoint::backed_slots`]), kept for the sessions that follow. A slot whose memory a failed construction
+//! consumed is retired for good and counted in [`NodeStats`].
 //!
 //! # The rules
 //!
@@ -146,6 +147,9 @@ pub struct Endpoint<
     pub(crate) cfg: EndpointConfig,
     pub(crate) alpns: [Option<Alpn>; MAX_ALPNS],
     pub(crate) slots: Slots<'s, Slot<'a, P, S, N, C, F, NP>, K>,
+    /// What an endpoint that owns its table makes a slot's memory from; `None` when the host gave every slot its own.
+    #[cfg(feature = "alloc")]
+    pub(crate) fresh: Option<Fresh>,
     pub(crate) free: u32,
     pub(crate) live: usize,
     pub(crate) half_open: usize,
@@ -198,31 +202,33 @@ pub struct Endpoint<
     pub(crate) trace: TraceLog,
 }
 
-/// The connection table: lent by the caller, or (with `alloc`) owned by the endpoint.
+/// The connection table: lent by the caller, or (with `alloc`) owned by the endpoint. An owned table has room for
+/// `K` slots and holds those taken so far: a slot is written when it is first taken, so an endpoint for thousands of
+/// sessions that has had ten touches the memory of ten.
 pub(crate) enum Slots<'s, T, const K: usize> {
     Borrowed(&'s mut [T; K]),
     #[cfg(feature = "alloc")]
-    Owned(alloc::boxed::Box<[T; K]>),
+    Owned(alloc::vec::Vec<T>),
 }
 
 impl<T, const K: usize> core::ops::Deref for Slots<'_, T, K> {
-    type Target = [T; K];
+    type Target = [T];
 
-    fn deref(&self) -> &[T; K] {
+    fn deref(&self) -> &[T] {
         match self {
-            Self::Borrowed(r) => r,
+            Self::Borrowed(r) => r.as_slice(),
             #[cfg(feature = "alloc")]
-            Self::Owned(b) => b,
+            Self::Owned(v) => v,
         }
     }
 }
 
 impl<T, const K: usize> core::ops::DerefMut for Slots<'_, T, K> {
-    fn deref_mut(&mut self) -> &mut [T; K] {
+    fn deref_mut(&mut self) -> &mut [T] {
         match self {
-            Self::Borrowed(r) => r,
+            Self::Borrowed(r) => r.as_mut_slice(),
             #[cfg(feature = "alloc")]
-            Self::Owned(b) => b,
+            Self::Owned(v) => v,
         }
     }
 }
@@ -268,10 +274,13 @@ where
     P: Provider,
     S: StreamSource,
 {
-    /// A new endpoint that owns its connection table and the memory of every slot: `pool_chunks` buffer chunks and a
-    /// stream table each, and one loss estimate they share. Nothing outlives the endpoint and nothing is borrowed, so
-    /// dropping it frees everything. The endpoint is built on the heap, piece by piece: no table of megabytes is ever
-    /// formed on the stack. `D` must be at least ten times `K`.
+    /// A new endpoint that owns its connection table and the memory of every slot: up to `pool_chunks` buffer chunks
+    /// and a stream table each, and one loss estimate they share. A slot and its memory are made when the slot is
+    /// first taken and kept for the sessions that follow in it, and its buffer chunks are made a segment at a time as
+    /// a session needs them. So the endpoint holds the memory of as many sessions as it has had at once, as large as
+    /// they grew, not of the `K` it may have. Nothing outlives the endpoint and nothing is borrowed, so dropping it
+    /// frees everything. The endpoint is built on the heap, piece by piece: no table of megabytes is ever formed on
+    /// the stack. `D` must be at least ten times `K`.
     pub fn new_owned(
         now: u64,
         provider: P,
@@ -280,39 +289,59 @@ where
         cfg: EndpointConfig,
         pool_chunks: usize,
     ) -> alloc::boxed::Box<Self> {
-        use alloc::{boxed::Box, rc::Rc, vec::Vec};
+        use alloc::{boxed::Box, vec::Vec};
 
-        use vinc_transport::conn::{Held, Shared};
-        use vinc_transport::conn::{Machines, Tables};
-        use vinc_transport::recovery::LossEstimate;
-        use vinc_transport::stream::Streams;
-        use vinc_transport::stream::pool::BufferPool;
-
-        let loss = Rc::new(LossEstimate::new());
-        let machines = Machines::new();
-        let stream_cfg = stream::Config::new(false);
-        let probe = BufferPool::new_boxed(1);
-        let slots: Vec<Slot<'static, P, S, N, C, F, NP>> = (0..K)
-            .map(|_| {
-                Slot::new(Resources {
-                    pool: BufferPool::new_boxed(pool_chunks),
-                    streams: Held::Owned(Box::new(Streams::new(&stream_cfg, &probe))),
-                    loss: Shared::Counted(Rc::clone(&loss)),
-                    tables: Tables::sharing(&machines),
-                })
-            })
-            .collect();
-        let Ok(table) = slots.into_boxed_slice().try_into() else {
-            unreachable!("a vector of K slots converts to an array of K")
-        };
-        Box::new(Self::with_slots(
+        // Room for every slot at once, so the table never moves; the system commits it as slots are written.
+        let mut ep = Box::new(Self::with_slots(
             now,
             provider,
             drbg,
             identity,
             cfg,
-            Slots::Owned(table),
-        ))
+            Slots::Owned(Vec::with_capacity(K)),
+        ));
+        ep.fresh = Some(Fresh::new(pool_chunks));
+        ep
+    }
+}
+
+/// What an endpoint that owns its table makes a slot's memory from, the first time the slot is taken.
+#[cfg(feature = "alloc")]
+pub(crate) struct Fresh {
+    pool_chunks: usize,
+    loss: alloc::rc::Rc<vinc_transport::recovery::LossEstimate>,
+    machines: vinc_transport::conn::Machines,
+    /// The pool a new stream table is made against; [`Endpoint::alloc_slot`] ties the table to the slot's own.
+    probe: vinc_transport::stream::pool::BufferPool<'static>,
+}
+
+#[cfg(feature = "alloc")]
+impl Fresh {
+    fn new(pool_chunks: usize) -> Self {
+        Self {
+            pool_chunks,
+            loss: alloc::rc::Rc::new(vinc_transport::recovery::LossEstimate::new()),
+            machines: vinc_transport::conn::Machines::new(),
+            probe: vinc_transport::stream::pool::BufferPool::new_boxed(1),
+        }
+    }
+
+    /// The memory of one slot: its buffer pool, its stream table and its tables, none of which holds more than the
+    /// slot's sessions come to use.
+    fn memory<'m, S: StreamSource, const N: usize, const C: usize, const F: usize>(&self) -> Resources<'m, S, N, C, F> {
+        use vinc_transport::conn::{Held, Shared, Tables};
+        use vinc_transport::stream::Streams;
+        use vinc_transport::stream::pool::BufferPool;
+
+        Resources {
+            pool: BufferPool::new_grown(self.pool_chunks),
+            streams: Held::Owned(alloc::boxed::Box::new(Streams::new(
+                &stream::Config::new(false),
+                &self.probe,
+            ))),
+            loss: Shared::Counted(alloc::rc::Rc::clone(&self.loss)),
+            tables: Tables::sharing(&self.machines),
+        }
     }
 }
 
@@ -354,10 +383,11 @@ ep_impl! {
     ) -> Self {
         cfg.conn.cid_len = CID_LEN;
         let seed = cfg.seed;
-        let last = K.saturating_sub(1);
+        let last = slots.len().saturating_sub(1);
         for (i, s) in slots.iter_mut().enumerate() {
             s.m.next_free = if i < last { u32::try_from(i + 1).unwrap_or(NIL) } else { NIL };
         }
+        let free = if slots.is_empty() { NIL } else { 0 };
         Self {
             provider,
             drbg,
@@ -366,7 +396,9 @@ ep_impl! {
             cfg,
             alpns: [None; MAX_ALPNS],
             slots,
-            free: if K == 0 { NIL } else { 0 },
+            #[cfg(feature = "alloc")]
+            fresh: None,
+            free,
             live: 0,
             half_open: 0,
             demux: Table::new(seed ^ 0x01),
@@ -535,6 +567,12 @@ ep_impl! {
         self.counters.retired
     }
 
+    /// Slots that hold memory, in use or free. For an endpoint that owns its table ([`Endpoint::new_owned`]) this is
+    /// the most sessions it has had at once; for one given its table it is every slot not retired.
+    pub fn backed_slots(&self) -> usize {
+        self.slots.iter().filter(|s| s.mem.is_some() || s.conn.is_some()).count()
+    }
+
     /// Trace records dropped because the ring was full.
     pub const fn trace_dropped(&self) -> u64 {
         self.trace.dropped()
@@ -611,9 +649,26 @@ ep_impl! {
 
     /// Take a free slot for a new session and prepare its memory for `client`'s role.
     pub(crate) fn alloc_slot(&mut self, client: bool, now: u64) -> Option<(usize, Resources<'a, S, N, C, F>)> {
+        // An endpoint that owns its table adds a slot when every one it has is taken.
+        #[cfg(feature = "alloc")]
+        if self.free == NIL
+            && self.fresh.is_some()
+            && let Slots::Owned(v) = &mut self.slots
+            && v.len() < K
+            && let Ok(i) = u32::try_from(v.len())
+        {
+            v.push(Slot::unbacked());
+            self.free = i;
+        }
         let i = self.free as usize;
         let slot = self.slots.get_mut(i)?;
-        let mut mem = slot.mem.take()?;
+        let mut mem = match slot.mem.take() {
+            Some(m) => m,
+            #[cfg(feature = "alloc")]
+            None => self.fresh.as_ref()?.memory(),
+            #[cfg(not(feature = "alloc"))]
+            None => return None,
+        };
         self.free = slot.m.next_free;
         mem.pool.reset();
         mem.streams.reinit(&stream::Config::new(client), &mem.pool);

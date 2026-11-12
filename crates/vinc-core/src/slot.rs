@@ -378,6 +378,16 @@ impl<'a, P: Provider, S: StreamSource, const N: usize, const C: usize, const F: 
             m: Meta::EMPTY,
         }
     }
+
+    /// A free slot, the last of its free list, whose memory the endpoint makes when the slot is first taken.
+    #[cfg(feature = "alloc")]
+    pub(crate) const fn unbacked() -> Self {
+        Self {
+            conn: None,
+            mem: None,
+            m: Meta::EMPTY,
+        }
+    }
 }
 
 impl<P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usize, const NP: usize> core::fmt::Debug

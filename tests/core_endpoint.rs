@@ -482,3 +482,104 @@ fn an_ended_endpoint_gives_its_table_back_with_every_session_closed() {
         assert!(again.is_some());
     });
 }
+
+/// An endpoint that owns its table holds the memory of the most sessions it has had at once, not of every slot.
+#[test]
+fn an_owned_endpoint_makes_the_memory_of_a_slot_when_the_slot_is_first_taken() {
+    use vinc_core::{Endpoint, EndpointConfig};
+    use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
+    use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+    use vinc_transport::stream::NoSource;
+
+    let identity = |tag: u8| {
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
+        LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap()
+    };
+    let mut ep: Box<Endpoint<'static, 'static, Software, NoSource, CN, CC, CF, CNP, CK, CD, CPK, CTK, CCT>> =
+        Endpoint::new_owned(
+            SEC_NS,
+            Software,
+            Drbg::new(&[3; 32]),
+            identity(1),
+            EndpointConfig::new(7),
+            CHUNKS_PER_CONN,
+        );
+    let mut drbg = Drbg::new(&[4; 32]);
+    let mut env = Env {
+        provider: &Software,
+        now: SEC_NS,
+        drbg: &mut drbg,
+    };
+    let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
+    ep.set_prekey(prekeys.acquire(&mut env).unwrap());
+    assert!(ep.register_alpn(ALPN_A));
+    ep.add_iface("10.0.0.1:4000".parse().unwrap()).unwrap();
+    assert_eq!(
+        ep.backed_slots(),
+        0,
+        "an endpoint that had no session holds no session memory"
+    );
+
+    let dial = |ep: &mut Endpoint<'static, 'static, Software, NoSource, CN, CC, CF, CNP, CK, CD, CPK, CTK, CCT>,
+                now: u64,
+                tag: u8| {
+        let to = [format!("10.0.0.{tag}:4000").parse().unwrap()];
+        let rep = ep
+            .command(
+                now,
+                Command::Connect {
+                    node: identity(tag).node_id(),
+                    alpn: ALPN_A,
+                    addrs: &to,
+                    role: Role::Other,
+                },
+            )
+            .unwrap();
+        let Value::Session(s) = rep.value else {
+            panic!("not a session")
+        };
+        s
+    };
+    let a = dial(&mut ep, SEC_NS, 2);
+    assert_eq!(ep.backed_slots(), 1);
+    let _b = dial(&mut ep, SEC_NS, 3);
+    assert_eq!(ep.backed_slots(), 2);
+
+    // A session ends: its slot keeps the memory, and the next session runs in it.
+    ep.command(SEC_NS, Command::Close { session: a, error: 0 }).unwrap();
+    let mut now = SEC_NS;
+    let mut out = [0u8; 1500];
+    for _ in 0..10_000 {
+        while ep.poll_transmit(now, &mut out).is_some() {}
+        while ep.poll_event().is_some() {}
+        if ep.node_stats().sessions == 1 {
+            break;
+        }
+        now = ep.poll_timeout().unwrap().max(now);
+        ep.handle_timeout(now);
+    }
+    assert_eq!(ep.node_stats().sessions, 1, "the closed session left the table");
+    assert_eq!(ep.backed_slots(), 2);
+    let _c = dial(&mut ep, now, 4);
+    assert_eq!(ep.backed_slots(), 2, "the freed slot's memory serves the next session");
+    let _d = dial(&mut ep, now, 5);
+    assert_eq!(ep.backed_slots(), 3);
+
+    // The table grows to its bound and no further.
+    for tag in 6..=10 {
+        dial(&mut ep, now, tag);
+    }
+    assert_eq!((ep.node_stats().sessions, ep.backed_slots()), (CK, CK));
+    let to = ["10.0.0.11:4000".parse().unwrap()];
+    let full = ep.command(
+        now,
+        Command::Connect {
+            node: identity(11).node_id(),
+            alpn: ALPN_A,
+            addrs: &to,
+            role: Role::Other,
+        },
+    );
+    assert!(full.is_err(), "a ninth session has no slot: {full:?}");
+    assert_eq!(ep.backed_slots(), CK);
+}
