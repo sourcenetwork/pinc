@@ -194,6 +194,7 @@ fn scenarios(app: &App) -> Resp {
                     crate::scenario::Workload::Pubsub(_) => "pubsub",
                     crate::scenario::Workload::Sync(_) => "sync",
                     crate::scenario::Workload::Reconcile(_) => "reconcile",
+                    crate::scenario::Workload::Dtn(_) => "dtn",
                 };
                 json!({
                     "file": file, "name": sc.name, "about": sc.about, "stacks": sc.stacks,

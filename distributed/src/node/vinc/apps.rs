@@ -1,5 +1,5 @@
-//! The host stores of the layers above broadcast for a VINC node program: the values it serves and fetches, and the sets
-//! it reconciles.
+//! The host stores of the layers above broadcast for a VINC node program: the values it serves and fetches, the sets
+//! it reconciles, and the bundle store of delay-tolerant delivery (see [`super::dtn`]), on when a scenario asks.
 //!
 //! A served value is generated from its seed at the offset asked, with the tree outboard built once when it is
 //! provided; a fetched value is written into one buffer the size of the value, and its verified ranges are kept in the
@@ -17,10 +17,11 @@ use std::rc::Rc;
 use vinc_crypto::Software;
 use vinc_dag::ranges::VerifiedRanges;
 use vinc_dag::tree::OutboardBuilder;
-use vinc_node::{Apps, Enabled, NoDtn, SetsApp};
+use vinc_node::{Apps, Enabled, SetsApp};
 use vinc_reconcile::{Fingerprint, ItemIndex, Limits, MemError, MemIndex};
 use vinc_values::store::{StoreError, ValueRead, ValueStore, verified_after};
 
+use super::dtn::DtnStore;
 use crate::node::data::Content;
 
 /// One value this node serves.
@@ -207,26 +208,27 @@ impl SetsApp for SetStore {
     }
 }
 
-/// The three stores a node over values and sets runs with.
-#[derive(Clone, Default)]
+/// The three stores a node runs with: values, sets, and bundles (off unless the scenario turns it on).
+#[derive(Default)]
 pub struct VApps {
     /// The values.
     pub values: VStore,
     /// The sets.
     pub sets: SetStore,
-    dtn: NoDtn,
+    /// The bundles.
+    pub dtn: DtnStore,
 }
 
 impl Apps<Software> for VApps {
     type Values = VStore;
     type Sets = SetStore;
-    type Dtn = NoDtn;
+    type Dtn = DtnStore;
 
     fn enabled(&self) -> Enabled {
         Enabled {
             values: true,
             sets: true,
-            dtn: false,
+            dtn: self.dtn.is_on(),
         }
     }
     fn values(&mut self) -> &mut VStore {
@@ -235,7 +237,7 @@ impl Apps<Software> for VApps {
     fn sets(&self) -> &SetStore {
         &self.sets
     }
-    fn dtn(&mut self) -> &mut NoDtn {
+    fn dtn(&mut self) -> &mut DtnStore {
         &mut self.dtn
     }
 }

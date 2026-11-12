@@ -1,0 +1,82 @@
+name = "dtn-custody"
+about = "Custody with signed acknowledgements across a restart: the laptop's update for an unreachable phone moves into the office node's custody with a signed ack, then the office node is killed before it hands the bundle on and comes back from its persisted store. Custody is never dropped, the restart restores it, and the phone gets the update once when it comes into contact. VINC only: iroh and libp2p have no custody."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home"
+
+[[nodes]]
+name = "hub"
+site = "home"
+role = "hub"
+
+[[nodes]]
+name = "laptop"
+site = "home"
+
+[[nodes]]
+name = "office"
+site = "home"
+
+[[nodes]]
+name = "phone"
+site = "home"
+
+[workload]
+kind = "dtn"
+sizes = [1024, 65536, 1048576]
+duration_s = 75
+
+[[workload.nodes]]
+name = "office"
+persist = true
+
+[[workload.sends]]
+at_s = 2
+from = "laptop"
+to = "phone"
+copies = 2
+lifetime_s = 200
+
+[[workload.contacts]]
+a = "laptop"
+b = "office"
+from_s = 1
+to_s = 10
+
+[[workload.contacts]]
+a = "office"
+b = "phone"
+from_s = 40
+to_s = 75
+
+[[workload.checks]]
+rule = "custody"
+moves = [{ from = "laptop", to = "office" }]
+
+[[workload.checks]]
+rule = "restored"
+at = "office"
+held_min = 1
+
+[[workload.checks]]
+rule = "delivered"
+to = "phone"
+via = "office"
+after_s = 40
+
+[[workload.checks]]
+rule = "copies"
+
+[[faults]]
+at_s = 15
+action = { do = "kill", node = "office" }
+
+[[faults]]
+at_s = 25
+action = { do = "restart", node = "office" }

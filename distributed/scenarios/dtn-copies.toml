@@ -1,0 +1,95 @@
+name = "dtn-copies"
+about = "Copy-limited spray and wait: a document update with a budget of 4 copies crosses laptop, c1 and office to a phone over contacts up only in windows, with distractor peers (cloud, edge) met in later windows that take copies too. No more holders than the budget, and every node hands on fewer copies than it received. VINC only: iroh and libp2p have no copy-limited forwarding."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home"
+
+[[nodes]]
+name = "hub"
+site = "home"
+role = "hub"
+
+[[nodes]]
+name = "laptop"
+site = "home"
+
+[[nodes]]
+name = "c1"
+site = "home"
+
+[[nodes]]
+name = "cloud"
+site = "home"
+
+[[nodes]]
+name = "office"
+site = "home"
+
+[[nodes]]
+name = "edge"
+site = "home"
+
+[[nodes]]
+name = "phone"
+site = "home"
+
+[workload]
+kind = "dtn"
+sizes = [1024, 65536, 1048576]
+duration_s = 60
+
+[[workload.sends]]
+at_s = 2
+from = "laptop"
+to = "phone"
+copies = 4
+lifetime_s = 200
+
+[[workload.contacts]]
+a = "laptop"
+b = "c1"
+from_s = 3
+to_s = 8
+
+[[workload.contacts]]
+a = "laptop"
+b = "cloud"
+from_s = 10
+to_s = 15
+
+[[workload.contacts]]
+a = "c1"
+b = "office"
+from_s = 18
+to_s = 24
+
+[[workload.contacts]]
+a = "c1"
+b = "edge"
+from_s = 26
+to_s = 31
+
+[[workload.contacts]]
+a = "office"
+b = "phone"
+from_s = 34
+to_s = 60
+
+[[workload.checks]]
+rule = "copies"
+
+[[workload.checks]]
+rule = "custody"
+moves = [{ from = "laptop", to = "c1" }, { from = "c1", to = "office" }]
+
+[[workload.checks]]
+rule = "delivered"
+to = "phone"
+via = "office"
+after_s = 34

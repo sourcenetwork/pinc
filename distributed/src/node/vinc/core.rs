@@ -19,7 +19,11 @@ use vinc_connect::client::{Config as ConnCfg, Io, Kind, RelayCfg};
 use vinc_connect::relay::Config as RelayConfig;
 use vinc_core::{Command, Endpoint, EndpointConfig, Event, Query, relay_parts};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId, Software};
-use vinc_node::{Config as NodeConfig, HUB_ALPN, MemberNotice, Node, NodeEvent, ValuesRequest, is_relay_request};
+use vinc_dtn::seal::RecipientKeys;
+use vinc_node::{
+    Body, Config as NodeConfig, DtnPlan, DtnRestored, HUB_ALPN, MemberNotice, Node, NodeEvent, NodeTrace,
+    ValuesRequest, is_relay_request,
+};
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, PrekeyPolicy, ResponderStores, SoftPrekeys};
 use vinc_values::source::ValueSource;
 
@@ -202,6 +206,11 @@ pub struct Core<const K: usize, const D: usize> {
     pub ops: VecDeque<Op>,
     /// What the application layer reads, oldest first.
     pub events: VecDeque<NodeEvent>,
+    /// The delay-tolerant layer's trace records with the wall clock (milliseconds) they were read at, oldest first;
+    /// empty unless delay-tolerant delivery is on.
+    pub dtn_trace: VecDeque<(u64, NodeTrace)>,
+    /// What the node restored from a kept bundle store when it started.
+    pub restored: DtnRestored,
     pub(super) start: std::time::Instant,
     pub(super) dirty: bool,
 }
@@ -267,7 +276,8 @@ fn build<const K: usize, const D: usize>(
         limits: vinc_broadcast::Limits::default(),
         wall_ms,
         local: spec.addr,
-        trace: false,
+        // The delay-tolerant layer's decisions are observable only through the trace: on with the layer.
+        trace: apps.dtn.is_on(),
     };
     let drbg2 = Drbg::new(&seed32(&spec.name, "vinc-node-drbg"));
     let kp2 = keypair(&spec.name)?;
@@ -302,7 +312,15 @@ impl<const K: usize, const D: usize> Core<K, D> {
     pub fn new(spec: &Spec, apps: VApps) -> Result<Self, String> {
         let start = std::time::Instant::now();
         let now = Self::epoch_ns();
-        let (node, kp, prekeys, hdrbg) = build::<K, D>(spec, now, apps)?;
+        let resume = apps.dtn.has_records();
+        let (mut node, kp, prekeys, hdrbg) = build::<K, D>(spec, now, apps)?;
+        // A kept store is read back before any other input, as the node asks.
+        let restored = if resume {
+            node.set_wall_ms(now, wall_ms());
+            node.dtn_restore(now)
+        } else {
+            DtnRestored::default()
+        };
         let me = kp.node_id();
         let hub = spec.is_hub.then(|| HubSide {
             relay: Box::new(HubRelay::new(RelayConfig::new(
@@ -330,6 +348,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
             small: VecDeque::new(),
             ops: VecDeque::new(),
             events: VecDeque::new(),
+            dtn_trace: VecDeque::new(),
+            restored,
             start,
             dirty: false,
         };
@@ -366,10 +386,49 @@ impl<const K: usize, const D: usize> Core<K, D> {
             busy |= self.udp_step();
             busy |= self.streams_out_step();
             busy |= std::mem::take(&mut self.dirty);
+            self.trace_step();
             if !busy {
                 return;
             }
         }
+    }
+
+    /// Keep the delay-tolerant layer's trace records (and the count of records lost), drop the others.
+    fn trace_step(&mut self) {
+        let wall = wall_ms();
+        while let Some(item) = self.node.poll_trace() {
+            if let Body::Node(
+                t @ (NodeTrace::DtnCreated { .. }
+                | NodeTrace::DtnOffer { .. }
+                | NodeTrace::DtnSymbols { .. }
+                | NodeTrace::DtnComplete { .. }
+                | NodeTrace::DtnCustody { .. }
+                | NodeTrace::DtnAcked { .. }
+                | NodeTrace::DtnRefused { .. }
+                | NodeTrace::DtnReleased { .. }
+                | NodeTrace::Lost { .. }),
+            ) = item.body
+            {
+                self.dtn_trace.push_back((wall, t));
+            }
+        }
+    }
+
+    /// Make a bundle for `to` carrying `payload`; returns its id.
+    ///
+    /// # Errors
+    /// Why the node refused it.
+    pub fn dtn_send(
+        &mut self,
+        now: u64,
+        to: &RecipientKeys,
+        payload: &[u8],
+        plan: &DtnPlan,
+    ) -> Result<[u8; 32], String> {
+        self.node.set_wall_ms(now, wall_ms());
+        let r = self.node.dtn_send(now, to, payload, plan).map_err(|e| e.to_string());
+        self.pump(now);
+        r
     }
 
     fn events_step(&mut self, now: u64) -> bool {
@@ -390,6 +449,11 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 | NodeEvent::ValueFailed { .. }
                 | NodeEvent::ReconcileDone { .. }
                 | NodeEvent::ReconcileFailed { .. }
+                | NodeEvent::DtnReceived { .. }
+                | NodeEvent::DtnCustody { .. }
+                | NodeEvent::DtnHandedOff { .. }
+                | NodeEvent::DtnDelivered { .. }
+                | NodeEvent::DtnExpired { .. }
                 | NodeEvent::Lost { .. } => self.events.push_back(ev),
                 _ => {}
             }

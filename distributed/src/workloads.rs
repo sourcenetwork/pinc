@@ -264,7 +264,7 @@ fn check_names(path: &str, names: &[String], nodes: &BTreeMap<&str, &NodeSpec>, 
 }
 
 /// Every stack joins through the hub and relay nodes, so one must exist and every node must reach one.
-fn check_group(sc: &Scenario, nodes: &BTreeMap<&str, &NodeSpec>, out: &mut Vec<Problem>) {
+pub(crate) fn check_group(sc: &Scenario, nodes: &BTreeMap<&str, &NodeSpec>, out: &mut Vec<Problem>) {
     let hubs: Vec<&&NodeSpec> = nodes.values().filter(|n| n.role != Role::Peer).collect();
     let Some(first) = hubs.first() else {
         out.push(Problem::new(

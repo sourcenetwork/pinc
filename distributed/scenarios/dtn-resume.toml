@@ -1,0 +1,84 @@
+name = "dtn-resume"
+about = "Resumed reception from a partial set of slices: two carriers hold the update; the phone, on a slow link, starts receiving from c1, which is killed mid-transfer and never comes back; cloud's later contact finishes the reception from where it stopped, never asking again for a slice it already verified. VINC only: iroh and libp2p have no resumable bundle reception."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home"
+
+[[nodes]]
+name = "hub"
+site = "home"
+role = "hub"
+
+[[nodes]]
+name = "laptop"
+site = "home"
+
+[[nodes]]
+name = "c1"
+site = "home"
+
+[[nodes]]
+name = "cloud"
+site = "home"
+
+[[nodes]]
+name = "phone"
+site = "home"
+link = { rate_mbit = 4 }
+
+[workload]
+kind = "dtn"
+sizes = [65536, 1048576]
+duration_s = 70
+
+[[workload.sends]]
+at_s = 2
+from = "laptop"
+to = "phone"
+copies = 4
+lifetime_s = 200
+
+[[workload.contacts]]
+a = "laptop"
+b = "c1"
+from_s = 3
+to_s = 10
+
+[[workload.contacts]]
+a = "laptop"
+b = "cloud"
+from_s = 3
+to_s = 10
+
+[[workload.contacts]]
+a = "c1"
+b = "phone"
+from_s = 14
+to_s = 70
+
+[[workload.contacts]]
+a = "cloud"
+b = "phone"
+from_s = 30
+to_s = 70
+
+[[workload.checks]]
+rule = "delivered"
+to = "phone"
+
+[[workload.checks]]
+rule = "no-refetch"
+at = "phone"
+
+[[workload.checks]]
+rule = "copies"
+
+[[faults]]
+at_s = 17
+action = { do = "kill", node = "c1" }

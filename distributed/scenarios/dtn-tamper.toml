@@ -1,0 +1,90 @@
+name = "dtn-tamper"
+about = "A tampered slice is rejected: a carrier whose store corrupts what it keeps serves the phone's update while the honest laptop is out of contact; the phone refuses the slices that fail their proof against the signed root and gets the intact update from the laptop later. Restarted, the carrier drops the held record whose signed head was tampered with. VINC only: iroh and libp2p have no per-slice proofs."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home"
+
+[[nodes]]
+name = "hub"
+site = "home"
+role = "hub"
+
+[[nodes]]
+name = "laptop"
+site = "home"
+
+[[nodes]]
+name = "cloud"
+site = "home"
+
+[[nodes]]
+name = "phone"
+site = "home"
+
+[workload]
+kind = "dtn"
+sizes = [1024, 65536, 1048576]
+duration_s = 65
+
+[[workload.nodes]]
+name = "cloud"
+persist = true
+tamper_slices = true
+tamper_heads = true
+
+[[workload.sends]]
+at_s = 2
+from = "laptop"
+to = "phone"
+copies = 2
+lifetime_s = 200
+
+[[workload.contacts]]
+a = "laptop"
+b = "cloud"
+from_s = 1
+to_s = 8
+
+[[workload.contacts]]
+a = "cloud"
+b = "phone"
+from_s = 12
+to_s = 30
+
+[[workload.contacts]]
+a = "laptop"
+b = "phone"
+from_s = 40
+to_s = 65
+
+[[workload.checks]]
+rule = "refused"
+at = "phone"
+reason = "bad-proof"
+from = "cloud"
+
+[[workload.checks]]
+rule = "delivered"
+to = "phone"
+via = "laptop"
+after_s = 40
+
+[[workload.checks]]
+rule = "restored"
+at = "cloud"
+dropped_min = 1
+held_max = 0
+
+[[faults]]
+at_s = 33
+action = { do = "kill", node = "cloud" }
+
+[[faults]]
+at_s = 36
+action = { do = "restart", node = "cloud" }

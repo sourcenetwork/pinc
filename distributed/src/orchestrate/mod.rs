@@ -5,6 +5,7 @@
 
 mod agg;
 mod apps;
+mod dtnload;
 mod faults;
 pub mod live;
 mod pubsub;
@@ -417,6 +418,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
         Workload::Pubsub(_) => 1,
         Workload::Sync(w) => w.sizes.len(),
         Workload::Reconcile(w) => w.items.len() * w.differences.len(),
+        Workload::Dtn(w) => w.sizes.len(),
     } * ctx.sc.stacks.len()
         * reps as usize;
     ctx.emit(Event::Started {
@@ -494,6 +496,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
                     Workload::Pubsub(w) => pubsub::run(&mut ctx, b, &w).await,
                     Workload::Sync(w) => syncload::run_sync(&mut ctx, b, &w).await,
                     Workload::Reconcile(w) => syncload::run_reconcile(&mut ctx, b, &w).await,
+                    Workload::Dtn(w) => dtnload::run(&mut ctx, b, &w).await,
                 }
             };
             tokio::select! {

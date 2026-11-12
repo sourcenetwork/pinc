@@ -108,6 +108,7 @@ const fn m(source: Source, label: &'static str, unit: &'static str, better: Bett
 }
 
 /// The metrics shown for a test id.
+#[allow(clippy::too_many_lines, reason = "one arm per kind of test, read top to bottom")]
 pub fn metrics_of(test: &str) -> Vec<Metric> {
     use Better::{Higher, Lower};
     use Source::{Cpu, Drops, Node, Peak, WirePerByte};
@@ -149,6 +150,29 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
         t if t.starts_with("reconcile_") => {
             let mut x = vec![
                 m(Node("round_ms"), "round time", "ms", Lower),
+                m(Source::WireTotal, "bytes on the wire", "B", Lower),
+            ];
+            x.extend(workload);
+            return x;
+        }
+        t if t.starts_with("dtn_") => {
+            let mut x = vec![
+                m(Node("checks_passed"), "rule checks passed", "", Higher),
+                m(Node("delivered"), "bundles delivered intact", "share", Higher),
+                m(Node("delivery_s"), "send to delivery, median bundle", "s", Lower),
+                m(Node("holders"), "holders of a bundle, most", "", Better::None),
+                m(
+                    Node("refused"),
+                    "transfers refused for the checked reason",
+                    "",
+                    Better::None,
+                ),
+                m(
+                    Node("served_by"),
+                    "carriers that served the reception",
+                    "",
+                    Better::None,
+                ),
                 m(Source::WireTotal, "bytes on the wire", "B", Lower),
             ];
             x.extend(workload);

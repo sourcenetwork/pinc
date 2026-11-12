@@ -23,7 +23,13 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 14] = [
+const EXAMPLES: [&str; 20] = [
+    "dtn-store-forward",
+    "dtn-custody",
+    "dtn-copies",
+    "dtn-resume",
+    "dtn-ledger",
+    "dtn-tamper",
     "lan",
     "wan",
     "lossy",

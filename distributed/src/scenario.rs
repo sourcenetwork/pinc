@@ -416,6 +416,8 @@ pub enum Workload {
     Sync(crate::workloads::ValueSync),
     /// Reconciling two sets that differ in a few items.
     Reconcile(crate::workloads::Reconcile),
+    /// Bundles for nodes that are offline, carried by delay-tolerant delivery, with checks on its rules.
+    Dtn(crate::dtn::Dtn),
 }
 
 /// A change to the network or a node during a repetition.
@@ -664,6 +666,7 @@ impl Scenario {
             Workload::Pubsub(w) => w.check(self, &node_names, &mut out),
             Workload::Sync(w) => w.check(self, &node_names, &mut out),
             Workload::Reconcile(w) => w.check(self, &node_names, &mut out),
+            Workload::Dtn(w) => w.check(self, &node_names, &mut out),
         }
         self.check_faults(&site_names, &node_names, &mut out);
         out
