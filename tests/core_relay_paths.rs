@@ -1,5 +1,5 @@
-//! Sessions on relay and direct paths at the endpoint: the re-join challenges of a thin node's sessions to one address
-//! are spaced.
+//! Sessions on relay and direct paths at the endpoint: a session whose relay path stops answering while the relay's
+//! carrier still does is closed, and the re-join challenges of a thin node's sessions to one address are spaced.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::net::SocketAddr;
@@ -102,6 +102,45 @@ fn the_sessions_of_a_thin_node_space_their_rejoin_challenges_to_one_address() {
             closest + 10 * MS >= SEC_NS,
             "two datagrams to the one address {} ms apart: {times:?}",
             closest / MS
+        );
+    });
+}
+
+/// How long after an outage that began under a transfer the session of node 0 ended, if it did within 20 s; the
+/// carrier of the relay is reported as answering at every step when `carrier_answers`.
+fn time_to_close(carrier_answers: bool) -> Option<u64> {
+    let (mut net, direct, via) = pair(10 * MS);
+    let s = session(&mut net, b"vinc/a", via);
+    outage(&mut net, direct, via);
+    send(&mut net, s, &pattern(2_000, 1));
+    let start = net.now;
+    while net.now < start + 20 * SEC_NS {
+        if carrier_answers {
+            let t = net.now;
+            net.nodes[0]
+                .cmd(t, Command::CarrierHeard { session: s, at: t })
+                .unwrap();
+        }
+        net.run_for(100 * MS);
+        if net.nodes[0]
+            .events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::Closed { session, .. } if *session == s))
+        {
+            return Some(net.now - start);
+        }
+    }
+    None
+}
+
+#[test]
+fn a_session_whose_relay_path_stops_answering_behind_an_answering_carrier_is_closed() {
+    big_stack(|| {
+        let closed = time_to_close(true);
+        let natural = time_to_close(false);
+        assert!(
+            closed.is_some_and(|c| natural.is_none_or(|n| c + SEC_NS < n)),
+            "{closed:?} {natural:?}"
         );
     });
 }

@@ -664,6 +664,11 @@ impl<const N: usize> Recovery<N> {
         s
     }
 
+    /// When the peer was last heard (an authenticated packet), 0 before that.
+    pub const fn last_heard(&self) -> u64 {
+        self.last_heard
+    }
+
     /// How the path is doing.
     ///
     /// `Dead` needs 10 probe timeouts and silence of at least `max(20 s if the minimum round trip is 250 ms or more

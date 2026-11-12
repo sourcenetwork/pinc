@@ -111,6 +111,13 @@ conn_impl! {
         self.hs.set_node_timing(thin, self.cfg.node_rtt, self.cfg.node_peak_rtt);
     }
 
+    /// When the relay carrier of the active path last heard anything, or `None` when that carrier is not open. A
+    /// session on a relay path whose probes keep timing out while its carrier answers is closed: its peer no longer
+    /// holds it (see [`handle_timeout`](Self::handle_timeout)).
+    pub fn set_carrier_heard(&mut self, heard: Option<u64>) {
+        self.life.carrier_heard = heard;
+    }
+
     /// Move the pending first resend of a dialing handshake to the absolute time `at`. Ignored once the first
     /// flight is answered.
     pub fn set_first_retransmit(&mut self, at: u64) {
@@ -172,13 +179,17 @@ conn_impl! {
 
     /// A keepalive that is not a transport PING stood for this connection's (an authenticated carrier answered for
     /// it): count it as traffic received, and as traffic sent when `sent`, so neither the idle timeout nor the next
-    /// keepalive fires meanwhile. An answer that arrived (`sent` false) is also a datagram heard on the active path.
+    /// keepalive fires meanwhile. An answer that arrived (`sent` false) is also a datagram heard on the active path, and
+    /// the peer heard: the give-up and the closing of a relay session behind a live carrier read the silence from it.
     pub fn pulse(&mut self, now: u64, sent: bool) {
         self.life.last_activity = now;
         if sent {
             self.life.last_sent = now;
-        } else if let Some(p) = self.paths.get_mut(self.paths.active) {
-            p.last_rx = now;
+        } else {
+            self.rec.note_peer_activity(now);
+            if let Some(p) = self.paths.get_mut(self.paths.active) {
+                p.last_rx = now;
+            }
         }
     }
 

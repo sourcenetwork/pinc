@@ -564,6 +564,15 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// The session.
         session: SessionId,
     },
+    /// When the carrier of the relay the session's active path runs through last heard anything, in the endpoint's
+    /// clock; 0 when that carrier is not open. A session on a relay path whose probe timeouts keep firing while the
+    /// carrier answers is closed: its peer no longer holds it. Send it while the session's probes are timing out.
+    CarrierHeard {
+        /// The session.
+        session: SessionId,
+        /// When the carrier last heard anything, 0 when it is not open.
+        at: u64,
+    },
     /// Mark a session as carrying broadcast traffic, which is flushed after the others.
     SetGossip {
         /// The session.

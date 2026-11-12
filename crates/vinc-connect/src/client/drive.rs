@@ -584,6 +584,17 @@ drive_impl! {
                 }
             }
             s.relay_route = st.route.is_some_and(|(_, r)| is_relay_addr(&r));
+            // A session whose probes time out on a relay path: the endpoint closes it when the carrier still answers, so
+            // it needs to hear whether that carrier does.
+            // vertexia: a snapshot taken after each drive, so the carrier's word is stale by at most one probe timeout when
+            // the endpoint decides; exact would need the endpoint to ask this layer at the decision.
+            if st.pto_count > 0
+                && s.relay_route
+                && let Some((relay, _)) = st.route.and_then(|(_, r)| self.path_parts(&r))
+            {
+                let at = self.rly.get(relay).filter(|r| r.link.is_open()).map_or(0, |r| r.link.last_heard());
+                let _ = self.cmd(ep, now, Command::CarrierHeard { session: s.id, at });
+            }
             // A session still in its handshake has nothing to punch for: its establishment arms the timer again. Left
             // armed, a timer that is due would keep the node waking for it until the handshake ends.
             if !st.established && s.punch.deadline().is_some_and(|d| d <= now) {

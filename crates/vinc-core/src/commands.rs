@@ -330,6 +330,13 @@ ep_impl! {
                 c.ping();
                 Ok(())
             }),
+            Command::CarrierHeard { session, at } => {
+                let i = self.live(session)?;
+                if let Some(c) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
+                    c.set_carrier_heard(Some(at).filter(|t| *t > 0));
+                }
+                Ok(Value::None)
+            }
             Command::SetGossip { session, gossip } => {
                 let i = self.live(session)?;
                 if let Some(s) = self.slots.get_mut(i) {

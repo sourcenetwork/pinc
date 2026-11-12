@@ -280,10 +280,13 @@ fn a_peer_that_dials_again_supersedes_its_older_incoming_session() {
             providers,
         };
         w.sim.command(secs(30), m[0], request.clone());
-        // The requester restarts while the provider is still sending; its new session finds the old one open.
+        // The requester restarts while the provider is still sending; its new session finds the old one open. It asks
+        // again within two seconds of the restart: a session on a relay path that has heard nothing through four probe
+        // timeouts, while the relay answers, is closed by its own side (about 4 s after the crash), and then there is
+        // no older session left to supersede.
         w.sim.crash(secs(32), m[0]);
         w.sim.restart(secs(33), m[0]);
-        w.sim.command(secs(40), m[0], request);
+        w.sim.command(secs(34), m[0], request);
         w.run(secs(160));
         let superseded = w
             .sim

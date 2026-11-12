@@ -66,6 +66,8 @@ pub(crate) struct Life {
     pub(crate) repair_pn: Option<u64>,
     /// The latest time any call carried; the path rules read it.
     pub(crate) clock: u64,
+    /// When the carrier of the active relay path last heard anything, as the endpoint reports it.
+    pub(crate) carrier_heard: Option<u64>,
 }
 
 impl Life {
@@ -95,6 +97,7 @@ impl Life {
             data_written: false,
             repair_pn: None,
             clock: now,
+            carrier_heard: None,
         }
     }
 }

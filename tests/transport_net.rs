@@ -346,6 +346,68 @@ fn relay_carries_a_penalty_and_takes_over_when_the_direct_path_dies() {
     });
 }
 
+/// A session on a relay path that stops answering, with the relay's carrier heard at every step or never, and a
+/// keepalive answer of the carrier received at every step or never: how long the session lives.
+fn relay_path_goes_silent(carrier_answers: bool, pulses: bool) -> Option<u64> {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let mut link = Link::new(16, Params::new(100 * MS));
+    link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+    let mut net = connected(&mut w, &mut sa, &mut sb, link);
+    let relay = PathInfo {
+        kind: PathKind::Relay,
+        ..PathInfo::default()
+    };
+    let now = net.now;
+    net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
+    net.b.with_env(now, |c, env| c.add_path(env, PathId(4), relay)).unwrap();
+    assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
+    // The direct path dies under a transfer and the relay takes over.
+    net.link.route(PathId(1)).up = false;
+    bulk(&mut net, &pattern(2 << 20, 21), 300 * SEC);
+    assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
+    // The relay path stops answering while data is in flight.
+    net.link.route(PathId(3)).up = false;
+    let id = net.a.conn.open_uni().unwrap();
+    net.a.conn.write(id, &pattern(50_000, 22)).unwrap();
+    let start = net.now;
+    while net.now < start + 8 * SEC && net.a.closed().is_none() {
+        if carrier_answers {
+            net.a.conn.set_carrier_heard(Some(net.now));
+        }
+        if pulses {
+            net.a.conn.pulse(net.now, false);
+        }
+        let until = (net.now + 10 * MS).min(start + 8 * SEC);
+        net.run(until, |n| n.a.closed().is_some());
+    }
+    net.a.closed().map(|_| net.now - start)
+}
+
+#[test]
+fn a_relay_session_whose_probes_time_out_behind_an_answering_carrier_is_closed() {
+    big_stack(|| {
+        let closed = relay_path_goes_silent(true, false);
+        assert!(closed.is_some_and(|t| t < 8 * SEC), "{closed:?}");
+        assert_eq!(
+            relay_path_goes_silent(false, false),
+            None,
+            "without the carrier's word the session lives on"
+        );
+    });
+}
+
+#[test]
+fn a_keepalive_answer_of_the_carrier_counts_as_hearing_the_peer() {
+    big_stack(|| {
+        assert_eq!(
+            relay_path_goes_silent(true, true),
+            None,
+            "a peer heard through its carrier is not silent"
+        );
+    });
+}
+
 #[test]
 fn a_session_with_a_long_round_trip_challenges_its_lost_direct_path_at_most_once_a_second() {
     big_stack(|| {

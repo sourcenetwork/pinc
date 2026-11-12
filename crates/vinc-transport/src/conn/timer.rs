@@ -2,7 +2,10 @@
 //!
 //! Invariants: a timer is reported only while it can still act (a stale deadline would make a driver spin); the
 //! recovery timer keeps running while the peer sleeps or the link is down (it declares the oldest packet lost and
-//! pings, without growing the count); a connection that is closing ends at its next timer.
+//! pings, without growing the count); a connection that is closing ends at its next timer. A session on a relay path
+//! is closed, with a CLOSE, at a probe timeout once 4 have fired in a row, it heard nothing for 4 round trips and the
+//! relay's carrier was heard within 6 s: the carrier works, so the peer no longer holds the session, and the layers
+//! above dial again instead of waiting for the probes to give up.
 
 use vinc_crypto::Provider;
 use vinc_security::Env;
@@ -12,8 +15,15 @@ use super::event::{CloseReason, Ev};
 use super::life::LINK_DOWN_MAX;
 use super::path::PTO_FALLBACK;
 use super::{Connection, Phase};
-use crate::recovery::Health;
+use crate::recovery::{Health, INITIAL_RTT, PathKind, SECOND};
 use crate::stream::StreamSource;
+
+/// Probe timeouts in a row on a relay path whose carrier answers after which the session is closed.
+const CLOSE_AFTER_PTOS: u32 = 4;
+/// A carrier heard within this long answers.
+const CARRIER_FRESH: u64 = 6 * SECOND;
+/// The session must also have heard nothing for this many round trips.
+const SILENT_RTTS: u64 = 4;
 
 conn_impl! {
     /// The next time [`handle_timeout`](Self::handle_timeout) must run, in the clock of the `Env`; `None` when the
@@ -111,6 +121,10 @@ conn_impl! {
         }
         match self.rec.health(now) {
             Health::Dead => self.silent_close(CloseReason::PathDead),
+            _ if to.ping && self.dead_behind_live_carrier(now) => {
+                self.begin_close(now, 0, CloseReason::PathDead);
+                return;
+            }
             Health::Degraded if !self.degraded_told => {
                 self.degraded_told = true;
                 if let Some(id) = self.paths.active().map(|p| p.id) {
@@ -123,5 +137,22 @@ conn_impl! {
         if self.rec.pto_count() >= PTO_FALLBACK {
             self.fail_over(env);
         }
+    }
+
+    /// Probe timeouts keep firing on a relay path whose carrier answers: 4 in a row, nothing heard for 4 round trips
+    /// (before a sample, of `max(333 ms, 2 x the node's longest round trip)`), and the carrier heard within 6 s.
+    fn dead_behind_live_carrier(&self, now: u64) -> bool {
+        let relay = self.paths.active().is_some_and(|p| p.info.kind == PathKind::Relay);
+        let alive = self.life.carrier_heard.is_some_and(|h| now.saturating_sub(h) < CARRIER_FRESH);
+        let rtt = if self.rec.rtt().has_sample() {
+            self.rec.rtt().smoothed()
+        } else {
+            let node = self.cfg.node_rtt.unwrap_or(0).max(self.cfg.node_peak_rtt.unwrap_or(0));
+            INITIAL_RTT.max(node.saturating_mul(2))
+        };
+        relay
+            && alive
+            && self.rec.pto_count() >= CLOSE_AFTER_PTOS
+            && now.saturating_sub(self.rec.last_heard()) >= rtt.saturating_mul(SILENT_RTTS)
     }
 }
