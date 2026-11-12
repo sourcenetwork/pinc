@@ -260,5 +260,9 @@ fn refused(r: vinc_broadcast::Refused) -> Error {
             Error::new(ErrorKind::Busy, "the endpoint tracks as many topics as it can")
         }
         vinc_broadcast::Refused::Sign => Error::config("the message could not be signed"),
+        vinc_broadcast::Refused::Backlog => Error::new(
+            ErrorKind::Busy,
+            "as many publishes as the endpoint tracks are waiting for a hub",
+        ),
     }
 }

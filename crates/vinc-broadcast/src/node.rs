@@ -123,6 +123,8 @@ pub enum Refused {
     TopicsFull,
     /// The signature could not be produced.
     Sign,
+    /// As many publishes as the node tracks are still waiting for a hub to acknowledge them.
+    Backlog,
 }
 
 impl core::fmt::Display for Refused {
@@ -139,6 +141,7 @@ impl core::fmt::Display for Refused {
 
             Self::TopicsFull => "the node tracks as many topics as it can",
             Self::Sign => "the message could not be signed",
+            Self::Backlog => "as many publishes as the node tracks are waiting for a hub; publish again later",
         })
     }
 }
