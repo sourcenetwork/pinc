@@ -300,9 +300,8 @@ impl<H: Hosted> Shared<H> {
                             let now = self.now();
                             let from = canon(from);
                             if let Some(mut core) = self.lock() {
-                                for d in buf.v.get_mut(..n).unwrap_or_default().chunks_mut(segment.max(1)) {
-                                    core.node.handle_datagram(now, self.local, from, d);
-                                }
+                                let batch = buf.v.get_mut(..n).unwrap_or_default();
+                                core.node.handle_batch(now, self.local, from, batch, segment);
                             }
                         }
                         Err(e) if transient(&e) => {}

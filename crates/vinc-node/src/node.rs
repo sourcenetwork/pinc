@@ -327,12 +327,19 @@ where
     }
 
     pub(crate) fn settle(&mut self, now: Nanos) {
+        self.settle_with(now, true);
+    }
+
+    /// Settle, with or without the connectivity layer's own step (`connect`).
+    fn settle_with(&mut self, now: Nanos, connect: bool) {
         for _ in 0..SETTLE_ROUNDS {
             self.refresh_alive(now);
             let mut busy = self.service(now);
             busy |= self.events_step(now);
             busy |= self.values_step(now);
-            self.drive(now);
+            if connect {
+                self.drive(now);
+            }
             busy |= self.inbound_step(now);
             busy |= self.notices_step();
             busy |= self.dtn_step(now);
@@ -415,11 +422,29 @@ where
 
     /// A datagram arrived at `local` from `remote`. The node may use `buf` as scratch.
     pub fn handle_datagram(&mut self, now: Nanos, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        self.handle_batch(now, local, remote, buf, usize::MAX);
+    }
+
+    /// Datagrams the host received from `remote` in one read, each `segment` bytes long but the last (which may be
+    /// shorter): as [`handle_datagram`](Self::handle_datagram) for each in turn, except that the connectivity layer's
+    /// own step runs once, after the last. Every event of every datagram is handled as it comes; what that step
+    /// decides depends on the time, which is the same for all of them, and on the state they leave.
+    pub fn handle_batch(&mut self, now: Nanos, local: SocketAddr, remote: SocketAddr, buf: &mut [u8], segment: usize) {
         self.begin(now);
-        if !self.conn.handle_udp(now, remote, buf) {
-            self.io.ep.handle_datagram(now, local, remote, buf);
+        let mut rest = buf;
+        loop {
+            // An empty buffer is one empty datagram, as the host read it.
+            let n = segment.max(1).min(rest.len());
+            let (d, tail) = core::mem::take(&mut rest).split_at_mut(n);
+            if !self.conn.handle_udp(now, remote, d) {
+                self.io.ep.handle_datagram(now, local, remote, d);
+            }
+            self.settle_with(now, tail.is_empty());
+            if tail.is_empty() {
+                return;
+            }
+            rest = tail;
         }
-        self.settle(now);
     }
 
     /// Time passed. Safe to call at any time.
