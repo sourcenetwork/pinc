@@ -123,9 +123,8 @@ fn a_subscriber_that_published_a_message_is_not_sent_it_back_from_the_log() {
     assert!(net.delivered(3).contains(&own) && net.delivered(3).contains(&other));
 }
 
-#[test]
-fn a_subscriber_further_behind_than_the_log_holds_continues_from_the_oldest_message_left() {
-    // A log of 64 KiB and messages of 1 KiB: about sixty fit.
+/// Hub 0, publisher 1 and subscriber 2, over a log of 64 KiB, so about sixty messages of 1 KiB fit.
+fn small_log_net() -> Net {
     let limits = vinc_broadcast::Limits {
         max_body: 2048,
         log_bytes: 64 << 10,
@@ -136,8 +135,12 @@ fn a_subscriber_further_behind_than_the_log_holds_continues_from_the_oldest_mess
     net.attach(2);
     net.subscribe(2, T);
     net.advance(SEC);
-    set_full(&mut net, 2, true);
-    let sent: Vec<[u8; 8]> = (0..200u64)
+    net
+}
+
+/// Publish `n` bodies of 1 KiB from member 1, 1 ms apart.
+fn publish_kib(net: &mut Net, from: u64, n: u64) -> Vec<[u8; 8]> {
+    (from..from + n)
         .map(|k| {
             let mut b = vec![0u8; 1024];
             b[..8].copy_from_slice(&k.to_be_bytes());
@@ -145,12 +148,46 @@ fn a_subscriber_further_behind_than_the_log_holds_continues_from_the_oldest_mess
             net.advance(SEC / 1000);
             m
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn a_log_full_of_owed_messages_takes_no_more_until_they_are_sent() {
+    let mut net = small_log_net();
+    set_full(&mut net, 2, true);
+    let sent = publish_kib(&mut net, 0, 200);
+    // The log stops at what it holds: evicting the oldest would lose a message the subscriber is owed, so the rest
+    // are refused, not acknowledged, and wait at the publisher.
+    let kept = net.nodes[0].t.log_len(T);
+    assert!(kept > 40 && kept < 70, "the log holds {kept} messages");
+    set_full(&mut net, 2, false);
+    assert_eq!(net.delivered(2), sent[..kept].to_vec(), "the oldest `kept`, in order");
+    // The publisher retries the others every 3 s and the hub takes them now.
+    net.advance(5 * SEC);
+    let mut got = net.delivered(2);
+    let mut want = sent.clone();
+    got.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(got, want, "every message, once");
+}
+
+#[test]
+fn a_stalled_subscriber_is_let_go_continues_from_the_oldest_message_left_and_is_told() {
+    let mut net = small_log_net();
+    set_full(&mut net, 2, true);
+    publish_kib(&mut net, 0, 1);
+    // Past PUSH_STALL_MS with nothing taken: the next store that needs room lets it go and evicts.
+    net.advance(3 * SEC);
+    let sent = publish_kib(&mut net, 1, 200);
     let kept = net.nodes[0].t.log_len(T);
     assert!(kept > 40 && kept < 70, "the log holds {kept} messages");
     set_full(&mut net, 2, false);
     // Exactly the messages the log still had, in order: the newest `kept` of the 200.
     assert_eq!(net.delivered(2), sent[200 - kept..].to_vec());
+    assert!(
+        net.events(2).iter().any(|e| matches!(e, common::Ev::Restored { .. })),
+        "the subscriber is told it lost messages"
+    );
 }
 
 #[test]

@@ -287,6 +287,47 @@ theorem push_evicted_prefix {ring cap : Nat} (L : Log) (mid born wall n : Nat) (
     obtain ⟨_, k, hk, h2, h3, h4⟩ := pushLoop_gen mid born wall n hn (L.entries.length + 1) L [] h hm
     exact ⟨k, hk, by simpa using h2, h3, h4⟩
 
+/-- `Topics::room_to_store` (`behind.rs`), the guard `Topics::hub_store` puts over `push`. `room` is how many of the
+oldest entries no subscriber that is behind and not held is still
+owed (the index of the first owed entry; the queue length when nobody is behind). The push goes ahead only when it
+evicts at most `room` entries, which `HubLog::evicts` counts before anything moves; otherwise nothing changes and
+the message is refused, so the hub does not acknowledge it. -/
+def pushOwed (L : Log) (ring cap mid born wall n room : Nat) : Log × Bool × List Nat :=
+  if (push L ring cap mid born wall n).2.2.length ≤ room then push L ring cap mid born wall n else (L, false, [])
+
+/-- The guarded push keeps the accounting invariant, stored or refused. -/
+theorem pushOwed_inv {ring cap : Nat} (L : Log) (mid born wall n room : Nat) (h : Inv ring cap L) :
+    Inv ring cap (pushOwed L ring cap mid born wall n room).1 := by
+  unfold pushOwed; split
+  · exact push_inv L mid born wall n h
+  · exact h
+
+/-- No owed entry is evicted: the entries from index `room` on are still in the queue, in order, with only the
+unowed ones before them evicted and only the new entry after them. -/
+theorem pushOwed_keeps_owed {ring cap : Nat} (L : Log) (mid born wall n room : Nat) (h : Inv ring cap L) :
+    ∃ pre post, (pushOwed L ring cap mid born wall n room).1.entries = pre ++ L.entries.drop room ++ post := by
+  unfold pushOwed
+  split
+  · rename_i hle
+    obtain ⟨k, hk, hev, hok, hno⟩ := push_evicted_prefix L mid born wall n h
+    have hkr : k ≤ room := by
+      rw [hev, List.length_map, List.length_take] at hle; omega
+    have hsplit : L.entries.drop k = (L.entries.drop k).take (room - k) ++ L.entries.drop room := by
+      have hd : (L.entries.drop k).drop (room - k) = L.entries.drop room := by
+        rw [List.drop_drop]; congr 1; omega
+      rw [← hd, List.take_append_drop]
+    cases hs : (push L ring cap mid born wall n).2.1
+    · exact ⟨(L.entries.drop k).take (room - k), [], by rw [hno hs, List.append_nil]; exact hsplit⟩
+    · obtain ⟨e, he, -⟩ := hok hs
+      exact ⟨(L.entries.drop k).take (room - k), [e], by rw [he, ← hsplit]⟩
+  · exact ⟨L.entries.take room, [], by simp⟩
+
+/-- A refused guarded push leaves the log as it was: the message is not stored, so it is not acknowledged. -/
+theorem pushOwed_refused {ring cap : Nat} (L : Log) (mid born wall n room : Nat)
+    (hgt : room < (push L ring cap mid born wall n).2.2.length) :
+    pushOwed L ring cap mid born wall n room = (L, false, []) := by
+  unfold pushOwed; simp [Nat.not_le.mpr hgt]
+
 /-- The expire loop, whatever the fuel at least the queue length: a prefix is removed, every removed entry is
 older than the window, and the first remaining entry is not. -/
 theorem expireLoop_gen {ring cap : Nat} (window now : Nat) : ∀ (f : Nat) (L : Log) (ev : List Nat),

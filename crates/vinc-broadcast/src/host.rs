@@ -95,7 +95,8 @@ pub enum Event<'a> {
         /// The subscriber.
         to: &'a NodeId,
     },
-    /// A hub restored this member's held subscription to a topic.
+    /// A hub restored this member's held subscription to a topic: messages published while it was held may be
+    /// missing (it was confirmed down, or its stream stalled or fell too far behind and the log evicted them).
     Restored {
         /// The hub.
         hub: &'a NodeId,

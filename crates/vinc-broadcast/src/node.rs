@@ -15,6 +15,7 @@ use vinc_crypto::{IdentityAlg, Keypair};
 use vinc_membership::{Nanos, NodeId};
 use vinc_wire::hlc::Hlc;
 
+use crate::behind::Behind;
 use crate::consts::{
     DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, GAP_EVERY, HAVE_MAX, MAX_TOPIC,
     QUEUE_CAP, SEEN_CAP,
@@ -123,7 +124,8 @@ pub enum Refused {
     TopicsFull,
     /// The signature could not be produced.
     Sign,
-    /// As many publishes as the node tracks are still waiting for a hub to acknowledge them.
+    /// As many publishes as the node tracks are still waiting for a hub to acknowledge them, or, on a hub, the topic's
+    /// log cannot take the message without evicting one its subscribers are still owed.
     Backlog,
 }
 
@@ -163,9 +165,9 @@ pub(crate) struct Topic {
     pub(crate) peers: Vec<NodeId>,
     /// Hub: the message log.
     pub(crate) log: Option<HubLog>,
-    /// Hub: the subscribers whose stream had no room, each with the sequence number of the first logged message it
-    /// has not been sent. Such a subscriber is pushed nothing new: it is served from that place, in order.
-    pub(crate) behind: BTreeMap<NodeId, u64>,
+    /// Hub: the subscribers whose stream had no room, each with its place in the log (see [`Behind`]). Such a
+    /// subscriber is pushed nothing new: it is served from that place, in order.
+    pub(crate) behind: BTreeMap<NodeId, Behind>,
     pub(crate) seen: Seen,
     /// Ids a gap repair asked for and has not received.
     pub(crate) requested: BTreeSet<[u8; 8]>,

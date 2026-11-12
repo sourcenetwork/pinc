@@ -10,6 +10,11 @@ pub const PUB_RETRY: Nanos = 3 * S;
 pub const PUB_GIVEUP: Nanos = 90 * S;
 /// A hub keeps a message in a topic log this long.
 pub const LOG_WINDOW: Nanos = 120 * S;
+/// A subscriber that is behind and owed a message older than this stops pacing the topic: the hub lets it go, so the
+/// log may evict what it is owed, and tells it with RESTORED once it caught up if it did.
+pub const PUSH_OWED_MAX: Nanos = 30 * S;
+/// A subscriber that is behind and whose stream took nothing for this long (milliseconds) is let go the same way.
+pub const PUSH_STALL_MS: u64 = 2_000;
 /// A hub keeps at most this many messages per topic.
 pub const LOG_CAP: usize = 2048;
 /// A node remembers a message id this long, so it delivers it at most once.

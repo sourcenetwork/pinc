@@ -5,7 +5,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
 )]
 
 mod node_common;
@@ -52,6 +53,21 @@ fn world(seed: u64) -> World {
         ..LinkConfig::default()
     };
     w.sim.set_link_pair(hub, writer, lan.clone(), lan);
+    w
+}
+
+/// The same, with every subscriber on the hub's LAN too.
+fn world_lan(seed: u64) -> World {
+    let mut w = world(seed);
+    let hub = w.sim.site(w.hubs[0].0);
+    let lan = LinkConfig {
+        delay: MS / 4,
+        ..LinkConfig::default()
+    };
+    for m in w.members.clone() {
+        let s = w.sim.site(m);
+        w.sim.set_link_pair(hub, s, lan.clone(), lan.clone());
+    }
     w
 }
 
@@ -121,29 +137,113 @@ fn every_publish_of_a_burst_is_acked_or_given_up() {
     });
 }
 
+/// The burst starts here, once every subscription is in.
+const START: Time = 40 * vinc_sim::SEC;
+/// The harness's drain: 15 s after the last publish.
+const DRAINED: Time = START + 15 * vinc_sim::SEC + 200 * MS;
+
+/// Subscribe every subscriber and schedule the burst at [`START`].
+fn burst(w: &mut World, writer: vinc_sim::NodeId, subs: &[vinc_sim::NodeId]) {
+    burst_of(w, writer, subs, N);
+}
+
+/// The same with `n` messages.
+fn burst_of(w: &mut World, writer: vinc_sim::NodeId, subs: &[vinc_sim::NodeId], n: usize) {
+    for s in subs {
+        w.sim.command(secs(20), *s, NCmd::Subscribe(TOPIC.to_vec()));
+    }
+    for i in 0..n {
+        w.sim.command(
+            START + (i as Time) * MS / 10,
+            writer,
+            NCmd::Publish {
+                topic: TOPIC.to_vec(),
+                body: body(i),
+            },
+        );
+    }
+}
+
+/// The publisher's acknowledged publishes per second, from the first publish to the last acknowledgement.
+fn ack_rate(w: &World, writer: vinc_sim::NodeId) -> f64 {
+    let last = w
+        .sim
+        .events(writer)
+        .iter()
+        .filter(|(_, e)| matches!(e, NEv::Node(NodeEvent::PublishAcked { .. })))
+        .map(|(t, _)| *t)
+        .max()
+        .unwrap_or(START);
+    let acked = count(w, writer, Time::MAX, |e| matches!(e, NodeEvent::PublishAcked { .. }));
+    acked as f64 / ((last - START) as f64 / vinc_sim::SEC as f64)
+}
+
+/// A subscriber whose stream stops draining (the hub's packets to it are dropped for 10 s, its session stays up)
+/// paces the topic for at most `PUSH_STALL`: the nine others still get the whole burst within the drain, and the
+/// stalled one ends with the whole burst or is told its subscription was held (`Restored`).
+#[test]
+fn a_stalled_subscriber_does_not_hold_back_the_others() {
+    big(|| {
+        let mut w = world(93);
+        let m = w.members.clone();
+        let (writer, subs) = (m[0], &m[1..]);
+        let (stalled, healthy) = (subs[0], &subs[1..]);
+        burst(&mut w, writer, subs);
+        let (hub, site) = (w.sim.site(w.hubs[0].0), w.sim.site(stalled));
+        let path = LinkConfig {
+            delay: OWD,
+            bandwidth_bps: 10_000_000,
+            ..LinkConfig::default()
+        };
+        w.run(START);
+        w.sim.set_link(
+            hub,
+            site,
+            LinkConfig {
+                blocked: true,
+                ..path.clone()
+            },
+        );
+        w.run(START + secs(10));
+        w.sim.set_link(hub, site, path);
+        w.run(DRAINED);
+        let acked = count(&w, writer, DRAINED, |e| matches!(e, NodeEvent::PublishAcked { .. }));
+        let got: Vec<usize> = healthy
+            .iter()
+            .map(|s| count(&w, *s, DRAINED, |e| matches!(e, NodeEvent::Message { .. })))
+            .collect();
+        let end = START + secs(60);
+        w.run(end);
+        let stalled_got = count(&w, stalled, end, |e| matches!(e, NodeEvent::Message { .. }));
+        let told = count(&w, stalled, end, |e| matches!(e, NodeEvent::Restored { .. }));
+        eprintln!(
+            "stalled: acked {acked} by the drain, healthy {got:?}, stalled got {stalled_got} told {told}, {:.0} acks/s",
+            ack_rate(&w, writer)
+        );
+        assert_eq!(
+            acked, N,
+            "the publisher must hear every publish acknowledged by the drain"
+        );
+        for (j, g) in got.iter().enumerate() {
+            assert_eq!(*g, N, "healthy subscriber {j} got {g} of {N} by the end of the drain");
+        }
+        assert!(
+            stalled_got == N || told > 0,
+            "the stalled subscriber got {stalled_got} of {N} and was not told"
+        );
+    });
+}
+
 #[test]
 fn a_pushlog_burst_reaches_every_subscriber() {
     big(|| {
         let mut w = world(91);
         let m = w.members.clone();
         let (writer, subs) = (m[0], &m[1..]);
-        for s in subs {
-            w.sim.command(secs(20), *s, NCmd::Subscribe(TOPIC.to_vec()));
-        }
-        let start = secs(40);
-        for i in 0..N {
-            w.sim.command(
-                start + (i as Time) * MS / 10,
-                writer,
-                NCmd::Publish {
-                    topic: TOPIC.to_vec(),
-                    body: body(i),
-                },
-            );
-        }
-        // The harness's drain: 15 s after the last publish.
-        let drained = start + secs(15) + MS * 200;
+        burst(&mut w, writer, subs);
+        let drained = DRAINED;
         w.run(drained);
+        eprintln!("burst: {:.0} acks/s", ack_rate(&w, writer));
         let acked = count(&w, writer, drained, |e| matches!(e, NodeEvent::PublishAcked { .. }));
         let gave_up = count(&w, writer, drained, |e| matches!(e, NodeEvent::PublishGaveUp { .. }));
         let got: Vec<usize> = subs
@@ -162,6 +262,91 @@ fn a_pushlog_burst_reaches_every_subscriber() {
         assert_eq!(acked, N, "the publisher must hear every publish acknowledged");
         for (j, g) in got.iter().enumerate() {
             assert_eq!(*g, N, "subscriber {j} got {g} of {N} by the end of the drain");
+        }
+    });
+}
+
+/// With every subscriber on the hub's LAN the streams keep up, so the hub refuses no store: every publish is
+/// acknowledged on its first send, before any retry, and the publisher runs at the rate it publishes.
+#[test]
+fn a_burst_on_a_fast_lan_is_not_paced() {
+    big(|| {
+        let mut w = world_lan(94);
+        let m = w.members.clone();
+        let (writer, subs) = (m[0], &m[1..]);
+        burst(&mut w, writer, subs);
+        w.run(DRAINED);
+        let acks: Vec<Time> = w
+            .sim
+            .events(writer)
+            .iter()
+            .filter(|(_, e)| matches!(e, NEv::Node(NodeEvent::PublishAcked { .. })))
+            .map(|(t, _)| *t)
+            .collect();
+        let last = acks.iter().max().copied().unwrap_or(START);
+        let got: Vec<usize> = subs
+            .iter()
+            .map(|s| count(&w, *s, DRAINED, |e| matches!(e, NodeEvent::Message { .. })))
+            .collect();
+        eprintln!(
+            "lan: acked {} last ack at +{} ms, {:.0} acks/s, delivered {got:?}",
+            acks.len(),
+            (last - START) / MS,
+            ack_rate(&w, writer)
+        );
+        assert_eq!(acks.len(), N, "the publisher must hear every publish acknowledged");
+        assert!(
+            last < START + vinc_broadcast::consts::PUB_RETRY,
+            "a publish waited for a retry: the hub refused a store"
+        );
+        for (j, g) in got.iter().enumerate() {
+            assert_eq!(*g, N, "subscriber {j} got {g} of {N} by the end of the drain");
+        }
+    });
+}
+
+/// A burst longer than the hub's log (6,000 bodies of 4 KiB, about 24 MiB, past the log's 2,048 entries and 16 MiB):
+/// whatever the hub acknowledges, every subscriber gets. The hub stops storing, and so acknowledging, once the log
+/// would evict what a subscriber is still owed; the publisher then retries, or is refused when it tracks as many
+/// publishes as it can, but it never hears a message acknowledged that a subscriber then never gets.
+#[test]
+fn a_burst_longer_than_the_log_acknowledges_nothing_it_loses() {
+    big(|| {
+        const LONG: usize = 6000;
+        let mut w = world(95);
+        let m = w.members.clone();
+        let (writer, subs) = (m[0], &m[1..]);
+        burst_of(&mut w, writer, subs, LONG);
+        // Past the 90 s give-up of the last publish, so every accepted publish has an outcome.
+        let end = START + secs(100);
+        w.run(end);
+        let mids = |n: vinc_sim::NodeId, acked: bool| -> std::collections::BTreeSet<[u8; 8]> {
+            w.sim
+                .events(n)
+                .iter()
+                .filter_map(|(_, e)| match e {
+                    NEv::Node(NodeEvent::PublishAcked { mid }) if acked => Some(*mid),
+                    NEv::Node(NodeEvent::Message { mid, .. }) if !acked => Some(*mid),
+                    _ => None,
+                })
+                .collect()
+        };
+        let acked = mids(writer, true);
+        let missing: Vec<usize> = subs
+            .iter()
+            .map(|s| acked.difference(&mids(*s, false)).count())
+            .collect();
+        let gave_up = count(&w, writer, end, |e| matches!(e, NodeEvent::PublishGaveUp { .. }));
+        eprintln!(
+            "long: acked {} gave_up {gave_up} of {LONG}, acked but missing at each subscriber {missing:?}",
+            acked.len()
+        );
+        assert!(!acked.is_empty(), "the publisher heard nothing acknowledged");
+        for (j, n) in missing.iter().enumerate() {
+            assert_eq!(
+                *n, 0,
+                "subscriber {j} never got {n} messages the publisher heard acknowledged"
+            );
         }
     });
 }

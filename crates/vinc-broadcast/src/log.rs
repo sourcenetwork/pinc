@@ -82,6 +82,32 @@ impl HubLog {
         self.ring.get(e.off..e.off + e.len)
     }
 
+    /// When the message with sequence number `seq` was logged, if it still is.
+    pub(crate) fn logged_at(&self, seq: u64) -> Option<Nanos> {
+        let e = self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)?;
+        Some(e.at)
+    }
+
+    /// How many of the oldest messages [`HubLog::push`] would evict to fit a message of `n` bytes, evicting none:
+    /// the loop of `push` on copies of the accounting.
+    pub(crate) fn evicts(&self, n: usize) -> usize {
+        let (mut wpos, mut used, mut k) = (self.wpos, self.used, 0);
+        let ring = self.ring.len();
+        loop {
+            let pad = if wpos + n > ring { ring - wpos } else { 0 };
+            if self.entries.len() - k < LOG_CAP && used + pad + n <= ring {
+                return k;
+            }
+            let Some(e) = self.entries.get(k) else { return k };
+            k += 1;
+            used -= e.cost;
+            if k == self.entries.len() {
+                wpos = 0;
+                used = 0;
+            }
+        }
+    }
+
     fn entry(&self, mid: u64) -> Option<&Entry> {
         let seq = self.index.get(mid)?;
         self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)
@@ -184,5 +210,32 @@ impl HubLog {
             .iter()
             .filter(move |e| now.saturating_sub(from) <= e.at && e.at < now.saturating_sub(to))
             .map(|e| e.mid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `evicts` names exactly the messages `push` then evicts, across wraps, padding and the entry cap.
+    #[test]
+    fn evicts_predicts_push() {
+        let mut log = HubLog::new(10_000);
+        let mut x = 7u64;
+        for mid in 0..20_000u64 {
+            x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            // Runs of one-byte messages reach the entry cap before the bytes run out.
+            let n = if (x >> 40).is_multiple_of(4) {
+                usize::try_from(x >> 52).unwrap_or(0) % 3000 + 1
+            } else {
+                1
+            };
+            let body = vec![0u8; n];
+            let want = log.evicts(n);
+            let mut got = 0;
+            assert!(log.push(mid, 0, 0, &[], &body, |_| got += 1));
+            assert_eq!(want, got, "message {mid} of {n} bytes");
+            assert_eq!(log.at(log.end() - 1).map(<[u8]>::len), Some(n));
+        }
     }
 }
