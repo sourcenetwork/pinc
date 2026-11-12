@@ -974,3 +974,7 @@ path = "relay_e2e.rs"
 [[test]]
 name = "vinc_state"
 path = "vinc_state.rs"
+
+[[test]]
+name = "layers_dtn_capacity"
+path = "layers_dtn_capacity.rs"
