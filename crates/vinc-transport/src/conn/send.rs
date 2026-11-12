@@ -541,7 +541,7 @@ conn_impl! {
         }
         let direct = ti == self.paths.active && self.paths.get(ti).is_some_and(|p| p.info.kind == PathKind::Direct);
         let age = now.saturating_sub(self.started);
-        if !self.loss.should_send_repair(age, true, direct) {
+        if !self.cfg.tail_repair || !self.loss.should_send_repair(age, true, direct) {
             return;
         }
         self.tail.on_packet(pn, filled.plain, filled.ineligible);

@@ -75,6 +75,9 @@ pub struct Config {
     /// retransmissions into datagram-sized fragments. Off by default: every flight is fragmented to the minimum
     /// datagram size.
     pub flight_split: bool,
+    /// Whether a burst that drained the send queue on a lossy direct path may be followed by a tail repair packet. Off
+    /// for the sessions of a node that serves a relay.
+    pub tail_repair: bool,
     /// The slack of the rate gate on round trips between 2 ms and 250 ms, in bytes; `None` keeps the default.
     pub gate_slack: Option<u64>,
     /// Acknowledge every this-many ack-eliciting packets instead of every 2nd (3rd for bulk): 4 for a member's
@@ -109,6 +112,7 @@ impl Config {
             key_update_after: 1 << 21,
             probe_mtu: true,
             flight_split: false,
+            tail_repair: true,
             gate_slack: None,
             ack_every: None,
             interface_mtu: 1500,

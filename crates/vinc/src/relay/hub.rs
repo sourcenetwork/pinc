@@ -54,6 +54,7 @@ impl Hub {
         };
         let mut cfg = EndpointConfig::new(u64::from_le_bytes(key));
         cfg.conn.max_gso = 1;
+        cfg.conn.tail_repair = false;
         let mut ep = AnyEp::new(
             limits.hub_sessions,
             now,
