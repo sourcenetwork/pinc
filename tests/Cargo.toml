@@ -863,6 +863,10 @@ name = "node_broadcast"
 path = "node_broadcast.rs"
 
 [[test]]
+name = "node_burst"
+path = "node_burst.rs"
+
+[[test]]
 name = "node_partition"
 path = "node_partition.rs"
 
