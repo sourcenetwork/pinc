@@ -21,6 +21,7 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use vinc_broadcast::{Config as BcConfig, Refused, StartError as BcStartError, Topics};
@@ -84,6 +85,8 @@ pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEE
     pub(crate) local: SocketAddr,
     pub(crate) local_addrs: [Option<SocketAddr>; MAX_ADDRS],
     pub(crate) next_duty: Nanos,
+    /// What [`Node::poll_timeout`] answers, until a call that could move it: every such call clears this.
+    pub(crate) deadline: Cell<Option<Option<Nanos>>>,
     pub(crate) leaving: bool,
 }
 
@@ -257,6 +260,7 @@ where
             local: cfg.local,
             local_addrs,
             next_duty: now,
+            deadline: Cell::new(None),
             leaving: false,
         };
         node.refresh_alive(now);
@@ -286,6 +290,7 @@ where
     /// Take the time of a call.
     pub(crate) fn begin(&mut self, now: Nanos) {
         self.io.now = self.io.now.max(now);
+        self.deadline.set(None);
     }
 
     /// Refresh what the layers read of the node: which hubs are alive, the ticket the address hash covers.
@@ -473,6 +478,22 @@ where
 
     /// When the host should next call [`Node::handle_timeout`].
     pub fn poll_timeout(&self) -> Option<Nanos> {
+        // A host asks many times between two calls that could move the answer: it is worked out once for them all.
+        if let Some(d) = self.deadline.get() {
+            debug_assert_eq!(
+                d,
+                self.next_deadline(),
+                "a call moved the node's deadline and did not say so"
+            );
+            return d;
+        }
+        let d = self.next_deadline();
+        self.deadline.set(Some(d));
+        d
+    }
+
+    /// The earliest deadline of the endpoint and of every layer, worked out now.
+    fn next_deadline(&self) -> Option<Nanos> {
         let now = self.io.now;
         [
             self.io.ep.poll_timeout(),
@@ -575,7 +596,8 @@ where
     }
 
     /// The host's stores, for the host to fill: add a value to serve, a set item, a bundle's key.
-    pub const fn apps_mut(&mut self) -> &mut A {
+    pub fn apps_mut(&mut self) -> &mut A {
+        self.deadline.set(None);
         &mut self.apps
     }
 
@@ -591,7 +613,8 @@ where
 
     /// The endpoint, for the calls the node does not wrap (reading a datagram, an interface event, a new prekey).
     /// Commands go through [`Node::command`], so the node sees their effects.
-    pub const fn endpoint_mut(&mut self) -> &mut E {
+    pub fn endpoint_mut(&mut self) -> &mut E {
+        self.deadline.set(None);
         &mut self.io.ep
     }
 
@@ -637,6 +660,7 @@ where
 
     /// Take `member` as a subscriber of `topic` to send to straight when no hub is reachable.
     pub fn hint_subscriber(&mut self, topic: &[u8], member: &NodeId) -> bool {
+        self.deadline.set(None);
         self.topics.hint(topic, member)
     }
 
@@ -665,6 +689,7 @@ where
     /// The access-control layer lifted the revocation of `peer`; whether it was revoked. Its place in every
     /// revocation table is free again.
     pub fn unrevoke(&mut self, peer: &NodeId) -> bool {
+        self.deadline.set(None);
         let a = self.mem.unrevoke(peer);
         let b = self.topics.unrevoke(peer);
         let c = self.io.revoked.remove(peer);
@@ -678,6 +703,7 @@ where
     /// The access-control layer's answer for `peer` changed: forget the endpoint's cached answer, so the peer's next
     /// session is checked afresh and a session already up is checked again at its next event.
     pub fn forget_access(&mut self, peer: &NodeId) {
+        self.deadline.set(None);
         let _ = self.io.cmd(Command::AcpForget {
             peer: self.io.full_id(peer),
         });
@@ -769,6 +795,7 @@ where
     /// Add an interface to the endpoint; `None` when its table is full. A host calls it for an interface that appears
     /// after the node started, and tells the node about the new address with [`Node::set_local`].
     pub fn add_iface(&mut self, local: SocketAddr) -> Option<IfaceId> {
+        self.deadline.set(None);
         self.io.ep.add_iface(local)
     }
 
@@ -781,16 +808,19 @@ where
 
     /// Use `prekey` in the carrier handshakes that start from now on (the endpoint's own prekey rotates).
     pub fn set_prekey(&mut self, prekey: PrekeyInfo) {
+        self.deadline.set(None);
         self.conn.set_prekey(prekey);
     }
 
     /// Turn the beacons of local discovery on or off (they are on by default).
     pub fn set_local_discovery(&mut self, on: bool) {
+        self.deadline.set(None);
         self.conn.set_local_discovery(on);
     }
 
     /// Set the node's own addresses.
     pub fn set_local(&mut self, addrs: &[SocketAddr]) {
+        self.deadline.set(None);
         self.local_addrs = [None; MAX_ADDRS];
         for (d, a) in self.local_addrs.iter_mut().zip(addrs) {
             *d = Some(*a);
@@ -800,6 +830,7 @@ where
 
     /// The next request for a carrier stream.
     pub fn poll_io(&mut self) -> Option<CarrierIo> {
+        self.deadline.set(None);
         self.conn.poll_io()
     }
 
@@ -837,11 +868,13 @@ where
 
     /// The next bytes to write on the carrier stream of `relay`.
     pub fn poll_stream(&mut self, relay: usize, buf: &mut [u8]) -> usize {
+        self.deadline.set(None);
         self.conn.poll_stream(relay, buf)
     }
 
     /// The next UDP datagram of the connectivity layer (a relay probe, a lookup, a beacon).
     pub fn poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        self.deadline.set(None);
         self.conn.poll_udp(buf)
     }
 
