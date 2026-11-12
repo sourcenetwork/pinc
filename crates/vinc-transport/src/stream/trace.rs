@@ -73,6 +73,8 @@ pub struct TableView {
     pub ext: u64,
     /// The window size the delivery rate asks for.
     pub target: u64,
+    /// The mark of the slots: one past the highest slot a stream holds; every slot past it is new.
+    pub high_water: u64,
     /// The delivery meter: the epoch start, the bytes in it, the last rate.
     pub meter: (Option<u64>, u64, u64),
     /// The stream credit: the limit on the streams we may open in all, the limit last advertised, and the streams

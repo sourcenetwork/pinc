@@ -107,7 +107,7 @@ fn view_json(v: &TableView) -> String {
     let slots: Vec<String> = v.slots.iter().map(slot_json).collect();
     let (ms, mb, mr) = v.meter;
     format!(
-        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"ms":{},"mb":{mb},"mr":{mr},"ad":[{},{},{}],"adp":{}}}"#,
+        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"hw":{},"ms":{},"mb":{mb},"mr":{mr},"ad":[{},{},{}],"adp":{}}}"#,
         slots.join(","),
         v.remote_next[0],
         v.remote_next[1],
@@ -117,6 +117,7 @@ fn view_json(v: &TableView) -> String {
         v.local_live,
         v.ext,
         v.target,
+        v.high_water,
         opt(ms),
         v.admit[0],
         v.admit[1],

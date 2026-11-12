@@ -90,6 +90,8 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     /// A peer stream stopped counting against its limit since [`Streams::take_released`] last asked.
     released: bool,
     open: usize,
+    /// One past the highest slot a stream holds, 0 with none (see [`Streams::used`]).
+    top: usize,
     buffered: u64,
     stats: StreamStats,
     admit: Admit,
@@ -120,6 +122,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             remote_live: 0,
             released: false,
             open: 0,
+            top: 0,
             buffered: 0,
             stats: StreamStats::default(),
             admit: Admit {
@@ -190,6 +193,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.remote_live = 0;
         self.released = false;
         self.open = 0;
+        self.top = 0;
         self.buffered = 0;
         self.stats = StreamStats::default();
         self.admit = Admit {
@@ -233,11 +237,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// The receive credit granted to the peer and not yet received, summed over the open streams. It is recomputed by
-    /// a scan of the slots streams have used.
+    /// a scan of the slots up to the highest one a stream holds.
     pub fn granted_unreceived(&self) -> u64 {
         self.slots
             .written()
             .iter()
+            .take(self.used())
             .fold(0, |sum, s| sum.saturating_add(s.recv.unreceived()))
     }
 
@@ -246,11 +251,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         N.saturating_sub(self.open) as u64
     }
 
-    /// The slots a stream has ever held, a prefix of the table (a new stream takes the lowest free slot): no slot
-    /// beyond it holds a stream or has anything to send, so the scans the connection makes for each packet stop
-    /// here and cost what the session's busiest moment used, not the size of the table.
-    pub(super) fn used(&self) -> usize {
-        self.slots.written().len()
+    /// One past the highest slot a stream holds (a new stream takes the lowest free slot): no slot beyond it holds a
+    /// stream or has anything to send, so the scans the connection makes for each packet stop here. It falls when the
+    /// top stream ends, so a session back to one stream after a burst of many scans one slot again, not every slot the
+    /// burst wrote (whose memory a scan would read, a cache miss a slot).
+    pub(super) const fn used(&self) -> usize {
+        self.top
     }
 
     /// The pool bytes promised to the peer: the credit granted and not yet received, plus the first charges kept for the
@@ -289,6 +295,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             local_live: self.local_live,
             ext: (pool.used_chunks() as u64).saturating_sub(held),
             target: self.target,
+            high_water: self.used() as u64,
             meter: self.meter.view(),
             admit: [self.admit.limit, self.admit.adv, self.admit.adv_at],
             admit_pend: self.admit.pend,
@@ -374,6 +381,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             *h = 0;
         }
         self.open = self.open.saturating_sub(1);
+        // The top stream ended: walk the mark down past the free slots below it, each passed once per free.
+        while self.top > 0 && self.ids.get(self.top - 1) == Some(&NONE) {
+            self.top -= 1;
+        }
         if id != NONE && counted {
             let live = if self.is_local(id) {
                 &mut self.local_live
@@ -433,6 +444,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
         slot.counted = true;
         self.open += 1;
+        self.top = self.top.max(i + 1);
         if local {
             self.local_live += 1;
         } else {
@@ -783,7 +795,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             }
             self.refresh(i);
         }
-        self.stalled = self.slots.written().iter().any(|s| s.recv.win.deferred);
+        self.stalled = self.slots.written().iter().take(self.used()).any(|s| s.recv.win.deferred);
     }
 
     /// Whether the bytes `offset..offset + len` of a stream are acknowledged (an empty range asks about the end
@@ -857,7 +869,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if self.buffered >= buffer_cap {
             return None;
         }
-        let i = self.slots.written().iter().position(|s| s.send.cap_cut)?;
+        let i = self.slots.written().iter().take(self.used()).position(|s| s.send.cap_cut)?;
         if let Some(slot) = self.slots.get_mut(i) {
             slot.send.cap_cut = false;
         }
@@ -913,6 +925,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.ids = [NONE; N];
         self.hot = [0; N];
         self.open = 0;
+        self.top = 0;
         self.buffered = 0;
         self.local_live = 0;
         self.remote_live = 0;
@@ -930,6 +943,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
     use super::*;
+    use crate::stream::{ControlFrame, StreamChunk};
 
     fn written<const N: usize, const C: usize>(t: &mut Streams<NoSource, N, C>) -> usize {
         t.slots.written_iter_mut().count()
@@ -960,5 +974,75 @@ mod tests {
         assert!(t.send_view(first).is_none());
         t.open_stream(&pool, true).unwrap();
         assert_eq!(written(&mut t), 1);
+    }
+
+    /// The scans for frames to send stop at the mark, one past the highest live slot. The highest slot keeps its
+    /// retransmission and its reset after every slot below it was freed; a reused slot below the mark is found; when
+    /// the top stream ends the mark falls to the highest one still live, though the slots above stay written; after a
+    /// reset of the table it is 0.
+    #[test]
+    fn the_highest_slot_ever_used_is_scanned_after_the_slots_below_it_are_freed() {
+        let mut pool = BufferPool::new_boxed(512);
+        let mut cfg = Config::new(true);
+        cfg.peer = PeerLimits {
+            window: 64 * 1024,
+            max_streams: 16,
+        };
+        let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
+        let next = |t: &mut Streams<NoSource, 72, 65>, pool: &BufferPool<'_>| {
+            let c = t.next_stream_frame(1200)?;
+            t.copy_out(pool, &c, &mut [0u8; 1200]).unwrap();
+            Some(c)
+        };
+        for _ in 0..4 {
+            let id = t.open_stream(&pool, false).unwrap();
+            t.write(&mut pool, id, &[1; 10], u64::MAX).unwrap();
+            t.finish(id).unwrap();
+        }
+        let sent: alloc::vec::Vec<StreamChunk> = core::iter::from_fn(|| next(&mut t, &pool)).collect();
+        assert_eq!(sent.len(), 4);
+        for c in sent.get(..3).unwrap() {
+            t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);
+        }
+        assert_eq!(
+            (t.open_streams(), t.used()),
+            (1, 4),
+            "the lower three are freed, the mark stays at the top slot"
+        );
+        let top = *sent.get(3).unwrap();
+        t.on_lost(top.id, top.offset, top.len as u64, top.fin);
+        assert_eq!(
+            next(&mut t, &pool).map(|c| c.id),
+            Some(top.id),
+            "the retransmission on the top slot is sent"
+        );
+        let reused = t.open_stream(&pool, false).unwrap();
+        t.write(&mut pool, reused, &[2; 10], u64::MAX).unwrap();
+        assert_eq!(t.used(), 4, "a reused slot sits below the mark");
+        assert_eq!(next(&mut t, &pool).map(|c| c.id), Some(reused));
+        t.reset(&mut pool, top.id, 9).unwrap();
+        let reset = t.pending_control();
+        assert!(
+            matches!(reset, Some(ControlFrame::ResetStream { id, .. }) if id == top.id),
+            "the reset of the top slot is sent"
+        );
+        t.on_control_acked(&mut pool, &reset.unwrap());
+        assert_eq!(
+            (t.used(), written(&mut t)),
+            (1, 4),
+            "the top stream ended: the mark falls to the reused slot, the slots above stay written"
+        );
+        t.on_lost(reused, 0, 10, false);
+        assert_eq!(
+            next(&mut t, &pool).map(|c| c.id),
+            Some(reused),
+            "the slot under the fallen mark is still scanned"
+        );
+        let mut fresh = BufferPool::new_boxed(512);
+        t.reinit(&cfg, &fresh);
+        assert_eq!((written(&mut t), t.used()), (0, 0));
+        let id = t.open_stream(&fresh, false).unwrap();
+        t.write(&mut fresh, id, &[3; 10], u64::MAX).unwrap();
+        assert_eq!((t.used(), next(&mut t, &fresh).map(|c| c.id)), (1, Some(id)));
     }
 }
