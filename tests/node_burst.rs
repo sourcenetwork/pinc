@@ -14,7 +14,8 @@ use node_common::{OWD, World, big, secs};
 use vinc_broadcast::Trace as BTrace;
 use vinc_node::NodeEvent;
 use vinc_node::trace::Body;
-use vinc_sim::{LinkConfig, MS, Sim, SimConfig, Time};
+use vinc_node::trace::NodeTrace;
+use vinc_sim::{LinkConfig, Loss, MS, Sim, SimConfig, Time};
 use vinc_tests::{NCmd, NEv};
 
 const TOPIC: &[u8] = b"pushlog";
@@ -31,15 +32,22 @@ fn body(i: usize) -> Vec<u8> {
 /// One hub, one writer on the hub's LAN, and `SUBS` subscribers on paths of 10 Mbit/s (a 100 Mbit/s link shared ten
 /// ways) with a 20 ms round trip.
 fn world(seed: u64) -> World {
-    let mut w = World::build_with(seed, 1, 1 + SUBS, |w| {
+    world_with(seed, SUBS, Loss::None)
+}
+
+/// As [`world`], with `subs` subscribers whose paths lose datagrams as `loss` says.
+fn world_with(seed: u64, subs: usize, loss: Loss) -> World {
+    let mut w = World::build_with(seed, 1, 1 + subs, |w| {
         // The hub's log is what a subscriber on a slow path is served from: it must hold the burst (about 8.2 MiB).
         w.limits.log_bytes = 16 << 20;
+        w.trace = true;
         w.sim = Sim::with_config(
             seed,
             SimConfig {
                 default_link: Some(LinkConfig {
                     delay: OWD,
                     bandwidth_bps: 10_000_000,
+                    loss,
                     ..LinkConfig::default()
                 }),
                 ..SimConfig::default()
@@ -162,6 +170,56 @@ fn a_pushlog_burst_reaches_every_subscriber() {
         assert_eq!(acked, N, "the publisher must hear every publish acknowledged");
         for (j, g) in got.iter().enumerate() {
             assert_eq!(*g, N, "subscriber {j} got {g} of {N} by the end of the drain");
+        }
+    });
+}
+
+/// A path that loses packets delivers a stream in jumps: everything behind a lost packet becomes readable at once
+/// when the packet is sent again. A subscriber reads all of it as the frames it is, resets no stream, and misses
+/// nothing.
+#[test]
+fn a_burst_over_a_path_that_loses_packets_reaches_every_subscriber_and_no_stream_is_reset() {
+    const SOME: usize = 3;
+    const COUNT: usize = 600;
+    big(|| {
+        let mut w = world_with(93, SOME, Loss::Bernoulli(0.02));
+        let m = w.members.clone();
+        let (writer, subs) = (m[0], &m[1..]);
+        for s in subs {
+            w.sim.command(secs(20), *s, NCmd::Subscribe(TOPIC.to_vec()));
+        }
+        let start = secs(40);
+        for i in 0..COUNT {
+            w.sim.command(
+                start + (i as Time) * MS / 10,
+                writer,
+                NCmd::Publish {
+                    topic: TOPIC.to_vec(),
+                    body: body(i),
+                },
+            );
+        }
+        let drained = start + secs(30);
+        w.run(drained);
+        let got: Vec<usize> = subs
+            .iter()
+            .map(|s| count(&w, *s, drained, |e| matches!(e, NodeEvent::Message { .. })))
+            .collect();
+        let resets: usize = subs
+            .iter()
+            .map(|s| {
+                w.sim
+                    .node(*s)
+                    .traces
+                    .iter()
+                    .filter(|(_, t)| matches!(t.body, Body::Node(NodeTrace::StreamReset { .. })))
+                    .count()
+            })
+            .sum();
+        eprintln!("lossy burst: delivered {got:?} stream resets {resets}");
+        assert_eq!(resets, 0, "a subscriber reset a stream whose frames were whole");
+        for (j, g) in got.iter().enumerate() {
+            assert_eq!(*g, COUNT, "subscriber {j} got {g} of {COUNT}");
         }
     });
 }

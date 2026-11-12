@@ -397,17 +397,24 @@ where
                 broken = true;
                 break;
             };
-            if st.inb.len().saturating_add(n) > limit.saturating_add(1 << 16) {
+            st.inb.extend_from_slice(chunk);
+            let consumed = io.cmd(Command::Consume { session, stream, n }).is_ok();
+            // Whole frames leave the buffer as they are read, however much the stream had ready (a burst, or
+            // everything behind a lost packet at once): what stays is the start of one frame, and a start longer
+            // than a frame is not one.
+            if !self.parse_stream(now, session, stream, &peer) {
                 broken = true;
                 break;
             }
-            st.inb.extend_from_slice(chunk);
-            if io.cmd(Command::Consume { session, stream, n }).is_err() {
-                break;
+            match self.io.strm.get(&(session, stream)) {
+                Some(st) if st.inb.len() > limit => {
+                    broken = true;
+                    break;
+                }
+                Some(_) if consumed => {}
+                // The stream ended while its frames were handled, or the transport refused the consume.
+                _ => break,
             }
-        }
-        if !broken {
-            broken = !self.parse_stream(now, session, stream, &peer);
         }
         if broken {
             let _ = self.io.cmd(Command::Reset {
@@ -420,28 +427,32 @@ where
         }
     }
 
-    /// Hand the whole frames in the stream's buffer to membership. False if the framing broke.
+    /// Hand the whole frames in the stream's buffer to membership, all of them: membership takes a bounded number
+    /// per call, so it is asked again while it used some and bytes are left. False if the framing broke.
     fn parse_stream(&mut self, now: Nanos, session: SessionId, stream: StreamId, peer: &NodeId) -> bool {
-        let Some(mut buf) = self
-            .io
-            .strm
-            .get_mut(&(session, stream))
-            .map(|s| core::mem::take(&mut s.inb))
-        else {
-            return true;
-        };
-        let (m, mut h) = self.mem_host();
-        let r = m.on_bytes(&mut h, now, peer, &buf);
-        let ok = match r {
-            Ok(used) => {
-                buf.drain(..used);
-                true
-            }
-            Err(_) => false,
-        };
-        if let Some(st) = self.io.strm.get_mut(&(session, stream)) {
+        loop {
+            let Some(mut buf) = self
+                .io
+                .strm
+                .get_mut(&(session, stream))
+                .map(|s| core::mem::take(&mut s.inb))
+            else {
+                return true;
+            };
+            let (m, mut h) = self.mem_host();
+            let used = m.on_bytes(&mut h, now, peer, &buf);
+            buf.drain(..used.unwrap_or(0).min(buf.len()));
+            let more = used.is_ok_and(|u| u > 0) && !buf.is_empty();
+            let Some(st) = self.io.strm.get_mut(&(session, stream)) else {
+                return true;
+            };
             st.inb = buf;
+            if used.is_err() {
+                return false;
+            }
+            if !more {
+                return true;
+            }
         }
-        ok
     }
 }
