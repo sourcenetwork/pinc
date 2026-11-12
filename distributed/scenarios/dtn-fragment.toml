@@ -1,0 +1,57 @@
+name = "dtn-fragment"
+about = "KNOWN GAP (reception interval cap): an honest 1 MiB update cut into 4 KiB slices (slice_log 2) makes 65 erasure blocks, so 65 disjoint verified ranges, over vinc-node's 64-interval reception cap. The cloud carrier's reception overflows and it refuses the laptop, reported on the wire as a bad proof though nothing was tampered with, so the update is not carried. This asserts today's real behaviour; a fix is tracked as a gap (see the PR). The other scenarios send at slice_log 4 (16 KiB slices, 17 blocks) to stay under the cap. VINC only."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home"
+
+[[nodes]]
+name = "hub"
+site = "home"
+role = "hub"
+
+[[nodes]]
+name = "laptop"
+site = "home"
+
+[[nodes]]
+name = "cloud"
+site = "home"
+
+[[nodes]]
+name = "phone"
+site = "home"
+
+[workload]
+kind = "dtn"
+sizes = [1048576]
+duration_s = 40
+
+[[workload.sends]]
+at_s = 2
+from = "laptop"
+to = "cloud"
+copies = 2
+lifetime_s = 200
+slice_log = 2
+
+[[workload.contacts]]
+a = "laptop"
+b = "cloud"
+from_s = 1
+to_s = 30
+
+[[workload.checks]]
+rule = "refused"
+at = "cloud"
+reason = "bad-proof"
+from = "laptop"
+
+[[workload.checks]]
+rule = "not-delivered"
+to = "cloud"
