@@ -6,18 +6,51 @@
 //! (GET) and the hub sends them (MSG). A periodic check (`GAP_AE`) repeats the question while a topic is live, so a
 //! message a dead session swallowed is fetched; hubs also exchange the ids of their logs (HAVE) every [`HUB_AE`].
 //!
+//! A hub offers every id of the span it is asked about or exchanges, in as many HAVE frames as that takes, so a node
+//! that was cut off learns of everything the log still holds, not only of the newest ids.
+//!
 //! Invariants: a HAVE and a GET carry at most [`HAVE_MAX`] ids; a GET names only ids the node lacks; a replay sends
 //! at most [`REPLAY_PUSH_MAX`] messages and never a member's own back to it.
 
 use vinc_membership::{Nanos, NodeId};
 
+use alloc::vec::Vec;
+
 use crate::consts::{
-    AE_FROM, AE_TO, GAP_EVERY, GAP_LIVE, GAP_SPAN, HAVE_MAX, HUB_AE, REPLAY_PUSH_MAX, RESUB_BACK_MS, TABLE_MAX,
+    AE_FROM, AE_TO, GAP_EVERY, GAP_LIVE, GAP_SPAN, HAVE_MAX, HUB_AE, LOG_CAP, REPLAY_PUSH_MAX, RESUB_BACK_MS, TABLE_MAX,
 };
 use crate::event::{Trace, topic_tag};
 use crate::host::{Host, Lane};
 use crate::node::{Refused, Topics};
 use crate::wire::{self, Head, get_u64, ty};
+
+/// Offer `mids` to `peers` as HAVE frames: every id, [`HAVE_MAX`] to a frame, oldest first. `sent` hears the peer and
+/// the id count of each frame. A log holds at most [`LOG_CAP`] messages, so an offer is at most four frames a peer.
+fn offer<H: Host>(
+    h: &mut H,
+    ids: &mut Vec<u8>,
+    scratch: &mut Vec<u8>,
+    peers: &[NodeId],
+    topic: &[u8],
+    mids: impl Iterator<Item = u64>,
+    mut sent: impl FnMut(&NodeId, u16),
+) {
+    let mut mids = mids.peekable();
+    while mids.peek().is_some() {
+        ids.clear();
+        for mid in mids.by_ref().take(HAVE_MAX) {
+            ids.extend_from_slice(&mid.to_le_bytes());
+        }
+        if wire::build(scratch, ty::HAVE, topic, &[ids]).is_err() {
+            return;
+        }
+        let count = u16::try_from(ids.len() / 8).unwrap_or(u16::MAX);
+        for p in peers {
+            h.send(p, Lane::Reply, scratch);
+            sent(p, count);
+        }
+    }
+}
 
 impl Topics {
     // vertexia: `since` is a wall-clock instant compared with the hub's wall clock, so a skewed clock shifts the
@@ -179,30 +212,28 @@ impl Topics {
         // Stay on the 5 s grid that began at start, however long the hub idled without a log.
         let behind = now.saturating_sub(self.next_ae);
         self.next_ae = self.next_ae.saturating_add((behind / HUB_AE + 1) * HUB_AE);
+        let up: Vec<NodeId> = self.hubs.iter().filter(|x| h.hub_up(x)).copied().collect();
         let topics = core::mem::take(&mut self.topics);
         for (k, st) in &topics {
             let Some(log) = st.log.as_ref().filter(|l| l.len() > 0) else {
                 continue;
             };
-            let total = log.window(now, AE_FROM, AE_TO).count();
-            self.ids.clear();
-            for mid in log.window(now, AE_FROM, AE_TO).skip(total.saturating_sub(HAVE_MAX)) {
-                self.ids.extend_from_slice(&mid.to_le_bytes());
-            }
-            if self.ids.is_empty() || wire::build(&mut self.scratch, ty::HAVE, k, &[&self.ids]).is_err() {
-                continue;
-            }
-            let count = u16::try_from(self.ids.len() / 8).unwrap_or(u16::MAX);
-            for hub in &self.hubs {
-                if h.hub_up(hub) {
-                    h.send(hub, Lane::Reply, &self.scratch);
-                    self.tq.push(|| Trace::HaveSent {
-                        peer: *hub,
+            let tq = &mut self.tq;
+            offer(
+                h,
+                &mut self.ids,
+                &mut self.scratch,
+                &up,
+                k,
+                log.window(now, AE_FROM, AE_TO),
+                |peer, count| {
+                    tq.push(|| Trace::HaveSent {
+                        peer: *peer,
                         topic: topic_tag(k),
                         count,
                     });
-                }
-            }
+                },
+            );
         }
         self.topics = topics;
     }
@@ -218,14 +249,9 @@ impl Topics {
             let Some(log) = st.log.as_ref().filter(|_| st.subs.contains_key(member)) else {
                 continue;
             };
-            let total = log.window(now, span, 0).count();
-            self.ids.clear();
-            for mid in log.window(now, span, 0).skip(total.saturating_sub(HAVE_MAX)) {
-                self.ids.extend_from_slice(&mid.to_le_bytes());
-            }
-            if !self.ids.is_empty() && wire::build(&mut self.scratch, ty::HAVE, k, &[&self.ids]).is_ok() {
-                h.send(member, Lane::Reply, &self.scratch);
-            }
+            let to = [*member];
+            let mids = log.window(now, span, 0);
+            offer(h, &mut self.ids, &mut self.scratch, &to, k, mids, |_, _| {});
         }
         self.topics = topics;
     }
@@ -248,8 +274,8 @@ impl Topics {
             false
         };
         if let Some(log) = st.log.as_ref() {
-            let total = log.since(since).count();
             if replay {
+                let total = log.since(since).count();
                 for mid in log.since(since).skip(total.saturating_sub(REPLAY_PUSH_MAX)) {
                     let Some(l) = log.get(mid) else { continue };
                     let Ok((head, _)) = Head::parse(l) else {
@@ -263,19 +289,23 @@ impl Topics {
                     }
                 }
             } else {
-                self.ids.clear();
-                for mid in log.since(since).skip(total.saturating_sub(HAVE_MAX)) {
-                    self.ids.extend_from_slice(&mid.to_le_bytes());
-                }
-                if !self.ids.is_empty() && wire::build(&mut self.scratch, ty::HAVE, topic, &[&self.ids]).is_ok() {
-                    h.send(from, Lane::Reply, &self.scratch);
-                    let count = u16::try_from(self.ids.len() / 8).unwrap_or(u16::MAX);
-                    self.tq.push(|| Trace::HaveSent {
-                        peer: *from,
-                        topic: topic_tag(topic),
-                        count,
-                    });
-                }
+                let tq = &mut self.tq;
+                let to = [*from];
+                offer(
+                    h,
+                    &mut self.ids,
+                    &mut self.scratch,
+                    &to,
+                    topic,
+                    log.since(since),
+                    |peer, count| {
+                        tq.push(|| Trace::HaveSent {
+                            peer: *peer,
+                            topic: topic_tag(topic),
+                            count,
+                        });
+                    },
+                );
             }
         }
         if changed {
@@ -311,7 +341,7 @@ impl Topics {
                 && !st.log.as_ref().is_some_and(|l| l.contains(key))
             {
                 self.ids.extend_from_slice(mid);
-                if st.requested.len() >= 2 * HAVE_MAX {
+                if st.requested.len() >= LOG_CAP {
                     st.requested.clear();
                 }
                 st.requested.insert(*mid);

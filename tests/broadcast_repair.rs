@@ -181,19 +181,64 @@ fn hubs_repair_each_other_after_a_partition() {
     assert_eq!(net.nodes[1].t.log_len(T), 1);
 }
 
+/// One HAVE carries at most 512 ids, and an offer of more goes on in further frames, oldest first: the asker learns of
+/// every id the log holds, not only of the newest.
 #[test]
-fn a_have_is_capped_at_512_ids_newest_first_kept() {
+fn a_have_carries_at_most_512_ids_and_the_offer_goes_on_in_further_frames() {
     let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
-    for i in 0..600u32 {
-        net.publish(1, T, &i.to_be_bytes());
-    }
-    // A subscriber asking from the beginning of time gets the newest 512 ids.
+    let sent: Vec<[u8; 8]> = (0..600u32).map(|i| net.publish(1, T, &i.to_be_bytes())).collect();
+    // A subscriber asking from the beginning of time is offered all 600 ids.
     let asker = net.id(2);
     let now = net.now;
     let n = &mut net.nodes[0];
     n.h.out.clear();
     n.t.frame(&mut n.h, now, &asker, ty::SUB, T, &0u64.to_be_bytes());
-    let have = n.h.out.iter().find(|o| o.bytes[4] == ty::HAVE).unwrap();
-    let rest = &have.bytes[6 + T.len()..];
-    assert_eq!(rest.len(), 512 * 8);
+    let haves: Vec<&[u8]> =
+        n.h.out
+            .iter()
+            .filter(|o| o.bytes[4] == ty::HAVE)
+            .map(|o| &o.bytes[6 + T.len()..])
+            .collect();
+    assert_eq!(
+        haves.iter().map(|r| r.len() / 8).collect::<Vec<_>>(),
+        vec![512, 88],
+        "the ids of each frame"
+    );
+    let offered: Vec<[u8; 8]> = haves.concat().as_chunks::<8>().0.to_vec();
+    assert_eq!(offered, sent, "every id, in the order it was logged");
+}
+
+/// A site is cut off for fifteen seconds while fifty messages a second are published elsewhere: 750 messages, more
+/// than one HAVE carries. After the heal its hub learns of every one of them from the other hub, not only of the
+/// newest, and its subscriber misses none.
+#[test]
+fn a_hub_cut_off_through_750_messages_gets_every_one_after_the_heal() {
+    // Hubs 0 and 1, publisher 2 on hub 0, subscriber 3 on hub 1.
+    let mut net = Net::new(IdentityAlg::Ed25519, 2, 2, SEC);
+    net.set_primary(3, 1);
+    net.subscribe(3, T);
+    let before = net.publish(2, T, b"before");
+    net.run_until(5 * SEC);
+    assert_eq!(net.delivered(3), vec![before]);
+
+    let cut = |net: &mut Net, up: bool| {
+        net.link(0, 1, up);
+        net.link(2, 1, up);
+        net.link(3, 0, up);
+    };
+    cut(&mut net, false);
+    let mut sent = vec![before];
+    for k in 0..750u32 {
+        sent.push(net.publish(2, T, format!("during {k}").as_bytes()));
+        net.advance(SEC / 50);
+    }
+    assert_eq!(net.delivered(3), vec![before], "nothing crosses the cut");
+
+    cut(&mut net, true);
+    net.advance(12 * SEC);
+    let mut got = net.delivered(3);
+    assert_eq!(got.len(), sent.len(), "the subscriber behind the cut misses messages");
+    got.sort_unstable();
+    sent.sort_unstable();
+    assert_eq!(got, sent);
 }
