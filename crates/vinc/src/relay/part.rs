@@ -243,16 +243,24 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     /// Apply what the machine queued for the node's endpoint (packets from members' carriers, pulses for their sessions,
     /// datagrams for their addresses); whether anything was. The events the endpoint produced at once go to `out`, for
     /// the endpoint's owner to handle like the ones it polls. Call it after [`Part::poll`], [`Part::datagram`] and
-    /// [`Part::handle_timeout`].
+    /// [`Part::handle_timeout`]. `now` is the endpoint's clock.
     pub fn hub<E: Ep>(&mut self, ep: &mut E, now: u64, out: &mut Vec<vinc_core::Event>) -> bool {
         self.core.hub_pump(ep, now, out)
     }
 
     /// The endpoint reported `ev`. Pass the events of sessions that are the relay's members ([`vinc_core::Event::Incoming`],
     /// [`vinc_core::Event::Closed`] and [`vinc_core::Event::PeerAwake`] matter); the others are ignored. A new member's
-    /// session takes the member role. The events the endpoint produced at once go to `out`.
-    pub fn hub_event<E: Ep>(&mut self, ep: &mut E, now: u64, ev: &vinc_core::Event, out: &mut Vec<vinc_core::Event>) {
-        self.core.hub_event(ep, now, ev, out);
+    /// session takes the member role. The events the endpoint produced at once go to `out`. `now` is the endpoint's
+    /// clock, used for its commands, and `relay_now` the relay's own (the same one when the host keeps a single clock).
+    pub fn hub_event<E: Ep>(
+        &mut self,
+        ep: &mut E,
+        now: u64,
+        relay_now: u64,
+        ev: &vinc_core::Event,
+        out: &mut Vec<vinc_core::Event>,
+    ) {
+        self.core.hub_event(ep, now, relay_now, ev, out);
     }
 
     /// The endpoint wants to send `bytes` to `remote`. Whether `remote` is a relay path address, which names a member:

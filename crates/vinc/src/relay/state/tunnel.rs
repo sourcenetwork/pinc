@@ -182,7 +182,14 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     }
 
     /// The endpoint reported `ev`; the relay takes what concerns its members.
-    pub(crate) fn hub_event<E: Ep>(&mut self, ep: &mut E, now: u64, ev: &EpEvent, out: &mut Vec<EpEvent>) {
+    pub(crate) fn hub_event<E: Ep>(
+        &mut self,
+        ep: &mut E,
+        now: u64,
+        relay_now: u64,
+        ev: &EpEvent,
+        out: &mut Vec<EpEvent>,
+    ) {
         let cap = self.limits.hub_sessions;
         let Some(t) = self.hub.as_mut() else { return };
         match *ev {
@@ -211,7 +218,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             EpEvent::PeerAwake { session } => {
                 if let Some((_, node)) = t.members.iter().find(|(s, _)| *s == session) {
                     let node = *node;
-                    self.sm.member_returned(now, &node, &mut self.fx);
+                    self.sm.member_returned(relay_now, &node, &mut self.fx);
                     self.flush();
                 }
             }

@@ -13,7 +13,7 @@ use core::net::SocketAddr;
 
 use vinc_connect::relay::Trace;
 use vinc_connect::relay::datagram::Datagram;
-use vinc_core::{Command, SessionId, is_relay_addr};
+use vinc_core::{Command, Event, SessionId, is_relay_addr};
 use vinc_crypto::NodeId;
 
 use crate::apps::{Apps, ServeSource};
@@ -107,6 +107,15 @@ where
             })
             .max_by_key(|(heard, _)| *heard)
             .map(|(_, route)| route)
+    }
+
+    /// Events that came out of commands the host's relay ran straight on the endpoint (it lends the endpoint to the
+    /// relay, which answers for its members' sessions): they join the node's own loop, which then runs, so the node
+    /// sees them as it sees the ones it polls itself.
+    pub fn relay_events(&mut self, now: Nanos, events: &[Event]) {
+        self.begin(now);
+        self.io.evq.extend(events.iter().copied());
+        self.settle(now);
     }
 
     /// The next thing the hub's relay should learn about a member, oldest first.
