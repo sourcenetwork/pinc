@@ -279,6 +279,27 @@ impl Monitor {
     }
 }
 
+/// The CPUs the machine has online, whatever CPUs this process is allowed to run on. A run pins its orchestrator to
+/// CPU 0 ([`pin_self`]) and a dashboard goes on to start other runs from the same process: counted by the process's
+/// own allowance, the machine would look like one CPU from the second run on, and every node would share CPU 0.
+pub fn host_cpus() -> usize {
+    std::fs::read_to_string("/sys/devices/system/cpu/online")
+        .ok()
+        .and_then(|s| online_count(&s))
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, std::num::NonZero::get))
+}
+
+/// How many CPUs a kernel CPU list names (`0-15`, `0,2-5,8`); `None` if it is not one or names none.
+fn online_count(list: &str) -> Option<usize> {
+    let mut n = 0usize;
+    for part in list.trim().split(',') {
+        let (a, b) = part.split_once('-').unwrap_or((part, part));
+        let (a, b): (usize, usize) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+        n = n.checked_add(b.checked_sub(a)?.checked_add(1)?)?;
+    }
+    (n > 0).then_some(n)
+}
+
 /// Pin this process (every thread) to `cpus`, so the orchestrator never runs on a node's cores.
 ///
 /// # Errors
@@ -299,4 +320,36 @@ pub fn pin_self(cpus: &str) -> Result<(), String> {
 pub fn governor() -> String {
     std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
         .map_or_else(|_| "not exposed by this machine".into(), |s| s.trim().to_owned())
+}
+
+#[cfg(test)]
+mod cpu_tests {
+    use super::*;
+
+    #[test]
+    fn a_kernel_cpu_list_is_counted() {
+        assert_eq!(online_count("0-15\n"), Some(16));
+        assert_eq!(online_count("0"), Some(1));
+        assert_eq!(online_count("0,2-5,8"), Some(6));
+        assert_eq!(online_count("0-3, 8-11"), Some(8));
+        for bad in ["", "\n", "a-b", "5-2", "0-", "-3", "1,,2"] {
+            assert_eq!(online_count(bad), None, "{bad:?}");
+        }
+    }
+
+    /// The machine keeps its CPUs when the process is pinned to one of them: a dashboard that pinned itself for one
+    /// run still plans the next run over every CPU.
+    #[test]
+    fn the_machine_keeps_its_cpus_when_the_process_is_pinned_to_one() {
+        let before = host_cpus();
+        if before < 2 || pin_self("0").is_err() {
+            // One CPU, or no `taskset` here: nothing to tell apart.
+            return;
+        }
+        assert_eq!(
+            std::thread::available_parallelism().map_or(0, std::num::NonZero::get),
+            1
+        );
+        assert_eq!(host_cpus(), before);
+    }
 }

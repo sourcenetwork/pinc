@@ -156,7 +156,7 @@ impl HostInfo {
                 .lines()
                 .find_map(|l| Some(l.strip_prefix("model name")?.split_once(':')?.1.trim().to_owned()))
                 .unwrap_or_else(|| "unknown".into()),
-            cpus: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+            cpus: quiet::host_cpus(),
             mem_gib: (kb / 1_048_576.0 * 10.0).round() / 10.0,
             kernel: std::fs::read_to_string("/proc/sys/kernel/osrelease")
                 .map_or_else(|_| "unknown".into(), |s| s.trim().to_owned()),

@@ -271,7 +271,7 @@ async fn validate(req: Request<Incoming>) -> Resp {
     if !problems.is_empty() {
         return json_ok(&json!({ "problems": problems, "toml": toml }));
     }
-    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let cpus = crate::quiet::host_cpus();
     let plan = Plan::new(&sc, "preview", cpus);
     let nodes: Vec<Value> = plan
         .nodes

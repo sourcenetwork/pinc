@@ -161,7 +161,7 @@ fn plan(args: &[String]) -> Result<(), String> {
     if !problems.is_empty() {
         return Err(problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"));
     }
-    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let cpus = vinc_distributed::quiet::host_cpus();
     let p = Plan::new(&sc, "RUN", cpus);
     for s in &p.sites {
         println!(
