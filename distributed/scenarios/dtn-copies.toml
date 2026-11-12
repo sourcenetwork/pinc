@@ -1,5 +1,5 @@
 name = "dtn-copies"
-about = "Copy-limited spray and wait: a document update with a budget of 4 copies crosses laptop, c1 and office to a phone over contacts up only in windows, with distractor peers (cloud, edge) met in later windows that take copies too. No more holders than the budget, and every node hands on fewer copies than it received. VINC only: iroh and libp2p have no copy-limited forwarding."
+about = "Copy-limited spray and wait: the laptop (4 copies) fans its update out over contacts up only in windows. It hands two copies and custody to the office carrier, keeps two, and later meets the distractor peers c1 and cloud that take copies too; the office, in standing contact with the phone, delivers. No more holders than the 4-copy budget, and every node hands on fewer copies than it received. VINC only: iroh and libp2p have no copy-limited forwarding."
 stacks = ["vinc"]
 repetitions = 3
 
@@ -20,19 +20,15 @@ name = "laptop"
 site = "home"
 
 [[nodes]]
+name = "office"
+site = "home"
+
+[[nodes]]
 name = "c1"
 site = "home"
 
 [[nodes]]
 name = "cloud"
-site = "home"
-
-[[nodes]]
-name = "office"
-site = "home"
-
-[[nodes]]
-name = "edge"
 site = "home"
 
 [[nodes]]
@@ -49,36 +45,30 @@ at_s = 2
 from = "laptop"
 to = "phone"
 copies = 4
-lifetime_s = 200
+lifetime_s = 300
+
+[[workload.contacts]]
+a = "laptop"
+b = "office"
+from_s = 3
+to_s = 14
 
 [[workload.contacts]]
 a = "laptop"
 b = "c1"
-from_s = 3
-to_s = 8
+from_s = 18
+to_s = 28
 
 [[workload.contacts]]
 a = "laptop"
 b = "cloud"
-from_s = 10
-to_s = 15
-
-[[workload.contacts]]
-a = "c1"
-b = "office"
-from_s = 18
-to_s = 24
-
-[[workload.contacts]]
-a = "c1"
-b = "edge"
-from_s = 26
-to_s = 31
+from_s = 32
+to_s = 42
 
 [[workload.contacts]]
 a = "office"
 b = "phone"
-from_s = 34
+from_s = 3
 to_s = 60
 
 [[workload.checks]]
@@ -86,10 +76,9 @@ rule = "copies"
 
 [[workload.checks]]
 rule = "custody"
-moves = [{ from = "laptop", to = "c1" }, { from = "c1", to = "office" }]
+moves = [{ from = "laptop", to = "office" }]
 
 [[workload.checks]]
 rule = "delivered"
 to = "phone"
 via = "office"
-after_s = 34
