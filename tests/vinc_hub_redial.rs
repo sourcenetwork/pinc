@@ -1,5 +1,5 @@
 //! A dial to a peer that restarted on the same address, with and without a hub named as relay.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::needless_continue)]
 
 #[macro_use]
 mod vinc_common;
@@ -174,7 +174,7 @@ async fn a_redial_reaches_a_restarted_peer_with_a_hub_named() {
         assert!(
             redial_after_restart(true).await,
             "the redial did not reach the restarted peer"
-        )
+        );
     })
     .await;
 }
