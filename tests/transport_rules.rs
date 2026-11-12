@@ -458,7 +458,10 @@ fn the_wake_a_resume_sends_is_recorded_in_flight_until_it_is_acknowledged() {
         net.a.with_env(now, vinc_transport::conn::Connection::wake);
         // The WAKE has left and its acknowledgement is still on its way (the round trip is 20 ms).
         net.run(net.now + 5 * MS, |_| false);
-        assert!(net.a.conn.recovery().bytes_in_flight() > 0, "the WAKE is not recorded in flight");
+        assert!(
+            net.a.conn.recovery().bytes_in_flight() > 0,
+            "the WAKE is not recorded in flight"
+        );
         assert!(net.run(net.now + SEC, |n| n.a.conn.recovery().bytes_in_flight() == 0));
     });
 }

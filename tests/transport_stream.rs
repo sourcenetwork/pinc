@@ -1242,7 +1242,10 @@ fn sixty_four_holes_of_acknowledged_ranges_are_remembered_without_sending_any_ag
     for &(offset, len) in frames.iter().skip(1).step_by(2).take(64) {
         t.on_acked(&mut pool, id, offset, len, false);
     }
-    assert!(!t.has_data_to_send(), "an acknowledged range was queued to be sent again");
+    assert!(
+        !t.has_data_to_send(),
+        "an acknowledged range was queued to be sent again"
+    );
     for &(offset, len) in frames.iter().skip(1).step_by(2).take(64) {
         assert!(t.is_acked(id, offset, len));
     }
