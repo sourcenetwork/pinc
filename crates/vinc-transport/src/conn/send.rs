@@ -639,7 +639,13 @@ conn_impl! {
         }
         if self.life.wake_tx && put(payload, pos, &Frame::Wake) {
             self.life.wake_tx = false;
-            out.weak();
+            // The WAKE of a resume on the active path is recorded in flight (it carries nothing to send again), so
+            // its acknowledgement is the first round trip sample after the wake and its loss reaches loss detection.
+            if fill.ti == self.paths.active {
+                out.strong();
+            } else {
+                out.weak();
+            }
         }
         if let Some(mtu) = self.paths.get_mut(fill.ti).and_then(|p| p.echo.take()) {
             let _ = put(payload, pos, &Frame::MtuProbeEcho { mtu });

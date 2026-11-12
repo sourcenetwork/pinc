@@ -445,6 +445,25 @@ fn a_lost_wake_does_not_leave_the_connection_suspended() {
 }
 
 #[test]
+fn the_wake_a_resume_sends_is_recorded_in_flight_until_it_is_acknowledged() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(12, Params::new(10 * MS)));
+        net.run(net.now + SEC, |_| false);
+        let now = net.now;
+        net.a.with_env(now, vinc_transport::conn::Connection::sleep);
+        assert!(net.run(net.now + SEC, |n| n.b.conn.peer_asleep()));
+        let now = net.now;
+        net.a.with_env(now, vinc_transport::conn::Connection::wake);
+        // The WAKE has left and its acknowledgement is still on its way (the round trip is 20 ms).
+        net.run(net.now + 5 * MS, |_| false);
+        assert!(net.a.conn.recovery().bytes_in_flight() > 0, "the WAKE is not recorded in flight");
+        assert!(net.run(net.now + SEC, |n| n.a.conn.recovery().bytes_in_flight() == 0));
+    });
+}
+
+#[test]
 fn a_link_return_sends_wake_and_the_probes_repeat_it_for_3_seconds() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
