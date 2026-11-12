@@ -24,6 +24,10 @@ pub trait Ep: Port {
     fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit>;
     /// The next event.
     fn poll_event(&mut self) -> Option<Event>;
+    /// Whether [`poll_event`](Self::poll_event) has anything to give or to do. An endpoint that cannot tell says yes.
+    fn events_waiting(&self) -> bool {
+        true
+    }
     /// The next deadline.
     fn poll_timeout(&self) -> Option<u64>;
     /// Time passed.
@@ -82,6 +86,10 @@ where
 
     fn poll_event(&mut self) -> Option<Event> {
         Endpoint::poll_event(self)
+    }
+
+    fn events_waiting(&self) -> bool {
+        Endpoint::events_waiting(self)
     }
 
     fn poll_timeout(&self) -> Option<u64> {

@@ -592,6 +592,11 @@ ep_impl! {
         ev
     }
 
+    /// Whether [`poll_event`](Self::poll_event) has an event to give, or work it holds back until events are read.
+    pub const fn events_waiting(&self) -> bool {
+        !self.events.is_empty() || self.parked_len > 0
+    }
+
     /// Queue an event for the host, or put it in the reply of the command being applied.
     pub(crate) fn emit(&mut self, ev: Event) {
         if let Some(cap) = self.capture.as_mut()

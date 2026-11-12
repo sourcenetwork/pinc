@@ -542,6 +542,23 @@ where
         r
     }
 
+    /// Apply a command that only moves the application's own data (it writes, reads, opens or ends one of its
+    /// streams): as [`command`](Self::command), except that the node's layers run only if the command raised an event
+    /// or one waits in the endpoint. Such a command gives them nothing else to act on, and what is due by the clock
+    /// comes at its deadline ([`poll_timeout`](Self::poll_timeout)). A host that moves data in many small commands
+    /// spares the layers a full round for each.
+    ///
+    /// # Errors
+    /// The endpoint's refusal.
+    pub fn data_command(&mut self, now: Nanos, cmd: Command<'_, E::Src>) -> Result<Value, CommandError> {
+        self.begin(now);
+        let r = self.io.cmd(cmd);
+        if !self.io.evq.is_empty() || self.io.ep.events_waiting() {
+            self.settle(now);
+        }
+        r
+    }
+
     /// Dial `node` for `alpn`; the connectivity layer finds the way (known addresses, a lookup, the home relay).
     ///
     /// # Errors

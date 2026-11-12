@@ -79,6 +79,11 @@ impl<const K: usize> EventRing<K> {
         }
     }
 
+    /// Whether no event is queued.
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Whether the queued events that cannot be recovered leave less than the headroom.
     pub(crate) const fn stalled(&self) -> bool {
         self.len - self.lossy_len + event_headroom(K) > Self::CAP

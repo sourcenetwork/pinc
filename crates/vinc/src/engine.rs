@@ -371,7 +371,22 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     fn cmd_once(&mut self, now: u64, c: Command<'_, NoSource>) -> core::result::Result<Value, CommandError> {
         let quiet = matches!(c, Command::Consume { n: 0, .. } | Command::OpenStream { .. });
-        let r = self.node.command(now, c);
+        // A command that only moves the application's data leaves the node's layers nothing to do unless it raised
+        // an event; the others always get their round.
+        let data = matches!(
+            c,
+            Command::Write { .. }
+                | Command::Consume { .. }
+                | Command::OpenStream { .. }
+                | Command::Finish { .. }
+                | Command::SetUrgency { .. }
+                | Command::SendDatagram { .. }
+        );
+        let r = if data {
+            self.node.data_command(now, c)
+        } else {
+            self.node.command(now, c)
+        };
         if let Ok(v) = &r {
             // A write that took nothing queued nothing: sending again would only loop.
             self.dirty |= !quiet && !matches!(v, Value::Written(0));

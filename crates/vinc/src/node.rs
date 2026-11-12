@@ -135,6 +135,9 @@ macro_rules! define {
             fn poll_event(&mut self) -> Option<Event> {
                 match self { $(Self::$v(e) => NodeEp::poll_event(&mut **e),)+ }
             }
+            fn events_waiting(&self) -> bool {
+                match self { $(Self::$v(e) => NodeEp::events_waiting(&**e),)+ }
+            }
             fn poll_timeout(&self) -> Option<u64> {
                 match self { $(Self::$v(e) => NodeEp::poll_timeout(&**e),)+ }
             }

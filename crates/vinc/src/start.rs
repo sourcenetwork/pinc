@@ -122,6 +122,8 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
+    use std::net::SocketAddr;
+
     use vinc_keystore::SoftwareStore;
 
     use super::*;
@@ -167,5 +169,125 @@ mod tests {
     #[test]
     fn a_default_endpoint_builds_and_drops_on_a_one_mebibyte_stack() {
         on_stack(1024, || drop(build(cfg(1024), 1).unwrap()));
+    }
+
+    const MS: u64 = 1_000_000;
+    type C = Core<SoftwareStore, AllowAll>;
+    fn end(seed: u8, port: u16) -> (C, SocketAddr) {
+        let local: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        let mut c = cfg(4);
+        c.identity = Identity::from_seed(&[seed; 32]).unwrap();
+        c.locals = vec![local];
+        (build(c, MS).unwrap(), local)
+    }
+    /// Carry datagrams both ways until both ends are at rest, a millisecond a round; the sizes sent go to `log`.
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "a test helper indexes its own two ends and fails loudly"
+    )]
+    fn settle(ends: &mut [(C, SocketAddr); 2], now: &mut u64, log: &mut Vec<(usize, usize)>) {
+        let mut buf = vec![0u8; 65_536];
+        let mut idle = 0;
+        for _ in 0..400 {
+            let mut moved = false;
+            for from in 0..2 {
+                let (a, b) = ends.split_at_mut(1);
+                let (tx, rx) = if from == 0 {
+                    (&mut a[0], &mut b[0])
+                } else {
+                    (&mut b[0], &mut a[0])
+                };
+                tx.0.service(*now);
+                while let Some(t) = tx.0.node.poll_transmit(*now, &mut buf) {
+                    log.push((from, t.len));
+                    rx.0.node
+                        .handle_batch(*now, rx.1, tx.1, &mut buf[..t.len], t.segment_size);
+                    moved = true;
+                }
+            }
+            *now += MS;
+            // A round without a datagram may be one that answered a key operation: rest is a few of them.
+            idle = if moved { 0 } else { idle + 1 };
+            if idle == 4 {
+                return;
+            }
+        }
+        panic!("the exchange did not come to rest");
+    }
+
+    /// The data path's light command changes nothing a peer can see: one exchange run through [`Node::command`] and
+    /// again through [`Node::data_command`] sends datagrams of the same sizes in the same order and delivers the same
+    /// bytes, and the node's deadline stays what its layers say it is (checked on every call in a debug build).
+    #[test]
+    fn a_data_command_sends_what_a_command_does() {
+        use vinc_core::{Command, Value};
+
+        fn run(light: bool) -> (Vec<(usize, usize)>, Vec<u8>) {
+            let mut ends = [end(3, 1), end(4, 2)];
+            let (mut now, mut log) = (MS, Vec::new());
+            let peer = Identity::<SoftwareStore>::from_seed(&[4; 32]).unwrap().node_id();
+            let to = [ends[1].1];
+            let session = ends[0].0.connect_start(now, peer, b"t", &to).unwrap();
+            settle(&mut ends, &mut now, &mut log);
+            let apply = |c: &mut C, now: u64, cmd: Command<'_, _>| {
+                if light {
+                    c.node.data_command(now, cmd)
+                } else {
+                    c.node.command(now, cmd)
+                }
+                .unwrap()
+            };
+            let stream = match apply(&mut ends[0].0, now, Command::OpenStream { session, bidi: true }) {
+                Value::Stream(stream) => stream,
+                v => unreachable!("an opened stream answers with its id, not {v:?}"),
+            };
+            for part in [&b"one "[..], &[7u8; 3000], b" three"] {
+                let v = apply(
+                    &mut ends[0].0,
+                    now,
+                    Command::Write {
+                        session,
+                        stream,
+                        data: part,
+                    },
+                );
+                assert!(matches!(v, Value::Written(n) if n == part.len()));
+                settle(&mut ends, &mut now, &mut log);
+            }
+            apply(&mut ends[0].0, now, Command::Finish { session, stream });
+            settle(&mut ends, &mut now, &mut log);
+            // What the other end holds of the stream, read as the facade reads it.
+            let there = ends[1].0.node.endpoint().session_at(0).unwrap().session;
+            let mut got = Vec::new();
+            while let Some(chunk) = ends[1].0.node.endpoint().read_chunk(there, stream).map(<[u8]>::to_vec) {
+                if chunk.is_empty() {
+                    break;
+                }
+                got.extend_from_slice(&chunk);
+                apply(
+                    &mut ends[1].0,
+                    now,
+                    Command::Consume {
+                        session: there,
+                        stream,
+                        n: chunk.len(),
+                    },
+                );
+            }
+            (log, got)
+        }
+        let (plain, light) = (run(false), run(true));
+        let mut sent = b"one ".to_vec();
+        sent.extend_from_slice(&[7u8; 3000]);
+        sent.extend_from_slice(b" three");
+        assert_eq!(plain.1, sent);
+        assert_eq!(light.1, sent);
+        assert_eq!(plain.0, light.0, "the two runs sent different datagrams");
+        assert!(
+            plain.0.len() > 6,
+            "a handshake and three writes are more than {} datagrams",
+            plain.0.len()
+        );
     }
 }
