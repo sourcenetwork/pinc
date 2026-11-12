@@ -163,6 +163,9 @@ NoStuckGrant == \A i \in Live : T.slots[i].defer => ~GrantFits(i)
 LedgerAlways == GU(T) + Resv(T) <= Avail(T)
 \* the opener never has more streams open in all than the peer gave credit for
 OpenerInside == T.lo[0] + T.lo[1] <= T.ad.lim
+\* the credit given never lets a peer that keeps to it have more streams live than the configured limit MAXREM: the
+\* streams it may still open plus those live are at most MAXREM (Streams_cap_w.cfg plants the cap that ignored it)
+CreditInLimit == T.ad.adv > AdmittedN(T) => T.ad.adv - AdmittedN(T) + T.rl <= MAXREM
 \* a peer stream that arrives inside the credit it was given is never held back, whatever the pool holds, however many
 \* lower ids its frame opens with it
 NoHeldWithinCredit == \A id \in RemIds : LET L == Locate(T, id) IN
