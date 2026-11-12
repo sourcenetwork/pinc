@@ -559,6 +559,10 @@ name = "core_relay_paths"
 path = "core_relay_paths.rs"
 
 [[test]]
+name = "vinc_hub_redial"
+path = "vinc_hub_redial.rs"
+
+[[test]]
 name = "transport_wide"
 path = "transport_wide.rs"
 
