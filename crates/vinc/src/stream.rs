@@ -114,6 +114,26 @@ impl<H: Hosted> SendStream<H> {
         .await
     }
 
+    /// Send `body` as the whole of this stream and end the stream: the endpoint keeps the buffer and reads from it as
+    /// it builds each packet, and again for what is lost. The bytes are copied once, into the datagram, where
+    /// [`write_all`](Self::write_all) copies them into the stream's buffer first; the buffer is not filled, so a
+    /// large body does not wait for room in it. Nothing may have been written to the stream before. Returns once the
+    /// endpoint has taken the body; the stream ends after its last byte, as after [`finish`](Self::finish).
+    ///
+    /// # Errors
+    /// The error that ended the stream; [`crate::ErrorKind::Busy`] if bytes were already written to it.
+    pub async fn send_owned(&mut self, body: impl Into<crate::Body>) -> Result<()> {
+        let body = body.into();
+        let (c, id) = (&self.conn, self.id);
+        let fin = &mut self.finished;
+        c.sh.run(|core, now| {
+            let r = core.send_body(now, &c.info, id, &body);
+            *fin |= r.is_ok();
+            Try::Done(r)
+        })
+        .await
+    }
+
     /// Set the stream's urgency among the streams of its connection. A lower number is sent first, so a control
     /// message on an urgent stream overtakes a bulk transfer already queued on another; streams of equal urgency are
     /// served in the order they were opened. A stream starts at [`DEFAULT_URGENCY`](crate::DEFAULT_URGENCY).

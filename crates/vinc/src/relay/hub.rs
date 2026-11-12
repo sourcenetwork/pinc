@@ -142,7 +142,7 @@ impl Hub {
         }
     }
 
-    fn cmd(&mut self, now: u64, c: Command<'_, vinc_transport::stream::NoSource>) {
+    fn cmd(&mut self, now: u64, c: Command<'_, crate::Body>) {
         if let Ok(r) = vinc_connect::client::Port::command(&mut self.ep, now, c) {
             self.pending.extend(r.events.iter().copied());
         }

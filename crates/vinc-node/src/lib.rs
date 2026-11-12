@@ -92,3 +92,5 @@ pub use relay::{MemberNotice, is_relay_request};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
 pub use values_provide::PROVIDED_MAX;
 pub use values_types::{FETCHES, ValuesError, ValuesRequest};
+/// The two types [`ServeSource`] is written in, for a host that names its own stream source.
+pub use vinc_values::{source::ValueSource, store::ValueRead};

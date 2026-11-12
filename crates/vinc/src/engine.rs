@@ -23,7 +23,7 @@ use vinc_crypto::{NodeId, Secret};
 use vinc_keystore::KeyStore;
 use vinc_node::HUB_ALPN;
 use vinc_security::{Alpn, KeyRequest, KeyResponse};
-use vinc_transport::stream::{NoSource, RecvStatus, StreamId, is_uni};
+use vinc_transport::stream::{RecvStatus, StreamId, is_uni};
 
 use crate::carriers::Relay;
 use crate::error::{Error, ErrorKind, Result};
@@ -359,7 +359,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     fn cmd<'c>(
         &mut self,
         now: u64,
-        make: impl Fn() -> Command<'c, NoSource>,
+        make: impl Fn() -> Command<'c, crate::Body>,
     ) -> core::result::Result<Value, CommandError> {
         let mut r = self.cmd_once(now, make());
         if matches!(r, Err(CommandError::EventsPending)) && !self.draining {
@@ -369,7 +369,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         r
     }
 
-    fn cmd_once(&mut self, now: u64, c: Command<'_, NoSource>) -> core::result::Result<Value, CommandError> {
+    fn cmd_once(&mut self, now: u64, c: Command<'_, crate::Body>) -> core::result::Result<Value, CommandError> {
         let quiet = matches!(c, Command::Consume { n: 0, .. } | Command::OpenStream { .. });
         // A command that only moves the application's data leaves the node's layers nothing to do unless it raised
         // an event; the others always get their round.

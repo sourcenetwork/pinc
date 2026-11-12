@@ -21,7 +21,7 @@ use vinc_core::{
 use vinc_crypto::{Drbg, NodeId, Software};
 use vinc_node::Ep as NodeEp;
 use vinc_security::{ConnId, LocalIdentity, PrekeyInfo};
-use vinc_transport::stream::{NoSource, StreamId};
+use vinc_transport::stream::StreamId;
 
 use crate::mem::Ep;
 
@@ -104,8 +104,8 @@ macro_rules! define {
         }
 
         impl Port for AnyEp {
-            type Src = NoSource;
-            fn command(&mut self, now: u64, cmd: Command<'_, NoSource>) -> Result<Reply, CommandError> {
+            type Src = crate::Body;
+            fn command(&mut self, now: u64, cmd: Command<'_, crate::Body>) -> Result<Reply, CommandError> {
                 match self { $(Self::$v(e) => Port::command(&mut **e, now, cmd),)+ }
             }
             fn stats(&self, session: SessionId) -> Option<SessionStats> {

@@ -59,6 +59,7 @@ extern crate alloc;
 pub struct ReadmeDoctests;
 
 mod addr;
+mod body;
 pub mod carrier;
 mod carriers;
 mod clock;
@@ -82,6 +83,7 @@ mod start;
 pub mod stream;
 
 pub use addr::{NodeAddr, node_from_str, node_to_string};
+pub use body::Body;
 pub use carrier::CarrierKind;
 pub use carriers::{CarrierFns, Carriers, NoCarriers, Relay};
 pub use conn::{ConnStats, Connection, Incoming};

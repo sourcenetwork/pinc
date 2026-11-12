@@ -164,13 +164,16 @@ type Wire = (Vec<u8>, SocketAddr, usize);
 
 /// An endpoint whose host is a pair of in-memory queues: a send puts the whole transmit on the peer's queue, a receive
 /// hands a whole transmit back with its segment size, as a socket with segmentation and receive offload does.
-/// `coalesced` counts the receives that held more than one datagram.
+/// `coalesced` counts the receives that held more than one datagram; with `lose` above zero every `lose`th transmit
+/// is lost on the wire.
 fn wired_end(
     me: SocketAddr,
     rx: smol::channel::Receiver<Wire>,
     tx: smol::channel::Sender<Wire>,
     coalesced: Arc<std::sync::atomic::AtomicUsize>,
+    lose: usize,
 ) -> vinc::Endpoint<impl vinc::Hosted> {
+    let sent = std::cell::Cell::new(0usize);
     Vinc::builder()
         .alpn(ALPN)
         .batch(8)
@@ -185,7 +188,10 @@ fn wired_end(
                 Ok((d.len(), from, segment))
             },
             async move |pkt: &[u8], _to: SocketAddr, segment: usize| {
-                let _ = tx.send((pkt.to_vec(), me, segment)).await;
+                sent.set(sent.get() + 1);
+                if lose == 0 || !sent.get().is_multiple_of(lose) {
+                    let _ = tx.send((pkt.to_vec(), me, segment)).await;
+                }
                 Ok(pkt.len().div_ceil(segment.max(1)))
             },
             async |at: Instant| tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
@@ -197,11 +203,19 @@ fn wired_end(
 fn wired_pair(
     coalesced: Arc<std::sync::atomic::AtomicUsize>,
 ) -> (vinc::Endpoint<impl vinc::Hosted>, vinc::Endpoint<impl vinc::Hosted>) {
+    wired_pair_losing(coalesced, 0)
+}
+
+/// As [`wired_pair`], with every `lose`th transmit of the second endpoint lost (none if zero).
+fn wired_pair_losing(
+    coalesced: Arc<std::sync::atomic::AtomicUsize>,
+    lose: usize,
+) -> (vinc::Endpoint<impl vinc::Hosted>, vinc::Endpoint<impl vinc::Hosted>) {
     let (a, b): (SocketAddr, SocketAddr) = ("10.0.0.1:7".parse().unwrap(), "10.0.0.2:7".parse().unwrap());
     let ((to_a, at_a), (to_b, at_b)) = (smol::channel::unbounded(), smol::channel::unbounded());
     (
-        wired_end(a, at_a, to_b, coalesced),
-        wired_end(b, at_b, to_a, Arc::new(std::sync::atomic::AtomicUsize::new(0))),
+        wired_end(a, at_a, to_b, coalesced, 0),
+        wired_end(b, at_b, to_a, Arc::new(std::sync::atomic::AtomicUsize::new(0)), lose),
     )
 }
 
@@ -318,4 +332,59 @@ async fn a_stream_lends_its_bytes_to_the_reader_in_place() {
             assert_eq!(serve.await.unwrap(), payload);
         })
         .await;
+}
+
+/// A body is sent from where it is: each kind of buffer arrives whole and in order, an empty one ends its stream at
+/// once, and when the wire loses transmits the lost ranges are read from the body again. A stream that already
+/// carries written bytes refuses a body.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stream_sends_an_owned_body_whole_and_again_after_loss() {
+    let large: Vec<u8> = (0..300_000u32).map(|i| (i % 241) as u8).collect();
+    let shared: std::rc::Rc<[u8]> = (0..50_000u32).map(|i| (i % 239) as u8).collect();
+    let fixed: &'static [u8] = b"ten bytes!";
+    for lose in [0, 9] {
+        let (server, client) = wired_pair_losing(Arc::new(std::sync::atomic::AtomicUsize::new(0)), lose);
+        let addr = server.addr();
+        let (large, shared) = (large.clone(), std::rc::Rc::clone(&shared));
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let serve = tokio::task::spawn_local(async move {
+                    let conn = server.accept().await.unwrap().into_connection();
+                    let mut got = Vec::new();
+                    for _ in 0..4 {
+                        let mut rx = conn.accept_uni().await.unwrap();
+                        got.push(rx.read_to_end(1 << 20).await.unwrap());
+                    }
+                    conn.close(0).await;
+                    // Under loss a later stream may be heard of first: the bodies differ in length.
+                    got.sort_by_key(Vec::len);
+                    got
+                });
+                let conn = client.connect(addr, ALPN).await.unwrap();
+                let bodies = [
+                    vinc::Body::from(large.clone()),
+                    vinc::Body::from(std::rc::Rc::clone(&shared)),
+                    vinc::Body::from(fixed),
+                    vinc::Body::from(Vec::new()),
+                ];
+                for body in bodies {
+                    let mut tx = conn.open_uni().await.unwrap();
+                    tx.send_owned(body).await.unwrap();
+                }
+                // A stream that was written to keeps its buffer: it takes no body.
+                let mut written = conn.open_uni().await.unwrap();
+                written.write_all(b"x").await.unwrap();
+                assert!(written.send_owned(vec![1u8]).await.is_err());
+                written.reset(0).await;
+                conn.closed().await;
+                let got = serve.await.unwrap();
+                assert_eq!(got.len(), 4);
+                assert_eq!(got[0].len(), 0);
+                assert_eq!(got[1], fixed);
+                assert_eq!(got[2], &shared[..]);
+                assert_eq!(got[3], large, "losing every {lose}th transmit");
+            })
+            .await;
+    }
 }

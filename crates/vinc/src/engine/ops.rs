@@ -182,6 +182,26 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .map_err(Error::command)
     }
 
+    /// Make `body` the whole content of a stream nothing was written to: the endpoint sends from it and ends the
+    /// stream after its last byte.
+    pub(crate) fn send_body(&mut self, now: u64, info: &SessInfo, stream: StreamId, body: &crate::Body) -> Result<()> {
+        if let Some(e) = self.send_failure(info.id, stream) {
+            return Err(e);
+        }
+        if !self.sessions.contains_key(&info.id) {
+            return Err(info.gone());
+        }
+        let session = info.id;
+        self.cmd(now, || Command::WriteSource {
+            session,
+            stream,
+            source: body.clone(),
+            len: body.len() as u64,
+        })
+        .map(|_| ())
+        .map_err(Error::command)
+    }
+
     /// Abandon the send side of a stream, for `code`.
     /// Set how urgent `stream` is among the streams of its session: lower numbers are sent first.
     pub(crate) fn set_urgency(&mut self, now: u64, info: &SessInfo, stream: StreamId, urgency: u8) -> Result<()> {

@@ -20,7 +20,6 @@
 
 use vinc_core::Endpoint;
 use vinc_crypto::Software;
-use vinc_transport::stream::NoSource;
 
 use crate::error::{Error, Result};
 
@@ -40,7 +39,7 @@ pub(crate) const CLIENT_TICKETS: usize = 32;
 
 /// The endpoint a driver runs, for a table of `K` sessions and `D` connection id entries (ten per session).
 pub(crate) type Ep<'s, 'a, const K: usize, const D: usize> =
-    Endpoint<'s, 'a, Software, NoSource, STREAMS, RING, FLIGHT, PATHS, K, D, PREKEYS, TICKETS, CLIENT_TICKETS>;
+    Endpoint<'s, 'a, Software, crate::Body, STREAMS, RING, FLIGHT, PATHS, K, D, PREKEYS, TICKETS, CLIENT_TICKETS>;
 
 /// The sizes a driver runs with; each has a default and a hard ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
