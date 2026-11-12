@@ -5619,6 +5619,7 @@ dependencies = [
  "vinc-core",
  "vinc-crypto",
  "vinc-dag",
+ "vinc-dtn",
  "vinc-keystore",
  "vinc-membership",
  "vinc-node",
