@@ -12,7 +12,7 @@
 //! holds an entry only while its session or stream lives, so nothing grows with history; per-poll work is proportional
 //! to what changed, never to a table's capacity.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -51,6 +51,8 @@ const SHUTDOWN_GRACE: u64 = 1_000_000_000;
 const BUDGET: usize = 4096;
 /// The most stopped streams of a session remembered for their writers, and discarded streams tracked.
 const TRACKED: usize = 128;
+/// The most events of hub sessions kept for the relay role between two of its turns; the rest are dropped.
+const RELAY_EVENTS: usize = 1024;
 
 /// A key answer that owns its bytes, so the request it answers can be dropped first.
 enum Answered {
@@ -70,10 +72,13 @@ impl Answered {
 }
 
 /// Answer a key operation from the identity key or the prekeys.
-fn answer<S: KeyStore>(identity: &mut Identity<S>, prekeys: &mut Prekeys, req: KeyRequest<'_>) -> Answered {
+fn answer<S: KeyStore>(identity: &RefCell<Identity<S>>, prekeys: &mut Prekeys, req: KeyRequest<'_>) -> Answered {
     match req {
         KeyRequest::Sign { key, message, .. } => {
-            match is_identity(key).then(|| identity.sign(message).ok()).flatten() {
+            let signed = is_identity(key)
+                .then(|| identity.try_borrow_mut().ok().and_then(|mut i| i.sign(message).ok()))
+                .flatten();
+            match signed {
                 Some(sig) => Answered::Signature(sig),
                 None => Answered::Failed,
             }
@@ -105,6 +110,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub relays: Vec<Relay>,
     /// The endpoint is a hub of membership and broadcast.
     pub hub: bool,
+    /// The endpoint runs the relay role: the events of its members' sessions are kept for it.
+    pub relaying: bool,
     /// How long a dial may take, in nanoseconds.
     pub connect_timeout: u64,
 }
@@ -196,7 +203,8 @@ struct Route {
 /// The core; see the module docs.
 pub(crate) struct Core<S, A> {
     pub(crate) node: Box<FacadeNode>,
-    identity: Identity<S>,
+    /// The identity, shared with the relay role when the endpoint has one; borrowed only inside a call.
+    identity: Rc<RefCell<Identity<S>>>,
     prekeys: Prekeys,
     /// The access hook, shared with the endpoint's handles so they can ask it without borrowing the core.
     admit: Rc<Gate<A>>,
@@ -236,6 +244,11 @@ pub(crate) struct Core<S, A> {
     look_at: u64,
     /// The instants futures wait for: a deadline passing wakes them to look again.
     deadlines: BTreeSet<u64>,
+    /// With the relay role, the relays this endpoint itself names as its hubs (their sessions are not the role's
+    /// members); `None` without the role. With it, the events of hub sessions go to `relay_events`.
+    relay_hubs: Option<Vec<NodeId>>,
+    /// Events of hub sessions the relay role has not heard yet, oldest first; bounded by [`RELAY_EVENTS`].
+    relay_events: Vec<Event>,
 }
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
@@ -243,7 +256,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     pub(crate) fn new(node: Box<FacadeNode>, cfg: CoreConfig<S, A>, prekeys: Prekeys, ifaces: Vec<IfaceId>) -> Self {
         Self {
             node,
-            identity: cfg.identity,
+            identity: Rc::new(RefCell::new(cfg.identity)),
             prekeys,
             admit: Rc::new(Gate::new(cfg.admit)),
             limits: cfg.limits,
@@ -275,12 +288,28 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             neighbors_dirty: false,
             look_at: 0,
             deadlines: BTreeSet::new(),
+            relay_hubs: cfg.relaying.then(|| cfg.relays.iter().map(|r| r.id).collect()),
+            relay_events: Vec::new(),
         }
     }
 
     /// Whether the endpoint has stopped, and why.
     pub(crate) const fn stopped(&self) -> Option<Error> {
         self.stopped
+    }
+
+    /// The identity the core signs with, for the relay role to share.
+    pub(crate) fn identity(&self) -> Rc<RefCell<Identity<S>>> {
+        Rc::clone(&self.identity)
+    }
+
+    /// Run `f` on the identity.
+    pub(crate) fn with_identity<T>(&self, f: impl FnOnce(&mut Identity<S>) -> Result<T>) -> Result<T> {
+        let mut id = self
+            .identity
+            .try_borrow_mut()
+            .map_err(|_| Error::new(ErrorKind::Busy, "the identity key is in use, try again"))?;
+        f(&mut id)
     }
 
     /// The next time the endpoint needs to run, in the clock the host feeds it; `None` if only an input can wake it.
@@ -294,6 +323,38 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         .into_iter()
         .flatten()
         .min()
+    }
+
+    /// Have the driving future wake at `at` as well: the relay role's next deadline.
+    pub(crate) fn add_deadline(&mut self, at: u64) {
+        self.deadlines.insert(at);
+    }
+
+    /// Keep an event of a session the relay role may own: a member's hub session coming up, going down or waking.
+    /// Sessions of the other protocols, and of the relays this endpoint itself uses as hubs, are not the role's.
+    pub(super) fn tap(&mut self, ev: &Event) {
+        let Some(hubs) = &self.relay_hubs else { return };
+        let mine = match ev {
+            Event::Incoming { node, alpn, .. } => alpn.as_bytes() == HUB_ALPN && !hubs.contains(node),
+            Event::Closed { .. } | Event::PeerAwake { .. } => true,
+            _ => false,
+        };
+        if mine && self.relay_events.len() < RELAY_EVENTS {
+            self.relay_events.push(*ev);
+            self.wake_driver();
+        }
+    }
+
+    /// The events kept for the relay role; the caller gives the vector back through [`Core::return_relay_events`].
+    pub(crate) fn take_relay_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.relay_events)
+    }
+
+    /// Give back the vector [`Core::take_relay_events`] lent, emptied, so its memory is reused.
+    pub(crate) fn return_relay_events(&mut self, mut v: Vec<Event>) {
+        v.clear();
+        v.append(&mut self.relay_events);
+        self.relay_events = v;
     }
 
     /// Wake the driving future if the endpoint now needs to run sooner than it sleeps.
@@ -462,7 +523,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             return 0;
         };
         let message = message.to_vec();
-        match self.identity.sign(&message) {
+        match self.with_identity(|i| i.sign(&message)) {
             Ok(sig) => self.node.sign_response(now, KeyResponse::Signature(&sig)),
             Err(_) => self.node.sign_response(now, KeyResponse::Failed),
         }
@@ -529,7 +590,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     fn answer_key(&mut self, now: u64, session: SessionId) {
         let answered = match self.node.endpoint().query(Query::KeyRequest(session)) {
-            Answer::KeyRequest(req) => answer(&mut self.identity, &mut self.prekeys, req),
+            Answer::KeyRequest(req) => answer(&self.identity, &mut self.prekeys, req),
             _ => return,
         };
         answered.with(|response| {
@@ -544,7 +605,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             let Some(req) = self.node.key_request(relay) else {
                 continue;
             };
-            let answered = answer(&mut self.identity, &mut self.prekeys, req);
+            let answered = answer(&self.identity, &mut self.prekeys, req);
             answered.with(|resp| self.node.key_response(now, relay, resp));
             n += 1;
         }

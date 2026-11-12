@@ -459,18 +459,18 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     pub(crate) fn seal(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
-        self.identity.seal(plain)
+        self.with_identity(|i| i.seal(plain))
     }
 
     pub(crate) fn unseal(&mut self, sealed: &[u8]) -> Result<Vec<u8>> {
-        self.identity.unseal(sealed)
+        self.with_identity(|i| i.unseal(sealed))
     }
 
     pub(crate) fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         if let Some(e) = self.stopped {
             return Err(e);
         }
-        self.identity.sign(data)
+        self.with_identity(|i| i.sign(data))
     }
 
     /// Begin the shutdown: every session closes, and the endpoint stops when they are gone or the grace ran out.
@@ -545,7 +545,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Random bytes from the identity's source; zeros if it fails (a mask or a nonce nothing depends on).
     pub(crate) fn random(&mut self, out: &mut [u8]) {
-        let _ = self.identity.random(out);
+        let _ = self.with_identity(|i| i.random(out));
     }
 
     /// Wake the future that drives, if there is one.

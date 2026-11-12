@@ -30,7 +30,10 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     /// One event of the node: the endpoint's go to the sessions, the others become events for the host.
     pub(super) fn on_node_event(&mut self, now: u64, ev: NodeEvent) {
         match ev {
-            NodeEvent::Endpoint(e) => self.on_event(now, e),
+            NodeEvent::Endpoint(e) => {
+                self.tap(&e);
+                self.on_event(now, e);
+            }
             NodeEvent::Message {
                 topic,
                 origin,

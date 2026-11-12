@@ -29,11 +29,15 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 mod carrier_io;
+mod role_io;
+
+pub(crate) use role_io::RoleEnd;
 
 use crate::carriers::{Carriers, Relay};
 use crate::engine::{Core, Try, Wait};
 use crate::error::Error;
 use crate::host::Hosted;
+use crate::role::Role;
 use crate::standby::Ticket;
 
 /// The first time the endpoint sees, so no time is zero.
@@ -64,6 +68,12 @@ pub(crate) struct Shared<H: Hosted> {
     tx_bufs: RefCell<Vec<Vec<u8>>>,
     /// The size of a transmit buffer: the endpoint's batch of datagrams of the largest size.
     tx_len: usize,
+    /// The relay role's clock minus the endpoint's, in nanoseconds; see [`role_io`].
+    role_off: u64,
+    /// The role's records are restored: its datagrams are read and its work done only from then on.
+    role_ready: Cell<bool>,
+    /// The role's carriers moved during the last poll: the endpoint has more to do.
+    rdirty: Cell<bool>,
 }
 
 /// A buffer that goes back to its pool when dropped.
@@ -167,6 +177,7 @@ impl<H: Hosted> Shared<H> {
         local: SocketAddr,
         gso: usize,
         relays: Vec<Relay>,
+        role_off: u64,
     ) -> Self {
         Self {
             host,
@@ -181,6 +192,9 @@ impl<H: Hosted> Shared<H> {
             rx_bufs: RefCell::new(Vec::new()),
             tx_bufs: RefCell::new(Vec::new()),
             tx_len: gso.clamp(1, UDP_MAX / vinc_core::MAX_DATAGRAM) * vinc_core::MAX_DATAGRAM,
+            role_off,
+            role_ready: Cell::new(false),
+            rdirty: Cell::new(false),
         }
     }
 
@@ -213,11 +227,25 @@ impl<H: Hosted> Shared<H> {
 
     /// Run `attempt` until it is done. Each time it cannot finish it names what it waits for; the future is woken when
     /// that changes, and meanwhile drives the endpoint if it holds the role. The attempt must be safe to repeat.
+    pub(crate) fn run<T>(
+        &self,
+        attempt: impl FnMut(&mut Core<H::Keys, H::Access>, u64) -> Try<T>,
+    ) -> impl Future<Output = T> {
+        self.run_as(false, attempt)
+    }
+
+    /// As [`run`](Self::run); `owner` says this future may drive an endpoint that has a relay role. Such an endpoint is
+    /// driven by its owner (the future of `Endpoint::run`) only, because the carriers' operations in flight live in the
+    /// driving future; an endpoint without a role is driven by whichever future waits.
     #[allow(
         clippy::too_many_lines,
         reason = "one poll function: the registration, the role and the host's I/O share its state"
     )]
-    pub(crate) async fn run<T>(&self, mut attempt: impl FnMut(&mut Core<H::Keys, H::Access>, u64) -> Try<T>) -> T {
+    pub(crate) async fn run_as<T>(
+        &self,
+        owner: bool,
+        mut attempt: impl FnMut(&mut Core<H::Keys, H::Access>, u64) -> Try<T>,
+    ) -> T {
         let mut turn = Turn {
             sh: self,
             ticket: None,
@@ -229,6 +257,7 @@ impl<H: Hosted> Shared<H> {
         let mut slept: Option<u64> = None;
         let mut spare: Option<Buf<'_>> = None;
         let mut carriers = pin!(None);
+        let mut role_io = pin!(None);
         loop {
             let step = poll_fn(|cx| {
                 let now = self.now();
@@ -237,6 +266,9 @@ impl<H: Hosted> Shared<H> {
                     return Poll::Pending;
                 };
                 if core.service(now) > 0 {
+                    return Poll::Ready(Step::Io);
+                }
+                if H::Role::ON && owner && self.role_serve(&mut core, now) {
                     return Poll::Ready(Step::Io);
                 }
                 let w = match attempt(&mut core, now) {
@@ -257,7 +289,7 @@ impl<H: Hosted> Shared<H> {
                 }
                 core.add_wait(w, t);
                 core.standby.arm(t, cx.waker());
-                if !turn.driving && !self.driving.replace(true) {
+                if !turn.driving && (owner || !H::Role::ON) && !self.driving.replace(true) {
                     turn.driving = true;
                     core.driver = Some(t);
                 }
@@ -283,9 +315,25 @@ impl<H: Hosted> Shared<H> {
                     slept = None;
                     progressed = true;
                 }
+                if H::Role::ON {
+                    if role_io.is_none() {
+                        // Boxed, so the future of an endpoint without a role carries no room for the role's state.
+                        role_io.set(Some(Box::pin(self.role_task())));
+                    }
+                    if let Some(f) = role_io.as_mut().as_pin_mut() {
+                        // It never completes: it holds the role's carrier operations in flight and polls them.
+                        let _ = f.poll(cx);
+                    }
+                    progressed |= self.rdirty.take();
+                }
                 // Read what the host already has before anything is sent: a burst that finds no reader overflows the
-                // socket's buffer and the datagrams are lost.
-                for _ in 0..DRAIN {
+                // socket's buffer and the datagrams are lost. A relay role reads once its records are restored.
+                let burst = if H::Role::ON && !self.role_ready.get() {
+                    0
+                } else {
+                    DRAIN
+                };
+                for _ in 0..burst {
                     if rx.is_none() {
                         let b = spare.take().unwrap_or_else(|| self.rx_buf());
                         rx.set(Some(recv_owned(&self.host, b)));
@@ -301,7 +349,11 @@ impl<H: Hosted> Shared<H> {
                             let from = canon(from);
                             if let Some(mut core) = self.lock() {
                                 let batch = buf.v.get_mut(..n).unwrap_or_default();
-                                core.node.handle_batch(now, self.local, from, batch, segment);
+                                if H::Role::ON {
+                                    self.role_datagrams(&mut core, now, from, batch, segment);
+                                } else {
+                                    core.node.handle_batch(now, self.local, from, batch, segment);
+                                }
                             }
                         }
                         Err(e) if transient(&e) => {}
@@ -349,11 +401,20 @@ impl<H: Hosted> Shared<H> {
                 let Some(mut core) = self.lock() else { return };
                 let moved = core.service(now);
                 let mut b = buf.take().unwrap_or_else(|| self.tx_buf());
-                let next = core
+                let mut next = core
                     .node
                     .poll_transmit(now, &mut b.v)
                     .map(|t| (t.remote, t.len, t.segment_size))
                     .or_else(|| core.poll_udp(&mut b.v).map(|(to, n)| (to, n, n)));
+                if H::Role::ON {
+                    if let Some((to, len, segment)) = next
+                        && self.role_carries(&mut core, now, &to, b.v.get(..len).unwrap_or_default(), segment)
+                    {
+                        buf = Some(b);
+                        continue;
+                    }
+                    next = next.or_else(|| self.role_outgoing(&mut b.v));
+                }
                 if let Some((to, len, segment)) = next {
                     (to, len, segment, b)
                 } else {

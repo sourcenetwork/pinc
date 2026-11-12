@@ -174,9 +174,9 @@ checked, the assumptions and what is still being closed.
 
 - **The facade** reaches peers directly and through relays, and has topic broadcast through a hub, lookup of a peer
   by its id through signed records, export and restore of its state, revocation, stream urgency, and two stream calls
-  that pass a buffer instead of copying it (`RecvStream::read_with`, `SendStream::send_owned`). Not yet: the relay
-  role (`vinc::relay`) run by the endpoint's own driver, so that one endpoint is hub and relay with nothing beside it;
-  an owned buffer written in the middle of a stream; a build without `std` (the crates below the facade have one).
+  that pass a buffer instead of copying it (`RecvStream::read_with`, `SendStream::send_owned`). One endpoint can be
+  hub and relay for other nodes (`Builder::relay_role`), run by its own `run` with nothing beside it. Not yet: an owned
+  buffer written in the middle of a stream; a build without `std` (the crates below the facade have one).
 - **Performance.** On loopback on the build host (12 November 2026, commit `38301fc`, all three in one quiet window)
   VINC leads iroh and rust-libp2p on bulk throughput (699 against 518 and 462 MiB/s on one stream), on CPU per byte
   (2.71 against 4.75 and 5.14 ns), on the 64-byte round trip (68 against 93 and 78 microseconds) and on connection

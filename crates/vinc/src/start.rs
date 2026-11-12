@@ -146,6 +146,7 @@ mod tests {
             locals: vec!["127.0.0.1:1".parse().unwrap()],
             relays: Vec::new(),
             hub: false,
+            relaying: false,
             connect_timeout: 1_000_000_000,
         }
     }
