@@ -60,10 +60,16 @@ impl<T: Blank, const N: usize> Lazy<T, N> {
     }
 
     /// Every entry, in order: `N` of them.
+    #[cfg(any(test, feature = "trace"))]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.written
             .iter()
             .chain(core::iter::repeat_n(&self.blank, N - self.written.len()))
+    }
+
+    /// The entries ever written, in order; every other entry is blank.
+    pub(crate) fn written(&self) -> &[T] {
+        &self.written
     }
 
     /// The entries ever written, in order; every other entry is blank.
@@ -107,8 +113,14 @@ impl<T: Blank, const N: usize> Lazy<T, N> {
     }
 
     /// Every entry, in order.
+    #[cfg(any(test, feature = "trace"))]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         self.all.iter()
+    }
+
+    /// Every entry, in order.
+    pub(crate) fn written(&self) -> &[T] {
+        &self.all
     }
 
     /// Every entry, in order.

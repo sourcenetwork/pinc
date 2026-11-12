@@ -17,6 +17,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let (r, i) = self
             .hot
             .iter()
+            .take(self.used())
             .enumerate()
             .filter(|(_, h)| **h & (HOT_RETX | HOT_NEW) != 0)
             .filter_map(|(i, _)| {
@@ -160,7 +161,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if let Some(limit) = self.admit.take() {
             return Some(ControlFrame::MaxStreams { limit });
         }
-        for i in 0..N {
+        for i in 0..self.used() {
             if self.hot.get(i).is_none_or(|h| h & HOT_CTL == 0) {
                 continue;
             }

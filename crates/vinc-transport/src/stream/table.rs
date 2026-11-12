@@ -214,11 +214,24 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// The receive credit granted to the peer and not yet received, summed over the open streams. It is recomputed by
-    /// a scan of the table.
+    /// a scan of the slots streams have used.
     pub fn granted_unreceived(&self) -> u64 {
         self.slots
+            .written()
             .iter()
             .fold(0, |sum, s| sum.saturating_add(s.recv.unreceived()))
+    }
+
+    /// The slots no stream holds.
+    const fn free(&self) -> u64 {
+        N.saturating_sub(self.open) as u64
+    }
+
+    /// The slots a stream has ever held, a prefix of the table (a new stream takes the lowest free slot): no slot
+    /// beyond it holds a stream or has anything to send, so the scans the connection makes for each packet stop
+    /// here and cost what the session's busiest moment used, not the size of the table.
+    pub(super) fn used(&self) -> usize {
+        self.slots.written().len()
     }
 
     /// The pool bytes promised to the peer: the credit granted and not yet received, plus the first charges kept for the
@@ -279,7 +292,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 slot.send.raise_limit(window);
             }
         }
-        for i in 0..N {
+        for i in 0..self.used() {
             self.refresh(i);
         }
     }
@@ -289,7 +302,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     fn find(&self, id: StreamId) -> Option<usize> {
-        self.ids.iter().position(|&x| x == id)
+        // The first free slot may be the one after the used ones.
+        let within = if id == NONE { N } else { self.used() };
+        self.ids.iter().take(within).position(|&x| x == id)
     }
 
     fn slot(&self, i: usize) -> Option<&Slot<S, C>> {
@@ -367,15 +382,15 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// many first charges as [`admit_fit`] allows of those that fit in the pool bytes left beside the credit already
     /// granted.
     fn admit_room(&self, pool: &BufferPool<'_>) -> u64 {
-        let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
+        let free = self.free();
         let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.first_charge();
         let cap = self.max_remote.min((N as u64 / 2).max(1));
         cap.saturating_sub(self.remote_live).min(free).min(admit_fit(fit))
     }
 
     /// Queue a raise of the stream credit when the room grew enough (see [`Admit::update`]).
-    // vertexia: one scan of the slots per call, which the connection makes once per packet it writes; gate on a
-    // changed pool or slot count if a profile shows it.
+    // vertexia: one scan of the used slots per call, which the connection makes once per packet it writes; gate on a
+    // changed pool or slot count if a profile shows it with many streams.
     fn refresh_admit(&mut self, pool: &BufferPool<'_>) {
         let (admitted, room) = (self.admitted(), self.admit_room(pool));
         self.admit.update(admitted, room);
@@ -431,7 +446,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// is made (a new stream takes no chunk, and the credit kept its first charge), so a frame that opens many skipped
     /// streams at once is never held back for them; beyond it their first charges must fit beside the credit left.
     fn admits(&self, pool: &BufferPool<'_>, count: u64) -> bool {
-        let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
+        let free = self.free();
         let inside = self.admitted().saturating_add(count) <= self.admit.adv;
         self.remote_live + count <= self.max_remote
             && free >= count
@@ -490,7 +505,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
         // The slot and the first charge of every stream inside the credit given to the peer stay free.
         let left = self.credit_left();
-        let free = self.ids.iter().filter(|&&x| x == NONE).count() as u64;
+        let free = self.free();
         if (free > 0 && free <= left) || (bidi && !self.windows_fit(pool, left + 1)) {
             return Err(StreamError::Exhausted);
         }
@@ -681,7 +696,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     fn grant(&mut self, pool: &BufferPool<'_>, first: usize) {
         let mut granted: Option<u64> = None;
         let reserve = self.reserved();
-        for i in 0..N {
+        for i in 0..self.used() {
             let target = self.target;
             let Some(slot) = self.slots.written_mut(i) else {
                 continue;
@@ -709,7 +724,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             }
             self.refresh(i);
         }
-        self.stalled = self.slots.iter().any(|s| s.recv.win.deferred);
+        self.stalled = self.slots.written().iter().any(|s| s.recv.win.deferred);
     }
 
     /// Whether the bytes `offset..offset + len` of a stream are acknowledged (an empty range asks about the end
@@ -783,7 +798,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if self.buffered >= buffer_cap {
             return None;
         }
-        let i = self.slots.iter().position(|s| s.send.cap_cut)?;
+        let i = self.slots.written().iter().position(|s| s.send.cap_cut)?;
         if let Some(slot) = self.slots.get_mut(i) {
             slot.send.cap_cut = false;
         }
