@@ -81,14 +81,22 @@ async fn redial_after_restart(hub: bool) -> bool {
         Vec::new()
     };
     let b = endpoint_at!(
-        vinc_common::builder().seed(&[2; 32]).unwrap().alpn(ECHO).relays(relays.clone()),
+        vinc_common::builder()
+            .seed(&[2; 32])
+            .unwrap()
+            .alpn(ECHO)
+            .relays(relays.clone()),
         vinc_common::lo()
     );
     let b_addr = b.local_addr();
     let b_id = b.id();
     let b_task = serve_echo!(b);
     let a = endpoint_at!(
-        vinc_common::builder().seed(&[1; 32]).unwrap().alpn(ECHO).relays(relays.clone()),
+        vinc_common::builder()
+            .seed(&[1; 32])
+            .unwrap()
+            .alpn(ECHO)
+            .relays(relays.clone()),
         vinc_common::lo()
     );
     let run = a.clone();
@@ -162,6 +170,11 @@ async fn a_redial_reaches_a_restarted_peer_without_a_hub() {
 
 #[nuclei::test]
 async fn a_redial_reaches_a_restarted_peer_with_a_hub_named() {
-    within(90, async { assert!(redial_after_restart(true).await, "the redial did not reach the restarted peer") })
-        .await;
+    within(90, async {
+        assert!(
+            redial_after_restart(true).await,
+            "the redial did not reach the restarted peer"
+        )
+    })
+    .await;
 }
