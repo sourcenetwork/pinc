@@ -37,8 +37,9 @@ theorem refreshAdmit_within_limit (p : P) (T : Tab) (h : T.adv ≤ admitted T + 
   have h1 : admitRoom p T ≤ p.capLive - T.rl := Nat.le_trans (Nat.min_le_left _ _) (Nat.min_le_left _ _)
   have h2 : p.capLive ≤ p.maxrem := Nat.min_le_left _ _
   unfold refreshAdmit
+  dsimp only
   split
-  · show admitted T + admitRoom p T ≤ _
+  · dsimp only
     omega
   · exact h
 
