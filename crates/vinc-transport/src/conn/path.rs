@@ -334,6 +334,13 @@ conn_impl! {
             .map(|(_, p)| p.id)
     }
 
+    /// Whether any path is still being re-challenged after it was abandoned or idled out. A re-join challenge leaves
+    /// only on such a path, and never in the call that starts the re-join, so a caller that sees `false` before a
+    /// timer has no floor to set and no challenge to collect after it.
+    pub fn rejoin_running(&self) -> bool {
+        self.paths.iter().any(|(_, p)| p.rejoin && p.probes_left > 0)
+    }
+
     /// No re-join challenge on path `id` leaves before `at`: another session of the node challenged the same address
     /// within the spacing. 0 lifts the wait. Ignored for a path the connection does not track.
     pub fn set_rejoin_floor(&mut self, id: PathId, at: u64) {

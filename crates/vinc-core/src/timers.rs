@@ -165,7 +165,14 @@ ep_impl! {
             slot.m.acp_recheck = None;
             self.ask_acp(i, now, true);
         }
-        let floors = self.rejoin_floors(i);
+        // Only a session with a re-join running has floors to take and challenges to report: the timer of every
+        // other session (a bulk transfer's fires for each paced burst) does none of that work.
+        let rejoining = self
+            .slots
+            .get(i)
+            .and_then(|s| s.conn.as_ref())
+            .is_some_and(vinc_transport::conn::Connection::rejoin_running);
+        let floors = if rejoining { self.rejoin_floors(i) } else { [None; NP] };
         let Some(slot) = self.slots.get_mut(i) else { return };
         let Some(conn) = slot.conn.as_mut() else { return };
         // A standby path that carried nothing for 5 s while data moves is challenged to keep its mapping open.
@@ -194,8 +201,10 @@ ep_impl! {
         }
         conn.handle_timeout(&mut env);
         let mut fired: [Option<PathId>; NP] = [None; NP];
-        for f in &mut fired {
-            *f = conn.take_rejoin_fired();
+        if rejoining {
+            for f in &mut fired {
+                *f = conn.take_rejoin_fired();
+            }
         }
         let remotes = fired.map(|f| f.and_then(|id| self.path_addrs(id)).map(|(_, remote)| remote));
         for remote in remotes.into_iter().flatten() {
