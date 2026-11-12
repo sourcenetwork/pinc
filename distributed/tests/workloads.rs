@@ -15,8 +15,12 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
-use vinc_distributed::node::proto::{Cmd, Init, PeerSpec, PubSubReport, Reply, Request};
+use vinc_distributed::dtn::{Check, Sent, evaluate};
+use vinc_distributed::node::proto::{Cmd, DtnInit, DtnReport, DtnWhat, Init, PeerSpec, PubSubReport, Reply, Request};
+use vinc_distributed::node::vinc::node_id;
 use vinc_distributed::scenario::{Role, Stack};
 
 struct Prog {
@@ -132,6 +136,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
                     mtu: 1500,
                     sessions: 16,
                     iroh_gossip_max: None,
+                    dtn: None,
                 },
                 s.role,
             )
@@ -303,6 +308,116 @@ fn vinc_reconciles_two_sets_to_their_exact_difference() {
     );
     assert_eq!(got["missing_here"], json!(7));
     assert_eq!(got["missing_there"], json!(7));
+}
+
+fn dtn_log(p: &mut Prog) -> DtnReport {
+    let v = p.ok(Cmd::Report, 30);
+    serde_json::from_value(v["dtn"].clone()).unwrap()
+}
+
+/// Store and forward through vinc-node's own layer: the source sends to a node that has not started, hands a copy to
+/// the carrier and ends; the destination starts later and gets the bundle, intact and once, from the carrier. The
+/// logs pass the custody and copy rules.
+#[test]
+fn vinc_carries_a_bundle_to_a_node_that_comes_online_after_its_source_left() {
+    let mut inits = group(Stack::Vinc, 113, 3);
+    for (init, role) in &mut inits {
+        if *role == Role::Peer {
+            init.dtn = Some(DtnInit {
+                budget: 64 << 20,
+                retry_ms: 2_000,
+                max_sends: 8,
+                dir: None,
+                tamper_slices: false,
+                tamper_heads: false,
+            });
+        }
+    }
+    let (src, carrier, dst) = ("p-1", "p-2", "p-3");
+    let mut progs: Vec<Prog> = inits.iter().take(3).map(|(i, _)| Prog::start(i)).collect();
+    for p in &mut progs {
+        p.ok(
+            Cmd::Join {
+                topic: "dtn".into(),
+                wait_ms: 40_000,
+            },
+            60,
+        );
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let size = 200_000;
+    let sent_at = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let v = progs[1].ok(
+        Cmd::DtnSend {
+            to: dst.into(),
+            size,
+            seed: 9,
+            copies: 2,
+            lifetime_ms: 300_000,
+            k: 4,
+            m: 2,
+            slice_log: 2,
+        },
+        30,
+    );
+    let bundle = v["bundle"].as_str().unwrap().to_owned();
+    // The carrier takes its copy (deadline and bounded backoff, not a fixed wait).
+    let end = Instant::now() + Duration::from_secs(60);
+    let mut backoff = Duration::from_millis(100);
+    while dtn_log(&mut progs[2]).held == 0 {
+        assert!(Instant::now() < end, "the carrier never took the bundle");
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_secs(1));
+    }
+    let src_log = dtn_log(&mut progs[1]);
+    drop(progs.remove(1));
+    let mut late = Prog::start(&inits[3].0);
+    late.ok(
+        Cmd::Join {
+            topic: "dtn".into(),
+            wait_ms: 40_000,
+        },
+        60,
+    );
+    let end = Instant::now() + Duration::from_secs(90);
+    let got = loop {
+        let l = dtn_log(&mut late);
+        if l.log.iter().any(|e| matches!(e.what, DtnWhat::Received { .. })) || Instant::now() >= end {
+            break l;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    let mut logs = BTreeMap::new();
+    logs.insert(src.to_owned(), vec![src_log]);
+    logs.insert(carrier.to_owned(), vec![dtn_log(&mut progs[1])]);
+    logs.insert(dst.to_owned(), vec![got]);
+    let sent = [Sent {
+        bundle,
+        from: src.into(),
+        to: dst.into(),
+        copies: 2,
+        at_ms: sent_at,
+        lifetime_ms: 300_000,
+    }];
+    let checks = [
+        Check::Delivered {
+            to: dst.into(),
+            via: Some(carrier.into()),
+            after_s: None,
+        },
+        Check::Custody { moves: vec![] },
+        Check::Copies,
+        Check::NoRefetch { at: dst.into() },
+    ];
+    let o = evaluate(&checks, &sent, &logs, sent_at, |n| node_id(n).ok().map(|i| i.bytes));
+    assert_eq!(o.failures, Vec::<String>::new(), "{logs:#?}");
+    assert_eq!(o.passed, 4);
 }
 
 /// Set reconciliation is asked of a stack that has no protocol for it: the answer says so, and the program goes on.

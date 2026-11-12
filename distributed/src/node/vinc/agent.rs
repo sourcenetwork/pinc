@@ -13,13 +13,16 @@ use std::net::{IpAddr, SocketAddr};
 
 use nuclei::sync::mpsc::UnboundedReceiver;
 use serde_json::{Value, json};
-use vinc_node::NodeEvent;
+use vinc_node::trace::btag;
+use vinc_node::{DtnPlan, NodeEvent};
 
 use super::core::{Core, HubAddr, NCmd, Op, Spec, StreamEv, Tx, node_id};
+use super::dtn::{DtnStore, opener};
+use super::dtnlog::{DtnLog, payload};
 use super::net::{Net, Streams, Wire};
 use crate::node::app::emit;
 use crate::node::data::{Content, item, wall_ns};
-use crate::node::proto::{Cmd, Init, Ready, Reply, Request};
+use crate::node::proto::{Cmd, DtnReport, Init, Ready, Reply, Request};
 use crate::node::stats::PubSubStats;
 use crate::scenario::Role;
 
@@ -67,6 +70,7 @@ struct Agent<const K: usize, const D: usize> {
     stats: PubSubStats,
     pubs: Vec<PubRun>,
     waits: Vec<Wait>,
+    dtn: DtnLog,
     stopping: bool,
 }
 
@@ -118,7 +122,11 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             batch,
             pool_chunks: 1024,
         };
-        let core = Core::<K, D>::new(&spec, super::apps::VApps::default())?;
+        let mut apps = super::apps::VApps::default();
+        if let Some(d) = init.dtn.clone() {
+            apps.dtn = DtnStore::new(&init.name, d)?;
+        }
+        let core = Core::<K, D>::new(&spec, apps)?;
         let hub_ids = spec.hubs.iter().map(|h| h.id.bytes).collect();
         let ready = Ready {
             stack: "vinc".into(),
@@ -132,6 +140,15 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 }
             ),
         };
+        let mut ready = ready;
+        if let Some(d) = &init.dtn {
+            use std::fmt::Write as _;
+            let _ = write!(
+                ready.config,
+                "; delay-tolerant delivery on (vinc-node's layer, a {} KiB bundle budget)",
+                d.budget >> 10
+            );
+        }
         let me = me_spec.index;
         Ok((
             Self {
@@ -141,6 +158,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 stats: PubSubStats::new(me),
                 pubs: Vec::new(),
                 waits: Vec::new(),
+                dtn: DtnLog::new(init.peers.iter().map(|p| p.name.as_str())),
                 stopping: false,
             },
             ready,
@@ -249,6 +267,37 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     Err(e) => out.push(Reply::fail(id, e)),
                 }
             }
+            Cmd::DtnContacts { t0_ms, windows } => {
+                out.push(
+                    match self.core.node.apps_mut().dtn.set_contacts(t0_ms, windows.as_deref()) {
+                        Ok(()) => Reply::ok(id, Value::Null),
+                        Err(e) => Reply::fail(id, e),
+                    },
+                );
+            }
+            Cmd::DtnSend {
+                to,
+                size,
+                seed,
+                copies,
+                lifetime_ms,
+                k,
+                m,
+                slice_log,
+            } => {
+                let plan = DtnPlan {
+                    lifetime_ms,
+                    copies,
+                    k,
+                    m,
+                    slice_log,
+                };
+                let sent = opener(&to).and_then(|o| self.core.dtn_send(now, &o.keys, &payload(seed, size), &plan));
+                out.push(match sent {
+                    Ok(b) => Reply::ok(id, json!({ "bundle": format!("{:016x}", btag(&b)) })),
+                    Err(e) => Reply::fail(id, format!("the bundle was not made: {e}")),
+                });
+            }
             Cmd::Suspend => out.push(match self.core.command(now, NCmd::Suspend) {
                 Ok(_) => Reply::ok(id, Value::Null),
                 Err(e) => Reply::fail(id, e),
@@ -257,13 +306,27 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 Ok(_) => Reply::ok(id, Value::Null),
                 Err(e) => Reply::fail(id, e),
             }),
-            Cmd::Report => out.push(Reply::ok(
-                id,
-                json!({
-                    "pubsub": self.stats.report(),
-                    "members": self.core.node.membership().member_count(),
-                }),
-            )),
+            Cmd::Report => {
+                self.drain_dtn_trace();
+                let (peak_bytes, budget) = self.core.node.apps().dtn.peak_and_budget();
+                let r = self.core.restored;
+                let dtn = DtnReport {
+                    log: self.dtn.log.clone(),
+                    held: self.core.node.dtn_held() as u64,
+                    peak_bytes,
+                    budget,
+                    restored: [r.held, r.partial, r.received, r.dropped].map(|n| n as u64),
+                    lost: self.dtn.lost,
+                };
+                out.push(Reply::ok(
+                    id,
+                    json!({
+                        "pubsub": self.stats.report(),
+                        "members": self.core.node.membership().member_count(),
+                        "dtn": dtn,
+                    }),
+                ));
+            }
             Cmd::Stop => {
                 // Leaving tells the hubs this node is gone for good; the loop ends after the farewell is sent.
                 let _ = self.core.command(now, NCmd::Leave);
@@ -310,9 +373,18 @@ impl<const K: usize, const D: usize> Agent<K, D> {
         }
     }
 
+    /// Move the delay-tolerant layer's trace records into its log.
+    fn drain_dtn_trace(&mut self) {
+        while let Some((ms, t)) = self.core.dtn_trace.pop_front() {
+            self.dtn.trace(ms, t);
+        }
+    }
+
     /// The application events the node produced.
     fn events(&mut self, now: u64, out: &mut Vec<Reply>) {
+        self.drain_dtn_trace();
         while let Some(ev) = self.core.events.pop_front() {
+            self.dtn.event(wall_ns() / 1_000_000, &ev);
             match ev {
                 NodeEvent::Message { body, .. } => self.stats.record(&body, wall_ns()),
                 NodeEvent::ValueComplete { fetch } => {

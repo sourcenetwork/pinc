@@ -2,7 +2,7 @@
 //!
 //! - [`core`]: the host without a runtime (duties, the node's inputs and outputs); `hub` is the relay a hub runs for its
 //!   members and `keys` answers key requests.
-//! - [`apps`]: the value and set stores.
+//! - [`apps`]: the value and set stores; [`dtn`]: the bundle store of delay-tolerant delivery.
 //! - [`net`]: the UDP socket and TCP streams.
 //! - [`agent`]: the workload commands and the loop that owns the node.
 //!
@@ -13,6 +13,8 @@
 pub mod agent;
 pub mod apps;
 pub mod core;
+pub mod dtn;
+pub mod dtnlog;
 mod hub;
 mod keys;
 pub mod net;

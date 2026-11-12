@@ -245,6 +245,9 @@ impl Handler for App {
             Cmd::HoldSet { .. } | Cmd::Reconcile { .. } => {
                 Err("set reconciliation is not available for iroh: it has no protocol for it".into())
             }
+            Cmd::DtnContacts { .. } | Cmd::DtnSend { .. } => {
+                Err("delay-tolerant delivery is not available for iroh: it has no store and forward".into())
+            }
         }
     }
 }

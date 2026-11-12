@@ -28,6 +28,7 @@ vinc-values = { path = "../crates/vinc-values", version = "0.1.0" }
 vinc-reconcile = { path = "../crates/vinc-reconcile", version = "0.1.0" }
 vinc-dag = { path = "../crates/vinc-dag", version = "0.1.0" }
 vinc-transport = { path = "../crates/vinc-transport", version = "0.1.0" }
+vinc-dtn = { path = "../crates/vinc-dtn", version = "0.1.0" }
 
 nuclei = "0.5.8"
 tokio = { version = "1.54.1", default-features = false }
@@ -104,6 +105,7 @@ vinc-values = { workspace = true }
 vinc-reconcile = { workspace = true, features = ["alloc"] }
 vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-transport = { workspace = true, features = ["alloc"] }
+vinc-dtn = { workspace = true }
 nuclei = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "process", "signal", "fs"] }
 futures = { workspace = true, features = ["std", "async-await"] }

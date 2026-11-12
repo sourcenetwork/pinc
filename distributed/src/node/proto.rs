@@ -58,6 +58,42 @@ pub struct Init {
     /// The largest iroh gossip message, when the workload sets one (see `Pubsub::iroh_gossip_max`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iroh_gossip_max: Option<u32>,
+    /// Delay-tolerant delivery for this node, on the stacks that have it (VINC); none leaves it off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dtn: Option<DtnInit>,
+}
+
+/// How a node runs delay-tolerant delivery. Read once, when the program starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtnInit {
+    /// The bytes the node may hold in bundles (its ledger's budget).
+    pub budget: u64,
+    /// Milliseconds of link-up time before an unacknowledged hand-over is sent again.
+    pub retry_ms: u64,
+    /// How many times a hand-over is sent in all before it is given up.
+    pub max_sends: u8,
+    /// Keep the bundle store and the node's records in this directory, so a program started again resumes from
+    /// them; none keeps them in memory only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    /// The store corrupts every slice it keeps: the node serves symbols that do not hash to their signed root.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tamper_slices: bool,
+    /// When the program starts from a kept store, the head in every held bundle's record has a byte flipped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tamper_heads: bool,
+}
+
+/// A contact window of delay-tolerant delivery: this node and `peer` are in contact from `from_ms` to `to_ms` after
+/// the workload's start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Contact {
+    /// The peer.
+    pub peer: String,
+    /// When it opens, in milliseconds after the start.
+    pub from_ms: u64,
+    /// When it closes.
+    pub to_ms: u64,
 }
 
 impl Init {
@@ -146,6 +182,33 @@ pub enum Cmd {
         /// The longest wait.
         timeout_ms: u64,
     },
+    /// Set the contacts of delay-tolerant delivery: none means every peer, always; a list means only its windows,
+    /// counted from the wall clock `t0_ms` (milliseconds since the epoch).
+    DtnContacts {
+        /// The start the windows count from.
+        t0_ms: u64,
+        /// The windows; none for every peer, always.
+        windows: Option<Vec<Contact>>,
+    },
+    /// Send a bundle of `size` payload bytes made from `seed` to `to`; the reply carries the bundle's tag.
+    DtnSend {
+        /// The destination.
+        to: String,
+        /// Payload bytes.
+        size: u64,
+        /// The payload's content seed.
+        seed: u64,
+        /// The copy budget of spray and wait.
+        copies: u16,
+        /// The lifetime in milliseconds.
+        lifetime_ms: u64,
+        /// Data symbols per erasure block.
+        k: u8,
+        /// Parity symbols per erasure block.
+        m: u8,
+        /// The slice size log (slices of 1 KiB to 16 KiB).
+        slice_log: u8,
+    },
     /// Tell the group this node is going to sleep (stacks that have the notion).
     Suspend,
     /// Tell the group this node is awake again.
@@ -225,6 +288,107 @@ pub struct PubSubReport {
     pub gap_max_ms: Option<f64>,
     /// Where the longest gap began, as milliseconds after the first delivery.
     pub gap_at_ms: Option<f64>,
+}
+
+/// One thing that happened to a bundle at a node, as the node's events and its trace show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "ev", rename_all = "snake_case")]
+pub enum DtnWhat {
+    /// The bundle was made here with this copy budget.
+    Created {
+        /// Its copies.
+        copies: u64,
+    },
+    /// It was offered to a peer with this many copies (0 for a delivery to the destination).
+    Offer {
+        /// The peer.
+        peer: String,
+        /// The copies handed over.
+        copies: u64,
+    },
+    /// A run of symbols from a peer verified against the signed root.
+    Symbols {
+        /// The peer.
+        peer: String,
+        /// The run's first symbol.
+        first: u64,
+    },
+    /// It arrived whole and verified from a peer.
+    Complete {
+        /// The peer.
+        peer: String,
+    },
+    /// This node took custody (or, at the destination, delivery) from a peer and acknowledged it.
+    Custody {
+        /// The previous holder.
+        peer: String,
+    },
+    /// A peer's acknowledgement was verified; `relieved` if custody moved to it.
+    Acked {
+        /// The peer.
+        peer: String,
+        /// Whether custody moved.
+        relieved: bool,
+    },
+    /// A transfer was refused, by this node or by the peer, for this reason.
+    Refused {
+        /// The other side.
+        peer: String,
+        /// The reason, as the node's refusal code names it.
+        reason: String,
+    },
+    /// It left this node: delivered or expired.
+    Released {
+        /// Whether the destination acknowledged it.
+        delivered: bool,
+    },
+    /// It was opened here, at its destination.
+    Received {
+        /// The node that made it.
+        source: String,
+        /// Whether the payload is the one its seed makes.
+        intact: bool,
+        /// Its payload bytes.
+        bytes: u64,
+    },
+    /// A peer took custody: this node is relieved.
+    HandedOff {
+        /// The new custodian.
+        to: String,
+    },
+    /// Its destination acknowledged it.
+    Delivered,
+    /// It expired here before it was delivered.
+    Expired,
+}
+
+/// One entry of a node's bundle log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtnEntry {
+    /// The wall clock, in milliseconds since the epoch.
+    pub ms: u64,
+    /// The bundle's tag: the first eight bytes of its id, in hex.
+    pub bundle: String,
+    /// What happened.
+    #[serde(flatten)]
+    pub what: DtnWhat,
+}
+
+/// What a node's delay-tolerant layer did in one life of its program.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtnReport {
+    /// Everything that happened to bundles here, in order.
+    pub log: Vec<DtnEntry>,
+    /// Bundles held now.
+    pub held: u64,
+    /// The most sealed bytes the host store held at once.
+    pub peak_bytes: u64,
+    /// The ledger's budget.
+    pub budget: u64,
+    /// What the node restored from a kept store when it started: held, partial, received and dropped records.
+    pub restored: [u64; 4],
+    /// Trace records the node dropped because its queue was full; nonzero means the log may miss entries.
+    pub lost: u64,
 }
 
 /// The kind of event a node prints on its own, not as a reply.

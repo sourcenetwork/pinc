@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::backend::Cluster;
 use crate::backend::containers::READY;
 use crate::error::{Error, Result};
-use crate::node::proto::{Cmd, Init, PeerSpec, Ready, Reply, Request};
+use crate::node::proto::{Cmd, DtnInit, Init, PeerSpec, Ready, Reply, Request};
 use crate::plan::Plan;
 use crate::scenario::{Role, Stack};
 
@@ -135,6 +135,8 @@ pub(crate) struct AppSet<'a> {
     rejoin: Mutex<Option<(String, u64)>>,
     /// Reports of lives that ended, by node.
     archived: Mutex<Vec<Vec<Value>>>,
+    /// Requests a node that starts again is sent again, by node, in order.
+    replay: Mutex<Vec<Vec<Cmd>>>,
 }
 
 /// How long a request that is not a long-running one may take.
@@ -170,6 +172,7 @@ impl<'a> AppSet<'a> {
                 mtu,
                 sessions,
                 iroh_gossip_max: None,
+                dtn: None,
             })
             .collect();
         Self {
@@ -179,7 +182,26 @@ impl<'a> AppSet<'a> {
             slots: plan.nodes.iter().map(|_| tokio::sync::Mutex::new(None)).collect(),
             rejoin: Mutex::new(None),
             archived: Mutex::new(vec![Vec::new(); plan.nodes.len()]),
+            replay: Mutex::new(vec![Vec::new(); plan.nodes.len()]),
         }
+    }
+
+    /// Set each node's delay-tolerant delivery: `f` is given the node's index and gives its settings.
+    pub(crate) fn with_dtn(mut self, f: impl Fn(usize) -> Option<DtnInit>) -> Self {
+        for (i, init) in self.inits.iter_mut().enumerate() {
+            init.dtn = f(i);
+        }
+        self
+    }
+
+    /// Ask node `i` to do `cmd`, and again whenever it is started again.
+    pub(crate) async fn call_kept(&self, i: usize, cmd: Cmd, wait: Duration) -> Result<Value> {
+        if let Ok(mut r) = self.replay.lock()
+            && let Some(v) = r.get_mut(i)
+        {
+            v.push(cmd.clone());
+        }
+        self.call(i, cmd, wait).await
     }
 
     /// Set the largest iroh gossip message of every node (see `Pubsub::iroh_gossip_max`).
@@ -299,6 +321,15 @@ impl<'a> AppSet<'a> {
         if let Some((topic, wait_ms)) = topic {
             self.call(i, Cmd::Join { topic, wait_ms }, Duration::from_millis(wait_ms + 10_000))
                 .await?;
+        }
+        let again = self
+            .replay
+            .lock()
+            .ok()
+            .and_then(|r| r.get(i).cloned())
+            .unwrap_or_default();
+        for cmd in again {
+            self.call(i, cmd, QUICK).await?;
         }
         Ok(())
     }
