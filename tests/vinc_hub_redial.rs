@@ -111,11 +111,26 @@ async fn redial_after_restart(hub: bool) -> bool {
     drop(b);
     // Its tasks end and let the socket go.
     nuclei::time::sleep(Duration::from_millis(300)).await;
-    // A dial while the peer is down, as a replicator's retry makes.
-    let down = nuclei::time::timeout(Duration::from_secs(3), a.connect(to.clone(), ECHO)).await;
+    // A dial while the peer is down, as a replicator's retry makes. It fails, or the connection it hands back (reported
+    // early, with a cached allow) ends within the early bound and fails what was written on it.
+    let at = std::time::Instant::now();
+    let down = nuclei::time::timeout(Duration::from_secs(5), async {
+        let conn = a.connect(to.clone(), ECHO).await?;
+        let (mut tx, mut rx) = conn.open_bi().await?;
+        tx.write_all(b"ping").await?;
+        let mut got = [0u8; 4];
+        let read = rx.read_exact(&mut got).await;
+        // What was written before the connection failed is reported as failed, not taken as sent.
+        if read.is_err() {
+            assert!(tx.finish().await.is_err(), "the stream of a failed connection finished");
+        }
+        read
+    })
+    .await;
+    eprintln!("down: {down:?} after {:?}", at.elapsed());
     assert!(
-        !matches!(down, Ok(Ok(_))),
-        "a dial to a peer that stopped returned a connection"
+        matches!(&down, Ok(Err(e)) if matches!(e.kind(), vinc::ErrorKind::TimedOut | vinc::ErrorKind::Unreachable)),
+        "a dial to a peer that stopped did not fail with TimedOut or Unreachable within 5 s: {down:?}"
     );
     // The same peer comes back on the same address.
     let b = endpoint_at!(

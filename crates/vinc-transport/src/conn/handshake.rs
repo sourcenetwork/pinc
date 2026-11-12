@@ -543,6 +543,11 @@ impl Handshake {
         self.held = held;
     }
 
+    /// End the handshake at `at` if it is not established by then and that comes before its own deadline.
+    pub(crate) fn cap_connect_at(&mut self, at: u64) {
+        self.connect_at = self.connect_at.map(|t| t.min(at));
+    }
+
     /// Move the pending resend of a dialing side to `at`; ignored once the handshake is past its first flight.
     pub(crate) const fn set_retransmit_at(&mut self, at: u64) {
         if self.client && matches!(self.stage, Stage::Open) && self.retx_at.is_some() {

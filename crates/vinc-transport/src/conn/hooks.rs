@@ -123,6 +123,12 @@ conn_impl! {
         self.hs.set_held(hold);
     }
 
+    /// Close with [`CloseReason::HandshakeTimeout`](super::CloseReason::HandshakeTimeout) at the absolute time `at`
+    /// if the handshake is not established by then; a later `at` than the handshake's own limit changes nothing.
+    pub fn set_connect_deadline(&mut self, at: u64) {
+        self.hs.cap_connect_at(at);
+    }
+
     /// No path MTU probe is sent before `until`.
     pub fn defer_mtu_probe(&mut self, until: u64) {
         self.life.qr_until = self.life.qr_until.max(until);

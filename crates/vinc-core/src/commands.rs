@@ -39,6 +39,13 @@ pub const FAN_URGENCY: u8 = 2;
 const CTRL_SMALL: usize = 72;
 /// A session this node dialed to a hub acknowledges every this many ack-eliciting packets.
 const HUB_ACK_EVERY: u32 = 4;
+/// A dial reported before its handshake (optimistic) ends if the handshake is not done within this many remembered
+/// round trips of the peer, and within the bounds below: 2 s covers two lost first flights (resent at 0.5 s and 1.5 s).
+const EARLY_BOUND_RTTS: u64 = 8;
+/// The shortest such bound (2 s).
+const EARLY_BOUND_MIN: u64 = 2_000_000_000;
+/// The longest such bound (10 s), well under the handshake's own 30 s.
+const EARLY_BOUND_MAX: u64 = 10_000_000_000;
 
 /// What the endpoint knows about the path to `remote`: through a relay, and the address family.
 pub(crate) fn path_info(remote: &SocketAddr, interface_mtu: u16) -> PathInfo {
@@ -468,6 +475,17 @@ ep_impl! {
         self.sync_ack_every(i);
         self.defer_mtu_for_quiet(i);
         if optimistic {
+            // Reported before the peer answered: if it stopped, the session ends within a few round trips rather
+            // than at the handshake's 30 s.
+            let bound = self
+                .rtt
+                .remembered_for(&node)
+                .unwrap_or(0)
+                .saturating_mul(EARLY_BOUND_RTTS)
+                .clamp(EARLY_BOUND_MIN, EARLY_BOUND_MAX);
+            if let Some(c) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
+                c.set_connect_deadline(now.saturating_add(bound));
+            }
             trace!(self, now, Early { slot: i as u64, rule: 1 });
             self.announce(i);
         }

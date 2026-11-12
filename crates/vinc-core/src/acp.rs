@@ -8,7 +8,9 @@
 //!
 //! - **Gate.** Application events of a session are held until the session is allowed; a deny closes it with code 3.
 //! - **Optimistic.** A dial towards a peer with a cached allow that has more than 5 s left reports `Connected` at once,
-//!   before the handshake; if the check then denies, the session closes and `Closed` follows.
+//!   before the handshake; if the check then denies, the session closes and `Closed` follows. If the handshake is not
+//!   done within 8 remembered round trips (2 s to 10 s), the peer is taken to have stopped: the session closes with
+//!   `HandshakeTimeout` and `Closed` follows.
 //! - **READY hold.** A client whose handshake round trip was under 20 ms reports `Connected` only after the server's
 //!   READY, which the server sends once its own answer is in, so the first stream write is served one way later.
 //!
