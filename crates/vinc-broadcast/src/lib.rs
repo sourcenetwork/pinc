@@ -39,6 +39,7 @@ pub mod wire;
 
 #[cfg(feature = "alloc")]
 mod behind;
+#[cfg(feature = "alloc")]
 mod floors;
 #[cfg(feature = "alloc")]
 mod frames;

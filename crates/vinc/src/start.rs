@@ -10,7 +10,7 @@
 //! freed when it is dropped.
 
 use vinc_broadcast::Limits as BroadcastLimits;
-use vinc_broadcast::consts::{DEFAULT_LOG_BYTES, DEFAULT_MAX_SUBSCRIBERS};
+use vinc_broadcast::consts::DEFAULT_MAX_SUBSCRIBERS;
 use vinc_connect::client::Config as ConnectConfig;
 use vinc_crypto::{Drbg, Software};
 use vinc_keystore::KeyStore;
@@ -91,7 +91,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         alpn: HUB_ALPN,
         limits: BroadcastLimits {
             max_body: cfg.limits.topic_message,
-            log_bytes: DEFAULT_LOG_BYTES.max(cfg.limits.topic_message.saturating_mul(4)),
+            log_bytes: cfg.limits.topic_log.max(cfg.limits.topic_message.saturating_mul(4)),
             max_topics: cfg.limits.topics,
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
         },

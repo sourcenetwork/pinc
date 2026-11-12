@@ -69,6 +69,11 @@ pub struct Limits {
     /// The largest message [`Endpoint::publish`](crate::Endpoint::publish) takes, in bytes (at most 16 MiB). Larger data
     /// belongs behind a reference: publish a root or an id and fetch the bytes over a stream.
     pub topic_message: usize,
+    /// The bytes of messages a hub endpoint keeps for each topic (at most 1 GiB; never less than four of the largest
+    /// message). A subscriber whose path is slower than a burst is served from this log, and so is one that was away:
+    /// a burst larger than the log loses its oldest messages for a subscriber that could not keep up. The memory is
+    /// taken as a topic's log fills.
+    pub topic_log: usize,
     /// The most topics the endpoint tracks at once.
     pub topics: usize,
 }
@@ -89,6 +94,7 @@ impl Default for Limits {
             accept_streams: 64,
             accept_sessions: 64,
             topic_message: 65_536,
+            topic_log: 4 << 20,
             topics: 128,
         }
     }
@@ -108,6 +114,7 @@ impl Limits {
             && self.accept_streams >= 1
             && self.accept_sessions >= 1
             && (1..=16 * 1024 * 1024).contains(&self.topic_message)
+            && (1..=1 << 30).contains(&self.topic_log)
             && (1..=4096).contains(&self.topics);
         if ok {
             Ok(())
@@ -129,5 +136,17 @@ mod tests {
         };
         assert!(limits(65_535).check().is_ok());
         assert!(limits(65_536).check().is_err());
+    }
+
+    #[test]
+    fn a_topic_log_is_between_one_byte_and_one_gibibyte() {
+        let limits = |topic_log| Limits {
+            topic_log,
+            ..Limits::default()
+        };
+        assert!(limits(16 << 20).check().is_ok());
+        assert!(limits(1 << 30).check().is_ok());
+        assert!(limits(0).check().is_err());
+        assert!(limits((1 << 30) + 1).check().is_err());
     }
 }

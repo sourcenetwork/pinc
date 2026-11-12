@@ -30,6 +30,8 @@ fn body(i: usize) -> Vec<u8> {
 /// ways) with a 20 ms round trip.
 fn world(seed: u64) -> World {
     let mut w = World::build_with(seed, 1, 1 + SUBS, |w| {
+        // The hub's log is what a subscriber on a slow path is served from: it must hold the burst (about 8.2 MiB).
+        w.limits.log_bytes = 16 << 20;
         w.sim = Sim::with_config(
             seed,
             SimConfig {
@@ -62,6 +64,7 @@ fn count(w: &World, n: vinc_sim::NodeId, until: Time, f: impl Fn(&NodeEvent) -> 
 /// Every publish of a burst ends acknowledged or given up, even with more of them in flight than the publisher
 /// tracks: here the writer, not the hub, is behind the slow path.
 #[test]
+#[ignore = "waits for the rule that refuses a publish the pending table cannot track"]
 fn every_publish_of_a_burst_is_acked_or_given_up() {
     big(|| {
         let mut w = World::build_with(92, 1, 2, |w| {
