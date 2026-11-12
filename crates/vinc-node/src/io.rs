@@ -642,7 +642,7 @@ impl<E: Ep, St: Store> Io<E, St> {
         false
     }
 
-    fn backlog_full(&self, peer: &NodeId, len: usize) -> bool {
+    pub(crate) fn backlog_full(&self, peer: &NodeId, len: usize) -> bool {
         let Some((conn, out)) = self.links.get(peer).and_then(|l| Some((l.conn?, l.out?))) else {
             return false;
         };

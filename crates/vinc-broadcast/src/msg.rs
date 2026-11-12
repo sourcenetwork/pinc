@@ -8,6 +8,8 @@
 //! access-control layer has not yet answered for is held (at most [`HELD_MAX`]) and delivered or dropped on the
 //! answer; the steady path (verify, log, push, deliver) allocates nothing.
 
+use alloc::vec::Vec;
+
 use vinc_membership::{Nanos, NodeId};
 use vinc_wire::hlc::Hlc;
 
@@ -147,13 +149,24 @@ impl Topics {
             fanned,
         });
         if wire::build(&mut self.scratch, ty::MSG, topic, &[rest]).is_ok() {
+            // Subscribers whose stream has no room for this message: none in the usual case, so nothing is allocated.
+            let mut fell: Vec<NodeId> = Vec::new();
             if let Some(st) = self.topics.get(topic) {
                 for (p, live) in &st.subs {
+                    // A subscriber that is behind gets this message from the log, after the ones before it.
+                    if !*live || Some(p) == sender || p == head.origin || st.behind.contains_key(p) {
+                        continue;
+                    }
                     // A floor advances only for a message a session took: one nobody carried was never delivered.
-                    if *live && Some(p) != sender && p != head.origin && h.send(p, Lane::Reply, &self.scratch) {
+                    if h.send(p, Lane::Reply, &self.scratch) {
                         self.sent.note(p, head.ts, head.origin);
+                    } else if h.backlogged(p, self.scratch.len()) {
+                        fell.push(*p);
                     }
                 }
+            }
+            if !fell.is_empty() {
+                self.fall_behind(topic, &fell);
             }
             if !fanned && sender.is_none_or(|s| !self.hubs.contains(s)) {
                 for hub in &self.hubs {

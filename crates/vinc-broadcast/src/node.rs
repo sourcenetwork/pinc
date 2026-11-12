@@ -160,6 +160,9 @@ pub(crate) struct Topic {
     pub(crate) peers: Vec<NodeId>,
     /// Hub: the message log.
     pub(crate) log: Option<HubLog>,
+    /// Hub: the subscribers whose stream had no room, each with the sequence number of the first logged message it
+    /// has not been sent. Such a subscriber is pushed nothing new: it is served from that place, in order.
+    pub(crate) behind: BTreeMap<NodeId, u64>,
     pub(crate) seen: Seen,
     /// Ids a gap repair asked for and has not received.
     pub(crate) requested: BTreeSet<[u8; 8]>,
@@ -174,6 +177,7 @@ impl Topic {
             pubs: BTreeSet::new(),
             peers: Vec::new(),
             log: None,
+            behind: BTreeMap::new(),
             seen: Seen::with_capacity(SEEN_CAP),
             requested: BTreeSet::new(),
         }
@@ -231,6 +235,8 @@ pub struct Topics {
     pub(crate) held: Vec<Held>,
     pub(crate) revoked: BTreeSet<NodeId>,
     pub(crate) sent: SentFloors,
+    /// Hub: the subscribers that are behind in some topic (see [`Topic::behind`]).
+    pub(crate) lagging: BTreeSet<NodeId>,
     pub(crate) gather: Gather,
     pub(crate) last_rx_wall: u64,
     /// The wall clock up to which every periodic check since the start reached back to the one before; starts at the
@@ -318,6 +324,7 @@ impl Topics {
             held: Vec::new(),
             revoked: BTreeSet::new(),
             sent: SentFloors::default(),
+            lagging: BTreeSet::new(),
             gather: Gather::new(cfg.is_hub),
             last_rx_wall: 0,
             last_gap_wall: wall_ms,
@@ -489,7 +496,9 @@ impl Topics {
         }
         for t in self.topics.values_mut() {
             t.subs.remove(peer);
+            t.behind.remove(peer);
             t.pubs.remove(peer);
         }
+        self.lagging.remove(peer);
     }
 }

@@ -98,6 +98,13 @@ where
             }
             Event::StreamWritable { session, stream } if self.io.sess.contains_key(&session) => {
                 self.io.flush(session, stream);
+                // A hub that kept its place in a topic's log for this subscriber goes on from it.
+                if self.io.is_hub
+                    && let Some(peer) = self.io.sess.get(&session).map(|s| s.peer)
+                {
+                    let (t, mut h) = self.bc_host();
+                    t.peer_writable(&mut h, &peer);
+                }
             }
             Event::StreamReset { session, stream, .. } if self.io.sess.contains_key(&session) => {
                 self.io.drop_strm(session, stream);

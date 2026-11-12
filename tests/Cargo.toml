@@ -571,6 +571,10 @@ name = "broadcast_hub"
 path = "broadcast_hub.rs"
 
 [[test]]
+name = "broadcast_behind"
+path = "broadcast_behind.rs"
+
+[[test]]
 name = "broadcast_repair"
 path = "broadcast_repair.rs"
 

@@ -84,6 +84,8 @@ pub struct NodeHost {
     pub wall: u64,
     /// How far this node's wall clock runs ahead of the true one, in milliseconds (negative: behind).
     pub skew_ms: i64,
+    /// Peers whose stream has no room: a frame for one is refused, and the host says it is a full stream.
+    pub full: BTreeSet<NodeId>,
 }
 
 impl NodeHost {
@@ -95,7 +97,7 @@ impl NodeHost {
 
 impl Host for NodeHost {
     fn send(&mut self, peer: &NodeId, lane: Lane, frame: &[u8]) -> bool {
-        if !self.reach.contains(peer) {
+        if !self.reach.contains(peer) || self.full.contains(peer) {
             return false;
         }
         self.out.push(Out {
@@ -105,6 +107,10 @@ impl Host for NodeHost {
             bytes: frame.to_vec(),
         });
         true
+    }
+
+    fn backlogged(&self, peer: &NodeId, _len: usize) -> bool {
+        self.reach.contains(peer) && self.full.contains(peer)
     }
 
     fn send_member(&mut self, peer: &NodeId, frame: &[u8]) -> bool {

@@ -65,6 +65,23 @@ impl HubLog {
             .map(|e| e.at.saturating_add(LOG_WINDOW).saturating_add(1))
     }
 
+    /// The sequence number the next message will get. Every logged message has a smaller one, in arrival order, and
+    /// a number is never used twice.
+    pub(crate) fn end(&self) -> u64 {
+        self.base + u64::try_from(self.entries.len()).unwrap_or(0)
+    }
+
+    /// The sequence number of the oldest message still logged.
+    pub(crate) const fn base(&self) -> u64 {
+        self.base
+    }
+
+    /// The head and body of the message with sequence number `seq`, if it is still logged.
+    pub(crate) fn at(&self, seq: u64) -> Option<&[u8]> {
+        let e = self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)?;
+        self.ring.get(e.off..e.off + e.len)
+    }
+
     fn entry(&self, mid: u64) -> Option<&Entry> {
         let seq = self.index.get(mid)?;
         self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)

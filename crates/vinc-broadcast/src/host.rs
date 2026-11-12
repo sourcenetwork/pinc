@@ -28,6 +28,14 @@ pub trait Host {
     /// `false` answer is not retried: the repair paths (retry, gap repair) cover a lost frame.
     fn send(&mut self, peer: &NodeId, lane: Lane, frame: &[u8]) -> bool;
 
+    /// Whether a frame of `len` bytes was refused by `peer`'s stream only because the stream has no room for it now:
+    /// the session is up and will take it later, and the host then calls [`Topics::peer_writable`](crate::Topics::peer_writable).
+    /// A hub keeps its place in the topic's log for such a subscriber and loses nothing. A host that cannot tell
+    /// answers `false`, and a refused frame is then left to the repair paths as before.
+    fn backlogged(&self, _peer: &NodeId, _len: usize) -> bool {
+        false
+    }
+
     /// Hand one complete frame to `peer` over a member session, opening it if none is up. Returns whether the frame
     /// was handed to a session.
     fn send_member(&mut self, peer: &NodeId, frame: &[u8]) -> bool;

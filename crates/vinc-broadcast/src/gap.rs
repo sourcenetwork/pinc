@@ -284,10 +284,10 @@ impl Topics {
     /// An UNSUB at a hub.
     pub(crate) fn on_unsub<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8]) {
         if self.is_hub
-            && self
-                .topics
-                .get_mut(topic)
-                .is_some_and(|st| st.subs.remove(from).is_some())
+            && self.topics.get_mut(topic).is_some_and(|st| {
+                st.behind.remove(from);
+                st.subs.remove(from).is_some()
+            })
         {
             self.announce_topic(h, topic);
         }

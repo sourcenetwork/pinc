@@ -126,6 +126,8 @@ impl Topics {
             if let Some(live) = st.subs.get_mut(member)
                 && core::mem::replace(live, false)
             {
+                // A held member is pushed nothing; its next subscribe says from when it wants the log.
+                st.behind.remove(member);
                 any = true;
                 announce(
                     h,
@@ -178,6 +180,7 @@ impl Topics {
         let mut any = false;
         for (k, st) in &mut self.topics {
             let was_pub = st.pubs.remove(member);
+            st.behind.remove(member);
             if st.subs.remove(member).is_some() {
                 any = true;
                 announce(
