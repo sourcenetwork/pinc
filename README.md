@@ -19,8 +19,10 @@ VINC is a library, not a framework:
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
 > **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. The facade
-> serves direct connections today; relays, broadcast and lookup exist in the crates below it and are not yet reachable
-> through it. The Status column says where each crate stands and [Open items](#open-items) lists what is not done.
+> reaches peers directly and through relays, broadcasts on topics through a hub, looks a peer up by its id, and can
+> itself be the hub and relay of other nodes. Broadcast still loses messages in two measured cases, which is the work
+> in hand. The Status column says where each crate stands and [Open items](#open-items) lists what is not done, with
+> the issue that tracks each.
 
 ## Usage
 
@@ -94,7 +96,7 @@ keepalives) awaits `Endpoint::run()`.
 
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
-| `vinc` | the facade: a builder, connections, streams with urgencies, datagrams, an access hook and revocation, all async, over the host's receive, send and sleep closures | std | built for direct connections; proofs being closed |
+| `vinc` | the facade: a builder, connections, streams with urgencies, datagrams, an access hook and revocation, all async, over the host's receive, send and sleep closures | std | built: direct and relayed connections, topic broadcast, lookup by id, state export and restore, the hub and relay roles; proofs being closed |
 | `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
 | `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs, verified-range sets; usable on its own | yes, heap-free | built, proven |
 | `vinc-crypto` | RustCrypto primitives behind one static `Provider`: AEADs, X25519, ML-KEM-768, Ed25519, P-256 and ML-DSA-65 identities, BLAKE3 KDF and transcript hash | yes | built; proofs being closed |
@@ -102,7 +104,7 @@ keepalives) awaits `Endpoint::run()`.
 | `vinc-security` | hybrid post-quantum handshake, ticket resumption with 0-RTT, key schedule, packet protection, key roll, amplification budget | yes | built, proven |
 | `vinc-transport` | VINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built; proofs being closed |
 | `vinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events and queries | yes | built; proofs being closed |
-| `vinc-node` | one composition of the endpoint, the connectivity client and every layer over real sessions; membership, broadcast, values, reconcile and delay-tolerant delivery are in | yes | built; write-through proofs, stream urgencies, FLOOR_PUSH, the hub's relay duties and restart of held bundles are in; the scenario runner and the facade move onto it next |
+| `vinc-node` | one composition of the endpoint, the connectivity client and every layer over real sessions; membership, broadcast, values, reconcile and delay-tolerant delivery are in | yes | built; the scenario suite and the facade run on it; proofs being closed |
 | `vinc-connect` | TCP and WebSocket carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side proven |
 | `vinc-membership` | hub roster and member view: leases, independent-path probes, restart-safe incarnations, leave, revocation | yes | built; proofs being closed |
 | `vinc-values` | verified streaming of values of any size from up to four providers, with resume and zero-copy serving | yes | built, proven; corrections being made |
@@ -172,21 +174,51 @@ checked, the assumptions and what is still being closed.
 
 ## Open items
 
+As of 12 November 2026, `master` at `d1706d9`. Every item names the issue that tracks it.
+
+- **Message loss in broadcast (the work in hand).** A burst of 2,000 messages of 4 KiB through a hub to ten
+  subscribers loses 1.35% to 14.9% of them in the harness, where iroh and rust-libp2p lose none (51% before the hub
+  kept each subscriber's place in its topic log): [#74](https://github.com/sourcenetwork/vinc/issues/74). A partition
+  that heals lost 6.4% when it was last measured, against none for iroh and 15.8% for rust-libp2p:
+  [#101](https://github.com/sourcenetwork/vinc/issues/101).
 - **The facade** reaches peers directly and through relays, and has topic broadcast through a hub, lookup of a peer
   by its id through signed records, export and restore of its state, revocation, stream urgency, and two stream calls
   that pass a buffer instead of copying it (`RecvStream::read_with`, `SendStream::send_owned`). One endpoint can be
-  hub and relay for other nodes (`Builder::relay_role`), run by its own `run` with nothing beside it. Not yet: an owned
-  buffer written in the middle of a stream; a build without `std` (the crates below the facade have one).
-- **Performance.** On loopback on the build host (12 November 2026, commit `38301fc`, all three in one quiet window)
+  hub and relay for other nodes (`Builder::relay_role`), run by its own `run` with nothing beside it. A session
+  carries 100 streams each way. Not yet: a build without `std`, which the crates below the facade have
+  ([#99](https://github.com/sourcenetwork/vinc/issues/99)); an owned buffer written in the middle of a stream. With
+  the default limits about twelve streams that are busy and unfinished at once make further opens wait
+  ([#95](https://github.com/sourcenetwork/vinc/issues/95)).
+- **Performance on loopback.** On the build host (12 November 2026, commit `38301fc`, all three in one quiet window)
   VINC leads iroh and rust-libp2p on bulk throughput (699 against 518 and 462 MiB/s on one stream), on CPU per byte
   (2.71 against 4.75 and 5.14 ns), on the 64-byte round trip (68 against 93 and 78 microseconds) and on connection
   setup. It is behind on the memory of an idle endpoint (6.3 MiB against 3.3 and 0.6), on a client's memory per
   connection (277 KiB against 185 and 107) and on the time to the first byte when 1000 connections start at once
-  (834 ms against iroh's 323). The emulated-network scenarios were last measured before these changes. `just compare`
-  and the harness print every row, the ones VINC loses included.
+  (834 ms against iroh's 323). The other two were not measured again since; VINC alone, before and after the change
+  to 100 streams, moved from 680 to 712 MiB/s to 711 to 730 MiB/s on one stream, and a server's memory per connection
+  rose by 1.6 to 4.5 KiB.
+- **Performance on the emulated network** (containers on the build host, three repetitions, medians). Requests on a
+  stream each, 64 in flight over a 20 ms path: 2,103 a second against 2,000 for iroh and 48 for rust-libp2p with 4 KiB
+  bodies, 2,203 against 2,300 and 48 with 512-byte bodies. Behind: the slowest requests with 4 and 16 in flight
+  (25.6 and 29.5 ms against 21.1 and 21.2, [#94](https://github.com/sourcenetwork/vinc/issues/94)), the fetch of a
+  1 KiB value over a WAN (315 ms against 114 and 155,
+  [#100](https://github.com/sourcenetwork/vinc/issues/100)) and the median delivery of a topic message on a LAN
+  (740 microseconds against 438, [#102](https://github.com/sourcenetwork/vinc/issues/102)). `just compare` and the
+  harness print every row, the ones VINC loses included.
+- **Transport rules not in yet.** A session whose relay path goes silent is not closed before the idle timeout
+  ([#96](https://github.com/sourcenetwork/vinc/issues/96)); an endpoint in the relay role still sends tail repair
+  on the sessions it serves ([#97](https://github.com/sourcenetwork/vinc/issues/97)).
+- **The scenario suite** passes every gate on the seeds it runs, except the mobile scenario, which is ignored on its
+  seed; the full run over 96 seeds has not been made on this code
+  ([#98](https://github.com/sourcenetwork/vinc/issues/98)). The two scenarios that need the values and reconcile
+  layers in one composition wait for them.
+- **The proofs** are behind the code on purpose: code lands first. What each merge left to prove or to check again is
+  listed in [#105](https://github.com/sourcenetwork/vinc/issues/105), beside
+  [Being closed](docs/PROOFS.md#being-closed).
+- `vinc-values`: five corrections found by its proofs are being made.
 - **The harness** has run on no machine but the build host's containers; the Terraform for separate machines is in
   `distributed/infra/` and has not been applied.
-- **The proofs** listed under [Being closed](docs/PROOFS.md#being-closed).
-- `vinc-values`: five corrections found by its proofs are being made.
-- **The scenario suite** passes every gate on every seed it runs; the two scenarios that need the values and reconcile
-  layers in one composition wait for them.
+- **Housekeeping.** Four test files are over the 1,000-line limit
+  ([#103](https://github.com/sourcenetwork/vinc/issues/103)); one unexplained move of a warm-up step in the leak test
+  ([#104](https://github.com/sourcenetwork/vinc/issues/104)); one old branch to check and delete
+  ([#106](https://github.com/sourcenetwork/vinc/issues/106)).
