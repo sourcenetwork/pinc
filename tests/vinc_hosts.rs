@@ -159,6 +159,52 @@ async fn a_batching_host_gets_whole_transmits() {
     );
 }
 
+/// One transmit on the in-memory wire: its bytes, its sender and its segment size.
+type Wire = (Vec<u8>, SocketAddr, usize);
+
+/// An endpoint whose host is a pair of in-memory queues: a send puts the whole transmit on the peer's queue, a receive
+/// hands a whole transmit back with its segment size, as a socket with segmentation and receive offload does.
+/// `coalesced` counts the receives that held more than one datagram.
+fn wired_end(
+    me: SocketAddr,
+    rx: smol::channel::Receiver<Wire>,
+    tx: smol::channel::Sender<Wire>,
+    coalesced: Arc<std::sync::atomic::AtomicUsize>,
+) -> vinc::Endpoint<impl vinc::Hosted> {
+    Vinc::builder()
+        .alpn(ALPN)
+        .batch(8)
+        .local_addr(me)
+        .build_batched(
+            async move |buf: &mut [u8]| {
+                let (d, from, segment) = rx.recv().await.map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+                buf[..d.len()].copy_from_slice(&d);
+                if d.len() > segment {
+                    coalesced.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Ok((d.len(), from, segment))
+            },
+            async move |pkt: &[u8], _to: SocketAddr, segment: usize| {
+                let _ = tx.send((pkt.to_vec(), me, segment)).await;
+                Ok(pkt.len().div_ceil(segment.max(1)))
+            },
+            async |at: Instant| tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+        )
+        .unwrap()
+}
+
+/// Two endpoints wired to each other in memory; `coalesced` counts the first one's receives of several datagrams.
+fn wired_pair(
+    coalesced: Arc<std::sync::atomic::AtomicUsize>,
+) -> (vinc::Endpoint<impl vinc::Hosted>, vinc::Endpoint<impl vinc::Hosted>) {
+    let (a, b): (SocketAddr, SocketAddr) = ("10.0.0.1:7".parse().unwrap(), "10.0.0.2:7".parse().unwrap());
+    let ((to_a, at_a), (to_b, at_b)) = (smol::channel::unbounded(), smol::channel::unbounded());
+    (
+        wired_end(a, at_a, to_b, coalesced),
+        wired_end(b, at_b, to_a, Arc::new(std::sync::atomic::AtomicUsize::new(0))),
+    )
+}
+
 /// A host that coalesces: each receive hands the endpoint a whole transmit of its peer, several datagrams with their
 /// segment size, as a socket with receive offload does. Everything arrives, in order, and batches did hold more than
 /// one datagram.
@@ -166,41 +212,8 @@ async fn a_batching_host_gets_whole_transmits() {
 async fn a_coalescing_host_delivers_several_datagrams_in_one_receive() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use smol::channel::{Receiver, Sender, unbounded};
-
-    type Wire = (Vec<u8>, SocketAddr, usize);
-    fn bind(
-        me: SocketAddr,
-        rx: Receiver<Wire>,
-        tx: Sender<Wire>,
-        coalesced: Arc<AtomicUsize>,
-    ) -> vinc::Endpoint<impl vinc::Hosted> {
-        Vinc::builder()
-            .alpn(ALPN)
-            .batch(8)
-            .local_addr(me)
-            .build_batched(
-                async move |buf: &mut [u8]| {
-                    let (d, from, segment) = rx.recv().await.map_err(|_| std::io::ErrorKind::BrokenPipe)?;
-                    buf[..d.len()].copy_from_slice(&d);
-                    if d.len() > segment {
-                        coalesced.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Ok((d.len(), from, segment))
-                },
-                async move |pkt: &[u8], _to: SocketAddr, segment: usize| {
-                    let _ = tx.send((pkt.to_vec(), me, segment)).await;
-                    Ok(pkt.len().div_ceil(segment.max(1)))
-                },
-                async |at: Instant| tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
-            )
-            .unwrap()
-    }
-    let (a, b): (SocketAddr, SocketAddr) = ("10.0.0.1:7".parse().unwrap(), "10.0.0.2:7".parse().unwrap());
-    let ((to_a, at_a), (to_b, at_b)) = (unbounded(), unbounded());
     let coalesced = Arc::new(AtomicUsize::new(0));
-    let server = bind(a, at_a, to_b, Arc::clone(&coalesced));
-    let client = bind(b, at_b, to_a, Arc::new(AtomicUsize::new(0)));
+    let (server, client) = wired_pair(Arc::clone(&coalesced));
     let addr = server.addr();
     let local = tokio::task::LocalSet::new();
     local
@@ -227,4 +240,82 @@ async fn a_coalescing_host_delivers_several_datagrams_in_one_receive() {
         coalesced.load(Ordering::Relaxed) > 0,
         "no receive held more than one datagram: the batch path was not exercised"
     );
+}
+
+/// A reader that borrows: the stream lends its bytes in place, consumes what the reader says it used and lends the
+/// rest again; a reader that uses nothing gets the same bytes back; the end of the stream is `None`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stream_lends_its_bytes_to_the_reader_in_place() {
+    let (server, client) = wired_pair(Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+    let addr = server.addr();
+    let payload: Vec<u8> = (0..100_000u32).map(|i| (i % 249) as u8).collect();
+    let sent = payload.clone();
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let serve = tokio::task::spawn_local(async move {
+                let conn = server.accept().await.unwrap().into_connection();
+                let mut rx = conn.accept_uni().await.unwrap();
+                let mut got = Vec::new();
+                // The first bytes are looked at and left where they are: they come again.
+                let mut first = Vec::new();
+                assert_eq!(
+                    rx.read_with(|b| {
+                        first = b.to_vec();
+                        0
+                    })
+                    .await
+                    .unwrap(),
+                    Some(0)
+                );
+                assert_ne!(first.len(), 0);
+                let mut again = Vec::new();
+                assert_eq!(
+                    rx.read_with(|b| {
+                        again = b.to_vec();
+                        3
+                    })
+                    .await
+                    .unwrap(),
+                    Some(3)
+                );
+                assert_eq!(&again[..first.len()], &first[..], "bytes left unused were lent again");
+                got.extend_from_slice(&again[..3]);
+                // Then at most 1000 bytes of each loan are used, so most loans are used in parts.
+                let (mut loans, mut largest) = (0usize, 0usize);
+                while let Some(n) = rx
+                    .read_with(|b| {
+                        let n = b.len().min(1000);
+                        got.extend_from_slice(&b[..n]);
+                        largest = largest.max(b.len());
+                        n
+                    })
+                    .await
+                    .unwrap()
+                {
+                    assert!(n > 0, "a loan is never empty");
+                    loans += 1;
+                }
+                assert_eq!(
+                    rx.read_with(|_| unreachable!("nothing is lent after the end"))
+                        .await
+                        .unwrap(),
+                    None
+                );
+                assert!(
+                    largest > 1000 && loans >= 100,
+                    "{loans} loans, the largest {largest} bytes"
+                );
+                conn.close(0).await;
+                got
+            });
+            let conn = client.connect(addr, ALPN).await.unwrap();
+            let mut tx = conn.open_uni().await.unwrap();
+            tx.write_all(&sent).await.unwrap();
+            tx.finish().await.unwrap();
+            // The client's endpoint runs while one of its futures is awaited: this one, until the reader closes.
+            conn.closed().await;
+            assert_eq!(serve.await.unwrap(), payload);
+        })
+        .await;
 }

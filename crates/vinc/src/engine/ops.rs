@@ -238,16 +238,31 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if buf.is_empty() {
             return Try::Done(Ok((0, None)));
         }
-        let session = info.id;
-        let n = match self.node.endpoint().query(Query::Read { session, stream }) {
-            Answer::Chunk(c) => {
-                let n = c.len().min(buf.len());
-                if let (Some(d), Some(s)) = (buf.get_mut(..n), c.get(..n)) {
-                    d.copy_from_slice(s);
-                }
-                n
+        self.read_with(now, info, stream, |c| {
+            let n = c.len().min(buf.len());
+            if let (Some(d), Some(s)) = (buf.get_mut(..n), c.get(..n)) {
+                d.copy_from_slice(s);
             }
-            _ => 0,
+            n
+        })
+    }
+
+    /// Lend what a stream has next to `take`, which says how many of the bytes it used: that many are consumed.
+    /// Answers as [`read`](Self::read). `take` is not called while the stream has nothing.
+    pub(crate) fn read_with(
+        &mut self,
+        now: u64,
+        info: &SessInfo,
+        stream: StreamId,
+        mut take: impl FnMut(&[u8]) -> usize,
+    ) -> Try<Result<(usize, Option<Result<()>>)>> {
+        if !self.sessions.contains_key(&info.id) {
+            return Try::Done(Err(info.gone()));
+        }
+        let session = info.id;
+        let (n, offered) = match self.node.endpoint().query(Query::Read { session, stream }) {
+            Answer::Chunk(c) if !c.is_empty() => (take(c).min(c.len()), true),
+            _ => (0, false),
         };
         let status = match self.cmd(now, || Command::Consume { session, stream, n }) {
             Ok(Value::Recv(st)) => st,
@@ -262,7 +277,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if n > 0 {
             self.wake_s(session, SKey::Open);
             Try::Done(Ok((n, end)))
-        } else if end.is_some() {
+        } else if end.is_some() || offered {
+            // The end, or bytes the taker left where they are: waiting would be for nothing.
             Try::Done(Ok((0, end)))
         } else {
             Try::Wait(Wait::S(session, SKey::Read(stream)))

@@ -185,6 +185,35 @@ impl<H: Hosted> RecvStream<H> {
         self.end.map_or(Ok(Some(0)), |e| e.map(|()| None))
     }
 
+    /// Lend the bytes the stream holds next to `take`, where they are and without a copy. `take` returns how many of
+    /// them it used, and those are consumed; the rest is lent again by the next call. Returns that number, or
+    /// `Ok(None)` at the end of the stream. Waits while the stream has none, so `take` never sees an empty slice.
+    ///
+    /// The slice is what arrived in one piece, at most 16 KiB. `take` runs inside the endpoint: it must not use the
+    /// endpoint, its connections or its streams.
+    ///
+    /// # Errors
+    /// As [`read`](Self::read).
+    pub async fn read_with(&mut self, mut take: impl FnMut(&[u8]) -> usize) -> Result<Option<usize>> {
+        if let Some(code) = self.stopped {
+            return Err(Error::new(ErrorKind::Stopped(code), "the stream was stopped"));
+        }
+        if let Some(end) = self.end {
+            return end.map(|()| None);
+        }
+        let (c, id) = (&self.conn, self.id);
+        let (n, end) =
+            c.sh.run(|core, now| core.read_with(now, &c.info, id, &mut take))
+                .await?;
+        if end.is_some() {
+            self.end = end;
+        }
+        match self.end {
+            Some(e) if n == 0 => e.map(|()| None),
+            _ => Ok(Some(n)),
+        }
+    }
+
     /// Read the next bytes the stream has, at most `max`; `Ok(None)` at the end. Allocates the chunk.
     ///
     /// # Errors
