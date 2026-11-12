@@ -467,7 +467,7 @@ ep_impl! {
         self.sync_cids(i, true);
         self.sync_ack_every(i);
         self.defer_mtu_for_quiet(i);
-        if optimistic && self.cfg.early_report {
+        if optimistic {
             trace!(self, now, Early { slot: i as u64, rule: 1 });
             self.announce(i);
         }

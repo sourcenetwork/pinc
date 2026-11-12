@@ -564,10 +564,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         }
     }
 
-    /// Dial `to` for `alpn`. A peer already connected gets a sub-session at once, with no round trip. Any other dial
-    /// returns once the peer answered its handshake, so a peer that stopped without closing is never handed back as a
-    /// connection. Without direct addresses in `to` the discovery hook and the address book are used; the hook has
-    /// [`LOOKUP_WAIT`] to answer.
+    /// Dial `to` for `alpn`. A peer already connected gets a sub-session at once, with no round trip. Without direct
+    /// addresses in `to` the discovery hook and the address book are used; the hook has [`LOOKUP_WAIT`] to answer.
     /// Dropping the future closes a session that was about to open.
     ///
     /// # Errors
