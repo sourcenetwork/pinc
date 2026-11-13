@@ -80,6 +80,11 @@ import Vinc.TransportHdr
 import Vinc.TransportHdrThm
 import Vinc.TransportHdrSplit
 import Vinc.TraceHdr
+import Vinc.TransportFrame
+import Vinc.TransportFrameThm
+import Vinc.TransportFrameCodec
+import Vinc.TransportFrameAck
+import Vinc.TraceFrame
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery
