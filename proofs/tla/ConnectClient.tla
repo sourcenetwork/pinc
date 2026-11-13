@@ -28,10 +28,11 @@
 (*              due only after the wait; nothing waits forever             *)
 (*  NetOK       the home is a valid relay and moves only to a relay with   *)
 (*              a strictly lower round trip, or away from an unhealthy     *)
-(*              one; a failover lands on a healthy relay; a relay is       *)
-(*              unhealthy after three misses in a row and healthy again    *)
-(*              after an answer; after three unanswered rounds the first   *)
-(*              relay is the home                                          *)
+(*              one; a failover lands on a relay known to work (it         *)
+(*              answered a probe since it last failed, or its carrier is   *)
+(*              open); a relay is unhealthy after three misses in a row    *)
+(*              and healthy again after an answer; after three unanswered  *)
+(*              rounds the first relay is the home                         *)
 (* Lean: Vinc/ConnectClientThm.lean.                                       *)
 (***************************************************************************)
 EXTENDS ConnectClientOps
@@ -123,7 +124,7 @@ DoNet ==
     \/ \E now \in Times, rl \in 0..1, nc \in 1..1, a \in 1..2 : NC' = NAnswered(NC, now, rl, <<nc>>, a).N 
     \/ \E rl \in 0..1 : NC' = NFailed(NC, rl)
     \/ \E rl \in 0..1 : NC' = NHealthy(NC, rl)
-    \/ \E us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>, <<FALSE, TRUE>>} : NC' = NFailover(NC, us).N
+    \/ \E us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>, <<FALSE, TRUE>>}, op \in BOOLEAN \X BOOLEAN : NC' = NFailover(NC, us, op).N
     \/ NC' = NRestart(NC)
     \/ \E fr \in -1..1 : NC' = NMissing(NC, fr).N
 
@@ -150,8 +151,10 @@ LookupsOK ==
 NetOK ==
     /\ NC.home \in -1..1
     /\ \A i \in 0..1 : Unhealthy(NC, i) = (NC.missed[i + 1] >= MISSLIMIT)
-    /\ \A us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>} :
-         LET f == NFailover(NC, us) IN f.res >= 0 => (f.res # NC.home /\ ~Unhealthy(NC, f.res) /\ us[f.res + 1] /\ f.N.home = f.res)
+    /\ \A us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>}, op \in BOOLEAN \X BOOLEAN :
+         LET f == NFailover(NC, us, op) IN
+         f.res >= 0 => (f.res # NC.home /\ ~Unhealthy(NC, f.res) /\ us[f.res + 1] /\ f.N.home = f.res
+                        /\ ((NC.missed[f.res + 1] = 0 /\ NC.refl[f.res + 1] >= 0) \/ op[f.res + 1]))
 
 \* the miss and try counters saturate at 255 in the code; one past the threshold covers every branch
 Bounded == (\A i \in 1..2 : NC.missed[i] <= MISSLIMIT + 1) /\ NC.tries <= HOMETRIES + 1

@@ -95,7 +95,7 @@ Ev1 ==
                               /\ r.res = Ev.res /\ NetView(r.N) /\ NC' = r.N /\ Step /\ UNCHANGED <<P, T, PE, LK>>
       [] Ev.m = "failed" -> /\ NetView(NFailed(NC, Ev.relay)) /\ NC' = NFailed(NC, Ev.relay) /\ Step /\ UNCHANGED <<P, T, PE, LK>>
       [] Ev.m = "healthy" -> /\ NetView(NHealthy(NC, Ev.relay)) /\ NC' = NHealthy(NC, Ev.relay) /\ Step /\ UNCHANGED <<P, T, PE, LK>>
-      [] Ev.m = "failover" -> LET r == NFailover(NC, Ev.usable) IN
+      [] Ev.m = "failover" -> LET r == NFailover(NC, Ev.usable, Ev.open) IN
                               /\ r.res = Ev.res /\ NetView(r.N) /\ NC' = r.N /\ Step /\ UNCHANGED <<P, T, PE, LK>>
       [] Ev.m = "restart" -> /\ NetView(NRestart(NC)) /\ NC' = NRestart(NC) /\ Step /\ UNCHANGED <<P, T, PE, LK>>
       [] Ev.m = "missing" -> LET r == NMissing(NC, Ev.fr) IN
