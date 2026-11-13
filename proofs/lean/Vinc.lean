@@ -85,6 +85,9 @@ import Vinc.TransportFrameThm
 import Vinc.TransportFrameCodec
 import Vinc.TransportFrameAck
 import Vinc.TraceFrame
+import Vinc.CoreOrphan
+import Vinc.CoreOrphanThm
+import Vinc.TraceOrphan
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery

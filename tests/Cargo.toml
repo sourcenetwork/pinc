@@ -1000,6 +1000,10 @@ name = "trace_frame"
 path = "trace_frame.rs"
 
 [[test]]
+name = "trace_orphan"
+path = "trace_orphan.rs"
+
+[[test]]
 name = "trace_mtu"
 path = "trace_mtu.rs"
 

@@ -17,6 +17,7 @@ import Vinc.TracePn
 import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
+import Vinc.TraceOrphan
 import Vinc.TraceMtu
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
@@ -176,6 +177,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut cidw : TransportCid.C := {}
   let mut ccw : TraceCc.W := {}
   let mut rsw : TraceReasm.W := {}
+  let mut orw : TraceOrphan.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
@@ -475,6 +477,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           -- Frame codec events (`txfr`, written by `trace_frame`): decode, write, the iterator and the ACK ranges.
           match TraceFrame.replayEvent j with
           | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceOrphan.isTag t then
+          -- Held first-flight fragment events (`coor`, written by `trace_orphan`): the endpoint's table of them.
+          match TraceOrphan.replayEvent j orw with
+          | .ok w' =>
+            orw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

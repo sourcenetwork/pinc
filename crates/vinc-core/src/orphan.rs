@@ -155,6 +155,132 @@ impl Orphans {
     }
 }
 
+/// Test-only driver of the table, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+pub(crate) mod trace {
+    use core::net::SocketAddr;
+
+    use vinc_security::ConnId;
+
+    use super::{ORPHAN_LIFE, ORPHAN_MAX, ORPHANS, Orphans};
+
+    /// What one entry of the table holds, beside the bytes.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct OrphanEntry {
+        /// When the datagram arrived.
+        pub at: u64,
+        /// Its place in the order of arrival.
+        pub order: u64,
+        /// The destination id it names.
+        pub dcid: ConnId,
+        /// The length of the message it is a part of.
+        pub total: u64,
+        /// The local address it arrived on.
+        pub local: SocketAddr,
+        /// The address it came from.
+        pub remote: SocketAddr,
+        /// Its length.
+        pub len: usize,
+    }
+
+    /// A table of held datagrams of its own, with its state readable after every call.
+    pub struct OrphanProbe {
+        o: Orphans,
+    }
+
+    impl Default for OrphanProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl OrphanProbe {
+        /// The most datagrams held.
+        pub const SLOTS: usize = ORPHANS;
+        /// The largest datagram held.
+        pub const MAX: usize = ORPHAN_MAX;
+        /// How long a held datagram stays useful.
+        pub const LIFE: u64 = ORPHAN_LIFE;
+
+        /// An empty table.
+        #[must_use]
+        pub const fn new() -> Self {
+            Self { o: Orphans::new() }
+        }
+
+        /// Let go of every datagram older than [`LIFE`](Self::LIFE) at `now`, as the endpoint's timer does.
+        pub fn expire(&mut self, now: u64) {
+            self.o.expire(now);
+        }
+
+        /// Hold a datagram, as the endpoint does for a later part of a first message that names no session.
+        pub fn hold(
+            &mut self,
+            now: u64,
+            dcid: ConnId,
+            total: u64,
+            local: SocketAddr,
+            remote: SocketAddr,
+            buf: &[u8],
+        ) -> bool {
+            self.o.hold(now, dcid, total, local, remote, buf)
+        }
+
+        /// Give out one held datagram, as the endpoint does for the session the start of the message created.
+        pub fn take(
+            &mut self,
+            now: u64,
+            dcid: &ConnId,
+            total: u64,
+            remote: &SocketAddr,
+            out: &mut [u8; ORPHAN_MAX],
+        ) -> Option<(SocketAddr, usize)> {
+            self.o.take(now, dcid, total, remote, out)
+        }
+
+        /// Entry `k` of the table.
+        #[must_use]
+        pub fn slot(&self, k: usize) -> Option<OrphanEntry> {
+            let h = self.o.held.get(k).copied().flatten()?;
+            Some(OrphanEntry {
+                at: h.at,
+                order: h.order,
+                dcid: h.dcid,
+                total: h.total,
+                local: h.local,
+                remote: h.remote,
+                len: h.len,
+            })
+        }
+
+        /// The bytes entry `k` holds, empty for a free entry.
+        #[must_use]
+        pub fn bytes(&self, k: usize) -> &[u8] {
+            let len = self.o.held.get(k).copied().flatten().map_or(0, |h| h.len);
+            self.o.data.get(k).and_then(|d| d.get(..len)).unwrap_or(&[])
+        }
+
+        /// The place in the order of arrival the next datagram held takes.
+        #[must_use]
+        pub const fn order(&self) -> u64 {
+            self.o.order
+        }
+
+        /// The counters: held, given out, expired, evicted.
+        #[must_use]
+        pub const fn counts(&self) -> [u64; 4] {
+            let c = self.o.counts;
+            [c.held, c.replayed, c.expired, c.evicted]
+        }
+
+        /// How many datagrams are held now.
+        #[must_use]
+        pub fn waiting(&self) -> usize {
+            self.o.waiting()
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test assertions")]
 mod tests {
