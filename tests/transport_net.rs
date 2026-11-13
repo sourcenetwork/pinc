@@ -205,6 +205,59 @@ fn migration_to_a_new_validated_path() {
 }
 
 #[test]
+fn a_path_rebound_to_a_new_local_address_carries_the_wake_and_the_resent_data_at_once() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(14, Params::new(150 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(150 * MS), Params::new(150 * MS));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let (up, down) = (net.a.conn.open_bi().unwrap(), net.b.conn.open_bi().unwrap());
+        let (to_server, to_client) = (pattern(3000, 5), pattern(3000, 6));
+        // Both sides send, and the client's old address then goes away: both segments are lost on the old route.
+        net.link.route(PathId(1)).up = false;
+        net.a.conn.write(up, &to_server).unwrap();
+        net.b.conn.write(down, &to_client).unwrap();
+        net.run(net.now + MS, |_| false);
+        let ptos_before = (net.a.conn.stats().ptos, net.b.conn.stats().ptos);
+        let now = net.now;
+        let sent_before = net.a.tx_log.len();
+        // The client's address changes and the link returns in one step: its path keeps everything it knows and leaves
+        // from the new address.
+        net.a.with_env(now, |c, env| {
+            c.rebind_path(PathId(1), PathId(3)).unwrap();
+            c.set_link_down(env, true);
+            c.set_link_down(env, false);
+        });
+        net.run(now, |_| false);
+        assert!(net.a.conn.path_validated(PathId(3)), "the path keeps its state");
+        assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
+        let first: Vec<_> = net.a.tx_log[sent_before..].iter().filter(|t| t.0 == now).collect();
+        assert!(
+            first.len() >= 2,
+            "the wake and the client's own data leave in the step of the move: {first:?}"
+        );
+        assert!(
+            first.iter().all(|t| t.2 == PathId(3)),
+            "nothing leaves from the old address: {first:?}"
+        );
+        // One round trip is 300 ms: the server resends on the wake at once, and neither probe timeout could have fired.
+        assert!(
+            net.run(now + 450 * MS, |n| {
+                n.a.read.get(&down).is_some_and(|d| d.len() == to_client.len())
+                    && n.b.read.get(&up).is_some_and(|d| d.len() == to_server.len())
+            }),
+            "both segments arrive within one round trip of the move"
+        );
+        assert_eq!(
+            (net.a.conn.stats().ptos, net.b.conn.stats().ptos),
+            ptos_before,
+            "no probe timeout fired"
+        );
+    });
+}
+
+#[test]
 fn nat_rebinding_keeps_the_transfer_alive() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

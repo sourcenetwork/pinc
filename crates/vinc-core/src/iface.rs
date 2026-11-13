@@ -123,8 +123,8 @@ ep_impl! {
         self.quiet_until = now.saturating_add(RESUME_QUIET);
         for i in 0..K {
             let wake = self.leaves_from(i, &old, false);
-            // Every path of the session that leaves from the old address is dead, not only the active one: a standby
-            // path left on it would be chosen again later and carry nothing.
+            // Every path of the session that leaves from the old address moves to the new one, not only the active one: a
+            // standby path left on it would be chosen again later and carry nothing.
             for j in 0..D {
                 let Some(((l, remote), generation)) = self.paths.at_index(j).map(|(k, g)| (*k, *g)) else { continue };
                 if l != old {
@@ -136,12 +136,21 @@ ep_impl! {
                     continue;
                 }
                 let pid = self.path_id(new, remote);
-                if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
-                    let mut env = env!(self, now);
-                    let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
-                    // The old local address is gone: the session leaves the path as soon as the new one validates.
-                    let _ = conn.path_lost(lost);
+                let Some(slot) = self.slots.get_mut(i) else { continue };
+                let Some(conn) = slot.conn.as_mut() else { continue };
+                if conn.rebind_path(lost, pid).is_ok() {
+                    // The same path to the same peer address, now leaving from the new address: it keeps what it knows,
+                    // and the stamp of what was sent and heard on it follows.
+                    if let Some(st) = slot.m.paths.iter_mut().flatten().find(|st| st.id == lost) {
+                        st.id = pid;
+                    }
+                    continue;
                 }
+                // The session already tracks a path to this peer from the new address: the old one is gone, and the
+                // session leaves it as soon as the new one validates.
+                let mut env = env!(self, now);
+                let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
+                let _ = conn.path_lost(lost);
             }
             if wake && let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 // The link went away and came back on the new address: the peer is woken on the new path.

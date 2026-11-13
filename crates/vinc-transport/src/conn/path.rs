@@ -228,6 +228,8 @@ pub enum PathError {
     NotValidated,
     /// The path is the active one.
     Active,
+    /// A path with that id is already tracked.
+    Exists,
 }
 
 impl core::fmt::Display for PathError {
@@ -237,6 +239,7 @@ impl core::fmt::Display for PathError {
             Self::Unknown => "unknown path",
             Self::NotValidated => "the path is not validated",
             Self::Active => "the path is the active one",
+            Self::Exists => "the path is already tracked",
         })
     }
 }
@@ -310,6 +313,25 @@ conn_impl! {
         }
         if self.phase == Phase::Connected {
             self.start_punch(env, i);
+        }
+        Ok(())
+    }
+
+    /// The path `old` now leaves from another local address, and `new` is its id from here on: the host's interface
+    /// kept its network but changed address. The path keeps its slot and all it knows (validated, round trip,
+    /// congestion and packet size state, the id it sends with, whether it is the active path), as the same path to the
+    /// same peer address does when only the interface under it moves.
+    ///
+    /// # Errors
+    /// [`PathError::Unknown`] if `old` is not tracked, [`PathError::Exists`] if `new` already is (the caller then adds
+    /// `new` and drops `old` as for a path that is gone).
+    pub fn rebind_path(&mut self, old: PathId, new: PathId) -> Result<(), PathError> {
+        let i = self.paths.find(old).ok_or(PathError::Unknown)?;
+        if self.paths.find(new).is_some() {
+            return Err(PathError::Exists);
+        }
+        if let Some(p) = self.paths.get_mut(i) {
+            p.id = new;
         }
         Ok(())
     }

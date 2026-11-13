@@ -417,6 +417,14 @@ fn a_session_goes_on_when_its_node_changes_address() {
     });
 }
 
+/// The addresses the active path of session `sa` of node `a` runs between: local, then remote.
+fn route_of(net: &mut CoreNet, a: usize, sa: SessionId) -> Option<(std::net::SocketAddr, std::net::SocketAddr)> {
+    let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(sa)) else {
+        panic!()
+    };
+    st.route
+}
+
 #[test]
 fn a_standby_path_that_leaves_from_the_old_address_moves_with_the_address() {
     big_stack(|| {
@@ -428,14 +436,72 @@ fn a_standby_path_that_leaves_from_the_old_address_moves_with_the_address() {
         let now = net.now;
         net.nodes[a].cmd(now, Command::Punch { session: sa, addr: b2 }).unwrap();
         net.run_for(2 * SEC_NS);
-        // The node moves. The old address reaches nobody, and the new address reaches the peer only at its second
-        // address: the session can go on only if its standby path to that address moved with the node.
+        let b1 = net.nodes[b].addr;
+        let route = route_of(&mut net, a, sa);
+        assert_eq!(
+            route,
+            Some((net.nodes[a].addr, b1)),
+            "the active path runs to the peer's first address"
+        );
+        // The node moves. Each path of the session that left from the old address now leaves from the new one, with
+        // its state: the active path stays the active one and the standby path keeps probing its own address.
         let new: std::net::SocketAddr = ([10, 0, 9, 1], 4433).into();
         let old = net.nodes[a].addr;
-        let b1 = net.nodes[b].addr;
         net.nodes[a].addr = new;
+        let (from_old, to_b2) = (
+            std::rc::Rc::new(std::cell::Cell::new(0u32)),
+            std::rc::Rc::new(std::cell::Cell::new(0u32)),
+        );
+        let (old_count, b2_count) = (from_old.clone(), to_b2.clone());
         net.loss = Some(Box::new(move |from, to, _| {
-            from == old || (from == new && to == b1) || (from == b1 && to == new)
+            if from == old {
+                old_count.set(old_count.get() + 1);
+            }
+            if from == new && to == b2 {
+                b2_count.set(b2_count.get() + 1);
+            }
+            from == old
+        }));
+        let now = net.now;
+        net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
+        net.nodes[a]
+            .ep
+            .iface_event(now, IfaceId(0), IfaceEvent::AddrChange(new));
+        net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Up);
+        assert_eq!(
+            route_of(&mut net, a, sa),
+            Some((new, b1)),
+            "the active path stays the active one and leaves from the new address"
+        );
+        open_and_send(&mut net, a, sa, b"after");
+        net.run_for(8 * SEC_NS);
+        assert_eq!(
+            from_old.get(),
+            0,
+            "no datagram leaves from the old address after the change"
+        );
+        assert!(to_b2.get() >= 1, "the standby path leaves from the new address too");
+    });
+}
+
+#[test]
+fn after_an_address_change_the_session_leaves_from_the_new_address_at_once() {
+    big_stack(|| {
+        let mut net = CoreNet::new(5 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _sb) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(2 * SEC_NS);
+        let new: std::net::SocketAddr = ([10, 0, 9, 1], 4433).into();
+        let old = net.nodes[a].addr;
+        net.nodes[a].addr = new;
+        // Every datagram that still leaves from the old address is counted, and lost.
+        let from_old = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counter = from_old.clone();
+        net.loss = Some(Box::new(move |from, _, _| {
+            if from == old {
+                counter.set(counter.get() + 1);
+            }
+            from == old
         }));
         let now = net.now;
         net.nodes[a].ep.iface_event(now, IfaceId(0), IfaceEvent::Down);
@@ -448,6 +514,11 @@ fn a_standby_path_that_leaves_from_the_old_address_moves_with_the_address() {
         assert!(
             net.run(t0 + 6 * SEC_NS, |n| !n.nodes[b].fin.is_empty()),
             "nothing from the moved node"
+        );
+        assert_eq!(
+            from_old.get(),
+            0,
+            "no datagram leaves from the old address after the change"
         );
     });
 }
