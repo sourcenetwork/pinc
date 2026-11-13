@@ -19,6 +19,9 @@
 //! - A message from an origin the access-control layer has not answered for is held, at most 64, until it answers.
 //! - With no hub reachable, a publisher sends the message straight to the topic's subscribers over member sessions.
 //! - A hub keeps a member's subscriptions while it is held down and tells the member when they are live again.
+//! - A member that names the peers it holds sessions with ([`Topics::set_adjacent`]) is reached through a hub only
+//!   from its connected component, as on a gossip mesh: a hub hands it a message only when a chain of sessions that
+//!   both ends reported links it to the origin, or the origin is a hub. The no-hub fallback is not scoped.
 //!
 //! Sizes are configuration ([`Limits`]): the body limit, the log ring, the topic count and the subscriber cap. Data
 //! larger than the limit goes by reference: broadcast a root or CID and fetch the bytes with `vinc-values`.
@@ -54,6 +57,8 @@ mod node;
 #[cfg(feature = "alloc")]
 mod publish;
 #[cfg(feature = "alloc")]
+mod reach;
+#[cfg(feature = "alloc")]
 mod subs;
 #[cfg(feature = "alloc")]
 mod table;
@@ -64,3 +69,5 @@ pub use event::{HoldWhy, PublishMode, Reject, Tag, Trace, topic_tag};
 pub use host::{Event, Host, Lane};
 #[cfg(feature = "alloc")]
 pub use node::{Config, Limits, Refused, StartError, Topics};
+#[cfg(feature = "alloc")]
+pub use reach::ReachStats;

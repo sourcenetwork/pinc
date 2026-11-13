@@ -275,3 +275,56 @@ async fn a_publish_past_the_tracked_ones_waits_for_the_hub_and_then_goes() {
     })
     .await;
 }
+
+#[nuclei::test]
+async fn with_connected_topics_a_group_hears_only_the_publishers_its_sessions_link_it_to() {
+    const APP: &[u8] = b"app";
+    const T: &[u8] = b"doc";
+    let hub = lo_endpoint!(vinc_common::builder().seed(&[10; 32]).unwrap().hub());
+    run(&hub);
+    let relay = hub_relay(hub.local_addr(), hub.id());
+    let member = |seed: u8| {
+        vinc_common::builder()
+            .seed(&[seed; 32])
+            .unwrap()
+            .relays([relay])
+            .alpn(APP)
+            .connected_topics()
+    };
+    let (a1, a2, b1) = (
+        lo_endpoint!(member(1)),
+        lo_endpoint!(member(2)),
+        lo_endpoint!(member(3)),
+    );
+    run(&a1);
+    run(&a2);
+    run(&b1);
+    within(120, async {
+        // A1 - A2 hold an application session; B1 holds none.
+        let _conn = a1.connect(a2.addr(), APP).await.unwrap();
+        a1.join(T, &[]).await.unwrap();
+        a2.join(T, &[]).await.unwrap();
+        b1.join(T, &[]).await.unwrap();
+        let mut got = None;
+        for _ in 0..200 {
+            a1.publish(T, b"from a1", None).await.unwrap();
+            if let Some(m) = next_message!(a2, 300) {
+                got = Some(m);
+                break;
+            }
+        }
+        assert_eq!(got.expect("A2 never heard A1").4, b"from a1");
+        for _ in 0..5 {
+            a1.publish(T, b"from a1", None).await.unwrap();
+            b1.publish(T, b"from b1", None).await.unwrap();
+        }
+        assert!(
+            next_message!(b1, 2_000).is_none(),
+            "B1 has no session with A1 and hears nothing"
+        );
+        while let Some(m) = next_message!(a2, 500) {
+            assert_eq!(m.1, a1.id(), "A2 hears only A1, never B1");
+        }
+    })
+    .await;
+}

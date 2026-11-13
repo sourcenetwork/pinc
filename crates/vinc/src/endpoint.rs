@@ -79,6 +79,7 @@ impl Vinc {
             local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
             carriers: NoCarriers,
             hub: false,
+            connected_topics: false,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             role: (),
         }
@@ -102,6 +103,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarri
     local: SocketAddr,
     carriers: C,
     hub: bool,
+    connected_topics: bool,
     connect_timeout: Duration,
     role: Q,
 }
@@ -147,6 +149,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             local: self.local,
             carriers: self.carriers,
             hub: self.hub,
+            connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
             role: self.role,
         }
@@ -214,6 +217,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             local: self.local,
             carriers: CarrierFns::new(open, read, write, close),
             hub: self.hub,
+            connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
             role: self.role,
         }
@@ -234,6 +238,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             local: self.local,
             carriers: self.carriers,
             hub: self.hub,
+            connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
             role: self.role,
         }
@@ -252,6 +257,23 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     #[must_use]
     pub const fn hub(mut self) -> Self {
         self.hub = true;
+        self
+    }
+
+    /// Give topics a gossip mesh's reach through the hubs: a hub hands this endpoint a topic message only from a
+    /// publisher it is linked to by a chain of the application's sessions (this endpoint's peers, their peers and so
+    /// on), even when a group with no path to it shares the hub. The endpoint tells its hubs the peers it holds
+    /// sessions with whenever that set changes; a hub links two endpoints only when both name each other. Endpoints
+    /// with and without this setting do not hear each other's topic messages through a hub. Off by default: a hub then
+    /// reaches every member of a topic.
+    ///
+    /// The scope is the hubs' to keep. While no hub is reachable, a publisher sends straight to the topic's
+    /// subscribers over member sessions, and members keep no records: in that fallback a message reaches every
+    /// subscriber the publisher knows, in its component or not. A hub's own application and a hub's own publishes are
+    /// never scoped, and on a hub this setting does nothing.
+    #[must_use]
+    pub const fn connected_topics(mut self) -> Self {
+        self.connected_topics = true;
         self
     }
 
@@ -277,6 +299,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             local: self.local,
             carriers: self.carriers,
             hub: self.hub,
+            connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
             role: self.role,
         }
@@ -394,6 +417,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             local,
             carriers,
             hub,
+            connected_topics,
             connect_timeout,
             role,
         } = self;
@@ -413,6 +437,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             locals: interfaces(local),
             relays: relays.clone(),
             hub,
+            connected_topics,
             relaying: <Q::Built as Role>::ON,
             connect_timeout: u64::try_from(connect_timeout.as_nanos()).unwrap_or(u64::MAX),
         };

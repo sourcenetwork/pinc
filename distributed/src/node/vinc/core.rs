@@ -765,6 +765,18 @@ impl<const K: usize, const D: usize> Core<K, D> {
         r
     }
 
+    /// Name the peers this node holds sessions with, so the hubs scope its topics to its connected component.
+    ///
+    /// # Errors
+    /// What the node refused.
+    pub fn set_adjacent(&mut self, peers: &[[u8; 32]]) -> Result<usize, vinc_broadcast::Refused> {
+        let now = self.now();
+        self.node.set_wall_ms(now, wall_ms());
+        let r = self.node.set_adjacent(now, peers);
+        self.pump(now);
+        r
+    }
+
     /// Apply a command of the application; the id of the fetch or round it started, else 0.
     ///
     /// # Errors

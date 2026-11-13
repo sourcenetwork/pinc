@@ -22,6 +22,7 @@ use crate::consts::{
 use crate::event::{Trace, topic_tag};
 use crate::host::{Host, Lane};
 use crate::node::{Refused, Topics};
+use crate::reach::{offers, reaches};
 use crate::wire::{self, Head, get_u64, ty};
 
 /// Offer `mids` to `peers` as HAVE frames: every id, [`HAVE_MAX`] to a frame, oldest first. `sent` hears the peer and
@@ -132,6 +133,10 @@ impl Topics {
 
     /// Membership asks the node to subscribe again at `hub` (a snapshot, a new session or a restored entry).
     pub fn resubscribe<H: Host>(&mut self, h: &mut H, now: Nanos, hub: &NodeId) {
+        // The hub hears whom this node is connected to before it answers the subscriptions.
+        if self.is_boot(hub) {
+            self.send_adj(h, Some(hub));
+        }
         if !self.is_hub && self.primary == Some(*hub) {
             let since = self.since_ms();
             self.resub_all(h, hub, since);
@@ -146,6 +151,9 @@ impl Topics {
         self.trace(|| Trace::Primary { hub: *new });
         if self.is_hub {
             return;
+        }
+        if self.is_boot(new) {
+            self.send_adj(h, Some(new));
         }
         let since = self.since_ms();
         let topics = core::mem::take(&mut self.topics);
@@ -250,7 +258,8 @@ impl Topics {
                 continue;
             };
             let to = [*member];
-            let mids = log.window(now, span, 0);
+            let reach = &self.reach;
+            let mids = log.window(now, span, 0).filter(|m| offers(reach, log, *m, member));
             offer(h, &mut self.ids, &mut self.scratch, &to, k, mids, |_, _| {});
         }
         self.topics = topics;
@@ -282,6 +291,7 @@ impl Topics {
                         continue;
                     };
                     if head.origin != from
+                        && reaches(&self.reach, head.origin, from)
                         && wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok()
                         && h.send(from, Lane::Reply, &self.scratch)
                     {
@@ -297,7 +307,7 @@ impl Topics {
                     &mut self.scratch,
                     &to,
                     topic,
-                    log.since(since),
+                    log.since(since).filter(|m| offers(&self.reach, log, *m, from)),
                     |peer, count| {
                         tq.push(|| Trace::HaveSent {
                             peer: *peer,
@@ -370,6 +380,9 @@ impl Topics {
             let Ok((head, _)) = Head::parse(l) else {
                 continue;
             };
+            if !reaches(&self.reach, head.origin, from) {
+                continue;
+            }
             if wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok() && h.send(from, Lane::Reply, &self.scratch)
             {
                 self.sent.note(from, head.ts, head.origin);

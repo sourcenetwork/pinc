@@ -690,6 +690,21 @@ where
         self.topics.hint(topic, member)
     }
 
+    /// Name the peers this node holds sessions with: from then on the hubs hand it topic messages only from its
+    /// connected component (see [`Topics::set_adjacent`](vinc_broadcast::Topics::set_adjacent)). Returns how many
+    /// peers the record names.
+    ///
+    /// # Errors
+    /// [`Refused::Sign`] if the record cannot be signed.
+    pub fn set_adjacent(&mut self, now: Nanos, peers: &[NodeId]) -> Result<usize, Refused> {
+        self.begin(now);
+        self.refresh_alive(now);
+        let (t, mut h) = self.bc_host();
+        let r = t.set_adjacent(&mut h, now, peers);
+        self.settle(now);
+        r
+    }
+
     /// The access-control layer answered a broadcast check ([`NodeEvent::BroadcastAcpCheck`]).
     pub fn broadcast_acp_answer(&mut self, now: Nanos, id: u32, allow: bool) {
         self.begin(now);

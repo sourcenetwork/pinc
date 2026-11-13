@@ -102,6 +102,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
             log_bytes: cfg.limits.topic_log.max(cfg.limits.topic_message.saturating_mul(4)),
             max_topics: cfg.limits.topics,
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
+            ..BroadcastLimits::default()
         },
         wall_ms: wall_ms(),
         local,
@@ -124,6 +125,11 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     })?;
     // The endpoint has no multicast group to announce itself on, and a listener for others' beacons is not wired.
     node.set_local_discovery(false);
+    // Scoped from the start, with no peers yet: no topic message from outside its component reaches it meanwhile.
+    if cfg.connected_topics {
+        node.set_adjacent(now, &[])
+            .map_err(|_| Error::config("the adjacency record could not be signed"))?;
+    }
     Ok(Core::new(Box::new(node), cfg, prekeys, ifaces))
 }
 
@@ -154,6 +160,7 @@ mod tests {
             locals: vec!["127.0.0.1:1".parse().unwrap()],
             relays: Vec::new(),
             hub: false,
+            connected_topics: false,
             relaying: false,
             connect_timeout: 1_000_000_000,
         }

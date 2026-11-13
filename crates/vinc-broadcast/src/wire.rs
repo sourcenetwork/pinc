@@ -42,6 +42,9 @@ pub mod ty {
     pub const SUBS: u8 = 18;
     /// A hub tells a member its held subscriptions of a topic are live again.
     pub const RESTORED: u8 = 19;
+    /// A member's adjacency record: the peers it holds sessions with, signed, sent to the hubs and mirrored between
+    /// them. The topic is empty.
+    pub const ADJ: u8 = 20;
 }
 
 /// The length of a message id.
