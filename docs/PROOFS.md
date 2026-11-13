@@ -118,6 +118,13 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   (`MbtOrphan_edge.cfg`, which holds five, passes); with `>=` for `>` in `Stale`, or a refused hold that expires, both
   fail. TLC's other exports were not enough: `-dumpTrace` writes one behaviour per violated property and `-simulate`
   draws random behaviours, so neither covers the graph.
+- **Trace soak.** The gate records the trace tests under their fixed seeds. `scripts/trace-soak.sh` (`just trace-soak`)
+  sets `VINC_TRACE_SEED`, which moves the seed of every trace test that draws from `SplitMix64::traced`, records the
+  traces into a temporary directory and replays each file in the Lean model, over and over, keeping the ndjson and the
+  seed of the first mismatch (with `-k n` it also runs the TLC trace checks every `n` iterations); a trace test's
+  assertions that its fixed seeds reach every branch are skipped under a moved seed. `scripts/trace-cov.sh` (`just
+  trace-cov`) measures what the trace tests alone run of the library crates, and lists the uncovered lines (with
+  `BRANCH=1`, branches) of the items named in the tables below.
 
 Tools: Lean 4 and Lake, TLC on `PATH` as `tlc`, Java, and for the trace check and the model-based tests a TLC of the
 same era as the [CommunityModules](https://github.com/tlaplus/CommunityModules) jar (the gate prints the download

@@ -496,7 +496,7 @@ impl Run<'_> {
 fn run(seed: u64, out: &mut String, id: u32, long_gap: bool) {
     let mut r = Run {
         r: Recovery::<N>::new(1_350),
-        rng: SplitMix64::new(seed),
+        rng: SplitMix64::traced(seed),
         out,
         id,
         now: 0,
@@ -564,7 +564,7 @@ fn ladder(out: &mut String, id: u32) {
 }
 
 fn tail_runs(out: &mut String) {
-    let mut rng = SplitMix64::new(0x5441_494c);
+    let mut rng = SplitMix64::traced(0x5441_494c);
     for id in 1..=6u32 {
         let mut t = TailRepair::new();
         let mut pn = 0u64;
@@ -642,7 +642,10 @@ fn recovery_runs_match_the_models() {
         r#""ping":true"#,
         r#""h":"Degraded""#,
     ] {
-        assert!(out.contains(needle), "the runs never reach {needle}");
+        assert!(
+            vinc_tests::soaking() || out.contains(needle),
+            "the runs never reach {needle}"
+        );
     }
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();

@@ -333,7 +333,7 @@ pub fn run(tw: &mut TraceWriter) {
     let mut small = Vec::new();
     small_frames(&mut small);
     let big = big_frames();
-    let mut rng = SplitMix64::new(0xC0DEC);
+    let mut rng = SplitMix64::traced(0xC0DEC);
 
     // Valid frames: the body parses back, the stream read returns it with the bytes it used, every proper prefix of
     // the stream form is a partial read, and an encoding into a buffer one byte too small is refused.

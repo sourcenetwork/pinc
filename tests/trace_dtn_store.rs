@@ -94,7 +94,7 @@ fn run<const N: usize>(
     out: &mut Vec<String>,
     seen: &mut Seen,
 ) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut pick = |v: &[u64]| v[(rng.next_u64() % v.len() as u64) as usize];
     let mut real = Ledger::<N>::new(budget);
     let mut model = Oracle::new(N, budget);
@@ -259,7 +259,7 @@ fn ledger_runs_match_the_reference_and_are_recorded() {
         ("reclasses of nothing", seen.reclass_unknown),
         ("cross-space evictions", seen.cross_space),
     ] {
-        assert!(n > 0, "the world never met: {name}");
+        assert!(vinc_tests::soaking() || n > 0, "the world never met: {name}");
     }
     write("dtn_store.ndjson", &out);
 
@@ -274,6 +274,8 @@ fn ledger_runs_match_the_reference_and_are_recorded() {
         run::<3>(seed + 100, big - 1, &sizes, &times, 40, &mut edge, &mut seen);
         run::<4>(seed + 200, big / 2 + 1, &sizes, &times, 40, &mut edge, &mut seen);
     }
-    assert!(seen.ok > 0 && seen.transit_evicted > 0 && seen.custody_refused > 0 && seen.full > 0);
+    assert!(
+        vinc_tests::soaking() || seen.ok > 0 && seen.transit_evicted > 0 && seen.custody_refused > 0 && seen.full > 0
+    );
     write("dtn_store_edge.ndjson", &edge);
 }

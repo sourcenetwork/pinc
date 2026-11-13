@@ -105,7 +105,7 @@ fn punch_events(out: &mut Vec<String>) {
             jlist(punch::probe_gaps(srtt).iter().map(|g| us(*g)))
         ));
     }
-    let mut rng = SplitMix64::new(0x9C);
+    let mut rng = SplitMix64::traced(0x9C);
     for _ in 0..40 {
         let mut p = Puncher::off();
         let mut now = pick(&mut rng, &[0, 5 * S]);
@@ -161,7 +161,7 @@ fn punch_events(out: &mut Vec<String>) {
 }
 
 fn tunnel_events(out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(0x7A);
+    let mut rng = SplitMix64::traced(0x7A);
     let silents = [0, 14 * S, 15 * S, 15 * S + MS, 40 * S];
     for _ in 0..3000 {
         let carrier_open = rng.next_u64().is_multiple_of(2);
@@ -264,7 +264,7 @@ fn tunnel_events(out: &mut Vec<String>) {
 }
 
 fn dial_events(out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(0xD1);
+    let mut rng = SplitMix64::traced(0xD1);
     for _ in 0..2000 {
         let first_try = rng.next_u64().is_multiple_of(2);
         let is_hub = rng.next_u64().is_multiple_of(2);
@@ -384,7 +384,7 @@ fn dial_events(out: &mut Vec<String>) {
 }
 
 fn lookup_events(out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(0x100C);
+    let mut rng = SplitMix64::traced(0x100C);
     for _ in 0..80 {
         let mut l: Lookups<3> = Lookups::new();
         let mut now = 0u64;
@@ -517,7 +517,7 @@ fn lookup_events(out: &mut Vec<String>) {
 }
 
 fn netcheck_events(out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(0x4E7);
+    let mut rng = SplitMix64::traced(0x4E7);
     // classification
     let ips: [[u8; 4]; 5] = [
         [10, 0, 0, 1],

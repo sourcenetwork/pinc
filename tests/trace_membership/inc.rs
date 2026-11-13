@@ -296,7 +296,7 @@ fn seens(rng: &mut SplitMix64, own: u64) -> u64 {
 }
 
 fn lineage(tw: &mut TraceWriter, run: usize, persistent: bool, seed: u64) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut life = Life::new(
         run,
         Host {
@@ -400,7 +400,7 @@ fn edges(tw: &mut TraceWriter, run: usize) {
 
 /// The address tag.
 fn tags(tw: &mut TraceWriter, run: usize, seed: u64) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut host = Host {
         ticket: 9,
         ..Host::default()

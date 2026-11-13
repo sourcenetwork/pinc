@@ -76,7 +76,7 @@ fn err_name(e: WireError) -> &'static str {
 
 fn varint_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x7a41_a002);
+    let mut rng = SplitMix64::traced(0x7a41_a002);
     let edges = edge_values();
     let mut values = edges.clone();
     values.extend(0..300u64);
@@ -226,7 +226,7 @@ fn offsets(len: u64, group: u64) -> Vec<u64> {
 
 fn layout_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x1a70_0a01);
+    let mut rng = SplitMix64::traced(0x1a70_0a01);
     let mut cases: Vec<(u64, u32)> = Vec::new();
     for len in edge_values() {
         for log in [0u32, 1, 4, 10, 19, 20] {
@@ -382,7 +382,7 @@ fn emit_encoder(out: &mut String, len: u64, log: u32, range: Range<u64>) {
 
 fn encoder_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x3c0d_e901);
+    let mut rng = SplitMix64::traced(0x3c0d_e901);
     // small layouts: every pair of the interesting offsets, the whole stream
     for k in 0..=12u64 {
         for log in [0u32, 1] {
@@ -424,7 +424,7 @@ fn encoder_traces() -> String {
 /// `encode_range` into output buffers of every size around the stream length, with a genuine value and outboard.
 fn encout_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x3c0d_e902);
+    let mut rng = SplitMix64::traced(0x3c0d_e902);
     for case in 0..160u64 {
         let log = below(&mut rng, 3) as u32;
         let g = 1024u64 << log;

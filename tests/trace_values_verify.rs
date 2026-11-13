@@ -541,7 +541,7 @@ fn run_dispatch(
 
 fn verify_traces() -> Trace {
     let mut tr = Trace::default();
-    let mut rng = SplitMix64::new(0x6a75_5e11);
+    let mut rng = SplitMix64::traced(0x6a75_5e11);
     let mut run = 0;
     for case in 0..140u64 {
         let log = below(&mut rng, 4) as u32;
@@ -610,7 +610,10 @@ fn group_and_range_verifiers_agree_on_every_call() {
         "\"gb\":false",
         "\"gi\":[\"g\"",
     ] {
-        assert!(tr.out.contains(needle), "the runs never produce {needle}");
+        assert!(
+            vinc_tests::soaking() || tr.out.contains(needle),
+            "the runs never produce {needle}"
+        );
     }
     let lines = tr.out.lines().count();
     assert!(lines > 2000, "{lines} events");

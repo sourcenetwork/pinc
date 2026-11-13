@@ -556,7 +556,7 @@ fn mutations(rng: &mut SplitMix64, base: &[u8], hot: &[usize]) -> Vec<Vec<u8>> {
 #[test]
 fn value_wire_trace() {
     let mut tr = Trace::default();
-    let mut rng = SplitMix64::new(0x5eed_0007);
+    let mut rng = SplitMix64::traced(0x5eed_0007);
 
     // ---- REQ ----
     let mut reqs: Vec<Vec<u8>> = Vec::new();

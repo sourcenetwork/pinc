@@ -130,16 +130,19 @@ fn run(rng: &mut SplitMix64, out: &mut String, wide: bool, n: u32) {
 
 #[test]
 fn packet_number_calls_match_the_models() {
-    let mut rng = SplitMix64::new(0x504e_0001);
+    let mut rng = SplitMix64::traced(0x504e_0001);
     let mut out = String::new();
     run(&mut rng, &mut out, false, 6000);
     let mut wide = String::new();
     run(&mut rng, &mut wide, true, 6000);
     for needle in [r#""err":"ok""#, r#""err":"PnLength""#, r#""op":"dec""#, r#""op":"for""#] {
-        assert!(out.contains(needle), "the calls never reach {needle}");
+        assert!(
+            vinc_tests::soaking() || out.contains(needle),
+            "the calls never reach {needle}"
+        );
     }
     assert!(
-        wide.contains(r#""err":"PacketNumber""#),
+        vinc_tests::soaking() || wide.contains(r#""err":"PacketNumber""#),
         "the wide calls never reach PacketNumber"
     );
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {

@@ -57,7 +57,7 @@ const NODES: u8 = 3;
 
 fn node_key(n: u8) -> Keypair {
     let mut seed = vec![0; IdentityAlg::Ed25519.seed_len()];
-    SplitMix64::new(0xC0DE + u64::from(n)).fill(&mut seed);
+    SplitMix64::traced(0xC0DE + u64::from(n)).fill(&mut seed);
     Keypair::from_seed(IdentityAlg::Ed25519, &seed).unwrap()
 }
 
@@ -224,7 +224,7 @@ fn run<const NB: usize, const NL: usize>(
     seen: &mut Seen,
 ) {
     let node_no = |id: &NodeId| nodes.iter().position(|(_, n)| n == id).unwrap() as u8;
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut pick = |v: &[u64]| v[(rng.next_u64() % v.len() as u64) as usize];
     let budget = 10;
     let mut ledger = Ledger::<NL>::new(budget);
@@ -558,7 +558,7 @@ fn custody_runs_match_the_tracker_and_are_recorded() {
         "stale record after a host expiry",
     ] {
         assert!(
-            seen.0.get(what).copied().unwrap_or(0) > 0,
+            vinc_tests::soaking() || seen.0.get(what).copied().unwrap_or(0) > 0,
             "the world never met: {what}: {:?}",
             seen.0
         );

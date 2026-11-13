@@ -98,7 +98,7 @@ fn drbg_run(out: &mut String, seed: [u8; 32], ops: &[DOp]) -> Vec<Vec<u8>> {
 }
 
 pub(super) fn drbg_trace(out: &mut String) {
-    let mut rng = SplitMix64::new(0xD2B6);
+    let mut rng = SplitMix64::traced(0xD2B6);
     let lens = [0usize, 1, 31, 32, 33, 63, 64, 65, 100, 1000];
     let seed: [u8; 32] = rand(&mut rng, 32).try_into().unwrap();
     let mut ops: Vec<DOp> = lens.iter().map(|&n| DOp::Fill(n)).collect();
@@ -141,7 +141,7 @@ pub(super) fn drbg_trace(out: &mut String) {
 
 pub(super) fn provider_trace(out: &mut String) {
     let sw = Software;
-    let mut rng = SplitMix64::new(0x9807);
+    let mut rng = SplitMix64::traced(0x9807);
     for (ai, alg) in [Aead::ChaCha20Poly1305, Aead::Aes128Gcm].into_iter().enumerate() {
         for len in 0..=70usize {
             let key = rand(&mut rng, len);
@@ -203,7 +203,7 @@ fn hex(s: &str) -> Vec<u8> {
 
 fn hp_trace(out: &mut String) {
     let sw = Software;
-    let mut rng = SplitMix64::new(0x4850);
+    let mut rng = SplitMix64::traced(0x4850);
     // ChaCha20: the counters around the block boundaries and the end of the 32-bit counter, and the RFC 9001 vector
     let key: [u8; 32] = rand(&mut rng, 32).try_into().unwrap();
     let hp = sw.hp_key(Aead::ChaCha20Poly1305, &key).unwrap();
@@ -305,7 +305,7 @@ fn hp_trace(out: &mut String) {
 
 fn dh_trace(out: &mut String) {
     let sw = Software;
-    let mut rng = SplitMix64::new(0x25519);
+    let mut rng = SplitMix64::traced(0x25519);
     let mut peers: Vec<Vec<u8>> = vec![
         vec![0u8; 32],
         {

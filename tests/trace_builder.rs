@@ -320,7 +320,7 @@ fn run_case(tr: &mut Trace, rng: &mut SplitMix64, run: usize, len: usize, log: u
 
 fn builder_traces() -> String {
     let mut tr = Trace::default();
-    let mut rng = SplitMix64::new(0xb011_de42);
+    let mut rng = SplitMix64::traced(0xb011_de42);
     for (run, case) in (0..170u64).enumerate() {
         let log = below(&mut rng, 4) as u32;
         let g = 1024usize << log;
@@ -367,7 +367,10 @@ fn builder_traces_are_consistent_with_the_genuine_value() {
         "\"len\":0,",
         "\"ilen\":0,",
     ] {
-        assert!(trace.contains(needle), "the runs never produce {needle}");
+        assert!(
+            vinc_tests::soaking() || trace.contains(needle),
+            "the runs never produce {needle}"
+        );
     }
     assert!(trace.lines().count() > 2000, "{} events", trace.lines().count());
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {

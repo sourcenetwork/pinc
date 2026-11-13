@@ -342,7 +342,7 @@ fn post_json(em: &mut Emit<'_>, l: &Logged) -> String {
 #[test]
 fn key_layer_runs_match_the_models() {
     big_stack(|| {
-        let mut rng = SplitMix64::new(0x4b45_594c_4159_4552);
+        let mut rng = SplitMix64::traced(0x4b45_594c_4159_4552);
         let mut out = String::new();
         let mut recorded = 0;
         for run_id in 1..=40u32 {

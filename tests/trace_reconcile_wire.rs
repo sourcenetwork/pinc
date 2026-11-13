@@ -189,7 +189,7 @@ fn bounds_traces(tr: &mut Trace) {
         }
     }
     // The cap of the shared prefix at 255 and bounds of 254..300 bytes.
-    let mut rng = SplitMix64::new(5);
+    let mut rng = SplitMix64::traced(5);
     for n in [254usize, 255, 256, 257, 300] {
         let last = vec![0u8; n];
         let mut cands: Vec<Vec<u8>> = vec![
@@ -480,7 +480,7 @@ fn message_event(tr: &mut Trace, msg: &[u8], mx: usize) {
 /// Every message of real sessions (both directions), then mutations of the short ones: every cut, a few flipped
 /// bytes and one extra byte.
 fn message_traces(tr: &mut Trace) {
-    let mut rng = SplitMix64::new(21);
+    let mut rng = SplitMix64::traced(21);
     let mut sets: Vec<(Vec<Vec<u8>>, Vec<Vec<u8>>)> = Vec::new();
     for (n, d, len) in [(60usize, 4usize, 3usize), (120, 10, 4), (50, 2, 2), (200, 6, 5)] {
         let a = fixed_set(&mut rng, n, len);

@@ -170,7 +170,7 @@ fn snapshot<const W: usize>(rx: &Reception<'_, W>) -> (String, Vec<bool>) {
 }
 
 fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut buf = vec![0xaa; b.layout.total_len() as usize];
     let mut rx = Reception::<W>::new(&b.signed, &mut buf, NOW).unwrap();
     out.push(format!(
@@ -377,15 +377,15 @@ fn reception_trace() {
     // the sealed bundle of the faulty sender really commits to non-code-word parity: a complete honest decode of a
     // reception that holds only some symbols of block 0 cannot match its root
     assert!(
-        out.iter().any(|l| l.contains(r#""res":"inconsistent""#)),
+        vinc_tests::soaking() || out.iter().any(|l| l.contains(r#""res":"inconsistent""#)),
         "a faulty sender is caught"
     );
     assert!(
-        out.iter().any(|l| l.contains(r#""res":"full""#)),
+        vinc_tests::soaking() || out.iter().any(|l| l.contains(r#""res":"full""#)),
         "the held set fills up"
     );
     assert!(
-        out.iter().any(|l| l.contains(r#""op":"fin","res":"ok""#)),
+        vinc_tests::soaking() || out.iter().any(|l| l.contains(r#""op":"fin","res":"ok""#)),
         "a finish succeeds"
     );
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {

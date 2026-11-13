@@ -391,7 +391,7 @@ fn run_dispatch(
 
 fn verifier_traces() -> Trace {
     let mut tr = Trace::default();
-    let mut rng = SplitMix64::new(0x7e21_f1e4);
+    let mut rng = SplitMix64::traced(0x7e21_f1e4);
     let mut run = 0;
     for case in 0..120u64 {
         let log = below(&mut rng, 4) as u32;
@@ -476,7 +476,7 @@ fn emit_encoder(out: &mut String, len: u64, log: u32, range: Range<u64>) {
 /// `RangeEncoder` step lists over layouts from one group to `2^54` groups.
 fn encoder_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0xe4c0_de01);
+    let mut rng = SplitMix64::traced(0xe4c0_de01);
     // Every tree up to 70 groups over its whole range, and narrow ranges in it.
     for n in 1..=70u64 {
         let log = (n % 21) as u32;
@@ -532,7 +532,7 @@ fn encoder_traces() -> String {
 /// `encode_range` with output buffers of every size around the stream's length, on a real value and outboard.
 fn encout_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x0e07_5eed);
+    let mut rng = SplitMix64::traced(0x0e07_5eed);
     for _ in 0..160 {
         let log = below(&mut rng, 3) as u32;
         let g = 1024u64 << log;
@@ -587,7 +587,7 @@ fn encout_traces() -> String {
 /// `groups`, `depth`, `outboard_size` and `group_size` over lengths from 0 to `u64::MAX` and every group log.
 fn size_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x512e_0001);
+    let mut rng = SplitMix64::traced(0x512e_0001);
     for _ in 0..1500 {
         let log = below(&mut rng, 21) as u32;
         let group = 1024u64 << log;
@@ -648,7 +648,10 @@ fn verifier_traces_are_consistent_with_the_genuine_value() {
         "\"err\":\"parent\"",
         "\"err\":\"group\"",
     ] {
-        assert!(tr.out.contains(needle), "the runs never produce {needle}");
+        assert!(
+            vinc_tests::soaking() || tr.out.contains(needle),
+            "the runs never produce {needle}"
+        );
     }
     assert!(lines > 2000, "{lines} events");
     assert!(encoder.contains("[\"p\",") && encoder.contains("[\"g\",") && encoder.lines().count() > 600);

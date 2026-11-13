@@ -84,7 +84,7 @@ fn err_name(e: DtnError) -> &'static str {
 
 #[test]
 fn field_and_code_trace() {
-    let mut rng = SplitMix64::new(0xD7_0F_E1);
+    let mut rng = SplitMix64::traced(0xD7_0F_E1);
     let mut out: Vec<String> = Vec::new();
 
     // inv for every byte, mul against fixed operands for every byte, and a random spread of pairs.

@@ -67,7 +67,7 @@ type Led = Ledger<3>;
 
 fn key(i: usize) -> Keypair {
     let mut seed = vec![0; IdentityAlg::Ed25519.seed_len()];
-    SplitMix64::new(0x5CE0 + i as u64).fill(&mut seed);
+    SplitMix64::traced(0x5CE0 + i as u64).fill(&mut seed);
     Keypair::from_seed(IdentityAlg::Ed25519, &seed).unwrap()
 }
 
@@ -753,7 +753,7 @@ fn scenarios_hold_and_write_the_trace() {
     add(outage(&mut all));
     add(lossy(&mut all));
     for seed in 0..40u64 {
-        let mut rng = SplitMix64::new(0xD7A0 + seed);
+        let mut rng = SplitMix64::traced(0xD7A0 + seed);
         let mut s = Sim::new(&mut all);
         for _ in 0..220 {
             s.random_step(&mut rng);
@@ -778,7 +778,10 @@ fn scenarios_hold_and_write_the_trace() {
         "pressure",
         "forged",
     ] {
-        assert!(met.get(want).copied().unwrap_or(0) > 0, "outcome {want} was never met");
+        assert!(
+            vinc_tests::soaking() || met.get(want).copied().unwrap_or(0) > 0,
+            "outcome {want} was never met"
+        );
     }
     println!("met {met:?}");
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {

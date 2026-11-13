@@ -54,7 +54,7 @@ fn view_json(v: &CidView) -> String {
 }
 
 fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool, seen: &mut [bool; 2]) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let client = id.is_multiple_of(2);
     let mut t = CidTable::new(client, &[1, 2, 3, 4]).unwrap();
     let mut secret_bytes = [0u8; 32];
@@ -208,7 +208,10 @@ fn connection_id_runs_match_the_models() {
         r#""op":"conf""#,
         r#""op":"query""#,
     ] {
-        assert!(out.contains(needle), "the runs never reach {needle}");
+        assert!(
+            vinc_tests::soaking() || out.contains(needle),
+            "the runs never reach {needle}"
+        );
     }
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();

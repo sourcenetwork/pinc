@@ -564,7 +564,7 @@ fn run(seed: u64, out: &mut String, run: u32) -> bool {
     let mut r = Run {
         t,
         pool,
-        rng: SplitMix64::new(seed),
+        rng: SplitMix64::traced(seed),
         out,
         id: run,
         now: 0,
@@ -613,7 +613,10 @@ fn stream_table_runs_match_the_models() {
             "ackedstop",
             "close",
         ] {
-            assert!(out.contains(&format!(r#""op":"{op}""#)), "no {op} event");
+            assert!(
+                vinc_tests::soaking() || out.contains(&format!(r#""op":"{op}""#)),
+                "no {op} event"
+            );
         }
         // The runs reach the interesting steps: a peer stream held back and admitted later, stop requests sent and lost, implicit opens, a deferred grant, a conflict, a stream
         // that outgrew its ranges, a limit raised, a reset acknowledged.
@@ -631,7 +634,10 @@ fn stream_table_runs_match_the_models() {
             r#""kind":"msts""#,
             r#""kind":"reset""#,
         ] {
-            assert!(out.contains(needle), "the runs never reach {needle}");
+            assert!(
+                vinc_tests::soaking() || out.contains(needle),
+                "the runs never reach {needle}"
+            );
         }
         if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();

@@ -136,7 +136,7 @@ fn pick<T: Copy>(rng: &mut SplitMix64, v: &[T]) -> T {
 }
 
 fn run(seed: u64, steps: usize, out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut sh = Shared {
         phone: rng.next_u64().is_multiple_of(3),
         keep_learn: rng.next_u64().is_multiple_of(2),

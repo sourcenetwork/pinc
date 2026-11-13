@@ -172,7 +172,7 @@ fn run_set<S: Set>(
 /// Run `seeds` sequences on a `VerifiedRanges<N>`.
 fn fixed_runs<const N: usize>(out: &mut String, run: &mut usize, seeds: u64, base: u64, span: u64, check: bool) {
     for seed in 0..seeds {
-        let mut rng = SplitMix64::new(0x5eed_0000 + (N as u64) * 1000 + seed);
+        let mut rng = SplitMix64::traced(0x5eed_0000 + (N as u64) * 1000 + seed);
         let mut set = VerifiedRanges::<N>::new();
         run_set(&mut set, Some(N), &mut rng, out, *run, base, span, 60, check);
         *run += 1;
@@ -188,7 +188,7 @@ fn ranges_traces() -> (String, String) {
     fixed_runs::<4>(&mut narrow, &mut run, 6, 0, 40, true);
     fixed_runs::<6>(&mut narrow, &mut run, 6, 0, 60, true);
     for seed in 0..6 {
-        let mut rng = SplitMix64::new(0x7ec0_0000 + seed);
+        let mut rng = SplitMix64::traced(0x7ec0_0000 + seed);
         run_set(
             &mut VerifiedRangesVec::new(),
             None,
@@ -207,7 +207,7 @@ fn ranges_traces() -> (String, String) {
     fixed_runs::<2>(&mut wide, &mut run, 4, top, 60, false);
     fixed_runs::<3>(&mut wide, &mut run, 4, top, 60, false);
     for seed in 0..3 {
-        let mut rng = SplitMix64::new(0x71de_0000 + seed);
+        let mut rng = SplitMix64::traced(0x71de_0000 + seed);
         run_set(
             &mut VerifiedRangesVec::new(),
             None,
@@ -239,7 +239,7 @@ fn err_name(e: WireError) -> &'static str {
 
 fn varint_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x7a41_a001);
+    let mut rng = SplitMix64::traced(0x7a41_a001);
     let mut values: Vec<u64> = vec![0, 1, 127, 128, u64::MAX, 1 << 63, (1 << 63) - 1, (1 << 62) + 1];
     for k in 1..=9u32 {
         let edge = 1u64.checked_shl(7 * k).unwrap_or(u64::MAX);
@@ -339,7 +339,7 @@ fn varint_traces() -> String {
 
 fn layout_traces() -> String {
     let mut out = String::new();
-    let mut rng = SplitMix64::new(0x1a70_0001);
+    let mut rng = SplitMix64::traced(0x1a70_0001);
     for _ in 0..1200 {
         let log = below(&mut rng, 21) as u32;
         let group = 1024u64 << log;

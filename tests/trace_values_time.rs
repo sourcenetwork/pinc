@@ -618,7 +618,7 @@ fn time_rules_trace() {
     run.go(&mut sim, &[], &[Provider(0), Provider(1)], Some(50 * SEC), 90 * SEC);
 
     // Seeded random worlds.
-    let mut rng = SplitMix64::new(0x7156_4EED);
+    let mut rng = SplitMix64::traced(0x7156_4EED);
     for k in 0..24u64 {
         let n = 1 + (rng.next_u64() % 3) as usize;
         let groups_n = 3 + rng.next_u64() % 14;

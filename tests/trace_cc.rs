@@ -110,7 +110,7 @@ fn pick<T: Copy>(rng: &mut SplitMix64, from: &[T]) -> T {
 }
 
 fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut r = Run {
         c: Cubic::new(),
         p: Pacer::new(),
@@ -362,7 +362,10 @@ fn congestion_control_runs_match_the_models() {
         r#""r":true"#,
         r#""r":false"#,
     ] {
-        assert!(out.contains(needle), "the runs never reach {needle}");
+        assert!(
+            vinc_tests::soaking() || out.contains(needle),
+            "the runs never reach {needle}"
+        );
     }
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();

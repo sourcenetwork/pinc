@@ -561,7 +561,7 @@ fn the_scheduler_runs_are_recorded_and_conserve_the_work() {
     go(&mut rec, Sim::new(cfgs(&store, &[100]), full), &[], &all(1), 5);
 
     // Seeded random worlds.
-    let mut rng = SplitMix64::new(0x5C4ED);
+    let mut rng = SplitMix64::traced(0x5C4ED);
     for seed in 0..48u64 {
         let mut next = |n: u64| rng.next_u64() % n;
         let nprov = 1 + next(4) as u32;

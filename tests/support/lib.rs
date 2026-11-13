@@ -29,6 +29,21 @@ pub use route::*;
 #[cfg(feature = "hwenc")]
 pub use swtpm::Swtpm;
 
+/// The number in the environment variable `VINC_TRACE_SEED`, mixed; zero when it is unset or not a number.
+fn trace_salt() -> u64 {
+    std::env::var("VINC_TRACE_SEED")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(0, |n| SplitMix64::new(n).next_u64())
+}
+
+/// Whether the trace tests run under a shifted seed (`VINC_TRACE_SEED` is set). A trace test's "the runs reach every
+/// branch" assertions describe its fixed seeds only, so they are skipped then; the recorded trace is still written and
+/// still checked against the models, which is the point of the soak.
+pub fn soaking() -> bool {
+    trace_salt() != 0
+}
+
 /// A small deterministic pseudo-random generator (`SplitMix64`) for reproducible test inputs.
 ///
 /// Tests use it instead of a global random source, so a failing case reproduces from its seed.
@@ -39,6 +54,13 @@ impl SplitMix64 {
     /// A generator starting from `seed`.
     pub fn new(seed: u64) -> Self {
         Self(seed)
+    }
+
+    /// A generator for a trace test (see [`soaking`]): `seed`, unless the environment variable `VINC_TRACE_SEED` is set to a number, in
+    /// which case every seed of every trace test is moved by it (the soak script `scripts/trace-soak.sh` does this to
+    /// record runs the fixed seeds never produce). Unset, it is exactly `new(seed)`, so the gate's runs do not change.
+    pub fn traced(seed: u64) -> Self {
+        Self::new(seed ^ trace_salt())
     }
 
     /// The next 64-bit value.

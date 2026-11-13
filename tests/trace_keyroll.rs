@@ -46,7 +46,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use vinc_crypto::{Aead, Drbg, Secret, Software};
+use vinc_crypto::{Aead, Drbg, Provider, Secret, Software};
 use vinc_security::keyroll::{ECHO_LEN, MAX_KEY_AGE_NS, MAX_REKEY_LEN, due, request_id};
 use vinc_security::{Env, Failure, Limits, PacketKey, RecordError, Rekey, Roll, roll_secret};
 use vinc_tests::SplitMix64;
@@ -261,8 +261,11 @@ impl Run {
     /// Deliver `msg` to node `n` through the method of its own kind, or (`wrong`) of the other kind.
     fn deliver(&mut self, tr: &mut Trace, n: usize, msg: Rekey, wrong: bool, spn: u64) {
         let p = Software;
-        let zero = msg.share == [0u8; 32];
-        let sid = self.ids.id(K_SHARE, &msg.share);
+        // A share "gives no shared secret" when the exchange fails: the all-zero value, but also every other low-order
+        // point (such as one bit set in the zero value), which the code refuses the same way.
+        let zero = p.x25519_dh(&p.x25519_secret(&[7u8; 32]), &msg.share).is_err();
+        // The models have one such value (`junk`), so every share of this class has the id of the all-zero one.
+        let sid = self.ids.id(K_SHARE, if zero { &[0u8; 32] } else { &msg.share });
         let eid = self.ids.id(K_ECHO, &msg.echo);
         let as_answer = msg.answer != wrong;
         let head = format!(
@@ -702,7 +705,7 @@ fn codec_events(rng: &mut SplitMix64, tr: &mut Trace) {
 
 #[test]
 fn key_roll_runs_match_the_models() {
-    let mut rng = SplitMix64::new(0x4b45_5952_4f4c_4c31);
+    let mut rng = SplitMix64::traced(0x4b45_5952_4f4c_4c31);
     let mut tr = Trace::default();
     for id in 1..=60u32 {
         run(&mut rng, &mut tr, id);

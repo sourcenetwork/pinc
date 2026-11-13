@@ -179,7 +179,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
 
 #[test]
 fn path_mtu_runs_match_the_models() {
-    let mut rng = SplitMix64::new(0x4d54_0001);
+    let mut rng = SplitMix64::traced(0x4d54_0001);
     let mut out = String::new();
     for id in 1..=60u32 {
         run(&mut rng, &mut out, id, 300, false);
@@ -198,14 +198,16 @@ fn path_mtu_runs_match_the_models() {
         r#""r":true"#,
     ] {
         assert!(
-            out.contains(needle) || wide.contains(needle),
+            vinc_tests::soaking() || out.contains(needle) || wide.contains(needle),
             "the runs never reach {needle}"
         );
     }
     assert!(
-        out.lines()
-            .chain(wide.lines())
-            .any(|l| l.contains(r#""op":"bhc""#) && l.contains(r#""r":true,"#)),
+        vinc_tests::soaking()
+            || out
+                .lines()
+                .chain(wide.lines())
+                .any(|l| l.contains(r#""op":"bhc""#) && l.contains(r#""r":true,"#)),
         "the fallback is never taken"
     );
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {

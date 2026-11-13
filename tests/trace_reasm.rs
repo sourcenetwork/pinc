@@ -167,14 +167,14 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, sparse: bool) {
 
 #[test]
 fn reassembly_runs_match_the_models() {
-    let mut rng = SplitMix64::new(0x5253_0001);
+    let mut rng = SplitMix64::traced(0x5253_0001);
     let mut out = String::new();
     for id in 1..=80u32 {
         run(&mut rng, &mut out, id, id.is_multiple_of(3));
     }
     assert!(out.contains(r#""op":"add""#));
     assert!(
-        out.contains(r#""out":-1"#) && out.matches(r#""runs":[]"#).count() > 80,
+        vinc_tests::soaking() || out.contains(r#""out":-1"#) && out.matches(r#""runs":[]"#).count() > 80,
         "no message was ever completed"
     );
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
