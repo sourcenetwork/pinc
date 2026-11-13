@@ -16,6 +16,7 @@ import Vinc.TraceCc
 import Vinc.TracePn
 import Vinc.TraceReasm
 import Vinc.TraceHdr
+import Vinc.TraceFrame
 import Vinc.TraceMtu
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
@@ -466,6 +467,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           -- Packet header events (`txhd`, written by `trace_hdr`): the long and short header codecs, the packets of
           -- a datagram and the associated data of seal and open.
           match TraceHdr.replayEvent j with
+          | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceFrame.isTag t then
+          -- Frame codec events (`txfr`, written by `trace_frame`): decode, write, the iterator and the ACK ranges.
+          match TraceFrame.replayEvent j with
           | .ok _ =>
             count := count + 1
             continue
