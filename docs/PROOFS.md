@@ -389,10 +389,13 @@ These items are still open; they are listed so nothing is hidden:
   only; TLC checks the bounded step of congestion avoidance (see the row above).
 - The loss recovery TLC configs are small (a ring of 2 or 3 slots, three or four packet numbers, at most four to six
   calls, a clock of 8 to 90 units with the millisecond as 1 unit) and the trace check runs the real constants; the
-  Lean theorems are unbounded in the ring, the times and the run. The Lean proof that the sorted order of the ring
-  is kept by every call, and that a done slot stays done slot by slot over the loops, is not done yet: both are
-  checked by TLC (`RingShape`, `DoneStays`) and the trace, and the loops are proved to report only packets that were
-  in flight (`detectLoop_lost_inflight`). The same proof for the acknowledgement loop is not done yet.
+  Lean theorems are unbounded in the ring, the times and the run. The order of the ring and the life of a slot are
+  proved for every call and through every loop (`TransportRecoveryRing`: the packet numbers stay strictly increasing
+  and at most the last one sent, `timeout_ok`, `flush_ok`, `ack_ok`, `send_ok`, `untracked_ok`; a slot found again by
+  its number is the same packet, done if it was done and never back in flight, `*_doneStays`). Of `RingShape` the
+  length is `push_len`; its two other conjuncts (a slot's path is below the path count, the largest acknowledged is
+  not above the last sent) are checked by TLC and the trace only. The detection loop is proved to report only packets
+  that were in flight (`detectLoop_lost_inflight`); the same for the acknowledgement loop is not done yet.
 - Of the stream table, the send half (credit against the peer's window, the retransmission queue, source-backed
   streams), urgency order and datagrams are not modelled; the send half appears only as the pool chunks it holds and
   the state that frees a slot, plus its reset and the stop request.
