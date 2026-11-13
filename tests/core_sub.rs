@@ -365,6 +365,51 @@ fn a_child_waits_with_its_parent_for_the_access_check() {
     });
 }
 
+/// Two connected nodes whose peer restarted (same identity and address, none of the session state) and then stayed
+/// quiet: the net, the nodes, and the instant the dialer last heard a datagram from it.
+fn restarted_peer() -> (CoreNet, usize, usize, u64) {
+    let mut net = CoreNet::new(10 * MS_NS);
+    net.capture = true;
+    let (a, b) = (net.add(1), net.add(2));
+    let (parent, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let (addr, now) = (net.nodes[b].addr, net.now);
+    net.nodes[b] = TNode::new(2, addr, now);
+    let Answer::Stats(st) = net.nodes[a].ep.query(Query::Stats(parent)) else {
+        panic!()
+    };
+    (net, a, b, st.heard)
+}
+
+#[test]
+fn a_dial_within_twenty_seconds_of_hearing_a_peer_that_restarted_rides_the_dead_session() {
+    big_stack(|| {
+        let (mut net, a, b, heard) = restarted_peer();
+        net.run_for((heard + 19 * SEC_NS).saturating_sub(net.now));
+        let marker = net.captured.len();
+        let (_, rep) = dial(&mut net, a, b, ALPN_B);
+        assert!(rep.events.any(is_connected));
+        net.run_for(SEC_NS);
+        assert!(!handshake_since(&net, marker), "a handshake started while the parent was recent");
+        assert!(!net.nodes[b].saw(|e| matches!(e, Event::Incoming { .. })), "the restarted peer heard the dial");
+    });
+}
+
+#[test]
+fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_handshake_and_connects() {
+    big_stack(|| {
+        let (mut net, a, b, heard) = restarted_peer();
+        net.run_for((heard + 21 * SEC_NS).saturating_sub(net.now));
+        assert_eq!(net.nodes[a].ep.sessions().count(), 1, "the dead session closed early");
+        let marker = net.captured.len();
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        net.run_for(SEC_NS);
+        assert!(handshake_since(&net, marker), "no handshake started for a silent parent");
+        write_new(&mut net, a, child, b"restarted");
+        assert!(net.run(net.now + 5 * SEC_NS, |n| n.nodes[b].read.values().any(|v| v == b"restarted")));
+    });
+}
+
 /// Two nodes where `b` dialed `a` for `ALPN_A` and `a` still holds the access check for `b` open.
 fn incoming_not_allowed() -> (CoreNet, usize, usize) {
     let mut net = CoreNet::new(15 * MS_NS);
