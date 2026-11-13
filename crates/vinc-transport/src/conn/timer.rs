@@ -119,6 +119,10 @@ conn_impl! {
             self.life.probes = 1;
             self.stats.ptos += 1;
         }
+        #[cfg(feature = "trace")]
+        {
+            self.life.carrier_probe = Some(self.trace_carrier(now, to.ping));
+        }
         match self.rec.health(now) {
             Health::Dead => self.silent_close(CloseReason::PathDead),
             _ if to.ping && self.dead_behind_live_carrier(now) => {
@@ -154,5 +158,143 @@ conn_impl! {
             && alive
             && self.rec.pto_count() >= CLOSE_AFTER_PTOS
             && now.saturating_sub(self.rec.last_heard()) >= rtt.saturating_mul(SILENT_RTTS)
+    }
+}
+
+/// Test-only view of the timers and the closing state, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+pub(super) mod trace {
+    use vinc_crypto::Provider;
+
+    use super::super::{Connection, Phase};
+    use crate::recovery::{Health, PathKind};
+    use crate::stream::StreamSource;
+
+    /// The lifecycle state of a connection and every deadline [`Connection::poll_timeout`] combines, as it reads them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[allow(clippy::struct_excessive_bools, reason = "independent flags of the view")]
+    pub struct TimerView {
+        /// 0 handshaking, 1 connected, 2 closing (the CLOSE still to leave), 3 closed.
+        pub phase: u8,
+        /// The code of the CLOSE to send, until it left.
+        pub close: Option<u64>,
+        /// Whether the 1-RTT sending keys are installed.
+        pub send_keys: bool,
+        /// When the peer was last heard (or the connection last resumed).
+        pub last_activity: u64,
+        /// When a datagram last left.
+        pub last_sent: u64,
+        /// The keepalive interval.
+        pub keepalive: Option<u64>,
+        /// Since when the peer announced it sleeps.
+        pub peer_asleep: Option<u64>,
+        /// Whether this endpoint sleeps.
+        pub local_asleep: bool,
+        /// SLEEP frames still to send.
+        pub sleep_tx: u8,
+        /// When an unanswered WAKE is reported.
+        pub wake_deadline: Option<u64>,
+        /// Since when the link is down.
+        pub link_down: Option<u64>,
+        /// The deadline after which silence closes the connection.
+        pub idle: u64,
+        /// Whether the handshake is confirmed (its retransmit timer is then not read).
+        pub confirmed: bool,
+        /// The handshake retransmit (or give-up) deadline.
+        pub hs: Option<u64>,
+        /// When the pending REKEY request is sent again.
+        pub rekey: Option<u64>,
+        /// Loss recovery: the loss time or the probe timeout.
+        pub rec: Option<u64>,
+        /// When the acknowledgement is due.
+        pub ack: Option<u64>,
+        /// Whether the active path may still be sent at least 64 bytes (the acknowledgement deadline is read only then).
+        pub amp_ok: bool,
+        /// When the pacer releases the data that waits.
+        pub paced: Option<u64>,
+        /// The earliest path deadline: a probe of an unvalidated path, the idle-out of a validated direct one.
+        pub path: Option<u64>,
+        /// The earliest path MTU deadline: a probe retry or a black-hole suspicion.
+        pub mtu: Option<u64>,
+    }
+
+    /// What the recovery timer reads at a call of `handle_timeout` to decide a close behind a live carrier, as it reads
+    /// it: the probe timeout that fired, whether the path is dead, the active path is a relay path, when its carrier
+    /// was heard, the probe timeouts in a row, when the peer was last heard, whether the round trip has a sample and
+    /// its smoothed value, and the node's longest round trip.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[allow(clippy::struct_excessive_bools, reason = "independent flags of the view")]
+    pub struct CarrierView {
+        /// A probe timeout fired in this call.
+        pub ping: bool,
+        /// The path is dead (the connection ends silently).
+        pub dead: bool,
+        /// The active path is a relay path.
+        pub relay: bool,
+        /// When the relay's carrier last heard anything.
+        pub carrier: Option<u64>,
+        /// Probe timeouts in a row.
+        pub ptos: u32,
+        /// When the peer was last heard.
+        pub heard: u64,
+        /// The round trip has a sample.
+        pub sampled: bool,
+        /// The smoothed round trip.
+        pub srtt: u64,
+        /// The node's longest round trip (the larger of the two the endpoint reports, 0 for none).
+        pub node: u64,
+    }
+
+    conn_impl! {
+        /// What the last recovery timer read for the carrier rule, taken: `None` when no recovery timer ran since.
+        pub fn trace_carrier_take(&mut self) -> Option<CarrierView> {
+            self.life.carrier_probe.take()
+        }
+
+        pub(super) fn trace_carrier(&self, now: u64, ping: bool) -> CarrierView {
+            CarrierView {
+                ping,
+                dead: matches!(self.rec.health(now), Health::Dead),
+                relay: self.paths.active().is_some_and(|p| p.info.kind == PathKind::Relay),
+                carrier: self.life.carrier_heard,
+                ptos: self.rec.pto_count(),
+                heard: self.rec.last_heard(),
+                sampled: self.rec.rtt().has_sample(),
+                srtt: self.rec.rtt().smoothed(),
+                node: self.cfg.node_rtt.unwrap_or(0).max(self.cfg.node_peak_rtt.unwrap_or(0)),
+            }
+        }
+
+        /// The timers and the closing state as [`poll_timeout`](Self::poll_timeout) reads them.
+        pub fn trace_timers(&self) -> TimerView {
+            TimerView {
+                phase: match self.phase {
+                    Phase::Handshaking => 0,
+                    Phase::Connected => 1,
+                    Phase::Closing => 2,
+                    Phase::Closed => 3,
+                },
+                close: self.life.close,
+                send_keys: self.keys.send.is_some(),
+                last_activity: self.life.last_activity,
+                last_sent: self.life.last_sent,
+                keepalive: self.life.keepalive,
+                peer_asleep: self.life.peer_asleep,
+                local_asleep: self.life.local_asleep.is_some(),
+                sleep_tx: self.life.sleep_tx,
+                wake_deadline: self.life.wake_deadline,
+                link_down: self.life.link_down,
+                idle: self.idle_deadline(),
+                confirmed: self.confirmed,
+                hs: self.hs.retransmit_at(),
+                rekey: self.rekey_deadline(),
+                rec: self.rec.next_timeout(),
+                ack: self.rx.ack_deadline(),
+                amp_ok: self.amp_room(self.paths.active) >= 64,
+                paced: self.paced_until,
+                path: self.path_deadline(),
+                mtu: self.mtu_deadline(),
+            }
+        }
     }
 }

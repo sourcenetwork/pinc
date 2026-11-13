@@ -103,6 +103,8 @@ pub use path::{PathError, RJ_THIN_GAP};
 pub use reasm::trace::{FragmentView, ReasmProbe, ReasmView};
 pub use send::Transmit;
 pub use tables::Tables;
+#[cfg(feature = "trace")]
+pub use timer::trace::{CarrierView, TimerView};
 
 use self::cid::Cids;
 use self::ctl::Ctl;

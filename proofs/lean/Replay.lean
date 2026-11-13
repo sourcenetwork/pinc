@@ -20,6 +20,7 @@ import Vinc.TraceFrame
 import Vinc.TraceOrphan
 import Vinc.TraceHalfOpen
 import Vinc.TraceMtu
+import Vinc.TraceTimers
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
 import Vinc.TraceValuesPlan
@@ -181,6 +182,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut orw : TraceOrphan.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut mtw : TransportMtu.M := {}
+  let mut tmw : TraceTimers.W := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
   let mut ksw : TraceKeystore.W := {}
@@ -456,6 +458,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceMtu.replayEvent j mtw with
           | .ok w' =>
             mtw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceTimers.isTag t then
+          -- Timer and closing events (`tmr`, written by `trace_timers`): poll_timeout, handle_timeout and the ends.
+          match TraceTimers.replayEvent j tmw with
+          | .ok w' =>
+            tmw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
