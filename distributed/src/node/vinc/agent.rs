@@ -622,7 +622,6 @@ pub async fn serve<const K: usize, const D: usize>(
             io.drain(&mut agent).await;
             return Ok(());
         }
-        let now = agent.core.now();
         let due = [agent.core.poll_timeout(), agent.next_deadline()]
             .into_iter()
             .flatten()
@@ -651,11 +650,18 @@ pub async fn serve<const K: usize, const D: usize>(
                 agent.tick(now, &mut replies);
             }
             r = cmds.recv() => match r {
-                Some(req) => agent.request(now, req, &mut replies),
+                // The time is read now, not when the loop went to wait: a request that arrives late in a wait would
+                // otherwise be stamped, and its duration counted, from before it existed.
+                Some(req) => {
+                    let now = agent.core.now();
+                    agent.request(now, req, &mut replies);
+                }
                 // The orchestrator closed its end: nobody is left to ask for anything.
                 None => return Ok(()),
             },
-            Some(w) = wire.recv() => match w {
+            Some(w) = wire.recv() => {
+                let now = agent.core.now();
+                match w {
                 Wire::Ev(StreamEv::Closed(id)) => {
                     io.streams.ended(id);
                     agent.core.stream_event(now, StreamEv::Closed(id));
@@ -669,6 +675,7 @@ pub async fn serve<const K: usize, const D: usize>(
                 Wire::Accepted(id, s) => {
                     io.streams.adopt(id, s);
                     agent.core.stream_event(now, StreamEv::Accepted(id));
+                }
                 }
             },
         }
