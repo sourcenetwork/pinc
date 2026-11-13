@@ -60,6 +60,10 @@ fn warmup_default() -> f64 {
 /// One node's settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent scenario switch, read from its own TOML key"
+)]
 pub struct DtnNode {
     /// The node.
     pub name: String,
@@ -72,6 +76,9 @@ pub struct DtnNode {
     /// The node's store corrupts every slice it keeps.
     #[serde(default)]
     pub tamper_slices: bool,
+    /// The node's store corrupts the first slice (the first data symbol) of every bundle it keeps, and no other.
+    #[serde(default)]
+    pub tamper_one_slice: bool,
     /// The heads of the held bundles' records are corrupted when the node starts from its kept store.
     #[serde(default)]
     pub tamper_heads: bool,
@@ -185,6 +192,18 @@ pub enum Check {
     NoRefetch {
         /// The receiver.
         at: String,
+    },
+    /// The parity symbols the receptions at `at` asked for, in place of symbols a holder could not prove: at least
+    /// `min`, at most `max` when named.
+    Parity {
+        /// The receiver.
+        at: String,
+        /// The fewest.
+        #[serde(default)]
+        min: u64,
+        /// The most.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<u64>,
     },
     /// At least `min` transfers refused at `at` for `reason` (from `from`, if named).
     Refused {
@@ -344,7 +363,12 @@ impl Check {
             Self::NotDelivered { to } => vec![to],
             Self::Custody { moves } => moves.iter().flat_map(|m| [m.from.as_str(), m.to.as_str()]).collect(),
             Self::Copies => vec![],
-            Self::NoRefetch { at } | Self::WithinBudget { at } | Self::Restored { at, .. } => vec![at],
+            Self::NoRefetch { at }
+            | Self::WithinBudget { at }
+            | Self::Restored { at, .. }
+            | Self::Parity { at, .. } => {
+                vec![at]
+            }
             Self::Refused { at, from, .. } => [Some(at.as_str()), from.as_deref()].into_iter().flatten().collect(),
             Self::Expired { at } => at.iter().map(String::as_str).collect(),
         }
@@ -578,6 +602,21 @@ pub fn evaluate(
                     .collect();
                 o.metrics.insert("served_by".into(), json!(peers.len()));
             }
+            Check::Parity { at, min, max } => {
+                let n: u64 = entries(logs, at)
+                    .filter_map(|(_, _, w)| match w {
+                        DtnWhat::Parity { symbols, .. } => Some(*symbols),
+                        _ => None,
+                    })
+                    .sum();
+                o.metrics.insert("parity_symbols".into(), json!(n));
+                if n < *min || max.is_some_and(|m| n > m) {
+                    o.failures.push(format!(
+                        "{at} asked for {n} parity symbols, outside {min}..={}",
+                        max.map_or("any".into(), |m| m.to_string())
+                    ));
+                }
+            }
             Check::Refused { at, reason, min, from } => {
                 let n = entries(logs, at)
                     .filter(|(_, _, w)| {
@@ -759,14 +798,36 @@ mod tests {
             peer: "x".into(),
             first,
         };
-        logs.insert("d".into(), life(&[(6, sym(0)), (7, sym(16)), (8, sym(0))]));
+        let parity = |symbols| DtnWhat::Parity {
+            peer: "x".into(),
+            symbols,
+        };
+        logs.insert(
+            "d".into(),
+            life(&[(6, sym(0)), (7, sym(16)), (8, sym(0)), (9, parity(1)), (10, parity(2))]),
+        );
         let checks = [
             Check::Copies,
             Check::Custody { moves: vec![] },
             Check::NoRefetch { at: "d".into() },
+            Check::Parity {
+                at: "d".into(),
+                min: 3,
+                max: Some(3),
+            },
+            Check::Parity {
+                at: "d".into(),
+                min: 0,
+                max: Some(0),
+            },
         ];
         let o = evaluate(&checks, &sent, &logs, 0, rank);
-        assert_eq!(o.failures.len(), 1, "a refetch: {:?}", o.failures);
-        assert_eq!(o.passed, 2);
+        assert_eq!(
+            o.failures.len(),
+            2,
+            "a refetch and parity past its max: {:?}",
+            o.failures
+        );
+        assert_eq!(o.passed, 3);
     }
 }

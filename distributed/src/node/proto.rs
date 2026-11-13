@@ -82,6 +82,10 @@ pub struct DtnInit {
     /// The store corrupts every slice it keeps: the node serves symbols that do not hash to their signed root.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tamper_slices: bool,
+    /// The store corrupts the first slice of every bundle it keeps, and no other: one data symbol of the first
+    /// erasure block fails its proof, which the block's parity stands in for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tamper_one_slice: bool,
     /// When the program starts from a kept store, the head in every held bundle's record has a byte flipped.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tamper_heads: bool,
@@ -315,6 +319,20 @@ pub enum DtnWhat {
         peer: String,
         /// The run's first symbol.
         first: u64,
+    },
+    /// A peer's answer did not verify, and this symbol is lost from it for the rest of the transfer.
+    Lost {
+        /// The peer.
+        peer: String,
+        /// The symbol.
+        symbol: u64,
+    },
+    /// Parity symbols were asked of a peer in place of symbols it could not prove.
+    Parity {
+        /// The peer.
+        peer: String,
+        /// The parity symbols asked for.
+        symbols: u64,
     },
     /// It arrived whole and verified from a peer.
     Complete {

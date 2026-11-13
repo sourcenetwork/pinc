@@ -1,15 +1,23 @@
 //! The receiving side of a delay-tolerant transfer: an offer is checked and charged, symbols are verified into a
 //! partial bundle, and a whole bundle is opened (at its destination) or taken into custody and acknowledged.
 //!
-//! Invariants: the ledger is charged the full size of a bundle before its buffer exists; a symbol is kept only after
-//! it hashed to the signed root; a refusal ends the transfer and names the reason.
+//! A receiver asks for data symbols only, block by block, until an answer does not verify against the signed root
+//! (a symbol fails its proof, or the answer is cut short or malformed): the symbols before the fault are kept, the
+//! first one not held is lost from this holder for the rest of the transfer, and its block asks for its next symbol
+//! in its place, which is parity once the block's data is used up, so `finish` rebuilds the block from any `k` of
+//! its symbols. Each failed answer is a whole run of up to `k` symbols, so a holder whose every symbol is corrupt
+//! costs up to `m + 1` such runs of one block before the block is stuck and the bundle refused; the partial stays.
+//!
+//! Invariants: the ledger is charged a bundle's full size and its held set before its buffers exist; a symbol is
+//! kept only after it hashed to the signed root; a block never asks for more symbols than it is short of `k`, and
+//! asks for parity only in place of a lost symbol; what a holder lost belongs to its transfer alone, so a holder
+//! feeding the same partial at the same time asks for it again; a refusal ends the transfer and names the reason.
 
 use alloc::vec::Vec;
 
 use vinc_core::SessionId;
-use vinc_dag::ranges::VerifiedRanges;
 use vinc_dtn::DtnError as DtnLibError;
-use vinc_dtn::bundle::Reception;
+use vinc_dtn::bundle::Receiving;
 use vinc_dtn::custody::{CustodyAck, Incoming};
 use vinc_dtn::forward::{Held, Input};
 use vinc_dtn::head::{BundleId, SignedHead};
@@ -19,7 +27,7 @@ use vinc_transport::stream::StreamId;
 
 use crate::apps::{Apps, DtnApp, ServeSource};
 use crate::config::Store;
-use crate::dtn::{DStream, Dtn, Partial, Role, RxCtx, Stop};
+use crate::dtn::{DStream, Dtn, Partial, Role, RxCtx, Stop, Want, no_symbols, partial_charge};
 use crate::dtn_wire::{self as wire, Refusal};
 use crate::ep::Ep;
 use crate::event::NodeEvent;
@@ -69,17 +77,23 @@ where
             copies,
             offer,
             ask: None,
+            lost: Vec::new(),
         };
         // Already whole here: take custody again (a repeated offer or a hand-back) and acknowledge.
         if d.heads.contains_key(&id) || d.received.contains_key(&id) {
             return Err(self.dtn_complete(session, stream, &ctx, &signed, None));
         }
+        // A partial already here is resumed: this holder starts with nothing lost, since it may prove what another
+        // could not.
         if !d.partials.contains_key(&id) {
             let total = layout.total_len();
+            let Some(charge) = partial_charge(&layout) else {
+                return Err(refuse(Refusal::Malformed));
+            };
             let mut evicted: Vec<Key> = Vec::new();
             let admitted = d
                 .led
-                .admit(id.store_key(), total, Class::Transit, h.expires_at(), wall, |e| {
+                .admit(id.store_key(), charge, Class::Transit, h.expires_at(), wall, |e| {
                     evicted.push(e.key);
                 });
             let app = self.apps.dtn();
@@ -91,25 +105,21 @@ where
             }
             let sealed_len = usize::try_from(total).ok();
             let outboard_len = layout.outboard_len().ok().and_then(|n| usize::try_from(n).ok());
-            let (Some(sealed_len), Some(outboard_len)) = (sealed_len, outboard_len) else {
+            let (Some(sealed_len), Some(outboard_len), Some(have)) = (sealed_len, outboard_len, no_symbols(&layout))
+            else {
                 let _ = d.led.release(&id.store_key());
                 return Err(refuse(Refusal::Malformed));
             };
-            d.partials.insert(
-                id,
-                Partial {
-                    signed,
-                    sealed: alloc::vec![0; sealed_len],
-                    outboard: alloc::vec![0; outboard_len],
-                    have: VerifiedRanges::new(),
-                    cursor: 0,
-                },
-            );
+            let sealed = alloc::vec![0; sealed_len];
+            let outboard = alloc::vec![0; outboard_len];
+            d.partials
+                .insert(id, Partial::new(signed, sealed, outboard, have, false));
         }
         Ok(ctx)
     }
 
-    /// Ask for the next run of symbols, or finish the bundle if every data symbol is held.
+    /// Ask for the next run of symbols; finish the bundle once every block holds `k` symbols, or refuse it when a
+    /// block cannot reach `k` from this holder.
     pub(crate) fn dtn_advance(
         &mut self,
         session: SessionId,
@@ -128,21 +138,35 @@ where
         let Ok(layout) = p.signed.head().layout() else {
             return Err(Stop::Break);
         };
-        if let Some((first, end)) = Dtn::want(&layout, p) {
-            ctx.ask = Some((first, end));
-            wire::start(&mut d.tx, wire::WANT);
-            d.tx.extend_from_slice(&first.to_be_bytes());
-            d.tx.extend_from_slice(&end.to_be_bytes());
-            wire::finish(&mut d.tx);
-            return if self.io.write(session, stream, &d.tx) {
-                Ok(())
-            } else {
-                Err(Stop::Break)
-            };
+        let (first, end) = match Dtn::want(&layout, p, &mut ctx.lost) {
+            Want::Ask(first, end) => (first, end),
+            Want::Decodable => {
+                ctx.ask = None;
+                let ctx = ctx.clone();
+                return Err(self.dtn_finish(session, stream, &ctx));
+            }
+            // The partial stays: another holder, or this one again, may prove the lost symbols.
+            Want::Stuck => return Err(Stop::Refuse(ctx.bundle, Refusal::BadProof)),
+        };
+        ctx.ask = Some((first, end));
+        wire::start(&mut d.tx, wire::WANT);
+        d.tx.extend_from_slice(&first.to_be_bytes());
+        d.tx.extend_from_slice(&end.to_be_bytes());
+        wire::finish(&mut d.tx);
+        if !self.io.write(session, stream, &d.tx) {
+            return Err(Stop::Break);
         }
-        ctx.ask = None;
-        let ctx = *ctx;
-        Err(self.dtn_finish(session, stream, &ctx))
+        let parity = (first..end)
+            .filter(|s| layout.locate(*s).is_some_and(|p| p.is_parity()))
+            .count();
+        if parity > 0 {
+            self.io.trace(NodeTrace::DtnParity {
+                bundle: btag(&ctx.bundle.0),
+                peer: tag(&ctx.from.bytes),
+                symbols: parity as u64,
+            });
+        }
+        Ok(())
     }
 
     /// A DATA frame: the symbols asked for, with their proof.
@@ -170,38 +194,43 @@ where
         let Some(p) = d.partials.get_mut(&id) else {
             return Err(Stop::Break);
         };
-        let have = core::mem::take(&mut p.have);
-        let fed = match Reception::resume(&p.signed, &mut p.sealed, have, wall) {
-            Ok(mut r) => {
-                let res = r.feed(first..end, proof);
-                let kept = r.have().clone();
-                p.have = kept;
-                res
+        // Another holder feeding this partial may have brought some of these in since the ask.
+        let fresh: Vec<u64> = (first..end).filter(|s| !p.have.holds(*s)).collect();
+        let fed =
+            Receiving::resume(&p.signed, &mut p.sealed, &mut p.have, wall).and_then(|mut r| r.feed(first..end, proof));
+        let g = p.signed.head().layout().map_or(0, |l| l.slice_len());
+        for s in &fresh {
+            if p.have.holds(*s) {
+                p.note_unsaved(*s, g);
             }
-            Err(e) => Err(e),
-        };
-        if let Err(e) = fed {
-            return Err(Stop::Refuse(id, Refusal::for_feed(e)));
         }
-        self.io.trace(NodeTrace::DtnSymbols {
-            bundle: btag(&id.0),
-            peer: tag(&ctx.from.bytes),
-            first,
-        });
-        let grown = self.dtn.as_deref().and_then(|d| {
-            d.partials.get(&id).map(|p| {
-                p.have
-                    .covered_len()
-                    .saturating_sub(d.saved.get(&id).copied().unwrap_or(0))
-            })
-        });
-        if grown.is_some_and(|g| g >= crate::dtn_save::SAVE_BYTES) {
+        match fed {
+            Ok(()) => self.io.trace(NodeTrace::DtnSymbols {
+                bundle: btag(&id.0),
+                peer: tag(&ctx.from.bytes),
+                first,
+            }),
+            // The symbols before the fault are kept; the first one not held is lost from this holder, and its block
+            // asks for another symbol in its place.
+            Err(DtnLibError::Tree(_)) => {
+                if let Some(s) = fresh.iter().copied().find(|s| !p.have.holds(*s)) {
+                    ctx.lost.push(s);
+                    self.io.trace(NodeTrace::DtnLost {
+                        bundle: btag(&id.0),
+                        peer: tag(&ctx.from.bytes),
+                        symbol: s,
+                    });
+                }
+            }
+            Err(e) => return Err(Stop::Refuse(id, Refusal::for_feed(e))),
+        }
+        if p.unsaved_bytes >= crate::dtn_save::SAVE_BYTES {
             self.dtn_save_partial(&id);
         }
         self.dtn_advance(session, stream, rx)
     }
 
-    /// Every data symbol is held: rebuild the rest, check the root, and take the bundle in.
+    /// Every block holds `k` symbols: rebuild the rest, check the root, and take the bundle in.
     fn dtn_finish(&mut self, session: SessionId, stream: StreamId, ctx: &RxCtx) -> Stop {
         let wall = self.io.wall_ms();
         let Some(d) = self.dtn.as_deref_mut() else {
@@ -211,7 +240,6 @@ where
         let Some(mut p) = d.partials.remove(&id) else {
             return Stop::Break;
         };
-        d.unmark(&id);
         // The partial record gives way to the bundle's own: held, delivered here, or none if it is refused.
         self.apps.dtn().drop_record(&id);
         let refuse = |why| Stop::Refuse(id, why);
@@ -220,8 +248,7 @@ where
             let _ = d.led.release(&id.store_key());
             return refuse(Refusal::Malformed);
         };
-        let have = core::mem::take(&mut p.have);
-        let Ok(mut rx) = Reception::resume(&p.signed, &mut p.sealed, have, wall) else {
+        let Ok(mut rx) = Receiving::resume(&p.signed, &mut p.sealed, &mut p.have, wall) else {
             let _ = d.led.release(&id.store_key());
             return refuse(Refusal::Expired);
         };
@@ -261,7 +288,6 @@ where
                 return refuse(Refusal::CannotOpen);
             };
             d.received.insert(id, signed.head().expires_at());
-            d.unmark(&id);
             self.dtn_save_received(&id, signed.head().expires_at());
             self.io.emit(NodeEvent::DtnReceived {
                 bundle: id.0,
@@ -334,7 +360,6 @@ where
                 }),
             );
             d.heads.entry(id).or_insert_with(|| signed.clone());
-            d.unmark(&id);
             Some(due)
         };
         let Some(key) = self.apps.dtn().signer() else {

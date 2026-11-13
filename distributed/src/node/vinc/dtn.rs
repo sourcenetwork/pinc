@@ -204,6 +204,16 @@ impl On {
             .is_ok()
     }
 
+    /// Add `more` to the end of a file; a crash may leave a torn tail, which the node's restore ignores.
+    fn append(&self, id: &BundleId, ext: &str, more: &[u8]) {
+        use std::io::Write as _;
+        let Some(dir) = self.dir() else { return };
+        let path = dir.join(format!("{}.{ext}", hex(&id.0)));
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
+            let _ = f.write_all(more);
+        }
+    }
+
     fn unlink(&self, id: &BundleId, ext: &str) {
         if let Some(dir) = self.dir() {
             let _ = std::fs::remove_file(dir.join(format!("{}.{ext}", hex(&id.0))));
@@ -232,6 +242,12 @@ impl DtnApp<Software> for DtnStore {
             for b in sealed.iter_mut().step_by(1024) {
                 *b ^= 0x01;
             }
+        }
+        if on.init.tamper_one_slice
+            && let Some(b) = sealed.first_mut()
+        {
+            // The first byte is in symbol 0, the first data symbol of the first erasure block.
+            *b ^= 0x01;
         }
         let len = (sealed.len() as u64).to_le_bytes();
         if !on.write(id, "b", &[&len, &sealed, outboard]) {
@@ -296,6 +312,15 @@ impl DtnApp<Software> for DtnStore {
         if let Some(on) = self.0.as_mut() {
             on.write(id, "r", &[record]);
             on.records.insert(*id, record.to_vec());
+        }
+    }
+
+    fn append_record(&mut self, id: &BundleId, more: &[u8]) {
+        if let Some(on) = self.0.as_mut()
+            && let Some(rec) = on.records.get_mut(id)
+        {
+            rec.extend_from_slice(more);
+            on.append(id, "r", more);
         }
     }
 

@@ -20,6 +20,7 @@ pub mod error;
 pub mod forward;
 pub mod gf256;
 pub mod head;
+pub mod held;
 pub mod labels;
 pub mod layout;
 pub mod rs;

@@ -1026,3 +1026,19 @@ path = "vinc_state.rs"
 [[test]]
 name = "layers_dtn_capacity"
 path = "layers_dtn_capacity.rs"
+
+[[test]]
+name = "layers_dtn_parity"
+path = "layers_dtn_parity.rs"
+
+[[test]]
+name = "dtn_held"
+path = "dtn_held.rs"
+
+[[test]]
+name = "layers_dtn_lost"
+path = "layers_dtn_lost.rs"
+
+[[test]]
+name = "layers_dtn_save"
+path = "layers_dtn_save.rs"

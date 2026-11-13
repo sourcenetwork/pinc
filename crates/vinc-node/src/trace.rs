@@ -202,6 +202,24 @@ pub enum NodeTrace {
         /// The first symbol.
         first: u64,
     },
+    /// A holder's answer did not verify: `symbol` is lost from that holder for the rest of the transfer.
+    DtnLost {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// The symbol lost.
+        symbol: u64,
+    },
+    /// A receiver asked a holder for parity symbols, in place of symbols the holder could not prove.
+    DtnParity {
+        /// The bundle.
+        bundle: u64,
+        /// The peer's tag.
+        peer: u64,
+        /// The parity symbols asked for.
+        symbols: u64,
+    },
     /// A bundle arrived complete and verified.
     DtnComplete {
         /// The bundle.
@@ -276,6 +294,8 @@ impl NodeTrace {
             Self::DtnCreated { .. } => "dtn_created",
             Self::DtnOffer { .. } => "dtn_offer",
             Self::DtnSymbols { .. } => "dtn_symbols",
+            Self::DtnLost { .. } => "dtn_lost",
+            Self::DtnParity { .. } => "dtn_parity",
             Self::DtnComplete { .. } => "dtn_complete",
             Self::DtnCustody { .. } => "dtn_custody",
             Self::DtnAcked { .. } => "dtn_acked",
@@ -314,6 +334,10 @@ impl NodeTrace {
             Self::DtnCreated { bundle, copies } => ([("bundle", bundle), ("copies", copies), z], 2),
             Self::DtnOffer { bundle, peer, copies } => ([("bundle", bundle), ("peer", peer), ("copies", copies)], 3),
             Self::DtnSymbols { bundle, peer, first } => ([("bundle", bundle), ("peer", peer), ("first", first)], 3),
+            Self::DtnLost { bundle, peer, symbol } => ([("bundle", bundle), ("peer", peer), ("symbol", symbol)], 3),
+            Self::DtnParity { bundle, peer, symbols } => {
+                ([("bundle", bundle), ("peer", peer), ("symbols", symbols)], 3)
+            }
             Self::DtnComplete { bundle, peer } | Self::DtnCustody { bundle, peer } => {
                 ([("bundle", bundle), ("peer", peer), z], 2)
             }

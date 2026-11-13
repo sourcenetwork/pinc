@@ -20,16 +20,17 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
+use core::ops::Range;
 
 use vinc_core::{Command, SessionId};
 use vinc_crypto::NodeId as FullId;
 use vinc_crypto::Secret;
-use vinc_dag::ranges::VerifiedRanges;
 use vinc_dtn::DtnError as DtnLibError;
 use vinc_dtn::bundle::{Outgoing, Plan, seal_bundle, serve, serve_len};
 use vinc_dtn::custody::{CustodyAck, CustodyBook, Incoming};
 use vinc_dtn::forward::{Action, Forwarder, Held, Input, Policy};
 use vinc_dtn::head::{BundleId, Erasure, SignedHead};
+use vinc_dtn::held::{BlockHeld, held_len};
 use vinc_dtn::hlc::Hlc;
 use vinc_dtn::layout::SliceLayout;
 use vinc_dtn::seal::{RecipientKeys, SealSeeds};
@@ -52,14 +53,6 @@ pub const BUNDLES: usize = 32;
 const LEDGER: usize = 64;
 /// The most transfer streams open at once.
 pub(crate) const STREAMS: usize = 64;
-/// The most disjoint intervals a partial reception tracks. Reed-Solomon parity sits between the data of consecutive
-/// erasure blocks, so a data-only reception records one range per block; this bounds how many blocks a bundle may
-/// have to be received here. At `k` data symbols a block, 256 covers a bundle of up to `256 * k` data slices: about
-/// 1 MiB at 4 KiB slices (k=4), or 4 MiB at 16 KiB slices. Each interval is 16 bytes, so this set is 4 KiB per
-/// in-flight reception (up to [`BUNDLES`] of them); raising it from 64 cost about 3 KiB more each. A bundle with more
-/// blocks than this still overflows (reported as [`Refusal::Fragmented`]); the real fix is to stop tracking ranges
-/// per block (issue #79).
-const INTERVALS: usize = 256;
 /// The bytes of symbols one request asks for.
 const CHUNK_BYTES: u64 = 64 << 10;
 
@@ -111,14 +104,69 @@ impl fmt::Display for DtnSendError {
 
 impl core::error::Error for DtnSendError {}
 
+/// The held-symbol set of a partial bundle: a bit per symbol and a count per erasure block, sized from the layout.
+pub(crate) type Symbols = BlockHeld<Vec<u8>>;
+
+/// An empty held-symbol set for `layout`.
+pub(crate) fn no_symbols(layout: &SliceLayout) -> Option<Symbols> {
+    BlockHeld::new(layout, alloc::vec![0; held_len(layout).ok()?]).ok()
+}
+
+/// What the ledger is charged for a partial bundle of `layout`: its symbols and its held set.
+pub(crate) fn partial_charge(layout: &SliceLayout) -> Option<u64> {
+    let held = u64::try_from(held_len(layout).ok()?).ok()?;
+    layout.total_len().checked_add(held)
+}
+
 /// A bundle being received: the verified symbols so far.
 pub(crate) struct Partial {
     pub(crate) signed: SignedHead,
     pub(crate) sealed: Vec<u8>,
     pub(crate) outboard: Vec<u8>,
-    pub(crate) have: VerifiedRanges<INTERVALS>,
-    /// The index of the first data symbol that may still be missing.
+    pub(crate) have: Symbols,
+    /// The first erasure block that may still be short of `k` held symbols.
     pub(crate) cursor: u64,
+    /// The byte runs verified since the last save, in the order they arrived, and their total length.
+    pub(crate) unsaved: Vec<Range<u64>>,
+    pub(crate) unsaved_bytes: u64,
+    /// Whether the host keeps a record of this partial, so a save appends to it.
+    pub(crate) recorded: bool,
+}
+
+impl Partial {
+    pub(crate) fn new(signed: SignedHead, sealed: Vec<u8>, outboard: Vec<u8>, have: Symbols, recorded: bool) -> Self {
+        Self {
+            signed,
+            sealed,
+            outboard,
+            have,
+            cursor: 0,
+            unsaved: Vec::new(),
+            unsaved_bytes: 0,
+            recorded,
+        }
+    }
+
+    /// Note symbol `s`, of `g` bytes, as verified since the last save.
+    pub(crate) fn note_unsaved(&mut self, s: u64, g: u64) {
+        let r = s * g..(s + 1) * g;
+        self.unsaved_bytes += g;
+        match self.unsaved.last_mut() {
+            Some(last) if last.end == r.start => last.end = r.end,
+            _ => self.unsaved.push(r),
+        }
+    }
+}
+
+/// What a partial bundle asks its holder for next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Want {
+    /// The symbols `first..end`.
+    Ask(u64, u64),
+    /// Every block holds `k` symbols: finish rebuilds the rest.
+    Decodable,
+    /// A block cannot reach `k` symbols from this holder: too many of its symbols were lost.
+    Stuck,
 }
 
 /// Which side of a transfer a stream is.
@@ -130,13 +178,17 @@ pub(crate) enum Role {
 }
 
 /// What a receiving stream knows of its transfer.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct RxCtx {
     pub(crate) bundle: BundleId,
     pub(crate) from: FullId,
     pub(crate) copies: u16,
     pub(crate) offer: u64,
     pub(crate) ask: Option<(u64, u64)>,
+    /// The symbols this holder sent and could not prove: not asked of it again, and stood in for by another symbol
+    /// of their block. They belong to this transfer only, since another holder may prove them. A symbol leaves once
+    /// its block holds `k`, so at most `m + 1` of one block are kept before the block is stuck.
+    pub(crate) lost: Vec<u64>,
 }
 
 /// A transfer stream and the bytes read from it and not yet parsed.
@@ -163,8 +215,6 @@ pub(crate) struct Dtn {
     pub(crate) contact_at: Option<u64>,
     /// When a delay-tolerant dial that failed may be made again (node time).
     pub(crate) redial_at: Option<Nanos>,
-    /// The verified bytes of each partial bundle at its last saved record.
-    pub(crate) saved: BTreeMap<BundleId, u64>,
     pub(crate) tx: Vec<u8>,
 }
 
@@ -184,7 +234,6 @@ impl Dtn {
             contacts_due: true,
             contact_at: None,
             redial_at: None,
-            saved: BTreeMap::new(),
             tx: Vec::new(),
         }
     }
@@ -216,38 +265,54 @@ impl Dtn {
         self.offers.retain(|(_, b), _| b != id);
         // The forwarder may not know it (a partial reception): nothing to forget then.
         let _ = self.fwd.step(wall, Input::Forget(*id));
-        self.saved.remove(id);
         app.remove(id);
         app.drop_record(id);
         held
     }
 
-    /// The first run of data symbols not yet held, at most `CHUNK_BYTES` of them.
-    pub(crate) fn want(layout: &SliceLayout, p: &mut Partial) -> Option<(u64, u64)> {
-        let g = layout.slice_len();
-        let held = |s: u64| p.have.contains_range(s * g..(s + 1) * g);
-        let total = layout.data_symbols();
-        let mut d = p.cursor;
-        let first = loop {
-            if d >= total {
-                p.cursor = total;
-                return None;
-            }
-            let s = layout.data_symbol(d)?;
-            if !held(s) {
-                break s;
-            }
-            d += 1;
-        };
-        p.cursor = d;
-        let max = (CHUNK_BYTES / g).max(1);
-        let mut end = first + 1;
-        let mut n = d + 1;
-        while end - first < max && n < total && layout.data_symbol(n) == Some(end) && !held(end) {
-            end += 1;
-            n += 1;
+    /// The next run of symbols to ask for, at most `CHUNK_BYTES` of them. From the first block short of `k` held
+    /// symbols on, each block wants as many symbols as it is short: its first ones in symbol order that are neither
+    /// held nor `lost` from this holder. A block's data comes before its parity, so with no loss exactly the data not
+    /// yet held is asked for, and parity only ever stands in for a lost symbol, one for one.
+    pub(crate) fn want(layout: &SliceLayout, p: &mut Partial, lost: &mut Vec<u64>) -> Want {
+        let max = (CHUNK_BYTES / layout.slice_len()).max(1);
+        let blocks = layout.blocks();
+        while p.cursor < blocks && p.have.count(p.cursor) >= layout.block_k(p.cursor) {
+            p.cursor += 1;
         }
-        Some((first, end))
+        lost.retain(|s| layout.locate(*s).is_some_and(|at| p.have.count(at.block) < at.block_k));
+        let open = |s: &u64| !p.have.holds(*s) && !lost.contains(s);
+        let mut run: Option<(u64, u64)> = None;
+        for b in p.cursor..blocks {
+            let start = layout.block_start(b);
+            let end = start + u64::try_from(layout.block_n(b)).unwrap_or(0);
+            let mut need = layout.block_k(b).saturating_sub(p.have.count(b));
+            if need == 0 {
+                if run.is_some() {
+                    break;
+                }
+                continue;
+            }
+            if (start..end).filter(&open).count() < need {
+                return Want::Stuck;
+            }
+            for s in (start..end).filter(&open) {
+                if need == 0 {
+                    break;
+                }
+                need -= 1;
+                run = match run {
+                    None => Some((s, s + 1)),
+                    Some((a, e)) if e == s && e - a < max => Some((a, e + 1)),
+                    Some((a, e)) => return Want::Ask(a, e),
+                };
+            }
+            // A run goes on into the next block only if it ends on this block's last symbol.
+            if run.is_some_and(|(_, e)| e < end) {
+                break;
+            }
+        }
+        run.map_or(Want::Decodable, |(a, e)| Want::Ask(a, e))
     }
 }
 
@@ -735,7 +800,11 @@ where
                 });
                 self.io.drop_strm(session, stream);
             }
-            Some(Stop::Refuse(bundle, why)) => self.dtn_refuse(session, stream, &ds, &bundle, why),
+            Some(Stop::Refuse(bundle, why)) => {
+                // A refused transfer may have brought symbols in: the partial keeps them across a restart too.
+                self.dtn_save_partial(&bundle);
+                self.dtn_refuse(session, stream, &ds, &bundle, why);
+            }
             // The transfer is over; ending our half lets the stream close.
             Some(Stop::Done) => self.io.close_stream(session, stream),
         }

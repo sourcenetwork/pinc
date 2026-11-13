@@ -448,6 +448,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 t @ (NodeTrace::DtnCreated { .. }
                 | NodeTrace::DtnOffer { .. }
                 | NodeTrace::DtnSymbols { .. }
+                | NodeTrace::DtnParity { .. }
+                | NodeTrace::DtnLost { .. }
                 | NodeTrace::DtnComplete { .. }
                 | NodeTrace::DtnCustody { .. }
                 | NodeTrace::DtnAcked { .. }

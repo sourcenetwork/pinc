@@ -226,6 +226,8 @@ pub struct DtnStore {
     pub bundles: BTreeMap<BundleId, (Vec<u8>, Vec<u8>)>,
     /// The node's records of the bundles it looks after, kept across a restart.
     pub records: BTreeMap<BundleId, Vec<u8>>,
+    /// The bytes written to records, saves and appends together.
+    pub record_bytes: u64,
     /// Contact windows `(peer, from_ms, to_ms)` in simulated milliseconds; `None` means every peer, always.
     pub windows: Option<Vec<([u8; 32], u64, u64)>>,
     pub budget: u64,
@@ -259,6 +261,7 @@ impl DtnStore {
             secrets: Rc::new(Secrets { keys, dk, xs }),
             bundles: BTreeMap::new(),
             records: BTreeMap::new(),
+            record_bytes: 0,
             windows: None,
             budget: 8 << 20,
             policy: Policy {
@@ -315,7 +318,13 @@ impl DtnApp<Caps> for DtnStore {
     }
 
     fn save_record(&mut self, id: &BundleId, record: &[u8]) {
+        self.record_bytes += record.len() as u64;
         self.records.insert(*id, record.to_vec());
+    }
+
+    fn append_record(&mut self, id: &BundleId, more: &[u8]) {
+        self.record_bytes += more.len() as u64;
+        self.records.entry(*id).or_default().extend_from_slice(more);
     }
 
     fn drop_record(&mut self, id: &BundleId) {

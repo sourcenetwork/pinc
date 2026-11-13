@@ -140,10 +140,14 @@ pub trait DtnApp<P: Provider> {
     }
 
     /// Keep the node's record of a bundle (opaque bytes) under `id`, replacing the earlier one. The node saves a
-    /// record when it makes a bundle, takes custody, hands copies on, and as a partial bundle grows; it drops the
+    /// record when it makes a bundle, takes custody, hands copies on, and when a partial bundle starts; it drops the
     /// record with [`drop_record`](Self::drop_record). A host that keeps them (with the bundles it stores) lets the
     /// node resume after a restart with [`Node::dtn_restore`](crate::Node::dtn_restore). The default keeps nothing.
     fn save_record(&mut self, _id: &BundleId, _record: &[u8]) {}
+
+    /// Add `more` to the end of the record kept under `id`. A partial bundle's record grows this way, by the symbols
+    /// verified since its last save, so a reception writes each byte once. The default keeps nothing.
+    fn append_record(&mut self, _id: &BundleId, _more: &[u8]) {}
 
     /// Forget the record of a bundle.
     fn drop_record(&mut self, _id: &BundleId) {}
