@@ -20,7 +20,9 @@
 (*    layer sees every frame come back (LostRequeues);                     *)
 (*  - the probe timeout declares the oldest packet in flight lost, backs   *)
 (*    off by one count per firing, not while the peer sleeps or the link   *)
-(*    is down (PtoOldest, PtoBackoff, DurMonotone, DurCapped);             *)
+(*    is down (a sleeping peer holds the probe timer and its back-off, not *)
+(*    the time-threshold loss rule) (PtoOldest, PtoBackoff, DurMonotone,   *)
+(*    DurCapped);                                                          *)
 (*  - the ring never overflows and the room check guarantees progress: a   *)
 (*    ring without room is full and its head is in flight, and the probe   *)
 (*    that fires then frees it (RingShape, RoomProgress);                  *)
@@ -148,7 +150,10 @@ PtoBackoff == L'.op = "timeout" =>
     /\ (R'.pc = R.pc \/ R'.pc = R.pc + 1)
     /\ ((R.asleep \/ R.down) => R'.pc = R.pc)
     /\ (L'.ping => (R'.pc = R.pc + 1 \/ R.down))
-    /\ (R.asleep => ~L'.ping /\ ev' = <<>>)
+    /\ (R.asleep => ~L'.ping)
+\* the earlier statement, too strong: a sleeping peer holds the probe timer and its back-off, not loss detection, so a
+\* timeout may still report a packet lost by the time threshold (Recovery_asleep_w finds it)
+PtoBackoffStrict == PtoBackoff /\ (L'.op = "timeout" => (R.asleep => ev' = <<>>))
 RoomProgress == (L'.op = "timeout" /\ L'.ping /\ ~HasRoom(R.ring)) => HasRoom(R'.ring)
 GhostBound == (L'.op \in {"ack", "timeout"} /\ L'.s.lp > 0) => Ghosts(R'.ring) <= MAXG
 FlushAll == L'.op = "flush" => (R'.inf = 0 /\ R'.infp = 0 /\ R'.pc = 0 /\ R'.lt = -1)
@@ -160,4 +165,5 @@ Bound == stepc <= KMAX
 Steps == /\ Mono /\ DoneStays /\ EventsSound /\ EventsFresh /\ EventsDistinct /\ LeavesReported /\ SlotsLeaveFromHead
          /\ SendOk /\ SummaryAgrees /\ PtoOldest /\ PtoBackoff /\ RoomProgress /\ GhostBound /\ FlushAll
 StepProps == [][Steps]_vars
+StrictProps == [][PtoBackoffStrict]_vars
 =============================================================================

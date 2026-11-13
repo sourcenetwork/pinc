@@ -65,6 +65,7 @@ CHome == [home |-> TRUE, rtt |-> 0, udp |-> FALSE, rides |-> FALSE, queued |-> F
 CHomeUdp == [home |-> TRUE, rtt |-> SEC, udp |-> TRUE, rides |-> FALSE, queued |-> FALSE]
 CRides == [home |-> FALSE, rtt |-> 0, udp |-> FALSE, rides |-> TRUE, queued |-> FALSE]
 CQueued == [home |-> TRUE, rtt |-> 0, udp |-> FALSE, rides |-> TRUE, queued |-> TRUE]
+CHomeRides == [home |-> TRUE, rtt |-> 0, udp |-> FALSE, rides |-> TRUE, queued |-> FALSE]
 S0Plain == NewShared
 S0Lease == [NewShared EXCEPT !.lhi = 20 * SEC, !.klearn = TRUE]
 S0Phone == [NewShared EXCEPT !.phone = TRUE, !.klearn = TRUE, !.kiv = 40 * SEC]
@@ -74,6 +75,7 @@ StepsC == {7 * SEC, 30 * SEC}
 StepsD == {10 * SEC, 25 * SEC}
 StepsE == {600000, 3 * SEC}
 StepsB == {SEC \div 2, 3 * SEC, 30 * SEC}
+StepsF == {3 * SEC, 30 * SEC}
 LDown == NewLink
 LDialing == [NewLink EXCEPT !.st = "dialing", !.ds = 0]
 LOpen == [NewLink EXCEPT !.st = "open", !.lrx = 0, !.hlt = 0, !.was = TRUE]

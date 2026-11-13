@@ -245,6 +245,7 @@ par run_tlc_deep connect_codec ConnectCodec ConnectCodec
 par run_tlc connect_link ConnectLink ConnectLink
 par run_tlc connect_link_lease ConnectLink ConnectLink_lease
 par run_tlc connect_link_rides ConnectLink ConnectLink_rides
+par run_tlc connect_link_rides_home ConnectLink ConnectLink_ridesHome
 par run_tlc connect_link_restart ConnectLink ConnectLink_restart
 par run_tlc connect_client ConnectClient ConnectClient
 par run_tlc connect_client_pending ConnectClient ConnectClient_pending
@@ -254,6 +255,7 @@ par run_tlc connect_table ConnectTable ConnectTable
 par run_tlc connect_table_n4 ConnectTable ConnectTable_n4
 par run_tlc connect_cache ConnectTable ConnectTable_cache
 par run_tlc connect_relay ConnectRelay ConnectRelay
+par run_tlc connect_relay_sleep ConnectRelay ConnectRelay_sleep
 par run_tlc dtn_store DtnStore DtnStore
 par witness_tlc dtn_store_cross DtnStore DtnStore_cross NoCrossEviction
 par run_tlc dtn_custody DtnCustody DtnCustody
@@ -380,6 +382,9 @@ par witness_live_tlc streams_live_stall Streams Streams_live_stall
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags
+par run_tlc recovery_flushdown Recovery Recovery_flushdown
+par run_tlc recovery_asleep Recovery Recovery_asleep
+par witness_tlc recovery_asleep_w Recovery Recovery_asleep_w StrictProps
 par run_tlc recovery_tail Recovery Recovery_tail
 par run_tlc rx Rx Rx
 par run_tlc rx_wide Rx Rx_wide
@@ -432,18 +437,23 @@ par witness_tlc broadcast_auth_nots BroadcastAuth BroadcastAuth_nots DeliverExac
 par run_tlc broadcast_wire BroadcastWire BroadcastWire
 par run_tlc broadcast_midmap BroadcastMidMap BroadcastMidMap
 par run_tlc broadcast_log BroadcastLog BroadcastLog
+par run_tlc broadcast_log_cap BroadcastLog BroadcastLog_cap
+par run_tlc broadcast_log_big BroadcastLog BroadcastLog_big
 par run_tlc broadcast_subs BroadcastSubs BroadcastSubs
 par run_tlc broadcast_floors BroadcastFloors BroadcastFloors
 par run_tlc broadcast_floors_cap1 BroadcastFloors BroadcastFloors_cap1
 par witness_tlc broadcast_floors_top BroadcastFloors BroadcastFloors_top FloorsSound
 par witness_tlc broadcast_floors_future BroadcastFloors BroadcastFloors_future FloorsSound
 par run_tlc broadcast_publish BroadcastPublish BroadcastPublish
+par run_tlc broadcast_publish_batch1 BroadcastPublish BroadcastPublish_batch1
 par run_tlc broadcast_publish_reach BroadcastPublish BroadcastPublish_reach
 par run_tlc broadcast_publish_nohub BroadcastPublish BroadcastPublish_nohub
+par run_tlc broadcast_publish_nohub_batch1 BroadcastPublish BroadcastPublish_nohub_batch1
 par witness_tlc broadcast_publish_ceiling BroadcastPublish BroadcastPublish_ceiling AllServedAtGiveUp
 par run_tlc broadcast_pending BroadcastPending BroadcastPending
 par witness_tlc broadcast_pending_drop BroadcastPending BroadcastPending_drop EveryOkTracked
 par run_tlc broadcast_push BroadcastPush BroadcastPush
+par run_tlc broadcast_push_n6 BroadcastPush BroadcastPush_n6
 par witness_tlc broadcast_push_nocursor BroadcastPush BroadcastPush_nocursor AckedReachesLive
 par witness_tlc broadcast_push_noguard BroadcastPush BroadcastPush_noguard OwedInLog
 par witness_tlc broadcast_push_notell BroadcastPush BroadcastPush_notell AckedReachesLive
@@ -456,6 +466,8 @@ par run_tlc broadcast_system BroadcastSystem BroadcastSystem
 par run_tlc broadcast_system_live BroadcastSystem BroadcastSystem_live
 par witness_tlc broadcast_system_fb BroadcastSystem BroadcastSystem_fb AtMostOnceStrict
 par run_tlc broadcast_node BroadcastNode BroadcastNode
+par run_tlc broadcast_node_two BroadcastNode BroadcastNode_two
+par run_tlc broadcast_node_hubcap BroadcastNode BroadcastNode_hubcap
 par run_tlc broadcast_node_floors BroadcastNode BroadcastNode_floors
 par run_tlc broadcast_node_hub BroadcastNode BroadcastNode_hub
 par witness_tlc broadcast_node_ackearly BroadcastNode BroadcastNode_ackEarly AckOnlyStored

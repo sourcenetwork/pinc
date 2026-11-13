@@ -24,7 +24,7 @@
 (***************************************************************************)
 EXTENDS ConnectRelayOps
 
-CONSTANTS Times, MaxNs, Depth
+CONSTANTS Times, MaxNs, Depth, WithSleep
 cf == [me |-> 9, C |-> 2, R |-> 2, MN |-> 1, MB |-> 120, Bytes |-> 3, Window |-> 3, SessT |-> 4, Age |-> 40]
 Cl == {1, 2}
 Peers == {5, 6}
@@ -50,8 +50,9 @@ Checks(kind, o, from, tm) ==
 
 Do(kind, o, from) == /\ R' = o.R /\ last' = Checks(kind, o, from, clock') /\ steps' = steps + 1
 
-Frames(n, tm) == {<<"send", d, 0, 1>> : d \in {1, 2, 3}}
+Frames(nd, tm) == {<<"send", d, 0, 1>> : d \in {1, 2, 3}}
              \cup {<<"sendalias", 0, 0, 1>>}
+             \cup (IF WithSleep THEN {<<"sleep", nd, tm * 1000, 1, 1>>} ELSE {})
 
 Next == \/ \E t \in Times : t >= clock /\ clock' = t /\
             ( (\E n \in Cl : R.ns < MaxNs /\ Do("open", CarrierOpened(cf, R, t, n), 0))
