@@ -1,5 +1,5 @@
 import Vinc.Json
-import Vinc.TransportHdr
+import Vinc.TransportHdrBody
 
 /-!
 # Replay of the packet header traces
@@ -14,7 +14,7 @@ The wide file has body lengths up to `2^64 - 1`.
 -/
 
 namespace Vinc.TraceHdr
-open Vinc.Json Vinc.TransportHdr
+open Vinc.Json Vinc.TransportHdr Vinc.TransportHdrBody Vinc.TransportReasm
 
 def isTag (t : String) : Bool := t == "txhd"
 
@@ -120,6 +120,68 @@ def replayEvent (j : J) : Except String Unit := do
       check (p.aad == (← bytesF j "aad")) s!"open: the associated data differs: the model takes {p.aad}"
       if err == "ok" then
         check (p.payloadStart == (← natF j "ps") && p.payloadEnd == (← natF j "pe")) "open: the payload range differs"
+  | "hw" =>
+    -- a datagram a real client built: its Handshake packet, and the writer's puts reproduced by the model
+    let d ← bytesF j "d"
+    match parseLong d with
+    | .error e => throw s!"hw: the model refuses the datagram: {(errName e).1}"
+    | .ok (h, hl) =>
+      let body := (d.drop hl).take h.bodyLen
+      check (h.ty == .handshake) "hw: not a Handshake packet"
+      match hsRead body with
+      | none => throw "hw: the body does not parse"
+      | some (t, o, data) =>
+        check (body == hsBody t o data && h.bodyLen == hsBodyLen t o data.length)
+          "hw: the body is not the three parts the header counts"
+        check (!data.isEmpty && o + data.length ≤ t) "hw: the fragment is empty or runs past the message"
+        check (hl + h.bodyLen ≤ (← natF j "win")) "hw: the packet is longer than the window"
+        let w := hsWrite h.dcid h.scid t o data (← natF j "win")
+        check (w.err == none && w.out == d.take (hl + h.bodyLen)) "hw: the model writes other bytes"
+  | "hf" =>
+    -- a body handed to `on_fragment`: the parse, the reassembly, and the bytes the buffer holds
+    let body ← bytesF j "body"
+    let mx ← natF j "max"
+    let nr ← natF j "nr"
+    let viewOf (v : J) : Except String R := do pure { runs := ← pairList (← field v "runs"), total := ← natF v "total" }
+    let b ← viewOf (← field j "b")
+    let a ← viewOf (← field j "a")
+    let (out, r2) := hsRecv b mx nr body
+    check ((out.map (fun t => (t : Int))).getD (-1) == (← intF j "ret")) "hf: the length handed over differs"
+    check (r2 == a) s!"hf: the model computes {repr r2}, the code recorded {repr a}"
+    match hsRead body with
+    | none => pure ()
+    | some (t, o, data) =>
+      let stop := min (o + data.length) t
+      let kept := out == some t || (r2.total == t && r2.runs.any fun (s, e) => s ≤ o && stop ≤ e)
+      if o < stop && kept then
+        let w ← bytesF j "w"
+        check ((← natF j "mo") == o && w.take (stop - o) == data.take (min 48 (stop - o)))
+          "hf: the buffer does not hold the bytes of the fragment"
+  | "pad" =>
+    let pre ← bytesF j "pre"
+    let (e, n, out) := match padTo (← natF j "cap") (← natF j "min") pre with
+      | .ok o => ("ok", 0, o)
+      | .error e => ((errName e).1, (errName e).2, pre)
+    check (e == (← strF j "err") && n == (← natF j "n") && out == (← bytesF j "out"))
+      s!"pad: the model answers {e} {n} and leaves {out}"
+  | "smp" =>
+    let pk ← bytesF j "pk"
+    let (e, s) := match sampleAt pk (← natF j "po") with
+      | .ok s => ("ok", s)
+      | .error e => ((errName e).1, [])
+    check (e == (← strF j "err") && s == (← bytesF j "s")) s!"smp: the model answers {e}"
+  | "smpp" =>
+    -- the sample of a protected packet and of the same packet unmasked
+    let p ← bytesF j "p"
+    let u ← bytesF j "u"
+    let po ← natF j "po"
+    check (p.length == u.length && (List.range p.length).all fun i =>
+        i == 0 || (po ≤ i && i < po + sampleSkip) || p[i]? == u[i]?)
+      "smpp: unmasking changed a byte other than the first and the packet number"
+    let sm (x : List Nat) : Option (List Nat) := match sampleAt x po with
+      | .ok s => some s
+      | .error _ => none
+    check (sm p == sm u && (sm p).getD [] == (← bytesF j "s")) "smpp: the sample is not the same before and after"
   | op => throw s!"unknown header op {op}"
 
 end Vinc.TraceHdr

@@ -2,7 +2,11 @@
 (***************************************************************************)
 (* Trace validation of the packet header codecs: vinc-transport            *)
 (* packet/header.rs, packet/datagram.rs and the associated data of         *)
-(* packet/protect.rs.                                                      *)
+(* packet/protect.rs, and the body of a Handshake packet (write_handshake  *)
+(* and on_fragment), pad_to and sample_at: hw (a datagram a real client    *)
+(* built), hf (a body handed to a real connection's on_fragment, with the  *)
+(* reassembly around it), pad, smp and smpp (the sample of a protected     *)
+(* packet and of the unmasked one).                                        *)
 (*                                                                         *)
 (* The Rust test tests/trace_hdr.rs calls the real LongHeader::write and   *)
 (* parse, ShortHeader::write, short_dcid, unprotect_header, packets, seal  *)
@@ -69,9 +73,47 @@ OpenEv == LET r == OpenParts(Ev0.pk, Ev0.po, Ev0.pl)
                      /\ Ev0.err = "ok" => r.ps = Ev0.ps /\ r.pe = Ev0.pe
                 ELSE ~Ev0.reached /\ Ev0.err = r.err
 
+(* a datagram a real client built: its Handshake packet carries the three parts, and the writer of the model puts
+   the same bytes in a window of the size given *)
+HwEv == LET r == LongParse(Ev0.d)
+        IN /\ Ev0.op = "hw" /\ r.err = "ok" /\ r.ty = 0
+           /\ LET end == r.hl + U!Val(r.bl)
+                  body == SubSeq(Ev0.d, r.hl + 1, end)
+                  p == HsRead(body)
+              IN /\ p.ok /\ body = HsBody(p.total, p.off, p.data)
+                 /\ r.bl = U!W(HsBodyLen(p.total, p.off, Len(p.data)))
+                 /\ Len(p.data) > 0 /\ U!Le(U!Add(p.off, U!W(Len(p.data))), p.total)
+                 /\ end <= Ev0.win
+                 /\ LET w == HsWrite(r.dcid, r.scid, p.total, p.off, p.data, Ev0.win)
+                    IN w.err = "ok" /\ w.out = SubSeq(Ev0.d, 1, end)
+(* a body handed to on_fragment: the reassembly before and after, the length handed over, and the first bytes of
+   the buffer at the offset: the fragment's bytes when the model keeps it *)
+RunsOf(l) == [k \in 1..Len(l) |-> <<l[k][1], l[k][2]>>]
+St(v) == [runs |-> RunsOf(v.runs), total |-> v.total]
+HfWindow(x) ==
+    LET p == HsRead(Ev0.body)
+    IN IF ~p.ok \/ ~U!Lt(p.total, U!W(Ev0.max + 1)) \/ ~U!Lt(p.off, p.total) THEN TRUE
+       ELSE LET t == U!Val(p.total)
+                o == U!Val(p.off)
+                stop == R!Mn(o + Len(p.data), t)
+                ak == St(Ev0.a)
+                kept == x.out = t \/ (ak.total = t /\ \E k \in 1..Len(ak.runs) : ak.runs[k][1] <= o /\ stop <= ak.runs[k][2])
+                n == R!Mn(48, stop - o)
+            IN (o < stop /\ kept) => /\ Ev0.mo = o /\ Len(Ev0.w) >= n /\ \A k \in 1..n : Ev0.w[k] = p.data[k]
+HfEv == LET x == HsRecv(St(Ev0.b), Ev0.max, Ev0.nr, Ev0.body)
+        IN /\ Ev0.op = "hf" /\ x.out = Ev0.ret /\ x.r = St(Ev0.a) /\ HfWindow(x)
+PadEv == LET r == PadTo(Ev0.cap, Ev0.min, Ev0.pre)
+         IN /\ Ev0.op = "pad" /\ r.err = Ev0.err /\ r.n = Ev0.n /\ r.out = Ev0.out
+SmpEv == LET r == SampleAt(Ev0.pk, Ev0.po)
+         IN /\ Ev0.op = "smp" /\ r.err = Ev0.err /\ (r.err = "ok" => r.s = Ev0.s) /\ (r.err # "ok" => Ev0.s = <<>>)
+SmppEv == LET r == SampleAt(Ev0.p, Ev0.po)
+          IN /\ Ev0.op = "smpp" /\ Len(Ev0.p) = Len(Ev0.u)
+             /\ \A k \in 2..Len(Ev0.p) : (k <= Ev0.po \/ k > Ev0.po + SAMPLESKIP) => Ev0.p[k] = Ev0.u[k]
+             /\ r = SampleAt(Ev0.u, Ev0.po) /\ (r.err = "ok" => r.s = Ev0.s) /\ (r.err # "ok" => Ev0.s = <<>>)
+
 Init == i = 1
 Step == /\ i <= Len(Trace) /\ Ev0.t = "txhd"
-        /\ (LwEv \/ LpEv \/ SwEv \/ SdEv \/ UnEv \/ DgEv \/ SealEv \/ OpenEv)
+        /\ (LwEv \/ LpEv \/ SwEv \/ SdEv \/ UnEv \/ DgEv \/ SealEv \/ OpenEv \/ HwEv \/ HfEv \/ PadEv \/ SmpEv \/ SmppEv)
         /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED i
 TNext == Step \/ Finished

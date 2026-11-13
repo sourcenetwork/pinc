@@ -100,7 +100,7 @@ pub use mtu::trace::{MtuProbe, MtuView};
 pub use params::{CreditRecord, credit_for_streams, peer_limits};
 pub use path::{PathError, RJ_THIN_GAP};
 #[cfg(feature = "trace")]
-pub use reasm::trace::{ReasmProbe, ReasmView};
+pub use reasm::trace::{FragmentView, ReasmProbe, ReasmView};
 pub use send::Transmit;
 pub use tables::Tables;
 

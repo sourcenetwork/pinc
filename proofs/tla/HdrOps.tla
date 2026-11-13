@@ -174,4 +174,86 @@ OpenParts(packet, pnOff, pnLen) ==
        ELSE IF Len(packet) - hl < TAGLEN THEN Err("TooShort", 0)
        ELSE [err |-> "ok", n |-> 0, aad |-> SubSeq(packet, 1, hl), ps |-> hl, pe |-> Len(packet) - TAGLEN,
              total |-> Len(packet)]
+
+(***************************************************************************)
+(* The body of a Handshake packet (conn/send.rs write_handshake, conn/     *)
+(* handshake.rs on_fragment): varint(total) varint(off) fragment. total    *)
+(* and off are u64 words of U64.tla; data is the fragment.                 *)
+(***************************************************************************)
+R == INSTANCE ReasmOps
+
+HsEnc(v) == V!Encode(v, 16).bytes
+HsBody(total, off, data) == HsEnc(total) \o HsEnc(off) \o data
+HsBodyLen(total, off, n) == V!EncodedLen(total) + V!EncodedLen(off) + n
+(* the header write_handshake writes: a Handshake long header whose body length counts the three parts *)
+HsHeader(dcid, scid, total, off, n) == [ty |-> 0, dcid |-> dcid, scid |-> scid, bl |-> U!W(HsBodyLen(total, off, n))]
+(* header.write(&mut w, 0).is_ok() && put_varint(total) && put_varint(off) && put_slice(bytes), on one writer of
+   cap bytes (the window); the code returns 0 if one failed, so the result is a datagram only if err = "ok" *)
+HsWrite(dcid, scid, total, off, data, cap) ==
+    PutSlice(cap, PutVarint(cap, PutVarint(cap, LongWrite(HsHeader(dcid, scid, total, off, Len(data)), 0, cap), total), off), data)
+(* what write_handshake needs of the window for the fragment: the whole header, both varints, the bytes *)
+HsNeed(dcid, scid, total, off, n) == HeaderLen(HsHeader(dcid, scid, total, off, n)) + V!EncodedLen(total) + V!EncodedLen(off) + n
+(* the room write_handshake leaves for the fragment: the window less the fixed part of the header, two bytes for
+   the body length and both varints (fragment_overhead) at the size of the offset the fragment starts at *)
+HsRoom(win, dl, sl, total, off) ==
+    LET fixed == 1 + 1 + 1 + dl + 1 + sl + 2 + V!EncodedLen(total) + V!EncodedLen(off)
+    IN IF win > fixed THEN win - fixed ELSE 0
+
+(* on_fragment's parse: the two varints (usize::try_from is the identity on a u64 here) and the rest *)
+HsRead(body) ==
+    LET v1 == V!Decode(body)
+    IN IF v1.kind # "ok" THEN [ok |-> FALSE]
+       ELSE LET rest == SubSeq(body, v1.n + 1, Len(body))
+                v2 == V!Decode(rest)
+            IN IF v2.kind # "ok" THEN [ok |-> FALSE]
+               ELSE [ok |-> TRUE, total |-> v1.v, off |-> v2.v, data |-> SubSeq(rest, v2.n + 1, Len(rest))]
+
+(* on_fragment then Reassembly::add with the length of the fragment. The two words are clamped to the integers
+   ReasmOps takes without changing what Add does: a total above mx is refused whatever it is, and an offset at or
+   past the total gives the same result whatever it is (the stop is the total, which is not past the offset). *)
+HsRecv(r, mx, nr, body) ==
+    LET p == HsRead(body)
+    IN IF ~p.ok THEN [out |-> -1, r |-> r]
+       ELSE LET tI == IF U!Lt(p.total, U!W(mx + 1)) THEN U!Val(p.total) ELSE mx + 1
+                oI == IF U!Lt(p.off, U!W(tI)) THEN U!Val(p.off) ELSE tI
+            IN R!Add(r, mx, nr, tI, oI, Len(p.data))
+
+(***************************************************************************)
+(* pad_to (packet/datagram.rs): zero bytes appended in chunks of 64 until  *)
+(* the writer, which holds out and has room for cap bytes, holds min_len;  *)
+(* ensure(left) comes first, so a refusal writes nothing. PadToLate is     *)
+(* the call without that check (chunk after chunk until one does not fit): *)
+(* it leaves a part of the padding behind.                                 *)
+(***************************************************************************)
+Zeros(n) == [i \in 1..n |-> 0]
+RECURSIVE PadLoop(_, _)
+PadLoop(left, out) ==
+    IF left = 0 THEN out
+    ELSE LET n == IF left < 64 THEN left ELSE 64 IN PadLoop(left - n, out \o Zeros(n))
+PadTo(cap, minLen, out) ==
+    LET left == IF minLen > Len(out) THEN minLen - Len(out) ELSE 0
+        room == cap - Len(out)
+    IN IF left > room THEN [err |-> "BufferTooSmall", n |-> left - room, out |-> out]
+       ELSE [err |-> "ok", n |-> 0, out |-> PadLoop(left, out)]
+RECURSIVE PadLoopLate(_, _, _)
+PadLoopLate(cap, left, out) ==
+    IF left = 0 THEN [err |-> "ok", n |-> 0, out |-> out]
+    ELSE LET n == IF left < 64 THEN left ELSE 64
+         IN IF Len(out) + n > cap
+            THEN [err |-> "BufferTooSmall", n |-> Len(out) + n - cap, out |-> out]
+            ELSE PadLoopLate(cap, left - n, out \o Zeros(n))
+PadToLate(cap, minLen, out) ==
+    PadLoopLate(cap, IF minLen > Len(out) THEN minLen - Len(out) ELSE 0, out)
+
+(***************************************************************************)
+(* sample_at (packet/protect.rs): the 16 bytes from pn_off + SAMPLE_SKIP,  *)
+(* or TooShort. SampleAtSkip takes the skip so that a skip that is not the *)
+(* one of the code can be shown wrong (HdrBody_skip3.cfg).                 *)
+(***************************************************************************)
+SAMPLELEN == 16
+SampleAtSkip(p, po, skip) ==
+    IF po + skip + SAMPLELEN <= Len(p)
+    THEN [err |-> "ok", n |-> 0, s |-> SubSeq(p, po + skip + 1, po + skip + SAMPLELEN)]
+    ELSE Err("TooShort", 0)
+SampleAt(p, po) == SampleAtSkip(p, po, SAMPLESKIP)
 =============================================================================
