@@ -530,12 +530,15 @@ async fn latency<L: Lib>(addr: &str, size: usize, count: usize) {
 }
 
 /// One request of a request-response protocol: a stream of its own, the request, the end of the send half, the
-/// echoed response.
-async fn request<L: Lib>(c: &L::Conn, req: &[u8], resp: &mut [u8]) -> io::Result<()> {
+/// echoed response. Returns how long the stream took to open: the wait for a place among the peer's streams.
+async fn request<L: Lib>(c: &L::Conn, req: &[u8], resp: &mut [u8]) -> io::Result<f64> {
+    let t = Instant::now();
     let (mut tx, mut rx) = L::open(c).await?;
+    let opened = us(t.elapsed());
     tx.write_all(req).await?;
     tx.finish().await?;
-    read_exact(&mut rx, resp).await
+    read_exact(&mut rx, resp).await?;
+    Ok(opened)
 }
 
 /// `count` requests of `size` bytes each way over one connection, `concurrency` in flight at once, each on a stream
@@ -565,7 +568,7 @@ async fn requests<L: Lib>(addr: &str, size: usize, count: usize, concurrency: us
                 left.set(left.get() - 1);
                 let t = Instant::now();
                 match request::<L>(&conn, req, &mut resp).await {
-                    Ok(()) => v.push(us(t.elapsed())),
+                    Ok(opened) => v.push((us(t.elapsed()), opened)),
                     Err(e) => {
                         failed += 1;
                         why.get_or_insert_with(|| e.to_string());
@@ -589,7 +592,16 @@ async fn requests<L: Lib>(addr: &str, size: usize, count: usize, concurrency: us
         failed += f;
         why = why.or(w);
     }
+    // What makes the tail: the slowest hundredth's mean wait to open against its mean time after the open.
+    v.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let tail = &v[..v.len().div_ceil(100)];
+    let tail_n = tail.len().max(1) as f64;
+    let tail_open = tail.iter().map(|t| t.1).sum::<f64>() / tail_n;
+    let tail_rest = tail.iter().map(|t| t.0 - t.1).sum::<f64>() / tail_n;
+    let mut opens: Vec<f64> = v.iter().map(|t| t.1).collect();
+    let mut v: Vec<f64> = v.iter().map(|t| t.0).collect();
     v.sort_by(f64::total_cmp);
+    opens.sort_by(f64::total_cmp);
     let n = v.len().max(1) as f64;
     let mut r = Rec::new(L::name(), &name)
         .n("requests", v.len() as f64)
@@ -599,6 +611,10 @@ async fn requests<L: Lib>(addr: &str, size: usize, count: usize, concurrency: us
         .n("p50_us", pct(&v, 0.5))
         .n("p99_us", pct(&v, 0.99))
         .n("max_us", pct(&v, 1.0))
+        .n("open_p50_us", pct(&opens, 0.5))
+        .n("open_p99_us", pct(&opens, 0.99))
+        .n("tail_open_us", tail_open)
+        .n("tail_after_open_us", tail_rest)
         .n("rate_per_s", n / secs)
         .n("client_cpu_us_per_req", c1.cpu_secs_since(c0) * 1e6 / n)
         .n("server_cpu_us_per_req", s1.cpu_secs_since(s0) * 1e6 / n);

@@ -444,6 +444,9 @@ par witness_tlc dial_report_thin DialReport DialReport_thin ThinKeepsLimit
 par witness_tlc dial_report_floor DialReport DialReport_floor FloorOnLimit
 par run_tlc facade_records FacadeRecords FacadeRecords
 par witness_tlc facade_records_noseq FacadeRecords FacadeRecords_noseq NoRollback
+par run_tlc facade_open FacadeOpen FacadeOpen
+par witness_tlc facade_open_wakeall FacadeOpen FacadeOpen_wakeall NoOvertake
+par witness_tlc facade_open_nohandoff FacadeOpen FacadeOpen_nohandoff NoStall
 par run_tlc facade_acp_forget FacadeAcpForget FacadeAcpForget
 par witness_tlc facade_acp_forget_nolift FacadeAcpForget FacadeAcpForget_nolift DecideFresh
 par witness_tlc facade_acp_forget_norevoke FacadeAcpForget FacadeAcpForget_norevoke DecideFresh

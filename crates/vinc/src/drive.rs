@@ -271,6 +271,7 @@ impl<H: Hosted> Shared<H> {
                 if H::Role::ON && owner && self.role_serve(&mut core, now) {
                     return Poll::Ready(Step::Io);
                 }
+                core.caller = turn.ticket;
                 let w = match attempt(&mut core, now) {
                     Try::Done(v) => {
                         core.kick();

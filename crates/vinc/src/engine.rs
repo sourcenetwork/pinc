@@ -143,7 +143,8 @@ pub(crate) enum SKey {
     AcceptUni,
     Datagram,
     Closed,
-    Open,
+    /// A place for a stream, bidirectional or not. Its waiters are served in the order they asked.
+    Open(bool),
     Read(StreamId),
     Write(StreamId),
 }
@@ -189,6 +190,11 @@ struct Sess {
     discard: Vec<StreamId>,
 }
 
+/// The oldest ticket in `waits` that waits for `key`.
+fn first_wait(waits: &[(SKey, Ticket)], key: SKey) -> Option<Ticket> {
+    waits.iter().find(|(k, _)| *k == key).map(|&(_, t)| t)
+}
+
 struct Dial {
     node: NodeId,
     alpn: Alpn,
@@ -230,6 +236,8 @@ pub(crate) struct Core<S, A> {
     pub(crate) standby: Standby,
     /// The ticket of the future that drives, and the deadline it sleeps for.
     pub(crate) driver: Option<Ticket>,
+    /// The ticket of the future whose attempt runs, `None` before it first waited.
+    pub(crate) caller: Option<Ticket>,
     pub(crate) armed: u64,
     /// The events for the host, oldest first, and how many were dropped since the host last read.
     events: VecDeque<TopicEvent>,
@@ -280,6 +288,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             gwaits: Vec::new(),
             standby: Standby::default(),
             driver: None,
+            caller: None,
             armed: u64::MAX,
             events: VecDeque::new(),
             lost: 0,
@@ -482,21 +491,47 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
     }
 
-    /// Remove `t`'s registration for `w` (its future ended).
+    /// Remove `t`'s registration for `w` (its future ended). The oldest open that leaves hands the turn to the next.
     pub(crate) fn forget(&mut self, w: Wait, t: Ticket) {
         match w {
             Wait::S(sid, key) => {
                 if let Some(s) = self.sessions.get_mut(&sid) {
+                    let first = matches!(key, SKey::Open(_)) && first_wait(&s.waits, key) == Some(t);
                     s.waits.retain(|e| *e != (key, t));
+                    if first && let Some(next) = first_wait(&s.waits, key) {
+                        self.standby.notify(next);
+                    }
                 }
             }
             Wait::G(key) => self.gwaits.retain(|e| *e != (key, t)),
         }
     }
 
+    /// The oldest open that waits on `sid` for a stream of the kind `key` names, unless it is the caller's own: an
+    /// open that finds one queues behind it, so a newcomer never takes a place an older open was woken for.
+    pub(crate) fn open_ahead(&self, sid: SessionId, key: SKey) -> bool {
+        self.sessions
+            .get(&sid)
+            .and_then(|s| first_wait(&s.waits, key))
+            .is_some_and(|t| Some(t) != self.caller)
+    }
+
+    /// Wake the oldest open of each kind on `sid`: there may be a place for it now.
+    pub(crate) fn wake_open(&mut self, sid: SessionId) {
+        self.wake_s(sid, SKey::Open(true));
+        self.wake_s(sid, SKey::Open(false));
+    }
+
     fn wake_s(&mut self, sid: SessionId, key: SKey) {
         let Some(s) = self.sessions.get_mut(&sid) else { return };
         let standby = &mut self.standby;
+        if matches!(key, SKey::Open(_)) {
+            // Only the oldest, which keeps its place; it wakes the next when it leaves (see `forget`).
+            if let Some(t) = first_wait(&s.waits, key) {
+                standby.notify(t);
+            }
+            return;
+        }
         s.waits.retain(|(k, t)| {
             let hit = *k == key;
             if hit {
@@ -558,9 +593,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             }
             Event::StreamWritable { session, stream } => {
                 self.wake_s(session, SKey::Write(stream));
-                self.wake_s(session, SKey::Open);
+                self.wake_open(session);
             }
-            Event::OpenReady { session } => self.wake_s(session, SKey::Open),
+            Event::OpenReady { session } => self.wake_open(session),
             Event::AcpCheck { check, node, alpn } => {
                 let dir = if alpn.as_bytes() == HUB_ALPN {
                     Direction::Gossip
