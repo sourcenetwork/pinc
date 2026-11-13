@@ -237,14 +237,16 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   `just compare` and the harness print every row, the ones VINC loses included.
 - **Transport and connectivity rules not in yet.** A session whose relay path goes silent is not closed before the
   idle timeout ([#96](https://github.com/sourcenetwork/vinc/issues/96)); a tunnel packet can leave from another local address than the hub session's, and the
-  relay then refuses it ([#120](https://github.com/sourcenetwork/vinc/issues/120)); a dial with a cached record that lists an old address sends no lookup
-  ([#123](https://github.com/sourcenetwork/vinc/issues/123)); a dial rides a held session however long it has been silent ([#147](https://github.com/sourcenetwork/vinc/issues/147)); a lost Finish is re-sent
-  on the probe timeout, not 999 ms after it ([#154](https://github.com/sourcenetwork/vinc/issues/154)); after an address change the wake leaves from the old
-  address, so the peer does not re-send at once ([#155](https://github.com/sourcenetwork/vinc/issues/155)). All six are being fixed.
+  relay then refuses it ([#120](https://github.com/sourcenetwork/vinc/issues/120)); a dial to a hub does not go through that hub's own relay path ([#215](https://github.com/sourcenetwork/vinc/issues/215));
+  a dial rides a held session however long it has been silent ([#147](https://github.com/sourcenetwork/vinc/issues/147)); a lost Finish is re-sent on the probe
+  timeout, not 999 ms after it ([#154](https://github.com/sourcenetwork/vinc/issues/154)); after an address change a session's path is replaced where the
+  reference model keeps it, so the wake and what is in flight leave from the old address ([#155](https://github.com/sourcenetwork/vinc/issues/155)). The fixes
+  of the first five are written and are being measured together; the sixth is being written.
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
-  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 80 at `6355d7d` (75 on its first run); the reference model the
-  rules come from passes 88, and five of the sixteen the library fails are seeds the model fails too
-  ([#98](https://github.com/sourcenetwork/vinc/issues/98)). The two scenarios that need the values and reconcile layers in one composition wait for them.
+  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 84 at `97bbaa4` (75 on its first run); the reference model the
+  rules come from passes 88. The twelve that fail are tracked by cause: [#155](https://github.com/sourcenetwork/vinc/issues/155) (mobile), [#215](https://github.com/sourcenetwork/vinc/issues/215) (a
+  dial to a hub), [#213](https://github.com/sourcenetwork/vinc/issues/213) (one low-bandwidth seed) and [#212](https://github.com/sourcenetwork/vinc/issues/212) (four seeds the model fails too). The two
+  scenarios that need the values and reconcile layers in one composition wait for them.
 - **The proofs** are behind the code on purpose: code lands first. What each merge left to prove or to check again is
   listed in [#105](https://github.com/sourcenetwork/vinc/issues/105), beside
   [Being closed](docs/PROOFS.md#being-closed).
