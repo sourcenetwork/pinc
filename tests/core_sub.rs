@@ -139,17 +139,7 @@ fn a_second_protocol_connects_at_once_and_its_data_arrives_one_way_later() {
 #[test]
 fn a_parent_silent_for_over_twenty_seconds_does_not_carry_a_dial_and_a_heard_one_does() {
     big_stack(|| {
-        let mut net = CoreNet::new(10 * MS_NS);
-        net.capture = true;
-        let (a, b) = (net.add(1), net.add(2));
-        net.connect_pair(a, b, ALPN_A, Role::Other);
-        net.run_for(SEC_NS);
-        // Nothing from the peer reaches `a` for longer than twenty seconds; the session itself is still up.
-        let silent = net.nodes[b].addr;
-        net.loss = Some(Box::new(move |f, _, _| f == silent));
-        net.run_for(25 * SEC_NS);
-        net.loss = None;
-        assert_eq!(net.nodes[a].ep.sessions().count(), 1);
+        let (mut net, a, b) = silent_parent();
         let marker = net.captured.len();
         let (child, _) = dial(&mut net, a, b, ALPN_B);
         net.run_for(SEC_NS);
@@ -157,10 +147,7 @@ fn a_parent_silent_for_over_twenty_seconds_does_not_carry_a_dial_and_a_heard_one
         assert!(net.run(net.now + 5 * SEC_NS, |n| {
             n.nodes[b].read.values().any(|v| v == b"own-handshake")
         }));
-        assert!(
-            net.captured[marker..].iter().any(|(_, _, d)| d[0] & 0x80 != 0),
-            "no handshake datagram was sent"
-        );
+        assert!(handshake_since(&net, marker), "no handshake datagram was sent");
         // A parent heard from a moment ago carries the next dial.
         net.run_for(SEC_NS);
         let marker = net.captured.len();
@@ -170,10 +157,50 @@ fn a_parent_silent_for_over_twenty_seconds_does_not_carry_a_dial_and_a_heard_one
         assert!(net.run(net.now + 5 * SEC_NS, |n| {
             n.nodes[b].read.values().any(|v| v == b"old-parent")
         }));
-        assert!(
-            net.captured[marker..].iter().all(|(_, _, d)| d[0] & 0x80 == 0),
-            "a handshake datagram was sent for a sub-session"
-        );
+        assert!(!handshake_since(&net, marker), "a handshake datagram was sent for a sub-session");
+    });
+}
+
+/// Two connected nodes whose parent session has not heard its peer for 25 seconds, with the session still up.
+fn silent_parent() -> (CoreNet, usize, usize) {
+    let mut net = CoreNet::new(10 * MS_NS);
+    net.capture = true;
+    let (a, b) = (net.add(1), net.add(2));
+    net.connect_pair(a, b, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let silent = net.nodes[b].addr;
+    net.loss = Some(Box::new(move |f, _, _| f == silent));
+    net.run_for(25 * SEC_NS);
+    net.loss = None;
+    assert_eq!(net.nodes[a].ep.sessions().count(), 1);
+    (net, a, b)
+}
+
+/// Whether a datagram with a long header left since `marker`: a handshake started.
+fn handshake_since(net: &CoreNet, marker: usize) -> bool {
+    net.captured[marker..].iter().any(|(_, _, d)| d[0] & 0x80 != 0)
+}
+
+#[test]
+fn a_carrier_ping_sent_does_not_count_as_hearing_the_parent_but_a_pong_does() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let parent = net.nodes[a].ep.sessions().next().unwrap();
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Pulse { session: parent, sent: true }).unwrap();
+        let marker = net.captured.len();
+        dial(&mut net, a, b, ALPN_B);
+        net.run_for(SEC_NS);
+        assert!(handshake_since(&net, marker), "a ping that went out made the parent look heard");
+        // The dial above started its own session; a pong that came back makes the parent heard again.
+        let (mut net, a, b) = silent_parent();
+        let parent = net.nodes[a].ep.sessions().next().unwrap();
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Pulse { session: parent, sent: false }).unwrap();
+        let marker = net.captured.len();
+        dial(&mut net, a, b, ALPN_B);
+        net.run_for(SEC_NS);
+        assert!(!handshake_since(&net, marker), "a pong that came back did not make the parent heard");
     });
 }
 

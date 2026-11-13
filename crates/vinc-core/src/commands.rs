@@ -264,9 +264,10 @@ ep_impl! {
             Command::Pulse { session, sent } => {
                 let i = self.live(session)?;
                 if let Some(s) = self.slots.get_mut(i) {
-                    s.m.last_rx = now;
                     if sent {
                         s.m.last_tx = now;
+                    } else {
+                        s.m.last_rx = now;
                     }
                     if let Some(c) = s.conn.as_mut() {
                         c.pulse(now, sent);

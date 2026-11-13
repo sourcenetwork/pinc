@@ -508,8 +508,8 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// Leave the session's first address out of the flight.
         skip_primary: bool,
     },
-    /// A carrier PING and PONG stood for the session's keepalive (`CARRIER_PULSE`): count it as received, and as sent
-    /// when `sent` says this side wrote the PING.
+    /// A carrier PING and PONG stood for the session's keepalive: a PONG that came back (`sent` false) counts as a
+    /// datagram received, a PING this side wrote (`sent` true) as a datagram sent.
     Pulse {
         /// The session.
         session: SessionId,
