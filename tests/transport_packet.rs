@@ -176,6 +176,22 @@ fn long_header_layout_and_round_trip() {
     }
 }
 
+// A body length that no varint holds is refused before a byte of the header is written.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn long_header_writes_nothing_for_a_body_length_no_varint_holds() {
+    let mut buf = [0xeeu8; 64];
+    let mut w = Writer::new(&mut buf);
+    let h = LongHeader {
+        ty: LongType::Handshake,
+        dcid: cid(&[7, 7]),
+        scid: cid(&[9]),
+        body_len: 1usize << 63,
+    };
+    assert_eq!(h.write(&mut w, 0), Err(PacketError::Wire(WireError::VarintOverflow)));
+    assert!(w.written().is_empty());
+}
+
 #[test]
 fn long_header_rejects_malformed_input() {
     let ok = {

@@ -1,6 +1,6 @@
 //! Long and short header encode and decode.
 
-use vinc_wire::{Reader, Writer, varint};
+use vinc_wire::{Reader, WireError, Writer, varint};
 
 use super::{ConnId, MAX_CID_LEN, PN_LEN_BASE, PacketError, VERSION};
 
@@ -60,7 +60,7 @@ impl LongHeader {
     ///
     /// # Errors
     /// [`PacketError::PnLength`] for a `pn_len` that does not fit the type; a [`PacketError::Wire`] if the buffer is
-    /// too small.
+    /// too small or the body length is 2^63 or more, which no varint holds.
     pub fn write(&self, w: &mut Writer<'_>, pn_len: usize) -> Result<(), PacketError> {
         let low = match self.ty {
             LongType::ZeroRtt if pn_len == PN_LEN_BASE => u8::try_from(pn_len - 1).unwrap_or(0),
@@ -68,6 +68,11 @@ impl LongHeader {
             _ if pn_len == 0 => 0,
             LongType::Handshake => return Err(PacketError::PnLength),
         };
+        // `header_len` counts ten bytes for a body length no varint holds, so the room check would pass and the
+        // length would be refused only after the bytes before it were written.
+        if self.body_len as u64 >= 1 << 63 {
+            return Err(PacketError::Wire(WireError::VarintOverflow));
+        }
         w.ensure(self.header_len())?;
         w.put_u8(LONG_FORM | ((self.ty as u8) << 4) | low)?;
         w.put_u8(VERSION)?;
