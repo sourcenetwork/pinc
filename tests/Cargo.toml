@@ -992,6 +992,10 @@ name = "trace_reasm"
 path = "trace_reasm.rs"
 
 [[test]]
+name = "trace_hdr"
+path = "trace_hdr.rs"
+
+[[test]]
 name = "trace_mtu"
 path = "trace_mtu.rs"
 
