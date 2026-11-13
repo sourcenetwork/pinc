@@ -22,6 +22,18 @@ use crate::error::{Error, Result};
 use crate::keys::Prekeys;
 use crate::node::{AnyEp, PEERS, RELAYS};
 
+/// The endpoint configuration `cfg` asks for. An endpoint that serves other nodes, as a hub or in the relay role,
+/// sends no tail repair on its sessions, as a relay host sends none.
+fn endpoint_config<S, A>(cfg: &CoreConfig<S, A>, seed: u64) -> vinc_core::EndpointConfig {
+    let mut ecfg = vinc_core::EndpointConfig::new(seed);
+    ecfg.conn.max_gso = cfg.max_gso.max(1);
+    ecfg.conn.interface_mtu = cfg.mtu;
+    ecfg.conn.send_window = cfg.limits.send_window;
+    ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
+    ecfg.conn.tail_repair = !(cfg.hub || cfg.relaying);
+    ecfg
+}
+
 /// Build a core at time `now`.
 ///
 /// # Errors
@@ -39,11 +51,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     cfg.identity.random(&mut node_rnd)?;
     let mut node_seed = [0u8; 8];
     cfg.identity.random(&mut node_seed)?;
-    let mut ecfg = vinc_core::EndpointConfig::new(u64::from_le_bytes(seed));
-    ecfg.conn.max_gso = cfg.max_gso.max(1);
-    ecfg.conn.interface_mtu = cfg.mtu;
-    ecfg.conn.send_window = cfg.limits.send_window;
-    ecfg.conn.credit = vinc_security::CreditRecord::new(cfg.limits.stream_window, cfg.limits.streams, u16::MAX);
+    let ecfg = endpoint_config(&cfg, u64::from_le_bytes(seed));
     let (drbg, identity) = (Drbg::new(&rnd), cfg.identity.local()?);
     let mut ep = AnyEp::new(
         cfg.limits.connections,
@@ -158,6 +166,24 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// A node repairs the tail of its bursts; an endpoint that is a hub or runs the relay role does not, on any
+    /// session, as a relay host does not.
+    #[test]
+    fn an_endpoint_that_serves_others_sends_no_tail_repair() {
+        assert!(endpoint_config(&cfg(4), 1).conn.tail_repair);
+        for (hub, relaying) in [(true, false), (false, true), (true, true)] {
+            let c = CoreConfig {
+                hub,
+                relaying,
+                ..cfg(4)
+            };
+            assert!(
+                !endpoint_config(&c, 1).conn.tail_repair,
+                "hub {hub}, relay role {relaying}"
+            );
+        }
     }
 
     /// The endpoint is built into the heap and ended there: a 1 MiB stack builds and drops one for a few sessions.
