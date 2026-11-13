@@ -1020,6 +1020,10 @@ name = "trace_mtu"
 path = "trace_mtu.rs"
 
 [[test]]
+name = "trace_core_state"
+path = "trace_core_state.rs"
+
+[[test]]
 name = "transport_wedge"
 path = "transport_wedge.rs"
 
