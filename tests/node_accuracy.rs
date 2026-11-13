@@ -190,15 +190,71 @@ fn a_member_confirmed_down_while_alive_is_in_every_view_again() {
 fn a_snapshot_after_a_heal_removes_nobody() {
     big(|| {
         for seed in [31u64, 32, 33] {
-            let mut w = World::build(seed, 3, 6);
+            let mut w = World::build_with(seed, 3, 6, |w| w.trace = true);
             let hubs: Vec<SimId> = w.hubs.iter().map(|(n, _)| *n).collect();
             let m = w.members.clone();
             // 50 s is longer than the transport's give-up time and shorter than the 80 s lease.
             let near: Vec<SimId> = hubs.iter().copied().chain(m[..3].iter().copied()).collect();
-            w.sim.partition(secs(60), &[&near, &m[3..]]);
-            w.sim.heal(secs(110));
+            let (cut_at, heal_at) = (secs(60), secs(110));
+            w.sim.partition(cut_at, &[&near, &m[3..]]);
+            w.sim.heal(heal_at);
             w.run(secs(300));
-            no_one_accused(&w, seed, "a heal");
+            // Every hub holds a carrier of every member, and the cut closes all of them: each hub confirms each cut
+            // member down on its own within the confirm deadline of its carrier closing, as the rule says.
+            let cut: Vec<[u8; 32]> = m[3..].iter().map(|n| w.id(*n)).collect();
+            for h in &hubs {
+                let traces = &w.sim.node(*h).traces;
+                let at = |pick: fn(&vinc_membership::Trace) -> Option<[u8; 32]>, member: &[u8; 32]| {
+                    traces.iter().find_map(|(t, it)| match &it.body {
+                        Body::Membership(x) if pick(x) == Some(*member) => Some(*t),
+                        _ => None,
+                    })
+                };
+                for c in &cut {
+                    let gone = at(
+                        |x| match x {
+                            vinc_membership::Trace::CarrierGone { member } => Some(*member),
+                            _ => None,
+                        },
+                        c,
+                    )
+                    .unwrap_or_else(|| panic!("seed {seed}: hub {h:?} never saw the carrier of a cut member close"));
+                    let confirmed = at(
+                        |x| match x {
+                            vinc_membership::Trace::Confirmed { member } => Some(*member),
+                            _ => None,
+                        },
+                        c,
+                    )
+                    .unwrap_or_else(|| panic!("seed {seed}: hub {h:?} did not confirm a cut member down"));
+                    assert!(
+                        gone >= cut_at && confirmed >= gone && confirmed <= gone + 2 * vinc_membership::consts::CONFIRM,
+                        "seed {seed}: hub {h:?} confirmed at {confirmed} after the carrier closed at {gone}"
+                    );
+                }
+                for (_, it) in traces {
+                    if let Body::Membership(vinc_membership::Trace::Confirmed { member }) = &it.body {
+                        assert!(
+                            cut.contains(member),
+                            "seed {seed}: hub {h:?} confirmed a near-side node down"
+                        );
+                    }
+                }
+            }
+            // The events: only cut members are ever removed, before the heal, and they are back in every view.
+            for n in all_nodes(&w) {
+                for (t, e) in w.member_events(n) {
+                    let (vinc_membership::Event::MemberConfirmedDown { member: down }
+                    | vinc_membership::Event::MemberLeft { member: down }) = e
+                    else {
+                        continue;
+                    };
+                    assert!(
+                        cut.contains(&down) && t < heal_at,
+                        "seed {seed} (a heal): node {n:?} removed {down:?} at {t}"
+                    );
+                }
+            }
             complete(&w, seed, "a heal");
         }
     });
