@@ -140,6 +140,20 @@ fn a_homeless_node_takes_the_first_relay_after_three_rounds() {
 }
 
 #[test]
+fn the_rounds_without_a_home_are_not_forgotten_when_the_link_changes() {
+    let mut n = Netcheck::<2>::new();
+    for _ in 0..HOME_TRIES - 1 {
+        assert_eq!(n.home_missing(Some(1)), HomeStep::Again);
+    }
+    n.restart();
+    assert_eq!(
+        n.home_missing(Some(1)),
+        HomeStep::Fallback(1),
+        "the third round, however the link moved"
+    );
+}
+
+#[test]
 fn classes_from_observation() {
     let local = [a("192.168.1.5:4433")];
     // public: the reflexive address is the local one (IPv4 and IPv6)

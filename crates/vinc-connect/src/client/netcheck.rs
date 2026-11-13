@@ -250,13 +250,13 @@ impl<const R: usize> Netcheck<R> {
         n
     }
 
-    /// Forget every answer (the link changed): the next round of probes starts over. The home stays until a lower
-    /// round trip is measured.
+    /// Forget every answer since the link changed: the next round of probes starts over. The home stays until a round
+    /// trip measured later names another, and the count of rounds without a home is kept: a node that moved with two
+    /// silent rounds behind it takes the fallback after one more.
     pub fn restart(&mut self) {
         self.probes = [None; R];
         self.reflexive = [None; R];
         self.first_probe = None;
-        self.tries = 0;
     }
 
     /// No home after a round of probes: count it. After [`HOME_TRIES`] `first`, the relay with the lowest id, is taken. Returns
