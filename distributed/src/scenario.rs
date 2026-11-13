@@ -496,6 +496,29 @@ pub struct Fault {
     pub action: FaultAction,
 }
 
+/// The scenario's `[debug]` table: options for looking inside a run. Off by default: with nothing set a run records
+/// and costs the same as without this table.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DebugOpts {
+    /// Record the VINC nodes' traces and packet log (datagrams and relay carrier bytes, with the milliseconds since
+    /// the node started) and write them beside the results, one file per node after each pubsub, sync or reconcile
+    /// measurement. Tracing slows the nodes, so every row made with it says its timings are not comparable. Other
+    /// stacks and the transport workload ignore it.
+    #[serde(default)]
+    pub trace: bool,
+}
+
+impl DebugOpts {
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's skip_serializing_if passes a reference"
+    )]
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// A scenario file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -526,6 +549,9 @@ pub struct Scenario {
     /// Faults during each repetition.
     #[serde(default)]
     pub faults: Vec<Fault>,
+    /// Options for looking inside the run (see [`DebugOpts`]).
+    #[serde(default, skip_serializing_if = "DebugOpts::is_default")]
+    pub debug: DebugOpts,
 }
 
 fn all_stacks() -> Vec<Stack> {

@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::node::proto::Cmd;
 use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::window::Window;
-use crate::orchestrate::{Ctx, Event, faults};
+use crate::orchestrate::{Ctx, Event, faults, tracefile};
 use crate::plan::MTU;
 use crate::results::Row;
 use crate::scenario::Stack;
@@ -23,7 +23,7 @@ use crate::workloads::{Reconcile, ValueSync};
 const VALUE_SEED: u64 = 0x5eed_0001;
 
 fn row(ctx: &Ctx, stack: Stack, test: &str, pair: &str, rep: u32) -> Row {
-    Row {
+    let mut row = Row {
         run: ctx.plan.run.clone(),
         stack: stack.name().into(),
         test: test.into(),
@@ -34,7 +34,9 @@ fn row(ctx: &Ctx, stack: Stack, test: &str, pair: &str, rep: u32) -> Row {
         kernel: BTreeMap::new(),
         shaper_drops: None,
         host: None,
-    }
+    };
+    tracefile::mark(ctx, stack, &mut row);
+    row
 }
 
 /// Median of the numbers, none when there are none.
@@ -82,8 +84,9 @@ pub(crate) async fn run_sync(ctx: &mut Ctx, b: &Cluster, w: &ValueSync) -> Resul
 
 async fn sync_one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &ValueSync, size: u64, rep: u32, pair: &str) -> Result<Row> {
     let mut r = row(ctx, stack, &ValueSync::id(size), pair, rep);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU);
+    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_trace(tracefile::wanted(ctx, stack));
     let outcome = sync_body(ctx, b, &set, w, size, &mut r).await;
+    tracefile::save(ctx, &set, stack, &r).await;
     if let Some(note) = set.configs().await.into_iter().next() {
         r.node.insert("note".into(), Value::String(note));
     }
@@ -209,8 +212,9 @@ async fn rec_one(
     pair: &str,
 ) -> Result<Row> {
     let mut r = row(ctx, stack, &Reconcile::id(items, diff), pair, rep);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU);
+    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_trace(tracefile::wanted(ctx, stack));
     let outcome = rec_body(ctx, b, &set, w, (items, diff), &mut r).await;
+    tracefile::save(ctx, &set, stack, &r).await;
     if let Some(note) = set.configs().await.into_iter().next() {
         r.node.insert("note".into(), Value::String(note));
     }

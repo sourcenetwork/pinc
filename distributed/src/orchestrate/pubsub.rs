@@ -15,7 +15,7 @@ use crate::node::proto::{Cmd, PubSubReport};
 use crate::orchestrate::agg::{Subscriber, merge_lives, pubsub_figures};
 use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::window::Window;
-use crate::orchestrate::{Ctx, Event, faults};
+use crate::orchestrate::{Ctx, Event, faults, tracefile};
 use crate::plan::MTU;
 use crate::results::Row;
 use crate::scenario::Stack;
@@ -62,7 +62,7 @@ pub(crate) async fn run(ctx: &mut Ctx, b: &Cluster, w: &Pubsub) -> Result<()> {
 }
 
 fn base_row(ctx: &Ctx, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Row {
-    Row {
+    let mut row = Row {
         run: ctx.plan.run.clone(),
         stack: stack.name().into(),
         test: w.id(),
@@ -73,13 +73,17 @@ fn base_row(ctx: &Ctx, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Row {
         kernel: BTreeMap::new(),
         shaper_drops: None,
         host: None,
-    }
+    };
+    tracefile::mark(ctx, stack, &mut row);
+    row
 }
 
 async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Result<Row> {
     let mut row = base_row(ctx, stack, w, rep, pair);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_iroh_gossip_max(w.iroh_gossip_max);
-    let outcome = body(ctx, b, &set, w, &mut row).await;
+    let set = AppSet::new(b, &ctx.plan, stack, MTU)
+        .with_iroh_gossip_max(w.iroh_gossip_max)
+        .with_trace(tracefile::wanted(ctx, stack));
+    let outcome = body(ctx, b, &set, w, stack, &mut row).await;
     if let Some(note) = set.configs().await.into_iter().next() {
         row.node.insert("note".into(), Value::String(note));
     }
@@ -90,7 +94,7 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Pubsub, rep: u32, pair: &
     Ok(row)
 }
 
-async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, row: &mut Row) -> Result<()> {
+async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, stack: Stack, row: &mut Row) -> Result<()> {
     set.start_all().await?;
     set.join_all(&w.topic, w.join_s * 1000).await?;
     tokio::time::sleep(Duration::from_secs_f64(w.warmup_s)).await;
@@ -154,7 +158,9 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, row: &mut Ro
     let mut counters = Map::new();
     for (i, n) in ctx.plan.nodes.iter().enumerate() {
         let mut sum: BTreeMap<String, u64> = BTreeMap::new();
-        for v in set.reports(i).await {
+        let reports = set.reports(i).await;
+        tracefile::write(ctx, stack, row, &n.name, &reports);
+        for v in reports {
             for (k, x) in v.get("counters").and_then(Value::as_object).into_iter().flatten() {
                 *sum.entry(k.clone()).or_insert(0) += x.as_u64().unwrap_or(0);
             }

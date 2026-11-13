@@ -1,0 +1,45 @@
+name = "sync-trace"
+about = "Records the VINC nodes' traces and packet log for a first fetch of a 1 KiB value across a WAN (50 ms round trip) through a hub; timings are not comparable with an untraced run."
+stacks = ["vinc"]
+repetitions = 1
+
+[resources]
+cpus = 2
+memory_mib = 2048
+
+[[sites]]
+name = "east"
+pos = [120, 160]
+
+[[sites]]
+name = "west"
+pos = [520, 160]
+
+[[nodes]]
+name = "hub"
+site = "east"
+role = "hub"
+
+[[nodes]]
+name = "provider"
+site = "east"
+
+[[nodes]]
+name = "consumer"
+site = "west"
+
+[[links]]
+a = "east"
+b = "west"
+shape = { delay_ms = 25, rate_mbit = 100 }
+
+[workload]
+kind = "sync"
+providers = ["provider"]
+consumers = ["consumer"]
+sizes = [1024]
+timeout_s = 300
+warmup_s = 8
+
+[debug]
+trace = true

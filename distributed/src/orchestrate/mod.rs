@@ -10,6 +10,7 @@ mod faults;
 pub mod live;
 mod pubsub;
 mod syncload;
+mod tracefile;
 mod transport;
 mod window;
 
@@ -204,6 +205,8 @@ pub(crate) struct Ctx {
     pub(crate) plan: Plan,
     pub(crate) sc: Scenario,
     pub(crate) reps: u32,
+    /// The run's results directory.
+    pub(crate) dir: PathBuf,
     events: Option<broadcast::Sender<Event>>,
     raw: std::fs::File,
     quiet_log: std::fs::File,
@@ -404,6 +407,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
         plan,
         sc,
         reps,
+        dir: dir.clone(),
         events: opts.events.clone(),
         raw,
         quiet_log,

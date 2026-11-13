@@ -61,6 +61,9 @@ pub struct Init {
     /// Delay-tolerant delivery for this node, on the stacks that have it (VINC); none leaves it off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dtn: Option<DtnInit>,
+    /// Record the node's trace and packet log and report them (VINC only; the other stacks ignore it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub trace: bool,
 }
 
 /// How a node runs delay-tolerant delivery. Read once, when the program starts.

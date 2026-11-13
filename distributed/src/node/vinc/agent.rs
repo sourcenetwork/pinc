@@ -123,6 +123,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             hubs,
             is_hub: me_spec.role != Role::Peer,
             mtu,
+            trace: init.trace,
             batch,
             pool_chunks: 1024,
         };
@@ -326,15 +327,16 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     restored: [r.held, r.partial, r.received, r.dropped].map(|n| n as u64),
                     lost: self.dtn.lost,
                 };
-                out.push(Reply::ok(
-                    id,
-                    json!({
-                        "pubsub": self.stats.report(),
-                        "counters": self.core.counters,
-                        "members": self.core.node.membership().member_count(),
-                        "dtn": dtn,
-                    }),
-                ));
+                let mut v = json!({
+                    "pubsub": self.stats.report(),
+                    "counters": self.core.counters,
+                    "members": self.core.node.membership().member_count(),
+                    "dtn": dtn,
+                });
+                if let (Some(l), Some(m)) = (self.core.tlog.as_ref(), v.as_object_mut()) {
+                    m.insert("trace".into(), l.report());
+                }
+                out.push(Reply::ok(id, v));
             }
             Cmd::Stop => {
                 // Leaving tells the hubs this node is gone for good; the loop ends after the farewell is sent.
@@ -528,6 +530,12 @@ impl<const K: usize, const D: usize> Agent<K, D> {
     }
 }
 
+/// The lengths of the datagrams in a send of `len` bytes cut every `segment` bytes (the last may be shorter).
+fn datagram_lens(len: usize, segment: usize) -> impl Iterator<Item = usize> {
+    let seg = segment.max(1);
+    (0..len).step_by(seg).map(move |o| seg.min(len - o))
+}
+
 // Milliseconds with microsecond resolution.
 #[allow(clippy::cast_precision_loss)]
 fn ms(ns: u64) -> f64 {
@@ -553,6 +561,9 @@ impl Io {
                 match op {
                     Op::Connect { stream, to } => self.streams.connect(stream, to),
                     Op::Write { stream, data } => {
+                        if let Some(l) = agent.core.tlog.as_mut() {
+                            l.note("carrier_tx", format!("{stream} {}", data.len()));
+                        }
                         let _ = self.streams.write(stream, data);
                     }
                     Op::Close { stream } => self.streams.close(stream),
@@ -560,6 +571,11 @@ impl Io {
             }
             while let Some(Tx { remote, len, segment }) = agent.core.poll_transmit(now, &mut self.sbuf) {
                 moved = true;
+                if let Some(l) = agent.core.tlog.as_mut() {
+                    for n in datagram_lens(len, segment) {
+                        l.note("udp_tx", format!("{remote} {n}"));
+                    }
+                }
                 if let Some(data) = self.sbuf.get(..len)
                     && let Err(e) = self.net.send(data, remote, segment).await
                 {
@@ -637,6 +653,9 @@ pub async fn serve<const K: usize, const D: usize>(
                     Ok((len, from, stride)) => {
                         if let Some(all) = rbuf.get_mut(..len) {
                             for chunk in all.chunks_mut(stride) {
+                                if let Some(l) = agent.core.tlog.as_mut() {
+                                    l.note("udp_rx", format!("{from} {}", chunk.len()));
+                                }
                                 agent.core.handle_datagram(now, from, chunk);
                             }
                         }
@@ -684,5 +703,18 @@ pub async fn serve<const K: usize, const D: usize>(
         for r in replies.drain(..) {
             emit(&r);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::datagram_lens;
+
+    #[test]
+    fn a_batched_send_is_one_entry_per_datagram() {
+        assert_eq!(datagram_lens(3000, 1200).collect::<Vec<_>>(), [1200, 1200, 600]);
+        assert_eq!(datagram_lens(1200, 1200).collect::<Vec<_>>(), [1200]);
+        assert_eq!(datagram_lens(0, 0).count(), 0);
+        assert_eq!(datagram_lens(3, 0).collect::<Vec<_>>(), [1, 1, 1]);
     }
 }

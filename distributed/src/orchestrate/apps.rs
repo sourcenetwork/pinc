@@ -173,6 +173,7 @@ impl<'a> AppSet<'a> {
                 sessions,
                 iroh_gossip_max: None,
                 dtn: None,
+                trace: false,
             })
             .collect();
         Self {
@@ -202,6 +203,14 @@ impl<'a> AppSet<'a> {
             v.push(cmd.clone());
         }
         self.call(i, cmd, wait).await
+    }
+
+    /// Have every node record its trace and packet log, when `on` (VINC nodes only act on it).
+    pub(crate) fn with_trace(mut self, on: bool) -> Self {
+        for i in &mut self.inits {
+            i.trace = on;
+        }
+        self
     }
 
     /// Set the largest iroh gossip message of every node (see `Pubsub::iroh_gossip_max`).

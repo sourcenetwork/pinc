@@ -18,6 +18,7 @@ pub mod dtnlog;
 mod hub;
 mod keys;
 pub mod net;
+pub mod tracelog;
 
 use crate::node::app::for_each_request;
 use crate::node::proto::Init;

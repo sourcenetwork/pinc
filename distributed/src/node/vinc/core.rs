@@ -30,6 +30,7 @@ use vinc_values::source::ValueSource;
 use super::apps::{VApps, VStore};
 use super::hub::{Collect, HubRelay, HubSide, RStream};
 use super::keys::answer;
+use super::tracelog::TraceLog;
 use crate::node::data::{seed_bytes, seed32};
 
 /// The bytes of messages a hub keeps for each topic in the harness.
@@ -87,6 +88,8 @@ pub struct Spec {
     pub is_hub: bool,
     /// The interface size the endpoint is told.
     pub mtu: u16,
+    /// Keep the node's trace and packet log (see [`TraceLog`]).
+    pub trace: bool,
     /// Datagrams per transmit (segmentation offload), at least 1.
     pub batch: usize,
     /// The 16 KiB buffer chunks each session may hold.
@@ -220,6 +223,8 @@ pub struct Core<const K: usize, const D: usize> {
     /// rejected messages and closed backlogs its trace records. Reported with the node's counts, so a loss in a result
     /// can be traced to what happened on which node.
     pub counters: BTreeMap<&'static str, u64>,
+    /// The trace and packet log, kept only when the scenario asks for it; every recording site tests this one option.
+    pub tlog: Option<TraceLog>,
     /// What the node restored from a kept bundle store when it started.
     pub restored: DtnRestored,
     pub(super) start: std::time::Instant,
@@ -293,7 +298,7 @@ fn build<const K: usize, const D: usize>(
         wall_ms,
         local: spec.addr,
         // The delay-tolerant layer's decisions are observable only through the trace: on with the layer.
-        trace: apps.dtn.is_on(),
+        trace: apps.dtn.is_on() || spec.trace,
     };
     let drbg2 = Drbg::new(&seed32(&spec.name, "vinc-node-drbg"));
     let kp2 = keypair(&spec.name)?;
@@ -366,6 +371,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
             events: VecDeque::new(),
             dtn_trace: VecDeque::new(),
             counters: BTreeMap::new(),
+            tlog: spec.trace.then(TraceLog::new),
             restored,
             start,
             dirty: false,
@@ -432,6 +438,11 @@ impl<const K: usize, const D: usize> Core<K, D> {
             };
             if let Some((name, n)) = counted {
                 *self.counters.entry(name).or_insert(0) += n;
+            }
+            if let Some(l) = self.tlog.as_mut() {
+                let mut text = String::new();
+                let _ = item.write_ndjson(&mut text);
+                l.note("trace", text);
             }
             if let Body::Node(
                 t @ (NodeTrace::DtnCreated { .. }
@@ -841,6 +852,9 @@ impl<const K: usize, const D: usize> Core<K, D> {
     }
 
     fn stream_data(&mut self, now: u64, stream: StreamId, data: &[u8]) {
+        if let Some(l) = self.tlog.as_mut() {
+            l.note("carrier_rx", format!("{stream} {}", data.len()));
+        }
         if let Some(i) = self.relay_of_stream(stream) {
             let mut bytes = data;
             for _ in 0..64 {
