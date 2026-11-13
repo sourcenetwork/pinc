@@ -226,3 +226,35 @@ fn a_direct_first_hub_session_that_came_up_at_once_gets_its_relay_path_two_secon
         );
     });
 }
+
+#[test]
+fn a_dial_to_a_relay_opens_the_carrier_to_that_relay() {
+    big(|| {
+        let mut w = World::new(92);
+        let (_r0, rs0) = w.relay(1, relay_ip(10));
+        let (r1, rs1) = w.relay(2, relay_ip(11));
+        let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs0, rs1]));
+        w.run(secs(4));
+        let up = |w: &World| {
+            w.notices(a)
+                .iter()
+                .any(|(_, n)| matches!(n, vinc_connect::client::Notice::CarrierUp(1)))
+        };
+        assert!(!up(&w), "the carrier to the second relay is not open before the dial");
+        let hub = w.relay_node(r1).id();
+        w.sim.command(
+            secs(4),
+            a,
+            Cmd::Dial {
+                node: hub,
+                hints: vec![rs1.udp.unwrap()],
+                role: vinc_core::Role::Hub,
+            },
+        );
+        w.run(secs(8));
+        assert!(
+            up(&w),
+            "the first flight to a relay also goes through its own relay, which opens its carrier"
+        );
+    });
+}

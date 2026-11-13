@@ -222,7 +222,7 @@ drive_impl! {
             }
         }
         // The peer's own relay when the record named one, and ours (RELAY_FORWARD on the first flight).
-        let peer = found.and_then(|f| self.relay_of(&f.home)).and_then(|r| u8::try_from(r).ok());
+        let peer = self.relay_of(node).or_else(|| found.and_then(|f| self.relay_of(&f.home))).and_then(|r| u8::try_from(r).ok());
         let own = self
             .home()
             .or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()))
