@@ -127,6 +127,10 @@ name = "security_fallback"
 path = "security_fallback.rs"
 
 [[test]]
+name = "security_resend"
+path = "security_resend.rs"
+
+[[test]]
 name = "security_keyroll"
 path = "security_keyroll.rs"
 
