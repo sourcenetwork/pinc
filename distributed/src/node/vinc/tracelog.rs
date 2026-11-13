@@ -1,8 +1,8 @@
 //! The bounded log a VINC node keeps when the scenario asks for traces: the node's trace records and every datagram
 //! and relay carrier write or read, each with the milliseconds since the node started.
 //!
-//! Invariants: at most [`CAP`] entries are held; the oldest go first and `dropped` counts them, so a reader knows
-//! whether the log starts at the beginning.
+//! Invariants: at most [`CAP`] entries and [`CAP_BYTES`] bytes of text are held; the oldest go first and `dropped`
+//! counts them, so a reader knows whether the log starts at the beginning.
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 /// The most entries kept.
 pub const CAP: usize = 50_000;
+/// The most bytes of entry text kept: a trace record can be long, so the count alone does not bound the memory.
+pub const CAP_BYTES: usize = 32 << 20;
 
 /// One entry: milliseconds since the node started, a short kind, and a text.
 pub type Entry = (u64, &'static str, String);
@@ -20,6 +22,7 @@ pub struct TraceLog {
     start: Instant,
     entries: VecDeque<Entry>,
     dropped: u64,
+    bytes: usize,
     cap: usize,
 }
 
@@ -34,14 +37,19 @@ impl TraceLog {
             start: Instant::now(),
             entries: VecDeque::new(),
             dropped: 0,
+            bytes: 0,
             cap,
         }
     }
 
-    /// Add an entry at `ms`, dropping the oldest when the log is full.
+    /// Add an entry at `ms`, dropping the oldest while the log is full by count or by bytes.
     pub fn push(&mut self, ms: u64, kind: &'static str, text: String) {
-        if self.entries.len() >= self.cap {
-            self.entries.pop_front();
+        self.bytes += text.len();
+        while self.entries.len() >= self.cap || self.bytes > CAP_BYTES {
+            let Some((_, _, old)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes -= old.len();
             self.dropped += 1;
         }
         self.entries.push_back((ms, kind, text));
@@ -89,5 +97,14 @@ mod tests {
         }
         assert_eq!(l.entries.len(), CAP);
         assert_eq!(l.dropped, 7);
+    }
+
+    #[test]
+    fn long_entries_are_bounded_by_their_bytes() {
+        let mut l = TraceLog::new();
+        for i in 0..40u64 {
+            l.push(i, "trace", "x".repeat(1 << 20));
+        }
+        assert_eq!((l.entries.len(), l.dropped, l.bytes), (32, 8, CAP_BYTES));
     }
 }
