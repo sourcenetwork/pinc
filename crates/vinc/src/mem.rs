@@ -63,10 +63,10 @@ pub struct Limits {
     /// this and 1.5 times the congestion window, which is what binds on any path under about 1 Gbit/s at 100 ms.
     pub send_window: u64,
     /// The most streams the peer may have open at once on a session (at most 100, half the slots of
-    /// [`STREAMS`]). A peer that sends one request a stream has this many requests in flight on a session. A stream
-    /// that has carried data and is not finished is charged its whole window to the pool, and a new stream waits
-    /// while those charges pass the pool: with the default window and pool that is about twelve such streams at once,
-    /// so a session that keeps many streams open and busy wants a smaller `stream_window` or more `pool_chunks`.
+    /// [`STREAMS`]). A peer that sends one request a stream has this many requests in flight on a session. A new
+    /// stream needs room in the pool for its first 64 KiB beside the same for each stream already open, so with the
+    /// default pool a hundred streams stay open and busy at once; what they send together beyond the pool is held
+    /// back and sent again by the peer.
     pub streams: u16,
     /// The most streams the peer may open that the application has not accepted, per session.
     pub accept_streams: usize,

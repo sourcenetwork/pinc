@@ -460,15 +460,12 @@ async fn as_many_streams_live_as_the_limit_says(limits: vinc::Limits, live: usiz
 }
 
 /// A peer has a hundred streams open at once on one connection, as a client that sends one request a stream needs: the
-/// hundred-and-first waits until one of them ends, and then opens. Every stream here carries data and stays open, so
-/// each is charged its whole window: the windows are 64 KiB, a hundred of which fit the pool of a session.
+/// hundred-and-first waits until one of them ends, and then opens. Every stream here carries data and stays open, and
+/// the limits are the default ones: a stream is admitted while the pool has a first 64 KiB for it beside the same
+/// for each open stream, whatever the windows of the open ones add up to.
 #[tokio::test(flavor = "current_thread")]
 async fn a_peer_has_a_hundred_streams_open_at_once_on_one_connection() {
-    let limits = vinc::Limits {
-        stream_window: 64 * 1024,
-        ..vinc::Limits::default()
-    };
-    as_many_streams_live_as_the_limit_says(limits, 100).await;
+    as_many_streams_live_as_the_limit_says(vinc::Limits::default(), 100).await;
 }
 
 /// The stream limit of an endpoint is the most streams its peer ever has open at once, not only the number it may

@@ -3,7 +3,7 @@
 //!
 //! The credit is a cumulative limit like a flow-control limit: `limit` is the number of streams the opener may have
 //! opened in all, of every kind. The receiver derives it as the streams it admitted so far plus the room it has now
-//! (slots, the live-stream cap, and first charges that fit the pool beside the credit already granted), tells the
+//! (slots, the live-stream cap, and first charges that fit the pool beside one for each open stream), tells the
 //! opener the first value in the handshake (`max_streams` of the credit record) and raises it with a `MAX_STREAMS`
 //! frame. A limit only grows: a shrinking pool is not taken back, the receiver holds back the surplus stream instead.
 //!

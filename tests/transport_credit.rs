@@ -2,7 +2,7 @@
 //! credit instead of sending them, every stream arrives with its bytes, and the receiver holds none back; a frame that
 //! opens many silent streams at once is admitted; a stream that ends gives the opener one more while every other one
 //! stays live; the configured window is the one advertised and the one the streams run with; and, on a table, a
-//! window charged to the ledger from its stream's first byte.
+//! window charged to the ledger from its stream's first byte, with streams admitted while a first charge fits.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -225,10 +225,11 @@ fn a_first_frame_on_the_highest_of_many_streams_opens_the_silent_ones_below_it_w
 }
 
 /// The ledger counts the first four chunks of a stream that has carried no data and its whole window from its first
-/// byte. A stream inside the credit is admitted however full the ledger is, skipped streams included, and nothing more
-/// is committed (no stream of ours, no raise of the credit, no stream beyond it) until the ledger fits again.
+/// byte, and no window is granted while it is past the pool. Admitting a stream asks less: a first charge for it
+/// beside one for each open stream. So with streams that carry data and hold the ledger past the pool, a stream of
+/// ours still opens and a peer stream beyond the credit is still admitted, until the pool has no first charge left.
 #[test]
-fn a_window_is_charged_from_its_first_byte_and_the_credit_admits_past_a_full_ledger() {
+fn a_window_is_charged_from_its_first_byte_and_a_stream_is_admitted_while_a_first_charge_fits() {
     let chunk = CHUNK_SIZE as u64;
     // Windows of 16 chunks against a pool of 32: charged at admission, two streams would fill it.
     let (mut pool, mut t) = table(32, 16);
@@ -254,20 +255,29 @@ fn a_window_is_charged_from_its_first_byte_and_the_credit_admits_past_a_full_led
         "the ledger is past the pool"
     );
     assert_eq!(t.stats().held_back, 0);
-    // Nothing more is committed while the ledger is past the pool.
-    assert_eq!(t.open_stream(&pool, true), Err(StreamError::Exhausted));
+    // A stream of ours opens all the same: four open streams count a first charge each (16 chunks), and a fifth
+    // first charge fits the 29 chunks the pool has left.
+    let mut ours = vec![t.open_stream(&pool, true).unwrap()];
+    // The credit is not raised: the peer has as many streams live as it may.
     t.regrant(&pool);
     assert!(std::iter::from_fn(|| t.pending_control()).all(|f| !matches!(f, ControlFrame::MaxStreams { .. })));
+    // A peer stream beyond the credit is admitted too, while its first charge fits.
+    t.on_stream_frame(&mut pool, 16, 0, &[4], false).unwrap();
+    assert_eq!(t.stats().held_back, 0);
+    // Six open streams count 24 chunks and the pool has 28 left: one more of ours fits, and then none does.
+    ours.push(t.open_stream(&pool, true).unwrap());
+    assert_eq!(t.open_stream(&pool, true), Err(StreamError::Exhausted));
     assert_eq!(
-        t.on_stream_frame(&mut pool, 16, 0, &[4], false),
+        t.on_stream_frame(&mut pool, 20, 0, &[5], false),
         Err(StreamError::Exhausted),
-        "a stream beyond the credit is held back"
+        "a stream beyond the credit with no first charge left is held back"
     );
     assert_eq!(t.stats().held_back, 1);
     // The silent stream stores what arrives while chunks are free.
     t.on_stream_frame(&mut pool, 8, 0, &[5; 1000], false).unwrap();
     // The streams end and are read, our halves end too: the ledger drains and the credit is raised.
-    for (id, len) in [(0u64, 1usize), (4, 1), (8, 1000), (12, 1)] {
+    let peers = [(0u64, 1usize), (4, 1), (8, 1000), (12, 1), (16, 1)];
+    for (id, len) in peers.into_iter().chain(ours.into_iter().map(|id| (id, 0))) {
         t.on_stream_frame(&mut pool, id, len as u64, &[], true).unwrap();
         assert_eq!(read_to_end(&mut t, &mut pool, id), len);
         t.finish(id).unwrap();
@@ -284,7 +294,7 @@ fn a_window_is_charged_from_its_first_byte_and_the_credit_admits_past_a_full_led
         ControlFrame::MaxStreams { limit } => Some(limit),
         _ => None,
     });
-    assert_eq!(raise, Some(8), "four admitted and room for four more");
-    t.on_stream_frame(&mut pool, 16, 0, &[4], false).unwrap();
+    assert_eq!(raise, Some(9), "five admitted and room for four more");
+    t.on_stream_frame(&mut pool, 20, 0, &[5], false).unwrap();
     assert_eq!(t.stats().held_back, 1);
 }

@@ -10,13 +10,17 @@
 //!   sender repeats it) and counted in `StreamStats::held_back`;
 //! - the pool ledger counts, for each receive half, the chunks its credit may still claim: the first [`FIRST_CHARGE`]
 //!   bytes of its window while the stream has carried no data, its whole window from the first byte on; the stream
-//!   credit keeps [`FIRST_CHARGE`] for each stream the peer may still open. A window grant, a raise of the stream
-//!   credit and a stream we open are made only while the ledger, with them, fits the bytes the pool has left. A peer
-//!   stream inside the credit is admitted with no pool test (it takes no chunk, and the credit kept its first charge),
-//!   so a frame that opens many skipped streams at once is never held back for them. The ledger passes the pool only
-//!   when streams start to carry data whose windows do not fit together, or when other users of the pool take chunks;
-//!   nothing more is granted until it fits again, so each of those streams stays within the window it has. The window
-//!   the peer may use is the full one from the first byte, and the sum of the windows may exceed the pool;
+//!   credit keeps [`FIRST_CHARGE`] for each stream the peer may still open. A window grant is made only while the
+//!   ledger, with it, fits the bytes the pool has left. A peer stream inside the credit is admitted with no pool test
+//!   (it takes no chunk, and the credit kept its first charge), so a frame that opens many skipped streams at once is
+//!   never held back for them. The ledger passes the pool only when streams start to carry data whose windows do not
+//!   fit together, or when other users of the pool take chunks; no window is granted until it fits again, so each of
+//!   those streams stays within the window it has. The window the peer may use is the full one from the first byte,
+//!   and the sum of the windows may exceed the pool;
+//! - admitting one more stream (a raise of the stream credit, a peer stream beyond the credit, a stream we open) asks
+//!   less than a window grant: that the pool has left a first charge for the new stream beside one for each stream
+//!   already open. Streams that carry data and stay open so do not shut out new ones for the size of their windows;
+//!   what they may then send together can pass the pool, and the frame that finds no chunk is held back;
 //! - a limit, once advertised or received, never shrinks, and a final size, once fixed, never changes;
 //! - the number of live streams each side opened never exceeds its cap; an excess peer stream is stored nowhere and
 //!   its packet goes unacknowledged, so its opener retransmits it from the start once there is room;

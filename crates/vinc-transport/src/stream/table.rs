@@ -389,11 +389,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// How many more peer streams could be admitted now, counting the credit already given: the live-stream cap (at
     /// most half the slots, so the rest stay free for the streams we open) less the live ones, the free slots, and as
-    /// many first charges as [`admit_fit`] allows of those that fit in the pool bytes left beside the credit already
-    /// granted.
+    /// many first charges as [`admit_fit`] allows of those that fit in the pool bytes left beside a first charge for
+    /// each open stream ([`Streams::admitted_charge`]).
     fn admit_room(&self, pool: &BufferPool<'_>) -> u64 {
         let free = self.free();
-        let fit = pool.available_bytes().saturating_sub(self.granted_unreceived()) / self.first_charge();
+        let fit = pool.available_bytes().saturating_sub(self.admitted_charge()) / self.first_charge();
         let cap = self.max_remote.min((N as u64 / 2).max(1));
         cap.saturating_sub(self.remote_live).min(free).min(admit_fit(fit))
     }
@@ -444,10 +444,22 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.admit.adv.saturating_sub(self.admitted())
     }
 
-    /// Whether the first charges of `streams` new streams fit in the pool bytes left beside the credit already
-    /// granted. The one test for a peer stream beyond the credit and for a local one, so they cannot differ.
+    /// What the open streams count for when one more stream is admitted: for each, the credit it may still claim, but
+    /// no more than one first charge. A window grant counts whole windows ([`Streams::granted_unreceived`]); admitting
+    /// a stream asks only that every stream, old and new, has room for a first step, so streams that carry data and
+    /// stay open do not shut out new ones for the size of their windows.
+    fn admitted_charge(&self) -> u64 {
+        let first = self.first_charge();
+        self.slots
+            .written()
+            .iter()
+            .fold(0, |sum, s| sum.saturating_add(s.recv.unreceived().min(first)))
+    }
+
+    /// Whether the first charges of `streams` new streams fit in the pool bytes left beside a first charge for each
+    /// open stream. The one test for a peer stream beyond the credit and for a local one, so they cannot differ.
     fn windows_fit(&self, pool: &BufferPool<'_>, streams: u64) -> bool {
-        self.granted_unreceived()
+        self.admitted_charge()
             .saturating_add(streams.saturating_mul(self.first_charge()))
             <= pool.available_bytes()
     }
