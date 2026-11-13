@@ -59,5 +59,7 @@ open Vinc.ValuesTime
 #audit_axioms Vinc.ValuesTime.tail_waits_for_wanted_end
 #audit_axioms Vinc.ValuesTime.tail_means_wanted_end
 #audit_axioms Vinc.ValuesTime.dupStep_announces_only_the_held
-#audit_axioms Vinc.ValuesTime.silent_provider_redialled
-#audit_axioms Vinc.ValuesTime.poll_offers_stall_from_request
+#audit_axioms Vinc.ValuesTime.no_granule_not_stalled
+#audit_axioms Vinc.ValuesTime.silent_after_granule_redialled
+#audit_axioms Vinc.ValuesTime.poll_offers_stall_from_first_granule
+#audit_axioms Vinc.ValuesTime.no_granule_no_timer

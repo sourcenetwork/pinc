@@ -259,25 +259,25 @@ def stallLive (now lastp : Nat) (ss : List Sess) : Nat :=
 def redial (s : Fs) (now : Nat) : Fs :=
   Fs.emit { s with lastp := now, sw := min (smul s.sw 2) STALL_CAP } [.redial s.sw (min (smul s.sw 2) STALL_CAP)]
 
-/-- The later of the last verified granule and the first request. -/
-def lastProg (s : Fs) : Nat := max s.lastp s.treq
+/-- The moment `stall_rtt` and `stall_live` count from: the last verified granule (`lastp`). -/
+def lastProg (s : Fs) : Nat := s.lastp
 
-/-- `stall_base`: the moment the stall wait counts from, the later of the last granule, the last stream bytes and the
-first request (the timer runs once a request was sent). -/
-def stallBase (s : Fs) : Nat := max (max s.lastp s.lastb) s.treq
+/-- `stall_base`: the moment the stall wait counts from, the later of the last granule and the last stream bytes;
+the timer runs once a granule was verified (`lastp ≠ 0`): a fetch that has received none is not stalled. -/
+def stallBase (s : Fs) : Nat := max s.lastp s.lastb
 
 /-- The first block of `on_timeout`. -/
 def stallStep (s : Fs) (now : Nat) (ss : List Sess) : Fs :=
-  if s.treq ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now then
+  if s.lastp ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now then
     if s.sw < stallRtt ss ∧ now < sadd (lastProg s) (stallRtt ss) then { s with sw := stallRtt ss }
     else if stallLive now (lastProg s) ss ≠ 0 then { s with sw := sadd (now - lastProg s) (stallLive now (lastProg s) ss) }
     else redial s now
   else s
 
-/-- The timers `poll_timeout` takes the minimum of: the stall timer once a request was sent, the hold timer, the steal
+/-- The timers `poll_timeout` takes the minimum of: the stall timer once a granule was verified, the hold timer, the steal
 re-check, the deadline plus one, the retries. -/
 def pollList (s : Fs) : List Nat :=
-  (if s.treq ≠ 0 then [sadd (stallBase s) s.sw] else []) ++
+  (if s.lastp ≠ 0 then [sadd (stallBase s) s.sw] else []) ++
     (s.head.map (fun h => sadd h.t0 HOLD_MAX)).toList ++ (if s.tw ≠ 0 then [s.tw] else []) ++
     (s.deadline.map (fun d => sadd d 1)).toList ++ s.rt.toList
 

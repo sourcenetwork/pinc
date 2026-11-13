@@ -138,11 +138,11 @@ ByteLive(s, t) ==
                      ELSE s.sw,
               !.lastb = t]
 
-(* the stall timer counts from the later of the last frame, the last bytes and the first request, and runs once a
-   request was sent (stall_base) *)
-Lp(s) == Mx(s.lastp, s.treq)
-Base(s) == Mx(Mx(s.lastp, s.lastb), s.treq)
-Due(s, t) == s.treq # Z /\ U!Le(SAdd(Base(s), s.sw), t)
+(* the stall timer counts from the later of the last frame and the last bytes, and runs once a granule was verified
+   (lastp # 0): a fetch that has received none is not stalled (stall_base) *)
+Lp(s) == s.lastp
+Base(s) == Mx(s.lastp, s.lastb)
+Due(s, t) == s.lastp # Z /\ U!Le(SAdd(Base(s), s.sw), t)
 RttWait(s, t, w) == U!Lt(s.sw, w) /\ U!Lt(t, SAdd(Lp(s), w))
 NextSw(sw) == Mn(SMul2(sw), StallCap)
 
@@ -157,7 +157,7 @@ Late(c, t) == c.hasdl /\ U!Lt(c.dl, t)
 
 (* poll_timeout: the minimum of the armed timers, [p |-> FALSE] if there is none *)
 Timers(c, s) ==
-    LET a == IF s.treq # Z THEN {SAdd(Base(s), s.sw)} ELSE {}
+    LET a == IF s.lastp # Z THEN {SAdd(Base(s), s.sw)} ELSE {}
         b == IF s.head.h THEN {SAdd(s.head.t0, HoldMax)} ELSE {}
         d == IF s.tw # Z THEN {s.tw} ELSE {}
         e == IF c.hasdl THEN {SAdd(c.dl, U!One)} ELSE {}

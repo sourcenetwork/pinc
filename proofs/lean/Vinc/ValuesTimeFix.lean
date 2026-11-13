@@ -8,7 +8,8 @@ import Vinc.ValuesTimeDeadline
 * A group another stream already stored (the race of two streams on one group) is announced once: `dupStep` writes
   and announces nothing of its own, `dupStep_announces_only_the_held`; with `announced_once` (which now ranges over
   inputs that repeat a group) the first granule is announced exactly once however the streams race.
-* The stall timer runs from the first request: `silent_provider_redialled`, `poll_offers_stall_from_request`.
+* The stall timer runs from the first verified granule, not before: `no_granule_not_stalled`,
+  `silent_after_granule_redialled`, `poll_offers_stall_from_first_granule`, `no_granule_no_timer`.
 -/
 
 set_option linter.unusedVariables false
@@ -84,15 +85,26 @@ theorem verifyStep_dup_log (s : Fs) (now off len : Nat) (h : containsRange s.sto
     verifyStep s now off len = dupStep s now off len := by
   unfold verifyStep; rw [if_pos h]
 
-/-- A fetch that has sent a request and heard nothing is redialled when the wait is spent. -/
-theorem silent_provider_redialled (s : Fs) (now : Nat) (ss : List Sess) (h0 : s.lastp = 0) (hb : s.lastb = 0)
-    (ht : s.treq ≠ 0) (hdue : sadd s.treq s.sw ≤ now) (hr : ¬ RttWait s now ss)
-    (hl : stallLive now (lastProg s) ss = 0) : (stallStep s now ss).log ≠ s.log := by
-  refine (redial_iff s now ss).2 ⟨⟨ht, ?_⟩, hr, hl⟩
-  simpa [stallBase, h0, hb] using hdue
+/-- A fetch that has verified no granule is never stalled: the stall block of `on_timeout` changes nothing, whatever
+was requested, whatever bytes arrived and however late the call is. -/
+theorem no_granule_not_stalled (s : Fs) (now : Nat) (ss : List Sess) (h0 : s.lastp = 0) : stallStep s now ss = s := by
+  simp [stallStep, h0]
 
-/-- `poll_timeout` offers the stall time from the first request on. -/
-theorem poll_offers_stall_from_request (s : Fs) (ht : s.treq ≠ 0) : sadd (stallBase s) s.sw ∈ pollList s := by
-  simp [pollList, ht]
+/-- A fetch that verified a granule and heard nothing since is redialled when the wait is spent. -/
+theorem silent_after_granule_redialled (s : Fs) (now : Nat) (ss : List Sess) (h0 : s.lastp ≠ 0) (hb : s.lastb ≤ s.lastp)
+    (hdue : sadd s.lastp s.sw ≤ now) (hr : ¬ RttWait s now ss)
+    (hl : stallLive now (lastProg s) ss = 0) : (stallStep s now ss).log ≠ s.log := by
+  refine (redial_iff s now ss).2 ⟨⟨h0, ?_⟩, hr, hl⟩
+  simpa [stallBase, Nat.max_eq_left hb] using hdue
+
+/-- `poll_timeout` offers the stall time from the first verified granule on. -/
+theorem poll_offers_stall_from_first_granule (s : Fs) (h : s.lastp ≠ 0) : sadd (stallBase s) s.sw ∈ pollList s := by
+  simp [pollList, h]
+
+/-- Before the first verified granule the stall rule arms nothing: a running fetch with no held granule, no steal
+timer, no deadline and no retry has no timer at all, whatever was requested. -/
+theorem no_granule_no_timer (s : Fs) (h0 : s.lastp = 0) (hh : s.head = none) (ht : s.tw = 0) (hd : s.deadline = none)
+    (hr : s.rt = none) : pollTimeout s = none := by
+  simp [pollTimeout, pollList, h0, hh, ht, hd, hr]
 
 end Vinc.ValuesTime

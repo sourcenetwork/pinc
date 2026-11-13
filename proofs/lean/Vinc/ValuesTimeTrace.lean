@@ -217,7 +217,7 @@ def replayTo (j : J) (w : W) : Except String W := do
   let wr ← limbsF j "w"
   let lv ← limbsF j "lv"
   check (stallRtt ss == wr) s!"stall_rtt: model {stallRtt ss}, test {wr}"
-  check (stallLive now (max pre.lastp pre.treq) ss == lv) s!"stall_live: model {stallLive now (max pre.lastp pre.treq) ss}, test {lv}"
+  check (stallLive now pre.lastp ss == lv) s!"stall_live: model {stallLive now pre.lastp ss}, test {lv}"
   let s0 := { w.fs with log := [] }
   let ok (c : Fs) : Bool := cmpSt c post && c.log == evs && c.tw == post.tw
   let c0 := onTimeout s0 now ss false none
