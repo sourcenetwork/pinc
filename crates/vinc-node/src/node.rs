@@ -374,12 +374,12 @@ where
     }
 
     fn inbound_step(&mut self, now: Nanos) -> bool {
-        let local = self.local;
+        let (addrs, fallback) = (&self.local_addrs, self.local);
         let ep = &mut self.io.ep;
         let mut did = false;
         self.conn.deliver_inbound(|from, data| {
             did = true;
-            ep.handle_datagram(now, local, from, data);
+            ep.handle_datagram(now, inbound_local(addrs, &from, fallback), from, data);
         });
         did
     }
@@ -817,6 +817,17 @@ where
     }
 }
 
+/// The local address a datagram carried by a relay arrives at: the node's current address of the sender's family, so it
+/// names the path the sessions use after the node moved; the address the node started with only while none is set.
+fn inbound_local(addrs: &[Option<SocketAddr>; MAX_ADDRS], from: &SocketAddr, fallback: SocketAddr) -> SocketAddr {
+    addrs
+        .iter()
+        .flatten()
+        .find(|a| a.is_ipv4() == from.is_ipv4())
+        .copied()
+        .unwrap_or(fallback)
+}
+
 /// Rebuild the ticket the address hash covers from the connectivity layer's candidates and home relay.
 fn refresh_ticket<P: Provider, const R: usize, const PEERS: usize, E: Ep, St: Store>(
     io: &mut Io<E, St>,
@@ -868,5 +879,27 @@ where
     /// Whether this node is a hub.
     pub const fn is_hub(&self) -> bool {
         self.io.is_hub
+    }
+}
+
+#[cfg(test)]
+mod inbound_tests {
+    use super::*;
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse()
+            .unwrap_or_else(|_| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
+    }
+
+    #[test]
+    fn a_relayed_datagram_arrives_at_the_current_address_of_its_family() {
+        let (old, new, v6) = (addr("10.0.0.1:4433"), addr("10.0.1.1:4433"), addr("[fd00::1]:4433"));
+        let mut addrs = [None; MAX_ADDRS];
+        for (d, a) in addrs.iter_mut().zip([v6, new]) {
+            *d = Some(a);
+        }
+        assert_eq!(inbound_local(&addrs, &addr("240.0.0.3:0"), old), new);
+        assert_eq!(inbound_local(&addrs, &addr("[fd00::9]:0"), old), v6);
+        assert_eq!(inbound_local(&[None; MAX_ADDRS], &addr("240.0.0.3:0"), old), old);
     }
 }
