@@ -275,6 +275,46 @@ fn the_first_snapshot_of_a_new_home_never_brings_back_a_member_that_left() {
 }
 
 #[test]
+fn a_removal_held_while_no_home_is_confirmed_is_decided_when_the_home_is() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let home = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let other = 1 - home;
+    // The member leaves while the member is cut from its home: the hubs drop it, the member is not told.
+    w.cut.insert((home, m));
+    w.leave(x);
+    for hub in 0..2 {
+        w.close_session(x, hub, LEAVE);
+    }
+    w.run(5 * SEC);
+    assert!(w.has(m, x));
+    w.close_session(m, home, 0);
+    assert!(w.run_until(120 * SEC, |w| w.nodes[m].m.primary() == Some(&id(other))));
+    // Both hub copies here lose the member while the new home is not confirmed: the removal is held.
+    let r = w.nodes[m]
+        .m
+        .members()
+        .find(|(k, _)| **k == id(x))
+        .map(|(_, r)| *r)
+        .unwrap();
+    for hub in [home, other] {
+        delta(&mut w, m, hub, &id(x), r, Alive::Left);
+    }
+    assert!(w.has(m, x), "held: no home view is confirmed yet");
+    assert_eq!(
+        traces(&w, m, |t| matches!(t, Trace::Deferred { .. })),
+        0,
+        "held by the missing home"
+    );
+    w.snapshot_to(other, m);
+    w.run(20 * SEC);
+    assert!(
+        !w.has(m, x),
+        "the home view omits it and no copy lists it: the held removal is decided"
+    );
+}
+
+#[test]
 fn a_down_delta_of_the_same_or_a_newer_incarnation_removes_an_older_one_is_ignored() {
     let mut w = started(2, 3);
     let (m, x) = (2, 3);

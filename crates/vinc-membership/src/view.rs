@@ -538,6 +538,10 @@ impl Membership {
     ) -> bool {
         let Some(c) = cur else { return false };
         if src.hold {
+            // Held until a home view is confirmed: look again then, no hub copy lists the member to bring it back.
+            if self.recheck.len() < MAX_TABLE {
+                self.recheck.insert(*m);
+            }
             return false;
         }
         if now < self.quiet_until && self.recheck.len() < MAX_TABLE {
