@@ -802,20 +802,20 @@ proptest! {
             let t = c.cwnd();
             let r = p.next_release(t);
             prop_assert!(r >= t);
-            p.on_sent(t, t, t ^ 0xAAAA, t);
+            p.on_sent(t, t, t ^ 0xAAAA, t, t & 1 == 0);
         }
     }
 
     /// The pacer never panics and never waits less than zero, for any inputs.
     #[test]
     fn the_pacer_handles_any_inputs(
-        events in proptest::collection::vec((big(), big(), big(), big()), 1..60),
+        events in proptest::collection::vec((big(), big(), big(), big(), any::<bool>()), 1..60),
     ) {
         let mut p = Pacer::new();
-        for (now, mtu, srtt, cwnd) in events {
+        for (now, mtu, srtt, cwnd, limited) in events {
             let r = p.next_release(now);
             prop_assert!(r >= now);
-            p.on_sent(now, mtu, srtt, cwnd);
+            p.on_sent(now, mtu, srtt, cwnd, limited);
         }
     }
 

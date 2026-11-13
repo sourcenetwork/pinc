@@ -547,17 +547,27 @@ impl<const N: usize> Recovery<N> {
         self.acct.in_flight += u64::from(p.size);
         self.in_flight_packets += 1;
         if self.rtt.has_sample() {
-            self.pacer
-                .on_sent(p.time, self.mtu, self.rtt.smoothed(), self.cc.cwnd());
+            self.pacer.on_sent(
+                p.time,
+                self.mtu,
+                self.rtt.smoothed(),
+                self.cc.cwnd(),
+                self.window_limits(),
+            );
         }
         self.note_limited(p.time);
         Ok(())
     }
 
-    /// Remember that the window limits the sender at `now`: it cannot send, or at least half of the window is in
-    /// flight (a paced or credit-limited sender that keeps the path busy is not idle).
+    /// Whether the window limits the sender: it cannot send, or at least half of the window is in flight (a paced or
+    /// credit-limited sender that keeps the path busy is not idle).
+    fn window_limits(&self) -> bool {
+        !self.can_send() || self.acct.in_flight >= self.cc.cwnd() / 2
+    }
+
+    /// Remember that the window limits the sender at `now`.
     pub(super) fn note_limited(&mut self, now: u64) {
-        if !self.can_send() || self.acct.in_flight >= self.cc.cwnd() / 2 {
+        if self.window_limits() {
             self.limited_at = Some(now);
         }
     }

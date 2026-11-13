@@ -82,12 +82,13 @@ impl Run<'_> {
     }
 
     fn plog(&mut self, body: &str) {
-        let (tokens, next) = self.p.trace_view();
+        let (tokens, next, start) = self.p.trace_view();
         let _ = writeln!(
             self.out,
-            r#"{{"t":"txcc","run":{},{body},"v":{{"tokens":{tokens},"next":{}}}}}"#,
+            r#"{{"t":"txcc","run":{},{body},"v":{{"tokens":{tokens},"next":{},"start":{}}}}}"#,
             self.id,
-            clamp(next, self.wide)
+            clamp(next, self.wide),
+            clamp(start, self.wide)
         );
     }
 
@@ -311,12 +312,16 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
                         pick(&mut rng, &[1200, 1452, 8952])
                     };
                     let s = srtt.unwrap_or(if wide { u64::MAX } else { 20 * MS });
-                    let (tokens_before, _) = r.p.trace_view();
-                    r.p.on_sent(r.now, mtu, s, cw);
-                    let (tokens_after, _) = r.p.trace_view();
+                    let limited = rng.next_u64().is_multiple_of(2);
+                    let (tokens_before, _, _) = r.p.trace_view();
+                    r.p.on_sent(r.now, mtu, s, cw, limited);
+                    let (tokens_after, _, start) = r.p.trace_view();
                     assert!((1..=BURST_PACKETS).contains(&tokens_after));
                     if tokens_before > 1 {
                         assert_eq!(tokens_after, tokens_before - 1);
+                        if tokens_before == BURST_PACKETS {
+                            assert_eq!(start, r.now, "a burst begins with its first packet");
+                        }
                         paced_in_burst += 1;
                     } else {
                         // the burst was full when it began, so exactly BURST_PACKETS - 1 packets preceded this one
@@ -325,7 +330,7 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
                     }
                     r.sends += 1;
                     r.plog(&format!(
-                        r#""op":"psent","now":{},"mtu":{mtu},"srtt":{s},"cw":{cw}"#,
+                        r#""op":"psent","now":{},"mtu":{mtu},"srtt":{s},"cw":{cw},"lim":{limited}"#,
                         r.now
                     ));
                 }
