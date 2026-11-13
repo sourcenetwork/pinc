@@ -409,6 +409,20 @@ par run_tlc halfopen HalfOpen HalfOpen
 par witness_tlc halfopen_le HalfOpen HalfOpen_le Capped
 par witness_tlc halfopen_strict HalfOpen HalfOpen_strict TimerRight
 par witness_tlc halfopen_reach HalfOpen HalfOpen_reach NoResumeAtCap
+par run_tlc queue Queue Queue
+par witness_tlc queue_over Queue Queue_over BurstKeeps
+par witness_tlc queue_head Queue Queue_head PushRule
+par witness_tlc queue_lost Queue Queue_lost NoLost
+par witness_tlc queue_drop Queue Queue_drop NoDrop
+par witness_tlc queue_deep Queue Queue_deep NoDeepEvict
+par witness_tlc queue_wrap Queue Queue_wrap NoWrap
+par witness_tlc queue_purge Queue Queue_purge NoPurgeDrop
+par witness_tlc queue_edge Queue Queue_edge NoBurstEdge
+par run_tlc held Held Held
+par witness_tlc held_head Held Held_head PushRule
+par witness_tlc held_refuse Held Held_refuse NoRefuse
+par witness_tlc held_merge Held Held_merge NoMerge
+par witness_tlc held_evict Held Held_evict NoEvict
 par run_tlc mtu Mtu Mtu
 par run_tlc broadcast_auth BroadcastAuth BroadcastAuth
 par witness_tlc broadcast_auth_nobody BroadcastAuth BroadcastAuth_nobody DeliverExact
@@ -473,7 +487,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_hdr --test trace_frame --test trace_orphan --test trace_halfopen --test trace_mtu
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_hdr --test trace_frame --test trace_orphan --test trace_halfopen --test trace_queue --test trace_held --test trace_mtu
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -529,6 +543,8 @@ trace_tlc TraceHdr "packet headers"
 trace_tlc TraceFrame "frame codecs"
 trace_tlc TraceOrphan "held fragments"
 trace_tlc TraceHalfOpen "half-open cap"
+trace_tlc TraceQueue "event queue"
+trace_tlc TraceHeld "held ring"
 trace_tlc TraceMtu "path MTU"
 trace_tlc TraceBroadcast broadcast
 trace_tlc TraceReconcileWire reconcile-wire

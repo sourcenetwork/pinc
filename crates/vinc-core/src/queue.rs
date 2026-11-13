@@ -154,6 +154,108 @@ impl<const K: usize> EventRing<K> {
     }
 }
 
+/// Test-only driver of the ring, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+pub(crate) mod trace {
+    use super::{EVENT_BASE, EventRing, event_headroom, event_queue};
+    use crate::api::{Event, SessionId};
+
+    /// The table size the probe's ring is built for: its rows do not divide the base, so the places wrap rows.
+    const K: usize = 3;
+
+    /// A ring of its own, with its state readable after every call.
+    pub struct EventProbe {
+        r: EventRing<K>,
+    }
+
+    impl Default for EventProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl EventProbe {
+        /// The places of the ring.
+        pub const CAP: usize = event_queue(K);
+        /// The places the endpoint keeps free of unrecoverable events.
+        pub const HEADROOM: usize = event_headroom(K);
+        /// The places of the ring besides the four rows.
+        pub const BASE: usize = EVENT_BASE;
+
+        /// An empty ring.
+        #[must_use]
+        pub fn new() -> Self {
+            Self { r: EventRing::new() }
+        }
+
+        /// Queue an event, as the endpoint does.
+        pub fn push(&mut self, ev: Event) {
+            self.r.push(ev);
+        }
+
+        /// The oldest event.
+        pub fn pop(&mut self) -> Option<Event> {
+            self.r.pop()
+        }
+
+        /// Drop what names `session` but its `Closed`.
+        pub fn purge(&mut self, session: SessionId) {
+            self.r.purge(session);
+        }
+
+        /// Whether the endpoint holds back work.
+        #[must_use]
+        pub fn stalled(&self) -> bool {
+            self.r.stalled()
+        }
+
+        /// Whether the application can recover the event by reading state.
+        #[must_use]
+        pub const fn lossy(ev: &Event) -> bool {
+            ev.lossy()
+        }
+
+        /// How many events are queued.
+        #[must_use]
+        pub const fn len(&self) -> usize {
+            self.r.len
+        }
+
+        /// Whether no event is queued.
+        #[must_use]
+        pub const fn is_empty(&self) -> bool {
+            self.r.is_empty()
+        }
+
+        /// The place of the oldest queued event.
+        #[must_use]
+        pub const fn head(&self) -> usize {
+            self.r.head
+        }
+
+        /// How many queued events the application can recover.
+        #[must_use]
+        pub const fn lossy_len(&self) -> usize {
+            self.r.lossy_len
+        }
+
+        /// The counters: dropped, lost.
+        #[must_use]
+        pub const fn counts(&self) -> [u64; 2] {
+            [self.r.dropped, self.r.lost]
+        }
+
+        /// The `i`th queued event, counting from the oldest.
+        #[must_use]
+        pub fn slot(&self, i: usize) -> Option<Event> {
+            if i >= self.r.len {
+                return None;
+            }
+            self.r.get(self.r.at(i))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

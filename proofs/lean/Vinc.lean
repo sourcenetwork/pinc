@@ -87,10 +87,17 @@ import Vinc.TransportFrameAck
 import Vinc.TraceFrame
 import Vinc.CoreOrphan
 import Vinc.CoreOrphanThm
+import Vinc.CoreQueue
+import Vinc.CoreQueueThm
+import Vinc.CoreQueueRun
+import Vinc.CoreHeld
+import Vinc.CoreHeldThm
 import Vinc.TraceOrphan
 import Vinc.CoreHalfOpen
 import Vinc.CoreHalfOpenThm
 import Vinc.TraceHalfOpen
+import Vinc.TraceQueue
+import Vinc.TraceHeld
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery
