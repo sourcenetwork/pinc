@@ -117,8 +117,8 @@ keepalives) awaits `Endpoint::run()`.
 | `vinc-node` | one composition of the endpoint, the connectivity client and every layer over real sessions; membership, broadcast, values, reconcile and delay-tolerant delivery are in | yes | built; the scenario suite and the facade run on it; proofs being closed |
 | `vinc-connect` | TCP and WebSocket carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side proven |
 | `vinc-membership` | hub roster and member view: leases, independent-path probes, restart-safe incarnations, leave, revocation | yes | built; proofs being closed |
-| `vinc-values` | verified streaming of values of any size from up to four providers, with resume and zero-copy serving | yes | built, proven; corrections being made |
-| `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built; proofs being closed |
+| `vinc-values` | verified streaming of values of any size from up to four providers, with resume and zero-copy serving | yes | built, proven; the scheduler and timer models are being brought up to the code ([#187](https://github.com/sourcenetwork/vinc/issues/187), [#189](https://github.com/sourcenetwork/vinc/issues/189)) |
+| `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built, proven (the liveness theorems cover runs without restarts) |
 | `vinc-reconcile` | range-based set reconciliation whose cost scales with the difference, exact by a final check | yes | built; proofs being closed |
 | `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody and copy-limited forwarding | yes | built, proven |
 | `vinc-sim` | deterministic network simulator and scenario suite: links, sites, NAT, partitions, clocks, adversaries | no | built |
@@ -248,7 +248,9 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
 - **The proofs** are behind the code on purpose: code lands first. What each merge left to prove or to check again is
   listed in [#105](https://github.com/sourcenetwork/vinc/issues/105), beside
   [Being closed](docs/PROOFS.md#being-closed).
-- `vinc-values`: five corrections found by its proofs are being made.
+- `vinc-values`: the five corrections found by its proofs are made and proven. One of them, the stall timer armed by the
+  first request, was changed again on purpose (the stall rule now starts at the first verified granule), and the models
+  follow in [#189](https://github.com/sourcenetwork/vinc/issues/189).
 - **The harness** has run on no machine but the build host's containers; the Terraform for separate machines is in
   `distributed/infra/` and has not been applied. A scenario can ask for the VINC nodes' traces and packet logs
   (`[debug] trace = true`, [#126](https://github.com/sourcenetwork/vinc/pull/126)).
