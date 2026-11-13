@@ -137,7 +137,9 @@ theorem down_then_gone (e : Env) (n : N) (now H m : Nat) (rc : Rec) (c : HubCopy
 
 /-- The time budget of the awareness bound: the hub drops the lease at its first tick after `t0 + LEASE` (within
 `HUB_TICK`), the DOWN reaches the node within `D`, the quiet window lasts at most `QUIET`, and the node's ticks come
-every `NODE_TICK`: the member is out of the view by `t0 + 145 s` when `D` is at most 48 s. -/
+every `NODE_TICK`: the member is out of the view by `t0 + 145 s` when `D` is at most 48 s. Over any run of the host's
+calls, `hub_lease_gone` (`MembershipTimer.lean`) gives `h1` and `h1'` with `HUB_TICK + σ` for the host's slack `σ`
+(`σ = 0` here); `hq` holds only when no quiet window opens at the node after the DOWN arrives (`heal_postpones`). -/
 theorem awareness_budget (t0 tau1 taud q t1 t2 D : Nat) (h1 : t0 + LEASE < tau1) (h1' : tau1 ≤ t0 + LEASE + HUB_TICK)
     (hd : taud ≤ tau1 + D) (hD : D ≤ 48 * S) (hq : q ≤ taud + QUIET) (ht1 : t1 ≤ max taud q + NODE_TICK)
     (ht2 : t2 ≤ t1 + RECHECK_GAP + NODE_TICK) : t2 ≤ t0 + 145 * S := by
