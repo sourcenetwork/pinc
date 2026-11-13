@@ -131,12 +131,7 @@ theorem rcNew_recheck (e : Env) (n : N) (m : Nat) (best : Rec) : (rcNew e n m be
     all_goals simp_all
 
 theorem rcTail_recheck (n : N) (m : Nat) (absent changed : Bool) : (rcTail n m absent changed).1.recheck = n.recheck := by
-  unfold rcTail
-  split
-  · dsimp only; split
-    · split <;> simp
-    · rfl
-  · rfl
+  rfl
 
 theorem recomputeOne_recheck (e : Env) (n : N) (now m : Nat) (hq : ¬ now < n.quietUntil)
     (hh : (n.source now).hold = false) :

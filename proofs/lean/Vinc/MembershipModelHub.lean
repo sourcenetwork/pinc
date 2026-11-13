@@ -143,16 +143,15 @@ def N.confirm (e : Env) (n : N) (now m : Nat) (sp : Susp) (l : Lease) : N :=
     (ms (now - sp.probeA), 0) :: (match sp.probeB with | some (tb, path) => [(ms (now - tb), path)] | none => [])
   N.hubDown e n now m (.confirmed ⟨ms (now - l.renewed), probes⟩)
 
-/-- A member silent for the first probe's wait is reported suspected, once; before that the wait is scheduled. -/
-def N.announce (n : N) (now m : Nat) (sp : Susp) : N :=
-  if !sp.ann then
-    if sp.probeA + sp.wait ≤ now then ({ n with susp := n.susp.insert m { sp with ann := true } }).emit (.suspected m)
-    else n.scheduleConfirm now (sp.probeA + sp.wait)
-  else n
+/-- The watch runs again when the first probe's wait ends: an independent route may be up by then. A suspicion is not
+reported (c26385e): only the confirmation is an event. -/
+def N.rewatch (n : N) (now : Nat) (sp : Susp) : N :=
+  if now < sp.probeA + sp.wait then n.scheduleConfirm now (sp.probeA + sp.wait) else n
 
-/-- The suspicion after `announce`. -/
-def Susp.announced (sp : Susp) (now : Nat) : Susp :=
-  if !sp.ann && sp.probeA + sp.wait ≤ now then { sp with ann := true } else sp
+theorem rewatch_susp (n : N) (now : Nat) (sp : Susp) : (N.rewatch n now sp).susp = n.susp := by
+  unfold N.rewatch N.scheduleConfirm
+  repeat' split
+  all_goals rfl
 
 /-- The `_` arm of the match on the suspicion in `carrier_watch`: a new drop to confirm. -/
 def N.newSusp (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : N :=
@@ -167,7 +166,7 @@ def N.newSusp (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) : N :=
         let n := (N.tx e n m route .probe).1
         (n.trace (.probeSent m path), some (now, path))
       | none => (n, none)
-    let sp : Susp := ⟨since, now, probeB, wait, false⟩
+    let sp : Susp := ⟨since, now, probeB, wait⟩
     let n := { n with susp := n.susp.insert m sp }
     let n := n.scheduleConfirm now (now + wait)
     match probeB with
@@ -195,8 +194,7 @@ def N.carrierWatch (e : Env) (n : N) (now m : Nat) : N :=
         match n.susp.get? m with
         | some sp0 =>
           if sp0.since == since then
-            let n := N.announce n now m sp0
-            let sp0 := sp0.announced now
+            let n := N.rewatch n now sp0
             let (n, sp) : N × Susp :=
               if sp0.probeB.isNone then
                 match n.independentRoute now m ev with

@@ -153,7 +153,7 @@ def NFrame.ty : NFrame → Nat
 /-! ## Events and traces (`event.rs`) -/
 
 inductive Ev where
-  | joined (m : Nat) | suspected (m : Nat) | down (m : Nat) | left (m : Nat) | revoked (m : Nat) | addr (m : Nat)
+  | joined (m : Nat) | down (m : Nat) | left (m : Nat) | revoked (m : Nat) | addr (m : Nat)
   | stack (m v : Nat) | view (epoch n : Nat) | lost (n : Nat)
   deriving DecidableEq, Repr
 
@@ -257,7 +257,6 @@ structure HubCopy where
 
 structure ViewEntry where
   rc : Rec
-  suspected : Bool
   deriving DecidableEq, Repr
 
 structure Susp where
@@ -265,8 +264,6 @@ structure Susp where
   probeA : Nat
   probeB : Option (Nat × Nat)
   wait : Nat
-  /-- reported suspected: the first probe went unanswered for the wait -/
-  ann : Bool
   deriving DecidableEq, Repr
 
 /-- One `Membership` node with the effects of the current call appended. -/

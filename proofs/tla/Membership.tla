@@ -224,19 +224,14 @@ RecomputeOne(S, env, now, m) ==
                            IN [S |-> [sa2 EXCEPT !.members = Put(@, m, e3)], ch |-> verCh \/ thCh]
                 \* the arm for a new member, or one reincarnated in a newer epoch
                 full == cur = <<>> /\ Cardinality(DOMAIN s1.members) >= MAX_TABLE
-                sB == LET sb1 == Emit([s1 EXCEPT !.members = Put(@, m, [rec |-> best, suspected |-> FALSE])], EvJoined(m))
+                sB == LET sb1 == Emit([s1 EXCEPT !.members = Put(@, m, [rec |-> best])], EvJoined(m))
                           old == IF cur # <<>> THEN <<<<c.rec.ver, c.rec.th>>>> ELSE Lookup(s1.goneVer, m)
                           sb2 == [sb1 EXCEPT !.goneVer = IF m \in DOMAIN @ THEN Del(@, m) ELSE @]
                           sb3 == IF old # <<>> /\ old[1][1] # best.ver THEN Emit(sb2, EvStack(m, best.ver)) ELSE sb2
                           sb4 == IF old # <<>> /\ cur = <<>> /\ old[1][2] # best.th THEN Emit(sb3, EvAddr(m)) ELSE sb3
                       IN [S |-> sb4, ch |-> TRUE]
                 r == IF known THEN sA ELSE sB
-                \* the suspicion flag follows whether the best record is an absence
-                sD == IF m \in DOMAIN r.S.members /\ r.S.members[m].suspected # absent
-                      THEN LET s6 == [r.S EXCEPT !.members[m].suspected = absent]
-                           IN IF absent THEN Emit(s6, EvSuspected(m)) ELSE s6
-                      ELSE r.S
-            IN IF ~known /\ full THEN [S |-> s1, ch |-> FALSE] ELSE [S |-> sD, ch |-> r.ch]
+            IN IF ~known /\ full THEN [S |-> s1, ch |-> FALSE] ELSE r
 
 ApplyDelta(S, env, now, hub, e) ==
     IF e.m = S.me THEN OnSelfEntry(S, env, now, hub, e.rec, e.a)
@@ -390,12 +385,10 @@ CarrierWatch(S, env, now, m) ==
                ELSE LET sp0 == Lookup(S.susp, m)
                     IN IF sp0 # <<>> /\ sp0[1].since = since
                        THEN LET spo == sp0[1]
-                                \* a member silent for the first probe's wait is reported suspected, once
+                                \* the watch runs again when the first probe's wait ends; a suspicion is not reported
+                                sp == spo
                                 at == U!Add64(spo.probeA, spo.wait)
-                                annc == ~spo.ann /\ Ge(now, at)
-                                sp == IF annc THEN [spo EXCEPT !.ann = TRUE] ELSE spo
-                                sA == IF annc THEN Emit([S EXCEPT !.susp = Put(@, m, sp)], EvSuspected(m))
-                                      ELSE IF ~spo.ann THEN ScheduleConfirm(S, now, at) ELSE S
+                                sA == IF Lt(now, at) THEN ScheduleConfirm(S, now, at) ELSE S
                                 rt == IndependentRoute(S, now, m, ev)
                                 needB == sp.probeB = <<>> /\ rt # <<>>
                                 s1 == IF needB
@@ -416,7 +409,7 @@ CarrierWatch(S, env, now, m) ==
                                 t4 == IF rt = <<>> THEN t2
                                       ELSE Trace(SendS(t2, env, m, rt[1].route, [k |-> "probe"]), [k |-> "probe_sent", member |-> m, path |-> rt[1].path])
                                 pB == IF rt = <<>> THEN <<>> ELSE <<[t |-> now, path |-> rt[1].path]>>
-                                sp == [since |-> since, probeA |-> now, probeB |-> pB, wait |-> wait, ann |-> FALSE]
+                                sp == [since |-> since, probeA |-> now, probeB |-> pB, wait |-> wait]
                                 t5 == [t4 EXCEPT !.susp = Put(@, m, sp)]
                                 t6 == ScheduleConfirm(t5, now, U!Add64(now, wait))
                             IN IF pB # <<>>

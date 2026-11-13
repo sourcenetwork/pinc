@@ -50,7 +50,7 @@ def rcKnown (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool
       (n, ch1 || ch2, false)
     else (n, false, false)
   else
-    let n := { n with members := n.members.insert m ⟨best, false⟩ }
+    let n := { n with members := n.members.insert m ⟨best⟩ }
     let n := n.emit (.joined m)
     let old := (some (c.rc.ver, c.rc.th)).orElse (fun _ => n.goneVer.get? m)
     let n := { n with goneVer := n.goneVer.erase m }
@@ -63,7 +63,7 @@ def rcKnown (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool
 def rcNew (e : Env) (n : N) (m : Nat) (best : Rec) : N × Bool × Bool :=
   if n.members.len ≥ MAX_TABLE then (n, false, true)
   else
-    let n := { n with members := n.members.insert m ⟨best, false⟩ }
+    let n := { n with members := n.members.insert m ⟨best⟩ }
     let n := n.emit (.joined m)
     let old := n.goneVer.get? m
     let n := { n with goneVer := n.goneVer.erase m }
@@ -74,15 +74,9 @@ def rcNew (e : Env) (n : N) (m : Nat) (best : Rec) : N × Bool × Bool :=
       | none => n
     (n, true, false)
 
-/-- The suspicion flag follows whether the best record is an absence. -/
-def rcTail (n : N) (m : Nat) (absent : Bool) (changed : Bool) : N × Bool :=
-  match n.members.get? m with
-  | some x =>
-    if x.suspected != absent then
-      let n := { n with members := n.members.modify m (fun y => { y with suspected := absent }) }
-      (if absent then n.emit (.suspected m) else n, changed)
-    else (n, changed)
-  | none => (n, changed)
+/-- The view keeps no suspicion flag and reports no suspicion (c26385e): after the arm there is nothing left to do. -/
+def rcTail (n : N) (_m : Nat) (_absent : Bool) (changed : Bool) : N × Bool :=
+  (n, changed)
 
 theorem recomputeOne_eq_v (e : Env) (n : N) (now m : Nat) :
     N.recomputeOne e n now m =
@@ -193,7 +187,7 @@ theorem recomputeOne_keeps2 (e : Env) (n : N) (now m : Nat) : Keeps2 m n (N.reco
       intro r hr
       by_cases he : r.2.2 = true
       · simp only [he, if_true]; exact h1.trans hr
-      · simp only [he, if_false]; exact (h1.trans hr).trans (rcTail_keeps2 _ _ _ _)
+      · simp only [he, if_false]; exact (h1.trans hr).trans (rcTail_keeps2 _ _ a0 _)
     split
     · rename_i c hc
       exact h2 _ (rcKnown_keeps2 _ _ _ _ _)

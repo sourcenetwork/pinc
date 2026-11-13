@@ -154,7 +154,6 @@ def bcOf (j : J) : Except String Bc := do
 def evOf (j : J) : Except String Ev := do
   match ← strF j "k" with
   | "joined" => pure (.joined (← natF j "m"))
-  | "suspected" => pure (.suspected (← natF j "m"))
   | "down" => pure (.down (← natF j "m"))
   | "left" => pure (.left (← natF j "m"))
   | "revoked" => pure (.revoked (← natF j "m"))
