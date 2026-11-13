@@ -53,7 +53,7 @@
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 \* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
 CONSTANT STOPS
@@ -85,10 +85,11 @@ AckedStopOp == \E id \in Ids : T' = CtlAckedStop(T, id) /\ UNCHANGED clock
 StopReqOp == \E id \in Ids : T' = StopReq(T, id, 7).t /\ UNCHANGED clock
 OnStopOp == \E id \in Ids, e2 \in 0..T.ext : T' = OnStop(T, id, 7, e2).t /\ UNCHANGED clock
 FinishOp == \E id \in Ids, e2 \in 0..T.ext, dn \in BOOLEAN : T' = Finish(T, id, e2, dn) /\ UNCHANGED clock
+SendOutOp == RELEASE /\ \E i \in 1..N, f \in BOOLEAN : T' = SendOut(T, i, f) /\ UNCHANGED clock
 ExtOp == \E e2 \in 0..EXTMAX : T' = ExtTo(T, e2) /\ UNCHANGED clock
 CloseOp == \E e2 \in 0..T.ext : T' = CloseAll(T, e2) /\ UNCHANGED clock
 
-Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ OpenOp \/ FinishOp \/ ExtOp \/ CloseOp
+Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ OpenOp \/ FinishOp \/ SendOutOp \/ ExtOp \/ CloseOp
         \/ MaxStreamsOp \/ LostMstsOp
         \/ (STOPS /\ (LostResetOp \/ AckedResetOp \/ AppResetOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp))
 Spec == Init /\ [][Next]_vars
@@ -128,9 +129,16 @@ TypeOK == /\ T.ext \in 0..B /\ clock \in 0..HOR /\ T.tgt \in SW..MaxStream
 Pool == Used(T) <= B
 Unique == \A i, j \in 1..N : (i # j /\ T.slots[i].id # -1) => T.slots[i].id # T.slots[j].id
 FreeIsNew == \A i \in 1..N : T.slots[i].id = -1 => T.slots[i] = NewSlot
-Counters == /\ T.rl = Cardinality({i \in Live : ~IsLocal(T.slots[i].id)})
+\* the peer streams that count against the limit are the live peer slots that have not been released (a stream whose
+\* data is whole and read and whose answer has left stops counting, though its slot is held until the answer is acked)
+Counters == /\ T.rl = Cardinality({i \in Live : ~IsLocal(T.slots[i].id) /\ T.slots[i].cnt})
             /\ T.ll = Cardinality({i \in Live : IsLocal(T.slots[i].id)})
             /\ T.rl <= MAXREM /\ T.ll <= T.lo[0] + T.lo[1]
+\* only a peer stream is ever released from the count
+ReleasedArePeer == \A i \in Live : ~T.slots[i].cnt => ~IsLocal(T.slots[i].id)
+\* the earlier statement of Counters, before a peer stream's place was free when its answer left: every live peer slot
+\* counts (Streams_released_w.cfg shows it false of the code)
+CountersEveryLive == T.rl = Cardinality({i \in Live : ~IsLocal(T.slots[i].id)})
 Admitted == \A i \in Live : ~IsLocal(T.slots[i].id) => Idx(T.slots[i].id) < T.rn[Class(T.slots[i].id)]
 \* a peer stream that does not fit is held back: any error answer of locate leaves the table as it was
 LocatePure == \A id \in Ids : Locate(T, id).err # "ok" => Locate(T, id).t = T
@@ -218,4 +226,9 @@ PoolOnAlloc == [][Used(T') > Used(T) => Used(T') <= B]_vars
 ReadFollowsContig == [][\A i \in 1..N : SameInc(i) => T'.slots[i].read <= T'.slots[i].contig]_vars
 \* the code of a reset, once set, never changes (the acknowledgement of the reset forgets it)
 CodeKept == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].scode # -1 /\ T'.slots[i].srst # 3) => T'.slots[i].scode = T.slots[i].scode]_vars
+\* a stream stops counting only when it is done on the receive side and its send half has flushed, and it never counts
+\* again (a lost range queued again after the release does not bring it back)
+ReleaseWhenFlushed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].cnt /\ ~T'.slots[i].cnt)
+                            => (RecvDone(T'.slots[i]) /\ Flushed(T'.slots[i]))]_vars
+ReleaseIsFinal == [][\A i \in 1..N : (SameInc(i) /\ ~T.slots[i].cnt) => ~T'.slots[i].cnt]_vars
 =============================================================================
