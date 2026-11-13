@@ -393,9 +393,13 @@ These items are still open; they are listed so nothing is hidden:
   proved for every call and through every loop (`TransportRecoveryRing`: the packet numbers stay strictly increasing
   and at most the last one sent, `timeout_ok`, `flush_ok`, `ack_ok`, `send_ok`, `untracked_ok`; a slot found again by
   its number is the same packet, done if it was done and never back in flight, `*_doneStays`). Of `RingShape` the
-  length is `push_len`; its two other conjuncts (a slot's path is below the path count, the largest acknowledged is
-  not above the last sent) are checked by TLC and the trace only. The detection loop is proved to report only packets
-  that were in flight (`detectLoop_lost_inflight`); the same for the acknowledgement loop is not done yet.
+  length is `push_len`, and its two other conjuncts are proved in `TransportRecoveryAck`: a slot's path is below the
+  path count (`RingPath`, kept by `send_path`, `untracked_path`, `ack_path`, `timeout_path`, `flush_path`) and the
+  largest acknowledged is not above the last sent (`LaLs`, kept by `send_laLs`, `untracked_laLs`, `ack_laLs`,
+  `timeout_laLs`, `flush_laLs`), so all of `RingShape` is proved in Lean. The detection loop is proved to report only
+  packets that were in flight (`detectLoop_lost_inflight`), and the acknowledgement loop to report an `acked` event
+  only for a slot that was in flight in the ring the call found, with its number, size and frames, a `late` event
+  only for a ghost of that ring, and no other event (`ackRing_events`, `ackRange1_events`, `ackRanges_events`).
 - Of the stream table, the send half (credit against the peer's window, the retransmission queue, source-backed
   streams), urgency order and datagrams are not modelled; the send half appears only as the pool chunks it holds and
   the state that frees a slot, plus its reset and the stop request.
