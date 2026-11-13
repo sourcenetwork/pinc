@@ -694,6 +694,10 @@ name = "trace_connect_client"
 path = "trace_connect_client.rs"
 
 [[test]]
+name = "trace_connect_carrier"
+path = "trace_connect_carrier.rs"
+
+[[test]]
 name = "trace_connect"
 path = "trace_connect.rs"
 

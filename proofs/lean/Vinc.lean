@@ -192,6 +192,10 @@ import Vinc.TraceConnectLink
 import Vinc.ConnectLinkThm
 import Vinc.ConnectClient
 import Vinc.TraceConnectClient
+import Vinc.ConnectCarrier
+import Vinc.ConnectCarrierThm
+import Vinc.ConnectCarrierKeys
+import Vinc.TraceConnectCarrier
 import Vinc.ConnectClientThm
 import Vinc.ConnectAudit
 import Vinc.DtnGf
