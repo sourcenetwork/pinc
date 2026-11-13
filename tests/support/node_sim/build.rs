@@ -134,6 +134,8 @@ impl<A: SimApps> SimNode<A> {
             now: spec.start,
             down: false,
             addr: spec.addr,
+            carrier_hold: 0,
+            held: Vec::new(),
         };
         n.node.set_local(&[spec.addr]);
         n

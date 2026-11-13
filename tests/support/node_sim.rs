@@ -87,4 +87,8 @@ pub struct SimNode<A: SimApps = NoApps> {
     pub addr: SocketAddr,
     /// Incarnations the node announced over its lives, for the monotonicity checks.
     pub incarnations: Vec<u64>,
+    /// A slow carrier reader: what a relay stream delivers within this span of the first record is read by the node
+    /// in one call (0 for each record on its own).
+    pub carrier_hold: Time,
+    held: Vec<(Time, usize, Vec<u8>)>,
 }

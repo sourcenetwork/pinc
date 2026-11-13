@@ -672,7 +672,12 @@ impl<const K: usize, const D: usize> Core<K, D> {
             });
         }
         loop {
-            let t = self.node.poll_transmit(now, buf)?;
+            let Some(t) = self.node.poll_transmit(now, buf) else {
+                // The node writes the datagrams of a relay path onto its carrier as it hands them out: they leave
+                // with this drain, not with the next turn of the host duties.
+                self.streams_out_step();
+                return None;
+            };
             if let Some((relay, slot)) = relay_parts(&t.remote)
                 && relay == LOCAL_RELAY
             {
@@ -901,3 +906,6 @@ impl<const K: usize, const D: usize> Core<K, D> {
         self.node.apps_mut().sets.insert(name, items)
     }
 }
+
+#[cfg(test)]
+mod tests;

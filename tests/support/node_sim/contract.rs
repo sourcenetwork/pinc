@@ -56,6 +56,7 @@ impl<A: SimApps> SimNode<A> {
         [
             self.node.poll_timeout(),
             self.hub.as_ref().and_then(|h| h.relay.next_deadline()),
+            self.held.first().map(|(at, ..)| at + self.carrier_hold),
         ]
         .into_iter()
         .flatten()
@@ -68,6 +69,10 @@ impl<A: SimApps> SimNode<A> {
         }
         self.timeouts += 1;
         self.node.set_wall_ms(now, self.wall_ms(now));
+        while let Some(pos) = self.held.iter().position(|(at, ..)| at + self.carrier_hold <= now) {
+            let (_, relay, bytes) = self.held.remove(pos);
+            self.feed(now, relay, &bytes);
+        }
         if let Some(h) = self.hub.as_mut()
             && h.relay.next_deadline().is_some_and(|d| d <= now)
         {
@@ -210,11 +215,11 @@ impl<A: SimApps> SimNode<A> {
                     rest = tail;
                 }
                 for p in payloads {
-                    self.feed(now, i, &p);
+                    self.read_carrier(now, i, &p);
                 }
             } else {
                 let d = data.to_vec();
-                self.feed(now, i, &d);
+                self.read_carrier(now, i, &d);
             }
             self.pump(now);
             return;

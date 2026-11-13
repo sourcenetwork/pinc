@@ -920,6 +920,10 @@ name = "layers_values"
 path = "layers_values.rs"
 
 [[test]]
+name = "layers_flight"
+path = "layers_flight.rs"
+
+[[test]]
 name = "layers_reconcile"
 path = "layers_reconcile.rs"
 

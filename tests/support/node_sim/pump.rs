@@ -243,6 +243,17 @@ impl<A: SimApps> SimNode<A> {
         did
     }
 
+    /// Bytes read from the carrier of `relay`: handed to the node now, or held to join what follows.
+    pub(super) fn read_carrier(&mut self, now: Time, relay: usize, bytes: &[u8]) {
+        if self.carrier_hold == 0 {
+            return self.feed(now, relay, bytes);
+        }
+        match self.held.iter_mut().find(|(_, r, _)| *r == relay) {
+            Some((_, _, held)) => held.extend_from_slice(bytes),
+            None => self.held.push((now, relay, bytes.to_vec())),
+        }
+    }
+
     pub(super) fn feed(&mut self, now: u64, relay: usize, mut bytes: &[u8]) {
         for _ in 0..64 {
             let n = self.node.stream_data(now, relay, bytes);

@@ -556,19 +556,6 @@ impl Io {
             let now = agent.core.now();
             agent.core.pump(now);
             let mut moved = false;
-            while let Some(op) = agent.core.ops.pop_front() {
-                moved = true;
-                match op {
-                    Op::Connect { stream, to } => self.streams.connect(stream, to),
-                    Op::Write { stream, data } => {
-                        if let Some(l) = agent.core.tlog.as_mut() {
-                            l.note("carrier_tx", format!("{stream} {}", data.len()));
-                        }
-                        let _ = self.streams.write(stream, data);
-                    }
-                    Op::Close { stream } => self.streams.close(stream),
-                }
-            }
             while let Some(Tx { remote, len, segment }) = agent.core.poll_transmit(now, &mut self.sbuf) {
                 moved = true;
                 if let Some(l) = agent.core.tlog.as_mut() {
@@ -580,6 +567,19 @@ impl Io {
                     && let Err(e) = self.net.send(data, remote, segment).await
                 {
                     tracing::warn!("a datagram could not be sent: {e}");
+                }
+            }
+            while let Some(op) = agent.core.ops.pop_front() {
+                moved = true;
+                match op {
+                    Op::Connect { stream, to } => self.streams.connect(stream, to),
+                    Op::Write { stream, data } => {
+                        if let Some(l) = agent.core.tlog.as_mut() {
+                            l.note("carrier_tx", format!("{stream} {}", data.len()));
+                        }
+                        let _ = self.streams.write(stream, data);
+                    }
+                    Op::Close { stream } => self.streams.close(stream),
                 }
             }
             if !agent.core.events.is_empty() {
