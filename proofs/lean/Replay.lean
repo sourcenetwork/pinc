@@ -33,6 +33,7 @@ import Vinc.TraceConnectCodec
 import Vinc.TraceConnectLink
 import Vinc.TraceConnectClient
 import Vinc.TraceConnect
+import Vinc.TraceConnectRecords
 import Vinc.TraceTranscript
 import Vinc.TraceCrypto
 import Vinc.TraceKeystore
@@ -159,6 +160,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut cmb : TraceConnectMailbox.W := {}
   let mut ctb : TraceConnectTable.W := {}
   let mut crl : TraceConnect.W := {}
+  let mut crr : TraceConnectRecords.W := {}
   let mut clk : TraceConnectLink.W := {}
   let mut ccl : TraceConnectClient.W := {}
   let mut trs : TraceTranscript.TS := {}
@@ -330,6 +332,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnect.replayEvent j crl with
           | .ok w' =>
             crl := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectRecords.isTag t then
+          -- Relay record store events (`trace_connect_records`): store, lookup, expiry and own record of the Lean model.
+          match TraceConnectRecords.replayEvent j crr with
+          | .ok w' =>
+            crr := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

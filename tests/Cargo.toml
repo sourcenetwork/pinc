@@ -698,6 +698,10 @@ name = "trace_connect"
 path = "trace_connect.rs"
 
 [[test]]
+name = "trace_connect_records"
+path = "trace_connect_records.rs"
+
+[[test]]
 name = "connect_link"
 path = "connect_link.rs"
 

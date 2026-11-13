@@ -15,6 +15,7 @@ import Vinc.ConnectBase32
 import Vinc.ConnectTicketTextPf
 import Vinc.ConnectLinkThm
 import Vinc.ConnectClientThm
+import Vinc.ConnectRecordsThm
 
 /-! Axiom audit of the main theorems of the connectivity proofs. -/
 
@@ -160,3 +161,37 @@ import Vinc.ConnectClientThm
 #audit_axioms Vinc.ConnectClient.verify_found
 #audit_axioms Vinc.ConnectClient.classify_blocked
 #audit_axioms Vinc.ConnectClient.missing_fallback
+#audit_axioms Vinc.ConnectRecords.accept_lower
+#audit_axioms Vinc.ConnectRecords.accept_equal_diff
+#audit_axioms Vinc.ConnectRecords.accept_equal_same
+#audit_axioms Vinc.ConnectRecords.accept_higher
+#audit_axioms Vinc.ConnectRecords.accept_new
+#audit_axioms Vinc.ConnectRecords.accept_full
+#audit_axioms Vinc.ConnectRecords.store_bad
+#audit_axioms Vinc.ConnectRecords.store_wrong_owner
+#audit_axioms Vinc.ConnectRecords.store_ok_verified
+#audit_axioms Vinc.ConnectRecords.store_ok_stored
+#audit_axioms Vinc.ConnectRecords.store_lower
+#audit_axioms Vinc.ConnectRecords.store_equal_diff
+#audit_axioms Vinc.ConnectRecords.store_equal_same
+#audit_axioms Vinc.ConnectRecords.store_higher
+#audit_axioms Vinc.ConnectRecords.inv_store
+#audit_axioms Vinc.ConnectRecords.inv_republish
+#audit_axioms Vinc.ConnectRecords.inv_timeout
+#audit_axioms Vinc.ConnectRecords.highest_reach
+#audit_axioms Vinc.ConnectRecords.publish_sync
+#audit_axioms Vinc.ConnectRecords.publish_refused
+#audit_axioms Vinc.ConnectRecords.replica_quiet
+#audit_axioms Vinc.ConnectRecords.restore_quiet
+#audit_axioms Vinc.ConnectRecords.lookup_spec
+#audit_axioms Vinc.ConnectRecords.lookup_none
+#audit_axioms Vinc.ConnectRecords.lookup_expired
+#audit_axioms Vinc.ConnectRecords.answer_pure
+#audit_axioms Vinc.ConnectRecords.answer_spec
+#audit_axioms Vinc.ConnectRecords.sweep_mem
+#audit_axioms Vinc.ConnectRecords.timeout_sweeps
+#audit_axioms Vinc.ConnectRecords.timeout_dropped
+#audit_axioms Vinc.ConnectRecords.ttl_periods
+#audit_axioms Vinc.ConnectRecords.setOwn_armed
+#audit_axioms Vinc.ConnectRecords.republish_early
+#audit_axioms Vinc.ConnectRecords.republish_spec
