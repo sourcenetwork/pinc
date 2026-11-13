@@ -59,38 +59,129 @@ fn complete(w: &World, seed: u64, what: &str) {
     }
 }
 
+/// The 15% loss world: every link between a member and a hub loses 15% of its datagrams both ways, every member's
+/// carriers are reset once (staggered from 50 s), and member 0 answers 600 ms late between 100 s and 120 s around a
+/// carrier reset at 105 s. With `loss` zero it is the same world with no loss at all.
+fn accuracy_world(seed: u64, loss: f64, trace: bool) -> World {
+    let mut w = World::build_with(seed, 3, 6, |w| w.trace = trace);
+    let pairs: Vec<(SimId, SimId)> = w
+        .members
+        .iter()
+        .flat_map(|m| w.hubs.iter().map(move |(h, _)| (*m, *h)))
+        .collect();
+    if loss > 0.0 {
+        for (m, h) in &pairs {
+            w.sim.link_change(0, *m, *h, LinkChange::Config(lossy(5 * MS, loss)));
+            w.sim.link_change(0, *h, *m, LinkChange::Config(lossy(5 * MS, loss)));
+        }
+    }
+    let members = w.members.clone();
+    for (i, m) in members.iter().enumerate() {
+        w.sim.command(secs(50 + 7 * i as u64), *m, NCmd::DropCarriers);
+    }
+    let slow = members[0];
+    for (h, _) in &w.hubs.clone() {
+        w.sim.link_change(secs(100), slow, *h, LinkChange::Delay(600 * MS));
+        w.sim.link_change(secs(100), *h, slow, LinkChange::Delay(600 * MS));
+        w.sim.link_change(secs(120), slow, *h, LinkChange::Delay(5 * MS));
+        w.sim.link_change(secs(120), *h, slow, LinkChange::Delay(5 * MS));
+    }
+    w.sim.command(secs(105), slow, NCmd::DropCarriers);
+    w.run(secs(260));
+    w
+}
+
 #[test]
-fn late_and_lost_answers_confirm_no_live_member() {
+fn a_member_that_answers_late_and_drops_its_carrier_is_never_confirmed_down() {
     big(|| {
         for seed in [21u64, 22, 23, 24] {
-            let mut w = World::build(seed, 3, 6);
-            let lossy_pairs: Vec<(SimId, SimId)> = w
-                .members
+            let w = accuracy_world(seed, 0.0, false);
+            no_one_accused(&w, seed, "late answers, no loss");
+            complete(&w, seed, "late answers, no loss");
+        }
+    });
+}
+
+/// Every confirmation a hub made, checked against the rule: the carrier of the member had been gone for the confirm
+/// wait (1 s), a probe on the session and a probe on an independent path were both sent and each had its wait (250
+/// ms), and nothing from the member was heard from the drop to the confirmation. Returns how many were checked.
+fn check_confirmations(w: &World, seed: u64) -> usize {
+    use vinc_membership::Trace as T;
+    use vinc_membership::codec::Path;
+    let mut checked = 0;
+    for (hub, _) in &w.hubs {
+        let traces = &w.sim.node(*hub).traces;
+        for (t, item) in traces {
+            let Body::Membership(T::Confirmed { member }) = &item.body else {
+                continue;
+            };
+            checked += 1;
+            let mine = |b: &Body| match b {
+                Body::Membership(T::CarrierGone { member: m }) => (m == member).then_some(0u8),
+                Body::Membership(T::ProbeSent { member: m, path }) => (m == member).then_some(match path {
+                    Path::Session => 1,
+                    _ => 2,
+                }),
+                Body::Membership(T::FrameIn { peer, .. }) => (peer == member).then_some(3),
+                _ => None,
+            };
+            let before: Vec<(u64, u8)> = traces
                 .iter()
-                .flat_map(|m| w.hubs.iter().map(move |(h, _)| (*m, *h)))
+                .filter(|(u, _)| u <= t)
+                .filter_map(|(u, i)| mine(&i.body).map(|k| (*u, k)))
                 .collect();
-            // 15% loss everywhere between members and hubs, from the start.
-            for (m, h) in &lossy_pairs {
-                w.sim.link_change(0, *m, *h, LinkChange::Config(lossy(5 * MS, 0.15)));
-                w.sim.link_change(0, *h, *m, LinkChange::Config(lossy(5 * MS, 0.15)));
-            }
-            let members = w.members.clone();
-            // Every member's carriers are reset once, staggered.
-            for (i, m) in members.iter().enumerate() {
-                w.sim.command(secs(50 + 7 * i as u64), *m, NCmd::DropCarriers);
-            }
-            // A slow member: its answers arrive 600 ms late for 20 s, around a carrier reset.
-            let slow = members[0];
-            for (h, _) in &w.hubs.clone() {
-                w.sim.link_change(secs(100), slow, *h, LinkChange::Delay(600 * MS));
-                w.sim.link_change(secs(100), *h, slow, LinkChange::Delay(600 * MS));
-                w.sim.link_change(secs(120), slow, *h, LinkChange::Delay(5 * MS));
-                w.sim.link_change(secs(120), *h, slow, LinkChange::Delay(5 * MS));
-            }
-            w.sim.command(secs(105), slow, NCmd::DropCarriers);
-            w.run(secs(260));
-            no_one_accused(&w, seed, "late and lost answers");
-            complete(&w, seed, "late and lost answers");
+            let gone = before.iter().rposition(|(_, k)| *k == 0).unwrap_or_else(|| {
+                panic!("seed {seed}: hub {hub:?} confirmed a member whose carrier never dropped, at {t}")
+            });
+            let (g, _) = before[gone];
+            let after = &before[gone + 1..];
+            let probe = |kind: u8| after.iter().find(|(_, k)| *k == kind).map(|(u, _)| *u);
+            let (Some(a), Some(b)) = (probe(1), probe(2)) else {
+                panic!(
+                    "seed {seed}: hub {hub:?} confirmed at {t} with the session probe {:?} and the independent probe {:?}",
+                    probe(1),
+                    probe(2)
+                );
+            };
+            assert!(
+                *t >= g + 1_000_000_000,
+                "seed {seed}: confirmed {} ms after the drop",
+                (t - g) / 1_000_000
+            );
+            assert!(
+                *t >= a.max(b) + 250_000_000,
+                "seed {seed}: a probe had no wait before the confirmation"
+            );
+            assert!(
+                !after.iter().any(|(u, k)| *k == 3 && *u <= *t),
+                "seed {seed}: hub {hub:?} confirmed at {t} after hearing the member"
+            );
+        }
+    }
+    checked
+}
+
+#[test]
+fn a_confirmation_needs_two_probes_on_independent_paths_both_unanswered() {
+    big(|| {
+        let mut total = 0;
+        for seed in 21u64..=60 {
+            let w = accuracy_world(seed, 0.15, true);
+            total += check_confirmations(&w, seed);
+        }
+        assert!(
+            total > 0,
+            "no confirmation happened on any seed, so the rule was not exercised"
+        );
+    });
+}
+
+#[test]
+fn a_member_confirmed_down_while_alive_is_in_every_view_again() {
+    big(|| {
+        for seed in 21u64..=60 {
+            let w = accuracy_world(seed, 0.15, false);
+            complete(&w, seed, "after the confirmations of a lossy run");
         }
     });
 }
