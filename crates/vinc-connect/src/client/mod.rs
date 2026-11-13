@@ -6,6 +6,7 @@
 //! - [`netcheck`]: address discovery, the home relay and the reachability class;
 //! - [`lookup`]: the lookup client and the verification of a record;
 //! - [`dial`]: pending dials (DIAL_PRUNE) and the first-flight rules;
+//! - `flight`: the candidate paths of a dial's flights, the dial and the answer of a lookup;
 //! - [`tunnel`]: the member side of the hub tunnel, SPLICE_LIVE and THIN_SPLICE;
 //! - [`punch`]: REACH_OUT and the punch timer;
 //! - [`queue`]: the packets a closed carrier holds.
@@ -29,6 +30,7 @@ mod carriers;
 pub mod conn;
 pub mod dial;
 mod drive;
+mod flight;
 pub mod link;
 pub mod lookup;
 mod mapped;
