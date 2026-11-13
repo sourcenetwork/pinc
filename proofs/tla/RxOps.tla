@@ -41,7 +41,11 @@ Init0(cap) == [items |-> <<>>, cap |-> cap, floor |-> 0, pending |-> 0, due |-> 
                sent |-> <<>>, conf |-> <<>>, cf |-> -1]
 
 Largest(x) == IF x.items = <<>> THEN -1 ELSE x.items[Len(x.items)][2] - 1
-Contains(x, pn) == pn < x.floor \/ \E k \in DOMAIN x.items : x.items[k][1] <= pn /\ pn < x.items[k][2]
+\* received, or too old to tell: below the floor, or below every tracked range when the table is full and cannot
+\* take it (a replay of it is dropped instead of processed)
+Contains(x, pn) == \/ pn < x.floor
+                   \/ \E k \in DOMAIN x.items : x.items[k][1] <= pn /\ pn < x.items[k][2]
+                   \/ (Len(x.items) = x.cap /\ x.items # <<>> /\ pn + 1 < x.items[1][1])
 
 \* the number of leading ranges that end below pn (partition_point)
 RECURSIVE Part(_, _)

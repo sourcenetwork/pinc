@@ -64,7 +64,11 @@ def split (pn : Nat) : List Iv → List Iv × List Iv
   | [] => ([], [])
   | iv :: t => if iv.2 < pn then ((iv :: (split pn t).1), (split pn t).2) else ([], iv :: t)
 
-def contains (x : X) (pn : Nat) : Bool := decide (pn < x.floor) || x.items.any (fun iv => decide (iv.1 ≤ pn ∧ pn < iv.2))
+/-- `contains`: received, or too old to tell: below the floor, or below every tracked range when the table is full
+and cannot take it, so a replay of it is dropped instead of processed. -/
+def contains (x : X) (pn : Nat) : Bool :=
+  decide (pn < x.floor) || x.items.any (fun iv => decide (iv.1 ≤ pn ∧ pn < iv.2)) ||
+    (decide (x.items.length = x.cap) && (match x.items.head? with | some iv => decide (pn + 1 < iv.1) | none => false))
 
 /-- `push_new`: a fresh one-number range between `a` and `b`; when full the lowest range is forgotten. -/
 def pushNew (x : X) (a b : List Iv) (pn : Nat) : Bool × X :=
