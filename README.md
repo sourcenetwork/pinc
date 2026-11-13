@@ -2,6 +2,16 @@
   <img src="art/vinc-banner.png" alt="VINC: next-gen peer-to-peer networking stack" width="100%">
 </p>
 
+**VINC** stands for **V**erified **I**dentity-**N**ative **C**onnectivity:
+
+- *Verified*: every session is mutually authenticated, and a value is checked against its root before the
+  application sees a byte of it.
+- *Identity-native*: a node is reached by its id, which is derived from its key, not by an address.
+- *Connectivity*: one stack that connects nodes directly, through relays, and across links that are not there all
+  the time.
+
+**VINCER**, the transport VINC runs on, stands for **VINC** **E**ncrypted **R**eliable transport.
+
 VINC is a peer-to-peer networking stack for Rust, written SANS-IO. It has its own encrypted, reliable transport
 (VINCER) with a hybrid post-quantum handshake (X25519 plus ML-KEM-768). On top of that core it builds membership,
 verified value transfer with no size limit, broadcast, set reconciliation and delay-tolerant delivery. It runs from a
