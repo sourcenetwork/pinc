@@ -239,12 +239,12 @@ impl Core {
     pub(super) fn udp_step(&mut self) -> bool {
         let mut did = false;
         let mut buf = vec![0u8; 2048];
-        while let Some((to, n)) = self.node.as_mut().and_then(|node| node.poll_udp(&mut buf)) {
+        while let Some((from, to, n)) = self.node.as_mut().and_then(|node| node.poll_udp_from(&mut buf)) {
             did = true;
             if to.port() == vinc_connect::local::PORT {
                 continue;
             }
-            if let (Some(from), Some(d)) = (self.udp_addr_for(&to), buf.get(..n)) {
+            if let (Some(from), Some(d)) = (from.or_else(|| self.udp_addr_for(&to)), buf.get(..n)) {
                 self.wire.datagrams.push_back((from, to, d.to_vec()));
             }
         }

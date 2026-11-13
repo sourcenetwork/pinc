@@ -718,6 +718,10 @@ name = "connect_tunnel"
 path = "connect_tunnel.rs"
 
 [[test]]
+name = "connect_tunnel_source"
+path = "connect_tunnel_source.rs"
+
+[[test]]
 name = "connect_punch"
 path = "connect_punch.rs"
 

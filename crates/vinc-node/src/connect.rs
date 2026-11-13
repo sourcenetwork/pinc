@@ -114,6 +114,12 @@ where
         self.conn.poll_udp(buf)
     }
 
+    /// As [`Self::poll_udp`], with the local address the datagram must leave from, when it has to leave from one.
+    pub fn poll_udp_from(&mut self, buf: &mut [u8]) -> Option<(Option<SocketAddr>, SocketAddr, usize)> {
+        self.deadline.set(Due::Stale);
+        self.conn.poll_udp_from(buf)
+    }
+
     /// A key operation the carrier handshake of `relay` waits for.
     pub fn key_request(&self, relay: usize) -> Option<KeyRequest<'_>> {
         self.conn.key_request(relay)

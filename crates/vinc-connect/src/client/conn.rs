@@ -188,6 +188,8 @@ pub(super) struct Rly<P: Provider> {
 
 #[derive(Clone, Copy)]
 pub(super) struct UdpItem {
+    /// The local address to send from; `None` leaves the choice to the host.
+    pub(super) from: Option<SocketAddr>,
     pub(super) to: SocketAddr,
     pub(super) len: usize,
     pub(super) data: [u8; MAX_PACKET_LEN],
@@ -656,11 +658,17 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     // ---- UDP ----
 
     pub(super) fn enqueue_udp_pub(&mut self, to: SocketAddr, d: &Datagram<'_>) -> bool {
-        self.enqueue_udp(to, d)
+        self.enqueue_udp(None, to, d)
+    }
+
+    /// As [`Self::enqueue_udp_pub`], leaving from `from`.
+    pub(super) fn enqueue_udp_from(&mut self, from: SocketAddr, to: SocketAddr, d: &Datagram<'_>) -> bool {
+        self.enqueue_udp(Some(from), to, d)
     }
 
     pub(super) fn enqueue_raw(&mut self, to: SocketAddr, bytes: &[u8]) {
         let mut item = UdpItem {
+            from: None,
             to,
             len: bytes.len(),
             data: [0; MAX_PACKET_LEN],
@@ -673,8 +681,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
     }
 
-    fn enqueue_udp(&mut self, to: SocketAddr, d: &Datagram<'_>) -> bool {
+    fn enqueue_udp(&mut self, from: Option<SocketAddr>, to: SocketAddr, d: &Datagram<'_>) -> bool {
         let mut item = UdpItem {
+            from,
             to,
             len: 0,
             data: [0; MAX_PACKET_LEN],
@@ -691,10 +700,16 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     /// The next UDP datagram to send: copies it into `buf` and returns where to and how long.
     pub fn poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        self.poll_udp_from(buf).map(|(_, to, n)| (to, n))
+    }
+
+    /// As [`Self::poll_udp`], with the local address the datagram must leave from when it rides a particular path (a
+    /// tunnel packet leaves from the address of the hub session that carries it), `None` when any will do.
+    pub fn poll_udp_from(&mut self, buf: &mut [u8]) -> Option<(Option<SocketAddr>, SocketAddr, usize)> {
         let item = pop(&mut self.udp_q)?;
         let dst = buf.get_mut(..item.len)?;
         dst.copy_from_slice(item.data.get(..item.len)?);
-        Some((item.to, item.len))
+        Some((item.from, item.to, item.len))
     }
 
     /// A UDP datagram from `from` arrived. Returns true if it was a relay control datagram (handled here); false
@@ -854,7 +869,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 continue;
             };
             let Ok(nonce) = env.random::<8>() else { continue };
-            if self.enqueue_udp(udp, &Datagram::Qad { nonce }) {
+            if self.enqueue_udp(None, udp, &Datagram::Qad { nonce }) {
                 self.net.probe_sent(now, i, nonce, self.udp_any);
             }
         }
@@ -890,7 +905,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                         continue;
                     }
                     if let Some(udp) = self.rly.get(i).and_then(|r| r.cfg).and_then(|c| c.udp) {
-                        self.enqueue_udp(udp, &Datagram::DnsQuery { peer: *peer });
+                        self.enqueue_udp(None, udp, &Datagram::DnsQuery { peer: *peer });
                     }
                 }
             }

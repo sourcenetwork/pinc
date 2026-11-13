@@ -821,7 +821,7 @@ drive_impl! {
         });
         let open = self.carrier_state(relay) == super::link::State::Open;
         let silent = now.saturating_sub(self.last_heard(relay));
-        let tunnel_to = self.tunnel_target(now, ep, relay);
+        let tunnel_to = self.tunnel_route(now, ep, relay);
         let mut via = tunnel::decide(open, silent, rides, tunnel_to.is_some());
         if via != Via::Tunnel
             && let (Some(st), Some(_)) = (st, tunnel_to)
@@ -841,11 +841,11 @@ drive_impl! {
         }
         let relay_id = self.relay_cfg(relay).map(|c| c.id);
         if via != Via::Carrier
-            && let Some(to) = tunnel_to
+            && let Some((from, to)) = tunnel_to
         {
             let d = Datagram::Spu { dst: peer, flag: 0, packet };
             if packet.len() <= crate::relay::datagram::MAX_TUNNEL_DATAGRAM - 35
-                && self.enqueue_udp_pub(to, &d)
+                && self.enqueue_udp_from(from, to, &d)
                 && via == Via::Tunnel
             {
                 // Not queued for the carrier; the dial goes on.
@@ -870,33 +870,35 @@ drive_impl! {
         self.rly.get(relay).map_or(0, |r| r.link.last_heard())
     }
 
-    /// The UDP address of a validated hub session that can carry a tunnel packet for `relay`: the relay's own hub
-    /// session, else the home relay's (which forwards), else a hub session the relay spliced to us lately.
-    fn tunnel_target<E: Port>(&self, now: u64, ep: &E, relay: usize) -> Option<SocketAddr> {
+    /// The route `(local, remote)` of a validated hub session that can carry a tunnel packet for `relay`: the relay's
+    /// own hub session, else the home relay's (which forwards), else a hub session the relay spliced to us lately. The
+    /// hub knows the member by the address that session uses, so the packet leaves from its local half.
+    fn tunnel_route<E: Port>(&self, now: u64, ep: &E, relay: usize) -> Option<(SocketAddr, SocketAddr)> {
         let home = self.home();
         let order = [Some(relay), home.filter(|h| *h != relay)];
-        let hub_ok = |r: usize| -> Option<(HubSession, SocketAddr)> {
+        let hub_ok = |r: usize| -> Option<(HubSession, (SocketAddr, SocketAddr))> {
             let id = self.sess.iter().flatten().find(|s| s.hub == Some(r) && !s.handshaking)?.id;
             let st = ep.stats(id)?;
-            let (_, remote) = st.route?;
+            let route = st.route?;
+            let remote = route.1;
             let hs = HubSession { validated_direct: st.path_validated && !is_relay_addr(&remote), heard: st.heard, remote };
-            Some((hs, remote))
+            Some((hs, route))
         };
         for r in order.into_iter().flatten() {
-            if let Some((hs, remote)) = hub_ok(r)
+            if let Some((hs, route)) = hub_ok(r)
                 && tunnel::hub_ok(&hs, now)
             {
-                return self.rly.get(r).and_then(|x| x.cfg).and_then(|c| c.udp).filter(|_| true).or(Some(remote)).map(|_| remote);
+                return Some(route);
             }
         }
         // SPLICE_LIVE: a hub that spliced down to us lately has a working UDP session; the same validated path
         // carries our tunnel packets even when our own receive stamp on it is old.
         for r in order.into_iter().flatten() {
-            if let Some((hs, remote)) = hub_ok(r)
+            if let Some((hs, route)) = hub_ok(r)
                 && hs.validated_direct
-                && self.splices.live(now, u8::try_from(r).unwrap_or(0), self.node_rtt) == Some(remote)
+                && self.splices.live(now, u8::try_from(r).unwrap_or(0), self.node_rtt) == Some(route.1)
             {
-                return Some(remote);
+                return Some(route);
             }
         }
         None
