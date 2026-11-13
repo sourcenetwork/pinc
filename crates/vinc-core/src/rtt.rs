@@ -5,8 +5,9 @@
 //! [`PEER_RTTS`] peers, none replaced once the table is full). `lrtt` is the node average of handshake round trips, an
 //! exponentially weighted mean with weight 7/8 on the old value. `tgr` is the node peak: after every sample it becomes
 //! `max(sample, tgr - tgr / 32)`. The handshake floor `hs_floor` rises after a dial times out, `min(8 s, max(500 ms, 2 x
-//! floor))`, and falls to zero on any round trip sample. A node, or a session, is thin when the largest of these numbers
-//! is at least 250 ms; a session with no sample at all counts as thin.
+//! floor))`, and falls to zero only when a handshake answered at its first flight gives a sample: a new round trip peak
+//! of a session does not reset it. A node, or a session, is thin when the largest of these numbers is at least 250 ms;
+//! a session with no sample at all counts as thin.
 //!
 //! The first resend of a dial waits `max(500 ms, 2 x r, hs_floor)`, `r` being the peer's `krtt` else `lrtt`; a ticket
 //! resume to a hub the node has just restarted towards waits `max(300 ms, 1.5 x krtt + 20 ms)` instead.
@@ -75,11 +76,6 @@ impl NodeRtt {
     /// A connection took a round trip sample whose peak, after its own decay, is `peak`: the node peak follows.
     pub fn note_peak(&mut self, peak: u64) {
         self.tgr = peak.max(self.tgr - (self.tgr >> 5));
-    }
-
-    /// Any round trip sample resets the handshake floor.
-    pub const fn note_sample(&mut self) {
-        self.hs_floor = 0;
     }
 
     /// A dial timed out: the floor rises.
@@ -175,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn the_floor_doubles_to_eight_seconds_and_a_sample_resets_it() {
+    fn the_floor_doubles_to_eight_seconds_and_only_a_handshake_sample_resets_it() {
         let mut r = NodeRtt::new(1);
         let seen: std::vec::Vec<u64> = (0..6)
             .map(|_| {
@@ -196,7 +192,10 @@ mod tests {
         );
         assert_eq!(r.first_resend(&n(1)), 8_000_000_000);
         assert_eq!(r.remembered_for(&n(1)), Some(4_000_000_000));
-        r.note_sample();
+        // A new round trip peak is not a handshake sample: the floor stays.
+        r.note_peak(300_000_000);
+        assert_eq!(r.hs_floor(), 8_000_000_000);
+        r.note_handshake(n(1), 10_000_000);
         assert_eq!(r.hs_floor(), 0);
         assert_eq!(r.first_resend(&n(1)), FIRST_RESEND);
     }

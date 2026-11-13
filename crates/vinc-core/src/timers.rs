@@ -64,7 +64,6 @@ ep_impl! {
         if peak != slot.m.seen_peak {
             slot.m.seen_peak = peak;
             self.rtt.note_peak(peak);
-            self.rtt.note_sample();
             self.node_ver += 1;
             trace!(self, now, Rtt {
                 lrtt: self.rtt.lrtt(),

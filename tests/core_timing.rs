@@ -263,11 +263,11 @@ fn node_round_trips_classify_thin_and_feed_new_sessions() {
 }
 
 #[test]
-fn a_timed_out_dial_raises_the_handshake_floor_and_any_sample_resets_it() {
+fn a_timed_out_dial_raises_the_handshake_floor_and_only_a_first_flight_sample_resets_it() {
     big_stack(|| {
         let mut net = CoreNet::new(10 * MS_NS);
         net.capture = true;
-        let (a, b) = (net.add(1), net.add(2));
+        let (a, b, c) = (net.add(1), net.add(2), net.add(3));
         let (peer, to) = (net.nodes[b].node, net.nodes[b].addr);
         let dead = Box::new(|_: SocketAddr, _: SocketAddr, _: &[u8]| true);
         net.loss = Some(dead);
@@ -303,12 +303,19 @@ fn a_timed_out_dial_raises_the_handshake_floor_and_any_sample_resets_it() {
             "first resend at {second} ns; {} datagrams",
             net.captured.len() - marker
         );
-        // A successful handshake gives a sample, and the floor drops to zero.
+        // A handshake that needed a resend measures nothing, and the round trips its session measures later (new peaks
+        // of the node's round trip) do not reset the floor either.
         net.loss = None;
         assert!(net.run(net.now + 60 * S, |n| n.nodes[a].saw(is_connected)));
-        // A handshake that needed a resend measures nothing; the first round trip sample of the session resets the floor.
         assert!(net.nodes[a].ep.node_stats().hs_floor > 0);
         net.run_for(10 * S);
+        assert_eq!(
+            net.nodes[a].ep.node_stats().hs_floor,
+            8000 * ms,
+            "a round trip of the session reset the floor"
+        );
+        // A handshake answered at its first flight gives a sample, and the floor drops to zero.
+        net.connect_pair(a, c, ALPN_A, Role::Other);
         assert_eq!(net.nodes[a].ep.node_stats().hs_floor, 0);
     });
 }

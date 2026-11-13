@@ -167,7 +167,7 @@ proptest! {
 
     #[test]
     fn node_round_trips_stay_in_bounds(
-        steps in prop::collection::vec((0u8..6, prop_oneof![0u64..2_000_000_000, any::<u64>()], 0u8..4), 0..200)
+        steps in prop::collection::vec((0u8..6, prop_oneof![0u64..2_000_000_000, any::<u64>()], 0u8..3), 0..200)
     ) {
         let mut r = NodeRtt::new(5);
         let node = |b: u8| NodeId { alg: IdentityAlg::Ed25519, bytes: [b; 32] };
@@ -176,8 +176,7 @@ proptest! {
             match what {
                 0 => r.note_handshake(node(peer), rtt),
                 1 => r.note_peak(rtt),
-                2 => r.note_timeout(),
-                _ => r.note_sample(),
+                _ => r.note_timeout(),
             }
             prop_assert!(r.hs_floor() <= FLOOR_MAX);
             floor_seen = floor_seen.max(r.hs_floor());
