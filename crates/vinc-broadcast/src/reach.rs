@@ -19,8 +19,13 @@
 //!   until the node is heard again;
 //! - a node that never sent a record: unscoped. Unscoped nodes hear each other and no scoped node, as before;
 //! - the table holds at most [`Limits::max_reach`](crate::Limits::max_reach) records. A new node's record that finds
-//!   it full is refused and the table closes: from then on every node without a record is alone, the refused one
-//!   and the unscoped ones alike (failing closed: an unscoped member then hears only hubs through this hub);
+//!   it full is refused and the table closes: while it is closed every node without a record is alone, the refused
+//!   ones and the unscoped ones alike (failing closed: an unscoped member then hears only hubs through this hub). The
+//!   hub reports each refusal ([`Event::ReachRefused`]) and the closing ([`Event::ReachClosed`]). The table opens
+//!   again ([`Event::ReachOpened`], checked every [`REFRESH`]) once no refused node waits: each one
+//!   got a record (a refused member sends its record again every [`REFRESH`]), was revoked, or was released for
+//!   good with nothing of it left in the logs. A hub that refused more nodes than the table holds records cannot
+//!   tell, and its table stays closed until it restarts;
 //! - a node membership released for good ([`Topics::release`]) keeps its tombstone until no log here holds a message
 //!   of it; then the tombstone is dropped, since the node is neither an origin nor a subscriber here any more;
 //! - a revoked node's record is forgotten: nothing of it is delivered.
@@ -48,14 +53,13 @@
 mod record;
 mod table;
 
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use vinc_crypto::IdentityAlg;
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_membership::{Nanos, NodeId};
 
 use crate::consts::{ADJ_MAX, REFRESH};
-use crate::host::{Host, Lane};
+use crate::host::{Event, Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Refused, Topics};
 use crate::wire::{self, Head, ty};
@@ -97,9 +101,12 @@ impl Topics {
 
     /// Name the peers this node holds sessions with, so the hubs reach it only from its connected component. The
     /// first call makes the node scoped for the rest of its life; an empty list scopes it to itself. The record goes
-    /// to every hub that is up at once when the set changed. A record names at most [`ADJ_MAX`] peers: of more, the
-    /// least [`ADJ_MAX`] ids, which only narrows the reach. Returns how many peers the record names. On a hub it does
-    /// nothing and returns 0: hubs are not scoped.
+    /// to every hub that is up at once when the set changed, so a caller names its peers once a batch of session
+    /// changes is handled, not once per change. A record names at most [`ADJ_MAX`] peers: of more, the least
+    /// [`ADJ_MAX`] ids. That narrows the reach and can lose an edge both ends hold: two nodes with more than
+    /// [`ADJ_MAX`] peers each may name different subsets, and an edge only one of them names is not kept, so the
+    /// component may split there. Returns how many peers the record names. On a hub it does nothing and returns 0:
+    /// hubs are not scoped.
     ///
     /// # Errors
     /// [`Refused::Sign`] if the record cannot be signed; the last record stays.
@@ -117,6 +124,7 @@ impl Topics {
         let named = set.len();
         let seq = self.reach.mine.as_ref().map_or(1, |m| m.seq + 1);
         let frame = self.adj_frame(seq, &set).ok_or(Refused::Sign)?;
+        self.reach.signed = self.reach.signed.saturating_add(1);
         self.reach.mine = Some(Mine {
             seq,
             peers: set,
@@ -132,7 +140,8 @@ impl Topics {
         self.reach.mine.as_ref().map(|m| m.peers.as_slice())
     }
 
-    /// On a hub: what its adjacency table holds and what it refused.
+    /// On a hub: what its adjacency table holds, what it refused and whether it is closed; on a member: how many records
+    /// it signed.
     pub fn reach_stats(&self) -> ReachStats {
         self.reach.stats()
     }
@@ -180,23 +189,16 @@ impl Topics {
             m.next = now.saturating_add(REFRESH);
             self.send_adj(h, None);
         }
-        if self.reach.expire(now) && self.reach.any_gone() {
-            let logged = self.logged_origins();
-            self.reach.drop_gone(|id| logged.contains(id));
-        }
-    }
-
-    /// The origins of every message the logs hold.
-    fn logged_origins(&self) -> BTreeSet<NodeId> {
-        let mut out = BTreeSet::new();
-        for log in self.topics.values().filter_map(|st| st.log.as_ref()) {
-            for seq in log.base()..log.end() {
-                if let Some((head, _)) = log.at(seq).and_then(|l| Head::parse(l).ok()) {
-                    out.insert(*head.origin);
-                }
+        if self.reach.expire(now) {
+            if self.reach.any_gone() {
+                let topics = &self.topics;
+                self.reach
+                    .drop_gone(|id| topics.values().filter_map(|st| st.log.as_ref()).any(|l| l.holds(id)));
+            }
+            if self.reach.reopen() {
+                h.event(Event::ReachOpened);
             }
         }
-        out
     }
 
     /// When the reach timers next need a call.
@@ -219,7 +221,15 @@ impl Topics {
         if (!mirrored && v.origin != from) || self.revoked.contains(v.origin) || *v.origin == self.me {
             return;
         }
-        if self.reach.take(now, &v, rest, !mirrored).is_none() || mirrored {
+        let (closed, refused) = (self.reach.is_closed(), self.reach.refused());
+        let took = self.reach.take(now, &v, !mirrored);
+        if self.reach.refused() != refused {
+            h.event(Event::ReachRefused { origin: v.origin });
+            if !closed {
+                h.event(Event::ReachClosed);
+            }
+        }
+        if took.is_none() || mirrored {
             return;
         }
         let mut frame = Vec::with_capacity(6 + rest.len());

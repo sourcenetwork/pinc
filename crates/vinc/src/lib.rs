@@ -103,6 +103,7 @@ pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
 pub use role::{RelayRole, Role, RoleSpec};
 pub use stream::{RecvStream, SendStream};
+pub use vinc_broadcast::ReachStats;
 pub use vinc_core::NodeStats;
 pub use vinc_crypto::NodeId;
 /// The urgency a stream starts with; see [`SendStream::set_urgency`].

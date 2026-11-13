@@ -39,9 +39,11 @@ pub struct Limits {
     /// The most subscribers the node learns or announces per topic.
     pub max_subscribers: usize,
     /// The most adjacency records a hub keeps (see [`Topics::set_adjacent`]), each of at most
-    /// [`ADJ_MAX`](crate::consts::ADJ_MAX) peers: about 33 KiB a record at that bound, 100 bytes for a record of a few
-    /// peers. A full table refuses a new member's record and from then on counts every node without a record as
-    /// alone.
+    /// [`ADJ_MAX`](crate::consts::ADJ_MAX) peers. A record keeps its parsed peers and its signature, not the frame:
+    /// 32 KiB and the signature at that bound (about 128 MiB for the default 4,096 records), a little over 100 bytes
+    /// for a record of a few peers; [`ReachStats::bytes`](crate::ReachStats::bytes) counts them. A full table
+    /// refuses a new member's record and closes: while it is closed every node without a record counts as alone. It
+    /// opens again once every node it refused has a record, was revoked or was released.
     pub max_reach: usize,
 }
 

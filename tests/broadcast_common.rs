@@ -65,6 +65,9 @@ pub enum Ev {
         origin: NodeId,
         topic: Vec<u8>,
     },
+    ReachRefused(NodeId),
+    ReachClosed,
+    ReachOpened,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +177,9 @@ impl Host for NodeHost {
                 origin: *origin,
                 topic: topic.to_vec(),
             },
+            Event::ReachRefused { origin } => Ev::ReachRefused(*origin),
+            Event::ReachClosed => Ev::ReachClosed,
+            Event::ReachOpened => Ev::ReachOpened,
         });
     }
 }

@@ -33,6 +33,9 @@ use crate::mem::Limits;
 use crate::node::{FacadeNode, RELAYS};
 use crate::standby::{Standby, Ticket};
 
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
+mod adjacent_tests;
 mod gate;
 mod ops;
 mod state;
@@ -251,6 +254,11 @@ pub(crate) struct Core<S, A> {
     /// With [`Builder::connected_topics`](crate::Builder::connected_topics), the peers of the application's sessions
     /// last named to the hubs; `None` without it.
     adjacent: Option<Vec<[u8; 32]>>,
+    /// An application session came up or ended since the peers were last named to the hubs: they are named again at
+    /// this instant or after it.
+    adjacent_due: Option<u64>,
+    /// The peers are named again no sooner than this, however fast the sessions churn.
+    adjacent_next: u64,
     /// How long a dial may take, in nanoseconds.
     connect_timeout: u64,
     /// The peers a relay had no record for or sent a bad one for, oldest first.
@@ -300,6 +308,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             topics: BTreeMap::new(),
             hub_sessions: RapidHashMap::default(),
             adjacent: cfg.connected_topics.then(Vec::new),
+            adjacent_due: None,
+            adjacent_next: 0,
             connect_timeout: cfg.connect_timeout,
             lookup_failed: VecDeque::new(),
             neighbors_dirty: false,
@@ -335,6 +345,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             self.node.poll_timeout(),
             self.shutdown,
             self.look_deadline(),
+            self.adjacent_deadline(),
             self.deadlines.first().copied(),
         ]
         .into_iter()
@@ -399,7 +410,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
         n += self.answer_signatures(now);
         n += self.answer_relay_keys(now);
-        n += self.drain(now);
+        let drained = self.drain(now);
+        n += drained;
+        // The turn's events are all handled: the sessions it ended with are named once, not once per event.
+        if drained < BUDGET {
+            self.report_adjacent(now);
+        }
         if n > 0 {
             let dropped = self.node.endpoint().node_stats().events_dropped;
             if dropped != self.last_dropped {
@@ -583,11 +599,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 ..
             } => {
                 self.session_up(now, session, node, alpn, true, resumed);
-                self.report_adjacent(now);
+                self.adjacent_changed();
             }
             Event::Incoming { session, node, alpn } => {
                 self.session_up(now, session, node, alpn, false, false);
-                self.report_adjacent(now);
+                self.adjacent_changed();
             }
             Event::ConnectFailed { node, alpn, reason } => {
                 if let Some(sid) = self.dial_by_peer.remove(&(node, alpn)) {
@@ -597,7 +613,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             Event::Closed { session, reason } => {
                 self.hub_session_down(session);
                 self.session_down(session, Error::ended(reason));
-                self.report_adjacent(now);
+                self.adjacent_changed();
             }
             Event::StreamOpened { session, stream } => self.stream_opened(now, session, stream),
             Event::StreamReadable { session, stream } | Event::StreamReset { session, stream, .. } => {

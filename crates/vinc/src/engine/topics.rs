@@ -25,6 +25,8 @@ const EVENTS: usize = 1024;
 const HINTS: usize = 16;
 /// How often the neighbours are looked at while a topic is joined or a future waits for one, in nanoseconds.
 const LOOK: u64 = 500_000_000;
+/// With connected topics, the least time between two records naming this endpoint's peers, in nanoseconds.
+pub(super) const ADJ_GAP: u64 = 250_000_000;
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
     /// One event of the node: the endpoint's go to the sessions, the others become events for the host.
@@ -56,6 +58,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.node.broadcast_acp_answer(now, id, allow);
                 self.dirty = true;
             }
+            NodeEvent::ReachRefused { origin } => {
+                let node = self.node.full_id(&origin);
+                self.push_event(Event::ReachRefused { node });
+            }
+            NodeEvent::ReachClosed => self.push_event(Event::ReachClosed),
+            NodeEvent::ReachOpened => self.push_event(Event::ReachOpened),
             NodeEvent::Member(_) => self.neighbors_dirty = true,
             NodeEvent::Connect(n) => self.on_notice(&n),
             NodeEvent::Lost { count } => self.lost = self.lost.saturating_add(count),
@@ -259,11 +267,26 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         was
     }
 
+    /// When the peers are next named to the hubs: while sessions came up or ended since they last were.
+    pub(super) fn adjacent_deadline(&self) -> Option<u64> {
+        self.adjacent.as_ref().and(self.adjacent_due)
+    }
+
+    /// A session came up or ended: the peers are named once the turn's events are handled, no sooner than the gap.
+    pub(super) fn adjacent_changed(&mut self) {
+        self.adjacent_due.get_or_insert(self.adjacent_next);
+    }
+
     /// With connected topics, name the peers of the application's sessions to the hubs when the set changed, so the
-    /// hubs hand this endpoint topic messages only from its connected component. Hub-protocol sessions are not
-    /// counted: every member holds one with its hubs. When the hubs are not told every peer, [`Event::AdjacencyShort`]
-    /// says so.
+    /// hubs hand this endpoint topic messages only from its connected component. Called once the events of a turn
+    /// are handled, and at most once every [`ADJ_GAP`]: a burst of sessions is one signed record, not one per session.
+    /// Hub-protocol sessions are not counted: every member holds one with its hubs. When the hubs are not told every
+    /// peer, [`Event::AdjacencyShort`] says so.
     pub(super) fn report_adjacent(&mut self, now: u64) {
+        if self.adjacent_due.is_none_or(|at| now < at) {
+            return;
+        }
+        self.adjacent_due = None;
         let Some(last) = self.adjacent.as_ref() else { return };
         let mut set: Vec<[u8; 32]> = self.sessions.values().map(|s| s.info.node.bytes).collect();
         set.sort_unstable();
@@ -271,6 +294,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if set == *last {
             return;
         }
+        self.adjacent_next = now.saturating_add(ADJ_GAP);
         let sessions = u32::try_from(set.len()).unwrap_or(u32::MAX);
         match self.node.set_adjacent(now, &set) {
             Ok(named) => {

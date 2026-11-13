@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use core::cell::Cell;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use vinc_broadcast::{Config as BcConfig, Refused, StartError as BcStartError, Topics};
+use vinc_broadcast::{Config as BcConfig, ReachStats, Refused, StartError as BcStartError, Topics};
 use vinc_connect::client::Connectivity;
 use vinc_connect::record::MAX_ADDRS;
 use vinc_connect::ticket::Ticket;
@@ -703,6 +703,13 @@ where
         let r = t.set_adjacent(&mut h, now, peers);
         self.settle(now);
         r
+    }
+
+    /// On a hub: what its adjacency table holds, what it refused and whether it is closed
+    /// ([`NodeEvent::ReachClosed`]); on a member: how many adjacency records it signed. See
+    /// [`Topics::reach_stats`](vinc_broadcast::Topics::reach_stats).
+    pub fn reach_stats(&self) -> ReachStats {
+        self.topics.reach_stats()
     }
 
     /// The access-control layer answered a broadcast check ([`NodeEvent::BroadcastAcpCheck`]).

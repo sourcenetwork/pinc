@@ -6,12 +6,12 @@
 //!
 //! Invariants: entries are in arrival order; an entry's bytes are contiguous in the ring (a message that would
 //! straddle the end starts at the beginning, and the skipped tail is charged to it); a message id is in the log at
-//! most once.
+//! most once; `origins` counts the entries of each origin, kept where an entry is pushed and popped.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec;
 use alloc::vec::Vec;
-use vinc_membership::Nanos;
+use vinc_membership::{Nanos, NodeId};
 
 use crate::consts::{LOG_CAP, LOG_WINDOW};
 use crate::table::MidMap;
@@ -19,6 +19,7 @@ use crate::table::MidMap;
 #[derive(Debug, Clone, Copy)]
 struct Entry {
     mid: u64,
+    origin: NodeId,
     at: Nanos,
     wall_ms: u64,
     off: usize,
@@ -36,6 +37,8 @@ pub(crate) struct HubLog {
     ring: Vec<u8>,
     wpos: usize,
     used: usize,
+    /// How many logged messages each origin has here.
+    origins: BTreeMap<NodeId, u32>,
 }
 
 impl HubLog {
@@ -47,7 +50,13 @@ impl HubLog {
             ring: vec![0; bytes],
             wpos: 0,
             used: 0,
+            origins: BTreeMap::new(),
         }
+    }
+
+    /// Whether a message of `origin` is logged here.
+    pub(crate) fn holds(&self, origin: &NodeId) -> bool {
+        self.origins.contains_key(origin)
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -122,6 +131,12 @@ impl HubLog {
     /// Drop the oldest message; returns its id.
     pub(crate) fn pop(&mut self) -> Option<u64> {
         let e = self.entries.pop_front()?;
+        if let Some(n) = self.origins.get_mut(&e.origin) {
+            *n -= 1;
+            if *n == 0 {
+                self.origins.remove(&e.origin);
+            }
+        }
         if self.index.get(e.mid) == Some(self.base) {
             self.index.remove(e.mid);
         }
@@ -134,10 +149,13 @@ impl HubLog {
         Some(e.mid)
     }
 
-    /// Log a message made of `head` then `body`. Evicted ids go to `evicted`. Returns false if it cannot fit.
+    /// Log a message of `origin` made of `head` then `body`. Evicted ids go to `evicted`. Returns false if it
+    /// cannot fit.
+    #[allow(clippy::too_many_arguments, reason = "the parts of one logged message")]
     pub(crate) fn push(
         &mut self,
         mid: u64,
+        origin: &NodeId,
         at: Nanos,
         wall_ms: u64,
         head: &[u8],
@@ -165,6 +183,7 @@ impl HubLog {
                 let seq = self.base + u64::try_from(self.entries.len()).unwrap_or(0);
                 self.entries.push_back(Entry {
                     mid,
+                    origin: *origin,
                     at,
                     wall_ms,
                     off,
@@ -172,6 +191,7 @@ impl HubLog {
                     cost: pad + n,
                 });
                 self.index.insert(mid, seq);
+                *self.origins.entry(*origin).or_insert(0) += 1;
                 self.used += pad + n;
                 self.wpos = (off + n) % self.ring.len();
                 return true;
@@ -233,9 +253,23 @@ mod tests {
             let body = vec![0u8; n];
             let want = log.evicts(n);
             let mut got = 0;
-            assert!(log.push(mid, 0, 0, &[], &body, |_| got += 1));
+            let origin = [u8::try_from(mid % 3).unwrap_or(0); 32];
+            assert!(log.push(mid, &origin, 0, 0, &[], &body, |_| got += 1));
             assert_eq!(want, got, "message {mid} of {n} bytes");
             assert_eq!(log.at(log.end() - 1).map(<[u8]>::len), Some(n));
+            // The count of each origin is that of its entries still logged (looked at every 97th message).
+            for o in (0..3u8).filter(|_| mid % 97 == 0) {
+                let logged = (log.base()..log.end()).any(|seq| u64::from(o) == seq_mid(&log, seq) % 3);
+                assert_eq!(log.holds(&[o; 32]), logged, "origin {o} after message {mid}");
+            }
         }
+        log.expire(LOG_WINDOW + 1, |_| {});
+        assert!((0..3u8).all(|o| !log.holds(&[o; 32])), "an empty log holds no origin");
+    }
+
+    fn seq_mid(log: &HubLog, seq: u64) -> u64 {
+        log.entries
+            .get(usize::try_from(seq - log.base()).unwrap_or(usize::MAX))
+            .map_or(u64::MAX, |e| e.mid)
     }
 }
