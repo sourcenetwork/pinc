@@ -3,16 +3,20 @@
 //! Index 0 of each direction is the random id the handshake carried. Every later index `i` is
 //! `keyed_hash(cid_secret, direction || i)[..len]`, so each side can compute the other side's ids without any frame
 //! to announce them, and an observer without the secret cannot link two ids to one session. A sender takes the next
-//! index each time a path needs an id of its own and never reuses one. The receiver accepts index 0 and a window of
-//! derived indices: every index it has seen on an authenticated packet that it still holds, and the next
-//! [`LOOKAHEAD`] indices after the highest seen, so a packet on a fresh path is routable even when the first packet
-//! of the previous path was lost.
+//! index each time a path needs an id of its own, but only while that index is within [`LOOKAHEAD`] of the highest
+//! index the peer has answered on; past that it takes an id of that window again, turn by turn, and a path gives up
+//! an id the peer never answered on once the window moved past it. So the sender never uses an id the receiver may
+//! not accept, however many paths never deliver. The receiver accepts index 0 and a window of derived indices: every
+//! index it holds from one below the highest seen (the range a sender may still use), every older one it has not
+//! needed to evict, and the next [`LOOKAHEAD`] indices after the highest seen, so a packet on a fresh path is
+//! routable even when the first packet of the previous path was lost.
 //!
-//! Invariants: the table holds at most [`LOCAL_SLOTS`] derived ids; when it is full the least recently used one that
-//! is not a lookahead entry makes room (an entry used by a packet, or stale: below the highest index seen and never
-//! used, as the peer's path that was to use it never delivered); the lookahead entries are never evicted, so the
-//! indices after the highest one seen are always held once the secret is installed; a received id is only a candidate (another session of the same endpoint may
-//! derive the same four bytes): the packet's authentication decides which session owns it.
+//! Invariants: the table holds at most [`LOCAL_SLOTS`] derived ids; when it is full the least recently used entry at
+//! least [`LOOKAHEAD`] below the highest index seen makes room; the entries from there up are never evicted, so the
+//! indices after the highest one seen are always held once the secret is installed; the sender's id is index 0 or an
+//! index above the highest one the peer answered on, and at most [`LOOKAHEAD`] above it; a received id is only a
+//! candidate (another session of the same endpoint may derive the same four bytes): the packet's authentication
+//! decides which session owns it.
 
 use vinc_crypto::extract;
 use vinc_security::ConnId;
@@ -52,6 +56,10 @@ pub(crate) struct Cids {
     highest: u64,
     tick: u64,
     next_send: u64,
+    /// The highest index the peer acknowledged a packet on.
+    confirmed: u64,
+    /// How many ids of the window were handed out again.
+    reuse: u64,
 }
 
 impl Cids {
@@ -65,6 +73,8 @@ impl Cids {
             highest: 0,
             tick: 0,
             next_send: 0,
+            confirmed: 0,
+            reuse: 0,
         }
     }
 
@@ -108,7 +118,7 @@ impl Cids {
                     .entries
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, e)| e.filter(|e| e.seen || e.index <= self.highest).map(|e| (e.used, i)))
+                    .filter_map(|(i, e)| e.filter(|e| e.index + LOOKAHEAD <= self.highest).map(|e| (e.used, i)))
                     .min()
                 {
                     Some((_, i)) => i,
@@ -158,19 +168,39 @@ impl Cids {
         }
     }
 
-    /// The peer's id for a path that needs one of its own: the next index, never reused. `None` before the secret is
-    /// known (only index 0 exists then) or while the peer's index 0 is unknown.
+    /// The peer's id for a path that needs one of its own: the next index while it is within [`LOOKAHEAD`] of the
+    /// highest one the peer answered on, otherwise an index of that window again, turn by turn. `None` before the
+    /// session secret is known (only index 0 exists then) or while the peer's index 0 is unknown.
     pub(crate) fn claim_remote(&mut self) -> Option<(u64, ConnId)> {
         let first = self.first_remote?;
-        let index = self.next_send;
+        let fresh = self.next_send <= self.confirmed + LOOKAHEAD;
+        let index = if fresh {
+            self.next_send
+        } else {
+            self.confirmed + 1 + self.reuse % LOOKAHEAD
+        };
         let cid = if index == 0 {
             first
         } else {
             let secret = self.secret?;
             derive(&secret, !self.client, index, first.as_bytes().len())?
         };
-        self.next_send += 1;
+        if fresh {
+            self.next_send += 1;
+        } else {
+            self.reuse += 1;
+        }
         Some((index, cid))
+    }
+
+    /// The peer acknowledged a packet sent with the id of `index`.
+    pub(crate) fn confirm_remote(&mut self, index: u64) {
+        self.confirmed = self.confirmed.max(index);
+    }
+
+    /// Whether the peer is known to accept the id of `index`: index 0, or one above the highest it answered on.
+    pub(crate) const fn remote_usable(&self, index: u64) -> bool {
+        index == 0 || index > self.confirmed
     }
 }
 
@@ -190,6 +220,8 @@ pub(super) mod trace {
         pub tick: u64,
         /// The next index the sender takes.
         pub next_send: u64,
+        /// The highest index the peer acknowledged a packet on.
+        pub confirmed: u64,
         /// Whether the session secret is installed.
         pub secret: bool,
         /// Whether the peer's first id is known.
@@ -270,6 +302,16 @@ pub(super) mod trace {
             Some((index, derived))
         }
 
+        /// The peer acknowledged a packet sent with the id of `index`.
+        pub fn confirm_remote(&mut self, index: u64) {
+            self.cids.confirm_remote(index);
+        }
+
+        /// Whether the peer is known to accept the id of `index`.
+        pub fn remote_usable(&self, index: u64) -> bool {
+            self.cids.remote_usable(index)
+        }
+
         /// The state of the table.
         pub fn view(&self) -> CidView {
             CidView {
@@ -277,6 +319,7 @@ pub(super) mod trace {
                 highest: self.cids.highest,
                 tick: self.cids.tick,
                 next_send: self.cids.next_send,
+                confirmed: self.cids.confirmed,
                 secret: self.cids.secret.is_some(),
                 first_remote: self.cids.first_remote.is_some(),
                 epoch: self.cids.epoch(),

@@ -4,11 +4,11 @@
 //!
 //! A run learns the peer's first id and installs the secret at random moments, authenticates packets addressed to
 //! the ids of indices near the highest seen (skipping some, repeating some, outside the lookahead, below the
-//! highest, index 0), and takes ids for new paths. After every call the table shows its slots (index, tick of last
+//! highest, index 0), takes ids for new paths and confirms some of the ids it took. After every call the table shows its slots (index, tick of last
 //! use, whether a packet used it), the highest index, the counters and the epoch.
 //!
 //! The test asserts what it can itself (the lookahead is always held once the secret is installed, a retired id is
-//! never accepted again, the sender takes each index once) so it is meaningful without the proof tools.
+//! never accepted again, the sender takes a fresh index only within the lookahead of the highest confirmed one, otherwise an index of that window) so it is meaningful without the proof tools.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -41,11 +41,12 @@ fn view_json(v: &CidView) -> String {
         })
         .collect();
     format!(
-        r#"{{"ent":[{}],"hi":{},"tick":{},"ns":{},"sec":{},"fr":{},"epoch":{}}}"#,
+        r#"{{"ent":[{}],"hi":{},"tick":{},"ns":{},"cf":{},"sec":{},"fr":{},"epoch":{}}}"#,
         ents.join(","),
         v.highest,
         v.tick,
         v.next_send,
+        v.confirmed,
         b(v.secret),
         b(v.first_remote),
         v.epoch
@@ -69,7 +70,7 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
     );
     let mut retired: BTreeSet<u64> = BTreeSet::new();
     let mut held: BTreeSet<u64> = BTreeSet::new();
-    let mut next_claim = 0u64;
+    let mut claimed: Vec<u64> = Vec::new();
     for _ in 0..steps {
         let v = t.view();
         match rng.next_u64() % 100 {
@@ -98,16 +99,27 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
                 t.on_authenticated(index);
                 log(&t, out, &format!(r#""op":"auth","k":{index}"#));
             }
-            65..=84 => {
-                let before = t.view().next_send;
+            65..=80 => {
+                let (before, confirmed) = (v.next_send, v.confirmed);
                 let r = t.claim_remote().map(|(k, derived)| {
                     assert!(derived, "the id claimed is not the one derived for its index");
                     k
                 });
                 if let Some(k) = r {
-                    assert_eq!(k, before, "the sender took an index out of order");
-                    assert_eq!(k, next_claim, "the sender reused or skipped an index");
-                    next_claim += 1;
+                    if k == before {
+                        assert!(
+                            k <= confirmed + 2,
+                            "a fresh index {k} is past the window of confirmed {confirmed}"
+                        );
+                        assert_eq!(t.view().next_send, before + 1);
+                    } else {
+                        assert!(
+                            k > confirmed && k <= confirmed + 2,
+                            "the index {k} taken again is outside the window of confirmed {confirmed}"
+                        );
+                        assert_eq!(t.view().next_send, before);
+                    }
+                    claimed.push(k);
                 } else {
                     assert_eq!(t.view().next_send, before);
                 }
@@ -116,6 +128,12 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
                     out,
                     &format!(r#""op":"claim","k":{}"#, r.map_or(-1, |k| i64::try_from(k).unwrap())),
                 );
+            }
+            81..=84 if !claimed.is_empty() => {
+                let k = claimed[usize::try_from(rng.next_u64()).unwrap() % claimed.len()];
+                t.confirm_remote(k);
+                assert_eq!(t.view().confirmed, v.confirmed.max(k));
+                log(&t, out, &format!(r#""op":"conf","k":{k}"#));
             }
             _ => {
                 let hi = v.highest;
@@ -161,6 +179,7 @@ fn connection_id_runs_match_the_models() {
         r#""op":"install""#,
         r#""op":"auth""#,
         r#""op":"claim""#,
+        r#""op":"conf""#,
         r#""op":"query""#,
     ] {
         assert!(out.contains(needle), "the runs never reach {needle}");

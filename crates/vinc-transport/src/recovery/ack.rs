@@ -175,6 +175,7 @@ impl<const N: usize> Recovery<N> {
                 frames: &sent.frames,
                 mtu_probe: sent.is_mtu_probe,
                 repair: sent.is_repair,
+                path: sent.path,
             });
             if scan.newest.is_none_or(|n| sent.pn > n.0) {
                 scan.newest = Some((sent.pn, sent.time, sent.path));

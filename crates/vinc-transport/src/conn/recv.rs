@@ -639,6 +639,11 @@ conn_impl! {
         if let Some(size) = out.probe_lost.and_then(|s| u16::try_from(s).ok()) {
             self.mtu_probe_lost(active, size, now);
         }
+        for (slot, pn) in out.acked_pn.iter().enumerate() {
+            if let Some(pn) = *pn {
+                self.confirm_dcid(slot, pn);
+            }
+        }
         if out.tickets_acked {
             self.ctl.tickets_pending = false;
         }

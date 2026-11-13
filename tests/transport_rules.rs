@@ -646,3 +646,31 @@ fn data_after_an_idle_spell_brings_the_slow_rechallenge_forward() {
         assert_eq!(run(true), 1, "with data it goes out at once");
     });
 }
+
+#[test]
+fn paths_that_never_deliver_do_not_strand_the_next_path_without_an_accepted_id() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = connected(&mut w, &mut sa, &mut sb, Link::new(1, Params::new(10 * MS)));
+        let p = Params::new(10 * MS);
+        // Three paths that drop everything, one after the other: each takes an id that never reaches the peer.
+        for (a, b) in [(3, 4), (5, 6), (7, 8)] {
+            net.link.add_route(PathId(a), PathId(b), p, p);
+            net.link.route(PathId(a)).up = false;
+            let now = net.now;
+            net.a
+                .with_env(now, |c, env| c.add_path(env, PathId(a), PathInfo::default()))
+                .unwrap();
+            net.run(net.now + SEC, |_| false);
+            assert!(!net.a.conn.path_validated(PathId(a)));
+        }
+        // A fourth path that works must validate: the id it sends with is one the peer accepts.
+        net.link.add_route(PathId(9), PathId(10), p, p);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(9), PathInfo::default()))
+            .unwrap();
+        assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(9))));
+    });
+}

@@ -317,15 +317,36 @@ conn_impl! {
         self.cids.first_remote().unwrap_or(self.odcid)
     }
 
-    /// The peer's connection id for sending on path `ti`: the next index of the derived sequence, claimed the first
-    /// time the path sends.
+    /// The peer's connection id for sending on path `ti`, claimed the first time the path sends. The path keeps it
+    /// while the peer answered on it or is still known to accept it, and claims again once the peer's window moved
+    /// past an id that never got an answer.
     fn path_dcid(&mut self, ti: usize) -> Option<ConnId> {
-        if let Some(d) = self.paths.get(ti)?.dcid {
+        let p = self.paths.get(ti)?;
+        if let Some(d) = p.dcid
+            && (p.dcid_seen || self.cids.remote_usable(p.dcid_index))
+        {
             return Some(d);
         }
-        let (_, cid) = self.cids.claim_remote()?;
-        self.paths.get_mut(ti)?.dcid = Some(cid);
+        let (index, cid) = self.cids.claim_remote()?;
+        let pn = self.next_pn;
+        let p = self.paths.get_mut(ti)?;
+        p.dcid = Some(cid);
+        p.dcid_index = index;
+        p.dcid_pn = pn;
+        p.dcid_seen = false;
         Some(cid)
+    }
+
+    /// A packet with number `pn` was acknowledged on path slot `slot`: if it was sent with the path's current id, the
+    /// peer accepts that id.
+    pub(super) fn confirm_dcid(&mut self, slot: usize, pn: u64) {
+        let Some(p) = self.paths.get_mut(slot) else { return };
+        if p.dcid_seen || p.dcid.is_none() || pn < p.dcid_pn {
+            return;
+        }
+        p.dcid_seen = true;
+        let index = p.dcid_index;
+        self.cids.confirm_remote(index);
     }
 
     /// Build an application packet (short, or ZeroRtt on an early client) at the start of `window`.

@@ -60,7 +60,7 @@ fn a_retired_id_is_never_accepted_again() {
 }
 
 #[test]
-fn the_sender_takes_each_index_once_and_none_before_the_peers_first_id() {
+fn the_sender_takes_fresh_indices_in_order_and_none_before_the_peers_first_id() {
     let mut t = CidTable::new(false, &[9, 9, 9, 9]).unwrap();
     assert_eq!(t.claim_remote(), None);
     t.set_first_remote(&[1, 1, 1, 1]);
@@ -73,4 +73,58 @@ fn the_sender_takes_each_index_once_and_none_before_the_peers_first_id() {
         "the id claimed is the one derived for its index"
     );
     assert_eq!(t.claim_remote(), Some((2, true)));
+}
+
+#[test]
+fn every_id_a_sender_takes_with_nothing_confirmed_is_one_the_receiver_accepts() {
+    let recv = table();
+    let mut send = CidTable::new(false, &[9, 9, 9, 9]).unwrap();
+    send.set_first_remote(&[1, 1, 1, 1]);
+    send.install(&SECRET);
+    for path in 0..6 {
+        let (index, derived) = send.claim_remote().unwrap();
+        assert!(derived);
+        assert!(
+            recv.is_local(index),
+            "path {path} was given index {index}, which the receiver does not accept"
+        );
+    }
+}
+
+#[test]
+fn a_confirmed_index_moves_the_window_and_retires_the_ids_below_it() {
+    let mut send = CidTable::new(false, &[9, 9, 9, 9]).unwrap();
+    send.set_first_remote(&[1, 1, 1, 1]);
+    send.install(&SECRET);
+    assert_eq!(send.claim_remote().map(|c| c.0), Some(0));
+    assert_eq!(send.claim_remote().map(|c| c.0), Some(1));
+    assert_eq!(send.claim_remote().map(|c| c.0), Some(2));
+    assert_eq!(
+        send.claim_remote().map(|c| c.0),
+        Some(1),
+        "past the window the ids of the window come again"
+    );
+    assert_eq!(send.claim_remote().map(|c| c.0), Some(2));
+    assert!(send.remote_usable(1));
+    send.confirm_remote(2);
+    assert_eq!(send.claim_remote().map(|c| c.0), Some(3));
+    assert!(!send.remote_usable(1));
+    assert!(!send.remote_usable(2));
+    assert!(send.remote_usable(0));
+    assert!(send.remote_usable(3));
+}
+
+#[test]
+fn the_unused_id_below_the_highest_seen_stays_held_when_the_table_is_full_of_used_ones() {
+    let mut t = table();
+    for index in 1..=7 {
+        t.on_authenticated(index);
+    }
+    // The used ids are the most recently used; the id of index 8 was never used.
+    for index in 2..=7 {
+        t.on_authenticated(index);
+    }
+    t.on_authenticated(9);
+    assert!(t.is_local(8), "the id just below the highest seen was evicted");
+    assert!(t.is_local(10) && t.is_local(11));
 }

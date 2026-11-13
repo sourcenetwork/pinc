@@ -71,6 +71,8 @@ pub enum Event<'a> {
         mtu_probe: bool,
         /// Whether the packet was a repair packet.
         repair: bool,
+        /// The path the packet left on.
+        path: u8,
     },
     /// A packet already declared lost was acknowledged after all: cancel any retransmission still queued for it.
     LateAcked {

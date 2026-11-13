@@ -136,8 +136,12 @@ pub(crate) struct Path {
     pub(crate) rtt: u64,
     /// When a datagram last arrived on this path, 0 for never.
     pub(crate) last_rx: u64,
-    /// The peer's id this path sends with, and its index.
+    /// The peer's id this path sends with, its index, the number of the first packet that can carry it, and whether
+    /// the peer acknowledged a packet this path sent with it.
     pub(crate) dcid: Option<ConnId>,
+    pub(crate) dcid_index: u64,
+    pub(crate) dcid_pn: u64,
+    pub(crate) dcid_seen: bool,
     /// The local address of the path is gone (the host's interface moved): nothing can use it again.
     pub(crate) gone: bool,
 }
@@ -167,6 +171,9 @@ impl Path {
             rtt: 0,
             last_rx: 0,
             dcid: None,
+            dcid_index: 0,
+            dcid_pn: 0,
+            dcid_seen: false,
             gone: false,
         }
     }

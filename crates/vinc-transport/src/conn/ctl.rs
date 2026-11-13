@@ -64,6 +64,8 @@ pub(crate) struct Outcome {
     pub(crate) loss_acked: u32,
     /// Lost packets that count toward the loss average (every one but repair packets and path MTU probes).
     pub(crate) loss_lost: u32,
+    /// Per path slot, the highest packet number acknowledged on it.
+    pub(crate) acked_pn: [Option<u64>; crate::recovery::MAX_PATHS],
 }
 
 /// Pending control state and the table of frames in flight.
@@ -177,9 +179,13 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             size,
             repair,
             pn,
+            path,
             ..
         } => {
             out.acked_packets += 1;
+            if let Some(s) = out.acked_pn.get_mut(usize::from(path)) {
+                *s = (*s).max(Some(pn));
+            }
             if size > u32::from(super::config::MIN_MTU) {
                 out.big_acked = out.big_acked.max(Some(pn));
             }

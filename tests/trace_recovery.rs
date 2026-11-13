@@ -148,6 +148,7 @@ fn event_json(e: &Event<'_>, log: &mut Log, seen: &mut Seen) {
             frames,
             mtu_probe,
             repair,
+            ..
         } => {
             assert!(seen.acked.insert(*pn), "packet {pn} acknowledged twice");
             assert!(
