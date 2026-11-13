@@ -73,6 +73,26 @@ fn a_dialing_side_resends_at_500_ms_doubling_to_16_s_and_gives_up_at_30_s() {
 }
 
 #[test]
+fn the_connect_limit_is_exceeded_not_reached() {
+    big_stack(|| {
+        // A handshake that began at `t0` ends at the first instant after t0 + 30 s (60 s on a thin node), not at it.
+        for (thin, limit) in [(false, 30 * SEC), (true, 60 * SEC)] {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            w.cfg.thin = thin;
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let mut link = Link::new(54, Params::new(10 * MS));
+            link.route(PathId(1)).up = false;
+            let mut net = setup(&mut w, &mut sa, &mut sb, link);
+            let t0 = net.now;
+            net.run(t0 + limit, |_| false);
+            assert!(net.a.closed().is_none(), "thin {thin}: closed at the limit itself");
+            net.run(t0 + limit + 1, |_| false);
+            assert_eq!(net.a.closed(), Some(CloseReason::HandshakeTimeout), "thin {thin}");
+        }
+    });
+}
+
+#[test]
 fn a_thin_node_caps_the_back_off_and_waits_60_s() {
     big_stack(|| {
         // The cap is max(8 s, 2 x the node's largest round trip): 8 s here, so the resends are 0.5, 1.5, 3.5, 7.5,

@@ -424,7 +424,9 @@ fn gso_batches_same_size_datagrams() {
 fn the_handshake_timer_backs_off_and_caps() {
     big_stack(|| {
         // A client that hears nothing: retransmits at max(500 ms, 2 x RTT), doubling up to max(16 s, 4 x RTT), 8 s when thin.
-        for (thin, remembered, expect) in [(false, None, 6u64), (true, None, 8), (false, Some(SEC), 4)] {
+        // With a remembered round trip of 1 s a resend falls due at 30 s exactly, where the connect limit is reached
+        // and not yet exceeded, so it still leaves.
+        for (thin, remembered, expect) in [(false, None, 6u64), (true, None, 8), (false, Some(SEC), 5)] {
             let mut w = World::new(IdentityAlg::Ed25519);
             w.cfg.thin = thin;
             w.cfg.remembered_rtt = remembered;

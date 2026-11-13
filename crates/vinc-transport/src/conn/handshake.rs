@@ -24,7 +24,8 @@
 //!   (n the sends so far, at most 3) up to 2 s, until the first 1-RTT packet arrives. On a thin node each wait after
 //!   the first is at least `min(20 s, 2 x max(srtt, node RTTs))`. The Finish and each resend go on the path the reply
 //!   came on, not on the other paths the first flight was copied to.
-//! - A handshake that is not established 30 s after it began (60 s on a thin node) ends; the connection then closes.
+//! - A handshake still not established more than 30 s after it began (60 s on a thin node) ends; the connection then
+//!   closes.
 //!   The limit follows the node's round trips as they change, so a dial begun before the node measured itself slow
 //!   keeps 60 s.
 //! - A dial the layer above told to end early (one it reported before its handshake) also ends when the resend timer
@@ -147,6 +148,11 @@ impl Timing {
         } else {
             CONNECT_TIMEOUT
         }
+    }
+
+    /// The first instant at which a handshake begun at `created` has run out: the limit is exceeded, not reached.
+    fn connect_deadline(&self, created: u64) -> u64 {
+        created.saturating_add(self.connect_timeout()).saturating_add(1)
     }
 }
 
@@ -335,6 +341,7 @@ pub(crate) struct Handshake {
     held: bool,
     sends: u32,
     srtt: u64,
+    /// The first instant at which the unestablished handshake has run out (see [`Timing::connect_deadline`]).
     connect_at: Option<u64>,
     timed_out: bool,
     /// End once [`EARLY_FLIGHTS`] first flights went unanswered.
@@ -394,7 +401,7 @@ impl Handshake {
             held: false,
             sends,
             srtt: 0,
-            connect_at: Some(now.saturating_add(timing.connect_timeout())),
+            connect_at: Some(timing.connect_deadline(now)),
             timed_out: false,
             early: false,
             unheard: 0,
@@ -544,7 +551,7 @@ impl Handshake {
     pub(crate) fn set_node_timing(&mut self, thin: bool, node_rtt: Option<u64>, node_peak_rtt: Option<u64>) {
         self.timing.set_node(thin, node_rtt, node_peak_rtt);
         if self.connect_at.is_some() {
-            self.connect_at = Some(self.created.saturating_add(self.timing.connect_timeout()));
+            self.connect_at = Some(self.timing.connect_deadline(self.created));
         }
     }
 
