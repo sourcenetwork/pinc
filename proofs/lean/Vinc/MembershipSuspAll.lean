@@ -5,7 +5,7 @@ import Vinc.MembershipQuiet
 /-!
 # `SuspOk` through every call (property 3, hub side)
 
-Only a few functions write the suspicion table (`MembershipTickSusp.lean`): `new_susp`, `carrier_watch`, `hub_down`,
+Only a few functions write the suspicion table (`MembershipTickSusp.lean`): `N.newSusp` (the model's cut of `carrier_watch`), `carrier_watch`, `hub_down`,
 `hub_tick`, `revoke`. Every other function of the machine leaves it as it is; this file proves that
 (`*_susp` theorems: `(f ...).susp = n.susp`) and then that each public call keeps `SuspOk`. With `start` (empty table)
 this makes `SuspOk` an invariant of every reachable state (`Reach.suspOk`), and `carrierWatch_keeps_unless_reach`

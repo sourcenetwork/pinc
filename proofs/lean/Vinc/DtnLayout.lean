@@ -7,7 +7,7 @@ import Vinc.Axioms
 operations, and every other accessor is plain arithmetic in the code, so the theorems below show that once `new`
 succeeded no accessor can overflow (`all_fit`), that each equals its exact definition (`data_spec`, `blocks_spec`,
 `blockK_spec`, `total_spec`), that the padding is below one slice (`padding_lt`), that `locate` is a bijection between
-symbol numbers below `totalSymbols` and positions (`locate_iff`, `locate_block_start`), that `dataSymbol` is the inverse
+symbol numbers below `totalSyms` and positions (`locate_iff`, `locate_block_start`), that `dataSymbol` is the inverse
 position of the data slices (`dataSymbol_locate`), and that `byteRange` refuses exactly a reversed range and a range
 past the last symbol (`byteRange_spec`). The numbers are unbounded naturals, so the statements hold for every
 parameter, not a checked domain. `chunk = 1024` is `vinc_dag::tree::CHUNK_LEN`.

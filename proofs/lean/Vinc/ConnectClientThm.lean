@@ -9,15 +9,15 @@ For every instant, every view and every state:
   (`due_future`), punches only when due (`punch_when_due`), stops for a good direct path (`punch_good_stops`), and an
   idle session only waits another interval (`idle_waits`);
 * tunnel: `decide` is `Carrier` without a tunnel and `Tunnel` without a carrier (`decide_no_tunnel`,
-  `decide_carrier_closed`), stale carriers get both (`decide_stale`); `seen_length` (the tables keep their size),
-  `seen_age` (a splice just seen has age 0);
-* dial: the selection is a sublist of the candidates (`select_sublist`), at most `cap` and at most one on a thin try
-  (`select_cap`, `select_thin`); `add_size` (the pending table keeps its size), `take_clears`;
+  `decide_carrier_closed`), stale carriers get both (`decide_stale`); `seen_length` (the tables keep their size; that a splice just seen has age 0 is not proved in Lean yet);
+* dial: the selection is a sublist of the candidates (`select_sublist`), at most `cap` (`select_cap`; at most one on a thin try
+  is not proved in Lean yet); `add_size` (the pending table keeps its size; that `take` clears the entry of the peer is
+  not proved in Lean yet);
 * lookup: `ask_size` (the table keeps its size), `answered_removes`, `deadline_due`, and
   `verify_found`: an answer is accepted only if the record parses, its signature verifies and it names the peer asked
   about;
-* netcheck: `classify_blocked`, `answered_home` (the home moves only to a relay with a strictly lower round trip or
-  away from an unhealthy one), `failover_healthy`, `missing_fallback`.
+* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; that an answer moves the home only to a relay with a
+  strictly lower round trip, or away from an unhealthy one, is not proved in Lean yet.
 -/
 
 namespace Vinc.ConnectClient

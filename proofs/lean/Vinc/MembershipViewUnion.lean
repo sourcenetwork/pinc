@@ -10,8 +10,10 @@ import Vinc.MembershipViewCand
   them omitted, never removes one**;
 * `recomputeOne_removal_requires`: a member leaves the view only if no eligible copy lists it, the source does not hold
   removals, and no quiet window defers it;
-* `removeFromView_why`: the removal is reported as a leave exactly when a hub reported a leave, never as a failure
-  (property 7), as a lease expiry only when a full lease of omission passed, otherwise as reported by a hub.
+* `removeFromView_event_left`, `removeFromView_event_down` (and `rfvDo_events_left`, `rfvDo_events_down`): the removal
+  raises the event `left` exactly when a hub reported a leave and the event `down` otherwise, never a failure for a
+  leave (property 7), or is counted as a lost event when the queue is full; that the trace names a lease expiry only
+  when a full lease of omission passed is not proved in Lean yet.
 -/
 
 set_option linter.unusedVariables false

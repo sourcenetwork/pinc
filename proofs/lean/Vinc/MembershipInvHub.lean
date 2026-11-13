@@ -5,7 +5,7 @@ import Vinc.MembershipModelHub
 # Property 9, part 4: the hub roster steps keep `Inv`
 
 `send_snapshot`, `send_floor`, `on_hello`, `hub_down`, `on_down`, `carrier_return`, `schedule_confirm`, `confirm`,
-`new_susp`, `carrier_watch`, `carrier_gone` and `hub_tick`: every insert into `roster`, `attached`, `homed`, `downed`,
+`N.newSusp` (the model's cut of `carrier_watch`), `carrier_watch`, `carrier_gone` and `hub_tick`: every insert into `roster`, `attached`, `homed`, `downed`,
 `susp` is behind the guard the code tests (`MAX_TABLE`), so a full table refuses instead of growing.
 -/
 

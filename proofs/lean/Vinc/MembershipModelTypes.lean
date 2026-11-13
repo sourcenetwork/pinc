@@ -19,7 +19,7 @@ Conventions:
 * A node id is a `Nat` (the code compares ids by equality and order only).
 * A `u64` is a `Nat`. `saturating_add` is `satAdd`, `saturating_sub` is natural subtraction, plain `+` and `*` are
   `Nat` operations: the model is exact below `2^64`, which every instant of a host's monotonic clock is for 584
-  years. Hypothesis name in the theorems: `TimeBounded`.
+  years.
 * The incarnation and the address tag are those of `Vinc.MemInc`. The host's store (`Local`) is part of the call's
   environment and is read from it at the start of each call.
 * The proofs treat a call as `N → N`: every effect on the host (frames sent, broadcast layer calls, closes, the store)

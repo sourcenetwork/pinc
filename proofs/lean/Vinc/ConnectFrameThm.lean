@@ -9,7 +9,8 @@ import Vinc.ConnectBatch
 * `encode_ok`, `encode_short`: with room the encoder writes `f.bytes`, without it reports the shortfall of the first
   write that does not fit (`WireError::BufferTooSmall`).
 * The exact refusal for each class of malformed input (`decode_empty`, `decode_unknown`, `decode_trailing`,
-  `decode_packet_empty`, `decode_alias`, `decode_status`, `decode_batch_count`).
+  `decode_tail_refused` (an empty or too long packet, record or notice) and `decode_send_no_packet`, `decode_alias`,
+  `decode_status`, `decode_batch_count`).
 -/
 
 namespace Vinc.ConnCodec

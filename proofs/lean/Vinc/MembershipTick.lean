@@ -8,10 +8,10 @@ import Vinc.MembershipViewFrame
 body of the first loop as small named pieces (`htPulse`, `htExpire`, `htStep`; the restatement is proved equal to the
 model by `rfl`, `hubTick_eq`) and proves what each step does to the roster:
 
-* `rm_htStep`: the step at key `m` changes only the entry of `m`, and only raises its renewal time or removes it
+* `htStep_rm`: the step at key `m` changes only the entry of `m`, and only raises its renewal time or removes it
   (`RM`); `carrierWatch_rm`, `hubDown_roster`, `confirm_rm` are the same fact for the helpers it calls.
 * `htStep_expired`: an entry whose lease (after the refresh from transport evidence) is older than `LEASE` is removed,
-  its `Down` delta is pushed (`htStep_expired_eq`) and its subscriptions are released.
+  its `Down` delta is pushed (`htStep_expired`) and its subscriptions are released.
 * `htStep_fresh`: an entry the step keeps has been renewed within `LEASE`.
 -/
 

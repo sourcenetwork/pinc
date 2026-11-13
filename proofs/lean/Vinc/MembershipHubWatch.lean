@@ -11,7 +11,7 @@ Property 3 (a, b and the independent-path rule at the hub).
   the drop, or whose suspension was announced, is never confirmed: the roster keeps its members and nothing is sent.
 * `cw_lone_new`, `cw_lone_old`: with no direct path and no other live hub, nothing is confirmed (the hub waits for the
   lease).
-* `carrierWatch_removes_only_if`: the roster loses a member in `carrier_watch` only if the carrier is gone since
+* `carrierWatch_keeps_unless` (with `ConfirmCond`): the roster keeps a member in `carrier_watch` unless the carrier is gone since
   `since`, the lease was not renewed since, nothing was heard since, no suspension notice excuses the drop, a
   suspicion for this very drop exists whose second probe went on a path other than the session (direct or a relay
   through another hub), and the deadline (drop + CONFIRM, each probe + its wait) has passed.

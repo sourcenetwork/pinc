@@ -6,7 +6,8 @@ import Vinc.MembershipHubLease
 * `carrierReturn_restores` (property 5): the lease comes back, renewed now; the subscriptions are restored (`restore`);
   the member is told about itself (a DELTA to the member, in the sent list, traced `restored = true`).
 * `carrierReturn_nothing_held`: nothing held, nothing restored: only a `restored = false` record.
-* `carrierReturn_roster_unbounded` (property 9): the roster insert of `carrier_return` has no bound check.
+* `carrierReturn_roster_len`, `carrierReturn_full`, `carrierReturn_roster_le` (property 9): the roster insert of
+  `carrier_return` checks the bound; with a full roster the member is only released and a `restored = false` record is traced.
 * `sessionDown_leave` (property 7): the leave code on a member's session on a hub is `hub_down` with cause `left`.
 * `revoke_effects` (property 6): revocation removes the member from the roster, the held, suspicion, attached and homed
   tables and the hub copies in the call itself, records it, releases its subscriptions, closes its sessions;

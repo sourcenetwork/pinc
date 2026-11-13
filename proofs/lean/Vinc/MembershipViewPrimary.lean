@@ -3,7 +3,7 @@ import Vinc.MembershipViewSnap
 /-!
 # Membership view: the primary hub with its hysteresis, and PULSE suppression (property 10)
 
-* `reselect_changes_only_if`: the primary of a member changes to a different hub only when there was none, the old one
+* `reselect_switch_requires`: the primary of a member changes to a different hub only when there was none, the old one
   is not alive, or the new one beats it by `HYST_ABS` (20 ms) and a quarter: `rn + 20 ms < rc * 3 / 4` (all saturating
   as in the code). A hub is its own primary and never changes.
 * `rnStep_suppress`: a periodic HELLO to a hub is skipped (and `helloSuppressed` traced) exactly when the periodic

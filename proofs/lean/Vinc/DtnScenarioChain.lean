@@ -19,8 +19,9 @@ particular some node keeps it. The proof is the invariant `ChInv`:
 * a custody item leaves a ledger only by delivery, release, relief or expiry (`custody_stays`), and each of the first
   two and the last ends the bundle.
 
-Without the ranking the statement is false: a stale ack of a first handover and the ack of a handover back relieve
-both nodes of a cycle (`DtnScenarioCycle.cycle_loses_custody`, and `DtnScenario_cycle.cfg` in TLA+).
+Without the ranking the proof does not go through: before an ack carried an offer id, a stale ack of a first handover
+and the ack of a handover back relieved both nodes of a cycle. That run now keeps custody at node 1
+(`DtnScenarioCycle.cycle_keeps_custody`, and `DtnScenario_cycle.cfg` in TLA+).
 -/
 
 namespace Vinc.DtnScenario

@@ -24,7 +24,7 @@ Differences from the TLA text, each exact for what is stated:
   order is the empty-order no-op; the TLA run stops there with an error, and the theorems assume `0 < seenCap`,
   which is what keeps that case away.
 * The TLA assertion in `SPush` ("the map refused an id the set had room for") is not repeated: it cannot
-  fire, because every map entry is an order entry (`NodeInv.seenMap` in `BroadcastNodeThm`).
+  fire, because every map entry is an order entry (`SeenInv.map` in `BroadcastNodeLemmas1`).
 * The environment is unbounded: `MaxNow` and `MaxLife` (bounds for the model checker) are dropped, `Stamps`,
   `Sizes`, `Paths` are all values.
 -/

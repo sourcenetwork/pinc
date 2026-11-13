@@ -5,7 +5,7 @@ import Vinc.MembershipCodecNum
 
 For every valid frame `f`, `parse (encBody f) = f`, `read (enc f ++ rest) = (f, 4 + len)`, and the encoded size is
 `bodyLen f`. The proof goes through one lemma per frame type (`hello_rt`, `delta_rt`, `snap_rt`, `down_rt`,
-`other_rt`) and the entry lemmas they share.
+`dispatch_other`) and the entry lemmas they share.
 -/
 
 namespace Vinc.MemCodec

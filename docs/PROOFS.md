@@ -428,7 +428,8 @@ These items are still open; they are listed so nothing is hidden:
 - `vinc-membership`: still open: the hub-side timer schedule and the DOWN delivery bound as theorems (the 145 s awareness
   chain still takes them as hypotheses), the whole-run churn and heal theorems, the full-roster branch in the traces
   (a roster of `MAX_TABLE` entries needs about 8 million snapshot entries in the trace, and the model's ordered loops are
-  quadratic in the table), and the revocation invariant for the whole machine (proved per call for `recompute_one`,
+  quadratic in the table), that the trace of a view removal names a lease expiry only when a full lease of omission
+  passed (the event raised, `left` or `down`, is proved), and the revocation invariant for the whole machine (proved per call for `recompute_one`,
   `apply_delta` and the helpers; the walk of the larger calls does not finish in the proof tactic yet).
 - `vinc-values`: the five corrections found by the proofs are made and proven (HEAD_HOLD tail, one announcement per granule,
   stall timer started at the first verified granule (it was armed by the first request, then changed in 3ec9fb3), a wrong out-of-band proof frame evicts its provider, supersession after the
@@ -443,6 +444,11 @@ These items are still open; they are listed so nothing is hidden:
   local duty cycle and radio, the sleep tether in `conn.rs`, `drive.rs`, `carriers.rs` and `signing.rs`, the scenario
   models (relay path, direct path after punching, fallback after a block, sleep and wake), and liveness under stated
   fairness (the link and client rules have bounded-response checks only). The pending, lookup and netcheck tables
-  are model checked and traced, with Lean theorems for their sizes and single decisions only.
+  are model checked and traced, with Lean theorems for their sizes and single decisions only. Of the client rules,
+  four statements are not proved in Lean yet: that a splice just seen has age 0, that a thin dial try sends on at most
+  one candidate, that taking a peer from the pending table clears its entry, and that a netcheck answer moves the home
+  only to a relay with a strictly lower round trip or away from an unhealthy one.
+- `vinc-dtn`: the forwarder's order within one poll is proved for the release (a retransmission or a handover means no
+  bundle was done); not proved in Lean yet is that a handover means the retransmission scan found nothing to send.
 - The endpoint's cap on half-open sessions and their lifetime (`vinc-core`) is not modelled or proved yet.
 - The facade `vinc` is built; its proofs follow.

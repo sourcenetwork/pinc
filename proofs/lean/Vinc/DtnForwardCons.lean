@@ -7,7 +7,7 @@ The copies of a bundle at one node are `held` (the copies in its bundle slots) p
 peers in its transfers, acknowledged or not, never taken back). `total` is their sum. This file proves, for every
 state and every capacity, how each operation changes `total` of each bundle:
 
-* `advance_total`, `retr_total`, `step_total_other`: advancing the clock, the retransmission scan, a refused input,
+* `advance_total`, `retr_total`, `step_other_total`: advancing the clock, the retransmission scan, a refused input,
   a link change, an acknowledgement do not change any total.
 * `spray_total`: a handover moves `copies / 2` from held to handed (and a delivery moves none): the total of every
   bundle is unchanged, so binary spray neither creates nor loses a copy.

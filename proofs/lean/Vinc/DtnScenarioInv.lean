@@ -9,7 +9,7 @@ Two invariants of the forwarder of every node of every reachable system, beyond 
   scenario, with its expiry);
 * the clock of the forwarder is not ahead of the clock of the system.
 
-`inv_bok_step` and `inv_bok_poll` carry the first through `step` and `poll`; `Fwd` collects what the system proofs
+`bok_step` and `bok_poll` carry the first through `step` and `poll`; `Fwd` collects what the system proofs
 need: `Uniq` (no bundle slot twice), `BOk` and the clock.
 -/
 
