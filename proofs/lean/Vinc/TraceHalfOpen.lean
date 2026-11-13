@@ -1,0 +1,142 @@
+import Vinc.Json
+import Vinc.CoreHalfOpen
+
+/-!
+# Replay of the half-open cap traces
+
+The Lean half of the trace validation of the endpoint's half-open cap and the lifetime of an unauthenticated session
+(`vinc-core` `rx.rs`, `events.rs`, `endpoint.rs`, `timers.rs`), the port of `proofs/tla/TraceHalfOpen.tla`. It reads
+the `coho` events written by the Rust test `trace_halfopen` and replays every call: each decision the endpoint
+recorded (an admission with the count and the ticket's verdict it used, a session made, established, expired or
+freed) must be the one `Vinc.CoreHalfOpen` makes, in that order, and the slots and the count the model computes must
+be the recorded ones; the deadlines a session's connection asks for are the endpoint's own. After every call the count
+is at most the cap and the number of counted sessions, every slot is good (`good`), `poll_timeout` is the earliest
+deadline (none while stalled), a timer call the queue did not stop left no session at or past its end, and a first
+flight that made no session changed no slot. The file `halfopen_ns.ndjson`, with times in nanoseconds, is replayed
+here only.
+-/
+
+namespace Vinc.TraceHalfOpen
+open Vinc.Json Vinc.CoreHalfOpen
+
+def isTag (t : String) : Bool := t == "coho"
+
+structure W where
+  e : E := {}
+  p : P := { max := 0, life := 0, full := 0, short := 0 }
+
+/-- A recorded slot: `[slot, in use, created, unauthenticated, counted, has a deadline, the deadline]`. -/
+def slotOf (r : List Nat) : Except String (Nat × Option Sl) :=
+  match r with
+  | [j, use, created, unauth, counted, hasDl, dl] =>
+    if use == 0 then pure (j, none)
+    else pure (j, some { created, unauth := unauth == 1, counted := counted == 1,
+                         dl := if hasDl == 1 then some dl else none })
+  | _ => throw "a slot has not seven numbers"
+
+def listOf (j : J) (k : String) : Except String (List J) := do
+  match (← field j k).arr? with
+  | some a => pure a.toList
+  | none => throw s!"expected the list {k}"
+
+def bare : Option Sl → Option Sl
+  | some s => some { s with dl := none }
+  | none => none
+
+/-- `good` as a test. -/
+def goodB (p : P) : Option Sl → Bool
+  | some s => (!s.counted || s.unauth) && (!s.unauth || s.dl.any (· ≤ s.created + p.life))
+  | none => true
+
+structure St where
+  e : E
+  adm : Option (Bool × Bool)
+
+/-- One decision of a call: `[0, admitted, count, resume]` an admission, `[1, slot, dial, 0]` a session made,
+`[2, slot, 0, 0]` established, `[3, slot, 0, 0]` expired (the next decision frees it), `[4, slot, 0, 0]` freed. -/
+def stepOf (p : P) (op : String) (now kind len : Nat) (st : St) (s : List Nat) (next : Option (List Nat)) :
+    Except String St := do
+  match s with
+  | [0, a, c, r] =>
+    check (op == "dgram") "an admission outside a datagram"
+    check (isFirst kind) "an admission of a type that starts nothing"
+    check (c == st.e.count) s!"the admission used the count {c}, the model holds {st.e.count}"
+    check (r == 0 || kind == 6) "a resumption that is no Hello"
+    check ((a == 1) == admits p st.e.count kind len (r == 1)) "the admission differs from the rule"
+    pure { st with adm := some (a == 1, r == 1) }
+  | [1, j, 1, _] =>
+    check (j < st.e.slots.length && at? st.e.slots j == none) "a dial took a slot in use"
+    pure { st with e := dial st.e j now }
+  | [1, j, _, _] =>
+    check (j < st.e.slots.length && at? st.e.slots j == none) "a session took a slot in use"
+    match st.adm with
+    | some (true, r) => pure { e := make st.e j now r, adm := none }
+    | _ => throw "a session made without an admission"
+  | [2, j, _, _] =>
+    check (at? st.e.slots j).isSome "a free slot was established"
+    pure { st with e := establish st.e j }
+  | [3, j, _, _] =>
+    check (op == "timer") "an expiry outside a timer call"
+    check (expired p now (at? st.e.slots j)) "a session expired before its end"
+    check (next == some [4, j, 0, 0]) "an expired session was not freed"
+    pure st
+  | [4, j, _, _] => pure { st with e := release st.e j }
+  | _ => throw s!"unknown decision {s}"
+
+def foldSteps (p : P) (op : String) (now kind len : Nat) : St → List (List Nat) → Except String St
+  | st, [] => pure st
+  | st, s :: rest => do
+    let st' ← stepOf p op now kind len st s rest.head?
+    foldSteps p op now kind len st' rest
+
+def replayEvent (j : J) (w : W) : Except String W := do
+  match ← strF j "op" with
+  | "init" =>
+    let k ← natF j "k"
+    pure { e := init k, p := { max := ← natF j "max", life := ← natF j "life", full := ← natF j "full",
+                               short := ← natF j "short" } }
+  | op =>
+    check (op == "dgram" || op == "timer" || op == "other") s!"unknown half-open op {op}"
+    let p := w.p
+    let now ← natF j "now"
+    let kind ← natF j "kind"
+    let len ← natF j "len"
+    let n ← natF j "n"
+    let stalled0 := (← natF j "stalled0") == 1
+    let stalled := (← natF j "stalled") == 1
+    let count ← natF j "count"
+    let dropped ← natF j "dropped"
+    let stalledIn ← natF j "stalledIn"
+    let steps ← (← listOf j "steps").mapM natList
+    let diff ← (← (← listOf j "diff").mapM natList).mapM slotOf
+    let timeout : Option Nat := match ← natList (← field j "timeout") with
+      | [t] => some t
+      | _ => none
+    let st ← foldSteps p op now kind len { e := w.e, adm := none } steps
+    -- the slots and the count the model computes are the endpoint's; the deadlines are the endpoint's own
+    let sl := diff.foldl (fun acc (x : Nat × Option Sl) => put acc x.1 x.2) w.e.slots
+    check (sl.map bare == st.e.slots.map bare)
+      s!"the slots differ: the model computes {repr (st.e.slots.map bare)}, the code recorded {repr (sl.map bare)}"
+    check (st.e.count == count) s!"the count differs: the model computes {st.e.count}, the code recorded {count}"
+    let e' : E := { slots := sl, count }
+    -- the count is at most the cap and the number of counted sessions; every slot is good
+    check (count ≤ p.max && count == countOf sl) "the count passed the cap or differs from the counted sessions"
+    check (sl.all (goodB p)) "a counted session is authenticated, or an unauthenticated one's deadline is past its end"
+    -- poll_timeout is the earliest deadline, none while stalled
+    check (timeout == poll sl stalled) s!"poll_timeout {timeout} is not the earliest deadline {poll sl stalled}"
+    -- a timer call the queue did not stop leaves no session at or past its end; a stalled one runs nothing
+    check (op != "timer" || stalled || sl.all (fun o => !expired p now o)) "a session outlived its end"
+    check (op != "timer" || !stalled0 || (steps.isEmpty && diff.isEmpty)) "a timer ran while the queue was stalled"
+    -- a datagram for an id no session holds
+    if op == "dgram" && n == 0 then
+      let made := steps.any (fun s => s.head? == some 1)
+      let decided := steps.head?.bind List.head? == some 0
+      check (!stalled0 || (steps.isEmpty && stalledIn == 1 && dropped == 0)) "a stalled endpoint decided"
+      check (stalled0 || isFirst kind || (steps.isEmpty && (kind == 0 || dropped == 1)))
+        "a type that starts no session decided"
+      check (stalled0 || !isFirst kind || decided) "a first message type was not decided"
+      check (made || diff.isEmpty) "a first flight that made no session changed a slot"
+      check (!decided || made || dropped == 1) "a refused first flight was not counted as dropped"
+    pure { w with e := e' }
+
+end Vinc.TraceHalfOpen

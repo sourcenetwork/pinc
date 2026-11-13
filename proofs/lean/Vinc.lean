@@ -88,6 +88,9 @@ import Vinc.TraceFrame
 import Vinc.CoreOrphan
 import Vinc.CoreOrphanThm
 import Vinc.TraceOrphan
+import Vinc.CoreHalfOpen
+import Vinc.CoreHalfOpenThm
+import Vinc.TraceHalfOpen
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery

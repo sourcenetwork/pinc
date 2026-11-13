@@ -339,6 +339,42 @@ ep_impl! {
     }
 }
 
+/// What the half-open bookkeeping holds for one slot in use, for trace validation (cargo feature `trace`).
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HalfOpenSlot {
+    /// When the session was created.
+    pub created: u64,
+    /// The peer is not authenticated yet, so the session ends [`HALF_OPEN_LIFE`] after `created`.
+    pub unauth: bool,
+    /// The session counts against [`MAX_HALF_OPEN`].
+    pub counted: bool,
+    /// The deadline the session holds in the endpoint's heap.
+    pub deadline: Option<u64>,
+}
+
+#[cfg(feature = "trace")]
+ep_impl! {
+    /// The half-open bookkeeping of slot `i`, `None` for a slot not in use (cargo feature `trace`).
+    #[must_use]
+    pub fn half_open_slot(&self, i: usize) -> Option<HalfOpenSlot> {
+        let s = self.slots.get(i).filter(|s| s.m.in_use)?;
+        Some(HalfOpenSlot {
+            created: s.m.created,
+            unauth: s.m.unauth,
+            counted: s.m.half_open,
+            deadline: self.heap.deadline(i),
+        })
+    }
+
+    /// Whether the host left so many events unread that the endpoint starts no session and runs no timer (cargo
+    /// feature `trace`).
+    #[must_use]
+    pub const fn events_stalled(&self) -> bool {
+        self.events.stalled()
+    }
+}
+
 /// A number standing for an address in a trace line.
 #[cfg(feature = "trace")]
 pub(crate) fn addr_key(a: &SocketAddr) -> u64 {

@@ -18,6 +18,7 @@ import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceOrphan
+import Vinc.TraceHalfOpen
 import Vinc.TraceMtu
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
@@ -178,6 +179,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ccw : TraceCc.W := {}
   let mut rsw : TraceReasm.W := {}
   let mut orw : TraceOrphan.W := {}
+  let mut how : TraceHalfOpen.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
@@ -485,6 +487,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceOrphan.replayEvent j orw with
           | .ok w' =>
             orw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceHalfOpen.isTag t then
+          -- Half-open cap events (`coho`, written by `trace_halfopen`): admissions, the count and the lifetime.
+          match TraceHalfOpen.replayEvent j how with
+          | .ok w' =>
+            how := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
