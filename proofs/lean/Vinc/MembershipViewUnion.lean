@@ -60,7 +60,7 @@ theorem removeFromView_members_eq (e : Env) (n : N) (now m : Nat) (cur : Option 
   split
   · rfl
   · by_cases hh : src.hold = true
-    · simp [hh]
+    · simp [hh]; split <;> rfl
     · have h2 : now < n.quietUntil ∧ n.recheck.len < MAX_TABLE := by
         rcases h with h | h
         · exact absurd h hh

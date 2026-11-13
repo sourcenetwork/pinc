@@ -51,7 +51,7 @@ theorem removeFromView_mem_sub (e : Env) (n : N) (now m : Nat) (cur : Option Vie
   split at h
   · exact h
   · split at h
-    · exact h
+    · split at h <;> exact h
     · split at h
       · simpa using h
       · by_cases hh : n.isHub = true <;> by_cases hg : (n.goneVer.len < MAX_TABLE ∨ n.goneVer.has m = true) <;>

@@ -12,7 +12,9 @@ member queued in the `recheck` set. The first block of `tick` then drives the sc
   yet, re-opens the window for `RECHECK_GAP` (the members stay queued, the view is untouched).
 * `tickRecheck_early`: while that second window lasts, further ticks do nothing in this block.
 * `tickRecheck_second`: the first tick at or after the end of the second window runs `recheck_now` on the queue.
-* `recheckNow_clears`: with the window over, the queue ends empty (nothing is deferred again).
+* `removeFromView_holds`: a removal found while the source is held (no confirmed home view) queues the member, the view
+  untouched.
+* `recheckNow_clears`: with the window over and the source not held, the queue ends empty (nothing is deferred again).
 * `recheckNow_keeps_listed`: a member in the view that some eligible hub copy still lists is in the view after
   `recheck_now` (a member that is back is never reported); `recomputeOne_removes`: one that no copy lists, with the window
   over, is removed.
@@ -94,16 +96,24 @@ theorem quiet_schedule (e : Env) (n : N) (t1 t2 : Nat) (hne : n.recheck.isEmpty 
 /-! ## `recheck_now` -/
 
 theorem removeFromView_recheck (e : Env) (n : N) (now m : Nat) (cur : Option ViewEntry) (src : Source) (x : Bool)
-    (hq : ¬ now < n.quietUntil) : (N.removeFromView e n now m cur src x).1.recheck = n.recheck := by
+    (hq : ¬ now < n.quietUntil) (hh : src.hold = false) : (N.removeFromView e n now m cur src x).1.recheck = n.recheck := by
   unfold N.removeFromView
   split
   · rfl
   · split
-    · rfl
+    · rename_i h; rw [hh] at h; cases h
     · split
       · rename_i h; simp at h; omega
       · by_cases hh : n.isHub = true <;> by_cases hg : (n.goneVer.len < MAX_TABLE ∨ n.goneVer.has m = true) <;>
           by_cases hl : n.left.has m = true <;> by_cases hx : x = true <;> simp [hh, hg, hl, hx]
+
+/-- A removal found while the source is held (no confirmed home view) changes nothing in the view and queues the member for
+a second look, as a removal inside the quiet window does (commit 6355d7d): no hub copy lists the member to bring it back. -/
+theorem removeFromView_holds (e : Env) (n : N) (now m : Nat) (c : ViewEntry) (src : Source) (x : Bool)
+    (hh : src.hold = true) (hr : n.recheck.len < MAX_TABLE) :
+    N.removeFromView e n now m (some c) src x = ({ n with recheck := n.recheck.ins m }, false) := by
+  unfold N.removeFromView
+  simp [hh, hr]
 
 theorem rcKnown_recheck (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : (rcKnown e n m best c).1.recheck = n.recheck := by
   unfold rcKnown
@@ -128,12 +138,13 @@ theorem rcTail_recheck (n : N) (m : Nat) (absent changed : Bool) : (rcTail n m a
     · rfl
   · rfl
 
-theorem recomputeOne_recheck (e : Env) (n : N) (now m : Nat) (hq : ¬ now < n.quietUntil) :
+theorem recomputeOne_recheck (e : Env) (n : N) (now m : Nat) (hq : ¬ now < n.quietUntil)
+    (hh : (n.source now).hold = false) :
     (N.recomputeOne e n now m).1.recheck = n.recheck := by
   rw [recomputeOne_eq_v]
   dsimp only
   split
-  · exact removeFromView_recheck e n now m _ _ _ hq
+  · exact removeFromView_recheck e n now m _ _ _ hq hh
   · rename_i b0 a0 hb
     have hm : (if (n.isHub && (match n.members.get? m with | none => true | some c => decide (c.rc ≠ b0))) = true then
         N.homeDelta e n m b0 .alive else n).recheck = n.recheck := by
@@ -162,26 +173,6 @@ theorem recomputeOne_recheck (e : Env) (n : N) (now m : Nat) (hq : ¬ now < n.qu
 
 theorem bump_recheck (n : N) : n.bump.recheck = n.recheck := by unfold N.bump; simp
 
-/-- With the window over, `recheck_now` leaves the queue empty: no removal is deferred again. -/
-theorem recheckNow_clears (e : Env) (n : N) (now : Nat) (hq : ¬ now < n.quietUntil) : (N.recheckNow e n now).recheck = [] := by
-  unfold N.recheckNow
-  dsimp only
-  have key : ∀ (ks : List Nat) (a : N × Bool), a.1.recheck = [] → ¬ now < a.1.quietUntil →
-      (ks.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) a).1.recheck = [] := by
-    intro ks
-    induction ks with
-    | nil => intro a h _; exact h
-    | cons k r ih =>
-      intro a h1 h2
-      simp only [List.foldl_cons]
-      apply ih
-      · simp only []; rw [recomputeOne_recheck e a.1 now k h2]; exact h1
-      · simp only []; rw [(recomputeOne_keeps2 e a.1 now k).1.2.2.2.2.2.2.2.2.2.2.2]; exact h2
-  have := key n.recheck.keys ({ n with recheck := [] }, false) rfl hq
-  generalize (n.recheck.keys.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) ({ n with recheck := [] }, false)) = F at this ⊢
-  obtain ⟨f1, f2⟩ := F
-  by_cases h : f2 = true <;> simp [h, bump_recheck] at this ⊢ <;> exact this
-
 theorem Keeps.hubUp {n n' : N} (h : Keeps n n') (now x : Nat) : n'.hubUp now x = n.hubUp now x := by
   obtain ⟨-, -, -, hme, -, -, -, hup, hhe, -⟩ := h
   unfold N.hubUp; rw [hme, hup, hhe]
@@ -192,6 +183,29 @@ theorem Keeps.source {n n' : N} (h : Keeps n n') (now : Nat) : n'.source now = n
   unfold N.source
   rw [hpr, hhub, hho, hv]
   simp only [hu]
+
+/-- With the window over and a confirmed home view (the source is not held), `recheck_now` leaves the queue empty: no removal
+is deferred again. (While the source is held the removal is queued again: `removeFromView_holds`.) -/
+theorem recheckNow_clears (e : Env) (n : N) (now : Nat) (hq : ¬ now < n.quietUntil) (hh : (n.source now).hold = false) :
+    (N.recheckNow e n now).recheck = [] := by
+  unfold N.recheckNow
+  dsimp only
+  have key : ∀ (ks : List Nat) (a : N × Bool), a.1.recheck = [] → ¬ now < a.1.quietUntil → (a.1.source now).hold = false →
+      (ks.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) a).1.recheck = [] := by
+    intro ks
+    induction ks with
+    | nil => intro a h _ _; exact h
+    | cons k r ih =>
+      intro a h1 h2 h3
+      simp only [List.foldl_cons]
+      apply ih
+      · simp only []; rw [recomputeOne_recheck e a.1 now k h2 h3]; exact h1
+      · simp only []; rw [(recomputeOne_keeps2 e a.1 now k).1.2.2.2.2.2.2.2.2.2.2.2]; exact h2
+      · simp only []; rw [((recomputeOne_keeps2 e a.1 now k).1).source now]; exact h3
+  have := key n.recheck.keys ({ n with recheck := [] }, false) rfl hq hh
+  generalize (n.recheck.keys.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) ({ n with recheck := [] }, false)) = F at this ⊢
+  obtain ⟨f1, f2⟩ := F
+  by_cases h : f2 = true <;> simp [h, bump_recheck] at this ⊢ <;> exact this
 
 theorem Keeps.candidates {n n' : N} (h : Keeps n n') (now m : Nat) :
     n'.candidates now (n'.source now) m = n.candidates now (n.source now) m := by

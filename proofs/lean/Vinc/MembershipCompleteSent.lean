@@ -79,7 +79,9 @@ theorem removeFromView_ps (e : Env) (n : N) (now m : Nat) (cur : Option ViewEntr
   | none => unfold N.removeFromView; exact PS_refl n
   | some c =>
     by_cases hh : src.hold = true
-    · unfold N.removeFromView; simp [hh]; exact PS_refl n
+    · unfold N.removeFromView; simp [hh]; split
+      · exact PS_of_sent (by simp)
+      · exact PS_refl n
     · by_cases hq : now < n.quietUntil ∧ n.recheck.len < MAX_TABLE
       · unfold N.removeFromView; simp [hq.1, hq.2]; exact PS_of_sent (by simp)
       · rw [removeFromView_eq e n now m c src ex (by simpa using hh) hq]; exact rfvDo_ps ..

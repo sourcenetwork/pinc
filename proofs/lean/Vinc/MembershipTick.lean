@@ -119,26 +119,26 @@ theorem cwMain_rm (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
   | some sp0 =>
     simp only []
     by_cases hsi : sp0.since = since
-    · simp only [hsi, beq_self_eq_true, if_true]
+    · simp only [hsi, beq_self_eq_true, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
       cases hb : sp0.probeB with
       | none =>
-        simp only [hb, Option.isNone_none, if_true]
+        simp only [hb, Option.isNone_none, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         cases hr : n.independentRoute now m ev with
-        | none => simp only [hr, hb]; exact RM.refl _ _
+        | none => simp only [hr, hb, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]; exact key _ (announce_roster ..)
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only []
           by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
-          · simp only [hr, hdl, ite_true]
-            exact (key _ (by simp)).trans (confirm_rm ..)
-          · simp only [hr, hdl, ite_false]
-            exact key _ (by simp [scheduleConfirm_roster])
+          · simp only [hr, hdl, ite_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
+            exact (key _ (by simp [announce_roster])).trans (confirm_rm ..)
+          · simp only [hr, hdl, ite_false, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
+            exact key _ (by simp [scheduleConfirm_roster, announce_roster])
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
-        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false]
+        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
-        · rw [if_pos hdl]; exact confirm_rm ..
-        · rw [if_neg hdl]; exact key _ (by simp [scheduleConfirm_roster])
+        · rw [if_pos hdl]; exact (key _ (announce_roster ..)).trans (confirm_rm ..)
+        · rw [if_neg hdl]; exact key _ (by simp [scheduleConfirm_roster, announce_roster])
     · simp only [show (sp0.since == since) = false by simpa using hsi]
       exact key _ (newSusp_roster ..)
 

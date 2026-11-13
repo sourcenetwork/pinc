@@ -318,6 +318,7 @@ par run_tlc sys_complete MembershipSys MembershipSys_complete
 par run_tlc sys_complete33 MembershipSys MembershipSys_complete33
 par run_tlc sys_lease MembershipSys MembershipSys_lease
 par run_tlc sys_lostprobe MembershipSys MembershipSys_lostprobe
+par run_tlc sys_lostprobe_nosusp MembershipSys MembershipSys_lostprobe_nosusp
 par run_tlc sys_slow MembershipSys MembershipSys_slow
 par run_tlc sys_partition MembershipSys MembershipSys_partition
 par run_tlc sys_return MembershipSys MembershipSys_return
