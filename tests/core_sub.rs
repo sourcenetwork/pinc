@@ -157,7 +157,10 @@ fn a_parent_silent_for_over_twenty_seconds_does_not_carry_a_dial_and_a_heard_one
         assert!(net.run(net.now + 5 * SEC_NS, |n| {
             n.nodes[b].read.values().any(|v| v == b"old-parent")
         }));
-        assert!(!handshake_since(&net, marker), "a handshake datagram was sent for a sub-session");
+        assert!(
+            !handshake_since(&net, marker),
+            "a handshake datagram was sent for a sub-session"
+        );
     });
 }
 
@@ -187,20 +190,42 @@ fn a_carrier_ping_sent_does_not_count_as_hearing_the_parent_but_a_pong_does() {
         let (mut net, a, b) = silent_parent();
         let parent = net.nodes[a].ep.sessions().next().unwrap();
         let t = net.now;
-        net.nodes[a].cmd(t, Command::Pulse { session: parent, sent: true }).unwrap();
+        net.nodes[a]
+            .cmd(
+                t,
+                Command::Pulse {
+                    session: parent,
+                    sent: true,
+                },
+            )
+            .unwrap();
         let marker = net.captured.len();
         dial(&mut net, a, b, ALPN_B);
         net.run_for(SEC_NS);
-        assert!(handshake_since(&net, marker), "a ping that went out made the parent look heard");
+        assert!(
+            handshake_since(&net, marker),
+            "a ping that went out made the parent look heard"
+        );
         // The dial above started its own session; a pong that came back makes the parent heard again.
         let (mut net, a, b) = silent_parent();
         let parent = net.nodes[a].ep.sessions().next().unwrap();
         let t = net.now;
-        net.nodes[a].cmd(t, Command::Pulse { session: parent, sent: false }).unwrap();
+        net.nodes[a]
+            .cmd(
+                t,
+                Command::Pulse {
+                    session: parent,
+                    sent: false,
+                },
+            )
+            .unwrap();
         let marker = net.captured.len();
         dial(&mut net, a, b, ALPN_B);
         net.run_for(SEC_NS);
-        assert!(!handshake_since(&net, marker), "a pong that came back did not make the parent heard");
+        assert!(
+            !handshake_since(&net, marker),
+            "a pong that came back did not make the parent heard"
+        );
     });
 }
 
@@ -390,8 +415,14 @@ fn a_dial_within_twenty_seconds_of_hearing_a_peer_that_restarted_rides_the_dead_
         let (_, rep) = dial(&mut net, a, b, ALPN_B);
         assert!(rep.events.any(is_connected));
         net.run_for(SEC_NS);
-        assert!(!handshake_since(&net, marker), "a handshake started while the parent was recent");
-        assert!(!net.nodes[b].saw(|e| matches!(e, Event::Incoming { .. })), "the restarted peer heard the dial");
+        assert!(
+            !handshake_since(&net, marker),
+            "a handshake started while the parent was recent"
+        );
+        assert!(
+            !net.nodes[b].saw(|e| matches!(e, Event::Incoming { .. })),
+            "the restarted peer heard the dial"
+        );
     });
 }
 
@@ -404,9 +435,14 @@ fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_han
         let marker = net.captured.len();
         let (child, _) = dial(&mut net, a, b, ALPN_B);
         net.run_for(SEC_NS);
-        assert!(handshake_since(&net, marker), "no handshake started for a silent parent");
+        assert!(
+            handshake_since(&net, marker),
+            "no handshake started for a silent parent"
+        );
         write_new(&mut net, a, child, b"restarted");
-        assert!(net.run(net.now + 5 * SEC_NS, |n| n.nodes[b].read.values().any(|v| v == b"restarted")));
+        assert!(net.run(net.now + 5 * SEC_NS, |n| {
+            n.nodes[b].read.values().any(|v| v == b"restarted")
+        }));
     });
 }
 
@@ -418,7 +454,8 @@ fn incoming_not_allowed() -> (CoreNet, usize, usize) {
     net.nodes[a].acp = Acp::Manual;
     let (peer, to, now) = (net.nodes[a].node, net.nodes[a].addr, net.now);
     net.nodes[b].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
-    assert!(net.run(now + 5 * SEC_NS, |n| !n.nodes[a].checks.is_empty() && n.nodes[b].saw(is_connected)));
+    assert!(net.run(now + 5 * SEC_NS, |n| !n.nodes[a].checks.is_empty()
+        && n.nodes[b].saw(is_connected)));
     net.run_for(SEC_NS);
     (net, a, b)
 }
@@ -433,12 +470,15 @@ fn a_dial_waits_on_a_session_the_peer_opened_that_is_not_allowed_yet() {
         write_new(&mut net, a, child, b"waited");
         net.run_for(SEC_NS);
         assert!(!handshake_since(&net, marker), "the dial made its own handshake");
-        let incoming_b = |n: &CoreNet| n.nodes[b].saw(|e| matches!(e, Event::Incoming { alpn, .. } if alpn.as_bytes() == ALPN_B));
+        let incoming_b =
+            |n: &CoreNet| n.nodes[b].saw(|e| matches!(e, Event::Incoming { alpn, .. } if alpn.as_bytes() == ALPN_B));
         assert!(!incoming_b(&net), "the open left before the parent was allowed");
         let (check, _) = net.nodes[a].checks[0];
         let t = net.now;
         net.nodes[a].cmd(t, Command::AcpAnswer { check, allow: true }).unwrap();
-        assert!(net.run(net.now + 5 * SEC_NS, |n| n.nodes[b].read.values().any(|v| v == b"waited")));
+        assert!(net.run(net.now + 5 * SEC_NS, |n| {
+            n.nodes[b].read.values().any(|v| v == b"waited")
+        }));
         assert!(incoming_b(&net));
     });
 }
