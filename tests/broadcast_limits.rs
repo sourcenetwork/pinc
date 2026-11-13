@@ -147,6 +147,10 @@ fn an_invalid_config_is_refused_at_start() {
         .err(),
         Some(StartError::InvalidLimits)
     );
+    assert_eq!(
+        start(Limits { max_reach: 0, ..ok }).err(),
+        Some(StartError::InvalidLimits)
+    );
 }
 
 #[test]

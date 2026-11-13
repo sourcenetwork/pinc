@@ -262,6 +262,33 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.neighbors_dirty |= was;
         was
     }
+
+    /// With connected topics, name the peers of the application's sessions to the hubs when the set changed, so the
+    /// hubs hand this endpoint topic messages only from its connected component. Hub-protocol sessions are not
+    /// counted: every member holds one with its hubs. When the hubs are not told every peer, [`Event::AdjacencyShort`]
+    /// says so.
+    pub(super) fn report_adjacent(&mut self, now: u64) {
+        let Some(last) = self.adjacent.as_ref() else { return };
+        let mut set: Vec<[u8; 32]> = self.sessions.values().map(|s| s.info.node.bytes).collect();
+        set.sort_unstable();
+        set.dedup();
+        if set == *last {
+            return;
+        }
+        let sessions = u32::try_from(set.len()).unwrap_or(u32::MAX);
+        match self.node.set_adjacent(now, &set) {
+            Ok(named) => {
+                if named < set.len() {
+                    let named = Some(u32::try_from(named).unwrap_or(u32::MAX));
+                    self.push_event(Event::AdjacencyShort { sessions, named });
+                }
+                self.adjacent = Some(set);
+                self.dirty = true;
+            }
+            // The set stays unnamed, so the next change of sessions tries again.
+            Err(_) => self.push_event(Event::AdjacencyShort { sessions, named: None }),
+        }
+    }
 }
 
 /// The error for a refusal of the broadcast layer.

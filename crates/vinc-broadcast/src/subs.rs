@@ -175,8 +175,10 @@ impl Topics {
         }
     }
 
-    /// `member` is gone for good: forget its subscriptions.
+    /// `member` is gone for good: forget its subscriptions. Its adjacency record goes once it expired and no log holds
+    /// a message of it.
     pub fn release<H: Host>(&mut self, h: &mut H, member: &NodeId) {
+        self.reach.leave(member);
         let mut any = false;
         for (k, st) in &mut self.topics {
             let was_pub = st.pubs.remove(member);

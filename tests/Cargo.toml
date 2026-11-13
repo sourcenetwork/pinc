@@ -615,6 +615,18 @@ name = "broadcast_behind"
 path = "broadcast_behind.rs"
 
 [[test]]
+name = "broadcast_reach"
+path = "broadcast_reach.rs"
+
+[[test]]
+name = "broadcast_reach_paths"
+path = "broadcast_reach_paths.rs"
+
+[[test]]
+name = "broadcast_reach_table"
+path = "broadcast_reach_table.rs"
+
+[[test]]
 name = "broadcast_repair"
 path = "broadcast_repair.rs"
 

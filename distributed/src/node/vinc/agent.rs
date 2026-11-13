@@ -131,7 +131,23 @@ impl<const K: usize, const D: usize> Agent<K, D> {
         if let Some(d) = init.dtn.clone() {
             apps.dtn = DtnStore::new(&init.name, d)?;
         }
-        let core = Core::<K, D>::new(&spec, apps)?;
+        let mut core = Core::<K, D>::new(&spec, apps)?;
+        // A harness built with VINC_REACH=mesh measures delivery scoped to the connected component (vinc#86): every
+        // member names every other member as a session peer, as replicators that all hold sessions with each other
+        // would, so the hubs hand each message to the same subscribers as without the scope and pay its checks.
+        let mesh = option_env!("VINC_REACH") == Some("mesh");
+        if mesh && !spec.is_hub {
+            let mut peers = Vec::new();
+            for p in init
+                .peers
+                .iter()
+                .filter(|p| p.role == Role::Peer && p.name != init.name)
+            {
+                peers.push(node_id(&p.name)?.bytes);
+            }
+            core.set_adjacent(&peers)
+                .map_err(|e| format!("the adjacency record was refused: {e}"))?;
+        }
         let hub_ids = spec.hubs.iter().map(|h| h.id.bytes).collect();
         let ready = Ready {
             stack: "vinc".into(),
@@ -148,6 +164,11 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             ),
         };
         let mut ready = ready;
+        if mesh {
+            ready
+                .config
+                .push_str("; topics scoped to the connected component, every member naming the others");
+        }
         if let Some(d) = &init.dtn {
             use std::fmt::Write as _;
             let _ = write!(

@@ -372,6 +372,7 @@ import Vinc.BroadcastSystem
 import Vinc.BroadcastPublish
 import Vinc.BroadcastRepair
 import Vinc.BroadcastSubs
+import Vinc.BroadcastReach
 import Vinc.BroadcastTrace
 import Vinc.BroadcastTable
 import Vinc.BroadcastWire

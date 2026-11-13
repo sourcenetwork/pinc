@@ -79,3 +79,9 @@ pub const FALLBACK_BATCH: usize = 8;
 pub const HLC_DRIFT_MS: u64 = 60_000;
 /// The most trace records queued between two polls.
 pub const QUEUE_CAP: usize = 8192;
+/// A member that names its peers sends its adjacency record to its hubs again this often.
+pub const REFRESH: Nanos = 20 * S;
+/// A hub forgets an adjacency record it has not heard for this long: three refreshes and a margin.
+pub const RECORD_TTL: Nanos = 65 * S;
+/// The most peers one adjacency record names.
+pub const ADJ_MAX: usize = 1024;

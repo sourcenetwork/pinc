@@ -159,9 +159,10 @@ impl Topics {
             // Subscribers whose stream has no room for this message: none in the usual case, so nothing is allocated.
             let mut fell: Vec<NodeId> = Vec::new();
             if let Some(st) = self.topics.get(topic) {
+                let scope = self.reach.from(head.origin);
                 for (p, live) in &st.subs {
                     // A subscriber that is behind gets this message from the log, after the ones before it.
-                    if !*live || Some(p) == sender || p == head.origin || st.behind.contains_key(p) {
+                    if !*live || Some(p) == sender || p == head.origin || st.behind.contains_key(p) || !scope.to(p) {
                         continue;
                     }
                     // A floor advances only for a message a session took: one nobody carried was never delivered.
@@ -184,7 +185,7 @@ impl Topics {
             }
         }
         let subscribed = self.topics.get(topic).is_some_and(|st| st.sub);
-        if subscribed && *head.origin != self.me {
+        if subscribed && *head.origin != self.me && self.may_reach(head.origin, &self.me) {
             let hop = sender.copied().unwrap_or(self.me);
             self.offer(h, now, topic, head.mid, head.origin, &hop, body, head.ts);
         } else if let Some(st) = self.topics.get_mut(topic) {

@@ -41,6 +41,9 @@ impl Topics {
         if let Some(t) = self.room_at {
             soon(t);
         }
+        if let Some(t) = self.reach_deadline() {
+            soon(t);
+        }
         at
     }
 
@@ -56,6 +59,7 @@ impl Topics {
         if self.room_at.is_some_and(|t| now >= t) {
             self.tell_room(h);
         }
+        self.reach_timer(h, now);
     }
 
     /// Expire the dedupe sets and the logs; a message leaving a log stays in the dedupe set, so a late copy is not

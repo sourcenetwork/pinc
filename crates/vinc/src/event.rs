@@ -38,6 +38,17 @@ pub enum Event {
         /// The bytes published.
         payload: Vec<u8>,
     },
+    /// With [`Builder::connected_topics`](crate::Builder::connected_topics): the hubs were not told every peer this
+    /// endpoint holds sessions with, so they reach it from part of its component only. `named` is how many they were
+    /// told: the first [`ADJ_MAX`](vinc_broadcast::consts::ADJ_MAX) when there are more, or `None` when the record
+    /// could not be signed. The hubs then keep the last record named and the endpoint tries again on the next change of
+    /// sessions; a stale record only narrows the reach, since an edge needs both ends.
+    AdjacencyShort {
+        /// The peers of the endpoint's sessions.
+        sessions: u32,
+        /// How many of them the hubs were told.
+        named: Option<u32>,
+    },
     /// This many events were dropped because the queue was full.
     Lost {
         /// How many.

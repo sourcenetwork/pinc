@@ -110,6 +110,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub relays: Vec<Relay>,
     /// The endpoint is a hub of membership and broadcast.
     pub hub: bool,
+    /// Topic messages reach the endpoint only from its connected component of application sessions.
+    pub connected_topics: bool,
     /// The endpoint runs the relay role: the events of its members' sessions are kept for it.
     pub relaying: bool,
     /// How long a dial may take, in nanoseconds.
@@ -245,6 +247,9 @@ pub(crate) struct Core<S, A> {
     topics: BTreeMap<Vec<u8>, Vec<NodeId>>,
     /// The sessions of the hub protocol, by session, with their peer.
     hub_sessions: RapidHashMap<SessionId, NodeId>,
+    /// With [`Builder::connected_topics`](crate::Builder::connected_topics), the peers of the application's sessions
+    /// last named to the hubs; `None` without it.
+    adjacent: Option<Vec<[u8; 32]>>,
     /// How long a dial may take, in nanoseconds.
     connect_timeout: u64,
     /// The peers a relay had no record for or sent a bad one for, oldest first.
@@ -292,6 +297,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             lost: 0,
             topics: BTreeMap::new(),
             hub_sessions: RapidHashMap::default(),
+            adjacent: cfg.connected_topics.then(Vec::new),
             connect_timeout: cfg.connect_timeout,
             lookup_failed: VecDeque::new(),
             neighbors_dirty: false,
@@ -573,8 +579,14 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 alpn,
                 resumed,
                 ..
-            } => self.session_up(now, session, node, alpn, true, resumed),
-            Event::Incoming { session, node, alpn } => self.session_up(now, session, node, alpn, false, false),
+            } => {
+                self.session_up(now, session, node, alpn, true, resumed);
+                self.report_adjacent(now);
+            }
+            Event::Incoming { session, node, alpn } => {
+                self.session_up(now, session, node, alpn, false, false);
+                self.report_adjacent(now);
+            }
             Event::ConnectFailed { session, reason, .. } => {
                 if let Some(session) = session {
                     self.dial_done(session, Err(Error::dial(reason)));
@@ -583,6 +595,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             Event::Closed { session, reason } => {
                 self.hub_session_down(session);
                 self.session_down(session, Error::ended(reason));
+                self.report_adjacent(now);
             }
             Event::StreamOpened { session, stream } => self.stream_opened(now, session, stream),
             Event::StreamReadable { session, stream } | Event::StreamReset { session, stream, .. } => {

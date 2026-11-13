@@ -18,7 +18,7 @@ use vinc_wire::hlc::Hlc;
 use crate::behind::Behind;
 use crate::consts::{
     DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, GAP_EVERY, HAVE_MAX, MAX_TOPIC,
-    QUEUE_CAP, SEEN_CAP,
+    QUEUE_CAP, SEEN_CAP, TABLE_MAX,
 };
 use crate::event::Trace;
 use crate::floors::{Gather, SentFloors};
@@ -38,6 +38,11 @@ pub struct Limits {
     pub max_topics: usize,
     /// The most subscribers the node learns or announces per topic.
     pub max_subscribers: usize,
+    /// The most adjacency records a hub keeps (see [`Topics::set_adjacent`]), each of at most
+    /// [`ADJ_MAX`](crate::consts::ADJ_MAX) peers: about 33 KiB a record at that bound, 100 bytes for a record of a few
+    /// peers. A full table refuses a new member's record and from then on counts every node without a record as
+    /// alone.
+    pub max_reach: usize,
 }
 
 impl Default for Limits {
@@ -47,6 +52,7 @@ impl Default for Limits {
             log_bytes: DEFAULT_LOG_BYTES,
             max_topics: DEFAULT_MAX_TOPICS,
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
+            max_reach: TABLE_MAX,
         }
     }
 }
@@ -61,6 +67,7 @@ impl Limits {
         // A logged message is its head and body, and the whole of it must fit the ring.
         self.max_topics > 0
             && self.max_subscribers > 0
+            && self.max_reach > 0
             && u16::try_from(self.max_subscribers).is_ok()
             && u32::try_from(self.max_body).is_ok()
             && self.max_body.saturating_add(crate::wire::MAX_HEAD) <= self.log_bytes
@@ -262,6 +269,8 @@ pub struct Topics {
     pub(crate) nodes: Vec<NodeId>,
     pub(crate) spare: Vec<Vec<u8>>,
     pub(crate) tq: TraceQueue,
+    /// The adjacency records and the components they make (see `reach.rs`).
+    pub(crate) reach: crate::reach::Reach,
 }
 
 /// The bounded queue of trace records.
@@ -315,6 +324,10 @@ impl Topics {
         }
         let mut pk = alloc::vec![0u8; alg.public_key_len()];
         key.public_key(&mut pk).map_err(|_| StartError::KeyMismatch)?;
+        let mut unscoped = hubs.clone();
+        if cfg.is_hub {
+            unscoped.push(cfg.me);
+        }
         Ok(Self {
             me: cfg.me,
             is_hub: cfg.is_hub,
@@ -358,6 +371,7 @@ impl Topics {
                 },
                 lost: 0,
             },
+            reach: crate::reach::Reach::new(unscoped, cfg.limits.max_reach),
         })
     }
 
@@ -527,5 +541,6 @@ impl Topics {
             t.pubs.remove(peer);
         }
         self.lagging.remove(peer);
+        self.reach.forget(peer);
     }
 }

@@ -124,6 +124,7 @@ impl Topics {
                 let Some(l) = log.at(b.next) else { break Place::Caught };
                 if let Ok((head, _)) = Head::parse(l)
                     && head.origin != peer
+                    && crate::reach::reaches(&self.reach, head.origin, peer)
                     && wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok()
                 {
                     if !h.send(peer, Lane::Reply, &self.scratch) {
