@@ -3,7 +3,8 @@
 //! The endpoint recycles a connection's memory ([`Connection::into_resources`]), answers key requests it was told
 //! about ([`Connection::pending_key_request`]), feeds the node-wide round trips back ([`Connection::set_node_rtt`]),
 //! moves the first resend of a dial ([`Connection::set_first_retransmit`]), allows short Initials in its resends
-//! ([`Connection::set_short_until`]), defers the first path MTU probe ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
+//! ([`Connection::set_short_until`]) and reports a prekey reject ([`Connection::take_prekey_rejected`]), defers the
+//! first path MTU probe ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
 //! ([`Connection::set_flight_fanout`], and [`Connection::set_flight_skip_primary`] to leave the active path out),
 //! starts a sub-session ([`Connection::sub_session`]) and starts one whose parent is still in its handshake
 //! ([`Connection::sub_pending`], opened by [`Connection::activate_sub`]).
@@ -115,6 +116,12 @@ conn_impl! {
     /// heard a validated UDP path lately. A connection never told has the allowance its dial began with.
     pub fn set_short_until(&mut self, until: u64) {
         self.hs.set_short_until(until);
+    }
+
+    /// Whether a dialing handshake took a prekey reject since the last call: the peer does not hold the prekey the
+    /// short Initial named, so the node should forget that it does.
+    pub fn take_prekey_rejected(&mut self) -> bool {
+        self.hs.take_prekey_rejected()
     }
 
     /// When the relay carrier of the active path last heard anything, or `None` when that carrier is not open. A

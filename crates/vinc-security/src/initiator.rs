@@ -14,6 +14,11 @@
 //! stays unanswered: the third send is a full Initial under the same destination id. The machine then still accepts
 //! a late resume Reply, which completes the resumed session and abandons the full handshake.
 //!
+//! A prekey reject (the responder does not hold the prekey the short Initial named) is answered with the full Initial
+//! once, at once, unless one was sent for a reject less than [`Initiator::set_reject_gap`] ago; the resends go on as
+//! before, short while the host allows it. The host learns of a reject from [`Initiator::take_prekey_rejected`], to
+//! forget that the peer holds its prekey.
+//!
 //! The sends are counted from the first. A resend of the Initial is the short one while the host allows short Initials
 //! ([`Initiator::set_short_until`]: it heard a validated UDP path lately), whichever form the first send had, and the
 //! full one otherwise; sends 3, 6, 9 and so on always carry the full prekey, so a lost or unroutable reject never
@@ -48,6 +53,8 @@ use crate::tickets::{Ticket, TicketBatch};
 pub const RESUME_TRIES: u32 = 3;
 /// Every this many sends the short Initial carries the full prekey.
 pub const FULL_EVERY: u32 = 3;
+/// The shortest time between two full Initials sent for prekey rejects (500 ms), until the host sets another.
+pub const REJECT_GAP: u64 = 500_000_000;
 
 /// What an [`Initiator`] needs to start.
 #[derive(Debug)]
@@ -73,9 +80,8 @@ pub struct InitiatorParams<'a> {
 }
 
 enum State {
-    /// Waiting for the Reply (or a prekey reject, while `short`: the short Initial is still in use).
+    /// Waiting for the Reply (or a prekey reject).
     Reply {
-        short: bool,
         echo: [u8; 16],
     },
     /// Waiting for the resume Reply (or a resume reject).
@@ -90,9 +96,9 @@ enum State {
         aead: Aead,
         th1: [u8; 32],
         ss_x: Secret<32>,
-        /// What the machine goes back to when the Reply fails to open: a forged or damaged Reply is dropped (the
-        /// transcript before it is in `back_th`).
-        back: Back,
+        /// The echo of the state the machine goes back to when the Reply fails to open: a forged or damaged Reply is
+        /// dropped (the transcript before it is in `back_th`).
+        back: [u8; 16],
     },
     /// Waiting for the host to sign.
     Sign {
@@ -103,13 +109,6 @@ enum State {
     },
     Done,
     Failed,
-}
-
-/// The state before a Reply was taken in.
-#[derive(Clone, Copy)]
-struct Back {
-    short: bool,
-    echo: [u8; 16],
 }
 
 /// A resumption the machine stopped waiting for but still accepts a reply to.
@@ -142,6 +141,11 @@ pub struct Initiator {
     sends: u32,
     /// A resend may be the short Initial while the clock is below this.
     short_until: u64,
+    /// When the full Initial last went out for a prekey reject, the shortest time before another may, and whether
+    /// the host was told of the reject yet.
+    rejected_at: Option<u64>,
+    reject_gap: u64,
+    reject_news: bool,
     late: Option<Late>,
     out: Outbox,
     inbuf: [u8; MAX_MESSAGE_LEN],
@@ -182,6 +186,9 @@ impl Initiator {
             sends: 0,
             // The host that knew the peer caches the prekey judged a short Initial fine when it dialed.
             short_until: if params.peer_has_prekey { u64::MAX } else { 0 },
+            rejected_at: None,
+            reject_gap: REJECT_GAP,
+            reject_news: false,
             late: None,
             out: Outbox::new(),
             inbuf: [0; MAX_MESSAGE_LEN],
@@ -255,6 +262,20 @@ impl Initiator {
         self.short_until = until;
     }
 
+    /// Send the full Initial for a prekey reject only if none was sent for one less than `gap` ago (at least
+    /// [`REJECT_GAP`] unless the host knows a longer round trip).
+    pub const fn set_reject_gap(&mut self, gap: u64) {
+        self.reject_gap = gap;
+    }
+
+    /// Whether a prekey reject was taken since the last call: the responder does not hold the prekey, so the host
+    /// should not try the short Initial first on a later dial to it.
+    pub const fn take_prekey_rejected(&mut self) -> bool {
+        let news = self.reject_news;
+        self.reject_news = false;
+        news
+    }
+
     fn short_ok(&self, now: u64) -> bool {
         now < self.short_until
     }
@@ -269,7 +290,7 @@ impl Initiator {
     /// [`Failure::Randomness`] if the fallback needs the generator and it refuses.
     pub fn retransmit<P: Provider>(&mut self, env: &mut Env<'_, P>) -> Result<(), Failure> {
         let result = match self.state {
-            State::Reply { short: true, .. } => {
+            State::Reply { .. } => {
                 self.sends = self.sends.saturating_add(1);
                 self.write_initial(self.sends.is_multiple_of(FULL_EVERY) || !self.short_ok(env.now))
             }
@@ -282,7 +303,7 @@ impl Initiator {
                     Ok(())
                 }
             }
-            State::Reply { short: false, .. } | State::Done => {
+            State::Done => {
                 self.sends = self.sends.saturating_add(1);
                 self.out.resend();
                 Ok(())
@@ -314,7 +335,7 @@ impl Initiator {
     fn dispatch<P: Provider>(&mut self, env: &mut Env<'_, P>, input: &[u8]) -> Result<(), Failure> {
         match MessageType::of(input).map_err(Failure::Malformed)? {
             MessageType::Reply => self.on_reply(env, input),
-            MessageType::PrekeyReject => self.on_prekey_reject(input),
+            MessageType::PrekeyReject => self.on_prekey_reject(env.now, input),
             MessageType::ResumeReply => self.on_resume_reply(env, input),
             MessageType::ResumeReject => self.on_resume_reject(env, input),
             _ => Err(Failure::UnexpectedMessage),
@@ -369,7 +390,6 @@ impl Initiator {
         self.sends = 1;
         self.write_initial(!short)?;
         self.state = State::Reply {
-            short: true,
             echo: echo(&self.th.snapshot()),
         };
         Ok(())
@@ -439,16 +459,22 @@ impl Initiator {
         Ok(())
     }
 
-    fn on_prekey_reject(&mut self, input: &[u8]) -> Result<(), Failure> {
-        let State::Reply { short: true, echo } = self.state else {
+    fn on_prekey_reject(&mut self, now: u64, input: &[u8]) -> Result<(), Failure> {
+        let State::Reply { echo } = self.state else {
             return Err(Failure::UnexpectedMessage);
         };
         let reject = Reject::parse(input, MessageType::PrekeyReject).map_err(Failure::Malformed)?;
         if !ct_eq(&reject.echo, &echo) {
             return Err(Failure::UnexpectedMessage);
         }
-        self.write_initial(true)?;
-        self.state = State::Reply { short: false, echo };
+        self.reject_news = true;
+        if self
+            .rejected_at
+            .is_none_or(|t| now.saturating_sub(t) >= self.reject_gap)
+        {
+            self.rejected_at = Some(now);
+            self.write_initial(true)?;
+        }
         Ok(())
     }
 
@@ -494,7 +520,7 @@ impl Initiator {
             return Err(Failure::UnexpectedMessage);
         }
         let reply = Reply::parse(input).map_err(Failure::Malformed)?;
-        let State::Reply { short, echo } = self.state else {
+        let State::Reply { echo } = self.state else {
             return Err(Failure::UnexpectedMessage);
         };
         if !self.offer.contains(reply.aead) {
@@ -509,7 +535,6 @@ impl Initiator {
             .ok_or(Failure::InvalidParameter)?
             .copy_from_slice(input);
         self.inlen = input.len();
-        let back = Back { short, echo };
         self.back_th = self.th.clone();
         absorb_reply(&mut self.th, &reply.scid, reply.aead, &reply.e, reply.ct);
         self.out.set_request(Pending::Decap {
@@ -520,7 +545,7 @@ impl Initiator {
             aead: reply.aead,
             th1: self.th.snapshot(),
             ss_x,
-            back,
+            back: echo,
         };
         Ok(())
     }
@@ -537,10 +562,7 @@ impl Initiator {
                 if f == Failure::Authentication {
                     // A damaged or forged Reply proves nothing: drop it and wait for the next one.
                     self.th = self.back_th.clone();
-                    self.state = State::Reply {
-                        short: back.short,
-                        echo: back.echo,
-                    };
+                    self.state = State::Reply { echo: back };
                     self.inbuf.zeroize();
                     self.inlen = 0;
                 }

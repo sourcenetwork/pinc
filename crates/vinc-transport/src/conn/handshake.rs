@@ -17,6 +17,8 @@
 //!   this peer, else the node's average; the delay then doubles up to `max(16 s, 4 x node RTT)`, and on a thin node
 //!   no further than `max(8 s, 2 x the node's largest RTT)`. A Hello that stayed unanswered for its third send gives
 //!   way to a full handshake (see `vinc-security`), and a rejected ticket restarts the schedule.
+//! - A prekey reject (the peer does not hold the prekey a short Initial named) is answered at once with the full
+//!   Initial, then at most once per `max(500 ms, node RTT)`; the resends that follow are short as before.
 //! - A responder resends its flight after 999 ms, then after 1.998 s, 3.996 s and every 4 s.
 //! - A dialing side resends its Finish after 999 ms whatever the round trip it measured, then after `999 ms << n`
 //!   (n the sends so far, at most 3) up to 2 s, until the first 1-RTT packet arrives. On a thin node each wait after
@@ -42,6 +44,7 @@
 
 use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
 use vinc_crypto::{IdentityAlg, Provider};
+use vinc_security::initiator::REJECT_GAP;
 use vinc_security::message::MAX_MESSAGE_LEN;
 use vinc_security::{
     Env, Event as SecEvent, Failure, Initiator, KeyHandle, KeyRequest, Output, Responder, ResponderStores,
@@ -564,6 +567,14 @@ impl Handshake {
         }
     }
 
+    /// Whether the dialing side took a prekey reject since the last call (the peer does not hold its prekey).
+    pub(crate) fn take_prekey_rejected(&mut self) -> bool {
+        match machine_of(&mut self.machine) {
+            Some(Machine::Client(m)) => m.take_prekey_rejected(),
+            _ => false,
+        }
+    }
+
     /// Hold the resends of a dialing side, or let them go on.
     pub(crate) const fn set_held(&mut self, held: bool) {
         self.held = held;
@@ -696,8 +707,13 @@ impl Handshake {
             .get(MAX_MESSAGE_LEN..)
             .and_then(|b| b.get(..len))
             .ok_or(Failure::InvalidParameter)?;
+        // A prekey reject is answered with the full Initial at most once per `max(500 ms, node round trip)`.
+        let gap = REJECT_GAP.max(self.timing.node_rtt.unwrap_or(0));
         let r = match (machine_of(&mut self.machine).ok_or(Failure::Closed)?, stores) {
-            (Machine::Client(m), _) => m.handle(env, msg),
+            (Machine::Client(m), _) => {
+                m.set_reject_gap(gap);
+                m.handle(env, msg)
+            }
             (Machine::Server(m), Some(stores)) => m.handle(env, stores, msg),
             (Machine::Server(_), None) => Err(Failure::InvalidParameter),
         };

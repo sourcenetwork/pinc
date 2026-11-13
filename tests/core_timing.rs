@@ -455,6 +455,67 @@ fn a_resend_is_the_short_initial_while_udp_was_heard_lately_whatever_the_first_f
     });
 }
 
+/// Node a had a session with b and closed it; b restarted and lost the prekeys it cached, so it rejects the short
+/// Initial of a's next dial, and nothing it sends after its first reject reaches a. Returns the net with the dial
+/// started, the nodes and the number of datagrams captured before it.
+fn rejected_dial() -> (CoreNet, usize, usize, usize) {
+    let mut net = CoreNet::new(10 * MS_NS);
+    net.capture = true;
+    let (a, b) = (net.add(1), net.add(2));
+    let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+    let t = net.now;
+    net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+    // Longer than the 30 s access answer of b, so the dial is not reported early and not ended early.
+    net.run_for(31 * S);
+    let (peer, now) = (net.nodes[b].node, net.now);
+    while net.nodes[a].ep.tickets().take(&peer, ALPN_A, now).is_some() {}
+    let b_addr = net.nodes[b].addr;
+    net.nodes[b] = TNode::new(2, b_addr, now);
+    let passed = std::rc::Rc::new(std::cell::Cell::new(false));
+    net.loss = Some(Box::new(move |from, _, d| {
+        if from != b_addr || message_type(d) != Some(3) {
+            return from == b_addr;
+        }
+        passed.replace(true)
+    }));
+    let marker = net.captured.len();
+    dial(&mut net, a, b, ALPN_A, Role::Other);
+    (net, a, b, marker)
+}
+
+#[test]
+fn a_prekey_reject_sends_the_full_initial_once_and_the_resends_stay_short() {
+    big_stack(|| {
+        let (mut net, a, b, marker) = rejected_dial();
+        // The reject answers the short Initial; the full one follows at once, not at the next timer.
+        net.run_for(100 * MS_NS);
+        assert_eq!(flights(&net, marker, a, b), [2, 1]);
+        // The resends at 0.5, 1.5, 3.5, 7.5 and 15.5 s stay short except the third and the sixth send.
+        net.run_for(16 * S);
+        assert_eq!(flights(&net, marker, a, b), [2, 1, 2, 1, 2, 2, 1]);
+    });
+}
+
+#[test]
+fn a_prekey_reject_makes_the_next_dial_start_with_the_full_initial() {
+    big_stack(|| {
+        let (mut net, a, b, _) = rejected_dial();
+        // The dial times out; a UDP path was heard moments ago, but the reject dropped what the node knew of the
+        // peer's prekey cache, so the next first flight is the full Initial.
+        net.run_for(36 * S);
+        assert!(net.nodes[a].saw(|e| matches!(e, Event::ConnectFailed { .. })));
+        net.loss = None;
+        let marker = net.captured.len();
+        dial(&mut net, a, b, ALPN_A, Role::Other);
+        net.run_for(S);
+        assert_eq!(
+            flights(&net, marker, a, b)[0],
+            1,
+            "the dropped entry still gave a short Initial"
+        );
+    });
+}
+
 #[test]
 fn a_link_return_resends_a_dial_still_in_its_handshake_at_once() {
     big_stack(|| {

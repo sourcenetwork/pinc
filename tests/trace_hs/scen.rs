@@ -102,8 +102,9 @@ fn base(c: &mut Ctx) {
         assert!(is_dropped(&r));
         let (r, d) = sim.i_recv(is, &ex(&rej));
         assert!(r.is_ok() && d.sends[0][0] == 1);
-        // the same reject again: the initiator already moved to the full form
-        assert!(is_dropped(&sim.i_recv(is, &ex(&rej)).0));
+        // the same reject again: taken, and the full Initial is not sent twice within the gap
+        let (r, again) = sim.i_recv(is, &ex(&rej));
+        assert!(r.is_ok() && again.sends.is_empty());
         sim.drive(is, d.sends.clone(), None, 1, 1);
         agree(&sim.ests[&('I', is)], &sim.ests[&('R', sim.resps.len())]);
     });
@@ -272,7 +273,8 @@ fn retransmits(c: &mut Ctx) {
         sim.r_shed(rs);
         sim.accept(is, rs);
     });
-    // a short Initial that misses: sent again, then rejected; the full Initial is sent again after the reject
+    // a short Initial that misses: sent again, then rejected; the full Initial is sent once after the reject and the
+    // resends that follow are short
     c.world(false, |sim| {
         let (is, first) = sim.start(1, 1, true, false);
         let rs = sim.r_new(1);
@@ -288,7 +290,7 @@ fn retransmits(c: &mut Ctx) {
         let (_, d) = sim.i_recv(is, &ex(&rej));
         let full = d.sends[0].clone();
         assert_eq!(full[0], 1);
-        assert_eq!(sim.i_retx(is).sends, vec![full.clone()]);
+        assert_eq!(sim.i_retx(is).sends[0][0], 2, "send 4 is short again");
         sim.drive(is, vec![full], None, 1, 1);
         agree(&sim.ests[&('I', is)], &sim.ests[&('R', sim.resps.len())]);
     });
