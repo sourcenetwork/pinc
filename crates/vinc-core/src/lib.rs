@@ -98,6 +98,8 @@ pub use queue::{EVENT_BASE, event_headroom, event_queue};
 pub use reach::REACH_BODY_MAX;
 pub use relay_net::{RELAY_V4, is_relay_addr, relay_addr, relay_parts};
 pub use rtt::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
+#[cfg(feature = "trace")]
+pub use rx::HalfOpenSlot;
 pub use rx::{HALF_OPEN_LIFE, MAX_HALF_OPEN};
 pub use slot::{HELD_EVENTS, Slot};
 pub use state::{Restored, STATE_VERSION, StateError, state_len};

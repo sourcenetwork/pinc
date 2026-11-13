@@ -1000,6 +1000,10 @@ name = "trace_orphan"
 path = "trace_orphan.rs"
 
 [[test]]
+name = "trace_halfopen"
+path = "trace_halfopen.rs"
+
+[[test]]
 name = "trace_mtu"
 path = "trace_mtu.rs"
 
