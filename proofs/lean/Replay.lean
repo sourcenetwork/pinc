@@ -22,6 +22,7 @@ import Vinc.TraceOrphan
 import Vinc.TraceCoreTable
 import Vinc.TraceHalfOpen
 import Vinc.TraceHeap
+import Vinc.TraceCoreState
 import Vinc.TraceMtu
 import Vinc.TraceTimers
 import Vinc.TraceStores
@@ -544,6 +545,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceHalfOpen.replayEvent j how with
           | .ok w' =>
             how := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceCoreState.isTag t then
+          -- Saved-state events (`cs`, written by `trace_core_state`): `export_state` and `restore_state`.
+          match TraceCoreState.replayEvent j with
+          | .ok _ =>
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
