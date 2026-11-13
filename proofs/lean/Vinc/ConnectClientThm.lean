@@ -230,4 +230,147 @@ theorem missing_fallback (n : Netcheck) (f : Nat) (hh : n.home = none) (ht : hom
   simp only []
   rw [if_pos (by simp; omega)]
 
+/-- The fold of `argMin` from a known best: the result is the best or a later element, and is least. -/
+theorem argMin_fold (key : Nat → Nat) (l : List Nat) :
+    ∀ (b x : Nat), l.foldl (fun acc i => match acc with
+        | none => some i
+        | some b => if key i < key b then some i else some b) (some b) = some x →
+      (x = b ∨ x ∈ l) ∧ key x ≤ key b ∧ ∀ i ∈ l, key x ≤ key i := by
+  induction l with
+  | nil => intro b x h; simp at h; subst h; simp
+  | cons a t ih =>
+    intro b x h
+    simp only [List.foldl_cons] at h
+    by_cases hlt : key a < key b
+    · rw [if_pos hlt] at h
+      obtain ⟨h1, h2, h3⟩ := ih a x h
+      refine ⟨?_, by omega, ?_⟩
+      · rcases h1 with h1 | h1
+        · exact Or.inr (h1 ▸ List.mem_cons_self)
+        · exact Or.inr (List.mem_cons_of_mem _ h1)
+      · intro i hi
+        rcases List.mem_cons.mp hi with rfl | hi
+        · omega
+        · exact h3 i hi
+    · rw [if_neg hlt] at h
+      obtain ⟨h1, h2, h3⟩ := ih b x h
+      refine ⟨?_, h2, ?_⟩
+      · rcases h1 with h1 | h1
+        · exact Or.inl h1
+        · exact Or.inr (List.mem_cons_of_mem _ h1)
+      · intro i hi
+        rcases List.mem_cons.mp hi with rfl | hi
+        · omega
+        · exact h3 i hi
+
+/-- `argMin` picks a member of the list, and one with the least key. -/
+theorem argMin_spec (idx : List Nat) (key : Nat → Nat) (x : Nat) (h : argMin idx key = some x) :
+    x ∈ idx ∧ ∀ i ∈ idx, key x ≤ key i := by
+  unfold argMin at h
+  cases idx with
+  | nil => simp at h
+  | cons a t =>
+    simp only [List.foldl_cons] at h
+    obtain ⟨h1, h2, h3⟩ := argMin_fold key t a x h
+    refine ⟨?_, ?_⟩
+    · rcases h1 with h1 | h1
+      · exact h1 ▸ List.mem_cons_self
+      · exact List.mem_cons_of_mem _ h1
+    · intro i hi
+      rcases List.mem_cons.mp hi with rfl | hi
+      · exact h2
+      · exact h3 i hi
+
+/-- A missed count of zero is healthy (the miss limit is 3). -/
+theorem unhealthy_zero (n : Netcheck) (i : Nat) (h : n.missed.getD i 0 = 0) : n.unhealthy i = false := by
+  simp only [Netcheck.unhealthy, h, missLimit]; decide
+
+/-- A step of the ring from an unhealthy home never lands on the home. -/
+theorem ring_ne (home rn k : Nat) (hk1 : 1 ≤ k) (hk2 : k < rn) : (home + k) % rn ≠ home := by
+  intro h
+  by_cases hh : home < rn
+  · have : (home + k) % rn = if home + k < rn then home + k else home + k - rn := by
+      split
+      · exact Nat.mod_eq_of_lt (by assumption)
+      · rw [Nat.mod_eq_sub_mod (by omega), Nat.mod_eq_of_lt (by omega)]
+    split at this <;> omega
+  · have := Nat.mod_lt (home + k) (show rn > 0 by omega)
+    omega
+
+/-- A failover only moves away from an unhealthy home, to a configured relay that is not unhealthy and is known to work
+(a probe answered since it last failed, or an open carrier), and changes nothing but the home. This needs no
+hypothesis on the miss limit: it is the constant 3 in the model. -/
+theorem failover_healthy (n n' : Netcheck) (usable isOpen : Nat → Bool) (x : Nat)
+    (h : n.failover usable isOpen = (some x, n')) :
+    (∃ home, n.home = some home ∧ n.unhealthy home = true ∧ x ≠ home) ∧
+    usable x = true ∧ n.unhealthy x = false ∧
+    ((n.missed.getD x 0 = 0 ∧ (n.refl.getD x none).isSome = true) ∨ isOpen x = true) ∧
+    n' = { n with home := some x } := by
+  unfold Netcheck.failover at h
+  cases hh : n.home with
+  | none => simp [hh] at h
+  | some home =>
+    simp only [hh] at h
+    by_cases hu : n.unhealthy home = true
+    · rw [if_neg (by simpa using hu)] at h
+      generalize hm : argMin _ _ = m at h
+      cases m with
+      | some m =>
+        simp only [] at h
+        obtain ⟨rfl, rfl⟩ : m = x ∧ { n with home := some m } = n' := by
+          simp only [Prod.mk.injEq, Option.some.injEq] at h; exact h
+        have hs := (argMin_spec _ _ _ hm).1
+        simp only [List.mem_filter, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq] at hs
+        obtain ⟨_, ⟨⟨hne, hus⟩, hz⟩, hrf⟩ := hs
+        exact ⟨⟨home, rfl, hu, hne⟩, hus, unhealthy_zero n _ hz, Or.inl ⟨hz, hrf⟩, rfl⟩
+      | none =>
+        simp only [] at h
+        cases hf : (((List.range' 1 (n.probes.length - 1)).map fun k => (home + k) % n.probes.length).find?
+            fun i => usable i && isOpen i && !n.unhealthy i) with
+        | none => simp [hf] at h
+        | some y =>
+          simp only [hf, Prod.mk.injEq, Option.some.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hp := List.find?_some hf
+          have hmem := List.mem_of_find?_eq_some hf
+          simp only [Bool.and_eq_true, Bool.not_eq_true'] at hp
+          obtain ⟨⟨hus, hop⟩, hun⟩ := hp
+          obtain ⟨k, hk, hky⟩ := List.mem_map.mp hmem
+          rw [List.mem_range'_1] at hk
+          exact ⟨⟨home, rfl, hu, hky ▸ ring_ne home _ k (by omega) (by omega)⟩, hus, hun, Or.inr hop, rfl⟩
+    · rw [if_pos (by simpa using hu)] at h
+      simp at h
+  
+/-- With no relay known to work the home stays (and nothing is returned). -/
+theorem failover_none (n n' : Netcheck) (usable isOpen : Nat → Bool)
+    (h : n.failover usable isOpen = (none, n')) : n' = n := by
+  unfold Netcheck.failover at h
+  cases hh : n.home with
+  | none => simp [hh] at h; exact h.symm
+  | some home =>
+    simp only [hh] at h
+    split at h
+    · simp at h; exact h.symm
+    · split at h
+      · simp at h
+      · simp at h; exact h.symm
+
+/-- The measured candidate has the least round trip among the candidates: configured, not the home, with no miss since
+its last answer and a known reflexive address. -/
+theorem failover_measured_least (n : Netcheck) (usable : Nat → Bool) (home m : Nat)
+    (h : argMin ((List.range n.probes.length).filter fun i =>
+        i != home && usable i && n.missed.getD i 0 == 0 && (n.refl.getD i none).isSome) (fun i => n.rtt.getD i 0) = some m) :
+    ∀ i, i < n.probes.length → i ≠ home → usable i = true → n.missed.getD i 0 = 0 →
+      (n.refl.getD i none).isSome = true → n.rtt.getD m 0 ≤ n.rtt.getD i 0 := by
+  intro i hi hne hus hz hrf
+  apply (argMin_spec _ _ _ h).2
+  simp only [List.mem_filter, List.mem_range, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq]
+  exact ⟨hi, ⟨⟨hne, hus⟩, hz⟩, hrf⟩
+
+
 end Vinc.ConnectClient
+
+#audit_axioms Vinc.ConnectClient.argMin_spec
+#audit_axioms Vinc.ConnectClient.failover_healthy
+#audit_axioms Vinc.ConnectClient.failover_none
+#audit_axioms Vinc.ConnectClient.failover_measured_least
