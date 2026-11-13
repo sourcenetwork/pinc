@@ -15,9 +15,10 @@
 //!    answered. With one answer this is the best the node can say; a second relay may correct it to carrier-grade.
 //!
 //! **Failover.** A relay that failed [`MISS_LIMIT`] times in a row (probes sent while the last was unanswered, or
-//! carrier dials that never opened) is unhealthy. When the home relay is unhealthy the home moves to the healthy
-//! relay with the lowest round trip, or to the next healthy one by table position when no round trip is known (a node
-//! that only has carriers). Any answer or opened carrier makes a relay healthy again.
+//! carrier dials that never opened) is unhealthy. When the home relay is unhealthy the home moves only to a relay
+//! known to work: the one with the lowest round trip among those that answered a probe since they last failed, else
+//! the next one by table position whose carrier is open. A relay that merely has not failed yet is no target, and with
+//! none the home stays. Any answer or opened carrier makes a relay healthy again.
 //!
 //! Invariants: the nonce of an answer must match the probe sent to that relay, and a probe is answered at most once;
 //! the round trip of a relay is the last measured one; [`Netcheck::home`] is stable until a strictly lower round trip
@@ -174,21 +175,26 @@ impl<const R: usize> Netcheck<R> {
         self.missed.get(relay).is_some_and(|m| *m >= MISS_LIMIT)
     }
 
-    /// Move the home away from an unhealthy relay. `usable` says which relays are configured. Returns the new home.
-    pub fn failover(&mut self, usable: impl Fn(usize) -> bool) -> Option<usize> {
+    /// Move the home away from an unhealthy relay, only to one known to work: a probe answered since it last failed
+    /// (lowest round trip first), else an `open` carrier (next by table position). `usable` says which relays are
+    /// configured. With no such relay the home stays. Returns the new home.
+    pub fn failover(&mut self, usable: impl Fn(usize) -> bool, open: impl Fn(usize) -> bool) -> Option<usize> {
         let home = self.home?;
         if !self.unhealthy(home) {
             return None;
         }
         let measured = (0..R)
             .filter(|i| {
-                *i != home && usable(*i) && !self.unhealthy(*i) && self.reflexive.get(*i).is_some_and(Option::is_some)
+                *i != home
+                    && usable(*i)
+                    && self.missed.get(*i) == Some(&0)
+                    && self.reflexive.get(*i).is_some_and(Option::is_some)
             })
             .min_by_key(|i| self.rtt.get(*i).copied().unwrap_or(u64::MAX));
         let next = measured.or_else(|| {
             (1..R)
                 .map(|k| (home + k) % R)
-                .find(|i| usable(*i) && !self.unhealthy(*i))
+                .find(|i| usable(*i) && open(*i) && !self.unhealthy(*i))
         })?;
         self.home = Some(next);
         Some(next)

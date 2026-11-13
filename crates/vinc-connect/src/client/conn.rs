@@ -21,8 +21,8 @@
 //! long-header packet (a handshake packet of the transport) closes the batch and is sealed alone.
 //!
 //! Failover. A relay whose carrier dials never opened, or whose probes went unanswered on a node that hears UDP,
-//! three times in a row is unhealthy; the home moves to the healthy relay with the lowest round trip and the record is
-//! published there.
+//! three times in a row is unhealthy; the home moves to a relay known to work (a probe answered since it last failed,
+//! else an open carrier) and the record is published there. With no such relay the home stays.
 //!
 //! Invariants: every table and queue is bounded and nothing allocates; a stream is open only for a relay whose link
 //! is not `Down`; sealed bytes leave a carrier in the order they were sealed.

@@ -157,13 +157,13 @@ fn a_relay_that_fails_three_times_in_a_row_loses_the_home_to_the_next_healthy_on
         n.probe_sent(1_000, 0, [50 + round; 8], true);
     }
     assert!(!n.unhealthy(0), "two failures are not yet three");
-    assert_eq!(n.failover(|_| true), None);
+    assert_eq!(n.failover(|_| true, |_| false), None);
     n.probe_sent(1_000, 0, [60; 8], true);
     assert!(n.unhealthy(0));
     assert_eq!(
-        n.failover(|_| true),
+        n.failover(|_| true, |_| false),
         Some(1),
-        "the healthy relay with the lowest round trip"
+        "the relay that answered, with the lowest round trip"
     );
     assert_eq!(n.home(), Some(1));
     // A carrier that opens makes a relay healthy again; an answer too.
@@ -179,15 +179,33 @@ fn a_relay_that_fails_three_times_in_a_row_loses_the_home_to_the_next_healthy_on
     d.failed(0);
     d.failed(0);
     assert!(d.unhealthy(0));
-    assert_eq!(d.failover(|i| i < 2), None, "no home yet, nothing to move");
+    assert_eq!(d.failover(|i| i < 2, |_| true), None, "no home yet, nothing to move");
     d.home_missing(Some(0));
     d.home_missing(Some(0));
     d.home_missing(Some(0));
     assert_eq!(d.home(), Some(0));
     assert_eq!(
-        d.failover(|i| i < 2),
+        d.failover(|i| i < 2, |_| false),
+        None,
+        "a relay that merely has not failed is no target: the home stays"
+    );
+    for _ in 0..9 {
+        d.failed(0);
+        d.failed(1);
+        assert_eq!(d.failover(|i| i < 2, |_| false), None);
+        assert_eq!(d.home(), Some(0), "nothing reachable: the home does not cycle");
+    }
+    let mut c = Netcheck::<2>::new();
+    c.home_missing(Some(0));
+    c.home_missing(Some(0));
+    c.home_missing(Some(0));
+    for _ in 0..3 {
+        c.failed(0);
+    }
+    assert_eq!(
+        c.failover(|i| i < 2, |i| i == 1),
         Some(1),
-        "with no round trip known the next relay by position"
+        "with no round trip known the next relay by position whose carrier is open"
     );
     // The only relay has nowhere to go.
     let mut one = Netcheck::<1>::new();
@@ -197,5 +215,5 @@ fn a_relay_that_fails_three_times_in_a_row_loses_the_home_to_the_next_healthy_on
     for _ in 0..3 {
         one.failed(0);
     }
-    assert_eq!(one.failover(|_| true), None);
+    assert_eq!(one.failover(|_| true, |_| true), None);
 }

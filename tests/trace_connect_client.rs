@@ -622,11 +622,17 @@ fn netcheck_events(out: &mut Vec<String>) {
                         !rng.next_u64().is_multiple_of(4),
                         !rng.next_u64().is_multiple_of(4),
                     ];
-                    let r = n.failover(|i| usable[i]);
+                    let open = [
+                        rng.next_u64().is_multiple_of(2),
+                        rng.next_u64().is_multiple_of(2),
+                        rng.next_u64().is_multiple_of(2),
+                    ];
+                    let r = n.failover(|i| usable[i], |i| open[i]);
                     format!(
-                        r#"{{"t":"cl","m":"failover","now":{},"usable":{},"res":{}"#,
+                        r#"{{"t":"cl","m":"failover","now":{},"usable":{},"open":{},"res":{}"#,
                         us(now),
                         jlist(usable.iter()),
+                        jlist(open.iter()),
                         r.map_or(-1, |x| x as i64)
                     )
                 }

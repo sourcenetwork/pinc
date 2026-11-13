@@ -439,7 +439,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// Move the home away from an unhealthy relay, dial the new home and republish there.
     pub(super) fn check_failover(&mut self, now: u64) {
         let cfg: [bool; R] = core::array::from_fn(|i| self.rly.get(i).is_some_and(|r| r.cfg.is_some()));
-        let Some(h) = self.net.failover(|i| cfg.get(i).copied().unwrap_or(false)) else {
+        let open: [bool; R] = core::array::from_fn(|i| self.rly.get(i).is_some_and(|r| r.link.is_open()));
+        let Some(h) = self.net.failover(
+            |i| cfg.get(i).copied().unwrap_or(false),
+            |i| open.get(i).copied().unwrap_or(false),
+        ) else {
             return;
         };
         self.notice(Notice::Home(h));
