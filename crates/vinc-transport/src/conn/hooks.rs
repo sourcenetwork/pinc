@@ -11,7 +11,7 @@
 //!
 //! Invariants: a sub-session is born established with keys derived from its parent's, so it needs no handshake
 //! message and no round trip; the flight fan-out only repeats bytes the handshake already queued, one path after the
-//! other, and never changes what the primary path sends.
+//! other, never changes what the primary path sends, and ends when a dialing side is established.
 
 use vinc_crypto::Provider;
 use vinc_security::{
@@ -165,8 +165,11 @@ conn_impl! {
 
     /// Send every handshake flight, and each resend of it, on the given paths as well as the active one. The flight
     /// leaves on the active path first, then on each listed path in turn; paths the connection does not track are
-    /// ignored. An empty list turns the fan-out off.
+    /// ignored. An empty list turns the fan-out off. A dialing side turns it off itself when its session is
+    /// established (the reply came back on one path, and the Finish and its resends go there only), and a later call
+    /// is ignored.
     pub fn set_flight_fanout(&mut self, ids: &[PathId]) {
+        let ids: &[PathId] = if self.client && self.phase != Phase::Handshaking { &[] } else { ids };
         self.fan_set = ids
             .iter()
             .filter_map(|id| self.paths.find(*id))

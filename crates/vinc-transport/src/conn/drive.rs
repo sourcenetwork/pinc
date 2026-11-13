@@ -133,6 +133,9 @@ conn_impl! {
                 self.phase = Phase::Connected;
                 self.life.last_activity = now;
                 if self.client {
+                    // The reply came back on one path: the Finish and each resend of it follow it there, not onto the
+                    // other paths the flight was copied to.
+                    self.set_flight_fanout(&[]);
                     if !est.resumed {
                         let srtt = self.rec.rtt().smoothed();
                         self.hs.finish_sent(now, srtt);

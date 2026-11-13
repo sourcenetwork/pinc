@@ -1,7 +1,8 @@
 //! The handshake timers and recovery on a real connection: the dialing side's schedule (first resend, doubling, the
 //! cap, the thin cap, the node round trip), the responder's schedule, the connect timeout, the Finish resent on the
-//! probe timeout, the handshake round trip as the first round-trip sample, a link return, a lost resume Reply, a Hello
-//! that falls back to a full handshake and is still answered late, and the buffers returned to the pool.
+//! probe timeout and sent only on the path of the reply, the handshake round trip as the first round-trip sample, a
+//! link return, a lost resume Reply, a Hello that falls back to a full handshake and is still answered late, and the
+//! buffers returned to the pool.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -14,7 +15,7 @@
 
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
-use vinc_transport::conn::{CloseReason, PathId};
+use vinc_transport::conn::{CloseReason, PathId, PathInfo};
 
 /// The dialing side's resend counts at `(offset, expected count)` checkpoints, on a link that delivers nothing.
 fn dial_schedule(w: &mut World, checks: &[(u64, u64)]) -> Vec<(u64, u64)> {
@@ -429,5 +430,57 @@ fn a_lost_finish_is_resent_999_ms_later_whatever_the_measured_round_trip() {
         assert_eq!(count(3010 * MS), 2, "second not resent at 999 + 1998 ms");
         assert_eq!(count(4990 * MS), 2, "third resent before 2 s later");
         assert_eq!(count(5010 * MS), 3, "third not resent 2 s later");
+    });
+}
+
+#[test]
+fn the_finish_and_its_resends_leave_on_the_path_the_reply_came_on_only() {
+    big_stack(|| {
+        // The first flight is copied onto a second path, but nothing crosses it: the reply comes on the first.
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(41, Params::new(10 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        link.route(PathId(3)).ab.p.loss_ppm = 1_000_000;
+        link.route(PathId(3)).ba.p.loss_ppm = 1_000_000;
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        net.a.conn.set_flight_fanout(&[PathId(3)]);
+        // Whether each datagram the dialing side sends has a long header (a handshake packet), to tell the Finish from
+        // the path challenges the second path gets once the session is open.
+        let long = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let tap = long.clone();
+        net.on_tx = Some(Box::new(move |is_a, seg, _| {
+            if is_a {
+                tap.borrow_mut().push(seg[0] & 0x80 != 0);
+            }
+        }));
+        // The first Finish is lost on the first path; the second path never delivers, so only a resend gets through.
+        net.drop_finish = true;
+        let t0 = net.now;
+        assert!(net.run(t0 + SEC, |n| n.a.conn.is_connected()));
+        let connected = net.now;
+        assert!(net.connect(t0 + 3 * SEC));
+        assert_eq!(long.borrow().len(), net.a.tx_log.len(), "one datagram per transmit");
+        let handshake_on = |p: PathId| {
+            net.a
+                .tx_log
+                .iter()
+                .zip(long.borrow().iter())
+                .filter(|((t, _, q), long)| *t >= connected && *q == p && **long)
+                .count()
+        };
+        assert!(
+            handshake_on(PathId(1)) >= 2,
+            "the Finish and its resend leave on the path of the reply"
+        );
+        assert_eq!(
+            handshake_on(PathId(3)),
+            0,
+            "a copy of the Finish went out on the fan-out path"
+        );
     });
 }

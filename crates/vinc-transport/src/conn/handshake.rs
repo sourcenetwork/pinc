@@ -22,7 +22,8 @@
 //! - A responder resends its flight after 999 ms, then after 1.998 s, 3.996 s and every 4 s.
 //! - A dialing side resends its Finish after 999 ms whatever the round trip it measured, then after `999 ms << n`
 //!   (n the sends so far, at most 3) up to 2 s, until the first 1-RTT packet arrives. On a thin node each wait after
-//!   the first is at least `min(20 s, 2 x max(srtt, node RTTs))`.
+//!   the first is at least `min(20 s, 2 x max(srtt, node RTTs))`. The Finish and each resend go on the path the reply
+//!   came on, not on the other paths the first flight was copied to.
 //! - A handshake that is not established 30 s after it began (60 s on a thin node) ends; the connection then closes.
 //! - A dial the layer above told to end early (one it reported before its handshake) also ends when the resend timer
 //!   fires after 4 first flights went out with nothing heard from the peer: 15 first delays for a full handshake
