@@ -78,7 +78,7 @@ theorem scheduleConfirm_roster (n : N) (now at_ : Nat) : (n.scheduleConfirm now 
 
 /-- `new_susp` in two stages, so that each is small: the first probe, then the second one if there is a route. -/
 def N.nsFirst (e : Env) (n : N) (m : Nat) : N :=
-  ((N.tx e n m .session .probe).1.trace (.probeSent m 0)).emit (.suspected m)
+  (N.tx e n m .session .probe).1.trace (.probeSent m 0)
 
 def N.nsSecond (e : Env) (n : N) (now m : Nat) (ev : Option Evid) : N × Option (Nat × Nat) :=
   match n.independentRoute now m ev with
@@ -86,6 +86,31 @@ def N.nsSecond (e : Env) (n : N) (now m : Nat) (ev : Option Evid) : N × Option 
     let n := (N.tx e n m route .probe).1
     (n.trace (.probeSent m path), some (now, path))
   | none => (n, none)
+
+theorem announce_roster (n : N) (now m : Nat) (sp : Susp) : (N.announce n now m sp).roster = n.roster := by
+  unfold N.announce N.emit N.scheduleConfirm
+  repeat' split
+  all_goals rfl
+
+theorem announce_indep (n : N) (now m x : Nat) (sp : Susp) (ev : Option Evid) :
+    (N.announce n now m sp).independentRoute x m ev = n.independentRoute x m ev := by
+  unfold N.announce N.emit N.scheduleConfirm N.independentRoute N.hubUp
+  repeat' split
+  all_goals rfl
+
+theorem announce_downed (n : N) (now m : Nat) (sp : Susp) : (N.announce n now m sp).downed = n.downed := by
+  unfold N.announce N.emit N.scheduleConfirm
+  repeat' split
+  all_goals rfl
+
+theorem announced_since (sp : Susp) (now : Nat) : (sp.announced now).since = sp.since := by
+  unfold Susp.announced; split <;> rfl
+theorem announced_probeA (sp : Susp) (now : Nat) : (sp.announced now).probeA = sp.probeA := by
+  unfold Susp.announced; split <;> rfl
+theorem announced_probeB (sp : Susp) (now : Nat) : (sp.announced now).probeB = sp.probeB := by
+  unfold Susp.announced; split <;> rfl
+theorem announced_wait (sp : Susp) (now : Nat) : (sp.announced now).wait = sp.wait := by
+  unfold Susp.announced; split <;> rfl
 
 theorem nsFirst_roster (e : Env) (n : N) (m : Nat) : (N.nsFirst e n m).roster = n.roster := by
   unfold N.nsFirst; simp
@@ -101,8 +126,8 @@ theorem newSusp_roster (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) 
         let wait := max PROBE_WAIT_MIN (match ev with | some x => min (x.srtt * 3) U64MAX | none => 0)
         let n1 := N.nsFirst e n m
         let (n2, probeB) := N.nsSecond e n1 now m ev
-        let sp : Susp := ⟨since, now, probeB, wait⟩
-        let n3 := { n2 with susp := n2.susp.insert m sp }
+        let sp : Susp := ⟨since, now, probeB, wait, false⟩
+        let n3 := ({ n2 with susp := n2.susp.insert m sp }).scheduleConfirm now (now + wait)
         match probeB with
         | some (tb, _) => n3.scheduleConfirm now (max (max (since + CONFIRM) (now + wait)) (tb + wait))
         | none => n3.trace (.noIndependentPath m) := by
@@ -118,19 +143,21 @@ theorem newSusp_roster (e : Env) (n : N) (now m since : Nat) (ev : Option Evid) 
       have := nsSecond_roster e (N.nsFirst e n m) now m ev
       rw [hq] at this; simp at this; rw [this, nsFirst_roster]
     cases pb with
-    | none => simp [h2]
+    | none => simp [scheduleConfirm_roster, h2]
     | some p => obtain ⟨tb, pa⟩ := p; simp [scheduleConfirm_roster, h2]
 
-/-- No second path and no earlier second probe: the hub waits for the lease. -/
+/-- No second path and no earlier second probe, the member already reported suspected: the hub waits for the lease and does
+nothing. (A member not yet reported is reported suspected, or its wait scheduled: `cw_lone_unannounced`.) -/
 theorem cw_lone_old (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease) (sp : Susp)
     (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
     (hx : ¬ Excused l since sleep (e.evidence m)) (hs : n.susp.get? m = some sp) (hsince : sp.since = since)
-    (hb : sp.probeB = none) (hr : n.independentRoute now m (e.evidence m) = none) :
+    (hb : sp.probeB = none) (hr : n.independentRoute now m (e.evidence m) = none) (hann : sp.ann = true) :
     N.carrierWatch e n now m = n := by
   unfold Excused at hx
   unfold N.carrierWatch
   rw [hl]; dsimp only; simp only [hc]
-  cases hev : e.evidence m <;> cases sleep <;> simp_all <;> (intros; exfalso; omega)
+  cases hev : e.evidence m <;> cases sleep <;>
+    simp_all [N.announce, Susp.announced] <;> (intros; exfalso; omega)
 
 theorem cw_lone_new (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease)
     (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
@@ -155,6 +182,8 @@ def N.cwMain (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option Evid
   match n.susp.get? m with
   | some sp0 =>
     if sp0.since == since then
+      let n := N.announce n now m sp0
+      let sp0 := sp0.announced now
       let (n, sp) : N × Susp :=
         if sp0.probeB.isNone then
           match n.independentRoute now m ev with
@@ -182,6 +211,19 @@ theorem cw_eq_main (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l
   cases hev : e.evidence m <;> cases sleep <;>
     (rw [if_neg (by simp [Excused, hev] at hx ⊢; omega)]; rfl)
 
+/-- The same without the report: a member not yet reported suspected is reported (or its wait scheduled), and stays on the
+roster. -/
+theorem cw_lone_unannounced (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease) (sp : Susp)
+    (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
+    (hx : ¬ Excused l since sleep (e.evidence m)) (hs : n.susp.get? m = some sp) (hsince : sp.since = since)
+    (hb : sp.probeB = none) (hr : n.independentRoute now m (e.evidence m) = none) :
+    (N.carrierWatch e n now m).roster = n.roster := by
+  rw [cw_eq_main e n now m since sleep l hl hc hx]
+  unfold N.cwMain
+  simp only [hs, hsince, beq_self_eq_true, if_true, announced_probeB, announced_since, announced_probeA, announced_wait,
+    announce_indep, hr, hb, Option.isNone_none]
+  exact announce_roster ..
+
 theorem cwMain_keeps_unless (e : Env) (n : N) (now m since : Nat) (sleep : Option Nat) (l : Lease) (hOk : n.SuspOk)
     (hl : n.roster.get? m = some l) (hc : e.carrier m = .gone since sleep)
     (hx : ¬ Excused l since sleep (e.evidence m)) :
@@ -194,31 +236,32 @@ theorem cwMain_keeps_unless (e : Env) (n : N) (now m since : Nat) (sleep : Optio
   | some sp0 =>
     simp only []
     by_cases hsi : sp0.since = since
-    · simp only [hsi, beq_self_eq_true, if_true]
+    · simp only [hsi, beq_self_eq_true, if_true, announced_since, announced_probeA, announced_probeB, announced_wait,
+        announce_indep]
       cases hb : sp0.probeB with
       | none =>
-        simp only [hb, Option.isNone_none, if_true]
+        simp only [hb, Option.isNone_none, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         cases hr : n.independentRoute now m (e.evidence m) with
-        | none => left; simp only [hr, hb]; exact hhas
+        | none => left; simp only [hr, hb, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]; exact keep _ (announce_roster ..)
         | some rp =>
           obtain ⟨route, path⟩ := rp
-          simp only [hr]
+          simp only [hr, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
           by_cases hdl : max (max (since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
           · right
             exact ⟨since, sleep, sp0, now, path, hc, hx, hs, hsi, independentRoute_path n now m _ route path hr,
               Or.inr ⟨hb, rfl, route, hr⟩, hdl⟩
           · left
             simp only [hdl, if_false]
-            exact keep _ (by simp [scheduleConfirm_roster])
+            exact keep _ (by simp [scheduleConfirm_roster, announce_roster])
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
-        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false]
+        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
         · right
           exact ⟨since, sleep, sp0, tb, path, hc, hx, hs, hsi, hOk m sp0 tb path hs hb, Or.inl hb, by rw [← hsi]; exact hdl⟩
         · left
           rw [if_neg hdl]
-          exact keep _ (by simp [scheduleConfirm_roster])
+          exact keep _ (by simp [scheduleConfirm_roster, announce_roster])
     · left
       simp only [show (sp0.since == since) = false by simpa using hsi]
       exact keep _ (newSusp_roster ..)

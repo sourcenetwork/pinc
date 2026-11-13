@@ -86,7 +86,8 @@ def N.removeFromView (e : Env) (n : N) (now m : Nat) (cur : Option ViewEntry) (s
   match cur with
   | none => (n, false)
   | some c =>
-    if src.hold then (n, false)
+    if src.hold then
+      ((if n.recheck.len < MAX_TABLE then { n with recheck := n.recheck.ins m } else n), false)
     else if now < n.quietUntil && n.recheck.len < MAX_TABLE then
       ((({ n with recheck := n.recheck.ins m }).trace (.deferred m)), false)
     else

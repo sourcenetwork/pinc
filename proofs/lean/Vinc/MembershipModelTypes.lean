@@ -265,6 +265,8 @@ structure Susp where
   probeA : Nat
   probeB : Option (Nat × Nat)
   wait : Nat
+  /-- reported suspected: the first probe went unanswered for the wait -/
+  ann : Bool
   deriving DecidableEq, Repr
 
 /-- One `Membership` node with the effects of the current call appended. -/

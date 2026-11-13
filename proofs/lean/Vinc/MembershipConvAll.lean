@@ -52,7 +52,7 @@ theorem removeFromView_len (e : Env) (n : N) (now m : Nat) (cur : Option ViewEnt
   split
   · exact Nat.le_refl _
   · split
-    · exact Nat.le_refl _
+    · split <;> exact Nat.le_refl _
     · split
       · simp [AMap.len]
       · by_cases hh : n.isHub = true <;> by_cases hg : (n.goneVer.len < MAX_TABLE ∨ n.goneVer.has m = true) <;>

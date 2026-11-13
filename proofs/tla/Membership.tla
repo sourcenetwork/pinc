@@ -185,7 +185,8 @@ HomeDelta(S, env, m, rec, alive) ==
 RemoveFromView(S, env, now, m, cur, src, expired) ==
     IF cur = <<>> THEN [S |-> S, ch |-> FALSE]
     ELSE LET c == cur[1] IN
-         IF src.hold THEN [S |-> S, ch |-> FALSE]
+         IF src.hold
+         THEN [S |-> IF Cardinality(S.recheck) < MAX_TABLE THEN [S EXCEPT !.recheck = @ \cup {m}] ELSE S, ch |-> FALSE]
          ELSE IF Lt(now, S.quietUntil) /\ Cardinality(S.recheck) < MAX_TABLE
               THEN [S |-> Trace([S EXCEPT !.recheck = @ \cup {m}], [k |-> "deferred", member |-> m]), ch |-> FALSE]
               ELSE LET s1 == [S EXCEPT !.members = Del(@, m),
@@ -388,14 +389,20 @@ CarrierWatch(S, env, now, m) ==
                THEN IF heard THEN [rmSusp EXCEPT !.roster[m].renewed = Max2(@, ev[1].rx)] ELSE rmSusp
                ELSE LET sp0 == Lookup(S.susp, m)
                     IN IF sp0 # <<>> /\ sp0[1].since = since
-                       THEN LET sp == sp0[1]
+                       THEN LET spo == sp0[1]
+                                \* a member silent for the first probe's wait is reported suspected, once
+                                at == U!Add64(spo.probeA, spo.wait)
+                                annc == ~spo.ann /\ Ge(now, at)
+                                sp == IF annc THEN [spo EXCEPT !.ann = TRUE] ELSE spo
+                                sA == IF annc THEN Emit([S EXCEPT !.susp = Put(@, m, sp)], EvSuspected(m))
+                                      ELSE IF ~spo.ann THEN ScheduleConfirm(S, now, at) ELSE S
                                 rt == IndependentRoute(S, now, m, ev)
                                 needB == sp.probeB = <<>> /\ rt # <<>>
                                 s1 == IF needB
-                                      THEN LET t1 == SendS(S, env, m, rt[1].route, [k |-> "probe"])
+                                      THEN LET t1 == SendS(sA, env, m, rt[1].route, [k |-> "probe"])
                                                t2 == Trace(t1, [k |-> "probe_sent", member |-> m, path |-> rt[1].path])
                                            IN [t2 EXCEPT !.susp = Put(@, m, [sp EXCEPT !.probeB = <<[t |-> now, path |-> rt[1].path]>>])]
-                                      ELSE S
+                                      ELSE sA
                                 spB == IF needB THEN [sp EXCEPT !.probeB = <<[t |-> now, path |-> rt[1].path]>>] ELSE sp
                             IN IF spB.probeB = <<>> THEN s1
                                ELSE LET tb == spB.probeB[1].t
@@ -405,16 +412,16 @@ CarrierWatch(S, env, now, m) ==
                        ELSE LET wait == Max2(PROBE_WAIT_MIN, IF ev = <<>> THEN Z ELSE SatMul3(ev[1].srtt))
                                 t1 == SendS(S, env, m, RSession, [k |-> "probe"])
                                 t2 == Trace(t1, [k |-> "probe_sent", member |-> m, path |-> 0])
-                                t3 == Emit(t2, EvSuspected(m))
                                 rt == IndependentRoute(S, now, m, ev)
-                                t4 == IF rt = <<>> THEN t3
-                                      ELSE Trace(SendS(t3, env, m, rt[1].route, [k |-> "probe"]), [k |-> "probe_sent", member |-> m, path |-> rt[1].path])
+                                t4 == IF rt = <<>> THEN t2
+                                      ELSE Trace(SendS(t2, env, m, rt[1].route, [k |-> "probe"]), [k |-> "probe_sent", member |-> m, path |-> rt[1].path])
                                 pB == IF rt = <<>> THEN <<>> ELSE <<[t |-> now, path |-> rt[1].path]>>
-                                sp == [since |-> since, probeA |-> now, probeB |-> pB, wait |-> wait]
+                                sp == [since |-> since, probeA |-> now, probeB |-> pB, wait |-> wait, ann |-> FALSE]
                                 t5 == [t4 EXCEPT !.susp = Put(@, m, sp)]
+                                t6 == ScheduleConfirm(t5, now, U!Add64(now, wait))
                             IN IF pB # <<>>
-                               THEN ScheduleConfirm(t5, now, Max2(Max2(U!Add64(since, CONFIRM), U!Add64(now, wait)), U!Add64(now, wait)))
-                               ELSE Trace(t5, [k |-> "no_independent_path", member |-> m])
+                               THEN ScheduleConfirm(t6, now, Max2(Max2(U!Add64(since, CONFIRM), U!Add64(now, wait)), U!Add64(now, wait)))
+                               ELSE Trace(t6, [k |-> "no_independent_path", member |-> m])
 
 CarrierGone(S, env, now, member) ==
     IF S.isHub /\ ~IsBoot(S, member)

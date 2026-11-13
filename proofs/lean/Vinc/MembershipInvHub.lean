@@ -68,12 +68,33 @@ theorem inv_newSusp {e : Env} {n0 : N} (hx : Inv B n0) (now m since : Nat) (ev :
     inv_leaf
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_newSusp)
 
+theorem announce_has {n : N} (now m : Nat) (sp : Susp) (h : n.susp.get? m = some sp) :
+    (N.announce n now m sp).susp.has m = true := by
+  have hg : n.susp.has m = true := AMap.has_of_get? _ _ _ h
+  unfold N.announce
+  split
+  · split
+    · unfold N.emit; split <;> simp [AMap.has_insert_self]
+    · simpa [N.scheduleConfirm] using hg
+  · exact hg
+
+theorem inv_announce {n : N} (hx : Inv B n) (now m : Nat) (sp : Susp) (h : n.susp.get? m = some sp) :
+    Inv B (N.announce n now m sp) := by
+  unfold N.announce
+  have hg : n.susp.has m = true := AMap.has_of_get? _ _ _ h
+  split
+  · split
+    · exact inv_emit (by inv_keep hx; exact hx.susp.insert _ _ (Or.inr hg)) _
+    · exact inv_scheduleConfirm hx _ _
+  · exact hx
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_announce)
+
 theorem inv_carrierWatch {e : Env} {n : N} (hx : Inv B n) (now m : Nat) : Inv B (N.carrierWatch e n now m) := by
   unfold N.carrierWatch
   inv_go
   all_goals
-    have hs : x.susp = n.susp := by subst_vars; simp
-    have hg : x.susp.has m = true := by rw [hs]; exact AMap.has_of_get? _ _ _ ‹n.susp.get? m = some _›
+    have hg : x.susp.has m = true := by
+      subst_vars; simpa using announce_has now m _ ‹n.susp.get? m = some _›
     inv_leaf
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_carrierWatch)
 

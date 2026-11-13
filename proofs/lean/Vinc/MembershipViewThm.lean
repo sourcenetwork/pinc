@@ -27,7 +27,7 @@ theorem removeFromView_keeps (e : Env) (n : N) (now m : Nat) (cur : Option ViewE
   split
   · exact Keeps.refl n
   · split
-    · exact Keeps.refl n
+    · split <;> simp [Keeps]
     · split
       · simp [Keeps]
       · by_cases hh : n.isHub = true <;> by_cases hg : (n.goneVer.len < MAX_TABLE ∨ n.goneVer.has m = true) <;>
@@ -127,7 +127,7 @@ theorem removeFromView_keeps2 (e : Env) (n : N) (now m : Nat) (cur : Option View
   split
   · rfl
   · split
-    · rfl
+    · split <;> simp
     · split
       · simp
       · simp [AMap.get?_erase_ne _ _ _ hk]

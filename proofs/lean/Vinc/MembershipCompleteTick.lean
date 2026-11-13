@@ -69,24 +69,24 @@ theorem cwMain_roster (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Op
   | some sp0 =>
     simp only []
     by_cases hsi : sp0.since = since
-    · simp only [hsi, beq_self_eq_true, if_true]
+    · simp only [hsi, beq_self_eq_true, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
       cases hb : sp0.probeB with
       | none =>
-        simp only [hb, Option.isNone_none, if_true]
+        simp only [hb, Option.isNone_none, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         cases hr : n.independentRoute now m ev with
-        | none => left; simp only [hr, hb]
+        | none => left; simp only [hr, hb, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]; exact announce_roster ..
         | some rp =>
           obtain ⟨route, path⟩ := rp
-          simp only [hr]
+          simp only [hr, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
           split
-          · right; rw [confirm_roster]; simp
-          · left; simp [scheduleConfirm_roster]
+          · right; rw [confirm_roster]; simp [announce_roster]
+          · left; simp [scheduleConfirm_roster, announce_roster]
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
-        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false]
+        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         split
-        · right; rw [confirm_roster]
-        · left; simp [scheduleConfirm_roster]
+        · right; rw [confirm_roster, announce_roster]
+        · left; simp [scheduleConfirm_roster, announce_roster]
     · left
       simp only [show (sp0.since == since) = false by simpa using hsi]
       exact newSusp_roster ..

@@ -77,27 +77,27 @@ theorem cwMain_rd (e : Env) (n : N) (now m since : Nat) (l : Lease) (ev : Option
     simp only []
     by_cases hsi : sp0.since = since
     · subst hsi
-      simp only [beq_self_eq_true, if_true]
+      simp only [beq_self_eq_true, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
       cases hb : sp0.probeB with
       | none =>
-        simp only [hb, Option.isNone_none, if_true]
+        simp only [hb, Option.isNone_none, if_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         cases hr : n.independentRoute now m ev with
-        | none => simp only [hr, hb]; exact RD.refl _ _
+        | none => simp only [hr, hb, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]; exact RD.of_eq (announce_downed ..)
         | some rp =>
           obtain ⟨route, path⟩ := rp
           simp only []
           by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (now + sp0.wait) ≤ now
-          · simp only [hr, hdl, ite_true]
+          · simp only [hr, hdl, ite_true, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
             refine RD.trans (b := _) ?_ (confirm_rd _ _ _ _ _ _)
-            exact RD.of_eq (by simp)
-          · simp only [hr, hdl, ite_false]
-            exact RD.of_eq (by simp [N.scheduleConfirm])
+            exact RD.of_eq (by simp [announce_downed])
+          · simp only [hr, hdl, ite_false, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
+            exact RD.of_eq (by simp [N.scheduleConfirm, announce_downed])
       | some tbp =>
         obtain ⟨tb, path⟩ := tbp
-        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false]
+        simp only [hb, Option.isNone_some, Bool.false_eq_true, ite_false, announced_since, announced_probeA, announced_probeB, announced_wait, announce_indep]
         by_cases hdl : max (max (sp0.since + CONFIRM) (sp0.probeA + sp0.wait)) (tb + sp0.wait) ≤ now
-        · rw [if_pos hdl]; exact confirm_rd e n now m sp0 l
-        · rw [if_neg hdl]; exact RD.of_eq (by simp [N.scheduleConfirm])
+        · rw [if_pos hdl]; exact RD.trans (b := _) (RD.of_eq (announce_downed ..)) (confirm_rd _ _ _ _ _ _)
+        · rw [if_neg hdl]; exact RD.of_eq (by simp [N.scheduleConfirm, announce_downed])
     · simp only [show (sp0.since == since) = false by simpa using hsi]
       exact RD.of_eq (newSusp_rd' ..)
 
