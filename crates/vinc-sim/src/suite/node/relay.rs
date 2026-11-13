@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 
 use vinc_connect::carrier::MAX_FRAME_LEN;
 use vinc_connect::carrier::session::{self, Poll, ProtectedCarrier};
-use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole};
+use vinc_connect::carrier::ws::{Decoder, Role as WsRole};
 use vinc_connect::relay::datagram::Datagram;
 use vinc_connect::relay::{Config as RelayConfig, Effect, Relay, SessionId as RSession, Sink, Trace, UdpTarget};
 use vinc_core::relay_addr;
@@ -144,10 +144,7 @@ impl HubSide {
 
 fn wrap(rs: &RStream, bytes: &[u8]) -> Vec<u8> {
     if rs.ws.is_some() {
-        let mut f = vec![0u8; bytes.len() + 16];
-        let n = ws::encode(Opcode::Binary, bytes, None, &mut f).unwrap_or(0);
-        f.truncate(n);
-        f
+        super::carrier::ws_frames(bytes, None)
     } else {
         bytes.to_vec()
     }

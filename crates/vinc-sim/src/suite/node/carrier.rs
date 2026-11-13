@@ -113,6 +113,20 @@ impl Wire {
     }
 }
 
+/// `bytes` of the carrier stream as consecutive binary frames, none over the codec's payload limit, so a write
+/// larger than one frame arrives whole.
+pub(super) fn ws_frames(bytes: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len().div_ceil(ws::MAX_PAYLOAD) * ws::MAX_HEADER);
+    let mut f = vec![0u8; ws::MAX_PAYLOAD + ws::MAX_HEADER];
+    for chunk in bytes.chunks(ws::MAX_PAYLOAD) {
+        // vertexia: the buffer holds the largest frame, so encode cannot fail; a failure would drop the chunk.
+        if let Ok(m) = ws::encode(Opcode::Binary, chunk, mask, &mut f) {
+            out.extend_from_slice(f.get(..m).unwrap_or_default());
+        }
+    }
+    out
+}
+
 /// The payloads of the WebSocket frames in `data`, in order.
 pub(super) fn ws_payloads(dec: &mut Decoder, data: &mut [u8]) -> Vec<Vec<u8>> {
     let mut rest: &mut [u8] = data;
@@ -255,11 +269,7 @@ impl Core {
                 };
                 did = true;
                 let data = if wire.kinds.get(relay).copied().flatten() == Some(Kind::Ws) {
-                    let mut f = vec![0u8; n + 16];
-                    let mask = [0x11, 0x22, 0x33, 0x44];
-                    let m = ws::encode(Opcode::Binary, bytes, Some(mask), &mut f).unwrap_or(0);
-                    f.truncate(m);
-                    f
+                    ws_frames(bytes, Some([0x11, 0x22, 0x33, 0x44]))
                 } else {
                     bytes.to_vec()
                 };
@@ -353,6 +363,22 @@ impl Core {
         };
         for p in payloads {
             self.feed(relay, &p);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_larger_than_one_frame_arrives_whole() {
+        let bytes: Vec<u8> = (0..20_000u32).map(|i| u8::try_from(i % 251).unwrap_or(0)).collect();
+        for (mask, role) in [(Some([0x11, 0x22, 0x33, 0x44]), WsRole::Client), (None, WsRole::Server)] {
+            let mut framed = ws_frames(&bytes, mask);
+            let mut dec = Decoder::new(role);
+            let got: Vec<u8> = ws_payloads(&mut dec, &mut framed).concat();
+            assert_eq!(got, bytes);
         }
     }
 }
