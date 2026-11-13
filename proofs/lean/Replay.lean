@@ -18,6 +18,7 @@ import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceOrphan
+import Vinc.TraceCoreTable
 import Vinc.TraceHalfOpen
 import Vinc.TraceMtu
 import Vinc.TraceTimers
@@ -182,6 +183,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ccw : TraceCc.W := {}
   let mut rsw : TraceReasm.W := {}
   let mut orw : TraceOrphan.W := {}
+  let mut ctw : TraceCoreTable.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut tmw : TraceTimers.W := {}
@@ -507,6 +509,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceOrphan.replayEvent j orw with
           | .ok w' =>
             orw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceCoreTable.isTag t then
+          -- Connection-id table events (`cota`, written by `trace_core_table`): the endpoint's demux table.
+          match TraceCoreTable.replayEvent j ctw with
+          | .ok w' =>
+            ctw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
