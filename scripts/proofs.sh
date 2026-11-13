@@ -270,6 +270,19 @@ par run_tlc connect_table_n4 ConnectTable ConnectTable_n4
 par run_tlc connect_cache ConnectTable ConnectTable_cache
 par run_tlc connect_relay ConnectRelay ConnectRelay
 par run_tlc connect_relay_sleep ConnectRelay ConnectRelay_sleep
+par run_tlc connect_records ConnectRecords ConnectRecords
+par run_tlc connect_records_own ConnectRecords ConnectRecords_own
+par witness_tlc connect_records_nocheck ConnectRecords ConnectRecords_nocheck OnlyGood
+par witness_tlc connect_records_equal ConnectRecords ConnectRecords_equal EqualDiff
+par witness_tlc connect_records_lower ConnectRecords ConnectRecords_lower Lower
+par witness_tlc connect_records_nosweep ConnectRecords ConnectRecords_nosweep SweepRule
+par witness_tlc connect_records_lookall ConnectRecords ConnectRecords_lookall LookupFresh
+par run_tlc connect_own ConnectOwn ConnectOwn
+par witness_tlc connect_own_samewall ConnectOwn ConnectOwn_samewall SeqAbove
+par witness_tlc connect_own_dup ConnectOwn ConnectOwn_dup CandLocal
+par witness_tlc connect_own_nocap ConnectOwn ConnectOwn_nocap CandCap
+par witness_tlc connect_own_anyfrom ConnectOwn ConnectOwn_anyfrom Observed
+par witness_tlc connect_own_anynonce ConnectOwn ConnectOwn_anynonce Observed
 par run_tlc dtn_store DtnStore DtnStore
 par witness_tlc dtn_store_cross DtnStore DtnStore_cross NoCrossEviction
 par run_tlc dtn_custody DtnCustody DtnCustody
@@ -538,7 +551,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_hdr --test trace_frame --test trace_framepack --test trace_orphan --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_mtu --test trace_timers --test trace_connect_carrier
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_hdr --test trace_frame --test trace_framepack --test trace_orphan --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_mtu --test trace_timers --test trace_connect_carrier
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -567,6 +580,7 @@ trace_tlc TraceValuesWire valueswire
 trace_tlc TraceConnectMailbox mailbox
 trace_tlc TraceConnectTable table
 trace_tlc TraceConnect relay
+trace_tlc TraceConnectRecords connect-records
 trace_tlc TraceConnectCodec connect-codec
 trace_tlc TraceConnectLink connect-link
 trace_tlc TraceConnectClient connect-client

@@ -209,6 +209,9 @@ import Vinc.ConnectCarrierThm
 import Vinc.ConnectCarrierKeys
 import Vinc.TraceConnectCarrier
 import Vinc.ConnectClientThm
+import Vinc.ConnectRecords
+import Vinc.ConnectRecordsThm
+import Vinc.TraceConnectRecords
 import Vinc.ConnectAudit
 import Vinc.DtnGf
 import Vinc.DtnGfField
