@@ -6,6 +6,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::vec;
+use std::vec::Vec;
 
 /// The largest response a TPM can send (`TPM_MAX_COMMAND_SIZE`), with room for the kernel's own limit.
 const MAX_RESPONSE: usize = 8192;

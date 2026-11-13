@@ -7,6 +7,8 @@
 //! Invariants: a request that names an unbound handle, asks for an algorithm other than the bound key's, or fails in
 //! the store is answered [`KeyResponse::Failed`] and never with a guess; the signature buffer is wiped on drop.
 
+use alloc::vec::Vec;
+
 use vinc_security::{KeyHandle as SecHandle, KeyRequest, KeyResponse};
 use zeroize::Zeroize;
 

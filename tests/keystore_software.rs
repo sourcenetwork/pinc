@@ -139,3 +139,103 @@ fn errors_are_short_and_carry_no_key_material() {
         );
     }
 }
+
+/// A store whose every random byte comes from `entropy`: no operating system involved.
+fn seeded(byte: u8) -> SoftwareStore {
+    SoftwareStore::from_entropy([byte; 32])
+}
+
+#[test]
+fn from_entropy_signs_and_verifies() {
+    big(|| {
+        let mut store = seeded(1);
+        for alg in ALGS {
+            let key = store.generate(alg).unwrap();
+            let (_, pk) = store.public(&key).unwrap();
+            let sig = store.sign(&key, b"entropy given by the host").unwrap();
+            verify(alg, &pk, b"entropy given by the host", sig.as_bytes()).unwrap();
+            assert_eq!(
+                verify(alg, &pk, b"another message", sig.as_bytes()),
+                Err(CryptoError::InvalidSignature)
+            );
+        }
+    });
+}
+
+#[test]
+fn from_entropy_kem_round_trips() {
+    let mut store = seeded(2);
+    let (key, ek) = store.generate_kem().unwrap();
+    let ek = Software.kem_encaps_key(&ek).unwrap();
+    let (ct, shared) = Software.kem_encapsulate(&ek, &[9; 32]).unwrap();
+    assert_eq!(
+        store.decapsulate(&key, &Software.kem_ciphertext_bytes(&ct)).unwrap(),
+        shared
+    );
+}
+
+#[test]
+fn from_entropy_seals_and_unseals() {
+    let mut store = seeded(3);
+    let sealed = store.seal(b"ticket").unwrap();
+    assert_eq!(store.unseal(&sealed).unwrap().as_slice(), b"ticket");
+    // The nonce is drawn from the generator, so sealing twice differs.
+    assert_ne!(store.seal(b"ticket").unwrap(), sealed);
+    let mut tampered = sealed.clone();
+    tampered[sealed.len() - 1] ^= 1;
+    assert_eq!(store.unseal(&tampered), Err(KeyStoreError::InvalidSealed));
+    // The sealing key follows the entropy: another seed cannot unseal, the same seed can.
+    assert_eq!(seeded(4).unseal(&sealed), Err(KeyStoreError::InvalidSealed));
+    assert_eq!(seeded(3).unseal(&sealed).unwrap().as_slice(), b"ticket");
+}
+
+#[test]
+fn from_entropy_kem_key_follows_the_entropy() {
+    let first = seeded(5).generate_kem().unwrap().1;
+    assert_eq!(first, seeded(5).generate_kem().unwrap().1);
+    assert_ne!(first, seeded(6).generate_kem().unwrap().1);
+}
+
+#[test]
+fn from_entropy_draws_differ() {
+    let mut store = seeded(7);
+    let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+    store.random(&mut a).unwrap();
+    store.random(&mut b).unwrap();
+    assert_ne!(a, b);
+    assert_ne!(a, [0; 32]);
+}
+
+#[test]
+fn reseed_diverges_two_stores_of_one_entropy() {
+    let (mut a, mut b) = (seeded(8), seeded(8));
+    let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
+    a.random(&mut x).unwrap();
+    b.random(&mut y).unwrap();
+    assert_eq!(x, y);
+    a.reseed(&[1; 32]);
+    b.reseed(&[2; 32]);
+    a.random(&mut x).unwrap();
+    b.random(&mut y).unwrap();
+    assert_ne!(x, y);
+}
+
+#[test]
+fn reseed_with_equal_entropy_keeps_stores_in_step() {
+    let (mut a, mut b) = (seeded(9), seeded(9));
+    a.reseed(&[3; 32]);
+    b.reseed(&[3; 32]);
+    let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
+    a.random(&mut x).unwrap();
+    b.random(&mut y).unwrap();
+    assert_eq!(x, y);
+}
+
+#[test]
+fn os_random_fills_and_differs() {
+    let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+    vinc_keystore::os_random(&mut a).unwrap();
+    vinc_keystore::os_random(&mut b).unwrap();
+    assert_ne!(a, b);
+    assert_ne!(a, [0; 32]);
+}

@@ -15,7 +15,16 @@
 //!
 //! Invariants: errors are small `Copy` values with one-sentence messages and no key material; private keys never
 //! appear in `Debug` output; keys held in memory are zeroized when dropped.
+//!
+//! The crate is `no_std` with `alloc`. The `std` feature adds the operating system as a source of randomness
+//! (`SoftwareStore::new`, `os_random`); without it a host seeds the store with entropy of its own
+//! (`SoftwareStore::from_entropy`).
+#![no_std]
 #![forbid(unsafe_code)]
+
+extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 mod error;
 mod host;
@@ -24,7 +33,8 @@ mod software;
 #[cfg(feature = "hwenc")]
 pub mod tpm;
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use vinc_crypto::{IdentityAlg, NodeId, Secret};
 use zeroize::Zeroizing;
@@ -32,6 +42,8 @@ use zeroize::Zeroizing;
 pub use error::{KeyStoreError, Result};
 pub use host::KeyHost;
 pub use software::SoftwareStore;
+#[cfg(feature = "std")]
+pub use software::os_random;
 #[cfg(feature = "hwenc")]
 pub use tpm::{TpmConfig, TpmStore};
 
@@ -44,8 +56,9 @@ pub struct KeyHandle(u64);
 
 impl KeyHandle {
     pub(crate) fn next() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+        // A `usize` counter: 32-bit targets have no 64-bit atomics. A wrap needs 2^32 allocations between two live handles.
+        static NEXT: AtomicUsize = AtomicUsize::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed) as u64)
     }
 
     pub(crate) const fn id(&self) -> u64 {

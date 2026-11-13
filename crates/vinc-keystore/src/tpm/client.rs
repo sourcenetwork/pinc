@@ -5,6 +5,8 @@
 //! checked before the body is read, so a failure is a [`KeyStoreError::Tpm`] carrying the code; buffers that held
 //! commands or responses with secrets are zeroized.
 
+use std::vec::Vec;
+
 use tpm2_protocol::basic::{TpmHandle, TpmUint16};
 use tpm2_protocol::constant::TPM_MAX_COMMAND_SIZE;
 use tpm2_protocol::data::{
@@ -403,7 +405,7 @@ const _: () = assert!(MAX_AUTH_LEN == tpm2_protocol::constant::MAX_DIGEST_SIZE);
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use std::io;
+    use std::{io, vec};
 
     use super::*;
 
