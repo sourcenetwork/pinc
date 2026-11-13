@@ -17,6 +17,7 @@ import Vinc.TracePn
 import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
+import Vinc.TraceFramePack
 import Vinc.TraceOrphan
 import Vinc.TraceHalfOpen
 import Vinc.TraceMtu
@@ -478,6 +479,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
         if TraceFrame.isTag t then
           -- Frame codec events (`txfr`, written by `trace_frame`): decode, write, the iterator and the ACK ranges.
           match TraceFrame.replayEvent j with
+          | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceFramePack.isTag t then
+          -- Packet builder events (`txpk`, written by `trace_framepack`): the frames of every sealed packet, the
+          -- dropped length and the STREAM header.
+          match TraceFramePack.replayEvent j with
           | .ok _ =>
             count := count + 1
             continue

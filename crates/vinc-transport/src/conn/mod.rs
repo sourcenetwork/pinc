@@ -102,6 +102,8 @@ pub use path::{PathError, RJ_THIN_GAP};
 #[cfg(feature = "trace")]
 pub use reasm::trace::{ReasmProbe, ReasmView};
 pub use send::Transmit;
+#[cfg(feature = "trace")]
+pub use send::trace::{PackKind, PackMode, PackProbe, PackRecord};
 pub use tables::Tables;
 
 use self::cid::Cids;
@@ -201,6 +203,9 @@ pub struct Connection<
     fan_mask: u16,
     fan_target: Option<usize>,
     fan_skip: bool,
+    /// The log of the packet builder (trace validation only).
+    #[cfg(feature = "trace")]
+    pack: send::trace::PackLog,
 }
 
 impl<'a, P, S, const N: usize, const C: usize, const F: usize, const NP: usize> Connection<'a, P, S, N, C, F, NP>
@@ -296,6 +301,8 @@ where
             fan_mask: 0,
             fan_target: None,
             fan_skip: false,
+            #[cfg(feature = "trace")]
+            pack: send::trace::PackLog::new(),
         })
     }
 
