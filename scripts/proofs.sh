@@ -17,8 +17,13 @@ COMMUNITY="$TLA_HOME/CommunityModules-deps-202611060952.jar"
 # take 75% of the machine; 15% each keeps the 3 under half (of the cgroup limit, when the run has one).
 jtmp_root=$(mktemp -d)
 trap 'rm -rf "$jtmp_root"' EXIT
-jopts() { printf -- '-XX:MaxRAMPercentage=15 -Djava.io.tmpdir=%s' "$(mktemp -d -p "$jtmp_root")"; }
+jopts() { printf -- '-XX:MaxRAMPercentage=15 -Djava.io.tmpdir=%s' "$(mktemp -d "$jtmp_root/XXXXXX")"; }
 
+
+# `wait -n` (bash 4.3) runs the model checks in parallel; macOS ships bash 3.2.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 3 ]; }; then
+    echo "proofs: bash 4.3 or newer is needed (this is $BASH_VERSION); on macOS: brew install bash" >&2; exit 1
+fi
 
 need() { # need <file> <download command>
     [ -f "$1" ] || { echo "proofs: missing $1; fetch it with: $2" >&2; exit 1; }
