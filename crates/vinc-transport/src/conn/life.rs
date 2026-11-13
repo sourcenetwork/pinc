@@ -68,6 +68,9 @@ pub(crate) struct Life {
     pub(crate) clock: u64,
     /// When the carrier of the active relay path last heard anything, as the endpoint reports it.
     pub(crate) carrier_heard: Option<u64>,
+    /// What the last recovery timer read to decide whether the session is closed behind a live carrier (trace only).
+    #[cfg(feature = "trace")]
+    pub(crate) carrier_probe: Option<super::timer::trace::CarrierView>,
 }
 
 impl Life {
@@ -98,6 +101,8 @@ impl Life {
             repair_pn: None,
             clock: now,
             carrier_heard: None,
+            #[cfg(feature = "trace")]
+            carrier_probe: None,
         }
     }
 }

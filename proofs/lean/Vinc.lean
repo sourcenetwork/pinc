@@ -93,6 +93,9 @@ import Vinc.CoreHalfOpenThm
 import Vinc.TraceHalfOpen
 import Vinc.TransportMtu
 import Vinc.TraceMtu
+import Vinc.TransportTimers
+import Vinc.TransportTimersThm
+import Vinc.TraceTimers
 import Vinc.TraceRecovery
 import Vinc.ReconcileSession
 import Vinc.TraceReconcile
