@@ -135,27 +135,30 @@ theorem RingFwd.pns {r r' : List Slot} (h : RingFwd r r') : (r'.map (·.pn)).Sub
 structure Keep (r0 r : R) : Prop where
   ring : RingFwd r0.ring r.ring
   ls : r.ls = r0.ls
+  la : r.la = r0.la
 
-theorem Keep.refl (r : R) : Keep r r := ⟨RingFwd.refl _, rfl⟩
+theorem Keep.refl (r : R) : Keep r r := ⟨RingFwd.refl _, rfl, rfl⟩
 
-theorem Keep.next {r0 r : R} (k : Keep r0 r) (r' : R) (hr : F2 r.ring r'.ring) (hl : r'.ls = r.ls) : Keep r0 r' :=
-  ⟨k.ring.step hr, hl.trans k.ls⟩
+theorem Keep.next {r0 r : R} (k : Keep r0 r) (r' : R) (hr : F2 r.ring r'.ring) (hl : r'.ls = r.ls)
+    (hla : r'.la = r.la := by rfl) : Keep r0 r' :=
+  ⟨k.ring.step hr, hl.trans k.ls, hla.trans k.la⟩
 
 theorem Keep.trim {r0 r : R} (k : Keep r0 r) (p : P) (now : Nat) (r' : R) (hr : r'.ring = trim p now r.ring)
-    (hl : r'.ls = r.ls) : Keep r0 r' := by
+    (hl : r'.ls = r.ls) (hla : r'.la = r.la := by rfl) : Keep r0 r' := by
   obtain ⟨j, hj⟩ := trim_drop p now r.ring
-  exact ⟨by rw [hr, hj]; exact k.ring.dropk j, hl.trans k.ls⟩
+  exact ⟨by rw [hr, hj]; exact k.ring.dropk j, hl.trans k.ls, hla.trans k.la⟩
 
 theorem Keep.ite {r0 : R} (c : Prop) [Decidable c] (a b : R) (ha : Keep r0 a) (hb : Keep r0 b) :
     Keep r0 (if c then a else b) := by
   split <;> assumption
 
 theorem noteOvertaken_keep (p : P) (r : R) (now pn time path : Nat) :
-    (noteOvertaken p r now pn time path).ring = r.ring ∧ (noteOvertaken p r now pn time path).ls = r.ls := by
+    (noteOvertaken p r now pn time path).ring = r.ring ∧ (noteOvertaken p r now pn time path).ls = r.ls ∧
+      (noteOvertaken p r now pn time path).la = r.la := by
   unfold noteOvertaken
   split
-  · exact ⟨rfl, rfl⟩
-  · split <;> exact ⟨rfl, rfl⟩
+  · exact ⟨rfl, rfl, rfl⟩
+  · split <;> exact ⟨rfl, rfl, rfl⟩
 
 theorem loseAt_keep {r0 : R} (p : P) (y : Y) (i now : Nat) (sl : Slot) (h : y.r.ring[i]? = some sl)
     (hst : sl.st = .fl) (k : Keep r0 y.r) : Keep r0 (loseAt p y i now).r := by
@@ -225,7 +228,7 @@ theorem timeoutLoss_keep {r0 : R} (p : P) (r : R) (now : Nat) (k : Keep r0 r) :
 theorem timeout_keep (p : P) (r : R) (now : Nat) : Keep r (timeout p r now).r := by
   unfold timeout
   dsimp only
-  have h1 := timeoutLoss_keep (r0 := r) p { r with clock := max r.clock now } now ⟨RingFwd.refl _, rfl⟩
+  have h1 := timeoutLoss_keep (r0 := r) p { r with clock := max r.clock now } now ⟨RingFwd.refl _, rfl, rfl⟩
   repeat' split
   all_goals first
     | exact h1
@@ -249,7 +252,7 @@ theorem flushLoop_keep {r0 : R} (now : Nat) : ∀ (n i : Nat) (y : Y), Keep r0 y
 theorem flush_keep (r : R) (now : Nat) : Keep r (flush r now).r := by
   unfold flush
   dsimp only
-  exact (flushLoop_keep (r0 := r) now _ 0 _ ⟨RingFwd.refl _, rfl⟩).next _ (F2.refl _) rfl
+  exact (flushLoop_keep (r0 := r) now _ 0 _ ⟨RingFwd.refl _, rfl, rfl⟩).next _ (F2.refl _) rfl
 
 theorem ackRing_keep {r0 : R} (p : P) (now b : Nat) :
     ∀ (n i : Nat) (x : X), Keep r0 x.r → Keep r0 (ackRing p now b n i x).r
@@ -276,8 +279,8 @@ theorem ackRing_keep {r0 : R} (p : P) (now b : Nat) :
             · exact ackRing_keep p now b n (i + 1) _ (k.next _ hdone rfl)
             · try dsimp only
               split
-              · exact ackRing_keep p now b n (i + 1) _ (k.next _ hno ho.2)
-              · exact ackRing_keep p now b n (i + 1) _ (k.next _ hno ho.2)
+              · exact ackRing_keep p now b n (i + 1) _ (k.next _ hno ho.2.1 ho.2.2)
+              · exact ackRing_keep p now b n (i + 1) _ (k.next _ hno ho.2.1 ho.2.2)
 
 theorem ackRange1_keep {r0 : R} (p : P) (now a b : Nat) (x : X) (k : Keep r0 x.r) :
     Keep r0 (ackRange1 p now a b x).r := by
@@ -301,13 +304,24 @@ theorem ackRanges_keep {r0 : R} (p : P) (now : Nat) :
 theorem ackStart_keep (p : P) (r : R) (now : Nat) : Keep r (ackStart p r now).1 := by
   unfold ackStart
   dsimp only
-  split <;> exact ⟨RingFwd.refl _, rfl⟩
+  split <;> exact ⟨RingFwd.refl _, rfl, rfl⟩
 
-theorem ackSeed_keep {r0 : R} (p : P) (x : X) (now fl : Nat) (k : Keep r0 x.r) :
-    Keep r0 (ackSeed p x now fl).1 := by
+theorem RingFwd.trans {r a b : List Slot} (h1 : RingFwd r a) (h2 : RingFwd a b) : RingFwd r b := by
+  obtain ⟨k1, hk1⟩ := h1
+  obtain ⟨k2, hk2⟩ := h2
+  refine ⟨k1 + k2, ?_⟩
+  rw [← List.drop_drop]
+  exact (hk1.drop k2).trans hk2
+
+/-- What the seed of an acknowledgement leaves: the ring and the last number sent, and the largest acknowledged
+number raised to `fl`. -/
+theorem ackSeed_fields (p : P) (x : X) (now fl : Nat) :
+    (ackSeed p x now fl).1.ring = x.r.ring ∧ (ackSeed p x now fl).1.ls = x.r.ls ∧
+      (ackSeed p x now fl).1.la = omax x.r.la (some fl) := by
   unfold ackSeed
   dsimp only
-  exact Keep.ite _ _ _ (k.next _ (F2.refl _) rfl) (k.next _ (F2.refl _) rfl)
+  repeat' split
+  all_goals exact ⟨rfl, rfl, rfl⟩
 
 theorem ackSample_keep {r0 : R} (p : P) (r4 : R) (npn ntime npath now fl : Nat) (k : Keep r0 r4) :
     Keep r0 (ackSample p r4 npn ntime npath now fl) := by
@@ -317,28 +331,35 @@ theorem ackSample_keep {r0 : R} (p : P) (r4 : R) (npn ntime npath now fl : Nat) 
   · exact k.next _ (F2.refl _) rfl
   · exact k
 
-theorem ackFinish_keep {r0 : R} (p : P) (x : X) (now fl : Nat) (k : Keep r0 x.r) :
-    Keep r0 (ackFinish p x now fl).r := by
+/-- The end of an acknowledgement keeps what the seed left. -/
+theorem ackFinish_keep (p : P) (x : X) (now fl : Nat) : Keep (ackSeed p x now fl).1 (ackFinish p x now fl).r := by
   unfold ackFinish
-  have ks := ackSeed_keep p x now fl k
   split
-  · exact ks.trim p now _ rfl rfl
+  · exact (Keep.refl _).trim p now _ rfl rfl
   · rename_i npn ntime npath _
-    have kd := detect_keep (r0 := r0) p
+    have kd := detect_keep (r0 := (ackSeed p x now fl).1) p
       ⟨{ ackSample p (ackSeed p x now fl).1 npn ntime npath now fl with pc := 0 }, x.ev, x.s, none⟩ now fl
-      ((ackSample_keep p _ npn ntime npath now fl ks).next _ (F2.refl _) rfl)
+      ((ackSample_keep p _ npn ntime npath now fl (Keep.refl _)).next _ (F2.refl _) rfl)
     exact kd.trim p now _ rfl rfl
 
-theorem ack_keep (p : P) (r : R) (now : Nat) (rgs : List (Nat × Nat)) : Keep r (ack p r now rgs).r := by
+/-- A call of `ack`: the ring moved forward and the last number sent kept (the largest acknowledged one is raised,
+see `Vinc.TransportRecovery.ack_la`). -/
+theorem ack_keep (p : P) (r : R) (now : Nat) (rgs : List (Nat × Nat)) :
+    RingFwd r.ring (ack p r now rgs).r.ring ∧ (ack p r now rgs).r.ls = r.ls := by
   unfold ack
   dsimp only
   have kx := ackRanges_keep (r0 := r) p now rgs
     ⟨(ackStart p r now).1, [], {}, none, none, (ackStart p r now).2, "ok"⟩ (ackStart_keep p r now)
+  generalize ackRanges p now rgs ⟨(ackStart p r now).1, [], {}, none, none, (ackStart p r now).2, "ok"⟩ = x at kx ⊢
   split
-  · exact kx
+  · exact ⟨kx.ring, kx.ls⟩
   · split
-    · exact kx.next _ (F2.refl _) rfl
-    · exact ackFinish_keep p _ now _ kx
+    · exact ⟨(kx.next _ (F2.refl _) rfl).ring, (kx.next _ (F2.refl _) rfl).ls⟩
+    · rename_i fl _
+      have kf := ackFinish_keep p x now fl
+      have e := ackSeed_fields p x now fl
+      exact ⟨by have := kf.ring; rw [e.1] at this; exact kx.ring.trans this,
+        kf.ls.trans (e.2.1.trans kx.ls)⟩
 
 /-- A send: the ring moved forward, and then nothing more or one new slot with a number above the last one sent,
 which becomes the last one sent. -/
@@ -399,7 +420,9 @@ theorem flush_ok (r : R) (now : Nat) (ok : RingOK r.ls r.ring) : RingOK (flush r
   (flush_keep r now).ok ok
 
 theorem ack_ok (p : P) (r : R) (now : Nat) (rgs : List (Nat × Nat)) (ok : RingOK r.ls r.ring) :
-    RingOK (ack p r now rgs).r.ls (ack p r now rgs).r.ring := (ack_keep p r now rgs).ok ok
+    RingOK (ack p r now rgs).r.ls (ack p r now rgs).r.ring := by
+  have k := ack_keep p r now rgs
+  rw [k.2]; exact k.1.ok ok
 
 theorem send_ok (p : P) (r : R) (k : Pkt) (ok : RingOK r.ls r.ring) :
     RingOK (send p r k).r.ls (send p r k).r.ring := by
@@ -474,7 +497,7 @@ theorem flush_doneStays (r : R) (now : Nat) (ok : RingOK r.ls r.ring) :
 
 theorem ack_doneStays (p : P) (r : R) (now : Nat) (rgs : List (Nat × Nat)) (ok : RingOK r.ls r.ring) :
     ∀ a ∈ r.ring, ∀ b ∈ (ack p r now rgs).r.ring, a.pn = b.pn → SlotFwd a b :=
-  (ack_keep p r now rgs).ring.doneStays ok.1
+  (ack_keep p r now rgs).1.doneStays ok.1
 
 theorem send_doneStays (p : P) (r : R) (k : Pkt) (ok : RingOK r.ls r.ring) :
     ∀ a ∈ r.ring, ∀ b ∈ (send p r k).r.ring, a.pn = b.pn → SlotFwd a b := by
