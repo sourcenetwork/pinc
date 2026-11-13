@@ -5,7 +5,8 @@
 //! with those ids and the protocol name, reports `Connected` at once, and queues one sub-session open extension frame
 //! (`alen alpn cc cs`) in the parent. The data it writes goes out in the next datagrams, so the peer sees the open and
 //! the first bytes in the same flight. The peer derives the same keys from the frame, finds the protocol in its
-//! registry and opens the matching session. There is no age limit on the parent: any established parent qualifies.
+//! registry and opens the matching session. The parent must have been heard from within [`PARENT_RX`]: one that went
+//! silent may be a peer that restarted, so the dial makes its own handshake and reaches it.
 //!
 //! The extension frame is repeated by the transport until its packet is acknowledged, so the peer may see it twice;
 //! the ids of the opens it accepted are remembered (1024 of them) and a repeat is ignored.
@@ -33,14 +34,20 @@ use crate::slot::State;
 
 /// The most sub-sessions that wait for one parent's handshake.
 const MAX_WAITERS: usize = 8;
+/// How recently a parent must have been heard from to carry a sub-session, in nanoseconds.
+const PARENT_RX: u64 = 20_000_000_000;
 use crate::trace::trace;
 
 ep_impl! {
-    /// The established session of `peer` a new session can be opened over, if any: a live one, a root one first.
-    pub(crate) fn find_parent(&self, peer: &NodeId) -> Option<usize> {
+    /// The established session of `peer` a new session can be opened over, if any: an allowed, live one with a path,
+    /// heard from within [`PARENT_RX`], a root one first.
+    pub(crate) fn find_parent(&self, peer: &NodeId, now: u64) -> Option<usize> {
         let live = |i: &usize| {
             self.slots.get(*i).is_some_and(|s| {
-                s.m.state == State::Established && s.conn.as_ref().is_some_and(|c| c.is_connected() && c.session().is_some())
+                s.m.state == State::Established
+                    && s.m.allowed
+                    && now.saturating_sub(s.m.last_rx) < PARENT_RX
+                    && s.conn.as_ref().is_some_and(|c| c.is_connected() && c.session().is_some() && c.active_path().is_some())
             })
         };
         self.peer_sessions(peer)

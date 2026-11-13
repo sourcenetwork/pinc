@@ -417,7 +417,7 @@ ep_impl! {
             });
             return Err(CommandError::Refused);
         }
-        if let Some(parent) = self.find_parent(&node) {
+        if let Some(parent) = self.find_parent(&node, now) {
             return self.open_sub(parent, node, alpn, role, now);
         }
         // Another protocol to a peer whose handshake is still running waits for it instead of starting a second one.
