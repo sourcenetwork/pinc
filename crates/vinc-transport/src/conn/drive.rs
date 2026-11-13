@@ -135,7 +135,7 @@ conn_impl! {
                 if self.client {
                     if !est.resumed {
                         let srtt = self.rec.rtt().smoothed();
-                        self.hs.finish_sent(now, self.rec.pto_duration(), srtt);
+                        self.hs.finish_sent(now, srtt);
                     }
                     if !est.tickets.entries().is_empty() {
                         self.events.push_tickets(est.tickets);

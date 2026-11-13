@@ -18,8 +18,9 @@
 //!   no further than `max(8 s, 2 x the node's largest RTT)`. A Hello that stayed unanswered for its third send gives
 //!   way to a full handshake (see `vinc-security`), and a rejected ticket restarts the schedule.
 //! - A responder resends its flight after 999 ms, then after 1.998 s, 3.996 s and every 4 s.
-//! - A dialing side resends its Finish on the probe timeout, backing off to at most `max(2 s, PTO)`, until the first
-//!   1-RTT packet arrives. On a thin node each wait is at least `min(20 s, 2 x max(srtt, node RTTs))`.
+//! - A dialing side resends its Finish after 999 ms whatever the round trip it measured, then after `999 ms << n`
+//!   (n the sends so far, at most 3) up to 2 s, until the first 1-RTT packet arrives. On a thin node each wait after
+//!   the first is at least `min(20 s, 2 x max(srtt, node RTTs))`.
 //! - A handshake that is not established 30 s after it began (60 s on a thin node) ends; the connection then closes.
 //! - A dial the layer above told to end early (one it reported before its handshake) also ends when the resend timer
 //!   fires after 4 first flights went out with nothing heard from the peer: 15 first delays for a full handshake
@@ -73,7 +74,9 @@ const SERVER_FIRST: u64 = 999 * MS;
 const SERVER_CAP: u64 = 4 * SECOND;
 /// The shift limit of a responder's doubling.
 const SERVER_SHIFT: u32 = 4;
-/// The longest delay between resends of the Finish, unless the probe timeout is longer.
+/// The first resend delay of the Finish: three times the 333 ms initial round trip.
+const FINISH_FIRST: u64 = 999 * MS;
+/// The longest delay between resends of the Finish.
 const FINISH_CAP: u64 = 2 * SECOND;
 /// The longest extra wait before a thin node resends its Finish.
 const THIN_FINISH_MAX: u64 = 20 * SECOND;
@@ -325,7 +328,6 @@ pub(crate) struct Handshake {
     /// The resends wait: the peer's address is still being looked up.
     held: bool,
     sends: u32,
-    pto: u64,
     srtt: u64,
     connect_at: Option<u64>,
     timed_out: bool,
@@ -383,7 +385,6 @@ impl Handshake {
             retx_at: client.then(|| now.saturating_add(first)),
             held: false,
             sends,
-            pto: 0,
             srtt: 0,
             connect_at: Some(now.saturating_add(timing.connect_timeout())),
             timed_out: false,
@@ -520,14 +521,12 @@ impl Handshake {
         }
     }
 
-    /// A dialing side established its session at `now`: resend the Finish on the probe timeout `pto` until the first
-    /// 1-RTT packet arrives.
-    pub(crate) fn finish_sent(&mut self, now: u64, pto: u64, srtt: u64) {
+    /// A dialing side established its session at `now`: resend the Finish after [`FINISH_FIRST`] until the first
+    /// 1-RTT packet arrives. The sends so far (the first flight and its resends) keep counting.
+    pub(crate) fn finish_sent(&mut self, now: u64, srtt: u64) {
         if self.client && self.stage == Stage::Finish {
-            self.pto = pto;
             self.srtt = srtt;
-            self.sends = 0;
-            self.retx_at = Some(now.saturating_add(pto));
+            self.retx_at = Some(now.saturating_add(FINISH_FIRST));
         }
     }
 
@@ -753,13 +752,11 @@ impl Handshake {
             self.unanswered = true;
             return true;
         }
+        let sent = self.sends;
         self.sends = self.sends.saturating_add(1);
         let delay = match (self.stage, self.client) {
             (Stage::Finish, _) => {
-                let backoff = self
-                    .pto
-                    .saturating_mul(1 << self.sends.min(FINISH_SHIFT))
-                    .min(FINISH_CAP.max(self.pto));
+                let backoff = FINISH_FIRST.saturating_mul(1 << sent.min(FINISH_SHIFT)).min(FINISH_CAP);
                 if self.timing.is_thin() {
                     // On a thin uplink the Finish is resent only after its answer could have arrived.
                     let rtt = self

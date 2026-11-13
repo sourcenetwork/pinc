@@ -174,7 +174,7 @@ fn a_responder_resends_its_flight_at_999_ms_then_every_4_s() {
 }
 
 #[test]
-fn the_finish_is_resent_on_the_probe_timeout_and_the_handshake_round_trip_seeds_the_estimate() {
+fn the_finish_is_resent_after_999_ms_and_the_handshake_round_trip_seeds_the_estimate() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
@@ -187,9 +187,13 @@ fn the_finish_is_resent_on_the_probe_timeout_and_the_handshake_round_trip_seeds_
         assert!((20 * MS..25 * MS).contains(&srtt), "srtt {srtt}");
         assert!(!net.b.conn.is_connected(), "the Finish was lost");
         assert!(net.connect(t0 + 2 * SEC));
-        // The Finish went out again after about a probe timeout (srtt + 4 x rttvar + 25 ms), not at the 500 ms base.
+        // The Finish went out again after 999 ms, whatever the round trip it measured.
         let took = net.now - t0;
-        assert!((60 * MS..450 * MS).contains(&took), "connected after {} ms", took / MS);
+        assert!(
+            (999 * MS..1100 * MS).contains(&took),
+            "connected after {} ms",
+            took / MS
+        );
         assert_eq!(net.a.conn.stats().handshake_retransmits, 1);
         // Once the first 1-RTT packet is heard the timer is done.
         net.run(t0 + 5 * SEC, |_| false);
@@ -394,5 +398,36 @@ fn a_thin_node_resends_its_finish_only_after_twice_the_round_trip() {
         // The wait after the first resend is at least twice the round trip, 1.2 s, not the 2 x PTO it would be.
         assert!(gap >= 1200 * MS, "waited {} ms", gap / MS);
         assert_eq!(net.a.conn.stats().handshake_retransmits, 3);
+    });
+}
+
+#[test]
+fn a_lost_finish_is_resent_999_ms_later_whatever_the_measured_round_trip() {
+    big_stack(|| {
+        // Replies take 590 ms, so the handshake round trip is about 600 ms and the probe timeout several seconds. One
+        // flight went out before the Finish, so the waits are 999 ms, then 999 ms << 1, then the 2 s cap.
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(44, Params::new(10 * MS));
+        link.route(PathId(1)).ba.p.delay_ns = 590 * MS;
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        net.drop_finish = true;
+        let t0 = net.now;
+        assert!(net.run(t0 + 5 * SEC, |n| n.a.conn.is_connected()));
+        let sent = net.now;
+        net.link.route(PathId(1)).ab.drop_next(3);
+        let before = net.a.conn.stats().handshake_retransmits;
+        // The re-sends the dialing side has made by each instant after the Finish: none before 999 ms, one at 1 s, a
+        // second 1998 ms later, a third 2 s after that.
+        let mut count = |at: u64| {
+            net.run(sent + at, |_| false);
+            net.a.conn.stats().handshake_retransmits - before
+        };
+        assert_eq!(count(990 * MS), 0, "resent before 999 ms");
+        assert_eq!(count(1010 * MS), 1, "not resent at 999 ms");
+        assert_eq!(count(2990 * MS), 1, "second resent before 999 + 1998 ms");
+        assert_eq!(count(3010 * MS), 2, "second not resent at 999 + 1998 ms");
+        assert_eq!(count(4990 * MS), 2, "third resent before 2 s later");
+        assert_eq!(count(5010 * MS), 3, "third not resent 2 s later");
     });
 }
