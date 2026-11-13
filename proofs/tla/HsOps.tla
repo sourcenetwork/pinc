@@ -14,12 +14,21 @@
 (* attacker only if it can be computed from the attacker's own secrets     *)
 (* (Known). A Diffie-Hellman secret is known if either secret is the      *)
 (* attacker's; a KEM secret if the encapsulation coin or the key owner is  *)
-(* the attacker's; the chain key of the hybrid schedule needs both. A      *)
-(* sealed blob is a record of the key it was sealed under, its associated  *)
-(* data and its plaintext; opening checks the key and the data. A          *)
-(* signature is a term only the signer (or anyone, for the attacker's own  *)
-(* identity) can make. Secrets are atoms <<tag, node, k>>, and a node is   *)
-(* the attacker's iff it is A.                                             *)
+(* the attacker's; the chain key of the hybrid schedule needs both. Either *)
+(* half of the hybrid can be broken by a constant, as DtnSeal.tla does it: *)
+(* with BX the attacker learns the Diffie-Hellman secret of every exchange *)
+(* (it sees every public value on the network), with BK the KEM secret of  *)
+(* every ciphertext and the implicit-rejection value of every malformed    *)
+(* one; signatures, hashes and the AEAD stay ideal. A resumption secret    *)
+(* seeded from an earlier, unmodelled full handshake is known if a party   *)
+(* is the attacker, if both halves are broken (the earlier session was a   *)
+(* full handshake: Handshake_xbroken and Handshake_kbroken show that one   *)
+(* broken half leaves its resumption secret secret), or if the ticket      *)
+(* store leaked (SeedLeak). A sealed blob is a record of the key it was    *)
+(* sealed under, its associated data and its plaintext; opening checks the *)
+(* key and the data. A signature is a term only the signer (or anyone, for *)
+(* the attacker's own identity) can make. Secrets are atoms <<tag, node,   *)
+(* k>>, and a node is the attacker's iff it is A.                          *)
 (*                                                                         *)
 (* Every field of every message is its own field of the message and its    *)
 (* own argument of the transcript terms: version (ver), ALPN (al),         *)
@@ -51,7 +60,9 @@ CONSTANTS A,    \* the attacker's node id
           NT,   \* tickets a session issues (tickets_per_session), 1..4
           ATT,  \* the draws one ticket id may take (ID_ATTEMPTS)
           LF, LS, LH, LR,   \* byte lengths: full Initial, short Initial, resume Hello, resume Reply
-          RB, LB            \* RESEND_BUDGET and LATE_INITIAL_BUDGET
+          RB, LB,           \* RESEND_BUDGET and LATE_INITIAL_BUDGET
+          BX, BK,           \* X25519 / ML-KEM-768 broken (the attacker learns every DH / KEM shared secret)
+          SeedLeak          \* the attacker holds the resumption secrets of the seeded earlier sessions
 
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 Max2(a, b) == IF a > b THEN a ELSE b
@@ -107,13 +118,13 @@ ThH(v, al, dc, sc, ad, tid, e, cr) == <<"thH", v, al, dc, sc, ad, tid, e, cr>>
 ThR(thh, binder, rsc, e, rcr) == <<"thR", thh, binder, rsc, e, rcr>>
 ThT(thr, tids) == <<"thT", thr, tids>>
 
-(* the attacker can compute t from its own secrets *)
+(* the attacker can compute t from its own secrets (and from the public values, with a broken half) *)
 RECURSIVE Known(_)
 Known(t) ==
-    CASE t[1] = "dh" -> \E x \in t[2] : x[2] = A
-      [] t[1] = "kem" -> t[2][2] = A \/ t[3][2] = A
-      [] t[1] = "seed" -> t[2] = A \/ t[3] = A
-      [] t[1] = "junk" -> FALSE
+    CASE t[1] = "dh" -> BX \/ \E x \in t[2] : x[2] = A
+      [] t[1] = "kem" -> BK \/ t[2][2] = A \/ t[3][2] = A
+      [] t[1] = "seed" -> (BX /\ BK) \/ SeedLeak \/ t[2] = A \/ t[3] = A
+      [] t[1] = "junk" -> BK
       [] t[1] \in {"ck1", "ck1r"} -> Known(t[2]) /\ Known(t[3])
       [] OTHER -> Known(t[2])
 

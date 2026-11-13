@@ -85,6 +85,12 @@ par run_tlc handshake Handshake Handshake
 par run_tlc handshake_resume Handshake Handshake_resume
 par run_tlc handshake_late Handshake Handshake_late
 par run_tlc handshake_stores Handshake Handshake_stores
+par run_tlc handshake_xbroken Handshake Handshake_xbroken
+par run_tlc handshake_kbroken Handshake Handshake_kbroken
+par run_tlc handshake_stores_xbroken Handshake Handshake_stores_xbroken
+par run_tlc handshake_pskleak Handshake Handshake_pskleak
+par witness_tlc handshake_bothbroken Handshake Handshake_bothbroken Secrecy
+par witness_tlc handshake_pskleak_xbroken Handshake Handshake_pskleak_xbroken ResumedSecret
 par run_tlc record Record Record
 par run_tlc record_chacha Record Record_chacha
 par run_tlc headerprot HeaderProt HeaderProt
@@ -97,6 +103,7 @@ par witness_tlc keyroll_good KeyRoll KeyRoll_good NotGood
 par run_tlc keyroll_stale KeyRoll KeyRoll_stale
 par run_tlc keyroll_gate KeyRoll KeyRoll_gate
 par run_tlc keyroll_orphan KeyRoll KeyRoll_orphan
+par witness_tlc keyroll_xbroken KeyRoll KeyRoll_xbroken PostCompromiseX
 par run_tlc labels Labels Labels
 par run_tlc crypto_kdf CryptoKdf CryptoKdf
 par run_tlc crypto_identity CryptoIdentity CryptoIdentity

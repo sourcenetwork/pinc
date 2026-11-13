@@ -134,7 +134,7 @@ theorem upd_inv {g g' : G} (h : Inv1 g) (s : Nat × Nat) (st' : IState) (out : L
   (Inv1_congr (g := { g with ist := upd g.ist s st', net := addNet g out }) hist hrst hnet hsig).2
     (upd_inv0 h s st' out hold hdec hauth hfin hres hout)
 
-theorem derivable_sig {g : G} (h : Inv1 g) {m : Msg} (hm : Derivable g m) : SigGood g m.sealed := by
+theorem derivable_sig {kn : Term → Prop} {g : G} (h : Inv1 g) {m : Msg} (hm : DerivableK kn g m) : SigGood g m.sealed := by
   rcases hm with hm | ⟨hs, -⟩
   · exact fun id r th e => Or.inr (h.netSigned m hm id r th e)
   · exact hs
@@ -200,7 +200,7 @@ theorem startFull_inv {g : G} (h : Inv1 g) (s : Nat × Nat) (peer : Nat) (al : T
     (by simp [hfin]) (by simp [hres]) hout
   exact (Inv1_congr (g := { g with ist := upd g.ist s (INew s.1 s.2 peer al short (if take then (CTake (g.cli s.1) peer al).tk else none)).st, net := addNet g (INew s.1 s.2 peer al short (if take then (CTake (g.cli s.1) peer al).tk else none)).out }) (g' := stepIStart g s peer al short take) (by cases take <;> rfl) rfl (by cases take <;> rfl) rfl).2 this
 
-theorem iRecv_inv {g : G} (h : Inv1 g) (s : Nat × Nat) (m : Msg) (hd : Derivable g m) :
+theorem iRecv_inv {kn : Term → Prop} {g : G} (h : Inv1 g) (s : Nat × Nat) (m : Msg) (hd : DerivableK kn g m) :
     Inv1 (stepIRecv g s m) := by
   have hF := h.iFin s
   have hR := h.iRes s
@@ -507,7 +507,8 @@ theorem rsame_inv {g g' : G} (h : Inv1 g) (hist : g'.ist = g.ist) (hrst : g'.rst
 theorem NoSig_rhReply (n k : Nat) (sto : Store) (m : Msg) (cs : List (List Nat)) : NoSig (rhReply n k sto m cs) :=
   NoSig_default _ rfl
 
-theorem rRecv_inv {g : G} (h : Inv1 g) (s : Nat × Nat) (m : Msg) (cs : List (List Nat)) (hd : Derivable g m) :
+theorem rRecv_inv {kn : Term → Prop} {g : G} (h : Inv1 g) (s : Nat × Nat) (m : Msg) (cs : List (List Nat))
+    (hd : DerivableK kn g m) :
     Inv1 (stepRRecv g s m cs) := by
   rcases RHandle_cases (g.rst s) s.1 s.2 (g.sto s.1) m cs with
       ⟨c1, c2, -⟩ | ⟨hp, c1, c2, -⟩ | ⟨hp, ⟨sp, nr, c1⟩, c2, -⟩ | ⟨hp, hty, c1, c2, -⟩ | ⟨hp, hty, c1, c2, -⟩
@@ -632,7 +633,7 @@ theorem rShed_inv {g : G} (h : Inv1 g) (s : Nat × Nat) : Inv1 (stepRShed g s) :
     · simp [RShed, hp]
   · exact rsame_inv h rfl (by show upd g.rst s _ = _; simp [RShed, hp, upd_self]) [] (by simp [stepRShed, addNet_nil]) rfl (by simp)
 
-theorem Inv1_step {g g' : G} (h : Inv1 g) (hs : Step g g') : Inv1 g' := by
+theorem Inv1_step {kn : Term → Prop} {g g' : G} (h : Inv1 g) (hs : StepK kn g g') : Inv1 g' := by
   cases hs with
   | iStart s peer al short take _ hn _ => exact startFull_inv h s peer al short take hn
   | iRecv s m _ hd => exact iRecv_inv h s m hd
@@ -650,22 +651,25 @@ theorem Inv1_step {g g' : G} (h : Inv1 g) (hs : Step g g') : Inv1 g' := by
   | restore n drop _ => exact (Inv1_congr (g := g) (g' := stepRestore g n drop) rfl rfl rfl rfl).2 h
   | restart n _ => exact (Inv1_congr (g := g) (g' := stepRestart g n) rfl rfl rfl rfl).2 h
 
-/-- Every reachable state satisfies the invariant. -/
-theorem Inv1_reach {K C : Nat} {g : G} (h : Reach K C g) : Inv1 g := by
+/-- Every reachable state satisfies the invariant, whatever the attacker can deduce (`kn`): it rests on the
+signatures alone. -/
+theorem Inv1_reach {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) : Inv1 g := by
   induction h with
   | init => exact Inv1_init K C
   | step _ hs ih => exact Inv1_step ih hs
 
 /-- Authentication of the responder, for any number of sessions: an initiator that finished a full handshake with an
-honest peer X holds a transcript that a responder session of X signed. -/
-theorem authI {K C : Nat} {g : G} (h : Reach K C g) (s : Nat × Nat) (hd : (g.ist s).ph = .done)
+honest peer X holds a transcript that a responder session of X signed. It holds against every attacker `kn`, a broken
+half of the hybrid included (`HandshakeHybrid`): it rests on the signatures, which stay ideal. -/
+theorem authI {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) (s : Nat × Nat) (hd : (g.ist s).ph = .done)
     (hr : (g.ist s).resumed = false) (hp : (g.ist s).peer ≠ att) :
     ∃ k, (g.rst ((g.ist s).peer, k)).sgn = true ∧ (g.rst ((g.ist s).peer, k)).ath = (g.ist s).ath :=
   (Inv1_reach h).iAuth s (Or.inr hd) hr hp
 
 /-- Authentication of the initiator, for any number of sessions: a responder that finished a full handshake with an
-honest peer Y holds a transcript that an initiator session of Y signed. -/
-theorem authR {K C : Nat} {g : G} (h : Reach K C g) (s : Nat × Nat) (hd : (g.rst s).ph = .done)
+honest peer Y holds a transcript that an initiator session of Y signed. It holds against every attacker `kn`, as
+`authI`. -/
+theorem authR {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) (s : Nat × Nat) (hd : (g.rst s).ph = .done)
     (hr : (g.rst s).resumed = false) (hp : (g.rst s).peer ≠ att) :
     ∃ k, (g.ist ((g.rst s).peer, k)).ph = .done ∧ (g.ist ((g.rst s).peer, k)).th4 = (g.rst s).th4
       ∧ (g.ist ((g.rst s).peer, k)).resumed = false :=

@@ -36,6 +36,18 @@
 (* shed on both sides. Ticket expiry (Expire, ExpireC), the client store's *)
 (* export and restore and its restart are steps too.                       *)
 (*                                                                         *)
+(* The hybrid: BX and BK of HsOps break the X25519 or the ML-KEM half for  *)
+(* the attacker (Known); its forgeries then also mix an honest Reply's     *)
+(* public value or ciphertext with its own half (MixBases). With one half  *)
+(* broken every property holds (Handshake_xbroken, _kbroken and the store  *)
+(* configs): secrecy rests on the other half, agreement and authentication *)
+(* on the signatures, which stay ideal. With both broken Secrecy fails     *)
+(* (Handshake_bothbroken). A resumed session runs no ML-KEM: its chain key *)
+(* is the ticket's key and one X25519 secret (ResumedAsPsk); a stolen      *)
+(* ticket alone does not reveal the keys of a resumption an honest peer    *)
+(* answered (Handshake_pskleak), with X25519 broken it does                *)
+(* (Handshake_pskleak_xbroken).                                            *)
+(*                                                                         *)
 (* Not modelled: the prekey cache's capacity (see PrekeyCache.tla), the    *)
 (* transport (padding, 1-RTT data), and a ticket store that survives a     *)
 (* responder restart (it cannot: the code has no way to persist it).       *)
@@ -195,6 +207,12 @@ RReplyForgeries(x, thh, binder, ckpsk) ==
     IN {[b EXCEPT !.conf = BadT]}
        \cup (IF Known(cfk) THEN {[b EXCEPT !.conf = Conf(cfk, ThT(thr, <<>>))]} ELSE {})
 
+(* with a broken half the attacker can also pair an honest Reply's public value (X25519 broken) or ciphertext (ML-KEM
+   broken) with its own other half: it then knows the chain key the initiator derives *)
+MixBases(base) ==
+    LET rs == {m \in net : m.ty = "Reply"}
+    IN (IF BX THEN {[base EXCEPT !.e = r.e] : r \in rs} ELSE {}) \cup (IF BK THEN {[base EXCEPT !.ct = r.ct] : r \in rs} ELSE {})
+
 ForgedToI(s) ==
     LET st == ist[s]
         n == s[1]
@@ -203,7 +221,7 @@ ForgedToI(s) ==
     IN (IF Forge THEN {[base EXCEPT !.ad = BadAd]} ELSE {})
        \cup (IF ~Forge \/ st.ph # "reply" THEN {}
              ELSE UNION {{[m EXCEPT !.sealed = b] : b \in ReplyBlobsOK(st, n, m)} :
-                            m \in {base} \cup {[base EXCEPT !.sc = c] : c \in CidPool}})
+                            m \in {base} \cup {[base EXCEPT !.sc = c] : c \in CidPool} \cup MixBases(base)})
        \cup (IF st.ph # "resume" THEN {} ELSE RReplyForgeries(st.x, st.thh, st.binder, st.ckpsk))
        \cup (IF st.late.on /\ st.ph \in {"reply", "decap", "sign"}
              THEN RReplyForgeries(st.late.x, st.late.thh, st.late.binder, st.late.ckpsk) ELSE {})
@@ -383,6 +401,28 @@ Secrecy ==
             PrivateOK(rst[r].send) /\ PrivateOK(rst[r].recv) /\ PrivateOK(rst[r].res) /\ PrivateOK(rst[r].cid)
     /\ \A i \in ISess : (ist[i].early # NIL /\ ist[i].peer \in H) => PrivateOK(ist[i].early)
     /\ \A r \in RSess : (rst[r].early # NIL /\ rst[r].peer \in H) => PrivateOK(rst[r].early)
+
+(* A resumed session runs no ML-KEM: the chain key of its keys is ck1r(the ticket's key, one X25519 secret), so its keys
+   are known exactly when the ticket's pre-shared key and that X25519 secret are; with X25519 broken (BX), exactly
+   when the pre-shared key is. The keys are <<"app" | "res" | "cids", ck2, ...>> with ck2 = <<"ck2", ck1, th>>. *)
+Ck1Of(k) == k[2][2]
+AsPsk(keys, ckp) ==
+    \A k \in keys : /\ Ck1Of(k)[1] = "ck1r" /\ Ck1Of(k)[2] = ckp /\ Ck1Of(k)[3][1] = "dh"
+                    /\ (Known(k) <=> (Known(ckp) /\ Known(Ck1Of(k)[3])))
+                    /\ (BX => (Known(k) <=> Known(ckp)))
+ResumedAsPsk ==
+    /\ \A i \in ISess : (ist[i].est /\ ist[i].resumed) => AsPsk({ist[i].send, ist[i].recv, ist[i].res, ist[i].cid}, ist[i].ckpsk)
+    /\ \A r \in RSess : (rst[r].est /\ rst[r].resumed) =>
+           AsPsk({rst[r].send, rst[r].recv, rst[r].res, rst[r].cid}, CkPsk(rst[r].tpsk))
+
+(* The keys of a resumption that an honest responder answered (both sides established with the same final transcript)
+   are secret. The early keys are not claimed: they derive from the pre-shared key alone. With the ticket's pre-shared
+   key stolen (SeedLeak) this holds, by the X25519 exchange of the resumption; with X25519 broken as well it fails. *)
+ResumedSecret ==
+    \A i \in ISess, r \in RSess :
+        (ist[i].est /\ ist[i].resumed /\ rst[r].est /\ rst[r].resumed /\ ist[i].thf = rst[r].thf) =>
+            \A k \in {ist[i].send, ist[i].recv, ist[i].res, ist[i].cid, rst[r].send, rst[r].recv, rst[r].res, rst[r].cid} :
+                PrivateOK(k)
 
 (* No early acceptance: Established and the early keys only after the peer was authenticated, and the responder's
    early keys come from a ticket it issued *)
