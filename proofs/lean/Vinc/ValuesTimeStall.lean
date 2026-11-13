@@ -7,9 +7,11 @@ The wait `sw` before a fresh dial, and what moves it, from `Vinc/ValuesTime.lean
 
 * `arrival_*` (ARK_PACE), `byteLive_*` (BYTE_LIVE), `stallRtt_le` (STALL_RTT), `stallLive_*` (STALL_LIVE), `redial_*`
   (the doubling): each cap is respected.
-* `stallStep_cases`, `redial_iff`, `redial_only_after_silence`: exactly which events trigger a redial.
-* `sw_decrease`: the wait is not monotone, and `sw_decrease_cases` says exactly where it falls: ARK_PACE when the wait
-  stood above 40 s, and the redial when it stood above 16 s. Nothing else lowers it.
+* `stallStep_idle`, `stallStep_rtt`, `stallStep_live`, `stallStep_redial` (the four cases of a stall check), `redial_iff`,
+  `redial_only_after_silence`: exactly which events trigger a redial.
+* `ark_lowers_example`, `redial_lowers_example`: the wait is not monotone, and `sw_decrease_cases` says exactly where it
+  falls: ARK_PACE when the wait stood above 40 s, and the redial when it stood above 16 s (or, where the timer sum
+  overflows `u64`, STALL_LIVE). Nothing else lowers it.
 * `sw_ge`, `sw_le`: over every run the wait is at least 4 s and at most 60 s, or at most `LIVE_CAP` plus the largest
   STALL_LIVE extension when that rule is taken.
 -/

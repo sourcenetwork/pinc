@@ -17,7 +17,7 @@ The abstract response byte function is `PlanM.byteAt`: for every stream offset `
   order, whatever the window held. So a retransmission equals the original (`readAt_retx`), a partial read is a
   prefix of a longer read (`readAt_prefix`), and a short return happens only at the end of the response or at a
   byte the store lacks (`readAt_short`).
-* `window_inv`: the window only ever holds frames of the plan.
+* `WinInv`, kept by `refill_inv`, `frameAtM_spec` and `rdF_spec`: the window only ever holds frames of the plan.
 -/
 
 set_option linter.deprecated false

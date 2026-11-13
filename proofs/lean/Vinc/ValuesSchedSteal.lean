@@ -15,7 +15,7 @@ import Vinc.ValuesSchedList
 - `steal_idle_robbed`, `steal_idle_below_min`: a provider idle for `STEAL_IDLE` that holds any bytes is a candidate with
   the stalled eta whatever it holds, even less than `STEAL_MIN`. `fresh_work_not_idle`: a provider whose clock was set
   when it was handed work is not idle for `STEAL_IDLE` after that.
-- `keep_group`, `keep_stalled_zero`, `steal_tail_total`: the cut is on a group boundary, a stalled victim loses
+- `keep_group`, `keep_stalled_zero`, and `steal_head_tail_total` (in `ValuesSchedPart`): the cut is on a group boundary, a stalled victim loses
   everything, and the bytes moved are the list's total beyond `keep`.
 - `steal_empty_tail_witness`: the rounding up of `keep` can make the tail empty (a concrete case); the code then resets
   the victim's streams although nothing moved (a finding, see the report).

@@ -15,7 +15,7 @@ assigned list of an active provider. Nothing is dropped by a top-up, a steal (cu
 share goes back to the queue), a prune, or a widening push; this is the invariant "coverage never shrinks" lifted
 from the list to the schedule. `reach_complete`: when the queue and every active list are empty, every wanted byte is
 verified, so a fetch that empties its work has fetched what it was asked for. The start covers resume:
-`start_cover`, the queue after `start` holds every wanted byte that was not verified.
+`start_inv` and `start1_inv`, the queue after `start` holds every wanted byte that was not verified.
 -/
 
 set_option linter.unusedVariables false

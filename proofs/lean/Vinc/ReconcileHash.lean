@@ -6,7 +6,7 @@ import Vinc.ReconcileAlgebra
 `xorH` is the fingerprint of a list of items: the XOR of their 128-bit hashes. The model assumption on the keyed hash
 is `Indep`: the item hashes are independent over XOR (no list of items whose hashes XOR to zero has an item an odd
 number of times), which is what a 128-bit keyed hash gives except with probability 2^-128 per comparison. Under it,
-`check_iff` is the whole content of the final check of the protocol: the fingerprint
+`check_detects_wrong` and `exact_passes_check` are the whole content of the final check of the protocol: the fingerprint
 `fp(A) ^ fp(here) ^ fp(there)` that the initiator sends equals `fp(B)` exactly when `here = B \\ A` and `there = A \\ B`,
 for every pair of arenas that hold only items of the right side, each once.
 -/

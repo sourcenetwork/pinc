@@ -10,12 +10,13 @@ stream of a peer that is being collected, or is serving a response for a root ov
   `BUSY` and nothing is held beyond `S` (`held_le`): a request beyond `S` is refused, never queued.
 * `supersede_iff`: the answer to a new request frees exactly the serving slots of the same peer and the same root
   whose rounded ranges overlap one of the new spans, and never the request's own stream; every other slot is
-  untouched (`supersede_keeps`). Each freed slot is reset with `SUPERSEDED`.
+  untouched. Each freed slot is reset with `SUPERSEDED`.
 * `answer_refused_keeps_others`, `answer_installed_supersedes`: the older responses are freed only after the new
   response is accepted; a refused install frees the request's own slot and nothing else.
-* `refuse_unavailable`: a value the store does not hold whole (or a plan the value cannot give) resets the
+* `refuse_spec`, `answer_refused_keeps_others`: a value the store does not hold whole (or a plan the value cannot give) resets the
   request with `UNAVAILABLE` and frees only its slot.
-* `closed_iff`, `done_frees`: a closed session drops exactly its peer's slots; a finished stream frees its slot.
+* `closed_iff`: a closed session drops exactly its peer's slots; a finished stream frees its slot (`done`: only
+  `done_length` is proved in Lean, not yet that the first slot holding the stream is the one freed).
 -/
 
 set_option linter.deprecated false

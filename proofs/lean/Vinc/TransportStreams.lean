@@ -5,7 +5,8 @@ A model of `vinc-transport` `stream/table.rs`, `recv.rs`, `flow.rs`, `ranges.rs`
 operation as `proofs/tla/StreamsOps.tla` has them (the same operators, with unbounded `Nat` offsets and arbitrary
 sizes in `P`: the chunk size `ch`, the ring `ring`, the stored-range cap `rr`, the slots `n`, the pool `b` in
 chunks). `Vinc.TraceStreams` replays the recorded calls of the real code through these functions; the theorems
-about them are in `Vinc.TransportStreamsThm`.
+about them are in `Vinc.TransportStreamsGrant`, `Vinc.TransportStreamsFlow`, `Vinc.TransportStreamsLocal` and
+`Vinc.TransportStreamsAdmit`.
 
 A slot's `held` is the ascending list of chunk numbers its ring holds, `rs` the ascending stored ranges. The
 pool use of the streams is the number of chunks their rings hold; `ext` is what everything else holds (send

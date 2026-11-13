@@ -12,9 +12,9 @@ and on `usize` of 32 or 64 bits (`Machine`).
   the stream (the sum of the sizes of the steps), and the stream's size in bytes otherwise; every `u64` to
   `usize` conversion of an offset or length succeeds on both widths (so none truncates), and the reads stay
   inside the value and the outboard, so `RangeOutOfBounds` is not raised.
-* `encodedLen_exact`: `encoded_len` adds the step sizes in `u64` without a check; it overflows exactly when the
+* `encodedLen_overflows_iff`: `encoded_len` adds the step sizes in `u64` without a check; it overflows exactly when the
   stream is longer than `u64::MAX` bytes, which a layout of a value close to `u64::MAX` bytes over its whole
-  range produces. See `Vinc.Machine.encodedLen_overflows_iff`.
+  range produces.
 -/
 
 set_option linter.deprecated false

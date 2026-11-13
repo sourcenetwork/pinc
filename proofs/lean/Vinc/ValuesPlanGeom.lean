@@ -8,11 +8,11 @@ form with `parents_before`. `frame_spec` proves, for every range of an accepted 
 range, that
 
 * the frame exists, with the stream offset of the reference (the range's start plus the bytes of the reference
-  frames before it, `frame_start_ref`), the group offset and length of the reference frame, the pair count of the
+  frames before it: `sumTo (fb ..)`), the group offset and length of the reference frame, the pair count of the
   reference frame times 64 as proof length, and `follows` exactly after the first frame;
 * the frame ends where the next one starts (`frame_end_start`), so the frames of a range tile it and, with the
   ranges laid back to back (`RO`), the whole response `[0, total)` (`tiling`);
-* the starts strictly increase (`start_lt_end`, `start_strict`).
+* the starts strictly increase (`start_strict`).
 
 `frame_u32` shows the `u32::try_from` of the lengths never fails and `frame_none` that only a group of the range
 has a frame. `frame_end_le_total` shows no frame passes the response, which is at most `2^62 - 1` bytes, so no

@@ -18,7 +18,7 @@ failing, which can only make a byte be asked for twice, never skip it (`push_cov
 when the new span touches the last one, the covered set is exactly the union (`push_cov_iff_room`,
 `push_cov_iff_touch`); and a widened byte always lies in the hull of the last span and the new one
 (`push_cov_hull`). `holes` returns exactly the unverified part of a span, ordered and strictly separated
-(`holes_cov`, `holes_mult`, `holes_sorted`). `align` rounds a non-empty span out to whole groups clamped to the value
+(`holesOf_cov`, `holesOf_mult`, `holesOf_sorted`, in `ValuesSchedHoles`). `align` rounds a non-empty span out to whole groups clamped to the value
 (`align_spec`).
 -/
 

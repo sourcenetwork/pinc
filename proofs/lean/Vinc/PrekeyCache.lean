@@ -13,8 +13,9 @@ The clock wraps after 2^64 operations. The model keeps the wrapping (`tick`) and
 carry the hypothesis `n < 2^64` on the number of operations performed (`PReach N n`): a documented ceiling, not an
 assumption. The theorems about a single operation need only `st.clock + 1 < 2^64`.
 
-`recency_get` and `recency_insert` are the refinement of the stamps by a plain recency list (most recent first):
-`get` moves the hash to the front, `insert` puts it at the front and drops the last when the list is over `N`.
+`get_most_recent` and `insert_most_recent` show that the entry touched carries the newest stamp and every other entry is older.
+The refinement of the stamps by a plain recency list (most recent first: `get` moves the hash to the front, `insert` puts it
+at the front and drops the last when the list is over `N`) is not proved in Lean yet.
 -/
 
 namespace Vinc.PrekeyCache

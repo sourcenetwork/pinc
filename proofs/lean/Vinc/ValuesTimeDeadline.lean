@@ -9,8 +9,8 @@ import Vinc.ValuesTimeStall
 * `poll_deadline`, `late_of_poll`, `deadline_max_never`: `poll_timeout` offers the deadline plus one, and that time is
   past the deadline unless the deadline is `u64::MAX`.
 * `redial_only_timeout`: a redial record comes only from a timeout call with the stall rule due.
-* `fail_reason`: which input reports which reason; `startFetch_*`: the reasons at the start; `terminal_once`: one
-  terminal event per fetch.
+* `fail_reason`: which input reports which reason; `startFetch_*`: the reasons at the start; `step_stopped`,
+  `onTimeout_late_one_terminal` and the `term` field of `Inv` (`ValuesTimeInv`): one terminal event per fetch.
 -/
 
 set_option linter.unusedVariables false

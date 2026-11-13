@@ -8,10 +8,11 @@ Theorems about `holdWhy`, `holdCheck`, `checkDone`, `groupVerified` and `onTimeo
 * `holdWhy_*`: the release causes and their order (a buffer of `HOLD_B` verified bytes behind the granule, the wanted
   range ending in the buffer, `HOLD_NV` later granules, `HOLD_MAX` after the hold started, else the forced `Done`);
   `bufOf_ge_iff` ties the buffer to the verified set: `n` bytes stand behind the granule iff they are all verified.
-* `Inv` and `reach_inv`: over every run (every valid input sequence), the first granule is never announced before it
-  is verified and stored, is announced exactly once (`head_dichotomy`), later granules are announced right after their
-  commit (`readable_after_store`), the held granule is not announced (`held_not_announced`), a completed fetch holds
-  no granule (`complete_released`).
+* `Inv` and `reach_inv` (in `ValuesTimeInv`; the theorems of `ValuesTimeBound` follow from them): over every run (every
+  valid input sequence), the first granule is never announced before it is verified and stored
+  (`never_announced_unstored`), is announced exactly once (the `dich` field of `Inv`, `announced_once`), later granules
+  are announced right after their verification record (`later_granule_immediate`), the held granule is not announced
+  (`held_not_announced`), a completed fetch holds no granule (the `comp` field of `Inv`, `complete_announced_once`).
 * `J0` and `reach_j0`: no late release: at every point between calls a held granule has fewer than `HOLD_B` verified
   bytes behind it, the wanted range does not end in the buffer and fewer than `HOLD_NV` later granules verified.
 * The bound: `hold_poll_le` (the timer `poll_timeout` offers is at most `t0 + HOLD_MAX`), `onTimeout_clears_head`

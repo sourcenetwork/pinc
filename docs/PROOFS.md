@@ -2,10 +2,10 @@
 
 `proofs/tla/` and `proofs/lean/` hold TLA+ specifications, checked with TLC, and Lean 4 proofs of VINC's state machines
 and pure functions. Both are kept identical to the Rust code by validating traces recorded from the real code against
-each. Proven in full: `vinc-wire`, `vinc-dag`, `vinc-crypto`, `vinc-keystore`, `vinc-security` (handshake, key schedule, record keys, key roll, credit
-record, amplification budget and padding, ticket stores, prekey cache), `vinc-values`, `vinc-dtn` (custody, the charged
+each. Proven in full: `vinc-wire`, `vinc-dag`, `vinc-crypto`, `vinc-keystore`, `vinc-values`, `vinc-dtn` (custody, the charged
 store, forwarding, erasure coding, layout, codecs, reception, one-shot encryption and the multi-node scenarios) and the
-relay side of `vinc-connect` with its codecs, carrier link and client rules. `vinc-membership`, `vinc-broadcast` and `vinc-reconcile` are proven except for the
+relay side of `vinc-connect` with its codecs, carrier link and client rules. `vinc-security` (handshake, key schedule, record keys, key roll, credit
+record, amplification budget and padding, ticket stores), `vinc-membership`, `vinc-broadcast` and `vinc-reconcile` are proven except for the
 items under [Being closed](#being-closed).
 Run everything with `just proofs`.
 
@@ -435,6 +435,7 @@ These items are still open; they are listed so nothing is hidden:
   (a roster of `MAX_TABLE` entries needs about 8 million snapshot entries in the trace, and the model's ordered loops are
   quadratic in the table), and the revocation invariant for the whole machine (proved per call for `recompute_one`,
   `apply_delta` and the helpers; the walk of the larger calls does not finish in the proof tactic yet).
+- `vinc-security`: the prekey cache is proved in Lean to stamp the entry it touches with the newest clock value and to evict the lowest stamp; that the stamps are a plain recency list (`get` moves the hash to the front, `insert` puts it at the front and drops the last when the list is over `N`) is checked by TLC (`PrekeyCache.tla`, `Refines`) and not yet proved in Lean.
 - `vinc-values`: the five corrections found by the proofs are made and proven (HEAD_HOLD tail, one announcement per granule,
   stall timer started at the first verified granule (it was armed by the first request, then changed in 3ec9fb3), a wrong out-of-band proof frame evicts its provider, supersession after the
   install), and the gaps of the first round are closed in both languages (the flat `byteAt` equality, the run-wide exact
@@ -442,7 +443,9 @@ These items are still open; they are listed so nothing is hidden:
   the system model, the server slot table in the traces). Still open: the exact partition is proven for runs in which
   no list fills (the room guards of `ReachR`; a widened push is covered by `Cover`, not by `Exact`), and the sizes of a
   chunk and of a steal are the environment's in both models (their arithmetic is `ValuesSched`). Liveness theorems keep
-  an explicit fairness hypothesis, as liveness requires.
+  an explicit fairness hypothesis, as liveness requires. Not yet proved in Lean either: that finishing a request stream frees
+  exactly the first server slot that holds it (`done` has only its length lemma), and that the proactive proof path caps
+  its window at `WT_LEAD` (`proofsCall` takes the window as given).
 - `vinc-connect`: not proven yet are the protected carrier (the frame sequence, keys, the handshake over a carrier
   and close: `session.rs`, `ws.rs`), the batch builder, the relay-side lookup, own record and address discovery, the
   local duty cycle and radio, the sleep tether in `conn.rs`, `drive.rs`, `carriers.rs` and `signing.rs`, the scenario

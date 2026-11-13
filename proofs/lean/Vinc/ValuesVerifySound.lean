@@ -5,9 +5,10 @@ import Vinc.ValuesVerifySim
 
 * `skipG_eq_feedG`: `skip_group` of a group whose bytes the caller holds verified (they hash to the committed
   chaining value) leaves the verifier in exactly the state that feeding the whole group would have left it in, with
-  the same group reported, minus the hashing; `skipG_spec` says exactly when it refuses.
+  the same group reported, minus the hashing; `skipG_ok` and `skipG_err` say exactly when it refuses.
 * `Reach` are the states a caller drives a fresh verifier to with any calls of `feed` and any `skip_group` under that
-  contract; `reach_rel`: each is related (`Rel`) to a `RangeVerifier` state that satisfies the item model's invariant.
+  contract; `reach_good`: each is `Good`, related (`Rel`) to a `RangeVerifier` state that
+  satisfies the item model's invariant.
 * `released_genuine`: with the genuine root and a collision resistant hash, every group a reachable verifier has
   passed is the genuine group of its index, whatever bytes the adversary sent. `feedG_release_verified`: a group is
   reported only by the call whose bytes hash to the chaining value its verified parents committed to.

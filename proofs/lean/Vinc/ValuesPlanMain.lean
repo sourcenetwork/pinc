@@ -8,8 +8,9 @@ import Vinc.ValuesPlanPairs
   the requested span and stays inside the value.
 * `rangePairs_encoder` and `wt_range_eq`: the proof length `fetch/wt.rs` accepts is the pair count of the
   encoder's group range, which is the group range the server's `RangeEncoder` runs on.
-* `plan_main`: for a plan `Plan::new` accepts, the response is exactly the frames of the reference, in order,
-  tiling `[0, total)`, `total <= 2^62 - 1`; `locate` inverts `frame`.
+* the main statements, for a plan `Plan::new` accepts, are spread over the files that follow: the response is exactly the
+  frames of the reference (`frame_spec`), in order, tiling `[0, total)` (`first_range`, `frame_end_start`, `range_ends`,
+  `frame_end_le_total`), `total <= 2^62 - 1` (`planNew_ok`); `locate` inverts `frame` (`locate_frame`, `locate_total`).
 -/
 
 set_option linter.deprecated false

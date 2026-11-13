@@ -16,7 +16,7 @@ provider holds a share any more, the holders are restored from the candidates; i
   open; `evictF_survivor`: if another provider holds a share it stays `Running`.
 - `evictF_inv`, `evicted_forever`: a holder is always a candidate, and an evicted provider is never a candidate or a
   holder again: every assignment (a top-up, a steal in either role, the return of a share) requires `in_assign`.
-- `moves_keep_inactive`: on the work lists, no move changes the list of a provider outside the active set, and the
+- `step_inactive`: on the work lists, no move changes the list of a provider outside the active set, and the
   active set only shrinks: the evicted provider is never given work.
 -/
 

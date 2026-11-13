@@ -13,14 +13,14 @@ accounts, which hold after every call, are in `Vinc.TransportRecoveryCalls`):
 - the probe timeout declares the oldest packet in flight lost (`declareOldest_first`), backs off without bound
   of count but not of time (`ptoDur_mono`, `ptoDur_le_cap`), and a lost packet is reported with its frames and
   requeued unless it is a repair packet or a path MTU probe (`loseAt_event`); only a packet in flight is ever
-  declared lost (`loseAt_guard`, the callers test the state), a ghost is kept only for stream data (`loseAt_ghost`);
+  declared lost (`detectLoop_lost_inflight`, `declareOldest_first`; `loseAt` itself does not test the state, its callers do), a ghost is kept only for stream data (`loseAt_ghost`);
 - at most `maxg` ghosts remain after a loss (`ghosts_limit`);
 - the give-up decision needs 10 probe timeouts and the tell-the-endpoint decision 3 (`health_dead`,
   `health_degraded`);
 - a packet number is sent once, strictly above every earlier one (`send_fresh`);
 - the reorder lens only widens its extent while the evidence is fresh and the time rule it selects never waits
   longer than four round trips (`noteOvertaken_widens`, `reorder_threshold_le`);
-- tail repair: a candidate exists only after a burst of exactly one packet (`tail_shape`).
+- tail repair: a candidate exists only after a burst of exactly one packet (`TailInv`, kept by `tail_new`, `tail_packet`, `tail_drain`).
 -/
 
 namespace Vinc.TransportRecovery
