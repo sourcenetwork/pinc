@@ -200,7 +200,7 @@ impl Streams {
     pub fn connect(&self, id: StreamId, to: SocketAddr) {
         let events = self.events.clone();
         nuclei::spawn_local(async move {
-            let r = nuclei::net::TcpStream::connect(to).await.ok();
+            let r = nuclei::net::TcpStream::connect(to).await.and_then(at_once).ok();
             let _ = events.send(Wire::Connected(id, r));
         })
         .detach();
@@ -212,6 +212,8 @@ impl Streams {
         nuclei::spawn_local(async move {
             let mut id = first;
             while let Ok((stream, _)) = listener.accept().await {
+                // A connection that cannot be set up is dropped: its dialer sees it close and dials again.
+                let Ok(stream) = at_once(stream) else { continue };
                 if events.send(Wire::Accepted(id, stream)).is_err() {
                     break;
                 }
@@ -219,5 +221,37 @@ impl Streams {
             }
         })
         .detach();
+    }
+}
+
+/// Make a carrier connection send every write at once. A relay forwards a handshake flight or a reply as two writes
+/// one behind the other; with the kernel's default the second waits for the acknowledgement of the first, a round
+/// trip of the link or the peer's delayed-acknowledgement timer, on every hop.
+fn at_once(stream: Handle<TcpStream>) -> io::Result<Handle<TcpStream>> {
+    stream.get_ref().set_nodelay(true)?;
+    Ok(stream)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod tests {
+    use super::*;
+
+    #[nuclei::test]
+    async fn a_carrier_connection_sends_at_once_at_both_ends() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let to = listener.get_ref().local_addr().unwrap();
+        let (streams, mut events) = Streams::new();
+        streams.listen(listener, 7);
+        streams.connect(1, to);
+        let (mut dialed, mut accepted) = (None, None);
+        while dialed.is_none() || accepted.is_none() {
+            match events.recv().await {
+                Some(Wire::Connected(1, Some(s))) => dialed = s.get_ref().nodelay().ok(),
+                Some(Wire::Accepted(7, s)) => accepted = s.get_ref().nodelay().ok(),
+                _ => break,
+            }
+        }
+        assert_eq!((dialed, accepted), (Some(true), Some(true)));
     }
 }
