@@ -351,6 +351,8 @@ impl<N: Node, R: Random, C: CostModel> Sim<N, R, C> {
             return;
         }
         slot.node.suspend(t);
+        self.drive(n, t, t, false);
+        let slot = &mut self.nodes[n];
         slot.state = NodeState::Suspended;
         slot.timer_gen += 1;
         slot.timer_at = None;

@@ -328,6 +328,8 @@ pub struct Probe {
     pub sticky: bool,
     /// The time of every call to `handle_datagram`, which shows when the node actually ran.
     pub call_times: Vec<Time>,
+    /// A datagram the node queues when it is suspended (a farewell), as `(local, remote, data)`.
+    pub farewell: Option<(SocketAddr, SocketAddr, Vec<u8>)>,
 }
 
 impl Probe {
@@ -405,6 +407,9 @@ impl Node for Probe {
 
     fn suspend(&mut self, now: Time) {
         self.sleeps.push((now, true));
+        if let Some((local, remote, data)) = self.farewell.take() {
+            self.out.push_back((local, remote, data, None));
+        }
     }
 
     fn resume(&mut self, now: Time) {

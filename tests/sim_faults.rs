@@ -227,6 +227,28 @@ fn a_suspended_node_is_not_called_and_loses_arriving_datagrams() {
 }
 
 #[test]
+fn what_a_node_queues_when_it_is_suspended_leaves_at_the_suspend_time() {
+    let mut sim = Sim::with_config(1, cfg(MS));
+    let (a, mut probe) = (sim.add_node_at(Probe::new(), ip(1)), Probe::new());
+    probe.farewell = Some((sa(2), sa(1), vec![9]));
+    let b = sim.add_node_at(probe, ip(2));
+    sim.suspend(SEC, b);
+    sim.resume(4 * SEC, b);
+    sim.run_until(6 * SEC);
+    let got: Vec<u64> = sim
+        .events(a)
+        .iter()
+        .filter(|(_, e)| matches!(e, ProbeEvent::Recv { data, .. } if data == &[9]))
+        .map(|(t, _)| *t)
+        .collect();
+    assert_eq!(
+        got,
+        vec![SEC + MS],
+        "the farewell arrives one link delay after the suspend, not after the resume"
+    );
+}
+
+#[test]
 fn interface_down_up_and_address_changes_reach_the_node() {
     let mut sim = Sim::with_config(1, cfg(MS));
     let (a, b) = (
