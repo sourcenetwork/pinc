@@ -18,6 +18,9 @@ takes the first draw not stored, or fails). The store capacity `K` (server) and 
 least 1 for `Victim` to name a slot; all results hold for every `K` and `C`). The loss timers (`Retr`), the
 acceptance of tickets (`Accept`) and the client store's export, restore and restart (`Persist`) are always enabled
 (the TLA+ flags are configuration switches; the system here is the union).
+
+The attacker's deduction is a parameter (`StepK kn`, `ReachK kn`): `Reach` is the system of perfect cryptography
+(`Known`), `ReachK (KnownB bx bk)` the system with the X25519 or the ML-KEM half broken (`HandshakeHybrid`).
 -/
 
 namespace Vinc.Hs
@@ -50,17 +53,21 @@ def G0 (K C : Nat) : G :=
 def SigGood (g : G) (b : Blob) : Prop :=
   ∀ id r th, b.sig = Term.sig id r th → id = att ∨ g.signed id r th
 
-/-- Binders and confirmation tags the attacker can use: under a key it knows, or one already on the network. -/
-def BinderOK (g : G) (b : Term) : Prop :=
-  ∀ p th, b = Term.binder p th → Known p ∨ ∃ m, g.net m ∧ m.binder = b
-def ConfOK (g : G) (c : Term) : Prop :=
-  ∀ p th, c = Term.conf p th → Known p ∨ ∃ m, g.net m ∧ m.conf = c
+/-- Binders and confirmation tags the attacker can use: under a key it knows (`kn`), or one already on the network. -/
+def BinderOK (kn : Term → Prop) (g : G) (b : Term) : Prop :=
+  ∀ p th, b = Term.binder p th → kn p ∨ ∃ m, g.net m ∧ m.binder = b
+def ConfOK (kn : Term → Prop) (g : G) (c : Term) : Prop :=
+  ∀ p th, c = Term.conf p th → kn p ∨ ∃ m, g.net m ∧ m.conf = c
 
-/-- The messages that can be delivered: everything ever sent, and everything the attacker can build. -/
-def Derivable (g : G) (m : Msg) : Prop :=
+/-- The messages that can be delivered by an attacker whose deduction is `kn`: everything ever sent, and everything it
+can build. -/
+def DerivableK (kn : Term → Prop) (g : G) (m : Msg) : Prop :=
   g.net m ∨
-  (SigGood g m.sealed ∧ (m.sealed.k = nil ∨ Known m.sealed.k ∨ ∃ m', g.net m' ∧ m'.sealed = m.sealed)
-    ∧ BinderOK g m.binder ∧ ConfOK g m.conf)
+  (SigGood g m.sealed ∧ (m.sealed.k = nil ∨ kn m.sealed.k ∨ ∃ m', g.net m' ∧ m'.sealed = m.sealed)
+    ∧ BinderOK kn g m.binder ∧ ConfOK kn g m.conf)
+
+/-- The attacker of perfect cryptography (`Known`). -/
+abbrev Derivable (g : G) (m : Msg) : Prop := DerivableK Known g m
 
 def addNet (g : G) (out : List Msg) : Msg → Prop := fun m => g.net m ∨ m ∈ out
 
@@ -129,42 +136,46 @@ def stepRestore (g : G) (n : Nat) (drop : List Nat) : G :=
 
 def stepRestart (g : G) (n : Nat) : G := { g with cli := upd g.cli n ((g.cli n).map (fun _ => NoSlot)) }
 
-/-- One step of the system: the actions of `Next` of `Handshake.tla`. Sessions and nodes of the sessions are honest
-(`≠ att`). -/
-inductive Step : G → G → Prop
+/-- One step of the system against the attacker whose deduction is `kn`: the actions of `Next` of `Handshake.tla`.
+Sessions and nodes of the sessions are honest (`≠ att`). -/
+inductive StepK (kn : Term → Prop) : G → G → Prop
   | iStart (g : G) (s : Nat × Nat) (peer : Nat) (al : Term) (short take : Bool) :
       s.1 ≠ att → (g.ist s).ph = .none → peer ≠ s.1 →
-      Step g (stepIStart g s peer al short take)
+      StepK kn g (stepIStart g s peer al short take)
   | iRecv (g : G) (s : Nat × Nat) (m : Msg) :
-      s.1 ≠ att → Derivable g m → Step g (stepIRecv g s m)
+      s.1 ≠ att → DerivableK kn g m → StepK kn g (stepIRecv g s m)
   | iAnswer (g : G) (s : Nat × Nat) (kind : KRes) :
-      s.1 ≠ att → ((g.ist s).ph = .decap ∨ (g.ist s).ph = .sign) → Step g (stepIAnswer g s kind)
+      s.1 ≠ att → ((g.ist s).ph = .decap ∨ (g.ist s).ph = .sign) → StepK kn g (stepIAnswer g s kind)
   | iRetrans (g : G) (s : Nat × Nat) :
-      s.1 ≠ att → (g.ist s).ph ≠ .none → Step g (stepIRetrans g s)
+      s.1 ≠ att → (g.ist s).ph ≠ .none → StepK kn g (stepIRetrans g s)
   | iShed (g : G) (s : Nat × Nat) :
-      s.1 ≠ att → (g.ist s).ph ≠ .none → Step g (stepIShed g s)
+      s.1 ≠ att → (g.ist s).ph ≠ .none → StepK kn g (stepIShed g s)
   | iAccept (g : G) (s : Nat × Nat) (tids : List Term) :
       s.1 ≠ att → (g.ist s).ph = .done → (g.ist s).acc = false → (g.ist s).peer ≠ att → AcceptTids g s tids →
-      Step g (stepIAccept g s tids)
+      StepK kn g (stepIAccept g s tids)
   | rRecv (g : G) (s : Nat × Nat) (m : Msg) (cs : List (List Nat)) :
-      s.1 ≠ att → Derivable g m → Step g (stepRRecv g s m cs)
+      s.1 ≠ att → DerivableK kn g m → StepK kn g (stepRRecv g s m cs)
   | rAnswer (g : G) (s : Nat × Nat) (kind : KRes) :
-      s.1 ≠ att → (g.rst s).ph = .sign → Step g (stepRAnswer g s kind)
+      s.1 ≠ att → (g.rst s).ph = .sign → StepK kn g (stepRAnswer g s kind)
   | rRetrans (g : G) (s : Nat × Nat) :
-      s.1 ≠ att → (g.rst s).ph = .finish → Step g (stepRRetrans g s)
+      s.1 ≠ att → (g.rst s).ph = .finish → StepK kn g (stepRRetrans g s)
   | rShed (g : G) (s : Nat × Nat) :
-      s.1 ≠ att → Step g (stepRShed g s)
+      s.1 ≠ att → StepK kn g (stepRShed g s)
   | expire (g : G) (n i : Nat) (sl : Slot) :
-      n ≠ att → (g.sto n).tks[i]? = some sl → sl.occ = true → sl.exp = false → Step g (stepExpire g n i)
+      n ≠ att → (g.sto n).tks[i]? = some sl → sl.occ = true → sl.exp = false → StepK kn g (stepExpire g n i)
   | expireC (g : G) (n i : Nat) (sl : Slot) :
-      n ≠ att → (g.cli n)[i]? = some sl → sl.occ = true → sl.exp = false → Step g (stepExpireC g n i)
-  | export (g : G) (n mx : Nat) : n ≠ att → Step g (stepExport g n mx)
-  | restore (g : G) (n : Nat) (drop : List Nat) : n ≠ att → Step g (stepRestore g n drop)
-  | restart (g : G) (n : Nat) : n ≠ att → Step g (stepRestart g n)
+      n ≠ att → (g.cli n)[i]? = some sl → sl.occ = true → sl.exp = false → StepK kn g (stepExpireC g n i)
+  | export (g : G) (n mx : Nat) : n ≠ att → StepK kn g (stepExport g n mx)
+  | restore (g : G) (n : Nat) (drop : List Nat) : n ≠ att → StepK kn g (stepRestore g n drop)
+  | restart (g : G) (n : Nat) : n ≠ att → StepK kn g (stepRestart g n)
 
-/-- Reachable states for server store capacity `K` and client store capacity `C`. -/
-inductive Reach (K C : Nat) : G → Prop
-  | init : Reach K C (G0 K C)
-  | step {g g' : G} : Reach K C g → Step g g' → Reach K C g'
+/-- Reachable states for server store capacity `K` and client store capacity `C`, against the attacker `kn`. -/
+inductive ReachK (kn : Term → Prop) (K C : Nat) : G → Prop
+  | init : ReachK kn K C (G0 K C)
+  | step {g g' : G} : ReachK kn K C g → StepK kn g g' → ReachK kn K C g'
+
+/-- The system of perfect cryptography. -/
+abbrev Step : G → G → Prop := StepK Known
+abbrev Reach (K C : Nat) : G → Prop := ReachK Known K C
 
 end Vinc.Hs

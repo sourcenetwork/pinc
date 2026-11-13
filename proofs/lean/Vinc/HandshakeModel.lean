@@ -118,6 +118,32 @@ def Known : Term → Prop
   | conf k _ => Known k
   | _ => False
 
+/-- The same deduction with a half of the hybrid broken (`Known` of `HsOps.tla` with `BX` and `BK`): with `bx` the
+attacker learns the Diffie-Hellman secret of every exchange (it sees every public value), with `bk` the KEM secret of
+every ciphertext and the implicit-rejection value of every malformed one (`junk`). Signatures, hashes and the AEAD
+stay ideal. With neither it is `Known` (`KnownB_ff`). -/
+def KnownB (bx bk : Bool) : Term → Prop
+  | dh a b => bx = true ∨ owner a = att ∨ owner b = att
+  | kem c e => bk = true ∨ owner c = att ∨ ekNode e = att
+  | junk _ _ => bk = true
+  | ck1 a b => KnownB bx bk a ∧ KnownB bx bk b
+  | ck1r a b => KnownB bx bk a ∧ KnownB bx bk b
+  | hs k _ _ => KnownB bx bk k
+  | ck2 k _ => KnownB bx bk k
+  | app k _ _ => KnownB bx bk k
+  | res k _ => KnownB bx bk k
+  | cfk k _ => KnownB bx bk k
+  | cids k _ => KnownB bx bk k
+  | psk k _ _ => KnownB bx bk k
+  | ckpsk k => KnownB bx bk k
+  | early k _ => KnownB bx bk k
+  | binder k _ => KnownB bx bk k
+  | conf k _ => KnownB bx bk k
+  | _ => False
+
+theorem KnownB_ff (t : Term) : KnownB false false t ↔ Known t := by
+  induction t <;> simp_all [KnownB, Known]
+
 /-- The Diffie-Hellman secret of two atoms (unordered). -/
 def Dh (a b : Atom) : Term := if Atom.lt b a then dh b a else dh a b
 

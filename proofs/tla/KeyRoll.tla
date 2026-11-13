@@ -357,6 +357,26 @@ AgreeDh == \A x \in comp : x.dh = x.gdh
 FloorHonoured == \A n \in Nodes : nd[n].nxt # NONE =>
     \A p \in net : (p.from = Peer(n) /\ p.sec = nd[n].nxt.k.sec) => p.pn >= nd[n].nxt.floor
 
+(* Post-compromise, symbolically (KeyRoll.post_compromise in Lean): an attacker that stole the base secrets of both
+   directions, owns no atom (both nodes are honest) and stays passive during the roll. A rolled secret is known iff the
+   secret it rolls and the bound Diffie-Hellman value are; the identifier is a hash of a public share. With bx the
+   attacker breaks X25519: it computes the Diffie-Hellman value from the two shares, which it reads from the REKEY
+   messages (they travel under the current keys, which it holds). *)
+RECURSIVE KnownSec(_, _)
+KnownSec(t, bx) ==
+    CASE t.t = "base" -> TRUE
+      [] t.t = "roll" -> KnownSec(t.s, bx) /\ KnownSec(t.dh, bx)
+      [] t.t = "bound" -> KnownSec(t.id, bx) /\ KnownSec(t.dh, bx)
+      [] t.t = "id" -> TRUE
+      [] t.t = "dh" -> bx
+      [] OTHER -> FALSE
+KeysHeld(n) == {nd[n].sk, nd[n].cur} \cup (IF nd[n].stg = NONE THEN {} ELSE {nd[n].stg})
+               \cup (IF nd[n].prev = NONE THEN {} ELSE {nd[n].prev.k}) \cup (IF nd[n].nxt = NONE THEN {} ELSE {nd[n].nxt.k})
+(* every key after a roll is secret again *)
+PostCompromise == \A n \in Nodes : \A k \in KeysHeld(n) : k.g >= 1 => ~KnownSec(k.sec, FALSE)
+(* the same with X25519 broken: false after the first roll (KeyRoll_xbroken), the roll is a fresh X25519 exchange only *)
+PostCompromiseX == \A n \in Nodes : \A k \in KeysHeld(n) : k.g >= 1 => ~KnownSec(k.sec, TRUE)
+
 Good == /\ \A n \in Nodes : nd[n].roll.st = "idle" /\ nd[n].stg = NONE /\ nd[n].nxt = NONE /\ nd[n].prev = NONE
         /\ nd[0].sk.g = nd[1].cur.g /\ nd[1].sk.g = nd[0].cur.g /\ nd[0].sk.g >= 1 /\ nd[1].sk.g >= 1
 

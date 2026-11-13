@@ -40,8 +40,8 @@ theorem fin_secret {K C : Nat} {g : G} (hr : Reach K C g) (s : Nat × Nat) (m : 
     (hd : Derivable g m) (hty : m.ty = .fin) (hp : (g.rst s).ph = .finish) (hk : (g.rst s).hsi = m.sealed.k)
     (ha : (g.rst s).th3 = m.sealed.ad) (hsg : m.sealed.sig = sig m.sealed.id false (rfT4 (g.rst s) m))
     (hid : m.sealed.id ≠ att) : ¬ Known (rfRes (g.rst s) m) := by
-  have hs := Step.rRecv g s m [] hn hd
-  have hr' := Reach.step hr hs
+  have hs : Step g _ := StepK.rRecv g s m [] hn hd
+  have hr' := ReachK.step hr hs
   have h3 := Inv3_reach hr
   have hc : (RHandle (g.rst s) s.1 s.2 (g.sto s.1) m []).st = rfSt (g.rst s) s.1 (g.sto s.1) m [] := by
     simp [RHandle, hty, RFinish, hp, ← hk, ← ha, hsg, rfIs, Issue, IssueAll]
@@ -530,7 +530,7 @@ theorem rok_step {K C : Nat} {g g' : G} (hr : Reach K C g) (h4 : Inv4 g) (hs : S
     ∀ r, (g'.rst r).resumed = true → ∃ t, g'.issued t ∧ t.psk = (g'.rst r).tpsk ∧ t.tid = (g'.rst r).tid ∧
       t.peer = (g'.rst r).peer ∧ t.cr = (g'.rst r).rcr := by
   intro r hres
-  have h3' := Inv3_reach (Reach.step hr hs)
+  have h3' := Inv3_reach (ReachK.step hr hs)
   have hEr : Est (g'.rst r).ph := by
     rcases (h3'.rc r).resFlag hres with h | h
     · exact Or.inr h
@@ -575,7 +575,7 @@ theorem hauth_step {K C : Nat} {g g' : G} (hr : Reach K C g) (h4 : Inv4 g) (hs :
       ∃ k, (g'.ist ((g'.rst r).peer, k)).thh = (g'.rst r).thh := by
   intro r hres hpe
   have h3 := Inv3_reach hr
-  have h3' := Inv3_reach (Reach.step hr hs)
+  have h3' := Inv3_reach (ReachK.step hr hs)
   have hEr : Est (g'.rst r).ph := by
     rcases (h3'.rc r).resFlag hres with h | h
     · exact Or.inr h

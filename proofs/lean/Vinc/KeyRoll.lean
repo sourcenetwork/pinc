@@ -29,7 +29,8 @@ A model of `vinc-security/src/keyroll.rs`, written to be read against it.
   The attacker of this theorem is PASSIVE during the roll: REKEY travels inside packets authenticated under the
   current keys, so an attacker who holds the current keys can forge a REKEY and mount a man-in-the-middle (it then
   owns an atom of the Diffie-Hellman value); a roll recovers confidentiality only against an attacker that stole the
-  secrets and then stopped acting on the path.
+  secrets and then stopped acting on the path. The roll is a fresh X25519 exchange only: with X25519 broken
+  (`KnownX`) it recovers nothing (`xbroken_no_post_compromise`, `xbroken_chain`), a design limit.
 * `due` is the roll trigger.
 
 The Lean counterpart of `proofs/tla/KeyRoll.tla` (layer, system), `RekeyCodec.tla` (codec). Trace validation:
@@ -578,6 +579,35 @@ theorem post_compromise_chain (att : Nat) (leaked : Nat → Prop) (s : T) (ds : 
     (hu : ¬ Known att leaked d) : ¬ Known att leaked (rollAll s ds) := by
   rw [known_rollAll]; exact fun h => hu (h.2 d hd)
 
+/-- The same attacker with X25519 broken: it computes every Diffie-Hellman value from the two public shares (which it
+reads from the REKEY messages, sent under the keys it holds). -/
+def KnownX (att : Nat) (leaked : Nat → Prop) : T → Prop
+  | .pub _ => True
+  | .dh _ _ => True
+  | .base d => leaked d
+  | .roll s d => KnownX att leaked s ∧ KnownX att leaked d
+  | .key s => KnownX att leaked s
+  | .junk => False
+  | .id s => KnownX att leaked s
+  | .bound i d => KnownX att leaked i ∧ KnownX att leaked d
+
+/-- With X25519 broken a roll gives no post-compromise security: an attacker that knows the old secret knows the
+secret and the key after the roll, whoever owns the atoms (the roll is a fresh X25519 exchange and nothing else). -/
+theorem xbroken_no_post_compromise (att : Nat) (leaked : Nat → Prop) (s : T) (hs : KnownX att leaked s) (r a b : Atom) :
+    KnownX att leaked (.roll s (.bound (.id (.pub r)) (Dh a b))) ∧
+    KnownX att leaked (.key (.roll s (.bound (.id (.pub r)) (Dh a b)))) := by
+  have hd : KnownX att leaked (Dh a b) := by unfold Dh; split <;> trivial
+  exact ⟨⟨hs, trivial, hd⟩, ⟨hs, trivial, hd⟩⟩
+
+/-- ... and along any chain of rolls: the secret after the rolls is known exactly when the first one is. -/
+theorem xbroken_chain (att : Nat) (leaked : Nat → Prop) (s : T) (rs : List (Atom × Atom × Atom)) :
+    KnownX att leaked (rollAll s (rs.map fun x => .bound (.id (.pub x.1)) (Dh x.2.1 x.2.2))) ↔ KnownX att leaked s := by
+  induction rs generalizing s with
+  | nil => simp [rollAll]
+  | cons x rs ih =>
+    simp only [List.map_cons, rollAll, ih]
+    exact ⟨fun h => h.1, fun h => (xbroken_no_post_compromise att leaked s h x.1 x.2.1 x.2.2).1⟩
+
 /-- Rolls of one secret with different Diffie-Hellman values are different secrets, and different keys. -/
 theorem roll_injective (s s' d d' : T) : T.roll s d = T.roll s' d' ↔ s = s' ∧ d = d' := by
   constructor
@@ -744,6 +774,8 @@ theorem forged_phase_changes_nothing (k : RecvKeys) (now : Nat) : (k.expire now)
 #audit_axioms Vinc.KeyRoll.known_dh
 #audit_axioms Vinc.KeyRoll.post_compromise
 #audit_axioms Vinc.KeyRoll.post_compromise_chain
+#audit_axioms Vinc.KeyRoll.xbroken_no_post_compromise
+#audit_axioms Vinc.KeyRoll.xbroken_chain
 #audit_axioms Vinc.KeyRoll.roll_injective
 #audit_axioms Vinc.KeyRoll.roll_not_a_function_of_the_secret
 #audit_axioms Vinc.KeyRoll.due_iff

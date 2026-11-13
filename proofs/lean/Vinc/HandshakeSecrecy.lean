@@ -6,7 +6,7 @@ import Vinc.HandshakeAgree
 The application keys, the resumption secret and the connection id secret of a finished full handshake with an honest
 peer are not known to the attacker (`Known`, the Dolev-Yao deduction of `HandshakeModel`), for any number of sessions.
 The chain key of the hybrid schedule needs both the KEM secret and the Diffie-Hellman secret, so one of them being out
-of the attacker's reach suffices. The authentication witnesses of `HandshakeInv` (`iAuth`, `rAuth`) name the honest
+of the attacker's reach suffices (`HandshakeHybrid` proves it with either half broken). The authentication witnesses of `HandshakeInv` (`iAuth`, `rAuth`) name the honest
 peer session that signed the same transcript, and the local consistency of `HandshakeLocal` reads the peer's ephemeral
 and prekey owner off that transcript.
 -/
@@ -63,7 +63,7 @@ theorem chain_th3 (i r : Nat × Nat) (sti : IState) (str : RState) (m : Msg) (hs
   exact ⟨hp2, he, hex.symm, hhk.symm⟩
 
 /-- The responder session a full initiator authenticated is a full one: the reply's ephemeral is its. -/
-theorem iAuth_reply_e {K C : Nat} {g : G} (h : Reach K C g) (i : Nat × Nat) (hd : (g.ist i).ph = .done)
+theorem iAuth_reply_e {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) (i : Nat × Nat) (hd : (g.ist i).ph = .done)
     (hr : (g.ist i).resumed = false) (hp : (g.ist i).peer ≠ att) :
     ∃ k, (g.ist i).reply.e = pub (ry (g.ist i).peer k) := by
   have h1 := Inv1_reach h

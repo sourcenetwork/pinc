@@ -31,7 +31,7 @@ theorem RCl_upd {g : G} (h : ∀ s, RCl s (g.rst s)) (s0 : Nat × Nat) (st : RSt
   · subst e; simpa [upd_same] using hs
   · rw [upd_ne _ _ _ _ e]; exact h s
 
-theorem Inv3_step {g g' : G} (h : Inv3 g) (hs : Step g g') : Inv3 g' := by
+theorem Inv3_step {kn : Term → Prop} {g g' : G} (h : Inv3 g) (hs : StepK kn g g') : Inv3 g' := by
   cases hs with
   | iStart s peer al short take hn _ _ =>
     refine ⟨?_, h.rc⟩
@@ -52,7 +52,7 @@ theorem Inv3_step {g g' : G} (h : Inv3 g) (hs : Step g g') : Inv3 g' := by
   | restore n drop _ => exact ⟨h.ic, h.rc⟩
   | restart n _ => exact ⟨h.ic, h.rc⟩
 
-theorem Inv3_reach {K C : Nat} {g : G} (h : Reach K C g) : Inv3 g := by
+theorem Inv3_reach {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) : Inv3 g := by
   induction h with
   | init => exact Inv3_init K C
   | step _ hs ih => exact Inv3_step ih hs
@@ -129,8 +129,9 @@ theorem agree_full_core (i r : Nat × Nat) (sti : IState) (str : RState) (m : Ms
 /-- Agreement of full handshakes, for any number of sessions, nodes and tickets: an initiator session and a responder
 session that both finished a full handshake and hold the same final transcript hash hold the same application keys
 (each one's send key is the other's receive key), the same resumption secret and connection id secret, name each other
-as peer, and agree on the ALPN, the AEAD and the credit records of both sides. -/
-theorem agreement_full {K C : Nat} {g : G} (h : Reach K C g) (i r : Nat × Nat) (hi : (g.ist i).ph = .done)
+as peer, and agree on the ALPN, the AEAD and the credit records of both sides. It holds against every attacker `kn`,
+a broken half of the hybrid included: the keys are a function of the transcript. -/
+theorem agreement_full {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) (i r : Nat × Nat) (hi : (g.ist i).ph = .done)
     (hr : (g.rst r).ph = .done) (hri : (g.ist i).resumed = false) (hrr : (g.rst r).resumed = false)
     (hth : (g.ist i).thf = (g.rst r).thf) :
     (g.ist i).send = (g.rst r).recv ∧ (g.ist i).recv = (g.rst r).send ∧ (g.ist i).res = (g.rst r).res ∧
@@ -146,7 +147,7 @@ theorem agreement_full {K C : Nat} {g : G} (h : Reach K C g) (i r : Nat × Nat) 
   exact this
 
 /-- A full handshake and a resumed one never share a final transcript hash. -/
-theorem agreement_resumed_flag {K C : Nat} {g : G} (h : Reach K C g) (i r : Nat × Nat) (hi : (g.ist i).ph = .done)
+theorem agreement_resumed_flag {kn : Term → Prop} {K C : Nat} {g : G} (h : ReachK kn K C g) (i r : Nat × Nat) (hi : (g.ist i).ph = .done)
     (hr : (g.rst r).ph = .done) (hth : (g.ist i).thf = (g.rst r).thf) :
     (g.ist i).resumed = (g.rst r).resumed := by
   have h3 := Inv3_reach h
