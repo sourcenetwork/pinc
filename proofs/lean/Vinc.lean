@@ -76,6 +76,10 @@ import Vinc.TransportReasm
 import Vinc.TransportReasmThm
 import Vinc.TransportReasmComplete
 import Vinc.TraceReasm
+import Vinc.TransportHdr
+import Vinc.TransportHdrThm
+import Vinc.TransportHdrSplit
+import Vinc.TraceHdr
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery
