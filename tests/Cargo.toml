@@ -467,6 +467,14 @@ name = "core_timing"
 path = "core_timing.rs"
 
 [[test]]
+name = "core_unanswered"
+path = "core_unanswered.rs"
+
+[[test]]
+name = "vinc_hub_redial"
+path = "vinc_hub_redial.rs"
+
+[[test]]
 name = "core_timing_flight"
 path = "core_timing_flight.rs"
 

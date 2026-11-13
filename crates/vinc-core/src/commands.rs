@@ -456,6 +456,10 @@ ep_impl! {
             conn.set_first_retransmit(now.saturating_add(delay));
         }
         let optimistic = self.acp_cached(&node, now).is_some_and(|a| a.allow && a.until > now.saturating_add(ACP_RECHECK));
+        // Reported before the peer answered: a peer that stopped ends it after its 4th unanswered flight, not at 30 s.
+        if optimistic {
+            conn.end_unanswered();
+        }
         let Some(slot) = self.slots.get_mut(i) else { return Err(CommandError::Full) };
         slot.conn = Some(conn);
         slot.m.peer = Some(node);

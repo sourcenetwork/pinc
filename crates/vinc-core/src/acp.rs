@@ -8,7 +8,10 @@
 //!
 //! - **Gate.** Application events of a session are held until the session is allowed; a deny closes it with code 3.
 //! - **Optimistic.** A dial towards a peer with a cached allow that has more than 5 s left reports `Connected` at once,
-//!   before the handshake; if the check then denies, the session closes and `Closed` follows.
+//!   before the handshake; if the check then denies, the session closes and `Closed` follows. Its handshake ends once
+//!   4 first flights went out with nothing heard (at the 500 ms first delay: 7.5 s for a full handshake, 3 s for a
+//!   resume; not on a thin node), so a dial to a peer that stopped closes with `Unanswered` instead of lasting the
+//!   handshake's 30 s. That end does not raise the node's handshake floor.
 //! - **READY hold.** A client whose handshake round trip was under 20 ms reports `Connected` only after the server's
 //!   READY, which the server sends once its own answer is in, so the first stream write is served one way later.
 //!
