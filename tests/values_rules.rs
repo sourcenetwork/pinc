@@ -160,6 +160,33 @@ fn a_fast_provider_leaves_the_starting_target_before_the_warm_up_ends() {
     );
 }
 
+/// Near the end of a fetch the top-ups are small and many, and the fetch's request streams can all be in use. A
+/// top-up then takes nothing: every top-up made on a session that is up is requested in the same instant, and none
+/// waits for a timer.
+#[test]
+fn a_top_up_is_requested_when_it_is_made() {
+    for (seed, n) in [(47u64, 3usize), (48, 4)] {
+        let store = PStore::random(seed, 16 << 20);
+        let cfgs = (0..n).map(|_| ProvCfg::new(store.clone(), 20_000)).collect();
+        let mut sim = Sim::new(cfgs, ClientStore::new());
+        sim.start();
+        assert!(sim.run_until(40 * SEC, |s| s.fetch.is_done()));
+        let asked = sim.rec.traces_of(|t| match t {
+            Trace::Requested { provider, bytes, .. } => Some((*provider, *bytes)),
+            _ => None,
+        });
+        let late: Vec<_> = topups(&sim)
+            .into_iter()
+            .filter(|(t, p, _, _)| asked.iter().any(|(at, (ap, _))| at < t && ap == p))
+            .filter(|(t, p, b, _)| !asked.iter().any(|(at, (ap, ab))| at == t && ap == p && ab == b))
+            .collect();
+        assert!(
+            late.is_empty(),
+            "{n} providers: top-ups with no request at their instant: {late:?}"
+        );
+    }
+}
+
 #[test]
 fn tail_shrink_cuts_each_top_up_to_a_share_of_what_is_left() {
     let len = 12 << 20;

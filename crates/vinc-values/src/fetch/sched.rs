@@ -117,6 +117,11 @@ impl Fetch {
         if outstanding >= tgt / 2 {
             return;
         }
+        // A top-up's request needs a stream of the fetch. With none free the bytes stay in the queue for the top-up
+        // that follows the next stream's end; taken now they would wait, assigned, for a retry timer.
+        if conn && self.rx.iter().all(Option::is_some) {
+            return;
+        }
         let mut want = tgt - outstanding;
         if !self.queue.is_empty() {
             // TAIL_SHRINK: near the end a top-up takes at most a 1/(2k) share of what is left.
