@@ -147,6 +147,12 @@ impl<K: Hash + Eq + Copy, V: Copy, const CAP: usize> Table<K, V, CAP> {
         (h.finish() % CAP as u64) as usize
     }
 
+    /// The bucket `k` hashes to: the bucket function the models take as a parameter, read for the trace check.
+    #[cfg(feature = "trace")]
+    pub fn trace_bucket(&self, k: &K) -> usize {
+        self.bucket(k)
+    }
+
     fn at(&self, i: u32) -> Option<&Entry<K, V>> {
         self.entries.get(i as usize)
     }

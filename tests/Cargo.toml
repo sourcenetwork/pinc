@@ -1008,6 +1008,10 @@ name = "trace_halfopen"
 path = "trace_halfopen.rs"
 
 [[test]]
+name = "trace_core_table"
+path = "trace_core_table.rs"
+
+[[test]]
 name = "trace_mtu"
 path = "trace_mtu.rs"
 
