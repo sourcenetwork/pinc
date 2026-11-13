@@ -104,6 +104,8 @@ TypeOK == /\ n.phase \in {"never", "gathering", "done"} /\ life \in 0..MaxLife
 EpochBound == \A m \in Mids : cnt[m] <= ep[m]
 EpochSpacing == [][ \A m \in Mids : NewRec(n, n', m) => (ep[m] = 0 \/ capd[m] \/ now - rec[m] > TTL) ]_vars
 OnceNoDup == \A i, j \in 1..Len(dls) : i < j => dls[i] # dls[j]
+\* a bound for the model checker alone (a config names it as its CONSTRAINT): a hub that stores its own messages forgets and records an id again for ever
+EpochsLe3 == \A m \in Mids : ep[m] <= 3
 
 SeenAccounted == \A m \in Mids : n.seen.map[m] # N!NoT => m \in acct
 
