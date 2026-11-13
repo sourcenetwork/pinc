@@ -227,7 +227,7 @@ drive_impl! {
             .home()
             .or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()))
             .and_then(|r| u8::try_from(r).ok());
-        for r in flight_relays(peer, own, |r| self.carrier_state(usize::from(r)) == super::link::State::Open)
+        for r in flight_relays(peer, own)
             .into_iter()
             .flatten()
         {

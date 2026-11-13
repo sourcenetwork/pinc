@@ -51,20 +51,16 @@ pub enum Cand {
     Relay(u8),
 }
 
-/// The relays a flight to a peer goes through: the peer's own relay, when the record named one, and ours (the first flight
-/// of `RELAY_FORWARD` reaches the peer's relay through ours). A relay we hold an open carrier to reaches the other end
-/// in one hop, so the peer's relay comes first only when that carrier is open; otherwise the packet to it would leave
-/// as an unauthenticated datagram and be refused, and ours comes first. A relay named twice is listed once.
-pub fn flight_relays(peer: Option<u8>, own: Option<u8>, open: impl Fn(u8) -> bool) -> [Option<u8>; 2] {
+/// The relays a flight to a peer goes through: the peer's own relay, when the record named one, then ours (the first
+/// flight of `RELAY_FORWARD` reaches the peer's relay through ours). The order is fixed, whether or not a carrier to the
+/// peer's relay is open, and it matters on a slow link: a node that sends one path per try takes the second relay on its
+/// first try and the first on its next, so its first try goes through its own relay, which it has a carrier to. A relay
+/// named twice is listed once.
+pub const fn flight_relays(peer: Option<u8>, own: Option<u8>) -> [Option<u8>; 2] {
     match (peer, own) {
-        (Some(p), Some(o)) if p != o => {
-            if open(p) {
-                [Some(p), Some(o)]
-            } else {
-                [Some(o), Some(p)]
-            }
-        }
-        (p, o) => [p.or(o), None],
+        (Some(p), Some(o)) if p != o => [Some(p), Some(o)],
+        (Some(p), _) => [Some(p), None],
+        (None, o) => [o, None],
     }
 }
 

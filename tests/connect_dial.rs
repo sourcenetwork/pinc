@@ -181,15 +181,35 @@ fn a_hub_initial_goes_by_relay_paths_only_while_nothing_at_all_has_been_heard() 
 }
 
 #[test]
-fn a_flight_goes_through_the_relay_it_has_a_carrier_to_and_through_the_peers() {
-    // The peer's relay carries it in one hop when our carrier to it is open; the record's relay and ours are both tried.
-    assert_eq!(flight_relays(Some(1), Some(0), |_| true), [Some(1), Some(0)]);
-    // Without a carrier to the peer's relay, a packet to it would be an unauthenticated datagram: ours goes first and
-    // forwards.
-    assert_eq!(flight_relays(Some(1), Some(0), |r| r == 0), [Some(0), Some(1)]);
+fn a_flights_relays_are_the_peers_then_ours_whether_or_not_a_carrier_to_the_peers_is_open() {
+    // The order is fixed. It used to put ours first when no carrier to the peer's relay was open; a node sending one
+    // path per try then started with the relay it had no carrier to.
+    assert_eq!(flight_relays(Some(1), Some(0)), [Some(1), Some(0)]);
     // One relay named twice, or only one known, is listed once.
-    assert_eq!(flight_relays(Some(2), Some(2), |_| false), [Some(2), None]);
-    assert_eq!(flight_relays(None, Some(0), |_| false), [Some(0), None]);
-    assert_eq!(flight_relays(Some(3), None, |_| false), [Some(3), None]);
-    assert_eq!(flight_relays(None, None, |_| true), [None, None]);
+    assert_eq!(flight_relays(Some(2), Some(2)), [Some(2), None]);
+    assert_eq!(flight_relays(None, Some(0)), [Some(0), None]);
+    assert_eq!(flight_relays(Some(3), None), [Some(3), None]);
+    assert_eq!(flight_relays(None, None), [None, None]);
+}
+
+#[test]
+fn a_thin_node_whose_record_names_a_relay_it_has_no_carrier_to_starts_with_its_home_relay() {
+    let (own, peer_relay) = (0u8, 1u8);
+    let mut cands = Vec::new();
+    cands.extend(
+        flight_relays(Some(peer_relay), Some(own))
+            .into_iter()
+            .flatten()
+            .map(Cand::Relay),
+    );
+    let mut t = base();
+    t.link_rtt = TG_SLOW;
+    t.tries = 1;
+    assert_eq!(pick(&cands, &t, false, 1), vec![Cand::Relay(own)], "the first try");
+    t.tries = 2;
+    assert_eq!(
+        pick(&cands, &t, false, 1),
+        vec![Cand::Relay(peer_relay)],
+        "the next try"
+    );
 }
