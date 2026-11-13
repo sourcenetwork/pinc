@@ -55,6 +55,7 @@ import Vinc.TransportRecovery
 import Vinc.TransportRecoveryAcct
 import Vinc.TransportRecoveryCalls
 import Vinc.TransportRecoveryThm
+import Vinc.TransportRecoveryRing
 import Vinc.TransportRx
 import Vinc.TransportRxThm
 import Vinc.TransportRxRecv
