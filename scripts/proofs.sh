@@ -380,6 +380,8 @@ par run_tlc rx Rx Rx
 par run_tlc rx_wide Rx Rx_wide
 par run_tlc cid Cid Cid
 par witness_tlc cid_stale Cid Cid_stale Lookahead
+par witness_tlc cid_slots Cid Cid_slots Lookahead
+par witness_tlc cid_reuse Cid Cid_reuse IssuedOnce
 par run_tlc cc Cc Cc
 par run_tlc pn Pn Pn
 par run_tlc reasm Reasm Reasm

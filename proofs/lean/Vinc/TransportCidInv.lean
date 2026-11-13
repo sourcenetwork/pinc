@@ -6,8 +6,8 @@ import Vinc.TransportCidThm
 
 `refill1_spec` is the step that puts one lookahead id into the table (a free slot, or the slot of the entry
 least recently used among those allowed to make room); `refill_spec` runs it for the two lookahead indices;
-`install_inv`, `auth_inv` and `claim_next` carry the invariant through the calls; `Reach` adds the indices
-forgotten and shows that none is ever held again.
+`install_inv` and `auth_inv` carry the invariant through the calls; `Reach` adds the indices forgotten and shows
+that none is ever held again. An index makes room only when it is at least `look` below the highest one seen.
 -/
 
 namespace Vinc.TransportCid
@@ -59,7 +59,7 @@ theorem refill1_spec (c : C) (k : Nat) (hc : Core c) (hk1 : c.hi < k) (hk2 : k �
       Core c' ∧ c'.hi = c.hi ∧ c'.sec = c.sec ∧ c'.tick = c.tick ∧ c'.ns = c.ns ∧ c'.fr = c.fr ∧
       has c' k = true ∧
       (∀ j, has c j = true → has c' j = true ∨ ev = some j) ∧
-      (∀ v, ev = some v → v ≤ c.hi) ∧
+      (∀ v, ev = some v → v + look ≤ c.hi) ∧
       (∀ j, has c' j = true → has c j = true ∨ j = k) ∧
       (∀ v, ev = some v → has c' v = false) := by
   intro c' ev h
@@ -102,11 +102,7 @@ theorem refill1_spec (c : C) (k : Nat) (hc : Core c) (hk1 : c.hi < k) (hk2 : k �
       | none => rw [hv] at hsome; simp at hsome
       | some s =>
         obtain ⟨hs, e, he, hev⟩ := victim_spec c s hv
-        have hevle : e.idx ≤ c.hi := by
-          simp only [evictable, Bool.or_eq_true, decide_eq_true_eq] at hev
-          rcases hev with h | h
-          · exact hc.seenLe s e he h
-          · exact h
+        have hevle : e.idx + look ≤ c.hi := by simpa [evictable] using hev
         simp only [hf, hv, he, Option.map_some, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         refine ⟨core_put c hc s hs k hk1 hk2 hnew, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_⟩
@@ -136,7 +132,7 @@ theorem refill_spec (c : C) (hc : Core c) : ∀ c' ev, refill c = (c', ev) →
     Core c' ∧ c'.hi = c.hi ∧ c'.sec = c.sec ∧ c'.tick = c.tick ∧ c'.ns = c.ns ∧ c'.fr = c.fr ∧
       (c.sec = true → has c' (c.hi + 1) = true ∧ has c' (c.hi + 2) = true) ∧
       (∀ j, has c j = true → has c' j = true ∨ j ∈ ev) ∧
-      (∀ v ∈ ev, v ≤ c.hi) ∧
+      (∀ v ∈ ev, v + look ≤ c.hi) ∧
       (∀ v ∈ ev, has c' v = false) ∧
       (∀ j, has c' j = true → has c j = true ∨ (c.hi < j ∧ j ≤ c.hi + look)) := by
   intro c' ev h
@@ -198,7 +194,7 @@ theorem refill_spec' (c : C) (hc : Core c) :
       (refill c).1.ns = c.ns ∧ (refill c).1.fr = c.fr ∧
       (c.sec = true → has (refill c).1 (c.hi + 1) = true ∧ has (refill c).1 (c.hi + 2) = true) ∧
       (∀ j, has c j = true → has (refill c).1 j = true ∨ j ∈ (refill c).2) ∧
-      (∀ v ∈ (refill c).2, v ≤ c.hi) ∧
+      (∀ v ∈ (refill c).2, v + look ≤ c.hi) ∧
       (∀ v ∈ (refill c).2, has (refill c).1 v = false) ∧
       (∀ j, has (refill c).1 j = true → has c j = true ∨ (c.hi < j ∧ j ≤ c.hi + look)) :=
   refill_spec c hc (refill c).1 (refill c).2 rfl
