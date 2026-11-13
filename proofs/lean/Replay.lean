@@ -24,6 +24,8 @@ import Vinc.TraceCoreTable
 import Vinc.TraceHalfOpen
 import Vinc.TraceHeap
 import Vinc.TraceCoreState
+import Vinc.TraceQueue
+import Vinc.TraceHeld
 import Vinc.TraceMtu
 import Vinc.TraceTimers
 import Vinc.TraceStores
@@ -192,6 +194,8 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ctw : TraceCoreTable.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut hpw : TraceHeap.W := {}
+  let mut qvw : TraceQueue.W := {}
+  let mut hdw : TraceHeld.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut tmw : TraceTimers.W := {}
   let mut bcw : BroadcastTrace.W := {}
@@ -570,6 +574,22 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           -- Saved-state events (`cs`, written by `trace_core_state`): `export_state` and `restore_state`.
           match TraceCoreState.replayEvent j with
           | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceHeld.isTag t then
+          -- Held ring events (`coh`, written by `trace_held`): a session's events waiting for the access check.
+          match TraceHeld.replayEvent j hdw with
+          | .ok w' =>
+            hdw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceQueue.isTag t then
+          -- Event queue events (`coq`, written by `trace_queue`): pushes, pops, purges and bursts of the endpoint's ring.
+          match TraceQueue.replayEvent j qvw with
+          | .ok w' =>
+            qvw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

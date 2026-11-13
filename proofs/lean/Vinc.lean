@@ -94,6 +94,11 @@ import Vinc.TransportExtThm
 import Vinc.TraceExt
 import Vinc.CoreOrphan
 import Vinc.CoreOrphanThm
+import Vinc.CoreQueue
+import Vinc.CoreQueueThm
+import Vinc.CoreQueueRun
+import Vinc.CoreHeld
+import Vinc.CoreHeldThm
 import Vinc.TraceOrphan
 import Vinc.CoreHalfOpen
 import Vinc.CoreHalfOpenThm
@@ -107,6 +112,8 @@ import Vinc.TraceHeap
 import Vinc.CoreState
 import Vinc.CoreStateThm
 import Vinc.TraceCoreState
+import Vinc.TraceQueue
+import Vinc.TraceHeld
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TransportTimers

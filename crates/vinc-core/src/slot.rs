@@ -401,6 +401,129 @@ impl<P: Provider, S: StreamSource, const N: usize, const C: usize, const F: usiz
     }
 }
 
+/// Test-only driver of the held ring, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+pub(crate) mod trace {
+    use super::{HELD_EVENTS, Held, HeldEvent};
+
+    /// A held event as the probe shows it: its kind, stream and error.
+    type HeldView = (u8, u64, u64);
+
+    /// A ring of held events of its own, with its state readable after every call.
+    pub struct HeldProbe {
+        h: Held,
+    }
+
+    impl Default for HeldProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl HeldProbe {
+        /// The places of the ring.
+        pub const SLOTS: usize = HELD_EVENTS;
+        /// The kinds of event, as the code numbers them: opened, readable, writable, reset, datagram, stopped,
+        /// open ready.
+        pub const KINDS: [u8; 7] = [
+            HeldEvent::OPENED,
+            HeldEvent::READABLE,
+            HeldEvent::WRITABLE,
+            HeldEvent::RESET,
+            HeldEvent::DATAGRAM,
+            HeldEvent::STOPPED,
+            HeldEvent::OPEN_READY,
+        ];
+
+        /// An empty ring.
+        #[must_use]
+        pub const fn new() -> Self {
+            Self { h: Held::EMPTY }
+        }
+
+        /// Hold an event.
+        pub fn push(&mut self, kind: u8, stream: u64, error: u64) {
+            self.h.push(HeldEvent { kind, stream, error });
+        }
+
+        /// The oldest held event.
+        pub fn pop(&mut self) -> Option<HeldView> {
+            self.h.pop().map(|e| (e.kind, e.stream, e.error))
+        }
+
+        /// Release every held event.
+        pub fn clear(&mut self) {
+            self.h.clear();
+        }
+
+        /// Whether the ring is full of events the application cannot recover.
+        #[must_use]
+        pub fn stalled(&self) -> bool {
+            self.h.stalled()
+        }
+
+        /// Whether the application can recover an event of this kind by reading state.
+        #[must_use]
+        pub const fn lossy(kind: u8) -> bool {
+            HeldEvent {
+                kind,
+                stream: 0,
+                error: 0,
+            }
+            .lossy()
+        }
+
+        /// How many events are held.
+        #[must_use]
+        pub const fn len(&self) -> usize {
+            self.h.len
+        }
+
+        /// Whether no event is held.
+        #[must_use]
+        pub const fn is_empty(&self) -> bool {
+            self.h.len == 0
+        }
+
+        /// The place of the oldest held event.
+        #[must_use]
+        pub const fn head(&self) -> usize {
+            self.h.head
+        }
+
+        /// How many events the ring dropped.
+        #[must_use]
+        pub const fn dropped(&self) -> u64 {
+            self.h.dropped
+        }
+
+        /// The `i`th held event, counting from the oldest.
+        #[must_use]
+        pub fn slot(&self, i: usize) -> Option<HeldView> {
+            if i >= self.h.len {
+                return None;
+            }
+            self.h
+                .items
+                .get(self.h.at(i))
+                .copied()
+                .flatten()
+                .map(|e| (e.kind, e.stream, e.error))
+        }
+
+        /// The cell at place `p`, whatever the window: for the shift an eviction makes.
+        #[must_use]
+        pub fn cell(&self, p: usize) -> Option<HeldView> {
+            self.h
+                .items
+                .get(p)
+                .copied()
+                .flatten()
+                .map(|e| (e.kind, e.stream, e.error))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;

@@ -1040,6 +1040,14 @@ name = "trace_core_table"
 path = "trace_core_table.rs"
 
 [[test]]
+name = "trace_queue"
+path = "trace_queue.rs"
+
+[[test]]
+name = "trace_held"
+path = "trace_held.rs"
+
+[[test]]
 name = "trace_mtu"
 path = "trace_mtu.rs"
 
