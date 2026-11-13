@@ -114,8 +114,10 @@ def attemptsOf (attempts : Nat) : Nat := max attempts 1
 A reset at the first message of the responder is a reset of the attempt; an attempt that ends in anything but a reset
 ends the run at once; and `attempts` attempts that are all reset end in `Exhausted`. Each attempt begins with
 `Initiator::start` and a responder in the `fresh` side, so what an earlier attempt left in the objects is cleared
-(`Core.clear`, the `fresh` branch of `Responder.handle`) before it is read; the byte-level check of that is the trace
-validation of reused objects (`TraceReconcile.tla`) and the model with `ResetOn` (`Reconcile_reset.cfg`). -/
+(`Core.clear`, the `fresh` branch of `Responder.handle`) or written before it is read: `ReconcileStaleRun` proves that
+a run on used objects ends as the run on new ones (`runAttempts_fresh`). The trace validation of reused objects
+(`TraceReconcile.tla`) and the model with `ResetOn` (`Reconcile_reset.cfg`) check the same on the real code and in
+TLC. -/
 
 theorem attempt_reset_first (oI oR : Oracle) (SI SR : List Item) (ref : Item) (cut : Cut) (fuel : Nat)
     (i : Initiator) (r : Responder) (i0 : Initiator) (tx : List Nat)
