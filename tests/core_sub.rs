@@ -365,6 +365,39 @@ fn a_child_waits_with_its_parent_for_the_access_check() {
     });
 }
 
+/// Two nodes where `b` dialed `a` for `ALPN_A` and `a` still holds the access check for `b` open.
+fn incoming_not_allowed() -> (CoreNet, usize, usize) {
+    let mut net = CoreNet::new(15 * MS_NS);
+    net.capture = true;
+    let (a, b) = (net.add(1), net.add(2));
+    net.nodes[a].acp = Acp::Manual;
+    let (peer, to, now) = (net.nodes[a].node, net.nodes[a].addr, net.now);
+    net.nodes[b].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+    assert!(net.run(now + 5 * SEC_NS, |n| !n.nodes[a].checks.is_empty() && n.nodes[b].saw(is_connected)));
+    net.run_for(SEC_NS);
+    (net, a, b)
+}
+
+#[test]
+fn a_dial_waits_on_a_session_the_peer_opened_that_is_not_allowed_yet() {
+    big_stack(|| {
+        let (mut net, a, b) = incoming_not_allowed();
+        let marker = net.captured.len();
+        let (child, rep) = dial(&mut net, a, b, ALPN_B);
+        assert!(rep.events.any(is_connected), "the dial did not connect at once");
+        write_new(&mut net, a, child, b"waited");
+        net.run_for(SEC_NS);
+        assert!(!handshake_since(&net, marker), "the dial made its own handshake");
+        let incoming_b = |n: &CoreNet| n.nodes[b].saw(|e| matches!(e, Event::Incoming { alpn, .. } if alpn.as_bytes() == ALPN_B));
+        assert!(!incoming_b(&net), "the open left before the parent was allowed");
+        let (check, _) = net.nodes[a].checks[0];
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::AcpAnswer { check, allow: true }).unwrap();
+        assert!(net.run(net.now + 5 * SEC_NS, |n| n.nodes[b].read.values().any(|v| v == b"waited")));
+        assert!(incoming_b(&net));
+    });
+}
+
 #[test]
 fn a_second_protocol_dialed_during_the_handshake_connects_at_once_and_opens_with_its_parent() {
     big_stack(|| {

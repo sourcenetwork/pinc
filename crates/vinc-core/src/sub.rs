@@ -11,9 +11,10 @@
 //! The extension frame is repeated by the transport until its packet is acknowledged, so the peer may see it twice;
 //! the ids of the opens it accepted are remembered (1024 of them) and a repeat is ignored.
 //!
-//! Dialing a peer whose handshake for another protocol is still running opens a waiting sub-session instead: it reports
-//! `Connected` at once and takes writes, and gets its keys, and its open goes out, when the parent is allowed. If the
-//! parent fails first, it closes as orphaned and the application dials again.
+//! Dialing a peer with a session for another protocol that is not yet allowed (its handshake still runs, or its access
+//! check is open) opens a waiting sub-session instead: it reports `Connected` at once and takes writes, and gets its
+//! keys, and its open goes out, when the parent is allowed. If the parent fails first, it closes as orphaned and the
+//! application dials again.
 //!
 //! A sub-session that never heard its peer while its parent closes may never have been accepted (the parent died before
 //! the frame arrived), so it is closed with its parent and the application dials again.
@@ -32,8 +33,10 @@ use crate::endpoint::{CID_LEN, env, ep_impl};
 use crate::keepalive::Role;
 use crate::slot::State;
 
-/// The most sub-sessions that wait for one parent's handshake.
+/// The most sub-sessions that wait for one parent.
 const MAX_WAITERS: usize = 8;
+/// The most sessions that have waiters at one time.
+const MAX_WAITING_PARENTS: usize = 256;
 /// How recently a parent must have been heard from to carry a sub-session, in nanoseconds.
 const PARENT_RX: u64 = 20_000_000_000;
 use crate::trace::trace;
@@ -178,20 +181,30 @@ ep_impl! {
         matches!(queued, Some(Ok(())))
     }
 
-    /// A session of `peer` still in its handshake that a dial for another protocol can wait for: dialed by this node,
-    /// not yet allowed, not a sub-session itself, with room for another waiter.
+    /// A session of `peer` that is not yet allowed, whatever its role and state, that a dial for another protocol can
+    /// wait for: not itself a waiting sub-session, with room for another waiter, and while fewer than
+    /// [`MAX_WAITING_PARENTS`] sessions have waiters.
     pub(crate) fn find_waiting_parent(&self, peer: &NodeId, alpn: &[u8]) -> Option<usize> {
-        self.peer_find(peer, |e, i| {
+        let parent = self.peer_find(peer, |e, i| {
             e.slots.get(i).is_some_and(|s| {
-                s.m.client
-                    && !s.m.sub
+                s.m.state != State::Closing
                     && !s.m.allowed
                     && !s.m.denied
-                    && s.m.state == State::Handshaking
+                    && !s.m.waiting
                     && s.m.alpn.is_some_and(|a| a.as_bytes() != alpn)
                     && e.waiters(i) < MAX_WAITERS
             })
-        })
+        })?;
+        (self.waiting_parents() < MAX_WAITING_PARENTS).then_some(parent)
+    }
+
+    /// How many sessions have a sub-session waiting for them.
+    // vertexia: a scan of the table per waiting dial, a counter kept by the open and the release if dials get hot
+    fn waiting_parents(&self) -> usize {
+        let seen = self.slots.iter().enumerate().filter(|(_, s)| s.m.waiting);
+        seen.clone()
+            .filter(|(i, s)| !seen.clone().take_while(|(j, _)| j < i).any(|(_, o)| o.m.parent == s.m.parent))
+            .count()
     }
 
     /// How many sub-sessions wait for session `parent`.
