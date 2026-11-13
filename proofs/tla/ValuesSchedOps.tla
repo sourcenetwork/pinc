@@ -57,9 +57,10 @@ Prate(has, pt, pb, now) ==
     ELSE IF DiffMs(now, pt) < WARMMS THEN 0
     ELSE pb \div Max(DiffMs(now, pt), 1)
 
-(* Fetch::target (ARRIVAL_CURVE) *)
+(* Fetch::target (ARRIVAL_CURVE): the rate replaces the starting target after the warm-up, or as soon as the provider
+   has verified twice the starting target *)
 Target(has, pt, pb, now) ==
-    IF has /\ DiffMs(now, pt) >= WARMMS
+    IF has /\ (DiffMs(now, pt) >= WARMMS \/ pb >= 2 * TGT0)
     THEN Max(MINT, Min(TGTMAX, SatRate(pb, Max(DiffMs(now, pt), 1))))
     ELSE TGT0
 
