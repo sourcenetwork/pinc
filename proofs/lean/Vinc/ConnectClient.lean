@@ -400,8 +400,10 @@ def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr 
       (some rtt, n2)
   | none => (none, n)
 
-/-- `Netcheck::failover`: move the home away from an unhealthy relay; `usable` says which relays are configured. -/
-def Netcheck.failover (n : Netcheck) (usable : Nat → Bool) : Option Nat × Netcheck :=
+/-- `Netcheck::failover`: move the home away from an unhealthy relay, only to one known to work: a probe answered since
+it last failed (lowest round trip first), else an `open` carrier (next by table position). `usable` says which relays
+are configured. With no such relay the home stays. -/
+def Netcheck.failover (n : Netcheck) (usable isOpen : Nat → Bool) : Option Nat × Netcheck :=
   match n.home with
   | none => (none, n)
   | some home =>
@@ -409,10 +411,10 @@ def Netcheck.failover (n : Netcheck) (usable : Nat → Bool) : Option Nat × Net
     else
       let rn := n.probes.length
       let measured := argMin ((List.range rn).filter fun i =>
-        i != home && usable i && !n.unhealthy i && (n.refl.getD i none).isSome) fun i => n.rtt.getD i 0
+        i != home && usable i && n.missed.getD i 0 == 0 && (n.refl.getD i none).isSome) fun i => n.rtt.getD i 0
       let next := match measured with
         | some m => some m
-        | none => ((List.range' 1 (rn - 1)).map fun k => (home + k) % rn).find? fun i => usable i && !n.unhealthy i
+        | none => ((List.range' 1 (rn - 1)).map fun k => (home + k) % rn).find? fun i => usable i && isOpen i && !n.unhealthy i
       match next with
       | some x => (some x, { n with home := some x })
       | none => (none, n)

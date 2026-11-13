@@ -219,12 +219,12 @@ NAnswered(N, now, relay, nonce, addr) ==
              N2 == IF best >= 0 /\ N1.home # best /\ (N1.home < 0 \/ Unhealthy(N1, N1.home) \/ N1.rtt[best + 1] < N1.rtt[N1.home + 1])
                    THEN [N1 EXCEPT !.home = best] ELSE N1
          IN [res |-> rtt, N |-> N2]
-NFailover(N, usable) ==
+NFailover(N, usable, open) ==
     IF N.home < 0 \/ ~Unhealthy(N, N.home) THEN [res |-> -1, N |-> N]
     ELSE LET rn == Len(N.probes)
-             meas == ArgMin({i \in 0..(rn - 1) : i # N.home /\ usable[i + 1] /\ ~Unhealthy(N, i) /\ N.refl[i + 1] >= 0}, N.rtt)
+             meas == ArgMin({i \in 0..(rn - 1) : i # N.home /\ usable[i + 1] /\ N.missed[i + 1] = 0 /\ N.refl[i + 1] >= 0}, N.rtt)
              ring == {(N.home + k) % rn : k \in 1..(rn - 1)}
-             cand == {k \in 1..(rn - 1) : usable[((N.home + k) % rn) + 1] /\ ~Unhealthy(N, (N.home + k) % rn)}
+             cand == {k \in 1..(rn - 1) : usable[((N.home + k) % rn) + 1] /\ open[((N.home + k) % rn) + 1] /\ ~Unhealthy(N, (N.home + k) % rn)}
              nxt == IF meas >= 0 THEN meas
                     ELSE IF cand = {} THEN -1
                     ELSE (N.home + (CHOOSE k \in cand : \A x \in cand : k <= x)) % rn

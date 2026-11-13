@@ -224,7 +224,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
   | "restart" => ncView j w w.nc.restart "none"
   | "failover" =>
     let usable ← boolList j "usable"
-    let (r, n) := w.nc.failover fun i => usable.getD i false
+    let isOpen ← boolList j "open"
+    let (r, n) := w.nc.failover (fun i => usable.getD i false) fun i => isOpen.getD i false
     sameInt "failover" j "res" r
     ncView j w n "ok"
   | "missing" =>
