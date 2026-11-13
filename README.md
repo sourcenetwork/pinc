@@ -202,37 +202,49 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   carries 100 streams each way, and a stream the peer opened gives its place back when its answer has left
   ([#128](https://github.com/sourcenetwork/vinc/pull/128)). Not yet: a build without `std`, which the crates below
   the facade have; the plan is in [#99](https://github.com/sourcenetwork/vinc/issues/99) and its first phases are
-  being written. An owned buffer written in the middle of a stream.
-- **Performance on loopback.** On the build host (12 November 2026, commit `38301fc`, all three in one quiet window)
-  VINC leads iroh and rust-libp2p on bulk throughput (699 against 518 and 462 MiB/s on one stream), on CPU per byte
-  (2.71 against 4.75 and 5.14 ns), on the 64-byte round trip (68 against 93 and 78 microseconds) and on connection
-  setup. It is behind on the memory of an idle endpoint (6.3 MiB against 3.3 and 0.6), on a client's memory per
-  connection (277 KiB against 185 and 107) and on the time to the first byte when 1000 connections start at once
-  (834 ms against iroh's 323). The other two were not measured again since; VINC alone at `3dca293` against its own
-  earlier build: one stream 719 MiB/s against 720 over ten alternating runs, a server's memory per connection 112 to
-  113 KiB against 116 to 117.
-- **Performance on the emulated network** (containers on the build host, three repetitions, medians, 13 November
-  2026). Requests on a stream each over a 20 ms path, 512-byte bodies: with 64 in flight 2,795 a second against 2,300
-  for iroh and 48 for rust-libp2p, the slowest hundredth at 26.1 ms against 40.3; with 4 KiB bodies 2,729 against
-  2,003, and 2,728 against 1,880 when 256 are asked for. Fetching a value over a WAN: 1 KiB in 104 ms against 112
-  and 155, 1 MiB in 390 ms against 471 and 512, 64 MiB in 6.06 s against 6.23 and 6.78
-  ([#100](https://github.com/sourcenetwork/vinc/issues/100): the harness's node had left Nagle's algorithm on its
-  relay connections). Behind: the slowest hundredth of requests with 16 in flight (22.4 ms against 21.2,
-  [#94](https://github.com/sourcenetwork/vinc/issues/94)), a 64 MiB value fetched from three providers at once (1.79 s
-  against 1.26 s for rust-libp2p; iroh 2.98 s, [#130](https://github.com/sourcenetwork/vinc/issues/130)) and the median delivery of a topic message on a LAN (740 microseconds
-  against 438, two hops by design, [#102](https://github.com/sourcenetwork/vinc/issues/102)). `just compare` and the
-  harness print every row, the ones VINC loses included.
+  written but not merged: one of them raised a server's memory per connection, which is being looked into. An owned
+  buffer written in the middle of a stream.
+- **Performance on loopback.** On the build host (13 November 2026, commit `6355d7d`, all three stacks in one quiet
+  window) VINC leads iroh and rust-libp2p on bulk throughput (713 against 514 and 465 MiB/s on one stream, 678
+  against 488 and 462 on sixteen), on CPU per byte (2.65 against 4.81 and 5.09 ns), on the 64-byte round trip (68
+  against 93 and 78 microseconds) and on connection setup (858 microseconds against 1,047 and 1,801). It is behind on
+  a client's memory per connection (250 KiB against 180 and 107) and on the memory of an idle endpoint (6.3 MiB
+  against 3.3 and 0.6, measured on 12 November; both in [#158](https://github.com/sourcenetwork/vinc/issues/158)), and on the time to the first byte when 1000
+  connections start at once (821 ms against iroh's 315, [#157](https://github.com/sourcenetwork/vinc/issues/157)).
+- **Performance on the emulated network** (containers on the build host, the same session, three repetitions,
+  medians). Under 1% loss on a 50 ms path a transfer runs at 6.28 MiB/s against 0.35 and 0.34. Requests on a stream
+  each over a 20 ms path, 512-byte bodies: with 64 in flight 2,799 a second against 2,311 for iroh and 48 for
+  rust-libp2p, the slowest hundredth at 26.0 ms against 40.2; with 4 KiB bodies 2,730 against 1,990, and 2,666
+  against 1,863 when 256 are asked for. Fetching a value over a WAN: 1 KiB in 104 ms against 114 and 155, 1 MiB in
+  390 ms against 473 and 511, 64 MiB in 6.06 s against 6.24 and 6.68, 256 MiB level with iroh (23.35 s against
+  23.32), and 64 MiB from three providers at once in 1.25 s against 1.27 s for rust-libp2p and 2.98 s for iroh.
+  Behind:
+  - one stream on a clean 150 ms path fell from 12.1 to 10.8 MiB/s between 12 and 13 November (iroh 5.68; the
+    change that did it is being looked for, [#156](https://github.com/sourcenetwork/vinc/issues/156)), and sixteen streams there move 9.72 MiB/s against iroh's
+    11.2 ([#159](https://github.com/sourcenetwork/vinc/issues/159));
+  - one stream on a LAN, 85.8 against 90.3 MiB/s ([#159](https://github.com/sourcenetwork/vinc/issues/159)), and a burst of 500 connections there, 0.94 s
+    against 0.56 s ([#157](https://github.com/sourcenetwork/vinc/issues/157));
+  - the slowest hundredth of requests with 16 in flight (22.1 ms against 21.1, [#94](https://github.com/sourcenetwork/vinc/issues/94)) and with 256 asked for
+    (230 ms against 158, [#162](https://github.com/sourcenetwork/vinc/issues/162));
+  - the median delivery of a topic message on a LAN (852 microseconds against 430, two hops by design,
+    [#102](https://github.com/sourcenetwork/vinc/issues/102)) and of a burst of 2,000 updates through a hub (3.49 s against iroh's 1.61 s, level with
+    rust-libp2p, [#161](https://github.com/sourcenetwork/vinc/issues/161));
+  - CPU on a large value fetched from one provider (11.9 s over all nodes for 256 MiB against 9.79 and 9.37,
+    [#163](https://github.com/sourcenetwork/vinc/issues/163));
+  - three setup rows: the median on a LAN, the resumed median on a slow lossy path and the tail at 1% loss
+    ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
+
+  `just compare` and the harness print every row, the ones VINC loses included.
 - **Transport and connectivity rules not in yet.** A session whose relay path goes silent is not closed before the
-  idle timeout ([#96](https://github.com/sourcenetwork/vinc/issues/96)); a tunnel packet can leave from another
-  local address than the hub session's, and the relay then refuses it
-  ([#120](https://github.com/sourcenetwork/vinc/issues/120)); a node that moved drops what its relay carries to it
-  ([#122](https://github.com/sourcenetwork/vinc/issues/122)); a dial with a cached record that lists an old address
-  sends no lookup ([#123](https://github.com/sourcenetwork/vinc/issues/123)). All four are being fixed.
-- **The scenario suite** passes every gate on the seeds it runs, except the mobile scenario, which is ignored on its
-  seed: with [#129](https://github.com/sourcenetwork/vinc/pull/129) and the fix of #122 it delivers 1,576 of 1,577
-  and misses one gate, which #123 is expected to close. The full run over 96 seeds has not been made on this code
-  ([#98](https://github.com/sourcenetwork/vinc/issues/98)). The two scenarios that need the values and reconcile
-  layers in one composition wait for them.
+  idle timeout ([#96](https://github.com/sourcenetwork/vinc/issues/96)); a tunnel packet can leave from another local address than the hub session's, and the
+  relay then refuses it ([#120](https://github.com/sourcenetwork/vinc/issues/120)); a dial with a cached record that lists an old address sends no lookup
+  ([#123](https://github.com/sourcenetwork/vinc/issues/123)); a dial rides a held session however long it has been silent ([#147](https://github.com/sourcenetwork/vinc/issues/147)); a lost Finish is re-sent
+  on the probe timeout, not 999 ms after it ([#154](https://github.com/sourcenetwork/vinc/issues/154)); after an address change the wake leaves from the old
+  address, so the peer does not re-send at once ([#155](https://github.com/sourcenetwork/vinc/issues/155)). All six are being fixed.
+- **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
+  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 80 at `6355d7d` (75 on its first run); the reference model the
+  rules come from passes 88, and five of the sixteen the library fails are seeds the model fails too
+  ([#98](https://github.com/sourcenetwork/vinc/issues/98)). The two scenarios that need the values and reconcile layers in one composition wait for them.
 - **The proofs** are behind the code on purpose: code lands first. What each merge left to prove or to check again is
   listed in [#105](https://github.com/sourcenetwork/vinc/issues/105), beside
   [Being closed](docs/PROOFS.md#being-closed).
@@ -240,5 +252,7 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
 - **The harness** has run on no machine but the build host's containers; the Terraform for separate machines is in
   `distributed/infra/` and has not been applied. A scenario can ask for the VINC nodes' traces and packet logs
   (`[debug] trace = true`, [#126](https://github.com/sourcenetwork/vinc/pull/126)).
-- **Housekeeping.** One unexplained move of a warm-up step in the leak test
-  ([#104](https://github.com/sourcenetwork/vinc/issues/104)).
+- **Planned.** Forward erasure correction as an option, off by default, that an application switches on through the
+  builder ([#145](https://github.com/sourcenetwork/vinc/issues/145)).
+- **Housekeeping.** The memory test fails when it runs beside the whole suite on a busy host and passes alone
+  ([#148](https://github.com/sourcenetwork/vinc/issues/148)). A session's memory depends on the allocator committing its pool segment lazily ([#141](https://github.com/sourcenetwork/vinc/issues/141)).
