@@ -14,11 +14,6 @@ pub enum Event {
         /// The member.
         member: NodeId,
     },
-    /// A member is suspected: a probe is outstanding at a hub, or a snapshot omitted it.
-    MemberSuspected {
-        /// The member.
-        member: NodeId,
-    },
     /// A member was confirmed down.
     MemberConfirmedDown {
         /// The member.

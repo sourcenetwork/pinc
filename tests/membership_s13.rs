@@ -125,13 +125,11 @@ fn a_snapshot_after_a_heal_does_not_remove_partition_mates() {
         0
     );
     assert_eq!(
-        w.count_events(
-            m,
-            |e| matches!(e, Event::MemberSuspected { member } if *member == id(p))
-        ),
-        1
+        traces(&w, m, |t| matches!(t, Trace::Absent { member } if *member == id(p))),
+        2,
+        "each of the two hubs' snapshots omits the mate: the omissions are noted, and nothing is reported"
     );
-    // Then the mate redials, the hub lists it again, and the suspicion ends without any event.
+    // Then the mate redials, the hub lists it again, and the absence ends without any event.
     for hub in 0..2 {
         w.close_session(p, hub, 0);
     }

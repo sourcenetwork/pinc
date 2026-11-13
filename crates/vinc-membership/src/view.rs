@@ -5,7 +5,7 @@
 //! highest incarnation winning, with removals held.
 //!
 //! A snapshot never removes a member on its own. A complete snapshot that omits a member starts that member's lease
-//! clock; the member stays in the view and is suspected, and leaves it only when the hub reports it down (a delta or
+//! clock; the member stays in the view, with no event, and leaves it only when the hub reports it down (a delta or
 //! a DOWN of the same or a newer incarnation), or when a full lease passes without any hub listing it again. Removals
 //! found while a quiet window is open (after a late timer or a partition heal) are re-checked at its end.
 //!
@@ -455,7 +455,7 @@ impl Membership {
             }
         }
         let cur = self.members.get(m).copied();
-        let Some((best, absent)) = best else {
+        let Some((best, _)) = best else {
             return self.remove_from_view(h, now, m, cur, &src, expired);
         };
         let mut changed = false;
@@ -490,13 +490,7 @@ impl Membership {
                 if cur.is_none() && self.members.len() >= MAX_TABLE {
                     return false;
                 }
-                self.members.insert(
-                    *m,
-                    ViewEntry {
-                        rec: best,
-                        suspected: false,
-                    },
-                );
+                self.members.insert(*m, ViewEntry { rec: best });
                 self.emit(Event::MemberJoined { member: *m });
                 let old = cur
                     .map(|c| (c.rec.ver, c.rec.thash))
@@ -514,14 +508,6 @@ impl Membership {
                     }
                 }
                 changed = true;
-            }
-        }
-        if let Some(e) = self.members.get_mut(m)
-            && e.suspected != absent
-        {
-            e.suspected = absent;
-            if absent {
-                self.emit(Event::MemberSuspected { member: *m });
             }
         }
         changed

@@ -25,7 +25,7 @@
 use crate::codec::{Alive, Down, Hello, MAX_PROBES, NodeId, Other, Path, Probe, Proof, Record, SNAP_CHUNK, ty};
 use crate::codec::{ENTRY_LEN, Frame, Snap, entry_bytes};
 use crate::consts::{CONFIRM, FLOOR_MAX, LEASE, MAX_TABLE, PROBE_WAIT_MIN, RENEW, SLEEP_WIN};
-use crate::event::{Event, Refusal, Trace};
+use crate::event::{Refusal, Trace};
 use crate::node::{Lease, Membership, Susp, next_in, next_key};
 use crate::session::{Carrier, Evidence, Host, Nanos, Route};
 
@@ -410,17 +410,11 @@ impl Membership {
         }
         match self.susp.get(m).copied() {
             Some(mut sp) if sp.since == since => {
-                // A carrier that closed on a member that is still there (a slow link reset it) is answered by the
-                // probe within the wait; only a member silent for the wait is reported suspected.
-                if !sp.announced {
-                    let at = sp.probe_a.saturating_add(sp.wait);
-                    if now >= at {
-                        sp.announced = true;
-                        self.susp.insert(*m, sp);
-                        self.emit(Event::MemberSuspected { member: *m });
-                    } else {
-                        self.schedule_confirm(now, at);
-                    }
+                // The watch runs again when the first probe's wait ends: an independent route may be up by then. A
+                // suspicion is not reported: only the confirmation is an event.
+                let at = sp.probe_a.saturating_add(sp.wait);
+                if now < at {
+                    self.schedule_confirm(now, at);
                 }
                 if sp.probe_b.is_none()
                     && let Some((route, path)) = self.independent_route(now, m, ev)
@@ -459,7 +453,6 @@ impl Membership {
                     probe_a: now,
                     probe_b,
                     wait,
-                    announced: false,
                 };
                 self.susp.insert(*m, sp);
                 self.schedule_confirm(now, now.saturating_add(wait));

@@ -98,7 +98,6 @@ pub(crate) struct HubCopy {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ViewEntry {
     pub(crate) rec: Record,
-    pub(crate) suspected: bool,
 }
 
 /// A carrier drop a hub is confirming.
@@ -108,8 +107,6 @@ pub(crate) struct Susp {
     pub(crate) probe_a: Nanos,
     pub(crate) probe_b: Option<(Nanos, Path)>,
     pub(crate) wait: Nanos,
-    /// The member was reported suspected: its first probe went unanswered for the wait.
-    pub(crate) announced: bool,
 }
 
 /// The first key of `m` strictly after `after` (or the first key when `after` is `None`).

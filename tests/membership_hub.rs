@@ -176,7 +176,15 @@ fn a_dropped_carrier_is_confirmed_at_the_drop_plus_one_second_on_two_paths() {
         .collect();
     assert_eq!(probes.len(), 2, "one probe on the session, one on the independent path");
     assert!(probes.iter().any(|p| p.4 == Route::Reply) && probes.iter().any(|p| p.4 == Route::Direct));
-    assert_eq!(w.count_events(0, |e| matches!(e, Event::MemberSuspected { .. })), 1);
+    // A suspicion is not an event: from the drop to the confirmation the hub reports nothing about the member. The
+    // confirmation itself is the lease ending above and the trace below; the members hear it as a delta.
+    let reported: Vec<Event> = w.events[0]
+        .iter()
+        .filter(|(at, e)| *at >= t && !matches!(e, Event::ViewChanged { .. }))
+        .map(|(_, e)| *e)
+        .collect();
+    assert!(reported.is_empty(), "what the hub reported: {reported:?}");
+    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })), 1);
     assert!(
         w.nodes[0].h.bc.contains(&Bc::Hold(id(2))),
         "the subscriptions are held, not dropped"
@@ -228,9 +236,10 @@ fn a_member_that_answers_on_either_path_is_never_confirmed() {
 }
 
 #[test]
-fn a_member_that_answers_the_probe_after_its_carrier_closed_is_never_reported_suspected() {
+fn a_member_that_answers_the_probe_after_its_carrier_closed_is_kept_and_nothing_is_reported() {
     let mut w = started(2, 1);
     w.run(40 * SEC);
+    let t = w.now;
     w.nodes[0].h.carriers.insert(
         id(2),
         Carrier::Gone {
@@ -241,10 +250,10 @@ fn a_member_that_answers_the_probe_after_its_carrier_closed_is_never_reported_su
     w.with(0, |m, h, now| m.carrier_gone(h, now, &id(2)));
     w.run(10 * SEC);
     assert_eq!(w.nodes[0].m.roster_len(), 2, "the member is kept");
-    assert_eq!(
-        w.count_events(0, |e| matches!(e, Event::MemberSuspected { .. })),
-        0,
-        "a member that is there is not suspected for a closed carrier"
+    assert_eq!(traces(&w, 0, |t| matches!(t, Trace::Confirmed { .. })), 0);
+    assert!(
+        w.events[0].iter().all(|(at, _)| *at < t),
+        "a member that is there causes no report for a closed carrier"
     );
 }
 

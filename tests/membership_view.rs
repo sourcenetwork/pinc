@@ -181,7 +181,7 @@ fn a_member_that_hears_no_hub_keeps_its_view() {
 }
 
 #[test]
-fn a_snapshot_never_removes_it_suspects_and_a_lease_without_a_listing_ends_it() {
+fn a_snapshot_never_removes_it_notes_the_absence_and_a_lease_without_a_listing_ends_it() {
     let mut w = started(2, 3);
     let (m, x) = (2, 3);
     let home = *w.nodes[m].m.primary().unwrap();
@@ -195,19 +195,13 @@ fn a_snapshot_never_removes_it_suspects_and_a_lease_without_a_listing_ends_it() 
     // A partial snapshot (a young hub) says nothing about absence.
     w.inject(m, hub, &Frame::Snap(Snap::new(true, false, &raw).unwrap()));
     assert!(w.has(m, x));
-    assert_eq!(w.count_events(m, |e| matches!(e, Event::MemberSuspected { .. })), 0);
-    // A complete snapshot that omits the member: it stays, suspected.
+    assert_eq!(traces(&w, m, |t| matches!(t, Trace::Absent { .. })), 0);
+    // A complete snapshot that omits the member: it stays, noted as absent, and nothing is reported.
     w.inject(m, hub, &Frame::Snap(Snap::new(false, false, &raw).unwrap()));
     assert!(w.has(m, x), "a snapshot never removes a member on its own");
-    assert_eq!(
-        w.count_events(
-            m,
-            |e| matches!(e, Event::MemberSuspected { member } if *member == id(x))
-        ),
-        1
-    );
     assert_eq!(traces(&w, m, |t| matches!(t, Trace::Absent { .. })), 1);
-    // The hub lists it again (a delta): the suspicion ends, and nothing removes it however long we wait.
+    assert_eq!(w.count_events(m, |e| matches!(e, Event::MemberConfirmedDown { .. })), 0);
+    // The hub lists it again (a delta): the absence ends, and nothing removes it however long we wait.
     let r = *w.nodes[m].m.members().find(|(mem, _)| **mem == id(x)).unwrap().1;
     delta(&mut w, m, hub, &id(x), r, Alive::Alive);
     w.run(200 * SEC);
@@ -263,13 +257,6 @@ fn the_first_snapshot_of_a_new_home_never_brings_back_a_member_that_left() {
     );
     assert_eq!(
         traces(&w, m, |t| matches!(t, Trace::Absent { member } if *member == id(x))),
-        0
-    );
-    assert_eq!(
-        w.count_events(
-            m,
-            |e| matches!(e, Event::MemberSuspected { member } if *member == id(x))
-        ),
         0
     );
 }

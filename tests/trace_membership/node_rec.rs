@@ -148,7 +148,6 @@ fn bc_json(c: &Bc) -> String {
 fn event_json(e: &Event) -> String {
     match e {
         Event::MemberJoined { member } => format!("{{\"k\":\"joined\",\"m\":{}}}", nid(member)),
-        Event::MemberSuspected { member } => format!("{{\"k\":\"suspected\",\"m\":{}}}", nid(member)),
         Event::MemberConfirmedDown { member } => format!("{{\"k\":\"down\",\"m\":{}}}", nid(member)),
         Event::MemberLeft { member } => format!("{{\"k\":\"left\",\"m\":{}}}", nid(member)),
         Event::MemberRevoked { member } => format!("{{\"k\":\"revoked\",\"m\":{}}}", nid(member)),

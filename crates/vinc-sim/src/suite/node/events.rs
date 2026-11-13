@@ -225,7 +225,6 @@ impl Core {
         let ix = |s: &Self, id: &[u8; 32]| s.shared.index_of_bytes(id);
         let ev = match *m {
             M::MemberJoined { member } => MemberEvent::Joined(ix(self, &member)),
-            M::MemberSuspected { member } => MemberEvent::Suspected(ix(self, &member)),
             M::MemberConfirmedDown { member } => MemberEvent::ConfirmedDown(ix(self, &member)),
             M::MemberLeft { member } => MemberEvent::Left(ix(self, &member)),
             M::MemberRevoked { member } => MemberEvent::Revoked(ix(self, &member)),
