@@ -209,6 +209,7 @@ par witness_tlc vsys_w_deadline ValuesSys ValuesSys_w_deadline NeverDeadlineFail
 par witness_tlc vsys_w_store ValuesSys ValuesSys_w_store NeverStoreFail
 par witness_tlc vsys_w_ahead ValuesSys ValuesSys_w_ahead NeverAheadCommit
 par witness_tlc vsys_w_liar_complete ValuesSys ValuesSys_w_liar_complete NeverLiarThenComplete
+par witness_tlc vsys_w_n3 ValuesSys ValuesSys_w_n3 NeverLiarThenComplete
 par witness_tlc vsys_w_steal ValuesSys ValuesSys_w_steal NeverStolen
 par witness_tlc vsys_w_redial ValuesSys ValuesSys_w_redial NeverRedialed
 par witness_live_tlc vsys_n2_old ValuesSys ValuesSys_n2_old
@@ -347,6 +348,7 @@ par run_tlc sys_live_heal MembershipSys MembershipSys_live_heal
 par witness_live_tlc sys_live_w_never MembershipSys MembershipSys_live_w_never
 par run_tlc sys_conv MembershipConv MembershipConv
 par witness_tlc sys_w_finished MembershipSys MembershipSys_w_finished NeverFinished
+par run_tlc_deep nanos NanosCheck NanosCheck
 par run_tlc incarnation Incarnation Incarnation
 par run_tlc incarnation_pers Incarnation Incarnation_pers
 par run_tlc incarnation_hlc Incarnation Incarnation_hlc
