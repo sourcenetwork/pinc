@@ -7,9 +7,13 @@ and the index; index 0 is the id the handshake carried and is not in the table).
 the slot number to the entry; slots from `slots` up are empty. `Vinc.TraceCid` replays the recorded calls of the
 real code through these functions; the theorems are in `Vinc.TransportCidThm`.
 
-The eviction rule is the one of the code now: a stale entry (below the highest index seen, never used by a packet)
-may make room as well as a used one. The earlier rule (`seen` only) lost the lookahead after enough skipped
-indices; `proofs/tla/Cid_stale.cfg` keeps that behaviour as a witness.
+The eviction rule is the one of the code now: an entry at least `look` below the highest index seen may make room,
+used by a packet or not, and the entries from there up are never evicted. The earliest rule (`seen` only) lost the
+lookahead after enough skipped indices; `proofs/tla/Cid_stale.cfg` keeps that behaviour as a witness.
+
+The sender takes the next index while it is within `look` of the highest one the peer answered on (`cf`), and past
+that an index of that window again, turn by turn (`ru` counts those; the code does not show it in its trace view,
+so the replay carries it).
 -/
 
 namespace Vinc.TransportCid
@@ -27,6 +31,10 @@ structure C where
   hi : Nat := 0
   tick : Nat := 0
   ns : Nat := 0
+  /-- `confirmed`: the highest index the peer acknowledged a packet on. -/
+  cf : Nat := 0
+  /-- `reuse`: how many ids of the window were handed out again. -/
+  ru : Nat := 0
   sec : Bool := false
   fr : Bool := false
 
@@ -38,8 +46,8 @@ def look : Nat := 2
 /-- Whether the table holds the id of index `k`. -/
 def has (c : C) (k : Nat) : Bool := (List.range slots).any (fun s => (c.ent s).any (fun e => e.idx == k))
 
-/-- An entry that may make room: used by a packet, or stale (below the highest index seen). -/
-def evictable (c : C) (e : E) : Bool := e.seen || decide (e.idx ≤ c.hi)
+/-- An entry that may make room: at least `look` below the highest index seen. -/
+def evictable (c : C) (e : E) : Bool := decide (e.idx + look ≤ c.hi)
 
 def lexLt (a b : Nat × Nat) : Bool := decide (a.1 < b.1) || (a.1 == b.1 && decide (a.2 < b.2))
 
@@ -97,9 +105,22 @@ def auth (c : C) (k : Nat) : C × List Nat :=
 
 def setFirstRemote (c : C) : C := { c with fr := true }
 
+/-- Whether the next index is within `look` of the highest one confirmed. -/
+def claimFresh (c : C) : Bool := decide (c.ns ≤ c.cf + look)
+
+/-- The index `claim_remote` takes: the next one, or an index of the window again, turn by turn. -/
+def claimIndex (c : C) : Nat := if claimFresh c then c.ns else c.cf + 1 + c.ru % look
+
 /-- `claim_remote`: the index of the id for a path of its own. -/
 def claim (c : C) : C × Option Nat :=
-  if !c.fr || (decide (0 < c.ns) && !c.sec) then (c, none) else ({ c with ns := c.ns + 1 }, some c.ns)
+  if !c.fr || (decide (0 < claimIndex c) && !c.sec) then (c, none)
+  else (if claimFresh c then { c with ns := c.ns + 1 } else { c with ru := c.ru + 1 }, some (claimIndex c))
+
+/-- `confirm_remote`: the peer acknowledged a packet sent with the id of index `k`. -/
+def confirm (c : C) (k : Nat) : C := { c with cf := max c.cf k }
+
+/-- `remote_usable`: the peer is known to accept the id of index `k`. -/
+def remoteUsable (c : C) (k : Nat) : Bool := decide (k = 0) || decide (c.cf < k)
 
 def isLocal (c : C) (k : Nat) : Bool := decide (k = 0) || has c k
 

@@ -7,7 +7,9 @@ import Vinc.TransportCid
 The Lean half of the trace validation of the connection id tables (`conn/cid.rs`), the port of
 `proofs/tla/TraceCid.tla`. It reads the `txcid` events written by the Rust test `trace_cid` and replays every call
 through the functions of `Vinc.TransportCid`: the table the model computes must be the table recorded, slot by
-slot, with the counters and the epoch, and so must the index a claim returns and the answers of a query.
+slot, with the counters and the epoch, and so must the index a claim returns and the answers of a query. The code
+does not show how many ids of the window it handed out again (`ru`): the model carries the count, and a wrong one
+shows as a wrong index at the next claim past the window.
 -/
 
 namespace Vinc.TraceCid
@@ -35,7 +37,8 @@ def same (c : C) (j : J) (what : String) : Except String Unit := do
   let v ← field j "v"
   let ents ← slotsOf v
   check (view c == ents) s!"{what}: the model holds {repr (view c)}, the code recorded {repr ents}"
-  check (c.hi == (← natF v "hi") && c.tick == (← natF v "tick") && c.ns == (← natF v "ns")) s!"{what}: the counters differ"
+  check (c.hi == (← natF v "hi") && c.tick == (← natF v "tick") && c.ns == (← natF v "ns") && c.cf == (← natF v "cf"))
+    s!"{what}: the counters differ"
   check (c.sec == (← boolF v "sec") && c.fr == (← boolF v "fr")) s!"{what}: the flags differ"
   check (epoch c == (← natF v "epoch")) s!"{what}: the epoch differs"
 
@@ -51,6 +54,7 @@ def replayEvent (j : J) (c : C) : Except String C := do
     check ((r.map (fun k => (k : Int))).getD (-1) == (← intF j "k")) "claim: the index differs"
     same c2 j "claim"
     pure c2
+  | "conf" => let c2 := confirm c (← natF j "k"); same c2 j "conf"; pure c2
   | "query" =>
     same c j "query"
     check ((held c).length + 1 == (← natF j "lc")) "query: the number of ids accepted differs"

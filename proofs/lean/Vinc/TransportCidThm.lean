@@ -9,9 +9,12 @@ What the model proves about the connection id table (`conn/cid.rs`), over unboun
 - the table holds each derived index at most once, at most `slots` ids, none below 1 (`Core`);
 - once the secret is installed the `look` indices after the highest one seen are always held, so a packet on a
   fresh path is routable (`Inv.ahead`, `install_inv`, `auth_inv`);
-- an entry makes room only if it is stale or used, so it is at or below the highest index seen, and an index
-  forgotten is never held again (`Reach.retired`): a retired id is never accepted again;
-- the sender takes each index once, in order (`claim_next`).
+- an entry makes room only if it is at least `look` below the highest index seen, and an index forgotten is never
+  held again (`reach_inv`): a retired id is never accepted again, and no id from `hi - look + 1` up is retired;
+- the sender takes the next index while it is within `look` of the highest one confirmed and an index of that
+  window again past it (`claim_some`), so the index it takes is 0 or one of the `look` indices after the highest one
+  confirmed, and the peer is known to accept it (`claim_sender`, `claim_usable`, `reach_claim`). It no longer takes
+  each index once.
 -/
 
 namespace Vinc.TransportCid
@@ -126,11 +129,14 @@ theorem put_bound (c : C) (s : Nat) (e : E) (hs : s < slots) (hb : ∀ t, slots 
   have : t ≠ s := by omega
   simp [this, hb t ht]
 
-/-- Pigeonhole: a full table with the window shape has an entry at or below the highest index. -/
+/-- Pigeonhole: a full table with the window shape has an entry at least `look` below the highest index. The entries
+that are not lie in the `2 * look` indices `hi - look + 1 ..= hi + look`, so five slots hold one that is (the code
+has eight; the argument needs more than `2 * look`, or `2 * look` when the index to add is not held, which is the
+case `proofs/tla/Cid.cfg` checks). -/
 theorem full_has_low (c : C) (hc : Core c) (hfull : ∀ s, s < slots → c.ent s ≠ none) :
-    ∃ s, s < slots ∧ ∃ e, c.ent s = some e ∧ e.idx ≤ c.hi := by
+    ∃ s, s < slots ∧ ∃ e, c.ent s = some e ∧ e.idx + look ≤ c.hi := by
   apply Classical.byContradiction; intro hno
-  have key : ∀ s, s < slots → ∃ e, c.ent s = some e ∧ c.hi < e.idx := by
+  have key : ∀ s, s < slots → ∃ e, c.ent s = some e ∧ c.hi < e.idx + look := by
     intro s hs
     cases he : c.ent s with
     | none => exact absurd he (hfull s hs)
@@ -141,13 +147,24 @@ theorem full_has_low (c : C) (hc : Core c) (hfull : ∀ s, s < slots → c.ent s
   obtain ⟨e0, h0, l0⟩ := key 0 (by decide)
   obtain ⟨e1, h1, l1⟩ := key 1 (by decide)
   obtain ⟨e2, h2, l2⟩ := key 2 (by decide)
+  obtain ⟨e3, h3, l3⟩ := key 3 (by decide)
+  obtain ⟨e4, h4, l4⟩ := key 4 (by decide)
   have w0 := hc.window 0 e0 h0
   have w1 := hc.window 1 e1 h1
   have w2 := hc.window 2 e2 h2
+  have w3 := hc.window 3 e3 h3
+  have w4 := hc.window 4 e4 h4
   have n01 : e0.idx ≠ e1.idx := fun h => by have := hc.nodup 0 1 e0 e1 h0 h1 h; omega
   have n02 : e0.idx ≠ e2.idx := fun h => by have := hc.nodup 0 2 e0 e2 h0 h2 h; omega
+  have n03 : e0.idx ≠ e3.idx := fun h => by have := hc.nodup 0 3 e0 e3 h0 h3 h; omega
+  have n04 : e0.idx ≠ e4.idx := fun h => by have := hc.nodup 0 4 e0 e4 h0 h4 h; omega
   have n12 : e1.idx ≠ e2.idx := fun h => by have := hc.nodup 1 2 e1 e2 h1 h2 h; omega
-  simp only [look] at w0 w1 w2
+  have n13 : e1.idx ≠ e3.idx := fun h => by have := hc.nodup 1 3 e1 e3 h1 h3 h; omega
+  have n14 : e1.idx ≠ e4.idx := fun h => by have := hc.nodup 1 4 e1 e4 h1 h4 h; omega
+  have n23 : e2.idx ≠ e3.idx := fun h => by have := hc.nodup 2 3 e2 e3 h2 h3 h; omega
+  have n24 : e2.idx ≠ e4.idx := fun h => by have := hc.nodup 2 4 e2 e4 h2 h4 h; omega
+  have n34 : e3.idx ≠ e4.idx := fun h => by have := hc.nodup 3 4 e3 e4 h3 h4 h; omega
+  simp only [look] at w0 w1 w2 w3 w4 l0 l1 l2 l3 l4
   omega
 
 end Vinc.TransportCid

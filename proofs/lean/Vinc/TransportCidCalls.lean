@@ -5,10 +5,11 @@ import Vinc.TransportCidInv
 # Connection ids: the calls and the runs
 
 `install_inv` and `auth_inv` carry the table shape and the lookahead through the calls that fill the table;
-`claim_some` and `claim_none` say what the sender's call takes; `Reach` is a run of any calls with the indices
-forgotten recorded, and `reach_inv` shows that after any run the table has its shape, the lookahead is held once the
-secret is installed, and every index forgotten is below the highest one seen and not held: a retired id is never
-accepted again.
+`claim_some` and `claim_none` say what the sender's call takes, `claim_sender` that the index is 0 or in the window
+of the highest one confirmed, `confirm_sender` and `confirm_usable` what a confirmation does; `Reach` is a run of any
+calls with the indices forgotten recorded, and `reach_inv` shows that after any run the table has its shape, the
+lookahead is held once the secret is installed, the highest index confirmed is one the sender took, and every index
+forgotten is at least `look` below the highest one seen and not held: a retired id is never accepted again.
 -/
 
 namespace Vinc.TransportCid
@@ -89,8 +90,8 @@ theorem core_init : Core ({} : C) := by
   refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> intros <;> simp_all
 
 theorem install_inv (c : C) (hc : Core c) :
-    Core (install c).1 ∧ Ahead (install c).1 ∧ (∀ v ∈ (install c).2, v ≤ c.hi ∧ has (install c).1 v = false) ∧
-      (install c).1.hi = c.hi ∧ (∀ j, has (install c).1 j = true → has c j = true ∨ (c.hi < j ∧ j ≤ c.hi + look)) := by
+    Core (install c).1 ∧ Ahead (install c).1 ∧
+      (∀ v ∈ (install c).2, v + look ≤ c.hi ∧ has (install c).1 v = false) ∧ (install c).1.hi = c.hi ∧ (∀ j, has (install c).1 j = true → has c j = true ∨ (c.hi < j ∧ j ≤ c.hi + look)) := by
   unfold install
   have hc0 : Core { c with sec := true } := ⟨hc.bound, hc.nodup, hc.pos, hc.window, hc.seenLe⟩
   generalize hdef : ({ c with sec := true } : C) = c0 at hc0 ⊢
@@ -115,7 +116,7 @@ theorem install_inv (c : C) (hc : Core c) :
 theorem authAt_inv (c1 : C) (hc : Core c1) (ha : Ahead c1) (k s : Nat) (hs : s < slots) (e : E)
     (he : c1.ent s = some e) (hek : e.idx = k) :
     Core (authAt c1 k s).1 ∧ Ahead (authAt c1 k s).1 ∧ c1.hi ≤ (authAt c1 k s).1.hi ∧
-      (∀ v ∈ (authAt c1 k s).2, v ≤ (authAt c1 k s).1.hi ∧ has (authAt c1 k s).1 v = false) ∧
+      (∀ v ∈ (authAt c1 k s).2, v + look ≤ (authAt c1 k s).1.hi ∧ has (authAt c1 k s).1 v = false) ∧
       (∀ j, has (authAt c1 k s).1 j = true → has c1 j = true ∨ (c1.hi < j ∧ j ≤ (authAt c1 k s).1.hi + look)) := by
   unfold authAt
   have hm : ∀ j, has (put c1 s ⟨k, c1.tick, true⟩) j = has c1 j := has_mark c1 hc s k hs e he hek _ _
@@ -164,7 +165,7 @@ theorem auth_cases (c : C) (k : Nat) :
 
 theorem auth_inv (c : C) (hc : Core c) (ha : Ahead c) (k : Nat) :
     Core (auth c k).1 ∧ Ahead (auth c k).1 ∧ c.hi ≤ (auth c k).1.hi ∧
-      (∀ v ∈ (auth c k).2, v ≤ (auth c k).1.hi ∧ has (auth c k).1 v = false) ∧
+      (∀ v ∈ (auth c k).2, v + look ≤ (auth c k).1.hi ∧ has (auth c k).1 v = false) ∧
       (∀ j, has (auth c k).1 j = true → has c j = true ∨ (c.hi < j ∧ j ≤ (auth c k).1.hi + look)) := by
   rcases auth_cases c k with h | ⟨s, hs', h⟩
   · rw [h]
@@ -173,52 +174,149 @@ theorem auth_inv (c : C) (hc : Core c) (ha : Ahead c) (k : Nat) :
     rw [h]
     exact authAt_inv { c with tick := c.tick + 1 } (core_tick c hc) (fun h j h1 h2 => ha h j h1 h2) k s hslt e he hek
 
+theorem refill1_sender (c : C) (k : Nat) : (refill1 c k).1.cf = c.cf ∧ (refill1 c k).1.ns = c.ns := by
+  unfold refill1
+  repeat' split
+  all_goals exact ⟨rfl, rfl⟩
+
+theorem refill_sender (c : C) : (refill c).1.cf = c.cf ∧ (refill c).1.ns = c.ns := by
+  unfold refill
+  split
+  · have h1 := refill1_sender c (c.hi + 1)
+    have h2 := refill1_sender (refill1 c (c.hi + 1)).1 (c.hi + 2)
+    exact ⟨h2.1.trans h1.1, h2.2.trans h1.2⟩
+  · exact ⟨rfl, rfl⟩
+
+/-- The calls of the receiving side leave the sender's counters alone. -/
+theorem install_sender (c : C) : (install c).1.cf = c.cf ∧ (install c).1.ns = c.ns :=
+  refill_sender { c with sec := true }
+
+theorem auth_sender (c : C) (k : Nat) : (auth c k).1.cf = c.cf ∧ (auth c k).1.ns = c.ns := by
+  rcases auth_cases c k with h | ⟨s, _, h⟩
+  · rw [h]; exact ⟨rfl, rfl⟩
+  · rw [h]
+    unfold authAt
+    split
+    · exact refill_sender _
+    · exact ⟨rfl, rfl⟩
+
+/-- What the sender's counters keep: the highest index confirmed is 0 or one the sender took. -/
+def Sender (c : C) : Prop := c.cf = 0 ∨ c.cf < c.ns
+
+/-- A claim that takes an index: the peer's first id is known, the secret is installed for an index past 0, and
+either the next index is within `look` of the highest one confirmed and is the one taken, or it is past that window
+and the index taken is one of the window, which the sender took before (it is below the next index). -/
 theorem claim_some (c c' : C) (k : Nat) (h : claim c = (c', some k)) :
-    k = c.ns ∧ c'.ns = c.ns + 1 ∧ c.fr = true ∧ (k = 0 ∨ c.sec = true) ∧ c'.ent = c.ent ∧ c'.hi = c.hi ∧ c'.sec = c.sec := by
+    c.fr = true ∧ (k = 0 ∨ c.sec = true) ∧ c'.ent = c.ent ∧ c'.hi = c.hi ∧ c'.sec = c.sec ∧ c'.cf = c.cf ∧
+      ((c.ns ≤ c.cf + look ∧ k = c.ns ∧ c'.ns = c.ns + 1 ∧ c'.ru = c.ru) ∨
+        (c.cf + look < c.ns ∧ c.cf < k ∧ k ≤ c.cf + look ∧ c'.ns = c.ns ∧ c'.ru = c.ru + 1)) := by
   unfold claim at h
-  by_cases hc : (!c.fr || (decide (0 < c.ns) && !c.sec)) = true
+  by_cases hc : (!c.fr || (decide (0 < claimIndex c) && !c.sec)) = true
   · simp [hc] at h
-  · simp only [hc, if_false, Prod.mk.injEq, Option.some.injEq] at h
+  · simp only [hc, Prod.mk.injEq, Option.some.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
     simp only [Bool.or_eq_true, Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq, not_or, not_and] at hc
     obtain ⟨h1, h2⟩ := hc
-    refine ⟨rfl, rfl, by simpa using h1, ?_, rfl, rfl, rfl⟩
-    by_cases hn : c.ns = 0
-    · exact Or.inl hn
-    · right; have := h2 (by omega); simpa using this
+    have hfr : c.fr = true := by simpa using h1
+    have hsec : claimIndex c = 0 ∨ c.sec = true := by
+      by_cases hn : claimIndex c = 0
+      · exact Or.inl hn
+      · right; have := h2 (by omega); simpa using this
+    by_cases hf : claimFresh c = true
+    · have hle : c.ns ≤ c.cf + look := by simpa [claimFresh] using hf
+      have hi : claimIndex c = c.ns := by simp [claimIndex, hf]
+      rw [if_pos hf]
+      exact ⟨hfr, hsec, rfl, rfl, rfl, rfl, Or.inl ⟨hle, hi, rfl, rfl⟩⟩
+    · have hgt : c.cf + look < c.ns := by
+        have : ¬ c.ns ≤ c.cf + look := by simpa [claimFresh] using hf
+        omega
+      have hi : claimIndex c = c.cf + 1 + c.ru % look := by simp [claimIndex, hf]
+      have hm : c.ru % look < look := Nat.mod_lt _ (by decide)
+      rw [if_neg hf]
+      exact ⟨hfr, hsec, rfl, rfl, rfl, rfl, Or.inr ⟨hgt, by rw [hi]; omega, by rw [hi]; omega, rfl, rfl⟩⟩
 
 theorem claim_none (c c' : C) (h : claim c = (c', none)) : c' = c := by
   unfold claim at h
-  by_cases hc : (!c.fr || (decide (0 < c.ns) && !c.sec)) = true
+  by_cases hc : (!c.fr || (decide (0 < claimIndex c) && !c.sec)) = true
   · simp only [hc, if_true, Prod.mk.injEq] at h; exact h.1.symm
   · simp [hc] at h
 
-/-- A run of calls, with the indices the table forgot. -/
+/-- The index a claim takes is 0 or one of the `look` indices after the highest one confirmed, and it is below the
+next index (so the indices taken are those below `ns`); the counters keep their relation. -/
+theorem claim_sender (c c' : C) (k : Nat) (hs : Sender c) (h : claim c = (c', some k)) :
+    (k = 0 ∨ (c.cf < k ∧ k ≤ c.cf + look)) ∧ k < c'.ns ∧ Sender c' := by
+  obtain ⟨_, _, _, _, _, hcf, hk⟩ := claim_some c c' k h
+  unfold Sender at *
+  rw [hcf]
+  rcases hk with ⟨h1, h2, h3, _⟩ | ⟨h1, h2, h3, h4, _⟩
+  · exact ⟨by omega, by omega, by omega⟩
+  · exact ⟨Or.inr ⟨h2, h3⟩, by omega, by omega⟩
+
+/-- The peer is known to accept the id a claim takes (`remote_usable` of the index, right after the claim). -/
+theorem claim_usable (c c' : C) (k : Nat) (hs : Sender c) (h : claim c = (c', some k)) :
+    remoteUsable c' k = true := by
+  have hcf := (claim_some c c' k h).2.2.2.2.2.1
+  have hw := (claim_sender c c' k hs h).1
+  unfold remoteUsable
+  rw [hcf]
+  rcases hw with h0 | ⟨h1, _⟩
+  · simp [h0]
+  · simp [h1]
+
+/-- A confirmation of an index the sender took keeps the relation of the counters. -/
+theorem confirm_sender (c : C) (k : Nat) (hs : Sender c) (hk : k < c.ns) : Sender (confirm c k) := by
+  unfold Sender at *
+  show max c.cf k = 0 ∨ max c.cf k < c.ns
+  omega
+
+/-- A confirmation moves the highest index confirmed up to `k`, never down. -/
+theorem confirm_cf (c : C) (k : Nat) :
+    c.cf ≤ (confirm c k).cf ∧ k ≤ (confirm c k).cf ∧ ((confirm c k).cf = c.cf ∨ (confirm c k).cf = k) := by
+  show c.cf ≤ max c.cf k ∧ k ≤ max c.cf k ∧ (max c.cf k = c.cf ∨ max c.cf k = k)
+  omega
+
+/-- An index the peer is known to accept after a confirmation was known to be accepted before it, and it is 0 or
+above the index confirmed (a path that holds the index confirmed or a lower one without an answer of its own gives
+it up). -/
+theorem confirm_usable (c : C) (k j : Nat) (h : remoteUsable (confirm c k) j = true) :
+    remoteUsable c j = true ∧ (j = 0 ∨ k < j) := by
+  have hc := confirm_cf c k
+  unfold remoteUsable at *
+  simp only [Bool.or_eq_true, decide_eq_true_eq] at h ⊢
+  omega
+
+/-- A run of calls, with the indices the table forgot. The connection confirms the index a path claimed
+(`confirm_dcid` in `conn/send.rs`), so a confirmation is of an index the sender took. -/
 inductive Reach : C → List Nat → Prop
   | init : Reach {} []
   | install (c : C) (ret : List Nat) : Reach c ret → Reach (install c).1 ((install c).2 ++ ret)
   | auth (c : C) (ret : List Nat) (k : Nat) : Reach c ret → Reach (auth c k).1 ((auth c k).2 ++ ret)
   | frem (c : C) (ret : List Nat) : Reach c ret → Reach (setFirstRemote c) ret
   | claim (c : C) (ret : List Nat) : Reach c ret → Reach (claim c).1 ret
+  | confirm (c : C) (ret : List Nat) (k : Nat) : Reach c ret → k < c.ns → Reach (confirm c k) ret
 
-theorem claim_fst (c : C) : ∃ n, (claim c).1 = { c with ns := n } := by
+theorem claim_fst (c : C) : ∃ n r, (claim c).1 = { c with ns := n, ru := r } := by
   unfold claim
   split
-  · exact ⟨c.ns, rfl⟩
-  · exact ⟨c.ns + 1, rfl⟩
+  · exact ⟨c.ns, c.ru, rfl⟩
+  · split
+    · exact ⟨c.ns + 1, c.ru, rfl⟩
+    · exact ⟨c.ns, c.ru + 1, rfl⟩
 
-/-- After any run: the table has its shape, the lookahead is held once the secret is installed, and every index
-forgotten is below the highest one seen and not held. -/
+/-- After any run: the table has its shape, the lookahead is held once the secret is installed, the highest index
+confirmed is 0 or one the sender took, and every index forgotten is at least `look` below the highest one seen and
+not held. -/
 theorem reach_inv {c : C} {ret : List Nat} (h : Reach c ret) :
-    Core c ∧ Ahead c ∧ ∀ r ∈ ret, r ≤ c.hi ∧ has c r = false := by
+    Core c ∧ Ahead c ∧ Sender c ∧ ∀ r ∈ ret, r + look ≤ c.hi ∧ has c r = false := by
   induction h with
   | init =>
-    refine ⟨core_init, ?_, fun r hr => by simp at hr⟩
+    refine ⟨core_init, ?_, Or.inl rfl, fun r hr => by simp at hr⟩
     intro h; simp at h
   | install c ret _ ih =>
-    obtain ⟨hc, ha, hr⟩ := ih
+    obtain ⟨hc, ha, hs, hr⟩ := ih
     obtain ⟨i1, i2, i3, i4, i5⟩ := install_inv c hc
-    refine ⟨i1, i2, ?_⟩
+    obtain ⟨s1, s2⟩ := install_sender c
+    refine ⟨i1, i2, by unfold Sender at *; omega, ?_⟩
     intro r hr'
     rcases List.mem_append.1 hr' with h1 | h1
     · exact ⟨by have := (i3 r h1).1; omega, (i3 r h1).2⟩
@@ -230,9 +328,10 @@ theorem reach_inv {c : C} {ret : List Nat} (h : Reach c ret) :
       · rw [h3] at h4; simp at h4
       · omega
   | auth c ret k _ ih =>
-    obtain ⟨hc, ha, hr⟩ := ih
+    obtain ⟨hc, ha, hs, hr⟩ := ih
     obtain ⟨i1, i2, i3, i4, i5⟩ := auth_inv c hc ha k
-    refine ⟨i1, i2, ?_⟩
+    obtain ⟨s1, s2⟩ := auth_sender c k
+    refine ⟨i1, i2, by unfold Sender at *; omega, ?_⟩
     intro r hr'
     rcases List.mem_append.1 hr' with h1 | h1
     · exact i4 r h1
@@ -244,12 +343,25 @@ theorem reach_inv {c : C} {ret : List Nat} (h : Reach c ret) :
       · rw [h3] at h4; simp at h4
       · omega
   | frem c ret _ ih =>
-    obtain ⟨hc, ha, hr⟩ := ih
-    exact ⟨⟨hc.bound, hc.nodup, hc.pos, hc.window, hc.seenLe⟩, ha, hr⟩
+    obtain ⟨hc, ha, hs, hr⟩ := ih
+    exact ⟨⟨hc.bound, hc.nodup, hc.pos, hc.window, hc.seenLe⟩, ha, hs, hr⟩
   | claim c ret _ ih =>
-    obtain ⟨hc, ha, hr⟩ := ih
-    obtain ⟨n, hn⟩ := claim_fst c
-    rw [hn]
-    exact ⟨⟨hc.bound, hc.nodup, hc.pos, hc.window, hc.seenLe⟩, ha, hr⟩
+    obtain ⟨hc, ha, hs, hr⟩ := ih
+    have hs' : Sender (claim c).1 := by
+      rcases hcl : claim c with ⟨c', o⟩
+      cases o with
+      | none => rw [claim_none c c' hcl]; exact hs
+      | some k => exact (claim_sender c c' k hs hcl).2.2
+    obtain ⟨n, r, hn⟩ := claim_fst c
+    rw [hn] at hs' ⊢
+    exact ⟨⟨hc.bound, hc.nodup, hc.pos, hc.window, hc.seenLe⟩, ha, hs', hr⟩
+  | confirm c ret k _ hk ih =>
+    obtain ⟨hc, ha, hs, hr⟩ := ih
+    exact ⟨⟨hc.bound, hc.nodup, hc.pos, hc.window, hc.seenLe⟩, ha, confirm_sender c k hs hk, hr⟩
+
+/-- After any run, the index a claim takes is 0 or one of the `look` indices after the highest one confirmed. -/
+theorem reach_claim {c : C} {ret : List Nat} (h : Reach c ret) (c' : C) (k : Nat) (hcl : claim c = (c', some k)) :
+    k = 0 ∨ (c.cf < k ∧ k ≤ c.cf + look) :=
+  (claim_sender c c' k (reach_inv h).2.2.1 hcl).1
 
 end Vinc.TransportCid
