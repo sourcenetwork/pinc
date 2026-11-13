@@ -381,6 +381,9 @@ par run_tlc rx_wide Rx Rx_wide
 par run_tlc cid Cid Cid
 par witness_tlc cid_stale Cid Cid_stale Lookahead
 par run_tlc cc Cc Cc
+par run_tlc cc_pacer Cc Cc_pacer
+par run_tlc cc_pacer_limited Cc Cc_pacer_limited
+par witness_tlc cc_pacer_strict Cc Cc_pacer_strict PacerRateStrict
 par run_tlc pn Pn Pn
 par run_tlc reasm Reasm Reasm
 par run_tlc mtu Mtu Mtu
