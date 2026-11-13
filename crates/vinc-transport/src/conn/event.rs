@@ -57,6 +57,9 @@ pub enum CloseReason {
     Handshake(Failure),
     /// The handshake was not established in time (30 s, or 60 s on a thin node).
     HandshakeTimeout,
+    /// A dial told to end early ([`Connection::end_unanswered`](super::Connection::end_unanswered)) had no answer to
+    /// its first 4 flights.
+    Unanswered,
 }
 
 impl fmt::Display for CloseReason {
@@ -69,6 +72,7 @@ impl fmt::Display for CloseReason {
             Self::PathDead => f.write_str("the peer stopped answering"),
             Self::Handshake(e) => write!(f, "the handshake failed: {e}"),
             Self::HandshakeTimeout => f.write_str("the handshake took too long"),
+            Self::Unanswered => f.write_str("the peer did not answer the handshake"),
         }
     }
 }

@@ -94,7 +94,11 @@ conn_impl! {
             self.rec.seed_rtt(rtt);
         }
         if self.hs.timed_out() && self.phase == Phase::Handshaking {
-            self.silent_close(CloseReason::HandshakeTimeout);
+            self.silent_close(if self.hs.unanswered() {
+                CloseReason::Unanswered
+            } else {
+                CloseReason::HandshakeTimeout
+            });
         }
         if self.hs.take_fresh() {
             self.fan_mask = self.fan_set;

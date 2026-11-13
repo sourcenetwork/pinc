@@ -123,6 +123,14 @@ conn_impl! {
         self.hs.set_held(hold);
     }
 
+    /// End a dialing handshake with [`CloseReason::Unanswered`](super::CloseReason::Unanswered) when its resend timer
+    /// fires after 4 first flights went out with nothing heard (at the 500 ms first delay: 7.5 s for a full handshake,
+    /// 3 s for a resume, whose fallback restarts the schedule) instead of at its 30 s limit. Held resends do not count,
+    /// a message from the peer (a rejected ticket too) starts the count again, and a thin node keeps its 60 s.
+    pub const fn end_unanswered(&mut self) {
+        self.hs.end_unanswered();
+    }
+
     /// No path MTU probe is sent before `until`.
     pub fn defer_mtu_probe(&mut self, until: u64) {
         self.life.qr_until = self.life.qr_until.max(until);

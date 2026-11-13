@@ -121,7 +121,7 @@ impl Error {
                 },
                 "the connection broke a protocol rule",
             ),
-            CloseReason::PathDead | CloseReason::HandshakeTimeout => {
+            CloseReason::PathDead | CloseReason::HandshakeTimeout | CloseReason::Unanswered => {
                 Self::new(ErrorKind::TimedOut, "the peer stopped answering")
             }
             CloseReason::Handshake(_) => Self::new(ErrorKind::Unreachable, "the handshake failed"),

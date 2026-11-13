@@ -21,6 +21,12 @@
 //! - A dialing side resends its Finish on the probe timeout, backing off to at most `max(2 s, PTO)`, until the first
 //!   1-RTT packet arrives. On a thin node each wait is at least `min(20 s, 2 x max(srtt, node RTTs))`.
 //! - A handshake that is not established 30 s after it began (60 s on a thin node) ends; the connection then closes.
+//! - A dial the layer above told to end early (one it reported before its handshake) also ends when the resend timer
+//!   fires after 4 first flights went out with nothing heard from the peer: 15 first delays for a full handshake
+//!   (7.5 s at the 500 ms floor), 6 for a resume, whose fallback at the third send restarts the schedule (3 s). A held
+//!   flight is not sent and does not count, a message from the peer (a rejected ticket too) starts the count again,
+//!   and a thin node keeps its 60 s. It closes as [`CloseReason::Unanswered`](super::CloseReason::Unanswered), which
+//!   the node's handshake floor does not count.
 //! - When the link returns, a dialing side's pending flight is resent at once.
 //! - The round trip of the first flight, if it was answered without a resend, is offered once as an RTT sample.
 //!
@@ -59,6 +65,8 @@ const THIN_RTT: u64 = 250 * MS;
 const HELD_RECHECK: u64 = 500 * MS;
 /// How long an unestablished handshake lasts.
 const CONNECT_TIMEOUT: u64 = 30 * SECOND;
+/// The first flights a dial told to end early sends; the wait after the last of them ends it.
+const EARLY_FLIGHTS: u32 = 4;
 /// The first resend delay of a responder: three times the 333 ms initial round trip.
 const SERVER_FIRST: u64 = 999 * MS;
 /// The longest resend delay of a responder.
@@ -321,6 +329,12 @@ pub(crate) struct Handshake {
     srtt: u64,
     connect_at: Option<u64>,
     timed_out: bool,
+    /// End once [`EARLY_FLIGHTS`] first flights went unanswered.
+    early: bool,
+    /// First flights queued since the peer was last heard.
+    unheard: u32,
+    /// The handshake ended that way.
+    unanswered: bool,
     first_sent: u64,
     sample: Option<u64>,
     sampled: bool,
@@ -373,6 +387,9 @@ impl Handshake {
             srtt: 0,
             connect_at: Some(now.saturating_add(timing.connect_timeout())),
             timed_out: false,
+            early: false,
+            unheard: 0,
+            unanswered: false,
             first_sent: now,
             sample: None,
             sampled: false,
@@ -428,6 +445,9 @@ impl Handshake {
                         self.fresh = true;
                         self.tx_retx = self.retransmitting;
                         self.retransmitting = false;
+                        if self.client && self.stage == Stage::Open {
+                            self.unheard = self.unheard.saturating_add(1);
+                        }
                         // A responder's resend schedule starts when its flight first goes out.
                         if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
                             self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
@@ -541,6 +561,16 @@ impl Handshake {
     /// Hold the resends of a dialing side, or let them go on.
     pub(crate) const fn set_held(&mut self, held: bool) {
         self.held = held;
+    }
+
+    /// End a dialing side once [`EARLY_FLIGHTS`] first flights went unanswered, unless the node is thin.
+    pub(crate) const fn end_unanswered(&mut self) {
+        self.early = true;
+    }
+
+    /// Whether the handshake ended because its first flights went unanswered (see [`Self::end_unanswered`]).
+    pub(crate) const fn unanswered(&self) -> bool {
+        self.unanswered
     }
 
     /// Move the pending resend of a dialing side to `at`; ignored once the handshake is past its first flight.
@@ -665,6 +695,10 @@ impl Handshake {
             (Machine::Server(m), Some(stores)) => m.handle(env, stores, msg),
             (Machine::Server(_), None) => Err(Failure::InvalidParameter),
         };
+        if r.is_ok() && self.client {
+            // The peer answered (a reject too): only flights sent after this count towards the early end.
+            self.unheard = 0;
+        }
         if r.is_ok() && self.client && !self.sampled && self.sends == 1 {
             self.sampled = true;
             self.sample = Some(env.now.saturating_sub(self.first_sent).max(MIN_SAMPLE));
@@ -706,6 +740,18 @@ impl Handshake {
         if self.held && self.client && self.stage == Stage::Open {
             self.retx_at = Some(now.saturating_add(HELD_RECHECK));
             return false;
+        }
+        if self.early
+            && self.client
+            && self.stage == Stage::Open
+            && self.unheard >= EARLY_FLIGHTS
+            && !self.timing.is_thin()
+        {
+            self.connect_at = None;
+            self.retx_at = None;
+            self.timed_out = true;
+            self.unanswered = true;
+            return true;
         }
         self.sends = self.sends.saturating_add(1);
         let delay = match (self.stage, self.client) {
