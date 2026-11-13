@@ -33,7 +33,8 @@
 (* (the next k PROBE frames sent are lost).                                  *)
 (*                                                                         *)
 (* History variables record what the nodes reported, for the properties:  *)
-(* down/left/susp (observer, member) events, conf (hub, member) confirmed,  *)
+(* down/left (observer, member) events, susp (hub, member) suspicion        *)
+(* records (internal state, not an event), conf (hub, member) confirmed,    *)
 (* accepted DOWNs, restores, resubscribes, releases, holds, and the flags   *)
 (* okDown (a DOWN was accepted only on a stale lease), okInc (announced     *)
 (* words only go up, strictly across a restart), okBounds (tables within    *)
@@ -95,7 +96,7 @@ Done(x, n, S1, now) ==
         h == x.hist
         down == {<<n, e.m>> : e \in {e \in EvS(S1) : e.k = "down"}}
         left == {<<n, e.m>> : e \in {e \in EvS(S1) : e.k = "left"}}
-        susp == {<<n, e.m>> : e \in {e \in EvS(S1) : e.k = "suspected"}}
+        susp == {<<n, m>> : m \in DOMAIN S1.susp}
         conf == {<<n, t.member>> : t \in {t \in TrS(S1) : t.k = "confirmed"}}
         acc == {<<n, t.member>> : t \in {t \in TrS(S1) : t.k = "down_accepted"}}
         rest == {<<n, t.member>> : t \in {t \in TrS(S1) : t.k = "carrier_returned" /\ t.restored}}
@@ -341,7 +342,6 @@ IncOK == w.hist.okInc
 \* stated per config with NoConf / NoDown below
 NoConf(hub, m) == <<hub, m>> \notin w.hist.conf
 NoDownEv(obs, m) == <<obs, m>> \notin w.hist.down
-NoSuspEv(obs, m) == <<obs, m>> \notin w.hist.susp
 \* a member that left is reported as left everywhere and never as down (property 7)
 LeaveReported(m) == \A o \in Nodes \ {m} : <<o, m>> \notin w.hist.down
 \* no node lists itself, and none lists a revoked node (view invariants)
@@ -372,7 +372,10 @@ NeverSwitched == \A n \in Members : w.hist.primN[n] <= 1
 NoFlap == NeverSwitched
 NeverConfirmed == w.hist.conf = {}
 NeverDown == w.hist.down = {}
+\* no hub ever kept a suspicion record, the internal state that drives the probes (a suspicion is not an event)
 NeverSusp == w.hist.susp = {}
+\* a lost probe is answered: once the member is back, no hub still suspects it
+SuspEnded == Ge(w.now, SecW(START + 70)) => \A h \in Hubs : 4 \notin DOMAIN w.nodes[h].susp
 NeverRestore == w.hist.restore = {}
 NeverRestarted == w.hist.restarts = 0
 NeverLeft == w.hist.left = {}

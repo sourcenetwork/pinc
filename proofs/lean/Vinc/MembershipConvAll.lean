@@ -21,7 +21,7 @@ open Vinc.Membership.Cmp
 
 theorem rcKnown_len (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) :
     (rcKnown e n m best c).1.members.len ≤ n.members.len + 1 := by
-  have hi := AMap.insert_length_le n.members m ⟨best, false⟩
+  have hi := AMap.insert_length_le n.members m ⟨best⟩
   unfold rcKnown
   by_cases h1 : best.inc / 65536 ≤ c.rc.inc / 65536 <;> by_cases h2 : (best.inc / 65536 == c.rc.inc / 65536 && decide (c.rc.inc ≤ best.inc)) = true <;>
     by_cases h3 : (best.ver != c.rc.ver) = true <;> by_cases h4 : (best.th != c.rc.th) = true <;>
@@ -30,7 +30,7 @@ theorem rcKnown_len (e : Env) (n : N) (m : Nat) (best : Rec) (c : ViewEntry) :
 
 theorem rcNew_len (e : Env) (n : N) (m : Nat) (best : Rec) :
     (rcNew e n m best).1.members.len ≤ n.members.len + 1 := by
-  have hi := AMap.insert_length_le n.members m ⟨best, false⟩
+  have hi := AMap.insert_length_le n.members m ⟨best⟩
   unfold rcNew
   by_cases h1 : n.members.len ≥ MAX_TABLE
   · rw [if_pos h1]; exact Nat.le_succ _
@@ -74,7 +74,7 @@ theorem recomputeOne_len_le (e : Env) (n : N) (now m : Nat) :
       intro r hr
       by_cases he : r.2.2 = true
       · simp only [he, if_true]; exact hr
-      · simp only [he, if_false]; exact Nat.le_trans (rcTail_len _ _ _ _) hr
+      · simp only [he, if_false]; exact Nat.le_trans (rcTail_len _ m a0 _) hr
     split
     · rename_i c hc
       refine h2 _ ?_

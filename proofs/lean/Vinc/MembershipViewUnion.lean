@@ -102,7 +102,7 @@ theorem recomputeOne_listed_stays (e : Env) (n : N) (now m : Nat)
       left
       rw [hne]
       simp only [Bool.false_eq_true, if_false]
-      exact rcTail_has _ _ _ _ h1
+      exact rcTail_has _ m false _ h1
     · rename_i hc
       by_cases he : (rcNew e n1 m b0).2.2 = true
       · right
@@ -113,7 +113,7 @@ theorem recomputeOne_listed_stays (e : Env) (n : N) (now m : Nat)
       · left
         have hf : (rcNew e n1 m b0).2.2 = false := by simpa using he
         simp only [hf, Bool.false_eq_true, if_false]
-        exact rcTail_has _ _ _ _ (rcNew_has e n1 m b0 hf)
+        exact rcTail_has _ m false _ (rcNew_has e n1 m b0 hf)
 
 theorem recomputeOne_none (e : Env) (n : N) (now m : Nat) (h : (n.candidates now (n.source now) m).1 = none) :
     N.recomputeOne e n now m =

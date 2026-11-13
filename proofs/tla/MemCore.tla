@@ -99,7 +99,6 @@ Trace(S, t) ==
 
 \* the records of the Rust enums (kinds as in the trace schema)
 EvJoined(m) == [k |-> "joined", m |-> m]
-EvSuspected(m) == [k |-> "suspected", m |-> m]
 EvDown(m) == [k |-> "down", m |-> m]
 EvLeft(m) == [k |-> "left", m |-> m]
 EvRevoked(m) == [k |-> "revoked", m |-> m]

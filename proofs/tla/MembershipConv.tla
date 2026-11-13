@@ -27,7 +27,7 @@ Base == StartOp([me |-> 9, isHub |-> TRUE, hubs |-> <<1, 2>>], Env0, Now, U!W(10
 Cells == {0, 1, 2}
 Entry(c) == [rec |-> Rec(c), round |-> Z, absentSince |-> <<>>]
 CopyOf(f) == [entries |-> [m \in {m \in {3, 4} : f[m] # 0} |-> Entry(f[m])], round |-> Z, open |-> FALSE]
-ViewOf(f) == [m \in {m \in {3, 4} : f[m] # 0} |-> [rec |-> Rec(f[m]), suspected |-> FALSE]]
+ViewOf(f) == [m \in {m \in {3, 4} : f[m] # 0} |-> [rec |-> Rec(f[m])]]
 
 VARIABLES c1, c2, v1, v2, done
 vars == <<c1, c2, v1, v2, done>>

@@ -127,7 +127,7 @@ def N.recomputeOne (e : Env) (n : N) (now m : Nat) : N × Bool :=
             (n, ch1 || ch2, false)
           else (n, false, false)
         else
-          let n := { n with members := n.members.insert m ⟨best, false⟩ }
+          let n := { n with members := n.members.insert m ⟨best⟩ }
           let n := n.emit (.joined m)
           let old := (some (c.rc.ver, c.rc.th)).orElse (fun _ => n.goneVer.get? m)
           let n := { n with goneVer := n.goneVer.erase m }
@@ -138,7 +138,7 @@ def N.recomputeOne (e : Env) (n : N) (now m : Nat) : N × Bool :=
       | none =>
         if n.members.len ≥ MAX_TABLE then (n, false, true)
         else
-          let n := { n with members := n.members.insert m ⟨best, false⟩ }
+          let n := { n with members := n.members.insert m ⟨best⟩ }
           let n := n.emit (.joined m)
           let old := n.goneVer.get? m
           let n := { n with goneVer := n.goneVer.erase m }
@@ -148,15 +148,8 @@ def N.recomputeOne (e : Env) (n : N) (now m : Nat) : N × Bool :=
               if th != best.th then n.emit (.addr m) else n
             | none => n
           (n, true, false)
-    if early then (n, false)
-    else
-      match n.members.get? m with
-      | some x =>
-        if x.suspected != absent then
-          let n := { n with members := n.members.modify m (fun y => { y with suspected := absent }) }
-          (if absent then n.emit (.suspected m) else n, changed)
-        else (n, changed)
-      | none => (n, changed)
+    -- the view keeps no suspicion flag and reports no suspicion: an absent best record changes nothing here
+    if early then (n, false) else (n, changed)
 
 def N.bump (n : N) : N :=
   let n := { n with epoch := n.epoch + 1 }

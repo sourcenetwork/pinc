@@ -195,7 +195,7 @@ def N.rcSame (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool × Bool 
 
 /-- A known member reincarnated in a newer epoch. -/
 def N.rcNewer (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool × Bool :=
-  let n := { n with members := n.members.insert m ⟨best, false⟩ }
+  let n := { n with members := n.members.insert m ⟨best⟩ }
   let n := n.emit (.joined m)
   let old := (some (c.rc.ver, c.rc.th)).orElse (fun _ => n.goneVer.get? m)
   let n := { n with goneVer := n.goneVer.erase m }
@@ -206,7 +206,7 @@ def N.rcNewer (n : N) (m : Nat) (best : Rec) (c : ViewEntry) : N × Bool × Bool
 def N.rcFresh (n : N) (m : Nat) (best : Rec) : N × Bool × Bool :=
   if n.members.len ≥ MAX_TABLE then (n, false, true)
   else
-    let n := { n with members := n.members.insert m ⟨best, false⟩ }
+    let n := { n with members := n.members.insert m ⟨best⟩ }
     let n := n.emit (.joined m)
     let old := n.goneVer.get? m
     let n := { n with goneVer := n.goneVer.erase m }
@@ -223,14 +223,8 @@ def N.rcArm (n : N) (m : Nat) (best : Rec) (cur : Option ViewEntry) : N × Bool 
     else n.rcNewer m best c
   | none => n.rcFresh m best
 
-def N.rcSusp (n : N) (m : Nat) (absent changed : Bool) : N × Bool :=
-  match n.members.get? m with
-  | some x =>
-    if x.suspected != absent then
-      let n := { n with members := n.members.modify m (fun y => { y with suspected := absent }) }
-      (if absent then n.emit (.suspected m) else n, changed)
-    else (n, changed)
-  | none => (n, changed)
+def N.rcSusp (n : N) (_m : Nat) (_absent : Bool) (changed : Bool) : N × Bool :=
+  (n, changed)
 
 def N.rcAfter (e : Env) (n : N) (m : Nat) (best : Rec) (absent : Bool) (cur : Option ViewEntry) : N × Bool :=
   let n := if n.isHub && (match cur with | none => true | some c => decide (c.rc ≠ best)) then

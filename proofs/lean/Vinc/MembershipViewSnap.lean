@@ -7,7 +7,7 @@ import Vinc.MembershipViewEpoch
 and, for a complete snapshot, drops the omitted entries of members the view does not list (`drop_gone`) and marks the
 other omitted ones with the time (`mark_absent`); those entries stay. An omission that has just been marked is not
 expired (`fresh_mark_not_expired`), so the omitted member is still a live candidate of `recompute_one`
-(`MembershipViewUnion.lean`, `recomputeOne_listed_stays`) and stays in the view, suspected. It leaves only when a hub
+(`MembershipViewUnion.lean`, `recomputeOne_listed_stays`) and stays in the view, with no event and no flag (c26385e: a view reports no suspicion). It leaves only when a hub
 reports it down, or a full lease of omission passes (`sweep_absent`, `sweepAbsent_only_expired`). A member the view
 does not list is never brought back by an omission.
 
