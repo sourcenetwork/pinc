@@ -1020,6 +1020,10 @@ name = "trace_framepack"
 path = "trace_framepack.rs"
 
 [[test]]
+name = "trace_ext"
+path = "trace_ext.rs"
+
+[[test]]
 name = "trace_orphan"
 path = "trace_orphan.rs"
 

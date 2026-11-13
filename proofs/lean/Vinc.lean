@@ -89,6 +89,9 @@ import Vinc.TraceFrame
 import Vinc.TransportFramePack
 import Vinc.TransportFramePackThm
 import Vinc.TraceFramePack
+import Vinc.TransportExt
+import Vinc.TransportExtThm
+import Vinc.TraceExt
 import Vinc.CoreOrphan
 import Vinc.CoreOrphanThm
 import Vinc.TraceOrphan

@@ -18,6 +18,7 @@ import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceFramePack
+import Vinc.TraceExt
 import Vinc.TraceOrphan
 import Vinc.TraceCoreTable
 import Vinc.TraceHalfOpen
@@ -522,6 +523,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           -- Packet builder events (`txpk`, written by `trace_framepack`): the frames of every sealed packet, the
           -- dropped length and the STREAM header.
           match TraceFramePack.replayEvent j with
+          | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceExt.isTag t then
+          -- Extension frame events (`txex`, written by `trace_ext`): the registry and the dispatch of real frames.
+          match TraceExt.replayEvent j with
           | .ok _ =>
             count := count + 1
             continue
