@@ -280,6 +280,7 @@ import Vinc.BroadcastNodeLemmas6
 import Vinc.BroadcastNodeThm
 import Vinc.BroadcastNodeLemmas7
 import Vinc.BroadcastNodeSpacing
+import Vinc.BroadcastNodeSwept
 import Vinc.BroadcastSystem
 import Vinc.BroadcastPublish
 import Vinc.BroadcastRepair
