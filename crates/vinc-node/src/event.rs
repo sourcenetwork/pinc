@@ -85,6 +85,16 @@ pub enum NodeEvent {
         /// The topic.
         topic: Vec<u8>,
     },
+    /// On a hub: its adjacency table was full and refused `origin`'s record; `origin` is alone here until a slot
+    /// frees and its next record takes it (see [`Node::reach_stats`](crate::Node::reach_stats)).
+    ReachRefused {
+        /// The node whose record was refused.
+        origin: NodeId,
+    },
+    /// On a hub: its adjacency table closed; every node without a record is alone here until it opens again.
+    ReachClosed,
+    /// On a hub: its closed adjacency table opened again.
+    ReachOpened,
     /// The access-control layer must decide whether `origin` may publish here; answer with
     /// [`Node::broadcast_acp_answer`](crate::Node::broadcast_acp_answer).
     BroadcastAcpCheck {

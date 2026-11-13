@@ -139,7 +139,7 @@ impl Topics {
             self.note_reject(head.mid, Reject::LogFull);
             return false;
         }
-        let stored = log.push(key, now, wall, head_bytes, body, |old| {
+        let stored = log.push(key, head.origin, now, wall, head_bytes, body, |old| {
             // Only an id the set lost needs a record: a second one at the same instant would leave the id forgotten
             // when the first is popped.
             if !seen.contains(old, now) {

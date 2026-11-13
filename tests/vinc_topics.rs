@@ -325,6 +325,11 @@ async fn with_connected_topics_a_group_hears_only_the_publishers_its_sessions_li
         while let Some(m) = next_message!(a2, 500) {
             assert_eq!(m.1, a1.id(), "A2 hears only A1, never B1");
         }
+        // The hub's table is reachable through the facade: three records, open; A1 signed its first record and
+        // the one naming A2.
+        let at_hub = hub.reach_stats().expect("the hub runs");
+        assert!(at_hub.records >= 3 && !at_hub.closed, "{at_hub:?}");
+        assert!(a1.reach_stats().expect("A1 runs").signed >= 2);
     })
     .await;
 }

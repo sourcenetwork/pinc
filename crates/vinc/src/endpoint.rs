@@ -263,7 +263,8 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     /// Give topics a gossip mesh's reach through the hubs: a hub hands this endpoint a topic message only from a
     /// publisher it is linked to by a chain of the application's sessions (this endpoint's peers, their peers and so
     /// on), even when a group with no path to it shares the hub. The endpoint tells its hubs the peers it holds
-    /// sessions with whenever that set changes; a hub links two endpoints only when both name each other. Endpoints
+    /// sessions with when that set changed, once the session events of a turn are handled and at most every 250 ms, so a
+    /// burst of sessions is one signed record; a hub links two endpoints only when both name each other. Endpoints
     /// with and without this setting do not hear each other's topic messages through a hub. Off by default: a hub then
     /// reaches every member of a topic.
     ///

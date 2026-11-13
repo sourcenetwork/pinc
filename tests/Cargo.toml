@@ -619,6 +619,10 @@ name = "broadcast_reach"
 path = "broadcast_reach.rs"
 
 [[test]]
+name = "broadcast_reach_close"
+path = "broadcast_reach_close.rs"
+
+[[test]]
 name = "broadcast_reach_paths"
 path = "broadcast_reach_paths.rs"
 

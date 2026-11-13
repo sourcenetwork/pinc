@@ -42,13 +42,28 @@ pub enum Event {
     /// endpoint holds sessions with, so they reach it from part of its component only. `named` is how many they were
     /// told: the first [`ADJ_MAX`](vinc_broadcast::consts::ADJ_MAX) when there are more, or `None` when the record
     /// could not be signed. The hubs then keep the last record named and the endpoint tries again on the next change of
-    /// sessions; a stale record only narrows the reach, since an edge needs both ends.
+    /// sessions. A short record can lose an edge both ends hold: two endpoints with more than
+    /// [`ADJ_MAX`](vinc_broadcast::consts::ADJ_MAX) peers each may name different subsets, and a hub keeps an edge only
+    /// when both name it, so their component may split there.
     AdjacencyShort {
         /// The peers of the endpoint's sessions.
         sessions: u32,
         /// How many of them the hubs were told.
         named: Option<u32>,
     },
+    /// On a hub: its adjacency table was full and refused `node`'s record (see
+    /// [`Builder::connected_topics`](crate::Builder::connected_topics)); `node` is alone at this hub until a slot frees
+    /// and its next record takes it. See [`Endpoint::reach_stats`](crate::Endpoint::reach_stats).
+    ReachRefused {
+        /// The endpoint whose record was refused.
+        node: NodeId,
+    },
+    /// On a hub: its adjacency table closed. Until it opens again ([`Event::ReachOpened`]) every endpoint without a
+    /// record, connected topics or not, hears only the hubs through this hub.
+    ReachClosed,
+    /// On a hub: its closed adjacency table opened again: every endpoint it refused has a record, was
+    /// revoked or was released.
+    ReachOpened,
     /// This many events were dropped because the queue was full.
     Lost {
         /// How many.

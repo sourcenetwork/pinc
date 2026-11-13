@@ -105,6 +105,7 @@ pub use role::{RelayRole, Role, RoleSpec};
 #[cfg(feature = "trace")]
 pub use standby::trace::{StandbyProbe, StandbySlot};
 pub use stream::{RecvStream, SendStream};
+pub use vinc_broadcast::ReachStats;
 pub use vinc_core::NodeStats;
 pub use vinc_crypto::NodeId;
 /// The urgency a stream starts with; see [`SendStream::set_urgency`].

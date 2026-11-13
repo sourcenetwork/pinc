@@ -4,12 +4,15 @@
 (* vinc-broadcast reach.rs (Topics::set_adjacent, Topics::on_adj,          *)
 (* Topics::reach_timer) and reach/table.rs (Reach::take, Reach::class,     *)
 (* Reach::rebuild, Reach::expire, Reach::leave, Reach::drop_gone,           *)
-(* Scope::to), and the checks in msg.rs (Topics::hub_store), gap.rs       *)
-(* (Topics::on_sub, Topics::on_get, Topics::have_to) and behind.rs        *)
-(* (Topics::peer_writable).                                                *)
+(* Reach::reopen, Scope::to), log.rs (HubLog::holds), the checks in msg.rs *)
+(* (Topics::hub_store), gap.rs (Topics::on_sub, Topics::on_get,            *)
+(* Topics::have_to) and behind.rs (Topics::peer_writable), and the facade's *)
+(* report of its sessions: vinc engine.rs (Core::on_event, Core::service)  *)
+(* and engine/topics.rs (Core::adjacent_changed, Core::report_adjacent).  *)
 (*                                                                         *)
-(* The story. Members open and close sessions with each other. Each member *)
-(* tells its primary hub, in a signed record with a growing sequence       *)
+(* The story. Members open and close sessions with each other. The facade *)
+(* runs in turns: it handles a turn's session events first, and only then *)
+(* tells its primary hub, in one signed record with a growing sequence     *)
 (* number, which peers it holds sessions with; the frame may be lost, and  *)
 (* the member sends its newest record again from time to time (the         *)
 (* refresh). A hub keeps the newest record of every member, at most        *)
@@ -18,8 +21,11 @@
 (* each component of those edges by its least member. A hub that has not   *)
 (* heard a record for a while expires it: the member stays scoped, alone,  *)
 (* until it is heard again. A hub whose table is full refuses a newcomer's *)
-(* record and closes: from then on a member it holds no record of is       *)
-(* alone. A member may leave for good: its subscriptions are forgotten,    *)
+(* record and closes, and says so (an event for each refusal and one for  *)
+(* the closing): while it is closed a member it holds no record of is      *)
+(* alone. It opens again, and says so, once no refused member waits: each *)
+(* one got a record, or left with nothing of it in the log. A member may   *)
+(* leave for good: its subscriptions are forgotten,                        *)
 (* its messages drain out of the hub's log, and only then may the hub drop *)
 (* its expired record. Members subscribe at their primary hub after their  *)
 (* record (the same stream carries both, record first) and publish; a hub  *)
@@ -32,10 +38,24 @@
 (* s while o and s are not linked by sessions that are up, or by edges the *)
 (* hub holds only because an honest end's newer word has not reached it    *)
 (* yet. And what must happen (Converges): once the sessions stop changing, *)
-(* every hub's components become the sessions' components.                 *)
+(* every hub's components become the sessions' components. Also: a member *)
+(* signs at most one record a turn however many sessions came and went    *)
+(* (BoundedReports), and a hub's events say whether its table is closed   *)
+(* and name every member it refused (ClosedTold).                          *)
 (*                                                                         *)
-(* Mutual = Rebuild = Tomb = ScopedRepair = Closed = TRUE and              *)
-(* EvictAny = FALSE is the code.                                           *)
+(* Mutual = Rebuild = Tomb = ScopedRepair = Closed = Batch = Told = Waits  *)
+(* = TRUE and EvictAny = FALSE is the code.                                *)
+(* BroadcastReach_perevent.cfg sets Batch = FALSE: a member names its      *)
+(* sessions on every session event, as before the review of #137, so a     *)
+(* member in two session changes of one turn signs two records; TLC finds  *)
+(* BoundedReports violated.                                                *)
+(* BroadcastReach_silent.cfg sets Told = FALSE: the table refuses and      *)
+(* closes without an event, so whoever runs the hub cannot tell that every *)
+(* member without a record is now alone; TLC finds ClosedTold violated.    *)
+(* BroadcastReach_reopen.cfg sets Waits = FALSE: the table opens again     *)
+(* while a refused member still has no record, so it counts as unscoped    *)
+(* and hears another member without a record; TLC finds DeliverySound     *)
+(* violated.                                                               *)
 (* BroadcastReach_onesided.cfg sets Mutual = FALSE: an edge is kept on one *)
 (* end's word, so a liar that names an honest member it has no session     *)
 (* with hears that member; TLC finds DeliverySound violated.               *)
@@ -67,19 +87,25 @@
 (* reads the labels of the current records, as Recv does here at once);    *)
 (* unscoped members (they form one more class of their own, which no       *)
 (* scoped member shares); hubs as origins or subscribers (never scoped);   *)
-(* an older record a member sends itself after its incarnation went back.  *)
+(* an older record a member sends itself after its incarnation went back;  *)
+(* the 250 ms gap between two reports (an abstraction: a gap only moves a  *)
+(* report to a later turn); a revoked member (forgotten, and no longer     *)
+(* waiting); a hub that refused more members than it can remember (it     *)
+(* stays closed, which DeliverySound allows).                              *)
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Vinc/BroadcastReach.lean (labels_iff,     *)
-(* edge_symm, reach_mono, split_narrows, closed_unknown_alone).            *)
+(* edge_symm, reach_mono, split_narrows, closed_unknown_alone,             *)
+(* reopened_refused_iff, log_push_inv, log_pop_inv, log_holds_iff).        *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets, Sequences, TLC
 
 \* N: the members are 1..N; HubCount: how many hubs there are; Liars: the members that may lie about their peers;
 \* MaxChanges: how many times sessions open or close; MaxLoss: how many record frames may be lost; MaxExpire: how
 \* many times a hub may expire a record; MaxLeave: how many members may leave for good; TableMax: the most records
-\* one hub keeps (Limits::max_reach); Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny: the guards
+\* one hub keeps (Limits::max_reach); Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits: the
+\* guards
 CONSTANTS N, HubCount, Liars, MaxChanges, MaxLoss, MaxExpire, MaxLeave, TableMax,
-          Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny
+          Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits
 
 \* the members, numbered from 1 so that 0 can mean "unscoped" and -n "n alone, with no record"
 Nodes == 1..N
@@ -97,9 +123,16 @@ MaxSeq == MaxChanges + 2
 \* net: the record frames in flight (to a hub; a mirrored copy is marked); lost, expired: how many frames were lost
 \* and records expired; subd: the subscribers each hub holds; bad: a hub handed a message to a subscriber it must
 \* not reach; closed: each hub's table refused a newcomer; refd: the members whose record each hub refused; left:
-\* the members that left for good; logged: the origins each hub's log still holds a message of
-VARIABLES sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged
-vars == <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged>>
+\* the members that left for good; logged: the origins each hub's log still holds a message of (HubLog::holds);
+\* phase: whether the facade is handling a turn's session events or naming its peers after them; sent: how many
+\* records each member signed this turn; said: whether each hub's last close or open event said closed; heard: the
+\* members each hub reported refusing
+VARIABLES sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged, phase, sent, said,
+          heard
+\* the variables of the turns and of the hub's events, which most actions leave alone
+turnsAndEvents == <<phase, sent, said, heard>>
+vars == <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged, phase, sent, said,
+          heard>>
 
 \* the peers member n holds sessions with, now
 Nbrs(n) == {v \in Nodes : {n, v} \in sess}
@@ -149,43 +182,80 @@ Init == /\ sess = {} /\ changes = 0
         /\ subd = [h \in Hubs |-> {}] /\ bad = FALSE
         /\ closed = [h \in Hubs |-> FALSE] /\ refd = [h \in Hubs |-> {}] /\ left = {}
         /\ logged = [h \in Hubs |-> Nodes]
+        /\ phase = "events" /\ sent = [n \in Nodes |-> 0]
+        /\ said = [h \in Hubs |-> FALSE] /\ heard = [h \in Hubs |-> {}]
 
-\* a session between u and v opens or closes (Event::Connected, Event::Closed in the facade); a member that left
-\* opens none
+\* a session between u and v opens or closes in the turn's events (Event::Connected, Event::Incoming, Event::Closed
+\* in Core::on_event, which only marks the peers to be named: Core::adjacent_changed); a member that left opens none.
+\* Without Batch each end names its peers at once, on the event, as the code did before (the RED configuration)
 Toggle(u, v) ==
-    /\ u < v /\ changes < MaxChanges /\ u \notin left /\ v \notin left
-    /\ sess' = IF {u, v} \in sess THEN sess \ {{u, v}} ELSE sess \union {{u, v}}
+    /\ phase = "events" /\ u < v /\ changes < MaxChanges /\ u \notin left /\ v \notin left
+    /\ LET \* the sessions after this change
+           s2 == IF {u, v} \in sess THEN sess \ {{u, v}} ELSE sess \union {{u, v}}
+           \* the peers of x after it
+           nb(x) == {w \in Nodes : {x, w} \in s2}
+           \* the ends that name their peers on the event: none with Batch; else the honest ends with records to spare
+           now == IF Batch THEN {} ELSE {x \in {u, v} : x \notin Liars /\ cur[x].seq < MaxSeq}
+       IN /\ sess' = s2
+          /\ cur' = [x \in Nodes |-> IF x \in now THEN [seq |-> cur[x].seq + 1, peers |-> nb(x)] ELSE cur[x]]
+          /\ net' = net \union {[to |-> Prim(x), n |-> x, seq |-> cur[x].seq + 1, peers |-> nb(x), mir |-> FALSE] :
+                                 x \in now}
+          /\ sent' = [x \in Nodes |-> IF x \in now THEN sent[x] + 1 ELSE sent[x]]
     /\ changes' = changes + 1
-    /\ UNCHANGED <<cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<tab, lab, lost, expired, subd, bad, closed, refd, left, logged, phase, said, heard>>
+
+\* some honest member's sessions changed since its last record, and it has a record to spare
+Pending == \E n \in Nodes : n \notin Liars /\ n \notin left /\ cur[n].peers /= Nbrs(n) /\ cur[n].seq < MaxSeq
+
+\* the turn's session events are all handled (Core::service once Core::drain found no more): the members name
+\* their peers now. A turn that changed nothing names nothing, so it is not a step of its own here
+EndTurn ==
+    /\ phase = "events" /\ Pending /\ phase' = "report"
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged, sent, said,
+                   heard>>
+
+\* member n would name its peers in this turn: honest, still here, its sessions changed since its last record, a
+\* record to spare, and none signed yet this turn
+ReportReady(n) ==
+    n \notin Liars /\ n \notin left /\ cur[n].peers /= Nbrs(n) /\ cur[n].seq < MaxSeq /\ sent[n] = 0
+
+\* every member that had to name its peers did: the next turn starts, with no record signed in it yet
+NextTurn ==
+    /\ phase = "report" /\ \A n \in Nodes : ~ReportReady(n)
+    /\ phase' = "events" /\ sent' = [n \in Nodes |-> 0]
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left, logged, said,
+                   heard>>
 
 \* the frame that carries member n's newest record to its primary hub
 Frame(n) == [to |-> Prim(n), n |-> n, seq |-> cur[n].seq, peers |-> cur[n].peers, mir |-> FALSE]
 
-\* an honest member names its sessions anew when they changed (Core::report_adjacent, Topics::set_adjacent)
+\* once the turn's events are handled, an honest member names its sessions anew when they changed: one signed record
+\* for all of the turn's changes (Core::report_adjacent, Topics::set_adjacent)
 Report(n) ==
-    /\ n \notin Liars /\ n \notin left /\ cur[n].peers /= Nbrs(n) /\ cur[n].seq < MaxSeq
+    /\ phase = "report" /\ ReportReady(n)
     /\ cur' = [cur EXCEPT ![n] = [seq |-> @.seq + 1, peers |-> Nbrs(n)]]
     /\ net' = net \union {[to |-> Prim(n), n |-> n, seq |-> cur[n].seq + 1, peers |-> Nbrs(n), mir |-> FALSE]}
-    /\ UNCHANGED <<sess, changes, tab, lab, lost, expired, subd, bad, closed, refd, left, logged>>
+    /\ sent' = [sent EXCEPT ![n] = @ + 1]
+    /\ UNCHANGED <<sess, changes, tab, lab, lost, expired, subd, bad, closed, refd, left, logged, phase, said, heard>>
 
 \* a liar names any peers it likes, signed with its own key
 Lie(n, P) ==
     /\ n \in Liars /\ n \notin left /\ n \notin P /\ P /= cur[n].peers /\ cur[n].seq < MaxSeq
     /\ cur' = [cur EXCEPT ![n] = [seq |-> @.seq + 1, peers |-> P]]
     /\ net' = net \union {[to |-> Prim(n), n |-> n, seq |-> cur[n].seq + 1, peers |-> P, mir |-> FALSE]}
-    /\ UNCHANGED <<sess, changes, tab, lab, lost, expired, subd, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, tab, lab, lost, expired, subd, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
 
 \* the refresh (Topics::reach_timer): the member sends its newest record again
 Refresh(n) ==
     /\ n \notin left /\ Frame(n) \notin net
     /\ net' = net \union {Frame(n)}
-    /\ UNCHANGED <<sess, changes, cur, tab, lab, lost, expired, subd, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, lost, expired, subd, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
 
 \* a record frame is lost on the way
 Lose(f) ==
     /\ f \in net /\ lost < MaxLoss
     /\ net' = net \ {f} /\ lost' = lost + 1
-    /\ UNCHANGED <<sess, changes, cur, tab, lab, expired, subd, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, expired, subd, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
 
 \* hub f.to takes a record frame (Topics::on_adj, Reach::take): a newer record, or the same one again over an expired
 \* one, replaces what it holds and the labels are worked out again (with Rebuild; without it only for a member heard
@@ -216,8 +286,11 @@ Recv(f) ==
           /\ lab' = IF takes /\ room /\ (Rebuild \/ old.seq = 0) THEN [lab EXCEPT ![h] = Labels(t2)] ELSE lab
           /\ closed' = IF takes /\ ~room /\ Closed THEN [closed EXCEPT ![h] = TRUE] ELSE closed
           /\ refd' = IF takes /\ ~room THEN [refd EXCEPT ![h] = @ \union {f.n}] ELSE refd
+          \* with Told the hub reports the refusal (Event::ReachRefused) and the closing (Event::ReachClosed)
+          /\ heard' = IF takes /\ ~room /\ Told THEN [heard EXCEPT ![h] = @ \union {f.n}] ELSE heard
+          /\ said' = IF takes /\ ~room /\ Closed /\ Told THEN [said EXCEPT ![h] = TRUE] ELSE said
           /\ net' = (net \ {f}) \union (IF f.seq >= old.seq /\ ~f.mir /\ room THEN mirrors ELSE {})
-    /\ UNCHANGED <<sess, changes, cur, lost, expired, subd, bad, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, lost, expired, subd, bad, left, logged, phase, sent>>
 
 \* hub h expires its record of n (Reach::expire): with Tomb the record stays, naming no peer, so n is alone in its
 \* component; without it the record is forgotten (sequence back to 0)
@@ -227,7 +300,7 @@ Expire(h, n) ==
        IN /\ tab' = [tab EXCEPT ![h] = t2]
           /\ lab' = IF Rebuild THEN [lab EXCEPT ![h] = Labels(t2)] ELSE lab
     /\ expired' = expired + 1
-    /\ UNCHANGED <<sess, changes, cur, net, lost, subd, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, net, lost, subd, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
 
 \* member n leaves for good with no session up (Topics::release on every hub, Reach::leave): the hubs forget its
 \* subscriptions, and it sends and publishes nothing more
@@ -235,13 +308,13 @@ Leave(n) ==
     /\ n \notin left /\ Cardinality(left) < MaxLeave /\ Nbrs(n) = {}
     /\ left' = left \union {n}
     /\ subd' = [h \in Hubs |-> subd[h] \ {n}]
-    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, bad, closed, refd, logged>>
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, bad, closed, refd, logged>> /\ UNCHANGED turnsAndEvents
 
 \* hub h's log lets the last message of a member that left go (the log window passes)
 Drain(h, n) ==
     /\ n \in left /\ n \in logged[h]
     /\ logged' = [logged EXCEPT ![h] = @ \ {n}]
-    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left>>
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, closed, refd, left>> /\ UNCHANGED turnsAndEvents
 
 \* hub h drops the expired record of a member that left once its log holds nothing of it (Reach::drop_gone)
 Drop(h, n) ==
@@ -249,7 +322,19 @@ Drop(h, n) ==
     /\ LET t2 == [tab[h] EXCEPT ![n] = None]
        IN /\ tab' = [tab EXCEPT ![h] = t2]
           /\ lab' = IF Rebuild THEN [lab EXCEPT ![h] = Labels(t2)] ELSE lab
-    /\ UNCHANGED <<sess, changes, cur, net, lost, expired, subd, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, net, lost, expired, subd, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
+
+\* the members hub h refused that still wait for a record: no record now, and not gone for good with nothing of
+\* theirs left in its log (Reach::waiting)
+Waiting(h) == {n \in refd[h] : tab[h][n].seq = 0 /\ ~(n \in left /\ n \notin logged[h])}
+
+\* hub h's closed table opens again on its sweep (Reach::reopen, Topics::reach_timer) once no refused member waits,
+\* or with Waits off whenever it likes; with Told it reports it (Event::ReachOpened)
+Reopen(h) ==
+    /\ closed[h] /\ (~Waits \/ Waiting(h) = {})
+    /\ closed' = [closed EXCEPT ![h] = FALSE]
+    /\ said' = IF Told THEN [said EXCEPT ![h] = FALSE] ELSE said
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, bad, refd, left, logged, phase, sent, heard>>
 
 \* member s subscribes at its primary hub; its record went first on the same stream, so the hub took it or its full
 \* table refused it
@@ -257,7 +342,7 @@ Sub(s) ==
     /\ s \notin left /\ s \notin subd[Prim(s)]
     /\ tab[Prim(s)][s].seq > 0 \/ s \in refd[Prim(s)]
     /\ subd' = [subd EXCEPT ![Prim(s)] = @ \union {s}]
-    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, bad, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, bad, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
 
 \* hub h hands o's logged message to subscriber s, checking reach (the push, Topics::hub_store) or, for a repair
 \* answer (on_sub, on_get, have_to, peer_writable), checking it only with ScopedRepair; bad records a hand-over the
@@ -267,18 +352,21 @@ Hand(h, o, s, repair) ==
     /\ s \in subd[h] /\ o \in logged[h] /\ s /= o
     /\ (repair /\ ~ScopedRepair) \/ Allowed(h, o, s)
     /\ bad' = (bad \/ ~Linked(Good(h), o, s))
-    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, closed, refd, left, logged>>
+    /\ UNCHANGED <<sess, changes, cur, tab, lab, net, lost, expired, subd, closed, refd, left, logged>> /\ UNCHANGED turnsAndEvents
 
 Next == \/ \E u, v \in Nodes : Toggle(u, v)
+        \/ EndTurn \/ NextTurn
         \/ \E n \in Nodes : Report(n) \/ Refresh(n) \/ Sub(n) \/ Leave(n)
         \/ \E n \in Liars : \E P \in SUBSET (Nodes \ {n}) : Lie(n, P)
         \/ \E f \in net : Lose(f) \/ Recv(f)
+        \/ \E h \in Hubs : Reopen(h)
         \/ \E h \in Hubs, n \in Nodes : Expire(h, n) \/ Drain(h, n) \/ Drop(h, n)
         \/ \E h \in Hubs, o, s \in Nodes, r \in BOOLEAN : Hand(h, o, s, r)
 
-\* honest members report their changes, frames in flight arrive, and members refresh; losses and expiries are
-\* bounded, so in the end every hub hears every member's newest record
+\* turns end and start again, honest members report their changes, frames in flight arrive, and members refresh;
+\* losses and expiries are bounded, so in the end every hub hears every member's newest record
 Spec == /\ Init /\ [][Next]_vars
+        /\ WF_vars(EndTurn) /\ WF_vars(NextTurn)
         /\ \A n \in Nodes : WF_vars(Report(n)) /\ WF_vars(Refresh(n))
         /\ \A h \in Hubs : \A n \in Nodes : WF_vars(\E f \in net : f.to = h /\ f.n = n /\ Recv(f))
 
@@ -293,6 +381,14 @@ LabelsFresh == \A h \in Hubs : lab[h] = Labels(tab[h])
 Bounds == /\ \A n \in Nodes : cur[n].seq <= MaxSeq
           /\ \A h \in Hubs : \A n \in Nodes : tab[h][n].seq <= cur[n].seq
           /\ \A h \in Hubs : Count(tab[h]) <= TableMax
+\* an honest member signs at most one record a turn, however many of its sessions came and went in it
+BoundedReports == \A n \in Nodes \ Liars : sent[n] <= 1
+\* a hub's events tell the truth about its table: the last of them says closed exactly while it is, and every member
+\* it refused was reported
+ClosedTold == \A h \in Hubs : (said[h] <=> closed[h]) /\ refd[h] \subseteq heard[h]
+\* a witness, not a promise: a table that refused a member stays closed. BroadcastReach_reopened.cfg must find it
+\* violated, which shows the guarded Reopen is reachable (a slot freed and the refused member's record took it)
+StaysClosed == \A h \in Hubs : refd[h] /= {} => closed[h]
 \* once the sessions stop changing, every hub's components are the sessions' components (honest members only)
 Converges == <>[](\A h \in Hubs : \A u, v \in Nodes : (lab[h][u] = lab[h][v]) <=> Linked(sess, u, v))
 =============================================================================

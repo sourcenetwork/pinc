@@ -13,7 +13,11 @@ breadth-first search). Facts, for every set of records:
 - `labels_iff`: two members get the same label exactly when a chain of edges links them (the component invariant);
 - `one_sided_no_edge`: a record that names a peer that does not name it back makes no edge;
 - `reach_mono`, `split_narrows`: records that only drop peers (a session that ended) never link two members that
-  were not linked before, so a split never widens anyone's reach.
+  were not linked before, so a split never widens anyone's reach;
+- `closed_unknown_alone`, `reopened_refused_iff`: a closed table keeps a node without a record alone, and a table
+  opened again once every refused node has a record keeps each of them in its component;
+- `log_push_inv`, `log_pop_inv`, `log_holds_iff`: the per-origin counts of a hub's log stay equal to its entries,
+  so `HubLog::holds` answers whether any message of an origin is logged.
 -/
 
 namespace Vinc.BroadcastReach
@@ -261,6 +265,84 @@ theorem recorded_iff {closed : Bool} {rec : Nat → Bool} {lab : Nat → Nat} {a
   -- both are `label _`, and `label` is injective
   simp [cls, ha, hb]
 
+/-! ## Opening a closed table again (`Reach::reopen`)
+
+The table opens again only when no refused node waits for a record: every node it refused has one now (or was
+revoked, or left with nothing of it in the logs, so it is neither an origin nor a subscriber here). A refused node
+then keeps its component's reach exactly: it shares a class with another node only when both have records and the
+same label. Opening while one still waits is the `open_unknown_shared` fallback again (`BroadcastReach_reopen`). -/
+
+/-- Once open again, a node with a record, as every refused node has, shares a class with `b` exactly when `b` has a
+record too and the same label: never with a node without one. -/
+theorem reopened_refused_iff {rec : Nat → Bool} {lab : Nat → Nat} {a b : Nat} (ha : rec a = true) :
+    cls false rec lab a = cls false rec lab b ↔ rec b = true ∧ lab a = lab b := by
+  -- split on whether `b` has a record: `label _` is never `unscoped`, and `label` is injective
+  cases hb : rec b <;> simp [cls, ha, hb]
+
+/-! ## The count of each origin in a hub's log (`HubLog::push`, `HubLog::pop`, `HubLog::holds`)
+
+A hub drops a released member's tombstone, and forgets a refused member that left, once no log holds a message of
+it. The log keeps a count of its messages by origin beside its entries, raised when it pushes one and lowered when it
+pops one, so the question is a lookup and not a walk over every message. The counts stay equal to the entries. -/
+
+/-- A log: the origins of its entries, oldest first, and the count kept for each origin. -/
+structure Log where
+  -- the origin of each logged message, oldest first
+  entries : List Nat
+  -- the count the log keeps for each origin
+  cnt : Nat → Nat
+
+/-- The counts are those of the entries. -/
+def Log.Inv (l : Log) : Prop := ∀ o, l.cnt o = l.entries.count o
+
+/-- Push a message of `o`: it goes last, and the count of `o` goes up by one. -/
+def Log.push (l : Log) (o : Nat) : Log :=
+  -- the entries with `o` appended, and the count of `o` raised
+  { entries := l.entries ++ [o], cnt := fun x => if x = o then l.cnt x + 1 else l.cnt x }
+
+/-- Pop the oldest message: the count of its origin goes down by one. An empty log stays as it is. -/
+def Log.pop (l : Log) : Log :=
+  match l.entries with
+  -- nothing to pop
+  | [] => l
+  -- the oldest goes, and its origin's count is lowered
+  | o :: rest => { entries := rest, cnt := fun x => if x = o then l.cnt x - 1 else l.cnt x }
+
+/-- An empty log with no counts keeps the invariant. -/
+theorem log_empty_inv : (Log.mk [] (fun _ => 0)).Inv := by
+  -- no entry counts anything
+  intro o; simp
+
+/-- A push keeps the counts equal to the entries. -/
+theorem log_push_inv {l : Log} (h : l.Inv) (o : Nat) : (l.push o).Inv := by
+  -- the appended entry adds one to the count of `o` and nothing to the others
+  intro x
+  by_cases hx : x = o
+  · subst hx; simp [Log.push, h x]
+  · simp [Log.push, hx, h x, Ne.symm hx]
+
+/-- A pop keeps the counts equal to the entries. -/
+theorem log_pop_inv {l : Log} (h : l.Inv) : l.pop.Inv := by
+  -- split on the entries; the popped origin's count was at least one, so lowering it is exact
+  intro x
+  have hx := h x
+  unfold Log.pop
+  split
+  · exact hx
+  · rename_i o rest he
+    rw [he, List.count_cons] at hx
+    by_cases hxo : x = o
+    · subst hxo; simp at hx ⊢; omega
+    · have : (o == x) = false := by simp [Ne.symm hxo]
+      simp [hxo, hx, this]
+
+/-- Under the invariant, a log holds a message of `o` exactly when its count of `o` is not zero (`HubLog::holds`,
+which keeps no origin at zero). -/
+theorem log_holds_iff {l : Log} (h : l.Inv) (o : Nat) : l.cnt o ≠ 0 ↔ o ∈ l.entries := by
+  -- the count of `o` in the entries is positive exactly when `o` is one of them
+  rw [h o, ← List.count_pos_iff]
+  omega
+
 end Vinc.BroadcastReach
 
 #audit_axioms Vinc.BroadcastReach.labels_iff
@@ -268,3 +350,7 @@ end Vinc.BroadcastReach
 #audit_axioms Vinc.BroadcastReach.split_never_widens
 #audit_axioms Vinc.BroadcastReach.closed_unknown_alone
 #audit_axioms Vinc.BroadcastReach.recorded_iff
+#audit_axioms Vinc.BroadcastReach.reopened_refused_iff
+#audit_axioms Vinc.BroadcastReach.log_push_inv
+#audit_axioms Vinc.BroadcastReach.log_pop_inv
+#audit_axioms Vinc.BroadcastReach.log_holds_iff

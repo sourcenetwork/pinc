@@ -11,8 +11,8 @@ mod support;
 
 use common::{Net, SEC, ty};
 use support::{T, adj, ask, capture, sends, session};
-use vinc_broadcast::Limits;
 use vinc_broadcast::consts::{LOG_WINDOW, RECORD_TTL, REFRESH};
+use vinc_broadcast::{Limits, ReachStats};
 use vinc_crypto::IdentityAlg;
 
 /// A hub and `members` members, the hub's table holding at most `max` records.
@@ -26,6 +26,14 @@ fn small(members: usize, max: usize) -> Net {
         net.attach(i);
     }
     net
+}
+
+/// Hub 0's table, without the count of signatures it checked: a record that fails its check is counted there.
+fn table(net: &Net) -> ReachStats {
+    ReachStats {
+        verified: 0,
+        ..net.nodes[0].t.reach_stats()
+    }
 }
 
 /// Keep node `i`'s records from reaching any hub (`true`) or let them through again.
@@ -47,20 +55,20 @@ fn a_record_whose_signature_fails_changes_nothing_even_with_the_table_full() {
     mute(&mut net, 2, true);
     net.advance(RECORD_TTL + REFRESH + SEC);
     mute(&mut net, 2, false);
-    let before = net.nodes[0].t.reach_stats();
+    let before = table(&net);
     assert_eq!((before.records, before.live), (2, 1));
 
     // A newcomer's record with a flipped signature bit: nothing is evicted, refused, counted or closed.
     let mut bad = capture(&mut net, 3, &[]);
     *bad.last_mut().unwrap() ^= 1;
     ask(&mut net, 0, 3, ty::ADJ, &bad);
-    assert_eq!(net.nodes[0].t.reach_stats(), before);
+    assert_eq!(table(&net), before);
 
     // A newer record of a member that holds one, badly signed: the member keeps its old record.
     let mut newer = capture(&mut net, 1, &[2]);
     *newer.last_mut().unwrap() ^= 1;
     ask(&mut net, 0, 1, ty::ADJ, &newer);
-    assert_eq!(net.nodes[0].t.reach_stats(), before);
+    assert_eq!(table(&net), before);
 }
 
 #[test]

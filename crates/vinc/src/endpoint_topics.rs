@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use vinc_broadcast::ReachStats;
 use vinc_crypto::NodeId;
 
 use crate::addr::NodeAddr;
@@ -67,6 +68,13 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
             .lock()
             .map(|core| core.neighbors(topic))
             .unwrap_or_default()
+    }
+
+    /// The adjacency table of [`Builder::connected_topics`](crate::Builder::connected_topics). On a hub: the records it
+    /// holds, the records it refused, and whether its table is closed ([`Event::ReachClosed`]) and why it stays so. On
+    /// a member: how many records it signed. `None` once the endpoint stopped.
+    pub fn reach_stats(&self) -> Option<ReachStats> {
+        self.0.shared.lock().map(|core| core.node.reach_stats())
     }
 
     /// The next event about a topic; `None` once the endpoint stopped and the events are read. Events queue while no one

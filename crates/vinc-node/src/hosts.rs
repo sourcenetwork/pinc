@@ -221,6 +221,9 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
                 hub: *hub,
                 topic: topic.to_vec(),
             },
+            BcEvent::ReachRefused { origin } => NodeEvent::ReachRefused { origin: *origin },
+            BcEvent::ReachClosed => NodeEvent::ReachClosed,
+            BcEvent::ReachOpened => NodeEvent::ReachOpened,
             BcEvent::AcpCheck { id, origin, topic } => NodeEvent::BroadcastAcpCheck {
                 id,
                 origin: *origin,

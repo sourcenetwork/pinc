@@ -170,6 +170,9 @@ impl Core {
                 | NEv::GapRepaired { .. }
                 | NEv::Fallback { .. }
                 | NEv::Restored { .. }
+                | NEv::ReachRefused { .. }
+                | NEv::ReachClosed
+                | NEv::ReachOpened
                 | NEv::Lost { .. }
                 | NEv::DtnReceived { .. }
                 | NEv::DtnCustody { .. }

@@ -107,6 +107,18 @@ pub enum Event<'a> {
         /// The topic.
         topic: &'a [u8],
     },
+    /// On a hub: its adjacency table was full and refused `origin`'s record (see
+    /// [`Topics::set_adjacent`](crate::Topics::set_adjacent)); `origin` is alone here until a slot frees and its next record takes it.
+    ReachRefused {
+        /// The node whose record was refused.
+        origin: &'a NodeId,
+    },
+    /// On a hub: its adjacency table closed. Every node without a record is alone here until it opens again
+    /// ([`Event::ReachOpened`]); [`Topics::reach_stats`](crate::Topics::reach_stats) says why it has not.
+    ReachClosed,
+    /// On a hub: its closed adjacency table opened again. Every node it refused has a record, was revoked or was
+    /// released, so the nodes without a record are unscoped again.
+    ReachOpened,
     /// The access-control layer must decide whether `origin` may publish to this node; answer with
     /// `Topics::acp_answer`.
     AcpCheck {

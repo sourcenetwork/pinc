@@ -18,7 +18,7 @@ pub(crate) struct View<'a> {
     pub(super) seq: u64,
     pub(super) peers: &'a [NodeId],
     signed: &'a [u8],
-    sig: &'a [u8],
+    pub(super) sig: &'a [u8],
 }
 
 /// The record in `rest`, if it is well formed: its peers sorted, without repeats and without its origin.
