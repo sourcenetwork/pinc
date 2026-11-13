@@ -51,9 +51,10 @@ CcEv == /\ UNCHANGED p
 InitEv == /\ Ev0.op = "init" /\ x' = Cc0 /\ p' = Pc0 /\ Same(x', Ev0.v)
 
 PcEv == /\ UNCHANGED x
-        /\ \/ LET q == OnSent(p, Ev0.now, Ev0.mtu, Ev0.srtt, Ev0.cw)
-              IN Ev0.op = "psent" /\ p' = q /\ q.tokens = Ev0.v.tokens /\ q.next = Ev0.v.next
+        /\ \/ LET q == OnSent(p, Ev0.now, Ev0.mtu, Ev0.srtt, Ev0.cw, Ev0.lim)
+              IN Ev0.op = "psent" /\ p' = q /\ q.tokens = Ev0.v.tokens /\ q.next = Ev0.v.next /\ q.start = Ev0.v.start
            \/ Ev0.op = "prel" /\ p' = p /\ NextRelease(p, Ev0.now) = Ev0.r /\ p.tokens = Ev0.v.tokens /\ p.next = Ev0.v.next
+              /\ p.start = Ev0.v.start
 
 Init == i = 1 /\ x = Cc0 /\ p = Pc0
 Step == /\ i <= Len(Trace) /\ Ev0.t = "txcc"

@@ -58,7 +58,7 @@ MulDiv(a, m, d) == (m * (a \div d)) + Horner(BitsOf(m, <<>>), a % d, d, <<0, 0>>
 \* the controller; none is -1; ss = TOP is a threshold not set (u64::MAX)
 Cc0 == [cwnd |-> INITC, ss |-> TOP, wmax |-> 0, west |-> 0, k |-> 0, epoch |-> -1, rec |-> -1, streak |-> 0,
         rend |-> 0, ref |-> -1, rmin |-> -1, samp |-> 0, pst |-> -1, pby |-> 0, rate |-> 0, slack |-> GMID]
-Pc0 == [tokens |-> BURST, next |-> 0]
+Pc0 == [tokens |-> BURST, next |-> 0, start |-> 0]
 
 (* ---- the slow-start exit detector ---- *)
 OnSample(x, s) == [x EXCEPT !.rmin = IF x.rmin < 0 THEN s ELSE Mn(x.rmin, s), !.samp = Mn(x.samp + 1, U32MAX)]
@@ -158,8 +158,16 @@ SetSlack(x, b) == [x EXCEPT !.slack = Mn(b, MAXC)]
 
 (* ---- the pacer ---- *)
 Gap(mtu, srtt, cwnd) == Mn(MulDiv(srtt, 4 * Mn(mtu, MAXMSS), 5 * Mx(cwnd, 1)), TOP)
-OnSent(p, now, mtu, srtt, cwnd) ==
-    IF p.tokens > 1 THEN [p EXCEPT !.tokens = p.tokens - 1]
-    ELSE [tokens |-> BURST, next |-> SAdd(now, SMul(Gap(mtu, srtt, cwnd), BURST))]
+\* on_sent: start is the time of the first packet of the burst; the last packet of a burst sets the release, ten
+\* gaps after it, or one tick after it when the window does not limit the sender (lim is FALSE) and the burst took
+\* at least ten gaps already. The release only moves forward.
+StartAt(p, now) == IF p.tokens = BURST THEN now ELSE p.start
+Span(mtu, srtt, cwnd) == SMul(Gap(mtu, srtt, cwnd), BURST)
+Slow(p, now, mtu, srtt, cwnd, lim) == ~lim /\ Mx(now - StartAt(p, now), 0) >= Span(mtu, srtt, cwnd)
+OnSent(p, now, mtu, srtt, cwnd, lim) ==
+    IF p.tokens > 1 THEN [p EXCEPT !.tokens = p.tokens - 1, !.start = StartAt(p, now)]
+    ELSE [tokens |-> BURST,
+          next |-> Mx(p.next, SAdd(now, IF Slow(p, now, mtu, srtt, cwnd, lim) THEN 1 ELSE Span(mtu, srtt, cwnd))),
+          start |-> StartAt(p, now)]
 NextRelease(p, now) == IF p.next > now THEN p.next ELSE now
 =============================================================================

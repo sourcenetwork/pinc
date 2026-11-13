@@ -225,6 +225,8 @@ def Cc.setSlack (c : Cc) (b : Nat) : Cc := { c with slack := min b maxCwnd }
 structure Pacer where
   tokens : Nat := burst
   next : Nat := 0
+  /-- When the first packet of the burst being counted left. -/
+  start : Nat := 0
   deriving BEq, Repr
 
 def Pacer.nextRelease (p : Pacer) (now : Nat) : Nat := if now < p.next then p.next else now
@@ -232,8 +234,22 @@ def Pacer.nextRelease (p : Pacer) (now : Nat) : Nat := if now < p.next then p.ne
 /-- The gap between two packets of a burst's pause. -/
 def gap (mtu srtt cwnd : Nat) : Nat := sat (min mtu maxMss * srtt * 4 / (5 * max cwnd 1))
 
-def Pacer.onSent (p : Pacer) (now mtu srtt cwnd : Nat) : Pacer :=
-  if 1 < p.tokens then { p with tokens := p.tokens - 1 }
-  else { tokens := burst, next := satAdd now (satMul (gap mtu srtt cwnd) burst) }
+/-- The pause after a burst: ten gaps. -/
+def span (mtu srtt cwnd : Nat) : Nat := satMul (gap mtu srtt cwnd) burst
+
+/-- The start of the burst a packet at `now` belongs to: `now` for the first packet of a burst. -/
+def Pacer.startAt (p : Pacer) (now : Nat) : Nat := if p.tokens = burst then now else p.start
+
+/-- The burst took at least its pause and the window does not limit the sender: it has waited already. -/
+def Pacer.slow (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Bool :=
+  !limited && decide (span mtu srtt cwnd ≤ now - p.startAt now)
+
+/-- `on_sent`: a packet out of the burst takes a token; the last one refills the burst and sets the release, ten
+gaps after it, or one tick after it for a sender that was slow. The release only moves forward. -/
+def Pacer.onSent (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Pacer :=
+  if 1 < p.tokens then { p with tokens := p.tokens - 1, start := p.startAt now }
+  else { tokens := burst,
+         next := max p.next (satAdd now (if p.slow now mtu srtt cwnd limited then 1 else span mtu srtt cwnd)),
+         start := p.startAt now }
 
 end Vinc.TransportCc
