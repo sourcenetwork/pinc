@@ -710,7 +710,8 @@ pub struct SendState {
 pub struct NodeStats {
     /// Sessions in the table.
     pub sessions: usize,
-    /// Sessions that have not authenticated their peer yet.
+    /// Sessions that count against the cap on unauthenticated sessions: those that have not authenticated their peer
+    /// yet, but for a resumption in its handshake, which the cap exempts.
     pub half_open: usize,
     /// The node average handshake round trip.
     pub lrtt: u64,

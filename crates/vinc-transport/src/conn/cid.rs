@@ -7,9 +7,9 @@
 //! index the peer has answered on; past that it takes an id of that window again, turn by turn, and a path gives up
 //! an id the peer never answered on once the window moved past it. So the sender never uses an id the receiver may
 //! not accept, however many paths never deliver. The receiver accepts index 0 and a window of derived indices: every
-//! index it holds from one below the highest seen (the range a sender may still use), every older one it has not
-//! needed to evict, and the next [`LOOKAHEAD`] indices after the highest seen, so a packet on a fresh path is
-//! routable even when the first packet of the previous path was lost.
+//! index it holds less than [`LOOKAHEAD`] below the highest seen (the range a sender may still use), every older one
+//! it has not needed to evict, and the next [`LOOKAHEAD`] indices after the highest seen, so a packet on a fresh path
+//! is routable even when the first packet of the previous path was lost.
 //!
 //! Invariants: the table holds at most [`LOCAL_SLOTS`] derived ids; when it is full the least recently used entry at
 //! least [`LOOKAHEAD`] below the highest index seen makes room; the entries from there up are never evicted, so the
