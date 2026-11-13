@@ -53,7 +53,7 @@ fn view_json(v: &CidView) -> String {
     )
 }
 
-fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
+fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool, seen: &mut [bool; 2]) {
     let mut rng = SplitMix64::new(seed);
     let client = id.is_multiple_of(2);
     let mut t = CidTable::new(client, &[1, 2, 3, 4]).unwrap();
@@ -139,10 +139,26 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
                 let hi = v.highest;
                 let probes: Vec<u64> = (0..6).map(|_| rng.next_u64() % (hi + 6)).collect();
                 let has: Vec<String> = probes.iter().map(|p| format!("[{p},{}]", b(t.is_local(*p)))).collect();
+                let usable: Vec<String> = [0, v.confirmed, v.confirmed + 1, v.next_send]
+                    .into_iter()
+                    .chain((0..2).map(|_| rng.next_u64() % (v.next_send + 6)))
+                    .map(|p| {
+                        let r = t.remote_usable(p);
+                        if p != 0 {
+                            seen[usize::from(r)] = true;
+                        }
+                        format!("[{p},{}]", b(r))
+                    })
+                    .collect();
                 log(
                     &t,
                     out,
-                    &format!(r#""op":"query","lc":{},"has":[{}]"#, t.local_count(), has.join(",")),
+                    &format!(
+                        r#""op":"query","lc":{},"has":[{}],"usable":[{}]"#,
+                        t.local_count(),
+                        has.join(","),
+                        usable.join(",")
+                    ),
                 );
             }
         }
@@ -171,9 +187,19 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, skipper: bool) {
 #[test]
 fn connection_id_runs_match_the_models() {
     let mut out = String::new();
+    let mut seen = [false; 2];
     for id in 1..=40u32 {
-        run(0x4349_4400 + u64::from(id), &mut out, id, 300, id.is_multiple_of(5));
+        run(
+            0x4349_4400 + u64::from(id),
+            &mut out,
+            id,
+            300,
+            id.is_multiple_of(5),
+            &mut seen,
+        );
     }
+    assert!(seen[0], "no probe of a non-zero index was refused as remote_usable");
+    assert!(seen[1], "no probe of a non-zero index was accepted as remote_usable");
     for needle in [
         r#""op":"frem""#,
         r#""op":"install""#,

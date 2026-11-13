@@ -68,6 +68,16 @@ def replayEvent (j : J) (c : C) : Except String C := do
           | _, _ => throw "bad probe"
         | _ => throw "bad probe"
     | none => throw "has is not an array"
+    match (← field j "usable").arr? with
+    | some a =>
+      for e in a do
+        match e.arr? with
+        | some #[p, b] =>
+          match p.nat?, b.bool? with
+          | some p, some b => check (remoteUsable c p == b) s!"query: remote_usable {p} differs"
+          | _, _ => throw "bad probe"
+        | _ => throw "bad probe"
+    | none => throw "usable is not an array"
     pure c
   | _ => throw s!"unknown connection id op {op}"
 
