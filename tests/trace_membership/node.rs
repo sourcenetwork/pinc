@@ -126,7 +126,7 @@ fn churn(c: &mut Ctx) {
 /// A lossy network and dropped frames; the awareness bound.
 fn lossy(c: &mut Ctx) {
     let mut w = c.world(2, 6, START);
-    w.rng = vinc_tests::SplitMix64::new(3);
+    w.rng = vinc_tests::SplitMix64::traced(3);
     w.loss_pct = 20;
     w.attach_all();
     w.run(120 * SEC);

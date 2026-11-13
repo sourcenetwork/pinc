@@ -796,7 +796,7 @@ fn gen_cands(o: &mut Out, rng: &mut SplitMix64) {
 #[test]
 fn connect_codec_trace() {
     let mut o = Out { lines: Vec::new() };
-    let mut rng = SplitMix64::new(0xC0DEC);
+    let mut rng = SplitMix64::traced(0xC0DEC);
     o.lines.push(format!(
         r#"{{"t":"consts","rec":{MAX_RECORD_LEN},"pkt":{MAX_PACKET_LEN},"notice":{MAX_NOTICE_LEN},"frames":{BATCH_MAX_FRAMES},"bytes":{BATCH_MAX_BYTES},"frame":{MAX_FRAME_LEN},"tunnel":{MAX_TUNNEL_DATAGRAM},"alias":{},"bcn":{},"ntc":{}}}"#,
         vinc_connect::carrier::ALIAS_MAX,

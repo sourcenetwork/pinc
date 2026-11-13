@@ -209,7 +209,7 @@ struct Cov {
 type Cache = std::collections::HashMap<(u8, u64, u64, u8), Vec<u8>>;
 
 fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let kps: Vec<Keypair> = (0..4u8).map(|i| ed(0x61 + i)).collect();
     let me_kp = ed(0x50);
     let other_relay = id(&ed(0x51));
@@ -555,7 +555,10 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                     let at = if forced.is_some() {
                         now
                     } else {
-                        now - (rng.next_u64() % 25) * SEC.min(now / SEC)
+                        // Whole seconds back: the trace records `at / SEC`. (This was `k * SEC.min(now / SEC)`, that is
+                        // `k * secs` nanoseconds, which the trace rounded away: the code saw a heard time 19.000009 s
+                        // before a frame and the model 20 s, the edge of the freshness bound.)
+                        now - ((rng.next_u64() % 25) * SEC).min(now)
                     };
                     let x = r.udp_heard(&ids[node], at);
                     res = res_name(&x);
@@ -643,14 +646,14 @@ fn the_relay_records_its_trace() {
     for seed in 0..24u64 {
         run(seed, &mut out, &mut cov, &mut cache);
     }
-    assert!(cov.forwarded > 0, "no forward");
-    assert!(cov.mailboxed > 0, "nothing mailboxed");
-    assert!(cov.quota > 0, "no quota drop");
-    assert!(cov.expired > 0, "no session expiry");
-    assert!(cov.fwdback > 0, "no reply route learnt");
-    assert!(cov.wake > 0, "no wake-up");
-    assert!(cov.held_out > 0, "no held packet delivered");
-    assert!(cov.stale_copy > 0, "no tunnel packet");
+    assert!(vinc_tests::soaking() || cov.forwarded > 0, "no forward");
+    assert!(vinc_tests::soaking() || cov.mailboxed > 0, "nothing mailboxed");
+    assert!(vinc_tests::soaking() || cov.quota > 0, "no quota drop");
+    assert!(vinc_tests::soaking() || cov.expired > 0, "no session expiry");
+    assert!(vinc_tests::soaking() || cov.fwdback > 0, "no reply route learnt");
+    assert!(vinc_tests::soaking() || cov.wake > 0, "no wake-up");
+    assert!(vinc_tests::soaking() || cov.held_out > 0, "no held packet delivered");
+    assert!(vinc_tests::soaking() || cov.stale_copy > 0, "no tunnel packet");
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
         return;
     };

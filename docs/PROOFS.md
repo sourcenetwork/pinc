@@ -89,6 +89,13 @@ By `scripts/proofs.sh` (the `== proofs` step of `scripts/gate.sh`):
   `lake exe replay` also replays the ranges, varint, layout and size traces (`groups`, `depth`, `outboard_size`,
   `group_size` over lengths up to `u64::MAX` and every group log) against the Lean functions and fails on any
   difference.
+- **Trace soak.** The gate records the trace tests under their fixed seeds. `scripts/trace-soak.sh` (`just trace-soak`)
+  sets `VINC_TRACE_SEED`, which moves the seed of every trace test that draws from `SplitMix64::traced`, records the
+  traces into a temporary directory and replays each file in the Lean model, over and over, keeping the ndjson and the
+  seed of the first mismatch (with `-k n` it also runs the TLC trace checks every `n` iterations); a trace test's
+  assertions that its fixed seeds reach every branch are skipped under a moved seed. `scripts/trace-cov.sh` (`just
+  trace-cov`) measures what the trace tests alone run of the library crates, and lists the uncovered lines (with
+  `BRANCH=1`, branches) of the items named in the tables below.
 
 Tools: Lean 4 and Lake, TLC on `PATH` as `tlc`, Java, and for the trace check a TLC of the same era as the
 [CommunityModules](https://github.com/tlaplus/CommunityModules) jar (the gate prints the download command when a

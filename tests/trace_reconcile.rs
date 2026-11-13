@@ -927,7 +927,7 @@ fn mutation_cases(tr: &mut Tr, rng: &mut SplitMix64) {
             for kind in 0..15u32 {
                 let mut k = 0usize;
                 let seed = rng.next_u64();
-                let mut mrng = SplitMix64::new(seed);
+                let mut mrng = SplitMix64::traced(seed);
                 let isfirst = log[idx].2;
                 let r = session(
                     &mut cs,
@@ -958,7 +958,7 @@ fn mutation_cases(tr: &mut Tr, rng: &mut SplitMix64) {
 
 #[test]
 fn reconcile_sessions_match_the_models() {
-    let mut rng = SplitMix64::new(0x7265_636f_6e63_696c);
+    let mut rng = SplitMix64::traced(0x7265_636f_6e63_696c);
     let on = std::env::var("VINC_TRACE_DIR").is_ok();
     let mut tr = Tr { on, ..Tr::default() };
     basic_cases(&mut tr, &mut rng);

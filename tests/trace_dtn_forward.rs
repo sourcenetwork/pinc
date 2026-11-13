@@ -602,12 +602,12 @@ fn the_forwarder_matches_its_models() {
     let mut cover = HashSet::new();
     for seed in 0..40u64 {
         let mut run = Run::<2, 2, 2, 2>::new(policy, 0);
-        run.drive(&mut SplitMix64::new(seed), 70, 0);
+        run.drive(&mut SplitMix64::traced(seed), 70, 0);
         lines.append(&mut run.lines);
         cover.extend(run.cover);
     }
     for b in BRANCHES {
-        assert!(cover.contains(b), "branch {b} was never met");
+        assert!(vinc_tests::soaking() || cover.contains(b), "branch {b} was never met");
     }
     write("dtn_forward", &lines);
 }
@@ -623,15 +623,15 @@ fn other_capacities_policies_and_times_near_the_limit() {
         for seed in 0..6u64 {
             let s = seed + 100 * n as u64;
             let mut a = Run::<1, 1, 1, 1>::new(policy, 0);
-            a.drive(&mut SplitMix64::new(s), 60, 0);
+            a.drive(&mut SplitMix64::traced(s), 60, 0);
             let mut b = Run::<3, 2, 4, 2>::new(policy, 5);
-            b.drive(&mut SplitMix64::new(s + 7), 60, 5);
+            b.drive(&mut SplitMix64::traced(s + 7), 60, 5);
             // Times next to u64::MAX: the clock saturates and timers never wrap.
             let mut c = Run::<2, 2, 2, 2>::new(policy, u64::MAX - 80);
-            c.drive(&mut SplitMix64::new(s + 13), 60, u64::MAX - 80);
+            c.drive(&mut SplitMix64::traced(s + 13), 60, u64::MAX - 80);
             // A memory table of no slot refuses every hold: the Full branch of the memory.
             let mut d = Run::<2, 2, 2, 0>::new(policy, 0);
-            d.drive(&mut SplitMix64::new(s + 21), 40, 0);
+            d.drive(&mut SplitMix64::traced(s + 21), 40, 0);
             lines.append(&mut a.lines);
             lines.append(&mut b.lines);
             lines.append(&mut c.lines);

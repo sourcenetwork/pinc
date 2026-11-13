@@ -78,7 +78,7 @@ fn rec(r: CreditRecord) -> String {
 }
 
 fn credit_trace(out: &mut String) {
-    let mut rng = SplitMix64::new(0x5EC0_C0DE);
+    let mut rng = SplitMix64::traced(0x5EC0_C0DE);
     let unit = WINDOW_UNIT;
     let max_units = u64::from(u16::MAX);
     // window requests: edges around the unit, the saturation point and u64::MAX, then random sizes of every magnitude
@@ -234,7 +234,7 @@ fn credit_trace(out: &mut String) {
 }
 
 fn amp_trace(out: &mut String) {
-    let mut rng = SplitMix64::new(0x5EC0_0001);
+    let mut rng = SplitMix64::traced(0x5EC0_0001);
     for r in 0..40u32 {
         let mut b = AmpBudget::new();
         let big = r % 4 == 3;
@@ -341,7 +341,10 @@ fn security_traces() {
         r#""op":"tx""#,
         r#""op":"can","n""#,
     ] {
-        assert!(out.contains(needle), "the runs never produce {needle}");
+        assert!(
+            vinc_tests::soaking() || out.contains(needle),
+            "the runs never produce {needle}"
+        );
     }
     assert!(out.contains(r#""can":true"#) && out.contains(r#""can":false"#));
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {

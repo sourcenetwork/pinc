@@ -164,7 +164,7 @@ fn labels_trace(out: &mut String) {
 }
 
 fn kdf_trace(out: &mut String) {
-    let mut rng = SplitMix64::new(0xC0DE_0001);
+    let mut rng = SplitMix64::traced(0xC0DE_0001);
     let label_set = [
         vinc_security::labels::PACKET_KEY,
         vinc_security::labels::PACKET_IV,
@@ -242,7 +242,7 @@ fn alg_trace(out: &mut String) {
 }
 
 fn keypair(alg: IdentityAlg, seed: u64) -> Keypair {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     Keypair::from_seed(alg, &rand(&mut rng, alg.seed_len())).unwrap()
 }
 
@@ -602,7 +602,7 @@ fn vnode_trace(out: &mut String) {
 }
 
 fn kp_trace(out: &mut String) {
-    let mut rng = SplitMix64::new(0x4B50);
+    let mut rng = SplitMix64::traced(0x4B50);
     for alg in ALGS {
         let need = alg.seed_len();
         let mut seeds: Vec<Vec<u8>> = vec![

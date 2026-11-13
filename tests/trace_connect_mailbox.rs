@@ -150,7 +150,7 @@ fn st_json(s: [u64; 7]) -> String {
 }
 
 fn run<const N: usize, const B: usize>(seed: u64, age: u64, out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut m: Mailbox<N, B> = Mailbox::new(age, seed);
     let mut r = Reference {
         b: B,

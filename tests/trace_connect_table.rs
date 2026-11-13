@@ -37,7 +37,7 @@ fn slots_json<'a>(it: impl Iterator<Item = (&'a vinc_crypto::NodeId, &'a u32)>) 
 }
 
 fn run_table<const N: usize>(seed: u64, out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut t: Table<u32, N> = Table::new(seed);
     let keys = N as u8 + 2;
     out.push(format!(r#"{{"t":"tbnew","n":{N}}}"#));
@@ -98,7 +98,7 @@ fn run_table<const N: usize>(seed: u64, out: &mut Vec<String>) {
 }
 
 fn run_cache<const N: usize>(seed: u64, out: &mut Vec<String>) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut c: Cache<u32, N> = Cache::new(seed);
     let keys = N as u8 + 2;
     out.push(format!(r#"{{"t":"knew","n":{N}}}"#));

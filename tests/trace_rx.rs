@@ -182,7 +182,7 @@ impl<const N: usize> Run<'_, N> {
 }
 
 fn run<const N: usize>(seed: u64, out: &mut String, id: u32, steps: u32, sparse: bool) -> (u32, u32, u32, u32) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut r = Run::<N> {
         rx: ReceivedPackets::new(),
         out,
@@ -393,11 +393,14 @@ fn received_packet_runs_match_the_models() {
         r#""op":"peer""#,
         r#""op":"acksent""#,
     ] {
-        assert!(out.contains(needle), "the runs never reach {needle}");
+        assert!(
+            vinc_tests::soaking() || out.contains(needle),
+            "the runs never reach {needle}"
+        );
     }
     assert!(wide_out.contains(r#""out":"PacketNumberOutOfRange""#));
     assert!(
-        new > 0 && dup > 0 && forgot > 0 && thin > 0,
+        vinc_tests::soaking() || new > 0 && dup > 0 && forgot > 0 && thin > 0,
         "new {new} dup {dup} forgot {forgot} thin {thin}"
     );
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {

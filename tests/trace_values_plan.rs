@@ -850,7 +850,7 @@ fn server_run(sink: &mut Sink, rng: &mut SplitMix64, store: &PStore, spans: &[Sp
 
 #[test]
 fn plan_source_and_server_agree_with_the_encoder_and_are_traced() {
-    let mut rng = SplitMix64::new(0x9_1A);
+    let mut rng = SplitMix64::traced(0x9_1A);
     let mut sink = Sink::default();
 
     // Plans and reads over real values: lengths around group and tree-shape boundaries.

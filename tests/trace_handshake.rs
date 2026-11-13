@@ -167,7 +167,10 @@ fn handshake_traces() {
             r#""kind":"fail""#,
             r#""alpn":2"#,
         ] {
-            assert!(hs.contains(needle), "the runs never produce {needle}");
+            assert!(
+                vinc_tests::soaking() || hs.contains(needle),
+                "the runs never produce {needle}"
+            );
         }
         let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
             return;

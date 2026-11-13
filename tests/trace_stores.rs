@@ -266,7 +266,7 @@ struct Seen {
 
 #[allow(clippy::too_many_arguments)]
 fn client_run<const N: usize>(run: u32, ops: usize, seed: u64, ids: &mut Ids, out: &mut Vec<String>, seen: &mut Seen) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut store = ClientTickets::<N>::new();
     out.push(format!(r#"{{"t":"cnew","run":{run},"n":{N}}}"#));
     let mut serial: u16 = 0;
@@ -560,7 +560,7 @@ fn got_is(ent_json: &str) -> bool {
 }
 
 fn cache_run<const N: usize>(run: u32, ops: usize, seed: u64, out: &mut Vec<String>, seen: &mut Seen) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut cache = PrekeyCache::<N>::new();
     out.push(format!(r#"{{"t":"pnew","run":{run},"n":{N}}}"#));
     let universe = N + 3;
@@ -614,7 +614,7 @@ fn cache_run<const N: usize>(run: u32, ops: usize, seed: u64, out: &mut Vec<Stri
 }
 
 fn server_run<const N: usize>(run: u32, ops: usize, seed: u64, ids: &mut Ids, out: &mut Vec<String>, seen: &mut Seen) {
-    let mut rng = SplitMix64::new(seed);
+    let mut rng = SplitMix64::traced(seed);
     let mut store = ServerTickets::<N>::new();
     out.push(format!(r#"{{"t":"snew","run":{run},"n":{N}}}"#));
     let provider = Software;

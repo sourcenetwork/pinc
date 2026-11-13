@@ -179,6 +179,14 @@ doctest:
 proofs:
     scripts/proofs.sh
 
+# Record the trace tests under fresh seeds and replay them in the Lean model until a mismatch: `just trace-soak -n 20`.
+trace-soak *args:
+    scripts/trace-soak.sh {{args}}
+
+# Coverage of the library crates under the trace tests only, and the modelled functions' uncovered lines; BRANCH=1 adds branches (nightly).
+trace-cov:
+    scripts/trace-cov.sh
+
 # Only the Lean proofs.
 lean:
     cd proofs/lean && lake build
