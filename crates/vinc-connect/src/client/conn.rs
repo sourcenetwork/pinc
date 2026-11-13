@@ -811,14 +811,15 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             .map(|(_, f, _)| *f)
     }
 
-    /// The record found for `peer` unless it is stale: older than [`FOUND_TTL`] and listing no address (such a
-    /// record only names a relay, and the relay may have changed).
+    /// The record found for `peer` unless it is stale: older than [`FOUND_TTL`]. A record that lists addresses goes
+    /// stale as well, because a peer that lists addresses may have moved since: a dial then looks it up again and
+    /// its first flight goes through the relay, not to those addresses.
     pub fn found_fresh(&self, now: u64, peer: &NodeId) -> Option<Found> {
         self.found
             .iter()
             .flatten()
             .find(|(p, _, _)| p == peer)
-            .filter(|(_, f, at)| now.saturating_sub(*at) < FOUND_TTL || f.addrs().next().is_some())
+            .filter(|(_, _, at)| now.saturating_sub(*at) < FOUND_TTL)
             .map(|(_, f, _)| *f)
     }
 

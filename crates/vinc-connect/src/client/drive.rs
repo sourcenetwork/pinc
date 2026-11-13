@@ -198,7 +198,9 @@ drive_impl! {
     }
 
     /// The candidate paths for a dial to `node`: its known UDP addresses, then the relay path.
-    fn candidates_for(&mut self, node: &NodeId, hints: &[SocketAddr], out: &mut [Cand; 16]) -> usize {
+    /// The paths a flight to `node` can take. With `fresh_at` set, the addresses of a record older than its time are
+    /// left out: a dial looks such a peer up again and the flight goes through the relay, as for a peer with no record.
+    fn candidates_for(&mut self, node: &NodeId, hints: &[SocketAddr], fresh_at: Option<u64>, out: &mut [Cand; 16]) -> usize {
         let mut n = 0;
         let add = |c: Cand, out: &mut [Cand; 16], n: &mut usize| {
             if *n < out.len() && !out.get(..*n).unwrap_or_default().contains(&c)
@@ -216,7 +218,7 @@ drive_impl! {
             }
         }
         let found = self.found(node);
-        if let Some(f) = &found {
+        if let Some(f) = found.filter(|_| fresh_at.is_none_or(|t| self.found_fresh(t, node).is_some())) {
             for a in f.addrs() {
                 add(Cand::Udp(a), out, &mut n);
             }
@@ -260,7 +262,7 @@ drive_impl! {
         let first = self.first_dial.is_none();
         let first_dial = *self.first_dial.get_or_insert(now);
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&node, hints, &mut cands);
+        let nc = self.candidates_for(&node, hints, Some(now), &mut cands);
         let hub = self.relay_of(&node);
         let direct = hub.is_some() && direct_first(true, true, first_dial, self.start);
         let mut chosen = [Cand::Relay(0); 16];
@@ -478,7 +480,7 @@ drive_impl! {
         let waiting = self.pending.take(peer);
         let Some(f) = self.found(peer) else { return };
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(peer, &[], &mut cands);
+        let nc = self.candidates_for(peer, &[], None, &mut cands);
         for id in waiting.into_iter().flatten() {
             let mut addrs = [self.me_addr_pub(); 16];
             let mut na = 0;
@@ -516,7 +518,7 @@ drive_impl! {
             return;
         }
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&s.node, &[], &mut cands);
+        let nc = self.candidates_for(&s.node, &[], None, &mut cands);
         if cands.get(..nc).unwrap_or_default().iter().any(|c| matches!(c, Cand::Relay(_))) {
             self.add_paths(now, ep, &s);
         } else {
@@ -624,7 +626,7 @@ drive_impl! {
     /// Register every known path of the session's peer but its first one, and fan the flight out over them.
     fn add_paths<E: Port>(&mut self, now: u64, ep: &mut E, s: &Sess) {
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&s.node, &[], &mut cands);
+        let nc = self.candidates_for(&s.node, &[], None, &mut cands);
         let mut addrs = [self.me_addr_pub(); 16];
         let mut na = 0;
         for c in cands.get(..nc).unwrap_or_default() {
@@ -724,7 +726,7 @@ drive_impl! {
     /// again at once, not at its keepalive.
     fn check_dial_carriers(&mut self, now: u64, node: &NodeId) {
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(node, &[], &mut cands);
+        let nc = self.candidates_for(node, &[], None, &mut cands);
         for c in cands.get(..nc).unwrap_or_default() {
             if let Cand::Relay(r) = c {
                 self.check_carrier(now, usize::from(*r));
@@ -737,7 +739,7 @@ drive_impl! {
 
     fn reselect<E: Port>(&mut self, now: u64, ep: &mut E, s: &mut Sess) {
         let mut cands = [Cand::Relay(0); 16];
-        let mut nc = self.candidates_for(&s.node, &[], &mut cands);
+        let mut nc = self.candidates_for(&s.node, &[], None, &mut cands);
         // A peer with no record and no relay is dialed at the address the caller gave: a retry keeps to it.
         if nc == 0
             && let Some(p) = s.primary

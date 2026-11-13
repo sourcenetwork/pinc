@@ -6,7 +6,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::many_single_char_names
 )]
 
 mod connect_sim_common;
@@ -255,6 +256,86 @@ fn a_dial_to_a_relay_opens_the_carrier_to_that_relay() {
         assert!(
             up(&w),
             "the first flight to a relay also goes through its own relay, which opens its carrier"
+        );
+    });
+}
+
+/// Two clients behind NATs; `a` has looked `b` up at 5 s, so it holds a record that lists b's address.
+fn looked_up() -> (
+    World,
+    vinc_sim::NodeId,
+    vinc_sim::NodeId,
+    vinc_sim::NodeId,
+    vinc_crypto::NodeId,
+) {
+    let mut w = World::new(91);
+    let (r, rs) = w.relay(1, relay_ip(10));
+    let nat_a = w.nat(vinc_sim::NatKind::FullCone, ext(1), 120 * SEC, 7200 * SEC);
+    let nat_b = w.nat(vinc_sim::NatKind::FullCone, ext(2), 120 * SEC, 7200 * SEC);
+    let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[rs]), nat_a);
+    let b = w.client_behind(&client_spec(0xb1, priv_addr(2), &[rs]), nat_b);
+    w.run(secs(5));
+    let id = w.sim.node(b).client().host.me;
+    w.sim.command(secs(5), a, Cmd::Lookup(id));
+    w.run(secs(7));
+    let found = w.client(a).conn.found(&id).expect("the lookup found b");
+    assert!(found.addrs().next().is_some(), "the record lists an address");
+    (w, a, b, r, id)
+}
+
+/// For each first-flight sized datagram of `a` in `[from, from + span)`, in time order: whether it went through a relay.
+fn dial_flights(w: &World, a: vinc_sim::NodeId, from: Time, span: Time) -> Vec<bool> {
+    w.client(a)
+        .tx_log
+        .iter()
+        .filter(|(t, _, len)| *t >= from && *t < from + span && *len >= 1000)
+        .map(|(_, r, _)| is_relay_addr(r))
+        .collect()
+}
+
+#[test]
+fn a_dial_with_a_record_older_than_its_time_looks_the_peer_up_and_goes_through_the_relay() {
+    big(|| {
+        let (mut w, a, b, r, _) = looked_up();
+        let before = w.relay_node(r).relay.stats().lookups;
+        w.run(secs(45));
+        w.dial(secs(45), a, b, vec![]);
+        w.run(secs(45) + 200 * MS);
+        assert!(
+            w.relay_node(r).relay.stats().lookups > before,
+            "the peer is looked up again"
+        );
+        w.run(secs(46));
+        let f = dial_flights(&w, a, secs(45), SEC);
+        assert_eq!(
+            f.first(),
+            Some(&true),
+            "the first flight goes through the home relay: {f:?}"
+        );
+        assert!(
+            f.iter().any(|r| !*r),
+            "the answer brings the address and a flight goes there: {f:?}"
+        );
+    });
+}
+
+#[test]
+fn a_dial_with_a_record_within_its_time_does_not_look_the_peer_up() {
+    big(|| {
+        let (mut w, a, b, r, _) = looked_up();
+        let before = w.relay_node(r).relay.stats().lookups;
+        w.run(secs(20));
+        w.dial(secs(20), a, b, vec![]);
+        w.run(secs(20) + 200 * MS);
+        assert_eq!(
+            w.relay_node(r).relay.stats().lookups,
+            before,
+            "no lookup within the time"
+        );
+        let f = dial_flights(&w, a, secs(20), 200 * MS);
+        assert!(
+            f.iter().any(|r| !*r),
+            "the first flight goes to the cached address: {f:?}"
         );
     });
 }
