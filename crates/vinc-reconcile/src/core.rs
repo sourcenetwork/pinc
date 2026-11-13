@@ -79,10 +79,13 @@ struct Out {
 }
 
 impl Out {
+    /// Start a message. The snapshot goes too: a rollback to the start of a message that took no mark restores the
+    /// last bound from it, and must not read what an earlier message left.
     fn reset(&mut self) {
         self.body.clear();
         self.stage.clear();
         self.last.clear();
+        self.snap.clear();
     }
 
     /// Remember the end of the message, to undo a part that does not fit.
@@ -903,4 +906,33 @@ fn reply<E>(out: &mut Out, lo: &[u8], hi: Option<&[u8]>, c: usize, seen: &[u8], 
     out.stage = stage;
     out.stage.clear();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rollback_to_the_start_of_a_message_reads_nothing_an_earlier_message_left() {
+        let mut out = Out {
+            body: Vec::new(),
+            stage: Vec::new(),
+            last: Vec::new(),
+            snap: Vec::new(),
+            cap: 64,
+        };
+        // An earlier message wrote a bound and marked its end.
+        out.last.extend_from_slice(b"earlier");
+        let _ = out.mark();
+        // The next message starts and rolls back to its start without a mark of its own, as the root's split does.
+        out.reset();
+        out.body.extend_from_slice(b"part");
+        out.rollback(0);
+        assert_eq!(out.body, [] as [u8; 0]);
+        assert_eq!(
+            out.last,
+            [] as [u8; 0],
+            "the last bound came back from the earlier message"
+        );
+    }
 }
