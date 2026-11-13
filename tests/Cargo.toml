@@ -159,6 +159,18 @@ name = "transport_stream"
 path = "transport_stream.rs"
 
 [[test]]
+name = "transport_stream_send"
+path = "transport_stream_send.rs"
+
+[[test]]
+name = "transport_stream_limits"
+path = "transport_stream_limits.rs"
+
+[[test]]
+name = "transport_stream_pool"
+path = "transport_stream_pool.rs"
+
+[[test]]
 name = "transport_recovery"
 path = "transport_recovery.rs"
 
