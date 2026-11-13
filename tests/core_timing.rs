@@ -18,7 +18,7 @@ mod common;
 
 use std::net::SocketAddr;
 
-use common::{S, dial, is_connected, message_type, sends};
+use common::{S, dial, flights, is_connected, message_type, sends};
 use vinc_core::{Answer, Command, ConnectFailure, EndReason, Event, IfaceEvent, IfaceId, Query, Role, Value};
 use vinc_tests::*;
 use vinc_transport::conn::CloseReason;
@@ -418,6 +418,40 @@ fn the_short_initial_is_used_only_for_a_peer_known_to_cache_the_prekey_on_a_fres
             Some(1),
             "a stale path still used the short Initial"
         );
+    });
+}
+
+#[test]
+fn a_resend_is_the_short_initial_while_udp_was_heard_lately_whatever_the_first_flight_was() {
+    big_stack(|| {
+        // Node a had a session with b and closed it `idle` ns ago, then dials b (known to cache its prekey) or c (never
+        // dialed) while everything sent to the target is lost. Resends go out at 0.5, 1.5, 3.5, 7.5 and 15.5 s. The idle
+        // time is longer than the 30 s access answer of b, so the dial is not reported early and not ended early.
+        let resends = |again: bool, idle: u64| {
+            let mut net = CoreNet::new(10 * MS_NS);
+            net.capture = true;
+            let (a, b, c) = (net.add(1), net.add(2), net.add(3));
+            let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+            let t = net.now;
+            net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+            net.run_for(idle);
+            let (peer, now) = (net.nodes[b].node, net.now);
+            while net.nodes[a].ep.tickets().take(&peer, ALPN_A, now).is_some() {}
+            let target = if again { b } else { c };
+            let to = net.nodes[target].addr;
+            net.loss = Some(Box::new(move |_, dst, _| dst == to));
+            let marker = net.captured.len();
+            dial(&mut net, a, target, ALPN_A, Role::Other);
+            net.run_for(16 * S);
+            flights(&net, marker, a, target)
+        };
+        // A full first flight (c was never dialed) with UDP heard lately: the resends are short, the third and the sixth
+        // send carry the full prekey.
+        assert_eq!(resends(false, 31 * S), [1, 2, 1, 2, 2, 1]);
+        // A short first flight (b caches the prekey): the same schedule.
+        assert_eq!(resends(true, 31 * S), [2, 2, 1, 2, 2, 1]);
+        // After 90 s without hearing a UDP path every send is a full Initial.
+        assert_eq!(resends(false, 100 * S), [1, 1, 1, 1, 1, 1]);
     });
 }
 

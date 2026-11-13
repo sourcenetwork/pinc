@@ -10,7 +10,8 @@
 //!
 //! Before a session's timer runs, the endpoint also tells it how long its re-join challenges must wait for those the
 //! node's other thin sessions sent to the same address: one per address per `max(1 s, node peak round trip)`, the last
-//! 200 addresses remembered.
+//! 200 addresses remembered, and until when a dial's resend may carry the short Initial (a validated UDP path heard
+//! within 90 s of the timer, not of the dial).
 //!
 //! Invariants: a session has at most one entry in the heap; a settled session that has ended is freed; a deadline
 //! after a timer is strictly later than the time of the call, so a timer cannot spin.
@@ -173,6 +174,7 @@ ep_impl! {
             .and_then(|s| s.conn.as_ref())
             .is_some_and(vinc_transport::conn::Connection::rejoin_running);
         let floors = if rejoining { self.rejoin_floors(i) } else { [None; NP] };
+        let short_until = self.short_until();
         let Some(slot) = self.slots.get_mut(i) else { return };
         let Some(conn) = slot.conn.as_mut() else { return };
         // A standby path that carried nothing for 5 s while data moves is pinged to keep its mapping open.
@@ -199,6 +201,8 @@ ep_impl! {
         for (id, at) in floors.into_iter().flatten() {
             conn.set_rejoin_floor(id, at);
         }
+        // A resend of a dial reads whether UDP was heard lately now, not as of the dial.
+        conn.set_short_until(short_until);
         conn.handle_timeout(&mut env);
         let mut fired: [Option<PathId>; NP] = [None; NP];
         if rejoining {

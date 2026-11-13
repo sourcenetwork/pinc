@@ -307,6 +307,49 @@ fn every_third_retransmit_carries_the_full_prekey() {
 }
 
 #[test]
+fn a_resend_after_a_full_initial_is_short_while_the_host_allows_it() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
+        // The message types sent when the loss timer fires at each of `times` after the first send at `w.now`.
+        let sent = |w: &mut World, until: Option<u64>, times: &[u64]| {
+            let dial = w.dial();
+            let mut i = w.initiator_with(dial, ALPN, false, false);
+            if let Some(until) = until {
+                i.set_short_until(until);
+            }
+            let mut seen = vec![];
+            let Some(Output::Send { data, .. }) = i.poll_output() else {
+                panic!("no first message")
+            };
+            seen.push(data[0]);
+            for t in times {
+                let mut env = Env {
+                    provider: &w.i_prov,
+                    now: *t,
+                    drbg: &mut w.i_drbg,
+                };
+                i.retransmit(&mut env).unwrap();
+                let Some(Output::Send { data, .. }) = i.poll_output() else {
+                    panic!("nothing to send at {t}")
+                };
+                seen.push(data[0]);
+            }
+            seen
+        };
+        let t0 = w.now;
+        let ms = |n: u64| t0 + n * 1_000_000;
+        // A full first Initial: the resends are short, except the third and sixth send, which carry the full prekey.
+        let times = [ms(500), ms(1500), ms(3500), ms(7500), ms(15_500), ms(23_500)];
+        assert_eq!(sent(&mut w, Some(u64::MAX), &times), vec![1, 2, 1, 2, 2, 1, 2]);
+        // Short Initials stop where the host's allowance ends: the resends at 3.5 s and later are full.
+        assert_eq!(sent(&mut w, Some(ms(3000)), &times), vec![1, 2, 1, 1, 1, 1, 1]);
+        // A host that never allows them, or never said (the default after a full first Initial): all full.
+        assert_eq!(sent(&mut w, Some(0), &times), vec![1; 7]);
+        assert_eq!(sent(&mut w, None, &times), vec![1; 7]);
+    });
+}
+
+#[test]
 fn a_repeated_initial_gets_the_same_reply_and_the_finish_can_be_retransmitted() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);

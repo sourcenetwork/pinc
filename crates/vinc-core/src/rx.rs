@@ -197,7 +197,9 @@ ep_impl! {
             if let Some(p) = slot.m.stamp(pid) {
                 p.rx = now;
             }
-            if conn.path_validated(pid) {
+            // Only a validated direct path counts: a short Initial is not for a node that hears no UDP and reaches its
+            // peers through a carrier.
+            if conn.path_validated(pid) && !is_relay_addr(&remote) {
                 self.udp_heard = Some(now);
             }
         }

@@ -557,6 +557,13 @@ impl Handshake {
         true
     }
 
+    /// Allow short Initials in a dialing side's resends while the clock is below `until`.
+    pub(crate) fn set_short_until(&mut self, until: u64) {
+        if let Some(Machine::Client(m)) = machine_of(&mut self.machine) {
+            m.set_short_until(until);
+        }
+    }
+
     /// Hold the resends of a dialing side, or let them go on.
     pub(crate) const fn set_held(&mut self, held: bool) {
         self.held = held;

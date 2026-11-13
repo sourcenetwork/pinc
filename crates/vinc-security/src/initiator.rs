@@ -14,8 +14,10 @@
 //! stays unanswered: the third send is a full Initial under the same destination id. The machine then still accepts
 //! a late resume Reply, which completes the resumed session and abandons the full handshake.
 //!
-//! The sends are counted from the first: the short Initial is resent with the full prekey on sends 3, 6, 9 and so
-//! on, so a lost or unroutable reject never leaves the machine sending short Initials only.
+//! The sends are counted from the first. A resend of the Initial is the short one while the host allows short Initials
+//! ([`Initiator::set_short_until`]: it heard a validated UDP path lately), whichever form the first send had, and the
+//! full one otherwise; sends 3, 6, 9 and so on always carry the full prekey, so a lost or unroutable reject never
+//! leaves the machine sending short Initials only.
 
 use core::mem;
 
@@ -60,7 +62,9 @@ pub struct InitiatorParams<'a> {
     pub identity: &'a LocalIdentity,
     /// The prekey to use for this handshake (from [`crate::SoftPrekeys::acquire`] or the host's key store).
     pub prekey: &'a PrekeyInfo,
-    /// Whether the responder is known to cache the prekey, so the short Initial can be tried first.
+    /// Whether the responder is known to cache the prekey and the host judges a short Initial usable now, so it can
+    /// be tried first. It also leaves short resends allowed until the host says otherwise
+    /// ([`Initiator::set_short_until`]).
     pub peer_has_prekey: bool,
     /// A ticket for this peer and ALPN to resume with, if one is held.
     pub ticket: Option<Ticket>,
@@ -69,7 +73,7 @@ pub struct InitiatorParams<'a> {
 }
 
 enum State {
-    /// Waiting for the Reply (or a prekey reject, while `short`).
+    /// Waiting for the Reply (or a prekey reject, while `short`: the short Initial is still in use).
     Reply {
         short: bool,
         echo: [u8; 16],
@@ -136,6 +140,8 @@ pub struct Initiator {
     /// The transcript as it was before the Reply that is waiting to be opened.
     back_th: Transcript,
     sends: u32,
+    /// A resend may be the short Initial while the clock is below this.
+    short_until: u64,
     late: Option<Late>,
     out: Outbox,
     inbuf: [u8; MAX_MESSAGE_LEN],
@@ -174,6 +180,8 @@ impl Initiator {
             th: Transcript::new(),
             back_th: Transcript::new(),
             sends: 0,
+            // The host that knew the peer caches the prekey judged a short Initial fine when it dialed.
+            short_until: if params.peer_has_prekey { u64::MAX } else { 0 },
             late: None,
             out: Outbox::new(),
             inbuf: [0; MAX_MESSAGE_LEN],
@@ -241,8 +249,19 @@ impl Initiator {
         result.map(|()| true)
     }
 
-    /// The host's loss timer fired: queue the outstanding flight again. While a short Initial is outstanding, the
-    /// sends 3, 6, 9 and so on carry the full prekey. A resume Hello that reaches [`RESUME_TRIES`] sends is not sent
+    /// Allow short Initials in resends while `env.now` is below `until`: the host heard a validated UDP path lately,
+    /// so a lost reject costs one round trip, not a carrier's. Resends are full Initials once the time has passed.
+    pub const fn set_short_until(&mut self, until: u64) {
+        self.short_until = until;
+    }
+
+    fn short_ok(&self, now: u64) -> bool {
+        now < self.short_until
+    }
+
+    /// The host's loss timer fired: queue the outstanding flight again. A resent Initial is the short one while the
+    /// host allows it ([`Initiator::set_short_until`]), whichever form the first send had, except on the sends 3, 6, 9
+    /// and so on, which carry the full prekey. A resume Hello that reaches [`RESUME_TRIES`] sends is not sent
     /// again: a full Initial under the same destination id takes its place, and a late resume Reply still completes
     /// the resumed session. Once the Finish has gone out it is queued again until [`Initiator::shed`].
     ///
@@ -252,7 +271,7 @@ impl Initiator {
         let result = match self.state {
             State::Reply { short: true, .. } => {
                 self.sends = self.sends.saturating_add(1);
-                self.write_initial(self.sends.is_multiple_of(FULL_EVERY))
+                self.write_initial(self.sends.is_multiple_of(FULL_EVERY) || !self.short_ok(env.now))
             }
             State::Resume { .. } => {
                 self.sends = self.sends.saturating_add(1);
@@ -350,7 +369,7 @@ impl Initiator {
         self.sends = 1;
         self.write_initial(!short)?;
         self.state = State::Reply {
-            short,
+            short: true,
             echo: echo(&self.th.snapshot()),
         };
         Ok(())

@@ -2,8 +2,8 @@
 //!
 //! The endpoint recycles a connection's memory ([`Connection::into_resources`]), answers key requests it was told
 //! about ([`Connection::pending_key_request`]), feeds the node-wide round trips back ([`Connection::set_node_rtt`]),
-//! moves the first resend of a dial ([`Connection::set_first_retransmit`]), defers the first path MTU probe
-//! ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
+//! moves the first resend of a dial ([`Connection::set_first_retransmit`]), allows short Initials in its resends
+//! ([`Connection::set_short_until`]), defers the first path MTU probe ([`Connection::defer_mtu_probe`]), sends the handshake flight on several candidate paths
 //! ([`Connection::set_flight_fanout`], and [`Connection::set_flight_skip_primary`] to leave the active path out),
 //! starts a sub-session ([`Connection::sub_session`]) and starts one whose parent is still in its handshake
 //! ([`Connection::sub_pending`], opened by [`Connection::activate_sub`]).
@@ -109,6 +109,12 @@ conn_impl! {
         }
         self.cfg.thin = thin;
         self.hs.set_node_timing(thin, self.cfg.node_rtt, self.cfg.node_peak_rtt);
+    }
+
+    /// Allow the short prekey Initial in the resends of a dialing handshake while the clock is below `until`: the node
+    /// heard a validated UDP path lately. A connection never told has the allowance its dial began with.
+    pub fn set_short_until(&mut self, until: u64) {
+        self.hs.set_short_until(until);
     }
 
     /// When the relay carrier of the active path last heard anything, or `None` when that carrier is not open. A

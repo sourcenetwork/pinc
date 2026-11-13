@@ -383,6 +383,12 @@ ep_impl! {
         }
     }
 
+    /// Until when a short Initial may be sent: a validated UDP path was heard within [`UDP_FRESH`] before (0: never).
+    /// The one place that decides, for the first flight of a dial and for every resend of it.
+    pub(crate) fn short_until(&self) -> u64 {
+        self.udp_heard.map_or(0, |t| t.saturating_add(UDP_FRESH))
+    }
+
     /// The local address of the first interface that can reach `remote`.
     fn route_for(&self, remote: &SocketAddr) -> Option<SocketAddr> {
         self.ifaces.iter().flatten().find(|l| l.is_ipv4() == remote.is_ipv4()).copied()
@@ -419,8 +425,8 @@ ep_impl! {
         let pid = self.path_id(local, first);
         let ticket = self.tickets.take(&node, alpn, now);
         let resume = ticket.is_some();
-        let short_ok = self.udp_heard.is_some_and(|t| now.saturating_sub(t) < UDP_FRESH);
-        let peer_has_prekey = short_ok && self.ekk.get(&node) == Some(prekey.hash());
+        let short_until = self.short_until();
+        let peer_has_prekey = now < short_until && self.ekk.get(&node) == Some(prekey.hash());
         self.t_first.get_or_insert(now);
         let late = self.t_first.is_some_and(|t| t.saturating_sub(self.started) > LATE_START);
         let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
@@ -447,6 +453,7 @@ ep_impl! {
                 return Err(CommandError::Failure(e));
             }
         };
+        conn.set_short_until(short_until);
         for a in addrs {
             self.ledger.open(*a);
         }

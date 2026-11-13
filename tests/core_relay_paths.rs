@@ -1,9 +1,14 @@
 //! Sessions on relay and direct paths at the endpoint: a session whose relay path stops answering while the relay's
-//! carrier still does is closed, and the re-join challenges of a thin node's sessions to one address are spaced.
+//! carrier still does is closed, the re-join challenges of a thin node's sessions to one address are spaced, and a
+//! datagram heard on a relay path does not count as UDP heard for the short Initial.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+
+#[path = "core_timing_common.rs"]
+mod common;
 
 use std::net::SocketAddr;
 
+use common::{dial, flights};
 use vinc_core::{Command, Event, PathState, Role, SessionId, Value, relay_addr};
 use vinc_tests::*;
 
@@ -142,5 +147,33 @@ fn a_session_whose_relay_path_stops_answering_behind_an_answering_carrier_is_clo
             closed.is_some_and(|c| natural.is_none_or(|n| c + SEC_NS < n)),
             "{closed:?} {natural:?}"
         );
+    });
+}
+
+#[test]
+fn a_datagram_heard_on_a_relay_path_does_not_allow_the_short_initial() {
+    big_stack(|| {
+        // Node 0 reaches node 1 through a relay path only: no validated direct UDP path was ever heard, so the dial of
+        // a peer and every resend of it carry the full Initial.
+        let mut net = CoreNet::new(10 * MS);
+        net.capture = true;
+        let (a, b, c) = (net.add(1), net.add(2), net.add(3));
+        let via = relay_addr(false, 3, 7);
+        net.nodes[b].extra.push(via);
+        let (peer, now) = (net.nodes[b].node, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, via, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        assert!(net.run(now + 10 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Connected { .. }))
+        }));
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+        net.run_for(SEC_NS);
+        let to_c = net.nodes[c].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == to_c));
+        let marker = net.captured.len();
+        dial(&mut net, a, c, ALPN_A, Role::Other);
+        net.run_for(16 * SEC_NS);
+        assert_eq!(flights(&net, marker, a, c), [1, 1, 1, 1, 1, 1]);
     });
 }

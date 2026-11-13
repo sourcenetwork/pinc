@@ -43,6 +43,16 @@ pub fn message_type(d: &[u8]) -> Option<u8> {
     r.read_u8().ok()
 }
 
+/// The handshake message types node `from` sent to node `to` after the first `marker` captured datagrams, in order.
+pub fn flights(net: &CoreNet, marker: usize, from: usize, to: usize) -> Vec<u8> {
+    let (src, dst) = (net.nodes[from].addr, net.nodes[to].addr);
+    net.captured[marker..]
+        .iter()
+        .filter(|(f, t, d)| *f == src && *t == dst && d[0] & 0x80 != 0)
+        .filter_map(|(_, _, d)| message_type(d))
+        .collect()
+}
+
 pub fn dial(net: &mut CoreNet, a: usize, b: usize, alpn: &[u8], role: Role) -> SessionId {
     let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
     let rep = net.nodes[a].connect(now, peer, alpn, to, role).unwrap();
