@@ -21,6 +21,11 @@ pub const LOG_CAP: usize = 2048;
 pub const SEEN_TTL: Nanos = 600 * S;
 /// The most message ids one topic remembers; a message that would exceed it is not delivered.
 pub const SEEN_CAP: usize = 8192;
+// An id the log evicts must still be in the dedupe set afterwards, so that a late copy is a duplicate. One store can
+// evict the whole log, and the inserts of that step drop the oldest records of a full set: the set must hold at least
+// twice what the log holds (`BroadcastNode.evictedSeen` in the proofs; `BroadcastNode_evictCap.cfg` is the
+// counterexample below that).
+const _: () = assert!(SEEN_CAP >= 2 * LOG_CAP);
 /// Hubs tell each other the ids of their log this often.
 pub const HUB_AE: Nanos = 5 * S;
 /// The hub-to-hub id exchange covers messages logged between this long ago...
