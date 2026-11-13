@@ -330,6 +330,7 @@ fn vinc_carries_a_bundle_to_a_node_that_comes_online_after_its_source_left() {
                 max_sends: 8,
                 dir: None,
                 tamper_slices: false,
+                tamper_one_slice: false,
                 tamper_heads: false,
             });
         }

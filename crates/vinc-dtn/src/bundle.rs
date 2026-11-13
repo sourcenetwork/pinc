@@ -22,6 +22,7 @@ use vinc_dag::tree::{Layout, RangeVerifier, TreeError, build_outboard, encode_ra
 
 use crate::error::DtnError;
 use crate::head::{Erasure, Head, SignedHead};
+use crate::held::HeldSet;
 use crate::hlc::Hlc;
 use crate::layout::SliceLayout;
 use crate::rs::{MAX_SYMBOLS, Rs};
@@ -201,25 +202,51 @@ fn verify_stream(
 
 /// The receiving side of one bundle: verified symbols in a caller-owned buffer, and which ones are held.
 ///
-/// `W` bounds the number of disjoint held intervals; an arrival that would need more is refused with
-/// [`DtnError::ReceptionFull`] (the symbol is simply fetched again later).
+/// `H` is the held set ([`HeldSet`]): a [`crate::held::BlockHeld`] is sized from the layout and never refuses a symbol;
+/// a [`VerifiedRanges`] (the [`Reception`] alias) holds at most its cap of disjoint intervals, and an arrival that
+/// would need more is refused with [`DtnError::ReceptionFull`] (the symbol is simply fetched again later).
 #[derive(Debug)]
-pub struct Reception<'a, const W: usize> {
+pub struct Receiving<'a, H> {
     head: Head,
     layout: SliceLayout,
     buf: &'a mut [u8],
-    have: VerifiedRanges<W>,
+    have: H,
 }
 
-impl<'a, const W: usize> Reception<'a, W> {
+/// A reception that records its held symbols in at most `W` disjoint intervals.
+pub type Reception<'a, const W: usize> = Receiving<'a, VerifiedRanges<W>>;
+
+impl<'a, const W: usize> Receiving<'a, VerifiedRanges<W>> {
     /// Start receiving a bundle into `buf`, which must be exactly [`SliceLayout::total_len`] bytes.
     ///
     /// # Errors
-    /// As [`Reception::resume`].
+    /// As [`Receiving::resume`].
     pub fn new(signed: &SignedHead, buf: &'a mut [u8], now: u64) -> Result<Self, DtnError> {
         Self::resume(signed, buf, VerifiedRanges::new(), now)
     }
 
+    /// The first run of unheld symbols at or after symbol `from`, as symbol indices: what to ask for next.
+    pub fn next_missing(&self, from: u64) -> Option<Range<u64>> {
+        let g = self.layout.slice_len();
+        let total = self.layout.total_len();
+        let mut at = from.saturating_mul(g);
+        for iv in self.have.iter() {
+            if iv.end <= at {
+                continue;
+            }
+            if iv.start > at {
+                return Some(at / g..iv.start.min(total) / g);
+            }
+            at = iv.end;
+        }
+        (at < total).then(|| at / g..total / g)
+    }
+}
+
+impl<'a, H> Receiving<'a, H>
+where
+    H: HeldSet,
+{
     /// Continue a reception from state the caller kept: the same buffer and the held-range set it had. The caller
     /// vouches that `buf` holds the verified bytes of every interval in `have` (it got them from a previous
     /// reception of this same bundle).
@@ -227,7 +254,7 @@ impl<'a, const W: usize> Reception<'a, W> {
     /// # Errors
     /// [`DtnError::Crypto`] if the head's signature does not verify; [`DtnError::Expired`] if it is expired at
     /// `now`; [`DtnError::Params`] for an invalid head; [`DtnError::Buffer`] if `buf` is the wrong size.
-    pub fn resume(signed: &SignedHead, buf: &'a mut [u8], have: VerifiedRanges<W>, now: u64) -> Result<Self, DtnError> {
+    pub fn resume(signed: &SignedHead, buf: &'a mut [u8], have: H, now: u64) -> Result<Self, DtnError> {
         signed.verify()?;
         let head = *signed.head();
         if head.is_expired(now) {
@@ -255,8 +282,8 @@ impl<'a, const W: usize> Reception<'a, W> {
         &self.layout
     }
 
-    /// The held byte ranges, to keep for a later [`Reception::resume`].
-    pub const fn have(&self) -> &VerifiedRanges<W> {
+    /// The held byte ranges, to keep for a later [`Receiving::resume`].
+    pub const fn have(&self) -> &H {
         &self.have
     }
 
@@ -299,29 +326,12 @@ impl<'a, const W: usize> Reception<'a, W> {
         s < self.layout.total_symbols() && self.have.contains_range(s * g..(s + 1) * g)
     }
 
-    /// The first run of unheld symbols at or after symbol `from`, as symbol indices: what to ask for next.
-    pub fn next_missing(&self, from: u64) -> Option<Range<u64>> {
-        let g = self.layout.slice_len();
-        let total = self.layout.total_len();
-        let mut at = from.saturating_mul(g);
-        for iv in self.have.iter() {
-            if iv.end <= at {
-                continue;
-            }
-            if iv.start > at {
-                return Some(at / g..iv.start.min(total) / g);
-            }
-            at = iv.end;
-        }
-        (at < total).then(|| at / g..total / g)
-    }
-
     /// Whether every symbol is held.
     pub fn is_complete(&self) -> bool {
         self.have.contains_range(0..self.layout.total_len())
     }
 
-    /// Whether every block holds at least `k` of its symbols, so [`Reception::finish`] can succeed.
+    /// Whether every block holds at least `k` of its symbols, so [`Receiving::finish`] can succeed.
     pub fn is_decodable(&self) -> bool {
         (0..self.layout.blocks()).all(|b| {
             let start = self.layout.block_start(b);
@@ -332,7 +342,7 @@ impl<'a, const W: usize> Reception<'a, W> {
         })
     }
 
-    /// The size of the scratch buffer [`Reception::finish`] needs: one erasure block of symbols, the largest one.
+    /// The size of the scratch buffer [`Receiving::finish`] needs: one erasure block of symbols, the largest one.
     ///
     /// # Errors
     /// [`DtnError::Buffer`] if the size does not fit `usize`.
@@ -346,7 +356,7 @@ impl<'a, const W: usize> Reception<'a, W> {
     /// [`SliceLayout::outboard_len`] bytes) and check the result against the signed root. Afterwards the buffer is
     /// the complete sealed bundle: it can be served and opened.
     ///
-    /// Each block is reconstructed in `scratch` (exactly [`Reception::scratch_len`] bytes), and only the symbols
+    /// Each block is reconstructed in `scratch` (exactly [`Receiving::scratch_len`] bytes), and only the symbols
     /// that are not held are copied back, so a held symbol is never written over, even when the check fails.
     ///
     /// # Errors
@@ -389,7 +399,7 @@ impl<'a, const W: usize> Reception<'a, W> {
             .map_err(|_| DtnError::ReceptionFull)
     }
 
-    /// The sealed bundle bytes; every symbol is valid once [`Reception::is_complete`].
+    /// The sealed bundle bytes; every symbol is valid once [`Receiving::is_complete`].
     pub const fn sealed(&self) -> &[u8] {
         &*self.buf
     }

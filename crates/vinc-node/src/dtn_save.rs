@@ -2,15 +2,21 @@
 //!
 //! The host keeps complete bundles in its store; the node adds one small record per bundle it looks after, through
 //! [`DtnApp::save_record`](crate::DtnApp::save_record): a held bundle (its signed head, the copies this node still
-//! holds, and whether custody is owed to a previous holder), a partial bundle (its head, the symbols verified so far
-//! and where the next ask starts) or the memory that a bundle was delivered here. [`Node::dtn_restore`] reads them
+//! holds, and whether custody is owed to a previous holder), a partial bundle (its head, then the runs of verified
+//! symbols, each with its bytes) or the memory that a bundle was delivered here. [`Node::dtn_restore`] reads them
 //! back after a restart and rebuilds the forwarder, the ledger and the custody book from them.
 //!
+//! A partial bundle's record is written once with its head and grows by
+//! [`DtnApp::append_record`](crate::DtnApp::append_record): every [`SAVE_BYTES`] (256 KiB) of verified bytes, when
+//! a transfer of it is refused and when its session ends, the runs verified since the last save are appended, so a reception writes each byte once
+//! and a crash loses at most the symbols since then, which the holder sends again. A run carries no count, so a
+//! record holds any number of them.
+//!
 //! Invariants: a record is written only for state the node holds; a record that cannot be read back whole is dropped,
-//! never half applied; the ledger is charged for every restored bundle before it is held, so a restart never lets the
-//! node hold more than its budget; the copies restored are those the node held when it last wrote the record, so a
-//! copy handed on before a crash is not counted twice. A partial bundle is saved every [`SAVE_BYTES`] (256 KiB) of verified bytes
-//! and when its session ends, so a crash loses at most the symbols since then, which the holder sends again.
+//! never half applied, except that a partial record's torn last run (a crash during an append) is left out and the
+//! runs before it kept; the ledger is charged for every restored bundle before it is held, so a restart never lets
+//! the node hold more than its budget; the copies restored are those the node held when it last wrote the record, so
+//! a copy handed on before a crash is not counted twice.
 
 #![allow(
     clippy::many_single_char_names,
@@ -20,20 +26,20 @@
 use alloc::vec::Vec;
 
 use vinc_crypto::{IdentityAlg, NodeId as FullId};
-use vinc_dag::ranges::VerifiedRanges;
 use vinc_dtn::custody::Incoming;
 use vinc_dtn::forward::{Held, Input};
 use vinc_dtn::head::{BundleId, SignedHead};
+use vinc_dtn::held::HeldSet;
 use vinc_dtn::store::{Class, Key, Space};
 
 use crate::apps::{Apps, DtnApp, ServeSource};
 use crate::config::{Nanos, Store};
-use crate::dtn::{Dtn, Partial};
+use crate::dtn::{Partial, no_symbols, partial_charge};
 use crate::ep::Ep;
 use crate::node::Node;
 
 /// The version of the record format.
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const HELD: u8 = 0;
 const PARTIAL: u8 = 1;
 const RECEIVED: u8 = 2;
@@ -139,40 +145,40 @@ where
         self.apps.dtn().save_record(id, &rec);
     }
 
-    /// Write the record of a partial bundle: its head, the cursor and the verified symbols.
+    /// Save the runs of a partial bundle verified since its last save: the first save writes the record with the
+    /// head, every later one appends.
     pub(crate) fn dtn_save_partial(&mut self, id: &BundleId) {
         let Some(d) = self.dtn.as_deref_mut() else {
             return;
         };
-        let Some(p) = d.partials.get(id) else {
+        let Some(p) = d.partials.get_mut(id).filter(|p| !p.unsaved.is_empty()) else {
             return;
         };
-        let ranges: Vec<core::ops::Range<u64>> = p.have.iter().collect();
-        let Ok(n) = u16::try_from(ranges.len()) else {
-            return;
-        };
-        let mut rec =
-            Vec::with_capacity(usize::try_from(p.have.covered_len()).unwrap_or(0) + 64 + p.signed.encoded_len());
-        rec.extend_from_slice(&[VERSION, PARTIAL]);
-        if !put_head(&mut rec, &p.signed) {
-            return;
+        let runs = p.unsaved.len() * 16;
+        let mut rec = Vec::with_capacity(usize::try_from(p.unsaved_bytes).unwrap_or(0) + runs + 64);
+        if !p.recorded {
+            rec.extend_from_slice(&[VERSION, PARTIAL]);
+            if !put_head(&mut rec, &p.signed) {
+                return;
+            }
         }
-        rec.extend_from_slice(&p.cursor.to_be_bytes());
-        rec.extend_from_slice(&n.to_be_bytes());
-        for r in &ranges {
-            rec.extend_from_slice(&r.start.to_be_bytes());
-            rec.extend_from_slice(&r.end.to_be_bytes());
-        }
-        for r in &ranges {
+        for r in &p.unsaved {
             let (Ok(a), Ok(b)) = (usize::try_from(r.start), usize::try_from(r.end)) else {
                 return;
             };
             let Some(bytes) = p.sealed.get(a..b) else { return };
+            rec.extend_from_slice(&r.start.to_be_bytes());
+            rec.extend_from_slice(&r.end.to_be_bytes());
             rec.extend_from_slice(bytes);
         }
-        let covered = p.have.covered_len();
-        d.saved.insert(*id, covered);
-        self.apps.dtn().save_record(id, &rec);
+        p.unsaved.clear();
+        p.unsaved_bytes = 0;
+        if p.recorded {
+            self.apps.dtn().append_record(id, &rec);
+        } else {
+            p.recorded = true;
+            self.apps.dtn().save_record(id, &rec);
+        }
     }
 
     /// Save every partial bundle that has grown since its last record.
@@ -183,7 +189,7 @@ where
             .map(|d| {
                 d.partials
                     .iter()
-                    .filter(|(id, p)| p.have.covered_len() > d.saved.get(id).copied().unwrap_or(0))
+                    .filter(|(_, p)| !p.unsaved.is_empty())
                     .map(|(id, _)| *id)
                     .collect()
             })
@@ -293,8 +299,6 @@ where
             PARTIAL => {
                 let signed = take_head(&mut c)?;
                 let h = *signed.head();
-                let cursor = c.u64()?;
-                let count = usize::from(c.u16()?);
                 if h.id != *id || h.is_expired(wall) {
                     return None;
                 }
@@ -302,47 +306,37 @@ where
                 let total = layout.total_len();
                 let sealed_len = usize::try_from(total).ok()?;
                 let outboard_len = usize::try_from(layout.outboard_len().ok()?).ok()?;
-                let mut ranges = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let (a, b) = (c.u64()?, c.u64()?);
-                    if a >= b || b > total {
-                        return None;
-                    }
-                    ranges.push(a..b);
-                }
-                let mut sealed = alloc::vec![0u8; sealed_len];
-                let mut have = VerifiedRanges::new();
-                for r in &ranges {
-                    let bytes = c.take(usize::try_from(r.end - r.start).ok()?)?;
-                    sealed
-                        .get_mut(usize::try_from(r.start).ok()?..usize::try_from(r.end).ok()?)?
-                        .copy_from_slice(bytes);
-                    have.insert(r.clone()).ok()?;
-                }
+                // Charged before any buffer of it exists, as on an offer.
                 let mut evicted: Vec<Key> = Vec::new();
-                let admitted = d
-                    .led
-                    .admit(id.store_key(), total, Class::Transit, h.expires_at(), wall, |e| {
+                let admitted = d.led.admit(
+                    id.store_key(),
+                    partial_charge(&layout)?,
+                    Class::Transit,
+                    h.expires_at(),
+                    wall,
+                    |e| {
                         evicted.push(e.key);
-                    });
+                    },
+                );
                 let app = self.apps.dtn();
                 for k in evicted.iter().filter(|k| k.space == Space::DTN) {
                     d.forget(app, wall, &BundleId(k.id));
                 }
                 admitted.ok()?;
-                let covered = have.covered_len();
-                d.partials.insert(
-                    *id,
-                    Partial {
-                        signed,
-                        sealed,
-                        outboard: alloc::vec![0; outboard_len],
-                        have,
-                        cursor,
-                    },
-                );
-                d.saved.insert(*id, covered);
+                let runs = take_runs(&mut c, total, sealed_len, &layout);
+                let Some((sealed, have)) = runs else {
+                    let _ = d.led.release(&id.store_key());
+                    return None;
+                };
+                let outboard = alloc::vec![0; outboard_len];
+                d.partials
+                    .insert(*id, Partial::new(signed, sealed, outboard, have, true));
                 out.partial += 1;
+                // A torn run is cut off the host's record, so the next append follows a whole run.
+                if !c.0.is_empty() {
+                    let whole = rec.get(..rec.len() - c.0.len())?;
+                    self.apps.dtn().save_record(id, whole);
+                }
             }
             _ => return None,
         }
@@ -350,9 +344,33 @@ where
     }
 }
 
-impl Dtn {
-    /// Forget the saved-progress mark of a bundle.
-    pub(crate) fn unmark(&mut self, id: &BundleId) {
-        self.saved.remove(id);
+/// The runs of a partial record into a buffer of `sealed_len` bytes and its held set. A run cut short at the end (a
+/// crash during an append) is left out; any other bad run drops the record.
+fn take_runs(
+    c: &mut Cur<'_>,
+    total: u64,
+    sealed_len: usize,
+    layout: &vinc_dtn::layout::SliceLayout,
+) -> Option<(Vec<u8>, crate::dtn::Symbols)> {
+    let mut sealed = alloc::vec![0u8; sealed_len];
+    let mut have = no_symbols(layout)?;
+    while !c.0.is_empty() {
+        let at = c.0;
+        let (Some(a), Some(b)) = (c.u64(), c.u64()) else {
+            c.0 = at;
+            break;
+        };
+        if a >= b || b > total {
+            return None;
+        }
+        let Some(bytes) = c.take(usize::try_from(b - a).ok()?) else {
+            c.0 = at;
+            break;
+        };
+        sealed
+            .get_mut(usize::try_from(a).ok()?..usize::try_from(b).ok()?)?
+            .copy_from_slice(bytes);
+        have.insert(a..b).ok()?;
     }
+    Some((sealed, have))
 }

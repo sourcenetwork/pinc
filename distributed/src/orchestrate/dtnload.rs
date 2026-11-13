@@ -100,6 +100,7 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Dtn, size: u64, rep: u32,
                 .filter(|o| o.persist)
                 .map(|_| format!("/tmp/vinc-dtn/{nonce}/{}", n.name)),
             tamper_slices: own.is_some_and(|o| o.tamper_slices),
+            tamper_one_slice: own.is_some_and(|o| o.tamper_one_slice),
             tamper_heads: own.is_some_and(|o| o.tamper_heads),
         })
     });

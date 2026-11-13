@@ -1,11 +1,9 @@
-//! A bundle that overflows a receiver's verified-range set is refused as "too fragmented", not as a bad proof.
+//! A bundle of more erasure blocks than any interval cap is received, and refused by no one.
 //!
-//! The reception keeps at most `INTERVALS = 64` disjoint verified ranges. Reed-Solomon parity sits between the data
-//! of consecutive erasure blocks, so a data-only reception records one range per block; a bundle of more than 64
-//! blocks overflows the set. With `k = 1` every data slice is its own block, so a 300-slice payload makes 300 blocks
-//! on a tiny bundle, well past the cap, so it stays an overflow even if the cap is later raised. The receiver must
-//! refuse it with the `Fragmented` reason (wire code 9), never `BadProof` (4): the data is honest, and a holder that
-//! reads "bad proof" has reason to distrust a copy that is actually fine.
+//! Reed-Solomon parity sits between the data of consecutive erasure blocks, so a data-only reception holds one
+//! disjoint run per block. With `k = 1` every data slice is its own block, so a 300-slice payload makes 300 blocks
+//! on a tiny bundle. The reception counts held symbols per block and has no cap on runs, so the destination receives
+//! it intact and nobody records a refusal; a reception capped at 256 disjoint ranges would overflow on it.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -17,17 +15,13 @@
 mod layers_common;
 
 use layers_common::{LWorld, big, secs};
-use vinc_node::{Body, DtnPlan, Enabled, NodeTrace};
+use vinc_node::{Body, DtnPlan, Enabled, NodeEvent, NodeTrace};
 use vinc_tests::{LayerApps, NCmd, SplitMix64};
 
-/// The wire code of a `Fragmented` refusal, and of a `BadProof` refusal, as `dtn_wire::Refusal` numbers them.
-const FRAGMENTED: u64 = 9;
-const BAD_PROOF: u64 = 4;
-
 #[test]
-fn a_bundle_of_too_many_blocks_is_refused_as_fragmented_not_a_bad_proof() {
+fn a_bundle_of_three_hundred_blocks_is_received_and_refused_by_no_one() {
     big(|| {
-        // One hub and two members with delay-tolerant delivery on; traces kept so the refusal reason is readable.
+        // One hub and two members with delay-tolerant delivery on; traces kept so a refusal would be readable.
         let mut w = LWorld::build_with(77, 1, 2, 0, true, |tag| {
             LayerApps::new(
                 tag,
@@ -39,10 +33,10 @@ fn a_bundle_of_too_many_blocks_is_refused_as_fragmented_not_a_bad_proof() {
         });
         let (src, dst) = (w.members[0], w.members[1]);
         let keys = w.apps(dst).dtn.keys();
-        // 300 data slices at k = 1 is 300 erasure blocks, well past the 64-range cap (and past a raised 256). slice_log
-        // 0: 1008 plain bytes a slice, so the payload is still tiny.
+        // 300 data slices at k = 1 is 300 erasure blocks. slice_log 0: 1008 plain bytes a slice, a tiny payload.
         let mut payload = vec![0u8; 300 * 1008];
         SplitMix64::new(1).fill(&mut payload);
+        let expected = payload.clone();
         w.sim.command(
             secs(2),
             src,
@@ -60,8 +54,19 @@ fn a_bundle_of_too_many_blocks_is_refused_as_fragmented_not_a_bad_proof() {
         );
         w.run(secs(40));
 
-        // The refusal reasons the two nodes recorded (the receiver when it refuses, the holder when it reads the
-        // REFUSE frame).
+        let got: Vec<Vec<u8>> = w
+            .node_events(dst)
+            .into_iter()
+            .filter_map(|(_, e)| match e {
+                NodeEvent::DtnReceived { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![expected],
+            "a 300-block bundle must be received once and intact"
+        );
         let reasons: Vec<u64> = [src, dst]
             .into_iter()
             .flat_map(|n| w.sim.node(n).traces.clone())
@@ -70,14 +75,9 @@ fn a_bundle_of_too_many_blocks_is_refused_as_fragmented_not_a_bad_proof() {
                 _ => None,
             })
             .collect();
-
         assert!(
-            reasons.contains(&FRAGMENTED),
-            "an overflowing reception must refuse as Fragmented ({FRAGMENTED}); saw {reasons:?}"
-        );
-        assert!(
-            !reasons.contains(&BAD_PROOF),
-            "an honest bundle must never be refused as a bad proof ({BAD_PROOF}); saw {reasons:?}"
+            reasons.is_empty(),
+            "an honest bundle is refused by no one; saw {reasons:?}"
         );
     });
 }

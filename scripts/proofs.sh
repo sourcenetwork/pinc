@@ -270,6 +270,16 @@ par run_tlc_deep dtnlayout DtnLayout DtnLayout
 par run_tlc_deep dtncodec DtnCodec DtnCodec
 par run_tlc dtnreception DtnReception DtnReception
 par run_tlc dtnreception_w3 DtnReception DtnReception_w3
+par run_tlc dtnreception_blocks DtnReception DtnReception_blocks
+par run_tlc dtnrequest DtnRequest DtnRequest
+par run_tlc dtnrequest_none DtnRequest DtnRequest_none
+par run_tlc dtnrequest_two DtnRequest DtnRequest_two
+par run_tlc dtnrequest_allbad DtnRequest DtnRequest_allbad
+par witness_live_tlc dtnrequest_nomark DtnRequest DtnRequest_nomark
+par witness_tlc dtnrequest_parityfirst DtnRequest DtnRequest_parityfirst NoParityWithoutLoss
+par witness_tlc dtnrequest_noneed DtnRequest DtnRequest_noneed AskWithinNeed
+par witness_tlc dtnrequest_shared DtnRequest DtnRequest_shared HonestNotRefused
+par witness_tlc dtnrequest_nostuck DtnRequest DtnRequest_nostuck ActiveReachable
 par run_tlc_deep dtnclock DtnClock DtnClock
 par run_tlc dtnseal DtnSeal DtnSeal
 par run_tlc dtnseal_decap DtnSeal DtnSeal_decap

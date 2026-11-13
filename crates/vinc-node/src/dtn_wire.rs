@@ -45,19 +45,14 @@ pub(crate) enum Refusal {
     NoSigner = 7,
     /// A table of this node is full.
     Busy = 8,
-    /// The reception holds as many disjoint verified ranges as it can and cannot record another: the bundle is too
-    /// fragmented for this node to receive, not tampered with. The holder may offer it to another node.
-    Fragmented = 9,
 }
 
 impl Refusal {
-    /// The refusal that reports a feed or reception error to the holder. A full range set is [`Refusal::Fragmented`],
-    /// an expired bundle is [`Refusal::Expired`], and anything else is a failed proof. The distinction matters: a
-    /// holder must not read "too fragmented here" as "you sent bad data" and stop offering.
+    /// The refusal that reports a feed error other than a failed proof (which costs only the symbol) to the holder:
+    /// an expired bundle is [`Refusal::Expired`], anything else is [`Refusal::BadProof`].
     pub(crate) fn for_feed(e: vinc_dtn::DtnError) -> Self {
         match e {
             vinc_dtn::DtnError::Expired => Self::Expired,
-            vinc_dtn::DtnError::ReceptionFull => Self::Fragmented,
             _ => Self::BadProof,
         }
     }
@@ -130,24 +125,5 @@ mod tests {
         let mut out = alloc::vec![DATA];
         out.extend_from_slice(&u32::try_from(BODY_MAX + 1).unwrap_or(u32::MAX).to_be_bytes());
         assert_eq!(next(&out), Err(()));
-    }
-
-    #[test]
-    fn a_full_range_set_is_fragmented_not_a_bad_proof() {
-        // An honest bundle that overflows the reception's range set is Fragmented, never BadProof: the holder must
-        // not read "too fragmented here" as "you sent bad data". Expired stays Expired; every other feed error is a
-        // bad proof.
-        assert_eq!(
-            Refusal::for_feed(vinc_dtn::DtnError::ReceptionFull),
-            Refusal::Fragmented
-        );
-        assert_eq!(Refusal::for_feed(vinc_dtn::DtnError::Expired), Refusal::Expired);
-        assert_eq!(
-            Refusal::for_feed(vinc_dtn::DtnError::Tree(vinc_dag::tree::TreeError::Incomplete)),
-            Refusal::BadProof
-        );
-        // Three distinct wire codes, and Fragmented is new (9), not an alias of BadProof (4).
-        assert_eq!(Refusal::Fragmented as u8, 9);
-        assert_ne!(Refusal::Fragmented as u8, Refusal::BadProof as u8);
     }
 }

@@ -100,6 +100,20 @@ impl DtnLog {
                     first,
                 },
             ),
+            NodeTrace::DtnLost { bundle, peer, symbol } => (
+                bundle,
+                DtnWhat::Lost {
+                    peer: self.name(peer),
+                    symbol,
+                },
+            ),
+            NodeTrace::DtnParity { bundle, peer, symbols } => (
+                bundle,
+                DtnWhat::Parity {
+                    peer: self.name(peer),
+                    symbols,
+                },
+            ),
             NodeTrace::DtnComplete { bundle, peer } => (bundle, DtnWhat::Complete { peer: self.name(peer) }),
             NodeTrace::DtnCustody { bundle, peer } => (bundle, DtnWhat::Custody { peer: self.name(peer) }),
             NodeTrace::DtnAcked { bundle, peer, relieved } => (

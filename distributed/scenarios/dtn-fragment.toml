@@ -1,5 +1,5 @@
 name = "dtn-fragment"
-about = "A fine-sliced 1 MiB bundle is received after the reception cap is raised: cut into 4 KiB slices (slice_log 2) it makes 65 erasure blocks, so 65 disjoint verified ranges. With the reception's interval cap at 256 (raised from 64), the carrier receives it, takes custody and delivers to the phone; on master (cap 64) it overflows and is refused (see the dtn-fragment known-gap form in the base branch). VINC only."
+about = "Fine-sliced bundles of 1 MiB and 4 MiB are received whole: cut into 4 KiB slices (slice_log 2) they make 65 and 258 erasure blocks, and a data-only reception holds one disjoint run per block. The reception counts held symbols per block, with no cap on runs, so the carrier receives both, takes custody and delivers to the phone, asking for no parity since nothing is lost. Before (an interval cap of 256 runs) the 4 MiB bundle overflowed and was refused as fragmented. VINC only."
 stacks = ["vinc"]
 repetitions = 3
 
@@ -29,7 +29,7 @@ site = "home"
 
 [workload]
 kind = "dtn"
-sizes = [1048576]
+sizes = [1048576, 4194304]
 duration_s = 55
 
 [[workload.sends]]
@@ -60,3 +60,13 @@ via = "cloud"
 [[workload.checks]]
 rule = "custody"
 moves = [{ from = "laptop", to = "cloud" }]
+
+[[workload.checks]]
+rule = "parity"
+at = "cloud"
+max = 0
+
+[[workload.checks]]
+rule = "parity"
+at = "phone"
+max = 0
