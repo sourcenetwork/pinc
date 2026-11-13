@@ -795,7 +795,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             }
             self.refresh(i);
         }
-        self.stalled = self.slots.written().iter().take(self.used()).any(|s| s.recv.win.deferred);
+        self.stalled = self
+            .slots
+            .written()
+            .iter()
+            .take(self.used())
+            .any(|s| s.recv.win.deferred);
     }
 
     /// Whether the bytes `offset..offset + len` of a stream are acknowledged (an empty range asks about the end
@@ -869,7 +874,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if self.buffered >= buffer_cap {
             return None;
         }
-        let i = self.slots.written().iter().take(self.used()).position(|s| s.send.cap_cut)?;
+        let i = self
+            .slots
+            .written()
+            .iter()
+            .take(self.used())
+            .position(|s| s.send.cap_cut)?;
         if let Some(slot) = self.slots.get_mut(i) {
             slot.send.cap_cut = false;
         }
