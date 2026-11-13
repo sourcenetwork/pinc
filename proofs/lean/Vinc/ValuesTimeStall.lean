@@ -168,7 +168,7 @@ theorem stallLive_ne_zero (now lastp : Nat) (ss : List Sess) (h : stallLive now 
 /-! ## The stall block of `on_timeout` -/
 
 /-- The stall wait is spent: a frame arrived once, and no frame and no byte for `sw` (saturating). -/
-def Due (s : Fs) (now : Nat) : Prop := s.treq ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now
+def Due (s : Fs) (now : Nat) : Prop := s.lastp ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now
 
 /-- STALL_RTT applies: its wait is longer than the current one and still in the future. -/
 def RttWait (s : Fs) (now : Nat) (ss : List Sess) : Prop :=
@@ -209,7 +209,7 @@ theorem redial_iff (s : Fs) (now : Nat) (ss : List Sess) :
 /-- A redial needs `sw` of silence: the clock has reached the later of the last frame and the last byte plus the
 wait, and, if that sum does not overflow, `sw` nanoseconds really passed since both. -/
 theorem redial_only_after_silence (s : Fs) (now : Nat) (ss : List Sess) (h : (stallStep s now ss).log ≠ s.log) :
-    s.treq ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now ∧
+    s.lastp ≠ 0 ∧ sadd (stallBase s) s.sw ≤ now ∧
       (stallBase s + s.sw ≤ U64Max → s.sw ≤ now - lastProg s ∧ s.sw ≤ now - s.lastb) := by
   obtain ⟨hd, _, _⟩ := (redial_iff s now ss).1 h
   refine ⟨hd.1, hd.2, fun hov => ?_⟩

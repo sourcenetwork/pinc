@@ -26,8 +26,11 @@
 (*             mid-granule (the tail is the end of the wanted ranges);        *)
 (*  _stall, _live, _max, _dl  the wait, STALL_RTT, STALL_LIVE, clocks up   *)
 (*             to u64::MAX, the deadline;                                  *)
-(*  witnesses (TLC must violate the named property): _wfirst (a provider   *)
-(*             that never sends is redialled), _seq (the wait       *)
+(*  _first     bytes, timer calls and arming, no frame (found by NoRedialUnheard): *)
+(*             the stall rule never redials a fetch that has no granule;   *)
+(*  witnesses (TLC must violate the named property): _wredial (NeverRedialed:   *)
+(*             a skipped frame starts the stall rule, the next call redials), *)
+(*             _seq (the wait       *)
 (*             reaches 16 s), _low (the wait is not monotone), _wbuf,      *)
 (*             _wbufreal, _wtail, _wgran, _wtime, _wdone (each release     *)
 (*             cause is reachable).                                        *)
@@ -40,8 +43,9 @@
 (*   holds is ignored between calls, poll_timeout offers at most t0 +      *)
 (*   HOLD_MAX, an on_timeout at or after it leaves no held granule, a      *)
 (*   later granule is announced right after its verification;              *)
-(*  SwGe, SwLe, SwDecrease, RedialOnly: the wait stays within [4 s, cap],  *)
-(*   falls only where the code lowers it, a redial needs the wait spent;   *)
+(*  SwGe, SwLe, SwDecrease, RedialOnly, NoRedialUnheard: the wait stays within  *)
+(*   [4 s, cap], falls only where the code lowers it, a redial needs the   *)
+(*   wait spent and a frame completed (the first granule starts the rule);  *)
 (*  DeadlineAct, FailReasonAct, OneTerminal, PollDeadline: the deadline.   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
@@ -199,6 +203,8 @@ SwDecrease == [][ U!Lt(s'.sw, s.sw) =>
                     ( (kind' \in {"frame", "frames", "framesf"} /\ U!Lt(OP!ArkCap, s.sw))
                       \/ (kind' = "timeout" /\ Redialed /\ U!Lt(OP!StallCap, s.sw))
                       \/ (kind' = "timeout" /\ ~Redialed /\ OverflowDue(s)) ) ]_vars
+NeverRedialed == [][ ~Redialed ]_vars
+NoRedialUnheard == [][ Redialed => s.lastp # OP!Z ]_vars
 RedialOnly == [][ Redialed => (kind' = "timeout" /\ s.run /\ ~OP!Late(Cfg, now') /\ OP!Due(s, now')
                                /\ ~OP!RttWait(s, now', env'[1]) /\ env'[2] = OP!Z) ]_vars
 
