@@ -40,7 +40,8 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// Publish `payload` to `topic`; the topic need not be joined. With `wait`, first waits up to that long for a member of
     /// the topic this endpoint has a session with (see [`neighbors`](Self::neighbors)). A burst is held back, not
     /// dropped: while 1,024 publishes still wait for a hub to acknowledge them, the call waits until one of them is
-    /// acknowledged or given up (after 90 seconds).
+    /// acknowledged or given up (after 90 seconds). On an endpoint that is a hub the call waits while the topic's log is
+    /// full of messages its subscribers are still owed; a subscriber that takes nothing for two seconds is let go.
     ///
     /// # Errors
     /// [`crate::ErrorKind::TooLarge`] when `payload` is over [`max_message`](Self::max_message),

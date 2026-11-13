@@ -46,6 +46,7 @@ pub enum Ev {
     },
     Acked([u8; 8]),
     GaveUp([u8; 8]),
+    Room,
     Repaired {
         topic: Vec<u8>,
         mid: [u8; 8],
@@ -154,6 +155,7 @@ impl Host for NodeHost {
             },
             Event::PublishAcked { mid } => Ev::Acked(mid),
             Event::PublishGaveUp { mid } => Ev::GaveUp(mid),
+            Event::PublishRoom => Ev::Room,
             Event::GapRepaired { topic, mid } => Ev::Repaired {
                 topic: topic.to_vec(),
                 mid,

@@ -58,6 +58,8 @@ pub enum NodeEvent {
         /// The message id.
         mid: [u8; 8],
     },
+    /// On a hub: a publish of its own that was refused for want of room in the topic's log may be taken now.
+    PublishRoom,
     /// A message that a gap repair asked for arrived.
     GapRepaired {
         /// The topic.

@@ -59,7 +59,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             NodeEvent::Member(_) => self.neighbors_dirty = true,
             NodeEvent::Connect(n) => self.on_notice(&n),
             NodeEvent::Lost { count } => self.lost = self.lost.saturating_add(count),
-            NodeEvent::PublishAcked { .. } | NodeEvent::PublishGaveUp { .. } => self.wake_g(GKey::Publish),
+            NodeEvent::PublishAcked { .. } | NodeEvent::PublishGaveUp { .. } | NodeEvent::PublishRoom => {
+                self.wake_g(GKey::Publish);
+            }
             _ => {}
         }
     }
@@ -125,8 +127,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         was
     }
 
-    /// Publish `body` to `topic`, or a wait while the node tracks as many publishes as it can: room returns when a hub
-    /// acknowledges one of them or one is given up.
+    /// Publish `body` to `topic`, or a wait while the node has no room for it: as a member, while it tracks as many
+    /// publishes as it can (room returns when a hub acknowledges one or one is given up); as a hub, while the topic's
+    /// log is full of messages subscribers are still owed (the node says when to publish again).
     pub(crate) fn publish(&mut self, now: u64, topic: &[u8], body: &[u8]) -> Try<Result<MessageId>> {
         if let Err(e) = self.running() {
             return Try::Done(Err(e));

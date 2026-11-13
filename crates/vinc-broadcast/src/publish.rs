@@ -27,7 +27,7 @@ use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_membership::{Nanos, NodeId};
 
 use crate::auth;
-use crate::consts::{FALLBACK_BATCH, MAX_TOPIC, PENDING_MAX, PUB_GIVEUP, PUB_RETRY};
+use crate::consts::{FALLBACK_BATCH, MAX_TOPIC, PENDING_MAX, PUB_GIVEUP, PUB_RETRY, PUSH_STALL_MS};
 use crate::event::{PublishMode, Trace, topic_tag};
 use crate::host::{Event, Host, Lane};
 use crate::node::{Pending, Refused, Topic, Topics};
@@ -154,7 +154,12 @@ impl Topics {
             let stored =
                 Head::parse(rest).is_ok_and(|(hd, b)| self.hub_store(h, now, None, false, topic, &hd, rest, b));
             self.give_buf(data);
-            return if stored { Ok(mid) } else { Err(Refused::Backlog) };
+            if stored {
+                return Ok(mid);
+            }
+            // A subscriber that stalls can be let go once it took nothing for the stall time: ask again just after.
+            self.room_at = Some(now.saturating_add((PUSH_STALL_MS + 1) * 1_000_000));
+            return Err(Refused::Backlog);
         }
         // Behind publishes that wait for room in the hub's stream this one waits too, so the hub gets them in order.
         let (mode, handed) = if self.unsent > 0 {

@@ -489,6 +489,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 NodeEvent::Message { .. }
                 | NodeEvent::PublishAcked { .. }
                 | NodeEvent::PublishGaveUp { .. }
+                | NodeEvent::PublishRoom
                 | NodeEvent::GapRepaired { .. }
                 | NodeEvent::Fallback { .. }
                 | NodeEvent::Restored { .. }

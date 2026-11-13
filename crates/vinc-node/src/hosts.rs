@@ -207,6 +207,7 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
             },
             BcEvent::PublishAcked { mid } => NodeEvent::PublishAcked { mid },
             BcEvent::PublishGaveUp { mid } => NodeEvent::PublishGaveUp { mid },
+            BcEvent::PublishRoom => NodeEvent::PublishRoom,
             BcEvent::GapRepaired { topic, mid } => NodeEvent::GapRepaired {
                 topic: topic.to_vec(),
                 mid,

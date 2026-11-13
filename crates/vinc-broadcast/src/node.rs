@@ -239,6 +239,9 @@ pub struct Topics {
     pub(crate) pending: Vec<Pending>,
     /// How many of `pending` are [`Pending::unsent`]. While it is not zero a new publish waits behind them.
     pub(crate) unsent: usize,
+    /// Hub: a publish of its own found no room in a log; the latest instant at which the application is told to
+    /// publish again (a subscriber that stalls can be let go by then). It is told sooner when a subscriber moves on.
+    pub(crate) room_at: Option<Nanos>,
     pub(crate) acp: BTreeMap<NodeId, (bool, Nanos)>,
     pub(crate) checks: Vec<(u32, NodeId)>,
     pub(crate) next_check: u32,
@@ -329,6 +332,7 @@ impl Topics {
             topics: BTreeMap::new(),
             pending: Vec::new(),
             unsent: 0,
+            room_at: None,
             acp: BTreeMap::new(),
             checks: Vec::new(),
             next_check: 1,

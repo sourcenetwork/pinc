@@ -23,7 +23,7 @@
 use vinc_membership::{Nanos, NodeId};
 
 use crate::consts::{PUSH_OWED_MAX, PUSH_STALL_MS};
-use crate::host::{Host, Lane};
+use crate::host::{Event, Host, Lane};
 use crate::log::HubLog;
 use crate::node::Topics;
 use crate::wire::{self, Head, ty};
@@ -108,7 +108,7 @@ impl Topics {
             return;
         }
         let wall = h.wall_ms();
-        let mut still = false;
+        let (mut still, mut advanced) = (false, false);
         for (topic, st) in &mut self.topics {
             let Some(mut b) = st.behind.get(peer).copied() else {
                 continue;
@@ -139,6 +139,7 @@ impl Topics {
             };
             if b.next > from {
                 b.progress_ms = wall;
+                advanced = true;
             }
             match place {
                 Place::Keep => {
@@ -158,6 +159,16 @@ impl Topics {
         }
         if !still {
             self.lagging.remove(peer);
+        }
+        if advanced {
+            self.tell_room(h);
+        }
+    }
+
+    /// A hub whose own publish found no room in a log is told to publish again, once for each refusal.
+    pub(crate) fn tell_room<H: Host>(&mut self, h: &mut H) {
+        if self.room_at.take().is_some() {
+            h.event(Event::PublishRoom);
         }
     }
 

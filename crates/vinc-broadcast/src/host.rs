@@ -79,6 +79,10 @@ pub enum Event<'a> {
         /// The message id.
         mid: [u8; 8],
     },
+    /// On a hub: a publish of its own that was refused with [`Refused::Backlog`](crate::Refused::Backlog), because
+    /// its topic's log was full of messages subscribers were still owed, may be taken now: a subscriber that was
+    /// behind moved on, or one that stalled can be let go. The application publishes again.
+    PublishRoom,
     /// A message that a gap repair asked for arrived.
     GapRepaired {
         /// The topic.

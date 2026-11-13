@@ -284,3 +284,54 @@ fn a_publish_waits_behind_the_unsent_ones_and_one_past_the_tracked_ones_is_refus
     assert_eq!(taken, n.t.pending_len(), "every publish that was taken is tracked");
     assert_eq!(n.t.unsent_len(), taken);
 }
+
+/// A hub publishes 1 KiB bodies of its own until one is refused; how many it took.
+fn hub_publishes_until_refused(net: &mut Net) -> usize {
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.h.tick(now);
+    let mut taken = 0;
+    let refused = loop {
+        match n.t.publish(&mut n.h, now, T, &[7u8; 1024]) {
+            Ok(_) => taken += 1,
+            Err(e) => break e,
+        }
+        assert!(taken <= 4096, "no publish of the hub was ever refused");
+    };
+    assert_eq!(refused, vinc_broadcast::Refused::Backlog);
+    net.pump();
+    taken
+}
+
+fn rooms(net: &Net) -> usize {
+    net.events(0).iter().filter(|e| matches!(e, common::Ev::Room)).count()
+}
+
+/// A hub that publishes itself has no acknowledgement to wait for. When its log is full of messages a subscriber is
+/// still owed its publish is refused, and it is told when to publish again: as soon as the subscriber moved on, or
+/// once a subscriber that stalls can be let go.
+#[test]
+fn a_hub_whose_own_publish_found_no_room_is_told_when_to_publish_again() {
+    let mut net = small_log_net();
+    set_full(&mut net, 2, true);
+    let taken = hub_publishes_until_refused(&mut net);
+    assert!(taken > 40 && taken < 70, "the log took {taken} messages");
+    assert_eq!(rooms(&net), 0, "nothing changed yet");
+
+    // The subscriber's stream has room: it is sent what it was owed, and the hub is told, once.
+    set_full(&mut net, 2, false);
+    assert_eq!(net.delivered(2).len(), taken);
+    assert_eq!(rooms(&net), 1);
+    net.publish(0, T, &[8u8; 1024]);
+
+    // The subscriber stalls: the hub is refused again, and told once the stall time has passed. Its next publish
+    // lets the subscriber go and is taken.
+    set_full(&mut net, 2, true);
+    hub_publishes_until_refused(&mut net);
+    assert_eq!(rooms(&net), 1);
+    net.advance(SEC);
+    assert_eq!(rooms(&net), 1, "not before the stall time");
+    net.advance(2 * SEC);
+    assert_eq!(rooms(&net), 2);
+    net.publish(0, T, &[9u8; 1024]);
+}
