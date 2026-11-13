@@ -171,7 +171,9 @@ conn_impl! {
         }
         let dlen = dgram.len();
         let mut known = self.paths.find(path);
-        if known.is_none() && !self.client && self.paths.iter().next().is_none() {
+        // A responder in its handshake learns the address of every handshake datagram that names its ids: the dialer's
+        // flight may arrive on several paths and its last flight on one the first did not use.
+        if known.is_none() && !self.client && (self.paths.iter().next().is_none() || self.phase == Phase::Handshaking) {
             known = self.new_path_slot(path, self.learned_path(), now);
         }
         if let Some(p) = known.and_then(|i| self.paths.get_mut(i)) {

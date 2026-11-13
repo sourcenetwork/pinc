@@ -674,3 +674,21 @@ fn paths_that_never_deliver_do_not_strand_the_next_path_without_an_accepted_id()
         assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(9))));
     });
 }
+
+#[test]
+fn a_responder_in_its_handshake_learns_the_path_of_a_datagram_that_names_its_ids() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(1, Params::new(10 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        net.a.conn.set_flight_fanout(&[PathId(3)]);
+        // The flight leaves on both paths; the responder sees the second copy after the first made its session.
+        assert!(net.run(net.now + 10 * SEC, |n| n.b.conn.has_path(PathId(4))));
+    });
+}
