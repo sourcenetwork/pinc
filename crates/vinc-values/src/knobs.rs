@@ -32,7 +32,8 @@ pub const TGT0: u64 = 786_432;
 pub const TGT_MAX: u64 = 1_572_864;
 /// ARRIVAL_CURVE: the outstanding target is the provider's verified rate times this horizon, in milliseconds.
 pub const RATE_HORIZON: u64 = 1000;
-/// ARRIVAL_CURVE: the samples a provider's rate needs before it replaces [`TGT0`].
+/// ARRIVAL_CURVE: the samples a provider's rate needs before it replaces [`TGT0`], unless the provider has verified
+/// twice [`TGT0`] sooner.
 pub const RATE_WARMUP: u64 = 500 * MS;
 /// TAIL_SHRINK: a top-up takes at most a share of the queue once less than this many chunks per provider remain.
 pub const STRIPE_CHUNK: u64 = 1_048_576;

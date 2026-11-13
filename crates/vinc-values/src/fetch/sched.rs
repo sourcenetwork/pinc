@@ -56,11 +56,14 @@ impl Fetch {
         pt.1 / (now.saturating_sub(pt.0) / MS).max(1)
     }
 
-    /// The outstanding target of provider `pi` (ARRIVAL_CURVE).
+    /// The outstanding target of provider `pi` (ARRIVAL_CURVE). The rate replaces the starting target after the
+    /// warm-up, or as soon as the provider has verified twice the starting target: a fast provider keeps less than the
+    /// starting target in flight for one round trip, so holding it for the whole warm-up leaves it idle between
+    /// top-ups.
     fn target(&self, pi: usize, now: u64) -> u64 {
         let Some(p) = self.provs.get(pi) else { return TGT0 };
         match p.pt {
-            Some(pt) if now.saturating_sub(pt) >= RATE_WARMUP => {
+            Some(pt) if now.saturating_sub(pt) >= RATE_WARMUP || p.pb >= 2 * TGT0 => {
                 let ms = (now.saturating_sub(pt) / MS).max(1);
                 (MIN_TARGET_GROUPS * GROUP).max(TGT_MAX.min(p.pb.saturating_mul(RATE_HORIZON) / ms))
             }

@@ -135,6 +135,31 @@ fn arrival_curve_target_is_the_verified_rate_times_one_second_within_the_bounds(
     );
 }
 
+/// A provider that verifies twice the starting target before the warm-up is over gets its rate's target at once: at
+/// 20 kB/ms the starting target is less than what one round trip holds in flight, and the provider would idle
+/// between top-ups for the rest of the half second.
+#[test]
+fn a_fast_provider_leaves_the_starting_target_before_the_warm_up_ends() {
+    let store = PStore::random(43, 24 << 20);
+    let mut sim = Sim::new(
+        vec![ProvCfg::new(store.clone(), 20_000), ProvCfg::new(store, 20_000)],
+        ClientStore::new(),
+    );
+    sim.start();
+    sim.run_until(40 * SEC, |s| s.fetch.is_done());
+    let tops = topups(&sim);
+    let first = tops.iter().map(|t| t.0).min().unwrap();
+    let early: Vec<u64> = tops
+        .iter()
+        .filter(|t| t.0 > first + 200 * MS && t.0 < first + 450 * MS)
+        .map(|t| t.3)
+        .collect();
+    assert!(
+        !early.is_empty() && early.iter().all(|&t| t == knobs::TGT_MAX),
+        "{early:?}"
+    );
+}
+
 #[test]
 fn tail_shrink_cuts_each_top_up_to_a_share_of_what_is_left() {
     let len = 12 << 20;
