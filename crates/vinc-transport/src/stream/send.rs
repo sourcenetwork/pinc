@@ -123,6 +123,14 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             || (self.fin == Fin::Acked && self.final_size == Some(self.acked_prefix))
     }
 
+    /// Whether everything this half will send has left and nothing waits to be sent again: its end or its reset was
+    /// sent, and no lost range is queued. Only the acknowledgement is still to come.
+    pub(super) fn flushed(&self) -> bool {
+        !self.open
+            || matches!(self.reset, Reset::Sent { .. } | Reset::Acked)
+            || (matches!(self.fin, Fin::Sent | Fin::Acked) && !self.wants().0)
+    }
+
     /// What the host may pace on: how far it sent, the lowest byte waiting to be sent again, and whether it is done.
     pub(super) fn view(&self) -> super::SendView {
         super::SendView {

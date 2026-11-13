@@ -22,8 +22,11 @@
 //!   already open. Streams that carry data and stay open so do not shut out new ones for the size of their windows;
 //!   what they may then send together can pass the pool, and the frame that finds no chunk is held back;
 //! - a limit, once advertised or received, never shrinks, and a final size, once fixed, never changes;
-//! - the number of live streams each side opened never exceeds its cap; an excess peer stream is stored nowhere and
-//!   its packet goes unacknowledged, so its opener retransmits it from the start once there is room;
+//! - the peer's streams that count against its limit never exceed the limit; a stream stops counting when what the
+//!   peer sent on it is whole and read and our answer has left with nothing queued to be sent again, so a request and
+//!   reply stream frees its place when the reply is sent and not a round trip later, while its slot is held until
+//!   the reply is acknowledged; an excess peer stream is stored nowhere and its packet goes unacknowledged, so its
+//!   opener retransmits it from the start once there is room;
 //! - streams are served in order of urgency, then id, so a better stream drains before a worse one gets anything;
 //! - a stream id's low bit is the initiator (0 = client) and its second bit is set for unidirectional streams.
 #![allow(

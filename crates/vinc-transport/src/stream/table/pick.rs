@@ -52,6 +52,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             });
             self.refresh(i);
             if frame.is_some() {
+                // The frame may have carried the end of our answer on a stream the peer opened.
+                self.release_limit(i);
                 return frame;
             }
             floor = Some(key);

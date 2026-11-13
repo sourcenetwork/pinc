@@ -617,6 +617,15 @@ conn_impl! {
             self.fill_streams(payload, &mut pos, &mut out);
             self.fill_datagrams(payload, &mut pos, &mut out);
         }
+        // A peer stream whose answer just left gave its place back: the credit it frees rides in the same packet, so
+        // the peer has it when it reads the answer.
+        if ring_room && self.streams.take_released() {
+            let before = pos;
+            self.fill_stream_control(payload, &mut pos, &mut out);
+            if pos != before {
+                out.last_stream = None;
+            }
+        }
         if fill.force && ring_room && !out.eliciting && put(payload, &mut pos, &Frame::Ping) {
             if ti == self.paths.active {
                 out.strong();
@@ -680,8 +689,13 @@ conn_impl! {
             }
         }
         self.fill_extensions(payload, pos, out);
+        self.fill_stream_control(payload, pos, out);
+    }
+
+    /// The streams' control frames: window and stream credit, resets and stop requests.
+    fn fill_stream_control(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled) {
         self.streams.regrant(&self.pool);
-        while out.refs.len() < MAX_FRAME_REFS && payload.len() - *pos >= MIN_ROOM {
+        while out.refs.len() < MAX_FRAME_REFS && payload.len().saturating_sub(*pos) >= MIN_ROOM {
             let Some(cf) = self.streams.pending_control() else { break };
             let Some(key) = self.ctl.track(cf) else {
                 self.streams.on_control_lost(&cf);

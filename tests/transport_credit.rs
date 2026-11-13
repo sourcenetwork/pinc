@@ -224,6 +224,141 @@ fn a_first_frame_on_the_highest_of_many_streams_opens_the_silent_ones_below_it_w
     });
 }
 
+/// A stream that carries one request and its reply frees its place when the reply has left: the credit is raised then,
+/// not a round trip later when the reply is acknowledged, and the peer's next streams are admitted while the first
+/// ones still hold their slots.
+#[test]
+fn a_peer_stream_whose_answer_has_left_no_longer_counts_against_the_limit() {
+    let (mut pool, mut t) = table(64, 4);
+    assert_eq!(t.advertised_streams(), 4, "half of the 8 slots");
+    let raise = |t: &mut Table, pool: &BufferPool<'_>| {
+        t.regrant(pool);
+        std::iter::from_fn(|| t.pending_control()).find_map(|f| match f {
+            ControlFrame::MaxStreams { limit } => Some(limit),
+            _ => None,
+        })
+    };
+    // Four requests arrive whole and are read; the replies are written and ended.
+    for id in [0u64, 4, 8, 12] {
+        t.on_stream_frame(&mut pool, id, 0, &[7; 100], true).unwrap();
+        assert_eq!(read_to_end(&mut t, &mut pool, id), 100);
+        assert_eq!(t.write(&mut pool, id, &[9; 200], u64::MAX).unwrap(), 200);
+        t.finish(id).unwrap();
+    }
+    assert_eq!(raise(&mut t, &pool), None, "no reply has left yet");
+    // The replies leave. Nothing is acknowledged.
+    let mut sent = Vec::new();
+    while let Some(c) = t.next_stream_frame(1200) {
+        let mut buf = vec![0u8; c.len];
+        t.copy_out(&pool, &c, &mut buf).unwrap();
+        sent.push(c);
+    }
+    assert_eq!(
+        raise(&mut t, &pool),
+        Some(8),
+        "four admitted, and room for four more at once"
+    );
+    assert_eq!(t.open_streams(), 4, "the slots are held for the acknowledgements");
+    // Four more requests are admitted beside them.
+    for id in [16u64, 20, 24, 28] {
+        t.on_stream_frame(&mut pool, id, 0, &[7; 100], true).unwrap();
+    }
+    assert_eq!((t.open_streams(), t.stats().held_back), (8, 0));
+    // The acknowledgements free the first four slots.
+    for c in sent {
+        t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);
+    }
+    assert_eq!(t.open_streams(), 4);
+}
+
+/// Requests on a stream each in a closed loop, three quarters of the peer's limit in flight: the opener is never
+/// refused for want of credit, because a stream's place is free again when its reply was sent. Counted until the
+/// acknowledgement, the streams whose replies are on their way would take the limit one and a half times over. (At
+/// the whole limit the answering side's slots are the bound: a slot is held until the reply is acknowledged, and its
+/// table has two for each stream of the limit.)
+#[test]
+fn an_opener_with_most_of_its_limit_in_flight_is_never_refused() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(67, Params::new(10 * MS)));
+        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+        net.run(net.now + SEC, |_| false);
+        let limit = usize::from(net.a.conn.peer_credit().max_streams);
+        assert_eq!(limit, 32, "half the slots of the table");
+        let (total, req, resp) = (1500usize, vec![0xa5u8; 513], vec![0x5au8; 512]);
+        let mut live: Vec<u64> = Vec::new();
+        let mut replied = std::collections::HashSet::new();
+        let (mut started, mut refused) = (0usize, 0usize);
+        let done = net.run(net.now + 600 * SEC, |n| {
+            let ready: Vec<u64> = n.b.fin.iter().copied().filter(|id| !replied.contains(id)).collect();
+            for id in ready {
+                assert_eq!(n.b.conn.write(id, &resp).unwrap(), resp.len());
+                n.b.conn.finish(id).unwrap();
+                replied.insert(id);
+            }
+            live.retain(|id| !n.a.fin.contains(id));
+            while live.len() < limit * 3 / 4 && started < total {
+                let Ok(id) = n.a.conn.open_bi() else {
+                    refused += 1;
+                    break;
+                };
+                assert_eq!(n.a.conn.write(id, &req).unwrap(), req.len());
+                n.a.conn.finish(id).unwrap();
+                live.push(id);
+                started += 1;
+            }
+            started == total && live.is_empty()
+        });
+        assert!(done, "{started} of {total} requests started");
+        assert_eq!(refused, 0, "the opener was refused for want of credit");
+        assert_eq!(net.b.conn.stats().held_back, 0);
+    });
+}
+
+/// The credit a reply frees travels in the reply's packet, not in one behind it: an opener at its limit can open
+/// again when it has read the reply, and the answering side sent one packet for it.
+#[test]
+fn the_credit_a_reply_frees_arrives_with_the_reply() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(67, Params::new(10 * MS)));
+        assert!(net.connect(net.now + 10 * SEC), "{:?}", net.rx_drops);
+        net.run(net.now + SEC, |_| false);
+        let limit = usize::from(net.a.conn.peer_credit().max_streams);
+        let ids: Vec<u64> = (0..limit)
+            .map(|_| {
+                let id = net.a.conn.open_bi().unwrap();
+                assert_eq!(net.a.conn.write(id, &[0xa5; 300]).unwrap(), 300);
+                net.a.conn.finish(id).unwrap();
+                id
+            })
+            .collect();
+        // Every request arrives and every acknowledgement is back: only the limit holds the opener.
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(net.b.fin.len(), limit);
+        assert_eq!(net.a.conn.open_bi(), Err(StreamError::StreamLimit));
+        let first = ids[0];
+        assert_eq!(net.b.conn.write(first, &[0x5a; 300]).unwrap(), 300);
+        net.b.conn.finish(first).unwrap();
+        let sent = net.b.conn.stats().packets_sent;
+        let mut opened = None;
+        net.run(net.now + SEC, |n| {
+            if n.a.fin.contains(&first) && opened.is_none() {
+                opened = Some(n.a.conn.open_bi().is_ok());
+            }
+            opened.is_some()
+        });
+        assert_eq!(opened, Some(true), "the raise came with the reply");
+        assert_eq!(
+            net.b.conn.stats().packets_sent - sent,
+            1,
+            "the reply and the raise in one packet"
+        );
+    });
+}
+
 /// The ledger counts the first four chunks of a stream that has carried no data and its whole window from its first
 /// byte, and no window is granted while it is past the pool. Admitting a stream asks less: a first charge for it
 /// beside one for each open stream. So with streams that carry data and hold the ledger past the pool, a stream of

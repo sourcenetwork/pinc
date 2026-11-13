@@ -3,8 +3,10 @@
 //! Invariants: `ids[i]` is the id held by slot `i` (or `NONE`) and `hot[i]` is a superset of what slot `i` can emit
 //! (a stale bit costs one failed attempt, a missing bit would starve the slot, so every mutator refreshes it); a slot
 //! is freed only when both halves are done, which returns all of its chunks to the pool; `buffered` is the sum over
-//! slots of the written-and-unacknowledged bytes; `local_live` and `remote_live` count the live streams each side
-//! opened; a peer stream the table has no room for is stored nowhere, answers nothing and is never acknowledged, so
+//! slots of the written-and-unacknowledged bytes; `local_live` counts the streams we opened that hold a slot and
+//! `remote_live` the peer's streams that count against its limit (a peer stream stops counting when its data is
+//! whole and read and our answer has left, though its slot is held until the answer is acknowledged); a peer stream
+//! the table has no room for is stored nowhere, answers nothing and is never acknowledged, so
 //! its opener holds and retransmits it until there is room;
 //! stream ids of a class are opened in order and never reused.
 
@@ -31,6 +33,8 @@ struct Slot<S, const C: usize> {
     recv: Recv<C>,
     send: Send<S, C>,
     urgency: u8,
+    /// The stream counts against its opener's limit (`local_live` or `remote_live`).
+    counted: bool,
 }
 
 /// How many of `fit` first charges the credit may promise: half of them, but never more than leave three for the
@@ -49,6 +53,7 @@ impl<S: StreamSource, const C: usize> Slot<S, C> {
         recv: Recv::NEW,
         send: Send::NEW,
         urgency: DEFAULT_URGENCY,
+        counted: false,
     };
 }
 
@@ -82,6 +87,8 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     remote_next: [u64; 2],
     local_live: u64,
     remote_live: u64,
+    /// A peer stream stopped counting against its limit since [`Streams::take_released`] last asked.
+    released: bool,
     open: usize,
     buffered: u64,
     stats: StreamStats,
@@ -111,6 +118,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             remote_next: [0; 2],
             local_live: 0,
             remote_live: 0,
+            released: false,
             open: 0,
             buffered: 0,
             stats: StreamStats::default(),
@@ -180,6 +188,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.remote_next = [0; 2];
         self.local_live = 0;
         self.remote_live = 0;
+        self.released = false;
         self.open = 0;
         self.buffered = 0;
         self.stats = StreamStats::default();
@@ -346,10 +355,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let done = self.slots.get(i).is_some_and(|s| s.recv.is_done() && s.send.is_done());
         if !done {
             self.refresh(i);
+            self.release_limit(i);
             self.regrant(pool);
             return;
         }
         let id = self.ids.get(i).copied().unwrap_or(NONE);
+        let counted = self.slots.get(i).is_some_and(|s| s.counted);
         if let Some(slot) = self.slots.get_mut(i) {
             self.buffered = self.buffered.saturating_sub(slot.send.buffered());
             slot.recv.release_all(pool);
@@ -363,7 +374,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             *h = 0;
         }
         self.open = self.open.saturating_sub(1);
-        if id != NONE {
+        if id != NONE && counted {
             let live = if self.is_local(id) {
                 &mut self.local_live
             } else {
@@ -420,6 +431,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if let Some(x) = self.ids.get_mut(i) {
             *x = id;
         }
+        slot.counted = true;
         self.open += 1;
         if local {
             self.local_live += 1;
@@ -428,6 +440,31 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
         self.refresh(i);
         Ok(i)
+    }
+
+    /// A peer stream stops counting against the peer's limit once what it sent is whole and read and our answer has
+    /// left with nothing queued to be sent again ([`Send::flushed`]): the peer may open another while this one's
+    /// last bytes wait for their acknowledgement. A stream that carries one request and its reply so frees its place
+    /// when the reply is sent, not a round trip later. The slot is kept until both halves are done.
+    pub(super) fn release_limit(&mut self, i: usize) {
+        let local = self.ids.get(i).is_none_or(|id| *id == NONE || self.is_local(*id));
+        if local {
+            return;
+        }
+        if let Some(slot) = self.slots.written_mut(i)
+            && slot.counted
+            && slot.recv.is_done()
+            && slot.send.flushed()
+        {
+            slot.counted = false;
+            self.remote_live = self.remote_live.saturating_sub(1);
+            self.released = true;
+        }
+    }
+
+    /// Whether a peer stream gave its place back since the last call, so the stream credit may have room to grow.
+    pub fn take_released(&mut self) -> bool {
+        core::mem::take(&mut self.released)
     }
 
     /// The pool bytes reserved for the stream credit given to the peer and not yet used: the first charges of the
@@ -879,6 +916,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.buffered = 0;
         self.local_live = 0;
         self.remote_live = 0;
+        self.released = false;
         self.stalled = false;
     }
 
