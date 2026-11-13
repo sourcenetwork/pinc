@@ -8,3 +8,5 @@ states/
 *.ndjson
 *_TTrace_*
 /target-harness
+/distributed/target
+/benches/target
