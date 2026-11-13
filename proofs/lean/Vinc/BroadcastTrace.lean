@@ -31,7 +31,7 @@ def paramsOf (n : Nat) : Params where
   oldSlack := 16000
   me := n
   isHub := n == 0
-  revoked := []
+  revoked := [99]
   heldDedup := true
   heldFullKeepsUnseen := true
   topicFull := false
@@ -145,7 +145,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let n ← natF j "n"
     let hd ← boolF j "hd"
     let ok ← verified w j
-    let kind : MsgKind := if !hd then .badhead else if !ok then .badsig else .good
+    let big ← boolF j "big"
+    let kind : MsgKind := if !hd then .badhead else if big then .big else if !ok then .badsig else .good
     let m : Msg := ⟨← natF j "mid", ← natF j "org", ← natF j "ts", kind, ← natF j "sz"⟩
     let at_ ← natF j "at"
     let r := OnMsg (paramsOf n) (← node w n) at_ at_ (← frameOf (← natF j "ft")) (← boolF j "boot") m

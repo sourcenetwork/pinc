@@ -6,8 +6,9 @@
 (* The Rust test tests/trace_dtn_reception.rs drives real receptions of an *)
 (* honest sender and of a sender whose parity is not a code word through   *)
 (* seeded random calls (intact, damaged, short and padded proof streams    *)
-(* into a held set of 2 or 3 intervals, finish, resume) and records after  *)
-(* each call its verdict, the whole held set and the answers of `holds`,   *)
+(* into a held set of 2 or 3 intervals, or into a BlockHeld lent as       *)
+(* `&mut`, which never refuses and so is the cap of 4; finish, resume)     *)
+(* and records after each call its verdict, the whole held set and the answers of `holds`,   *)
 (* `is_complete`, `is_decodable` and `next_missing`. Each recorded step    *)
 (* must be a step of DtnReception.tla: a feed is FeedResult for an intact  *)
 (* stream, a stream with one wrong group, a stream cut short, or a stream  *)
@@ -33,6 +34,8 @@ VARIABLE c
 
 R2 == INSTANCE DtnReception WITH G <- 1024, W <- 2, ct <- 0, have <- 0, buf <- 0, res <- 0
 R3 == INSTANCE DtnReception WITH G <- 1024, W <- 3, ct <- 0, have <- 0, buf <- 0, res <- 0
+\* a BlockHeld never refuses a symbol: the cap of 4 is the most runs 7 symbols can make
+R4 == INSTANCE DtnReception WITH G <- 1024, W <- 4, ct <- 0, have <- 0, buf <- 0, res <- 0
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/dtn_reception.ndjson")
 News == SelectSeq(Trace, LAMBDA e : e.op = "new")
@@ -54,7 +57,9 @@ Sts(kind, n) ==
       [] kind = "flip" -> {[vals |-> [Z(n) EXCEPT ![p] = 1], extra |-> FALSE] : p \in 1..n}
 
 FR(w, a, b, h, st) ==
-    IF w = 2 THEN R2!FeedResult(Ct0, Buf0, h, a, b, st) ELSE R3!FeedResult(Ct0, Buf0, h, a, b, st)
+    IF w = 2 THEN R2!FeedResult(Ct0, Buf0, h, a, b, st)
+    ELSE IF w = 3 THEN R3!FeedResult(Ct0, Buf0, h, a, b, st)
+    ELSE R4!FeedResult(Ct0, Buf0, h, a, b, st)
 
 Snap(ev) ==
     LET h2 == H(ev.have)

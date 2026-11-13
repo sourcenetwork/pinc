@@ -87,7 +87,7 @@ SignEv == /\ Ev.op = "sign"
           /\ UNCHANGED ns
 
 FrameEv ==
-    LET kind == IF ~Ev.hd THEN "badhead" ELSE IF ~Verified THEN "badsig" ELSE "good"
+    LET kind == IF ~Ev.hd THEN "badhead" ELSE IF Ev.big THEN "big" ELSE IF ~Verified THEN "badsig" ELSE "good"
         m == [mid |-> Ev.mid, origin |-> Ev.org, ts |-> Ev.ts, kind |-> kind, n |-> Ev.sz]
         r == OnMsgOf(Ev.n, Ev.at, FrameName(Ev.ft), Ev.boot, m)
     IN /\ Ev.op = "frame" /\ Same(r) /\ r.ack = Ev.ack /\ ns' = [ns EXCEPT ![Ev.n] = r.n] /\ UNCHANGED orc
