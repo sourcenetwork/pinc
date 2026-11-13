@@ -1032,6 +1032,10 @@ name = "mbt_orphan"
 path = "mbt_orphan.rs"
 
 [[test]]
+name = "trace_node_backoff"
+path = "trace_node_backoff.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 

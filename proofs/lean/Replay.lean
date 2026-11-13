@@ -22,6 +22,7 @@ import Vinc.TraceExt
 import Vinc.TraceOrphan
 import Vinc.TraceCoreTable
 import Vinc.TraceKeepalive
+import Vinc.TraceNodeBackoff
 import Vinc.TraceHalfOpen
 import Vinc.TraceHeap
 import Vinc.TraceCoreState
@@ -195,6 +196,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut rsw : TraceReasm.W := {}
   let mut orw : TraceOrphan.W := {}
   let mut ctw : TraceCoreTable.W := {}
+  let mut nbw : TraceNodeBackoff.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut hpw : TraceHeap.W := {}
   let mut qvw : TraceQueue.W := {}
@@ -577,6 +579,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceHeap.replayEvent j hpw with
           | .ok w' =>
             hpw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceNodeBackoff.isTag t then
+          -- Failed-dial table events (`nobo`, written by `trace_node_backoff`): the node's backoff table.
+          match TraceNodeBackoff.replayEvent j nbw with
+          | .ok w' =>
+            nbw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

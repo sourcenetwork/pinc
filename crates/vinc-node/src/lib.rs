@@ -68,6 +68,8 @@ mod hosts;
 mod io;
 mod layer;
 mod node;
+#[cfg(feature = "trace")]
+mod probe;
 mod reconcile;
 mod relay;
 pub mod trace;
@@ -87,6 +89,8 @@ pub use ep::Ep;
 pub use event::{NodeEvent, ReconcileFailure};
 pub use layer::Layer;
 pub use node::{Node, StartError};
+#[cfg(feature = "trace")]
+pub use probe::BackoffProbe;
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
 pub use relay::{MemberNotice, is_relay_request};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
