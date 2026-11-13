@@ -25,6 +25,8 @@
 //!   the first is at least `min(20 s, 2 x max(srtt, node RTTs))`. The Finish and each resend go on the path the reply
 //!   came on, not on the other paths the first flight was copied to.
 //! - A handshake that is not established 30 s after it began (60 s on a thin node) ends; the connection then closes.
+//!   The limit follows the node's round trips as they change, so a dial begun before the node measured itself slow
+//!   keeps 60 s.
 //! - A dial the layer above told to end early (one it reported before its handshake) also ends when the resend timer
 //!   fires after 4 first flights went out with nothing heard from the peer: 15 first delays for a full handshake
 //!   (7.5 s at the 500 ms floor), 6 for a resume, whose fallback at the third send restarts the schedule (3 s). A held
@@ -341,6 +343,8 @@ pub(crate) struct Handshake {
     unheard: u32,
     /// The handshake ended that way.
     unanswered: bool,
+    /// When the handshake began.
+    created: u64,
     first_sent: u64,
     sample: Option<u64>,
     sampled: bool,
@@ -395,6 +399,7 @@ impl Handshake {
             early: false,
             unheard: 0,
             unanswered: false,
+            created: now,
             first_sent: now,
             sample: None,
             sampled: false,
@@ -534,9 +539,13 @@ impl Handshake {
         }
     }
 
-    /// Update the node-level timing inputs.
-    pub(crate) const fn set_node_timing(&mut self, thin: bool, node_rtt: Option<u64>, node_peak_rtt: Option<u64>) {
+    /// Update the node-level timing inputs. An unestablished handshake takes the connect limit they give, counted
+    /// from its start.
+    pub(crate) fn set_node_timing(&mut self, thin: bool, node_rtt: Option<u64>, node_peak_rtt: Option<u64>) {
         self.timing.set_node(thin, node_rtt, node_peak_rtt);
+        if self.connect_at.is_some() {
+            self.connect_at = Some(self.created.saturating_add(self.timing.connect_timeout()));
+        }
     }
 
     /// Whether a flight was queued since the last call (the connection copies it onto its fan-out paths).

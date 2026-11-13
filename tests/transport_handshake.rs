@@ -484,3 +484,37 @@ fn the_finish_and_its_resends_leave_on_the_path_the_reply_came_on_only() {
         );
     });
 }
+
+#[test]
+fn a_dial_that_began_before_the_node_measured_itself_slow_keeps_the_longer_limit() {
+    big_stack(|| {
+        // Ten seconds in, the node's round trips turn out to be 300 ms: the dial ends after 60 s, not the 30 s it began
+        // with. The limit is read from the node's round trips whenever they change.
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(42, Params::new(10 * MS));
+        link.route(PathId(1)).up = false;
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        let t0 = net.now;
+        net.run(t0 + 10 * SEC, |_| false);
+        net.a.conn.set_node_rtt(300 * MS, 300 * MS, true);
+        net.run(t0 + 59_900 * MS, |_| false);
+        assert!(net.a.closed().is_none());
+        net.run(t0 + 60_100 * MS, |_| false);
+        assert_eq!(net.a.closed(), Some(CloseReason::HandshakeTimeout));
+        // A node that began as thin and finds its round trips short goes back to 30 s.
+        let mut w = World::new(IdentityAlg::Ed25519);
+        w.cfg.thin = true;
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(43, Params::new(10 * MS));
+        link.route(PathId(1)).up = false;
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        let t0 = net.now;
+        net.run(t0 + 5 * SEC, |_| false);
+        net.a.conn.set_node_rtt(10 * MS, 10 * MS, false);
+        net.run(t0 + 29_900 * MS, |_| false);
+        assert!(net.a.closed().is_none());
+        net.run(t0 + 30_100 * MS, |_| false);
+        assert_eq!(net.a.closed(), Some(CloseReason::HandshakeTimeout));
+    });
+}
