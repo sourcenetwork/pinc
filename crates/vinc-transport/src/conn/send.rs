@@ -31,6 +31,9 @@ use crate::recovery::{
 };
 use crate::stream::{ControlFrame, StreamSource};
 
+#[cfg(feature = "trace")]
+pub(super) mod trace;
+
 /// The datagram a [`Connection::poll_transmit`] call wrote into the caller's buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Transmit {
@@ -414,6 +417,11 @@ conn_impl! {
             self.requeue(&filled.refs);
             return None;
         }
+        #[cfg(feature = "trace")]
+        let traced = self
+            .pack
+            .on
+            .then(|| (payload.get(..filled.len).unwrap_or_default().to_vec(), filled.last_stream));
         // Pad so the header-protection sample exists and any minimum size holds.
         let mut payload_len = filled.len;
         // With GSO on, a packet that leaves more stream data queued is padded to the full size so the next one can
@@ -428,6 +436,18 @@ conn_impl! {
             // The last frame runs to the end of the packet: its length is implicit.
             payload_len -= implicit_stream_len(window.get_mut(hdr_cap..hdr_cap + payload_len)?, at, len_bytes)?;
         }
+        #[cfg(feature = "trace")]
+        let traced = traced.map(|(frames, hint)| trace::PackRecord {
+            kind: if kind == Kind::Short { trace::PackKind::Short } else { trace::PackKind::ZeroRtt },
+            mode: trace::PackMode::of(fill.ping_only, fill.probe.is_some(), fill.repair.is_some()),
+            client: self.client,
+            pn,
+            pn_len,
+            frames,
+            hint,
+            min_payload,
+            payload: window.get(hdr_cap..hdr_cap + payload_len).unwrap_or_default().to_vec(),
+        });
         // Lay out the header; a long header's length depends on the payload, so the payload moves up against it.
         let (header_len, layout) = match kind {
             Kind::Short => {
@@ -489,6 +509,10 @@ conn_impl! {
         #[cfg(feature = "trace")]
         if kind == Kind::Short {
             self.trace_sent(now, pn);
+        }
+        #[cfg(feature = "trace")]
+        if let Some(r) = traced {
+            self.pack.log.push(r);
         }
         self.stats.packets_sent += 1;
         if filled.ack {
@@ -920,17 +944,35 @@ conn_impl! {
         if !put(payload, &mut pos, &Frame::Close { error }) {
             return None;
         }
+        #[cfg(feature = "trace")]
+        let traced = self.pack.on.then(|| payload.get(..pos).unwrap_or_default().to_vec());
         let pad = 4usize.saturating_sub(pn_len + pos);
         if pad > 0 {
             payload.get_mut(pos..pos + pad)?.fill(0);
             pos += pad;
         }
+        #[cfg(feature = "trace")]
+        let traced = traced.map(|frames| trace::PackRecord {
+            kind: trace::PackKind::Short,
+            mode: trace::PackMode::Close,
+            client: self.client,
+            pn,
+            pn_len,
+            frames,
+            hint: None,
+            min_payload: 4usize.saturating_sub(pn_len),
+            payload: payload.get(..pos).unwrap_or_default().to_vec(),
+        });
         let phase = self.keys.send.as_ref()?.phase;
         ShortHeader { key_phase: phase, dcid }.write(&mut Writer::new(out.get_mut(..hdr)?), pn_bytes.get(..pn_len)?).ok()?;
         let k = self.keys.send.as_mut()?;
         let layout = PnLayout { pn_off: 1 + dcid.as_bytes().len(), pn_len, long: false };
         let len = seal(&mut k.pk, &k.hk, p, out, layout, pos, pn).ok()?;
         self.next_pn += 1;
+        #[cfg(feature = "trace")]
+        if let Some(r) = traced {
+            self.pack.log.push(r);
+        }
         self.life.close = None;
         self.phase = Phase::Closed;
         self.stats.packets_sent += 1;
