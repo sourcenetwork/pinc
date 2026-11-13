@@ -204,6 +204,7 @@ struct Cov {
     fwdback: u32,
     wake: u32,
     held_out: u32,
+    tunnel_held: u32,
 }
 
 type Cache = std::collections::HashMap<(u8, u64, u64, u8), Vec<u8>>;
@@ -249,7 +250,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
             let k = (rng.next_u64() % 4) as usize;
             let o = 4 + (rng.next_u64() % 2) as usize;
             let d = |rng: &mut SplitMix64, v: [u64; 3]| v[(rng.next_u64() % 3) as usize];
-            match rng.next_u64() % 9 {
+            match rng.next_u64() % 10 {
                 // sleep notice, close, packets for the sleeper, return
                 0 => script.extend([
                     (0, k, 0, 0, R, 0),
@@ -312,6 +313,17 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                 ]),
                 // a session is closed by the sweep at its limit, not before
                 7 => script.extend([(0, k, 0, 0, 1, 0), (14, 0, 0, 0, 299, 0), (14, 0, 0, 0, 1, 0)]),
+                // a sleeper's UDP session wakes before its carrier: the mailbox goes down the tunnel
+                9 => script.extend([
+                    (0, k, 0, 0, 1, 0),
+                    (3, k, 11, 0, 1, 0),
+                    (2, k, 0, 0, 1, 0),
+                    (0, o, 0, 0, 1, 0),
+                    (3, o, 0, k, 1, 0),
+                    (3, o, 0, k, 1, 0),
+                    (11, k, 0, 0, 1, 0),
+                    (13, k, 0, 0, 1, 0),
+                ]),
                 // a record is dropped after three republish periods, not before
                 _ => script.extend([
                     (0, k, 0, 0, 1, 0),
@@ -620,6 +632,9 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
             cov.wake += u32::from(e.starts_with(r#"["wake"#));
             cov.held_out += u32::from(e.contains("mdeliv"));
         }
+        cov.tunnel_held += u32::from(
+            sink.out.iter().any(|e| e.starts_with(r#"["udp"#)) && sink.out.iter().any(|e| e.contains("mdeliv")),
+        );
         cov.stale_copy += u32::from(sink.out.iter().filter(|e| e.starts_with(r#"["udp"#)).count() > 0);
         out.push(format!(r#"{head},"res":"{res}","out":[{}]}}"#, sink.out.join(",")));
         assert!(r.sessions() <= 3);
@@ -638,6 +653,7 @@ fn the_relay_records_its_trace() {
         fwdback: 0,
         wake: 0,
         held_out: 0,
+        tunnel_held: 0,
     };
     let mut cache = Cache::new();
     for seed in 0..24u64 {
@@ -651,6 +667,7 @@ fn the_relay_records_its_trace() {
     assert!(cov.wake > 0, "no wake-up");
     assert!(cov.held_out > 0, "no held packet delivered");
     assert!(cov.stale_copy > 0, "no tunnel packet");
+    assert!(cov.tunnel_held > 0, "no held packet delivered down the tunnel");
     let Some(dir) = std::env::var_os("VINC_TRACE_DIR") else {
         return;
     };

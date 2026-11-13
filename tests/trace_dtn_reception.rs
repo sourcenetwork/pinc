@@ -37,13 +37,15 @@
 
 mod dtn_common;
 
+use core::ops::Range;
 use dtn_common::{keypair, make, plan, recipient};
 use vinc_crypto::IdentityAlg;
 use vinc_dag::ranges::VerifiedRanges;
 use vinc_dag::tree::build_outboard;
 use vinc_dtn::DtnError;
-use vinc_dtn::bundle::{Reception, serve, serve_len};
+use vinc_dtn::bundle::{Receiving, Reception, serve, serve_len};
 use vinc_dtn::head::SignedHead;
+use vinc_dtn::held::{BlockHeld, HeldSet, held_len};
 use vinc_dtn::layout::SliceLayout;
 use vinc_tests::SplitMix64;
 
@@ -122,23 +124,91 @@ impl Bundle {
     }
 }
 
-fn have_json<const W: usize>(h: &VerifiedRanges<W>) -> String {
-    let v: Vec<String> = h.iter().map(|r| format!("[{},{}]", r.start, r.end)).collect();
-    format!("[{}]", v.join(","))
+/// A held set the trace drives: the interval set `VerifiedRanges<W>`, or a `BlockHeld` lent as `&mut BlockHeld`
+/// (which never refuses a symbol, so it is the model's cap of 4, the most runs 7 symbols can make).
+trait Probe<'s>: HeldSet + Sized {
+    const CAP: usize;
+    /// An empty set of this kind (`store` is the lent set's storage).
+    fn empty(store: &'s mut BlockHeld<Vec<u8>>) -> Self;
+    fn have_json(rx: &Receiving<'_, Self>) -> String;
+    /// `next_missing` of the real set if it has one, else the plain answer.
+    fn next_missing(rx: &Receiving<'_, Self>, from: u64, plain: Option<Range<u64>>) -> Option<Range<u64>>;
+    /// Resume from a copy of the buffer and of the held set; the snapshot of the resumed reception, if it resumed.
+    fn resume(
+        rx: &Receiving<'_, Self>,
+        signed: &SignedHead,
+        copy: &mut [u8],
+        now: u64,
+    ) -> Result<(String, Vec<bool>), DtnError>;
 }
 
-fn snapshot<const W: usize>(rx: &Reception<'_, W>) -> (String, Vec<bool>) {
+impl<'s, const W: usize> Probe<'s> for VerifiedRanges<W> {
+    const CAP: usize = W;
+    fn empty(_store: &'s mut BlockHeld<Vec<u8>>) -> Self {
+        Self::new()
+    }
+    fn have_json(rx: &Receiving<'_, Self>) -> String {
+        let v: Vec<String> = rx.have().iter().map(|r| format!("[{},{}]", r.start, r.end)).collect();
+        format!("[{}]", v.join(","))
+    }
+    fn next_missing(rx: &Receiving<'_, Self>, from: u64, _plain: Option<Range<u64>>) -> Option<Range<u64>> {
+        rx.next_missing(from)
+    }
+    fn resume(
+        rx: &Receiving<'_, Self>,
+        signed: &SignedHead,
+        copy: &mut [u8],
+        now: u64,
+    ) -> Result<(String, Vec<bool>), DtnError> {
+        let r = Reception::<W>::resume(signed, copy, rx.have().clone(), now)?;
+        Ok(snapshot(&r))
+    }
+}
+
+impl<'s> Probe<'s> for &'s mut BlockHeld<Vec<u8>> {
+    const CAP: usize = 4;
+    fn empty(store: &'s mut BlockHeld<Vec<u8>>) -> Self {
+        store
+    }
+    fn have_json(rx: &Receiving<'_, Self>) -> String {
+        let v: Vec<String> = rx.have().runs().map(|r| format!("[{},{}]", r.start, r.end)).collect();
+        format!("[{}]", v.join(","))
+    }
+    fn next_missing(_rx: &Receiving<'_, Self>, _from: u64, plain: Option<Range<u64>>) -> Option<Range<u64>> {
+        plain
+    }
+    fn resume(
+        rx: &Receiving<'_, Self>,
+        signed: &SignedHead,
+        copy: &mut [u8],
+        now: u64,
+    ) -> Result<(String, Vec<bool>), DtnError> {
+        // a fresh set rebuilt symbol by symbol from the held ones
+        let mut tmp = BlockHeld::new(rx.layout(), vec![0; held_len(rx.layout()).unwrap()]).unwrap();
+        for s in (0..TOTAL).filter(|&s| rx.holds(s)) {
+            tmp.insert(s * G..(s + 1) * G).unwrap();
+        }
+        let r = Receiving::resume(signed, copy, &mut tmp, now)?;
+        Ok(snapshot(&r))
+    }
+}
+
+fn snapshot<'s, P: Probe<'s>>(rx: &Receiving<'_, P>) -> (String, Vec<bool>) {
     let held: Vec<bool> = (0..TOTAL).map(|s| rx.holds(s)).collect();
     let bits: Vec<String> = held.iter().map(|b| u8::from(*b).to_string()).collect();
+    let plain_nm = |from: u64| {
+        (from..TOTAL).find(|&s| !held[s as usize]).map(|a| {
+            let b = (a..TOTAL).find(|&s| held[s as usize]).unwrap_or(TOTAL);
+            a..b
+        })
+    };
     let nm: Vec<String> = (0..=TOTAL)
         .map(|from| {
-            rx.next_missing(from)
-                .map_or("[]".to_string(), |r| format!("[{},{}]", r.start, r.end))
+            P::next_missing(rx, from, plain_nm(from)).map_or("[]".to_string(), |r| format!("[{},{}]", r.start, r.end))
         })
         .collect();
     // the plain expectations
-    let runs_ok = runs(&held) <= W;
-    assert!(runs_ok);
+    assert!(runs(&held) <= P::CAP);
     assert_eq!(rx.is_complete(), held.iter().all(|h| *h));
     let decodable = (0..2u64).all(|b| {
         let (lo, hi, k) = if b == 0 { (0, 4, 2) } else { (4, 7, 1) };
@@ -146,20 +216,16 @@ fn snapshot<const W: usize>(rx: &Reception<'_, W>) -> (String, Vec<bool>) {
     });
     assert_eq!(rx.is_decodable(), decodable);
     for from in 0..=TOTAL {
-        let expect = (from..TOTAL).find(|&s| !held[s as usize]).map(|a| {
-            let b = (a..TOTAL).find(|&s| held[s as usize]).unwrap_or(TOTAL);
-            (a, b)
-        });
         assert_eq!(
-            rx.next_missing(from).map(|r| (r.start, r.end)),
-            expect,
+            P::next_missing(rx, from, plain_nm(from)),
+            plain_nm(from),
             "next_missing({from})"
         );
     }
     (
         format!(
             r#""have":{},"hold":[{}],"cmp":{},"dec":{},"nm":[{}]"#,
-            have_json(rx.have()),
+            P::have_json(rx),
             bits.join(","),
             rx.is_complete(),
             rx.is_decodable(),
@@ -169,12 +235,13 @@ fn snapshot<const W: usize>(rx: &Reception<'_, W>) -> (String, Vec<bool>) {
     )
 }
 
-fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) {
+fn run<'s, P: Probe<'s>>(b: &Bundle, seed: u64, id: usize, store: &'s mut BlockHeld<Vec<u8>>, out: &mut Vec<String>) {
+    let w = P::CAP;
     let mut rng = SplitMix64::new(seed);
     let mut buf = vec![0xaa; b.layout.total_len() as usize];
-    let mut rx = Reception::<W>::new(&b.signed, &mut buf, NOW).unwrap();
+    let mut rx = Receiving::resume(&b.signed, &mut buf, P::empty(store), NOW).unwrap();
     out.push(format!(
-        r#"{{"t":"rx","run":{id},"op":"new","W":{W},"k":2,"m":2,"log":0,"payload":3000,"g":{G},"total":{TOTAL},"have":[],"faulty":[{}]}}"#,
+        r#"{{"t":"rx","run":{id},"op":"new","W":{w},"k":2,"m":2,"log":0,"payload":3000,"g":{G},"total":{TOTAL},"have":[],"faulty":[{}]}}"#,
         b.faulty.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
     ));
     let mut held: Vec<bool> = vec![false; TOTAL as usize];
@@ -241,7 +308,7 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
                 for s in a2..b2 {
                     let mut next = exp.clone();
                     next[s as usize] = true;
-                    if runs(&next) <= W {
+                    if runs(&next) <= w {
                         exp = next;
                     } else {
                         full = true;
@@ -313,7 +380,6 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
             // resume from a copy of the buffer and the held set
             let case = rng.next_u64() % 4;
             let mut copy = rx.sealed().to_vec();
-            let have = rx.have().clone();
             let (signed, now, wrong) = match case {
                 0 => {
                     let mut head = *b.signed.head();
@@ -332,7 +398,7 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
             if wrong {
                 copy.pop();
             }
-            let r = Reception::<W>::resume(&signed, &mut copy, have, now);
+            let r = P::resume(&rx, &signed, &mut copy, now);
             let rc = match &r {
                 Ok(_) => "ok",
                 Err(e) => class(e),
@@ -344,8 +410,7 @@ fn run<const W: usize>(b: &Bundle, seed: u64, id: usize, out: &mut Vec<String>) 
                 _ => "ok",
             };
             assert_eq!(rc, want);
-            if let Ok(r2) = r {
-                let (snap, now_held) = snapshot(&r2);
+            if let Ok((snap, now_held)) = r {
                 assert_eq!(now_held, held, "resume keeps the verified ranges");
                 out.push(format!(
                     r#"{{"t":"rx","run":{id},"op":"res","case":{case},"res":"{rc}",{snap}}}"#
@@ -369,10 +434,19 @@ fn reception_trace() {
     let faulty6 = Bundle::new(12, Some(6));
     for seed in 0..24u64 {
         let id = 4 * seed as usize;
-        run::<2>(&honest, 100 + seed, id, &mut out);
-        run::<3>(&honest, 200 + seed, id + 1, &mut out);
-        run::<2>(&faulty3, 300 + seed, id + 2, &mut out);
-        run::<3>(&faulty6, 400 + seed, id + 3, &mut out);
+        let held = || BlockHeld::new(&honest.layout, vec![0; held_len(&honest.layout).unwrap()]).unwrap();
+        run::<VerifiedRanges<2>>(&honest, 100 + seed, id, &mut held(), &mut out);
+        run::<VerifiedRanges<3>>(&honest, 200 + seed, id + 1, &mut held(), &mut out);
+        run::<VerifiedRanges<2>>(&faulty3, 300 + seed, id + 2, &mut held(), &mut out);
+        run::<VerifiedRanges<3>>(&faulty6, 400 + seed, id + 3, &mut held(), &mut out);
+    }
+    // the same calls into a `BlockHeld` lent as `&mut`, which never refuses (so no run is ever `full`); run ids
+    // follow the order the `new` events are written in
+    for seed in 0..24u64 {
+        let held = || BlockHeld::new(&honest.layout, vec![0; held_len(&honest.layout).unwrap()]).unwrap();
+        let id = 96 + 2 * seed as usize;
+        run::<&mut BlockHeld<Vec<u8>>>(&honest, 500 + seed, id, &mut held(), &mut out);
+        run::<&mut BlockHeld<Vec<u8>>>(&faulty3, 600 + seed, id + 1, &mut held(), &mut out);
     }
     // the sealed bundle of the faulty sender really commits to non-code-word parity: a complete honest decode of a
     // reception that holds only some symbols of block 0 cannot match its root
