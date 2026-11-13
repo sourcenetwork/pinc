@@ -23,6 +23,10 @@ const GROWTH_PER_RUN: u64 = 8 << 20;
 /// How many times the world is run.
 const RUNS: usize = 12;
 /// The runs in which the warm-up may grow the process by more than that.
+/// The larger step came in the third run in every measurement until a stream's send record grew to remember 64
+/// acknowledged ranges instead of 16; since that change it comes anywhere from the third run to the twelfth. The
+/// likely reason, read from the change and not measured: each record is larger, which moves the point at which the
+/// busiest sessions first touch new pages.
 const WARM_UP_STEPS: usize = 2;
 /// The most the warm-up adds in all: the two steps measured come to about 62 MiB.
 const WARM_UP_TOTAL: u64 = 80 << 20;
