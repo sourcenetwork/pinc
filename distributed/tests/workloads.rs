@@ -137,6 +137,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
                     sessions: 16,
                     iroh_gossip_max: None,
                     dtn: None,
+                    trace: false,
                 },
                 s.role,
             )
@@ -455,4 +456,41 @@ fn a_request_that_is_not_understood_is_answered_and_the_program_goes_on() {
     let r: Reply = serde_json::from_str(&l).unwrap();
     assert!(!r.ok);
     assert!(progs[1].call(Cmd::Report, 30).ok);
+}
+
+/// With tracing asked for, a VINC node reports its trace and packet log; without, the report has no trace.
+#[test]
+fn a_traced_vinc_node_reports_its_packet_log_and_an_untraced_one_does_not() {
+    let mut inits = group(Stack::Vinc, 140, 2);
+    for (init, _) in &mut inits {
+        init.trace = init.name == "p-2";
+    }
+    let mut progs: Vec<Prog> = inits.iter().map(|(i, _)| Prog::start(i)).collect();
+    for p in &mut progs {
+        p.ok(
+            Cmd::Join {
+                topic: "sync".into(),
+                wait_ms: 40_000,
+            },
+            60,
+        );
+    }
+    let value = progs[1].ok(Cmd::Provide { size: 4096, seed: 9 }, 60);
+    progs[2].ok(
+        Cmd::Fetch {
+            value,
+            providers: vec!["p-1".into()],
+            timeout_ms: 60_000,
+        },
+        90,
+    );
+    let plain = progs[1].ok(Cmd::Report, 30);
+    assert!(plain.get("trace").is_none(), "{plain}");
+    let traced = progs[2].ok(Cmd::Report, 30);
+    let entries = traced["trace"]["entries"].as_array().unwrap();
+    assert_eq!(traced["trace"]["dropped"], json!(0));
+    for kind in ["trace", "udp_rx", "udp_tx"] {
+        assert!(entries.iter().any(|e| e[1] == kind), "no {kind} entry");
+    }
+    assert!(entries.iter().all(|e| e[0].is_u64() && e[2].is_string()));
 }

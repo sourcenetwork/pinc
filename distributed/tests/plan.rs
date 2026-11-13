@@ -23,7 +23,7 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 22] = [
+const EXAMPLES: [&str; 23] = [
     "dtn-store-forward",
     "dtn-custody",
     "dtn-copies",
@@ -40,6 +40,7 @@ const EXAMPLES: [&str; 22] = [
     "pubsub-lan",
     "pubsub-wan",
     "sync-wan",
+    "sync-trace",
     "sync-multi",
     "reconcile-wan",
     "partition-heal",
@@ -167,6 +168,21 @@ fn a_transport_server_behind_translation_is_refused_with_the_reason() {
 fn unknown_fields_are_errors_not_silently_ignored() {
     let text = std::fs::read_to_string(format!("{}/scenarios/wan.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let bad = text.replace("repetitions = 3", "repetitions = 3\nrepetitons = 4");
+    assert!(Scenario::parse(&bad).is_err());
+}
+
+#[test]
+fn the_debug_table_asks_for_traces_and_defaults_to_off() {
+    assert!(scenario("sync-trace").debug.trace);
+    let sc = scenario("sync-wan");
+    assert!(!sc.debug.trace);
+    assert!(
+        !sc.to_toml().unwrap().contains("[debug]"),
+        "an untraced scenario saves without the table"
+    );
+    let on = scenario("sync-trace").to_toml().unwrap();
+    assert!(Scenario::parse(&on).unwrap().debug.trace);
+    let bad = on.replace("trace = true", "trace = true\ntraces = true");
     assert!(Scenario::parse(&bad).is_err());
 }
 
