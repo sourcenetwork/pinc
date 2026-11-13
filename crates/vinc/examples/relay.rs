@@ -133,6 +133,8 @@ async fn upgrade(s: &Stream) -> io::Result<()> {
 async fn accept_one(listener: &Handle<TcpListener>) -> Result<(Stream, CarrierKind), Error> {
     loop {
         let (s, _) = listener.accept().await.map_err(io_err)?;
+        // Every write leaves at once: a frame behind another must not wait for the first one's acknowledgement.
+        s.get_ref().set_nodelay(true).map_err(io_err)?;
         let mut first = [0u8; 4];
         let seen = timeout(Duration::from_secs(5), s.peek(&mut first)).await;
         match seen {
@@ -192,7 +194,10 @@ impl Carriers for Io {
         let to = peer.tcp;
         self.spawn(tag, async move {
             Done::Opened(match to {
-                Some(to) => Handle::<TcpStream>::connect(to).await.map_err(io_err),
+                Some(to) => Handle::<TcpStream>::connect(to)
+                    .await
+                    .and_then(|s| s.get_ref().set_nodelay(true).map(|()| s))
+                    .map_err(io_err),
                 None => Err(Error::new(
                     ErrorKind::Unreachable,
                     "the example dials TCP carriers only",

@@ -181,7 +181,9 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     /// The host's carriers to the relays: `open` a byte stream of a [`CarrierKind`] to a relay (the TCP connect, or the
     /// HTTP upgrade of a WebSocket, is the host's work), `read` into a vector, `write` a vector from an offset, and
     /// `close`. The buffers are owned and come back with the result; see [`Carriers`](crate::Carriers) for what a
-    /// dropped operation may leave. Without them a relay is reached by UDP only.
+    /// dropped operation may leave. Without them a relay is reached by UDP only. A TCP carrier should send every write
+    /// at once (`set_nodelay(true)`): a relay frame written behind another otherwise waits for the acknowledgement of
+    /// the first, a round trip on every hop.
     #[must_use]
     #[allow(
         clippy::type_complexity,
