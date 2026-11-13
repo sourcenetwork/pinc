@@ -12,11 +12,12 @@ the call could be built and sent (the store and the session are adversarial: any
 * `proofs_frames`: every frame lies in one aligned block of `k <= 16` groups, starts on a group, stays inside the
   value, begins at or after what was sent and the block of `from`, and its proof is at most `cost(k) - 8 < 1100`
   bytes, so with the head it fits `PROOF_BODY_MAX`; at most 48 frames; the pair count is `range_pairs` of its group
-  range (`pairs_eq_range_pairs`), which is what `fetch/wt.rs on_ext` accepts.
-* `proofs_lead`: every group a call covers starts at most `eff` into the value, `eff` = the `upto` asked for, or
-  the send frontier plus the window: on the proactive path (`window` capped at `WT_LEAD`) at most `WT_LEAD` past
-  the frontier.
-* `proofs_deep`: a value over 1 GiB gets no proofs and stays deep.
+  range (`server_wt_pairs`), which is what `fetch/wt.rs on_ext` accepts.
+* the last conjunct of `proofs_frames`: every group a call covers starts at most `eff` into the value, `eff` = the `upto`
+  asked for, or the send frontier plus the window; that the proactive path caps `window` at `WT_LEAD`, so that it is at
+  most `WT_LEAD` past the frontier, is not proved in Lean yet (the model takes `window` as given).
+* `protoK_deep_iff`, the fifth conjunct of `proofs_frames` and `proofs_deep_sticky`: a value over 1 GiB gets no proofs
+  and stays deep.
 -/
 
 set_option linter.deprecated false

@@ -17,7 +17,7 @@ nothing when skipped). A `none` result is the provider being reported (`Pump::Ba
 * in the data phase of a group that is fed, the verifier waits for exactly that group (offset and length) and has
   taken `len - left` of its bytes; in the data phase of a skipped group it is at a boundary and untouched;
 * `enterData_total`: after the checks of `enter_data` the `skip_group` it calls cannot fail;
-* `dataStep_consumes`: the `data` call is always given a verifier that takes all `min(piece, left)` bytes, so the
+* `feedG_group_nf` (used by `dataStep_inv`): the `data` call is always given a verifier that takes all `min(piece, left)` bytes, so the
   `fed.consumed != take` refusal is unreachable.
 
 The verifier of the next range is a fresh one (`initG`), at a boundary, the same state as at the start.

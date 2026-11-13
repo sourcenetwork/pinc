@@ -8,10 +8,10 @@ infinity). `splitIvs T I fan` is the interval logic of `splitParts` (core.rs `sp
 are cut into blocks of `step = max 1 (ceil (c / fan))` and a separator `q[..cpl p q + 1]` is placed between the last
 item `p` of a block and the first item `q` of the next. This file proves (`splitIvs_*`):
 
-* `splitIvs_cover`, `splitIvs_disj`, `splitIvs_sub`: the children are pairwise disjoint sub-intervals of `I` whose union is `I`
-  (a partition of the key space, so of every set);
-* `splitIvs_items`: the receiver's items in the children are the blocks (consecutive slices, each of at most `step`);
-* `splitIvs_length`: at most `fan` children; `splitIvs_lt`: with two or more items every child holds fewer.
+* `splitIvs_spec`: the children are pairwise disjoint sub-intervals of `I` whose union is `I` (a partition of the key
+  space, so of every set); at most `fan` children; each holds at most `step` of the receiver's items, and with two or
+  more items every child holds fewer;
+* `ivs_props`: the receiver's items in the children are the blocks (consecutive slices, `chunkBy`, each of at most `step`).
 
 The refinement of the byte machine has to show that the intervals `splitParts` writes are `splitIvs` of the receiver's
 items in the part's range (the blocks are the index slices `x..y`; `slice_eq_filter` turns a rank range into a filter).

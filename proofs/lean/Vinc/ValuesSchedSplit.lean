@@ -7,7 +7,7 @@ import Vinc.ValuesSchedHoles
 The loop of `split` over the spans of a list, as the code writes it (`k` clamped to `1..=S`, a share of at least one
 group, a cut when the share is full, the last share taking the rest). `split_cov`: every byte of the input lands in a
 share; `split_aligned`: for a list of whole groups, every span of every share starts and ends on a group boundary,
-so a cut is never inside a group; `split_idx_lt`: the share index never leaves `0..k`.
+so a cut is never inside a group; the share index never leaves `0..k` (the first conjunct of `splitSpan_cov` and `splitFold_cov`).
 
 The fetch calls `split` only with `k = 1` (a fetch of one provider is the only one not striped), where it is the
 identity on coverage; the proofs are for every `k`, so a future caller with more providers is covered too.

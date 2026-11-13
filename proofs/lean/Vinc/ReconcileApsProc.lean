@@ -6,12 +6,11 @@ import Vinc.ReconcileApsModel
 Facts about a single part-processing step, used by the invariants (ReconcileApsSafe) and the potentials
 (ReconcileApsCost):
 
-* `Proc.kids_sub`, `Proc.kids_disj`: the new parts are pairwise disjoint sub-intervals of the processed one;
-* `Proc.adds_in`, `Proc.adds_nokids`: the arenas only grow by items of the processed interval, and only when no part is
-  left over;
+* `Proc.facts`: the new parts are pairwise disjoint sub-intervals of the processed one (its first two conjuncts); the
+  arenas only grow by items of the processed interval, and only when no part is left over (the third and fourth);
 * `Proc.safe_adds`: what is added is safe whatever the id function: `here` gets items of `B` that `A` lacks, `there`
   items of `A`, each once;
-* `Proc.cover_exact` (needs `Indep`): in a lossless step (not an ids part) every difference item of the interval is
+* `Proc.cover` (needs `Indep`): in a lossless step (not an ids part) every difference item of the interval is
   added or lies in a new part;
 * `aps_ids_exact_of_inj`: if the id function is injective on the leaf's items, the ids reply is the exact merge.
 -/

@@ -7,7 +7,7 @@ A model of `vinc-dag/src/ranges.rs`: a sorted list of disjoint half-open interva
 capacity set `VerifiedRanges<N>` and the unbounded `VerifiedRangesVec`.
 
 Offsets are `Nat`. The code uses `u64`; every comparison, `min`, `max` and subtraction below is the same on both
-as long as the values are `u64`s, and `coveredLen_le` shows the saturating add of `covered_len` never saturates.
+as long as the values are `u64`s, and `coveredLen_eq` shows the saturating add of `covered_len` never saturates.
 The live slice `items[..len]` is the list; the in-place `copy_within` plus slot assignment of the array insert
 and the `Vec::splice` of the vector insert both produce `take from ++ merged :: drop to`.
 -/

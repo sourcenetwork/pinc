@@ -7,7 +7,7 @@ import Vinc.TransportCc
 What the model proves about the controller and the pacer, over unbounded windows, times and runs of calls:
 
 - the window is never below `minCwnd` and never above `maxCwnd` after any call, the filter streak never exceeds 4,
-  and the Reno estimate never exceeds the cap (`Inv`, `onAcked_inv`, `onLoss_inv`, `newPath_inv`, `restore_inv`,
+  and the Reno estimate never exceeds the cap (`Inv`, `onAcked_inv`, `onLoss_inv`, `newPath_inv`, `restore_ge`,
   `resume_inv`);
 - in slow start every acknowledged byte is added to the window, up to the cap (`growSS_cwnd`); an acknowledgement
   never lowers the window except by the rate gate (`growCA_ge`, `applyGate_le`), and the gate never takes it below

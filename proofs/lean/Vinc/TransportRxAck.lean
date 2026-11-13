@@ -11,7 +11,7 @@ What the model proves about the acknowledgement decision and the report of `Rece
 - an acknowledgement is due no later than the delay after the oldest ack-eliciting packet it still owes: once the
   clock has passed that point the deadline has passed (`ack_due_after_delay`, from the invariant `Owed` that every
   call keeps: `owed_receive`, `owed_ackSent`, `owed_other`); a gap, or the count rule, makes the deadline the
-  time of the packet (`receive_due_now`);
+  time of the packet (`dueNext_fire`);
 - the ranges reported are the newest, at most `maxack`, and at least one when anything was received
   (`ackRanges_length_le`, `ackRanges_ne_nil`);
 - our acknowledgement table and the confirmation queue never exceed their bounds (`ackSent_tables`,

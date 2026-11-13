@@ -10,13 +10,13 @@ window arithmetic of `Streams::new`, `Streams::consume` and `Recv::due`. Sizes a
   beyond the read position plus the window, and never beyond a fixed final size (the 1/8 rule of flow control).
 * `grantOne_ledger`: when a grant raises a limit, the credit granted and not yet received, with the new grant,
   fits in the bytes the pool has left (POOL_GRANT).
-* `grantOne_limit_mono`, `grantOne_limit_le`, `grantOne_eighth`: a grant never lowers a limit, keeps it within one
-  window of the read position, and moves it by an eighth of the window at least.
+* `grantOne_limit_mono`, `grantSlot_eighth` (with `grantOne_proc`, which says a grant that acts is `grantSlot`): a grant
+  never lowers a limit, keeps it within one window of the read position, and moves it by an eighth of the window at least.
 * `grantOne_defers_only_when_unfit`, `grantOne_not_missed`: a window due to move is moved or deferred, and it is
   deferred only when the ledger says it does not fit.
 * `grantRun_first_ok`: after `Streams::grant` for the stream just read from, its window is not due (moved or
   nothing due) or deferred: credit follows consumption, the deferred ones being retried by `regrant`.
-* `target_bounds`, `maxStream_le_half`, `limit_span_lt_ring`: the window size stays between the initial window
+* `target_bounds`, `maxStream_le_half`, `maxStream_le_ring`, `span_lt_ring`, `ring_never_overflows`: the window size stays between the initial window
   and the ceiling, which is at most half the pool and `(C - 1)` chunks, so a frame inside the credit never
   reaches `C` chunks beyond the read position (the ring never overflows; RATE_WINDOW).
 -/

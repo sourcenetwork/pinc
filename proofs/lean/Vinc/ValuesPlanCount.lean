@@ -11,8 +11,9 @@ import Vinc.ValuesPlanRef
   `[a, b)` (so `range_pairs`, which `fetch/wt.rs` checks a proof against, is the pair count of `RangeEncoder`).
 * `sufGo_eq`: the loop of `parents_in_suffix` is `parents_in` of the groups from `s` on.
 * `pbGo_eq`: `parents_before` is the number of parent steps that precede the data of the group in the stream.
-* `bef_frames`: the pair counts of the frames sum, frame by frame, to `parents_before`, so the pair count of a
-  frame is the difference of two `parents_before` and the pairs of all the frames are the parents of the range.
+* `parentsBefore_sum`, `pendLen_diff`, `parentsIn_sum` (in `ValuesPlanFrames`): the pair counts of the frames sum, frame
+  by frame, to `parents_before`, so the pair count of a frame is the difference of two `parents_before` and the pairs of
+  all the frames are the parents of the range.
 -/
 
 set_option linter.deprecated false

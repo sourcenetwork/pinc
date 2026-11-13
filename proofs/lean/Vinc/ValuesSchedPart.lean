@@ -9,7 +9,7 @@ asks for a byte twice. This file proves the other half for the moves where no pu
 list was not full, or the span touched the last one): the multiplicity of every byte is conserved exactly.
 
 - `evictQueue_mult`: the share returned to the queue front adds its bytes to the queue, once each.
-- `stealSplit_mult`, `steal_head_tail_total`: the head and the tail of a steal partition the victim's list
+- `steal_head_tail_total` (and `stealSplit_exact`, from any start): the head and the tail of a steal partition the victim's list
   byte for byte, and the tail's total is `total l - min keep (total l)`: the bytes moved are exactly what the
   `Steal` trace record reports and what the thief's list gains.
 -/

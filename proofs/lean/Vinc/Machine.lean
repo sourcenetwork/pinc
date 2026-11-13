@@ -9,7 +9,8 @@ The tree arithmetic of `vinc-dag/src/tree/layout.rs` as the code writes it, on `
 Each operation returns `none` where Rust would overflow, underflow, divide by zero or shift out of range:
 that is a panic in a debug build and a silent wrap in a release build, so the code is correct only if it never
 happens. A function `fooM` is the code of `foo` written with these operations, in the order the code evaluates
-them, and the theorem `fooM_eq` says it returns `some` of the unbounded model that the rest of the package proves
+them, and a theorem named after it with the suffix `eq` (`groupsM_eq`, `depthM_eq`, `outboardSizeM_eq`, `groupSizeM_eq`, `groupRangeM_eq`,
+`leftGroupsM_eq`, `preorderIndexM_eq`, ...) says it returns `some` of the unbounded model that the rest of the package proves
 correct: no step of the code overflows, for every length up to `u64::MAX` and every supported group log. Where the
 code uses a saturating operation the model uses `satMul`, and where it narrows with `try_from` the model uses
 `tryFrom`, which fails instead of truncating.

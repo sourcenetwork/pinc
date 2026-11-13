@@ -10,7 +10,8 @@ import Vinc.ValuesSchedList
 `holes_spec`: the pieces `holes` emits are exactly the unverified bytes of the span, in increasing order, each
 non-empty and inside the span, no byte twice. `retainMissing_cov` and `extend_cov`: they never lose an unverified byte
 (also when a push widens). `align_spec`: the span rounded out to whole groups and clamped to the value.
-`split_spec`: the shares are contiguous pieces of the list in order, cover it exactly and, for lists of whole groups,
+The contract of `split` is in `ValuesSchedSplit` and `ValuesSchedSplitOnce` (`split_cov`, `split_aligned`, `split_once`,
+`split_order`): the shares are contiguous pieces of the list in order, cover it exactly and, for lists of whole groups,
 every cut is at a group boundary.
 -/
 
