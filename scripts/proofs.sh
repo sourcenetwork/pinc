@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The proofs step of the gate: the Lean proofs, TLC on every TLA+ model, and trace validation of the Rust code
-# against the TLA+ spec and the Lean model. Usage: scripts/proofs.sh
+# The proofs step of the gate: the Lean proofs, TLC on every TLA+ model, trace validation of the Rust code against the
+# TLA+ spec and the Lean model, and model-based tests (the Rust code driven along TLC's state graph of a model).
+# Usage: scripts/proofs.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.elan/bin:$HOME/.local/bin:$PATH"
@@ -536,4 +537,19 @@ trace_tlc TraceReconcile reconcile
 trace_tlc TraceCrypto crypto
 trace_tlc TraceKeystore keystore
 proofs/lean/.lake/build/bin/replay "$dir"/*.ndjson
+
+echo "-- model-based tests"
+mbt_cases() { # mbt_cases <spec> <cfg> <out> : TLC's state graph of <cfg> as paths that take every edge, in $dir/mbt/<out>
+    local log="$dir/mbt/$2.log"
+    # the labels of the edges carry the actions' arguments from the 2026 TLC on
+    JAVA_TOOL_OPTIONS="$(jopts)" java -Xss256m -XX:+UseParallelGC -cp "$TRACE_TLC" tlc2.TLC -workers auto \
+        -metadir "proofs/tla/states/$2" -dump dot,actionlabels,constrained "$dir/mbt/$2.dot" \
+        -config "proofs/tla/$2.cfg" "proofs/tla/$1.tla" > "$log" 2>&1 \
+        || { cat "$log" >&2; echo "proofs: TLC failed on $2" >&2; exit 1; }
+    python3 scripts/mbt.py "$dir/mbt/$2.dot" "proofs/tla/$2.cfg" "$log" "$dir/mbt/$3"
+}
+mkdir -p "$dir/mbt"
+mbt_cases MbtOrphan MbtOrphan orphan.ndjson
+mbt_cases MbtOrphan MbtOrphan_edge orphan_edge.ndjson
+VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan -- --nocapture
 echo "proofs: ok"
