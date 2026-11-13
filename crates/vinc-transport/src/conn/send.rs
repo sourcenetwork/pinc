@@ -179,7 +179,7 @@ conn_impl! {
             n = 1;
         }
         for (i, p) in self.paths.iter() {
-            let work = p.send_challenge || p.response.is_some() || p.echo.is_some();
+            let work = p.send_challenge || p.send_ping || p.response.is_some() || p.echo.is_some();
             if i != self.paths.active && Some(i) != self.fan_target && work && n < 5 {
                 if let Some(s) = order.get_mut(n) {
                     *s = Some(i);
@@ -786,6 +786,12 @@ conn_impl! {
         {
             if let Some(pm) = self.paths.get_mut(ti) {
                 pm.response = None;
+            }
+            out.weak();
+        }
+        if p.send_ping && put(payload, pos, &Frame::Ping) {
+            if let Some(pm) = self.paths.get_mut(ti) {
+                pm.send_ping = false;
             }
             out.weak();
         }

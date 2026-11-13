@@ -175,7 +175,7 @@ ep_impl! {
         let floors = if rejoining { self.rejoin_floors(i) } else { [None; NP] };
         let Some(slot) = self.slots.get_mut(i) else { return };
         let Some(conn) = slot.conn.as_mut() else { return };
-        // A standby path that carried nothing for 5 s while data moves is challenged to keep its mapping open.
+        // A standby path that carried nothing for 5 s while data moves is pinged to keep its mapping open.
         let active = conn.active_path();
         let mut probe: [Option<vinc_transport::conn::PathId>; NP] = [None; NP];
         let mut n = 0;
@@ -191,7 +191,7 @@ ep_impl! {
         }
         let mut env = env!(self, now);
         for id in probe.iter().flatten() {
-            let _ = conn.probe(&mut env, *id);
+            let _ = conn.ping_path(*id);
             if let Some(p) = slot.m.stamp(*id) {
                 p.tx = now;
             }

@@ -121,6 +121,8 @@ pub(crate) struct Path {
     /// The challenge is waiting for a packet.
     pub(crate) send_challenge: bool,
     pub(crate) response: Option<[u8; 8]>,
+    /// A PING is waiting to leave on this path (a standby path's keepalive).
+    pub(crate) send_ping: bool,
     pub(crate) echo: Option<u16>,
     pub(crate) probes_left: u32,
     pub(crate) next_probe: u64,
@@ -160,6 +162,7 @@ impl Path {
             challenge_at: 0,
             send_challenge: false,
             response: None,
+            send_ping: false,
             echo: None,
             probes_left: 0,
             next_probe: 0,
@@ -381,6 +384,20 @@ conn_impl! {
     pub fn probe(&mut self, env: &mut Env<'_, P>, id: PathId) -> Result<(), PathError> {
         let i = self.paths.find(id).ok_or(PathError::Unknown)?;
         self.queue_challenge(env, i);
+        Ok(())
+    }
+
+    /// Keep the standby path `id` alive: a PING leaves on it with the next packet, which the peer acknowledges. Unlike
+    /// [`probe`](Self::probe) it starts no challenge, so the path's round trip and the choice of the active path are
+    /// left as they are.
+    ///
+    /// # Errors
+    /// [`PathError::Unknown`] if the path is not tracked.
+    pub fn ping_path(&mut self, id: PathId) -> Result<(), PathError> {
+        let i = self.paths.find(id).ok_or(PathError::Unknown)?;
+        if let Some(p) = self.paths.get_mut(i) {
+            p.send_ping = true;
+        }
         Ok(())
     }
 

@@ -268,6 +268,44 @@ fn a_path_that_never_answers_gets_nine_small_probes_and_stays_unvalidated() {
 }
 
 #[test]
+fn a_ping_on_a_standby_path_keeps_it_alive_and_leaves_its_round_trip_and_the_choice_alone() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(18, Params::new(100 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(100 * MS), Params::new(100 * MS));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        net.b
+            .with_env(now, |c, env| c.add_path(env, PathId(4), PathInfo::default()))
+            .unwrap();
+        assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        let slow = net.a.conn.path_rtt(PathId(3)).unwrap();
+        assert!(slow > 150 * MS, "{slow}");
+        // The standby path gets much faster; a keepalive on it must not notice.
+        net.link.set(PathId(3), Params::new(10 * MS), Params::new(10 * MS));
+        let sent = net.a.tx_log.iter().filter(|t| t.2 == PathId(3)).count();
+        net.a.conn.ping_path(PathId(3)).unwrap();
+        net.run(net.now + 3 * SEC, |_| false);
+        assert!(
+            net.a.tx_log.iter().filter(|t| t.2 == PathId(3)).count() > sent,
+            "the ping left on the standby path"
+        );
+        assert_eq!(net.a.conn.path_rtt(PathId(3)), Some(slow));
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        // A challenge on it does measure the new round trip, and the faster path takes over.
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.probe(env, PathId(3))).unwrap();
+        assert!(net.run(net.now + 10 * SEC, |n| n.a.conn.active_path() == Some(PathId(3))));
+    });
+}
+
+#[test]
 fn relay_carries_a_penalty_and_takes_over_when_the_direct_path_dies() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
