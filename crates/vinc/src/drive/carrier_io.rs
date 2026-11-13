@@ -29,6 +29,46 @@ use crate::node::RELAYS;
 
 /// The most bytes the node may have queued for one carrier that the host has not yet taken.
 pub(crate) const OUT_CAP: usize = 256 * 1024;
+
+/// Take the bytes the node has for one carrier into `out`, until `out` holds [`OUT_CAP`] or the node has none. `next`
+/// fills a buffer and returns how many bytes it gave and, for a WebSocket carrier (`framed`), the mask of their
+/// frame. A framed take is at most one frame's payload, so everything the node gives is framed; false if a frame
+/// could not be encoded all the same, with `out` left as it was before that take.
+fn take_out(
+    out: &mut Vec<u8>,
+    scratch: &mut [u8],
+    framed: bool,
+    mut next: impl FnMut(&mut [u8]) -> (usize, [u8; 4]),
+) -> bool {
+    let room = if framed {
+        scratch.len().min(ws::MAX_PAYLOAD)
+    } else {
+        scratch.len()
+    };
+    let Some(buf) = scratch.get_mut(..room) else {
+        return true;
+    };
+    while out.len() < OUT_CAP {
+        let (n, mask) = next(buf);
+        let Some(chunk) = buf.get(..n).filter(|c| !c.is_empty()) else {
+            return true;
+        };
+        if framed {
+            let at = out.len();
+            out.resize(at + n + ws::MAX_HEADER, 0);
+            let used = out
+                .get_mut(at..)
+                .and_then(|o| ws::encode(Opcode::Binary, chunk, Some(mask), o).ok());
+            out.truncate(at + used.unwrap_or(0));
+            if used.is_none() {
+                return false;
+            }
+        } else {
+            out.extend_from_slice(chunk);
+        }
+    }
+    true
+}
 /// The size of a read.
 const READ_BUF: usize = 16 * 1024;
 /// The most bytes of the stream read ahead of the node, and of undecoded WebSocket frames.
@@ -240,27 +280,24 @@ impl<H: Hosted> Shared<H> {
         let mut scratch = self.tx_buf();
         for (r, s) in t.iter_mut().enumerate() {
             let State::Open(_, kind) = s.state else { continue };
-            while s.out.len() < OUT_CAP {
-                let n = core.carrier_out(r, &mut scratch.v);
-                if n == 0 {
-                    break;
-                }
-                work = true;
-                let Some(chunk) = scratch.v.get(..n) else { break };
-                if kind == CarrierKind::Ws {
-                    let mut mask = [0u8; 4];
+            let framed = kind == CarrierKind::Ws;
+            let before = s.out.len();
+            let whole = take_out(&mut s.out, &mut scratch.v, framed, |buf| {
+                let n = core.carrier_out(r, buf);
+                let mut mask = [0u8; 4];
+                if framed && n > 0 {
                     core.random(&mut mask);
-                    let at = s.out.len();
-                    s.out.resize(at + n + ws::MAX_HEADER, 0);
-                    let used = s
-                        .out
-                        .get_mut(at..)
-                        .and_then(|o| ws::encode(Opcode::Binary, chunk, Some(mask), o).ok())
-                        .unwrap_or(0);
-                    s.out.truncate(at + used);
-                } else {
-                    s.out.extend_from_slice(chunk);
                 }
+                (n, mask)
+            });
+            work |= s.out.len() != before || !whole;
+            if !whole {
+                // Bytes the node gave could not be framed: the stream would have a hole, so the carrier ends here.
+                if let State::Open(st, _) = std::mem::replace(&mut s.state, State::Idle) {
+                    s.set(State::Closing(Some(st)));
+                }
+                core.carrier_closed(self.now(), r);
+                self.cdirty.set(true);
             }
         }
         drop(t);
@@ -597,4 +634,50 @@ fn ws_fill<S>(s: &mut Slot<S>) -> Result<bool, ()> {
         raw.drain(..used);
     }
     Ok(true)
+}
+
+#[cfg(test)]
+#[allow(clippy::cast_possible_truncation, reason = "bytes counted modulo 251")]
+mod tests {
+    use super::*;
+
+    /// A source of `total` counted bytes that gives as many as the buffer takes.
+    fn source(total: usize) -> impl FnMut(&mut [u8]) -> (usize, [u8; 4]) {
+        let mut given = 0usize;
+        move |buf| {
+            let n = buf.len().min(total - given);
+            for (i, b) in buf.iter_mut().take(n).enumerate() {
+                *b = ((given + i) % 251) as u8;
+            }
+            given += n;
+            (n, [1, 2, 3, 4])
+        }
+    }
+
+    #[test]
+    fn more_than_one_frame_of_waiting_bytes_is_framed_whole_and_in_order() {
+        let total = 3 * ws::MAX_PAYLOAD + 777;
+        let (mut out, mut scratch) = (Vec::new(), vec![0u8; 64 * 1024]);
+        assert!(take_out(&mut out, &mut scratch, true, source(total)));
+        let (mut dec, mut got, mut at) = (Decoder::new(WsRole::Client), Vec::new(), 0);
+        while let Ok(Some((frame, used))) = dec.decode(out.get_mut(at..).unwrap_or_default()) {
+            if let WsFrame::Data(p) = frame {
+                assert!(p.len() <= ws::MAX_PAYLOAD);
+                got.extend_from_slice(p);
+            }
+            at += used;
+        }
+        let want: Vec<u8> = (0..total).map(|i| (i % 251) as u8).collect();
+        assert_eq!((got.len(), got == want, at), (total, true, out.len()));
+    }
+
+    #[test]
+    fn a_plain_carrier_takes_the_bytes_as_they_are_up_to_the_cap() {
+        let (mut out, mut scratch) = (Vec::new(), vec![0u8; 64 * 1024]);
+        assert!(take_out(&mut out, &mut scratch, false, source(100_000)));
+        assert_eq!(out.len(), 100_000);
+        let mut out = Vec::new();
+        assert!(take_out(&mut out, &mut scratch, false, source(OUT_CAP + 200_000)));
+        assert!(out.len() >= OUT_CAP && out.len() < OUT_CAP + scratch.len());
+    }
 }
