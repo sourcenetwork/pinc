@@ -92,6 +92,8 @@ pub use keepalive::{
     standby_due,
 };
 pub use ledger::{DATAGRAM_OVERHEAD, FACTOR, LEDGER_ENTRIES, Ledger, LedgerEntry};
+#[cfg(feature = "trace")]
+pub use orphan::trace::{OrphanEntry, OrphanProbe};
 pub use queue::{EVENT_BASE, event_headroom, event_queue};
 pub use reach::REACH_BODY_MAX;
 pub use relay_net::{RELAY_V4, is_relay_addr, relay_addr, relay_parts};

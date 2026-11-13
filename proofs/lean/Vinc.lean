@@ -80,6 +80,9 @@ import Vinc.TransportHdr
 import Vinc.TransportHdrThm
 import Vinc.TransportHdrSplit
 import Vinc.TraceHdr
+import Vinc.CoreOrphan
+import Vinc.CoreOrphanThm
+import Vinc.TraceOrphan
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery
