@@ -707,6 +707,32 @@ impl Handshake {
         self.rx.add(buf, total, off, data)
     }
 
+    /// [`Self::on_fragment`] with the state of the reassembly around it and the message buffer after it.
+    #[cfg(feature = "trace")]
+    pub(crate) fn trace_fragment(
+        &mut self,
+        pool: &mut BufferPool<'_>,
+        body: &[u8],
+    ) -> super::reasm::trace::FragmentView {
+        let before = self.rx.trace_view();
+        let ret = self.on_fragment(pool, body);
+        let after = self.rx.trace_view();
+        let n = ret.unwrap_or(0).max(after.total);
+        let message = self
+            .chunk
+            .as_ref()
+            .and_then(|c| pool.bytes(c).get(MAX_MESSAGE_LEN..))
+            .and_then(|b| b.get(..n))
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        super::reasm::trace::FragmentView {
+            before,
+            after,
+            ret,
+            message,
+        }
+    }
+
     /// Hand the complete message of `len` bytes to the state machine. A server needs the shared `stores`.
     ///
     /// The first message that is taken, if the first flight went unrepeated, gives the handshake round trip.

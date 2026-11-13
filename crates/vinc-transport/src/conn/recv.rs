@@ -395,6 +395,13 @@ conn_impl! {
         self.process_payload(env, &mut ctx, pn, payload)
     }
 
+    /// The body of a Handshake packet as `handle_inner` hands it to the handshake, with the reassembly around it (trace
+    /// validation: the real parse of the two varints and the real reassembly, without the state machine after it).
+    #[cfg(feature = "trace")]
+    pub fn trace_fragment(&mut self, body: &[u8]) -> super::FragmentView {
+        self.hs.trace_fragment(&mut self.pool, body)
+    }
+
     /// Authenticated packet `pn` with `payload` frames.
     fn process_payload(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn: u64, payload: &[u8]) -> Result<(), Drop> {
         let now = ctx.now;

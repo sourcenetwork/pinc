@@ -79,6 +79,7 @@ import Vinc.TraceReasm
 import Vinc.TransportHdr
 import Vinc.TransportHdrThm
 import Vinc.TransportHdrSplit
+import Vinc.TransportHdrBody
 import Vinc.TraceHdr
 import Vinc.TransportFrame
 import Vinc.TransportFrameThm

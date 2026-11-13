@@ -88,6 +88,15 @@ impl Reassembly {
         }
         None
     }
+
+    /// The runs and the message length, for trace validation.
+    #[cfg(feature = "trace")]
+    pub(crate) fn trace_view(&self) -> trace::ReasmView {
+        trace::ReasmView {
+            runs: self.runs.iter().take(self.len).copied().collect(),
+            total: self.total,
+        }
+    }
 }
 
 /// Test-only driver of the reassembly, for trace validation (cargo feature `trace`, off by default).
@@ -106,6 +115,21 @@ pub(super) mod trace {
         pub runs: Vec<(usize, usize)>,
         /// The message length being assembled, 0 for none.
         pub total: usize,
+    }
+
+    /// What the handshake did with the body of one Handshake packet: the state of the reassembly before and after,
+    /// what `on_fragment` returned, and the bytes of the message buffer (as many as the message being assembled, or
+    /// the message just completed, is long).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FragmentView {
+        /// The reassembly before the call.
+        pub before: ReasmView,
+        /// The reassembly after the call.
+        pub after: ReasmView,
+        /// The length of the message, if the fragment completed it.
+        pub ret: Option<usize>,
+        /// The first bytes of the message buffer.
+        pub message: Vec<u8>,
     }
 
     /// A reassembly with its own message buffer.

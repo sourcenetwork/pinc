@@ -409,6 +409,12 @@ par run_tlc halfopen HalfOpen HalfOpen
 par witness_tlc halfopen_le HalfOpen HalfOpen_le Capped
 par witness_tlc halfopen_strict HalfOpen HalfOpen_strict TimerRight
 par witness_tlc halfopen_reach HalfOpen HalfOpen_reach NoResumeAtCap
+par run_tlc hdr_body HdrBody HdrBody
+par witness_tlc hdr_body_room HdrBody HdrBody_room RoomAny
+par witness_tlc hdr_body_trim HdrBody HdrBody_trim PastRefused
+par witness_tlc hdr_body_done HdrBody HdrBody_done NotDone
+par witness_tlc hdr_body_padlate HdrBody HdrBody_padlate PadAtomicLate
+par witness_tlc hdr_body_skip3 HdrBody HdrBody_skip3 SampleStable3
 par run_tlc mtu Mtu Mtu
 par run_tlc broadcast_auth BroadcastAuth BroadcastAuth
 par witness_tlc broadcast_auth_nobody BroadcastAuth BroadcastAuth_nobody DeliverExact
