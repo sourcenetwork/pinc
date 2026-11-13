@@ -14,6 +14,11 @@
 
 mod vinc_common;
 
+use std::future::{Future, poll_fn};
+use std::pin::{Pin, pin};
+use std::task::Poll;
+use std::time::Duration;
+
 use vinc::{ErrorKind, Limits};
 use vinc_common::{ECHO, GEN, SINK, bind, client, join_all, node, pattern, pattern_hash, serve_conn, within};
 
@@ -105,6 +110,57 @@ async fn streams_beyond_the_peer_pool_are_delivered() {
         join_all(jobs).await;
     })
     .await;
+}
+
+/// Opens past the peer's stream limit are served in the order they asked: an open that comes after the place freed,
+/// while the older open is woken but has not run yet, queues behind it instead of taking the place.
+#[nuclei::test]
+async fn a_waiting_open_is_served_before_a_newer_one() {
+    within(60, async {
+        let one = Limits {
+            streams: 1,
+            ..Limits::default()
+        };
+        let peer = bind(vinc_common::builder().alpn(ECHO).limits(one)).await;
+        let s = peer.clone();
+        nuclei::spawn_local(async move {
+            while let Some(i) = s.accept().await {
+                nuclei::spawn_local(serve_conn(i.into_connection())).detach();
+            }
+        })
+        .detach();
+        let ep = client().await;
+        let conn = ep.connect(peer.addr(), ECHO).await.unwrap();
+        let (mut tx, mut rx) = conn.open_bi().await.unwrap();
+        // The endpoint's own task takes the driving role back from the dial, so the futures polled by hand below
+        // never hold it.
+        nuclei::time::sleep(Duration::from_millis(50)).await;
+        let mut older = pin!(conn.open_bi());
+        assert!(poll_once(older.as_mut()).await.is_pending(), "the one place is taken");
+        tx.write_all(b"first").await.unwrap();
+        tx.finish().await.unwrap();
+        assert_eq!(rx.read_to_end(64).await.unwrap(), b"first");
+        // The place's credit may ride a packet after the answer; the endpoint's own task takes it in meanwhile.
+        nuclei::time::sleep(Duration::from_millis(200)).await;
+        let mut newer = pin!(conn.open_bi());
+        assert!(
+            poll_once(newer.as_mut()).await.is_pending(),
+            "a newer open took the place the older one waits for"
+        );
+        for (f, name) in [(older, &b"older"[..]), (newer, b"newer")] {
+            let (mut tx, mut rx) = f.await.unwrap();
+            tx.write_all(name).await.unwrap();
+            tx.finish().await.unwrap();
+            assert_eq!(rx.read_to_end(64).await.unwrap(), name);
+        }
+    })
+    .await;
+}
+
+/// One poll of `f`.
+async fn poll_once<F: Future>(f: Pin<&mut F>) -> Poll<F::Output> {
+    let mut f = Some(f);
+    poll_fn(|cx| Poll::Ready(f.take().map_or(Poll::Pending, |f| f.poll(cx)))).await
 }
 
 #[nuclei::test]

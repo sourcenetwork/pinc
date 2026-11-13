@@ -130,12 +130,16 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             return Try::Done(Err(info.gone()));
         }
         let session = info.id;
+        let key = SKey::Open(bidi);
+        if self.open_ahead(session, key) {
+            return Try::Wait(Wait::S(session, key));
+        }
         match self.cmd(now, || Command::OpenStream { session, bidi }) {
             Ok(Value::Stream(id)) => Try::Done(Ok(id)),
             Ok(_) => Try::Done(Err(Error::new(ErrorKind::Busy, "the stream did not open"))),
             // No stream credit or no room for the stream's window yet: wait for the connection's open-ready event.
             Err(CommandError::Stream(StreamError::StreamLimit | StreamError::Exhausted)) => {
-                Try::Wait(Wait::S(session, SKey::Open))
+                Try::Wait(Wait::S(session, key))
             }
             Err(e) => Try::Done(Err(Error::command(e))),
         }
@@ -295,7 +299,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             RecvStatus::Reset(e) => Some(Err(Error::new(ErrorKind::Reset(e), "the peer reset the stream"))),
         };
         if n > 0 {
-            self.wake_s(session, SKey::Open);
+            self.wake_open(session);
             Try::Done(Ok((n, end)))
         } else if end.is_some() || offered {
             // The end, or bytes the taker left where they are: waiting would be for nothing.
