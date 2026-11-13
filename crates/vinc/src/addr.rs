@@ -8,9 +8,13 @@
 //! Invariants: parsing never panics; printing then parsing returns the same value; the text of a node id holds no
 //! secret.
 
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::fmt;
-use std::net::SocketAddr;
-use std::str::FromStr;
+use core::net::SocketAddr;
+use core::str::FromStr;
 
 use crate::error::{Error, ErrorKind, Result};
 use vinc_crypto::{IdentityAlg, NodeId};

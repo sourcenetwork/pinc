@@ -12,9 +12,10 @@
 //! offset between them; the in-flight operations of the host's carriers live in the future of `run`, so a role is
 //! driven by one `run` at a time and ends when it ends.
 
-use std::future::{Ready, pending, ready};
-use std::net::SocketAddr;
-use std::task::Context;
+use alloc::vec::Vec;
+use core::future::{Ready, pending, ready};
+use core::net::SocketAddr;
+use core::task::Context;
 
 use vinc_core::Event;
 use vinc_crypto::NodeId;
@@ -263,7 +264,7 @@ pub trait RoleSpec<K: KeyStore>: sealed::Sealed {
     #[doc(hidden)]
     fn build(
         self,
-        identity: std::rc::Rc<std::cell::RefCell<Identity<K>>>,
+        identity: alloc::rc::Rc<core::cell::RefCell<Identity<K>>>,
         local: SocketAddr,
         relay_now: u64,
     ) -> Result<Self::Built>;
@@ -272,7 +273,7 @@ pub trait RoleSpec<K: KeyStore>: sealed::Sealed {
 impl<K: KeyStore> RoleSpec<K> for () {
     type Built = ();
 
-    fn build(self, _: std::rc::Rc<std::cell::RefCell<Identity<K>>>, _: SocketAddr, _: u64) -> Result<()> {
+    fn build(self, _: alloc::rc::Rc<core::cell::RefCell<Identity<K>>>, _: SocketAddr, _: u64) -> Result<()> {
         Ok(())
     }
 }
@@ -297,7 +298,7 @@ impl<K: KeyStore, C: Carriers, St: Store, A: Access> RoleSpec<K> for RelayRole<C
 
     fn build(
         self,
-        identity: std::rc::Rc<std::cell::RefCell<Identity<K>>>,
+        identity: alloc::rc::Rc<core::cell::RefCell<Identity<K>>>,
         local: SocketAddr,
         relay_now: u64,
     ) -> Result<Part<C, K, St, A>> {

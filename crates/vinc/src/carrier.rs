@@ -45,6 +45,7 @@ impl CarrierKind {
 #[cfg(test)]
 mod tests {
     use super::CarrierKind;
+    use alloc::vec::Vec;
 
     #[test]
     fn only_browser_websocket_keeps_message_boundaries() {

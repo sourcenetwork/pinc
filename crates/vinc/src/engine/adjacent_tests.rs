@@ -1,6 +1,9 @@
 //! The adjacency report of connected topics: a burst of sessions is named to the hubs once a turn, and no more often
 //! than [`ADJ_GAP`] while sessions churn (vinc#86, review of #137).
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use vinc_core::{EndReason, Event, SessionId};
 use vinc_crypto::{IdentityAlg, NodeId};
 use vinc_keystore::SoftwareStore;

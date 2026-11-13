@@ -10,11 +10,13 @@
 //! Invariants: no borrow is held across a call of a host closure; every buffer is allocated when a carrier opens and
 //! reused after; the bytes waiting to be written are bounded by [`OUT_CAP`].
 
-use std::future::{Future, poll_fn};
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use core::future::{Future, poll_fn};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use std::io;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
 
 use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
 use vinc_connect::client::Io as CarrierIo;
@@ -147,7 +149,7 @@ impl<S> Slot<S> {
 pub(crate) type Slots<S> = [Slot<S>; RELAYS];
 
 pub(crate) fn slots<S>() -> Slots<S> {
-    std::array::from_fn(|_| Slot::new())
+    core::array::from_fn(|_| Slot::new())
 }
 
 /// The bit of [`Op`]'s state that says an operation runs; the rest is the version of the state it belongs to.
@@ -266,7 +268,7 @@ impl<H: Hosted> Shared<H> {
                 }
                 CarrierIo::Close { relay } => {
                     if let Some(s) = t.get_mut(relay) {
-                        let held = match std::mem::replace(&mut s.state, State::Idle) {
+                        let held = match core::mem::replace(&mut s.state, State::Idle) {
                             State::Open(st, _) => Some(st),
                             _ => None,
                         };
@@ -291,7 +293,7 @@ impl<H: Hosted> Shared<H> {
             work |= s.out.len() != before || !whole;
             if !whole {
                 // Bytes the node gave could not be framed: the stream would have a hole, so the carrier ends here.
-                if let State::Open(st, _) = std::mem::replace(&mut s.state, State::Idle) {
+                if let State::Open(st, _) = core::mem::replace(&mut s.state, State::Idle) {
                     s.set(State::Closing(Some(st)));
                 }
                 core.carrier_closed(self.now(), r);
@@ -313,7 +315,7 @@ impl<H: Hosted> Shared<H> {
         };
         for (r, s) in t.iter_mut().enumerate() {
             if s.writing {
-                let st = match std::mem::replace(&mut s.state, State::Idle) {
+                let st = match core::mem::replace(&mut s.state, State::Idle) {
                     State::Open(st, _) => Some(st),
                     _ => None,
                 };
@@ -328,7 +330,7 @@ impl<H: Hosted> Shared<H> {
         let now = self.now();
         let Some(mut core) = self.lock() else { return };
         let was = self
-            .with_slot(r, ver, |s| match std::mem::replace(&mut s.state, State::Idle) {
+            .with_slot(r, ver, |s| match core::mem::replace(&mut s.state, State::Idle) {
                 State::Open(st, _) => {
                     s.set(State::Closing(Some(st)));
                     true
@@ -444,8 +446,8 @@ impl<H: Hosted> Shared<H> {
             }
             s.writing = true;
             s.wfrom = 0;
-            let spare = std::mem::take(&mut s.spare);
-            Some(std::mem::replace(&mut s.out, spare))
+            let spare = core::mem::take(&mut s.spare);
+            Some(core::mem::replace(&mut s.out, spare))
         })
         .flatten()
     }
@@ -460,7 +462,7 @@ impl<H: Hosted> Shared<H> {
                         return Some(true);
                     }
                     buf.clear();
-                    s.spare = std::mem::take(&mut buf);
+                    s.spare = core::mem::take(&mut buf);
                     s.writing = false;
                     s.wfrom = 0;
                     Some(false)
@@ -502,10 +504,10 @@ impl<H: Hosted> Shared<H> {
     pub(super) async fn carriers_task(&self) {
         let c = self.host.carriers();
         self.adopt_carriers();
-        let mut opens: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
-        let mut reads: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
-        let mut writes: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
-        let mut closes: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
+        let mut opens: [Op<_>; RELAYS] = core::array::from_fn(|_| Op::new());
+        let mut reads: [Op<_>; RELAYS] = core::array::from_fn(|_| Op::new());
+        let mut writes: [Op<_>; RELAYS] = core::array::from_fn(|_| Op::new());
+        let mut closes: [Op<_>; RELAYS] = core::array::from_fn(|_| Op::new());
         let mut hop = Op::new();
         poll_fn(|cx| {
             let mut moved = false;
@@ -551,7 +553,7 @@ impl<H: Hosted> Shared<H> {
                             let buf = self
                                 .with_slot(r, ver, |s| {
                                     // The host fills at most the length of the vector, from its start.
-                                    let mut b = std::mem::take(&mut s.rbuf);
+                                    let mut b = core::mem::take(&mut s.rbuf);
                                     b.resize(READ_BUF, 0);
                                     b
                                 })
@@ -643,6 +645,8 @@ fn ws_fill<S>(s: &mut Slot<S>) -> Result<bool, ()> {
 #[cfg(test)]
 #[allow(clippy::cast_possible_truncation, reason = "bytes counted modulo 251")]
 mod tests {
+    use alloc::vec;
+
     use super::*;
 
     /// A source of `total` counted bytes that gives as many as the buffer takes.

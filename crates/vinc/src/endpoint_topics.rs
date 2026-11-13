@@ -6,7 +6,8 @@
 //! hub or a relay that alters one is caught, and a peer the access hook refuses (with [`Direction::Gossip`](crate::Direction))
 //! neither delivers nor receives anything.
 
-use std::time::Duration;
+use alloc::vec::Vec;
+use core::time::Duration;
 
 use vinc_broadcast::ReachStats;
 use vinc_crypto::NodeId;

@@ -12,12 +12,16 @@
 //! connection of it or to a stream of it lives; dropping the last handle drops its state without sending anything, so
 //! close what should be told first ([`Endpoint::close`], [`Connection::close`]).
 
-use std::future::{Future, poll_fn};
-use std::net::{Ipv4Addr, SocketAddr};
-use std::pin::pin;
-use std::rc::Rc;
-use std::task::Poll;
-use std::time::{Duration, Instant};
+use alloc::rc::Rc;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::{Future, poll_fn};
+use core::net::{Ipv4Addr, SocketAddr};
+use core::pin::pin;
+use core::task::Poll;
+use core::time::Duration;
+use std::time::Instant;
 
 use vinc_connect::record::{self, MAX_ADDRS, MAX_RECORD_LEN, Reach, RecordFields};
 use vinc_crypto::NodeId;
@@ -558,7 +562,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
             a.set_ip(if a.is_ipv4() {
                 Ipv4Addr::LOCALHOST.into()
             } else {
-                std::net::Ipv6Addr::LOCALHOST.into()
+                core::net::Ipv6Addr::LOCALHOST.into()
             });
         }
         NodeAddr {

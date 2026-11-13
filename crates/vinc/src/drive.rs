@@ -18,14 +18,18 @@
 //! share and go back when dropped, so steady traffic allocates none, however many futures send at once; with no future
 //! polled the endpoint makes no progress, which is the SANS-IO contract.
 
-use std::cell::{Cell, RefCell, RefMut};
-use std::future::poll_fn;
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cell::{Cell, RefCell, RefMut};
+use core::future::poll_fn;
+use core::net::{IpAddr, SocketAddr};
+use core::pin::pin;
+use core::task::Poll;
+use core::time::Duration;
 use std::io;
-use std::net::{IpAddr, SocketAddr};
-use std::pin::pin;
-use std::rc::Rc;
-use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 mod carrier_io;
 mod http_io;
@@ -49,7 +53,7 @@ const DRAIN: usize = 256;
 /// The most buffers each pool keeps.
 const POOLED: usize = 8;
 
-thread_local! {
+std::thread_local! {
     /// The receive buffers the endpoints of this thread share.
     static RX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
     /// The transmit buffers the endpoints of this thread share.
@@ -98,7 +102,7 @@ struct Buf<'a> {
 
 impl Drop for Buf<'_> {
     fn drop(&mut self) {
-        let v = std::mem::take(&mut self.v);
+        let v = core::mem::take(&mut self.v);
         // A pool borrowed at this moment is never: the borrows are short and nothing calls out while holding one.
         if let Ok(mut pool) = self.home.try_borrow_mut()
             && pool.len() < POOLED

@@ -7,7 +7,10 @@
 //!
 //! Invariants: a body never changes once made; cloning one is a reference count, never a copy of its bytes.
 
-use std::rc::Rc;
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use vinc_node::{ServeSource, ValueRead, ValueSource};
 use vinc_transport::stream::StreamSource;

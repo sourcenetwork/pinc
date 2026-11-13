@@ -7,7 +7,8 @@
 //! Invariants: the event queue holds at most [`EVENTS`] events and counts what it drops; the topics joined are
 //! bounded by the node's topic limit; a neighbour is reported up once and down once per change of the set.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use vinc_core::Role;
 use vinc_crypto::NodeId;
@@ -102,7 +103,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     /// The next event, or `None` once the endpoint stopped and the queue is empty, else a wait.
     pub(crate) fn poll_event(&mut self) -> Try<Option<Event>> {
         if self.lost > 0 {
-            let count = std::mem::take(&mut self.lost);
+            let count = core::mem::take(&mut self.lost);
             return Try::Done(Some(Event::Lost { count }));
         }
         match self.events.pop_front() {

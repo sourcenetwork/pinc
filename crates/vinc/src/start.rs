@@ -9,6 +9,9 @@
 //! Invariants: the endpoint is built once; its connection id table holds ten entries per session; everything it uses is
 //! freed when it is dropped.
 
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 use vinc_broadcast::Limits as BroadcastLimits;
 use vinc_broadcast::consts::DEFAULT_MAX_SUBSCRIBERS;
 use vinc_connect::client::Config as ConnectConfig;
@@ -144,12 +147,12 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
 }
 
 /// The local addresses the endpoint knows: one per family the socket can carry.
-pub(crate) fn interfaces(local: std::net::SocketAddr) -> Vec<std::net::SocketAddr> {
+pub(crate) fn interfaces(local: core::net::SocketAddr) -> Vec<core::net::SocketAddr> {
     match local {
-        std::net::SocketAddr::V6(a) if a.ip().is_unspecified() => {
+        core::net::SocketAddr::V6(a) if a.ip().is_unspecified() => {
             vec![
                 local,
-                std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), a.port()),
+                core::net::SocketAddr::new(core::net::Ipv4Addr::UNSPECIFIED.into(), a.port()),
             ]
         }
         a => vec![a],
@@ -160,7 +163,7 @@ pub(crate) fn interfaces(local: std::net::SocketAddr) -> Vec<std::net::SocketAdd
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PortMapping {
     pub on: bool,
-    pub gateway: Option<std::net::IpAddr>,
+    pub gateway: Option<core::net::IpAddr>,
 }
 
 impl PortMapping {
@@ -174,7 +177,10 @@ impl PortMapping {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "tests assert")]
 mod tests {
-    use std::net::SocketAddr;
+    use alloc::format;
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use core::net::SocketAddr;
 
     use vinc_keystore::SoftwareStore;
 

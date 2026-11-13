@@ -14,8 +14,9 @@
 //! again, whatever the calls (the slot is released unarmed or not): the release that brings a slot's generation round
 //! drops every stale entry, so one of an earlier round cannot match the generation of a new ticket.
 
-use std::collections::VecDeque;
-use std::task::Waker;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
+use core::task::Waker;
 
 /// A future's place in the slab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,8 +140,11 @@ impl Standby {
 /// A slab of its own for the trace check, driven call by call with tickets and wakers named by numbers.
 #[cfg(feature = "trace")]
 pub(crate) mod trace {
-    use std::sync::{Arc, Mutex, PoisonError};
-    use std::task::{Wake, Waker};
+    use alloc::sync::Arc;
+    use alloc::task::Wake;
+    use alloc::vec::Vec;
+    use core::task::Waker;
+    use std::sync::{Mutex, PoisonError};
 
     use super::{Standby, Ticket};
 

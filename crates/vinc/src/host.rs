@@ -24,10 +24,10 @@
 //! a receive future that is dropped before it completes loses no datagram (true of readiness-based receives such as
 //! nuclei's and tokio's `recv_from`).
 
-use std::cell::RefCell;
+use core::cell::RefCell;
+use core::marker::PhantomData;
+use core::net::SocketAddr;
 use std::io;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
 use std::time::Instant;
 
 use vinc_keystore::KeyStore;

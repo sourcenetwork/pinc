@@ -4,7 +4,7 @@
 //! share one [`Gate`]; the bar is borrowed only for a lookup or an update and never while the hook runs, so asking it
 //! never depends on what the endpoint is doing.
 
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use vinc_crypto::NodeId;
 use vinc_security::Alpn;

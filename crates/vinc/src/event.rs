@@ -3,6 +3,7 @@
 //! Events queue in a bounded buffer. When it is full the newest is dropped and counted, and the count comes out as
 //! [`Event::Lost`] before the next event, so a gap never reads as silence.
 
+use alloc::vec::Vec;
 use vinc_crypto::NodeId;
 
 /// The id of a published message.

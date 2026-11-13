@@ -14,7 +14,9 @@
 //! Invariants: restoring bytes that are not exactly one well-formed state changes nothing; the address book never holds
 //! more than [`BOOK_MAX`] nodes or eight addresses of one.
 
-use std::net::{IpAddr, SocketAddr};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::net::{IpAddr, SocketAddr};
 
 use vinc_core::state_len;
 use vinc_crypto::{IdentityAlg, NodeId};

@@ -17,9 +17,10 @@
 //! never replaces a higher one), and there are at most [`KNOWN_MAX`]; a borrow of the table lasts one call and is
 //! never held across an await.
 
-use std::cell::{Cell, RefCell};
-use std::future::Future;
-use std::net::SocketAddr;
+use alloc::vec::Vec;
+use core::cell::{Cell, RefCell};
+use core::future::Future;
+use core::net::SocketAddr;
 
 use vinc_connect::record::{MAX_HINT_LEN, Record};
 use vinc_crypto::NodeId;
@@ -207,12 +208,12 @@ mod tests {
     struct Empty;
 
     impl Rendezvous for Empty {
-        async fn publish(&self, _record: &[u8]) -> Result<()> {
-            Ok(())
+        fn publish(&self, _record: &[u8]) -> impl Future<Output = Result<()>> {
+            core::future::ready(Ok(()))
         }
 
-        async fn fetch(&self, _node: &NodeId) -> Option<Vec<u8>> {
-            None
+        fn fetch(&self, _node: &NodeId) -> impl Future<Output = Option<Vec<u8>>> {
+            core::future::ready(None)
         }
     }
 

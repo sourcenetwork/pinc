@@ -5,7 +5,7 @@
 //! Invariants: an endpoint built without [`Builder::port_mapping`], on a loopback address or with the relay role sends
 //! nothing for port mapping and holds no mapping.
 
-use std::net::{IpAddr, SocketAddr};
+use core::net::{IpAddr, SocketAddr};
 
 use super::{Builder, Discovery, Endpoint};
 use crate::engine::Try;

@@ -12,10 +12,13 @@
 //! holds an entry only while its session or stream lives, so nothing grows with history; per-poll work is proportional
 //! to what changed, never to a table's capacity.
 
-use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::net::SocketAddr;
-use std::rc::Rc;
+use alloc::boxed::Box;
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cell::{Cell, OnceCell, RefCell};
+use core::net::SocketAddr;
 
 use vinc_core::{Answer, Command, CommandError, ConnectFailure, Event, IfaceId, Query, SessionId, Taken, Value};
 use vinc_crypto::{NodeId, Secret};
@@ -399,7 +402,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// The events kept for the relay role; the caller gives the vector back through [`Core::return_relay_events`].
     pub(crate) fn take_relay_events(&mut self) -> Vec<Event> {
-        std::mem::take(&mut self.relay_events)
+        core::mem::take(&mut self.relay_events)
     }
 
     /// Give back the vector [`Core::take_relay_events`] lent, emptied, so its memory is reused.
@@ -514,7 +517,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Whether a command ran since the last call that may have queued packets; the caller then sends them.
     pub(crate) fn take_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.dirty)
+        core::mem::take(&mut self.dirty)
     }
 
     // ---- waiting ----
