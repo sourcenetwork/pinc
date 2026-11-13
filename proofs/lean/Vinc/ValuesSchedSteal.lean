@@ -51,11 +51,12 @@ def prate (pt : Option Nat) (pb now : Nat) : Nat :=
   | none => 0
   | some t => if now - t < RATE_WARMUP then 0 else pb / max ((now - t) / MS) 1
 
-/-- `Fetch::target`: the outstanding target of a provider (ARRIVAL_CURVE). -/
+/-- `Fetch::target`: the outstanding target of a provider (ARRIVAL_CURVE). The rate replaces the starting target after
+the warm-up, or as soon as the provider has verified twice `TGT0`. -/
 def target (pt : Option Nat) (pb now : Nat) : Nat :=
   match pt with
   | some t =>
-    if now - t ≥ RATE_WARMUP then
+    if now - t ≥ RATE_WARMUP ∨ 2 * TGT0 ≤ pb then
       max (MIN_TARGET_GROUPS * G) (min TGT_MAX (satMul pb RATE_HORIZON / max ((now - t) / MS) 1))
     else TGT0
   | none => TGT0
@@ -80,7 +81,14 @@ theorem topup_want_pos (pt : Option Nat) (pb now outstanding : Nat)
 theorem prate_warmup (t pb now : Nat) (h : now - t < RATE_WARMUP) : prate (some t) pb now = 0 := by
   simp [prate, h]
 
-theorem target_warmup (t pb now : Nat) (h : now - t < RATE_WARMUP) : target (some t) pb now = TGT0 := by
+theorem target_warmup (t pb now : Nat) (h : now - t < RATE_WARMUP) (hb : pb < 2 * TGT0) :
+    target (some t) pb now = TGT0 := by
+  simp [target]; omega
+
+/-- Inside the warm-up, a provider that has verified twice `TGT0` has left the first-round target for its rate. -/
+theorem target_early (t pb now : Nat) (h : now - t < RATE_WARMUP) (hb : 2 * TGT0 ≤ pb) :
+    target (some t) pb now
+      = max (MIN_TARGET_GROUPS * G) (min TGT_MAX (satMul pb RATE_HORIZON / max ((now - t) / MS) 1)) := by
   simp [target]; omega
 
 /-! ## TAIL_SHRINK -/
@@ -220,6 +228,7 @@ end Vinc.ValuesSched
 #audit_axioms Vinc.ValuesSched.topup_want_pos
 #audit_axioms Vinc.ValuesSched.prate_warmup
 #audit_axioms Vinc.ValuesSched.target_warmup
+#audit_axioms Vinc.ValuesSched.target_early
 #audit_axioms Vinc.ValuesSched.tail_shrink_inactive
 #audit_axioms Vinc.ValuesSched.tail_want_pos
 #audit_axioms Vinc.ValuesSched.leftSum_le
