@@ -2,8 +2,10 @@
 //!
 //! The node sends a QAD probe with a fresh nonce to every relay's UDP address. An answer carries the address the
 //! relay saw ([`crate::relay::datagram::Datagram::Qadr`]): that is the node's reflexive address, and the time the
-//! answer took is the round trip to that relay. The home relay is the one with the lowest round trip; a node whose
-//! probes all went unanswered takes the relay with the lowest id after three tries (so it is never homeless).
+//! answer took is the round trip to that relay. The home relay is the one with the lowest last-measured round trip
+//! among the relays that ever answered, re-chosen at every answer (a tie goes to the relay that answered first); a node
+//! whose probes all went unanswered takes the relay with the lowest id after three tries (so it is never homeless),
+//! and the first answer that comes later moves it to the measured relay.
 //!
 //! The reachability class ([`classify`]) is read from what was observed, never configured:
 //! 1. **UDP blocked**: no UDP datagram was ever heard and every probe went unanswered for `watchdog` since the first.
@@ -21,8 +23,8 @@
 //! none the home stays. Any answer or opened carrier makes a relay healthy again.
 //!
 //! Invariants: the nonce of an answer must match the probe sent to that relay, and a probe is answered at most once;
-//! the round trip of a relay is the last measured one; [`Netcheck::home`] is stable until a strictly lower round trip
-//! is measured.
+//! the round trip of a relay is the last measured one; [`Netcheck::home`] is the best relay of the last answer, so it
+//! follows the measurements without a margin.
 
 use core::net::{IpAddr, SocketAddr};
 
@@ -91,6 +93,8 @@ struct Probe {
 pub struct Netcheck<const R: usize> {
     probes: [Option<Probe>; R],
     rtt: [u64; R],
+    /// The place of each relay in the order of first answers (0: never answered); kept across [`Netcheck::restart`].
+    order: [u32; R],
     reflexive: [Option<SocketAddr>; R],
     home: Option<usize>,
     missed: [u8; R],
@@ -110,6 +114,7 @@ impl<const R: usize> Netcheck<R> {
         Self {
             probes: [None; R],
             rtt: [0; R],
+            order: [0; R],
             reflexive: [None; R],
             home: None,
             missed: [0; R],
@@ -142,16 +147,21 @@ impl<const R: usize> Netcheck<R> {
         let rtt = now.saturating_sub(sent);
         *self.rtt.get_mut(relay)? = rtt;
         *self.reflexive.get_mut(relay)? = Some(addr);
+        if self.order.get(relay) == Some(&0) {
+            let next = self.order.iter().max().map_or(1, |m| m.saturating_add(1));
+            *self.order.get_mut(relay)? = next;
+        }
+        // Every relay that ever answered counts, not only those since the last link change; an unhealthy one does not.
         let best = (0..R)
-            .filter(|i| self.reflexive.get(*i).is_some_and(Option::is_some) && !self.unhealthy(*i))
-            .min_by_key(|i| self.rtt.get(*i).copied().unwrap_or(u64::MAX));
-        if let Some(b) = best
-            && self.home != Some(b)
-            && self
-                .home
-                .is_none_or(|h| self.unhealthy(h) || self.rtt.get(b) < self.rtt.get(h))
-        {
-            self.home = Some(b);
+            .filter(|i| self.order.get(*i).is_some_and(|o| *o > 0) && !self.unhealthy(*i))
+            .min_by_key(|i| {
+                (
+                    self.rtt.get(*i).copied().unwrap_or(u64::MAX),
+                    self.order.get(*i).copied(),
+                )
+            });
+        if best.is_some() {
+            self.home = best;
         }
         Some(rtt)
     }

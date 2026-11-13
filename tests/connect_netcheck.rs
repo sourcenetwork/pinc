@@ -40,7 +40,7 @@ fn obs<'a>(local: &'a [SocketAddr], refl: &'a [SocketAddr], mapped: &'a [SocketA
 }
 
 #[test]
-fn the_home_is_the_lowest_round_trip_and_changes_only_for_a_strictly_lower_one() {
+fn the_home_is_the_lowest_round_trip_and_a_tie_goes_to_the_relay_that_answered_first() {
     let mut n = Netcheck::<3>::new();
     for (i, nonce) in [[1u8; 8], [2; 8], [3; 8]].into_iter().enumerate() {
         n.probe_sent(0, i, nonce, true);
@@ -51,7 +51,11 @@ fn the_home_is_the_lowest_round_trip_and_changes_only_for_a_strictly_lower_one()
     assert_eq!(n.answered(30, 1, [2; 8], a("1.2.3.4:5")), Some(30));
     assert_eq!(n.home(), Some(1));
     assert_eq!(n.answered(30, 2, [3; 8], a("1.2.3.4:5")), Some(30));
-    assert_eq!(n.home(), Some(1), "an equal round trip does not move the home");
+    assert_eq!(
+        n.home(),
+        Some(1),
+        "an equal round trip does not move the home from the relay that answered first"
+    );
     assert_eq!(n.best_rtt(), 30);
 }
 
@@ -75,6 +79,38 @@ fn an_address_that_several_relays_report_is_listed_once() {
     let mut one = [a("0.0.0.0:0"); 1];
     assert_eq!(n.reflexive_into(&mut one), 1);
     assert_eq!(one[0], a("1.2.3.4:5"));
+}
+
+#[test]
+fn a_home_taken_by_the_fallback_moves_to_the_first_relay_that_answers() {
+    let mut n = Netcheck::<3>::new();
+    for _ in 0..HOME_TRIES {
+        n.home_missing(Some(0));
+    }
+    assert_eq!(n.home(), Some(0), "the lowest id, never measured");
+    n.probe_sent(0, 2, [3; 8], true);
+    assert_eq!(n.answered(900, 2, [3; 8], a("1.2.3.4:5")), Some(900));
+    assert_eq!(n.home(), Some(2), "a relay measured at 900 beats one never measured");
+}
+
+#[test]
+fn the_home_follows_the_last_measurements_and_an_equal_round_trip_goes_to_the_relay_that_answered_first() {
+    let mut n = Netcheck::<2>::new();
+    let answer = |n: &mut Netcheck<2>, now: u64, sent: u64, relay: usize, nonce: u8| {
+        n.probe_sent(sent, relay, [nonce; 8], true);
+        n.answered(now, relay, [nonce; 8], a("1.2.3.4:5"));
+    };
+    answer(&mut n, 50, 0, 0, 1);
+    answer(&mut n, 30, 0, 1, 2);
+    assert_eq!(n.home(), Some(1));
+    // Relay 1 now measures 50 as well: equal to relay 0, which answered first, so the home goes back to it.
+    answer(&mut n, 1_050, 1_000, 1, 3);
+    assert_eq!(n.rtt(1), Some(50));
+    assert_eq!(n.home(), Some(0));
+    // Answers kept across a link change still count as candidates.
+    n.restart();
+    answer(&mut n, 2_020, 2_000, 1, 4);
+    assert_eq!(n.home(), Some(1), "relay 1 measures 20, relay 0 still stands at 50");
 }
 
 #[test]
