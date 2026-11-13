@@ -195,3 +195,9 @@ pub const fn secs(n: u64) -> Time {
 pub fn default_lan() -> LanConfig {
     LanConfig::default()
 }
+
+/// The two relays ordered by id, lowest first: a node that hears no relay takes the lowest id as its home, so the
+/// tests that mean "the first relay is the home" list them this way.
+pub fn by_id<N>(a: (N, RelaySpec), b: (N, RelaySpec)) -> ((N, RelaySpec), (N, RelaySpec)) {
+    if a.1.id.bytes <= b.1.id.bytes { (a, b) } else { (b, a) }
+}

@@ -96,11 +96,16 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             self.check_failover(now);
             self.next_probe = now.saturating_add(HOME_RETRY_NS);
             if self.net.home().is_none() {
-                // A node none of whose relays takes UDP (a browser) has no probe to wait for: its first relay is home.
-                let configured = |i: &usize| self.rly.get(*i).is_some_and(|r| r.cfg.is_some());
-                let first = (0..R)
-                    .find(|i| self.rly.get(*i).is_some_and(|r| r.cfg.is_some_and(|c| c.udp.is_some())))
-                    .or_else(|| (0..R).find(configured));
+                // A node none of whose relays takes UDP (a browser) has no probe to wait for: the relay with the lowest
+                // id is home, the same for every node that sees the same relays.
+                let lowest = |udp_only: bool| {
+                    (0..R)
+                        .filter_map(|i| Some((i, self.rly.get(i)?.cfg?)))
+                        .filter(|(_, c)| !udp_only || c.udp.is_some())
+                        .min_by_key(|(_, c)| c.id.bytes)
+                        .map(|(i, _)| i)
+                };
+                let first = lowest(true).or_else(|| lowest(false));
                 if let HomeStep::Fallback(f) = self.net.home_missing(first) {
                     self.notice(Notice::Home(f));
                 }

@@ -109,8 +109,7 @@ fn a_node_that_hears_udp_looks_peers_up_over_udp() {
 fn dark_world(seed: u64, tcp_timeout: u64) -> (World, vinc_sim::NodeId, vinc_sim::NodeId, vinc_sim::NodeId) {
     use vinc_sim::{NatConfig, NatKind, PortPolicy};
     let mut w = World::new(seed);
-    let (r1, rs1) = w.relay(1, relay_ip(10));
-    let (r2, rs2) = w.relay(2, relay_ip(20));
+    let ((r1, rs1), (r2, rs2)) = by_id(w.relay(1, relay_ip(10)), w.relay(2, relay_ip(20)));
     let lan = w.sim.add_lan(LanConfig {
         udp_block: true,
         ..LanConfig::default()
@@ -259,8 +258,7 @@ fn a_carrier_nobody_rides_is_checked_while_the_node_has_a_session() {
 fn dial_over_a_silently_dead_carrier(seed: u64) -> Option<u64> {
     use vinc_sim::{NatConfig, NatKind, PortPolicy};
     let mut w = World::new(seed);
-    let (_r1, rs1) = w.relay(1, relay_ip(10));
-    let (_r2, rs2) = w.relay(2, relay_ip(20));
+    let ((_r1, rs1), (_r2, rs2)) = by_id(w.relay(1, relay_ip(10)), w.relay(2, relay_ip(20)));
     let lan = w.sim.add_lan(LanConfig {
         udp_block: true,
         ..LanConfig::default()

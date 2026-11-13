@@ -111,3 +111,29 @@ fn the_same_seed_gives_the_same_run_and_the_trace_is_not_empty() {
         assert_eq!(first, second, "two runs of one seed differ");
     });
 }
+
+#[test]
+fn a_node_that_hears_no_relay_takes_the_relay_with_the_lowest_id_as_its_home() {
+    big(|| {
+        let mut w = World::new(3);
+        let (r1, rs1) = w.relay(1, relay_ip(10));
+        let (r2, rs2) = w.relay(2, relay_ip(20));
+        w.sim.crash(0, r1);
+        w.sim.crash(0, r2);
+        // The table lists the higher id first, so the table position and the id order disagree.
+        let (hi, lo) = if rs1.id.bytes > rs2.id.bytes {
+            (rs1, rs2)
+        } else {
+            (rs2, rs1)
+        };
+        let nat = w.nat(NatKind::FullCone, ext(1), 120 * SEC, 7200 * SEC);
+        let a = w.client_behind(&client_spec(0xa1, priv_addr(1), &[hi, lo]), nat);
+        w.run(secs(10));
+        let homes: Vec<usize> = w
+            .notices(a)
+            .iter()
+            .filter_map(|(_, x)| if let Notice::Home(h) = x { Some(*h) } else { None })
+            .collect();
+        assert_eq!(homes.first(), Some(&1), "{homes:?}");
+    });
+}

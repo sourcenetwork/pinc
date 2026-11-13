@@ -3,7 +3,7 @@
 //! The node sends a QAD probe with a fresh nonce to every relay's UDP address. An answer carries the address the
 //! relay saw ([`crate::relay::datagram::Datagram::Qadr`]): that is the node's reflexive address, and the time the
 //! answer took is the round trip to that relay. The home relay is the one with the lowest round trip; a node whose
-//! probes all went unanswered picks the first relay by identity after three tries (so it is never homeless).
+//! probes all went unanswered takes the relay with the lowest id after three tries (so it is never homeless).
 //!
 //! The reachability class ([`classify`]) is read from what was observed, never configured:
 //! 1. **UDP blocked**: no UDP datagram was ever heard and every probe went unanswered for `watchdog` since the first.
@@ -27,7 +27,7 @@ use core::net::{IpAddr, SocketAddr};
 
 use crate::record::Reach;
 
-/// The attempts to learn a home relay before the node takes the first one.
+/// The attempts to learn a home relay before the node takes the one with the lowest id.
 pub const HOME_TRIES: u8 = 3;
 /// The wait between those attempts.
 pub const HOME_RETRY_NS: u64 = 2_000_000_000;
@@ -238,7 +238,7 @@ impl<const R: usize> Netcheck<R> {
         self.tries = 0;
     }
 
-    /// No home after a round of probes: count it. After [`HOME_TRIES`] the first relay in `order` is taken. Returns
+    /// No home after a round of probes: count it. After [`HOME_TRIES`] `first`, the relay with the lowest id, is taken. Returns
     /// the relay chosen by this fallback, and otherwise whether to probe again.
     pub fn home_missing(&mut self, first: Option<usize>) -> HomeStep {
         if self.home.is_some() {
