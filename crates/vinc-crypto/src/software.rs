@@ -22,8 +22,10 @@ use crate::{Aead, Capabilities, CryptoError, Provider, Secret};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 cpufeatures::new!(aes_gcm_hw, "aes", "pclmulqdq");
+// On aarch64 `cpufeatures` has no separate token for the carry-less multiply: its "aes" is AES and PMULL together
+// (HWCAP_AES | HWCAP_PMULL on Linux and Android, always present on Apple hardware).
 #[cfg(target_arch = "aarch64")]
-cpufeatures::new!(aes_gcm_hw, "aes", "pmull");
+cpufeatures::new!(aes_gcm_hw, "aes");
 
 /// The software provider: a zero-sized handle.
 #[derive(Debug, Clone, Copy, Default)]
