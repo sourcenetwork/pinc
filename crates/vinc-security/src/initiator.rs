@@ -11,8 +11,9 @@
 //! a prekey decapsulation request, a signature request, and the Finish together with the established session.
 //! With a ticket the flow is: resume Hello (and the 0-RTT keys), then the resume Reply and the established session;
 //! if the responder rejects the ticket the machine starts a full handshake by itself, and so it does when the Hello
-//! stays unanswered: the third send is a full Initial under the same destination id. The machine then still accepts
-//! a late resume Reply, which completes the resumed session and abandons the full handshake.
+//! stays unanswered: the third send is an Initial under the same destination id, the short one for a responder known
+//! to cache the prekey while the host allows it, else the full one. The machine then still accepts a late resume
+//! Reply, which completes the resumed session and abandons the full handshake.
 //!
 //! A prekey reject (the responder does not hold the prekey the short Initial named) is answered with the full Initial
 //! once, at once, unless one was sent for a reject less than [`Initiator::set_reject_gap`] ago; the resends go on as
@@ -70,8 +71,8 @@ pub struct InitiatorParams<'a> {
     /// The prekey to use for this handshake (from [`crate::SoftPrekeys::acquire`] or the host's key store).
     pub prekey: &'a PrekeyInfo,
     /// Whether the responder is known to cache the prekey and the host judges a short Initial usable now, so it can
-    /// be tried first. It also leaves short resends allowed until the host says otherwise
-    /// ([`Initiator::set_short_until`]).
+    /// be tried first, also for the full handshake that follows a rejected or unanswered Hello. It also leaves short
+    /// resends allowed until the host says otherwise ([`Initiator::set_short_until`]).
     pub peer_has_prekey: bool,
     /// A ticket for this peer and ALPN to resume with, if one is held.
     pub ticket: Option<Ticket>,
@@ -139,6 +140,8 @@ pub struct Initiator {
     /// The transcript as it was before the Reply that is waiting to be opened.
     back_th: Transcript,
     sends: u32,
+    /// The host knew the responder to cache the prekey when it dialed.
+    cached: bool,
     /// A resend may be the short Initial while the clock is below this.
     short_until: u64,
     /// When the full Initial last went out for a prekey reject, the shortest time before another may, and whether
@@ -184,6 +187,7 @@ impl Initiator {
             th: Transcript::new(),
             back_th: Transcript::new(),
             sends: 0,
+            cached: params.peer_has_prekey,
             // The host that knew the peer caches the prekey judged a short Initial fine when it dialed.
             short_until: if params.peer_has_prekey { u64::MAX } else { 0 },
             rejected_at: None,
@@ -198,9 +202,11 @@ impl Initiator {
         let usable = params
             .ticket
             .filter(|t| t.expiry >= env.now && t.peer == this.peer && t.alpn == this.alpn);
-        match usable {
-            Some(t) => this.begin_resume(env, &t)?,
-            None => this.begin_full(env, params.peer_has_prekey, false)?,
+        if let Some(t) = usable {
+            this.begin_resume(env, &t)?;
+        } else {
+            let short = this.short_first(env.now);
+            this.begin_full(env, short, false)?;
         }
         Ok(this)
     }
@@ -280,10 +286,16 @@ impl Initiator {
         now < self.short_until
     }
 
+    /// Whether the first Initial of a full handshake is the short one: the responder is known to cache the prekey
+    /// and the host allows short Initials now. A full handshake that follows a ticket is started the same way.
+    fn short_first(&self, now: u64) -> bool {
+        self.cached && self.short_ok(now)
+    }
+
     /// The host's loss timer fired: queue the outstanding flight again. A resent Initial is the short one while the
     /// host allows it ([`Initiator::set_short_until`]), whichever form the first send had, except on the sends 3, 6, 9
     /// and so on, which carry the full prekey. A resume Hello that reaches [`RESUME_TRIES`] sends is not sent
-    /// again: a full Initial under the same destination id takes its place, and a late resume Reply still completes
+    /// again: an Initial under the same destination id takes its place, and a late resume Reply still completes
     /// the resumed session. Once the Finish has gone out it is queued again until [`Initiator::shed`].
     ///
     /// # Errors
@@ -488,12 +500,13 @@ impl Initiator {
         }
         self.out.early = None;
         self.late = None;
-        self.begin_full(env, false, false)?;
+        let short = self.short_first(env.now);
+        self.begin_full(env, short, false)?;
         self.out.set_resume_rejected();
         Ok(())
     }
 
-    /// The Hello went unanswered: queue a full Initial under the same destination id and keep what a late resume
+    /// The Hello went unanswered: queue an Initial under the same destination id and keep what a late resume
     /// Reply needs. The caller is told, as for a reject, so it sends its early data again under the 1-RTT keys.
     fn fall_back<P: Provider>(&mut self, env: &mut Env<'_, P>) -> Result<(), Failure> {
         let State::Resume {
@@ -510,7 +523,8 @@ impl Initiator {
             seed: mem::replace(&mut self.seed, Secret::new([0; 32])),
             remembered: self.remembered,
         });
-        self.begin_full(env, false, true)?;
+        let short = self.short_first(env.now);
+        self.begin_full(env, short, true)?;
         self.out.set_resume_rejected();
         Ok(())
     }

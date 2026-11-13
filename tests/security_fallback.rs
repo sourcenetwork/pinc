@@ -141,6 +141,72 @@ fn an_unanswered_hello_is_sent_twice_then_a_full_initial_takes_over() {
 }
 
 #[test]
+fn the_full_handshake_that_follows_a_hello_starts_with_the_short_initial_for_a_peer_known_to_cache_the_prekey() {
+    big_stack(|| {
+        let mut w = world();
+        let dial = w.dial();
+        // The Hello goes unanswered: send 3 is the Initial that takes over, short here because the host knows the
+        // peer caches the prekey; the resends after it follow the rule of the Initial (the full prekey on the third).
+        w.full();
+        let mut i = w.initiator_with(dial, ALPN, true, true);
+        assert_eq!(drain_i(&mut i).0[0][0], 6);
+        assert_eq!(retransmit(&mut w, &mut i).0[0][0], 6);
+        let (sent, events) = retransmit(&mut w, &mut i);
+        assert_eq!(sent[0][0], 2, "the short Initial");
+        assert!(matches!(events[..], [Event::ResumeRejected]));
+        let seen: Vec<u8> = (0..3).map(|_| retransmit(&mut w, &mut i).0[0][0]).collect();
+        assert_eq!(seen, vec![2, 1, 2]);
+        // A host that does not allow short Initials when the Hello gives way gets the full one.
+        w.full();
+        let mut i = w.initiator_with(dial, ALPN, true, true);
+        drain_i(&mut i);
+        retransmit(&mut w, &mut i);
+        i.set_short_until(0);
+        assert_eq!(retransmit(&mut w, &mut i).0[0][0], 1, "the full Initial");
+        // Without the knowledge it is full, as before.
+        w.full();
+        let mut i = w.initiator_with(dial, ALPN, false, true);
+        drain_i(&mut i);
+        retransmit(&mut w, &mut i);
+        assert_eq!(retransmit(&mut w, &mut i).0[0][0], 1);
+    });
+}
+
+#[test]
+fn the_full_handshake_that_follows_a_rejected_hello_starts_with_the_short_initial_for_a_peer_known_to_cache_the_prekey()
+{
+    big_stack(|| {
+        let mut w = world();
+        let dial = w.dial();
+        for (known, first) in [(true, 2), (false, 1)] {
+            w.full();
+            let mut i = w.initiator_with(dial, ALPN, known, true);
+            let hello = drain_i(&mut i).0.remove(0);
+            // A responder that holds no ticket rejects the Hello.
+            let mut r = w.responder();
+            let mut stores: ResponderStores<4, 4> = ResponderStores::default();
+            let mut env = Env {
+                provider: &w.r_prov,
+                now: w.now,
+                drbg: &mut w.r_drbg,
+            };
+            r.handle(&mut env, &mut stores, &hello).unwrap();
+            let reject = drain_r(&mut r).0.remove(0);
+            assert_eq!(reject[0], 8);
+            let mut env = Env {
+                provider: &w.i_prov,
+                now: w.now,
+                drbg: &mut w.i_drbg,
+            };
+            i.handle(&mut env, &reject).unwrap();
+            let (sent, events) = drain_i(&mut i);
+            assert!(matches!(events[..], [Event::ResumeRejected]));
+            assert_eq!(sent[0][0], first, "known to cache the prekey: {known}");
+        }
+    });
+}
+
+#[test]
 fn a_late_resume_reply_still_completes_the_resumption() {
     big_stack(|| {
         let mut h = hello_answered_but_reply_held();

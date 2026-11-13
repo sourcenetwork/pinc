@@ -517,6 +517,30 @@ fn a_prekey_reject_makes_the_next_dial_start_with_the_full_initial() {
 }
 
 #[test]
+fn the_initial_after_an_unanswered_hello_is_short_for_a_peer_known_to_cache_the_prekey() {
+    big_stack(|| {
+        // Node a had a session with b, which gave it a ticket and caches its prekey, and closed it a while ago. The idle
+        // time is longer than the 30 s access answer of b, so the dial is not reported early and not ended early.
+        let mut net = CoreNet::new(10 * MS_NS);
+        net.capture = true;
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        // The ticket arrives a moment after the session is open.
+        net.run_for(S);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Close { session: sa, error: 0 }).unwrap();
+        net.run_for(31 * S);
+        // The Hello is sent at 0 and 0.5 s; the third send, at 1.5 s, is the Initial that takes its place.
+        let b_addr = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == b_addr));
+        let marker = net.captured.len();
+        dial(&mut net, a, b, ALPN_A, Role::Other);
+        net.run_for(1600 * MS_NS);
+        assert_eq!(flights(&net, marker, a, b), [6, 6, 2]);
+    });
+}
+
+#[test]
 fn a_link_return_resends_a_dial_still_in_its_handshake_at_once() {
     big_stack(|| {
         let mut net = CoreNet::new(10 * MS_NS);
