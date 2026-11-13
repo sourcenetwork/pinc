@@ -33,7 +33,8 @@ def slotOf (j : J) : Except String Slot := do
            contig := ← natF j "contig", fin := ← optNat j "fin", limit := ← natF j "limit",
            size := ← natF j "size", pend := ← boolF j "pend", defer := ← boolF j "defer",
            rst := ← optNat j "rst", obs := ← boolF j "obs", sdone := ← boolF j "sdone", srst := ← natF j "srst",
-           stop := ← natF j "stop", qcode := ← optNat j "qcode", scode := ← optNat j "scode" }
+           stop := ← natF j "stop", qcode := ← optNat j "qcode", scode := ← optNat j "scode",
+           cnt := false, sfl := false }
 
 def pairN (j : J) (k : String) : Except String (Nat × Nat) := do
   match ← natList (← field j k) with
@@ -52,21 +53,32 @@ def tabOf (v : J) : Except String Tab := do
          ms := ← optNat v "ms", mb := ← natF v "mb", mr := ← natF v "mr",
          adlim := ad[0]!, adv := ad[1]!, adat := ad[2]!, adpend := ← boolF v "adp" }
 
-/-- The replay state: the table, and whether a run is open. -/
+/-- The replay state: the tables the recorded calls so far allow, and whether a run is open. The table has two fields per
+slot that the test does not record (`cnt`, `sfl`: whether the stream counts against the peer's limit, whether its send
+half has flushed); the calls that change them without an event of their own (a stream frame leaving) make several
+tables possible, and the replay follows all of them, as TLC does. -/
 structure St where
-  tab : Tab := Tab.init params
+  tabs : List Tab := [Tab.init params]
   run : Nat := 0
+
+/-- The table without its unrecorded fields. -/
+def hide (T : Tab) : Tab := { T with slots := T.slots.map (fun r => { r with cnt := false, sfl := false }) }
+
+/-- The one-call replay state. -/
+structure St1 where
+  tab : Tab
+  run : Nat
 
 def same (T : Tab) (v : J) (what : String) : Except String Unit := do
   let rec' ← tabOf v
-  if T == rec' then pure () else throw s!"{what}: the model computes {repr T}, the code recorded {repr rec'}"
+  if hide T == rec' then pure () else throw s!"{what}: the model computes {repr T}, the code recorded {repr rec'}"
 
-def replayEvent (j : J) (st : St) : Except String St := do
+def replayOne (j : J) (st : St1) : Except String St1 := do
   let op ← strF j "op"
   let v ← field j "v"
   let p := params
   let T := st.tab
-  let upd (T2 : Tab) (what : String) : Except String St := do
+  let upd (T2 : Tab) (what : String) : Except String St1 := do
     same T2 v what
     pure { st with tab := T2 }
   match op with
@@ -76,7 +88,7 @@ def replayEvent (j : J) (st : St) : Except String St := do
     pure { tab := Tab.init p, run := ← natF j "run" }
   | "end" =>
     check (st.run == (← natF j "run")) "end of another run"
-    pure {}
+    pure { tab := Tab.init p, run := 0 }
   | _ =>
     check (st.run == (← natF j "run")) "event outside its run"
     match op with
@@ -120,5 +132,28 @@ def replayEvent (j : J) (st : St) : Except String St := do
     | "ext" => upd (extTo p T (← natF j "ext")) "ext"
     | "close" => upd (closeAll p T (← natF v "ext")) "close"
     | _ => throw s!"unknown stream op {op}"
+
+/-- Every table a run of unrecorded `sendOut` calls leads to. -/
+def closure (p : P) (ts : List Tab) : List Tab := Id.run do
+  let mut seen := ts
+  let mut frontier := ts
+  for _ in [0:64] do
+    let next := frontier.flatMap (fun T =>
+      (List.range p.n).flatMap (fun i => [sendOut T i true, sendOut T i false]))
+    let fresh := next.eraseDups.filter (fun T => !seen.contains T)
+    if fresh.isEmpty then break
+    seen := seen ++ fresh
+    frontier := fresh
+  return seen
+
+def replayEvent (j : J) (st : St) : Except String St := do
+  let results := (closure params st.tabs).map (fun T => replayOne j { tab := T, run := st.run })
+  let oks := results.filterMap (fun r => match r with | .ok s => some s | .error _ => none)
+  match oks with
+  | [] =>
+    match replayOne j { tab := st.tabs.headD (Tab.init params), run := st.run } with
+    | .error e => throw e
+    | .ok _ => throw "no table the unrecorded calls lead to matches the recorded one"
+  | s :: _ => pure { tabs := (oks.map (·.tab)).eraseDups, run := s.run }
 
 end Vinc.TraceStreams

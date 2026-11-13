@@ -42,7 +42,7 @@ theorem allocSlot_tab (p : P) (T : Tab) (id i : Nat) (hf : firstFree T = some i)
   refine ⟨{ Slot.new with id := some id, open_ := !isUni id || !isLocal id,
                           limit := if (!isUni id || !isLocal id) = true then p.sw else 0,
                           size := if (!isUni id || !isLocal id) = true then p.sw else 0,
-                          sdone := !(!isUni id || isLocal id) }, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ <;>
+                          sdone := !(!isUni id || isLocal id), cnt := true }, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ <;>
   · simp only [allocSlot, hf, setSlot]
     split <;> rfl
 

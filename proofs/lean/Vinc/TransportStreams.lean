@@ -72,11 +72,17 @@ structure Slot where
   stop : Nat
   qcode : Option Nat
   scode : Option Nat
+  /-- The stream counts against its opener's limit (`Slot::counted`). Not on the wire: the trace replay carries it. -/
+  cnt : Bool
+  /-- The send half's end has left and no lost range is queued: the part of `Send::flushed` that `sdone` and `srst`
+  do not show. Not on the wire either. -/
+  sfl : Bool
   deriving DecidableEq, Repr, Inhabited
 
 def Slot.new : Slot :=
   { id := none, open_ := false, held := [], rs := [], read := 0, hi := 0, contig := 0, fin := none, limit := 0,
-    size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0, stop := 0, qcode := none, scode := none }
+    size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0, stop := 0, qcode := none, scode := none,
+    cnt := false, sfl := false }
 
 structure Tab where
   slots : List Slot
@@ -222,11 +228,24 @@ def freeSlot (T : Tab) (i : Nat) : Tab :=
   let T1 := setSlot T i Slot.new
   match r.id with
   | none => T1
-  | some id => if isLocal id then { T1 with ll := T1.ll - 1 } else { T1 with rl := T1.rl - 1 }
+  | some id => if isLocal id then { T1 with ll := T1.ll - 1 } else if r.cnt then { T1 with rl := T1.rl - 1 } else T1
+
+/-- `Send::flushed`: everything the send half will send has left and nothing waits to be sent again. -/
+def Slot.flushed (r : Slot) : Bool := r.sdone || r.srst ≥ 2 || r.sfl
+
+/-- `Streams::release_limit`: a peer stream stops counting against the peer's limit once what it sent is whole and read
+and our answer has left; its slot is kept until both halves are done. -/
+def releaseLimit (T : Tab) (i : Nat) : Tab :=
+  let r := T.slots.getD i Slot.new
+  match r.id with
+  | none => T
+  | some id =>
+    if isLocal id || !r.cnt || !r.recvDone || !r.flushed then T
+    else { setSlot T i { r with cnt := false } with rl := T.rl - 1 }
 
 def settle (p : P) (T : Tab) (i : Nat) : Tab :=
   let r := T.slots.getD i Slot.new
-  regrant p (if r.recvDone && r.sendDone then freeSlot T i else T)
+  regrant p (if r.recvDone && r.sendDone then freeSlot T i else releaseLimit T i)
 
 def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
   match firstFree T with
@@ -236,7 +255,7 @@ def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
     let recvOn := !isUni id || !lcl
     let sendOn := !isUni id || lcl
     let r := { Slot.new with id := some id, open_ := recvOn, limit := if recvOn then p.sw else 0,
-                             size := if recvOn then p.sw else 0, sdone := !sendOn }
+                             size := if recvOn then p.sw else 0, sdone := !sendOn, cnt := true }
     let T1 := setSlot T i r
     if lcl then { T1 with ll := T1.ll + 1 } else { T1 with rl := T1.rl + 1 }
 
@@ -416,6 +435,14 @@ def openLocal (p : P) (T : Tab) : Tab :=
   else { allocSlot p T (T.lo.1 * 4 + 1) with lo := (T.lo.1 + 1, T.lo.2) }
 
 def Slot.sendOpen (r : Slot) : Bool := !(r.id.any (fun id => isUni id && !isLocal id))
+
+/-- A stream frame left on slot `i` (`pick.rs`): the send half's end has gone with nothing queued again (`f`), or not
+yet, or a lost range waits to be sent again (`!f`); then `release_limit`. Only a send half that can still send a stream
+frame is touched. -/
+def sendOut (T : Tab) (i : Nat) (f : Bool) : Tab :=
+  let r := T.slots.getD i Slot.new
+  if r.id.isNone || !r.sendOpen || r.sdone || r.srst != 0 then T
+  else releaseLimit (setSlot T i { r with sfl := f }) i
 
 def appReset (p : P) (T : Tab) (id code ext2 : Nat) : Tab :=
   match findSlot T id with

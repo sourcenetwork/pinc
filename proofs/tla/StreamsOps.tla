@@ -68,7 +68,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -85,7 +85,7 @@ SW == Min(SWC, MaxStream)           \* the initial window; the ceiling is MaxStr
 NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi |-> 0, contig |-> 0, fin |-> -1,
             limit |-> 0, size |-> 0, pend |-> FALSE, defer |-> FALSE, rst |-> -1, obs |-> FALSE,
             sdone |-> TRUE, srst |-> 0,
-            stop |-> 0, qcode |-> -1, scode |-> -1]
+            stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE]
 
 WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
 \* what the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit
@@ -195,15 +195,32 @@ RefreshAdmit(T) ==
 Regrant(T) == LET T1 == RefreshAdmit(T) IN IF RETRY /\ AnyDefer(T1) THEN GrantRun(T1, 0) ELSE T1
 
 (* ---- slots ---- *)
+\* A peer stream stops counting against the peer's limit (T.rl) once what it sent is whole and read (RecvDone) and our
+\* answer has left with nothing queued to be sent again (Flushed): Streams::release_limit, called at the end of settle
+\* and after a stream frame left (SendOut). Its slot is kept until both halves are done. cnt says the stream counts
+\* (Slot::counted); sfl says the send half's end has left with no lost range queued (the part of Send::flushed that
+\* sdone and srst do not show). Neither is on the wire: the trace check carries them as hidden state.
+\* RELEASE = FALSE turns the release off (ReleaseLimit and SendOut change nothing, so every live peer stream counts and
+\* cnt is always TRUE): the earlier table, whose state space the large Streams configs keep at the size they were cut
+\* to. The rule is checked with RELEASE = TRUE in the small configs (Streams_release, Streams_cap, Streams_mark,
+\* Streams_local_ctl and the witnesses) and by the trace, which runs the code with it on. With it on a stream whose
+\* reset was sent stops counting too, so the peer may open more streams and the state space grows several times over.
+Flushed(r) == r.sdone \/ r.srst >= 2 \/ r.sfl
+ReleaseLimit(T, i) ==
+    LET r == T.slots[i]
+    IN IF ~RELEASE \/ r.id = -1 \/ IsLocal(r.id) \/ ~r.cnt \/ ~RecvDone(r) \/ ~Flushed(r) THEN T
+       ELSE [SetSlot(T, i, [r EXCEPT !.cnt = FALSE]) EXCEPT !.rl = Max(@ - 1, 0)]
 FreeSlot(T, i) ==
     LET id == T.slots[i].id
         S1 == [T.slots EXCEPT ![i] = NewSlot]
         T1 == [T EXCEPT !.slots = S1, !.hw = MarkOnFree(S1, T.hw, i)]
     IN IF id = -1 THEN T1
-       ELSE IF IsLocal(id) THEN [T1 EXCEPT !.ll = Max(@ - 1, 0)] ELSE [T1 EXCEPT !.rl = Max(@ - 1, 0)]
+       ELSE IF IsLocal(id) THEN [T1 EXCEPT !.ll = Max(@ - 1, 0)]
+       ELSE IF T.slots[i].cnt THEN [T1 EXCEPT !.rl = Max(@ - 1, 0)]   \* a released stream is not counted again
+       ELSE T1
 Settle(T, i) ==
     LET r == T.slots[i]
-    IN Regrant(IF RecvDone(r) /\ SendDone(r) THEN FreeSlot(T, i) ELSE T)
+    IN Regrant(IF RecvDone(r) /\ SendDone(r) THEN FreeSlot(T, i) ELSE ReleaseLimit(T, i))
 
 FirstFree(T) == IF \E i \in 1..N : T.slots[i].id = -1 THEN CHOOSE i \in 1..N : (T.slots[i].id = -1 /\ \A j \in 1..(i - 1) : T.slots[j].id # -1) ELSE 0
 AllocSlot(T, id) ==
@@ -212,7 +229,7 @@ AllocSlot(T, id) ==
         recvOn == ~IsUni(id) \/ ~local
         sendOn == ~IsUni(id) \/ local
         r == [NewSlot EXCEPT !.id = id, !.open = recvOn, !.limit = IF recvOn THEN SW ELSE 0,
-                              !.size = IF recvOn THEN SW ELSE 0, !.sdone = ~sendOn]
+                              !.size = IF recvOn THEN SW ELSE 0, !.sdone = ~sendOn, !.cnt = TRUE]
         T1 == [SetSlot(T, i, r) EXCEPT !.hw = Max(@, i)]   \* taking a slot writes it: the mark rises to it
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
@@ -361,6 +378,13 @@ RecvMaxStreams(T, l) == [T EXCEPT !.ad.lim = Max(@, l)]
 \* a MAX_STREAMS frame was lost: send the current limit again unless a later one superseded it
 CtlLostMsts(T, l) == IF l >= T.ad.adv THEN [T EXCEPT !.ad.pend = TRUE] ELSE T
 SendOpen(r) == ~(IsUni(r.id) /\ ~IsLocal(r.id))
+(* A stream frame left on slot i (pick.rs, next_hot): the send half's end has gone with nothing queued again (f), or
+   not yet, or a lost range waits to be sent again (not f); then release_limit. Only a send half that can still send a
+   stream frame is touched. *)
+SendOut(T, i, f) ==
+    LET r == T.slots[i]
+    IN IF ~RELEASE \/ r.id = -1 \/ ~SendOpen(r) \/ r.sdone \/ r.srst # 0 THEN T
+       ELSE ReleaseLimit(SetSlot(T, i, [r EXCEPT !.sfl = f]), i)
 (* Streams::reset: queue a stream reset on the send half, the send buffers released (ext2 <= ext) *)
 AppReset(T, id, code, ext2) ==
     LET i == FindSlot(T, id)
