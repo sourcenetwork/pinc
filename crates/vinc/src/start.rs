@@ -40,6 +40,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     let mut node_seed = [0u8; 8];
     cfg.identity.random(&mut node_seed)?;
     let mut ecfg = vinc_core::EndpointConfig::new(u64::from_le_bytes(seed));
+    ecfg.reset_key = cfg.identity.reset_key();
     ecfg.conn.max_gso = cfg.max_gso.max(1);
     ecfg.conn.interface_mtu = cfg.mtu;
     ecfg.conn.send_window = cfg.limits.send_window;

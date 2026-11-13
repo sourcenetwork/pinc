@@ -359,6 +359,8 @@ impl Core {
             inc,
         ))));
         cfg.conn.max_gso = MAX_GSO;
+        // The reset key comes from the node's identity, not its incarnation: it survives a restart, as a host's does.
+        cfg.reset_key = Some(derive(b"suite-reset", world_seed, self.idx as u64, 0));
         // A hub runs the relay of its members, and a node that serves a relay sends no tail repair on its sessions.
         cfg.conn.tail_repair = !self.shared.is_hub(self.idx);
         let ep_drbg = Drbg::new(&derive(b"suite-endpoint", world_seed, self.idx as u64, inc));

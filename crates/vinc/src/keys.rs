@@ -104,6 +104,15 @@ impl<S: KeyStore> Identity<S> {
         key
     }
 
+    /// The key of this node's stateless reset tokens: a keyed hash of the identity seed, so a node that restarts with
+    /// the same identity has the same key and can tell a peer it forgot their session. `None` for an identity that
+    /// lives in a key store the crate cannot read a secret from, or after the seed was taken: that node sends no reset
+    /// and its peers wait for the idle timeout, as before.
+    pub(crate) fn reset_key(&self) -> Option<[u8; 32]> {
+        self.seed
+            .map(|s| vinc_crypto::extract(&s, b"vinc stateless reset key v1"))
+    }
+
     /// The node id.
     pub const fn node_id(&self) -> NodeId {
         self.node

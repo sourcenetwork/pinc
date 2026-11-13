@@ -113,7 +113,11 @@ ep_impl! {
             rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
         });
         let Some((dcid, long)) = peek(buf) else {
-            self.counters.dropped_in += 1;
+            if crate::reset::is_reset(buf) {
+                self.on_reset(now, buf);
+            } else {
+                self.counters.dropped_in += 1;
+            }
             return;
         };
         let (found, n) = self.demux.matches::<MAX_CANDIDATES>(&dcid);
@@ -122,7 +126,13 @@ ep_impl! {
             candidates: n as u64,
         });
         match n {
-            0 => self.unrouted(now, local, remote, buf),
+            0 => {
+                // A short header names a session; none here holds it, so the sender may hold one this node forgot.
+                if !long {
+                    self.answer_unknown(local, remote, buf);
+                }
+                self.unrouted(now, local, remote, buf);
+            }
             1 => {
                 if let Some(i) = found.first().copied().flatten() {
                     // A drop reason is counted by the connection itself.
@@ -178,6 +188,8 @@ ep_impl! {
         buf: &mut [u8],
     ) -> Result<(), Drop> {
         let pid = self.path_id(local, remote);
+        let short = short_dcid(buf, CID_LEN).ok();
+        let mut untokened = None;
         let Some(slot) = self.slots.get_mut(i) else { return Err(Drop::Unroutable) };
         let Some(conn) = slot.conn.as_mut() else { return Err(Drop::Closed) };
         // Back-pressure: while the session's held events are all unrecoverable, or the host's queue is near full of
@@ -196,10 +208,14 @@ ep_impl! {
             slot.m.last_rx = now;
             if let Some(p) = slot.m.stamp(pid) {
                 p.rx = now;
+                untokened = short.filter(|c| p.token_for != Some(*c));
             }
             if conn.path_validated(pid) {
                 self.udp_heard = Some(now);
             }
+        }
+        if let Some(cid) = untokened {
+            self.give_token(i, pid, cid, remote);
         }
         self.settle(i, now);
         if let Some((path, rtt)) = returned {

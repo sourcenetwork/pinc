@@ -192,6 +192,8 @@ pub(crate) struct PathStamp {
     pub(crate) id: PathId,
     pub(crate) tx: u64,
     pub(crate) rx: u64,
+    /// The connection id whose reset token this path was given.
+    pub(crate) token_for: Option<ConnId>,
 }
 
 /// What the endpoint knows about a session.
@@ -238,6 +240,9 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) cids: [Option<ConnId>; MAX_CIDS],
     pub(crate) cid_epoch: u64,
     pub(crate) odcid: Option<ConnId>,
+    /// The reset tokens the peer gave, by the id they belong to, and the entry the next one replaces.
+    pub(crate) tokens: [Option<(ConnId, [u8; crate::reset::TOKEN_LEN])>; crate::reset::TOKENS_HELD],
+    pub(crate) token_next: usize,
     pub(crate) held: Held,
     pub(crate) seen_peak: u64,
     pub(crate) plan: Plan,
@@ -298,6 +303,8 @@ impl<const NP: usize> Meta<NP> {
         cids: [None; MAX_CIDS],
         cid_epoch: u64::MAX,
         odcid: None,
+        tokens: [None; crate::reset::TOKENS_HELD],
+        token_next: 0,
         held: Held::EMPTY,
         seen_peak: 0,
         plan: Plan {
@@ -352,7 +359,12 @@ impl<const NP: usize> Meta<NP> {
                 })
                 .inspect(|i| {
                     if let Some(s) = self.paths.get_mut(*i) {
-                        *s = Some(PathStamp { id, tx: 0, rx: 0 });
+                        *s = Some(PathStamp {
+                            id,
+                            tx: 0,
+                            rx: 0,
+                            token_for: None,
+                        });
                     }
                 })
             })?;

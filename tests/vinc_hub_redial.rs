@@ -178,3 +178,116 @@ async fn a_redial_reaches_a_restarted_peer_with_a_hub_named() {
     })
     .await;
 }
+
+/// `a` keeps its connection to `b` while `b` is killed and comes back on the same address and identity. The first dial
+/// after the restart still rides the held session; the restarted peer's stateless reset ends it, so a dial reaches
+/// the new peer at once instead of after the held session's 30 s idle timeout. Returns whether a dial echoed, how long
+/// after the restart, and whether the held connection was closed by then.
+async fn redial_holding_a_session(hub: bool) -> (bool, Duration, bool) {
+    let relays = if hub {
+        let h = endpoint_at!(vinc_common::builder().seed(&[10; 32]).unwrap().hub(), vinc_common::lo());
+        let relay = Relay::new(h.id()).with_udp(h.local_addr());
+        let run = h.clone();
+        nuclei::spawn_local(async move {
+            let _ = run.run().await;
+        })
+        .detach();
+        std::mem::forget(h);
+        vec![relay]
+    } else {
+        Vec::new()
+    };
+    let b = endpoint_at!(
+        vinc_common::builder()
+            .seed(&[2; 32])
+            .unwrap()
+            .alpn(ECHO)
+            .relays(relays.clone()),
+        vinc_common::lo()
+    );
+    let (b_addr, b_id) = (b.local_addr(), b.id());
+    let b_task = serve_echo!(b);
+    let a = endpoint_at!(
+        vinc_common::builder()
+            .seed(&[1; 32])
+            .unwrap()
+            .alpn(ECHO)
+            .relays(relays.clone()),
+        vinc_common::lo()
+    );
+    let run = a.clone();
+    nuclei::spawn_local(async move {
+        let _ = run.run().await;
+    })
+    .detach();
+    let mut to = NodeAddr::new(b_id);
+    to.direct = vec![b_addr];
+    // The connection the host keeps.
+    let held = a.connect(to.clone(), ECHO).await.unwrap();
+    let (mut tx, mut rx) = held.open_bi().await.unwrap();
+    tx.write_all(b"ping").await.unwrap();
+    tx.finish().await.unwrap();
+    let mut got = [0u8; 4];
+    rx.read_exact(&mut got).await.unwrap();
+    if hub {
+        a.join(b"t", &[]).await.unwrap();
+        b.join(b"t", &[]).await.unwrap();
+        a.publish(b"t", b"x", None).await.unwrap();
+        nuclei::time::sleep(Duration::from_secs(1)).await;
+    }
+    // The peer is killed and comes back on the same address.
+    drop(b_task);
+    drop(b);
+    nuclei::time::sleep(Duration::from_millis(300)).await;
+    let b = endpoint_at!(
+        vinc_common::builder().seed(&[2; 32]).unwrap().alpn(ECHO).relays(relays),
+        b_addr
+    );
+    let _b_task = serve_echo!(b);
+    if hub {
+        b.join(b"t", &[]).await.unwrap();
+    }
+    let at = std::time::Instant::now();
+    let mut ok = false;
+    for _ in 0..20 {
+        if echoes!(a, to.clone()) {
+            ok = true;
+            break;
+        }
+        nuclei::time::sleep(Duration::from_millis(100)).await;
+    }
+    let took = at.elapsed();
+    let closed = nuclei::time::timeout(Duration::from_millis(1), held.closed())
+        .await
+        .is_ok();
+    eprintln!("held: echoed {ok} after {took:?}, held connection closed {closed}");
+    a.close().await;
+    b.close().await;
+    (ok, took, closed)
+}
+
+#[nuclei::test]
+async fn a_redial_over_a_held_session_reaches_a_restarted_peer_at_once() {
+    within(90, async {
+        let (ok, took, closed) = redial_holding_a_session(false).await;
+        assert!(
+            ok && took < Duration::from_secs(2),
+            "no echo within 2 s of the restart: {ok} after {took:?}"
+        );
+        assert!(closed, "the held connection to the restarted peer is still up");
+    })
+    .await;
+}
+
+#[nuclei::test]
+async fn a_redial_over_a_held_session_reaches_a_restarted_peer_at_once_with_a_hub_named() {
+    within(90, async {
+        let (ok, took, closed) = redial_holding_a_session(true).await;
+        assert!(
+            ok && took < Duration::from_secs(2),
+            "no echo within 2 s of the restart: {ok} after {took:?}"
+        );
+        assert!(closed, "the held connection to the restarted peer is still up");
+    })
+    .await;
+}

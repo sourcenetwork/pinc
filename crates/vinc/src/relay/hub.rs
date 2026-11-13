@@ -46,14 +46,15 @@ impl Hub {
     ) -> Result<Self> {
         let mut seed = [0u8; 32];
         let mut key = [0u8; 8];
-        let local_id: LocalIdentity = {
+        let (local_id, reset_key): (LocalIdentity, _) = {
             let mut id = identity.borrow_mut();
             id.random(&mut seed)?;
             id.random(&mut key)?;
-            id.local()?
+            (id.local()?, id.reset_key())
         };
         let mut cfg = EndpointConfig::new(u64::from_le_bytes(key));
         cfg.conn.max_gso = 1;
+        cfg.reset_key = reset_key;
         cfg.conn.tail_repair = false;
         let mut ep = AnyEp::new(
             limits.hub_sessions,

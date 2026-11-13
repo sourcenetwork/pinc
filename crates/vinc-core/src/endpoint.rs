@@ -74,7 +74,7 @@ pub(crate) const REJOIN_ADDRS: usize = 200;
 pub(crate) const CLOSE_GRACE: u64 = 1_000_000_000;
 
 /// How the endpoint behaves; [`EndpointConfig::new`] holds the defaults.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct EndpointConfig {
     /// The base configuration of every connection. The connection id length is forced to [`CID_LEN`].
     pub conn: Config,
@@ -84,6 +84,21 @@ pub struct EndpointConfig {
     pub tickets_per_session: u8,
     /// How long an issued ticket lives, in seconds.
     pub ticket_lifetime_s: u32,
+    /// The key of this node's stateless reset tokens (see the `reset` module): `None` gives no tokens and sends no
+    /// reset. It is a secret, and it must stay the same across restarts of one identity: a host derives it from the
+    /// identity's secret.
+    pub reset_key: Option<[u8; 32]>,
+}
+
+impl core::fmt::Debug for EndpointConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EndpointConfig")
+            .field("conn", &self.conn)
+            .field("tickets_per_session", &self.tickets_per_session)
+            .field("ticket_lifetime_s", &self.ticket_lifetime_s)
+            .field("reset_key", &self.reset_key.map(|_| "set"))
+            .finish_non_exhaustive()
+    }
 }
 
 impl EndpointConfig {
@@ -98,6 +113,7 @@ impl EndpointConfig {
             seed,
             tickets_per_session: 1,
             ticket_lifetime_s: vinc_security::tickets::DEFAULT_TICKET_LIFETIME_S,
+            reset_key: None,
         }
     }
 }
@@ -192,6 +208,8 @@ pub struct Endpoint<
     pub(crate) orphans: crate::orphan::Orphans,
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
+    /// A stateless reset waiting to be sent; at most one.
+    pub(crate) reset_out: Option<crate::reset::ResetOut>,
     pub(crate) udp_heard: Option<u64>,
     pub(crate) started: u64,
     pub(crate) t_first: Option<u64>,
@@ -437,6 +455,7 @@ ep_impl! {
             orphans: crate::orphan::Orphans::new(),
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
+            reset_out: None,
             udp_heard: None,
             started: now,
             t_first: None,

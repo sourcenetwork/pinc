@@ -131,6 +131,8 @@ ep_impl! {
                 } else if ty == ext::REACH_OUT && len > 0 && len <= crate::reach::REACH_BODY_MAX {
                     self.reach_in.put(session, body);
                     self.emit(Event::ReachOut { session });
+                } else if ty == ext::RESET_TOKEN {
+                    self.take_token(i, body);
                 } else if ty != ext::SUB_SESSION_OPEN
                     && ty != ext::REACH_OUT
                     && len > 0

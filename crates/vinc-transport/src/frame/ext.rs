@@ -17,16 +17,19 @@ pub const TEST_LAST: u64 = 0x43;
 /// `REACH_OUT`, a request to a peer to send punching candidates toward an address (hole punching in `vinc-connect`).
 /// Reserved: the connect crate takes this type when it implements the frame.
 pub const REACH_OUT: u64 = 0x44;
+/// A stateless reset token: the id the receiver sends to on this path, then its 16-byte token (`vinc-core` `reset`).
+pub const RESET_TOKEN: u64 = 0x45;
 /// A range-proof request for a value range.
 pub const PROOF_REQ: u64 = 0x49;
 /// A range proof answering a [`PROOF_REQ`].
 pub const PROOF: u64 = 0x4f;
 
 /// Every assigned type as an inclusive range `(first, last)`; a single type has `first == last`.
-pub const ASSIGNED: [(u64, u64); 5] = [
+pub const ASSIGNED: [(u64, u64); 6] = [
     (SUB_SESSION_OPEN, SUB_SESSION_OPEN),
     (TEST_FIRST, TEST_LAST),
     (REACH_OUT, REACH_OUT),
+    (RESET_TOKEN, RESET_TOKEN),
     (PROOF_REQ, PROOF_REQ),
     (PROOF, PROOF),
 ];

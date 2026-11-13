@@ -125,6 +125,10 @@ impl Error {
                 Self::new(ErrorKind::TimedOut, "the peer stopped answering")
             }
             CloseReason::Handshake(_) => Self::new(ErrorKind::Unreachable, "the handshake failed"),
+            CloseReason::Reset => Self::new(
+                ErrorKind::Unreachable,
+                "the peer restarted and no longer holds the connection",
+            ),
         }
     }
 

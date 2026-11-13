@@ -162,16 +162,35 @@ impl TNode {
 
     /// A node whose identity uses `alg` and whose interface carries datagrams of up to `mtu` bytes.
     pub fn with_mtu(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16) -> Self {
+        Self::build(tag, addr, now, alg, mtu, None, 0)
+    }
+
+    /// A node with the stateless reset key `reset_key`, in its incarnation `inc`: the identity and the address come from
+    /// `tag` alone, the randomness from `tag` and `inc`, so a later incarnation is the same node restarted.
+    pub fn with_reset_key(tag: u8, addr: SocketAddr, now: u64, reset_key: Option<[u8; 32]>, inc: u8) -> Self {
+        Self::build(tag, addr, now, IdentityAlg::Ed25519, 1500, reset_key, inc)
+    }
+
+    fn build(
+        tag: u8,
+        addr: SocketAddr,
+        now: u64,
+        alg: IdentityAlg,
+        mtu: u16,
+        reset_key: Option<[u8; 32]>,
+        inc: u8,
+    ) -> Self {
         let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
         let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
         let prov = Caps(Software, true);
-        let mut drbg = Drbg::new(&[tag ^ 0x5a; 32]);
-        let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
+        let mut drbg = Drbg::new(&[tag ^ 0x5a ^ inc.wrapping_mul(0x11); 32]);
+        let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9 + u64::from(inc));
+        cfg.reset_key = reset_key;
         cfg.conn.max_gso = 4;
         // The reassembly and fan-out tests need a first flight in several datagrams.
         cfg.conn.flight_split = false;
         cfg.conn.interface_mtu = mtu;
-        let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
+        let ep_drbg = Drbg::new(&[tag ^ 0xa5 ^ inc.wrapping_mul(0x11); 32]);
         let mut ep = Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots()));
         let mut env = Env {
             provider: &prov,
@@ -457,6 +476,26 @@ impl CoreNet {
         let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
         self.nodes.push(TNode::with_alg(tag, addr, self.now, alg));
         self.nodes.len() - 1
+    }
+
+    /// A node at the address of `add(tag)` whose identity has the stateless reset key `key`.
+    pub fn add_resetting(&mut self, tag: u8, key: Option<[u8; 32]>) -> usize {
+        let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
+        self.nodes.push(TNode::with_reset_key(tag, addr, self.now, key, 0));
+        self.nodes.len() - 1
+    }
+
+    /// Node `i` (made by `add_resetting(tag, key)`) stops without a word and comes back at once as incarnation `inc`:
+    /// the same identity, address and reset key, and no session.
+    pub fn restart(&mut self, i: usize, tag: u8, key: Option<[u8; 32]>, inc: u8) {
+        let addr = self.nodes[i].addr;
+        self.nodes[i] = TNode::with_reset_key(tag, addr, self.now, key, inc);
+    }
+
+    /// Node `i` stops without a word and stays down: a node with no session takes its place, at an address nothing
+    /// sends to.
+    pub fn stop(&mut self, i: usize, tag: u8) {
+        self.nodes[i] = TNode::with_reset_key(tag, ([10, 0, 0, 254], 1).into(), self.now, None, 0xff);
     }
 
     pub fn node_at(&self, a: SocketAddr) -> Option<usize> {

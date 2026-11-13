@@ -36,6 +36,13 @@ ep_impl! {
     /// Write the next datagram, or batch of datagrams, into `out`. Returns `None` when nothing waits to leave; call it
     /// again after every input and timeout until it does.
     pub fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit> {
+        if let Some(r) = self.reset_out.take()
+            && let Some(d) = out.get_mut(..r.bytes.len())
+            && self.gate(now, r.remote, r.bytes.len(), 1)
+        {
+            d.copy_from_slice(&r.bytes);
+            return Some(Transmit { local: r.local, remote: r.remote, len: r.bytes.len(), segment_size: r.bytes.len() });
+        }
         if let Some(m) = self.stash_meta.take()
             && let Some(t) = self.send_stash(now, out, &m)
         {

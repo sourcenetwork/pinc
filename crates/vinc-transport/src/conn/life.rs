@@ -105,6 +105,11 @@ conn_impl! {
         self.begin_close(env.now, error, CloseReason::Local { error });
     }
 
+    /// End the connection because its peer sent a valid stateless reset: nothing is sent, as the peer holds nothing.
+    pub fn peer_reset(&mut self) {
+        self.silent_close(CloseReason::Reset);
+    }
+
     /// Set (or turn off) the keepalive interval: a PING goes out after this long without sending anything.
     pub fn set_keepalive(&mut self, interval: Option<u64>) {
         self.life.keepalive = interval;
