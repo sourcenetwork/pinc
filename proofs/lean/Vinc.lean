@@ -91,6 +91,9 @@ import Vinc.TraceOrphan
 import Vinc.CoreHalfOpen
 import Vinc.CoreHalfOpenThm
 import Vinc.TraceHalfOpen
+import Vinc.CoreHeap
+import Vinc.CoreHeapThm
+import Vinc.TraceHeap
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TraceRecovery

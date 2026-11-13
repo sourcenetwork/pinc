@@ -19,6 +19,7 @@ import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceOrphan
 import Vinc.TraceHalfOpen
+import Vinc.TraceHeap
 import Vinc.TraceMtu
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
@@ -180,6 +181,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut rsw : TraceReasm.W := {}
   let mut orw : TraceOrphan.W := {}
   let mut how : TraceHalfOpen.W := {}
+  let mut hpw : TraceHeap.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
@@ -487,6 +489,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceOrphan.replayEvent j orw with
           | .ok w' =>
             orw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceHeap.isTag t then
+          -- Deadline heap events (`cohp`, written by `trace_heap`): the heap, its position index and its deadlines.
+          match TraceHeap.replayEvent j hpw with
+          | .ok w' =>
+            hpw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
