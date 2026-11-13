@@ -6,12 +6,13 @@ import Vinc.MembershipHubRevoke
 
 `SuspOk` says that a suspicion record whose second probe is recorded sent it on a path other than the session (1 direct,
 2 relay through another hub). `carrierWatch_keeps_unless` (`MembershipHubWatch.lean`) assumes it. The writers of `susp`
-are `new_susp` and `carrier_watch` (insert a record whose second probe comes from `independent_route`), and
+are `N.newSusp` (the model's cut of `carrier_watch`) and `carrier_watch` (insert a record whose second probe comes from `independent_route`), and
 `hub_down`, `hub_tick` (expiry), `revoke`, `carrier_watch` itself (erase). This file proves each preserves `SuspOk`:
 
-* `newSusp_susp`, `cwMain_susp`, `carrierWatch_susp`, `hubDown_susp`, `htStep_susp`, `hubTick_susp`.
+* `newSusp_cw2`, `cwMain_cw2`, `carrierWatch_cw2`, `htStep_cw2` (each states `CW2`: `SuspOk` is kept and the broadcast
+  output only grows), `hubDown_susp`, `hubTick_susp` (`MembershipTickLoop`).
 * `OBg`: the broadcast-layer output of `carrier_watch`, `hub_down` and the tick only grows (used to find the `release`
-  of an expired lease in the output).
+  of an expired lease in the output; it is the second half of `CW2`).
 -/
 
 set_option linter.unusedVariables false

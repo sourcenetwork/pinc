@@ -17,8 +17,8 @@ projections, with the names of the TLA properties:
 * `seenAccounted`: every id the set or the log holds was delivered, held, refused with a reason or dropped for a
   stated cause (with full holds keeping the id unseen);
 * `deliveredAllowed`, `denyDrops`, `floorRespected`, `floorHold`, `bounds`, `gatherBound`;
-* `ackOnlyStored`: a hub acknowledges only a message it holds; `garbageInert`: a frame that is not a good message
-  changes nothing (`OnMsg_garbage`); `gatherEnds`: the first timer past the wait ends the gathering.
+* `ackOnlyStored`: a hub acknowledges only a message it holds; `garbage_inert`: a frame that is not a good message
+  changes nothing (`OnMsg_garbage`); `gather_ends`: the first timer past the wait ends the gathering.
 -/
 
 set_option linter.unusedSimpArgs false
@@ -311,6 +311,9 @@ theorem bounds : s.node.held.length ≤ p.heldMax ∧ s.node.fhold.length ≤ p.
   have h := (reach_inv hcap r).inv
   ⟨h.heldLen, h.fholdLen, h.checksLen, h.seen.len, h.lgLen, h.acpLen⟩
 
+theorem floorHold (hh : p.isHub = false) (hl : s.last = .msg ∨ s.last = .timer ∨ s.last = .answer)
+    (hg : s.node.phase = .gathering) : ∀ o ∈ s.outs, NoDel o := (reach_inv hcap r).floor hh hl hg
+
 theorem gatherBound (h : s.node.phase = .gathering) : s.now ≤ s.node.born + p.floorWait + 1 :=
   (reach_inv hcap r).gather h
 
@@ -408,6 +411,7 @@ theorem AcpAnswer_cached {p : Params} {N : Node} {now id : Nat} {allow : Bool} {
 #audit_axioms Vinc.BroadcastNode.denyDrops
 #audit_axioms Vinc.BroadcastNode.floorRespected
 #audit_axioms Vinc.BroadcastNode.bounds
+#audit_axioms Vinc.BroadcastNode.floorHold
 #audit_axioms Vinc.BroadcastNode.gatherBound
 #audit_axioms Vinc.BroadcastNode.ackOnlyStored
 #audit_axioms Vinc.BroadcastNode.garbage_inert

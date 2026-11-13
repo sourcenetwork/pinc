@@ -14,10 +14,10 @@ For a ledger with `Inv`, and a book with `NodupB` and `Linked`, each operation o
   `accept_capacity_iff`: the book is full exactly when no record is free;
 * `onAck_ok_iff`: custody is relieved exactly when the ack is valid, the bundle is held, custody was offered to exactly
   the acknowledging node under exactly the ack's offer id, and the ledger still holds the item; `onAck_stale`: any
-  other ack of a held bundle is `notOffered` and moves nothing; `onAck_refused_state`: any other ack moves nothing
+  other ack of a held bundle is `notOffered` and moves nothing; `onAck_state`: any other ack moves nothing
   (the one exception is documented: a valid, offered ack for an item the ledger already dropped clears the record and
   reports `storeUnknown`);
-* `onAck_relief_only`: a relief changes the class of that bundle's item to transit and clears that bundle's record, and
+* `onAck_state` and `onAck_records`: a relief changes the class of that bundle's item to transit and clears that bundle's record, and
   nothing else;
 * `delivered_exits`, `bexpire_exits`: the other exits.
 -/

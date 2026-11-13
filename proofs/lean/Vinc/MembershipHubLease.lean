@@ -7,15 +7,16 @@ Properties 5 and 7 at the hub, and the roster tables of property 9.
 
 * `hubDown_left`: a leave (cause `left`) drops the lease, releases the member's subscriptions (never holds them) and
   records nothing in `downed`.
-* `hubDown_hold`: a confirmation or an accepted DOWN drops the lease, holds the subscriptions for the lease (a `hold`,
+* `hubDown_confirmed`, `hubDown_remote`: a confirmation or an accepted DOWN drops the lease, holds the subscriptions for the lease (a `hold`,
   never a `release`) and records the member in `downed` with the time (the table has room, or already lists it).
 * `carrierReturn_restores` (5): a member in `downed` whose carrier returns gets its lease back (renewed now), its
   subscriptions restored (`restore`) and is told about itself; `carrierReturn_nothing_held`: with nothing held, only a
   `restored = false` record is traced.
 * `sessionDown_leave` (7): a hub that sees the leave code on a member's session drops the lease with cause `left`.
-* `onHello_roster_le`, `hubDown_downed_le`, `onHello_attached_le`, `onHello_homed_le` (9): inserts check the bound and
-  refuse instead of evicting. `carrierReturn_roster_unbounded` records a gap of the code found while proving these:
-  `carrier_return` inserts into the roster without the bound check.
+* `onHello_full_refuses`, `carrierReturn_roster_le`, `carrierReturn_full` (9): inserts check the bound and refuse
+  instead of evicting (`hubDown_remote` and `hubDown_confirmed` take the room of `downed` as a hypothesis). The bounds
+  of the roster, `attached`, `homed` and `downed` for every call, `on_hello` and `hub_down` included, are `inv_onHello`
+  and `inv_hubDown` (`MembershipInvHub`), and `reach_bounds` (`MembershipInvReach`) for every reachable node.
 -/
 
 set_option linter.unusedVariables false

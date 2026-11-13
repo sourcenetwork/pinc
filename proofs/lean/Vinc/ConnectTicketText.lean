@@ -11,8 +11,8 @@ leftover bits or any leftover bit that is not zero. The accumulator of the code 
 reads; it is a `Nat` modulo `2^32` here, as in the code.
 
 Theorems: `b32_roundtrip` (decoding the symbols of a byte string returns it), `b32dec_inv` (an accepted symbol string
-is the symbols of the bytes it returned, so the text has one accepted spelling up to case), `tkText_roundtrip` and
-`tkFromText_inv` for tickets.
+is the symbols of the bytes it returned, so the text has one accepted spelling up to case), `Tk.text_roundtrip` and
+`Tk.fromText_inv` for tickets (both in `ConnectTicketTextPf`).
 -/
 
 namespace Vinc.ConnCodec

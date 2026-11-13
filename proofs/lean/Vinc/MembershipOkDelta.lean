@@ -5,7 +5,7 @@ import Vinc.MembershipOkView
 
 The hub copies are written by `apply_delta` / `push_delta` (an alive delta inserts the member, a down delta erases it) and
 by `apply_snap` (next file). An insert goes through the tests of the code: the member is not this node (`apply_delta`,
-`push_delta` and `apply_snap` test it before) and not revoked (`apply_delta_core` and `apply_snap` test it). So every
+`push_delta` and `apply_snap` test it before) and not revoked (`N.applyDeltaCore`, the model's cut of `apply_delta`, and `apply_snap` test it). So every
 copy keeps listing only clean nodes (`vk_applyDeltaCore`, `vk_pushDelta`).
 -/
 

@@ -12,8 +12,10 @@ proves that, so that the timeline theorems can follow one lease through a whole 
 
 * `Held t0 m n`: the roster has no lease for `m`, or one renewed at `t0` or earlier.
 * `Silent t0 e m`: the host shows no evidence of `m` after `t0` and `m`'s carrier is not open.
-* `onTimeout_held`: a call of `on_timeout` keeps `Held` under `Silent`; `onTimeout_roster_other`: it never touches the
-  lease of another member through a path other than that member's own rules (`Other`).
+* `Other k n n'`: the rosters of `n` and `n'` agree at every key but `k`. The calls that leave the roster as it is are
+  `pulseRefresh_roster`, `refreshLocal_roster`, `renew_roster`, `recheckNow_roster`, `reselect_roster`, `dropPeer_roster`
+  and the other `*_roster` lemmas below; `onTimeout_held` (in `MembershipCompleteTimeout`) puts them together: a call
+  of `on_timeout` keeps `Held` under `Silent`.
 -/
 
 set_option linter.unusedVariables false

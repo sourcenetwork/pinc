@@ -10,7 +10,8 @@ Theorems about `DtnForward.advance`, `poll`, `spray` and `retr`, for every table
   maximum of the old clock and the offered time, and nothing else of the state changes.
 * Expiry is wall-clock (`expiry_ignores_links`, `poll_release_done`, `poll_release_only_done`): a delivered or expired
   bundle is released first, whatever the links and timers say, and a release is only of such a bundle.
-* Order (`poll_retr_after_release`, `poll_spray_after_retr`): release, then retransmission, then new handovers.
+* Order (`poll_release_done`, `poll_send_spec`): a done bundle is released first, and a retransmission or a handover
+  means none was done; that a handover means the retransmission scan found nothing is not proved in Lean yet.
 * Give-up (`poll_gives_up_only`): a transfer gives up only with its timer out, its link up and its sends used.
 * Spray (`spray_send_spec`, `poll_send_spec`): a handover to the destination carries no copies, to anyone else it
   hands `copies / 2` and the holder keeps at least one; a transfer is created once per (bundle, peer).

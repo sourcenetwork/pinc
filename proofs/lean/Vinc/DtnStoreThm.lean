@@ -10,7 +10,7 @@ then the fit test; so every refusal returns the swept ledger and the expired ite
 yet swept is admitted fresh.
 
 The two exits of the code that its own logic makes unreachable (`evictLoop` returning `none`, and `put` finding no free
-slot after the loop) are modelled as the refusal the code returns; `admit_total` proves they are not taken.
+slot after the loop) are modelled as the refusal the code returns; `admit_cases` proves they are not taken: once the fit test passes, `evictLoop` returns a ledger and `put` finds a slot.
 -/
 
 namespace Vinc.DtnStore

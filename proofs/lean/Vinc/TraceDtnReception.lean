@@ -16,8 +16,8 @@ verdict rules proved per block in `Vinc.DtnReception` (Incomplete exactly when a
 Inconsistent only when a block that is not fully held has a parity that is not a code word, and Ok whenever every
 such block is a code word, since `finish` never writes a held symbol and so the verdict depends on the held set alone;
 the exact verdict for a sender with a bad parity needs the code and is checked by TLC); a finish with a wrong-sized
-outboard or scratch is `Buffer` and changes nothing; `resume` by its checks. `nextMissing` is the loop of the code, replayed here and
-proved in `Vinc.DtnReceptionNext` and checked by TLC (`DtnReception.tla`). It is the port of `proofs/tla/TraceDtnReception.tla`.
+outboard or scratch is `Buffer` and changes nothing; `resume` by its checks. `next_missing` is the loop of the code, replayed here as `nmGo` and
+proved by `next_missing_some` and `next_missing_none` in `Vinc.DtnReceptionNext` and checked by TLC (`DtnReception.tla`). It is the port of `proofs/tla/TraceDtnReception.tla`.
 -/
 
 namespace Vinc.TraceDtnReception
