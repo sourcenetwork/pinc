@@ -161,6 +161,28 @@ impl<const N: usize> DeadlineHeap<N> {
     }
 }
 
+/// Views of the heap's arrays, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+impl<const N: usize> DeadlineHeap<N> {
+    /// The id at heap index `i`, for an index below the length.
+    #[must_use]
+    pub fn heap_at(&self, i: usize) -> Option<usize> {
+        self.heap.get(i).filter(|_| i < self.len).map(|&id| id as usize)
+    }
+
+    /// The heap index of `id`, if it has a deadline; `None` for an id without one or outside `0..N`.
+    #[must_use]
+    pub fn pos_of(&self, id: usize) -> Option<usize> {
+        self.pos.get(id).copied().filter(|&p| p != NONE).map(|p| p as usize)
+    }
+
+    /// The deadline stored for `id` whether or not it has one (a removed id keeps its last one), for `id` below `N`.
+    #[must_use]
+    pub fn stored(&self, id: usize) -> Option<u64> {
+        self.at.get(id).copied()
+    }
+}
+
 impl<const N: usize> Default for DeadlineHeap<N> {
     fn default() -> Self {
         Self::new()

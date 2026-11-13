@@ -95,6 +95,9 @@ import Vinc.TraceHalfOpen
 import Vinc.CoreTable
 import Vinc.CoreTableThm
 import Vinc.TraceCoreTable
+import Vinc.CoreHeap
+import Vinc.CoreHeapThm
+import Vinc.TraceHeap
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TransportTimers
