@@ -40,6 +40,7 @@ ConfEv == /\ Ev0.op = "conf" /\ c' = Confirm(c, Ev0.k) /\ Same(c', Ev0.v)
 QueryEv == /\ Ev0.op = "query" /\ c' = c /\ Same(c, Ev0.v)
            /\ Ev0.lc = 1 + Cardinality(Held(c))
            /\ \A k \in 1..Len(Ev0.has) : Ev0.has[k][2] = IsLocal(c, Ev0.has[k][1])
+           /\ \A k \in 1..Len(Ev0.usable) : Ev0.usable[k][2] = RemoteUsable(c, Ev0.usable[k][1])
 
 Init == i = 1 /\ c = Init0
 Step == /\ i <= Len(Trace) /\ Ev0.t = "txcid"
