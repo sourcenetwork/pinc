@@ -175,7 +175,7 @@ test-default *args:
 doctest:
     cargo test --workspace --doc --all-features -q
 
-# Lean proofs, TLC model checking and trace validation of the Rust code.
+# Lean proofs, TLC model checking, trace validation and model-based tests of the Rust code.
 proofs:
     scripts/proofs.sh
 

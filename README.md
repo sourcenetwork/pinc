@@ -138,7 +138,7 @@ just              # list the recipes
 just gate         # everything a change must pass: checks, tests, doctests, proofs
 just checks       # dependency rules, format, lints, docs, no_std builds, pure Rust
 just test         # every test with cargo-nextest (the hwenc TPM tests need swtpm); just test-default skips hwenc
-just proofs       # Lean proofs, TLC model checking and trace validation
+just proofs       # Lean proofs, TLC model checking, trace validation and model-based tests
 just tla-tools    # install the pinned TLA+ tools the proofs use
 just bench        # micro benchmarks
 just compare      # VINC against iroh and rust-libp2p on loopback (run it on an otherwise idle machine; needs sudo and tc)
@@ -180,10 +180,12 @@ the library's build compiles C.
 ## Proofs
 
 VINC's state machines and pure functions are specified in TLA+ and model checked with TLC, proved in Lean 4 without
-bounds, and both are validated against traces recorded from the real Rust code. Only the dependencies are taken on
-trust: the cryptographic primitives and Rust `core` and `std` semantics. The crates marked proven above are covered in
-full; the others land crate by crate. [docs/PROOFS.md](docs/PROOFS.md) has the property table, how each property is
-checked, the assumptions and what is still being closed.
+bounds, and both are validated against traces recorded from the real Rust code. The other way round, the real code of
+the endpoint's table of held first-flight fragments is driven along every edge of TLC's bounded state graph of its
+model (model-based tests). Only the dependencies are taken on trust: the cryptographic primitives and Rust `core` and
+`std` semantics. The crates marked proven above are covered in full; the others land crate by crate.
+[docs/PROOFS.md](docs/PROOFS.md) has the property table, how each property is checked, the assumptions and what is
+still being closed.
 
 ## Open items
 
