@@ -291,3 +291,199 @@ fn a_upnp_external_address_no_peer_could_reach_is_not_mapped() {
         assert_eq!(pm.mapped(), None);
     }
 }
+
+const OK: &[u8] = b"HTTP/1.1 200 OK\r\n\r\n<u:AddPortMappingResponse/>";
+
+fn pcp_map(nonce: [u8; 12], result: u8, epoch: u32, lifetime: u32) -> Vec<u8> {
+    let r = pcp::Response::Map {
+        result,
+        lifetime,
+        epoch,
+        nonce,
+        protocol: pcp::UDP,
+        internal_port: 4433,
+        external_port: 4433,
+        external_ip: "203.0.113.9".parse().unwrap(),
+    };
+    let mut b = [0u8; 60];
+    pcp::encode_response(&r, &mut b).unwrap();
+    b.to_vec()
+}
+
+fn pcp_header(opcode: u8, result: u8, epoch: u32) -> Vec<u8> {
+    let mut b = [0u8; 24];
+    let n = pcp::encode_response(
+        &pcp::Response::Header {
+            opcode,
+            result,
+            lifetime: 30,
+            epoch,
+        },
+        &mut b,
+    )
+    .unwrap();
+    b[..n].to_vec()
+}
+
+#[test]
+fn a_pcp_error_header_while_a_mapping_is_held_changes_nothing() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    let held = pm.mapped();
+    assert!(held.is_some());
+    // a header-form MAP error (no nonce in this form) whose epoch went back: it answers no request
+    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_header(pcp::OP_MAP, 8, 3));
+    assert_eq!(pm.mapped(), held, "an answer to no request dropped the mapping");
+    assert_eq!(pm.poll_timeout(), Some(T0 + 3600 * SEC), "the renewal is still armed");
+    assert!(sent(&mut pm).is_empty());
+}
+
+#[test]
+fn an_announce_that_drops_the_mapping_is_asked_again() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 3));
+    assert_eq!(pm.mapped(), None);
+    assert!(
+        pm.poll_timeout().is_some(),
+        "a client that holds nothing still has a timer"
+    );
+    assert_eq!(sent(&mut pm).len(), 1, "the mapping is asked for again");
+}
+
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+}
+
+/// Random events against the client, PCP header answers among them. After every event and a drain of what it sends,
+/// a client that is not stopped has a timer or an HTTP request to make (or it never acts again), and one that
+/// stopped holds nothing.
+fn never_wedged(seed: u64) {
+    let mut r = Rng(seed.wrapping_mul(0x2545_f491_4f6c_dd1d) | 1);
+    let gateway = if r.below(5) == 0 { None } else { Some(IpAddr::V4(GW)) };
+    let mut cfg = Config::new(gateway, local(), NONCE);
+    cfg.lifetime = [120, 7200][r.below(2) as usize];
+    let mut pm = PortMap::new(cfg, T0);
+    let mut now = T0;
+    let mut epoch: u32 = 100;
+    let mut trace = Vec::new();
+    for _ in 0..150 {
+        match r.below(12) {
+            0..=2 => {
+                now = pm.poll_timeout().map_or(now + SEC, |t| t.max(now));
+                pm.handle_timeout(now);
+                trace.push(format!("timeout@{}", (now - T0) / SEC));
+            }
+            3 => {
+                now += r.below(4000) * SEC;
+                pm.handle_timeout(now);
+                trace.push(format!("jump@{}", (now - T0) / SEC));
+            }
+            4 | 5 => {
+                epoch = epoch.wrapping_add(r.below(50) as u32);
+                let e = if r.below(8) == 0 { r.below(5) as u32 } else { epoch };
+                let nonce = if r.below(5) == 0 { [9; 12] } else { NONCE };
+                let res = [0, 0, 1, 2, 8][r.below(5) as usize];
+                pm.handle_datagram(
+                    now,
+                    gw(),
+                    &pcp_map(nonce, res, e, [0, 1, 120, 7200][r.below(4) as usize]),
+                );
+                trace.push(format!("pcp-map res={res} e={e}"));
+            }
+            6 => {
+                let e = if r.below(3) == 0 { r.below(5) as u32 } else { epoch };
+                let op = r.below(2) as u8;
+                let res = if op == 0 { 0 } else { [1, 2, 8][r.below(3) as usize] };
+                pm.handle_datagram(now, gw(), &pcp_header(op, res, e));
+                trace.push(format!("pcp-header op={op} res={res} e={e}"));
+            }
+            7 => {
+                let e = if r.below(4) == 0 { r.below(5) as u32 } else { epoch };
+                let m = match r.below(3) {
+                    0 => natpmp::Response::Address {
+                        result: 0,
+                        epoch: e,
+                        ip: "203.0.113.9".parse().unwrap(),
+                    },
+                    1 => natpmp::Response::Map {
+                        result: 0,
+                        epoch: e,
+                        internal_port: 4433,
+                        external_port: 4433,
+                        lifetime: 120,
+                    },
+                    _ => natpmp::Response::Error {
+                        opcode: r.below(2) as u8,
+                        result: 1 + r.below(3) as u16,
+                        epoch: e,
+                    },
+                };
+                pm.handle_datagram(now, gw(), &nat(m));
+                trace.push(format!("natpmp {m:?}"));
+            }
+            8 => {
+                pm.handle_datagram(now, from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml"));
+                trace.push("ssdp".into());
+            }
+            9 => {
+                if http(&mut pm).is_some() {
+                    let desc: &[u8] = b"HTTP/1.1 200 OK\r\n\r\n<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/c</controlURL></service>";
+                    let answers: [Option<&[u8]>; 6] = [
+                        Some(desc),
+                        Some(b"HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>203.0.113.9</NewExternalIPAddress>"),
+                        Some(OK),
+                        Some(b"HTTP/1.1 500 E\r\n\r\n<errorCode>718</errorCode>"),
+                        Some(b"HTTP/1.1 500 E\r\n\r\n<errorCode>725</errorCode>"),
+                        None,
+                    ];
+                    pm.handle_http(now, answers[r.below(6) as usize]);
+                    trace.push("http".into());
+                }
+            }
+            10 => {
+                let junk: Vec<u8> = (0..r.below(60)).map(|_| r.next().to_le_bytes()[0]).collect();
+                pm.handle_datagram(now, gw(), &junk);
+                trace.push("junk".into());
+            }
+            _ => {
+                if r.below(10) == 0 {
+                    pm.stop(now);
+                    trace.push("stop".into());
+                }
+            }
+        }
+        sent(&mut pm);
+        if pm.stopped() {
+            assert_eq!(pm.mapped(), None, "a stopped client holds a mapping: {trace:?}");
+            return;
+        }
+        let mut b = [0u8; upnp::MAX_REQUEST];
+        assert!(
+            pm.poll_timeout().is_some() || pm.clone().poll_http(&mut b).is_some(),
+            "wedged: no timer, not stopped, nothing to send after {trace:?}"
+        );
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2000))]
+
+    #[test]
+    fn the_client_always_has_a_timer_or_an_exchange_in_flight(seed in proptest::prelude::any::<u64>()) {
+        never_wedged(seed);
+    }
+}

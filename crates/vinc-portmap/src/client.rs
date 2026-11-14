@@ -334,7 +334,8 @@ impl PortMap {
 
     /// Note the gateway's epoch. One that shows the gateway lost its mappings drops the mapping held at once, whatever
     /// the answer that carried it says next (a grant that follows holds a new lease); returns the protocol of a mapping
-    /// so dropped.
+    /// so dropped. Whoever calls this outside a request in flight must ask again when it returns a protocol: a client
+    /// that holds nothing and waits for nothing never acts again.
     fn note_epoch(&mut self, now: u64, server: u32) -> Option<Proto> {
         let lost = self.epoch.is_some_and(|p| lease::restarted(p, now, server));
         self.epoch = Some(Epoch { at: now, server });
@@ -422,14 +423,15 @@ impl PortMap {
             Ok(pcp::Response::Header {
                 opcode, result, epoch, ..
             }) => {
-                let lost = self.note_epoch(now, epoch);
                 if opcode == pcp::OP_ANNOUNCE {
                     // the gateway lost the mapping: ask again with the same protocol
-                    if let Some(proto) = lost {
+                    if let Some(proto) = self.note_epoch(now, epoch) {
                         self.renew(proto, now);
                         self.renewing = false;
                     }
                 } else if self.step == Step::Pcp {
+                    // an answer to the request in flight (the form has no nonce); in any other step it answers nothing
+                    self.note_epoch(now, epoch);
                     if result == pcp::UNSUPP_VERSION && !self.renewing {
                         self.enter(Step::NatAddr, now);
                     } else {
