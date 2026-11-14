@@ -1144,6 +1144,10 @@ name = "trace_timers"
 path = "trace_timers.rs"
 
 [[test]]
+name = "trace_reply_path"
+path = "trace_reply_path.rs"
+
+[[test]]
 name = "trace_core_state"
 path = "trace_core_state.rs"
 

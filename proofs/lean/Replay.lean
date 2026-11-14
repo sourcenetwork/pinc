@@ -34,6 +34,7 @@ import Vinc.TraceHeld
 import Vinc.TraceExtIn
 import Vinc.TraceReach
 import Vinc.TraceMtu
+import Vinc.TraceReplyPath
 import Vinc.TraceTimers
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
@@ -218,6 +219,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut exw : TraceExtIn.W := {}
   let mut rcw2 : TraceReach.W := {}
   let mut mtw : TransportMtu.M := {}
+  let mut rpw : TraceReplyPath.W := {}
   let mut tmw : TraceTimers.W := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
@@ -533,6 +535,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceMtu.replayEvent j mtw with
           | .ok w' =>
             mtw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceReplyPath.isTag t then
+          -- Reply path events (`rp`, written by `trace_reply_path`): a dialing side's path table through its handshake.
+          match TraceReplyPath.replayEvent j rpw with
+          | .ok w' =>
+            rpw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

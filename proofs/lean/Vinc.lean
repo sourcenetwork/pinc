@@ -140,6 +140,9 @@ import Vinc.TraceExtIn
 import Vinc.TraceReach
 import Vinc.TransportMtu
 import Vinc.TraceMtu
+import Vinc.TransportPath
+import Vinc.TransportPathJoined
+import Vinc.TraceReplyPath
 import Vinc.TransportTimers
 import Vinc.TransportTimersThm
 import Vinc.TraceTimers

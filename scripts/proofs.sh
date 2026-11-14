@@ -604,6 +604,10 @@ par witness_tlc rtt_full Rtt Rtt_full NoRefuse
 par witness_tlc rtt_thin Rtt Rtt_thin NoThin
 par witness_tlc rtt_peakzero Rtt Rtt_peakzero NoPeakZero
 par run_tlc mtu Mtu Mtu
+par run_tlc reply_path ReplyPath ReplyPath
+par run_tlc reply_path_one ReplyPath ReplyPath_one
+par witness_tlc reply_path_held ReplyPath ReplyPath_held ReplyTaken
+par witness_tlc reply_path_coalesced ReplyPath ReplyPath_coalesced Unique
 par run_tlc timers Timers Timers
 par witness_tlc timers_close Timers Timers_close NoCloseSent
 par witness_tlc timers_nowake Timers Timers_nowake PollLeLife
@@ -717,7 +721,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_pack --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_early --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_standby --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_pack --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_early --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_standby --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_reply_path --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -792,6 +796,7 @@ trace_tlc TraceHeld "held ring"
 trace_tlc TraceExtIn "extension ring"
 trace_tlc TraceReach "reach ring"
 trace_tlc TraceMtu "path MTU"
+trace_tlc TraceReplyPath "reply path"
 trace_tlc TraceTimers "timers and closing"
 trace_tlc TraceIntegrationCodecs "integration codecs"
 trace_tlc TraceBroadcast broadcast
