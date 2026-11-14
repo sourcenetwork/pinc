@@ -25,6 +25,12 @@ use vinc_transport::stream::StreamId;
 
 use crate::mem::Ep;
 
+thread_local! {
+    /// The boxes of handshake machines the endpoints of this thread share: an endpoint holds one only while a
+    /// handshake of its runs.
+    static MACHINES: vinc_transport::conn::Machines = vinc_transport::conn::Machines::new();
+}
+
 /// The relays a node can name at once.
 pub(crate) const RELAYS: usize = 4;
 /// The peers the connectivity layer tracks.
@@ -71,9 +77,11 @@ macro_rules! define {
                 pool_chunks: usize,
             ) -> Option<Self> {
                 match connections {
-                    $(n if n <= $k => Some(Self::$v(Ep::<$k, { $k * 10 }>::new_owned(
-                        now, Software, drbg, identity, cfg, pool_chunks,
-                    ))),)+
+                    $(n if n <= $k => Some(Self::$v({
+                        let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
+                        MACHINES.with(|m| ep.share_machines(m));
+                        ep
+                    })),)+
                     _ => None,
                 }
             }

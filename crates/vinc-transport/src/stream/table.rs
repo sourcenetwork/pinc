@@ -394,6 +394,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             };
             *live = live.saturating_sub(1);
         }
+        // The last stream ended: the session is quiet, so its pool lets go of the chunks its busiest moment took.
+        if self.open == 0 {
+            pool.trim();
+        }
         self.regrant(pool);
     }
 

@@ -213,9 +213,11 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   window) VINC leads iroh and rust-libp2p on bulk throughput (713 against 514 and 465 MiB/s on one stream, 678
   against 488 and 462 on sixteen), on CPU per byte (2.65 against 4.81 and 5.09 ns), on the 64-byte round trip (68
   against 93 and 78 microseconds) and on connection setup (858 microseconds against 1,047 and 1,801). It is behind on
-  a client's memory per connection (250 KiB against 180 and 107) and on the memory of an idle endpoint (6.3 MiB
-  against 3.3 and 0.6, measured on 12 November; both in [#158](https://github.com/sourcenetwork/vinc/issues/158)), and on the time to the first byte when 1000
-  connections start at once (821 ms against iroh's 315, [#157](https://github.com/sourcenetwork/vinc/issues/157)).
+  a client's memory per connection, 188 KiB against iroh's 176 and rust-libp2p's 110 (it was 250), and on the memory
+  of an idle endpoint, 5.8 MiB against 3.3 and 0.6 (it was 6.3); both measured on 13 November on a c7i.4xlarge in one
+  session with the other two ([#158](https://github.com/sourcenetwork/vinc/issues/158)). It is behind on the time to
+  the first byte when 1000 connections start at once (821 ms against iroh's 315,
+  [#157](https://github.com/sourcenetwork/vinc/issues/157)).
 - **Performance on the emulated network** (containers on the build host, the same session, three repetitions,
   medians). Under 1% loss on a 50 ms path a transfer runs at 6.28 MiB/s against 0.35 and 0.34. Requests on a stream
   each over a 20 ms path, 512-byte bodies: with 64 in flight 2,799 a second against 2,311 for iroh and 48 for

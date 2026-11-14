@@ -310,6 +310,15 @@ where
         ep.fresh = Some(Fresh::new(pool_chunks));
         ep
     }
+
+    /// Take the boxes of handshake machines from `machines`, a pool other endpoints may share, instead of a pool of
+    /// this endpoint's own. A machine is held only while its handshake runs, so endpoints that share a pool hold as many
+    /// as run at once, not one each. Affects only the slots made after the call.
+    pub fn share_machines(&mut self, machines: &vinc_transport::conn::Machines) {
+        if let Some(f) = self.fresh.as_mut() {
+            f.machines = machines.clone();
+        }
+    }
 }
 
 /// What an endpoint that owns its table makes a slot's memory from, the first time the slot is taken.

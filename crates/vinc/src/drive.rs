@@ -14,10 +14,9 @@
 //!
 //! Invariants: at most one future holds the role; the flag, the baton and a ticket's registration change in one
 //! borrow of the core, so a wake is never lost between a failed attempt and the wait; no borrow is held across an await
-//! or a call of a host closure; the
-//! receive and transmit buffers come from two small pools and go back when dropped, so steady traffic allocates none,
-//! however many futures send at once; with no future polled the endpoint makes no progress, which is the SANS-IO
-//! contract.
+//! or a call of a host closure; the receive and transmit buffers come from two small pools the endpoints of the thread
+//! share and go back when dropped, so steady traffic allocates none, however many futures send at once; with no future
+//! polled the endpoint makes no progress, which is the SANS-IO contract.
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::future::poll_fn;
@@ -49,6 +48,13 @@ const DRAIN: usize = 256;
 /// The most buffers each pool keeps.
 const POOLED: usize = 8;
 
+thread_local! {
+    /// The receive buffers the endpoints of this thread share.
+    static RX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+    /// The transmit buffers the endpoints of this thread share.
+    static TX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+}
+
 /// The state every handle of an endpoint shares.
 pub(crate) struct Shared<H: Hosted> {
     pub(crate) host: H,
@@ -64,8 +70,11 @@ pub(crate) struct Shared<H: Hosted> {
     carriers: RefCell<carrier_io::Slots<<H::Carriers as Carriers>::Stream>>,
     /// A carrier moved bytes or changed state during the last poll: the endpoint has more to do.
     cdirty: Cell<bool>,
-    rx_bufs: RefCell<Vec<Vec<u8>>>,
-    tx_bufs: RefCell<Vec<Vec<u8>>>,
+    /// The receive and transmit buffers of every endpoint on this thread. A receive buffer is held while a future drives
+    /// the endpoint and a transmit buffer while a transmit is built and sent, so endpoints that are mostly idle share a
+    /// few instead of keeping two each.
+    rx_bufs: Rc<RefCell<Vec<Vec<u8>>>>,
+    tx_bufs: Rc<RefCell<Vec<Vec<u8>>>>,
     /// The size of a transmit buffer: the endpoint's batch of datagrams of the largest size.
     tx_len: usize,
     /// The relay role's clock minus the endpoint's, in nanoseconds; see [`role_io`].
@@ -121,13 +130,13 @@ fn wire(a: SocketAddr, socket_v6: bool) -> SocketAddr {
     }
 }
 
-/// A buffer of `len` bytes from `home`, or a new one.
+/// A buffer of `len` bytes from `home`, or a new one. A pooled buffer of another length (the endpoints of a thread may
+/// batch differently) is cut or zero-extended to `len`.
 fn pooled(home: &RefCell<Vec<Vec<u8>>>, len: usize) -> Buf<'_> {
     let v = home.try_borrow_mut().ok().and_then(|mut b| b.pop());
-    Buf {
-        v: v.unwrap_or_else(|| vec![0; len]),
-        home,
-    }
+    let mut v = v.unwrap_or_else(|| vec![0; len]);
+    v.resize(len, 0);
+    Buf { v, home }
 }
 
 async fn recv_owned<'a, H: Hosted>(host: &H, mut buf: Buf<'a>) -> (io::Result<(usize, SocketAddr, usize)>, Buf<'a>) {
@@ -189,8 +198,8 @@ impl<H: Hosted> Shared<H> {
             relays,
             carriers: RefCell::new(carrier_io::slots()),
             cdirty: Cell::new(false),
-            rx_bufs: RefCell::new(Vec::new()),
-            tx_bufs: RefCell::new(Vec::new()),
+            rx_bufs: RX_BUFS.with(Rc::clone),
+            tx_bufs: TX_BUFS.with(Rc::clone),
             tx_len: gso.clamp(1, UDP_MAX / vinc_core::MAX_DATAGRAM) * vinc_core::MAX_DATAGRAM,
             role_off,
             role_ready: Cell::new(false),
