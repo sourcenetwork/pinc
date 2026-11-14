@@ -1138,3 +1138,7 @@ path = "trace_reach.rs"
 [[test]]
 name = "trace_rtt"
 path = "trace_rtt.rs"
+
+[[test]]
+name = "node_route_full"
+path = "node_route_full.rs"

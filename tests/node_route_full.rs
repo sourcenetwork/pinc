@@ -1,0 +1,236 @@
+//! A hub-protocol session the node cannot record (its session table holds `TABLE_MAX` = 4096 hub sessions) is closed,
+//! as a layer's session is, so none of its stream events reaches the application (`lib.rs`: "the streams of a
+//! hub-protocol session never reach the application as events or bytes").
+//!
+//! The endpoint is scripted: it hands the node exactly the events a real endpoint with a table of more than 4096
+//! sessions raises when one member holds 4097 sessions of the hub protocol with the hub (the newest session of a peer
+//! supersedes the old one, which stays in the node's table until it closes). Like a real endpoint, it raises nothing
+//! but the close for a session the node closed.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
+
+use std::collections::VecDeque;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::ops::Range;
+
+use vinc_broadcast::Limits;
+use vinc_connect::client::{Config as ConnCfg, Port};
+use vinc_core::{
+    Command, CommandError, Event, Events, IfaceEvent, IfaceId, NodeStats, Reply, SendState, SessionId, SessionStats,
+    TraceRecord, Transmit, Value,
+};
+use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
+use vinc_node::{Config as NodeConfig, Ep, HUB_ALPN, Node, NodeEvent};
+use vinc_security::{Alpn, Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
+use vinc_tests::Caps;
+use vinc_transport::stream::{NoSource, StreamId};
+
+/// An endpoint that hands out scripted events and accepts every command with an empty reply. It records the sessions
+/// the node closed, and drops every later event of one but its close: a closed session's packets are not read.
+#[derive(Default)]
+struct Script {
+    events: VecDeque<Event>,
+    closed: Vec<SessionId>,
+}
+
+impl Port for Script {
+    type Src = NoSource;
+    fn command(&mut self, _now: u64, cmd: Command<'_, NoSource>) -> Result<Reply, CommandError> {
+        if let Command::Close { session, .. } = cmd {
+            self.closed.push(session);
+        }
+        Ok(Reply {
+            value: Value::None,
+            events: Events::default(),
+        })
+    }
+    fn stats(&self, _session: SessionId) -> Option<SessionStats> {
+        None
+    }
+    fn node(&self) -> Option<NodeStats> {
+        None
+    }
+    fn peer(&self, _node: &NodeId) -> Option<vinc_core::PeerInfo> {
+        None
+    }
+    fn reach_body(&self, _session: SessionId, _out: &mut [u8; vinc_core::REACH_BODY_MAX]) -> usize {
+        0
+    }
+    fn by_conn_id(&self, _cid: &vinc_security::ConnId) -> Option<SessionStats> {
+        None
+    }
+}
+
+impl Ep for Script {
+    fn handle_datagram(&mut self, _now: u64, _local: SocketAddr, _remote: SocketAddr, _buf: &mut [u8]) {}
+    fn poll_transmit(&mut self, _now: u64, _out: &mut [u8]) -> Option<Transmit> {
+        None
+    }
+    fn poll_event(&mut self) -> Option<Event> {
+        while let Some(ev) = self.events.pop_front() {
+            if matches!(ev, Event::Closed { .. }) || !ev.session().is_some_and(|s| self.closed.contains(&s)) {
+                return Some(ev);
+            }
+        }
+        None
+    }
+    fn poll_timeout(&self) -> Option<u64> {
+        None
+    }
+    fn handle_timeout(&mut self, _now: u64) {}
+    fn register_alpn(&mut self, _alpn: &[u8]) -> bool {
+        true
+    }
+    fn read_chunk(&self, _session: SessionId, _stream: StreamId) -> Option<&[u8]> {
+        None
+    }
+    fn read_at(&self, _session: SessionId, _stream: StreamId, _offset: u64) -> Option<&[u8]> {
+        None
+    }
+    fn stored_after(&self, _session: SessionId, _stream: StreamId, _from: u64) -> Option<Range<u64>> {
+        None
+    }
+    fn send_state(&self, _session: SessionId, _stream: StreamId) -> Option<SendState> {
+        None
+    }
+    fn in_flight(&self, _session: SessionId) -> Option<u64> {
+        None
+    }
+    fn read_extension(&mut self, _out: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, CommandError> {
+        Ok(None)
+    }
+    fn session_at(&self, _n: usize) -> Option<SessionStats> {
+        None
+    }
+    fn poll_trace(&mut self) -> Option<TraceRecord> {
+        None
+    }
+    fn add_iface(&mut self, _local: SocketAddr) -> Option<IfaceId> {
+        None
+    }
+    fn iface_event(&mut self, _now: u64, _id: IfaceId, _ev: IfaceEvent) {}
+}
+
+type Hub = Node<Script, Caps, (), 4, 32>;
+
+fn hub() -> Box<Hub> {
+    let alg = IdentityAlg::Ed25519;
+    let kp = Keypair::from_seed(alg, &[0x11; 32]).unwrap();
+    let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
+    let prov = Caps(vinc_crypto::Software, true);
+    let mut drbg = Drbg::new(&[0x21; 32]);
+    let mut env = Env {
+        provider: &prov,
+        now: 0,
+        drbg: &mut drbg,
+    };
+    let mut prekeys = SoftPrekeys::new(&mut env, PrekeyPolicy::default()).unwrap();
+    let prekey = prekeys.acquire(&mut env).unwrap();
+    let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), 4433);
+    let cfg = NodeConfig {
+        connect: ConnCfg {
+            me: kp.node_id(),
+            identity,
+            relays: [None; 4],
+            phone: false,
+            restarted: false,
+            start: 0,
+            v6: false,
+            keep_learn: false,
+        },
+        is_hub: true,
+        version: 1,
+        alpn: HUB_ALPN,
+        limits: Limits::default(),
+        wall_ms: 1_700_000_000_000,
+        local,
+        trace: false,
+    };
+    let key = Keypair::from_seed(alg, &[0x11; 32]).unwrap();
+    Box::new(
+        Node::new(
+            &cfg,
+            Script::default(),
+            prekey,
+            prov,
+            Drbg::new(&[0x31; 32]),
+            Box::new(key),
+            (),
+            7,
+        )
+        .expect("the node starts"),
+    )
+}
+
+fn member() -> NodeId {
+    Keypair::from_seed(IdentityAlg::Ed25519, &[0x41; 32]).unwrap().node_id()
+}
+
+/// The stream events of every hub-protocol session the application was told of.
+fn hub_stream_events_at_app(node: &mut Hub, hub_sessions: &[SessionId]) -> Vec<Event> {
+    let mut seen = Vec::new();
+    while let Some(e) = node.poll_event() {
+        if let NodeEvent::Endpoint(ev) = e
+            && matches!(
+                ev,
+                Event::StreamOpened { .. } | Event::StreamReadable { .. } | Event::StreamReset { .. }
+            )
+            && ev.session().is_some_and(|s| hub_sessions.contains(&s))
+        {
+            seen.push(ev);
+        }
+    }
+    seen
+}
+
+#[test]
+fn a_hub_session_past_the_full_table_does_not_reach_the_application() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = hub();
+            let alpn = Alpn::new(HUB_ALPN).unwrap();
+            let peer = member();
+            let mut now = 1_000_000_000;
+            let mut sessions = Vec::new();
+            // 4097 sessions of the hub protocol from one member; the node's table keeps 4096 of them.
+            for i in 0..=4096u64 {
+                let session = SessionId(i);
+                sessions.push(session);
+                node.endpoint_mut().events.push_back(Event::Incoming {
+                    session,
+                    node: peer,
+                    alpn,
+                });
+                if i % 512 == 0 {
+                    node.poll(now);
+                    while node.poll_event().is_some() {}
+                    now += 1_000_000;
+                }
+            }
+            node.poll(now);
+            while node.poll_event().is_some() {}
+            assert_eq!(
+                node.endpoint_mut().closed,
+                [SessionId(4096)],
+                "the node closes the session its full table cannot record, and only it"
+            );
+            // The member opens its stream on the first session and on the last one and sends a frame on each.
+            for s in [SessionId(0), SessionId(4096)] {
+                node.endpoint_mut()
+                    .events
+                    .push_back(Event::StreamOpened { session: s, stream: 0 });
+                node.endpoint_mut()
+                    .events
+                    .push_back(Event::StreamReadable { session: s, stream: 0 });
+            }
+            node.poll(now + 1_000_000);
+            let leaked = hub_stream_events_at_app(&mut node, &sessions);
+            assert!(
+                leaked.is_empty(),
+                "stream events of a hub-protocol session reached the application: {leaked:?}"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
