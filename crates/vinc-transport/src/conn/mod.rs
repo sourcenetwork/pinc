@@ -89,6 +89,8 @@ pub use config::{
     ClientParams, Config, DEFAULT_SEND_WINDOW, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo,
     ServerParams, Stats,
 };
+#[cfg(feature = "trace")]
+pub use drive::EarlyView;
 pub use event::{CloseReason, Drop, Event, EventTable, code};
 pub use handshake::Machines;
 pub use held::{Held, Shared};

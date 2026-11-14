@@ -76,6 +76,9 @@ import Vinc.TransportReasm
 import Vinc.TransportReasmThm
 import Vinc.TransportReasmComplete
 import Vinc.TraceReasm
+import Vinc.TransportEarly
+import Vinc.TransportEarlyThm
+import Vinc.TraceEarly
 import Vinc.TransportHdr
 import Vinc.TransportHdrThm
 import Vinc.TransportHdrSplit

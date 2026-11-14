@@ -83,3 +83,63 @@ pub struct TableView {
     /// A `MAX_STREAMS` frame is waiting to be sent.
     pub admit_pend: bool,
 }
+
+/// An early-data buffer with a pool of its own, for trace validation of the buffer of packets held for want of keys.
+#[derive(Debug)]
+pub struct EarlyProbe {
+    pool: super::pool::BufferPool<'static>,
+    early: super::datagram::EarlyData,
+}
+
+impl EarlyProbe {
+    /// The most packets the buffer holds.
+    pub const MAX: usize = super::datagram::MAX_EARLY_PACKETS;
+
+    /// An empty buffer over a pool of `chunks` chunks.
+    pub fn new(chunks: usize) -> Self {
+        Self {
+            pool: super::pool::BufferPool::new_boxed(chunks),
+            early: super::datagram::EarlyData::new(),
+        }
+    }
+
+    /// Hold a packet; whether it was kept.
+    pub fn push(&mut self, packet: &[u8]) -> bool {
+        self.early.push(&mut self.pool, packet)
+    }
+
+    /// The oldest packet held.
+    pub fn front(&self) -> Option<Vec<u8>> {
+        self.early.front(&self.pool).map(<[u8]>::to_vec)
+    }
+
+    /// Remove the oldest packet.
+    pub fn pop(&mut self) {
+        self.early.pop(&mut self.pool);
+    }
+
+    /// Drop every packet.
+    pub fn clear(&mut self) {
+        self.early.clear(&mut self.pool);
+    }
+
+    /// How many packets are held.
+    pub fn len(&self) -> usize {
+        self.early.len()
+    }
+
+    /// Whether no packet is held.
+    pub fn is_empty(&self) -> bool {
+        self.early.is_empty()
+    }
+
+    /// The packets dropped so far.
+    pub fn dropped(&self) -> u64 {
+        self.early.dropped()
+    }
+
+    /// The pool chunks the buffer holds.
+    pub fn used_chunks(&self) -> usize {
+        self.pool.used_chunks()
+    }
+}

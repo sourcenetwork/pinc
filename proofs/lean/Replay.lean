@@ -15,6 +15,7 @@ import Vinc.TraceCid
 import Vinc.TraceCc
 import Vinc.TracePn
 import Vinc.TraceReasm
+import Vinc.TraceEarly
 import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceOrphan
@@ -178,6 +179,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut cidw : TransportCid.C := {}
   let mut ccw : TraceCc.W := {}
   let mut rsw : TraceReasm.W := {}
+  let mut eaw : TraceEarly.W := {}
   let mut orw : TraceOrphan.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut mtw : TransportMtu.M := {}
@@ -464,6 +466,15 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceReasm.replayEvent j rsw with
           | .ok w' =>
             rsw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceEarly.isTag t then
+          -- Early-packet events (`txea` the buffer, `txeb` a connection, written by `trace_early`): the packets held
+          -- for want of keys, tried once the session is established, gone with the connection.
+          match TraceEarly.replayEvent j eaw lineNo with
+          | .ok w' =>
+            eaw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
