@@ -8,8 +8,10 @@
 //!
 //! Invariants: the queue and its byte arena never pass `WORK_BACKLOG` items, a packet past it is counted as dropped;
 //! the table of slots that name members in relay path addresses never grows past `SLOTS` and reuses the oldest first;
-//! a session is a member's only after the embedder reported it.
+//! a session is a member's only after the embedder reported it; the members never pass the limit `hub_sessions`; the
+//! member a datagram came from is found through the endpoint's table of sessions by address, not by a walk.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
@@ -38,7 +40,7 @@ enum Work {
 
 pub(super) struct Tunnel {
     local: SocketAddr,
-    members: Vec<(SessionId, NodeId)>,
+    members: BTreeMap<SessionId, NodeId>,
     slots: Vec<NodeId>,
     next_slot: usize,
     work: Vec<Work>,
@@ -49,7 +51,7 @@ impl Tunnel {
     pub(super) const fn new(local: SocketAddr) -> Self {
         Self {
             local,
-            members: Vec::new(),
+            members: BTreeMap::new(),
             slots: Vec::new(),
             next_slot: 0,
             work: Vec::new(),
@@ -57,7 +59,7 @@ impl Tunnel {
         }
     }
 
-    pub(super) const fn sessions(&self) -> usize {
+    pub(super) fn sessions(&self) -> usize {
         self.members.len()
     }
 
@@ -129,13 +131,12 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
     }
 
-    /// The member whose validated session talks from `src`.
+    /// The member whose validated session talks from `src` (of several, the lowest session id), from the endpoint's
+    /// table of sessions by address.
     pub(crate) fn member_at<E: Ep>(&self, ep: &E, src: &SocketAddr) -> Option<NodeId> {
         let t = self.hub.as_ref()?;
-        t.members
-            .iter()
-            .find(|(sid, _)| session_remote(ep, *sid).as_ref() == Some(src))
-            .map(|(_, n)| *n)
+        let sid = ep.session_from(src, &|sid| t.members.contains_key(&sid))?;
+        t.members.get(&sid).copied()
     }
 
     /// Apply what the machine queued for the endpoint. Whether anything was applied. The events the commands produced
@@ -156,7 +157,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                     }
                 }
                 Work::Pulse(node) => {
-                    if let Some((session, _)) = t.members.iter().find(|(_, n)| *n == node) {
+                    if let Some((session, _)) = t.members.iter().find(|(_, n)| **n == node) {
                         let session = *session;
                         if let Ok(r) = ep.command(now, Command::Pulse { session, sent: true }) {
                             out.extend(r.events.iter().copied());
@@ -167,7 +168,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                     let addr = t
                         .members
                         .iter()
-                        .find(|(_, n)| *n == node)
+                        .find(|(_, n)| **n == node)
                         .and_then(|(sid, _)| session_remote(ep, *sid));
                     match (addr, t.arena.get(s..e)) {
                         (Some(a), Some(b)) => self.queue_udp(a, b),
@@ -198,7 +199,7 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                     self.counters.hub_dropped += 1;
                     return;
                 }
-                t.members.push((session, node));
+                t.members.insert(session, node);
                 if let Ok(r) = ep.command(
                     now,
                     Command::SetRole {
@@ -210,13 +211,12 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                 }
             }
             EpEvent::Closed { session, .. } => {
-                if let Some(i) = t.members.iter().position(|(s, _)| *s == session) {
-                    let (_, node) = t.members.swap_remove(i);
+                if let Some(node) = t.members.remove(&session) {
                     self.sm.udp_gone(&node);
                 }
             }
             EpEvent::PeerAwake { session } => {
-                if let Some((_, node)) = t.members.iter().find(|(s, _)| *s == session) {
+                if let Some(node) = t.members.get(&session) {
                     let node = *node;
                     self.sm.member_returned(relay_now, &node, &mut self.fx);
                     self.flush();
