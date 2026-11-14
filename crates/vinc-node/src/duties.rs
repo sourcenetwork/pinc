@@ -6,6 +6,8 @@
 //!
 //! Invariants: a peer is dialed once at a time and never inside its backoff window; a peer that refused us is
 //! redialed only after the deny backoff; no duty closes a session for silence (membership does, on an unanswered HELLO).
+//! Both dial promises hold below the tables' bound: a full failed-dial table keeps no window for a peer it has no
+//! entry for, which is then redialed at every pass, and a full table of dials in progress does not record the dial.
 
 use vinc_core::{Command, Role};
 use vinc_membership::NodeId;

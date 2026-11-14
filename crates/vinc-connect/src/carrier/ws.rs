@@ -10,6 +10,8 @@
 //! - A payload over [`MAX_PAYLOAD`] is refused before any byte of it is buffered, and the length uses the shortest
 //!   form that holds it (a longer form is refused, as RFC 6455 requires).
 //! - Decoding unmasks in place and never copies; encoding writes into a caller buffer; nothing allocates.
+//! - A close frame is reported and does not stop the decoder: the host stops reading. The mask key of a client frame
+//!   is the caller's; `encode` does not check that it is random.
 
 use core::fmt;
 
