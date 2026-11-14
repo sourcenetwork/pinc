@@ -206,6 +206,9 @@ where
         self.io.learn_alg(node);
         self.io.connecting.remove(&peer);
         if !self.admit(session) {
+            // The session table has no room for the link: redial after the backoff a closed session gets, not on
+            // every duty pass.
+            self.io.backoff(&peer);
             return;
         }
         if let Some(cur) = self.io.links.get(&peer).and_then(|l| l.conn) {
