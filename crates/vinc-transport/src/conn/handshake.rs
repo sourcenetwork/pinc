@@ -28,7 +28,8 @@
 //!   node each wait after the first is at least `min(20 s, 2 x max(srtt, node RTTs))`. The Finish and each resend go
 //!   on the path the reply came on, not on the other paths the first flight was copied to.
 //! - A handshake still not established more than 30 s after it began (60 s on a thin node) ends; the connection then
-//!   closes.
+//!   closes. A responder that has sent its flight holds it at least 60 s ([`RESPONDER_HOLD`]), so a slow dialer's
+//!   Finish delayed by a retransmission timeout still finds it.
 //! - A dialing side that established but has heard no 1-RTT packet from the peer more than the same 30 s (60 s) after
 //!   it established ends unconfirmed ([`CloseReason::Unconfirmed`](super::CloseReason::Unconfirmed)): the peer does
 //!   not hold the session (its handshake ran out before the Finish arrived, or the path is gone), so the layer above
@@ -81,6 +82,10 @@ const THIN_RTT: u64 = 250 * MS;
 const HELD_RECHECK: u64 = 500 * MS;
 /// How long an unestablished handshake lasts on a node that is not thin.
 const CONNECT_TIMEOUT: u64 = 30 * SECOND;
+/// How long a responder that has sent its flight holds the handshake, at least: the limit a thin dialing side has, so a
+/// slow dialer's Finish delayed by a retransmission timeout still finds it. The half-open cap bounds what it costs: at
+/// most the cap times this hold.
+pub const RESPONDER_HOLD: u64 = 60 * SECOND;
 /// The first flights a dial told to end early sends; the wait after the last of them ends it.
 const EARLY_FLIGHTS: u32 = 4;
 /// The first resend delay of a responder: three times the 333 ms initial round trip.
@@ -120,6 +125,8 @@ pub(crate) struct Timing {
     pub(crate) node_rtt: Option<u64>,
     /// The node's largest recent round trip.
     pub(crate) node_peak_rtt: Option<u64>,
+    /// A responder that has sent its flight: it holds the handshake at least [`RESPONDER_HOLD`].
+    pub(crate) hold: bool,
 }
 
 impl Timing {
@@ -150,9 +157,10 @@ impl Timing {
         }
     }
 
-    /// How long an unestablished handshake lasts.
+    /// How long an unestablished handshake lasts: the connect limit, and at least [`RESPONDER_HOLD`] for a responder that
+    /// has sent its flight.
     fn connect_timeout(&self) -> u64 {
-        connect_limit(self.is_thin())
+        handshake_limit(self.is_thin(), self.hold)
     }
 
     /// The first instant at which a handshake begun at `created` has run out: the limit is exceeded, not reached.
@@ -167,6 +175,19 @@ impl Timing {
 #[must_use]
 pub const fn connect_limit(thin: bool) -> u64 {
     if thin { CONNECT_TIMEOUT * 2 } else { CONNECT_TIMEOUT }
+}
+
+/// How long an unestablished handshake lasts for a node that is thin or not and a responder that has answered or not:
+/// the connect limit, and at least [`RESPONDER_HOLD`] once the responder's flight went out. Nothing exceeds 60 s. The
+/// transport and the endpoint's half-open sweep both ask this, so they cannot disagree.
+#[must_use]
+pub const fn handshake_limit(thin: bool, answered: bool) -> u64 {
+    let base = connect_limit(thin);
+    if answered && base < RESPONDER_HOLD {
+        RESPONDER_HOLD
+    } else {
+        base
+    }
 }
 
 /// One of the two state machines.
@@ -492,6 +513,11 @@ impl Handshake {
                         // A responder's resend schedule starts when its flight first goes out.
                         if !self.client && self.stage == Stage::Open && self.retx_at.is_none() {
                             self.retx_at = Some(self.clock.saturating_add(SERVER_FIRST));
+                            // It has answered: it holds the handshake for a slow dialer's Finish.
+                            self.timing.hold = true;
+                            if self.connect_at.is_some() {
+                                self.connect_at = Some(self.timing.connect_deadline(self.created));
+                            }
                         }
                     }
                 }
@@ -588,6 +614,11 @@ impl Handshake {
         if self.confirm_at.is_some() {
             self.confirm_at = Some(self.timing.connect_deadline(self.established));
         }
+    }
+
+    /// A responder that has sent its flight.
+    pub(crate) const fn answered(&self) -> bool {
+        self.timing.hold
     }
 
     /// Whether a flight was queued since the last call (the connection copies it onto its fan-out paths).

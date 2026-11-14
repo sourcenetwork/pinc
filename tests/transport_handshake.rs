@@ -188,8 +188,11 @@ fn a_responder_resends_its_flight_at_999_ms_then_every_4_s() {
             net.run(t0 + at, |_| false);
             assert_eq!(net.b.conn.stats().handshake_retransmits, want, "at {} ms", at / MS);
         }
-        // A responder that is never established gives up after 30 s as well.
-        net.run(t0 + 30_100 * MS, |_| false);
+        // A responder that answered but is never established holds the handshake 60 s (`RESPONDER_HOLD`, vinc#387), not
+        // the 30 s connect limit, then gives up.
+        net.run(t0 + 59_900 * MS, |_| false);
+        assert_eq!(net.b.closed(), None, "an answered responder holds its handshake 60 s");
+        net.run(t0 + 60_100 * MS, |_| false);
         assert_eq!(net.b.closed(), Some(CloseReason::HandshakeTimeout));
     });
 }
@@ -544,7 +547,8 @@ fn a_session_the_peer_never_confirms_ends_unconfirmed_after_the_connect_limit() 
         assert_eq!(net.a.closed(), None, "still waiting for the peer within the limit");
         net.run(est + 31_000 * MS, |_| false);
         assert_eq!(net.a.closed(), Some(CloseReason::Unconfirmed));
-        // The responder never held it: its handshake ran out.
+        // The responder never held it: its handshake ran out after the 60 s hold of an answered responder.
+        net.run(est + 61_000 * MS, |_| false);
         assert_eq!(net.b.closed(), Some(CloseReason::HandshakeTimeout));
     });
 }

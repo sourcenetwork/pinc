@@ -5,7 +5,7 @@ use vinc_core::{Command, CommandError, MAX_DATAGRAM, Role};
 use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
 use vinc_tests::*;
 
-use crate::common::{LIFE, MAX, SK, craft, floor, kind_of, source};
+use crate::common::{HOLD, MAX, SK, craft, floor, kind_of, source};
 use crate::duo::{Duo, pick_time};
 use crate::rec::{Rec, Seen};
 
@@ -168,7 +168,7 @@ pub fn small_run(run: u32, seed: u64) -> (String, String, Seen) {
     if run.is_multiple_of(2) {
         stall(&mut r, now);
         forge(&mut r, now, 1, FULL_INITIAL_MIN);
-        r.timer(now + LIFE + SEC_NS);
+        r.timer(now + HOLD + SEC_NS);
         r.drain(now);
     }
     // the lifetime, with a clock that sometimes steps back
@@ -189,7 +189,7 @@ pub fn small_run(run: u32, seed: u64) -> (String, String, Seen) {
     let t = r
         .unauth()
         .iter()
-        .map(|(_, s)| s.created + LIFE)
+        .map(|(_, s)| s.created + s.life)
         .max()
         .unwrap_or(now)
         .max(now);

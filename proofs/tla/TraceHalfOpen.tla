@@ -19,7 +19,9 @@
 (* the operators of HalfOpenOps.tla make, in that order, and the slots and *)
 (* the count they compute must be the recorded ones; the deadlines a       *)
 (* session's connection asks for are the endpoint's own, and must keep an  *)
-(* unauthenticated session within its life. A first flight goes to the     *)
+(* unauthenticated session within its own life, which is the base life or *)
+(* the hold once it answered, never shorter than before. A first flight    *)
+(* goes to the                                                            *)
 (* admission only while its id has fewer holders than the endpoint allows  *)
 (* (Room), and a datagram whose first flight went to the admission frees   *)
 (* no session that was in use before it, only one it made itself: an       *)
@@ -38,15 +40,16 @@ INSTANCE HalfOpenOps
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/halfopen.ndjson")
 Ev == Trace[i]
 
-\* a recorded slot: <<slot, in use, created, unauthenticated, counted, has a deadline, the deadline>>
+\* a recorded slot: <<slot, in use, created, unauthenticated, counted, has a deadline, the deadline, its life>>
 SlotOf(r) == IF r[2] = 0 THEN Free
-             ELSE [use |-> TRUE, created |-> r[3], unauth |-> r[4] = 1, counted |-> r[5] = 1,
+             ELSE [use |-> TRUE, created |-> r[3], unauth |-> r[4] = 1, counted |-> r[5] = 1, life |-> r[8],
                    dl |-> IF r[6] = 1 THEN r[7] ELSE NoDl]
 \* the slots after the call: the recorded changes over the slots before it
 After(sl, diff) == [j \in DOMAIN sl |->
                       IF \E k \in DOMAIN diff : diff[k][1] = j
                       THEN SlotOf(diff[CHOOSE k \in DOMAIN diff : diff[k][1] = j]) ELSE sl[j]]
-Bare(s) == [s EXCEPT !.dl = NoDl]
+\* the deadline and the life are the endpoint's own (the life rises to the hold when the session answers)
+Bare(s) == [s EXCEPT !.dl = NoDl, !.life = 0]
 
 \* the decisions of one call, in the order the endpoint recorded them, from the state before it: st = [e, ok, adm],
 \* adm the last admission <<admitted, resume>> (<<>> once a session took it); a step is <<code, a, b, c>>: 0 an
@@ -65,10 +68,10 @@ Fold(st, steps, k) ==
                                   /\ (s[4] = 1 => Ev.kind = 6)
                                   /\ (s[2] = 1) = Admit(x.count, Ev.kind, Ev.len, s[4] = 1, p.max, p.full, p.short)]
                       [] s[1] = 1 /\ s[3] = 1 ->
-                          [e |-> Dial(x, j, Ev.now), adm |-> st.adm,
+                          [e |-> Dial(x, j, Ev.now, p.life), adm |-> st.adm,
                            ok |-> st.ok /\ j \in DOMAIN x.slots /\ ~x.slots[j].use]
                       [] s[1] = 1 ->
-                          [e |-> Make(x, j, Ev.now, st.adm = <<1, 1>>), adm |-> <<>>,
+                          [e |-> Make(x, j, Ev.now, st.adm = <<1, 1>>, p.life), adm |-> <<>>,
                            ok |-> /\ st.ok /\ j \in DOMAIN x.slots /\ ~x.slots[j].use
                                   /\ st.adm \in {<<1, 0>>, <<1, 1>>}]
                       [] s[1] = 2 ->
@@ -76,7 +79,7 @@ Fold(st, steps, k) ==
                       [] s[1] = 3 ->
                           [e |-> x, adm |-> st.adm,
                            ok |-> /\ st.ok /\ Ev.op = "timer" /\ j \in DOMAIN x.slots
-                                  /\ Expired(x.slots[j], Ev.now, p.life)
+                                  /\ Expired(x.slots[j], Ev.now)
                                   /\ k < Len(steps) /\ steps[k + 1] = <<4, j, 0, 0>>]
                       [] s[1] = 4 ->
                           [e |-> Release(x, j), adm |-> st.adm, ok |-> st.ok /\ j \in DOMAIN x.slots]
@@ -84,8 +87,8 @@ Fold(st, steps, k) ==
          IN Fold(nxt, steps, k + 1)
 
 InitEv == /\ Ev.op = "init"
-          /\ p' = [k |-> Ev.k, max |-> Ev.max, life |-> Ev.life, full |-> Ev.full, short |-> Ev.short,
-                   holders |-> Ev.holders]
+          /\ p' = [k |-> Ev.k, max |-> Ev.max, life |-> Ev.life, hold |-> Ev.hold, full |-> Ev.full,
+                   short |-> Ev.short, holders |-> Ev.holders]
           /\ e' = [slots |-> Table0(Ev.k), count |-> 0]
 
 CallEv ==
@@ -98,13 +101,17 @@ CallEv ==
        /\ st.ok
        \* the slots and the count the model computes are the endpoint's; the deadlines are the endpoint's own
        /\ \A j \in DOMAIN sl : Bare(sl[j]) = Bare(st.e.slots[j])
+       \* a session lives the base life or the hold, and its life never falls while it holds the slot
+       /\ \A j \in DOMAIN sl : sl[j].use => /\ sl[j].life \in {p.life, p.hold}
+                                         /\ (e.slots[j].use /\ e.slots[j].created = sl[j].created
+                                               => sl[j].life >= e.slots[j].life)
        /\ st.e.count = Ev.count
        /\ e' = [slots |-> sl, count |-> Ev.count]
        \* poll_timeout is the earliest deadline, none while the event queue is stalled
        /\ timeout = Poll(sl, Ev.stalled = 1)
        \* a timer call the queue did not stop leaves no unauthenticated session at or past its end; a stalled one runs
        \* nothing
-       /\ Ev.op = "timer" /\ Ev.stalled = 0 => \A j \in DOMAIN sl : ~Expired(sl[j], Ev.now, p.life)
+       /\ Ev.op = "timer" /\ Ev.stalled = 0 => \A j \in DOMAIN sl : ~Expired(sl[j], Ev.now)
        /\ Ev.op = "timer" /\ Ev.stalled0 = 1 => Ev.steps = <<>> /\ Ev.diff = <<>>
        \* an arrival never frees a session: a datagram whose first flight went to the admission frees only a session
        \* that was not in use before it or that it made itself (the id table full, or a session that ended at once)
@@ -124,7 +131,7 @@ CallEv ==
        /\ UNCHANGED p
 
 Init == /\ i = 1 /\ e = [slots |-> Table0(1), count |-> 0]
-        /\ p = [k |-> 1, max |-> 0, life |-> 0, full |-> 0, short |-> 0, holders |-> 0]
+        /\ p = [k |-> 1, max |-> 0, life |-> 0, hold |-> 0, full |-> 0, short |-> 0, holders |-> 0]
 Step == /\ i <= Len(Trace) /\ Ev.t = "coho" /\ (InitEv \/ CallEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
@@ -137,5 +144,5 @@ Inv == /\ e.count <= p.max
        /\ \A j \in DOMAIN e.slots :
             /\ e.slots[j].counted => e.slots[j].unauth /\ e.slots[j].use
             /\ ~e.slots[j].use => e.slots[j] = Free
-            /\ e.slots[j].use /\ e.slots[j].unauth => e.slots[j].dl # NoDl /\ e.slots[j].dl <= End(e.slots[j], p.life)
+            /\ e.slots[j].use /\ e.slots[j].unauth => e.slots[j].dl # NoDl /\ e.slots[j].dl <= End(e.slots[j])
 =============================================================================

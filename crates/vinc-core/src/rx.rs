@@ -45,9 +45,13 @@ use crate::trace::trace;
 const MAX_CANDIDATES: usize = 4;
 /// The most unauthenticated sessions.
 pub const MAX_HALF_OPEN: usize = 256;
-/// How long an unauthenticated session lives on a node that is not thin (30 s). It lives as long as an unestablished
-/// handshake may last ([`connect_limit`]), so a thin node keeps it twice as long.
+/// How long an unauthenticated session lives on a node that is not thin (30 s), until it answers as a responder. It
+/// lives as long as an unestablished handshake may last ([`connect_limit`]), so a thin node keeps it twice as long.
 pub const HALF_OPEN_LIFE: u64 = connect_limit(false);
+/// How long an unauthenticated session lives once it answered as a responder (60 s, the transport's
+/// [`RESPONDER_HOLD`](vinc_transport::conn::RESPONDER_HOLD)), whatever the node is: a slow dialer's Finish still finds
+/// it. The half-open cap bounds the cost at [`MAX_HALF_OPEN`] times this hold.
+pub const HALF_OPEN_HOLD: u64 = vinc_transport::conn::RESPONDER_HOLD;
 
 /// What the first packet of an unroutable datagram says.
 struct First<'a> {
@@ -482,9 +486,11 @@ pub enum Taken {
 pub struct HalfOpenSlot {
     /// When the session was created.
     pub created: u64,
-    /// The peer is not authenticated yet, so the session ends [`HALF_OPEN_LIFE`] after `created` (twice that on a thin
-    /// node).
+    /// The peer is not authenticated yet, so the session ends `life` after `created`.
     pub unauth: bool,
+    /// How long the session lives while unauthenticated: the node's connect limit ([`HALF_OPEN_LIFE`], twice that on a
+    /// thin node), and at least [`HALF_OPEN_HOLD`] once it answered. Never above [`HALF_OPEN_HOLD`].
+    pub life: u64,
     /// The session counts against [`MAX_HALF_OPEN`].
     pub counted: bool,
     /// The deadline the session holds in the endpoint's heap.
@@ -500,6 +506,7 @@ ep_impl! {
         Some(HalfOpenSlot {
             created: s.m.created,
             unauth: s.m.unauth,
+            life: s.half_open_life(self.rtt.thin_node()),
             counted: s.m.half_open,
             deadline: self.heap.deadline(i),
         })

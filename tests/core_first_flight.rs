@@ -13,7 +13,7 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Endpoint, EndpointConfig, Event, HALF_OPEN_LIFE, MAX_HALF_OPEN, NodeStats, Role, Slot, TraceEvent};
+use vinc_core::{Endpoint, EndpointConfig, Event, HALF_OPEN_HOLD, MAX_HALF_OPEN, NodeStats, Role, Slot, TraceEvent};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use vinc_security::message::FULL_INITIAL_MIN;
 use vinc_security::{ConnId, KeyHandle, LocalIdentity};
@@ -264,7 +264,7 @@ fn the_session_whose_finish_authenticates_stays_under_the_id() {
             let st = p.stats();
             assert_eq!((st.sessions, st.half_open), (2, 1), "forged_first {forged_first}");
             let held = p.holders();
-            let t = p.net.now + HALF_OPEN_LIFE + 2 * SEC_NS;
+            let t = p.net.now + HALF_OPEN_HOLD + 2 * SEC_NS;
             p.net.run(t, |_| false);
             let st = p.stats();
             assert_eq!((st.sessions, st.half_open), (1, 0), "forged_first {forged_first}");
@@ -340,7 +340,7 @@ fn finish_of_several_datagrams(forged_delay: u64) {
         !p.net.nodes[p.b].saw(|e| matches!(e, Event::Closed { .. })),
         "a holder was closed"
     );
-    let t = p.net.now + HALF_OPEN_LIFE + 2 * SEC_NS;
+    let t = p.net.now + HALF_OPEN_HOLD + 2 * SEC_NS;
     p.net.run(t, |_| false);
     let st = p.stats();
     assert_eq!(

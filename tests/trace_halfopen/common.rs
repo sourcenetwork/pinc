@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot};
+use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_HOLD, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
 use vinc_security::{ConnId, KeyHandle, LocalIdentity};
@@ -16,6 +16,7 @@ use vinc_transport::stream::{self, NoSource, Streams};
 use vinc_wire::{Reader, Writer};
 
 pub const LIFE: u64 = HALF_OPEN_LIFE;
+pub const HOLD: u64 = HALF_OPEN_HOLD;
 pub const MAX: usize = MAX_HALF_OPEN;
 /// The most sessions that may hold one id (`MAX_CANDIDATES` in `rx.rs`, private to the crate): a first flight for an id
 /// that this many hold is dropped.

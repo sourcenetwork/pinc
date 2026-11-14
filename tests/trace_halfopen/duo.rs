@@ -7,7 +7,7 @@ use vinc_tests::*;
 use vinc_transport::packet::LongHeader;
 use vinc_wire::Reader;
 
-use crate::common::{BK, LIFE, craft, kind_of, source};
+use crate::common::{BK, craft, kind_of, source};
 use crate::rec::Rec;
 
 /// A time to run the timers at, as a host with a millisecond clock might: its next deadline, the moment before, at
@@ -17,7 +17,7 @@ pub fn pick_time<const K: usize, const D: usize>(r: &Rec<K, D>, rng: &mut SplitM
     match rng.next_u64() % 6 {
         0 | 1 if !open.is_empty() => {
             let (_, s) = open[(rng.next_u64() % open.len() as u64) as usize];
-            let end = s.created + LIFE;
+            let end = s.created + s.life;
             match rng.next_u64() % 3 {
                 0 => end - MS_NS,
                 1 => end,
