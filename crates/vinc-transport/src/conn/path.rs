@@ -536,12 +536,19 @@ conn_impl! {
     }
 
     /// Learn the path `id` of a packet by receiving on it, as the endpoint knows nothing else of it yet: the one rule
-    /// for both roles. `None` when the table is full of validated paths and the active one.
+    /// for both roles. The slot of a path already held, else a new one; `None` when the table is full of validated
+    /// paths and the active one.
     pub(super) fn learn_path(&mut self, id: PathId, now: u64) -> Option<usize> {
         self.new_path_slot(id, self.learned_path(), now)
     }
 
+    /// The slot of path `id` if it is held (its state and `info` untouched), else a new one for it, taking a free slot
+    /// or the first unvalidated path that is not the active one; `None` when neither exists. A path is never held
+    /// twice.
     pub(super) fn new_path_slot(&mut self, id: PathId, info: PathInfo, now: u64) -> Option<usize> {
+        if let Some(i) = self.paths.find(id) {
+            return Some(i);
+        }
         let active = self.paths.active;
         let free = self
             .paths

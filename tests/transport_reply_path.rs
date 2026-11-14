@@ -10,6 +10,7 @@ use std::rc::Rc;
 use vinc_crypto::IdentityAlg;
 use vinc_tests::*;
 use vinc_transport::conn::{PathId, PathInfo};
+use vinc_transport::packet::{Header, packets};
 
 /// The path the Reply comes back on, which the dialing side does not hold.
 const OTHER: PathId = PathId(9);
@@ -42,6 +43,52 @@ fn deliver_on(net: &mut Net<'_, '_>, path: PathId, datagrams: &[Vec<u8>]) {
         let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, path, &mut d));
     }
     net.a.service(now);
+}
+
+/// No path id appears twice in the session's table.
+fn no_duplicate_paths(net: &Net<'_, '_>) {
+    let ids: Vec<u64> = net.a.conn.path_list().map(|(id, _, _)| id.0).collect();
+    let mut once = ids.clone();
+    once.sort_unstable();
+    once.dedup();
+    assert_eq!(once.len(), ids.len(), "a path is held twice: {ids:?}");
+}
+
+/// Whether the datagram holds a 1-RTT packet to the dialing side.
+fn has_short(c: &Conn<'_>, d: &[u8]) -> bool {
+    let mut d = d.to_vec();
+    packets(&mut d, 4)
+        .any(|p| matches!(p, Ok(p) if matches!(p.header, Header::Short { dcid } if c.local_cids().any(|l| l == dcid))))
+}
+
+/// A resume dial, the responder's datagrams (the Reply, then a 1-RTT packet) joined into one, handed to the dialing
+/// side on `OTHER` after its table was given the paths `held`.
+fn coalesced_resume(held: &[u64], seed: u64) -> Vec<(PathId, bool)> {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    let mut tickets = first_session(&mut w);
+    let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let a = w.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let b = w.server(&mut sb);
+    let mut net = Net::new(a, b, Link::new(seed, Params::new(10 * MS)), &mut w.stores);
+    let now = net.now;
+    for p in held {
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(*p), PathInfo::default()))
+            .unwrap();
+    }
+    let mut reply = reply_datagrams(&mut net);
+    assert!(
+        reply.len() >= 2 && has_short(&net.a.conn, &reply[1]),
+        "no 1-RTT datagram follows the Reply"
+    );
+    let tail = reply.remove(1);
+    reply[0].extend_from_slice(&tail);
+    deliver_on(&mut net, OTHER, &reply);
+    assert!(net.a.conn.is_connected());
+    no_duplicate_paths(&net);
+    assert_eq!(net.a.conn.active_path(), Some(OTHER));
+    net.a.conn.path_list().map(|(id, _, v)| (id, v)).collect()
 }
 
 /// Whether the dialing side has sent anything on `path` from `since` on.
@@ -81,6 +128,7 @@ fn reply_on_unheld_path(mut w: World, ticket: bool) {
         !sent_on(&net, PathId(1), at),
         "a packet left on the path the Reply did not use"
     );
+    no_duplicate_paths(&net);
 }
 
 #[test]
@@ -110,6 +158,7 @@ fn a_reply_in_several_datagrams_on_a_path_the_dial_does_not_hold_establishes() {
             reply.len()
         );
         assert_eq!(net.a.conn.active_path(), Some(OTHER));
+        no_duplicate_paths(&net);
     });
 }
 
@@ -143,6 +192,7 @@ fn a_forged_reply_on_a_path_the_dial_does_not_hold_adds_no_path_and_moves_nothin
         assert!(net.connect(now + 5 * SEC), "{:?}", net.rx_drops);
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         assert!(!net.a.conn.has_path(OTHER));
+        no_duplicate_paths(&net);
     });
 }
 
@@ -181,6 +231,7 @@ fn a_reply_on_a_new_path_at_a_full_table_takes_the_place_of_an_unvalidated_stand
             .filter(|p| net.a.conn.has_path(PathId(*p)))
             .count();
         assert_eq!(held, 4, "the table grew past its bound");
+        no_duplicate_paths(&net);
     });
 }
 
@@ -205,5 +256,48 @@ fn a_reply_on_a_path_the_dial_gave_up_establishes_and_the_path_is_held_again() {
         );
         assert!(net.a.conn.has_path(OTHER));
         assert_eq!(net.a.conn.active_path(), Some(OTHER));
+        no_duplicate_paths(&net);
+    });
+}
+
+#[test]
+fn a_resume_reply_with_a_1rtt_packet_behind_it_on_a_new_path_holds_the_path_once() {
+    big_stack(|| {
+        let paths = coalesced_resume(&[], 76);
+        assert_eq!(paths.iter().filter(|(id, _)| *id == OTHER).count(), 1);
+        assert!(
+            paths.iter().any(|(id, _)| *id == PathId(1)),
+            "the path the session left is gone"
+        );
+    });
+}
+
+#[test]
+fn at_a_full_table_a_reply_with_a_1rtt_packet_behind_it_gives_up_one_path_only() {
+    big_stack(|| {
+        // Paths 1 (dialed, active), 3, 4, 5, none validated but the dialed one. The new path takes the first
+        // unvalidated path that is not the active one: path 3. Path 1, which the session leaves, stays.
+        let paths = coalesced_resume(&[3, 4, 5], 77);
+        let ids: Vec<u64> = paths.iter().map(|(id, _)| id.0).collect();
+        assert_eq!(ids.len(), 4, "{ids:?}");
+        for keep in [1, 4, 5, 9] {
+            assert!(ids.contains(&keep), "path {keep} was given up: {ids:?}");
+        }
+    });
+}
+
+#[test]
+fn a_1rtt_packet_alone_on_a_held_path_adds_no_path() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(78, Params::new(10 * MS)));
+        assert!(net.connect(net.now + 5 * SEC));
+        let before: Vec<_> = net.a.conn.path_list().map(|(id, _, _)| id).collect();
+        let t = net.now + 50 * MS;
+        net.run(t, |_| false);
+        let after: Vec<_> = net.a.conn.path_list().map(|(id, _, _)| id).collect();
+        assert_eq!(before, after);
+        no_duplicate_paths(&net);
     });
 }
