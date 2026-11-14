@@ -34,7 +34,7 @@ pub(crate) fn with_sid(body: &[u8], sid: u64, out: &mut [u8; EXT_MAX]) -> Option
 }
 
 /// The head of a range-proof body as the trace test of the proofs reads it: the same functions on a buffer of
-/// [`EXT_MAX`] bytes, with their results in public types.
+/// `EXT_MAX` bytes, with their results in public types.
 #[cfg(feature = "trace")]
 pub mod probe {
     use super::{EXT_MAX, head_sid, with_sid};
@@ -42,12 +42,12 @@ pub mod probe {
     /// The size of the buffer `with_sid` writes to.
     pub const BUF: usize = EXT_MAX;
 
-    /// [`head_sid`](super::head_sid).
+    /// `head_sid`.
     pub fn head(body: &[u8]) -> Option<u64> {
         head_sid(body)
     }
 
-    /// [`with_sid`](super::with_sid) into a fresh buffer: the bytes written.
+    /// `with_sid` into a fresh buffer: the bytes written.
     pub fn with(body: &[u8], sid: u64) -> Option<alloc::vec::Vec<u8>> {
         let mut out = [0u8; EXT_MAX];
         let n = with_sid(body, sid, &mut out)?;
