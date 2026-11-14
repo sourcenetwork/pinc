@@ -32,13 +32,21 @@ fn bad(what: &'static str) -> Error {
     Error::new(ErrorKind::Config, what)
 }
 
-/// Parse the text form of a node id.
+/// Whether `s` is `len` characters of lowercase hex, the only text `node_to_string` prints.
+fn is_lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Parse the text form of a node id: exactly what [`node_to_string`] prints, so one id has one text.
 ///
 /// # Errors
 /// [`crate::ErrorKind::Config`] if the text is not a node id.
 pub fn node_from_str(s: &str) -> Result<NodeId> {
     let (alg, hex) = match s.split_once('.') {
         Some((tag, rest)) => {
+            if !is_lower_hex(tag, 2) {
+                return Err(bad("the node id has a bad algorithm tag"));
+            }
             let t = u8::from_str_radix(tag, 16).map_err(|_| bad("the node id has a bad algorithm tag"))?;
             (
                 IdentityAlg::from_tag(t).ok_or_else(|| bad("the node id has an unknown algorithm"))?,
@@ -47,8 +55,8 @@ pub fn node_from_str(s: &str) -> Result<NodeId> {
         }
         None => (IdentityAlg::Ed25519, s),
     };
-    if hex.len() != 64 || !hex.is_ascii() {
-        return Err(bad("a node id is 64 hex characters"));
+    if !is_lower_hex(hex, 64) {
+        return Err(bad("a node id is 64 lowercase hex characters"));
     }
     let mut bytes = [0u8; 32];
     for (b, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks(2)) {
@@ -87,10 +95,16 @@ impl NodeAddr {
     }
 
     /// Add a relay URL.
-    #[must_use]
-    pub fn with_relay(mut self, url: impl Into<String>) -> Self {
-        self.relays.push(url.into());
-        self
+    ///
+    /// # Errors
+    /// [`crate::ErrorKind::Config`] if the URL is empty, has no `://` or has a `,`: the text form could not give it back.
+    pub fn with_relay(mut self, url: impl Into<String>) -> Result<Self> {
+        let url = url.into();
+        if url.is_empty() || !url.contains("://") || url.contains(',') {
+            return Err(bad("a relay is a URL with a scheme and no comma"));
+        }
+        self.relays.push(url);
+        Ok(self)
     }
 
     /// The one-line text form; [`NodeAddr::parse`] reads it back.

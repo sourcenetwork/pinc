@@ -31,7 +31,8 @@ async fn addresses_round_trip() {
     assert_eq!(node_from_str(&text).unwrap(), node);
     let a = NodeAddr::new(node)
         .with_direct("10.1.2.3:4433".parse().unwrap())
-        .with_relay("https://relay.example/");
+        .with_relay("https://relay.example/")
+        .unwrap();
     assert_eq!(NodeAddr::parse(&a.ticket()).unwrap(), a);
     assert_eq!(NodeAddr::parse(&text).unwrap(), NodeAddr::new(node));
     for bad in ["", "zz", &text[..63], "00@x", &format!("{text}@nope")] {

@@ -1190,3 +1190,7 @@ path = "node_hub_stream_stop.rs"
 [[test]]
 name = "node_route_full"
 path = "node_route_full.rs"
+
+[[test]]
+name = "vinc_addr_roundtrip"
+path = "vinc_addr_roundtrip.rs"
