@@ -1240,6 +1240,10 @@ name = "node_hub_reserve"
 path = "node_hub_reserve.rs"
 
 [[test]]
+name = "node_hub_write_stop"
+path = "node_hub_write_stop.rs"
+
+[[test]]
 name = "node_route_owner"
 path = "node_route_owner.rs"
 

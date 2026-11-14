@@ -18,7 +18,8 @@
 //! - **Survivor adoption.** When a member's newer session closes at a hub and an older one was heard within 30 s, the
 //!   hub adopts it: a fresh write stream, a snapshot, and the ids of the last 90 s of each subscribed topic. The
 //!   same happens when a member writes on a session that is not the hub's current one.
-//! - **Stream repair.** A hub session without our write stream gets a fresh one after 10 s.
+//! - **Stream repair.** A hub session without our write stream gets a fresh one after 10 s, a member's toward a hub and a
+//!   hub's toward a member alike (a stream the peer stopped or reset is forgotten, so the session is left without one).
 //! - **No transport watchdog.** A hub session is closed for want of an answer only by membership, when its HELLO goes
 //!   unanswered; probe timeouts alone do not close it, the transport gives up on a silent session by itself.
 //! - **Heal detection.** A hub heard again after longer than the transport's give-up bound at the last round trip
@@ -40,7 +41,8 @@
 //! The crate is `no_std` with `alloc`, forbids unsafe code and uses no `dyn`. Every table is bounded.
 //!
 //! Invariants: the same inputs in the same order give the same outputs; no input panics; the streams of a
-//! hub-protocol session never reach the application as events or bytes (its lifecycle events do); a frame the node cannot hand to a session reports failure to its layer,
+//! hub-protocol session never reach the application as events or bytes, nor do its datagram and room events (its
+//! lifecycle events do); a frame the node cannot hand to a session reports failure to its layer,
 //! which repairs it by its own rules.
 #![no_std]
 #![forbid(unsafe_code)]

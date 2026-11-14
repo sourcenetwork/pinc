@@ -1,5 +1,5 @@
-//! The host-side duties of membership: dialing the hubs, repairing a hub session without a write stream, and probing a
-//! member along another hub's relay.
+//! The host-side duties of membership: dialing the hubs, repairing a session without a write stream (a member's to a
+//! hub, a hub's to a member), and probing a member along another hub's relay.
 //!
 //! They run on the node's own cadence (half a second for a member, a second for a hub) and when a layer asks for a
 //! dial by sending a frame to a peer with no session.
@@ -9,6 +9,8 @@
 //! Both dial promises hold below the tables' bound: a full failed-dial table keeps no window for a peer it has no
 //! entry for, which is then redialed at every pass, and a full table of dials in progress does not record the dial.
 
+use alloc::vec::Vec;
+
 use vinc_core::{Command, Role};
 use vinc_membership::NodeId;
 
@@ -16,6 +18,9 @@ use crate::config::{DUTY_HUB, DUTY_MEMBER, GONE_TTL, Nanos, STREAM_REPAIR, Store
 use crate::ep::Ep;
 use crate::node::Node;
 use crate::trace::{NodeTrace, tag};
+
+/// The most members whose write stream a hub replaces in one duty pass; the rest wait for the next.
+const REPAIRS_PER_PASS: usize = 256;
 
 /// A failed dial's backoff entry is forgotten this long after it expired.
 const FAILED_KEEP: Nanos = 3_600_000_000_000;
@@ -96,10 +101,24 @@ where
             self.dial_peer(now, &hub);
             self.repair_stream(now, &hub);
         }
+        if self.io.is_hub {
+            // A hub's write stream to a member that stopped it is replaced as a member's toward a hub is.
+            let members: Vec<NodeId> = self
+                .io
+                .links
+                .iter()
+                .filter(|(p, l)| l.conn.is_some() && l.out.is_none() && !self.io.is_hub_id(p))
+                .map(|(p, _)| *p)
+                .take(REPAIRS_PER_PASS)
+                .collect();
+            for member in members {
+                self.repair_stream(now, &member);
+            }
+        }
         self.prune(now);
     }
 
-    /// A hub session without our write stream gets a fresh one; if none can be opened, the session is closed.
+    /// A session without our write stream gets a fresh one; if none can be opened, the session is closed.
     fn repair_stream(&mut self, now: Nanos, hub: &NodeId) {
         let Some(l) = self.io.links.get(hub).copied() else {
             return;

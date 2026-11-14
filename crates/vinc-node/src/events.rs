@@ -137,11 +137,10 @@ where
                     t.peer_writable(&mut h, now, &peer);
                 }
             }
-            Event::StreamReset { session, stream, .. } if self.io.sess.contains_key(&session) => {
-                self.io.drop_strm(session, stream);
-            }
-            Event::StreamStopped { session, stream, .. } if self.io.sess.contains_key(&session) => {
-                self.hub_stream_stopped(session, stream);
+            Event::StreamReset { session, stream, .. } | Event::StreamStopped { session, stream, .. }
+                if self.io.sess.contains_key(&session) =>
+            {
+                self.hub_stream_gone(session, stream);
             }
             // The hub streams are opened by the duty pass and the dial, which try again on their own, and the hub
             // protocol has no use for datagrams.
@@ -437,9 +436,9 @@ where
         self.io.flush_queue(&peer, session, stream);
     }
 
-    /// The peer stopped a stream we write on: it is forgotten, so a session left without a write stream gets a fresh
-    /// one from the duty pass.
-    fn hub_stream_stopped(&mut self, session: SessionId, stream: StreamId) {
+    /// The peer stopped or reset a stream: it is forgotten, so a session left without a write stream gets a fresh one
+    /// from the duty pass, at a member toward a hub and at a hub toward a member alike.
+    fn hub_stream_gone(&mut self, session: SessionId, stream: StreamId) {
         let Some(peer) = self.io.sess.get(&session).map(|s| s.peer) else {
             return;
         };
