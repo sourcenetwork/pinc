@@ -8,7 +8,8 @@
 //!
 //! Invariants: nothing is acted on before it authenticated, so a forged packet changes nothing (a new path is added
 //! only after a packet from it authenticated); a packet whose frames could not be stored for lack of memory is not
-//! recorded as received, so the peer sends it again; any authenticated packet ends the peer's sleep.
+//! recorded as received, so the peer sends it again; any authenticated packet that was not received before ends the
+//! peer's sleep (a copy of an old packet is refused first and changes nothing).
 
 use vinc_crypto::Provider;
 use vinc_security::{Env, ResponderStores};

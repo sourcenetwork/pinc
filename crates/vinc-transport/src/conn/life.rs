@@ -1,8 +1,10 @@
 //! The lifecycle: idle timeout, keepalive, close, sleep and wake, and link outages.
 //!
 //! Invariants: a connection ends exactly once and reports it with one [`Event::Closed`]; a local close or a violation
-//! sends one CLOSE and the state is freed (there is no closing or draining wait); a peer's CLOSE and every silent end
-//! (idle, dead path) send nothing. Any authenticated packet from the peer ends its sleep; only a peer that announced
+//! queues one CLOSE, which leaves with the next `poll_transmit`, and the state is freed (there is no closing or
+//! draining wait); a `handle_timeout` that runs before that `poll_transmit` ends the connection without the CLOSE, so
+//! at most one CLOSE is ever sent; a peer's CLOSE and every silent end (idle, dead path) send nothing. Any
+//! authenticated packet from the peer that it has not received before ends its sleep; only a peer that announced
 //! its sleep is held past the idle timeout, for 120 s, and the probe backoff does not grow while the peer sleeps or
 //! the link is down.
 
@@ -108,7 +110,9 @@ impl Life {
 }
 
 conn_impl! {
-    /// Close the connection with `error`. One CLOSE goes out and the connection is over; nothing waits afterwards.
+    /// Close the connection with `error`. One CLOSE goes out with the next `poll_transmit` and the connection is
+    /// over; nothing waits afterwards. Call `poll_transmit` before `handle_timeout`: the timer ends a closing
+    /// connection, and a CLOSE that has not left by then is not sent.
     pub fn close(&mut self, env: &mut Env<'_, P>, error: u64) {
         self.begin_close(env.now, error, CloseReason::Local { error });
     }

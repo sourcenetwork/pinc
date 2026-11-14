@@ -3,7 +3,8 @@
 //!
 //! Frames go into a packet in priority order: ACK, control frames (SLEEP and WAKE, MTU echo, READY, tickets, REKEY,
 //! extension frames, stream credit and resets), PATH frames, then stream data in order of urgency (each stream's
-//! retransmissions before its new data) and datagrams. The last STREAM frame of a packet leaves its length out.
+//! retransmissions before its new data) and datagrams, then the credit a stream gives back once its answer has left,
+//! and last a PING if one is forced. The last STREAM frame of a packet leaves its length out.
 //! Every packet that carries anything is recorded in recovery with the descriptors needed to send its content again.
 //!
 //! Invariants: a datagram never exceeds the path's datagram size or the output buffer, and an unvalidated path
