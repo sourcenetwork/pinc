@@ -155,7 +155,8 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         }
     }
 
-    /// Serve the protocol `alpn` (1 to 32 bytes). At most four protocols in all, including registered ones.
+    /// Serve the protocol `alpn` (1 to 32 bytes). At most [`MAX_PROTOCOLS`](crate::MAX_PROTOCOLS) protocols in all,
+    /// including registered ones.
     #[must_use]
     pub fn alpn(mut self, alpn: impl Into<Vec<u8>>) -> Self {
         self.alpns.push(alpn.into());
@@ -759,7 +760,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// Serve `protocol` on its ALPN: every session a peer opens on it goes to the returned [`Registered`], not to
     /// [`accept`](Self::accept). The host runs `protocol.serve` for each, on its own executor. The ALPN counts against
-    /// the endpoint's four.
+    /// the endpoint's [`MAX_PROTOCOLS`](crate::MAX_PROTOCOLS).
     ///
     /// # Errors
     /// [`crate::ErrorKind::Config`] if the ALPN is empty, too long, already registered, or one too many.

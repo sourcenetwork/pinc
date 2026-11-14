@@ -242,16 +242,20 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
     ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
 
   `just compare` and the harness print every row, the ones VINC loses included.
-- **Transport and connectivity rules not in yet.** The reference model's rules for a dial's first flight (which paths
-  it takes, when the relay copy leaves) and its punch round that probes unvalidated direct paths again are written
-  and held back: with them two low-bandwidth seeds lose a delivery, which points at a dialing side that does not take
-  a handshake reply on a path it does not hold ([#399](https://github.com/sourcenetwork/vinc/issues/399)). A hub's
-  floor that covers a message sent after a member's restart is fixed on a branch and waits for the same seeds
-  ([#340](https://github.com/sourcenetwork/vinc/issues/340)). Open beside them: the amplification ledger validates
-  an address on any second datagram ([#251](https://github.com/sourcenetwork/vinc/issues/251), fix in progress), a
-  forged, different first flight frees the real half-open session
-  ([#365](https://github.com/sourcenetwork/vinc/issues/365)), and a 0-RTT packet may carry any frame
-  ([#295](https://github.com/sourcenetwork/vinc/issues/295)).
+- **Transport and connectivity rules not in yet.** Five changes that bring the library closer to the reference model
+  are written, tested and held back: its rules for a dial's first flight (which paths it takes, when the relay copy
+  leaves), its punch round that probes unvalidated direct paths again, a hub tunnel that takes only a route its
+  endpoint can send on ([#416](https://github.com/sourcenetwork/vinc/issues/416)) with the longer life of an
+  unauthenticated session on a thin node ([#417](https://github.com/sourcenetwork/vinc/issues/417)), a hub's floor
+  that covers a message sent after a member's restart ([#340](https://github.com/sourcenetwork/vinc/issues/340)),
+  and an amplification ledger that asks for evidence before it validates an address
+  ([#251](https://github.com/sourcenetwork/vinc/issues/251)). Each loses one or two deliveries in the same few
+  low-bandwidth and mobile seeds, at least one of which `master` delivers by accident, so they are being compared
+  with the reference model's own run of those seeds before they land. Open beside them: a dialing side does not
+  take a handshake reply on a path it does not hold
+  ([#399](https://github.com/sourcenetwork/vinc/issues/399)), and the facade's access hook is asked for a protocol
+  and a direction while its answer stands for the peer
+  ([#440](https://github.com/sourcenetwork/vinc/issues/440), fix in review).
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
   ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 92 at `b12aa0aa` (84 at
   `97bbaa4`, 75 on its first run); the reference model the rules come from passes 88. The four that fail are the four

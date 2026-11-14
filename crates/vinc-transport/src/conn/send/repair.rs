@@ -1,4 +1,5 @@
-//! The tail repair fill: the stream frames of an earlier packet that are not acknowledged yet, sent again whole.
+//! The tail repair fill: the stream frames of an earlier packet that are not acknowledged yet, sent again from the
+//! first byte that is not acknowledged for good (the part before it was released).
 
 use super::{Fill, Filled, put_stream_header};
 use crate::conn::Connection;
@@ -10,8 +11,8 @@ use vinc_crypto::Provider;
 
 conn_impl! {
 
-    /// A tail repair: the stream frames of packet `repair` that are not acknowledged yet, newest first, whole, up to
-    /// `min(datagram size - 23, 600)` bytes of payload. The packet is a repair packet: its loss is neither resent
+    /// A tail repair: the stream frames of packet `repair` that are not acknowledged yet, newest first, each from
+    /// its first byte that is not acknowledged for good, up to `min(datagram size - 23, 600)` bytes of payload. The packet is a repair packet: its loss is neither resent
     /// nor a congestion signal.
     pub(super) fn fill_repair(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, repair: u64, fill: &Fill) {
         let Some(frames) = self.rec.sent_frames(repair).copied() else { return };
