@@ -583,3 +583,49 @@ fn an_owned_endpoint_makes_the_memory_of_a_slot_when_the_slot_is_first_taken() {
     assert!(full.is_err(), "a ninth session has no slot: {full:?}");
     assert_eq!(ep.backed_slots(), CK);
 }
+
+#[test]
+fn a_dial_refused_for_a_full_table_keeps_the_ticket_for_the_next_dial() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (sa, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let tickets = net.nodes[a].ep.tickets().len();
+        assert!(tickets >= 1, "no ticket received");
+        let now = net.now;
+        net.nodes[a].cmd(now, Command::Close { session: sa, error: 0 }).unwrap();
+        net.run_for(SEC_NS);
+        let filler = net.fill_table(a);
+        let (peer, to, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let full = net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other);
+        assert_eq!(full.err(), Some(CommandError::Full));
+        assert_eq!(
+            net.nodes[a].ep.tickets().len(),
+            tickets,
+            "the refused dial spent the ticket"
+        );
+
+        net.nodes[a]
+            .cmd(
+                now,
+                Command::Close {
+                    session: filler[0],
+                    error: 0,
+                },
+            )
+            .unwrap();
+        assert!(net.run(now + 10 * SEC_NS, |n| n.nodes[a].ep.node_stats().sessions
+            < filler.len()));
+        let now = net.now;
+        // The ACP answer is cached, so the dial reports Connected at once, before the resumption is known; the ticket
+        // taken by the dial is what shows it resumed.
+        net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        assert_eq!(
+            net.nodes[a].ep.tickets().len(),
+            tickets - 1,
+            "the dial did not use the ticket"
+        );
+        assert!(net.run(now + 5 * SEC_NS, |n| n.nodes[a].ep.tickets().len() == tickets));
+    });
+}

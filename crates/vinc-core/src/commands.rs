@@ -423,13 +423,13 @@ ep_impl! {
         let first = addrs.iter().copied().find(|a| self.route_for(a).is_some()).ok_or(CommandError::NoRoute)?;
         let local = self.route_for(&first).ok_or(CommandError::NoRoute)?;
         let pid = self.path_id(local, first);
+        let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
         let ticket = self.tickets.take(&node, alpn, now);
         let resume = ticket.is_some();
         let short_until = self.short_until();
         let peer_has_prekey = now < short_until && self.ekk.get(&node) == Some(prekey.hash());
         self.t_first.get_or_insert(now);
         let late = self.t_first.is_some_and(|t| t.saturating_sub(self.started) > LATE_START);
-        let (i, mem) = self.alloc_slot(true, now).ok_or(CommandError::Full)?;
         let mut extra: [Option<(vinc_transport::conn::PathId, PathInfo)>; NP] = [None; NP];
         for (d, a) in extra.iter_mut().zip(addrs.iter().filter(|a| **a != first)) {
             *d = self.route_for(a).map(|l| (self.path_id(l, *a), path_info(a, self.cfg.conn.interface_mtu)));
