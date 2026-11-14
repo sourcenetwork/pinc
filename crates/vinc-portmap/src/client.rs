@@ -21,8 +21,8 @@
 //! **A gateway that restarted.** Every PCP and NAT-PMP answer to a request carries the gateway's epoch. An answer that
 //! shows the gateway lost its mappings ([`lease::restarted`]) drops a held mapping at once and asks again, unless the
 //! answer is itself the grant that renews it. A PCP announce is no answer to a request and has no nonce: while a
-//! mapping is held it brings the renewal forward once a round and changes nothing else, and in any other step it is
-//! dropped and counted.
+//! mapping is held it brings the renewal forward (by a wait of 0 to 5 seconds drawn from the nonce, and at most once
+//! per [`ANNOUNCE_FLOOR`]) and changes nothing else, and with no mapping held it is dropped and counted.
 //!
 //! **Releasing.** [`PortMap::stop`] drops the mapping and asks the gateway to delete it: PCP and NAT-PMP with a
 //! lifetime of 0, `UPnP` with `DeletePortMapping`. The client does nothing more afterwards.
@@ -48,6 +48,12 @@ pub const LIFETIME: u32 = 7200;
 pub const TRIES: u8 = 3;
 /// The wait after the first try of a PCP or NAT-PMP request; it doubles after each.
 pub const FIRST_GAP: u64 = 250_000_000;
+/// The least time between two renewals brought forward by announces of one mapping. RFC 6887 section 14.1.3 has a client
+/// wait a random 0 to 5 seconds after an announce that shows a restart ([`PortMap`] draws that wait from its nonce) and
+/// gives no rate for repeated announces; this floor is the client's own, so a host on the link that spoofs the
+/// gateway's announces cannot make it renew faster. The scheduled renewal is never delayed by it. NAT-PMP's
+/// announcement of the external address (RFC 6886 section 3.2.1) is not acted upon.
+pub const ANNOUNCE_FLOOR: u64 = 10 * SEC;
 /// The wait after each SSDP search.
 pub const SSDP_GAP: u64 = SEC;
 /// How long an HTTP exchange may take.
@@ -161,10 +167,6 @@ struct Igd {
 
 /// The port-mapping client of one socket.
 #[derive(Debug, Clone)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "the flags of one state machine, each set and read in few places"
-)]
 pub struct PortMap {
     cfg: Config,
     step: Step,
@@ -182,7 +184,11 @@ pub struct PortMap {
     /// Releases not sent yet: a restart's and a stop's can wait together.
     releases: [Option<Lease>; 2],
     /// The held mapping's renewal was brought forward by an announce since it was granted.
-    announced: bool,
+    /// The earliest time an announce may start another brought-forward renewal.
+    floor_end: u64,
+    /// An announce came while a renewal was in flight: the time its brought-forward renewal may start, once that
+    /// renewal is answered.
+    announce_next: Option<u64>,
     halted: bool,
     stats: Stats,
 }
@@ -205,7 +211,8 @@ impl PortMap {
             nat_ip: None,
             igd: None,
             releases: [None; 2],
-            announced: false,
+            floor_end: 0,
+            announce_next: None,
             halted: false,
             stats: Stats::default(),
         };
@@ -387,7 +394,9 @@ impl PortMap {
             expiry: lease::expiry(self.started, lifetime),
         });
         self.renewing = false;
-        self.announced = false;
+        if let Some(start) = self.announce_next.take() {
+            self.bring_forward(start);
+        }
         self.enter(Step::Held, now);
     }
 
@@ -495,15 +504,7 @@ impl PortMap {
                 opcode, result, epoch, ..
             }) => {
                 if opcode == pcp::OP_ANNOUNCE {
-                    // Nothing asked for it and it carries no nonce, so it only brings the renewal forward, once a
-                    // round, and the mapping stays: the renewal's answer has the nonce, and its epoch decides.
-                    match &mut self.held {
-                        Some(l) if self.step == Step::Held && !self.announced => {
-                            self.announced = true;
-                            l.renew = l.renew.min(now);
-                        }
-                        _ => bump(&mut self.stats.unexpected),
-                    }
+                    self.announce(now);
                 } else if self.step == Step::Pcp {
                     // an answer to the request in flight (the form has no nonce); in any other step it answers nothing
                     self.note_epoch(now, epoch);
@@ -517,6 +518,40 @@ impl PortMap {
                 }
             }
         }
+    }
+
+    /// A PCP announce: nothing asked for it and it carries no nonce, so it only brings the held mapping's renewal
+    /// forward and the mapping stays; the renewal's answer has the nonce, and its epoch decides. Announce-brought
+    /// renewals are at least [`ANNOUNCE_FLOOR`] apart, and one that came while a renewal was in flight is kept for after
+    /// its answer, so a second restart is found no later than the floor after the first renewal.
+    fn announce(&mut self, now: u64) {
+        let Some(l) = self.held else {
+            bump(&mut self.stats.unexpected);
+            return;
+        };
+        let start = now.max(self.floor_end);
+        if self.step != Step::Held {
+            self.announce_next = Some(self.announce_next.map_or(start, |s| s.min(start)));
+        } else if start.saturating_add(self.announce_delay()) < l.renew {
+            self.bring_forward(start);
+        }
+    }
+
+    /// Bring the held mapping's renewal forward to `start` plus the announce delay (at the earliest now), and keep the
+    /// next such renewal a floor away.
+    fn bring_forward(&mut self, start: u64) {
+        let due = start.saturating_add(self.announce_delay()).max(self.now);
+        if let Some(l) = &mut self.held {
+            l.renew = l.renew.min(due);
+        }
+        self.floor_end = start.saturating_add(ANNOUNCE_FLOOR);
+    }
+
+    /// The wait between an announce and the renewal it brings forward: 0 to 5 seconds, drawn from the client's random
+    /// nonce so that clients of one gateway do not renew together (RFC 6887 section 14.1.3).
+    fn announce_delay(&self) -> u64 {
+        let draw = u64::from(self.cfg.nonce.first().copied().unwrap_or(0));
+        draw.saturating_mul(5 * SEC) / 256
     }
 
     /// Whether `ip` may be the external address of a mapping; one that may not is counted.
@@ -818,6 +853,7 @@ impl PortMap {
             self.queue_release(l);
         }
         self.renewing = false;
+        self.announce_next = None;
         self.epoch = None;
         self.nat_ip = None;
         self.igd = None;

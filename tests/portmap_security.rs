@@ -339,18 +339,28 @@ fn a_pcp_error_header_while_a_mapping_is_held_changes_nothing() {
     assert_eq!(sent(&mut pm), vec![]);
 }
 
+/// The wait between an announce and the renewal it brings forward: 0 to 5 seconds drawn from the first byte of the
+/// nonce (5): 5 * 5 s / 256.
+const ANNOUNCE_DELAY: u64 = 5 * 5 * SEC / 256;
+
 #[test]
 fn an_announce_keeps_the_mapping_and_the_renewal_answer_decides() {
     let mut pm = client(Some(GW.into()), local());
     sent(&mut pm);
     pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
     let held = pm.mapped();
-    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 3));
+    let at = T0 + 10 * SEC;
+    pm.handle_datagram(at, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 3));
     assert_eq!(pm.mapped(), held, "an announce dropped the mapping");
-    pm.handle_timeout(T0 + 10 * SEC);
-    assert_eq!(sent(&mut pm).len(), 1, "the renewal is asked for at once");
+    assert_eq!(
+        pm.poll_timeout(),
+        Some(at + ANNOUNCE_DELAY),
+        "the renewal is brought forward by the announce wait"
+    );
+    pm.handle_timeout(at + ANNOUNCE_DELAY);
+    assert_eq!(sent(&mut pm).len(), 1, "the renewal is asked for");
     // the renewal is refused with an epoch that went back: the gateway lost its mappings
-    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_map(NONCE, 2, 3, 7200));
+    pm.handle_datagram(at + ANNOUNCE_DELAY, gw(), &pcp_map(NONCE, 2, 3, 7200));
     assert_eq!(pm.mapped(), None, "the mapping the gateway lost is still held");
     assert!(
         pm.poll_timeout().is_some(),
@@ -359,27 +369,129 @@ fn an_announce_keeps_the_mapping_and_the_renewal_answer_decides() {
     assert!(!sent(&mut pm).is_empty(), "the mapping is asked for again");
 }
 
-#[test]
-fn spoofed_announces_change_nothing_and_cost_one_request_a_round() {
+/// A flood of spoofed announces, one per millisecond for `secs` seconds, against a gateway that answers every request
+/// `rtt_ms` later with an epoch that matches the clocks: how many renewal requests were asked, and whether the mapping
+/// ever changed. The run goes half a second past the flood.
+fn flood(rtt_ms: u64, secs: u64) -> (usize, bool) {
     let mut pm = client(Some(GW.into()), local());
     sent(&mut pm);
     pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
     let held = pm.mapped();
-    let mut asked = 0;
-    for i in 0..20u64 {
-        let now = T0 + 10 * SEC + i * SEC / 100;
-        pm.handle_datagram(now, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 0));
+    let mut due: Vec<u64> = Vec::new();
+    let (mut asked, mut changed) = (0, false);
+    for ms in 0..=secs * 1000 + 500 {
+        let now = T0 + 10 * SEC + ms * SEC / 1000;
+        if ms < secs * 1000 {
+            pm.handle_datagram(now, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 0));
+        }
+        if pm.poll_timeout().is_some_and(|t| t <= now) {
+            pm.handle_timeout(now);
+        }
+        for (_, b) in sent(&mut pm) {
+            if pcp::decode_request(&b).is_ok_and(|r| r.lifetime > 0) {
+                asked += 1;
+                due.push(now + rtt_ms * SEC / 1000);
+            }
+        }
+        while due.first().is_some_and(|t| *t <= now) {
+            due.remove(0);
+            pm.handle_datagram(
+                now,
+                gw(),
+                &pcp_map(
+                    NONCE,
+                    pcp::SUCCESS,
+                    1000 + u32::try_from((now - T0) / SEC).unwrap(),
+                    7200,
+                ),
+            );
+        }
+        changed |= pm.mapped() != held;
+    }
+    (asked, changed)
+}
+
+#[test]
+fn a_flood_of_spoofed_announces_costs_at_most_one_renewal_per_floor() {
+    // the announce-brought renewals of one mapping are at least ANNOUNCE_FLOOR (10 s) apart, so in a flood of 10 s and
+    // the half second after it there are at most 10 / 10 + 1 = 2
+    for rtt in [1, 20] {
+        let (asked, changed) = flood(rtt, 10);
+        assert!(!changed, "a flood changed the mapping (round trip {rtt} ms)");
+        assert!(
+            (1..=2).contains(&asked),
+            "{asked} renewals for a 10 s flood with a {rtt} ms round trip, at most 2 are allowed"
+        );
+    }
+}
+
+#[test]
+fn a_flood_of_spoofed_announces_costs_a_upnp_mapping_at_most_four_exchanges() {
+    let mut pm = client(Some(GW.into()), local());
+    let mut now = T0;
+    while !sent(&mut pm).iter().any(|(to, _)| *to == upnp::SSDP) {
+        now = pm.poll_timeout().unwrap();
         pm.handle_timeout(now);
-        asked += sent(&mut pm).len();
+    }
+    pm.handle_datagram(now, from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml"));
+    let desc = b"HTTP/1.1 200 OK\r\n\r\n<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl</controlURL></service>";
+    let ip = b"HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>203.0.113.9</NewExternalIPAddress>";
+    for a in [desc.as_slice(), ip, OK] {
+        http(&mut pm).unwrap();
+        pm.handle_http(now, Some(a));
+    }
+    let held = pm.mapped();
+    assert!(held.is_some());
+    // 100 spoofed announces, one every 100 ms for 10 s; every HTTP exchange the client asks for is answered at once
+    let mut exchanges = 0;
+    let start = now;
+    for i in 0..=105u64 {
+        let t = start + i * SEC / 10;
+        if i < 100 {
+            pm.handle_datagram(t, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 0));
+        }
+        if pm.poll_timeout().is_some_and(|d| d <= t) {
+            pm.handle_timeout(t);
+        }
+        while let Some(req) = http_text(&mut pm) {
+            exchanges += 1;
+            let a: &[u8] = if req.contains("GetExternalIPAddress") { ip } else { OK };
+            pm.handle_http(t, Some(a));
+        }
         assert_eq!(pm.mapped(), held, "announce {i} changed the mapping");
     }
-    assert_eq!(asked, 1, "20 announces in one round cost one extra request");
-    // the answer to that request ends the round; one more announce brings one more renewal
-    pm.handle_datagram(T0 + 11 * SEC, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1011, 7200));
-    pm.handle_datagram(T0 + 12 * SEC, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 0));
-    pm.handle_timeout(T0 + 12 * SEC);
-    assert_eq!(sent(&mut pm).len(), 1);
-    assert_eq!(pm.mapped(), held);
+    // at most 2 brought-forward renewals in 10 s, each an address read and an AddPortMapping
+    assert!(exchanges <= 4, "{exchanges} HTTP exchanges for 100 spoofed announces");
+}
+
+#[test]
+fn two_restarts_closer_than_the_floor_are_found_a_floor_after_the_first_renewal() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    let t1 = T0 + 10 * SEC;
+    // restart one is announced: the renewal is asked for after the announce wait, and its answer shows the restart
+    pm.handle_datagram(t1, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 2));
+    let first = t1 + ANNOUNCE_DELAY;
+    pm.handle_timeout(first);
+    assert_eq!(sent(&mut pm).len(), 1, "the first renewal");
+    pm.handle_datagram(first, gw(), &pcp_map(NONCE, pcp::SUCCESS, 2, 7200));
+    // restart two is announced 5 ms later, inside the floor: its renewal waits for the floor and then goes
+    pm.handle_datagram(first + SEC / 200, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 1));
+    let second = first + 10 * SEC;
+    assert_eq!(
+        pm.poll_timeout(),
+        Some(second),
+        "the second renewal is a floor after the first"
+    );
+    pm.handle_timeout(second - 1);
+    assert!(sent(&mut pm).is_empty(), "the floor was not kept");
+    pm.handle_timeout(second);
+    assert_eq!(sent(&mut pm).len(), 1, "the second renewal");
+    // its answer shows the second restart (the epoch went back again) and the gateway refuses
+    pm.handle_datagram(second, gw(), &pcp_map(NONCE, 2, 1, 7200));
+    assert_eq!(pm.mapped(), None, "the second restart was not found");
+    assert!(!sent(&mut pm).is_empty(), "the mapping is asked for again");
 }
 
 #[test]

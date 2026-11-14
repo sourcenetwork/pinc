@@ -209,19 +209,34 @@ fn an_announce_brings_the_renewal_forward_and_the_renewal_finds_a_restart() {
     sent(&mut pm);
     pm.handle_datagram(T0, gw(), &pcp_grant(1000, 4433, 7200));
     assert!(pm.mapped().is_some());
-    // ten seconds later an announce says the epoch is 2: nothing in it is checked, so the mapping stays
+    // ten seconds later an announce arrives: nothing in it is checked, so the mapping stays
     pm.handle_datagram(T0 + 10 * SEC, gw(), &announce(2));
     assert!(pm.mapped().is_some(), "an unchecked announce dropped the mapping");
-    pm.handle_timeout(T0 + 10 * SEC);
+    let renewal = pm.poll_timeout().unwrap();
+    assert!(
+        (T0 + 10 * SEC..=T0 + 15 * SEC).contains(&renewal),
+        "the renewal is brought forward by 0 to 5 s"
+    );
+    pm.handle_timeout(renewal);
     let out = sent(&mut pm);
     assert_eq!(out.len(), 1);
-    assert!(
-        pcp::decode_request(&out[0].1).is_ok(),
-        "the renewal is asked for at once"
-    );
-    // the renewal's answer carries the nonce and its epoch matches the clocks: the mapping goes on
-    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_grant(1010, 4433, 7200));
-    assert!(pm.mapped().is_some());
+    assert!(pcp::decode_request(&out[0].1).is_ok(), "the renewal is asked for");
+    // the gateway restarted: the renewal is refused and its epoch went back
+    let refused = pcp::Response::Map {
+        result: 2,
+        lifetime: 0,
+        epoch: 2,
+        nonce: NONCE,
+        protocol: pcp::UDP,
+        internal_port: 4433,
+        external_port: 4433,
+        external_ip: EXT.into(),
+    };
+    let mut b = [0u8; 60];
+    pcp::encode_response(&refused, &mut b).unwrap();
+    pm.handle_datagram(renewal, gw(), &b);
+    assert_eq!(pm.mapped(), None, "the restart the renewal's epoch shows was not found");
+    assert!(!sent(&mut pm).is_empty(), "the mapping is asked for again");
 }
 
 /// Run the UPnP leg: answer the SSDP search, then each HTTP request with `answers`, in order.
