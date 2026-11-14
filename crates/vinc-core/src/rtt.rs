@@ -121,11 +121,12 @@ impl NodeRtt {
         (r > 0).then_some(r)
     }
 
-    /// The first resend of a ticket resume to a hub after a late start: `max(300 ms, 1.5 x r0 + 20 ms)` with `r0`
-    /// the peer's `krtt`; `None` without one.
+    /// The first resend of a ticket resume to a hub after a late start: `max(300 ms, 3 * r0 / 2 + 20 ms)` with `r0`
+    /// the peer's `krtt`, the product taken first; `None` without one.
     pub fn hub_resend(&self, peer: &NodeId) -> Option<u64> {
         let r0 = self.krtt(peer).filter(|r| *r > 0)?;
-        Some(HUB_RESEND.max((r0 / 2).saturating_mul(3).saturating_add(20_000_000)))
+        // `r0 + r0 / 2` is `3 * r0 / 2` rounded down, without a product that could overflow.
+        Some(HUB_RESEND.max(r0.saturating_add(r0 / 2).saturating_add(20_000_000)))
     }
 
     /// Whether the node is on a constrained link: the largest of `tgr` and `lrtt` is at least 250 ms.
@@ -211,6 +212,19 @@ mod tests {
         assert_eq!(r.hub_resend(&n(2)), Some(HUB_RESEND));
         assert_eq!(r.hub_resend(&n(1)), Some(920_000_000));
         assert_eq!(r.hub_resend(&n(9)), None);
+    }
+
+    #[test]
+    fn the_hub_resend_of_an_odd_round_trip_multiplies_before_it_halves() {
+        let mut r = NodeRtt::new(1);
+        r.note_handshake(n(1), 600_000_001);
+        // 3 * 600_000_001 / 2 = 900_000_001, one more than three halves of 600_000_000.
+        assert_eq!(r.hub_resend(&n(1)), Some(920_000_001));
+        // Three halves of a round trip near the top of the clock: exact while it fits, the ceiling beyond.
+        r.note_handshake(n(2), 12_000_000_000_000_000_001);
+        assert_eq!(r.hub_resend(&n(2)), Some(18_000_000_000_020_000_001));
+        r.note_handshake(n(3), u64::MAX);
+        assert_eq!(r.hub_resend(&n(3)), Some(u64::MAX));
     }
 
     #[test]

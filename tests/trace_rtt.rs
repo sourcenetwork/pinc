@@ -118,7 +118,7 @@ impl Naive {
     }
     fn hub(&self, p: u32) -> Option<u128> {
         let r0 = self.krtt(p).filter(|r| *r > 0)?;
-        Some(u128::from(HUB_RESEND).max((3 * (r0 / 2) + 20 * u128::from(MS)).min(MAX)))
+        Some(u128::from(HUB_RESEND).max((3 * r0 / 2 + 20 * u128::from(MS)).min(MAX)))
     }
     fn thin_node(&self) -> bool {
         self.tgr.max(self.lrtt) >= u128::from(SLOW_RTT)
@@ -346,7 +346,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, peers: u32, 
         }
         seen.thin_node += u32::from(naive.thin_node());
         seen.not_thin_node += u32::from(!naive.thin_node());
-        seen.hub_saturated += u32::from(naive.tab.iter().any(|e| 3 * (e.1 / 2) + 20_000_000 > MAX));
+        seen.hub_saturated += u32::from(naive.tab.iter().any(|e| 3 * e.1 / 2 + 20_000_000 > MAX));
         // the floor is zero or one of its five values, whatever happened
         assert!(
             [0, 500, 1000, 2000, 4000, 8000].contains(&(naive.floor / u128::from(MS)))
