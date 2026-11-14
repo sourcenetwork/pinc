@@ -2,8 +2,8 @@
 //! gateway's control address, write the request, read until the gateway closes, hand the answer back.
 //!
 //! Invariants: at most one exchange runs at a time, held by the driving future; an answer is read up to
-//! [`vinc_portmap::MAX_RESPONSE`] bytes and no further; a stream that fails ends the exchange with no answer, and the
-//! port-mapping client's own deadline bounds an exchange the host never finishes.
+//! [`vinc_portmap::MAX_RESPONSE`] bytes and no further; a stream that fails ends the exchange with no answer, and an
+//! exchange the host never finishes is dropped, stream and all, when the port-mapping client's own deadline passes.
 
 use std::net::SocketAddr;
 

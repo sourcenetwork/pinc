@@ -184,6 +184,12 @@ impl PortMap {
         self.held.map(|l| l.proto)
     }
 
+    /// Whether the client waits for the answer to the HTTP request it last gave out: false once it gave the exchange
+    /// up, so the host drops what it still runs for it.
+    pub fn awaiting_http(&self) -> bool {
+        self.http == Http::Sent
+    }
+
     /// Whether the client stopped and sent its release.
     pub fn stopped(&self) -> bool {
         self.step == Step::Stopped && self.release.is_none()

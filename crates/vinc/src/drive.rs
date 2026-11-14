@@ -387,6 +387,10 @@ impl<H: Hosted> Shared<H> {
                     }
                     progressed |= self.cdirty.take();
                 }
+                if http.is_some() && !self.lock().is_some_and(|core| core.node.http_awaited()) {
+                    // The client gave the exchange up: drop it and its stream, so the next request is polled.
+                    http.set(None);
+                }
                 if http.is_none() {
                     let mut req = [0u8; http_io::MAX_REQUEST];
                     let job = self.lock().and_then(|mut core| {

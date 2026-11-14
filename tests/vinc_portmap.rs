@@ -218,3 +218,83 @@ async fn an_endpoint_with_the_relay_role_sends_nothing_for_port_mapping() {
         .collect();
     assert_eq!(asked, vec![], "the relay role asked about a mapping");
 }
+
+/// A stream that counts how many were dropped.
+struct Stream(Rc<std::cell::Cell<usize>>);
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+/// A gateway that takes the connection and never answers: once the client gave the exchange up the endpoint drops it,
+/// stream and all, instead of holding the exchange (and every later one) for ever.
+#[tokio::test(flavor = "current_thread")]
+async fn an_exchange_the_client_gave_up_is_dropped_with_its_stream() {
+    let (tx, rx) = unbounded::<(Vec<u8>, SocketAddr)>();
+    let log: Log = Rc::default();
+    let sent = Rc::clone(&log);
+    let (opened, dropped) = (
+        Rc::new(std::cell::Cell::new(0usize)),
+        Rc::new(std::cell::Cell::new(0usize)),
+    );
+    let (o, d) = (Rc::clone(&opened), Rc::clone(&dropped));
+    let ep = Vinc::builder()
+        .alpn(ALPN)
+        .local_addr(addr(PRIVATE))
+        .port_mapping(true)
+        .carriers(
+            async move |_relay: &vinc::Relay, _kind: CarrierKind| -> std::io::Result<Stream> {
+                o.set(o.get() + 1);
+                Ok(Stream(Rc::clone(&d)))
+            },
+            async |_s: &Stream, _buf: Vec<u8>| -> (std::io::Result<usize>, Vec<u8>) { std::future::pending().await },
+            async |_s: &Stream, buf: Vec<u8>, from: usize| (Ok(buf.len() - from), buf),
+            async |_s: Stream| {},
+        )
+        .build(
+            async move |buf: &mut [u8]| {
+                let (d, from) = rx.recv().await.map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+                buf[..d.len()].copy_from_slice(&d);
+                Ok((d.len(), from))
+            },
+            async move |pkt: &[u8], to: SocketAddr| {
+                sent.borrow_mut().push((to, pkt.to_vec()));
+                Ok(pkt.len())
+            },
+            async |at: Instant| tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+        )
+        .unwrap();
+    // one driving future for the whole test: dropping the driver drops the exchange it holds
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let driver = ep.clone();
+            tokio::task::spawn_local(async move {
+                let _ = driver.accept().await;
+            });
+            assert!(soon(|| !log.borrow().is_empty()).await, "no search left");
+            let answer = b"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.1:5000/d.xml\r\n\r\n".to_vec();
+            tx.try_send((answer, addr("192.168.1.1:1900"))).unwrap();
+            assert!(soon(|| opened.get() == 1).await, "the description was not asked for");
+            assert_eq!(dropped.get(), 0, "the exchange is still within its deadline");
+            // the client waits three seconds for the answer, then gives up: the exchange and its stream go
+            assert!(
+                soon(|| dropped.get() == 1).await,
+                "the stream of a given-up exchange is still held"
+            );
+        })
+        .await;
+}
+
+/// Wait, with backoff from 1 ms to 50 ms, until `cond` holds, for at most ten seconds.
+async fn soon(mut cond: impl FnMut() -> bool) -> bool {
+    let end = Instant::now() + Duration::from_secs(10);
+    let mut step = Duration::from_millis(1);
+    while !cond() && Instant::now() < end {
+        tokio::time::sleep(step).await;
+        step = (step * 2).min(Duration::from_millis(50));
+    }
+    cond()
+}

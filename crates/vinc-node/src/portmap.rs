@@ -84,6 +84,12 @@ where
         self.pm.as_mut()?.client.poll_http(buf)
     }
 
+    /// Whether the port-mapping client still waits for the answer to the HTTP request it gave out. When it does not
+    /// (its deadline passed), the host drops the exchange it runs and polls [`Node::poll_http`] again.
+    pub fn http_awaited(&self) -> bool {
+        self.pm.as_ref().is_some_and(|pm| pm.client.awaiting_http())
+    }
+
     /// The answer to the last HTTP request, or `None` if its connection failed.
     pub fn handle_http(&mut self, now: Nanos, resp: Option<&[u8]>) {
         self.begin(now);
