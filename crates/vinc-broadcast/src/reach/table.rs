@@ -222,8 +222,9 @@ impl Reach {
     /// signature check; a tombstone takes the same or a newer one, and an older one only from its member itself (its
     /// incarnation went back), never from a hub's mirror. Nothing else changes unless the signature verifies. A
     /// record that does not fit the budget is refused: a new node's closes the table and the node waits (see
-    /// [`Reach::reopen`]); a newer one of a node the table holds leaves that node a tombstone, alone, so a record it
-    /// outgrew never keeps edges its sessions may have dropped.
+    /// [`Reach::reopen`]); a newer one of a node the table holds leaves that node a tombstone with the refused
+    /// record's numbers, alone, so a record it outgrew never keeps edges its sessions may have dropped and never
+    /// comes back from a hub's mirror.
     pub(crate) fn take(&mut self, now: Nanos, v: &View<'_>, direct: bool) -> Option<bool> {
         // A refresh: the same incarnation, sequence, peers and signature. The key fields are not compared, so a copy
         // with another key passes here too; all it does is what the true record's bytes, which anyone can replay, do.
@@ -259,6 +260,9 @@ impl Reach {
                 }
                 r.peers = Vec::new();
                 r.sig = Vec::new();
+                // The tombstone stands for the record that was refused, so the one it replaced is older and a hub's
+                // late mirror of it is not taken again.
+                (r.inc, r.seq) = (v.inc, v.seq);
                 return None;
             }
             self.closed = true;

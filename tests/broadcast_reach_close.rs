@@ -246,6 +246,50 @@ fn a_record_that_outgrows_the_bytes_leaves_a_tombstone_and_its_next_record_that_
 }
 
 #[test]
+fn a_record_a_member_outgrew_does_not_come_back_from_another_hubs_mirror() {
+    // Hubs 0 and 1, members 2 to 6. Hub 0 is handed every record here, so what it holds does not depend on hub 1.
+    let budget = 2 * cost(1) + 32;
+    let limits = Limits {
+        reach_bytes: budget,
+        ..Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 7], 2, SEC, limits);
+    for i in 2..7 {
+        net.attach(i);
+    }
+    let (id2, id3) = (net.id(2), net.id(3));
+    let old = capture(&mut net, 2, &[3]);
+    ask(&mut net, 0, 2, ty::ADJ, &old);
+    let other = capture(&mut net, 3, &[2]);
+    ask(&mut net, 0, 3, ty::ADJ, &other);
+    assert!(net.nodes[0].t.same_component(&id2, &id3));
+
+    // Member 2 drops 3 and names three others: its newer record does not fit and leaves it a tombstone.
+    let newer = capture(&mut net, 2, &[4, 5, 6]);
+    ask(&mut net, 0, 2, ty::ADJ, &newer);
+    let stats = net.nodes[0].t.reach_stats();
+    assert_eq!((stats.records, stats.live, stats.refused), (2, 1, 1));
+    assert!(!net.nodes[0].t.same_component(&id2, &id3));
+
+    // A copy of the record it outgrew, still on its way from hub 1 when the newer one was refused: it would fit, and
+    // it is older than what the hub refused, so it is not taken.
+    ask(&mut net, 0, 1, ty::ADJ, &old);
+    let stats = net.nodes[0].t.reach_stats();
+    assert_eq!(
+        (stats.records, stats.live),
+        (2, 1),
+        "the record member 2 outgrew came back from a mirror"
+    );
+    assert!(
+        !net.nodes[0].t.same_component(&id2, &id3),
+        "the outgrown record links member 2 to a peer it dropped"
+    );
+    // The refused record again, from the member: still too large, and nothing else changed.
+    ask(&mut net, 0, 2, ty::ADJ, &newer);
+    assert_eq!(net.nodes[0].t.reach_stats().live, 1);
+}
+
+#[test]
 fn the_charge_follows_the_records_through_expiry_release_and_revocation() {
     let mut net = small(3, room(3));
     adj(&mut net, 1, &[2]);
