@@ -18,6 +18,41 @@ use crate::stream::StreamSource;
 /// The largest early packet replayed: the biggest datagram a path carries.
 const EARLY_MAX: usize = 9216;
 
+/// What the buffer of early packets depends on, for trace validation (cargo feature `trace`, off by default).
+#[cfg(feature = "trace")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EarlyView {
+    /// 0 handshaking, 1 connected, 2 closing, 3 closed.
+    pub phase: u8,
+    /// This endpoint dialed.
+    pub client: bool,
+    /// Packets held for want of keys.
+    pub held: usize,
+    /// The 0-RTT receive keys exist.
+    pub early_keys: bool,
+    /// The 1-RTT receive keys exist.
+    pub recv_keys: bool,
+}
+
+#[cfg(feature = "trace")]
+conn_impl! {
+    /// The state the buffer of early packets works on.
+    pub fn early_view(&self) -> EarlyView {
+        EarlyView {
+            phase: match self.phase {
+                Phase::Handshaking => 0,
+                Phase::Connected => 1,
+                Phase::Closing => 2,
+                Phase::Closed => 3,
+            },
+            client: self.client,
+            held: self.early.len(),
+            early_keys: self.keys.early_recv.is_some(),
+            recv_keys: self.keys.recv.is_some(),
+        }
+    }
+}
+
 conn_impl! {
     /// Answer the key request last announced by [`Event::KeyRequest`](super::Event::KeyRequest).
     ///
