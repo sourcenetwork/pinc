@@ -1,12 +1,13 @@
 ---------------------------- MODULE HalfOpenOps -----------------------------
 (***************************************************************************)
 (* The half-open bookkeeping of the vinc-core endpoint, step for step: the *)
-(* admission of a first flight (rx.rs unrouted, accept), the end of the    *)
-(* unauthenticated phase (events.rs on_established), the release of a slot *)
-(* (endpoint.rs free_slot), the deadline a session holds (timers.rs settle) *)
-(* and the timer loop (timers.rs handle_timeout, run_timer). HalfOpen.tla  *)
-(* checks them over every interleaving at small sizes; TraceHalfOpen.tla   *)
-(* replays the recorded calls of the real endpoint.                        *)
+(* admission of a first flight (rx.rs unrouted, accept; offer for an id    *)
+(* that sessions hold), the end of the unauthenticated phase (events.rs    *)
+(* on_established), the release of a slot (endpoint.rs free_slot), the     *)
+(* deadline a session holds (timers.rs settle) and the timer loop          *)
+(* (timers.rs handle_timeout, run_timer). HalfOpen.tla checks them over    *)
+(* every interleaving at small sizes; TraceHalfOpen.tla replays the        *)
+(* recorded calls of the real endpoint.                                    *)
 (*                                                                         *)
 (* The state e: slots (a function from the slot numbers, each Free or a    *)
 (* session [created, unauth, counted, dl]: when it was made, whether its   *)
@@ -30,6 +31,10 @@ Floor(kind, full, short) == CASE kind = 1 -> full [] kind = 2 -> short [] OTHER 
 \* (resume: the Hello is whole in its first packet, names a registered protocol and an unused ticket that opens)
 Admit(count, kind, len, resume, max, full, short) ==
     len >= Floor(kind, full, short) /\ (resume \/ count < max)
+\* offer: a first flight for an id that held sessions hold, each of which refused it as a first flight other than its
+\* own, goes to the admission above only while the id has fewer than maxh holders (MAX_CANDIDATES); else it is dropped
+\* and counted (holders_refused). Nothing an arrival does frees a session: the flight gets a session beside the holders.
+Room(held, maxh) == held < maxh
 
 \* accept: the slot becomes an unauthenticated session made now, counted unless it resumes
 Make(e, j, now, resume) ==

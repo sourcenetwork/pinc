@@ -524,8 +524,12 @@ par witness_tlc integration_codecs_wlong IntegrationCodecs IntegrationCodecs_w_w
 par witness_tlc integration_codecs_sidskip IntegrationCodecs IntegrationCodecs_w_sidskip cSidAll
 par witness_tlc integration_codecs_nocap IntegrationCodecs IntegrationCodecs_w_nocap cSidAll
 par run_tlc halfopen HalfOpen HalfOpen
+par run_tlc halfopen_held HalfOpen HalfOpen_held
 par witness_tlc halfopen_le HalfOpen HalfOpen_le Capped
+par witness_tlc halfopen_le_held HalfOpen HalfOpen_le_held HeldBound
 par witness_tlc halfopen_strict HalfOpen HalfOpen_strict TimerRight
+par witness_tlc halfopen_supersede HalfOpen HalfOpen_supersede HolderKept
+par witness_tlc halfopen_holders HalfOpen HalfOpen_holders NoFullId
 par run_tlc heap Heap Heap
 par witness_tlc heap_hi Heap Heap_hi Order
 par witness_tlc heap_full Heap Heap_full NotFull

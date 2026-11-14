@@ -19,8 +19,13 @@
 (* the operators of HalfOpenOps.tla make, in that order, and the slots and *)
 (* the count they compute must be the recorded ones; the deadlines a       *)
 (* session's connection asks for are the endpoint's own, and must keep an  *)
-(* unauthenticated session within its life. Times are in milliseconds (a   *)
-(* deadline rounded up, so every comparison is the one the code makes).    *)
+(* unauthenticated session within its life. A first flight goes to the     *)
+(* admission only while its id has fewer holders than the endpoint allows  *)
+(* (Room), and a datagram whose first flight went to the admission frees   *)
+(* no session that was in use before it, only one it made itself: an       *)
+(* arrival never frees the session that holds its id. Times are in         *)
+(* milliseconds (a deadline rounded up, so every comparison is the one the *)
+(* code makes).                                                            *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds halfopen.ndjson.      *)
@@ -45,8 +50,8 @@ Bare(s) == [s EXCEPT !.dl = NoDl]
 
 \* the decisions of one call, in the order the endpoint recorded them, from the state before it: st = [e, ok, adm],
 \* adm the last admission <<admitted, resume>> (<<>> once a session took it); a step is <<code, a, b, c>>: 0 an
-\* admission <<0, admitted, count, resume>>, 1 a session made in slot a (b = 1 for a dial), 2 established, 3 expired,
-\* 4 freed
+\* admission <<0, admitted, count, resume>> (Ev.n sessions held the datagram's id), 1 a session made in slot a (b = 1
+\* for a dial), 2 established, 3 expired, 4 freed
 RECURSIVE Fold(_, _, _)
 Fold(st, steps, k) ==
     IF k > Len(steps) THEN st
@@ -56,6 +61,7 @@ Fold(st, steps, k) ==
              nxt == CASE s[1] = 0 ->
                           [e |-> x, adm |-> <<s[2], s[4]>>,
                            ok |-> /\ st.ok /\ Ev.op = "dgram" /\ First(Ev.kind) /\ s[3] = x.count
+                                  /\ Room(Ev.n, p.holders)
                                   /\ (s[4] = 1 => Ev.kind = 6)
                                   /\ (s[2] = 1) = Admit(x.count, Ev.kind, Ev.len, s[4] = 1, p.max, p.full, p.short)]
                       [] s[1] = 1 /\ s[3] = 1 ->
@@ -78,7 +84,8 @@ Fold(st, steps, k) ==
          IN Fold(nxt, steps, k + 1)
 
 InitEv == /\ Ev.op = "init"
-          /\ p' = [k |-> Ev.k, max |-> Ev.max, life |-> Ev.life, full |-> Ev.full, short |-> Ev.short]
+          /\ p' = [k |-> Ev.k, max |-> Ev.max, life |-> Ev.life, full |-> Ev.full, short |-> Ev.short,
+                   holders |-> Ev.holders]
           /\ e' = [slots |-> Table0(Ev.k), count |-> 0]
 
 CallEv ==
@@ -99,6 +106,13 @@ CallEv ==
        \* nothing
        /\ Ev.op = "timer" /\ Ev.stalled = 0 => \A j \in DOMAIN sl : ~Expired(sl[j], Ev.now, p.life)
        /\ Ev.op = "timer" /\ Ev.stalled0 = 1 => Ev.steps = <<>> /\ Ev.diff = <<>>
+       \* an arrival never frees a session: a datagram whose first flight went to the admission frees only a session
+       \* that was not in use before it or that it made itself (the id table full, or a session that ended at once)
+       /\ Ev.op = "dgram" /\ (\E k \in DOMAIN Ev.steps : Ev.steps[k][1] = 0) =>
+            \A k \in DOMAIN Ev.steps : Ev.steps[k][1] = 4 =>
+                 \/ Ev.steps[k][2] \notin DOMAIN e.slots
+                 \/ ~e.slots[Ev.steps[k][2]].use
+                 \/ \E m \in 1..(k - 1) : Ev.steps[m][1] = 1 /\ Ev.steps[m][2] = Ev.steps[k][2]
        \* a datagram for an id no session holds: a stalled queue or a type that starts no session decides nothing, a first
        \* message type is decided, and what makes no session changes no slot and counts one dropped or stalled datagram
        /\ Ev.op = "dgram" /\ Ev.n = 0 =>
@@ -110,7 +124,7 @@ CallEv ==
        /\ UNCHANGED p
 
 Init == /\ i = 1 /\ e = [slots |-> Table0(1), count |-> 0]
-        /\ p = [k |-> 1, max |-> 0, life |-> 0, full |-> 0, short |-> 0]
+        /\ p = [k |-> 1, max |-> 0, life |-> 0, full |-> 0, short |-> 0, holders |-> 0]
 Step == /\ i <= Len(Trace) /\ Ev.t = "coho" /\ (InitEv \/ CallEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished

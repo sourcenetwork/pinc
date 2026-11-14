@@ -2,11 +2,13 @@
 # The half-open cap: the model
 
 A model of the half-open bookkeeping of the `vinc-core` endpoint, as `proofs/tla/HalfOpenOps.tla` has it, over
-unbounded `Nat`: the admission of a first flight for an id no session holds (`rx.rs` `unrouted`, `accept`), the end of
-the unauthenticated phase (`events.rs` `on_established`), the release of a slot (`endpoint.rs` `free_slot`), the
-deadline a session holds in the heap (`timers.rs` `settle`), `poll_timeout`, and the timer loop (`timers.rs`
-`handle_timeout`, `run_timer`). `Vinc.TraceHalfOpen` replays the recorded calls of the real endpoint through these
-functions; the theorems are in `Vinc.CoreHalfOpenThm`.
+unbounded `Nat`: the admission of a first flight for an id no session holds (`rx.rs` `unrouted`, `accept`), or for an
+id that sessions hold, each of which refused it as a first flight other than its own (`offer`: it gets a session beside
+them while the id has fewer than `holders` of them, and frees none), the end of the unauthenticated phase
+(`events.rs` `on_established`), the release of a slot (`endpoint.rs` `free_slot`), the deadline a session holds in the
+heap (`timers.rs` `settle`), `poll_timeout`, and the timer loop (`timers.rs` `handle_timeout`, `run_timer`).
+`Vinc.TraceHalfOpen` replays the recorded calls of the real endpoint through these functions; the theorems are in
+`Vinc.CoreHalfOpenThm`.
 -/
 
 namespace Vinc.CoreHalfOpen
@@ -26,12 +28,14 @@ structure E where
   count : Nat := 0
   deriving BEq, DecidableEq, Repr
 
-/-- The constants: the cap, the life of an unauthenticated session, the floors of a full and a short Initial. -/
+/-- The constants: the cap, the life of an unauthenticated session, the floors of a full and a short Initial, and the
+most sessions that may hold one id (`rx.rs` `MAX_CANDIDATES`). -/
 structure P where
   max : Nat
   life : Nat
   full : Nat
   short : Nat
+  holders : Nat
   deriving Repr
 
 /-- A table of `k` free slots. -/
@@ -73,6 +77,11 @@ the Hello is whole in its first packet, names a registered protocol and an unuse
 it). -/
 def admits (p : P) (count kind len : Nat) (resume : Bool) : Bool :=
   decide (floor p kind ≤ len) && (resume || decide (count < p.max))
+
+/-- `offer`: a first flight for an id that `held` sessions hold, each of which refused it as a first flight other than
+its own, goes to the admission only while the id has fewer than `holders` holders (none holds an id the endpoint has
+not seen); else it is dropped and counted (`holders_refused`). -/
+def room (p : P) (held : Nat) : Bool := decide (held < p.holders)
 
 /-! ## The steps -/
 
@@ -130,25 +139,29 @@ def earliest : List (Option Sl) → Option Nat
 /-- `poll_timeout`: the earliest deadline, none while the event queue is stalled. -/
 def poll (l : List (Option Sl)) (stalled : Bool) : Option Nat := if stalled then none else earliest l
 
-/-! ## A first flight for an id no session holds -/
+/-! ## A first flight -/
 
 /-- What a first flight did. -/
 inductive Out where
   | stalled
   | notFirst
+  | crowded
   | refused
   | failed
   | made (j : Nat)
   deriving DecidableEq, Repr
 
-/-- `unrouted` and `accept`: with the event queue stalled nothing starts; a type that is no first message starts
-nothing; the admission decides; an admitted first flight takes `take`, the slot the free list gives (`none` when no
-protocol is registered, no slot is free, the construction fails or the id table is full), and the session's own
-deadline after the first flight is `d`. -/
-def arrive (p : P) (e : E) (stalled : Bool) (kind len now : Nat) (resume : Bool) (take : Option Nat) (d : Nat) :
+/-- `unrouted` and `accept`, through `offer` for an id that `held` sessions hold (each refused the flight as a first
+flight other than its own; a holder that takes it is another call): with the event queue stalled nothing starts; a
+type that is no first message starts nothing; an id with `holders` holders takes no more; the admission decides; an
+admitted first flight takes `take`, the slot the free list gives (`none` when no protocol is registered, no slot is
+free, the construction fails or the id table is full), and the session's own deadline after the first flight is `d`.
+No session is freed: the new one is made beside the holders. -/
+def arrive (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat) (d : Nat) :
     Out × E :=
   if stalled then (.stalled, e)
   else if !isFirst kind then (.notFirst, e)
+  else if !room p held then (.crowded, e)
   else if !admits p e.count kind len resume then (.refused, e)
   else match take with
     | some j => if j < e.slots.length ∧ at? e.slots j = none then (.made j, settle p (make e j now resume) j d)

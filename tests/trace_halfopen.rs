@@ -61,6 +61,9 @@ use vinc_wire::{Reader, Writer};
 
 const LIFE: u64 = HALF_OPEN_LIFE;
 const MAX: usize = MAX_HALF_OPEN;
+/// The most sessions that may hold one id (`MAX_CANDIDATES` in `rx.rs`, private to the crate): a first flight for an id
+/// that this many hold is dropped.
+const HOLDERS: u64 = 4;
 /// The table of the big endpoint: room past the cap, so the cap and not the table refuses.
 const BK: usize = MAX_HALF_OPEN + 44;
 /// The table of the small endpoint: full long before the cap.
@@ -244,7 +247,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         for (unit, out) in [(MS_NS, &mut r.ms), (1, &mut r.ns)] {
             let _ = writeln!(
                 out,
-                r#"{{"t":"coho","run":{run},"op":"init","k":{K},"max":{MAX},"life":{},"full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN}}}"#,
+                r#"{{"t":"coho","run":{run},"op":"init","k":{K},"max":{MAX},"life":{},"full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"holders":{HOLDERS}}}"#,
                 LIFE / unit
             );
         }
@@ -445,6 +448,12 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let Op::Dgram(kind, len) = *op else { return };
         let freed_first = steps.iter().position(|s| s[0] == 4);
         let decided_at = steps.iter().position(|s| s[0] == 0);
+        if decided_at.is_some() {
+            assert!(
+                n.is_some_and(|n| n < HOLDERS),
+                "a first flight went to the admission for an id that {n:?} sessions hold"
+            );
+        }
         if n == Some(1) && decided_at.is_some() {
             // a first message that differs from the one a half-open session holds under the same ids gets a session of
             // its own: the held one is not freed
