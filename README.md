@@ -13,9 +13,12 @@
 **VINCER**, the transport VINC runs on, stands for **VINC** **E**ncrypted **R**eliable transport.
 
 VINC is a peer-to-peer networking stack for Rust, written SANS-IO. It has its own encrypted, reliable transport
-(VINCER) with a hybrid post-quantum handshake (X25519 plus ML-KEM-768). On top of that core it builds membership,
-verified value transfer with no size limit, broadcast, set reconciliation and delay-tolerant delivery. It runs from a
-microcontroller to a data centre and in the browser, and you write your own protocols on top of it.
+(VINCER) with a hybrid post-quantum handshake (X25519 plus ML-KEM-768). The hybrid claim is the full handshake's: a
+resumed session runs no ML-KEM, so its keys are as secret as its ticket's key (which a full handshake set up), and the
+key roll is an X25519 ratchet, so with X25519 broken it does not recover a session whose keys were stolen. On top of
+that core it builds membership, verified value transfer with no size limit, broadcast, set reconciliation and
+delay-tolerant delivery. It runs from a microcontroller to a data centre and in the browser, and you write your own
+protocols on top of it.
 
 VINC is a library, not a framework:
 - **No runtime dependency.** The protocol crates are state machines: you give them bytes, time and commands, and they
