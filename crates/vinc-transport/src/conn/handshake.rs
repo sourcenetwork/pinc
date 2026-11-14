@@ -79,7 +79,7 @@ const CAP_THIN: u64 = 8 * SECOND;
 const THIN_RTT: u64 = 250 * MS;
 /// How often a held flight is looked at again.
 const HELD_RECHECK: u64 = 500 * MS;
-/// How long an unestablished handshake lasts.
+/// How long an unestablished handshake lasts on a node that is not thin.
 const CONNECT_TIMEOUT: u64 = 30 * SECOND;
 /// The first flights a dial told to end early sends; the wait after the last of them ends it.
 const EARLY_FLIGHTS: u32 = 4;
@@ -152,17 +152,21 @@ impl Timing {
 
     /// How long an unestablished handshake lasts.
     fn connect_timeout(&self) -> u64 {
-        if self.is_thin() {
-            CONNECT_TIMEOUT * 2
-        } else {
-            CONNECT_TIMEOUT
-        }
+        connect_limit(self.is_thin())
     }
 
     /// The first instant at which a handshake begun at `created` has run out: the limit is exceeded, not reached.
     fn connect_deadline(&self, created: u64) -> u64 {
         created.saturating_add(self.connect_timeout()).saturating_add(1)
     }
+}
+
+/// How long an unestablished handshake lasts, on either side: 30 s, twice that on a thin node. An endpoint keeps a
+/// session whose peer is not authenticated yet for the same time, so a responder on a slow link still holds the session
+/// when the dialer's Finish arrives late.
+#[must_use]
+pub const fn connect_limit(thin: bool) -> u64 {
+    if thin { CONNECT_TIMEOUT * 2 } else { CONNECT_TIMEOUT }
 }
 
 /// One of the two state machines.

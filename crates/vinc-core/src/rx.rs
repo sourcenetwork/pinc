@@ -31,7 +31,7 @@ use core::net::SocketAddr;
 use vinc_security::message::{FULL_INITIAL_MIN, MAX_MESSAGE_LEN, MessageType, SHORT_INITIAL_MIN};
 use vinc_security::responder::hello_opens_ticket;
 use vinc_security::{ConnId, Env, Failure};
-use vinc_transport::conn::{Connection, Drop, PathId, ServerParams};
+use vinc_transport::conn::{Connection, Drop, PathId, ServerParams, connect_limit};
 use vinc_transport::packet::{LongHeader, LongType, short_dcid};
 use vinc_wire::Reader;
 
@@ -45,8 +45,9 @@ use crate::trace::trace;
 const MAX_CANDIDATES: usize = 4;
 /// The most unauthenticated sessions.
 pub const MAX_HALF_OPEN: usize = 256;
-/// How long an unauthenticated session lives (30 s).
-pub const HALF_OPEN_LIFE: u64 = 30_000_000_000;
+/// How long an unauthenticated session lives on a node that is not thin (30 s). It lives as long as an unestablished
+/// handshake may last ([`connect_limit`]), so a thin node keeps it twice as long.
+pub const HALF_OPEN_LIFE: u64 = connect_limit(false);
 
 /// What the first packet of an unroutable datagram says.
 struct First<'a> {
@@ -477,7 +478,8 @@ pub enum Taken {
 pub struct HalfOpenSlot {
     /// When the session was created.
     pub created: u64,
-    /// The peer is not authenticated yet, so the session ends [`HALF_OPEN_LIFE`] after `created`.
+    /// The peer is not authenticated yet, so the session ends [`HALF_OPEN_LIFE`] after `created` (twice that on a thin
+    /// node).
     pub unauth: bool,
     /// The session counts against [`MAX_HALF_OPEN`].
     pub counted: bool,

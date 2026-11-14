@@ -59,7 +59,7 @@ pub enum TraceEvent {
         /// 1 if a ticket resume (exempt from the cap).
         resume: u64,
     },
-    /// An unauthenticated session lived its 30 s and was dropped.
+    /// An unauthenticated session lived its life (30 s, 60 s on a thin node) and was dropped.
     HalfOpenExpired {
         /// The session slot.
         slot: u64,

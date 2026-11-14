@@ -35,7 +35,7 @@
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
-//!   An unauthenticated session lives 30 s.
+//!   An unauthenticated session lives as long as an unestablished handshake: 30 s, 60 s on a thin node.
 //! - **Reordered first flights.** A later part of a first message that arrives before its start is held: at most 4
 //!   datagrams of at most 1500 bytes for the whole endpoint, for at most 1 s, the oldest given up first, and handed
 //!   only to the session the start of the same message from the same address creates.

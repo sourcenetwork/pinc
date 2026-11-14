@@ -1,5 +1,5 @@
 //! The defences of an endpoint that answers strangers: the amplification ledger, the half-open cap with its Initial
-//! size floors and its 30 s expiry.
+//! size floors and its expiry (30 s, 60 s on a thin node).
 #![allow(
     clippy::many_single_char_names,
     clippy::unwrap_used,
@@ -239,6 +239,67 @@ fn the_half_open_cap_floors_and_expiry() {
         assert_eq!(admissions(&mut ep), [(true, false)]);
         let _: Option<Event> = None;
         let _ = Answer::None;
+    });
+}
+
+/// A responder on a slow link keeps a session whose peer is not authenticated yet as long as a handshake may last on
+/// such a node, 60 s: a dialer that finished its handshake and whose Finish waits more than 30 s in a queue on its slow
+/// uplink is answered when the Finish arrives, not left holding a session the responder dropped. A handshake that is
+/// never finished still ends at 60 s.
+#[test]
+fn a_thin_responder_holds_a_half_open_session_until_a_late_finish_arrives() {
+    big_stack(|| {
+        // 150 ms each way: the responder measures a 300 ms round trip on its own dial, so it is thin.
+        let mut net = CoreNet::new(150 * MS_NS);
+        let (s, w, c, d) = (net.add(1), net.add(2), net.add(3), net.add(4));
+        net.connect_pair(s, w, ALPN_A, Role::Other);
+        assert!(net.nodes[s].ep.node_stats().thin, "the responder is not thin");
+        let (peer, to) = (net.nodes[s].node, net.nodes[s].addr);
+
+        // The dialer's first flight arrives; what it sends after it, its Finish first, is held back.
+        let (t0, ca) = (net.now, net.nodes[c].addr);
+        net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+        net.pump_all();
+        let mark = net.captured.len();
+        net.capture = true;
+        net.loss = Some(Box::new(move |from, _, _| from == ca));
+        net.run_for(40 * SEC_NS);
+        net.loss = None;
+        assert_eq!(
+            net.nodes[c].count(|e| matches!(e, Event::Connected { .. })),
+            1,
+            "the dialer did not finish"
+        );
+        let finish = net.captured[mark..].iter().find(|x| x.0 == ca).unwrap().2.clone();
+        assert_eq!(net.nodes[s].count(|e| matches!(e, Event::Incoming { .. })), 0);
+
+        // The Finish arrives 40 s after the first flight.
+        net.inject(ca, to, finish, 0);
+        let end = net.now + 2 * SEC_NS;
+        let late = net.run(end, |n| n.nodes[s].count(|e| matches!(e, Event::Incoming { .. })) == 1);
+        assert!(
+            late,
+            "the responder dropped the session whose Finish came 40 s late: {:?}",
+            net.nodes[s].ep.node_stats()
+        );
+
+        // A dialer whose Finish never arrives: the session is held for 60 s and then freed.
+        let (t1, da) = (net.now, net.nodes[d].addr);
+        net.nodes[d].connect(t1, peer, ALPN_A, to, Role::Other).unwrap();
+        net.pump_all();
+        net.loss = Some(Box::new(move |from, _, _| from == da));
+        net.run_for(59 * SEC_NS);
+        assert_eq!(
+            net.nodes[s].ep.node_stats().half_open,
+            1,
+            "the unfinished session ended before 60 s"
+        );
+        net.run_for(2 * SEC_NS);
+        assert_eq!(
+            net.nodes[s].ep.node_stats().half_open,
+            0,
+            "the unfinished session outlived 60 s"
+        );
     });
 }
 

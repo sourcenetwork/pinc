@@ -92,7 +92,7 @@ pub use config::{
 #[cfg(feature = "trace")]
 pub use drive::EarlyView;
 pub use event::{CloseReason, Drop, Event, EventTable, code};
-pub use handshake::Machines;
+pub use handshake::{Machines, connect_limit};
 pub use held::{Held, Shared};
 pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
