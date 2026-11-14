@@ -97,9 +97,14 @@ struct Pair {
 
 impl Pair {
     fn new() -> Self {
+        Self::with_alg(IdentityAlg::Ed25519)
+    }
+
+    /// A pair whose dialer has the identity `alg`: its Finish spans as many datagrams as the identity needs.
+    fn with_alg(alg: IdentityAlg) -> Self {
         let mut net = CoreNet::new(5 * MS_NS);
         net.capture = true;
-        let (a, b) = (net.add(1), net.add(2));
+        let (a, b) = (net.add_with_alg(1, alg), net.add(2));
         let (addr_a, addr_b) = (net.nodes[a].addr, net.nodes[b].addr);
         let (peer, now) = (net.nodes[b].node, net.now);
         net.nodes[a].connect(now, peer, ALPN_A, addr_b, Role::Other).unwrap();
@@ -267,6 +272,95 @@ fn the_session_whose_finish_authenticates_stays_under_the_id() {
             assert!(!p.net.nodes[p.b].saw(|e| matches!(e, Event::Closed { .. })));
         }
     });
+}
+
+/// `d` with its destination id replaced by `dcid` (a long handshake packet is not sealed, so nothing else changes).
+fn readdressed(d: &[u8], dcid: ConnId) -> Vec<u8> {
+    let (h, hlen) = LongHeader::parse(d).unwrap();
+    let body = &d[hlen..hlen + h.body_len];
+    let h = LongHeader { dcid, ..h };
+    let mut out = vec![0u8; h.header_len() + body.len()];
+    let mut w = Writer::new(&mut out);
+    h.write(&mut w, 0).unwrap();
+    w.put_slice(body).unwrap();
+    out
+}
+
+/// A Finish that spans several datagrams and reaches the id of the first flight (as when a path hands the dialer's
+/// packets to the shared id) reaches every holder of the id, and only the session whose key opens it takes it: the real
+/// pair opens whichever flight came first, the other holder is not closed by the parts and ends at its own half-open
+/// limit. The dialer addresses its Finish to the id its responder chose, so the test keeps those datagrams back and
+/// hands them over readdressed to the id of the first flight (and keeps back what the dialer resends, so only
+/// those copies can complete the Finish).
+fn finish_of_several_datagrams(forged_delay: u64) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut p = Pair::with_alg(IdentityAlg::MlDsa65);
+    let (addr_a, addr_b) = p.addrs();
+    let odcid = p.flight.dcid();
+    let kept: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
+    let sink = Rc::clone(&kept);
+    p.net.loss = Some(Box::new(move |from, _, d| {
+        let to_other_id =
+            from == addr_a && d[0] & 0x80 != 0 && LongHeader::parse(d).is_ok_and(|(h, _)| h.dcid != odcid);
+        if to_other_id {
+            sink.borrow_mut().push(d.to_vec());
+        }
+        to_other_id
+    }));
+    let forged = p.flight.other(1);
+    p.net.inject(addr_a, addr_b, forged, forged_delay);
+    // The dialer's repeat of its flight is what the forged-first case waits for.
+    let end = p.net.now + 5 * SEC_NS;
+    p.net.run(end, |_| !kept.borrow().is_empty());
+    p.net.run_for(50 * MS_NS);
+    let finish: Vec<Vec<u8>> = kept.borrow().iter().map(|d| readdressed(d, odcid)).collect();
+    assert!(
+        finish.len() >= 3,
+        "the Finish did not span datagrams ({})",
+        finish.len()
+    );
+    for d in finish {
+        p.net.inject(addr_a, addr_b, d, 0);
+    }
+    assert!(
+        p.open(),
+        "{:?} / {:?}",
+        p.net.nodes[p.a].events,
+        p.net.nodes[p.b].events
+    );
+    let st = p.stats();
+    assert_eq!(
+        (st.sessions, st.half_open),
+        (2, 1),
+        "the forged holder is not half-open any more"
+    );
+    assert!(
+        !p.net.nodes[p.b].saw(|e| matches!(e, Event::Closed { .. })),
+        "a holder was closed"
+    );
+    let t = p.net.now + HALF_OPEN_LIFE + 2 * SEC_NS;
+    p.net.run(t, |_| false);
+    let st = p.stats();
+    assert_eq!(
+        (st.sessions, st.half_open),
+        (1, 0),
+        "the forged holder did not end by its own life"
+    );
+    assert!(!p.net.nodes[p.b].saw(|e| matches!(e, Event::Closed { .. })));
+}
+
+/// The real flight, then a forged one, then the real Finish in several datagrams.
+#[test]
+fn a_finish_of_several_datagrams_is_taken_by_the_real_holder_when_a_forged_flight_came_after() {
+    big_stack(|| finish_of_several_datagrams(7 * MS_NS));
+}
+
+/// The forged flight, then the real one, then the real Finish in several datagrams.
+#[test]
+fn a_finish_of_several_datagrams_is_taken_by_the_real_holder_when_a_forged_flight_came_first() {
+    big_stack(|| finish_of_several_datagrams(MS_NS));
 }
 
 /// The table of the endpoint: room past the cap, so the cap and not the table refuses.

@@ -174,6 +174,7 @@ conn_impl! {
         dgram: &mut [u8],
     ) -> Result<(), Drop> {
         let now = env.now;
+        self.life.hs_part = false;
         match self.phase {
             Phase::Closed | Phase::Closing => return Err(Drop::Closed),
             _ => {}
@@ -269,7 +270,11 @@ conn_impl! {
             self.note_heard(ctx.now);
         }
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
-        let Some(len) = self.hs.on_fragment(&mut self.pool, body) else { return Ok(()) };
+        let Some(len) = self.hs.on_fragment(&mut self.pool, body) else {
+            self.life.hs_part = true;
+            return Ok(());
+        };
+        self.life.hs_part = false;
         let r = self.hs.feed(&self.pool, env, stores, len);
         self.count_unauthentic(&r);
         if self.client && r.is_ok() {
@@ -277,6 +282,12 @@ conn_impl! {
         }
         self.pump(env);
         r.map_err(Drop::Handshake)
+    }
+
+    /// Whether the datagram the last call took only added a part to a handshake message and finished none, so the
+    /// session did not decide anything about it; the endpoint hands such a datagram to every session of an id.
+    pub fn take_handshake_part(&mut self) -> bool {
+        core::mem::take(&mut self.life.hs_part)
     }
 
     /// Keep a packet that arrived before the keys to open it, for [`drain_early`](Self::drain_early).

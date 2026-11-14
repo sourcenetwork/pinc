@@ -54,6 +54,8 @@ pub(crate) struct Life {
     pub(crate) probes: u8,
     /// A path that was abandoned validated again: its id and round trip, until the endpoint takes them.
     pub(crate) rejoined: Option<(super::PathId, u64)>,
+    /// The last datagram only added a part to a handshake message and finished none.
+    pub(crate) hs_part: bool,
     pub(crate) ping_owed: bool,
     /// An acknowledgement must leave in the next packet.
     pub(crate) ack_now: bool,
@@ -93,6 +95,7 @@ impl Life {
             qr_until: 0,
             probes: 0,
             rejoined: None,
+            hs_part: false,
             ping_owed: false,
             ack_now: false,
             small_ping: None,

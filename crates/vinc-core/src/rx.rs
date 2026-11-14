@@ -4,8 +4,9 @@
 //! candidate owns the datagram; several (two sessions derived the same four bytes) are tried in turn on a copy of the
 //! datagram, because opening a packet changes the bytes in place. For a short datagram the first holder that does
 //! not answer undecryptable or unroutable owns it, whatever it did with it (a closed or back-pressured holder takes
-//! it too); a long packet is offered to each holder in the order they were made until one takes it (one that refuses
-//! a handshake message or has ended does not), and a first flight that every holder says differs from its own gets a
+//! it too); a long packet is offered to each holder, oldest first, until one owns it (one that refuses a handshake
+//! message, has ended or only added a part to a message not complete yet does not, so the parts of a Finish reach every
+//! holder), and a first flight that every holder says differs from its own gets a
 //! half-open session of its own under the same id, up to four holders, so a forged flight never displaces the first.
 //! The candidate list can name the same slot twice, which only costs a second trial. An id no session holds can only
 //! start a session if the datagram is a first handshake message that meets its size floor
@@ -166,17 +167,20 @@ ep_impl! {
         self.counters.dropped_in += 1;
     }
 
-    /// Offer a long packet to each of the `n` sessions that hold its id, in the order they were made, until one takes
-    /// it: a holder that refuses a handshake message (a Finish it does not authenticate, a first flight other than its
-    /// own) or has ended does not. When every live holder says the packet is a first flight different from its own, the
-    /// packet is the start of another dial under the same id and gets a session of its own, unless the id already has
-    /// [`MAX_CANDIDATES`] holders.
+    /// Offer a long packet to each of the `n` sessions that hold its id, oldest first, until one owns it: a holder
+    /// that refuses a handshake message (a Finish it does not authenticate, a first flight other than its own) or
+    /// cannot open it, or has ended, does not own it, and neither does one that only added a part to a message that is
+    /// not complete yet, since the parts of a Finish reach every holder and only the one whose key opens the whole
+    /// message takes it. When every live holder says the packet is a first flight different from its own, the packet
+    /// is the start of another dial under the same id and gets a session of its own, unless the id already has
+    /// [`MAX_CANDIDATES`] holders. An id with one holder gets that one delivery and nothing else.
     fn offer(&mut self, found: &[Option<u32>], n: usize, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
         let len = buf.len();
         let Some(copy) = self.scratch.get_mut(..len) else { return };
         copy.copy_from_slice(buf);
-        let (mut different, mut other) = (false, false);
-        for (k, i) in found.iter().flatten().enumerate() {
+        let (mut different, mut other, mut parted) = (false, false, false);
+        // The table lists the newest holder first; the first holder of an id is never displaced, so it is asked first.
+        for (k, i) in found.iter().flatten().rev().enumerate() {
             if k > 0 {
                 match self.scratch.get(..len) {
                     Some(s) => buf.copy_from_slice(s),
@@ -184,9 +188,14 @@ ep_impl! {
                 }
             }
             let r = self.deliver(*i as usize, now, local, remote, buf);
-            let refused = matches!(r, Err(Drop::Handshake(_) | Drop::Closed));
+            let refused = matches!(r, Err(Drop::Handshake(_) | Drop::Closed | Drop::Undecryptable));
+            let part = n > 1 && r.is_ok() && self.took_part(*i as usize);
             if n > 1 {
-                trace!(self, now, Trial { slot: u64::from(*i), ok: u64::from(!refused) });
+                trace!(self, now, Trial { slot: u64::from(*i), ok: u64::from(!refused && !part) });
+            }
+            if part {
+                parted = true;
+                continue;
             }
             if !refused {
                 return;
@@ -197,7 +206,7 @@ ep_impl! {
                 _ => other = true,
             }
         }
-        if !different || other {
+        if !different || other || parted {
             return;
         }
         match self.scratch.get(..len) {
@@ -216,6 +225,14 @@ ep_impl! {
         } else {
             self.unrouted(now, local, remote, buf);
         }
+    }
+
+    /// Whether session `i` only added a part to a handshake message from the datagram it was just given.
+    fn took_part(&mut self, i: usize) -> bool {
+        self.slots
+            .get_mut(i)
+            .and_then(|s| s.conn.as_mut())
+            .is_some_and(Connection::take_handshake_part)
     }
 
     /// Whether `buf` starts a first message whose later part the endpoint holds: every session that holds the id has
