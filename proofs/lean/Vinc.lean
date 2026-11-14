@@ -27,6 +27,7 @@ import Vinc.TicketsWire
 import Vinc.TicketsClient
 import Vinc.TicketsExport
 import Vinc.PrekeyCache
+import Vinc.PrekeyRecency
 import Vinc.TraceStores
 import Vinc.TraceTranscript
 import Vinc.CryptoKdf
