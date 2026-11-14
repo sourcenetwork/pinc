@@ -216,6 +216,10 @@ pub struct Endpoint<
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
     pub(crate) udp_heard: Option<u64>,
+    /// How many more sessions the host's application can take waiting to be accepted (`set_backlog_room`).
+    pub(crate) backlog_room: usize,
+    /// Sessions this node accepted whose peer is not authenticated yet: their handshakes are under way.
+    pub(crate) handshaking: usize,
     pub(crate) started: u64,
     pub(crate) t_first: Option<u64>,
     pub(crate) quiet_until: u64,
@@ -472,6 +476,8 @@ ep_impl! {
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
             udp_heard: None,
+            backlog_room: usize::MAX,
+            handshaking: 0,
             started: now,
             t_first: None,
             quiet_until: 0,
@@ -603,6 +609,7 @@ ep_impl! {
             fragments_expired: self.orphans.counts.expired,
             fragments_evicted: self.orphans.counts.evicted,
             fragments_waiting: self.orphans.waiting(),
+            handshaking: self.handshaking,
             retries_sent: self.counters.retries_sent,
             retries_waiting: self.retries.waiting(),
             retries_dropped: self.counters.retries_dropped,
@@ -828,6 +835,9 @@ ep_impl! {
         slot.m.cids = [None; MAX_CIDS];
         if let Some(a) = slot.m.route.take() {
             self.by_route.remove_pair(&a, &idx);
+        }
+        if slot.m.unauth {
+            self.handshaking = self.handshaking.saturating_sub(1);
         }
         if slot.m.half_open {
             self.half_open = self.half_open.saturating_sub(1);

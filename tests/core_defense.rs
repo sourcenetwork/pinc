@@ -610,3 +610,36 @@ fn a_flood_past_the_cap_holds_nothing_but_a_bounded_ring_of_small_retries() {
         assert_eq!((ns.retries_sent, ns.retries_waiting), (RETRIES as u64, 0));
     });
 }
+
+#[test]
+fn handshakes_that_would_overfill_the_accept_queue_are_refused_before_any_work() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let (mut ep, addr) = big_server(now);
+        ep.set_backlog_room(0);
+        let stalled = ep.node_stats().stalled_in;
+        feed(&mut ep, addr, now, 1, craft(1, 1, 1200));
+        let ns = ep.node_stats();
+        assert_eq!(
+            (ns.sessions, ns.half_open, ns.retries_waiting, ns.stalled_in),
+            (0, 0, 0, stalled + 1),
+            "refused before any work, nothing kept"
+        );
+        // Room for two: two handshakes start, the third waits.
+        ep.set_backlog_room(2);
+        for i in 1..=3 {
+            feed(&mut ep, addr, now, i, craft(i, 1, 1200));
+        }
+        let ns = ep.node_stats();
+        assert_eq!((ns.sessions, ns.handshaking), (2, 2), "as many handshakes as the room");
+        ep.set_backlog_room(usize::MAX);
+        // At the cap a full queue answers no retry either: the dialer waits for room, not for a token.
+        for i in 3..=(MAX_HALF_OPEN as u64) {
+            feed(&mut ep, addr, now, i, craft(i, 1, 1200));
+        }
+        assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
+        ep.set_backlog_room(0);
+        feed(&mut ep, addr, now, 900, craft(900, 1, 1200));
+        assert_eq!(ep.node_stats().retries_waiting, 0);
+    });
+}

@@ -747,7 +747,8 @@ pub struct NodeStats {
     /// Datagrams the ledger held back.
     pub held_by_ledger: u64,
     /// Packets refused because they would raise events while the host left unrecoverable events unread or a session's
-    /// held events were full; the peer sends them again.
+    /// held events were full, or first flights refused while the application's accept queue was full; the peer sends
+    /// them again.
     pub stalled_in: u64,
     /// First flights dropped because the id they name already has four half-open sessions (also counted in
     /// `dropped_in`).
@@ -767,6 +768,8 @@ pub struct NodeStats {
     pub fragments_evicted: u64,
     /// Handshake datagrams held now (at most 4).
     pub fragments_waiting: usize,
+    /// Sessions this node accepted whose handshake is under way.
+    pub handshaking: usize,
     /// Retry packets sent: first flights the half-open cap refused, answered with an address-validation token.
     pub retries_sent: u64,
     /// Retry packets waiting to be sent (at most [`RETRIES`](crate::RETRIES)).

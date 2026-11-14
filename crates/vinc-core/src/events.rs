@@ -269,6 +269,7 @@ ep_impl! {
         slot.m.last_app = now;
         if slot.m.unauth {
             slot.m.unauth = false;
+            self.handshaking = self.handshaking.saturating_sub(1);
             if slot.m.half_open {
                 slot.m.half_open = false;
                 self.half_open = self.half_open.saturating_sub(1);

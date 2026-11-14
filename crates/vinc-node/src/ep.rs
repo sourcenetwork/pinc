@@ -33,6 +33,11 @@ pub trait Ep: Port {
     fn retries_full(&self) -> bool {
         false
     }
+    /// How many more sessions the application can take waiting to be accepted: first flights that would overfill it
+    /// are refused before any work.
+    fn set_backlog_room(&mut self, room: usize) {
+        let _ = room;
+    }
     /// The next deadline.
     fn poll_timeout(&self) -> Option<u64>;
     /// Time passed.
@@ -102,6 +107,10 @@ where
 
     fn retries_full(&self) -> bool {
         Endpoint::retries_full(self)
+    }
+
+    fn set_backlog_room(&mut self, room: usize) {
+        Endpoint::set_backlog_room(self, room);
     }
 
     fn poll_timeout(&self) -> Option<u64> {

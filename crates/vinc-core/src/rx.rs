@@ -13,7 +13,9 @@
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
 //! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
 //! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
-//! forged or replayed one included, counts like a full Initial. A first flight the cap refuses is answered with a retry
+//! forged or replayed one included, counts like a full Initial. While the handshakes under way would fill the room
+//! the host's application has left to accept sessions (`set_backlog_room`), no first flight starts one, a new holder
+//! of a held id included, as while the event queue is stalled; nothing is freed for it. A first flight the cap refuses is answered with a retry
 //! token and nothing is kept for it (see `retry`); the flight that comes back behind a token that opens for its address
 //! and id is exempt from the count as a resumption is, because the token proves the address hears this node. The token
 //! leads the flight's datagram as a retry packet, which every reading of the flight skips. A later part of a first message that arrives before
@@ -74,7 +76,9 @@ fn echoed(buf: &[u8]) -> (Option<[u8; RETRY_TOKEN_LEN]>, usize) {
     match LongHeader::parse(buf) {
         Ok((h, hlen)) if h.ty == LongType::Retry => {
             let end = hlen.saturating_add(h.body_len);
-            let token = buf.get(hlen..end).and_then(|b| <[u8; RETRY_TOKEN_LEN]>::try_from(b).ok());
+            let token = buf
+                .get(hlen..end)
+                .and_then(|b| <[u8; RETRY_TOKEN_LEN]>::try_from(b).ok());
             (token, end)
         }
         _ => (None, 0),
@@ -324,9 +328,10 @@ ep_impl! {
 
     /// A datagram for an id no session holds: it may start a server session.
     fn unrouted(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
-        // Back-pressure: a new session raises events; with the host's queue near full of events it cannot recover,
-        // none starts.
-        if self.events.stalled() {
+        // Back-pressure: a new session raises events; with the host's queue near full of events it cannot recover, or
+        // with the handshakes under way filling the room the application has left to accept, none starts, before any
+        // work and with nothing kept (the holders of the flight's id are left as they are).
+        if self.events.stalled() || self.handshaking >= self.backlog_room {
             self.counters.stalled_in += 1;
             return;
         }
@@ -395,6 +400,14 @@ ep_impl! {
         }
     }
 
+    /// How many more sessions the host's application can take waiting to be accepted. While the handshakes under way
+    /// (`NodeStats::handshaking`) would fill it, a first flight that would start a session is refused before any work
+    /// and nothing is kept for it, as with a stalled event queue (counted in `stalled_in`); the dialer sends it again
+    /// on its own timer. Every session that finishes its handshake then has a place to wait. Unlimited until set.
+    pub const fn set_backlog_room(&mut self, room: usize) {
+        self.backlog_room = room;
+    }
+
     /// Whether the ring of retries is full: a host that reads many datagrams before it sends sends first, so every
     /// first flight the half-open cap refuses can be offered one.
     #[must_use]
@@ -441,6 +454,7 @@ ep_impl! {
         slot.conn = Some(conn);
         slot.m.odcid = Some(odcid);
         slot.m.unauth = true;
+        self.handshaking += 1;
         slot.m.half_open = counted;
         if counted {
             self.half_open += 1;

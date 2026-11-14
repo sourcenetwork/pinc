@@ -500,6 +500,11 @@ where
         self.io.ep.retries_full()
     }
 
+    /// How many more sessions the application can take waiting to be accepted (see the endpoint's `set_backlog_room`).
+    pub fn set_backlog_room(&mut self, room: usize) {
+        self.io.ep.set_backlog_room(room);
+    }
+
     /// When the host should next call [`Node::handle_timeout`].
     pub fn poll_timeout(&self) -> Option<Nanos> {
         // A host asks many times between two calls that could move the answer: it is worked out once for them all.
