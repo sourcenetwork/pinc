@@ -637,6 +637,23 @@ impl CoreNet {
     }
 
     /// Run for `span` nanoseconds of virtual time.
+    /// Dial unreachable peers from node `n` until its table is full; the sessions are returned.
+    pub fn fill_table(&mut self, n: usize) -> Vec<SessionId> {
+        let mut filler = Vec::new();
+        for tag in 100u8..=255 {
+            let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[tag; 32]).unwrap();
+            let peer = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap().node_id();
+            let to: SocketAddr = ([10, 9, 0, tag], 4433).into();
+            let now = self.now;
+            match self.nodes[n].connect(now, peer, ALPN_A, to, Role::Other) {
+                Ok(rep) => filler.push(self.nodes[n].session(&rep)),
+                Err(CommandError::Full) => return filler,
+                Err(e) => panic!("filler dial failed: {e:?}"),
+            }
+        }
+        panic!("the table never filled");
+    }
+
     pub fn run_for(&mut self, span: u64) {
         let end = self.now + span;
         self.run(end, |_| false);

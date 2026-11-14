@@ -318,7 +318,6 @@ ep_impl! {
         else {
             return;
         };
-        self.subs_seen.insert(cs, ());
         let Some((child, mem)) = self.alloc_slot(false, now) else { return };
         let cfg = self.conn_config(Some(&peer));
         let open = SubOpen {
@@ -336,6 +335,7 @@ ep_impl! {
             self.retire_slot(child);
             return;
         };
+        self.subs_seen.insert(cs, ());
         let pid = self.session_id(parent);
         if let Some(s) = self.slots.get_mut(child) {
             s.conn = Some(conn);

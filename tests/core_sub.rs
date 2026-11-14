@@ -528,3 +528,70 @@ fn a_child_that_waited_for_its_parent_runs_on_the_path_the_parent_settled_on() {
         assert_eq!(st.route.map(|(_, r)| r), Some(second), "{st:?}");
     });
 }
+
+/// A parent between `a` and `b`, a sub-session open from `a` that `b` refuses once, and a short window where the answers
+/// from `b` are lost so `a` repeats the open. Returns how many sessions with `ALPN_B` `b` reports.
+fn refused_open_repeated(refuse: impl FnOnce(&mut CoreNet, usize) -> Box<dyn FnOnce(&mut CoreNet)>) -> usize {
+    let mut net = CoreNet::new(10 * MS_NS);
+    let (a, b) = (net.add(1), net.add(2));
+    net.connect_pair(a, b, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let lift = refuse(&mut net, b);
+    let silent = Rc::new(Cell::new(true));
+    let s = silent.clone();
+    let from = net.nodes[b].addr;
+    net.loss = Some(Box::new(move |f, _, _| s.get() && f == from));
+    let (child, _) = dial(&mut net, a, b, ALPN_B);
+    write_new(&mut net, a, child, b"after-refusal");
+    // The open is repeated at 75 ms, 225 ms and 525 ms after the dial; the answers are held back past the first.
+    net.run_for(150 * MS_NS);
+    assert_eq!(
+        net.nodes[b].count(|e| matches!(e, Event::Incoming { alpn, .. } if alpn.as_bytes() == ALPN_B)),
+        0,
+        "the open was served while it should be refused"
+    );
+    lift(&mut net);
+    silent.set(false);
+    net.run(net.now + 30 * SEC_NS, |n| {
+        n.nodes[b].read.values().any(|v| v == b"after-refusal")
+    });
+    net.nodes[b].count(|e| matches!(e, Event::Incoming { alpn, .. } if alpn.as_bytes() == ALPN_B))
+}
+
+#[test]
+fn a_sub_open_refused_for_a_full_table_opens_when_repeated_after_a_slot_frees() {
+    big_stack(|| {
+        let opened = refused_open_repeated(|net, b| {
+            let filler = net.fill_table(b);
+            Box::new(move |net| {
+                let now = net.now;
+                net.nodes[b]
+                    .cmd(
+                        now,
+                        Command::Close {
+                            session: filler[0],
+                            error: 0,
+                        },
+                    )
+                    .unwrap();
+                assert!(
+                    net.run(now + 10 * SEC_NS, |n| n.nodes[b].ep.node_stats().sessions
+                        < filler.len() + 1),
+                    "the closed session kept its slot"
+                );
+            })
+        });
+        assert_eq!(opened, 1, "the repeat of an open refused for a full table was ignored");
+    });
+}
+
+#[test]
+fn a_sub_open_refused_for_an_unregistered_protocol_opens_when_repeated_after_it_is_served() {
+    big_stack(|| {
+        let opened = refused_open_repeated(|net, b| {
+            net.nodes[b].ep.unregister_alpn(ALPN_B);
+            Box::new(move |net| assert!(net.nodes[b].ep.register_alpn(ALPN_B)))
+        });
+        assert_eq!(opened, 1);
+    });
+}
