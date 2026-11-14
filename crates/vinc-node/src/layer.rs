@@ -88,13 +88,15 @@ where
             | Event::StreamReadable { session, .. }
             | Event::StreamWritable { session, .. }
             | Event::StreamReset { session, .. }
-            | Event::StreamStopped { session, .. } => self.io.lsess.get(session).map(|s| s.layer),
+            | Event::StreamStopped { session, .. }
+            | Event::OpenReady { session }
+            | Event::DatagramReceived { session } => self.io.lsess.get(session).map(|s| s.layer),
             _ => None,
         }
     }
 
-    /// Handle an endpoint event of a layer's session. Lifecycle events also reach the application; the streams of a
-    /// layer never do.
+    /// Handle an endpoint event of a layer's session. Lifecycle events also reach the application; nothing else of a
+    /// layer's session does.
     pub(crate) fn on_layer_event(&mut self, now: Nanos, layer: Layer, ev: Event) {
         match ev {
             Event::Connected { session, node, .. } => {
@@ -134,6 +136,8 @@ where
                     Layer::Dtn => self.dtn_stream_gone(session, stream),
                 }
             }
+            // A layer opens its streams on its own ticks and has no use for datagrams.
+            Event::OpenReady { .. } | Event::DatagramReceived { .. } => {}
             other => self.io.emit(NodeEvent::Endpoint(other)),
         }
     }
@@ -184,16 +188,16 @@ where
     pub(crate) fn layer_up(&mut self, now: Nanos, layer: Layer, session: SessionId, peer: NodeId, incoming: bool) {
         self.io.lconn.remove(&(layer, peer));
         if !self.layer_on(layer) || self.io.revoked.contains(&peer) || self.leaving {
-            let _ = self.io.cmd(Command::Close { session, error: 0 });
+            self.io.shed(session);
             return;
         }
         if self.io.lsess.len() >= TABLE_MAX {
-            let _ = self.io.cmd(Command::Close { session, error: 0 });
+            self.io.shed(session);
             return;
         }
         if !incoming && self.io.lout.contains_key(&(layer, peer)) {
             // Both ends dialed at once, or the dial was asked for twice: one session of ours per layer and peer.
-            let _ = self.io.cmd(Command::Close { session, error: 0 });
+            self.io.shed(session);
             self.io.trace(NodeTrace::DuplicateClosed { peer: tag(&peer) });
             return;
         }

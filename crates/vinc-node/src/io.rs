@@ -169,6 +169,9 @@ pub(crate) struct Io<E: Ep, St: Store> {
     pub(crate) ldials: Vec<(Layer, NodeId)>,
     /// The dial backoff of a layer's peer: when the next dial may start, and the wait that was used.
     pub(crate) lfailed: BTreeMap<(Layer, NodeId), (Nanos, Nanos)>,
+    /// The sessions of the hub protocol or of a layer that the node closed without recording, until their `Closed`
+    /// arrives: the events of such a session still queued belong to no one.
+    pub(crate) shed: BTreeSet<SessionId>,
     pub(crate) evq: VecDeque<Event>,
     pub(crate) members: VecDeque<crate::relay::MemberNotice>,
     pub(crate) out: EventQueue,
@@ -230,6 +233,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             lconn: BTreeSet::new(),
             ldials: Vec::new(),
             lfailed: BTreeMap::new(),
+            shed: BTreeSet::new(),
             evq: VecDeque::with_capacity(64),
             members: VecDeque::new(),
             out: EventQueue::with_capacity(256),
@@ -296,6 +300,16 @@ impl<E: Ep, St: Store> Io<E, St> {
         let r = self.ep.command(self.now, c)?;
         self.evq.extend(r.events.iter().copied());
         Ok(r.value)
+    }
+
+    /// Close a session of the hub protocol or of a layer that the node cannot serve, and remember it until its close,
+    /// so no event it still has queued reaches the application.
+    // vertexia: a full set forgets the session, whose queued events the endpoint purges at its close; the set holds
+    // a session only between this call and its `Closed`, so it does not fill in practice.
+    pub(crate) fn shed(&mut self, session: SessionId) {
+        if self.cmd(Command::Close { session, error: 0 }).is_ok() && self.shed.len() < TABLE_MAX {
+            self.shed.insert(session);
+        }
     }
 
     pub(crate) fn register_stream(&mut self, session: SessionId, stream: StreamId) {

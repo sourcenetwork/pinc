@@ -6,9 +6,14 @@
 //! at a hub, may adopt the member's older live session. Every other event is the application's and passes through
 //! unchanged.
 //!
-//! Invariants: a hub-protocol session produces no stream event for the application, not even a stop of its stream (its
-//! lifecycle events pass); a frame is parsed only from bytes of a session of its peer; a
-//! stream that breaks the framing is reset and forgotten, never guessed at.
+//! A session belongs to the hub logic, to a layer or to the application by its protocol id, and the stream, the
+//! room-to-open and the datagram events of a hub or layer session reach only that owner, whether or not the node
+//! recorded the session; the lifecycle events and the ones the host must answer (a key request, a path or sleep
+//! change) reach the application as well.
+//!
+//! Invariants: a hub-protocol session produces no stream, room or datagram event for the application, not even a stop
+//! of its stream; a frame is parsed only from bytes of a session of its peer; a stream that breaks the framing is
+//! reset and forgotten, never guessed at.
 
 use vinc_core::{Command, EndReason, Event, PathState, Role, SessionId};
 use vinc_membership::NodeId;
@@ -30,6 +35,20 @@ const fn close_code(r: EndReason) -> u64 {
     match r {
         EndReason::Transport(TransportClose::Peer { error } | TransportClose::Violation { error }) => error,
         _ => 0,
+    }
+}
+
+/// The session of a stream, room-to-open or datagram event: the events a session's owner alone may see.
+const fn data_session(ev: &Event) -> Option<SessionId> {
+    match *ev {
+        Event::StreamOpened { session, .. }
+        | Event::StreamReadable { session, .. }
+        | Event::StreamWritable { session, .. }
+        | Event::StreamReset { session, .. }
+        | Event::StreamStopped { session, .. }
+        | Event::OpenReady { session }
+        | Event::DatagramReceived { session } => Some(session),
+        _ => None,
     }
 }
 
@@ -63,6 +82,12 @@ where
 
     fn on_event(&mut self, now: Nanos, ev: Event) {
         self.conn.observe(now, &mut self.io.ep, &ev);
+        if let Event::Closed { session, .. } = ev {
+            self.io.shed.remove(&session);
+        }
+        if data_session(&ev).is_some_and(|s| self.io.shed.contains(&s)) {
+            return;
+        }
         if let Some(layer) = self.event_layer(&ev) {
             self.on_layer_event(now, layer, ev);
             return;
@@ -118,8 +143,10 @@ where
             Event::StreamStopped { session, stream, .. } if self.io.sess.contains_key(&session) => {
                 self.hub_stream_stopped(session, stream);
             }
-            // The hub streams are opened by the duty pass and the dial, which try again on their own.
-            Event::OpenReady { session } if self.io.sess.contains_key(&session) => {}
+            // The hub streams are opened by the duty pass and the dial, which try again on their own, and the hub
+            // protocol has no use for datagrams.
+            Event::OpenReady { session } | Event::DatagramReceived { session }
+                if self.io.sess.contains_key(&session) => {}
             Event::AcpCheck { check, node, .. } if self.io.revoked.contains(&node.bytes) => {
                 // A revoked peer is refused here; the application never hears of the check.
                 let _ = self.io.cmd(Command::AcpAnswer { check, allow: false });
@@ -147,7 +174,7 @@ where
         if self.io.sess.len() < TABLE_MAX || self.io.sess.contains_key(&session) {
             return true;
         }
-        let _ = self.io.cmd(Command::Close { session, error: 0 });
+        self.io.shed(session);
         false
     }
 
@@ -271,7 +298,7 @@ where
                 },
             );
         }
-        let _ = self.io.cmd(Command::Close { session, error: 0 });
+        self.io.shed(session);
         self.io.trace(NodeTrace::DuplicateClosed { peer: tag(peer) });
     }
 
