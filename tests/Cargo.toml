@@ -1110,3 +1110,7 @@ path = "layers_dtn_save.rs"
 [[test]]
 name = "trace_heap"
 path = "trace_heap.rs"
+
+[[test]]
+name = "trace_keepalive"
+path = "trace_keepalive.rs"

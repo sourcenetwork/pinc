@@ -100,6 +100,10 @@ import Vinc.CoreQueueRun
 import Vinc.CoreHeld
 import Vinc.CoreHeldThm
 import Vinc.TraceOrphan
+import Vinc.CoreKeepalive
+import Vinc.CoreKeepaliveThm
+import Vinc.CoreKeepaliveStable
+import Vinc.TraceKeepalive
 import Vinc.CoreHalfOpen
 import Vinc.CoreHalfOpenThm
 import Vinc.TraceHalfOpen

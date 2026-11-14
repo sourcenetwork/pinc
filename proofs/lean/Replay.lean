@@ -21,6 +21,7 @@ import Vinc.TraceFramePack
 import Vinc.TraceExt
 import Vinc.TraceOrphan
 import Vinc.TraceCoreTable
+import Vinc.TraceKeepalive
 import Vinc.TraceHalfOpen
 import Vinc.TraceHeap
 import Vinc.TraceCoreState
@@ -534,6 +535,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
         if TraceExt.isTag t then
           -- Extension frame events (`txex`, written by `trace_ext`): the registry and the dispatch of real frames.
           match TraceExt.replayEvent j with
+          | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceKeepalive.isTag t then
+          -- Keepalive schedule events (`cka`, written by `trace_keepalive`): the plan and the standby due.
+          match TraceKeepalive.replayEvent j with
           | .ok _ =>
             count := count + 1
             continue
