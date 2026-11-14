@@ -28,6 +28,11 @@ pub trait Ep: Port {
     fn events_waiting(&self) -> bool {
         true
     }
+    /// Whether the endpoint's ring of retries is full, so the host should send before it reads more. An endpoint that
+    /// cannot tell says no.
+    fn retries_full(&self) -> bool {
+        false
+    }
     /// The next deadline.
     fn poll_timeout(&self) -> Option<u64>;
     /// Time passed.
@@ -93,6 +98,10 @@ where
 
     fn events_waiting(&self) -> bool {
         Endpoint::events_waiting(self)
+    }
+
+    fn retries_full(&self) -> bool {
+        Endpoint::retries_full(self)
     }
 
     fn poll_timeout(&self) -> Option<u64> {

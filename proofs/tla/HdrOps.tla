@@ -60,9 +60,9 @@ PutVarint(cap, w, v) ==
             ELSE IF e.kind = "overflow" THEN [w EXCEPT !.err = "VarintOverflow"]
             ELSE [w EXCEPT !.err = "BufferTooSmall", !.n = e.needed]
 
-(* ---- the long header: h = [ty (0 Handshake, 1 ZeroRtt), dcid, scid, bl (a word)] ---- *)
+(* ---- the long header: h = [ty (0 Handshake, 1 ZeroRtt, 2 Retry), dcid, scid, bl (a word)] ---- *)
 HeaderLen(h) == 1 + 1 + 1 + Len(h.dcid) + 1 + Len(h.scid) + V!EncodedLen(h.bl)
-(* the low four bits write chooses, -1 for a pn_len that does not fit the type *)
+(* the low four bits write chooses, -1 for a pn_len that does not fit the type (Handshake and Retry: 0 only) *)
 LowBits(ty, pnLen) ==
     IF ty = 1 THEN (IF pnLen = 2 THEN pnLen - 1 ELSE -1) ELSE (IF pnLen = 0 THEN 0 ELSE -1)
 FirstLong(ty, low) == 192 + 16 * ty + low
@@ -102,7 +102,7 @@ LongParse(p) ==
     IF Len(p) = 0 THEN Err("Truncated", 1)
     ELSE LET first == p[1]
          IN IF first \div 64 # 3 THEN Err("Form", 0)
-            ELSE IF (first \div 16) % 4 > 1 THEN Err("LongType", 0)
+            ELSE IF (first \div 16) % 4 = 3 THEN Err("LongType", 0)
             ELSE LET ty == (first \div 16) % 4
                  IN IF ty # 1 /\ first % 16 # 0 THEN Err("Reserved", 0)
                     ELSE IF Len(p) < 2 THEN Err("Truncated", 1)

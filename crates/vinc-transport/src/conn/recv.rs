@@ -23,7 +23,9 @@ use super::event::{Drop, Ev, code};
 use super::path::RJ_THIN_GAP;
 use super::{Connection, Phase};
 use crate::frame::{Ack, Frame, FrameIter};
-use crate::packet::{Header, LongHeader, LongType, Packet, PacketError, decode_pn, open, packets, unprotect_header};
+use crate::packet::{
+    Header, LongHeader, LongType, Packet, PacketError, RETRY_TOKEN_LEN, decode_pn, open, packets, unprotect_header,
+};
 use crate::recovery::PathKind;
 use crate::recovery::{RxOutcome, RxPacket};
 use crate::stream::{StreamError, StreamSource};
@@ -196,6 +198,14 @@ conn_impl! {
         self.life.clock = now;
         let (mut ok, mut first_err) = (false, None);
         for pkt in packets(dgram, self.cfg.cid_len) {
+            // The retry token a dialer puts in front of its flight is for the endpoint, not for a responder's session:
+            // skipped, so it neither takes the datagram nor hides what the flight's own packets decide.
+            if !self.client
+                && let Ok(p) = &pkt
+                && matches!(p.header, Header::Long { header, .. } if header.ty == LongType::Retry)
+            {
+                continue;
+            }
             let r = match pkt {
                 Ok(mut pkt) => self.on_packet(env, stores.as_deref_mut(), &mut ctx, &mut pkt),
                 Err(e) => Err(Drop::Malformed(e)),
@@ -231,6 +241,7 @@ conn_impl! {
                     }
                     self.on_zero_rtt(env, ctx, pn_off, pkt.bytes)
                 }
+                LongType::Retry => self.on_retry(&header, header_len, pkt.bytes),
             },
             Header::Short { dcid } => {
                 if !self.cids.is_local(&dcid) {
@@ -288,6 +299,27 @@ conn_impl! {
     /// session did not decide anything about it; the endpoint hands such a datagram to every session of an id.
     pub fn take_handshake_part(&mut self) -> bool {
         core::mem::take(&mut self.life.hs_part)
+    }
+
+    /// A retry token. A dialing side that has heard nothing from the peer yet keeps it when the ids are the ones its
+    /// first flight used (the newest token replaces an older one), sends its first flight again at once and puts the
+    /// token in front of it from then on. Anything else, the token a dialer echoes to a responder included, is not for
+    /// this connection.
+    fn on_retry(&mut self, header: &LongHeader, header_len: usize, bytes: &[u8]) -> Result<(), Drop> {
+        let ours = self.client
+            && self.phase == Phase::Handshaking
+            && self.cids.first_remote().is_none()
+            && header.dcid == self.cids.first_local()
+            && header.scid == self.odcid;
+        let token = bytes.get(header_len..).and_then(|b| <[u8; RETRY_TOKEN_LEN]>::try_from(b).ok());
+        match token {
+            Some(t) if ours => {
+                self.retry_token = Some(t);
+                self.hs.on_retry();
+                Ok(())
+            }
+            _ => Err(Drop::Empty),
+        }
     }
 
     /// Keep a packet that arrived before the keys to open it, for [`drain_early`](Self::drain_early).

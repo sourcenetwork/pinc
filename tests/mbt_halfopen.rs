@@ -210,9 +210,10 @@ fn run(file: &str, case: &MbtCase, init: &Json, full: u64, short: u64, step: u64
                         admitted,
                         half_open,
                         resume,
+                        token,
                     } = rec.event
                     {
-                        decisions.push((admitted, half_open, resume));
+                        decisions.push((admitted, half_open, resume | token));
                     }
                 }
                 if matches!(kind, 1 | 2 | 6) {

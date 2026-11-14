@@ -734,7 +734,8 @@ pub struct NodeStats {
     pub datagrams_in: u64,
     /// Datagrams sent.
     pub datagrams_out: u64,
-    /// Datagrams dropped before any connection (unroutable, too large, floors, the half-open cap, a full table).
+    /// Datagrams dropped before any connection (unroutable, too large, floors, the half-open cap, a full table). A first
+    /// flight the cap refuses counts here whether or not a retry answers it.
     pub dropped_in: u64,
     /// Datagrams a connection produced that could not leave: the path they were for is gone, or the buffer offered
     /// for a datagram kept from the last call is shorter than it.
@@ -766,6 +767,14 @@ pub struct NodeStats {
     pub fragments_evicted: u64,
     /// Handshake datagrams held now (at most 4).
     pub fragments_waiting: usize,
+    /// Retry packets sent: first flights the half-open cap refused, answered with an address-validation token.
+    pub retries_sent: u64,
+    /// Retry packets waiting to be sent (at most [`RETRIES`](crate::RETRIES)).
+    pub retries_waiting: usize,
+    /// Retries not offered because the ring was full; the dialer resends on its own timer.
+    pub retries_dropped: u64,
+    /// Sessions admitted past the half-open cap on a retry token that opened.
+    pub token_admitted: u64,
 }
 
 /// A peer in the round-trip table.

@@ -495,6 +495,11 @@ where
         self.settle(now);
     }
 
+    /// Whether the endpoint's ring of retries is full: send what waits before reading more datagrams.
+    pub fn retries_full(&self) -> bool {
+        self.io.ep.retries_full()
+    }
+
     /// When the host should next call [`Node::handle_timeout`].
     pub fn poll_timeout(&self) -> Option<Nanos> {
         // A host asks many times between two calls that could move the answer: it is worked out once for them all.

@@ -14,7 +14,10 @@
 (* peer is still unauthenticated, whether it counts against the cap, and   *)
 (* the deadline it holds in the heap, NoDl for none) and count, the        *)
 (* endpoint's counter of counted sessions. A message type is its first     *)
-(* byte: 1 a full Initial, 2 a short Initial, 6 a resumption Hello.        *)
+(* byte: 1 a full Initial, 2 a short Initial, 6 a resumption Hello. A      *)
+(* flight is exempt from the cap when a resumption Hello's ticket opens or *)
+(* it comes behind a retry token that opens for its address and id         *)
+(* (retry.rs); ring is how many retries wait to be sent.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -27,16 +30,20 @@ MinOf(S) == CHOOSE x \in S : \A y \in S : x <= y
 \* unrouted: the size floor of each first message type; any other type starts nothing
 First(kind) == kind \in {1, 2, 6}
 Floor(kind, full, short) == CASE kind = 1 -> full [] kind = 2 -> short [] OTHER -> 0
-\* admitted: the datagram meets the floor, and fewer than max sessions are counted unless the Hello's ticket opens
-\* (resume: the Hello is whole in its first packet, names a registered protocol and an unused ticket that opens)
+\* admitted: the datagram meets the floor, and fewer than max sessions are counted unless the flight is exempt
+\* (resume: the Hello is whole in its first packet, names a registered protocol and an unused ticket that opens; or a
+\* retry token that opens for the flight's address and id comes in front of it)
 Admit(count, kind, len, resume, max, full, short) ==
     len >= Floor(kind, full, short) /\ (resume \/ count < max)
 \* offer: a first flight for an id that held sessions hold, each of which refused it as a first flight other than its
 \* own, goes to the admission above only while the id has fewer than maxh holders (MAX_CANDIDATES); else it is dropped
 \* and counted (holders_refused). Nothing an arrival does frees a session: the flight gets a session beside the holders.
 Room(held, maxh) == held < maxh
+\* a first flight the cap refused although it met its floor and its id had room for it: the retry ring takes a retry
+\* while it has room (rq entries); nothing else is kept. A flight the holder limit refused gets none (offer drops it).
+Offer(ring, rq) == IF ring < rq THEN ring + 1 ELSE ring
 
-\* accept: the slot becomes an unauthenticated session made now, counted unless it resumes
+\* accept: the slot becomes an unauthenticated session made now, counted unless it is exempt (a ticket or a token)
 Make(e, j, now, resume) ==
     [slots |-> [e.slots EXCEPT ![j] = [use |-> TRUE, created |-> now, unauth |-> TRUE,
                                        counted |-> ~resume, dl |-> NoDl]],

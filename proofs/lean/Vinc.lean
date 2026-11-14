@@ -106,6 +106,8 @@ import Vinc.CoreHeld
 import Vinc.CoreHeldThm
 import Vinc.CoreExtIn
 import Vinc.CoreExtInThm
+import Vinc.CoreRetry
+import Vinc.CoreRetryThm
 import Vinc.CoreReach
 import Vinc.CoreReachThm
 import Vinc.TraceOrphan

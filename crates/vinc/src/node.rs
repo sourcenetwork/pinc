@@ -146,6 +146,9 @@ macro_rules! define {
             fn events_waiting(&self) -> bool {
                 match self { $(Self::$v(e) => NodeEp::events_waiting(&**e),)+ }
             }
+            fn retries_full(&self) -> bool {
+                match self { $(Self::$v(e) => NodeEp::retries_full(&**e),)+ }
+            }
             fn poll_timeout(&self) -> Option<u64> {
                 match self { $(Self::$v(e) => NodeEp::poll_timeout(&**e),)+ }
             }

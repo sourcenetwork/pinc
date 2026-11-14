@@ -7,10 +7,13 @@
 //! Between connections the endpoint batches for segmentation offload: after a datagram, the next sessions' datagrams
 //! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for another
 //! destination is kept for the next call. The session just served moves to the back of its queue, so each gets a turn.
+//! The retries the half-open cap offered (`retry`) leave after the kept datagram and before any session's, one per call,
+//! through the same gate.
 //!
 //! Invariants: one call returns one destination and a run of equal-size segments (the last may be shorter); no
 //! datagram leaves without passing the ledger; the buffer never holds more than the configured number of segments;
-//! the kept datagram is the only extra buffer and is sent first on the next call.
+//! the kept datagram and the retry ring are the only extra buffers, and the kept datagram is sent first on the next
+//! call.
 
 use core::net::SocketAddr;
 
@@ -40,6 +43,13 @@ ep_impl! {
             && let Some(t) = self.send_stash(now, out, &m)
         {
             return Some(t);
+        }
+        while let Some((local, remote, len)) = self.retries.pop(out) {
+            if self.gate(now, remote, len, 1) {
+                self.counters.retries_sent += 1;
+                self.counters.datagrams_out += 1;
+                return Some(Transmit { local, remote, len, segment_size: len });
+            }
         }
         loop {
             let (q, i) = self.dirty_front()?;

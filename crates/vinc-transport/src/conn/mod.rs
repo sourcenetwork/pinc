@@ -192,6 +192,9 @@ pub struct Connection<
     next_pn: u64,
     started: u64,
     odcid: ConnId,
+    /// The token a responder at its half-open cap sent this dialing side; it leads every datagram of the first flight
+    /// until the peer answers.
+    retry_token: Option<[u8; crate::packet::RETRY_TOKEN_LEN]>,
     /// Where the handshake message a dialing side's machine took last came from: the path, the source id and the
     /// arrival time of the datagram that completed it. Acted on only once the session is established.
     reply_from: Option<(PathId, ConnId, u64)>,
@@ -299,6 +302,7 @@ where
             next_pn: 0,
             started: now,
             odcid,
+            retry_token: None,
             reply_from: None,
             resumed: false,
             confirmed: false,

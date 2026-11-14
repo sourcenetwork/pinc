@@ -18,6 +18,9 @@ pub enum LongType {
     Handshake = 0,
     /// A packet under the early keys, carrying a packet number and frames.
     ZeroRtt = 1,
+    /// An address-validation token: a responder at its half-open cap sends one instead of a session, and the dialer
+    /// puts it in front of its first flight again (see [`RETRY_TOKEN_LEN`](super::RETRY_TOKEN_LEN)).
+    Retry = 2,
 }
 
 impl LongType {
@@ -25,6 +28,7 @@ impl LongType {
         match bits {
             0 => Some(Self::Handshake),
             1 => Some(Self::ZeroRtt),
+            2 => Some(Self::Retry),
             _ => None,
         }
     }
@@ -66,7 +70,7 @@ impl LongHeader {
             LongType::ZeroRtt if pn_len == PN_LEN_BASE => u8::try_from(pn_len - 1).unwrap_or(0),
             LongType::ZeroRtt => return Err(PacketError::PnLength),
             _ if pn_len == 0 => 0,
-            LongType::Handshake => return Err(PacketError::PnLength),
+            LongType::Handshake | LongType::Retry => return Err(PacketError::PnLength),
         };
         // `header_len` counts ten bytes for a body length no varint holds, so the room check would pass and the
         // length would be refused only after the bytes before it were written.

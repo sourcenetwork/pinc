@@ -50,7 +50,8 @@ Bare(s) == [s EXCEPT !.dl = NoDl]
 
 \* the decisions of one call, in the order the endpoint recorded them, from the state before it: st = [e, ok, adm],
 \* adm the last admission <<admitted, resume>> (<<>> once a session took it); a step is <<code, a, b, c>>: 0 an
-\* admission <<0, admitted, count, resume>> (Ev.n sessions held the datagram's id), 1 a session made in slot a (b = 1
+\* admission <<0, admitted, count, resume>> (resume: the cap exempts it, a ticket or a retry token that opens; Ev.n
+\* sessions held the datagram's id), 1 a session made in slot a (b = 1
 \* for a dial), 2 established, 3 expired, 4 freed
 RECURSIVE Fold(_, _, _)
 Fold(st, steps, k) ==

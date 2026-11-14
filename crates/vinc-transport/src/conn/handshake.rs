@@ -584,6 +584,17 @@ impl Handshake {
         f
     }
 
+    /// A responder at its half-open cap answered a dialing side's first flight with a retry token: the flight goes again
+    /// now, behind the token, and the peer counts as heard. The resend schedule stays as it was. Returns whether a flight
+    /// was queued.
+    pub(crate) const fn on_retry(&mut self) -> bool {
+        if !self.client || !matches!(self.stage, Stage::Open) {
+            return false;
+        }
+        self.unheard = 0;
+        self.replay()
+    }
+
     /// Queue the flight in the buffer again from its first byte, for another path. Returns whether there is one.
     pub(crate) const fn replay(&mut self) -> bool {
         if !self.tx_live || self.tx_len == 0 {

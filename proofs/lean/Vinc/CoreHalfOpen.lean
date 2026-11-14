@@ -72,9 +72,9 @@ def isFirst (kind : Nat) : Bool := kind == 1 || kind == 2 || kind == 6
 /-- The size floor of a first message type. -/
 def floor (p : P) (kind : Nat) : Nat := if kind = 1 then p.full else if kind = 2 then p.short else 0
 
-/-- The datagram meets the floor, and fewer than `max` sessions are counted unless the Hello's ticket opens (`resume`:
-the Hello is whole in its first packet, names a registered protocol and an unused ticket of this node that opens for
-it). -/
+/-- The datagram meets the floor, and fewer than `max` sessions are counted unless the flight is exempt (`resume`: the
+Hello is whole in its first packet, names a registered protocol and an unused ticket of this node that opens for it; or
+a retry token that opens for the flight's address and id comes in front of it, `retry.rs`). -/
 def admits (p : P) (count kind len : Nat) (resume : Bool) : Bool :=
   decide (floor p kind ≤ len) && (resume || decide (count < p.max))
 

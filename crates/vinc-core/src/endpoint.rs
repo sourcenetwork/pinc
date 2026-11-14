@@ -132,6 +132,9 @@ pub(crate) struct Counters {
     pub(crate) stalled_in: u64,
     pub(crate) holders_refused: u64,
     pub(crate) retired: u64,
+    pub(crate) retries_sent: u64,
+    pub(crate) retries_dropped: u64,
+    pub(crate) token_admitted: u64,
 }
 
 /// The endpoint; see the module docs.
@@ -208,6 +211,8 @@ pub struct Endpoint<
     pub(crate) capture: Option<Events>,
     pub(crate) scratch: [u8; MAX_DATAGRAM],
     pub(crate) orphans: crate::orphan::Orphans,
+    /// The retry key and the retries waiting to leave (see `retry`).
+    pub(crate) retries: crate::retry::Retries,
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
     pub(crate) udp_heard: Option<u64>,
@@ -463,6 +468,7 @@ ep_impl! {
             capture: None,
             scratch: [0; MAX_DATAGRAM],
             orphans: crate::orphan::Orphans::new(),
+            retries: crate::retry::Retries::new(),
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
             udp_heard: None,
@@ -597,6 +603,10 @@ ep_impl! {
             fragments_expired: self.orphans.counts.expired,
             fragments_evicted: self.orphans.counts.evicted,
             fragments_waiting: self.orphans.waiting(),
+            retries_sent: self.counters.retries_sent,
+            retries_waiting: self.retries.waiting(),
+            retries_dropped: self.counters.retries_dropped,
+            token_admitted: self.counters.token_admitted,
         }
     }
 

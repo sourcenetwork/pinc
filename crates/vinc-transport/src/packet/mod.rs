@@ -11,8 +11,10 @@
 //! 0b11TT_xxxx | version(1) | dcid_len(1) dcid | scid_len(1) scid | length(varint) | body(length)
 //! ```
 //!
-//! `TT` is 0 for [`LongType::Handshake`] and 1 for [`LongType::ZeroRtt`]; 2 and 3 are errors. The version is [`VERSION`],
-//! one byte. Each connection id is 0 to 20 bytes. `xxxx` is zero for a handshake packet. For a 0-RTT packet bits 3
+//! `TT` is 0 for [`LongType::Handshake`], 1 for [`LongType::ZeroRtt`] and 2 for [`LongType::Retry`]; 3 is an error. The version is [`VERSION`],
+//! one byte. Each connection id is 0 to 20 bytes. `xxxx` is zero for a handshake or retry packet. A retry body is the
+//! [`RETRY_TOKEN_LEN`]-byte token, unprotected: from a responder it names the dialer's source id as `dcid` and the id
+//! the dialer chose as `scid`; from a dialer it leads a first-flight datagram with the ids of its handshake packets. For a 0-RTT packet bits 3
 //! and 2 are zero and bits 1 and 0 hold the packet-number length minus one, always the base width; the body is the
 //! packet number, the sealed frames and the 16-byte tag, so `length` counts the packet number too. The low four bits
 //! of the first byte and the packet number of a 0-RTT packet are header protected (mask `0x0f`).
@@ -52,6 +54,8 @@ pub use number::{MAX_PN, PN_LEN_BASE, PN_LEN_WIDE, WIDE_WINDOW, decode_pn, encod
 pub use protect::{
     Opened, PnLayout, SAMPLE_SKIP, Unprotected, open, protect_header, sample_at, seal, unprotect_header,
 };
+/// The length of a retry token: when it was made (seconds, 4 bytes) and its 16-byte tag.
+pub const RETRY_TOKEN_LEN: usize = 20;
 /// The version the long header carries: one byte, the handshake's version.
 pub const VERSION: u8 = vinc_security::VERSION;
 pub use vinc_security::ids::{ConnId, MAX_CID_LEN};

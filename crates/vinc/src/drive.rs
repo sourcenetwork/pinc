@@ -344,6 +344,11 @@ impl<H: Hosted> Shared<H> {
                     DRAIN
                 };
                 for _ in 0..burst {
+                    // A full ring of retries is sent before more first flights are read, so none goes unanswered.
+                    if self.lock().is_some_and(|core| core.node.retries_full()) {
+                        progressed = true;
+                        break;
+                    }
                     if rx.is_none() {
                         let b = spare.take().unwrap_or_else(|| self.rx_buf());
                         rx.set(Some(recv_owned(&self.host, b)));

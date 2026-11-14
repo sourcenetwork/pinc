@@ -13,7 +13,10 @@
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
 //! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
 //! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
-//! forged or replayed one included, counts like a full Initial. A later part of a first message that arrives before
+//! forged or replayed one included, counts like a full Initial. A first flight the cap refuses is answered with a retry
+//! token and nothing is kept for it (see `retry`); the flight that comes back behind a token that opens for its address
+//! and id is exempt from the count as a resumption is, because the token proves the address hears this node. The token
+//! leads the flight's datagram as a retry packet, which every reading of the flight skips. A later part of a first message that arrives before
 //! the part that starts it is held for a moment in the endpoint's small table of such datagrams (see `orphan`) and
 //! handed to the session once the first part has created it.
 //!
@@ -27,7 +30,7 @@ use vinc_security::message::{FULL_INITIAL_MIN, MAX_MESSAGE_LEN, MessageType, SHO
 use vinc_security::responder::hello_opens_ticket;
 use vinc_security::{ConnId, Env, Failure};
 use vinc_transport::conn::{Connection, Drop, PathId, ServerParams};
-use vinc_transport::packet::{LongHeader, LongType, short_dcid};
+use vinc_transport::packet::{LongHeader, LongType, RETRY_TOKEN_LEN, short_dcid};
 use vinc_wire::Reader;
 
 use crate::endpoint::{CID_LEN, MAX_DATAGRAM, env, ep_impl};
@@ -46,6 +49,8 @@ pub const HALF_OPEN_LIFE: u64 = 30_000_000_000;
 /// What the first packet of an unroutable datagram says.
 struct First<'a> {
     odcid: ConnId,
+    /// The dialer's own id.
+    scid: ConnId,
     /// The length of the whole message.
     total: u64,
     kind: MessageType,
@@ -63,8 +68,23 @@ fn peek(buf: &[u8]) -> Option<(ConnId, bool)> {
     }
 }
 
-/// The destination id and first message type of a long Handshake packet that starts a message.
+/// The token a dialer puts in front of its first flight after a retry, if the datagram starts with one, and where the
+/// flight's own packets start (0 when there is no retry packet).
+fn echoed(buf: &[u8]) -> (Option<[u8; RETRY_TOKEN_LEN]>, usize) {
+    match LongHeader::parse(buf) {
+        Ok((h, hlen)) if h.ty == LongType::Retry => {
+            let end = hlen.saturating_add(h.body_len);
+            let token = buf.get(hlen..end).and_then(|b| <[u8; RETRY_TOKEN_LEN]>::try_from(b).ok());
+            (token, end)
+        }
+        _ => (None, 0),
+    }
+}
+
+/// The destination id and first message type of a long Handshake packet that starts a message (behind a retry token
+/// if one leads the datagram).
 fn classify(buf: &[u8]) -> Option<First<'_>> {
+    let buf = buf.get(echoed(buf).1..)?;
     let (h, hlen) = LongHeader::parse(buf).ok()?;
     if h.ty != LongType::Handshake {
         return None;
@@ -81,6 +101,7 @@ fn classify(buf: &[u8]) -> Option<First<'_>> {
     let message = usize::try_from(total).ok().and_then(|t| data.get(..t));
     Some(First {
         odcid: h.dcid,
+        scid: h.scid,
         total,
         kind,
         message,
@@ -88,8 +109,9 @@ fn classify(buf: &[u8]) -> Option<First<'_>> {
 }
 
 /// The destination id and message length of a long Handshake packet that carries a part of a message other than its
-/// start.
+/// start (behind a retry token if one leads the datagram).
 fn later_part(buf: &[u8]) -> Option<(ConnId, u64)> {
+    let buf = buf.get(echoed(buf).1..)?;
     let (h, hlen) = LongHeader::parse(buf).ok()?;
     if h.ty != LongType::Handshake {
         return None;
@@ -325,21 +347,35 @@ ep_impl! {
             }
         };
         let resume = first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
-        let admitted = buf.len() >= floor && (resume || self.half_open < MAX_HALF_OPEN);
+        let floor_met = buf.len() >= floor;
+        let token = echoed(buf).0;
+        let token = !resume && floor_met && token.is_some_and(|t| self.retries.opens(now, &remote, &first.odcid, &t));
+        let admitted = floor_met && (resume || token || self.half_open < MAX_HALF_OPEN);
         trace!(self, now, HalfOpen {
             admitted: u64::from(admitted),
             half_open: self.half_open as u64,
             resume: u64::from(resume),
+            token: u64::from(token),
         });
         if !admitted {
+            // At the cap, a flight that meets its floor gets a retry token instead of a session: nothing is kept for
+            // its peer but the retry in a bounded ring, sent through the ledger. A flight that comes here as another
+            // holder of an id (see `offer`) is answered the same way: its token, bound to the same id, comes back to
+            // `offer`, which hands it here again only while the id has room for another holder.
+            if floor_met && self.retries.keyed(&mut self.drbg) {
+                let queued = self.retries.push(now, local, remote, first.scid, first.odcid);
+                self.counters.retries_dropped += u64::from(!queued);
+                trace!(self, now, Retry { queued: u64::from(queued), waiting: self.retries.waiting() as u64 });
+            }
             self.counters.dropped_in += 1;
             return;
         }
         let (odcid, total) = (first.odcid, first.total);
-        let Some(i) = self.accept(now, odcid, resume) else {
+        let Some(i) = self.accept(now, odcid, !resume && !token) else {
             self.counters.dropped_in += 1;
             return;
         };
+        self.counters.token_admitted += u64::from(token);
         // A drop reason is counted by the connection itself.
         let _ = self.deliver(i, now, local, remote, buf);
         self.replay_held(i, now, odcid, total, remote);
@@ -359,6 +395,13 @@ ep_impl! {
         }
     }
 
+    /// Whether the ring of retries is full: a host that reads many datagrams before it sends sends first, so every
+    /// first flight the half-open cap refuses can be offered one.
+    #[must_use]
+    pub const fn retries_full(&self) -> bool {
+        self.retries.full()
+    }
+
     /// Whether a resumption Hello names an unused ticket that opens, so it needs no half-open slot.
     fn opens_ticket(&self, now: u64, message: Option<&[u8]>) -> bool {
         message.is_some_and(|m| {
@@ -367,10 +410,11 @@ ep_impl! {
         })
     }
 
-    /// Create the server session for a first handshake message.
+    /// Create the server session for a first handshake message; `counted` when it counts against the half-open cap
+    /// (neither a resumption nor a flight behind a retry token).
     // Out of line, as `free_slot`: a whole connection moves here.
     #[inline(never)]
-    fn accept(&mut self, now: u64, odcid: ConnId, resume: bool) -> Option<usize> {
+    fn accept(&mut self, now: u64, odcid: ConnId, counted: bool) -> Option<usize> {
         let alpns = self.alpn_list()?;
         let (i, mem) = self.alloc_slot(false, now)?;
         let cfg = self.conn_config(None);
@@ -397,8 +441,8 @@ ep_impl! {
         slot.conn = Some(conn);
         slot.m.odcid = Some(odcid);
         slot.m.unauth = true;
-        slot.m.half_open = !resume;
-        if !resume {
+        slot.m.half_open = counted;
+        if counted {
             self.half_open += 1;
         }
         self.sync_cids(i, true);
