@@ -93,7 +93,7 @@ theorem countOf_replicate : ∀ k, countOf (List.replicate k none) = 0
 most its life after its creation. -/
 def good (p : P) : Option Sl → Prop
   | some s => (s.counted = true → s.unauth = true) ∧
-              (s.unauth = true → ∃ d, s.dl = some d ∧ d ≤ s.created + p.life)
+              (s.unauth = true → ∃ d, s.dl = some d ∧ d ≤ s.created + s.life)
   | none => True
 
 /-- What holds of the table between calls. -/
@@ -113,7 +113,7 @@ theorem Inv.counted_unauth {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h 
   exact this.1 hc
 
 theorem Inv.deadline {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h : at? e.slots j = some s)
-    (hu : s.unauth = true) : ∃ d, s.dl = some d ∧ d ≤ s.created + p.life := by
+    (hu : s.unauth = true) : ∃ d, s.dl = some d ∧ d ≤ s.created + s.life := by
   have := hI.good j
   rw [h] at this
   exact this.2 hu
@@ -147,7 +147,7 @@ theorem cnt_le_count {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h : at? 
 /-! ## The steps -/
 
 theorem settle_eq (p : P) (e : E) (j d : Nat) (s : Sl) (h : at? e.slots j = some s) :
-    settle p e j d = { slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + p.life)
+    settle p e j d = { slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + s.life)
                                                                        else d) }), count := e.count } := by
   simp [settle, h]
 
@@ -202,10 +202,39 @@ theorem release_inv {p : P} {e : E} (hI : Inv p e) (j : Nat) : Inv p (release e 
 
 /-- A dial takes a free slot. -/
 theorem dial_inv {p : P} {e : E} (hI : Inv p e) {j : Nat} (hj : j < e.slots.length) (hf : at? e.slots j = none)
-    (now d : Nat) : Inv p (settle p (dial e j now) j d) := by
+    (now d : Nat) : Inv p (settle p (dial e j now p.life) j d) := by
   apply settle_inv
   refine inv_put hI hj ?_ e.count (by rw [hf]; simp [cnt]) hI.capped
   exact ⟨fun hc => by simp at hc, fun hu => by simp at hu⟩
+
+/-- An answer, then the deadline its connection asks for: the session lives `h`, its deadline at most that away. -/
+theorem answer_settle_eq (p : P) (e : E) (j h d : Nat) (s : Sl) (hs : at? e.slots j = some s) :
+    settle p (answer e j h) j d =
+      { slots := put e.slots j (some { s with life := h, dl := some (if s.unauth then min d (s.created + h) else d) })
+        count := e.count } := by
+  have hlt := at?_lt _ _ _ hs
+  have ha : at? (answer e j h).slots j = some { s with life := h } := by
+    simp only [answer, hs]
+    exact at?_put_eq _ _ _ hlt
+  rw [settle_eq p _ j d _ ha]
+  simp [answer, hs, put_put]
+
+/-- An answer keeps the invariant once the session's deadline is settled again. -/
+theorem answer_inv {p : P} {e : E} (hI : Inv p e) (j h d : Nat) : Inv p (settle p (answer e j h) j d) := by
+  cases hs : at? e.slots j with
+  | none =>
+    have : answer e j h = e := by simp [answer, hs]
+    rw [this]
+    exact settle_inv hI j d
+  | some s =>
+    rw [answer_settle_eq p e j h d s hs]
+    have hg := hI.good j
+    rw [hs] at hg
+    refine inv_put hI (at?_lt _ _ _ hs) ?_ e.count (by rw [hs]; simp [cnt]) hI.capped
+    refine ⟨hg.1, fun hu => ?_⟩
+    simp only at hu
+    simp only [hu, ite_true]
+    exact ⟨_, rfl, Nat.min_le_right _ _⟩
 
 /-! ## Slots and the count, step by step -/
 
@@ -301,7 +330,7 @@ theorem arrive_made_eq (p : P) (e : E) (stalled : Bool) (held kind len now : Nat
     stalled = false ∧ isFirst kind = true ∧ room p held = true ∧ admits p e.count kind len resume = true ∧
     j < e.slots.length ∧ at? e.slots j = none ∧
     (arrive p e stalled held kind len now resume take d).2 =
-      { slots := put e.slots j (some { created := now, unauth := true, counted := !resume,
+      { slots := put e.slots j (some { created := now, unauth := true, counted := !resume, life := p.life,
                                        dl := some (min d (now + p.life)) })
         count := if resume then e.count else e.count + 1 } := by
   unfold arrive at h ⊢
@@ -320,8 +349,8 @@ theorem arrive_made_eq (p : P) (e : E) (stalled : Bool) (held kind len now : Nat
               subst h
               refine ⟨rfl, rfl, rfl, rfl, hf.1, hf.2, ?_⟩
               simp only [hf, and_self, ite_true]
-              have hm : at? (make e k now resume).slots k =
-                  some { created := now, unauth := true, counted := !resume, dl := none } := at?_put_eq _ _ _ hf.1
+              have hm : at? (make e k now resume p.life).slots k =
+                  some { created := now, unauth := true, counted := !resume, life := p.life, dl := none } := at?_put_eq _ _ _ hf.1
               rw [settle_eq p _ k d _ hm]
               simp [make, put_put]
             · simp [hk, hr, ha, hf] at h
@@ -331,7 +360,7 @@ theorem arrive_made_eq (p : P) (e : E) (stalled : Bool) (held kind len now : Nat
 theorem arrive_made (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : Bool) (take : Option Nat)
     (d j : Nat) (h : (arrive p e stalled held kind len now resume take d).1 = .made j) :
     at? (arrive p e stalled held kind len now resume take d).2.slots j =
-      some { created := now, unauth := true, counted := !resume, dl := some (min d (now + p.life)) } ∧
+      some { created := now, unauth := true, counted := !resume, life := p.life, dl := some (min d (now + p.life)) } ∧
     ∀ i, i ≠ j → at? (arrive p e stalled held kind len now resume take d).2.slots i = at? e.slots i := by
   obtain ⟨_, _, _, _, hlt, _, heq⟩ := arrive_made_eq p e stalled held kind len now resume take d j h
   rw [heq]
@@ -413,7 +442,7 @@ theorem earliest_le : ∀ (l : List (Option Sl)) (j : Nat) (s : Sl) (d : Nat), a
 
 /-- `poll_timeout` is never later than the end of any unauthenticated session. -/
 theorem poll_le {p : P} {e : E} (hI : Inv p e) {j : Nat} {s : Sl} (h : at? e.slots j = some s)
-    (hu : s.unauth = true) : ∃ t, poll e.slots false = some t ∧ t ≤ s.created + p.life := by
+    (hu : s.unauth = true) : ∃ t, poll e.slots false = some t ∧ t ≤ s.created + s.life := by
   obtain ⟨d, hd, hle⟩ := hI.deadline h hu
   obtain ⟨t, ht, htd⟩ := earliest_le e.slots j s d h hd
   exact ⟨t, ht, Nat.le_trans htd hle⟩
@@ -425,16 +454,16 @@ theorem poll_stalled (l : List (Option Sl)) : poll l true = none := rfl
 
 /-- Two slots hold the same session, up to its deadline. -/
 def keep : Option Sl → Option Sl → Prop
-  | some s, some t => t.created = s.created ∧ t.unauth = s.unauth ∧ t.counted = s.counted
+  | some s, some t => t.created = s.created ∧ t.unauth = s.unauth ∧ t.counted = s.counted ∧ t.life = s.life
   | none, none => True
   | _, _ => False
 
 theorem keep_refl : ∀ a, keep a a
-  | some _ => ⟨rfl, rfl, rfl⟩
+  | some _ => ⟨rfl, rfl, rfl, rfl⟩
   | none => trivial
 
 theorem keep_trans : ∀ a b c, keep a b → keep b c → keep a c
-  | some _, some _, some _, ⟨h1, h2, h3⟩, ⟨g1, g2, g3⟩ => ⟨g1.trans h1, g2.trans h2, g3.trans h3⟩
+  | some _, some _, some _, ⟨h1, h2, h3, h4⟩, ⟨g1, g2, g3, g4⟩ => ⟨g1.trans h1, g2.trans h2, g3.trans h3, g4.trans h4⟩
   | none, none, none, _, _ => trivial
   | some _, none, _, h, _ => h.elim
   | none, some _, _, h, _ => h.elim
@@ -442,13 +471,13 @@ theorem keep_trans : ∀ a b c, keep a b → keep b c → keep a c
   | none, none, some _, _, h => h.elim
 
 theorem keep_expired (p : P) (now : Nat) : ∀ a b, keep a b → expired p now b = expired p now a
-  | some _, some _, ⟨h1, h2, _⟩ => by simp [expired, h1, h2]
+  | some _, some _, ⟨h1, h2, _, h4⟩ => by simp [expired, h1, h2, h4]
   | none, none, _ => rfl
   | some _, none, h => h.elim
   | none, some _, h => h.elim
 
 theorem keep_cnt : ∀ a b, keep a b → cnt b = cnt a
-  | some _, some _, ⟨_, _, h3⟩ => by simp [cnt, h3]
+  | some _, some _, ⟨_, _, h3, _⟩ => by simp [cnt, h3]
   | none, none, _ => rfl
   | some _, none, h => h.elim
   | none, some _, h => h.elim
@@ -574,7 +603,7 @@ theorem runTimer_spec (p : P) (now : Nat) (d : Option Nat) (e : E) (j : Nat) (s 
     | some d =>
       dsimp only
       -- the deadline the connection asks for, kept within the session's life, then moved past now
-      let v := if s.unauth then min d (s.created + p.life) else d
+      let v := if s.unauth then min d (s.created + s.life) else d
       let w := if v ≤ now then now + 1 else v
       have hset : settle p (clearDl e j) j d =
           { slots := put e.slots j (some { s with dl := some v }), count := e.count } := by
@@ -593,11 +622,11 @@ theorem runTimer_spec (p : P) (now : Nat) (d : Option Nat) (e : E) (j : Nat) (s 
         · simp only [hv, ite_false, w]
           exact hset
       rw [hb]
-      have hnot : ¬ (s.unauth = true ∧ s.created + p.life ≤ now) := by
+      have hnot : ¬ (s.unauth = true ∧ s.created + s.life ≤ now) := by
         intro hh
         apply hx
         simp [expired, hh.1, hh.2]
-      refine ⟨_, _, rfl, ?_, by simp [cnt], ?_, Or.inr ⟨rfl, rfl, rfl⟩⟩
+      refine ⟨_, _, rfl, ?_, by simp [cnt], ?_, Or.inr ⟨rfl, rfl, rfl, rfl⟩⟩
       · simp only [dueAt]
         by_cases hv : v ≤ now
         · simp [w, hv]
@@ -605,12 +634,12 @@ theorem runTimer_spec (p : P) (now : Nat) (d : Option Nat) (e : E) (j : Nat) (s 
       · intro hcu
         refine ⟨hcu, fun hu => ⟨w, rfl, ?_⟩⟩
         have hu' : s.unauth = true := hu
-        have hv : v ≤ s.created + p.life := by
+        have hv : v ≤ s.created + s.life := by
           simp only [v, hu', ite_true]
           exact Nat.min_le_right _ _
         by_cases hvn : v ≤ now
         · simp only [w, hvn, ite_true]
-          have : ¬ s.created + p.life ≤ now := fun hh => hnot ⟨hu, hh⟩
+          have : ¬ s.created + s.life ≤ now := fun hh => hnot ⟨hu, hh⟩
           omega
         · simp only [w, hvn, ite_false]
           exact hv
@@ -763,6 +792,7 @@ inductive Op where
   | est (j d : Nat)
   | close (j : Nat)
   | touch (j d : Nat)
+  | answer (j d : Nat)
   | dial (j now d : Nat)
   | timer (now : Nat) (ds : Nat → Option Nat) (fuel : Nat)
 
@@ -771,7 +801,8 @@ def step (p : P) (e : E) : Op → E
   | .est j d => settle p (establish e j) j d
   | .close j => release e j
   | .touch j d => settle p e j d
-  | .dial j now d => if j < e.slots.length ∧ at? e.slots j = none then settle p (dial e j now) j d else e
+  | .answer j d => settle p (answer e j p.hold) j d
+  | .dial j now d => if j < e.slots.length ∧ at? e.slots j = none then settle p (dial e j now p.life) j d else e
   | .timer now ds fuel => loop p now ds fuel e
 
 theorem step_inv {p : P} {e : E} (hI : Inv p e) : ∀ op, Inv p (step p e op)
@@ -779,6 +810,7 @@ theorem step_inv {p : P} {e : E} (hI : Inv p e) : ∀ op, Inv p (step p e op)
   | .est j d => settle_inv (establish_inv hI j) j d
   | .close j => release_inv hI j
   | .touch j d => settle_inv hI j d
+  | .answer j d => answer_inv hI j p.hold d
   | .dial j now d => by
     simp only [step]
     split
@@ -825,6 +857,18 @@ theorem establish_stays (e : E) (j i : Nat) : stays (at? e.slots i) (at? (establ
     exact ⟨_, establish_slot e i s hs, rfl⟩
   · exact ⟨s, by rw [establish_other e i j hij]; exact hs, rfl⟩
 
+theorem answer_stays (e : E) (j h i : Nat) : stays (at? e.slots i) (at? (answer e j h).slots i) := by
+  intro s hs
+  cases hj : at? e.slots j with
+  | none => exact ⟨s, by simp only [answer, hj]; exact hs, rfl⟩
+  | some t =>
+    by_cases hij : i = j
+    · subst hij
+      rw [hj] at hs
+      obtain rfl : t = s := Option.some.inj hs
+      exact ⟨{ t with life := h }, by simp only [answer, hj]; exact at?_put_eq _ _ _ (at?_lt _ _ _ hj), rfl⟩
+    · exact ⟨s, by simp only [answer, hj]; rw [at?_put_ne _ _ _ _ hij]; exact hs, rfl⟩
+
 /-- A session that holds slot `i`, the first holder of its id included, is still there after a call, made at the same
 time, unless the call is a close of that slot, or a timer call at which the session was at or past its end or its
 connection ended: no arrival, establishment, other input or dial frees or replaces it. -/
@@ -848,6 +892,10 @@ theorem step_left {p : P} {e : E} (hI : Inv p e) (op : Op) {i : Nat} {s : Sl} (h
     left
     simp only [step]
     exact settle_stays p e j d i s h
+  | answer j d =>
+    left
+    simp only [step]
+    exact stays_trans (answer_stays e j p.hold i) (settle_stays p _ j d i) s h
   | dial j now d =>
     left
     simp only [step]
@@ -857,8 +905,8 @@ theorem step_left {p : P} {e : E} (hI : Inv p e) (op : Op) {i : Nat} {s : Sl} (h
         intro hij
         rw [hij, hf.2] at h
         simp at h
-      have hd : at? (dial e j now).slots i = at? e.slots i := at?_put_ne _ _ _ _ hij
-      exact settle_stays p (dial e j now) j d i s (hd.trans h)
+      have hd : at? (dial e j now p.life).slots i = at? e.slots i := at?_put_ne _ _ _ _ hij
+      exact settle_stays p (dial e j now p.life) j d i s (hd.trans h)
     · exact ⟨s, h, rfl⟩
   | timer now ds fuel =>
     rcases loop_left hI now ds fuel i with hk | ⟨_, hw⟩
@@ -869,7 +917,7 @@ theorem step_left {p : P} {e : E} (hI : Inv p e) (op : Op) {i : Nat} {s : Sl} (h
       | none => rw [hb] at hk; simp [keep] at hk
       | some t =>
         rw [hb] at hk
-        obtain ⟨hc, _, _⟩ := hk
+        obtain ⟨hc, _, _, _⟩ := hk
         exact ⟨t, rfl, hc⟩
     · right; right
       rw [h] at hw

@@ -25,29 +25,32 @@ def isTag (t : String) : Bool := t == "coho"
 
 structure W where
   e : E := {}
-  p : P := { max := 0, life := 0, full := 0, short := 0, holders := 0 }
+  p : P := { max := 0, life := 0, hold := 0, full := 0, short := 0, holders := 0 }
 
-/-- A recorded slot: `[slot, in use, created, unauthenticated, counted, has a deadline, the deadline]`. -/
+/-- A recorded slot: `[slot, in use, created, unauthenticated, counted, has a deadline, the deadline, its life]`. -/
 def slotOf (r : List Nat) : Except String (Nat × Option Sl) :=
   match r with
-  | [j, use, created, unauth, counted, hasDl, dl] =>
+  | [j, use, created, unauth, counted, hasDl, dl, life] =>
     if use == 0 then pure (j, none)
-    else pure (j, some { created, unauth := unauth == 1, counted := counted == 1,
+    else pure (j, some { created, unauth := unauth == 1, counted := counted == 1, life,
                          dl := if hasDl == 1 then some dl else none })
-  | _ => throw "a slot has not seven numbers"
+  | _ => throw "a slot has not eight numbers"
 
 def listOf (j : J) (k : String) : Except String (List J) := do
   match (← field j k).arr? with
   | some a => pure a.toList
   | none => throw s!"expected the list {k}"
 
+/-- A slot without what is the endpoint's own: the deadline, and the life (it rises to the hold when the session
+answers). -/
 def bare : Option Sl → Option Sl
-  | some s => some { s with dl := none }
+  | some s => some { s with dl := none, life := 0 }
   | none => none
 
 /-- `good` as a test. -/
 def goodB (p : P) : Option Sl → Bool
-  | some s => (!s.counted || s.unauth) && (!s.unauth || s.dl.any (· ≤ s.created + p.life))
+  | some s => (!s.counted || s.unauth) && (!s.unauth || s.dl.any (· ≤ s.created + s.life))
+              && (s.life == p.life || s.life == p.hold)
   | none => true
 
 structure St where
@@ -70,11 +73,11 @@ def stepOf (p : P) (op : String) (now kind len n : Nat) (st : St) (s : List Nat)
     pure { st with adm := some (a == 1, r == 1) }
   | [1, j, 1, _] =>
     check (j < st.e.slots.length && at? st.e.slots j == none) "a dial took a slot in use"
-    pure { st with e := dial st.e j now }
+    pure { st with e := dial st.e j now p.life }
   | [1, j, _, _] =>
     check (j < st.e.slots.length && at? st.e.slots j == none) "a session took a slot in use"
     match st.adm with
-    | some (true, r) => pure { e := make st.e j now r, adm := none }
+    | some (true, r) => pure { e := make st.e j now r p.life, adm := none }
     | _ => throw "a session made without an admission"
   | [2, j, _, _] =>
     check (at? st.e.slots j).isSome "a free slot was established"
@@ -105,8 +108,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
   match ← strF j "op" with
   | "init" =>
     let k ← natF j "k"
-    pure { e := init k, p := { max := ← natF j "max", life := ← natF j "life", full := ← natF j "full",
-                               short := ← natF j "short", holders := ← natF j "holders" } }
+    pure { e := init k, p := { max := ← natF j "max", life := ← natF j "life", hold := ← natF j "hold",
+                               full := ← natF j "full", short := ← natF j "short", holders := ← natF j "holders" } }
   | op =>
     check (op == "dgram" || op == "timer" || op == "other") s!"unknown half-open op {op}"
     let p := w.p

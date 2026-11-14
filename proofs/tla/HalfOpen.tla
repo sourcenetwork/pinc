@@ -26,10 +26,11 @@
 (*  - the count never passes MAX (Capped) and is the number of counted     *)
 (*    sessions (Exact); a counted session is unauthenticated and in use, a *)
 (*    free slot holds nothing (Shape);                                     *)
-(*  - an unauthenticated session holds a deadline at most LIFE after its   *)
-(*    creation (DeadlineBound), so poll_timeout is never later than the    *)
-(*    end of any unauthenticated session, and none while the event queue   *)
-(*    is stalled (PollBound);                                              *)
+(*  - an unauthenticated session holds a deadline at most its own life     *)
+(*    after its creation, and that life is never above HOLD: LIFE, or HOLD *)
+(*    once it answered as a responder (DeadlineBound), so poll_timeout is  *)
+(*    never later than the end of any unauthenticated session, and none    *)
+(*    while the event queue is stalled (PollBound);                        *)
 (*  - a first flight that makes no session (a stalled queue, no room left  *)
 (*    to accept, a type that starts nothing, the floor or the cap, no      *)
 (*    protocol, no free slot, a failed construction) changes nothing       *)
@@ -57,9 +58,12 @@
 (* BUG_LE admits while count <= MAX and while the id has at most MAXH      *)
 (* holders: the witnesses HalfOpen_le and HalfOpen_le_held break Capped    *)
 (* and HeldBound. STRICT expires only past the end: the witness            *)
-(* HalfOpen_strict breaks TimerRight. SUPERSEDE is the rule before #365: a *)
-(* first flight that the one holder of its id refused as a first flight    *)
-(* other than its own freed that holder and went to the admission; the     *)
+(* HalfOpen_strict breaks TimerRight. BUG_HOLD lets an answer hold the     *)
+(* session past HOLD: the witness HalfOpen_hold breaks DeadlineBound.      *)
+(* HalfOpen_answer has sessions answer and live HOLD > LIFE. SUPERSEDE is  *)
+(* the rule before #365: a first flight that the one holder of its id      *)
+(* refused as a first flight other than its own freed that holder and      *)
+(* went to the admission; the                                              *)
 (* witness HalfOpen_supersede breaks HolderKept. HalfOpen_reach and        *)
 (* HalfOpen_holders are reachability witnesses: a resumption is admitted   *)
 (* while the count is at the cap; an id gets MAXH holders.                 *)
@@ -85,8 +89,8 @@
 (* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS K, MAX, LIFE, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE,
-          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF
+CONSTANTS K, MAX, LIFE, HOLD, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE,
+          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF, BUG_HOLD
 VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
           halfok, resok
 \* the two history flags of the half rule: only Arrive changes them
@@ -152,7 +156,7 @@ Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOL
            free == {k \in Slots : ~e0.slots[k].use}
            made == adm /\ alpn /\ ~fail /\ free # {}
            j == MinOf(free)
-       IN /\ e' = IF made THEN Settle(Make(e0, j, t, resume), j, d, LIFE) ELSE e0
+       IN /\ e' = IF made THEN Settle(Make(e0, j, t, resume, LIFE), j, d) ELSE e0
           /\ ids' = IF made THEN [ids0 EXCEPT ![j] = x] ELSE ids0
           /\ refused' = (refused /\ (made \/ e' = e))
           /\ resumed' = (resumed /\ (made => e'.slots[j].counted = ~resume)
@@ -175,7 +179,7 @@ Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOL
 \* Incoming yet)
 Est == \E j \in Slots, d \in 1..(TMAX + 1) :
     /\ e.slots[j].use /\ e.slots[j].unauth
-    /\ e' = Settle(Establish(e, j), j, d, LIFE)
+    /\ e' = Settle(Establish(e, j), j, d)
     /\ left' = (left /\ Lost(e, e') \subseteq {j} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
     /\ ow' = IF BUG_EST THEN ow \ {j} ELSE ow
@@ -194,14 +198,25 @@ Close == \E j \in Slots :
 \* any other input to a session moves its own deadline
 Touch == \E j \in Slots, d \in 1..(TMAX + 1) :
     /\ e.slots[j].use
-    /\ e' = Settle(e, j, d, LIFE)
+    /\ e' = Settle(e, j, d)
+    /\ left' = (left /\ Lost(e, e') = {} /\ Won(e, e') = {})
+    /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
+    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>> /\ UNCHANGED bk
+
+\* an unauthenticated session answers as a responder (its flight went out): it lives HOLD from now on, and its
+\* connection's own deadline moves past every time checked (handshake.rs: the connect limit becomes the hold); BUG_HOLD
+\* lets it hold past HOLD
+AnswerA == \E j \in Slots : LET d == TMAX + 1 IN
+    /\ HOLD > LIFE
+    /\ e.slots[j].use /\ e.slots[j].unauth /\ e.slots[j].life = LIFE
+    /\ e' = Settle(Answer(e, j, IF BUG_HOLD THEN HOLD + 1 ELSE HOLD), j, d)
     /\ left' = (left /\ Lost(e, e') = {} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
     /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>> /\ UNCHANGED bk
 
 DialA == \E t \in 0..TMAX, j \in Slots, d \in 1..(TMAX + 1) :
     /\ ~e.slots[j].use
-    /\ e' = Settle(Dial(e, j, t), j, d, LIFE)
+    /\ e' = Settle(Dial(e, j, t, LIFE), j, d)
     /\ left' = (left /\ Lost(e, e') = {} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
     /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>> /\ UNCHANGED bk
@@ -212,13 +227,13 @@ Stall == stalled' = ~stalled /\ UNCHANGED <<e, ids, refused, left, timed, resume
 \* a timer call at t: each due connection's next deadline (or its end), and after how many pops the queue stalls
 Timer == \E t \in 0..TMAX : \E ds \in [Slots -> {t, t + 2, Gone}], cut \in 0..(K + 1) :
     IF stalled THEN UNCHANGED vars
-    ELSE /\ e' = Loop(e, t, ds, LIFE, STRICT, K, IF cut > K THEN K ELSE cut)
+    ELSE /\ e' = Loop(e, t, ds, STRICT, K, IF cut > K THEN K ELSE cut)
          /\ ids' = [j \in Slots |-> IF e'.slots[j].use THEN ids[j] ELSE 0]
          /\ stalled' = (cut <= K)
-         /\ timed' = (timed /\ (~stalled' => \A j \in Slots : ~Expired(e'.slots[j], t, LIFE)))
+         /\ timed' = (timed /\ (~stalled' => \A j \in Slots : ~Expired(e'.slots[j], t)))
          /\ left' = (left /\ Won(e, e') = {}
-                          /\ \A j \in Lost(e, e') : Expired(e.slots[j], t, LIFE) \/ ds[j] = Gone)
-         /\ kept' = (kept /\ \A j \in Ended(e, e', ids, ids') : Expired(e.slots[j], t, LIFE) \/ ds[j] = Gone)
+                          /\ \A j \in Lost(e, e') : Expired(e.slots[j], t) \/ ds[j] = Gone)
+         /\ kept' = (kept /\ \A j \in Ended(e, e', ids, ids') : Expired(e.slots[j], t) \/ ds[j] = Gone)
          /\ EndOwed(e, Freed(e, e'))
          /\ UNCHANGED <<refused, resumed, atcap, q, busy, heldok, roomref>> /\ UNCHANGED hk
 
@@ -253,7 +268,7 @@ Accept ==
     /\ q' = q - 1
     /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>> /\ UNCHANGED hk
 
-Next == Arrive \/ Est \/ Close \/ Touch \/ DialA \/ Stall \/ Timer \/ Take \/ TakeGone \/ SubUp \/ Accept
+Next == Arrive \/ Est \/ Close \/ Touch \/ DialA \/ Stall \/ Timer \/ Take \/ TakeGone \/ SubUp \/ Accept \/ AnswerA
 Spec == Init /\ [][Next]_vars
 
 Capped == e.count <= MAX
@@ -261,10 +276,11 @@ Exact == e.count = CountOf(e.slots)
 Shape == \A j \in Slots : /\ e.slots[j].counted => e.slots[j].unauth /\ e.slots[j].use
                           /\ ~e.slots[j].use => e.slots[j] = Free
 DeadlineBound == \A j \in Slots :
-    e.slots[j].use /\ e.slots[j].unauth => e.slots[j].dl # NoDl /\ e.slots[j].dl <= End(e.slots[j], LIFE)
+    e.slots[j].use /\ e.slots[j].unauth => /\ e.slots[j].dl # NoDl /\ e.slots[j].dl <= End(e.slots[j])
+                                          /\ e.slots[j].life \in {LIFE, HOLD}
 PollBound == /\ stalled => Poll(e.slots, stalled) = NoDl
              /\ \A j \in Slots : e.slots[j].use /\ e.slots[j].unauth /\ ~stalled =>
-                    Poll(e.slots, stalled) # NoDl /\ Poll(e.slots, stalled) <= End(e.slots[j], LIFE)
+                    Poll(e.slots, stalled) # NoDl /\ Poll(e.slots, stalled) <= End(e.slots[j])
 RefusedRight == refused
 LeftRight == left
 TimerRight == timed

@@ -14,11 +14,13 @@ heap (`timers.rs` `settle`), `poll_timeout`, and the timer loop (`timers.rs` `ha
 namespace Vinc.CoreHalfOpen
 
 /-- A session's half-open bookkeeping: when it was made, whether its peer is still unauthenticated, whether it counts
-against the cap, and the deadline it holds in the endpoint's heap. -/
+against the cap, how long it lives while unauthenticated (the base life, or the hold once it answered as a responder:
+`slot.rs` `half_open_life`), and the deadline it holds in the endpoint's heap. -/
 structure Sl where
   created : Nat
   unauth : Bool
   counted : Bool
+  life : Nat
   dl : Option Nat
   deriving BEq, DecidableEq, Repr
 
@@ -28,11 +30,12 @@ structure E where
   count : Nat := 0
   deriving BEq, DecidableEq, Repr
 
-/-- The constants: the cap, the life of an unauthenticated session, the floors of a full and a short Initial, and the
-most sessions that may hold one id (`rx.rs` `MAX_CANDIDATES`). -/
+/-- The constants: the cap, the life of an unauthenticated session, its hold once it answered, the floors of a full and
+a short Initial, and the most sessions that may hold one id (`rx.rs` `MAX_CANDIDATES`). -/
 structure P where
   max : Nat
   life : Nat
+  hold : Nat
   full : Nat
   short : Nat
   holders : Nat
@@ -85,14 +88,20 @@ def room (p : P) (held : Nat) : Bool := decide (held < p.holders)
 
 /-! ## The steps -/
 
-/-- `accept`: slot `j` becomes an unauthenticated session made `now`, counted unless it resumes. -/
-def make (e : E) (j now : Nat) (resume : Bool) : E :=
-  { slots := put e.slots j (some { created := now, unauth := true, counted := !resume, dl := none })
+/-- `accept`: slot `j` becomes an unauthenticated session made `now`, counted unless it resumes, living `life`. -/
+def make (e : E) (j now : Nat) (resume : Bool) (life : Nat) : E :=
+  { slots := put e.slots j (some { created := now, unauth := true, counted := !resume, life := life, dl := none })
     count := if resume then e.count else e.count + 1 }
 
 /-- A dial of this node (`commands.rs` `connect`): a session that is neither unauthenticated nor counted. -/
-def dial (e : E) (j now : Nat) : E :=
-  { e with slots := put e.slots j (some { created := now, unauth := false, counted := false, dl := none }) }
+def dial (e : E) (j now : Nat) (life : Nat) : E :=
+  { e with slots := put e.slots j (some { created := now, unauth := false, counted := false, life, dl := none }) }
+
+/-- The session in slot `j` answered as a responder (its flight went out): it lives `hold` from now on. -/
+def answer (e : E) (j hold : Nat) : E :=
+  match at? e.slots j with
+  | some s => { e with slots := put e.slots j (some { s with life := hold }) }
+  | none => e
 
 /-- `on_established`: the peer is authenticated; a counted session leaves the count. -/
 def establish (e : E) (j : Nat) : E :=
@@ -107,16 +116,16 @@ def release (e : E) (j : Nat) : E :=
   | some s => { slots := put e.slots j none, count := if s.counted then e.count - 1 else e.count }
   | none => e
 
-/-- `run_timer`'s test: an unauthenticated session at or past the end of its life. -/
-def expired (p : P) (now : Nat) : Option Sl → Bool
-  | some s => s.unauth && decide (s.created + p.life ≤ now)
+/-- `run_timer`'s test: an unauthenticated session at or past the end of its own life. -/
+def expired (_p : P) (now : Nat) : Option Sl → Bool
+  | some s => s.unauth && decide (s.created + s.life ≤ now)
   | none => false
 
 /-- `settle`: the session's deadline is the earliest of its own `d` and, while it is unauthenticated, the end of its
 life. -/
 def settle (p : P) (e : E) (j d : Nat) : E :=
   match at? e.slots j with
-  | some s => { e with slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + p.life)
+  | some s => { e with slots := put e.slots j (some { s with dl := some (if s.unauth then min d (s.created + s.life)
                                                                           else d) }) }
   | none => e
 
@@ -164,7 +173,7 @@ def arrive (p : P) (e : E) (stalled : Bool) (held kind len now : Nat) (resume : 
   else if !room p held then (.crowded, e)
   else if !admits p e.count kind len resume then (.refused, e)
   else match take with
-    | some j => if j < e.slots.length ∧ at? e.slots j = none then (.made j, settle p (make e j now resume) j d)
+    | some j => if j < e.slots.length ∧ at? e.slots j = none then (.made j, settle p (make e j now resume p.life) j d)
                 else (.failed, e)
     | none => (.failed, e)
 

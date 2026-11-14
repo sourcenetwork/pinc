@@ -93,7 +93,7 @@ pub use config::{
 #[cfg(feature = "trace")]
 pub use drive::EarlyView;
 pub use event::{CloseReason, Drop, Event, EventTable, code};
-pub use handshake::{Machines, connect_limit};
+pub use handshake::{Machines, RESPONDER_HOLD, connect_limit, handshake_limit};
 pub use held::{Held, Shared};
 pub use hooks::{SubOpen, SubWait};
 #[cfg(feature = "trace")]
@@ -253,6 +253,7 @@ where
             remembered_rtt: cfg.remembered_rtt,
             node_rtt: cfg.node_rtt,
             node_peak_rtt: cfg.node_peak_rtt,
+            hold: false,
         };
         let Tables { sent, events, machines } = tables;
         let hs = Handshake::new(machine, machines, &mut pool, now, timing)?;

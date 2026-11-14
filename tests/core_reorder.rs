@@ -224,7 +224,7 @@ fn a_forged_part_given_to_a_new_session_does_not_stop_the_real_dial() {
             (2, 1, 0),
             "the forged session was freed"
         );
-        net.run_for(vinc_core::HALF_OPEN_LIFE + SEC_NS);
+        net.run_for(vinc_core::HALF_OPEN_HOLD + SEC_NS);
         let s = net.nodes[b].ep.node_stats();
         assert_eq!((s.sessions, s.half_open, s.fragments_waiting), (1, 0, 0));
         assert!(balanced(&s));

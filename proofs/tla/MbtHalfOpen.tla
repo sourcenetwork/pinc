@@ -58,8 +58,9 @@ vars == <<g, count>>
 
 INSTANCE HalfOpenOps
 
-\* a session made at time t: unauthenticated, counted, no deadline the model reads
-Born(t) == [use |-> TRUE, created |-> t, unauth |-> TRUE, counted |-> TRUE, dl |-> NoDl]
+\* a session made at time t: unauthenticated, counted, living the base life (a forged first flight is never answered),
+\* no deadline the model reads
+Born(t) == [use |-> TRUE, created |-> t, unauth |-> TRUE, counted |-> TRUE, life |-> LIFE, dl |-> NoDl]
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 \* g is a sequence: the number of sessions made at time t is g[t + 1] (TLC prints a function on 1..n as a sequence)
 RECURSIVE Sum(_, _)
@@ -73,7 +74,7 @@ CallFlood(t, kind, len, ok) ==
     /\ g' = IF ok THEN [g EXCEPT ![t + 1] = @ + 1] ELSE g
     /\ count' = IF ok THEN count + 1 ELSE count
 CallTimer(t) ==
-    LET h == [i \in 1..Len(g) |-> IF Expired(Born(i - 1), t, LIFE) THEN 0 ELSE g[i]]
+    LET h == [i \in 1..Len(g) |-> IF Expired(Born(i - 1), t) THEN 0 ELSE g[i]]
     IN g' = h /\ count' = Sum(h, HT)
 
 Next == \/ \E t \in HT, kind \in KINDS, len \in LENS, ok \in BOOLEAN : CallFlood(t, kind, len, ok)

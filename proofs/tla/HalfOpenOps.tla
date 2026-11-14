@@ -10,16 +10,19 @@
 (* recorded calls of the real endpoint.                                    *)
 (*                                                                         *)
 (* The state e: slots (a function from the slot numbers, each Free or a    *)
-(* session [created, unauth, counted, dl]: when it was made, whether its   *)
-(* peer is still unauthenticated, whether it counts against the cap, and   *)
-(* the deadline it holds in the heap, NoDl for none) and count, the        *)
-(* endpoint's counter of counted sessions. A message type is its first     *)
-(* byte: 1 a full Initial, 2 a short Initial, 6 a resumption Hello.        *)
+(* session [created, unauth, counted, life, dl]: when it was made, whether *)
+(* its peer is still unauthenticated, whether it counts against the cap,   *)
+(* how long it lives while unauthenticated (the base life, or the hold     *)
+(* once it answered as a responder: rx.rs HALF_OPEN_LIFE, HALF_OPEN_HOLD,  *)
+(* slot.rs half_open_life), and the deadline it holds in the heap, NoDl    *)
+(* for none) and count, the endpoint's counter of counted sessions. A     *)
+(* message type is its first byte: 1 a full Initial, 2 a short Initial, 6  *)
+(* a resumption Hello.                                                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
 NoDl == -1
-Free == [use |-> FALSE, created |-> 0, unauth |-> FALSE, counted |-> FALSE, dl |-> NoDl]
+Free == [use |-> FALSE, created |-> 0, unauth |-> FALSE, counted |-> FALSE, life |-> 0, dl |-> NoDl]
 Table0(k) == [j \in 0..(k - 1) |-> Free]
 Min2(a, b) == IF a <= b THEN a ELSE b
 MinOf(S) == CHOOSE x \in S : \A y \in S : x <= y
@@ -36,14 +39,17 @@ Admit(count, kind, len, resume, max, full, short) ==
 \* and counted (holders_refused). Nothing an arrival does frees a session: the flight gets a session beside the holders.
 Room(held, maxh) == held < maxh
 
-\* accept: the slot becomes an unauthenticated session made now, counted unless it resumes
-Make(e, j, now, resume) ==
+\* accept: the slot becomes an unauthenticated session made now, counted unless it resumes, living the base life
+Make(e, j, now, resume, life) ==
     [slots |-> [e.slots EXCEPT ![j] = [use |-> TRUE, created |-> now, unauth |-> TRUE,
-                                       counted |-> ~resume, dl |-> NoDl]],
+                                       counted |-> ~resume, life |-> life, dl |-> NoDl]],
      count |-> IF resume THEN e.count ELSE e.count + 1]
 \* a dial of this node (commands.rs connect): a session that is neither unauthenticated nor counted
-Dial(e, j, now) ==
-    [e EXCEPT !.slots[j] = [use |-> TRUE, created |-> now, unauth |-> FALSE, counted |-> FALSE, dl |-> NoDl]]
+Dial(e, j, now, life) ==
+    [e EXCEPT !.slots[j] = [use |-> TRUE, created |-> now, unauth |-> FALSE, counted |-> FALSE, life |-> life,
+                            dl |-> NoDl]]
+\* the session answered as a responder (its flight went out): it lives the hold from now on (slot.rs half_open_life)
+Answer(e, j, hold) == [e EXCEPT !.slots[j].life = hold]
 \* on_established: the peer is authenticated; a counted session leaves the count
 Establish(e, j) ==
     [slots |-> [e.slots EXCEPT ![j].unauth = FALSE, ![j].counted = FALSE],
@@ -53,12 +59,12 @@ Release(e, j) ==
     [slots |-> [e.slots EXCEPT ![j] = Free],
      count |-> IF e.slots[j].counted THEN e.count - 1 ELSE e.count]
 
-\* the end of an unauthenticated session's life, and run_timer's test for it
-End(s, life) == s.created + life
-Expired(s, now, life) == s.use /\ s.unauth /\ now >= End(s, life)
+\* the end of an unauthenticated session's life (its own: the base or the hold), and run_timer's test for it
+End(s) == s.created + s.life
+Expired(s, now) == s.use /\ s.unauth /\ now >= End(s)
 \* settle: the session's deadline is the earliest of its own d and, while it is unauthenticated, the end of its life
-Settle(e, j, d, life) ==
-    [e EXCEPT !.slots[j].dl = IF e.slots[j].unauth THEN Min2(d, End(e.slots[j], life)) ELSE d]
+Settle(e, j, d) ==
+    [e EXCEPT !.slots[j].dl = IF e.slots[j].unauth THEN Min2(d, End(e.slots[j])) ELSE d]
 \* poll_timeout: the earliest deadline in the heap, none while the event queue is stalled
 Dls(sl) == {sl[j].dl : j \in {x \in DOMAIN sl : sl[x].dl # NoDl}}
 Poll(sl, stalled) == IF stalled \/ Dls(sl) = {} THEN NoDl ELSE MinOf(Dls(sl))
@@ -72,15 +78,15 @@ Gone == -2
 Due(sl, now) == {j \in DOMAIN sl : sl[j].dl # NoDl /\ sl[j].dl <= now}
 Pop(sl, now) == CHOOSE j \in Due(sl, now) :
                     \A x \in Due(sl, now) : sl[j].dl < sl[x].dl \/ (sl[j].dl = sl[x].dl /\ j <= x)
-ExpiredAt(s, now, life, strict) == IF strict THEN s.use /\ s.unauth /\ now > End(s, life) ELSE Expired(s, now, life)
-RunTimer(e, j, now, d, life, strict) ==
-    IF ExpiredAt(e.slots[j], now, life, strict) \/ d = Gone THEN Release(e, j)
-    ELSE LET e1 == Settle(e, j, d, life)
+ExpiredAt(s, now, strict) == IF strict THEN s.use /\ s.unauth /\ now > End(s) ELSE Expired(s, now)
+RunTimer(e, j, now, d, strict) ==
+    IF ExpiredAt(e.slots[j], now, strict) \/ d = Gone THEN Release(e, j)
+    ELSE LET e1 == Settle(e, j, d)
          IN IF e1.slots[j].dl <= now THEN [e1 EXCEPT !.slots[j].dl = now + 1] ELSE e1
-RECURSIVE Loop(_, _, _, _, _, _, _)
-Loop(e, now, ds, life, strict, fuel, cut) ==
+RECURSIVE Loop(_, _, _, _, _, _)
+Loop(e, now, ds, strict, fuel, cut) ==
     IF fuel = 0 \/ cut = 0 \/ Due(e.slots, now) = {} THEN e
     ELSE LET j == Pop(e.slots, now)
-         IN Loop(RunTimer([e EXCEPT !.slots[j].dl = NoDl], j, now, ds[j], life, strict),
-                 now, ds, life, strict, fuel - 1, cut - 1)
+         IN Loop(RunTimer([e EXCEPT !.slots[j].dl = NoDl], j, now, ds[j], strict),
+                 now, ds, strict, fuel - 1, cut - 1)
 =============================================================================

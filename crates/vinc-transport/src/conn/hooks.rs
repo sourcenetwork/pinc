@@ -119,6 +119,11 @@ conn_impl! {
         self.hs.set_node_timing(thin, self.cfg.node_rtt, self.cfg.node_peak_rtt);
     }
 
+    /// A responder that has sent its flight, so it holds its handshake at least [`super::RESPONDER_HOLD`].
+    pub fn answered(&self) -> bool {
+        self.hs.answered()
+    }
+
     /// Allow the short prekey Initial in the resends of a dialing handshake while the clock is below `until`: the node
     /// heard a validated UDP path lately. A connection never told has the allowance its dial began with.
     pub fn set_short_until(&mut self, until: u64) {

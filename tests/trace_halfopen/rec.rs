@@ -12,7 +12,7 @@ use vinc_security::{Env, KeyHandle, KeyResponse, SoftKeys, SoftPrekeys};
 use vinc_tests::*;
 use vinc_transport::stream::NoSource;
 
-use crate::common::{Ep, HOLDERS, LIFE, MAX, floor, kind_of, server};
+use crate::common::{Ep, HOLD, HOLDERS, LIFE, MAX, floor, kind_of, server};
 
 /// What a set of runs exercised.
 #[derive(Default, Debug)]
@@ -96,8 +96,9 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         for (unit, out) in [(MS_NS, &mut r.ms), (1, &mut r.ns)] {
             let _ = writeln!(
                 out,
-                r#"{{"t":"coho","run":{run},"op":"init","k":{K},"max":{MAX},"life":{},"full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"holders":{HOLDERS}}}"#,
-                LIFE / unit
+                r#"{{"t":"coho","run":{run},"op":"init","k":{K},"max":{MAX},"life":{},"hold":{},"full":{FULL_INITIAL_MIN},"short":{SHORT_INITIAL_MIN},"holders":{HOLDERS}}}"#,
+                LIFE / unit,
+                HOLD / unit
             );
         }
         r
@@ -181,14 +182,15 @@ impl<const K: usize, const D: usize> Rec<K, D> {
                 let diff_s: Vec<String> = diff
                     .iter()
                     .map(|&i| match after[i] {
-                        None => format!("[{i},0,0,0,0,0,0]"),
+                        None => format!("[{i},0,0,0,0,0,0,0]"),
                         Some(s) => format!(
-                            "[{i},1,{},{},{},{},{}]",
+                            "[{i},1,{},{},{},{},{},{}]",
                             exact(s.created),
                             u8::from(s.unauth),
                             u8::from(s.counted),
                             u8::from(s.deadline.is_some()),
-                            s.deadline.map_or(0, up)
+                            s.deadline.map_or(0, up),
+                            exact(s.life)
                         ),
                     })
                     .collect();
@@ -237,7 +239,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             assert!(!s.counted || s.unauth, "a counted session is authenticated");
             if s.unauth {
                 assert!(
-                    s.deadline.is_some_and(|d| d <= s.created + LIFE),
+                    s.deadline.is_some_and(|d| d <= s.created + s.life) && (s.life == LIFE || s.life == HOLD),
                     "an unauthenticated session's deadline is past its end: {s:?}"
                 );
             }
@@ -274,9 +276,12 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         for s in steps.iter().filter(|s| s[0] == 3) {
             let b = before[s[1] as usize].unwrap();
             assert!(matches!(op, Op::Timer), "an expiry outside a timer call");
-            assert!(b.unauth && now >= b.created + LIFE, "a session expired before its end");
+            assert!(
+                b.unauth && now >= b.created + b.life,
+                "a session expired before its end"
+            );
             self.seen.expired += 1;
-            self.seen.expired_at_end += u32::from(now == b.created + LIFE);
+            self.seen.expired_at_end += u32::from(now == b.created + b.life);
         }
         if let Op::Timer = op {
             if stalled0 {
@@ -286,10 +291,10 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             if !stalled {
                 for s in after.iter().flatten() {
                     assert!(
-                        !s.unauth || now < s.created + LIFE,
+                        !s.unauth || now < s.created + s.life,
                         "a session outlived its end past a timer call"
                     );
-                    self.seen.spared_before_end += u32::from(s.unauth && now + MS_NS == s.created + LIFE);
+                    self.seen.spared_before_end += u32::from(s.unauth && now + MS_NS == s.created + s.life);
                 }
             }
         }

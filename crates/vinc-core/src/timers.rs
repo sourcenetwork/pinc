@@ -5,8 +5,8 @@
 //! rejected a short Initial holds the node's prekey, brings the session's entry in the table of sessions by address in
 //! line with its path, and recomputes the one deadline the session contributes to the heap. The deadline is the
 //! earliest of the connection's own timer, the keepalive review, the next ping of a standby path, the end of an
-//! unauthenticated session's life (30 s, 60 s on a thin node: as long as its handshake may last), and the moment a
-//! cached access answer has 5 s left.
+//! unauthenticated session's life (30 s, 60 s on a thin node, and 60 s once it answered as a responder: as long as its
+//! handshake may last), and the moment a cached access answer has 5 s left.
 //! [`Endpoint::poll_timeout`](crate::Endpoint::poll_timeout) is a peek at the heap;
 //! [`Endpoint::handle_timeout`](crate::Endpoint::handle_timeout) pops the sessions that are due, each at most once per
 //! call.
@@ -19,7 +19,7 @@
 //! Invariants: a session has at most one entry in the heap; a settled session that has ended is freed; a deadline
 //! after a timer is strictly later than the time of the call, so a timer cannot spin.
 
-use vinc_transport::conn::{Config, PathId, RJ_THIN_GAP, connect_limit};
+use vinc_transport::conn::{Config, PathId, RJ_THIN_GAP};
 
 use crate::endpoint::{CLOSE_GRACE, env, ep_impl};
 use crate::keepalive::{ACTIVE_KEEP, Inputs, standby_due};
@@ -127,7 +127,7 @@ ep_impl! {
             note(slot.m.acp_recheck);
         }
         if slot.m.unauth {
-            note(Some(slot.m.created.saturating_add(connect_limit(self.rtt.thin_node()))));
+            note(Some(slot.m.created.saturating_add(slot.half_open_life(self.rtt.thin_node()))));
         }
         self.heap.set(i, deadline);
         self.sync_cids(i, false);
@@ -164,12 +164,12 @@ ep_impl! {
     }
 
     fn run_timer(&mut self, i: usize, now: u64) {
-        let life = connect_limit(self.rtt.thin_node());
+        let thin = self.rtt.thin_node();
         let Some(slot) = self.slots.get_mut(i) else { return };
         if !slot.m.in_use {
             return;
         }
-        if slot.m.unauth && now >= slot.m.created.saturating_add(life) {
+        if slot.m.unauth && now >= slot.m.created.saturating_add(slot.half_open_life(thin)) {
             trace!(self, now, HalfOpenExpired { slot: i as u64 });
             self.free_slot(i, now);
             return;
