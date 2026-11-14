@@ -115,7 +115,7 @@ keepalives) awaits `Endpoint::run()`.
 | `vinc-transport` | VINCER: streams, datagrams, flow and congestion control, loss recovery, pacing, path MTU, migration | yes | built; proofs being closed |
 | `vinc-core` | the SANS-IO endpoint: host interface, protocol dispatch, commands, events and queries | yes | built; proofs being closed |
 | `vinc-node` | one composition of the endpoint, the connectivity client and every layer over real sessions; membership, broadcast, values, reconcile and delay-tolerant delivery are in | yes | built; the scenario suite and the facade run on it; proofs being closed |
-| `vinc-connect` | TCP and WebSocket carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side and the protected carrier's records proven |
+| `vinc-connect` | TCP and WebSocket carriers, relays, signed records and lookup, hole punching, the hub tunnel, the mailbox | yes | built; relay side, the protected carrier's records and its WebSocket framing proven |
 | `vinc-membership` | hub roster and member view: leases, independent-path probes, restart-safe incarnations, leave, revocation | yes | built; proofs being closed |
 | `vinc-values` | verified streaming of values of any size from up to four providers, with resume and zero-copy serving | yes | built, proven |
 | `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built, proven (the liveness theorems cover runs without restarts) |
