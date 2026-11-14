@@ -134,7 +134,8 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         node.set_adjacent(now, &[])
             .map_err(|_| Error::config("the adjacency record could not be signed"))?;
     }
-    if cfg.port_mapping.on && !local.ip().to_canonical().is_loopback() {
+    // The relay role is a server: it asks no gateway for a mapping, whatever the builder says.
+    if cfg.port_mapping.on && !cfg.relaying && !local.ip().to_canonical().is_loopback() {
         node.start_port_mapping(now, cfg.port_mapping.gateway, local, vinc_portmap::client::LIFETIME);
     }
     Ok(Core::new(Box::new(node), cfg, prekeys, ifaces))
@@ -158,6 +159,14 @@ pub(crate) fn interfaces(local: std::net::SocketAddr) -> Vec<std::net::SocketAdd
 pub(crate) struct PortMapping {
     pub on: bool,
     pub gateway: Option<std::net::IpAddr>,
+}
+
+impl PortMapping {
+    /// Port mapping off: the default.
+    pub(crate) const OFF: Self = Self {
+        on: false,
+        gateway: None,
+    };
 }
 
 #[cfg(test)]

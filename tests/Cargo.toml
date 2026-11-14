@@ -576,6 +576,10 @@ name = "vinc_examples"
 path = "vinc_examples.rs"
 
 [[test]]
+name = "vinc_portmap"
+path = "vinc_portmap.rs"
+
+[[test]]
 name = "vinc_datagram"
 path = "vinc_datagram.rs"
 

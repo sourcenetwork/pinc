@@ -2,8 +2,8 @@
 //! read of the mapping held. What the client does is in `vinc-portmap`; the endpoint starts it on build, routes its
 //! datagrams and HTTP exchanges, and releases the mapping when it closes.
 //!
-//! Invariants: an endpoint built with [`Builder::port_mapping`] off or on a loopback address sends nothing for port
-//! mapping and holds no mapping.
+//! Invariants: an endpoint built without [`Builder::port_mapping`], on a loopback address or with the relay role sends
+//! nothing for port mapping and holds no mapping.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -13,15 +13,26 @@ use crate::host::Hosted;
 
 impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     /// Ask the home gateway for a UDP mapping of the endpoint's socket, so peers behind address translation of their
-    /// own reach it directly (on by default). The endpoint tries PCP, then NAT-PMP, then `UPnP-IGD`, renews the lease
-    /// before it ends, and deletes the mapping when it closes. The mapped address leads the addresses its signed
-    /// record lists, and the endpoint's reachability is port-mapped while it holds one.
+    /// own reach it directly (off by default). The endpoint tries PCP, then NAT-PMP, then `UPnP-IGD`, renews the lease
+    /// before it ends, and deletes the mapping when it closes. A mapped address is published, first in the endpoint's
+    /// signed record, only once a relay saw the endpoint at its IP, and the endpoint's reachability is then
+    /// port-mapped. An external address no peer could reach (private, carrier-grade, loopback, link-local, multicast
+    /// or unspecified) is never held.
     ///
-    /// PCP and NAT-PMP need the gateway's address ([`gateway`](Self::gateway)); without it only `UPnP` is tried, by an
-    /// SSDP search. PCP and `UPnP` name the endpoint's own address, so an endpoint bound to the unspecified address
-    /// tries NAT-PMP only. `UPnP`'s HTTP calls go over the host's carriers ([`carriers`](Self::carriers)): `open` is
-    /// then asked for a TCP stream to a [`Relay`](crate::Relay) whose id is the endpoint's own and whose only address
-    /// is the gateway's control address. An endpoint on a loopback address asks nothing.
+    /// What an endpoint sends when it is on (an endpoint with the relay role, one on a loopback address and one with
+    /// this off send nothing):
+    ///
+    /// | bound to | sent |
+    /// |---|---|
+    /// | a private IPv4 address (RFC 1918, 100.64.0.0/10), no [`gateway`](Self::gateway) | an `M-SEARCH` of 137 bytes to `239.255.255.250:1900` at 0, 1 and 2 s, again every 5 minutes |
+    /// | a private IPv4 address and a gateway | PCP (60 bytes, three tries), then NAT-PMP, then the search; again every 5 minutes |
+    /// | a public IPv4 address and a gateway | PCP, then NAT-PMP, again every 5 minutes; no search |
+    /// | the unspecified address and a gateway | NAT-PMP only, every 5 minutes |
+    /// | a public IPv4 address, the unspecified address or IPv6, no gateway | nothing |
+    ///
+    /// `UPnP`'s HTTP calls go over the host's carriers ([`carriers`](Self::carriers)): `open` is asked for a TCP
+    /// stream to a [`Relay`](crate::Relay) whose id is the endpoint's own and whose only address is the host that
+    /// answered the search.
     #[must_use]
     pub const fn port_mapping(mut self, on: bool) -> Self {
         self.port_mapping.on = on;
@@ -39,6 +50,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
 
 impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// The external address of the port mapping the gateway granted (see [`Builder::port_mapping`]), if one is held.
+    /// A held mapping is not yet published: that waits for a relay to see the endpoint at its IP.
     pub async fn port_mapping(&self) -> Option<SocketAddr> {
         self.0
             .shared

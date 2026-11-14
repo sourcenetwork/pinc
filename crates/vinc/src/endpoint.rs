@@ -82,10 +82,7 @@ impl Vinc {
             hub: false,
             connected_topics: false,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            port_mapping: PortMapping {
-                on: true,
-                gateway: None,
-            },
+            port_mapping: PortMapping::OFF,
             role: (),
         }
     }
