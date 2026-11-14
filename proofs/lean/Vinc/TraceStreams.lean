@@ -39,7 +39,8 @@ def slotOf (j : J) : Except String Slot := do
            size := ← natF j "size", pend := ← boolF j "pend", defer := ← boolF j "defer",
            rst := ← optNat j "rst", obs := ← boolF j "obs", sdone := ← boolF j "sdone", srst := ← natF j "srst",
            stop := ← natF j "stop", qcode := ← optNat j "qcode", scode := ← optNat j "scode",
-           cnt := false, sfl := false, ord := ← natF j "ord" }
+           cnt := false, sfl := false, ord := ← natF j "ord",
+           ms := ← optNat j "ms", mb := ← natF j "mb", mr := ← natF j "mr" }
 
 def pairN (j : J) (k : String) : Except String (Nat × Nat) := do
   match ← natList (← field j k) with
@@ -54,8 +55,7 @@ def tabOf (v : J) : Except String Tab := do
   let ad ← natList (← field v "ad")
   check (ad.length == 3) "ad is not a triple"
   pure { slots, rn := ← pairN v "rn", lo := ← pairN v "lo", rl := ← natF v "rl", ll := ← natF v "ll",
-         ext := ← natF v "ext", tgt := ← natF v "tgt",
-         ms := ← optNat v "ms", mb := ← natF v "mb", mr := ← natF v "mr",
+         ext := ← natF v "ext",
          adlim := ad[0]!, adv := ad[1]!, adat := ad[2]!, adpend := ← boolF v "adp",
          early := ← boolF v "early" }
 

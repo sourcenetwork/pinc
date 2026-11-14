@@ -80,12 +80,16 @@ structure Slot where
   /-- For a stream we opened, how many we had opened in all, itself included (`Slot::ordinal`): its data waits until
   the peer's limit covers it. 0 for a stream the peer opened. -/
   ord : Nat
+  /-- This stream's delivery meter (`Recv::meter`): the epoch start, the bytes read in it, the last rate. -/
+  ms : Option Nat
+  mb : Nat
+  mr : Nat
   deriving DecidableEq, Repr, Inhabited
 
 def Slot.new : Slot :=
   { id := none, open_ := false, held := [], rs := [], read := 0, hi := 0, contig := 0, fin := none, limit := 0,
     size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0, stop := 0, qcode := none, scode := none,
-    cnt := false, sfl := false, ord := 0 }
+    cnt := false, sfl := false, ord := 0, ms := none, mb := 0, mr := 0 }
 
 structure Tab where
   slots : List Slot
@@ -94,10 +98,6 @@ structure Tab where
   rl : Nat
   ll : Nat
   ext : Nat
-  tgt : Nat
-  ms : Option Nat
-  mb : Nat
-  mr : Nat
   /-- The limit on the streams we may open in all, as the peer last said. -/
   adlim : Nat
   /-- The limit on the streams the peer may open in all, as last advertised. -/
@@ -112,7 +112,7 @@ structure Tab where
 
 def Tab.init (p : P) : Tab :=
   { slots := List.replicate p.n Slot.new, rn := (0, 0), lo := (0, 0), rl := 0, ll := 0,
-    ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0, adlim := p.pm, adv := p.adv0, adat := 0, adpend := false,
+    ext := 0, adlim := p.pm, adv := p.adv0, adat := 0, adpend := false,
     early := false }
 
 /-! ### Identifiers -/
@@ -176,6 +176,9 @@ def used (T : Tab) : Nat := heldTotal T + T.ext
 def availC (p : P) (T : Tab) : Nat := p.b - used T
 def avail (p : P) (T : Tab) : Nat := availC p T * p.ch
 def gu (p : P) (T : Tab) : Nat := (T.slots.map (·.unreceived p)).sum
+/-- `Streams::consume`'s window target: twice the rate the stream's own reader drained per round trip, never below
+the initial window nor above the ceiling. -/
+def windowTarget (p : P) (rate : Nat) : Nat := min (max (rate * 2) p.sw) p.maxStream
 /-- The peer streams admitted in all. -/
 def admitted (T : Tab) : Nat := T.rn.1 + T.rn.2
 /-- The streams the peer may still open inside the credit it was given. -/
@@ -212,7 +215,8 @@ def grantSlot (p : P) (tgt g a : Nat) (r : Slot) : Slot :=
 
 def grantOne (p : P) (first : Nat) (T : Tab) (i : Nat) : Tab :=
   let r := T.slots.getD i Slot.new
-  if !r.open_ || !(i == first || r.defer) then T else setSlot T i (grantSlot p T.tgt (gu p T + resv p T) (avail p T) r)
+  -- the window size moved when its own reader consumed; a grant only moves the limit (target 0 leaves the size)
+  if !r.open_ || !(i == first || r.defer) then T else setSlot T i (grantSlot p 0 (gu p T + resv p T) (avail p T) r)
 
 def grantRun (p : P) (T : Tab) (first : Nat) : Tab := (List.range p.n).foldl (grantOne p first) T
 /-- `Streams::admit_room`: how many more peer streams could be admitted now. -/
@@ -372,13 +376,15 @@ def consume (p : P) (T : Tab) (id n now srtt : Nat) : Tab × String :=
     else
       let nr := r.read + n
       let cut := r.fin == some nr
+      -- the stream's own meter takes the bytes read, and its window grows toward twice the rate it measures
+      let (ms, mb, mr) := meterStep r.ms r.mb r.mr n now srtt
       let r1 := { r with read := nr,
                          held := if cut then [] else r.held.filter (fun k => !(r.read / p.ch ≤ k && k < nr / p.ch)),
-                         rs := if cut then [] else r.rs }
+                         rs := if cut then [] else r.rs,
+                         ms := ms, mb := mb, mr := mr,
+                         size := max r.size (windowTarget p mr) }
       let r2 := { r1 with obs := r1.obs || r1.status != 0 }
-      let (ms, mb, mr) := meterStep T.ms T.mb T.mr n now srtt
-      let T1 := { setSlot T i r2 with ms := ms, mb := mb, mr := mr, tgt := min (max (mr * 2) p.sw) p.maxStream }
-      (settle p (grantRun p T1 i) i, "ok")
+      (settle p (grantRun p (setSlot T i r2) i) i, "ok")
 
 /-! ### Control frames -/
 /-- `pending_control` with the test `due` of the slots that may give a frame: the table, the kind ("none", "reset",

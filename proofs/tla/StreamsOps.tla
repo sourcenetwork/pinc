@@ -16,9 +16,8 @@
 (* send half completing), ExtTo (the other users of the pool: send         *)
 (* buffers, datagram queues, the early-data buffer, which the code charges *)
 (* to the same pool), CloseAll. The state T holds the table: slots, the    *)
-(* peer-opened and locally opened counters, the pool use                  *)
-(* of the others, the window target and the delivery meter. The pool use   *)
-(* of the streams is the number of chunks their rings hold.                *)
+(* peer-opened and locally opened counters and the pool use of the         *)
+(* others. The pool use of the streams is the chunks their rings hold.     *)
 (*                                                                         *)
 (* Scaling. The real constants are CH = 16384, RING = 1025, RR = 96,       *)
 (* N = 100, B = the pool in chunks; the model is parameterised by *)
@@ -30,6 +29,14 @@
 (* users released); an earlier version retried it only after a consume,    *)
 (* which stalled a stream when the application had nothing left to read.   *)
 (* RETRY = FALSE is that earlier behaviour (a witness config).             *)
+(*                                                                         *)
+(* Meter. Each receive half measures what its own reader drains per       *)
+(* round trip (r.m, MeterStep) and its window grows toward twice that      *)
+(* (Target). Before #159 one meter measured the whole connection and every *)
+(* stream took twice that rate as its window, so many streams together     *)
+(* asked the pool for far more credit than it holds and their grants were  *)
+(* deferred. PERSTREAM = FALSE sizes a stream from the connection's rate   *)
+(* (the sum of the streams' rates), that earlier behaviour (a witness).    *)
 (*                                                                         *)
 (* The ledger (Unreceived, GU). A receive half counts the chunks its credit *)
 (* may still claim: the first FIRSTK chunks of its window while the stream *)
@@ -80,7 +87,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -97,7 +104,8 @@ SW == Min(SWC, MaxStream)           \* the initial window; the ceiling is MaxStr
 NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi |-> 0, contig |-> 0, fin |-> -1,
             limit |-> 0, size |-> 0, pend |-> FALSE, defer |-> FALSE, rst |-> -1, obs |-> FALSE,
             sdone |-> TRUE, srst |-> 0,
-            stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE, ord |-> 0]
+            stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE, ord |-> 0,
+            m |-> [start |-> -1, bytes |-> 0, rate |-> 0]]
 
 WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
 \* what the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit
@@ -125,8 +133,7 @@ TopHeld(S) == IF \E k \in 1..N : S[k].id # -1
 MarkOnFree(S, hw, i) == IF i = hw THEN TopHeld(S) ELSE hw
 MarkOnFreeLow(S, hw, i) == Min(hw, i - 1)
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
-          rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW, hw |-> 0,
-          m |-> [start |-> -1, bytes |-> 0, rate |-> 0],
+          rl |-> 0, ll |-> 0, ext |-> 0, hw |-> 0,
           ad |-> [lim |-> PM, adv |-> Adv0, at |-> 0, pend |-> FALSE, early |-> FALSE]]
 
 (* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most RR ---- *)
@@ -191,7 +198,7 @@ AnyDefer(T) == \E i \in 1..N : T.slots[i].defer
 GrantOne(T, i, first) ==
     LET r == T.slots[i] IN
     IF ~r.open \/ ~(i = first \/ r.defer) THEN T
-    ELSE LET r1 == [r EXCEPT !.size = Max(r.size, T.tgt)]
+    ELSE LET r1 == r   \* the window size moved when its own reader consumed (Consume)
              c == Due(r1)
          IN IF c = -1 THEN SetSlot(T, i, [r1 EXCEPT !.defer = FALSE])
             ELSE LET demand == GU(T) - Unreceived(r) + PoolDemand(r1, Charged(r1, c))
@@ -332,17 +339,31 @@ MeterStep(m, n, now, srtt) ==
     IN IF srtt > 0 /\ el >= srtt THEN [start |-> now, bytes |-> 0, rate |-> (by * srtt) \div el]
        ELSE [start |-> st, bytes |-> by, rate |-> m.rate]
 
+\* The rate a window is sized from. With PERSTREAM (the code) it is what this stream's own reader drained per round
+\* trip; PERSTREAM = FALSE is the connection's rate, the sum over the streams with this one's new rate in place, as one
+\* meter of the whole connection measured it before #159 (the witness config Streams_meter_w).
+ConnRate(T, i, rate) == LET f[k \in 0..N] == IF k = 0 THEN 0
+                                             ELSE f[k - 1] + (IF k = i THEN rate ELSE T.slots[k].m.rate)
+                        IN f[N]
+SizeRate(T, i, rate) == IF PERSTREAM THEN rate ELSE ConnRate(T, i, rate)
+\* Streams::consume: the window size a rate asks for, twice the rate, never below the initial window nor above the
+\* ceiling
+Target(rate) == Min(Max(rate * 2, SW), MaxStream)
+
 Consume(T, id, n, now, srtt) ==
     LET i == FindSlot(T, id)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
         nr == r.read + n
         cut == r.fin # -1 /\ r.fin = nr
+        \* the stream's own meter takes the bytes read
+        m2 == MeterStep(r.m, n, now, srtt)
         r1 == [r EXCEPT !.read = nr,
                         !.held = IF cut THEN {} ELSE r.held \ (r.read \div CH..(nr \div CH - 1)),
-                        !.rs = IF cut THEN <<>> ELSE r.rs]
+                        !.rs = IF cut THEN <<>> ELSE r.rs,
+                        !.m = m2,
+                        !.size = Max(r.size, Target(SizeRate(T, i, m2.rate)))]
         r2 == [r1 EXCEPT !.obs = r1.obs \/ Status(r1) # "open"]
-        m2 == MeterStep(T.m, n, now, srtt)
-        T1 == [SetSlot(T, i, r2) EXCEPT !.m = m2, !.tgt = Min(Max(m2.rate * 2, SW), MaxStream)]
+        T1 == SetSlot(T, i, r2)
     IN IF i = 0 THEN [t |-> T, err |-> "UnknownStream"]
        ELSE IF n > Readable(r) THEN [t |-> T, err |-> "InvalidConsume"]
        ELSE [t |-> Settle(GrantRun(T1, i), i), err |-> "ok"]
@@ -451,5 +472,5 @@ ExtTo(T, ext2) ==
     IF ext2 > T.ext /\ ext2 - T.ext > AvailC(T) THEN T
     ELSE IF ext2 >= T.ext THEN [T EXCEPT !.ext = ext2]
     ELSE Regrant([T EXCEPT !.ext = ext2])
-CloseAll(T, ext2) == [Init0 EXCEPT !.ext = ext2, !.m = T.m, !.tgt = T.tgt, !.lo = T.lo, !.rn = T.rn, !.ad = T.ad]
+CloseAll(T, ext2) == [Init0 EXCEPT !.ext = ext2, !.lo = T.lo, !.rn = T.rn, !.ad = T.ad]
 =============================================================================
