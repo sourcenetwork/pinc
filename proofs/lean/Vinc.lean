@@ -265,6 +265,9 @@ import Vinc.TraceConnectWs
 import Vinc.ConnectClientThm
 import Vinc.ConnectRecords
 import Vinc.ConnectRecordsThm
+import Vinc.ConnectOwn
+import Vinc.ConnectOwnThm
+import Vinc.TraceConnectOwn
 import Vinc.TraceConnectRecords
 import Vinc.ConnectAudit
 import Vinc.ConnectPack
