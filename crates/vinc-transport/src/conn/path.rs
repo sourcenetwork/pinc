@@ -30,8 +30,13 @@
 //! one node space their re-join challenges to one address. A path that never answers stays
 //! unvalidated and is only removed when its slot is needed.
 //!
+//! A relay path is valid from the moment the connection tracks it and is never challenged: the relay authenticated
+//! the node at each end, as the reference model takes a relay path to be. Like every validated standby path it is
+//! kept alive by the endpoint's keepalive, which is what keeps a member's carrier heard by its hub and the hub's by
+//! the member.
+//!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
-//! amplification budget; a path is validated only by an answer to a challenge sent to it.
+//! amplification budget; a direct path is validated only by an answer to a challenge sent to it.
 
 use vinc_crypto::Provider;
 use vinc_security::{AmpBudget, ConnId, Env};
@@ -155,11 +160,16 @@ pub(crate) struct Path {
 
 impl Path {
     pub(crate) fn new(id: PathId, info: PathInfo) -> Self {
+        let relay = info.kind == PathKind::Relay;
+        let mut amp = AmpBudget::new();
+        if relay {
+            amp.validate();
+        }
         Self {
             id,
             info,
-            validated: false,
-            amp: AmpBudget::new(),
+            validated: relay,
+            amp,
             mtu: Mtu::new(),
             challenge: None,
             sent: [None; CHALLENGES],
@@ -298,7 +308,8 @@ impl<const NP: usize> Paths<NP> {
 
 conn_impl! {
     /// Add a path the endpoint knows about, or update what it knows about one the connection already tracks.
-    /// A new path is probed with PATH_CHALLENGE once the handshake is done.
+    /// A new direct path is probed with PATH_CHALLENGE once the handshake is done; a new relay path is valid as it is
+    /// and is not probed.
     ///
     /// # Errors
     /// [`PathError::TooMany`] if the table is full and no unused path can make room.
@@ -316,7 +327,7 @@ conn_impl! {
         if let Some(p) = self.paths.get_mut(i) {
             p.amp.validate();
         }
-        if self.phase == Phase::Connected {
+        if self.phase == Phase::Connected && info.kind != PathKind::Relay {
             self.start_punch(env, i);
         }
         Ok(())
@@ -516,6 +527,16 @@ conn_impl! {
             p.info = info;
             self.sync_kind(i);
             self.choose_path();
+            // A path taken for direct that the endpoint names a relay's is valid as every relay path is. It becomes
+            // a candidate for the next choice of the active path, not this one.
+            if let Some(p) = self.paths.get_mut(i)
+                && p.info.kind == PathKind::Relay
+                && !p.validated
+                && !p.gone
+            {
+                p.validated = true;
+                p.amp.validate();
+            }
         }
     }
 

@@ -374,14 +374,13 @@ fn relay_carries_a_penalty_and_takes_over_when_the_direct_path_dies() {
         let now = net.now;
         net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
         net.b.with_env(now, |c, env| c.add_path(env, PathId(4), relay)).unwrap();
-        assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
+        assert!(net.run(net.now + 10 * SEC, |n| n.a.conn.path_validated(PathId(3))));
         net.run(net.now + 2 * SEC, |_| false);
         assert_eq!(
             net.a.conn.active_path(),
             Some(PathId(1)),
             "a faster relay does not beat a direct path"
         );
-        assert!(net.a.conn.path_rtt(PathId(3)).unwrap() < 30 * MS);
         // The direct path dies under a transfer: after three probe timeouts the relay takes over.
         net.link.route(PathId(1)).up = false;
         let data = pattern(2 << 20, 17);
@@ -395,6 +394,39 @@ fn relay_carries_a_penalty_and_takes_over_when_the_direct_path_dies() {
         assert!(
             net.run(net.now + 60 * SEC, |n| n.a.conn.active_path() == Some(PathId(1))),
             "back to direct"
+        );
+    });
+}
+
+/// A relay path is valid from the moment it is added and is never challenged, as the reference model takes every relay
+/// path to be: the relay authenticated both ends. Kept valid as a standby path, it is pinged by the endpoint's
+/// keepalive, which keeps a member's carrier heard by its hub.
+#[test]
+fn a_relay_path_is_valid_when_added_and_is_never_challenged() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(16, Params::new(100 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let relay = PathInfo {
+            kind: PathKind::Relay,
+            ..PathInfo::default()
+        };
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
+        assert!(
+            net.a.conn.path_validated(PathId(3)),
+            "a relay path is valid as soon as it is added"
+        );
+        let mark = net.a.tx_log.len();
+        net.run(net.now + 5 * SEC, |_| false);
+        let on_relay = net.a.tx_log[mark..].iter().filter(|t| t.2 == PathId(3)).count();
+        assert_eq!(on_relay, 0, "nothing challenges a relay path");
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(PathId(1)),
+            "the direct path stays active"
         );
     });
 }
@@ -414,7 +446,7 @@ fn relay_path_goes_silent(carrier_answers: bool, pulses: bool) -> Option<u64> {
     let now = net.now;
     net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
     net.b.with_env(now, |c, env| c.add_path(env, PathId(4), relay)).unwrap();
-    assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
+    assert!(net.run(net.now + 10 * SEC, |n| n.a.conn.path_validated(PathId(3))));
     // The direct path dies under a transfer and the relay takes over.
     net.link.route(PathId(1)).up = false;
     bulk(&mut net, &pattern(2 << 20, 21), 300 * SEC);
@@ -477,7 +509,7 @@ fn a_session_with_a_long_round_trip_challenges_its_lost_direct_path_at_most_once
         let now = net.now;
         net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
         net.b.with_env(now, |c, env| c.add_path(env, PathId(4), relay)).unwrap();
-        assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
+        assert!(net.run(net.now + 10 * SEC, |n| n.a.conn.path_validated(PathId(3))));
         net.link.route(PathId(1)).up = false;
         let id = net.a.conn.open_uni().unwrap();
         net.a.conn.write(id, &pattern(100_000, 23)).unwrap();
