@@ -1,18 +1,20 @@
 //! The HTTP exchange of the port-mapping client (`UPnP`), carried over the host's carriers: open a TCP stream to the
 //! host that answered the search, write the request, read until it closes, hand the answer back.
 //!
-//! The exchange is state, not a future: the stream, the request and how much of it is written, the answer read so
-//! far, and the phase live in [`Shared`], and whichever call drives the endpoint advances it through the same host
-//! operations the carriers use (`open`, `write`, `read`), recording progress after each completed operation. An
-//! operation in flight when the driver changes is started again by the new driver, which is the carriers' contract
+//! The exchange is state, not a future: the stream, the request and how much of it is written, the answer read so far,
+//! and the phase live in [`Shared`], and whichever call drives the endpoint advances it through the same host
+//! operations the carriers use (`open`, `write`, `read`, `close`), recording progress after each completed operation.
+//! An operation in flight when the driver changes is started again by the new driver, which is the carriers' contract
 //! (a dropped read loses nothing, a write reports how much it took): a host whose operation loses data when dropped
 //! breaks it, and the endpoint does not cope with that. A write dropped by a change of driver may have put part of the
 //! request out, so, as a carrier's is, that stream is closed and the exchange ends with no answer: the port-mapping
 //! client's own retry decides when to ask again.
 //!
+//! Every stream an exchange opens is given to the host's `close` exactly once, whichever way the exchange ends (its
+//! answer, the client giving it up, a dropped write), and a running close finishes before the next exchange opens.
+//!
 //! Invariants: at most one exchange runs at a time; an answer is read up to [`vinc_portmap::MAX_RESPONSE`] bytes and no
-//! further; a stream that fails ends the exchange with no answer; an exchange is dropped, stream and all, when the
-//! port-mapping client no longer awaits it (its deadline passed).
+//! further; a stream that fails ends the exchange with no answer.
 
 use std::future::Future;
 use std::io;
@@ -24,6 +26,9 @@ use crate::carrier::CarrierKind;
 use crate::carriers::{Carriers, Relay};
 use crate::drive::Shared;
 use crate::host::Hosted;
+
+/// The answer an exchange ends with: the bytes read, or none when it failed.
+type Answer = Option<Vec<u8>>;
 
 /// The longest request the port-mapping client builds.
 const MAX_REQUEST: usize = vinc_portmap::upnp::MAX_REQUEST;
@@ -41,6 +46,8 @@ enum Phase {
     Open,
     Write,
     Read,
+    /// The exchange ended; its stream is being closed.
+    Close,
 }
 
 /// The exchange of an endpoint of host type `H`, boxed in the shared state while one runs.
@@ -56,6 +63,19 @@ pub(crate) struct Exchange<S> {
     phase: Phase,
     /// A host operation was started and its result is not recorded yet.
     busy: bool,
+    /// The stream to give to the host's `close`, once the exchange ended.
+    closing: Option<S>,
+    /// How the exchange ended, handed to the client after the stream is closed (none when the client gave up).
+    result: Option<Answer>,
+}
+
+impl<S> Exchange<S> {
+    /// The exchange ends: its stream is to be closed.
+    fn start_close(&mut self) {
+        self.phase = Phase::Close;
+        self.busy = false;
+        self.closing = self.stream.take().and_then(|s| Rc::try_unwrap(s).ok());
+    }
 }
 
 /// What the driver asks of the host.
@@ -110,11 +130,15 @@ impl<H: Hosted> Shared<H> {
             return false;
         }
         let mut moved = false;
+        let awaited = self.lock().is_some_and(|core| core.node.http_awaited());
         let mut slot = self.http.borrow_mut();
-        if slot.is_some() && !self.lock().is_some_and(|core| core.node.http_awaited()) {
-            // The client gave the exchange up: drop it and its stream, so the next request is polled.
-            *slot = None;
+        if let Some(ex) = slot.as_mut()
+            && ex.phase != Phase::Close
+            && !awaited
+        {
+            // The client gave the exchange up: its stream is closed, and the next request waits for that.
             hop.cancel();
+            ex.start_close();
             moved = true;
         }
         if slot.is_none() {
@@ -133,18 +157,17 @@ impl<H: Hosted> Shared<H> {
                     stream: None,
                     phase: Phase::Open,
                     busy: false,
+                    closing: None,
+                    result: None,
                 }));
                 moved = true;
             }
         }
         let Some(ex) = slot.as_mut() else {
-            // the stream of an exchange that ended is closed by the same operation slot
-            if hop.poll(cx, CLOSE).is_some() {
-                moved = true;
-            }
             return moved;
         };
-        let mut finished: Option<Option<Vec<u8>>> = None;
+        let mut finished: Option<Answer> = None;
+        let mut done = false;
         match ex.phase {
             Phase::Open => {
                 if !hop.running(OPEN) {
@@ -211,16 +234,34 @@ impl<H: Hosted> Shared<H> {
                     }
                 }
             }
+            Phase::Close => {
+                if !hop.running(CLOSE) {
+                    match ex.closing.take() {
+                        Some(s) => hop.start(CLOSE, make(Step::Close(s))),
+                        None => done = true,
+                    }
+                }
+                if hop.poll(cx, CLOSE).is_some() {
+                    done = true;
+                }
+            }
         }
         if let Some(answer) = finished {
-            let stream = ex.stream.take().and_then(|s| Rc::try_unwrap(s).ok());
+            hop.cancel();
+            ex.result = Some(answer);
+            ex.start_close();
+            moved = true;
+        }
+        if done {
+            // The stream is closed: now the client hears how the exchange ended, so a client that stops with this
+            // exchange is not done before its stream is.
+            let result = ex.result.take();
             *slot = None;
-            let now = self.now();
-            if let Some(mut core) = self.lock() {
-                core.node.handle_http(now, answer.as_deref());
-            }
-            if let Some(s) = stream {
-                hop.start(CLOSE, make(Step::Close(s)));
+            if let Some(answer) = result {
+                let now = self.now();
+                if let Some(mut core) = self.lock() {
+                    core.node.handle_http(now, answer.as_deref());
+                }
             }
             moved = true;
         }

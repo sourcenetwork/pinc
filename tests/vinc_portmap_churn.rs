@@ -258,3 +258,72 @@ async fn a_dropped_write_ends_the_exchange_and_opens_no_stream_of_its_own() {
         assert_eq!(ep.port_mapping().await, None);
     }
 }
+
+/// Whatever the application's way of driving, every stream the exchanges opened is given to the host's `close`.
+#[tokio::test(flavor = "current_thread")]
+async fn every_stream_an_exchange_opened_is_closed_whoever_drives() {
+    for way in ["one driver", "a call every 12 ms", "a new driver at every poll"] {
+        let (ep, sent, tx, c) = bind_with(KIND);
+        let driver = ep.clone();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                if way == "one driver" {
+                    tokio::task::spawn_local(async move {
+                        let _ = driver.accept().await;
+                    });
+                }
+                let end = Instant::now() + Duration::from_secs(5);
+                while !sent.borrow().contains(&upnp::SSDP) && Instant::now() < end {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    if way != "one driver" {
+                        let _ = tokio::time::timeout(Duration::from_millis(10), ep.accept()).await;
+                    }
+                }
+                tx.try_send((SEARCH_ANSWER.to_vec(), "192.168.1.1:1900".parse().unwrap()))
+                    .unwrap();
+                let mut held = None;
+                let end = Instant::now() + Duration::from_secs(8);
+                while held.is_none() && Instant::now() < end {
+                    match way {
+                        "one driver" => tokio::time::sleep(Duration::from_millis(5)).await,
+                        "a call every 12 ms" => churn(&ep, Duration::from_millis(50)).await,
+                        _ => {
+                            let _ = tokio::time::timeout(Duration::ZERO, ep.accept()).await;
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    }
+                    held = ep.port_mapping().await;
+                }
+                assert!(held.is_some(), "{way}: no mapping (opened {})", c.opened.get());
+                assert_eq!(
+                    (c.opened.get(), c.closed.get()),
+                    (3, 3),
+                    "{way}: streams opened and closed for the three exchanges"
+                );
+            })
+            .await;
+    }
+}
+
+/// Closing the endpoint during an `AddPortMapping` the gateway never answers: the stalled exchange's stream is closed
+/// when the client gives it up, and the delete that follows is answered and closed too.
+#[tokio::test(flavor = "current_thread")]
+async fn closing_during_a_stalled_add_port_mapping_closes_every_stream() {
+    let (ep, sent, tx, c) = bind_with(Opts {
+        stall_add: true,
+        ..KIND
+    });
+    search_then_answer(&ep, &sent, &tx).await;
+    let end = Instant::now() + Duration::from_secs(8);
+    while c.opened.get() < 3 && Instant::now() < end {
+        churn(&ep, Duration::from_millis(30)).await;
+    }
+    assert_eq!(c.opened.get(), 3, "the add exchange is open");
+    ep.close().await;
+    assert_eq!(
+        (c.opened.get(), c.closed.get()),
+        (4, 4),
+        "streams opened and closed (the add, and the delete that followed)"
+    );
+}
