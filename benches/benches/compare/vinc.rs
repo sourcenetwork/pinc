@@ -5,7 +5,11 @@
 //! endpoint reserves its tables for the smallest shape that holds the request, which is what the documentation tells a
 //! host to do. The endpoint's three I/O calls are a type here (`Net`, an `Io`), not closures, only so the harness can
 //! write the endpoint's type down; the facade's own calls are made directly, with no boxing and no `unsafe`. Everything
-//! runs on the thread that started it, one endpoint per thread, as the facade is meant to be used.
+//! runs on the thread that started it, one endpoint per thread, as the facade is meant to be used: the server runs one
+//! endpoint per core (`VINC_BENCH_CORES`, else one per worker of the runtime), the first on the thread that serves and
+//! the others on workers, and prints every address; the `many` burst spreads its client endpoints over as many workers,
+//! each dialing its own server endpoint. The other scenarios use the first endpoint and one client endpoint, on the
+//! threads that run them.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -34,9 +38,9 @@ use std::net::{SocketAddr, UdpSocket};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use super::{Lib, Rx, Tx};
-use nuclei::Handle;
+use super::{ADDR_SEP, Lib, Rx, Tx};
 use nuclei::net::UdpSocketBuilder;
+use nuclei::{Handle, RuntimeHandle};
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use vinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, RecvStream, SendStream, Vinc};
 use vinc_keystore::SoftwareStore;
@@ -142,6 +146,39 @@ fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
     Ok(ep)
 }
 
+/// How many endpoints the server runs, and over how many workers a burst is spread: `VINC_BENCH_CORES`, else one per
+/// worker of the runtime (one per core).
+fn cores() -> usize {
+    std::env::var("VINC_BENCH_CORES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .or_else(|| RuntimeHandle::try_current().ok().map(|rt| rt.workers()))
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// One serving endpoint on this thread: it accepts every session and serves its streams. Returns its address.
+fn serve_here() -> io::Result<String> {
+    let ep = bind(Limits::default(), true)?;
+    let addr = ep.addr().ticket();
+    nuclei::spawn_local(async move {
+        while let Some(inc) = ep.accept().await {
+            let conn = inc.into_connection();
+            nuclei::spawn_local(async move {
+                while let Ok((tx, rx)) = conn.accept_bi().await {
+                    nuclei::spawn_local(async move {
+                        let _ = super::handle(tx, rx).await;
+                    })
+                    .detach();
+                }
+            })
+            .detach();
+        }
+    })
+    .detach();
+    Ok(addr)
+}
+
 /// The library under test.
 pub struct Vinc1;
 
@@ -187,24 +224,38 @@ impl Lib for Vinc1 {
     }
 
     async fn serve() -> io::Result<String> {
-        let ep = bind(Limits::default(), true)?;
-        let addr = ep.addr().ticket();
-        nuclei::spawn_local(async move {
-            while let Some(inc) = ep.accept().await {
-                let conn = inc.into_connection();
-                nuclei::spawn_local(async move {
-                    while let Ok((tx, rx)) = conn.accept_bi().await {
-                        nuclei::spawn_local(async move {
-                            let _ = super::handle(tx, rx).await;
-                        })
-                        .detach();
-                    }
-                })
-                .detach();
+        // The first endpoint is on this thread, where every scenario but the burst finds it, as before; the others are
+        // on workers 1, 2, ... of the runtime.
+        let mut addrs = vec![serve_here()?];
+        if let Ok(rt) = RuntimeHandle::try_current()
+            && rt.workers() > 0
+        {
+            for w in 1..cores() {
+                addrs.push(
+                    rt.spawn_local_on_worker(w % rt.workers(), || async { serve_here() })?
+                        .await?,
+                );
             }
-        })
-        .detach();
-        Ok(addr)
+        }
+        Ok(addrs.join(&ADDR_SEP.to_string()))
+    }
+
+    fn shards() -> usize {
+        cores()
+    }
+
+    fn on_shard<M, F>(i: usize, make: M)
+    where
+        M: FnOnce() -> F + Send + 'static,
+        F: Future<Output = ()> + 'static,
+    {
+        match RuntimeHandle::try_current() {
+            Ok(rt) if rt.workers() > 0 => rt
+                .spawn_local_on_worker(i % rt.workers(), make)
+                .expect("a worker of the runtime takes the shard")
+                .detach(),
+            _ => nuclei::spawn_local(make()).detach(),
+        }
     }
 
     async fn client() -> io::Result<Ep> {

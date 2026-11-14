@@ -4,7 +4,8 @@
 //! One library is measured per process, and a process is either the server or the client of a scenario:
 //!
 //! - `server [--count-allocs]` binds on `VINC_BENCH_BIND` (an IP address; 127.0.0.1 when unset), prints `ADDR <text>`
-//!   and serves until it is killed.
+//!   and serves until it is killed. A library that runs one endpoint per core prints the address of each, separated by
+//!   [`ADDR_SEP`]: the `many` burst spreads its dials over them and every other scenario dials the first.
 //! - `client <addr> <scenario> [numbers]` runs one scenario against it and prints one JSON line per result.
 //!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
@@ -40,7 +41,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 
 pub mod iroh;
 pub mod libp2p;
@@ -48,6 +49,8 @@ pub mod vinc;
 
 /// The chunk every library moves bulk data in.
 pub const CHUNK: usize = 64 * 1024;
+/// What separates the addresses of a server that runs more than one endpoint, in its `ADDR` line.
+pub const ADDR_SEP: char = '|';
 
 /// A global allocator that counts calls and bytes once [`count_allocs`] turned counting on.
 pub struct Counting;
@@ -258,6 +261,20 @@ pub trait Lib: Sized + 'static {
     /// A line about the library's state after a setup scenario (for example how many resumptions were accepted).
     fn note() -> String {
         String::new()
+    }
+    /// Over how many threads, each with endpoints of its own, the `many` burst runs: one for a library whose runtime
+    /// spreads its own work over cores.
+    fn shards() -> usize {
+        1
+    }
+    /// Start what `make` makes on shard `i` of [`shards`](Self::shards), without waiting for it.
+    fn on_shard<M, F>(i: usize, make: M)
+    where
+        M: FnOnce() -> F + Send + 'static,
+        F: Future<Output = ()> + 'static,
+    {
+        let _ = i;
+        Self::spawn(make());
     }
 }
 
@@ -663,31 +680,36 @@ async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
     L::shutdown(ep).await;
 }
 
-/// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
-/// while every connection is still open.
-async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
-    let Ok(ctl_ep) = L::client().await else { return };
-    let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
-        Rec::new(L::name(), "many")
-            .s("status", "failed: no control connection")
-            .emit();
-        return;
-    };
-    let s_base = server_stats::<L>(&ctl).await.unwrap_or_default();
-    let c_base = Stats::now();
-    let mut eps = Vec::with_capacity(n);
-    let mut no_endpoint = 0u32;
-    for _ in 0..n {
+/// What a shard of a burst and the process that runs it say to each other; every part crosses threads.
+pub struct ShardIo {
+    /// How many of the shard's endpoints could not be made, once the rest are.
+    ready: mpsc::UnboundedSender<u32>,
+    /// When the burst starts.
+    go: oneshot::Receiver<Instant>,
+    /// Each connection's time to its first byte, or why it failed.
+    results: mpsc::UnboundedSender<Result<f64, String>>,
+    /// Close the connections, after the readings.
+    release: oneshot::Receiver<()>,
+    /// The connections are closed.
+    closed: mpsc::UnboundedSender<()>,
+}
+
+/// One shard of a burst: `count` fresh endpoints, made before the start, each dial `addr` at the start and move
+/// `each` bytes; the connections stay open until the release.
+async fn shard<L: Lib>(addr: String, count: usize, each: u64, io: ShardIo) {
+    let mut eps = Vec::with_capacity(count);
+    let mut missing = 0u32;
+    for _ in 0..count {
         match L::client().await {
             Ok(e) => eps.push(e),
-            Err(_) => no_endpoint += 1,
+            Err(_) => missing += 1,
         }
     }
-    let c_made = Stats::now();
-    let t = Instant::now();
+    let _ = io.ready.unbounded_send(missing);
+    let Ok(t) = io.go.await else { return };
     let (done, mut results) = mpsc::unbounded();
     for ep in eps {
-        let (addr, done) = (addr.to_owned(), done.clone());
+        let (addr, done) = (addr.clone(), done.clone());
         L::spawn(async move {
             let r = async {
                 let c = L::hello(&ep, &addr, false).await?;
@@ -700,17 +722,76 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
         });
     }
     drop(done);
-    let (mut held, mut up, mut failed, mut why) = (Vec::with_capacity(n), Vec::new(), no_endpoint, String::new());
+    let mut held = Vec::with_capacity(count);
     while let Some((ep, r)) = results.next().await {
-        match r {
-            Ok((u, c)) => {
-                up.push(us(u));
-                held.push((ep, c));
-            }
-            Err(e) => {
+        let _ = io.results.unbounded_send(r.map(|(u, c)| {
+            held.push((ep, c));
+            us(u)
+        }));
+    }
+    let _ = io.release.await;
+    for (ep, c) in held {
+        L::close(&ep, &c).await;
+        L::shutdown(ep).await;
+    }
+    let _ = io.closed.unbounded_send(());
+}
+
+/// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
+/// while every connection is still open. The endpoints are spread over [`Lib::shards`] shards, made before the clock
+/// starts; shard `i` dials the `i`-th of the server's addresses (`addr` holds one or more, separated by
+/// [`ADDR_SEP`]), so a library that runs one endpoint per core meets the burst with all of them.
+async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
+    let addrs: Vec<&str> = addr.split(ADDR_SEP).collect();
+    let Ok(ctl_ep) = L::client().await else { return };
+    let Ok(ctl) = L::hello(&ctl_ep, addrs[0], false).await else {
+        Rec::new(L::name(), "many")
+            .s("status", "failed: no control connection")
+            .emit();
+        return;
+    };
+    let s_base = server_stats::<L>(&ctl).await.unwrap_or_default();
+    let c_base = Stats::now();
+    let shards = L::shards().clamp(1, n.max(1));
+    let (ready, mut readies) = mpsc::unbounded();
+    let (results_tx, mut results) = mpsc::unbounded();
+    let (closed_tx, mut closed_rx) = mpsc::unbounded();
+    let (mut gos, mut releases) = (Vec::with_capacity(shards), Vec::with_capacity(shards));
+    for i in 0..shards {
+        let count = n / shards + usize::from(i < n % shards);
+        let (go_tx, go) = oneshot::channel();
+        let (release_tx, release) = oneshot::channel();
+        let io = ShardIo {
+            ready: ready.clone(),
+            go,
+            results: results_tx.clone(),
+            release,
+            closed: closed_tx.clone(),
+        };
+        let to = addrs[i % addrs.len()].to_owned();
+        L::on_shard(i, move || shard::<L>(to, count, each, io));
+        gos.push(go_tx);
+        releases.push(release_tx);
+    }
+    drop((ready, results_tx, closed_tx));
+    let mut failed = 0u32;
+    for _ in 0..shards {
+        failed += readies.next().await.unwrap_or(0);
+    }
+    let c_made = Stats::now();
+    let t = Instant::now();
+    for go in gos {
+        let _ = go.send(t);
+    }
+    let (mut up, mut why) = (Vec::with_capacity(n), String::new());
+    for _ in 0..n.saturating_sub(failed as usize) {
+        match results.next().await {
+            Some(Ok(u)) => up.push(u),
+            Some(Err(e)) => {
                 failed += 1;
                 why = e;
             }
+            None => break,
         }
     }
     let secs = t.elapsed().as_secs_f64();
@@ -718,7 +799,7 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
     L::sleep(Duration::from_millis(500)).await;
     let (s1, c1) = (server_stats::<L>(&ctl).await.unwrap_or(s_base), Stats::now());
     up.sort_by(f64::total_cmp);
-    let ok = held.len() as f64;
+    let ok = up.len() as f64;
     Rec::new(L::name(), "many")
         .n("requested", n as f64)
         .n("connected_and_moved", ok)
@@ -739,11 +820,15 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
         .n("client_rss_before_mib", c_base.rss_kb as f64 / 1024.0)
         .n("server_cpu_s", s1.cpu_secs_since(s_base))
         .n("client_cpu_s", c1.cpu_secs_since(c_made))
+        .n("shards", shards as f64)
+        .n("server_endpoints", addrs.len() as f64)
         .s("last_error", &why)
         .emit();
-    for (ep, c) in held {
-        L::close(&ep, &c).await;
-        L::shutdown(ep).await;
+    for release in releases {
+        let _ = release.send(());
+    }
+    for _ in 0..shards {
+        let _ = closed_rx.next().await;
     }
     L::shutdown(ctl_ep).await;
 }
@@ -802,18 +887,20 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
         Some("client") if args.len() >= 3 => {
             let addr = args[1].clone();
             let (a, scenario) = (args[3..].to_vec(), args[2].clone());
+            // Only the burst spreads over the server's endpoints; everything else dials the first.
+            let first = addr.split(ADDR_SEP).next().unwrap_or_default().to_owned();
             L::run(async move {
                 let a = &a[..];
                 match scenario.as_str() {
-                    "setup" => setup::<L>(&addr, num(a, 0, 200), false).await,
-                    "resume" => setup::<L>(&addr, num(a, 0, 200), true).await,
-                    "throughput" => throughput::<L>(&addr, num(a, 0, 1 << 30), num(a, 1, 1)).await,
-                    "latency" => latency::<L>(&addr, num(a, 0, 64), num(a, 1, 100_000)).await,
-                    "requests" => requests::<L>(&addr, num(a, 0, 512), num(a, 1, 10_000), num(a, 2, 1)).await,
+                    "setup" => setup::<L>(&first, num(a, 0, 200), false).await,
+                    "resume" => setup::<L>(&first, num(a, 0, 200), true).await,
+                    "throughput" => throughput::<L>(&first, num(a, 0, 1 << 30), num(a, 1, 1)).await,
+                    "latency" => latency::<L>(&first, num(a, 0, 64), num(a, 1, 100_000)).await,
+                    "requests" => requests::<L>(&first, num(a, 0, 512), num(a, 1, 10_000), num(a, 2, 1)).await,
                     "allocs" => {
                         count_allocs();
-                        latency::<L>(&addr, 64, num(a, 0, 20_000)).await;
-                        bulk_allocs::<L>(&addr, num(a, 1, 64 << 20)).await;
+                        latency::<L>(&first, 64, num(a, 0, 20_000)).await;
+                        bulk_allocs::<L>(&first, num(a, 1, 64 << 20)).await;
                     }
                     "many" => many::<L>(&addr, num(a, 0, 1000), num(a, 1, 64 * 1024)).await,
                     other => {
