@@ -11,12 +11,13 @@ many entries as the slab has slots; `notify` takes and wakes one ticket's waker;
 first entry whose ticket is live and armed and wakes it, dropping stale entries and unqueuing the slots of live ones;
 `notifyAll` wakes every live armed slot in slot order; `release` ends the slot's life, unqueues it, moves its
 generation on (`wrapping_add` on a `u32`: modulo `2^32`) and pushes it on the free stack, leaving the ticket's entry
-in the queue, stale. Every call that wakes returns the wakers woken, in order. `alloc` names a new slot by the slab's
-length, as the code does while it has fewer than `2^32` slots.
+in the queue, stale, except that the release that brings the slot's generation round (from `2^32 - 1` to 0) drops
+every stale entry (`wrapQueue`, the fix of #419). Every call that wakes returns the wakers woken, in order. `alloc`
+names a new slot by the slab's length, as the code does while it has fewer than `2^32` slots.
 
 Beside the slab, `Op.order` keeps the documented order of the baton: the tickets waiting for the role in the order
 they were queued (`orderWoken` is what that order says the baton wakes). `Op.revives` is an `alloc` that hands out a
-ticket a stale entry of the queue still names, which needs the slot released a multiple of `2^32` times.
+ticket a stale entry of the queue still names, which the drop at the wrap rules out (`exec_norevive`).
 
 `Vinc.TraceFacadeStandby` replays the recorded calls of the real code through these functions; the theorems are in
 `Vinc.FacadeStandbyThm` (the slab) and `Vinc.FacadeStandbyOrder` (the queue and the baton's order), and
@@ -116,13 +117,20 @@ def notifyAll (s : S) : List Nat × S :=
   (s.slots.filterMap armedW,
    { s with slots := s.slots.map fun sl => if sl.live then { sl with waker := none } else sl })
 
+/-- The queue a release of a slot of generation `g` leaves, with `slots` the slots after it: the live entries only
+(`drop_stale`) when the release brings the generation round (`g` is `u32::MAX`), the queue as it was otherwise. -/
+def wrapQueue (g : Nat) (slots : List Slot) (q : List Ticket) : List Ticket :=
+  if g + 1 = GENS then q.filter (valid slots) else q
+
 def release (t : Ticket) (s : S) : S :=
   match slotOf s t with
   | none => s
   | some sl =>
     { s with slots := s.slots.set t.idx
                { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none, queued := false },
-             free := t.idx :: s.free }
+             free := t.idx :: s.free,
+             queue := wrapQueue sl.gen (s.slots.set t.idx
+               { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none, queued := false }) s.queue }
 
 /-- The calls, for runs of them. -/
 inductive Op where

@@ -10,7 +10,8 @@ included:
 - every entry of the queue names a slot of the slab; a queued slot is live and the entry of its ticket is in the
   queue; a slot keeps a waker only while it is live and queued; the free stack holds each slot at most once, exactly
   the slots that are not live; every generation is below `2^32` (`Inv`, `init_inv`, `alloc_inv`, `arm_inv`,
-  `notify_inv`, `baton_inv`, `notifyAll_inv`, `release_inv`, `run_inv`, `exec_inv`);
+  `notify_inv`, `baton_inv`, `notifyAll_inv`, `release_inv`, `run_inv`, `exec_inv`; the release that brings a
+  generation round drops only stale entries, `wrapQueue_filter`);
 - the slab is as long as the most tickets held at once (`exec_hw`, over any run from the empty slab);
 - an `arm`, `notify` or `release` with a ticket that names no live slot of its generation changes nothing and wakes
   nothing (`arm_stale`, `notify_stale`, `release_stale`); a release leaves its ticket dead (`release_dead`), and a
@@ -319,6 +320,37 @@ theorem compact_filter (s : S) : (compact s).filter (valid s.slots) = s.queue.fi
     exact List.filter_congr (fun x _ => by simp)
   · rfl
 
+/-! ### The queue a release leaves -/
+
+theorem wrapQueue_sub {g : Nat} {slots : List Slot} {q : List Ticket} {u : Ticket} (h : u ∈ wrapQueue g slots q) :
+    u ∈ q := by
+  unfold wrapQueue at h
+  split at h
+  · exact (List.mem_filter.mp h).1
+  · exact h
+
+theorem wrapQueue_keep {g : Nat} {slots : List Slot} {q : List Ticket} {u : Ticket} (hu : u ∈ q)
+    (hv : valid slots u = true) : u ∈ wrapQueue g slots q := by
+  unfold wrapQueue
+  split
+  · exact List.mem_filter.mpr ⟨hu, hv⟩
+  · exact hu
+
+/-- The drop at the wrap drops only stale entries. -/
+theorem wrapQueue_filter (g : Nat) (slots : List Slot) (q : List Ticket) :
+    (wrapQueue g slots q).filter (valid slots) = q.filter (valid slots) := by
+  unfold wrapQueue
+  split
+  · rw [List.filter_filter]
+    exact List.filter_congr (fun x _ => by simp)
+  · rfl
+
+theorem wrapQueue_len (g : Nat) (slots : List Slot) (q : List Ticket) : (wrapQueue g slots q).length ≤ q.length := by
+  unfold wrapQueue
+  split
+  · exact List.length_filter_le _ _
+  · exact Nat.le_refl _
+
 theorem arm_inv (t : Ticket) (w : Nat) (s : S) (h : Inv s) : Inv (arm t w s) := by
   unfold arm
   cases hs : slotOf s t with
@@ -387,12 +419,15 @@ theorem release_inv (t : Ticket) (s : S) (h : Inv s) : Inv (release t s) := by
     refine ⟨?_, ?_, ?_, List.nodup_cons.mpr ⟨hnot, h.f_nodup⟩, ?_, ?_⟩
     · intro u hu
       show u.idx < (s.slots.set t.idx _).length
-      rw [List.length_set]; exact h.q_idx u hu
+      rw [List.length_set]; exact h.q_idx u (wrapQueue_sub hu)
     · intro j sl' hj hq'
+      have hj0 := hj
       simp only [get_set] at hj
       by_cases hij : t.idx = j
       · subst hij; simp [hlt] at hj; subst hj; simp at hq'
-      · simp [hij] at hj; exact h.q_live j sl' hj hq'
+      · simp [hij] at hj
+        obtain ⟨h1, h2⟩ := h.q_live j sl' hj hq'
+        exact ⟨h1, wrapQueue_keep h2 (valid_iff.mpr ⟨sl', slotAt_some.mpr ⟨hj0, h1, rfl⟩⟩)⟩
     · intro j sl' hj hw'
       simp only [get_set] at hj
       by_cases hij : t.idx = j

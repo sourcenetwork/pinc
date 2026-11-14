@@ -724,7 +724,8 @@ par witness_tlc facade_acp_forget_unlisted FacadeAcpForget FacadeAcpForget_unlis
 par run_tlc facade_standby FacadeStandby FacadeStandby
 par witness_tlc facade_standby_oldest FacadeStandby FacadeStandby_oldest BatonOldest
 par witness_tlc facade_standby_nogen FacadeStandby FacadeStandby_nogen NoStaleHit
-par witness_tlc facade_standby_wrap FacadeStandby FacadeStandby_wrap QueueStrict
+par run_tlc facade_standby_wrap FacadeStandby FacadeStandby_wrap
+par witness_tlc facade_standby_wrapkeep FacadeStandby FacadeStandby_wrapkeep QueueStrict
 par run_tlc facade_turn FacadeTurn FacadeTurn
 par run_tlc facade_turn_two FacadeTurn FacadeTurn_two
 par run_tlc facade_turn_role FacadeTurn FacadeTurn_role
@@ -732,7 +733,8 @@ par run_tlc facade_turn_wrap FacadeTurn FacadeTurn_wrap
 par run_tlc facade_turn_live FacadeTurn FacadeTurn_live
 par witness_tlc facade_turn_nopass FacadeTurn FacadeTurn_nopass RoleOffered
 par witness_tlc facade_turn_drain FacadeTurn FacadeTurn_drain NotCut
-par witness_tlc facade_turn_wrapfew FacadeTurn FacadeTurn_wrapfew QueueOnce
+par run_tlc facade_turn_wrapfew FacadeTurn FacadeTurn_wrapfew
+par witness_tlc facade_turn_wrapkeep FacadeTurn FacadeTurn_wrapkeep QueueOnce
 while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 
 echo "-- trace"

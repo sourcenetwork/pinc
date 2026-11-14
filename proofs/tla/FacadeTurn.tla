@@ -44,11 +44,12 @@
 (*    of the queued slots, once each, and the queue holds at most twice as *)
 (*    many entries as the slab has slots; WakerQueued, FreeExact,          *)
 (*    SlabBound: the slab is as long as the most futures that held a       *)
-(*    ticket at once). Every ticket a future allocates is armed in the     *)
-(*    same poll, so each reuse of a slot queues an entry: in               *)
-(*    FacadeTurn_wrap a slot's generation wraps (GENS = 5 is more than     *)
-(*    twice the slab) and the stale entry of its old ticket is compacted   *)
-(*    away before the slot is taken at that generation again;              *)
+(*    ticket at once). A slot's generation goes round within the bound,    *)
+(*    and the release that brings it round drops every stale entry (the    *)
+(*    fix of #419), so the stale entry of its old ticket is gone before    *)
+(*    the slot is taken at that generation again: FacadeTurn_wrap (GENS =  *)
+(*    5, more than twice the slab, where a compaction drops it first) and  *)
+(*    FacadeTurn_wrapfew (GENS = 3, not more than twice the slab);         *)
 (*  - every datagram the host delivered is either still with the host or   *)
 (*    was handed to the core, exactly once and in order (FedExact), and a  *)
 (*    poll reads at most DRAIN (DrainBound);                               *)
@@ -63,9 +64,9 @@
 (* does not pass the baton on: the one it was offered to is dropped and a  *)
 (* waiting future is stranded, RoleOffered fails); FacadeTurn_drain (a     *)
 (* poll stops at DRAIN with datagrams still waiting at the host);          *)
-(* FacadeTurn_wrapfew (GENS = 3, not more than twice the slab: a slot is   *)
-(* taken at the generation of a stale entry before the queue is long       *)
-(* enough to compact it, and QueueOnce fails).                             *)
+(* FacadeTurn_wrapkeep (the release before the fix of #419, DROP = FALSE,  *)
+(* with GENS = 3: a slot is taken at the generation of a stale entry       *)
+(* before the queue is long enough to compact it, and QueueOnce fails).    *)
 (* Assumed of the host (#246 (c)): its executor polls every woken future;  *)
 (* a dropped receive future loses no datagram; sleep(at) does not finish   *)
 (* before at; every future runs on the thread that built the endpoint, so  *)
@@ -73,7 +74,8 @@
 (* Lean counterpart: proofs/lean/Vinc/FacadeTurn.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS F, OWNER, ROLE, DRAIN, DMAX, STARTS, GENS, PASS
+CONSTANTS F, OWNER, ROLE, DRAIN, DMAX, STARTS, GENS, PASS,
+          DROP   \* the release of the code (TRUE) or the release before the fix of #419 (FALSE)
 VARIABLES sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took, hw
 vars == <<sb, st, tk, drv, flag, driver, sock, fed, arrived, starts, done, took, hw>>
 
@@ -81,6 +83,7 @@ INSTANCE StandbyOps
 
 NoTicket == <<>>
 CanDrive(f) == ~ROLE \/ f = OWNER
+Rel(s, t) == IF DROP THEN Release(s, t, GENS) ELSE ReleaseKeep(s, t, GENS)
 Max(a, b) == IF a > b THEN a ELSE b
 
 Init == /\ sb = Sb0 /\ st = [f \in F |-> "off"] /\ tk = [f \in F |-> NoTicket] /\ drv = [f \in F |-> FALSE]
@@ -140,7 +143,7 @@ Ended(f) ==
     THEN /\ st' = [st EXCEPT ![f] = "off"]
          /\ UNCHANGED <<sb, tk, drv, flag, driver>>
     ELSE LET flag1 == IF drv[f] THEN FALSE ELSE flag
-             s1 == Release(sb, tk[f], GENS)
+             s1 == Rel(sb, tk[f])
              b == IF drv[f] \/ (PASS /\ ~flag1) THEN Baton(s1) ELSE [w |-> <<>>, s |-> s1]
          IN /\ sb' = b.s /\ flag' = flag1
             /\ driver' = IF drv[f] THEN NoTicket ELSE driver

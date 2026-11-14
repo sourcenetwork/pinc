@@ -6,23 +6,28 @@
 (* small sizes, with every ticket ever handed out (stale ones included)    *)
 (* and a forged one (StandbyOps.tla has the operators). At most LIVE       *)
 (* tickets are held at once and AMAX are handed out in all; W are the      *)
-(* wakers. Beside the slab the model keeps ord, the documented order: the  *)
-(* tickets waiting for the role in the order they were queued, and         *)
-(* wrapped, set once alloc hands out a ticket that a stale entry of the    *)
-(* queue still names (its slot was released a multiple of GENS times since *)
-(* the entry was queued, so the entry names a live slot again).            *)
+(* wakers; GENS generations stand for the code's 2^32, so a slot's         *)
+(* generation goes round within the bound. Beside the slab the model keeps *)
+(* ord, the documented order: the tickets waiting for the role in the      *)
+(* order they were queued, and wrapped, set once alloc hands out a ticket  *)
+(* that a stale entry of the queue still names (its slot was released a    *)
+(* multiple of GENS times since the entry was queued, so the entry names a *)
+(* live slot again).                                                       *)
 (*                                                                         *)
 (* Checked:                                                                *)
+(*  - wrapped is never set (NoRevive): the release that brings a slot's    *)
+(*    generation round drops every stale entry of the queue (the fix of    *)
+(*    #419), so no entry of an earlier round names the slot's next ticket, *)
+(*    whatever the calls (a slot released unarmed included); and it could  *)
+(*    be set only after a slot was released GENS times (WrapCost);         *)
 (*  - every entry of the queue names a slot of the slab, and a queued slot *)
-(*    is live with the entry of its ticket in the queue; until wrapped,    *)
-(*    the slot of every live entry is queued, no ticket has two live       *)
-(*    entries, and the queue holds at most twice as many entries as the    *)
-(*    slab has slots (QueueOnce);                                          *)
-(*  - until wrapped, the live entries of the queue are the documented      *)
-(*    order: a ticket that reuses a released slot queues behind the        *)
-(*    tickets already waiting (QueueOrder);                                *)
-(*  - wrapped only after a slot was released GENS times (2^32 in the code) *)
-(*    (WrapCost);                                                          *)
+(*    is live with the entry of its ticket in the queue; the slot of every *)
+(*    live entry is queued, no ticket has two live entries, and the queue  *)
+(*    holds at most twice as many entries as the slab has slots            *)
+(*    (QueueOnce);                                                         *)
+(*  - the live entries of the queue are the documented order: a ticket     *)
+(*    that reuses a released slot queues behind the tickets already        *)
+(*    waiting (QueueOrder);                                                *)
 (*  - a slot keeps a waker only while it is live and queued (WakerQueued); *)
 (*  - the free stack holds each slot at most once, exactly the slots that  *)
 (*    are not live (FreeExact);                                            *)
@@ -43,21 +48,24 @@
 (*    woken; the slot of every live entry it popped is no longer queued    *)
 (*    and no other slot's mark changes; whenever a slot is armed, exactly  *)
 (*    one waker is woken (BatonRight);                                     *)
-(*  - until wrapped, the baton wakes the oldest armed ticket of the        *)
-(*    documented order (BatonOldest).                                      *)
+(*  - the baton wakes the oldest armed ticket of the documented order      *)
+(*    (BatonOldest).                                                       *)
 (* Witnesses: FacadeStandby_oldest runs the code before the fix of #311    *)
 (* (OLD: release leaves the slot queued and its entry in the queue, and    *)
 (* the baton takes an entry by its slot whatever the generation, so a      *)
 (* ticket that reuses a queued slot keeps the released ticket's place):    *)
-(* BatonOldest fails. FacadeStandby_wrap (GENS = 2): a stale entry names a *)
-(* live slot again after its slot was released twice, and the queue is no  *)
-(* longer exact (QueueStrict fails). FacadeStandby_nogen has one           *)
-(* generation: a stale ticket names the slot of a later future (NoStaleHit *)
-(* fails).                                                                 *)
+(* BatonOldest fails. FacadeStandby_wrapkeep runs the release before the   *)
+(* fix of #419 (DROP = FALSE: the stale entries stay queued at the wrap)   *)
+(* with GENS = 2: a stale entry names a live slot again after its slot was *)
+(* released twice, and the queue is no longer exact (QueueStrict fails);   *)
+(* FacadeStandby_wrap is the same run with the fix, where QueueStrict      *)
+(* holds. FacadeStandby_nogen has one generation: a stale ticket names the *)
+(* slot of a later future (NoStaleHit fails).                              *)
 (* Lean counterpart: proofs/lean/Vinc/FacadeStandby*.lean.                 *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS LIVE, AMAX, W, GENS, OLD
+CONSTANTS LIVE, AMAX, W, GENS, OLD,
+          DROP   \* the release of the code (TRUE) or the release before the fix of #419 (FALSE)
 VARIABLES sb, issued, allocs, hw, rels, dead, ord, wrapped, rStale, rAlloc, rWake, rBaton, oldest
 vars == <<sb, issued, allocs, hw, rels, dead, ord, wrapped, rStale, rAlloc, rWake, rBaton, oldest>>
 
@@ -96,7 +104,7 @@ ReleaseOld(s, t) ==
                    !.slots[t[1] + 1].waker = 0, !.free = Append(@, t[1])]
 DoArm(s, t, w) == IF OLD THEN ArmOld(s, t, w) ELSE Arm(s, t, w)
 DoBaton(s) == IF OLD THEN BatonOld(s) ELSE Baton(s)
-DoRelease(s, t) == IF OLD THEN ReleaseOld(s, t) ELSE Release(s, t, GENS)
+DoRelease(s, t) == IF OLD THEN ReleaseOld(s, t) ELSE IF DROP THEN Release(s, t, GENS) ELSE ReleaseKeep(s, t, GENS)
 
 AllocA ==
     LET x == Alloc(sb)
@@ -154,7 +162,7 @@ BatonA ==
                      /\ \A i \in 0..Len(sb.slots) - 1 :
                             IF i \in offered THEN ~Slot(x.s, i).queued ELSE Slot(x.s, i).queued = Slot(sb, i).queued
                      /\ ((\E i \in 0..Len(sb.slots) - 1 : Slot(sb, i).waker # 0) => Len(x.w) = 1))
-       /\ oldest' = (oldest /\ (wrapped \/ x.w = OrderWoken(sb, ord)))
+       /\ oldest' = (oldest /\ x.w = OrderWoken(sb, ord))
        /\ UNCHANGED <<issued, allocs, hw, rels, dead, wrapped, rStale, rAlloc, rWake>>
 
 ReleaseA == \E t \in Tickets :
@@ -170,8 +178,9 @@ ReleaseA == \E t \in Tickets :
 Next == AllocA \/ ArmA \/ NotifyA \/ NotifyAllA \/ BatonA \/ ReleaseA
 Spec == Init /\ [][Next]_vars
 
-QueueOnce == QueueLive(sb) /\ (~wrapped => QueueExact(sb))
-QueueOrder == ~wrapped => LiveEntries(sb) = ord
+NoRevive == ~wrapped
+QueueOnce == QueueLive(sb) /\ QueueExact(sb)
+QueueOrder == LiveEntries(sb) = ord
 WrapCost == wrapped => \E i \in 0..LIVE - 1 : rels[i] >= GENS
 WakerQueued == \A i \in 0..Len(sb.slots) - 1 : Slot(sb, i).waker # 0 => Slot(sb, i).live /\ Slot(sb, i).queued
 FreeExact == /\ Distinct(sb.free)
@@ -185,11 +194,11 @@ AllocRight == rAlloc
 WakeRight == rWake
 BatonRight == rBaton
 BatonOldest == oldest
-Inv == QueueOnce /\ QueueOrder /\ WrapCost /\ WakerQueued /\ FreeExact /\ SlabBound /\ GenRange /\ DeadStay
-       /\ StaleRight /\ AllocRight /\ WakeRight /\ BatonRight /\ BatonOldest
+Inv == NoRevive /\ QueueOnce /\ QueueOrder /\ WrapCost /\ WakerQueued /\ FreeExact /\ SlabBound /\ GenRange
+       /\ DeadStay /\ StaleRight /\ AllocRight /\ WakeRight /\ BatonRight /\ BatonOldest
 
-\* the witnesses: the queue exact and in the documented order whatever the generations (a stale entry that names a
-\* live slot again breaks it), and a stale ticket that names a later future's slot
+\* the witnesses: the queue exact and in the documented order (a stale entry that names a live slot again, which the
+\* release before #419 lets happen, breaks it), and a stale ticket that names a later future's slot
 QueueStrict == QueueExact(sb) /\ LiveEntries(sb) = ord
 NoStaleHit == \A d \in dead : ~Valid(sb, <<d[1], d[2]>>)
 =============================================================================

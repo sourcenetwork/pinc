@@ -13,6 +13,7 @@
 (* code's Vec used as a stack: push appends, pop takes the last); queue    *)
 (* (the VecDeque of tickets, front first). A ticket is <<idx, gen>>. gens  *)
 (* is the number of generations, 2^32 in the code (u32 wrapping_add).      *)
+(* ReleaseKeep is release before the fix of #419, for the witnesses.       *)
 (* Every call that can wake returns w, the wakers woken in the order the   *)
 (* code wakes them.                                                        *)
 (***************************************************************************)
@@ -75,21 +76,27 @@ NotifyAll(s) ==
         s |-> [s EXCEPT !.slots = [k \in 1..Len(s.slots) |->
                    IF Armed(s, k) THEN [s.slots[k] EXCEPT !.waker = 0] ELSE s.slots[k]]]]
 
-\* release: the slot is no longer live nor queued, its generation moves on (wrapping), its waker is dropped, and it goes
-\* on the free stack; the entry of the ticket stays in the queue, stale, until the baton or a compaction drops it
-Release(s, t, gens) ==
+\* release before the fix of #419: the slot is no longer live nor queued, its generation moves on (wrapping), its waker
+\* is dropped, and it goes on the free stack; the entry of the ticket stays in the queue, stale, until the baton or a
+\* compaction drops it
+ReleaseKeep(s, t, gens) ==
     IF ~Valid(s, t) THEN s
     ELSE [s EXCEPT !.slots[t[1] + 1].live = FALSE, !.slots[t[1] + 1].gen = (@ + 1) % gens,
                    !.slots[t[1] + 1].waker = 0, !.slots[t[1] + 1].queued = FALSE, !.free = Append(@, t[1])]
+\* release: as above, and the release that brings the slot's generation round (from gens - 1 to 0) drops every stale
+\* entry of the queue (drop_stale, after the slot is released), so no entry of an earlier round outlives it
+Release(s, t, gens) ==
+    LET r == ReleaseKeep(s, t, gens)
+    IN IF Valid(s, t) /\ Slot(s, t[1]).gen = gens - 1 THEN [r EXCEPT !.queue = LiveEntries(r)] ELSE r
 
 Range(q) == {q[k] : k \in DOMAIN q}
 Distinct(q) == \A j, k \in DOMAIN q : q[j] = q[k] => j = k
 Lives(s) == {i \in 0..Len(s.slots) - 1 : Slot(s, i).live}
 
-\* The queue's own invariants. Always: every entry names a slot of the slab, and a queued slot is live with the
-\* entry of its ticket in the queue (QueueLive). While no stale entry names a live slot again: the slot of every live
-\* entry is queued, no ticket has two live entries, and the queue holds at most twice as many entries as the slab has
-\* slots (QueueExact).
+\* The queue's own invariants. Every entry names a slot of the slab, and a queued slot is live with the entry of its
+\* ticket in the queue (QueueLive). While no stale entry names a live slot again, which Release keeps (the rule before
+\* #419, ReleaseKeep, does not): the slot of every live entry is queued, no ticket has two live entries, and the queue
+\* holds at most twice as many entries as the slab has slots (QueueExact).
 QueueLive(s) == /\ \A k \in DOMAIN s.queue : Has(s, s.queue[k][1])
                 /\ \A i \in 0..Len(s.slots) - 1 :
                        Slot(s, i).queued => Slot(s, i).live /\ <<i, Slot(s, i).gen>> \in Range(s.queue)

@@ -9,15 +9,15 @@ What the model proves about the queue of `Standby` and its baton, for any number
 - the baton, as the code has it: the waker of the first entry of the queue whose ticket is live and armed is woken,
   and every entry up to it leaves the queue; with none, nothing is woken and the queue empties (`baton_first`);
   whenever a slot is armed, exactly one waker is woken (`baton_one`);
-- while no `alloc` hands out a ticket that a stale entry of the queue still names (`NoRevive`: that entry's ticket
-  was released, so by `dead_stays` its slot was released a multiple of `2^32` times since): the slot of every live
-  entry is queued, no ticket has two live entries, and the queue holds at most twice as many entries as the slab has
-  slots (`QInv`, `init_qinv`, `run_qinv`, `exec_qinv`), so its live entries are at most the slab (`live_le`); and the
-  live entries of the queue are the documented order, the tickets waiting for the role in the order they were queued,
-  so a ticket that reuses a released slot queues behind those already waiting (`run_order`, `exec_order`);
+- while no `alloc` hands out a ticket that a stale entry of the queue still names (`NoRevive`, which every run from
+  the empty slab keeps since the fix of #419, `Vinc.FacadeStandbyWrap`): the slot of every live entry is queued, no
+  ticket has two live entries, and the queue holds at most twice as many entries as the slab has slots (`QInv`,
+  `init_qinv`, `run_qinv`, `exec_qinv`), so its live entries are at most the slab (`live_le`); and the live entries
+  of the queue are the documented order, the tickets waiting for the role in the order they were queued, so a ticket
+  that reuses a released slot queues behind those already waiting (`run_order`, `exec_order`);
 - what the baton wakes and the live entries it leaves are what the documented order says of the live entries it
   found (`baton_order`), so it wakes the oldest armed ticket of the documented order (`baton_oldest`; from the empty
-  slab over any run that revives no stale entry, `exec_oldest`; on the run of issue #311, `oldest_ok`);
+  slab over any run, `exec_oldest` in `Vinc.FacadeStandbyWrap`; on the run of issue #311, `oldest_ok`);
 - the rule before the fix of #311 (release left the slot queued and its entry in the queue, and the baton took an
   entry by its slot), under which a ticket that reused a queued slot kept that place, fails the documented order
   (`oldest_bad`).
@@ -461,14 +461,15 @@ theorem release_qinv (t : Ticket) (s : S) (hq : QInv s) : QInv (release t s) := 
       · rw [slotAt_set_ne _ _ _ _ hut] at hu; exact hu
     refine ⟨?_, ?_, ?_⟩
     · intro u hu sl' hs'
-      exact hq.lq_q u hu sl' (back u sl' hs')
-    · show (s.queue.filter (valid (s.slots.set t.idx _))).Nodup
+      exact hq.lq_q u (wrapQueue_sub hu) sl' (back u sl' hs')
+    · show ((wrapQueue sl.gen (s.slots.set t.idx _) s.queue).filter (valid (s.slots.set t.idx _))).Nodup
+      rw [wrapQueue_filter]
       refine hq.lq_nodup.sublist (filter_mono _ _ s.queue ?_)
       intro u _ hv
       obtain ⟨sl', hs'⟩ := valid_iff.mp hv
       exact valid_iff.mpr ⟨sl', back u sl' hs'⟩
-    · show s.queue.length ≤ 2 * (s.slots.set t.idx _).length
-      rw [List.length_set]; exact hq.q_len
+    · show (wrapQueue sl.gen (s.slots.set t.idx _) s.queue).length ≤ 2 * (s.slots.set t.idx _).length
+      rw [List.length_set]; exact Nat.le_trans (wrapQueue_len _ _ _) hq.q_len
 
 theorem run_qinv (o : Op) (s : S) (h : Inv s) (hq : QInv s) (hn : ¬o.revives s) : QInv (o.run s) := by
   cases o with
@@ -606,8 +607,11 @@ theorem release_order (t : Ticket) (s : S) (o : List Ticket) (ho : s.queue.filte
     obtain ⟨hsl, _, _⟩ := slotOf_some.mp hs
     have hv : valid s.slots t = true := valid_iff.mpr ⟨sl, hs⟩
     rw [ite_eq_left hv, ← ho, List.filter_filter]
-    show s.queue.filter (valid (s.slots.set t.idx
-      { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none, queued := false })) = _
+    show (wrapQueue sl.gen (s.slots.set t.idx
+      { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none, queued := false }) s.queue).filter
+      (valid (s.slots.set t.idx
+        { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none, queued := false })) = _
+    rw [wrapQueue_filter]
     apply List.filter_congr
     intro u _
     show valid (s.slots.set t.idx _) u = (decide (u ≠ t) && valid s.slots u)
@@ -669,12 +673,6 @@ theorem exec_order : ∀ (os : List Op) (s : S) (o : List Ticket), Inv s → QIn
 theorem execO_fst : ∀ (os : List Op) (s : S) (o : List Ticket), (execO os s o).1 = exec os s
   | [], _, _ => rfl
   | op :: os, s, o => execO_fst os (op.run s) (op.order s o)
-
-/-- From the empty slab, over any run that revives no stale entry, the baton wakes the oldest armed ticket of the
-documented order. -/
-theorem exec_oldest (os : List Op) (hn : NoRevive os {}) :
-    (baton (execO os {} []).1).1 = orderWoken (execO os {} []).1.slots (execO os {} []).2 :=
-  baton_oldest _ _ (exec_order os {} [] init_inv init_qinv rfl hn)
 
 /-! ## The order of issue #311 -/
 
@@ -755,7 +753,6 @@ theorem oldest_ok :
 #audit_axioms Vinc.FacadeStandby.exec_order
 #audit_axioms Vinc.FacadeStandby.baton_order
 #audit_axioms Vinc.FacadeStandby.baton_oldest
-#audit_axioms Vinc.FacadeStandby.exec_oldest
 #audit_axioms Vinc.FacadeStandby.oldest_bad
 #audit_axioms Vinc.FacadeStandby.oldest_ok
 
