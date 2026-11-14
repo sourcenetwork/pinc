@@ -90,9 +90,6 @@ conn_impl! {
         while let Some(ev) = self.hs.step(&mut self.pool) {
             self.on_hs_event(env, ev);
         }
-        if let Some(rtt) = self.hs.take_rtt_sample() {
-            self.rec.seed_rtt(rtt);
-        }
         if self.hs.timed_out() && self.phase == Phase::Handshaking {
             self.silent_close(if self.hs.unanswered() {
                 CloseReason::Unanswered
@@ -133,6 +130,10 @@ conn_impl! {
                 self.phase = Phase::Connected;
                 self.life.last_activity = now;
                 if self.client {
+                    self.follow_reply();
+                    if let Some(rtt) = self.hs.take_rtt_sample() {
+                        self.rec.seed_rtt(rtt);
+                    }
                     // The reply came back on one path: the Finish and each resend of it follow it there, not onto the
                     // other paths the flight was copied to.
                     self.set_flight_fanout(&[]);
@@ -164,6 +165,38 @@ conn_impl! {
                 self.drain_early(env);
             }
         }
+    }
+
+    /// A dialing side's session is established, so the message that led there authenticated: the Reply's sealed block
+    /// opened and the responder's signature verified, or the resume Reply's confirmation tag matched. Only now does
+    /// the datagram that completed it count: its source id becomes the peer's first id, and the session continues on
+    /// its path (the answer to a flight sent on several paths came back there), while the path that did not answer
+    /// is validated only when a challenge on it is answered. A handshake packet whose message does not authenticate
+    /// moves no path, validates none and names no id.
+    ///
+    /// The reference model acts on the server flight in the same order: it opens the sealed part and verifies the
+    /// signature, and only then takes the peer's id and moves to the path the flight came on; a resumption moves only
+    /// after its reply has opened. Here nothing leaves between the signature check and the establishment, so the
+    /// Finish leaves on the new active path, as the reference's does.
+    fn follow_reply(&mut self) {
+        let Some((id, scid, at)) = self.reply_from.take() else { return };
+        self.cids.set_first_remote(scid);
+        let Some(pi) = self.paths.find(id) else { return };
+        if let Some(p) = self.paths.get_mut(pi) {
+            p.last_rx = p.last_rx.max(at);
+        }
+        if pi == self.paths.active {
+            return;
+        }
+        let old = self.paths.active;
+        if let Some(p) = self.paths.get_mut(old) {
+            p.validated = false;
+        }
+        if let Some(p) = self.paths.get_mut(pi) {
+            p.validated = true;
+            p.amp.validate();
+        }
+        self.switch_active(pi);
     }
 
     /// Apply the peer's authenticated credit record. Returns false if the connection was closed instead.

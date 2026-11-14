@@ -1,5 +1,6 @@
 //! The rules of the transport pinned with their numbers: derived connection ids, the stream-level limits as the
-//! connection shows them, sleep and wake, path rules, path MTU, the fixed packet-number width and the first flight.
+//! connection shows them, sleep and wake, path rules, path MTU, the fixed packet-number width, the first flight, and
+//! what a handshake packet changes before its message authenticated.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -14,11 +15,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::IdentityAlg;
+use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
+use vinc_crypto::{Aead, IdentityAlg};
+use vinc_security::ClientTickets;
+use vinc_security::message::{MAX_MESSAGE_LEN, Reply};
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, ExtensionError, PathId, PathInfo, code};
 use vinc_transport::frame::ext;
+use vinc_transport::packet::{ConnId, LongHeader, LongType, short_dcid};
 use vinc_transport::recovery::PathKind;
+use vinc_wire::Writer;
 
 vinc_tests::install_counting_allocator!();
 
@@ -690,5 +696,251 @@ fn a_responder_in_its_handshake_learns_the_path_of_a_datagram_that_names_its_ids
         net.a.conn.set_flight_fanout(&[PathId(3)]);
         // The flight leaves on both paths; the responder sees the second copy after the first made its session.
         assert!(net.run(net.now + 10 * SEC, |n| n.b.conn.has_path(PathId(4))));
+    });
+}
+
+// ---- handshake packets before their message authenticated ----
+
+/// The source id a forger puts in its packets.
+fn forger() -> ConnId {
+    ConnId::new(&[0xEE; 8]).unwrap()
+}
+
+/// A long Handshake packet to `dcid` from the forger's id, carrying `body`.
+fn forged(dcid: ConnId, body: &[u8]) -> Vec<u8> {
+    let h = LongHeader {
+        ty: LongType::Handshake,
+        dcid,
+        scid: forger(),
+        body_len: body.len(),
+    };
+    let mut d = vec![0u8; h.header_len() + body.len()];
+    let mut w = Writer::new(&mut d);
+    h.write(&mut w, 0).unwrap();
+    w.put_slice(body).unwrap();
+    d
+}
+
+/// A whole Reply from the forger that the dialing side's machine takes: well formed, with a sealed block that does
+/// not open.
+fn forged_reply(dcid: ConnId) -> Vec<u8> {
+    let ct = [0x5a; KEM_CIPHERTEXT_LEN];
+    let reply = Reply {
+        scid: forger(),
+        aead: Aead::ChaCha20Poly1305,
+        e: [0x5a; 32],
+        ct: &ct,
+        sealed: &[0xa5; 128],
+    };
+    let mut msg = vec![0u8; MAX_MESSAGE_LEN];
+    let mut w = Writer::new(&mut msg);
+    reply.write(&mut w).unwrap();
+    let n = w.written().len();
+    let mut body = vec![0u8; n + 16];
+    let mut w = Writer::new(&mut body);
+    w.put_varint(n as u64).unwrap();
+    w.put_varint(0).unwrap();
+    w.put_slice(&msg[..n]).unwrap();
+    let len = w.written().len();
+    forged(dcid, &body[..len])
+}
+
+/// The destination id of the first packet of a datagram; `None` for one that holds only padding.
+fn dcid_of(d: &[u8], cid_len: usize) -> Option<ConnId> {
+    LongHeader::parse(d)
+        .map(|(h, _)| h.dcid)
+        .or_else(|_| short_dcid(d, cid_len))
+        .ok()
+}
+
+/// Every datagram `node` has to send at `now`, with the path it leaves on.
+fn drain(node: &mut Node<'_>, now: u64) -> Vec<(PathId, Vec<u8>)> {
+    let mut buf = vec![0u8; 65_536];
+    let mut out = Vec::new();
+    while let Some(t) = node.with_env(now, |c, env| c.poll_transmit(env, &mut buf)) {
+        out.extend(buf[..t.len].chunks(t.segment_size).map(|s| (t.path, s.to_vec())));
+    }
+    out
+}
+
+#[test]
+fn a_forged_handshake_packet_on_a_candidate_path_moves_validates_and_names_nothing() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let cid_len = w.cfg.cid_len;
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        // Path 3 reaches nobody: a dialing side moved there would not finish its handshake.
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(1, Params::new(10 * MS)));
+        let log = capture(&mut net);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        net.flush();
+        // The forger read the dialing side's id in its first flight; the body is no fragment of a message.
+        let mut d = forged(net.a.conn.local_cids().next().unwrap(), &[0xff; 4]);
+        let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(3), &mut d));
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        assert!(net.a.conn.path_validated(PathId(1)));
+        assert!(!net.a.conn.path_validated(PathId(3)));
+        assert!(net.connect(now + 10 * SEC), "{:?}", net.rx_drops);
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        // The peer's first id is kept from the first that is set: had the forger's been taken, every later datagram
+        // of the dialing side would be addressed to it.
+        let sent: Vec<ConnId> = log
+            .borrow()
+            .iter()
+            .filter(|(is_a, _, _)| *is_a)
+            .filter_map(|(_, d, _)| dcid_of(d, cid_len))
+            .collect();
+        assert!(!sent.is_empty() && !sent.contains(&forger()), "{sent:?}");
+    });
+}
+
+#[test]
+fn a_reply_on_another_path_moves_the_dialing_side_there_only_once_it_authenticated() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(1, Params::new(10 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        // The flight leaves on paths 1 and 3; only the copy on path 3 reaches the responder, which answers there.
+        link.route(PathId(1)).up = false;
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        net.a.auto_keys = false;
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        net.a.conn.set_flight_fanout(&[PathId(3)]);
+        // The Reply is in and taken, its sealed block not opened yet: nothing has moved.
+        assert!(net.run(now + SEC, |n| n.a.deferred.is_some()));
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        assert!(net.a.conn.path_validated(PathId(1)));
+        assert!(!net.a.conn.path_validated(PathId(3)));
+        // Opened, verified and signed: the session is established and continues on the path that answered.
+        let t = net.now;
+        net.a.deliver_deferred(t).unwrap();
+        net.a.service(t);
+        net.a.deliver_deferred(t).unwrap();
+        assert!(net.a.conn.is_connected());
+        assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
+        assert!(net.a.conn.path_validated(PathId(3)));
+        assert!(!net.a.conn.path_validated(PathId(1)));
+        net.a.auto_keys = true;
+        assert!(net.connect(t + 5 * SEC), "{:?}", net.rx_drops);
+        assert_eq!(net.a.conn.active_path(), Some(PathId(3)));
+    });
+}
+
+#[test]
+fn a_forged_packet_between_the_parts_of_a_reply_moves_nothing_and_the_part_that_completes_it_decides_the_path() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut client = w.client(&mut sa, None, ClientTickets::new());
+        let mut server = w.server(&mut sb);
+        for id in [3, 5] {
+            client
+                .with_env(T0, |c, env| c.add_path(env, PathId(id), PathInfo::default()))
+                .unwrap();
+        }
+        let t1 = T0 + 10 * MS;
+        for (path, mut d) in drain(&mut client, T0) {
+            assert_eq!(path, PathId(1));
+            let _ = server.with_env(t1, |c, env| {
+                c.handle_datagram_with(env, &mut *w.stores, PathId(2), &mut d)
+            });
+        }
+        server.service(t1);
+        let mut reply = drain(&mut server, t1);
+        let parts = reply.iter().filter(|(_, d)| LongHeader::parse(d).is_ok()).count();
+        assert!(parts >= 2, "the Reply spans datagrams: {parts}");
+        let t2 = t1 + 10 * MS;
+        // The first part arrives on path 1, then a forged packet on path 5.
+        client
+            .with_env(t2, |c, env| c.handle_datagram(env, PathId(1), &mut reply[0].1))
+            .unwrap();
+        let mut d = forged(client.conn.local_cids().next().unwrap(), &[0xff; 4]);
+        let _ = client.with_env(t2, |c, env| c.handle_datagram(env, PathId(5), &mut d));
+        client.service(t2);
+        assert_eq!(client.conn.active_path(), Some(PathId(1)));
+        assert!(client.conn.path_validated(PathId(1)));
+        assert!(!client.conn.path_validated(PathId(5)));
+        // The rest arrives on path 3 and completes the Reply, which authenticates: the session continues there.
+        for (_, d) in reply.iter_mut().skip(1) {
+            let _ = client.with_env(t2, |c, env| c.handle_datagram(env, PathId(3), d));
+        }
+        client.service(t2);
+        assert!(client.connected());
+        assert_eq!(client.conn.active_path(), Some(PathId(3)));
+        assert!(client.conn.path_validated(PathId(3)));
+        assert!(!client.conn.path_validated(PathId(1)));
+        assert!(!client.conn.path_validated(PathId(5)));
+        // The Finish leaves there, to the responder's id, and completes the responder.
+        let server_id = server.conn.local_cids().next().unwrap();
+        let fin = drain(&mut client, t2);
+        assert!(!fin.is_empty() && fin.iter().all(|(path, _)| *path == PathId(3)));
+        let t3 = t2 + 10 * MS;
+        for (_, mut d) in fin {
+            if let Ok((header, _)) = LongHeader::parse(&d) {
+                assert_eq!(header.dcid, server_id);
+            }
+            let _ = server.with_env(t3, |c, env| {
+                c.handle_datagram_with(env, &mut *w.stores, PathId(4), &mut d)
+            });
+        }
+        server.service(t3);
+        assert!(server.connected());
+    });
+}
+
+#[test]
+fn a_forged_reply_that_the_machine_takes_gives_no_round_trip_sample() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(51, Params::new(10 * MS)));
+        net.flush();
+        let t0 = net.now;
+        // It comes at once after the first flight: as a round trip it would read 1 ms.
+        let mut d = forged_reply(net.a.conn.local_cids().next().unwrap());
+        net.a
+            .with_env(t0, |c, env| c.handle_datagram(env, PathId(1), &mut d))
+            .unwrap();
+        net.a.service(t0);
+        assert!(!net.a.conn.is_closed(), "a Reply that does not open is dropped");
+        assert!(net.run(t0 + SEC, |n| n.a.conn.is_connected()));
+        // The Reply that authenticated came 20 ms after the first flight: that is the first estimate.
+        let srtt = net.a.conn.stats().srtt;
+        assert!((20 * MS..25 * MS).contains(&srtt), "srtt {srtt}");
+    });
+}
+
+#[test]
+fn a_handshaking_responder_learns_the_path_of_a_forged_packet_but_neither_validates_it_nor_sends_there() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(1, Params::new(10 * MS)));
+        // The responder took the first flight and sent its Reply; it waits for the Finish.
+        assert!(net.run(net.now + SEC, |n| n.b.conn.has_path(PathId(2))));
+        let now = net.now;
+        let mut d = forged(net.b.conn.local_cids().next().unwrap(), &[0xff; 4]);
+        let stores = &mut *net.stores;
+        let _ = net
+            .b
+            .with_env(now, |c, env| c.handle_datagram_with(env, stores, PathId(6), &mut d));
+        assert!(net.b.conn.has_path(PathId(6)));
+        assert!(!net.b.conn.path_validated(PathId(6)));
+        assert_eq!(net.b.conn.active_path(), Some(PathId(2)));
+        assert!(net.connect(now + 10 * SEC), "{:?}", net.rx_drops);
+        assert_eq!(net.b.conn.active_path(), Some(PathId(2)));
+        assert!(!net.b.conn.path_validated(PathId(6)));
+        assert!(
+            net.b.tx_log.iter().all(|(_, _, p)| *p == PathId(2)),
+            "{:?}",
+            net.b.tx_log
+        );
     });
 }

@@ -246,30 +246,25 @@ conn_impl! {
             return Err(Drop::Empty);
         }
         let Some(pi) = ctx.path else { return Err(Drop::NoPath) };
-        if self.client && self.cids.first_local() != header.dcid {
-            return Err(Drop::Unroutable);
-        }
-        self.cids.set_first_remote(header.scid);
-        if let Some(p) = self.paths.get_mut(pi) {
-            p.last_rx = ctx.now;
-        }
-        if self.client && self.phase == Phase::Handshaking && pi != self.paths.active {
-            // The answer to a flight sent on several paths came back on this one: the session continues here, and
-            // the path that did not answer is validated only when a challenge on it is answered.
-            let old = self.paths.active;
-            if let Some(p) = self.paths.get_mut(old) {
-                p.validated = false;
+        if self.client {
+            // A dialing side believes nothing of the packet itself: its path and source id count only once the
+            // message it completes has authenticated (`follow_reply`).
+            if self.cids.first_local() != header.dcid {
+                return Err(Drop::Unroutable);
             }
+        } else {
+            self.cids.set_first_remote(header.scid);
             if let Some(p) = self.paths.get_mut(pi) {
-                p.validated = true;
-                p.amp.validate();
+                p.last_rx = ctx.now;
             }
-            self.switch_active(pi);
+            self.note_heard(ctx.now);
         }
-        self.note_heard(ctx.now);
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
         let Some(len) = self.hs.on_fragment(&mut self.pool, body) else { return Ok(()) };
         let r = self.hs.feed(&self.pool, env, stores, len);
+        if self.client && r.is_ok() {
+            self.reply_from = Some((ctx.path_id, header.scid, ctx.now));
+        }
         self.pump(env);
         r.map_err(Drop::Handshake)
     }

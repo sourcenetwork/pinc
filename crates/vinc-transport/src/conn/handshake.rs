@@ -35,7 +35,8 @@
 //!   and a thin node keeps its 60 s. It closes as [`CloseReason::Unanswered`](super::CloseReason::Unanswered), which
 //!   the node's handshake floor does not count.
 //! - When the link returns, a dialing side's pending flight is resent at once.
-//! - The round trip of the first flight, if it was answered without a resend, is offered once as an RTT sample.
+//! - The time from the first flight to the reply that established the session, if no resend went out on the timer,
+//!   is offered once as an RTT sample; a message that does not authenticate gives none.
 //!
 //! The state machine is large and needed only until the peer shows it holds the session. With the `alloc` feature it is
 //! boxed, and the box comes from a [`Machines`] pool that the connections of a node share and goes back to it when the
@@ -354,7 +355,6 @@ pub(crate) struct Handshake {
     created: u64,
     first_sent: u64,
     sample: Option<u64>,
-    sampled: bool,
     clock: u64,
     /// A new flight was queued since the connection last asked.
     fresh: bool,
@@ -409,7 +409,6 @@ impl Handshake {
             created: now,
             first_sent: now,
             sample: None,
-            sampled: false,
             clock: now,
             fresh: false,
         })
@@ -735,7 +734,10 @@ impl Handshake {
 
     /// Hand the complete message of `len` bytes to the state machine. A server needs the shared `stores`.
     ///
-    /// The first message that is taken, if the first flight went unrepeated, gives the handshake round trip.
+    /// The message taken last, if the first flight went unrepeated, gives the handshake round trip, offered only once
+    /// the session is established: the message that leads there is the one that authenticated, so a forged one gives
+    /// no sample. The reference model seeds its estimate the same way, only after the reply's checks:
+    /// `if c.hs_tries == 1 and c.srtt == 0 and c.hs_sent:` then `c.srtt = max(1000000, now - c.hs_sent)`.
     pub(crate) fn feed<P: Provider, const PK: usize, const TK: usize>(
         &mut self,
         pool: &BufferPool<'_>,
@@ -763,15 +765,12 @@ impl Handshake {
         if r.is_ok() && self.client {
             // The peer answered (a reject too): only flights sent after this count towards the early end.
             self.unheard = 0;
-        }
-        if r.is_ok() && self.client && !self.sampled && self.sends == 1 {
-            self.sampled = true;
-            self.sample = Some(env.now.saturating_sub(self.first_sent).max(MIN_SAMPLE));
+            self.sample = (self.sends == 1).then_some(env.now.saturating_sub(self.first_sent).max(MIN_SAMPLE));
         }
         r
     }
 
-    /// The handshake round trip, once: offered when the first flight was answered without a resend.
+    /// The handshake round trip, taken when the session is established (see [`Self::feed`]).
     pub(crate) const fn take_rtt_sample(&mut self) -> Option<u64> {
         self.sample.take()
     }
