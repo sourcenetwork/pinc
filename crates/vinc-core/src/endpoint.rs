@@ -124,6 +124,7 @@ pub(crate) struct Counters {
     pub(crate) ext_dropped: u64,
     pub(crate) held_by_ledger: u64,
     pub(crate) stalled_in: u64,
+    pub(crate) holders_refused: u64,
     pub(crate) retired: u64,
 }
 
@@ -579,6 +580,7 @@ ep_impl! {
             ext_dropped: self.counters.ext_dropped,
             held_by_ledger: self.counters.held_by_ledger,
             stalled_in: self.counters.stalled_in,
+            holders_refused: self.counters.holders_refused,
             events_dropped: self.events.dropped,
             events_lost: self.events.lost,
             fragments_held: self.orphans.counts.held,

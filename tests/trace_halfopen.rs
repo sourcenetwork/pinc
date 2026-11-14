@@ -183,7 +183,7 @@ struct Seen {
     left_by_free: u32,
     stalled_timer: u32,
     clock_back: u32,
-    superseded: u32,
+    second_holder: u32,
 }
 
 /// The host's side of the endpoint: its signing key, and the outputs written so far.
@@ -445,12 +445,14 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let Op::Dgram(kind, len) = *op else { return };
         let freed_first = steps.iter().position(|s| s[0] == 4);
         let decided_at = steps.iter().position(|s| s[0] == 0);
-        if let (Some(f), Some(a)) = (freed_first, decided_at)
-            && f < a
-        {
-            // a first message that differs from the one a half-open session holds under the same ids
-            assert_eq!(n, Some(1));
-            self.seen.superseded += 1;
+        if n == Some(1) && decided_at.is_some() {
+            // a first message that differs from the one a half-open session holds under the same ids gets a session of
+            // its own: the held one is not freed
+            assert!(
+                freed_first.is_none(),
+                "a first message freed the session that holds its id"
+            );
+            self.seen.second_holder += u32::from(steps.iter().any(|s| s[0] == 1));
         }
         if n != Some(0) {
             return;
@@ -783,7 +785,7 @@ fn big_run(run: u32, seed: u64) -> (String, String, Seen) {
     d.forge(next(), 1, FULL_INITIAL_MIN);
     assert!(d.r.ep.register_alpn(ALPN_A));
     d.drive(MS_NS);
-    // a full handshake whose first message is damaged on the way: the dialer's repeat supersedes the session it made;
+    // a full handshake whose first message is damaged on the way: the dialer's repeat gets a session beside the one it made;
     // the dialer then holds a ticket
     d.damage = true;
     let s = d.dial(3 * SEC_NS);
@@ -952,7 +954,7 @@ fn add(a: &mut Seen, b: &Seen) {
     a.left_by_free += b.left_by_free;
     a.stalled_timer += b.stalled_timer;
     a.clock_back += b.clock_back;
-    a.superseded += b.superseded;
+    a.second_holder += b.second_holder;
 }
 
 #[test]
@@ -1007,7 +1009,10 @@ fn the_half_open_cap_matches_the_models() {
         "no counted session was freed other than by its end"
     );
     assert!(seen.clock_back > 0, "the clock never stepped back");
-    assert!(seen.superseded > 0, "no first message superseded a damaged one");
+    assert!(
+        seen.second_holder > 0,
+        "no first message got a session beside a damaged one"
+    );
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(std::path::Path::new(&dir).join("halfopen.ndjson"), &ms).unwrap();

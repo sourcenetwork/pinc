@@ -212,12 +212,19 @@ fn a_forged_part_given_to_a_new_session_does_not_stop_the_real_dial() {
             !connected(&net, a),
             "the dialer accepted a session built on a forged Initial"
         );
-        // The dialer's own resend ends the forged session and starts the real one.
+        // The dialer's own resend starts the real session beside the forged one, which ends at its half-open limit.
         assert!(
             net.run(t0 + 10 * SEC_NS, |n| connected(n, a)),
             "the real dial never connected"
         );
         net.run_for(2 * SEC_NS);
+        let s = net.nodes[b].ep.node_stats();
+        assert_eq!(
+            (s.sessions, s.half_open, s.fragments_waiting),
+            (2, 1, 0),
+            "the forged session was freed"
+        );
+        net.run_for(vinc_core::HALF_OPEN_LIFE + SEC_NS);
         let s = net.nodes[b].ep.node_stats();
         assert_eq!((s.sessions, s.half_open, s.fragments_waiting), (1, 0, 0));
         assert!(balanced(&s));

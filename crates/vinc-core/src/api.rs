@@ -745,6 +745,9 @@ pub struct NodeStats {
     /// Packets refused because they would raise events while the host left unrecoverable events unread or a session's
     /// held events were full; the peer sends them again.
     pub stalled_in: u64,
+    /// First flights dropped because the id they name already has four half-open sessions (also counted in
+    /// `dropped_in`).
+    pub holders_refused: u64,
     /// Events dropped because the event queue was full.
     pub events_dropped: u64,
     /// Events the application cannot recover that were dropped because the event queue held nothing else to give up;

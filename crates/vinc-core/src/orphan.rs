@@ -149,6 +149,13 @@ impl Orphans {
         Some((h.local, h.len))
     }
 
+    /// Whether a fresh datagram from `remote` with a part of the message of `total` bytes for `dcid` is held.
+    pub(crate) fn holds(&self, now: u64, dcid: &ConnId, total: u64, remote: &SocketAddr) -> bool {
+        self.held.iter().flatten().any(|x| {
+            x.dcid == *dcid && x.total == total && x.remote == *remote && now.saturating_sub(x.at) <= ORPHAN_LIFE
+        })
+    }
+
     /// How many datagrams are held now.
     pub(crate) fn waiting(&self) -> usize {
         self.held.iter().flatten().count()

@@ -4,9 +4,11 @@
 //! candidate owns the datagram; several (two sessions derived the same four bytes) are tried in turn on a copy of the
 //! datagram, because opening a packet changes the bytes in place. For a short datagram the first holder that does
 //! not answer undecryptable or unroutable owns it, whatever it did with it (a closed or back-pressured holder takes
-//! it too); a long packet is not sealed, so the first holder takes it without a trial. The candidate list can name the
-//! same slot twice, which only costs a second trial. An id no
-//! session holds can only start a session if the datagram is a first handshake message that meets its size floor
+//! it too); a long packet is offered to each holder in the order they were made until one takes it (one that refuses
+//! a handshake message or has ended does not), and a first flight that every holder says differs from its own gets a
+//! half-open session of its own under the same id, up to four holders, so a forged flight never displaces the first.
+//! The candidate list can name the same slot twice, which only costs a second trial. An id no session holds can only
+//! start a session if the datagram is a first handshake message that meets its size floor
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
 //! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
 //! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
@@ -126,29 +128,23 @@ ep_impl! {
         });
         match n {
             0 => self.unrouted(now, local, remote, buf),
+            // A long packet is not sealed: each holder is offered it in turn and the one it belongs to takes it.
+            _ if long && n < MAX_CANDIDATES && self.starts_held_message(now, remote, buf) => {
+                self.unrouted(now, local, remote, buf);
+            }
+            _ if long => self.offer(&found, n, now, local, remote, buf),
             1 => {
                 if let Some(i) = found.first().copied().flatten() {
                     // A drop reason is counted by the connection itself.
-                    let r = self.deliver(i as usize, now, local, remote, buf);
-                    if r == Err(Drop::Handshake(Failure::DifferentFirst)) {
-                        self.supersede(i as usize, now, local, remote, buf);
-                    }
+                    let _ = self.deliver(i as usize, now, local, remote, buf);
                 }
             }
-            _ => self.trial(&found, now, local, remote, buf, long),
+            _ => self.trial(&found, now, local, remote, buf),
         }
     }
 
     /// Try each session that holds the id on a fresh copy; the first whose keys open the packet owns it.
-    fn trial(
-        &mut self,
-        found: &[Option<u32>],
-        now: u64,
-        local: SocketAddr,
-        remote: SocketAddr,
-        buf: &mut [u8],
-        long: bool,
-    ) {
+    fn trial(&mut self, found: &[Option<u32>], now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
         let len = buf.len();
         if let Some(d) = self.scratch.get_mut(..len) {
             d.copy_from_slice(buf);
@@ -161,14 +157,71 @@ ep_impl! {
                 }
             }
             let r = self.deliver(*i as usize, now, local, remote, buf);
-            // A long packet is not sealed, so the first holder takes it.
-            let mine = long || !matches!(r, Err(Drop::Undecryptable | Drop::Unroutable));
+            let mine = !matches!(r, Err(Drop::Undecryptable | Drop::Unroutable));
             trace!(self, now, Trial { slot: u64::from(*i), ok: u64::from(mine) });
             if mine {
                 return;
             }
         }
         self.counters.dropped_in += 1;
+    }
+
+    /// Offer a long packet to each of the `n` sessions that hold its id, in the order they were made, until one takes
+    /// it: a holder that refuses a handshake message (a Finish it does not authenticate, a first flight other than its
+    /// own) or has ended does not. When every live holder says the packet is a first flight different from its own, the
+    /// packet is the start of another dial under the same id and gets a session of its own, unless the id already has
+    /// [`MAX_CANDIDATES`] holders.
+    fn offer(&mut self, found: &[Option<u32>], n: usize, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
+        let len = buf.len();
+        let Some(copy) = self.scratch.get_mut(..len) else { return };
+        copy.copy_from_slice(buf);
+        let (mut different, mut other) = (false, false);
+        for (k, i) in found.iter().flatten().enumerate() {
+            if k > 0 {
+                match self.scratch.get(..len) {
+                    Some(s) => buf.copy_from_slice(s),
+                    None => return,
+                }
+            }
+            let r = self.deliver(*i as usize, now, local, remote, buf);
+            let refused = matches!(r, Err(Drop::Handshake(_) | Drop::Closed));
+            if n > 1 {
+                trace!(self, now, Trial { slot: u64::from(*i), ok: u64::from(!refused) });
+            }
+            if !refused {
+                return;
+            }
+            match r {
+                Err(Drop::Handshake(Failure::DifferentFirst)) => different = true,
+                Err(Drop::Closed) => {}
+                _ => other = true,
+            }
+        }
+        if !different || other {
+            return;
+        }
+        match self.scratch.get(..len) {
+            Some(s) => buf.copy_from_slice(s),
+            None => return,
+        }
+        if classify(buf).is_none() {
+            // A later part that completed a message other than every holder's: it waits for the start of that message,
+            // which then gets a session of its own (see `starts_held_message`).
+            let held = later_part(buf)
+                .is_some_and(|(dcid, total)| self.orphans.hold(now, dcid, total, local, remote, buf));
+            self.counters.dropped_in += u64::from(!held);
+        } else if n >= MAX_CANDIDATES {
+            self.counters.dropped_in += 1;
+            self.counters.holders_refused += 1;
+        } else {
+            self.unrouted(now, local, remote, buf);
+        }
+    }
+
+    /// Whether `buf` starts a first message whose later part the endpoint holds: every session that holds the id has
+    /// refused that part as a different message, so the start gets a session of its own, which the part then joins.
+    fn starts_held_message(&self, now: u64, remote: SocketAddr, buf: &[u8]) -> bool {
+        classify(buf).is_some_and(|f| self.orphans.holds(now, &f.odcid, f.total, &remote))
     }
 
     /// Hand a datagram to session `i`, then bring the endpoint's view of it up to date.
@@ -287,13 +340,6 @@ ep_impl! {
                 let _ = self.deliver(i, now, local, remote, d);
             }
         }
-    }
-
-    /// A first message differs from the one the half-open session `i` holds under the same ids: the held one was
-    /// damaged or forged on the way, so the session ends and the new message starts another.
-    fn supersede(&mut self, i: usize, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]) {
-        self.free_slot(i, now);
-        self.unrouted(now, local, remote, buf);
     }
 
     /// Whether a resumption Hello names an unused ticket that opens, so it needs no half-open slot.
