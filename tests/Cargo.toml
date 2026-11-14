@@ -1228,6 +1228,10 @@ name = "node_hub_stream_stop"
 path = "node_hub_stream_stop.rs"
 
 [[test]]
+name = "node_alpn_owner"
+path = "node_alpn_owner.rs"
+
+[[test]]
 name = "node_route_owner"
 path = "node_route_owner.rs"
 

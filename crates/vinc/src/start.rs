@@ -120,6 +120,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     )
     .map_err(|e| match e {
         vinc_node::StartError::Alpn => Error::config("a protocol name is empty, too long or one too many"),
+        vinc_node::StartError::AlpnOfLayer(_) => Error::config("the protocol name is also the name of a layer"),
         vinc_node::StartError::Membership(_) => Error::config("the membership layer could not start"),
         vinc_node::StartError::Broadcast(_) => Error::config("the broadcast layer could not start"),
     })?;

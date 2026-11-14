@@ -51,6 +51,8 @@ use crate::values::Values;
 pub enum StartError {
     /// The endpoint's protocol registry is full, or the protocol id is empty or too long.
     Alpn,
+    /// The protocol id of the hub stream is the protocol id of a layer: the node could not tell their sessions apart.
+    AlpnOfLayer(Layer),
     /// Membership could not start: too many hubs, or the incarnation could not be issued.
     Membership(MemStartError),
     /// Broadcast could not start: the limits are unusable, or the key is not the node's.
@@ -61,6 +63,11 @@ impl core::fmt::Display for StartError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Alpn => f.write_str("the hub protocol id could not be registered with the endpoint"),
+            Self::AlpnOfLayer(l) => write!(
+                f,
+                "the hub protocol id {} is also the protocol id of a layer, so each needs an id of its own",
+                core::str::from_utf8(l.alpn()).unwrap_or_default()
+            ),
             Self::Membership(e) => e.fmt(f),
             Self::Broadcast(e) => e.fmt(f),
         }
@@ -152,7 +159,8 @@ where
     /// above broadcast run and gives them their stores.
     ///
     /// # Errors
-    /// [`StartError`] if a protocol id cannot be registered, or a layer refuses to start.
+    /// [`StartError`] if a protocol id cannot be registered or is claimed by two owners (the hub stream and a layer),
+    /// or a layer refuses to start.
     #[allow(
         clippy::too_many_arguments,
         reason = "a node is built once from the pieces the host owns"
@@ -169,6 +177,9 @@ where
         mut apps: A,
     ) -> Result<Self, StartError> {
         let now = cfg.connect.start;
+        if let Some(layer) = Layer::of_alpn(cfg.alpn) {
+            return Err(StartError::AlpnOfLayer(layer));
+        }
         if !ep.register_alpn(cfg.alpn) {
             return Err(StartError::Alpn);
         }
