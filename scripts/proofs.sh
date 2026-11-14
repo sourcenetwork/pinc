@@ -500,6 +500,8 @@ par witness_tlc framepack_stale FramePack FramePack_stale HintRight
 par witness_tlc framepack_nocheck FramePack FramePack_nocheck RoundTrip
 par witness_tlc framepack_reach FramePack FramePack_reach NoImplicit
 par witness_tlc framepack_taken FramePack FramePack_taken RepairKept
+par witness_tlc framepack_built FramePack FramePack_built RepairPending
+par witness_tlc framepack_short FramePack FramePack_short RepairCarried
 par run_tlc ext Ext Ext
 par witness_tlc ext_collide Ext Ext_collide Disjoint
 par witness_tlc ext_collide_check Ext Ext_collide_check TableOK

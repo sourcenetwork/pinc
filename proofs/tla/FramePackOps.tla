@@ -26,29 +26,40 @@
 (* Pick is what build_app decides before the fill: the probe timeout's     *)
 (* PING when it owes packets, else a path MTU probe when one is due, else  *)
 (* a tail repair when one is pending and the packet goes on the active     *)
-(* path, else an ordinary fill; the pending repair is taken (and gone)     *)
-(* only for a packet built as a repair, so a repair that is due together   *)
-(* with a probe stays pending and goes with the next packet (#293).        *)
+(* path, else an ordinary fill; only a packet built as a repair reads the  *)
+(* pending repair, so a repair that is due together with a probe stays     *)
+(* pending and goes with the next packet (#293).                           *)
+(*                                                                         *)
+(* The end of the build (#433): the repair leaves the pending state when   *)
+(* the packet built for it is sealed (Sealed: the buffer holds a packet,   *)
+(* a destination id is there, build_packet keeps the fill, the sent ring   *)
+(* takes it and sealing succeeds), or when fill_repair drops it because    *)
+(* nothing a packet can carry is left (Dropped: its packet is no longer in *)
+(* the ring, or the fill wrote none of its frames and did not stop at one  *)
+(* the payload had no room for); a build that ends otherwise leaves it     *)
+(* pending (After).                                                        *)
 (*                                                                         *)
 (* The code's constants are MINROOM = 24, SBUDGET = 11, REKEYMAX = 51 and  *)
-(* REFS = 8 (MAX_FRAME_REFS). CLEAR, CHECK and KEEP are TRUE in the code:  *)
-(* FALSE is the wrong rule of a witness (the place kept is not forgotten   *)
-(* when a datagram or a credit frame follows the STREAM frame; the length  *)
-(* is dropped without checking that the frame ends the payload; the rule   *)
-(* before #293, where the repair is taken for a path MTU probe too and the *)
-(* probe, which carries only its PING, leaves without it).                 *)
+(* REFS = 8 (MAX_FRAME_REFS). CLEAR, CHECK, KEEP and SEAL are TRUE in the  *)
+(* code: FALSE is the wrong rule of a witness (the place kept is not       *)
+(* forgotten when a datagram or a credit frame follows the STREAM frame;   *)
+(* the length is dropped without checking that the frame ends the          *)
+(* payload; the rule before #293, where the repair is taken for a path MTU *)
+(* probe too and the probe, which carries only its PING, leaves without    *)
+(* it; the rule before #433, where build_app takes the repair when the     *)
+(* build starts, so a build that ends without a packet loses it).          *)
 (*                                                                         *)
 (* Lean counterpart: Vinc/TransportFramePack.lean, with the theorems of    *)
 (* TransportFramePackThm.lean.                                             *)
 (***************************************************************************)
 EXTENDS FrameOps
 
-CONSTANTS MINROOM, SBUDGET, REKEYMAX, REFS, CLEAR, CHECK, KEEP
+CONSTANTS MINROOM, SBUDGET, REKEYMAX, REFS, CLEAR, CHECK, KEEP, SEAL
 
 (* ---- build_app ---- *)
 \* probes: the probe timeout owes packets; mtu: a path MTU probe is due for this packet; pending: a tail repair is
-\* pending; active: the packet goes on the active path. The mode of the fill, whether the fill takes the pending repair,
-\* and whether a repair is still pending after it
+\* pending; active: the packet goes on the active path. The mode of the fill, whether the fill reads the pending repair
+\* (the packet takes it when it is sealed), and whether a repair is still pending once the packet is sealed
 Pick(probes, mtu, pending, active) ==
     LET took == pending /\ active /\ ~probes /\ (~mtu \/ ~KEEP) IN
     [mode |-> IF probes THEN "pingonly" ELSE IF mtu THEN "probe" ELSE IF took THEN "repair" ELSE "normal",
@@ -87,8 +98,9 @@ WAKE == [k |-> "Wake"]
 SLEEP == [k |-> "Sleep"]
 READY == [k |-> "Ready"]
 
-\* what the fill holds: the bytes, the frames in order, whether one elicits an ACK, the place kept, the frames recorded
-St0 == [w |-> <<>>, fs |-> <<>>, el |-> FALSE, hint |-> <<>>, refs |-> 0, ack |-> FALSE]
+\* what the fill holds: the bytes, the frames in order, whether one elicits an ACK, the place kept, the frames recorded,
+\* whether a repair fill stopped at a frame the payload had no room for
+St0 == [w |-> <<>>, fs |-> <<>>, el |-> FALSE, hint |-> <<>>, refs |-> 0, ack |-> FALSE, short |-> FALSE]
 
 Room(c, st) == c.cap - Len(st.w)
 \* put: Frame::write into what is left of the payload
@@ -165,16 +177,18 @@ DgLoop(c, st, ds) ==
          IF EncodedLen(f) > Room(c, st) \/ ~Fits(c, st, f) THEN st
          ELSE DgLoop(c, [Eli(Add(c, st, f)) EXCEPT !.hint = IF CLEAR THEN <<>> ELSE @], Tail(ds))
 
-\* fill_repair: the stream frames of the packet repaired that are not acknowledged, each as the stream layer gives it
-\* (cut to start after its stream's acknowledged prefix, resend_from; a part acknowledged for good was released), while
-\* they fit the repair's room and the payload
+\* fill_repair: the stream frames of the packet repaired that are not acknowledged, in the order it visits them, each as
+\* the stream layer gives it (cut to start after its stream's acknowledged prefix, resend_from; a part acknowledged for
+\* good was released), while they fit the repair's room and the payload; a frame the payload has no room for ends the
+\* loop as short (the repair stays pending), one past the room or a header that fails ends it as it is
 RECURSIVE RepLoop(_, _, _, _)
 RepLoop(c, st, cs, room) ==
     IF Len(cs) = 0 \/ Len(cs[1].data) + 24 > room \/ st.refs >= REFS THEN st
     ELSE LET ch == cs[1]
              hdr == StreamOverhead(ch.id, ch.off, Len(ch.data), FALSE)
              h == PutStreamHeader(hdr, ch.id, ch.off, Len(ch.data), ch.fin) IN
-         IF Len(st.w) + hdr + Len(ch.data) > c.cap \/ ~h.ok THEN st
+         IF Len(st.w) + hdr + Len(ch.data) > c.cap THEN [st EXCEPT !.short = TRUE]
+         ELSE IF ~h.ok THEN st
          ELSE RepLoop(c, [st EXCEPT !.w = @ \o h.w \o ch.data, !.fs = Append(@, SFrame(ch)), !.el = TRUE,
                                     !.refs = @ + 1], Tail(cs), room - hdr - Len(ch.data))
 
@@ -183,7 +197,7 @@ Fill(c) ==
     CASE c.mode = "pingonly" ->
            One(c, One(c, s1, c.wakeUntil, WAKE, TRUE, FALSE), TRUE, PING, TRUE, FALSE)
       [] c.mode = "probe" -> Eli(One(c, s1, TRUE, PING, TRUE, FALSE))
-      [] c.mode = "repair" -> RepLoop(c, s1, c.streams, c.rroom)
+      [] c.mode = "repair" -> IF c.gone THEN s1 ELSE RepLoop(c, s1, c.streams, c.rroom)
       [] OTHER ->
            LET s2 == IF c.ring THEN Control(c, s1) ELSE s1
                s3 == Path(c, s2)
@@ -197,6 +211,25 @@ Fill(c) ==
 
 \* build_packet seals the fill unless it is empty, or only an ACK that is not due (and nothing forces a packet)
 Built(c, st) == Len(st.w) > 0 /\ ~(~st.el /\ st.ack /\ ~c.ackDue /\ ~c.force /\ c.mode # "probe")
+
+(* ---- the end of the build ---- *)
+\* How a build ends besides its fill (c.end): "small", the buffer holds no packet, and "nodcid", no destination id is
+\* there (build_packet returns before the fill); "ring", the sent ring has no slot (a packet with a frame recorded in
+\* flight is refused); "seal", sealing fails; "none", none of these. c.gone: the packet a repair is for is no longer in
+\* the sent ring (sent_frames finds nothing).
+Fills(c) == c.end \notin {"small", "nodcid"}
+Carries(st) == \E i \in 1..Len(st.fs) : st.fs[i].k = "Stream"
+\* the stream frames of a repair and the PING of a path MTU probe are recorded in flight (Filled::strong)
+Tracked(c, st) == c.mode = "probe" \/ Carries(st)
+\* the build ends with a sealed packet; f is Finish of the fill (the ? after implicit_stream_len)
+Sealed(c, st, f) == Fills(c) /\ Built(c, st) /\ f.ok /\ c.end # "seal" /\ ~(c.end = "ring" /\ Tracked(c, st))
+\* fill_repair drops the repair itself: its packet is no longer in the ring, or the fill wrote none of its frames and did
+\* not stop at one the payload had no room for (each is acknowledged, or the first does not fit the repair's room)
+Dropped(c, st) == c.mode = "repair" /\ Fills(c) /\ (c.gone \/ (~Carries(st) /\ ~st.short))
+\* whether a repair is pending once the build ends: the code (SEAL) takes it when the packet that reads it is sealed or
+\* the fill drops it; before #433 build_app took it when the build started, so every build that read it took it
+After(c, st, f) ==
+    IF SEAL THEN c.sel.pending /\ ~(c.took /\ (Sealed(c, st, f) \/ Dropped(c, st))) ELSE c.left
 
 (* ---- the tail of build_packet ---- *)
 \* the payload sealed and what was done (the padding, the bytes dropped), or ok = FALSE when the ? gives the packet up

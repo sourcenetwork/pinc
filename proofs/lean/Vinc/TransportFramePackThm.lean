@@ -18,10 +18,17 @@ For the model of `TransportFramePack.lean`:
   frames written in order, the last one without its length when it was dropped, then one PADDING frame for the
   padding; a frame without a length is only the last, and never in a padded payload.
 * **The order** (`fill_ordered`): the frames of a fill come in the order of the slots of `fill_frames`.
-* **The tail repair** (`pick_took`, `pick_keeps`, `pick_probe_then_repair`): `build_app` takes the pending repair
-  exactly for a packet it builds as a repair; a path MTU probe, the probe timeout's packet and a packet on another
-  path leave it pending, so a repair due together with a probe goes with the next packet. `pickOld_loses` is the
-  witness of the rule before #293: the probe packet took the repair and carried none of it.
+* **The tail repair** (`pick_took`, `pick_keeps`, `pick_probe_then_repair`): only a packet `build_app` builds as a
+  repair reads the pending repair; a path MTU probe, the probe timeout's packet and a packet on another path leave it
+  pending, so a repair due together with a probe goes with the next packet. `pickOld_loses` is the witness of the rule
+  before #293: the probe packet took the repair and carried none of it.
+* **The end of the build** (`dropped_iff`, `carried_or_short`, `after_nofill`, `after_unsealed`, `after_leaves`): the
+  fill drops exactly a repair no packet can carry, and otherwise writes its first frame or stops at it for want of
+  room in the payload; the repair leaves the pending state exactly when the packet built for it is sealed or nothing a
+  packet can carry is left of it, so a build that ends without a packet leaves it pending. `afterOld_loses` is the
+  witness of the rule before #433 (taken when the build started, so a build that ended without a packet lost it).
+  `after_short_sealed` and `after_short_reached` are a finding: a packet whose payload has no room for the repair's
+  first frame, sealed with its ACK alone, takes the repair that no packet then carries.
 -/
 
 namespace Vinc.TransportFramePack
@@ -622,8 +629,9 @@ theorem fill_ordered (f : Fill) (hk : f.Kinds) : ordered f.mode f.frames = true 
 
 /-! ## The tail repair -/
 
-/-- The pending repair is taken exactly by a packet built as a repair, which goes on the active path with no path MTU
-probe due and no probe timeout's packet owed; what is not taken stays pending. -/
+/-- The pending repair is read exactly by a packet built as a repair, which goes on the active path with no path MTU
+probe due and no probe timeout's packet owed; once a packet is sealed, a repair is still pending exactly when that
+packet did not read it. -/
 theorem pick_took (probes mtu pending active : Bool) :
     ((pick probes mtu pending active).2.1 = true ↔ (pick probes mtu pending active).1 = .repair) ∧
       ((pick probes mtu pending active).1 = .repair →
@@ -631,8 +639,8 @@ theorem pick_took (probes mtu pending active : Bool) :
       (pick probes mtu pending active).2.2 = (pending && !(pick probes mtu pending active).2.1) := by
   cases probes <;> cases mtu <;> cases pending <;> cases active <;> decide
 
-/-- A path MTU probe, the probe timeout's packet and a packet on another path take no repair and leave a pending one
-pending. -/
+/-- A path MTU probe, the probe timeout's packet and a packet on another path do not read the repair and leave a pending
+one pending. -/
 theorem pick_keeps (probes mtu pending active : Bool) (h : probes = true ∨ mtu = true ∨ active = false) :
     (pick probes mtu pending active).2.1 = false ∧ (pick probes mtu pending active).2.2 = pending := by
   revert h
@@ -654,6 +662,95 @@ def pickOld (probes mtu pending active : Bool) : Mode × Bool × Bool :=
 the repair is gone. -/
 theorem pickOld_loses : pickOld false true true true = (.probe, true, false) := by decide
 
+/-! ## The end of the build (#433) -/
+
+/-- The first turn of the loop of `fill_repair`. -/
+theorem repLoop_eight (c : Chunk) (cs : List Chunk) (room cap : Nat) :
+    repLoop 8 (c :: cs) room cap =
+      if room < c.data.length + 24 then ([], false)
+      else if cap < c.size then ([], true)
+      else (c :: (repLoop 7 cs (room - c.size) (cap - c.size)).1, (repLoop 7 cs (room - c.size) (cap - c.size)).2) :=
+  rfl
+
+/-- `fill_repair` drops exactly a repair that no packet can carry: its packet left the sent ring, each of its frames is
+acknowledged, or the first does not fit the repair's budget. -/
+theorem dropped_iff (inRing : Bool) (cs : List Chunk) (room cap : Nat) :
+    dropped inRing cs room cap = !carriable inRing cs room := by
+  cases inRing with
+  | false => cases cs <;> simp [dropped, carriable]
+  | true =>
+    cases cs with
+    | nil => rfl
+    | cons c cs =>
+      simp only [dropped, carriable, repLoop_eight]
+      by_cases h1 : room < c.data.length + 24
+      · have h1' : ¬ c.data.length + 24 ≤ room := by omega
+        simp [h1, h1']
+      · have h1' : c.data.length + 24 ≤ room := by omega
+        by_cases h2 : cap < c.size <;> simp [h1, h1', h2]
+
+/-- A fill that reads a repair a packet can carry writes its first frame or stops at it for want of room in the
+payload, so it never drops it. -/
+theorem carried_or_short (cs : List Chunk) (room cap : Nat) (h : carriable true cs room = true) :
+    (repLoop 8 cs room cap).1 ≠ [] ∨ (repLoop 8 cs room cap).2 = true := by
+  cases cs with
+  | nil => simp [carriable] at h
+  | cons c cs =>
+    simp only [carriable, Bool.true_and, decide_eq_true_eq] at h
+    have h1 : ¬ room < c.data.length + 24 := by omega
+    rw [repLoop_eight]
+    by_cases h2 : cap < c.size <;> simp [h1, h2]
+
+/-- A build that ends before its fill (a buffer with no room for a packet, no destination id) leaves the repair
+pending. -/
+theorem after_nofill : repairAfter false false = true := rfl
+
+/-- A build whose fill read a repair a packet can carry and that ends without a packet (the sent ring has no slot,
+sealing fails, nothing to send) leaves it pending. -/
+theorem after_unsealed (inRing : Bool) (cs : List Chunk) (room cap : Nat) (h : carriable inRing cs room = true) :
+    repairAfter false (dropped inRing cs room cap) = true := by
+  simp [repairAfter, dropped_iff, h]
+
+/-- A pending repair that a fill read leaves the pending state exactly when the packet built for it is sealed or
+nothing a packet can carry is left of it. -/
+theorem after_leaves (sealed inRing : Bool) (cs : List Chunk) (room cap : Nat) :
+    repairAfter sealed (dropped inRing cs room cap) = false ↔
+      (sealed = true ∨ carriable inRing cs room = false) := by
+  rw [dropped_iff]
+  cases sealed <;> cases hc : carriable inRing cs room <;> simp [repairAfter]
+
+/-- The rule before #433: `build_app` took the pending repair when the build started, so it was gone whatever the
+build then did. -/
+def repairAfterOld (_sealed _dropped : Bool) : Bool := false
+
+/-- The witness of the rule before #433: a repair a packet can carry (a FIN with no data, its packet in the ring) and a
+build whose fill writes it but that ends without a packet (the sent ring has no slot): the rule before #433 loses it,
+the code keeps it pending. -/
+theorem afterOld_loses :
+    carriable true [⟨0, 0, true, []⟩] 600 = true ∧
+      repLoop 8 [⟨0, 0, true, []⟩] 600 64 = ([⟨0, 0, true, []⟩], false) ∧
+      repairAfterOld false (dropped true [⟨0, 0, true, []⟩] 600 64) = false ∧
+      repairAfter false (dropped true [⟨0, 0, true, []⟩] 600 64) = true := by
+  decide
+
+/-- The finding (`FramePack_short.cfg`): a repair packet whose payload has no room for the first frame of a repair a
+packet can carry stops at that frame and writes none of the repair, and the fill keeps it; but when the packet's ACK
+is due the packet is sealed with the ACK alone, and the seal takes the repair, which no packet carries then. -/
+theorem after_short_sealed (c : Chunk) (cs : List Chunk) (room cap : Nat) (h1 : c.data.length + 24 ≤ room)
+    (h2 : cap < c.size) :
+    carriable true (c :: cs) room = true ∧ repLoop 8 (c :: cs) room cap = ([], true) ∧
+      dropped true (c :: cs) room cap = false ∧ repairAfter true (dropped true (c :: cs) room cap) = false := by
+  have h1' : ¬ room < c.data.length + 24 := by omega
+  refine ⟨by simp [carriable, h1], by rw [repLoop_eight]; simp [h1', h2], ?_, by simp [repairAfter]⟩
+  rw [dropped_iff]
+  simp [carriable, h1]
+
+/-- The case of the finding is reached: a FIN with no data and 2 bytes left in the payload after the ACK. -/
+theorem after_short_reached :
+    carriable true [⟨0, 0, true, []⟩] 600 = true ∧ repLoop 8 [⟨0, 0, true, []⟩] 600 2 = ([], true) ∧
+      repairAfter true (dropped true [⟨0, 0, true, []⟩] 600 2) = false := by
+  decide
+
 end Vinc.TransportFramePack
 
 #audit_axioms Vinc.TransportFramePack.header_eq
@@ -671,3 +768,11 @@ end Vinc.TransportFramePack
 #audit_axioms Vinc.TransportFramePack.pick_keeps
 #audit_axioms Vinc.TransportFramePack.pick_probe_then_repair
 #audit_axioms Vinc.TransportFramePack.pickOld_loses
+#audit_axioms Vinc.TransportFramePack.dropped_iff
+#audit_axioms Vinc.TransportFramePack.carried_or_short
+#audit_axioms Vinc.TransportFramePack.after_nofill
+#audit_axioms Vinc.TransportFramePack.after_unsealed
+#audit_axioms Vinc.TransportFramePack.after_leaves
+#audit_axioms Vinc.TransportFramePack.afterOld_loses
+#audit_axioms Vinc.TransportFramePack.after_short_sealed
+#audit_axioms Vinc.TransportFramePack.after_short_reached

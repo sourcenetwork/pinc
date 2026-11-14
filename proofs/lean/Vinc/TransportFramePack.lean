@@ -20,8 +20,12 @@ What `crates/vinc-transport/src/conn/send.rs` puts into a packet, over the frame
   the room and the counts the code tests; the model takes what each slot wrote, so the theorems hold whatever those
   tests decide. `Fill.hint` is `last_stream` as the fill leaves it: the last chunk written, forgotten when a
   datagram or a credit frame follows it;
-* `pick` is what `build_app` decides before the fill: the mode, and whether the fill takes the pending tail repair
-  (only a packet built as a repair does, so a repair due together with a path MTU probe stays pending).
+* `pick` is what `build_app` decides before the fill: the mode, and whether the fill reads the pending tail repair
+  (only a packet built as a repair does, so a repair due together with a path MTU probe stays pending);
+* `repLoop` is the loop of `fill_repair` over the frames of the repaired packet not acknowledged, and `dropped`,
+  `repairAfter` the end of the build (#433): the repair leaves the pending state when the packet built for it is
+  sealed, or when the fill drops it because nothing a packet can carry is left of it; a build that ends without a
+  packet leaves it pending.
 
 The theorems are in `TransportFramePackThm.lean`. The TLA+ counterpart is `proofs/tla/FramePackOps.tla` with
 `FramePack.tla`; the trace is replayed by `Vinc/TraceFramePack.lean`.
@@ -273,12 +277,50 @@ def Fill.mode : Fill → Mode
 
 /-! ## The choice before the fill -/
 
-/-- What `build_app` decides before the fill: the mode, whether the fill takes the pending tail repair, and whether
-a repair is still pending after it. `probes`: the probe timeout owes packets; `mtu`: a path MTU probe is due for this
-packet; `pending`: a tail repair is pending; `active`: the packet goes on the active path. The repair is taken only
-for a packet built as a repair, so a repair that is due together with a probe stays pending for the next packet. -/
+/-- What `build_app` decides before the fill: the mode, whether the fill reads the pending tail repair (the packet
+takes it when it is sealed, `repairAfter`), and whether a repair is still pending once the packet is sealed. `probes`:
+the probe timeout owes packets; `mtu`: a path MTU probe is due for this packet; `pending`: a tail repair is pending;
+`active`: the packet goes on the active path. Only a packet built as a repair reads it, so a repair that is due together
+with a probe stays pending for the next packet. -/
 def pick (probes mtu pending active : Bool) : Mode × Bool × Bool :=
   let took := pending && active && !probes && !mtu
   (if probes then .pingOnly else if mtu then .probe else if took then .repair else .normal, took, pending && !took)
+
+/-! ## The end of the build (#433) -/
+
+/-- What `fill_repair` reserves for a chunk: its header (`stream_overhead`) and its data. -/
+def Chunk.size (c : Chunk) : Nat := streamOverhead c.id c.off c.data.length false + c.data.length
+
+/-- The loop of `fill_repair` over the frames of the repaired packet not acknowledged, in the order it visits them,
+while `k` more may be recorded (`MAX_FRAME_REFS`), each within the repair's budget (`room`: its data and 24 bytes) and
+the payload left after the ACK (`cap`: its header and data). The chunks written, and whether the loop stopped at a
+chunk the payload had no room for (`short`); a chunk past the budget or the count ends it as it is. The header is the
+one `put_stream_header` writes (`chunk_bytes`) and the bytes are readable, so neither ends it here. -/
+def repLoop : Nat → List Chunk → Nat → Nat → List Chunk × Bool
+  | 0, _, _, _ => ([], false)
+  | _ + 1, [], _, _ => ([], false)
+  | k + 1, c :: cs, room, cap =>
+    if room < c.data.length + 24 then ([], false)
+    else if cap < c.size then ([], true)
+    else
+      let r := repLoop k cs (room - c.size) (cap - c.size)
+      (c :: r.1, r.2)
+
+/-- A repair a packet can carry: its packet is still in the sent ring (`inRing`) and the first of its frames not
+acknowledged, in the order the fill visits them, fits the repair's budget. -/
+def carriable (inRing : Bool) : List Chunk → Nat → Bool
+  | [], _ => false
+  | c :: _, room => inRing && decide (c.data.length + 24 ≤ room)
+
+/-- `fill_repair` drops the repair itself: its packet is no longer in the ring, or the loop wrote none of its frames
+and did not stop at one the payload had no room for. -/
+def dropped (inRing : Bool) (cs : List Chunk) (room cap : Nat) : Bool :=
+  !inRing || ((repLoop 8 cs room cap).1.isEmpty && !(repLoop 8 cs room cap).2)
+
+/-- Whether a pending repair is still pending once a build that read it ends: the seal of the packet built for it
+takes it, and so does the fill when it drops it (`dropped` is `false` for a build that ends before its fill: a buffer
+with no room for a packet, no destination id); a build that ends otherwise without a packet (the sent ring has no slot,
+sealing fails, nothing to send) leaves it pending. -/
+def repairAfter (sealed dropped : Bool) : Bool := !(sealed || dropped)
 
 end Vinc.TransportFramePack

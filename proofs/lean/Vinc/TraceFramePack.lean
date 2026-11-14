@@ -7,8 +7,8 @@ import Vinc.TransportFramePack
 The Lean half of the trace validation of the VINCER packet builder (`vinc-transport` `conn/send.rs`), the port of
 `proofs/tla/TraceFramePack.tla`. It reads the `txpk` events written by the Rust test `trace_framepack`:
 
-* a sealed packet (`pkt`): its mode, whether its fill took the pending tail repair and whether a repair is still
-  pending as it is sealed must be what `pick` gives for its path and some state of the probes (a probe or the probe
+* a sealed packet (`pkt`): its mode, whether it took the pending tail repair as it was sealed and whether a repair
+  is still pending then must be what `pick` gives for its path and some state of the probes (a probe or the probe
   timeout's packet takes no repair, so one due with it stays pending); the frames of the fill must parse (`frames`)
   with no error, none PADDING or CLOSE (CLOSE alone in the CLOSE packet) and none without its length; their kinds
   come in the order of the fill's slots for its mode (`ordered`); the place kept is the last frame exactly when a

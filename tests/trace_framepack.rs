@@ -8,9 +8,11 @@
 //! resets and stop requests, a second path (challenge, response and path PING), sleep and wake, a keepalive, key
 //! rolls, the tickets and READY of a full handshake, a resumption whose client sends stream data in 0-RTT packets,
 //! a lost tail (the probe timeout's packets), path MTU probes, tail repairs, a path MTU probe due while a tail repair
-//! is pending, and the CLOSE packet. Each connection records, through the `trace` view of the builder, every packet
-//! it seals: its header (short or 0-RTT), what it was built for, whether its fill took the pending tail repair,
-//! whether one is still pending and whether it goes on the active path, the frames the fill wrote, the place of the
+//! is pending, a tail repair pending while builds end without a packet (a buffer with no room for a packet, then one
+//! with no room for the repair's frame), and the CLOSE packet. Each connection records, through the `trace` view of
+//! the builder, every packet it seals (a build that ends without a packet records nothing): its header (short or
+//! 0-RTT), what it was built for, whether it took the pending tail repair as it was sealed, whether one is still
+//! pending and whether it goes on the active path, the frames the fill wrote, the place of the
 //! last STREAM frame the fill kept, the least payload, and the payload as sealed. `implicit_stream_len` and
 //! `put_stream_header` are also called directly, on the frames of real fills and on seeded inputs: a frame that ends
 //! the payload, one followed by more bytes, one cut short, a place that is not a frame, lengths at the varint edges,
@@ -20,12 +22,12 @@
 //! 32-bit integers), `framepack_wide.ndjson` every event, with stream ids, offsets and lengths up to `2^64 - 1`.
 //!
 //! The test checks every packet against a naive reading of the code, so it is meaningful without the proof tools:
-//! only a packet built as a repair takes the pending tail repair, and a normal packet on the active path finds none
-//! pending; the fill's frames parse with the real `FrameIter` with no error, none is PADDING or CLOSE (CLOSE only in
-//! the CLOSE packet) and none leaves its length out; their kinds come in the builder's order; the place kept is the
-//! last frame, a STREAM frame of a normal fill whose data runs to the end; the payload sealed is the frames padded to
-//! the least payload, or the frames with the length of that STREAM frame dropped; and it parses into the frames
-//! written, the last one without its length, then one PADDING frame for the padding.
+//! only a packet built as a repair takes the pending tail repair (when it is sealed), and a normal packet on the
+//! active path finds none pending; the fill's frames parse with the real `FrameIter` with no error, none is PADDING or
+//! CLOSE (CLOSE only in the CLOSE packet) and none leaves its length out; their kinds come in the builder's order; the
+//! place kept is the last frame, a STREAM frame of a normal fill whose data runs to the end; the payload sealed is the
+//! frames padded to the least payload, or the frames with the length of that STREAM frame dropped; and it parses into
+//! the frames written, the last one without its length, then one PADDING frame for the padding.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -249,8 +251,9 @@ fn packet(out: &mut Out, r: &PackRecord) {
         assert!(!kinds.contains(&"Close"), "CLOSE outside the CLOSE packet");
     }
     assert!(r.kind == PackKind::Short || r.client, "a server sealed a 0-RTT packet");
-    // The tail repair: build_app takes it exactly for a packet built as a repair, on the active path; a path MTU probe
-    // and the probe timeout's packet leave it pending, and a normal packet on the active path finds none pending.
+    // The tail repair: build_app reads it exactly for a packet built as a repair, on the active path, which takes it as
+    // it is sealed; a path MTU probe and the probe timeout's packet leave it pending, and a normal packet on the active
+    // path finds none pending.
     if r.mode != PackMode::Close {
         assert_eq!(
             r.repair_taken,
@@ -622,6 +625,54 @@ fn probe_with_repair(out: &mut Out, seed: u64) {
     take(out, &mut net);
 }
 
+/// A tail repair pending while builds end without a packet (#433): a buffer with no room for any packet, then one with
+/// room for a packet but not for the frame of the repair. Neither build takes the repair, which leaves with the next
+/// packet that has room, before any probe timeout. The builds that end without a packet record nothing; the packet
+/// that follows them is the repair.
+fn repair_after_no_packet(out: &mut Out, seed: u64) {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    w.cfg.probe_mtu = false;
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    sa.loss.record(1000, 0);
+    let mut net = setup(
+        &mut w,
+        &mut sa,
+        &mut sb,
+        Link::new(seed, Params::new(10 * MS).mtu(1500)),
+    );
+    enable(&mut net);
+    assert!(net.connect(net.now + 30 * SEC), "{:?}", net.rx_drops);
+    net.run(net.now + 3 * SEC, |_| false);
+    let id = net.a.conn.open_uni().unwrap();
+    net.a.conn.write(id, &pattern(100, seed)).unwrap();
+    net.a.conn.finish(id).unwrap();
+    assert!(poll_a(&mut net).is_some(), "the stream packet leaves");
+    assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
+    // 24 bytes hold no packet (a header, the tag and a frame); 60 hold a packet, not the 100 byte frame of the repair.
+    for room in [24, 60] {
+        net.buf.truncate(room);
+        assert_eq!(poll_a(&mut net), None, "a build in {room} bytes ends without a packet");
+        net.buf.resize(65_536, 0);
+    }
+    assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
+    assert!(
+        poll_a(&mut net).is_some_and(|n| n < 700),
+        "the repair leaves with the next packet"
+    );
+    assert_eq!(net.a.conn.stats().repairs, 1, "{:?}", net.a.conn.stats());
+    assert_eq!(net.a.conn.stats().ptos, 0, "{:?}", net.a.conn.stats());
+    let sealed = net.a.conn.trace_pack_take();
+    let last = sealed.last().expect("the repair packet is recorded");
+    assert!(
+        last.mode == PackMode::Repair && last.repair_taken && !last.repair_left,
+        "the packet after the builds with no packet is not the repair: {last:?}"
+    );
+    out.see("repair after builds with no packet");
+    for r in sealed.iter().chain(net.b.conn.trace_pack_take().iter()) {
+        packet(out, r);
+    }
+}
+
 // ---- the byte functions ----
 
 /// One call of `implicit_stream_len` on `b`, checked against a naive reading and recorded.
@@ -838,6 +889,7 @@ fn trace_framepack() {
         resume(&mut out, 42);
         repair(&mut out, 14);
         probe_with_repair(&mut out, 31);
+        repair_after_no_packet(&mut out, 31);
         byte_functions(&mut out);
         out
     });
@@ -854,6 +906,7 @@ fn trace_framepack() {
         "implicit",
         "implicit behind other frames",
         "probe with a repair pending",
+        "repair after builds with no packet",
         "as written",
         "Ack",
         "Sleep",

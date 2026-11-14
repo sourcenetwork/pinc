@@ -13,14 +13,29 @@
 (* what build_app sees (the probe timeout owes packets, a path MTU probe   *)
 (* is due, a tail repair is pending, the packet goes on the active path)   *)
 (* and its mode is the one Pick gives; an ordinary fill is built with no   *)
-(* repair pending.                                                         *)
+(* repair pending. A tail repair case also gives how the build ends        *)
+(* besides its fill (the buffer holds no packet, no destination id, the    *)
+(* sent ring has no slot, sealing fails, or none of these) and whether the *)
+(* packet repaired is still in the sent ring.                              *)
 (*                                                                         *)
-(* The choice before the fill:                                             *)
-(*   RepairKept the pending tail repair is taken exactly by a packet built *)
-(*              as a repair (on the active path, no path MTU probe due,    *)
-(*              no probe timeout's packet owed) and is otherwise left      *)
-(*              pending: a repair due together with a path MTU probe or    *)
-(*              the probe timeout's PING goes with the next packet.        *)
+(* The choice before the fill and the end of the build:                    *)
+(*   RepairKept    only a packet built as a repair (on the active path, no *)
+(*                 path MTU probe due, no probe timeout's packet owed)     *)
+(*                 reads the pending repair, and a repair is still pending *)
+(*                 once a packet is sealed exactly when that packet was    *)
+(*                 not built as a repair: a repair due together with a     *)
+(*                 path MTU probe or the probe timeout's PING goes with    *)
+(*                 the next packet;                                        *)
+(*   RepairLeaves  a pending repair leaves the pending state exactly when  *)
+(*                 the packet built for it is sealed or nothing a packet   *)
+(*                 can carry is left of it (its packet is out of the ring, *)
+(*                 each frame is acknowledged, or the first does not fit   *)
+(*                 the repair's room);                                     *)
+(*   RepairPending a build that ends without a packet leaves a repair a    *)
+(*                 packet can carry pending;                               *)
+(*   RepairCarriedWithRoom  a sealed repair packet carries a frame of a    *)
+(*                 repair a packet can carry, unless its payload had no    *)
+(*                 room for the first of them.                             *)
 (*                                                                         *)
 (* Properties of every packet the builder seals:                           *)
 (*   HintRight  the place kept is the last frame, a STREAM frame with its  *)
@@ -54,12 +69,21 @@
 (* NoImplicit, an implicit length is reached (FramePack_reach.cfg);        *)
 (* RepairKept under the rule before #293 (FramePack_taken.cfg, KEEP =      *)
 (* FALSE: the probe packet takes the pending repair and carries none of    *)
-(* it, so the repair is gone).                                             *)
+(* it, so the repair is gone); RepairPending under the rule before #433    *)
+(* (FramePack_built.cfg, SEAL = FALSE: build_app takes the repair when the *)
+(* build starts, and a build that ends without a packet loses it). The     *)
+(* finding FramePack_short.cfg: RepairCarried, a sealed repair packet      *)
+(* always carries a frame of a repair a packet can carry, fails: when the  *)
+(* payload has no room for the first frame (a buffer smaller than the      *)
+(* path's datagrams) and an ACK is due, the packet is sealed with the ACK  *)
+(* alone and takes the repair, which no packet carries then.               *)
 (*                                                                         *)
 (* Lean counterpart: TransportFramePackThm.lean (fill_hint, finish_ok,     *)
 (* finish_frames, finish_lastOnly, fill_ordered, fill_bytes,               *)
 (* implicit_spec, implicit_refuses, header_eq, pick_took, pick_keeps,      *)
-(* pick_probe_then_repair, pickOld_loses).                                 *)
+(* pick_probe_then_repair, pickOld_loses, dropped_iff, carried_or_short,   *)
+(* after_nofill, after_unsealed, after_leaves, afterOld_loses,             *)
+(* after_short_sealed, after_short_reached).                               *)
 (***************************************************************************)
 EXTENDS FramePackOps, FiniteSets
 
@@ -107,10 +131,14 @@ Normal ==
 Sels == [probes : BOOLEAN, mtu : BOOLEAN, pending : BOOLEAN, active : BOOLEAN]
 NoSel == [probes |-> FALSE, mtu |-> FALSE, pending |-> FALSE, active |-> TRUE]
 PickOf(s) == Pick(s.probes, s.mtu, s.pending, s.active)
-\* the other modes, each as build_app picks it
+\* how a build ends besides its fill (FramePackOps.tla, Fills and Sealed)
+Ends == {"none", "small", "nodcid", "ring", "seal"}
+\* the other modes, each as build_app picks it; a tail repair also with each end of the build, and with its packet in
+\* the sent ring or not (streams are then the frames of that packet not acknowledged, in the order the fill visits them)
 Other ==
     {y \in [sel : Sels, cap : {24, 40, 64}, full : BOOLEAN, ack : {<<>>, <<A1>>, <<A2>>}, wakeUntil : BOOLEAN,
-            streams : Streams, rroom : {30, 600}, ackDue : BOOLEAN] : PickOf(y.sel).mode # "normal"}
+            streams : Streams, rroom : {30, 600}, ackDue : BOOLEAN, end : Ends, gone : BOOLEAN] :
+        PickOf(y.sel).mode # "normal" /\ (PickOf(y.sel).mode # "repair" => y.end = "none" /\ ~y.gone)}
 
 \* a case as the operators read it (the fields a mode does not use are fixed)
 Flat(x) ==
@@ -120,14 +148,15 @@ Flat(x) ==
           tickets |-> x.ctl.tickets, rekey |-> x.ctl.rekey, rk |-> RK, ext |-> x.ctl.ext, sc |-> x.ctl.sc,
           resp |-> x.path.resp, pping |-> x.path.pping, chal |-> x.path.chal, streams |-> x.streams,
           dgrams |-> x.dgrams, released |-> Len(x.sc2) > 0, sc2 |-> x.sc2, force |-> x.force, ackDue |-> x.ackDue,
-          wakeUntil |-> FALSE, rroom |-> 0, sel |-> NoSel, took |-> PickOf(NoSel).took, left |-> PickOf(NoSel).left]
+          wakeUntil |-> FALSE, rroom |-> 0, sel |-> NoSel, took |-> PickOf(NoSel).took, left |-> PickOf(NoSel).left,
+          end |-> "none", gone |-> FALSE]
     ELSE LET p == PickOf(x.sel) IN
          [mode |-> p.mode, cap |-> x.cap, minp |-> IF p.mode = "probe" \/ x.full THEN x.cap ELSE 2, ack |-> x.ack,
           ring |-> TRUE, cc |-> TRUE, sleep |-> FALSE, wake |-> FALSE, echo |-> FALSE, ready |-> FALSE,
           tickets |-> FALSE, rekey |-> FALSE, rk |-> RK, ext |-> <<>>, sc |-> <<>>, resp |-> FALSE,
           pping |-> FALSE, chal |-> FALSE, streams |-> x.streams, dgrams |-> <<>>, released |-> FALSE, sc2 |-> <<>>,
           force |-> p.mode = "pingonly", ackDue |-> x.ackDue, wakeUntil |-> x.wakeUntil, rroom |-> x.rroom,
-          sel |-> x.sel, took |-> p.took, left |-> p.left]
+          sel |-> x.sel, took |-> p.took, left |-> p.left, end |-> x.end, gone |-> x.gone]
 
 Init ==
     /\ c \in {Flat(x) : x \in (IF "normal" \in MODES THEN Normal ELSE {})
@@ -181,9 +210,33 @@ Sizes ==
 \* the reachability witness: an implicit length is reached
 NoImplicit == ~(Built(c, R) /\ F.ok /\ F.n > 0)
 
-\* build_app takes the pending repair exactly for a packet it builds as a repair, and leaves it pending otherwise
+\* only a packet build_app builds as a repair reads the pending repair, and a repair is still pending once a packet is
+\* sealed exactly when that packet was not built as a repair
 RepairKept ==
     /\ c.took = (c.mode = "repair")
     /\ c.left = (c.sel.pending /\ c.mode # "repair")
     /\ c.mode = "repair" => c.sel.pending /\ c.sel.active /\ ~c.sel.probes /\ ~c.sel.mtu
+
+(* ---- the end of the build (#433) ---- *)
+\* a repair a packet can carry: its packet is still in the sent ring and the first of its frames not acknowledged, in
+\* the order the fill visits them, fits the repair's room (min(datagram size - 23, 600) bytes)
+Carriable == c.sel.pending /\ ~c.gone /\ Len(c.streams) > 0 /\ Len(c.streams[1].data) + 24 <= c.rroom
+Sealed0 == Sealed(c, R, F)
+Pending1 == After(c, R, F)
+
+\* a pending repair leaves the pending state exactly when the packet built for it is sealed, or when the fill that reads
+\* it finds nothing a packet can carry
+RepairLeaves == c.sel.pending => (~Pending1 <=> (c.took /\ (Sealed0 \/ (Fills(c) /\ ~Carriable))))
+
+\* a build that ends without a packet leaves a repair a packet can carry pending (the rule before #433 loses it:
+\* FramePack_built.cfg)
+RepairPending == Carriable /\ ~Sealed0 => Pending1
+
+\* the packet that takes a repair a packet can carry holds one of its frames, unless its payload had no room for the
+\* first of them
+RepairCarriedWithRoom == Carriable /\ c.took /\ Sealed0 => Carries(R) \/ R.short
+
+\* the statement without the exception, a finding (FramePack_short.cfg must violate it): a repair packet whose payload
+\* has no room for the repair's first frame is sealed when its ACK is due, with the ACK alone, and takes the repair
+RepairCarried == Carriable /\ c.took /\ Sealed0 => Carries(R)
 =============================================================================
