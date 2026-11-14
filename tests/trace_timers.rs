@@ -177,7 +177,7 @@ impl Log {
                     CloseReason::Violation { .. } => "viol",
                     CloseReason::IdleTimeout => "idle",
                     CloseReason::PathDead => "dead",
-                    CloseReason::HandshakeTimeout | CloseReason::Unanswered => "hs",
+                    CloseReason::HandshakeTimeout | CloseReason::Unanswered | CloseReason::Unconfirmed => "hs",
                     CloseReason::Handshake(f) => panic!("the handshake failed: {f:?}"),
                 },
                 Event::PeerAsleep => "asleep",

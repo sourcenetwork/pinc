@@ -423,7 +423,7 @@ ep_impl! {
 /// How a dial that never opened is reported.
 const fn failure_of(reason: CloseReason) -> ConnectFailure {
     match reason {
-        CloseReason::HandshakeTimeout | CloseReason::Unanswered => ConnectFailure::Timeout,
+        CloseReason::HandshakeTimeout | CloseReason::Unanswered | CloseReason::Unconfirmed => ConnectFailure::Timeout,
         CloseReason::Handshake(f) => ConnectFailure::Handshake(f),
         _ => ConnectFailure::Closed,
     }

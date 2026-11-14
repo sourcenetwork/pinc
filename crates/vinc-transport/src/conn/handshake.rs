@@ -26,6 +26,10 @@
 //!   came on, not on the other paths the first flight was copied to.
 //! - A handshake still not established more than 30 s after it began (60 s on a thin node) ends; the connection then
 //!   closes.
+//! - A dialing side that established but has heard no 1-RTT packet from the peer more than the same 30 s (60 s) after
+//!   it established ends unconfirmed ([`CloseReason::Unconfirmed`](super::CloseReason::Unconfirmed)): the peer does
+//!   not hold the session (its handshake ran out before the Finish arrived, or the path is gone), so the layer above
+//!   dials again instead of holding the session until the idle timeout.
 //!   The limit follows the node's round trips as they change, so a dial begun before the node measured itself slow
 //!   keeps 60 s.
 //! - A dial the layer above told to end early (one it reported before its handshake) also ends when the resend timer
@@ -351,6 +355,13 @@ pub(crate) struct Handshake {
     unheard: u32,
     /// The handshake ended that way.
     unanswered: bool,
+    /// A dialing side that established waits for the peer to show it holds the session until this instant (the
+    /// connect limit counted from [`Self::established`]); past it the session ends unconfirmed.
+    confirm_at: Option<u64>,
+    /// When a dialing side established.
+    established: u64,
+    /// The session ended that way: the peer never showed it holds it.
+    unconfirmed: bool,
     /// When the handshake began.
     created: u64,
     first_sent: u64,
@@ -406,6 +417,9 @@ impl Handshake {
             early: false,
             unheard: 0,
             unanswered: false,
+            confirm_at: None,
+            established: now,
+            unconfirmed: false,
             created: now,
             first_sent: now,
             sample: None,
@@ -506,6 +520,8 @@ impl Handshake {
                 if self.client {
                     self.stage = Stage::Finish;
                     self.retx_at = None;
+                    self.established = self.clock;
+                    self.confirm_at = Some(self.timing.connect_deadline(self.clock));
                     self.rx_live = false;
                     if est.resumed {
                         self.tx_live = false;
@@ -551,6 +567,9 @@ impl Handshake {
         self.timing.set_node(thin, node_rtt, node_peak_rtt);
         if self.connect_at.is_some() {
             self.connect_at = Some(self.timing.connect_deadline(self.created));
+        }
+        if self.confirm_at.is_some() {
+            self.confirm_at = Some(self.timing.connect_deadline(self.established));
         }
     }
 
@@ -775,12 +794,18 @@ impl Handshake {
         self.sample.take()
     }
 
-    /// When the next timer fires, if one runs: the resend, or the end of an unestablished handshake.
+    /// When the next timer fires, if one runs: the resend, the end of an unestablished handshake, or the end of an
+    /// established dialing side the peer never confirmed.
     pub(crate) fn retransmit_at(&self) -> Option<u64> {
-        match (self.retx_at, self.connect_at) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [self.retx_at, self.connect_at, self.confirm_at]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Whether the session ended because the peer never showed it holds it; the connection then closes.
+    pub(crate) const fn unconfirmed(&self) -> bool {
+        self.unconfirmed
     }
 
     /// Whether the handshake ran out of time; the connection then closes.
@@ -796,6 +821,14 @@ impl Handshake {
             self.connect_at = None;
             self.retx_at = None;
             self.timed_out = true;
+            return true;
+        }
+        // The Finish went unconfirmed for the connect limit: the peer does not hold the session (its own handshake
+        // ran out before the Finish reached it, or the path to it is gone). Resending longer cannot help.
+        if self.confirm_at.is_some_and(|t| t <= now) {
+            self.confirm_at = None;
+            self.retx_at = None;
+            self.unconfirmed = true;
             return true;
         }
         if self.retx_at.is_none_or(|t| t > now) {
@@ -865,6 +898,7 @@ impl Handshake {
     /// handshake kept to answer a repeat.
     pub(crate) fn confirm(&mut self, pool: &mut BufferPool<'_>) {
         self.retx_at = None;
+        self.confirm_at = None;
         self.stage = Stage::Done;
         self.retire_machine();
         self.tx_live = false;
