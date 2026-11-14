@@ -18,6 +18,7 @@ import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceOrphan
+import Vinc.TraceKeepalive
 import Vinc.TraceHalfOpen
 import Vinc.TraceMtu
 import Vinc.TraceStores
@@ -478,6 +479,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
         if TraceFrame.isTag t then
           -- Frame codec events (`txfr`, written by `trace_frame`): decode, write, the iterator and the ACK ranges.
           match TraceFrame.replayEvent j with
+          | .ok _ =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceKeepalive.isTag t then
+          -- Keepalive schedule events (`cka`, written by `trace_keepalive`): the plan and the standby due.
+          match TraceKeepalive.replayEvent j with
           | .ok _ =>
             count := count + 1
             continue
