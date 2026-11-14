@@ -584,6 +584,10 @@ name = "vinc_size"
 path = "vinc_size.rs"
 
 [[test]]
+name = "vinc_portmap_churn"
+path = "vinc_portmap_churn.rs"
+
+[[test]]
 name = "vinc_datagram"
 path = "vinc_datagram.rs"
 

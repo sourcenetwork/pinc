@@ -20,7 +20,7 @@ use vinc_connect::carrier::ws::{self, Decoder, Opcode, Role as WsRole, WsFrame};
 use vinc_connect::client::Io as CarrierIo;
 use vinc_connect::client::Kind;
 
-use super::Shared;
+use super::{Shared, http_io};
 use crate::carrier::CarrierKind;
 use crate::carriers::{Carriers, Relay};
 use crate::engine::Core;
@@ -151,14 +151,14 @@ pub(crate) fn slots<S>() -> Slots<S> {
 }
 
 /// An operation in flight: its future lives in one box for the life of the driver, set again for each operation.
-struct Op<F> {
+pub(super) struct Op<F> {
     fut: Option<Pin<Box<F>>>,
     live: bool,
     ver: u64,
 }
 
 impl<F: Future> Op<F> {
-    const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             fut: None,
             live: false,
@@ -166,11 +166,11 @@ impl<F: Future> Op<F> {
         }
     }
 
-    const fn running(&self, ver: u64) -> bool {
+    pub(super) const fn running(&self, ver: u64) -> bool {
         self.live && self.ver == ver
     }
 
-    fn start(&mut self, ver: u64, f: F) {
+    pub(super) fn start(&mut self, ver: u64, f: F) {
         match self.fut.as_mut() {
             Some(b) => b.as_mut().set(f),
             None => self.fut = Some(Box::pin(f)),
@@ -180,7 +180,7 @@ impl<F: Future> Op<F> {
     }
 
     /// The result, if the operation finished and still belongs to state `ver`.
-    fn poll(&mut self, cx: &mut Context<'_>, ver: u64) -> Option<F::Output> {
+    pub(super) fn poll(&mut self, cx: &mut Context<'_>, ver: u64) -> Option<F::Output> {
         if !self.live {
             return None;
         }
@@ -193,7 +193,7 @@ impl<F: Future> Op<F> {
     }
 
     /// Drop the operation and what it holds.
-    fn cancel(&mut self) {
+    pub(super) fn cancel(&mut self) {
         if self.fut.is_some() {
             self.live = false;
             self.fut = None;
@@ -497,6 +497,10 @@ impl<H: Hosted> Shared<H> {
 
     /// The driver's carrier work as one future that never completes; the driving future polls it. Its locals hold the
     /// operations in flight.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one poll function: the slots of every relay and the exchange share its locals"
+    )]
     pub(super) async fn carriers_task(&self) {
         let c = self.host.carriers();
         self.adopt_carriers();
@@ -504,6 +508,7 @@ impl<H: Hosted> Shared<H> {
         let mut reads: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
         let mut writes: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
         let mut closes: [Op<_>; RELAYS] = std::array::from_fn(|_| Op::new());
+        let mut hop = Op::new();
         poll_fn(|cx| {
             let mut moved = false;
             for r in 0..RELAYS {
@@ -591,6 +596,7 @@ impl<H: Hosted> Shared<H> {
                     }
                 }
             }
+            moved |= self.http_drive(cx, &mut hop, |step| http_io::host_step(c, step));
             if moved {
                 // What finished may let the next step start: look again at once.
                 cx.waker().wake_by_ref();
