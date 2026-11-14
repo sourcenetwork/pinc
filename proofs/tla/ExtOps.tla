@@ -59,6 +59,8 @@ Decodes(t) == t >= BASE
 \* the layer a type is for, as the destination it must route to
 DestOf(who) == IF who = "sub" THEN "sub" ELSE IF who = "reach" THEN "reach" ELSE "ring"
 
+\* allowed: the session may release events to the application (Endpoint::may_release: the access check allowed it
+\* and its peer's cached answer has not lapsed and is an allow); the dispatch asks that one predicate
 Route(ty, len, allowed) ==
     IF ty = SUB /\ len > 0 THEN "sub"
     ELSE IF ty = REACH /\ len > 0 /\ len <= REACHMAX THEN "reach"

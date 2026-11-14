@@ -77,8 +77,9 @@ inductive Dest where
 
 /-- The `Co::Extension` arm of `on_conn_event`: a non-empty sub-session open goes to the sub-session layer; a
 `REACH_OUT` of 1 to `REACH_BODY_MAX` bytes to the reach ring (and raises `Event::ReachOut`); any other type, with a
-non-empty body and on a session the access check allowed, to the ring the application reads; everything else is
-dropped. `len` is the body length, `allowed` the answer of the access check. -/
+non-empty body and on a session that may release, to the ring the application reads; everything else is dropped.
+`len` is the body length, `allowed` the release predicate of the access check (`may_release`: the session is allowed
+and its peer's cached answer has not lapsed and is an allow). -/
 def route (ty len : Nat) (allowed : Bool) : Dest :=
   if ty = subOpen ∧ 0 < len then .sub
   else if ty = reachOut ∧ 0 < len ∧ len ≤ reachMax then .reach

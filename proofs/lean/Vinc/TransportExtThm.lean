@@ -15,8 +15,9 @@ For the model of `TransportExt.lean`:
 * **The dispatch** (`route_sub_iff`, `route_reach_iff`, `route_ring_iff`, `route_drop_iff`, `route_exclusive`,
   `ring_not_core`): a frame goes to the sub-session layer exactly when it has that type and a body, to the `REACH_OUT`
   ring exactly with its type and a body of 1 to `REACH_BODY_MAX` bytes, to the application ring exactly with another
-  type, a body and an allowed session, and is dropped otherwise; the application ring never takes the type of either
-  endpoint layer, and a session not allowed gets nothing in it (`route_gate`).
+  type, a body and a session that may release (`may_release`: allowed, and its peer's answer stands), and is dropped
+  otherwise; the application ring never takes the type of either endpoint layer, and a session that may not release
+  (not allowed, denied, or its answer lapsed) gets nothing in it (`route_gate`).
 * **Total over the table** (`route_table`): for each registered type there is an input that reaches the layer that
   registered it, and for the types of the values layer and the transport tests that is the application ring.
 * **Unregistered types** (`unregistered_ring`, `unregistered_untaken`): a type at or above the base nobody registered
