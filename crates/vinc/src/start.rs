@@ -140,6 +140,19 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     Ok(Core::new(Box::new(node), cfg, prekeys, ifaces))
 }
 
+/// The local addresses the endpoint knows: one per family the socket can carry.
+pub(crate) fn interfaces(local: std::net::SocketAddr) -> Vec<std::net::SocketAddr> {
+    match local {
+        std::net::SocketAddr::V6(a) if a.ip().is_unspecified() => {
+            vec![
+                local,
+                std::net::SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), a.port()),
+            ]
+        }
+        a => vec![a],
+    }
+}
+
 /// Whether an endpoint asks its gateway for a port mapping, and the gateway's address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PortMapping {
