@@ -6,7 +6,7 @@
 //! gateway's description, its external address and `AddPortMapping`, over HTTP the host carries ([`PortMap::poll_http`]).
 //! PCP and `UPnP` need the client's own address (it is in their messages), so a socket on the unspecified address tries
 //! NAT-PMP only; with no gateway known only `UPnP` is tried, and an answer from another address than the gateway's is
-//! not taken. `UPnP` searches only from a private IPv4 address, takes a description only from the host that answered
+//! not taken (with none known, a search answer is taken only from a private address). `UPnP` searches only from a private IPv4 address, takes a description only from the host that answered
 //! (and the gateway's, when it is known), and sends HTTP to no other host. When every protocol failed the client tries again after [`RETRY`].
 //!
 //! A grant whose external address no peer on the internet could send to (unspecified, loopback, multicast, link-local or
@@ -401,7 +401,12 @@ impl PortMap {
         if self.gateway() == Some(from) {
             return true;
         }
-        self.step == Step::Ssdp && upnp::is_ssdp_answer(from, b) && self.cfg.gateway.is_none_or(|g| g == from.ip())
+        self.step == Step::Ssdp
+            && upnp::is_ssdp_answer(from, b)
+            && self.cfg.gateway.map_or_else(
+                || matches!(from.ip(), IpAddr::V4(v4) if addr::is_private(v4)),
+                |g| g == from.ip(),
+            )
     }
 
     /// A datagram this client [`owns`](Self::owns) arrived at `now`.

@@ -754,3 +754,28 @@ fn a_failed_http_exchange_is_counted() {
     pm.handle_http(T0, None);
     assert_eq!(pm.stats(), only(|s| s.http_failures = 1));
 }
+
+#[test]
+fn with_no_gateway_a_search_answer_is_taken_only_from_a_private_address() {
+    let mut pm = client(None, local());
+    sent(&mut pm);
+    let far = from([198, 51, 100, 7]);
+    let ans = answer("http://198.51.100.7:5000/d.xml");
+    assert!(!pm.owns(far, &ans), "an answer from a public host is for the client");
+    pm.handle_datagram(T0, far, &ans);
+    assert_eq!(http(&mut pm), None, "an HTTP request left for a public host");
+    // a carrier-grade address is a private network
+    let shared = from([100, 64, 0, 9]);
+    assert!(pm.owns(shared, &answer("http://100.64.0.9:5000/d.xml")));
+}
+
+#[test]
+fn with_a_gateway_a_search_answer_is_taken_only_from_it() {
+    let mut pm = client(Some(GW.into()), local());
+    while !sent(&mut pm).iter().any(|(to, _)| *to == upnp::SSDP) {
+        let t = pm.poll_timeout().unwrap();
+        pm.handle_timeout(t);
+    }
+    assert!(!pm.owns(from([192, 168, 1, 77]), &answer("http://192.168.1.77:5000/d.xml")));
+    assert!(pm.owns(from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml")));
+}
