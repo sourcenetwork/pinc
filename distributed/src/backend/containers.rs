@@ -29,14 +29,20 @@ pub const FALLBACK_IMAGE: &str = "debian:bookworm-slim";
 /// The base image when none is given: the build host's own distribution and release, so the C library the bound
 /// binary was linked against is in it (an older one refuses to load it).
 pub fn default_image() -> String {
+    host_image().unwrap_or_else(|| FALLBACK_IMAGE.to_owned())
+}
+
+/// The image of the distribution this host says it runs, if it says one that has an image.
+fn host_image() -> Option<String> {
     std::fs::read_to_string("/etc/os-release")
         .ok()
         .and_then(|t| image_for(&t))
-        .unwrap_or_else(|| FALLBACK_IMAGE.to_owned())
 }
 
-/// The image of the distribution an `/etc/os-release` names: `ID:VERSION_ID`, or `archlinux:latest` for Arch, which
-/// has no release.
+/// The image of the distribution an `/etc/os-release` names. Only distributions whose name and release are an image
+/// are taken by name (`ubuntu:24.04`, `debian:12-slim`, `fedora:41`); a derivative is given the image of what it is
+/// built on (`ubuntu:<codename>` when it names an Ubuntu codename, `archlinux:latest` for Arch and what is like it,
+/// which have no release). Anything else has no image here, and the fallback is used.
 pub fn image_for(os_release: &str) -> Option<String> {
     let field = |k: &str| {
         os_release
@@ -45,10 +51,29 @@ pub fn image_for(os_release: &str) -> Option<String> {
             .map(|v| v.trim().trim_matches('"'))
             .filter(|v| !v.is_empty())
     };
+    let like = |d: &str| field("ID_LIKE").is_some_and(|l| l.split_whitespace().any(|x| x == d));
     match field("ID")? {
+        "debian" => Some(format!("debian:{}-slim", field("VERSION_ID")?)),
+        id @ ("ubuntu" | "fedora") => Some(format!("{id}:{}", field("VERSION_ID")?)),
         "arch" => Some("archlinux:latest".to_owned()),
-        id => Some(format!("{id}:{}", field("VERSION_ID")?)),
+        _ if like("arch") => Some("archlinux:latest".to_owned()),
+        _ if like("ubuntu") => Some(format!("ubuntu:{}", field("UBUNTU_CODENAME")?)),
+        _ => None,
     }
+}
+
+/// What a refused image is told: both versions, and the image to pass. The host's own image is named only when the
+/// host has one and it is not the image that was refused.
+pub fn refusal(image: &str, theirs: (u32, u32), host: (u32, u32), own: Option<&str>) -> String {
+    let own = own
+        .filter(|o| *o != image)
+        .map(|o| format!("{o} (this host's distribution) or "))
+        .unwrap_or_default();
+    format!(
+        "the image {image} has glibc {}.{}, older than this host's {}.{}, which the node binary links; \
+         pass --image {own}an image with glibc {}.{} or newer",
+        theirs.0, theirs.1, host.0, host.1, host.0, host.1
+    )
 }
 
 /// The glibc version in what `getconf GNU_LIBC_VERSION` prints (`glibc 2.39`), as (major, minor).
@@ -80,20 +105,11 @@ async fn check_libc(image: &str) -> Result<()> {
     if let (Some(h), Some(i)) = (host, theirs)
         && i < h
     {
-        return Err(Error::Host(format!(
-            "the image {image} has glibc {}.{}, older than this host's {}.{}, which the node binary links; \
-             pass --image {} (this host's distribution) or another image with glibc {}.{} or newer",
-            i.0,
-            i.1,
-            h.0,
-            h.1,
-            default_image(),
-            h.0,
-            h.1
-        )));
+        return Err(Error::Host(refusal(image, i, h, host_image().as_deref())));
     }
     Ok(())
 }
+
 /// Containers started at once.
 const PARALLEL: usize = 8;
 
