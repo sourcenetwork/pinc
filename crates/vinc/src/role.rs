@@ -39,6 +39,10 @@ pub trait Role: sealed::Sealed + Sized {
     #[doc(hidden)]
     fn offer<E: Ep>(&mut self, ep: &E, now: u64, src: SocketAddr, bytes: &mut [u8]) -> bool;
 
+    /// The endpoint read a session packet from `src` that the relay did not take.
+    #[doc(hidden)]
+    fn after_offer<E: Ep>(&mut self, ep: &E, now: u64, src: SocketAddr);
+
     /// Apply what the relay queued for the endpoint; whether anything was.
     #[doc(hidden)]
     fn pump<E: Ep>(&mut self, ep: &mut E, now: u64, out: &mut Vec<Event>) -> bool;
@@ -114,6 +118,8 @@ impl Role for () {
         false
     }
 
+    fn after_offer<E: Ep>(&mut self, _: &E, _: u64, _: SocketAddr) {}
+
     fn pump<E: Ep>(&mut self, _: &mut E, _: u64, _: &mut Vec<Event>) -> bool {
         false
     }
@@ -176,6 +182,10 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Role for Part<C, K, St, A> 
 
     fn offer<E: Ep>(&mut self, ep: &E, now: u64, src: SocketAddr, bytes: &mut [u8]) -> bool {
         self.datagram(ep, now, src, bytes)
+    }
+
+    fn after_offer<E: Ep>(&mut self, ep: &E, now: u64, src: SocketAddr) {
+        self.after_datagram(ep, now, src);
     }
 
     fn pump<E: Ep>(&mut self, ep: &mut E, now: u64, out: &mut Vec<Event>) -> bool {

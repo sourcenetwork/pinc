@@ -104,6 +104,9 @@ impl<H: Hosted> Shared<H> {
                 continue;
             }
             core.node.handle_batch(now, self.local, from, d, usize::MAX);
+            if !answer {
+                role.after_offer(core.node.endpoint(), rnow, from);
+            }
         }
     }
 

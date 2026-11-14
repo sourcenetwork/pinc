@@ -27,13 +27,15 @@ impl<A: SimApps> SimNode<A> {
                 .datagram(now, remote, member.as_ref(), data, &mut s);
             self.apply(now, s);
         } else {
+            let session = data.first().is_some_and(|b| *b >= 0x40);
+            metered(|| self.node.handle_datagram(now, local, remote, data));
+            // Asked after the endpoint read the packet, as the hosts of the library do.
             if self.hub.is_some()
-                && data.first().is_some_and(|b| *b >= 0x40)
+                && session
                 && let Some(n) = self.member_at(&remote)
             {
                 let _ = self.hub.as_mut().unwrap().relay.udp_heard(&n, now);
             }
-            metered(|| self.node.handle_datagram(now, local, remote, data));
         }
         self.pump(now);
     }

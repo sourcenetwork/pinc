@@ -432,10 +432,11 @@ impl RelayNode {
             let _ = self.relay.datagram(now, remote, member.as_ref(), data, &mut s);
             self.apply(now, s);
         } else {
+            // Asked after the endpoint read the packet, as the hosts of the library do.
+            self.host.ep.handle_datagram(now, local, remote, data);
             if let Some(n) = self.member_at(&remote) {
                 let _ = self.relay.udp_heard(&n, now);
             }
-            self.host.ep.handle_datagram(now, local, remote, data);
         }
         self.pump(now);
     }

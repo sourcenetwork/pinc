@@ -180,11 +180,19 @@ impl<C: Carriers, K: KeyStore, St: Store, A: Access> Part<C, K, St, A> {
     }
 
     /// A datagram arrived from `src`. Whether it was the relay's own (address discovery, a tunnelled or a forwarded
-    /// packet): the part took it. If not, the caller gives it to the endpoint. `ep` is only read, to tell which member
-    /// the datagram came from.
+    /// packet): the part took it. If not, the caller gives it to the endpoint, then calls [`Part::after_datagram`].
+    /// `ep` is only read, to tell which member the datagram came from.
     pub fn datagram<E: Ep>(&mut self, ep: &E, now: u64, src: SocketAddr, bytes: &mut [u8]) -> bool {
         let member = self.core.member_at(ep, &src);
         self.core.on_datagram(now, src, member, bytes)
+    }
+
+    /// The endpoint read a datagram from `src` that [`Part::datagram`] left to it. A packet from a member's validated
+    /// direct address keeps the member's UDP session usable for the tunnel; asked after the read, the packet that
+    /// validated the address counts too. `ep` is only read.
+    pub fn after_datagram<E: Ep>(&mut self, ep: &E, now: u64, src: SocketAddr) {
+        let member = self.core.member_at(ep, &src);
+        self.core.on_heard(now, member);
     }
 
     /// The next datagram the relay wants to send: its remote, and its length in `out`. A datagram longer than `out` is

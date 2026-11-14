@@ -118,6 +118,7 @@ where
                         Some(hub) => {
                             if !part.datagram(hub.ep(), now, from, dgram) {
                                 hub.handle_datagram(now, from, dgram);
+                                part.after_datagram(hub.ep(), now, from);
                             }
                         }
                         None => {

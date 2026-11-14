@@ -73,7 +73,8 @@ where
 
     /// The member whose hub session has a validated direct path from `src`, if any: who a session packet from `src`
     /// proves present. Of several, the lowest session id. The endpoint's table of sessions by address answers, so a
-    /// datagram costs no walk of the hub's members.
+    /// datagram costs no walk of the hub's members. A host asks it after the endpoint read the packet, so the packet
+    /// that validated the address, or that moved the session onto it, counts.
     pub fn member_at(&self, src: &SocketAddr) -> Option<NodeId> {
         let incoming = |sid: SessionId| self.io.sess.get(&sid).is_some_and(|s| s.incoming);
         let sid = self.io.ep.session_from(src, &incoming)?;

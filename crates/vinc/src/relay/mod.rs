@@ -211,7 +211,7 @@ impl<K: KeyStore, St: Store, A: Access> Builder<K, St, A> {
 
     /// Tunnel through the node's endpoint, bound at `local`, for a [`Part`] built with [`Builder::build_part`]: members
     /// with a validated UDP session to that endpoint can send packets through the relay over UDP. The endpoint is lent
-    /// at each call ([`Part::hub`], [`Part::hub_event`], [`Part::datagram`]).
+    /// at each call ([`Part::hub`], [`Part::hub_event`], [`Part::datagram`], [`Part::after_datagram`]).
     #[must_use]
     pub fn tunnel(mut self, local: SocketAddr) -> Self {
         self.tunnel = Some(local);

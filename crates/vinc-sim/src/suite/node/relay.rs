@@ -240,14 +240,17 @@ impl Core {
             self.reply_from = None;
             return;
         }
-        if data.first().is_some_and(|b| *b >= 0x40)
+        let session = data.first().is_some_and(|b| *b >= 0x40);
+        if let Some(node) = self.node.as_mut() {
+            node.handle_datagram(now, local, remote, data);
+        }
+        // Asked once the endpoint read the packet, as the reference model stamps the path a packet came in on: the
+        // answer that validates the member's address, or the packet the session follows to it, counts as heard.
+        if session
             && let Some(n) = self.node.as_ref().and_then(|n| n.member_at(&remote))
             && let Some(h) = self.hub.as_mut()
         {
             let _ = h.relay.udp_heard(&n, now);
-        }
-        if let Some(node) = self.node.as_mut() {
-            node.handle_datagram(now, local, remote, data);
         }
     }
 

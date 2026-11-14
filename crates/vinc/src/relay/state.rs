@@ -851,6 +851,17 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         false
     }
 
+    /// The endpoint read a session packet from the validated direct address of `member` (asked after the read): the
+    /// member's UDP session was heard now. Asked after the read, the packet that validated the address, or that moved
+    /// the session onto it, counts, as the reference model stamps the path a packet came in on.
+    pub(crate) fn on_heard(&mut self, now: u64, member: Option<NodeId>) {
+        let Some(n) = member else { return };
+        self.fx.set_direct(&n, true);
+        if self.hub.is_some() {
+            let _ = self.sm.udp_heard(&n, now);
+        }
+    }
+
     /// Run the machine's timers and the checks of stream deadlines.
     pub(crate) fn on_timeout(&mut self, now: u64) {
         self.last_now = now;
