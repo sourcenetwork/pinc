@@ -218,6 +218,56 @@ def done (s : Slots) (stream : Nat) : Slots :=
 theorem done_length (s : Slots) (stream : Nat) : (done s stream).length = s.length := by
   unfold done; split <;> simp
 
+/-- A slot holds `stream` when it is taken by a request of that stream (the predicate `done` searches with). -/
+def holds (stream : Nat) (x : Option Slot) : Bool :=
+  match x with | some o => decide (o.stream = stream) | none => false
+
+/-- `done`: the slot table after it is the one before with the first slot that holds the stream cleared and every other
+slot unchanged (index `i` is `findIdx`), and when no slot holds the stream nothing changes. -/
+theorem done_spec (s : Slots) (stream : Nat) :
+    let i := s.findIdx (holds stream)
+    (∀ j, (done s stream)[j]? = if j = i ∧ i < s.length then some none else s[j]?) ∧
+    (i < s.length → (∃ o : Slot, s[i]? = some (some o) ∧ o.stream = stream) ∧
+      ∀ (j : Nat) (hj : j < i) (o : Slot), s[j]? = some (some o) → o.stream ≠ stream) ∧
+    (s.length ≤ i → (∀ (j : Nat) (o : Slot), s[j]? = some (some o) → o.stream ≠ stream) ∧ done s stream = s) := by
+  intro i
+  have hd : done s stream = if i < s.length then s.set i none else s := rfl
+  refine ⟨?_, ?_, ?_⟩
+  · intro j
+    rw [hd]
+    by_cases hi : i < s.length
+    · simp only [hi, ite_true, List.getElem?_set]
+      by_cases hj : j = i
+      · subst hj; simp [hi]
+      · simp [hj, Ne.symm hj]
+    · simp [hi]
+  · intro hi
+    refine ⟨?_, ?_⟩
+    · have h := List.findIdx_getElem (p := holds stream) (xs := s) (w := hi)
+      generalize hx : s[i] = x at h
+      cases x with
+      | none => simp [holds] at h
+      | some o =>
+        exact ⟨o, by rw [List.getElem?_eq_getElem hi, hx], by simpa [holds] using h⟩
+    · intro j hj o ho
+      have h := List.not_of_lt_findIdx (p := holds stream) (xs := s) (i := j) hj
+      have hjl : j < s.length := by omega
+      rw [List.getElem?_eq_getElem hjl] at ho
+      simp only [Option.some.injEq] at ho
+      rw [ho] at h
+      simp [holds] at h
+      exact h
+  · intro hi
+    have hnot : ¬ i < s.length := by omega
+    have hall : ∀ x ∈ s, holds stream x = false := List.findIdx_eq_length.1 (by
+      have := List.findIdx_le_length (p := holds stream) (xs := s); omega)
+    refine ⟨?_, by rw [hd]; simp [hnot]⟩
+    intro j (o : Slot) ho
+    have hm : some o ∈ s := List.mem_of_getElem? ho
+    have := hall _ hm
+    simp [holds] at this
+    exact this
+
 end Vinc.ValuesPlan
 
 #audit_axioms Vinc.ValuesPlan.opened_busy
@@ -230,3 +280,4 @@ end Vinc.ValuesPlan
 #audit_axioms Vinc.ValuesPlan.answer_refused_keeps_others
 #audit_axioms Vinc.ValuesPlan.answer_installed_supersedes
 #audit_axioms Vinc.ValuesPlan.closed_iff
+#audit_axioms Vinc.ValuesPlan.done_spec
