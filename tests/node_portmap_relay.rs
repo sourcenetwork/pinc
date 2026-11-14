@@ -381,3 +381,18 @@ fn a_second_start_withdraws_what_the_first_published_and_releases_it() {
     });
 }
 
+#[test]
+fn a_changed_address_withdraws_the_class_with_the_address() {
+    big(|| {
+        let (mut w, now, _) = live();
+        w.node.address_changed(now + SEC);
+        w.drain(now + SEC, None);
+        assert_eq!(w.offered(), [local()]);
+        assert_ne!(
+            w.node.connectivity().class(),
+            Some(Reach::PortMapped),
+            "the class stays port-mapped after the address was withdrawn"
+        );
+    });
+}
+

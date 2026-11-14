@@ -650,8 +650,14 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let nr = self.net.reflexive_into(&mut refl);
         let live = self.live_of(refl.get(..nr).unwrap_or_default());
         if live != self.live {
+            let had = self.live.iter().any(Option::is_some);
             self.live = live;
             self.sign.want_record();
+            // The mapping that made the node port-mapped is no longer vouched for: the class is unknown until a relay
+            // reports again, as the address is not offered.
+            if had && self.class == Some(Reach::PortMapped) && !live.iter().any(Option::is_some) {
+                self.class = None;
+            }
         }
     }
 
