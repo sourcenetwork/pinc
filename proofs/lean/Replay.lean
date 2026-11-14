@@ -154,6 +154,9 @@ private def replayRanges (j : J) (items : List Ranges.Interval) : Except String 
   check (Ranges.containsRange next (← natF j "cs", ← natF j "ce") == (← boolF j "cr")) s!"contains_range of {next}"
   pure next
 
+-- The file loop dispatches every trace kind in one `do` block; with that many arms its elaboration needs more than the
+-- default budget, as the large invariant files do.
+set_option maxHeartbeats 1000000 in
 /-- Replay one file: the number of events that matched the model, and the number of those that were handshake (`hs`) events. -/
 private def replayFile (path : String) : IO (Nat × Nat) := do
   let text ← IO.FS.readFile path
