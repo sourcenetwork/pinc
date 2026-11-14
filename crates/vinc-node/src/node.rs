@@ -476,7 +476,6 @@ where
     pub fn handle_timeout(&mut self, now: Nanos) {
         self.begin(now);
         self.io.ep.handle_timeout(now);
-        self.io.sample_rx();
         self.refresh_alive(now);
         if self.in_group() && now >= self.mem.poll_timeout() {
             self.refresh_ticket();
@@ -842,7 +841,6 @@ where
     /// close, if the relay saw one. The hub starts confirming the drop.
     pub fn member_carrier_closed(&mut self, now: Nanos, member: &NodeId, sleep: Option<Nanos>) {
         self.begin(now);
-        self.io.sample_rx();
         if self.io.carriers.len() < crate::config::TABLE_MAX || self.io.carriers.contains_key(member) {
             self.io.carriers.insert(*member, Carrier::Gone { since: now, sleep });
         }

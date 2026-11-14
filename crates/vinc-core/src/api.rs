@@ -685,6 +685,9 @@ pub struct SessionStats {
     pub path_validated: bool,
     /// When a datagram last arrived on the active path, in the endpoint's clock; 0 before the first.
     pub heard: u64,
+    /// When the peer was last heard on any path (an authenticated packet, or a carrier keepalive answer), in the
+    /// endpoint's clock; 0 before the first.
+    pub heard_any: u64,
     /// The keepalive was handed to the connectivity layer ([`Command::SetPulse`]) and is due now.
     pub pulse_due: bool,
     /// When the application last moved data on the session, in the endpoint's clock (a quiet role's small control

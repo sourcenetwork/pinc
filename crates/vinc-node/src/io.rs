@@ -173,8 +173,6 @@ pub(crate) struct Io<E: Ep, St: Store> {
     pub(crate) dials: Vec<NodeId>,
     pub(crate) probes: Vec<(NodeId, NodeId)>,
     pub(crate) carriers: BTreeMap<NodeId, Carrier>,
-    /// Per session: the packet count at the last look and when it last changed.
-    pub(crate) rx_seen: BTreeMap<SessionId, (u64, Nanos)>,
     pub(crate) rtts: BTreeMap<NodeId, (Nanos, bool)>,
     pub(crate) revoked: BTreeSet<NodeId>,
     /// The sessions of the layers above broadcast, by session.
@@ -244,7 +242,6 @@ impl<E: Ep, St: Store> Io<E, St> {
             dials: Vec::with_capacity(16),
             probes: Vec::with_capacity(16),
             carriers: BTreeMap::new(),
-            rx_seen: BTreeMap::new(),
             rtts: BTreeMap::new(),
             revoked: BTreeSet::new(),
             lsess: BTreeMap::new(),
@@ -605,32 +602,13 @@ impl<E: Ep, St: Store> Io<E, St> {
 
     // ---------------------------------------------------------------- evidence and backoff
 
-    /// Look at every hub-protocol session's packet count and note when it last moved. The transport reports when the
-    /// last packet arrived on the active path only, and a quiet session's direct path idles out; the count moves
-    /// whatever the path.
-    pub(crate) fn sample_rx(&mut self) {
-        let now = self.now;
-        for sid in self.sess.keys() {
-            let Some(st) = self.ep.stats(*sid) else { continue };
-            let n = st.transport.packets_received;
-            let known = self.rx_seen.len();
-            if let Some(e) = self.rx_seen.get_mut(sid) {
-                if e.0 != n {
-                    *e = (n, now);
-                }
-            } else if known < TABLE_MAX {
-                self.rx_seen.insert(*sid, (n, now));
-            }
-        }
-    }
-
-    /// What the transport knows about the current session of `peer`.
+    /// What the transport knows about the current session of `peer`. The last time heard is on any path: a quiet
+    /// session's direct path idles out, and the peer may still be heard on another.
     pub(crate) fn evidence_of(&self, peer: &NodeId) -> Option<Evidence> {
         let sid = self.links.get(peer)?.conn?;
         let st = self.ep.stats(sid).filter(|s| s.established)?;
-        let extra = self.rx_seen.get(&sid).map_or(0, |e| e.1);
         Some(Evidence {
-            last_rx: st.heard.max(extra),
+            last_rx: st.heard.max(st.heard_any),
             srtt: st.transport.srtt,
             pto: st.pto_count,
             inflight: u32::try_from(self.ep.in_flight(sid).unwrap_or(0)).unwrap_or(u32::MAX),

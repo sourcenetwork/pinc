@@ -54,6 +54,7 @@ impl Port for Stub {
             pto_count: 0,
             path_validated: true,
             heard: self.now,
+            heard_any: self.now,
             pulse_due: false,
             last_app: 0,
             sub: false,

@@ -364,11 +364,10 @@ impl<E: Ep, St: Store> Outbound for VSess<'_, E, St> {
         let peer = self.net.peer_of(provider)?;
         let session = *self.io.lout.get(&(Layer::Values, peer))?;
         let st = self.io.ep.stats(session)?;
-        let seen = self.io.rx_seen.get(&session).map_or(0, |e| e.1);
         Some(PeerInfo {
             rtt_ns: (st.transport.srtt > 0).then_some(st.transport.srtt),
             pto: st.pto_count > 0,
-            last_rx: st.heard.max(seen),
+            last_rx: st.heard.max(st.heard_any),
         })
     }
 }

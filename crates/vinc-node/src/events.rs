@@ -15,7 +15,7 @@
 //! of its stream; a frame is parsed only from bytes of a session of its peer; a stream that breaks the framing is
 //! reset and forgotten, never guessed at.
 
-use vinc_core::{Command, EndReason, Event, PathState, Role, SessionId};
+use vinc_core::{Command, EndReason, Event, Role, SessionId};
 use vinc_membership::NodeId;
 use vinc_membership::session::LEAVE_CODE;
 use vinc_transport::conn::CloseReason as TransportClose;
@@ -149,17 +149,6 @@ where
             Event::AcpCheck { check, node, .. } if self.io.revoked.contains(&node.bytes) => {
                 // A revoked peer is refused here; the application never hears of the check.
                 let _ = self.io.cmd(Command::AcpAnswer { check, allow: false });
-            }
-            Event::PathChanged {
-                session,
-                state: PathState::Validated,
-                ..
-            } => {
-                // The answer to a path probe is transport evidence that the peer is alive.
-                if let Some(e) = self.io.rx_seen.get_mut(&session) {
-                    e.1 = now;
-                }
-                self.io.emit(NodeEvent::Endpoint(ev));
             }
             other => self.io.emit(NodeEvent::Endpoint(other)),
         }
@@ -340,7 +329,6 @@ where
             self.io.notice(crate::relay::MemberNotice::Gone(full));
         }
         self.io.drop_session_streams(session);
-        self.io.rx_seen.remove(&session);
         let peer = s.peer;
         let code = close_code(reason);
         let Some(link) = self.io.links.get(&peer).copied().filter(|l| l.conn == Some(session)) else {
