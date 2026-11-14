@@ -24,7 +24,8 @@ use vinc_transport::stream::{RecvStatus, StreamError, StreamId};
 
 use crate::bound;
 use crate::config::{
-    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, DENY_CAP, DENY_FIRST, EVENT_CAP, Nanos, QUEUE_FRAMES, Store, TABLE_MAX,
+    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, DENY_CAP, DENY_FIRST, EVENT_CAP, EVENT_HIGH, EVENT_LOW, Nanos,
+    QUEUE_FRAMES, Store, TABLE_MAX,
 };
 use crate::ep::Ep;
 use crate::event::NodeEvent;
@@ -65,10 +66,22 @@ impl Strm {
 }
 
 /// The bounded queue of application events.
+///
+/// The node takes events from the endpoint only while the queue has room ([`can_take`](Self::can_take)), so the
+/// endpoint's own rule applies when the host reads slowly: it keeps the events the application cannot recover. A
+/// full queue drops what the application can recover by reading state, and an event it cannot recover only when
+/// nothing else is queued.
 #[derive(Debug, Default)]
 pub(crate) struct EventQueue {
     q: VecDeque<NodeEvent>,
     lost: u32,
+    /// The node stopped taking events from the endpoint and has not resumed.
+    held: bool,
+}
+
+/// Whether the application can recover the event by reading state.
+fn lossy(e: &NodeEvent) -> bool {
+    matches!(e, NodeEvent::Endpoint(e) if e.lossy())
 }
 
 impl EventQueue {
@@ -76,15 +89,38 @@ impl EventQueue {
         Self {
             q: VecDeque::with_capacity(n),
             lost: 0,
+            held: false,
         }
+    }
+
+    /// Whether the node may take another event from the endpoint: not from [`EVENT_HIGH`] queued events until the
+    /// queue is back to [`EVENT_LOW`].
+    pub(crate) fn can_take(&mut self) -> bool {
+        self.held = if self.held {
+            self.q.len() > EVENT_LOW
+        } else {
+            self.q.len() >= EVENT_HIGH
+        };
+        !self.held
+    }
+
+    /// Whether the node stopped taking events and the queue has since fallen to the point it resumes.
+    pub(crate) fn resumable(&self) -> bool {
+        self.held && self.q.len() <= EVENT_LOW
     }
 
     pub(crate) fn push(&mut self, e: NodeEvent) {
         if self.q.len() >= EVENT_CAP {
             self.lost = self.lost.saturating_add(1);
-        } else {
-            self.q.push_back(e);
+            if lossy(&e) {
+                return;
+            }
+            // vertexia: a scan for the oldest recoverable event, only at a full queue, which the pause above makes rare;
+            // a count of them would make it O(1) if a host runs there.
+            let victim = self.q.iter().position(lossy).unwrap_or(0);
+            self.q.remove(victim);
         }
+        self.q.push_back(e);
     }
 
     pub(crate) fn pop(&mut self) -> Option<NodeEvent> {

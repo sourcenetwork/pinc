@@ -589,7 +589,13 @@ where
 
     /// The next event for the application.
     pub fn poll_event(&mut self) -> Option<NodeEvent> {
-        self.io.out.pop()
+        let e = self.io.out.pop();
+        // The node held events back in the endpoint while the queue was full: it takes them as the host makes room.
+        if self.io.out.resumable() {
+            let now = self.io.now;
+            self.settle(now);
+        }
+        e
     }
 
     /// The next trace record. Empty unless tracing was configured.

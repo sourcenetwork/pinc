@@ -58,7 +58,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             }
             NodeEvent::Member(_) => self.neighbors_dirty = true,
             NodeEvent::Connect(n) => self.on_notice(&n),
-            NodeEvent::Lost { count } => self.lost = self.lost.saturating_add(count),
+            NodeEvent::Lost { count } => {
+                self.lost = self.lost.saturating_add(count);
+                // An event of a session may be among them: the neighbours are worked out from the sessions again.
+                self.neighbors_dirty = true;
+            }
             NodeEvent::PublishAcked { .. } | NodeEvent::PublishGaveUp { .. } | NodeEvent::PublishRoom => {
                 self.wake_g(GKey::Publish);
             }

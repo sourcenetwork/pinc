@@ -220,7 +220,7 @@ pub enum Event {
 impl Event {
     /// Whether the application can recover the event by reading state, so a full queue may drop it. A datagram
     /// cannot be recovered: each notification stands for one datagram.
-    pub(crate) const fn lossy(&self) -> bool {
+    pub const fn lossy(&self) -> bool {
         matches!(
             self,
             Self::StreamReadable { .. } | Self::StreamWritable { .. } | Self::OpenReady { .. }

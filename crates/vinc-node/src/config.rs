@@ -42,6 +42,11 @@ pub const QUEUE_FRAMES: usize = 256;
 pub(crate) const TABLE_MAX: usize = 4096;
 /// The most events queued for the application between two polls.
 pub(crate) const EVENT_CAP: usize = 8192;
+/// The node stops taking events from the endpoint at this many queued events, so the layers' own events from one
+/// round still fit; it resumes at [`EVENT_LOW`].
+pub(crate) const EVENT_HIGH: usize = EVENT_CAP - 1024;
+/// The queued events at or below which the node takes events from the endpoint again.
+pub(crate) const EVENT_LOW: usize = EVENT_CAP / 2;
 /// A carrier that closed is remembered this long.
 pub(crate) const GONE_TTL: Nanos = 600 * S;
 /// The close code of a refusal (a denied or revoked node).

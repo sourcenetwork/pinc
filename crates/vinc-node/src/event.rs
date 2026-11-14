@@ -1,7 +1,9 @@
 //! What the node tells the application, in one ordered queue.
 //!
-//! The queue is bounded. When it is full the newest event is dropped and counted, and the count is delivered as
-//! [`NodeEvent::Lost`] before the next event, so a gap never reads as silence.
+//! The queue is bounded. While it is nearly full the node takes no more events from the endpoint, which keeps the ones
+//! the application cannot recover. When it is full all the same, an event the application can recover by reading state
+//! is dropped first and counted, and the count is delivered as [`NodeEvent::Lost`] before the next event, so a gap
+//! never reads as silence.
 
 use alloc::vec::Vec;
 use vinc_connect::client::Notice;

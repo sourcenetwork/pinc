@@ -1170,3 +1170,7 @@ path = "trace_integration_codecs.rs"
 [[test]]
 name = "trace_early"
 path = "trace_early.rs"
+
+[[test]]
+name = "node_event_queue"
+path = "node_event_queue.rs"
