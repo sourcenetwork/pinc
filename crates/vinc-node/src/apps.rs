@@ -153,6 +153,8 @@ pub trait DtnApp<P: Provider> {
     fn drop_record(&mut self, _id: &BundleId) {}
 
     /// The `n`th record kept, in any order but the same each time, for [`Node::dtn_restore`](crate::Node::dtn_restore).
+    /// The node drops records only after it has walked them all, so an order that shifts when a record is dropped
+    /// does not matter.
     fn record_at(&self, _n: usize) -> Option<(BundleId, &[u8])> {
         None
     }

@@ -1136,6 +1136,10 @@ name = "layers_dtn_save"
 path = "layers_dtn_save.rs"
 
 [[test]]
+name = "layers_dtn_restore_skip"
+path = "layers_dtn_restore_skip.rs"
+
+[[test]]
 name = "trace_heap"
 path = "trace_heap.rs"
 

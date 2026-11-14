@@ -23,6 +23,7 @@
     reason = "d, p, c and r are the layer's state, a part, the cursor over a record and a run, as in the modules around"
 )]
 
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use vinc_crypto::{IdentityAlg, NodeId as FullId};
@@ -202,7 +203,7 @@ where
     /// Resume after a restart from the records the host kept: held bundles with their copies and custody, partial
     /// bundles with their verified symbols, and the memory of what was delivered here. Call it once, before any
     /// other input, with the host's store and records as they were. A record that cannot be applied is dropped and
-    /// counted.
+    /// counted. The records to drop are dropped after the walk, so the host's order never shifts under it.
     pub fn dtn_restore(&mut self, now: Nanos) -> DtnRestored {
         self.begin(now);
         let mut out = DtnRestored::default();
@@ -210,19 +211,36 @@ where
             return out;
         }
         let mut n = 0;
+        let mut unreadable = Vec::new();
+        // Bundles evicted to make room: their records are not visited and are dropped with the others.
+        let mut evicted = BTreeSet::new();
         while let Some((id, rec)) = self.apps.dtn().record_at(n).map(|(i, r)| (i, r.to_vec())) {
             n += 1;
-            if self.restore_one(&id, &rec, &mut out).is_none() {
-                out.dropped += 1;
-                self.apps.dtn().drop_record(&id);
+            if evicted.contains(&id) {
+                continue;
             }
+            if self.restore_one(&id, &rec, &mut out, &mut evicted).is_none() {
+                out.dropped += 1;
+                unreadable.push(id);
+            }
+        }
+        for id in unreadable.iter().chain(&evicted) {
+            self.apps.dtn().drop_record(id);
         }
         self.dtn_contacts_changed();
         self.settle(now);
         out
     }
 
-    fn restore_one(&mut self, id: &BundleId, rec: &[u8], out: &mut DtnRestored) -> Option<()> {
+    /// Apply one record, only once the whole of it is known to be readable: nothing is admitted or evicted for a
+    /// record that is then refused.
+    fn restore_one(
+        &mut self,
+        id: &BundleId,
+        rec: &[u8],
+        out: &mut DtnRestored,
+        gone: &mut BTreeSet<BundleId>,
+    ) -> Option<()> {
         let wall = self.io.wall_ms();
         let mut c = Cur(rec);
         if c.u8()? != VERSION {
@@ -233,7 +251,7 @@ where
         match kind {
             RECEIVED => {
                 let expires = c.u64()?;
-                if expires <= wall {
+                if !c.0.is_empty() || expires <= wall {
                     return None;
                 }
                 d.received.insert(*id, expires);
@@ -241,10 +259,17 @@ where
             }
             HELD => {
                 let copies = c.u16()?;
-                let custody = c.u8()? == 1;
+                let custody = match c.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return None,
+                };
                 let prev = c.node()?;
                 let bytes = c.u64()?;
                 let signed = take_head(&mut c)?;
+                if !c.0.is_empty() {
+                    return None;
+                }
                 let h = *signed.head();
                 if h.id != *id || h.is_expired(wall) || copies == 0 || self.apps.dtn().get(id).is_none() {
                     return None;
@@ -277,7 +302,9 @@ where
                 };
                 let app = self.apps.dtn();
                 for k in evicted.iter().filter(|k| k.space == Space::DTN && k.id != id.0) {
-                    d.forget(app, wall, &BundleId(k.id));
+                    let gone_id = BundleId(k.id);
+                    d.forget_keeping_record(app, wall, &gone_id);
+                    gone.insert(gone_id);
                 }
                 if !kept {
                     return None;
@@ -306,21 +333,21 @@ where
                 let total = layout.total_len();
                 let sealed_len = usize::try_from(total).ok()?;
                 let outboard_len = usize::try_from(layout.outboard_len().ok()?).ok()?;
+                let charge = partial_charge(&layout)?;
+                // The runs are checked whole before the charge can evict anything.
+                check_runs(&mut Cur(c.0), total, layout.slice_len())?;
                 // Charged before any buffer of it exists, as on an offer.
                 let mut evicted: Vec<Key> = Vec::new();
-                let admitted = d.led.admit(
-                    id.store_key(),
-                    partial_charge(&layout)?,
-                    Class::Transit,
-                    h.expires_at(),
-                    wall,
-                    |e| {
+                let admitted = d
+                    .led
+                    .admit(id.store_key(), charge, Class::Transit, h.expires_at(), wall, |e| {
                         evicted.push(e.key);
-                    },
-                );
+                    });
                 let app = self.apps.dtn();
                 for k in evicted.iter().filter(|k| k.space == Space::DTN) {
-                    d.forget(app, wall, &BundleId(k.id));
+                    let gone_id = BundleId(k.id);
+                    d.forget_keeping_record(app, wall, &gone_id);
+                    gone.insert(gone_id);
                 }
                 admitted.ok()?;
                 let runs = take_runs(&mut c, total, sealed_len, &layout);
@@ -342,6 +369,22 @@ where
         }
         Some(())
     }
+}
+
+/// Whether the runs left in a partial record are whole, as [`take_runs`] reads them, without holding any of them.
+fn check_runs(c: &mut Cur<'_>, total: u64, slice_len: u64) -> Option<()> {
+    while !c.0.is_empty() {
+        let (Some(a), Some(b)) = (c.u64(), c.u64()) else {
+            return Some(());
+        };
+        if a >= b || b > total || !a.is_multiple_of(slice_len) || !b.is_multiple_of(slice_len) {
+            return None;
+        }
+        if c.take(usize::try_from(b - a).ok()?).is_none() {
+            return Some(());
+        }
+    }
+    Some(())
 }
 
 /// The runs of a partial record into a buffer of `sealed_len` bytes and its held set. A run cut short at the end (a

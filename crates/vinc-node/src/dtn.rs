@@ -259,6 +259,19 @@ impl Dtn {
         wall: u64,
         id: &BundleId,
     ) -> bool {
+        let held = self.forget_keeping_record(app, wall, id);
+        app.drop_record(id);
+        held
+    }
+
+    /// [`forget`](Self::forget) without dropping the host's record, for the walk of a restore, which must not change
+    /// the host's records while it reads them.
+    pub(crate) fn forget_keeping_record<P: vinc_crypto::Provider>(
+        &mut self,
+        app: &mut impl DtnApp<P>,
+        wall: u64,
+        id: &BundleId,
+    ) -> bool {
         let held = self.heads.remove(id).is_some();
         self.partials.remove(id);
         self.confirmed.remove(id);
@@ -266,7 +279,6 @@ impl Dtn {
         // The forwarder may not know it (a partial reception): nothing to forget then.
         let _ = self.fwd.step(wall, Input::Forget(*id));
         app.remove(id);
-        app.drop_record(id);
         held
     }
 
