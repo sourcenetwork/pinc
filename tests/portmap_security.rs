@@ -495,6 +495,50 @@ fn two_restarts_closer_than_the_floor_are_found_a_floor_after_the_first_renewal(
 }
 
 #[test]
+fn an_announce_kept_across_a_failed_renewal_brings_no_renewal_inside_the_floor() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    // the scheduled renewal goes out half way; an announce arrives while it is in flight and is kept for its answer
+    let half = T0 + 3600 * SEC;
+    pm.handle_timeout(half);
+    assert_eq!(sent(&mut pm).len(), 1, "the scheduled renewal");
+    pm.handle_datagram(half + SEC / 1000, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 4600));
+    // no answer comes: the renewal's tries run out and the mapping stays held
+    while let Some(t) = pm.poll_timeout().filter(|t| *t < half + 4 * SEC) {
+        pm.handle_timeout(t);
+        sent(&mut pm);
+    }
+    assert!(pm.mapped().is_some(), "a renewal that failed dropped the mapping");
+    // a second announce, now with the mapping held and no request in flight, brings a renewal forward
+    let t2 = half + 5 * SEC;
+    pm.handle_datagram(t2, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 4605));
+    pm.handle_timeout(t2 + ANNOUNCE_DELAY);
+    assert_eq!(
+        sent(&mut pm).len(),
+        1,
+        "the renewal the second announce brought forward"
+    );
+    // its grant arrives; the announce kept from before must not start another renewal inside the floor
+    pm.handle_datagram(
+        t2 + ANNOUNCE_DELAY + SEC / 1000,
+        gw(),
+        &pcp_map(NONCE, pcp::SUCCESS, 4605, 7200),
+    );
+    let floor = t2 + 10 * SEC;
+    assert!(
+        pm.poll_timeout().is_none_or(|t| t >= floor),
+        "the announce kept from before brings a renewal {:?} inside the floor that ends at {floor}",
+        pm.poll_timeout()
+    );
+    pm.handle_timeout(floor - 1);
+    assert!(sent(&mut pm).is_empty(), "a renewal went out inside the floor");
+    // it is not lost either: its renewal goes once the floor has passed
+    pm.handle_timeout(floor + ANNOUNCE_DELAY);
+    assert_eq!(sent(&mut pm).len(), 1, "the kept announce's renewal, a floor later");
+}
+
+#[test]
 fn an_announce_outside_a_held_mapping_is_dropped_and_counted() {
     let mut pm = client(Some(GW.into()), local());
     sent(&mut pm);

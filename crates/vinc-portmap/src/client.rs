@@ -538,8 +538,10 @@ impl PortMap {
     }
 
     /// Bring the held mapping's renewal forward to `start` plus the announce delay (at the earliest now), and keep the
-    /// next such renewal a floor away.
+    /// next such renewal a floor away. A start noted before a later announce was acted on (one kept across a renewal
+    /// that then failed) waits for the floor that announce set, so the floor never moves back.
     fn bring_forward(&mut self, start: u64) {
+        let start = start.max(self.floor_end);
         let due = start.saturating_add(self.announce_delay()).max(self.now);
         if let Some(l) = &mut self.held {
             l.renew = l.renew.min(due);
