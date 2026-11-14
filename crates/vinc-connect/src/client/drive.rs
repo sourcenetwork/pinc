@@ -824,10 +824,8 @@ drive_impl! {
         let open = self.carrier_state(relay) == super::link::State::Open;
         let silent = now.saturating_sub(self.last_heard(relay));
         let tunnel_to = self.tunnel_route(now, ep, relay);
-        let mut via = tunnel::decide(open, silent, rides, tunnel_to.is_some());
-        if via != Via::Tunnel
-            && let (Some(st), Some(_)) = (st, tunnel_to)
-        {
+        let mut spliced = false;
+        if let (Some(st), Some(_)) = (st, tunnel_to) {
             let thin = ThinSplice {
                 thin: self.node_rtt >= super::dial::TG_SLOW,
                 established: st.established,
@@ -837,9 +835,11 @@ drive_impl! {
                 tunnel_took: true,
                 pto_count: st.pto_count,
             };
-            if tunnel::thin_splice(&thin) {
-                via = Via::Tunnel;
-            }
+            spliced = tunnel::thin_splice(&thin);
+        }
+        let mut via = tunnel::decide(open, silent, rides, tunnel_to.is_some());
+        if spliced {
+            via = Via::Tunnel;
         }
         let relay_id = self.relay_cfg(relay).map(|c| c.id);
         if via != Via::Carrier
@@ -850,8 +850,11 @@ drive_impl! {
                 && self.enqueue_udp_from(from, to, &d)
                 && via == Via::Tunnel
             {
-                // Not queued for the carrier; the dial goes on.
-                self.dial_if_down(now, relay);
+                // Not queued for the carrier. THIN_SPLICE leaves the carrier as it is; a packet the tunnel took
+                // because the carrier is not open dials it.
+                if !spliced {
+                    self.dial_if_down(now, relay);
+                }
                 return true;
             }
         }
@@ -860,8 +863,14 @@ drive_impl! {
         true
     }
 
+    /// Dial `relay`'s carrier if it is down and its retry time has come. The packet went by the tunnel and nothing
+    /// waits in the carrier's queue, but it counts as a frame for the relay, as every frame sent to a relay does in the
+    /// reference model whatever path takes it: a member that moved gets its carrier back when it next sends.
     fn dial_if_down(&mut self, now: u64, relay: usize) {
-        let ctx = self.ctx(relay);
+        let ctx = super::link::Ctx {
+            queued: true,
+            ..self.ctx(relay)
+        };
         let act = self.rly.get_mut(relay).and_then(|r| r.link.want_dial(now, &mut self.shared, &ctx));
         if let Some(a) = act {
             self.act_pub(now, relay, a);
