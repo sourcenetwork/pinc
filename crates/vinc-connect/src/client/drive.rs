@@ -62,6 +62,12 @@ pub(super) struct Sess {
     pub(super) relay_route: bool,
     /// The flight's resends are held while the peer's address is looked up.
     pub(super) held: bool,
+    /// RELAY_FWD: the dial started without a usable record and has a home relay; the home relay is a candidate path
+    /// until the session is established.
+    pub(super) fwd: bool,
+    /// The dial started without a usable record and without a home relay: its first flight leaves when the answer to
+    /// the lookup arrives.
+    pub(super) withheld: bool,
 }
 
 /// A peer heard by local discovery.
@@ -181,7 +187,7 @@ drive_impl! {
         super::conn::pop(&mut self.evq)
     }
 
-    fn sess_mut(&mut self, id: SessionId) -> Option<&mut Sess> {
+    pub(super) fn sess_mut(&mut self, id: SessionId) -> Option<&mut Sess> {
         self.sess.iter_mut().flatten().find(|s| s.id == id)
     }
 
@@ -225,6 +231,8 @@ drive_impl! {
                         primary: None,
                         relay_route: false,
                         held: false,
+                        fwd: false,
+                        withheld: false,
                     });
                 }
                 let st = ep.stats(session);
@@ -340,7 +348,7 @@ drive_impl! {
             return;
         }
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&s.node, &[], None, &mut cands);
+        let nc = self.candidates_for(&s.node, &[], None, s.fwd, &mut cands);
         if cands.get(..nc).unwrap_or_default().iter().any(|c| matches!(c, Cand::Relay(_))) {
             self.add_paths(now, ep, &s);
         } else {
@@ -363,6 +371,10 @@ drive_impl! {
                 }
                 continue;
             };
+            // RELAY_FWD ends with the handshake, not with `Connected`: a dial with a cached allow reports that at once.
+            if st.established {
+                s.fwd = false;
+            }
             if let Some(h) = s.hub
                 && st.established
                 && st.path_validated
@@ -404,7 +416,7 @@ drive_impl! {
                 s.tries = tries;
                 self.reselect(now, ep, &mut s);
                 if tries >= CARRIER_CHECK_TRIES {
-                    self.check_dial_carriers(now, &s.node);
+                    self.check_dial_carriers(now, &s.node, s.fwd);
                 }
             }
             s.relay_route = st.route.is_some_and(|(_, r)| is_relay_addr(&r));

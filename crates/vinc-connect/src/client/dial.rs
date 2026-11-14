@@ -51,8 +51,8 @@ pub enum Cand {
     Relay(u8),
 }
 
-/// The relays a flight to a peer goes through: the peer's own relay, when the record named one, then ours (the first
-/// flight of `RELAY_FORWARD` reaches the peer's relay through ours). The order is fixed, whether or not a carrier to the
+/// The relays a flight to a peer goes through: the peer's own relay, when the record named one, then ours when the
+/// dial started without a usable record (the first flight of `RELAY_FORWARD` reaches the peer's relay through ours). The order is fixed, whether or not a carrier to the
 /// peer's relay is open, and it matters on a slow link: a node that sends one path per try takes the second relay on its
 /// first try and the first on its next, so its first try goes through its own relay, which it has a carrier to. A relay
 /// named twice is listed once.

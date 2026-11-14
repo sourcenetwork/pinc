@@ -15,14 +15,14 @@ use super::drive::{Port, Sess};
 use super::punch::Puncher;
 
 impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> {
-    /// The candidate paths for a dial to `node`: its known UDP addresses, then the relay path.
-    /// The paths a flight to `node` can take. With `fresh_at` set, the addresses of a record older than its time are
+    /// The paths a flight to `node` can take: the caller's addresses, then the peer's relay, then (`fwd`) our home relay. With `fresh_at` set, the addresses of a record older than its time are
     /// left out: a dial looks such a peer up again and the flight goes through the relay, as for a peer with no record.
     pub(super) fn candidates_for(
         &mut self,
         node: &NodeId,
         hints: &[SocketAddr],
         fresh_at: Option<u64>,
+        fwd: bool,
         out: &mut [Cand; 16],
     ) -> usize {
         let mut n = 0;
@@ -49,15 +49,13 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 add(Cand::Udp(a), out, &mut n);
             }
         }
-        // The peer's own relay when the record named one, and ours (RELAY_FORWARD on the first flight).
+        // The peer's own relay when the record named one, and ours only for a dial that started without a usable
+        // record (RELAY_FWD: `fwd`, kept until the session is established).
         let peer = self
             .relay_of(node)
             .or_else(|| found.and_then(|f| self.relay_of(&f.home)))
             .and_then(|r| u8::try_from(r).ok());
-        let own = self
-            .home()
-            .or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()))
-            .and_then(|r| u8::try_from(r).ok());
+        let own = self.home().filter(|_| fwd).and_then(|r| u8::try_from(r).ok());
         for r in flight_relays(peer, own).into_iter().flatten() {
             add(Cand::Relay(r), out, &mut n);
         }
@@ -88,8 +86,18 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let first = self.first_dial.is_none();
         let first_dial = *self.first_dial.get_or_insert(now);
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&node, hints, Some(now), &mut cands);
         let hub = self.relay_of(&node);
+        let no_record = hub.is_none() && self.found_fresh(now, &node).is_none();
+        let lookup = no_record && hints.is_empty();
+        // RELAY_FWD: a dial that started without a usable record also flies through our home relay; with no home yet
+        // and a lookup to wait for (some relay to ask) it flies nowhere until the answer arrives.
+        let fwd = no_record && self.home().is_some();
+        let withheld = lookup && self.home().is_none() && self.has_relays();
+        let nc = if withheld {
+            0
+        } else {
+            self.candidates_for(&node, hints, Some(now), fwd, &mut cands)
+        };
         let direct = hub.is_some() && direct_first(true, true, first_dial, self.start);
         let mut chosen = [Cand::Relay(0); 16];
         let list: &[Cand] = cands.get(..nc).unwrap_or_default();
@@ -141,6 +149,17 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                 na += 1;
             }
         }
+        if na == 0 {
+            // The session needs a path to be created on; a dial that flies nowhere yet keeps it unused.
+            let first = self.home().or_else(|| (0..R).find(|i| self.relay_cfg(*i).is_some()));
+            if let Some(r) = first.and_then(|r| u8::try_from(r).ok()) {
+                let a = self.to_addr(&Cand::Relay(r), &node);
+                if let Some(d) = addrs.get_mut(0) {
+                    *d = a;
+                    na = 1;
+                }
+            }
+        }
         let primary = addrs.first().copied();
         let rep = self.cmd(
             ep,
@@ -155,7 +174,17 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let Value::Session(id) = rep.value else {
             return Err(CommandError::NoSession);
         };
-        if na > 1 {
+        if withheld {
+            let _ = self.cmd(
+                ep,
+                now,
+                Command::FlightPaths {
+                    session: id,
+                    addrs: &[],
+                    skip_primary: true,
+                },
+            );
+        } else if na > 1 {
             let _ = self.cmd(
                 ep,
                 now,
@@ -195,11 +224,13 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             primary,
             relay_route: false,
             held: false,
+            fwd,
+            withheld,
         };
         if let Some(s) = self.sess.iter_mut().find(|s| s.is_none()) {
             *s = Some(entry);
         }
-        if hub.is_none() && self.found_fresh(now, &node).is_none() && hints.is_empty() {
+        if lookup {
             self.pending.add(node, id);
             self.lookup(now, &node);
         }
@@ -214,36 +245,49 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     pub(super) fn found_dial<E: Port>(&mut self, now: u64, ep: &mut E, peer: &NodeId) {
         let waiting = self.pending.take(peer);
-        let Some(f) = self.found(peer) else { return };
-        let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(peer, &[], None, &mut cands);
+        if self.found(peer).is_none() {
+            return;
+        }
         for id in waiting.into_iter().flatten() {
+            let Some(s) = self.sess.iter().flatten().find(|s| s.id == id).copied() else {
+                continue;
+            };
+            let mut cands = [Cand::Relay(0); 16];
+            let nc = self.candidates_for(peer, &[], None, s.fwd, &mut cands);
             let mut addrs = [self.me_addr_pub(); 16];
             let mut na = 0;
             for c in cands.get(..nc).unwrap_or_default() {
                 let a = self.to_addr(c, peer);
-                if let Some(s) = addrs.get_mut(na) {
-                    *s = a;
+                if let Some(d) = addrs.get_mut(na) {
+                    *d = a;
                     na += 1;
                 }
             }
+            let list = addrs.get(..na).unwrap_or_default();
+            // A flight that was withheld leaves now, and only on the paths the answer named.
+            let skip_primary = s.withheld && s.primary.is_some_and(|p| !list.contains(&p));
             let _ = self.cmd(
                 ep,
                 now,
                 Command::FlightPaths {
                     session: id,
-                    addrs: addrs.get(..na).unwrap_or_default(),
-                    skip_primary: false,
+                    addrs: list,
+                    skip_primary,
                 },
             );
+            if s.withheld {
+                let _ = self.cmd(ep, now, Command::FirstResend { session: id, delay: 0 });
+                if let Some(x) = self.sess_mut(id) {
+                    x.withheld = false;
+                }
+            }
         }
-        let _ = f;
     }
 
     /// Register every known path of the session's peer but its first one, and fan the flight out over them.
     pub(super) fn add_paths<E: Port>(&mut self, now: u64, ep: &mut E, s: &Sess) {
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(&s.node, &[], None, &mut cands);
+        let nc = self.candidates_for(&s.node, &[], None, s.fwd, &mut cands);
         let mut addrs = [self.me_addr_pub(); 16];
         let mut na = 0;
         for c in cands.get(..nc).unwrap_or_default() {
@@ -269,9 +313,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// From its third try on, a handshake that has not been answered checks the carriers it could ride: the relays
     /// among the peer's candidate paths and the home relay. A carrier that died without a close is found and dialed
     /// again at once, not at its keepalive.
-    pub(super) fn check_dial_carriers(&mut self, now: u64, node: &NodeId) {
+    pub(super) fn check_dial_carriers(&mut self, now: u64, node: &NodeId, fwd: bool) {
         let mut cands = [Cand::Relay(0); 16];
-        let nc = self.candidates_for(node, &[], None, &mut cands);
+        let nc = self.candidates_for(node, &[], None, fwd, &mut cands);
         for c in cands.get(..nc).unwrap_or_default() {
             if let Cand::Relay(r) = c {
                 self.check_carrier(now, usize::from(*r));
@@ -284,7 +328,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     pub(super) fn reselect<E: Port>(&mut self, now: u64, ep: &mut E, s: &mut Sess) {
         let mut cands = [Cand::Relay(0); 16];
-        let mut nc = self.candidates_for(&s.node, &[], None, &mut cands);
+        let mut nc = self.candidates_for(&s.node, &[], None, s.fwd, &mut cands);
         // A peer with no record and no relay is dialed at the address the caller gave: a retry keeps to it.
         if nc == 0
             && let Some(p) = s.primary

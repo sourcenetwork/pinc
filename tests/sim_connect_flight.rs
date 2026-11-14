@@ -15,7 +15,7 @@ mod connect_sim_common;
 use std::net::SocketAddr;
 
 use connect_sim_common::*;
-use vinc_core::is_relay_addr;
+use vinc_core::{is_relay_addr, relay_parts};
 use vinc_sim::{LanConfig, LinkConfig, MS, SEC, StreamPolicy, Time};
 use vinc_tests::Cmd;
 
@@ -337,5 +337,71 @@ fn a_dial_with_a_record_within_its_time_does_not_look_the_peer_up() {
             f.iter().any(|r| !*r),
             "the first flight goes to the cached address: {f:?}"
         );
+    });
+}
+
+#[test]
+fn a_dial_to_a_hub_does_not_fly_through_our_home_relay() {
+    big(|| {
+        let mut w = World::new(93);
+        let (_r0, rs0) = w.relay(1, relay_ip(10));
+        let (_r1, rs1) = w.relay(2, relay_ip(11));
+        let a = w.client_public(&client_spec(0xa1, priv_addr(1), &[rs0, rs1]));
+        w.run(secs(8));
+        let home = w.client(a).conn.home().expect("a home relay");
+        let hub = if home == 0 { rs1 } else { rs0 };
+        let hub_slot = usize::from(home == 0);
+        let t0 = secs(8);
+        w.sim.command(
+            t0,
+            a,
+            Cmd::Dial {
+                node: hub.id,
+                hints: vec![],
+                role: vinc_core::Role::Hub,
+            },
+        );
+        w.run(t0 + secs(2));
+        let slots: Vec<usize> = w
+            .client(a)
+            .tx_log
+            .iter()
+            .filter(|(t, r, len)| *t >= t0 && *len >= 1000 && is_relay_addr(r))
+            .filter_map(|(_, r, _)| relay_parts(r).map(|p| usize::from(p.0)))
+            .collect();
+        assert!(!slots.is_empty(), "the dial flew");
+        assert!(
+            slots.iter().all(|s| *s == hub_slot),
+            "only the hub's own relay path, never the home relay {home}: {slots:?}"
+        );
+    });
+}
+
+#[test]
+fn a_dial_that_waits_for_a_lookup_with_no_home_yet_flies_when_the_answer_arrives() {
+    big(|| {
+        let mut w = World::new(94);
+        let (_r, rs) = w.relay(1, relay_ip(10));
+        let b = w.client_public(&client_spec(0xb1, priv_addr(2), &[rs]));
+        let mut spec = client_spec(0xa1, priv_addr(1), &[rs]);
+        spec.start = secs(5);
+        let a = w.client_public(&spec);
+        w.run(secs(5) + MS);
+        assert!(w.client(a).conn.home().is_none(), "no home relay yet");
+        w.dial(secs(5) + MS, a, b, vec![]);
+        w.run(secs(9));
+        let first = w
+            .client(a)
+            .tx_log
+            .iter()
+            .find(|(t, _, len)| *t > secs(5) && *len >= 1000)
+            .map(|(t, _, _)| *t)
+            .expect("a first flight");
+        assert!(
+            first >= secs(5) + 5 * MS,
+            "the first flight waited for the answer to the lookup: {} us after the dial",
+            (first - secs(5) - MS) / 1000
+        );
+        assert!(w.connected(a).is_some(), "{}", w.dump(a));
     });
 }
