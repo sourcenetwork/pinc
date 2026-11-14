@@ -102,16 +102,25 @@ impl Cids {
         self.first_local.as_bytes().len()
     }
 
-    /// Make sure indices `highest + 1 ..= highest + LOOKAHEAD` are in the table.
+    /// Make sure [`LOOKAHEAD`] indices after `highest` are in the table. An index whose derived id equals one the
+    /// table already holds (the first id, or the id of another index) is not kept twice: the next index takes its
+    /// place, within a window twice as wide. A peer can search for such a pair, so no id is ever listed twice.
     fn refill(&mut self) {
         let Some(secret) = self.secret else { return };
-        for index in self.highest + 1..=self.highest + LOOKAHEAD {
+        let mut covered = 0;
+        let mut index = self.highest;
+        while covered < LOOKAHEAD && index < self.highest + 2 * LOOKAHEAD {
+            index += 1;
             if self.entries.iter().flatten().any(|e| e.index == index) {
+                covered += 1;
                 continue;
             }
             let Some(cid) = derive(&secret, self.client, index, self.local_len()) else {
                 continue;
             };
+            if self.is_local(&cid) {
+                continue;
+            }
             let slot = match self.entries.iter().position(Option::is_none) {
                 Some(i) => i,
                 None => match self
@@ -132,6 +141,7 @@ impl Cids {
                     used: self.tick,
                     seen: false,
                 });
+                covered += 1;
             }
         }
     }
@@ -201,6 +211,41 @@ impl Cids {
     /// Whether the peer is known to accept the id of `index`: index 0, or one above the highest it answered on.
     pub(crate) const fn remote_usable(&self, index: u64) -> bool {
         index == 0 || index > self.confirmed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::cast_possible_truncation,
+        clippy::panic
+    )]
+    fn an_id_equal_to_one_held_is_not_kept_twice() {
+        // One-byte ids collide within a few hundred secrets.
+        for n in 0..=u16::MAX {
+            let mut secret = [0u8; 32];
+            secret[..2].copy_from_slice(&n.to_be_bytes());
+            let (a, b) = (derive(&secret, false, 1, 1), derive(&secret, false, 2, 1));
+            let Some(a) = a.filter(|a| Some(*a) == b) else { continue };
+            let first = ConnId::new(&[a.as_bytes()[0].wrapping_add(1)]).unwrap();
+            let mut c = Cids::new(false, first);
+            c.install(&secret);
+            for (k, id) in c.local().enumerate() {
+                assert!(!c.local().take(k).any(|o| o == id), "{id:?} is listed twice");
+            }
+            assert_eq!(
+                c.entries.iter().flatten().count(),
+                LOOKAHEAD as usize,
+                "the window kept its width"
+            );
+            return;
+        }
+        panic!("no colliding secret found");
     }
 }
 

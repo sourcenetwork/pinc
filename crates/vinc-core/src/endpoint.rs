@@ -20,8 +20,12 @@
 //!
 //! - **Demultiplexing.** A fixed hash table maps each 4-byte connection id (the first one, the derived window and the
 //!   id the dialer invented) to its sessions. Ids are derived from session secrets, so two sessions may hold the same
-//!   four bytes; a datagram with an id several sessions hold is tried against each in turn on a copy, and the session
-//!   whose keys open it owns it.
+//!   four bytes; a datagram with an id several sessions hold is tried against each in turn on a copy. A short datagram
+//!   goes to the first holder that does not answer undecryptable or unroutable, a long packet to the first holder (see
+//!   `rx`), and the candidate list can name a slot twice. A connection never lists an id twice (the transport draws
+//!   the next index for a derived id equal to one it holds), and the table holds one entry per copy a connection
+//!   lists. The table needs at least ten entries per session; the table sizes are type parameters the embedding
+//!   crate picks, and nothing checks the ratio at run time.
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
@@ -49,7 +53,7 @@ use crate::heap::DeadlineHeap;
 use crate::ledger::Ledger;
 use crate::queue::EventRing;
 use crate::rtt::NodeRtt;
-use crate::slot::{MAX_CIDS, NIL, Slot, State};
+use crate::slot::{MAX_CIDS, NIL, Slot, State, cid_delta};
 use crate::store::{Store, filled};
 use crate::table::Table;
 use crate::trace::{TraceLog, TraceRecord};
@@ -734,15 +738,13 @@ ep_impl! {
         for (d, c) in new.iter_mut().zip(conn.local_cids()) {
             *d = Some(c);
         }
-        for old in slot.m.cids.iter().flatten() {
-            if !new.contains(&Some(*old)) {
-                self.demux.remove_pair(old, &idx);
-            }
+        // A connection may hold an id twice: the table gets one entry per copy, so a copy that leaves takes its own.
+        let (gone, added) = cid_delta(&slot.m.cids, &new);
+        for old in gone.iter().flatten() {
+            self.demux.remove_pair(old, &idx);
         }
-        for n in new.iter().flatten() {
-            if !slot.m.cids.contains(&Some(*n)) {
-                self.demux.insert_dup(*n, idx);
-            }
+        for n in added.iter().flatten() {
+            self.demux.insert_dup(*n, idx);
         }
         slot.m.cids = new;
         slot.m.cid_epoch = epoch;

@@ -17,6 +17,23 @@ use crate::keepalive::{Plan, Role};
 
 /// Most connection ids one session registers: the first, the derived window and the id the dialer invented.
 pub(crate) const MAX_CIDS: usize = 10;
+/// The connection ids a session gave up and the ones it gained when its list goes from `old` to `new`, as a multiset
+/// difference: an id held twice is listed twice, so the table gets one entry per copy.
+pub(crate) fn cid_delta(
+    old: &[Option<ConnId>; MAX_CIDS],
+    new: &[Option<ConnId>; MAX_CIDS],
+) -> ([Option<ConnId>; MAX_CIDS], [Option<ConnId>; MAX_CIDS]) {
+    let mut gone = *old;
+    let mut added = [None; MAX_CIDS];
+    for (a, n) in added.iter_mut().zip(new.iter().flatten()) {
+        match gone.iter_mut().find(|o| **o == Some(*n)) {
+            Some(o) => *o = None,
+            None => *a = Some(*n),
+        }
+    }
+    (gone, added)
+}
+
 /// The most application events held back for the access check.
 pub const HELD_EVENTS: usize = 64;
 pub(crate) const NIL: u32 = u32::MAX;
@@ -666,5 +683,27 @@ mod tests {
             HELD_EVENTS - 1
         );
         assert_eq!(kinds.last(), Some(&HeldEvent::RESET));
+    }
+
+    #[test]
+    fn a_connection_id_held_twice_has_two_entries_and_leaves_one_at_a_time() {
+        let id = |b: u8| ConnId::new(&[b; 4]);
+        let list = |v: &[u8]| {
+            let mut l = [None; MAX_CIDS];
+            for (d, b) in l.iter_mut().zip(v) {
+                *d = id(*b);
+            }
+            l
+        };
+        let count = |l: &[Option<ConnId>; MAX_CIDS], b: u8| l.iter().filter(|x| **x == id(b)).count();
+        let (gone, added) = cid_delta(&list(&[1]), &list(&[1, 2, 2]));
+        assert_eq!((count(&gone, 1), count(&added, 2), count(&added, 1)), (0, 2, 0));
+        let (gone, added) = cid_delta(&list(&[1, 2, 2]), &list(&[1, 2]));
+        assert_eq!((count(&gone, 2), count(&added, 2)), (1, 0));
+        let (gone, added) = cid_delta(&list(&[1, 2]), &list(&[]));
+        assert_eq!(
+            (count(&gone, 1), count(&gone, 2), added.iter().flatten().count()),
+            (1, 1, 0)
+        );
     }
 }

@@ -2,7 +2,10 @@
 //!
 //! The destination connection id of the first packet picks the candidates in the demultiplexing table. One
 //! candidate owns the datagram; several (two sessions derived the same four bytes) are tried in turn on a copy of the
-//! datagram, because opening a packet changes the bytes in place, and the session whose keys open it owns it. An id no
+//! datagram, because opening a packet changes the bytes in place. For a short datagram the first holder that does
+//! not answer undecryptable or unroutable owns it, whatever it did with it (a closed or back-pressured holder takes
+//! it too); a long packet is not sealed, so the first holder takes it without a trial. The candidate list can name the
+//! same slot twice, which only costs a second trial. An id no
 //! session holds can only start a session if the datagram is a first handshake message that meets its size floor
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
 //! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
