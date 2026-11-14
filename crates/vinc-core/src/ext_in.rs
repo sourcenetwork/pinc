@@ -39,18 +39,17 @@ impl ExtRing {
         }
     }
 
-    /// Keep a frame; a full ring drops its oldest. False if the body is too long to keep.
-    pub(crate) fn put(&mut self, session: SessionId, ty: u64, body: &[u8]) -> bool {
+    /// Keep a frame; a full ring drops its oldest. `None` if the body is too long to keep, else how many frames the
+    /// ring gave up for it (0 or 1).
+    pub(crate) fn put(&mut self, session: SessionId, ty: u64, body: &[u8]) -> Option<u64> {
         let mut held = Held {
             session,
             ty,
             len: body.len(),
             body: [0; EXT_BODY_MAX],
         };
-        let Some(dst) = held.body.get_mut(..body.len()) else {
-            return false;
-        };
-        dst.copy_from_slice(body);
+        held.body.get_mut(..body.len())?.copy_from_slice(body);
+        let lost = u64::from(self.len == EXT_SLOTS);
         if self.len == EXT_SLOTS {
             self.head = (self.head + 1) % EXT_SLOTS;
             self.len -= 1;
@@ -60,7 +59,7 @@ impl ExtRing {
             *s = Some(held);
             self.len += 1;
         }
-        true
+        Some(lost)
     }
 
     /// Copy the oldest frame into `out` and remove it: its session, type and length. `Err(len)` if it does not fit
@@ -92,7 +91,10 @@ mod tests {
         let mut r = ExtRing::new();
         let mut out = [0u8; EXT_BODY_MAX];
         for i in 0..=EXT_SLOTS as u8 {
-            assert!(r.put(SessionId(1), 0x49, &[i; 3]));
+            assert_eq!(
+                r.put(SessionId(1), 0x49, &[i; 3]),
+                Some(u64::from(i as usize == EXT_SLOTS))
+            );
         }
         for i in 1..=EXT_SLOTS as u8 {
             assert_eq!(r.take(&mut out), Ok(Some((SessionId(1), 0x49, 3))));
@@ -104,8 +106,8 @@ mod tests {
     #[test]
     fn a_body_too_long_is_refused_and_one_that_does_not_fit_the_buffer_stays() {
         let mut r = ExtRing::new();
-        assert!(!r.put(SessionId(1), 0x49, &[0; EXT_BODY_MAX + 1]));
-        assert!(r.put(SessionId(2), 0x4f, &[7; 10]));
+        assert_eq!(r.put(SessionId(1), 0x49, &[0; EXT_BODY_MAX + 1]), None);
+        assert_eq!(r.put(SessionId(2), 0x4f, &[7; 10]), Some(0));
         assert_eq!(r.take(&mut [0u8; 4]), Err(10));
         assert_eq!(r.take(&mut [0u8; 10]), Ok(Some((SessionId(2), 0x4f, 10))));
     }
@@ -141,7 +143,7 @@ pub(crate) mod trace {
 
         /// Keep a frame; false if the body is too long.
         pub fn put(&mut self, session: u64, ty: u64, body: &[u8]) -> bool {
-            self.r.put(SessionId(session), ty, body)
+            self.r.put(SessionId(session), ty, body).is_some()
         }
 
         /// Take the oldest frame into `out`: its session, type and length, or the length that does not fit.

@@ -479,6 +479,10 @@ name = "core_acp_gate"
 path = "core_acp_gate.rs"
 
 [[test]]
+name = "core_ring_drops"
+path = "core_ring_drops.rs"
+
+[[test]]
 name = "core_sub"
 path = "core_sub.rs"
 

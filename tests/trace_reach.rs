@@ -6,11 +6,12 @@
 //! place, overwrites and wraps), with bodies of every length that matters (empty, short, exactly the limit of 153
 //! bytes, one over it and well over it), and asks for the body of a session. A body is a run of one byte (its
 //! `tag`), so the body read back is checked whole and the record carries its first byte. After every call the record
-//! shows the pointer `next` and the four places.
+//! shows the four places.
 //!
 //! The test compares every call with a naive table written from the module's doc, and checks the rules itself: a
 //! body over the limit changes nothing, at most one body per session, a get after a put returns the body put, and a
-//! session that is not held takes the place `next` while a held one keeps its place.
+//! session that is not held takes a free place or else the place of the body put longest ago, while a held one keeps
+//! its place, and every body lost is counted.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -45,22 +46,24 @@ fn json_cell(c: Option<(u64, usize, u8)>) -> String {
 
 struct Naive {
     cells: Vec<Cell>,
-    next: usize,
+    /// When each place was last put.
+    stamps: Vec<u64>,
+    clock: u64,
 }
 
 impl Naive {
-    /// What the module's doc says: the place of the session if held, else the place `next`; the pointer moves on
-    /// when that place was `next`.
+    /// What the module's doc says: the place of the session if held, else a free place, else the place of the body
+    /// put longest ago.
     fn put(&mut self, session: u64, body: &[u8]) -> usize {
+        self.clock += 1;
         let at = self
             .cells
             .iter()
             .position(|c| c.as_ref().is_some_and(|c| c.0 == session))
-            .unwrap_or(self.next);
+            .or_else(|| self.cells.iter().position(Option::is_none))
+            .unwrap_or_else(|| (0..SLOTS).min_by_key(|k| self.stamps[*k]).unwrap());
         self.cells[at] = Some((session, body.to_vec()));
-        if at == self.next {
-            self.next = (self.next + 1) % SLOTS;
-        }
+        self.stamps[at] = self.clock;
         at
     }
     fn get(&self, session: u64) -> Option<&[u8]> {
@@ -68,20 +71,17 @@ impl Naive {
     }
 }
 
-fn view(p: &ReachProbe, nv: &Naive) -> String {
-    assert_eq!(p.next(), nv.next);
+fn view(p: &ReachProbe) -> String {
     let cells: Vec<String> = (0..SLOTS).map(|k| json_cell(p.cell(k))).collect();
-    format!(r#"{{"next":{},"cells":[{}]}}"#, p.next(), cells.join(","))
+    format!(r#"{{"cells":[{}]}}"#, cells.join(","))
 }
 
 #[derive(Default)]
 struct Seen {
     refreshed: u32,
-    refreshed_at_next: u32,
     overwritten: u32,
     refused: u32,
     at_limit: u32,
-    wrapped: u32,
     got: u32,
     got_none: u32,
     zero_len: u32,
@@ -91,17 +91,17 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
     let mut p = ReachProbe::new();
     let mut nv = Naive {
         cells: vec![None; SLOTS],
-        next: 0,
+        stamps: vec![0; SLOTS],
+        clock: 0,
     };
     let _ = writeln!(
         out,
         r#"{{"t":"cor","run":{id},"op":"init","n":{SLOTS},"mx":{MAX},"v":{}}}"#,
-        view(&p, &nv)
+        view(&p)
     );
     // how many sessions share the ring, and how often a body is long
     let sessions = [2u64, 4, 6, 9][(rng.next_u64() % 4) as usize];
     let long_pct = [0u64, 6, 30][(rng.next_u64() % 3) as usize];
-    let mut last_next = 0usize;
     for _ in 0..steps {
         let op = if rng.next_u64() % 100 < 75 {
             let session = rng.next_u64() % sessions;
@@ -114,8 +114,8 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
             let body = vec![tag; len];
             let held = nv.cells.iter().position(|c| c.as_ref().is_some_and(|c| c.0 == session));
             let before: Vec<Cell> = nv.cells.clone();
-            let next_before = nv.next;
-            p.put(session, &body);
+            let stamps_before = nv.stamps.clone();
+            let lost = p.put(session, &body);
             if len <= MAX {
                 let at = nv.put(session, &body);
                 seen.zero_len += u32::from(len == 0);
@@ -124,13 +124,17 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                     Some(h) => {
                         assert_eq!(at, h, "a held session did not keep its place");
                         seen.refreshed += 1;
-                        seen.refreshed_at_next += u32::from(h == next_before);
+                        assert_eq!(lost, 0, "a refresh lost a body");
                     }
                     None => {
-                        assert_eq!(
-                            at, next_before,
-                            "a session that is not held did not take the place next"
-                        );
+                        let full = before.iter().all(Option::is_some);
+                        if full {
+                            let oldest = (0..SLOTS).min_by_key(|k| stamps_before[*k]).unwrap();
+                            assert_eq!(at, oldest, "a full ring did not give up the body put longest ago");
+                        } else {
+                            assert!(before[at].is_none(), "a free place was passed over");
+                        }
+                        assert_eq!(lost, u64::from(full), "a lost body was not counted");
                         seen.overwritten += u32::from(before[at].is_some());
                     }
                 }
@@ -147,6 +151,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                 );
             } else {
                 seen.refused += 1;
+                assert_eq!(lost, 1, "a body over the limit was not counted");
                 assert_eq!(nv.cells, before, "a body over the limit changed the table");
                 assert_eq!(
                     p.get(session),
@@ -165,8 +170,6 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
             seen.got_none += u32::from(got.is_none());
             format!(r#""op":"get","s":{session},"out":{o}"#)
         };
-        seen.wrapped += u32::from(p.next() < last_next);
-        last_next = p.next();
         // at most one body per session, and the table is the naive one after every call
         for k in 0..SLOTS {
             let want = nv.cells[k].as_ref().map(|c| (c.0, c.1.len(), tag_of(&c.1)));
@@ -179,7 +182,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                 );
             }
         }
-        let v = view(&p, &nv);
+        let v = view(&p);
         let _ = writeln!(out, r#"{{"t":"cor","run":{id},{op},"v":{v}}}"#);
     }
 }
@@ -193,14 +196,12 @@ fn the_reach_ring_matches_the_models() {
         run(&mut rng, &mut out, id, 300, &mut seen);
     }
     assert!(seen.refreshed > 0, "no held session was refreshed");
-    assert!(seen.refreshed_at_next > 0, "no session in the place next was refreshed");
     assert!(
         seen.overwritten > 0,
         "no body was overwritten by a session that was not held"
     );
     assert!(seen.refused > 0, "no body over the limit was refused");
     assert!(seen.at_limit > 0, "no body of exactly the limit was kept");
-    assert!(seen.wrapped > 0, "the pointer never went round");
     assert!(seen.got > 0 && seen.got_none > 0, "get never found, or never missed");
     assert!(seen.zero_len > 0, "no empty body was kept");
     if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {

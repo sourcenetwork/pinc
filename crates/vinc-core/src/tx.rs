@@ -63,7 +63,7 @@ ep_impl! {
             self.dirty_rotate(q);
             self.settle_core(i, now, false);
             let Some((local, remote)) = self.path_addrs(tx.path) else {
-                self.counters.dropped_in += 1;
+                self.counters.dropped_out += 1;
                 continue;
             };
             if !self.gate(now, remote, tx.len, segments) {
@@ -106,11 +106,11 @@ ep_impl! {
     /// Send the datagram kept from the last call.
     fn send_stash(&mut self, now: u64, out: &mut [u8], m: &StashMeta) -> Option<Transmit> {
         let Some((local, remote)) = self.path_addrs(m.path) else {
-            self.counters.dropped_in += 1;
+            self.counters.dropped_out += 1;
             return None;
         };
         let (Some(src), Some(dst)) = (self.stash.get(..m.len), out.get_mut(..m.len)) else {
-            self.counters.dropped_in += 1;
+            self.counters.dropped_out += 1;
             return None;
         };
         dst.copy_from_slice(src);

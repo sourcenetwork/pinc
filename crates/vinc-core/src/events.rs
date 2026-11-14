@@ -137,8 +137,11 @@ ep_impl! {
                 if ty == ext::SUB_SESSION_OPEN && len > 0 {
                     self.sub_accept(i, now, body);
                 } else if ty == ext::REACH_OUT && len > 0 && len <= crate::reach::REACH_BODY_MAX {
-                    self.reach_in.put(session, body);
+                    self.counters.reach_dropped += self.reach_in.put(session, body);
                     self.emit(Event::ReachOut { session });
+                } else if ty == ext::REACH_OUT {
+                    // A body that is empty or too long to keep is lost.
+                    self.counters.reach_dropped += 1;
                 } else if ty != ext::SUB_SESSION_OPEN
                     && ty != ext::REACH_OUT
                     && len > 0
@@ -147,7 +150,7 @@ ep_impl! {
                     // A frame of a session the access check has not allowed is dropped (the branch above); the
                     // application protocols carry hints in extension frames and ask again. A body too long to keep
                     // is dropped too.
-                    let _ = self.ext_in.put(session, ty, body);
+                    self.counters.ext_dropped += self.ext_in.put(session, ty, body).unwrap_or(1);
                 }
             }
             Co::Undeliverable(ty) => {

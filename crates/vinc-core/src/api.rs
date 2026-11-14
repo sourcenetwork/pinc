@@ -733,6 +733,13 @@ pub struct NodeStats {
     pub datagrams_out: u64,
     /// Datagrams dropped before any connection (unroutable, too large, floors, the half-open cap, a full table).
     pub dropped_in: u64,
+    /// Datagrams a connection produced that could not leave: the path they were for is gone, or the buffer offered
+    /// for a datagram kept from the last call is shorter than it.
+    pub dropped_out: u64,
+    /// Reach-out bodies lost: kept no longer because newer ones took their place, or too long to keep.
+    pub reach_dropped: u64,
+    /// Extension frames lost: dropped as the oldest of a full ring, or too long to keep.
+    pub ext_dropped: u64,
     /// Datagrams the ledger held back.
     pub held_by_ledger: u64,
     /// Packets refused because they would raise events while the host left unrecoverable events unread or a session's
