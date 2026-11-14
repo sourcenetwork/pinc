@@ -467,6 +467,10 @@ name = "core_sub"
 path = "core_sub.rs"
 
 [[test]]
+name = "core_sendq"
+path = "core_sendq.rs"
+
+[[test]]
 name = "core_timing"
 path = "core_timing.rs"
 

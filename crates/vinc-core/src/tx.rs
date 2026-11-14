@@ -105,9 +105,15 @@ ep_impl! {
 
     /// Send the datagram kept from the last call.
     fn send_stash(&mut self, now: u64, out: &mut [u8], m: &StashMeta) -> Option<Transmit> {
-        let (local, remote) = self.path_addrs(m.path)?;
-        let src = self.stash.get(..m.len)?;
-        out.get_mut(..m.len)?.copy_from_slice(src);
+        let Some((local, remote)) = self.path_addrs(m.path) else {
+            self.counters.dropped_in += 1;
+            return None;
+        };
+        let (Some(src), Some(dst)) = (self.stash.get(..m.len), out.get_mut(..m.len)) else {
+            self.counters.dropped_in += 1;
+            return None;
+        };
+        dst.copy_from_slice(src);
         let segments = m.len.div_ceil(m.segment.max(1));
         if !self.gate(now, remote, m.len, segments) {
             return None;
@@ -134,6 +140,10 @@ ep_impl! {
             let Some(window) = out.get_mut(first.len..first.len + room) else { return };
             let mut env = env!(self, now);
             let Some(tx) = conn.poll_transmit(&mut env, window) else {
+                // A window shorter than a full datagram may be why there was none: the session stays for the next call.
+                if room < MAX_DATAGRAM {
+                    return;
+                }
                 self.dirty_pop(q);
                 let closing = self.run_deferred_close(j, now);
                 self.settle_core(j, now, closing);

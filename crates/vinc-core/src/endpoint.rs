@@ -158,6 +158,8 @@ pub struct Endpoint<
     pub(crate) demux: Table<ConnId, u32, D>,
     pub(crate) by_peer: Table<NodeId, u32, K>,
     pub(crate) heap: DeadlineHeap<K>,
+    /// The sessions that may have something to send, in two queues. An entry can name a slot that was freed or reused
+    /// since it was queued; it is skipped when served.
     pub(crate) dirty_head: [u32; 2],
     pub(crate) dirty_tail: [u32; 2],
     pub(crate) ledger: Ledger,
