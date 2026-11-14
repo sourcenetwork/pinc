@@ -78,7 +78,8 @@ pub enum NodeEvent {
         /// The subscriber.
         to: NodeId,
     },
-    /// A hub confirmed this node's subscription to a topic: it is in the hub's subscriber set.
+    /// A hub confirmed this node's subscription to a topic: it is in the hub's subscriber set. Not raised for a node
+    /// the hub's set leaves out because the topic has more subscribers than a set names.
     Subscribed {
         /// The hub.
         hub: NodeId,

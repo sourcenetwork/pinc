@@ -39,7 +39,9 @@ pub enum Event {
         payload: Vec<u8>,
     },
     /// A hub holds this endpoint's subscription to `topic`, the first time since it joined: a message published to the
-    /// topic through that hub from now on arrives. A join returns before any hub knows of it.
+    /// topic through that hub from now on arrives. A join returns before any hub knows of it. The event comes from the
+    /// hub's list of subscribers, which names at most 256 of them in id order: on a topic with more, an endpoint the
+    /// list leaves out is subscribed all the same and is not told, so do not wait for this event without a bound.
     Joined {
         /// The topic.
         topic: Vec<u8>,
