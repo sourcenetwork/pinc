@@ -26,11 +26,6 @@ name = "relay"
 site = "public"
 role = "relay-server"
 
-[[nodes]]
-name = "hub"
-site = "public"
-role = "hub"
-
 [[links]]
 a = "home1"
 b = "public"

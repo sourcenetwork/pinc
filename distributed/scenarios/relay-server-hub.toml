@@ -1,0 +1,55 @@
+name = "relay-server-hub"
+about = "A vinc_relay server as the only infrastructure: it is the hub every node joins through (lease roster, membership, topics) and their relay. Six nodes behind home routers, one publisher sending 1000 messages of 512 bytes at 50 a second, every node subscribed; each node's roster should hold the others."
+stacks = ["vinc"]
+repetitions = 3
+
+[resources]
+cpus = 1
+memory_mib = 1024
+
+[[sites]]
+name = "home1"
+nat = "port-restricted"
+
+[[sites]]
+name = "home2"
+nat = "symmetric"
+
+[[sites]]
+name = "public"
+
+[[nodes]]
+name = "a"
+site = "home1"
+count = 3
+
+[[nodes]]
+name = "b"
+site = "home2"
+count = 3
+
+[[nodes]]
+name = "relay"
+site = "public"
+role = "relay-server"
+
+[[links]]
+a = "home1"
+b = "public"
+shape = { delay_ms = 10, rate_mbit = 50 }
+reverse = { rate_mbit = 200 }
+
+[[links]]
+a = "home2"
+b = "public"
+shape = { delay_ms = 15, rate_mbit = 20 }
+reverse = { rate_mbit = 100 }
+
+[workload]
+kind = "pubsub"
+publishers = ["a-1"]
+messages = 1000
+size = 512
+rate_hz = 50
+warmup_s = 10
+drain_s = 8

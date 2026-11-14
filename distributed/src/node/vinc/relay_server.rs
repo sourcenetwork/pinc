@@ -75,7 +75,13 @@ pub fn run(init: &Init) -> Result<(), String> {
         .read_line(&mut line)
         .map_err(|e| format!("vinc_relay said nothing: {e}"))?;
     let want = vinc::node_to_string(&node_id(&init.name)?);
-    if line.split_whitespace().nth(1) != Some(want.as_str()) {
+    // "relay and hub <id> on <address>", or "relay <id> on <address>" with the hub off.
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let id = words
+        .iter()
+        .position(|w| *w == "on")
+        .and_then(|on| words.get(on.checked_sub(1)?));
+    if id != Some(&want.as_str()) {
         return Err(format!("vinc_relay did not come up as {want}: {line}"));
     }
     let ready = Ready {

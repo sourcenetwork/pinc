@@ -1,5 +1,5 @@
 name = "relay-server-no-punch"
-about = "S5's no-punch case on real sockets: a consumer and a provider each behind a symmetric NAT, so no hole punch can work, fetch through a vinc_relay server (role relay-server, the binary in VINC_RELAY_BIN); a public hub takes the joins. The relay forwards every packet."
+about = "S5's no-punch case on real sockets: a consumer and a provider each behind a symmetric NAT, so no hole punch can work, fetch through a vinc_relay server (role relay-server, the binary in VINC_RELAY_BIN); the relay is also the hub. The relay forwards every packet."
 stacks = ["vinc"]
 repetitions = 3
 
@@ -26,11 +26,6 @@ site = "home2"
 name = "relay"
 site = "public"
 role = "relay-server"
-
-[[nodes]]
-name = "hub"
-site = "public"
-role = "hub"
 
 [[links]]
 a = "home1"
