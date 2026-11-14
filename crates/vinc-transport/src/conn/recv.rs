@@ -6,8 +6,10 @@
 //! the bookkeeping that depends on the whole packet (the received-packet record, following the peer, the handshake
 //! confirmation).
 //!
-//! Invariants: nothing is acted on before it authenticated, so a forged packet changes nothing (a new path is added
-//! only after a packet from it authenticated); a packet whose frames could not be stored for lack of memory is not
+//! Invariants: nothing is acted on before it authenticated, so a forged packet moves no path, validates none and
+//! names no id (a responder still in its handshake does learn the path a handshake packet came on, unvalidated and
+//! held to three times what arrived on it; otherwise a new path is added only after a packet from it
+//! authenticated); a packet whose frames could not be stored for lack of memory is not
 //! recorded as received, so the peer sends it again; any authenticated packet that was not received before ends the
 //! peer's sleep (a copy of an old packet is refused first and changes nothing).
 
