@@ -225,6 +225,10 @@ import Vinc.ConnectTicketText
 import Vinc.ConnectBase32
 import Vinc.ConnectTicketTextPf
 import Vinc.TraceConnectCodec
+import Vinc.RelayNet
+import Vinc.StreamTag
+import Vinc.ValuesFrames
+import Vinc.TraceIntegrationCodecs
 import Vinc.ConnectLink
 import Vinc.TraceConnectLink
 import Vinc.ConnectLinkThm

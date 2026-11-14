@@ -1142,3 +1142,7 @@ path = "trace_reach.rs"
 [[test]]
 name = "trace_rtt"
 path = "trace_rtt.rs"
+
+[[test]]
+name = "trace_integration_codecs"
+path = "trace_integration_codecs.rs"
