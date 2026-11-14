@@ -551,5 +551,7 @@ mbt_cases() { # mbt_cases <spec> <cfg> <out> : TLC's state graph of <cfg> as pat
 mkdir -p "$dir/mbt"
 mbt_cases MbtOrphan MbtOrphan orphan.ndjson
 mbt_cases MbtOrphan MbtOrphan_edge orphan_edge.ndjson
-VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan -- --nocapture
+mbt_cases MbtHalfOpen MbtHalfOpen halfopen.ndjson
+mbt_cases MbtHalfOpen MbtHalfOpen_back halfopen_back.ndjson
+VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen -- --nocapture
 echo "proofs: ok"

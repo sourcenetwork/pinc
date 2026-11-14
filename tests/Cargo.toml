@@ -1008,6 +1008,10 @@ name = "mbt_orphan"
 path = "mbt_orphan.rs"
 
 [[test]]
+name = "mbt_halfopen"
+path = "mbt_halfopen.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 
