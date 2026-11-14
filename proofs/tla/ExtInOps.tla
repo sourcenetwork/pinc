@@ -12,14 +12,15 @@
 (* of its body (the body itself is carried, not looked at; the trace       *)
 (* compares its first byte). MX is EXT_BODY_MAX = 1200.                    *)
 (*                                                                         *)
-(* Put: a body longer than MX is refused and nothing changes; otherwise a  *)
-(* full ring drops its oldest frame (the head moves on), and the frame is  *)
-(* appended. Nothing counts the refusal or the dropped frame: the code     *)
-(* has no counter (put returns whether the frame was kept, and the         *)
-(* endpoint ignores it). Take: the oldest frame, or None for an empty      *)
-(* ring, or, when it is longer than the buffer, its length with the frame  *)
-(* left held. dropNewest is the wrong rule of a witness config: a full     *)
-(* ring gives up the newest frame it holds, not the oldest.                *)
+(* Put: a body longer than MX is refused and nothing changes (put returns *)
+(* None: ok is FALSE); otherwise a full ring drops its oldest frame (the   *)
+(* head moves on), and the frame is appended; put returns Some(gave), how  *)
+(* many frames the ring gave up for it, 1 when it was full, else 0. The    *)
+(* endpoint adds gave, or 1 for a refused body, to its count of extension  *)
+(* frames lost. Take: the oldest frame, or None for an empty ring, or,     *)
+(* when it is longer than the buffer, its length with the frame left held. *)
+(* dropNewest is the wrong rule of a witness config: a full ring gives up  *)
+(* the newest frame it holds, not the oldest.                              *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 
@@ -29,13 +30,14 @@ Ring0 == [head |-> 0, len |-> 0, q |-> <<>>]
 Front(q) == SubSeq(q, 1, Len(q) - 1)
 
 EPut(r, cap, mx, it, dropNewest) ==
-    IF it[4] > mx THEN [ok |-> FALSE, r |-> r]
+    IF it[4] > mx THEN [ok |-> FALSE, gave |-> 0, r |-> r]
     ELSE LET r1 == IF r.len = cap
                    THEN IF dropNewest
                         THEN [head |-> r.head, len |-> r.len - 1, q |-> Front(r.q)]
                         ELSE [head |-> (r.head + 1) % cap, len |-> r.len - 1, q |-> Tail(r.q)]
                    ELSE r
-         IN [ok |-> TRUE, r |-> [head |-> r1.head, len |-> r1.len + 1, q |-> Append(r1.q, it)]]
+         IN [ok |-> TRUE, gave |-> IF r.len = cap THEN 1 ELSE 0,
+             r |-> [head |-> r1.head, len |-> r1.len + 1, q |-> Append(r1.q, it)]]
 
 \* res is "none" (empty ring), "err" (the oldest frame does not fit; out is its length) or "ok" (out is the frame)
 ETake(r, cap, oc) ==

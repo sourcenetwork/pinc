@@ -569,12 +569,11 @@ par witness_tlc ext_in_stay ExtIn ExtIn_stay NoStay
 par run_tlc reach Reach Reach
 par witness_tlc reach_dup Reach Reach_dup OnePerSession
 par witness_tlc reach_newest Reach Reach_newest PutRule
-par witness_tlc reach_lru Reach Reach_lru EvictsLeastRecent
 par witness_tlc reach_first Reach Reach_first EvictsFirstIn
 par witness_tlc reach_refresh Reach Reach_refresh NoRefresh
 par witness_tlc reach_evict Reach Reach_evict NoEvict
 par witness_tlc reach_refuse Reach Reach_refuse NoRefuse
-par witness_tlc reach_atnext Reach Reach_atnext NoAtNext
+par witness_tlc reach_renew Reach Reach_renew NoRenewOldest
 par run_tlc rtt Rtt Rtt
 par run_tlc rtt_floor Rtt Rtt_floor
 par witness_tlc rtt_hubhalf Rtt Rtt_hubhalf Inv

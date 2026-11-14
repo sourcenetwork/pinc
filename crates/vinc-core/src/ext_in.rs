@@ -141,9 +141,9 @@ pub(crate) mod trace {
             Self { r: ExtRing::new() }
         }
 
-        /// Keep a frame; false if the body is too long.
-        pub fn put(&mut self, session: u64, ty: u64, body: &[u8]) -> bool {
-            self.r.put(SessionId(session), ty, body).is_some()
+        /// Keep a frame: `None` if the body is too long, else how many frames the ring gave up for it (0 or 1).
+        pub fn put(&mut self, session: u64, ty: u64, body: &[u8]) -> Option<u64> {
+            self.r.put(SessionId(session), ty, body)
         }
 
         /// Take the oldest frame into `out`: its session, type and length, or the length that does not fit.

@@ -10,7 +10,8 @@
 (* too small, just right and large, in mixes that keep the ring short,     *)
 (* fill it, drop its oldest frame and take the head round it. Every call   *)
 (* must be the step the operators of ExtInOps.tla compute, with the result   *)
-(* the code returned; the head, the length and the frames held (session,   *)
+(* the code returned (for a put: kept or not, and how many frames the ring *)
+(* gave up for it); the head, the length and the frames held (session,     *)
 (* type, length and the first byte of the body, oldest first) recorded     *)
 (* after every call must be the model's. The model's frame carries the     *)
 (* first byte in the slot of its place in the order of puts.               *)
@@ -36,7 +37,7 @@ Same(x) ==
 
 InitEv == /\ Ev0.op = "init" /\ cap' = Ev0.n /\ mx' = Ev0.mx /\ r' = Ring0 /\ Same(r')
 PutEv == LET x == EPut(r, cap, mx, It(Ev0.f), FALSE)
-         IN /\ Ev0.op = "put" /\ x.ok = Ev0.ok
+         IN /\ Ev0.op = "put" /\ x.ok = Ev0.ok /\ x.gave = Ev0.gave
             /\ r' = x.r /\ Same(r') /\ UNCHANGED <<cap, mx>>
 TakeEv == LET x == ETake(r, cap, Ev0.oc)
           IN /\ Ev0.op = "take" /\ x.res = Ev0.res

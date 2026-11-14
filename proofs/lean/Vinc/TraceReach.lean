@@ -6,9 +6,10 @@ import Vinc.CoreReach
 
 The Lean half of the trace validation of the ring of `REACH_OUT` bodies (`vinc-core` `reach.rs`), the port of
 `proofs/tla/TraceReach.tla`. It reads the `cor` events written by the Rust test `trace_reach` and replays every
-call through `Vinc.CoreReach.rput` and `rget`: the body a get returns must be the recorded one (its length and
-first byte), and the pointer `next` and the four places (session, body length and first byte, or nothing) must be
-the recorded ones after every call. The model's cell carries the first byte in `id`.
+call through `Vinc.CoreReach.rput` and `rget`: the number of bodies a put returned as lost and the body a get returns
+(its length and first byte) must be the recorded ones, and so must the four places (session, body length and first
+byte, or nothing) after every call. The stamps and the put counter are not recorded; the replay carries them from the
+empty ring at the start of each run. The model's cell carries the first byte in `id`.
 -/
 
 namespace Vinc.TraceReach
@@ -28,7 +29,6 @@ def recCell : Option C → List Nat
 
 def same (r : R) (j : J) (what : String) : Except String Unit := do
   let v ← field j "v"
-  check (r.next == (← natF v "next")) s!"{what}: the pointer differs"
   let cells ← match (← field v "cells").arr? with
     | some a => a.toList.mapM natList
     | none => throw "expected the places"
@@ -38,13 +38,14 @@ def replayEvent (j : J) (w : W) : Except String W := do
   match ← strF j "op" with
   | "init" =>
     let n ← natF j "n"
-    let w' : W := { r := { cells := List.replicate n none, next := 0 }, n, mx := ← natF j "mx" }
+    let w' : W := { r := { cells := List.replicate n none, clock := 0 }, n, mx := ← natF j "mx" }
     same w'.r j "init"
     pure w'
   | "put" =>
     match ← natList (← field j "c") with
     | [s, l, g] =>
-      let r2 := rput w.n w.mx w.r { sess := s, id := g, len := l }
+      let (lost, r2) := rput w.mx w.r { sess := s, id := g, len := l }
+      check (lost == (← natF j "lost")) "put: another number of bodies lost"
       same r2 j "put"
       pure { w with r := r2 }
     | _ => throw "a body has not three parts"

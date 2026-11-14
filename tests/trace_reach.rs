@@ -5,8 +5,8 @@
 //! A run puts bodies for a few sessions (more sessions than the ring has places, so it fills, refreshes bodies in
 //! place, overwrites and wraps), with bodies of every length that matters (empty, short, exactly the limit of 153
 //! bytes, one over it and well over it), and asks for the body of a session. A body is a run of one byte (its
-//! `tag`), so the body read back is checked whole and the record carries its first byte. After every call the record
-//! shows the four places.
+//! `tag`), so the body read back is checked whole and the record carries its first byte. A put records how many
+//! bodies it returned as lost. After every call the record shows the four places.
 //!
 //! The test compares every call with a naive table written from the module's doc, and checks the rules itself: a
 //! body over the limit changes nothing, at most one body per session, a get after a put returns the body put, and a
@@ -158,7 +158,10 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                     before.iter().flatten().find(|c| c.0 == session).map(|c| &c.1[..])
                 );
             }
-            format!(r#""op":"put","c":[{session},{len},{}]"#, if len == 0 { 0 } else { tag })
+            format!(
+                r#""op":"put","c":[{session},{len},{}],"lost":{lost}"#,
+                if len == 0 { 0 } else { tag }
+            )
         } else {
             let session = rng.next_u64() % (sessions + 2);
             let got = p.get(session);

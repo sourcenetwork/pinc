@@ -7,9 +7,9 @@ import Vinc.CoreExtIn
 The Lean half of the trace validation of the ring of extension frames held for the application (`vinc-core`
 `ext_in.rs`), the port of `proofs/tla/TraceExtIn.tla`. It reads the `cox` events written by the Rust test
 `trace_ext_in` and replays every call through `Vinc.CoreExtIn.eput` and `etake`: the result the model computes must be
-the one the code returned, and the head, the length and the frames held (session, type, length and the first byte
-of the body, oldest first) must be the recorded ones after every call. The model's frame carries the first byte in
-`id`.
+the one the code returned (for a put: kept or not, and how many frames the ring gave up for it), and the head, the
+length and the frames held (session, type, length and the first byte of the body, oldest first) must be the recorded
+ones after every call. The model's frame carries the first byte in `id`.
 -/
 
 namespace Vinc.TraceExtIn
@@ -47,8 +47,9 @@ def replayEvent (j : J) (w : W) : Except String W := do
     pure w'
   | "put" =>
     let f ← frameOf (← field j "f")
-    let (ok, x2) := eput w.cap w.mx w.x f
-    check (ok == (← boolF j "ok")) "put: another result"
+    let (g, x2) := eput w.cap w.mx w.x f
+    check (g.isSome == (← boolF j "ok")) "put: another result"
+    check (g.getD 0 == (← natF j "gave")) "put: another number of frames given up"
     same x2 j "put"
     pure { w with x := x2 }
   | "take" =>

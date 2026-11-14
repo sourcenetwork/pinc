@@ -5,13 +5,14 @@
 //! A run puts frames of a few sessions and types, with bodies of every length that matters (empty, short, exactly the
 //! limit of 1200 bytes, one over it and well over it), takes them with buffers that are too small, just right and
 //! large, and lets the ring fill, drop its oldest frame and wrap its head. A body is a run of one byte (its `tag`),
-//! so the body read back is checked whole and the record carries its first byte. After every call the record shows
-//! the head, the length and the frames held, oldest first.
+//! so the body read back is checked whole and the record carries its first byte. A put records whether the frame was
+//! kept and how many frames the ring gave up for it. After every call the record shows the head, the length and the
+//! frames held, oldest first.
 //!
 //! The test compares every call with a naive queue (a deque of whole bodies, written from the module's doc), and
 //! checks the rules itself: a body over the limit is refused and changes nothing, a full ring drops its oldest
-//! frame and keeps the new one, frames leave in arrival order with their bodies intact, a frame that does not fit
-//! the buffer stays held, the ring never holds more than its places.
+//! frame, keeps the new one and says it gave one up, frames leave in arrival order with their bodies intact, a frame
+//! that does not fit the buffer stays held, the ring never holds more than its places.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -50,16 +51,18 @@ struct Naive {
 }
 
 impl Naive {
-    fn put(&mut self, f: Frame) -> bool {
+    /// `None` for a body over the limit, else how many frames the ring gave up for it.
+    fn put(&mut self, f: Frame) -> Option<u64> {
         if f.2.len() > MAX {
-            return false;
+            return None;
         }
-        if self.q.len() == CAP {
+        let full = self.q.len() == CAP;
+        if full {
             self.q.pop_front();
             self.head = (self.head + 1) % CAP;
         }
         self.q.push_back(f);
-        true
+        Some(u64::from(full))
     }
 }
 
@@ -123,10 +126,16 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
             let body = vec![tag; len];
             let was_len = nv.q.len();
             let second = nv.q.get(1).cloned();
-            let ok = p.put(session, ty, &body);
+            let got = p.put(session, ty, &body);
             let want = nv.put((session, ty, body));
-            assert_eq!(ok, want, "put differs from the naive ring");
+            assert_eq!(got, want, "put differs from the naive ring");
+            let ok = got.is_some();
             assert_eq!(ok, len <= MAX, "a body is kept exactly when it is within the limit");
+            assert_eq!(
+                got.unwrap_or(0),
+                u64::from(ok && was_len == CAP),
+                "a put gives up a frame exactly when the ring was full"
+            );
             if ok {
                 seen.at_limit += u32::from(len == MAX);
                 seen.zero_len += u32::from(len == 0);
@@ -150,8 +159,9 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                 assert_eq!(nv.q.len(), was_len, "a refused body changed the ring");
             }
             format!(
-                r#""op":"put","f":{},"ok":{ok}"#,
-                json_frame(session, ty, len, if len == 0 { 0 } else { tag })
+                r#""op":"put","f":{},"ok":{ok},"gave":{}"#,
+                json_frame(session, ty, len, if len == 0 { 0 } else { tag }),
+                got.unwrap_or(0)
             )
         } else {
             // buffers too small by one, just right, and large
