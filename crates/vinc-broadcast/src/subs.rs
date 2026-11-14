@@ -215,6 +215,7 @@ impl Topics {
         let n = usize::from(u16::from_be_bytes(*count)).min(self.limits.max_subscribers);
         let list = ids.as_chunks::<32>().0.iter().take(n);
         let is_hub = self.is_hub;
+        let me = self.me;
         let Some(st) = self.topics.get_mut(topic) else {
             return;
         };
@@ -226,6 +227,10 @@ impl Topics {
             // vertexia: the last report wins; a per-hub merge if hubs disagree for long.
             st.peers.clear();
             st.peers.extend(list.copied());
+            if st.sub && !st.confirmed && st.peers.contains(&me) {
+                st.confirmed = true;
+                h.event(Event::Subscribed { hub: from, topic });
+            }
         }
         if is_hub
             && let Some(st) = self.topics.get(topic)

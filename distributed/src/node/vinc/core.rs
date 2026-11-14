@@ -519,6 +519,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 | NodeEvent::GapRepaired { .. }
                 | NodeEvent::Fallback { .. }
                 | NodeEvent::Restored { .. }
+                | NodeEvent::Subscribed { .. }
                 | NodeEvent::Member(_)
                 | NodeEvent::ValueComplete { .. }
                 | NodeEvent::ValueFailed { .. }

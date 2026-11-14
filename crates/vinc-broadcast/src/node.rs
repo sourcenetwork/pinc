@@ -166,6 +166,8 @@ impl core::error::Error for Refused {}
 pub(crate) struct Topic {
     /// This node subscribes to the topic.
     pub(crate) sub: bool,
+    /// Member: a hub's subscriber set listed this node since it last subscribed.
+    pub(crate) confirmed: bool,
     /// Hub: subscribed members; the flag is false while a member's subscriptions are held.
     pub(crate) subs: BTreeMap<NodeId, bool>,
     /// Hub: the subscribers the other hubs reported.
@@ -188,6 +190,7 @@ impl Topic {
     fn new() -> Self {
         Self {
             sub: false,
+            confirmed: false,
             subs: BTreeMap::new(),
             rsubs: BTreeMap::new(),
             pubs: BTreeSet::new(),

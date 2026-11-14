@@ -78,6 +78,13 @@ pub enum NodeEvent {
         /// The subscriber.
         to: NodeId,
     },
+    /// A hub confirmed this node's subscription to a topic: it is in the hub's subscriber set.
+    Subscribed {
+        /// The hub.
+        hub: NodeId,
+        /// The topic.
+        topic: Vec<u8>,
+    },
     /// A hub restored this node's held subscription to a topic.
     Restored {
         /// The hub.
