@@ -111,6 +111,9 @@ import Vinc.TraceKeepalive
 import Vinc.CoreNodeBackoff
 import Vinc.CoreNodeBackoffThm
 import Vinc.TraceNodeBackoff
+import Vinc.CoreRtt
+import Vinc.CoreRttThm
+import Vinc.TraceRtt
 import Vinc.CoreHalfOpen
 import Vinc.CoreHalfOpenThm
 import Vinc.TraceHalfOpen
