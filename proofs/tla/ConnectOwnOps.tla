@@ -48,11 +48,12 @@ Observe(cf, S, from, nonce, addr) ==
 (* Netcheck::restart *)
 Restart(S) == [S EXCEPT !.probe = [k \in 1..Len(S.probe) |-> 0], !.refl = [k \in 1..Len(S.refl) |-> 0]]
 
-(* Netcheck::reflexive_into: the reflexive addresses in relay order, as many as fit in cap *)
-ReflList(cf, S) == LET F[k \in 0..Len(S.refl)] == IF k = 0 THEN <<>> ELSE IF S.refl[k] # 0 THEN Append(F[k - 1], S.refl[k]) ELSE F[k - 1]
-                   IN SubSeq(F[Len(S.refl)], 1, Min(Len(F[Len(S.refl)]), cf.cap))
-
 InSeq(s, a) == \E i \in 1..Len(s) : s[i] = a
+
+(* Netcheck::reflexive_into: the distinct reflexive addresses in relay order (an address that several relays report is
+   listed once, at its first relay), as many as fit in cap *)
+ReflList(cf, S) == LET F[k \in 0..Len(S.refl)] == IF k = 0 THEN <<>> ELSE IF S.refl[k] # 0 /\ ~InSeq(F[k - 1], S.refl[k]) THEN Append(F[k - 1], S.refl[k]) ELSE F[k - 1]
+                   IN SubSeq(F[Len(S.refl)], 1, Min(Len(F[Len(S.refl)]), cf.cap))
 
 (* Connectivity::candidates: reflexive first, then the local ones not yet there, up to cap *)
 Cands(cf, S) == LET r0 == ReflList(cf, S)

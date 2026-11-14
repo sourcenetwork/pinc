@@ -10,11 +10,14 @@
 (*                                                                         *)
 (* Properties (Lean: Vinc/ConnectOwnThm.lean):                             *)
 (*  CandCap      the record lists at most cap addresses (MAX_ADDRS)        *)
-(*  CandPrefix   the reflexive addresses come first, in relay order        *)
+(*  CandPrefix   the distinct reflexive addresses come first, in relay     *)
+(*               order                                                     *)
 (*  CandLocal    after them come the node's own addresses, in order, each  *)
 (*               once and none that is already listed; all of them when    *)
 (*               there is room                                             *)
 (*  CandOnly     nothing else is listed                                    *)
+(*  CandDistinct every address is listed once, one that several relays     *)
+(*               report included                                           *)
 (*  Observed     a reflexive address enters only from the configured       *)
 (*               address of a relay, for the nonce of that relay's         *)
 (*               outstanding probe, and only once per probe; an answer     *)
@@ -24,6 +27,13 @@
 (*               exactly when the clock rose (SeqAbove holds with Strict   *)
 (*               and fails without it: the code keeps nothing across a     *)
 (*               restart, so a restart is the same as a tick)              *)
+(* Witnesses (BUG, a rule that is not the code's; TLC must violate the     *)
+(* property): "dup" lists the node's own addresses without leaving out     *)
+(* those already listed (CandLocal); "refldup" is the rule the code had    *)
+(* before an address several relays report was listed once: one entry per *)
+(* relay that reported it (CandDistinct); "nocap" ignores the cap          *)
+(* (CandCap); "anyfrom" and "anynonce" take an answer from any address or  *)
+(* for any nonce (Observed).                                               *)
 (***************************************************************************)
 EXTENDS ConnectOwnOps, TLC
 
@@ -53,6 +63,12 @@ CandsB ==
     ELSE IF BUG = "nocap" THEN
         LET r0 == ReflList(cf, S)
             F[i \in 0..Len(S.local)] == IF i = 0 THEN r0 ELSE IF ~InSeq(F[i - 1], S.local[i]) THEN Append(F[i - 1], S.local[i]) ELSE F[i - 1]
+        IN F[Len(S.local)]
+    ELSE IF BUG = "refldup" THEN
+        LET R[k \in 0..Len(S.refl)] == IF k = 0 THEN <<>> ELSE IF S.refl[k] # 0 THEN Append(R[k - 1], S.refl[k]) ELSE R[k - 1]
+            r0 == SubSeq(R[Len(S.refl)], 1, Min(Len(R[Len(S.refl)]), Cap))
+            F[i \in 0..Len(S.local)] == IF i = 0 THEN r0
+                ELSE IF Len(F[i - 1]) < Cap /\ ~InSeq(F[i - 1], S.local[i]) THEN Append(F[i - 1], S.local[i]) ELSE F[i - 1]
         IN F[Len(S.local)]
     ELSE Cands(cf, S)
 
@@ -98,6 +114,7 @@ CandLocal == job.made =>
     /\ \A i \in 1..Len(t) : ~InSeq(job.rl, t[i]) /\ InSeq(job.loc, t[i])
     /\ (Len(job.addrs) < Cap => \A i \in 1..Len(job.loc) : InSeq(job.addrs, job.loc[i]))
 CandOnly == job.made => SetOf(job.addrs) \subseteq SetOf(job.rl) \cup SetOf(job.loc)
+CandDistinct == job.made => Dist(job.addrs)
 SeqIsWall == job.made => job.seq # 0
 SeqAbove == job.made => job.seq > job.prev
 

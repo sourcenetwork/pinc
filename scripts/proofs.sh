@@ -315,6 +315,7 @@ par witness_tlc connect_records_lookall ConnectRecords ConnectRecords_lookall Lo
 par run_tlc connect_own ConnectOwn ConnectOwn
 par witness_tlc connect_own_samewall ConnectOwn ConnectOwn_samewall SeqAbove
 par witness_tlc connect_own_dup ConnectOwn ConnectOwn_dup CandLocal
+par witness_tlc connect_own_refldup ConnectOwn ConnectOwn_refldup CandDistinct
 par witness_tlc connect_own_nocap ConnectOwn ConnectOwn_nocap CandCap
 par witness_tlc connect_own_anyfrom ConnectOwn ConnectOwn_anyfrom Observed
 par witness_tlc connect_own_anynonce ConnectOwn ConnectOwn_anynonce Observed
