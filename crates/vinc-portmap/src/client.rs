@@ -1,12 +1,12 @@
-//! The port-mapping client: one UDP mapping of the node's socket, asked for with PCP, then NAT-PMP, then UPnP-IGD.
+//! The port-mapping client: one UDP mapping of the node's socket, asked for with PCP, then NAT-PMP, then `UPnP`-IGD.
 //!
 //! **Asking.** With the gateway's address known, the client sends a PCP MAP request to it (three tries, 250 ms apart
 //! and doubling). A NAT-PMP answer to it, an unsupported-version result, or silence moves on to NAT-PMP: the external
-//! address request, then the UDP mapping request. Silence or a refusal there moves on to UPnP: an SSDP search, the
-//! gateway's description, its external address and AddPortMapping, over HTTP the host carries ([`PortMap::poll_http`]).
-//! PCP and UPnP need the client's own address (it is in their messages), so a socket on the unspecified address tries
-//! NAT-PMP only; with no gateway known only UPnP is tried, and an answer from another address than the gateway's is
-//! not taken. UPnP searches only from a private IPv4 address, takes a description only from the host that answered
+//! address request, then the UDP mapping request. Silence or a refusal there moves on to `UPnP`: an SSDP search, the
+//! gateway's description, its external address and `AddPortMapping`, over HTTP the host carries ([`PortMap::poll_http`]).
+//! PCP and `UPnP` need the client's own address (it is in their messages), so a socket on the unspecified address tries
+//! NAT-PMP only; with no gateway known only `UPnP` is tried, and an answer from another address than the gateway's is
+//! not taken. `UPnP` searches only from a private IPv4 address, takes a description only from the host that answered
 //! (and the gateway's, when it is known), and sends HTTP to no other host. When every protocol failed the client tries again after [`RETRY`].
 //!
 //! A grant whose external address no peer on the internet could send to (unspecified, loopback, multicast, link-local or
@@ -23,7 +23,7 @@
 //! itself the grant that renews it.
 //!
 //! **Releasing.** [`PortMap::stop`] drops the mapping and asks the gateway to delete it: PCP and NAT-PMP with a
-//! lifetime of 0, UPnP with DeletePortMapping. The client does nothing more afterwards.
+//! lifetime of 0, `UPnP` with `DeletePortMapping`. The client does nothing more afterwards.
 //!
 //! Invariants: [`PortMap::mapped`] is a mapping the gateway granted and whose lease has not ended on the client's clock,
 //! and none after [`PortMap::stop`]; an answer is taken only from the gateway (or, for SSDP, from port 1900 of it) and
@@ -52,7 +52,7 @@ pub const SSDP_GAP: u64 = SEC;
 pub const HTTP_WAIT: u64 = 3 * SEC;
 /// The wait before asking again when every protocol failed.
 pub const RETRY: u64 = 300 * SEC;
-/// The external ports AddPortMapping tries when the gateway says the port is taken.
+/// The external ports `AddPortMapping` tries when the gateway says the port is taken.
 pub const CONFLICT_TRIES: u8 = 3;
 
 /// A protocol that maps ports.
@@ -62,7 +62,7 @@ pub enum Proto {
     Pcp,
     /// NAT-PMP, RFC 6886.
     NatPmp,
-    /// UPnP-IGD.
+    /// `UPnP`-IGD.
     Upnp,
 }
 
@@ -93,7 +93,7 @@ fn bump(c: &mut u64) {
 pub struct Config {
     /// The default gateway, when the host knows it.
     pub gateway: Option<IpAddr>,
-    /// The node's socket: the address in PCP and UPnP requests and the port mapped.
+    /// The node's socket: the address in PCP and `UPnP` requests and the port mapped.
     pub local: SocketAddr,
     /// The lease asked for, in seconds.
     pub lifetime: u32,
@@ -736,7 +736,7 @@ impl PortMap {
     }
 
     /// The mapping a request in flight may have made at the gateway: a PCP or NAT-PMP request that left, or an
-    /// AddPortMapping that was sent.
+    /// `AddPortMapping` that was sent.
     fn in_flight(&self) -> Option<Lease> {
         let proto = match self.step {
             Step::Pcp => Proto::Pcp,

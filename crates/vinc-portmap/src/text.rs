@@ -1,4 +1,4 @@
-//! Byte-text helpers for the UPnP leg: a bounded writer, searching, and the few number and address forms HTTP and the
+//! Byte-text helpers for the `UPnP` leg: a bounded writer, searching, and the few number and address forms HTTP and the
 //! IGD's XML carry.
 //!
 //! Invariants: nothing reads past its slice, allocates or panics; the writer never writes past its buffer and reports

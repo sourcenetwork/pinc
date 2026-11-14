@@ -1,5 +1,5 @@
-//! UPnP-IGD, minimal and bounded: the SSDP search, the gateway's description, and the three WANIPConnection calls a
-//! client needs (GetExternalIPAddress, AddPortMapping, DeletePortMapping), over HTTP/1.0 so no response is chunked.
+//! `UPnP`-IGD, minimal and bounded: the SSDP search, the gateway's description, and the three `WANIPConnection` calls a
+//! client needs (`GetExternalIPAddress`, `AddPortMapping`, `DeletePortMapping`), over HTTP/1.0 so no response is chunked.
 //!
 //! - **Search.** [`M_SEARCH`] goes to `239.255.255.250:1900`; an answer is `HTTP/1.1 200` with a `LOCATION` header
 //!   naming the description: `http://<IPv4>[:port]/<path>`, the only form taken ([`parse_location`]), and never a
@@ -171,12 +171,12 @@ fn host(o: &mut Out<'_>, a: SocketAddr) {
     }
 }
 
-/// A WANIPConnection call.
+/// A `WANIPConnection` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Call {
-    /// GetExternalIPAddress.
+    /// `GetExternalIPAddress`.
     ExternalIp,
-    /// AddPortMapping of UDP `external` to `client:internal` for `lease` seconds (0: as long as the gateway keeps it).
+    /// `AddPortMapping` of UDP `external` to `client:internal` for `lease` seconds (0: as long as the gateway keeps it).
     Add {
         /// The external port.
         external: u16,
@@ -187,7 +187,7 @@ pub enum Call {
         /// Seconds.
         lease: u32,
     },
-    /// DeletePortMapping of UDP `external`.
+    /// `DeletePortMapping` of UDP `external`.
     Delete {
         /// The external port.
         external: u16,
@@ -255,13 +255,13 @@ pub fn soap(url: &Url, service: usize, call: &Call, out: &mut [u8]) -> Option<us
 pub enum SoapResult<'a> {
     /// `200`, with the body.
     Ok(&'a [u8]),
-    /// A UPnP error code.
+    /// A `UPnP` error code.
     Fault(u32),
 }
 
-/// The UPnP error: the gateway keeps only leases of duration 0.
+/// The `UPnP` error: the gateway keeps only leases of duration 0.
 pub const ONLY_PERMANENT_LEASES: u32 = 725;
-/// The UPnP error: the external port is mapped to another client.
+/// The `UPnP` error: the external port is mapped to another client.
 pub const CONFLICT: u32 = 718;
 
 /// The result of a SOAP answer; `None` for anything but a `200` or a `500` with an `<errorCode>`.
@@ -273,7 +273,7 @@ pub fn soap_result(resp: &[u8]) -> Option<SoapResult<'_>> {
     }
 }
 
-/// The address a GetExternalIPAddress answer names.
+/// The address a `GetExternalIPAddress` answer names.
 pub fn external_ip(body: &[u8]) -> Option<Ipv4Addr> {
     parse_ip4(element(body, 0, b"NewExternalIPAddress")?.0)
 }

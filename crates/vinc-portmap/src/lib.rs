@@ -1,7 +1,7 @@
 //! VINC port mapping: a SANS-IO client that asks the home gateway for a UDP mapping of the node's socket, so a node
 //! behind a home router can be reached directly (SYS-CON-03).
 //!
-//! The client ([`PortMap`]) talks PCP (RFC 6887), falls back to NAT-PMP (RFC 6886) and then to UPnP-IGD, renews the
+//! The client ([`PortMap`]) talks PCP (RFC 6887), falls back to NAT-PMP (RFC 6886) and then to `UPnP`-IGD, renews the
 //! lease half way, notices a gateway that restarted by its epoch, and deletes the mapping when stopped. It has no
 //! clock, socket or thread: the host hands it time, the datagrams it [`owns`](PortMap::owns) and the answers to its
 //! HTTP requests, and takes the datagrams and HTTP requests it wants sent ([`PortMap::poll_datagram`],
@@ -11,10 +11,6 @@
 //! arithmetic is in [`lease`].
 #![no_std]
 #![forbid(unsafe_code)]
-#![allow(
-    clippy::doc_markdown,
-    reason = "UPnP and its action names (AddPortMapping) are protocol prose, not code"
-)]
 
 pub mod addr;
 pub mod client;
