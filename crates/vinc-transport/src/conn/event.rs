@@ -60,6 +60,9 @@ pub enum CloseReason {
     /// A dial told to end early ([`Connection::end_unanswered`](super::Connection::end_unanswered)) had no answer to
     /// its first 4 flights.
     Unanswered,
+    /// A dialing side established, but the peer showed no sign of holding the session (no 1-RTT packet) within the
+    /// connect limit after that (30 s, or 60 s on a thin node).
+    Unconfirmed,
 }
 
 impl fmt::Display for CloseReason {
@@ -73,6 +76,7 @@ impl fmt::Display for CloseReason {
             Self::Handshake(e) => write!(f, "the handshake failed: {e}"),
             Self::HandshakeTimeout => f.write_str("the handshake took too long"),
             Self::Unanswered => f.write_str("the peer did not answer the handshake"),
+            Self::Unconfirmed => f.write_str("the peer never confirmed the session"),
         }
     }
 }

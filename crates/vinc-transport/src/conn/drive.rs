@@ -132,6 +132,9 @@ conn_impl! {
                 CloseReason::HandshakeTimeout
             });
         }
+        if self.hs.unconfirmed() && self.phase == Phase::Connected {
+            self.silent_close(CloseReason::Unconfirmed);
+        }
         if self.hs.take_fresh() {
             self.fan_mask = self.fan_set;
         }

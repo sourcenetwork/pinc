@@ -538,3 +538,28 @@ fn a_dial_that_began_before_the_node_measured_itself_slow_keeps_the_longer_limit
         assert_eq!(net.a.closed(), Some(CloseReason::HandshakeTimeout));
     });
 }
+
+/// A dialing side that established but whose Finish never reaches the responder (the responder's own handshake runs
+/// out) ends the session as unconfirmed 30 s after it established, instead of holding it until the idle timeout:
+/// the layer above then dials again (vinc#385).
+#[test]
+fn a_session_the_peer_never_confirms_ends_unconfirmed_after_the_connect_limit() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let link = Link::new(54, Params::new(10 * MS));
+        let mut net = setup(&mut w, &mut sa, &mut sb, link);
+        // The Finish is lost, and once A holds the session nothing else it sends reaches B.
+        net.drop_finish = true;
+        let t0 = net.now;
+        assert!(net.run(t0 + 5_000 * MS, |n| n.a.conn.is_connected()));
+        let est = net.now;
+        net.link.route(PathId(1)).ab.p.loss_ppm = 1_000_000;
+        net.run(est + 29_000 * MS, |_| false);
+        assert_eq!(net.a.closed(), None, "still waiting for the peer within the limit");
+        net.run(est + 31_000 * MS, |_| false);
+        assert_eq!(net.a.closed(), Some(CloseReason::Unconfirmed));
+        // The responder never held it: its handshake ran out.
+        assert_eq!(net.b.closed(), Some(CloseReason::HandshakeTimeout));
+    });
+}
