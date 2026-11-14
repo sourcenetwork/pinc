@@ -5,8 +5,9 @@
 //! membership, backs the dial off and, at a hub, may adopt the member's older live session. Every other event is the
 //! application's and passes through unchanged.
 //!
-//! Invariants: a hub-protocol session produces no stream event for the application (its lifecycle events pass); a frame is parsed only from bytes of a session
-//! of its peer; a stream that breaks the framing is reset and forgotten, never guessed at.
+//! Invariants: a hub-protocol session produces no stream event for the application, not even a stop of its stream (its
+//! lifecycle events pass); a frame is parsed only from bytes of a session of its peer; a
+//! stream that breaks the framing is reset and forgotten, never guessed at.
 
 use vinc_core::{Command, EndReason, Event, PathState, Role, SessionId};
 use vinc_membership::NodeId;
@@ -46,6 +47,8 @@ where
                 e
             } else if let Some(e) = self.io.evq.pop_front() {
                 e
+            } else if !self.io.out.can_take() {
+                break;
             } else if let Some(e) = self.io.ep.poll_event() {
                 e
             } else {
@@ -109,6 +112,11 @@ where
             Event::StreamReset { session, stream, .. } if self.io.sess.contains_key(&session) => {
                 self.io.drop_strm(session, stream);
             }
+            Event::StreamStopped { session, stream, .. } if self.io.sess.contains_key(&session) => {
+                self.hub_stream_stopped(session, stream);
+            }
+            // The hub streams are opened by the duty pass and the dial, which try again on their own.
+            Event::OpenReady { session } if self.io.sess.contains_key(&session) => {}
             Event::AcpCheck { check, node, .. } if self.io.revoked.contains(&node.bytes) => {
                 // A revoked peer is refused here; the application never hears of the check.
                 let _ = self.io.cmd(Command::AcpAnswer { check, allow: false });
@@ -372,6 +380,23 @@ where
         };
         l.out = Some(stream);
         self.io.flush_queue(&peer, session, stream);
+    }
+
+    /// The peer stopped a stream we write on: it is forgotten, so a session left without a write stream gets a fresh
+    /// one from the duty pass.
+    fn hub_stream_stopped(&mut self, session: SessionId, stream: StreamId) {
+        let Some(peer) = self.io.sess.get(&session).map(|s| s.peer) else {
+            return;
+        };
+        self.io.drop_strm(session, stream);
+        if let Some(l) = self.io.links.get_mut(&peer).filter(|l| l.conn == Some(session)) {
+            if l.out == Some(stream) {
+                l.out = None;
+            }
+            if l.fan == Some(stream) {
+                l.fan = None;
+            }
+        }
     }
 
     /// Bytes arrived on a hub stream: collect them, parse the whole frames and hand them to membership.

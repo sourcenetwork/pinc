@@ -1174,3 +1174,7 @@ path = "trace_early.rs"
 [[test]]
 name = "node_event_queue"
 path = "node_event_queue.rs"
+
+[[test]]
+name = "node_hub_stream_stop"
+path = "node_hub_stream_stop.rs"
