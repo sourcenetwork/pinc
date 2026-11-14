@@ -1236,6 +1236,10 @@ name = "node_refused_dial"
 path = "node_refused_dial.rs"
 
 [[test]]
+name = "node_hub_reserve"
+path = "node_hub_reserve.rs"
+
+[[test]]
 name = "node_route_owner"
 path = "node_route_owner.rs"
 

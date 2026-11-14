@@ -24,8 +24,8 @@ use vinc_transport::stream::{RecvStatus, StreamError, StreamId};
 
 use crate::bound;
 use crate::config::{
-    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, DENY_CAP, DENY_FIRST, EVENT_CAP, EVENT_HIGH, EVENT_LOW, Nanos,
-    QUEUE_FRAMES, Store, TABLE_MAX,
+    BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, DENY_CAP, DENY_FIRST, EVENT_CAP, EVENT_HIGH, EVENT_LOW,
+    HUB_RESERVE_MAX, Nanos, QUEUE_FRAMES, Store, TABLE_MAX,
 };
 use crate::ep::Ep;
 use crate::event::NodeEvent;
@@ -277,6 +277,12 @@ impl<E: Ep, St: Store> Io<E, St> {
 
     pub(crate) fn is_hub_id(&self, id: &NodeId) -> bool {
         self.hubs.contains(id)
+    }
+
+    /// The session table entries kept free for hub links: two per configured hub (its session, and the duplicate of
+    /// a simultaneous dial that lives until it is closed), at most [`HUB_RESERVE_MAX`].
+    pub(crate) fn hub_reserve(&self) -> usize {
+        self.hubs.len().saturating_mul(2).min(HUB_RESERVE_MAX)
     }
 
     /// The full node id of a peer: the algorithm learned from a session or a configured relay, else ours.

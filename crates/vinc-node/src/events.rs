@@ -168,10 +168,16 @@ where
 
     // ---------------------------------------------------------------- sessions
 
-    /// Whether the session table can record `session`. One it cannot is closed before it touches anything, as a
-    /// layer's is: unrecorded, its streams would be taken for the application's.
-    fn admit(&mut self, session: SessionId) -> bool {
-        if self.io.sess.len() < TABLE_MAX || self.io.sess.contains_key(&session) {
+    /// Whether the session table can record `session` of `peer`. A link to a hub may take any free entry, a member's
+    /// session only one the room kept for the hub links leaves. One it cannot record is closed before it touches
+    /// anything, as a layer's is: unrecorded, its streams would be taken for the application's.
+    fn admit(&mut self, session: SessionId, peer: &NodeId) -> bool {
+        let reserve = if self.io.is_hub_id(peer) {
+            0
+        } else {
+            self.io.hub_reserve()
+        };
+        if self.io.sess.len().saturating_add(reserve) < TABLE_MAX || self.io.sess.contains_key(&session) {
             return true;
         }
         self.io.shed(session);
@@ -205,7 +211,7 @@ where
         let peer = node.bytes;
         self.io.learn_alg(node);
         self.io.connecting.remove(&peer);
-        if !self.admit(session) {
+        if !self.admit(session, &peer) {
             // The session table has no room for the link: redial after the backoff a closed session gets, not on
             // every duty pass.
             self.io.backoff(&peer);
@@ -235,7 +241,7 @@ where
     fn hub_incoming(&mut self, now: Nanos, session: SessionId, node: &vinc_crypto::NodeId) {
         let peer = node.bytes;
         self.io.learn_alg(node);
-        if !self.admit(session) {
+        if !self.admit(session, &peer) {
             return;
         }
         let role = if self.io.is_hub_id(&peer) {

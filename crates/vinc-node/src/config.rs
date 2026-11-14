@@ -40,6 +40,9 @@ pub(crate) const DUTY_HUB: Nanos = S;
 pub const QUEUE_FRAMES: usize = 256;
 /// The most entries of the dial backoff table and of the peer tables.
 pub(crate) const TABLE_MAX: usize = 4096;
+/// The most session table entries kept free for hub links: a member's session is refused once this many or fewer are
+/// free, so a hub the members filled the table of can still link to the other hubs.
+pub(crate) const HUB_RESERVE_MAX: usize = 64;
 /// The most events queued for the application between two polls.
 pub(crate) const EVENT_CAP: usize = 8192;
 /// The node stops taking events from the endpoint at this many queued events, so the layers' own events from one
