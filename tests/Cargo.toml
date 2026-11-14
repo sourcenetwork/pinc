@@ -708,6 +708,10 @@ name = "broadcast_restore"
 path = "broadcast_restore.rs"
 
 [[test]]
+name = "broadcast_subscribed"
+path = "broadcast_subscribed.rs"
+
+[[test]]
 name = "broadcast_wire"
 path = "broadcast_wire.rs"
 

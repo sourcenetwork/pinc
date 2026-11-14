@@ -60,6 +60,10 @@ pub enum Ev {
         hub: NodeId,
         topic: Vec<u8>,
     },
+    Subscribed {
+        hub: NodeId,
+        topic: Vec<u8>,
+    },
     Acp {
         id: u32,
         origin: NodeId,
@@ -169,6 +173,10 @@ impl Host for NodeHost {
                 to: *to,
             },
             Event::Restored { hub, topic } => Ev::Restored {
+                hub: *hub,
+                topic: topic.to_vec(),
+            },
+            Event::Subscribed { hub, topic } => Ev::Subscribed {
                 hub: *hub,
                 topic: topic.to_vec(),
             },
@@ -465,6 +473,10 @@ impl Net {
 
     pub fn subscribe(&mut self, i: usize, topic: &[u8]) {
         self.call(i, |t, h, now| t.subscribe(h, now, topic).unwrap());
+    }
+
+    pub fn unsubscribe(&mut self, i: usize, topic: &[u8]) {
+        self.call(i, |t, h, _| t.unsubscribe(h, topic));
     }
 
     pub fn publish(&mut self, i: usize, topic: &[u8], body: &[u8]) -> [u8; 8] {

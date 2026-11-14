@@ -90,6 +90,15 @@ pub enum Event<'a> {
         /// The message id.
         mid: [u8; 8],
     },
+    /// Member: a hub's subscriber set for a topic this node subscribes to lists this node, the first time since it
+    /// subscribed. The hub holds the subscription: a message published to the topic through it from now on reaches
+    /// this node.
+    Subscribed {
+        /// The hub.
+        hub: &'a NodeId,
+        /// The topic.
+        topic: &'a [u8],
+    },
     /// A message was sent straight to a subscriber because no hub is reachable.
     Fallback {
         /// The topic.

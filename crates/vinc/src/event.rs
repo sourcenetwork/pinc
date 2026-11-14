@@ -38,6 +38,14 @@ pub enum Event {
         /// The bytes published.
         payload: Vec<u8>,
     },
+    /// A hub holds this endpoint's subscription to `topic`, the first time since it joined: a message published to the
+    /// topic through that hub from now on arrives. A join returns before any hub knows of it.
+    Joined {
+        /// The topic.
+        topic: Vec<u8>,
+        /// The hub.
+        hub: NodeId,
+    },
     /// With [`Builder::connected_topics`](crate::Builder::connected_topics): the hubs were not told every peer this
     /// endpoint holds sessions with, so they reach it from part of its component only. `named` is how many they were
     /// told: the first [`ADJ_MAX`](vinc_broadcast::consts::ADJ_MAX) when there are more, or `None` when the record

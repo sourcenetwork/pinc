@@ -97,6 +97,7 @@ impl Topics {
         let st = self.topic(topic).ok_or(Refused::TopicsFull)?;
         if !st.sub {
             st.sub = true;
+            st.confirmed = false;
             if let Some(p) = self.primary {
                 let since = h.wall_ms();
                 self.send_sub(h, &p, topic, since, false);
@@ -113,6 +114,7 @@ impl Topics {
         if !core::mem::replace(&mut st.sub, false) {
             return;
         }
+        st.confirmed = false;
         if let Some(p) = self.primary.filter(|p| *p != self.me)
             && wire::build(&mut self.scratch, ty::UNSUB, topic, &[]).is_ok()
         {
