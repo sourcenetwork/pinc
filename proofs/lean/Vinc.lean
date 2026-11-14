@@ -71,6 +71,7 @@ import Vinc.TransportCidCode
 import Vinc.TraceCid
 import Vinc.TransportCc
 import Vinc.TransportCcThm
+import Vinc.TransportFinish
 import Vinc.TraceCc
 import Vinc.TransportPn
 import Vinc.TracePn
