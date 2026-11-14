@@ -155,7 +155,8 @@ pub enum Nat {
     #[default]
     None,
     /// The mapping keeps the source port and replies are accepted only from the address and port a node sent to
-    /// (Linux masquerading): endpoint-independent mapping, address-and-port-dependent filtering.
+    /// (Linux masquerading, with unsolicited packets dropped before conntrack keeps them): endpoint-independent
+    /// mapping, address-and-port-dependent filtering (RFC 4787).
     PortRestricted,
     /// A new random port for every destination: endpoint-dependent mapping, the hardest case for hole punching.
     Symmetric,

@@ -1,0 +1,53 @@
+name = "punch-port-restricted"
+about = "Two nodes each behind a port-restricted home router, a public relay and hub: the pair punches, and the relay carries only the start of the dial."
+stacks = ["vinc"]
+repetitions = 3
+
+[[sites]]
+name = "home1"
+nat = "port-restricted"
+
+[[sites]]
+name = "home2"
+nat = "port-restricted"
+
+[[sites]]
+name = "public"
+
+[[nodes]]
+name = "consumer"
+site = "home1"
+
+[[nodes]]
+name = "provider"
+site = "home2"
+
+[[nodes]]
+name = "relay"
+site = "public"
+role = "relay"
+
+[[nodes]]
+name = "hub"
+site = "public"
+role = "hub"
+
+[[links]]
+a = "home1"
+b = "public"
+shape = { delay_ms = 10, rate_mbit = 50 }
+reverse = { rate_mbit = 200 }
+
+[[links]]
+a = "home2"
+b = "public"
+shape = { delay_ms = 15, rate_mbit = 20 }
+reverse = { rate_mbit = 100 }
+
+[workload]
+kind = "sync"
+providers = ["provider"]
+consumers = ["consumer"]
+sizes = [1048576, 8388608]
+timeout_s = 180
+warmup_s = 8

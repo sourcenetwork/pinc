@@ -7,7 +7,7 @@
 //! - Link `k` between two routers is a /30 from `100.64.0.0/10`: `w<k>` on both routers.
 //! - Every router routes every routed LAN and every link subnet over the path of fewest links (least delay between
 //!   equals). A site behind address
-//!   translation is not routed: its router masquerades the LAN out of its links.
+//!   translation is not routed: its router masquerades the LAN out of its links and drops unsolicited packets.
 //! - Shaping happens only in routers, on packets that are already MTU-sized: a node's `eth0` segments every
 //!   offloaded batch before it leaves the node (`gso_max_segs 1`), so a shaper never loses a whole batch at once.
 //!   The node-to-router direction of an access link is shaped on the ingress of the router's port, redirected
@@ -510,6 +510,25 @@ impl Plan {
                     args.push("--random-fully");
                 }
                 c.push(Cmd::new(Tool::Iptables, &args));
+                // A home router drops an unsolicited packet. Accepted, it would leave a conntrack entry whose reply
+                // tuple is the router's own next packet to that sender, so masquerade would give that packet another
+                // port: a peer's early punch would make the mapping endpoint-dependent. Dropped before the entry is
+                // confirmed, it leaves nothing.
+                c.push(Cmd::new(
+                    Tool::Iptables,
+                    &[
+                        "-A",
+                        "INPUT",
+                        "-i",
+                        &l.dev,
+                        "-m",
+                        "conntrack",
+                        "--ctstate",
+                        "NEW,INVALID",
+                        "-j",
+                        "DROP",
+                    ],
+                ));
             }
         }
         let Some(hops) = hops else { return c };
