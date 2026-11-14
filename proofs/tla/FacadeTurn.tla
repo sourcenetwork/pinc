@@ -39,9 +39,16 @@
 (*    so each is released once, by the future that took it (TicketsLive); *)
 (*  - a slot keeps only its holder's waker, and a waiting future's waker   *)
 (*    is kept (WakerOwner, WaitArmed);                                     *)
-(*  - the slab's own invariants (QueueOnce, WakerQueued, FreeExact,        *)
+(*  - the slab's own invariants (QueueOnce: StandbyOps' QueueLive and      *)
+(*    QueueExact, so the live entries of the queue are exactly the tickets *)
+(*    of the queued slots, once each, and the queue holds at most twice as *)
+(*    many entries as the slab has slots; WakerQueued, FreeExact,          *)
 (*    SlabBound: the slab is as long as the most futures that held a       *)
-(*    ticket at once);                                                     *)
+(*    ticket at once). Every ticket a future allocates is armed in the     *)
+(*    same poll, so each reuse of a slot queues an entry: in               *)
+(*    FacadeTurn_wrap a slot's generation wraps (GENS = 5 is more than     *)
+(*    twice the slab) and the stale entry of its old ticket is compacted   *)
+(*    away before the slot is taken at that generation again;              *)
 (*  - every datagram the host delivered is either still with the host or   *)
 (*    was handed to the core, exactly once and in order (FedExact), and a  *)
 (*    poll reads at most DRAIN (DrainBound);                               *)
@@ -55,7 +62,10 @@
 (* Witnesses: FacadeTurn_nopass (a future that ends while the flag is free *)
 (* does not pass the baton on: the one it was offered to is dropped and a  *)
 (* waiting future is stranded, RoleOffered fails); FacadeTurn_drain (a     *)
-(* poll stops at DRAIN with datagrams still waiting at the host).          *)
+(* poll stops at DRAIN with datagrams still waiting at the host);          *)
+(* FacadeTurn_wrapfew (GENS = 3, not more than twice the slab: a slot is   *)
+(* taken at the generation of a stale entry before the queue is long       *)
+(* enough to compact it, and QueueOnce fails).                             *)
 (* Assumed of the host (#246 (c)): its executor polls every woken future;  *)
 (* a dropped receive future loses no datagram; sleep(at) does not finish   *)
 (* before at; every future runs on the thread that built the endpoint, so  *)
@@ -188,9 +198,7 @@ TicketsLive == /\ \A f \in F : st[f] = "off" => tk[f] = NoTicket /\ ~drv[f]
 WakerOwner == \A i \in 0..Len(sb.slots) - 1 :
                   Slot(sb, i).waker # 0 => Slot(sb, i).waker \in Held /\ tk[Slot(sb, i).waker][1] = i
 WaitArmed == \A f \in F : st[f] = "wait" => f \in Held /\ Slot(sb, tk[f][1]).waker = f
-QueueOnce == /\ Distinct(sb.queue)
-             /\ \A k \in DOMAIN sb.queue : Has(sb, sb.queue[k])
-             /\ \A i \in 0..Len(sb.slots) - 1 : Slot(sb, i).queued <=> i \in Range(sb.queue)
+QueueOnce == QueueLive(sb) /\ QueueExact(sb)
 WakerQueued == \A i \in 0..Len(sb.slots) - 1 : Slot(sb, i).waker # 0 => Slot(sb, i).live /\ Slot(sb, i).queued
 FreeExact == /\ Distinct(sb.free)
              /\ Range(sb.free) = {i \in 0..Len(sb.slots) - 1 : ~Slot(sb, i).live}

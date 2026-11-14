@@ -11,10 +11,10 @@
 (* as the code does, is slots[i + 1]), each [gen, waker, queued, live]     *)
 (* with waker 0 for none and the number of a waker otherwise; free (the    *)
 (* code's Vec used as a stack: push appends, pop takes the last); queue    *)
-(* (the VecDeque, front first). A ticket is <<idx, gen>>. gens is the      *)
-(* number of generations, 2^32 in the code (u32 wrapping_add). Every call  *)
-(* that can wake returns w, the wakers woken in the order the code wakes   *)
-(* them.                                                                   *)
+(* (the VecDeque of tickets, front first). A ticket is <<idx, gen>>. gens  *)
+(* is the number of generations, 2^32 in the code (u32 wrapping_add).      *)
+(* Every call that can wake returns w, the wakers woken in the order the   *)
+(* code wakes them.                                                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -37,11 +37,16 @@ Alloc(s) ==
     ELSE [t |-> <<Len(s.slots), 0>>,
           s |-> [s EXCEPT !.free = IF @ = <<>> THEN @ ELSE Pop(@), !.slots = Append(@, NewSlot)]]
 
-\* arm: keep the waker, and queue the slot unless it is queued already
+\* the entries of the queue whose ticket names a live slot of its generation, in order (drop_stale keeps these)
+LiveEntries(s) == SelectSeq(s.queue, LAMBDA t : Valid(s, t))
+
+\* arm: keep the waker; unless the slot is queued, queue the ticket at the back, first dropping the stale entries when
+\* the queue holds twice as many entries as the slab has slots
 Arm(s, t, w) ==
     IF ~Valid(s, t) THEN s
     ELSE IF Slot(s, t[1]).queued THEN [s EXCEPT !.slots[t[1] + 1].waker = w]
-    ELSE [s EXCEPT !.slots[t[1] + 1].waker = w, !.slots[t[1] + 1].queued = TRUE, !.queue = Append(@, t[1])]
+    ELSE [s EXCEPT !.slots[t[1] + 1].waker = w, !.slots[t[1] + 1].queued = TRUE,
+                   !.queue = Append(IF Len(@) >= 2 * Len(s.slots) THEN LiveEntries(s) ELSE @, t)]
 
 \* notify: take the waker of the ticket's slot and wake it
 Notify(s, t) ==
@@ -49,17 +54,17 @@ Notify(s, t) ==
     THEN [w |-> <<Slot(s, t[1]).waker>>, s |-> [s EXCEPT !.slots[t[1] + 1].waker = 0]]
     ELSE [w |-> <<>>, s |-> s]
 
-\* baton: pop the queue from the front; each popped slot is no longer queued; the first one that is live and has a
-\* waker gives it up and is woken, and the loop ends
+\* baton: pop the queue from the front; an entry whose ticket is stale is dropped and its slot left as it is; the slot
+\* of a live one is no longer queued, and the first live one with a waker gives it up and is woken, and the loop ends
 RECURSIVE Baton(_)
 Baton(s) ==
     IF s.queue = <<>> THEN [w |-> <<>>, s |-> s]
-    ELSE LET i == Head(s.queue)
+    ELSE LET t == Head(s.queue)
              s1 == [s EXCEPT !.queue = Tail(@)]
-         IN IF ~Has(s, i) THEN Baton(s1)
-            ELSE LET s2 == [s1 EXCEPT !.slots[i + 1].queued = FALSE]
-                 IN IF Slot(s, i).live /\ Slot(s, i).waker # 0
-                    THEN [w |-> <<Slot(s, i).waker>>, s |-> [s2 EXCEPT !.slots[i + 1].waker = 0]]
+         IN IF ~Valid(s, t) THEN Baton(s1)
+            ELSE LET s2 == [s1 EXCEPT !.slots[t[1] + 1].queued = FALSE]
+                 IN IF Slot(s, t[1]).waker # 0
+                    THEN [w |-> <<Slot(s, t[1]).waker>>, s |-> [s2 EXCEPT !.slots[t[1] + 1].waker = 0]]
                     ELSE Baton(s2)
 
 \* notify_all: every live slot with a waker gives it up and is woken, in the order of the slots
@@ -70,14 +75,37 @@ NotifyAll(s) ==
         s |-> [s EXCEPT !.slots = [k \in 1..Len(s.slots) |->
                    IF Armed(s, k) THEN [s.slots[k] EXCEPT !.waker = 0] ELSE s.slots[k]]]]
 
-\* release: the slot is no longer live, its generation moves on (wrapping), its waker is dropped, and it goes on the
-\* free stack; the queue is left as it is
+\* release: the slot is no longer live nor queued, its generation moves on (wrapping), its waker is dropped, and it goes
+\* on the free stack; the entry of the ticket stays in the queue, stale, until the baton or a compaction drops it
 Release(s, t, gens) ==
     IF ~Valid(s, t) THEN s
     ELSE [s EXCEPT !.slots[t[1] + 1].live = FALSE, !.slots[t[1] + 1].gen = (@ + 1) % gens,
-                   !.slots[t[1] + 1].waker = 0, !.free = Append(@, t[1])]
+                   !.slots[t[1] + 1].waker = 0, !.slots[t[1] + 1].queued = FALSE, !.free = Append(@, t[1])]
 
 Range(q) == {q[k] : k \in DOMAIN q}
 Distinct(q) == \A j, k \in DOMAIN q : q[j] = q[k] => j = k
 Lives(s) == {i \in 0..Len(s.slots) - 1 : Slot(s, i).live}
+
+\* The queue's own invariants. Always: every entry names a slot of the slab, and a queued slot is live with the
+\* entry of its ticket in the queue (QueueLive). While no stale entry names a live slot again: the slot of every live
+\* entry is queued, no ticket has two live entries, and the queue holds at most twice as many entries as the slab has
+\* slots (QueueExact).
+QueueLive(s) == /\ \A k \in DOMAIN s.queue : Has(s, s.queue[k][1])
+                /\ \A i \in 0..Len(s.slots) - 1 :
+                       Slot(s, i).queued => Slot(s, i).live /\ <<i, Slot(s, i).gen>> \in Range(s.queue)
+QueueExact(s) == /\ \A k \in DOMAIN s.queue : Valid(s, s.queue[k]) => Slot(s, s.queue[k][1]).queued
+                 /\ Distinct(LiveEntries(s))
+                 /\ Len(s.queue) <= 2 * Len(s.slots)
+
+\* The documented order of the baton, kept beside the slab: the tickets waiting for the driving role, in the order they
+\* were queued. arm appends a live ticket that is not in it; release takes its ticket out; the baton offers the role to
+\* the first ticket whose slot is armed, and that one and every one before it leave the order (all, when none is
+\* armed). OrderWoken is what the documented order says the baton wakes.
+ArmedT(s, t) == Valid(s, t) /\ Slot(s, t[1]).waker # 0
+OrderHits(s, o) == {k \in DOMAIN o : ArmedT(s, o[k])}
+OrderFirst(s, o) == CHOOSE k \in OrderHits(s, o) : \A j \in OrderHits(s, o) : k <= j
+OrderArm(s, t, o) == IF Valid(s, t) /\ t \notin Range(o) THEN Append(o, t) ELSE o
+OrderRelease(s, t, o) == IF Valid(s, t) THEN SelectSeq(o, LAMBDA u : u # t) ELSE o
+OrderBaton(s, o) == IF OrderHits(s, o) = {} THEN <<>> ELSE SubSeq(o, OrderFirst(s, o) + 1, Len(o))
+OrderWoken(s, o) == IF OrderHits(s, o) = {} THEN <<>> ELSE <<Slot(s, o[OrderFirst(s, o)][1]).waker>>
 =============================================================================

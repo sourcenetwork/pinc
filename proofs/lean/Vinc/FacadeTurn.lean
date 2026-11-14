@@ -1,5 +1,5 @@
 import Vinc.Axioms
-import Vinc.FacadeStandbyThm
+import Vinc.FacadeStandbyOrder
 
 /-!
 # The drive's turn: one driver, no stale ticket, nothing the driver reads lost, the role never stranded
@@ -22,9 +22,12 @@ step and no borrow of the core is held across an await.
 Main theorems: `inv_reach` (with the code's settings every reachable state has at most one driver, exactly when the
 flag is set and holding the core's driver ticket; only tickets that name live slots of their generation, one future
 per slot, every live slot held; a slot's waker is its holder's and a waiting future's waker is kept; the slab's own
-invariant; every datagram delivered either still at the host or handed to the core once, in order; at most `drain`
-read in a poll; and, while the flag is free and a future that may drive waits, a future that may drive and holds a
-ticket is running or flushing), `pollWait_takes` (that future, polled, takes the role when its attempt waits) and
+invariant `FacadeStandby.Inv` (the exact queue of `FacadeStandby.QInv` is TLC's in the turn, `QueueOnce`, and is
+not carried here: it holds while no stale entry is revived, which in the turn needs a count of the entries queued
+since the entry went stale); every datagram delivered either still at the host or handed to the core once, in order;
+at most `drain` read in a poll; and, while the flag is free and a future that may drive waits, a future that may
+drive and holds a ticket is running or flushing), `pollWait_takes` (that future, polled, takes the role when its
+attempt waits) and
 `noPass_bad` (if a future that ends while the flag is free did not pass the baton on, a waiting future is stranded).
 -/
 
@@ -185,7 +188,8 @@ theorem valid_shape {s s' : S} {ws : List Nat} (hs : Shape s.slots s'.slots ws) 
     rw [this]; rfl
 
 theorem release_at {s : S} {t : Ticket} {sl : Slot} (h : slotOf s t = some sl) :
-    (release t s).slots[t.idx]? = some { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none } ∧
+    (release t s).slots[t.idx]? =
+      some { sl with live := false, gen := (sl.gen + 1) % GENS, waker := none, queued := false } ∧
     ∀ j, j ≠ t.idx → (release t s).slots[j]? = s.slots[j]? := by
   obtain ⟨hsl, _, _⟩ := slotOf_some.mp h
   have hlt := lt_of_get hsl
@@ -745,12 +749,13 @@ theorem ended_inv (c : Cfg) (hp : c.pass = true) (s : State) (h : Inv c s) (f : 
       · obtain ⟨u, sl, h1, h2, h3⟩ := h.wait_armed g hg1
         have h2' : (release t s.sb).slots[u.idx]? = some sl := by rw [hroth _ (other_idx g u h1 hgf)]; exact h2
         obtain ⟨w, hw⟩ := baton_one _ hinv1 u.idx sl h2' (by rw [h3]; rfl)
-        rcases baton_first _ hinv1 with ⟨h5, _, _⟩ | ⟨_, i, _, sli, w', _, _, h6, _, h8, h9, _⟩
+        rcases baton_first (release t s.sb) with ⟨h5, _, _⟩ | ⟨_, k, _, sli, w', _, _, hk, h8, h9, _⟩
         · rw [h5] at hw; cases hw
         · rw [hw] at h9; cases h9
-          have hit : i ≠ t.idx := by intro e; rw [e] at h6; rw [(dead_t sli h6).2] at h8; cases h8
-          rw [hroth i hit] at h6
-          obtain ⟨v, hv, hvi⟩ := h.waker_owner i sli w h6 h8
+          have h6 := (slotAt_some.mp hk).1
+          have hit : k.idx ≠ t.idx := by intro e; rw [e] at h6; rw [(dead_t sli h6).2] at h8; cases h8
+          rw [hroth k.idx hit] at h6
+          obtain ⟨v, hv, hvi⟩ := h.waker_owner k.idx sli w h6 h8
           have hwf : w ≠ f := by intro e; rw [e, htf] at hv; cases hv; exact hit hvi.symm
           have hwoff : s.st w ≠ .off := fun e => by rw [h.off_none w e] at hv; cases hv
           refine ⟨w, v, by rw [set_other _ _ _ _ hwf]; exact hv, ?_, by simp [canDrive, hrole]⟩
