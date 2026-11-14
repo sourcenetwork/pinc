@@ -204,20 +204,23 @@ fn a_nat_pmp_gateway_answers_the_fallback() {
 }
 
 #[test]
-fn a_restarted_pcp_gateway_announces_and_the_stale_mapping_is_dropped() {
+fn an_announce_brings_the_renewal_forward_and_the_renewal_finds_a_restart() {
     let mut pm = client(Some(GW), local(), 7200);
     sent(&mut pm);
     pm.handle_datagram(T0, gw(), &pcp_grant(1000, 4433, 7200));
     assert!(pm.mapped().is_some());
-    // ten seconds later the gateway says its epoch is 2: it lost its mappings
+    // ten seconds later an announce says the epoch is 2: nothing in it is checked, so the mapping stays
     pm.handle_datagram(T0 + 10 * SEC, gw(), &announce(2));
-    assert_eq!(pm.mapped(), None, "a mapping the gateway lost is not kept");
+    assert!(pm.mapped().is_some(), "an unchecked announce dropped the mapping");
+    pm.handle_timeout(T0 + 10 * SEC);
     let out = sent(&mut pm);
     assert_eq!(out.len(), 1);
-    assert!(pcp::decode_request(&out[0].1).is_ok(), "asked again at once");
-    // an announce that matches the clocks changes nothing
-    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_grant(2, 4433, 7200));
-    pm.handle_datagram(T0 + 20 * SEC, gw(), &announce(12));
+    assert!(
+        pcp::decode_request(&out[0].1).is_ok(),
+        "the renewal is asked for at once"
+    );
+    // the renewal's answer carries the nonce and its epoch matches the clocks: the mapping goes on
+    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_grant(1010, 4433, 7200));
     assert!(pm.mapped().is_some());
 }
 

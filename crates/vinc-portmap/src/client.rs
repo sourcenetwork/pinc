@@ -18,9 +18,11 @@
 //! it; a renewal that fails is tried again half way to the end, and a lease that reaches its end is gone: the client
 //! drops the mapping and starts asking from the beginning.
 //!
-//! **A gateway that restarted.** Every PCP and NAT-PMP answer carries the gateway's epoch. An answer that shows the
-//! gateway lost its mappings ([`lease::restarted`]) drops a held mapping at once and asks again, unless the answer is
-//! itself the grant that renews it.
+//! **A gateway that restarted.** Every PCP and NAT-PMP answer to a request carries the gateway's epoch. An answer that
+//! shows the gateway lost its mappings ([`lease::restarted`]) drops a held mapping at once and asks again, unless the
+//! answer is itself the grant that renews it. A PCP announce is no answer to a request and has no nonce: while a
+//! mapping is held it brings the renewal forward once a round and changes nothing else, and in any other step it is
+//! dropped and counted.
 //!
 //! **Releasing.** [`PortMap::stop`] drops the mapping and asks the gateway to delete it: PCP and NAT-PMP with a
 //! lifetime of 0, `UPnP` with `DeletePortMapping`. The client does nothing more afterwards.
@@ -159,6 +161,10 @@ struct Igd {
 
 /// The port-mapping client of one socket.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the flags of one state machine, each set and read in few places"
+)]
 pub struct PortMap {
     cfg: Config,
     step: Step,
@@ -174,6 +180,8 @@ pub struct PortMap {
     nat_ip: Option<Ipv4Addr>,
     igd: Option<Igd>,
     release: Option<Lease>,
+    /// The held mapping's renewal was brought forward by an announce since it was granted.
+    announced: bool,
     halted: bool,
     stats: Stats,
 }
@@ -196,6 +204,7 @@ impl PortMap {
             nat_ip: None,
             igd: None,
             release: None,
+            announced: false,
             halted: false,
             stats: Stats::default(),
         };
@@ -377,21 +386,20 @@ impl PortMap {
             expiry: lease::expiry(self.started, lifetime),
         });
         self.renewing = false;
+        self.announced = false;
         self.enter(Step::Held, now);
     }
 
     /// Note the gateway's epoch. One that shows the gateway lost its mappings drops the mapping held at once, whatever
-    /// the answer that carried it says next (a grant that follows holds a new lease); returns the protocol of a mapping
-    /// so dropped. Whoever calls this outside a request in flight must ask again when it returns a protocol: a client
-    /// that holds nothing and waits for nothing never acts again.
-    fn note_epoch(&mut self, now: u64, server: u32) -> Option<Proto> {
+    /// the answer that carried it says next (a grant that follows holds a new lease). It is called only for the answer
+    /// to a request in flight, so a client that drops a mapping here goes on with that request.
+    fn note_epoch(&mut self, now: u64, server: u32) {
         let lost = self.epoch.is_some_and(|p| lease::restarted(p, now, server));
         self.epoch = Some(Epoch { at: now, server });
-        if !lost {
-            return None;
+        if lost {
+            self.renewing = false;
+            self.held = None;
         }
-        self.renewing = false;
-        self.held.take().map(|l| l.proto)
     }
 
     /// Whether a datagram from `from` is for this client: from the gateway's PCP and NAT-PMP port, or an SSDP answer
@@ -486,10 +494,14 @@ impl PortMap {
                 opcode, result, epoch, ..
             }) => {
                 if opcode == pcp::OP_ANNOUNCE {
-                    // the gateway lost the mapping: ask again with the same protocol
-                    if let Some(proto) = self.note_epoch(now, epoch) {
-                        self.renew(proto, now);
-                        self.renewing = false;
+                    // Nothing asked for it and it carries no nonce, so it only brings the renewal forward, once a
+                    // round, and the mapping stays: the renewal's answer has the nonce, and its epoch decides.
+                    match &mut self.held {
+                        Some(l) if self.step == Step::Held && !self.announced => {
+                            self.announced = true;
+                            l.renew = l.renew.min(now);
+                        }
+                        _ => bump(&mut self.stats.unexpected),
                     }
                 } else if self.step == Step::Pcp {
                     // an answer to the request in flight (the form has no nonce); in any other step it answers nothing

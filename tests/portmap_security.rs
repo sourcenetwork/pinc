@@ -340,17 +340,56 @@ fn a_pcp_error_header_while_a_mapping_is_held_changes_nothing() {
 }
 
 #[test]
-fn an_announce_that_drops_the_mapping_is_asked_again() {
+fn an_announce_keeps_the_mapping_and_the_renewal_answer_decides() {
     let mut pm = client(Some(GW.into()), local());
     sent(&mut pm);
     pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    let held = pm.mapped();
     pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 3));
-    assert_eq!(pm.mapped(), None);
+    assert_eq!(pm.mapped(), held, "an announce dropped the mapping");
+    pm.handle_timeout(T0 + 10 * SEC);
+    assert_eq!(sent(&mut pm).len(), 1, "the renewal is asked for at once");
+    // the renewal is refused with an epoch that went back: the gateway lost its mappings
+    pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_map(NONCE, 2, 3, 7200));
+    assert_eq!(pm.mapped(), None, "the mapping the gateway lost is still held");
     assert!(
         pm.poll_timeout().is_some(),
         "a client that holds nothing still has a timer"
     );
-    assert_eq!(sent(&mut pm).len(), 1, "the mapping is asked for again");
+    assert!(!sent(&mut pm).is_empty(), "the mapping is asked for again");
+}
+
+#[test]
+fn spoofed_announces_change_nothing_and_cost_one_request_a_round() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    let held = pm.mapped();
+    let mut asked = 0;
+    for i in 0..20u64 {
+        let now = T0 + 10 * SEC + i * SEC / 100;
+        pm.handle_datagram(now, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 0));
+        pm.handle_timeout(now);
+        asked += sent(&mut pm).len();
+        assert_eq!(pm.mapped(), held, "announce {i} changed the mapping");
+    }
+    assert_eq!(asked, 1, "20 announces in one round cost one extra request");
+    // the answer to that request ends the round; one more announce brings one more renewal
+    pm.handle_datagram(T0 + 11 * SEC, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1011, 7200));
+    pm.handle_datagram(T0 + 12 * SEC, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 0));
+    pm.handle_timeout(T0 + 12 * SEC);
+    assert_eq!(sent(&mut pm).len(), 1);
+    assert_eq!(pm.mapped(), held);
+}
+
+#[test]
+fn an_announce_outside_a_held_mapping_is_dropped_and_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_header(pcp::OP_ANNOUNCE, 0, 5));
+    assert_eq!(pm.stats().unexpected, 1);
+    assert_eq!(pm.mapped(), None);
+    assert!(sent(&mut pm).is_empty(), "an announce changed what the client asks");
 }
 
 struct Rng(u64);
