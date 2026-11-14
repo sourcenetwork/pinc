@@ -14,8 +14,8 @@ the call could be built and sent (the store and the session are adversarial: any
   bytes, so with the head it fits `PROOF_BODY_MAX`; at most 48 frames; the pair count is `range_pairs` of its group
   range (`server_wt_pairs`), which is what `fetch/wt.rs on_ext` accepts.
 * the last conjunct of `proofs_frames`: every group a call covers starts at most `eff` into the value, `eff` = the `upto`
-  asked for, or the send frontier plus the window; that the proactive path caps `window` at `WT_LEAD`, so that it is at
-  most `WT_LEAD` past the frontier, is not proved in Lean yet (the model takes `window` as given).
+  asked for, or the send frontier plus the window; `proactive_window` models the proactive path's `upto` (the window capped at `WT_LEAD`, as `Server::on_sent` computes it)
+  and `proactive_frames` gives the bound for it: at most `WT_LEAD` past the send frontier.
 * `protoK_deep_iff`, the fifth conjunct of `proofs_frames` and `proofs_deep_sticky`: a value over 1 GiB gets no proofs
   and stays deep.
 -/
@@ -201,6 +201,45 @@ theorem proofs_frames (ln : Nat) (st : PState) (vfront window from_ upto : Nat) 
         · rw [if_neg hu0, if_neg hu0]; omega
       exact lead_arith x.1 x.2 end0 _ a4 (Nat.le_trans a6 (Nat.min_le_right _ _)) hy
 
+/-- The proactive path of `Server::on_sent` (`server.rs`, `WT_LEAD` is `LEAD`):
+```
+let (from, upto) = (s.vfront.saturating_sub(1), s.vfront.saturating_add(window.min(WT_LEAD)));
+self.proofs(se, out, now, i, from, upto);
+```
+`s.window = window` was set just before, so `proofsCall` gets the same `window`. -/
+def proactiveFrom (vfront : Nat) : Nat := vfront - 1
+
+def proactiveUpto (vfront window : Nat) : Nat := min (vfront + min window LEAD) u64Max
+
+/-- The window computation of the proactive path: the `upto` it passes is at most `WT_LEAD` past the send frontier, at
+most `u64::MAX`, never before the frontier (for a frontier within `u64`), and the start is the frontier less one, so
+before `upto`; and every group a proactive `proofsCall` covers starts at most `vfront + WT_LEAD` into the value, also
+when `upto` is 0 (then the frontier and the window are both 0 and the call falls back to the frontier plus the
+window, which is 0). -/
+theorem proactive_window (vfront window : Nat) :
+    proactiveUpto vfront window ≤ vfront + LEAD ∧ proactiveUpto vfront window ≤ u64Max ∧
+    (vfront ≤ u64Max → vfront ≤ proactiveUpto vfront window) ∧
+    proactiveFrom vfront ≤ vfront ∧
+    (proactiveUpto vfront window = 0 → vfront = 0 ∧ window = 0) := by
+  unfold proactiveUpto proactiveFrom LEAD u64Max
+  refine ⟨by omega, by omega, fun h => by omega, by omega, fun h => ?_⟩
+  omega
+
+theorem proactive_frames (ln : Nat) (st : PState) (vfront window : Nat) (ok : Nat → Bool)
+    (hln : 0 < ln) (hu : ln ≤ u64Max) (hal : Aligned ln st.pfTo) (hd : st.deep = false) :
+    ∀ x ∈ (proofsCall ln st vfront window (proactiveFrom vfront) (proactiveUpto vfront window) ok).2,
+      (x.1 + x.2 - 1) / 16384 * 16384 ≤ vfront + LEAD := by
+  intro x hx
+  have h := (proofs_frames ln st vfront window (proactiveFrom vfront) (proactiveUpto vfront window) ok hln hu hal hd).2.2.2.2.2 x hx
+  obtain ⟨h1, h2, h3, h4, h5⟩ := proactive_window vfront window
+  by_cases h0 : proactiveUpto vfront window = 0
+  · obtain ⟨hv, hw⟩ := h5 h0
+    simp only [h0, ne_eq, not_true_eq_false, ite_false] at h
+    omega
+  · simp only [h0, ne_eq, not_false_eq_true, ite_true] at h
+    omega
+
+
 /-- The proof the server sends for a frame has as many pairs as `range_pairs` of its group range: the group range
 the receiver derives (`start / G`, `ceil(end / G)`) is the one `RangeEncoder::new` derives from the byte range, and
 both count the parents of the same range. -/
@@ -232,5 +271,7 @@ end Vinc.ValuesPlan
 
 #audit_axioms Vinc.ValuesPlan.frameLoop_spec
 #audit_axioms Vinc.ValuesPlan.proofs_frames
+#audit_axioms Vinc.ValuesPlan.proactive_window
+#audit_axioms Vinc.ValuesPlan.proactive_frames
 #audit_axioms Vinc.ValuesPlan.server_wt_pairs
 #audit_axioms Vinc.ValuesPlan.proofs_deep_sticky
