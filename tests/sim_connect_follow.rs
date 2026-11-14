@@ -99,6 +99,12 @@ fn an_address_change_arms_the_punch_again_a_tenth_of_a_second_later() {
     });
 }
 
+/// A hub session that carries no application data lapses onto its relay path once its direct path has been silent
+/// for 15 s at the hub, and does not punch again while it stays idle, as in the reference model: the relay path is
+/// valid beside the direct one, only the dialer pings a silent direct path (14 s after the later of its own last send
+/// and receive on it), the hub hears nothing on the direct path once the dialer's standby pings stop (20 s after the
+/// last data) and the dialer's answers to the hub's pings stop, so the hub's direct path idles out first; a PING
+/// does not move a session back to a path, and the punch round is skipped while no data moved for 20 s.
 #[test]
 fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round() {
     big(|| {
@@ -140,8 +146,8 @@ fn a_session_with_no_application_data_for_twenty_seconds_skips_its_punch_round()
         assert!(
             w.client(a)
                 .session_stats(sa)
-                .is_some_and(|s| s.route.is_some_and(|(_, r)| !vinc_core::is_relay_addr(&r))),
-            "the session still runs on the direct path: {:?}",
+                .is_some_and(|s| s.route.is_some_and(|(_, r)| vinc_core::is_relay_addr(&r))),
+            "the idle session lapsed onto its relay path: {:?}",
             w.client(a).session_stats(sa)
         );
         assert_eq!(
