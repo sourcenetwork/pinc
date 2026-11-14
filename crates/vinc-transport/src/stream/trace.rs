@@ -1,9 +1,10 @@
 //! Test-only observation of the stream table, for trace validation (cargo feature `trace`, off by default).
 //!
 //! [`Streams::trace_view`](super::Streams::trace_view) shows the state the receive and credit path works on: per
-//! slot the held chunk numbers, the stored ranges, the read position, the credit, the send half's state that
-//! frees the slot, the stop request and the ordinal of a stream we opened; per table the counters, the window target,
-//! the delivery meter, the pool chunks the others hold and whether opens may pass the peer's limit. Nothing here is
+//! slot the held chunk numbers, the stored ranges, the read position, the credit, the delivery meter, the send half's
+//! state that
+//! frees the slot, the stop request and the ordinal of a stream we opened; per table the counters,
+//! the pool chunks the others hold and whether opens may pass the peer's limit. Nothing here is
 //! compiled without the feature, and nothing here feeds back into the table.
 
 use alloc::vec::Vec;
@@ -37,6 +38,8 @@ pub struct SlotView {
     pub limit: u64,
     /// The window size the limit is kept ahead of the read position.
     pub size: u64,
+    /// The delivery meter of this stream: the epoch start, the bytes in it, the last rate.
+    pub meter: (Option<u64>, u64, u64),
     /// A new limit is waiting to be sent.
     pub pending: bool,
     /// A grant is due but the pool had no room.
@@ -75,12 +78,8 @@ pub struct TableView {
     pub local_live: u64,
     /// Pool chunks charged and not held by a receive ring.
     pub ext: u64,
-    /// The window size the delivery rate asks for.
-    pub target: u64,
     /// The mark of the slots: one past the highest slot a stream holds; every slot past it is new.
     pub high_water: u64,
-    /// The delivery meter: the epoch start, the bytes in it, the last rate.
-    pub meter: (Option<u64>, u64, u64),
     /// The stream credit: the limit on the streams we may open in all, the limit last advertised, and the streams
     /// admitted when it was set.
     pub admit: [u64; 3],

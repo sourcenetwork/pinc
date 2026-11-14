@@ -4,7 +4,7 @@
 //! `contig` is the end of the prefix stored without holes; chunks wholly below `read_off` are returned to the pool; a
 //! byte received twice must be identical. Window grants are decided by the table, which owns the pool accounting.
 
-use super::flow::Window;
+use super::flow::{Meter, Window};
 use super::pool::{BufferPool, CHUNK_SIZE, Ring};
 use super::ranges::RangeSet;
 use super::{FIRST_CHARGE, MAX_OFFSET, RECV_RANGES, RecvStatus, StreamError};
@@ -28,6 +28,8 @@ pub(super) struct Recv<const C: usize> {
     contig: u64,
     final_size: Option<u64>,
     pub(super) win: Window,
+    /// What this stream's reader consumed per smoothed round trip: its window is sized from it.
+    pub(super) meter: Meter,
     reset: Option<u64>,
     stop: Stop,
     /// The application has seen the end (a consume after the final size, or a reset).
@@ -44,6 +46,7 @@ impl<const C: usize> Recv<C> {
         contig: 0,
         final_size: None,
         win: Window::new(0),
+        meter: Meter::NEW,
         reset: None,
         stop: Stop::None,
         observed: false,
@@ -52,6 +55,7 @@ impl<const C: usize> Recv<C> {
     pub(super) const fn init(&mut self, size: u64) {
         self.open = true;
         self.win = Window::new(size);
+        self.meter = Meter::NEW;
     }
 
     /// The slot view of the receive half; the table fills in the id and the send half.
@@ -68,6 +72,7 @@ impl<const C: usize> Recv<C> {
             fin: self.final_size,
             limit: self.win.limit,
             size: self.win.size,
+            meter: self.meter.view(),
             pending: self.win.pending,
             deferred: self.win.deferred,
             reset: self.reset,

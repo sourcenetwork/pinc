@@ -251,3 +251,37 @@ fn streams_opened_before_the_peers_limit_wait_for_it_in_order() {
         "the stream past the limit goes out once credit covers it"
     );
 }
+
+/// A stream's window follows what its own reader drains. Before #159 one meter measured the whole connection and every
+/// stream that read a byte took twice that rate as its window: sixteen streams on a long path asked the pool for sixteen
+/// times the credit the connection moved, grants were deferred, and the last streams crawled at one window per round
+/// trip. Here stream 0 drains 32 KiB in a round trip and grows to 64 KiB; stream 4 reads 16 bytes and keeps its
+/// initial window.
+#[test]
+fn a_window_follows_the_rate_of_its_own_stream() {
+    const KIB: u64 = 1024;
+    const SRTT: u64 = 1_000;
+    fn read(t: &mut Streams<NoSource, 72, 65>, pool: &mut BufferPool<'_>, id: u64, now: u64) {
+        while let Some(k) = t.read_chunk(pool, id).map(<[u8]>::len) {
+            t.consume(pool, id, k, now, SRTT).unwrap();
+        }
+    }
+    let mut pool = BufferPool::new_boxed(1024);
+    let mut cfg = Config::new(false);
+    cfg.initial_stream_window = 16 * KIB;
+    let mut t: Streams<NoSource, 72, 65> = Streams::new(&cfg, &pool);
+    let block = [5u8; 16 * 1024];
+    t.on_stream_frame(&mut pool, 0, 0, &block, false).unwrap();
+    read(&mut t, &mut pool, 0, 0);
+    t.on_stream_frame(&mut pool, 0, 16 * KIB, &block, false).unwrap();
+    read(&mut t, &mut pool, 0, SRTT);
+    t.on_stream_frame(&mut pool, 4, 0, &block[..16], false).unwrap();
+    read(&mut t, &mut pool, 4, SRTT);
+    let size = |t: &Streams<NoSource, 72, 65>, id| t.stream_recv_window(id).unwrap().0;
+    assert_eq!(size(&t, 0), 2 * 32 * KIB, "stream 0 drained 32 KiB in a round trip");
+    assert_eq!(
+        size(&t, 4),
+        16 * KIB,
+        "stream 4 has drained 16 bytes: it keeps the initial window"
+    );
+}

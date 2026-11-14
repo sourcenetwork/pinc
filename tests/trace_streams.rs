@@ -87,7 +87,7 @@ fn slot_json(s: &SlotView) -> String {
     let id = i64::try_from(s.id).unwrap();
     let rs: Vec<String> = s.ranges.iter().map(|(a, z)| format!("[{a},{z}]")).collect();
     format!(
-        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{}}}"#,
+        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{},"ms":{},"mb":{},"mr":{}}}"#,
         b(s.open),
         list(&s.held),
         rs.join(","),
@@ -106,15 +106,17 @@ fn slot_json(s: &SlotView) -> String {
         s.stop,
         opt(s.stop_code),
         opt(s.send_code),
-        s.ordinal
+        s.ordinal,
+        opt(s.meter.0),
+        s.meter.1,
+        s.meter.2
     )
 }
 
 fn view_json(v: &TableView) -> String {
     let slots: Vec<String> = v.slots.iter().map(slot_json).collect();
-    let (ms, mb, mr) = v.meter;
     format!(
-        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"hw":{},"ms":{},"mb":{mb},"mr":{mr},"ad":[{},{},{}],"adp":{},"early":{}}}"#,
+        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"hw":{},"ad":[{},{},{}],"adp":{},"early":{}}}"#,
         slots.join(","),
         v.remote_next[0],
         v.remote_next[1],
@@ -123,9 +125,7 @@ fn view_json(v: &TableView) -> String {
         v.remote_live,
         v.local_live,
         v.ext,
-        v.target,
         v.high_water,
-        opt(ms),
         v.admit[0],
         v.admit[1],
         v.admit[2],
