@@ -1,0 +1,155 @@
+diff --git a/tests/broadcast_floors.rs b/tests/broadcast_floors.rs
+index a5fd1b6..48ae97f 100644
+--- a/tests/broadcast_floors.rs
++++ b/tests/broadcast_floors.rs
+@@ -238,3 +238,150 @@ fn the_per_origin_floor_lists_128_origins_and_no_more() {
+     assert_eq!(body[12], 1, "history is still reported");
+     assert_eq!(body[13], 0);
+ }
++
++// ---- restart liveness probes (appended to tests/broadcast_floors.rs for the run) ----
++
++/// A new life of member `i` started at `at` while the hubs still hold the session of its earlier life: they have not
++/// seen it close (the real node learns that only when the new session arrives or the old one times out), so what
++/// they hand that session is lost with it. The caller drops the frames to `i` meanwhile with `net.filter`.
++fn restart_unseen(net: &mut Net, i: usize, at: u64) {
++    use vinc_broadcast::{Config, Topics};
++    net.run_until(at);
++    let ids: Vec<_> = net.nodes.iter().map(|n| n.id).collect();
++    let hub_ids = ids[..net.hubs].to_vec();
++    let cfg = Config {
++        me: ids[i],
++        is_hub: false,
++        hubs: &hub_ids,
++        incarnation: ((common::WALL0 + at / 1_000_000 + 1) << 16) | 1,
++        trace: true,
++        limits: net.limits,
++    };
++    let wall = common::WALL0 + at / 1_000_000;
++    let k = common::keypair(net.algs[i], u8::try_from(i + 1).unwrap());
++    net.nodes[i].t = Topics::start(&cfg, Box::new(k), at, wall).unwrap();
++    net.nodes[i].h.events.clear();
++    net.nodes[i].h.out.clear();
++}
++
++/// The new session of member `i` reaches the hubs: they see the old one close and send their floors on the new one.
++fn new_session(net: &mut Net, i: usize) {
++    net.filter = None;
++    let me = net.id(i);
++    for hub in 0..net.hubs {
++        let n = &mut net.nodes[hub];
++        n.t.release(&mut n.h, &me);
++    }
++    net.set_primary(i, 0);
++    net.subscribe(i, T);
++    net.attach(i);
++}
++
++const MS: u64 = 1_000_000;
++
++/// Counterexample to "a message published after a subscriber's last restart is eventually delivered to it": the
++/// message is published 100 ms into the new life, before the new life's session reached the hubs. Hub 0 pushes it
++/// into the dead session of the earlier life (the session took it, so the hub notes it in the member's floor); the
++/// FLOOR it then sends on the new session covers it, and every later copy (the replay, the periodic check) is
++/// refused as old. Nothing restarts after 10 s; the publisher and the hubs stay up; the message stays in the log.
++#[test]
++fn restart_probe_a_message_published_after_the_restart_is_delivered() {
++    let mut net = world();
++    let m1 = net.publish(2, T, b"first life");
++    net.run_until(5 * SEC);
++    assert_eq!(net.delivered(3), vec![m1]);
++    // 10 s: the member's process dies and its new life starts; the hubs still hold the old session.
++    net.filter = Some(Box::new(|_, to, _| to != 3));
++    restart_unseen(&mut net, 3, 10 * SEC);
++    net.run_until(10 * SEC + 100 * MS);
++    let m2 = net.publish(2, T, b"published 100 ms into the new life");
++    // 700 ms: the new life's (deferred) first dial reaches the hubs.
++    net.run_until(10 * SEC + 700 * MS);
++    new_session(&mut net, 3);
++    net.run_until(130 * SEC);
++    let old = rejected_old(&mut net, 3);
++    assert_eq!(
++        net.delivered(3),
++        vec![m2],
++        "the message published after the restart is delivered (refused as old {old} times)"
++    );
++}
++
++/// Control: the same run, but the hubs saw the old session close at the restart (as `Net::restart` does), so
++/// nothing went into a dead session: the message is delivered.
++#[test]
++fn restart_probe_control_hubs_saw_the_close() {
++    let mut net = world();
++    let m1 = net.publish(2, T, b"first life");
++    net.run_until(5 * SEC);
++    assert_eq!(net.delivered(3), vec![m1]);
++    net.filter = Some(Box::new(|_, to, _| to != 3));
++    net.restart(3, 10 * SEC);
++    net.run_until(10 * SEC + 100 * MS);
++    let m2 = net.publish(2, T, b"published 100 ms into the new life");
++    net.run_until(10 * SEC + 700 * MS);
++    new_session(&mut net, 3);
++    net.run_until(130 * SEC);
++    assert_eq!(net.delivered(3), vec![m2]);
++}
++
++/// The documented trade-off, published before the restart: a message the hub's session took for the earlier life,
++/// which that life never read (it died with the frame in flight), is at the floor and is refused after the restart.
++#[test]
++fn restart_probe_tradeoff_in_flight_at_the_crash() {
++    let mut net = world();
++    let m1 = net.publish(2, T, b"first life");
++    net.run_until(5 * SEC);
++    net.filter = Some(Box::new(|_, to, _| to != 3));
++    let m2 = net.publish(2, T, b"in flight when the member died");
++    net.run_until(6 * SEC);
++    net.restart(3, 10 * SEC);
++    new_session(&mut net, 3);
++    net.run_until(130 * SEC);
++    assert_eq!(net.delivered(3), Vec::<[u8; 8]>::new(), "m1 {m1:?} delivered before, m2 {m2:?} lost");
++}
++
++/// The documented trade-off, per origin: the earlier life missed m2 (no session to take it), then got m3 of the same
++/// origin; it restarts before its gap check brought m2. The origin's floor is m3's stamp, so m2 is refused though no
++/// life delivered it.
++#[test]
++fn restart_probe_tradeoff_missed_below_a_later_message_of_the_origin() {
++    let mut net = world();
++    net.publish(2, T, b"first life");
++    net.run_until(5 * SEC);
++    net.link(3, 0, false);
++    let m2 = net.publish(2, T, b"missed");
++    net.run_until(6 * SEC);
++    net.link(3, 0, true);
++    let m3 = net.publish(2, T, b"got");
++    net.run_until(7 * SEC);
++    assert!(net.delivered(3).contains(&m3) && !net.delivered(3).contains(&m2));
++    net.restart(3, 8 * SEC);
++    new_session(&mut net, 3);
++    net.run_until(130 * SEC);
++    assert_eq!(net.delivered(3), Vec::<[u8; 8]>::new(), "m2 lost");
++}
++
++/// Second route, no dead session: the new session reaches hub 0, which sends its floor at once (FLOOR_PUSH); the
++/// member's queued SUB makes it a live subscriber; a message published now is pushed on the new session (noted in
++/// the floor) and held while hub 1 has not reported; the HELLO that follows makes hub 0 send its floor again (a new
++/// attachment), the member keeps the later one, and the held message is judged old when hub 1 reports.
++#[test]
++fn restart_probe_second_floor_covers_a_message_pushed_on_the_new_session() {
++    let mut net = world();
++    let m1 = net.publish(2, T, b"first life");
++    net.run_until(5 * SEC);
++    assert_eq!(net.delivered(3), vec![m1]);
++    net.restart(3, 10 * SEC);
++    net.set_primary(3, 0);
++    net.run_until(10 * SEC + 100 * MS);
++    net.attach_to(3, 0);
++    net.subscribe(3, T);
++    let m2 = net.publish(2, T, b"pushed on the new session");
++    net.run_until(10 * SEC + 150 * MS);
++    net.attach_to(3, 0);
++    net.attach_to(3, 1);
++    net.run_until(130 * SEC);
++    let old = rejected_old(&mut net, 3);
++    assert_eq!(net.delivered(3), vec![m2], "refused as old {old} times");
++}

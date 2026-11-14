@@ -1,0 +1,101 @@
+diff --git a/crates/vinc-core/src/lib.rs b/crates/vinc-core/src/lib.rs
+index 9e9cd93..f3fd650 100644
+--- a/crates/vinc-core/src/lib.rs
++++ b/crates/vinc-core/src/lib.rs
+@@ -105,4 +105,6 @@ pub use slot::{HELD_EVENTS, Slot};
+ pub use state::{Restored, STATE_VERSION, StateError, state_len};
+ pub use table::Table;
+ pub use trace::{TRACE_CAPACITY, TraceEvent, TraceRecord};
++#[cfg(feature = "trace")]
++pub use tx::QueueEntry;
+ pub use tx::Transmit;
+diff --git a/crates/vinc-core/src/tx.rs b/crates/vinc-core/src/tx.rs
+index 5116176..1e87590 100644
+--- a/crates/vinc-core/src/tx.rs
++++ b/crates/vinc-core/src/tx.rs
+@@ -166,3 +166,70 @@ ep_impl! {
+         }
+     }
+ }
++
++/// What the send queues hold for one session, for trace validation (cargo feature `trace`).
++#[cfg(feature = "trace")]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct QueueEntry {
++    /// The session slot.
++    pub slot: usize,
++    /// The slot is in use.
++    pub live: bool,
++    /// The slot's own mark: 0 not queued, 1 ordinary queue, 2 broadcast queue.
++    pub flag: u8,
++    /// The slot belongs to a broadcast session.
++    pub gossip: bool,
++    /// A sub-session open of the slot is still to leave.
++    pub ctrl_pending: bool,
++}
++
++#[cfg(feature = "trace")]
++ep_impl! {
++    /// Entry `k` (from 0, the front) of send queue `q` (0 ordinary, 1 broadcast), following the links from the head
++    /// (cargo feature `trace`).
++    #[must_use]
++    pub fn send_queue_at(&self, q: usize, k: usize) -> Option<QueueEntry> {
++        let mut cur = self.dirty_head.get(q).copied().unwrap_or(crate::slot::NIL);
++        let mut n = 0;
++        while let Some(s) = self.slots.get(cur as usize) {
++            if n == k {
++                return Some(QueueEntry {
++                    slot: cur as usize,
++                    live: s.m.in_use,
++                    flag: s.m.dirty,
++                    gossip: s.m.gossip,
++                    ctrl_pending: s.m.ctrl_pending,
++                });
++            }
++            n += 1;
++            cur = s.m.dirty_next;
++        }
++        None
++    }
++
++    /// The last slot of send queue `q` as the endpoint's tail pointer has it, `None` for none (cargo feature `trace`).
++    #[must_use]
++    pub fn send_queue_tail(&self, q: usize) -> Option<usize> {
++        let t = self.dirty_tail.get(q).copied()?;
++        self.slots.get(t as usize).map(|_| t as usize)
++    }
++
++    /// The datagram kept for the next call: its length and segment size, `None` for none (cargo feature `trace`).
++    #[must_use]
++    pub fn send_kept(&self) -> Option<(usize, usize)> {
++        self.stash_meta.map(|m| (m.len, m.segment))
++    }
++
++    /// What session slot `i` carries towards the send queues (cargo feature `trace`).
++    #[must_use]
++    pub fn send_mark(&self, i: usize) -> Option<QueueEntry> {
++        let s = self.slots.get(i)?;
++        Some(QueueEntry {
++            slot: i,
++            live: s.m.in_use,
++            flag: s.m.dirty,
++            gossip: s.m.gossip,
++            ctrl_pending: s.m.ctrl_pending,
++        })
++    }
++}
+diff --git a/tests/Cargo.toml b/tests/Cargo.toml
+index 8e7e459..7c9f945 100644
+--- a/tests/Cargo.toml
++++ b/tests/Cargo.toml
+@@ -1019,6 +1019,10 @@ path = "trace_halfopen.rs"
+ name = "trace_mtu"
+ path = "trace_mtu.rs"
+ 
++[[test]]
++name = "trace_sendq"
++path = "trace_sendq.rs"
++
+ [[test]]
+ name = "transport_wedge"
+ path = "transport_wedge.rs"

@@ -1,0 +1,349 @@
+From 652c37e93b916e5f2c5a72dc58d2972878d07136 Mon Sep 17 00:00:00 2001
+From: Jack Zampolin <jack.zampolin@gmail.com>
+Date: Fri, 13 Nov 2026 16:39:12 -0800
+Subject: [PATCH] test(core): an id one connection holds twice stays in the
+ demultiplexing table after its session ends (fails)
+
+sync_cids registers each id of the new list the old list lacks and removes each id of the old list the new list
+lacks, one table entry per list entry. When two ids of one connection are the same four bytes and enter in one
+sync, the table gets two entries; when they leave one at a time the first departure removes nothing and the second
+(or free_slot) removes one, so one entry stays for good, naming the slot. A sub-session's ids derive from the
+parent's id secret and the (cc, cs) the dialer sends, so a peer finds a colliding pair offline (2^32 BLAKE3 trials).
+The test opens such a sub-session on a real endpoint, drives the victim's window past index 2 and closes it: the
+table still maps the id to the freed slot. Adds the trace-feature views trace_demux, trace_cids and trace_session.
+---
+ crates/vinc-core/src/endpoint.rs |  54 ++++++++
+ crates/vinc-core/src/lib.rs      |   2 +
+ tests/Cargo.toml                 |   4 +
+ tests/core_demux_leak.rs         | 229 +++++++++++++++++++++++++++++++
+ 4 files changed, 289 insertions(+)
+ create mode 100644 tests/core_demux_leak.rs
+
+diff --git a/crates/vinc-core/src/endpoint.rs b/crates/vinc-core/src/endpoint.rs
+index 35991fe..4ba4652 100644
+--- a/crates/vinc-core/src/endpoint.rs
++++ b/crates/vinc-core/src/endpoint.rs
+@@ -901,3 +901,57 @@ ep_impl! {
+         self.mark_dirty(h as usize);
+     }
+ }
++
++/// What one slot holds of connection ids, for trace validation (cargo feature `trace`).
++#[cfg(feature = "trace")]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct CidRecord {
++    /// The slot holds a session.
++    pub in_use: bool,
++    /// The generation of the slot (the high half of its session id).
++    pub generation: u32,
++    /// The slot has a connection.
++    pub conn: bool,
++    /// The id the dialer invented, registered when a server session was made.
++    pub odcid: Option<ConnId>,
++    /// The ids registered for the connection at its last sync, in the order the connection listed them.
++    pub cids: [Option<ConnId>; MAX_CIDS],
++    /// The ids the connection accepts now (`Connection::local_cids`), in its order; none without a connection.
++    pub accepts: [Option<ConnId>; MAX_CIDS],
++}
++
++#[cfg(feature = "trace")]
++ep_impl! {
++    /// The demultiplexing table (cargo feature `trace`).
++    #[must_use]
++    pub const fn trace_demux(&self) -> &Table<ConnId, u32, D> {
++        &self.demux
++    }
++
++    /// What slot `i` holds of connection ids, `None` past the table (cargo feature `trace`).
++    #[must_use]
++    pub fn trace_cids(&self, i: usize) -> Option<CidRecord> {
++        let s = self.slots.get(i)?;
++        let mut accepts = [None; MAX_CIDS];
++        if let Some(c) = s.conn.as_ref() {
++            for (d, id) in accepts.iter_mut().zip(c.local_cids()) {
++                *d = Some(id);
++            }
++        }
++        Some(CidRecord {
++            in_use: s.m.in_use,
++            generation: s.m.generation,
++            conn: s.conn.is_some(),
++            odcid: s.m.odcid,
++            cids: s.m.cids,
++            accepts,
++        })
++    }
++
++    /// The authenticated session of `session`'s connection, once its handshake completed (cargo feature `trace`).
++    #[must_use]
++    pub fn trace_session(&self, session: SessionId) -> Option<&vinc_security::Established> {
++        let i = self.slot_of(session)?;
++        self.slots.get(i)?.conn.as_ref()?.session()
++    }
++}
+diff --git a/crates/vinc-core/src/lib.rs b/crates/vinc-core/src/lib.rs
+index 9e9cd93..0daa419 100644
+--- a/crates/vinc-core/src/lib.rs
++++ b/crates/vinc-core/src/lib.rs
+@@ -82,6 +82,8 @@ pub use api::{
+     Reply, SendState, SessionId, SessionStats, Value,
+ };
+ pub use commands::{FAN_URGENCY, UDP_FRESH};
++#[cfg(feature = "trace")]
++pub use endpoint::CidRecord;
+ pub use endpoint::{CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PREKEY_PEERS, SUBS_SEEN};
+ pub use ext_in::EXT_BODY_MAX;
+ pub use heap::DeadlineHeap;
+diff --git a/tests/Cargo.toml b/tests/Cargo.toml
+index 8aaac36..459c29e 100644
+--- a/tests/Cargo.toml
++++ b/tests/Cargo.toml
+@@ -438,6 +438,10 @@ path = "core_extras.rs"
+ name = "core_demux"
+ path = "core_demux.rs"
+ 
++[[test]]
++name = "core_demux_leak"
++path = "core_demux_leak.rs"
++
+ [[test]]
+ name = "core_setup"
+ path = "core_setup.rs"
+diff --git a/tests/core_demux_leak.rs b/tests/core_demux_leak.rs
+new file mode 100644
+index 0000000..e85d6ac
+--- /dev/null
++++ b/tests/core_demux_leak.rs
+@@ -0,0 +1,229 @@
++//! A connection id that one connection holds twice (two of its derived ids are the same four bytes) is left in the
++//! endpoint's demultiplexing table after its session ends.
++//!
++//! `sync_cids` (crates/vinc-core/src/endpoint.rs) registers every id of the new list that the old list lacks and
++//! removes every id of the old list that the new list lacks, one table entry per list entry. When two ids of one
++//! connection are the same four bytes and enter in the same sync, the table gets two entries; when they later leave
++//! the connection's list one at a time, the first departure removes nothing (the id is still in the list), and the
++//! second departure, or `free_slot` at the end of the session (it removes the ids of the record, now one copy),
++//! removes one entry. The other stays for good, naming the slot, which a later session reuses.
++//!
++//! The ids of a sub-session are derived from the parent's id secret and the two ids the dialer picks (`cc`, `cs`),
++//! which the dialer sends in the open frame, so a peer with an established session finds a pair whose acceptor-side
++//! ids 1 and 2 collide by trying ~2^32 pairs offline (BLAKE3; about a minute on 8 cores for the pair below). Then:
++//! the peer opens the sub-session with `Command::SendExtension`, sends on its paths so the victim's highest seen index
++//! moves up until the victim evicts index 2, and the victim's application closes the sub-session.
++#![allow(
++    clippy::unwrap_used,
++    clippy::expect_used,
++    clippy::indexing_slicing,
++    clippy::cast_possible_truncation,
++    clippy::too_many_lines
++)]
++
++use std::cell::RefCell;
++use std::rc::Rc;
++
++use vinc_core::{CID_LEN, Command, EndpointConfig, Role};
++use vinc_crypto::{Drbg, Software};
++use vinc_security::{Alpn, ConnId, Env, KeyHandle, LocalIdentity, sub_session_secret};
++use vinc_tests::*;
++use vinc_transport::conn::{Connection, PathId, PathInfo, SubOpen};
++use vinc_transport::frame::ext;
++use vinc_transport::stream::NoSource;
++
++type Child = Connection<'static, Caps, NoSource, CN, CC, CF, 8>;
++
++/// The dialer's id and the acceptor's id of the sub-session: for the parent session of this test (its id secret is
++/// `54262170…dda8`, the same on every run), the acceptor's derived ids 1 and 2 are both `0ca8f0d0`.
++const CC_ID: [u8; 4] = [0xa0, 0x0c, 0x00, 0x00];
++const CS_ID: [u8; 4] = [0x3e, 0x8a, 0x4b, 0x79];
++
++/// The id of `index` a side derives (`vinc_transport` `cid.rs`, `derive`).
++fn derived(secret: &[u8; 32], to_client: bool, index: u64) -> [u8; 4] {
++    let mut input = [0u8; 9];
++    input[0] = u8::from(to_client);
++    input[1..].copy_from_slice(&index.to_be_bytes());
++    let h = vinc_crypto::extract(secret, &input);
++    [h[0], h[1], h[2], h[3]]
++}
++
++fn cid(b: [u8; 4]) -> ConnId {
++    ConnId::new(&b).unwrap()
++}
++
++/// The entries of the victim's table that name `slot`, with their ids.
++fn entries_of(net: &CoreNet, v: usize, slot: usize) -> Vec<ConnId> {
++    net.nodes[v]
++        .ep
++        .trace_demux()
++        .iter()
++        .filter(|(_, s)| **s as usize == slot)
++        .map(|(k, _)| *k)
++        .collect()
++}
++
++#[test]
++fn an_id_a_connection_holds_twice_outlives_its_session() {
++    big_stack(|| {
++        let mut net = CoreNet::new(5 * MS_NS);
++        let (a, v) = (net.add(1), net.add(2));
++        let (sa, _) = net.connect_pair(a, v, ALPN_A, Role::Other);
++        net.run_for(SEC_NS);
++        let est = net.nodes[a].ep.trace_session(sa).unwrap().clone();
++        let sub = sub_session_secret(&est.cid_secret, ALPN_A, &CC_ID, &CS_ID);
++        let twice = derived(sub.expose(), false, 1);
++        assert_eq!(twice, derived(sub.expose(), false, 2), "the parent's id secret changed");
++
++        // The peer opens a sub-session with its chosen ids, as `open_sub` would with random ones.
++        let mut body = vec![ALPN_A.len() as u8];
++        body.extend_from_slice(ALPN_A);
++        body.extend_from_slice(&CC_ID);
++        body.extend_from_slice(&CS_ID);
++        let now = net.now;
++        net.nodes[a]
++            .cmd(
++                now,
++                Command::SendExtension {
++                    session: sa,
++                    ty: ext::SUB_SESSION_OPEN,
++                    body: &body,
++                },
++            )
++            .unwrap();
++        net.run_for(100 * MS_NS);
++        let child = (0..CK)
++            .find(|&i| {
++                net.nodes[v]
++                    .ep
++                    .trace_cids(i)
++                    .is_some_and(|r| r.in_use && r.cids[0] == Some(cid(CS_ID)))
++            })
++            .expect("the victim made no sub-session");
++        // The victim's connection lists the id twice, and the table holds two entries of it: in step so far.
++        let rec = net.nodes[v].ep.trace_cids(child).unwrap();
++        let count = |l: &[Option<ConnId>]| l.iter().filter(|c| **c == Some(cid(twice))).count();
++        assert_eq!(count(&rec.cids), 2);
++        let held: Vec<Option<ConnId>> = entries_of(&net, v, child).into_iter().map(Some).collect();
++        assert_eq!(count(&held), 2);
++
++        // The peer's side of the sub-session, driven by hand: what the victim sends to it is taken off the wire.
++        let (a_addr, v_addr) = (net.nodes[a].addr, net.nodes[v].addr);
++        let mine: Vec<[u8; 4]> = std::iter::once(CC_ID)
++            .chain((1..64).map(|j| derived(sub.expose(), true, j)))
++            .collect();
++        let queue: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
++        {
++            let q = Rc::clone(&queue);
++            net.loss = Some(Box::new(move |from, to, d: &[u8]| {
++                let ours = from == v_addr
++                    && to == a_addr
++                    && d.len() > 1 + CID_LEN
++                    && d[0] & 0x80 == 0
++                    && mine.iter().any(|m| m[..] == d[1..=CID_LEN]);
++                if ours {
++                    q.borrow_mut().push(d.to_vec());
++                }
++                ours
++            }));
++        }
++        let prov = Caps(Software, true);
++        let mut drbg = Drbg::new(&[0x77; 32]);
++        let mut cfg = EndpointConfig::new(9).conn;
++        cfg.cid_len = CID_LEN;
++        let identity = LocalIdentity::from_keypair(&net.nodes[a].kp, KeyHandle(1)).unwrap();
++        let p0 = PathId(1);
++        let mut peer: Child = {
++            let mut env = Env {
++                provider: &prov,
++                now: net.now,
++                drbg: &mut drbg,
++            };
++            let open = SubOpen {
++                client: true,
++                parent: &est,
++                alpn: Alpn::new(ALPN_A).unwrap(),
++                cc: cid(CC_ID),
++                cs: cid(CS_ID),
++                identity,
++                path: p0,
++                path_info: PathInfo::default(),
++            };
++            Connection::sub_session(cfg, open, memory(true), &mut env).unwrap()
++        };
++        let mut buf = vec![0u8; 65_536];
++        let mut paths = 1u64;
++        let mut left_once = false;
++        // The victim answers on the one path it knows (the peer's address); its answer is handed to the path the peer
++        // sent on last, so a path's challenge is answered on that path and the path's id is confirmed.
++        let mut last_path = p0;
++        for round in 0..4000u32 {
++            let now = net.now;
++            {
++                let mut env = Env {
++                    provider: &prov,
++                    now,
++                    drbg: &mut drbg,
++                };
++                for mut d in queue.borrow_mut().drain(..) {
++                    let _ = peer.handle_datagram(&mut env, last_path, &mut d);
++                }
++                if peer.poll_timeout().is_some_and(|t| t <= now) {
++                    peer.handle_timeout(&mut env);
++                }
++                if round % 50 == 0 {
++                    peer.ping();
++                }
++                // A new path every 100 ms: its first packet carries the next id of the victim's window. The oldest
++                // added path makes room once eight are tracked.
++                if round % 100 == 50 {
++                    if paths >= 8 {
++                        let _ = peer.remove_path(PathId(paths - 6));
++                    }
++                    paths += 1;
++                    let _ = peer.add_path(&mut env, PathId(paths), PathInfo::default());
++                }
++                while let Some(t) = peer.poll_transmit(&mut env, &mut buf) {
++                    last_path = t.path;
++                    for seg in buf[..t.len].chunks(t.segment_size) {
++                        net.inject(a_addr, v_addr, seg.to_vec(), 0);
++                    }
++                }
++                while peer.poll_event().is_some() {}
++            }
++            net.run_for(MS_NS);
++            let rec = net.nodes[v].ep.trace_cids(child).unwrap();
++            let held: Vec<Option<ConnId>> = entries_of(&net, v, child).into_iter().map(Some).collect();
++            if count(&rec.cids) == 1 && count(&held) == 2 {
++                // The connection evicted index 2 and kept index 1: the sync removed nothing.
++                left_once = true;
++                eprintln!("after {round} ms: the connection lists {twice:02x?} once, the table holds it twice");
++                break;
++            }
++        }
++        assert!(left_once, "the victim never let go of one of the two ids");
++
++        // The victim's application closes the sub-session; the slot is freed.
++        let session = net.nodes[v].ep.sessions().find(|s| s.slot() == child).unwrap();
++        let now = net.now;
++        net.nodes[v].cmd(now, Command::Close { session, error: 0 }).unwrap();
++        net.loss = None;
++        net.run_for(5 * SEC_NS);
++        let rec = net.nodes[v].ep.trace_cids(child).unwrap();
++        eprintln!(
++            "after the close: slot {child} in use {}, table entries naming it {:?}",
++            rec.in_use,
++            entries_of(&net, v, child)
++        );
++        // Every entry of the table names a live session that holds its id: this fails, the entry of the id stays.
++        let ep = &net.nodes[v].ep;
++        for (k, s) in ep.trace_demux().iter() {
++            let r = ep.trace_cids(*s as usize).unwrap();
++            assert!(
++                r.in_use && (r.odcid == Some(*k) || r.cids.contains(&Some(*k))),
++                "the table maps {k:?} to slot {s}, whose session (in use: {}) does not hold it",
++                r.in_use
++            );
++        }
++    });
++}
+-- 
+2.50.1 (Apple Git-155)
+
