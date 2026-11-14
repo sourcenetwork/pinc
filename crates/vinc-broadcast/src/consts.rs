@@ -85,3 +85,9 @@ pub const REFRESH: Nanos = 20 * S;
 pub const RECORD_TTL: Nanos = 65 * S;
 /// The most peers one adjacency record names.
 pub const ADJ_MAX: usize = 1024;
+/// What a hub charges an adjacency record besides its peers (32 bytes each) and its signature: its id, numbers and
+/// times, its component label and its share of the two maps' nodes, rounded up. A tombstone costs this alone.
+pub const REACH_RECORD_BASE: usize = 256;
+/// The bytes a hub's adjacency table holds by default ([`Limits::reach_bytes`](crate::Limits::reach_bytes)): about
+/// a thousand records of [`ADJ_MAX`] peers, or eighty thousand of a few peers and an Ed25519 signature.
+pub const DEFAULT_REACH_BYTES: usize = 32 << 20;

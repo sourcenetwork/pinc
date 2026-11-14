@@ -18,14 +18,17 @@
 //! - a node whose record was not heard for [`RECORD_TTL`]: alone. The record stays as a tombstone that names no peer,
 //!   until the node is heard again;
 //! - a node that never sent a record: unscoped. Unscoped nodes hear each other and no scoped node, as before;
-//! - the table holds at most [`Limits::max_reach`](crate::Limits::max_reach) records. A new node's record that finds
-//!   it full is refused and the table closes: while it is closed every node without a record is alone, the refused
+//! - the table holds at most [`Limits::reach_bytes`](crate::Limits::reach_bytes): each record is charged a fixed
+//!   share, its peers and its signature. A new node's record that does not fit is refused and the table closes: while it is closed every node without a record is alone, the refused
 //!   ones and the unscoped ones alike (failing closed: an unscoped member then hears only hubs through this hub). The
 //!   hub reports each refusal ([`Event::ReachRefused`]) and the closing ([`Event::ReachClosed`]). The table opens
 //!   again ([`Event::ReachOpened`], checked every [`REFRESH`]) once no refused node waits: each one
 //!   got a record (a refused member sends its record again every [`REFRESH`]), was revoked, or was released for
-//!   good with nothing of it left in the logs. A hub that refused more nodes than the table holds records cannot
-//!   tell, and its table stays closed until it restarts;
+//!   good with nothing of it left in the logs. A hub that refused more nodes than the bytes hold records of no peers
+//!   cannot tell, and its table stays closed until it restarts;
+//! - a newer record of a node the table holds one of that does not fit is refused too: the node keeps a tombstone,
+//!   alone, and the hub reports the refusal; its next record that fits takes its place. The table does not close for
+//!   it, since that node has a record;
 //! - a node membership released for good ([`Topics::release`]) keeps its tombstone until no log here holds a message
 //!   of it; then the tombstone is dropped, since the node is neither an origin nor a subscriber here any more;
 //! - a revoked node's record is forgotten: nothing of it is delivered.
@@ -225,7 +228,7 @@ impl Topics {
         let took = self.reach.take(now, &v, !mirrored);
         if self.reach.refused() != refused {
             h.event(Event::ReachRefused { origin: v.origin });
-            if !closed {
+            if !closed && self.reach.is_closed() {
                 h.event(Event::ReachClosed);
             }
         }

@@ -85,8 +85,8 @@ pub enum NodeEvent {
         /// The topic.
         topic: Vec<u8>,
     },
-    /// On a hub: its adjacency table was full and refused `origin`'s record; `origin` is alone here until a slot
-    /// frees and its next record takes it (see [`Node::reach_stats`](crate::Node::reach_stats)).
+    /// On a hub: `origin`'s record did not fit its adjacency table's bytes and was refused; `origin` is alone
+    /// here until a record of it fits (see [`Node::reach_stats`](crate::Node::reach_stats)).
     ReachRefused {
         /// The node whose record was refused.
         origin: NodeId,

@@ -10,15 +10,15 @@ mod common;
 mod support;
 
 use common::{Ev, Net, SEC, ty};
-use support::{T, adj, ask, capture, sends};
+use support::{T, adj, ask, capture, room, sends};
 use vinc_broadcast::Limits;
-use vinc_broadcast::consts::{LOG_WINDOW, RECORD_TTL, REFRESH};
+use vinc_broadcast::consts::{LOG_WINDOW, REACH_RECORD_BASE, RECORD_TTL, REFRESH};
 use vinc_crypto::IdentityAlg;
 
-/// A hub and `members` members, the hub's table holding at most `max` records; every member subscribes.
-fn small(members: usize, max: usize) -> Net {
+/// A hub and `members` members, the hub's table holding `bytes` bytes ([`room`]); every member subscribes.
+fn small(members: usize, bytes: usize) -> Net {
     let limits = Limits {
-        max_reach: max,
+        reach_bytes: bytes,
         ..Limits::default()
     };
     let mut net = Net::with_limits(&vec![IdentityAlg::Ed25519; members + 1], 1, SEC, limits);
@@ -62,7 +62,7 @@ fn release(net: &mut Net, i: usize) {
 
 /// Records 1 and 2 fill a table of two; member 2 publishes, so the log holds a message of it.
 fn full(members: usize) -> Net {
-    let mut net = small(members, 2);
+    let mut net = small(members, room(2));
     adj(&mut net, 1, &[]);
     adj(&mut net, 2, &[]);
     net.publish(2, T, b"logged");
@@ -156,13 +156,13 @@ fn a_refused_node_without_a_record_keeps_the_table_closed_until_it_is_released()
 
 #[test]
 fn a_record_costs_its_peers_and_its_signature_and_a_refresh_is_not_verified_again() {
-    let mut net = small(3, 8);
+    let mut net = small(3, room(8));
     adj(&mut net, 1, &[2, 3]);
     let stats = net.nodes[0].t.reach_stats();
     assert_eq!(
         stats.bytes,
-        2 * 32 + 64,
-        "two peers and an Ed25519 signature; the frame is not kept"
+        REACH_RECORD_BASE + 2 * 32 + 64,
+        "its fixed share, two peers and an Ed25519 signature; the frame is not kept"
     );
 
     // The same record, byte for byte, a hundred times: heard again, never verified again.
@@ -180,4 +180,90 @@ fn a_record_costs_its_peers_and_its_signature_and_a_refresh_is_not_verified_agai
     *other.last_mut().unwrap() ^= 1;
     ask(&mut net, 0, 2, ty::ADJ, &other);
     assert_eq!(net.nodes[0].t.reach_stats(), before);
+}
+
+/// A record of `peers` peers and an Ed25519 signature, as the hub charges it.
+const fn cost(peers: usize) -> usize {
+    REACH_RECORD_BASE + 32 * peers + 64
+}
+
+#[test]
+fn the_bound_is_bytes_a_newcomer_that_does_not_fit_them_is_refused_and_the_table_closes() {
+    // Room for two records of no peers; member 1 names three peers, so the second record does not fit.
+    let mut net = small(4, 2 * cost(0));
+    adj(&mut net, 1, &[2, 3, 4]);
+    adj(&mut net, 2, &[]);
+    let id2 = net.id(2);
+    assert_eq!(reach_events(&net), vec![Ev::ReachRefused(id2), Ev::ReachClosed]);
+    let stats = net.nodes[0].t.reach_stats();
+    assert_eq!(
+        (stats.records, stats.bytes, stats.refused, stats.closed),
+        (1, cost(3), 1, true),
+        "one record, charged by its bytes, fills the table"
+    );
+    assert!(
+        !sends(&mut net, 2, 3, b"refused to unscoped"),
+        "the refused member is alone"
+    );
+}
+
+#[test]
+fn a_record_that_outgrows_the_bytes_leaves_a_tombstone_and_its_next_record_that_fits_takes_its_place() {
+    // Members 1 and 2 hold a session; the table has room for one more peer beyond their records.
+    let budget = 2 * cost(1) + 32;
+    let mut net = small(5, budget);
+    adj(&mut net, 1, &[2]);
+    adj(&mut net, 2, &[1]);
+    let (id1, id2) = (net.id(1), net.id(2));
+    assert!(net.nodes[0].t.same_component(&id1, &id2));
+    assert!(sends(&mut net, 1, 2, b"linked"));
+
+    // Member 1 drops 2 and names three others: 64 bytes more than the room left. Refused, and member 1 is left a
+    // tombstone: the record it outgrew no longer links it to 2. The table stays open: member 1 has a record.
+    adj(&mut net, 1, &[3, 4, 5]);
+    assert_eq!(reach_events(&net), vec![Ev::ReachRefused(id1)]);
+    let stats = net.nodes[0].t.reach_stats();
+    assert_eq!(
+        (stats.records, stats.live, stats.bytes, stats.refused, stats.closed),
+        (2, 1, REACH_RECORD_BASE + cost(1), 1, false)
+    );
+    assert!(stats.bytes <= budget);
+    assert!(
+        !net.nodes[0].t.same_component(&id1, &id2),
+        "the outgrown record's edge is gone"
+    );
+    assert!(!sends(&mut net, 1, 2, b"split"), "member 1 is alone");
+
+    // Member 2 drops 1 too: its record shrinks, and member 1's next refresh fits exactly.
+    adj(&mut net, 2, &[]);
+    net.advance(REFRESH + SEC);
+    let stats = net.nodes[0].t.reach_stats();
+    assert_eq!(
+        (stats.live, stats.bytes, stats.closed),
+        (2, budget, false),
+        "taken once it fits"
+    );
+}
+
+#[test]
+fn the_charge_follows_the_records_through_expiry_release_and_revocation() {
+    let mut net = small(3, room(3));
+    adj(&mut net, 1, &[2]);
+    adj(&mut net, 2, &[1, 3]);
+    adj(&mut net, 3, &[]);
+    assert_eq!(net.nodes[0].t.reach_stats().bytes, cost(1) + cost(2) + cost(0));
+
+    // Member 3 is revoked: its record and its charge go.
+    let id3 = net.id(3);
+    net.nodes[0].t.revoke(&id3);
+    assert_eq!(net.nodes[0].t.reach_stats().bytes, cost(1) + cost(2));
+
+    // Member 2 publishes and leaves: its record expires to a tombstone, then goes once the log is clear of it.
+    net.publish(2, T, b"logged");
+    release(&mut net, 2);
+    net.advance(RECORD_TTL + REFRESH + SEC);
+    let stats = net.nodes[0].t.reach_stats();
+    assert_eq!((stats.records, stats.bytes), (2, cost(1) + REACH_RECORD_BASE));
+    net.advance(LOG_WINDOW + REFRESH);
+    assert_eq!(net.nodes[0].t.reach_stats().bytes, cost(1));
 }

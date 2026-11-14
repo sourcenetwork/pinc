@@ -17,8 +17,8 @@ use vinc_wire::hlc::Hlc;
 
 use crate::behind::Behind;
 use crate::consts::{
-    DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, GAP_EVERY, HAVE_MAX, MAX_TOPIC,
-    QUEUE_CAP, SEEN_CAP, TABLE_MAX,
+    DEFAULT_LOG_BYTES, DEFAULT_MAX_BODY, DEFAULT_MAX_SUBSCRIBERS, DEFAULT_MAX_TOPICS, DEFAULT_REACH_BYTES, GAP_EVERY,
+    HAVE_MAX, MAX_TOPIC, QUEUE_CAP, SEEN_CAP,
 };
 use crate::event::Trace;
 use crate::floors::{Gather, SentFloors};
@@ -38,13 +38,15 @@ pub struct Limits {
     pub max_topics: usize,
     /// The most subscribers the node learns or announces per topic.
     pub max_subscribers: usize,
-    /// The most adjacency records a hub keeps (see [`Topics::set_adjacent`]), each of at most
-    /// [`ADJ_MAX`](crate::consts::ADJ_MAX) peers. A record keeps its parsed peers and its signature, not the frame:
-    /// 32 KiB and the signature at that bound (about 128 MiB for the default 4,096 records), a little over 100 bytes
-    /// for a record of a few peers; [`ReachStats::bytes`](crate::ReachStats::bytes) counts them. A full table
-    /// refuses a new member's record and closes: while it is closed every node without a record counts as alone. It
-    /// opens again once every node it refused has a record, was revoked or was released.
-    pub max_reach: usize,
+    /// The bytes a hub's adjacency table holds (see [`Topics::set_adjacent`]). Each record is charged
+    /// [`REACH_RECORD_BASE`](crate::consts::REACH_RECORD_BASE), 32 bytes per peer it names and its signature; a
+    /// tombstone the base alone. [`ReachStats::bytes`](crate::ReachStats::bytes) is the charge now. A record that
+    /// does not fit is refused: a new node's, and the table closes (while it is closed every node without a record
+    /// counts as alone; it opens again once every node it refused has a record, was revoked or was released); or a
+    /// newer record of a node it holds one of, which then keeps a tombstone and is alone until a record of it fits.
+    /// The refused nodes it remembers are bounded by the records the bytes could hold. It must hold at least one
+    /// record's fixed share.
+    pub reach_bytes: usize,
 }
 
 impl Default for Limits {
@@ -54,7 +56,7 @@ impl Default for Limits {
             log_bytes: DEFAULT_LOG_BYTES,
             max_topics: DEFAULT_MAX_TOPICS,
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
-            max_reach: TABLE_MAX,
+            reach_bytes: DEFAULT_REACH_BYTES,
         }
     }
 }
@@ -69,7 +71,7 @@ impl Limits {
         // A logged message is its head and body, and the whole of it must fit the ring.
         self.max_topics > 0
             && self.max_subscribers > 0
-            && self.max_reach > 0
+            && self.reach_bytes >= crate::consts::REACH_RECORD_BASE
             && u16::try_from(self.max_subscribers).is_ok()
             && u32::try_from(self.max_body).is_ok()
             && self.max_body.saturating_add(crate::wire::MAX_HEAD) <= self.log_bytes
@@ -373,7 +375,7 @@ impl Topics {
                 },
                 lost: 0,
             },
-            reach: crate::reach::Reach::new(unscoped, cfg.limits.max_reach),
+            reach: crate::reach::Reach::new(unscoped, cfg.limits.reach_bytes),
         })
     }
 
