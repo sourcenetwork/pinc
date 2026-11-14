@@ -664,12 +664,34 @@ impl PortMap {
         }
     }
 
-    /// Stop at `now`: drop the mapping and ask the gateway to delete it. Nothing is asked afterwards.
+    /// The mapping a request in flight may have made at the gateway: a PCP or NAT-PMP request that left, or an
+    /// AddPortMapping that was sent.
+    fn in_flight(&self) -> Option<Lease> {
+        let proto = match self.step {
+            Step::Pcp => Proto::Pcp,
+            Step::NatMap => Proto::NatPmp,
+            Step::Add if self.igd.is_some_and(|i| i.ctl.is_some()) => Proto::Upnp,
+            _ => return None,
+        };
+        let port = match proto {
+            Proto::Upnp => self.igd.map_or(self.cfg.local.port(), |i| i.external),
+            _ => self.cfg.local.port(),
+        };
+        Some(Lease {
+            proto,
+            ext: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+            renew: 0,
+            expiry: 0,
+        })
+    }
+
+    /// Stop at `now`: drop the mapping, or a request in flight that may have made one, and ask the gateway to delete
+    /// it. Nothing is asked afterwards.
     pub fn stop(&mut self, now: u64) {
         self.now = self.now.max(now);
         let now = self.now;
         self.halted = true;
-        let held = self.held.take();
+        let held = self.held.take().or_else(|| self.in_flight());
         self.renewing = false;
         match held {
             Some(l) if l.proto == Proto::Upnp && self.igd.is_some_and(|i| i.ctl.is_some()) => {

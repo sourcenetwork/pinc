@@ -598,3 +598,72 @@ fn an_ipv4_mapped_gateway_is_the_ipv4_address_it_maps() {
     let v6_source = SocketAddr::new(mapped, PORT);
     assert!(pm.owns(v6_source, &[2; 60]), "a mapped source is the same address");
 }
+
+#[test]
+fn stop_releases_a_pcp_request_in_flight() {
+    let mut pm = client(Some(GW.into()), local());
+    let asked = pcp::decode_request(&sent(&mut pm)[0].1).unwrap();
+    pm.stop(T0 + SEC / 10);
+    let out = sent(&mut pm);
+    assert_eq!(out.len(), 1, "the request may have made a mapping: it is released");
+    let release = pcp::decode_request(&out[0].1).unwrap();
+    assert_eq!((out[0].0, release.lifetime, release.nonce), (gw(), 0, asked.nonce));
+    assert!(pm.stopped());
+}
+
+#[test]
+fn stop_releases_a_nat_pmp_request_in_flight() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(
+        T0,
+        gw(),
+        &nat(natpmp::Response::Error {
+            opcode: 1,
+            result: 1,
+            epoch: 1,
+        }),
+    );
+    sent(&mut pm);
+    pm.handle_datagram(
+        T0,
+        gw(),
+        &nat(natpmp::Response::Address {
+            result: 0,
+            epoch: 1,
+            ip: "203.0.113.9".parse().unwrap(),
+        }),
+    );
+    assert!(!sent(&mut pm).is_empty(), "the mapping request is out");
+    pm.stop(T0 + SEC / 10);
+    let out = sent(&mut pm);
+    assert_eq!(out.len(), 1);
+    assert_eq!(
+        natpmp::decode_request(&out[0].1),
+        Ok(natpmp::Request::Map {
+            internal_port: 4433,
+            external_port: 0,
+            lifetime: 0
+        })
+    );
+}
+
+#[test]
+fn stop_deletes_a_upnp_mapping_whose_request_is_in_flight() {
+    let mut pm = client(None, local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml"));
+    let desc = b"HTTP/1.1 200 OK\r\n\r\n<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl</controlURL></service>";
+    let ip = b"HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>203.0.113.9</NewExternalIPAddress>";
+    for a in [desc.as_slice(), ip] {
+        http(&mut pm).unwrap();
+        pm.handle_http(T0, Some(a));
+    }
+    assert!(
+        http_text(&mut pm).unwrap().contains("#AddPortMapping"),
+        "the AddPortMapping is out"
+    );
+    pm.stop(T0 + SEC / 10);
+    let del = http_text(&mut pm).expect("the mapping the gateway may have made is deleted");
+    assert!(del.contains("#DeletePortMapping") && del.contains("<NewExternalPort>4433<"));
+}
