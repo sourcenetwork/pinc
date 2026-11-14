@@ -337,7 +337,7 @@ impl EarlyData {
         self.dropped
     }
 
-    /// Drop every held packet (the peer failed authentication).
+    /// Drop every held packet: the connection closed, whatever the reason.
     pub fn clear(&mut self, pool: &mut BufferPool<'_>) {
         self.queue.clear(pool);
     }

@@ -695,7 +695,9 @@ impl<'o> BatchBuilder<'o> {
     /// Offer the next frame.
     ///
     /// # Errors
-    /// The frame's own encode errors; a frame that merely does not fit is [`Offer::Refused`].
+    /// The frame's own encode errors. A frame that merely does not fit a batch that already holds one is
+    /// [`Offer::Refused`]; on an empty batch a frame the buffer cannot take is the wire error, and a buffer shorter
+    /// than the batch header is `NoRoom`.
     pub fn offer(&mut self, frame: &Frame<'_>) -> Result<Offer, FrameError> {
         if matches!(frame, Frame::Batch(_)) || frame.is_long_header() || self.st.count >= BATCH_MAX_FRAMES {
             return Ok(Offer::Refused);
