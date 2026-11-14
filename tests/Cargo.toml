@@ -682,6 +682,10 @@ name = "trace_connect_table"
 path = "trace_connect_table.rs"
 
 [[test]]
+name = "trace_connect_pack"
+path = "trace_connect_pack.rs"
+
+[[test]]
 name = "trace_connect_codec"
 path = "trace_connect_codec.rs"
 
