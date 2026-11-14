@@ -382,7 +382,8 @@ conn_impl! {
             repair: None,
             min_total: 0,
         };
-        if on_active && !probes {
+        // A probe packet carries only its PING: the repair stays pending for the next packet.
+        if on_active && !probes && fill.probe.is_none() {
             fill.repair = self.life.repair_pn.take();
         }
         let r = self.build_packet(env, window, kind, fill);

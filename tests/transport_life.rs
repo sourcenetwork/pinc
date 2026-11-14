@@ -458,6 +458,63 @@ fn tail_repair_covers_a_lost_last_packet() {
     });
 }
 
+/// A connection old enough and with a loss average high enough to repair its tail, with a datagram buffer of
+/// `room` bytes: it sends one small finished stream and polls once, so the repair of that packet is pending.
+/// Returns the net with the buffer widened to the full size.
+fn net_with_a_repair_pending<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, room: usize) -> Net<'a, 'a> {
+    sa.loss.record(1000, 0);
+    let mut net = setup(w, sa, sb, Link::new(31, Params::new(10 * MS).mtu(1500)));
+    net.buf.truncate(room);
+    assert!(net.connect(net.now + 30 * SEC), "{:?}", net.rx_drops);
+    net.run(net.now + 3 * SEC, |_| false);
+    let id = net.a.conn.open_uni().unwrap();
+    net.a.conn.write(id, &pattern(100, 7)).unwrap();
+    net.a.conn.finish(id).unwrap();
+    assert!(poll_a(&mut net).is_some(), "the stream packet leaves");
+    assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
+    net.buf.resize(65_536, 0);
+    net
+}
+
+/// One poll of A, by hand, so that nothing else is built in between.
+fn poll_a(net: &mut Net<'_, '_>) -> Option<usize> {
+    let mut env = Env {
+        provider: &net.a.prov,
+        now: net.now,
+        drbg: &mut net.a.drbg,
+    };
+    net.a.conn.poll_transmit(&mut env, &mut net.buf).map(|t| t.len)
+}
+
+#[test]
+fn a_tail_repair_that_is_due_with_a_path_mtu_probe_goes_with_the_next_packet() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        // A buffer of 1300 bytes cannot hold the 1452 byte probe, so the first probe waits until the buffer grows.
+        let mut net = net_with_a_repair_pending(&mut w, &mut sa, &mut sb, 1300);
+        assert_eq!(poll_a(&mut net), Some(1452), "the probe leaves first");
+        assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
+        assert!(
+            poll_a(&mut net).is_some_and(|n| n < 700),
+            "the repair leaves with the next packet"
+        );
+        assert_eq!(net.a.conn.stats().repairs, 1, "{:?}", net.a.conn.stats());
+    });
+}
+
+#[test]
+fn a_tail_repair_with_no_probe_due_leaves_with_the_next_packet() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        w.cfg.probe_mtu = false;
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = net_with_a_repair_pending(&mut w, &mut sa, &mut sb, 1300);
+        assert!(poll_a(&mut net).is_some_and(|n| n < 700), "the repair leaves");
+        assert_eq!(net.a.conn.stats().repairs, 1, "{:?}", net.a.conn.stats());
+    });
+}
+
 #[test]
 fn a_node_that_serves_a_relay_sends_no_tail_repair() {
     big_stack(|| {
