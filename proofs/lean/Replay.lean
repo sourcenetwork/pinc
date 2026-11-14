@@ -24,6 +24,7 @@ import Vinc.TraceCoreTable
 import Vinc.TraceKeepalive
 import Vinc.TraceNodeBackoff
 import Vinc.TraceRtt
+import Vinc.TraceFacadeStandby
 import Vinc.TraceHalfOpen
 import Vinc.TraceHeap
 import Vinc.TraceCoreState
@@ -207,6 +208,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ctw : TraceCoreTable.W := {}
   let mut nbw : TraceNodeBackoff.W := {}
   let mut rtw : TraceRtt.W := {}
+  let mut fsw : TraceFacadeStandby.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut hpw : TraceHeap.W := {}
   let mut qvw : TraceQueue.W := {}
@@ -623,6 +625,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceRtt.replayEvent j rtw with
           | .ok w' =>
             rtw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceFacadeStandby.isTag t then
+          -- Standby slab events (`fsb`, written by `trace_standby`): the facade's tickets, wakers and baton queue.
+          match TraceFacadeStandby.replayEvent j fsw with
+          | .ok w' =>
+            fsw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

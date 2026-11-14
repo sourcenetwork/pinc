@@ -116,3 +116,150 @@ impl Standby {
         }
     }
 }
+
+/// A slab of its own for the trace check, driven call by call with tickets and wakers named by numbers.
+#[cfg(feature = "trace")]
+pub(crate) mod trace {
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::task::{Wake, Waker};
+
+    use super::{Standby, Ticket};
+
+    /// A waker that writes its number into the log when it is woken.
+    struct Named {
+        id: u32,
+        log: Arc<Mutex<Vec<u32>>>,
+    }
+
+    impl Wake for Named {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.log.lock().unwrap_or_else(PoisonError::into_inner).push(self.id);
+        }
+    }
+
+    /// What one slot of the slab holds.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StandbySlot {
+        /// The generation a ticket must name.
+        pub generation: u32,
+        /// The number of the waker kept, `None` if none is.
+        pub waker: Option<u32>,
+        /// The slot is in the queue of those waiting for the driving role.
+        pub queued: bool,
+        /// A future holds the slot.
+        pub live: bool,
+    }
+
+    /// A slab of tickets with its state readable after every call; a waker is named by a number, and every call
+    /// returns the numbers of the wakers it woke, in the order it woke them.
+    pub struct StandbyProbe {
+        s: Standby,
+        log: Arc<Mutex<Vec<u32>>>,
+        wakers: Vec<Waker>,
+    }
+
+    impl Default for StandbyProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl StandbyProbe {
+        /// An empty slab.
+        #[must_use]
+        pub fn new() -> Self {
+            Self {
+                s: Standby::default(),
+                log: Arc::new(Mutex::new(Vec::new())),
+                wakers: Vec::new(),
+            }
+        }
+
+        fn waker(&mut self, id: u32) -> Waker {
+            while self.wakers.len() <= id as usize {
+                let id = u32::try_from(self.wakers.len()).unwrap_or(u32::MAX);
+                self.wakers.push(Waker::from(Arc::new(Named {
+                    id,
+                    log: Arc::clone(&self.log),
+                })));
+            }
+            self.wakers
+                .get(id as usize)
+                .cloned()
+                .unwrap_or_else(|| Waker::noop().clone())
+        }
+
+        fn woken(&self) -> Vec<u32> {
+            std::mem::take(&mut *self.log.lock().unwrap_or_else(PoisonError::into_inner))
+        }
+
+        /// A new ticket, as its slot and generation.
+        pub fn alloc(&mut self) -> (u32, u32) {
+            let t = self.s.alloc();
+            (t.idx, t.gen_)
+        }
+
+        /// Arm the ticket `(idx, generation)` with the waker numbered `waker`; what it woke (nothing).
+        pub fn arm(&mut self, idx: u32, generation: u32, waker: u32) -> Vec<u32> {
+            let w = self.waker(waker);
+            self.s.arm(Ticket { idx, gen_: generation }, &w);
+            self.woken()
+        }
+
+        /// Notify the ticket `(idx, generation)`; the waker it woke, if any.
+        pub fn notify(&mut self, idx: u32, generation: u32) -> Vec<u32> {
+            self.s.notify(Ticket { idx, gen_: generation });
+            self.woken()
+        }
+
+        /// Offer the driving role; the waker it woke, if any.
+        pub fn baton(&mut self) -> Vec<u32> {
+            self.s.baton();
+            self.woken()
+        }
+
+        /// Wake every armed ticket; the wakers woken, in the order of their slots.
+        pub fn notify_all(&mut self) -> Vec<u32> {
+            self.s.notify_all();
+            self.woken()
+        }
+
+        /// Release the ticket `(idx, generation)`; what it woke (nothing).
+        pub fn release(&mut self, idx: u32, generation: u32) -> Vec<u32> {
+            self.s.release(Ticket { idx, gen_: generation });
+            self.woken()
+        }
+
+        /// The slots, in order.
+        pub fn slots(&self) -> Vec<StandbySlot> {
+            self.s
+                .slots
+                .iter()
+                .map(|s| StandbySlot {
+                    generation: s.gen_,
+                    waker: s.waker.as_ref().and_then(|w| {
+                        self.wakers
+                            .iter()
+                            .position(|m| m.will_wake(w))
+                            .and_then(|i| u32::try_from(i).ok())
+                    }),
+                    queued: s.queued,
+                    live: s.live,
+                })
+                .collect()
+        }
+
+        /// The free slots, as the code's stack holds them (the last is taken first).
+        pub fn free(&self) -> Vec<u32> {
+            self.s.free.clone()
+        }
+
+        /// The queue of those waiting for the driving role, front first.
+        pub fn queue(&self) -> Vec<u32> {
+            self.s.queue.iter().copied().collect()
+        }
+    }
+}

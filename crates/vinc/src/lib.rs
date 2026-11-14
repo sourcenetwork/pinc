@@ -102,6 +102,8 @@ pub use node::CAPACITIES;
 pub use protocol::{MAX_TAG, Protocol, Registered, read_tag, write_tag};
 pub use records::{KNOWN_MAX, MAX_HINTS, PeerRecord, Records, Rendezvous};
 pub use role::{RelayRole, Role, RoleSpec};
+#[cfg(feature = "trace")]
+pub use standby::trace::{StandbyProbe, StandbySlot};
 pub use stream::{RecvStream, SendStream};
 pub use vinc_core::NodeStats;
 pub use vinc_crypto::NodeId;
