@@ -640,6 +640,10 @@ par witness_tlc timers_carrier Timers Timers_carrier NoCarrierClose
 par witness_tlc timers_norelay Timers Timers_norelay CarrierClose
 par witness_tlc timers_nofresh Timers Timers_nofresh CarrierClose
 par witness_tlc timers_nounconf Timers Timers_nounconf HsEnds
+par run_tlc finish FinishResend FinishResend
+par witness_tlc finish_pto FinishResend FinishResend_pto FirstBounded
+par witness_tlc finish_fixed FinishResend FinishResend_fixed FirstAtPto
+par witness_tlc finish_nocap FinishResend FinishResend_nocap WaitsCapped
 par run_tlc broadcast_auth BroadcastAuth BroadcastAuth
 par witness_tlc broadcast_auth_nobody BroadcastAuth BroadcastAuth_nobody DeliverExact
 par witness_tlc broadcast_auth_noisb BroadcastAuth BroadcastAuth_noisb DeliverExact
