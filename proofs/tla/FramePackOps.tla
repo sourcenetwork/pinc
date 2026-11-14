@@ -147,7 +147,9 @@ DgLoop(c, st, ds) ==
          IF EncodedLen(f) > Room(c, st) \/ ~Fits(c, st, f) THEN st
          ELSE DgLoop(c, [Eli(Add(c, st, f)) EXCEPT !.hint = IF CLEAR THEN <<>> ELSE @], Tail(ds))
 
-\* fill_repair: the stream frames of the packet repaired, whole, while they fit the repair's room and the payload
+\* fill_repair: the stream frames of the packet repaired that are not acknowledged, each as the stream layer gives it
+\* (cut to start after its stream's acknowledged prefix, resend_from; a part acknowledged for good was released), while
+\* they fit the repair's room and the payload
 RECURSIVE RepLoop(_, _, _, _)
 RepLoop(c, st, cs, room) ==
     IF Len(cs) = 0 \/ Len(cs[1].data) + 24 > room \/ st.refs >= REFS THEN st

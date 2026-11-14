@@ -611,7 +611,13 @@ These items are still open; they are listed so nothing is hidden:
   only for a ghost of that ring, and no other event (`ackRing_events`, `ackRange1_events`, `ackRanges_events`).
 - Of the stream table, the send half (credit against the peer's window, the retransmission queue, source-backed
   streams), urgency order and datagrams are not modelled; the send half appears only as the pool chunks it holds and
-  the state that frees a slot, plus its reset and the stop request.
+  the state that frees a slot, plus its reset and the stop request. So a resend that never copies a released chunk's
+  slot is tested, not modelled: a lost range is cut to start after the acknowledged prefix (`Send::clip` in the
+  resend path), the tail repair cuts each frame it sends again the same way (`Streams::resend_from` in `fill_repair`),
+  and `Send::copy_out` refuses a chunk whose slot was released (`DataUnavailable`, the range queued again), checked by
+  `tests/transport_stream_ring.rs`, `tests/transport_ring_conn.rs` and `transport_stream_send`'s
+  `a_resend_starts_after_the_acknowledged_prefix`. The packet builder model takes the frames of a tail repair as the
+  stream layer gives them, cut so; the stream-table and packet-builder traces run the code with the cut.
 - The stream-table TLC configs are kept to about a minute each on the check host, which cut them to: `Streams`
   (offsets up to 3 of a 8-byte cap, was 6 of 12), `Streams_caps` (two slots, ids 0, 4 and 8, frames at offsets up to 2,
   was 3, a clock that does not advance), `Streams_ext` (offsets up to 2 of a 6-byte cap, was 4 of 12, other users of
