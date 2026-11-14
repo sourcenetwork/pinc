@@ -127,7 +127,7 @@ impl Ledger {
                 if u128::from(e.tx) + u128::from(charge) > u128::from(e.rx) * u128::from(FACTOR) {
                     false
                 } else {
-                    e.tx += charge;
+                    e.tx = e.tx.saturating_add(charge);
                     true
                 }
             }

@@ -456,3 +456,15 @@ fn a_hello_with_a_forged_binder_is_not_exempt() {
         assert_eq!(admissions(&mut d.srv), [(false, false)]);
     });
 }
+
+#[test]
+fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
+    use vinc_core::Ledger;
+    let v: SocketAddr = "10.9.9.8:1000".parse().unwrap();
+    let mut l = Ledger::new(1);
+    l.on_receive(v, u64::MAX);
+    assert!(l.allow_send(v, u64::MAX - 28));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| l.allow_send(v, 0)));
+    assert_eq!(r.ok(), Some(true), "the second charge must not overflow the total");
+    assert_eq!(l.get(&v).unwrap().tx, u64::MAX);
+}
