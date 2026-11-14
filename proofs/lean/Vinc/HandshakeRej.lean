@@ -9,6 +9,10 @@ for a Reply as it was, but for noting that a full Initial went out for a reject 
 reject gap), and a rejected resumption starts a fresh full handshake. A reject
 a responder sends leaves the responder's state as it was and its store as it was or with one slot removed (an
 expired one), and issues nothing (`RejectsOnlyFallback` of `Handshake.tla`).
+
+No message stops an initiator, and a Reply that fails a check before the responder's signature verified is dropped
+with the initiator waiting for the next one, unauthenticated (`ihandleNeverFatal`, `replyOfferDropped`,
+`replyUnauthDropped`).
 -/
 
 namespace Vinc.Hs
@@ -28,10 +32,9 @@ theorem InvI_upd {ist : Nat × Nat → IState} (h : InvI ist) (s : Nat × Nat) (
 theorem InvI_ihandle (st : IState) (n : Nat) (m : Msg) (h : (st.ph = .reply ∨ st.ph = .resume ∨ st.ph = .decap) → st.est = false ∧ st.auth = false) :
     ((IHandle st n m).st.ph = .reply ∨ (IHandle st n m).st.ph = .resume ∨ (IHandle st n m).st.ph = .decap) →
       (IHandle st n m).st.est = false ∧ (IHandle st n m).st.auth = false := by
-  rcases IHandle_cases st n m with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨hp, -, -, c, -⟩ | ⟨hp, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
+  rcases IHandle_cases st n m with ⟨c, -⟩ | ⟨hp, -, -, c, -⟩ | ⟨hp, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
     ⟨-, -, -, -, c, -⟩ | ⟨hp, -, -, c, -⟩
   · rw [c]; exact h
-  · rw [c]; intro e; simp at e
   · rw [c]; intro _; have := h (Or.inl hp); simp [this]
   · rw [c]; intro _; exact h (Or.inl hp)
   · rw [c]; intro e; simp [IResumed] at e
@@ -87,6 +90,33 @@ theorem InvI_reach {K C : Nat} {g : G} (hr : Reach K C g) : InvI g.ist := by
   induction hr with
   | init => intro s h; simp [G0] at h
   | step _ hs ih => exact InvI_step ih hs
+
+/-! ## A dialing side drops a Reply that fails a check before it authenticated
+
+Nothing in a Reply has authenticated until the responder's signature verified, so a Reply that fails any check
+before that is dropped and the initiator keeps waiting for the real one (`initiator.rs`). -/
+
+/-- No message stops an initiator: whatever it receives, the step takes it or drops it. -/
+theorem ihandleNeverFatal (st : IState) (n : Nat) (m : Msg) : (IHandle st n m).err ≠ .fatal := by
+  unfold IHandle
+  repeat' split
+  all_goals simp [Drop, Ok]
+
+/-- A Reply whose AEAD is outside the offer is dropped: the initiator is left exactly as it was. -/
+theorem replyOfferDropped (st : IState) (n : Nat) (m : Msg) (hp : st.ph = .reply) (hty : m.ty = .reply)
+    (ho : ¬ InOffer st.of m.ad) : IHandle st n m = Drop st := by
+  have hf : st.ph ≠ .failed := by simp [hp]
+  simp [IHandle, hf, hty, hp, ho]
+
+/-- A Reply taken in that does not authenticate (its sealed part does not open, or holds no credit record, another
+identity than the dialed one or a signature that does not verify) is dropped: nothing is sent or raised, the
+initiator waits for the next Reply, and it has not authenticated or taken the peer's credit record. -/
+theorem replyUnauthDropped (st : IState) (n : Nat) (hp : st.ph = .decap) (ha : ¬ ikAuth st n) :
+    (IKey st n .ok).err = .drop ∧ (IKey st n .ok).st = ikBackSt st ∧ (IKey st n .ok).out = []
+      ∧ (IKey st n .ok).ev = [] ∧ (IKey st n .ok).sg = []
+      ∧ (ikBackSt st).ph = .reply ∧ (ikBackSt st).pcr = st.pcr ∧ (ikBackSt st).auth = st.auth
+      ∧ (ikBackSt st).est = st.est := by
+  simp [IKey, hp, ha, ikBackSt]
 
 /-- RejectsOnlyFallback, initiator side: a reject delivered to any session is dropped or taken without a change, or
 leaves a session that waited for a reply as it was but for noting the full Initial it sent for a prekey reject, or
@@ -264,10 +294,9 @@ def InvD (s : Nat × Nat) (st : IState) : Prop :=
 theorem InvD_none (s : Nat × Nat) : InvD s ({} : IState) := ⟨by simp, by simp [Late]⟩
 
 theorem InvD_ihandle (s : Nat × Nat) (st : IState) (m : Msg) (h : InvD s st) : InvD s (IHandle st s.1 m).st := by
-  rcases IHandle_cases st s.1 m with ⟨c, -⟩ | ⟨-, c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨-, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
+  rcases IHandle_cases st s.1 m with ⟨c, -⟩ | ⟨-, -, -, c, -⟩ | ⟨-, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩ |
     ⟨-, -, -, -, c, -⟩ | ⟨-, -, -, c, -⟩
   · rw [c]; exact h
-  · rw [c]; exact ⟨by simp, h.2⟩
   · rw [c]; exact ⟨by simp, h.2⟩
   · rw [c]; exact ⟨fun e => h.1 e, h.2⟩
   · rw [c]; exact ⟨by simp [IResumed], by simp [IResumed, NoLate]⟩
@@ -361,6 +390,9 @@ theorem resendWithinBudget (st : RState) (n k : Nat) (sto : Store) (m : Msg) (cs
 #audit_axioms Vinc.Hs.fallbackKeepsDcid
 #audit_axioms Vinc.Hs.resendWithinBudget
 #audit_axioms Vinc.Hs.InvI_reach
+#audit_axioms Vinc.Hs.ihandleNeverFatal
+#audit_axioms Vinc.Hs.replyOfferDropped
+#audit_axioms Vinc.Hs.replyUnauthDropped
 #audit_axioms Vinc.Hs.rejectInit
 #audit_axioms Vinc.Hs.RplOK_reach
 #audit_axioms Vinc.Hs.rejectRespPrej

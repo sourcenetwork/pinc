@@ -175,7 +175,8 @@ HelloForgeries(b) ==
     {b, [b EXCEPT !.ver = "bad"], [b EXCEPT !.al = BadAlp]}
 
 (* A message the attacker has no way to make valid is, to the receiver, one canonical failing message: the bad ones
-   below stand for every such message (any other bad field only changes what an immediate fatal failure reports). *)
+   below stand for every such message (any other bad field only changes what an immediate fatal failure reports, or,
+   for a Reply, which check drops it). *)
 ForgedToR(s) ==
     LET st == rst[s]
     IN (IF Forge THEN InitForgeries(AttInit) \cup InitBad ELSE {})
@@ -197,6 +198,8 @@ ReplyBlobs(st, n, m) ==
     IN {BadBlob} \cup (IF Known(hsr)
                        THEN {[k |-> hsr, ad |-> th1, id |-> st.peer, sig |-> Sig(st.peer, "responder", Th2(th1, st.peer, cr)), cr |-> cr] :
                                  cr \in CrPool \cup {NIL}} ELSE {})
+(* a blob that opens but holds no credit record, another identity or a signature that does not verify is dropped by
+   the initiator exactly as BadBlob is (IKey), so BadBlob stands for it *)
 ReplyBlobsOK(st, n, m) == {b \in ReplyBlobs(st, n, m) : b = BadBlob \/ SigOK(st.peer, "responder", Th2(Th1(st.th0, m.sc, m.ad, m.e, m.ct), st.peer, b.cr))}
 
 (* a forged resumption reply against the Hello secrets x, thh, binder, ckpsk *)

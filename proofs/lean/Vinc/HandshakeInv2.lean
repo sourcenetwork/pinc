@@ -59,10 +59,9 @@ theorem iStep2 {g g' : G} (h1 : Inv1 g) (h : Inv2 g) (hs : Step g g') : Inv2 g' 
   | iRecv s m _ hd =>
     have hl := h.iEst s
     refine iupd2 h s _ rfl rfl ?_
-    rcases IHandle_cases (g.ist s) s.1 m with ⟨c1, -⟩ | ⟨-, c1, -⟩ | ⟨-, -, -, c1, -⟩ | ⟨-, -, -, -, c1, -⟩
+    rcases IHandle_cases (g.ist s) s.1 m with ⟨c1, -⟩ | ⟨-, -, -, c1, -⟩ | ⟨-, -, -, -, c1, -⟩
       | ⟨-, -, -, c1, -⟩ | ⟨-, -, -, -, c1, -⟩ | ⟨-, -, -, c1, -⟩
     · rw [c1]; exact hl
-    · rw [c1]; exact ⟨hl.1, by simp⟩
     · rw [c1]; exact ⟨hl.1, by simp⟩
     · rw [c1]; exact hl
     · rw [c1]; simp [IResumed]

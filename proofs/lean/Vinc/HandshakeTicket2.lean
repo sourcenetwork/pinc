@@ -24,9 +24,8 @@ theorem conf_inj {a b c d : Term} (h : conf a b = conf c d) : a = c ∧ b = d :=
 theorem IHandle_out_nil (st : IState) (n : Nat) (m : Msg) :
     ∀ x ∈ (IHandle st n m).out, x.conf = nil ∧ x.binder = nil := by
   intro x hx
-  rcases IHandle_cases st n m with ⟨c1, c2⟩ | ⟨hp, c1, c2⟩ | ⟨hp, hty, hio, c1, c2⟩ | ⟨hp, hsh, hty, he, c1, c2⟩
+  rcases IHandle_cases st n m with ⟨c1, c2⟩ | ⟨hp, hty, hio, c1, c2⟩ | ⟨hp, hsh, hty, he, c1, c2⟩
     | ⟨hp, hty, hc, c1, c2⟩ | ⟨hp, hl, hty, hc, c1, c2⟩ | ⟨hp, hty, he, c1, c2⟩ <;> rw [c2] at hx
-  · simp at hx
   · simp at hx
   · simp at hx
   · simp at hx; subst hx; simp [IInitMsg]
@@ -219,10 +218,9 @@ theorem CkS_of_near {n : Nat} {t : Tk} {st st' : IState} (h : CkS n t st) (hn : 
 theorem CkS_ihandle {s : Nat × Nat} {t : Tk} {st : IState} (m : Msg) (hI : ICl s st) (hL : ILoc st)
     (h : CkS s.1 t st) : CkS s.1 t (IHandle st s.1 m).st := by
   refine CkS_of_near h (IHandle_near st s.1 m) ?_
-  rcases IHandle_cases st s.1 m with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
+  rcases IHandle_cases st s.1 m with ⟨c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
     | ⟨hp, hty, hc, c1, -⟩ | ⟨hp, hl, hty, hc, c1, -⟩ | ⟨hp, hty, he, c1, -⟩
   · rw [c1]; exact h.rcr
-  · rw [c1]; intro _; exact h.rcr (fun e => by rcases hp with hp | hp <;> simp [hp] at e)
   · rw [c1]; intro _; exact h.rcr (fun e => by simp [hp] at e)
   · rw [c1]; intro _; exact h.rcr (fun e => by simp [hp] at e)
   · rw [c1]; intro _; exact h.rcr (fun e => by simp [hp] at e)
@@ -452,10 +450,9 @@ theorem ires2_step {K C : Nat} {g g' : G} (hr : Reach K C g) (h4 : Inv4 g) (hs :
   | iRecv s0 m hn hd =>
     refine ires2_upd hs0 h4 rfl ?_
     have hI := h3.ic s0
-    rcases IHandle_cases (g.ist s0) s0.1 m with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
+    rcases IHandle_cases (g.ist s0) s0.1 m with ⟨c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
       | ⟨hp, hty, hc, c1, -⟩ | ⟨hp, hl, hty, hc, c1, -⟩ | ⟨hp, hty, he, c1, -⟩
     · rw [c1]; intro hph hres; exact IRes2Of_mono hs0 (h4.ires2 s0 hph hres)
-    · rw [c1]; intro hph; rcases hp with hp | hp <;> simp [hp] at hph
     · rw [c1]; intro hph; simp [hp] at hph
     · rw [c1]; intro hph; simp [hp] at hph
     · rw [c1]; intro _ _

@@ -82,14 +82,9 @@ theorem ICl_new (s : Nat × Nat) (peer : Nat) (al : Term) (short : Bool) (tk : O
 
 theorem ICl_ihandle (s : Nat × Nat) (st : IState) (m : Msg) (h : ICl s st) :
     ICl s (IHandle st s.1 m).st := by
-  rcases IHandle_cases st s.1 m with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
+  rcases IHandle_cases st s.1 m with ⟨c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
     | ⟨hp, hty, hc, c1, -⟩ | ⟨hp, hl, hty, hc, c1, -⟩ | ⟨hp, hty, he, c1, -⟩
   · rw [c1]; exact h
-  · rw [c1]
-    have hnd : st.ph ≠ .done := by rcases hp with hp | hp <;> simp [hp]
-    refine ⟨fun _ => h.ne (by rcases hp with hp | hp <;> simp [hp]), ?_, ?_, ?_, ?_, ?_, ?_, ?_, h.late⟩ <;>
-      intro hh <;> simp at hh
-    exact absurd (h.resFlag hh) hnd
   · rw [c1]
     have hb := h.reply hp
     have hr0 : st.resumed = false := hb.2.2

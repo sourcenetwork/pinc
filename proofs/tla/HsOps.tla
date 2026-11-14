@@ -36,9 +36,11 @@
 (* (ad), and the byte length of the message (len), exactly as the code     *)
 (* absorbs them. The checks the code makes on them are the checks below:   *)
 (* the responder refuses a version other than "ok", an ALPN it does not    *)
-(* serve (Served) and an offer without a common AEAD (Choose), the         *)
-(* initiator refuses an AEAD outside its offer (InOffer). Anything else is *)
-(* absorbed and so authenticated through the transcript.                   *)
+(* serve (Served) and an offer without a common AEAD (Choose), and stops;  *)
+(* the initiator drops a Reply whose AEAD is outside its offer (InOffer)   *)
+(* and keeps waiting, since nothing in a Reply has authenticated before    *)
+(* the responder's signature verified. Anything else is absorbed and so    *)
+(* authenticated through the transcript.                                   *)
 (*                                                                         *)
 (* A step returns [st, out, ev, err] (the responder also sto and iss, the  *)
 (* initiator also sg): the new local state, the messages sent, the events  *)
@@ -321,7 +323,8 @@ IHandle(st, n, m) ==
     IF st.ph = "failed" THEN Drop(st)
     ELSE CASE m.ty = "Reply" ->
             IF st.ph # "reply" THEN Drop(st)
-            ELSE IF ~InOffer(st.of, m.ad) THEN Fatal(st)
+            (* not authenticated yet: a Reply with an AEAD outside the offer is dropped, the initiator keeps waiting *)
+            ELSE IF ~InOffer(st.of, m.ad) THEN Drop(st)
             ELSE Ok([st EXCEPT !.ph = "decap", !.reply = m, !.ad = m.ad, !.th1 = Th1(st.th0, m.sc, m.ad, m.e, m.ct),
                                !.ssx = Dh(st.x, AtomOf(m.e))], {}, {})
       [] m.ty = "PRej" ->
@@ -380,13 +383,14 @@ IKey(st, n, kind) ==
             ck1 == Ck1(ssk, st.ssx)
             b == st.reply.sealed
             th2 == Th2(st.th1, b.id, b.cr)
-        IN IF b.k # Hs(ck1, "R", st.th1) \/ b.ad # st.th1 THEN
-               (* the Reply does not open: it is dropped and the initiator waits for the next one (st.ad keeps the
-                  refused Reply's value; the next accepted Reply overwrites it) *)
+        IN IF (b.k # Hs(ck1, "R", st.th1) \/ b.ad # st.th1 \/ b.cr = NIL \/ b.id # st.peer
+               \/ b.sig # Sig(b.id, "responder", th2)) THEN
+               (* the Reply does not authenticate (its sealed part does not open, or holds no credit record, another
+                  identity than the dialed one or a signature that does not verify): it proves nothing, so it is
+                  dropped and the initiator waits for the next one; the peer's credit record (pcr) is taken only
+                  after the signature verified (st.ad keeps the refused Reply's value; the next accepted Reply
+                  overwrites it) *)
                Res([st EXCEPT !.ph = "reply", !.reply = MNil, !.th1 = NIL, !.ssx = NIL], {}, {}, "drop")
-           ELSE IF b.cr = NIL THEN Fatal(st)
-           ELSE IF b.id # st.peer THEN Fatal(st)
-           ELSE IF b.sig # Sig(b.id, "responder", th2) THEN Fatal(st)
            ELSE Ok([st EXCEPT !.ph = "sign", !.hsi = Hs(ck1, "I", st.th1), !.ck1 = ck1, !.th2 = th2,
                               !.th3 = Th3(th2, b.sig), !.th4 = Th4(Th3(th2, b.sig), n), !.ath = th2, !.pcr = b.cr,
                               !.auth = TRUE], {}, {})

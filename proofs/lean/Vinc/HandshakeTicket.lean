@@ -135,7 +135,7 @@ def Near (st st' : IState) : Prop :=
   st'.thh = st.thh ∧ st'.ckpsk = st.ckpsk ∧ st'.peer = st.peer ∧ st'.tid = st.tid ∧ st'.binder = st.binder
 
 theorem IHandle_near (st : IState) (n : Nat) (m : Msg) : Near st (IHandle st n m).st := by
-  rcases IHandle_cases st n m with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
+  rcases IHandle_cases st n m with ⟨c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
     | ⟨hp, hty, hc, c1, -⟩ | ⟨hp, hl, hty, hc, c1, -⟩ | ⟨hp, hty, he, c1, -⟩ <;>
   rw [c1] <;> simp [Near, IResumed, rrFall, IBeginFull, Ok]
 
@@ -150,10 +150,9 @@ theorem IRetransmit_near (n : Nat) (st : IState) : Near st (IRetransmit n st).st
 
 theorem ILoc_ihandle (s : Nat × Nat) (st : IState) (m : Msg) (hI : ICl s st) (h : ILoc st) :
     ILoc (IHandle st s.1 m).st := by
-  rcases IHandle_cases st s.1 m with ⟨c1, -⟩ | ⟨hp, c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
+  rcases IHandle_cases st s.1 m with ⟨c1, -⟩ | ⟨hp, hty, hio, c1, -⟩ | ⟨hp, hsh, hty, he, c1, -⟩
     | ⟨hp, hty, hc, c1, -⟩ | ⟨hp, hl, hty, hc, c1, -⟩ | ⟨hp, hty, he, c1, -⟩
   · rw [c1]; exact h
-  · rw [c1]; exact ⟨h.early, fun hh => by simp at hh, fun hh => by simp at hh, fun hh => by simp at hh⟩
   · rw [c1]; exact ⟨h.early, fun hh => by simp at hh, fun hh => by simp at hh, fun _ hl => h.late (Or.inl hp) hl⟩
   · rw [c1]; exact ⟨h.early, h.done, h.none, h.late⟩
   · rw [c1]

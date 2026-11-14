@@ -26,7 +26,6 @@ def lateFall (st : IState) (n : Nat) : IState :=
 
 theorem IHandle_cases (st : IState) (n : Nat) (m : Msg) :
     ((IHandle st n m).st = st ∧ (IHandle st n m).out = [])
-    ∨ ((st.ph = .reply ∨ st.ph = .resume) ∧ (IHandle st n m).st = { st with ph := .failed } ∧ (IHandle st n m).out = [])
     ∨ (st.ph = .reply ∧ m.ty = .reply ∧ InOffer st.of m.ad ∧
         (IHandle st n m).st = { st with ph := .decap, reply := m, ad := m.ad, th1 := th1 st.th0 m.sc m.ad m.e m.ct,
                                         ssx := Dh st.x (atomOf m.e) } ∧ (IHandle st n m).out = [])
@@ -52,33 +51,33 @@ theorem IHandle_cases (st : IState) (n : Nat) (m : Msg) :
       · by_cases h2 : m.echo = st.th0
         · by_cases hr : st.rgap = true
           · by_cases hg : m.gap = true
-            · right; right; right; left; simp [h1, h2, hr, hg, Ok]
+            · right; right; left; simp [h1, h2, hr, hg, Ok]
             · have hg' : m.gap = false := by simpa using hg
               left; simp [h1, h2, hr, hg', Ok]
           · have hr' : st.rgap = false := by simpa using hr
-            right; right; right; left; simp [h1, h2, hr', Ok]
+            right; right; left; simp [h1, h2, hr', Ok]
         · left; simp [h2, Drop]
       · left; simp [h1, Drop]
     · by_cases h1 : st.ph = .reply
       · by_cases h2 : InOffer st.of m.ad
-        · right; right; left; simp [h1, h2, Ok]
-        · right; left; simp [h1, h2, Fatal]
+        · right; left; simp [h1, h2, Ok]
+        · left; simp [h1, h2, Drop]
       · left; simp [h1, Drop]
     · left; simp [Drop]
     · left; simp [Drop]
     · by_cases h1 : st.ph = .resume
       · by_cases h2 : RrConfOK st.x st.ckpsk st.thh st.binder m
-        · right; right; right; right; left; simp [h1, h2, Ok]
+        · right; right; right; left; simp [h1, h2, Ok]
         · left; simp [h1, h2, Drop]
       · by_cases h3 : (st.ph = .reply ∨ st.ph = .decap ∨ st.ph = .sign) ∧ st.late.on = true
         · by_cases h2 : RrConfOK st.late.x st.late.ckpsk st.late.thh st.late.binder m
-          · right; right; right; right; right; left
+          · right; right; right; right; left
             simp [h1, h3, h2, Ok]
           · left; simp [h1, h3, h2, Drop]
         · left; simp [h1, h3, Drop]
     · by_cases h1 : st.ph = .resume
       · by_cases h2 : m.echo = st.thh
-        · right; right; right; right; right; right; simp [h1, h2, Ok, rrFall]
+        · right; right; right; right; right; simp [h1, h2, Ok, rrFall]
         · left; simp [h2, Drop]
       · left; simp [h1, Drop]
     
@@ -119,27 +118,18 @@ theorem IKey_cases (st : IState) (n : Nat) (kind : KRes) :
         (IKey st n kind).st = ikDoneSt st n
         ∧ (IKey st n kind).out = [ikFin st n]
         ∧ (IKey st n kind).sg = [⟨n, false, st.th4⟩])
-    ∨ (st.ph = .decap ∧ kind = .ok ∧ (st.reply.sealed.k ≠ hs (ikCk1 st n) false st.th1 ∨ st.reply.sealed.ad ≠ st.th1)
+    ∨ (st.ph = .decap ∧ kind = .ok ∧ ¬ ikAuth st n
         ∧ (IKey st n kind).st = ikBackSt st ∧ (IKey st n kind).out = [] ∧ (IKey st n kind).sg = []) := by
   unfold IKey
   by_cases h1 : st.ph = .decap ∧ kind = .ok
   · obtain ⟨hp, hk⟩ := h1
     simp only [hp, hk, and_self, ite_true]
-    by_cases ca : st.reply.sealed.k = hs (ikCk1 st n) false st.th1 ∧ st.reply.sealed.ad = st.th1
-    · by_cases cb : st.reply.sealed.cr = nil
-      · right; left; simp [ca, cb, Fatal]
-      · by_cases c2 : st.reply.sealed.id = st.peer
-        · by_cases c3 : st.reply.sealed.sig = sig st.reply.sealed.id true (ikTh2 st)
-          · right; right; left
-            simp [ca, cb, c2, c3, Ok, hp]
-          · right; left; rw [c2] at c3; simp [ca, cb, c2, c3, Fatal]
-        · right; left; simp [ca, cb, c2, Fatal]
+    by_cases ca : ikAuth st n
+    · right; right; left
+      obtain ⟨c1, c2, c3, c4, c5⟩ := ca
+      simp [ikAuth, c1, c2, c3, c4, c5, Ok, hp]
     · right; right; right; right
-      have : st.reply.sealed.k ≠ hs (ikCk1 st n) false st.th1 ∨ st.reply.sealed.ad ≠ st.th1 := by
-        by_cases hh : st.reply.sealed.k = hs (ikCk1 st n) false st.th1
-        · exact Or.inr (fun x => ca ⟨hh, x⟩)
-        · exact Or.inl hh
-      simp [this, ikBackSt, hp]
+      simp [ca, ikBackSt, hp]
   · by_cases h2 : st.ph = .sign ∧ kind = .ok
     · obtain ⟨hp, hk⟩ := h2
       right; right; right; left; simp [hp, hk]

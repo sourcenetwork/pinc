@@ -204,15 +204,9 @@ theorem iRecv_inv {kn : Term → Prop} {g : G} (h : Inv1 g) (s : Nat × Nat) (m 
     Inv1 (stepIRecv g s m) := by
   have hF := h.iFin s
   have hR := h.iRes s
-  rcases IHandle_cases (g.ist s) s.1 m with ⟨c1, c2⟩ | ⟨hp, c1, c2⟩ | ⟨hp, hty, hio, c1, c2⟩ | ⟨hp, hsh, hty, he, c1, c2⟩
+  rcases IHandle_cases (g.ist s) s.1 m with ⟨c1, c2⟩ | ⟨hp, hty, hio, c1, c2⟩ | ⟨hp, hsh, hty, he, c1, c2⟩
     | ⟨hp, hty, hc, c1, c2⟩ | ⟨hp, hl, hty, hc, c1, c2⟩ | ⟨hp, hty, he, c1, c2⟩
   · exact Inv1_same h (by show upd g.ist s _ = _; rw [c1, upd_self]) rfl _ rfl rfl (by simp [stepIRecv, c2])
-  · have hnd : (g.ist s).ph ≠ .done := by rcases hp with hp | hp <;> simp [hp]
-    refine upd_inv h s _ _ rfl rfl rfl rfl hnd ?_ ?_ ?_ ?_ (by simp [c2])
-    · simp [c1]
-    · simp [c1]
-    · rw [c1]; exact hF
-    · rw [c1]; intro hr; exact absurd (hR hr) hnd
   · have hnd : (g.ist s).ph ≠ .done := by simp [hp]
     refine upd_inv h s _ _ rfl rfl rfl rfl hnd ?_ ?_ ?_ ?_ (by simp [c2])
     · rw [c1]; intro _; simpa using derivable_sig h hd

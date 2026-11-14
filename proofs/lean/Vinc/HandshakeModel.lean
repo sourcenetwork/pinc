@@ -557,7 +557,8 @@ def IHandle (st : IState) (n : Nat) (m : Msg) : IRes :=
   else match m.ty with
     | .reply =>
       if st.ph ≠ .reply then Drop st
-      else if ¬ InOffer st.of m.ad then Fatal st
+      -- not authenticated yet: a Reply with an AEAD outside the offer is dropped, the initiator keeps waiting
+      else if ¬ InOffer st.of m.ad then Drop st
       else Ok { st with ph := .decap, reply := m, ad := m.ad, th1 := th1 st.th0 m.sc m.ad m.e m.ct,
                         ssx := Dh st.x (atomOf m.e) } [] []
     | .prej =>
@@ -616,7 +617,14 @@ def ikSignSt (st : IState) (n : Nat) : IState :=
             th3 := th3 (ikTh2 st) st.reply.sealed.sig, th4 := th4 (th3 (ikTh2 st) st.reply.sealed.sig) n,
             ath := ikTh2 st, pcr := st.reply.sealed.cr, auth := true }
 
-/-- The initiator after a Reply that does not open: the Reply is dropped and it waits for the next one. -/
+/-- The checks that authenticate the held Reply: its sealed part opens under the responder's handshake secret, holds a
+credit record and the dialed node's identity, and the signature over the transcript verifies. -/
+def ikAuth (st : IState) (n : Nat) : Prop :=
+  st.reply.sealed.k = hs (ikCk1 st n) false st.th1 ∧ st.reply.sealed.ad = st.th1 ∧ st.reply.sealed.cr ≠ nil
+    ∧ st.reply.sealed.id = st.peer ∧ st.reply.sealed.sig = sig st.reply.sealed.id true (ikTh2 st)
+instance (st : IState) (n : Nat) : Decidable (ikAuth st n) := by unfold ikAuth; infer_instance
+
+/-- The initiator after a Reply that does not authenticate: the Reply is dropped and it waits for the next one. -/
 def ikBackSt (st : IState) : IState := { st with ph := .reply, reply := {}, th1 := nil, ssx := nil }
 
 def ikSig (st : IState) (n : Nat) : Term := sig n false st.th4
@@ -631,14 +639,10 @@ def ikDoneSt (st : IState) (n : Nat) : IState :=
 /-- Initiator::on_key_response. -/
 def IKey (st : IState) (n : Nat) (kind : KRes) : IRes :=
   if st.ph = .decap ∧ kind = .ok then
-    let b := st.reply.sealed
-    if b.k ≠ hs (ikCk1 st n) false st.th1 ∨ b.ad ≠ st.th1 then
-      -- the Reply does not open: it is dropped and the initiator waits for the next one
-      { st := ikBackSt st, err := .drop }
-    else if b.cr = nil then Fatal st
-    else if b.id ≠ st.peer then Fatal st
-    else if b.sig ≠ sig b.id true (ikTh2 st) then Fatal st
-    else Ok (ikSignSt st n) [] []
+    -- a Reply that does not authenticate proves nothing: it is dropped and the initiator waits for the next one; the
+    -- peer's credit record is taken only after the signature verified
+    if ikAuth st n then Ok (ikSignSt st n) [] []
+    else { st := ikBackSt st, err := .drop }
   else if st.ph = .sign ∧ kind = .ok then
     { st := ikDoneSt st n, out := [ikFin st n], ev := [.est], sg := [⟨n, false, st.th4⟩] }
   else if (st.ph = .decap ∨ st.ph = .sign) ∧ kind = .fail then Fatal st
