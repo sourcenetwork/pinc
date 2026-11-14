@@ -18,6 +18,7 @@ import Vinc.TraceReasm
 import Vinc.TraceHdr
 import Vinc.TraceFrame
 import Vinc.TraceOrphan
+import Vinc.TraceRtt
 import Vinc.TraceHalfOpen
 import Vinc.TraceMtu
 import Vinc.TraceStores
@@ -179,6 +180,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ccw : TraceCc.W := {}
   let mut rsw : TraceReasm.W := {}
   let mut orw : TraceOrphan.W := {}
+  let mut rtw : TraceRtt.W := {}
   let mut how : TraceHalfOpen.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut bcw : BroadcastTrace.W := {}
@@ -487,6 +489,15 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceOrphan.replayEvent j orw with
           | .ok w' =>
             orw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceRtt.isTag t then
+          -- Node round trip events (`corr`, written by `trace_rtt`): the table of peers, the average, the peak and the
+          -- floor, and what the readers return.
+          match TraceRtt.replayEvent j rtw with
+          | .ok w' =>
+            rtw := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

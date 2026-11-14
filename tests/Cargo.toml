@@ -1066,3 +1066,7 @@ path = "layers_dtn_lost.rs"
 [[test]]
 name = "layers_dtn_save"
 path = "layers_dtn_save.rs"
+
+[[test]]
+name = "trace_rtt"
+path = "trace_rtt.rs"
