@@ -58,7 +58,8 @@ pub struct Restored {
     pub tickets: usize,
     /// Peers with a remembered round trip.
     pub peers: usize,
-    /// Peers known to cache the prekey.
+    /// Prekey entries read from the input: a repeated peer or an entry past the cache's size is counted too, so
+    /// this can be more than the cache holds afterwards.
     pub prekeys: usize,
 }
 

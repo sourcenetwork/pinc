@@ -10,7 +10,14 @@
 //! dialing side, the round trip notes; a close tells the application, orphans the unheard sub-sessions of the session
 //! and, for a dial that timed out, raises the handshake floor.
 //!
-//! Invariants: no application event leaves before the session is allowed; a session the application never heard of
+//! Extension frames: a `SUB_SESSION_OPEN` goes to the sub-session layer and a `REACH_OUT` to the reach ring whatever
+//! the session's access state (neither carries application data; a sub-session's own data passes its own gate); any
+//! other type on an allowed session goes to the application ring. An empty `SUB_SESSION_OPEN` or `REACH_OUT`, a
+//! `REACH_OUT` longer than the reach body limit, an empty body of any other type and any other type on a session that
+//! is not allowed are dropped without notice, and the connection stays open.
+//!
+//! Invariants: no application event (a stream, a datagram, an extension frame for the application ring) leaves
+//! before the session is allowed; a session the application never heard of
 //! produces no `Closed`; a dial the application asked for ends with `Connected` or `ConnectFailed` (or `Closed` after
 //! an early `Connected`), never silently; a session is orphaned at most once; an event the application cannot recover
 //! (a stream opened or reset, a datagram) is never dropped from the hold.
