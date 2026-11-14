@@ -91,6 +91,28 @@ def dataStep (w : Nat) (c : Cfg Cv) (rx : RxM Cv) (left : Nat) (skip : Bool) (pi
     if 0 < left - take then some { rx with ver := v1, ph := .data (left - take) skip }
     else some { rx with ver := v1, ph := .header, cur := none }
 
+/-- WHOLE_GROUP (`fetch/recv.rs` `drain`): the fetch feeds a group only once all of its bytes are stored, in the
+pieces the session keeps them in (at most two for a 16 KiB group: one per receive chunk), never one per packet. So
+each `data` step is given every stored byte up to the end of its piece, and the last one holds all `left` bytes the
+group still needs. Such a step finishes the frame: it ends in the header phase with no header open.
+(`group_split_invariance` says the verifier decides the same for every split, so feeding later decides the same.) -/
+theorem dataStep_whole (w : Nat) (c : Cfg Cv) (rx rx' : RxM Cv) (left : Nat) (skip : Bool) (piece : Bytes)
+    -- the piece holds every byte the group still needs
+    (hge : left ≤ piece.length)
+    -- and the step accepted it
+    (h : dataStep w c rx left skip piece = some rx') :
+    rx'.ph = .header ∧ rx'.cur = none := by
+  -- the step takes `min piece.length left = left` bytes, so none of the group is left after it
+  have hm : min piece.length left = left := Nat.min_eq_right hge
+  unfold dataStep at h
+  simp only [hm, Nat.sub_self, Nat.lt_irrefl, ite_false] at h
+  -- whatever the verifier did, an accepted step can only be the branch that closes the frame
+  split at h
+  · simp at h
+  · simp only [Option.some.injEq] at h
+    subst h
+    exact ⟨rfl, rfl⟩
+
 /-- The invariant of the receive state. -/
 def RxInv (w : Nat) (c : Cfg Cv) (root : Cv) (rx : RxM Cv) : Prop :=
   Reach w c root rx.ver ∧
@@ -383,3 +405,4 @@ end Vinc.ValuesVerify
 #audit_axioms Vinc.ValuesVerify.hdrDone_inv
 #audit_axioms Vinc.ValuesVerify.proofStep_inv
 #audit_axioms Vinc.ValuesVerify.dataStep_inv
+#audit_axioms Vinc.ValuesVerify.dataStep_whole

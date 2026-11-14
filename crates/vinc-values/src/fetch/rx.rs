@@ -31,6 +31,8 @@ enum Phase {
 pub(super) enum Pump {
     /// All the bytes given were consumed.
     More,
+    /// The bytes of a group to hash come next: call again once all of them are stored ([`Rx::group_left`]).
+    Group,
     /// A frame completed.
     Frame {
         /// The group's value offset.
@@ -64,6 +66,9 @@ pub(super) struct Rx {
     hdr_n: usize,
     cur: Option<GroupHeader>,
     data_start: u64,
+    /// The calls that hashed group bytes, for the tests.
+    #[cfg(test)]
+    feeds: u64,
 }
 
 impl Rx {
@@ -82,6 +87,8 @@ impl Rx {
             hdr_n: 0,
             cur: None,
             data_start: 0,
+            #[cfg(test)]
+            feeds: 0,
         };
         rx.ver = rx.verifier_for(0, root);
         rx
@@ -99,17 +106,28 @@ impl Rx {
             .map_or(u64::MAX, |s| s.off + self.k * GROUP)
     }
 
-    /// Feed `piece`; returns the bytes taken and what was found. Stops after the first completed frame or fault.
+    /// The group bytes still to hash when the stream is in the data phase of a group that is not skipped.
+    pub(super) fn group_left(&self) -> Option<u64> {
+        match self.phase {
+            Phase::Data { left, skip: false } => Some(u64::from(left)),
+            _ => None,
+        }
+    }
+
+    /// Feed `piece`; returns the bytes taken and what was found. Stops after the first completed frame or fault, and
+    /// where a group to hash begins ([`Pump::Group`]).
     pub(super) fn pump<St: ValueStore>(&mut self, st: &St, root: &[u8; 32], piece: &[u8]) -> (usize, Pump) {
         let mut i = 0;
         while i < piece.len() {
             let Some(rest) = piece.get(i..) else { break };
+            let framing = !matches!(self.phase, Phase::Data { .. });
             let step = match self.phase {
                 Phase::Header => self.header(rest, st, root),
                 Phase::Proof { left } => self.proof(left, rest, st, root),
                 Phase::Data { left, skip } => self.data(left, skip, rest, root),
             };
             match step {
+                Ok((n, None)) if framing && self.group_left().is_some() => return (i + n, Pump::Group),
                 Ok((n, None)) => i += n,
                 Ok((n, Some(done))) => return (i + n, done),
                 Err(why) => return (i, Pump::Bad(why)),
@@ -207,6 +225,10 @@ impl Rx {
     fn data(&mut self, left: u32, skip: bool, rest: &[u8], root: &[u8; 32]) -> Result<(usize, Option<Pump>), LiarWhy> {
         let take = rest.len().min(usize::try_from(left).unwrap_or(usize::MAX));
         if !skip {
+            #[cfg(test)]
+            {
+                self.feeds += 1;
+            }
             let ver = self.ver.as_mut().ok_or(LiarWhy::Protocol)?;
             let fed = ver
                 .feed(rest.get(..take).ok_or(LiarWhy::Protocol)?)
@@ -241,3 +263,6 @@ impl Rx {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -41,6 +41,11 @@ impl Fetch {
                 return;
             };
             let (stream, from, pi) = (rx.stream, rx.pos, rx.provider);
+            // WHOLE_GROUP: a group is hashed once all its bytes are here (they are kept until it ends either way), so
+            // BLAKE3 takes them in runs of whole chunks, not one packet at a time.
+            if rx.group_left().is_some_and(|left| !se.has(stream, from, left)) {
+                return;
+            }
             let mut found = Pump::More;
             se.visit(stream, from, |piece| {
                 if found != Pump::More {
@@ -52,6 +57,7 @@ impl Fetch {
             });
             match found {
                 Pump::More => return,
+                Pump::Group => {}
                 Pump::Bad(why) => return self.evict(io, now, pi, why),
                 Pump::Frame {
                     off,

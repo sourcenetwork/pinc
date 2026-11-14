@@ -247,6 +247,7 @@ par run_tlc_deep valuesverify_real32 ValuesVerify ValuesVerify_real32
 par run_tlc_deep valuesverify_skip ValuesVerify ValuesVerify_skip
 par run_tlc_deep valuesverify_skip2 ValuesVerify ValuesVerify_skip2
 par run_tlc_deep valuesverify_rx ValuesVerifyRx ValuesVerifyRx
+par witness_tlc valuesverify_rx_nowhole ValuesVerifyRx ValuesVerifyRx_nowhole WholeGroup
 par run_tlc_deep valueswire ValuesWire ValuesWire
 par run_tlc connect_mailbox ConnectMailbox ConnectMailbox
 par run_tlc connect_pack ConnectPack ConnectPack

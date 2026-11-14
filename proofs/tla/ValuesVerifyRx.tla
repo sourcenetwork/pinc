@@ -30,15 +30,25 @@
 (* group of the range was passed, in order, once, and the verifier is      *)
 (* complete.                                                               *)
 (*                                                                         *)
+(* WHOLE_GROUP (fetch/recv.rs `drain`, `Rx::pump` stopping at             *)
+(* `Pump::Group`): a group that is hashed is fed only once all of its     *)
+(* bytes are stored, so its data calls are the pieces the session keeps   *)
+(* them in: a first piece cut anywhere (where a receive chunk ends) and   *)
+(* then the whole rest, never a call per packet. `Whole` turns the guard   *)
+(* on; `WholeGroup` says a hashed group takes at most two calls. With      *)
+(* `Whole = FALSE` (ValuesVerifyRx_nowhole.cfg, the code before) the data  *)
+(* calls follow the packets and `WholeGroup` fails.                        *)
+(*                                                                         *)
 (* Lean counterpart: ValuesVerifyRx.lean (RxInv, hdrDone_inv, proofStep_inv, *)
-(* dataStep_inv, enterData_total).                                         *)
+(* dataStep_inv, enterData_total, dataStep_whole).                         *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
-CONSTANT SeedSet
+CONSTANT SeedSet, Whole
 
-VARIABLES cfg, its, pos, gs, ph, left, skipf, fi, frames, bad, noconsume, stored, adv
-vars == <<cfg, its, pos, gs, ph, left, skipf, fi, frames, bad, noconsume, stored, adv>>
+(* feeds: the data calls that hashed bytes of the current frame's group *)
+VARIABLES cfg, its, pos, gs, ph, left, skipf, fi, frames, bad, noconsume, stored, adv, feeds
+vars == <<cfg, its, pos, gs, ph, left, skipf, fi, frames, bad, noconsume, stored, adv, feeds>>
 
 U == INSTANCE U64
 V == INSTANCE ValuesVerify WITH Extra <- 0, SkipOn <- TRUE, SeedSet <- SeedSet, cfg <- cfg, its <- its, vs <- 0,
@@ -55,7 +65,7 @@ Fr(its0, k, g, plen, acc) ==
             ELSE Fr(its0, k + 1, g, U!Add(plen, it.need), acc)
 
 Init == cfg = [k |-> "root"] /\ its = <<>> /\ pos = U!Zero /\ gs = <<>> /\ ph = "hdr" /\ left = U!Zero /\ skipf = FALSE
-        /\ fi = 1 /\ frames = <<>> /\ bad = FALSE /\ noconsume = FALSE /\ stored = FALSE /\ adv = FALSE
+        /\ fi = 1 /\ frames = <<>> /\ bad = FALSE /\ noconsume = FALSE /\ stored = FALSE /\ adv = FALSE /\ feeds = 0
 
 Genuine(sd) == {x \in V!VB!CfgsOf(sd) : x.tam = -1}
 
@@ -74,18 +84,18 @@ Enter(g0, p0, fr, s) ==
 
 Next ==
     \/ cfg.k = "root" /\ \E sd \in V!MySeeds : cfg' = [k |-> "seed", sd |-> sd]
-       /\ UNCHANGED <<its, pos, gs, ph, left, skipf, fi, frames, bad, noconsume, stored, adv>>
+       /\ UNCHANGED <<its, pos, gs, ph, left, skipf, fi, frames, bad, noconsume, stored, adv, feeds>>
     \/ cfg.k = "seed" /\ \E x \in Genuine(cfg.sd) :
            /\ cfg' = x /\ its' = V!VB!Items(x) /\ gs' = V!GInit(x, V!VB!Items(x))
            /\ frames' = Fr(V!VB!Items(x), 1, x.lay.g, U!Zero, <<>>)
-           /\ UNCHANGED <<pos, ph, left, skipf, fi, bad, noconsume, stored, adv>>
+           /\ UNCHANGED <<pos, ph, left, skipf, fi, bad, noconsume, stored, adv, feeds>>
     \/ \* the header of the next frame is in; a hostile provider may announce a proof one byte longer or shorter
        cfg.k = "cfg" /\ ~bad /\ ph = "hdr" /\ fi <= Len(frames) /\ \E s \in BOOLEAN, dp \in {0, 1, -1} :
            LET fr == frames[fi]
                plen1 == IF dp = 0 THEN fr.plen
                         ELSE IF dp = 1 THEN U!Add(fr.plen, U!One)
                         ELSE IF fr.plen = U!Zero THEN fr.plen ELSE U!Sub(fr.plen, U!One)
-           IN /\ stored' = s /\ adv' = (adv \/ plen1 # fr.plen)
+           IN /\ stored' = s /\ adv' = (adv \/ plen1 # fr.plen) /\ feeds' = 0
               /\ UNCHANGED <<cfg, its, fi, frames, noconsume>>
               /\ IF plen1 = U!Zero THEN Enter(gs, pos, fr, s)
                  ELSE /\ ph' = "proof" /\ left' = plen1 /\ UNCHANGED <<gs, pos, skipf, bad>>
@@ -94,7 +104,7 @@ Next ==
            LET fr == frames[fi]
                gf == V!GFeed(cfg, its, gs, pos, U!W(t))
                left1 == U!Sub(left, gf.consumed)
-           IN /\ UNCHANGED <<cfg, its, fi, frames, noconsume, stored, adv>>
+           IN /\ UNCHANGED <<cfg, its, fi, frames, noconsume, stored, adv, feeds>>
               /\ IF GV!GNextItem(cfg.lay, gs) # <<"p">> \/ gf.res \in {"reject", "sticky", "toomuch", "outputtoosmall"}
                  THEN /\ bad' = TRUE /\ UNCHANGED <<gs, pos, ph, left, skipf>>
                  ELSE IF left1 = U!Zero
@@ -106,10 +116,14 @@ Next ==
            LET gf == V!GFeed(cfg, its, gs, pos, U!W(t))
                left1 == U!Sub(left, U!W(t))
            IN /\ UNCHANGED <<cfg, its, frames, bad, skipf, stored, adv>>
+              \* WHOLE_GROUP: the group is all stored before its first call, so after a first piece the next call
+              \* is given the whole rest
+              /\ Whole /\ ~skipf /\ feeds >= 1 => t = U!Val(left)
               /\ IF skipf
-                 THEN UNCHANGED <<gs, pos, noconsume>>
+                 THEN UNCHANGED <<gs, pos, noconsume, feeds>>
                  ELSE /\ gs' = gf.g /\ pos' = U!Add(pos, gf.consumed)
                       /\ noconsume' = (gf.consumed # U!W(t))
+                      /\ feeds' = feeds + 1
               /\ IF left1 = U!Zero THEN ph' = "hdr" /\ left' = U!Zero /\ fi' = fi + 1
                  ELSE ph' = "data" /\ left' = left1 /\ UNCHANGED fi
 
@@ -129,4 +143,7 @@ Inv ==
                /\ gs.stack = <<>> /\ ph = "hdr"
                /\ Len(gs.done) = U!Val(U!Sub(cfg.last, cfg.first))
                /\ \A i \in 1..Len(gs.done) : gs.done[i][1] = U!Mul64(U!Add(cfg.first, U!W(i - 1)), cfg.lay.g))
+
+(* WHOLE_GROUP: a hashed group is fed in at most two calls, not one per packet *)
+WholeGroup == feeds <= 2
 =============================================================================
