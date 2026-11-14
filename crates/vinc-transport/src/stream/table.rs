@@ -23,6 +23,8 @@ use super::{
 };
 
 mod pick;
+#[cfg(feature = "trace")]
+mod view;
 
 const NONE: u64 = u64::MAX;
 const HOT_RETX: u8 = 1;
@@ -277,39 +279,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// without any promise having grown; it falls again as those chunks come back or the peer's credit is received.
     pub fn promised(&self) -> u64 {
         self.granted_unreceived().saturating_add(self.reserved())
-    }
-
-    /// The state the receive and credit path works on, for trace validation.
-    #[cfg(feature = "trace")]
-    pub fn trace_view(&self, pool: &BufferPool<'_>) -> super::trace::TableView {
-        let slots: alloc::vec::Vec<_> = self
-            .slots
-            .iter()
-            .zip(&self.ids)
-            .map(|(s, &id)| {
-                let mut v = s.recv.trace_view();
-                let (done, reset, code) = s.send.trace_state();
-                v.id = id;
-                v.send_done = done;
-                v.send_reset = reset;
-                v.send_code = code;
-                v
-            })
-            .collect();
-        let held: u64 = slots.iter().map(|v| v.held.len() as u64).sum();
-        super::trace::TableView {
-            slots,
-            remote_next: self.remote_next,
-            local_opened: self.local_opened,
-            remote_live: self.remote_live,
-            local_live: self.local_live,
-            ext: (pool.used_chunks() as u64).saturating_sub(held),
-            target: self.target,
-            high_water: self.used() as u64,
-            meter: self.meter.view(),
-            admit: [self.admit.limit, self.admit.adv, self.admit.adv_at],
-            admit_pend: self.admit.pend,
-        }
     }
 
     /// The bytes written and not yet acknowledged, over all buffered streams.

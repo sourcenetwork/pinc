@@ -56,6 +56,15 @@
 (* lower ids its frame opens with it. The held-back rule below stays as    *)
 (* the net for a peer that ignores the credit and for a full pool.         *)
 (*                                                                         *)
+(* Early opens (an optimistic dial). Before the peer's record is known    *)
+(* the dialer may open streams past the limit it was given (T.ad.early,     *)
+(* set by SetEarly: Streams::set_early; OpenLocal skips the limit while it  *)
+(* is on). Each stream we open keeps its ordinal (Slot::ordinal: how many   *)
+(* we had opened in all, itself included; 0 for a peer stream), and its     *)
+(* data waits until the limit covers that ordinal (CanSend: the test of     *)
+(* Streams::refresh, so SendOut sends nothing for it). The establishment   *)
+(* raises the limit to the peer's record and turns early off.              *)
+(*                                                                         *)
 (* Held back streams. A peer stream the table has no room for yet is      *)
 (* stored nowhere, answered with nothing and never acknowledged: Locate    *)
 (* answers "Exhausted" and returns the table unchanged, so the opener's    *)
@@ -85,7 +94,7 @@ SW == Min(SWC, MaxStream)           \* the initial window; the ceiling is MaxStr
 NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi |-> 0, contig |-> 0, fin |-> -1,
             limit |-> 0, size |-> 0, pend |-> FALSE, defer |-> FALSE, rst |-> -1, obs |-> FALSE,
             sdone |-> TRUE, srst |-> 0,
-            stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE]
+            stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE, ord |-> 0]
 
 WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
 \* what the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit
@@ -115,7 +124,7 @@ MarkOnFreeLow(S, hw, i) == Min(hw, i - 1)
 Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> [c \in 0..1 |-> 0],
           rl |-> 0, ll |-> 0, ext |-> 0, tgt |-> SW, hw |-> 0,
           m |-> [start |-> -1, bytes |-> 0, rate |-> 0],
-          ad |-> [lim |-> PM, adv |-> Adv0, at |-> 0, pend |-> FALSE]]
+          ad |-> [lim |-> PM, adv |-> Adv0, at |-> 0, pend |-> FALSE, early |-> FALSE]]
 
 (* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most RR ---- *)
 InsertR(rs, s, e) ==
@@ -229,7 +238,8 @@ AllocSlot(T, id) ==
         recvOn == ~IsUni(id) \/ ~local
         sendOn == ~IsUni(id) \/ local
         r == [NewSlot EXCEPT !.id = id, !.open = recvOn, !.limit = IF recvOn THEN SW ELSE 0,
-                              !.size = IF recvOn THEN SW ELSE 0, !.sdone = ~sendOn, !.cnt = TRUE]
+                              !.size = IF recvOn THEN SW ELSE 0, !.sdone = ~sendOn, !.cnt = TRUE,
+                              !.ord = IF local THEN T.lo[0] + T.lo[1] + 1 ELSE 0]
         T1 == [SetSlot(T, i, r) EXCEPT !.hw = Max(@, i)]   \* taking a slot writes it: the mark rises to it
     IN IF local THEN [T1 EXCEPT !.ll = @ + 1] ELSE [T1 EXCEPT !.rl = @ + 1]
 
@@ -365,25 +375,32 @@ CtlAckedStop(T, id) ==
        ELSE IF T.slots[i].stop \in {1, 2} THEN SetSlot(T, i, [T.slots[i] EXCEPT !.stop = 3, !.qcode = -1]) ELSE T
 
 (* ---- the send half, as far as the receive side sees it ---- *)
-\* the opener: a stream opens only inside the credit the peer gave (T.ad.lim, in all), and with its slot and its window
-\* in the pool beside the slots and windows kept for the peer's credit
+\* the opener: a stream opens only inside the credit the peer gave (T.ad.lim, in all), unless opens are early (the
+\* peer's limit is not known yet), and with its slot and its window in the pool beside the slots and windows kept for
+\* the peer's credit
 OpenLocal(T) ==
     LET c == 0
         id == T.lo[c] * 4 + 1
-    IN IF T.lo[0] + T.lo[1] >= T.ad.lim \/ FirstFree(T) = 0 \/ FreeSlots(T) <= CreditLeft(T)
+    IN IF (~T.ad.early /\ T.lo[0] + T.lo[1] >= T.ad.lim) \/ FirstFree(T) = 0 \/ FreeSlots(T) <= CreditLeft(T)
           \/ ~WindowsFit(T, CreditLeft(T) + 1) THEN T
        ELSE [AllocSlot(T, id) EXCEPT !.lo[c] = @ + 1]
 \* a MAX_STREAMS frame arrived: the limit on the streams we may open only grows
 RecvMaxStreams(T, l) == [T EXCEPT !.ad.lim = Max(@, l)]
+\* Streams::set_early: opens may pass the limit (on), or no longer
+SetEarly(T, on) == [T EXCEPT !.ad.early = on]
+\* the establishment of an optimistic dial: the peer's record raises the limit (set_peer_limits), then early ends
+Establish(T, l) == SetEarly(RecvMaxStreams(T, l), FALSE)
+\* Streams::refresh: the data of a stream we opened waits until the limit covers its ordinal (0 for a peer stream)
+CanSend(T, i) == T.slots[i].ord <= T.ad.lim
 \* a MAX_STREAMS frame was lost: send the current limit again unless a later one superseded it
 CtlLostMsts(T, l) == IF l >= T.ad.adv THEN [T EXCEPT !.ad.pend = TRUE] ELSE T
 SendOpen(r) == ~(IsUni(r.id) /\ ~IsLocal(r.id))
 (* A stream frame left on slot i (pick.rs, next_hot): the send half's end has gone with nothing queued again (f), or
    not yet, or a lost range waits to be sent again (not f); then release_limit. Only a send half that can still send a
-   stream frame is touched. *)
+   stream frame is touched, and a stream we opened past the limit sends nothing. *)
 SendOut(T, i, f) ==
     LET r == T.slots[i]
-    IN IF ~RELEASE \/ r.id = -1 \/ ~SendOpen(r) \/ r.sdone \/ r.srst # 0 THEN T
+    IN IF ~RELEASE \/ r.id = -1 \/ ~SendOpen(r) \/ r.sdone \/ r.srst # 0 \/ ~CanSend(T, i) THEN T
        ELSE ReleaseLimit(SetSlot(T, i, [r EXCEPT !.sfl = f]), i)
 (* Streams::reset: queue a stream reset on the send half, the send buffers released (ext2 <= ext) *)
 AppReset(T, id, code, ext2) ==

@@ -85,6 +85,7 @@ impl<const C: usize> Recv<C> {
                 Stop::Pending(c) | Stop::Sent(c) => Some(c),
                 Stop::None | Stop::Acked => None,
             },
+            ordinal: 0,
         }
     }
 

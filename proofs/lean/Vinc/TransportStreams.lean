@@ -77,12 +77,15 @@ structure Slot where
   /-- The send half's end has left and no lost range is queued: the part of `Send::flushed` that `sdone` and `srst`
   do not show. Not on the wire either. -/
   sfl : Bool
+  /-- For a stream we opened, how many we had opened in all, itself included (`Slot::ordinal`): its data waits until
+  the peer's limit covers it. 0 for a stream the peer opened. -/
+  ord : Nat
   deriving DecidableEq, Repr, Inhabited
 
 def Slot.new : Slot :=
   { id := none, open_ := false, held := [], rs := [], read := 0, hi := 0, contig := 0, fin := none, limit := 0,
     size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0, stop := 0, qcode := none, scode := none,
-    cnt := false, sfl := false }
+    cnt := false, sfl := false, ord := 0 }
 
 structure Tab where
   slots : List Slot
@@ -103,11 +106,14 @@ structure Tab where
   adat : Nat
   /-- A `MAX_STREAMS` frame is waiting to be sent. -/
   adpend : Bool
+  /-- Opens may pass `adlim`, which the peer has not stated yet (`Admit::early`, an optimistic dial). -/
+  early : Bool
   deriving DecidableEq, Repr, Inhabited
 
 def Tab.init (p : P) : Tab :=
   { slots := List.replicate p.n Slot.new, rn := (0, 0), lo := (0, 0), rl := 0, ll := 0,
-    ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0, adlim := p.pm, adv := p.adv0, adat := 0, adpend := false }
+    ext := 0, tgt := p.sw, ms := none, mb := 0, mr := 0, adlim := p.pm, adv := p.adv0, adat := 0, adpend := false,
+    early := false }
 
 /-! ### Identifiers -/
 def isUni (id : Nat) : Bool := id / 2 % 2 == 1
@@ -255,7 +261,8 @@ def allocSlot (p : P) (T : Tab) (id : Nat) : Tab :=
     let recvOn := !isUni id || !lcl
     let sendOn := !isUni id || lcl
     let r := { Slot.new with id := some id, open_ := recvOn, limit := if recvOn then p.sw else 0,
-                             size := if recvOn then p.sw else 0, sdone := !sendOn, cnt := true }
+                             size := if recvOn then p.sw else 0, sdone := !sendOn, cnt := true,
+                             ord := if lcl then T.lo.1 + T.lo.2 + 1 else 0 }
     let T1 := setSlot T i r
     if lcl then { T1 with ll := T1.ll + 1 } else { T1 with rl := T1.rl + 1 }
 
@@ -391,6 +398,15 @@ def ctlLostMsts (T : Tab) (l : Nat) : Tab := if l ≥ T.adv then { T with adpend
 /-- A `MAX_STREAMS` frame arrived: the limit on the streams we may open only grows. -/
 def recvMaxStreams (T : Tab) (l : Nat) : Tab := { T with adlim := max T.adlim l }
 
+/-- `Streams::set_early`: opens may pass the limit (`on`), or no longer. -/
+def setEarly (T : Tab) (on : Bool) : Tab := { T with early := on }
+
+/-- The establishment of an optimistic dial: the peer's record raises the limit, then early opens end. -/
+def establish (T : Tab) (l : Nat) : Tab := setEarly (recvMaxStreams T l) false
+
+/-- `Streams::refresh`: the data of slot `i` may leave once the limit covers its ordinal (always, for a peer stream). -/
+def canSend (T : Tab) (i : Nat) : Bool := decide ((T.slots.getD i Slot.new).ord ≤ T.adlim)
+
 def ctlLostMsd (T : Tab) (id mx : Nat) : Tab :=
   match findSlot T id with
   | none => T
@@ -430,7 +446,7 @@ def ctlAckedStop (T : Tab) (id : Nat) : Tab :=
 
 /-! ### The send half, as far as the receive side sees it -/
 def openLocal (p : P) (T : Tab) : Tab :=
-  if T.lo.1 + T.lo.2 ≥ T.adlim || (firstFree T).isNone || decide (freeSlots T ≤ creditLeft T)
+  if (!T.early && decide (T.lo.1 + T.lo.2 ≥ T.adlim)) || (firstFree T).isNone || decide (freeSlots T ≤ creditLeft T)
       || !windowsFit p T (creditLeft T + 1) then T
   else { allocSlot p T (T.lo.1 * 4 + 1) with lo := (T.lo.1 + 1, T.lo.2) }
 
@@ -441,7 +457,7 @@ yet, or a lost range waits to be sent again (`!f`); then `release_limit`. Only a
 frame is touched. -/
 def sendOut (T : Tab) (i : Nat) (f : Bool) : Tab :=
   let r := T.slots.getD i Slot.new
-  if r.id.isNone || !r.sendOpen || r.sdone || r.srst != 0 then T
+  if r.id.isNone || !r.sendOpen || r.sdone || r.srst != 0 || !canSend T i then T
   else releaseLimit (setSlot T i { r with sfl := f }) i
 
 def appReset (p : P) (T : Tab) (id code ext2 : Nat) : Tab :=

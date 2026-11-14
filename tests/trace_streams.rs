@@ -7,13 +7,17 @@
 //! fragment the stored ranges), resets, consumes of the readable bytes, pending control frames that are then lost
 //! or acknowledged, locally opened streams with writes, sends and acknowledgements that take and give back pool
 //! chunks, other users of the pool, and the close of the table. After every call the table shows its state
-//! (`trace_view`): slots, held chunks, stored ranges, credit, counters, the window target and the
-//! delivery meter. The checkers replay each call with the operators of the model (`StreamsOps.tla`,
-//! `Vinc.TransportStreams`) and require the state they compute to be the state recorded, and the error they compute
-//! to be the error returned.
+//! (`trace_view`): slots, held chunks, stored ranges, credit, counters, the window target, the delivery meter, the
+//! ordinal of each stream we opened and whether opens may pass the peer's limit. Every drain of the stream frames is
+//! recorded with the streams whose frames left. Runs 25 to 36 are an optimistic dial: opens pass the peer's limit
+//! from the start (`set_early`), streams are opened past it with data queued, and the establishment raises the limit
+//! and ends that. The checkers replay each call with the operators of the model (`StreamsOps.tla`,
+//! `Vinc.TransportStreams`) and require the state they compute to be the state recorded, the error they compute to be
+//! the error returned, and every stream whose frame left to be one they let send.
 //!
 //! The test asserts what it can itself (the bytes read are the bytes stored, in order and once; the pool never
-//! passes its budget; a granted limit never goes down) so it is meaningful without the proof tools. Times are small
+//! passes its budget; a granted limit never goes down; no frame leaves for a stream we opened before the peer's limit
+//! covers its ordinal) so it is meaningful without the proof tools. Times are small
 //! ticks (the checker has 32-bit integers). The trace is written to `VINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
@@ -81,7 +85,7 @@ fn slot_json(s: &SlotView) -> String {
     let id = i64::try_from(s.id).unwrap();
     let rs: Vec<String> = s.ranges.iter().map(|(a, z)| format!("[{a},{z}]")).collect();
     format!(
-        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{}}}"#,
+        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{}}}"#,
         b(s.open),
         list(&s.held),
         rs.join(","),
@@ -99,7 +103,8 @@ fn slot_json(s: &SlotView) -> String {
         s.send_reset,
         s.stop,
         opt(s.stop_code),
-        opt(s.send_code)
+        opt(s.send_code),
+        s.ordinal
     )
 }
 
@@ -107,7 +112,7 @@ fn view_json(v: &TableView) -> String {
     let slots: Vec<String> = v.slots.iter().map(slot_json).collect();
     let (ms, mb, mr) = v.meter;
     format!(
-        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"hw":{},"ms":{},"mb":{mb},"mr":{mr},"ad":[{},{},{}],"adp":{}}}"#,
+        r#"{{"slots":[{}],"rn":[{},{}],"lo":[{},{}],"rl":{},"ll":{},"ext":{},"tgt":{},"hw":{},"ms":{},"mb":{mb},"mr":{mr},"ad":[{},{},{}],"adp":{},"early":{}}}"#,
         slots.join(","),
         v.remote_next[0],
         v.remote_next[1],
@@ -122,7 +127,8 @@ fn view_json(v: &TableView) -> String {
         v.admit[0],
         v.admit[1],
         v.admit[2],
-        b(v.admit_pend)
+        b(v.admit_pend),
+        b(v.early)
     )
 }
 
@@ -148,6 +154,10 @@ struct Run<'o> {
     held: std::collections::HashSet<u64>,
     /// A frame opened a skipped lower stream with its own, inside the credit.
     jumped: bool,
+    /// Streams we opened that a recorded table showed past the peer's limit.
+    past: std::collections::HashSet<u64>,
+    /// A stream once past the limit sent a frame after a raise covered it.
+    released: bool,
 }
 
 impl Run<'_> {
@@ -168,6 +178,9 @@ impl Run<'_> {
         let v = self.view();
         assert!(self.pool.used_chunks() <= POOL, "the pool passed its budget");
         for s in &v.slots {
+            if s.id != u64::MAX && s.ordinal > v.admit[0] {
+                self.past.insert(s.id);
+            }
             if s.id != u64::MAX {
                 let m = self.max_limit.entry(s.id).or_insert(0);
                 assert!(s.limit >= *m, "a limit went down");
@@ -485,13 +498,7 @@ impl Run<'_> {
             2 => {
                 let _ = self.t.finish(id);
             }
-            3 => {
-                while let Some(ch) = self.t.next_stream_frame(1 << 20) {
-                    let mut buf = vec![0u8; ch.len];
-                    let _ = self.t.copy_out(&self.pool, &ch, &mut buf);
-                    self.inflight.push((ch.id, ch.offset, ch.len as u64, ch.fin));
-                }
-            }
+            3 => self.drain(),
             4 => {
                 if self.inflight.is_empty() {
                     return;
@@ -508,6 +515,57 @@ impl Run<'_> {
                 self.log(&format!(r#""op":"appreset","id":{id},"code":9"#));
             }
         }
+    }
+
+    /// Send every stream frame the table gives, and record which streams they were for. A stream we opened sends
+    /// nothing before the peer's limit covers its ordinal.
+    fn drain(&mut self) {
+        let v = self.view();
+        let mut ids = Vec::new();
+        while let Some(ch) = self.t.next_stream_frame(1 << 20) {
+            let ord = v.slots.iter().find(|s| s.id == ch.id).map_or(0, |s| s.ordinal);
+            assert!(
+                ord <= v.admit[0],
+                "stream {} left before the peer's limit of {} covered its ordinal {ord}",
+                ch.id,
+                v.admit[0]
+            );
+            self.released |= self.past.contains(&ch.id);
+            let mut buf = vec![0u8; ch.len];
+            let _ = self.t.copy_out(&self.pool, &ch, &mut buf);
+            self.inflight.push((ch.id, ch.offset, ch.len as u64, ch.fin));
+            ids.push(ch.id);
+        }
+        self.log(&format!(r#""op":"sent","ids":{}"#, list(&ids)));
+    }
+
+    /// While opens may pass the peer's limit: open a few streams and queue data on each, as an application does on an
+    /// optimistic dial.
+    fn early_burst(&mut self) {
+        for _ in 0..4 {
+            let before = self.view().local_opened[0];
+            self.open_local();
+            let after = self.view().local_opened[0];
+            if after > before {
+                // the bidirectional stream just opened, on the server side
+                let id = before * 4 + 1;
+                let _ = self.t.write(&mut self.pool, id, &[0xab; 10], u64::MAX);
+                let ext = self.view().ext;
+                self.log(&format!(r#""op":"ext","ext":{ext}"#));
+            }
+        }
+    }
+
+    /// The peer's record arrives: its limits are applied and opens no longer pass them; then the table sends.
+    fn establish(&mut self) {
+        let limit = self.view().admit[0] + self.below(4);
+        self.t.set_peer_limits(&PeerLimits {
+            window: 1 << 20,
+            max_streams: limit,
+        });
+        self.t.set_early(false);
+        self.log(&format!(r#""op":"establish","limit":{limit}"#));
+        self.drain();
     }
 
     fn ext_users(&mut self) {
@@ -530,6 +588,7 @@ impl Run<'_> {
             60..=69 => self.pending(),
             70..=77 => self.settle_control(),
             78..=81 => self.peer_reset(),
+            82..=84 if self.view().early => self.early_burst(),
             82..=84 => self.open_local(),
             85..=91 => self.send_side(),
             92..=93 => self.stop_request(),
@@ -544,13 +603,24 @@ impl Run<'_> {
                 self.control.clear();
                 self.max_limit.clear();
                 self.log(r#""op":"close""#);
+                if self.view().early {
+                    self.early_burst();
+                }
             }
         }
     }
 }
 
-/// One seeded run; returns whether a frame opened a skipped lower stream inside the credit.
-fn run(seed: u64, out: &mut String, run: u32) -> bool {
+/// What a run reached: a frame that opened a skipped lower stream inside the credit, a stream we opened past the
+/// peer's limit, and such a stream sending once a raise covered it.
+struct Reached {
+    jumped: bool,
+    past: bool,
+    released: bool,
+}
+
+/// One seeded run; `early` makes it an optimistic dial.
+fn run(seed: u64, out: &mut String, run: u32, early: bool) -> Reached {
     let mut config = Config::new(false);
     config.initial_stream_window = WINDOW;
     config.max_stream_window = 6 * CH;
@@ -575,24 +645,58 @@ fn run(seed: u64, out: &mut String, run: u32) -> bool {
         max_limit: std::collections::HashMap::new(),
         held: std::collections::HashSet::new(),
         jumped: false,
+        past: std::collections::HashSet::new(),
+        released: false,
     };
     r.log(r#""op":"init""#);
-    for _ in 0..220 {
+    // An optimistic dial: the application opens streams and queues data before the peer's limits are known
+    // (`Connection::allow_early_streams`), and the establishment applies them some time later.
+    let establish_at = if early {
+        r.t.set_early(true);
+        r.t.set_peer_limits(&PeerLimits {
+            window: 16 * 1024,
+            max_streams: 0,
+        });
+        r.log(r#""op":"early""#);
+        r.early_burst();
+        20 + r.below(100)
+    } else {
+        u64::MAX
+    };
+    for k in 0..220 {
+        if k == establish_at {
+            r.establish();
+        }
         r.step();
     }
     r.log(r#""op":"end""#);
-    r.jumped
+    Reached {
+        jumped: r.jumped,
+        past: !r.past.is_empty(),
+        released: r.released,
+    }
 }
 
 #[test]
 fn stream_table_runs_match_the_models() {
     big_stack(|| {
         let mut out = String::new();
-        let mut jumped = false;
-        for run_id in 1..=24u32 {
-            jumped |= run(0x5354_5245_414d_0000 + u64::from(run_id), &mut out, run_id);
+        let (mut jumped, mut past, mut released) = (false, false, false);
+        for run_id in 1..=36u32 {
+            let r = run(0x5354_5245_414d_0000 + u64::from(run_id), &mut out, run_id, run_id > 24);
+            jumped |= r.jumped;
+            past |= r.past;
+            released |= r.released;
         }
         assert!(jumped, "no frame opened a skipped stream inside the credit");
+        assert!(
+            vinc_tests::soaking() || past,
+            "no stream was opened past the peer's limit"
+        );
+        assert!(
+            vinc_tests::soaking() || released,
+            "no stream opened past the peer's limit sent once a raise covered it"
+        );
         for op in [
             "frame",
             "consume",
@@ -612,6 +716,9 @@ fn stream_table_runs_match_the_models() {
             "loststop",
             "ackedstop",
             "close",
+            "early",
+            "establish",
+            "sent",
         ] {
             assert!(
                 vinc_tests::soaking() || out.contains(&format!(r#""op":"{op}""#)),

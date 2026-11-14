@@ -8,9 +8,12 @@ The Lean half of the trace validation of the receive and credit path of the stre
 `recv.rs`, `flow.rs`, `ranges.rs`, `pool.rs`), the port of `proofs/tla/TraceStreams.tla`. It reads the `st` events
 written by the Rust test `trace_streams` and replays every call through the functions of `Vinc.TransportStreams`
 (`frame`, `reset`, `consume`, `pending`, `ctlLostMsd`, `ctlLostReset`, `ctlAckedReset`, `openLocal`, `appReset`,
-`finish`, `extTo`, `closeAll`, and the stop-sending ones `stopReq`, `onStop`, `ctlLostStop`, `ctlAckedStop`): the state the model computes must be the state recorded, and the error it computes
-the error the call returned. The constants are those of the test: chunks of 16384 bytes, a ring of 5, 96 ranges,
-4 slots, 2 peer streams, a pool of 8 chunks, windows of 2 and 4 chunks, 2 local streams.
+`finish`, `extTo`, `closeAll`, the stop-sending ones `stopReq`, `onStop`, `ctlLostStop`, `ctlAckedStop`, and the early
+opens of an optimistic dial `setEarly` and `establish`): the state the model computes must be the state recorded, and
+the error it computes the error the call returned; every stream whose frame left (a `sent` event) must be one the
+model lets send (`canSend`: a stream we opened only once the limit covers its ordinal). The constants are those of the
+test (`params`): chunks of 16384 bytes, a ring of 7, 96 ranges, 4 slots, 2 live peer streams, a pool of 20 chunks,
+windows of 5 and 6 chunks, a first charge of 4 chunks.
 -/
 
 namespace Vinc.TraceStreams
@@ -34,7 +37,7 @@ def slotOf (j : J) : Except String Slot := do
            size := ← natF j "size", pend := ← boolF j "pend", defer := ← boolF j "defer",
            rst := ← optNat j "rst", obs := ← boolF j "obs", sdone := ← boolF j "sdone", srst := ← natF j "srst",
            stop := ← natF j "stop", qcode := ← optNat j "qcode", scode := ← optNat j "scode",
-           cnt := false, sfl := false }
+           cnt := false, sfl := false, ord := ← natF j "ord" }
 
 def pairN (j : J) (k : String) : Except String (Nat × Nat) := do
   match ← natList (← field j k) with
@@ -51,7 +54,8 @@ def tabOf (v : J) : Except String Tab := do
   pure { slots, rn := ← pairN v "rn", lo := ← pairN v "lo", rl := ← natF v "rl", ll := ← natF v "ll",
          ext := ← natF v "ext", tgt := ← natF v "tgt",
          ms := ← optNat v "ms", mb := ← natF v "mb", mr := ← natF v "mr",
-         adlim := ad[0]!, adv := ad[1]!, adat := ad[2]!, adpend := ← boolF v "adp" }
+         adlim := ad[0]!, adv := ad[1]!, adat := ad[2]!, adpend := ← boolF v "adp",
+         early := ← boolF v "early" }
 
 /-- The replay state: the tables the recorded calls so far allow, and whether a run is open. The table has two fields per
 slot that the test does not record (`cnt`, `sfl`: whether the stream counts against the peer's limit, whether its send
@@ -127,6 +131,14 @@ def replayOne (j : J) (st : St1) : Except String St1 := do
       upd T2 "onstop"
     | "ackedreset" => upd (ctlAckedReset p T (← natF j "id")) "ackedreset"
     | "open" => upd (openLocal p T) "open"
+    | "early" => upd (setEarly (recvMaxStreams T 0) true) "early"
+    | "establish" => upd (establish T (← natF j "limit")) "establish"
+    | "sent" =>
+      for id in ← natList (← field j "ids") do
+        match findSlot T id with
+        | none => throw s!"sent: stream {id} has no slot in the model"
+        | some i => check (canSend T i) s!"sent: stream {id} left before the limit covered its ordinal"
+      upd T "sent"
     | "appreset" => upd (appReset p T (← natF j "id") (← natF j "code") (← natF v "ext")) "appreset"
     | "finish" => upd (finish p T (← natF j "id") (← natF v "ext") (← boolF j "done")) "finish"
     | "ext" => upd (extTo p T (← natF j "ext")) "ext"

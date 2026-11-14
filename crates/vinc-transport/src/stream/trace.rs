@@ -1,9 +1,10 @@
 //! Test-only observation of the stream table, for trace validation (cargo feature `trace`, off by default).
 //!
 //! [`Streams::trace_view`](super::Streams::trace_view) shows the state the receive and credit path works on: per
-//! slot the held chunk numbers, the stored ranges, the read position, the credit and the send half's state that
-//! frees the slot and the stop request; per table the counters, the window target, the delivery meter and the pool
-//! chunks the others hold. Nothing here is compiled without the feature, and nothing here feeds back into the table.
+//! slot the held chunk numbers, the stored ranges, the read position, the credit, the send half's state that
+//! frees the slot, the stop request and the ordinal of a stream we opened; per table the counters, the window target,
+//! the delivery meter, the pool chunks the others hold and whether opens may pass the peer's limit. Nothing here is
+//! compiled without the feature, and nothing here feeds back into the table.
 
 use alloc::vec::Vec;
 
@@ -54,6 +55,9 @@ pub struct SlotView {
     pub stop: u8,
     /// The error code of the stop request until it is acknowledged.
     pub stop_code: Option<u64>,
+    /// For a stream we opened, how many we had opened in all, itself included: its first frame waits until the peer's
+    /// limit covers it. 0 for a stream the peer opened.
+    pub ordinal: u64,
 }
 
 /// The table.
@@ -82,6 +86,8 @@ pub struct TableView {
     pub admit: [u64; 3],
     /// A `MAX_STREAMS` frame is waiting to be sent.
     pub admit_pend: bool,
+    /// Opens may pass the limit on what we may open, which the peer has not stated yet.
+    pub early: bool,
 }
 
 /// An early-data buffer with a pool of its own, for trace validation of the buffer of packets held for want of keys.

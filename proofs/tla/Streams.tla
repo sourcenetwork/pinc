@@ -50,6 +50,18 @@
 (* Streams_local (a pool with no other user, a peer stream and a local    *)
 (* one) holds LedgerAlways: the initial window of a stream this endpoint   *)
 (* opens is counted in the ledger like a peer stream's (WindowsFit).       *)
+(*  - EARLY (an optimistic dial, the Streams_early configs): the table      *)
+(*    starts with early opens on and a limit of 0, and the establishment    *)
+(*    (Establish) raises the limit and ends them. The opener passes the     *)
+(*    limit only while early (OpenPastOnlyEarly), so it never has more      *)
+(*    streams open than the limit or than it opened while early             *)
+(*    (OpenerInsideOrEarly; the earlier OpenerInside is a witness there,    *)
+(*    Streams_early_w); each stream we open keeps its ordinal, the order of *)
+(*    its open (Ordinals); a stream frame leaves only for a stream whose    *)
+(*    ordinal the limit covers (SendOnlyInLimit), once allowed it stays     *)
+(*    allowed, and the streams allowed are the first ones opened            *)
+(*    (GateMonotone, GatePrefix); Streams_early_rel is the reachability     *)
+(*    witness of a stream opened past the limit that a raise lets send.     *)
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -57,12 +69,15 @@ CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocI
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 \* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
 CONSTANT STOPS
-VARIABLES T, clock
-vars == <<T, clock>>
+\* EARLY = TRUE starts the table of an optimistic dial: early opens on, until the establishment
+CONSTANT EARLY
+\* elo: a ghost, how many streams we had opened in all at the last open made while early
+VARIABLES T, clock, elo
+vars == <<T, clock, elo>>
 
 INSTANCE StreamsOps
 
-Init == T = Init0 /\ clock = 0
+Init == T = (IF EARLY THEN SetEarly(Init0, TRUE) ELSE Init0) /\ clock = 0 /\ elo = 0
 
 Ids == RemIds \cup LocIds
 FrameOp == \E id \in Ids, off \in 0..HOR, len \in 0..LMAX, fin \in BOOLEAN, diff \in BOOLEAN :
@@ -76,8 +91,10 @@ PendingOp == T' = Pending(T).t /\ UNCHANGED clock
 LostMsdOp == \E id \in Ids, mx \in 0..HOR : T' = CtlLostMsd(T, id, mx) /\ UNCHANGED clock
 LostResetOp == \E id \in Ids : T' = CtlLostReset(T, id) /\ UNCHANGED clock
 AckedResetOp == \E id \in Ids : T' = CtlAckedReset(T, id) /\ UNCHANGED clock
-OpenOp == T' = OpenLocal(T) /\ UNCHANGED clock
-MaxStreamsOp == /\ LocIds # {} /\ PM >= 2 /\ \E l \in 0..(PM + 2) : T' = RecvMaxStreams(T, l) /\ UNCHANGED clock
+OpenOp == /\ T' = OpenLocal(T) /\ UNCHANGED clock
+          /\ elo' = IF T.ad.early /\ T' # T THEN T'.lo[0] + T'.lo[1] ELSE elo
+MaxStreamsOp == /\ LocIds # {} /\ (PM >= 2 \/ EARLY) /\ \E l \in 0..(PM + 2) : T' = RecvMaxStreams(T, l) /\ UNCHANGED clock
+EstablishOp == EARLY /\ T.ad.early /\ \E l \in 0..(PM + 2) : T' = Establish(T, l) /\ UNCHANGED <<clock, elo>>
 LostMstsOp == T' = CtlLostMsts(T, T.ad.adv) /\ UNCHANGED clock   \* the latest frame lost; an older one is a no-op
 AppResetOp == \E id \in Ids, e2 \in 0..T.ext : T' = AppReset(T, id, 9, e2) /\ UNCHANGED clock
 LostStopOp == \E id \in Ids : T' = CtlLostStop(T, id) /\ UNCHANGED clock
@@ -89,13 +106,17 @@ SendOutOp == RELEASE /\ \E i \in 1..N, f \in BOOLEAN : T' = SendOut(T, i, f) /\ 
 ExtOp == \E e2 \in 0..EXTMAX : T' = ExtTo(T, e2) /\ UNCHANGED clock
 CloseOp == \E e2 \in 0..T.ext : T' = CloseAll(T, e2) /\ UNCHANGED clock
 
-Next == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ OpenOp \/ FinishOp \/ SendOutOp \/ ExtOp \/ CloseOp
-        \/ MaxStreamsOp \/ LostMstsOp
-        \/ (STOPS /\ (LostResetOp \/ AckedResetOp \/ AppResetOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp))
+Calls == FrameOp \/ ResetOp \/ ConsumeOp \/ PendingOp \/ LostMsdOp \/ FinishOp \/ SendOutOp \/ ExtOp \/ CloseOp
+         \/ MaxStreamsOp \/ LostMstsOp
+         \/ (STOPS /\ (LostResetOp \/ AckedResetOp \/ AppResetOp \/ LostStopOp \/ AckedStopOp \/ StopReqOp \/ OnStopOp))
+Next == (Calls /\ UNCHANGED elo) \/ OpenOp \/ EstablishOp
 Spec == Init /\ [][Next]_vars
+\* The bound of the EARLY configs (a CONSTRAINT): while early opens are on, a close frees the slots and keeps the
+\* counters, so opens past the limit go on without end; the configs stop at one round of the slots and one more.
+OpenBound == T.lo[0] + T.lo[1] <= N + 1
 
 \* the other users of the pool eventually let go (the liveness config only)
-ExtRelease == T.ext > 0 /\ T' = ExtTo(T, 0) /\ UNCHANGED clock
+ExtRelease == T.ext > 0 /\ T' = ExtTo(T, 0) /\ UNCHANGED <<clock, elo>>
 LSpec == Spec /\ WF_vars(ExtRelease)
 
 (* ---- state invariants ---- *)
@@ -169,8 +190,20 @@ NoStuckGrant == \A i \in Live : T.slots[i].defer => ~GrantFits(i)
 \* the ledger in every state: holds when no other user shares the pool and every window fits when its stream first
 \* carries data (FIRSTK covers the windows); the first charges kept for the credit given to the peer count as granted
 LedgerAlways == GU(T) + Resv(T) <= Avail(T)
-\* the opener never has more streams open in all than the peer gave credit for
+\* the opener never has more streams open in all than the peer gave credit for: true without early opens; an optimistic
+\* dial passes it (Streams_early_w.cfg)
 OpenerInside == T.lo[0] + T.lo[1] <= T.ad.lim
+\* restated for early opens: the opener has more streams open than the limit only by the ones it opened while early
+OpenerInsideOrEarly == T.lo[0] + T.lo[1] <= Max(T.ad.lim, elo)
+\* each stream we open keeps its ordinal, the order of its open: they are 1, 2, ... in the order of the ids (one kind
+\* of stream here), and a peer stream has none
+Ordinals == \A i \in Live : IF IsLocal(T.slots[i].id) THEN T.slots[i].ord = Idx(T.slots[i].id) + 1
+                                                       /\ T.slots[i].ord <= T.lo[0] + T.lo[1]
+                                                  ELSE T.slots[i].ord = 0
+\* a stream frame leaves only for a stream whose ordinal the limit covers: on any other slot SendOut changes nothing
+SendOnlyInLimit == \A i \in 1..N, f \in BOOLEAN : ~CanSend(T, i) => SendOut(T, i, f) = T
+\* the streams allowed to send are the first ones opened
+GatePrefix == \A i, j \in Live : (T.slots[i].ord < T.slots[j].ord /\ CanSend(T, j)) => CanSend(T, i)
 \* the credit given never lets a peer that keeps to it have more streams live than the configured limit MAXREM: the
 \* streams it may still open plus those live are at most MAXREM (Streams_cap_w.cfg plants the cap that ignored it)
 CreditInLimit == T.ad.adv > AdmittedN(T) => T.ad.adv - AdmittedN(T) + T.rl <= MAXREM
@@ -220,6 +253,13 @@ FirstData == \E i \in 1..N : T'.slots[i].hi > 0 /\ (T.slots[i].hi = 0 \/ T.slots
 OverOnlyByFirstData == [][Excess(T') > Max(Excess(T), 0) => (FirstData \/ T'.ext > T.ext)]_vars
 \* the credit and the limit on what we may open only grow
 CreditMonotone == [][T'.ad.adv >= T.ad.adv /\ T'.ad.lim >= T.ad.lim]_vars
+\* an open passes the limit only while early
+OpenPastOnlyEarly == [][(T'.lo[0] + T'.lo[1] > T.lo[0] + T.lo[1] /\ T'.lo[0] + T'.lo[1] > T.ad.lim) => T.ad.early]_vars
+\* a stream allowed to send stays allowed: its ordinal never changes and the limit never falls
+GateMonotone == [][\A i \in 1..N : (SameInc(i) /\ CanSend(T, i))
+                                     => (T'.slots[i].ord = T.slots[i].ord /\ CanSend(T', i))]_vars
+\* reachability witness (Streams_early_rel.cfg must violate it): a stream opened past the limit is let send by a raise
+NoReleaseOfEarly == [][~(\E i \in 1..N : SameInc(i) /\ ~CanSend(T, i) /\ CanSend(T', i))]_vars
 \* a pool charge happens only within the budget
 PoolOnAlloc == [][Used(T') > Used(T) => Used(T') <= B]_vars
 \* the limits never exceed the pool a stream may hold
