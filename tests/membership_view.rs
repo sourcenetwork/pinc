@@ -439,6 +439,106 @@ fn a_heal_opens_a_quiet_window_too() {
     assert_eq!(w.members_of(m).len(), 3);
 }
 
+/// Member 3 of a three-hub world is homed on hub 3 and has hubs 1 and 2 cut for a minute, then hears hub 1 again (a
+/// heal); hub 3 reports member 4 down just after, and hub 2 is heard again `gap` later (a second heal). Returns
+/// the world, the instant of the first heal and the instant member 4 left the view.
+fn two_heals(gap: u64) -> (World, u64, u64) {
+    let mut w = World::new(3, 3, START);
+    w.keepalive = 5 * SEC;
+    let (m, x) = (3, 4);
+    w.set_rtt(m, 0, 100 * MS);
+    w.set_rtt(m, 1, 100 * MS);
+    w.set_rtt(m, 2, 20 * MS);
+    w.attach_all();
+    w.run(5 * SEC);
+    assert_eq!(w.nodes[m].m.primary(), Some(&id(2)));
+    w.cut.insert((0, m));
+    w.cut.insert((1, m));
+    w.run(64 * SEC);
+    w.cut.remove(&(0, m));
+    assert!(w.run_until(20 * SEC, |w| traces(w, m, |t| matches!(t, Trace::Quiet { .. })) == 1));
+    let healed = w.now;
+    w.with(2, |n, h, now| n.revoke(h, now, &id(x))).unwrap();
+    w.run(gap);
+    w.cut.remove(&(1, m));
+    assert!(w.run_until(30 * SEC, |w| traces(w, m, |t| matches!(t, Trace::Quiet { .. })) == 2));
+    assert!(traces(&w, m, |t| matches!(t, Trace::Deferred { .. })) >= 1);
+    assert!(w.has(m, x), "the removal is queued while the windows are open");
+    assert!(w.run_until(60 * SEC, |w| !w.has(m, x)));
+    let left = w
+        .first_event_time(m, |e| matches!(e, Event::MemberConfirmedDown { .. }))
+        .unwrap();
+    (w, healed, left)
+}
+
+#[test]
+fn a_heal_does_not_defer_a_removal_an_earlier_window_deferred() {
+    let (_, healed, left) = two_heals(3 * SEC);
+    assert!(
+        left - healed <= 16 * SEC,
+        "the removal left {} ms after the first heal, not at the end of that window plus the extra look",
+        (left - healed) / MS
+    );
+}
+
+#[test]
+fn a_removal_found_after_a_heal_waits_for_that_heals_window() {
+    let mut w = World::new(2, 3, START);
+    w.keepalive = 5 * SEC;
+    w.attach_all();
+    w.run(5 * SEC);
+    let (m, x) = (2, 3);
+    let home = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    let other = 1 - home;
+    let r = *w.nodes[m].m.members().find(|(k, _)| **k == id(x)).unwrap().1;
+    w.cut.insert((other, m));
+    w.run(64 * SEC);
+    w.cut.remove(&(other, m));
+    assert!(w.run_until(20 * SEC, |w| traces(w, m, |t| matches!(t, Trace::Quiet { .. })) == 1));
+    let healed = w.now;
+    delta(&mut w, m, home, &id(x), r, Alive::Down);
+    assert!(w.has(m, x));
+    assert!(traces(&w, m, |t| matches!(t, Trace::Deferred { .. })) >= 1);
+    assert!(w.run_until(60 * SEC, |w| !w.has(m, x)));
+    let left = w
+        .first_event_time(m, |e| matches!(e, Event::MemberConfirmedDown { .. }))
+        .unwrap();
+    assert!(
+        left - healed >= 14 * SEC,
+        "left {} ms after the heal",
+        (left - healed) / MS
+    );
+}
+
+#[test]
+fn a_late_timer_defers_a_waiting_removal_again() {
+    let mut w = started(2, 3);
+    let (m, x) = (2, 3);
+    let hub = usize::from(w.nodes[m].m.primary().unwrap()[0]) - 1;
+    w.jump(20 * SEC);
+    w.with(m, |n, h, now| n.on_timeout(h, now));
+    w.with(hub, |n, h, now| n.revoke(h, now, &id(x))).unwrap();
+    w.run(8 * SEC);
+    assert!(w.has(m, x));
+    w.jump(20 * SEC);
+    w.with(m, |n, h, now| n.on_timeout(h, now));
+    let second = w.now;
+    w.run(9 * SEC);
+    assert!(
+        w.has(m, x),
+        "the second late timer reopened the window for the waiting removal"
+    );
+    assert!(w.run_until(20 * SEC, |w| !w.has(m, x)));
+    let left = w
+        .first_event_time(m, |e| matches!(e, Event::MemberConfirmedDown { .. }))
+        .unwrap();
+    assert!(
+        left - second >= 14 * SEC,
+        "left {} ms after the second late timer",
+        (left - second) / MS
+    );
+}
+
 #[test]
 fn a_redial_asks_for_a_snapshot() {
     let mut w = started(2, 2);

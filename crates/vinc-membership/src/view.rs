@@ -9,14 +9,15 @@
 //! copy the member came from); the member stays in the view, with no event, and leaves it only when the hub reports
 //! it down (a delta or a DOWN of the same or a newer incarnation), or when a full lease passes without any hub
 //! listing it again. Removals found while a quiet window is open (after a late timer or a partition heal) are
-//! re-checked at its end.
+//! re-checked at its end; a heal never defers a removal an earlier window already deferred, a late timer defers
+//! every removal waiting.
 //!
 //! Invariants: the view epoch only increases and increases once per batch of changes; the view never lists the node
 //! itself; a revoked node is never listed; every removal goes through [`Membership::recompute_one`], the one place
 //! that decides it.
 
 use crate::codec::{Alive, Entry, Hello, NodeId, Record, Snap};
-use crate::consts::{HYST_ABS, LEASE, PULSE_FRESH, RENEW};
+use crate::consts::{HYST_ABS, LEASE, PULSE_FRESH, RECHECK_GAP, RENEW};
 use crate::event::{Event, Removal, Trace};
 use crate::node::{CopyEntry, HubCopy, Membership, ViewEntry, next_key};
 use crate::session::{Host, Nanos, Route};
@@ -564,12 +565,12 @@ impl Membership {
         if src.hold {
             // Held until a home view is confirmed: look again then, no hub copy lists the member to bring it back.
             if self.recheck.len() < MAX_TABLE {
-                self.recheck.insert(*m);
+                self.recheck.entry(*m).or_insert((self.quiet_until, self.regrace));
             }
             return false;
         }
         if now < self.quiet_until && self.recheck.len() < MAX_TABLE {
-            self.recheck.insert(*m);
+            self.recheck.entry(*m).or_insert((self.quiet_until, self.regrace));
             self.trace(Trace::Deferred { member: *m });
             return false;
         }
@@ -597,13 +598,40 @@ impl Membership {
         true
     }
 
-    /// Recompute the members whose removal a quiet window deferred.
-    pub(crate) fn recheck_now<H: Host>(&mut self, h: &mut H, now: Nanos) {
-        let set: BTreeSet<NodeId> = core::mem::take(&mut self.recheck);
+    /// Recompute the members whose deferral is due. A member gets one more look at the end of its window (it may
+    /// have woken a moment ago and its HELLO is on the way), then is recomputed without a further deferral.
+    pub(crate) fn recheck_due<H: Host>(&mut self, h: &mut H, now: Nanos) {
+        let mut ready = BTreeSet::new();
+        let mut regrace = false;
+        for (m, e) in &mut self.recheck {
+            if e.0 > now {
+                continue;
+            }
+            if e.1 {
+                ready.insert(*m);
+            } else {
+                *e = (now.saturating_add(RECHECK_GAP), true);
+                regrace = true;
+            }
+        }
+        if regrace {
+            self.regrace = true;
+            self.quiet_until = self.quiet_until.max(now.saturating_add(RECHECK_GAP));
+        }
+        if ready.is_empty() {
+            return;
+        }
+        self.regrace = false;
+        for m in &ready {
+            self.recheck.remove(m);
+        }
+        // A removal a window already deferred is believed now, whatever window a heal has opened since.
+        let open = core::mem::take(&mut self.quiet_until);
         let mut changed = false;
-        for m in &set {
+        for m in &ready {
             changed |= self.recompute_one(h, now, m);
         }
+        self.quiet_until = open;
         if changed {
             self.bump();
         }

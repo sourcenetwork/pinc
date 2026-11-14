@@ -154,8 +154,11 @@ pub struct Membership {
     pub(crate) primary: Option<NodeId>,
     pub(crate) home_ok: Option<NodeId>,
     pub(crate) home_seen: bool,
-    pub(crate) recheck: BTreeSet<NodeId>,
+    /// Members whose removal a quiet window deferred, each with the instant it is due and whether its extra look
+    /// has begun.
+    pub(crate) recheck: BTreeMap<NodeId, (Nanos, bool)>,
     pub(crate) quiet_until: Nanos,
+    /// Whether the extra look of the current window has begun: a removal found during it is due when it ends.
     pub(crate) regrace: bool,
     pub(crate) gone_ver: BTreeMap<NodeId, (u16, [u8; 8])>,
     pub(crate) left: BTreeSet<NodeId>,
@@ -237,7 +240,7 @@ impl Membership {
             primary: cfg.is_hub.then_some(cfg.me),
             home_ok: None,
             home_seen: false,
-            recheck: BTreeSet::new(),
+            recheck: BTreeMap::new(),
             quiet_until: 0,
             regrace: false,
             gone_ver: BTreeMap::new(),
@@ -424,10 +427,17 @@ impl Membership {
             || (self.up.contains_key(x) && self.heard.get(x).is_some_and(|t| now.saturating_sub(*t) < HUB_STALE))
     }
 
-    /// Open a quiet window: removals found now are re-checked after it, not believed.
+    /// Open a quiet window: removals found now are re-checked after it, not believed. A late timer defers every
+    /// removal already waiting to the new window's end; a heal leaves them at their own instant, so repeated heals
+    /// cannot keep a removal deferred.
     pub(crate) fn begin_quiet(&mut self, now: Nanos, cause: QuietCause) {
         self.quiet_until = now.saturating_add(crate::consts::QUIET);
         self.regrace = false;
+        if cause == QuietCause::LateTimer {
+            for e in self.recheck.values_mut() {
+                *e = (self.quiet_until, false);
+            }
+        }
         self.trace(Trace::Quiet { cause });
     }
 

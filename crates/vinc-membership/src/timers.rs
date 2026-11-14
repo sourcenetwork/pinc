@@ -6,12 +6,11 @@
 //!
 //! Invariants: a tick that arrives later than [`WAKE_GAP`] after it was due is a suspension: the node renews every
 //! hub at once with a snapshot request and opens a quiet window, so removals queued while it slept are re-checked,
-//! not believed; a window re-checks removals after [`QUIET`] and again after [`RECHECK_GAP`].
+//! not believed (a heal leaves removals already waiting at their own instant); a window re-checks removals after
+//! [`QUIET`] and again after [`RECHECK_GAP`].
 
 use crate::codec::NodeId;
-use crate::consts::{
-    ACK_WAIT, HS_GRACE, HUB_STALE, HUB_TICK, NODE_TICK, PULSE_FRESH, RECHECK_GAP, RTT_QUIET, SLOW_TICK, WAKE_GAP,
-};
+use crate::consts::{ACK_WAIT, HS_GRACE, HUB_STALE, HUB_TICK, NODE_TICK, PULSE_FRESH, RTT_QUIET, SLOW_TICK, WAKE_GAP};
 use crate::event::{QuietCause, Trace};
 use crate::node::{Membership, next_key};
 use crate::session::{CloseReason, Host, Nanos};
@@ -57,17 +56,7 @@ impl Membership {
     }
 
     fn tick<H: Host>(&mut self, h: &mut H, now: Nanos) {
-        if !self.recheck.is_empty() && now >= self.quiet_until {
-            if self.regrace {
-                self.regrace = false;
-                self.recheck_now(h, now);
-            } else {
-                // A member still missing at the end of the window gets one more look: it may have woken a moment
-                // ago and its HELLO is on the way.
-                self.regrace = true;
-                self.quiet_until = now.saturating_add(RECHECK_GAP);
-            }
-        }
+        self.recheck_due(h, now);
         if self.sent != Some((self.ver, self.th)) {
             self.renew(h, now, false, false);
         }
