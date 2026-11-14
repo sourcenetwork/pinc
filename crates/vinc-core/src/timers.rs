@@ -114,10 +114,12 @@ ep_impl! {
                 // A keepalive already due waits for the layer above; only a later one is a deadline.
                 note(plan.ping_at.filter(|p| *p > now));
             }
+            // Every valid standby path the connection tracks, as in the reference model: one added to the session and
+            // never sent on is due at once.
             let active = conn.active_path();
-            for p in slot.m.paths.iter().flatten() {
-                if Some(p.id) != active && conn.path_validated(p.id) {
-                    note(standby_due(now, p.tx, slot.m.last_app));
+            for (id, _, valid) in conn.path_list() {
+                if Some(id) != active && valid {
+                    note(standby_due(now, slot.m.path_tx(id), slot.m.last_app));
                 }
             }
             note(slot.m.acp_recheck);
@@ -189,13 +191,13 @@ ep_impl! {
         let active = conn.active_path();
         let mut probe: [Option<vinc_transport::conn::PathId>; NP] = [None; NP];
         let mut n = 0;
-        for p in slot.m.paths.iter().flatten() {
-            if Some(p.id) != active
-                && conn.path_validated(p.id)
-                && standby_due(now, p.tx, slot.m.last_app).is_some_and(|d| d <= now)
+        for (id, _, valid) in conn.path_list() {
+            if Some(id) != active
+                && valid
+                && standby_due(now, slot.m.path_tx(id), slot.m.last_app).is_some_and(|d| d <= now)
                 && let Some(s) = probe.get_mut(n)
             {
-                *s = Some(p.id);
+                *s = Some(id);
                 n += 1;
             }
         }

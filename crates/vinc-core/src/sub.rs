@@ -138,9 +138,12 @@ ep_impl! {
     }
 
     /// Sub-session `child` runs where session `parent` runs: it takes the parent's paths, with what the endpoint said
-    /// of each and whether each is validated, its active path and its round-trip estimate.
+    /// of each and whether each is validated, its active path, its round-trip estimate, and when the endpoint last
+    /// sent and heard on each (so a standby path the parent kept alive is not pinged again at once).
     fn follow_parent_paths(&mut self, parent: usize, child: usize, now: u64) {
-        let Some(pc) = self.slots.get(parent).and_then(|s| s.conn.as_ref()) else { return };
+        let Some(ps) = self.slots.get(parent) else { return };
+        let stamps = ps.m.paths;
+        let Some(pc) = ps.conn.as_ref() else { return };
         let Some(active) = pc.active_path() else { return };
         let mut list = [(PathId(0), PathInfo::default(), false); NP];
         let mut n = 0;
@@ -150,9 +153,12 @@ ep_impl! {
         }
         let rtt = pc.rtt_estimate();
         let mut env = env!(self, now);
-        if let Some(k) = self.slots.get_mut(child).and_then(|s| s.conn.as_mut()) {
-            k.adopt_paths(&mut env, list.get(..n).unwrap_or_default(), active);
-            k.adopt_rtt(rtt);
+        if let Some(s) = self.slots.get_mut(child) {
+            s.m.paths = stamps;
+            if let Some(k) = s.conn.as_mut() {
+                k.adopt_paths(&mut env, list.get(..n).unwrap_or_default(), active);
+                k.adopt_rtt(rtt);
+            }
         }
     }
 

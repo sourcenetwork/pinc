@@ -1,7 +1,8 @@
 //! Sessions on relay and direct paths at the endpoint: a session whose relay path stops answering while the relay's
 //! carrier still does is closed, the re-join challenges of a thin node's sessions to one address are spaced, a
-//! datagram heard on a relay path does not count as UDP heard for the short Initial, and an end on a relay path that
-//! is challenged on a direct path validates it in the round trip of that challenge.
+//! datagram heard on a relay path does not count as UDP heard for the short Initial, an end on a relay path that is
+//! challenged on a direct path validates it in the round trip of that challenge, and a relay path added to a session
+//! is kept alive from the moment it is added (a child of the session keeps its parent's send times).
 #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
 #[path = "core_timing_common.rs"]
@@ -256,5 +257,44 @@ fn an_end_on_a_relay_path_validates_a_direct_path_in_the_round_trip_of_its_peers
             Some(t0 + 3 * one_way),
             "the challenge of the end on the relay waited for its next probe"
         );
+    });
+}
+
+/// A valid relay path added to a session is pinged at once while data moved in the last 20 s, as the reference model's
+/// keepalive pings every valid path never sent on: nothing else would leave on it.
+#[test]
+fn a_relay_path_added_to_a_session_is_pinged_at_once() {
+    big_stack(|| {
+        let (mut net, _, via) = pair(10 * MS);
+        net.capture = true;
+        let (sa, _) = net.connect_pair(0, 1, ALPN_A, Role::Other);
+        let (t, marker) = (net.now, net.captured.len());
+        net.nodes[0].cmd(t, Command::Punch { session: sa, addr: via }).unwrap();
+        net.run_for(100 * MS);
+        assert!(
+            net.captured[marker..].iter().any(|(_, to, _)| *to == via),
+            "a datagram left on the relay path"
+        );
+    });
+}
+
+/// A child takes its parent's paths with when the endpoint last sent on each, as the reference model's sub-session
+/// keeps its parent's path times: a relay path the parent pinged a moment ago is not pinged again by the child.
+#[test]
+fn a_child_does_not_ping_a_relay_path_its_parent_just_pinged() {
+    big_stack(|| {
+        let (mut net, _, via) = pair(10 * MS);
+        net.capture = true;
+        session(&mut net, ALPN_A, via);
+        let (peer, to, t) = (net.nodes[1].node, net.nodes[1].addr, net.now);
+        let marker = net.captured.len();
+        net.nodes[0].connect(t, peer, ALPN_B, to, Role::Other).unwrap();
+        net.run_for(500 * MS);
+        assert!(
+            net.nodes[0].saw(|e| matches!(e, Event::Connected { alpn, .. } if alpn.as_bytes() == ALPN_B)),
+            "the child connected"
+        );
+        let on_relay = net.captured[marker..].iter().filter(|(_, to, _)| *to == via).count();
+        assert_eq!(on_relay, 0, "the relay path was pinged by the parent a second ago");
     });
 }

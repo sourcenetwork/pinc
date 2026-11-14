@@ -364,6 +364,12 @@ impl<const NP: usize> Meta<NP> {
         self.last_app = now;
     }
 
+    /// When the endpoint last sent on path `id`, 0 for never: a path added to the session has no stamp until something
+    /// leaves on it.
+    pub(crate) fn path_tx(&self, id: PathId) -> u64 {
+        self.paths.iter().flatten().find(|p| p.id == id).map_or(0, |p| p.tx)
+    }
+
     pub(crate) fn stamp(&mut self, id: PathId) -> Option<&mut PathStamp> {
         let i = self
             .paths
