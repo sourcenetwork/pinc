@@ -23,7 +23,7 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 26] = [
+const EXAMPLES: [&str; 29] = [
     "dtn-store-forward",
     "dtn-custody",
     "dtn-copies",
@@ -50,6 +50,9 @@ const EXAMPLES: [&str; 26] = [
     "nat-reach",
     "punch-port-restricted",
     "punch-symmetric",
+    "relay-server-hub",
+    "relay-server-no-punch",
+    "relay-server-punch",
 ];
 
 #[test]
