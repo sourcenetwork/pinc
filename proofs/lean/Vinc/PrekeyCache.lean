@@ -15,7 +15,7 @@ assumption. The theorems about a single operation need only `st.clock + 1 < 2^64
 
 `get_most_recent` and `insert_most_recent` show that the entry touched carries the newest stamp and every other entry is older.
 The refinement of the stamps by a plain recency list (most recent first: `get` moves the hash to the front, `insert` puts it
-at the front and drops the last when the list is over `N`) is not proved in Lean yet.
+at the front and drops the last when the list is over `N`) is `Vinc.PrekeyRecency.cache_refines_list`.
 -/
 
 namespace Vinc.PrekeyCache
