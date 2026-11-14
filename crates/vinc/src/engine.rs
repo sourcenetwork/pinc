@@ -119,6 +119,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub relaying: bool,
     /// How long a dial may take, in nanoseconds.
     pub connect_timeout: u64,
+    /// Whether to ask the gateway for a port mapping, and the gateway.
+    pub port_mapping: crate::start::PortMapping,
 }
 
 /// What both the core and the handles of a session read.

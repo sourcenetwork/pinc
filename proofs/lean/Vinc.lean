@@ -226,6 +226,8 @@ import Vinc.ConnectDatagram
 import Vinc.ConnectRecord
 import Vinc.ConnectSigned
 import Vinc.ConnectTicket
+import Vinc.PortMapCodec
+import Vinc.PortMapLease
 import Vinc.ConnectTicketText
 import Vinc.ConnectBase32
 import Vinc.ConnectTicketTextPf

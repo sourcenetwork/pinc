@@ -25,6 +25,7 @@ vinc-transport = { path = "crates/vinc-transport", version = "0.1.0" }
 vinc-membership = { path = "crates/vinc-membership", version = "0.1.0" }
 vinc-sim = { path = "crates/vinc-sim", version = "0.1.0" }
 vinc-connect = { path = "crates/vinc-connect", version = "0.1.0" }
+vinc-portmap = { path = "crates/vinc-portmap", version = "0.1.0" }
 vinc-reconcile = { path = "crates/vinc-reconcile", version = "0.1.0" }
 vinc-dtn = { path = "crates/vinc-dtn", version = "0.1.0" }
 vinc-values = { path = "crates/vinc-values", version = "0.1.0" }

@@ -66,8 +66,20 @@ enum Kind {
     Round,
 }
 
+/// A reach test in flight: the session dialed, when, and what was seen of its path once it came up.
+struct ReachRun {
+    req: u64,
+    session: vinc_core::SessionId,
+    started: u64,
+    deadline: u64,
+    hold_ns: u64,
+    /// When the session came up and its path then.
+    up: Option<(u64, super::portmap::PathSeen)>,
+}
+
 /// The workload state of the node program.
 struct Agent<const K: usize, const D: usize> {
+    reach: Vec<ReachRun>,
     core: Core<K, D>,
     me: u16,
     hubs: Vec<[u8; 32]>,
@@ -196,6 +208,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 stats: PubSubStats::new(me),
                 pubs: Vec::new(),
                 waits: Vec::new(),
+                reach: Vec::new(),
                 dtn: DtnLog::new(init.peers.iter().map(|p| p.name.as_str())),
                 stopping: false,
             },
@@ -346,6 +359,27 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                 Ok(_) => Reply::ok(id, Value::Null),
                 Err(e) => Reply::fail(id, e),
             }),
+            Cmd::Reach {
+                peer,
+                timeout_ms,
+                hold_ms,
+            } => {
+                let Ok(peer_id) = node_id(&peer) else {
+                    out.push(Reply::fail(id, format!("{peer} has no identity")));
+                    return;
+                };
+                match self.core.reach_dial(now, peer_id) {
+                    Ok(session) => self.reach.push(ReachRun {
+                        req: id,
+                        session,
+                        started: now,
+                        deadline: now + timeout_ms * 1_000_000,
+                        hold_ns: hold_ms * 1_000_000,
+                        up: None,
+                    }),
+                    Err(e) => out.push(Reply::fail(id, e)),
+                }
+            }
             Cmd::Report => {
                 self.drain_dtn_trace();
                 let (peak_bytes, budget) = self.core.node.apps().dtn.peak_and_budget();
@@ -363,6 +397,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
                     "counters": self.core.counters,
                     "members": self.core.node.membership().member_count(),
                     "dtn": dtn,
+                    "portmap": self.core.portmap_report(),
                 });
                 if let (Some(l), Some(m)) = (self.core.tlog.as_ref(), v.as_object_mut()) {
                     m.insert("trace".into(), l.report());
@@ -542,6 +577,43 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             }
         }
         self.waits = keep;
+        self.reach_tick(now, out);
+    }
+
+    /// Reach tests: note when a session came up and its path, answer once it was held, fail one that never came up.
+    fn reach_tick(&mut self, now: u64, out: &mut Vec<Reply>) {
+        let mut keep = Vec::new();
+        for mut r in std::mem::take(&mut self.reach) {
+            let seen = self.core.reach_path(r.session);
+            match (r.up, seen) {
+                (None, Some(p)) if p.established => {
+                    r.up = Some((now, p));
+                    keep.push(r);
+                }
+                (Some((at, first)), Some(p)) if now >= at + r.hold_ns => out.push(Reply::ok(
+                    r.req,
+                    json!({
+                        "ms": ms(at.saturating_sub(r.started)),
+                        "first": first.json(),
+                        "held": p.json(),
+                        "portmap": self.core.portmap_report(),
+                    }),
+                )),
+                (Some((at, first)), None) => out.push(Reply::fail(
+                    r.req,
+                    format!(
+                        "the session ended while it was held; it came up after {:.1} ms on {}",
+                        ms(at.saturating_sub(r.started)),
+                        first.json()
+                    ),
+                )),
+                (None, _) if now >= r.deadline => {
+                    out.push(Reply::fail(r.req, "no session came up in time"));
+                }
+                _ => keep.push(r),
+            }
+        }
+        self.reach = keep;
     }
 
     fn next_deadline(&self) -> Option<u64> {
@@ -557,7 +629,9 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             .iter()
             .any(|w| matches!(w.kind, Kind::Join))
             .then(|| self.core.now() + 50_000_000);
-        pubs.chain(waits).chain(joins).min()
+        // A reach test looks at its session's path every 50 ms.
+        let reach = (!self.reach.is_empty()).then(|| self.core.now() + 50_000_000);
+        pubs.chain(waits).chain(joins).chain(reach).min()
     }
 }
 

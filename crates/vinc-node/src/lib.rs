@@ -70,6 +70,7 @@ mod hosts;
 mod io;
 mod layer;
 mod node;
+mod portmap;
 #[cfg(feature = "trace")]
 mod probe;
 mod reconcile;

@@ -134,7 +134,17 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         node.set_adjacent(now, &[])
             .map_err(|_| Error::config("the adjacency record could not be signed"))?;
     }
+    if cfg.port_mapping.on && !local.ip().to_canonical().is_loopback() {
+        node.start_port_mapping(now, cfg.port_mapping.gateway, local, vinc_portmap::client::LIFETIME);
+    }
     Ok(Core::new(Box::new(node), cfg, prekeys, ifaces))
+}
+
+/// Whether an endpoint asks its gateway for a port mapping, and the gateway's address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PortMapping {
+    pub on: bool,
+    pub gateway: Option<std::net::IpAddr>,
 }
 
 #[cfg(test)]
@@ -167,6 +177,10 @@ mod tests {
             connected_topics: false,
             relaying: false,
             connect_timeout: 1_000_000_000,
+            port_mapping: PortMapping {
+                on: true,
+                gateway: None,
+            },
         }
     }
 

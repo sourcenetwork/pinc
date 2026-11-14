@@ -163,6 +163,16 @@ fn classes_from_observation() {
     // port mapped
     let ext = a("203.0.113.9:6000");
     assert_eq!(classify(&obs(&local, &[ext], &[ext])), Some(Reach::PortMapped));
+    // the mapping's port need not be the one the node's own traffic leaves from; its address must be the one seen
+    assert_eq!(
+        classify(&obs(&local, &[ext], &[a("203.0.113.9:7000")])),
+        Some(Reach::PortMapped)
+    );
+    // a mapping on a gateway that is itself behind another translation is not reachable
+    assert_eq!(
+        classify(&obs(&local, &[ext], &[a("100.64.0.9:6000")])),
+        Some(Reach::Nat)
+    );
     // behind NAT: one answer, or equal answers from several relays
     assert_eq!(classify(&obs(&local, &[ext], &[])), Some(Reach::Nat));
     assert_eq!(classify(&obs(&local, &[ext, ext], &[])), Some(Reach::Nat));

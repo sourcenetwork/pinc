@@ -147,6 +147,15 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
             x.extend(workload);
             return x;
         }
+        "reach" => {
+            let mut x = vec![
+                m(Node("ms"), "time to the session", "ms", Lower),
+                m(Node("direct"), "path direct after the hold", "", Higher),
+                m(Node("server_mapped"), "server held a port mapping", "", Better::None),
+            ];
+            x.extend(workload);
+            return x;
+        }
         t if t.starts_with("reconcile_") => {
             let mut x = vec![
                 m(Node("round_ms"), "round time", "ms", Lower),

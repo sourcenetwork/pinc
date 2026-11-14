@@ -229,6 +229,9 @@ pub struct Core<const K: usize, const D: usize> {
     pub restored: DtnRestored,
     pub(super) start: std::time::Instant,
     pub(super) dirty: bool,
+    /// The port-mapping client's HTTP exchange in flight, and how many there were.
+    pub(super) http: Option<super::portmap::HttpLeg>,
+    pub(super) http_count: u64,
 }
 
 /// Build the node of `spec` over `apps`.
@@ -263,6 +266,8 @@ fn build<const K: usize, const D: usize>(
         .acquire(&mut env)
         .map_err(|_| "the prekeys could not be made".to_owned())?;
     ep.set_prekey(prekey_info.clone());
+    // Every node accepts the reach test's sessions.
+    ep.register_alpn(super::portmap::REACH_ALPN);
     ep.add_iface(spec.addr)
         .ok_or_else(|| "the interface could not be added to the endpoint".to_owned())?;
     let mut relays: [Option<RelayCfg>; NRL] = [None; NRL];
@@ -375,9 +380,12 @@ impl<const K: usize, const D: usize> Core<K, D> {
             restored,
             start,
             dirty: false,
+            http: None,
+            http_count: 0,
         };
         me_core.node.set_local(&[spec.addr]);
         let now = me_core.now();
+        me_core.start_port_mapping(now);
         me_core.pump(now);
         Ok(me_core)
     }
@@ -408,6 +416,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
             busy |= self.io_step(now);
             busy |= self.udp_step();
             busy |= self.streams_out_step();
+            busy |= self.http_step();
             busy |= std::mem::take(&mut self.dirty);
             self.trace_step();
             if !busy {
@@ -631,6 +640,9 @@ impl<const K: usize, const D: usize> Core<K, D> {
             if to.port() == vinc_connect::local::PORT {
                 continue;
             }
+            if to.port() == vinc_portmap::client::PORT || to == vinc_portmap::upnp::SSDP {
+                *self.counters.entry("portmap_udp").or_insert(0) += 1;
+            }
             if let Some(d) = buf.get(..n) {
                 self.small.push_back((to, d.to_vec()));
             }
@@ -826,6 +838,10 @@ impl<const K: usize, const D: usize> Core<K, D> {
     /// A stream event from the runtime layer.
     pub fn stream_event(&mut self, now: u64, ev: StreamEv) {
         self.node.set_wall_ms(now, wall_ms());
+        if self.http_event(now, &ev) {
+            self.pump(now);
+            return;
+        }
         match ev {
             StreamEv::Accepted(stream) => {
                 if let Some(h) = self.hub.as_mut() {

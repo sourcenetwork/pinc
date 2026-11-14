@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use vinc_distributed::helper::{host_ns_allowed, readable};
+use vinc_distributed::helper::{gateway_conf, host_ns_allowed, readable};
 use vinc_distributed::metrics::{Iface, NodeUse, Reading, parse_cpu_usec, parse_net_dev, parse_tc};
 use vinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
 use vinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
@@ -23,7 +23,10 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 29] = [
+const EXAMPLES: [&str; 32] = [
+    "port-mapping",
+    "port-mapping-upnp",
+    "port-mapping-none",
     "dtn-store-forward",
     "dtn-custody",
     "dtn-copies",
@@ -247,6 +250,87 @@ fn routers_use_the_direct_link_and_route_every_routed_lan() {
         routes.iter().any(|r| r[2] == "10.2.0.0/24" && r[6] == "w0"),
         "{routes:?}"
     );
+}
+
+#[test]
+fn a_router_that_maps_ports_gets_unreserved_links_and_the_chains_miniupnpd_uses() {
+    let mapped = Plan::new(&scenario("port-mapping"), "r", 16);
+    let none = Plan::new(&scenario("port-mapping-none"), "r", 16);
+    let (h1, h2) = (mapped.site("home1").unwrap(), mapped.site("home2").unwrap());
+    // home1's link is numbered from 11.0.0.0, home2's stays in 100.64.0.0/10, as every link of the control does
+    assert_eq!(mapped.links[0].net.octets()[0], 11);
+    assert_eq!(mapped.links[1].net, none.links[1].net);
+    assert!(none.links.iter().all(|l| l.net.octets()[..2] == [100, 64]));
+    let n1 = mapped.node("n1").unwrap();
+    assert_eq!(
+        mapped.public_ip(n1).octets()[0],
+        11,
+        "the node is seen at its router's unreserved address"
+    );
+    let nft = |p: &Plan, s: usize| {
+        p.setup
+            .iter()
+            .find(|(ns, _)| *ns == Ns::Router(s))
+            .unwrap()
+            .1
+            .iter()
+            .filter(|c| c.tool == Tool::Nft)
+            .count()
+    };
+    assert_eq!(nft(&mapped, h1), 1);
+    assert_eq!(nft(&mapped, h2), 0);
+    assert_eq!(nft(&none, h1), 0);
+    // every router routes the link /30 it is not on, by the link's own numbering
+    let public = mapped.site("public").unwrap();
+    let cmds = &mapped.setup.iter().find(|(ns, _)| *ns == Ns::Router(h2)).unwrap().1;
+    let net0 = format!("{}/30", mapped.links[0].net);
+    assert!(cmds.iter().any(|c| c.args.contains(&net0)));
+    assert!(mapped.sites[public].portmap.is_none());
+}
+
+#[test]
+fn a_port_mapping_needs_a_translating_router() {
+    let mut sc = scenario("port-mapping");
+    let public = sc.sites.iter().position(|s| s.name == "public").unwrap();
+    sc.sites[public].portmap = sc.sites[0].portmap;
+    let problems = sc.validate();
+    assert!(
+        problems.iter().any(|p| p.path == format!("sites[{public}].portmap")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn the_helper_writes_a_gateway_config_only_from_valid_fields() {
+    let conf = gateway_conf(42, "w0", "lan", "10.1.0.0", "pcp").unwrap();
+    for line in [
+        "ext_ifname=w0",
+        "listening_ip=lan",
+        "enable_pcp_pmp=yes",
+        "enable_upnp=no",
+        "allow 1024-65535 10.1.0.0/24 1024-65535",
+    ] {
+        assert!(conf.lines().any(|l| l == line), "{line} missing from\n{conf}");
+    }
+    assert!(
+        gateway_conf(42, "w0", "lan", "10.1.0.0", "upnp")
+            .unwrap()
+            .contains("enable_upnp=yes")
+    );
+    for (ext, lan, prefix, proto) in [
+        ("w0;rm", "lan", "10.1.0.0", "pcp"),
+        ("w0", "lan\nallow 0-65535 0.0.0.0/0 0-65535", "10.1.0.0", "pcp"),
+        ("w0", "lan", "10.1.0.7", "pcp"),
+        ("w0", "lan", "not an address", "pcp"),
+        ("w0", "lan", "10.1.0.0", "natpmp"),
+        ("a-name-longer-than-fifteen", "lan", "10.1.0.0", "pcp"),
+    ] {
+        assert_eq!(
+            gateway_conf(1, ext, lan, prefix, proto),
+            None,
+            "{ext} {lan} {prefix} {proto}"
+        );
+    }
 }
 
 #[test]

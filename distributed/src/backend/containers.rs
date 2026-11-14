@@ -224,6 +224,23 @@ impl Containers {
                 self.helper.run(Some(pid), c.tool.program(), c.args.clone()).await?;
             }
         }
+        // A router that maps ports runs miniupnpd on its first link, once its tables are there.
+        for (s, site) in plan.sites.iter().enumerate() {
+            let Some(pm) = site.portmap else { continue };
+            let Some(ext) = plan.links.iter().find(|l| l.a == s || l.b == s).map(|l| l.dev.clone()) else {
+                continue;
+            };
+            let ns = self.pid(Ns::Router(s))?;
+            self.helper
+                .call(Req::Gateway {
+                    ns,
+                    ext,
+                    lan: "lan".into(),
+                    prefix: site.lan.to_string(),
+                    proto: pm.name().into(),
+                })
+                .await?;
+        }
         Ok(())
     }
 
@@ -394,6 +411,12 @@ impl Containers {
     /// # Errors
     /// Docker failed.
     pub async fn down(&mut self) -> Result<Vec<String>> {
+        // The routers' miniupnpd first: they would keep the routers' network namespaces alive.
+        if let Ok(logs) = self.helper.call(Req::GatewayStop).await
+            && !logs.is_empty()
+        {
+            tracing::info!("miniupnpd logs:\n{logs}");
+        }
         docker::remove(&self.names).await?;
         if self.ifb_loaded {
             self.helper.call(Req::Ifb { load: false }).await?;

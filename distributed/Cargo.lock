@@ -5525,6 +5525,7 @@ dependencies = [
  "vinc-crypto",
  "vinc-keystore",
  "vinc-node",
+ "vinc-portmap",
  "vinc-security",
  "vinc-transport",
 ]
@@ -5623,6 +5624,7 @@ dependencies = [
  "vinc-keystore",
  "vinc-membership",
  "vinc-node",
+ "vinc-portmap",
  "vinc-reconcile",
  "vinc-security",
  "vinc-transport",
@@ -5668,12 +5670,17 @@ dependencies = [
  "vinc-dag",
  "vinc-dtn",
  "vinc-membership",
+ "vinc-portmap",
  "vinc-reconcile",
  "vinc-security",
  "vinc-transport",
  "vinc-values",
  "vinc-wire",
 ]
+
+[[package]]
+name = "vinc-portmap"
+version = "0.1.0"
 
 [[package]]
 name = "vinc-reconcile"

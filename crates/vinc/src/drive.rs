@@ -28,6 +28,7 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 mod carrier_io;
+mod http_io;
 mod role_io;
 
 pub(crate) use role_io::RoleEnd;
@@ -267,6 +268,7 @@ impl<H: Hosted> Shared<H> {
         let mut spare: Option<Buf<'_>> = None;
         let mut carriers = pin!(None);
         let mut role_io = pin!(None);
+        let mut http = pin!(None);
         loop {
             let step = poll_fn(|cx| {
                 let now = self.now();
@@ -384,6 +386,27 @@ impl<H: Hosted> Shared<H> {
                         let _ = f.poll(cx);
                     }
                     progressed |= self.cdirty.take();
+                }
+                if http.is_none() {
+                    let mut req = [0u8; http_io::MAX_REQUEST];
+                    let job = self.lock().and_then(|mut core| {
+                        let me = *core.node.id();
+                        core.node.poll_http(&mut req).map(|(to, n)| (me, to, n))
+                    });
+                    if let Some((me, to, n)) = job {
+                        let req = req.get(..n).unwrap_or_default().to_vec();
+                        http.set(Some(self.http_exchange(me, to, req)));
+                    }
+                }
+                if let Some(f) = http.as_mut().as_pin_mut()
+                    && let Poll::Ready(answer) = f.poll(cx)
+                {
+                    http.set(None);
+                    let now = self.now();
+                    if let Some(mut core) = self.lock() {
+                        core.node.handle_http(now, answer.as_deref());
+                    }
+                    progressed = true;
                 }
                 if progressed {
                     Poll::Ready(Step::Io)

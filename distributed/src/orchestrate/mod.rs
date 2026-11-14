@@ -9,6 +9,7 @@ mod dtnload;
 mod faults;
 pub mod live;
 mod pubsub;
+mod reach;
 mod syncload;
 mod tracefile;
 mod transport;
@@ -419,7 +420,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
     };
     let total = match &ctx.sc.workload {
         Workload::Transport(t) => t.pairs.len() * t.tests.len(),
-        Workload::Pubsub(_) => 1,
+        Workload::Pubsub(_) | Workload::Reach(_) => 1,
         Workload::Sync(w) => w.sizes.len(),
         Workload::Reconcile(w) => w.items.len() * w.differences.len(),
         Workload::Dtn(w) => w.sizes.len(),
@@ -501,6 +502,7 @@ pub async fn run(sc: Scenario, opts: Options) -> Result<Outcome> {
                     Workload::Sync(w) => syncload::run_sync(&mut ctx, b, &w).await,
                     Workload::Reconcile(w) => syncload::run_reconcile(&mut ctx, b, &w).await,
                     Workload::Dtn(w) => dtnload::run(&mut ctx, b, &w).await,
+                    Workload::Reach(w) => reach::run(&mut ctx, b, &w).await,
                 }
             };
             tokio::select! {
