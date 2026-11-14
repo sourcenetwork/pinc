@@ -90,6 +90,8 @@ pub use node::{Node, StartError};
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
 pub use relay::{MemberNotice, is_relay_request};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
+#[cfg(feature = "trace")]
+pub use values_frames::probe as values_frames_probe;
 pub use values_provide::PROVIDED_MAX;
 pub use values_types::{FETCHES, ValuesError, ValuesRequest};
 /// The two types [`ServeSource`] is written in, for a host that names its own stream source.

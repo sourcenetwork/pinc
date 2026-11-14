@@ -30,6 +30,7 @@ import Vinc.ValuesTimeTrace
 import Vinc.TraceConnectMailbox
 import Vinc.TraceConnectTable
 import Vinc.TraceConnectCodec
+import Vinc.TraceIntegrationCodecs
 import Vinc.TraceConnectLink
 import Vinc.TraceConnectClient
 import Vinc.TraceConnect
@@ -352,6 +353,13 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
         if TraceConnectCodec.isTag t then
           -- Wire format events (`trace_connect_codec`): the Lean frame, datagram, record, beacon, notice and ticket codecs.
           match TraceConnectCodec.replayEvent j with
+          | .ok () =>
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceIntegrationCodecs.isTag t then
+          -- Small round trip events (`trace_integration_codecs`): relay path addresses, the stream tag, the stream id of a range-proof body.
+          match TraceIntegrationCodecs.replayEvent j with
           | .ok () =>
             count := count + 1
             continue
