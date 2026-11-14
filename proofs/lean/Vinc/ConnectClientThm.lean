@@ -16,9 +16,11 @@ For every instant, every view and every state:
 * lookup: `ask_size` (the table keeps its size), `answered_removes`, `deadline_due`, and
   `verify_found`: an answer is accepted only if the record parses, its signature verifies and it names the peer asked
   about;
-* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; `answered_home_least`: after an answer the home
-  is the relay with the lowest last round trip among those that ever answered and are not unhealthy, a tie to the one
-  that answered first; `restart_keeps`: a link change keeps the home, that order and the rounds without a home.
+* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; after an answer a pinned relay that ever
+  answered and is not unhealthy is the home (`answered_pin_home`, over `rehome_pin` and `rehome_only_home`), and
+  otherwise (`answered_home_least`) the home is the relay with the lowest last round trip among those that ever answered
+  and are not unhealthy, a tie to the one that answered first; `restart_keeps`: a link change keeps the home, that order
+  and the rounds without a home.
 -/
 
 namespace Vinc.ConnectClient
@@ -230,6 +232,41 @@ theorem missing_fallback (n : Netcheck) (f : Nat) (hh : n.home = none) (ht : hom
   rw [if_neg this]
   simp only []
   rw [if_pos (by simp; omega)]
+
+-- Choosing a home after an answer: when the pinned relay ever answered and is not unhealthy, it is the home, whatever
+-- the round trips (the code's `pinned` short-cuts the round-trip comparison).
+theorem rehome_pin (n : Netcheck) (p : Nat) (hp : n.pinOk = some p) : n.rehome.home = some p := by
+  simp [Netcheck.rehome, hp]
+
+-- Choosing a home changes nothing but the home: the probes, round trips, order, misses and the pin are left as they were.
+theorem rehome_only_home (n : Netcheck) : ∃ h, n.rehome = { n with home := h } := by
+  unfold Netcheck.rehome
+  dsimp only
+  repeat' split
+  all_goals first | exact ⟨_, rfl⟩ | exact ⟨n.home, rfl⟩
+
+-- Whether the pin is a candidate does not depend on the home.
+theorem pinOk_home (n : Netcheck) (h : Option Nat) : ({ n with home := h } : Netcheck).pinOk = n.pinOk := rfl
+
+-- An answer that was taken is a home choice over the state with the answer recorded.
+theorem answered_rehome (n n' : Netcheck) (now relay addr rtt : Nat) (nonce : List Nat)
+    (h : n.answered now relay nonce addr = (some rtt, n')) : ∃ n1 : Netcheck, n' = n1.rehome := by
+  unfold Netcheck.answered at h
+  split at h
+  · split at h
+    · simp at h
+    · dsimp only at h
+      exact ⟨_, (Prod.mk.inj h).2.symm⟩
+  · simp at h
+
+/-- After an answer, a pinned relay that ever answered a probe and is not unhealthy is the home. -/
+theorem answered_pin_home (n n' : Netcheck) (now relay addr rtt p : Nat) (nonce : List Nat)
+    (h : n.answered now relay nonce addr = (some rtt, n')) (hp : n'.pinOk = some p) : n'.home = some p := by
+  obtain ⟨n1, rfl⟩ := answered_rehome n n' now relay addr rtt nonce h
+  obtain ⟨hm, hq⟩ := rehome_only_home n1
+  rw [hq, pinOk_home] at hp
+  rw [← hq] at *
+  exact rehome_pin n1 p hp
 
 /-- The fold of `argMin` from a known best: the result is the best or a later element, and is least. -/
 theorem argMin_fold (key : Nat → Nat) (l : List Nat) :
@@ -449,12 +486,30 @@ theorem argMin2_none (idx : List Nat) (key key2 : Nat → Nat) (h : argMin2 idx 
     obtain ⟨x, hx⟩ := argMin2_fold_some key key2 t a
     exact absurd (hx.symm.trans h) (by simp)
 
-/-- After an accepted answer the home is a relay that ever answered and is not unhealthy, and none of those has a lower
-last round trip, nor the same one with an earlier first answer: a fallback home that never answered moves to the first
-relay that does. The order and miss lists have one entry per relay, as the code's arrays. -/
+/-- The home choice with the pin not a candidate, out of a state where some relay ever answered and is not unhealthy:
+the relay with the lowest last round trip among those, a tie to the one that answered first. -/
+theorem rehome_least (n : Netcheck) (hp : n.rehome.pinOk = none) (hne : n.answeredRelays ≠ []) :
+    ∃ x, n.rehome.home = some x ∧ x ∈ n.rehome.answeredRelays ∧
+      ∀ i ∈ n.rehome.answeredRelays, n.rehome.rtt.getD x 0 < n.rehome.rtt.getD i 0 ∨
+        (n.rehome.rtt.getD x 0 = n.rehome.rtt.getD i 0 ∧ n.rehome.order.getD x 0 ≤ n.rehome.order.getD i 0) := by
+  have hp' : n.pinOk = none := by
+    obtain ⟨h, hq⟩ := rehome_only_home n
+    rw [hq, pinOk_home] at hp
+    exact hp
+  cases hb : argMin2 n.answeredRelays (fun i => n.rtt.getD i 0) (fun i => n.order.getD i 0) with
+  | none => exact absurd (argMin2_none _ _ _ hb) hne
+  | some b =>
+    have hr : n.rehome = { n with home := some b } := by simp only [Netcheck.rehome, hp', hb]
+    rw [hr]
+    exact ⟨b, rfl, argMin2_spec _ _ _ _ hb⟩
+
+/-- After an accepted answer, unless the pinned relay ever answered and is not unhealthy (`answered_pin_home`), the home
+is a relay that ever answered and is not unhealthy, and none of those has a lower last round trip, nor the same one with
+an earlier first answer: a fallback home that never answered moves to the first relay that does. With no pin set this
+holds after every answer. The order and miss lists have one entry per relay, as the code's arrays. -/
 theorem answered_home_least (n n' : Netcheck) (now relay r : Nat) (nonce : List Nat) (addr : Nat)
     (ho : n.order.length = n.probes.length) (hm : n.missed.length = n.probes.length)
-    (h : n.answered now relay nonce addr = (some r, n')) :
+    (h : n.answered now relay nonce addr = (some r, n')) (hpin : n'.pinOk = none) :
     ∃ x, n'.home = some x ∧ x ∈ n'.answeredRelays ∧
       ∀ i ∈ n'.answeredRelays, n'.rtt.getD x 0 < n'.rtt.getD i 0 ∨
         (n'.rtt.getD x 0 = n'.rtt.getD i 0 ∧ n'.order.getD x 0 ≤ n'.order.getD i 0) := by
@@ -475,20 +530,15 @@ theorem answered_home_least (n n' : Netcheck) (now relay r : Nat) (nonce : List 
       have hpos : 0 < (if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0) := by
         split <;> omega
       generalize (if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0) = place at h hpos
-      generalize hb : argMin2 _ _ _ = best at h
-      cases best with
-      | none =>
-        exfalso
-        have hnil := argMin2_none _ _ _ hb
-        unfold Netcheck.answeredRelays at hnil
-        rw [List.filter_eq_nil_iff] at hnil
-        have hx := hnil relay (by simpa using hrl)
-        simp [List.getD_eq_getElem?_getD, List.getElem?_set_self, ho, hm, hrl, hpos, Netcheck.unhealthy, missLimit] at hx
-          <;> omega
-      | some b =>
-        simp only [Prod.mk.injEq] at h
-        obtain ⟨-, rfl⟩ := h
-        exact ⟨b, rfl, argMin2_spec _ _ _ _ hb⟩
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨-, rfl⟩ := h
+      refine rehome_least _ hpin ?_
+      intro hnil
+      unfold Netcheck.answeredRelays at hnil
+      rw [List.filter_eq_nil_iff] at hnil
+      have hx := hnil relay (by simpa using hrl)
+      simp [List.getD_eq_getElem?_getD, List.getElem?_set_self, ho, hm, hrl, hpos, Netcheck.unhealthy, missLimit] at hx
+        <;> omega
 
 /-- A link change forgets the answers of the round and keeps the home, the order of first answers, the round trips, the
 misses and the count of rounds without a home (a node that moved after two silent rounds takes the fallback at the
@@ -507,4 +557,5 @@ end Vinc.ConnectClient
 #audit_axioms Vinc.ConnectClient.failover_none
 #audit_axioms Vinc.ConnectClient.failover_measured_least
 #audit_axioms Vinc.ConnectClient.answered_home_least
+#audit_axioms Vinc.ConnectClient.answered_pin_home
 #audit_axioms Vinc.ConnectClient.restart_keeps

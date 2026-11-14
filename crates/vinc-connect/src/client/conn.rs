@@ -586,6 +586,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.net.home()
     }
 
+    /// Pin the relay at table position `relay` as the home: the deployment's own relay, taken over a lower round trip
+    /// whenever it answers and is healthy, and the fallback when no relay answers (see [`Netcheck::pin`]).
+    pub const fn pin_home(&mut self, relay: usize) {
+        self.net.pin(relay);
+    }
+
     /// Whether a UDP datagram was ever heard.
     pub const fn udp_heard(&self) -> bool {
         self.udp_any

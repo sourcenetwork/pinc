@@ -568,7 +568,15 @@ fn netcheck_events(out: &mut Vec<String>) {
     for _ in 0..120 {
         let mut n: Netcheck<3> = Netcheck::new();
         let mut now = 0u64;
-        out.push(r#"{"t":"cl","m":"nnew","r":3}"#.to_string());
+        // One run in four has no pin; a pin past the table (3) is ignored by the code and logged as none.
+        let pin = (rng.next_u64() % 5) as usize;
+        if pin < 4 {
+            n.pin(pin);
+        }
+        out.push(format!(
+            r#"{{"t":"cl","m":"nnew","r":3,"pin":{}}}"#,
+            n.pinned().map_or(-1, |p| p as i64)
+        ));
         let mut nonces = [[0u8; 8]; 3];
         for _ in 0..70 {
             now = times(&mut rng, now);

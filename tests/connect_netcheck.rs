@@ -289,3 +289,86 @@ fn a_relay_that_fails_three_times_in_a_row_loses_the_home_to_the_next_healthy_on
     }
     assert_eq!(one.failover(|_| true, |_| true), None);
 }
+
+/// Probe every relay of `n` once and answer them with the round trips of `rtts`.
+fn answer_all<const R: usize>(n: &mut Netcheck<R>, at: u64, rtts: [u64; R]) {
+    for (i, rtt) in rtts.into_iter().enumerate() {
+        let nonce = [(at as u8).wrapping_add(i as u8); 8];
+        n.probe_sent(at, i, nonce, true);
+        assert!(n.answered(at + rtt, i, nonce, a("198.51.100.1:4000")).is_some());
+    }
+}
+
+#[test]
+fn a_pinned_relay_is_home_over_a_lower_round_trip_once_it_answers() {
+    let mut n = Netcheck::<3>::new();
+    n.pin(2);
+    assert_eq!(n.pinned(), Some(2));
+    n.probe_sent(0, 0, [1; 8], true);
+    assert!(n.answered(10, 0, [1; 8], a("1.2.3.4:5")).is_some());
+    assert_eq!(
+        n.home(),
+        Some(0),
+        "until the pinned relay answers, the lowest round trip is home"
+    );
+    n.probe_sent(0, 2, [3; 8], true);
+    assert!(n.answered(90, 2, [3; 8], a("1.2.3.4:5")).is_some());
+    assert_eq!(
+        n.home(),
+        Some(2),
+        "the pinned relay answered: it is home with a higher round trip"
+    );
+    n.probe_sent(100, 1, [2; 8], true);
+    assert!(n.answered(101, 1, [2; 8], a("1.2.3.4:5")).is_some());
+    assert_eq!(
+        n.home(),
+        Some(2),
+        "a lower round trip elsewhere does not move a pinned home"
+    );
+    // a position past the table is no pin
+    let mut m = Netcheck::<2>::new();
+    m.pin(2);
+    assert_eq!(m.pinned(), None);
+}
+
+#[test]
+fn an_unhealthy_pinned_home_fails_over_and_its_next_answer_brings_the_home_back() {
+    let mut n = Netcheck::<3>::new();
+    n.pin(1);
+    answer_all(&mut n, 0, [10, 50, 30]);
+    assert_eq!(n.home(), Some(1));
+    for k in 0..4u8 {
+        n.probe_sent(1_000, 1, [200 + k; 8], true);
+    }
+    assert!(n.unhealthy(1));
+    assert_eq!(
+        n.failover(|_| true, |_| false),
+        Some(0),
+        "the lowest round trip that works"
+    );
+    // answers from the others while the pin is still out keep the round-trip rule
+    n.probe_sent(2_000, 2, [7; 8], true);
+    assert!(n.answered(2_005, 2, [7; 8], a("1.2.3.4:5")).is_some());
+    assert_eq!(n.home(), Some(2));
+    n.probe_sent(3_000, 1, [9; 8], true);
+    assert!(n.answered(3_080, 1, [9; 8], a("1.2.3.4:5")).is_some());
+    assert!(!n.unhealthy(1));
+    assert_eq!(n.home(), Some(1), "the pinned relay answered again: it is home again");
+}
+
+#[test]
+fn a_pinned_home_holds_through_round_trips_that_move_an_unpinned_one() {
+    let mut pinned = Netcheck::<3>::new();
+    let mut plain = Netcheck::<3>::new();
+    pinned.pin(0);
+    for (at, rtts) in [(0, [40, 20, 30]), (1_000, [40, 10, 30]), (2_000, [5, 10, 30])] {
+        answer_all(&mut plain, at, rtts);
+        answer_all(&mut pinned, at, rtts);
+        assert_eq!(pinned.home(), Some(0));
+    }
+    assert_eq!(
+        plain.home(),
+        Some(0),
+        "the plain rule took relay 0 only for its strictly lower round trip"
+    );
+}

@@ -378,3 +378,53 @@ async fn a_dial_to_an_id_no_relay_knows_fails_inside_the_deadline() {
     })
     .await;
 }
+
+/// An endpoint of `seed` that knows `relays` by UDP only (address discovery picks its home), driven by its own task.
+async fn udp_only(seed: u8, relays: &[Relay]) -> vinc::Endpoint<impl vinc::Hosted + 'static> {
+    let sock = Rc::new(Handle::<UdpSocket>::bind(lo()).await.unwrap());
+    let (r, s) = (Rc::clone(&sock), Rc::clone(&sock));
+    let ep = vinc_common::builder()
+        .seed(&[seed; 32])
+        .unwrap()
+        .alpn(ECHO)
+        .relays(relays.iter().copied())
+        .local_addr(sock.local_addr().unwrap())
+        .build(
+            async move |buf: &mut [u8]| r.recv_from(buf).await,
+            async move |pkt: &[u8], to: SocketAddr| s.send_to(pkt, to).await,
+            async |at: Instant| nuclei::time::sleep_until_precise(at).await,
+        )
+        .unwrap();
+    let run = ep.clone();
+    nuclei::spawn_local(async move {
+        let _ = run.run().await;
+    })
+    .detach();
+    ep
+}
+
+#[nuclei::test]
+async fn an_endpoint_homes_on_the_relay_it_pins_whichever_answers_first() {
+    let (one, two) = (Rig::start().await, Rig::start().await);
+    let at = |rig: &Rig| Relay::new(rig.id()).with_udp(rig.addr);
+    within(120, async {
+        for (seed, pinned) in [(1u8, 1usize), (2, 0)] {
+            let mut relays = [at(&one), at(&two)];
+            relays[pinned] = relays[pinned].home();
+            let want = relays[pinned].id;
+            let ep = udp_only(seed, &relays).await;
+            let e = ep.clone();
+            eventually(60, "the endpoint is homed on the relay it pinned", || {
+                let e = e.clone();
+                async move { e.home_relay() == Some(want) }
+            })
+            .await;
+            // It stays there through the next rounds of probes, whatever their round trips.
+            for _ in 0..20 {
+                nuclei::time::sleep(Duration::from_millis(250)).await;
+                assert_eq!(ep.home_relay(), Some(want), "the pinned home held");
+            }
+        }
+    })
+    .await;
+}

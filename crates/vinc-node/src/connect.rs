@@ -54,6 +54,13 @@ where
         self.conn.set_local_discovery(on);
     }
 
+    /// Pin the relay at table position `relay` as the home relay, over one with a lower round trip
+    /// (`Connectivity::pin_home`).
+    pub fn pin_home(&mut self, relay: usize) {
+        self.deadline.set(Due::Stale);
+        self.conn.pin_home(relay);
+    }
+
     /// Set the node's own addresses.
     pub fn set_local(&mut self, addrs: &[SocketAddr]) {
         self.deadline.set(Due::Stale);

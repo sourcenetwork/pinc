@@ -124,6 +124,9 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
         vinc_node::StartError::Membership(_) => Error::config("the membership layer could not start"),
         vinc_node::StartError::Broadcast(_) => Error::config("the broadcast layer could not start"),
     })?;
+    if let Some(i) = cfg.relays.iter().take(RELAYS).position(|r| r.home) {
+        node.pin_home(i);
+    }
     // The endpoint has no multicast group to announce itself on, and a listener for others' beacons is not wired.
     node.set_local_discovery(false);
     // Scoped from the start, with no peers yet: no topic message from outside its component reaches it meanwhile.

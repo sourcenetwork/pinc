@@ -22,9 +22,14 @@
 //! the next one by table position whose carrier is open. A relay that merely has not failed yet is no target, and with
 //! none the home stays. Any answer or opened carrier makes a relay healthy again.
 //!
+//! **Pinned home.** A deployment that runs its own relay pins it ([`Netcheck::pin`]): once the pinned relay has
+//! answered a probe and is healthy, an answer makes it the home whatever its round trip. While it is unhealthy the
+//! home is chosen and fails over as without a pin, and its next answer brings the home back to it. A node that hears
+//! no answer at all falls back to the pinned relay instead of the one with the lowest id.
+//!
 //! Invariants: the nonce of an answer must match the probe sent to that relay, and a probe is answered at most once;
-//! the round trip of a relay is the last measured one; [`Netcheck::home`] is the best relay of the last answer, so it
-//! follows the measurements without a margin.
+//! the round trip of a relay is the last measured one; [`Netcheck::home`] is the best relay of the last answer (the
+//! healthy pinned relay once it answered, else the lowest round trip), so it follows the measurements without a margin.
 
 use core::net::{IpAddr, SocketAddr};
 
@@ -100,6 +105,7 @@ pub struct Netcheck<const R: usize> {
     missed: [u8; R],
     tries: u8,
     first_probe: Option<u64>,
+    pin: Option<usize>,
 }
 
 impl<const R: usize> Default for Netcheck<R> {
@@ -120,7 +126,20 @@ impl<const R: usize> Netcheck<R> {
             missed: [0; R],
             tries: 0,
             first_probe: None,
+            pin: None,
         }
+    }
+
+    /// Pin `relay` as the home (see the module docs); a position past the table is ignored.
+    pub const fn pin(&mut self, relay: usize) {
+        if relay < R {
+            self.pin = Some(relay);
+        }
+    }
+
+    /// The pinned relay, if any.
+    pub const fn pinned(&self) -> Option<usize> {
+        self.pin
     }
 
     /// Record a probe sent to relay `relay` at `now` with `nonce`. An unanswered earlier probe counts as a failure
@@ -152,14 +171,16 @@ impl<const R: usize> Netcheck<R> {
             *self.order.get_mut(relay)? = next;
         }
         // Every relay that ever answered counts, not only those since the last link change; an unhealthy one does not.
-        let best = (0..R)
-            .filter(|i| self.order.get(*i).is_some_and(|o| *o > 0) && !self.unhealthy(*i))
-            .min_by_key(|i| {
+        let measured = |i: usize| self.order.get(i).is_some_and(|o| *o > 0) && !self.unhealthy(i);
+        let pinned = self.pin.filter(|p| measured(*p));
+        let best = pinned.or_else(|| {
+            (0..R).filter(|i| measured(*i)).min_by_key(|i| {
                 (
                     self.rtt.get(*i).copied().unwrap_or(u64::MAX),
                     self.order.get(*i).copied(),
                 )
-            });
+            })
+        });
         if best.is_some() {
             self.home = best;
         }

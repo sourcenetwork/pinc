@@ -26,19 +26,24 @@
 (*  LookupsOK   the table keeps its size and a peer is in at most one      *)
 (*              slot; a query within the retry wait is skipped; a peer is  *)
 (*              due only after the wait; nothing waits forever             *)
-(*  NetOK       the home is a valid relay; after an answer it is the       *)
-(*              relay with the lowest last round trip among those that     *)
-(*              ever answered and are not unhealthy, a tie to the one that *)
-(*              answered first (so a fallback home that never answered     *)
-(*              moves to the first relay that does); the places in the     *)
-(*              order of first answers are 1..k, each once; a link change  *)
-(*              keeps the home, that order and the count of rounds without *)
-(*              a home; a failover lands on a relay known to work (it      *)
+(*  NetOK       the home is a valid relay; the places in the order of      *)
+(*              first answers are 1..k, each once; a link change keeps     *)
+(*              the home, that order and the count of rounds without a     *)
+(*              home; a failover lands on a relay known to work (it        *)
 (*              answered a probe since it last failed, or its carrier is   *)
 (*              open); a relay is unhealthy after three misses in a row    *)
 (*              and healthy again after an answer; at the third round      *)
 (*              without a home, counted across link changes, the relay     *)
-(*              given (the lowest id) is the home                          *)
+(*              given (the pinned relay, else the lowest id) is the home   *)
+(*  AnswerOK    after a taken answer, a pinned relay that ever answered    *)
+(*              and is not unhealthy is the home; otherwise the home is    *)
+(*              the relay with the lowest last round trip among those      *)
+(*              that ever answered and are not unhealthy, a tie to the     *)
+(*              one that answered first (so a fallback home that never     *)
+(*              answered moves to the first relay that does)               *)
+(* BUG = "nopin" (witness ConnectClient_net_w_nopin): an answer ignores    *)
+(* the pin, and AnswerOK fails: a closer relay keeps the home from the     *)
+(* deployment's own relay.                                                 *)
 (* Witnesses of the rules the code had before (TLC must violate them):     *)
 (*  ConnectClient_w_homelower  HomeOnlyLower: the home moves only to a     *)
 (*              strictly lower round trip or away from an unhealthy relay  *)
@@ -46,7 +51,7 @@
 (***************************************************************************)
 EXTENDS ConnectClientOps
 
-CONSTANTS Mode, Times, Peers, Sess
+CONSTANTS Mode, Times, Peers, Sess, BUG
 VARIABLES P, LK, NC
 vars == <<P, LK, NC>>
 
@@ -115,7 +120,11 @@ ClassifyOK ==
     /\ ~IsShared(<<10, 0, 0, 1>>)
 
 (* ---- state machines ---- *)
-Init == /\ P = NewPending(2, 2) /\ LK = NewLookups(2) /\ NC = NewNet(2)
+\* the probe state starts with no pin, or with either relay pinned
+Init == /\ P = NewPending(2, 2) /\ LK = NewLookups(2) /\ NC \in {NPin(NewNet(2), p) : p \in -1..1}
+
+\* the answer the code gives, or the planted bug's
+Ans(N, now, rl, nc, a) == NAnsweredBy(N, now, rl, nc, a, BUG # "nopin")
 
 DoPending ==
     \/ \E pe \in Peers, s \in Sess : LET r == PAdd(P, pe, s) IN P' = r.P
@@ -130,7 +139,7 @@ DoLookups ==
 
 DoNet ==
     \/ \E now \in Times, rl \in 0..1, nc \in 1..1, w \in BOOLEAN : NC' = NProbeSent(NC, now, rl, <<nc>>, w) 
-    \/ \E now \in Times, rl \in 0..1, nc \in 1..1, a \in 1..2 : NC' = NAnswered(NC, now, rl, <<nc>>, a).N 
+    \/ \E now \in Times, rl \in 0..1, nc \in 1..1, a \in 1..2 : NC' = Ans(NC, now, rl, <<nc>>, a).N
     \/ \E rl \in 0..1 : NC' = NFailed(NC, rl)
     \/ \E rl \in 0..1 : NC' = NHealthy(NC, rl)
     \/ \E us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>, <<FALSE, TRUE>>}, op \in BOOLEAN \X BOOLEAN : NC' = NFailover(NC, us, op).N
@@ -157,8 +166,9 @@ LookupsOK ==
          \E i \in 1..2 : LK.items[i].e /\ LK.items[i].peer = pe /\ now > LK.items[i].at + LK.items[i].wait
     /\ \A now \in Times : (LNext(LK) >= 0 /\ LNext(LK) <= now) => LDue(LK, now) # <<>>
 
-\* the answers the net configs can take in a state: every relay, address and time, the one nonce
-Answers == {NAnswered(NC, now, rl, <<1>>, a) : now \in Times, rl \in 0..1, a \in 1..2}
+\* the answers the net configs can take in a state (the code's, or the planted bug's): every relay, address and time,
+\* the one nonce
+Answers == {Ans(NC, now, rl, <<1>>, a) : now \in Times, rl \in 0..1, a \in 1..2}
 
 NetOK ==
     /\ NC.home \in -1..1
@@ -169,13 +179,6 @@ NetOK ==
                         /\ ((NC.missed[f.res + 1] = 0 /\ NC.refl[f.res + 1] >= 0) \/ op[f.res + 1]))
     \* the relays that answered hold the places 1..k of the order of first answers, each once
     /\ LET A == {i \in 1..2 : NC.order[i] > 0} IN {NC.order[i] : i \in A} = 1..Cardinality(A)
-    \* after an answer the home is the relay with the lowest last round trip among those that ever answered and are not
-    \* unhealthy, a tie to the one that answered first
-    /\ \A r \in Answers : r.res >= 0 =>
-         LET h == r.N.home IN
-         /\ h \in Answered(r.N)
-         /\ \A i \in Answered(r.N) : \/ r.N.rtt[h + 1] < r.N.rtt[i + 1]
-                                     \/ r.N.rtt[h + 1] = r.N.rtt[i + 1] /\ r.N.order[h + 1] <= r.N.order[i + 1]
     \* a link change forgets the round's answers and keeps the home, the order and the rounds without a home
     /\ LET s == NRestart(NC) IN
        /\ s.home = NC.home /\ s.order = NC.order /\ s.tries = NC.tries /\ s.rtt = NC.rtt /\ s.missed = NC.missed
@@ -191,6 +194,18 @@ NetOK ==
 HomeOnlyLower ==
     \A r \in Answers : (r.res >= 0 /\ r.N.home # NC.home) =>
         (NC.home < 0 \/ Unhealthy(r.N, NC.home) \/ r.N.rtt[r.N.home + 1] < r.N.rtt[NC.home + 1])
+
+\* after a taken answer the pinned relay, once it ever answered and while it is not unhealthy, is the home whatever the
+\* round trips; otherwise the home is the relay with the lowest last round trip among those that ever answered and are
+\* not unhealthy, a tie to the one that answered first. Only a taken answer (its nonce matched an outstanding probe)
+\* chooses a home; an opened carrier that makes the pinned relay healthy again waits for its next answer.
+AnswerOK ==
+    \A r \in Answers : r.res >= 0 =>
+        LET h == r.N.home IN
+        IF NC.pin \in Answered(r.N) THEN h = NC.pin
+        ELSE /\ h \in Answered(r.N)
+             /\ \A i \in Answered(r.N) : \/ r.N.rtt[h + 1] < r.N.rtt[i + 1]
+                                         \/ r.N.rtt[h + 1] = r.N.rtt[i + 1] /\ r.N.order[h + 1] <= r.N.order[i + 1]
 
 \* the miss and try counters saturate at 255 in the code; one past the threshold covers every branch
 Bounded == (\A i \in 1..2 : NC.missed[i] <= MISSLIMIT + 1) /\ NC.tries <= HOMETRIES + 1

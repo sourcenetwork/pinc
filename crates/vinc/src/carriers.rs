@@ -38,6 +38,8 @@ pub struct Relay {
     /// The host's WebSocket delivers whole messages, as a browser's does: the carrier kind is
     /// [`CarrierKind::WsMessages`] instead of [`CarrierKind::Ws`].
     pub messages: bool,
+    /// The endpoint's home relay whatever the round trips (the deployment's own relay): see [`Relay::home`].
+    pub home: bool,
 }
 
 impl Relay {
@@ -49,7 +51,18 @@ impl Relay {
             tcp: None,
             ws: None,
             messages: false,
+            home: false,
         }
+    }
+
+    /// Pin this relay as the endpoint's home: the relay its record names and its first stop, taken over one with a lower
+    /// round trip once it has answered a probe and is healthy. While it fails the home moves as without a pin and comes
+    /// back with its next answer. Of several relays marked so, the first in [`relays`](crate::Builder::relays) is the
+    /// home.
+    #[must_use]
+    pub const fn home(mut self) -> Self {
+        self.home = true;
+        self
     }
 
     /// Set the UDP address.

@@ -355,10 +355,17 @@ structure Netcheck where
   missed : List Nat
   tries : Nat
   firstProbe : Option Nat
+  -- the relay the deployment pinned as the home, if any
+  pin : Option Nat
   deriving DecidableEq, Repr
 
 def Netcheck.new (r : Nat) : Netcheck :=
-  ⟨List.replicate r none, List.replicate r 0, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none⟩
+  ⟨List.replicate r none, List.replicate r 0, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none,
+    none⟩
+
+/-- `Netcheck::pin`: a position past the table is ignored. -/
+def Netcheck.setPin (n : Netcheck) (relay : Nat) : Netcheck :=
+  if relay < n.probes.length then { n with pin := some relay } else n
 
 def Netcheck.unhealthy (n : Netcheck) (i : Nat) : Bool := decide (n.missed.getD i 0 ≥ missLimit)
 
@@ -395,10 +402,26 @@ def argMin2 (idx : List Nat) (key key2 : Nat → Nat) : Option Nat :=
 def Netcheck.answeredRelays (n : Netcheck) : List Nat :=
   (List.range n.probes.length).filter fun i => decide (n.order.getD i 0 > 0) && !n.unhealthy i
 
+/-- The pinned relay when it ever answered and is not unhealthy: a home candidate. -/
+def Netcheck.pinOk (n : Netcheck) : Option Nat :=
+  match n.pin with
+  | some p => if p ∈ n.answeredRelays then some p else none
+  | none => none
+
+/-- The home choice of `Netcheck::answered`: the pinned relay when it ever answered and is not unhealthy, whatever the
+round trips; else the relay with the lowest last round trip among every relay that ever answered and is not unhealthy, a
+tie to the one that answered first; with none the home stays. -/
+def Netcheck.rehome (n : Netcheck) : Netcheck :=
+  let best := match n.pinOk with
+    | some p => some p
+    | none => argMin2 n.answeredRelays (fun i => n.rtt.getD i 0) (fun i => n.order.getD i 0)
+  match best with
+  | some b => { n with home := some b }
+  | none => n
+
 /-- `Netcheck::answered`: the round trip when the nonce matched an outstanding probe. A relay's first answer gives it
 the next place in the order of first answers (the code's `u32` saturation is out of reach: the places are at most the
-number of relays); the home is re-chosen at every answer: the relay with the lowest last round trip among every relay
-that ever answered and is not unhealthy, a tie to the one that answered first. -/
+number of relays); the home is re-chosen at every answer (`Netcheck.rehome`). -/
 def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr : Nat) : Option Nat × Netcheck :=
   match n.probes.getD relay none with
   | some (nc, sent) =>
@@ -408,10 +431,7 @@ def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr 
       let place := if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0
       let n1 := { n with probes := n.probes.set relay none, missed := n.missed.set relay 0,
                          rtt := n.rtt.set relay rtt, order := n.order.set relay place, refl := n.refl.set relay (some addr) }
-      let best := argMin2 n1.answeredRelays (fun i => n1.rtt.getD i 0) (fun i => n1.order.getD i 0)
-      (some rtt, match best with
-        | some b => { n1 with home := some b }
-        | none => n1)
+      (some rtt, n1.rehome)
   | none => (none, n)
 
 /-- `Netcheck::failover`: move the home away from an unhealthy relay, only to one known to work: a probe answered since
