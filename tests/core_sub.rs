@@ -461,6 +461,39 @@ fn incoming_not_allowed() -> (CoreNet, usize, usize) {
 }
 
 #[test]
+fn a_third_protocol_rides_the_root_session_and_does_not_wait_on_a_sub_session() {
+    big_stack(|| {
+        const ALPN_C: &[u8] = b"vinc/c";
+        let mut net = CoreNet::new(10 * MS_NS);
+        net.capture = true;
+        let (a, b) = (net.add(1), net.add(2));
+        assert!(net.nodes[a].ep.register_alpn(ALPN_C) && net.nodes[b].ep.register_alpn(ALPN_C));
+        net.connect_pair(a, b, ALPN_A, Role::Other);
+        net.run_for(SEC_NS);
+        let (second, _) = dial(&mut net, a, b, ALPN_B);
+        write_new(&mut net, a, second, b"second");
+        assert!(net.run(net.now + 5 * SEC_NS, |n| {
+            n.nodes[b].read.values().any(|v| v == b"second")
+        }));
+        let marker = net.captured.len();
+        let (third, rep) = dial(&mut net, a, b, ALPN_C);
+        assert!(rep.events.any(is_connected));
+        write_new(&mut net, a, third, b"third");
+        assert!(
+            net.run(net.now + 5 * SEC_NS, |n| n.nodes[b]
+                .read
+                .values()
+                .any(|v| v == b"third")),
+            "the third protocol never got its data through"
+        );
+        assert!(
+            !handshake_since(&net, marker),
+            "the third protocol made its own handshake"
+        );
+    });
+}
+
+#[test]
 fn a_dial_waits_on_a_session_the_peer_opened_that_is_not_allowed_yet() {
     big_stack(|| {
         let (mut net, a, b) = incoming_not_allowed();
