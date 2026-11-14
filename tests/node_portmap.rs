@@ -426,9 +426,14 @@ fn every_request_carries_a_nonce_that_was_drawn() {
             let mut nonces = Vec::new();
             for i in 0..3u64 {
                 node.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
-                let asked = to_gateway(&mut node);
+                // a start while one runs releases the request the old client had in flight first
+                let asked: Vec<_> = to_gateway(&mut node)
+                    .iter()
+                    .map(|b| pcp::decode_request(b).unwrap())
+                    .filter(|r| r.lifetime > 0)
+                    .collect();
                 assert_eq!(asked.len(), 1, "a request is out at once");
-                nonces.push(pcp::decode_request(&asked[0]).unwrap().nonce);
+                nonces.push(asked[0].nonce);
             }
             assert!(
                 nonces.iter().all(|n| *n != [0; 12]),

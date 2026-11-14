@@ -1319,3 +1319,7 @@ path = "vinc_access_protocols.rs"
 [[test]]
 name = "node_portmap"
 path = "node_portmap.rs"
+
+[[test]]
+name = "node_portmap_relay"
+path = "node_portmap_relay.rs"

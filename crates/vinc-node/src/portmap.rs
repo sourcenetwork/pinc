@@ -36,15 +36,30 @@ struct Ask {
     lifetime: u32,
 }
 
-/// The port-mapping client (none until a nonce could be drawn), what it was started with, when the draw is tried
-/// again, and the address the connectivity client was last given.
+/// The port-mapping client (none until a nonce could be drawn), the stopped client of an earlier start while its release
+/// is still on the way, what the client was started with, when the draw is tried again, and the address the
+/// connectivity client was last given.
 #[derive(Debug)]
 pub(crate) struct Pm {
     client: Option<PortMap>,
+    retiring: Option<PortMap>,
     ask: Ask,
     retry: Nanos,
+    halted: bool,
     nonce_failures: u64,
     given: Option<SocketAddr>,
+}
+
+impl Pm {
+    /// The clients that send, the one retiring first: its release goes out before the new client asks.
+    fn sending(&mut self) -> impl Iterator<Item = &mut PortMap> {
+        self.retiring.iter_mut().chain(self.client.iter_mut())
+    }
+
+    /// Forget a retiring client whose release is sent.
+    fn reap(&mut self) {
+        self.retiring = self.retiring.take().filter(|c| !c.stopped());
+    }
 }
 
 impl<E, P, St, const R: usize, const PEERS: usize, A> Node<E, P, St, R, PEERS, A>
@@ -56,21 +71,34 @@ where
     E::Src: ServeSource<A::Values>,
 {
     /// Ask the gateway for a UDP mapping of the socket `local`, from `now` on, for leases of `lifetime` seconds.
-    /// `gateway` is the host's default gateway; without it only `UPnP` is tried. A call while one runs starts over.
+    /// `gateway` is the host's default gateway; without it only `UPnP` is tried. A call while one runs starts over: the
+    /// old client is stopped, its release goes out, and the address it published is withdrawn before the new client
+    /// asks.
     pub fn start_port_mapping(&mut self, now: Nanos, gateway: Option<IpAddr>, local: SocketAddr, lifetime: u32) {
         self.begin(now);
+        // vertexia: one release can be in flight for a retired client; a third start before it is sent replaces it
+        let (given, retiring) = self.pm.take().map_or((None, None), |old| {
+            let mut client = old.client;
+            if let Some(c) = &mut client {
+                c.stop(now);
+            }
+            (old.given, client.filter(|c| !c.stopped()))
+        });
         self.pm = Some(alloc::boxed::Box::new(Pm {
             client: None,
+            retiring,
             ask: Ask {
                 gateway,
                 local,
                 lifetime,
             },
             retry: now,
+            halted: false,
             nonce_failures: 0,
-            given: None,
+            given,
         }));
         self.pm_seed(now);
+        self.pm_apply(now);
         self.settle(now);
     }
 
@@ -79,7 +107,7 @@ where
     /// [`NONCE_RETRY`].
     fn pm_seed(&mut self, now: Nanos) {
         let Some(pm) = &mut self.pm else { return };
-        if pm.client.is_some() {
+        if pm.client.is_some() || pm.halted {
             return;
         }
         let mut nonce = [0u8; 12];
@@ -100,8 +128,15 @@ where
         self.begin(now);
         match self.pm.as_mut().map(|pm| pm.client.as_mut()) {
             Some(Some(client)) => client.stop(now),
-            // never started: nothing was asked, so nothing is released
-            Some(None) => self.pm = None,
+            // never started: nothing was asked, so nothing is released, and nothing is started later
+            Some(None) => {
+                if let Some(pm) = &mut self.pm {
+                    pm.halted = true;
+                    if pm.retiring.is_none() {
+                        self.pm = None;
+                    }
+                }
+            }
             None => {}
         }
         self.pm_apply(now);
@@ -117,9 +152,10 @@ where
 
     /// Whether the port-mapping client has nothing more to do: never turned on, or stopped and its release sent.
     pub fn port_mapping_done(&self) -> bool {
-        self.pm
-            .as_ref()
-            .is_none_or(|pm| pm.client.as_ref().is_some_and(PortMap::stopped))
+        self.pm.as_ref().is_none_or(|pm| {
+            let client = pm.client.as_ref().map_or(pm.halted, PortMap::stopped);
+            client && pm.retiring.as_ref().is_none_or(PortMap::stopped)
+        })
     }
 
     /// What the port-mapping client dropped, and the draws of its nonce that failed; zero before it is turned on.
@@ -140,8 +176,16 @@ where
     /// `buf` ([`vinc_portmap::upnp::MAX_REQUEST`] bytes hold any). The host writes it, reads the answer until the server closes it (at most
     /// [`vinc_portmap::MAX_RESPONSE`] bytes) and hands it to [`Node::handle_http`].
     pub fn poll_http(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        // With no client nothing can move the deadline, so the answer stays cached.
+        if !self
+            .pm
+            .as_ref()
+            .is_some_and(|pm| pm.client.is_some() || pm.retiring.is_some())
+        {
+            return None;
+        }
         self.deadline.set(Due::Stale);
-        self.pm.as_mut()?.client.as_mut()?.poll_http(buf)
+        self.pm.as_mut()?.sending().find_map(|c| c.poll_http(&mut *buf))
     }
 
     /// Whether the port-mapping client still waits for the answer to the HTTP request it gave out. When it does not
@@ -149,15 +193,17 @@ where
     pub fn http_awaited(&self) -> bool {
         self.pm
             .as_ref()
-            .and_then(|pm| pm.client.as_ref())
-            .is_some_and(PortMap::awaiting_http)
+            .is_some_and(|pm| pm.client.iter().chain(pm.retiring.iter()).any(PortMap::awaiting_http))
     }
 
     /// The answer to the last HTTP request, or `None` if its connection failed.
     pub fn handle_http(&mut self, now: Nanos, resp: Option<&[u8]>) {
         self.begin(now);
-        if let Some(client) = self.pm.as_mut().and_then(|pm| pm.client.as_mut()) {
-            client.handle_http(now, resp);
+        if let Some(pm) = &mut self.pm {
+            if let Some(c) = pm.sending().find(|c| c.awaiting_http()) {
+                c.handle_http(now, resp);
+            }
+            pm.reap();
         }
         self.pm_apply(now);
         self.settle(now);
@@ -165,12 +211,16 @@ where
 
     /// A datagram from `remote` for the port-mapping client: handled, and true; otherwise false.
     pub(crate) fn pm_datagram(&mut self, now: Nanos, remote: SocketAddr, d: &[u8]) -> bool {
-        let Some(client) = self.pm.as_mut().and_then(|pm| pm.client.as_mut()) else {
+        let Some(pm) = &mut self.pm else { return false };
+        // The new client first: its answers are the ones a gateway sends now.
+        let Some(client) = pm
+            .client
+            .iter_mut()
+            .chain(pm.retiring.iter_mut())
+            .find(|c| c.owns(remote, d))
+        else {
             return false;
         };
-        if !client.owns(remote, d) {
-            return false;
-        }
         client.handle_datagram(now, remote, d);
         self.pm_apply(now);
         true
@@ -185,24 +235,31 @@ where
             self.pm_seed(now);
             self.pm_apply(now);
         }
-        if let Some(client) = self.pm.as_mut().and_then(|pm| pm.client.as_mut())
-            && client.poll_timeout().is_some_and(|t| t <= now)
-        {
-            client.handle_timeout(now);
+        if let Some(pm) = &mut self.pm {
+            for c in pm.sending().filter(|c| c.poll_timeout().is_some_and(|t| t <= now)) {
+                c.handle_timeout(now);
+            }
+            pm.reap();
             self.pm_apply(now);
         }
     }
 
     pub(crate) fn pm_deadline(&self) -> Option<Nanos> {
         let pm = self.pm.as_ref()?;
-        match &pm.client {
-            Some(client) => client.poll_timeout(),
-            None => Some(pm.retry),
-        }
+        let seed = (pm.client.is_none() && !pm.halted).then_some(pm.retry);
+        pm.client
+            .iter()
+            .chain(pm.retiring.iter())
+            .filter_map(PortMap::poll_timeout)
+            .chain(seed)
+            .min()
     }
 
     pub(crate) fn pm_poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
-        self.pm.as_mut()?.client.as_mut()?.poll_datagram(buf)
+        let pm = self.pm.as_mut()?;
+        let out = pm.sending().find_map(|c| c.poll_datagram(&mut *buf));
+        pm.reap();
+        out
     }
 
     /// Give the connectivity client the address the port-mapping client holds, if it changed.
