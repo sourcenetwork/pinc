@@ -187,7 +187,7 @@ conn_impl! {
                     self.set_flight_fanout(&[]);
                     if !est.resumed {
                         let srtt = self.rec.rtt().smoothed();
-                        self.hs.finish_sent(now, srtt);
+                        self.hs.finish_sent(now, srtt, self.rec.pto_duration());
                     }
                     if !est.tickets.entries().is_empty() {
                         self.events.push_tickets(est.tickets);

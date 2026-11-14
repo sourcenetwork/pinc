@@ -195,7 +195,7 @@ fn a_responder_resends_its_flight_at_999_ms_then_every_4_s() {
 }
 
 #[test]
-fn the_finish_is_resent_after_999_ms_and_the_handshake_round_trip_seeds_the_estimate() {
+fn the_finish_is_resent_after_a_probe_timeout_below_999_ms_and_the_handshake_round_trip_seeds_the_estimate() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
@@ -208,13 +208,10 @@ fn the_finish_is_resent_after_999_ms_and_the_handshake_round_trip_seeds_the_esti
         assert!((20 * MS..25 * MS).contains(&srtt), "srtt {srtt}");
         assert!(!net.b.conn.is_connected(), "the Finish was lost");
         assert!(net.connect(t0 + 2 * SEC));
-        // The Finish went out again after 999 ms, whatever the round trip it measured.
+        // The Finish went out again after a probe timeout (srtt + 4 x rttvar + 25 ms, about 85 ms), not after 999 ms: a
+        // Finish lost in a burst costs about a round trip, not a second.
         let took = net.now - t0;
-        assert!(
-            (999 * MS..1100 * MS).contains(&took),
-            "connected after {} ms",
-            took / MS
-        );
+        assert!((60 * MS..450 * MS).contains(&took), "connected after {} ms", took / MS);
         assert_eq!(net.a.conn.stats().handshake_retransmits, 1);
         // Once the first 1-RTT packet is heard the timer is done.
         net.run(t0 + 5 * SEC, |_| false);
