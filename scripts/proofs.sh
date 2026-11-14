@@ -554,6 +554,11 @@ par witness_tlc coretable_evict CoreTable CoreTable_evict EvictRight
 par witness_tlc coretable_chain CoreTable CoreTable_chain Refines
 par witness_tlc coretable_dup CoreTable CoreTable_dup NoDouble
 par witness_tlc coretable_cut CoreTable CoreTable_cut NoOverflow
+par run_tlc corerouteindex CoreRouteIndex CoreRouteIndex
+par witness_tlc corerouteindex_nosync CoreRouteIndex CoreRouteIndex_nosync Agree
+par witness_tlc corerouteindex_nofree CoreRouteIndex CoreRouteIndex_nofree Exact
+par witness_tlc corerouteindex_noverify CoreRouteIndex CoreRouteIndex_noverify Agree
+par witness_tlc corerouteindex_keepold CoreRouteIndex CoreRouteIndex_keepold Exact
 par run_tlc corestate CoreState CoreState
 par witness_tlc corestate_lazy CoreState CoreState_lazy AtomicInv
 par witness_tlc corestate_tail CoreState CoreState_tail CanonInv

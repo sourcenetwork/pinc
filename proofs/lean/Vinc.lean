@@ -125,6 +125,8 @@ import Vinc.TraceHalfOpen
 import Vinc.CoreTable
 import Vinc.CoreTableThm
 import Vinc.TraceCoreTable
+import Vinc.CoreRouteIndex
+import Vinc.CoreRouteIndexThm
 import Vinc.CoreHeap
 import Vinc.CoreHeapInv
 import Vinc.CoreHeapSift
