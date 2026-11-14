@@ -1036,6 +1036,10 @@ name = "trace_node_backoff"
 path = "trace_node_backoff.rs"
 
 [[test]]
+name = "mbt_halfopen"
+path = "mbt_halfopen.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 
