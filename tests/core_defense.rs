@@ -468,3 +468,21 @@ fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
     assert_eq!(r.ok(), Some(true), "the second charge must not overflow the total");
     assert_eq!(l.get(&v).unwrap().tx, u64::MAX);
 }
+
+#[test]
+fn datagrams_out_counts_the_datagrams_that_left_and_held_counts_the_refusals() {
+    big_stack(|| {
+        let (mut net, s, hello) = spoofable_resume();
+        let x: SocketAddr = "10.9.9.9:1000".parse().unwrap();
+        let to = net.nodes[s].addr;
+        let out0 = net.nodes[s].ep.node_stats().datagrams_out;
+        let held0 = net.nodes[s].ep.node_stats().held_by_ledger;
+        net.inject(x, to, hello, 0);
+        net.run_for(5 * SEC_NS);
+        let left = net.tapped.iter().filter(|t| t.2 == x).count() as u64;
+        let ns = net.nodes[s].ep.node_stats();
+        assert!(left >= 1);
+        assert_eq!(ns.datagrams_out - out0, left, "a refused datagram never counts as out");
+        assert!(ns.held_by_ledger > held0, "the refusals are still counted");
+    });
+}

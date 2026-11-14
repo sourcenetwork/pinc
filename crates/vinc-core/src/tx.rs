@@ -59,7 +59,7 @@ ep_impl! {
                 continue;
             };
             let segments = tx.len.div_ceil(tx.segment_size.max(1));
-            self.note_sent(i, now, tx.path, segments);
+            self.note_sent(i, now, tx.path);
             self.dirty_rotate(q);
             self.settle_core(i, now, false);
             let Some((local, remote)) = self.path_addrs(tx.path) else {
@@ -75,9 +75,8 @@ ep_impl! {
         }
     }
 
-    /// Record that session `i` sent `segments` datagrams on `path`.
-    fn note_sent(&mut self, i: usize, now: u64, path: PathId, segments: usize) {
-        self.counters.datagrams_out += segments as u64;
+    /// Record that session `i` produced a datagram on `path`.
+    fn note_sent(&mut self, i: usize, now: u64, path: PathId) {
         if let Some(s) = self.slots.get_mut(i) {
             s.m.last_tx = now;
             s.m.ctrl_pending = false;
@@ -97,7 +96,9 @@ ep_impl! {
             rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
             tx: self.ledger.get(&remote).map_or(0, |e| e.tx),
         });
-        if !allowed {
+        if allowed {
+            self.counters.datagrams_out += segments as u64;
+        } else {
             self.counters.held_by_ledger += 1;
         }
         allowed
@@ -150,7 +151,7 @@ ep_impl! {
                 continue;
             };
             let more = tx.len.div_ceil(tx.segment_size.max(1));
-            self.note_sent(j, now, tx.path, more);
+            self.note_sent(j, now, tx.path);
             self.dirty_rotate(q);
             self.settle_core(j, now, false);
             let same_dest = self.path_addrs(tx.path) == Some((first.local, first.remote));
