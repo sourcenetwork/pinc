@@ -396,3 +396,18 @@ fn a_changed_address_withdraws_the_class_with_the_address() {
     });
 }
 
+#[test]
+fn an_endpoint_without_a_client_does_not_clear_the_cached_deadline() {
+    big(|| {
+        let mut w = world();
+        let _ = w.node.poll_timeout();
+        assert!(w.node.deadline_cached());
+        let mut b = [0u8; 2048];
+        assert!(w.node.poll_http(&mut b).is_none());
+        assert!(!w.node.has_port_mapping());
+        assert!(
+            w.node.deadline_cached(),
+            "poll_http cleared the cached deadline of a node with no client"
+        );
+    });
+}

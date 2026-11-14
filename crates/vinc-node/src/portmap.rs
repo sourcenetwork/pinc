@@ -158,6 +158,18 @@ where
         })
     }
 
+    /// Whether the host turned port mapping on: when it did not, there is nothing to poll for HTTP or datagrams.
+    pub fn has_port_mapping(&self) -> bool {
+        self.pm.is_some()
+    }
+
+    /// Whether the answer of [`Node::poll_timeout`] is cached, as a probe: a call that cannot move the deadline must
+    /// not clear it.
+    #[doc(hidden)]
+    pub fn deadline_cached(&self) -> bool {
+        matches!(self.deadline.get(), Due::Known(_))
+    }
+
     /// What the port-mapping client dropped, and the draws of its nonce that failed; zero before it is turned on.
     pub fn port_mapping_stats(&self) -> PortMapStats {
         self.pm.as_ref().map_or_else(PortMapStats::default, |pm| PortMapStats {

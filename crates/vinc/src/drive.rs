@@ -22,7 +22,7 @@ use std::cell::{Cell, RefCell, RefMut};
 use std::future::poll_fn;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::task::Poll;
 use std::time::{Duration, Instant};
@@ -56,6 +56,9 @@ thread_local! {
     static TX_BUFS: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
 }
 
+/// The HTTP exchange of the port-mapping client, in flight.
+type Exchange<'a> = Pin<Box<dyn Future<Output = Option<Vec<u8>>> + 'a>>;
+
 /// The state every handle of an endpoint shares.
 pub(crate) struct Shared<H: Hosted> {
     pub(crate) host: H,
@@ -71,6 +74,8 @@ pub(crate) struct Shared<H: Hosted> {
     carriers: RefCell<carrier_io::Slots<<H::Carriers as Carriers>::Stream>>,
     /// A carrier moved bytes or changed state during the last poll: the endpoint has more to do.
     cdirty: Cell<bool>,
+    /// The host turned port mapping on: only then is there an HTTP exchange to poll for.
+    port_mapping: bool,
     /// The receive and transmit buffers of every endpoint on this thread. A receive buffer is held while a future drives
     /// the endpoint and a transmit buffer while a transmit is built and sent, so endpoints that are mostly idle share a
     /// few instead of keeping two each.
@@ -189,6 +194,7 @@ impl<H: Hosted> Shared<H> {
         relays: Vec<Relay>,
         role_off: u64,
     ) -> Self {
+        let port_mapping = core.node.has_port_mapping();
         Self {
             host,
             start: Instant::now(),
@@ -199,6 +205,7 @@ impl<H: Hosted> Shared<H> {
             relays,
             carriers: RefCell::new(carrier_io::slots()),
             cdirty: Cell::new(false),
+            port_mapping,
             rx_bufs: RX_BUFS.with(Rc::clone),
             tx_bufs: TX_BUFS.with(Rc::clone),
             tx_len: gso.clamp(1, UDP_MAX / vinc_core::MAX_DATAGRAM) * vinc_core::MAX_DATAGRAM,
@@ -268,7 +275,8 @@ impl<H: Hosted> Shared<H> {
         let mut spare: Option<Buf<'_>> = None;
         let mut carriers = pin!(None);
         let mut role_io = pin!(None);
-        let mut http = pin!(None);
+        // The exchange of the port-mapping client, boxed so that an endpoint that never maps a port pays one pointer.
+        let mut http: Option<Exchange<'_>> = None;
         loop {
             let step = poll_fn(|cx| {
                 let now = self.now();
@@ -387,30 +395,32 @@ impl<H: Hosted> Shared<H> {
                     }
                     progressed |= self.cdirty.take();
                 }
-                if http.is_some() && !self.lock().is_some_and(|core| core.node.http_awaited()) {
-                    // The client gave the exchange up: drop it and its stream, so the next request is polled.
-                    http.set(None);
-                }
-                if http.is_none() {
-                    let mut req = [0u8; http_io::MAX_REQUEST];
-                    let job = self.lock().and_then(|mut core| {
-                        let me = *core.node.id();
-                        core.node.poll_http(&mut req).map(|(to, n)| (me, to, n))
-                    });
-                    if let Some((me, to, n)) = job {
-                        let req = req.get(..n).unwrap_or_default().to_vec();
-                        http.set(Some(self.http_exchange(me, to, req)));
+                if self.port_mapping {
+                    if http.is_some() && !self.lock().is_some_and(|core| core.node.http_awaited()) {
+                        // The client gave the exchange up: drop it and its stream, so the next request is polled.
+                        http = None;
                     }
-                }
-                if let Some(f) = http.as_mut().as_pin_mut()
-                    && let Poll::Ready(answer) = f.poll(cx)
-                {
-                    http.set(None);
-                    let now = self.now();
-                    if let Some(mut core) = self.lock() {
-                        core.node.handle_http(now, answer.as_deref());
+                    if http.is_none() {
+                        let mut req = [0u8; http_io::MAX_REQUEST];
+                        let job = self.lock().and_then(|mut core| {
+                            let me = *core.node.id();
+                            core.node.poll_http(&mut req).map(|(to, n)| (me, to, n))
+                        });
+                        if let Some((me, to, n)) = job {
+                            let req = req.get(..n).unwrap_or_default().to_vec();
+                            http = Some(Box::pin(self.http_exchange(me, to, req)));
+                        }
                     }
-                    progressed = true;
+                    if let Some(f) = http.as_mut()
+                        && let Poll::Ready(answer) = f.as_mut().poll(cx)
+                    {
+                        http = None;
+                        let now = self.now();
+                        if let Some(mut core) = self.lock() {
+                            core.node.handle_http(now, answer.as_deref());
+                        }
+                        progressed = true;
+                    }
                 }
                 if progressed {
                     Poll::Ready(Step::Io)
