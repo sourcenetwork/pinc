@@ -138,6 +138,7 @@ fn group(stack: Stack, net: u8, peers: u16) -> Vec<(Init, Role)> {
                     iroh_gossip_max: None,
                     dtn: None,
                     trace: false,
+                    portmap: false,
                 },
                 s.role,
             )

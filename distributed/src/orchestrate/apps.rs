@@ -174,6 +174,7 @@ impl<'a> AppSet<'a> {
                 iroh_gossip_max: None,
                 dtn: None,
                 trace: false,
+                portmap: plan.sites.get(n.site).is_some_and(|s| s.portmap.is_some()),
             })
             .collect();
         Self {

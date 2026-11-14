@@ -1,9 +1,9 @@
 //! The node program's port mapping and its reach test.
 //!
-//! Every VINC node asks its site's router for a mapping of its socket, as the facade does by default
-//! (`Builder::port_mapping`): the router is the `.1` of the node's LAN, and leases are [`LEASE_S`] seconds, miniupnpd's
-//! shortest, so a run sees renewals. A router with no port-mapping service answers nothing and the node goes on as it
-//! would without the client. The client's HTTP requests (for the IGD) go over a TCP stream of the runtime layer, one at a time, with ids
+//! A node of a site whose router runs a port-mapping service asks it for a mapping of its socket, as the facade does
+//! when `Builder::port_mapping` is on: the router is the `.1` of the node's LAN, and leases are [`LEASE_S`] seconds,
+//! miniupnpd's shortest, so a run sees renewals. Every other node runs as the facade builds one by default, with no
+//! port mapping. The client's HTTP requests (for the IGD) go over a TCP stream of the runtime layer, one at a time, with ids
 //! from [`HTTP_BASE`], apart from the carriers' and the accepted streams'.
 //!
 //! The reach test dials a peer by its node id alone (the dialer finds its addresses in its record, through the hub)
@@ -81,6 +81,13 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
     /// Start the next HTTP exchange the port-mapping client asks for.
     pub(super) fn http_step(&mut self) -> bool {
+        // The client gave the exchange up (its deadline passed): drop it, so the next request is polled.
+        if self.http.is_some()
+            && !self.node.http_awaited()
+            && let Some(leg) = self.http.take()
+        {
+            self.ops.push_back(Op::Close { stream: leg.stream });
+        }
         if self.http.is_some() {
             return false;
         }

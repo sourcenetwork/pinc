@@ -148,6 +148,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             trace: init.trace,
             batch,
             pool_chunks: 1024,
+            portmap: init.portmap,
         };
         let mut apps = super::apps::VApps::default();
         if let Some(d) = init.dtn.clone() {

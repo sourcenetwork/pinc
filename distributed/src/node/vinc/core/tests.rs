@@ -34,6 +34,7 @@ fn spec(name: &str, addr: &str, hubs: &[HubAddr], is_hub: bool) -> Spec {
         trace: false,
         batch: 1,
         pool_chunks: 1024,
+        portmap: false,
     }
 }
 
@@ -144,6 +145,36 @@ fn what_a_relay_path_writes_onto_a_carrier_leaves_in_the_same_drain() {
                 "b took no session"
             );
             assert_eq!(w.unflushed, 0, "carrier bytes waited for the next turn");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// A node asks its router for a mapping only when it is told to: a node of a site with no port-mapping service runs as
+/// the facade builds an endpoint by default.
+#[test]
+fn only_a_node_told_to_asks_its_router_for_a_mapping() {
+    std::thread::Builder::new()
+        .stack_size(512 << 20)
+        .spawn(|| {
+            let hub = HubAddr {
+                id: node_id("hub").unwrap(),
+                udp: "10.0.0.1:4433".parse().unwrap(),
+                tcp: "10.0.0.1:443".parse().unwrap(),
+            };
+            for on in [false, true] {
+                let mut s = spec("a", "10.0.1.1:4433", &[hub], false);
+                s.portmap = on;
+                let mut c = C::new(&s, VApps::default()).unwrap();
+                let base = c.now();
+                let mut buf = vec![0u8; 64 * 1024];
+                for k in 0..5u64 {
+                    c.pump(base + k * MS);
+                    while c.poll_transmit(base + k * MS, &mut buf).is_some() {}
+                }
+                assert_eq!(c.counters.contains_key("portmap_udp"), on, "port mapping {on}");
+            }
         })
         .unwrap()
         .join()

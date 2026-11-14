@@ -55,6 +55,9 @@ pub struct Init {
     pub mtu: u32,
     /// The most nodes that may be in the group: sizes the VINC endpoint.
     pub sessions: u32,
+    /// Ask the site's router for a port mapping: the node's site has a port-mapping service.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub portmap: bool,
     /// The largest iroh gossip message, when the workload sets one (see `Pubsub::iroh_gossip_max`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iroh_gossip_max: Option<u32>,

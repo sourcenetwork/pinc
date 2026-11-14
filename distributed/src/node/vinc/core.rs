@@ -94,6 +94,8 @@ pub struct Spec {
     pub batch: usize,
     /// The 16 KiB buffer chunks each session may hold.
     pub pool_chunks: usize,
+    /// Ask the site's router for a port mapping (only the nodes of a site with a port-mapping service do).
+    pub portmap: bool,
 }
 
 /// What the core asks the runtime layer to do with a stream.
@@ -385,7 +387,9 @@ impl<const K: usize, const D: usize> Core<K, D> {
         };
         me_core.node.set_local(&[spec.addr]);
         let now = me_core.now();
-        me_core.start_port_mapping(now);
+        if spec.portmap {
+            me_core.start_port_mapping(now);
+        }
         me_core.pump(now);
         Ok(me_core)
     }
