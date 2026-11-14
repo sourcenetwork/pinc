@@ -10,7 +10,9 @@
 //! nothing; a slot is released exactly once, by the future that allocated it; the queue holds whole tickets, at most one
 //! per live future, so a future that reuses a released slot queues behind the ones already waiting and the baton skips
 //! the entry of a released one; stale entries are dropped when the queue outgrows twice the slab, so it stays within that
-//! size, and the slab never outgrows the most futures that waited at once.
+//! size, and the slab never outgrows the most futures that waited at once. A stale entry never names a live ticket
+//! again, whatever the calls (the slot is released unarmed or not): the release that brings a slot's generation round
+//! drops every stale entry, so one of an earlier round cannot match the generation of a new ticket.
 
 use std::collections::VecDeque;
 use std::task::Waker;
@@ -119,12 +121,17 @@ impl Standby {
     /// Give the ticket's slot back.
     pub(crate) fn release(&mut self, t: Ticket) {
         let idx = t.idx;
-        if let Some(s) = self.slot(t) {
-            s.live = false;
-            s.gen_ = s.gen_.wrapping_add(1);
-            s.waker = None;
-            s.queued = false;
-            self.free.push(idx);
+        let Some(s) = self.slot(t) else { return };
+        s.live = false;
+        let wraps = s.gen_ == u32::MAX;
+        s.gen_ = s.gen_.wrapping_add(1);
+        s.waker = None;
+        s.queued = false;
+        self.free.push(idx);
+        // The one release in 2^32 of a slot that brings its generation back round: no entry of an earlier round may
+        // outlive it, or it would name the slot's next ticket.
+        if wraps {
+            self.drop_stale();
         }
     }
 }
@@ -274,5 +281,47 @@ pub(crate) mod trace {
         pub fn queue(&self) -> Vec<(u32, u32)> {
             self.s.queue.iter().map(|t| (t.idx, t.gen_)).collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Set the generation of slot 0, as the releases of that many rounds leave it.
+    fn set_gen(st: &mut Standby, gen_: u32) {
+        if let Some(s) = st.slots.get_mut(0) {
+            s.gen_ = gen_;
+        }
+    }
+
+    /// The witness of the model: alloc, arm, release, alloc, release, alloc, the generation brought round to the one
+    /// the first entry names by the releases between. The stale entry must not be the new ticket's place.
+    #[test]
+    fn a_stale_entry_does_not_name_the_ticket_a_wrapped_generation_hands_out() {
+        let mut st = Standby::default();
+        let w = Waker::noop();
+        st.alloc();
+        set_gen(&mut st, u32::MAX);
+        let first = Ticket { idx: 0, gen_: u32::MAX };
+        st.arm(first, w);
+        st.release(first);
+        let second = st.alloc();
+        assert_eq!(second.gen_, 0, "the release wrapped the generation");
+        st.release(second);
+        // 2^32 - 2 more releases of the slot bring its generation back to the one the first entry names
+        set_gen(&mut st, u32::MAX);
+        let third = st.alloc();
+        assert_eq!(third, first, "the slot hands out the generation the first entry names");
+        st.arm(third, w);
+        assert_eq!(
+            st.queue.iter().filter(|q| **q == third).count(),
+            1,
+            "the future has one live entry in the queue"
+        );
+        assert!(
+            st.queue.len() <= 2 * st.slots.len(),
+            "the queue stays within twice the slab"
+        );
     }
 }
