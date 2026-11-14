@@ -251,9 +251,11 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   and an amplification ledger that asks for evidence before it validates an address
   ([#251](https://github.com/sourcenetwork/vinc/issues/251)). Each loses one or two deliveries in the same few
   low-bandwidth and mobile seeds, at least one of which `master` delivers by accident, so they are being compared
-  with the reference model's own run of those seeds before they land. Open beside them: the facade's access hook is
-  asked for a protocol and a direction while its answer stands for the peer
-  ([#440](https://github.com/sourcenetwork/vinc/issues/440), fix in review).
+  with the reference model's own run of those seeds before they land. Open beside them: the endpoint keeps one
+  access answer for a peer and the facade works it out over the protocols the node serves, so a session on a
+  protocol the node dials without serving it can be closed when the endpoint asks again, and a refusal kept for a
+  peer can fail a dial the hook allows for up to 30 seconds
+  ([#440](https://github.com/sourcenetwork/vinc/issues/440), fix written, its model in work).
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
   ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 92 at `b12aa0aa` (84 at
   `97bbaa4`, 75 on its first run); the reference model the rules come from passes 88. The four that fail are the four
