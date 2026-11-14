@@ -410,6 +410,8 @@ import Vinc.MembershipConvAll
 import Vinc.FacadeRevoke
 import Vinc.FacadeRecords
 import Vinc.FacadeAcpForget
+import Vinc.FacadeAcpForgetBad
+import Vinc.FacadeAcpForgetThm
 import Vinc.FacadeOpen
 import Vinc.FacadeStandby
 import Vinc.FacadeStandbyThm
