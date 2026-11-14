@@ -1,5 +1,10 @@
 //! Diagnosis aid, ignored by default: runs one variant in process and prints the environment actions and session
 //! events of chosen nodes. `VINC_DIAG_ID=S13 VINC_DIAG_SEED=81320 VINC_DIAG_NODES=17,1 cargo test --test scenario_diag -- --ignored --nocapture`
+//!
+//! `VINC_DIAG_REF_POLL=1` does not run the reference model. The library runs either way; the switch only polls its
+//! node the way the reference model's harness polls a node ([`Driver::Reference`]: not after a harness intent), which
+//! is one of the two ways the scenario suite drives the library. The reference model's own run of a world is made
+//! outside this repository, so nothing here compares the library with it.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -26,7 +31,7 @@ fn diag() {
         .split(',')
         .filter_map(|x| x.parse().ok())
         .collect();
-    let driver = if std::env::var("VINC_DIAG_REF").is_ok() {
+    let driver = if std::env::var("VINC_DIAG_REF_POLL").is_ok() {
         Driver::Reference
     } else {
         Driver::Vinc
