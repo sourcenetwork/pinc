@@ -46,6 +46,21 @@
 (* is dropped: a non-fatal error; the state changes only where the code    *)
 (* changes it) / "fatal" (the machine stopped), and the signatures made.   *)
 (*                                                                         *)
+(* The resend rules of the initiator (initiator.rs): short records whether *)
+(* the host allows short Initials (it knew the responder to cache the      *)
+(* prekey when it dialed); a resend of the Initial is then the short one   *)
+(* except on sends 3, 6, 9, whatever form the first send had, and the full *)
+(* one otherwise, and the full handshake after a rejected or unanswered    *)
+(* Hello starts with the short Initial. The host's later changes of that   *)
+(* allowance (set_short_until, from a validated UDP path heard lately) are *)
+(* not modelled: the allowance is fixed for a handshake, as in the traces. *)
+(* A prekey reject to a session that waits for a Reply is taken whatever   *)
+(* the form of its Initial: the full Initial goes out once, and again only *)
+(* for a reject that arrives after the reject gap since the last one went  *)
+(* out (rgap: one went out within the gap; the field gap of the reject     *)
+(* says the gap has passed when it is delivered, which the network         *)
+(* chooses); the resends go on as before.                                  *)
+(*                                                                         *)
 (* Three abstractions keep the state space finite and change no behaviour: *)
 (* the retransmission count of an initiator is kept modulo 3 (the code     *)
 (* reads it only as "is a multiple of 3" and, in the resume state,         *)
@@ -132,7 +147,7 @@ Known(t) ==
 BadBlob == [k |-> NIL, ad |-> NIL, id |-> NIL, sig |-> NIL, cr |-> NIL]
 MNil == [ty |-> "nil", form |-> "nil", ver |-> "ok", al |-> Alp(1), dc |-> NIL, sc |-> NIL, of |-> NIL, ad |-> NIL,
          cr |-> NIL, len |-> 0, e |-> NIL, pk |-> NIL, ct |-> NIL, sealed |-> BadBlob, tid |-> NIL,
-         binder |-> NIL, tids |-> <<>>, conf |-> NIL, echo |-> NIL]
+         binder |-> NIL, tids |-> <<>>, conf |-> NIL, echo |-> NIL, gap |-> FALSE]
 M(r) == r @@ MNil
 
 (* ---- the stores (tickets.rs): a store is a sequence of slots ---- *)
@@ -244,7 +259,7 @@ INil == [ph |-> "none", peer |-> NIL, x |-> NIL, short |-> FALSE, th0 |-> NIL, m
          hsi |-> NIL, ck1 |-> NIL, th2 |-> NIL, th3 |-> NIL, th4 |-> NIL, fin |-> MNil,
          send |-> NIL, recv |-> NIL, res |-> NIL, cid |-> NIL, ath |-> NIL, thf |-> NIL, tids |-> <<>>,
          ad |-> NIL, pcr |-> NIL, rcr |-> NIL,
-         auth |-> FALSE, est |-> FALSE, resumed |-> FALSE, fell |-> FALSE, acc |-> FALSE]
+         auth |-> FALSE, est |-> FALSE, resumed |-> FALSE, fell |-> FALSE, acc |-> FALSE, rgap |-> FALSE]
 
 Res(st, out, ev, err) == [st |-> st, out |-> out, ev |-> ev, err |-> err, sg |-> {}]
 Drop(st) == Res(st, {}, {}, "drop")
@@ -277,9 +292,10 @@ IBeginResume(n, st0, x, dcid, tk) ==
               e |-> e, binder |-> b, cr |-> st0.cr, len |-> LH])},
           {"early"})
 
-(* Initiator::new: the dial parameters, and a ticket (NoTk for none) *)
+(* Initiator::new: the dial parameters (short: the responder is known to cache the prekey and the host allows short
+   Initials), and a ticket (NoTk for none) *)
 INew(n, k, peer, al, short, tk) ==
-    LET st0 == [INil EXCEPT !.peer = peer, !.al = al, !.sc = Cid("i", n, k), !.of = Off(n), !.cr = Cr(n)]
+    LET st0 == [INil EXCEPT !.peer = peer, !.al = al, !.sc = Cid("i", n, k), !.of = Off(n), !.cr = Cr(n), !.short = short]
         x == <<"i", n, k>>
         dcid == Cid("d", n, k)
     IN IF tk # NoTk THEN IBeginResume(n, st0, x, dcid, tk) ELSE IBeginFull(n, st0, x, dcid, short, NIL)
@@ -309,8 +325,11 @@ IHandle(st, n, m) ==
             ELSE Ok([st EXCEPT !.ph = "decap", !.reply = m, !.ad = m.ad, !.th1 = Th1(st.th0, m.sc, m.ad, m.e, m.ct),
                                !.ssx = Dh(st.x, AtomOf(m.e))], {}, {})
       [] m.ty = "PRej" ->
-            IF ~(st.ph = "reply" /\ st.short) \/ m.echo # st.th0 THEN Drop(st)
-            ELSE Ok([st EXCEPT !.short = FALSE, !.mode = "full"], {IInitMsg(n, st, FALSE)}, {})
+            (* a prekey reject is taken whatever the form of the Initial; the full Initial goes out unless one went out
+               for a reject within the gap *)
+            IF st.ph # "reply" \/ m.echo # st.th0 THEN Drop(st)
+            ELSE IF st.rgap /\ ~m.gap THEN Ok(st, {}, {})
+            ELSE Ok([st EXCEPT !.rgap = TRUE], {IInitMsg(n, st, FALSE)}, {})
       [] m.ty = "RReply" ->
             IF st.ph = "resume" THEN
                 (* a reply that does not confirm is dropped; the Hello is still outstanding *)
@@ -326,7 +345,7 @@ IHandle(st, n, m) ==
       [] m.ty = "RRej" ->
             IF st.ph # "resume" \/ m.echo # st.thh THEN Drop(st)
             ELSE LET b == IBeginFull(n, [st EXCEPT !.late = NoLate], <<"f", st.x[2], st.x[3]>>, Cid("r", n, st.x[3]),
-                                     FALSE, st.thh)
+                                     st.short, st.thh)
                  IN Ok([b.st EXCEPT !.mode = "fallback", !.fell = TRUE], b.out, {"rejected"})
       [] OTHER -> Drop(st)
 
@@ -337,10 +356,11 @@ IRetransmit(n, st) ==
         IN Ok([st EXCEPT !.sends = s1], {IInitMsg(n, st, s1 # 0)}, {})
     ELSE IF st.ph = "resume" THEN
         IF st.sends + 1 >= 3 THEN
-            (* fall_back: a full Initial under the same destination id; a late resume reply still counts *)
+            (* fall_back: an Initial under the same destination id, the short one when the host allows it; a late
+               resume reply still counts *)
             LET late == [on |-> TRUE, x |-> st.x, thh |-> st.thh, binder |-> st.binder, ckpsk |-> st.ckpsk,
                          rcr |-> st.rcr, ad |-> st.ad]
-                b == IBeginFull(n, [st EXCEPT !.late = late], <<"f", st.x[2], st.x[3]>>, st.dc, FALSE, st.thh)
+                b == IBeginFull(n, [st EXCEPT !.late = late], <<"f", st.x[2], st.x[3]>>, st.dc, st.short, st.thh)
             IN Ok([b.st EXCEPT !.mode = "fallback", !.fell = TRUE], b.out, {"rejected"})
         ELSE Ok([st EXCEPT !.sends = st.sends + 1],
                 {M([ty |-> "Hello", ver |-> "ok", al |-> st.al, dc |-> st.dc, sc |-> st.sc, ad |-> st.ad, tid |-> st.tid,

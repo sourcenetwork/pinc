@@ -31,7 +31,7 @@
 (*                                                                         *)
 (* The loss timers are real steps: the initiator's retransmit (the short   *)
 (* Initial carries the full prekey on sends 3, 6, 9; an unanswered Hello   *)
-(* gives way to a full Initial under the same destination id on its third  *)
+(* gives way to an Initial under the same destination id on its third     *)
 (* send), the responder's retransmit while it waits for the Finish, and    *)
 (* shed on both sides. Ticket expiry (Expire, ExpireC), the client store's *)
 (* export and restore and its restart are steps too.                       *)
@@ -225,7 +225,7 @@ ForgedToI(s) ==
        \cup (IF st.ph # "resume" THEN {} ELSE RReplyForgeries(st.x, st.thh, st.binder, st.ckpsk))
        \cup (IF st.late.on /\ st.ph \in {"reply", "decap", "sign"}
              THEN RReplyForgeries(st.late.x, st.late.thh, st.late.binder, st.late.ckpsk) ELSE {})
-       \cup {M([ty |-> "PRej", echo |-> ist[o].th0]) : o \in {x \in ISess : ist[x].ph = "reply"}}
+       \cup {M([ty |-> "PRej", echo |-> ist[o].th0, gap |-> g]) : o \in {x \in ISess : ist[x].ph = "reply"}, g \in BOOLEAN}
        \cup {M([ty |-> "RRej", echo |-> ist[o].thh]) : o \in {x \in ISess : ist[x].thh # NIL}}
 
 IPool(s) == {m \in net : m.ty \in {"Reply", "PRej", "RReply", "RRej"}} \cup ForgedToI(s)
@@ -442,16 +442,18 @@ CacheAuthenticated ==
     \A n \in H : \A h \in sto[n].pkc : \E r \in RSess : r[1] = n /\ rst[r].ph = "done" /\ rst[r].hpk = h
 
 (* Rejects: a reject delivered to an initiator never authenticates or establishes it and never changes whom it
-   dialed; it only moves a short Initial to the full form (same transcript) or a resumption to a fresh full
-   handshake. A responder's reject leaves its state unchanged. *)
+   dialed. A prekey reject leaves a session that waits for a Reply as it was (same transcript, same form of its
+   resends), but for noting that a full Initial went out for a reject; a resume reject moves a resumption to a fresh
+   full handshake. A responder's reject leaves its state unchanged. (Before the resend rules of the reject gap, a
+   prekey reject moved a short Initial to the full form for good; it no longer does.) *)
 RejectsOnlyFallback ==
     /\ \A s \in ISess : \A m \in IPool(s) :
         m.ty \in {"PRej", "RRej"} =>
             LET r == IHandle(ist[s], s[1], m).st
-            IN r = ist[s]
-               \/ (/\ r.ph = "reply" /\ ~r.short /\ r.peer = ist[s].peer /\ ~r.est /\ ~r.auth /\ ~ist[s].est
-                   /\ (ist[s].ph = "reply" => r.th0 = ist[s].th0)
-                   /\ (ist[s].ph = "resume" => r.fell))
+            IN \/ r = ist[s]
+               \/ (/\ ist[s].ph = "reply" /\ r = [ist[s] EXCEPT !.rgap = TRUE] /\ ~r.est /\ ~r.auth)
+               \/ (/\ ist[s].ph = "resume" /\ r.ph = "reply" /\ r.fell /\ r.peer = ist[s].peer /\ ~r.est /\ ~r.auth
+                   /\ ~ist[s].est)
     /\ \A s \in RSess : \A m \in RPool(s) :
         LET r == RHandle(rst[s], s, sto[s[1]], m, Draw0)
         IN (\E o \in r.out : o.ty = "PRej") => (r.st = rst[s] /\ r.sto = sto[s[1]])

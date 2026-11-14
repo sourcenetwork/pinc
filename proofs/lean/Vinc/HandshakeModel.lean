@@ -248,6 +248,9 @@ structure Msg where
   tids : List Term := []
   conf : Term := nil
   echo : Term := nil
+  /-- A prekey reject delivered after the reject gap since the last full Initial sent for one (when it is delivered is
+  the network's choice). -/
+  gap : Bool := false
   deriving DecidableEq, Repr
 
 inductive Ev | early | est | rejected | failed
@@ -476,6 +479,8 @@ structure IState where
   resumed : Bool := false
   fell : Bool := false
   acc : Bool := false
+  /-- A full Initial went out for a prekey reject within the reject gap. -/
+  rgap : Bool := false
   deriving DecidableEq, Repr
 
 structure IRes where
@@ -520,9 +525,10 @@ def IBeginResume (_n : Nat) (st0 : IState) (x : Atom) (dcid : Term) (tk : Tk) : 
     [{ ty := .hello, ver := ok, al := st0.al, dc := dcid, sc := st0.sc, ad := tk.ad, tid := tk.tid, e := e, binder := b,
        cr := st0.cr, len := LH }] [.early]
 
-/-- Initiator::new: the dial parameters, and a ticket (none for no ticket). -/
+/-- Initiator::new: the dial parameters (`short`: the responder is known to cache the prekey and the host allows short
+Initials, fixed for the handshake), and a ticket (none for no ticket). -/
 def INew (n k : Nat) (peer : Nat) (al : Term) (short : Bool) (tk : Option Tk) : IRes :=
-  let st0 : IState := { peer := peer, al := al, sc := cid 0 n k, of := off n, cr := crd n }
+  let st0 : IState := { peer := peer, al := al, sc := cid 0 n k, of := off n, cr := crd n, short := short }
   let x := atom 0 n k
   let dcid := cid 1 n k
   match tk with
@@ -555,8 +561,11 @@ def IHandle (st : IState) (n : Nat) (m : Msg) : IRes :=
       else Ok { st with ph := .decap, reply := m, ad := m.ad, th1 := th1 st.th0 m.sc m.ad m.e m.ct,
                         ssx := Dh st.x (atomOf m.e) } [] []
     | .prej =>
-      if ¬(st.ph = .reply ∧ st.short = true) ∨ m.echo ≠ st.th0 then Drop st
-      else Ok { st with short := false, mode := .full } [IInitMsg n st false] []
+      -- taken whatever the form of the Initial; the full Initial goes out unless one went out for a reject within the
+      -- gap, and the resends go on as before
+      if st.ph ≠ .reply ∨ m.echo ≠ st.th0 then Drop st
+      else if st.rgap = true ∧ m.gap = false then Ok st [] []
+      else Ok { st with rgap := true } [IInitMsg n st false] []
     | .rreply =>
       if st.ph = .resume then
         if ¬ RrConfOK st.x st.ckpsk st.thh st.binder m then Drop st
@@ -568,7 +577,7 @@ def IHandle (st : IState) (n : Nat) (m : Msg) : IRes :=
     | .rrej =>
       if st.ph ≠ .resume ∨ m.echo ≠ st.thh then Drop st
       else
-        let b := IBeginFull n { st with late := NoLate } (atom 1 st.x.n st.x.k) (cid 2 n st.x.k) false st.thh
+        let b := IBeginFull n { st with late := NoLate } (atom 1 st.x.n st.x.k) (cid 2 n st.x.k) st.short st.thh
         Ok { b.st with mode := .fallback, fell := true } b.out [.rejected]
     | _ => Drop st
 
@@ -580,7 +589,7 @@ def IRetransmit (n : Nat) (st : IState) : IRes :=
     if st.sends + 1 ≥ 3 then
       let late : Late := { on := true, x := st.x, thh := st.thh, binder := st.binder, ckpsk := st.ckpsk, rcr := st.rcr,
                            ad := st.ad }
-      let b := IBeginFull n { st with late := late } (atom 1 st.x.n st.x.k) st.dc false st.thh
+      let b := IBeginFull n { st with late := late } (atom 1 st.x.n st.x.k) st.dc st.short st.thh
       Ok { b.st with mode := .fallback, fell := true } b.out [.rejected]
     else Ok { st with sends := st.sends + 1 } [IHello st] []
   else if st.ph = .reply then Ok st [IInitMsg n st false] []

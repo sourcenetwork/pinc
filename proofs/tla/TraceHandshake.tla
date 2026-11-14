@@ -36,6 +36,9 @@
 (*    where the code did not;                                              *)
 (*  - the tickets of a client store, its export and its restore are those  *)
 (*    of the sessions that finished.                                       *)
+(* A prekey reject is delivered after the reject gap exactly when the      *)
+(* recorded clock (whole seconds, the gap being 500 ms) moved on since the *)
+(* full Initial last sent for a reject of that session (rts).              *)
 (* A world starts from empty stores (the begin line, which also gives the  *)
 (* store sizes and whether the dialing node is the attacker's); sessions   *)
 (* are numbered by the test.                                               *)
@@ -48,8 +51,8 @@ EXTENDS HsOps, Json, IOUtils
 CONSTANTS INODE, R1, R2   \* the honest initiator node and the two honest responder nodes of a world
 MaxS == 40
 
-VARIABLES ist, rst, sto, cli, snap, msgs, om, i, inode
-vars == <<ist, rst, sto, cli, snap, msgs, om, i, inode>>
+VARIABLES ist, rst, sto, cli, snap, msgs, om, i, inode, rts
+vars == <<ist, rst, sto, cli, snap, msgs, om, i, inode, rts>>
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/handshake.ndjson")
 
@@ -67,6 +70,7 @@ Init ==
     /\ msgs = {}
     /\ om = {}
     /\ inode = INODE
+    /\ rts = [s \in 1..MaxS |-> -1]
 
 (* ---- the oracle: a bijection between terms and ids ---- *)
 Consistent(o, t, id) ==
@@ -197,7 +201,7 @@ Begin ==
        /\ sto' = [rn \in {1, 2, 3} |-> EmptySto(ev.tk)]
        /\ cli' = NoSlots(ev.ck)
        /\ inode' = IF ev.ia THEN A ELSE INODE
-    /\ snap' = <<>> /\ msgs' = {} /\ om' = {}
+    /\ snap' = <<>> /\ msgs' = {} /\ om' = {} /\ rts' = [s \in 1..MaxS |-> -1]
     /\ i' = i + 1
 
 StartI ==
@@ -214,19 +218,26 @@ StartI ==
           /\ StepOK(ev, "I", INil, r, peer)
           /\ ist' = [ist EXCEPT ![ev.s] = r.st]
           /\ cli' = c.sl
-          /\ UNCHANGED <<rst, sto, snap, inode>>
+          /\ UNCHANGED <<rst, sto, snap, inode, rts>>
           /\ i' = i + 1
+
+(* the input of an initiator: a prekey reject is delivered after the gap when the clock moved on since the last full
+   Initial for one *)
+IInput(ev) ==
+    LET m0 == InputMsg(ev)
+    IN IF m0.ty = "PRej" THEN [m0 EXCEPT !.gap = (rts[ev.s] >= 0 /\ ev.ts > rts[ev.s])] ELSE m0
 
 RecvI ==
     /\ Guard
     /\ LET ev == Trace[i]
            old == ist[ev.s]
-           r == IF ev.imal THEN Drop(old) ELSE IHandle(old, inode, InputMsg(ev))
+           r == IF ev.imal THEN Drop(old) ELSE IHandle(old, inode, IInput(ev))
        IN /\ ev.op = "recv" /\ ev.who = "I"
           /\ InputKnown(ev)
           /\ InputShape(ev)
           /\ StepOK(ev, "I", old, r, old.peer)
           /\ ist' = [ist EXCEPT ![ev.s] = r.st]
+          /\ rts' = IF ~ev.imal /\ ev.ity = "PRej" /\ r.out # {} THEN [rts EXCEPT ![ev.s] = ev.ts] ELSE rts
           /\ UNCHANGED <<rst, sto, cli, snap, inode>>
           /\ i' = i + 1
 
@@ -238,7 +249,7 @@ KeyI ==
        IN /\ ev.op = "key" /\ ev.who = "I"
           /\ StepOK(ev, "I", old, r, old.peer)
           /\ ist' = [ist EXCEPT ![ev.s] = r.st]
-          /\ UNCHANGED <<rst, sto, cli, snap, inode>>
+          /\ UNCHANGED <<rst, sto, cli, snap, inode, rts>>
           /\ i' = i + 1
 
 RetxI ==
@@ -249,7 +260,7 @@ RetxI ==
        IN /\ ev.op = "retx" /\ ev.who = "I"
           /\ StepOK(ev, "I", old, r, old.peer)
           /\ ist' = [ist EXCEPT ![ev.s] = r.st]
-          /\ UNCHANGED <<rst, sto, cli, snap, inode>>
+          /\ UNCHANGED <<rst, sto, cli, snap, inode, rts>>
           /\ i' = i + 1
 
 ShedI ==
@@ -257,7 +268,7 @@ ShedI ==
     /\ LET ev == Trace[i] IN
        /\ ev.op = "shed" /\ ev.who = "I"
        /\ ist' = [ist EXCEPT ![ev.s] = IShed(ist[ev.s])]
-    /\ UNCHANGED <<rst, sto, cli, snap, msgs, om, inode>>
+    /\ UNCHANGED <<rst, sto, cli, snap, msgs, om, inode, rts>>
     /\ i' = i + 1
 
 (* the id draws of the ticket batch an established responder session issued: the recorded ids *)
@@ -277,7 +288,7 @@ RecvR ==
           /\ CapOK(ev, old)
           /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = r.st]
           /\ sto' = [sto EXCEPT ![ev.rn] = r.sto]
-          /\ UNCHANGED <<ist, cli, snap, inode>>
+          /\ UNCHANGED <<ist, cli, snap, inode, rts>>
           /\ i' = i + 1
 
 KeyR ==
@@ -290,7 +301,7 @@ KeyR ==
           /\ SlotsOK(r.sto.tks, ev)
           /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = r.st]
           /\ sto' = [sto EXCEPT ![ev.rn] = r.sto]
-          /\ UNCHANGED <<ist, cli, snap, inode>>
+          /\ UNCHANGED <<ist, cli, snap, inode, rts>>
           /\ i' = i + 1
 
 RetxR ==
@@ -301,7 +312,7 @@ RetxR ==
        IN /\ ev.op = "retx" /\ ev.who = "R"
           /\ StepOK(ev, "R", old, r, inode)
           /\ SlotsOK(r.sto.tks, ev)
-          /\ UNCHANGED <<ist, rst, sto, cli, snap, inode>>
+          /\ UNCHANGED <<ist, rst, sto, cli, snap, inode, rts>>
           /\ i' = i + 1
 
 ShedR ==
@@ -309,7 +320,7 @@ ShedR ==
     /\ LET ev == Trace[i] IN
        /\ ev.op = "shed" /\ ev.who = "R"
        /\ rst' = [rst EXCEPT ![<<ev.rn, ev.s>>] = RShed(rst[<<ev.rn, ev.s>>])]
-    /\ UNCHANGED <<ist, sto, cli, snap, msgs, om, inode>>
+    /\ UNCHANGED <<ist, sto, cli, snap, msgs, om, inode, rts>>
     /\ i' = i + 1
 
 (* the client takes the tickets of a finished session: a resumed session's own, or the batch of the responder
@@ -326,7 +337,7 @@ AcceptT ==
           /\ cli' = CInsertAll(cli, [j \in DOMAIN tids |->
                        [tid |-> tids[j], psk |-> Psk(st.res, tids[j], st.pcr), peer |-> st.peer, al |-> st.al,
                         ad |-> st.ad, cr |-> st.pcr]])
-          /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode>>
+          /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode, rts>>
           /\ i' = i + 1
 
 (* time passes: the ticket with this id expires in the store of the responder node or in the client store *)
@@ -341,7 +352,7 @@ ExpireT ==
                /\ UNCHANGED cli
           ELSE /\ cli' = MarkExpired(cli, ev.tid)
                /\ UNCHANGED sto
-    /\ UNCHANGED <<ist, rst, snap, msgs, om, inode>>
+    /\ UNCHANGED <<ist, rst, snap, msgs, om, inode, rts>>
     /\ i' = i + 1
 
 ExportT ==
@@ -351,7 +362,7 @@ ExportT ==
        IN /\ ev.op = "export"
           /\ TidsOK([j \in DOMAIN out |-> out[j].tid], ev.tids)
           /\ snap' = out
-    /\ UNCHANGED <<ist, rst, sto, cli, msgs, om, inode>>
+    /\ UNCHANGED <<ist, rst, sto, cli, msgs, om, inode, rts>>
     /\ i' = i + 1
 
 RECURSIVE DropIdx(_, _, _)
@@ -370,14 +381,14 @@ RestoreT ==
                   /\ Len(snap) - Cardinality(drop) = Len(ev.kept)
                   /\ cli' = CInsertAll(cli, KeepSeq(snap, drop, 1))
              ELSE cli' = cli
-    /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode>>
+    /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode, rts>>
     /\ i' = i + 1
 
 RestartT ==
     /\ Guard
     /\ Trace[i].op = "restart"
     /\ cli' = NoSlots(Len(cli))
-    /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode>>
+    /\ UNCHANGED <<ist, rst, sto, snap, msgs, om, inode, rts>>
     /\ i' = i + 1
 
 Done == i > Len(Trace) /\ UNCHANGED vars

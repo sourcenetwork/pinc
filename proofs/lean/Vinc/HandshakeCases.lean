@@ -12,12 +12,12 @@ open Term
 
 /-- The state `IBeginFull` returns for the fallback of a resumption that got a reject (a fresh destination id). -/
 def rrFall (st : IState) (n : Nat) : IState :=
-  { (IBeginFull n { st with late := NoLate } (atom 1 st.x.n st.x.k) (cid 2 n st.x.k) false st.thh).st with
+  { (IBeginFull n { st with late := NoLate } (atom 1 st.x.n st.x.k) (cid 2 n st.x.k) st.short st.thh).st with
     mode := .fallback, fell := true }
 
 /-- The `IBeginFull` result of the fallback of an unanswered Hello. -/
 def lateFallB (n : Nat) (st : IState) : IRes :=
-  IBeginFull n { st with late := { on := true, x := st.x, thh := st.thh, binder := st.binder, ckpsk := st.ckpsk, rcr := st.rcr, ad := st.ad } } (atom 1 st.x.n st.x.k) st.dc false st.thh
+  IBeginFull n { st with late := { on := true, x := st.x, thh := st.thh, binder := st.binder, ckpsk := st.ckpsk, rcr := st.rcr, ad := st.ad } } (atom 1 st.x.n st.x.k) st.dc st.short st.thh
 
 /-- The state of the fallback of an unanswered Hello: a full Initial under the same destination id, the Hello kept as
 the late context. -/
@@ -30,8 +30,8 @@ theorem IHandle_cases (st : IState) (n : Nat) (m : Msg) :
     ∨ (st.ph = .reply ∧ m.ty = .reply ∧ InOffer st.of m.ad ∧
         (IHandle st n m).st = { st with ph := .decap, reply := m, ad := m.ad, th1 := th1 st.th0 m.sc m.ad m.e m.ct,
                                         ssx := Dh st.x (atomOf m.e) } ∧ (IHandle st n m).out = [])
-    ∨ (st.ph = .reply ∧ st.short = true ∧ m.ty = .prej ∧ m.echo = st.th0 ∧
-        (IHandle st n m).st = { st with short := false, mode := .full } ∧
+    ∨ (st.ph = .reply ∧ (st.rgap = false ∨ m.gap = true) ∧ m.ty = .prej ∧ m.echo = st.th0 ∧
+        (IHandle st n m).st = { st with rgap := true } ∧
         (IHandle st n m).out = [IInitMsg n st false])
     ∨ (st.ph = .resume ∧ m.ty = .rreply ∧ RrConfOK st.x st.ckpsk st.thh st.binder m ∧
         (IHandle st n m).st = IResumed st st.x st.ckpsk st.thh st.binder st.rcr st.ad m ∧ (IHandle st n m).out = [])
@@ -40,7 +40,7 @@ theorem IHandle_cases (st : IState) (n : Nat) (m : Msg) :
         (IHandle st n m).st = IResumed st st.late.x st.late.ckpsk st.late.thh st.late.binder st.late.rcr st.late.ad m ∧
         (IHandle st n m).out = [])
     ∨ (st.ph = .resume ∧ m.ty = .rrej ∧ m.echo = st.thh ∧ (IHandle st n m).st = rrFall st n
-        ∧ (IHandle st n m).out = (IBeginFull n { st with late := NoLate } (atom 1 st.x.n st.x.k) (cid 2 n st.x.k) false st.thh).out) := by
+        ∧ (IHandle st n m).out = (IBeginFull n { st with late := NoLate } (atom 1 st.x.n st.x.k) (cid 2 n st.x.k) st.short st.thh).out) := by
   unfold IHandle
   by_cases hf : st.ph = .failed
   · left; simp [hf, Drop]
@@ -48,9 +48,15 @@ theorem IHandle_cases (st : IState) (n : Nat) (m : Msg) :
     cases hty : m.ty
     · left; simp [Drop]
     · left; simp [Drop]
-    · by_cases h1 : st.ph = .reply ∧ st.short = true
+    · by_cases h1 : st.ph = .reply
       · by_cases h2 : m.echo = st.th0
-        · right; right; right; left; simp [h1, h2, Ok]
+        · by_cases hr : st.rgap = true
+          · by_cases hg : m.gap = true
+            · right; right; right; left; simp [h1, h2, hr, hg, Ok]
+            · have hg' : m.gap = false := by simpa using hg
+              left; simp [h1, h2, hr, hg', Ok]
+          · have hr' : st.rgap = false := by simpa using hr
+            right; right; right; left; simp [h1, h2, hr', Ok]
         · left; simp [h2, Drop]
       · left; simp [h1, Drop]
     · by_cases h1 : st.ph = .reply

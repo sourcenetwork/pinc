@@ -3,9 +3,10 @@ import Vinc.HandshakeStore
 /-!
 # Rejects only cause a fallback, for unboundedly many sessions
 
-A forged or genuine reject (`PRej`, `RRej`) delivered to any initiator session of any reachable state either is
-dropped or moves the session to a full Initial under the same dialed peer, without establishing or authenticating
-anything; the short Initial keeps its transcript, and a rejected resumption starts a fresh full handshake. A reject
+A forged or genuine reject (`PRej`, `RRej`) delivered to any initiator session of any reachable state never
+establishes or authenticates anything and never changes the dialed peer: a prekey reject leaves a session that waits
+for a Reply as it was, but for noting that a full Initial went out for a reject (once, and again only after the
+reject gap), and a rejected resumption starts a fresh full handshake. A reject
 a responder sends leaves the responder's state as it was and its store as it was or with one slot removed (an
 expired one), and issues nothing (`RejectsOnlyFallback` of `Handshake.tla`).
 -/
@@ -87,35 +88,47 @@ theorem InvI_reach {K C : Nat} {g : G} (hr : Reach K C g) : InvI g.ist := by
   | init => intro s h; simp [G0] at h
   | step _ hs ih => exact InvI_step ih hs
 
-/-- RejectsOnlyFallback, initiator side: a reject delivered to any session is dropped or moves a session that was
-waiting for a reply to a full Initial to the same peer, unauthenticated, keeping the transcript of a short Initial
-and marking a resumption as fallen back. -/
+/-- RejectsOnlyFallback, initiator side: a reject delivered to any session is dropped or taken without a change, or
+leaves a session that waited for a reply as it was but for noting the full Initial it sent for a prekey reject, or
+moves a resumption to a fresh full handshake to the same peer, unauthenticated and marked as fallen back. -/
 theorem rejectInit {K C : Nat} {g : G} (hr : Reach K C g) (s : Nat × Nat) (m : Msg)
     (hm : m.ty = .prej ∨ m.ty = .rrej) :
     (IHandle (g.ist s) s.1 m).st = g.ist s ∨
-    ((IHandle (g.ist s) s.1 m).st.ph = .reply ∧ (IHandle (g.ist s) s.1 m).st.short = false ∧
+    ((g.ist s).ph = .reply ∧ (IHandle (g.ist s) s.1 m).st = { g.ist s with rgap := true } ∧
+      (g.ist s).est = false ∧ (g.ist s).auth = false) ∨
+    ((IHandle (g.ist s) s.1 m).st.ph = .reply ∧
       (IHandle (g.ist s) s.1 m).st.peer = (g.ist s).peer ∧ (IHandle (g.ist s) s.1 m).st.est = false ∧
       (IHandle (g.ist s) s.1 m).st.auth = false ∧ (g.ist s).est = false ∧
-      ((g.ist s).ph = .reply → (IHandle (g.ist s) s.1 m).st.th0 = (g.ist s).th0) ∧
-      ((g.ist s).ph = .resume → (IHandle (g.ist s) s.1 m).st.fell = true)) := by
+      (g.ist s).ph = .resume ∧ (IHandle (g.ist s) s.1 m).st.fell = true) := by
   have hs := InvI_reach hr s
   by_cases hf : (g.ist s).ph = .failed
   · left; simp [IHandle, hf, Drop]
   rcases hm with hm | hm
-  · by_cases hc : (g.ist s).ph = .reply ∧ (g.ist s).short = true ∧ m.echo = (g.ist s).th0
-    · right
-      have he := hs (Or.inl hc.1)
-      simp [IHandle, hf, hm, hc.1, hc.2.1, hc.2.2, Ok, he.1, he.2]
+  · by_cases hc : (g.ist s).ph = .reply ∧ m.echo = (g.ist s).th0
+    · have he := hs (Or.inl hc.1)
+      have hn : ¬((g.ist s).ph ≠ .reply ∨ m.echo ≠ (g.ist s).th0) := by
+        rintro (h | h)
+        · exact h hc.1
+        · exact h hc.2
+      by_cases hg : (g.ist s).rgap = true ∧ m.gap = false
+      · left
+        have e : IHandle (g.ist s) s.1 m = Ok (g.ist s) [] [] := by
+          unfold IHandle; rw [if_neg hf]; simp only [hm]; rw [if_neg hn, if_pos hg]
+        rw [e]; rfl
+      · right; left
+        have e : IHandle (g.ist s) s.1 m = Ok { g.ist s with rgap := true } [IInitMsg s.1 (g.ist s) false] [] := by
+          unfold IHandle; rw [if_neg hf]; simp only [hm]; rw [if_neg hn, if_neg hg]
+        rw [e]; exact ⟨hc.1, rfl, he.1, he.2⟩
     · left
-      have : ¬((g.ist s).ph = .reply ∧ (g.ist s).short = true) ∨ m.echo ≠ (g.ist s).th0 := by
-        by_cases h1 : (g.ist s).ph = .reply ∧ (g.ist s).short = true
-        · exact Or.inr (fun h2 => hc ⟨h1.1, h1.2, h2⟩)
+      have : (g.ist s).ph ≠ .reply ∨ m.echo ≠ (g.ist s).th0 := by
+        by_cases h1 : (g.ist s).ph = .reply
+        · exact Or.inr (fun h2 => hc ⟨h1, h2⟩)
         · exact Or.inl h1
       have e : IHandle (g.ist s) s.1 m = Drop (g.ist s) := by
         unfold IHandle; rw [if_neg hf]; simp only [hm]; rw [if_pos this]
       rw [e]; rfl
   · by_cases hc : (g.ist s).ph = .resume ∧ m.echo = (g.ist s).thh
-    · right
+    · right; right
       have he := hs (Or.inr (Or.inl hc.1))
       simp [IHandle, hf, hm, hc.1, hc.2, Ok, he.1, he.2, IBeginFull]
     · left

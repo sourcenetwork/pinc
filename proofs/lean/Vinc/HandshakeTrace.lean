@@ -19,7 +19,9 @@ message id), or that message with the recorded field replaced by a value the att
 ciphertexts, transcript hashes, session keys) and their recorded ids: equal ids must be equal terms and equal terms
 equal ids, so the code absorbs into each transcript exactly the fields the model does and both sides derive equal
 keys exactly when the model says so. Ticket ids are the recorded ids themselves (the generator is the environment).
-A world (`begin` event) starts from empty stores of the recorded capacities.
+A world (`begin` event) starts from empty stores of the recorded capacities. A prekey reject is delivered after the
+reject gap exactly when the recorded clock (whole seconds, the gap being 500 ms) moved on since the full Initial last
+sent for a reject of that session (`rts`, as in TraceHandshake.tla).
 -/
 
 namespace Vinc.HandshakeTrace
@@ -35,7 +37,7 @@ def peerNode (c : String) : Nat := if c == "R1" then r1 else if c == "R2" then r
 /-- A value no honest node makes: the "bad" field of a tampered message. -/
 def badT : Term := junk 0 nil
 
-/-- The model state of one world (the variables `ist rst sto cli snap msgs om inode` of TraceHandshake.tla). -/
+/-- The model state of one world (the variables `ist rst sto cli snap msgs om inode rts` of TraceHandshake.tla). -/
 structure W where
   ist : List (Nat × IState) := []
   rst : List ((Nat × Nat) × RState) := []
@@ -45,6 +47,8 @@ structure W where
   msgs : List (Nat × Msg) := []
   om : List (Term × Int) := []
   inode : Nat := iNode
+  /-- Per initiator session, the clock of the full Initial it last sent for a prekey reject. -/
+  rts : List (Nat × Nat) := []
 
 def W.getI (w : W) (s : Nat) : IState := (w.ist.lookup s).getD {}
 def W.setI (w : W) (s : Nat) (st : IState) : W := { w with ist := (s, st) :: w.ist.filter (·.1 != s) }
@@ -293,9 +297,18 @@ def replayEvent (ev : J) (w : W) : Except String W := do
     let imal ← boolF ev "imal"
     if who == "I" then
       let old := w.getI s
-      let r ← if imal then pure (Drop old) else do pure (IHandle old w.inode (← inputMsg w ev))
+      let ts ← natF ev "ts"
+      -- a prekey reject is delivered after the gap when the clock moved on since the last full Initial for one
+      let gapOver := (w.rts.lookup s).any (fun t => decide (t < ts))
+      let m? ← if imal then pure none else do
+        let m0 ← inputMsg w ev
+        pure (some (if m0.ty == .prej then { m0 with gap := gapOver } else m0))
+      let r := match m? with | some m => IHandle old w.inode m | none => Drop old
       let (om', msgs') ← stepOK ev w (viewI old r) old.peer
-      pure { (w.setI s r.st) with om := om', msgs := msgs' }
+      let rts' := match m? with
+        | some m => if m.ty == .prej && !r.out.isEmpty then (s, ts) :: w.rts.filter (·.1 != s) else w.rts
+        | none => w.rts
+      pure { (w.setI s r.st) with om := om', msgs := msgs', rts := rts' }
     else
       let rn ← natF ev "rn"
       let old := w.getR rn s
