@@ -28,7 +28,7 @@ use crate::stream::StreamSource;
 
 /// What the application may queue on a pending sub-session before the peer's record is known: one window unit
 /// (16 KiB) ...
-const PENDING_WINDOW: u64 = 16 * 1024;
+pub(super) const PENDING_WINDOW: u64 = 16 * 1024;
 /// ... and this many streams.
 const PENDING_STREAMS: u16 = 4;
 use vinc_security::Event as SecEvent;

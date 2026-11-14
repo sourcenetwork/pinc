@@ -446,6 +446,46 @@ fn a_dial_after_twenty_seconds_without_hearing_a_peer_that_restarted_makes_a_han
     });
 }
 
+#[test]
+fn an_optimistic_handshake_dial_opens_a_stream_and_writes_before_the_handshake_ends() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let t0 = net.now;
+        let (child, rep) = dial(&mut net, a, b, ALPN_B);
+        assert!(rep.events.any(is_connected));
+        // No time has passed: the stream opens and takes its bytes now, they leave with the handshake's last flight.
+        write_new(&mut net, a, child, b"early");
+        assert!(net.run(t0 + 5 * SEC_NS, |n| n.nodes[b].read.values().any(|v| v == b"early")));
+        assert!(
+            net.now - t0 <= 3 * 10 * MS_NS + 5 * MS_NS,
+            "the bytes took {} ns",
+            net.now - t0
+        );
+    });
+}
+
+#[test]
+fn an_optimistic_dial_that_is_never_answered_ends_with_its_early_stream_and_is_told_once() {
+    big_stack(|| {
+        let (mut net, a, b) = silent_parent();
+        let addr_b = net.nodes[b].addr;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_b));
+        let (child, rep) = dial(&mut net, a, b, ALPN_B);
+        assert!(rep.events.any(is_connected));
+        write_new(&mut net, a, child, b"never");
+        let end = net.now + 60 * SEC_NS;
+        assert!(net.run(end, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Closed { session, .. } if *session == child))
+        }));
+        net.run_for(SEC_NS);
+        assert_eq!(
+            net.nodes[a].count(|e| matches!(e, Event::Closed { session, .. } if *session == child)),
+            1
+        );
+        assert!(!net.nodes[b].read.values().any(|v| v == b"never"));
+    });
+}
+
 /// Two nodes where `b` dialed `a` for `ALPN_A` and `a` still holds the access check for `b` open.
 fn incoming_not_allowed() -> (CoreNet, usize, usize) {
     let mut net = CoreNet::new(15 * MS_NS);

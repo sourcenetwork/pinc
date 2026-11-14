@@ -161,3 +161,49 @@ fn a_peer_stream_whose_place_was_given_back_stays_under_the_mark_until_it_is_ack
         "acknowledged: the slot is free and the mark falls"
     );
 }
+
+/// Streams opened before the peer's limits are known send nothing; when the limit arrives the ones it covers go out in
+/// the order they were opened, and the rest wait for credit. After the limits are known an open past them is refused.
+#[test]
+fn streams_opened_before_the_peers_limit_wait_for_it_in_order() {
+    let mut pool = BufferPool::new_boxed(512);
+    let mut t: Streams<NoSource, 8, 65> = Streams::new(&Config::new(true), &pool);
+    t.set_early(true);
+    t.set_peer_limits(&PeerLimits {
+        window: 16 * 1024,
+        max_streams: 0,
+    });
+    let ids: alloc::vec::Vec<StreamId> = (0..3)
+        .map(|_| {
+            let id = t.open_stream(&pool, false).unwrap();
+            assert_eq!(t.write(&mut pool, id, &[7; 10], u64::MAX).unwrap(), 10);
+            t.finish(id).unwrap();
+            id
+        })
+        .collect();
+    assert!(
+        t.next_stream_frame(1200).is_none(),
+        "a stream went out before the peer's limit was known"
+    );
+    assert!(!t.has_data_to_send());
+    t.set_peer_limits(&PeerLimits {
+        window: 64 * 1024,
+        max_streams: 2,
+    });
+    t.set_early(false);
+    let sent: alloc::vec::Vec<StreamId> = core::iter::from_fn(|| t.next_stream_frame(1200).map(|c| c.id)).collect();
+    assert_eq!(
+        sent,
+        ids.get(..2).unwrap(),
+        "the streams within the limit go out in the order they were opened"
+    );
+    assert!(!t.has_data_to_send());
+    assert!(matches!(t.open_stream(&pool, false), Err(StreamError::StreamLimit)));
+    t.on_max_streams(3);
+    let more: alloc::vec::Vec<StreamId> = core::iter::from_fn(|| t.next_stream_frame(1200).map(|c| c.id)).collect();
+    assert_eq!(
+        more,
+        ids.get(2..).unwrap(),
+        "the stream past the limit goes out once credit covers it"
+    );
+}

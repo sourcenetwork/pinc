@@ -479,6 +479,10 @@ ep_impl! {
         // Reported before the peer answered: a peer that stopped ends it after its 4th unanswered flight, not at 30 s.
         if optimistic {
             conn.end_unanswered();
+            // A resumed dial carries its remembered credit; a fresh one may open streams before the peer's limits arrive.
+            if !resume {
+                conn.allow_early_streams();
+            }
         }
         let Some(slot) = self.slots.get_mut(i) else { return Err(CommandError::Full) };
         slot.conn = Some(conn);

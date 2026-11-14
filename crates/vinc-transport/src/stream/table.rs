@@ -36,6 +36,9 @@ struct Slot<S, const C: usize> {
     urgency: u8,
     /// The stream counts against its opener's limit (`local_live` or `remote_live`).
     counted: bool,
+    /// For a stream we opened: how many we had opened in all, itself included; its first frame waits until the peer's
+    /// limit covers it. 0 for a stream the peer opened.
+    ordinal: u64,
 }
 
 /// How many of `fit` first charges the credit may promise: half of them, but never more than leave three for the
@@ -55,6 +58,7 @@ impl<S: StreamSource, const C: usize> Slot<S, C> {
         send: Send::NEW,
         urgency: DEFAULT_URGENCY,
         counted: false,
+        ordinal: 0,
     };
 }
 
@@ -96,6 +100,9 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     buffered: u64,
     stats: StreamStats,
     admit: Admit,
+    /// The least ordinal among the streams whose first frame waits for the peer's limit, 0 with none: a raise of the
+    /// limit looks again once it reaches this.
+    held_from: u64,
     /// Some slot's grant was deferred at the last pass; a stale `true` costs one pass that clears it.
     stalled: bool,
 }
@@ -130,6 +137,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 on: config.credit,
                 ..Admit::NEW
             },
+            held_from: 0,
             stalled: false,
         };
         streams.set_peer_limits(&config.peer);
@@ -201,6 +209,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             on: config.credit,
             ..Admit::NEW
         };
+        self.held_from = 0;
         self.stalled = false;
         self.set_peer_limits(&config.peer);
         self.set_advertised(self.admit_cap(pool));
@@ -313,6 +322,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.peer.window = self.peer.window.max(limits.window);
         self.peer.max_streams = self.peer.max_streams.max(limits.max_streams);
         self.admit.raise_limit(limits.max_streams);
+        self.regate();
         let window = self.peer.window;
         for slot in self.slots.written_iter_mut() {
             if slot.send.open {
@@ -340,8 +350,18 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     fn refresh(&mut self, i: usize) {
         let Some(slot) = self.slots.get(i) else { return };
-        let (retx, new) = slot.send.wants();
+        let (retx, mut new) = slot.send.wants();
+        let ordinal = slot.ordinal;
+        let past = ordinal > self.admit.limit;
         let ctl = (slot.recv.win.pending && slot.recv.open) || slot.recv.stop_pending() || slot.send.control_pending();
+        if new && past {
+            new = false;
+            self.held_from = if self.held_from == 0 {
+                ordinal
+            } else {
+                self.held_from.min(ordinal)
+            };
+        }
         let hot = (u8::from(retx) * HOT_RETX) | (u8::from(new) * HOT_NEW) | (u8::from(ctl) * HOT_CTL);
         if let Some(h) = self.hot.get_mut(i) {
             *h = hot;
@@ -577,7 +597,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// # Errors
     /// The error `open_stream` would return.
     pub fn can_open(&self, pool: &BufferPool<'_>, bidi: bool) -> Result<(), StreamError> {
-        if !self.admit.allows(self.local_opened.iter().sum()) {
+        if !self.admit.early && !self.admit.allows(self.local_opened.iter().sum()) {
             return Err(StreamError::StreamLimit);
         }
         // The slot and the first charge of every stream inside the credit given to the peer stay free.
@@ -604,7 +624,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let c = usize::from(!bidi);
         let opened = self.local_opened.get(c).copied().unwrap_or(0);
         let id = (opened << 2) | if bidi { 0 } else { 2 } | u64::from(!self.is_client);
-        self.alloc_slot(id)?;
+        let ordinal = self.local_opened.iter().sum::<u64>() + 1;
+        let i = self.alloc_slot(id)?;
+        if let Some(slot) = self.slots.get_mut(i) {
+            slot.ordinal = ordinal;
+        }
+        self.refresh(i);
         if let Some(o) = self.local_opened.get_mut(c) {
             *o += 1;
         }
@@ -960,6 +985,24 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// The peer raised the number of streams we may have opened in all (`MAX_STREAMS`).
     pub fn on_max_streams(&mut self, limit: u64) {
         self.admit.raise_limit(limit);
+        self.regate();
+    }
+
+    /// Let streams open past the peer's limit while it is unknown (`on`), or end that when its record arrived. A stream
+    /// opened past the limit sends nothing until the limit covers it, in the order the streams were opened.
+    pub fn set_early(&mut self, on: bool) {
+        self.admit.early = on;
+    }
+
+    /// Look again at the streams whose first frame waited for the peer's limit.
+    fn regate(&mut self) {
+        if self.held_from == 0 || self.admit.limit < self.held_from {
+            return;
+        }
+        self.held_from = 0;
+        for i in 0..self.used() {
+            self.refresh(i);
+        }
     }
 }
 

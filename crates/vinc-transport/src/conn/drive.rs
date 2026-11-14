@@ -252,6 +252,7 @@ conn_impl! {
             return false;
         }
         self.streams.set_peer_limits(&peer_limits(&est.peer_credit));
+        self.streams.set_early(false);
         self.peer_credit = est.peer_credit;
         self.pn_len = crate::packet::pn_len_for(est.peer_credit.window_bytes().max(est.local_credit.window_bytes()));
         true

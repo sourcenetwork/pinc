@@ -23,6 +23,8 @@ pub(super) struct Admit {
     pub(super) pend: bool,
     /// The receiver side is on: credit is given and kept in the pool.
     pub(super) on: bool,
+    /// Opens may pass `limit`, which the peer has not stated yet: they wait for it to cover them.
+    pub(super) early: bool,
 }
 
 impl Admit {
@@ -32,6 +34,7 @@ impl Admit {
         adv_at: 0,
         pend: false,
         on: true,
+        early: false,
     };
 
     /// The peer raised the limit on what we may open.

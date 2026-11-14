@@ -10,7 +10,7 @@ use super::path::CTRL_SMALL;
 use super::{Connection, MIN_MTU, Phase};
 use crate::packet::PN_LEN_WIDE;
 use crate::stream::datagram::DatagramError;
-use crate::stream::{RecvStatus, StreamError, StreamId, StreamSource};
+use crate::stream::{PeerLimits, RecvStatus, StreamError, StreamId, StreamSource};
 
 /// A DATAGRAM frame spends its type and a two-byte length besides the data.
 const DATAGRAM_FRAME_OVERHEAD: usize = 3;
@@ -111,6 +111,15 @@ conn_impl! {
     /// some.
     pub fn raise_stream_credit(&mut self, limit: u64) {
         self.streams.on_max_streams(limit);
+    }
+
+    /// A dial reported connected before its handshake ran: let the application open streams and queue data now, though
+    /// the peer's limits are not known. Nothing leaves before the keys exist; once the peer's record arrives, a stream
+    /// within its stream limit goes out and one past it waits for credit, in the order the streams were opened. Each
+    /// stream may queue what the smallest window a record can state (one 16 KiB unit) allows until the record arrives.
+    pub fn allow_early_streams(&mut self) {
+        self.streams.set_early(true);
+        self.streams.set_peer_limits(&PeerLimits { window: super::hooks::PENDING_WINDOW, max_streams: 0 });
     }
 
     /// Whether a stream of the given kind could open now. A host whose open got [`StreamError::StreamLimit`] (no
