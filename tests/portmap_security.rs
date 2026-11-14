@@ -667,3 +667,90 @@ fn stop_deletes_a_upnp_mapping_whose_request_is_in_flight() {
     let del = http_text(&mut pm).expect("the mapping the gateway may have made is deleted");
     assert!(del.contains("#DeletePortMapping") && del.contains("<NewExternalPort>4433<"));
 }
+
+fn only(f: impl FnOnce(&mut vinc_portmap::Stats)) -> vinc_portmap::Stats {
+    let mut s = vinc_portmap::Stats::default();
+    f(&mut s);
+    s
+}
+
+#[test]
+fn a_datagram_from_another_source_is_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(
+        T0,
+        "192.168.1.99:5351".parse().unwrap(),
+        &pcp_map(NONCE, pcp::SUCCESS, 1, 7200),
+    );
+    assert_eq!(pm.stats(), only(|s| s.wrong_source = 1));
+    assert_eq!(pm.mapped(), None);
+    // a search answer that names another host
+    let mut pm = client(None, local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, from([192, 168, 1, 77]), &answer("http://10.9.9.9:6379/x"));
+    assert_eq!(pm.stats(), only(|s| s.wrong_source = 1));
+}
+
+#[test]
+fn a_pcp_answer_with_another_nonce_is_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map([9; 12], pcp::SUCCESS, 1, 7200));
+    assert_eq!(pm.stats(), only(|s| s.wrong_nonce = 1));
+    assert_eq!(pm.mapped(), None);
+}
+
+#[test]
+fn an_answer_that_does_not_decode_or_does_not_match_the_request_is_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &[2, 0, 0]);
+    assert_eq!(pm.stats(), only(|s| s.unexpected = 1));
+    pm.handle_datagram(
+        T0,
+        gw(),
+        &nat(natpmp::Response::Address {
+            result: 0,
+            epoch: 1,
+            ip: "203.0.113.9".parse().unwrap(),
+        }),
+    );
+    assert_eq!(
+        pm.stats(),
+        only(|s| s.unexpected = 2),
+        "a NAT-PMP address while PCP is asked"
+    );
+}
+
+#[test]
+fn a_refused_address_is_counted() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_grant("10.1.1.1".parse().unwrap()));
+    assert_eq!(pm.stats().refused_address, 1);
+    assert_eq!(pm.mapped(), None);
+}
+
+#[test]
+fn a_request_that_runs_out_of_tries_is_counted_as_a_timeout() {
+    let mut pm = client(Some(GW.into()), local());
+    let mut n = 0;
+    while pm.stats().timeouts == 0 && n < 20 {
+        sent(&mut pm);
+        let t = pm.poll_timeout().unwrap();
+        pm.handle_timeout(t);
+        n += 1;
+    }
+    assert_eq!(pm.stats(), only(|s| s.timeouts = 1), "the PCP tries ran out once");
+}
+
+#[test]
+fn a_failed_http_exchange_is_counted() {
+    let mut pm = client(None, local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml"));
+    http(&mut pm).unwrap();
+    pm.handle_http(T0, None);
+    assert_eq!(pm.stats(), only(|s| s.http_failures = 1));
+}

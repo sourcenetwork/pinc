@@ -28,7 +28,7 @@
 //! Invariants: [`PortMap::mapped`] is a mapping the gateway granted and whose lease has not ended on the client's clock,
 //! and none after [`PortMap::stop`]; an answer is taken only from the gateway (or, for SSDP, from port 1900 of it) and
 //! only for the request in flight (PCP by its nonce, protocol and port; NAT-PMP by its opcode and port); every buffer is
-//! bounded and nothing allocates or panics.
+//! bounded and nothing allocates or panics; everything the client drops is counted in [`Stats`].
 
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -64,6 +64,28 @@ pub enum Proto {
     NatPmp,
     /// UPnP-IGD.
     Upnp,
+}
+
+/// What the client dropped, by reason.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Stats {
+    /// Datagrams taken for the client that were not from the gateway, and search answers naming another host.
+    pub wrong_source: u64,
+    /// PCP answers whose nonce is not this client's.
+    pub wrong_nonce: u64,
+    /// Answers that did not decode or did not answer the request in flight (step, protocol or port).
+    pub unexpected: u64,
+    /// Grants of an external address no peer could reach.
+    pub refused_address: u64,
+    /// Requests that ran out of tries and HTTP exchanges that passed their deadline.
+    pub timeouts: u64,
+    /// HTTP exchanges that failed or whose answer was refused.
+    pub http_failures: u64,
+}
+
+/// Count one more in `c`.
+fn bump(c: &mut u64) {
+    *c = c.saturating_add(1);
 }
 
 /// How the client is set up.
@@ -153,6 +175,7 @@ pub struct PortMap {
     igd: Option<Igd>,
     release: Option<Lease>,
     halted: bool,
+    stats: Stats,
 }
 
 impl PortMap {
@@ -174,6 +197,7 @@ impl PortMap {
             igd: None,
             release: None,
             halted: false,
+            stats: Stats::default(),
         };
         pm.enter(pm.first(), now);
         pm
@@ -187,6 +211,11 @@ impl PortMap {
     /// The protocol of the mapping held.
     pub fn protocol(&self) -> Option<Proto> {
         self.held.map(|l| l.proto)
+    }
+
+    /// What the client dropped.
+    pub fn stats(&self) -> Stats {
+        self.stats
     }
 
     /// Whether the client waits for the answer to the HTTP request it last gave out: false once it gave the exchange
@@ -301,7 +330,10 @@ impl PortMap {
                 let first = self.first();
                 self.enter(first, now);
             }
-            _ => self.fail(now),
+            _ => {
+                bump(&mut self.stats.timeouts);
+                self.fail(now);
+            }
         }
     }
 
@@ -376,11 +408,19 @@ impl PortMap {
     pub fn handle_datagram(&mut self, now: u64, from: SocketAddr, b: &[u8]) {
         self.now = self.now.max(now);
         let now = self.now;
-        if !self.owns(from, b) || self.step == Step::Stopped {
+        if !self.owns(from, b) {
+            bump(&mut self.stats.wrong_source);
+            return;
+        }
+        if self.step == Step::Stopped {
             return;
         }
         if self.step == Step::Ssdp {
-            if let Some(desc) = upnp::ssdp_location(b).filter(|d| self.location_ok(d, from)) {
+            let desc = upnp::ssdp_location(b);
+            if desc.is_some_and(|d| !self.location_ok(&d, from)) {
+                bump(&mut self.stats.wrong_source);
+            }
+            if let Some(desc) = desc.filter(|d| self.location_ok(d, from)) {
                 self.igd = Some(Igd {
                     desc,
                     ctl: None,
@@ -409,7 +449,7 @@ impl PortMap {
 
     fn pcp_answer(&mut self, now: u64, b: &[u8]) {
         match pcp::decode_response(b) {
-            Err(_) => {}
+            Err(_) => bump(&mut self.stats.unexpected),
             Ok(pcp::Response::Map {
                 result,
                 lifetime,
@@ -420,16 +460,17 @@ impl PortMap {
                 external_port,
                 external_ip,
             }) => {
-                if self.step != Step::Pcp
-                    || nonce != self.cfg.nonce
-                    || protocol != pcp::UDP
-                    || internal_port != self.cfg.local.port()
-                {
+                if nonce != self.cfg.nonce {
+                    bump(&mut self.stats.wrong_nonce);
+                    return;
+                }
+                if self.step != Step::Pcp || protocol != pcp::UDP || internal_port != self.cfg.local.port() {
+                    bump(&mut self.stats.unexpected);
                     return;
                 }
                 self.note_epoch(now, epoch);
                 match result {
-                    pcp::SUCCESS if lifetime > 0 && external_port != 0 && addr::external_ok(external_ip) => {
+                    pcp::SUCCESS if lifetime > 0 && external_port != 0 && self.acceptable(external_ip) => {
                         self.grant(Proto::Pcp, SocketAddr::new(external_ip, external_port), lifetime, now);
                     }
                     pcp::UNSUPP_VERSION if !self.renewing => self.enter(Step::NatAddr, now),
@@ -453,13 +494,27 @@ impl PortMap {
                     } else {
                         self.fail(now);
                     }
+                } else {
+                    bump(&mut self.stats.unexpected);
                 }
             }
         }
     }
 
+    /// Whether `ip` may be the external address of a mapping; one that may not is counted.
+    fn acceptable(&mut self, ip: IpAddr) -> bool {
+        let ok = addr::external_ok(ip);
+        if !ok {
+            bump(&mut self.stats.refused_address);
+        }
+        ok
+    }
+
     fn natpmp_answer(&mut self, now: u64, b: &[u8]) {
-        let Ok(r) = natpmp::decode_response(b) else { return };
+        let Ok(r) = natpmp::decode_response(b) else {
+            bump(&mut self.stats.unexpected);
+            return;
+        };
         match r {
             natpmp::Response::Error { .. } if self.step == Step::Pcp && !self.renewing => {
                 self.enter(Step::NatAddr, now);
@@ -470,11 +525,13 @@ impl PortMap {
                 if ours {
                     self.note_epoch(now, epoch);
                     self.fail(now);
+                } else {
+                    bump(&mut self.stats.unexpected);
                 }
             }
             natpmp::Response::Address { result, epoch, ip } if self.step == Step::NatAddr => {
                 self.note_epoch(now, epoch);
-                if result == 0 && addr::external_ok(IpAddr::V4(ip)) {
+                if result == 0 && self.acceptable(IpAddr::V4(ip)) {
                     self.nat_ip = Some(ip);
                     self.enter(Step::NatMap, now);
                 } else {
@@ -501,7 +558,7 @@ impl PortMap {
                     _ => self.fail(now),
                 }
             }
-            _ => {}
+            _ => bump(&mut self.stats.unexpected),
         }
     }
 
@@ -602,9 +659,15 @@ impl PortMap {
         if built.is_some() {
             self.http = Http::Sent;
         } else {
-            self.fail(self.now);
+            self.http_fail(self.now);
         }
         built
+    }
+
+    /// An HTTP exchange failed or its answer was refused: counted, and the step fails.
+    fn http_fail(&mut self, now: u64) {
+        bump(&mut self.stats.http_failures);
+        self.fail(now);
     }
 
     /// The answer to the last HTTP request at `now`: the bytes the server sent, or `None` if the connection failed.
@@ -617,7 +680,7 @@ impl PortMap {
         self.http = Http::None;
         let Some(igd) = &mut self.igd else { return };
         let Some(resp) = resp else {
-            self.fail(now);
+            self.http_fail(now);
             return;
         };
         match self.step {
@@ -627,26 +690,34 @@ impl PortMap {
                         igd.ctl = Some(ctl);
                         self.enter(Step::ExtIp, now);
                     }
-                    None => self.fail(now),
+                    None => self.http_fail(now),
                 },
-                None => self.fail(now),
+                None => self.http_fail(now),
             },
-            Step::ExtIp => match upnp::soap_result(resp) {
-                Some(SoapResult::Ok(body))
-                    if upnp::external_ip(body).is_some_and(|ip| addr::external_ok(IpAddr::V4(ip))) =>
-                {
-                    igd.ext_ip = upnp::external_ip(body);
-                    self.enter(Step::Add, now);
+            Step::ExtIp => {
+                let ext = match upnp::soap_result(resp) {
+                    Some(SoapResult::Ok(body)) => upnp::external_ip(body),
+                    _ => None,
+                };
+                match ext {
+                    Some(ip) if addr::external_ok(IpAddr::V4(ip)) => {
+                        igd.ext_ip = Some(ip);
+                        self.enter(Step::Add, now);
+                    }
+                    Some(_) => {
+                        bump(&mut self.stats.refused_address);
+                        self.fail(now);
+                    }
+                    None => self.http_fail(now),
                 }
-                _ => self.fail(now),
-            },
+            }
             Step::Add => match upnp::soap_result(resp) {
                 Some(SoapResult::Ok(_)) => match igd.ext_ip {
                     Some(ip) => {
                         let ext = SocketAddr::new(IpAddr::V4(ip), igd.external);
                         self.grant(Proto::Upnp, ext, self.cfg.lifetime, now);
                     }
-                    None => self.fail(now),
+                    None => self.http_fail(now),
                 },
                 Some(SoapResult::Fault(upnp::ONLY_PERMANENT_LEASES)) if !igd.permanent => {
                     igd.permanent = true;
@@ -657,7 +728,7 @@ impl PortMap {
                     igd.external = igd.external.checked_add(1).unwrap_or(1024);
                     self.enter(Step::Add, now);
                 }
-                _ => self.fail(now),
+                _ => self.http_fail(now),
             },
             Step::Delete => self.enter(Step::Stopped, now),
             _ => {}
