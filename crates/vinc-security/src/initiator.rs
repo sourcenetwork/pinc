@@ -7,6 +7,14 @@
 //! verified and its node id equals the dialed one. A fatal failure stops the machine and is reported once as an
 //! event; a malformed or misplaced message is dropped with an error and changes nothing.
 //!
+//! Nothing in a Reply has authenticated until the responder's signature over the transcript verified under the dialed
+//! node's key, nor in a resume Reply until its confirmation tag matched: a forger who saw the first flight can make a
+//! Reply's sealed block open, since the prekey's encapsulation key and the ephemeral key are public in the full
+//! Initial. So a Reply or a resume Reply that fails any check before that (its key share, its AEAD, the sealed
+//! block, the identity in it, the signature) is dropped as [`Failure::Authentication`] and the machine waits for the
+//! real one; the handshake still ends at the host's connect limit. Only a failure after the responder authenticated,
+//! or of the host's own key operation, is fatal.
+//!
 //! The full flow is: Initial (or the short Initial when the responder is known to cache the prekey), then Reply,
 //! a prekey decapsulation request, a signature request, and the Finish together with the established session.
 //! With a ticket the flow is: resume Hello (and the 0-RTT keys), then the resume Reply and the established session;
@@ -537,16 +545,17 @@ impl Initiator {
         let State::Reply { echo } = self.state else {
             return Err(Failure::UnexpectedMessage);
         };
+        // Not authenticated yet: a Reply that fails a check here is dropped (see the module documentation).
         if !self.offer.contains(reply.aead) {
-            return Err(Failure::NoCommonAead);
+            return Err(Failure::Authentication);
         }
         let p = env.provider;
         let ss_x = p
             .x25519_dh(&p.x25519_secret(self.seed.expose()), &reply.e)
-            .map_err(|_| Failure::InvalidPeerKey)?;
+            .map_err(|_| Failure::Authentication)?;
         self.inbuf
             .get_mut(..input.len())
-            .ok_or(Failure::InvalidParameter)?
+            .ok_or(Failure::Authentication)?
             .copy_from_slice(input);
         self.inlen = input.len();
         self.back_th = self.th.clone();
@@ -569,40 +578,15 @@ impl Initiator {
             return Err(Failure::UnexpectedKeyResponse);
         };
         let hs = handshake_keys(ss_k, &ss_x, &th1);
-        let reply = Reply::parse(self.inbuf.get(..self.inlen).unwrap_or_default()).map_err(Failure::BadPayload)?;
-        let opened = match open_handshake(env.provider, aead, &hs.responder, &th1, reply.sealed) {
-            Ok(o) => o,
-            Err(f) => {
-                if f == Failure::Authentication {
-                    // A damaged or forged Reply proves nothing: drop it and wait for the next one.
-                    self.th = self.back_th.clone();
-                    self.state = State::Reply { echo: back };
-                    self.inbuf.zeroize();
-                    self.inlen = 0;
-                }
-                return Err(f);
-            }
+        let Ok(credit) = self.authenticate_reply(env.provider, aead, &hs.responder, &th1) else {
+            // A damaged or forged Reply proves nothing: drop it and wait for the next one.
+            self.th = self.back_th.clone();
+            self.state = State::Reply { echo: back };
+            self.inbuf.zeroize();
+            self.inlen = 0;
+            return Err(Failure::Authentication);
         };
-        let ids = IdSig::parse(opened.as_slice(), true).map_err(Failure::BadPayload)?;
-        let responder = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
-        if responder != self.peer {
-            return Err(Failure::WrongPeer);
-        }
-        absorb_identity(&mut self.th, ids.alg, ids.public_key);
-        let credit = ids
-            .credit
-            .ok_or(Failure::BadPayload(WireError::Unexpected("credit record")))?;
-        absorb_credit(&mut self.th, credit);
         self.peer_credit = credit;
-        let th2 = self.th.snapshot();
-        verify(
-            ids.alg,
-            ids.public_key,
-            &signature_message(labels::SIGNATURE_RESPONDER, &th2),
-            ids.signature,
-        )
-        .map_err(|_| Failure::BadSignature)?;
-        self.th.absorb("sig", ids.signature);
         let th3 = self.th.snapshot();
         absorb_identity(&mut self.th, self.identity.alg(), self.identity.public_key());
         self.out.set_request(Pending::Sign {
@@ -617,6 +601,42 @@ impl Initiator {
             th3,
         };
         Ok(())
+    }
+
+    /// The checks that authenticate the held Reply: its sealed block opens under the responder's handshake secret
+    /// `key`, holds the dialed node's identity and a credit record, and the signature over the transcript verifies
+    /// under that identity. On success the transcript holds the identity, the credit record and the signature, and the
+    /// responder's credit record is returned. A failure is never fatal: the caller drops the Reply and restores the
+    /// transcript (the reasons stay here for reading, the caller reports them all as [`Failure::Authentication`]).
+    fn authenticate_reply<P: Provider>(
+        &mut self,
+        p: &P,
+        aead: Aead,
+        key: &Secret<32>,
+        th1: &[u8; 32],
+    ) -> Result<CreditRecord, Failure> {
+        let reply = Reply::parse(self.inbuf.get(..self.inlen).unwrap_or_default()).map_err(Failure::BadPayload)?;
+        let opened = open_handshake(p, aead, key, th1, reply.sealed)?;
+        let ids = IdSig::parse(opened.as_slice(), true).map_err(Failure::BadPayload)?;
+        let responder = NodeId::from_public(ids.alg, ids.public_key).map_err(|_| Failure::InvalidPeerKey)?;
+        if responder != self.peer {
+            return Err(Failure::WrongPeer);
+        }
+        absorb_identity(&mut self.th, ids.alg, ids.public_key);
+        let credit = ids
+            .credit
+            .ok_or(Failure::BadPayload(WireError::Unexpected("credit record")))?;
+        absorb_credit(&mut self.th, credit);
+        let th2 = self.th.snapshot();
+        verify(
+            ids.alg,
+            ids.public_key,
+            &signature_message(labels::SIGNATURE_RESPONDER, &th2),
+            ids.signature,
+        )
+        .map_err(|_| Failure::BadSignature)?;
+        self.th.absorb("sig", ids.signature);
+        Ok(credit)
     }
 
     fn on_signed<P: Provider>(&mut self, env: &mut Env<'_, P>, signature: &[u8]) -> Result<(), Failure> {
@@ -680,19 +700,17 @@ impl Initiator {
             let (seed, remembered) = (self.seed.clone(), self.remembered);
             let th = mem::take(&mut self.th);
             let mut tried = th.clone();
-            let secrets = match open_resume_reply(env, &seed, &ck_psk, &binder, &mut tried, &reply) {
-                Ok(s) => s,
-                Err(f) => {
-                    // A reply that does not confirm is dropped; the Hello is still outstanding.
-                    self.th = th;
-                    self.state = State::Resume {
-                        ck_psk,
-                        aead,
-                        binder,
-                        echo,
-                    };
-                    return Err(f);
-                }
+            let Ok(secrets) = open_resume_reply(env, &seed, &ck_psk, &binder, &mut tried, &reply) else {
+                // A reply that does not confirm is dropped, whatever check refused it; the Hello is still
+                // outstanding.
+                self.th = th;
+                self.state = State::Resume {
+                    ck_psk,
+                    aead,
+                    binder,
+                    echo,
+                };
+                return Err(Failure::Authentication);
             };
             self.th = tried;
             self.finish_resume(aead, secrets, reply, remembered);
@@ -708,7 +726,7 @@ impl Initiator {
         };
         let mut th = late.th.clone();
         let secrets = open_resume_reply(env, &late.seed, &late.ck_psk, &late.binder, &mut th, &reply)
-            .map_err(|_| Failure::UnexpectedMessage)?;
+            .map_err(|_| Failure::Authentication)?;
         let (aead, remembered) = (late.aead, late.remembered);
         self.late = None;
         self.out.take_request();

@@ -15,16 +15,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use vinc_crypto::provider::KEM_CIPHERTEXT_LEN;
-use vinc_crypto::{Aead, IdentityAlg};
+use vinc_crypto::IdentityAlg;
 use vinc_security::ClientTickets;
-use vinc_security::message::{MAX_MESSAGE_LEN, Reply};
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, ExtensionError, PathId, PathInfo, code};
 use vinc_transport::frame::ext;
-use vinc_transport::packet::{ConnId, LongHeader, LongType, short_dcid};
+use vinc_transport::packet::{ConnId, LongHeader, short_dcid};
 use vinc_transport::recovery::PathKind;
-use vinc_wire::Writer;
 
 vinc_tests::install_counting_allocator!();
 
@@ -701,50 +698,6 @@ fn a_responder_in_its_handshake_learns_the_path_of_a_datagram_that_names_its_ids
 
 // ---- handshake packets before their message authenticated ----
 
-/// The source id a forger puts in its packets.
-fn forger() -> ConnId {
-    ConnId::new(&[0xEE; 8]).unwrap()
-}
-
-/// A long Handshake packet to `dcid` from the forger's id, carrying `body`.
-fn forged(dcid: ConnId, body: &[u8]) -> Vec<u8> {
-    let h = LongHeader {
-        ty: LongType::Handshake,
-        dcid,
-        scid: forger(),
-        body_len: body.len(),
-    };
-    let mut d = vec![0u8; h.header_len() + body.len()];
-    let mut w = Writer::new(&mut d);
-    h.write(&mut w, 0).unwrap();
-    w.put_slice(body).unwrap();
-    d
-}
-
-/// A whole Reply from the forger that the dialing side's machine takes: well formed, with a sealed block that does
-/// not open.
-fn forged_reply(dcid: ConnId) -> Vec<u8> {
-    let ct = [0x5a; KEM_CIPHERTEXT_LEN];
-    let reply = Reply {
-        scid: forger(),
-        aead: Aead::ChaCha20Poly1305,
-        e: [0x5a; 32],
-        ct: &ct,
-        sealed: &[0xa5; 128],
-    };
-    let mut msg = vec![0u8; MAX_MESSAGE_LEN];
-    let mut w = Writer::new(&mut msg);
-    reply.write(&mut w).unwrap();
-    let n = w.written().len();
-    let mut body = vec![0u8; n + 16];
-    let mut w = Writer::new(&mut body);
-    w.put_varint(n as u64).unwrap();
-    w.put_varint(0).unwrap();
-    w.put_slice(&msg[..n]).unwrap();
-    let len = w.written().len();
-    forged(dcid, &body[..len])
-}
-
 /// The destination id of the first packet of a datagram; `None` for one that holds only padding.
 fn dcid_of(d: &[u8], cid_len: usize) -> Option<ConnId> {
     LongHeader::parse(d)
@@ -778,7 +731,7 @@ fn a_forged_handshake_packet_on_a_candidate_path_moves_validates_and_names_nothi
             .unwrap();
         net.flush();
         // The forger read the dialing side's id in its first flight; the body is no fragment of a message.
-        let mut d = forged(net.a.conn.local_cids().next().unwrap(), &[0xff; 4]);
+        let mut d = forge_packet(net.a.conn.local_cids().next().unwrap(), &[0xff; 4]);
         let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(3), &mut d));
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         assert!(net.a.conn.path_validated(PathId(1)));
@@ -793,7 +746,7 @@ fn a_forged_handshake_packet_on_a_candidate_path_moves_validates_and_names_nothi
             .filter(|(is_a, _, _)| *is_a)
             .filter_map(|(_, d, _)| dcid_of(d, cid_len))
             .collect();
-        assert!(!sent.is_empty() && !sent.contains(&forger()), "{sent:?}");
+        assert!(!sent.is_empty() && !sent.contains(&forger_cid()), "{sent:?}");
     });
 }
 
@@ -861,7 +814,7 @@ fn a_forged_packet_between_the_parts_of_a_reply_moves_nothing_and_the_part_that_
         client
             .with_env(t2, |c, env| c.handle_datagram(env, PathId(1), &mut reply[0].1))
             .unwrap();
-        let mut d = forged(client.conn.local_cids().next().unwrap(), &[0xff; 4]);
+        let mut d = forge_packet(client.conn.local_cids().next().unwrap(), &[0xff; 4]);
         let _ = client.with_env(t2, |c, env| c.handle_datagram(env, PathId(5), &mut d));
         client.service(t2);
         assert_eq!(client.conn.active_path(), Some(PathId(1)));
@@ -901,10 +854,11 @@ fn a_forged_reply_that_the_machine_takes_gives_no_round_trip_sample() {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
         let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(51, Params::new(10 * MS)));
-        net.flush();
+        let initial = sent_initial(&mut net);
         let t0 = net.now;
         // It comes at once after the first flight: as a round trip it would read 1 ms.
-        let mut d = forged_reply(net.a.conn.local_cids().next().unwrap());
+        let reply = forge_reply(&net.a.prov, &initial, &Forgery::Unopened);
+        let mut d = forge_message(net.a.conn.local_cids().next().unwrap(), &reply);
         net.a
             .with_env(t0, |c, env| c.handle_datagram(env, PathId(1), &mut d))
             .unwrap();
@@ -918,6 +872,48 @@ fn a_forged_reply_that_the_machine_takes_gives_no_round_trip_sample() {
 }
 
 #[test]
+fn a_handshake_message_dropped_for_not_authenticating_is_counted_on_either_side() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(52, Params::new(10 * MS)));
+        let initial = sent_initial(&mut net);
+        let now = net.now;
+        let dcid = net.a.conn.local_cids().next().unwrap();
+        // One refused before the machine takes it, one after its sealed block opened.
+        for how in [Forgery::ZeroKey, Forgery::Garbage] {
+            let mut d = forge_message(dcid, &forge_reply(&net.a.prov, &initial, &how));
+            let _ = net.a.with_env(now, |c, env| c.handle_datagram(env, PathId(1), &mut d));
+            net.a.service(now);
+        }
+        assert_eq!(net.a.conn.stats().handshake_dropped, 2);
+        // The responder sent its Reply and waits for the Finish: a forged one does not open.
+        assert!(net.run(now + SEC, |n| n.b.conn.has_path(PathId(2))));
+        let finish = {
+            let mut msg = vec![0u8; 256];
+            let mut wr = vinc_wire::Writer::new(&mut msg);
+            vinc_security::message::Finish { sealed: &[0xa5; 120] }
+                .write(&mut wr)
+                .unwrap();
+            let len = wr.written().len();
+            msg.truncate(len);
+            msg
+        };
+        let mut d = forge_message(net.b.conn.local_cids().next().unwrap(), &finish);
+        let t = net.now;
+        let stores = &mut *net.stores;
+        let r = net
+            .b
+            .with_env(t, |c, env| c.handle_datagram_with(env, stores, PathId(2), &mut d));
+        assert!(r.is_err() && !net.b.conn.is_closed(), "{r:?}");
+        assert_eq!(net.b.conn.stats().handshake_dropped, 1);
+        assert!(net.connect(t + 5 * SEC), "{:?}", net.rx_drops);
+        assert_eq!(net.a.conn.stats().handshake_dropped, 2, "the real Reply is not counted");
+        assert_eq!(net.b.conn.stats().handshake_dropped, 1, "nor the real Finish");
+    });
+}
+
+#[test]
 fn a_handshaking_responder_learns_the_path_of_a_forged_packet_but_neither_validates_it_nor_sends_there() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
@@ -926,7 +922,7 @@ fn a_handshaking_responder_learns_the_path_of_a_forged_packet_but_neither_valida
         // The responder took the first flight and sent its Reply; it waits for the Finish.
         assert!(net.run(net.now + SEC, |n| n.b.conn.has_path(PathId(2))));
         let now = net.now;
-        let mut d = forged(net.b.conn.local_cids().next().unwrap(), &[0xff; 4]);
+        let mut d = forge_packet(net.b.conn.local_cids().next().unwrap(), &[0xff; 4]);
         let stores = &mut *net.stores;
         let _ = net
             .b

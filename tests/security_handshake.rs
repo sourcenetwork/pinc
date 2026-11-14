@@ -503,8 +503,10 @@ tamper_tests! {
     hybrid: IdentityAlg::Hybrid, 53;
 }
 
+/// A Reply from a node other than the dialed one has not authenticated as the dialed node: it is dropped, as one a
+/// forger made would be, and the initiator keeps waiting for the dialed node without sending its identity.
 #[test]
-fn a_wrong_dialed_node_id_fails() {
+fn a_reply_from_a_node_other_than_the_dialed_one_is_dropped() {
     big_stack(|| {
         for alg in ALGS {
             let mut w = World::new(IdentityAlg::Ed25519, alg, false, false);
@@ -512,12 +514,22 @@ fn a_wrong_dialed_node_id_fails() {
             let mut i = w.initiator_with(other, ALPN, false, false);
             let mut r = w.responder();
             let out = w.run(&mut i, &mut r, None);
-            assert_eq!(out.i_failed(), Some(Failure::WrongPeer), "{alg:?}");
+            assert!(out.i_dropped_unauthentic(), "{alg:?}: {:?}", out.i_errs);
             assert!(out.i_est().is_none() && out.r_est().is_none());
             // The initiator never sent its identity.
             assert_eq!(out.types(), vec![1, 4]);
-            // A later input is refused.
-            assert_eq!(out.i_errs, vec![Failure::WrongPeer]);
+            assert_eq!(out.i_errs, vec![Failure::Authentication]);
+            // It still waits: the loss timer sends the Initial again.
+            let mut env = Env {
+                provider: &w.i_prov,
+                now: w.now,
+                drbg: &mut w.i_drbg,
+            };
+            i.retransmit(&mut env).unwrap();
+            assert!(
+                matches!(i.poll_output(), Some(Output::Send { data, .. }) if data[0] == 1),
+                "{alg:?}"
+            );
         }
         // The right key under another algorithm tag is another node too.
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
@@ -529,7 +541,7 @@ fn a_wrong_dialed_node_id_fails() {
         let mut i = w.initiator_with(dial, ALPN, false, false);
         let mut r = w.responder();
         let out = w.run(&mut i, &mut r, None);
-        assert_eq!(out.i_failed(), Some(Failure::WrongPeer));
+        assert!(out.i_dropped_unauthentic(), "{:?}", out.i_errs);
     });
 }
 
@@ -564,15 +576,15 @@ fn the_transcript_binds_alpn_connection_ids_version_and_the_aead_offer() {
         // The offer: widened by the attacker, the responder picks ChaCha (no hardware AES) and the transcripts differ.
         let out = mk(Tamper::custom(0, move |m| m[offer] = 3), false, false);
         assert!(out.i_dropped_unauthentic(), "offer");
-        // With hardware AES at the responder it picks AES, which the initiator never offered.
+        // With hardware AES at the responder it picks AES, which the initiator never offered: the Reply is dropped.
         let out = mk(Tamper::custom(0, move |m| m[offer] = 3), false, true);
-        assert_eq!(out.i_failed(), Some(Failure::NoCommonAead), "offer, hardware");
+        assert!(out.i_dropped_unauthentic(), "offer, hardware");
         // The key share.
         let out = mk(Tamper::flip(0, e), false, false);
         assert!(out.i_dropped_unauthentic(), "e_I");
-        // The responder's choice, forged in the Reply (type, scid(1+8), aead).
+        // The responder's choice, forged in the Reply (type, scid(1+8), aead): an AEAD never offered, dropped.
         let out = mk(Tamper::custom(1, |m| m[10] = 2), false, false);
-        assert_eq!(out.i_failed(), Some(Failure::NoCommonAead), "aead choice");
+        assert!(out.i_dropped_unauthentic(), "aead choice");
     });
 }
 

@@ -248,7 +248,8 @@ async fn a_forged_record_is_refused_before_any_packet_and_a_stale_one_costs_one_
         assert_eq!(hits.load(Ordering::SeqCst), before, "a refused record led to a packet");
 
         // A stale record: the real node is gone and an impostor holds its address. The record verifies, so the
-        // client dials; the handshake authenticates the node id, so the one dial fails and nothing is accepted.
+        // client dials; the handshake authenticates the node id, so the impostor's Reply is dropped, the one dial
+        // fails at its connect timeout and nothing is accepted.
         table.held.borrow_mut().insert(id, genuine);
         real.close().await;
         drop(real);

@@ -265,6 +265,7 @@ conn_impl! {
         let body = bytes.get(header_len..).ok_or(Drop::Malformed(PacketError::Length))?;
         let Some(len) = self.hs.on_fragment(&mut self.pool, body) else { return Ok(()) };
         let r = self.hs.feed(&self.pool, env, stores, len);
+        self.count_unauthentic(&r);
         if self.client && r.is_ok() {
             self.reply_from = Some((ctx.path_id, header.scid, ctx.now));
         }

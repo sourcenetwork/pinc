@@ -65,6 +65,7 @@ conn_impl! {
             Some(Machine::Server(m)) => m.on_key_response(env, resp),
             None => Err(Failure::UnexpectedKeyResponse),
         };
+        self.count_unauthentic(&r);
         self.pump(env);
         r
     }
@@ -80,8 +81,17 @@ conn_impl! {
             Some(Machine::Server(m)) => m.answer_soft(env, keys),
             None => Ok(false),
         };
+        self.count_unauthentic(&r);
         self.pump(env);
         r
+    }
+
+    /// Count a handshake message the machine dropped because it did not authenticate: a forged or damaged one, which
+    /// leaves the handshake where it was.
+    pub(super) fn count_unauthentic<T>(&mut self, r: &Result<T, Failure>) {
+        if matches!(r, Err(Failure::Authentication)) {
+            self.stats.handshake_dropped += 1;
+        }
     }
 
     /// Store the tickets of a [`TicketsReceived`](super::Event::TicketsReceived) event in `store`, to resume with.

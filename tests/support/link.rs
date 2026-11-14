@@ -45,7 +45,7 @@ use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
 use vinc_transport::stream::{self, NoSource, RecvStatus, Streams};
 
-use crate::{Link, SplitMix64};
+use crate::{Link, Params, SplitMix64};
 
 /// [`Software`] with a chosen answer to "does AES-GCM run on hardware", so both AEADs are testable anywhere.
 #[derive(Debug, Clone, Copy)]
@@ -772,6 +772,18 @@ pub fn setup<'a, const C: usize, const F: usize>(
     let a = w.client(sa, None, ClientTickets::new());
     let b = w.server(sb);
     Net::new(a, b, link, &mut w.stores)
+}
+
+/// A full session that leaves the client with a resumption ticket.
+pub fn first_session(w: &mut World) -> ClientTickets<8> {
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let mut net = setup(w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
+    assert!(net.connect(net.now + 10 * SEC));
+    assert!(
+        net.run(net.now + 5 * SEC, |n| !n.a.tickets.is_empty()),
+        "no tickets arrived"
+    );
+    std::mem::take(&mut net.a.tickets)
 }
 
 /// Send `data` on a new bidirectional stream from A and run until B has read it all and A has nothing in flight.

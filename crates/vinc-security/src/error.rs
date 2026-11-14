@@ -34,12 +34,15 @@ pub enum Failure {
     InvalidParameter,
     /// The peer's key share or encapsulation key is invalid.
     InvalidPeerKey,
-    /// A tag, binder or confirmation did not authenticate: the transcript, a key or a message differs. The message is
-    /// dropped and the state is unchanged, so the peer's resend can still complete the handshake.
+    /// A message did not authenticate: a tag, binder, confirmation or signature failed, or a check before it did (a
+    /// dialing side reports every refusal of a Reply or resume Reply this way, since nothing in one has authenticated
+    /// before the responder's signature or confirmation). The message is dropped and the state is unchanged, so the
+    /// peer's resend can still complete the handshake.
     Authentication,
     /// The peer's signature does not verify.
     BadSignature,
-    /// The responder is not the node that was dialed.
+    /// The responder is not the node that was dialed. A dialing side does not end on it: such a Reply has not
+    /// authenticated as the dialed node, so it is dropped as [`Failure::Authentication`].
     WrongPeer,
     /// The host failed or refused a key operation.
     KeyOperation,

@@ -207,6 +207,10 @@ name = "transport_rules"
 path = "transport_rules.rs"
 
 [[test]]
+name = "transport_forged"
+path = "transport_forged.rs"
+
+[[test]]
 name = "membership_codec"
 path = "membership_codec.rs"
 

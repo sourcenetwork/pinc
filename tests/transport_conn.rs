@@ -495,18 +495,6 @@ fn rejected_resumption_falls_back_and_sends_early_data_again() {
     });
 }
 
-/// A full handshake that also collects the resumption tickets.
-fn first_session(w: &mut World) -> vinc_security::ClientTickets<8> {
-    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let mut net = setup(w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
-    assert!(net.connect(net.now + 10 * SEC));
-    assert!(
-        net.run(net.now + 5 * SEC, |n| !n.a.tickets.is_empty()),
-        "no tickets arrived"
-    );
-    std::mem::take(&mut net.a.tickets)
-}
-
 #[test]
 fn short_initial_hit_and_miss() {
     big_stack(|| {

@@ -245,7 +245,7 @@ fn a_forged_late_reply_changes_nothing() {
             drbg: &mut h.w.i_drbg,
         };
         let err = h.i.handle(&mut env, &forged).unwrap_err();
-        assert_eq!(err, Failure::UnexpectedMessage, "dropped, not fatal");
+        assert_eq!(err, Failure::Authentication, "dropped, not fatal");
         assert!(drain_i(&mut h.i).1.is_empty());
         // The full handshake goes on: the real late reply still works afterwards.
         h.i.handle(&mut env, &h.reply).unwrap();

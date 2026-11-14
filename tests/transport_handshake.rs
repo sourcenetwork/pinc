@@ -247,18 +247,6 @@ fn a_link_return_resends_a_pending_handshake_at_once() {
     });
 }
 
-/// A full session that leaves the client with a resumption ticket.
-fn first_session(w: &mut World) -> vinc_security::ClientTickets<8> {
-    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-    let mut net = setup(w, &mut sa, &mut sb, Link::new(4, Params::new(10 * MS)));
-    assert!(net.connect(net.now + 10 * SEC));
-    assert!(
-        net.run(net.now + 5 * SEC, |n| !n.a.tickets.is_empty()),
-        "no tickets arrived"
-    );
-    std::mem::take(&mut net.a.tickets)
-}
-
 #[test]
 fn a_lost_resume_reply_is_sent_again_when_the_hello_is() {
     big_stack(|| {

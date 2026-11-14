@@ -187,6 +187,8 @@ pub struct Stats {
     pub duplicates: u64,
     /// Received packets that did not authenticate.
     pub undecryptable: u64,
+    /// Handshake messages dropped because they did not authenticate (forged or damaged): the handshake goes on.
+    pub handshake_dropped: u64,
     /// Packets kept because they arrived before the handshake gave the keys to open them (0-RTT packets ahead of
     /// the Hello, 1-RTT packets ahead of the message that establishes the session).
     pub early_buffered: u64,
