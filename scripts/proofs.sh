@@ -467,8 +467,14 @@ par run_tlc cid Cid Cid
 par witness_tlc cid_stale Cid Cid_stale Lookahead
 par run_tlc cid_coll Cid Cid_coll
 par witness_tlc cid_dupid Cid Cid_dupid IdsOnce
-par witness_tlc cid_collevict Cid Cid_collevict Lookahead
-par witness_tlc cid_collwin Cid Cid_collwin WindowAccepted
+par run_tlc cid_collevict Cid Cid_collevict
+par run_tlc cid_collwin Cid Cid_collwin
+par run_tlc cid_collmany Cid Cid_collmany
+par witness_tlc cid_skipevict Cid Cid_skipevict Lookahead
+par witness_tlc cid_skipwin Cid Cid_skipwin WindowAccepted
+par witness_tlc cid_overstate Cid Cid_overstate TrueWindow
+par witness_tlc cid_overlate Cid Cid_overlate TrueWindow
+par witness_tlc cid_firstlag Cid Cid_firstlag TrueWindow
 par witness_tlc cid_slots Cid Cid_slots Lookahead
 par witness_tlc cid_reuse Cid Cid_reuse IssuedOnce
 par run_tlc cc Cc Cc

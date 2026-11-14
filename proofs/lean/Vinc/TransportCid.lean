@@ -4,8 +4,11 @@
 A model of `vinc-transport` `conn/cid.rs` (`Cids`), operation for operation as `proofs/tla/CidOps.tla` has them,
 over unbounded indices. A connection id is known by its derived index (the code derives it from the session secret
 and the index; index 0 is the id the handshake carried and is not in the table). The slots are a function from
-the slot number to the entry; slots from `slots` up are empty. `Vinc.TraceCid` replays the recorded calls of the
-real code through these functions; the theorems are in `Vinc.TransportCidThm`.
+the slot number to the entry; slots from `slots` up are empty. Here every index has an id of its own;
+`Vinc.TransportCidCode` has the code's calls with any derived ids (an entry then stands for every index that derives
+its id, with the newest of them as its index) and shows they are these functions when no two indices share an id.
+`Vinc.TraceCid` replays the recorded calls of the real code through the code's calls; the theorems are in
+`Vinc.TransportCidThm`.
 
 The eviction rule is the one of the code now: an entry at least `look` below the highest index seen may make room,
 used by a packet or not, and the entries from there up are never evicted. The earliest rule (`seen` only) lost the
