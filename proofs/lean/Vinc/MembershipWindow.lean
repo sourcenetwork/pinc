@@ -4,14 +4,15 @@ import Vinc.MembershipInvTab
 import Vinc.MembershipCompleteDelta
 
 /-!
-# Completeness, view side: a removal that a quiet window deferred is applied at the second tick
+# Completeness, view side: a removal that a quiet window deferred is applied on its own schedule
 
-`recheck_now` removes a deferred member when no eligible hub copy lists it, no hold stands and the quiet window is
-over (`recheckNow_removes`). With the two-step schedule of the tick (the first tick after the window arms a grace of
-`RECHECK_GAP`, the next tick after the grace runs `recheck_now`), a DOWN delta that the window deferred is applied at
-the second tick (`deferred_removal`). `down_then_gone` joins this to the delta itself: after a DOWN delta from the
-only hub that lists the member, the member is out of the view at once or out after those two ticks.
-`awareness_budget` adds up the times of the whole chain.
+A removal a quiet window defers waits under its own entry: the instant it is due (the end of the window then open) and
+whether its extra look has begun (#284). `recheck_due` gives it the look at the first tick at or after that instant and
+recomputes it at the first tick after the look, with no window open (`recheckDue_removes`): a member that no eligible
+copy lists, with no hold, is out of the view, whatever window a heal has opened since. `deferred_removal` is the two
+ticks together; `down_then_gone` joins them to the DOWN delta itself: after a DOWN delta from the only hub that lists the
+member, the member is out of the view at once or waits under its own entry, and `down_then_gone_ticks` is out of the
+view at the second tick after the window's end. `awareness_budget` adds up the times of the whole chain.
 -/
 
 set_option linter.unusedVariables false
@@ -36,24 +37,13 @@ theorem recomputeOne_gone (e : Env) (n : N) (now m : Nat)
     rw [AMap.has_iff_get, hg]
     rfl
 
-theorem keys_mem_of_has (s : ASet) (m : Nat) (h : s.has m = true) : m ∈ s.keys := by
-  rw [ASet.has, AMap.has_iff_get] at h
-  cases hg : AMap.get? s m with
-  | none => rw [hg] at h; simp at h
-  | some u =>
-    have := AMap.mem_of_get? s m u hg
-    exact List.mem_map_of_mem (f := Prod.fst) this
-
-/-- `recheck_now` removes a deferred member that no eligible copy lists, when the window is over and nothing holds
-removals. -/
-theorem recheckNow_removes (e : Env) (n : N) (now m : Nat) (hm : n.recheck.has m = true)
+/-- The recompute loop of `recheck_due` removes a member it reaches when no eligible copy lists it, nothing holds
+removals and no quiet window is open. -/
+theorem recheckFold_removes (e : Env) (n : N) (now m : Nat) (ks : List Nat) (hm : m ∈ ks)
     (hc : (n.candidates now (n.source now) m).1 = none) (hold : (n.source now).hold = false)
-    (hq : ¬ now < n.quietUntil) : (N.recheckNow e n now).members.has m = false := by
-  have hkb : Keeps n ({ n with recheck := [] } : N) := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-  unfold N.recheckNow
-  dsimp only
-  have key : ∀ (ks : List Nat) (a : N × Bool), Keeps ({ n with recheck := [] } : N) a.1 →
-      (m ∈ ks ∨ a.1.members.has m = false) →
+    (hq : ¬ now < n.quietUntil) : (N.recheckFold e n now ks).1.members.has m = false := by
+  unfold N.recheckFold
+  have key : ∀ (ks : List Nat) (a : N × Bool), Keeps n a.1 → (m ∈ ks ∨ a.1.members.has m = false) →
       (ks.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) a).1.members.has m = false := by
     intro ks
     induction ks with
@@ -69,10 +59,9 @@ theorem recheckNow_removes (e : Env) (n : N) (now m : Nat) (hm : n.recheck.has m
       by_cases hk : k = m
       · subst hk
         right
-        have hk2 := Keeps.trans hkb h1
-        have hc' : (a.1.candidates now (a.1.source now) k).1 = none := by rw [hk2.candidates now k]; exact hc
-        have hh' : (a.1.source now).hold = false := by rw [hk2.source now]; exact hold
-        have hq' : ¬ now < a.1.quietUntil := by rw [hk2.2.2.2.2.2.2.2.2.2.2.2]; exact hq
+        have hc' : (a.1.candidates now (a.1.source now) k).1 = none := by rw [h1.candidates now k]; exact hc
+        have hh' : (a.1.source now).hold = false := by rw [h1.source now]; exact hold
+        have hq' : ¬ now < a.1.quietUntil := by rw [h1.2.2.2.2.2.2.2.2.2.2.2]; exact hq
         exact recomputeOne_gone e a.1 now k hc' hh' hq'
       · rcases h2 with h | h
         · rcases List.mem_cons.mp h with h | h
@@ -82,64 +71,101 @@ theorem recheckNow_removes (e : Env) (n : N) (now m : Nat) (hm : n.recheck.has m
           have := (recomputeOne_keeps2 e a.1 now k).2 m (Ne.symm hk)
           rw [AMap.has_iff_get] at h ⊢
           rw [this]; exact h
-  have := key n.recheck.keys ({ n with recheck := [] }, false) (Keeps.refl _) (Or.inl (keys_mem_of_has _ _ hm))
-  generalize (n.recheck.keys.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) ({ n with recheck := [] }, false)) = F at this ⊢
-  obtain ⟨f1, f2⟩ := F
-  by_cases h : f2 = true <;> simp [h, bump_members] at this ⊢ <;> exact this
+  exact key ks (n, false) (Keeps.refl n) (Or.inl hm)
 
-/-- **A deferred removal is applied at the second tick.** A node with deferred removals, whose quiet window is over at
-`t1` and that has not yet armed its grace, applies them at the next tick at or after `t1 + RECHECK_GAP`: a member
-that no eligible copy lists then, with no hold, is out of the view. -/
-theorem deferred_removal (e : Env) (n : N) (t1 t2 m : Nat) (hne : n.recheck.isEmpty = false) (hq : n.quietUntil ≤ t1)
-    (hr : n.regrace = false) (hdue : satAdd t1 RECHECK_GAP ≤ t2) (hm : n.recheck.has m = true)
+/-- The recompute of `recheck_due` takes the window for the loop: a member it runs that no eligible copy lists, with
+no hold, is out of the view whatever window is open. -/
+theorem recheckRun_removes (e : Env) (n : N) (now m : Nat) (ks : List Nat) (hm : m ∈ ks)
+    (hc : (n.candidates now (n.source now) m).1 = none) (hold : (n.source now).hold = false) :
+    (N.recheckRun e n now ks).members.has m = false := by
+  have h0 : SrcEq n ({ n with quietUntil := 0 } : N) := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  have h := recheckFold_removes e ({ n with quietUntil := 0 } : N) now m ks hm (by rw [h0.candidates now m]; exact hc)
+    (by rw [h0.source now]; exact hold) (Nat.not_lt_zero now)
+  unfold N.recheckRun
+  dsimp only
+  split
+  · rw [bump_members]; exact h
+  · exact h
+
+/-- **A removal whose extra look ran is applied at its own instant, whatever window is open** (#284). A member waiting
+under `(d, true)` with `d ≤ now`, that no eligible copy lists, with no hold on removals, is out of the view after
+`recheck_due` at `now`: nothing is asked of the quiet window, since the recompute runs with none open. -/
+theorem recheckDue_removes (e : Env) (n : N) (now m d : Nat) (hw : n.recheck.get? m = some (d, true)) (hd : d ≤ now)
+    (hc : (n.candidates now (n.source now) m).1 = none) (hold : (n.source now).hold = false) :
+    (N.recheckDue e n now).members.has m = false := by
+  have hr : recheckReady now (m, (d, true)) = true := by simp [recheckReady, hd]
+  have hm : m ∈ AMap.keys (n.recheck.filter (recheckReady now)) :=
+    AMap.key_mem_of_get? _ _ _ (AMap.get?_filter_of _ _ _ _ hw hr)
+  have hne : (AMap.keys (n.recheck.filter (recheckReady now))).isEmpty = false := by
+    cases hk : AMap.keys (n.recheck.filter (recheckReady now)) with
+    | nil => rw [hk] at hm; cases hm
+    | cons a l => rfl
+  have hs := recheckArm_srcEq n now
+  rw [recheckDue_eq, hne, if_neg Bool.false_ne_true]
+  exact recheckRun_removes e ({ N.recheckArm n now with regrace := false } : N) now m _ hm (by rw [hs.candidates now m]; exact hc)
+    (by rw [hs.source now]; exact hold)
+
+/-- **A deferred removal is applied at the second tick after its own instant.** A member waiting under `(d, false)`
+(its extra look not begun) gets the look at the first tick `t1 ≥ d` and is out of the view at the next tick
+`t2 ≥ t1 + RECHECK_GAP`, when no eligible copy lists it then and nothing holds removals. Neither tick asks anything of
+the quiet window, so a heal between the deferral and the removal changes nothing (#284); only a late timer moves the
+instant (`beginQuiet_late`). -/
+theorem deferred_removal (e : Env) (n : N) (t1 t2 m d : Nat) (hw : n.recheck.get? m = some (d, false)) (hd : d ≤ t1)
+    (hdue : satAdd t1 RECHECK_GAP ≤ t2)
     (hc : (n.candidates t2 (n.source t2) m).1 = none) (hold : (n.source t2).hold = false) :
-    (N.tickRecheck e (N.tickRecheck e n t1) t2).members.has m = false := by
-  rw [(quiet_schedule e n t1 t2 hne hq hr).2 hdue]
-  have hsrc : ({ n with regrace := false, quietUntil := satAdd t1 RECHECK_GAP } : N).source t2 = n.source t2 := by
-    dsimp only [N.source, N.hubUp]
-  have hcc : ({ n with regrace := false, quietUntil := satAdd t1 RECHECK_GAP } : N).candidates t2
-      (({ n with regrace := false, quietUntil := satAdd t1 RECHECK_GAP } : N).source t2) m =
-      n.candidates t2 (n.source t2) m := by
-    rw [hsrc]; exact candidates_congr n _ t2 _ m rfl (fun h => by dsimp only [N.hubUp])
-  refine recheckNow_removes e _ t2 m hm ?_ ?_ ?_
-  · rw [hcc]; exact hc
-  · rw [hsrc]; exact hold
-  · exact Nat.not_lt.mpr hdue
-
-theorem recheck_ne_empty (n : N) (m : Nat) (h : n.recheck.has m = true) : n.recheck.isEmpty = false := by
-  cases hl : n.recheck with
-  | nil => rw [ASet.has, AMap.has_iff_get, hl] at h; simp [AMap.get?] at h
-  | cons x r => simp
+    (N.recheckDue e (N.recheckDue e n t1) t2).members.has m = false := by
+  obtain ⟨h1, -⟩ := recheckDue_arms e n t1 m d hw hd
+  have hs := recheckDue_srcEq e n t1
+  exact recheckDue_removes e _ t2 m _ h1 hdue (by rw [hs.candidates t2 m]; exact hc) (by rw [hs.source t2]; exact hold)
 
 /-- **A DOWN delta takes the member out of the view.** The hub whose copy is the only one listing the member sends
-DOWN: the node applying it removes the member at once, or, when a quiet window defers the removal, the member is in the
-recheck set and is out of the view at the second tick (`deferred_removal`), provided that at that tick no eligible copy
-lists it and nothing holds removals. -/
+DOWN: the node applying it removes the member at once, or, when a quiet window defers the removal, the member waits
+under its own entry: the one it already had, or the end of the window then open with the window's grace state. From
+there `deferred_removal` and `recheckDue_removes` take it out of the view at its own instant. -/
 theorem down_then_gone (e : Env) (n : N) (now H m : Nat) (rc : Rec) (c : HubCopy) (hrev : n.revoked.has m = false)
     (hs : Srt n.hv) (hH : n.hv.get? H = some c)
     (hent : ∀ x, c.entries.get? m = some x → x.rc.inc / 65536 ≤ rc.inc / 65536)
     (hothers : ∀ p ∈ n.hv, p.1 ≠ H → n.eligible now (n.source now) p.1 = true → p.2.entries.get? m = none)
-    (hhold : (n.source now).hold = false) (c0 : ViewEntry) (hcur : n.members.get? m = some c0) (t1 t2 : Nat)
-    (hq1 : (N.applyDeltaCore e n now H m rc .down).quietUntil ≤ t1)
-    (hr1 : (N.applyDeltaCore e n now H m rc .down).regrace = false) (hdue : satAdd t1 RECHECK_GAP ≤ t2)
-    (hc : ((N.applyDeltaCore e n now H m rc .down).candidates t2 ((N.applyDeltaCore e n now H m rc .down).source t2) m).1 = none)
-    (hold : ((N.applyDeltaCore e n now H m rc .down).source t2).hold = false) :
+    (hhold : (n.source now).hold = false) (c0 : ViewEntry) (hcur : n.members.get? m = some c0) :
     (N.applyDeltaCore e n now H m rc .down).members.get? m = none ∨
-    (N.tickRecheck e (N.tickRecheck e (N.applyDeltaCore e n now H m rc .down) t1) t2).members.has m = false := by
+    (N.applyDeltaCore e n now H m rc .down).recheck.get? m = some ((n.recheck.get? m).getD (n.quietUntil, n.regrace)) := by
   by_cases hq : now < n.quietUntil ∧ n.recheck.len < MAX_TABLE
   · right
     obtain ⟨-, hrc⟩ := applyDeltaCore_down_defers e n now H m rc c hrev hs hH hent hothers hhold hq c0 hcur
-    have hm : (N.applyDeltaCore e n now H m rc .down).recheck.has m = true := by
-      rw [hrc]; exact AMap.has_insert_self _ _ _
-    exact deferred_removal e _ t1 t2 m (recheck_ne_empty _ m hm) hq1 hr1 hdue hm hc hold
+    rw [hrc]
+    exact AMap.get?_orIns_self _ _ _
   · left
     exact applyDeltaCore_down_removes e n now H m rc c hrev hs hH hent hothers hhold hq
 
+/-- `down_then_gone` and `deferred_removal` together: a DOWN delta that a window defers, for a member not waiting
+already, found while the window's extra look has not begun, takes the member out of the view at the second tick after
+the window's end. -/
+theorem down_then_gone_ticks (e : Env) (n : N) (now H m : Nat) (rc : Rec) (c : HubCopy) (hrev : n.revoked.has m = false)
+    (hs : Srt n.hv) (hH : n.hv.get? H = some c)
+    (hent : ∀ x, c.entries.get? m = some x → x.rc.inc / 65536 ≤ rc.inc / 65536)
+    (hothers : ∀ p ∈ n.hv, p.1 ≠ H → n.eligible now (n.source now) p.1 = true → p.2.entries.get? m = none)
+    (hhold : (n.source now).hold = false) (c0 : ViewEntry) (hcur : n.members.get? m = some c0)
+    (hnew : n.recheck.get? m = none) (hr0 : n.regrace = false) (t1 t2 : Nat) (hq1 : n.quietUntil ≤ t1)
+    (hdue : satAdd t1 RECHECK_GAP ≤ t2)
+    (hc : ((N.applyDeltaCore e n now H m rc .down).candidates t2 ((N.applyDeltaCore e n now H m rc .down).source t2) m).1 = none)
+    (hold : ((N.applyDeltaCore e n now H m rc .down).source t2).hold = false) :
+    (N.applyDeltaCore e n now H m rc .down).members.get? m = none ∨
+    (N.recheckDue e (N.recheckDue e (N.applyDeltaCore e n now H m rc .down) t1) t2).members.has m = false := by
+  rcases down_then_gone e n now H m rc c hrev hs hH hent hothers hhold c0 hcur with h | h
+  · exact Or.inl h
+  · right
+    rw [hnew, hr0] at h
+    exact deferred_removal e _ t1 t2 m _ h hq1 hdue hc hold
+
 /-- The time budget of the awareness bound: the hub drops the lease at its first tick after `t0 + LEASE` (within
-`HUB_TICK`), the DOWN reaches the node within `D`, the quiet window lasts at most `QUIET`, and the node's ticks come
-every `NODE_TICK`: the member is out of the view by `t0 + 145 s` when `D` is at most 48 s. Over any run of the host's
-calls, `hub_lease_gone` (`MembershipTimer.lean`) gives `h1` and `h1'` with `HUB_TICK + σ` for the host's slack `σ`
-(`σ = 0` here); `hq` holds only when no quiet window opens at the node after the DOWN arrives (`heal_postpones`). -/
+`HUB_TICK`), the DOWN reaches the node within `D`, the removal waits for its own instant `q`, the end of the quiet
+window open when the DOWN arrived, at most `QUIET` after it (`beginQuiet_window`; a window's extra look lasts
+`RECHECK_GAP`, less), and the node's ticks come every `NODE_TICK`: the member is out of the view by `t0 + 145 s` when
+`D` is at most 48 s. Over any run of the host's calls, `hub_lease_gone` (`MembershipTimer.lean`) gives `h1` and `h1'`
+with `HUB_TICK + σ` for the host's slack `σ` (`σ = 0` here). No heal moves `q` (`beginQuiet_heal`,
+`heal_keeps_waiting`, #284) and the removal at `t2` holds whatever window a heal opened (`recheckDue_removes`); a late
+tick at the node does move it (`late_tick_reopens`, the reference model's rule), so `hq` asks that the node's host is not
+later than `WAKE_GAP` at a tick between the DOWN and the removal. -/
 theorem awareness_budget (t0 tau1 taud q t1 t2 D : Nat) (h1 : t0 + LEASE < tau1) (h1' : tau1 ≤ t0 + LEASE + HUB_TICK)
     (hd : taud ≤ tau1 + D) (hD : D ≤ 48 * S) (hq : q ≤ taud + QUIET) (ht1 : t1 ≤ max taud q + NODE_TICK)
     (ht2 : t2 ≤ t1 + RECHECK_GAP + NODE_TICK) : t2 ≤ t0 + 145 * S := by

@@ -417,6 +417,9 @@ par run_tlc sys_live_stale MembershipSys MembershipSys_live_stale
 par witness_tlc sys_live_w_stale MembershipSys MembershipSys_live_w_stale LiveCompleteAll
 par run_tlc sys_conv MembershipConv MembershipConv
 par witness_tlc sys_w_finished MembershipSys MembershipSys_w_finished NeverFinished
+par run_tlc sys_healwait MembershipSys MembershipSys_healwait
+par witness_tlc sys_w_healwait MembershipSys MembershipSys_w_healwait WaitKept
+par witness_tlc sys_w_healseen MembershipSys MembershipSys_w_healseen NeverHealWait
 par run_tlc_deep nanos NanosCheck NanosCheck
 par run_tlc incarnation Incarnation Incarnation
 par run_tlc incarnation_pers Incarnation Incarnation_pers

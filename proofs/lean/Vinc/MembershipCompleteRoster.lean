@@ -6,14 +6,14 @@ import Vinc.MembershipHubRevoke
 
 The hub's lease table (`roster`) is changed in `on_timeout` only by `hub_tick` (the pulse refresh, the expiry and the
 carrier watch of the first loop, the restore of the second), by `carrier_watch` from the confirmation deadline, and by
-nothing else: every other part of the call (`pulse_refresh`, `refresh_local`, `renew`, `recheck_now`, `slow_tick`
+nothing else: every other part of the call (`pulse_refresh`, `refresh_local`, `renew`, `recheck_due`, `slow_tick`
 with its `drop_peer`, `reselect`, `drop_stale_hubs`, `sweep_absent`, `sample_session_rtts`) leaves it as it is. This file
 proves that, so that the timeline theorems can follow one lease through a whole call.
 
 * `Held t0 m n`: the roster has no lease for `m`, or one renewed at `t0` or earlier.
 * `Silent t0 e m`: the host shows no evidence of `m` after `t0` and `m`'s carrier is not open.
 * `Other k n n'`: the rosters of `n` and `n'` agree at every key but `k`. The calls that leave the roster as it is are
-  `pulseRefresh_roster`, `refreshLocal_roster`, `renew_roster`, `recheckNow_roster`, `reselect_roster`, `dropPeer_roster`
+  `pulseRefresh_roster`, `refreshLocal_roster`, `renew_roster`, `recheckDue_roster`, `reselect_roster`, `dropPeer_roster`
   and the other `*_roster` lemmas below; `onTimeout_held` (in `MembershipCompleteTimeout`) puts them together: a call
   of `on_timeout` keeps `Held` under `Silent`.
 -/
@@ -141,14 +141,25 @@ theorem renew_roster (e : Env) (n : N) (now : Nat) (fs p : Bool) : (N.renew e n 
     foldl_inv (fun (x : N) => x.roster = (rnPush e (rnPre n p).1 now).roster) _ _ _ (fun b a hb => by rw [rnStep_roster]; exact hb) rfl
   exact e3.trans ((rnPush_roster e _ now).trans e1)
 
-theorem recheckNow_roster (e : Env) (n : N) (now : Nat) : (N.recheckNow e n now).roster = n.roster := by
-  unfold N.recheckNow
+theorem recheckFold_roster (e : Env) (n : N) (now : Nat) (ks : List Nat) :
+    (N.recheckFold e n now ks).1.roster = n.roster := by
+  unfold N.recheckFold
+  exact foldl_inv (fun x : N × Bool => x.1.roster = n.roster) _ _ _ (fun b a hb => by
+    simp only [recomputeOne_roster]; exact hb) rfl
+
+theorem recheckRun_roster (e : Env) (n : N) (now : Nat) (ks : List Nat) : (N.recheckRun e n now ks).roster = n.roster := by
+  have hf := recheckFold_roster e { n with quietUntil := 0 } now ks
+  unfold N.recheckRun
   dsimp only
   split
-  · simp
-    exact foldl_inv (fun x : N × Bool => x.1.roster = n.roster) _ _ _ (fun b a hb => by
-      simp only [recomputeOne_roster]; exact hb) rfl
-  · exact foldl_inv (fun x : N × Bool => x.1.roster = n.roster) _ _ _ (fun b a hb => by
-      simp only [recomputeOne_roster]; exact hb) rfl
+  · rw [bump_roster]; exact hf
+  · exact hf
+
+theorem recheckDue_roster (e : Env) (n : N) (now : Nat) : (N.recheckDue e n now).roster = n.roster := by
+  have ha : (N.recheckArm n now).roster = n.roster := by unfold N.recheckArm; dsimp only; split <;> rfl
+  rw [recheckDue_eq]
+  split
+  · exact ha
+  · exact (recheckRun_roster e ({ N.recheckArm n now with regrace := false } : N) now _).trans ha
 
 end Vinc.Membership.Cmp

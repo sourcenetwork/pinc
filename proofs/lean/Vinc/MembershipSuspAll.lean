@@ -128,9 +128,25 @@ macro "su_tac" : tactic => `(tactic| first | (simp; done) | (repeat' split; all_
 macro "su_fold" : tactic => `(tactic| (apply foldl_su; intro b a; repeat' split; all_goals simp))
 macro "su_all" : tactic => `(tactic| simp (disch := (intro b a; repeat' split; all_goals simp)) [foldl_su])
 
-@[simp] theorem recheckNow_susp (e : Env) (n : N) (now : Nat) : (N.recheckNow e n now).susp = n.susp := by
-  unfold N.recheckNow
-  su_tac
+theorem recheckFold_susp (e : Env) (n : N) (now : Nat) (ks : List Nat) : (N.recheckFold e n now ks).1.susp = n.susp := by
+  unfold N.recheckFold
+  exact foldl_inv (fun x : N × Bool => x.1.susp = n.susp) _ _ _ (fun b a hb => by
+    simp only [recomputeOne_susp]; exact hb) rfl
+
+theorem recheckRun_susp (e : Env) (n : N) (now : Nat) (ks : List Nat) : (N.recheckRun e n now ks).susp = n.susp := by
+  have hf := recheckFold_susp e { n with quietUntil := 0 } now ks
+  unfold N.recheckRun
+  dsimp only
+  split
+  · rw [bump_susp]; exact hf
+  · exact hf
+
+@[simp] theorem recheckDue_susp (e : Env) (n : N) (now : Nat) : (N.recheckDue e n now).susp = n.susp := by
+  have ha : (N.recheckArm n now).susp = n.susp := by unfold N.recheckArm; dsimp only; split <;> rfl
+  rw [recheckDue_eq]
+  split
+  · exact ha
+  · exact (recheckRun_susp e ({ N.recheckArm n now with regrace := false } : N) now _).trans ha
 
 @[simp] theorem reselect_susp (e : Env) (n : N) (now : Nat) : (N.reselect e n now).susp = n.susp := by
   unfold N.reselect
@@ -311,7 +327,7 @@ theorem forKeys_so (ks : List Nat) (f : Nat → N → N) (h : ∀ k b, b.SuspOk 
 
 /-- `tick` up to the last step, which is the only one that can touch the suspicion table. -/
 def N.tickMid (e : Env) (n : N) (now : Nat) : N :=
-  let n := N.tickRecheck e n now
+  let n := N.recheckDue e n now
   let n := if n.sent != some (n.ver, n.th) then N.renew e n now false false else n
   if n.isHub || n.nextSlow ≤ now then
     N.slowTick e (if !n.isHub then { n with nextSlow := satAdd now SLOW_TICK } else n) now
@@ -320,15 +336,10 @@ def N.tickMid (e : Env) (n : N) (now : Nat) : N :=
 theorem tick_eq' (e : Env) (n : N) (now : Nat) :
     N.tick e n now = (let n := N.tickMid e n now; if n.isHub then N.hubTick e n now else n) := rfl
 
-theorem tickRecheck_susp (e : Env) (n : N) (now : Nat) : (N.tickRecheck e n now).susp = n.susp := by
-  unfold N.tickRecheck
-  repeat' split
-  all_goals simp
-
 theorem tickMid_susp (e : Env) (n : N) (now : Nat) : (N.tickMid e n now).susp = n.susp := by
   unfold N.tickMid
-  have h := tickRecheck_susp e n now
-  generalize N.tickRecheck e n now = n1 at h ⊢
+  have h := recheckDue_susp e n now
+  generalize N.recheckDue e n now = n1 at h ⊢
   repeat' split
   all_goals simp [h]
 

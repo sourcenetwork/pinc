@@ -89,6 +89,9 @@ def insert : AMap α → Nat → α → AMap α
 
 def erase (m : AMap α) (k : Nat) : AMap α := m.filter (fun p => p.1 != k)
 
+/-- `entry(k).or_insert(v)`: a key already present keeps its value. -/
+def orIns (m : AMap α) (k : Nat) (v : α) : AMap α := if m.has k then m else m.insert k v
+
 /-- Update the value at `k`, if present. -/
 def modify (m : AMap α) (k : Nat) (f : α → α) : AMap α := m.map (fun p => if p.1 == k then (p.1, f p.2) else p)
 
@@ -292,8 +295,11 @@ structure N where
   primary : Option Nat
   homeOk : Option Nat
   homeSeen : Bool
-  recheck : ASet
+  /-- The members whose removal a quiet window deferred, each with the instant it is re-checked and whether its
+  extra look has begun. -/
+  recheck : AMap (Nat × Bool)
   quietUntil : Nat
+  /-- Whether the extra look of the current window has begun: a removal found during it is due when it ends. -/
   regrace : Bool
   goneVer : AMap (Nat × List Nat)
   left : ASet
@@ -358,9 +364,13 @@ def N.tx (e : Env) (n : N) (peer : Nat) (route : Route) (f : NFrame) : N × Bool
 def N.deltaTo (e : Env) (n : N) (peer m : Nat) (rc : Rec) (a : Alive) : N :=
   (N.tx e n peer .session (.delta m rc a)).1
 
-/-- `begin_quiet`. -/
+/-- `begin_quiet`: open a quiet window of `QUIET` from `now`. A late timer (`cause = 0`) also defers every waiting
+removal to the window's end, its extra look not begun; a heal (`cause = 1`) leaves each at its own instant and grace
+state (#284). -/
 def N.beginQuiet (n : N) (now cause : Nat) : N :=
-  ({ n with quietUntil := satAdd now QUIET, regrace := false }).trace (.quiet cause)
+  ({ n with quietUntil := satAdd now QUIET, regrace := false,
+             recheck := if cause == 0 then n.recheck.map (fun (p : Nat × (Nat × Bool)) => (p.1, (satAdd now QUIET, false))) else n.recheck }).trace
+    (.quiet cause)
 
 /-- Visit the keys in increasing order (a cursor loop of the code). -/
 def forKeys (ks : List Nat) (f : Nat → N → N) (n : N) : N := ks.foldl (fun n k => f k n) n

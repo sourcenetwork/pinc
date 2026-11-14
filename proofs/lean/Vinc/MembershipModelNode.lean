@@ -105,10 +105,7 @@ def N.slowTick (e : Env) (n : N) (now : Nat) : N :=
 
 /-- `tick`. -/
 def N.tick (e : Env) (n : N) (now : Nat) : N :=
-  let n := if !n.recheck.isEmpty && n.quietUntil ≤ now then
-      (if n.regrace then N.recheckNow e { n with regrace := false } now
-       else { n with regrace := true, quietUntil := satAdd now RECHECK_GAP })
-    else n
+  let n := N.recheckDue e n now
   let n := if n.sent != some (n.ver, n.th) then N.renew e n now false false else n
   let n := if n.isHub || n.nextSlow ≤ now then
       N.slowTick e (if !n.isHub then { n with nextSlow := satAdd now SLOW_TICK } else n) now
@@ -225,7 +222,7 @@ def N.revoke (e : Env) (n : N) (now member : Nat) : Option N :=
   else
     let n := { n with revoked := n.revoked.ins member }
     let n := { n with hv := n.hv.map (fun (p : Nat × HubCopy) => (p.1, { p.2 with entries := p.2.entries.erase member })) }
-    let n := { n with recheck := n.recheck.del member, left := n.left.del member, susp := n.susp.erase member,
+    let n := { n with recheck := n.recheck.erase member, left := n.left.del member, susp := n.susp.erase member,
                       downed := n.downed.erase member, attached := n.attached.del member, homed := n.homed.del member }
     let n := match n.members.get? member with
       | some x =>

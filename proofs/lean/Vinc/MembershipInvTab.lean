@@ -203,6 +203,24 @@ theorem filter (h : Bnd m) (f : Nat × α → Bool) : Bnd (m.filter f) := by
   have h1 := h.1
   unfold AMap.keys at h1 ⊢
   exact List.Pairwise.sublist (List.Sublist.map _ List.filter_sublist) h1
+
+/-- `entry(k).or_insert(v)` behind the guard of an insert. -/
+theorem orIns (h : Bnd m) (k : Nat) (v : α) (g : m.length < MAX_TABLE ∨ m.has k = true) : Bnd (m.orIns k v) := by
+  unfold AMap.orIns
+  split
+  · exact h
+  · exact h.insert k v g
+
+/-- A table whose values change and whose keys stay. -/
+theorem map_keys {β : Type} (h : Bnd m) (f : Nat × α → Nat × β) (hf : ∀ p, (f p).1 = p.1) : Bnd (m.map f) := by
+  have hk : AMap.keys (m.map f) = AMap.keys m := by
+    unfold AMap.keys
+    rw [List.map_map]
+    apply List.map_congr_left
+    intro p _
+    simp only [Function.comp]
+    exact hf p
+  exact ⟨by rw [hk]; exact h.1, by rw [List.length_map]; exact h.2⟩
 end Bnd
 
 namespace KBnd

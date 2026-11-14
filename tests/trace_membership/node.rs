@@ -10,7 +10,8 @@
 //!
 //! The runs are the scenarios of the design: attachment and PULSE, churn, loss, partitions and heals, slow members,
 //! carrier drops with probes on every path, DOWN with every refusal, carrier returns, leave, revocation, crash and
-//! restart on a persistent counter and on the clock, suspension, the primary switch, a home switch to a hub that never
+//! restart on a persistent counter and on the clock, suspension, a heal and a late timer while a removal waits (#284),
+//! the primary switch, a home switch to a hub that never
 //! heard of a member that then crashes (#343), the address move, snapshots of several frames, and malformed input.
 //! Every scenario asserts what the real code did, so the test is meaningful without the proof tools.
 
@@ -589,6 +590,79 @@ fn suspension(c: &mut Ctx) {
     w.run(30 * SEC);
 }
 
+/// #284: a heal while a removal waits. Member 3 of a three-hub world is homed on hub 3 and has hubs 1 and 2 cut for a
+/// minute, then hears hub 1 again (a heal); hub 3 revokes member 4 just after, so the removal waits for that window, and
+/// hub 2 is heard again 3 s later (a second heal): the removal keeps its own instant and its extra look.
+fn heal_while_waiting(c: &mut Ctx) {
+    let mut w = c.world(3, 3, START);
+    w.keepalive = 5 * SEC;
+    let (m, x) = (3, 4);
+    w.set_rtt(m, 0, 100 * MS);
+    w.set_rtt(m, 1, 100 * MS);
+    w.set_rtt(m, 2, 20 * MS);
+    w.attach_all();
+    w.run(5 * SEC);
+    assert_eq!(w.nodes[m].m.primary(), Some(&id(2)));
+    w.cut.insert((0, m));
+    w.cut.insert((1, m));
+    w.run(64 * SEC);
+    w.cut.remove(&(0, m));
+    assert!(w.run_until(20 * SEC, |w| traces(w, m, |t| matches!(t, Trace::Quiet { .. })) == 1));
+    let healed = w.now;
+    assert!(w.revoke(2, x));
+    w.run(3 * SEC);
+    w.cut.remove(&(1, m));
+    assert!(w.run_until(30 * SEC, |w| traces(w, m, |t| matches!(t, Trace::Quiet { .. })) == 2));
+    assert!(traces(&w, m, |t| matches!(t, Trace::Deferred { .. })) >= 1);
+    assert!(w.has(m, x), "the removal waits while the windows are open");
+    assert!(w.run_until(60 * SEC, |w| !w.has(m, x)));
+    let left = w
+        .first_event_time(m, |e| matches!(e, Event::MemberConfirmedDown { .. }))
+        .unwrap();
+    assert!(
+        left - healed <= 16 * SEC,
+        "the removal left {} ms after the first heal, not at the end of that window plus the extra look",
+        (left - healed) / MS
+    );
+    w.run(5 * SEC);
+}
+
+/// #284: a late timer while a removal waits defers it again to the new window's end (the reference model's rule).
+fn late_timer_while_waiting(c: &mut Ctx) {
+    let mut w = c.started(2, 3);
+    let (m, x) = (2, 3);
+    let hub = hub_of(&w, m);
+    w.jump(20 * SEC);
+    w.run(50 * MS);
+    assert!(w.revoke(hub, x));
+    w.run(8 * SEC);
+    assert!(w.has(m, x), "the removal waits for the window");
+    w.jump(20 * SEC);
+    w.run(50 * MS);
+    let second = w.now;
+    assert_eq!(
+        traces(&w, m, |t| matches!(
+            t,
+            Trace::Quiet {
+                cause: QuietCause::LateTimer
+            }
+        )),
+        2
+    );
+    w.run(9 * SEC);
+    assert!(w.has(m, x), "the second late timer deferred the waiting removal again");
+    assert!(w.run_until(20 * SEC, |w| !w.has(m, x)));
+    let left = w
+        .first_event_time(m, |e| matches!(e, Event::MemberConfirmedDown { .. }))
+        .unwrap();
+    assert!(
+        left - second >= 14 * SEC,
+        "left {} ms after the second late timer",
+        (left - second) / MS
+    );
+    w.run(5 * SEC);
+}
+
 /// The primary: the nearest hub, switching only past the hysteresis of 20 ms and a quarter, and when it goes down.
 fn primary_switch(c: &mut Ctx) {
     let mut w = c.world(3, 1, START);
@@ -852,6 +926,8 @@ pub fn run(tw: &mut TraceWriter) {
     restarts(&mut c);
     reincarnated(&mut c);
     suspension(&mut c);
+    heal_while_waiting(&mut c);
+    late_timer_while_waiting(&mut c);
     primary_switch(&mut c);
     stale_view(&mut c);
     address_move(&mut c);

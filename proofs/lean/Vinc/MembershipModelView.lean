@@ -4,7 +4,7 @@ import Vinc.MembershipModelTypes
 # The membership machine: the member view (`view.rs`)
 
 `refresh_local`, `hello_to`, `renew`, `reselect`, `apply_delta`, `apply_snap`, `mark_absent`, `sweep_absent`,
-`recompute_one`, `remove_from_view`, `recheck_now`, `home_delta`, step for step. `push_delta` (`hub.rs`) lives here too:
+`recompute_one`, `remove_from_view`, `recheck_due`, `home_delta`, step for step. `push_delta` (`hub.rs`) lives here too:
 it calls `apply_delta`, whose first test (`member == me`) is false for the hub's own deltas to itself only through
 `on_self_entry`'s first line (`hub == me` returns), so `pushDelta` uses `applyDeltaCore`, the code after that test,
 and `applyDelta` is the test followed by the same core: the recursion of the code (`renew` -> `push_delta` ->
@@ -87,9 +87,9 @@ def N.removeFromView (e : Env) (n : N) (now m : Nat) (cur : Option ViewEntry) (s
   | none => (n, false)
   | some c =>
     if src.hold then
-      ((if n.recheck.len < MAX_TABLE then { n with recheck := n.recheck.ins m } else n), false)
+      ((if n.recheck.len < MAX_TABLE then { n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace) } else n), false)
     else if now < n.quietUntil && n.recheck.len < MAX_TABLE then
-      ((({ n with recheck := n.recheck.ins m }).trace (.deferred m)), false)
+      ((({ n with recheck := n.recheck.orIns m (n.quietUntil, n.regrace) }).trace (.deferred m)), false)
     else
       let n := { n with members := n.members.erase m }
       let n := if n.goneVer.len < MAX_TABLE || n.goneVer.has m then
@@ -155,12 +155,39 @@ def N.bump (n : N) : N :=
   let n := { n with epoch := n.epoch + 1 }
   n.emit (.view n.epoch (min n.members.len U32MAX))
 
-/-- `recheck_now`: recompute the members whose removal a quiet window deferred. -/
-def N.recheckNow (e : Env) (n : N) (now : Nat) : N :=
-  let set := n.recheck
-  let n := { n with recheck := [] }
-  let (n, changed) := set.keys.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) (n, false)
-  if changed then n.bump else n
+/-- A waiting removal due at `now` whose extra look has run: it is recomputed. -/
+def recheckReady (now : Nat) (p : Nat × (Nat × Bool)) : Bool := decide (p.2.1 ≤ now) && p.2.2
+/-- A waiting removal due at `now` whose extra look has not begun: it gets the look. -/
+def recheckLook (now : Nat) (p : Nat × (Nat × Bool)) : Bool := decide (p.2.1 ≤ now) && !p.2.2
+/-- A waiting removal after the first loop of `recheck_due`. -/
+def recheckStep (now : Nat) (p : Nat × (Nat × Bool)) : Nat × (Nat × Bool) :=
+  if recheckLook now p then (p.1, (satAdd now RECHECK_GAP, true)) else p
+
+/-- The first part of `recheck_due`: the removals whose extra look ran leave the table, a due removal whose look has not
+begun gets it (`RECHECK_GAP` from now) and the window lasts at least as long. -/
+def N.recheckArm (n : N) (now : Nat) : N :=
+  let n' := { n with recheck := (n.recheck.filter (fun p => !recheckReady now p)).map (recheckStep now) }
+  if n.recheck.any (recheckLook now) then
+    { n' with regrace := true, quietUntil := max n.quietUntil (satAdd now RECHECK_GAP) }
+  else n'
+
+/-- Recompute the members `ks` in order; whether the view changed. -/
+def N.recheckFold (e : Env) (n : N) (now : Nat) (ks : List Nat) : N × Bool :=
+  ks.foldl (fun (a : N × Bool) m => let (n', c) := N.recomputeOne e a.1 now m; (n', a.2 || c)) (n, false)
+
+/-- The recompute of `recheck_due`: the members `ready`, in key order, with no window open (`quiet_until` is taken for
+the loop and put back after it), then one bump if the view changed. -/
+def N.recheckRun (e : Env) (n : N) (now : Nat) (ready : List Nat) : N :=
+  let r := N.recheckFold e { n with quietUntil := 0 } now ready
+  let n' := { r.1 with quietUntil := n.quietUntil }
+  if r.2 then n'.bump else n'
+
+/-- `recheck_due`: recompute the members whose deferral is due. A member gets one more look at the end of its window,
+then is recomputed without a further deferral, whatever window a heal has opened since (#284). -/
+def N.recheckDue (e : Env) (n : N) (now : Nat) : N :=
+  let ready := AMap.keys (n.recheck.filter (recheckReady now))
+  let n := N.recheckArm n now
+  if ready.isEmpty then n else N.recheckRun e { n with regrace := false } now ready
 
 /-- `apply_delta` after the test `member == me`. -/
 def N.applyDeltaCore (e : Env) (n : N) (now hub : Nat) (m : Nat) (rc : Rec) (a : Alive) : N :=

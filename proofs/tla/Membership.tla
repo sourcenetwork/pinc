@@ -48,8 +48,21 @@ DeltaTo(S, env, peer, m, rec, a) == SendS(S, env, peer, RSession, [k |-> "delta"
 HubUp(S, now, x) ==
     x = S.me \/ (x \in DOMAIN S.up /\ x \in DOMAIN S.heard /\ Lt(SatSub(now, S.heard[x]), HUB_STALE))
 
+\* recheck holds, per member whose removal a quiet window deferred, [due |-> the instant it is re-checked,
+\* grace |-> whether its extra look has begun]. WaitOnQuiet is the rule of the code (begin_quiet, #284): a late timer
+\* (cause 0) defers every waiting removal to the new window's end with its extra look not begun, a heal (cause 1)
+\* leaves each at its own instant and grace state. A witness config overrides it with OldWaitOnQuiet, the rule before
+\* #284, under which a heal defers every waiting removal again as well.
+WaitOnQuiet(rc, until, cause) == IF cause = 0 THEN [m \in DOMAIN rc |-> [due |-> until, grace |-> FALSE]] ELSE rc
+OldWaitOnQuiet(rc, until, cause) == [m \in DOMAIN rc |-> [due |-> until, grace |-> FALSE]]
+
 BeginQuiet(S, now, cause) ==
-    Trace([S EXCEPT !.quietUntil = SatAdd(now, QUIET), !.regrace = FALSE], [k |-> "quiet", cause |-> cause])
+    LET until == SatAdd(now, QUIET)
+    IN Trace([S EXCEPT !.quietUntil = until, !.regrace = FALSE, !.recheck = WaitOnQuiet(S.recheck, until, cause)],
+             [k |-> "quiet", cause |-> cause])
+
+\* recheck.entry(m).or_insert((quiet_until, regrace)): a member already waiting keeps its instant and grace state
+Defer(S, m) == IF m \in DOMAIN S.recheck THEN S.recheck ELSE Put(S.recheck, m, [due |-> S.quietUntil, grace |-> S.regrace])
 
 (* ---- view.rs: hello, record, renew ---- *)
 HelloTo(S, env, peer, snap) ==
@@ -186,9 +199,9 @@ RemoveFromView(S, env, now, m, cur, src, expired) ==
     IF cur = <<>> THEN [S |-> S, ch |-> FALSE]
     ELSE LET c == cur[1] IN
          IF src.hold
-         THEN [S |-> IF Cardinality(S.recheck) < MAX_TABLE THEN [S EXCEPT !.recheck = @ \cup {m}] ELSE S, ch |-> FALSE]
-         ELSE IF Lt(now, S.quietUntil) /\ Cardinality(S.recheck) < MAX_TABLE
-              THEN [S |-> Trace([S EXCEPT !.recheck = @ \cup {m}], [k |-> "deferred", member |-> m]), ch |-> FALSE]
+         THEN [S |-> IF Cardinality(DOMAIN S.recheck) < MAX_TABLE THEN [S EXCEPT !.recheck = Defer(S, m)] ELSE S, ch |-> FALSE]
+         ELSE IF Lt(now, S.quietUntil) /\ Cardinality(DOMAIN S.recheck) < MAX_TABLE
+              THEN [S |-> Trace([S EXCEPT !.recheck = Defer(S, m)], [k |-> "deferred", member |-> m]), ch |-> FALSE]
               ELSE LET s1 == [S EXCEPT !.members = Del(@, m),
                                        !.goneVer = IF Cardinality(DOMAIN @) < MAX_TABLE \/ m \in DOMAIN @
                                                    THEN Put(@, m, <<c.rec.ver, c.rec.th>>) ELSE @]
@@ -573,8 +586,20 @@ RecheckLoop(S, env, now, set, cur, ch) ==
     IN IF m = NONE THEN [S |-> S, ch |-> ch]
        ELSE LET r == RecomputeOne(S, env, now, m) IN RecheckLoop(r.S, env, now, set, m, ch \/ r.ch)
 
-\* the members whose removal a quiet window deferred: the set is taken, then each is recomputed in order
-RecheckNow(S, env, now) ==
-    LET r == RecheckLoop([S EXCEPT !.recheck = {}], env, now, S.recheck, NONE, FALSE)
-    IN IF r.ch THEN Bump(r.S) ELSE r.S
+\* recheck_due (#284): an entry is due once its instant has come. A due entry whose extra look has not begun gets it
+\* (RECHECK_GAP from now, and the window lasts at least that long); the due entries whose extra look ran leave the
+\* table and are recomputed in key order with no window open (a removal a window already deferred is believed now,
+\* whatever window a heal has opened since), and the window is restored after.
+RecheckDue(S, env, now) ==
+    LET due == {m \in DOMAIN S.recheck : Le(S.recheck[m].due, now)}
+        ready == {m \in due : S.recheck[m].grace}
+        look == due \ ready
+        s1 == [S EXCEPT !.recheck = [m \in DOMAIN S.recheck \ ready |->
+                                       IF m \in look THEN [due |-> SatAdd(now, RECHECK_GAP), grace |-> TRUE]
+                                       ELSE S.recheck[m]]]
+        s2 == IF look # {} THEN [s1 EXCEPT !.regrace = TRUE, !.quietUntil = Max2(@, SatAdd(now, RECHECK_GAP))] ELSE s1
+    IN IF ready = {} THEN s2
+       ELSE LET r == RecheckLoop([s2 EXCEPT !.regrace = FALSE, !.quietUntil = Z], env, now, ready, NONE, FALSE)
+                s3 == [r.S EXCEPT !.quietUntil = s2.quietUntil]
+            IN IF r.ch THEN Bump(s3) ELSE s3
 =============================================================================

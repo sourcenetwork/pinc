@@ -137,12 +137,13 @@ theorem reselect_switch_requires (e : Env) (n : N) (now cur p : Nat) (hnh : n.is
 /-! ## The quiet window and revocation -/
 
 /-- A removal found inside a quiet window (after a late timer or a heal) is deferred: the view is unchanged, the member
-is queued in the recheck set, and `Deferred` is traced; `recheckNow` recomputes it after `QUIET` and again after
-`RECHECK_GAP`, and a member that is listed again by then stays (`recomputeOne_listed_stays`). -/
+is queued in the recheck table at the window's end with the window's grace state (a member already waiting keeps its
+own entry, #284), and `Deferred` is traced; `recheckDue` recomputes it at that instant and again after `RECHECK_GAP`,
+and a member that is listed again by then stays (`recomputeOne_listed_stays`). -/
 theorem removeFromView_defers (e : Env) (n : N) (now m : Nat) (c : ViewEntry) (src : Source) (x : Bool)
     (hold : src.hold = false) (hq : now < n.quietUntil) (hr : n.recheck.len < MAX_TABLE) :
     (N.removeFromView e n now m (some c) src x).1.members = n.members ∧
-    (N.removeFromView e n now m (some c) src x).1.recheck = n.recheck.ins m ∧
+    (N.removeFromView e n now m (some c) src x).1.recheck = n.recheck.orIns m (n.quietUntil, n.regrace) ∧
     (N.removeFromView e n now m (some c) src x).2 = false := by
   unfold N.removeFromView
   simp [hold, hq, hr]

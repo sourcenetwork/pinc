@@ -46,7 +46,7 @@ open Vinc.MemInc
 def N.rvPre (n : N) (member : Nat) : N :=
   let n := { n with revoked := n.revoked.ins member }
   let n := { n with hv := n.hv.map (fun (p : Nat × HubCopy) => (p.1, { p.2 with entries := p.2.entries.erase member })) }
-  { n with recheck := n.recheck.del member, left := n.left.del member, susp := n.susp.erase member,
+  { n with recheck := n.recheck.erase member, left := n.left.del member, susp := n.susp.erase member,
            downed := n.downed.erase member, attached := n.attached.del member, homed := n.homed.del member }
 
 def N.rvMembers (e : Env) (n : N) (now member : Nat) : N :=

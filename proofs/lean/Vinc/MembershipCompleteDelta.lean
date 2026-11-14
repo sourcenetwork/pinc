@@ -10,7 +10,7 @@ What a node does with a `Down` delta of hub `H` for `m` (`apply_delta`, then `re
   when no other eligible copy lists `m`, the source does not hold removals and no quiet window is open, `m` is removed from the
   view at once.
 * `applyDeltaCore_down_defers`: with a quiet window open (and room in the recheck table) the removal is deferred:
-  the view is unchanged and `m` is queued for `recheck_now`.
+  the view is unchanged and `m` is queued for `recheck_due` (at the window's end unless it already waits).
 * `applyDeltaCore_down_homes`: a hub that removes `m` from its view hands a `Down` delta to each homed member session.
 
 `Srt` is the sortedness every table of the machine keeps (a `BTreeMap`): a hypothesis on the state, an invariant of every
@@ -209,14 +209,15 @@ theorem rcdown_core (e : Env) (n : N) (now H m : Nat) (rc : Rec) (c : HubCopy) (
     (hs : Srt n.hv) (hH : n.hv.get? H = some c)
     (hent : ∀ x, c.entries.get? m = some x → x.rc.inc / 65536 ≤ rc.inc / 65536)
     (hothers : ∀ p ∈ n.hv, p.1 ≠ H → n.eligible now (n.source now) p.1 = true → p.2.entries.get? m = none) :
-    ∃ n2 : N, n2.members = n.members ∧ n2.quietUntil = n.quietUntil ∧ n2.recheck = n.recheck ∧ n2.isHub = n.isHub ∧
+    ∃ n2 : N, n2.members = n.members ∧ n2.quietUntil = n.quietUntil ∧ n2.recheck = n.recheck ∧ n2.regrace = n.regrace ∧
+      n2.isHub = n.isHub ∧
       n2.homed = n.homed ∧ n2.revoked = n.revoked ∧ n2.me = n.me ∧ n2.left = n.left ∧ n2.source now = n.source now ∧
       (n2.candidates now (n2.source now) m).1 = none ∧
       N.applyDeltaCore e n now H m rc .down =
         (let r := N.recomputeOne e n2 now m; if r.2 = true then r.1.bump else r.1) := by
   obtain ⟨hv', hkeys, hH', hex, heq⟩ := applyDeltaCore_down_eq e n now H m rc c hrev hs hH hent
   have hsrc : ({ n with hv := hv' } : N).source now = n.source now := source_hv n hv' now hkeys
-  refine ⟨{ n with hv := hv' }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hsrc, ?_, heq⟩
+  refine ⟨{ n with hv := hv' }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hsrc, ?_, heq⟩
   rw [candidates_none_iff]
   intro p hp ce hl
   obtain ⟨he, hg, _⟩ := hl
@@ -253,7 +254,7 @@ theorem applyDeltaCore_down_removes (e : Env) (n : N) (now H m : Nat) (rc : Rec)
     (hothers : ∀ p ∈ n.hv, p.1 ≠ H → n.eligible now (n.source now) p.1 = true → p.2.entries.get? m = none)
     (hhold : (n.source now).hold = false) (hq : ¬(now < n.quietUntil ∧ n.recheck.len < MAX_TABLE)) :
     (N.applyDeltaCore e n now H m rc .down).members.get? m = none := by
-  obtain ⟨n2, hm2, hq2, hr2, -, -, -, -, -, hsrc, hcand, heq⟩ := rcdown_core e n now H m rc c hrev hs hH hent hothers
+  obtain ⟨n2, hm2, hq2, hr2, -, -, -, -, -, -, hsrc, hcand, heq⟩ := rcdown_core e n now H m rc c hrev hs hH hent hothers
   rw [heq]
   dsimp only
   rw [recomputeOne_none e n2 now m hcand]
@@ -269,7 +270,7 @@ theorem applyDeltaCore_down_removes (e : Env) (n : N) (now H m : Nat) (rc : Rec)
   · exact hm
 
 /-- With a quiet window open (and room in the recheck table) the removal is deferred: the view is unchanged and the member is
-queued for `recheck_now`. -/
+queued for `recheck_due`, at the window's end with the window's grace state unless it already waits (#284). -/
 theorem applyDeltaCore_down_defers (e : Env) (n : N) (now H m : Nat) (rc : Rec) (c : HubCopy) (hrev : n.revoked.has m = false)
     (hs : Srt n.hv) (hH : n.hv.get? H = some c)
     (hent : ∀ x, c.entries.get? m = some x → x.rc.inc / 65536 ≤ rc.inc / 65536)
@@ -277,8 +278,8 @@ theorem applyDeltaCore_down_defers (e : Env) (n : N) (now H m : Nat) (rc : Rec) 
     (hhold : (n.source now).hold = false) (hq : now < n.quietUntil ∧ n.recheck.len < MAX_TABLE)
     (c0 : ViewEntry) (hcur : n.members.get? m = some c0) :
     (N.applyDeltaCore e n now H m rc .down).members = n.members ∧
-    (N.applyDeltaCore e n now H m rc .down).recheck = n.recheck.ins m := by
-  obtain ⟨n2, hm2, hq2, hr2, -, -, -, -, -, hsrc, hcand, heq⟩ := rcdown_core e n now H m rc c hrev hs hH hent hothers
+    (N.applyDeltaCore e n now H m rc .down).recheck = n.recheck.orIns m (n.quietUntil, n.regrace) := by
+  obtain ⟨n2, hm2, hq2, hr2, hg2, -, -, -, -, -, hsrc, hcand, heq⟩ := rcdown_core e n now H m rc c hrev hs hH hent hothers
   rw [heq]
   dsimp only
   rw [recomputeOne_none e n2 now m hcand]
@@ -287,7 +288,7 @@ theorem applyDeltaCore_down_defers (e : Env) (n : N) (now H m : Nat) (rc : Rec) 
   obtain ⟨h4, h5, h6⟩ := removeFromView_defers e n2 now m c0 (n2.source now) (n2.candidates now (n2.source now) m).2
     (by rw [hsrc]; exact hhold) (by rw [hq2]; exact hq.1) (by rw [hr2]; exact hq.2)
   rw [if_neg (by simp [h6])]
-  rw [h4, h5, hm2, hr2]
+  rw [h4, h5, hm2, hr2, hq2, hg2]
   exact ⟨rfl, rfl⟩
 
 
@@ -352,7 +353,7 @@ theorem applyDeltaCore_down_homes (e : Env) (n : N) (now H m : Nat) (rc : Rec) (
     (hhub : n.isHub = true) (c0 : ViewEntry) (hcur : n.members.get? m = some c0) (hleft : n.left.has m = false)
     (p : Nat) (hp : p ∈ n.homed.keys) (hpm : p ≠ m) (hr : n.revoked.has p = false) (hme : p ≠ n.me) :
     (p, Route.session, NFrame.delta m c0.rc .down, e.acc.has p) ∈ (N.applyDeltaCore e n now H m rc .down).outSent := by
-  obtain ⟨n2, hm2, hq2, hr2, hh2, hho2, hrv2, hme2, hl2, hsrc, hcand, heq⟩ := rcdown_core e n now H m rc c hrev hs hH hent hothers
+  obtain ⟨n2, hm2, hq2, hr2, -, hh2, hho2, hrv2, hme2, hl2, hsrc, hcand, heq⟩ := rcdown_core e n now H m rc c hrev hs hH hent hothers
   rw [heq]
   dsimp only
   rw [recomputeOne_none e n2 now m hcand]

@@ -24,11 +24,13 @@ of the awareness chain of `awareness_budget`, with one hypothesis about timing, 
 * `hub_lease_gone` (property 2, hub side, over a run): a hub drops that lease at a tick at an instant in
   `(t0 + LEASE, t0 + LEASE + HUB_TICK + σ]`; `hub_hands_down`: that call hands `Delta(m, record, Down)` to the session
   of every attached hub (`hubTick_hands_down`), unless the lease was dropped before.
-* `heal_postpones`: what the chain still needs. A member that hears a hub again after longer than the host's give-up
-  bound for it opens the quiet window again, and a removal the window deferred waits for its end: `awareness_budget`'s
-  link `q ≤ taud + QUIET` holds only when no quiet window opens at the member after the Down arrives.
-  `late_tick_reopens`: a member's tick later than `WAKE_GAP` after its deadline opens the window too, so the host's
-  slack at a member must stay within `WAKE_GAP`.
+* `heal_keeps_waiting`, `heal_then_removed`, `heal_then_gone` (#284): a member that hears a hub again after longer
+  than the host's give-up bound for it opens the quiet window again but leaves every waiting removal at its own instant
+  and grace state, so a removal a window deferred is out of the view at its own instant plus the one extra look,
+  whatever window the heal opened: `awareness_budget`'s link `q ≤ taud + QUIET` needs nothing of later heals.
+  `late_tick_reopens`: a member's tick later than `WAKE_GAP` after its deadline opens the window and defers every
+  waiting removal to its end (the reference model's rule), so the host's slack at a member must stay within
+  `WAKE_GAP` between the Down and the removal.
 -/
 
 set_option linter.unusedVariables false
@@ -138,8 +140,10 @@ macro "tm_tac" : tactic => `(tactic| first
   unfold N.rcAfter N.rcSusp; tm_tac
 @[simp] theorem recomputeOne_tm (e : Env) (n : N) (now m : Nat) : TM[n, (N.recomputeOne e n now m).1] := by
   rw [recomputeOne_eq]; unfold N.recomputeOneS; dsimp only; split <;> simp
-@[simp] theorem recheckNow_tm (e : Env) (n : N) (now : Nat) : TM[n, N.recheckNow e n now] := by
-  unfold N.recheckNow; tm_tac
+@[simp] theorem recheckFold_tm (e : Env) (n : N) (now : Nat) (ks : List Nat) : TM[n, (N.recheckFold e n now ks).1] := by
+  unfold N.recheckFold; tm_tac
+@[simp] theorem recheckDue_tm (e : Env) (n : N) (now : Nat) : TM[n, N.recheckDue e n now] := by
+  unfold N.recheckDue N.recheckRun N.recheckArm; tm_tac
 @[simp] theorem adEnsure_tm (n : N) (hub : Nat) : TM[n, (n.adEnsure hub).1] := by unfold N.adEnsure; tm_tac
 @[simp] theorem adEntries_tm (n : N) (hub m : Nat) (rc : Rec) (a : Alive) : TM[n, n.adEntries hub m rc a] := by
   unfold N.adEntries N.adDown; tm_tac
@@ -367,12 +371,10 @@ theorem tm_bumpMatch {F : N × Bool} {n0 : N} (h : TM[n0, F.1]) :
   unfold N.stHello; apply forKeys_tm; intro k b; tm_tac
 @[simp] theorem slowTick_tm (e : Env) (n : N) (now : Nat) : TM[n, N.slowTick e n now] := by
   rw [slowTick_eq]; dsimp only; split <;> simp
-@[simp] theorem tickRecheck_tm (e : Env) (n : N) (now : Nat) : TM[n, N.tickRecheck e n now] := by
-  unfold N.tickRecheck; tm_tac
 @[simp] theorem tickMid_tm (e : Env) (n : N) (now : Nat) : TM[n, N.tickMid e n now] := by
   unfold N.tickMid
-  have h := tickRecheck_tm e n now
-  generalize N.tickRecheck e n now = n1 at h ⊢
+  have h := recheckDue_tm e n now
+  generalize N.recheckDue e n now = n1 at h ⊢
   repeat' split
   all_goals simp [h]
 @[simp] theorem tick_tm (e : Env) (n : N) (now : Nat) : TM[n, N.tick e n now] := by
@@ -385,12 +387,8 @@ theorem tm_bumpMatch {F : N × Bool} {n0 : N} (h : TM[n0, F.1]) :
   unfold N.otPre; tm_tac
 @[simp] theorem tkPre_tm (e : Env) (n : N) (now : Nat) : TM[n, N.tkPre e n now] := by
   unfold N.tkPre N.tkRecheck
-  have h : TM[n, (if !n.recheck.isEmpty && n.quietUntil ≤ now then
-      (if n.regrace then N.recheckNow e { n with regrace := false } now
-       else { n with regrace := true, quietUntil := satAdd now RECHECK_GAP }) else n)] := by
-    repeat' split
-    all_goals simp
-  generalize (if !n.recheck.isEmpty && n.quietUntil ≤ now then _ else n) = n1 at h ⊢
+  have h := recheckDue_tm e n now
+  generalize N.recheckDue e n now = n1 at h ⊢
   dsimp only
   repeat' split
   all_goals simp [h]
@@ -759,8 +757,7 @@ macro "rs_tac" : tactic => `(tactic| first
   unfold N.rcAfter N.rcSusp; rs_tac
 @[simp] theorem recomputeOne_rs (e : Env) (n : N) (now m : Nat) : RS[n, (N.recomputeOne e n now m).1] := by
   rw [recomputeOne_eq]; unfold N.recomputeOneS; dsimp only; split <;> simp
-@[simp] theorem recheckNow_rs (e : Env) (n : N) (now : Nat) : RS[n, N.recheckNow e n now] := by
-  unfold N.recheckNow; rs_tac
+@[simp] theorem recheckDue_rs (e : Env) (n : N) (now : Nat) : RS[n, N.recheckDue e n now] := recheckDue_roster e n now
 @[simp] theorem adEnsure_rs (n : N) (hub : Nat) : RS[n, (n.adEnsure hub).1] := by unfold N.adEnsure; rs_tac
 @[simp] theorem adEntries_rs (n : N) (hub m : Nat) (rc : Rec) (a : Alive) : RS[n, n.adEntries hub m rc a] := by
   unfold N.adEntries N.adDown; rs_tac
@@ -1629,29 +1626,52 @@ theorem hub_hands_down (σ t0 m : Nat) (cs : List Call) (n : N) (ht : Timely σ 
     refine ⟨l0, hl0, fun p ha hb hpm hr hme => ?_⟩
     exact hubTick_hands_down e _ τ m l0 hl0 (htRefresh_expired t0 e _ τ m l0 hsil hle h2) p ha hb hpm hr hme
 
-/-! ## What the 145 s chain still needs: no quiet window at the node after the Down -/
+/-! ## A heal after the Down: the removal keeps its own instant (#284) -/
 
-/-- **A heal after the Down postpones the deferred removal.** A member whose removal of `m` a quiet window deferred
-hears a hub `peer` again after longer than the host's give-up bound for it (the first step of `on_frame` for a frame
-from a hub, `ofHub1`): the window opens again, `QUIET` from that instant, the grace is dropped, and the recheck of the
-tick at every instant before the new window ends leaves `m` in the view. So a heal at the member at least every `QUIET`
-keeps `m` in its view for ever, and the link `q ≤ taud + QUIET` of `awareness_budget` (the window in force when the Down
-arrives is the last one) holds only when no quiet window opens at the member between the Down and the removal. -/
-theorem heal_postpones (e : Env) (n : N) (now peer t m : Nat) (hm : n.isHub = false) (hh : n.heard.get? peer = some t)
-    (hs : e.giveUp peer < now - t) (hin : n.members.has m = true) (t' : Nat) (ht : t' < satAdd now QUIET) :
+/-- **A heal leaves every waiting removal at its own instant.** A member that hears a hub `peer` again after longer
+than the host's give-up bound for it (the first step of `on_frame` for a frame from a hub, `ofHub1`) opens the quiet
+window again, `QUIET` from that instant, with the window's grace dropped, and leaves the recheck table as it was: every
+waiting removal keeps its instant and its grace state (`beginQuiet_heal`; `session_up` and the PULSE refresh open the
+window through the same `begin_quiet`). Before #284 a heal deferred the waiting removals again: a heal at the member at
+least every `QUIET` kept a removal waiting for ever (the witness `MembershipSys_w_healwait.cfg`). -/
+theorem heal_keeps_waiting (e : Env) (n : N) (now peer t : Nat) (hm : n.isHub = false) (hh : n.heard.get? peer = some t)
+    (hs : e.giveUp peer < now - t) :
     (N.ofHub1 e n now peer).quietUntil = satAdd now QUIET ∧ (N.ofHub1 e n now peer).regrace = false ∧
-    (N.tickRecheck e (N.ofHub1 e n now peer) t').members.has m = true := by
+    (N.ofHub1 e n now peer).recheck = n.recheck := by
   have hq := ofHub1_heal e n now peer t hm hh hs
   have hr : (N.ofHub1 e n now peer).regrace = false := by
     unfold N.ofHub1
     simp only [hh, hs, hm, decide_true, Bool.not_false, Bool.true_and, if_true]
-    unfold N.beginQuiet N.trace
-    split <;> (try split) <;> rfl
-  have hmem : (N.ofHub1 e n now peer).members = n.members := by
-    unfold N.ofHub1; dsimp only; split <;> simp [N.beginQuiet]
-  refine ⟨hq, hr, ?_⟩
-  rw [tickRecheck_early e _ t' (by rw [hq]; exact ht), hmem]
-  exact hin
+    exact (beginQuiet_window n now 1).2
+  have hrc : (N.ofHub1 e n now peer).recheck = n.recheck := by
+    unfold N.ofHub1
+    simp only [hh, hs, hm, decide_true, Bool.not_false, Bool.true_and, if_true]
+    exact beginQuiet_heal n now
+  exact ⟨hq, hr, hrc⟩
+
+/-- **A heal does not defer again a removal an earlier window deferred** (#284). A member waiting under `(d, true)` (its
+extra look ran) whose node then hears a hub again after a long silence is out of the view after the tick at any
+`t' ≥ d`, though the window the heal opened lasts until `now + QUIET`, when no eligible copy lists it and nothing holds
+removals. -/
+theorem heal_then_removed (e : Env) (n : N) (now peer t m d t' : Nat) (hm : n.isHub = false)
+    (hh : n.heard.get? peer = some t) (hs : e.giveUp peer < now - t) (hw : n.recheck.get? m = some (d, true))
+    (hd : d ≤ t')
+    (hc : ((N.ofHub1 e n now peer).candidates t' ((N.ofHub1 e n now peer).source t') m).1 = none)
+    (hold : ((N.ofHub1 e n now peer).source t').hold = false) :
+    (N.recheckDue e (N.ofHub1 e n now peer) t').members.has m = false := by
+  obtain ⟨-, -, hrc⟩ := heal_keeps_waiting e n now peer t hm hh hs
+  exact recheckDue_removes e _ t' m d (by rw [hrc]; exact hw) hd hc hold
+
+/-- The same for a removal whose extra look has not begun: after the heal it gets the look at the first tick `t1 ≥ d`
+and is out of the view at the next tick `t2 ≥ t1 + RECHECK_GAP`, whatever window the heal opened. -/
+theorem heal_then_gone (e : Env) (n : N) (now peer t m d t1 t2 : Nat) (hm : n.isHub = false)
+    (hh : n.heard.get? peer = some t) (hs : e.giveUp peer < now - t) (hw : n.recheck.get? m = some (d, false))
+    (hd : d ≤ t1) (hdue : satAdd t1 RECHECK_GAP ≤ t2)
+    (hc : ((N.ofHub1 e n now peer).candidates t2 ((N.ofHub1 e n now peer).source t2) m).1 = none)
+    (hold : ((N.ofHub1 e n now peer).source t2).hold = false) :
+    (N.recheckDue e (N.recheckDue e (N.ofHub1 e n now peer) t1) t2).members.has m = false := by
+  obtain ⟨-, -, hrc⟩ := heal_keeps_waiting e n now peer t hm hh hs
+  exact deferred_removal e _ t1 t2 m d (by rw [hrc]; exact hw) hd hdue hc hold
 
 /-! ## A late tick at a member opens the quiet window -/
 
@@ -1751,17 +1771,58 @@ macro "qu_tac" : tactic => `(tactic| first
 @[simp] theorem renew_qu (e : Env) (n : N) (now : Nat) (fs p : Bool) : QU[n, N.renew e n now fs p] := by
   unfold N.renew; qu_tac
 
-/-- **A late tick at a member opens the quiet window.** A member whose tick comes later than `WAKE_GAP` after its
-deadline reads it as a suspension: the window opens, `QUIET` from the call, and the grace is dropped. So a host slack
-above `WAKE_GAP` at every tick keeps a member's window open and a deferred removal waiting (`tickRecheck_early`). -/
+theorem bumpRecord_recheck (n : N) : n.bumpRecord.recheck = n.recheck := by
+  unfold N.bumpRecord; split <;> simp
+
+theorem rnStep_recheck (e : Env) (now : Nat) (fs p : Bool) (n : N) (hub : Nat) :
+    (rnStep e now fs p n hub).recheck = n.recheck := by
+  unfold rnStep
+  split
+  · rfl
+  · dsimp only
+    split
+    · simp
+    · unfold N.helloTo; split <;> simp [N.markHello]
+
+/-- A member's `renew` leaves the recheck table (only a hub's renewal pushes a delta). -/
+theorem renew_recheck_member (e : Env) (n : N) (now : Nat) (fs p : Bool) (hm : n.isHub = false) :
+    (N.renew e n now fs p).recheck = n.recheck := by
+  rw [renew_eq']
+  have hb : ∀ (c : Prop) [Decidable c], (if c then n.bumpRecord else n).recheck = n.recheck ∧
+      (if c then n.bumpRecord else n).isHub = false := by
+    intro c _
+    by_cases h : c
+    · rw [if_pos h]; exact ⟨bumpRecord_recheck n, (bumpRecord_tm n).2.1.trans hm⟩
+    · rw [if_neg h]; exact ⟨rfl, hm⟩
+  have e1 : (rnPre n p).1.recheck = n.recheck ∧ (rnPre n p).1.isHub = false := by
+    unfold rnPre
+    dsimp only
+    exact hb _
+  have e2 : rnPush e (rnPre n p).1 now = (rnPre n p).1 := by
+    unfold rnPush
+    simp [e1.2]
+  rw [e2]
+  exact foldl_inv (fun (y : N) => y.recheck = n.recheck) (rnStep e now fs (rnPre n p).2) (rnPre n p).1.boot (rnPre n p).1
+    (fun b a hb => by rw [rnStep_recheck]; exact hb) e1.1
+
+/-- **A late tick at a member opens the quiet window and defers every waiting removal again.** A member whose tick
+comes later than `WAKE_GAP` after its deadline reads it as a suspension: the window opens, `QUIET` from the call, the
+window's grace is dropped, and every waiting removal is due at the window's end with its extra look not begun (the
+reference model's rule, kept by #284). So a host slack above `WAKE_GAP` at every tick keeps a member's removals
+waiting (`recheckDue_waits`): the late-host hypothesis of the awareness bound. -/
 theorem late_tick_reopens (e : Env) (n : N) (now t : Nat) (hm : n.isHub = false) (ht : n.nextTick = some t)
     (hlate : WAKE_GAP < now - t) :
-    (N.otTickPre e n now).quietUntil = satAdd now QUIET ∧ (N.otTickPre e n now).regrace = false := by
+    (N.otTickPre e n now).quietUntil = satAdd now QUIET ∧ (N.otTickPre e n now).regrace = false ∧
+    (N.otTickPre e n now).recheck =
+      n.recheck.map (fun (p : Nat × (Nat × Bool)) => (p.1, (satAdd now QUIET, false))) := by
   unfold N.otTickPre
   simp only [ht, hm, Bool.not_false, decide_true, Bool.true_and, hlate, if_true]
   have h := renew_qu e (n.beginQuiet now 0) now true false
-  rw [h.1, h.2]
-  exact beginQuiet_window n now 0
+  have hr := renew_recheck_member e (n.beginQuiet now 0) now true false ((beginQuiet_tm n now 0).2.1.trans hm)
+  refine ⟨?_, ?_, ?_⟩
+  · rw [h.1]; exact (beginQuiet_window n now 0).1
+  · rw [h.2]; exact (beginQuiet_window n now 0).2
+  · rw [hr]; exact beginQuiet_late n now
 
 end Vinc.Membership.Cmp
 
@@ -1774,5 +1835,7 @@ end Vinc.Membership.Cmp
 #audit_axioms Vinc.Membership.Cmp.hub_lease_gone_start
 #audit_axioms Vinc.Membership.Cmp.hubTick_hands_down
 #audit_axioms Vinc.Membership.Cmp.hub_hands_down
-#audit_axioms Vinc.Membership.Cmp.heal_postpones
+#audit_axioms Vinc.Membership.Cmp.heal_keeps_waiting
+#audit_axioms Vinc.Membership.Cmp.heal_then_removed
+#audit_axioms Vinc.Membership.Cmp.heal_then_gone
 #audit_axioms Vinc.Membership.Cmp.late_tick_reopens

@@ -22,12 +22,8 @@ namespace Vinc.Membership.Cmp
 open Vinc.Membership
 open Vinc.MemInc
 
-/-- The first step of `tick`: the recheck of the removals a quiet window deferred. -/
-def N.tkRecheck (e : Env) (n : N) (now : Nat) : N :=
-  if !n.recheck.isEmpty && n.quietUntil ≤ now then
-    (if n.regrace then N.recheckNow e { n with regrace := false } now
-     else { n with regrace := true, quietUntil := satAdd now RECHECK_GAP })
-  else n
+/-- The first step of `tick`: the recheck of the removals a quiet window deferred (`recheck_due`). -/
+def N.tkRecheck (e : Env) (n : N) (now : Nat) : N := N.recheckDue e n now
 
 /-- Everything in `tick` but `hub_tick`. -/
 def N.tkPre (e : Env) (n : N) (now : Nat) : N :=
@@ -67,7 +63,7 @@ theorem onTimeout_split (e : Env) (n : N) (now : Nat) :
 
 theorem tkPre_roster (e : Env) (n : N) (now : Nat) : (N.tkPre e n now).roster = n.roster := by
   unfold N.tkPre N.tkRecheck
-  simp only [ite_roster, recheckNow_roster, renew_roster, slowTick_roster, ite_self]
+  simp only [ite_roster, recheckDue_roster, renew_roster, slowTick_roster, ite_self]
 
 theorem carrierWatch_none (e : Env) (n : N) (now m : Nat) (h : n.roster.get? m = none) :
     (N.carrierWatch e n now m).roster.get? m = none := by

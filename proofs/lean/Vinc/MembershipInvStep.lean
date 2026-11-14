@@ -162,6 +162,7 @@ macro "inv_tab" : tactic =>
     | (apply HvB.erase; inv_src)
     | (apply HvB.map_erase; inv_src)
     | (refine Bnd.insert ?_ _ _ ?_ <;> first | inv_src | inv_guard)
+    | (refine Bnd.orIns ?_ _ _ ?_ <;> first | inv_src | inv_guard)
     | (refine HvB.insert ?_ _ _ ?_ ?_ <;> first | inv_src | (dsimp only; first | exact Bnd.nil | inv_src | (apply Bnd.erase; inv_src) | (apply Bnd.modify; inv_src) | (refine Bnd.insert ?_ _ _ ?_ <;> first | inv_src | inv_guard)) | inv_guard)
     | (refine KBnd.insert ?_ _ _ ?_ <;> first | inv_src | inv_mem))
 
@@ -237,7 +238,14 @@ theorem inv_bc {n : N} (h : Inv B n) (b : Bc) : Inv B (n.bc b) := by unfold N.bc
 theorem inv_close {n : N} (h : Inv B n) (p : Nat) (r : CloseR) : Inv B (n.close p r) := by unfold N.close; inv_keep h
 
 theorem inv_beginQuiet {n : N} (h : Inv B n) (now cause : Nat) : Inv B (n.beginQuiet now cause) := by
-  unfold N.beginQuiet; exact inv_trace (by inv_keep h) _
+  unfold N.beginQuiet
+  refine inv_trace ?_ _
+  have hr : Bnd (if (cause == 0) = true then n.recheck.map (fun (p : Nat × (Nat × Bool)) => (p.1, (satAdd now QUIET, false))) else n.recheck) := by
+    split
+    · exact h.recheck.map_keys _ (fun _ => rfl)
+    · exact h.recheck
+  inv_keep h
+  exact hr
 
 theorem inv_bump {n : N} (h : Inv B n) : Inv B n.bump := by
   unfold N.bump; exact inv_emit (by inv_keep h) _

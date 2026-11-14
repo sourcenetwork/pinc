@@ -145,9 +145,36 @@ theorem inv_reselect {e : Env} {n : N} (hx : Inv B n) (now : Nat) : Inv B (N.res
   inv_go
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_reselect)
 
-theorem inv_recheckNow {e : Env} {n : N} (hx : Inv B n) (now : Nat) : Inv B (N.recheckNow e n now) := by
-  unfold N.recheckNow
+theorem inv_recheckArm {n : N} (hx : Inv B n) (now : Nat) : Inv B (N.recheckArm n now) := by
+  unfold N.recheckArm
+  have hr : Bnd ((n.recheck.filter (fun p => !recheckReady now p)).map (recheckStep now)) :=
+    (hx.recheck.filter _).map_keys _ (fun p => by unfold recheckStep; split <;> rfl)
+  dsimp only
+  split <;> (inv_keep hx; exact hr)
+
+theorem inv_recheckFold {e : Env} {n : N} (hx : Inv B n) (now : Nat) (ks : List Nat) :
+    Inv B (N.recheckFold e n now ks).1 := by
+  unfold N.recheckFold
   inv_go
-macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_recheckNow)
+
+theorem inv_recheckRun {e : Env} {n : N} (hx : Inv B n) (now : Nat) (ready : List Nat) :
+    Inv B (N.recheckRun e n now ready) := by
+  have h1 : Inv B (N.recheckFold e { n with quietUntil := 0 } now ready).1 := inv_recheckFold (by inv_keep hx) now ready
+  have h2 : Inv B { (N.recheckFold e { n with quietUntil := 0 } now ready).1 with quietUntil := n.quietUntil } := by
+    inv_keep h1
+  unfold N.recheckRun
+  dsimp only
+  split
+  · exact inv_bump h2
+  · exact h2
+
+theorem inv_recheckDue {e : Env} {n : N} (hx : Inv B n) (now : Nat) : Inv B (N.recheckDue e n now) := by
+  unfold N.recheckDue
+  dsimp only
+  have ha := inv_recheckArm hx now
+  split
+  · exact ha
+  · exact inv_recheckRun (by inv_keep ha) now _
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_recheckDue)
 
 end Vinc.Membership

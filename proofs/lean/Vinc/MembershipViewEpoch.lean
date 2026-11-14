@@ -8,7 +8,7 @@ import Vinc.MembershipViewUnion
 function that can call `bump` has an epoch at least the old one:
 
 `applyDeltaCore_epoch`, `pushDelta_epoch`, `renew_epoch`, `onSelfEntry_epoch`, `applyDelta_epoch`, `markAbsent_epoch`,
-`markViewAbsent_epoch`, `snapAbsent_epoch`, `applySnap_epoch`, `sweepAbsent_epoch`, `recheckNow_epoch`.
+`markViewAbsent_epoch`, `snapAbsent_epoch`, `applySnap_epoch`, `sweepAbsent_epoch`, `recheckDue_epoch`.
 -/
 
 set_option linter.unusedVariables false
@@ -400,18 +400,38 @@ theorem sweepAbsent_epoch (e : Env) (n : N) (now : Nat) : EpGe n (N.sweepAbsent 
     all_goals first | exact hb | skip
     all_goals simp_all [recomputeOne_ep]
 
-theorem recheckNow_epoch (e : Env) (n : N) (now : Nat) : EpGe n (N.recheckNow e n now) := by
-  unfold N.recheckNow
+theorem recheckFold_ep (e : Env) (n : N) (now : Nat) (ks : List Nat) : (N.recheckFold e n now ks).1.epoch = n.epoch := by
+  unfold N.recheckFold
+  refine foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ ks (n, false) ?_ rfl
+  intro b m hb
+  obtain ⟨n1, c1⟩ := b
+  simp only at hb ⊢
+  rcases hr : N.recomputeOne e n1 now m with ⟨n2, ch⟩
+  have := recomputeOne_ep e n1 now m
+  rw [hr] at this
+  simp only; change n2.epoch = n.epoch; change n2.epoch = n1.epoch at this; omega
+
+theorem recheckDue_eq (e : Env) (n : N) (now : Nat) :
+    N.recheckDue e n now =
+      (if (AMap.keys (n.recheck.filter (recheckReady now))).isEmpty = true then N.recheckArm n now
+       else N.recheckRun e { N.recheckArm n now with regrace := false } now
+         (AMap.keys (n.recheck.filter (recheckReady now)))) := rfl
+
+theorem recheckRun_epoch (e : Env) (n : N) (now : Nat) (ks : List Nat) : EpGe n (N.recheckRun e n now ks) := by
+  have hf := recheckFold_ep e { n with quietUntil := 0 } now ks
+  unfold N.recheckRun
   dsimp only
   apply ite_ge_bump
   unfold EpGe
-  refine Nat.le_of_eq (Eq.symm (foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ n.recheck.keys ({ n with recheck := [] }, false) ?_ rfl))
-  · intro b m hb
-    obtain ⟨n1, c1⟩ := b
-    simp only at hb ⊢
-    rcases hr : N.recomputeOne e n1 now m with ⟨n2, ch⟩
-    have := recomputeOne_ep e n1 now m
-    rw [hr] at this
-    simp only; change n2.epoch = n.epoch; change n2.epoch = n1.epoch at this; omega
+  exact Nat.le_of_eq hf.symm
+
+theorem recheckDue_epoch (e : Env) (n : N) (now : Nat) : EpGe n (N.recheckDue e n now) := by
+  have ha : (N.recheckArm n now).epoch = n.epoch := by unfold N.recheckArm; dsimp only; split <;> rfl
+  have h1 : EpGe n (N.recheckArm n now) := by unfold EpGe; rw [ha]; exact Nat.le_refl _
+  have h2 : EpGe n ({ N.recheckArm n now with regrace := false } : N) := by unfold EpGe; exact Nat.le_of_eq ha.symm
+  rw [recheckDue_eq]
+  split
+  · exact h1
+  · exact EpGe.trans h2 (recheckRun_epoch e _ now _)
 
 end Vinc.Membership

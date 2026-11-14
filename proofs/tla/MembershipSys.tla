@@ -113,6 +113,15 @@ Done(x, n, S1, now) ==
                      LET eff == IF Pr(n, t.member) \in x.sess THEN Max2(S0.roster[t.member].renewed, x.rx[<<n, t.member>>])
                                 ELSE S0.roster[t.member].renewed
                      IN Gt(SatSub(now, eff), RENEW)
+        \* #284: unless a late timer ran in the call, a removal that waits before and after it moved only on its own
+        \* schedule: an entry not due is as it was, a due entry whose extra look had not begun has it now, a due entry
+        \* whose extra look ran was recomputed (whatever waits under its key after that is a new deferral)
+        late == \E t \in TrS(S1) : t.k = "quiet" /\ t.cause = 0
+        waitOK == late \/ \A m \in DOMAIN S0.recheck \cap DOMAIN S1.recheck :
+                    LET a == S0.recheck[m] b == S1.recheck[m]
+                    IN b = a \/ (Le(a.due, now) /\ (a.grace \/ b = [due |-> SatAdd(now, RECHECK_GAP), grace |-> TRUE]))
+        \* a heal at a node while a removal waits for a later instant
+        healWait == (\E t \in TrS(S1) : t.k = "quiet" /\ t.cause = 1) /\ \E m \in DOMAIN S0.recheck : Lt(now, S0.recheck[m].due)
         words == INC!Word(S1.inc)
         wordOK == Le(h.lastInc[n], words)
         boundsOK == /\ Cardinality(DOMAIN S1.roster) <= MAX_TABLE /\ Cardinality(S1.attached) <= MAX_TABLE
@@ -126,6 +135,7 @@ Done(x, n, S1, now) ==
                         !.hist.resub = @ \cup resub, !.hist.rel = @ \cup rel, !.hist.hold = @ \cup hold,
                         !.hist.restore = @ \cup restore, !.hist.primN[n] = @ + Cardinality({c \in BcS(S1) : c.k = "primary"}), !.hist.supp = @ \cup supp, !.hist.revcl = @ \cup revcl, !.hist.lvcl = @ \cup lvcl,
                         !.hist.okDown = @ /\ accOK, !.hist.okInc = @ /\ wordOK, !.hist.okBounds = @ /\ boundsOK,
+                        !.hist.okWait = @ /\ waitOK, !.hist.healWait = @ \/ healWait,
                         !.hist.lastInc[n] = words]
     IN [x1 EXCEPT !.net = Enq(x1, n, S1.sent, 1)]
 
@@ -262,7 +272,7 @@ ScriptStep(x) ==
 (* ---- the specification ---- *)
 HistInit == [down |-> {}, left |-> {}, susp |-> {}, conf |-> {}, acc |-> {}, rest |-> {}, resub |-> {}, rel |-> {},
              hold |-> {}, restore |-> {}, revcl |-> {}, lvcl |-> {}, lostProbes |-> 0, primN |-> [n \in Nodes |-> 0], supp |-> {}, restarts |-> 0,
-             okDown |-> TRUE, okInc |-> TRUE, okBounds |-> TRUE,
+             okDown |-> TRUE, okInc |-> TRUE, okBounds |-> TRUE, okWait |-> TRUE, healWait |-> FALSE,
              lastInc |-> [n \in Nodes |-> Z], crashAt |-> [n \in Nodes |-> <<>>]]
 
 StartAll ==
@@ -366,6 +376,12 @@ Revoke14 == RevokeEffect(1, 4)
 LeaveNotDown4 == LeaveReported(4) /\ <<1, 4>> \notin w.hist.hold /\ <<2, 4>> \notin w.hist.hold
 \* property 10: the primary of a member does not flap inside the hysteresis (at most the first choice and one switch)
 PrimaryStable == \A n \in Members : w.hist.primN[n] <= 2
+\* #284: a removal that a quiet window deferred moves only on its own schedule; no heal defers it again (only a late
+\* timer does, the reference model's rule)
+WaitKept == w.hist.okWait
+\* ScrHealWait: the removal hub 1 reports at 76 s, deferred by the window of the heal at 75 s, is applied at the tick after
+\* that window's end and the extra look (75 + 10 + 5 s, ticks every 0.5 s), whatever window the heal at 79 s opened
+HealGone == SecsSince(w, 91) => 5 \notin DOMAIN w.nodes[4].members
 \* witnesses (TLC must find a violation of each)
 NeverSuppressed == w.hist.supp = {}
 NeverSwitched == \A n \in Members : w.hist.primN[n] <= 1
@@ -380,6 +396,8 @@ NeverRestore == w.hist.restore = {}
 NeverRestarted == w.hist.restarts = 0
 NeverLeft == w.hist.left = {}
 NeverRevoked == w.hist.revcl = {}
+\* a heal reaches a node while a removal waits there for a later instant
+NeverHealWait == ~w.hist.healWait
 
 (***************************************************************************)
 (* The scripts of the scenarios (hubs 1 and 2, members 3 and 4 unless noted) *)
@@ -416,4 +434,9 @@ ScrPrimaryFlat == <<<<"rtt", 1, 3, 1, 100>>, <<"rtt", 1, 3, 2, 90>>>>
 \* and only hub 1 learns it; every cut heals at 250 s. Hub 2's complete snapshot omits 4, so 3 must let 4 go too.
 ScrStaleView == <<<<"cut", 0, 1, 2>>, <<"cut", 0, 2, 4>>, <<"rtt", 0, 3, 1, 100>>, <<"rtt", 0, 3, 2, 120>>,
                   <<"rtt", 100, 3, 2, 40>>, <<"crash", 130, 4>>, <<"heal", 250, 1, 2>>, <<"heal", 250, 2, 4>>>>
+\* #284 (hubs 1, 2 and 3, members 4 and 5): member 4 homes on hub 1 and is cut from hubs 2 and 3 at 10 s; hub 2 is
+\* heard again at 75 s (a heal: 65 s of silence), hub 1 revokes member 5 at 76 s, so its DOWN delta reaches 4 inside
+\* that window and the removal waits, and hub 3 is heard again at 79 s (a second heal) while it waits.
+ScrHealWait == <<<<"rtt", 0, 4, 2, 100>>, <<"rtt", 0, 4, 3, 100>>, <<"cut", 10, 2, 4>>, <<"cut", 10, 3, 4>>,
+                 <<"heal", 75, 2, 4>>, <<"revoke", 76, 1, 5>>, <<"heal", 79, 3, 4>>>>
 =============================================================================

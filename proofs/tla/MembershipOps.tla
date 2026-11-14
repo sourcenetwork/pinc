@@ -37,7 +37,7 @@ StartOp(cfg, env, now, wall, floor) ==
                hv |-> IF cfg.isHub THEN [x \in {cfg.me} |-> NewCopy] ELSE EmptyFn,
                members |-> EmptyFn, epoch |-> Z, hrtt |-> EmptyFn, hsent |-> EmptyFn, helloAt |-> EmptyFn,
                primary |-> IF cfg.isHub THEN <<cfg.me>> ELSE <<>>, homeOk |-> <<>>, homeSeen |-> FALSE,
-               recheck |-> {}, quietUntil |-> Z, regrace |-> FALSE, goneVer |-> EmptyFn, left |-> {},
+               recheck |-> EmptyFn, quietUntil |-> Z, regrace |-> FALSE, goneVer |-> EmptyFn, left |-> {},
                nextRenew |-> now, nextTick |-> <<>>, nextSlow |-> now,
                own |-> rec0, roster |-> EmptyFn, attached |-> {}, homed |-> {}, susp |-> EmptyFn, downed |-> EmptyFn,
                nextConf |-> <<>>, tracing |-> TRUE, loc |-> r.loc,
@@ -86,7 +86,7 @@ RevokeOp(S, env, now, member) ==
     ELSE LET s1 == [S EXCEPT !.revoked = @ \cup {member},
                              !.hv = [k \in DOMAIN @ |-> IF member \in DOMAIN @[k].entries
                                                        THEN [@[k] EXCEPT !.entries = Del(@, member)] ELSE @[k]],
-                             !.recheck = @ \ {member}, !.left = @ \ {member},
+                             !.recheck = Del(@, member), !.left = @ \ {member},
                              !.susp = IF member \in DOMAIN @ THEN Del(@, member) ELSE @,
                              !.downed = IF member \in DOMAIN @ THEN Del(@, member) ELSE @,
                              !.attached = @ \ {member}, !.homed = @ \ {member}]
@@ -225,10 +225,7 @@ SlowTick(S, env, now) ==
     IN IF down THEN Reselect(s3, env, now) ELSE s3
 
 Tick(S, env, now) ==
-    LET s1 == IF S.recheck # {} /\ Ge(now, S.quietUntil)
-              THEN (IF S.regrace THEN RecheckNow([S EXCEPT !.regrace = FALSE], env, now)
-                    ELSE [S EXCEPT !.regrace = TRUE, !.quietUntil = SatAdd(now, RECHECK_GAP)])
-              ELSE S
+    LET s1 == RecheckDue(S, env, now)
         s2 == IF s1.sentRec # <<<<s1.ver, s1.th>>>> THEN Renew(s1, env, now, FALSE, FALSE) ELSE s1
         s3 == IF s2.isHub \/ Ge(now, s2.nextSlow)
               THEN SlowTick(IF ~s2.isHub THEN [s2 EXCEPT !.nextSlow = SatAdd(now, SLOW_TICK)] ELSE s2, env, now)
