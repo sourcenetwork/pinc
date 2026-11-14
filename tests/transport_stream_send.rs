@@ -399,3 +399,16 @@ fn a_stream_without_credit_does_not_hold_up_a_worse_one() {
     assert_eq!(ids, [(a, 1000), (a, 1000), (b, 1000)]);
     let _ = &mut pool;
 }
+
+#[test]
+fn a_resend_starts_after_the_acknowledged_prefix() {
+    let (mut pool, mut t) = setup(1024, |_| {});
+    let id = t.open_stream(&pool, true).unwrap();
+    t.write(&mut pool, id, &pattern(3000, 6), NO_CAP).unwrap();
+    assert_eq!(drain_frames(&mut t, &pool, 1000).len(), 3);
+    assert_eq!(t.resend_from(id, 0), 0);
+    t.on_acked(&mut pool, id, 0, 1500, false);
+    assert_eq!(t.resend_from(id, 0), 1500, "the acknowledged prefix is not sent again");
+    assert_eq!(t.resend_from(id, 2000), 2000);
+    assert_eq!(t.resend_from(99, 7), 7, "a stream that is gone has nothing to cut");
+}

@@ -175,6 +175,14 @@ name = "transport_stream_pool"
 path = "transport_stream_pool.rs"
 
 [[test]]
+name = "transport_stream_ring"
+path = "transport_stream_ring.rs"
+
+[[test]]
+name = "transport_ring_conn"
+path = "transport_ring_conn.rs"
+
+[[test]]
 name = "transport_recovery"
 path = "transport_recovery.rs"
 
