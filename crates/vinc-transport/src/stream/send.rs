@@ -272,12 +272,17 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             fin,
         };
         if retx {
-            if let Some(r) = self.lost.take_front(budget as u64) {
+            while let Some(r) = self.lost.take_front(budget as u64) {
                 let fin = self.fin == Fin::Pending && self.final_size == Some(r.end);
+                // The acknowledged prefix is never sent again: its chunks are released.
+                let start = self.clip(r.start).min(r.end);
+                if start == r.end && !fin {
+                    continue;
+                }
                 if fin {
                     self.fin = Fin::Sent;
                 }
-                return Some(frame(r.start, r.end - r.start, fin));
+                return Some(frame(start, r.end - start, fin));
             }
             if self.lost.is_empty() && self.fin == Fin::Pending && self.final_size == Some(self.sent_max) {
                 self.fin = Fin::Sent;
@@ -304,6 +309,12 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         Some(frame(offset, n, fin))
     }
 
+    /// The lowest offset at or after `offset` that is not in the acknowledged prefix, so a range can be cut to the
+    /// bytes still held.
+    pub(super) fn clip(&self, offset: u64) -> u64 {
+        offset.max(self.acked_prefix)
+    }
+
     /// Copy the data of `chunk` into `dst`.
     pub(super) fn copy_out(
         &mut self,
@@ -312,6 +323,11 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         dst: &mut [u8],
     ) -> Result<usize, StreamError> {
         let out = dst.get_mut(..chunk.len).ok_or(StreamError::BufferTooSmall)?;
+        // A released chunk's slot may hold a later chunk's bytes once the ring has wrapped: refuse the copy.
+        if self.source.is_none() && chunk.offset / (CHUNK_SIZE as u64) < self.acked_prefix / (CHUNK_SIZE as u64) {
+            self.requeue(chunk.offset, chunk.len as u64, chunk.fin);
+            return Err(StreamError::DataUnavailable);
+        }
         let got = match self.source.as_mut() {
             Some(source) => source.read_at(chunk.offset, out),
             None => self.ring.read(pool, chunk.offset, out),

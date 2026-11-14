@@ -18,10 +18,13 @@ conn_impl! {
         let mtu = self.paths.get(fill.ti).map_or(u32::from(MIN_MTU), |p| u32::from(p.mtu.current));
         let mut room = usize::try_from(mtu.saturating_sub(REPAIR_OVERHEAD).min(REPAIR_PACKET_BYTES)).unwrap_or(0);
         for f in frames.as_slice().iter().rev() {
-            let FrameRef::Stream { id, offset, len, fin } = *f else { continue };
-            if (len > 0 || !fin) && self.streams.is_acked(id, offset, u64::from(len)) {
+            let FrameRef::Stream { id, offset: first, len, fin } = *f else { continue };
+            if (len > 0 || !fin) && self.streams.is_acked(id, first, u64::from(len)) {
                 continue;
             }
+            // A part of the frame that is acknowledged for good was released and is not sent again.
+            let offset = self.streams.resend_from(id, first);
+            let len = u32::try_from(u64::from(len).saturating_sub(offset - first)).unwrap_or(0);
             let dl = len as usize;
             if dl + 24 > room || out.refs.len() >= MAX_FRAME_REFS {
                 break;

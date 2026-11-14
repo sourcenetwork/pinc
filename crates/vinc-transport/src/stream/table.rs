@@ -817,6 +817,14 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             .is_none_or(|s| s.send.is_acked(offset, len))
     }
 
+    /// The lowest offset at or after `offset` of a stream that is not acknowledged for good, so a frame sent again can
+    /// be cut to the bytes still held. A stream that is gone returns `offset`.
+    pub fn resend_from(&self, id: StreamId, offset: u64) -> u64 {
+        self.find(id)
+            .and_then(|i| self.slot(i))
+            .map_or(offset, |s| s.send.clip(offset))
+    }
+
     /// Whether a stream sends from application storage instead of a buffer.
     pub fn is_source(&self, id: StreamId) -> bool {
         self.find(id)
