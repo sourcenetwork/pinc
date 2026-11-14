@@ -1040,6 +1040,10 @@ name = "mbt_halfopen"
 path = "mbt_halfopen.rs"
 
 [[test]]
+name = "mbt_reasm"
+path = "mbt_reasm.rs"
+
+[[test]]
 name = "trace_halfopen"
 path = "trace_halfopen.rs"
 
