@@ -9,6 +9,9 @@
 //! not taken. UPnP searches only from a private IPv4 address, takes a description only from the host that answered
 //! (and the gateway's, when it is known), and sends HTTP to no other host. When every protocol failed the client tries again after [`RETRY`].
 //!
+//! A grant whose external address no peer on the internet could send to (unspecified, loopback, multicast, link-local or
+//! private, [`addr::external_ok`]) is refused: it is not held, and the client goes on to the next protocol.
+//!
 //! **Holding.** A grant is a lease that started when its request first left, so it ends on the client's clock no
 //! later than on the gateway's ([`crate::lease`]). The client renews half way with the protocol that granted
 //! it; a renewal that fails is tried again half way to the end, and a lease that reaches its end is gone: the client
@@ -409,7 +412,7 @@ impl PortMap {
                 }
                 self.note_epoch(now, epoch);
                 match result {
-                    pcp::SUCCESS if lifetime > 0 && external_port != 0 => {
+                    pcp::SUCCESS if lifetime > 0 && external_port != 0 && addr::external_ok(external_ip) => {
                         self.grant(Proto::Pcp, SocketAddr::new(external_ip, external_port), lifetime, now);
                     }
                     pcp::UNSUPP_VERSION if !self.renewing => self.enter(Step::NatAddr, now),
@@ -453,7 +456,7 @@ impl PortMap {
             }
             natpmp::Response::Address { result, epoch, ip } if self.step == Step::NatAddr => {
                 self.note_epoch(now, epoch);
-                if result == 0 && !ip.is_unspecified() {
+                if result == 0 && addr::external_ok(IpAddr::V4(ip)) {
                     self.nat_ip = Some(ip);
                     self.enter(Step::NatMap, now);
                 } else {
@@ -611,7 +614,9 @@ impl PortMap {
                 None => self.fail(now),
             },
             Step::ExtIp => match upnp::soap_result(resp) {
-                Some(SoapResult::Ok(body)) if upnp::external_ip(body).is_some_and(|ip| !ip.is_unspecified()) => {
+                Some(SoapResult::Ok(body))
+                    if upnp::external_ip(body).is_some_and(|ip| addr::external_ok(IpAddr::V4(ip))) =>
+                {
                     igd.ext_ip = upnp::external_ip(body);
                     self.enter(Step::Add, now);
                 }

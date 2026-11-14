@@ -14,9 +14,10 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use vinc_portmap::client::PORT;
 use vinc_portmap::lease::SEC;
 use vinc_portmap::upnp;
-use vinc_portmap::{Config, PortMap};
+use vinc_portmap::{Config, PortMap, natpmp, pcp};
 
 const GW: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
 const T0: u64 = 1_000 * SEC;
@@ -168,5 +169,125 @@ fn no_http_goes_to_a_loopback_unspecified_multicast_or_link_local_host() {
         );
         pm.handle_http(T0, Some(desc.as_bytes()));
         assert_eq!(http(&mut pm), None, "{ip:?}: no SOAP request");
+    }
+}
+
+fn gw() -> SocketAddr {
+    SocketAddr::new(GW.into(), PORT)
+}
+
+fn pcp_grant(ip: IpAddr) -> Vec<u8> {
+    let r = pcp::Response::Map {
+        result: pcp::SUCCESS,
+        lifetime: 7200,
+        epoch: 1000,
+        nonce: NONCE,
+        protocol: pcp::UDP,
+        internal_port: 4433,
+        external_port: 4433,
+        external_ip: ip,
+    };
+    let mut b = [0u8; 60];
+    pcp::encode_response(&r, &mut b).unwrap();
+    b.to_vec()
+}
+
+fn nat(r: natpmp::Response) -> Vec<u8> {
+    let mut b = [0u8; 16];
+    let n = natpmp::encode_response(&r, &mut b).unwrap();
+    b[..n].to_vec()
+}
+
+/// External addresses no peer on the internet could send to.
+const UNREACHABLE: [&str; 12] = [
+    "100.64.0.7",
+    "100.127.255.1",
+    "10.1.1.1",
+    "172.16.0.3",
+    "192.168.9.9",
+    "127.0.0.1",
+    "169.254.1.1",
+    "224.0.0.1",
+    "0.0.0.0",
+    "::",
+    "fe80::1",
+    "fd00::1",
+];
+
+#[test]
+fn a_pcp_grant_of_an_address_no_peer_could_reach_is_not_held() {
+    for ip in UNREACHABLE {
+        let mut pm = client(Some(GW.into()), local());
+        sent(&mut pm);
+        pm.handle_datagram(T0, gw(), &pcp_grant(ip.parse().unwrap()));
+        assert_eq!(pm.mapped(), None, "a grant of {ip} is held");
+    }
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_grant("203.0.113.9".parse().unwrap()));
+    assert_eq!(pm.mapped(), Some("203.0.113.9:4433".parse().unwrap()));
+}
+
+#[test]
+fn a_nat_pmp_address_no_peer_could_reach_is_not_mapped() {
+    for ip in [
+        "100.64.0.7",
+        "10.1.1.1",
+        "127.0.0.1",
+        "169.254.1.1",
+        "224.0.0.1",
+        "0.0.0.0",
+    ] {
+        let mut pm = client(Some(GW.into()), local());
+        sent(&mut pm);
+        pm.handle_datagram(
+            T0,
+            gw(),
+            &nat(natpmp::Response::Error {
+                opcode: 1,
+                result: 1,
+                epoch: 1,
+            }),
+        );
+        sent(&mut pm);
+        let ip: Ipv4Addr = ip.parse().unwrap();
+        pm.handle_datagram(
+            T0,
+            gw(),
+            &nat(natpmp::Response::Address {
+                result: 0,
+                epoch: 1,
+                ip,
+            }),
+        );
+        let asks_for_a_mapping = sent(&mut pm)
+            .iter()
+            .any(|(to, b)| *to == gw() && matches!(natpmp::decode_request(b), Ok(natpmp::Request::Map { .. })));
+        assert!(!asks_for_a_mapping, "{ip}: a mapping was asked for");
+        assert_eq!(pm.mapped(), None);
+    }
+}
+
+#[test]
+fn a_upnp_external_address_no_peer_could_reach_is_not_mapped() {
+    for ip in [
+        "100.64.0.7",
+        "10.1.1.1",
+        "127.0.0.1",
+        "169.254.1.1",
+        "224.0.0.1",
+        "0.0.0.0",
+    ] {
+        let mut pm = client(None, local());
+        sent(&mut pm);
+        pm.handle_datagram(T0, from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml"));
+        http(&mut pm).unwrap();
+        let desc = b"HTTP/1.1 200 OK\r\n\r\n<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl</controlURL></service>";
+        pm.handle_http(T0, Some(desc));
+        http(&mut pm).unwrap();
+        let ext = format!("HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>{ip}</NewExternalIPAddress>");
+        pm.handle_http(T0, Some(ext.as_bytes()));
+        assert_eq!(http(&mut pm), None, "{ip}: AddPortMapping was asked");
+        assert_eq!(pm.mapped(), None);
     }
 }

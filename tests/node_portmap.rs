@@ -1,6 +1,6 @@
 //! The node's port-mapping client: the host turns it on, the node sends the gateway's requests from its own socket,
-//! takes the gateway's answers before the endpoint sees them, puts the mapped address first among the addresses it
-//! offers (and so in its record), renews, and releases the mapping when told to stop.
+//! takes the gateway's answers before the endpoint sees them, holds the mapped address and offers it only once a relay
+//! saw the node at its IP, renews, and releases the mapping when told to stop.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -22,7 +22,7 @@ use vinc_core::{
 };
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, NodeId};
 use vinc_node::{Config as NodeConfig, Ep, HUB_ALPN, Node};
-use vinc_portmap::{Proto, pcp};
+use vinc_portmap::{Proto, natpmp, pcp};
 use vinc_security::{Env, KeyHandle, LocalIdentity, PrekeyPolicy, SoftPrekeys};
 use vinc_tests::Caps;
 use vinc_transport::stream::{NoSource, StreamId};
@@ -212,7 +212,7 @@ fn grant(nonce: [u8; 12], epoch: u32) -> Vec<u8> {
 }
 
 #[test]
-fn a_mapping_leads_the_offered_addresses_until_it_is_released() {
+fn a_mapping_no_relay_saw_is_held_and_not_offered_until_it_is_released() {
     std::thread::Builder::new()
         .stack_size(256 << 20)
         .spawn(|| {
@@ -237,10 +237,9 @@ fn a_mapping_leads_the_offered_addresses_until_it_is_released() {
             let mut g = grant(req.nonce, 7);
             node.handle_datagram(now, local(), gw(), &mut g);
             assert_eq!(node.port_mapping(), Some((ext(), Proto::Pcp)));
-            assert_eq!(
-                offered(&node).first(),
-                Some(&ext()),
-                "the mapping leads what the node offers"
+            assert!(
+                !offered(&node).contains(&ext()),
+                "a mapping no relay vouched for is held and not offered"
             );
             assert!(offered(&node).contains(&local()));
             // half way through the lease the node renews
@@ -260,6 +259,112 @@ fn a_mapping_leads_the_offered_addresses_until_it_is_released() {
             assert_eq!(release.len(), 1);
             assert_eq!(pcp::decode_request(&release[0]).unwrap().lifetime, 0);
             assert!(node.port_mapping_done());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn nat(r: natpmp::Response) -> Vec<u8> {
+    let mut b = [0u8; 16];
+    let n = natpmp::encode_response(&r, &mut b).unwrap();
+    b[..n].to_vec()
+}
+
+/// Hand `node` a datagram from `from` at `now`.
+fn deliver(node: &mut Member, now: u64, from: SocketAddr, mut d: Vec<u8>) {
+    node.handle_datagram(now, local(), from, &mut d);
+}
+
+#[test]
+fn an_address_a_spoofed_gateway_names_is_held_and_never_offered() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = member();
+            node.set_local(&[local()]);
+            node.start_port_mapping(SEC, Some(gw().ip()), local(), 120);
+            to_gateway(&mut node);
+            // a NAT-PMP error during the PCP step, then an address and a mapping: nothing a nonce could tell apart
+            deliver(
+                &mut node,
+                SEC,
+                gw(),
+                nat(natpmp::Response::Error {
+                    opcode: 1,
+                    result: 1,
+                    epoch: 1,
+                }),
+            );
+            let victim = Ipv4Addr::new(1, 2, 3, 4);
+            deliver(
+                &mut node,
+                SEC,
+                gw(),
+                nat(natpmp::Response::Address {
+                    result: 0,
+                    epoch: 1,
+                    ip: victim,
+                }),
+            );
+            deliver(
+                &mut node,
+                SEC,
+                gw(),
+                nat(natpmp::Response::Map {
+                    result: 0,
+                    epoch: 1,
+                    internal_port: 4433,
+                    external_port: 53,
+                    lifetime: 120,
+                }),
+            );
+            let spoofed = SocketAddr::new(victim.into(), 53);
+            assert_eq!(
+                node.port_mapping(),
+                Some((spoofed, Proto::NatPmp)),
+                "the client holds what it was told"
+            );
+            assert_eq!(
+                offered(&node),
+                [local()],
+                "no relay saw the node at {victim}: it is not offered"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn an_address_a_lan_host_names_over_upnp_is_held_and_never_offered() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = member();
+            node.set_local(&[local()]);
+            node.start_port_mapping(SEC, None, local(), 120);
+            let host = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 77)), 1900);
+            deliver(
+                &mut node,
+                SEC,
+                host,
+                b"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.77:5000/d.xml\r\n\r\n".to_vec(),
+            );
+            let desc = b"HTTP/1.1 200 OK\r\n\r\n<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl</controlURL></service>";
+            let answers: [&[u8]; 3] = [
+                desc,
+                b"HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>1.2.3.4</NewExternalIPAddress>",
+                b"HTTP/1.1 200 OK\r\n\r\n<u:AddPortMappingResponse/>",
+            ];
+            for a in answers {
+                let mut buf = [0u8; 2048];
+                assert!(node.poll_http(&mut buf).is_some(), "the client asks");
+                node.handle_http(SEC, Some(a));
+            }
+            let spoofed = SocketAddr::new(Ipv4Addr::new(1, 2, 3, 4).into(), 4433);
+            assert_eq!(node.port_mapping(), Some((spoofed, Proto::Upnp)));
+            assert_eq!(offered(&node), [local()], "no relay saw the node at 1.2.3.4: it is not offered");
         })
         .unwrap()
         .join()

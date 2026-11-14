@@ -1,7 +1,7 @@
 //! The node's port-mapping client (`vinc-portmap`): the host turns it on with the node's socket and its default
 //! gateway, the node routes the gateway's datagrams to it, sends what it wants sent, runs its timers, and gives the
 //! mapped address to the connectivity client, which lists it first in the signed record and classifies the node as
-//! port-mapped. The client's HTTP requests (`UPnP`) are the host's to carry over TCP.
+//! port-mapped once a relay saw the node at its IP. The client's HTTP requests (`UPnP`) are the host's to carry over TCP.
 //!
 //! Invariants: the connectivity client holds exactly the address the port-mapping client holds, after every call that
 //! could change it; a node whose host never turned port mapping on sends nothing for it and arms no timer for it.

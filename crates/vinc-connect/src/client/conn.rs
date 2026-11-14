@@ -355,6 +355,8 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) udp_any: bool,
     pub(super) local: [Option<SocketAddr>; MAX_ADDRS],
     pub(super) mapped: [Option<SocketAddr>; 2],
+    /// The mapped addresses a relay vouches for, as the record was last asked for.
+    pub(super) live: [Option<SocketAddr>; 2],
     pub(super) udp_q: [Option<UdpItem>; UDP_QUEUE],
     pub(super) inbound: [Option<Inbound>; INBOUND],
     pub(super) io: [Option<Io>; IO_QUEUE],
@@ -442,6 +444,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             udp_any: false,
             local: [None; MAX_ADDRS],
             mapped: [None; 2],
+            live: [None; 2],
             udp_q: [None; UDP_QUEUE],
             inbound: [None; INBOUND],
             io: [None; IO_QUEUE],
@@ -620,8 +623,10 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
     }
 
-    /// Set the external addresses of the port mappings the host holds (at most two) at `now`: they lead the
-    /// candidates and the record, and decide the port-mapped class. A change is published at once.
+    /// Set the external addresses of the port mappings the host holds (at most two) at `now`. A mapped address leads
+    /// the candidates and the record, and decides the port-mapped class, only while a relay reported its IP
+    /// ([`netcheck::mapped_seen`]): until then it is held and not published, and a change in what passes is published
+    /// at once.
     pub fn set_mapped(&mut self, now: u64, addrs: &[SocketAddr]) {
         let mut mapped = [None; 2];
         for (d, a) in mapped.iter_mut().zip(addrs) {
@@ -632,17 +637,38 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
         self.mapped = mapped;
         self.update_class(now);
-        self.sign.want_record();
     }
 
-    /// The candidates this node offers a peer: the external addresses of its port mappings first, then its reflexive
-    /// addresses, then its local ones, at most 8.
+    /// The mapped addresses a relay vouches for, given the reflexive addresses `refl`.
+    fn live_of(&self, refl: &[SocketAddr]) -> [Option<SocketAddr>; 2] {
+        self.mapped.map(|m| m.filter(|m| netcheck::mapped_seen(refl, m)))
+    }
+
+    /// Ask for the record again when the mapped addresses a relay vouches for changed.
+    pub(super) fn refresh_mapped(&mut self) {
+        let mut refl = [self.me_addr(); MAX_ADDRS];
+        let nr = self.net.reflexive_into(&mut refl);
+        let live = self.live_of(refl.get(..nr).unwrap_or_default());
+        if live != self.live {
+            self.live = live;
+            self.sign.want_record();
+        }
+    }
+
+    /// The candidates this node offers a peer: the external addresses of its port mappings a relay vouches for first
+    /// ([`netcheck::mapped_seen`]), then its reflexive addresses, then its local ones, at most 8. A node with no
+    /// mapping offers its reflexive addresses, then its local ones.
     pub fn candidates(&self, out: &mut [SocketAddr; MAX_ADDRS]) -> usize {
         let mut refl = [self.me_addr(); MAX_ADDRS];
         let nr = self.net.reflexive_into(&mut refl);
         let mut n = 0;
-        let mapped = self.mapped.iter().flatten();
-        for a in mapped.chain(refl.iter().take(nr)).chain(self.local.iter().flatten()) {
+        let live = self.live_of(refl.get(..nr).unwrap_or_default());
+        for a in live
+            .iter()
+            .flatten()
+            .chain(refl.iter().take(nr))
+            .chain(self.local.iter().flatten())
+        {
             if n < MAX_ADDRS
                 && !out.get(..n).unwrap_or_default().contains(a)
                 && let Some(d) = out.get_mut(n)
@@ -670,6 +696,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     pub(super) fn update_class(&mut self, now: u64) {
+        self.refresh_mapped();
         let mut local = [self.me_addr(); MAX_ADDRS];
         let mut nl = 0;
         for (d, a) in local.iter_mut().zip(self.local.iter().flatten()) {
