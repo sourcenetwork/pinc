@@ -15,7 +15,9 @@
 //!   [`ProtectedCarrier::key_response`]. These are the same [`KeyRequest`] and [`KeyResponse`] the endpoint raises, so
 //!   a node whose key lives in a TPM or HSM opens carriers through the same host path.
 //! - A record that fails authentication, a unit of the wrong size or a failed handshake ends the carrier for good:
-//!   every later call returns [`CarrierError::Closed`] and the host closes the stream.
+//!   every later call that can fail returns [`CarrierError::Closed`] and the host closes the stream.
+//!   [`CarrierError::is_fatal`] is true exactly for an error the carrier ended with.
+//!   [`ProtectedCarrier::transmit`] still hands out handshake bytes that were queued before the end.
 //! - A frame inside an authenticated record that does not decode is dropped and reported
 //!   ([`CarrierError::Frame`]); the carrier stays usable.
 //! - Packet numbers count records per direction from 0 and are never reused; a key that reaches its usage limit
@@ -74,7 +76,9 @@ pub enum CarrierError {
     KeyLimit,
     /// A frame was sealed before the handshake completed.
     NotOpen,
-    /// The handshake output buffer is full: call [`ProtectedCarrier::transmit`] more often.
+    /// A key answer arrived while no key request was outstanding; nothing changed.
+    NoKeyRequest,
+    /// The handshake output buffer is full because [`ProtectedCarrier::transmit`] was not called; the carrier ends.
     OutputFull,
     /// The output buffer given to [`ProtectedCarrier::seal`] is too small.
     NoRoom,
@@ -87,9 +91,9 @@ pub enum CarrierError {
 }
 
 impl CarrierError {
-    /// Whether the carrier ended: the host closes the stream.
+    /// Whether the carrier ended with this error: the host closes the stream.
     pub const fn is_fatal(&self) -> bool {
-        !matches!(self, Self::Frame(_) | Self::NoRoom | Self::NotOpen | Self::OutputFull)
+        !matches!(self, Self::Frame(_) | Self::NoRoom | Self::NotOpen | Self::NoKeyRequest)
     }
 }
 
@@ -101,6 +105,7 @@ impl fmt::Display for CarrierError {
             Self::Authentication => f.write_str("carrier record failed authentication"),
             Self::KeyLimit => f.write_str("carrier key reached its usage limit"),
             Self::NotOpen => f.write_str("carrier handshake has not completed"),
+            Self::NoKeyRequest => f.write_str("carrier has no key request outstanding"),
             Self::OutputFull => f.write_str("carrier handshake output is full"),
             Self::NoRoom => f.write_str("output buffer is too small"),
             Self::Frame(e) => write!(f, "carrier frame dropped: {e}"),
@@ -257,9 +262,10 @@ impl<P: Provider> ProtectedCarrier<P> {
         self.alpn.is_some_and(|a| a.as_bytes() == PEER_ALPN)
     }
 
-    /// How many bytes [`ProtectedCarrier::receive`] would take now.
+    /// How many bytes [`ProtectedCarrier::receive`] would take now: the room left once the unit the last poll took
+    /// is released.
     pub const fn free(&self) -> usize {
-        IN_LEN - self.in_len
+        IN_LEN - (self.in_len - self.consume)
     }
 
     /// Buffer received stream bytes and return how many were taken. Offer the rest again after polling: this is the
@@ -359,8 +365,16 @@ impl<P: Provider> ProtectedCarrier<P> {
     /// [`ProtectedCarrier::poll`]: a later operation, handshake output to transmit, or the open carrier.
     ///
     /// # Errors
-    /// [`CarrierError::Handshake`] if no request is outstanding or the answer fails the handshake; the carrier ends.
+    /// [`CarrierError::Closed`] on an ended carrier; [`CarrierError::NoKeyRequest`] if no request is outstanding
+    /// (nothing changes, an open carrier stays open); [`CarrierError::Handshake`] if the answer fails the handshake,
+    /// and the carrier ends.
     pub fn key_response(&mut self, env: &mut Env<'_, P>, resp: KeyResponse<'_>) -> Result<Poll<'_>, CarrierError> {
+        if matches!(self.stage, Stage::Ended) {
+            return Err(CarrierError::Closed);
+        }
+        if self.key_request().is_none() {
+            return Err(CarrierError::NoKeyRequest);
+        }
         let outcome = match &mut self.stage {
             Stage::Dialing(m) => m
                 .on_key_response(env, resp)
@@ -378,12 +392,12 @@ impl<P: Provider> ProtectedCarrier<P> {
     /// Answer the outstanding key request at once from software keys (a host without a hardware key).
     ///
     /// # Errors
-    /// [`CarrierError::Handshake`] if there is no request or the handshake fails.
+    /// As [`ProtectedCarrier::key_response`].
     pub fn answer_soft(&mut self, env: &mut Env<'_, P>, soft: &SoftKeys<'_, P>) -> Result<Poll<'_>, CarrierError> {
         let mut sig = [0u8; vinc_crypto::identity::MAX_SIGNATURE_LEN];
         let resp = match self.key_request() {
             Some(req) => soft.answer(env, &req, &mut sig),
-            None => return Err(self.end(CarrierError::Handshake(Failure::UnexpectedKeyResponse))),
+            None => KeyResponse::Failed,
         };
         self.key_response(env, resp)
     }
@@ -468,9 +482,11 @@ impl<P: Provider> ProtectedCarrier<P> {
     /// Encode and seal `frame` into `out` as one unit; returns the unit length.
     ///
     /// # Errors
-    /// [`CarrierError::NotOpen`] before the handshake completes, [`CarrierError::NoRoom`] if `out` is short,
-    /// [`CarrierError::Frame`] for a frame that cannot be encoded, [`CarrierError::KeyLimit`] at the key's limit.
+    /// [`CarrierError::NotOpen`] before the handshake completes, [`CarrierError::Closed`] after the end,
+    /// [`CarrierError::NoRoom`] if `out` is short, [`CarrierError::Frame`] for a frame that cannot be encoded,
+    /// [`CarrierError::KeyLimit`] at the key's limit.
     pub fn seal(&mut self, p: &P, frame: &Frame<'_>, out: &mut [u8]) -> Result<usize, CarrierError> {
+        self.sealable()?;
         let body = out.get_mut(2..).ok_or(CarrierError::NoRoom)?;
         let n = frame.encode(body).map_err(|e| match e {
             FrameError::Wire(_) => CarrierError::NoRoom,
@@ -482,24 +498,28 @@ impl<P: Provider> ProtectedCarrier<P> {
     /// Seal already encoded frame bytes (for example a finished [`super::frame::BatchBuilder`]) as one unit.
     ///
     /// # Errors
-    /// As [`ProtectedCarrier::seal`].
+    /// As [`ProtectedCarrier::seal`]; bytes that are empty or longer than a frame are refused with
+    /// [`CarrierError::Frame`] and the carrier lives on.
     pub fn seal_bytes(&mut self, p: &P, plain: &[u8], out: &mut [u8]) -> Result<usize, CarrierError> {
+        self.sealable()?;
         if plain.is_empty() || plain.len() > MAX_FRAME_LEN {
-            return Err(CarrierError::UnitSize);
+            return Err(CarrierError::Frame(FrameError::BodySize));
         }
         let slot = out.get_mut(2..2 + plain.len()).ok_or(CarrierError::NoRoom)?;
         slot.copy_from_slice(plain);
         self.seal_in_place(p, out, plain.len())
     }
 
-    fn seal_in_place(&mut self, p: &P, out: &mut [u8], n: usize) -> Result<usize, CarrierError> {
-        if !matches!(self.stage, Stage::Open) {
-            return Err(if matches!(self.stage, Stage::Ended) {
-                CarrierError::Closed
-            } else {
-                CarrierError::NotOpen
-            });
+    /// Whether a frame can be sealed now: the stage decides before anything else is looked at.
+    const fn sealable(&self) -> Result<(), CarrierError> {
+        match self.stage {
+            Stage::Open => Ok(()),
+            Stage::Ended => Err(CarrierError::Closed),
+            Stage::Dialing(_) | Stage::Accepting(_) => Err(CarrierError::NotOpen),
         }
+    }
+
+    fn seal_in_place(&mut self, p: &P, out: &mut [u8], n: usize) -> Result<usize, CarrierError> {
         let unit = n + Aead::TAG_LEN;
         let unit16 = u16::try_from(unit).map_err(|_| CarrierError::UnitSize)?;
         let total = 2 + unit;

@@ -59,6 +59,7 @@ fn err_tag(e: CarrierError) -> &'static str {
         CarrierError::Authentication => "Authentication",
         CarrierError::KeyLimit => "KeyLimit",
         CarrierError::NotOpen => "NotOpen",
+        CarrierError::NoKeyRequest => "NoKeyRequest",
         CarrierError::OutputFull => "OutputFull",
         CarrierError::NoRoom => "NoRoom",
         CarrierError::Frame(_) => "Frame",

@@ -157,6 +157,20 @@ impl Rig {
         poll_soft(&mut self.client, &mut env, &mut stores, &soft)
     }
 
+    /// Hand the client side a key answer from software keys, whether or not it asked for one.
+    pub fn answer_client(&mut self) -> Result<Out, CarrierError> {
+        let soft = SoftKeys {
+            signer: Some((KeyHandle(1), &self.client_kp)),
+            prekeys: Some(&self.prekeys),
+        };
+        let mut env = Env {
+            provider: &self.prov,
+            now: NOW,
+            drbg: &mut self.c_drbg,
+        };
+        out(self.client.answer_soft(&mut env, &soft))
+    }
+
     pub fn poll_relay(&mut self) -> Result<Out, CarrierError> {
         let soft = SoftKeys {
             signer: Some((KeyHandle(1), &self.relay_kp)),

@@ -488,11 +488,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let Some(c) = self.rly.get_mut(relay).and_then(|r| r.carrier.as_mut()) else {
             return;
         };
-        let ok = c.key_response(env, resp).is_ok();
+        // An answer nobody asked for changes nothing: only an error the carrier ended with closes its stream.
+        let ended = c.key_response(env, resp).is_err_and(|e| e.is_fatal());
         if let Some(r) = self.rly.get_mut(relay) {
             r.keyreq = false;
         }
-        if !ok {
+        if ended {
             self.close_stream(relay);
             return;
         }
@@ -504,11 +505,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         let Some(c) = self.rly.get_mut(relay).and_then(|r| r.carrier.as_mut()) else {
             return;
         };
-        let ok = c.answer_soft(env, soft).is_ok();
+        let ended = c.answer_soft(env, soft).is_err_and(|e| e.is_fatal());
         if let Some(r) = self.rly.get_mut(relay) {
             r.keyreq = false;
         }
-        if !ok {
+        if ended {
             self.close_stream(relay);
             return;
         }

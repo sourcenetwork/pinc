@@ -376,12 +376,126 @@ fn a_bad_frame_in_a_good_record_is_dropped_and_the_carrier_lives_on() {
         assert!(matches!(e, CarrierError::Frame(_)) && !e.is_fatal());
         assert!(rig.relay.is_open());
         assert_eq!(rig.poll_relay().unwrap(), Out::Frame(enc(&Frame::Ping)));
-        // sealing nothing, or too much, is refused
-        assert_eq!(rig.seal_client_bytes(&[]).unwrap_err(), CarrierError::UnitSize);
+        // sealing nothing, or too much, is refused and the carrier lives on
+        for bytes in [vec![], vec![0u8; MAX_FRAME_LEN + 1]] {
+            let e = rig.seal_client_bytes(&bytes).unwrap_err();
+            assert!(matches!(e, CarrierError::Frame(_)) && !e.is_fatal(), "{e:?}");
+            assert!(rig.client.is_open());
+        }
+        assert_eq!(rig.seal_client(&Frame::Ping).len(), enc(&Frame::Ping).len() + 2 + 16);
+    });
+}
+
+#[test]
+fn a_handshake_output_that_fills_up_ends_the_carrier_and_the_error_says_so() {
+    big_stack(|| {
+        // the listener's host never transmits: each copy of the dialer's first message queues another reply
+        let mut rig = Rig::new(None);
+        let mut first = vec![0u8; 32 * 1024];
+        let n = rig.client.transmit(&mut first);
+        first.truncate(n);
+        let mut failed = None;
+        'copies: for _ in 0..64 {
+            rig.feed_relay(&first);
+            loop {
+                match rig.poll_relay() {
+                    Ok(Out::Idle) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        failed = Some(e);
+                        break 'copies;
+                    }
+                }
+            }
+        }
+        let e = failed.expect("the output never filled");
+        assert_eq!(e, CarrierError::OutputFull);
+        assert!(rig.relay.is_ended());
+        assert!(e.is_fatal(), "the carrier ended and the error does not say so");
+    });
+}
+
+#[test]
+fn an_ended_carrier_answers_closed_before_any_other_check() {
+    big_stack(|| {
+        let mut rig = Rig::new(None);
+        rig.handshake();
+        rig.feed_relay(&[0, 0]);
+        assert_eq!(rig.poll_relay().unwrap_err(), CarrierError::UnitSize);
+        assert!(rig.relay.is_ended());
+        let p = vinc_crypto::Software;
+        // no room, nothing to seal, too much to seal: the end is reported first
         assert_eq!(
-            rig.seal_client_bytes(&vec![0u8; MAX_FRAME_LEN + 1]).unwrap_err(),
-            CarrierError::UnitSize
+            rig.relay.seal(&p, &Frame::Ping, &mut [0u8; 1]).unwrap_err(),
+            CarrierError::Closed
         );
+        let mut out = vec![0u8; 20 * 1024];
+        assert_eq!(
+            rig.relay.seal_bytes(&p, &[], &mut out).unwrap_err(),
+            CarrierError::Closed
+        );
+        assert_eq!(
+            rig.relay
+                .seal_bytes(&p, &vec![0u8; MAX_FRAME_LEN + 1], &mut out)
+                .unwrap_err(),
+            CarrierError::Closed
+        );
+        assert_eq!(
+            rig.relay.seal_bytes(&p, &[1], &mut [0u8; 1]).unwrap_err(),
+            CarrierError::Closed
+        );
+        // a dialer that ended in its handshake answers a key answer the same way
+        let mut rig = Rig::new(Some(nid(0x99)));
+        let mut ended = false;
+        for _ in 0..16 {
+            rig.flush_client();
+            let _ = rig.poll_relay();
+            rig.flush_relay();
+            if rig.poll_client().is_err() {
+                ended = true;
+                break;
+            }
+        }
+        assert!(ended && rig.client.is_ended());
+        assert_eq!(rig.answer_client().unwrap_err(), CarrierError::Closed);
+    });
+}
+
+#[test]
+fn a_key_answer_nobody_asked_for_changes_nothing() {
+    big_stack(|| {
+        let mut rig = Rig::new(None);
+        rig.handshake();
+        let e = rig.answer_client().unwrap_err();
+        assert_eq!(e, CarrierError::NoKeyRequest);
+        assert!(!e.is_fatal());
+        assert!(rig.client.is_open(), "a stray key answer ended an open carrier");
+        // the carrier still carries frames both ways
+        let ping = rig.seal_client(&Frame::Ping);
+        rig.feed_relay(&ping);
+        assert_eq!(rig.poll_relay().unwrap(), Out::Frame(enc(&Frame::Ping)));
+        // before the handshake asks for a key it is the same: nothing ends
+        let mut rig = Rig::new(None);
+        assert_eq!(rig.answer_client().unwrap_err(), CarrierError::NoKeyRequest);
+        assert!(!rig.client.is_ended());
+        rig.handshake();
+    });
+}
+
+#[test]
+fn the_room_reported_counts_the_unit_a_poll_already_took() {
+    big_stack(|| {
+        let mut rig = Rig::new(None);
+        rig.handshake();
+        assert_eq!(rig.relay.free(), IN_LEN);
+        let ping = rig.seal_client(&Frame::Ping);
+        rig.feed_relay(&ping);
+        assert_eq!(rig.relay.free(), IN_LEN - ping.len());
+        assert_eq!(rig.poll_relay().unwrap(), Out::Frame(enc(&Frame::Ping)));
+        // the unit was taken: the next receive has the whole buffer, and `free` says so before it
+        assert_eq!(rig.relay.free(), IN_LEN);
+        let junk = vec![0u8; 2 * IN_LEN];
+        assert_eq!(rig.relay.receive(&junk), IN_LEN);
     });
 }
 
