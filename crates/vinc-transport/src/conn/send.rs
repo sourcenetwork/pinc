@@ -382,9 +382,10 @@ conn_impl! {
             repair: None,
             min_total: 0,
         };
-        // A probe packet carries only its PING: the repair stays pending for the next packet.
+        // A probe packet carries only its PING: the repair stays pending for the next packet. The repair is taken
+        // when its packet is sealed, or dropped by the fill when nothing is left to repair.
         if on_active && !probes && fill.probe.is_none() {
-            fill.repair = self.life.repair_pn.take();
+            fill.repair = self.life.repair_pn;
         }
         let r = self.build_packet(env, window, kind, fill);
         if r.is_some() && probes {
@@ -447,7 +448,7 @@ conn_impl! {
             mode: trace::PackMode::of(fill.ping_only, fill.probe.is_some(), fill.repair.is_some()),
             client: self.client,
             repair_taken: fill.repair.is_some(),
-            repair_left: self.life.repair_pn.is_some(),
+            repair_left: fill.repair.is_none() && self.life.repair_pn.is_some(),
             active: ti == self.paths.active,
             pn,
             pn_len,
@@ -494,7 +495,10 @@ conn_impl! {
             self.rec.on_packet_untracked(pn)
         };
         if recorded.is_err() {
-            self.requeue(&filled.refs);
+            // A repair re-carries frames that are in flight in another packet: they are not queued again.
+            if fill.repair.is_none() {
+                self.requeue(&filled.refs);
+            }
             return None;
         }
         let packet = window.get_mut(..total)?;
@@ -514,6 +518,9 @@ conn_impl! {
             return None;
         }
         self.next_pn += 1;
+        if fill.repair.is_some() {
+            self.life.repair_pn = None;
+        }
         #[cfg(feature = "trace")]
         if kind == Kind::Short {
             self.trace_sent(now, pn);
