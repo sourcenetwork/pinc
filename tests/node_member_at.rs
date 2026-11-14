@@ -4,7 +4,8 @@
 //! The endpoint is scripted: it raises an `Incoming` hub-protocol session for each of 300 members, answers
 //! `session_from` from its table of addresses, and counts every `stats` call (and answers none, so a walk of the
 //! sessions finds no one). A member the walk would reach only after visiting every other session is found with no
-//! visit, a session the node does not hold as incoming is not an answer, and an address nobody holds gives none.
+//! visit, a session the node does not hold as incoming is not an answer, and an address nobody holds gives none. A
+//! timer call reads no member's stats: the node used to sample every member session's packet count on each one.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -210,6 +211,13 @@ fn a_hub_finds_the_sender_of_a_datagram_without_visiting_its_member_sessions() {
                 node.endpoint_mut().visits.get(),
                 0,
                 "member sessions visited to find a sender"
+            );
+            // A timer call reads no member's stats either: when a member was last heard is read when it is needed.
+            node.handle_timeout(2_000_000_000);
+            assert_eq!(
+                node.endpoint_mut().visits.get(),
+                0,
+                "member sessions visited by a timer call"
             );
         })
         .unwrap()
