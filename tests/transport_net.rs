@@ -473,6 +473,42 @@ fn a_relay_session_moves_to_a_direct_path_several_seconds_long() {
     });
 }
 
+/// A path the endpoint adds has heard nothing until a datagram arrives on it, as a path starts in the reference model.
+/// A session that falls back to a relay path on which nothing arrives does not read as heard from the moment the path
+/// was added: a hub that watches a crashed member's session through it confirms the member down.
+#[test]
+fn a_path_the_endpoint_adds_is_unheard_until_a_datagram_arrives_on_it() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(20, Params::new(10 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(10 * MS), Params::new(10 * MS));
+        link.route(PathId(3)).up = false;
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let relay = PathInfo {
+            kind: PathKind::Relay,
+            ..PathInfo::default()
+        };
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(3), relay)).unwrap();
+        assert_eq!(
+            net.a.conn.path_last_rx(PathId(3)),
+            Some(0),
+            "nothing was heard on the added path"
+        );
+        // The direct path dies under data and the session falls back to the relay path, silent too.
+        net.link.route(PathId(1)).up = false;
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(10_000, 24)).unwrap();
+        assert!(net.run(net.now + 60 * SEC, |n| n.a.conn.active_path() == Some(PathId(3))));
+        assert_eq!(
+            net.a.conn.path_last_rx(PathId(3)),
+            Some(0),
+            "a fallback onto a silent path is not news from the peer"
+        );
+    });
+}
+
 /// A session on a relay path that stops answering, with the relay's carrier heard at every step or never, and a
 /// keepalive answer of the carrier received at every step or never: how long the session lives.
 fn relay_path_goes_silent(carrier_answers: bool, pulses: bool) -> Option<u64> {

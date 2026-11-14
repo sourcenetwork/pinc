@@ -305,7 +305,8 @@ impl<const NP: usize> Paths<NP> {
 conn_impl! {
     /// Add a path the endpoint knows about, or update what it knows about one the connection already tracks.
     /// A new direct path is probed with PATH_CHALLENGE once the handshake is done; a new relay path is valid as it is
-    /// and is not probed.
+    /// and is not probed. Nothing is heard on a new path until a datagram arrives on it, as in the reference model: a
+    /// session that moves onto a relay path it added does not read as heard from the moment the path was added.
     ///
     /// # Errors
     /// [`PathError::TooMany`] if the table is full and no unused path can make room.
@@ -322,6 +323,7 @@ conn_impl! {
         // does not apply to challenging it.
         if let Some(p) = self.paths.get_mut(i) {
             p.amp.validate();
+            p.last_rx = 0;
         }
         if self.phase == Phase::Connected && info.kind != PathKind::Relay {
             self.start_punch(env, i);
