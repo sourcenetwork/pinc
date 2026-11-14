@@ -184,7 +184,7 @@ conn_impl! {
         // A responder in its handshake learns the address of every handshake datagram that names its ids: the dialer's
         // flight may arrive on several paths and its last flight on one the first did not use.
         if known.is_none() && !self.client && (self.paths.iter().next().is_none() || self.phase == Phase::Handshaking) {
-            known = self.new_path_slot(path, self.learned_path(), now);
+            known = self.learn_path(path, now);
         }
         if let Some(p) = known.and_then(|i| self.paths.get_mut(i)) {
             p.amp.on_receive(dlen as u64);
@@ -255,14 +255,14 @@ conn_impl! {
         if self.phase != Phase::Handshaking && !(self.phase == Phase::Connected && self.hs.keeps_reply()) {
             return Err(Drop::Empty);
         }
-        let Some(pi) = ctx.path else { return Err(Drop::NoPath) };
         if self.client {
-            // A dialing side believes nothing of the packet itself: its path and source id count only once the
-            // message it completes has authenticated (`follow_reply`).
+            // A dialing side believes nothing of the packet itself: its path (held or not) and source id count only
+            // once the message it completes has authenticated (`follow_reply`).
             if self.cids.first_local() != header.dcid {
                 return Err(Drop::Unroutable);
             }
         } else {
+            let Some(pi) = ctx.path else { return Err(Drop::NoPath) };
             self.cids.set_first_remote(header.scid);
             if let Some(p) = self.paths.get_mut(pi) {
                 p.last_rx = ctx.now;
@@ -449,7 +449,7 @@ conn_impl! {
         let pi = if let Some(i) = ctx.path {
             i
         } else {
-            let i = self.new_path_slot(ctx.path_id, self.learned_path(), now).ok_or(Drop::NoPath)?;
+            let i = self.learn_path(ctx.path_id, now).ok_or(Drop::NoPath)?;
             ctx.path = Some(i);
             if let Some(p) = self.paths.get_mut(i) {
                 p.amp.on_receive(ctx.dlen as u64);

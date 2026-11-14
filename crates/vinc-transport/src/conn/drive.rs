@@ -229,7 +229,9 @@ conn_impl! {
     fn follow_reply(&mut self) {
         let Some((id, scid, at)) = self.reply_from.take() else { return };
         self.cids.set_first_remote(scid);
-        let Some(pi) = self.paths.find(id) else { return };
+        // A reply on a path the dial does not hold adds it now, as a responder learns one, at the table's bound; at a
+        // full table the session stays on its path.
+        let Some(pi) = self.paths.find(id).or_else(|| self.learn_path(id, at)) else { return };
         if let Some(p) = self.paths.get_mut(pi) {
             p.last_rx = p.last_rx.max(at);
         }

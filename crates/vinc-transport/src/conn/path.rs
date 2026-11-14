@@ -535,6 +535,12 @@ conn_impl! {
         }
     }
 
+    /// Learn the path `id` of a packet by receiving on it, as the endpoint knows nothing else of it yet: the one rule
+    /// for both roles. `None` when the table is full of validated paths and the active one.
+    pub(super) fn learn_path(&mut self, id: PathId, now: u64) -> Option<usize> {
+        self.new_path_slot(id, self.learned_path(), now)
+    }
+
     pub(super) fn new_path_slot(&mut self, id: PathId, info: PathInfo, now: u64) -> Option<usize> {
         let active = self.paths.active;
         let free = self
