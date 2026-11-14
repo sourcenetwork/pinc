@@ -72,16 +72,12 @@ where
     }
 
     /// The member whose hub session has a validated direct path from `src`, if any: who a session packet from `src`
-    /// proves present.
-    // vertexia: a linear walk of the hub's member sessions per call; an index by address when a hub carries many.
+    /// proves present. Of several, the lowest session id. The endpoint's table of sessions by address answers, so a
+    /// datagram costs no walk of the hub's members.
     pub fn member_at(&self, src: &SocketAddr) -> Option<NodeId> {
-        if is_relay_addr(src) {
-            return None;
-        }
-        self.io.sess.iter().filter(|(_, s)| s.incoming).find_map(|(sid, s)| {
-            let st = self.io.ep.stats(*sid)?;
-            (st.path_validated && st.route.map(|(_, r)| r) == Some(*src)).then(|| self.io.full_id(&s.peer))
-        })
+        let incoming = |sid: SessionId| self.io.sess.get(&sid).is_some_and(|s| s.incoming);
+        let sid = self.io.ep.session_from(src, &incoming)?;
+        self.io.sess.get(&sid).map(|s| self.io.full_id(&s.peer))
     }
 
     /// The direct address of `member`'s hub session, if it has a validated one: where the relay sends a datagram to

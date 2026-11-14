@@ -176,6 +176,9 @@ macro_rules! define {
             fn session_at(&self, n: usize) -> Option<SessionStats> {
                 match self { $(Self::$v(e) => NodeEp::session_at(&**e, n),)+ }
             }
+            fn session_from(&self, remote: &SocketAddr, keep: &dyn Fn(SessionId) -> bool) -> Option<SessionId> {
+                match self { $(Self::$v(e) => NodeEp::session_from(&**e, remote, keep),)+ }
+            }
             fn poll_trace(&mut self) -> Option<TraceRecord> {
                 match self { $(Self::$v(e) => NodeEp::poll_trace(&mut **e),)+ }
             }

@@ -26,6 +26,12 @@
 //!   the next index for a derived id equal to one it holds), and the table holds one entry per copy a connection
 //!   lists. The table needs at least ten entries per session; the table sizes are type parameters the embedding
 //!   crate picks, and nothing checks the ratio at run time.
+//! - **Sessions by address.** A second table of `K` entries maps the remote address of each session whose active path
+//!   is validated and direct to its slot, so [`Endpoint::session_from`] finds who sent a datagram without a walk of
+//!   the sessions. Every input that touches a session settles it, and settling brings the session's entry in line with
+//!   its path (validation, migration, a rebind); freeing a slot removes it. A slot holds at most one entry, so the
+//!   table never fills; a lookup checks each entry against the session's path, so an entry whose path the table of
+//!   address pairs evicted since is not an answer.
 //! - **Amplification ledger.** Every outgoing datagram passes the [`Ledger`].
 //! - **Half-open cap.** A first Initial creates state only in a datagram of at least 1200 bytes (464 for a short
 //!   one), and only while fewer than 256 sessions are unauthenticated; a resumption Hello is exempt from the count.
@@ -165,6 +171,8 @@ pub struct Endpoint<
     pub(crate) half_open: usize,
     pub(crate) demux: Table<ConnId, u32, D>,
     pub(crate) by_peer: Table<NodeId, u32, K>,
+    /// The remote address of each session whose active path is validated and direct, to its slot (`Meta::route`).
+    pub(crate) by_route: Table<SocketAddr, u32, K>,
     pub(crate) heap: DeadlineHeap<K>,
     /// The sessions that may have something to send, in two queues. An entry can name a slot that was freed or reused
     /// since it was queued; it is skipped when served.
@@ -427,6 +435,7 @@ ep_impl! {
             half_open: 0,
             demux: Table::new(seed ^ 0x01),
             by_peer: Table::new(seed ^ 0x02),
+            by_route: Table::new(seed ^ 0x0C),
             heap: DeadlineHeap::new(),
             dirty_head: [NIL; 2],
             dirty_tail: [NIL; 2],
@@ -752,6 +761,44 @@ ep_impl! {
         slot.m.cid_epoch = epoch;
     }
 
+    /// The remote address of session `i`'s active path, when the session is live and that path is validated and
+    /// direct: the address a datagram of the session proves the peer is at.
+    pub(crate) fn direct_remote(&self, i: usize) -> Option<SocketAddr> {
+        let slot = self.slots.get(i).filter(|s| s.m.in_use)?;
+        let conn = slot.conn.as_ref()?;
+        let path = conn.active_path()?;
+        let (_, remote) = self.path_addrs(path)?;
+        (conn.path_validated(path) && !crate::relay_net::is_relay_addr(&remote)).then_some(remote)
+    }
+
+    /// Bring the table of sessions by address in line with session `i`'s path. A refused entry (the table holds one
+    /// per slot, so only a table smaller than the slots refuses) leaves the session out, and the next settle tries
+    /// again.
+    pub(crate) fn sync_route(&mut self, i: usize) {
+        let want = self.direct_remote(i);
+        let Ok(idx) = u32::try_from(i) else { return };
+        let Some(slot) = self.slots.get_mut(i) else { return };
+        if slot.m.route == want {
+            return;
+        }
+        if let Some(old) = slot.m.route.take() {
+            self.by_route.remove_pair(&old, &idx);
+        }
+        slot.m.route = want.filter(|a| self.by_route.insert_dup(*a, idx));
+    }
+
+    /// The live session with a validated direct path from `remote` that `keep` accepts, the lowest session id of
+    /// those: who a datagram from `remote` came from. It costs the entries of one chain of the table, not a walk of
+    /// the sessions.
+    pub fn session_from(&self, remote: &SocketAddr, keep: impl Fn(SessionId) -> bool) -> Option<SessionId> {
+        self.by_route
+            .holders(remote)
+            .filter(|i| self.direct_remote(*i as usize).as_ref() == Some(remote))
+            .map(|i| self.session_id(i as usize))
+            .filter(|s| keep(*s))
+            .min()
+    }
+
     /// End session `i`: unregister it, return its memory to the slot and put the slot on the free list.
     // Out of line: it moves a whole connection (a value of over a hundred kilobytes); a caller that inlined it would
     // reserve and probe that much stack on every call, on its hot path too. The same holds where a connection is built.
@@ -769,6 +816,9 @@ ep_impl! {
             self.demux.remove_pair(&o, &idx);
         }
         slot.m.cids = [None; MAX_CIDS];
+        if let Some(a) = slot.m.route.take() {
+            self.by_route.remove_pair(&a, &idx);
+        }
         if slot.m.half_open {
             self.half_open = self.half_open.saturating_sub(1);
             slot.m.half_open = false;

@@ -277,6 +277,8 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) sub_ids: Option<(ConnId, ConnId)>,
     /// The session is in its peer's list.
     pub(crate) linked: bool,
+    /// The address this session holds in the endpoint's table of sessions by address, if any.
+    pub(crate) route: Option<core::net::SocketAddr>,
     /// Close with this code once everything queued has left (a dialer's Finish goes out before its deny).
     pub(crate) deferred_close: Option<u64>,
 }
@@ -331,6 +333,7 @@ impl<const NP: usize> Meta<NP> {
         waiting: false,
         sub_ids: None,
         linked: false,
+        route: None,
         deferred_close: None,
     };
 

@@ -331,6 +331,22 @@ impl<K: Hash + Eq + Copy, V: Copy, const CAP: usize> Table<K, V, CAP> {
         (out, n)
     }
 
+    /// Every value stored under `k`, newest first: `matches` without its bound.
+    pub fn holders<'t>(&'t self, k: &'t K) -> impl Iterator<Item = V> + 't {
+        let mut cur = self.heads.get(self.bucket(k)).copied().unwrap_or(NIL);
+        core::iter::from_fn(move || {
+            while let Some(e) = self.at(cur) {
+                cur = e.chain;
+                if let Some((ek, ev)) = e.kv.as_ref()
+                    && ek == k
+                {
+                    return Some(*ev);
+                }
+            }
+            None
+        })
+    }
+
     /// Move the entry under `k` to the newest position, so it is evicted last.
     pub fn touch(&mut self, k: &K) {
         if let Some(i) = self.find(k)

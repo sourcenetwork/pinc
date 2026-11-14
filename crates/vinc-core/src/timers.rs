@@ -2,9 +2,10 @@
 //!
 //! After any call that touches a session the endpoint settles it: it reads the session's events, hands it the node
 //! round trips if they changed, applies the keepalive plan, registers new connection ids, forgets that a peer which
-//! rejected a short Initial holds the node's prekey, and recomputes the one deadline the session contributes to the
-//! heap. The deadline is the earliest of the connection's own timer, the keepalive review, the next ping of a standby
-//! path, the end of an unauthenticated session's 30 s, and the moment a cached access answer has 5 s left.
+//! rejected a short Initial holds the node's prekey, brings the session's entry in the table of sessions by address in
+//! line with its path, and recomputes the one deadline the session contributes to the heap. The deadline is the
+//! earliest of the connection's own timer, the keepalive review, the next ping of a standby path, the end of an
+//! unauthenticated session's 30 s, and the moment a cached access answer has 5 s left.
 //! [`Endpoint::poll_timeout`](crate::Endpoint::poll_timeout) is a peek at the heap;
 //! [`Endpoint::handle_timeout`](crate::Endpoint::handle_timeout) pops the sessions that are due, each at most once per
 //! call.
@@ -127,6 +128,7 @@ ep_impl! {
         }
         self.heap.set(i, deadline);
         self.sync_cids(i, false);
+        self.sync_route(i);
         if queue {
             self.mark_dirty(i);
         }

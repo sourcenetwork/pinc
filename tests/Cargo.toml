@@ -459,6 +459,10 @@ name = "core_endpoint"
 path = "core_endpoint.rs"
 
 [[test]]
+name = "core_session_from"
+path = "core_session_from.rs"
+
+[[test]]
 name = "core_extras"
 path = "core_extras.rs"
 
@@ -1270,6 +1274,10 @@ path = "node_route_owner.rs"
 [[test]]
 name = "node_route_full"
 path = "node_route_full.rs"
+
+[[test]]
+name = "node_member_at"
+path = "node_member_at.rs"
 
 [[test]]
 name = "vinc_addr_roundtrip"

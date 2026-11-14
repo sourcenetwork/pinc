@@ -51,6 +51,9 @@ pub trait Ep: Port {
     fn read_extension(&mut self, out: &mut [u8]) -> Result<Option<(SessionId, u64, usize)>, CommandError>;
     /// The `n`th live session.
     fn session_at(&self, n: usize) -> Option<SessionStats>;
+    /// The live session with a validated direct path from `remote` that `keep` accepts, the lowest session id of
+    /// those, found without a walk of the sessions.
+    fn session_from(&self, remote: &SocketAddr, keep: &dyn Fn(SessionId) -> bool) -> Option<SessionId>;
     /// The next trace record of the endpoint (always `None` without the endpoint's `trace` feature).
     fn poll_trace(&mut self) -> Option<TraceRecord>;
     /// Add an interface; `None` when the table is full.
@@ -152,6 +155,10 @@ where
             Answer::Stats(s) => Some(s),
             _ => None,
         }
+    }
+
+    fn session_from(&self, remote: &SocketAddr, keep: &dyn Fn(SessionId) -> bool) -> Option<SessionId> {
+        Endpoint::session_from(self, remote, keep)
     }
 
     fn poll_trace(&mut self) -> Option<TraceRecord> {

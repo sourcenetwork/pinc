@@ -90,6 +90,9 @@ impl Ep for Stub {
     fn session_at(&self, _n: usize) -> Option<SessionStats> {
         None
     }
+    fn session_from(&self, _remote: &SocketAddr, _keep: &dyn Fn(SessionId) -> bool) -> Option<SessionId> {
+        None
+    }
     fn poll_trace(&mut self) -> Option<TraceRecord> {
         None
     }
