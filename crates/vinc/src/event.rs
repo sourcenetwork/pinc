@@ -51,9 +51,9 @@ pub enum Event {
         /// How many of them the hubs were told.
         named: Option<u32>,
     },
-    /// On a hub: its adjacency table was full and refused `node`'s record (see
-    /// [`Builder::connected_topics`](crate::Builder::connected_topics)); `node` is alone at this hub until a slot frees
-    /// and its next record takes it. See [`Endpoint::reach_stats`](crate::Endpoint::reach_stats).
+    /// On a hub: `node`'s record did not fit its adjacency table's bytes and was refused (see
+    /// [`Builder::connected_topics`](crate::Builder::connected_topics)); `node` is alone at this hub until a record of
+    /// it fits. See [`Endpoint::reach_stats`](crate::Endpoint::reach_stats).
     ReachRefused {
         /// The endpoint whose record was refused.
         node: NodeId,

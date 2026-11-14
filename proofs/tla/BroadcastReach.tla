@@ -15,14 +15,17 @@
 (* tells its primary hub, in one signed record with a growing sequence     *)
 (* number, which peers it holds sessions with; the frame may be lost, and  *)
 (* the member sends its newest record again from time to time (the         *)
-(* refresh). A hub keeps the newest record of every member, at most        *)
-(* TableMax of them, mirrors each record a member hands it to the other    *)
-(* hubs, keeps an edge only where both ends list each other, and labels    *)
-(* each component of those edges by its least member. A hub that has not   *)
-(* heard a record for a while expires it: the member stays scoped, alone,  *)
-(* until it is heard again. A hub whose table is full refuses a newcomer's *)
-(* record and closes, and says so (an event for each refusal and one for  *)
-(* the closing): while it is closed a member it holds no record of is      *)
+(* refresh). A hub keeps the newest record of every member, charged in     *)
+(* bytes (a fixed share, and a unit per peer while it is live) up to       *)
+(* TableBytes, mirrors each record a member hands it to the other hubs,    *)
+(* keeps an edge only where both ends list each other, and labels each     *)
+(* component of those edges by its least member. A hub that has not heard  *)
+(* a record for a while expires it: the member stays scoped, alone, until  *)
+(* it is heard again. A hub refuses a record that does not fit: a newer    *)
+(* one of a member it holds leaves that member a tombstone, alone, and the *)
+(* table stays open; a newcomer's is refused and the table closes, and     *)
+(* says so (an event for each refusal and one for the closing): while it  *)
+(* is closed a member it holds no record of is                             *)
 (* alone. It opens again, and says so, once no refused member waits: each *)
 (* one got a record, or left with nothing of it in the log. A member may   *)
 (* leave for good: its subscriptions are forgotten,                        *)
@@ -44,7 +47,11 @@
 (* and name every member it refused (ClosedTold).                          *)
 (*                                                                         *)
 (* Mutual = Rebuild = Tomb = ScopedRepair = Closed = Batch = Told = Waits  *)
-(* = TRUE and EvictAny = FALSE is the code.                                *)
+(* = Charge = TRUE and EvictAny = FALSE is the code.                       *)
+(* BroadcastReach_bytes.cfg sets Charge = FALSE: only a newcomer's record  *)
+(* is checked against the bytes, as when the bound was a count of records, *)
+(* so a member whose newer record names more peers is taken whatever it   *)
+(* costs; TLC finds Bounds (the table within TableBytes) violated.         *)
 (* BroadcastReach_perevent.cfg sets Batch = FALSE: a member names its      *)
 (* sessions on every session event, as before the review of #137, so a     *)
 (* member in two session changes of one turn signs two records; TLC finds  *)
@@ -88,6 +95,7 @@
 (* unscoped members (they form one more class of their own, which no       *)
 (* scoped member shares); hubs as origins or subscribers (never scoped);   *)
 (* an older record a member sends itself after its incarnation went back;  *)
+(* the signature's bytes (a record is charged its share and its peers);    *)
 (* the 250 ms gap between two reports (an abstraction: a gap only moves a  *)
 (* report to a later turn); a revoked member (forgotten, and no longer     *)
 (* waiting); a hub that refused more members than it can remember (it     *)
@@ -95,17 +103,19 @@
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Vinc/BroadcastReach.lean (labels_iff,     *)
 (* edge_symm, reach_mono, split_narrows, closed_unknown_alone,             *)
-(* reopened_refused_iff, log_push_inv, log_pop_inv, log_holds_iff).        *)
+(* reopened_refused_iff, log_push_inv, log_pop_inv, log_holds_iff,        *)
+(* running_charge, take_within, shrink_le).                                *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets, Sequences, TLC
 
 \* N: the members are 1..N; HubCount: how many hubs there are; Liars: the members that may lie about their peers;
 \* MaxChanges: how many times sessions open or close; MaxLoss: how many record frames may be lost; MaxExpire: how
-\* many times a hub may expire a record; MaxLeave: how many members may leave for good; TableMax: the most records
-\* one hub keeps (Limits::max_reach); Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits: the
-\* guards
-CONSTANTS N, HubCount, Liars, MaxChanges, MaxLoss, MaxExpire, MaxLeave, TableMax,
-          Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits
+\* many times a hub may expire a record; MaxLeave: how many members may leave for good; TableBytes: the bytes one hub's
+\* records may be charged (Limits::reach_bytes); RecBase: a record's fixed share (REACH_RECORD_BASE), in the unit of
+\* one peer (32 bytes in the code); Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits, Charge:
+\* the guards
+CONSTANTS N, HubCount, Liars, MaxChanges, MaxLoss, MaxExpire, MaxLeave, TableBytes, RecBase,
+          Mutual, Rebuild, Tomb, ScopedRepair, Closed, EvictAny, Batch, Told, Waits, Charge
 
 \* the members, numbered from 1 so that 0 can mean "unscoped" and -n "n alone, with no record"
 Nodes == 1..N
@@ -152,8 +162,10 @@ Edges(t) == {e \in SUBSET Nodes : Cardinality(e) = 2 /\
                 \E u, v \in e : u /= v /\ u \in HeldPeers(t, v) /\ (~Mutual \/ v \in HeldPeers(t, u))}
 \* the label of every member under the table t: the least member of its component
 Labels(t) == [n \in Nodes |-> Least(Closure(Edges(t), {n}))]
-\* how many records the table t holds, expired ones included
-Count(t) == Cardinality({n \in Nodes : t[n].seq > 0})
+\* the bytes the table t is charged (record_cost, Reach::bytes): a fixed share for every record, expired ones included,
+\* and one unit for every peer a live record names (an expired record names none), counted as (member, peer) pairs
+Size(t) == RecBase * Cardinality({n \in Nodes : t[n].seq > 0})
+           + Cardinality({p \in Nodes \X Nodes : p[2] \in HeldPeers(t, p[1])})
 \* a member's class at hub h (Reach::class): its label with a record (an expired record still counts: its label is
 \* the member itself, alone); with none, alone (-n) once the table closed, otherwise unscoped (0)
 Class(h, n) == IF tab[h][n].seq > 0 THEN lab[h][n] ELSE IF closed[h] THEN -n ELSE 0
@@ -260,8 +272,10 @@ Lose(f) ==
 \* hub f.to takes a record frame (Topics::on_adj, Reach::take): a newer record, or the same one again over an expired
 \* one, replaces what it holds and the labels are worked out again (with Rebuild; without it only for a member heard
 \* for the first time); a record from a member, not from a hub, new or the same again (a refresh), is mirrored to the
-\* other hubs; an older one is ignored. A newcomer that finds the table full is refused, and with Closed the table
-\* closes; with EvictAny the hub instead drops an expired record, whatever its member, to make room.
+\* other hubs; an older one is ignored. A record whose charge does not fit TableBytes is refused: a newcomer's, and
+\* with Closed the table closes; a newer one of a member the hub holds, which leaves that member a tombstone (alone,
+\* the table stays open). With EvictAny the hub instead drops an expired record, whatever its member, to make room.
+\* Without Charge only a newcomer's record is checked, as when the bound counted records.
 Recv(f) ==
     /\ f \in net
     /\ LET h == f.to
@@ -269,26 +283,33 @@ Recv(f) ==
            old == tab[h][f.n]
            \* the frame is newer, or the same as an expired record
            takes == f.seq > old.seq \/ (f.seq = old.seq /\ ~old.live)
-           \* a newcomer and no slot left
-           full == old.seq = 0 /\ Count(tab[h]) >= TableMax
-           \* the expired records an EvictAny hub could drop
-           tombs == {v \in Nodes : tab[h][v].seq > 0 /\ ~tab[h][v].live}
-           \* the record fits: a slot, or one made by EvictAny
-           room == ~full \/ (EvictAny /\ tombs /= {})
+           \* the table with the frame's record in place of the one held
+           t0 == [tab[h] EXCEPT ![f.n] = [seq |-> f.seq, peers |-> f.peers, live |-> TRUE]]
+           \* the record does not fit: the charge with it exceeds the bytes (without Charge, only for a newcomer)
+           full == Size(t0) > TableBytes /\ (Charge \/ old.seq = 0)
+           \* the expired records of other members an EvictAny hub could drop
+           tombs == {v \in Nodes \ {f.n} : tab[h][v].seq > 0 /\ ~tab[h][v].live}
            \* the member whose record EvictAny drops, or 0 for none
            gone == IF full /\ EvictAny /\ tombs /= {} THEN Least(tombs) ELSE 0
-           \* the table after the drop and with the frame's record
-           t1 == IF gone > 0 THEN [tab[h] EXCEPT ![gone] = None] ELSE tab[h]
-           t2 == [t1 EXCEPT ![f.n] = [seq |-> f.seq, peers |-> f.peers, live |-> TRUE]]
+           \* the table after the drop, with the frame's record
+           t2 == IF gone > 0 THEN [t0 EXCEPT ![gone] = None] ELSE t0
+           \* the record fits, or fits once EvictAny made room
+           room == ~full \/ (gone > 0 /\ Size(t2) <= TableBytes)
+           \* a refused member the hub holds a record of: left a tombstone that names no peer
+           tomb == [tab[h] EXCEPT ![f.n] = [@ EXCEPT !.live = FALSE]]
+           \* the refusal closes the table: a newcomer's, with Closed
+           closes == takes /\ ~room /\ Closed /\ old.seq = 0
            \* the copies a member's own record is mirrored as
            mirrors == {[to |-> o, n |-> f.n, seq |-> f.seq, peers |-> f.peers, mir |-> TRUE] : o \in Hubs \ {h}}
-       IN /\ tab' = IF takes /\ room THEN [tab EXCEPT ![h] = t2] ELSE tab
-          /\ lab' = IF takes /\ room /\ (Rebuild \/ old.seq = 0) THEN [lab EXCEPT ![h] = Labels(t2)] ELSE lab
-          /\ closed' = IF takes /\ ~room /\ Closed THEN [closed EXCEPT ![h] = TRUE] ELSE closed
+       IN /\ tab' = IF takes /\ room THEN [tab EXCEPT ![h] = t2]
+                    ELSE IF takes /\ old.seq > 0 THEN [tab EXCEPT ![h] = tomb] ELSE tab
+          /\ lab' = IF takes /\ room /\ (Rebuild \/ old.seq = 0) THEN [lab EXCEPT ![h] = Labels(t2)]
+                    ELSE IF takes /\ ~room /\ old.seq > 0 /\ Rebuild THEN [lab EXCEPT ![h] = Labels(tomb)] ELSE lab
+          /\ closed' = IF closes THEN [closed EXCEPT ![h] = TRUE] ELSE closed
           /\ refd' = IF takes /\ ~room THEN [refd EXCEPT ![h] = @ \union {f.n}] ELSE refd
           \* with Told the hub reports the refusal (Event::ReachRefused) and the closing (Event::ReachClosed)
           /\ heard' = IF takes /\ ~room /\ Told THEN [heard EXCEPT ![h] = @ \union {f.n}] ELSE heard
-          /\ said' = IF takes /\ ~room /\ Closed /\ Told THEN [said EXCEPT ![h] = TRUE] ELSE said
+          /\ said' = IF closes /\ Told THEN [said EXCEPT ![h] = TRUE] ELSE said
           /\ net' = (net \ {f}) \union (IF f.seq >= old.seq /\ ~f.mir /\ room THEN mirrors ELSE {})
     /\ UNCHANGED <<sess, changes, cur, lost, expired, subd, bad, left, logged, phase, sent>>
 
@@ -377,10 +398,10 @@ DeliverySound == ~bad
 EdgesGood == \A h \in Hubs : Edges(tab[h]) \subseteq Good(h)
 \* the labels a hub uses are those of its records (with Rebuild)
 LabelsFresh == \A h \in Hubs : lab[h] = Labels(tab[h])
-\* the tables stay within their bounds: sequence numbers, and at most TableMax records a hub
+\* the tables stay within their bounds: sequence numbers, and at most TableBytes charged a hub
 Bounds == /\ \A n \in Nodes : cur[n].seq <= MaxSeq
           /\ \A h \in Hubs : \A n \in Nodes : tab[h][n].seq <= cur[n].seq
-          /\ \A h \in Hubs : Count(tab[h]) <= TableMax
+          /\ \A h \in Hubs : Size(tab[h]) <= TableBytes
 \* an honest member signs at most one record a turn, however many of its sessions came and went in it
 BoundedReports == \A n \in Nodes \ Liars : sent[n] <= 1
 \* a hub's events tell the truth about its table: the last of them says closed exactly while it is, and every member

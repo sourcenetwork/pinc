@@ -107,8 +107,8 @@ pub enum Event<'a> {
         /// The topic.
         topic: &'a [u8],
     },
-    /// On a hub: its adjacency table was full and refused `origin`'s record (see
-    /// [`Topics::set_adjacent`](crate::Topics::set_adjacent)); `origin` is alone here until a slot frees and its next record takes it.
+    /// On a hub: `origin`'s record did not fit its adjacency table's bytes and was refused (see
+    /// [`Topics::set_adjacent`](crate::Topics::set_adjacent)); `origin` is alone here until a record of it fits.
     ReachRefused {
         /// The node whose record was refused.
         origin: &'a NodeId,

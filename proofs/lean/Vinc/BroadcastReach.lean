@@ -17,7 +17,9 @@ breadth-first search). Facts, for every set of records:
 - `closed_unknown_alone`, `reopened_refused_iff`: a closed table keeps a node without a record alone, and a table
   opened again once every refused node has a record keeps each of them in its component;
 - `log_push_inv`, `log_pop_inv`, `log_holds_iff`: the per-origin counts of a hub's log stay equal to its entries,
-  so `HubLog::holds` answers whether any message of an origin is logged.
+  so `HubLog::holds` answers whether any message of an origin is logged;
+- `running_charge`, `take_within`, `shrink_le`: the table's running count of bytes stays the sum of its records'
+  charges, and within `Limits::reach_bytes`.
 -/
 
 namespace Vinc.BroadcastReach
@@ -218,7 +220,7 @@ theorem split_never_widens (ns : List Nat) {peers peers' : Nat → List Nat}
 
 /-! ## The class of a node, with a bounded table (`Reach::class`)
 
-The hub keeps at most `Limits::max_reach` records. A node it holds a record of is in its component (`label`). A
+The hub keeps records up to `Limits::reach_bytes`. A node it holds a record of is in its component (`label`). A
 node it holds none of is unscoped while the table is open, and alone once the table refused a record and closed:
 the refused node may be any node without a record, so each of them must be alone. -/
 
@@ -343,6 +345,97 @@ theorem log_holds_iff {l : Log} (h : l.Inv) (o : Nat) : l.cnt o ≠ 0 ↔ o ∈ 
   rw [h o, ← List.count_pos_iff]
   omega
 
+/-! ## The table's bytes (`Reach::take`, `Reach::expire`, `Reach::drop_gone`, `Reach::forget`)
+
+The hub charges each record a fixed share, its peers and its signature (`record_cost`), keeps the sum as a running
+count (`Reach::bytes`), and takes a record only when the count minus the record it replaces plus the new one fits
+`Limits::reach_bytes`. Here `c n` is what member `n`'s record is charged (0 for none) and `ns` lists every member
+once. Changing one member's charge moves the sum by exactly the difference (`total_setc`), so the running count stays
+the sum (`running_charge`); a record taken only when it fits keeps the sum within the bytes (`take_within`); and
+leaving a tombstone, expiring, dropping or forgetting a record never raises it (`shrink_le`). -/
+
+/-- The charges of the members in `ns`, added up. -/
+def total (c : Nat → Nat) : List Nat → Nat
+  -- nobody: nothing
+  | [] => 0
+  -- the first member's charge and the rest's
+  | n :: ns => c n + total c ns
+
+/-- The charges `c` with member `n`'s set to `k` (a record taken, a tombstone left, or 0 for a record gone). -/
+def setc (c : Nat → Nat) (n k : Nat) : Nat → Nat :=
+  -- `n` is charged `k`, everyone else as before
+  fun x => if x = n then k else c x
+
+/-- A member that is not in the list does not change its sum. -/
+theorem total_setc_notin {c : Nat → Nat} {n k : Nat} : ∀ {ns : List Nat}, n ∉ ns → total (setc c n k) ns = total c ns
+  -- no member: both sums are 0
+  | [], _ => rfl
+  -- the first member is not `n`, so it keeps its charge, and the rest follows by induction
+  | a :: ns, h => by
+    have ha : a ≠ n := fun e => h (by simp [e])
+    have hr : n ∉ ns := fun m => h (by simp [m])
+    show (if a = n then k else c a) + total (setc c n k) ns = c a + total c ns
+    simp only [ha, ↓reduceIte]
+    rw [total_setc_notin hr]
+
+/-- One member's charge is at most the sum it is part of. -/
+theorem charge_le_total {c : Nat → Nat} {n : Nat} : ∀ {ns : List Nat}, n ∈ ns → c n ≤ total c ns
+  -- the empty list holds nobody
+  | [], h => by simp at h
+  -- `n` is the first member, or is in the rest
+  | a :: ns, h => by
+    show c n ≤ c a + total c ns
+    rcases List.mem_cons.mp h with e | m
+    · subst e; omega
+    · have := charge_le_total (c := c) m; omega
+
+/-- Setting the charge of a member listed once to `k` moves the sum by exactly `k` minus its old charge. -/
+theorem total_setc {c : Nat → Nat} {n k : Nat} : ∀ {ns : List Nat}, ns.Nodup → n ∈ ns →
+    total (setc c n k) ns + c n = total c ns + k
+  -- the empty list holds nobody
+  | [], _, h => by simp at h
+  -- either the first member is `n` (and the rest does not hold it again), or `n` is in the rest
+  | a :: ns, hd, h => by
+    have hd' := List.nodup_cons.mp hd
+    show (if a = n then k else c a) + total (setc c n k) ns + c n = c a + total c ns + k
+    by_cases ha : a = n
+    · subst ha
+      simp only [eq_self, ↓reduceIte]
+      rw [total_setc_notin hd'.1]
+      omega
+    · have hm : n ∈ ns := by
+        rcases List.mem_cons.mp h with e | m
+        · exact absurd e.symm ha
+        · exact m
+      have ih := total_setc (c := c) (k := k) hd'.2 hm
+      simp only [ha, ↓reduceIte]
+      omega
+
+/-- The running count the code keeps (`bytes - held + cost`) is the sum after the change, when it was the sum
+before. -/
+theorem running_charge {c : Nat → Nat} {ns : List Nat} {n k b : Nat} (hd : ns.Nodup) (hn : n ∈ ns)
+    (hb : b = total c ns) : total (setc c n k) ns = b - c n + k := by
+  -- the exact difference, and the old charge is part of the old sum, so the subtraction does not saturate
+  have h1 := total_setc (c := c) (k := k) hd hn
+  have h2 := charge_le_total (c := c) hn
+  omega
+
+/-- A record taken only when the running count minus the record it replaces plus its own charge fits the bytes keeps
+the table within them; a newcomer is the case `c n = 0`. -/
+theorem take_within {c : Nat → Nat} {ns : List Nat} {n k budget : Nat} (hd : ns.Nodup) (hn : n ∈ ns)
+    (fits : total c ns - c n + k ≤ budget) : total (setc c n k) ns ≤ budget := by
+  -- the new sum is exactly what was checked
+  rw [running_charge hd hn rfl]
+  exact fits
+
+/-- Lowering a charge (a refused record left a tombstone of the fixed share, a record expired, or one dropped or
+forgotten, charged 0) never raises the sum: a table within its bytes stays within them. -/
+theorem shrink_le {c : Nat → Nat} {ns : List Nat} {n k : Nat} (hd : ns.Nodup) (hn : n ∈ ns) (hk : k ≤ c n) :
+    total (setc c n k) ns ≤ total c ns := by
+  -- the exact difference is not positive
+  have := total_setc (c := c) (k := k) hd hn
+  omega
+
 end Vinc.BroadcastReach
 
 #audit_axioms Vinc.BroadcastReach.labels_iff
@@ -354,3 +447,6 @@ end Vinc.BroadcastReach
 #audit_axioms Vinc.BroadcastReach.log_push_inv
 #audit_axioms Vinc.BroadcastReach.log_pop_inv
 #audit_axioms Vinc.BroadcastReach.log_holds_iff
+#audit_axioms Vinc.BroadcastReach.running_charge
+#audit_axioms Vinc.BroadcastReach.take_within
+#audit_axioms Vinc.BroadcastReach.shrink_le

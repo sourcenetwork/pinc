@@ -10,15 +10,15 @@ mod common;
 mod support;
 
 use common::{Net, SEC, ty};
-use support::{T, adj, ask, capture, sends, session};
+use support::{T, adj, ask, capture, room, sends, session};
 use vinc_broadcast::consts::{LOG_WINDOW, RECORD_TTL, REFRESH};
 use vinc_broadcast::{Limits, ReachStats};
 use vinc_crypto::IdentityAlg;
 
-/// A hub and `members` members, the hub's table holding at most `max` records.
-fn small(members: usize, max: usize) -> Net {
+/// A hub and `members` members, the hub's table holding `bytes` bytes ([`room`]).
+fn small(members: usize, bytes: usize) -> Net {
     let limits = Limits {
-        max_reach: max,
+        reach_bytes: bytes,
         ..Limits::default()
     };
     let mut net = Net::with_limits(&vec![IdentityAlg::Ed25519; members + 1], 1, SEC, limits);
@@ -48,7 +48,7 @@ fn mute(net: &mut Net, i: usize, on: bool) {
 
 #[test]
 fn a_record_whose_signature_fails_changes_nothing_even_with_the_table_full() {
-    let mut net = small(3, 2);
+    let mut net = small(3, room(2));
     adj(&mut net, 1, &[]);
     adj(&mut net, 2, &[]);
     // Node 2's record expires: the full table holds a tombstone, the one record room could once be made from.
@@ -73,7 +73,7 @@ fn a_record_whose_signature_fails_changes_nothing_even_with_the_table_full() {
 
 #[test]
 fn a_full_table_refuses_a_newcomer_and_every_node_without_a_record_is_then_alone() {
-    let mut net = small(5, 2);
+    let mut net = small(5, room(2));
     let mut edges = Vec::new();
     session(&mut net, &mut edges, 1, 2, true);
     for i in 1..=5 {
@@ -106,7 +106,7 @@ fn a_full_table_refuses_a_newcomer_and_every_node_without_a_record_is_then_alone
 
 #[test]
 fn a_released_member_s_tombstone_goes_once_no_log_holds_its_messages_and_frees_its_slot() {
-    let mut net = small(3, 2);
+    let mut net = small(3, room(2));
     adj(&mut net, 1, &[]);
     adj(&mut net, 2, &[]);
     net.subscribe(1, T);
@@ -140,7 +140,7 @@ fn a_released_member_s_tombstone_goes_once_no_log_holds_its_messages_and_frees_i
 
 #[test]
 fn a_revoked_member_s_record_is_forgotten_and_not_taken_again() {
-    let mut net = small(2, 8);
+    let mut net = small(2, room(8));
     adj(&mut net, 1, &[2]);
     adj(&mut net, 2, &[1]);
     assert!(net.nodes[0].t.same_component(&net.id(1), &net.id(2)));
@@ -176,7 +176,7 @@ fn a_tombstone_takes_an_older_record_from_its_member_but_not_from_a_hub_mirror()
 
 #[test]
 fn records_that_arrive_between_two_checks_are_worked_out_once() {
-    let mut net = small(2, 8);
+    let mut net = small(2, room(8));
     adj(&mut net, 1, &[2]);
     adj(&mut net, 2, &[1]);
     assert!(net.nodes[0].t.same_component(&net.id(1), &net.id(2)));
