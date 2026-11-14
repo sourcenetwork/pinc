@@ -105,7 +105,12 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
                         .min_by_key(|(_, c)| c.id.bytes)
                         .map(|(i, _)| i)
                 };
-                let first = self.net.pinned().or_else(|| lowest(true)).or_else(|| lowest(false));
+                // A pin counts only where a relay is configured: an empty position is no home.
+                let pinned = self
+                    .net
+                    .pinned()
+                    .filter(|p| self.rly.get(*p).is_some_and(|r| r.cfg.is_some()));
+                let first = pinned.or_else(|| lowest(true)).or_else(|| lowest(false));
                 if let HomeStep::Fallback(f) = self.net.home_missing(first) {
                     self.notice(Notice::Home(f));
                 }

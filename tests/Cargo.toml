@@ -774,6 +774,10 @@ name = "connect_publish_wait"
 path = "connect_publish_wait.rs"
 
 [[test]]
+name = "connect_pin"
+path = "connect_pin.rs"
+
+[[test]]
 name = "connect_lookup"
 path = "connect_lookup.rs"
 
