@@ -731,4 +731,6 @@ mbt_cases MbtHalfOpen MbtHalfOpen_back halfopen_back.ndjson
 mbt_cases MbtRanges MbtRanges ranges.ndjson
 mbt_cases MbtRanges MbtRanges_wide ranges_wide.ndjson
 VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_ranges -- --nocapture
+mbt_cases MbtReasm MbtReasm reasm.ndjson
+VINC_MBT_DIR="$dir/mbt" cargo test -q -p vinc-tests --features hwenc --test mbt_orphan --test mbt_halfopen --test mbt_reasm -- --nocapture
 echo "proofs: ok"
