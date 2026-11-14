@@ -8,7 +8,7 @@ import Vinc.MembershipViewUnion
 function that can call `bump` has an epoch at least the old one:
 
 `applyDeltaCore_epoch`, `pushDelta_epoch`, `renew_epoch`, `onSelfEntry_epoch`, `applyDelta_epoch`, `markAbsent_epoch`,
-`applySnap_epoch`, `sweepAbsent_epoch`, `recheckNow_epoch`.
+`markViewAbsent_epoch`, `snapAbsent_epoch`, `applySnap_epoch`, `sweepAbsent_epoch`, `recheckNow_epoch`.
 -/
 
 set_option linter.unusedVariables false
@@ -249,6 +249,22 @@ theorem markAbsent_epoch (e : Env) (n : N) (now hub round : Nat) : (N.markAbsent
   repeat' split
   all_goals simp_all [recomputeOne_ep]
 
+theorem markViewAbsent_epoch (e : Env) (n : N) (now hub round : Nat) :
+    (N.markViewAbsent e n now hub round).1.epoch = n.epoch := by
+  unfold N.markViewAbsent
+  refine foldl_inv (fun (a : N × Bool) => a.1.epoch = n.epoch) _ _ _ ?_ rfl
+  intro a m ha
+  obtain ⟨n1, c1⟩ := a
+  simp only at ha ⊢
+  repeat' split
+  all_goals simp_all [recomputeOne_ep]
+
+theorem snapAbsent_epoch (e : Env) (n : N) (now hub round : Nat) : (N.snapAbsent e n now hub round).1.epoch = n.epoch := by
+  simp only [N.snapAbsent]
+  split
+  · simp only [markViewAbsent_epoch, markAbsent_epoch]
+  · exact markAbsent_epoch ..
+
 
 /-! ## `apply_snap` in pieces -/
 
@@ -288,7 +304,7 @@ def snapFin (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat) (a : 
         | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
         | none => n
       let (n, changed) := if !partial_ then
-          let (n', ch) := N.markAbsent e (n.dropGone hub round) now hub round
+          let (n', ch) := N.snapAbsent e (n.dropGone hub round) now hub round
           (n', changed || ch)
         else (n, changed)
       let n := if n.primary == some hub then n.bc (.resub hub) else n
@@ -337,7 +353,7 @@ theorem snapFin_ep (e : Env) (now hub : Nat) (partial_ more : Bool) (round : Nat
   dsimp only
   apply ite_ge_bump
   repeat' split
-  all_goals (unfold EpGe; simp [trace_epoch, N.bc, markAbsent_epoch, dropGone_epoch])
+  all_goals (unfold EpGe; simp [trace_epoch, N.bc, snapAbsent_epoch, dropGone_epoch])
 
 
 theorem applySnap_epoch (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) :

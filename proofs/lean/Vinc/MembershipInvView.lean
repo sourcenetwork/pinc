@@ -4,7 +4,7 @@ import Vinc.MembershipModelNode
 /-!
 # Property 9, part 3: the view steps keep `Inv`
 
-`remove_from_view`, `recompute_one`, `apply_delta` (the core and the self entry), `push_delta`, `mark_absent`,
+`remove_from_view`, `recompute_one`, `apply_delta` (the core and the self entry), `push_delta`, `mark_absent`, `mark_view_absent`,
 `apply_snap`, `sweep_absent`, `renew` and `reselect`: every insert into a table is behind the guard the code tests,
 and every other update erases or rewrites an entry.
 -/
@@ -113,6 +113,17 @@ theorem inv_markAbsent {e : Env} {n : N} (hx : Inv B n) (now hub round : Nat) : 
   unfold N.markAbsent
   inv_go
 macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_markAbsent)
+
+theorem inv_markViewAbsent {e : Env} {n : N} (hx : Inv B n) (now hub round : Nat) :
+    Inv B (N.markViewAbsent e n now hub round).1 := by
+  unfold N.markViewAbsent
+  inv_go
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_markViewAbsent)
+
+theorem inv_snapAbsent {e : Env} {n : N} (hx : Inv B n) (now hub round : Nat) : Inv B (N.snapAbsent e n now hub round).1 := by
+  unfold N.snapAbsent
+  inv_go
+macro_rules | `(tactic| inv_apply) => `(tactic| apply inv_snapAbsent)
 
 theorem inv_applySnap {e : Env} {n : N} (hx : Inv B n) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) : Inv B (N.applySnap e n now hub partial_ more es) := by
   unfold N.applySnap

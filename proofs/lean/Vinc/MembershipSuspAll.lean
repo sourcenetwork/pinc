@@ -105,6 +105,20 @@ theorem pushDelta_susp'' (e : Env) (n : N) (now m : Nat) (rc : Rec) (a : Alive) 
   repeat' split
   all_goals simp
 
+@[simp] theorem markViewAbsent_susp (e : Env) (n : N) (now hub round : Nat) :
+    (N.markViewAbsent e n now hub round).1.susp = n.susp := by
+  unfold N.markViewAbsent
+  apply foldl_su2
+  intro b x
+  obtain ⟨b1, b2⟩ := b
+  simp only []
+  repeat' split
+  all_goals simp
+
+@[simp] theorem snapAbsent_susp (e : Env) (n : N) (now hub round : Nat) : (N.snapAbsent e n now hub round).1.susp = n.susp := by
+  simp only [N.snapAbsent]
+  split <;> simp
+
 theorem susp_bump_match {F : N × Bool} {n0 : N} (h : F.1.susp = n0.susp) :
     (match F with | (n, ch) => if ch = true then n.bump else n).susp = n0.susp := by
   obtain ⟨f1, f2⟩ := F

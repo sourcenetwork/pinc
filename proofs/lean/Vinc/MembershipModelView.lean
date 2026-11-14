@@ -265,6 +265,41 @@ def N.markAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
       | none => a)
     (n, false)
 
+/-- `mark_view_absent`: a complete snapshot of the confirmed home listed round `round`. It is the whole view, so a
+view member the home's copy does not hold, whichever hub's copy listed it, gets an entry there carrying the view's
+record, one round before `round` (`round - 1`: a snapshot's round is at least 1 here), with the omission clock started;
+with the copy full there is no room and the member is recomputed at once. The members are walked in key order, each
+recomputed by itself, so the keys taken at the start are the ones the code's cursor visits. -/
+def N.markViewAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
+  n.members.keys.foldl
+    (fun (a : N × Bool) m =>
+      let (n, changed) := a
+      match n.members.get? m with
+      | some v =>
+        match n.hv.get? hub with
+        | some c =>
+          if c.entries.has m then a
+          else if MAX_TABLE ≤ c.entries.len && !c.entries.has m then
+            let (n, ch) := N.recomputeOne e n now m
+            (n, changed || ch)
+          else
+            let n := { n with hv := n.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ } }
+            let n := n.trace (.absent m)
+            let (n, ch) := N.recomputeOne e n now m
+            (n, changed || ch)
+        | none => a
+      | none => a)
+    (n, false)
+
+/-- The omissions of a complete snapshot of `hub`: `mark_absent`, then, at a member whose confirmed home `hub` is,
+`mark_view_absent`. -/
+def N.snapAbsent (e : Env) (n : N) (now hub round : Nat) : N × Bool :=
+  let a := N.markAbsent e n now hub round
+  if !a.1.isHub && a.1.primary == some hub then
+    let b := N.markViewAbsent e a.1 now hub round
+    (b.1, a.2 || b.2)
+  else a
+
 /-- `apply_snap`: a snapshot frame from `hub`. -/
 def N.applySnap (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) : N :=
   let (n, ok) : N × Bool :=
@@ -307,7 +342,7 @@ def N.applySnap (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : L
           | some c => { n with hv := n.hv.insert hub { c with open_ := false } }
           | none => n
         let (n, changed) := if !partial_ then
-            let (n', ch) := N.markAbsent e (n.dropGone hub round) now hub round
+            let (n', ch) := N.snapAbsent e (n.dropGone hub round) now hub round
             (n', changed || ch)
           else (n, changed)
         let n := if n.primary == some hub then n.bc (.resub hub) else n

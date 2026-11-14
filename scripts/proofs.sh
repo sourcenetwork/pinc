@@ -413,6 +413,8 @@ par run_tlc sys_live_return MembershipSys MembershipSys_live_return
 par run_tlc sys_live_leave MembershipSys MembershipSys_live_leave
 par run_tlc sys_live_heal MembershipSys MembershipSys_live_heal
 par witness_live_tlc sys_live_w_never MembershipSys MembershipSys_live_w_never
+par run_tlc sys_live_stale MembershipSys MembershipSys_live_stale
+par witness_tlc sys_live_w_stale MembershipSys MembershipSys_live_w_stale LiveCompleteAll
 par run_tlc sys_conv MembershipConv MembershipConv
 par witness_tlc sys_w_finished MembershipSys MembershipSys_w_finished NeverFinished
 par run_tlc_deep nanos NanosCheck NanosCheck

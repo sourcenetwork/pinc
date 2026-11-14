@@ -176,6 +176,18 @@ macro "tm_tac" : tactic => `(tactic| first
   simp only []
   repeat' split
   all_goals simp
+@[simp] theorem markViewAbsent_tm (e : Env) (n : N) (now hub round : Nat) :
+    TM[n, (N.markViewAbsent e n now hub round).1] := by
+  unfold N.markViewAbsent
+  apply foldl_tm2
+  intro b x
+  obtain ⟨b1, b2⟩ := b
+  simp only []
+  repeat' split
+  all_goals simp
+@[simp] theorem snapAbsent_tm (e : Env) (n : N) (now hub round : Nat) : TM[n, (N.snapAbsent e n now hub round).1] := by
+  simp only [N.snapAbsent]
+  split <;> simp
 @[simp] theorem applySnap_tm (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) :
     TM[n, N.applySnap e n now hub partial_ more es] := by
   rw [applySnap_eq]
@@ -784,6 +796,18 @@ macro "rs_tac" : tactic => `(tactic| first
   simp only []
   repeat' split
   all_goals simp
+@[simp] theorem markViewAbsent_rs (e : Env) (n : N) (now hub round : Nat) :
+    RS[n, (N.markViewAbsent e n now hub round).1] := by
+  unfold N.markViewAbsent
+  apply foldl_rs2
+  intro b x
+  obtain ⟨b1, b2⟩ := b
+  simp only []
+  repeat' split
+  all_goals simp
+@[simp] theorem snapAbsent_rs (e : Env) (n : N) (now hub round : Nat) : RS[n, (N.snapAbsent e n now hub round).1] := by
+  simp only [N.snapAbsent]
+  split <;> simp
 @[simp] theorem applySnap_rs (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) :
     RS[n, N.applySnap e n now hub partial_ more es] := by
   rw [applySnap_eq]

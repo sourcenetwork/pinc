@@ -10,9 +10,9 @@
 //!
 //! The runs are the scenarios of the design: attachment and PULSE, churn, loss, partitions and heals, slow members,
 //! carrier drops with probes on every path, DOWN with every refusal, carrier returns, leave, revocation, crash and
-//! restart on a persistent counter and on the clock, suspension, the primary switch, the address move, snapshots of
-//! several frames, and malformed input. Every scenario asserts what the real code did, so the test is meaningful
-//! without the proof tools.
+//! restart on a persistent counter and on the clock, suspension, the primary switch, a home switch to a hub that never
+//! heard of a member that then crashes (#343), the address move, snapshots of several frames, and malformed input.
+//! Every scenario asserts what the real code did, so the test is meaningful without the proof tools.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -620,6 +620,45 @@ fn primary_switch(c: &mut Ctx) {
     assert_ne!(w.nodes[m].m.primary(), Some(&id(0)));
 }
 
+/// #343: a member whose new home never heard of a member that later crashes lets it go. Hub 1 is cut from hub 2 and hub 2
+/// from member 4; member 3 homes on hub 1 and lists 4; when 3 moves its home to hub 2, hub 2's complete snapshot starts
+/// the omission lease for 4 at 3 although only hub 1's copy listed it; 4 crashes, every cut heals, and 3 lets 4 go.
+fn stale_view(c: &mut Ctx) {
+    let (h1, h2, n, m) = (0, 1, 2, 3);
+    let mut w = c.world(2, 2, START);
+    w.cut.insert((h1, h2));
+    w.cut.insert((h2, m));
+    w.set_rtt(n, h1, 100 * MS);
+    w.set_rtt(n, h2, 120 * MS);
+    w.attach_all();
+    w.run(100 * SEC);
+    assert_eq!(w.nodes[n].m.primary(), Some(&id(h1)), "member 3 homes on hub 1");
+    assert!(
+        w.has(n, m) && !w.has(h2, m),
+        "member 3 lists member 4, which hub 2 never heard of"
+    );
+    w.set_rtt(n, h2, 40 * MS);
+    w.run(30 * SEC);
+    assert_eq!(
+        w.nodes[n].m.primary(),
+        Some(&id(h2)),
+        "member 3 moved its home to hub 2"
+    );
+    w.crash(m);
+    w.run(120 * SEC);
+    w.cut.clear();
+    w.connect(h2, h1);
+    w.run(150 * SEC);
+    let gone = id(m);
+    assert!(
+        w.traces[n]
+            .iter()
+            .any(|t| matches!(t, Trace::Absent { member } if *member == gone)),
+        "hub 2's snapshot started the omission clock for member 4 at member 3"
+    );
+    assert!(!w.has(n, m), "member 3 let member 4 go");
+}
+
 /// The address tag: a move changes it once, and the previous one is kept while the reflexive address is unknown.
 fn address_move(c: &mut Ctx) {
     let mut w = c.started(2, 2);
@@ -814,6 +853,7 @@ pub fn run(tw: &mut TraceWriter) {
     reincarnated(&mut c);
     suspension(&mut c);
     primary_switch(&mut c);
+    stale_view(&mut c);
     address_move(&mut c);
     big_snapshot(&mut c);
     garbage(&mut c);

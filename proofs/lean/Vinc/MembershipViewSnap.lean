@@ -13,7 +13,8 @@ does not list is never brought back by an omission.
 
 * `applySnap_copies_mono`: no copy but the sender's loses an entry;
 * `fresh_mark_not_expired`: a freshly marked omission is not an expired one;
-* `markAbsent_marks_only_unlisted`: only entries of an earlier round without a mark get marked.
+* `markAbsent_marks_only_unlisted`: only entries of an earlier round without a mark get marked;
+* `markViewAbsent_mono`, `snapAbsent_mono`: the confirmed home's snapshot only adds entries to its copy.
 -/
 
 set_option linter.unusedVariables false
@@ -207,6 +208,42 @@ theorem markAbsent_mono (e : Env) (n : N) (now hub round : Nat) : HvMono n.hv (N
         rw [this]; exact HvMono.refl _
     · simp only [h, if_false]; exact ha
 
+theorem markViewAbsent_mono (e : Env) (n : N) (now hub round : Nat) :
+    HvMono n.hv (N.markViewAbsent e n now hub round).1.hv := by
+  unfold N.markViewAbsent
+  refine foldl_inv (fun (a : N × Bool) => HvMono n.hv a.1.hv) _ _ _ ?_ (HvMono.refl _)
+  intro a m ha
+  obtain ⟨n1, c1⟩ := a
+  simp only at ha ⊢
+  cases hv : n1.members.get? m with
+  | none => simpa [hv] using ha
+  | some v =>
+    cases hh : n1.hv.get? hub with
+    | none => simpa [hv, hh] using ha
+    | some c =>
+      simp only []
+      by_cases h1 : c.entries.has m = true
+      · simp only [h1, if_true]; exact ha
+      · by_cases h2 : (decide (MAX_TABLE ≤ c.entries.len) && !c.entries.has m) = true
+        · rw [if_neg h1, if_pos h2]
+          simp only []
+          have := (recomputeOne_keeps2 e n1 now m).1.1
+          rw [this]; exact ha
+        · rw [if_neg h1, if_neg h2]
+          simp only []
+          have hm : HvMono n1.hv (n1.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ }) :=
+            hvMono_insert _ _ _ (fun c' hc' m' hm' => by
+              rw [hh] at hc'; cases hc'; exact AMap.has_insert_mono _ _ _ _ hm')
+          have := (recomputeOne_keeps2 e ((({ n1 with hv := n1.hv.insert hub { c with entries := c.entries.insert m ⟨v.rc, round - 1, some now⟩ } }) : N).trace (.absent m)) now m).1.1
+          simp only [trace_hv] at this
+          refine ha.trans (hm.trans ?_)
+          rw [this]; exact HvMono.refl _
+
+theorem snapAbsent_mono (e : Env) (n : N) (now hub round : Nat) : HvMono n.hv (N.snapAbsent e n now hub round).1.hv := by
+  simp only [N.snapAbsent]
+  split
+  · exact (markAbsent_mono e n now hub round).trans (markViewAbsent_mono e _ now hub round)
+  · exact markAbsent_mono e n now hub round
 
 /-- `drop_gone` only touches the sender's copy. -/
 theorem dropGone_monoX (n : N) (hub round : Nat) : HvMonoX hub n.hv (n.dropGone hub round).hv := by
@@ -264,7 +301,7 @@ def sfClose (n : N) (hub : Nat) : N :=
 def sfMid (e : Env) (now hub : Nat) (partial_ : Bool) (round : Nat) (n : N) (changed : Bool) : N × Bool :=
   let n := sfClose n hub
   let (n, changed) := if !partial_ then
-      let (n', ch) := N.markAbsent e (n.dropGone hub round) now hub round
+      let (n', ch) := N.snapAbsent e (n.dropGone hub round) now hub round
       (n', changed || ch)
     else (n, changed)
   let n := if n.primary == some hub then n.bc (.resub hub) else n
@@ -291,8 +328,8 @@ theorem sfMid_mono (e : Env) (now hub : Nat) (partial_ : Bool) (round : Nat) (n 
   by_cases hp : (!partial_) = true
   · simp only [hp, if_true]
     have h2 := (dropGone_monoX (sfClose n hub) hub round).trans
-      ((markAbsent_mono e ((sfClose n hub).dropGone hub round) now hub round).x hub)
-    by_cases hq : ((N.markAbsent e ((sfClose n hub).dropGone hub round) now hub round).1.primary == some hub) = true
+      ((snapAbsent_mono e ((sfClose n hub).dropGone hub round) now hub round).x hub)
+    by_cases hq : ((N.snapAbsent e ((sfClose n hub).dropGone hub round) now hub round).1.primary == some hub) = true
     · simp only [hq, if_true]
       rw [bc_hv]; exact h1.trans h2
     · simp only [hq, Bool.false_eq_true, if_false]; exact h1.trans h2
@@ -322,7 +359,8 @@ theorem snapFin_mono (e : Env) (now hub : Nat) (partial_ more : Bool) (round : N
 
 /-- **A snapshot takes nothing from the other hubs' copies.** After `apply_snap`, every copy but the sender's still
 lists every member it listed before. The sender's copy gains the listed entries, marks the omitted ones of members the
-view lists, and drops only the omitted ones of members the view does not list (`drop_gone`). -/
+view lists, at a member whose confirmed home the sender is gains a marked entry for every view member it lacks
+(`mark_view_absent`), and drops only the omitted ones of members the view does not list (`drop_gone`). -/
 theorem applySnap_copies_mono (e : Env) (n : N) (now hub : Nat) (partial_ more : Bool) (es : List (Nat × Rec)) :
     HvMonoX hub n.hv (N.applySnap e n now hub partial_ more es).hv := by
   rw [applySnap_eq]

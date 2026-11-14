@@ -503,6 +503,33 @@ MarkAbsent(S, env, now, hub, round, cur, ch) ==
                         r == RecomputeOne(s1, env, now, m)
                     IN MarkAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
 
+\* the round one before `round`, wrapping in 32 bits (the code's round.wrapping_sub(1))
+RoundBefore(round) == U!Low(U!Sub(U!Add(round, U!Pw(32)), One), 32)
+
+\* a complete snapshot of the confirmed home listed round `round`: it is the whole view, so every view member the home's
+\* copy does not hold, whichever hub's copy listed it, gets an entry there carrying the view's record, one round before
+\* `round`, with the omission clock started; with the copy full there is no room and the member is recomputed at once
+\* (view.rs mark_view_absent)
+RECURSIVE MarkViewAbsent(_, _, _, _, _, _, _)
+MarkViewAbsent(S, env, now, hub, round, cur, ch) ==
+    LET m == NextKey(DOMAIN S.members, cur)
+    IN IF m = NONE \/ hub \notin DOMAIN S.hv THEN [S |-> S, ch |-> ch]
+       ELSE IF m \in DOMAIN S.hv[hub].entries THEN MarkViewAbsent(S, env, now, hub, round, m, ch)
+       ELSE IF Cardinality(DOMAIN S.hv[hub].entries) >= MAX_TABLE
+            THEN LET r == RecomputeOne(S, env, now, m) IN MarkViewAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
+       ELSE LET s1 == Trace([S EXCEPT !.hv[hub].entries = Put(@, m, [rec |-> S.members[m].rec, round |-> RoundBefore(round),
+                                                                      absentSince |-> <<now>>])],
+                            [k |-> "absent", member |-> m])
+                r == RecomputeOne(s1, env, now, m)
+            IN MarkViewAbsent(r.S, env, now, hub, round, m, ch \/ r.ch)
+
+\* ViewAbsent is the rule of the code (mark_view_absent, after mark_absent); a witness config overrides it with
+\* OldViewAbsent, the rule before #343, under which a view member that only another hub's copy listed is never looked
+\* at again
+ViewAbsent(S, env, now, hub, round, ch) ==
+    IF ~S.isHub /\ S.primary = <<hub>> THEN MarkViewAbsent(S, env, now, hub, round, NONE, ch) ELSE [S |-> S, ch |-> ch]
+OldViewAbsent(S, env, now, hub, round, ch) == [S |-> S, ch |-> ch]
+
 ApplySnap(S, env, now, hub, sn) ==
     IF hub \notin DOMAIN S.hv /\ Cardinality(DOMAIN S.hv) >= MAX_HUBS THEN S
     ELSE LET s0 == IF hub \in DOMAIN S.hv THEN S ELSE [S EXCEPT !.hv = Put(@, hub, NewCopy)]
@@ -514,7 +541,9 @@ ApplySnap(S, env, now, hub, sn) ==
              s3 == Trace(r.S, [k |-> "snap_applied", hub |-> hub, entries |-> Len(sn.es), more |-> sn.more])
          IN IF sn.more THEN (IF r.ch THEN Bump(s3) ELSE s3)
             ELSE LET s4 == IF hub \in DOMAIN s3.hv THEN [s3 EXCEPT !.hv[hub].open = FALSE] ELSE s3
-                     m == IF ~sn.partial THEN MarkAbsent(DropGone(s4, hub, round), env, now, hub, round, NONE, r.ch)
+                     m == IF ~sn.partial
+                          THEN LET a == MarkAbsent(DropGone(s4, hub, round), env, now, hub, round, NONE, r.ch)
+                               IN ViewAbsent(a.S, env, now, hub, round, a.ch)
                           ELSE [S |-> s4, ch |-> r.ch]
                      s5 == IF m.S.primary = <<hub>> THEN Bc(m.S, [k |-> "resub", hub |-> hub]) ELSE m.S
                  IN IF m.ch THEN Bump(s5) ELSE s5
