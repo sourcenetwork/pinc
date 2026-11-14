@@ -190,7 +190,7 @@ pub enum Role {
     /// A relay or rendezvous point.
     Relay,
     /// A `vinc_relay` server (the binary in `VINC_RELAY_BIN`) in place of a VINC node: the other nodes list it as their
-    /// first relay, ahead of the hubs, and join through the hubs only. VINC only.
+    /// first relay, ahead of the hubs, and join through it as a hub. VINC only.
     RelayServer,
 }
 
@@ -690,19 +690,11 @@ impl Scenario {
         let nodes = self.check_nodes(&site_names, &mut out);
         self.check_links(&site_names, &mut out);
         let node_names: BTreeMap<&str, &NodeSpec> = nodes.iter().map(|n| (n.name.as_str(), n)).collect();
-        if nodes.iter().any(|n| n.role == Role::RelayServer) {
-            if self.stacks != [Stack::Vinc] {
-                out.push(Problem::new(
-                    "stacks",
-                    "a relay-server node runs with the vinc stack only",
-                ));
-            }
-            if !nodes.iter().any(|n| matches!(n.role, Role::Hub | Role::Relay)) {
-                out.push(Problem::new(
-                    "nodes",
-                    "a relay-server takes no joins: give another node the role hub",
-                ));
-            }
+        if nodes.iter().any(|n| n.role == Role::RelayServer) && self.stacks != [Stack::Vinc] {
+            out.push(Problem::new(
+                "stacks",
+                "a relay-server node runs with the vinc stack only",
+            ));
         }
         match &self.workload {
             Workload::Transport(t) => self.check_transport(t, &node_names, &mut out),

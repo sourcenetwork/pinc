@@ -156,10 +156,15 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, stack: Stack
     }
     // What each node counted besides deliveries (a stack that counts nothing reports nothing).
     let mut counters = Map::new();
+    // The members each node's membership roster holds at the end: what the hub's snapshots and events told it.
+    let mut members = Map::new();
     for (i, n) in ctx.plan.nodes.iter().enumerate() {
         let mut sum: BTreeMap<String, u64> = BTreeMap::new();
         let reports = set.reports(i).await;
         tracefile::write(ctx, stack, row, &n.name, &reports);
+        if let Some(m) = reports.last().and_then(|v| v.get("members")) {
+            members.insert(n.name.clone(), m.clone());
+        }
         for v in reports {
             for (k, x) in v.get("counters").and_then(Value::as_object).into_iter().flatten() {
                 *sum.entry(k.clone()).or_insert(0) += x.as_u64().unwrap_or(0);
@@ -173,6 +178,9 @@ async fn body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &Pubsub, stack: Stack
     row.node = pubsub_figures(&subs, &published);
     if !counters.is_empty() {
         row.node.insert("counters".into(), Value::Object(counters));
+    }
+    if !members.is_empty() {
+        row.node.insert("members".into(), Value::Object(members));
     }
     if !notes.is_empty() {
         row.node.insert("faults_note".into(), Value::String(notes.join("; ")));
