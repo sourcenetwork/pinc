@@ -161,8 +161,8 @@ theorem down_then_gone_ticks (e : Env) (n : N) (now H m : Nat) (rc : Rec) (c : H
 `HUB_TICK`), the DOWN reaches the node within `D`, the removal waits for its own instant `q`, the end of the quiet
 window open when the DOWN arrived, at most `QUIET` after it (`beginQuiet_window`; a window's extra look lasts
 `RECHECK_GAP`, less), and the node's ticks come every `NODE_TICK`: the member is out of the view by `t0 + 145 s` when
-`D` is at most 48 s. Over any run of the host's calls, `hub_lease_gone` (`MembershipTimer.lean`) gives `h1` and `h1'`
-with `HUB_TICK + σ` for the host's slack `σ` (`σ = 0` here). No heal moves `q` (`beginQuiet_heal`,
+`D` is at most 48 s. Over any run of the host's calls, `hub_lease_gone` (`MembershipTimerLease.lean`) gives `h1` and
+`h1'` with `HUB_TICK + σ` for the host's slack `σ` (`σ = 0` here). No heal moves `q` (`beginQuiet_heal`,
 `heal_keeps_waiting`, #284) and the removal at `t2` holds whatever window a heal opened (`recheckDue_removes`); a late
 tick at the node does move it (`late_tick_reopens`, the reference model's rule), so `hq` asks that the node's host is not
 later than `WAKE_GAP` at a tick between the DOWN and the removal. -/
