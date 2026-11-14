@@ -19,6 +19,8 @@ window arithmetic of `Streams::new`, `Streams::consume` and `Recv::due`. Sizes a
 * `target_bounds`, `maxStream_le_half`, `maxStream_le_ring`, `span_lt_ring`, `ring_never_overflows`: the window size stays between the initial window
   and the ceiling, which is at most half the pool and `(C - 1)` chunks, so a frame inside the credit never
   reaches `C` chunks beyond the read position (the ring never overflows; RATE_WINDOW).
+* `target_own`, `target_idle`: a window grows toward twice what its own reader drained, so a stream that drained
+  nothing keeps its initial window whatever the other streams move (METER, #159).
 -/
 
 namespace Vinc.TransportStreams
@@ -198,7 +200,7 @@ theorem grantOne_skip (p : P) (first : Nat) (T : Tab) (i : Nat)
 
 theorem grantOne_proc (p : P) (first : Nat) (T : Tab) (i : Nat)
     (hs : ¬ (!(T.slots.getD i Slot.new).open_ || !(i == first || (T.slots.getD i Slot.new).defer)) = true) :
-    grantOne p first T i = setSlot T i (grantSlot p T.tgt (gu p T + resv p T) (avail p T) (T.slots.getD i Slot.new)) := by
+    grantOne p first T i = setSlot T i (grantSlot p 0 (gu p T + resv p T) (avail p T) (T.slots.getD i Slot.new)) := by
   unfold grantOne
   dsimp only
   rw [if_neg hs]
@@ -234,15 +236,15 @@ theorem grantOne_ledger (p : P) (first : Nat) (T : Tab) (i : Nat)
   · rw [grantOne_skip p first T i hs] at h; exact absurd h (Nat.lt_irrefl _)
   · have hl := lt_of_open _ _ (proc_open p first T i hs)
     rw [grantOne_proc p first T i hs, getD_setSlot _ _ _ _ hl, if_pos rfl] at h
-    obtain ⟨c, hc, hfit, he⟩ := grantSlot_raise p T.tgt (gu p T + resv p T) (avail p T) _ h
+    obtain ⟨c, hc, hfit, he⟩ := grantSlot_raise p 0 (gu p T + resv p T) (avail p T) _ h
     rw [grantOne_proc p first T i hs, he]
     have hsum := sum_map_set (fun s => s.unreceived p) T.slots i
-      (((T.slots.getD i Slot.new).grown T.tgt).raised c) hl
+      (((T.slots.getD i Slot.new).grown 0).raised c) hl
     have hup := getD_le_sum (fun s => s.unreceived p) T.slots i hl
     have hheld := sum_map_set (fun s => s.held.length) T.slots i
-      (((T.slots.getD i Slot.new).grown T.tgt).raised c) hl
-    have hpd : (((T.slots.getD i Slot.new).grown T.tgt).raised c).unreceived p
-        = ((T.slots.getD i Slot.new).grown T.tgt).demandTo p c := by
+      (((T.slots.getD i Slot.new).grown 0).raised c) hl
+    have hpd : (((T.slots.getD i Slot.new).grown 0).raised c).unreceived p
+        = ((T.slots.getD i Slot.new).grown 0).demandTo p c := by
       simp [Slot.unreceived, Slot.demandTo, Slot.chargeTo, poolDemand, Slot.reach, Slot.raised, Slot.grown]
     simp only [hpd] at hsum
     simp only [gu, avail, availC, used, heldTotal, setSlot, resv, creditLeft, admitted] at hsum hup hheld hfit ⊢
@@ -281,10 +283,10 @@ theorem grantOne_not_missed (p : P) (first : Nat) (T : Tab) (i : Nat)
 theorem grantOne_defers_only_when_unfit (p : P) (first : Nat) (T : Tab) (i : Nat)
     (h : ((grantOne p first T i).slots.getD i Slot.new).defer = true)
     (hp : ¬ (!(T.slots.getD i Slot.new).open_ || !(i == first || (T.slots.getD i Slot.new).defer)) = true) :
-    (((T.slots.getD i Slot.new).grown T.tgt).due p = none) ∨
-    ∃ c, (((T.slots.getD i Slot.new).grown T.tgt).due p = some c) ∧
+    (((T.slots.getD i Slot.new).grown 0).due p = none) ∨
+    ∃ c, (((T.slots.getD i Slot.new).grown 0).due p = some c) ∧
       ¬ (gu p T + resv p T - (T.slots.getD i Slot.new).unreceived p
-          + ((T.slots.getD i Slot.new).grown T.tgt).demandTo p c ≤ avail p T) := by
+          + ((T.slots.getD i Slot.new).grown 0).demandTo p c ≤ avail p T) := by
   have hl := lt_of_open _ _ (proc_open p first T i hp)
   rw [grantOne_proc p first T i hp, getD_setSlot _ _ _ _ hl, if_pos rfl] at h
   exact grantSlot_defers p _ _ _ _ h
@@ -330,11 +332,24 @@ theorem grantRun_first_ok (p : P) (T : Tab) (first : Nat) (h : first < p.n) :
 theorem sw_le_maxStream (p : P) : p.sw ≤ p.maxStream := by
   unfold P.sw; exact Nat.min_le_right _ _
 
-/-- The window size the delivery rate asks for stays between the initial window and the ceiling. -/
+/-- The window size a stream's rate asks for stays between the initial window and the ceiling. -/
 theorem target_bounds (p : P) (rate : Nat) :
-    p.sw ≤ min (max (rate * 2) p.sw) p.maxStream ∧ min (max (rate * 2) p.sw) p.maxStream ≤ p.maxStream := by
+    p.sw ≤ windowTarget p rate ∧ windowTarget p rate ≤ p.maxStream := by
   have := sw_le_maxStream p
+  unfold windowTarget
   constructor <;> omega
+
+/-- METER (#159): the target asks for no more than twice what the stream's own reader drained, or the initial window
+when that is smaller: a stream that drained nothing asks for its initial window, whatever the other streams move. -/
+theorem target_own (p : P) (rate : Nat) : windowTarget p rate ≤ max (rate * 2) p.sw := by
+  unfold windowTarget
+  omega
+
+/-- METER (#159): a stream that has drained nothing yet asks for its initial window. -/
+theorem target_idle (p : P) : windowTarget p 0 = p.sw := by
+  have := sw_le_maxStream p
+  unfold windowTarget
+  omega
 
 /-- The ceiling is at most half the pool. -/
 theorem maxStream_le_half (p : P) : p.maxStream ≤ p.b * p.ch / 2 := by

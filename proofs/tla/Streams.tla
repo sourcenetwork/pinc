@@ -28,7 +28,10 @@
 (*    configs check all of it with a window larger than FIRSTK;            *)
 (*  - RATE_WINDOW: the window size stays between the initial window *)
 (*    and the ceiling, which is at most half the pool; the limit stays     *)
-(*    within one window of the read position;                              *)
+(*    within one window of the read position; a window grows only to      *)
+(*    twice what its own reader drained per round trip                     *)
+(*    (SizeFollowsOwnRate; Streams_meter, and the witness Streams_meter_w, *)
+(*    the connection-wide meter before #159, which breaks it);             *)
 (*  - flow-control updates: a limit moves only by at least 1/8 of   *)
 (*    the window, never down, and a window due to move is moved or         *)
 (*    deferred (NoMissedGrant); a deferred grant is retried after every     *)
@@ -72,7 +75,7 @@
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 \* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
 CONSTANT STOPS
@@ -126,6 +129,12 @@ OpenBound == T.lo[0] + T.lo[1] <= N + 1
 ExtRelease == T.ext > 0 /\ T' = ExtTo(T, 0) /\ UNCHANGED <<clock, elo>>
 LSpec == Spec /\ WF_vars(ExtRelease)
 
+\* The state without the meters, for configs whose clock never moves (DT = 0, VIEW MeterFree). There a meter's epoch
+\* never closes (no consume is ever a round trip after the epoch's start), so its rate stays 0 and no window grows from
+\* it: two states that differ only in their meters behave alike, and fingerprinting them as one keeps the per-stream
+\* meters from multiplying the state space. The configs that check the meter (Streams_meter, DT = 1) keep it.
+MeterFree == <<[T EXCEPT !.slots = [k \in 1..N |-> [T.slots[k] EXCEPT !.m = [start |-> -1, bytes |-> 0, rate |-> 0]]]],
+               clock, elo>>
 (* ---- state invariants ---- *)
 Live == {i \in 1..N : T.slots[i].id # -1}
 Sorted(rs) == /\ Len(rs) <= RR
@@ -152,7 +161,7 @@ SlotInv(r) ==
         /\ (r.rst # -1 => r.read = r.fin /\ r.held = {} /\ r.rs = <<>>)
     /\ ~r.open => r.held = {} /\ r.rs = <<>>
 
-TypeOK == /\ T.ext \in 0..B /\ clock \in 0..HOR /\ T.tgt \in SW..MaxStream
+TypeOK == /\ T.ext \in 0..B /\ clock \in 0..HOR
           /\ \A i \in 1..N : SlotInv(T.slots[i])
 Pool == Used(T) <= B
 Unique == \A i, j \in 1..N : (i # j /\ T.slots[i].id # -1) => T.slots[i].id # T.slots[j].id
@@ -189,7 +198,7 @@ CodesSet == \A i \in Live : (T.slots[i].stop \in {1, 2} => T.slots[i].qcode # -1
 \* a window due to move was moved or deferred (credit follows consumption)
 NoMissedGrant == \A i \in Live : T.slots[i].open => (Due(T.slots[i]) = -1 \/ T.slots[i].defer)
 GrantFits(i) == LET r == T.slots[i]
-                    r1 == [r EXCEPT !.size = Max(r.size, T.tgt)]
+                    r1 == r
                     c == Due(r1)
                 IN c # -1 /\ GU(T) - Unreceived(r) + PoolDemand(r1, Charged(r1, c)) + Resv(T) <= Avail(T)
 \* a deferred grant that now fits is never left waiting for a consume
@@ -260,6 +269,11 @@ SameInc(i) == T.slots[i].id # -1 /\ T'.slots[i].id = T.slots[i].id
 LimitsMonotone == [][\A i \in 1..N : SameInc(i) => T'.slots[i].limit >= T.slots[i].limit]_vars
 ReadMonotone == [][\A i \in 1..N : SameInc(i) => T'.slots[i].read >= T.slots[i].read]_vars
 FinalFixed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].fin # -1) => T'.slots[i].fin = T.slots[i].fin]_vars
+\* METER: a window grows only to what its own stream asks for: twice what its reader drained per round trip, between
+\* the initial window and the ceiling. With the connection-wide meter (PERSTREAM = FALSE) a stream that has drained
+\* nothing yet takes twice the other streams' rate, and Streams_meter_w finds it.
+SizeFollowsOwnRate == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].size > T.slots[i].size)
+                            => T'.slots[i].size <= Target(T'.slots[i].m.rate)]_vars
 \* a limit moves only by at least an eighth of the window
 EighthRule == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) =>
                     T'.slots[i].limit >= T.slots[i].limit + T'.slots[i].size \div 8]_vars
