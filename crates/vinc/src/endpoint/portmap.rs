@@ -31,6 +31,11 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     /// | an IPv6 address and a gateway | PCP and NAT-PMP, three tries each, again every 5 minutes; no search |
     /// | a public IPv4 address, the unspecified address or IPv6, no gateway | nothing |
     ///
+    /// With `UPnP` the description and control requests go to whatever TCP port the answering gateway names, so a host on
+    /// the link that can spoof the gateway's address can make the endpoint send one HTTP request to any port of the
+    /// gateway (and, with no gateway given, of any private host that answers the search). That is one reason the feature
+    /// is off by default.
+    ///
     /// `UPnP`'s HTTP calls go over the host's carriers ([`carriers`](Self::carriers)): `open` is asked for a TCP
     /// stream to a [`Relay`](crate::Relay) whose id is the endpoint's own and whose only address is the host that
     /// answered the search.
