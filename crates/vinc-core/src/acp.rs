@@ -6,7 +6,9 @@
 //! [`Event::AcpCheck`] is raised per peer (further sessions of the peer wait for the same answer). A session with
 //! 5 s or less of cached allow left asks again, once.
 //!
-//! - **Gate.** Application events of a session are held until the session is allowed; a deny closes it with code 3.
+//! - **Gate.** Application events of a session are held until the session is allowed; a deny closes it with code 3,
+//!   clears the allow and drops what was held at once. Every release asks one predicate (`may_release`): the session
+//!   is allowed and its peer's answer has not lapsed and is an allow.
 //! - **Optimistic.** A dial towards a peer with a cached allow that has more than 5 s left reports `Connected` at once,
 //!   before the handshake; if the check then denies, the session closes and `Closed` follows. Its handshake ends once
 //!   4 first flights went out with nothing heard (at the 500 ms first delay: 7.5 s for a full handshake, 3 s for a
@@ -42,17 +44,20 @@ ep_impl! {
         self.acp.get(peer).copied().filter(|a| a.until > now)
     }
 
+    /// Whether session `i` may release application events now: it is allowed and its peer's cached answer has not
+    /// lapsed and is an allow. Every path that releases events asks this one function.
+    pub(crate) fn may_release(&self, i: usize, now: u64) -> bool {
+        self.slots.get(i).is_some_and(|s| {
+            s.m.allowed && s.m.peer.is_some_and(|p| self.acp_cached(&p, now).is_some_and(|a| a.allow))
+        })
+    }
+
     /// Resolve the access check of an established session, or ask for it.
     pub(crate) fn start_acp(&mut self, i: usize, now: u64) {
         let Some(slot) = self.slots.get(i) else { return };
         let Some(peer) = slot.m.peer else { return };
-        // A sub-session of an allowed session is allowed with it.
-        let parent_allowed = slot
-            .m
-            .parent
-            .and_then(|p| self.slot_of(p))
-            .and_then(|p| self.slots.get(p))
-            .is_some_and(|p| p.m.allowed);
+        // A sub-session is allowed with its parent while the parent may release events now.
+        let parent_allowed = slot.m.parent.and_then(|p| self.slot_of(p)).is_some_and(|p| self.may_release(p, now));
         if parent_allowed {
             self.allow_session(i, now);
         } else if self.acp_cached(&peer, now).is_some() {
@@ -107,7 +112,10 @@ ep_impl! {
         let Some(slot) = self.slots.get_mut(i) else { return };
         trace!(self, now, Acp { slot: i as u64, step: 2 });
         slot.m.denied = true;
-        let announce_failure = slot.m.client && !slot.m.optimistic;
+        slot.m.allowed = false;
+        slot.m.held.clear();
+        slot.m.acp_recheck = None;
+        let announce_failure = slot.m.client && !slot.m.announced;
         let (peer, alpn) = (slot.m.peer, slot.m.alpn);
         let session = SessionId::new(i, slot.m.generation);
         if slot.m.client {

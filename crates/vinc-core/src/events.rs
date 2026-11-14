@@ -12,13 +12,14 @@
 //!
 //! Extension frames: a `SUB_SESSION_OPEN` goes to the sub-session layer and a `REACH_OUT` to the reach ring whatever
 //! the session's access state (neither carries application data; a sub-session's own data passes its own gate); any
-//! other type on an allowed session goes to the application ring. An empty `SUB_SESSION_OPEN` or `REACH_OUT`, a
+//! other type goes to the application ring if the session may release. An empty `SUB_SESSION_OPEN` or `REACH_OUT`, a
 //! `REACH_OUT` longer than the reach body limit, an empty body of any other type and any other type on a session that
-//! is not allowed are dropped without notice, and the connection stays open.
+//! may not release are dropped, and the connection stays open.
 //!
 //! Invariants: no application event (a stream, a datagram, an extension frame for the application ring) leaves
-//! before the session is allowed; a session the application never heard of
-//! produces no `Closed`; a dial the application asked for ends with `Connected` or `ConnectFailed` (or `Closed` after
+//! before the session is allowed or after a deny or a lapsed answer (one predicate, `may_release`, decides every
+//! release); a denied session holds and delivers nothing; a session the
+//! application never heard of produces no `Closed`; a dial the application asked for ends with `Connected` or `ConnectFailed` (or `Closed` after
 //! an early `Connected`), never silently; a session is orphaned at most once; an event the application cannot recover
 //! (a stream opened or reset, a datagram) is never dropped from the hold.
 
@@ -141,7 +142,7 @@ ep_impl! {
                 } else if ty != ext::SUB_SESSION_OPEN
                     && ty != ext::REACH_OUT
                     && len > 0
-                    && self.slots.get(i).is_some_and(|s| s.m.allowed)
+                    && self.may_release(i, now)
                 {
                     // A frame of a session the access check has not allowed is dropped (the branch above); the
                     // application protocols carry hints in extension frames and ask again. A body too long to keep
@@ -181,6 +182,11 @@ ep_impl! {
 
     /// An application event: emitted if the session is allowed and not waiting for READY, held otherwise.
     fn app_event(&mut self, i: usize, now: u64, ev: Event) {
+        let Some(denied) = self.slots.get(i).map(|s| s.m.denied) else { return };
+        // A denied session is closing: its data never reaches the application and is not held.
+        if denied {
+            return;
+        }
         // An allowed session whose peer's answer lapsed holds its events and asks again: nothing leaves on an answer
         // that no longer stands.
         let lapsed = self
@@ -190,9 +196,10 @@ ep_impl! {
         if lapsed {
             self.ask_acp(i, now, true);
         }
+        let open = self.may_release(i, now);
         let Some(slot) = self.slots.get_mut(i) else { return };
         // Behind earlier held events the new one waits too, so the order holds.
-        if slot.m.allowed && slot.m.hold != 2 && slot.m.held.len() == 0 && !lapsed {
+        if open && slot.m.hold != 2 && slot.m.held.len() == 0 {
             self.emit(ev);
             return;
         }
@@ -204,6 +211,9 @@ ep_impl! {
 
     /// Emit the held events of session `i` in the order they arrived.
     pub(crate) fn release_held(&mut self, i: usize, now: u64) {
+        if !self.may_release(i, now) {
+            return;
+        }
         let session = self.session_id(i);
         trace!(self, now, Gate { slot: i as u64, release: 1, held: self.slots.get(i).map_or(0, |s| s.m.held.len()) as u64 });
         while !self.events.stalled() {
@@ -236,8 +246,7 @@ ep_impl! {
             if let Some(flag) = self.is_parked.get_mut(i) {
                 *flag = false;
             }
-            let Some(s) = self.slots.get(i) else { continue };
-            if s.m.allowed && s.m.hold != 2 {
+            if self.slots.get(i).is_some_and(|s| s.m.hold != 2) {
                 self.release_held(i, now);
             }
             self.settle(i, now);

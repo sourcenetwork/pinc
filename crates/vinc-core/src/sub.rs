@@ -20,7 +20,7 @@
 //! the frame arrived), so it is closed with its parent and the application dials again.
 //!
 //! Invariants: the keys of two sub-sessions differ whenever their ids or protocols differ; a sub-session is allowed
-//! when its parent is; an open whose ids are already used here, whose protocol is not in the registry or that finds no
+//! while its parent may release events (it is allowed and its peer's answer stands); an open whose ids are already used here, whose protocol is not in the registry or that finds no
 //! free slot is dropped without effect.
 
 use vinc_crypto::NodeId;
