@@ -555,6 +555,10 @@ name = "vinc_dial_failure"
 path = "vinc_dial_failure.rs"
 
 [[test]]
+name = "connect_record_seq"
+path = "connect_record_seq.rs"
+
+[[test]]
 name = "vinc_api"
 path = "vinc_api.rs"
 

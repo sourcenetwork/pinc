@@ -462,6 +462,21 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         true
     }
 
+    /// The sequence number of the last record this node built, or 0 before the first. Keep it across a restart and give
+    /// it back with [`restore_record_seq`](Self::restore_record_seq); a restart without it, within the same millisecond
+    /// or after the clock was set back, can lose one record until the republish.
+    pub const fn record_seq(&self) -> u64 {
+        self.sign.last_seq
+    }
+
+    /// Raise the last record's sequence number to `seq` (a lower one changes nothing), so the next record is above
+    /// every one a previous run of this node published.
+    pub const fn restore_record_seq(&mut self, seq: u64) {
+        if seq > self.sign.last_seq {
+            self.sign.last_seq = seq;
+        }
+    }
+
     /// The ticket hints the node's record carries.
     pub fn hints(&self) -> &[u8] {
         self.hints.get(..self.hint_len).unwrap_or_default()

@@ -50,6 +50,8 @@ pub(super) struct Signing {
     suspending: bool,
     close_at: Option<u64>,
     pub(super) wall_ms: Option<u64>,
+    /// The sequence number of the last record job built; the next one is above it.
+    pub(super) last_seq: u64,
 }
 
 impl Signing {
@@ -63,6 +65,7 @@ impl Signing {
             suspending: false,
             close_at: None,
             wall_ms: None,
+            last_seq: 0,
         }
     }
 
@@ -232,21 +235,26 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         Some(job)
     }
 
-    fn record_job(&self, wall_ms: u64) -> Option<Job> {
+    /// The record job for the wall clock `wall_ms`. Its number is the clock, or one above the last record's when the
+    /// clock did not move past it (a record signed again within the millisecond, a clock set back), so a relay never
+    /// takes it for a stale one.
+    fn record_job(&mut self, wall_ms: u64) -> Option<Job> {
         let home = self.net.home()?;
         let class = self.class?;
         let home_id = self.relay_cfg(home)?.id;
         let mut addrs = [self.me_addr_pub(); MAX_ADDRS];
         let n = self.candidates(&mut addrs);
+        let seq = wall_ms.max(self.sign.last_seq.saturating_add(1));
         let fields = RecordFields {
             home: home_id,
-            seq: wall_ms,
+            seq,
             reach: class,
             addrs: addrs.get(..n).unwrap_or_default(),
             hints: self.hints.get(..self.hint_len).unwrap_or_default(),
         };
         let mut job = Self::blank(Kind::Record, home);
         job.signed = record::prepare(&self.me, self.identity.public_key(), &fields, &mut job.buf).ok()?;
+        self.sign.last_seq = seq;
         Some(job)
     }
 

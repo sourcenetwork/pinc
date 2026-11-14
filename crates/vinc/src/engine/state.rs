@@ -7,7 +7,9 @@
 //! before they reach a disk (`Endpoint::seal_state`).
 //!
 //! Format, all integers big-endian: `version(1) core_len(4) core addresses(2) { alg(1) node(32) n(1) { tag(1) ip(4 or 16)
-//! port(2) } }`, where `core` is the endpoint's own state (`vinc-core`).
+//! port(2) } } record_seq(8)`, where `core` is the endpoint's own state (`vinc-core`) and `record_seq` is the sequence
+//! number of the last record the node published, which keeps the numbers rising across a restart. Version 1 is the same
+//! without `record_seq`; it is still read, and a restore from it leaves the number as it is.
 //!
 //! Invariants: restoring bytes that are not exactly one well-formed state changes nothing; the address book never holds
 //! more than [`BOOK_MAX`] nodes or eight addresses of one.
@@ -22,8 +24,10 @@ use super::{Admit, Core};
 use crate::error::{Error, Result};
 use crate::mem::CLIENT_TICKETS;
 
-/// The state format version.
-const VERSION: u8 = 1;
+/// The state format version written. Version 1, without the record number, is still read.
+const VERSION: u8 = 2;
+/// The format before the record number.
+const VERSION_1: u8 = 1;
 /// The most nodes the address book holds.
 pub(crate) const BOOK_MAX: usize = 4096;
 /// The most addresses kept for one node.
@@ -87,10 +91,12 @@ impl<'a> Cursor<'a> {
 /// The address book as a state holds it: each node with its addresses.
 type Book = Vec<(NodeId, Vec<SocketAddr>)>;
 
-/// The state split into its parts, every part checked.
-fn parse(bytes: &[u8]) -> Option<(&[u8], Book)> {
+/// The state split into its parts, every part checked: the core's bytes, the address book and the last record's number
+/// (absent in version 1).
+fn parse(bytes: &[u8]) -> Option<(&[u8], Book, Option<u64>)> {
     let mut c = Cursor(bytes);
-    if c.u8()? != VERSION {
+    let version = c.u8()?;
+    if version != VERSION && version != VERSION_1 {
         return None;
     }
     let len = usize::try_from(u32::from_be_bytes(c.array()?)).ok()?;
@@ -110,7 +116,12 @@ fn parse(bytes: &[u8]) -> Option<(&[u8], Book)> {
         let addrs = (0..n).map(|_| c.addr()).collect::<Option<Vec<_>>>()?;
         book.push((node, addrs));
     }
-    c.0.is_empty().then_some((core, book))
+    let seq = if version == VERSION {
+        Some(u64::from_be_bytes(c.array()?))
+    } else {
+        None
+    };
+    c.0.is_empty().then_some((core, book, seq))
 }
 
 impl<S: KeyStore, A: Admit> Core<S, A> {
@@ -140,14 +151,18 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 put_addr(&mut out, a);
             }
         }
+        out.extend_from_slice(&self.node.connectivity().record_seq().to_be_bytes());
         Ok(out)
     }
 
     /// Load state made by [`export_state`](Self::export_state); nothing changes if it is not exactly one state.
     pub(crate) fn restore_state(&mut self, now: u64, bytes: &[u8]) -> Result<Restored> {
         let bad = || Error::config("the bytes are not a state of this endpoint");
-        let (core, book) = parse(bytes).ok_or_else(bad)?;
+        let (core, book, seq) = parse(bytes).ok_or_else(bad)?;
         let r = self.node.endpoint_mut().restore_state(now, core).map_err(|_| bad())?;
+        if let Some(seq) = seq {
+            self.node.restore_record_seq(seq);
+        }
         let addresses = book.len();
         for (node, addrs) in book {
             for a in addrs {
@@ -170,14 +185,14 @@ mod tests {
 
     #[test]
     fn a_state_with_a_wrong_version_a_cut_or_extra_byte_is_not_parsed() {
-        let mut ok = vec![VERSION, 0, 0, 0, 0, 0, 0];
+        let mut ok = vec![VERSION_1, 0, 0, 0, 0, 0, 0];
         assert!(parse(&ok).is_some());
         assert!(parse(&ok[..ok.len() - 1]).is_none());
         ok.push(0);
         assert!(parse(&ok).is_none());
         assert!(parse(&[VERSION + 1, 0, 0, 0, 0, 0, 0]).is_none());
         // One address of an unknown family.
-        let mut book = vec![VERSION, 0, 0, 0, 0, 0, 1, IdentityAlg::Ed25519.tag()];
+        let mut book = vec![VERSION_1, 0, 0, 0, 0, 0, 1, IdentityAlg::Ed25519.tag()];
         book.extend_from_slice(&[0; 32]);
         book.extend_from_slice(&[1, 9, 0, 0, 0, 0, 0]);
         assert!(parse(&book).is_none());
@@ -187,15 +202,29 @@ mod tests {
     fn an_address_book_entry_round_trips() {
         let a: SocketAddr = "[2001:db8::1]:4433".parse().unwrap();
         let b: SocketAddr = "10.1.2.3:9".parse().unwrap();
-        let mut bytes = vec![VERSION, 0, 0, 0, 0, 0, 1, IdentityAlg::Ed25519.tag()];
+        let mut bytes = vec![VERSION_1, 0, 0, 0, 0, 0, 1, IdentityAlg::Ed25519.tag()];
         bytes.extend_from_slice(&[7; 32]);
         bytes.push(2);
         put_addr(&mut bytes, &a);
         put_addr(&mut bytes, &b);
-        let (core, book) = parse(&bytes).unwrap();
+        let (core, book, seq) = parse(&bytes).unwrap();
+        assert_eq!(seq, None);
         assert_eq!(core, &[] as &[u8]);
         assert_eq!(book.len(), 1);
         assert_eq!(book[0].1, vec![a, b]);
         assert_eq!(book[0].0.alg, IdentityAlg::Ed25519);
+    }
+
+    #[test]
+    fn the_record_number_is_read_from_a_current_state_and_absent_from_the_old_one() {
+        let mut v2 = vec![VERSION, 0, 0, 0, 0, 0, 0];
+        v2.extend_from_slice(&41u64.to_be_bytes());
+        assert_eq!(parse(&v2).unwrap().2, Some(41));
+        assert!(parse(&v2[..v2.len() - 1]).is_none());
+        // A current state without the number is cut short, and an old one with it has trailing bytes.
+        assert!(parse(&[VERSION, 0, 0, 0, 0, 0, 0]).is_none());
+        let mut v1 = vec![VERSION_1, 0, 0, 0, 0, 0, 0];
+        v1.extend_from_slice(&41u64.to_be_bytes());
+        assert!(parse(&v1).is_none());
     }
 }

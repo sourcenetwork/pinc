@@ -7,8 +7,11 @@
 //! - `magic` is `"VNCREC"` followed by two version bytes `0, 1`; it is part of the signed bytes, so a record of
 //!   another kind never verifies as this one.
 //! - `node` is the publisher, `home` is its home relay, `seq` orders the publisher's records (a higher one replaces
-//!   a lower one; the publisher uses its clock in milliseconds), `reach` is the reachability class
-//!   ([`Reach`]).
+//!   a lower one; the publisher uses its clock in milliseconds, or one above its last record's when the clock did not
+//!   move past it), `reach` is the reachability class
+//!   ([`Reach`]). The number is the library's own: it keeps rising while the process lives and, with the saved state,
+//!   across a restart. A restart without saved state within the same millisecond as the last record, or after the clock
+//!   was set back, can lose one record: a relay keeps the higher number until the next republish.
 //! - Each address is `4 ip(4) port(2)` or `6 ip(16) port(2)`; there are at most [`MAX_ADDRS`] (reflexive and local
 //!   addresses together); `hints` is at most [`MAX_HINT_LEN`] opaque bytes (ticket hints).
 //! - `public_key` has the length of the node's algorithm, and the node id must be the id of that key;
