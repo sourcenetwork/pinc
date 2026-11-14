@@ -11,8 +11,9 @@
 //! it has not needed to evict, and the next [`LOOKAHEAD`] indices after the highest seen, so a packet on a fresh path
 //! is routable even when the first packet of the previous path was lost.
 //!
-//! Invariants: the table holds at most [`LOCAL_SLOTS`] derived ids; when it is full the least recently used entry at
-//! least [`LOOKAHEAD`] below the highest index seen makes room; the entries from there up are never evicted, so the
+//! Invariants: the table holds at most [`LOCAL_SLOTS`] derived ids; when it is full the least recently used entry whose
+//! newest index (an entry stands for every index that derives its id) is at least [`LOOKAHEAD`] below the highest
+//! index seen makes room; the entries from there up are never evicted, so the
 //! indices after the highest one seen are always held once the secret is installed; the sender's id is index 0 or an
 //! index above the highest one the peer answered on, and at most [`LOOKAHEAD`] above it; a received id is only a
 //! candidate (another session of the same endpoint may derive the same four bytes): the packet's authentication
@@ -104,7 +105,9 @@ impl Cids {
 
     /// Make sure [`LOOKAHEAD`] indices after `highest` are in the table. An index whose derived id equals one the
     /// table already holds (the first id, or the id of another index) is not kept twice: the next index takes its
-    /// place, within a window twice as wide. A peer can search for such a pair, so no id is ever listed twice.
+    /// place, within a window twice as wide. A peer can search for such a pair, so no id is ever listed twice. An
+    /// entry whose id another index derives stands for that index too, so it is evicted only once the newest index
+    /// it stands for is out of the sender's range.
     fn refill(&mut self) {
         let Some(secret) = self.secret else { return };
         let mut covered = 0;
@@ -118,7 +121,12 @@ impl Cids {
             let Some(cid) = derive(&secret, self.client, index, self.local_len()) else {
                 continue;
             };
-            if self.is_local(&cid) {
+            if self.first_local == cid {
+                continue;
+            }
+            // the held entry now also stands for this index: it is kept while the newest one it stands for may be used
+            if let Some(e) = self.entries.iter_mut().flatten().find(|e| e.cid == cid) {
+                e.index = e.index.max(index);
                 continue;
             }
             let slot = match self.entries.iter().position(Option::is_none) {
@@ -246,6 +254,115 @@ mod tests {
             return;
         }
         panic!("no colliding secret found");
+    }
+
+    /// Ids of two bytes: a pair collides once in 65536 secrets, three or more at once almost never.
+    const LEN: usize = 2;
+
+    #[allow(clippy::unwrap_used)]
+    fn id_of(secret: &[u8; 32], index: u64, len: usize) -> ConnId {
+        derive(secret, false, index, len).unwrap()
+    }
+
+    /// A secret under which index `pair.0` derives the id of index `pair.1` and no other two of the indices 1..=14
+    /// (nor the first id) share one.
+    #[allow(clippy::panic, clippy::indexing_slicing)]
+    fn colliding_secret(first: ConnId, pair: (u64, u64)) -> [u8; 32] {
+        for n in 0..=u32::MAX {
+            let mut secret = [0u8; 32];
+            secret[..4].copy_from_slice(&n.to_be_bytes());
+            let id = |i| id_of(&secret, i, LEN);
+            if id(pair.0) != id(pair.1) {
+                continue;
+            }
+            let clean = (1..=14).all(|a| id(a) != first && (1..a).all(|b| (id(a) == id(b)) == ((a, b) == pair)));
+            if clean {
+                return secret;
+            }
+        }
+        panic!("no colliding secret found");
+    }
+
+    /// The id of every index in `from..=to` (from 1 on) is accepted.
+    fn assert_accepted(c: &Cids, secret: &[u8; 32], from: u64, to: u64, what: &str) {
+        for j in from.max(1)..=to {
+            let cid = id_of(secret, j, c.local_len());
+            assert!(
+                c.is_local(&cid),
+                "the id of index {j}, {what}, is accepted (highest seen {})",
+                c.highest
+            );
+        }
+    }
+
+    /// Authenticate packets to the ids of `indices`, in order, and check `window` of the table after each.
+    fn drive(first: ConnId, pair: (u64, u64), indices: &[u64], window: impl Fn(&Cids, &[u8; 32])) {
+        let secret = colliding_secret(first, pair);
+        let mut c = Cids::new(false, first);
+        c.install(&secret);
+        window(&c, &secret);
+        for &i in indices {
+            c.on_authenticated(&id_of(&secret, i, LEN));
+            window(&c, &secret);
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn first() -> ConnId {
+        ConnId::new(&[0xff; LEN]).unwrap()
+    }
+
+    /// The witness of the model's lookahead check: index 9 has the id of index 1, a refill at the highest index 7
+    /// passes 9 over, and the refill at 8 must not evict the entry that is also the id of 9, an index the sender takes
+    /// next.
+    #[test]
+    fn a_collision_does_not_evict_the_id_of_an_index_ahead() {
+        drive(first(), (9, 1), &[1, 3, 5, 7, 8], |c, s| {
+            assert_accepted(c, s, c.highest + 1, c.highest + LOOKAHEAD, "ahead of the highest seen");
+        });
+    }
+
+    /// The witness of the model's window check: index 8 has the id of index 1, and the refill at the highest index 9
+    /// must not evict the entry that is also the id of 8, which the sender may still use.
+    #[test]
+    fn a_collision_does_not_evict_the_id_of_an_index_the_sender_may_still_use() {
+        drive(first(), (8, 1), &[1, 3, 5, 7, 9], |c, s| {
+            assert_accepted(
+                c,
+                s,
+                (c.highest + 1).saturating_sub(LOOKAHEAD),
+                c.highest,
+                "one the sender may still use",
+            );
+        });
+    }
+
+    /// Whatever ids collide, every index from `LOOKAHEAD` below the highest seen up to `LOOKAHEAD` above it is accepted.
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    fn every_index_the_sender_may_use_is_accepted_under_random_collisions() {
+        // ids of one byte collide in most sessions
+        let mut x = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..2000 {
+            let mut secret = [0u8; 32];
+            secret[..8].copy_from_slice(&next().to_be_bytes());
+            let first = ConnId::new(&[u8::try_from(next() & 0xff).unwrap()]).unwrap();
+            let mut c = Cids::new(false, first);
+            c.install(&secret);
+            for _ in 0..60 {
+                let from = c.highest.saturating_sub(3);
+                let index = from + next() % (c.highest + 6 - from);
+                c.on_authenticated(&id_of(&secret, index, 1));
+                let (lo, hi) = ((c.highest + 1).saturating_sub(LOOKAHEAD), c.highest + LOOKAHEAD);
+                assert_accepted(&c, &secret, lo, hi, "one the sender may use");
+            }
+        }
     }
 }
 
