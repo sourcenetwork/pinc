@@ -2,9 +2,10 @@
 //! client needs (GetExternalIPAddress, AddPortMapping, DeletePortMapping), over HTTP/1.0 so no response is chunked.
 //!
 //! - **Search.** [`M_SEARCH`] goes to `239.255.255.250:1900`; an answer is `HTTP/1.1 200` with a `LOCATION` header
-//!   naming the description: `http://<IPv4>[:port]/<path>`, the only form taken ([`parse_location`]).
+//!   naming the description: `http://<IPv4>[:port]/<path>`, the only form taken ([`parse_location`]), and never a
+//!   loopback, unspecified, multicast, broadcast or link-local host ([`usable_host`]).
 //! - **Description.** The first `<service>` whose `<serviceType>` is one of [`SERVICES`] gives the `<controlURL>`, a
-//!   path or an `http://` URL of the same form ([`control_of`]).
+//!   path or an `http://` URL of the same form and of the description's own host ([`control_of`]).
 //! - **Calls.** A SOAP POST to the control URL ([`soap`]); a `200` answer is success and a `500` carries `<errorCode>`
 //!   ([`soap_result`]).
 //!
@@ -15,6 +16,7 @@
 
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
+use crate::addr::usable_host;
 use crate::text::{Out, element, find, header, parse_ip4, parse_u32, trim};
 
 /// The SSDP multicast address.
@@ -81,7 +83,8 @@ pub fn parse_location(b: &[u8]) -> Option<Url> {
     if port == 0 {
         return None;
     }
-    let addr = SocketAddr::V4(SocketAddrV4::new(parse_ip4(host)?, port));
+    let ip = parse_ip4(host).filter(|ip| usable_host(*ip))?;
+    let addr = SocketAddr::V4(SocketAddrV4::new(ip, port));
     Url::new(addr, if path.is_empty() { b"/" } else { path })
 }
 
@@ -140,7 +143,8 @@ pub fn control_of(desc: &[u8], base: &Url) -> Option<(Url, usize)> {
 
 fn resolve(ctl: &[u8], base: &Url) -> Option<Url> {
     if ctl.get(..7).is_some_and(|p| p.eq_ignore_ascii_case(b"http://")) {
-        return parse_location(ctl);
+        // The control address is the description's host: an answer names where to send HTTP only once.
+        return parse_location(ctl).filter(|u| u.addr.ip() == base.addr.ip());
     }
     if ctl.first() == Some(&b'/') {
         return Url::new(base.addr, ctl);

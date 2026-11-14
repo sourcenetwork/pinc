@@ -16,6 +16,7 @@
     reason = "UPnP and its action names (AddPortMapping) are protocol prose, not code"
 )]
 
+pub mod addr;
 pub mod client;
 pub mod lease;
 pub mod natpmp;

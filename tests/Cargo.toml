@@ -795,6 +795,10 @@ name = "portmap_client"
 path = "portmap_client.rs"
 
 [[test]]
+name = "portmap_security"
+path = "portmap_security.rs"
+
+[[test]]
 name = "connect_publish_wait"
 path = "connect_publish_wait.rs"
 

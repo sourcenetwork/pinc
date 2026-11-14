@@ -6,7 +6,8 @@
 //! gateway's description, its external address and AddPortMapping, over HTTP the host carries ([`PortMap::poll_http`]).
 //! PCP and UPnP need the client's own address (it is in their messages), so a socket on the unspecified address tries
 //! NAT-PMP only; with no gateway known only UPnP is tried, and an answer from another address than the gateway's is
-//! not taken. When every protocol failed the client tries again after [`RETRY`].
+//! not taken. UPnP searches only from a private IPv4 address, takes a description only from the host that answered
+//! (and the gateway's, when it is known), and sends HTTP to no other host. When every protocol failed the client tries again after [`RETRY`].
 //!
 //! **Holding.** A grant is a lease that started when its request first left, so it ends on the client's clock no
 //! later than on the gateway's ([`crate::lease`]). The client renews half way with the protocol that granted
@@ -27,6 +28,7 @@
 
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use crate::addr;
 use crate::lease::{self, Epoch, SEC};
 use crate::natpmp;
 use crate::pcp;
@@ -193,12 +195,18 @@ impl PortMap {
         }
     }
 
+    /// Whether the client may search: only from a private IPv4 address, so an endpoint on the internet sends no
+    /// multicast and takes no answer from a host that is not on its network.
+    fn searchable(&self) -> bool {
+        self.client_v4().is_some_and(addr::is_private)
+    }
+
     fn first(&self) -> Step {
         let specified = !self.cfg.local.ip().is_unspecified();
         match (self.cfg.gateway.is_some(), specified) {
             (true, true) => Step::Pcp,
             (true, false) => Step::NatAddr,
-            (false, _) if self.client_v4().is_some() => Step::Ssdp,
+            (false, _) if self.searchable() => Step::Ssdp,
             _ => Step::Stopped,
         }
     }
@@ -303,7 +311,7 @@ impl PortMap {
         }
         let next = match self.step {
             Step::Pcp => Step::NatAddr,
-            Step::NatAddr | Step::NatMap if self.client_v4().is_some() => Step::Ssdp,
+            Step::NatAddr | Step::NatMap if self.searchable() => Step::Ssdp,
             Step::Delete | Step::Stopped => Step::Stopped,
             _ => Step::Idle,
         };
@@ -352,7 +360,7 @@ impl PortMap {
             return;
         }
         if self.step == Step::Ssdp {
-            if let Some(desc) = upnp::ssdp_location(b) {
+            if let Some(desc) = upnp::ssdp_location(b).filter(|d| self.location_ok(d, from)) {
                 self.igd = Some(Igd {
                     desc,
                     ctl: None,
@@ -370,6 +378,13 @@ impl PortMap {
             Some(_) => self.pcp_answer(now, b),
             None => {}
         }
+    }
+
+    /// Whether the description `desc` an SSDP answer from `from` names is on the host that answered (and on the gateway,
+    /// when one is known): HTTP goes only to the host that spoke.
+    fn location_ok(&self, desc: &Url, from: SocketAddr) -> bool {
+        let ip = from.ip().to_canonical();
+        desc.addr.ip() == ip && self.cfg.gateway.is_none_or(|g| g == ip)
     }
 
     fn pcp_answer(&mut self, now: u64, b: &[u8]) {
