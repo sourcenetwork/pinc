@@ -84,6 +84,8 @@ pub use api::{
 pub use commands::{FAN_URGENCY, UDP_FRESH};
 pub use endpoint::{CID_LEN, Endpoint, EndpointConfig, MAX_ALPNS, MAX_DATAGRAM, MAX_IFACES, PREKEY_PEERS, SUBS_SEEN};
 pub use ext_in::EXT_BODY_MAX;
+#[cfg(feature = "trace")]
+pub use ext_in::trace::ExtInProbe;
 pub use heap::DeadlineHeap;
 pub use iface::{IfaceEvent, IfaceId};
 pub use keepalive::{
@@ -98,6 +100,8 @@ pub use orphan::trace::{OrphanEntry, OrphanProbe};
 pub use queue::trace::EventProbe;
 pub use queue::{EVENT_BASE, event_headroom, event_queue};
 pub use reach::REACH_BODY_MAX;
+#[cfg(feature = "trace")]
+pub use reach::trace::ReachProbe;
 pub use relay_net::{RELAY_V4, is_relay_addr, relay_addr, relay_parts};
 pub use rtt::{FIRST_RESEND, FLOOR_MAX, HUB_RESEND, NodeRtt, PEER_RTTS, SLOW_RTT};
 #[cfg(feature = "trace")]

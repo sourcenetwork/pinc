@@ -99,6 +99,10 @@ import Vinc.CoreQueueThm
 import Vinc.CoreQueueRun
 import Vinc.CoreHeld
 import Vinc.CoreHeldThm
+import Vinc.CoreExtIn
+import Vinc.CoreExtInThm
+import Vinc.CoreReach
+import Vinc.CoreReachThm
 import Vinc.TraceOrphan
 import Vinc.CoreKeepalive
 import Vinc.CoreKeepaliveThm
@@ -121,6 +125,8 @@ import Vinc.CoreStateThm
 import Vinc.TraceCoreState
 import Vinc.TraceQueue
 import Vinc.TraceHeld
+import Vinc.TraceExtIn
+import Vinc.TraceReach
 import Vinc.TransportMtu
 import Vinc.TraceMtu
 import Vinc.TransportTimers

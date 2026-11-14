@@ -1126,3 +1126,11 @@ path = "trace_keepalive.rs"
 [[test]]
 name = "trace_connect_ws"
 path = "trace_connect_ws.rs"
+
+[[test]]
+name = "trace_ext_in"
+path = "trace_ext_in.rs"
+
+[[test]]
+name = "trace_reach"
+path = "trace_reach.rs"
