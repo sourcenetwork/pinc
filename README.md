@@ -251,10 +251,8 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   and an amplification ledger that asks for evidence before it validates an address
   ([#251](https://github.com/sourcenetwork/vinc/issues/251)). Each loses one or two deliveries in the same few
   low-bandwidth and mobile seeds, at least one of which `master` delivers by accident, so they are being compared
-  with the reference model's own run of those seeds before they land. Open beside them: a dialing side does not
-  take a handshake reply on a path it does not hold
-  ([#399](https://github.com/sourcenetwork/vinc/issues/399)), and the facade's access hook is asked for a protocol
-  and a direction while its answer stands for the peer
+  with the reference model's own run of those seeds before they land. Open beside them: the facade's access hook is
+  asked for a protocol and a direction while its answer stands for the peer
   ([#440](https://github.com/sourcenetwork/vinc/issues/440), fix in review).
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
   ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 92 at `b12aa0aa` (84 at
