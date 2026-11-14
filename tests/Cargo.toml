@@ -996,6 +996,10 @@ name = "values_fixes"
 path = "values_fixes.rs"
 
 [[test]]
+name = "values_deadline"
+path = "values_deadline.rs"
+
+[[test]]
 name = "node_view"
 path = "node_view.rs"
 

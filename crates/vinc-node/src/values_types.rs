@@ -21,7 +21,9 @@ pub struct ValuesRequest<'a> {
     pub ranges: &'a [Span],
     /// The providers, by node id; the first four count.
     pub providers: &'a [NodeId],
-    /// The node time after which the fetch fails, if any.
+    /// The node time after which the fetch fails, if any. Nothing else ends a fetch whose providers stop answering:
+    /// a provider whose session closed is dialled again for as long as the fetch runs, and one that is connected and
+    /// sends nothing is waited for with no timer. A fetch that must not wait gives a deadline.
     pub deadline: Option<Nanos>,
 }
 
