@@ -279,6 +279,7 @@ conn_impl! {
         let p = self.paths.get_mut(ti)?;
         debug_assert!(self.sess_amp.is_validated() || p.amp.can_send(len as u64));
         p.amp.on_send(charge);
+        p.last_tx = now;
         self.sess_amp.on_send(charge);
         self.stats.datagrams_sent += 1;
         self.stats.bytes_sent += len as u64;
@@ -685,7 +686,7 @@ conn_impl! {
             self.fill_control(payload, &mut pos, &mut out, fill);
         }
         // PATH frames.
-        self.fill_path(payload, &mut pos, &mut out, ti, fill.now);
+        self.fill_path(payload, &mut pos, &mut out, ti);
         // Retransmissions and new stream data.
         if fill.allow_cc {
             self.fill_streams(payload, &mut pos, &mut out);
@@ -832,7 +833,7 @@ conn_impl! {
         true
     }
 
-    fn fill_path(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, ti: usize, now: u64) {
+    fn fill_path(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, ti: usize) {
         let Some(p) = self.paths.get(ti).copied() else { return };
         if let Some(d) = p.response
             && put(payload, pos, &Frame::PathResponse(d))
@@ -854,7 +855,6 @@ conn_impl! {
         {
             if let Some(pm) = self.paths.get_mut(ti) {
                 pm.send_challenge = false;
-                pm.challenge_sent(data, now);
             }
             out.weak();
         }

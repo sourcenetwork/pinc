@@ -1,11 +1,14 @@
 //! Paths: validation, following the peer, the active-path choice, the idle rules and path MTU state.
 //!
 //! A connection keeps at most `NP` paths. Each has its own validated flag, [`AmpBudget`], datagram size, round trip
-//! and last-heard time. A path is validated by an answered PATH_CHALLENGE (the previous challenge is
-//! accepted too, so a replaced challenge cannot strand the answer to the first); the round trip it gives is the time
-//! since the challenge the response echoes was first sent, kept in a small table of the outstanding challenges, so
-//! challenges repeated faster than the round trip cannot under-read it. Challenges and responses are small and unpadded: the datagram size is
-//! found by the separate probe.
+//! and last-heard and last-sent times. A path is validated by an answered PATH_CHALLENGE (the challenges it replaced
+//! are accepted too, kept in a small table of the outstanding ones, so a replaced challenge cannot strand the answer to
+//! the first); the round trip it gives is the time since a datagram last left on the path, as the reference model
+//! reads it. A challenge repeated faster than the round trip therefore reads less than the true round trip. That is
+//! the reference model's behaviour and its path choice relies on it: a direct path several seconds long, probed on the
+//! doubling cadence, reads below a relay's one-second penalty and takes the session off the relay. Once packets sent
+//! on the path are acknowledged, its round trip follows the connection's smoothed one. Challenges and responses are
+//! small and unpadded: the datagram size is found by the separate probe.
 //!
 //! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves
 //! the active path to the path it came from, and a new UDP path is challenged in parallel (a new path gets three
@@ -122,9 +125,8 @@ pub(crate) struct Path {
     pub(crate) mtu: Mtu,
     /// The challenge outstanding on this path.
     pub(crate) challenge: Option<[u8; 8]>,
-    /// The newest challenges (the outstanding one and those it replaced) with the time each was first sent, 0 while
-    /// unsent; the oldest entry is overwritten.
-    pub(crate) sent: [Option<([u8; 8], u64)>; CHALLENGES],
+    /// The newest challenges (the outstanding one and those it replaced); the oldest entry is overwritten.
+    pub(crate) sent: [Option<[u8; 8]>; CHALLENGES],
     sent_next: usize,
     /// When the outstanding migration challenge was sent.
     pub(crate) challenge_at: u64,
@@ -148,6 +150,8 @@ pub(crate) struct Path {
     pub(crate) rtt: u64,
     /// When a datagram last arrived on this path, 0 for never.
     pub(crate) last_rx: u64,
+    /// When a datagram last left on this path, 0 for never.
+    pub(crate) last_tx: u64,
     /// The peer's id this path sends with, its index, the number of the first packet that can carry it, and whether
     /// the peer acknowledged a packet this path sent with it.
     pub(crate) dcid: Option<ConnId>,
@@ -188,6 +192,7 @@ impl Path {
             rj_fired: false,
             rtt: 0,
             last_rx: 0,
+            last_tx: 0,
             dcid: None,
             dcid_index: 0,
             dcid_pn: 0,
@@ -200,23 +205,14 @@ impl Path {
     fn push_challenge(&mut self, data: [u8; 8]) {
         self.challenge = Some(data);
         if let Some(s) = self.sent.get_mut(self.sent_next) {
-            *s = Some((data, 0));
+            *s = Some(data);
         }
         self.sent_next = (self.sent_next + 1) % CHALLENGES;
     }
 
-    /// Note that the challenge `data` left on the path at `now`; only the first send counts.
-    pub(crate) fn challenge_sent(&mut self, data: [u8; 8], now: u64) {
-        if let Some((_, at)) = self.sent.iter_mut().flatten().find(|(d, _)| *d == data)
-            && *at == 0
-        {
-            *at = now;
-        }
-    }
-
-    /// The time the challenge `data` was first sent, if it is one of the outstanding ones.
-    fn challenge_time(&self, data: [u8; 8]) -> Option<u64> {
-        self.sent.iter().flatten().find(|(d, _)| *d == data).map(|(_, at)| *at)
+    /// Whether `data` is one of the outstanding challenges.
+    fn is_challenge(&self, data: [u8; 8]) -> bool {
+        self.sent.iter().flatten().any(|d| *d == data)
     }
 
     /// The cost used to rank paths.
@@ -643,10 +639,13 @@ conn_impl! {
         }
     }
 
-    /// A PATH_RESPONSE arrived on path `i`.
+    /// A PATH_RESPONSE arrived on path `i`. The path's round trip is the time since the last datagram left on it, as in
+    /// the reference model, whose path choice is tuned to that reading.
     pub(super) fn on_path_response(&mut self, i: usize, data: [u8; 8], now: u64) {
         let Some(p) = self.paths.get_mut(i) else { return };
-        let Some(sent_at) = p.challenge_time(data) else { return };
+        if !p.is_challenge(data) {
+            return;
+        }
         let was = p.validated;
         let rejoining = p.rejoin;
         p.sent = [None; CHALLENGES];
@@ -655,7 +654,7 @@ conn_impl! {
         p.validated = true;
         p.amp.validate();
         p.probes_left = 0;
-        p.rtt = if sent_at == 0 { 0 } else { now.saturating_sub(sent_at) };
+        p.rtt = if p.last_tx == 0 { 0 } else { now.saturating_sub(p.last_tx) };
         p.rejoin = false;
         let id = p.id;
         if !was {

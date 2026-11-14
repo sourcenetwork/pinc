@@ -325,23 +325,28 @@ fn a_ping_on_a_standby_path_keeps_it_alive_and_leaves_its_round_trip_and_the_cho
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        let mut link = Link::new(18, Params::new(100 * MS));
+        // Active path: 20 ms round trip. Standby path: 200 ms, which a challenge reads as the time since the last
+        // datagram left on it (as the reference model does): about 100 ms, as the challenges leave 33 and 67 ms apart.
+        // That stays slower than the active path; only this end probes, so no answer to the peer's challenges
+        // leaves just before the reading.
+        let mut link = Link::new(18, Params::new(10 * MS));
         link.add_route(PathId(3), PathId(4), Params::new(100 * MS), Params::new(100 * MS));
         let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        bulk(&mut net, &pattern(200_000, 19), 30 * SEC);
+        net.run(net.now + SEC, |_| false);
+        let cur = net.a.conn.path_rtt(PathId(1)).unwrap();
+        assert!((19 * MS..23 * MS).contains(&cur), "{cur}");
         let now = net.now;
         net.a
             .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
-            .unwrap();
-        net.b
-            .with_env(now, |c, env| c.add_path(env, PathId(4), PathInfo::default()))
             .unwrap();
         assert!(net.run(net.now + 10 * SEC, |n| n.a.saw(|r| *r == Rec::PathValidated(PathId(3)))));
         net.run(net.now + SEC, |_| false);
         assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
         let slow = net.a.conn.path_rtt(PathId(3)).unwrap();
-        assert!(slow > 150 * MS, "{slow}");
+        assert!((90 * MS..110 * MS).contains(&slow), "{slow}");
         // The standby path gets much faster; a keepalive on it must not notice.
-        net.link.set(PathId(3), Params::new(10 * MS), Params::new(10 * MS));
+        net.link.set(PathId(3), Params::new(MS), Params::new(MS));
         let sent = net.a.tx_log.iter().filter(|t| t.2 == PathId(3)).count();
         net.a.conn.ping_path(PathId(3)).unwrap();
         net.run(net.now + 3 * SEC, |_| false);
@@ -427,6 +432,43 @@ fn a_relay_path_is_valid_when_added_and_is_never_challenged() {
             net.a.conn.active_path(),
             Some(PathId(1)),
             "the direct path stays active"
+        );
+    });
+}
+
+/// A session on a relay takes a direct path several seconds long, as the reference model's does: probed on the
+/// doubling cadence, the direct path reads the time since its last challenge left, under the relay's one-second
+/// penalty. Read as its true round trip it would lose to the relay for good.
+#[test]
+fn a_relay_session_moves_to_a_direct_path_several_seconds_long() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        // The session runs on route 1, which both ends then learn is a relay's: 20 ms plus the penalty.
+        let mut link = Link::new(19, Params::new(10 * MS));
+        link.add_route(PathId(3), PathId(4), Params::new(1250 * MS), Params::new(1250 * MS));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let relay = PathInfo {
+            kind: PathKind::Relay,
+            ..PathInfo::default()
+        };
+        net.a.conn.set_path_info(PathId(1), relay);
+        net.b.conn.set_path_info(PathId(2), relay);
+        assert_eq!(net.a.conn.active_path(), Some(PathId(1)));
+        // The direct path takes 2.5 s. Its challenges leave 33 ms apart, doubling up to 2 s, so the last before the
+        // first answer left at 2.1 s: it reads about 0.4 s.
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        assert!(net.run(net.now + 10 * SEC, |n| n.a.conn.path_validated(PathId(3))));
+        let read = net.a.conn.path_rtt(PathId(3)).unwrap();
+        assert!(read < SEC, "{read}");
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(
+            net.a.conn.active_path(),
+            Some(PathId(3)),
+            "the session leaves the relay for the direct path"
         );
     });
 }
@@ -573,8 +615,10 @@ fn switching_needs_a_gain_above_5_ms_on_the_raw_round_trip() {
     });
 }
 
+/// The reference model reads a path's round trip at an answered challenge as the time since a datagram last left on
+/// the path, so a path probed faster than its round trip reads less than it, and its path choice acts on that reading.
 #[test]
-fn a_slow_path_probed_faster_than_its_round_trip_reads_the_true_round_trip() {
+fn a_slow_path_probed_faster_than_its_round_trip_reads_the_time_since_its_last_send() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
@@ -584,7 +628,7 @@ fn a_slow_path_probed_faster_than_its_round_trip_reads_the_true_round_trip() {
         let cur = net.a.conn.path_rtt(PathId(1)).unwrap();
         assert!((19 * MS..23 * MS).contains(&cur), "{cur}");
         // A new path with a 40 ms round trip is probed every 33 ms, so a new challenge leaves before the answer to
-        // the last one arrives. The round trip is that of the challenge the answer echoes, not of the latest send.
+        // the last one arrives. The round trip read is the time since that latest send, about 7 ms, not the 40 ms.
         let p = Params::new(20 * MS);
         net.link.add_route(PathId(3), PathId(4), p, p);
         let now = net.now;
@@ -593,12 +637,12 @@ fn a_slow_path_probed_faster_than_its_round_trip_reads_the_true_round_trip() {
             .unwrap();
         assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(3))));
         let measured = net.a.conn.path_rtt(PathId(3)).unwrap();
-        assert!((39 * MS..45 * MS).contains(&measured), "{measured}");
+        assert!((5 * MS..10 * MS).contains(&measured), "{measured}");
         net.run(net.now + SEC, |_| false);
         assert_eq!(
             net.a.conn.active_path(),
-            Some(PathId(1)),
-            "a slower path does not win the switch"
+            Some(PathId(3)),
+            "read more than 5 ms faster than the active path, the slower path wins the switch, as in the reference model"
         );
     });
 }
