@@ -443,3 +443,31 @@ fn every_request_carries_a_nonce_that_was_drawn() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn the_node_exposes_what_the_client_dropped() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = member();
+            assert_eq!(
+                node.port_mapping_stats(),
+                vinc_node::PortMapStats::default(),
+                "nothing before it is on"
+            );
+            node.start_port_mapping(SEC, Some(gw().ip()), local(), 120);
+            let req = pcp::decode_request(&to_gateway(&mut node)[0]).unwrap();
+            // an answer from the gateway with another nonce is dropped and counted
+            deliver(&mut node, SEC, gw(), grant([9; 12], 7));
+            assert_eq!(node.port_mapping(), None);
+            assert_eq!(node.port_mapping_stats().client.wrong_nonce, 1);
+            assert_eq!(node.port_mapping_stats().nonce_failures, 0);
+            // one with its own nonce is held and counts nothing more
+            deliver(&mut node, SEC, gw(), grant(req.nonce, 7));
+            assert_eq!(node.port_mapping_stats().client.wrong_nonce, 1);
+            assert!(node.port_mapping().is_some());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

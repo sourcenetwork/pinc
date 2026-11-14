@@ -92,6 +92,7 @@ pub use ep::Ep;
 pub use event::{NodeEvent, ReconcileFailure};
 pub use layer::Layer;
 pub use node::{Node, StartError};
+pub use portmap::PortMapStats;
 #[cfg(feature = "trace")]
 pub use probe::BackoffProbe;
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};

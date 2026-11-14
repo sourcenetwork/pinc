@@ -16,6 +16,15 @@ use crate::config::{Nanos, Store};
 use crate::ep::Ep;
 use crate::node::{Due, Node};
 
+/// What the port-mapping client dropped, and how often the node failed to draw its nonce.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PortMapStats {
+    /// What the client dropped, by reason.
+    pub client: vinc_portmap::Stats,
+    /// Draws of the nonce that failed: the client starts at the next try.
+    pub nonce_failures: u64,
+}
+
 /// How long after a failed draw of the nonce the node draws again, in nanoseconds.
 const NONCE_RETRY: Nanos = 1_000_000_000;
 
@@ -111,6 +120,14 @@ where
         self.pm
             .as_ref()
             .is_none_or(|pm| pm.client.as_ref().is_some_and(PortMap::stopped))
+    }
+
+    /// What the port-mapping client dropped, and the draws of its nonce that failed; zero before it is turned on.
+    pub fn port_mapping_stats(&self) -> PortMapStats {
+        self.pm.as_ref().map_or_else(PortMapStats::default, |pm| PortMapStats {
+            client: pm.client.as_ref().map(PortMap::stats).unwrap_or_default(),
+            nonce_failures: pm.nonce_failures,
+        })
     }
 
     /// The mapping held: its external address and the protocol that granted it.
