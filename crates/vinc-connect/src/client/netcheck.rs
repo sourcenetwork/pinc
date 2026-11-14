@@ -225,12 +225,17 @@ impl<const R: usize> Netcheck<R> {
         self.reflexive.get(relay).copied().flatten()
     }
 
-    /// The reflexive addresses learned, in relay order, written to `out`; returns how many.
+    /// The distinct reflexive addresses learned, in relay order, written to `out`; returns how many. An address that
+    /// several relays report is listed once.
     pub fn reflexive_into(&self, out: &mut [SocketAddr]) -> usize {
         let mut n = 0;
-        for (d, a) in out.iter_mut().zip(self.reflexive.iter().flatten()) {
-            *d = *a;
-            n += 1;
+        for a in self.reflexive.iter().flatten() {
+            if !out.get(..n).unwrap_or_default().contains(a)
+                && let Some(d) = out.get_mut(n)
+            {
+                *d = *a;
+                n += 1;
+            }
         }
         n
     }

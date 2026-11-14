@@ -56,6 +56,28 @@ fn the_home_is_the_lowest_round_trip_and_changes_only_for_a_strictly_lower_one()
 }
 
 #[test]
+fn an_address_that_several_relays_report_is_listed_once() {
+    let mut n = Netcheck::<3>::default();
+    n.probe_sent(0, 0, [1; 8], true);
+    n.probe_sent(0, 1, [2; 8], true);
+    n.probe_sent(0, 2, [3; 8], true);
+    assert!(n.answered(50, 0, [1; 8], a("1.2.3.4:5")).is_some());
+    assert!(n.answered(30, 1, [2; 8], a("1.2.3.4:5")).is_some());
+    assert!(n.answered(40, 2, [3; 8], a("9.9.9.9:7")).is_some());
+    let mut out = [a("0.0.0.0:0"); 8];
+    let got = n.reflexive_into(&mut out);
+    assert_eq!(
+        &out[..got],
+        &[a("1.2.3.4:5"), a("9.9.9.9:7")],
+        "one place per address, in relay order"
+    );
+    // a short buffer takes the distinct addresses that fit
+    let mut one = [a("0.0.0.0:0"); 1];
+    assert_eq!(n.reflexive_into(&mut one), 1);
+    assert_eq!(one[0], a("1.2.3.4:5"));
+}
+
+#[test]
 fn a_wrong_nonce_or_a_second_answer_is_ignored() {
     let mut n = Netcheck::<2>::new();
     n.probe_sent(0, 0, [9; 8], true);
