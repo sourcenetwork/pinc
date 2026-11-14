@@ -26,7 +26,11 @@ fn a_subscriber_is_told_once_that_the_hub_holds_its_subscription() {
         topic: T.to_vec()
     }));
     net.subscribe(1, T);
-    assert_eq!(subscribed(&net, 2), 1, "a later subscriber's set does not tell it again");
+    assert_eq!(
+        subscribed(&net, 2),
+        1,
+        "a later subscriber's set does not tell it again"
+    );
     assert_eq!(subscribed(&net, 1), 1);
 }
 
