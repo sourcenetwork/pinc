@@ -12,7 +12,6 @@
 //! stream ids of a class are opened in order and never reused.
 
 use super::credit::Admit;
-use super::flow::Meter;
 use super::lazy::{Blank, Lazy};
 use super::pool::{BufferPool, CHUNK_SIZE};
 use super::recv::Recv;
@@ -86,8 +85,6 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     slots: Lazy<Slot<S, C>, N>,
     stream_window: u64,
     max_stream_window: u64,
-    target: u64,
-    meter: Meter,
     peer: PeerLimits,
     max_remote: u64,
     local_opened: [u64; 2],
@@ -122,8 +119,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             slots: Lazy::new(),
             stream_window,
             max_stream_window: max_stream,
-            target: stream_window,
-            meter: Meter::NEW,
             peer: PeerLimits::default(),
             max_remote: config.max_streams.min(N as u64),
             local_opened: [0; 2],
@@ -194,8 +189,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         self.hot = [0; N];
         self.stream_window = stream_window;
         self.max_stream_window = max_stream;
-        self.target = stream_window;
-        self.meter = Meter::NEW;
         self.peer = PeerLimits::default();
         self.max_remote = config.max_streams.min(N as u64);
         self.local_opened = [0; 2];
@@ -237,7 +230,6 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// peer streams live at once (at most the cap it was made with). The stream credit is derived again from them.
     pub fn adopt(&mut self, pool: &BufferPool<'_>, window: u64, streams: u64) {
         self.stream_window = window.min(self.max_stream_window);
-        self.target = self.stream_window;
         self.max_remote = self.max_remote.min(streams);
         self.set_advertised(self.admit_cap(pool));
     }
@@ -751,34 +743,33 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         srtt: u64,
     ) -> Result<RecvStatus, StreamError> {
         let i = self.require(id)?;
+        let (floor, ceiling) = (self.stream_window, self.max_stream_window);
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         slot.recv.consume(pool, n as u64)?;
         let status = slot.recv.status();
-        let rate = self.meter.consumed(n as u64, now, srtt);
-        self.target = rate
-            .saturating_mul(2)
-            .max(self.stream_window)
-            .min(self.max_stream_window);
+        // Each window follows what its own reader drains, so the windows together ask for twice the connection's
+        // rate however many streams share it, and a stream that sits idle asks for no more than the initial window.
+        let rate = slot.recv.meter.consumed(n as u64, now, srtt);
+        slot.recv.win.size = slot.recv.win.size.max(rate.saturating_mul(2).max(floor).min(ceiling));
         self.grant(pool, i);
         self.settle(pool, i);
         Ok(status)
     }
 
-    /// Move the window of slot `first`, and of every slot whose grant was deferred, to the current target. A grant is
+    /// Move the limit of slot `first`, and of every slot whose grant was deferred, to a window ahead of its read position
+    /// (the window its own reader's rate sized in `consume`). A grant is
     /// queued only while the credit already granted and not yet received, plus the increase, fits in the pool;
     /// otherwise the slot stays deferred and is tried again after a later consume.
     fn grant(&mut self, pool: &BufferPool<'_>, first: usize) {
         let mut granted: Option<u64> = None;
         let reserve = self.reserved();
         for i in 0..self.used() {
-            let target = self.target;
             let Some(slot) = self.slots.written_mut(i) else {
                 continue;
             };
             if !slot.recv.open || !(i == first || slot.recv.win.deferred) {
                 continue;
             }
-            slot.recv.win.size = slot.recv.win.size.max(target);
             let Some(candidate) = slot.recv.due() else {
                 slot.recv.win.deferred = false;
                 continue;

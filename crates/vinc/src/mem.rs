@@ -58,8 +58,8 @@ pub struct Limits {
     /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
     /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
-    /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice the
-    /// delivery rate while the stream is read, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
+    /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice what the
+    /// stream's own reader drains per round trip, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
     /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
     /// window needs a raised `pool_chunks` to keep as many streams busy at once.
     pub stream_window: u64,
