@@ -287,6 +287,7 @@ mod tests {
             },
             1 => Event::Incoming { session, node, alpn },
             2 => Event::ConnectFailed {
+                session: Some(session),
                 node,
                 alpn,
                 reason: ConnectFailure::Timeout,

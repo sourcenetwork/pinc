@@ -219,7 +219,6 @@ pub(crate) struct Core<S, A> {
     pub(crate) limits: Limits,
     sessions: RapidHashMap<SessionId, Sess>,
     dials: RapidHashMap<SessionId, Dial>,
-    dial_by_peer: RapidHashMap<(NodeId, Alpn), SessionId>,
     /// The accept queues: the first takes every protocol no registered one claims.
     routes: Vec<Route>,
     /// The protocols served for the application: those the builder listed and those registered since.
@@ -272,7 +271,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             limits: cfg.limits,
             sessions: RapidHashMap::default(),
             dials: RapidHashMap::default(),
-            dial_by_peer: RapidHashMap::default(),
             user_alpns: cfg.alpns.len(),
             routes: vec![Route {
                 alpn: Vec::new(),
@@ -577,9 +575,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 ..
             } => self.session_up(now, session, node, alpn, true, resumed),
             Event::Incoming { session, node, alpn } => self.session_up(now, session, node, alpn, false, false),
-            Event::ConnectFailed { node, alpn, reason } => {
-                if let Some(sid) = self.dial_by_peer.remove(&(node, alpn)) {
-                    self.dial_done(sid, Err(Error::dial(reason)));
+            Event::ConnectFailed { session, reason, .. } => {
+                if let Some(session) = session {
+                    self.dial_done(session, Err(Error::dial(reason)));
                 }
             }
             Event::Closed { session, reason } => {
@@ -599,7 +597,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             Event::AcpCheck { check, node, alpn } => {
                 let dir = if alpn.as_bytes() == HUB_ALPN {
                     Direction::Gossip
-                } else if self.dial_by_peer.contains_key(&(node, alpn)) {
+                } else if self.dialing(&node, alpn) {
                     Direction::Outbound
                 } else {
                     Direction::Inbound
@@ -700,12 +698,18 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             },
         );
         if dialer {
-            self.dial_by_peer.remove(&(node, alpn));
             self.dial_done(session, Ok(info));
         } else if let Some(r) = self.routes.get_mut(route) {
             r.queue.push_back(info);
             self.wake_g(GKey::Route(route));
         }
+    }
+
+    /// Whether a dial to `node` for `alpn` still waits for its answer. The dials are bounded by the connection table.
+    fn dialing(&self, node: &NodeId, alpn: Alpn) -> bool {
+        self.dials
+            .values()
+            .any(|d| d.result.is_none() && d.node == *node && d.alpn == alpn)
     }
 
     fn dial_done(&mut self, session: SessionId, result: Result<Rc<SessInfo>>) {
@@ -721,7 +725,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if let Some(d) = self.dials.get(&session)
             && d.result.is_none()
         {
-            self.dial_by_peer.remove(&(d.node, d.alpn));
             self.dial_done(session, Err(err));
         }
         if let Some(rec) = self.sessions.remove(&session) {

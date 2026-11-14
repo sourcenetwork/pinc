@@ -79,7 +79,9 @@ where
                 self.hub_incoming(now, session, &node);
                 self.io.emit(NodeEvent::Endpoint(ev));
             }
-            Event::ConnectFailed { node, alpn: a, reason } if a.as_bytes() == alpn => {
+            Event::ConnectFailed {
+                node, alpn: a, reason, ..
+            } if a.as_bytes() == alpn => {
                 self.hub_connect_failed(&node.bytes, reason == vinc_core::ConnectFailure::Denied);
                 self.io.emit(NodeEvent::Endpoint(ev));
             }

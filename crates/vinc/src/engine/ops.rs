@@ -66,7 +66,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                         deadline,
                     },
                 );
-                self.dial_by_peer.insert((node, key), session);
                 Ok(session)
             }
             Err(e) => Err(Error::command(e)),
@@ -87,14 +86,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Give up a dial whose future was dropped: a session that came up meanwhile is closed.
     pub(crate) fn dial_cancel(&mut self, now: u64, session: SessionId) {
-        if let Some(d) = self.dials.remove(&session) {
-            self.dial_by_peer.remove(&(d.node, d.alpn));
-            if let Some(Ok(info)) = d.result
-                && self.sessions.contains_key(&info.id)
-            {
-                let id = info.id;
-                let _ = self.cmd(now, || Command::Close { session: id, error: 0 });
-            }
+        if let Some(d) = self.dials.remove(&session)
+            && let Some(Ok(info)) = d.result
+            && self.sessions.contains_key(&info.id)
+        {
+            let id = info.id;
+            let _ = self.cmd(now, || Command::Close { session: id, error: 0 });
         }
     }
 
@@ -580,9 +577,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// End the dial of `session` with `err` and close its session.
     fn fail_dial(&mut self, now: u64, session: SessionId, err: Error) {
-        if let Some(d) = self.dials.get(&session) {
-            self.dial_by_peer.remove(&(d.node, d.alpn));
-        }
         self.dial_done(session, Err(err));
         let _ = self.cmd(now, || Command::Close { session, error: 0 });
     }

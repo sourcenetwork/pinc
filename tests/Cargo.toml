@@ -551,6 +551,10 @@ name = "vinc_stop"
 path = "vinc_stop.rs"
 
 [[test]]
+name = "vinc_dial_failure"
+path = "vinc_dial_failure.rs"
+
+[[test]]
 name = "vinc_api"
 path = "vinc_api.rs"
 

@@ -104,6 +104,8 @@ pub enum Event {
     },
     /// A dial ended without a session the application knew.
     ConnectFailed {
+        /// The session of the dial, or `None` when the dial was refused before one existed.
+        session: Option<SessionId>,
         /// The peer.
         node: NodeId,
         /// The protocol.
@@ -246,6 +248,8 @@ impl Event {
             | Self::PeerAsleep { session }
             | Self::PeerAwake { session }
             | Self::TicketsReceived { session, .. } => Some(session),
+            // A failed dial's session is no longer kept: the queue purges the events of a closed session, and this
+            // one must reach the application.
             Self::ConnectFailed { .. } | Self::AcpCheck { .. } => None,
         }
     }

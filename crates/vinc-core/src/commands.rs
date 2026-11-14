@@ -409,7 +409,12 @@ ep_impl! {
         }
         let alpn_t = Alpn::new(alpn).filter(|_| !alpn.is_empty()).ok_or(CommandError::BadAlpn)?;
         if node == self.identity.node_id() {
-            self.emit(Event::ConnectFailed { node, alpn: alpn_t, reason: ConnectFailure::Refused });
+            self.emit(Event::ConnectFailed {
+                session: None,
+                node,
+                alpn: alpn_t,
+                reason: ConnectFailure::Refused,
+            });
             return Err(CommandError::Refused);
         }
         if let Some(parent) = self.find_parent(&node) {

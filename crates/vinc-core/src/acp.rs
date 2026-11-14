@@ -21,7 +21,7 @@
 use vinc_crypto::NodeId;
 use vinc_transport::conn::code;
 
-use crate::api::{CommandError, Event};
+use crate::api::{CommandError, Event, SessionId};
 use crate::endpoint::{AcpAnswer, env, ep_impl};
 use crate::slot::State;
 use crate::trace::trace;
@@ -109,6 +109,7 @@ ep_impl! {
         slot.m.denied = true;
         let announce_failure = slot.m.client && !slot.m.optimistic;
         let (peer, alpn) = (slot.m.peer, slot.m.alpn);
+        let session = SessionId::new(i, slot.m.generation);
         if slot.m.client {
             // The dialer's Finish is still queued; it leaves first, so the peer knows whom it is closing on.
             slot.m.deferred_close = Some(code::FLOW_CONTROL);
@@ -117,7 +118,12 @@ ep_impl! {
             conn.close(&mut env, code::FLOW_CONTROL);
         }
         if announce_failure && let (Some(node), Some(alpn)) = (peer, alpn) {
-            self.emit(Event::ConnectFailed { node, alpn, reason: crate::api::ConnectFailure::Denied });
+            self.emit(Event::ConnectFailed {
+                session: Some(session),
+                node,
+                alpn,
+                reason: crate::api::ConnectFailure::Denied,
+            });
         }
         self.settle(i, now);
     }

@@ -295,7 +295,7 @@ impl Core {
                 resumed,
             } => self.on_open(layers, session, node, alpn, true, resumed),
             Event::Incoming { session, node, alpn } => self.on_open(layers, session, node, alpn, false, false),
-            Event::ConnectFailed { node, alpn, reason } => {
+            Event::ConnectFailed { node, alpn, reason, .. } => {
                 if let Some(peer) = self.shared.index_of(&node) {
                     self.push_event(NodeEvent::ConnectFailed {
                         peer,

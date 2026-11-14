@@ -287,6 +287,7 @@ fn a_timed_out_dial_raises_the_handshake_floor_and_only_a_first_flight_sample_re
         assert!(net.nodes[a].saw(|e| matches!(
             e,
             Event::ConnectFailed {
+                session: Some(_),
                 reason: ConnectFailure::Timeout,
                 ..
             }

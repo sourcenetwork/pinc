@@ -354,7 +354,12 @@ ep_impl! {
             };
             self.emit(Event::Closed { session, reason: why });
         } else if client && !denied && let (Some(node), Some(alpn)) = (node, alpn) {
-            self.emit(Event::ConnectFailed { node, alpn, reason: failure_of(reason) });
+            self.emit(Event::ConnectFailed {
+                session: Some(session),
+                node,
+                alpn,
+                reason: failure_of(reason),
+            });
         }
         if client && matches!(reason, CloseReason::HandshakeTimeout) {
             self.rtt.note_timeout();
