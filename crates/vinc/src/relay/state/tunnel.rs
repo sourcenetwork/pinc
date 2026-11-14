@@ -100,6 +100,15 @@ fn session_remote<E: Ep>(ep: &E, sid: SessionId) -> Option<SocketAddr> {
         .filter(|r| !vinc_core::is_relay_addr(r))
 }
 
+/// The direct address of `node`'s validated session, any of its sessions: where a datagram for the member goes, and
+/// whether the relay may tunnel to it.
+fn node_remote<E: Ep>(ep: &E, members: &BTreeMap<SessionId, NodeId>, node: &NodeId) -> Option<SocketAddr> {
+    members
+        .iter()
+        .filter(|(_, n)| *n == node)
+        .find_map(|(sid, _)| session_remote(ep, *sid))
+}
+
 impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     pub(super) fn queue_local(&mut self, from: &NodeId, packet: &[u8]) {
         let from = *from;
@@ -165,14 +174,13 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
                     }
                 }
                 Work::Udp(node, s, e) => {
-                    let addr = t
-                        .members
-                        .iter()
-                        .find(|(_, n)| **n == node)
-                        .and_then(|(sid, _)| session_remote(ep, *sid));
-                    match (addr, t.arena.get(s..e)) {
-                        (Some(a), Some(b)) => self.queue_udp(a, b),
-                        _ => self.counters.datagrams_dropped += 1,
+                    let addr = node_remote(ep, &t.members, &node);
+                    if let (Some(a), Some(b)) = (addr, t.arena.get(s..e)) {
+                        self.queue_udp(a, b);
+                    } else {
+                        // the route went since the relay chose it: later packets take the next rule
+                        self.fx.set_direct(&node, false);
+                        self.counters.datagrams_dropped += 1;
                     }
                 }
             }
@@ -213,6 +221,15 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
             EpEvent::Closed { session, .. } => {
                 if let Some(node) = t.members.remove(&session) {
                     self.sm.udp_gone(&node);
+                    if !t.members.values().any(|n| *n == node) {
+                        self.fx.set_direct(&node, false);
+                    }
+                }
+            }
+            EpEvent::PathChanged { session, .. } => {
+                if let Some(node) = t.members.get(&session).copied() {
+                    self.fx
+                        .set_direct(&node, node_remote(&*ep, &t.members, &node).is_some());
                 }
             }
             EpEvent::PeerAwake { session } => {

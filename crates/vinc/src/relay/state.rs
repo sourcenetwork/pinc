@@ -834,6 +834,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
     pub(crate) fn on_datagram(&mut self, now: u64, src: SocketAddr, member: Option<NodeId>, bytes: &mut [u8]) -> bool {
         self.last_now = now;
         self.counters.datagrams_in += 1;
+        if let Some(n) = member.as_ref() {
+            self.fx.set_direct(n, true);
+        }
         if bytes.first().is_some_and(|b| *b < 0x40) {
             // vertexia: the machine counts and traces a refused datagram; nothing else to do with the result
             let _ = self.sm.datagram(now, src, member.as_ref(), bytes, &mut self.fx);

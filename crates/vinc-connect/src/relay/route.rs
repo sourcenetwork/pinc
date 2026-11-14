@@ -6,7 +6,9 @@
 //! 2. `dst` holds a carrier here: RECV on its carrier, in alias form after first use. If that carrier has been
 //!    silent for [`super::rule::TUNNEL_STALE_NS`] the packet is also tunnelled down the member's UDP session (the
 //!    receiver drops the duplicate).
-//! 3. `dst` has a UDP session heard within [`super::rule::HUB_TUNNEL_FRESH_NS`] and the packet fits a datagram: SPL.
+//! 3. `dst` has a UDP session heard within [`super::rule::HUB_TUNNEL_FRESH_NS`], the host can send on its validated
+//!    direct route now ([`super::Sink::tunnel_ready`]) and the packet fits a datagram: SPL. Otherwise the packet goes on
+//!    to the next rule, as for a member with no UDP session.
 //! 4. `dst` is asleep (its sleep notice is held and it has no carrier): the packet goes into the mailbox and the host
 //!    is asked to wake the member.
 //! 5. Otherwise, unless the packet itself came from a peer relay (no loops): the home relay is the one that
@@ -115,7 +117,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
             .udp
             .get(dst)
             .is_some_and(|heard| now.saturating_sub(*heard) < rule::HUB_TUNNEL_FRESH_NS);
-        if !fresh || packet.is_empty() || 35 + packet.len() > MAX_TUNNEL_DATAGRAM {
+        if !fresh || !sink.tunnel_ready(dst) || packet.is_empty() || 35 + packet.len() > MAX_TUNNEL_DATAGRAM {
             return false;
         }
         sink.emit(Effect::Udp {

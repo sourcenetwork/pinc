@@ -175,6 +175,106 @@ fn the_hub_tunnel_down_uses_a_udp_session_heard_within_20_seconds() {
 }
 
 #[test]
+fn a_member_heard_by_udp_without_a_direct_route_is_not_tunnelled_and_goes_to_the_next_rule() {
+    let mut fx = Fx::new();
+    let (a, p1, member) = (nid(0xa1), nid(0x91), nid(0xe1));
+    let sa = fx.open(T0, a);
+    let p = [0x41u8; 50];
+    let go = |fx: &mut Fx, at: u64| {
+        fx.send(
+            at,
+            a,
+            sa,
+            &Frame::Send {
+                dst: member,
+                flag: 2,
+                packet: &p,
+            },
+        )
+    };
+    // the member has a record at a peer relay and was heard by UDP, but the host has no direct route for it
+    fx.r.add_peer(p1);
+    let kp = ed(0x71);
+    let member_id = id(&kp);
+    let rec = record_bytes(&kp, p1, 1);
+    fx.peer(T0, p1, &Frame::Sync { record: &rec }).unwrap();
+    fx.r.udp_heard(&member_id, T0).unwrap();
+    fx.fx();
+    fx.s.2.push(member_id);
+    fx.send(
+        T0 + SEC,
+        a,
+        sa,
+        &Frame::Send {
+            dst: member_id,
+            flag: 2,
+            packet: &p,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fx.fx(),
+        [Rec::Peer(
+            p1,
+            enc(&Frame::Forward {
+                src: a,
+                dst: member_id,
+                flag: 2,
+                packet: &p
+            })
+        )]
+    );
+    // the guard: with a direct route the same packet is tunnelled
+    fx.s.2.clear();
+    fx.send(
+        T0 + 2 * SEC,
+        a,
+        sa,
+        &Frame::Send {
+            dst: member_id,
+            flag: 2,
+            packet: &p,
+        },
+    )
+    .unwrap();
+    assert!(matches!(fx.fx()[..], [Rec::Udp(UdpTarget::Member(m), _)] if m == member_id));
+    // a member with neither a record nor a route is a refusal that is counted, not a silent drop
+    let before = fx.r.stats().rejected;
+    assert_eq!(go(&mut fx, T0 + 3 * SEC), Err(Reject::NoRoute));
+    assert_eq!(fx.r.stats().rejected, before + 1);
+}
+
+#[test]
+fn a_sleeping_member_heard_by_udp_without_a_direct_route_gets_its_packet_in_the_mailbox() {
+    let mut fx = Fx::new();
+    let a = nid(0xa1);
+    let sa = fx.open(T0, a);
+    let kp = ed(0x61);
+    let m = id(&kp);
+    let sm = fx.open(T0, m);
+    let me = fx.me;
+    fx.r.sleep_notice(T0, &notice(&kp, &me, T0 / 1_000_000), None, &mut fx.s)
+        .unwrap();
+    fx.r.carrier_closed(T0 + SEC, &m, sm, &mut fx.s);
+    fx.r.udp_heard(&m, T0 + 2 * SEC).unwrap();
+    fx.s.2.push(m);
+    fx.fx();
+    fx.send(
+        T0 + 3 * SEC,
+        a,
+        sa,
+        &Frame::Send {
+            dst: m,
+            flag: 7,
+            packet: &[1, 2, 3],
+        },
+    )
+    .unwrap();
+    assert!(!fx.fx().iter().any(|r| matches!(r, Rec::Udp(..))));
+    assert_eq!(fx.r.mailbox_pending(&m).0, 1);
+}
+
+#[test]
 fn a_member_carrier_silent_for_more_than_15_seconds_also_gets_the_tunnel_copy() {
     assert_eq!(rule::TUNNEL_STALE_NS, 15 * SEC);
     let mut fx = Fx::new();

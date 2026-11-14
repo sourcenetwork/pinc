@@ -189,6 +189,13 @@ pub enum Effect<'a> {
 pub trait Sink {
     /// Take one effect.
     fn emit(&mut self, effect: Effect<'_>);
+
+    /// Whether the host can send a datagram to member `node` over its session's validated direct route now. The relay
+    /// asks when it routes, so a packet it tunnels is one the host can send and, if not, takes the next rule. A sink
+    /// that stands for no sessions of its own (a test collector) says yes.
+    fn tunnel_ready(&self, _node: &NodeId) -> bool {
+        true
+    }
 }
 
 /// How a packet was routed.

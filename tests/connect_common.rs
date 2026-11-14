@@ -330,9 +330,14 @@ pub enum Rec {
 }
 
 #[derive(Debug, Default)]
-pub struct Collect(pub Vec<Rec>, pub Vec<Trace>);
+pub struct Collect(pub Vec<Rec>, pub Vec<Trace>, pub Vec<NodeId>);
 
 impl Sink for Collect {
+    /// The members listed in the third field have no validated direct route.
+    fn tunnel_ready(&self, node: &NodeId) -> bool {
+        !self.2.contains(node)
+    }
+
     fn emit(&mut self, e: Effect<'_>) {
         self.0.push(match e {
             Effect::Carrier { to, frame } => Rec::Carrier(to, enc(&frame)),

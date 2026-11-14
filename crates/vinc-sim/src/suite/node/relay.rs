@@ -22,7 +22,7 @@ use vinc_crypto::NodeId;
 use vinc_node::{MemberNotice, is_relay_request};
 use vinc_security::{ConnId, Env, KeyHandle, LocalIdentity, ResponderStores, SoftKeys};
 
-use super::core::Core;
+use super::core::{Core, NodeT};
 use crate::suite::crypto::Tracked;
 use crate::{StreamId, StreamOp};
 
@@ -69,6 +69,33 @@ impl Sink for Collect {
             Effect::Wake { .. } => return,
             Effect::Trace(t) => Eff::Trace(t),
         });
+    }
+}
+
+/// The relay's sink for one call: the effects go to the collector, and the question whether a member can be reached by
+/// its session's direct route is answered by the node, the one that sends the datagram.
+pub(super) struct Host<'a> {
+    out: &'a mut Collect,
+    node: Option<&'a NodeT>,
+}
+
+impl<'a> Host<'a> {
+    #[allow(clippy::ref_option, reason = "the callers hold the node as the core's field")]
+    pub(super) fn new(out: &'a mut Collect, node: &'a Option<Box<NodeT>>) -> Self {
+        Self {
+            out,
+            node: node.as_deref(),
+        }
+    }
+}
+
+impl Sink for Host<'_> {
+    fn emit(&mut self, e: Effect<'_>) {
+        self.out.emit(e);
+    }
+
+    fn tunnel_ready(&self, member: &NodeId) -> bool {
+        self.node.is_some_and(|n| n.member_route(member).is_some())
     }
 }
 
@@ -119,6 +146,8 @@ pub(super) struct HubSide {
     stores: ResponderStores<4, 4>,
     slots: Vec<NodeId>,
     pub(super) scid: u64,
+    /// Datagrams for a member the host could not send, as the library's hub counts them.
+    pub(super) datagrams_dropped: u64,
 }
 
 impl HubSide {
@@ -132,7 +161,21 @@ impl HubSide {
             stores: ResponderStores::default(),
             slots: Vec::new(),
             scid: 0,
+            datagrams_dropped: 0,
         }
+    }
+
+    /// The datagram `d` for `member` with the route the node sends it on, or none and the drop counted.
+    fn member_datagram(
+        &mut self,
+        route: Option<(SocketAddr, SocketAddr)>,
+        d: Vec<u8>,
+    ) -> Option<(SocketAddr, SocketAddr, Vec<u8>)> {
+        let sent = route.map(|(f, a)| (f, a, d));
+        if sent.is_none() {
+            self.datagrams_dropped += 1;
+        }
+        sent
     }
 
     /// The relay's next deadline, in local time: its own timers and the next dial of a peer relay.
@@ -178,7 +221,10 @@ impl Core {
             let mut s = Collect::default();
             if let Some(h) = self.hub.as_mut() {
                 // A refused request is dropped and traced by the relay itself.
-                let refused = h.relay.datagram(now, remote, member.as_ref(), data, &mut s).is_err();
+                let refused = h
+                    .relay
+                    .datagram(now, remote, member.as_ref(), data, &mut Host::new(&mut s, &self.node))
+                    .is_err();
                 if refused
                     && self.shared.is_watched(self.idx)
                     && super::in_trace_window(self.now)
@@ -213,7 +259,9 @@ impl Core {
             && let Some(node) = h.slots.get(usize::from(slot)).copied()
         {
             // No route to a member that left is the relay's refusal; the packet is lost as on a real path.
-            let _ = h.relay.send_local(now, &node, 0, packet, &mut s);
+            let _ = h
+                .relay
+                .send_local(now, &node, 0, packet, &mut Host::new(&mut s, &self.node));
         }
         self.apply(s);
     }
@@ -229,7 +277,7 @@ impl Core {
                 MemberNotice::Gone(n) => h.relay.udp_gone(&n),
                 MemberNotice::Awake(n) => {
                     let mut s = Collect::default();
-                    h.relay.member_returned(now, &n, &mut s);
+                    h.relay.member_returned(now, &n, &mut Host::new(&mut s, &self.node));
                     self.apply(s);
                 }
             }
@@ -244,7 +292,7 @@ impl Core {
         if let Some(h) = self.hub.as_mut()
             && h.relay.next_deadline().is_some_and(|d| d <= now)
         {
-            h.relay.handle_timeout(now, &mut s);
+            h.relay.handle_timeout(now, &mut Host::new(&mut s, &self.node));
         }
         self.apply(s);
         self.hub_dial_peers();
@@ -266,8 +314,11 @@ impl Core {
                 Eff::Udp(UdpTarget::Member(n), d) => {
                     // From the address of the member's session, to its address: a member reached over IPv6 is not
                     // reached from the hub's IPv4 address.
-                    if let Some((f, a)) = self.node.as_ref().and_then(|node| node.member_route(&n)) {
-                        self.wire.datagrams.push_back((f, a, d));
+                    let route = self.node.as_ref().and_then(|node| node.member_route(&n));
+                    if let Some(h) = self.hub.as_mut()
+                        && let Some(dg) = h.member_datagram(route, d)
+                    {
+                        self.wire.datagrams.push_back(dg);
                     }
                 }
                 Eff::Local(f, mut packet) => {
@@ -384,10 +435,14 @@ impl Core {
                         if rs.peer {
                             if let Some(node) = rs.node {
                                 // A refused frame is dropped and traced by the relay; the carrier stays up.
-                                let _ = hub.relay.peer_frame(now, &node, &f, &mut sink);
+                                let _ = hub
+                                    .relay
+                                    .peer_frame(now, &node, &f, &mut Host::new(&mut sink, &self.node));
                             }
                         } else if let (Some(node), Some(sess)) = (rs.node, rs.session) {
-                            let _ = hub.relay.carrier_frame(now, &node, sess, &f, &mut sink);
+                            let _ =
+                                hub.relay
+                                    .carrier_frame(now, &node, sess, &f, &mut Host::new(&mut sink, &self.node));
                         }
                         Step::Frame
                     }
@@ -427,7 +482,7 @@ impl Core {
         let mut s = Collect::default();
         let mut replaced = None;
         if let Some(hub) = self.hub.as_mut()
-            && let Ok(sess) = hub.relay.carrier_opened(now, peer, &mut s)
+            && let Ok(sess) = hub.relay.carrier_opened(now, peer, &mut Host::new(&mut s, &self.node))
         {
             if let Some(rs) = hub.streams.get_mut(&sid) {
                 rs.node = Some(peer);
@@ -458,7 +513,8 @@ impl Core {
             if hub.by_node.get(&node.bytes) == Some(&sid) {
                 hub.by_node.remove(&node.bytes);
             }
-            hub.relay.carrier_closed(now, &node, sess, &mut s);
+            hub.relay
+                .carrier_closed(now, &node, sess, &mut Host::new(&mut s, &self.node));
         }
         self.apply(s);
     }
@@ -511,5 +567,31 @@ impl Core {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vinc_crypto::IdentityAlg;
+
+    #[test]
+    fn a_datagram_for_a_member_without_a_route_is_counted_not_lost_silently() {
+        let me = NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes: [7; 32],
+        };
+        let mut hub = HubSide::new(me, 1);
+        let (from, to) = (
+            SocketAddr::from(([10, 0, 0, 1], 1)),
+            SocketAddr::from(([10, 0, 0, 2], 2)),
+        );
+        assert_eq!(
+            hub.member_datagram(Some((from, to)), vec![1]),
+            Some((from, to, vec![1]))
+        );
+        assert_eq!(hub.datagrams_dropped, 0);
+        assert_eq!(hub.member_datagram(None, vec![1]), None);
+        assert_eq!(hub.datagrams_dropped, 1);
     }
 }

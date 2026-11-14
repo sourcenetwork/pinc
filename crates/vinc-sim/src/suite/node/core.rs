@@ -53,7 +53,7 @@ pub const LEDGER_ENTRY_BYTES: u64 = 64;
 /// The size of one remembered round trip in the exported state format, used as its memory estimate.
 pub const PEER_ENTRY_BYTES: u64 = 41;
 
-type NodeT = Node<Ep, Tracked, (), NRL, NPEERS, SuiteApps>;
+pub(super) type NodeT = Node<Ep, Tracked, (), NRL, NPEERS, SuiteApps>;
 
 /// One interface of the node as the endpoint sees it.
 pub(super) struct IfEntry {

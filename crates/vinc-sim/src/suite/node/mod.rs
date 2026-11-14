@@ -256,6 +256,9 @@ impl<L: Layers> SuiteNode<L> {
         let mut out = vec![format!("{:?}", ep.node_stats())];
         out.extend(self.core.notices.iter().map(|n| format!("notice {n}")));
         out.push(self.core.wire_summary());
+        if let Some(h) = self.core.hub.as_ref().filter(|h| h.datagrams_dropped > 0) {
+            out.push(format!("hub datagrams_dropped {}", h.datagrams_dropped));
+        }
         for n in 0..SESSIONS {
             if let vinc_core::Answer::Stats(st) = ep.query(vinc_core::Query::SessionAt(n)) {
                 out.push(format!(
