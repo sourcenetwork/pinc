@@ -28,6 +28,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     /// | a private IPv4 address and a gateway | PCP (60 bytes, three tries), then NAT-PMP, then the search; again every 5 minutes |
     /// | a public IPv4 address and a gateway | PCP, then NAT-PMP, again every 5 minutes; no search |
     /// | the unspecified address and a gateway | NAT-PMP only, every 5 minutes |
+    /// | an IPv6 address and a gateway | PCP and NAT-PMP, three tries each, again every 5 minutes; no search |
     /// | a public IPv4 address, the unspecified address or IPv6, no gateway | nothing |
     ///
     /// `UPnP`'s HTTP calls go over the host's carriers ([`carriers`](Self::carriers)): `open` is asked for a TCP
