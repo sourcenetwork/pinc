@@ -37,7 +37,7 @@ ProbeAll(cf, S, nonces) == [S EXCEPT !.probe = [k \in 1..Len(cf.udp) |-> IF cf.u
 
 (* handle_udp for a QADR from address from, with the nonce and the address the relay reports: it is the relay whose
    configured address is from (the first such), and Netcheck::answered takes it only for the outstanding nonce *)
-RelayAt(cf, from) == IF \E k \in 1..Len(cf.udp) : cf.udp[k] = from
+RelayAt(cf, from) == IF from # 0 /\ \E k \in 1..Len(cf.udp) : cf.udp[k] = from
                      THEN CHOOSE k \in 1..Len(cf.udp) : cf.udp[k] = from /\ \A j \in 1..(k - 1) : cf.udp[j] # from
                      ELSE 0
 Observe(cf, S, from, nonce, addr) ==

@@ -16,6 +16,7 @@ import Vinc.ConnectTicketTextPf
 import Vinc.ConnectLinkThm
 import Vinc.ConnectClientThm
 import Vinc.ConnectRecordsThm
+import Vinc.ConnectOwnThm
 
 /-! Axiom audit of the main theorems of the connectivity proofs. -/
 
@@ -195,3 +196,33 @@ import Vinc.ConnectRecordsThm
 #audit_axioms Vinc.ConnectRecords.setOwn_armed
 #audit_axioms Vinc.ConnectRecords.republish_early
 #audit_axioms Vinc.ConnectRecords.republish_spec
+#audit_axioms Vinc.ConnectOwn.cands_length
+#audit_axioms Vinc.ConnectOwn.cands_prefix
+#audit_axioms Vinc.ConnectOwn.cands_tail
+#audit_axioms Vinc.ConnectOwn.cands_room
+#audit_axioms Vinc.ConnectOwn.cands_only
+#audit_axioms Vinc.ConnectOwn.reflexive_repeats
+#audit_axioms Vinc.ConnectOwn.reflexive_dropped
+#audit_axioms Vinc.ConnectOwn.observe_took
+#audit_axioms Vinc.ConnectOwn.observe_refused
+#audit_axioms Vinc.ConnectOwn.observe_unknown
+#audit_axioms Vinc.ConnectOwn.observe_wrong_nonce
+#audit_axioms Vinc.ConnectOwn.observe_once
+#audit_axioms Vinc.ConnectOwn.job_seq
+#audit_axioms Vinc.ConnectOwn.same_tick_same_seq
+#audit_axioms Vinc.ConnectOwn.seq_rises_only_across_ticks
+#audit_axioms Vinc.ConnectOwn.seq_rises_with_wall
+#audit_axioms Vinc.ConnectOwn.seq_falls_when_clock_set_back
+#audit_axioms Vinc.ConnectOwn.seq_lt_iff
+#audit_axioms Vinc.ConnectOwn.not_above_refused
+#audit_axioms Vinc.ConnectOwn.start_job
+#audit_axioms Vinc.ConnectOwn.start_blocked
+#audit_axioms Vinc.ConnectOwn.start_idle
+#audit_axioms Vinc.ConnectOwn.run_job_fixed
+#audit_axioms Vinc.ConnectOwn.run_sent_fixed
+#audit_axioms Vinc.ConnectOwn.signed_sent
+#audit_axioms Vinc.ConnectOwn.later_address_waits
+#audit_axioms Vinc.ConnectOwn.republish_not_before
+#audit_axioms Vinc.ConnectOwn.republish_at
+#audit_axioms Vinc.ConnectOwn.changed_then_publish
+#audit_axioms Vinc.ConnectOwn.want_rises

@@ -54,6 +54,7 @@ import Vinc.TraceConnectCarrier
 import Vinc.TraceConnectWs
 import Vinc.TraceConnect
 import Vinc.TraceConnectRecords
+import Vinc.TraceConnectOwn
 import Vinc.TraceTranscript
 import Vinc.TraceCrypto
 import Vinc.TraceKeystore
@@ -185,6 +186,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut ctb : TraceConnectTable.W := {}
   let mut crl : TraceConnect.W := {}
   let mut crr : TraceConnectRecords.W := {}
+  let mut cow : TraceConnectOwn.W := {}
   let mut clk : TraceConnectLink.W := {}
   let mut ccl : TraceConnectClient.W := {}
   let mut cca : TraceConnectCarrier.W := {}
@@ -378,6 +380,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnectRecords.replayEvent j crr with
           | .ok w' =>
             crr := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectOwn.isTag t then
+          -- Own record and address discovery events (`trace_connect_own`): candidates, QADR answers, record jobs.
+          match TraceConnectOwn.replayEvent j cow with
+          | .ok w' =>
+            cow := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
