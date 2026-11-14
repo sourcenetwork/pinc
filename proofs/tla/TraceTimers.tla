@@ -7,30 +7,34 @@
 (* connections (built with the cargo feature `trace`) call by call: the    *)
 (* idle timeout, local closes with their CLOSE or with a timer first,      *)
 (* violations, a sleeping peer held 120 s, an unanswered WAKE, a link      *)
-(* outage past 30 s, a dead path, a dial nobody answers, and random runs   *)
-(* with traffic, loss, duplicates, altered datagrams, sleep and wake,      *)
-(* outages, keepalives and pulses. Every call of each connection must be   *)
-(* the step the operators of TimersOps.tla compute from the state the      *)
-(* previous call left, with the lifecycle events the code reported, and    *)
-(* the state recorded after it must be the model's: poll_timeout must      *)
-(* return the minimum the model takes over the recorded component          *)
-(* deadlines; handle_timeout must close for idleness exactly at or after   *)
-(* the deadline, end an outage and report a WAKE exactly when due (a close *)
-(* a component decides in it is taken from the events, cc; the carrier     *)
-(* rule is decided from what the recovery timer read, pr: a probe timeout  *)
-(* on a relay path whose carrier was heard within 6 s, with 4 in a row and *)
-(* 4 round trips of silence begins a close with a CLOSE); a datagram is    *)
-(* heard exactly when handle_datagram took it (res "ok"), and its SLEEP    *)
-(* and CLOSE frames are taken from the events; poll_transmit may write     *)
-(* only what CanSend allows, so at most one CLOSE leaves each connection   *)
-(* (Inv); the application's opens are refused once closing.                *)
+(* outage past 30 s, a dead path, a dial nobody answers, a dialing side    *)
+(* whose Finish never reached the responder (it ends the session           *)
+(* unconfirmed at its connect limit while the responder's handshake runs   *)
+(* out, #390), and random runs with traffic, loss, duplicates, altered     *)
+(* datagrams, sleep and wake, outages, keepalives and pulses. Every call   *)
+(* of each connection must be the step the operators of TimersOps.tla      *)
+(* compute from the state the previous call left, with the lifecycle       *)
+(* events the code reported, and the state recorded after it must be the   *)
+(* model's: poll_timeout must return the minimum the model takes over the  *)
+(* recorded component deadlines; handle_timeout must close for idleness    *)
+(* exactly at or after the deadline, end an outage and report a WAKE       *)
+(* exactly when due (a close a component decides in it is taken from the   *)
+(* events, cc; the carrier rule is decided from what the recovery timer    *)
+(* read, pr: a probe timeout on a relay path whose carrier was heard       *)
+(* within 6 s, with 4 in a row and 4 round trips of silence begins a close *)
+(* with a CLOSE); a datagram is heard exactly when handle_datagram took it *)
+(* (res "ok"), and its SLEEP and CLOSE frames are taken from the events;   *)
+(* poll_transmit may write only what CanSend allows, so at most one CLOSE  *)
+(* leaves each connection (Inv); the application's opens are refused once  *)
+(* closing.                                                                *)
 (*                                                                         *)
-(* The runs start from a connected pair (a dial nobody answers takes       *)
-(* nothing), so no handshake datagram reaches a dialing side here. One     *)
-(* that it takes without its session being established does not restart   *)
-(* the idle timer (conn/recv.rs believes nothing of it before the reply    *)
-(* authenticated; the establishment restarts it): reading res "ok" as      *)
-(* heard does not cover that case.                                         *)
+(* The runs start from a connected pair, or from a dialing side connected  *)
+(* to a responder that still waits for the Finish (a dial nobody answers   *)
+(* and that pair take nothing), so no handshake datagram reaches a dialing *)
+(* side here. One that it takes without its session being established does *)
+(* not restart the idle timer (conn/recv.rs believes nothing of it before  *)
+(* the reply authenticated; the establishment restarts it): reading res    *)
+(* "ok" as heard does not cover that case.                                 *)
 (*                                                                         *)
 (* Times are whole microseconds, rounded up (the test drives whole         *)
 (* microseconds), with the real constants.                                 *)
@@ -63,8 +67,12 @@ Keep(x) == Put([s |-> x, ev |-> <<>>]) /\ UNCHANGED closes
 InitEv == /\ E.op = "init" /\ E.ev = <<>> /\ Idle(SOf(E.v), K) = E.v.idle
           /\ s' = [s EXCEPT ![N] = SOf(E.v)] /\ closes' = [closes EXCEPT ![N] = 0]
 PollEv == E.op = "poll" /\ E.out = Poll(St, COf(E.v), K) /\ Keep(St)
+\* the close a component decided in the call: the handshake's timer runs before the recovery timer, so an end it
+\* reported ("hs" while handshaking, "unconf" while connected) came first and a dead path in the same call changed
+\* nothing
 TimeoutEv == /\ E.op = "timeout"
-             /\ LET cc == IF E.pr.dead THEN "dead" ELSE IF Has("hs") THEN "hs" ELSE "none"
+             /\ LET cc == IF Has("hs") THEN "hs" ELSE IF Has("unconf") THEN "unconf" ELSE IF E.pr.dead THEN "dead"
+                          ELSE "none"
                     pr == [ping |-> E.pr.ping, relay |-> E.pr.relay, ch |-> E.pr.ch, pto |-> E.pr.pto, lh |-> E.pr.lh,
                            smp |-> E.pr.smp, sr |-> E.pr.sr, nd |-> E.pr.nd]
                 IN Put(Timeout(St, E.now, cc, pr, K)) /\ UNCHANGED closes

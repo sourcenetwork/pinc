@@ -28,8 +28,10 @@
 (* TransportRx*, TransportMtu); here they are opaque. So are the decisions *)
 (* the components take inside a call: a close a component decides in      *)
 (* handle_timeout (cc: "dead" when recovery gives up, "hs" when the        *)
-(* handshake runs out of time), whether poll_transmit wrote a datagram and *)
-(* how many SLEEP frames are left after it.                                *)
+(* handshake runs out of time, "unconf" when a dialing side that           *)
+(* established heard no 1-RTT packet from its peer within the connect      *)
+(* limit after that, conn/drive.rs pump), whether poll_transmit wrote a    *)
+(* datagram and how many SLEEP frames are left after it.                   *)
 (*                                                                         *)
 (* A probe timeout may also close the session behind a live carrier       *)
 (* (dead_behind_live_carrier, conn/timer.rs). Its inputs are pr: ping (a   *)
@@ -44,8 +46,8 @@
 (* 120 s), wake (WAKE_WAIT, 800 ms), ldm (LINK_DOWN_MAX, 30 s), cf         *)
 (* (CARRIER_FRESH, 6 s) and ir (INITIAL_RTT, 333 ms).                      *)
 (* Every operation returns the new state and the events it reports, a     *)
-(* sequence of "local", "peer", "viol", "idle", "dead", "hs" (the reasons  *)
-(* of Event::Closed), "asleep", "awake" and "unanswered".                  *)
+(* sequence of "local", "peer", "viol", "idle", "dead", "hs", "unconf"     *)
+(* (the reasons of Event::Closed), "asleep", "awake" and "unanswered".     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences
 
@@ -102,15 +104,19 @@ CarrierB(now, pr, k, bug) ==
 Carrier(now, pr, k) == CarrierB(now, pr, k, "none")
 
 \* handle_timeout: a closing connection ends; past the idle deadline the connection ends silently and nothing else
-\* runs; otherwise the handshake timer (it may end a handshaking connection), the end of a link outage, the
-\* recovery timer and the wake wait, in this order. The recovery timer ends the connection silently when the path is
-\* dead (cc = "dead"); otherwise, at a probe timeout behind a live carrier, it begins a close with a CLOSE (reason
-\* PathDead, error 0), which is a no-op on a connection that already ended
+\* runs; otherwise the handshake timer (it may end a handshaking connection whose handshake ran out of time, and a
+\* connected one whose peer never confirmed the session, each silently), the end of a link outage, the recovery timer
+\* and the wake wait, in this order. The recovery timer ends the connection silently when the path is dead
+\* (cc = "dead"); otherwise, at a probe timeout behind a live carrier, it begins a close with a CLOSE (reason
+\* PathDead, error 0), which is a no-op on a connection that already ended. bug = "nounconf" is the rule before
+\* #390: the handshake timer ends only a handshaking connection
 TimeoutB(s, now, cc, pr, k, bug) ==
     IF s.ph = "closed" THEN [s |-> s, ev |-> <<>>]
     ELSE IF s.ph = "closing" THEN [s |-> [s EXCEPT !.ph = "closed"], ev |-> <<>>]
     ELSE IF now >= Idle(s, k) THEN [s |-> Silent(s), ev |-> <<"idle">>]
-    ELSE LET h == IF cc = "hs" /\ s.ph = "hs" THEN [s |-> Silent(s), ev |-> <<"hs">>] ELSE [s |-> s, ev |-> <<>>]
+    ELSE LET h == IF cc = "hs" /\ s.ph = "hs" THEN [s |-> Silent(s), ev |-> <<"hs">>]
+                  ELSE IF cc = "unconf" /\ s.ph = "conn" /\ bug # "nounconf" THEN [s |-> Silent(s), ev |-> <<"unconf">>]
+                  ELSE [s |-> s, ev |-> <<>>]
              l == IF h.s.ld # None /\ h.s.ld + k.ldm <= now THEN [h.s EXCEPT !.ld = None] ELSE h.s
              b == BeginClose(l, 0, "dead")
              d == IF cc = "dead" THEN (IF l.ph # "closed" THEN [s |-> Silent(l), ev |-> h.ev \o <<"dead">>]

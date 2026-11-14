@@ -12,7 +12,9 @@ deadlines; the state recorded after each call must be the one the model computes
 left, with the same lifecycle events and the same idle deadline; `poll_transmit` may write only what `canSend`
 allows, and at most one CLOSE leaves each connection of a run. A `handle_timeout` call carries what the recovery
 timer read for the close behind a live carrier (`pr`: the probe timeout, the path, the carrier, the probe timeouts in a
-row, when the peer was last heard, the round trip) and whether the path was dead; the model decides from them.
+row, when the peer was last heard, the round trip) and whether the path was dead; the model decides from them. A
+close the handshake's timer decided in the call (a handshake timeout, or a dialing side's session its peer never
+confirmed) is read from the events it reported.
 -/
 
 namespace Vinc.TraceTimers
@@ -37,6 +39,7 @@ def evOf : String → Except String Ev
   | "idle" => pure .idle
   | "dead" => pure .dead
   | "hs" => pure .hs
+  | "unconf" => pure .unconf
   | "asleep" => pure .asleep
   | "awake" => pure .awake
   | "unanswered" => pure .unanswered
@@ -112,7 +115,10 @@ def replayEvent (j : J) (w : W) : Except String W := do
     keep s "poll"
   | "timeout" =>
     let pj ← field j "pr"
-    let cc : CC := if (← boolF pj "dead") then .dead else if has .hs then .hs else .none
+    -- The handshake's timer runs before the recovery timer: an end it reported came first, and a dead path in the
+    -- same call changed nothing.
+    let dead ← boolF pj "dead"
+    let cc : CC := if has .hs then .hs else if has .unconf then .unconf else if dead then .dead else .none
     upd (timeout k s now cc (← pOf pj)) "timeout"
   | "recv" =>
     upd (recv s now ((← strF j "res") == "ok") (has .asleep) (has .peer)) "recv"

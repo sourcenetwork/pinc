@@ -12,11 +12,14 @@
 //! application's opens and writes. The scenarios: random runs with traffic, loss, duplicates, sleep and wake, link
 //! outages, keepalives and closes; the idle timeout on both sides; a local close and its one CLOSE; a close whose
 //! connection reaches a timer first; violations; a sleeping peer held 120 s; an unanswered WAKE; a link outage past
-//! 30 s; a dial nobody answers, until its handshake gives up; a close while handshaking; sessions whose probes time
-//! out with nothing coming back while the relay's carrier answers (`set_carrier_heard`), on a relay path with a fresh
-//! carrier, which a 4th probe timeout closes with a CLOSE (with and without a round-trip sample: a lost first flight
-//! leaves the handshake with none), and the near misses (3 probe timeouts, a carrier heard 6 s ago, a carrier never
-//! open, a direct path, the peer heard just before). Each call carries what the recovery timer read for that rule
+//! 30 s; a dial nobody answers, until its handshake gives up; a close while handshaking; a dialing side whose Finish
+//! never reached the responder (the test takes over once the dialing side is connected), which ends the session
+//! unconfirmed at its connect limit counted from when it established (30 s, 60 s on a thin node, the limit following
+//! the node's kind when it changes) while the responder's handshake runs out; sessions whose probes time out with
+//! nothing coming back while the relay's carrier answers (`set_carrier_heard`), on a relay path with a fresh carrier,
+//! which a 4th probe timeout closes with a CLOSE (with and without a round-trip sample: a lost first flight leaves the
+//! handshake with none), and the near misses (3 probe timeouts, a carrier heard 6 s ago, a carrier never open, a
+//! direct path, the peer heard just before). Each call carries what the recovery timer read for that rule
 //! (`CarrierView`), and the test checks that the rule's own decision, taken from those reads in nanoseconds and in the
 //! rounded microseconds the checkers take, is the same, that the close happened exactly then, and that every case above
 //! was reached.
@@ -27,8 +30,8 @@
 //! idle deadline is always below it).
 //!
 //! The test checks by itself what it can see from outside: at most one CLOSE leaves a connection, a closed connection
-//! has no timer, writes nothing and refuses datagrams and opens, and the idle timeout and the unanswered WAKE are
-//! reported at the time the constants say.
+//! has no timer, writes nothing and refuses datagrams and opens, and the idle timeout, the unanswered WAKE and the end
+//! of a session its peer never confirmed are reported at the time the constants say.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -177,7 +180,8 @@ impl Log {
                     CloseReason::Violation { .. } => "viol",
                     CloseReason::IdleTimeout => "idle",
                     CloseReason::PathDead => "dead",
-                    CloseReason::HandshakeTimeout | CloseReason::Unanswered | CloseReason::Unconfirmed => "hs",
+                    CloseReason::HandshakeTimeout | CloseReason::Unanswered => "hs",
+                    CloseReason::Unconfirmed => "unconf",
                     CloseReason::Handshake(f) => panic!("the handshake failed: {f:?}"),
                 },
                 Event::PeerAsleep => "asleep",
@@ -498,6 +502,22 @@ impl Duo<'_, '_> {
     }
 }
 
+/// Hand the nodes of `net` to `f` as a scripted pair, at its time rounded up to a millisecond, their events served.
+fn take_over<'a, 'b>(net: Net<'a, 'b>, f: impl FnOnce(&mut Duo<'a, 'b>)) {
+    let Net { a, b, stores, now, .. } = net;
+    let mut d = Duo {
+        nodes: [a, b],
+        stores,
+        now: now.div_ceil(MS) * MS,
+        pool: Vec::new(),
+        buf: vec![0u8; 65_536],
+    };
+    for x in &mut d.nodes {
+        while x.conn.poll_event().is_some() {}
+    }
+    f(&mut d);
+}
+
 /// Connect two nodes over the in-memory link, then hand them to `f` as a scripted pair.
 fn with_pair(seed: u64, thin: bool, f: impl FnOnce(&mut Duo<'_, '_>)) {
     with_pair_at(seed, thin, false, f);
@@ -520,18 +540,7 @@ fn with_pair_at(seed: u64, thin: bool, resent: bool, f: impl FnOnce(&mut Duo<'_,
     if !resent {
         net.run(net.now + 100 * MS, |_| false);
     }
-    let Net { a, b, stores, now, .. } = net;
-    let mut d = Duo {
-        nodes: [a, b],
-        stores,
-        now: now.div_ceil(MS) * MS,
-        pool: Vec::new(),
-        buf: vec![0u8; 65_536],
-    };
-    for x in &mut d.nodes {
-        while x.conn.poll_event().is_some() {}
-    }
-    f(&mut d);
+    take_over(net, f);
 }
 
 /// Random calls on a connected pair.
@@ -976,6 +985,82 @@ fn link_run(log: &mut Log, seed: u64) {
     });
 }
 
+/// A dialing side whose Finish never reached the responder (#390): A holds the session, connected and unconfirmed, B
+/// still waits in its handshake, and nothing either writes arrives. B's handshake runs out, and A ends the session as
+/// unconfirmed, silently, at the first timer call past the connect limit counted from when it established (30 s, 60 s
+/// on a thin node), not a microsecond earlier. With `turn`, A's node becomes thin (or not) that long after A
+/// established: the limit is the new one, still counted from the establishment, so one already past ends the session
+/// at the next timer call.
+fn unconfirmed_run(log: &mut Log, seed: u64, thin: bool, turn: Option<(u64, bool)>) {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    w.cfg.thin = thin;
+    w.seed = seed as u8;
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(seed, Params::new(10 * MS)));
+    net.drop_finish = true;
+    assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.is_connected()));
+    assert!(!net.b.conn.is_connected(), "the responder took the Finish");
+    take_over(net, |d| {
+        // A established at its last activity: nothing of B was heard after the reply.
+        let est = d.nodes[0].conn.trace_timers().last_activity;
+        assert!(!d.nodes[0].conn.trace_timers().confirmed);
+        d.init(log);
+        let limit = |thin: bool| if thin { 60 * SEC } else { 30 * SEC };
+        let (mut kind, mut turn, mut turned) = (thin, turn, None);
+        let mut ends: [Option<(u64, &'static str)>; 2] = [None, None];
+        for _ in 0..4000 {
+            for n in 0..2 {
+                d.tx(log, n);
+            }
+            d.lose_all();
+            let Some(next) = d.next_deadline() else { break };
+            if let Some((after, to)) = turn
+                && next >= est + after
+            {
+                // A's node changes its kind before A's next timer.
+                d.now = d.now.max((est + after).div_ceil(1000) * 1000);
+                d.nodes[0].conn.set_node_rtt(0, 0, to);
+                (kind, turn, turned) = (to, None, Some(d.now));
+                continue;
+            }
+            // The first whole microsecond at or past the end: the connect limit is exceeded, not reached.
+            let at = (est + limit(kind) + 1).div_ceil(1000) * 1000;
+            if ends[0].is_none() && next.div_ceil(1000) * 1000 >= at && at >= d.now + 1000 {
+                // a microsecond before it, A still holds the session
+                d.now = at - 1000;
+                d.poll(log, 0);
+                let ev = d.timeout(log, 0);
+                assert!(
+                    ev.is_empty() && !d.nodes[0].conn.is_closed(),
+                    "unconfirmed before the limit: {ev:?}"
+                );
+            }
+            d.now = d.now.max(next.div_ceil(1000) * 1000);
+            for n in 0..2 {
+                if d.poll(log, n).is_some_and(|t| t <= d.now) {
+                    let ev = d.timeout(log, n);
+                    if let Some(&e) = ev.iter().find(|e| ["unconf", "hs", "idle", "dead"].contains(*e)) {
+                        ends[n] = Some((d.now, e));
+                    }
+                }
+            }
+        }
+        let at = (est + limit(kind) + 1).div_ceil(1000) * 1000;
+        assert_eq!(
+            ends[0],
+            Some((at.max(turned.unwrap_or(0)), "unconf")),
+            "the dialing side ends unconfirmed at its limit"
+        );
+        assert_eq!(ends[1].map(|e| e.1), Some("hs"), "the responder's handshake runs out");
+        assert_eq!(log.closes, [0, 0], "an unconfirmed session ended with a CLOSE");
+        for n in 0..2 {
+            assert!(d.poll(log, n).is_none());
+            assert_eq!(d.tx(log, n), 0);
+            app(log, n, &mut d.nodes[n], d.now, 10);
+        }
+    });
+}
+
 /// A dial nobody answers: its handshake retransmits, then gives up; or the application closes it first.
 fn dial_run(log: &mut Log, seed: u64, close_at: Option<u64>) {
     let w = World::new(IdentityAlg::Ed25519);
@@ -1058,6 +1143,18 @@ fn timers_match_the_models() {
             next(&mut log);
             dial_run(&mut log, 700 + i as u64, c);
         }
+        for (i, (thin, turn)) in [
+            (false, None),
+            (true, None),
+            (false, Some((10 * SEC, true))),
+            (true, Some((40 * SEC, false))),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            next(&mut log);
+            unconfirmed_run(&mut log, 750 + i as u64, thin, turn);
+        }
         for (i, (relay, carrier, node)) in [
             (true, Carrier::Fresh, None),
             (true, Carrier::Edge, None),
@@ -1102,6 +1199,7 @@ fn timers_match_the_models() {
             "viol",
             "dead",
             "hs",
+            "unconf",
             "asleep",
             "awake",
             "unanswered",

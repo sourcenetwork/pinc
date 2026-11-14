@@ -9,7 +9,8 @@ SLEEP leaving, a packet heard, SLEEP and CLOSE applied), as `proofs/tla/TimersOp
 The deadlines of the other components are inputs (`C`): their own rules are proved in their own models (loss recovery
 in `TransportRecovery*`, the pacer in `TransportCc*`, the acknowledgement deadline in `TransportRx*`, the MTU timer in
 `TransportMtu`). So are the decisions the components take inside a call: a close a component decides in
-`handle_timeout` (`CC.dead` when recovery gives up, `CC.hs` when the handshake runs out of time), whether
+`handle_timeout` (`CC.dead` when recovery gives up, `CC.hs` when the handshake runs out of time, `CC.unconf` when a
+dialing side that established heard no 1-RTT packet from its peer within the connect limit after that), whether
 `poll_transmit` wrote a datagram, and how many SLEEP frames are left after it. The close of a relay session behind a
 live carrier (`dead_behind_live_carrier`, at a probe timeout) is decided here from its inputs (`P`). `Vinc.TraceTimers` replays the recorded
 calls of a scripted pair of real connections through these functions; the theorems are in `Vinc.TransportTimersThm`.
@@ -108,6 +109,7 @@ inductive Ev where
   | idle
   | dead
   | hs
+  | unconf
   | asleep
   | awake
   | unanswered
@@ -118,6 +120,7 @@ inductive CC where
   | none
   | dead
   | hs
+  | unconf
   deriving DecidableEq, Repr
 
 def isOpen (s : S) : Bool := s.ph == .hs || s.ph == .conn
@@ -179,8 +182,12 @@ def beginClose (s : S) (err : Nat) (why : Ev) : R :=
     { s := { s with close := some err, ph := if s.ph == .conn && s.keys then .closing else .closed }, ev := [why] }
   else { s := s, ev := [] }
 
-/-- The handshake timer of `handle_timeout`: the handshake may run out of time while handshaking. -/
-def hsStep (s : S) (cc : CC) : R := if cc == .hs && s.ph == .hs then ⟨silent s, [.hs]⟩ else ⟨s, []⟩
+/-- The handshake timer of `handle_timeout` (`pump` in `conn/drive.rs`): the handshake may run out of time while
+handshaking, and a dialing side's session its peer never confirmed ends while connected (#390). -/
+def hsStep (s : S) (cc : CC) : R :=
+  if cc == .hs && s.ph == .hs then ⟨silent s, [.hs]⟩
+  else if cc == .unconf && s.ph == .conn then ⟨silent s, [.unconf]⟩
+  else ⟨s, []⟩
 
 /-- The end of a link outage that lasted its bound. -/
 def linkStep (k : K) (s : S) (now : Nat) : S :=
@@ -209,8 +216,9 @@ def wakeStep (r : R) (now : Nat) : R :=
   | none => r
 
 /-- `handle_timeout`: a closing connection ends; past the idle deadline the connection ends silently and nothing else
-runs; otherwise the handshake timer (it may end a handshaking connection), the end of a link outage, the recovery
-timer (it may give up, or close behind a live carrier) and the wake wait, in this order. -/
+runs; otherwise the handshake timer (it may end a handshaking connection, or a connected one whose peer never confirmed
+the session), the end of a link outage, the recovery timer (it may give up, or close behind a live carrier) and the
+wake wait, in this order. -/
 def timeout (k : K) (s : S) (now : Nat) (cc : CC) (p : P) : R :=
   match s.ph with
   | .closed => ⟨s, []⟩

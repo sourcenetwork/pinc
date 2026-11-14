@@ -16,15 +16,19 @@ of the model in `Vinc.TransportTimers`:
 * `handle_timeout` does nothing before `poll_timeout` when no probe timeout fires (`timeout_before_poll`), closes silently and does nothing else
   at or after the idle deadline and never before (`timeout_idle`, `timeout_not_idle`), reports an unanswered WAKE
   exactly when its wait ran out (`timeout_wake_due`, `timeout_wake_not_due`), ends a link outage once it lasted its
-  bound (`timeout_link_end`), and leaves none of its own deadlines in the past (`timeout_no_stale`); at a probe
-  timeout behind a live carrier (`carrier_iff`: a relay path, a carrier heard within `cf`, 4 probe timeouts in a row,
-  4 round trips of silence) it begins a close with a CLOSE unless the path is dead or the call ended the connection
-  first (`timeout_carrier_close`), and it begins a close at no other time (`timeout_close_only_carrier`);
+  bound (`timeout_link_end`), and leaves none of its own deadlines in the past (`timeout_no_stale`); the handshake's
+  timer ends a handshaking connection whose handshake ran out of time and a connected one whose peer never confirmed
+  the session, each silently and only in its own phase (`timeout_hs`, `timeout_unconf`, `timeout_hs_phase`,
+  `timeout_unconf_phase`); at a probe timeout behind a live carrier (`carrier_iff`: a relay path, a carrier heard
+  within `cf`, 4 probe timeouts in a row, 4 round trips of silence) it begins a close with a CLOSE unless the path is
+  dead or the call ended the connection first (`timeout_carrier_close`), and it begins a close at no other time
+  (`timeout_close_only_carrier`);
 * at most one CLOSE leaves in any run (`run_closes_le_one`); after a local close of a connected connection the first
   datagram written is the CLOSE and the connection is then closed (`close_then_tx`); a closed connection stays closed,
   has no timer, writes nothing and takes nothing (`closed_inert`, `run_closed`), so a peer's CLOSE, the idle timeout,
-  a dead path and a handshake timeout, which all end in the closed state with no CLOSE to send (`recv_peer_close`,
-  `timeout_idle`, `timeout_dead`, `timeout_hs`), send nothing ever after;
+  a dead path, a handshake timeout and a session its peer never confirmed, which all end in the closed state with no
+  CLOSE to send (`recv_peer_close`, `timeout_idle`, `timeout_dead`, `timeout_hs`, `timeout_unconf`), send nothing ever
+  after;
 * a heard packet restarts the idle timer and clears the wake wait, anything refused leaves the state as it was
   (`recv_heard`, `recv_unheard`, `recv_refused`); a sleeping peer is held `hold` after its SLEEP (`idle_hold`,
   `sleep_hold`).
@@ -135,10 +139,14 @@ theorem poll_le_wake {k : K} {s : S} {c : C} {p w : Nat} (ho : isOpen s = true) 
 theorem idle_congr {k : K} {s t : S} (ha : t.act = s.act) (hp : t.pa = s.pa) : idle k t = idle k s := by
   simp [idle, ha, hp]
 
-@[simp] theorem hsStep_wd (s : S) (cc : CC) : (hsStep s cc).s.wd = s.wd := by unfold hsStep; split <;> rfl
-@[simp] theorem hsStep_ld (s : S) (cc : CC) : (hsStep s cc).s.ld = s.ld := by unfold hsStep; split <;> rfl
-@[simp] theorem hsStep_act (s : S) (cc : CC) : (hsStep s cc).s.act = s.act := by unfold hsStep; split <;> rfl
-@[simp] theorem hsStep_pa (s : S) (cc : CC) : (hsStep s cc).s.pa = s.pa := by unfold hsStep; split <;> rfl
+@[simp] theorem hsStep_wd (s : S) (cc : CC) : (hsStep s cc).s.wd = s.wd := by
+  unfold hsStep; split <;> (try split) <;> rfl
+@[simp] theorem hsStep_ld (s : S) (cc : CC) : (hsStep s cc).s.ld = s.ld := by
+  unfold hsStep; split <;> (try split) <;> rfl
+@[simp] theorem hsStep_act (s : S) (cc : CC) : (hsStep s cc).s.act = s.act := by
+  unfold hsStep; split <;> (try split) <;> rfl
+@[simp] theorem hsStep_pa (s : S) (cc : CC) : (hsStep s cc).s.pa = s.pa := by
+  unfold hsStep; split <;> (try split) <;> rfl
 
 @[simp] theorem linkStep_wd (k : K) (s : S) (now : Nat) : (linkStep k s now).wd = s.wd := by
   unfold linkStep; split <;> (try split) <;> rfl
@@ -241,23 +249,53 @@ theorem wakeStep_ev (r : R) (now : Nat) (x : Ev) (h : x ∈ (wakeStep r now).ev)
     · simp [hw, hn] at h; exact h
     · simp [hw, hn] at h; exact Or.inl h
 
-theorem hsStep_ev (s : S) (cc : CC) (x : Ev) (h : x ∈ (hsStep s cc).ev) : x = Ev.hs := by
-  unfold hsStep at h; split at h <;> simp at h; exact h
+theorem hsStep_ev (s : S) (cc : CC) (x : Ev) (h : x ∈ (hsStep s cc).ev) : x = Ev.hs ∨ x = Ev.unconf := by
+  unfold hsStep at h
+  split at h
+  · simp at h; exact Or.inl h
+  · split at h
+    · simp at h; exact Or.inr h
+    · simp at h
+
+/-- The handshake reports its timeout only for a handshaking connection, when it decided it. -/
+theorem hsStep_hs (s : S) (cc : CC) (h : Ev.hs ∈ (hsStep s cc).ev) : cc = .hs ∧ s.ph = .hs := by
+  unfold hsStep at h
+  split at h
+  · rename_i hc; simpa using hc
+  · split at h <;> simp at h
+
+/-- And a session its peer never confirmed only for a connected connection, when it decided it. -/
+theorem hsStep_unconf (s : S) (cc : CC) (h : Ev.unconf ∈ (hsStep s cc).ev) : cc = .unconf ∧ s.ph = .conn := by
+  unfold hsStep at h
+  split at h
+  · simp at h
+  · split at h
+    · rename_i hc; simpa using hc
+    · simp at h
+
+/-- The events of a call before the idle deadline: the handshake's, a dead path's and an unanswered WAKE. -/
+theorem body_ev (k : K) (s : S) (now : Nat) (cc : CC) (pr : P) (x : Ev)
+    (h : x ∈ (wakeStep (recStep k ⟨linkStep k (hsStep s cc).s now, (hsStep s cc).ev⟩ now pr cc) now).ev) :
+    x ∈ (hsStep s cc).ev ∨ x = Ev.dead ∨ x = Ev.unanswered := by
+  rcases wakeStep_ev _ now _ h with h | h
+  · rcases recStep_ev k _ now pr cc _ h with h | h
+    · exact Or.inl h
+    · exact Or.inr (Or.inl h)
+  · exact Or.inr (Or.inr h)
 
 theorem body_no_unanswered (k : K) (s : S) (now : Nat) (cc : CC) (pr : P) :
     Ev.unanswered ∉ (recStep k ⟨linkStep k (hsStep s cc).s now, (hsStep s cc).ev⟩ now pr cc).ev := by
   intro h
   rcases recStep_ev k _ now pr cc _ h with h | h
-  · have := hsStep_ev s cc _ h; cases this
+  · rcases hsStep_ev s cc _ h with h | h <;> cases h
   · cases h
 
 theorem body_no_idle (k : K) (s : S) (now : Nat) (cc : CC) (pr : P) :
     Ev.idle ∉ (wakeStep (recStep k ⟨linkStep k (hsStep s cc).s now, (hsStep s cc).ev⟩ now pr cc) now).ev := by
   intro h
-  rcases wakeStep_ev _ now _ h with h | h
-  · rcases recStep_ev k _ now pr cc _ h with h | h
-    · have := hsStep_ev s cc _ h; cases this
-    · cases h
+  rcases body_ev k s now cc pr _ h with h | h | h
+  · rcases hsStep_ev s cc _ h with h | h <;> cases h
+  · cases h
   · cases h
 
 /-- Before the idle deadline `handle_timeout` runs its parts in order. -/
@@ -408,6 +446,56 @@ theorem timeout_hs {k : K} {s : S} {now : Nat} (pr : P) (hp : s.ph = .hs) (hi : 
   rw [h2]
   exact ⟨by simp, by simp, wakeStep_ev_mem _ _ _ (by simp)⟩
 
+/-- A dialing side's session its peer never confirmed within the connect limit after it established (#390): the
+connected connection ends silently. -/
+theorem timeout_unconf {k : K} {s : S} {now : Nat} (pr : P) (hp : s.ph = .conn) (hi : now < idle k s) :
+    (timeout k s now .unconf pr).s.ph = .closed ∧ (timeout k s now .unconf pr).s.close = none
+      ∧ Ev.unconf ∈ (timeout k s now .unconf pr).ev := by
+  have ho : isOpen s = true := by simp [isOpen, hp]
+  rw [timeout_body .unconf pr ho hi]
+  have h1 : hsStep s .unconf = ⟨silent s, [.unconf]⟩ := by simp [hsStep, hp]
+  rw [h1]
+  have h2 : recStep k ⟨linkStep k (silent s) now, [.unconf]⟩ now pr .unconf
+      = ⟨linkStep k (silent s) now, [.unconf]⟩ := by
+    have hc : isOpen (linkStep k (silent s) now) = false := by simp [isOpen]
+    simp [recStep, deadStep, carrierStep, beginClose, hc]
+  rw [h2]
+  exact ⟨by simp, by simp, wakeStep_ev_mem _ _ _ (by simp)⟩
+
+/-- A connection that a call ends is open before it. -/
+theorem timeout_ev_open {k : K} {s : S} {now : Nat} {cc : CC} {pr : P} {x : Ev}
+    (h : x ∈ (timeout k s now cc pr).ev) : isOpen s = true := by
+  cases hp : s.ph with
+  | hs => simp [isOpen, hp]
+  | conn => simp [isOpen, hp]
+  | closing => rw [timeout_closing k s now cc pr hp] at h; simp at h
+  | closed => rw [timeout_closed k s now cc pr hp] at h; simp at h
+
+/-- The handshake's ends keep to their phases: a call reports a handshake timeout only for a handshaking connection
+whose handshake decided it ran out of time. -/
+theorem timeout_hs_phase {k : K} {s : S} {now : Nat} {cc : CC} {pr : P}
+    (h : Ev.hs ∈ (timeout k s now cc pr).ev) : cc = .hs ∧ s.ph = .hs := by
+  have ho := timeout_ev_open h
+  by_cases hi : idle k s ≤ now
+  · rw [timeout_idle cc pr ho hi] at h; simp at h
+  · rw [timeout_body cc pr ho (by omega)] at h
+    rcases body_ev k s now cc pr _ h with h | h | h
+    · exact hsStep_hs s cc h
+    · cases h
+    · cases h
+
+/-- And a session its peer never confirmed only for a connected connection whose handshake decided it (#390). -/
+theorem timeout_unconf_phase {k : K} {s : S} {now : Nat} {cc : CC} {pr : P}
+    (h : Ev.unconf ∈ (timeout k s now cc pr).ev) : cc = .unconf ∧ s.ph = .conn := by
+  have ho := timeout_ev_open h
+  by_cases hi : idle k s ≤ now
+  · rw [timeout_idle cc pr ho hi] at h; simp at h
+  · rw [timeout_body cc pr ho (by omega)] at h
+    rcases body_ev k s now cc pr _ h with h | h | h
+    · exact hsStep_unconf s cc h
+    · cases h
+    · cases h
+
 /-! ## The close behind a live carrier -/
 
 /-- The rule itself: a relay path, a carrier heard less than `cf` ago, 4 probe timeouts in a row, and nothing heard for
@@ -429,10 +517,10 @@ theorem carrier_iff (k : K) (now : Nat) (pr : P) :
 
 /-- At a probe timeout behind a live carrier the connection begins a close with a CLOSE: error 0, reported as
 `PathDead`, never silent. It holds unless the path is dead (`cc = .dead`, which ends it silently first) or the call
-ended the connection before the recovery timer ran (the handshake timeout). -/
+ended the connection before the recovery timer ran (the handshake timeout, or a session its peer never confirmed). -/
 theorem timeout_carrier_close {k : K} {s : S} {now : Nat} (cc : CC) (pr : P) (ho : isOpen s = true)
-    (hi : now < idle k s) (hd : cc ≠ .dead) (hh : ¬ (cc = .hs ∧ s.ph = .hs)) (hp : pr.ping = true)
-    (hc : carrier k now pr = true) :
+    (hi : now < idle k s) (hd : cc ≠ .dead) (hh : ¬ (cc = .hs ∧ s.ph = .hs)) (hu : ¬ (cc = .unconf ∧ s.ph = .conn))
+    (hp : pr.ping = true) (hc : carrier k now pr = true) :
     (timeout k s now cc pr).s.close = some 0 ∧ isOpen (timeout k s now cc pr).s = false
       ∧ Ev.dead ∈ (timeout k s now cc pr).ev := by
   rw [timeout_body cc pr ho hi]
@@ -440,7 +528,9 @@ theorem timeout_carrier_close {k : K} {s : S} {now : Nat} (cc : CC) (pr : P) (ho
     unfold hsStep
     split
     · rename_i h; simp at h; exact absurd h hh
-    · rfl
+    · split
+      · rename_i h; simp at h; exact absurd h hu
+      · rfl
   have hl : isOpen (linkStep k s now) = true := by simpa [isOpen] using ho
   have hg : (cc != CC.dead && pr.ping && carrier k now pr) = true := by
     cases cc <;> simp [hp, hc] at hd ⊢
@@ -472,7 +562,7 @@ theorem timeout_close_only_carrier {k : K} {s : S} {now : Nat} (cc : CC) (pr : P
         = deadStep ⟨linkStep k (hsStep s cc).s now, (hsStep s cc).ev⟩ cc := by
       simp [recStep, carrierStep, hg]
     rw [hr]
-    have hh : (hsStep s cc).s.close = none := by unfold hsStep; split <;> simp [hn]
+    have hh : (hsStep s cc).s.close = none := by unfold hsStep; split <;> (try split) <;> simp [hn]
     unfold deadStep; split <;> simp [hh]
 
 /-! ## Closing -/
@@ -539,7 +629,7 @@ theorem step_closed (k : K) (s : S) (op : Op) (h : s.ph = .closed) :
   | est now => simp [step, est, h]
 
 /-- So a run from a closed connection sends no CLOSE and stays closed: after a peer's CLOSE, the idle timeout, a dead
-path, a handshake timeout, or the CLOSE itself, nothing more ever leaves. -/
+path, a handshake timeout, a session its peer never confirmed, or the CLOSE itself, nothing more ever leaves. -/
 theorem run_closed (k : K) (s : S) (ops : List Op) (h : s.ph = .closed) :
     (run k s ops).1.ph = .closed ∧ (run k s ops).2 = 0 := by
   induction ops generalizing s with
@@ -646,6 +736,9 @@ theorem wake_starts_wait {k : K} {s : S} {now : Nat} (hp : s.ph = .conn) (hl : s
 #audit_axioms timeout_no_stale
 #audit_axioms timeout_dead
 #audit_axioms timeout_hs
+#audit_axioms timeout_unconf
+#audit_axioms timeout_hs_phase
+#audit_axioms timeout_unconf_phase
 #audit_axioms carrier_iff
 #audit_axioms timeout_carrier_close
 #audit_axioms timeout_close_only_carrier

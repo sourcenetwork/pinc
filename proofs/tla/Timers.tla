@@ -28,9 +28,14 @@
 (*    leaves none of its own deadlines in the past (NoStale);              *)
 (*  - at most one CLOSE ever leaves, only from the closing state, and the  *)
 (*    connection is closed after it (OneClose); a peer's CLOSE, the idle   *)
-(*    timeout, a dead path and a handshake timeout send nothing            *)
-(*    (SilentEnd); a closed connection stays closed, has no timer, sends   *)
-(*    nothing and takes nothing (ClosedInert);                             *)
+(*    timeout, a dead path, a handshake timeout and a session its peer     *)
+(*    never confirmed send nothing (SilentEnd); a closed connection stays  *)
+(*    closed, has no timer, sends nothing and takes nothing (ClosedInert); *)
+(*  - before the idle deadline the handshake timer ends a handshaking      *)
+(*    connection whose handshake ran out of time ("hs") and a connected    *)
+(*    one whose peer never confirmed the session ("unconf", a dialing side *)
+(*    past its connect limit counted from when it established, #390),      *)
+(*    each silently and only in its own phase (HsEnds);                    *)
 (*  - a heard packet restarts the idle timer and clears the wake wait,     *)
 (*    anything else refused leaves the state as it was (IdleRestart); a    *)
 (*    sleeping peer is held HOLD after its SLEEP (SleepHold);              *)
@@ -45,9 +50,11 @@
 (* the wake wait while suspended) and Timers_noheard (a receive path that  *)
 (* does not restart the idle timer) are wrong rules TLC must catch, so are *)
 (* Timers_norelay (a carrier close on a direct path) and Timers_nofresh (a *)
-(* carrier close that ignores the carrier's freshness); Timers_close is    *)
-(* the reachability witness of a CLOSE leaving and Timers_carrier that of  *)
-(* a carrier close.                                                        *)
+(* carrier close that ignores the carrier's freshness), and so is          *)
+(* Timers_nounconf (the rule before #390: the handshake timer ends only a  *)
+(* handshaking connection, so a dialing side whose peer never confirmed    *)
+(* the session stays connected); Timers_close is the reachability witness  *)
+(* of a CLOSE leaving and Timers_carrier that of a carrier close.          *)
 (* Lean counterpart: proofs/lean/Vinc/TransportTimers*.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -65,8 +72,8 @@ Pats == {[x \in Comps |-> None]} \cup {[x \in Comps |-> IF x = y THEN v ELSE Non
         \cup {[x \in Comps |-> v] : v \in CD}
 CSet == {[conf |-> cf, amp |-> am, hs |-> f["hs"], rec |-> f["rec"], ack |-> f["ack"], path |-> f["path"],
           rekey |-> f["rekey"], paced |-> f["paced"], mtu |-> f["mtu"]] : cf \in BOOLEAN, am \in BOOLEAN, f \in Pats}
-CC == {"none", "dead", "hs"}
-CloseWhy == {"local", "peer", "viol", "idle", "dead", "hs"}
+CC == {"none", "dead", "hs", "unconf"}
+CloseWhy == {"local", "peer", "viol", "idle", "dead", "hs", "unconf"}
 
 \* the inputs of the carrier rule. PR0 has no probe timeout; Shape(t, p, rl, pt, c) is a call at t with a carrier
 \* heard at c, the peer last heard at 0 and a smoothed round trip of 1 (4 round trips of silence from t = 4)
@@ -92,8 +99,11 @@ Do(r) == DoW(r, IF Open(s) /\ ~Open(r.s) THEN Reason(r.ev) ELSE why)
 Plain(x) == Do([s |-> x, ev |-> <<>>]) /\ UNCHANGED closes
 
 Tick == now < TMAX /\ now' = now + 1 /\ UNCHANGED <<s, n, closes, why>>
+\* the handshake decides "hs" only while handshaking (pump: Phase::Handshaking) and "unconf" only while connected
+\* (pump: Phase::Connected)
 TimeoutA == \E cc \in CC, pr \in Move(now) :
               /\ (cc = "hs" => s.ph = "hs")
+              /\ (cc = "unconf" => s.ph = "conn")
               /\ LET r == TimeoutB(s, now, cc, pr, K, BUG)
                  IN DoW(r, IF Open(s) /\ ~Open(r.s) THEN (IF r.s.close # None THEN "carrier" ELSE Reason(r.ev)) ELSE why)
               /\ UNCHANGED closes
@@ -152,7 +162,7 @@ DueWork == Open(s) => \A t \in Times : \A cc \in CC, pr \in Move(t) :
                /\ Has(r.ev, "unanswered") = (s.wd # None /\ s.wd <= t)
                /\ (r.s.wd = None) = (s.wd = None \/ s.wd <= t)
                /\ (r.s.ld = None) = (s.ld = None \/ s.ld + LDM <= t)
-               /\ (Has(r.ev, "dead") \/ Has(r.ev, "hs")) = ~Open(r.s)
+               /\ (Has(r.ev, "dead") \/ Has(r.ev, "hs") \/ Has(r.ev, "unconf")) = ~Open(r.s)
 NoStale == Open(s) => \A t \in Times : \A cc \in CC, pr \in Move(t) :
              LET r == Timeout(s, t, cc, pr, K) IN
              Open(r.s) => /\ Idle(r.s, K) > t
@@ -163,7 +173,16 @@ NoStale == Open(s) => \A t \in Times : \A cc \in CC, pr \in Move(t) :
 OneClose == /\ closes <= 1
             /\ s.ph = "closing" => closes = 0 /\ s.close # None
             /\ closes = 1 => s.ph = "closed" /\ s.close = None
-SilentEnd == why \in {"peer", "idle", "dead", "hs"} => closes = 0 /\ s.ph = "closed" /\ s.close = None
+SilentEnd == why \in {"peer", "idle", "dead", "hs", "unconf"} => closes = 0 /\ s.ph = "closed" /\ s.close = None
+\* the handshake's own ends, at a timer call before the idle deadline: a handshaking connection whose handshake ran out
+\* of time and a connected one whose peer never confirmed the session end silently, each reported as its own reason
+\* and only in its own phase
+HsEnds == Open(s) => \A t \in Times : \A cc \in CC, pr \in Move(t) :
+            LET r == TimeoutB(s, t, cc, pr, K, BUG) IN
+            t < Idle(s, K) =>
+              /\ Has(r.ev, "hs") = (cc = "hs" /\ s.ph = "hs")
+              /\ Has(r.ev, "unconf") = (cc = "unconf" /\ s.ph = "conn")
+              /\ (Has(r.ev, "hs") \/ Has(r.ev, "unconf")) => r.s.ph = "closed" /\ r.s.close = None
 \* closed: no timer, nothing leaves, nothing is taken, and no call but keepalive and pulse changes anything
 ClosedInert == s.ph = "closed" =>
                  /\ ~CanSend(s) /\ ~AppOpen(s) /\ \A c \in CSet : Poll(s, c, K) = None
@@ -194,18 +213,20 @@ CarrierSpec(t, pr) == /\ pr.relay /\ pr.ch # None /\ (pr.ch > t \/ t - pr.ch < C
 ASSUME \A t \in 0..TMAX, pr \in FullSet : Carrier(t, pr, K) = CarrierSpec(t, pr)
 \* at a timer call before the idle deadline: a CLOSE is to leave only if the rule holds at a probe timeout and the path
 \* is not dead; and when the rule holds at a probe timeout, the path is not dead and the call did not end the
-\* connection first (a handshake timeout), the close begins with error 0 and is reported as PathDead
+\* connection first (a handshake timeout, or a session its peer never confirmed), the close begins with error 0 and is
+\* reported as PathDead
 CarrierClose == Open(s) => \A t \in Times : \A cc \in CC, pr \in ShapeSet(t) :
                   LET r == TimeoutB(s, t, cc, pr, K, BUG) IN
                   t < Idle(s, K) =>
                     /\ r.s.close # None => pr.ping /\ cc # "dead" /\ CarrierSpec(t, pr)
-                    /\ (pr.ping /\ cc # "dead" /\ ~(cc = "hs" /\ s.ph = "hs") /\ CarrierSpec(t, pr))
+                    /\ (pr.ping /\ cc # "dead" /\ ~(cc = "hs" /\ s.ph = "hs") /\ ~(cc = "unconf" /\ s.ph = "conn")
+                        /\ CarrierSpec(t, pr))
                          => r.s.close = 0 /\ Has(r.ev, "dead")
 \* a carrier close ended the connection or owes its CLOSE with error 0
 CarrierEnd == why = "carrier" => ~Open(s) /\ (s.ph = "closing" => s.close = 0)
 
 Inv == /\ PollMin /\ PollPhase /\ PollLeLife /\ EarlyNothing /\ IdleExact /\ DueWork /\ NoStale
-       /\ OneClose /\ SilentEnd /\ ClosedInert /\ KeysWhenConnected /\ IdleRestart /\ SleepHold /\ TimesPast
+       /\ OneClose /\ SilentEnd /\ HsEnds /\ ClosedInert /\ KeysWhenConnected /\ IdleRestart /\ SleepHold /\ TimesPast
        /\ CarrierClose /\ CarrierEnd
 
 \* ---- witnesses ----
