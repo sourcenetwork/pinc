@@ -248,6 +248,10 @@ import Vinc.ConnectRecords
 import Vinc.ConnectRecordsThm
 import Vinc.TraceConnectRecords
 import Vinc.ConnectAudit
+import Vinc.ConnectPack
+import Vinc.ConnectPackThm
+import Vinc.TraceConnectPack
+import Vinc.ConnectPackAudit
 import Vinc.DtnGf
 import Vinc.DtnGfField
 import Vinc.DtnGfSlice

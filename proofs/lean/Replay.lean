@@ -41,6 +41,7 @@ import Vinc.ValuesWireTrace
 import Vinc.ValuesVerifyTrace
 import Vinc.ValuesTimeTrace
 import Vinc.TraceConnectMailbox
+import Vinc.TraceConnectPack
 import Vinc.TraceConnectTable
 import Vinc.TraceConnectCodec
 import Vinc.TraceIntegrationCodecs
@@ -177,6 +178,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut gvw : ValuesVerifyTrace.W := {}
   let mut vtw : ValuesTimeTrace.W := default
   let mut cmb : TraceConnectMailbox.W := {}
+  let mut cpk : TraceConnectPack.W := {}
   let mut ctb : TraceConnectTable.W := {}
   let mut crl : TraceConnect.W := {}
   let mut crr : TraceConnectRecords.W := {}
@@ -432,6 +434,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnectMailbox.replayEvent j cmb with
           | .ok w' =>
             cmb := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectPack.isTag t then
+          -- Batch builder events (`trace_connect_pack`): offers and closes through the Lean builder model.
+          match TraceConnectPack.replayEvent j cpk with
+          | .ok w' =>
+            cpk := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

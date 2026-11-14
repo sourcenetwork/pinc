@@ -249,6 +249,28 @@ par run_tlc_deep valuesverify_skip2 ValuesVerify ValuesVerify_skip2
 par run_tlc_deep valuesverify_rx ValuesVerifyRx ValuesVerifyRx
 par run_tlc_deep valueswire ValuesWire ValuesWire
 par run_tlc connect_mailbox ConnectMailbox ConnectMailbox
+par run_tlc connect_pack ConnectPack ConnectPack
+par run_tlc connect_pack_tight ConnectPack ConnectPack_tight
+par run_tlc connect_pack_noroom ConnectPack ConnectPack_noroom
+par witness_tlc connect_pack_w_bytes ConnectPack ConnectPack_w_bytes Inv
+par witness_tlc connect_pack_w_count ConnectPack ConnectPack_w_count Inv
+par witness_tlc connect_pack_w_fit ConnectPack ConnectPack_w_fit Inv
+par witness_tlc connect_pack_w_long ConnectPack ConnectPack_w_long Inv
+par witness_tlc connect_pack_w_batch ConnectPack ConnectPack_w_batch Inv
+par witness_tlc connect_pack_p_added ConnectPack ConnectPack_p_added Unreached
+par witness_tlc connect_pack_p_full ConnectPack ConnectPack_p_full Unreached
+par witness_tlc connect_pack_p_bytes ConnectPack ConnectPack_p_bytes Unreached
+par witness_tlc connect_pack_p_long ConnectPack ConnectPack_p_long Unreached
+par witness_tlc connect_pack_p_batch ConnectPack ConnectPack_p_batch Unreached
+par witness_tlc connect_pack_p_room ConnectPack ConnectPack_p_room Unreached
+par witness_tlc connect_pack_p_errsmall ConnectPack ConnectPack_p_errsmall Unreached
+par witness_tlc connect_pack_p_noroom ConnectPack ConnectPack_p_noroom Unreached
+par witness_tlc connect_pack_p_bad ConnectPack ConnectPack_p_bad Unreached
+par witness_tlc connect_pack_p_single ConnectPack ConnectPack_p_single Unreached
+par witness_tlc connect_pack_p_batchfin ConnectPack ConnectPack_p_batchfin Unreached
+par witness_tlc connect_pack_p_fullfin ConnectPack ConnectPack_p_fullfin Unreached
+par witness_tlc connect_pack_p_exact ConnectPack ConnectPack_p_exact Unreached
+par witness_tlc connect_pack_p_none ConnectPack ConnectPack_p_none Unreached
 par run_tlc_deep connect_codec ConnectCodec ConnectCodec
 par run_tlc connect_link ConnectLink ConnectLink
 par run_tlc connect_link_lease ConnectLink ConnectLink_lease
@@ -632,7 +654,7 @@ while [ -n "$(jobs -rp)" ]; do wait -n || exit 1; done
 echo "-- trace"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir" "$jtmp_root"' EXIT
-VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
+VINC_TRACE_DIR="$dir" cargo test -q -p vinc-tests --features hwenc --test trace_ranges --test trace_verifier --test trace_builder --test trace_tla --test trace_handshake --test trace_security --test trace_keyroll --test trace_keylayer --test trace_stores --test trace_values_sched --test trace_values_sys --test trace_values_verify --test trace_values_wire --test trace_values_time --test trace_values_plan --test trace_connect_mailbox --test trace_connect_pack --test trace_connect_table --test trace_connect --test trace_connect_records --test trace_transcript --test trace_dtn_store --test trace_dtn_custody --test trace_dtn_forward --test trace_dtn_rs --test trace_dtn_layout --test trace_dtn_codec --test trace_dtn_reception --test trace_dtn_seal --test trace_dtn_scenario --test trace_membership --test trace_streams --test trace_recovery --test trace_broadcast --test trace_reconcile_wire --test trace_reconcile --test trace_crypto --test trace_keystore --test trace_keystore_tpm --test trace_connect_codec --test trace_connect_link --test trace_connect_client --test trace_rx --test trace_cid --test trace_cc --test trace_pn --test trace_reasm --test trace_hdr --test trace_frame --test trace_framepack --test trace_ext --test trace_orphan --test trace_keepalive --test trace_node_backoff --test trace_rtt --test trace_halfopen --test trace_core_table --test trace_heap --test trace_core_state --test trace_queue --test trace_held --test trace_ext_in --test trace_reach --test trace_mtu --test trace_timers --test trace_connect_carrier --test trace_connect_ws --test trace_integration_codecs
 trace_tlc() { # trace_tlc <spec> <what> : TLC of the newer era over the recorded ndjson in $dir
     local out
     # -Xss: TLC's evaluator recurses deeply on the larger builder tables, which overflows the default thread stack.
@@ -659,6 +681,7 @@ trace_tlc TraceValuesTime values_time
 trace_tlc TraceValuesVerify valuesverify
 trace_tlc TraceValuesWire valueswire
 trace_tlc TraceConnectMailbox mailbox
+trace_tlc TraceConnectPack connect-pack
 trace_tlc TraceConnectTable table
 trace_tlc TraceConnect relay
 trace_tlc TraceConnectRecords connect-records
