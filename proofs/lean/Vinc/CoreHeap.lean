@@ -5,7 +5,8 @@ A model of `vinc-core` `heap.rs` (`DeadlineHeap`), as `proofs/tla/HeapOps.tla` h
 indexed binary min-heap of `(deadline, id)` pairs for the ids below `n`. The heap, the position index and the
 deadlines are total functions, as the code's three arrays are; `put`, `up`, `down` and `set` follow the code call
 for call (the hole of the code's sifts is the model's `put` at the end). `Vinc.TraceHeap` replays the recorded
-calls of the real code through these functions; the theorems are in `Vinc.CoreHeapThm`.
+calls of the real code through these functions; the theorems are in `Vinc.CoreHeapInv`, `Vinc.CoreHeapSift`,
+`Vinc.CoreHeapSet` and `Vinc.CoreHeapPop`.
 -/
 
 namespace Vinc.CoreHeap

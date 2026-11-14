@@ -126,7 +126,10 @@ import Vinc.CoreTable
 import Vinc.CoreTableThm
 import Vinc.TraceCoreTable
 import Vinc.CoreHeap
-import Vinc.CoreHeapThm
+import Vinc.CoreHeapInv
+import Vinc.CoreHeapSift
+import Vinc.CoreHeapSet
+import Vinc.CoreHeapPop
 import Vinc.TraceHeap
 import Vinc.CoreState
 import Vinc.CoreStateThm
