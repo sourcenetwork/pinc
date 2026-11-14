@@ -23,7 +23,12 @@ pub struct PortMapStats {
     pub client: vinc_portmap::Stats,
     /// Draws of the nonce that failed: the client starts at the next try.
     pub nonce_failures: u64,
+    /// Releases of earlier starts that were replaced, unsent, because more than four waited.
+    pub release_overflows: u64,
 }
+
+/// The most stopped clients whose release is still on the way.
+const RETIRING: usize = 4;
 
 /// How long after a failed draw of the nonce the node draws again, in nanoseconds.
 const NONCE_RETRY: Nanos = 1_000_000_000;
@@ -42,7 +47,8 @@ struct Ask {
 #[derive(Debug)]
 pub(crate) struct Pm {
     client: Option<PortMap>,
-    retiring: Option<PortMap>,
+    retiring: [Option<PortMap>; RETIRING],
+    overflows: u64,
     ask: Ask,
     retry: Nanos,
     halted: bool,
@@ -53,12 +59,14 @@ pub(crate) struct Pm {
 impl Pm {
     /// The clients that send, the one retiring first: its release goes out before the new client asks.
     fn sending(&mut self) -> impl Iterator<Item = &mut PortMap> {
-        self.retiring.iter_mut().chain(self.client.iter_mut())
+        self.retiring.iter_mut().flatten().chain(self.client.iter_mut())
     }
 
     /// Forget a retiring client whose release is sent.
     fn reap(&mut self) {
-        self.retiring = self.retiring.take().filter(|c| !c.stopped());
+        for r in &mut self.retiring {
+            *r = r.take().filter(|c| !c.stopped());
+        }
     }
 }
 
@@ -76,17 +84,33 @@ where
     /// asks.
     pub fn start_port_mapping(&mut self, now: Nanos, gateway: Option<IpAddr>, local: SocketAddr, lifetime: u32) {
         self.begin(now);
-        // vertexia: one release can be in flight for a retired client; a third start before it is sent replaces it
-        let (given, retiring) = self.pm.take().map_or((None, None), |old| {
-            let mut client = old.client;
-            if let Some(c) = &mut client {
+        // The stopped client waits for its release in a fixed queue; a start that finds it full replaces the oldest
+        // release, counted in the statistics (a release is one datagram, or a delete over HTTP).
+        let old = self.pm.take();
+        let mut given = None;
+        let mut overflows = 0;
+        let mut retiring: [Option<PortMap>; RETIRING] = core::array::from_fn(|_| None);
+        if let Some(old) = old {
+            given = old.given;
+            overflows = old.overflows;
+            retiring = old.retiring;
+            if let Some(mut c) = old.client {
                 c.stop(now);
+                if !c.stopped() {
+                    let slot = retiring.iter().position(Option::is_none).unwrap_or_else(|| {
+                        overflows = overflows.saturating_add(1);
+                        0
+                    });
+                    if let Some(r) = retiring.get_mut(slot) {
+                        *r = Some(c);
+                    }
+                }
             }
-            (old.given, client.filter(|c| !c.stopped()))
-        });
+        }
         self.pm = Some(alloc::boxed::Box::new(Pm {
             client: None,
             retiring,
+            overflows,
             ask: Ask {
                 gateway,
                 local,
@@ -132,7 +156,7 @@ where
             Some(None) => {
                 if let Some(pm) = &mut self.pm {
                     pm.halted = true;
-                    if pm.retiring.is_none() {
+                    if pm.retiring.iter().all(Option::is_none) {
                         self.pm = None;
                     }
                 }
@@ -154,7 +178,7 @@ where
     pub fn port_mapping_done(&self) -> bool {
         self.pm.as_ref().is_none_or(|pm| {
             let client = pm.client.as_ref().map_or(pm.halted, PortMap::stopped);
-            client && pm.retiring.as_ref().is_none_or(PortMap::stopped)
+            client && pm.retiring.iter().flatten().all(PortMap::stopped)
         })
     }
 
@@ -175,6 +199,7 @@ where
         self.pm.as_ref().map_or_else(PortMapStats::default, |pm| PortMapStats {
             client: pm.client.as_ref().map(PortMap::stats).unwrap_or_default(),
             nonce_failures: pm.nonce_failures,
+            release_overflows: pm.overflows,
         })
     }
 
@@ -192,7 +217,7 @@ where
         if !self
             .pm
             .as_ref()
-            .is_some_and(|pm| pm.client.is_some() || pm.retiring.is_some())
+            .is_some_and(|pm| pm.client.is_some() || pm.retiring.iter().any(Option::is_some))
         {
             return None;
         }
@@ -203,9 +228,12 @@ where
     /// Whether the port-mapping client still waits for the answer to the HTTP request it gave out. When it does not
     /// (its deadline passed), the host drops the exchange it runs and polls [`Node::poll_http`] again.
     pub fn http_awaited(&self) -> bool {
-        self.pm
-            .as_ref()
-            .is_some_and(|pm| pm.client.iter().chain(pm.retiring.iter()).any(PortMap::awaiting_http))
+        self.pm.as_ref().is_some_and(|pm| {
+            pm.client
+                .iter()
+                .chain(pm.retiring.iter().flatten())
+                .any(PortMap::awaiting_http)
+        })
     }
 
     /// The answer to the last HTTP request, or `None` if its connection failed.
@@ -228,7 +256,7 @@ where
         let Some(client) = pm
             .client
             .iter_mut()
-            .chain(pm.retiring.iter_mut())
+            .chain(pm.retiring.iter_mut().flatten())
             .find(|c| c.owns(remote, d))
         else {
             return false;
@@ -261,7 +289,7 @@ where
         let seed = (pm.client.is_none() && !pm.halted).then_some(pm.retry);
         pm.client
             .iter()
-            .chain(pm.retiring.iter())
+            .chain(pm.retiring.iter().flatten())
             .filter_map(PortMap::poll_timeout)
             .chain(seed)
             .min()

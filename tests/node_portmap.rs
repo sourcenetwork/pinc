@@ -476,3 +476,55 @@ fn the_node_exposes_what_the_client_dropped() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn a_third_start_does_not_drop_the_release_of_the_first() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = member();
+            node.set_local(&[local()]);
+            for i in 0..3u64 {
+                node.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
+            }
+            // nothing was polled between the starts: two releases wait, and the third client's request
+            let asked: Vec<_> = to_gateway(&mut node)
+                .iter()
+                .map(|b| pcp::decode_request(b).unwrap())
+                .collect();
+            let releases: std::collections::BTreeSet<[u8; 12]> =
+                asked.iter().filter(|r| r.lifetime == 0).map(|r| r.nonce).collect();
+            assert_eq!(releases.len(), 2, "the releases of the first two clients: {asked:?}");
+            assert_eq!(asked.iter().filter(|r| r.lifetime > 0).count(), 1);
+            assert_eq!(node.port_mapping_stats().release_overflows, 0);
+            node.stop_port_mapping(5 * SEC);
+            to_gateway(&mut node);
+            assert!(node.port_mapping_done(), "done once every release was sent");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn more_unsent_releases_than_the_queue_holds_are_counted() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = member();
+            node.set_local(&[local()]);
+            for i in 0..6u64 {
+                node.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
+            }
+            // five clients were stopped unsent; the queue holds four
+            let asked: Vec<_> = to_gateway(&mut node)
+                .iter()
+                .map(|b| pcp::decode_request(b).unwrap())
+                .collect();
+            assert_eq!(asked.iter().filter(|r| r.lifetime == 0).count(), 4);
+            assert_eq!(node.port_mapping_stats().release_overflows, 1);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
