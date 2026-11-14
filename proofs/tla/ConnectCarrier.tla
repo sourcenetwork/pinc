@@ -55,7 +55,19 @@
 (*    handshake output, a key limit) delivers nothing, opens nothing and   *)
 (*    leaves both packet numbers as they were (EndChangesNothing);         *)
 (*  - on an ended carrier every call leaves it ended and delivers, opens  *)
-(*    and seals nothing (EndedStays);                                      *)
+(*    and seals nothing (EndedStays), and every call that can fail answers *)
+(*    Closed, before anything else is looked at (EndedAnswersClosed);      *)
+(*  - an error is fatal (CarrierError::is_fatal) exactly when the call     *)
+(*    ended the carrier, or found it ended (FatalIffEnded);                *)
+(*  - a key answer while no key request is outstanding answers            *)
+(*    NoKeyRequest and changes nothing: an open carrier stays open         *)
+(*    (NoRequestNoChange);                                                 *)
+(*  - a seal before the handshake completes answers NotOpen and changes   *)
+(*    nothing, whatever its size or buffer (SealStageFirst); bytes that    *)
+(*    are empty or longer than a frame are refused as a frame on an open   *)
+(*    carrier, which lives on (BytesRefusedLive);                          *)
+(*  - free() is what a read takes when it offers more (FreeIsReceive):     *)
+(*    the unit the last poll took counts as room;                          *)
 (*  - the next record D sealed, intact and whole in the buffer of an open *)
 (*    carrier, is accepted (InOrderAccepted), unless the receive key is   *)
 (*    at its failed-open limit (KeyLimit) or the packet number is past    *)
@@ -68,8 +80,12 @@
 (*   PnCount, PnUsed, NoNonceReuse                                         *)
 (*                           carrier_pns, carrier_no_nonce_reuse,          *)
 (*                           sealIn_ok, sealIn_never_not_increasing        *)
-(*   EndChangesNothing, EndedStays, LimitEnds                              *)
+(*   EndChangesNothing, EndedStays, LimitEnds, EndedAnswersClosed          *)
 (*                           ends_change_nothing, ended_stays, sealIn_limit*)
+(*   NoRequestNoChange, SealStageFirst, BytesRefusedLive, FreeIsReceive    *)
+(*                           keyResponse_no_request, seal_not_open,        *)
+(*                           sealBytes_size, receive_takes_free            *)
+(*   FatalIffEnded           TLC only                                      *)
 (*   Bounds, NoStall         receive_bound, idle_has_room                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -216,9 +232,14 @@ NoStall == LET a1 == Release(a) IN
 
 (* ---- properties of the next call from every reachable state ---- *)
 Delivers(r) == r \in {"frame", "Frame", "open"}
-(* every call of A's host: the poll, the key answer, a seal (frame or short), a read, a transmit *)
+(* every call of A's host: the poll, the key answer, a seal (frame or short, or bytes of every length around the
+   limits), a read, a transmit *)
+BytesCap(p) == 2 + p + TAG
+SealCalls == {[c |-> ASealA(p, s).c, r |-> ASealA(p, s).r] : p \in 1..MAXF, s \in BOOLEAN}
+             \cup {[c |-> SealBytes(K, a, p, BytesCap(p)).c, r |-> SealBytes(K, a, p, BytesCap(p)).r] :
+                    p \in 0..(MAXF + 1)}
 Calls == {[c |-> PollA.c, r |-> PollA.r], [c |-> AnsA.c, r |-> AnsA.r]}
-         \cup {[c |-> ASealA(p, s).c, r |-> ASealA(p, s).r] : p \in 1..MAXF, s \in BOOLEAN}
+         \cup SealCalls
          \cup {[c |-> Receive(K, a, n).c, r |-> "recv"] : n \in ReadSizes}
          \cup {[c |-> Transmit(a, n).c, r |-> "tx"] : n \in {1, K.outn}}
 EarlyRefusal == LET a1 == Release(a) IN
@@ -241,8 +262,20 @@ LimitEnds == LET a1 == Release(a) IN
               /\ a1.wr >= a1.rd + 2 + Hdr(a1.rd))
              => /\ a1.rpn > MaxPn => PollA.r = "Record"
                 /\ (a1.rpn <= MaxPn /\ a1.rk.aead = "chacha" /\ a1.rk.failed >= a1.rk.chachaLim) => PollA.r = "KeyLimit"
+(* the answers of the calls, as the table of the code has them *)
+Errs == {"Handshake", "UnitSize", "Authentication", "KeyLimit", "OutputFull", "Record", "Closed",
+         "NotOpen", "NoKeyRequest", "NoRoom", "Frame"}
+Fatal(r) == r \in {"Handshake", "UnitSize", "Authentication", "KeyLimit", "OutputFull", "Record", "Closed"}
+FatalIffEnded == \A x \in Calls : x.r \in Errs => (Fatal(x.r) <=> x.c.st = "ended")
+EndedAnswersClosed == a.st = "ended" => \A x \in Calls : x.r \in Errs => x.r = "Closed"
+NoRequestNoChange == (a.st # "ended" /\ ~(a.st = "hs" /\ a.kr)) => (AnsA.r = "NoKeyRequest" /\ AnsA.c = a)
+SealStageFirst == a.st = "hs" => \A x \in SealCalls : x.r = "NotOpen" /\ x.c = a
+BytesRefusedLive == a.st = "open" =>
+    \A p \in {0, MAXF + 1} : SealBytes(K, a, p, BytesCap(p)).r = "Frame" /\ SealBytes(K, a, p, BytesCap(p)).c = a
+FreeIsReceive == Receive(K, a, K.inl + 1).took = Free(K, a)
 Inv == Bounds /\ Aligned /\ InOrder /\ NoFrameBeforeOpen /\ PnCount /\ PnUsed /\ NoNonceReuse /\ NoStall
        /\ EarlyRefusal /\ EndChangesNothing /\ EndedStays /\ InOrderAccepted /\ LimitEnds
+       /\ FatalIffEnded /\ EndedAnswersClosed /\ NoRequestNoChange /\ SealStageFirst /\ BytesRefusedLive /\ FreeIsReceive
 
 (* reachability witness (ConnectCarrier_reach.cfg, which TLC must violate): a record is delivered after a handshake
    over the stream *)

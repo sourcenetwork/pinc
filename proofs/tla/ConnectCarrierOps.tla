@@ -55,7 +55,8 @@ C0(st) == [st |-> st, rd |-> 0, wr |-> 0, cons |-> 0, out |-> 0, spn |-> 0, rpn 
            sk |-> NoKey, rk |-> NoKey, kr |-> FALSE]
 
 InLen(c) == c.wr - c.rd
-Free(K, c) == K.inl - InLen(c)
+\* free(): what receive would take now, the room left once the unit the last poll took is released
+Free(K, c) == K.inl - (InLen(c) - c.cons)
 
 (* release(): drop the bytes of the last unit *)
 Release(c) == IF c.cons > 0 THEN [c EXCEPT !.rd = @ + c.cons, !.cons = 0] ELSE c
@@ -133,20 +134,26 @@ Poll(K, c, Hdr(_), Opens(_, _), Fok(_), hs) ==
     ELSE IF c1.st = "open" THEN PollRecord(K, c1, Hdr, Opens, Fok)
     ELSE PollHs(K, c1, Hdr, hs)
 
-(* key_response(): the machine's on_key_response and the drain; on an open or ended carrier it is refused with
-   Closed and the carrier ends (finish of an error) *)
+(* key_response(): Closed on an ended carrier, checked first; NoKeyRequest when no key request is outstanding
+   (key_request() is none: an open carrier, or a handshake that waits for no key operation), and nothing changes;
+   otherwise the machine's on_key_response and the drain (a wrong kind of answer fails the machine: Handshake, and the
+   carrier ends) *)
 KeyResponse(K, c, hs) ==
-    IF c.st # "hs" THEN [c |-> End(c), r |-> "Closed"]
+    IF c.st = "ended" THEN [c |-> c, r |-> "Closed"]
+    ELSE IF ~(c.st = "hs" /\ c.kr) THEN [c |-> c, r |-> "NoKeyRequest"]
     ELSE LET d == HsRun(K, c.out, hs) IN Finish(K, [c EXCEPT !.out = d.out], d.res, hs)
 
-(* answer_soft(): with no key request outstanding the carrier ends with Handshake(UnexpectedKeyResponse) *)
-AnswerSoft(K, c, hs) ==
-    IF ~(c.st = "hs" /\ c.kr) THEN [c |-> End(c), r |-> "Handshake"] ELSE KeyResponse(K, c, hs)
+(* answer_soft(): the software answer to the outstanding request, or a Failed answer when there is none, through
+   key_response: so it answers as key_response does *)
+AnswerSoft(K, c, hs) == KeyResponse(K, c, hs)
+
+(* sealable(): a seal answers Closed on an ended carrier and NotOpen before the handshake completes, before anything
+   else is looked at *)
+StageErr(c) == IF c.st = "ended" THEN "Closed" ELSE "NotOpen"
 
 (* seal_in_place(n): seal the n plaintext bytes at out[2..] as one unit of n + tag bytes, at packet number send_pn *)
 SealIn(K, c, n, cap) ==
-    IF c.st # "open" THEN [c |-> c, r |-> IF c.st = "ended" THEN "Closed" ELSE "NotOpen", n |-> 0, pn |-> -1]
-    ELSE IF n + K.tag > 65535 THEN [c |-> c, r |-> "UnitSize", n |-> 0, pn |-> -1]
+    IF n + K.tag > 65535 THEN [c |-> c, r |-> "UnitSize", n |-> 0, pn |-> -1]
     ELSE IF c.sk = NoKey THEN [c |-> c, r |-> "NotOpen", n |-> 0, pn |-> -1]
     ELSE IF cap < 2 + n + K.tag THEN [c |-> c, r |-> "NoRoom", n |-> 0, pn |-> -1]
     ELSE LET s == Rec!SealOp(c.sk, c.spn) IN
@@ -157,13 +164,15 @@ SealIn(K, c, n, cap) ==
 (* seal(frame): encode into out[2..] (fe is the encoder's outcome there: "ok", "wire" for a short buffer, "frame"
    for a frame that cannot be encoded), then seal the plen bytes written *)
 SealFrame(K, c, plen, cap, fe) ==
-    IF cap < 2 \/ fe = "wire" THEN [c |-> c, r |-> "NoRoom", n |-> 0, pn |-> -1]
+    IF c.st # "open" THEN [c |-> c, r |-> StageErr(c), n |-> 0, pn |-> -1]
+    ELSE IF cap < 2 \/ fe = "wire" THEN [c |-> c, r |-> "NoRoom", n |-> 0, pn |-> -1]
     ELSE IF fe = "frame" THEN [c |-> c, r |-> "Frame", n |-> 0, pn |-> -1]
     ELSE SealIn(K, c, plen, cap)
 
-(* seal_bytes(plain) *)
+(* seal_bytes(plain): bytes that are empty or longer than a frame are refused as a frame (Frame), the carrier lives on *)
 SealBytes(K, c, plen, cap) ==
-    IF plen = 0 \/ plen > K.maxf THEN [c |-> c, r |-> "UnitSize", n |-> 0, pn |-> -1]
+    IF c.st # "open" THEN [c |-> c, r |-> StageErr(c), n |-> 0, pn |-> -1]
+    ELSE IF plen = 0 \/ plen > K.maxf THEN [c |-> c, r |-> "Frame", n |-> 0, pn |-> -1]
     ELSE IF cap < 2 + plen THEN [c |-> c, r |-> "NoRoom", n |-> 0, pn |-> -1]
     ELSE SealIn(K, c, plen, cap)
 

@@ -55,6 +55,8 @@ inductive Err where
   | record
   | closed
   | handshake
+  /-- A key answer arrived while no key request was outstanding; nothing changed. -/
+  | noKeyRequest
   deriving DecidableEq, Repr
 
 /-- What a call answered: `Poll` (with `opened` for `Poll::Open`), an error, or `ok` for a seal. -/
@@ -105,7 +107,8 @@ structure Hs where
   rb : Nat
 
 def inLen (c : C) : Nat := c.wr - c.rd
-def free (k : Konst) (c : C) : Nat := k.inl - inLen c
+/-- `free()`: what `receive` would take now, the room left once the unit the last poll took is released. -/
+def free (k : Konst) (c : C) : Nat := k.inl - (inLen c - c.cons)
 
 /-- `release()`. -/
 def release (c : C) : C := if c.cons > 0 then { c with rd := c.rd + c.cons, cons := 0 } else c
@@ -206,21 +209,26 @@ def poll (k : Konst) (S : Strm) (c : C) (hs : Hs) : C × Res :=
   | .open_ => pollRecord k S c1
   | .hs => pollHs k S c1 hs
 
-/-- `key_response()`: refused with `Closed` (and the carrier ends) once the handshake is over. -/
+/-- `key_response()`: `Closed` on an ended carrier, checked first; `NoKeyRequest` when no key request is outstanding
+(an open carrier, or a handshake that waits for no key operation), and nothing changes; otherwise the machine's step
+and the drain of its outputs. -/
 def keyResponse (k : Konst) (c : C) (hs : Hs) : C × Res :=
-  if c.st ≠ .hs then (endC c, .err .closed)
+  if c.st = .ended then (c, .err .closed)
+  else if ¬ (c.st = .hs ∧ c.kr = true) then (c, .err .noKeyRequest)
   else
     let d := hsRun k c.out hs
     finish k { c with out := d.1 } d.2 hs
 
-/-- `answer_soft()`: with no key request outstanding the carrier ends with `Handshake`. -/
-def answerSoft (k : Konst) (c : C) (hs : Hs) : C × Res :=
-  if ¬ (c.st = .hs ∧ c.kr = true) then (endC c, .err .handshake) else keyResponse k c hs
+/-- `answer_soft()`: the software answer to the outstanding request, or a failed answer when there is none, through
+`key_response`, so it answers as `key_response` does. -/
+def answerSoft (k : Konst) (c : C) (hs : Hs) : C × Res := keyResponse k c hs
+
+/-- `sealable()`: the answer of a seal on a carrier that is not open, before anything else is looked at. -/
+def stageErr (c : C) : Err := if c.st = .ended then .closed else .notOpen
 
 /-- `seal_in_place(n)`: the unit length when it succeeds. -/
 def sealIn (k : Konst) (c : C) (n cap : Nat) : C × Res × Nat :=
-  if c.st ≠ .open_ then (c, .err (if c.st = .ended then .closed else .notOpen), 0)
-  else if 65535 < n + k.tag then (c, .err .unitSize, 0)
+  if 65535 < n + k.tag then (c, .err .unitSize, 0)
   else match c.sk with
     | none => (c, .err .notOpen, 0)
     | some s =>
@@ -239,13 +247,15 @@ inductive Fe where
 
 /-- `seal(frame)`: `plen` bytes encoded, or the encoder's refusal. -/
 def sealFrame (k : Konst) (c : C) (plen cap : Nat) (fe : Fe) : C × Res × Nat :=
-  if cap < 2 ∨ fe = .wire then (c, .err .noRoom, 0)
+  if c.st ≠ .open_ then (c, .err (stageErr c), 0)
+  else if cap < 2 ∨ fe = .wire then (c, .err .noRoom, 0)
   else if fe = .frame then (c, .err .frame, 0)
   else sealIn k c plen cap
 
-/-- `seal_bytes(plain)`. -/
+/-- `seal_bytes(plain)`: bytes that are empty or longer than a frame are refused as a frame, and the carrier lives on. -/
 def sealBytes (k : Konst) (c : C) (plen cap : Nat) : C × Res × Nat :=
-  if plen = 0 ∨ k.maxf < plen then (c, .err .unitSize, 0)
+  if c.st ≠ .open_ then (c, .err (stageErr c), 0)
+  else if plen = 0 ∨ k.maxf < plen then (c, .err .frame, 0)
   else if cap < 2 + plen then (c, .err .noRoom, 0)
   else sealIn k c plen cap
 

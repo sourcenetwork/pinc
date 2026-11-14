@@ -55,6 +55,7 @@ def resName : Res → String
     | .record => "Record"
     | .closed => "Closed"
     | .handshake => "Handshake"
+    | .noKeyRequest => "NoKeyRequest"
 
 def sendName (s : String) : Nat := if s == "d" then 0 else 1
 

@@ -9,8 +9,9 @@
 //! and again to a listener whose host does not transmit (the handshake output fills up), a record dropped, replayed,
 //! moved after the next one, with a flipped bit, reflected back to its sender, or cut at the end of the stream. The
 //! seals cover the encoder's refusals (a frame that does not encode, a buffer too short for the frame or for the tag),
-//! empty and over-long bytes, and seals before the handshake and after the end. Every call is one event with what the
-//! code answered and the state the public API shows (`free`, `pending_transmit`, `key_request`).
+//! empty and over-long bytes, and seals before the handshake and after the end, and key answers nobody asked for. Every
+//! call is one event with what the code answered and the state the public API shows (`free`, `pending_transmit`,
+//! `key_request`).
 //!
 //! The stream each end receives is written at the start of the run as its units: the offset and the value of each
 //! length (split by the lengths, from the start, as a reader does), and for a unit whose bytes are exactly the `k`-th
@@ -684,6 +685,7 @@ fn carrier_calls_match_the_models() {
                 r#""res":"NotOpen""#,
                 r#""res":"Closed""#,
                 r#""res":"Handshake""#,
+                r#""res":"NoKeyRequest""#,
                 r#""res":"kreq""#,
                 r#""res":"open""#,
                 r#""fe":"wire""#,

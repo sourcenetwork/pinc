@@ -20,8 +20,13 @@ and seals of any length into any buffer):
   and `recv_pn` is unchanged (`procRec_ok`, `procRec_auth`); no frame comes before the handshake completed
   (`poll_frame_open`);
 - a call that ends the carrier delivers nothing, opens nothing, seals nothing and leaves both packet numbers as they
-  were (`ends_change_nothing`), and on an ended carrier every call leaves it ended and delivers, opens and seals
-  nothing (`ended_stays`).
+  were (`ends_change_nothing`), and on an ended carrier a poll, a key answer and a seal answer `Closed` before anything
+  else is looked at and change nothing, and a read leaves it ended (`ended_stays`);
+- the answers of the calls: a key answer while no key request is outstanding answers `NoKeyRequest` and changes
+  nothing, an open carrier stays open (`keyResponse_no_request`); a seal before the handshake completes answers
+  `NotOpen` and changes nothing, whatever its size or buffer (`seal_not_open`); bytes that are empty or longer than a
+  frame are refused as a frame on an open carrier, which lives on (`sealBytes_size`); `free` is what `receive` takes,
+  counting the unit the last poll took as room (`receive_takes_free`).
 -/
 
 namespace Vinc.ConnectCarrier
@@ -30,56 +35,44 @@ open Vinc.Record (Key Sys sealK openK)
 /-! ## Seals -/
 
 theorem sealIn_ok (k : Konst) (c : C) (n cap : Nat) (h : (sealIn k c n cap).2.1 = .ok) :
-    c.st = .open_ ∧ n + k.tag ≤ 65535 ∧ 2 + n + k.tag ≤ cap ∧ ∃ s, c.sk = some s ∧ (sealK s.key c.spn).2 = none ∧
+    n + k.tag ≤ 65535 ∧ 2 + n + k.tag ≤ cap ∧ ∃ s, c.sk = some s ∧ (sealK s.key c.spn).2 = none ∧
       sealIn k c n cap = ({ c with sk := some (s.seal c.spn), spn := c.spn + 1 }, .ok, 2 + n + k.tag) := by
   unfold sealIn at h ⊢
-  by_cases a : c.st ≠ .open_
-  · simp [a] at h
-  · simp only [a, ite_false] at h ⊢
-    have a' : c.st = .open_ := by simpa using a
-    by_cases b : 65535 < n + k.tag
-    · simp [b] at h
-    · simp only [b, ite_false] at h ⊢
-      cases hs : c.sk with
-      | none => simp [hs] at h
-      | some s =>
-        simp only [hs] at h ⊢
-        by_cases d : cap < 2 + n + k.tag
-        · simp [d] at h
-        · simp only [d, ite_false] at h ⊢
-          cases hk : sealK s.key c.spn with
-          | mk k' r =>
-            cases r with
-            | none => exact ⟨a', by omega, by omega, s, rfl, by rw [hk], by simp⟩
-            | some e => simp only [hk] at h; cases e <;> simp at h
+  by_cases b : 65535 < n + k.tag
+  · simp [b] at h
+  · simp only [b, ite_false] at h ⊢
+    cases hs : c.sk with
+    | none => simp [hs] at h
+    | some s =>
+      simp only [hs] at h ⊢
+      by_cases d : cap < 2 + n + k.tag
+      · simp [d] at h
+      · simp only [d, ite_false] at h ⊢
+        cases hk : sealK s.key c.spn with
+        | mk k' r =>
+          cases r with
+          | none => exact ⟨by omega, by omega, s, rfl, by rw [hk], by simp⟩
+          | some e => simp only [hk] at h; cases e <;> simp at h
 
 theorem sealIn_cases (k : Konst) (c : C) (n cap : Nat) :
     (sealIn k c n cap).2.1 = .ok ∨
-    ((sealIn k c n cap).1 = c ∧ (sealIn k c n cap).2.1 ∈ [.err .closed, .err .notOpen, .err .unitSize, .err .noRoom]) ∨
-    ((sealIn k c n cap).1 = endC c ∧ (sealIn k c n cap).2.1 ∈ [.err .keyLimit, .err .record] ∧ c.st = .open_) := by
+    ((sealIn k c n cap).1 = c ∧ (sealIn k c n cap).2.1 ∈ [.err .notOpen, .err .unitSize, .err .noRoom]) ∨
+    ((sealIn k c n cap).1 = endC c ∧ (sealIn k c n cap).2.1 ∈ [.err .keyLimit, .err .record] ∧ c.sk.isSome) := by
   unfold sealIn
-  by_cases a : c.st = .open_
-  · have a2 : ¬ c.st ≠ .open_ := by simpa using a
-    simp only [a2, ite_false]
-    by_cases b : 65535 < n + k.tag
-    · right; left; simp [b]
-    · simp only [b, ite_false]
-      cases hs : c.sk with
-      | none => right; left; simp
-      | some s =>
-        by_cases d : cap < 2 + n + k.tag
-        · right; left; simp [d]
-        · simp only [d, ite_false]
-          cases hk : sealK s.key c.spn with
-          | mk k' r =>
-            cases r with
-            | none => left; rfl
-            | some e => right; right; cases e <;> simp [a]
-  · right; left
-    split
-    · refine ⟨rfl, ?_⟩
-      by_cases e : c.st = .ended <;> simp [e]
-    · contradiction
+  by_cases b : 65535 < n + k.tag
+  · right; left; simp [b]
+  · simp only [b, ite_false]
+    cases hs : c.sk with
+    | none => right; left; simp
+    | some s =>
+      by_cases d : cap < 2 + n + k.tag
+      · right; left; simp [d]
+      · simp only [d, ite_false]
+        cases hk : sealK s.key c.spn with
+        | mk k' r =>
+          cases r with
+          | none => left; rfl
+          | some e => right; right; cases e <;> simp
 
 /-- A refusal of a seal for its stage, its size or its room changes nothing. -/
 theorem sealIn_refused (k : Konst) (c : C) (n cap : Nat) (e : Err)
@@ -101,21 +94,27 @@ theorem sealIn_limit (k : Konst) (c : C) (n cap : Nat) (e : Err)
 theorem sealFrame_refused (k : Konst) (c : C) (plen cap : Nat) (fe : Fe) (h : fe ≠ .ok ∨ cap < 2) :
     (sealFrame k c plen cap fe).1 = c ∧ (sealFrame k c plen cap fe).2.1 ≠ .ok := by
   unfold sealFrame
-  by_cases a : cap < 2 ∨ fe = .wire
-  · simp [a]
-  · simp only [a, ite_false]
-    have : fe = .frame := by
-      cases fe <;> simp_all
-    simp [this]
+  by_cases s : c.st ≠ .open_
+  · simp [s]
+  · simp only [s, ite_false]
+    by_cases a : cap < 2 ∨ fe = .wire
+    · simp [a]
+    · simp only [a, ite_false]
+      have : fe = .frame := by
+        cases fe <;> simp_all
+      simp [this]
 
 theorem sealBytes_refused (k : Konst) (c : C) (plen cap : Nat) (h : plen = 0 ∨ k.maxf < plen ∨ cap < 2 + plen) :
     (sealBytes k c plen cap).1 = c ∧ (sealBytes k c plen cap).2.1 ≠ .ok := by
   unfold sealBytes
-  by_cases a : plen = 0 ∨ k.maxf < plen
-  · simp [a]
-  · simp only [a, ite_false]
-    have : cap < 2 + plen := by omega
-    simp [this]
+  by_cases s : c.st ≠ .open_
+  · simp [s]
+  · simp only [s, ite_false]
+    by_cases a : plen = 0 ∨ k.maxf < plen
+    · simp [a]
+    · simp only [a, ite_false]
+      have : cap < 2 + plen := by omega
+      simp [this]
 
 /-! ## Reachable carriers -/
 
@@ -225,24 +224,24 @@ theorem kinv_poll (k : Konst) (S : Strm) (c : C) (hs : Hs) (hi : KInv k c) : KIn
 theorem kinv_keyResponse (k : Konst) (c : C) (hs : Hs) (hi : KInv k c) : KInv k (keyResponse k c hs).1 := by
   unfold keyResponse
   split
-  · exact kinv_endC k c
-  · rename_i a
-    have a' : c.st = .hs := by simpa using a
-    exact kinv_finish k _ _ hs (kinv_keep k _ _ hi rfl rfl (fun h => h)) a'
+  · exact hi
+  · split
+    · exact hi
+    · rename_i a
+      have a' : c.st = .hs := Classical.byContradiction fun hc => a (fun h => hc h.1)
+      exact kinv_finish k _ _ hs (kinv_keep k _ _ hi rfl rfl (fun h => h)) a'
 
-theorem kinv_answerSoft (k : Konst) (c : C) (hs : Hs) (hi : KInv k c) : KInv k (answerSoft k c hs).1 := by
-  unfold answerSoft
-  split
-  · exact kinv_endC k c
-  · exact kinv_keyResponse k c hs hi
+theorem kinv_answerSoft (k : Konst) (c : C) (hs : Hs) (hi : KInv k c) : KInv k (answerSoft k c hs).1 :=
+  kinv_keyResponse k c hs hi
 
 theorem kinv_sealIn (k : Konst) (c : C) (n cap : Nat) (hi : KInv k c) : KInv k (sealIn k c n cap).1 := by
   rcases sealIn_cases k c n cap with h | ⟨h, -⟩ | ⟨h, -⟩
-  · obtain ⟨hst, -, -, s, hs, hok, he⟩ := sealIn_ok k c n cap h
+  · obtain ⟨-, -, s, hs, hok, he⟩ := sealIn_ok k c n cap h
     rw [he]
     obtain ⟨⟨b, hb⟩, hl, hlast⟩ := hi.sk s hs
     obtain ⟨-, -, -, hk⟩ := Record.seal_ok_cases s.key c.spn hok
-    refine ⟨fun h' => by simp [hst] at h', fun s' hs' => ?_⟩
+    -- a carrier still in its handshake holds no send key, so it never gets here
+    refine ⟨fun h' => absurd ((hi.hs (by simpa using h')).2.symm.trans hs) (by simp), fun s' hs' => ?_⟩
     simp only [Option.some.injEq] at hs'
     subst hs'
     refine ⟨⟨b, Record.Reach.sealStep c.spn hb⟩, ?_, ?_⟩
@@ -266,7 +265,9 @@ theorem kinv_sealFrame (k : Konst) (c : C) (plen cap : Nat) (fe : Fe) (hi : KInv
   · exact hi
   · split
     · exact hi
-    · exact kinv_sealIn k c plen cap hi
+    · split
+      · exact hi
+      · exact kinv_sealIn k c plen cap hi
 
 theorem kinv_sealBytes (k : Konst) (c : C) (plen cap : Nat) (hi : KInv k c) :
     KInv k (sealBytes k c plen cap).1 := by
@@ -275,7 +276,9 @@ theorem kinv_sealBytes (k : Konst) (c : C) (plen cap : Nat) (hi : KInv k c) :
   · exact hi
   · split
     · exact hi
-    · exact kinv_sealIn k c plen cap hi
+    · split
+      · exact hi
+      · exact kinv_sealIn k c plen cap hi
 
 theorem kinv_dial (k : Konst) (hs : Hs) : KInv k (dial k hs).1 := by
   unfold dial
@@ -493,9 +496,9 @@ theorem ends_change_nothing (k : Konst) (S : Strm) (c : C) (hs : Hs) (hne : c.st
   · unfold answerSoft keyResponse at h ⊢
     revert h
     split
-    · intro _; simp [Delivers, endC]
+    · rename_i hen; exact absurd hen hne
     · split
-      · intro _; simp [Delivers, endC]
+      · intro h; exact absurd h hne
       · have hc' : ({ c with out := (hsRun k c.out hs).1 } : C).st ≠ .ended := hne
         rcases finish_shape k _ (hsRun k c.out hs).2 hs hc' with ⟨e, he, hre⟩ | hn
         · rw [he]; intro _
@@ -507,53 +510,69 @@ theorem ends_change_nothing (k : Konst) (S : Strm) (c : C) (hs : Hs) (hne : c.st
             · intro hf; cases hf
           cases e <;> simp_all [Delivers]
         · intro h; exact absurd h hn
-  · rcases sealIn_cases k c n cap with h1 | ⟨h1, -⟩ | ⟨h1, -⟩
-    · obtain ⟨hst, -⟩ := sealIn_ok k c n cap h1
-      obtain ⟨-, -, -, s, -, -, he⟩ := sealIn_ok k c n cap h1
-      rw [he] at h; simp [hst] at h
+  · rcases sealIn_cases k c n cap with h1 | ⟨h1, -⟩ | ⟨h1, h2, -⟩
+    · obtain ⟨-, -, s, -, -, he⟩ := sealIn_ok k c n cap h1
+      rw [he] at h; exact absurd h hne
     · rw [h1] at h; exact absurd h hne
-    · rcases sealIn_cases k c n cap with h2 | -
-      · obtain ⟨-, -, -, s, -, -, he⟩ := sealIn_ok k c n cap h2
-        rw [he] at h1; simp [endC] at h1
-      · rw [h1]; refine ⟨fun h3 => ?_, rfl, rfl, rfl⟩
-        rcases sealIn_cases k c n cap with h4 | ⟨-, h5⟩ | ⟨-, h5, -⟩
-        · obtain ⟨-, -, -, s, -, -, he⟩ := sealIn_ok k c n cap h4
-          rw [he] at h1; simp [endC] at h1
-        · rw [h3] at h5; simp at h5
-        · rw [h3] at h5; simp at h5
+    · rw [h1]; refine ⟨fun h3 => ?_, rfl, rfl, rfl⟩
+      rw [h3] at h2; simp at h2
 
-/-- On an ended carrier every call leaves it ended and delivers, opens and seals nothing; a poll answers `Closed`,
-and the packet numbers stay. -/
+/-- On an ended carrier a poll, a key answer and a seal of either kind answer `Closed` before anything else is looked
+at and change nothing (the poll drops the unit it had taken); a read leaves it ended with its packet numbers. -/
 theorem ended_stays (k : Konst) (S : Strm) (c : C) (hs : Hs) (he : c.st = .ended) :
     poll k S c hs = (release c, .err .closed) ∧
-    (answerSoft k c hs).1.st = .ended ∧ ¬ Delivers (answerSoft k c hs).2 ∧
-    (keyResponse k c hs).1.st = .ended ∧ (keyResponse k c hs).2 = .err .closed ∧
-    (∀ n cap, sealIn k c n cap = (c, .err .closed, 0)) ∧
-    (∀ plen cap fe, (sealFrame k c plen cap fe).1 = c ∧ (sealFrame k c plen cap fe).2.1 ≠ .ok) ∧
-    (∀ plen cap, (sealBytes k c plen cap).1 = c ∧ (sealBytes k c plen cap).2.1 ≠ .ok) ∧
+    keyResponse k c hs = (c, .err .closed) ∧ answerSoft k c hs = (c, .err .closed) ∧
+    (∀ plen cap fe, sealFrame k c plen cap fe = (c, .err .closed, 0)) ∧
+    (∀ plen cap, sealBytes k c plen cap = (c, .err .closed, 0)) ∧
     (∀ n, (receive k c n).2.st = .ended ∧ (receive k c n).2.rpn = c.rpn ∧ (receive k c n).2.spn = c.spn) := by
-  have hsi : ∀ n cap, sealIn k c n cap = (c, .err .closed, 0) := by
-    intro n cap; unfold sealIn; simp [he]
-  refine ⟨poll_ended k S c hs he, ?_, ?_, ?_, ?_, hsi, fun plen cap fe => ?_, fun plen cap => ?_, fun n => ?_⟩
-  · unfold answerSoft; simp [he, endC]
-  · unfold answerSoft; simp [he, Delivers]
-  · unfold keyResponse; simp [he, endC]
-  · unfold keyResponse; simp [he]
-  · unfold sealFrame
-    split
-    · simp
-    · split
-      · simp
-      · rw [hsi]; simp
-  · unfold sealBytes
-    split
-    · simp
-    · split
-      · simp
-      · rw [hsi]; simp
+  have hk : keyResponse k c hs = (c, .err .closed) := by
+    unfold keyResponse; rw [if_pos he]
+  refine ⟨poll_ended k S c hs he, hk, hk, fun plen cap fe => ?_, fun plen cap => ?_, fun n => ?_⟩
+  · unfold sealFrame stageErr; simp [he]
+  · unfold sealBytes stageErr; simp [he]
   · rw [(receive_spec k c n).2]
     obtain ⟨-, -, -, h4, -, h6, h7, -⟩ := release_fields c
     exact ⟨by rw [setW_st, h4, he], h7, h6⟩
+
+/-! ## The answers of the calls -/
+
+/-- A key answer while no key request is outstanding answers `NoKeyRequest` and changes nothing: an open carrier
+stays open. -/
+theorem keyResponse_no_request (k : Konst) (c : C) (hs : Hs) (hne : c.st ≠ .ended)
+    (hno : ¬ (c.st = .hs ∧ c.kr = true)) :
+    keyResponse k c hs = (c, .err .noKeyRequest) ∧ answerSoft k c hs = (c, .err .noKeyRequest) := by
+  have h : keyResponse k c hs = (c, .err .noKeyRequest) := by
+    unfold keyResponse
+    rw [if_neg hne, if_pos hno]
+  exact ⟨h, h⟩
+
+/-- A seal before the handshake completes answers `NotOpen` and changes nothing, whatever its size or buffer. -/
+theorem seal_not_open (k : Konst) (c : C) (hc : c.st = .hs) :
+    (∀ plen cap fe, sealFrame k c plen cap fe = (c, .err .notOpen, 0)) ∧
+    (∀ plen cap, sealBytes k c plen cap = (c, .err .notOpen, 0)) := by
+  refine ⟨fun plen cap fe => ?_, fun plen cap => ?_⟩
+  · unfold sealFrame stageErr; simp [hc]
+  · unfold sealBytes stageErr; simp [hc]
+
+/-- Bytes that are empty or longer than a frame are refused as a frame on an open carrier, which lives on. -/
+theorem sealBytes_size (k : Konst) (c : C) (plen cap : Nat) (hc : c.st = .open_) (h : plen = 0 ∨ k.maxf < plen) :
+    sealBytes k c plen cap = (c, .err .frame, 0) := by
+  unfold sealBytes
+  simp [hc, h]
+
+theorem free_release (k : Konst) (c : C) : free k c = k.inl - inLen (release c) := by
+  unfold free inLen release
+  split
+  · try dsimp only
+    omega
+  · rename_i h
+    have : c.cons = 0 := by omega
+    simp [this]
+
+/-- `free()` is what `receive` takes when it is offered at least that much: the unit the last poll took counts as
+room. -/
+theorem receive_takes_free (k : Konst) (c : C) (n : Nat) : (receive k c n).1 = min n (free k c) := by
+  rw [free_release]; rfl
 
 #audit_axioms Vinc.ConnectCarrier.carrier_no_nonce_reuse
 #audit_axioms Vinc.ConnectCarrier.carrier_pns
@@ -565,5 +584,9 @@ theorem ended_stays (k : Konst) (S : Strm) (c : C) (hs : Hs) (he : c.st = .ended
 #audit_axioms Vinc.ConnectCarrier.poll_frame_open
 #audit_axioms Vinc.ConnectCarrier.ends_change_nothing
 #audit_axioms Vinc.ConnectCarrier.ended_stays
+#audit_axioms Vinc.ConnectCarrier.keyResponse_no_request
+#audit_axioms Vinc.ConnectCarrier.seal_not_open
+#audit_axioms Vinc.ConnectCarrier.sealBytes_size
+#audit_axioms Vinc.ConnectCarrier.receive_takes_free
 
 end Vinc.ConnectCarrier
