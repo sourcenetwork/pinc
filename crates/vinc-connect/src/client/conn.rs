@@ -219,9 +219,9 @@ impl<P: Provider> Rly<P> {
             carrier: None,
             kind: Kind::Tcp,
             generation: 0,
-            out: buf(),
+            out: buf::<OUT_LEN>(cfg.is_some()),
             out_len: 0,
-            bbuf: buf(),
+            bbuf: buf::<MAX_FRAME_LEN>(cfg.is_some()),
             bst: BatchState::new(),
             q: held_q(),
             keyreq: false,
@@ -237,35 +237,59 @@ impl<P: Provider> Rly<P> {
     }
 }
 
-/// A buffer of a relay's. With `alloc` it lives on the heap, so a relay is a few kilobytes and the layer builds on a small
-/// stack.
+/// A buffer of a relay's, `N` bytes. With `alloc` it lives on the heap, so a relay is a few kilobytes and the layer builds
+/// on a small stack, and a relay slot with no relay named (its configuration is fixed when the layer is built) has an
+/// empty one: it is never carried, so it never writes one.
 #[cfg(feature = "alloc")]
-pub(super) type Buf<const N: usize> = alloc::boxed::Box<[u8; N]>;
+pub(super) type Buf<const N: usize> = alloc::boxed::Box<[u8]>;
 #[cfg(not(feature = "alloc"))]
 pub(super) type Buf<const N: usize> = [u8; N];
 
 #[cfg(feature = "alloc")]
-fn buf<const N: usize>() -> Buf<N> {
-    match alloc::vec![0u8; N].into_boxed_slice().try_into() {
-        Ok(b) => b,
-        Err(_) => alloc::boxed::Box::new([0; N]),
+fn buf<const N: usize>(named: bool) -> Buf<N> {
+    if named {
+        alloc::vec![0u8; N].into_boxed_slice()
+    } else {
+        alloc::boxed::Box::default()
     }
 }
 
 #[cfg(not(feature = "alloc"))]
-const fn buf<const N: usize>() -> Buf<N> {
+const fn buf<const N: usize>(_: bool) -> Buf<N> {
     [0; N]
 }
 
-/// The packets held for a relay's carrier.
+/// The packets held for a relay's carrier. With `alloc` the queue is made when the first packet is held, so a relay
+/// that never queues (or a slot with no relay) holds none of its memory.
 #[cfg(feature = "alloc")]
-pub(super) type HeldQ = alloc::boxed::Box<super::queue::HeldQueue>;
+pub(super) struct HeldQ(Option<alloc::boxed::Box<super::queue::HeldQueue>>);
 #[cfg(not(feature = "alloc"))]
 pub(super) type HeldQ = super::queue::HeldQueue;
 
+/// What a queue not made yet reads as.
 #[cfg(feature = "alloc")]
-fn held_q() -> HeldQ {
-    alloc::boxed::Box::new(super::queue::HeldQueue::new())
+static NO_HELD: super::queue::HeldQueue = super::queue::HeldQueue::new();
+
+#[cfg(feature = "alloc")]
+impl core::ops::Deref for HeldQ {
+    type Target = super::queue::HeldQueue;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap_or(&NO_HELD)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl core::ops::DerefMut for HeldQ {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+            .get_or_insert_with(|| alloc::boxed::Box::new(super::queue::HeldQueue::new()))
+    }
+}
+
+#[cfg(feature = "alloc")]
+const fn held_q() -> HeldQ {
+    HeldQ(None)
 }
 
 #[cfg(not(feature = "alloc"))]

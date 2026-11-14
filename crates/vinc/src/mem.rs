@@ -3,18 +3,22 @@
 //! The endpoint's tables are const-generic, so the driver builds one of a ladder of shapes: the smallest of
 //! [`CAPACITIES`](crate::CAPACITIES) that holds [`Limits::connections`] sessions. Every shape has [`STREAMS`] stream slots per session
 //! and [`RING`] chunk entries per stream half. What varies at run time is the pool of 16 KiB chunks each session may
-//! use ([`Limits::pool_chunks`]). The endpoint owns all of it: it is allocated once, when the endpoint is built, on the
-//! heap and piece by piece, and freed when the endpoint is dropped; nothing is leaked and nothing is shared.
+//! use ([`Limits::pool_chunks`]). The endpoint owns its tables: they are allocated on the heap and piece by piece, and
+//! freed when the endpoint is dropped; nothing is leaked. What the endpoints of one thread share is what they hold
+//! only for a moment: the receive and transmit buffers of their drivers and the state machines of handshakes in
+//! progress.
 //!
 //! # Memory
 //!
 //! Per session, every slot of the shape reserves a connection, a stream table of [`STREAMS`] slots (a slot is a few KiB
-//! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of
-//! [`Limits::pool_chunks`] chunks of 16 KiB. The pool, the stream table and the table of sent packets are zero-filled
-//! or reserved memory the system commits only as it is used, so an idle session costs address space and almost no
-//! resident memory, and a busy one costs what its streams and packets in flight touched. The shape is rounded up to
-//! the next capacity of the ladder, which doubles at each step: ask for what you need, not for a round number above
-//! it.
+//! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of up to
+//! [`Limits::pool_chunks`] chunks of 16 KiB. The stream table and the table of sent packets are reserved memory the
+//! system commits only as it is used. The pool makes a chunk when the session first needs it and keeps it while the
+//! session is busy; when the session's last stream ends it frees its idle chunks, so a quiet session holds
+//! what it uses, on any allocator. A session that moved 64 KiB and went quiet holds about 96 KiB of the client's
+//! memory, and a client endpoint with no session about 620 KiB (`tests/vinc_client_memory.rs` holds them to 112 and 704
+//! KiB). The shape is rounded up to the next capacity of the ladder, which doubles at each step: ask for what you
+//! need, not for a round number above it.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
 
@@ -49,10 +53,10 @@ pub struct Limits {
     /// The most sessions at once (at most [`MAX_CONNECTIONS`]). The memory for the next capacity of [`CAPACITIES`](crate::CAPACITIES)
     /// at or above it is reserved when the engine starts; see the module docs for what that costs.
     pub connections: usize,
-    /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 1024 is 16 MiB:
-    /// the pool of every session is reserved at start (address space; memory is used as chunks are), so raise it for a
-    /// few busy sessions, not for thousands. Streams that move data at once are charged their whole window, so a path
-    /// whose bandwidth times round trip is above half the pool needs more.
+    /// The 16 KiB chunks one session may hold for its streams and datagrams (8 to 65,535). The default of 1024 is 16 MiB,
+    /// a ceiling: a busy session holds the chunks it came to use and a quiet one (no stream open) only those still in
+    /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
+    /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice the
     /// delivery rate while the stream is read, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at

@@ -1138,3 +1138,7 @@ path = "trace_reach.rs"
 [[test]]
 name = "trace_rtt"
 path = "trace_rtt.rs"
+
+[[test]]
+name = "vinc_client_memory"
+path = "vinc_client_memory.rs"

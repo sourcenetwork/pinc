@@ -175,7 +175,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
 
     fn offer(&mut self, i: usize, frame: &Frame<'_>) -> Result<Offer, crate::carrier::FrameError> {
         let r = self.rly.get_mut(i).ok_or(crate::carrier::FrameError::NoRoom)?;
-        let mut b = BatchBuilder::resume(r.bbuf.as_mut_slice(), r.bst);
+        let mut b = BatchBuilder::resume(r.bbuf.as_mut(), r.bst);
         let o = b.offer(frame)?;
         if o == Offer::Added {
             r.bst = b.state();
@@ -215,7 +215,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             r.bst = BatchState::new();
             return false;
         };
-        let Ok(Some(plain)) = BatchBuilder::resume(r.bbuf.as_mut_slice(), r.bst).finish() else {
+        let Ok(Some(plain)) = BatchBuilder::resume(r.bbuf.as_mut(), r.bst).finish() else {
             r.bst = BatchState::new();
             return false;
         };
