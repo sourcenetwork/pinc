@@ -239,6 +239,10 @@ name = "membership_incarnation"
 path = "membership_incarnation.rs"
 
 [[test]]
+name = "membership_stale_view"
+path = "membership_stale_view.rs"
+
+[[test]]
 name = "sim_engine"
 path = "sim_engine.rs"
 

@@ -5,9 +5,11 @@
 //! highest incarnation winning, with removals held.
 //!
 //! A snapshot never removes a member on its own. A complete snapshot that omits a member starts that member's lease
-//! clock; the member stays in the view, with no event, and leaves it only when the hub reports it down (a delta or
-//! a DOWN of the same or a newer incarnation), or when a full lease passes without any hub listing it again. Removals
-//! found while a quiet window is open (after a late timer or a partition heal) are re-checked at its end.
+//! clock (the complete snapshot of the confirmed home does so for every member of the view it omits, whichever hub's
+//! copy the member came from); the member stays in the view, with no event, and leaves it only when the hub reports
+//! it down (a delta or a DOWN of the same or a newer incarnation), or when a full lease passes without any hub
+//! listing it again. Removals found while a quiet window is open (after a late timer or a partition heal) are
+//! re-checked at its end.
 //!
 //! Invariants: the view epoch only increases and increases once per batch of changes; the view never lists the node
 //! itself; a revoked node is never listed; every removal goes through [`Membership::recompute_one`], the one place
@@ -353,6 +355,9 @@ impl Membership {
             if !s.partial {
                 self.drop_gone(hub, round);
                 changed |= self.mark_absent(h, now, hub, round);
+                if !self.is_hub && self.primary.as_ref() == Some(hub) {
+                    changed |= self.mark_view_absent(h, now, hub, round);
+                }
             }
             if self.primary.as_ref() == Some(hub) {
                 // A snapshot means a fresh attachment: the hub forgot our subscriptions with the old session.
@@ -394,6 +399,39 @@ impl Membership {
                 marked = true;
             }
             if marked {
+                self.trace(Trace::Absent { member: m });
+                changed |= self.recompute_one(h, now, &m);
+            }
+        }
+        changed
+    }
+
+    /// A complete snapshot of the confirmed home listed round `round`: it is the whole view, so every view member it
+    /// does not list gets the omission lease clock, whichever hub's copy it came from. A member the home's copy never
+    /// held gets an entry in it, carrying the view's record, that only the clock gives life to; `sweep_absent` ends
+    /// it. With the copy full there is no room for the clock and the member is recomputed at once.
+    fn mark_view_absent<H: Host>(&mut self, h: &mut H, now: Nanos, hub: &NodeId, round: u32) -> bool {
+        let mut changed = false;
+        let mut cur: Option<NodeId> = None;
+        while let Some(m) = next_key(&self.members, cur.as_ref()) {
+            cur = Some(m);
+            let Some(rec) = self.members.get(&m).map(|e| e.rec) else {
+                continue;
+            };
+            let Some(c) = self.hv.get_mut(hub) else { break };
+            if !c.entries.contains_key(&m) {
+                if c.entries.len() >= MAX_TABLE {
+                    changed |= self.recompute_one(h, now, &m);
+                    continue;
+                }
+                c.entries.insert(
+                    m,
+                    CopyEntry {
+                        rec,
+                        round: round.wrapping_sub(1),
+                        absent_since: Some(now),
+                    },
+                );
                 self.trace(Trace::Absent { member: m });
                 changed |= self.recompute_one(h, now, &m);
             }
