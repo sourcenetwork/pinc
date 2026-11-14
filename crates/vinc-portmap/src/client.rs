@@ -13,7 +13,8 @@
 //! private, [`addr::external_ok`]) is refused: it is not held, and the client goes on to the next protocol.
 //!
 //! **Holding.** A grant is a lease that started when its request first left, so it ends on the client's clock no
-//! later than on the gateway's ([`crate::lease`]). The client renews half way with the protocol that granted
+//! later than on the gateway's ([`crate::lease`]); it is as long as the shorter of what the gateway granted and what
+//! was asked. The client renews half way with the protocol that granted
 //! it; a renewal that fails is tried again half way to the end, and a lease that reaches its end is gone: the client
 //! drops the mapping and starts asking from the beginning.
 //!
@@ -79,10 +80,14 @@ pub struct Config {
 }
 
 impl Config {
-    /// A client for the socket `local` behind `gateway`, asking for [`LIFETIME`].
+    /// A client for the socket `local` behind `gateway`, asking for [`LIFETIME`]. An IPv4-mapped IPv6 gateway is
+    /// the IPv4 address it maps, so its answers are told from the requests it was sent.
     pub const fn new(gateway: Option<IpAddr>, local: SocketAddr, nonce: [u8; 12]) -> Self {
         Self {
-            gateway,
+            gateway: match gateway {
+                Some(g) => Some(g.to_canonical()),
+                None => None,
+            },
             local,
             lifetime: LIFETIME,
             nonce,
@@ -331,6 +336,8 @@ impl PortMap {
     }
 
     fn grant(&mut self, proto: Proto, ext: SocketAddr, lifetime: u32, now: u64) {
+        // A gateway may grant more than was asked: the lease is the shorter, so a restart is noticed at the renewal.
+        let lifetime = lifetime.min(self.cfg.lifetime.max(1));
         self.held = Some(Lease {
             proto,
             ext,

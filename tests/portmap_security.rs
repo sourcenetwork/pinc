@@ -570,3 +570,31 @@ fn a_restart_of_a_upnp_mapping_searches_again_and_a_stopped_client_stays_stopped
     assert_eq!(sent(&mut pm), vec![]);
     assert_eq!(pm.poll_timeout(), None);
 }
+
+#[test]
+fn a_grant_longer_than_asked_is_scheduled_as_asked() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 86_400));
+    assert_eq!(
+        pm.poll_timeout(),
+        Some(T0 + 3600 * SEC),
+        "a day-long grant renews at half the lifetime asked (7200 s), not at 12 hours"
+    );
+    // a shorter grant is kept as granted
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 120));
+    assert_eq!(pm.poll_timeout(), Some(T0 + 60 * SEC));
+}
+
+#[test]
+fn an_ipv4_mapped_gateway_is_the_ipv4_address_it_maps() {
+    let mapped = IpAddr::V6(GW.to_ipv6_mapped());
+    let mut pm = client(Some(mapped), local());
+    let out = sent(&mut pm);
+    assert_eq!(out[0].0, gw(), "requests go to the IPv4 address");
+    assert!(pm.owns(gw(), &[2; 60]), "its answers are the gateway's");
+    let v6_source = SocketAddr::new(mapped, PORT);
+    assert!(pm.owns(v6_source, &[2; 60]), "a mapped source is the same address");
+}
