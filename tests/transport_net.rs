@@ -320,15 +320,19 @@ fn a_path_that_never_answers_gets_nine_small_probes_and_stays_unvalidated() {
     });
 }
 
+/// A PING on a standby path keeps it alive and moves neither its round trip nor the choice of the active path; a
+/// challenge then measures it, and once faster it takes over.
+///
+/// The active route is 20 ms: a challenge reads a path as the time since the last datagram left on it, as the
+/// reference model reads it, so the 200 ms standby route reads about 100 ms (its challenges leave 33 and 67 ms apart).
+/// Against a 200 ms active route that reading would win the switch at once and there would be no standby path. Only
+/// this end probes: with both ends probing, this end's answer to the peer's challenge can leave on the path just
+/// before the reading and make it near zero.
 #[test]
 fn a_ping_on_a_standby_path_keeps_it_alive_and_leaves_its_round_trip_and_the_choice_alone() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);
         let (mut sa, mut sb) = (Store::new(true), Store::new(false));
-        // Active path: 20 ms round trip. Standby path: 200 ms, which a challenge reads as the time since the last
-        // datagram left on it (as the reference model does): about 100 ms, as the challenges leave 33 and 67 ms apart.
-        // That stays slower than the active path; only this end probes, so no answer to the peer's challenges
-        // leaves just before the reading.
         let mut link = Link::new(18, Params::new(10 * MS));
         link.add_route(PathId(3), PathId(4), Params::new(100 * MS), Params::new(100 * MS));
         let mut net = connected(&mut w, &mut sa, &mut sb, link);
