@@ -7,8 +7,10 @@
 //! the role if it is still waiting.
 //!
 //! Invariants: a ticket names its slot and the slot's generation, so a notify for a ticket whose future is gone does
-//! nothing; a slot is released exactly once, by the future that allocated it; the queue holds each slot at most once, so
-//! it never outgrows the slab, and the slab never outgrows the most futures that waited at once.
+//! nothing; a slot is released exactly once, by the future that allocated it; the queue holds whole tickets, at most one
+//! per live future, so a future that reuses a released slot queues behind the ones already waiting and the baton skips
+//! the entry of a released one; stale entries are dropped when the queue outgrows twice the slab, so it stays within that
+//! size, and the slab never outgrows the most futures that waited at once.
 
 use std::collections::VecDeque;
 use std::task::Waker;
@@ -33,7 +35,7 @@ struct Slot {
 pub(crate) struct Standby {
     slots: Vec<Slot>,
     free: Vec<u32>,
-    queue: VecDeque<u32>,
+    queue: VecDeque<Ticket>,
 }
 
 impl Standby {
@@ -50,6 +52,9 @@ impl Standby {
             live: true,
             ..Slot::default()
         });
+        // The queue never outgrows twice the slab, so arming allocates nothing once the slab has its size.
+        self.queue
+            .reserve((self.slots.len().saturating_mul(2) + 1).saturating_sub(self.queue.len()));
         Ticket { idx, gen_: 0 }
     }
 
@@ -67,8 +72,18 @@ impl Standby {
         }
         if !s.queued {
             s.queued = true;
-            self.queue.push_back(t.idx);
+            if self.queue.len() >= self.slots.len().saturating_mul(2) {
+                self.drop_stale();
+            }
+            self.queue.push_back(t);
         }
+    }
+
+    /// Drop the queue entries whose future is gone.
+    fn drop_stale(&mut self) {
+        let slots = &self.slots;
+        self.queue
+            .retain(|t| slots.get(t.idx as usize).is_some_and(|s| s.live && s.gen_ == t.gen_));
     }
 
     /// Wake `t`'s future if it is armed.
@@ -80,14 +95,10 @@ impl Standby {
 
     /// Wake the oldest armed ticket, to offer it the driving role.
     pub(crate) fn baton(&mut self) {
-        while let Some(idx) = self.queue.pop_front() {
-            let Some(s) = self.slots.get_mut(idx as usize) else {
-                continue;
-            };
+        while let Some(t) = self.queue.pop_front() {
+            let Some(s) = self.slot(t) else { continue };
             s.queued = false;
-            if s.live
-                && let Some(w) = s.waker.take()
-            {
+            if let Some(w) = s.waker.take() {
                 w.wake();
                 return;
             }
@@ -112,6 +123,7 @@ impl Standby {
             s.live = false;
             s.gen_ = s.gen_.wrapping_add(1);
             s.waker = None;
+            s.queued = false;
             self.free.push(idx);
         }
     }
@@ -257,9 +269,10 @@ pub(crate) mod trace {
             self.s.free.clone()
         }
 
-        /// The queue of those waiting for the driving role, front first.
-        pub fn queue(&self) -> Vec<u32> {
-            self.s.queue.iter().copied().collect()
+        /// The queue of those waiting for the driving role as tickets (slot and generation), front first; the entry of a
+        /// released ticket stays until the baton or a compaction drops it.
+        pub fn queue(&self) -> Vec<(u32, u32)> {
+            self.s.queue.iter().map(|t| (t.idx, t.gen_)).collect()
         }
     }
 }

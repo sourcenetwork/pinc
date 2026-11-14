@@ -9,10 +9,11 @@
 //! woke, in order.
 //!
 //! The test compares every call with a naive slab (the same rules over plain vectors, written from the module's
-//! docs and the code's order: the queue is of slots, and a reused slot keeps its place) and checks the documented
-//! invariants itself: the queue holds each slot at most once and exactly the queued ones, a waker only on a live
-//! queued slot, the free stack exactly the slots not live, the slab as long as the most tickets held at once, a call
-//! with a stale ticket changes nothing, a released ticket is dead.
+//! docs and the code's order: the queue is of tickets, a reused slot queues behind the futures already waiting, and
+//! the baton skips the entry of a released ticket) and checks the documented invariants itself: the live entries of
+//! the queue are exactly the queued slots, once each, a waker only on a live queued slot, the free stack exactly the
+//! slots not live, the slab as long as the most tickets held at once, the queue within twice the slab, a call with a
+//! stale ticket changes nothing, a released ticket is dead.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -40,7 +41,7 @@ const HELD: usize = 6;
 struct Naive {
     slots: Vec<StandbySlot>,
     free: Vec<u32>,
-    queue: Vec<u32>,
+    queue: Vec<(u32, u32)>,
 }
 
 impl Naive {
@@ -71,7 +72,12 @@ impl Naive {
         s.waker = Some(w);
         if !s.queued {
             s.queued = true;
-            self.queue.push(t.0);
+            if self.queue.len() >= self.slots.len() * 2 {
+                let slots = self.slots.clone();
+                self.queue
+                    .retain(|q| slots.get(q.0 as usize).is_some_and(|s| s.live && s.generation == q.1));
+            }
+            self.queue.push(t);
         }
     }
     fn notify(&mut self, t: (u32, u32)) -> Vec<u32> {
@@ -82,12 +88,13 @@ impl Naive {
     }
     fn baton(&mut self) -> Vec<u32> {
         while !self.queue.is_empty() {
-            let i = self.queue.remove(0);
-            let s = &mut self.slots[i as usize];
+            let q = self.queue.remove(0);
+            if !self.valid(q) {
+                continue;
+            }
+            let s = &mut self.slots[q.0 as usize];
             s.queued = false;
-            if s.live
-                && let Some(w) = s.waker.take()
-            {
+            if let Some(w) = s.waker.take() {
                 return vec![w];
             }
         }
@@ -112,6 +119,7 @@ impl Naive {
         s.live = false;
         s.generation = s.generation.wrapping_add(1);
         s.waker = None;
+        s.queued = false;
         self.free.push(t.0);
     }
 }
@@ -131,7 +139,7 @@ fn view(p: &StandbyProbe) -> (String, Naive) {
             .collect::<Vec<_>>()
             .join(","),
         n.free,
-        n.queue
+        n.queue.iter().map(|t| [t.0, t.1]).collect::<Vec<_>>()
     );
     (json, n)
 }
@@ -141,10 +149,13 @@ fn check(n: &Naive, hw: usize) {
     let queued: Vec<u32> = (0..n.slots.len() as u32)
         .filter(|&i| n.slots[i as usize].queued)
         .collect();
-    let mut q = n.queue.clone();
+    let mut q: Vec<u32> = n.queue.iter().filter(|t| n.valid(**t)).map(|t| t.0).collect();
     q.sort_unstable();
-    assert_eq!(q, queued, "the queue is not exactly the queued slots, once each");
-    assert!(n.queue.len() <= n.slots.len());
+    assert_eq!(
+        q, queued,
+        "the live entries of the queue are not exactly the queued slots, once each"
+    );
+    assert!(n.queue.len() <= n.slots.len() * 2, "the queue outgrew twice the slab");
     for s in &n.slots {
         assert!(
             s.waker.is_none() || (s.live && s.queued),
@@ -168,7 +179,7 @@ fn check(n: &Naive, hw: usize) {
 #[derive(Default)]
 struct Seen {
     stale: u32,
-    inherited: u32,
+    stale_entry_reused: u32,
     skipped: u32,
     empty_baton: u32,
     woken_all: u32,
@@ -202,8 +213,8 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                 let t = p.alloc();
                 assert_eq!(t, naive.alloc(), "alloc differs from the naive slab");
                 assert!(!before.valid(t), "alloc handed out a live ticket");
-                // a reused slot still queued keeps its place in the queue
-                seen.inherited += u32::from(before.slots.get(t.0 as usize).is_some_and(|s| s.queued));
+                // a slot reused while the entry of its released ticket is still queued
+                seen.stale_entry_reused += u32::from(before.queue.iter().any(|q| q.0 == t.0));
                 held.push(t);
                 gone.retain(|g| *g != t);
                 format!(r#""op":"alloc","out":[{},{}]"#, t.0, t.1)
@@ -223,15 +234,15 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, seen: &mut S
                 format!(r#""op":"notify","tk":[{},{}],"woke":{woke:?}"#, t.0, t.1)
             }
             9 | 10 => {
-                // the waker of the first live armed slot in the queue, and the entries before it skipped
-                let first = before.queue.iter().position(|&i| {
-                    let s = before.slots[i as usize];
-                    s.live && s.waker.is_some()
-                });
+                // the waker of the first live armed ticket in the queue, and the entries before it skipped
+                let first = before
+                    .queue
+                    .iter()
+                    .position(|&t| before.valid(t) && before.slots[t.0 as usize].waker.is_some());
                 let woke = p.baton();
                 assert_eq!(woke, naive.baton(), "the baton differs from the naive slab");
                 if let Some(k) = first {
-                    assert_eq!(woke, vec![before.slots[before.queue[k] as usize].waker.unwrap()]);
+                    assert_eq!(woke, vec![before.slots[before.queue[k].0 as usize].waker.unwrap()]);
                     seen.skipped += k as u32;
                 } else {
                     assert_eq!(woke, NONE);
@@ -343,7 +354,10 @@ fn the_standby_slab_matches_the_models() {
     }
     reuse(&mut out, 900, 200);
     assert!(seen.stale > 0, "no stale or forged ticket was used");
-    assert!(seen.inherited > 0, "no slot was reused while still queued");
+    assert!(
+        seen.stale_entry_reused > 0,
+        "no slot was reused while the entry of its released ticket was queued"
+    );
     assert!(seen.skipped > 0, "the baton never skipped an entry");
     assert!(seen.empty_baton > 0, "the baton always found a slot");
     assert!(seen.woken_all > 0, "notify_all woke no one");
