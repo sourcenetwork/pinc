@@ -305,8 +305,9 @@ Recv(f) ==
            b2 == IF gone > 0 THEN b0 - Cost(tab[h][gone]) ELSE b0
            \* the record fits, or fits once EvictAny made room
            room == ~full \/ (gone > 0 /\ b2 <= TableBytes)
-           \* a refused member the hub holds a record of: left a tombstone that names no peer
-           tomb == [tab[h] EXCEPT ![f.n] = [@ EXCEPT !.live = FALSE]]
+           \* a refused member the hub holds a record of: left a tombstone that names no peer and carries the refused
+           \* record's number, so the record it replaced is older and a late mirror of it is not taken again
+           tomb == [tab[h] EXCEPT ![f.n] = [@ EXCEPT !.live = FALSE, !.seq = f.seq]]
            \* the refusal closes the table: a newcomer's, with Closed
            closes == takes /\ ~room /\ Closed /\ old.seq = 0
            \* the copies a member's own record is mirrored as
