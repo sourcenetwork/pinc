@@ -298,7 +298,12 @@ conn_impl! {
 
     /// Whether an application packet can be built now: 1-RTT keys, or early keys on a client mid-handshake.
     fn can_build_app(&self) -> bool {
-        self.keys.send.is_some() || (self.client && self.phase == Phase::Handshaking && self.keys.early_send.is_some())
+        self.keys.send.is_some() || self.early_client()
+    }
+
+    /// Whether this is a dialing side that resumes and still sends its data as early data.
+    pub(super) fn early_client(&self) -> bool {
+        self.client && self.phase == Phase::Handshaking && self.keys.early_send.is_some()
     }
 
     /// Write the next fragment of the handshake flight as a long Handshake packet at the start of `window`.

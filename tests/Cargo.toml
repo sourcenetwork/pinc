@@ -212,6 +212,10 @@ name = "transport_early_control"
 path = "transport_early_control.rs"
 
 [[test]]
+name = "transport_early_resend"
+path = "transport_early_resend.rs"
+
+[[test]]
 name = "transport_handshake"
 path = "transport_handshake.rs"
 

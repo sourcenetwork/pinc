@@ -87,6 +87,12 @@ conn_impl! {
         }
         if self.hs.on_timer(env, now) {
             self.stats.handshake_retransmits += 1;
+            // The one resend of a resume Hello takes the early data in flight with it: what left with the first
+            // flight goes again behind it, not a round trip after the handshake, when loss detection would find it.
+            // The send after it is a full handshake, which has no early data.
+            if self.stats.handshake_retransmits == 1 && self.early_client() {
+                self.flush_in_flight(now);
+            }
             self.pump(env);
         }
         if self.life.link_down.is_some_and(|s| s.saturating_add(LINK_DOWN_MAX) <= now) {

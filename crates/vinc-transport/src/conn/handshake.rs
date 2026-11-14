@@ -16,7 +16,9 @@
 //! - A dialing side resends its first flight after `max(500 ms, 2 x RTT)`, where the RTT is the one remembered for
 //!   this peer, else the node's average; the delay then doubles up to `max(16 s, 4 x node RTT)`, and on a thin node
 //!   no further than `max(8 s, 2 x the node's largest RTT)`. A Hello that stayed unanswered for its third send gives
-//!   way to a full handshake (see `vinc-security`), and a rejected ticket restarts the schedule.
+//!   way to a full handshake (see `vinc-security`), and a rejected ticket restarts the schedule. The one resend of
+//!   a Hello takes the early data in flight with it (the connection requeues it), so a lost first datagram costs
+//!   the resend and one round trip, as a lost Reply does.
 //! - A prekey reject (the peer does not hold the prekey a short Initial named) is answered at once with the full
 //!   Initial, then at most once per `max(500 ms, node RTT)`; the resends that follow are short as before.
 //! - A responder resends its flight after 999 ms, then after 1.998 s, 3.996 s and every 4 s.
