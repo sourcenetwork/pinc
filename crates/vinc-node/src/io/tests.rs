@@ -12,6 +12,7 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::net::SocketAddr;
 use core::ops::Range;
 
@@ -25,7 +26,9 @@ use vinc_crypto::IdentityAlg;
 use vinc_transport::stream::{NoSource, StreamId};
 
 use super::{Io, Link};
+use crate::config::EVENT_CAP;
 use crate::ep::Ep;
+use crate::event::NodeEvent;
 use crate::trace::{Body, NodeTrace};
 
 /// An endpoint that accepts no stream bytes and counts what it was asked.
@@ -237,4 +240,44 @@ fn a_membership_frame_for_a_peer_without_a_session_closes_nothing() {
         "a reply is dropped"
     );
     assert_eq!(io.ep.closes, 0);
+}
+
+fn readable(i: u64) -> Event {
+    Event::StreamReadable {
+        session: SessionId(i),
+        stream: 0,
+    }
+}
+
+#[test]
+fn the_queue_of_command_replies_holds_no_more_than_the_event_cap() {
+    let mut io = io();
+    io.evq.extend((0..2 * EVENT_CAP as u64).map(readable));
+    assert!(
+        io.evq.len() <= EVENT_CAP,
+        "the queue of command replies grew to {} events",
+        io.evq.len()
+    );
+}
+
+#[test]
+fn a_full_queue_of_command_replies_drops_a_recoverable_event_first_and_reports_the_count() {
+    let mut io = io();
+    io.evq.extend((0..EVENT_CAP as u64).map(readable));
+    let closed = |i| Event::Closed {
+        session: SessionId(i),
+        reason: vinc_core::EndReason::Denied,
+    };
+    io.evq.extend((0..3).map(closed));
+    let mut kept = Vec::new();
+    while let Some(e) = io.next_reply() {
+        kept.push(e);
+    }
+    assert_eq!(kept.len(), EVENT_CAP, "the queue stays at its cap");
+    assert_eq!(
+        kept.iter().filter(|e| matches!(e, Event::Closed { .. })).count(),
+        3,
+        "an event the application cannot recover stays"
+    );
+    assert_eq!(io.out.pop(), Some(NodeEvent::Lost { count: 3 }), "the drop is reported");
 }

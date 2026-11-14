@@ -130,6 +130,24 @@ impl EventQueue {
         }
         self.q.pop_front()
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.q.is_empty() && self.lost == 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.q.len()
+    }
+}
+
+/// Endpoint events join the queue under its bound and its drop rule.
+impl Extend<Event> for EventQueue {
+    fn extend<T: IntoIterator<Item = Event>>(&mut self, events: T) {
+        for e in events {
+            self.push(NodeEvent::Endpoint(e));
+        }
+    }
 }
 
 /// The session state of a node, and the host the layers talk to.
@@ -172,7 +190,8 @@ pub(crate) struct Io<E: Ep, St: Store> {
     /// The sessions of the hub protocol or of a layer that the node closed without recording, until their `Closed`
     /// arrives: the events of such a session still queued belong to no one.
     pub(crate) shed: BTreeSet<SessionId>,
-    pub(crate) evq: VecDeque<Event>,
+    /// The events the replies of commands carried, until the loop handles them: bounded as the application's queue is.
+    pub(crate) evq: EventQueue,
     pub(crate) members: VecDeque<crate::relay::MemberNotice>,
     pub(crate) out: EventQueue,
     pub(crate) tq: TraceQueue,
@@ -234,7 +253,7 @@ impl<E: Ep, St: Store> Io<E, St> {
             ldials: Vec::new(),
             lfailed: BTreeMap::new(),
             shed: BTreeSet::new(),
-            evq: VecDeque::with_capacity(64),
+            evq: EventQueue::with_capacity(64),
             members: VecDeque::new(),
             out: EventQueue::with_capacity(256),
             tq: TraceQueue::new(trace),
@@ -268,6 +287,18 @@ impl<E: Ep, St: Store> Io<E, St> {
 
     pub(crate) fn emit(&mut self, e: NodeEvent) {
         self.out.push(e);
+    }
+
+    /// The next event a command's reply carried. A count of replies dropped at the bound goes on to the application as
+    /// lost events.
+    pub(crate) fn next_reply(&mut self) -> Option<Event> {
+        while let Some(e) = self.evq.pop() {
+            match e {
+                NodeEvent::Endpoint(ev) => return Some(ev),
+                other => self.emit(other),
+            }
+        }
+        None
     }
 
     pub(crate) fn trace(&mut self, t: NodeTrace) {

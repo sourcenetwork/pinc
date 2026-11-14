@@ -65,7 +65,7 @@ where
         loop {
             let ev = if let Some(e) = self.conn.poll_event() {
                 e
-            } else if let Some(e) = self.io.evq.pop_front() {
+            } else if let Some(e) = self.io.next_reply() {
                 e
             } else if !self.io.out.can_take() {
                 break;
