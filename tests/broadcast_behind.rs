@@ -335,3 +335,38 @@ fn a_hub_whose_own_publish_found_no_room_is_told_when_to_publish_again() {
     assert_eq!(rooms(&net), 2);
     net.publish(0, T, &[9u8; 1024]);
 }
+
+/// A subscriber the hub keeps behind gets a new session with room in it. No stream that was full drains, so the host
+/// never reports one writable; the subscriber subscribes again on the new session. The hub sends it what it is owed
+/// and pushes it live again, without waiting for a periodic gap repair.
+#[test]
+fn a_behind_subscriber_that_subscribes_again_on_a_new_session_is_pushed_live_again() {
+    let mut net = net();
+    set_full(&mut net, 2, true);
+    let owed: Vec<[u8; 8]> = (0..5)
+        .map(|k| {
+            let m = net.publish(1, T, &body(k));
+            net.advance(SEC / 1000);
+            m
+        })
+        .collect();
+    assert_eq!(net.nodes[0].t.behind_count(T), 1);
+
+    // The new session's stream has room, and nothing tells the hub so.
+    let (sub, hub) = (net.id(2), net.id(0));
+    net.nodes[0].h.full.remove(&sub);
+    let now = net.now;
+    let n = &mut net.nodes[2];
+    n.h.tick(now);
+    n.t.resubscribe(&mut n.h, now, &hub);
+    net.pump();
+
+    let live = net.publish(1, T, b"live");
+    net.advance(SEC / 10);
+    let got = net.delivered(2);
+    for m in &owed {
+        assert!(got.contains(m), "an owed message arrived");
+    }
+    assert!(got.contains(&live), "the subscriber is pushed live again");
+    assert_eq!(net.nodes[0].t.behind_count(T), 0);
+}

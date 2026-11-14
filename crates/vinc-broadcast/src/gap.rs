@@ -266,10 +266,16 @@ impl Topics {
     }
 
     /// A SUB at a hub: record the subscriber and answer with HAVE, or replay the messages when flag 1 is set.
-    pub(crate) fn on_sub<H: Host>(&mut self, h: &mut H, _now: Nanos, from: &NodeId, topic: &[u8], rest: &[u8]) {
+    pub(crate) fn on_sub<H: Host>(&mut self, h: &mut H, now: Nanos, from: &NodeId, topic: &[u8], rest: &[u8]) {
         let Some(since) = get_u64(rest).filter(|_| self.is_hub && *from != self.me) else {
             return;
         };
+        // A subscriber this hub keeps behind subscribes again on a new session, whose stream no host reports writable
+        // (only a full stream that drains is): it goes on from its place in the log now, and is pushed live once
+        // caught up.
+        if self.lagging.contains(from) {
+            self.peer_writable(h, now, from);
+        }
         let replay = rest.get(8) == Some(&1);
         if !self.ensure_topic(topic) {
             return;
