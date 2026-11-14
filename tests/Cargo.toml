@@ -208,6 +208,10 @@ name = "transport_repair"
 path = "transport_repair.rs"
 
 [[test]]
+name = "transport_early_control"
+path = "transport_early_control.rs"
+
+[[test]]
 name = "transport_handshake"
 path = "transport_handshake.rs"
 

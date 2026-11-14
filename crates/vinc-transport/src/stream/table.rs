@@ -102,7 +102,7 @@ pub struct Streams<S: StreamSource = NoSource, const N: usize = 100, const C: us
     buffered: u64,
     stats: StreamStats,
     admit: Admit,
-    /// The least ordinal among the streams whose first frame waits for the peer's limit, 0 with none: a raise of the
+    /// The least ordinal among the streams whose first frame or control frame waits for the peer's limit, 0 with none: a raise of the
     /// limit looks again once it reaches this.
     held_from: u64,
     /// Some slot's grant was deferred at the last pass; a stale `true` costs one pass that clears it.
@@ -322,9 +322,12 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let (retx, mut new) = slot.send.wants();
         let ordinal = slot.ordinal;
         let past = ordinal > self.admit.limit;
-        let ctl = (slot.recv.win.pending && slot.recv.open) || slot.recv.stop_pending() || slot.send.control_pending();
-        if new && past {
+        let mut ctl =
+            (slot.recv.win.pending && slot.recv.open) || slot.recv.stop_pending() || slot.send.control_pending();
+        // Past the peer's limit the peer does not know the stream yet: neither its data nor its control frames go.
+        if (new || ctl) && past {
             new = false;
+            ctl = false;
             self.held_from = if self.held_from == 0 {
                 ordinal
             } else {

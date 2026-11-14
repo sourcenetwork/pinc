@@ -162,6 +162,50 @@ fn a_peer_stream_whose_place_was_given_back_stays_under_the_mark_until_it_is_ack
     );
 }
 
+/// The stream control frames queued now, in the order they would be sent.
+fn stream_controls(t: &mut Streams<NoSource, 8, 65>) -> alloc::vec::Vec<ControlFrame> {
+    core::iter::from_fn(|| t.pending_control())
+        .filter(|f| !matches!(f, ControlFrame::MaxStreams { .. }))
+        .collect()
+}
+
+/// A reset and a stop request on a stream opened past the peer's limit wait for the limit as its data does: the peer
+/// does not know the stream before its limit covers it.
+#[test]
+fn control_frames_of_streams_opened_before_the_peers_limit_wait_for_it() {
+    let mut pool = BufferPool::new_boxed(512);
+    let mut t: Streams<NoSource, 8, 65> = Streams::new(&Config::new(true), &pool);
+    t.set_early(true);
+    t.set_peer_limits(&PeerLimits {
+        window: 16 * 1024,
+        max_streams: 0,
+    });
+    let first = t.open_stream(&pool, true).unwrap();
+    let second = t.open_stream(&pool, true).unwrap();
+    t.reset(&mut pool, first, 1).unwrap();
+    t.stop_sending(second, 2).unwrap();
+    assert!(
+        stream_controls(&mut t).is_empty(),
+        "a control frame went out before the peer's limit was known"
+    );
+    t.set_peer_limits(&PeerLimits {
+        window: 16 * 1024,
+        max_streams: 1,
+    });
+    t.set_early(false);
+    let sent = stream_controls(&mut t);
+    assert!(
+        matches!(sent.as_slice(), [ControlFrame::ResetStream { id, error_code: 1, .. }] if *id == first),
+        "only the stream the limit covers sends its control frame: {sent:?}"
+    );
+    t.on_max_streams(2);
+    let more = stream_controls(&mut t);
+    assert!(
+        matches!(more.as_slice(), [ControlFrame::StopSending { id, error_code: 2 }] if *id == second),
+        "the stream past the limit sends its control frame once credit covers it: {more:?}"
+    );
+}
+
 /// Streams opened before the peer's limits are known send nothing; when the limit arrives the ones it covers go out in
 /// the order they were opened, and the rest wait for credit. After the limits are known an open past them is refused.
 #[test]
