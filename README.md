@@ -242,21 +242,24 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
     ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
 
   `just compare` and the harness print every row, the ones VINC loses included.
-- **Transport and connectivity rules not in yet.** A session whose relay path goes silent is not closed before the
-  idle timeout ([#96](https://github.com/sourcenetwork/vinc/issues/96)); a tunnel packet can leave from another local address than the hub session's, and the
-  relay then refuses it ([#120](https://github.com/sourcenetwork/vinc/issues/120)); a dial to a hub does not go through that hub's own relay path ([#215](https://github.com/sourcenetwork/vinc/issues/215));
-  a dial rides a held session however long it has been silent ([#147](https://github.com/sourcenetwork/vinc/issues/147)); a lost Finish is re-sent on the probe
-  timeout, not 999 ms after it ([#154](https://github.com/sourcenetwork/vinc/issues/154)); after an address change a session's path is replaced where the
-  reference model keeps it, so the wake and what is in flight leave from the old address ([#155](https://github.com/sourcenetwork/vinc/issues/155)). The fixes
-  of the first five are written and are being measured together; the sixth is being written.
+- **Transport and connectivity rules not in yet.** The reference model's rules for a dial's first flight (which paths
+  it takes, when the relay copy leaves) and its punch round that probes unvalidated direct paths again are written
+  and held back: with them two low-bandwidth seeds lose a delivery, which points at a dialing side that does not take
+  a handshake reply on a path it does not hold ([#399](https://github.com/sourcenetwork/vinc/issues/399)). A hub's
+  floor that covers a message sent after a member's restart is fixed on a branch and waits for the same seeds
+  ([#340](https://github.com/sourcenetwork/vinc/issues/340)). Open beside them: the amplification ledger validates
+  an address on any second datagram ([#251](https://github.com/sourcenetwork/vinc/issues/251), fix in progress), a
+  forged, different first flight frees the real half-open session
+  ([#365](https://github.com/sourcenetwork/vinc/issues/365)), and a 0-RTT packet may carry any frame
+  ([#295](https://github.com/sourcenetwork/vinc/issues/295)).
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
-  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 84 at `97bbaa4` (75 on its first run); the reference model the
-  rules come from passes 88. The twelve that fail are tracked by cause: [#155](https://github.com/sourcenetwork/vinc/issues/155) (mobile), [#215](https://github.com/sourcenetwork/vinc/issues/215) (a
-  dial to a hub), [#213](https://github.com/sourcenetwork/vinc/issues/213) (one low-bandwidth seed) and [#212](https://github.com/sourcenetwork/vinc/issues/212) (four seeds the model fails too). The two
-  scenarios that need the values and reconcile layers in one composition wait for them.
-- **The proofs** are behind the code on purpose: code lands first. What each merge left to prove or to check again is
-  listed in [#105](https://github.com/sourcenetwork/vinc/issues/105), beside
-  [Being closed](docs/PROOFS.md#being-closed).
+  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 92 at `b12aa0aa` (84 at
+  `97bbaa4`, 75 on its first run); the reference model the rules come from passes 88. The four that fail are the four
+  the model fails too ([#212](https://github.com/sourcenetwork/vinc/issues/212)). The two scenarios that need the
+  values and reconcile layers in one composition wait for them.
+- **The proofs** land with the code: a fix whose behaviour a model covers carries the model's update in the same pull
+  request. What is still to prove or to check again is listed in
+  [#105](https://github.com/sourcenetwork/vinc/issues/105), beside [Being closed](docs/PROOFS.md#being-closed).
 - `vinc-values`: the five corrections found by its proofs are made and proven. One of them, the stall timer armed by the
   first request, was changed again on purpose (the stall rule now starts at the first verified granule), and the models
   follow it ([#190](https://github.com/sourcenetwork/vinc/pull/190)).
@@ -266,4 +269,4 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
 - **Planned.** Forward erasure correction as an option, off by default, that an application switches on through the
   builder ([#145](https://github.com/sourcenetwork/vinc/issues/145)).
 - **Housekeeping.** The memory test fails when it runs beside the whole suite on a busy host and passes alone
-  ([#148](https://github.com/sourcenetwork/vinc/issues/148)). A session's memory depends on the allocator committing its pool segment lazily ([#141](https://github.com/sourcenetwork/vinc/issues/141)).
+  ([#148](https://github.com/sourcenetwork/vinc/issues/148)).
