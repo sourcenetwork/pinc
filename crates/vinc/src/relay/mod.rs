@@ -19,9 +19,10 @@
 //!
 //! The relay owns no process, socket, runtime or timer. It runs on the closures the host passes, so a node can take
 //! the relay role inside its own process: the host shares one UDP socket and one executor with its other endpoints,
-//! awaits [`Relay::run`] next to them, and stops it with [`Relay::stop`] without ending anything else. A dedicated
-//! host can also run it as a service of its own, as the relay server in sourcenetwork/vinc_relay does. The example
-//! binary is a minimal host of the second kind.
+//! awaits [`Relay::run`] next to them, and stops it with [`Relay::stop`] without ending anything else. No deployment
+//! needs a relay service: any of its nodes that others can reach can take the role. A dedicated host can also run it
+//! as a service of its own, as the relay server in `sourcenetwork/vinc_relay` does. The example binary is a minimal
+//! host of the second kind.
 //!
 //! # What it keeps
 //!
