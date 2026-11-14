@@ -370,3 +370,49 @@ fn an_address_a_lan_host_names_over_upnp_is_held_and_never_offered() {
         .join()
         .unwrap();
 }
+
+/// A node holding a PCP mapping at `T = 1 s`, its request drained; the request's nonce.
+fn held_node() -> (Box<Member>, [u8; 12]) {
+    let mut node = member();
+    node.set_local(&[local()]);
+    node.start_port_mapping(SEC, Some(gw().ip()), local(), 120);
+    let req = pcp::decode_request(&to_gateway(&mut node)[0]).unwrap();
+    deliver(&mut node, SEC, gw(), grant(req.nonce, 7));
+    assert_eq!(node.port_mapping(), Some((ext(), Proto::Pcp)));
+    (node, req.nonce)
+}
+
+#[test]
+fn a_changed_address_withdraws_the_mapping_at_once_and_asks_again() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let (mut node, nonce) = held_node();
+            node.address_changed(2 * SEC);
+            assert_eq!(node.port_mapping(), None, "the old mapping is still held");
+            let sent = to_gateway(&mut node);
+            let asked: Vec<_> = sent.iter().map(|b| pcp::decode_request(b).unwrap()).collect();
+            assert_eq!(asked.iter().map(|r| r.lifetime).collect::<Vec<_>>(), [0, 120]);
+            assert!(asked.iter().all(|r| r.nonce == nonce));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn a_resume_that_moved_withdraws_the_mapping_and_one_that_did_not_keeps_it() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let (mut node, _) = held_node();
+            node.resume(2 * SEC, false);
+            assert_eq!(node.port_mapping(), Some((ext(), Proto::Pcp)));
+            node.resume(3 * SEC, true);
+            assert_eq!(node.port_mapping(), None);
+            assert_eq!(pcp::decode_request(&to_gateway(&mut node)[0]).unwrap().lifetime, 0);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

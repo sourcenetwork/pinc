@@ -336,7 +336,7 @@ fn a_pcp_error_header_while_a_mapping_is_held_changes_nothing() {
     pm.handle_datagram(T0 + 10 * SEC, gw(), &pcp_header(pcp::OP_MAP, 8, 3));
     assert_eq!(pm.mapped(), held, "an answer to no request dropped the mapping");
     assert_eq!(pm.poll_timeout(), Some(T0 + 3600 * SEC), "the renewal is still armed");
-    assert!(sent(&mut pm).is_empty());
+    assert_eq!(sent(&mut pm), vec![]);
 }
 
 #[test]
@@ -486,4 +486,87 @@ proptest::proptest! {
     fn the_client_always_has_a_timer_or_an_exchange_in_flight(seed in proptest::prelude::any::<u64>()) {
         never_wedged(seed);
     }
+}
+
+/// The next HTTP request in full.
+fn http_text(pm: &mut PortMap) -> Option<String> {
+    let mut b = [0u8; upnp::MAX_REQUEST];
+    pm.poll_http(&mut b)
+        .map(|(_, n)| String::from_utf8_lossy(&b[..n]).into_owned())
+}
+
+/// A client that holds a UPnP mapping of external address `ext`, its grant at `T0`.
+fn upnp_held(ext: &str) -> PortMap {
+    let mut pm = client(None, local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml"));
+    let desc = b"HTTP/1.1 200 OK\r\n\r\n<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl</controlURL></service>";
+    let ip = format!("HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>{ext}</NewExternalIPAddress>");
+    for a in [desc.as_slice(), ip.as_bytes(), OK] {
+        http(&mut pm).unwrap();
+        pm.handle_http(T0, Some(a));
+    }
+    assert_eq!(pm.mapped(), Some(format!("{ext}:4433").parse().unwrap()));
+    pm
+}
+
+#[test]
+fn a_upnp_renewal_reads_the_external_address_again() {
+    let mut pm = upnp_held("203.0.113.9");
+    pm.handle_timeout(T0 + 3600 * SEC);
+    let first = http_text(&mut pm).unwrap();
+    assert!(
+        first.contains("#GetExternalIPAddress"),
+        "the renewal did not ask for the address first: {first}"
+    );
+    pm.handle_http(
+        T0 + 3600 * SEC,
+        Some(b"HTTP/1.1 200 OK\r\n\r\n<NewExternalIPAddress>198.51.100.77</NewExternalIPAddress>"),
+    );
+    assert!(http_text(&mut pm).unwrap().contains("#AddPortMapping"));
+    pm.handle_http(T0 + 3600 * SEC, Some(OK));
+    assert_eq!(
+        pm.mapped(),
+        Some("198.51.100.77:4433".parse().unwrap()),
+        "the mapping still names the old address"
+    );
+}
+
+#[test]
+fn a_restart_drops_the_mapping_releases_it_and_asks_again() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(T0, gw(), &pcp_map(NONCE, pcp::SUCCESS, 1000, 7200));
+    assert!(pm.mapped().is_some());
+    pm.restart(T0 + 10 * SEC);
+    assert_eq!(pm.mapped(), None, "the old mapping is still held");
+    let out = sent(&mut pm);
+    let lifetimes: Vec<u32> = out
+        .iter()
+        .map(|(_, b)| pcp::decode_request(b).unwrap().lifetime)
+        .collect();
+    assert_eq!(
+        lifetimes,
+        [0, 7200],
+        "the old mapping is released, then a new one asked for"
+    );
+    assert!(out.iter().all(|(to, _)| *to == gw()));
+    assert!(pm.poll_timeout().is_some());
+}
+
+#[test]
+fn a_restart_of_a_upnp_mapping_searches_again_and_a_stopped_client_stays_stopped() {
+    let mut pm = upnp_held("203.0.113.9");
+    pm.restart(T0 + 10 * SEC);
+    assert_eq!(pm.mapped(), None);
+    assert_eq!(sent(&mut pm).first().map(|(to, _)| *to), Some(upnp::SSDP));
+    assert_eq!(http(&mut pm), None);
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.stop(T0 + SEC);
+    sent(&mut pm);
+    pm.restart(T0 + 2 * SEC);
+    assert!(pm.stopped());
+    assert_eq!(sent(&mut pm), vec![]);
+    assert_eq!(pm.poll_timeout(), None);
 }

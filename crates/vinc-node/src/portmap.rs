@@ -57,6 +57,14 @@ where
         self.pm_apply(now);
     }
 
+    /// The network changed: the mapping held is dropped and released, and the client asks again from the beginning.
+    pub(crate) fn pm_restart(&mut self, now: Nanos) {
+        if let Some(pm) = &mut self.pm {
+            pm.client.restart(now);
+        }
+        self.pm_apply(now);
+    }
+
     /// Whether the port-mapping client has nothing more to do: never turned on, or stopped and its release sent.
     pub fn port_mapping_done(&self) -> bool {
         self.pm.as_ref().is_none_or(|pm| pm.client.stopped())

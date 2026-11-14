@@ -147,6 +147,7 @@ pub struct PortMap {
     nat_ip: Option<Ipv4Addr>,
     igd: Option<Igd>,
     release: Option<Lease>,
+    halted: bool,
 }
 
 impl PortMap {
@@ -167,6 +168,7 @@ impl PortMap {
             nat_ip: None,
             igd: None,
             release: None,
+            halted: false,
         };
         pm.enter(pm.first(), now);
         pm
@@ -297,7 +299,8 @@ impl PortMap {
         let step = match proto {
             Proto::Pcp => Step::Pcp,
             Proto::NatPmp => Step::NatAddr,
-            Proto::Upnp => Step::Add,
+            // the external address is read again: it moves when the gateway's WAN address does
+            Proto::Upnp => Step::ExtIp,
         };
         self.enter(step, now);
     }
@@ -652,6 +655,7 @@ impl PortMap {
     pub fn stop(&mut self, now: u64) {
         self.now = self.now.max(now);
         let now = self.now;
+        self.halted = true;
         let held = self.held.take();
         self.renewing = false;
         match held {
@@ -667,5 +671,25 @@ impl PortMap {
             }
             None => self.enter(Step::Stopped, now),
         }
+    }
+
+    /// The network changed at `now`: drop the mapping held, release it at once (a `UPnP` one is left to its lease:
+    /// its delete needs HTTP the new network may not carry), forget what was learned of the gateway and ask again
+    /// from the beginning. A stopped client stays stopped.
+    pub fn restart(&mut self, now: u64) {
+        self.now = self.now.max(now);
+        let now = self.now;
+        if self.halted {
+            return;
+        }
+        if let Some(l) = self.held.take().filter(|l| l.proto != Proto::Upnp) {
+            self.release = Some(l);
+        }
+        self.renewing = false;
+        self.epoch = None;
+        self.nat_ip = None;
+        self.igd = None;
+        let first = self.first();
+        self.enter(first, now);
     }
 }

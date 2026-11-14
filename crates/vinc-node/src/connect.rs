@@ -200,6 +200,7 @@ where
         self.conn.resume_all(now, &mut self.io.ep, moved);
         if moved {
             self.mem.address_changed(now);
+            self.pm_restart(now);
         }
         self.settle(now);
     }

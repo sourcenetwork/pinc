@@ -824,6 +824,7 @@ where
         self.begin(now);
         self.mem.address_changed(now);
         self.conn.link_changed(now);
+        self.pm_restart(now);
         self.settle(now);
     }
 
