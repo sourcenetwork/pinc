@@ -15,12 +15,13 @@
 //! relay.run().await?;
 //! ```
 //!
-//! # Embedded, not a service
+//! # Embedded or run as a service
 //!
-//! The relay is a role an ordinary node takes inside its own process, never a separate service: it owns no process,
-//! socket, runtime or timer. It runs on the closures the host passes, so the host can share one UDP socket and one
-//! executor with its other endpoints, await [`Relay::run`] next to them, and stop it with [`Relay::stop`] without
-//! ending anything else. The example binary is only an example of such a host.
+//! The relay owns no process, socket, runtime or timer. It runs on the closures the host passes, so a node can take
+//! the relay role inside its own process: the host shares one UDP socket and one executor with its other endpoints,
+//! awaits [`Relay::run`] next to them, and stops it with [`Relay::stop`] without ending anything else. A dedicated
+//! host can also run it as a service of its own, as the relay server in sourcenetwork/vinc_relay does. The example
+//! binary is a minimal host of the second kind.
 //!
 //! # What it keeps
 //!
