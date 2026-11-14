@@ -1114,3 +1114,7 @@ path = "trace_heap.rs"
 [[test]]
 name = "trace_keepalive"
 path = "trace_keepalive.rs"
+
+[[test]]
+name = "trace_connect_ws"
+path = "trace_connect_ws.rs"

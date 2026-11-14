@@ -42,6 +42,7 @@ import Vinc.TraceConnectCodec
 import Vinc.TraceConnectLink
 import Vinc.TraceConnectClient
 import Vinc.TraceConnectCarrier
+import Vinc.TraceConnectWs
 import Vinc.TraceConnect
 import Vinc.TraceConnectRecords
 import Vinc.TraceTranscript
@@ -174,6 +175,7 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut clk : TraceConnectLink.W := {}
   let mut ccl : TraceConnectClient.W := {}
   let mut cca : TraceConnectCarrier.W := {}
+  let mut cws : TraceConnectWs.W := {}
   let mut trs : TraceTranscript.TS := {}
   let mut trCount := 0
   let mut dsw : TraceDtnStore.W := {}
@@ -372,6 +374,14 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceConnectCarrier.replayEvent j cca with
           | .ok w' =>
             cca := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceConnectWs.isTag t then
+          -- WebSocket framing events (`ws`, written by `trace_connect_ws`): the encoder and the decoder.
+          match TraceConnectWs.replayEvent j cws with
+          | .ok w' =>
+            cws := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")

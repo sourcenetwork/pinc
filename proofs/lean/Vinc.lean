@@ -221,7 +221,12 @@ import Vinc.TraceConnectClient
 import Vinc.ConnectCarrier
 import Vinc.ConnectCarrierThm
 import Vinc.ConnectCarrierKeys
+import Vinc.ConnectWs
+import Vinc.ConnectWsThm
+import Vinc.ConnectWsEnc
+import Vinc.ConnectWsSplit
 import Vinc.TraceConnectCarrier
+import Vinc.TraceConnectWs
 import Vinc.ConnectClientThm
 import Vinc.ConnectRecords
 import Vinc.ConnectRecordsThm
