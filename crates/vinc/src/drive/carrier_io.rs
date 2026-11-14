@@ -150,24 +150,23 @@ pub(crate) fn slots<S>() -> Slots<S> {
     std::array::from_fn(|_| Slot::new())
 }
 
-/// An operation in flight: its future lives in one box for the life of the driver, set again for each operation.
+/// The bit of [`Op`]'s state that says an operation runs; the rest is the version of the state it belongs to.
+const LIVE: u64 = 1 << 63;
+
+/// An operation in flight: its future lives in one box for the life of the driver, set again for each operation. The
+/// version and the flag that it runs share one word, so a slot costs two words.
 pub(super) struct Op<F> {
     fut: Option<Pin<Box<F>>>,
-    live: bool,
-    ver: u64,
+    state: u64,
 }
 
 impl<F: Future> Op<F> {
     pub(super) const fn new() -> Self {
-        Self {
-            fut: None,
-            live: false,
-            ver: 0,
-        }
+        Self { fut: None, state: 0 }
     }
 
     pub(super) const fn running(&self, ver: u64) -> bool {
-        self.live && self.ver == ver
+        self.state == (ver | LIVE)
     }
 
     pub(super) fn start(&mut self, ver: u64, f: F) {
@@ -175,27 +174,26 @@ impl<F: Future> Op<F> {
             Some(b) => b.as_mut().set(f),
             None => self.fut = Some(Box::pin(f)),
         }
-        self.live = true;
-        self.ver = ver;
+        self.state = ver | LIVE;
     }
 
     /// The result, if the operation finished and still belongs to state `ver`.
     pub(super) fn poll(&mut self, cx: &mut Context<'_>, ver: u64) -> Option<F::Output> {
-        if !self.live {
+        if self.state & LIVE == 0 {
             return None;
         }
         let out = match self.fut.as_mut()?.as_mut().poll(cx) {
             Poll::Ready(v) => v,
             Poll::Pending => return None,
         };
-        self.live = false;
-        (self.ver == ver).then_some(out)
+        self.state &= !LIVE;
+        (self.state == ver).then_some(out)
     }
 
     /// Drop the operation and what it holds.
     pub(super) fn cancel(&mut self) {
         if self.fut.is_some() {
-            self.live = false;
+            self.state = 0;
             self.fut = None;
         }
     }
