@@ -200,7 +200,9 @@ Classify(local, refl, mapped, heard, since, wd) ==
     ELSE 3
 
 NewNet(r) == [probes |-> [i \in 1..r |-> [e |-> FALSE, nonce |-> <<>>, sent |-> 0]], rtt |-> [i \in 1..r |-> 0],
-              refl |-> [i \in 1..r |-> -1], home |-> -1, missed |-> [i \in 1..r |-> 0], tries |-> 0, fp |-> -1]
+              refl |-> [i \in 1..r |-> -1], home |-> -1, missed |-> [i \in 1..r |-> 0], tries |-> 0, fp |-> -1, pin |-> -1]
+\* Netcheck::pin: the deployment's own relay; a position past the table is ignored
+NPin(N, p) == IF p >= 0 /\ p < Len(N.probes) THEN [N EXCEPT !.pin = p] ELSE N
 Unhealthy(N, i) == N.missed[i + 1] >= MISSLIMIT
 NFailed(N, i) == IF i < Len(N.missed) THEN [N EXCEPT !.missed[i + 1] = Min(255, N.missed[i + 1] + 1)] ELSE N
 NHealthy(N, i) == IF i < Len(N.missed) THEN [N EXCEPT !.missed[i + 1] = 0] ELSE N
@@ -210,15 +212,20 @@ NProbeSent(N, now, relay, nonce, works) ==
     THEN [N1 EXCEPT !.probes[relay + 1] = [e |-> TRUE, nonce |-> nonce, sent |-> now], !.fp = IF N1.fp < 0 THEN now ELSE N1.fp]
     ELSE N1
 ArgMin(S, key) == IF S = {} THEN -1 ELSE CHOOSE m \in S : \A x \in S : key[m + 1] < key[x + 1] \/ (key[m + 1] = key[x + 1] /\ m <= x)
-NAnswered(N, now, relay, nonce, addr) ==
+\* Netcheck::answered. With `usePin` the pinned relay, once it answered and is healthy, is the home whatever the round
+\* trips; without it (a planted bug) the pin is ignored.
+NAnsweredBy(N, now, relay, nonce, addr, usePin) ==
     IF relay >= Len(N.probes) \/ ~N.probes[relay + 1].e \/ N.probes[relay + 1].nonce # nonce THEN [res |-> -1, N |-> N]
     ELSE LET rtt == SatSub(now, N.probes[relay + 1].sent)
              N1 == [N EXCEPT !.probes[relay + 1].e = FALSE, !.missed[relay + 1] = 0, !.rtt[relay + 1] = rtt, !.refl[relay + 1] = addr]
              cands == {i \in 0..(Len(N1.probes) - 1) : N1.refl[i + 1] >= 0 /\ ~Unhealthy(N1, i)}
-             best == ArgMin(cands, N1.rtt)
-             N2 == IF best >= 0 /\ N1.home # best /\ (N1.home < 0 \/ Unhealthy(N1, N1.home) \/ N1.rtt[best + 1] < N1.rtt[N1.home + 1])
+             pinned == IF usePin /\ N1.pin \in cands THEN N1.pin ELSE -1
+             best == IF pinned >= 0 THEN pinned ELSE ArgMin(cands, N1.rtt)
+             N2 == IF best >= 0 /\ N1.home # best
+                      /\ (best = pinned \/ N1.home < 0 \/ Unhealthy(N1, N1.home) \/ N1.rtt[best + 1] < N1.rtt[N1.home + 1])
                    THEN [N1 EXCEPT !.home = best] ELSE N1
          IN [res |-> rtt, N |-> N2]
+NAnswered(N, now, relay, nonce, addr) == NAnsweredBy(N, now, relay, nonce, addr, TRUE)
 NFailover(N, usable, open) ==
     IF N.home < 0 \/ ~Unhealthy(N, N.home) THEN [res |-> -1, N |-> N]
     ELSE LET rn == Len(N.probes)

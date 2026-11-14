@@ -353,10 +353,16 @@ structure Netcheck where
   missed : List Nat
   tries : Nat
   firstProbe : Option Nat
+  -- the relay the deployment pinned as the home, if any
+  pin : Option Nat
   deriving DecidableEq, Repr
 
 def Netcheck.new (r : Nat) : Netcheck :=
-  ⟨List.replicate r none, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none⟩
+  ⟨List.replicate r none, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none, none⟩
+
+/-- `Netcheck::pin`: a position past the table is ignored. -/
+def Netcheck.setPin (n : Netcheck) (relay : Nat) : Netcheck :=
+  if relay < n.probes.length then { n with pin := some relay } else n
 
 def Netcheck.unhealthy (n : Netcheck) (i : Nat) : Bool := decide (n.missed.getD i 0 ≥ missLimit)
 
@@ -379,6 +385,30 @@ def argMin (idx : List Nat) (key : Nat → Nat) : Option Nat :=
     | none => some i
     | some b => if key i < key b then some i else some b) none
 
+/-- A relay that answered a probe and is not unhealthy: a home candidate. -/
+def Netcheck.ok (n : Netcheck) (i : Nat) : Bool := (n.refl.getD i none).isSome && !n.unhealthy i
+
+/-- The pinned relay when it is a candidate. -/
+def Netcheck.pinOk (n : Netcheck) : Option Nat :=
+  match n.pin with
+  | some p => if n.ok p then some p else none
+  | none => none
+
+/-- The home choice of `Netcheck::answered` over `r` relays: the pinned relay when it is a candidate, else the lowest
+round trip, taken when there is no home, the home is unhealthy, the new one is the pinned relay, or its round trip is
+strictly lower. -/
+def Netcheck.rehome (n : Netcheck) (r : Nat) : Netcheck :=
+  let best := match n.pinOk with
+    | some p => some p
+    | none => argMin ((List.range r).filter n.ok) fun i => n.rtt.getD i 0
+  match best with
+  | some b =>
+    if (n.home != some b) && (n.pinOk == some b || (match n.home with
+        | none => true
+        | some h => n.unhealthy h || decide (n.rtt.getD b 0 < n.rtt.getD h 0))) then { n with home := some b }
+    else n
+  | none => n
+
 /-- `Netcheck::answered`: the round trip when the nonce matched an outstanding probe. -/
 def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr : Nat) : Option Nat × Netcheck :=
   match n.probes.getD relay none with
@@ -388,16 +418,7 @@ def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr 
       let rtt := satSub now sent
       let n1 := { n with probes := n.probes.set relay none, missed := n.missed.set relay 0,
                          rtt := n.rtt.set relay rtt, refl := n.refl.set relay (some addr) }
-      let cands := (List.range n.probes.length).filter fun i => (n1.refl.getD i none).isSome && !n1.unhealthy i
-      let best := argMin cands fun i => n1.rtt.getD i 0
-      let n2 := match best with
-        | some b =>
-          if (n1.home != some b) && (match n1.home with
-              | none => true
-              | some h => n1.unhealthy h || decide (n1.rtt.getD b 0 < n1.rtt.getD h 0)) then { n1 with home := some b }
-          else n1
-        | none => n1
-      (some rtt, n2)
+      (some rtt, n1.rehome n.probes.length)
   | none => (none, n)
 
 /-- `Netcheck::failover`: move the home away from an unhealthy relay, only to one known to work: a probe answered since

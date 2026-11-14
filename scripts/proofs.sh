@@ -281,6 +281,7 @@ par run_tlc connect_client ConnectClient ConnectClient
 par run_tlc connect_client_pending ConnectClient ConnectClient_pending
 par run_tlc connect_client_lookups ConnectClient ConnectClient_lookups
 par run_tlc connect_client_net ConnectClient ConnectClient_net
+par witness_tlc connect_client_net_w_nopin ConnectClient ConnectClient_net_w_nopin AnswerOK
 par run_tlc connect_carrier ConnectCarrier ConnectCarrier
 par run_tlc connect_carrier_open ConnectCarrier ConnectCarrier_open
 par run_tlc connect_carrier_limits ConnectCarrier ConnectCarrier_limits

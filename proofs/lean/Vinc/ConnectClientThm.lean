@@ -16,8 +16,10 @@ For every instant, every view and every state:
 * lookup: `ask_size` (the table keeps its size), `answered_removes`, `deadline_due`, and
   `verify_found`: an answer is accepted only if the record parses, its signature verifies and it names the peer asked
   about;
-* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; that an answer moves the home only to a relay with a
-  strictly lower round trip, or away from an unhealthy one, is not proved in Lean yet.
+* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; a pinned relay that answered and is not
+  unhealthy is the home after an answer (`answered_pin_home`, over `rehome_pin` and `rehome_only_home`); that an answer
+  otherwise moves the home only to a relay with a strictly lower round trip, or away from an unhealthy one, is not proved
+  in Lean yet.
 -/
 
 namespace Vinc.ConnectClient
@@ -229,6 +231,41 @@ theorem missing_fallback (n : Netcheck) (f : Nat) (hh : n.home = none) (ht : hom
   rw [if_neg this]
   simp only []
   rw [if_pos (by simp; omega)]
+
+-- Choosing a home after an answer: when the pinned relay has answered and is not unhealthy, it is the home, whatever
+-- the round trips (the code's `pinned` short-cuts the round-trip comparison).
+theorem rehome_pin (n : Netcheck) (r p : Nat) (hp : n.pinOk = some p) : (n.rehome r).home = some p := by
+  by_cases hh : n.home = some p <;> simp [Netcheck.rehome, hp, hh]
+
+-- Choosing a home changes nothing but the home: the probes, round trips, misses and the pin are left as they were.
+theorem rehome_only_home (n : Netcheck) (r : Nat) : ∃ h, n.rehome r = { n with home := h } := by
+  unfold Netcheck.rehome
+  dsimp only
+  repeat' split
+  all_goals first | exact ⟨_, rfl⟩ | exact ⟨n.home, rfl⟩
+
+-- Whether the pin is a candidate does not depend on the home.
+theorem pinOk_home (n : Netcheck) (h : Option Nat) : ({ n with home := h } : Netcheck).pinOk = n.pinOk := rfl
+
+-- An answer that was taken is a home choice over the state with the answer recorded.
+theorem answered_rehome (n n' : Netcheck) (now relay addr rtt : Nat) (nonce : List Nat)
+    (h : n.answered now relay nonce addr = (some rtt, n')) : ∃ n1 : Netcheck, n' = n1.rehome n.probes.length := by
+  unfold Netcheck.answered at h
+  split at h
+  · split at h
+    · simp at h
+    · dsimp only at h
+      exact ⟨_, (Prod.mk.inj h).2.symm⟩
+  · simp at h
+
+/-- After an answer, a pinned relay that has answered a probe and is not unhealthy is the home. -/
+theorem answered_pin_home (n n' : Netcheck) (now relay addr rtt p : Nat) (nonce : List Nat)
+    (h : n.answered now relay nonce addr = (some rtt, n')) (hp : n'.pinOk = some p) : n'.home = some p := by
+  obtain ⟨n1, rfl⟩ := answered_rehome n n' now relay addr rtt nonce h
+  obtain ⟨hm, hq⟩ := rehome_only_home n1 n.probes.length
+  rw [hq, pinOk_home] at hp
+  rw [← hq] at *
+  exact rehome_pin n1 _ p hp
 
 /-- The fold of `argMin` from a known best: the result is the best or a later element, and is least. -/
 theorem argMin_fold (key : Nat → Nat) (l : List Nat) :

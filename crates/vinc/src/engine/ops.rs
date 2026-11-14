@@ -455,6 +455,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.dirty = true;
     }
 
+    /// The relay the node is homed on now.
+    pub(crate) fn home_relay(&self) -> Option<NodeId> {
+        let c = self.node.connectivity();
+        c.home().and_then(|h| c.relay_cfg(h)).map(|r| r.id)
+    }
+
     pub(crate) fn node_stats(&self) -> NodeStats {
         self.node.endpoint().node_stats()
     }

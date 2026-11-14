@@ -216,7 +216,10 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let o : Observed := ⟨← addrs "local", ← addrs "refl", ← addrs "mapped", ← boolF j "heard", ← ns j "since", ← ns j "wd"⟩
     check ((← natF j "res") == (classify o).getD 0) "classify"
     pure w
-  | "nnew" => pure { w with nc := Netcheck.new (← natF j "r") }
+  | "nnew" =>
+    -- the pinned relay of the run: `-1` is none
+    let nc := Netcheck.new (← natF j "r")
+    pure { w with nc := match ← optI j "pin" with | some p => nc.setPin p | none => nc }
   | "psent" =>
     ncView j w (w.nc.probeSent (← ns j "now") (← natF j "relay") (← natList (← field j "nonce")) (← boolF j "works")) "none"
   | "failed" => ncView j w (w.nc.failed (← natF j "relay")) "none"

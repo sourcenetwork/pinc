@@ -751,6 +751,12 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         self.0.shared.run(|core, _| Try::Done(Ok(core.node_stats()))).await
     }
 
+    /// The relay this endpoint is homed on now: the one its record names and a relayed path's first stop. A relay pinned
+    /// with [`Relay::home`](crate::Relay::home) is it once that relay answers. `None` before any relay answered.
+    pub fn home_relay(&self) -> Option<NodeId> {
+        self.0.shared.lock().and_then(|core| core.home_relay())
+    }
+
     /// Serve `protocol` on its ALPN: every session a peer opens on it goes to the returned [`Registered`], not to
     /// [`accept`](Self::accept). The host runs `protocol.serve` for each, on its own executor. The ALPN counts against
     /// the endpoint's four.

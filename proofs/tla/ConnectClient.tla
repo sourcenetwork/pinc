@@ -33,11 +33,18 @@
 (*              open); a relay is unhealthy after three misses in a row    *)
 (*              and healthy again after an answer; after three unanswered  *)
 (*              rounds the first relay is the home                         *)
+(*  AnswerOK    after a taken answer, a pinned relay that answered and is  *)
+(*              healthy is the home; otherwise the home moves only to the  *)
+(*              pinned relay, to a strictly lower round trip, or away from *)
+(*              an unhealthy one                                           *)
+(* BUG = "nopin" (witness ConnectClient_net_w_nopin): an answer ignores    *)
+(* the pin, and AnswerOK fails: a closer relay keeps the home from the     *)
+(* deployment's own relay.                                                 *)
 (* Lean: Vinc/ConnectClientThm.lean.                                       *)
 (***************************************************************************)
 EXTENDS ConnectClientOps
 
-CONSTANTS Mode, Times, Peers, Sess
+CONSTANTS Mode, Times, Peers, Sess, BUG
 VARIABLES P, LK, NC
 vars == <<P, LK, NC>>
 
@@ -106,7 +113,11 @@ ClassifyOK ==
     /\ ~IsShared(<<10, 0, 0, 1>>)
 
 (* ---- state machines ---- *)
-Init == /\ P = NewPending(2, 2) /\ LK = NewLookups(2) /\ NC = NewNet(2)
+\* the probe state starts with no pin, or with either relay pinned
+Init == /\ P = NewPending(2, 2) /\ LK = NewLookups(2) /\ NC \in {NPin(NewNet(2), p) : p \in -1..1}
+
+\* the answer the code gives, or the planted bug's
+Ans(N, now, rl, nc, a) == NAnsweredBy(N, now, rl, nc, a, BUG # "nopin")
 
 DoPending ==
     \/ \E pe \in Peers, s \in Sess : LET r == PAdd(P, pe, s) IN P' = r.P
@@ -121,7 +132,7 @@ DoLookups ==
 
 DoNet ==
     \/ \E now \in Times, rl \in 0..1, nc \in 1..1, w \in BOOLEAN : NC' = NProbeSent(NC, now, rl, <<nc>>, w) 
-    \/ \E now \in Times, rl \in 0..1, nc \in 1..1, a \in 1..2 : NC' = NAnswered(NC, now, rl, <<nc>>, a).N 
+    \/ \E now \in Times, rl \in 0..1, nc \in 1..1, a \in 1..2 : NC' = Ans(NC, now, rl, <<nc>>, a).N
     \/ \E rl \in 0..1 : NC' = NFailed(NC, rl)
     \/ \E rl \in 0..1 : NC' = NHealthy(NC, rl)
     \/ \E us \in {<<TRUE, TRUE>>, <<TRUE, FALSE>>, <<FALSE, TRUE>>}, op \in BOOLEAN \X BOOLEAN : NC' = NFailover(NC, us, op).N
@@ -155,6 +166,16 @@ NetOK ==
          LET f == NFailover(NC, us, op) IN
          f.res >= 0 => (f.res # NC.home /\ ~Unhealthy(NC, f.res) /\ us[f.res + 1] /\ f.N.home = f.res
                         /\ ((NC.missed[f.res + 1] = 0 /\ NC.refl[f.res + 1] >= 0) \/ op[f.res + 1]))
+
+AnswerOK ==
+    \A now \in Times, rl \in 0..1, a \in 1..2 :
+        LET r == Ans(NC, now, rl, <<1>>, a)
+            Q == r.N
+        \* only a taken answer (its nonce matched an outstanding probe) chooses a home; an opened carrier that makes
+        \* the pinned relay healthy again waits for its next answer
+        IN /\ (r.res >= 0 /\ NC.pin >= 0 /\ Q.refl[NC.pin + 1] >= 0 /\ ~Unhealthy(Q, NC.pin)) => Q.home = NC.pin
+           /\ (Q.home # NC.home /\ NC.home >= 0) =>
+                 (Q.home = NC.pin \/ Unhealthy(Q, NC.home) \/ Q.rtt[Q.home + 1] < Q.rtt[NC.home + 1])
 
 \* the miss and try counters saturate at 255 in the code; one past the threshold covers every branch
 Bounded == (\A i \in 1..2 : NC.missed[i] <= MISSLIMIT + 1) /\ NC.tries <= HOMETRIES + 1

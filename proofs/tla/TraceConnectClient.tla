@@ -88,7 +88,7 @@ Ev1 ==
       [] Ev.m = "lview" -> /\ LookView(LK) /\ Step /\ UNCHANGED <<P, T, PE, LK, NC>>
       [] Ev.m = "verify" -> /\ VerifyOK /\ Step /\ UNCHANGED <<P, T, PE, LK, NC>>
       [] Ev.m = "classify" -> /\ Classify(Ev.local, Ev.refl, Ev.mapped, Ev.heard, Ev.since, Ev.wd) = Ev.res /\ Step /\ UNCHANGED <<P, T, PE, LK, NC>>
-      [] Ev.m = "nnew" -> /\ NC' = NewNet(Ev.r) /\ Step /\ UNCHANGED <<P, T, PE, LK>>
+      [] Ev.m = "nnew" -> /\ NC' = NPin(NewNet(Ev.r), Ev.pin) /\ Step /\ UNCHANGED <<P, T, PE, LK>>
       [] Ev.m = "psent" -> LET n == NProbeSent(NC, Ev.now, Ev.relay, Ev.nonce, Ev.works) IN
                            /\ NetView(n) /\ NC' = n /\ Step /\ UNCHANGED <<P, T, PE, LK>>
       [] Ev.m = "answered" -> LET r == NAnswered(NC, Ev.now, Ev.relay, Ev.nonce, Ev.addr) IN
