@@ -1,6 +1,8 @@
 //! End to end on the build host: a two-node scenario on containers of this machine, every stack, one repetition;
 //! every measurement must succeed and the teardown must leave nothing. Needs Docker and `sudo -n`, so it is ignored
-//! by default and run with `just e2e` (`cargo nextest run --run-ignored only`).
+//! by default and run with `just e2e` (`cargo nextest run --run-ignored only`). Two more runs check hole punching
+//! through the home routers: a pair behind port-restricted routers ends on a direct path, a pair behind symmetric ones
+//! stays on the relay.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -94,4 +96,65 @@ fn a_two_node_scenario_runs_every_stack_and_tears_down() {
         .unwrap();
     assert!(left.stdout.is_empty(), "the teardown left containers");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Runs the committed scenario `name` once and returns, for each fetch, the payload size and what the two public nodes
+/// received: a relayed session rides the relay or the hub, whichever the dial went through.
+fn relay_bytes(name: &str) -> Vec<(f64, u64)> {
+    let bin = env!("CARGO_BIN_EXE_vinc-distributed");
+    let file = format!("{}/scenarios/{name}.toml", env!("CARGO_MANIFEST_DIR"));
+    let dir = std::env::temp_dir().join(format!("vinc-distributed-{name}-{}", std::process::id()));
+    let out = Command::new(bin)
+        .args(["run", &file, "--reps", "1", "--results", dir.to_str().unwrap()])
+        .args(["--quiet-other", "100000", "--quiet-steal", "100", "--quiet-wait", "60"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let line = String::from_utf8_lossy(&out.stdout);
+    let results = line
+        .trim()
+        .strip_prefix("results: ")
+        .expect("the run names its results directory");
+    let rows = read_rows(std::path::Path::new(results)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!rows.is_empty(), "nothing was measured");
+    rows.iter()
+        .map(|r| {
+            assert_eq!(r.status, "ok", "{} was not measured", r.test);
+            let bytes = r.node["bytes"].as_f64().unwrap();
+            let rx = |n: &str| r.kernel[n].eth0.as_ref().unwrap().rx_bytes;
+            (bytes, rx("relay") + rx("hub"))
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs Docker and sudo: run with `just e2e` on the build host"]
+fn a_pair_behind_port_restricted_routers_goes_direct() {
+    for (bytes, relay) in relay_bytes("punch-port-restricted") {
+        // Direct after the dial: the relay carries the dial and the punch, about 80 KB, never the payload.
+        #[allow(clippy::cast_precision_loss)]
+        let ok = (relay as f64) < bytes / 8.0;
+        assert!(
+            ok,
+            "the relay and hub received {relay} bytes of a {bytes}-byte fetch: the pair did not punch"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs Docker and sudo: run with `just e2e` on the build host"]
+fn a_pair_behind_symmetric_routers_stays_on_the_relay() {
+    for (bytes, relay) in relay_bytes("punch-symmetric") {
+        #[allow(clippy::cast_precision_loss)]
+        let ok = relay as f64 > bytes;
+        assert!(
+            ok,
+            "the relay and hub received {relay} bytes of a {bytes}-byte fetch: a symmetric pair cannot go direct"
+        );
+    }
 }

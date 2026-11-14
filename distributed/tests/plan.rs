@@ -23,7 +23,7 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 24] = [
+const EXAMPLES: [&str; 26] = [
     "dtn-store-forward",
     "dtn-custody",
     "dtn-copies",
@@ -48,6 +48,8 @@ const EXAMPLES: [&str; 24] = [
     "churn",
     "suspend-resume",
     "nat-reach",
+    "punch-port-restricted",
+    "punch-symmetric",
 ];
 
 #[test]
@@ -265,8 +267,29 @@ fn translated_sites_masquerade_and_are_not_routed() {
             .map(|c| c.args.clone())
             .collect()
     };
-    assert_eq!(rules(h1).len(), 1);
+    assert_eq!(rules(h1).len(), 2);
     assert!(!rules(h1)[0].contains(&"--random-fully".to_owned()));
+    for s in [h1, h2] {
+        let drop = [
+            "-A",
+            "INPUT",
+            "-i",
+            "w",
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW,INVALID",
+            "-j",
+            "DROP",
+        ];
+        assert!(
+            rules(s).iter().any(|r| r.len() == drop.len()
+                && r.iter()
+                    .zip(drop)
+                    .all(|(a, b)| if b == "w" { a.starts_with(b) } else { a == b })),
+            "a home router drops unsolicited packets before conntrack keeps them, or a peer's punch remaps the port"
+        );
+    }
     assert!(
         rules(h2)[0].contains(&"--random-fully".to_owned()),
         "the symmetric translation picks a random port per destination"

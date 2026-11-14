@@ -1,0 +1,53 @@
+name = "punch-symmetric"
+about = "Two nodes each behind a symmetric home router, a public relay and hub: no punch can work, so the whole transfer stays on the relay."
+stacks = ["vinc"]
+repetitions = 3
+
+[[sites]]
+name = "home1"
+nat = "symmetric"
+
+[[sites]]
+name = "home2"
+nat = "symmetric"
+
+[[sites]]
+name = "public"
+
+[[nodes]]
+name = "consumer"
+site = "home1"
+
+[[nodes]]
+name = "provider"
+site = "home2"
+
+[[nodes]]
+name = "relay"
+site = "public"
+role = "relay"
+
+[[nodes]]
+name = "hub"
+site = "public"
+role = "hub"
+
+[[links]]
+a = "home1"
+b = "public"
+shape = { delay_ms = 10, rate_mbit = 50 }
+reverse = { rate_mbit = 200 }
+
+[[links]]
+a = "home2"
+b = "public"
+shape = { delay_ms = 15, rate_mbit = 20 }
+reverse = { rate_mbit = 100 }
+
+[workload]
+kind = "sync"
+providers = ["provider"]
+consumers = ["consumer"]
+sizes = [1048576, 8388608]
+timeout_s = 180
+warmup_s = 8
