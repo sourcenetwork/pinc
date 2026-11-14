@@ -11,6 +11,8 @@
 //! and against the whole session); data and datagrams leave only while the congestion window and the pacer allow
 //! (probes, acknowledgements and path frames are exempt); a packet number is used by exactly one packet; when the
 //! sent ring is full the frames just taken are given back to their owners and nothing is sent.
+//!
+//! The tail repair fill (`fill_repair`) is in `repair`, and the CLOSE packet (`build_close`) is in `close`.
 
 use core::ops::RangeInclusive;
 
@@ -26,13 +28,14 @@ use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
 use crate::packet::{ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, seal};
-use crate::recovery::{
-    FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, REPAIR_OVERHEAD, REPAIR_PACKET_BYTES, Sent,
-};
+use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, Sent};
 use crate::stream::{ControlFrame, StreamSource};
 
 #[cfg(feature = "trace")]
 pub(super) mod trace;
+
+mod close;
+mod repair;
 
 /// The datagram a [`Connection::poll_transmit`] call wrote into the caller's buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -831,41 +834,6 @@ conn_impl! {
         }
     }
 
-    /// A tail repair: the stream frames of packet `repair` that are not acknowledged yet, newest first, whole, up to
-    /// `min(datagram size - 23, 600)` bytes of payload. The packet is a repair packet: its loss is neither resent
-    /// nor a congestion signal.
-    fn fill_repair(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled, repair: u64, fill: &Fill) {
-        let Some(frames) = self.rec.sent_frames(repair).copied() else { return };
-        let mtu = self.paths.get(fill.ti).map_or(u32::from(MIN_MTU), |p| u32::from(p.mtu.current));
-        let mut room = usize::try_from(mtu.saturating_sub(REPAIR_OVERHEAD).min(REPAIR_PACKET_BYTES)).unwrap_or(0);
-        for f in frames.as_slice().iter().rev() {
-            let FrameRef::Stream { id, offset, len, fin } = *f else { continue };
-            if (len > 0 || !fin) && self.streams.is_acked(id, offset, u64::from(len)) {
-                continue;
-            }
-            let dl = len as usize;
-            if dl + 24 > room || out.refs.len() >= MAX_FRAME_REFS {
-                break;
-            }
-            let hdr = stream_overhead(id, offset, dl, false);
-            let end = *pos + hdr + dl;
-            let chunk = crate::stream::StreamChunk { id, offset, len: dl, fin };
-            let ok = end <= payload.len()
-                && payload
-                    .get_mut(*pos + hdr..end)
-                    .is_some_and(|dst| self.streams.copy_out(&self.pool, &chunk, dst).is_ok())
-                && payload.get_mut(*pos..*pos + hdr).is_some_and(|h| put_stream_header(h, &chunk));
-            if !ok {
-                break;
-            }
-            *pos = end;
-            room -= hdr + dl;
-            let _ = out.refs.push(FrameRef::Stream { id, offset, len, fin });
-            out.strong();
-            out.streams = true;
-        }
-    }
-
     fn fill_streams(&mut self, payload: &mut [u8], pos: &mut usize, out: &mut Filled) {
         for _ in 0..16 {
             if out.refs.len() >= MAX_FRAME_REFS {
@@ -922,63 +890,6 @@ conn_impl! {
             out.data = true;
             out.last_stream = None;
         }
-    }
-
-    /// The packet carrying CLOSE, sent once; the connection is over once it left.
-    fn build_close(&mut self, env: &mut Env<'_, P>, out: &mut [u8]) -> Option<Transmit> {
-        let Some(error) = self.life.close else {
-            self.phase = Phase::Closed;
-            return None;
-        };
-        let ti = self.paths.active;
-        let now = env.now;
-        let p = env.provider;
-        let dcid = self.path_dcid(ti)?;
-        let pn = self.next_pn;
-        let pn_len = self.pn_len;
-        let pn_bytes = encode_pn(pn, pn_len).ok()?;
-        let hdr = 1 + dcid.as_bytes().len() + pn_len;
-        let mtu = usize::from(self.paths.get(ti)?.mtu.current).min(out.len()).min(self.amp_room(ti));
-        let payload = out.get_mut(hdr..mtu.checked_sub(16)?)?;
-        let mut pos = 0;
-        if !put(payload, &mut pos, &Frame::Close { error }) {
-            return None;
-        }
-        #[cfg(feature = "trace")]
-        let traced = self.pack.on.then(|| payload.get(..pos).unwrap_or_default().to_vec());
-        let pad = 4usize.saturating_sub(pn_len + pos);
-        if pad > 0 {
-            payload.get_mut(pos..pos + pad)?.fill(0);
-            pos += pad;
-        }
-        #[cfg(feature = "trace")]
-        let traced = traced.map(|frames| trace::PackRecord {
-            kind: trace::PackKind::Short,
-            mode: trace::PackMode::Close,
-            client: self.client,
-            pn,
-            pn_len,
-            frames,
-            hint: None,
-            min_payload: 4usize.saturating_sub(pn_len),
-            payload: payload.get(..pos).unwrap_or_default().to_vec(),
-        });
-        let phase = self.keys.send.as_ref()?.phase;
-        ShortHeader { key_phase: phase, dcid }.write(&mut Writer::new(out.get_mut(..hdr)?), pn_bytes.get(..pn_len)?).ok()?;
-        let k = self.keys.send.as_mut()?;
-        let layout = PnLayout { pn_off: 1 + dcid.as_bytes().len(), pn_len, long: false };
-        let len = seal(&mut k.pk, &k.hk, p, out, layout, pos, pn).ok()?;
-        self.next_pn += 1;
-        #[cfg(feature = "trace")]
-        if let Some(r) = traced {
-            self.pack.log.push(r);
-        }
-        self.life.close = None;
-        self.phase = Phase::Closed;
-        self.stats.packets_sent += 1;
-        let path = self.paths.get(ti)?.id;
-        self.finish_datagram(ti, len, now)?;
-        Some(Transmit { path, len, segment_size: len })
     }
 }
 
