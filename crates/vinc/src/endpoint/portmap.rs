@@ -57,4 +57,13 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
             .run(|core, _| Try::Done(core.node.port_mapping().map(|(a, _)| a)))
             .await
     }
+
+    /// What the port-mapping client dropped, by reason, and how often drawing its nonce failed; all zero when port
+    /// mapping is off (see [`Builder::port_mapping`]).
+    pub async fn port_mapping_stats(&self) -> crate::PortMapStats {
+        self.0
+            .shared
+            .run(|core, _| Try::Done(core.node.port_mapping_stats()))
+            .await
+    }
 }

@@ -175,6 +175,35 @@ async fn the_gateway_is_asked_for_a_mapping_of_the_socket_and_the_grant_is_read_
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn the_endpoint_exposes_what_the_port_mapping_client_dropped() {
+    let (ep, log, tx) = bind(PRIVATE, Some(true), Some(GATEWAY));
+    assert_eq!(ep.port_mapping_stats().await, vinc::PortMapStats::default());
+    assert!(until(&ep, || !log.borrow().is_empty()).await, "nothing asked");
+    // an answer from the gateway with another nonce is dropped and counted
+    let r = pcp::Response::Map {
+        result: pcp::SUCCESS,
+        lifetime: 7200,
+        epoch: 1,
+        nonce: [9; 12],
+        protocol: pcp::UDP,
+        internal_port: 4433,
+        external_port: 4433,
+        external_ip: "203.0.113.9".parse().unwrap(),
+    };
+    let mut b = [0u8; 60];
+    let n = pcp::encode_response(&r, &mut b).unwrap();
+    tx.try_send((b[..n].to_vec(), gateway())).unwrap();
+    let mut seen = 0;
+    let end = Instant::now() + Duration::from_secs(5);
+    while seen == 0 && Instant::now() < end {
+        seen = ep.port_mapping_stats().await.client.wrong_nonce;
+        run_for(&ep, Duration::from_millis(5)).await;
+    }
+    assert_eq!(seen, 1);
+    assert_eq!(ep.port_mapping().await, None);
+}
+
 /// The relay role is a server: it never asks a gateway for a mapping, even with the builder turned on.
 #[tokio::test(flavor = "current_thread")]
 async fn an_endpoint_with_the_relay_role_sends_nothing_for_port_mapping() {

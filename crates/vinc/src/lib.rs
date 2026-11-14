@@ -108,5 +108,6 @@ pub use stream::{RecvStream, SendStream};
 pub use vinc_broadcast::ReachStats;
 pub use vinc_core::NodeStats;
 pub use vinc_crypto::NodeId;
+pub use vinc_node::PortMapStats;
 /// The urgency a stream starts with; see [`SendStream::set_urgency`].
 pub use vinc_transport::stream::DEFAULT_URGENCY;
