@@ -22,7 +22,9 @@
 (* nothing; its timer looks again every tick. An optimistic dial on a node *)
 (* that is not thin ends as "unanswered" when its timer fires after        *)
 (* Flights flights went out with nothing heard from the peer; any dial     *)
-(* ends at Limit ticks (the handshake's 30 s; twice that on a thin node).  *)
+(* ends once Limit ticks are exceeded, not when they are reached (the      *)
+(* handshake's 30 s; twice that on a thin node: the code's deadline is the *)
+(* start plus the limit plus one nanosecond, connect_deadline).            *)
 (* Only the Limit end raises the node's handshake floor.                   *)
 (*                                                                         *)
 (* What must never happen:                                                 *)
@@ -150,7 +152,7 @@ Tick ==
     /\ now < MaxNow                                   \* within the explored time
     /\ ~(Waiting /\ now >= d.next)                    \* the resend timer is not due
     /\ ~(Waiting /\ d.ans > 0 /\ now >= d.ans)        \* no answer is due
-    /\ ~(Waiting /\ now >= d.at + LimitOf(d.thin))    \* Limit is not due
+    /\ ~(Waiting /\ now > d.at + LimitOf(d.thin))     \* Limit is not exceeded
     /\ ~(Waiting /\ FixedDue)                         \* the fixed end is not due
     /\ now' = now + 1                                 \* one tick on
     /\ UNCHANGED <<alive, inc, ticket, cached, held, d, steady, floor, limits>>
@@ -255,7 +257,7 @@ FixedEnd ==
 
 \* Limit: a handshake still waiting gives up. A dial handed over closes, any other fails; the floor goes up.
 GiveUp ==
-    /\ Waiting /\ now >= d.at + LimitOf(d.thin)       \* Limit came
+    /\ Waiting /\ now > d.at + LimitOf(d.thin)        \* Limit was exceeded
     /\ d' = [d EXCEPT !.st = IF d.told THEN "closed" ELSE "failed", !.why = "limit"]  \* it ends
     /\ floor' = floor + 1                             \* the floor goes up
     /\ limits' = limits + 1                           \* counted as a Limit end
