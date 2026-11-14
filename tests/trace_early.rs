@@ -7,13 +7,17 @@
 //! oldest first, a refused packet is the new one, none refused while a chunk is free). `txeb` is a real connection in
 //! its handshake: a client and a server are connected through a [`Net`], and before the session is established
 //! junk 0-RTT and 1-RTT packets are handed to one side (more than the buffer holds), the session is established, more
-//! junk arrives, and the connection is closed and gets some more. The connection shows what it holds, its phase and
-//! its keys through the `trace` feature (`early_view`), and its counters through `stats()`.
+//! junk arrives, and the connection is closed and gets some more; or a resumed server is handed the first datagram of
+//! a client with a ticket split in two, the Hello alone (`hello`: it raises the early keys and establishes the
+//! session) and then the client's first 0-RTT packet alone, carrying ACK, CLOSE, REKEY, `NEW_TICKETS` or
+//! `PATH_RESPONSE` (refused) or only the frames a client sends there (applied). The connection shows what it holds,
+//! its phase and its keys through the `trace` feature (`early_view`), and its counters through `stats()`.
 //!
 //! The test asserts the rules itself, against a naive rule for each packet (held, refused as full, refused for want
-//! of keys, or refused because the connection is over; the bytes counted on arrival whichever it is, and nothing held
-//! once the connection is up or closed), so it is meaningful without the proof tools. The trace is written to
-//! `VINC_TRACE_DIR` when it is set.
+//! of keys, refused for a frame only an established session sends, or refused because the connection is over; the
+//! bytes counted on arrival whichever it is, a refusal for a frame changing nothing else and applying none of the
+//! packet, and nothing held once the connection is up or closed), so it is meaningful without the proof tools. The
+//! trace is written to `VINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -32,8 +36,10 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use vinc_crypto::IdentityAlg;
+use vinc_security::{Rekey, TicketBatch, TicketEntry};
 use vinc_tests::*;
 use vinc_transport::conn::{Drop as RxDrop, PathId};
+use vinc_transport::frame::{Frame, write_ack};
 use vinc_transport::packet::{LongHeader, LongType, PN_LEN_BASE};
 use vinc_transport::stream::pool::CHUNK_SIZE;
 use vinc_transport::stream::trace::EarlyProbe;
@@ -192,6 +198,7 @@ struct Snap {
     nb: u64,
     nd: u64,
     nu: u64,
+    nr: u64,
     rx: u64,
 }
 
@@ -205,14 +212,15 @@ impl Snap {
             nb: s.early_buffered,
             nd: s.early_dropped,
             nu: s.undecryptable,
+            nr: s.early_refused,
             rx: s.bytes_received,
         }
     }
 
     fn json(&self) -> String {
         format!(
-            r#"{{"ph":{},"er":{},"rv":{},"n":{},"nb":{},"nd":{},"nu":{},"rx":{}}}"#,
-            self.ph, self.er, self.rv, self.n, self.nb, self.nd, self.nu, self.rx
+            r#"{{"ph":{},"er":{},"rv":{},"n":{},"nb":{},"nd":{},"nu":{},"nr":{},"rx":{}}}"#,
+            self.ph, self.er, self.rv, self.n, self.nb, self.nd, self.nu, self.nr, self.rx
         )
     }
 }
@@ -300,12 +308,13 @@ fn inject(
         before.nu + u64::from(failed_short),
         "a failed 1-RTT packet is counted, a 0-RTT one is not"
     );
+    assert_eq!(after.nr, before.nr, "junk is never refused for its frames");
     if out == "held" && !zero {
         rec.held_shorts += 1;
     }
     let _ = writeln!(
         rec.out,
-        r#"{{"t":"txeb","run":{},"op":"rx","kind":"{}","dlen":{dlen},"out":"{out}","v":{}}}"#,
+        r#"{{"t":"txeb","run":{},"op":"rx","kind":"{}","fate":"fail","dlen":{dlen},"out":"{out}","v":{}}}"#,
         rec.run,
         if zero { "z" } else { "s" },
         after.json()
@@ -369,9 +378,9 @@ fn conn_run(rng: &mut SplitMix64, out: &mut String, run: u32, client: bool) {
     let after = side.snap();
     assert_eq!((after.ph, after.n, after.rv), (1, 0, true));
     assert_eq!(
-        (after.nb, after.nd),
-        (rec.last.nb, rec.last.nd),
-        "establishing counts no hold"
+        (after.nb, after.nd, after.nr),
+        (rec.last.nb, rec.last.nd, rec.last.nr),
+        "establishing counts no hold and refuses no junk"
     );
     assert_eq!(
         after.nu,
@@ -411,6 +420,145 @@ fn conn_run(rng: &mut SplitMix64, out: &mut String, run: u32, client: bool) {
     }
 }
 
+fn encoded(frames: &[Frame<'_>]) -> Vec<u8> {
+    let mut buf = vec![0u8; 1400];
+    let mut w = Writer::new(&mut buf);
+    for f in frames {
+        f.write(&mut w).unwrap();
+    }
+    let n = w.written().len();
+    buf.truncate(n);
+    buf
+}
+
+/// The frames only an established session sends, one set each: ACK, CLOSE, REKEY, `NEW_TICKETS` and `PATH_RESPONSE`.
+fn established_only() -> Vec<(&'static str, Vec<u8>)> {
+    let mut ack = vec![0u8; 16];
+    let mut w = Writer::new(&mut ack);
+    write_ack(&mut w, std::iter::once(0..=0)).unwrap();
+    let n = w.written().len();
+    ack.truncate(n);
+    let mut tickets = TicketBatch::new();
+    tickets.push(TicketEntry {
+        tid: [3; 16],
+        lifetime_s: 60,
+    });
+    let rekey = Rekey {
+        answer: false,
+        share: [1; 32],
+        echo: [0; vinc_security::keyroll::ECHO_LEN],
+        switch_pn: 0,
+    };
+    vec![
+        ("ACK", ack),
+        ("CLOSE", encoded(&[Frame::Close { error: 0 }])),
+        ("REKEY", encoded(&[Frame::Rekey(rekey)])),
+        ("NEW_TICKETS", encoded(&[Frame::NewTickets(tickets)])),
+        ("PATH_RESPONSE", encoded(&[Frame::PathResponse([1; 8])])),
+    ]
+}
+
+/// A resumed server handed the first datagram of a client with a ticket, split in two: the Hello alone (it raises the
+/// early keys and establishes the session), then the client's first 0-RTT packet alone, sealed by the real client
+/// with the encoded frames `raw` in front of its stream data. With a frame only an established session sends
+/// (`refuse`) the packet is dropped whole and counted, and nothing of it is applied; with the frames a client sends
+/// in 0-RTT it is applied.
+fn resumed_run(out: &mut String, run: u32, name: &str, raw: &[u8], refuse: bool) {
+    let mut world = World::new(IdentityAlg::Ed25519);
+    let mut tickets = first_session(&mut world);
+    let ticket = tickets.take(&world.rp.id.node_id(), ALPN, T0).unwrap();
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    let dialer = world.client(&mut sa, Some(ticket), vinc_security::ClientTickets::new());
+    let resumed = world.server(&mut sb);
+    let mut net = Net::new(
+        dialer,
+        resumed,
+        Link::new(u64::from(run) + 500, Params::new(10 * MS)),
+        &mut world.stores,
+    );
+    net.a.conn.inject_frames(raw);
+    let id = net.a.conn.open_bi().unwrap();
+    net.a.conn.write(id, b"early bytes").unwrap();
+    net.a.conn.finish(id).unwrap();
+    // The client's first datagram, built by hand and never sent on the link: the Hello, then one 0-RTT packet.
+    let now = net.now;
+    let mut buf = vec![0u8; 65_536];
+    let len = net
+        .a
+        .with_env(now, |conn, env| conn.poll_transmit(env, &mut buf))
+        .unwrap()
+        .len;
+    let dgram = &buf[..len];
+    let (hs, hs_len) = LongHeader::parse(dgram).unwrap();
+    assert_eq!(hs.ty, LongType::Handshake, "{name}");
+    let cut = hs_len + hs.body_len;
+    let (zh, zh_len) = LongHeader::parse(&dgram[cut..]).unwrap();
+    assert_eq!(zh.ty, LongType::ZeroRtt, "{name}");
+    assert_eq!(
+        cut + zh_len + zh.body_len,
+        len,
+        "{name}: the datagram is the Hello and one 0-RTT packet"
+    );
+    let (hello, zero) = (dgram[..cut].to_vec(), dgram[cut..].to_vec());
+    let mut side = Side {
+        net: &mut net,
+        client: false,
+    };
+    let first = side.snap();
+    assert_eq!((first.ph, first.n, first.rx), (0, 0, 0));
+    let _ = writeln!(
+        out,
+        r#"{{"t":"txeb","run":{run},"op":"init","client":false,"cap":8,"v":{}}}"#,
+        first.json()
+    );
+    // The Hello alone: counted, the early keys raised and the session established by the same Hello.
+    let hlen = hello.len() as u64;
+    side.give(hello).unwrap();
+    let up = side.snap();
+    assert_eq!(
+        (up.ph, up.er, up.rv, up.n, up.nr, up.rx),
+        (1, true, true, 0, 0, first.rx + hlen),
+        "{name}: a resumed Hello raises the early keys and establishes the session"
+    );
+    let _ = writeln!(
+        out,
+        r#"{{"t":"txeb","run":{run},"op":"hello","dlen":{hlen},"v":{}}}"#,
+        up.json()
+    );
+    // The 0-RTT packet alone.
+    let zlen = zero.len() as u64;
+    let got = side.give(zero);
+    let after = side.snap();
+    let outcome = match got {
+        Ok(()) => "ok",
+        Err(RxDrop::EarlyFrame) => "refused",
+        Err(e) => panic!("{name}: unexpected {e:?}"),
+    };
+    assert_eq!(outcome, if refuse { "refused" } else { "ok" }, "{name}");
+    // A refusal changes nothing but its count; the datagram was counted on arrival, as every one.
+    assert_eq!(after.nr, up.nr + u64::from(refuse), "{name}");
+    assert_eq!(
+        (
+            after.ph, after.er, after.rv, after.n, after.nb, after.nd, after.nu, after.rx
+        ),
+        (up.ph, up.er, up.rv, up.n, up.nb, up.nd, up.nu, up.rx + zlen),
+        "{name}"
+    );
+    let now = side.net.now;
+    side.net.b.service(now);
+    assert_eq!(
+        side.net.b.read.get(&id).map(Vec::as_slice),
+        if refuse { None } else { Some(&b"early bytes"[..]) },
+        "{name}: the stream frame of the packet"
+    );
+    let _ = writeln!(
+        out,
+        r#"{{"t":"txeb","run":{run},"op":"rx","kind":"z","fate":"{}","dlen":{zlen},"out":"{outcome}","v":{}}}"#,
+        if refuse { "estonly" } else { "open" },
+        after.json()
+    );
+}
+
 #[test]
 fn early_packets_match_the_models() {
     big_stack(|| {
@@ -422,13 +570,27 @@ fn early_packets_match_the_models() {
         for run in 0..14u32 {
             conn_run(&mut rng, &mut out, run, run % 2 == 1);
         }
+        for (k, (name, raw)) in established_only().iter().enumerate() {
+            resumed_run(&mut out, 14 + k as u32, name, raw, true);
+        }
+        let client_frames = encoded(&[
+            Frame::Ping,
+            Frame::Padding { len: 3 },
+            Frame::MaxStreams { limit: 100 },
+            Frame::Datagram {
+                data: b"dgram",
+                implicit_len: false,
+            },
+        ]);
+        resumed_run(&mut out, 19, "the frames a client sends", &client_frames, false);
+        assert!(out.contains(r#""op":"hello""#) && out.contains(r#""out":"refused""#));
         assert!(out.contains(r#""op":"push""#) && out.contains(r#""ok":false"#));
         assert!(
             out.contains(r#""out":"held""#) && out.contains(r#""out":"full""#),
             "the buffer was never filled"
         );
         assert!(out.contains(r#""op":"est""#) && out.contains(r#""op":"close""#));
-        assert!(out.contains(r#""kind":"z","dlen"#) && out.contains(r#""out":"closed""#));
+        assert!(out.contains(r#""kind":"z","fate":"fail","dlen"#) && out.contains(r#""out":"closed""#));
         if let Ok(dir) = std::env::var("VINC_TRACE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("early.ndjson"), &out).unwrap();

@@ -22,7 +22,12 @@ What the model proves about the buffer of early packets, for any bound `cap` and
   bytes received are as they were (`established_count`);
 - nothing held survives the close (`shut_q`, `recv_closed`);
 - amplification: a datagram counts toward the bytes received on arrival, whether it is held, refused or opened, and
-  trying the held packets later counts nothing (`recv_amp`, `established_count`).
+  trying the held packets later counts nothing (`recv_amp`, `established_count`);
+- a 0-RTT packet that opens and carries a frame only an established session sends (ACK, CLOSE, REKEY, NEW_TICKETS or
+  PATH_RESPONSE) is dropped whole: it is counted as refused and changes nothing else, and the connection stays open;
+  no other packet is refused, and only a refusal moves the count (`direct_refused`, `recv_refused`); the drain
+  refuses at most the 0-RTT packets held that carry such a frame, and none once the early keys are gone
+  (`established_nr`).
 -/
 
 namespace Vinc.TransportEarly
@@ -50,20 +55,45 @@ theorem direct_shape (c : C) (p : Pkt) :
     (((direct c p).2.q = c.q ∧ (direct c p).2.ph = c.ph) ∨ ((direct c p).2.q = [] ∧ (direct c p).2.ph = .closed)) ∧
       (direct c p).2.client = c.client ∧ (direct c p).2.rv = c.rv ∧ (direct c p).2.rx = c.rx ∧
       (direct c p).2.nb = c.nb ∧ (direct c p).2.nd = c.nd := by
-  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx⟩
+  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
   rcases p with ⟨id, k, f⟩
   cases k <;> cases f <;> cases er <;> simp [direct, shut]
 
 theorem direct_nu (c : C) (p : Pkt) :
     (direct c p).2.nu = c.nu + (if p.kind = .s ∧ p.fate = .fails then 1 else 0) := by
-  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx⟩
+  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
   rcases p with ⟨id, k, f⟩
   cases k <;> cases f <;> cases er <;> simp [direct, shut]
 
 theorem direct_open (c : C) (p : Pkt) (h : p.fate ≠ .closes) : (direct c p).2.ph = c.ph ∧ (direct c p).2.q = c.q := by
-  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx⟩
+  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
   rcases p with ⟨id, k, f⟩
   cases k <;> cases f <;> cases er <;> simp_all [direct]
+
+/-- A 0-RTT packet that opens and carries a frame only an established session sends is refused, and the refusal
+changes nothing but the count of refused packets; no other packet is refused. -/
+theorem direct_refused (c : C) (p : Pkt) :
+    ((direct c p).1 = .refused ↔ p.kind = .z ∧ c.er = true ∧ p.fate = .estOnly) ∧
+      ((direct c p).1 = .refused → (direct c p).2 = { c with nr := c.nr + 1 }) := by
+  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
+  rcases p with ⟨id, k, f⟩
+  cases k <;> cases f <;> cases er <;> simp [direct, shut]
+
+/-- Only a refusal moves the count of refused packets. -/
+theorem direct_nr (c : C) (p : Pkt) :
+    (direct c p).2.nr = c.nr + (if (direct c p).1 = .refused then 1 else 0) := by
+  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
+  rcases p with ⟨id, k, f⟩
+  cases k <;> cases f <;> cases er <;> simp [direct, shut]
+
+/-- A packet tried adds at most one refusal, and only a 0-RTT one with a frame only an established session sends;
+without early keys it adds none, and the early keys stay gone. -/
+theorem direct_nr_le (c : C) (p : Pkt) :
+    (direct c p).2.nr ≤ c.nr + (if p.kind = .z ∧ p.fate = .estOnly then 1 else 0) ∧
+      (c.er = false → (direct c p).2.nr = c.nr ∧ (direct c p).2.er = false) := by
+  rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
+  rcases p with ⟨id, k, f⟩
+  cases k <;> cases f <;> cases er <;> simp [direct, shut] <;> omega
 
 theorem live_rx (c : C) (cap : Nat) (room : Bool) (p : Pkt) : (live c cap room p).2.rx = c.rx := by
   unfold live
@@ -98,7 +128,7 @@ theorem live_held_eligible (c : C) (cap : Nat) (room : Bool) (p : Pkt) (h : (liv
   · rw [if_neg he] at h
     split at h
     · simp at h
-    · rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx⟩
+    · rcases c with ⟨cl, ph, er, rv, q, nb, nd, nu, rx, nr⟩
       rcases p with ⟨id, k, f⟩
       cases k <;> cases f <;> cases er <;> simp [direct, shut] at h
 
@@ -124,6 +154,26 @@ theorem live_nu (c : C) (cap : Nat) (room : Bool) (p : Pkt) :
           · rfl
         simp [hk, hrv]
       · simp [hk]
+
+theorem live_refused (c : C) (cap : Nat) (room : Bool) (p : Pkt) :
+    ((live c cap room p).1 = .refused ↔ eligible c p = false ∧ p.kind = .z ∧ c.er = true ∧ p.fate = .estOnly) ∧
+      ((live c cap room p).1 = .refused → (live c cap room p).2 = { c with nr := c.nr + 1 }) ∧
+      (live c cap room p).2.nr = c.nr + (if (live c cap room p).1 = .refused then 1 else 0) := by
+  unfold live
+  by_cases he : eligible c p = true
+  · rw [if_pos he]
+    unfold holdPkt
+    split <;> simp [he]
+  · rw [if_neg he]
+    have hf : eligible c p = false := by simpa using he
+    by_cases hs : p.kind = .s ∧ c.rv = false
+    · rw [if_pos hs]
+      simp [hs.1]
+    · rw [if_neg hs]
+      obtain ⟨h1, h2⟩ := direct_refused c p
+      refine ⟨?_, h2, direct_nr c p⟩
+      rw [h1, hf]
+      simp
 
 theorem live_inv (cap : Nat) (c : C) (room : Bool) (p : Pkt) (hi : Inv cap c) (hfresh : ∀ x ∈ c.q, x.id < p.id) :
     Inv cap (live c cap room p).2 := by
@@ -218,6 +268,19 @@ theorem recv_nu (c : C) (cap : Nat) (room : Bool) (p : Pkt) (dlen : Nat) (h : c.
       c.nu + (if p.kind = .s ∧ c.rv = true ∧ p.fate = .fails then 1 else 0) := by
   rw [recv_live c cap room p dlen h, live_nu]
 
+/-- A 0-RTT packet that opens and carries a frame only an established session sends (ACK, CLOSE, REKEY, NEW_TICKETS
+or PATH_RESPONSE) is dropped whole: it is counted as refused and nothing else changes but the bytes received, which
+every datagram counts on arrival; the connection stays open. No other packet is refused so, and only a refusal moves
+the count. -/
+theorem recv_refused (c : C) (cap : Nat) (room : Bool) (p : Pkt) (dlen : Nat) (h : c.ph ≠ .closed) :
+    ((recv c cap room p dlen).1 = .refused ↔
+        eligible { c with rx := c.rx + dlen } p = false ∧ p.kind = .z ∧ c.er = true ∧ p.fate = .estOnly) ∧
+      ((recv c cap room p dlen).1 = .refused →
+        (recv c cap room p dlen).2 = { c with rx := c.rx + dlen, nr := c.nr + 1 }) ∧
+      (recv c cap room p dlen).2.nr = c.nr + (if (recv c cap room p dlen).1 = .refused then 1 else 0) := by
+  rw [recv_live c cap room p dlen h]
+  exact live_refused _ cap room p
+
 theorem recv_inv (cap : Nat) (c : C) (room : Bool) (p : Pkt) (dlen : Nat) (hi : Inv cap c)
     (hfresh : ∀ x ∈ c.q, x.id < p.id) : Inv cap (recv c cap room p dlen).2 := by
   by_cases hc : c.ph = .closed
@@ -298,6 +361,37 @@ theorem established_nu (c : C) (h : ∀ p ∈ c.q, p.fate ≠ .closes) :
     (established c).1.nu = c.nu + (c.q.filter (fun p => p.kind = .s ∧ p.fate = .fails)).length := by
   exact ((drainQ_spec c.q { c with ph := .up, rv := true } (by simp)).2.2.2.2.2.2.2 h).2.2
 
+/-- The drain refuses at most the 0-RTT packets held that carry a frame only an established session sends, and none
+once the early keys are gone. -/
+theorem drainQ_nr (l : List Pkt) : ∀ c : C,
+    (drainQ c l).1.nr ≤ c.nr + (l.filter (fun p => p.kind = .z ∧ p.fate = .estOnly)).length ∧
+      (c.er = false → (drainQ c l).1.nr = c.nr) := by
+  induction l with
+  | nil => intro c; simp [drainQ]
+  | cons p t ih =>
+    intro c
+    obtain ⟨h1, h2⟩ := direct_nr_le c p
+    have hf : ((p :: t).filter (fun p => p.kind = .z ∧ p.fate = .estOnly)).length =
+        (if p.kind = .z ∧ p.fate = .estOnly then 1 else 0) +
+          (t.filter (fun p => p.kind = .z ∧ p.fate = .estOnly)).length := by
+      rcases p with ⟨id, k, f⟩
+      cases k <;> cases f <;> simp [List.filter_cons] <;> omega
+    unfold drainQ
+    dsimp only
+    split
+    · dsimp only
+      exact ⟨by rw [hf]; omega, fun he => (h2 he).1⟩
+    · dsimp only
+      obtain ⟨i1, i2⟩ := ih (direct c p).2
+      exact ⟨by rw [hf]; omega, fun he => by rw [i2 (h2 he).2, (h2 he).1]⟩
+
+/-- Establishing the session refuses at most the 0-RTT packets held that carry a frame only an established session
+sends, and none when the Hello brought no early keys. -/
+theorem established_nr (c : C) :
+    (established c).1.nr ≤ c.nr + (c.q.filter (fun p => p.kind = .z ∧ p.fate = .estOnly)).length ∧
+      (c.er = false → (established c).1.nr = c.nr) :=
+  drainQ_nr c.q { c with ph := .up, rv := true }
+
 theorem established_inv (cap : Nat) (c : C) : Inv cap (established c).1 := by
   have h := (established_count c).1
   have hcl := (drainQ_spec c.q { c with ph := .up, rv := true } (by simp)).2.2.2.2.2.2.1
@@ -316,5 +410,8 @@ theorem established_inv (cap : Nat) (c : C) : Inv cap (established c).1 := by
 #audit_axioms Vinc.TransportEarly.established_once
 #audit_axioms Vinc.TransportEarly.established_count
 #audit_axioms Vinc.TransportEarly.established_inv
+#audit_axioms Vinc.TransportEarly.direct_refused
+#audit_axioms Vinc.TransportEarly.recv_refused
+#audit_axioms Vinc.TransportEarly.established_nr
 
 end Vinc.TransportEarly

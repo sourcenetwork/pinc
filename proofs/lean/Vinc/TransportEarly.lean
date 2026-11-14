@@ -9,8 +9,10 @@ in `Vinc.TransportEarlyThm`.
 
 A connection is the phase, whether the 0-RTT and the 1-RTT receive keys exist, the packets held (oldest first) and
 the counters the code keeps. A packet has its place in the order of arrival, a kind (`z` a 0-RTT long packet, `s` a
-1-RTT short one) and a fate when it is opened: it authenticates, it does not, or it authenticates and its frames
-close the connection. Which keys open it is not modelled, only that its kind needs the keys the connection has;
+1-RTT short one) and a fate when it is opened: it authenticates, it does not, it authenticates and its frames
+close the connection, or it authenticates and carries ACK, CLOSE, REKEY, NEW_TICKETS or PATH_RESPONSE, a frame only
+an established session sends (`estOnly`: a 0-RTT packet that does is dropped whole and counted, `process_payload`;
+a 1-RTT one is applied). Which keys open it is not modelled, only that its kind needs the keys the connection has;
 the datagram length `dlen` is the one thing of the bytes that counts (toward the amplification budget).
 -/
 
@@ -19,14 +21,14 @@ namespace Vinc.TransportEarly
 inductive Kind | z | s
   deriving BEq, DecidableEq, Repr
 
-inductive Fate | opens | fails | closes
+inductive Fate | opens | fails | closes | estOnly
   deriving BEq, DecidableEq, Repr
 
 /-- `closed` stands for both `Closing` and `Closed`, which refuse alike. -/
 inductive Ph | hs | up | closed
   deriving BEq, DecidableEq, Repr
 
-inductive Out | held | full | undec | ok | closed
+inductive Out | held | full | undec | ok | refused | closed
   deriving BEq, DecidableEq, Repr
 
 structure Pkt where
@@ -45,6 +47,7 @@ structure C where
   nd : Nat := 0
   nu : Nat := 0
   rx : Nat := 0
+  nr : Nat := 0
   deriving BEq, Repr
 
 /-- `begin_close` and `silent_close`: `release_buffers` lets go of every packet held. -/
@@ -55,18 +58,21 @@ def holdPkt (c : C) (cap : Nat) (room : Bool) (p : Pkt) : Out × C :=
   if c.q.length < cap ∧ room = true then (.held, { c with q := c.q ++ [p], nb := c.nb + 1 })
   else (.full, { c with nd := c.nd + 1 })
 
-/-- `on_zero_rtt`, and `on_short` with the 1-RTT keys in place: opened or refused, never held. A 1-RTT packet that
-opens ends the use of the early keys; one that fails is counted as undecryptable, a 0-RTT one is not. -/
+/-- `on_zero_rtt`, and `on_short` with the 1-RTT keys in place: opened or refused, never held. A 0-RTT packet that
+opens and carries a frame only an established session sends is dropped whole before any of its frames is applied,
+and counted (`early_refused`); the connection stays open. A 1-RTT packet that opens ends the use of the early keys,
+whatever its frames; one that fails is counted as undecryptable, a 0-RTT one is not. -/
 def direct (c : C) (p : Pkt) : Out × C :=
   match p.kind with
   | .z =>
     if c.er = false ∨ p.fate = .fails then (.undec, c)
-    else (.ok, if p.fate = .opens then c else shut c)
+    else if p.fate = .estOnly then (.refused, { c with nr := c.nr + 1 })
+    else (.ok, if p.fate = .closes then shut c else c)
   | .s =>
     if p.fate = .fails then (.undec, { c with nu := c.nu + 1 })
     else
       let c1 := { c with er := false }
-      (.ok, if p.fate = .opens then c1 else shut c1)
+      (.ok, if p.fate = .closes then shut c1 else c1)
 
 /-- Whether `on_packet` keeps the packet for want of keys: a 0-RTT packet on a server in its handshake that has no
 early keys yet, a 1-RTT packet in a handshake before the 1-RTT keys exist. -/

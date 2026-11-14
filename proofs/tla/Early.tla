@@ -26,14 +26,22 @@
 (*  - nothing held survives the close (Phase, Closed);                     *)
 (*  - amplification: every datagram a live connection receives counts      *)
 (*    toward the bytes received on arrival, held, refused or opened; the   *)
-(*    drain adds nothing (Amp).                                            *)
+(*    drain adds nothing (Amp);                                            *)
+(*  - a 0-RTT packet that opens and carries a frame only an established    *)
+(*    session sends (ACK, CLOSE, REKEY, NEW_TICKETS or PATH_RESPONSE) is   *)
+(*    dropped whole: it is counted as refused and changes nothing else,    *)
+(*    the connection stays open; no other packet is refused so, and only   *)
+(*    a refusal moves the count, on arrival and in the drain               *)
+(*    (EarlyRefused).                                                      *)
 (* RULE picks the rule: "code" is what the code does; the witnesses give   *)
 (* a wrong one each and the matching property fails: "oldest" (a full      *)
 (* buffer loses the oldest packet, not the new one: FullRefuses),          *)
 (* "anyphase" (a client keeps 0-RTT packets too: Kinds), "noclear" (the    *)
 (* close keeps the buffer: Phase), "redrain" (the drain leaves the packets *)
-(* in the buffer: Drain) and "ampopen" (a packet counts only when it       *)
-(* opens: Amp). Lean counterpart: proofs/lean/Vinc/TransportEarly*.lean.   *)
+(* in the buffer: Drain), "ampopen" (a packet counts only when it opens:   *)
+(* Amp) and "anyframe" (the rule before #295: a 0-RTT packet that opens is *)
+(* applied whatever its frames: EarlyRefused). Lean counterpart:           *)
+(* proofs/lean/Vinc/TransportEarly*.lean.                                  *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS CAP, KMAX, RULE
@@ -46,6 +54,7 @@ Init == /\ \E cl \in BOOLEAN : c = Early0(cl)
         /\ prev = c /\ lst = [op |-> "init"] /\ nid = 0 /\ held = {} /\ att = 0
 
 Pkts == {[kind |-> k, fate |-> f] : k \in {"z", "s"}, f \in {"open", "fail", "close"}}
+        \cup {[kind |-> "z", fate |-> "estonly"]}
 
 RecvStep == \E q \in Pkts, room \in BOOLEAN, dlen \in 1..2 :
     LET p == [id |-> nid + 1, kind |-> q.kind, fate |-> q.fate]
@@ -56,6 +65,8 @@ RecvStep == \E q \in Pkts, room \in BOOLEAN, dlen \in 1..2 :
              THEN [out |-> "held", c |-> [base.c EXCEPT !.q = Append(Tail(c.q), p)]]
              ELSE IF RULE = "ampopen" /\ base.out # "ok" /\ c.ph # "closed"
              THEN [out |-> base.out, c |-> [base.c EXCEPT !.rx = c.rx]]
+             ELSE IF RULE = "anyframe" /\ base.out = "refused"
+             THEN [out |-> "ok", c |-> [base.c EXCEPT !.nr = c.nr]]
              ELSE base
     IN /\ nid < KMAX
        /\ c' = x.c /\ prev' = c /\ nid' = nid + 1
@@ -115,6 +126,22 @@ Drain == lst.op = "est" =>
 DrainOnce == lst.op = "est" => (IsIncreasing(lst.done) /\ \A i \in DOMAIN lst.done : lst.done[i] \in held)
 Closed == c.ph = "closed" => c.q = <<>>
 
+\* the i-th packet held in x is a 0-RTT packet with a frame only an established session sends, and the early keys
+\* are still there when the drain reaches it (a 1-RTT packet before it that opened ended their use)
+RefusedAt(x, i) ==
+    /\ x.q[i].kind = "z" /\ x.q[i].fate = "estonly" /\ x.er
+    /\ \A j \in 1..(i - 1) : ~(x.q[j].kind = "s" /\ x.q[j].fate # "fail")
+\* a 0-RTT packet that opens and carries a frame only an established session sends is dropped whole: it is counted as
+\* refused and nothing else changes (its datagram was counted on arrival, as every one); no other packet is refused,
+\* and only a refusal moves the count, also in the drain
+EarlyRefused ==
+    /\ lst.op = "recv" =>
+         /\ (lst.out = "refused") =
+              (prev.ph # "closed" /\ ~RecvElig /\ lst.p.kind = "z" /\ prev.er /\ lst.p.fate = "estonly")
+         /\ IF lst.out = "refused" THEN c = [RecvPre EXCEPT !.nr = prev.nr + 1] ELSE c.nr = prev.nr
+    /\ lst.op = "est" => c.nr = prev.nr + Cardinality({i \in DOMAIN lst.done : RefusedAt(prev, i)})
+    /\ lst.op \in {"keys", "close"} => c.nr = prev.nr
+
 Inv == Bound /\ Order /\ Phase /\ Kinds /\ HoldCount /\ HoldRight /\ FullRefuses /\ Refused /\ Counted /\ Amp
-       /\ Drain /\ DrainOnce /\ Closed
+       /\ Drain /\ DrainOnce /\ Closed /\ EarlyRefused
 =============================================================================

@@ -480,6 +480,7 @@ par witness_tlc early_anyphase Early Early_anyphase Kinds
 par witness_tlc early_noclear Early Early_noclear Phase
 par witness_tlc early_redrain Early Early_redrain Drain
 par witness_tlc early_ampopen Early Early_ampopen Amp
+par witness_tlc early_anyframe Early Early_anyframe EarlyRefused
 par run_tlc hdr Hdr Hdr
 par witness_tlc hdr_late Hdr Hdr_late WriteAtomic
 par witness_tlc hdr_coalesced Hdr Hdr_coalesced NotCoalesced

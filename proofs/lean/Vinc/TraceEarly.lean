@@ -7,9 +7,11 @@ import Vinc.TransportEarly
 The Lean half of the trace validation of the buffer of packets that arrive before their keys (`conn/recv.rs`,
 `drive.rs`, `life.rs`, `stream/datagram.rs`), the port of `proofs/tla/TraceEarly.tla`. It reads the `txea` events
 (the real buffer: pushes into pools of one to eight chunks, pops, clears) and the `txeb` events (real connections
-handed junk 0-RTT and 1-RTT packets before and after the session is established, and after the close), written by
-the Rust test `trace_early`, and replays every step through `Vinc.TransportEarly`: the state the model computes must
-be the one recorded, and so must the outcome of each packet.
+handed junk 0-RTT and 1-RTT packets before and after the session is established, and after the close; resumed
+servers handed a client's Hello alone, which raises the early keys and establishes the session, then the client's
+first 0-RTT packet alone, refused when it carries a frame only an established session sends), written by the Rust
+test `trace_early`, and replays every step through `Vinc.TransportEarly`: the state the model computes must be the
+one recorded, and so must the outcome of each packet.
 -/
 
 namespace Vinc.TraceEarly
@@ -28,7 +30,14 @@ def front (c : C) : Int := match c.q with | [] => -1 | p :: _ => p.id
 def junk (id : Nat) (k : Kind) : Pkt := { id, kind := k, fate := .fails }
 
 def outStr : Out → String
-  | .held => "held" | .full => "full" | .undec => "undec" | .ok => "ok" | .closed => "closed"
+  | .held => "held" | .full => "full" | .undec => "undec" | .ok => "ok" | .refused => "refused" | .closed => "closed"
+
+def fateOf : String → Except String Fate
+  | "open" => pure .opens
+  | "fail" => pure .fails
+  | "close" => pure .closes
+  | "estonly" => pure .estOnly
+  | f => throw s!"unknown fate {f}"
 
 /-- The buffer alone: the length, the packets dropped and the oldest packet held. -/
 def sameA (c : C) (j : J) : Except String Unit := do
@@ -47,6 +56,7 @@ def sameB (c : C) (j : J) : Except String Unit := do
   check (c.nb == (← natF v "nb")) "early_buffered differs"
   check (c.nd == (← natF v "nd")) "early_dropped differs"
   check (c.nu == (← natF v "nu")) "undecryptable differs"
+  check (c.nr == (← natF v "nr")) "early_refused differs"
   check (c.rx == (← natF v "rx")) "bytes_received differs"
 
 def replayEvent (j : J) (w : W) (idx : Nat) : Except String W := do
@@ -81,10 +91,17 @@ def replayEvent (j : J) (w : W) (idx : Nat) : Except String W := do
       pure { c, cap := ← natF j "cap" }
     | "rx" =>
       let k : Kind := if (← strF j "kind") == "z" then .z else .s
-      let (out, c2) := recv w.c w.cap true (junk idx k) (← natF j "dlen")
+      let f ← fateOf (← strF j "fate")
+      let p : Pkt := { id := idx, kind := k, fate := f }
+      let (out, c2) := recv w.c w.cap true p (← natF j "dlen")
       check (outStr out == (← strF j "out")) "rx: the outcome differs"
       sameB c2 j
       pure { w with c := c2 }
+    | "hello" =>
+      check (w.c.ph == .hs && !w.c.client) "hello: not a server in its handshake"
+      let (c1, _) := established (earlyKeys { w.c with rx := w.c.rx + (← natF j "dlen") })
+      sameB c1 j
+      pure { w with c := c1 }
     | "est" =>
       check (w.c.ph == .hs) "est: not in a handshake"
       let (c1, _) := established w.c
