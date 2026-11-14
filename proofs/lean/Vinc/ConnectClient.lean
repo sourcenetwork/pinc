@@ -344,10 +344,12 @@ inductive HomeStep where
   | fallback (r : Nat)
   deriving DecidableEq, Repr
 
-/-- The probe state for `R` relays. -/
+/-- The probe state for `R` relays. `order` is the place of each relay in the order of first answers (`0`: never
+answered); a restart keeps it. -/
 structure Netcheck where
   probes : List (Option (List Nat × Nat))
   rtt : List Nat
+  order : List Nat
   refl : List (Option Nat)
   home : Option Nat
   missed : List Nat
@@ -356,7 +358,7 @@ structure Netcheck where
   deriving DecidableEq, Repr
 
 def Netcheck.new (r : Nat) : Netcheck :=
-  ⟨List.replicate r none, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none⟩
+  ⟨List.replicate r none, List.replicate r 0, List.replicate r 0, List.replicate r none, none, List.replicate r 0, 0, none⟩
 
 def Netcheck.unhealthy (n : Netcheck) (i : Nat) : Bool := decide (n.missed.getD i 0 ≥ missLimit)
 
@@ -379,25 +381,37 @@ def argMin (idx : List Nat) (key : Nat → Nat) : Option Nat :=
     | none => some i
     | some b => if key i < key b then some i else some b) none
 
-/-- `Netcheck::answered`: the round trip when the nonce matched an outstanding probe. -/
+/-- Whether `i` comes strictly before `b` by `key`, then by `key2`. -/
+def lexLt (key key2 : Nat → Nat) (i b : Nat) : Bool :=
+  decide (key i < key b) || (decide (key i = key b) && decide (key2 i < key2 b))
+
+/-- The first index of the least pair `(key, key2)` among `idx` (`min_by_key` over a pair). -/
+def argMin2 (idx : List Nat) (key key2 : Nat → Nat) : Option Nat :=
+  idx.foldl (fun acc i => match acc with
+    | none => some i
+    | some b => if lexLt key key2 i b then some i else some b) none
+
+/-- The relays that ever answered (a place in the order of first answers) and are not unhealthy. -/
+def Netcheck.answeredRelays (n : Netcheck) : List Nat :=
+  (List.range n.probes.length).filter fun i => decide (n.order.getD i 0 > 0) && !n.unhealthy i
+
+/-- `Netcheck::answered`: the round trip when the nonce matched an outstanding probe. A relay's first answer gives it
+the next place in the order of first answers (the code's `u32` saturation is out of reach: the places are at most the
+number of relays); the home is re-chosen at every answer: the relay with the lowest last round trip among every relay
+that ever answered and is not unhealthy, a tie to the one that answered first. -/
 def Netcheck.answered (n : Netcheck) (now relay : Nat) (nonce : List Nat) (addr : Nat) : Option Nat × Netcheck :=
   match n.probes.getD relay none with
   | some (nc, sent) =>
     if nc ≠ nonce then (none, n)
     else
       let rtt := satSub now sent
+      let place := if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0
       let n1 := { n with probes := n.probes.set relay none, missed := n.missed.set relay 0,
-                         rtt := n.rtt.set relay rtt, refl := n.refl.set relay (some addr) }
-      let cands := (List.range n.probes.length).filter fun i => (n1.refl.getD i none).isSome && !n1.unhealthy i
-      let best := argMin cands fun i => n1.rtt.getD i 0
-      let n2 := match best with
-        | some b =>
-          if (n1.home != some b) && (match n1.home with
-              | none => true
-              | some h => n1.unhealthy h || decide (n1.rtt.getD b 0 < n1.rtt.getD h 0)) then { n1 with home := some b }
-          else n1
-        | none => n1
-      (some rtt, n2)
+                         rtt := n.rtt.set relay rtt, order := n.order.set relay place, refl := n.refl.set relay (some addr) }
+      let best := argMin2 n1.answeredRelays (fun i => n1.rtt.getD i 0) (fun i => n1.order.getD i 0)
+      (some rtt, match best with
+        | some b => { n1 with home := some b }
+        | none => n1)
   | none => (none, n)
 
 /-- `Netcheck::failover`: move the home away from an unhealthy relay, only to one known to work: a probe answered since
@@ -426,8 +440,10 @@ def Netcheck.rttOf (n : Netcheck) (i : Nat) : Option Nat :=
 def Netcheck.bestRtt (n : Netcheck) : Nat :=
   (((List.range n.probes.length).filter fun i => (n.refl.getD i none).isSome).map fun i => n.rtt.getD i 0).min?.getD 0
 
+/-- `Netcheck::restart`: the link changed; the answers of the round are forgotten, the home, the order of first answers
+and the count of rounds without a home stay. -/
 def Netcheck.restart (n : Netcheck) : Netcheck :=
-  { n with probes := n.probes.map fun _ => none, refl := n.refl.map fun _ => none, firstProbe := none, tries := 0 }
+  { n with probes := n.probes.map fun _ => none, refl := n.refl.map fun _ => none, firstProbe := none }
 
 /-- `Netcheck::home_missing`. -/
 def Netcheck.homeMissing (n : Netcheck) (first : Option Nat) : HomeStep × Netcheck :=

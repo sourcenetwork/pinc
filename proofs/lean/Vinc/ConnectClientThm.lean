@@ -16,8 +16,9 @@ For every instant, every view and every state:
 * lookup: `ask_size` (the table keeps its size), `answered_removes`, `deadline_due`, and
   `verify_found`: an answer is accepted only if the record parses, its signature verifies and it names the peer asked
   about;
-* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; that an answer moves the home only to a relay with a
-  strictly lower round trip, or away from an unhealthy one, is not proved in Lean yet.
+* netcheck: `classify_blocked`, `failover_healthy`, `missing_fallback`; `answered_home_least`: after an answer the home
+  is the relay with the lowest last round trip among those that ever answered and are not unhealthy, a tie to the one
+  that answered first; `restart_keeps`: a link change keeps the home, that order and the rounds without a home.
 -/
 
 namespace Vinc.ConnectClient
@@ -367,6 +368,137 @@ theorem failover_measured_least (n : Netcheck) (usable : Nat → Bool) (home m :
   simp only [List.mem_filter, List.mem_range, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq]
   exact ⟨hi, ⟨⟨hne, hus⟩, hz⟩, hrf⟩
 
+/-! ## Netcheck: the home after an answer -/
+
+/-- The fold of `argMin2` from a known best: the result is the best or a later element, and none comes before it by
+`key`, then by `key2`. -/
+theorem argMin2_fold (key key2 : Nat → Nat) (l : List Nat) :
+    ∀ (b x : Nat), l.foldl (fun acc i => match acc with
+        | none => some i
+        | some b => if lexLt key key2 i b then some i else some b) (some b) = some x →
+      (x = b ∨ x ∈ l) ∧ (key x < key b ∨ (key x = key b ∧ key2 x ≤ key2 b)) ∧
+        ∀ i ∈ l, key x < key i ∨ (key x = key i ∧ key2 x ≤ key2 i) := by
+  induction l with
+  | nil => intro b x h; simp at h; subst h; simp
+  | cons a t ih =>
+    intro b x h
+    simp only [List.foldl_cons] at h
+    by_cases hlt : lexLt key key2 a b = true
+    · rw [if_pos hlt] at h
+      obtain ⟨h1, h2, h3⟩ := ih a x h
+      simp only [lexLt, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hlt
+      refine ⟨?_, by omega, ?_⟩
+      · rcases h1 with h1 | h1
+        · exact Or.inr (h1 ▸ List.mem_cons_self)
+        · exact Or.inr (List.mem_cons_of_mem _ h1)
+      · intro i hi
+        rcases List.mem_cons.mp hi with rfl | hi
+        · exact h2
+        · exact h3 i hi
+    · rw [if_neg hlt] at h
+      obtain ⟨h1, h2, h3⟩ := ih b x h
+      simp only [lexLt, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hlt
+      refine ⟨?_, h2, ?_⟩
+      · rcases h1 with h1 | h1
+        · exact Or.inl h1
+        · exact Or.inr (List.mem_cons_of_mem _ h1)
+      · intro i hi
+        rcases List.mem_cons.mp hi with rfl | hi
+        · omega
+        · exact h3 i hi
+
+/-- `argMin2` picks a member of the list, and none comes before it by `key`, then by `key2`. -/
+theorem argMin2_spec (idx : List Nat) (key key2 : Nat → Nat) (x : Nat) (h : argMin2 idx key key2 = some x) :
+    x ∈ idx ∧ ∀ i ∈ idx, key x < key i ∨ (key x = key i ∧ key2 x ≤ key2 i) := by
+  unfold argMin2 at h
+  cases idx with
+  | nil => simp at h
+  | cons a t =>
+    simp only [List.foldl_cons] at h
+    obtain ⟨h1, h2, h3⟩ := argMin2_fold key key2 t a x h
+    refine ⟨?_, ?_⟩
+    · rcases h1 with h1 | h1
+      · exact h1 ▸ List.mem_cons_self
+      · exact List.mem_cons_of_mem _ h1
+    · intro i hi
+      rcases List.mem_cons.mp hi with rfl | hi
+      · exact h2
+      · exact h3 i hi
+
+/-- The fold of `argMin2` from a known best gives a result. -/
+theorem argMin2_fold_some (key key2 : Nat → Nat) (l : List Nat) :
+    ∀ b, ∃ x, l.foldl (fun acc i => match acc with
+        | none => some i
+        | some b => if lexLt key key2 i b then some i else some b) (some b) = some x := by
+  induction l with
+  | nil => intro b; exact ⟨b, rfl⟩
+  | cons a t ih =>
+    intro b
+    simp only [List.foldl_cons]
+    by_cases hlt : lexLt key key2 a b = true
+    · rw [if_pos hlt]; exact ih a
+    · rw [if_neg hlt]; exact ih b
+
+/-- `argMin2` finds nothing only in an empty list. -/
+theorem argMin2_none (idx : List Nat) (key key2 : Nat → Nat) (h : argMin2 idx key key2 = none) : idx = [] := by
+  unfold argMin2 at h
+  cases idx with
+  | nil => rfl
+  | cons a t =>
+    simp only [List.foldl_cons] at h
+    obtain ⟨x, hx⟩ := argMin2_fold_some key key2 t a
+    exact absurd (hx.symm.trans h) (by simp)
+
+/-- After an accepted answer the home is a relay that ever answered and is not unhealthy, and none of those has a lower
+last round trip, nor the same one with an earlier first answer: a fallback home that never answered moves to the first
+relay that does. The order and miss lists have one entry per relay, as the code's arrays. -/
+theorem answered_home_least (n n' : Netcheck) (now relay r : Nat) (nonce : List Nat) (addr : Nat)
+    (ho : n.order.length = n.probes.length) (hm : n.missed.length = n.probes.length)
+    (h : n.answered now relay nonce addr = (some r, n')) :
+    ∃ x, n'.home = some x ∧ x ∈ n'.answeredRelays ∧
+      ∀ i ∈ n'.answeredRelays, n'.rtt.getD x 0 < n'.rtt.getD i 0 ∨
+        (n'.rtt.getD x 0 = n'.rtt.getD i 0 ∧ n'.order.getD x 0 ≤ n'.order.getD i 0) := by
+  unfold Netcheck.answered at h
+  cases hp : n.probes.getD relay none with
+  | none => (simp only [hp] at h) <;> simp at h
+  | some p =>
+    obtain ⟨nc, sent⟩ := p
+    simp only [hp] at h
+    split at h
+    · simp at h
+    · have hrl : relay < n.probes.length := by
+        by_cases hc : relay < n.probes.length
+        · exact hc
+        · have hn : n.probes[relay]? = none := List.getElem?_eq_none (by omega)
+          rw [List.getD_eq_getElem?_getD, hn] at hp
+          simp at hp
+      have hpos : 0 < (if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0) := by
+        split <;> omega
+      generalize (if n.order.getD relay 0 = 0 then n.order.foldl max 0 + 1 else n.order.getD relay 0) = place at h hpos
+      generalize hb : argMin2 _ _ _ = best at h
+      cases best with
+      | none =>
+        exfalso
+        have hnil := argMin2_none _ _ _ hb
+        unfold Netcheck.answeredRelays at hnil
+        rw [List.filter_eq_nil_iff] at hnil
+        have hx := hnil relay (by simpa using hrl)
+        simp [List.getD_eq_getElem?_getD, List.getElem?_set_self, ho, hm, hrl, hpos, Netcheck.unhealthy, missLimit] at hx
+          <;> omega
+      | some b =>
+        simp only [Prod.mk.injEq] at h
+        obtain ⟨-, rfl⟩ := h
+        exact ⟨b, rfl, argMin2_spec _ _ _ _ hb⟩
+
+/-- A link change forgets the answers of the round and keeps the home, the order of first answers, the round trips, the
+misses and the count of rounds without a home (a node that moved after two silent rounds takes the fallback at the
+next). -/
+theorem restart_keeps (n : Netcheck) :
+    n.restart.home = n.home ∧ n.restart.order = n.order ∧ n.restart.tries = n.tries ∧ n.restart.rtt = n.rtt ∧
+      n.restart.missed = n.missed ∧ n.restart.refl.all Option.isNone := by
+  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_⟩
+  simp [Netcheck.restart, List.all_eq_true]
+
 
 end Vinc.ConnectClient
 
@@ -374,3 +506,5 @@ end Vinc.ConnectClient
 #audit_axioms Vinc.ConnectClient.failover_healthy
 #audit_axioms Vinc.ConnectClient.failover_none
 #audit_axioms Vinc.ConnectClient.failover_measured_least
+#audit_axioms Vinc.ConnectClient.answered_home_least
+#audit_axioms Vinc.ConnectClient.restart_keeps

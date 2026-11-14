@@ -199,7 +199,9 @@ Classify(local, refl, mapped, heard, since, wd) ==
     ELSE IF (\E i \in 1..Len(refl) : IsShared(refl[i][1])) \/ (\E i \in 1..Len(refl) : refl[i] # refl[1]) THEN 4
     ELSE 3
 
+\* order[i] is the place of relay i in the order of first answers (0: never answered); a restart keeps it
 NewNet(r) == [probes |-> [i \in 1..r |-> [e |-> FALSE, nonce |-> <<>>, sent |-> 0]], rtt |-> [i \in 1..r |-> 0],
+              order |-> [i \in 1..r |-> 0],
               refl |-> [i \in 1..r |-> -1], home |-> -1, missed |-> [i \in 1..r |-> 0], tries |-> 0, fp |-> -1]
 Unhealthy(N, i) == N.missed[i + 1] >= MISSLIMIT
 NFailed(N, i) == IF i < Len(N.missed) THEN [N EXCEPT !.missed[i + 1] = Min(255, N.missed[i + 1] + 1)] ELSE N
@@ -210,14 +212,24 @@ NProbeSent(N, now, relay, nonce, works) ==
     THEN [N1 EXCEPT !.probes[relay + 1] = [e |-> TRUE, nonce |-> nonce, sent |-> now], !.fp = IF N1.fp < 0 THEN now ELSE N1.fp]
     ELSE N1
 ArgMin(S, key) == IF S = {} THEN -1 ELSE CHOOSE m \in S : \A x \in S : key[m + 1] < key[x + 1] \/ (key[m + 1] = key[x + 1] /\ m <= x)
+\* the relay of S with the least key, a tie to the least second key, then to the first relay (min_by_key over the pair)
+ArgMin2(S, key, key2) ==
+    IF S = {} THEN -1
+    ELSE CHOOSE m \in S : \A x \in S : \/ key[m + 1] < key[x + 1]
+                                       \/ key[m + 1] = key[x + 1] /\ key2[m + 1] < key2[x + 1]
+                                       \/ key[m + 1] = key[x + 1] /\ key2[m + 1] = key2[x + 1] /\ m <= x
+\* the relays that ever answered and are not unhealthy: the home is chosen among them
+Answered(N) == {i \in 0..(Len(N.probes) - 1) : N.order[i + 1] > 0 /\ ~Unhealthy(N, i)}
+\* Netcheck::answered: the home is re-chosen at every answer, the lowest last round trip among every relay that ever
+\* answered (not only since the last restart), a tie to the relay that answered first
 NAnswered(N, now, relay, nonce, addr) ==
     IF relay >= Len(N.probes) \/ ~N.probes[relay + 1].e \/ N.probes[relay + 1].nonce # nonce THEN [res |-> -1, N |-> N]
     ELSE LET rtt == SatSub(now, N.probes[relay + 1].sent)
-             N1 == [N EXCEPT !.probes[relay + 1].e = FALSE, !.missed[relay + 1] = 0, !.rtt[relay + 1] = rtt, !.refl[relay + 1] = addr]
-             cands == {i \in 0..(Len(N1.probes) - 1) : N1.refl[i + 1] >= 0 /\ ~Unhealthy(N1, i)}
-             best == ArgMin(cands, N1.rtt)
-             N2 == IF best >= 0 /\ N1.home # best /\ (N1.home < 0 \/ Unhealthy(N1, N1.home) \/ N1.rtt[best + 1] < N1.rtt[N1.home + 1])
-                   THEN [N1 EXCEPT !.home = best] ELSE N1
+             top == LET O == {N.order[i] : i \in 1..Len(N.order)} IN CHOOSE m \in O : \A x \in O : x <= m
+             N1 == [N EXCEPT !.probes[relay + 1].e = FALSE, !.missed[relay + 1] = 0, !.rtt[relay + 1] = rtt, !.refl[relay + 1] = addr,
+                             !.order[relay + 1] = IF N.order[relay + 1] = 0 THEN top + 1 ELSE N.order[relay + 1]]
+             best == ArgMin2(Answered(N1), N1.rtt, N1.order)
+             N2 == IF best >= 0 THEN [N1 EXCEPT !.home = best] ELSE N1
          IN [res |-> rtt, N |-> N2]
 NFailover(N, usable, open) ==
     IF N.home < 0 \/ ~Unhealthy(N, N.home) THEN [res |-> -1, N |-> N]
@@ -229,8 +241,10 @@ NFailover(N, usable, open) ==
                     ELSE IF cand = {} THEN -1
                     ELSE (N.home + (CHOOSE k \in cand : \A x \in cand : k <= x)) % rn
          IN IF nxt < 0 THEN [res |-> -1, N |-> N] ELSE [res |-> nxt, N |-> [N EXCEPT !.home = nxt]]
+\* a link change forgets the answers of the round; the home, the order of first answers and the count of rounds
+\* without a home stay
 NRestart(N) == [N EXCEPT !.probes = [i \in 1..Len(N.probes) |-> [N.probes[i] EXCEPT !.e = FALSE]],
-                         !.refl = [i \in 1..Len(N.refl) |-> -1], !.fp = -1, !.tries = 0]
+                         !.refl = [i \in 1..Len(N.refl) |-> -1], !.fp = -1]
 NMissing(N, first) ==
     IF N.home >= 0 THEN [res |-> "done", N |-> N]
     ELSE LET N1 == [N EXCEPT !.tries = Min(255, N.tries + 1)] IN

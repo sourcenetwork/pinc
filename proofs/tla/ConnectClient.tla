@@ -26,13 +26,22 @@
 (*  LookupsOK   the table keeps its size and a peer is in at most one      *)
 (*              slot; a query within the retry wait is skipped; a peer is  *)
 (*              due only after the wait; nothing waits forever             *)
-(*  NetOK       the home is a valid relay and moves only to a relay with   *)
-(*              a strictly lower round trip, or away from an unhealthy     *)
-(*              one; a failover lands on a relay known to work (it         *)
+(*  NetOK       the home is a valid relay; after an answer it is the       *)
+(*              relay with the lowest last round trip among those that     *)
+(*              ever answered and are not unhealthy, a tie to the one that *)
+(*              answered first (so a fallback home that never answered     *)
+(*              moves to the first relay that does); the places in the     *)
+(*              order of first answers are 1..k, each once; a link change  *)
+(*              keeps the home, that order and the count of rounds without *)
+(*              a home; a failover lands on a relay known to work (it      *)
 (*              answered a probe since it last failed, or its carrier is   *)
 (*              open); a relay is unhealthy after three misses in a row    *)
-(*              and healthy again after an answer; after three unanswered  *)
-(*              rounds the first relay is the home                         *)
+(*              and healthy again after an answer; at the third round      *)
+(*              without a home, counted across link changes, the relay     *)
+(*              given (the lowest id) is the home                          *)
+(* Witnesses of the rules the code had before (TLC must violate them):     *)
+(*  ConnectClient_w_homelower  HomeOnlyLower: the home moves only to a     *)
+(*              strictly lower round trip or away from an unhealthy relay  *)
 (* Lean: Vinc/ConnectClientThm.lean.                                       *)
 (***************************************************************************)
 EXTENDS ConnectClientOps
@@ -148,6 +157,9 @@ LookupsOK ==
          \E i \in 1..2 : LK.items[i].e /\ LK.items[i].peer = pe /\ now > LK.items[i].at + LK.items[i].wait
     /\ \A now \in Times : (LNext(LK) >= 0 /\ LNext(LK) <= now) => LDue(LK, now) # <<>>
 
+\* the answers the net configs can take in a state: every relay, address and time, the one nonce
+Answers == {NAnswered(NC, now, rl, <<1>>, a) : now \in Times, rl \in 0..1, a \in 1..2}
+
 NetOK ==
     /\ NC.home \in -1..1
     /\ \A i \in 0..1 : Unhealthy(NC, i) = (NC.missed[i + 1] >= MISSLIMIT)
@@ -155,6 +167,30 @@ NetOK ==
          LET f == NFailover(NC, us, op) IN
          f.res >= 0 => (f.res # NC.home /\ ~Unhealthy(NC, f.res) /\ us[f.res + 1] /\ f.N.home = f.res
                         /\ ((NC.missed[f.res + 1] = 0 /\ NC.refl[f.res + 1] >= 0) \/ op[f.res + 1]))
+    \* the relays that answered hold the places 1..k of the order of first answers, each once
+    /\ LET A == {i \in 1..2 : NC.order[i] > 0} IN {NC.order[i] : i \in A} = 1..Cardinality(A)
+    \* after an answer the home is the relay with the lowest last round trip among those that ever answered and are not
+    \* unhealthy, a tie to the one that answered first
+    /\ \A r \in Answers : r.res >= 0 =>
+         LET h == r.N.home IN
+         /\ h \in Answered(r.N)
+         /\ \A i \in Answered(r.N) : \/ r.N.rtt[h + 1] < r.N.rtt[i + 1]
+                                     \/ r.N.rtt[h + 1] = r.N.rtt[i + 1] /\ r.N.order[h + 1] <= r.N.order[i + 1]
+    \* a link change forgets the round's answers and keeps the home, the order and the rounds without a home
+    /\ LET s == NRestart(NC) IN
+       /\ s.home = NC.home /\ s.order = NC.order /\ s.tries = NC.tries /\ s.rtt = NC.rtt /\ s.missed = NC.missed
+       /\ \A i \in 1..2 : s.refl[i] = -1 /\ ~s.probes[i].e
+    \* a round without a home is counted; at the third the relay given is the home
+    /\ \A fr \in 0..1 :
+         LET m == NMissing(NC, fr) IN
+         /\ NC.home >= 0 => m.res = "done" /\ m.N = NC
+         /\ (NC.home < 0 /\ NC.tries + 1 >= HOMETRIES) => m.N.home = fr
+         /\ (NC.home < 0 /\ NC.tries + 1 < HOMETRIES) => m.N.home = -1 /\ m.N.tries = NC.tries + 1
+
+\* the old rule: an answer moves the home only to a strictly lower round trip, or away from an unhealthy home
+HomeOnlyLower ==
+    \A r \in Answers : (r.res >= 0 /\ r.N.home # NC.home) =>
+        (NC.home < 0 \/ Unhealthy(r.N, NC.home) \/ r.N.rtt[r.N.home + 1] < r.N.rtt[NC.home + 1])
 
 \* the miss and try counters saturate at 255 in the code; one past the threshold covers every branch
 Bounded == (\A i \in 1..2 : NC.missed[i] <= MISSLIMIT + 1) /\ NC.tries <= HOMETRIES + 1
