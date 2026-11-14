@@ -1,6 +1,8 @@
-//! Memory across runs: the same world run again and again in one process keeps its resident size flat, because a
-//! restarted node reuses the connection table of its previous incarnation and a finished run gives its tables back.
-//! The scenario is S12 (many restarts); the numbers print with `--nocapture`.
+//! Memory across runs: the same world run again and again in one process holds the same live heap after every run,
+//! because a restarted node reuses the connection table of its previous incarnation and a finished run gives its
+//! tables back. The scenario is S13; what is measured is the allocator's own live bytes (allocated minus freed),
+//! which other processes cannot move, and never the resident size, which the kernel moves whenever the host is
+//! under memory pressure. The numbers print with `--nocapture`.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -8,58 +10,96 @@
     clippy::cast_precision_loss
 )]
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
 use vinc_sim::Driver;
 use vinc_sim::suite::run::{LayerSet, run};
 use vinc_sim::suite::world::{build, variants};
 
-/// The resident set of this process in bytes (Linux).
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+/// A global allocator that forwards to the system allocator and keeps the process-wide live bytes and their peak. The
+/// shared counting allocator of the test support counts per thread and never frees, so it cannot give a live figure.
+struct Live;
+
+fn grow(by: usize) {
+    let now = LIVE.fetch_add(by, Relaxed) + by;
+    PEAK.fetch_max(now, Relaxed);
+}
+
+// SAFETY: every method forwards its arguments unchanged to `System`, which upholds the `GlobalAlloc` contract; the
+// counters are atomics and never allocate.
+#[allow(unsafe_code)]
+unsafe impl GlobalAlloc for Live {
+    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc(l) };
+        if !p.is_null() {
+            grow(l.size());
+        }
+        p
+    }
+    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        let p = unsafe { System.alloc_zeroed(l) };
+        if !p.is_null() {
+            grow(l.size());
+        }
+        p
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        LIVE.fetch_sub(l.size(), Relaxed);
+        unsafe { System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+        let q = unsafe { System.realloc(p, l, new) };
+        if !q.is_null() {
+            LIVE.fetch_sub(l.size(), Relaxed);
+            grow(new);
+        }
+        q
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Live = Live;
+
+/// The resident set of this process in bytes (Linux), printed for information only.
 fn resident() -> u64 {
     let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
     statm.split_whitespace().nth(1).unwrap().parse::<u64>().unwrap() * 4096
 }
 
-/// How much one more run may grow the process: far below the 16 MiB an incarnation used to leak.
-const GROWTH_PER_RUN: u64 = 8 << 20;
 /// How many times the world is run.
 const RUNS: usize = 12;
-/// The runs in which the warm-up may grow the process by more than that.
-/// The larger step came in the third run in every measurement until a stream's send record grew to remember 64
-/// acknowledged ranges instead of 16; since that change it comes anywhere from the third run to the twelfth. The
-/// likely reason, read from the change and not measured: each record is larger, which moves the point at which the
-/// busiest sessions first touch new pages.
-const WARM_UP_STEPS: usize = 2;
-/// The most the warm-up adds in all: the two steps measured come to about 62 MiB.
-const WARM_UP_TOTAL: u64 = 80 << 20;
+/// How much one run may add to the live bytes over the run before it. Measured: the live bytes of this world differ
+/// from one run to the next by a toggle of about 180 KB (the buffer pools and the recycled-table maps of the run
+/// thread, each bounded) and a drift of about 0.5 KB per run; a run that keeps its connection tables adds about 3 GB.
+const STEP: usize = 512 << 10;
+/// How much the live bytes after the last run may exceed those after the first in all: well above the toggle, and
+/// below what a leak of even 30 KB per run adds over eleven runs.
+const TOTAL: usize = 256 << 10;
 
 #[test]
 fn a_rerun_world_does_not_grow_the_process() {
     let v = variants().into_iter().find(|v| v.id == "S13").unwrap();
     let world = build(&v).unwrap();
-    let mut seen = Vec::new();
+    let mut live = Vec::new();
     for _ in 0..RUNS {
-        let r = run(&world, Driver::Vinc, LayerSet::NODE).unwrap();
-        assert!(r.ran);
-        seen.push(resident());
+        assert!(run(&world, Driver::Vinc, LayerSet::NODE).unwrap().ran);
+        live.push(LIVE.load(Relaxed));
+        println!(
+            "live {} peak {} resident {}",
+            live[live.len() - 1],
+            PEAK.load(Relaxed),
+            resident()
+        );
     }
-    let mib = |b: u64| b as f64 / f64::from(1u32 << 20);
-    println!(
-        "resident after each run (MiB): {:?}",
-        seen.iter().map(|b| mib(*b)).collect::<Vec<_>>()
-    );
-    // A node's connection memory is recycled between runs and becomes resident page by page as sessions first touch
-    // it, so the process grows in a few steps while the busiest sessions reach pages no earlier run touched, and then
-    // stays flat. Measured: one step of about 15 MiB and one of about 45 MiB, at the second run and at some later run
-    // (the third to the tenth were seen; which one depends on the order the chunks were released in), then flat to a
-    // few tens of KiB. A leak is different in kind: it adds to the process at every run. So a leak shows as growth in more runs
-    // than the warm-up has steps, and as a total above what the tables can hold.
-    let steps = seen
-        .windows(2)
-        .filter(|w| w[1].saturating_sub(w[0]) > GROWTH_PER_RUN)
-        .count();
-    assert!(
-        steps <= WARM_UP_STEPS,
-        "the process grew by more than 8 MiB in {steps} of {RUNS} runs"
-    );
-    let total = seen[RUNS - 1].saturating_sub(seen[0]);
-    assert!(total <= WARM_UP_TOTAL, "grew {} MiB over {RUNS} runs", mib(total));
+    // A leak adds to the live bytes at every run, so every run ends above the one before it by the same step.
+    for (n, w) in live.windows(2).enumerate() {
+        let step = w[1].saturating_sub(w[0]);
+        assert!(step <= STEP, "run {} holds {step} more bytes than run {}", n + 2, n + 1);
+    }
+    let total = live[RUNS - 1].saturating_sub(live[0]);
+    assert!(total <= TOTAL, "the live bytes grew by {total} over {RUNS} runs");
 }
