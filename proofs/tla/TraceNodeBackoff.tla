@@ -15,6 +15,14 @@
 (* the size of the table the code recorded; a dump of the whole table must *)
 (* be the model's. Times and waits are four 16-bit limbs.                  *)
 (*                                                                         *)
+(* One run drives a real node instead (`Node` over a scripted endpoint)    *)
+(* whose session table is full: each dial of a hub comes up and the table  *)
+(* sheds the session (events.rs `hub_connected`), which is `Backoff`. The  *)
+(* node's table is not readable, so the record of a shed has no entry; the *)
+(* duty passes that follow (duties.rs `duties`: `dial_peer` of each hub,   *)
+(* then the prune) record whether the node dialed the hub, which must be   *)
+(* exactly outside the window the model's entry makes.                     *)
+(*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds nobo.ndjson.          *)
 (***************************************************************************)
@@ -42,13 +50,20 @@ DenyEv == LET x == DenyBack(F, L(Ev0.now), Ev0.peer)
 \* the frame hand-off takes a frame for a peer with no session and nothing queued exactly outside the window
 GateEv == /\ Ev0.op = "gate" /\ (~Window(F, L(Ev0.now), Ev0.peer)) = Ev0.ok
           /\ F' = F /\ Rec(Ev0.peer, Ev0.e) /\ Size(F) = Ev0.len /\ UNCHANGED hubs
+\* our dial of the peer came up and the full session table shed the session: a failed dial
+ShedEv == /\ Ev0.op = "shed" /\ F' = Backoff(F, L(Ev0.now), Ev0.peer, Ev0.peer \in hubs).f /\ UNCHANGED hubs
+\* a duty pass of the node; the peer has no session, no dial in progress and is not revoked, so the node dials it
+\* exactly outside its window; the pass ends with the prune
+DutyEv == /\ Ev0.op = "duty" /\ (~Window(F, L(Ev0.now), Ev0.peer)) = Ev0.dialed
+          /\ F' = Prune(F, L(Ev0.now)) /\ UNCHANGED hubs
 DumpEv == /\ Ev0.op = "dump" /\ F' = F /\ UNCHANGED hubs
           /\ Used(F) = {Ev0.entries[k][1] : k \in DOMAIN Ev0.entries}
           /\ \A k \in DOMAIN Ev0.entries :
                 F[Ev0.entries[k][1]] = <<L(Ev0.entries[k][2]), L(Ev0.entries[k][3])>>
 
 Init == i = 1 /\ F = Tab0(1..1) /\ hubs = {}
-Step == /\ i <= Len(Trace) /\ Ev0.t = "nobo" /\ (InitEv \/ BackoffEv \/ DenyEv \/ GateEv \/ DumpEv) /\ i' = i + 1
+Step == /\ i <= Len(Trace) /\ Ev0.t = "nobo"
+        /\ (InitEv \/ BackoffEv \/ DenyEv \/ GateEv \/ ShedEv \/ DutyEv \/ DumpEv) /\ i' = i + 1
 Finished == i > Len(Trace) /\ UNCHANGED vars
 TNext == Step \/ Finished
 TraceSpec == Init /\ [][TNext]_vars

@@ -9,6 +9,11 @@ The Lean half of the trace validation of the node's table of failed dials (`vinc
 replays every call through `Vinc.NodeBackoff.backoff`, `denyBack` and `window`: the entry of the peer and the size
 of the table the model computes must be the ones recorded, and so must the answer of the guard; a dump of the whole
 table must be the model's. Times and waits are four 16-bit limbs, up to `u64::MAX`.
+
+One run drives a real node whose session table is full: a `shed` (our dial of a hub came up and the table shed the
+session) is replayed through `backoff`, with no entry recorded (the node's table is a private field), and each
+`duty` (a duty pass: `dial_peer` of the hub, then the prune) must have dialed the hub exactly when the model's
+`window` is open, and is replayed through `prune`.
 -/
 
 namespace Vinc.TraceNodeBackoff
@@ -67,6 +72,14 @@ def replayEvent (j : J) (w : W) : Except String W := do
     check ((!window w.f (← limbs (← field j "now")) p) == (← boolF j "ok")) "gate: the answer differs"
     same w.f p j "gate"
     pure w
+  | "shed" =>
+    let p ← natF j "peer"
+    pure { w with f := (backoff w.max (w.hubs.contains p) w.f (← limbs (← field j "now")) p).2 }
+  | "duty" =>
+    let p ← natF j "peer"
+    let now ← limbs (← field j "now")
+    check ((!window w.f now p) == (← boolF j "dialed")) "duty: the node's dial differs from the model's window"
+    pure { w with f := prune w.f now }
   | "dump" =>
     let rows ← match (← field j "entries").arr? with
       | some a => a.toList.mapM fun r => do

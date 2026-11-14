@@ -16,9 +16,17 @@
 //! entry for, and `gate` is false exactly inside the window. After every call the record carries the entry of the
 //! peer and the size of the table; a dump of the whole table follows now and then and at the end of a run.
 //!
+//! One run drives a real node instead (a member over the scripted endpoint of `node_script.rs`) whose session table
+//! is full: each dial of a hub comes up and the table sheds the session (`hub_connected`), which is a failed dial.
+//! The node's table is a private field, so the run records the shed without an entry, then the node's duty passes
+//! and whether each dialed the hub: never before the wait is over (a pass in the middle of it, and one on its last
+//! nanosecond), always at its end (on the first nanosecond after it, or half a second after its last), through the
+//! waits 2, 4, 8, 16, 16 and 16 s.
+//!
 //! Not driven here: the guard of `dial_peer` beyond the window (a session, a dial in progress, a revoked peer),
-//! the reset of a session that lived 5 s, the prune and the table of dials in progress, which are `Node` methods
-//! over private fields; those rules are in the models only.
+//! the reset of a session that lived 5 s and the table of dials in progress, which are `Node` methods over private
+//! fields; those rules are in the models only. The prune runs at every duty pass of the node run but has nothing to
+//! let go of there.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -30,10 +38,15 @@
     unreachable_pub
 )]
 
+mod node_script;
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use vinc_node::BackoffProbe;
+use node_script::{DIALED, ScriptNode, hub_alpn, id_of, node_with};
+use vinc_core::{Event, SessionId};
+use vinc_crypto::NodeId;
+use vinc_node::{BackoffProbe, HUB_ALPN, NoApps};
 use vinc_tests::SplitMix64;
 
 const MAX: usize = BackoffProbe::TABLE_MAX;
@@ -42,6 +55,9 @@ const HUB_CAP: u64 = BackoffProbe::HUB_CAP;
 const CAP: u64 = BackoffProbe::CAP;
 const DENY_FIRST: u64 = BackoffProbe::DENY_FIRST;
 const DENY_CAP: u64 = BackoffProbe::DENY_CAP;
+/// The duty cadence of a member node (`DUTY_MEMBER`, `config.rs`): the duty passes of the node run are at least this
+/// far apart, so each call of `handle_timeout` there is a duty pass.
+const DUTY: u64 = 500_000_000;
 
 fn limbs(v: u64) -> String {
     format!(
@@ -284,6 +300,123 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, cfg: &Cfg, seen: &mut Se
     assert_eq!(mine, theirs);
 }
 
+/// A thread with the stack a node needs.
+fn big<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// The dials `node` made of `hub` so far.
+fn dials_of(node: &mut ScriptNode<NoApps>, hub: &NodeId) -> usize {
+    node.endpoint_mut().dials.iter().filter(|d| *d == hub).count()
+}
+
+/// A duty pass of `node` at `now`, recorded as a `duty` event of peer 1 (`hub`): whether it dialed the hub.
+fn duty(node: &mut ScriptNode<NoApps>, hub: &NodeId, now: u64, out: &mut String, id: u32) -> bool {
+    let before = dials_of(node, hub);
+    node.handle_timeout(now);
+    let dialed = dials_of(node, hub) > before;
+    let _ = writeln!(
+        out,
+        r#"{{"t":"nobo","run":{id},"op":"duty","now":{},"peer":1,"dialed":{dialed}}}"#,
+        limbs(now)
+    );
+    dialed
+}
+
+/// The run of a real node: a member with hubs 1 and 2, whose session table 4000 sessions of a member (peer 3) and 96
+/// of hub 2 fill. Each dial of hub 1 comes up and the full table sheds the session, a failed dial; the duty passes
+/// that follow must not dial the hub before the wait is over and must dial it from then on.
+fn shed_run(id: u32) -> String {
+    let mut out = String::new();
+    let (h1, h2) = (id_of(0x61), id_of(0x62));
+    let mut node = node_with(false, &[h1, h2], HUB_ALPN, NoApps::default()).unwrap();
+    let _ = writeln!(
+        out,
+        r#"{{"t":"nobo","run":{id},"op":"init","max":{MAX},"peers":3,"hubs":[1,2],"first":{},"hubcap":{},"cap":{},"dfirst":{},"dcap":{}}}"#,
+        limbs(FIRST),
+        limbs(HUB_CAP),
+        limbs(CAP),
+        limbs(DENY_FIRST),
+        limbs(DENY_CAP)
+    );
+    let mut now = 1_000_000_000u64;
+    for i in 0..MAX as u64 {
+        let peer = if i < MAX as u64 - 96 { id_of(0x41) } else { h2 };
+        node.endpoint_mut().events.push_back(Event::Incoming {
+            session: SessionId(i),
+            node: peer,
+            alpn: hub_alpn(),
+        });
+        if i % 512 == 511 {
+            node.poll(now);
+            while node.poll_event().is_some() {}
+            now += 1_000_000;
+        }
+    }
+    assert!(node.endpoint_mut().closed.is_empty(), "the table took every session");
+    assert_eq!(
+        dials_of(&mut node, &h1),
+        0,
+        "the hub was dialed before the first duty pass"
+    );
+    assert!(
+        duty(&mut node, &h1, now, &mut out, id),
+        "the first duty pass did not dial the hub"
+    );
+    let mut back = 0u64;
+    for k in 0..6u64 {
+        let pos = node.endpoint_mut().dials.iter().rposition(|d| *d == h1).unwrap();
+        let session = SessionId(DIALED + pos as u64);
+        // the session comes up a little after the dial, later in each round
+        let at = now + k * 3_000_000;
+        node.endpoint_mut().events.push_back(Event::Connected {
+            session,
+            node: h1,
+            alpn: hub_alpn(),
+            resumed: false,
+        });
+        let closed = node.endpoint_mut().closed.len();
+        node.poll(at);
+        while node.poll_event().is_some() {}
+        assert!(
+            node.endpoint_mut().closed[closed..].contains(&session),
+            "the full table took the hub session"
+        );
+        let _ = writeln!(
+            out,
+            r#"{{"t":"nobo","run":{id},"op":"shed","now":{},"peer":1}}"#,
+            limbs(at)
+        );
+        back = if back == 0 { FIRST } else { (back * 2).min(HUB_CAP) };
+        let until = at + back;
+        assert!(
+            !duty(&mut node, &h1, at + back / 2, &mut out, id),
+            "the hub was redialed inside its backoff"
+        );
+        let open = if k % 2 == 0 {
+            assert!(
+                !duty(&mut node, &h1, until - 1, &mut out, id),
+                "the hub was redialed on the last nanosecond of its backoff"
+            );
+            until - 1 + DUTY
+        } else {
+            until
+        };
+        assert!(
+            duty(&mut node, &h1, open, &mut out, id),
+            "the hub was not redialed once its backoff was over"
+        );
+        now = open;
+    }
+    assert_eq!(back, HUB_CAP, "the waits did not reach the hub cap");
+    out
+}
+
 #[test]
 fn the_failed_dials_match_the_models() {
     let mut rng = SplitMix64::new(0x6e62_0001);
@@ -318,6 +451,8 @@ fn the_failed_dials_match_the_models() {
         dump_every: 700,
     };
     run(&mut rng, &mut out, 900, &cfg, &mut seen);
+    // a real node whose full session table sheds every session of its dial of a hub
+    out.push_str(&big(|| shed_run(950)));
     assert!(seen.hub_cap > 0, "no hub reached its cap");
     assert!(seen.cap > 0, "no other node reached its cap");
     assert!(seen.deny_cap > 0, "no refusal reached its cap");

@@ -2,10 +2,10 @@
 (***************************************************************************)
 (* The node's table of failed dials and its table of dials in progress     *)
 (* (vinc-node io.rs, duties.rs, events.rs), over every interleaving of     *)
-(* dials, connections, failed dials, closed sessions and the prune at any  *)
-(* times from a small set (a clock that steps back and times at the top of *)
-(* the u64 range included), at small sizes (NodeBackoffOps.tla has the     *)
-(* operators).                                                             *)
+(* dials, connections, failed dials, sessions the full session table shed, *)
+(* closed sessions and the prune at any times from a small set (a clock    *)
+(* that steps back and times at the top of the u64 range included), at     *)
+(* small sizes (NodeBackoffOps.tla has the operators).                     *)
 (*                                                                         *)
 (* Checked:                                                                *)
 (*  - each table stays within MAXT entries, whatever fails (Bounded);      *)
@@ -25,20 +25,31 @@
 (*  - a closed session forgets the entry of its peer when it lived at      *)
 (*    least 5 s, is a failed dial when it lived less, and is a refusal     *)
 (*    when the peer refused us (Right);                                    *)
+(*  - a dial whose session came up and that the full session table shed   *)
+(*    (events.rs `hub_connected`: `admit` refuses it and closes it) is a   *)
+(*    failed dial: it makes the entry a failed dial makes, so the peer is  *)
+(*    redialed after the wait and not at every duty pass (Right);          *)
 (*  - the prune lets go of exactly the entries whose time plus 3600 s      *)
 (*    (saturating) is not after now (Right);                               *)
 (*  - a peer is never in the dials in progress and in a session at once    *)
 (*    (Disjoint).                                                          *)
 (* IGNORE_WINDOW is a dial that skips the window check. The witness        *)
-(* NodeBackoff_window sets it and Right fails. The other witnesses are     *)
-(* reachability: a table that fills, a new peer refused by it, an entry at *)
-(* the cap, an entry saturated at u64::MAX, a reset, a prune.              *)
+(* NodeBackoff_window sets it and Right fails. SHED_FREE is the rule       *)
+(* before issue 367: a shed session leaves the table as it was, so the hub *)
+(* is redialed at the next duty pass. The witness NodeBackoff_shedfree     *)
+(* sets it and Right fails. The other witnesses are reachability: a table  *)
+(* that fills, a new peer refused by it, an entry at the cap, an entry     *)
+(* saturated at u64::MAX, a reset, a prune, a shed.                        *)
+(* The session table is not in the state: a shed may come for any peer at  *)
+(* any time, also for one that has a session (our dial came up while a     *)
+(* session the peer opened was already in use).                           *)
 (* Known limitation (low severity, filed): once the table is full a        *)
-(* newly failing peer has no entry and is redialed at every duty pass.     *)
+(* newly failing or shed peer has no entry and is redialed at every duty   *)
+(* pass.                                                                   *)
 (* Lean counterpart: proofs/lean/Vinc/NodeBackoff*.lean.                   *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, Nanos
-CONSTANTS MAXT, PEERS, HUBS, REV, TIMES, IGNORE_WINDOW
+CONSTANTS MAXT, PEERS, HUBS, REV, TIMES, IGNORE_WINDOW, SHED_FREE
 VARIABLES F, C, op, right, seen
 vars == <<F, C, op, right, seen>>
 
@@ -99,6 +110,16 @@ FailedStep == \E t \in TIMES, p \in C, den \in BOOLEAN :
        /\ seen' = Mark(F, p, IF den THEN "deny" ELSE "failed")
        /\ UNCHANGED op
 
+\* our dial of p came up and the full session table shed the session (hub_connected): the dial is over, the peer has
+\* no new session, and it is a failed dial
+ShedStep == \E t \in TIMES, p \in PEERS :
+    LET x == Backoff(F, t, p, Hub(p))
+        f2 == IF SHED_FREE THEN F ELSE x.f
+    IN /\ C' = C \ {p} /\ F' = f2
+       /\ right' = (right /\ BackoffRight(F, f2, t, p, x.back))
+       /\ seen' = Mark(F, p, "shed")
+       /\ UNCHANGED op
+
 ClosedStep == \E t \in TIMES, p \in Conn : \E den \in (IF Hub(p) THEN BOOLEAN ELSE {FALSE}) :
     LET x == Closed(F, t, p, op[p], den, Hub(p))
         short == Lt(t, U!Add(op[p], Sec(5)))
@@ -119,7 +140,7 @@ PruneStep == \E t \in TIMES :
     /\ seen' = IF \E q \in PEERS : F[q] # None /\ F'[q] = None THEN seen \cup {"pruned"} ELSE seen
     /\ UNCHANGED <<C, op>>
 
-Next == DialStep \/ ConnectedStep \/ FailedStep \/ ClosedStep \/ PruneStep
+Next == DialStep \/ ConnectedStep \/ FailedStep \/ ShedStep \/ ClosedStep \/ PruneStep
 Spec == Init /\ [][Next]_vars
 
 Bounded == Size(F) <= MAXT /\ Cardinality(C) <= MAXT
@@ -138,4 +159,5 @@ NoReset == "reset" \notin seen
 NoPruned == "pruned" \notin seen
 NoBlocked == "blocked" \notin seen
 NoDenyMax == \A p \in Used(F) : F[p][2] # Sec(900)
+NoShed == "shed" \notin seen
 =============================================================================

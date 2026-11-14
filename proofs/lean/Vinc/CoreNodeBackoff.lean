@@ -2,7 +2,8 @@
 # The node's table of failed dials: the model
 
 A model of `vinc-node` `io.rs` (`backoff`, `deny_back`, `set_failed`), `duties.rs` (`dial_peer`, `prune`) and
-`events.rs` (`hub_closed`, `hub_connect_failed`), as `proofs/tla/NodeBackoffOps.tla` has it, over unbounded `Nat`.
+`events.rs` (`hub_closed`, `hub_connect_failed`, and `hub_connected`, whose session the full session table shed: that
+is `backoff`), as `proofs/tla/NodeBackoffOps.tla` has it, over unbounded `Nat`.
 A time and a wait are `u64` nanoseconds; the code saturates where it adds and doubles (`satAdd`, `satMul2`), and so
 does the model: `MAXU` is `u64::MAX`.
 

@@ -24,6 +24,9 @@ clock that steps back included) and any run of calls:
   `window_no_gate`); an entry is a window until its time and not from then on (`window_iff`);
 - a closed session forgets the entry of its peer when it lived at least `lived`, is a failed dial when it lived less
   and a refusal when the peer refused us (`closed_long`, `closed_short`, `closed_den`);
+- a dial whose session came up and that the full session table shed (`hub_connected`, the step `shed`) is a failed
+  dial: the peer is not dialed before the wait is over, and, the shed having ended its dial in progress, it is dialed
+  from then on when nothing else refuses (`shed_waits`, `shed_redials`);
 - the prune lets go of exactly the entries whose time plus `keep` (saturating) is not after now (`prune_mem`);
 - every table stays within its bound and the dials in progress never overlap the sessions through any run of the
   steps of the node (`step_inv`, `reach_inv`).
@@ -393,6 +396,25 @@ theorem no_window_after (max : Nat) (hub : Bool) (f : Tab) (now p t : Nat)
     omega
   · simpa using hh
 
+/-- After a dial whose session the full session table shed (`hub_connected` calls `backoff`), stored because the
+table had room or an entry for the peer, the peer is not dialed at any time before the wait is over: a shed hub is
+not redialed at every duty pass. -/
+theorem shed_waits (max : Nat) (hub : Bool) (f : Tab) (now p t : Nat) (conn c rev : List Nat) (lv : Bool)
+    (hs : f.length < max ∨ (get f p).isSome = true) (ht : t < satAdd now (backoff max hub f now p).1) :
+    gate (backoff max hub f now p).2 t p conn c rev lv = false :=
+  window_no_gate _ _ _ _ _ _ _ (window_after_backoff max hub f now p t hs ht)
+
+/-- And the shed ended the dial in progress, so from the end of the wait on the peer is dialed when nothing else
+refuses: no session, not revoked, the node not leaving. -/
+theorem shed_redials (max : Nat) (hub : Bool) (f : Tab) (now p t : Nat) (conn c rev : List Nat)
+    (hs : f.length < max ∨ (get f p).isSome = true) (hc : c.Nodup)
+    (ht : satAdd now (backoff max hub f now p).1 ≤ t) (hconn : p ∉ conn) (hrev : p ∉ rev) :
+    gate (backoff max hub f now p).2 t p conn (c.erase p) rev false = true := by
+  rw [gate_iff]
+  refine ⟨rfl, hconn, ?_, hrev, no_window_after max hub f now p t hs ht⟩
+  rw [List.Nodup.mem_erase_iff hc]
+  simp
+
 /-- The time of an entry is never below its wait: no wraparound. -/
 theorem until_ge_back (max : Nat) (f : Tab) (now p back : Nat) (hb : back ≤ MAXU) (u b : Nat)
     (h : get (setFailed max f now p back) p = some (u, b)) (hs : f.length < max ∨ (get f p).isSome = true) :
@@ -542,8 +564,9 @@ structure Inv (max : Nat) (s : St) : Prop where
   disjoint : ∀ p, p ∈ s.c → p ∉ s.conn
 
 /-- One step of the node: a dial the guard lets through that reaches the transport or does not; a session that
-comes up; a dial that fails or is refused; a session that closes; the prune. `hub` says whether a peer is a hub,
-`rev` is the revoked set and `lv` whether the node is leaving. -/
+comes up; a dial that fails or is refused; a dial whose session came up and that the full session table shed (the
+session table is not in the state, so a shed may come for any peer); a session that closes; the prune. `hub` says
+whether a peer is a hub, `rev` is the revoked set and `lv` whether the node is leaving. -/
 inductive Step (max : Nat) (hub : Nat → Bool) (rev : List Nat) (lv : Bool) : St → St → Prop
   | dialOk (s : St) (now p : Nat) :
       gate s.f now p s.conn s.c rev lv = true →
@@ -559,6 +582,8 @@ inductive Step (max : Nat) (hub : Nat → Bool) (rev : List Nat) (lv : Bool) : S
       Step max hub rev lv s
         { f := if den then (denyBack max s.f now p).2 else (backoff max (hub p) s.f now p).2
           c := s.c.erase p, conn := s.conn }
+  | shed (s : St) (now p : Nat) :
+      Step max hub rev lv s { s with f := (backoff max (hub p) s.f now p).2, c := s.c.erase p }
   | closes (s : St) (now p opened : Nat) (den : Bool) :
       p ∈ s.conn →
       Step max hub rev lv s { s with conn := s.conn.erase p, f := (closed max (hub p) s.f now p opened den).2 }
@@ -614,6 +639,11 @@ theorem step_inv {max : Nat} {hub : Nat → Bool} {rev : List Nat} {lv : Bool} {
       · exact backoff_keys_nodup _ _ _ _ _ hs.f_nodup
     · intro q hq
       exact hs.disjoint q ((List.erase_subset ..) hq)
+  | shed now p =>
+    refine ⟨backoff_length_le _ _ _ _ _ hs.f_le, backoff_keys_nodup _ _ _ _ _ hs.f_nodup,
+      Nat.le_trans (List.length_erase_le ..) hs.c_le, hs.c_nodup.erase _, ?_⟩
+    intro q hq
+    exact hs.disjoint q ((List.erase_subset ..) hq)
   | closes now p opened den hp =>
     refine ⟨closed_length_le _ _ _ _ _ _ _ hs.f_le, closed_keys_nodup _ _ _ _ _ _ _ hs.f_nodup, hs.c_le, hs.c_nodup, ?_⟩
     intro q hq hm
@@ -649,6 +679,8 @@ end Vinc.NodeBackoff
 #audit_axioms Vinc.NodeBackoff.window_no_gate
 #audit_axioms Vinc.NodeBackoff.window_after_backoff
 #audit_axioms Vinc.NodeBackoff.no_window_after
+#audit_axioms Vinc.NodeBackoff.shed_waits
+#audit_axioms Vinc.NodeBackoff.shed_redials
 #audit_axioms Vinc.NodeBackoff.until_ge_back
 #audit_axioms Vinc.NodeBackoff.closed_long
 #audit_axioms Vinc.NodeBackoff.closed_short

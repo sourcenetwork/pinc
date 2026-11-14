@@ -567,6 +567,8 @@ par witness_tlc node_backoff_sat NodeBackoff NodeBackoff_sat NoSaturated
 par witness_tlc node_backoff_reset NodeBackoff NodeBackoff_reset NoReset
 par witness_tlc node_backoff_pruned NodeBackoff NodeBackoff_pruned NoPruned
 par witness_tlc node_backoff_blocked NodeBackoff NodeBackoff_blocked NoBlocked
+par witness_tlc node_backoff_shed NodeBackoff NodeBackoff_shed NoShed
+par witness_tlc node_backoff_shedfree NodeBackoff NodeBackoff_shedfree Right
 par run_tlc ext_in ExtIn ExtIn
 par witness_tlc ext_in_newest ExtIn ExtIn_newest PutRule
 par witness_tlc ext_in_evict ExtIn ExtIn_evict NoEvict
