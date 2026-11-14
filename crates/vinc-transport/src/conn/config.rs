@@ -194,6 +194,8 @@ pub struct Stats {
     pub early_buffered: u64,
     /// Such packets dropped because the buffer was full.
     pub early_dropped: u64,
+    /// 0-RTT packets dropped whole because they carried a frame that only an established session sends.
+    pub early_refused: u64,
     /// Handshake flights sent again on the timer.
     pub handshake_retransmits: u64,
     /// Key updates, started here or by the peer.

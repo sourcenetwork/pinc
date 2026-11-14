@@ -201,6 +201,9 @@ pub struct Connection<
     /// Kinds of stream (bit 0 unidirectional, bit 1 bidirectional) whose open was refused for want of credit or room.
     open_wait: u8,
     paced_until: Option<u64>,
+    /// Raw frame bytes the next packet carries first, and their length (test hook).
+    #[cfg(feature = "inject")]
+    inject_raw: ([u8; 1400], usize),
     degraded_told: bool,
     local_credit: CreditRecord,
     peer_credit: CreditRecord,
@@ -302,6 +305,8 @@ where
             ext_release: false,
             open_wait: 0,
             paced_until: None,
+            #[cfg(feature = "inject")]
+            inject_raw: ([0; 1400], 0),
             degraded_told: false,
             local_credit,
             peer_credit: CreditRecord::NONE,

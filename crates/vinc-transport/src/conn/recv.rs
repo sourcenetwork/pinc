@@ -96,6 +96,8 @@ struct Props {
     stream_bytes: u32,
     /// The largest data payload (stream or datagram bytes).
     payload: usize,
+    /// The packet carries ACK, CLOSE, REKEY, NEW_TICKETS or PATH_RESPONSE, which a 0-RTT packet may not.
+    established_only: bool,
 }
 
 fn scan(payload: &[u8]) -> Result<Props, crate::frame::FrameError> {
@@ -103,7 +105,11 @@ fn scan(payload: &[u8]) -> Result<Props, crate::frame::FrameError> {
     for f in FrameIter::new(payload) {
         match f? {
             Frame::Padding { .. } => p.padding = true,
-            Frame::Ack(_) => {}
+            Frame::Ack(_) => p.established_only = true,
+            Frame::Close { .. } | Frame::Rekey(_) | Frame::NewTickets(_) | Frame::PathResponse(_) => {
+                p.eliciting = true;
+                p.established_only = true;
+            }
             Frame::Ping => {
                 p.eliciting = true;
                 p.ping = true;
@@ -293,7 +299,7 @@ conn_impl! {
         }
         let opened = open(&mut dir.pk, p, bytes, pn_off, &un, self.rx.largest()).map_err(|_| Drop::Undecryptable)?;
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
-        self.process_payload(env, ctx, opened.pn, payload)
+        self.process_payload(env, ctx, opened.pn, payload, true)
     }
 
     pub(super) fn on_short(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn_off: usize, bytes: &mut [u8]) -> Result<(), Drop> {
@@ -378,7 +384,7 @@ conn_impl! {
             self.cids.on_authenticated(&dcid);
         }
         let payload = bytes.get(opened.payload_start..opened.payload_end).ok_or(Drop::Undecryptable)?;
-        let result = self.process_payload(env, ctx, opened.pn, payload);
+        let result = self.process_payload(env, ctx, opened.pn, payload, false);
         #[cfg(feature = "trace")]
         self.trace_rx_event(now, pto_in, (opened.pn, seen.1, seen.2), true, matches!(result, Err(Drop::Duplicate)), promoted);
         result
@@ -391,7 +397,18 @@ conn_impl! {
     #[cfg(feature = "inject")]
     pub fn inject_payload(&mut self, env: &mut Env<'_, P>, path: PathId, now: u64, pn: u64, payload: &[u8]) -> Result<(), Drop> {
         let mut ctx = Rx { path_id: path, path: None, dlen: payload.len(), now, old_key: false };
-        self.process_payload(env, &mut ctx, pn, payload)
+        self.process_payload(env, &mut ctx, pn, payload, false)
+    }
+
+    /// Put the encoded frames `raw` (at most 1400 bytes) at the front of the next packet built (test hook: a packet
+    /// a well-behaved peer never sends).
+    #[cfg(feature = "inject")]
+    pub fn inject_frames(&mut self, raw: &[u8]) {
+        let n = raw.len().min(self.inject_raw.0.len());
+        if let (Some(dst), Some(src)) = (self.inject_raw.0.get_mut(..n), raw.get(..n)) {
+            dst.copy_from_slice(src);
+        }
+        self.inject_raw.1 = n;
     }
 
     /// The body of a Handshake packet as `handle_inner` hands it to the handshake, with the reassembly around it (trace
@@ -401,13 +418,19 @@ conn_impl! {
         self.hs.trace_fragment(&mut self.pool, body)
     }
 
-    /// Authenticated packet `pn` with `payload` frames.
-    fn process_payload(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn: u64, payload: &[u8]) -> Result<(), Drop> {
+    /// Authenticated packet `pn` with `payload` frames; `early` for a 0-RTT packet, which may not carry the frames of
+    /// an established session.
+    fn process_payload(&mut self, env: &mut Env<'_, P>, ctx: &mut Rx, pn: u64, payload: &[u8], early: bool) -> Result<(), Drop> {
         let now = ctx.now;
         let Ok(props) = scan(payload) else {
             self.violation(now, code::FRAME_ENCODING);
             return Err(Drop::Closed);
         };
+        // The packet is only the ticket holder's, sent before the handshake is done: nothing of it is applied.
+        if early && props.established_only {
+            self.stats.early_refused += 1;
+            return Err(Drop::EarlyFrame);
+        }
         if self.rx.contains(pn) {
             self.stats.duplicates += 1;
             return Err(Drop::Duplicate);

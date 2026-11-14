@@ -15,10 +15,12 @@
 )]
 
 use vinc_crypto::IdentityAlg;
+use vinc_security::{Rekey, TicketBatch, TicketEntry};
 use vinc_tests::*;
 use vinc_transport::conn::{CloseReason, Drop, PathId};
-use vinc_transport::frame::ext;
+use vinc_transport::frame::{Frame, ext, write_ack};
 use vinc_transport::stream::datagram::DatagramError;
+use vinc_wire::Writer;
 
 vinc_tests::install_counting_allocator!();
 
@@ -548,6 +550,128 @@ fn resumption_delivers_zero_rtt_data() {
         // The early packets were acknowledged, so the sender has nothing left in flight.
         net.run(net.now + SEC, |_| false);
         assert!(net.a.conn.recovery().bytes_in_flight() == 0);
+    });
+}
+
+/// The first flight of a resumed client whose first 0-RTT packet also carries the encoded frames `raw` (a packet the
+/// library's own client never builds) and a finished stream with `early bytes`. Runs to the moment the 0-RTT data has
+/// arrived and returns the stream, with the net still mid-handshake.
+fn zero_rtt_with<'a>(w: &'a mut World, sa: &'a mut Store, sb: &'a mut Store, raw: &[u8]) -> (Net<'a, 'a>, u64) {
+    let mut tickets = first_session(w);
+    let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+    let a = w.client(sa, Some(ticket), vinc_security::ClientTickets::new());
+    let b = w.server(sb);
+    let mut net = Net::new(a, b, Link::new(7, Params::new(10 * MS)), &mut w.stores);
+    net.a.conn.inject_frames(raw);
+    let id = net.a.conn.open_bi().unwrap();
+    net.a.conn.write(id, b"early bytes").unwrap();
+    net.a.conn.finish(id).unwrap();
+    let deadline = net.now + 10 * MS + MS / 2;
+    net.run(deadline, |n| n.b.fin.contains(&id));
+    (net, id)
+}
+
+fn encoded(frames: &[Frame<'_>]) -> Vec<u8> {
+    let mut buf = vec![0u8; 1400];
+    let mut w = Writer::new(&mut buf);
+    for f in frames {
+        f.write(&mut w).unwrap();
+    }
+    let n = w.written().len();
+    buf.truncate(n);
+    buf
+}
+
+/// The frames that only make sense on an established session, one packet each. The reference model has no early
+/// data, so there is nothing to compare these with.
+fn established_only_frames() -> Vec<(&'static str, Vec<u8>)> {
+    let mut ack = vec![0u8; 16];
+    let mut w = Writer::new(&mut ack);
+    write_ack(&mut w, std::iter::once(0..=0)).unwrap();
+    let n = w.written().len();
+    ack.truncate(n);
+    let mut tickets = TicketBatch::new();
+    tickets.push(TicketEntry {
+        tid: [3; 16],
+        lifetime_s: 60,
+    });
+    let rekey = Rekey {
+        answer: false,
+        share: [1; 32],
+        echo: [0; vinc_security::keyroll::ECHO_LEN],
+        switch_pn: 0,
+    };
+    vec![
+        ("ACK", ack),
+        ("CLOSE", encoded(&[Frame::Close { error: 0 }])),
+        ("REKEY", encoded(&[Frame::Rekey(rekey)])),
+        ("NEW_TICKETS", encoded(&[Frame::NewTickets(tickets)])),
+        ("PATH_RESPONSE", encoded(&[Frame::PathResponse([1; 8])])),
+    ]
+}
+
+/// A 0-RTT packet that carries the frame `name` of `established_only_frames` and a stream is dropped whole.
+fn zero_rtt_refuses(name: &'static str) {
+    let raw = established_only_frames()
+        .into_iter()
+        .find(|(n, _)| *n == name)
+        .unwrap()
+        .1;
+    big_stack(move || {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let (mut net, id) = zero_rtt_with(&mut w, &mut sa, &mut sb, &raw);
+        assert!(
+            !net.b.read.contains_key(&id),
+            "the stream frame of the packet is not applied"
+        );
+        assert_eq!(net.b.conn.stats().early_refused, 1, "the packet is counted");
+        assert!(
+            net.connect(net.now + 5 * SEC),
+            "the connection stays open: {:?}",
+            net.rx_drops
+        );
+        // The refused packet was not acknowledged, so its stream data is sent again and arrives.
+        assert!(net.run(net.now + 5 * SEC, |n| n.b.fin.contains(&id)));
+        assert_eq!(net.b.read[&id], b"early bytes");
+    });
+}
+
+macro_rules! refused_in_zero_rtt {
+    ($($test:ident: $frame:literal),+ $(,)?) => {
+        $(#[test]
+        fn $test() {
+            zero_rtt_refuses($frame);
+        })+
+    };
+}
+
+refused_in_zero_rtt! {
+    a_zero_rtt_packet_with_an_ack_is_dropped_whole: "ACK",
+    a_zero_rtt_packet_with_a_close_is_dropped_whole: "CLOSE",
+    a_zero_rtt_packet_with_a_rekey_is_dropped_whole: "REKEY",
+    a_zero_rtt_packet_with_new_tickets_is_dropped_whole: "NEW_TICKETS",
+    a_zero_rtt_packet_with_a_path_response_is_dropped_whole: "PATH_RESPONSE",
+}
+
+#[test]
+fn a_zero_rtt_packet_with_the_frames_a_client_sends_there_is_applied() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let raw = encoded(&[
+            Frame::Ping,
+            Frame::Padding { len: 3 },
+            Frame::MaxStreams { limit: 100 },
+            Frame::Datagram {
+                data: b"dgram",
+                implicit_len: false,
+            },
+        ]);
+        let (net, id) = zero_rtt_with(&mut w, &mut sa, &mut sb, &raw);
+        assert_eq!(net.b.conn.stats().early_refused, 0);
+        assert_eq!(net.b.read.get(&id).map(Vec::as_slice), Some(&b"early bytes"[..]));
+        assert_eq!(net.b.dgrams, vec![b"dgram".to_vec()]);
     });
 }
 

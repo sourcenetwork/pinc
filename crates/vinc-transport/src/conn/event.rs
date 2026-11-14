@@ -98,6 +98,9 @@ pub enum Drop {
     Handshake(Failure),
     /// The datagram held nothing to process.
     Empty,
+    /// A 0-RTT packet carried a frame that only an established session sends (ACK, CLOSE, REKEY, NEW_TICKETS or
+    /// PATH_RESPONSE); the packet was dropped whole and the connection stays open.
+    EarlyFrame,
     /// The packet carries something that would raise an event and the application has not read the events it has
     /// (see [`set_gated`](super::Connection::set_gated)); it was not processed and not acknowledged.
     Gated,
@@ -115,6 +118,7 @@ impl fmt::Display for Drop {
             Self::NoPath => f.write_str("no room for another path"),
             Self::Handshake(e) => write!(f, "handshake message refused: {e}"),
             Self::Empty => f.write_str("the datagram held nothing to process"),
+            Self::EarlyFrame => f.write_str("a 0-RTT packet carried a frame only an established session sends"),
             Self::Gated => f.write_str("the packet waits until the application reads its events"),
         }
     }

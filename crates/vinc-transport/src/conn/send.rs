@@ -612,6 +612,15 @@ conn_impl! {
         let mut out = Filled::default();
         let mut pos = 0usize;
         let cap = payload.len();
+        #[cfg(feature = "inject")]
+        if let Some(raw) = self.inject_raw.0.get(..self.inject_raw.1).filter(|r| !r.is_empty())
+            && let Some(dst) = payload.get_mut(..raw.len())
+        {
+            dst.copy_from_slice(raw);
+            pos = raw.len();
+            out.weak();
+            self.inject_raw.1 = 0;
+        }
         // ACK. It does not wait for the pacer or the window.
         // Only the active path carries acknowledgements: an ACK would otherwise be sent on a path that is only being
         // checked.
