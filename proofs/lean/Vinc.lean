@@ -67,6 +67,7 @@ import Vinc.TransportCid
 import Vinc.TransportCidThm
 import Vinc.TransportCidInv
 import Vinc.TransportCidCalls
+import Vinc.TransportCidCode
 import Vinc.TraceCid
 import Vinc.TransportCc
 import Vinc.TransportCcThm

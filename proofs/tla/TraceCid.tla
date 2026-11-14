@@ -16,9 +16,13 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS SLOTS, LOOK, FIXED
+CONSTANTS SLOTS, LOOK, FIXED, SKIP
 VARIABLES i, c
 vars == <<i, c>>
+
+\* the runs use ids of four bytes from random secrets: one id per index (a collision would show as a step the model
+\* does not take, never as a pass); collisions are checked in Cid.tla
+Id(j) == j
 
 INSTANCE CidOps
 
