@@ -1,9 +1,10 @@
 //! Endpoint events: which belong to the hub stream, and what the node does with each.
 //!
 //! The connectivity client sees every event first. Then the events of sessions that speak the hub protocol drive the
-//! hub stream: a session coming up opens the write stream and tells membership; bytes become frames; a close tells
-//! membership, backs the dial off and, at a hub, may adopt the member's older live session. Every other event is the
-//! application's and passes through unchanged.
+//! hub stream: a session coming up opens the write stream and tells membership (one the full session table cannot
+//! record is closed instead, as a layer's is); bytes become frames; a close tells membership, backs the dial off and,
+//! at a hub, may adopt the member's older live session. Every other event is the application's and passes through
+//! unchanged.
 //!
 //! Invariants: a hub-protocol session produces no stream event for the application, not even a stop of its stream (its
 //! lifecycle events pass); a frame is parsed only from bytes of a session of its peer; a
@@ -138,6 +139,16 @@ where
 
     // ---------------------------------------------------------------- sessions
 
+    /// Whether the session table can record `session`. One it cannot is closed before it touches anything, as a
+    /// layer's is: unrecorded, its streams would be taken for the application's.
+    fn admit(&mut self, session: SessionId) -> bool {
+        if self.io.sess.len() < TABLE_MAX || self.io.sess.contains_key(&session) {
+            return true;
+        }
+        let _ = self.io.cmd(Command::Close { session, error: 0 });
+        false
+    }
+
     /// Make `session` the current session of `peer`.
     fn attach(&mut self, now: Nanos, session: SessionId, peer: NodeId, incoming: bool) {
         if self.io.sess.len() < TABLE_MAX {
@@ -165,6 +176,9 @@ where
         let peer = node.bytes;
         self.io.learn_alg(node);
         self.io.connecting.remove(&peer);
+        if !self.admit(session) {
+            return;
+        }
         if let Some(cur) = self.io.links.get(&peer).and_then(|l| l.conn) {
             // The peer dialed us at the same time. Both ends keep the session the lower id dialed.
             if self.io.me < peer && self.io.sess.get(&cur).is_some_and(|s| s.incoming) {
@@ -189,6 +203,9 @@ where
     fn hub_incoming(&mut self, now: Nanos, session: SessionId, node: &vinc_crypto::NodeId) {
         let peer = node.bytes;
         self.io.learn_alg(node);
+        if !self.admit(session) {
+            return;
+        }
         let role = if self.io.is_hub_id(&peer) {
             Role::Hub
         } else {

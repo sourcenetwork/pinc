@@ -1178,3 +1178,7 @@ path = "node_event_queue.rs"
 [[test]]
 name = "node_hub_stream_stop"
 path = "node_hub_stream_stop.rs"
+
+[[test]]
+name = "node_route_full"
+path = "node_route_full.rs"
