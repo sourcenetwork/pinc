@@ -14,6 +14,7 @@ use vinc_node::Ep as _;
 use vinc_security::Alpn;
 use vinc_transport::stream::{RecvStatus, StreamError, StreamId};
 
+use super::gate::direction;
 use super::{Admit, Core, Dial, GKey, Gate, Route, SHUTDOWN_GRACE, SKey, SessInfo, TRACKED, Try, Wait};
 use crate::error::{Error, ErrorKind, Result};
 
@@ -51,6 +52,15 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             }
         }
         let key = Alpn::new(alpn).ok_or_else(|| Error::config("the protocol name is empty or too long"))?;
+        // The endpoint keeps one answer per peer. A refusal it holds was given for other questions, so it must not
+        // fail a dial the hook allows: it is dropped, and the session of this dial asks with its own question.
+        let refused = matches!(
+            self.node.endpoint().query(Query::Access(node)),
+            Answer::Access { allow: false, until } if now < until
+        );
+        if refused && self.admit.admit(&node, alpn, direction(alpn, true)) {
+            self.forget_access(&node.bytes);
+        }
         match self.node.dial(now, node, alpn, Role::Other, &all) {
             Ok(session) => {
                 // The first flight is queued: the future that started the dial sends it.

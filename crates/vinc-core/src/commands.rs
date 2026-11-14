@@ -27,7 +27,7 @@ use crate::api::{
 use crate::endpoint::{env, ep_impl};
 use crate::keepalive::{LATE_START, MTU_PROBE_DELAY, Role};
 use crate::relay_net::is_relay_addr;
-use crate::slot::State;
+use crate::slot::{NIL, State};
 use crate::trace::trace;
 
 /// A short Initial is used only while a validated UDP path was heard within this long (90 s).
@@ -514,6 +514,11 @@ ep_impl! {
                 .filter(|(_, s)| s.m.in_use && s.conn.is_some())
                 .nth(n)
                 .map_or(Answer::None, |(i, _)| self.stats_of(i)),
+            Query::PeerSession { node, after } => self.peer_session(&node, after),
+            Query::Access(node) => self.acp.get(&node).map_or(Answer::None, |a| Answer::Access {
+                allow: a.allow,
+                until: a.until,
+            }),
             Query::PeerAt(n) => self
                 .rtt
                 .peers()
@@ -570,6 +575,26 @@ ep_impl! {
     /// The connection of a live session.
     fn conn_of(&self, id: SessionId) -> Option<&Connection<'a, P, S, N, C, F, NP>> {
         self.slot_of(id).and_then(|i| self.slots.get(i)).and_then(|s| s.conn.as_ref())
+    }
+
+    /// The counters of the session of `peer` that follows `after` in the peer's list, or of its oldest.
+    fn peer_session(&self, peer: &NodeId, after: Option<SessionId>) -> Answer<'_> {
+        let mut next = match after {
+            None => self.by_peer.get(peer).copied(),
+            Some(id) => self
+                .slot_of(id)
+                .and_then(|i| self.slots.get(i))
+                .filter(|s| s.m.linked && s.m.peer == Some(*peer))
+                .map(|s| s.m.peer_next),
+        };
+        while let Some(i) = next.filter(|n| *n != NIL) {
+            let found = self.stats_of(i as usize);
+            if !matches!(found, Answer::None) {
+                return found;
+            }
+            next = self.slots.get(i as usize).map(|s| s.m.peer_next);
+        }
+        Answer::None
     }
 
     fn stats_of(&self, i: usize) -> Answer<'_> {

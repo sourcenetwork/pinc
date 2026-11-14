@@ -39,10 +39,11 @@ pub(super) fn direction(alpn: &[u8], dialing: bool) -> Direction {
 /// It is asked for the protocol and direction of each session, once for a peer while its answer stands: a later
 /// session of the same protocol and direction, within 30 seconds, is taken up on that answer, and any other is asked
 /// when it comes up. A refused session is closed with [`DENIED`] before anything of it reaches the application. The
-/// endpoint also keeps one answer per peer; when the hook refuses the protocol that raised the question, it is asked
-/// about the peer's other protocols and directions, and the peer stays reachable while one is allowed. The hook must
-/// give the same answer to the same question while nothing it decides on has changed, as an answer is used for at
-/// most 30 seconds before it is asked again.
+/// endpoint also keeps one answer per peer; when the hook refuses the question that raised it, it is asked about the
+/// peer's other sessions and dials and about every served protocol in both directions, and the peer stays reachable
+/// while one is allowed. A refusal kept for a peer does not fail a later dial the hook allows: the hook is asked for
+/// that dial. The hook must give the same answer to the same question while nothing it decides on has changed, as an
+/// answer is used for at most 30 seconds before it is asked again.
 pub trait Admit {
     /// Whether `peer` may use `alpn` in `dir`.
     fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool;

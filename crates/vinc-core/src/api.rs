@@ -593,6 +593,16 @@ pub enum Query {
     Stats(SessionId),
     /// The session at position `i` of the table, counting live sessions only.
     SessionAt(usize),
+    /// The session of `node` made next after `after` (the oldest when `after` is `None`), a dial that has not
+    /// finished included; nothing after the newest, or when `after` is not a session of `node`. One lookup a step.
+    PeerSession {
+        /// The peer.
+        node: NodeId,
+        /// The session to continue from.
+        after: Option<SessionId>,
+    },
+    /// The answer of the access check the endpoint holds for a peer, with when it runs out.
+    Access(NodeId),
     /// The peer at position `i` of the round-trip table.
     PeerAt(usize),
     /// A peer of the round-trip table by node id; nothing when it holds no round trip of that peer.
@@ -802,4 +812,11 @@ pub enum Answer<'q> {
     Ledger(LedgerEntry),
     /// A `REACH_OUT` body, borrowed from the endpoint.
     ReachOut(&'q [u8]),
+    /// The answer of the access check held for a peer.
+    Access {
+        /// Whether it is an allow.
+        allow: bool,
+        /// When it runs out, in the endpoint's clock; it counts for nothing from then on.
+        until: u64,
+    },
 }

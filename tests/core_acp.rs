@@ -616,3 +616,84 @@ fn a_session_the_host_closes_when_it_is_reported_names_nothing_after_its_closed(
         assert!(after.is_empty(), "events named the session after its Closed: {after:?}");
     });
 }
+
+/// The sessions `ep` holds with `node`, as [`Query::PeerSession`] walks them: the session, its protocol, who dialed.
+fn sessions_of(ep: &CoreEp, node: vinc_crypto::NodeId) -> Vec<(vinc_core::SessionId, Vec<u8>, bool)> {
+    let (mut out, mut after) = (Vec::new(), None);
+    while let Answer::Stats(st) = ep.query(Query::PeerSession { node, after }) {
+        out.push((st.session, st.alpn.unwrap().as_bytes().to_vec(), st.dialer));
+        after = Some(st.session);
+    }
+    out
+}
+
+#[test]
+fn the_sessions_of_a_peer_are_walked_oldest_first_with_protocol_and_role_and_a_dial_under_way_is_among_them() {
+    big_stack(|| {
+        let mut net = CoreNet::new(SLOW);
+        let (a, b, c) = (net.add(1), net.add(2), net.add(3));
+        let (pb, pc) = (net.nodes[b].node, net.nodes[c].node);
+        assert!(sessions_of(&net.nodes[a].ep, pb).is_empty(), "no session yet");
+        let (out, _) = net.connect_pair(a, b, ALPN_A, Role::Other);
+        let (_, back) = net.connect_pair(b, a, ALPN_B, Role::Other);
+        net.connect_pair(a, c, ALPN_A, Role::Other);
+        assert_eq!(
+            sessions_of(&net.nodes[a].ep, pb),
+            [(out, ALPN_A.to_vec(), true), (back, ALPN_B.to_vec(), false)],
+            "the sessions with one peer, in the order they were made, and none of another peer"
+        );
+        assert_eq!(sessions_of(&net.nodes[a].ep, pc).len(), 1);
+        // A walk continued from a session of another peer, or from one that is gone, ends.
+        let after = Some(out);
+        assert!(matches!(
+            net.nodes[a].ep.query(Query::PeerSession { node: pc, after }),
+            Answer::None
+        ));
+        // A dial that has not finished is in the list from the moment it starts.
+        let d = net.add(4);
+        let (pd, to, now) = (net.nodes[d].node, net.nodes[d].addr, net.now);
+        let rep = net.nodes[a].connect(now, pd, ALPN_B, to, Role::Other).unwrap();
+        let dial = net.nodes[a].session(&rep);
+        assert_eq!(sessions_of(&net.nodes[a].ep, pd), [(dial, ALPN_B.to_vec(), true)]);
+        let t = net.now;
+        net.nodes[a].cmd(t, Command::Close { session: out, error: 0 }).unwrap();
+        net.run_for(SEC_NS);
+        assert_eq!(sessions_of(&net.nodes[a].ep, pb), [(back, ALPN_B.to_vec(), false)]);
+        assert!(matches!(
+            net.nodes[a].ep.query(Query::PeerSession { node: pb, after }),
+            Answer::None
+        ));
+    });
+}
+
+#[test]
+fn the_answer_held_for_a_peer_is_read_with_when_it_runs_out_and_is_gone_once_forgotten() {
+    big_stack(|| {
+        let mut net = CoreNet::new(SLOW);
+        let (a, b) = (net.add(1), net.add(2));
+        net.nodes[b].acp = Acp::Deny;
+        let (pa, peer, to, now) = (net.nodes[a].node, net.nodes[b].node, net.nodes[b].addr, net.now);
+        assert!(matches!(net.nodes[b].ep.query(Query::Access(pa)), Answer::None));
+        net.nodes[a].connect(now, peer, ALPN_A, to, Role::Other).unwrap();
+        assert!(net.run(now + 5 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Closed { .. } | Event::ConnectFailed { .. }))
+        }));
+        // The dialing side allowed, the other denied: each holds its own answer, good for 30 s from when it was given.
+        let Answer::Access { allow, until } = net.nodes[b].ep.query(Query::Access(pa)) else {
+            panic!("the denying side holds no answer")
+        };
+        assert!(!allow);
+        assert!(
+            until > net.now && until <= net.now + 30 * SEC_NS,
+            "{until} at {}",
+            net.now
+        );
+        assert!(matches!(
+            net.nodes[a].ep.query(Query::Access(peer)),
+            Answer::Access { allow: true, .. }
+        ));
+        let t = net.now;
+        net.nodes[b].cmd(t, Command::AcpForget { peer: pa }).unwrap();
+        assert!(matches!(net.nodes[b].ep.query(Query::Access(pa)), Answer::None));
+    });
+}

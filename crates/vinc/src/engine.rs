@@ -688,16 +688,28 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .unwrap_or(0)
     }
 
-    /// Whether the hook admits `node` on any protocol and direction but `asked`: the endpoint keeps one answer per peer,
-    /// so a refusal of one protocol must not close the sessions of one the hook allows. Each session is checked on its
-    /// own where it comes up. At most `2 * MAX_PROTOCOLS + 1` calls.
+    /// Whether the hook admits `node` on any question but the one `asked`: the endpoint keeps one answer per peer, so a
+    /// refusal of one protocol must not close the sessions of one the hook allows. The questions are those of the
+    /// peer's own sessions and unfinished dials, whatever their protocol (a node may dial a protocol it does not
+    /// serve), then every served protocol in both directions and the hub. Each session is still checked on its own
+    /// where it comes up. One call per session of the peer and at most `2 * MAX_PROTOCOLS + 1` more.
     fn admits_other(&self, node: &NodeId, alpn: &[u8], asked: Direction) -> bool {
+        let other = |a: &[u8], d: Direction| !(a == alpn && d == asked) && self.admit.admit(node, a, d);
+        let mut after = None;
+        while let Answer::Stats(st) = self.node.endpoint().query(Query::PeerSession { node: *node, after }) {
+            if st
+                .alpn
+                .is_some_and(|a| other(a.as_bytes(), direction(a.as_bytes(), st.dialer)))
+            {
+                return true;
+            }
+            after = Some(st.session);
+        }
         self.alpns
             .iter()
             .flat_map(|a| [(a.as_slice(), Direction::Inbound), (a.as_slice(), Direction::Outbound)])
             .chain([(HUB_ALPN, Direction::Gossip)])
-            .filter(|&(a, d)| !(a == alpn && d == asked))
-            .any(|(a, d)| self.admit.admit(node, a, d))
+            .any(|(a, d)| other(a, d))
     }
 
     /// Whether a session of `node` on `alpn` may come up: not while revoked, and with the hook asked unless the answer

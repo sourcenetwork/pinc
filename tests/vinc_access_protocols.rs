@@ -1,6 +1,7 @@
 //! The access hook is asked for every session with that session's own protocol and direction: a hook that allows a
 //! peer on one protocol and refuses it on another serves the first and closes the second with the denied code, whatever
-//! the order they come in, in either direction and for a broadcast neighbour.
+//! the order they come in, in either direction and for a broadcast neighbour. The endpoint's one answer per peer never
+//! costs a session or a dial the hook allows, also on a protocol the node dials without serving it.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -264,6 +265,68 @@ async fn a_hook_is_asked_once_per_question_while_the_answer_stands() {
         );
         let last = hook.asked.lock().unwrap().last().cloned();
         assert_eq!(last, Some((ECHO.to_vec(), Direction::Outbound)));
+    })
+    .await;
+}
+
+/// The hook of a node that only dials: any protocol outbound, nothing inbound.
+fn outbound_only(_alpn: &[u8], dir: Direction) -> bool {
+    dir == Direction::Outbound
+}
+
+#[nuclei::test]
+async fn a_refusal_kept_for_a_peer_does_not_fail_a_dial_the_hook_allows_on_a_protocol_the_node_does_not_serve() {
+    within(120, async {
+        // The node serves one protocol and refuses everyone on it; it dials another, which it does not serve.
+        let hook = Rules::new(|alpn, dir| alpn == ECHO && dir == Direction::Outbound);
+        let node = bind(builder().alpn(SINK).acp(hook)).await;
+        let accepted = serve_all(&node);
+        let peer = bind(builder().alpn(ECHO).alpn(SINK)).await;
+        serve_all(&peer);
+
+        // The peer is refused on the served protocol: the endpoint now holds a refusal for it.
+        refused_dial(peer.connect(node.addr(), SINK).await).await;
+        // The dial the hook allows goes through all the same, at once.
+        let c = node.connect(peer.addr(), ECHO).await;
+        assert!(
+            c.is_ok(),
+            "a dial the hook allows was failed by the refusal of another protocol: {:?}",
+            c.err()
+        );
+        echoes(&c.unwrap()).await;
+        assert!(accepted.lock().unwrap().is_empty(), "the refused session was accepted");
+    })
+    .await;
+}
+
+/// Takes 28 s: the endpoint asks again 25 s after the first answer, and that is the moment under test.
+#[nuclei::test]
+async fn a_session_the_node_dialed_outlives_the_next_question_when_the_hook_allows_only_outbound() {
+    within(120, async {
+        let hook = Rules::new(outbound_only);
+        let node = bind(builder().acp(hook.clone())).await;
+        let peer = bind(builder().alpn(ECHO)).await;
+        serve_all(&peer);
+
+        let c = node.connect(peer.addr(), ECHO).await.unwrap();
+        echoes(&c).await;
+        let before = hook.calls();
+        // Past the moment the endpoint asks about the peer again (5 s before its 30 s answer runs out).
+        nuclei::time::sleep(std::time::Duration::from_secs(28)).await;
+        assert!(hook.calls() > before, "the endpoint did not ask again within 28 s");
+        let stream = c.open_bi().await;
+        assert!(
+            stream.is_ok(),
+            "the session the hook allows was closed when the endpoint asked again: {:?}",
+            stream.err()
+        );
+        drop(stream);
+        echoes(&c).await;
+        let asked = hook.asked.lock().unwrap().clone();
+        assert!(
+            asked.contains(&(ECHO.to_vec(), Direction::Outbound)),
+            "the hook was never asked the question of the session: {asked:?}"
+        );
     })
     .await;
 }
