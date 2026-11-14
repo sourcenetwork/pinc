@@ -416,3 +416,30 @@ fn a_resume_that_moved_withdraws_the_mapping_and_one_that_did_not_keeps_it() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn every_request_carries_a_nonce_that_was_drawn() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let mut node = member();
+            let mut nonces = Vec::new();
+            for i in 0..3u64 {
+                node.start_port_mapping(SEC * (i + 1), Some(gw().ip()), local(), 120);
+                let asked = to_gateway(&mut node);
+                assert_eq!(asked.len(), 1, "a request is out at once");
+                nonces.push(pcp::decode_request(&asked[0]).unwrap().nonce);
+            }
+            assert!(
+                nonces.iter().all(|n| *n != [0; 12]),
+                "a request went out with an all-zero nonce"
+            );
+            assert!(
+                nonces[0] != nonces[1] && nonces[1] != nonces[2],
+                "the nonce repeats: {nonces:?}"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
