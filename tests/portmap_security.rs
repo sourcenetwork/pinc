@@ -818,3 +818,58 @@ fn with_a_gateway_a_search_answer_is_taken_only_from_it() {
     assert!(!pm.owns(from([192, 168, 1, 77]), &answer("http://192.168.1.77:5000/d.xml")));
     assert!(pm.owns(from([192, 168, 1, 1]), &answer("http://192.168.1.1:5000/d.xml")));
 }
+
+#[test]
+fn a_restart_then_a_stop_keeps_both_releases() {
+    let mut pm = client(Some(GW.into()), local());
+    sent(&mut pm);
+    pm.handle_datagram(
+        T0,
+        gw(),
+        &nat(natpmp::Response::Error {
+            opcode: 1,
+            result: 1,
+            epoch: 1,
+        }),
+    );
+    sent(&mut pm);
+    let ext = "203.0.113.9".parse().unwrap();
+    pm.handle_datagram(
+        T0,
+        gw(),
+        &nat(natpmp::Response::Address {
+            result: 0,
+            epoch: 1,
+            ip: ext,
+        }),
+    );
+    sent(&mut pm);
+    pm.handle_datagram(
+        T0,
+        gw(),
+        &nat(natpmp::Response::Map {
+            result: 0,
+            epoch: 1,
+            internal_port: 4433,
+            external_port: 4433,
+            lifetime: 7200,
+        }),
+    );
+    assert!(pm.mapped().is_some());
+    pm.restart(T0 + SEC);
+    pm.stop(T0 + 2 * SEC);
+    let out = sent(&mut pm);
+    let nat_release = out.iter().any(|(_, b)| {
+        natpmp::decode_request(b)
+            == Ok(natpmp::Request::Map {
+                internal_port: 4433,
+                external_port: 0,
+                lifetime: 0,
+            })
+    });
+    let pcp_release = out
+        .iter()
+        .any(|(_, b)| pcp::decode_request(b).is_ok_and(|r| r.lifetime == 0));
+    assert!(nat_release, "the NAT-PMP mapping's release was lost: {out:?}");
+    assert!(pcp_release, "the request in flight was not released");
+}

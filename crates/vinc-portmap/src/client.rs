@@ -71,7 +71,7 @@ pub enum Proto {
 /// What the client dropped, by reason.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Stats {
-    /// Datagrams taken for the client that were not from the gateway, and search answers naming another host.
+    /// Search answers that name another host than the one that answered.
     pub wrong_source: u64,
     /// PCP answers whose nonce is not this client's.
     pub wrong_nonce: u64,
@@ -179,7 +179,8 @@ pub struct PortMap {
     epoch: Option<Epoch>,
     nat_ip: Option<Ipv4Addr>,
     igd: Option<Igd>,
-    release: Option<Lease>,
+    /// Releases not sent yet: a restart's and a stop's can wait together.
+    releases: [Option<Lease>; 2],
     /// The held mapping's renewal was brought forward by an announce since it was granted.
     announced: bool,
     halted: bool,
@@ -203,7 +204,7 @@ impl PortMap {
             epoch: None,
             nat_ip: None,
             igd: None,
-            release: None,
+            releases: [None; 2],
             announced: false,
             halted: false,
             stats: Stats::default(),
@@ -235,7 +236,7 @@ impl PortMap {
 
     /// Whether the client stopped and sent its release.
     pub fn stopped(&self) -> bool {
-        self.step == Step::Stopped && self.release.is_none()
+        self.step == Step::Stopped && self.releases.iter().all(Option::is_none)
     }
 
     fn gateway(&self) -> Option<SocketAddr> {
@@ -582,7 +583,7 @@ impl PortMap {
     /// The next datagram to send: its destination and length in `buf`. A buffer of
     /// [`MAX_DATAGRAM`](crate::MAX_DATAGRAM) bytes holds any.
     pub fn poll_datagram(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
-        if let Some(l) = self.release.take() {
+        if let Some(l) = self.releases.iter_mut().find_map(Option::take) {
             let gw = self.gateway()?;
             let n = match l.proto {
                 Proto::Pcp => pcp::encode_request(&self.pcp_request(0, Some(l.ext)), buf).ok()?,
@@ -773,6 +774,14 @@ impl PortMap {
         })
     }
 
+    // vertexia: two releases wait at most; a third replaces the last, a restart of a restart is not a case that needs more
+    fn queue_release(&mut self, l: Lease) {
+        let slot = self.releases.iter().position(Option::is_none).unwrap_or(1);
+        if let Some(r) = self.releases.get_mut(slot) {
+            *r = Some(l);
+        }
+    }
+
     /// Stop at `now`: drop the mapping, or a request in flight that may have made one, and ask the gateway to delete
     /// it. Nothing is asked afterwards.
     pub fn stop(&mut self, now: u64) {
@@ -789,7 +798,7 @@ impl PortMap {
                 self.enter(Step::Delete, now);
             }
             Some(l) => {
-                self.release = Some(l);
+                self.queue_release(l);
                 self.enter(Step::Stopped, now);
             }
             None => self.enter(Step::Stopped, now),
@@ -806,7 +815,7 @@ impl PortMap {
             return;
         }
         if let Some(l) = self.held.take().filter(|l| l.proto != Proto::Upnp) {
-            self.release = Some(l);
+            self.queue_release(l);
         }
         self.renewing = false;
         self.epoch = None;
