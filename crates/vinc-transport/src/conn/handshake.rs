@@ -558,6 +558,10 @@ impl Handshake {
         if self.client && self.stage == Stage::Finish {
             self.srtt = srtt;
             self.retx_at = Some(now.saturating_add(FINISH_FIRST));
+            // The wait for the peer's confirmation counts from this instant too: the key answer that established the
+            // session can come long after the last datagram or timer the handshake took.
+            self.established = now;
+            self.confirm_at = Some(self.timing.connect_deadline(now));
         }
     }
 

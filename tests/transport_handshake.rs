@@ -551,3 +551,38 @@ fn a_session_the_peer_never_confirms_ends_unconfirmed_after_the_connect_limit() 
         assert_eq!(net.b.closed(), Some(CloseReason::HandshakeTimeout));
     });
 }
+
+/// A dialing side whose key answers come late (a slow key host) establishes when its signature is answered, and its
+/// wait for the peer to confirm counts from that instant, not from the reply that came 5 s before it (vinc#385).
+#[test]
+fn a_late_key_answer_does_not_shorten_the_wait_for_the_peer_to_confirm() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(54, Params::new(10 * MS)));
+        // A's key host answers when the test says so, and the Finish is lost.
+        net.a.auto_keys = false;
+        net.drop_finish = true;
+        assert!(net.run(net.now + SEC, |n| n.a.deferred.is_some()));
+        let reply = net.now;
+        net.run(reply + 5 * SEC, |_| false);
+        let est = net.now;
+        net.a.deliver_deferred(est).unwrap();
+        net.a.service(est);
+        net.a.deliver_deferred(est).unwrap();
+        net.a.service(est);
+        assert!(net.a.conn.is_connected());
+        net.a.auto_keys = true;
+        net.flush();
+        // Nothing A sends from here on reaches B.
+        net.link.route(PathId(1)).ab.p.loss_ppm = 1_000_000;
+        net.run(est + 29 * SEC, |_| false);
+        assert_eq!(
+            net.a.closed(),
+            None,
+            "the limit counts from the establishment, 5 s after the reply"
+        );
+        net.run(est + 31 * SEC, |_| false);
+        assert_eq!(net.a.closed(), Some(CloseReason::Unconfirmed));
+    });
+}
