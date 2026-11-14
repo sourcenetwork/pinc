@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use nuclei::Handle;
+use nuclei::io::Interest;
 use nuclei::net::{TcpListener, UdpSocketBuilder};
 use nuclei::sync::local::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
@@ -56,20 +57,20 @@ impl Net {
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr, usize)> {
         loop {
             let mut meta = [RecvMeta::default()];
-            let got = self.udp.recv(
-                UdpSockRef::from(&*self.sock),
-                &mut [io::IoSliceMut::new(buf)],
-                &mut meta,
-            );
-            match got {
-                Ok(_) => {
-                    let [m] = meta;
-                    if m.len > 0 {
-                        return Ok((m.len, m.addr, m.stride.max(1)));
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.sock.readable().await?,
-                Err(e) => return Err(e),
+            // The runtime's own readiness, not `readable()`: that one asks the socket with a peek, a system call per
+            // wake on top of the receive.
+            self.sock
+                .async_io(Interest::READABLE, || {
+                    self.udp.recv(
+                        UdpSockRef::from(&*self.sock),
+                        &mut [io::IoSliceMut::new(buf)],
+                        &mut meta,
+                    )
+                })
+                .await?;
+            let [m] = meta;
+            if m.len > 0 {
+                return Ok((m.len, m.addr, m.stride.max(1)));
             }
         }
     }

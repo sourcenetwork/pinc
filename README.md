@@ -241,8 +241,11 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   - the median delivery of a topic message on a LAN (748 microseconds against 438, two hops by design,
     [#102](https://github.com/sourcenetwork/vinc/issues/102)) and of a burst of 2,000 updates through a hub (3.46 s against iroh's 1.27 s, level with
     rust-libp2p, [#161](https://github.com/sourcenetwork/vinc/issues/161));
-  - CPU on a large value fetched from one provider (12.1 s over all nodes for 256 MiB against 9.91 and 9.48,
-    [#163](https://github.com/sourcenetwork/vinc/issues/163));
+  - CPU on a large value fetched from one provider, per received packet in the node: with the library's share of
+    [#523](https://github.com/sourcenetwork/vinc/issues/523) alone, 1.47 s over all nodes for 64 MiB against 1.34 and
+    1.45, and 5.62 s for 256 MiB against 5.48 and 5.79 (15 November, c7i.4xlarge,
+    [#163](https://github.com/sourcenetwork/vinc/issues/163)); the harness's own node program, which added to the row
+    a cost iroh's never had, no longer does;
   - three setup rows: the median on a LAN, the resumed median on a slow lossy path and the tail at 1% loss
     ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
 

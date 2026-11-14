@@ -736,6 +736,11 @@ pub async fn serve<const K: usize, const D: usize>(
     println!("READY {}", serde_json::to_string(&ready).map_err(|e| e.to_string())?);
     let mut rbuf = vec![0u8; 64 * 1024];
     let mut replies = Vec::new();
+    // The node's next deadline, on one precise timer moved only when the deadline does: arming it costs the runtime a
+    // system call. The millisecond wheel is not used: it fires up to a millisecond late, once per round trip of a
+    // transfer still in slow start, which made a 1 MiB fetch over a WAN 10 ms slower.
+    let mut timer = std::pin::pin!(nuclei::time::sleep_until_precise(std::time::Instant::now()));
+    let mut armed: Option<std::time::Instant> = None;
     loop {
         io.drain(&mut agent).await;
         if agent.stopping {
@@ -748,10 +753,21 @@ pub async fn serve<const K: usize, const D: usize>(
             .into_iter()
             .flatten()
             .min();
+        // A deadline already passed fires at once; with none, the armed one stands if it is still ahead.
+        let now_i = std::time::Instant::now();
         let at = due.map_or_else(
-            || std::time::Instant::now() + std::time::Duration::from_secs(1),
-            |t| agent.core.instant_of(t).max(std::time::Instant::now()),
+            || {
+                armed
+                    .filter(|a| *a > now_i)
+                    .unwrap_or(now_i + std::time::Duration::from_secs(1))
+            },
+            |t| agent.core.instant_of(t),
         );
+        if armed != Some(at) {
+            timer.as_mut().reset(at);
+            armed = Some(at);
+        }
+        let wake = std::future::poll_fn(|cx| timer.as_mut().poll(cx));
         nuclei::select! {
             r = io.net.recv(&mut rbuf) => {
                 let now = agent.core.now();
@@ -769,7 +785,7 @@ pub async fn serve<const K: usize, const D: usize>(
                     Err(e) => return Err(format!("the UDP socket failed: {e}")),
                 }
             }
-            () = Net::sleep_until(at) => {
+            () = wake => {
                 let now = agent.core.now();
                 agent.core.handle_timeout(now);
                 agent.tick(now, &mut replies);

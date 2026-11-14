@@ -213,6 +213,8 @@ pub struct Core<const K: usize, const D: usize> {
     pub(super) next_stream: StreamId,
     pub(super) hub: Option<HubSide>,
     pub(super) small: VecDeque<(SocketAddr, Vec<u8>)>,
+    /// The buffer carrier writes are drained through, made once: every drain of the transmit queue ends here.
+    pub(super) carrier_buf: Vec<u8>,
     /// What the layer above does with streams, oldest first.
     pub ops: VecDeque<Op>,
     /// What the application layer reads, oldest first.
@@ -230,6 +232,8 @@ pub struct Core<const K: usize, const D: usize> {
     /// What the node restored from a kept bundle store when it started.
     pub restored: DtnRestored,
     pub(super) start: std::time::Instant,
+    /// The wall clock in nanoseconds at `start`.
+    pub(super) wall_start_ns: u64,
     pub(super) dirty: bool,
     /// The port-mapping client's HTTP exchange in flight, and how many there were.
     pub(super) http: Option<super::portmap::HttpLeg>,
@@ -374,6 +378,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
             next_stream: 1,
             hub,
             small: VecDeque::new(),
+            carrier_buf: vec![0u8; 20_000],
             ops: VecDeque::new(),
             events: VecDeque::new(),
             dtn_trace: VecDeque::new(),
@@ -381,6 +386,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
             tlog: spec.trace.then(TraceLog::new),
             restored,
             start,
+            wall_start_ns: crate::node::data::wall_ns(),
             dirty: false,
             http: None,
             http_count: 0,
@@ -404,6 +410,12 @@ impl<const K: usize, const D: usize> Core<K, D> {
         Self::epoch_ns() + u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX)
     }
 
+    /// The wall clock in milliseconds when the node's clock reads `now`: the wall clock read once at the start and
+    /// moved on by the node's clock, so a turn reads the system clock once, not once more for the wall.
+    fn wall_at(&self, now: u64) -> u64 {
+        self.wall_start_ns.saturating_add(now.saturating_sub(Self::epoch_ns())) / 1_000_000
+    }
+
     /// The `Instant` at which the node's clock reads `t`.
     pub fn instant_of(&self, t: u64) -> std::time::Instant {
         self.start + std::time::Duration::from_nanos(t.saturating_sub(Self::epoch_ns()))
@@ -411,7 +423,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
     /// One turn of the host duties, repeated until nothing moves.
     pub fn pump(&mut self, now: u64) {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         for _ in 0..128 {
             self.node.poll(now);
             let mut busy = self.events_step(now);
@@ -487,7 +500,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
         payload: &[u8],
         plan: &DtnPlan,
     ) -> Result<[u8; 32], String> {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         let r = self.node.dtn_send(now, to, payload, plan).map_err(|e| e.to_string());
         self.pump(now);
         r
@@ -657,7 +671,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
     fn streams_out_step(&mut self) -> bool {
         let mut did = false;
-        let mut buf = vec![0u8; 20_000];
+        let mut buf = std::mem::take(&mut self.carrier_buf);
         for i in 0..NRL {
             let Some(stream) = self.streams.get(i).copied().flatten() else {
                 continue;
@@ -676,6 +690,7 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 }
             }
         }
+        self.carrier_buf = buf;
         did
     }
 
@@ -723,7 +738,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
     /// A datagram arrived from `remote`.
     pub fn handle_datagram(&mut self, now: u64, remote: SocketAddr, data: &mut [u8]) {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         let request = self.hub.is_some() && is_relay_request(data);
         if request {
             let member = self.node.member_at(&remote);
@@ -758,7 +774,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
     /// Time passed.
     pub fn handle_timeout(&mut self, now: u64) {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         if let Some(h) = self.hub.as_mut()
             && h.relay.next_deadline().is_some_and(|d| d <= now)
         {
@@ -776,7 +793,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
     /// What the node refused. [`vinc_broadcast::Refused::Backlog`] means as many publishes as the node tracks are
     /// waiting for a hub: the message is to be offered again when one of them is acknowledged or given up.
     pub fn publish(&mut self, now: u64, topic: &[u8], body: &[u8]) -> Result<(), vinc_broadcast::Refused> {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         let r = self.node.publish(now, topic, body).map(|_| ());
         self.pump(now);
         r
@@ -788,7 +806,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
     /// What the node refused.
     pub fn set_adjacent(&mut self, peers: &[[u8; 32]]) -> Result<usize, vinc_broadcast::Refused> {
         let now = self.now();
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         let r = self.node.set_adjacent(now, peers);
         self.pump(now);
         r
@@ -799,7 +818,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
     /// # Errors
     /// What the node refused, in a sentence.
     pub fn command(&mut self, now: u64, cmd: NCmd) -> Result<u32, String> {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         let mut id = 0;
         match cmd {
             NCmd::Subscribe(t) => {
@@ -842,7 +862,8 @@ impl<const K: usize, const D: usize> Core<K, D> {
 
     /// A stream event from the runtime layer.
     pub fn stream_event(&mut self, now: u64, ev: StreamEv) {
-        self.node.set_wall_ms(now, wall_ms());
+        let wall = self.wall_at(now);
+        self.node.set_wall_ms(now, wall);
         if self.http_event(now, &ev) {
             self.pump(now);
             return;
