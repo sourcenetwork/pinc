@@ -514,41 +514,7 @@ impl Plan {
             c.push(Cmd::new(Tool::Ip, &["link", "set", &l.dev, "mtu", &mtu, "up"]));
             c.push(shape_cmd(&l.dev, &shape, false));
             if site.nat != Nat::None {
-                let mut args = vec![
-                    "-t",
-                    "nat",
-                    "-A",
-                    "POSTROUTING",
-                    "-s",
-                    lan.as_str(),
-                    "-o",
-                    l.dev.as_str(),
-                    "-j",
-                    "MASQUERADE",
-                ];
-                if site.nat == Nat::Symmetric {
-                    args.push("--random-fully");
-                }
-                c.push(Cmd::new(Tool::Iptables, &args));
-                // A home router drops an unsolicited packet. Accepted, it would leave a conntrack entry whose reply
-                // tuple is the router's own next packet to that sender, so masquerade would give that packet another
-                // port: a peer's early punch would make the mapping endpoint-dependent. Dropped before the entry is
-                // confirmed, it leaves nothing.
-                c.push(Cmd::new(
-                    Tool::Iptables,
-                    &[
-                        "-A",
-                        "INPUT",
-                        "-i",
-                        &l.dev,
-                        "-m",
-                        "conntrack",
-                        "--ctstate",
-                        "NEW,INVALID",
-                        "-j",
-                        "DROP",
-                    ],
-                ));
+                c.extend(nat_cmds(site.nat, &lan, &l.dev));
             }
         }
         if site.portmap.is_some() {
@@ -680,6 +646,48 @@ impl Plan {
             })
             .collect()
     }
+}
+
+/// A translating router's rules on its link `dev`: masquerade of the LAN `lan` (with random ports when symmetric),
+/// and a drop of unsolicited packets.
+fn nat_cmds(nat: Nat, lan: &str, dev: &str) -> Vec<Cmd> {
+    let mut args = vec![
+        "-t",
+        "nat",
+        "-A",
+        "POSTROUTING",
+        "-s",
+        lan,
+        "-o",
+        dev,
+        "-j",
+        "MASQUERADE",
+    ];
+    if nat == Nat::Symmetric {
+        args.push("--random-fully");
+    }
+    vec![
+        Cmd::new(Tool::Iptables, &args),
+        // A home router drops an unsolicited packet. Accepted, it would leave a conntrack entry whose reply tuple is
+        // the router's own next packet to that sender, so masquerade would give that packet another port: a peer's
+        // early punch would make the mapping endpoint-dependent. Dropped before the entry is confirmed, it leaves
+        // nothing.
+        Cmd::new(
+            Tool::Iptables,
+            &[
+                "-A",
+                "INPUT",
+                "-i",
+                dev,
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "NEW,INVALID",
+                "-j",
+                "DROP",
+            ],
+        ),
+    ]
 }
 
 /// The nftables chains miniupnpd adds its rules to, in a router that maps ports: a forward filter that accepts what
