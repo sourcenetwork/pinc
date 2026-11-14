@@ -23,8 +23,77 @@ use crate::scenario::Shape;
 
 /// Where the node binary is mounted in every node container.
 pub const BIN: &str = "/opt/vd/vinc-distributed";
-/// The base image: small, with the C library and the GCC runtime the binary links.
-pub const IMAGE: &str = "debian:bookworm-slim";
+/// The base image when the host does not say which distribution it runs: small, with a C library and the GCC runtime.
+pub const FALLBACK_IMAGE: &str = "debian:bookworm-slim";
+
+/// The base image when none is given: the build host's own distribution and release, so the C library the bound
+/// binary was linked against is in it (an older one refuses to load it).
+pub fn default_image() -> String {
+    std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|t| image_for(&t))
+        .unwrap_or_else(|| FALLBACK_IMAGE.to_owned())
+}
+
+/// The image of the distribution an `/etc/os-release` names: `ID:VERSION_ID`, or `archlinux:latest` for Arch, which
+/// has no release.
+pub fn image_for(os_release: &str) -> Option<String> {
+    let field = |k: &str| {
+        os_release
+            .lines()
+            .find_map(|l| l.strip_prefix(k)?.strip_prefix('='))
+            .map(|v| v.trim().trim_matches('"'))
+            .filter(|v| !v.is_empty())
+    };
+    match field("ID")? {
+        "arch" => Some("archlinux:latest".to_owned()),
+        id => Some(format!("{id}:{}", field("VERSION_ID")?)),
+    }
+}
+
+/// The glibc version in what `getconf GNU_LIBC_VERSION` prints (`glibc 2.39`), as (major, minor).
+pub fn glibc(getconf: &str) -> Option<(u32, u32)> {
+    let (major, rest) = getconf.trim().strip_prefix("glibc ")?.split_once('.')?;
+    Some((major.parse().ok()?, rest.split('.').next()?.parse().ok()?))
+}
+
+/// Refuse an image whose glibc is older than the host's, which the bound binary links. Nothing is refused when
+/// either side does not say (a musl image, a host without `getconf`).
+async fn check_libc(image: &str) -> Result<()> {
+    let host = Command::new("getconf")
+        .arg("GNU_LIBC_VERSION")
+        .output()
+        .await
+        .ok()
+        .and_then(|o| glibc(&String::from_utf8_lossy(&o.stdout)));
+    let args = [
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "getconf",
+        image,
+        "GNU_LIBC_VERSION",
+    ];
+    let theirs = docker::docker(&args).await.ok().and_then(|s| glibc(&s));
+    if let (Some(h), Some(i)) = (host, theirs)
+        && i < h
+    {
+        return Err(Error::Host(format!(
+            "the image {image} has glibc {}.{}, older than this host's {}.{}, which the node binary links; \
+             pass --image {} (this host's distribution) or another image with glibc {}.{} or newer",
+            i.0,
+            i.1,
+            h.0,
+            h.1,
+            default_image(),
+            h.0,
+            h.1
+        )));
+    }
+    Ok(())
+}
 /// Containers started at once.
 const PARALLEL: usize = 8;
 
@@ -133,6 +202,7 @@ impl Containers {
     pub async fn up(plan: &Plan, image: &str) -> Result<Self> {
         Self::preflight().await?;
         let image_id = docker::ensure_image(image).await?;
+        check_libc(image).await?;
         let helper = Helper::start()?;
         let ifb_loaded = helper.call(Req::Ifb { load: true }).await? == "loaded";
         let mut me = Self {

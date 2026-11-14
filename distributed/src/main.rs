@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use vinc_distributed::backend::containers::{self, IMAGE};
+use vinc_distributed::backend::containers::{self, default_image};
 use vinc_distributed::backend::fleet::Fleet;
 use vinc_distributed::backend::ssh;
 use vinc_distributed::orchestrate::{self, Options};
@@ -73,7 +73,7 @@ fn run(args: &[String]) -> Result<(), String> {
         None => None,
     };
     let opts = Options {
-        image: flag(args, "--image").unwrap_or_else(|| IMAGE.into()),
+        image: flag(args, "--image").unwrap_or_else(default_image),
         results: flag(args, "--results").map_or_else(results_root, PathBuf::from),
         reps,
         events: None,
@@ -106,7 +106,7 @@ fn dashboard(args: &[String]) -> Result<(), String> {
             .map_err(|_| format!("--bind takes an address and port, such as 127.0.0.1:7878, not {bind}"))?,
         token: flag(args, "--token"),
         root: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-        image: flag(args, "--image").unwrap_or_else(|| IMAGE.into()),
+        image: flag(args, "--image").unwrap_or_else(default_image),
         hosts: fleet(args)?,
         quiet: thresholds(args)?,
     };
