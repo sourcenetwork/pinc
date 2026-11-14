@@ -66,3 +66,57 @@ impl ReachRing {
             .and_then(|h| h.body.get(..h.len))
     }
 }
+
+#[cfg(feature = "trace")]
+pub(crate) mod trace {
+    use super::{REACH_BODY_MAX, REACH_SLOTS, ReachRing};
+    use crate::api::SessionId;
+
+    /// A ring of its own, with its state readable after every call.
+    pub struct ReachProbe {
+        r: ReachRing,
+    }
+
+    impl Default for ReachProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl ReachProbe {
+        /// The places of the ring.
+        pub const SLOTS: usize = REACH_SLOTS;
+        /// The longest body kept.
+        pub const BODY_MAX: usize = REACH_BODY_MAX;
+
+        /// An empty ring.
+        #[must_use]
+        pub const fn new() -> Self {
+            Self { r: ReachRing::new() }
+        }
+
+        /// Keep `body` as the latest of `session`.
+        pub fn put(&mut self, session: u64, body: &[u8]) {
+            self.r.put(SessionId(session), body);
+        }
+
+        /// The body held for `session`.
+        #[must_use]
+        pub fn get(&self, session: u64) -> Option<&[u8]> {
+            self.r.get(SessionId(session))
+        }
+
+        /// The place the next new session takes.
+        #[must_use]
+        pub const fn next(&self) -> usize {
+            self.r.next
+        }
+
+        /// The session, length and first byte of the body in place `k`.
+        #[must_use]
+        pub fn cell(&self, k: usize) -> Option<(u64, usize, u8)> {
+            let h = self.r.items.get(k).copied().flatten()?;
+            Some((h.session.0, h.len, h.body.first().copied().unwrap_or(0)))
+        }
+    }
+}

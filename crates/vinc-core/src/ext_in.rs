@@ -110,3 +110,75 @@ mod tests {
         assert_eq!(r.take(&mut [0u8; 10]), Ok(Some((SessionId(2), 0x4f, 10))));
     }
 }
+
+#[cfg(feature = "trace")]
+pub(crate) mod trace {
+    use super::{EXT_BODY_MAX, EXT_SLOTS, ExtRing};
+    use crate::api::SessionId;
+
+    /// A ring of its own, with its state readable after every call.
+    pub struct ExtInProbe {
+        r: ExtRing,
+    }
+
+    impl Default for ExtInProbe {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl ExtInProbe {
+        /// The places of the ring.
+        pub const SLOTS: usize = EXT_SLOTS;
+        /// The longest body kept.
+        pub const BODY_MAX: usize = EXT_BODY_MAX;
+
+        /// An empty ring.
+        #[must_use]
+        pub const fn new() -> Self {
+            Self { r: ExtRing::new() }
+        }
+
+        /// Keep a frame; false if the body is too long.
+        pub fn put(&mut self, session: u64, ty: u64, body: &[u8]) -> bool {
+            self.r.put(SessionId(session), ty, body)
+        }
+
+        /// Take the oldest frame into `out`: its session, type and length, or the length that does not fit.
+        ///
+        /// # Errors
+        ///
+        /// The length of the oldest frame when `out` is shorter (it stays held).
+        pub fn take(&mut self, out: &mut [u8]) -> Result<Option<(u64, u64, usize)>, usize> {
+            self.r.take(out).map(|o| o.map(|(s, t, l)| (s.0, t, l)))
+        }
+
+        /// Frames held.
+        #[must_use]
+        pub const fn len(&self) -> usize {
+            self.r.len
+        }
+
+        /// Whether no frame is held.
+        #[must_use]
+        pub const fn is_empty(&self) -> bool {
+            self.r.len == 0
+        }
+
+        /// The place of the oldest frame.
+        #[must_use]
+        pub const fn head(&self) -> usize {
+            self.r.head
+        }
+
+        /// The session, type, length and first byte of the `k`-th held frame, oldest first.
+        #[must_use]
+        pub fn frame(&self, k: usize) -> Option<(u64, u64, usize, u8)> {
+            if k >= self.r.len {
+                return None;
+            }
+            let h = self.r.items.get((self.r.head + k) % EXT_SLOTS).copied().flatten()?;
+            Some((h.session.0, h.ty, h.len, h.body.first().copied().unwrap_or(0)))
+        }
+    }
+}

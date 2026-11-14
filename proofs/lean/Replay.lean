@@ -21,6 +21,8 @@ import Vinc.TraceOrphan
 import Vinc.TraceHalfOpen
 import Vinc.TraceQueue
 import Vinc.TraceHeld
+import Vinc.TraceExtIn
+import Vinc.TraceReach
 import Vinc.TraceMtu
 import Vinc.TraceStores
 import Vinc.TraceValuesSys
@@ -184,6 +186,8 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
   let mut how : TraceHalfOpen.W := {}
   let mut qvw : TraceQueue.W := {}
   let mut hdw : TraceHeld.W := {}
+  let mut exw : TraceExtIn.W := {}
+  let mut rcw2 : TraceReach.W := {}
   let mut mtw : TransportMtu.M := {}
   let mut bcw : BroadcastTrace.W := {}
   let mut rcw : TraceReconcile.W := {}
@@ -507,6 +511,22 @@ private def replayFile (path : String) : IO (Nat × Nat) := do
           match TraceHeld.replayEvent j hdw with
           | .ok w' =>
             hdw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceExtIn.isTag t then
+          -- Extension ring events (`cox`, written by `trace_ext_in`): frames held for the application.
+          match TraceExtIn.replayEvent j exw with
+          | .ok w' =>
+            exw := w'
+            count := count + 1
+            continue
+          | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
+        if TraceReach.isTag t then
+          -- Reach ring events (`cor`, written by `trace_reach`): `REACH_OUT` bodies held for the application.
+          match TraceReach.replayEvent j rcw2 with
+          | .ok w' =>
+            rcw2 := w'
             count := count + 1
             continue
           | .error msg => throw (IO.userError s!"{path}:{lineNo}: {msg}")
