@@ -44,10 +44,12 @@
 (*    from conn_config computes the same first resend from the remembered  *)
 (*    round trip it is given as the node computes it, because the floor is *)
 (*    even (ConnFirstSame); the hub resend exists exactly for a peer with  *)
-(*    a positive round trip of its own (HubRight); a node is thin exactly  *)
-(*    when its peak or its average is at least 250 ms, and a session is    *)
-(*    thin when it has no sample, when the node is, or when its smallest   *)
-(*    round trip or half its smoothed one is (ThinRight);                  *)
+(*    a positive round trip r0 of its own and is then max(300 ms,          *)
+(*    floor(3 x r0 / 2) + 20 ms), the product first, saturating at the     *)
+(*    top of the clock (HubRight, against the product on 80 bits); a node  *)
+(*    is thin exactly when its peak or its average is at least 250 ms, and *)
+(*    a session is thin when it has no sample, when the node is, or when   *)
+(*    its smallest round trip or half its smoothed one is (ThinRight);     *)
 (*  - what the connection reads: a new connection gets the average and the *)
 (*    peak (None for 0), the thin flag and the remembered round trip; a    *)
 (*    running one that is pushed the node values holds them afterwards,    *)
@@ -56,7 +58,9 @@
 (*    "leaves the input as it was" rule of the push never hides a fall: an *)
 (*    average or a peak that is positive stays positive                    *)
 (*    (AvgNeverZeroAgain, PeakNeverZeroAgain).                             *)
-(* Witness configs: Rtt_peakfloor (a peak resets the floor, the code of    *)
+(* Witness configs: Rtt_hubhalf (the hub resend of the code before         *)
+(* cede7b48, half the round trip times three: HubRight fails for an odd    *)
+(* round trip), Rtt_peakfloor (a peak resets the floor, the code of        *)
 (* before 2dd1682: FloorOnlyHandshake fails), Rtt_zeroreset (a handshake   *)
 (* with no sample resets the floor: HandshakeZero fails), Rtt_evict (a     *)
 (* full table replaces its oldest peer: TableOnlyGrows fails), Rtt_floor9  *)
@@ -66,7 +70,7 @@
 (* Lean counterpart: proofs/lean/Vinc/CoreRtt*.lean.                       *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CAP, PEERS, VALSMS, TOPV, EDGE, DEPTH, PEAK_RESETS, ZERO_RESETS, EVICT, FLOOR_TOP
+CONSTANTS CAP, PEERS, VALSMS, TOPV, EDGE, DEPTH, PEAK_RESETS, ZERO_RESETS, EVICT, FLOOR_TOP, HUB_HALF
 VARIABLES r, cv, last, n, sampled, maxpeak, maxhs
 vars == <<r, cv, last, n, sampled, maxpeak, maxhs>>
 
@@ -145,11 +149,11 @@ RememberedRight(p) ==
        /\ (m.some => /\ Le(Base(r, p), m.v) /\ Le(r.floor, Exact(m.v, 2))
                      /\ (m.v = Base(r, p) \/ Le(Exact(m.v, 2), U!Add(r.floor, U!One))))
 HubRight(p) ==
-    LET h == HubOf(r, p)
+    LET h == HubOfB(r, p, HUB_HALF)
         k == Krtt(r, p)
-        exact == U!Add(Exact(N!Div(k.v, 2), 3), Ms(20))
+        e == U!Add(N!Div(Exact(k.v, 3), 2), Ms(20))   \* floor(3 * r0 / 2) + 20 ms on 80 bits, the product first
     IN /\ h.some <=> (k.some /\ k.v # Zero)
-       /\ (h.some => Le(HubResend, h.v) /\ (U!Fits(exact) => Le(exact, h.v)))
+       /\ (h.some => h.v = N!Max(HubResend, IF U!Fits(e) THEN e ELSE U!Max64))
 ThinRight ==
     /\ ThinNode(r) <=> (Le(SlowRtt, r.tgr) \/ Le(SlowRtt, r.lrtt))
     /\ \A s, m \in Vals :

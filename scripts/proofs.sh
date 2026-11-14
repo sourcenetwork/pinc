@@ -574,6 +574,7 @@ par witness_tlc reach_refuse Reach Reach_refuse NoRefuse
 par witness_tlc reach_atnext Reach Reach_atnext NoAtNext
 par run_tlc rtt Rtt Rtt
 par run_tlc rtt_floor Rtt Rtt_floor
+par witness_tlc rtt_hubhalf Rtt Rtt_hubhalf Inv
 par witness_tlc rtt_peakfloor Rtt Rtt_peakfloor Props
 par witness_tlc rtt_zeroreset Rtt Rtt_zeroreset Props
 par witness_tlc rtt_evict Rtt Rtt_evict Props

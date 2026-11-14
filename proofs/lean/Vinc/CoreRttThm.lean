@@ -31,7 +31,8 @@ quotes are the module documentation:
 - the readers: the first resend is at least 500 ms, at least twice the base round trip and at least the floor, and one
   of the three (`firstResend_ge`, `firstResend_cases`); a connection built from the remembered round trip computes
   the same first resend as the node, because the floor is even (`connFirst_remembered`); the hub resend exists
-  exactly for a peer with a positive round trip of its own and is at least 300 ms (`hub_iff`, `hub_ge`); a node is
+  exactly for a peer with a positive round trip `r0` of its own and is `max(300 ms, ⌊3 r0 / 2⌋ + 20 ms)`, the product
+  taken first, held at the top of the clock (`hub_iff`, `hub_eq`, `hub_ge`); a node is
   thin exactly when its peak or its average is at least 250 ms, a session when it has no sample, the node is thin, or
   its smallest round trip or half its smoothed one is (`thinNode_iff`, `thin_iff`);
 - what the connection reads: a new connection gets the node's values; a running one that is pushed them holds them
@@ -528,8 +529,15 @@ theorem hub_iff (r : R) (p : Nat) : (hub r p).isSome = true ↔ ∃ k, krtt r p 
   | none => simp
   | some k => by_cases h : k = 0 <;> simp [h]
 
+/-- The hub resend of a peer whose round trip `k` is positive is `max(300 ms, ⌊3 k / 2⌋ + 20 ms)`, the product taken
+first, held at `u64::MAX`: the code's `k + k / 2` is three halves of `k` rounded down. -/
+theorem hub_eq (r : R) (p k : Nat) (hk : krtt r p = some k) (h0 : k ≠ 0) :
+    hub r p = some (max hubResendMin (min (3 * k / 2 + hubPad) maxU)) := by
+  unfold hub
+  simp [hk, h0, satAdd] <;> omega
+
 theorem hub_ge (r : R) (p h : Nat) (hh : hub r p = some h) :
-    hubResendMin ≤ h ∧ ∀ k, krtt r p = some k → 3 * (k / 2) + hubPad ≤ maxU → 3 * (k / 2) + hubPad ≤ h := by
+    hubResendMin ≤ h ∧ ∀ k, krtt r p = some k → 3 * k / 2 + hubPad ≤ maxU → 3 * k / 2 + hubPad ≤ h := by
   unfold hub at hh
   cases hk : krtt r p with
   | none => simp [hk] at hh
@@ -658,6 +666,7 @@ end Vinc.CoreRtt
 #audit_axioms Vinc.CoreRtt.remembered_some
 #audit_axioms Vinc.CoreRtt.connFirst_remembered
 #audit_axioms Vinc.CoreRtt.hub_iff
+#audit_axioms Vinc.CoreRtt.hub_eq
 #audit_axioms Vinc.CoreRtt.hub_ge
 #audit_axioms Vinc.CoreRtt.thinNode_iff
 #audit_axioms Vinc.CoreRtt.thin_iff

@@ -88,10 +88,11 @@ def remembered (r : R) (p : Nat) : Option Nat :=
   let x := max (base r p) ((r.floor + 1) / 2)
   if x ≠ 0 then some x else none
 
-/-- `hub_resend`: `max(300 ms, 1.5 x krtt + 20 ms)`, only for a peer with a positive `krtt`. -/
+/-- `hub_resend`: `max(300 ms, 3 * krtt / 2 + 20 ms)`, the product first, written as the code has it
+(`krtt + krtt / 2`, saturating, then the 20 ms, saturating), only for a peer with a positive `krtt`. -/
 def hub (r : R) (p : Nat) : Option Nat :=
   match krtt r p with
-  | some k => if k ≠ 0 then some (max hubResendMin (satAdd (satMul (k / 2) 3) hubPad)) else none
+  | some k => if k ≠ 0 then some (max hubResendMin (satAdd (satAdd k (k / 2)) hubPad)) else none
   | none => none
 
 /-- `thin_node`: the larger of the peak and the average is at least 250 ms. -/

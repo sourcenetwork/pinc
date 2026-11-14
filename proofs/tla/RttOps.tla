@@ -70,11 +70,14 @@ Base(r, p) == LET k == Krtt(r, p) IN IF k.some /\ k.v # Zero THEN k.v ELSE r.lrt
 FirstResendOf(r, p) == N!Max(N!Max(FirstResend, SatMul(Base(r, p), 2)), r.floor)
 HalfUp(a) == IF a[1] % 2 = 1 THEN U!Add(N!Div(a, 2), U!One) ELSE N!Div(a, 2)
 Remembered(r, p) == LET x == N!Max(Base(r, p), HalfUp(r.floor)) IN IF x # Zero THEN Some(x) ELSE None
-HubOf(r, p) ==
+\* hub_resend: max(300 ms, 3 * r0 / 2 + 20 ms), the product first, as r0 + r0 / 2 (the same value, which cannot overflow
+\* before the sum saturates); half selects the rule of the code before cede7b48, (r0 / 2) * 3, the half first, which is
+\* one nanosecond short for an odd r0 (the witness config Rtt_hubhalf)
+HubOfB(r, p, half) ==
     LET k == Krtt(r, p)
-    IN IF k.some /\ k.v # Zero
-       THEN Some(N!Max(HubResend, SatAdd(SatMul(N!Div(k.v, 2), 3), Ms(20))))
-       ELSE None
+        t == IF half THEN SatMul(N!Div(k.v, 2), 3) ELSE SatAdd(k.v, N!Div(k.v, 2))
+    IN IF k.some /\ k.v # Zero THEN Some(N!Max(HubResend, SatAdd(t, Ms(20)))) ELSE None
+HubOf(r, p) == HubOfB(r, p, FALSE)
 ThinNode(r) == N!Le(SlowRtt, N!Max(r.tgr, r.lrtt))
 Thin(r, srtt, minrtt) ==
     srtt = Zero \/ N!Le(SlowRtt, N!Max(N!Max(N!Max(r.tgr, r.lrtt), minrtt), N!Div(srtt, 2)))
