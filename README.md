@@ -123,7 +123,7 @@ keepalives) awaits `Endpoint::run()`.
 | `vinc-values` | verified streaming of values of any size from up to four providers, with resume and zero-copy serving | yes | built, proven |
 | `vinc-broadcast` | topic broadcast through hubs with origin authentication, replay floors and a bounded log | yes | built, proven (the liveness theorems cover runs without restarts) |
 | `vinc-reconcile` | range-based set reconciliation whose cost scales with the difference, exact by a final check | yes | built; proofs being closed |
-| `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody and copy-limited forwarding | yes | built, proven (one ordering fact of the forwarder's poll is not proved in Lean yet) |
+| `vinc-dtn` | bundles sealed to a recipient, erasure coding, custody and copy-limited forwarding | yes | built, proven |
 | `vinc-sim` | deterministic network simulator and scenario suite: links, sites, NAT, partitions, clocks, adversaries | no | built |
 
 **proven**: every property has a TLA+ model, a Lean theorem and trace validation ([docs/PROOFS.md](docs/PROOFS.md)).

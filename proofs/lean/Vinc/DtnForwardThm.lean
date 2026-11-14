@@ -1,4 +1,5 @@
 import Vinc.DtnForwardRetr
+import Vinc.Axioms
 
 /-!
 # The forwarder: timers, expiry, ordering, spray and the destination
@@ -11,7 +12,8 @@ Theorems about `DtnForward.advance`, `poll`, `spray` and `retr`, for every table
 * Expiry is wall-clock (`expiry_ignores_links`, `poll_release_done`, `poll_release_only_done`): a delivered or expired
   bundle is released first, whatever the links and timers say, and a release is only of such a bundle.
 * Order (`poll_release_done`, `poll_send_spec`): a done bundle is released first, and a retransmission or a handover
-  means none was done; that a handover means the retransmission scan found nothing is not proved in Lean yet.
+  means none was done; a handover also means the retransmission scan of that poll found nothing to send
+  (`poll_handover_scan_empty`).
 * Give-up (`poll_gives_up_only`): a transfer gives up only with its timer out, its link up and its sends used.
 * Spray (`spray_send_spec`, `poll_send_spec`): a handover to the destination carries no copies, to anyone else it
   hands `copies / 2` and the holder keeps at least one; a transfer is created once per (bundle, peer).
@@ -440,5 +442,28 @@ theorem poll_gives_up_only {f f' : F} {a : Act} (h : poll f = (f', a)) {i : Nat}
         rw [ht'] at h2
         cases h2
         exact key ts' _ hrel h1
+
+/-- A handover is made only when the retransmission scan of the same poll found nothing to send: the scan runs
+before the spray and the spray is reached only on an empty scan. -/
+theorem poll_handover_scan_empty {f f' : F} {p id c : Nat} (h : poll f = (f', .send p id c false)) :
+    doneIdx f = none ∧ (retr (upLink f.ls) f.retry f.maxSends f.ts).2 = none := by
+  have hd := (poll_send_spec h).1
+  refine ⟨hd, ?_⟩
+  unfold poll at h
+  simp only [hd] at h
+  cases hr : retr (upLink f.ls) f.retry f.maxSends f.ts with
+  | mk ts' a =>
+    cases a with
+    | none => rfl
+    | some x =>
+      have hx := retr_send_slot (up := upLink f.ls) (retry := f.retry) (maxS := f.maxSends) (ts := f.ts) (x := x)
+        (by rw [hr])
+      simp only [hr] at hx h
+      obtain ⟨i, t, sd, _, _, _, _, _, h6⟩ := hx
+      obtain ⟨_, hx2⟩ := Prod.mk.inj h
+      rw [h6] at hx2
+      simp at hx2
+
+#audit_axioms poll_handover_scan_empty
 
 end Vinc.DtnForward
