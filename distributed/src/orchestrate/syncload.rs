@@ -16,7 +16,7 @@ use crate::orchestrate::window::Window;
 use crate::orchestrate::{Ctx, Event, faults, tracefile};
 use crate::plan::MTU;
 use crate::results::Row;
-use crate::scenario::Stack;
+use crate::scenario::{Role, Stack};
 use crate::workloads::{Reconcile, ValueSync};
 
 /// The seed of the value every stack serves, so all of them move the same bytes.
@@ -165,6 +165,29 @@ async fn sync_body(ctx: &Ctx, b: &Cluster, set: &AppSet<'_>, w: &ValueSync, size
     #[allow(clippy::cast_precision_loss)]
     r.node
         .insert("bytes".into(), json!(size as f64 * consumers.len() as f64));
+    // A relay server counts the packets it forwarded: few once the pairs hold a direct path, all of them when none
+    // can be punched.
+    for (i, _) in ctx
+        .plan
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.role == Role::RelayServer)
+    {
+        if let Ok(v) = set.call(i, Cmd::Report, Duration::from_secs(5)).await
+            && let Some(c) = v.get("relay_server").and_then(Value::as_object)
+        {
+            for (col, key) in [
+                ("relay_packets", "packets_total{to=\"carrier\"}"),
+                ("relay_carriers", "carriers"),
+                ("relay_lookups", "lookups_total"),
+            ] {
+                if let Some(n) = c.get(key) {
+                    r.node.insert(col.into(), n.clone());
+                }
+            }
+        }
+    }
     Ok(())
 }
 

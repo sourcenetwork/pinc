@@ -106,6 +106,10 @@ fn run_args(c: &Container, run: &str, image: &str, bin: Option<&Path>) -> Vec<St
         // Bound read-only, so a rebuild needs no image and every node runs the orchestrator's own build.
         a.extend(["-v".into(), format!("{}:{BIN}:ro", b.display())]);
     }
+    if let Some(r) = std::env::var_os("VINC_RELAY_BIN") {
+        let at = crate::node::vinc::relay_server::RELAY_BIN;
+        a.extend(["-v".into(), format!("{}:{at}:ro", Path::new(&r).display())]);
+    }
     a.extend([image.to_owned(), "infinity".into()]);
     a
 }

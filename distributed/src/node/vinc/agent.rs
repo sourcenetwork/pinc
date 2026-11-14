@@ -104,8 +104,19 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             .ok_or_else(|| format!("{} is not a node of the scenario", init.name))?
             .clone();
         let addr = SocketAddr::new(IpAddr::V4(me_spec.ip), me_spec.port(UDP_PORT));
+        // Relay servers first, on their one port: a node reaches a peer through its first relay until a direct path
+        // works. They take no joins, so they are left out of the hubs the node waits for.
         let mut hubs = Vec::new();
-        for p in init.peers.iter().filter(|p| p.role != Role::Peer) {
+        for p in init.peers.iter().filter(|p| p.role == Role::RelayServer) {
+            let at = SocketAddr::new(IpAddr::V4(p.public_ip), p.port(UDP_PORT));
+            hubs.push(HubAddr {
+                id: node_id(&p.name)?,
+                udp: at,
+                tcp: at,
+            });
+        }
+        let servers = hubs.len();
+        for p in init.peers.iter().filter(|p| matches!(p.role, Role::Hub | Role::Relay)) {
             hubs.push(HubAddr {
                 id: node_id(&p.name)?,
                 udp: SocketAddr::new(IpAddr::V4(p.public_ip), p.port(UDP_PORT)),
@@ -132,7 +143,7 @@ impl<const K: usize, const D: usize> Agent<K, D> {
             apps.dtn = DtnStore::new(&init.name, d)?;
         }
         let core = Core::<K, D>::new(&spec, apps)?;
-        let hub_ids = spec.hubs.iter().map(|h| h.id.bytes).collect();
+        let hub_ids = spec.hubs.iter().skip(servers).map(|h| h.id.bytes).collect();
         let ready = Ready {
             stack: "vinc".into(),
             id: hex(&core.me.bytes),
