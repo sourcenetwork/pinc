@@ -18,10 +18,12 @@ pub mod dtnlog;
 mod hub;
 mod keys;
 pub mod net;
+pub mod relay_server;
 pub mod tracelog;
 
 use crate::node::app::for_each_request;
 use crate::node::proto::Init;
+use crate::scenario::Role;
 
 pub use self::core::{HubAddr, Spec, node_id};
 
@@ -42,6 +44,9 @@ fn block<const K: usize, const D: usize>(init: Init) -> Result<(), String> {
 /// # Errors
 /// The node or its sockets could not start, or failed.
 pub fn run(init: Init) -> Result<(), String> {
+    if init.me().is_some_and(|m| m.role == Role::RelayServer) {
+        return relay_server::run(&init);
+    }
     // The node holds its buffers inline, so it runs on a thread with room for them.
     let sessions = init.sessions;
     let h = std::thread::Builder::new()

@@ -1,0 +1,52 @@
+name = "relay-server-punch"
+about = "relay-server-no-punch with a punch possible: the consumer behind a port-restricted NAT, the provider on a routed site. The pair starts on the vinc_relay server and moves to a direct path; the relay forwards only the first packets."
+stacks = ["vinc"]
+repetitions = 3
+
+[[sites]]
+name = "home1"
+nat = "port-restricted"
+
+[[sites]]
+name = "home2"
+
+[[sites]]
+name = "public"
+
+[[nodes]]
+name = "consumer"
+site = "home1"
+
+[[nodes]]
+name = "provider"
+site = "home2"
+
+[[nodes]]
+name = "relay"
+site = "public"
+role = "relay-server"
+
+[[nodes]]
+name = "hub"
+site = "public"
+role = "hub"
+
+[[links]]
+a = "home1"
+b = "public"
+shape = { delay_ms = 10, rate_mbit = 50 }
+reverse = { rate_mbit = 200 }
+
+[[links]]
+a = "home2"
+b = "public"
+shape = { delay_ms = 15, rate_mbit = 20 }
+reverse = { rate_mbit = 100 }
+
+[workload]
+kind = "sync"
+providers = ["provider"]
+consumers = ["consumer"]
+sizes = [1048576, 8388608]
+timeout_s = 180
+warmup_s = 8
