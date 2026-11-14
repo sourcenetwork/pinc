@@ -13,12 +13,16 @@
 //! Per session, every slot of the shape reserves a connection, a stream table of [`STREAMS`] slots (a slot is a few KiB
 //! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of up to
 //! [`Limits::pool_chunks`] chunks of 16 KiB. The stream table and the table of sent packets are reserved memory the
-//! system commits only as it is used. The pool makes a chunk when the session first needs it and keeps it while the
-//! session is busy; when the session's last stream ends it frees its idle chunks, so a quiet session holds
-//! what it uses, on any allocator. A session that moved 64 KiB and went quiet holds about 96 KiB of the client's
-//! memory, and a client endpoint with no session about 620 KiB (`tests/vinc_client_memory.rs` holds them to 112 and 704
-//! KiB). The shape is rounded up to the next capacity of the ladder, which doubles at each step: ask for what you
-//! need, not for a round number above it.
+//! system commits only as it is used. The pool makes its chunks in segments when the session first needs them and keeps
+//! them while the session is busy; when the session's last stream ends it frees every segment with no chunk in use, so
+//! a quiet session holds what it uses. On 64-bit Linux with glibc a segment is 32 MiB, which the allocator maps on its
+//! own, and the system commits only the pages the session wrote: freeing it gives them back to the system, where 16 KiB
+//! chunks freed one by one would stay in the allocator's heap after a burst. The endpoints of a thread keep up to four
+//! freed segments their sessions wrote at most 16 chunks of (1 MiB in all), so a session that goes quiet after every
+//! request takes its segment again without the system. A session that moved 64 KiB and went
+//! quiet holds about 54 KiB of the client's memory, and a client endpoint with no session about 620 KiB
+//! (`tests/vinc_client_memory.rs` holds them to 80 and 704 KiB). The shape is rounded up to the next capacity of the
+//! ladder, which doubles at each step: ask for what you need, not for a round number above it.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
 
@@ -58,6 +62,19 @@ pub struct Limits {
     /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
     /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
+    /// Whether a session's pool takes its chunks from segments of 32 MiB (2048 chunks), which a quiet session frees
+    /// whole so its pages go back to the system after a burst, or each chunk on its own, 16 KiB at a time (`false`).
+    /// The default is on for 64-bit Linux with glibc, the one system the segments are for (it maps a request of 32
+    /// MiB or more on its own, commits only the pages written and unmaps it whole when it is freed), and off
+    /// everywhere else, where it cannot be turned on. Turn it off on such a host when:
+    ///
+    /// - it runs with a strict commit limit (`vm.overcommit_memory = 2`): a segment is charged whole against the
+    ///   limit though only its written pages are resident. The charge is at most, per thread, 32 MiB times the
+    ///   segments of the sessions with a chunk in use (one each up to 2048 `pool_chunks`, `pool_chunks / 2048`
+    ///   rounded up above), plus the 4 spare segments of 32 MiB the thread keeps;
+    /// - it installs its own global allocator (`#[global_allocator]`): the segments count on glibc's behaviour, and
+    ///   another allocator may commit a segment whole or keep it when it is freed.
+    pub pool_segments: bool,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice the
     /// delivery rate while the stream is read, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
     /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
@@ -93,6 +110,7 @@ impl Default for Limits {
         Self {
             connections: 1024,
             pool_chunks: 1024,
+            pool_segments: vinc_transport::stream::pool::SEGMENT_CHUNKS > 1,
             stream_window: 1_310_720,
             // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
             // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path

@@ -335,6 +335,24 @@ where
             f.machines = machines.clone();
         }
     }
+
+    /// Take the spare segments of buffer pools from `segments`, a cache other endpoints may share, instead of a cache of
+    /// this endpoint's own: a session that goes quiet frees its pool's segment there, and the next one that needs a
+    /// segment takes it. Affects only the slots made after the call.
+    pub fn share_segments(&mut self, segments: &vinc_transport::stream::pool::Segments) {
+        if let Some(f) = self.fresh.as_mut() {
+            f.segments = segments.clone();
+        }
+    }
+
+    /// Whether the buffer pools of the slots made after the call take their chunks from segments of
+    /// [`SEGMENT_CHUNKS`](vinc_transport::stream::pool::SEGMENT_CHUNKS) (`true`, the default) or each chunk on its own
+    /// (`false`, the pool of 16 KiB chunks); see `Limits::pool_segments` in the facade.
+    pub fn set_pool_segments(&mut self, on: bool) {
+        if let Some(f) = self.fresh.as_mut() {
+            f.segment_chunks = if on { vinc_transport::stream::pool::SEGMENT_CHUNKS } else { 1 };
+        }
+    }
 }
 
 /// What an endpoint that owns its table makes a slot's memory from, the first time the slot is taken.
@@ -343,6 +361,8 @@ pub(crate) struct Fresh {
     pool_chunks: usize,
     loss: alloc::rc::Rc<vinc_transport::recovery::LossEstimate>,
     machines: vinc_transport::conn::Machines,
+    segments: vinc_transport::stream::pool::Segments,
+    segment_chunks: usize,
     /// The pool a new stream table is made against; [`Endpoint::alloc_slot`] ties the table to the slot's own.
     probe: vinc_transport::stream::pool::BufferPool<'static>,
 }
@@ -354,6 +374,8 @@ impl Fresh {
             pool_chunks,
             loss: alloc::rc::Rc::new(vinc_transport::recovery::LossEstimate::new()),
             machines: vinc_transport::conn::Machines::new(),
+            segments: vinc_transport::stream::pool::Segments::new(),
+            segment_chunks: vinc_transport::stream::pool::SEGMENT_CHUNKS,
             probe: vinc_transport::stream::pool::BufferPool::new_boxed(1),
         }
     }
@@ -366,7 +388,11 @@ impl Fresh {
         use vinc_transport::stream::pool::BufferPool;
 
         Resources {
-            pool: BufferPool::new_grown(self.pool_chunks),
+            pool: {
+                let mut pool = BufferPool::new_grown_in(self.pool_chunks, self.segment_chunks);
+                pool.share_segments(&self.segments);
+                pool
+            },
             streams: Held::Owned(alloc::boxed::Box::new(Streams::new(
                 &stream::Config::new(false),
                 &self.probe,

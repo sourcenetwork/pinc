@@ -29,6 +29,9 @@ thread_local! {
     /// The boxes of handshake machines the endpoints of this thread share: an endpoint holds one only while a
     /// handshake of its runs.
     static MACHINES: vinc_transport::conn::Machines = vinc_transport::conn::Machines::new();
+    /// The spare segments of buffer pools the endpoints of this thread share: a session that goes quiet after a request
+    /// frees its segment there and the next request takes it again, and a burst's segments go back to the system.
+    static SEGMENTS: vinc_transport::stream::pool::Segments = vinc_transport::stream::pool::Segments::new();
 }
 
 /// The relays a node can name at once.
@@ -65,8 +68,9 @@ macro_rules! define {
 
         impl AnyEp {
             /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
-            /// session and `pool_chunks` chunks for each; `None` above the ladder. It is not generic, so it is compiled
-            /// once, here, and optimised whatever the host's types: no host's build keeps a copy of a slot on the stack.
+            /// session and `pool_chunks` chunks for each, in segments if `pool_segments` (and the system has them); `None`
+            /// above the ladder. It is not generic, so it is compiled once, here, and optimised whatever the host's types:
+            /// no host's build keeps a copy of a slot on the stack.
             #[inline(never)]
             pub(crate) fn new(
                 connections: usize,
@@ -75,11 +79,14 @@ macro_rules! define {
                 identity: LocalIdentity,
                 cfg: EndpointConfig,
                 pool_chunks: usize,
+                pool_segments: bool,
             ) -> Option<Self> {
                 match connections {
                     $(n if n <= $k => Some(Self::$v({
                         let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
                         MACHINES.with(|m| ep.share_machines(m));
+                        SEGMENTS.with(|s| ep.share_segments(s));
+                        ep.set_pool_segments(pool_segments && vinc_transport::stream::pool::SEGMENT_CHUNKS > 1);
                         ep
                     })),)+
                     _ => None,
