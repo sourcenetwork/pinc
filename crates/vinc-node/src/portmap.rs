@@ -187,8 +187,9 @@ where
         self.pm.is_some()
     }
 
-    /// Whether the answer of [`Node::poll_timeout`] is cached, as a probe: a call that cannot move the deadline must
-    /// not clear it.
+    /// Whether the answer of [`Node::poll_timeout`] is cached, as a probe (with the `trace` feature, which the tests
+    /// enable): a call that cannot move the deadline must not clear it.
+    #[cfg(feature = "trace")]
     #[doc(hidden)]
     pub fn deadline_cached(&self) -> bool {
         matches!(self.deadline.get(), Due::Known(_))
