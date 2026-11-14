@@ -54,7 +54,8 @@ structure St where
   e : E
   adm : Option (Bool × Bool)
 
-/-- One decision of a call: `[0, admitted, count, resume]` an admission, `[1, slot, dial, 0]` a session made,
+/-- One decision of a call: `[0, admitted, count, resume]` an admission (`resume`: the cap exempts it, a ticket or a
+retry token that opens), `[1, slot, dial, 0]` a session made,
 `[2, slot, 0, 0]` established, `[3, slot, 0, 0]` expired (the next decision frees it), `[4, slot, 0, 0]` freed; `n`
 is how many sessions held the datagram's id. -/
 def stepOf (p : P) (op : String) (now kind len n : Nat) (st : St) (s : List Nat) (next : Option (List Nat)) :

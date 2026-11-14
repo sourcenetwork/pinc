@@ -34,7 +34,7 @@ def errName : PErr → String × Nat
   | .tooShort => ("TooShort", 0)
   | .length => ("Length", 0)
 
-def tyOf (n : Nat) : LongType := if n = 1 then .zeroRtt else .handshake
+def tyOf (n : Nat) : LongType := if n = 1 then .zeroRtt else if n = 2 then .retry else .handshake
 
 def bytesF (j : J) (k : String) : Except String (List Nat) := do natList (← field j k)
 

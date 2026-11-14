@@ -538,6 +538,14 @@ par witness_tlc halfopen_le_held HalfOpen HalfOpen_le_held HeldBound
 par witness_tlc halfopen_strict HalfOpen HalfOpen_strict TimerRight
 par witness_tlc halfopen_supersede HalfOpen HalfOpen_supersede HolderKept
 par witness_tlc halfopen_holders HalfOpen HalfOpen_holders NoFullId
+
+par run_tlc halfopen_retry HalfOpen HalfOpen_retry
+par run_tlc halfopen_room HalfOpen HalfOpen_room
+par witness_tlc halfopen_tokencount HalfOpen HalfOpen_tokencount Capped
+par witness_tlc halfopen_anytoken HalfOpen HalfOpen_anytoken TokenRight
+par witness_tlc halfopen_ring HalfOpen HalfOpen_ring RingBound
+par witness_tlc halfopen_hold HalfOpen HalfOpen_hold HeldRight
+par witness_tlc halfopen_tokreach HalfOpen HalfOpen_tokreach NoTokenAtCap
 par run_tlc heap Heap Heap
 par witness_tlc heap_hi Heap Heap_hi Order
 par witness_tlc heap_full Heap Heap_full NotFull

@@ -74,7 +74,10 @@ pub struct Limits {
     pub streams: u16,
     /// The most streams the peer may open that the application has not accepted, per session.
     pub accept_streams: usize,
-    /// The most sessions accepted but not yet taken by the application.
+    /// The most sessions accepted but not yet taken by the application. The endpoint starts no handshake that could not
+    /// wait here (it refuses the first flight before any work, and the dialer sends it again), so a session that finished
+    /// its handshake is never closed for want of room. The default is the default connection table, so a burst the table
+    /// holds is taken whole.
     pub accept_sessions: usize,
     /// The largest message [`Endpoint::publish`](crate::Endpoint::publish) takes, in bytes (at most 16 MiB). Larger data
     /// belongs behind a reference: publish a root or an id and fetch the bytes over a stream.
@@ -102,7 +105,7 @@ impl Default for Limits {
             send_window: 16 * 1024 * 1024,
             streams: 100,
             accept_streams: 100,
-            accept_sessions: 64,
+            accept_sessions: 1024,
             topic_message: 65_536,
             topic_log: 4 << 20,
             topics: 128,

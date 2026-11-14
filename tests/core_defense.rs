@@ -1,5 +1,6 @@
 //! The defences of an endpoint that answers strangers: the amplification ledger, the half-open cap with its Initial
-//! size floors and its 30 s expiry.
+//! size floors and its 30 s expiry, and the retry token that lets a dialer past a full cap without the endpoint keeping
+//! anything for it.
 #![allow(
     clippy::many_single_char_names,
     clippy::unwrap_used,
@@ -15,7 +16,8 @@
 use std::net::SocketAddr;
 
 use vinc_core::{
-    Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role, Slot, TraceEvent,
+    Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, RETRIES, Role, Slot,
+    TraceEvent,
 };
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
@@ -484,5 +486,160 @@ fn datagrams_out_counts_the_datagrams_that_left_and_held_counts_the_refusals() {
         assert!(left >= 1);
         assert_eq!(ns.datagrams_out - out0, left, "a refused datagram never counts as out");
         assert!(ns.held_by_ledger > held0, "the refusals are still counted");
+    });
+}
+
+// ---- retries at the cap ----
+
+/// The half-open table filled with forged full Initials that will never finish.
+fn forged_full_cap(d: &mut Duo) {
+    let now = d.net.now;
+    for i in 0..MAX_HALF_OPEN as u64 {
+        feed(&mut d.srv, d.addr, now, 1000 + i, craft(1000 + i, 1, 1200));
+    }
+    assert_eq!(d.srv.node_stats().half_open, MAX_HALF_OPEN);
+}
+
+/// The admissions since the last call: (admitted, by a ticket, by a retry token).
+fn decisions(ep: &mut BigEp) -> Vec<(bool, bool, bool)> {
+    let mut v = Vec::new();
+    while let Some(r) = ep.poll_trace() {
+        if let TraceEvent::HalfOpen {
+            admitted,
+            resume,
+            token,
+            ..
+        } = r.event
+        {
+            v.push((admitted == 1, resume == 1, token == 1));
+        }
+    }
+    v
+}
+
+/// The first byte of a long retry packet: the long form, type 2, nothing in the low bits.
+const RETRY_FIRST: u8 = 0xe0;
+
+#[test]
+fn a_dial_past_a_full_cap_gets_a_retry_and_connects_at_once_behind_its_token() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        forged_full_cap(&mut d);
+        let _ = decisions(&mut d.srv);
+        let mark = d.net.captured.len();
+        // `dial` gives the handshake 300 ms; a first flight the cap dropped would be sent again only after 500 ms.
+        d.dial();
+        let to_srv: Vec<_> = d.net.captured[mark..].iter().filter(|c| c.1 == d.addr).collect();
+        assert_ne!(to_srv[0].2[0], RETRY_FIRST, "the first flight goes out bare");
+        assert!(
+            to_srv.iter().any(|c| c.2[0] == RETRY_FIRST),
+            "the flight goes again behind the token"
+        );
+        assert_eq!(
+            decisions(&mut d.srv),
+            [(false, false, false), (true, false, true)],
+            "refused at the cap, then admitted behind the token"
+        );
+        let ns = d.srv.node_stats();
+        assert_eq!(ns.half_open, MAX_HALF_OPEN, "a session behind a token is not counted");
+        assert_eq!((ns.token_admitted, ns.retries_sent, ns.retries_dropped), (1, 1, 0));
+    });
+}
+
+#[test]
+fn a_token_opens_only_for_the_address_and_the_id_it_was_made_for() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        forged_full_cap(&mut d);
+        let mark = d.net.captured.len();
+        let session = d.dial();
+        let (from, behind) = d.net.captured[mark..]
+            .iter()
+            .find(|c| c.1 == d.addr && c.2[0] == RETRY_FIRST)
+            .map(|c| (c.0, c.2.clone()))
+            .expect("the dialer sent its flight behind the token");
+        // The session ends and frees its ids, so the same flight finds no session again.
+        d.hang_up(session);
+        let _ = decisions(&mut d.srv);
+        let now = d.net.now;
+        // From another address the token does not open: refused at the cap, and nothing is kept.
+        let sessions = d.srv.node_stats().sessions;
+        feed(&mut d.srv, d.addr, now, 7001, behind.clone());
+        assert_eq!(decisions(&mut d.srv), [(false, false, false)]);
+        // Another id (a byte of the handshake packet's destination id): the tag does not match.
+        let echo = LongHeader::parse(&behind).unwrap();
+        let mut other_id = behind.clone();
+        other_id[echo.1 + echo.0.body_len + 3] ^= 1;
+        d.srv.handle_datagram(now, d.addr, from, &mut other_id);
+        assert_eq!(decisions(&mut d.srv), [(false, false, false)]);
+        assert_eq!(d.srv.node_stats().sessions, sessions, "a refused flight left a session");
+        // The same flight from its own address opens while the token lives.
+        d.srv.handle_datagram(now, d.addr, from, &mut behind.clone());
+        assert_eq!(decisions(&mut d.srv), [(true, false, true)]);
+    });
+}
+
+#[test]
+fn a_flood_past_the_cap_holds_nothing_but_a_bounded_ring_of_small_retries() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let (mut ep, addr) = big_server(now);
+        let over = 1000u64;
+        for i in 0..(MAX_HALF_OPEN as u64 + over) {
+            feed(&mut ep, addr, now, i, craft(i + 1, 1, 1200));
+        }
+        let ns = ep.node_stats();
+        assert_eq!((ns.half_open, ns.sessions), (MAX_HALF_OPEN, MAX_HALF_OPEN));
+        assert_eq!(
+            (ns.retries_waiting, ns.retries_dropped),
+            (RETRIES, over - RETRIES as u64)
+        );
+        let mut buf = vec![0u8; 65_536];
+        let mut sent = 0;
+        while let Some(t) = ep.poll_transmit(now, &mut buf) {
+            assert_eq!(
+                buf[0], RETRY_FIRST,
+                "only retries leave: the forgeries sent no whole message"
+            );
+            // At most three times what the source sent (one datagram of 1200 bytes).
+            assert!(t.len <= 3 * 1200 && t.len == t.segment_size);
+            sent += 1;
+        }
+        assert_eq!(sent, RETRIES);
+        let ns = ep.node_stats();
+        assert_eq!((ns.retries_sent, ns.retries_waiting), (RETRIES as u64, 0));
+    });
+}
+
+#[test]
+fn handshakes_that_would_overfill_the_accept_queue_are_refused_before_any_work() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let (mut ep, addr) = big_server(now);
+        ep.set_backlog_room(0);
+        let stalled = ep.node_stats().stalled_in;
+        feed(&mut ep, addr, now, 1, craft(1, 1, 1200));
+        let ns = ep.node_stats();
+        assert_eq!(
+            (ns.sessions, ns.half_open, ns.retries_waiting, ns.stalled_in),
+            (0, 0, 0, stalled + 1),
+            "refused before any work, nothing kept"
+        );
+        // Room for two: two handshakes start, the third waits.
+        ep.set_backlog_room(2);
+        for i in 1..=3 {
+            feed(&mut ep, addr, now, i, craft(i, 1, 1200));
+        }
+        let ns = ep.node_stats();
+        assert_eq!((ns.sessions, ns.handshaking), (2, 2), "as many handshakes as the room");
+        ep.set_backlog_room(usize::MAX);
+        // At the cap a full queue answers no retry either: the dialer waits for room, not for a token.
+        for i in 3..=(MAX_HALF_OPEN as u64) {
+            feed(&mut ep, addr, now, i, craft(i, 1, 1200));
+        }
+        assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
+        ep.set_backlog_room(0);
+        feed(&mut ep, addr, now, 900, craft(900, 1, 1200));
+        assert_eq!(ep.node_stats().retries_waiting, 0);
     });
 }

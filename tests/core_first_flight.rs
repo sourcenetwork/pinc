@@ -466,3 +466,74 @@ fn the_half_open_cap_counts_every_holder() {
         assert_eq!(holders!(ep, flight, now, addr, addr_a), 3);
     });
 }
+
+/// `token` in front of `flight`, as a dialer behind a retry sends it: a long retry packet under the flight's ids.
+fn behind(token: &[u8], flight: &[u8]) -> Vec<u8> {
+    let (h, _) = LongHeader::parse(flight).unwrap();
+    let echo = LongHeader {
+        ty: LongType::Retry,
+        dcid: h.dcid,
+        scid: h.scid,
+        body_len: token.len(),
+    };
+    let mut out = vec![0u8; echo.header_len() + token.len()];
+    let mut w = Writer::new(&mut out);
+    echo.write(&mut w, 0).unwrap();
+    w.put_slice(token).unwrap();
+    out.extend_from_slice(flight);
+    out
+}
+
+/// At the cap, a different flight under a held id gets a retry, comes back behind its token as another holder beside
+/// the first one (never in its place) while the id has room, and a flight past the holder limit gets no retry.
+#[test]
+fn a_retry_at_the_cap_keeps_the_holders_of_an_id() {
+    big_stack(|| {
+        let mut net = CoreNet::new(MS_NS);
+        net.capture = true;
+        let a = net.add(1);
+        let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
+        let peer = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap().node_id();
+        let (addr_a, now) = (net.nodes[a].addr, net.now);
+        let (mut ep, addr) = server(now);
+        net.nodes[a].connect(now, peer, ALPN_A, addr, Role::Other).unwrap();
+        net.pump_all();
+        let flight = Flight::of(&net, addr_a);
+        for i in 0..(MAX_HALF_OPEN - 3) as u64 {
+            ep.handle_datagram(now, addr, source(i), &mut craft(0x1000 + i));
+        }
+        for mut d in flight.datagrams.clone() {
+            ep.handle_datagram(now, addr, addr_a, &mut d);
+        }
+        for k in 0..2 {
+            ep.handle_datagram(now, addr, addr_a, &mut flight.other(k));
+        }
+        assert_eq!(ep.node_stats().half_open, MAX_HALF_OPEN);
+        let mut buf = vec![0u8; 65_536];
+        while ep.poll_transmit(now, &mut buf).is_some() {}
+        // A third different flight at the cap: refused by the cap, and answered with a retry.
+        ep.handle_datagram(now, addr, addr_a, &mut flight.other(2));
+        let t = ep.poll_transmit(now, &mut buf).unwrap();
+        let (h, hl) = LongHeader::parse(&buf[..t.len]).unwrap();
+        assert_eq!((h.ty, t.remote), (LongType::Retry, addr_a));
+        let token = buf[hl..t.len].to_vec();
+        // Behind its token it gets a session of its own beside the three holders, uncounted.
+        ep.handle_datagram(now, addr, addr_a, &mut behind(&token, &flight.other(2)));
+        let ns = ep.node_stats();
+        assert_eq!(
+            (ns.token_admitted, ns.half_open, ns.holders_refused),
+            (1, MAX_HALF_OPEN, 0)
+        );
+        assert_eq!(
+            holders!(ep, flight, now, addr, addr_a),
+            4,
+            "the holders are kept and the new one joins them"
+        );
+        // A fifth flight under the full id: the holder limit refuses it, and no retry is offered.
+        let sent = ep.node_stats().retries_sent + ep.node_stats().retries_waiting as u64;
+        ep.handle_datagram(now, addr, addr_a, &mut behind(&token, &flight.other(3)));
+        let ns = ep.node_stats();
+        assert_eq!(ns.holders_refused, 1);
+        assert_eq!(ns.retries_sent + ns.retries_waiting as u64, sent);
+    });
+}

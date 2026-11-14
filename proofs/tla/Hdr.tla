@@ -5,7 +5,7 @@
 (* checked over the operators of HdrOps.tla.                               *)
 (*                                                                         *)
 (* The cases are the states of one machine (as in Varint.tla):             *)
-(*  - long headers: both types, five connection ids each side (0, 1, 2 and *)
+(*  - long headers: every type, five connection ids each side (0, 1, 2 and *)
 (*    20 bytes), body lengths 0, 1, 3, 127, 128, 300 and 2^j - 1, 2^j,     *)
 (*    2^j + 1 for j in 14, 31, 62, 63, 64, every pn_len 0..3 and every     *)
 (*    room 0..header_len + 1;                                              *)
@@ -92,7 +92,7 @@ Dls == {0, 1, 2, 21}
 
 Next ==
     \/ c.t = "root" /\ \E f \in {"long", "short", "bytes", "cat"} : c' = [t |-> "seed", f |-> f]
-    \/ c.t = "seed" /\ c.f = "long" /\ \E ty \in 0..1, d \in Cids, s \in Cids, bl \in Bls :
+    \/ c.t = "seed" /\ c.f = "long" /\ \E ty \in 0..2, d \in Cids, s \in Cids, bl \in Bls :
            c' = [t |-> "long", h |-> [ty |-> ty, dcid |-> d, scid |-> s, bl |-> bl]]
     \/ c.t = "seed" /\ c.f = "short" /\ \E kp \in BOOLEAN, d \in Cids, pn \in Pns :
            c' = [t |-> "short", h |-> [kp |-> kp, dcid |-> d], pn |-> pn]
@@ -180,8 +180,8 @@ LongStrict(h) ==
                 /\ LongParse(SetAt(whole, 3, l)) = Err("ConnIdLength", 0)
                 /\ LongParse(SetAt(whole, 4 + Len(h.dcid), l)) = Err("ConnIdLength", 0)
            /\ \A f \in 0..191 : LongParse(SetAt(whole, 1, f)) = Err("Form", 0)
-           /\ \A f \in 224..255 : LongParse(SetAt(whole, 1, f)) = Err("LongType", 0)
-           /\ \A f \in 193..207 : LongParse(SetAt(whole, 1, f)) = Err("Reserved", 0)
+           /\ \A f \in 240..255 : LongParse(SetAt(whole, 1, f)) = Err("LongType", 0)
+           /\ \A f \in (193..207) \cup (225..239) : LongParse(SetAt(whole, 1, f)) = Err("Reserved", 0)
 
 (* ---- the short header read back ---- *)
 ShortRoundTrip(h, pn) ==
@@ -214,7 +214,7 @@ LongCanonical(s) ==
         IN /\ Len(h.dcid) <= MAXCID /\ Len(h.scid) <= MAXCID /\ ~Big(h)
            /\ r.hl = HeaderLen(h) /\ r.hl + U!Val(h.bl) <= Len(s)
            /\ Prefix(s, r.hl) = EncodeLong(h, s[1] % 16)
-           /\ h.ty = 0 => Prefix(s, r.hl) = LongWrite(h, 0, r.hl).out
+           /\ h.ty # 1 => Prefix(s, r.hl) = LongWrite(h, 0, r.hl).out
            /\ h.ty = 1 => Rest(Prefix(s, r.hl), 1) = Rest(LongWrite(h, 2, r.hl).out, 1) /\ s[1] \div 16 = 13
 ShortCanonical(s) ==
     \A dl \in {0, 1, 2} :

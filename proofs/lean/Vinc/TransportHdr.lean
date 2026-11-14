@@ -63,17 +63,20 @@ def ofVarint : Varint.Error → PErr
 inductive LongType where
   | handshake
   | zeroRtt
+  | retry
   deriving DecidableEq, Repr
 
 /-- `ty as u8`. -/
 def LongType.bits : LongType → Nat
   | .handshake => 0
   | .zeroRtt => 1
+  | .retry => 2
 
 /-- `LongType::from_bits`. -/
 def LongType.fromBits : Nat → Option LongType
   | 0 => some .handshake
   | 1 => some .zeroRtt
+  | 2 => some .retry
   | _ => none
 
 structure LongHeader where
@@ -128,7 +131,7 @@ def headerLen (h : LongHeader) : Nat :=
 def lowBits (ty : LongType) (pnLen : Nat) : Option Nat :=
   match ty with
   | .zeroRtt => if pnLen = 2 then some (pnLen - 1) else none
-  | .handshake => if pnLen = 0 then some 0 else none
+  | .handshake | .retry => if pnLen = 0 then some 0 else none
 
 /-- `LONG_FORM | ((ty as u8) << 4) | low`. -/
 def firstLong (ty : LongType) (low : Nat) : Nat := 0xC0 ||| (ty.bits <<< 4) ||| low

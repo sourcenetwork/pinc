@@ -28,7 +28,9 @@ use super::ctl::{EXT_BODY_MAX, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS}
 use super::event::Ev;
 use super::{Connection, Phase};
 use crate::frame::{Frame, MAX_ACK_RANGES, ack_len, stream_overhead, ty, write_ack};
-use crate::packet::{ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, ShortHeader, encode_pn, seal};
+use crate::packet::{
+    ConnId, LongHeader, LongType, PN_LEN_BASE, PnLayout, RETRY_TOKEN_LEN, ShortHeader, encode_pn, seal,
+};
 use crate::recovery::{FrameRef, FrameRefs, MAX_FRAME_REFS, PathKind, REPAIR_FRAME_BYTES, Sent};
 use crate::stream::{ControlFrame, StreamSource};
 
@@ -242,7 +244,12 @@ conn_impl! {
         let mut used = 0;
         let mut hs_len = 0;
         if self.hs.has_tx() {
-            hs_len = self.write_handshake(window);
+            // Behind a retry token the flight's packet follows the token's; without the flight the token is not sent.
+            let echo = self.write_retry_echo(window);
+            hs_len = window.get_mut(echo..).map_or(0, |w| self.write_handshake(w));
+            if hs_len > 0 {
+                hs_len += echo;
+            }
             used = hs_len;
         }
         if hs_len == 0 && self.hs.padding_owed() > 0 {
@@ -316,6 +323,19 @@ conn_impl! {
             && w.put_varint(total as u64).is_ok()
             && w.put_varint(off as u64).is_ok()
             && w.put_slice(bytes).is_ok();
+        if ok { w.written().len() } else { 0 }
+    }
+
+    /// A dialing side that holds a retry token puts it in front of each datagram of its flight, under the ids of the
+    /// flight, until the peer answers. Returns the bytes written.
+    fn write_retry_echo(&self, window: &mut [u8]) -> usize {
+        let Some(token) = self.retry_token.filter(|_| self.client && self.cids.first_remote().is_none()) else {
+            return 0;
+        };
+        let (dcid, scid) = (self.long_dcid(), self.cids.first_local());
+        let header = LongHeader { ty: LongType::Retry, dcid, scid, body_len: RETRY_TOKEN_LEN };
+        let mut w = Writer::new(window);
+        let ok = header.write(&mut w, 0).is_ok() && w.put_slice(&token).is_ok();
         if ok { w.written().len() } else { 0 }
     }
 

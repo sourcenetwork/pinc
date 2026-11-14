@@ -10,6 +10,8 @@ theorem byte_hs : ∀ b, b < 256 → b &&& 0xC0 = 0xC0 → (b >>> 4) &&& 3 = 0 �
   decide +kernel
 theorem byte_zr : ∀ b, b < 256 → b &&& 0xC0 = 0xC0 → (b >>> 4) &&& 3 = 1 → 0xC0 ||| (1 <<< 4) ||| (b &&& 0x0f) = b := by
   decide +kernel
+theorem byte_rt : ∀ b, b < 256 → b &&& 0xC0 = 0xC0 → (b >>> 4) &&& 3 = 2 → 0xC0 ||| (2 <<< 4) ||| (b &&& 0x0f) = b := by
+  decide +kernel
 theorem low_zr : ∀ low, low < 16 →
     (0xC0 ||| (1 <<< 4) ||| low) &&& 0xC0 = 0xC0 ∧ ((0xC0 ||| (1 <<< 4) ||| low) >>> 4) &&& 3 = 1 ∧
       (0xC0 ||| (1 <<< 4) ||| low) < 256 := by decide +kernel
@@ -127,12 +129,13 @@ theorem readCid_ok (r cid rest : List Nat) (h : readCid r = .ok (cid, rest)) :
         simp [this]
         omega
 
-/-- The low bits a first byte may carry: none on a handshake, any four on a 0-RTT packet (they are under header
+/-- The low bits a first byte may carry: none on a handshake or a retry, any four on a 0-RTT packet (they are under header
 protection when the header is parsed). -/
 def LowOk (ty : LongType) (low : Nat) : Prop :=
   match ty with
   | .handshake => low = 0
   | .zeroRtt => low < 16
+  | .retry => low = 0
 
 /-- Round trip: parsing an encoded header, followed by a body that fits and anything after it, gives the fields
 and the header length. -/
@@ -151,6 +154,7 @@ theorem parse_write (h : LongHeader) (low : Nat) (rest : List Nat) (hw : h.WF) (
       simp only [firstLong, LongType.bits]
       rw [a, b]
       simp [LongType.fromBits]
+    · simp only [LowOk] at hlow; subst hlow; decide
   obtain ⟨f1, f2, f3⟩ := hfirst
   have hdec := Varint.decode_encode bl rest hv
   have hlen := Varint.length_encodeBytes bl
@@ -168,6 +172,7 @@ theorem firstLong_eq (first : Nat) (ty : LongType) (hb : first < 256) (hf : firs
   cases ty
   · exact byte_hs first hb hf hbits
   · exact byte_zr first hb hf hbits
+  · exact byte_rt first hb hf hbits
 
 /-- Canonical: an accepted header is the encoding of the fields it yields, with the low four bits of its first
 byte as they are (zero on a handshake); the ids are at most 20 bytes, the body length is one a varint holds, the
@@ -231,6 +236,9 @@ theorem parse_canonical (p : List Nat) (hp : Varint.ValidBytes p) (h : LongHeade
     · simp only [LowOk, List.headD_cons]
       have := Nat.and_le_right (n := first) (m := 0x0f)
       omega
+    · simp only [LowOk, List.headD_cons]
+      simp only [ne_eq, not_and, Decidable.not_not] at hres
+      exact hres (by simp)
   · simp only [List.headD_cons, encodeLong, hfl, ← htake]
     have e : 1 + 1 + (1 + dcid.length) + (1 + scid.length) + n' = ([first, version, dcid.length] ++ dcid ++ [scid.length] ++ scid).length + n' := by
       simp; omega
@@ -256,7 +264,7 @@ theorem parse_err_form (first : Nat) (r : List Nat) (h : first &&& 0xC0 ≠ 0xC0
     parseLong (first :: r) = .error .form := by
   simp [parseLong, h]
 
-theorem parse_err_type (first : Nat) (r : List Nat) (h : first &&& 0xC0 = 0xC0) (ht : 2 ≤ (first >>> 4) &&& 3) :
+theorem parse_err_type (first : Nat) (r : List Nat) (h : first &&& 0xC0 = 0xC0) (ht : (first >>> 4) &&& 3 = 3) :
     parseLong (first :: r) = .error .longType := by
   have : LongType.fromBits ((first >>> 4) &&& 3) = none := by
     unfold LongType.fromBits
@@ -305,6 +313,7 @@ theorem parse_err_length (h : LongHeader) (low : Nat) (rest : List Nat) (hw : h.
       simp only [firstLong, LongType.bits]
       rw [a, b]
       simp [LongType.fromBits]
+    · simp only [LowOk] at hlow; subst hlow; decide
   obtain ⟨f1, f2, f3⟩ := hfirst
   have hdec := Varint.decode_encode bl rest hv
   have hlen := Varint.length_encodeBytes bl
@@ -320,6 +329,7 @@ theorem valid_encodeLong (h : LongHeader) (low : Nat) (hw : h.WF) (hlow : LowOk 
     cases hty : h.ty
     · rw [hty] at hlow; simp only [LowOk] at hlow; subst hlow; decide
     · rw [hty] at hlow; simp only [LowOk] at hlow; exact (low_zr low hlow).2.2
+    · rw [hty] at hlow; simp only [LowOk] at hlow; subst hlow; decide
   obtain ⟨h1, h2⟩ := hw
   unfold maxCid at h1 h2
   intro b hb

@@ -58,6 +58,16 @@ pub enum TraceEvent {
         half_open: u64,
         /// 1 if a ticket resume (exempt from the cap).
         resume: u64,
+        /// 1 if behind a retry token that opened (exempt from the cap).
+        token: u64,
+    },
+    /// The half-open cap refused a first flight that met its floor and a retry was offered: `queued` 1 if the ring took
+    /// it, with `waiting` retries in the ring after.
+    Retry {
+        /// 1 if queued.
+        queued: u64,
+        /// Retries waiting after the decision.
+        waiting: u64,
     },
     /// An unauthenticated session lived its 30 s and was dropped.
     HalfOpenExpired {
@@ -135,6 +145,7 @@ impl TraceEvent {
             Self::LedgerTx { .. } => "ledger_tx",
             Self::HalfOpen { .. } => "half_open",
             Self::HalfOpenExpired { .. } => "half_open_expired",
+            Self::Retry { .. } => "retry",
             Self::Acp { .. } => "acp",
             Self::Gate { .. } => "gate",
             Self::Early { .. } => "early",
@@ -159,15 +170,17 @@ impl TraceEvent {
                 admitted,
                 half_open,
                 resume,
+                token,
             } => (
                 [
                     ("admitted", admitted),
                     ("half_open", half_open),
                     ("resume", resume),
-                    NONE,
+                    ("token", token),
                 ],
-                3,
+                4,
             ),
+            Self::Retry { queued, waiting } => ([("queued", queued), ("waiting", waiting), NONE, NONE], 2),
             Self::HalfOpenExpired { slot } => ([("slot", slot), NONE, NONE, NONE], 1),
             Self::Acp { slot, step } => ([("slot", slot), ("step", step), NONE, NONE], 2),
             Self::Gate { slot, release, held } => ([("slot", slot), ("release", release), ("held", held), NONE], 3),

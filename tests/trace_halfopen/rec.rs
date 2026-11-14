@@ -74,6 +74,8 @@ pub struct Rec<const K: usize, const D: usize> {
     pub seen: Seen,
     /// What the next first flight's ticket must give, when the test knows.
     pub expect_resume: Option<bool>,
+    /// Whether the last first flight's ticket opened (the models read one exemption: a ticket or a retry token).
+    pub ticket: bool,
     pub last_now: u64,
 }
 
@@ -90,6 +92,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             host: Host::new(),
             seen: Seen::default(),
             expect_resume: None,
+            ticket: false,
             last_now: now,
         };
         while r.ep.poll_trace().is_some() {}
@@ -126,7 +129,12 @@ impl<const K: usize, const D: usize> Rec<K, D> {
                     admitted,
                     half_open,
                     resume,
-                } => steps.push([0, admitted, half_open, resume]),
+                    token,
+                } => {
+                    // The models read one exemption: a ticket that opens, or a retry token that opens.
+                    steps.push([0, admitted, half_open, resume | token]);
+                    self.ticket = resume == 1;
+                }
                 TraceEvent::Session { slot, step: 0, dialer } => steps.push([1, slot, dialer, 0]),
                 TraceEvent::Session { slot, step: 1, .. } => steps.push([2, slot, 0, 0]),
                 TraceEvent::Session { slot, .. } => steps.push([4, slot, 0, 0]),
@@ -335,9 +343,9 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         };
         let [code, admitted, c, resume] = steps[0];
         assert_eq!((code, c as usize), (0, count0), "the decision did not use the count");
-        assert!(resume == 0 || kind == 6, "a resumption that is no Hello");
+        assert!(!self.ticket || kind == 6, "a resumption that is no Hello");
         if let Some(e) = self.expect_resume.take() {
-            assert_eq!(resume == 1, e, "the ticket did not decide as expected");
+            assert_eq!(self.ticket, e, "the ticket did not decide as expected");
         }
         let want = len >= f && (resume == 1 || count0 < MAX);
         assert_eq!(admitted == 1, want, "the admission differs from the rule");

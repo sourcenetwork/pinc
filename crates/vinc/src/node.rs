@@ -146,6 +146,12 @@ macro_rules! define {
             fn events_waiting(&self) -> bool {
                 match self { $(Self::$v(e) => NodeEp::events_waiting(&**e),)+ }
             }
+            fn retries_full(&self) -> bool {
+                match self { $(Self::$v(e) => NodeEp::retries_full(&**e),)+ }
+            }
+            fn set_backlog_room(&mut self, room: usize) {
+                match self { $(Self::$v(e) => NodeEp::set_backlog_room(&mut **e, room),)+ }
+            }
             fn poll_timeout(&self) -> Option<u64> {
                 match self { $(Self::$v(e) => NodeEp::poll_timeout(&**e),)+ }
             }

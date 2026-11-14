@@ -758,7 +758,21 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         } else if let Some(r) = self.routes.get_mut(route) {
             r.queue.push_back(info);
             self.wake_g(GKey::Route(route));
+            self.sync_backlog();
         }
+    }
+
+    /// Tell the endpoint how many more sessions the fullest accept queue takes, so that it refuses first flights that
+    /// would overfill it before their handshake rather than this closing finished sessions as busy. The fullest queue
+    /// holds back every protocol's dials: the endpoint cannot tell a first flight's protocol before it opens it.
+    pub(crate) fn sync_backlog(&mut self) {
+        let room = self
+            .routes
+            .iter()
+            .map(|r| self.limits.accept_sessions.saturating_sub(r.queue.len()))
+            .min()
+            .unwrap_or(usize::MAX);
+        self.node.set_backlog_room(room);
     }
 
     /// Whether a dial to `node` for `alpn` still waits for its answer. The dials are bounded by the connection table.

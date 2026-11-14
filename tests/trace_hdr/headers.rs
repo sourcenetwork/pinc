@@ -147,10 +147,16 @@ pub fn cid(rng: &mut SplitMix64) -> ConnId {
     ConnId::new(&bytes(rng, len)).unwrap()
 }
 
+/// One of the three long types, evenly.
+pub fn long_type(rng: &mut SplitMix64) -> LongType {
+    [LongType::Handshake, LongType::ZeroRtt, LongType::Retry][pick(rng, 3) as usize]
+}
+
 pub fn ty_bits(ty: LongType) -> u8 {
     match ty {
         LongType::Handshake => 0,
         LongType::ZeroRtt => 1,
+        LongType::Retry => 2,
     }
 }
 
@@ -514,11 +520,7 @@ pub fn body_len(rng: &mut SplitMix64, wide: bool) -> usize {
 
 pub fn long_run(rng: &mut SplitMix64, out: &mut String, wide: bool, n: u32) {
     for i in 0..n {
-        let ty = if pick(rng, 2) == 0 {
-            LongType::Handshake
-        } else {
-            LongType::ZeroRtt
-        };
+        let ty = long_type(rng);
         let h = LongHeader {
             ty,
             dcid: cid(rng),
@@ -648,11 +650,7 @@ pub fn short_run(rng: &mut SplitMix64, out: &mut String, n: u32) {
 
 /// A long packet with a body of random bytes.
 pub fn long_packet(rng: &mut SplitMix64) -> Vec<u8> {
-    let ty = if pick(rng, 2) == 0 {
-        LongType::Handshake
-    } else {
-        LongType::ZeroRtt
-    };
+    let ty = long_type(rng);
     let h = LongHeader {
         ty,
         dcid: cid(rng),

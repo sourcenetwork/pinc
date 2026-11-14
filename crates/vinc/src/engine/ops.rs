@@ -98,6 +98,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     /// The next session on accept queue `route`, or `None` once the endpoint stopped, else a wait.
     pub(crate) fn accept_route(&mut self, route: usize) -> Try<Option<Rc<SessInfo>>> {
         if let Some(i) = self.routes.get_mut(route).and_then(|r| r.queue.pop_front()) {
+            self.sync_backlog();
             return Try::Done(Some(i));
         }
         if self.stopped.is_some() {
