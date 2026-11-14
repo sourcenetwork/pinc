@@ -1278,3 +1278,7 @@ path = "vinc_client_memory.rs"
 [[test]]
 name = "vinc_standby_order"
 path = "vinc_standby_order.rs"
+
+[[test]]
+name = "vinc_access_protocols"
+path = "vinc_access_protocols.rs"

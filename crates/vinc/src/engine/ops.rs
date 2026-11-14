@@ -108,7 +108,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// Send sessions for `alpn` to a queue of their own; returns its index.
     pub(crate) fn listen(&mut self, alpn: &[u8]) -> Result<usize> {
-        if self.routes.iter().any(|r| r.alpn == alpn) || self.user_alpns >= crate::mem::MAX_PROTOCOLS {
+        if self.routes.iter().any(|r| r.alpn == alpn) || self.alpns.len() >= crate::mem::MAX_PROTOCOLS {
             return Err(Error::config("the protocol is already registered or too many are"));
         }
         if !self.node.endpoint_mut().register_alpn(alpn) {
@@ -118,7 +118,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             alpn: alpn.to_vec(),
             queue: VecDeque::new(),
         });
-        self.user_alpns += 1;
+        self.alpns.push(alpn.to_vec());
         Ok(self.routes.len() - 1)
     }
 
@@ -404,6 +404,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if !self.admit.bar(node) {
             return Err(Error::new(ErrorKind::Busy, "too many peers are revoked"));
         }
+        self.known.forget(&node.bytes);
         self.node
             .revoke(now, &node.bytes)
             .map_err(|_| Error::new(ErrorKind::Busy, "too many peers are revoked"))?;
@@ -412,11 +413,13 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
     }
 
     pub(crate) fn unrevoke(&mut self, node: &[u8; 32]) {
+        self.known.forget(node);
         self.node.unrevoke(node);
     }
 
     /// Drop the endpoint's cached access answer for `node`: its next session asks the gate again.
     pub(crate) fn forget_access(&mut self, node: &[u8; 32]) {
+        self.known.forget(node);
         self.node.forget_access(node);
     }
 

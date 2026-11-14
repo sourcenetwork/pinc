@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 use rapidhash::RapidHashMap;
-use vinc_core::{Answer, Command, CommandError, Event, IfaceId, Query, SessionId, Value};
+use vinc_core::{Answer, Command, CommandError, ConnectFailure, Event, IfaceId, Query, SessionId, Value};
 use vinc_crypto::{NodeId, Secret};
 use vinc_keystore::KeyStore;
 use vinc_node::HUB_ALPN;
@@ -45,6 +45,7 @@ pub use state::Restored;
 pub use gate::AllowAll;
 pub(crate) use gate::Gate;
 pub use gate::{Admit, DENIED, Direction, REVOKED_MAX};
+use gate::{Known, direction};
 
 /// The close code sent for a session or stream refused because a queue was full.
 pub const BUSY: u64 = 0x42;
@@ -227,7 +228,9 @@ pub(crate) struct Core<S, A> {
     /// The accept queues: the first takes every protocol no registered one claims.
     routes: Vec<Route>,
     /// The protocols served for the application: those the builder listed and those registered since.
-    user_alpns: usize,
+    alpns: Vec<Vec<u8>>,
+    /// The allows the hook gave the endpoint's per-peer question, which cover a session of the same protocol and direction.
+    known: Known,
     book: RapidHashMap<NodeId, Vec<SocketAddr>>,
     ifaces: Vec<IfaceId>,
     shutdown: Option<u64>,
@@ -284,7 +287,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             limits: cfg.limits,
             sessions: RapidHashMap::default(),
             dials: RapidHashMap::default(),
-            user_alpns: cfg.alpns.len(),
+            alpns: cfg.alpns,
+            known: Known::default(),
             routes: vec![Route {
                 alpn: Vec::new(),
                 queue: VecDeque::new(),
@@ -624,14 +628,15 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             }
             Event::OpenReady { session } => self.wake_open(session),
             Event::AcpCheck { check, node, alpn } => {
-                let dir = if alpn.as_bytes() == HUB_ALPN {
-                    Direction::Gossip
-                } else if self.dialing(&node, alpn) {
-                    Direction::Outbound
+                let dir = direction(alpn.as_bytes(), self.dialing(&node, alpn));
+                let own = self.admit.admit(&node, alpn.as_bytes(), dir);
+                // An allow that only another protocol or direction gave covers no session: each one asks the hook itself.
+                if own {
+                    self.known.remember(now, &node, alpn, dir);
                 } else {
-                    Direction::Inbound
-                };
-                let allow = self.admit.admit(&node, alpn.as_bytes(), dir);
+                    self.known.forget(&node.bytes);
+                }
+                let allow = own || self.admits_other(&node, alpn.as_bytes(), dir);
                 let _ = self.cmd_once(now, Command::AcpAnswer { check, allow });
             }
             Event::StreamStopped { session, stream, error } => {
@@ -683,7 +688,33 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .unwrap_or(0)
     }
 
+    /// Whether the hook admits `node` on any protocol and direction but `asked`: the endpoint keeps one answer per peer,
+    /// so a refusal of one protocol must not close the sessions of one the hook allows. Each session is checked on its
+    /// own where it comes up. At most `2 * MAX_PROTOCOLS + 1` calls.
+    fn admits_other(&self, node: &NodeId, alpn: &[u8], asked: Direction) -> bool {
+        self.alpns
+            .iter()
+            .flat_map(|a| [(a.as_slice(), Direction::Inbound), (a.as_slice(), Direction::Outbound)])
+            .chain([(HUB_ALPN, Direction::Gossip)])
+            .filter(|&(a, d)| !(a == alpn && d == asked))
+            .any(|(a, d)| self.admit.admit(node, a, d))
+    }
+
+    /// Whether a session of `node` on `alpn` may come up: not while revoked, and with the hook asked unless the answer
+    /// it gave the endpoint for exactly this protocol and direction still stands.
+    fn session_admitted(&self, now: u64, node: &NodeId, alpn: Alpn, dir: Direction) -> bool {
+        !self.admit.is_revoked(node)
+            && (self.known.covers(now, node, alpn, dir) || self.admit.admit(node, alpn.as_bytes(), dir))
+    }
+
     fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool, resumed: bool) {
+        if !self.session_admitted(now, &node, alpn, direction(alpn.as_bytes(), dialer)) {
+            let _ = self.cmd(now, || Command::Close { session, error: DENIED });
+            if dialer && self.dials.contains_key(&session) {
+                self.dial_done(session, Err(Error::dial(ConnectFailure::Denied)));
+            }
+            return;
+        }
         if alpn.as_bytes() == HUB_ALPN {
             self.hub_session_up(session, node);
             return;
@@ -696,10 +727,6 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             resumed,
             ended: OnceCell::new(),
         });
-        if self.admit.is_revoked(&node) {
-            let _ = self.cmd(now, || Command::Close { session, error: DENIED });
-            return;
-        }
         let route = self.route_of(&alpn);
         if !dialer {
             let full = self

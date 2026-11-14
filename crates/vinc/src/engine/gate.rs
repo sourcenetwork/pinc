@@ -7,6 +7,7 @@
 use std::rc::Rc;
 
 use vinc_crypto::NodeId;
+use vinc_security::Alpn;
 
 /// Which way a connection was made, as the access hook is told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,9 +20,29 @@ pub enum Direction {
     Gossip,
 }
 
+/// The direction a session of `alpn` is asked about: the hub protocol is [`Direction::Gossip`], any other is
+/// [`Direction::Outbound`] when this node dialed it and [`Direction::Inbound`] when the peer did.
+pub(super) fn direction(alpn: &[u8], dialing: bool) -> Direction {
+    if alpn == vinc_node::HUB_ALPN {
+        Direction::Gossip
+    } else if dialing {
+        Direction::Outbound
+    } else {
+        Direction::Inbound
+    }
+}
+
 /// The access hook: whether a peer may connect or be a neighbour. The endpoint asks it while it handles an event, in a
 /// short section on the thread that drives it, so it must not block and must not call back into the endpoint. It
 /// holds no endpoint state: [`Endpoint::admit`](crate::Endpoint::admit) asks the same hook at any time.
+///
+/// It is asked for the protocol and direction of each session, once for a peer while its answer stands: a later
+/// session of the same protocol and direction, within 30 seconds, is taken up on that answer, and any other is asked
+/// when it comes up. A refused session is closed with [`DENIED`] before anything of it reaches the application. The
+/// endpoint also keeps one answer per peer; when the hook refuses the protocol that raised the question, it is asked
+/// about the peer's other protocols and directions, and the peer stays reachable while one is allowed. The hook must
+/// give the same answer to the same question while nothing it decides on has changed, as an answer is used for at
+/// most 30 seconds before it is asked again.
 pub trait Admit {
     /// Whether `peer` may use `alpn` in `dir`.
     fn admit(&self, peer: &NodeId, alpn: &[u8], dir: Direction) -> bool;
@@ -84,5 +105,41 @@ pub struct AllowAll;
 impl Admit for AllowAll {
     fn admit(&self, _peer: &NodeId, _alpn: &[u8], _dir: Direction) -> bool {
         true
+    }
+}
+
+/// The most peers [`Known`] holds.
+const KNOWN_MAX: usize = 1024;
+
+/// The question the hook last answered with an allow for the endpoint's per-peer check, per peer, and until when. A
+/// session of exactly that protocol and direction is taken up without asking the hook again, so a hook is asked once
+/// per question while the endpoint's own answer stands, not once per session. The table is bounded, and losing an
+/// entry is always safe: it costs one more call of the hook.
+#[derive(Default)]
+pub(crate) struct Known(rapidhash::RapidHashMap<[u8; 32], (Alpn, Direction, u64)>);
+
+impl Known {
+    /// Whether the answer remembered for `node` is an allow for this `alpn` and `dir` that has not run out at `now`.
+    pub(crate) fn covers(&self, now: u64, node: &NodeId, alpn: Alpn, dir: Direction) -> bool {
+        self.0
+            .get(&node.bytes)
+            .is_some_and(|&(a, d, until)| a == alpn && d == dir && now < until)
+    }
+
+    /// Remember an allow of `alpn` and `dir` for `node` for as long as the endpoint keeps its own answer.
+    pub(crate) fn remember(&mut self, now: u64, node: &NodeId, alpn: Alpn, dir: Direction) {
+        if self.0.len() >= KNOWN_MAX && !self.0.contains_key(&node.bytes) {
+            self.0.retain(|_, &mut (_, _, until)| now < until);
+            if self.0.len() >= KNOWN_MAX {
+                self.0.clear();
+            }
+        }
+        let until = now.saturating_add(vinc_core::ACP_TTL);
+        self.0.insert(node.bytes, (alpn, dir, until));
+    }
+
+    /// Drop what is remembered for `node`.
+    pub(crate) fn forget(&mut self, node: &[u8; 32]) {
+        self.0.remove(node);
     }
 }

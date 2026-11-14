@@ -286,7 +286,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         self
     }
 
-    /// Set the access hook: it is asked on accept, on dial, and by [`Endpoint::admit`] for gossip neighbours.
+    /// Set the access hook: it is asked for the protocol and direction of each session on accept and on dial, and by [`Endpoint::admit`] for gossip neighbours; see [`Admission`].
     #[must_use]
     pub fn acp<N: Admission>(self, hook: N) -> Builder<S, D, N, C, Q> {
         Builder {
