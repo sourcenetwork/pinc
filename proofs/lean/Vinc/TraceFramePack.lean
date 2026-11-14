@@ -7,12 +7,14 @@ import Vinc.TransportFramePack
 The Lean half of the trace validation of the VINCER packet builder (`vinc-transport` `conn/send.rs`), the port of
 `proofs/tla/TraceFramePack.tla`. It reads the `txpk` events written by the Rust test `trace_framepack`:
 
-* a sealed packet (`pkt`): the frames of the fill must parse (`frames`) with no error, none PADDING or CLOSE (CLOSE
-  alone in the CLOSE packet) and none without its length; their kinds come in the order of the fill's slots for its
-  mode (`ordered`); the place kept is the last frame exactly when a normal fill ends with a STREAM frame, with the
-  size of the header before the length; `finish` of the fill is the payload sealed, and that payload parses into
-  the frames written, the last without its length when it was dropped, then one PADDING frame for the padding
-  (`expected`);
+* a sealed packet (`pkt`): its mode, whether its fill took the pending tail repair and whether a repair is still
+  pending as it is sealed must be what `pick` gives for its path and some state of the probes (a probe or the probe
+  timeout's packet takes no repair, so one due with it stays pending); the frames of the fill must parse (`frames`)
+  with no error, none PADDING or CLOSE (CLOSE alone in the CLOSE packet) and none without its length; their kinds
+  come in the order of the fill's slots for its mode (`ordered`); the place kept is the last frame exactly when a
+  normal fill ends with a STREAM frame, with the size of the header before the length; `finish` of the fill is the
+  payload sealed, and that payload parses into the frames written, the last without its length when it was dropped,
+  then one PADDING frame for the padding (`expected`);
 * a direct call of `implicit_stream_len` (`imp`) or `put_stream_header` (`hdr`): the model's answer and bytes.
 
 Both files are replayed: the narrow one and the wide one (stream ids, offsets and lengths up to `2^64 - 1`).
@@ -60,6 +62,14 @@ def replayPkt (j : J) : Except String Unit := do
     | [] => pure none
     | [p, h] => pure (some (p, h))
     | _ => throw "pkt: the place kept is not a pair"
+  let took ← boolF j "took"
+  let left ← boolF j "left"
+  let active ← boolF j "active"
+  let name ← strF j "mode"
+  check (mode == .close || [false, true].any fun probes => [false, true].any fun mtu =>
+      pick probes mtu (took || left) active == (mode, took, left))
+    (s!"pkt: a {name} packet that took the tail repair ({took}) and left one pending ({left}) " ++
+      s!"on the active path ({active}) is not the choice of build_app")
   let (fs, e) := frames b
   check (e.isNone && !fs.isEmpty) "pkt: the fill does not parse into frames"
   check (fs.all (fun f => !isPadding f && !implicitFrame f)) "pkt: the fill wrote PADDING or left a length out"

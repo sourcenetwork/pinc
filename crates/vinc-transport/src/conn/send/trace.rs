@@ -1,8 +1,9 @@
 //! Test-only observation of the packet builder, for trace validation (cargo feature `trace`, off by default).
 //!
 //! Once [`Connection::trace_pack_enable`] was called, a connection records one [`PackRecord`] per packet it seals:
-//! the frames `fill_frames` wrote, the place of the last STREAM frame it kept for an implicit length, the least
-//! payload the packet must have, and the payload as it was sealed (after the padding or the dropped length). The
+//! what it was built for, whether its fill took the pending tail repair and whether one is still pending, the frames
+//! `fill_frames` wrote, the place of the last STREAM frame it kept for an implicit length, the least payload the
+//! packet must have, and the payload as it was sealed (after the padding or the dropped length). The
 //! log is drained with [`Connection::trace_pack_take`]. [`PackProbe`] calls the two byte functions of the builder,
 //! `implicit_stream_len` and `put_stream_header`, directly. Nothing here is compiled without the feature, and
 //! nothing here feeds back into the connection.
@@ -40,6 +41,10 @@ pub enum PackMode {
 
 /// One sealed packet.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent observations of one packet, recorded as the code holds them"
+)]
 pub struct PackRecord {
     /// The header.
     pub kind: PackKind,
@@ -47,6 +52,12 @@ pub struct PackRecord {
     pub mode: PackMode,
     /// Whether the connection is a client.
     pub client: bool,
+    /// The fill took the pending tail repair (the packet is built as one).
+    pub repair_taken: bool,
+    /// A tail repair is still pending as the packet is sealed (one this packet's own data makes is set after).
+    pub repair_left: bool,
+    /// The packet goes on the active path.
+    pub active: bool,
     /// The packet number.
     pub pn: u64,
     /// The width of the packet number.

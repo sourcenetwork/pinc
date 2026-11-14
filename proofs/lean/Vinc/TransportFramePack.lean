@@ -19,7 +19,9 @@ What `crates/vinc-transport/src/conn/send.rs` puts into a packet, over the frame
   MTU probe's ACK and PING; or a tail repair's ACK and stream chunks. Which pending frames a slot writes depends on
   the room and the counts the code tests; the model takes what each slot wrote, so the theorems hold whatever those
   tests decide. `Fill.hint` is `last_stream` as the fill leaves it: the last chunk written, forgotten when a
-  datagram or a credit frame follows it.
+  datagram or a credit frame follows it;
+* `pick` is what `build_app` decides before the fill: the mode, and whether the fill takes the pending tail repair
+  (only a packet built as a repair does, so a repair due together with a path MTU probe stays pending).
 
 The theorems are in `TransportFramePackThm.lean`. The TLA+ counterpart is `proofs/tla/FramePackOps.tla` with
 `FramePack.tla`; the trace is replayed by `Vinc/TraceFramePack.lean`.
@@ -268,5 +270,15 @@ def Fill.mode : Fill → Mode
   | .pingOnly .. => .pingOnly
   | .probe .. => .probe
   | .repair .. => .repair
+
+/-! ## The choice before the fill -/
+
+/-- What `build_app` decides before the fill: the mode, whether the fill takes the pending tail repair, and whether
+a repair is still pending after it. `probes`: the probe timeout owes packets; `mtu`: a path MTU probe is due for this
+packet; `pending`: a tail repair is pending; `active`: the packet goes on the active path. The repair is taken only
+for a packet built as a repair, so a repair that is due together with a probe stays pending for the next packet. -/
+def pick (probes mtu pending active : Bool) : Mode × Bool × Bool :=
+  let took := pending && active && !probes && !mtu
+  (if probes then .pingOnly else if mtu then .probe else if took then .repair else .normal, took, pending && !took)
 
 end Vinc.TransportFramePack

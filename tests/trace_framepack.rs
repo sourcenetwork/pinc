@@ -7,22 +7,25 @@
 //! the stream data, request streams answered by the peer (the credit a stream gives back rides behind its data),
 //! resets and stop requests, a second path (challenge, response and path PING), sleep and wake, a keepalive, key
 //! rolls, the tickets and READY of a full handshake, a resumption whose client sends stream data in 0-RTT packets,
-//! a lost tail (the probe timeout's packets), path MTU probes and the CLOSE packet. Each connection records, through
-//! the `trace` view of the builder, every packet it seals: its header (short or 0-RTT), what it was built for, the
-//! frames the fill wrote, the place of the last STREAM frame the fill kept, the least payload, and the payload as
-//! sealed. `implicit_stream_len` and `put_stream_header` are also called directly, on the frames of real fills
-//! and on seeded inputs: a frame that ends the payload, one followed by more bytes, one cut short, a place that is
-//! not a frame, lengths at the varint edges, and buffers of the exact size, one byte off and empty.
+//! a lost tail (the probe timeout's packets), path MTU probes, tail repairs, a path MTU probe due while a tail repair
+//! is pending, and the CLOSE packet. Each connection records, through the `trace` view of the builder, every packet
+//! it seals: its header (short or 0-RTT), what it was built for, whether its fill took the pending tail repair,
+//! whether one is still pending and whether it goes on the active path, the frames the fill wrote, the place of the
+//! last STREAM frame the fill kept, the least payload, and the payload as sealed. `implicit_stream_len` and
+//! `put_stream_header` are also called directly, on the frames of real fills and on seeded inputs: a frame that ends
+//! the payload, one followed by more bytes, one cut short, a place that is not a frame, lengths at the varint edges,
+//! and buffers of the exact size, one byte off and empty.
 //!
 //! Two files are written: `framepack.ndjson` holds the events whose numbers stay below 2^28 (the TLA+ checker has
 //! 32-bit integers), `framepack_wide.ndjson` every event, with stream ids, offsets and lengths up to `2^64 - 1`.
 //!
 //! The test checks every packet against a naive reading of the code, so it is meaningful without the proof tools:
-//! the fill's frames parse with the real `FrameIter` with no error, none is PADDING or CLOSE (CLOSE only in the CLOSE
-//! packet) and none leaves its length out; their kinds come in the builder's order; the place kept is the last
-//! frame, a STREAM frame of a normal fill whose data runs to the end; the payload sealed is the frames padded to the
-//! least payload, or the frames with the length of that STREAM frame dropped; and it parses into the frames written,
-//! the last one without its length, then one PADDING frame for the padding.
+//! only a packet built as a repair takes the pending tail repair, and a normal packet on the active path finds none
+//! pending; the fill's frames parse with the real `FrameIter` with no error, none is PADDING or CLOSE (CLOSE only in
+//! the CLOSE packet) and none leaves its length out; their kinds come in the builder's order; the place kept is the
+//! last frame, a STREAM frame of a normal fill whose data runs to the end; the payload sealed is the frames padded to
+//! the least payload, or the frames with the length of that STREAM frame dropped; and it parses into the frames
+//! written, the last one without its length, then one PADDING frame for the padding.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -246,6 +249,22 @@ fn packet(out: &mut Out, r: &PackRecord) {
         assert!(!kinds.contains(&"Close"), "CLOSE outside the CLOSE packet");
     }
     assert!(r.kind == PackKind::Short || r.client, "a server sealed a 0-RTT packet");
+    // The tail repair: build_app takes it exactly for a packet built as a repair, on the active path; a path MTU probe
+    // and the probe timeout's packet leave it pending, and a normal packet on the active path finds none pending.
+    if r.mode != PackMode::Close {
+        assert_eq!(
+            r.repair_taken,
+            r.mode == PackMode::Repair,
+            "the repair taken by a {:?} packet",
+            r.mode
+        );
+        assert!(!(r.repair_taken && r.repair_left), "a repair taken is still pending");
+        assert!(r.mode != PackMode::Repair || r.active, "a repair off the active path");
+        assert!(
+            r.mode != PackMode::Normal || !r.active || !r.repair_left,
+            "a normal packet on the active path left the repair pending"
+        );
+    }
     // The place kept is the last frame, an explicit STREAM frame whose data runs to the end, exactly in a normal fill
     // that ends with a STREAM frame.
     let last = fs.last().unwrap();
@@ -294,13 +313,19 @@ fn packet(out: &mut Out, r: &PackRecord) {
     if fs.len() > 1 && dropped > 0 {
         out.see("implicit behind other frames");
     }
+    if r.mode == PackMode::Probe && r.repair_left {
+        out.see("probe with a repair pending");
+    }
     let narrow = fs.iter().all(|(_, _, f)| narrow_frame(f));
     let hint = r.hint.map_or("[]".to_string(), |(a, h)| format!("[{a},{h}]"));
     let line = format!(
-        r#"{{"t":"txpk","op":"pkt","kind":"{}","mode":"{}","client":{},"pnl":{},"frames":{},"hint":{hint},"min":{},"pay":{}}}"#,
+        r#"{{"t":"txpk","op":"pkt","kind":"{}","mode":"{}","client":{},"took":{},"left":{},"active":{},"pnl":{},"frames":{},"hint":{hint},"min":{},"pay":{}}}"#,
         if r.kind == PackKind::ZeroRtt { "zrtt" } else { "short" },
         mode_name(r.mode),
         r.client,
+        r.repair_taken,
+        r.repair_left,
+        r.active,
         r.pn_len,
         arr(&r.frames),
         r.min_payload,
@@ -555,6 +580,48 @@ fn repair(out: &mut Out, seed: u64) {
     take(out, &mut net);
 }
 
+/// One poll of A, by hand, so that nothing else is built in between; the datagram is not sent.
+fn poll_a(net: &mut Net<'_, '_>) -> Option<usize> {
+    let now = net.now;
+    let Net { a, buf, .. } = net;
+    a.with_env(now, |c, env| c.poll_transmit(env, buf)).map(|t| t.len)
+}
+
+/// A tail repair that is due together with a path MTU probe: a connection old enough and with a loss average high
+/// enough to repair its tail sends one small finished stream through a datagram buffer too small for the probe, so
+/// the repair of that packet is pending when the buffer grows. The probe leaves first, without it, and the repair goes
+/// with the next packet.
+fn probe_with_repair(out: &mut Out, seed: u64) {
+    let mut w = World::new(IdentityAlg::Ed25519);
+    let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+    sa.loss.record(1000, 0);
+    let mut net = setup(
+        &mut w,
+        &mut sa,
+        &mut sb,
+        Link::new(seed, Params::new(10 * MS).mtu(1500)),
+    );
+    enable(&mut net);
+    // A buffer of 1300 bytes cannot hold the 1452 byte probe, so the first probe waits until the buffer grows.
+    net.buf.truncate(1300);
+    assert!(net.connect(net.now + 30 * SEC), "{:?}", net.rx_drops);
+    net.run(net.now + 3 * SEC, |_| false);
+    let id = net.a.conn.open_uni().unwrap();
+    net.a.conn.write(id, &pattern(100, seed)).unwrap();
+    net.a.conn.finish(id).unwrap();
+    assert!(poll_a(&mut net).is_some(), "the stream packet leaves");
+    assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
+    net.buf.resize(65_536, 0);
+    assert_eq!(poll_a(&mut net), Some(1452), "the probe leaves first");
+    assert_eq!(net.a.conn.stats().repairs, 0, "{:?}", net.a.conn.stats());
+    assert!(
+        poll_a(&mut net).is_some_and(|n| n < 700),
+        "the repair leaves with the next packet"
+    );
+    assert_eq!(net.a.conn.stats().repairs, 1, "{:?}", net.a.conn.stats());
+    take(out, &mut net);
+}
+
 // ---- the byte functions ----
 
 /// One call of `implicit_stream_len` on `b`, checked against a naive reading and recorded.
@@ -770,6 +837,7 @@ fn trace_framepack() {
         resume(&mut out, 41);
         resume(&mut out, 42);
         repair(&mut out, 14);
+        probe_with_repair(&mut out, 31);
         byte_functions(&mut out);
         out
     });
@@ -785,6 +853,7 @@ fn trace_framepack() {
         "padded",
         "implicit",
         "implicit behind other frames",
+        "probe with a repair pending",
         "as written",
         "Ack",
         "Sleep",

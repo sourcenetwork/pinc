@@ -494,6 +494,7 @@ par run_tlc framepack_modes FramePack FramePack_modes
 par witness_tlc framepack_stale FramePack FramePack_stale HintRight
 par witness_tlc framepack_nocheck FramePack FramePack_nocheck RoundTrip
 par witness_tlc framepack_reach FramePack FramePack_reach NoImplicit
+par witness_tlc framepack_taken FramePack FramePack_taken RepairKept
 par run_tlc ext Ext Ext
 par witness_tlc ext_collide Ext Ext_collide Disjoint
 par witness_tlc ext_collide_check Ext Ext_collide_check TableOK

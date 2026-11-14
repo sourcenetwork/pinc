@@ -18,6 +18,10 @@ For the model of `TransportFramePack.lean`:
   frames written in order, the last one without its length when it was dropped, then one PADDING frame for the
   padding; a frame without a length is only the last, and never in a padded payload.
 * **The order** (`fill_ordered`): the frames of a fill come in the order of the slots of `fill_frames`.
+* **The tail repair** (`pick_took`, `pick_keeps`, `pick_probe_then_repair`): `build_app` takes the pending repair
+  exactly for a packet it builds as a repair; a path MTU probe, the probe timeout's packet and a packet on another
+  path leave it pending, so a repair due together with a probe goes with the next packet. `pickOld_loses` is the
+  witness of the rule before #293: the probe packet took the repair and carried none of it.
 -/
 
 namespace Vinc.TransportFramePack
@@ -616,6 +620,40 @@ theorem fill_ordered (f : Fill) (hk : f.Kinds) : ordered f.mode f.frames = true 
         (fun a _ => by simp only [Item.frame, Chunk.frame, Frame.kind]; decide))
     exact sec_append T _ _ _ _ _ _ s1 s2 (by omega) (by omega) (by omega)
 
+/-! ## The tail repair -/
+
+/-- The pending repair is taken exactly by a packet built as a repair, which goes on the active path with no path MTU
+probe due and no probe timeout's packet owed; what is not taken stays pending. -/
+theorem pick_took (probes mtu pending active : Bool) :
+    ((pick probes mtu pending active).2.1 = true ↔ (pick probes mtu pending active).1 = .repair) ∧
+      ((pick probes mtu pending active).1 = .repair →
+        pending = true ∧ active = true ∧ probes = false ∧ mtu = false) ∧
+      (pick probes mtu pending active).2.2 = (pending && !(pick probes mtu pending active).2.1) := by
+  cases probes <;> cases mtu <;> cases pending <;> cases active <;> decide
+
+/-- A path MTU probe, the probe timeout's packet and a packet on another path take no repair and leave a pending one
+pending. -/
+theorem pick_keeps (probes mtu pending active : Bool) (h : probes = true ∨ mtu = true ∨ active = false) :
+    (pick probes mtu pending active).2.1 = false ∧ (pick probes mtu pending active).2.2 = pending := by
+  revert h
+  cases probes <;> cases mtu <;> cases pending <;> cases active <;> decide
+
+/-- A repair due together with a path MTU probe: the probe leaves without it, and it goes with the next packet built
+on the active path with no probe due. -/
+theorem pick_probe_then_repair :
+    pick false true true true = (.probe, false, true) ∧ pick false false true true = (.repair, true, false) := by
+  decide
+
+/-- The rule before #293: the repair was taken for every packet on the active path with no probe timeout's packet
+owed, a path MTU probe too. -/
+def pickOld (probes mtu pending active : Bool) : Mode × Bool × Bool :=
+  let took := pending && active && !probes
+  (if probes then .pingOnly else if mtu then .probe else if took then .repair else .normal, took, pending && !took)
+
+/-- The witness of the rule before #293: the probe packet, which carries only its PING, takes the pending repair, so
+the repair is gone. -/
+theorem pickOld_loses : pickOld false true true true = (.probe, true, false) := by decide
+
 end Vinc.TransportFramePack
 
 #audit_axioms Vinc.TransportFramePack.header_eq
@@ -629,3 +667,7 @@ end Vinc.TransportFramePack
 #audit_axioms Vinc.TransportFramePack.finish_lastOnly
 #audit_axioms Vinc.TransportFramePack.matchFrom_of
 #audit_axioms Vinc.TransportFramePack.fill_ordered
+#audit_axioms Vinc.TransportFramePack.pick_took
+#audit_axioms Vinc.TransportFramePack.pick_keeps
+#audit_axioms Vinc.TransportFramePack.pick_probe_then_repair
+#audit_axioms Vinc.TransportFramePack.pickOld_loses

@@ -9,7 +9,18 @@
 (* frames and path frames pending, the chunks the stream layer holds, the  *)
 (* datagrams queued, the credit given back after an answer, and the        *)
 (* switches (the sent ring has room, the window and the pacer allow data,  *)
-(* a packet is forced, an ACK is due).                                     *)
+(* a packet is forced, an ACK is due). A case of the other modes gives     *)
+(* what build_app sees (the probe timeout owes packets, a path MTU probe   *)
+(* is due, a tail repair is pending, the packet goes on the active path)   *)
+(* and its mode is the one Pick gives; an ordinary fill is built with no   *)
+(* repair pending.                                                         *)
+(*                                                                         *)
+(* The choice before the fill:                                             *)
+(*   RepairKept the pending tail repair is taken exactly by a packet built *)
+(*              as a repair (on the active path, no path MTU probe due,    *)
+(*              no probe timeout's packet owed) and is otherwise left      *)
+(*              pending: a repair due together with a path MTU probe or    *)
+(*              the probe timeout's PING goes with the next packet.        *)
 (*                                                                         *)
 (* Properties of every packet the builder seals:                           *)
 (*   HintRight  the place kept is the last frame, a STREAM frame with its  *)
@@ -40,11 +51,15 @@
 (* (FramePack_stale.cfg, CLEAR = FALSE: the packet would be given up);     *)
 (* RoundTrip when, besides, the length is dropped without the check        *)
 (* (FramePack_nocheck.cfg: the STREAM frame swallows what follows it);     *)
-(* NoImplicit, an implicit length is reached (FramePack_reach.cfg).        *)
+(* NoImplicit, an implicit length is reached (FramePack_reach.cfg);        *)
+(* RepairKept under the rule before #293 (FramePack_taken.cfg, KEEP =      *)
+(* FALSE: the probe packet takes the pending repair and carries none of    *)
+(* it, so the repair is gone).                                             *)
 (*                                                                         *)
 (* Lean counterpart: TransportFramePackThm.lean (fill_hint, finish_ok,     *)
 (* finish_frames, finish_lastOnly, fill_ordered, fill_bytes,               *)
-(* implicit_spec, implicit_refuses, header_eq).                            *)
+(* implicit_spec, implicit_refuses, header_eq, pick_took, pick_keeps,      *)
+(* pick_probe_then_repair, pickOld_loses).                                 *)
 (***************************************************************************)
 EXTENDS FramePackOps, FiniteSets
 
@@ -87,27 +102,36 @@ Normal ==
     [mode : {"normal"}, cap : Caps, full : BOOLEAN, ack : {<<>>, <<A1>>, <<A2>>}, ctl : Ctls, path : Paths,
      ring : BOOLEAN, cc : BOOLEAN, streams : Streams, dgrams : Dgrams, sc2 : {<<>>, <<MS>>}, force : BOOLEAN,
      ackDue : BOOLEAN]
+\* what build_app sees: the probe timeout owes packets, a path MTU probe is due, a tail repair is pending, the packet
+\* goes on the active path; an ordinary fill of Normal is built with nothing owed or due and no repair pending
+Sels == [probes : BOOLEAN, mtu : BOOLEAN, pending : BOOLEAN, active : BOOLEAN]
+NoSel == [probes |-> FALSE, mtu |-> FALSE, pending |-> FALSE, active |-> TRUE]
+PickOf(s) == Pick(s.probes, s.mtu, s.pending, s.active)
+\* the other modes, each as build_app picks it
 Other ==
-    [mode : {"pingonly", "probe", "repair"}, cap : {24, 40, 64}, full : BOOLEAN, ack : {<<>>, <<A1>>, <<A2>>},
-     wakeUntil : BOOLEAN, streams : Streams, rroom : {30, 600}, ackDue : BOOLEAN]
+    {y \in [sel : Sels, cap : {24, 40, 64}, full : BOOLEAN, ack : {<<>>, <<A1>>, <<A2>>}, wakeUntil : BOOLEAN,
+            streams : Streams, rroom : {30, 600}, ackDue : BOOLEAN] : PickOf(y.sel).mode # "normal"}
 
 \* a case as the operators read it (the fields a mode does not use are fixed)
 Flat(x) ==
-    IF x.mode = "normal"
+    IF "sel" \notin DOMAIN x
     THEN [mode |-> x.mode, cap |-> x.cap, minp |-> IF x.full THEN x.cap ELSE 2, ack |-> x.ack, ring |-> x.ring, cc |-> x.cc,
           sleep |-> x.ctl.sleep, wake |-> x.ctl.wake, echo |-> x.ctl.echo, ready |-> x.ctl.ready,
           tickets |-> x.ctl.tickets, rekey |-> x.ctl.rekey, rk |-> RK, ext |-> x.ctl.ext, sc |-> x.ctl.sc,
           resp |-> x.path.resp, pping |-> x.path.pping, chal |-> x.path.chal, streams |-> x.streams,
           dgrams |-> x.dgrams, released |-> Len(x.sc2) > 0, sc2 |-> x.sc2, force |-> x.force, ackDue |-> x.ackDue,
-          wakeUntil |-> FALSE, rroom |-> 0]
-    ELSE [mode |-> x.mode, cap |-> x.cap, minp |-> IF x.mode = "probe" \/ x.full THEN x.cap ELSE 2, ack |-> x.ack,
+          wakeUntil |-> FALSE, rroom |-> 0, sel |-> NoSel, took |-> PickOf(NoSel).took, left |-> PickOf(NoSel).left]
+    ELSE LET p == PickOf(x.sel) IN
+         [mode |-> p.mode, cap |-> x.cap, minp |-> IF p.mode = "probe" \/ x.full THEN x.cap ELSE 2, ack |-> x.ack,
           ring |-> TRUE, cc |-> TRUE, sleep |-> FALSE, wake |-> FALSE, echo |-> FALSE, ready |-> FALSE,
           tickets |-> FALSE, rekey |-> FALSE, rk |-> RK, ext |-> <<>>, sc |-> <<>>, resp |-> FALSE,
           pping |-> FALSE, chal |-> FALSE, streams |-> x.streams, dgrams |-> <<>>, released |-> FALSE, sc2 |-> <<>>,
-          force |-> x.mode = "pingonly", ackDue |-> x.ackDue, wakeUntil |-> x.wakeUntil, rroom |-> x.rroom]
+          force |-> p.mode = "pingonly", ackDue |-> x.ackDue, wakeUntil |-> x.wakeUntil, rroom |-> x.rroom,
+          sel |-> x.sel, took |-> p.took, left |-> p.left]
 
 Init ==
-    /\ c \in {Flat(x) : x \in (IF "normal" \in MODES THEN Normal ELSE {}) \cup {y \in Other : y.mode \in MODES}}
+    /\ c \in {Flat(x) : x \in (IF "normal" \in MODES THEN Normal ELSE {})
+                                \cup {y \in Other : PickOf(y.sel).mode \in MODES}}
     /\ r = Fill(c)
     /\ f = Finish(r.w, r.hint, c.minp)
     /\ iw = Iter(r.w)
@@ -156,4 +180,10 @@ Sizes ==
 
 \* the reachability witness: an implicit length is reached
 NoImplicit == ~(Built(c, R) /\ F.ok /\ F.n > 0)
+
+\* build_app takes the pending repair exactly for a packet it builds as a repair, and leaves it pending otherwise
+RepairKept ==
+    /\ c.took = (c.mode = "repair")
+    /\ c.left = (c.sel.pending /\ c.mode # "repair")
+    /\ c.mode = "repair" => c.sel.pending /\ c.sel.active /\ ~c.sel.probes /\ ~c.sel.mtu
 =============================================================================

@@ -23,18 +23,36 @@
 (* or the length of the kept STREAM frame dropped (implicit_stream_len     *)
 (* under the ?, so a refusal gives the packet up), or nothing.             *)
 (*                                                                         *)
+(* Pick is what build_app decides before the fill: the probe timeout's     *)
+(* PING when it owes packets, else a path MTU probe when one is due, else  *)
+(* a tail repair when one is pending and the packet goes on the active     *)
+(* path, else an ordinary fill; the pending repair is taken (and gone)     *)
+(* only for a packet built as a repair, so a repair that is due together   *)
+(* with a probe stays pending and goes with the next packet (#293).        *)
+(*                                                                         *)
 (* The code's constants are MINROOM = 24, SBUDGET = 11, REKEYMAX = 51 and  *)
-(* REFS = 8 (MAX_FRAME_REFS). CLEAR and CHECK are TRUE in the code: FALSE  *)
-(* is the wrong rule of a witness (the place kept is not forgotten when a  *)
-(* datagram or a credit frame follows the STREAM frame; the length is      *)
-(* dropped without checking that the frame ends the payload).              *)
+(* REFS = 8 (MAX_FRAME_REFS). CLEAR, CHECK and KEEP are TRUE in the code:  *)
+(* FALSE is the wrong rule of a witness (the place kept is not forgotten   *)
+(* when a datagram or a credit frame follows the STREAM frame; the length  *)
+(* is dropped without checking that the frame ends the payload; the rule   *)
+(* before #293, where the repair is taken for a path MTU probe too and the *)
+(* probe, which carries only its PING, leaves without it).                 *)
 (*                                                                         *)
 (* Lean counterpart: Vinc/TransportFramePack.lean, with the theorems of    *)
 (* TransportFramePackThm.lean.                                             *)
 (***************************************************************************)
 EXTENDS FrameOps
 
-CONSTANTS MINROOM, SBUDGET, REKEYMAX, REFS, CLEAR, CHECK
+CONSTANTS MINROOM, SBUDGET, REKEYMAX, REFS, CLEAR, CHECK, KEEP
+
+(* ---- build_app ---- *)
+\* probes: the probe timeout owes packets; mtu: a path MTU probe is due for this packet; pending: a tail repair is
+\* pending; active: the packet goes on the active path. The mode of the fill, whether the fill takes the pending repair,
+\* and whether a repair is still pending after it
+Pick(probes, mtu, pending, active) ==
+    LET took == pending /\ active /\ ~probes /\ (~mtu \/ ~KEEP) IN
+    [mode |-> IF probes THEN "pingonly" ELSE IF mtu THEN "probe" ELSE IF took THEN "repair" ELSE "normal",
+     took |-> took, left |-> pending /\ ~took]
 
 (* ---- the byte functions ---- *)
 ClearLen(b) == IF (b \div 2) % 2 = 1 THEN b - 2 ELSE b
