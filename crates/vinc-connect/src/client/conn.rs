@@ -357,6 +357,8 @@ pub struct Connectivity<P: Provider, const R: usize, const PEERS: usize> {
     pub(super) mapped: [Option<SocketAddr>; 2],
     /// The mapped addresses a relay vouches for, as the record was last asked for.
     pub(super) live: [Option<SocketAddr>; 2],
+    /// The class the node would have without its mapping, noted while the class is the port-mapped one.
+    pub(super) unmapped: Option<Reach>,
     pub(super) udp_q: [Option<UdpItem>; UDP_QUEUE],
     pub(super) inbound: [Option<Inbound>; INBOUND],
     pub(super) io: [Option<Io>; IO_QUEUE],
@@ -445,6 +447,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             local: [None; MAX_ADDRS],
             mapped: [None; 2],
             live: [None; 2],
+            unmapped: None,
             udp_q: [None; UDP_QUEUE],
             inbound: [None; INBOUND],
             io: [None; IO_QUEUE],
@@ -623,69 +626,6 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
     }
 
-    /// Set the external addresses of the port mappings the host holds (at most two) at `now`. A mapped address leads
-    /// the candidates and the record, and decides the port-mapped class, only while a relay reported its IP
-    /// ([`netcheck::mapped_seen`]): until then it is held and not published, and a change in what passes is published
-    /// at once.
-    pub fn set_mapped(&mut self, now: u64, addrs: &[SocketAddr]) {
-        let mut mapped = [None; 2];
-        for (d, a) in mapped.iter_mut().zip(addrs) {
-            *d = Some(*a);
-        }
-        if mapped == self.mapped {
-            return;
-        }
-        self.mapped = mapped;
-        self.update_class(now);
-    }
-
-    /// The mapped addresses a relay vouches for, given the reflexive addresses `refl`.
-    fn live_of(&self, refl: &[SocketAddr]) -> [Option<SocketAddr>; 2] {
-        self.mapped.map(|m| m.filter(|m| netcheck::mapped_seen(refl, m)))
-    }
-
-    /// Ask for the record again when the mapped addresses a relay vouches for changed.
-    pub(super) fn refresh_mapped(&mut self) {
-        let mut refl = [self.me_addr(); MAX_ADDRS];
-        let nr = self.net.reflexive_into(&mut refl);
-        let live = self.live_of(refl.get(..nr).unwrap_or_default());
-        if live != self.live {
-            let had = self.live.iter().any(Option::is_some);
-            self.live = live;
-            self.sign.want_record();
-            // The mapping that made the node port-mapped is no longer vouched for: the class is unknown until a relay
-            // reports again, as the address is not offered.
-            if had && self.class == Some(Reach::PortMapped) && !live.iter().any(Option::is_some) {
-                self.class = None;
-            }
-        }
-    }
-
-    /// The candidates this node offers a peer: the external addresses of its port mappings a relay vouches for first
-    /// ([`netcheck::mapped_seen`]), then its reflexive addresses, then its local ones, at most 8. A node with no
-    /// mapping offers its reflexive addresses, then its local ones.
-    pub fn candidates(&self, out: &mut [SocketAddr; MAX_ADDRS]) -> usize {
-        let mut refl = [self.me_addr(); MAX_ADDRS];
-        let nr = self.net.reflexive_into(&mut refl);
-        let mut n = 0;
-        let live = self.live_of(refl.get(..nr).unwrap_or_default());
-        for a in live
-            .iter()
-            .flatten()
-            .chain(refl.iter().take(nr))
-            .chain(self.local.iter().flatten())
-        {
-            if n < MAX_ADDRS
-                && !out.get(..n).unwrap_or_default().contains(a)
-                && let Some(d) = out.get_mut(n)
-            {
-                *d = *a;
-                n += 1;
-            }
-        }
-        n
-    }
-
     pub(super) fn rtt(&self) -> u64 {
         self.net.best_rtt()
     }
@@ -702,7 +642,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     }
 
     pub(super) fn update_class(&mut self, now: u64) {
-        self.refresh_mapped();
+        self.refresh_mapped(now);
         let mut local = [self.me_addr(); MAX_ADDRS];
         let mut nl = 0;
         for (d, a) in local.iter_mut().zip(self.local.iter().flatten()) {
@@ -731,6 +671,9 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
             watchdog: super::link::dial_wait(self.rtt()),
         };
         let class = netcheck::classify(&o);
+        if class == Some(Reach::PortMapped) {
+            self.unmapped = netcheck::classify(&Observed { mapped: &[], ..o });
+        }
         if class != self.class
             && let Some(c) = class
         {
@@ -740,7 +683,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         }
     }
 
-    const fn me_addr(&self) -> SocketAddr {
+    pub(super) const fn me_addr(&self) -> SocketAddr {
         SocketAddr::new(core::net::IpAddr::V4(core::net::Ipv4Addr::UNSPECIFIED), 0)
     }
 

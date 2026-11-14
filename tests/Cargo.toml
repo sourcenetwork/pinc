@@ -815,6 +815,10 @@ name = "connect_mapped"
 path = "connect_mapped.rs"
 
 [[test]]
+name = "connect_mapped_record"
+path = "connect_mapped_record.rs"
+
+[[test]]
 name = "connect_publish_wait"
 path = "connect_publish_wait.rs"
 

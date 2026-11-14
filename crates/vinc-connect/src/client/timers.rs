@@ -189,7 +189,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     pub fn resume(&mut self, now: u64) {
         self.sign.cancel_suspend();
         self.net.restart();
-        self.refresh_mapped();
+        self.refresh_mapped(now);
         self.next_probe = now.saturating_add(10_000_000);
         self.duty.restart(now);
         for i in 0..R {
@@ -211,7 +211,7 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
     /// beacon again.
     pub fn link_changed(&mut self, now: u64) {
         self.net.restart();
-        self.refresh_mapped();
+        self.refresh_mapped(now);
         self.next_probe = now.saturating_add(NETCHECK_DELAY);
         self.duty.restart(now);
         for i in 0..R {

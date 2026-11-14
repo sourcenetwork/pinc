@@ -31,6 +31,7 @@ pub mod dial;
 mod drive;
 pub mod link;
 pub mod lookup;
+mod mapped;
 pub mod netcheck;
 pub mod punch;
 pub mod queue;
