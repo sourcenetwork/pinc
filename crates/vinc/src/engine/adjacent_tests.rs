@@ -34,6 +34,10 @@ fn core() -> C {
         connected_topics: true,
         relaying: false,
         connect_timeout: 1_000_000_000,
+        port_mapping: crate::start::PortMapping {
+            on: false,
+            gateway: None,
+        },
     };
     crate::start::build(cfg, 1).unwrap()
 }

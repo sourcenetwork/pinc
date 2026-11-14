@@ -575,6 +575,7 @@ impl Handler for App {
                 Ok(Value::Null)
             }
             Cmd::Suspend | Cmd::Resume => Err("libp2p has no notion of a node going to sleep: not available".into()),
+            Cmd::Reach { .. } => Err("the reach test is VINC's port mapping check: not available for libp2p".into()),
             Cmd::HoldSet { .. } | Cmd::Reconcile { .. } => {
                 Err("set reconciliation is not available for libp2p: it has no protocol for it".into())
             }

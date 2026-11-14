@@ -18,6 +18,7 @@ pub mod dtnlog;
 mod hub;
 mod keys;
 pub mod net;
+pub mod portmap;
 pub mod relay_server;
 pub mod tracelog;
 

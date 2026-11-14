@@ -1,0 +1,13 @@
+[package]
+name = "vinc-portmap"
+description = "VINC port mapping: a SANS-IO client that asks the home gateway for a UDP mapping with PCP, NAT-PMP or UPnP-IGD, renews it before the lease ends and releases it on shutdown"
+keywords = ["no_std", "pcp", "nat-pmp", "upnp", "sans-io"]
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

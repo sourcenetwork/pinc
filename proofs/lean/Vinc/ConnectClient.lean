@@ -497,7 +497,8 @@ def classify (o : Observed) : Option Nat :=
   | [] => if ¬ o.udpHeard ∧ o.sinceProbe ≥ o.watchdog then some 5 else none
   | first :: _ =>
     if o.reflexive.any (fun r => o.local_.contains r) then some 1
-    else if o.reflexive.any (fun r => o.mapped.contains r) then some 2
+    -- port mapped: a mapping's external IP is one a relay saw (its port may differ from the reflexive one)
+    else if o.reflexive.any (fun r => o.mapped.any (fun m => m.1 == r.1)) then some 2
     else if o.reflexive.any (fun r => isShared r.1) ∨ o.reflexive.any (fun r => r != first) then some 4
     else some 3
 

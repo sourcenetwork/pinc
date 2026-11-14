@@ -195,7 +195,8 @@ IsShared(ip) == Len(ip) = 4 /\ ip[1] = 100 /\ ip[2] >= 64 /\ ip[2] < 128
 Classify(local, refl, mapped, heard, since, wd) ==
     IF refl = <<>> THEN (IF ~heard /\ since >= wd THEN 5 ELSE 0)
     ELSE IF \E i \in 1..Len(refl) : \E j \in 1..Len(local) : refl[i] = local[j] THEN 1
-    ELSE IF \E i \in 1..Len(refl) : \E j \in 1..Len(mapped) : refl[i] = mapped[j] THEN 2
+    \* port mapped: a mapping's external IP is one a relay saw (its port may differ from the reflexive one)
+    ELSE IF \E i \in 1..Len(refl) : \E j \in 1..Len(mapped) : refl[i][1] = mapped[j][1] THEN 2
     ELSE IF (\E i \in 1..Len(refl) : IsShared(refl[i][1])) \/ (\E i \in 1..Len(refl) : refl[i] # refl[1]) THEN 4
     ELSE 3
 

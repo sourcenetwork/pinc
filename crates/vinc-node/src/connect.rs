@@ -118,13 +118,15 @@ where
     /// The next UDP datagram of the connectivity layer (a relay probe, a lookup, a beacon).
     pub fn poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
         self.deadline.set(Due::Stale);
-        self.conn.poll_udp(buf)
+        self.pm_poll_udp(buf).or_else(|| self.conn.poll_udp(buf))
     }
 
     /// As [`Self::poll_udp`], with the local address the datagram must leave from, when it has to leave from one.
     pub fn poll_udp_from(&mut self, buf: &mut [u8]) -> Option<(Option<SocketAddr>, SocketAddr, usize)> {
         self.deadline.set(Due::Stale);
-        self.conn.poll_udp_from(buf)
+        self.pm_poll_udp(buf)
+            .map(|(to, n)| (None, to, n))
+            .or_else(|| self.conn.poll_udp_from(buf))
     }
 
     /// A key operation the carrier handshake of `relay` waits for.

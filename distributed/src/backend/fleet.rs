@@ -276,6 +276,7 @@ site = "west"
             .map(|n| Site {
                 name: (*n).into(),
                 nat: Nat::None,
+                portmap: None,
                 lan: Shape::lan(),
                 pos: None,
             })

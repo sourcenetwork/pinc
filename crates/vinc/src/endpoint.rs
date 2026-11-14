@@ -13,7 +13,7 @@
 //! close what should be told first ([`Endpoint::close`], [`Connection::close`]).
 
 use std::future::{Future, poll_fn};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::pin;
 use std::rc::Rc;
 use std::task::Poll;
@@ -39,6 +39,7 @@ use crate::node::RELAYS;
 use crate::protocol::{Protocol, Registered};
 use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
 use crate::role::{Role, RoleSpec};
+use crate::start::PortMapping;
 use crate::start::build;
 
 mod role;
@@ -81,6 +82,10 @@ impl Vinc {
             hub: false,
             connected_topics: false,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            port_mapping: PortMapping {
+                on: true,
+                gateway: None,
+            },
             role: (),
         }
     }
@@ -105,6 +110,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarri
     hub: bool,
     connected_topics: bool,
     connect_timeout: Duration,
+    port_mapping: PortMapping,
     role: Q,
 }
 
@@ -151,6 +157,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             hub: self.hub,
             connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
+            port_mapping: self.port_mapping,
             role: self.role,
         }
     }
@@ -220,6 +227,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             hub: self.hub,
             connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
+            port_mapping: self.port_mapping,
             role: self.role,
         }
     }
@@ -241,6 +249,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             hub: self.hub,
             connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
+            port_mapping: self.port_mapping,
             role: self.role,
         }
     }
@@ -250,6 +259,30 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
     #[must_use]
     pub const fn connect_timeout(mut self, wait: Duration) -> Self {
         self.connect_timeout = wait;
+        self
+    }
+
+    /// Ask the home gateway for a UDP mapping of the endpoint's socket, so peers behind address translation of their
+    /// own reach it directly (on by default). The endpoint tries PCP, then NAT-PMP, then `UPnP-IGD`, renews the lease
+    /// before it ends, and deletes the mapping when it closes. The mapped address leads the addresses its signed
+    /// record lists, and the endpoint's reachability is port-mapped while it holds one.
+    ///
+    /// PCP and NAT-PMP need the gateway's address ([`gateway`](Self::gateway)); without it only `UPnP` is tried, by an
+    /// SSDP search. PCP and `UPnP` name the endpoint's own address, so an endpoint bound to the unspecified address
+    /// tries NAT-PMP only. `UPnP`'s HTTP calls go over the host's carriers ([`carriers`](Self::carriers)): `open` is
+    /// then asked for a TCP stream to a [`Relay`] whose id is the endpoint's own and whose only address is the
+    /// gateway's control address. An endpoint on a loopback address asks nothing.
+    #[must_use]
+    pub const fn port_mapping(mut self, on: bool) -> Self {
+        self.port_mapping.on = on;
+        self
+    }
+
+    /// The default gateway of the host's network: where PCP and NAT-PMP requests go, and the only address an SSDP
+    /// answer is taken from.
+    #[must_use]
+    pub const fn gateway(mut self, gateway: IpAddr) -> Self {
+        self.port_mapping.gateway = Some(gateway);
         self
     }
 
@@ -303,6 +336,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             hub: self.hub,
             connected_topics: self.connected_topics,
             connect_timeout: self.connect_timeout,
+            port_mapping: self.port_mapping,
             role: self.role,
         }
     }
@@ -421,6 +455,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             hub,
             connected_topics,
             connect_timeout,
+            port_mapping,
             role,
         } = self;
         if relays.len() > RELAYS {
@@ -442,6 +477,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             connected_topics,
             relaying: <Q::Built as Role>::ON,
             connect_timeout: u64::try_from(connect_timeout.as_nanos()).unwrap_or(u64::MAX),
+            port_mapping,
         };
         let core = build(cfg, T0)?;
         // The relay's clock is the wall clock; the endpoint's is the same time from another origin, a fixed offset away.
@@ -768,6 +804,14 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         let alpn = protocol.alpn();
         let route = self.0.shared.run(|core, _| Try::Done(core.listen(alpn))).await?;
         Ok(Registered::new(&self.0.shared, route, protocol))
+    }
+
+    /// The external address of the port mapping the gateway granted (see [`Builder::port_mapping`]), if one is held.
+    pub async fn port_mapping(&self) -> Option<SocketAddr> {
+        self.0
+            .shared
+            .run(|core, _| Try::Done(core.node.port_mapping().map(|(a, _)| a)))
+            .await
     }
 
     /// Close every session with a goodbye code and stop the endpoint; returns when the sessions are closed or a second has

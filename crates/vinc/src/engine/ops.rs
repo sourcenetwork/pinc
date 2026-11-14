@@ -498,13 +498,15 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         if self.shutdown.is_none() && self.stopped.is_none() {
             self.shutdown = Some(now.saturating_add(SHUTDOWN_GRACE));
             self.node.leave(now);
+            self.node.stop_port_mapping(now);
             self.dirty = true;
         }
     }
 
     pub(super) fn check_finished(&mut self, now: u64) {
         let Some(at) = self.shutdown else { return };
-        if self.node.endpoint().node_stats().sessions > 0 && now < at {
+        // A UPnP mapping is deleted over HTTP: the driving future carries it while the grace runs.
+        if (self.node.endpoint().node_stats().sessions > 0 || !self.node.port_mapping_done()) && now < at {
             return;
         }
         self.stop(Error::shutdown());

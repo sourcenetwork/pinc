@@ -3,7 +3,9 @@
 //!
 //! It reads one JSON request per line on its standard input and answers one JSON line each, in order. It does only
 //! what a run needs and checks every request against that:
-//! - run `ip`, `tc`, `iptables` or `sysctl` inside a node's or router's network namespace (`nsenter --net`);
+//! - run `ip`, `tc`, `iptables`, `sysctl` or `nft` inside a node's or router's network namespace (`nsenter --net`);
+//! - start miniupnpd in a router's network namespace from a configuration it writes itself ([`gateway_conf`]), and
+//!   stop every one it started (on request, and when its input closes);
 //! - in the host's own namespace, only create a veth pair whose two ends go straight into two other namespaces, and
 //!   only read the host's links and queueing disciplines (for the teardown check);
 //! - read a node's interface counters (`/proc/<pid>/net/dev`) and its cgroup's files;
@@ -33,7 +35,7 @@ pub enum Req {
     Run {
         /// The process whose network namespace to enter; the host's own when absent.
         ns: Option<u32>,
-        /// `ip`, `tc`, `iptables` or `sysctl`.
+        /// `ip`, `tc`, `iptables`, `sysctl` or `nft`.
         tool: String,
         /// Its arguments.
         args: Vec<String>,
@@ -58,6 +60,22 @@ pub enum Req {
         /// Load or unload.
         load: bool,
     },
+    /// Start miniupnpd in the network namespace of process `ns`, serving the LAN interface `lan` (the /24 at
+    /// `prefix`) and mapping on the external interface `ext`, with the protocol `proto` (`pcp` or `upnp`).
+    Gateway {
+        /// The router's process.
+        ns: u32,
+        /// The external interface.
+        ext: String,
+        /// The LAN interface.
+        lan: String,
+        /// The LAN's network address.
+        prefix: String,
+        /// `pcp` (PCP and NAT-PMP) or `upnp`.
+        proto: String,
+    },
+    /// Stop every miniupnpd this helper started; answers the end of each one's log.
+    GatewayStop,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -127,7 +145,7 @@ pub fn readable(path: &str) -> bool {
 }
 
 fn run_tool(ns: Option<u32>, tool: &str, args: &[String]) -> std::result::Result<String, String> {
-    if !matches!(tool, "ip" | "tc" | "iptables" | "sysctl") {
+    if !matches!(tool, "ip" | "tc" | "iptables" | "sysctl" | "nft") {
         return Err(format!("the helper does not run {tool}"));
     }
     let Some(path) = find_tool(tool) else {
@@ -187,6 +205,7 @@ pub fn serve() -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     let mut peaks: HashMap<String, File> = HashMap::new();
+    let mut gateways: Vec<Gateway> = Vec::new();
     for line in stdin.lock().lines() {
         let line = line?;
         let Ok(env) = serde_json::from_str::<Envelope>(&line) else {
@@ -230,6 +249,18 @@ pub fn serve() -> std::io::Result<()> {
             },
             Req::Read { path } => Err(format!("the helper does not read {path}")),
             Req::Ifb { load } => ifb(load),
+            Req::Gateway {
+                ns,
+                ext,
+                lan,
+                prefix,
+                proto,
+            } => start_gateway(ns, &ext, &lan, &prefix, &proto).map(|g| {
+                let out = format!("miniupnpd {} in the namespace of {ns}", g.child.id());
+                gateways.push(g);
+                out
+            }),
+            Req::GatewayStop => Ok(stop_gateways(&mut gateways)),
         };
         let resp = match result {
             Ok(out) => Resp {
@@ -248,7 +279,81 @@ pub fn serve() -> std::io::Result<()> {
         writeln!(stdout, "{}", serde_json::to_string(&resp).unwrap_or_default())?;
         stdout.flush()?;
     }
+    stop_gateways(&mut gateways);
     Ok(())
+}
+
+/// A miniupnpd the helper started, and its log.
+struct Gateway {
+    child: std::process::Child,
+    log: String,
+}
+
+/// Where the helper keeps the files of the gateways it starts.
+const GATEWAY_DIR: &str = "/run/vinc-distributed";
+
+fn iface_ok(s: &str) -> bool {
+    (1..=15).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The miniupnpd configuration of a router (public for the tests): `None` for an interface name that is not one, a
+/// prefix that is not a /24 network address, or a protocol other than `pcp` and `upnp`.
+pub fn gateway_conf(ns: u32, ext: &str, lan: &str, prefix: &str, proto: &str) -> Option<String> {
+    let p: std::net::Ipv4Addr = prefix.parse().ok()?;
+    if !iface_ok(ext) || !iface_ok(lan) || p.octets()[3] != 0 {
+        return None;
+    }
+    let (pcp, upnp) = match proto {
+        "pcp" => ("yes", "no"),
+        "upnp" => ("no", "yes"),
+        _ => return None,
+    };
+    Some(format!(
+        "ext_ifname={ext}\nlistening_ip={lan}\nhttp_port=5000\nenable_pcp_pmp={pcp}\nenable_upnp={upnp}\nsecure_mode=yes\n\
+         system_uptime=no\nmin_lifetime=120\nuuid=7663642d-6761-7465-7761-{ns:012x}\nupnp_table_name=filter\n\
+         upnp_nat_table_name=filter\nupnp_forward_chain=miniupnpd\nupnp_nat_chain=prerouting_miniupnpd\n\
+         upnp_nat_postrouting_chain=postrouting_miniupnpd\nallow 1024-65535 {p}/24 1024-65535\n\
+         deny 0-65535 0.0.0.0/0 0-65535\n"
+    ))
+}
+
+fn start_gateway(ns: u32, ext: &str, lan: &str, prefix: &str, proto: &str) -> std::result::Result<Gateway, String> {
+    let conf = gateway_conf(ns, ext, lan, prefix, proto)
+        .ok_or("the helper refuses this gateway: bad interface, prefix or protocol")?;
+    let (Some(nsenter), Some(miniupnpd)) = (find_tool("nsenter"), find_tool("miniupnpd")) else {
+        return Err("nsenter or miniupnpd is not installed (apt install miniupnpd-nftables)".into());
+    };
+    std::fs::create_dir_all(GATEWAY_DIR).map_err(|e| format!("{GATEWAY_DIR}: {e}"))?;
+    let base = format!("{GATEWAY_DIR}/miniupnpd-{ns}");
+    let (cpath, ppath, lpath) = (format!("{base}.conf"), format!("{base}.pid"), format!("{base}.log"));
+    std::fs::write(&cpath, conf).map_err(|e| format!("{cpath}: {e}"))?;
+    let log = File::create(&lpath).map_err(|e| format!("{lpath}: {e}"))?;
+    let err = log.try_clone().map_err(|e| format!("{lpath}: {e}"))?;
+    let child = Command::new(nsenter)
+        .arg(format!("--net=/proc/{ns}/ns/net"))
+        .arg("--")
+        .arg(miniupnpd)
+        .args(["-d", "-4", "-f", &cpath, "-P", &ppath])
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(err)
+        .spawn()
+        .map_err(|e| format!("miniupnpd did not start: {e}"))?;
+    Ok(Gateway { child, log: lpath })
+}
+
+/// Stop the gateways; the last 4000 bytes of each one's log.
+fn stop_gateways(gateways: &mut Vec<Gateway>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for mut g in gateways.drain(..) {
+        let _ = g.child.kill();
+        let _ = g.child.wait();
+        let text = std::fs::read_to_string(&g.log).unwrap_or_default();
+        let tail = text.len().saturating_sub(4000);
+        let _ = writeln!(out, "== {}\n{}", g.log, text.get(tail..).unwrap_or_default());
+    }
+    out
 }
 
 type Call = (Req, oneshot::Sender<Resp>);

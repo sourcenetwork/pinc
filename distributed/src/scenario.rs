@@ -162,6 +162,27 @@ pub enum Nat {
     Symmetric,
 }
 
+/// A port-mapping service on a home router: miniupnpd, which has one switch for PCP and NAT-PMP together and one
+/// for UPnP-IGD, so NAT-PMP alone cannot be offered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PortMap {
+    /// PCP, and NAT-PMP with it.
+    Pcp,
+    /// UPnP-IGD only.
+    Upnp,
+}
+
+impl PortMap {
+    /// Its name in a scenario file.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Pcp => "pcp",
+            Self::Upnp => "upnp",
+        }
+    }
+}
+
 /// A site: a LAN with a router.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -171,6 +192,9 @@ pub struct Site {
     /// Whether the router translates addresses for the LAN.
     #[serde(default)]
     pub nat: Nat,
+    /// A port-mapping service on the router; none by default. Only a router that translates has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portmap: Option<PortMap>,
     /// Each node's access link to the router, both directions.
     #[serde(default = "Shape::lan")]
     pub lan: Shape,
@@ -422,6 +446,8 @@ pub enum Workload {
     Reconcile(crate::workloads::Reconcile),
     /// Bundles for nodes that are offline, carried by delay-tolerant delivery, with checks on its rules.
     Dtn(crate::dtn::Dtn),
+    /// One node dials another by its node id; the session's path says whether it is direct (VINC only).
+    Reach(crate::workloads::Reach),
 }
 
 /// A change to the network or a node during a repetition.
@@ -703,6 +729,7 @@ impl Scenario {
             Workload::Sync(w) => w.check(self, &node_names, &mut out),
             Workload::Reconcile(w) => w.check(self, &node_names, &mut out),
             Workload::Dtn(w) => w.check(self, &node_names, &mut out),
+            Workload::Reach(w) => w.check(self, &node_names, &mut out),
         }
         self.check_faults(&site_names, &node_names, &mut out);
         out
@@ -727,6 +754,12 @@ impl Scenario {
                 out.push(Problem::new(format!("sites[{i}].name"), "another site has this name"));
             }
             s.lan.check(&format!("sites[{i}].lan"), out);
+            if s.portmap.is_some() && s.nat == Nat::None {
+                out.push(Problem::new(
+                    format!("sites[{i}].portmap"),
+                    "a port mapping needs address translation on the router; set nat",
+                ));
+            }
         }
         names
     }

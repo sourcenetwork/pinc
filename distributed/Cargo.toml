@@ -22,6 +22,7 @@ vinc-core = { path = "../crates/vinc-core", version = "0.1.0" }
 vinc-crypto = { path = "../crates/vinc-crypto", version = "0.1.0" }
 vinc-security = { path = "../crates/vinc-security", version = "0.1.0" }
 vinc-connect = { path = "../crates/vinc-connect", version = "0.1.0" }
+vinc-portmap = { path = "../crates/vinc-portmap", version = "0.1.0" }
 vinc-membership = { path = "../crates/vinc-membership", version = "0.1.0" }
 vinc-broadcast = { path = "../crates/vinc-broadcast", version = "0.1.0" }
 vinc-values = { path = "../crates/vinc-values", version = "0.1.0" }
@@ -99,6 +100,7 @@ vinc-core = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true }
 vinc-security = { workspace = true }
 vinc-connect = { workspace = true }
+vinc-portmap = { workspace = true }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
 vinc-values = { workspace = true }

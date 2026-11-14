@@ -17,6 +17,7 @@ vinc-transport = { workspace = true, features = ["alloc"] }
 vinc-core = { workspace = true, features = ["alloc"] }
 vinc-node = { workspace = true }
 vinc-connect = { workspace = true, features = ["alloc"] }
+vinc-portmap = { workspace = true }
 vinc-broadcast = { workspace = true, features = ["alloc"] }
 rapidhash = { workspace = true }
 

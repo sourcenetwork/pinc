@@ -104,6 +104,8 @@ pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEE
     /// What [`Node::poll_timeout`] answers, until a call that could move it: every such call clears this.
     pub(crate) deadline: Cell<Due>,
     pub(crate) leaving: bool,
+    /// The port-mapping client, once the host turned it on.
+    pub(crate) pm: Option<Box<crate::portmap::Pm>>,
 }
 
 impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize, A: Apps<P>> core::fmt::Debug
@@ -282,6 +284,7 @@ where
             next_duty: now,
             deadline: Cell::new(Due::Stale),
             leaving: false,
+            pm: None,
         };
         node.refresh_alive(now);
         Ok(node)
@@ -461,7 +464,7 @@ where
             // An empty buffer is one empty datagram, as the host read it.
             let n = segment.max(1).min(rest.len());
             let (d, tail) = core::mem::take(&mut rest).split_at_mut(n);
-            if !self.conn.handle_udp(now, remote, d) {
+            if !self.pm_datagram(now, remote, d) && !self.conn.handle_udp(now, remote, d) {
                 self.io.ep.handle_datagram(now, local, remote, d);
             }
             self.settle_with(now, tail.is_empty());
@@ -492,6 +495,7 @@ where
         if self.duty_needed() && now >= self.next_duty {
             self.duties(now);
         }
+        self.pm_timeout(now);
         self.settle(now);
     }
 
@@ -523,6 +527,7 @@ where
             self.sets_deadline(),
             self.dtn_deadline(),
             self.duty_needed().then_some(self.next_duty),
+            self.pm_deadline(),
         ]
         .into_iter()
         .flatten()

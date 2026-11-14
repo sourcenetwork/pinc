@@ -10,7 +10,8 @@
 //! The reachability class ([`classify`]) is read from what was observed, never configured:
 //! 1. **UDP blocked**: no UDP datagram was ever heard and every probe went unanswered for `watchdog` since the first.
 //! 2. **Public**: a reflexive address equals a local address (IPv4 or IPv6).
-//! 3. **Port-mapped**: a reflexive address equals the external address of a port mapping the host holds.
+//! 3. **Port-mapped**: a port mapping the host holds has the external IP a relay saw the node at (the mapping's port
+//!    need not be the one the node's own traffic leaves from).
 //! 4. **Carrier-grade NAT**: a reflexive IPv4 address in the shared range 100.64.0.0/10, or two relays saw different
 //!    addresses (a symmetric mapping, which hole punching cannot predict).
 //! 5. **Behind NAT**: a reflexive address that differs from every local address and is the same at every relay that
@@ -78,7 +79,7 @@ pub fn classify(o: &Observed<'_>) -> Option<Reach> {
     if o.reflexive.iter().any(|r| o.local.contains(r)) {
         return Some(Reach::Public);
     }
-    if o.reflexive.iter().any(|r| o.mapped.contains(r)) {
+    if o.reflexive.iter().any(|r| o.mapped.iter().any(|m| m.ip() == r.ip())) {
         return Some(Reach::PortMapped);
     }
     if o.reflexive.iter().any(|r| is_shared(&r.ip())) || o.reflexive.iter().any(|r| r != first) {

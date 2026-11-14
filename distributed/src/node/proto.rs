@@ -220,6 +220,15 @@ pub enum Cmd {
     Suspend,
     /// Tell the group this node is awake again.
     Resume,
+    /// Dial `peer` by its node id alone and report the session's path when it comes up and again `hold_ms` later.
+    Reach {
+        /// The peer.
+        peer: String,
+        /// The longest wait for the session.
+        timeout_ms: u64,
+        /// How long to hold the session before the second look.
+        hold_ms: u64,
+    },
     /// What this node counted since it started.
     Report,
     /// Leave and end.

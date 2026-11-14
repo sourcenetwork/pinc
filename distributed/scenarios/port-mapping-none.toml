@@ -1,0 +1,48 @@
+name = "port-mapping-none"
+about = "The port-mapping topology with a router that maps no ports: the node asks and nobody answers, so nothing changes; the peer behind the symmetric translation reaches it only through the relay."
+stacks = ["vinc"]
+repetitions = 1
+
+[[sites]]
+name = "home1"
+nat = "port-restricted"
+
+[[sites]]
+name = "home2"
+nat = "symmetric"
+
+[[sites]]
+name = "public"
+
+[[nodes]]
+name = "n1"
+site = "home1"
+
+[[nodes]]
+name = "n2"
+site = "home2"
+
+[[nodes]]
+name = "rv"
+site = "public"
+role = "relay"
+
+[[links]]
+a = "home1"
+b = "public"
+shape = { delay_ms = 10, rate_mbit = 50 }
+reverse = { rate_mbit = 200 }
+
+[[links]]
+a = "home2"
+b = "public"
+shape = { delay_ms = 15, rate_mbit = 20 }
+reverse = { rate_mbit = 100 }
+
+[workload]
+kind = "reach"
+server = "n1"
+client = "n2"
+settle_s = 130
+hold_s = 10
+timeout_s = 60

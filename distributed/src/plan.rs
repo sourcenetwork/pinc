@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
-use crate::scenario::{Nat, Role, Scenario, Shape};
+use crate::scenario::{Nat, PortMap, Role, Scenario, Shape};
 
 /// The interface MTU everywhere.
 pub const MTU: u32 = 1500;
@@ -49,6 +49,8 @@ pub enum Tool {
     Iptables,
     /// `sysctl`.
     Sysctl,
+    /// `nft`.
+    Nft,
 }
 
 impl Tool {
@@ -59,6 +61,7 @@ impl Tool {
             Self::Tc => "tc",
             Self::Iptables => "iptables",
             Self::Sysctl => "sysctl",
+            Self::Nft => "nft",
         }
     }
 }
@@ -104,6 +107,8 @@ pub struct SitePlan {
     pub name: String,
     /// Its translation.
     pub nat: Nat,
+    /// The port-mapping service on its router.
+    pub portmap: Option<PortMap>,
     /// The LAN's network address (a /24).
     pub lan: Ipv4Addr,
     /// The router's address on the LAN.
@@ -142,6 +147,8 @@ pub struct LinkPlan {
     pub b: usize,
     /// The interface on both routers.
     pub dev: String,
+    /// The link's /30.
+    pub net: Ipv4Addr,
     /// The first end's address.
     pub ip_a: Ipv4Addr,
     /// The second end's address.
@@ -198,9 +205,16 @@ fn host_in(lan: Ipv4Addr, host: usize) -> Ipv4Addr {
     Ipv4Addr::new(o[0], o[1], o[2], u8::try_from(host).unwrap_or(u8::MAX))
 }
 
-/// The /30 of link `k`: its network address and the two ends.
-fn link_net(k: usize) -> (Ipv4Addr, Ipv4Addr, Ipv4Addr) {
-    let base = u32::from(Ipv4Addr::new(100, 64, 0, 0)) + u32::try_from(k * 4).unwrap_or(u32::MAX);
+/// The /30 of link `k`: its network address and the two ends. A link of a site whose router maps ports is numbered
+/// from 11.0.0.0, the others from 100.64.0.0: miniupnpd refuses to map ports on a reserved external address, and
+/// nothing of the emulated network reaches the Internet, so the block is free to use.
+fn link_net(k: usize, mapped: bool) -> (Ipv4Addr, Ipv4Addr, Ipv4Addr) {
+    let first = if mapped {
+        Ipv4Addr::new(11, 0, 0, 0)
+    } else {
+        Ipv4Addr::new(100, 64, 0, 0)
+    };
+    let base = u32::from(first) + u32::try_from(k * 4).unwrap_or(u32::MAX);
     (Ipv4Addr::from(base), Ipv4Addr::from(base + 1), Ipv4Addr::from(base + 2))
 }
 
@@ -348,6 +362,7 @@ impl Plan {
             .map(|(i, s)| SitePlan {
                 name: s.name.clone(),
                 nat: s.nat,
+                portmap: s.portmap,
                 lan: site_lan(i),
                 gateway: host_in(site_lan(i), 1),
                 router: Container {
@@ -389,11 +404,16 @@ impl Plan {
             .iter()
             .enumerate()
             .filter_map(|(k, l)| {
-                let (_, ip_a, ip_b) = link_net(k);
+                let (a, b) = (*site_idx.get(l.a.as_str())?, *site_idx.get(l.b.as_str())?);
+                let mapped = [a, b]
+                    .iter()
+                    .any(|s| sites.get(*s).is_some_and(|x| x.portmap.is_some()));
+                let (net, ip_a, ip_b) = link_net(k, mapped);
                 Some(LinkPlan {
-                    a: *site_idx.get(l.a.as_str())?,
-                    b: *site_idx.get(l.b.as_str())?,
+                    a,
+                    b,
                     dev: format!("w{k}"),
+                    net,
                     ip_a,
                     ip_b,
                     forward: l.shape,
@@ -531,6 +551,9 @@ impl Plan {
                 ));
             }
         }
+        if site.portmap.is_some() {
+            c.push(portmap_tables());
+        }
         let Some(hops) = hops else { return c };
         let mut routes = Vec::new();
         for (dst, d) in self.sites.iter().enumerate() {
@@ -538,11 +561,10 @@ impl Plan {
                 routes.push((format!("{}/24", d.lan), hops.get(&dst)));
             }
         }
-        for (k, l) in self.links.iter().enumerate() {
+        for l in &self.links {
             if l.a != s && l.b != s {
                 // Towards the nearer end's site: either end routes the /30 it is on.
-                let (net, _, _) = link_net(k);
-                routes.push((format!("{net}/30"), hops.get(&l.a).or_else(|| hops.get(&l.b))));
+                routes.push((format!("{}/30", l.net), hops.get(&l.a).or_else(|| hops.get(&l.b))));
             }
         }
         for (prefix, hop) in routes {
@@ -658,4 +680,24 @@ impl Plan {
             })
             .collect()
     }
+}
+
+/// The nftables chains miniupnpd adds its rules to, in a router that maps ports: a forward filter that accepts what
+/// the router forwards today and jumps to `miniupnpd`, and nat chains at the usual priorities that jump to
+/// `prerouting_miniupnpd` and `postrouting_miniupnpd`. The package's own `nft_init.sh` is not used: its forward chain
+/// drops by default, which would cut the router's ordinary forwarding.
+pub fn portmap_tables() -> Cmd {
+    Cmd::new(
+        Tool::Nft,
+        &["add table inet filter; \
+           add chain inet filter forward { type filter hook forward priority 0 ; policy accept ; } ; \
+           add chain inet filter miniupnpd ; \
+           add rule inet filter forward jump miniupnpd ; \
+           add chain inet filter prerouting { type nat hook prerouting priority -100 ; policy accept ; } ; \
+           add chain inet filter postrouting { type nat hook postrouting priority 100 ; policy accept ; } ; \
+           add chain inet filter prerouting_miniupnpd ; \
+           add chain inet filter postrouting_miniupnpd ; \
+           add rule inet filter prerouting jump prerouting_miniupnpd ; \
+           add rule inet filter postrouting jump postrouting_miniupnpd"],
+    )
 }

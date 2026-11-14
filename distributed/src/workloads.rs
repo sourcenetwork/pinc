@@ -255,6 +255,62 @@ impl Reconcile {
     }
 }
 
+/// Direct reach: `client` dials `server` by its node id alone, after the group settled, and the session's path is
+/// read when it comes up and again after `hold_s`. With a port mapping on the server's router the path is direct even
+/// from behind a translation that cannot be punched; without one it is the relay's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reach {
+    /// The node dialed.
+    pub server: String,
+    /// The node that dials.
+    pub client: String,
+    /// Seconds between everyone having joined and the dial: the server's mapping and its record settle.
+    #[serde(default = "settle_default")]
+    pub settle_s: f64,
+    /// Seconds the session is held before its path is read again.
+    #[serde(default = "hold_default")]
+    pub hold_s: f64,
+    /// The longest wait for the session, in seconds.
+    #[serde(default = "reach_timeout_default")]
+    pub timeout_s: u64,
+}
+
+fn settle_default() -> f64 {
+    10.0
+}
+fn hold_default() -> f64 {
+    10.0
+}
+fn reach_timeout_default() -> u64 {
+    60
+}
+
+impl Reach {
+    /// The test id.
+    pub const ID: &'static str = "reach";
+
+    pub(crate) fn check(&self, sc: &Scenario, nodes: &BTreeMap<&str, &NodeSpec>, out: &mut Vec<Problem>) {
+        check_names("workload", &[self.server.clone(), self.client.clone()], nodes, out);
+        if self.server == self.client {
+            out.push(Problem::new(
+                "workload.client",
+                "the client and the server are different nodes",
+            ));
+        }
+        if !(0.0..=600.0).contains(&self.settle_s) || !(0.0..=600.0).contains(&self.hold_s) {
+            out.push(Problem::new(
+                "workload.settle_s",
+                "use 0 to 600 seconds to settle and to hold",
+            ));
+        }
+        if !(1..=3600).contains(&self.timeout_s) {
+            out.push(Problem::new("workload.timeout_s", "use 1 to 3600 seconds"));
+        }
+        check_group(sc, nodes, out);
+    }
+}
+
 fn check_names(path: &str, names: &[String], nodes: &BTreeMap<&str, &NodeSpec>, out: &mut Vec<Problem>) {
     for (i, n) in names.iter().enumerate() {
         if !nodes.contains_key(n.as_str()) {
