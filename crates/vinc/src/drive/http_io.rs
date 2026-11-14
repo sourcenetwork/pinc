@@ -6,8 +6,9 @@
 //! operations the carriers use (`open`, `write`, `read`), recording progress after each completed operation. An
 //! operation in flight when the driver changes is started again by the new driver, which is the carriers' contract
 //! (a dropped read loses nothing, a write reports how much it took): a host whose operation loses data when dropped
-//! breaks it, and the endpoint does not cope with that. A dropped write may have put part of the request out, so the
-//! exchange then starts over on a new stream.
+//! breaks it, and the endpoint does not cope with that. A write dropped by a change of driver may have put part of the
+//! request out, so, as a carrier's is, that stream is closed and the exchange ends with no answer: the port-mapping
+//! client's own retry decides when to ask again.
 //!
 //! Invariants: at most one exchange runs at a time; an answer is read up to [`vinc_portmap::MAX_RESPONSE`] bytes and no
 //! further; a stream that fails ends the exchange with no answer; an exchange is dropped, stream and all, when the
@@ -164,12 +165,9 @@ impl<H: Hosted> Shared<H> {
             }
             Phase::Write => {
                 if ex.busy && !hop.running(WRITE) {
-                    // A write that was in flight was dropped: part of the request may be out, so start over.
-                    ex.stream = None;
-                    ex.sent = 0;
-                    ex.phase = Phase::Open;
-                    ex.busy = false;
-                    moved = true;
+                    // A write that was in flight was dropped: part of the request may be out. As a carrier's, the stream
+                    // is closed and the exchange ends; the client's own retry decides when to ask again.
+                    finished = Some(None);
                 } else if let Some(s) = ex.stream.clone() {
                     if !hop.running(WRITE) {
                         hop.start(WRITE, make(Step::Write(s, ex.req.clone(), ex.sent)));

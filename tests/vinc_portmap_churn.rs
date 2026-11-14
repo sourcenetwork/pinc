@@ -33,8 +33,29 @@ struct Stream {
 
 struct Counts {
     opened: Rc<Cell<usize>>,
+    closed: Rc<Cell<usize>>,
     answered: Rc<Cell<usize>>,
 }
+
+/// How the host behaves besides answering 40 ms after the write.
+#[derive(Clone, Copy)]
+struct Opts {
+    /// A read that is dropped loses the answer (a host that breaks the carriers' contract).
+    loses: bool,
+    /// A write takes this long (milliseconds) before it records its bytes.
+    write_ms: u64,
+    /// A write takes at most this many bytes.
+    chunk: usize,
+    /// The gateway never answers an `AddPortMapping`.
+    stall_add: bool,
+}
+
+const KIND: Opts = Opts {
+    loses: false,
+    write_ms: 0,
+    chunk: usize::MAX,
+    stall_add: false,
+};
 
 /// What the gateway answers to the request in `req`.
 fn reply(req: &[u8]) -> Vec<u8> {
@@ -60,19 +81,32 @@ fn bind(
     Sender<(Vec<u8>, SocketAddr)>,
     Counts,
 ) {
+    bind_with(Opts { loses, ..KIND })
+}
+
+fn bind_with(
+    o: Opts,
+) -> (
+    Endpoint<impl Hosted>,
+    Rc<RefCell<Vec<SocketAddr>>>,
+    Sender<(Vec<u8>, SocketAddr)>,
+    Counts,
+) {
     let (tx, rx) = unbounded::<(Vec<u8>, SocketAddr)>();
     let sent: Rc<RefCell<Vec<SocketAddr>>> = Rc::default();
     let log = Rc::clone(&sent);
     let opened = Rc::new(Cell::new(0usize));
+    let closed = Rc::new(Cell::new(0usize));
     let answered = Rc::new(Cell::new(0usize));
-    let (o, an) = (Rc::clone(&opened), Rc::clone(&answered));
+    let (op, cl, an) = (Rc::clone(&opened), Rc::clone(&closed), Rc::clone(&answered));
+    let loses = o.loses;
     let ep = Vinc::builder()
         .alpn(ALPN)
         .local_addr("192.168.1.5:4433".parse().unwrap())
         .port_mapping(true)
         .carriers(
             async move |_relay: &vinc::Relay, _kind: CarrierKind| -> std::io::Result<Stream> {
-                o.set(o.get() + 1);
+                op.set(op.get() + 1);
                 Ok(Stream {
                     req: RefCell::default(),
                     wrote_at: Cell::new(None),
@@ -91,6 +125,9 @@ fn bind(
                     taken_here = true;
                     s.taken.set(true);
                 }
+                if o.stall_add && String::from_utf8_lossy(&s.req.borrow()).contains("AddPortMapping") {
+                    std::future::pending::<()>().await;
+                }
                 loop {
                     if (taken_here || (!loses && !s.taken.get())) && due(s) {
                         s.taken.set(true);
@@ -105,12 +142,16 @@ fn bind(
                     tokio::time::sleep(Duration::from_millis(3)).await;
                 }
             },
-            async |s: &Stream, buf: Vec<u8>, from: usize| {
-                s.req.borrow_mut().extend_from_slice(&buf[from..]);
+            async move |s: &Stream, buf: Vec<u8>, from: usize| {
+                if o.write_ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(o.write_ms)).await;
+                }
+                let n = (buf.len() - from).min(o.chunk);
+                s.req.borrow_mut().extend_from_slice(&buf[from..from + n]);
                 s.wrote_at.set(Some(s.wrote_at.get().unwrap_or_else(Instant::now)));
-                (Ok(buf.len() - from), buf)
+                (Ok(n), buf)
             },
-            async |_s: Stream| {},
+            async move |_s: Stream| cl.set(cl.get() + 1),
         )
         .build(
             async move |buf: &mut [u8]| {
@@ -125,7 +166,16 @@ fn bind(
             async |at: Instant| tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
         )
         .unwrap();
-    (ep, sent, tx, Counts { opened, answered })
+    (
+        ep,
+        sent,
+        tx,
+        Counts {
+            opened,
+            closed,
+            answered,
+        },
+    )
 }
 
 /// The application's way of driving: a call that returns every 10 ms.
@@ -186,4 +236,25 @@ async fn a_host_that_loses_data_when_a_read_is_dropped_gets_no_mapping() {
         c.opened.get(),
         c.answered.get()
     );
+}
+
+/// A write that is dropped by a change of driver ends the exchange and its stream is closed; the client's own retry
+/// decides when to ask again, so the streams opened in six seconds are the one the first exchange used.
+#[tokio::test(flavor = "current_thread")]
+async fn a_dropped_write_ends_the_exchange_and_opens_no_stream_of_its_own() {
+    for chunk in [usize::MAX, 200] {
+        let (ep, sent, tx, c) = bind_with(Opts {
+            write_ms: 20,
+            chunk,
+            ..KIND
+        });
+        search_then_answer(&ep, &sent, &tx).await;
+        churn(&ep, Duration::from_secs(6)).await;
+        assert_eq!(
+            (c.opened.get(), c.closed.get()),
+            (1, 1),
+            "writes of {chunk} bytes: streams opened and closed in 6 s (the client retries after 300 s)"
+        );
+        assert_eq!(ep.port_mapping().await, None);
+    }
 }
