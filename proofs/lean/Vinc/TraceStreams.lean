@@ -10,8 +10,10 @@ written by the Rust test `trace_streams` and replays every call through the func
 (`frame`, `reset`, `consume`, `pending`, `ctlLostMsd`, `ctlLostReset`, `ctlAckedReset`, `openLocal`, `appReset`,
 `finish`, `extTo`, `closeAll`, the stop-sending ones `stopReq`, `onStop`, `ctlLostStop`, `ctlAckedStop`, and the early
 opens of an optimistic dial `setEarly` and `establish`): the state the model computes must be the state recorded, and
-the error it computes the error the call returned; every stream whose frame left (a `sent` event) must be one the
-model lets send (`canSend`: a stream we opened only once the limit covers its ordinal). The constants are those of the
+the error it computes the error the call returned, and the control frame `pending` gives the one the table gave (a
+stream's control frames wait for the limit as its data does, #432); every stream whose frame left (a `sent` event)
+must be one the model lets send (`canSend`: a stream we opened only once the limit covers its ordinal). Runs 37 to 40
+reset a stream opened early past the limit before the limit covers it. The constants are those of the
 test (`params`): chunks of 16384 bytes, a ring of 7, 96 ranges, 4 slots, 2 live peer streams, a pool of 20 chunks,
 windows of 5 and 6 chunks, a first charge of 4 chunks.
 -/

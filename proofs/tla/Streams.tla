@@ -58,10 +58,17 @@
 (*    (OpenerInsideOrEarly; the earlier OpenerInside is a witness there,    *)
 (*    Streams_early_w); each stream we open keeps its ordinal, the order of *)
 (*    its open (Ordinals); a stream frame leaves only for a stream whose    *)
-(*    ordinal the limit covers (SendOnlyInLimit), once allowed it stays     *)
-(*    allowed, and the streams allowed are the first ones opened            *)
-(*    (GateMonotone, GatePrefix); Streams_early_rel is the reachability     *)
-(*    witness of a stream opened past the limit that a raise lets send.     *)
+(*    ordinal the limit covers (SendOnlyInLimit), and so does a stream      *)
+(*    control frame, a reset, a stop request or a window update            *)
+(*    (CtlOnlyInLimit, #432), so the peer never receives a frame for a      *)
+(*    stream its limit does not cover (PeerNeverRefuses), and a control     *)
+(*    frame held for the limit leaves once it covers the stream             *)
+(*    (CtlReleased); once allowed a stream stays allowed, and the streams   *)
+(*    allowed are the first ones opened (GateMonotone, GatePrefix);         *)
+(*    Streams_early_rel is the reachability witness of a stream opened past *)
+(*    the limit that a raise lets send, and Streams_early_ctl_w the rule    *)
+(*    before #432 (control frames not held: PeerNeverRefuses fails on a     *)
+(*    stream reset at once after an early open).                            *)
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
@@ -202,6 +209,20 @@ Ordinals == \A i \in Live : IF IsLocal(T.slots[i].id) THEN T.slots[i].ord = Idx(
                                                   ELSE T.slots[i].ord = 0
 \* a stream frame leaves only for a stream whose ordinal the limit covers: on any other slot SendOut changes nothing
 SendOnlyInLimit == \A i \in 1..N, f \in BOOLEAN : ~CanSend(T, i) => SendOut(T, i, f) = T
+\* a stream control frame (a reset, a stop request, a window update) leaves only for a stream whose ordinal the limit
+\* covers: the frame Pending gives next is for such a stream (#432)
+CtlOnlyInLimit == LET P == Pending(T) IN P.kind \in {"reset", "stop", "msd"} => CanSend(T, FindSlot(T, P.id))
+\* a stream the peer's limit does not cover: one we opened whose index is at or past the limit the peer gave (the peer
+\* has not opened it, and past its cap its locate refuses it with a stream limit error that closes the connection)
+PeerRefuses(id) == IsLocal(id) /\ Idx(id) >= T.ad.lim
+\* the peer never receives a frame for a stream its limit does not cover: neither a stream frame (a stream allowed to
+\* send, CanSend, is covered) nor the stream control frame Pending gives next
+PeerNeverRefuses ==
+    /\ \A i \in Live : CanSend(T, i) => ~PeerRefuses(T.slots[i].id)
+    /\ LET P == Pending(T) IN P.kind \in {"reset", "stop", "msd"} => ~PeerRefuses(P.id)
+\* a control frame held for the limit is released once the limit covers its stream: while some stream the limit covers
+\* has a control frame to send, Pending gives a frame (none waits behind the gate for good)
+CtlReleased == (\E i \in Live : Hot(T.slots[i]) /\ CanSend(T, i)) => Pending(T).kind # "none"
 \* the streams allowed to send are the first ones opened
 GatePrefix == \A i, j \in Live : (T.slots[i].ord < T.slots[j].ord /\ CanSend(T, j)) => CanSend(T, i)
 \* the credit given never lets a peer that keeps to it have more streams live than the configured limit MAXREM: the

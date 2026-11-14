@@ -187,6 +187,9 @@ def setSlot (T : Tab) (i : Nat) (r : Slot) : Tab := { T with slots := T.slots.se
 def findSlot (T : Tab) (id : Nat) : Option Nat := T.slots.findIdx? (·.id == some id)
 def firstFree (T : Tab) : Option Nat := T.slots.findIdx? (·.id == none)
 def Slot.hot (r : Slot) : Bool := (r.pend && r.open_) || r.srst == 1 || r.stop == 1
+/-- The slot may give a control frame now: it has one, and the limit `lim` covers its ordinal (`Streams::refresh`;
+#432: a stream opened past the peer's limit holds its control frames as it holds its data). -/
+def Slot.ctlDue (lim : Nat) (r : Slot) : Bool := r.hot && decide (r.ord ≤ lim)
 def anyDefer (T : Tab) : Bool := T.slots.any (·.defer)
 
 /-! ### The window grant (`Streams::grant`) -/
@@ -378,12 +381,13 @@ def consume (p : P) (T : Tab) (id n now srtt : Nat) : Tab × String :=
       (settle p (grantRun p T1 i) i, "ok")
 
 /-! ### Control frames -/
-/-- `pending_control`: the table, the kind ("none", "reset", "stop", "msd"), the stream and the number: the limit of an
-msd, the error code of a reset or a stop. The first slot with a frame to send gives one: its stream reset first, then
-its stop request, then its limit. -/
-def pending (T : Tab) : Tab × String × Nat × Nat :=
+/-- `pending_control` with the test `due` of the slots that may give a frame: the table, the kind ("none", "reset",
+"stop", "msd"), the stream and the number: the limit of an msd, the error code of a reset or a stop. A raise of the
+stream credit goes first; then the first slot `due` lets go gives one: its stream reset first, then its stop request,
+then its limit. -/
+def pendingBy (due : Slot → Bool) (T : Tab) : Tab × String × Nat × Nat :=
   if T.adpend then ({ T with adpend := false }, "msts", 0, T.adv) else
-  match T.slots.findIdx? Slot.hot with
+  match T.slots.findIdx? due with
   | none => (T, "none", 0, 0)
   | some i =>
     let r := T.slots.getD i Slot.new
@@ -391,6 +395,9 @@ def pending (T : Tab) : Tab × String × Nat × Nat :=
     if r.srst == 1 then (setSlot T i { r with srst := 2 }, "reset", id, r.scode.getD 0)
     else if r.stop == 1 then (setSlot T i { r with stop := 2 }, "stop", id, r.qcode.getD 0)
     else (setSlot T i { r with pend := false }, "msd", id, r.limit)
+
+/-- `pending_control`: the first slot with a frame to send whose ordinal the limit covers gives one (`Slot.ctlDue`). -/
+def pending (T : Tab) : Tab × String × Nat × Nat := pendingBy (Slot.ctlDue T.adlim) T
 
 /-- A lost `MAX_STREAMS` frame is sent again unless a later limit superseded it. -/
 def ctlLostMsts (T : Tab) (l : Nat) : Tab := if l ≥ T.adv then { T with adpend := true } else T
@@ -404,7 +411,8 @@ def setEarly (T : Tab) (on : Bool) : Tab := { T with early := on }
 /-- The establishment of an optimistic dial: the peer's record raises the limit, then early opens end. -/
 def establish (T : Tab) (l : Nat) : Tab := setEarly (recvMaxStreams T l) false
 
-/-- `Streams::refresh`: the data of slot `i` may leave once the limit covers its ordinal (always, for a peer stream). -/
+/-- `Streams::refresh`: the data and the control frames of slot `i` may leave once the limit covers its ordinal
+(always, for a peer stream). -/
 def canSend (T : Tab) (i : Nat) : Bool := decide ((T.slots.getD i Slot.new).ord ≤ T.adlim)
 
 def ctlLostMsd (T : Tab) (id mx : Nat) : Tab :=

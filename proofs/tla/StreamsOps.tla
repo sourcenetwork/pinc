@@ -61,9 +61,12 @@
 (* set by SetEarly: Streams::set_early; OpenLocal skips the limit while it  *)
 (* is on). Each stream we open keeps its ordinal (Slot::ordinal: how many   *)
 (* we had opened in all, itself included; 0 for a peer stream), and its     *)
-(* data waits until the limit covers that ordinal (CanSend: the test of     *)
-(* Streams::refresh, so SendOut sends nothing for it). The establishment   *)
-(* raises the limit to the peer's record and turns early off.              *)
+(* data and its control frames (a reset, a stop request, a window update)  *)
+(* wait until the limit covers that ordinal (CanSend: the test of           *)
+(* Streams::refresh, so SendOut sends nothing for it and Pending gives none *)
+(* of its control frames, CtlGate; before #432 only its data waited,        *)
+(* CtlUngated). The establishment raises the limit to the peer's record    *)
+(* and turns early off.                                                    *)
 (*                                                                         *)
 (* Held back streams. A peer stream the table has no room for yet is      *)
 (* stored nowhere, answered with nothing and never acknowledged: Locate    *)
@@ -174,6 +177,14 @@ Resv(T) == CreditLeft(T) * FirstW                     \* the pool bytes kept for
 SetSlot(T, i, r) == [T EXCEPT !.slots[i] = r]
 FindSlot(T, id) == IF \E i \in 1..N : T.slots[i].id = id THEN CHOOSE i \in 1..N : T.slots[i].id = id ELSE 0
 Hot(r) == (r.pend /\ r.open) \/ r.srst = 1 \/ r.stop = 1
+\* Streams::refresh: the data and the control frames of a stream we opened wait until the limit covers its ordinal
+\* (always covered for a peer stream, whose ordinal is 0)
+CanSend(T, i) == T.slots[i].ord <= T.ad.lim
+\* the gate on a slot's control frames (#432); CtlUngated is the rule before it, for the witness Streams_early_ctl_w.cfg
+CtlGate(T, i) == CanSend(T, i)
+CtlUngated(T, i) == TRUE
+\* the slot may give a control frame now
+CtlDue(T, i) == Hot(T.slots[i]) /\ CtlGate(T, i)
 AnyDefer(T) == \E i \in 1..N : T.slots[i].defer
 
 (* ---- the window grant (Streams::grant) ---- *)
@@ -338,9 +349,9 @@ Consume(T, id, n, now, srtt) ==
 
 (* ---- control frames ---- *)
 (* Pending: pending_control; the table after, the frame (kind "none", "reset", "stop" or "msd") and its number:
-   the limit of an msd, the error code of a reset or a stop. The first slot with a frame to send gives one: its stream
-   reset first, then its stop request, then its limit. *)
-PendingSlot(T) == IF \E i \in 1..N : Hot(T.slots[i]) THEN CHOOSE i \in 1..N : (Hot(T.slots[i]) /\ \A j \in 1..(i - 1) : ~Hot(T.slots[j])) ELSE 0
+   the limit of an msd, the error code of a reset or a stop. The first slot with a frame to send whose stream the
+   peer's limit covers (CtlDue) gives one: its stream reset first, then its stop request, then its limit. *)
+PendingSlot(T) == IF \E i \in 1..N : CtlDue(T, i) THEN CHOOSE i \in 1..N : (CtlDue(T, i) /\ \A j \in 1..(i - 1) : ~CtlDue(T, j)) ELSE 0
 Pending(T) ==
     IF T.ad.pend THEN [t |-> [T EXCEPT !.ad.pend = FALSE], kind |-> "msts", id |-> -1, max |-> T.ad.adv]
     ELSE LET i == PendingSlot(T)
@@ -390,14 +401,13 @@ RecvMaxStreams(T, l) == [T EXCEPT !.ad.lim = Max(@, l)]
 SetEarly(T, on) == [T EXCEPT !.ad.early = on]
 \* the establishment of an optimistic dial: the peer's record raises the limit (set_peer_limits), then early ends
 Establish(T, l) == SetEarly(RecvMaxStreams(T, l), FALSE)
-\* Streams::refresh: the data of a stream we opened waits until the limit covers its ordinal (0 for a peer stream)
-CanSend(T, i) == T.slots[i].ord <= T.ad.lim
 \* a MAX_STREAMS frame was lost: send the current limit again unless a later one superseded it
 CtlLostMsts(T, l) == IF l >= T.ad.adv THEN [T EXCEPT !.ad.pend = TRUE] ELSE T
 SendOpen(r) == ~(IsUni(r.id) /\ ~IsLocal(r.id))
 (* A stream frame left on slot i (pick.rs, next_hot): the send half's end has gone with nothing queued again (f), or
    not yet, or a lost range waits to be sent again (not f); then release_limit. Only a send half that can still send a
-   stream frame is touched, and a stream we opened past the limit sends nothing. *)
+   stream frame is touched, and a stream we opened past the limit sends nothing (CanSend; its control frames wait the
+   same way, CtlGate in Pending). *)
 SendOut(T, i, f) ==
     LET r == T.slots[i]
     IN IF ~RELEASE \/ r.id = -1 \/ ~SendOpen(r) \/ r.sdone \/ r.srst # 0 \/ ~CanSend(T, i) THEN T

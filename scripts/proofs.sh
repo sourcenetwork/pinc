@@ -463,6 +463,8 @@ par witness_live_tlc streams_live_stall Streams Streams_live_stall
 par run_tlc streams_early Streams Streams_early
 par witness_tlc streams_early_w Streams Streams_early_w OpenerInside
 par witness_tlc streams_early_rel Streams Streams_early_rel NoReleaseOfEarly
+par run_tlc streams_early_ctl Streams Streams_early_ctl
+par witness_tlc streams_early_ctl_w Streams Streams_early_ctl_w PeerNeverRefuses
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags

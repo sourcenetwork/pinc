@@ -20,6 +20,11 @@ the credit meets in `admits`; the whole window is counted from the stream's firs
   opens are early (`openLocal_past_early`); a stream frame leaves only for a stream whose ordinal the limit covers,
   any other `sendOut` changes nothing (`sendOut_gated`); and a raise of the limit never takes that back
   (`canSend_raise`), so the streams let go are the first ones opened, in order, and stay let go.
+* The control frames of those streams (#432): a reset, a stop request or a window update leaves only for a stream
+  whose ordinal the limit covers (`pending_gated`, through `pendingBy_slot`), and one held for the limit is released
+  once it covers the stream: with a covered slot that has a frame, `pending` gives a frame (`pending_released`).
+  `pendingOld_leaks` is the witness of the rule before #432: a stream opened early past a limit of 0 and reset at once
+  sent its reset, which names a stream the peer's limit does not cover.
 -/
 
 namespace Vinc.TransportStreams
@@ -155,8 +160,109 @@ theorem canSend_raise (T : Tab) (i l : Nat) (h : canSend T i = true) : canSend (
   unfold recvMaxStreams
   exact decide_eq_true (Nat.le_trans (of_decide_eq_true h) (Nat.le_max_left _ _))
 
+/-- With no raise of the stream credit waiting, `pendingBy` takes its frame from the first slot `due` lets go. -/
+theorem pendingBy_some (due : Slot → Bool) (T : Tab) (i : Nat) (ha : T.adpend = false)
+    (hf : T.slots.findIdx? due = some i) :
+    pendingBy due T =
+      (let r := T.slots.getD i Slot.new
+       let id := r.id.getD 0
+       if r.srst == 1 then (setSlot T i { r with srst := 2 }, "reset", id, r.scode.getD 0)
+       else if r.stop == 1 then (setSlot T i { r with stop := 2 }, "stop", id, r.qcode.getD 0)
+       else (setSlot T i { r with pend := false }, "msd", id, r.limit)) := by
+  unfold pendingBy
+  rw [ha, hf]
+  try rfl
+
+/-- `pendingBy` takes a stream's control frame from the first slot `due` lets go, and the frame names that slot's
+stream. -/
+theorem pendingBy_slot (due : Slot → Bool) (T : Tab) (hk : (pendingBy due T).2.1 ≠ "none")
+    (hm : (pendingBy due T).2.1 ≠ "msts") :
+    ∃ i, T.slots.findIdx? due = some i ∧ (pendingBy due T).2.2.1 = (T.slots.getD i Slot.new).id.getD 0 := by
+  cases ha : T.adpend
+  · cases hf : T.slots.findIdx? due with
+    | none =>
+      exfalso
+      apply hk
+      simp [pendingBy, ha, hf]
+    | some i =>
+      refine ⟨i, rfl, ?_⟩
+      rw [pendingBy_some due T i ha hf]
+      dsimp only
+      split
+      · rfl
+      · split <;> rfl
+  · exfalso
+    apply hm
+    simp [pendingBy, ha]
+
+/-- A stream control frame (a reset, a stop request, a window update) leaves only for a stream whose ordinal the
+limit covers: the frame `pending` gives names the stream of a slot that has one and that `canSend` lets go (#432). -/
+theorem pending_gated (T : Tab) (hk : (pending T).2.1 ≠ "none") (hm : (pending T).2.1 ≠ "msts") :
+    ∃ i, canSend T i = true ∧ (T.slots.getD i Slot.new).hot = true ∧
+      (pending T).2.2.1 = (T.slots.getD i Slot.new).id.getD 0 := by
+  obtain ⟨i, hf, hid⟩ := pendingBy_slot (Slot.ctlDue T.adlim) T hk hm
+  obtain ⟨hlt, hp, -⟩ := List.findIdx?_eq_some_iff_getElem.mp hf
+  have hg : T.slots.getD i Slot.new = T.slots[i] := by
+    simp [List.getD_eq_getElem?_getD, hlt]
+  simp only [Slot.ctlDue, Bool.and_eq_true, decide_eq_true_eq] at hp
+  refine ⟨i, ?_, ?_, hid⟩
+  · rw [canSend, hg]
+    exact decide_eq_true hp.2
+  · rw [hg]
+    exact hp.1
+
+/-- A control frame held for the limit is released once the limit covers its stream: while a slot whose ordinal the
+limit covers has a frame to send, `pending` gives a frame, so none waits behind the gate for good. -/
+theorem pending_released (T : Tab) (i : Nat) (hi : i < T.slots.length) (hh : T.slots[i].hot = true)
+    (hc : T.slots[i].ord ≤ T.adlim) : (pending T).2.1 ≠ "none" := by
+  have hdue : Slot.ctlDue T.adlim T.slots[i] = true := by simp [Slot.ctlDue, hh, hc]
+  show (pendingBy (Slot.ctlDue T.adlim) T).2.1 ≠ "none"
+  cases ha : T.adpend
+  · cases hf : T.slots.findIdx? (Slot.ctlDue T.adlim) with
+    | none =>
+      have hno := List.findIdx?_eq_none_iff.mp hf _ (List.getElem_mem hi)
+      rw [hdue] at hno
+      exact absurd hno (by decide)
+    | some j =>
+      rw [pendingBy_some _ T j ha hf]
+      dsimp only
+      split
+      · show "reset" ≠ "none"
+        simp
+      · split
+        · show "stop" ≠ "none"
+          simp
+        · show "msd" ≠ "none"
+          simp
+  · simp [pendingBy, ha]
+
+/-- The rule before #432: the first slot with a control frame gave it, whatever its ordinal. -/
+def pendingOld (T : Tab) : Tab × String × Nat × Nat := pendingBy Slot.hot T
+
+/-- A stream we opened early, the first (ordinal 1, id 1), reset at once with code 9. -/
+def earlyReset : Slot :=
+  { Slot.new with id := some 1, open_ := true, sdone := false, srst := 1, scode := some 9, ord := 1 }
+
+/-- The table of an optimistic dial that opened it, before the peer's limit (0) is known. -/
+def earlyTab : Tab :=
+  { slots := [earlyReset], rn := (0, 0), lo := (1, 0), rl := 0, ll := 1, ext := 0, tgt := 0, ms := none, mb := 0,
+    mr := 0, adlim := 0, adv := 0, adat := 0, adpend := false, early := true }
+
+/-- The witness of the rule before #432: a stream opened early past the peer's limit of 0 and reset at once. Before
+#432 `pending_control` sent its reset (the slot's reset counts as sent, for stream 1) although the limit does not
+cover the stream; `pending` holds it and leaves the table as it was. -/
+theorem pendingOld_leaks :
+    ((pendingOld earlyTab).1.slots.getD 0 Slot.new).srst = 2 ∧ (pendingOld earlyTab).2.2.1 = 1 ∧
+      canSend earlyTab 0 = false ∧ (pending earlyTab).1 = earlyTab := by
+  decide
+
 #audit_axioms Vinc.TransportStreams.openLocal_past_early
 #audit_axioms Vinc.TransportStreams.sendOut_gated
 #audit_axioms Vinc.TransportStreams.canSend_raise
+#audit_axioms Vinc.TransportStreams.pendingBy_some
+#audit_axioms Vinc.TransportStreams.pendingBy_slot
+#audit_axioms Vinc.TransportStreams.pending_gated
+#audit_axioms Vinc.TransportStreams.pending_released
+#audit_axioms Vinc.TransportStreams.pendingOld_leaks
 
 end Vinc.TransportStreams

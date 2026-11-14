@@ -9,16 +9,18 @@
 //! chunks, other users of the pool, and the close of the table. After every call the table shows its state
 //! (`trace_view`): slots, held chunks, stored ranges, credit, counters, the window target, the delivery meter, the
 //! ordinal of each stream we opened and whether opens may pass the peer's limit. Every drain of the stream frames is
-//! recorded with the streams whose frames left. Runs 25 to 36 are an optimistic dial: opens pass the peer's limit
+//! recorded with the streams whose frames left. Runs 25 to 40 are an optimistic dial: opens pass the peer's limit
 //! from the start (`set_early`), streams are opened past it with data queued, and the establishment raises the limit
-//! and ends that. The checkers replay each call with the operators of the model (`StreamsOps.tla`,
-//! `Vinc.TransportStreams`) and require the state they compute to be the state recorded, the error they compute to be
-//! the error returned, and every stream whose frame left to be one they let send.
+//! and ends that; in runs 37 to 40 the last stream opened early is reset at once, before the limit covers it, so its
+//! reset waits for the limit (#432) and leaves once the establishment covers it. The checkers replay each call with the
+//! operators of the model (`StreamsOps.tla`, `Vinc.TransportStreams`) and require the state they compute to be the
+//! state recorded, the error they compute to be the error returned, the control frame they give to be the one the
+//! table gave, and every stream whose frame left to be one they let send.
 //!
 //! The test asserts what it can itself (the bytes read are the bytes stored, in order and once; the pool never
-//! passes its budget; a granted limit never goes down; no frame leaves for a stream we opened before the peer's limit
-//! covers its ordinal) so it is meaningful without the proof tools. Times are small
-//! ticks (the checker has 32-bit integers). The trace is written to `VINC_TRACE_DIR` when it is set.
+//! passes its budget; a granted limit never goes down; no stream frame and no control frame of a stream leaves for a
+//! stream we opened before the peer's limit covers its ordinal) so it is meaningful without the proof tools. Times are
+//! small ticks (the checker has 32-bit integers). The trace is written to `VINC_TRACE_DIR` when it is set.
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -158,6 +160,10 @@ struct Run<'o> {
     past: std::collections::HashSet<u64>,
     /// A stream once past the limit sent a frame after a raise covered it.
     released: bool,
+    /// A control frame of a stream once past the limit left after a raise covered it.
+    ctl_released: bool,
+    /// The least limit the establishment gives: the ordinal of a stream reset while past the limit (0: any).
+    cover: u64,
 }
 
 impl Run<'_> {
@@ -351,7 +357,23 @@ impl Run<'_> {
     }
 
     fn pending(&mut self) {
+        let v = self.view();
         let f = self.t.pending_control();
+        // A control frame of a stream leaves only once the peer's limit covers its ordinal (#432).
+        if let Some(
+            ControlFrame::ResetStream { id, .. }
+            | ControlFrame::StopSending { id, .. }
+            | ControlFrame::MaxStreamData { id, .. },
+        ) = f
+        {
+            let ord = v.slots.iter().find(|s| s.id == id).map_or(0, |s| s.ordinal);
+            assert!(
+                ord <= v.admit[0],
+                "a control frame of stream {id} left before the peer's limit of {} covered its ordinal {ord}",
+                v.admit[0]
+            );
+            self.ctl_released |= self.past.contains(&id);
+        }
         let head = match f {
             None => r#""op":"pending","kind":"none","fid":-1,"max":0"#.to_string(),
             Some(ControlFrame::MaxStreamData { id, max }) => {
@@ -556,9 +578,10 @@ impl Run<'_> {
         }
     }
 
-    /// The peer's record arrives: its limits are applied and opens no longer pass them; then the table sends.
+    /// The peer's record arrives: its limits are applied and opens no longer pass them; then the table sends. After an
+    /// early reset the limit covers the stream reset, and the control frames are asked for.
     fn establish(&mut self) {
-        let limit = self.view().admit[0] + self.below(4);
+        let limit = (self.view().admit[0] + self.below(4)).max(self.cover);
         self.t.set_peer_limits(&PeerLimits {
             window: 1 << 20,
             max_streams: limit,
@@ -566,6 +589,32 @@ impl Run<'_> {
         self.t.set_early(false);
         self.log(&format!(r#""op":"establish","limit":{limit}"#));
         self.drain();
+        if self.cover > 0 {
+            for _ in 0..4 {
+                self.pending();
+            }
+        }
+    }
+
+    /// Reset the last stream opened while it is past the peer's limit, and ask for the control frames: its reset waits
+    /// for the limit as its data does (#432).
+    fn reset_last_early(&mut self) {
+        let v = self.view();
+        let Some(last) = v
+            .slots
+            .iter()
+            .filter(|s| s.id != u64::MAX && s.ordinal > v.admit[0])
+            .max_by_key(|s| s.ordinal)
+        else {
+            return;
+        };
+        let (id, ordinal) = (last.id, last.ordinal);
+        let _ = self.t.reset(&mut self.pool, id, 9);
+        self.log(&format!(r#""op":"appreset","id":{id},"code":9"#));
+        self.cover = ordinal;
+        for _ in 0..2 {
+            self.pending();
+        }
     }
 
     fn ext_users(&mut self) {
@@ -612,15 +661,17 @@ impl Run<'_> {
 }
 
 /// What a run reached: a frame that opened a skipped lower stream inside the credit, a stream we opened past the
-/// peer's limit, and such a stream sending once a raise covered it.
+/// peer's limit, such a stream sending once a raise covered it, and a control frame of one leaving then.
+#[allow(clippy::struct_excessive_bools, reason = "independent things a run may reach")]
 struct Reached {
     jumped: bool,
     past: bool,
     released: bool,
+    ctl_released: bool,
 }
 
-/// One seeded run; `early` makes it an optimistic dial.
-fn run(seed: u64, out: &mut String, run: u32, early: bool) -> Reached {
+/// One seeded run; `early` makes it an optimistic dial, and `reset_early` resets its last early stream at once.
+fn run(seed: u64, out: &mut String, run: u32, early: bool, reset_early: bool) -> Reached {
     let mut config = Config::new(false);
     config.initial_stream_window = WINDOW;
     config.max_stream_window = 6 * CH;
@@ -647,6 +698,8 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool) -> Reached {
         jumped: false,
         past: std::collections::HashSet::new(),
         released: false,
+        ctl_released: false,
+        cover: 0,
     };
     r.log(r#""op":"init""#);
     // An optimistic dial: the application opens streams and queues data before the peer's limits are known
@@ -659,6 +712,9 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool) -> Reached {
         });
         r.log(r#""op":"early""#);
         r.early_burst();
+        if reset_early {
+            r.reset_last_early();
+        }
         20 + r.below(100)
     } else {
         u64::MAX
@@ -674,6 +730,7 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool) -> Reached {
         jumped: r.jumped,
         past: !r.past.is_empty(),
         released: r.released,
+        ctl_released: r.ctl_released,
     }
 }
 
@@ -681,12 +738,19 @@ fn run(seed: u64, out: &mut String, run: u32, early: bool) -> Reached {
 fn stream_table_runs_match_the_models() {
     big_stack(|| {
         let mut out = String::new();
-        let (mut jumped, mut past, mut released) = (false, false, false);
-        for run_id in 1..=36u32 {
-            let r = run(0x5354_5245_414d_0000 + u64::from(run_id), &mut out, run_id, run_id > 24);
+        let (mut jumped, mut past, mut released, mut ctl_released) = (false, false, false, false);
+        for run_id in 1..=40u32 {
+            let r = run(
+                0x5354_5245_414d_0000 + u64::from(run_id),
+                &mut out,
+                run_id,
+                run_id > 24,
+                run_id > 36,
+            );
             jumped |= r.jumped;
             past |= r.past;
             released |= r.released;
+            ctl_released |= r.ctl_released;
         }
         assert!(jumped, "no frame opened a skipped stream inside the credit");
         assert!(
@@ -696,6 +760,10 @@ fn stream_table_runs_match_the_models() {
         assert!(
             vinc_tests::soaking() || released,
             "no stream opened past the peer's limit sent once a raise covered it"
+        );
+        assert!(
+            vinc_tests::soaking() || ctl_released,
+            "no control frame of a stream opened past the peer's limit left once a raise covered it"
         );
         for op in [
             "frame",
