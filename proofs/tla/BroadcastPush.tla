@@ -57,6 +57,25 @@
 (* BroadcastPush_noresume_live.cfg is the same plant checked for liveness: *)
 (* TLC finds LiveAgain violated (the subscriber stays behind for ever).    *)
 (*                                                                         *)
+(* A subscriber's session can also end at the hub (End): membership then   *)
+(* releases the subscriber, so the hub forgets its place, and what was in  *)
+(* its stream is gone. The subscriber comes back and subscribes (Sub): the *)
+(* hub offers its log (HAVE) and the subscriber asks for the positions it  *)
+(* lacks (GET, `ask`). The hub answers into the new stream (Get, gap.rs    *)
+(* Topics::on_get; the replay of a SUB is the same step): what the stream  *)
+(* has room for is sent, in order. With Owe, the subscriber is behind from *)
+(* the first position that found the stream full, let go from the start    *)
+(* (a repair never paces the topic), and is caught up from the log like    *)
+(* any subscriber that is behind. BroadcastPush_getdrop.cfg sets Owe =     *)
+(* FALSE, the code before vinc#504, where the rest of the GET was dropped: *)
+(* TLC finds AckedReachesLive violated. BroadcastPush_repair.cfg checks    *)
+(* the step with Ends = 1.                                                 *)
+(* Assumed, and said in PROOFS.md: a session ends only while the           *)
+(* subscriber has missed nothing and everything it lacks is still logged,  *)
+(* and the log evicts nothing it lacks until its GET is answered (a        *)
+(* subscriber that comes back to a log that moved past it is the residual  *)
+(* of the row).                                                            *)
+(*                                                                         *)
 (* Lean counterpart: proofs/lean/Vinc/BroadcastLogModel.lean (pushOwed,    *)
 (* pushOwed_inv, pushOwed_keeps_owed, pushOwed_refused) and                *)
 (* proofs/lean/Vinc/BroadcastWake.lean (wake_inv, wake_stuck_without).     *)
@@ -66,7 +85,9 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
 \* Subs: the subscribers; N: how many messages the publisher has; LogCap: LOG_CAP (the log's room, in entries);
 \* StreamCap: how many frames a stream holds before it refuses (out_cap); Swaps: how many times each subscriber's
 \* session may be replaced (a bound for TLC); Cursor, Guard, Tell, Resume: the parts of the fix
-CONSTANTS Subs, N, LogCap, StreamCap, Swaps, Cursor, Guard, Tell, Resume
+\* Ends: how many times each subscriber's session may end at the hub (a bound for TLC); Owe: a GET answered into a
+\* stream that fills keeps the subscriber's place (vinc#504)
+CONSTANTS Subs, N, LogCap, StreamCap, Swaps, Cursor, Guard, Tell, Resume, Ends, Owe
 
 \* msgAt: the message stored at each log position, positions 1..Len(msgAt), oldest first; base: the oldest position
 \* still in the log; acked: the messages the publisher heard acknowledged; stream: each subscriber's frames in flight,
@@ -75,8 +96,12 @@ CONSTANTS Subs, N, LogCap, StreamCap, Swaps, Cursor, Guard, Tell, Resume
 \* told: the positions each was told it missed; wake: the host told the hub that the subscriber's stream has room
 \* (the hub's `lagging` entry is being served); subq: a SUB from the subscriber's new session is on its way; swaps:
 \* how many times each subscriber's session was replaced
-VARIABLES msgAt, base, acked, stream, got, behind, held, missed, told, wake, subq, swaps
-vars == <<msgAt, base, acked, stream, got, behind, held, missed, told, wake, subq, swaps>>
+\* ask: the positions each subscriber asked for in a GET the hub has yet to answer; ends: how many times each
+\* subscriber's session ended at the hub
+VARIABLES msgAt, base, acked, stream, got, behind, held, missed, told, wake, subq, swaps, ask, ends
+vars == <<msgAt, base, acked, stream, got, behind, held, missed, told, wake, subq, swaps, ask, ends>>
+\* the two variables of the repair step
+rp == <<ask, ends>>
 
 \* the newest position in the log (0 while nothing is stored)
 Top == Len(msgAt)
@@ -84,6 +109,18 @@ Top == Len(msgAt)
 PosOf(m) == CHOOSE i \in 1..Top : msgAt[i] = m
 \* the set of the frames in a stream
 Frames(q) == {q[i] : i \in 1..Len(q)}
+\* the lowest of a set of positions
+Lowest(S) == CHOOSE x \in S : \A y \in S : x <= y
+\* the k lowest positions of S
+Firsts(S, k) == {i \in S : Cardinality({j \in S : j < i}) < k}
+\* stream q with the messages at the positions S appended, oldest first
+RECURSIVE Fill(_, _)
+Fill(q, S) == IF S = {} THEN q ELSE Fill(Append(q, msgAt[Lowest(S)]), S \ {Lowest(S)})
+\* the logged positions subscriber s lacks and is not owed from its place
+Lacks(s) == {i \in base..Top : /\ msgAt[i] \notin got[s] \union Frames(stream[s])
+                               /\ (behind[s] = 0 \/ i < behind[s])}
+\* a repair of subscriber s is under way: its SUB is on its way or its GET is not answered yet
+Repairing(s) == subq[s] \/ ask[s] /= {}
 
 \* nothing stored, every stream empty, nobody behind, woken, resubscribing or swapped
 Init == /\ msgAt = <<>> /\ base = 1 /\ acked = {}
@@ -91,6 +128,7 @@ Init == /\ msgAt = <<>> /\ base = 1 /\ acked = {}
         /\ behind = [s \in Subs |-> 0] /\ held = {}
         /\ missed = [s \in Subs |-> {}] /\ told = [s \in Subs |-> {}]
         /\ wake = [s \in Subs |-> FALSE] /\ subq = [s \in Subs |-> FALSE] /\ swaps = [s \in Subs |-> 0]
+        /\ ask = [s \in Subs |-> {}] /\ ends = [s \in Subs |-> 0]
 
 \* Topics::hub_store with message m. The new entry goes to position Top + 1. With LogCap entries already in the log,
 \* the oldest (base) is evicted to make room (HubLog::evicts says so before anything moves). With the guard
@@ -104,6 +142,8 @@ Store(m) ==
            owedLost == evict /\ \E s \in Subs \ held : behind[s] = base
            pos == Top + 1
        IN /\ ~(Guard /\ owedLost)
+          \* assumed: the log evicts nothing a subscriber lacks while its repair is under way
+          /\ ~(evict /\ \E s \in Subs : Repairing(s) /\ msgAt[base] \notin got[s] \union Frames(stream[s]))
           /\ msgAt' = Append(msgAt, m)
           /\ base' = IF evict THEN base + 1 ELSE base
           /\ acked' = acked \union {m}
@@ -111,7 +151,7 @@ Store(m) ==
                 IF behind[s] = 0 /\ Len(stream[s]) < StreamCap THEN Append(stream[s], m) ELSE stream[s]]
           /\ behind' = [s \in Subs |->
                 IF Cursor /\ behind[s] = 0 /\ Len(stream[s]) >= StreamCap THEN pos ELSE behind[s]]
-    /\ UNCHANGED <<got, held, missed, told, wake, subq, swaps>>
+    /\ UNCHANGED <<got, held, missed, told, wake, subq, swaps>> /\ UNCHANGED rp
 
 \* the subscriber reads the oldest frame of its stream; a stream that was full now has room, and the host wakes the
 \* hub for it (StreamWritable), which serves a subscriber that is behind (peer_writable does nothing for any other)
@@ -120,7 +160,7 @@ Drain(s) ==
     /\ got' = [got EXCEPT ![s] = @ \union {Head(stream[s])}]
     /\ stream' = [stream EXCEPT ![s] = Tail(@)]
     /\ wake' = [wake EXCEPT ![s] = @ \/ (Len(stream[s]) >= StreamCap /\ behind[s] /= 0)]
-    /\ UNCHANGED <<msgAt, base, acked, behind, held, missed, told, subq, swaps>>
+    /\ UNCHANGED <<msgAt, base, acked, behind, held, missed, told, subq, swaps>> /\ UNCHANGED rp
 
 \* Topics::peer_writable, once woken: the stream has room, so the hub sends the next owed position, or the oldest still
 \* logged if the log evicted the owed ones (`max(next, base)`; the skipped positions are missed). Once the newest
@@ -141,14 +181,14 @@ Writable(s) ==
           /\ missed' = [missed EXCEPT ![s] = IF done THEN {} ELSE gap]
           /\ told' = [told EXCEPT ![s] = IF done /\ Tell THEN @ \union gap ELSE @]
           /\ wake' = [wake EXCEPT ![s] = ~done]
-    /\ UNCHANGED <<msgAt, base, acked, got, subq, swaps>>
+    /\ UNCHANGED <<msgAt, base, acked, got, subq, swaps>> /\ UNCHANGED rp
 
 \* the store's PUSH_STALL and PUSH_OWED_MAX rules: a behind subscriber is let go (the timing is not modelled, so TLC
 \* may let any behind subscriber go at any time)
 LetGo(s) ==
     /\ behind[s] /= 0 /\ s \notin held
     /\ held' = held \union {s}
-    /\ UNCHANGED <<msgAt, base, acked, stream, got, behind, missed, told, wake, subq, swaps>>
+    /\ UNCHANGED <<msgAt, base, acked, stream, got, behind, missed, told, wake, subq, swaps>> /\ UNCHANGED rp
 
 \* the subscriber's session is replaced: the new stream is empty and was never full, so no host wakes the hub for it,
 \* and the subscriber sends a SUB on it. The frames of the old stream are asked for again by that SUB, from the
@@ -160,35 +200,70 @@ Swap(s) ==
     /\ wake' = [wake EXCEPT ![s] = FALSE]
     /\ subq' = [subq EXCEPT ![s] = TRUE]
     /\ swaps' = [swaps EXCEPT ![s] = @ + 1]
-    /\ UNCHANGED <<msgAt, base, acked, behind, held, missed, told>>
+    /\ UNCHANGED <<msgAt, base, acked, behind, held, missed, told>> /\ UNCHANGED rp
 
 \* Topics::on_sub at the hub: with Resume, a subscriber it keeps behind is woken, so its catch-up goes on from its place
-\* in the log; without it nothing wakes the subscriber
+\* in the log; without it nothing wakes the subscriber. The hub offers its log (HAVE) and the subscriber asks for the
+\* positions it lacks (GET), which is on its way to the hub from here
 Sub(s) ==
     /\ subq[s]
     /\ subq' = [subq EXCEPT ![s] = FALSE]
     /\ wake' = [wake EXCEPT ![s] = @ \/ (Resume /\ behind[s] /= 0)]
-    /\ UNCHANGED <<msgAt, base, acked, stream, got, behind, held, missed, told, swaps>>
+    /\ ask' = [ask EXCEPT ![s] = Lacks(s)]
+    /\ UNCHANGED <<msgAt, base, acked, stream, got, behind, held, missed, told, swaps, ends>>
 
-\* any store, or any subscriber's drain, catch-up step, let-go, session swap or SUB
+\* the subscriber's session ends at the hub and membership releases the subscriber (drop_peer, Topics::release): its
+\* place is forgotten, what was in its stream is gone, and it comes back and subscribes on a new session. Assumed: it
+\* has missed nothing and everything it lacks is still logged (see the header)
+End(s) ==
+    /\ ends[s] < Ends
+    /\ missed[s] = {}
+    /\ \A m \in acked \ got[s] : PosOf(m) >= base
+    /\ stream' = [stream EXCEPT ![s] = <<>>]
+    /\ behind' = [behind EXCEPT ![s] = 0]
+    /\ held' = held \ {s}
+    /\ wake' = [wake EXCEPT ![s] = FALSE]
+    /\ subq' = [subq EXCEPT ![s] = TRUE]
+    /\ ask' = [ask EXCEPT ![s] = {}]
+    /\ ends' = [ends EXCEPT ![s] = @ + 1]
+    /\ UNCHANGED <<msgAt, base, acked, got, missed, told, swaps>>
+
+\* Topics::on_get at the hub: the positions asked for go into the subscriber's stream, oldest first, while it has room.
+\* With Owe the subscriber is behind from the first one that found the stream full (or from its earlier place), let
+\* go; without it the rest is dropped
+Get(s) ==
+    /\ ask[s] /= {}
+    /\ LET want == {i \in ask[s] : i >= base}
+           sent == Firsts(want, StreamCap - Len(stream[s]))
+           rest == want \ sent
+       IN /\ stream' = [stream EXCEPT ![s] = Fill(@, sent)]
+          /\ behind' = [behind EXCEPT ![s] =
+                IF Owe /\ rest /= {} THEN (IF @ = 0 \/ Lowest(rest) < @ THEN Lowest(rest) ELSE @) ELSE @]
+          /\ held' = IF Owe /\ rest /= {} THEN held \union {s} ELSE held
+    /\ ask' = [ask EXCEPT ![s] = {}]
+    /\ UNCHANGED <<msgAt, base, acked, got, missed, told, wake, subq, swaps, ends>>
+
+\* any store, or any subscriber's drain, catch-up step, let-go, session swap or end, SUB or answered GET
 Next == \/ \E m \in 1..N : Store(m)
-        \/ \E s \in Subs : Drain(s) \/ Writable(s) \/ LetGo(s) \/ Swap(s) \/ Sub(s)
+        \/ \E s \in Subs : Drain(s) \/ Writable(s) \/ LetGo(s) \/ Swap(s) \/ Sub(s) \/ End(s) \/ Get(s)
 
 \* streams drain, the hub answers a wake, a SUB arrives, and the publisher keeps retrying; letting a subscriber go and
 \* replacing a session are never forced
 Spec == /\ Init /\ [][Next]_vars
-        /\ \A s \in Subs : WF_vars(Drain(s)) /\ WF_vars(Writable(s)) /\ WF_vars(Sub(s))
+        /\ \A s \in Subs : WF_vars(Drain(s)) /\ WF_vars(Writable(s)) /\ WF_vars(Sub(s)) /\ WF_vars(Get(s))
         /\ \A m \in 1..N : WF_vars(Store(m))
 
 (* ---------------------------- the checked properties ---------------------------- *)
 \* every acknowledged message reaches every subscriber: received, in its stream, owed from the position it is behind
-\* at, or a position it missed and is told about once caught up (or was told about)
+\* at, a position it missed and is told about once caught up (or was told about), or one its repair is fetching (its
+\* SUB is on its way, or the position is in its GET)
 AckedReachesLive ==
     \A s \in Subs : \A m \in acked :
         \/ m \in got[s]
         \/ \E i \in 1..Len(stream[s]) : stream[s][i] = m
         \/ behind[s] /= 0 /\ PosOf(m) >= behind[s]
         \/ PosOf(m) \in missed[s] \union told[s]
+        \/ PosOf(m) >= base /\ (subq[s] \/ PosOf(m) \in ask[s])
 \* only a subscriber that was let go misses anything
 MissedOnlyHeld == \A s \in Subs : missed[s] /= {} => s \in held
 \* a position a pacing subscriber is owed is still in the log
