@@ -56,10 +56,11 @@ ep_impl! {
         {
             self.ekk.remove(&peer);
         }
-        if conn.poll_timeout().is_none() {
+        // The connection's own deadline, asked once: nothing below changes it but the node's round trips.
+        let Some(mut own) = conn.poll_timeout() else {
             self.free_slot(i, now);
             return;
-        }
+        };
         let closing = conn.is_closed();
         let peak = conn.recovery().peak_rtt();
         if peak != slot.m.seen_peak {
@@ -75,12 +76,10 @@ ep_impl! {
         if slot.m.node_ver != self.node_ver {
             slot.m.node_ver = self.node_ver;
             conn.set_node_rtt(self.rtt.tgr(), self.rtt.lrtt(), self.rtt.thin_node());
+            // The node's round trips move a handshake's timers: ask again (the phase did not change, so there is one).
+            own = conn.poll_timeout().unwrap_or(own);
         }
-        let mut deadline = if closing {
-            Some(now.saturating_add(CLOSE_GRACE))
-        } else {
-            conn.poll_timeout()
-        };
+        let mut deadline = Some(if closing { now.saturating_add(CLOSE_GRACE) } else { own });
         let mut note = |d: Option<u64>| {
             if let Some(d) = d {
                 deadline = Some(deadline.map_or(d, |c| c.min(d)));
