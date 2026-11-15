@@ -365,6 +365,26 @@ conn_impl! {
         Ok(())
     }
 
+    /// A punch round: every direct path the connection tracks that is not validated and has no probe left is probed
+    /// on the cadence of a new path. The reference model's punch challenges every such path of the session, not only
+    /// the addresses the layer above names. Without it a path that lost its validation with no re-join running (an
+    /// abandoned path of a session that is not thin once its re-join probes are spent, a path a sub-session took
+    /// unvalidated from its parent) is never tried again by this end, and a session on a relay stays there.
+    pub fn punch_known(&mut self, env: &mut Env<'_, P>) {
+        if self.phase != Phase::Connected {
+            return;
+        }
+        for i in 0..NP {
+            let due = self
+                .paths
+                .get(i)
+                .is_some_and(|p| p.info.kind == PathKind::Direct && !p.validated && !p.gone && p.probes_left == 0);
+            if due {
+                self.start_punch(env, i);
+            }
+        }
+    }
+
     /// Whether the session counts as thin for its path rules: the host declared the node thin, or the session has no
     /// round trip yet, or the node's, its minimum or half its smoothed round trip reaches 250 ms.
     fn thin_session(&self) -> bool {

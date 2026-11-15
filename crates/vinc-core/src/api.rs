@@ -547,8 +547,9 @@ pub enum Command<'c, S = vinc_transport::stream::NoSource> {
         /// Whether to hold.
         hold: bool,
     },
-    /// Send the peer a `REACH_OUT`: an opaque body (the candidate addresses, at most [`crate::REACH_BODY_MAX`]
-    /// bytes) the layer above encodes.
+    /// A punch round. Send the peer a `REACH_OUT`: an opaque body (the candidate addresses, at most
+    /// [`crate::REACH_BODY_MAX`] bytes) the layer above encodes. And probe every direct path the session tracks that
+    /// is not validated and has no probe left.
     ReachOut {
         /// The session.
         session: SessionId,

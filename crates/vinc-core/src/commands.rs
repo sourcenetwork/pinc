@@ -303,9 +303,14 @@ ep_impl! {
                 if body.is_empty() || body.len() > crate::reach::REACH_BODY_MAX {
                     return Err(CommandError::BadAlpn);
                 }
-                self.with_conn(session, now, |c| {
-                    c.send_extension(vinc_transport::frame::ext::REACH_OUT, body).map_err(|_| CommandError::NoSession)
-                })
+                let i = self.live(session)?;
+                let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
+                conn.send_extension(vinc_transport::frame::ext::REACH_OUT, body).map_err(|_| CommandError::NoSession)?;
+                // The round also probes the direct paths the session already tracks, as the reference model's does.
+                let mut env = env!(self, now);
+                conn.punch_known(&mut env);
+                self.settle(i, now);
+                Ok(Value::None)
             }
             Command::Punch { session, addr } => {
                 let i = self.live(session)?;

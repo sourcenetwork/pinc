@@ -375,6 +375,47 @@ fn a_session_on_a_slow_direct_path_stays_on_it_when_a_datagram_comes_from_a_new_
     });
 }
 
+/// A punch round probes the direct path the session already tracks, as the reference model's punch challenges every
+/// direct path of the session that is not validated and has no probe left. A session that is not thin spends its
+/// re-join probes in a few seconds; once they are gone nothing but a punch round tries the path again.
+#[test]
+fn a_punch_round_probes_the_direct_path_the_session_abandoned() {
+    big_stack(|| {
+        let one_way = 5 * MS;
+        let (mut net, direct, via) = pair(one_way);
+        let s = session(&mut net, b"vinc/a", via);
+        // The direct path is lost for 40 s while the relay path carries the session: the session abandons it and its
+        // re-join probes run out.
+        net.loss = Some(Box::new(move |f, to, _| f == direct || to == direct));
+        net.run_for(40 * SEC_NS);
+        net.loss = None;
+        // The path works again and nothing tries it.
+        let healed = net.now;
+        net.run_for(30 * SEC_NS);
+        let probes = |net: &CoreNet, from: u64| net.tapped.iter().filter(|t| t.0 > from && t.2 == direct).count();
+        assert_eq!(probes(&net, healed), 0, "something tried the abandoned path by itself");
+        assert_eq!(validated_at(&net, 0, s, healed), None);
+        // The round: the path is probed at once and answers in one round trip, and data leaves on it again.
+        let t = net.now;
+        net.nodes[0]
+            .cmd(t, Command::ReachOut { session: s, body: &[0] })
+            .unwrap();
+        net.run_for(SEC_NS);
+        assert_eq!(
+            validated_at(&net, 0, s, t),
+            Some(t + 2 * one_way),
+            "the punch round did not probe the direct path the session tracks"
+        );
+        let back = net.now;
+        send(&mut net, s, &pattern(3_000, 1));
+        net.run_for(SEC_NS);
+        assert!(
+            net.tapped.iter().any(|d| d.0 >= back && d.2 == direct && d.3 > 1_000),
+            "the session did not return to its direct path"
+        );
+    });
+}
+
 /// A valid relay path added to a session is pinged at once while data moved in the last 20 s, as the reference model's
 /// keepalive pings every valid path never sent on: nothing else would leave on it.
 #[test]
