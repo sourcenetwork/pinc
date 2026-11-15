@@ -9,7 +9,10 @@ What the model proves, for any number of slots and any queue size:
   pass the queue's size (`Inv`, kept by `init_inv`, `make_inv`, `release_inv`, `take_inv`, `sub_inv`, `pop_inv`);
 - so the host never finds the queue full when it reads the `Incoming` of an owed session: no session a first flight
   made is closed as busy after its handshake (`take_not_busy`);
-- a first flight refused for want of room changes nothing (`make_refused`).
+- a first flight refused for want of room changes nothing (`make_refused`);
+- the half rule never raises the half-open cap (`halfCap_le_max`), admits a flight that does not resume only while the
+  counted sessions are fewer than half of the room, rounded up (`halfCap_admits`), and so the sessions it admitted
+  never fill an empty queue of two places or more: a peer that resumes finds room beside them (`resume_finds_room`).
 -/
 
 namespace Vinc.CoreBacklog
@@ -110,5 +113,24 @@ theorem sub_inv (cap : Nat) (b : B) (h : Inv cap b) : Inv cap (sub cap b) := by
 theorem pop_inv (cap : Nat) (b : B) (h : Inv cap b) : Inv cap (pop b) := by
   obtain ⟨hn, hq⟩ := h
   exact ⟨hn, by simp only [pop]; omega⟩
+
+/-- The half rule never raises the half-open cap. -/
+theorem halfCap_le_max (m room : Nat) : halfCap m room ≤ m := by
+  unfold halfCap
+  exact Nat.min_le_left _ _
+
+/-- A first flight that does not resume is admitted only while the counted sessions are fewer than half of the room,
+rounded up. -/
+theorem halfCap_admits (m room count : Nat) (h : count < halfCap m room) : 2 * count < room + 1 := by
+  unfold halfCap at h
+  have h2 : count < (room + 1) / 2 := Nat.lt_of_lt_of_le h (Nat.min_le_right _ _)
+  omega
+
+/-- The sessions admitted under the half rule never fill an empty queue of two places or more, so a peer that resumes
+finds room beside them. -/
+theorem resume_finds_room (m cap counted : Nat) (hc : 2 ≤ cap) (h : counted ≤ halfCap m cap) : counted < cap := by
+  unfold halfCap at h
+  have h2 : counted ≤ (cap + 1) / 2 := Nat.le_trans h (Nat.min_le_right _ _)
+  omega
 
 end Vinc.CoreBacklog

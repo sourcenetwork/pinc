@@ -69,4 +69,8 @@ def sub (cap : Nat) (b : B) : B := if b.q + b.n < cap then { b with q := b.q + 1
 /-- The application takes the oldest waiting session. -/
 def pop (b : B) : B := { b with q := b.q - 1 }
 
+/-- The most sessions whose peer is not authenticated yet that a first flight may add to: half of the room, rounded
+up, and never more than the half-open cap `m` (`rx.rs` `unrouted`: `MAX_HALF_OPEN.min(backlog_room.div_ceil(2))`). -/
+def halfCap (m room : Nat) : Nat := min m ((room + 1) / 2)
+
 end Vinc.CoreBacklog

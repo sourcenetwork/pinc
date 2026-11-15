@@ -72,15 +72,28 @@
 (* it ended (HalfOpen_gone); BUG_SUB lets a sub-session take a place held  *)
 (* for an owed session (HalfOpen_sub). HalfOpen_roomreach is a witness: a  *)
 (* first flight is refused for want of room.                               *)
+(* Of the room the counted sessions (unauthenticated, not resumed) hold at *)
+(* most half, rounded up (HalfCap): a first flight that does not resume    *)
+(* makes a session only below it (HalfRight), so the counted sessions      *)
+(* never pass half of QCAP (HalfRoom) and, with an empty queue of two      *)
+(* places or more and only counted sessions owed, a resumption that could  *)
+(* be made is made (ResumeOpen): first flights that never finish cannot    *)
+(* keep out a peer that resumes. HalfOpen_half checks it at three slots,   *)
+(* a cap of two and a queue of two; BUG_HALF is the rule before, the whole *)
+(* room, and HalfOpen_flood breaks ResumeOpen with it.                     *)
 (* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean, and              *)
 (* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 CONSTANTS K, MAX, LIFE, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE,
-          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB
-VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref
-bk == <<ow, pend, q, gone, busy, heldok, roomref>>
-vars == <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref>>
+          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB, BUG_HALF
+VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
+          halfok, resok
+\* the two history flags of the half rule: only Arrive changes them
+hk == <<halfok, resok>>
+bk == <<ow, pend, q, gone, busy, heldok, roomref, halfok, resok>>
+vars == <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref,
+          halfok, resok>>
 
 INSTANCE HalfOpenOps
 
@@ -90,10 +103,16 @@ Limited == QCAP > 0
 Init == /\ e = [slots |-> Table0(K), count |-> 0] /\ ids = [j \in Slots |-> 0] /\ stalled = FALSE
         /\ refused = TRUE /\ left = TRUE /\ timed = TRUE /\ resumed = TRUE /\ atcap = FALSE /\ kept = TRUE
         /\ ow = {} /\ pend = {} /\ q = 0 /\ gone = 0 /\ busy = FALSE /\ heldok = TRUE /\ roomref = FALSE
+        /\ halfok = TRUE /\ resok = TRUE
 
+\* half of r, rounded up
+Half(r) == (r + 1) \div 2
+\* rx.rs unrouted: the counted sessions may hold at most half of the room, rounded up, and never more than MAX (under
+\* BUG_HALF, the rule before, the whole room: MAX alone bounds them)
+HalfCap == IF Limited /\ ~BUG_HALF /\ Half(QCAP - q) < MAX THEN Half(QCAP - q) ELSE MAX
 AdmitM(count, kind, len, resume) ==
     IF BUG_LE THEN len >= Floor(kind, FULL, SHORT) /\ (resume \/ count <= MAX)
-    ELSE Admit(count, kind, len, resume, MAX, FULL, SHORT)
+    ELSE Admit(count, kind, len, resume, HalfCap, FULL, SHORT)
 RoomM(held) == IF BUG_LE THEN held <= MAXH ELSE Room(held, MAXH)
 \* rx.rs unrouted: a first flight may start a session only while the owed sessions leave room (owed < room)
 Open == ~Limited \/ BUG_ROOM \/ Cardinality(ow) < QCAP - q
@@ -145,6 +164,11 @@ Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOL
           /\ pend' = IF Limited /\ made THEN pend \cup {j} ELSE pend
           /\ heldok' = (heldok /\ (Limited /\ Cardinality(ow) >= QCAP - q => ~made))
           /\ roomref' = (roomref \/ (Limited /\ ~stalled /\ First(kind) /\ ~Open))
+          /\ halfok' = (halfok /\ (Limited /\ made /\ ~resume => e0.count < Half(QCAP - q)))
+          /\ resok' = (resok /\ ((Limited /\ QCAP >= 2 /\ q = 0 /\ ~stalled /\ resume /\ ~fail /\ free # {}
+                                    /\ (IF SUPERSEDE THEN held = 0 ELSE RoomM(held))
+                                    /\ ow \subseteq {k \in Slots : e0.slots[k].counted})
+                                   => made))
     /\ UNCHANGED <<stalled, timed, q, gone, busy>>
 
 \* the handshake of an unauthenticated session completes; under BUG_EST it is owed no more (the host has not read its
@@ -155,7 +179,7 @@ Est == \E j \in Slots, d \in 1..(TMAX + 1) :
     /\ left' = (left /\ Lost(e, e') \subseteq {j} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
     /\ ow' = IF BUG_EST THEN ow \ {j} ELSE ow
-    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap, pend, q, gone, busy, heldok, roomref>>
+    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap, pend, q, gone, busy, heldok, roomref>> /\ UNCHANGED hk
 
 \* a connection ends: a close finished, the peer gave up
 Close == \E j \in Slots :
@@ -165,7 +189,7 @@ Close == \E j \in Slots :
     /\ left' = (left /\ Lost(e, e') \subseteq {j} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids') \subseteq {j})
     /\ EndOwed(e, {j})
-    /\ UNCHANGED <<stalled, refused, timed, resumed, atcap, q, busy, heldok, roomref>>
+    /\ UNCHANGED <<stalled, refused, timed, resumed, atcap, q, busy, heldok, roomref>> /\ UNCHANGED hk
 
 \* any other input to a session moves its own deadline
 Touch == \E j \in Slots, d \in 1..(TMAX + 1) :
@@ -196,7 +220,7 @@ Timer == \E t \in 0..TMAX : \E ds \in [Slots -> {t, t + 2, Gone}], cut \in 0..(K
                           /\ \A j \in Lost(e, e') : Expired(e.slots[j], t, LIFE) \/ ds[j] = Gone)
          /\ kept' = (kept /\ \A j \in Ended(e, e', ids, ids') : Expired(e.slots[j], t, LIFE) \/ ds[j] = Gone)
          /\ EndOwed(e, Freed(e, e'))
-         /\ UNCHANGED <<refused, resumed, atcap, q, busy, heldok, roomref>>
+         /\ UNCHANGED <<refused, resumed, atcap, q, busy, heldok, roomref>> /\ UNCHANGED hk
 
 \* engine.rs on_event: the host reads the Incoming of an established session j and takes it (session_taken says
 \* Reserved): it waits in the queue, or, with the queue full, is closed as busy after its handshake
@@ -205,7 +229,7 @@ Take == \E j \in pend :
     /\ pend' = pend \ {j} /\ ow' = ow \ {j}
     /\ q' = IF q < QCAP THEN q + 1 ELSE q
     /\ busy' = (busy \/ q >= QCAP)
-    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, gone, heldok, roomref>>
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, gone, heldok, roomref>> /\ UNCHANGED hk
 
 \* BUG_GONE: the host queues the Incoming of a session that ended before it read it
 TakeGone ==
@@ -213,21 +237,21 @@ TakeGone ==
     /\ gone' = gone - 1
     /\ q' = IF q < QCAP THEN q + 1 ELSE q
     /\ busy' = (busy \/ q >= QCAP)
-    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, heldok, roomref>>
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, heldok, roomref>> /\ UNCHANGED hk
 
 \* the Incoming of a sub-session its peer opened inside a session it has (session_taken says Unreserved): it waits only
 \* in a place no owed session holds (BUG_SUB: in any free place), else it is closed as busy; it had no handshake
 SubUp ==
     /\ Limited
     /\ q' = IF (IF BUG_SUB THEN q < QCAP ELSE q + Cardinality(ow) < QCAP) THEN q + 1 ELSE q
-    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>>
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>> /\ UNCHANGED hk
 
 \* ops.rs accept_route: the application takes the oldest waiting session (a session that ended while it waited
 \* included: it keeps its place until then)
 Accept ==
     /\ Limited /\ q > 0
     /\ q' = q - 1
-    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>>
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>> /\ UNCHANGED hk
 
 Next == Arrive \/ Est \/ Close \/ Touch \/ DialA \/ Stall \/ Timer \/ Take \/ TakeGone \/ SubUp \/ Accept
 Spec == Init /\ [][Next]_vars
@@ -252,8 +276,11 @@ HeldRight == heldok
 Placed == q + Cardinality(pend) + gone <= QCAP \/ ~Limited
 OwedExact == ow = pend /\ \A j \in ow : e.slots[j].use
 NoBusy == ~busy
+HalfRight == halfok
+HalfRoom == ~Limited \/ BUG_LE \/ e.count <= Half(QCAP)
+ResumeOpen == resok
 Inv == Capped /\ Exact /\ Shape /\ DeadlineBound /\ PollBound /\ RefusedRight /\ LeftRight /\ TimerRight /\ ResumeRight
-       /\ HolderKept /\ HeldBound /\ HeldRight /\ Placed /\ OwedExact /\ NoBusy
+       /\ HolderKept /\ HeldBound /\ HeldRight /\ Placed /\ OwedExact /\ NoBusy /\ HalfRight /\ HalfRoom /\ ResumeOpen
 
 \* reachability witnesses: a resumption is admitted while the count is at the cap; an id gets MAXH holders; a first
 \* flight is refused for want of room

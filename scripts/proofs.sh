@@ -556,6 +556,8 @@ par witness_tlc halfopen_noroom HalfOpen HalfOpen_noroom NoBusy
 par witness_tlc halfopen_owedest HalfOpen HalfOpen_owedest NoBusy
 par witness_tlc halfopen_gone HalfOpen HalfOpen_gone NoBusy
 par witness_tlc halfopen_sub HalfOpen HalfOpen_sub NoBusy
+par run_tlc halfopen_half HalfOpen HalfOpen_half
+par witness_tlc halfopen_flood HalfOpen HalfOpen_flood ResumeOpen
 par run_tlc heap Heap Heap
 par witness_tlc heap_hi Heap Heap_hi Order
 par witness_tlc heap_full Heap Heap_full NotFull

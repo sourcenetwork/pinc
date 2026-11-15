@@ -79,7 +79,10 @@ pub struct Limits {
     /// wait here: while the sessions in the fullest queue and those whose handshake is under way or not yet queued fill
     /// it, a first flight is refused before any work and the dialer sends it again, so a session that finished its
     /// handshake is never closed for want of room. A waiting session holds its slot of the table (see the module docs)
-    /// and its entry in the queue; the table bounds them whatever this is.
+    /// and its entry in the queue; the table bounds them whatever this is. Two things follow from the endpoint not
+    /// knowing a first flight's protocol before it opens it: the fullest queue holds back the dials of every protocol,
+    /// and handshakes whose peer is not authenticated yet may hold at most half of the free places at a time, so that
+    /// first flights that never finish cannot keep out a peer that resumes.
     pub accept_sessions: usize,
     /// The largest message [`Endpoint::publish`](crate::Endpoint::publish) takes, in bytes (at most 16 MiB). Larger data
     /// belongs behind a reference: publish a root or an id and fetch the bytes over a stream.

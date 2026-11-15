@@ -16,7 +16,9 @@
 //! forged or replayed one included, counts like a full Initial. Every server session a first flight makes is owed to
 //! the host until the host reads its `Incoming` (`session_taken`) or it ends, and while the owed sessions fill the room
 //! the host has left to accept them (`set_backlog_room`) no first flight starts one, before a ticket is opened and with
-//! nothing kept, so a session that finishes its handshake always has a place to wait. A later part of a first message that arrives before
+//! nothing kept, so a session that finishes its handshake always has a place to wait. Of that room the sessions that
+//! count towards the 256 hold at most half (rounded up), so first flights that never finish cannot reserve all of it
+//! and a peer that resumes with a ticket still finds a place. A later part of a first message that arrives before
 //! the part that starts it is held for a moment in the endpoint's small table of such datagrams (see `orphan`) and
 //! handed to the session once the first part has created it.
 //!
@@ -340,8 +342,11 @@ ep_impl! {
             self.counters.backlog_refused += 1;
             return;
         }
-        let resume =first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
-        let admitted = buf.len() >= floor && (resume || self.half_open < MAX_HALF_OPEN);
+        let resume = first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
+        // Sessions whose peer is not authenticated yet hold at most half of that room (rounded up): what first flights
+        // that never finish can reserve leaves the other half to peers that resume with a ticket.
+        let cap = MAX_HALF_OPEN.min(self.backlog_room.div_ceil(2));
+        let admitted = buf.len() >= floor && (resume || self.half_open < cap);
         trace!(self, now, HalfOpen {
             admitted: u64::from(admitted),
             half_open: self.half_open as u64,
@@ -429,7 +434,9 @@ ep_impl! {
     /// nothing is kept for it (counted in [`NodeStats::backlog_refused`](crate::NodeStats::backlog_refused)); the
     /// dialer sends it again on its own timer. A host that sets a room calls [`session_taken`](Self::session_taken) for
     /// every [`Event::Incoming`](crate::Event::Incoming) it reads, so every session that finishes its handshake has a
-    /// place to wait. Unlimited until set.
+    /// place to wait. Sessions whose peer is not authenticated yet hold at most half of the room (rounded up, and
+    /// never more than [`MAX_HALF_OPEN`]): a flood of first flights that never finish, each of which keeps its place
+    /// for [`HALF_OPEN_LIFE`], leaves the rest to peers that resume with a ticket. Unlimited until set.
     pub const fn set_backlog_room(&mut self, room: usize) {
         self.backlog_room = room;
     }
