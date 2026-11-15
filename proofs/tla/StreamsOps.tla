@@ -44,7 +44,7 @@
 (* refused Fragmented only beyond that. The chunk is charged to the pool   *)
 (* (Used) and returned when the ranges are cleared: the stream read to its *)
 (* end, reset, or freed. Without a chunk free the frame is Exhausted.      *)
-(* Before #159 there was no spill (SPR = RR, a witness): the frame was     *)
+(* Before #478 there was no spill (SPR = RR, a witness): the frame was     *)
 (* refused with the pool idle, its packet went unacknowledged and the      *)
 (* sender sent it again though it had arrived.                             *)
 (*                                                                         *)

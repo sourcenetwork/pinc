@@ -44,7 +44,7 @@
 (*    pool has no chunk for the spill, and the chunk counts in the pool    *)
 (*    (Pool) until the ranges are cleared (NoNeedlessFragmented, SpillHeld; *)
 (*    Streams_spill, and the witness Streams_spill_w, no spill as before   *)
-(*    #159, which breaks it);                                              *)
+(*    #478, which breaks it);                                              *)
 (*  - flow-control updates: a limit moves only by at least 1/8 of   *)
 (*    the window, never down, and a window due to move is moved or         *)
 (*    deferred (NoMissedGrant); a deferred grant is retried after every     *)
@@ -165,6 +165,12 @@ OpenBound == T.lo[0] + T.lo[1] <= N + 1
 \* the other users of the pool eventually let go (the liveness config only)
 ExtRelease == T.ext > 0 /\ T' = ExtTo(T, 0) /\ UNCHANGED <<clock, elo>>
 LSpec == Spec /\ WF_vars(ExtRelease)
+\* The state without the meters, for configs whose clock never moves (DT = 0, VIEW MeterFree). There a meter's epoch
+\* never closes (no consume is ever a round trip after the epoch's start), so its rate stays 0 and no window grows from
+\* it: two states that differ only in their meters behave alike, and fingerprinting them as one keeps the per-stream
+\* meters from multiplying the state space. The configs that check the meter (Streams_meter, DT = 1) keep it.
+MeterFree == <<[T EXCEPT !.slots = [k \in 1..N |-> [T.slots[k] EXCEPT !.m = [start |-> -1, bytes |-> 0, rate |-> 0]]]],
+               clock, elo>>
 
 (* ---- state invariants ---- *)
 Live == {i \in 1..N : T.slots[i].id # -1}

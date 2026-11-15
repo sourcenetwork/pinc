@@ -53,7 +53,7 @@
 (* swapped.                                                                *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR
 \* the opener opens at most OPENS streams in all; an empty frame is lost at most LOSSES times
 CONSTANTS OPENS, LOSSES
 VARIABLES T, po, plim, wrote, ann, fly, sends, lost, last
