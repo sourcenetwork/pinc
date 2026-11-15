@@ -187,9 +187,10 @@ impl<H: Hosted> Connection<H> {
     }
 
     /// Whether this node's dial resumed an earlier session with a ticket, which saves a round trip and lets data go in
-    /// the first flight. Only the dialing side knows; the accepting side reports `false`.
+    /// the first flight. Only the dialing side knows; the accepting side reports `false`. Exact once the peer has
+    /// answered ([`answered`](Self::answered)); a connection handed over before that reads `false` until then.
     pub fn resumed(&self) -> bool {
-        self.0.info.resumed
+        self.0.info.resumed.get()
     }
 
     /// Open a stream both sides can write. Waits while the connection has no room for another stream.

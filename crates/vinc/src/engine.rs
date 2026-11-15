@@ -145,7 +145,7 @@ pub(crate) struct SessInfo {
     pub alpn: Alpn,
     pub dialer: bool,
     /// The session resumed an earlier one with a ticket (known on the dialing side).
-    pub resumed: bool,
+    pub resumed: Cell<bool>,
     /// Why the session ended, set once when it leaves the table.
     pub ended: OnceCell<Error>,
     /// The peer was heard on the session ([`Connection::answered`](crate::Connection::answered)).
@@ -656,8 +656,9 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.wake_open(session);
             }
             Event::OpenReady { session } => self.wake_open(session),
-            Event::Answered { session } => {
+            Event::Answered { session, resumed } => {
                 if let Some(s) = self.sessions.get(&session) {
+                    s.info.resumed.set(resumed);
                     s.info.answered.set(true);
                 }
                 self.wake_s(session, SKey::Answered);
@@ -781,7 +782,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             node,
             alpn,
             dialer,
-            resumed,
+            resumed: Cell::new(resumed),
             ended: OnceCell::new(),
             answered: Cell::new(!dialer || self.peer_answered(session)),
         });

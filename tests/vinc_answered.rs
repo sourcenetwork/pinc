@@ -69,6 +69,28 @@ async fn a_dial_to_a_running_peer_is_answered_and_so_is_its_redial() {
 }
 
 #[nuclei::test]
+async fn a_redial_handed_over_before_its_handshake_reports_resumed_once_the_peer_answers() {
+    within(30, async {
+        let (to, _task) = peer!();
+        let client = vinc_common::client().await;
+        let first = client.connect(to.clone(), ECHO).await.unwrap();
+        first.answered().await.unwrap();
+        assert!(!first.resumed(), "the first dial has no ticket to resume with");
+        echo_once(&first).await;
+        first.close(0).await;
+        let _ = first.closed().await;
+        let again = client.connect(to, ECHO).await.unwrap();
+        assert!(
+            !again.is_answered(),
+            "the redial was not handed over before its handshake"
+        );
+        again.answered().await.unwrap();
+        assert!(again.resumed(), "the redial resumed with the ticket of the first");
+    })
+    .await;
+}
+
+#[nuclei::test]
 async fn a_protocol_opened_over_a_session_is_answered_once_the_peer_answers() {
     within(30, async {
         let (to, _task) = peer!();

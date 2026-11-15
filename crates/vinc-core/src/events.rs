@@ -77,8 +77,9 @@ ep_impl! {
             }
             // The peer was heard on a session reported before it answered (`deliver`).
             if core::mem::take(&mut slot.m.answer_due) {
+                let resumed = slot.m.resumed;
                 let session = self.session_id(i);
-                self.emit(Event::Answered { session });
+                self.emit(Event::Answered { session, resumed });
                 continue;
             }
             // A session the application never heard of that ended needs its events read to be freed: its held ones go.
@@ -292,7 +293,7 @@ ep_impl! {
         trace!(self, now, Session { slot: i as u64, step: 1, dialer: u64::from(client) });
         if answered_now {
             let session = self.session_id(i);
-            self.emit(Event::Answered { session });
+            self.emit(Event::Answered { session, resumed });
         }
         if sub {
             // A sub-session takes the access state of the peer; there was no handshake to measure.

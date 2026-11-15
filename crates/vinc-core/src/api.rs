@@ -223,6 +223,8 @@ pub enum Event {
     Answered {
         /// The session.
         session: SessionId,
+        /// Whether the dial resumed an earlier session with a ticket; `false` on the accepting side.
+        resumed: bool,
     },
 }
 
@@ -255,7 +257,7 @@ impl Event {
             | Self::PeerAsleep { session }
             | Self::PeerAwake { session }
             | Self::TicketsReceived { session, .. }
-            | Self::Answered { session } => Some(session),
+            | Self::Answered { session, .. } => Some(session),
             // A failed dial's session is no longer kept: the queue purges the events of a closed session, and this
             // one must reach the application.
             Self::ConnectFailed { .. } | Self::AcpCheck { .. } => None,

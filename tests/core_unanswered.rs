@@ -199,3 +199,35 @@ fn a_rejected_ticket_starts_the_count_again_and_the_restarted_peer_is_reached() 
         }
     });
 }
+
+#[test]
+fn a_resumed_early_dial_tells_that_it_resumed_when_the_peer_answers() {
+    big_stack(|| {
+        let (mut net, a, b) = warm(50 * MS_NS);
+        assert!(!net.nodes[a].ep.tickets().is_empty(), "no ticket to resume with");
+        let s = early_dial(&mut net, a, b);
+        assert!(
+            net.run(net.now + 5 * S, |n| n.nodes[a]
+                .saw(|e| matches!(e, Event::Answered { .. }))),
+            "never answered"
+        );
+        assert!(net.nodes[a].saw(|e| matches!(e, Event::Answered { session, resumed: true } if *session == s)));
+    });
+}
+
+#[test]
+fn an_early_dial_whose_ticket_the_peer_refused_tells_that_it_did_not_resume() {
+    big_stack(|| {
+        let (mut net, a, b) = warm(50 * MS_NS);
+        assert!(!net.nodes[a].ep.tickets().is_empty(), "no ticket to resume with");
+        let addr = net.nodes[b].addr;
+        net.nodes[b] = TNode::new(2, addr, net.now);
+        let s = early_dial(&mut net, a, b);
+        assert!(
+            net.run(net.now + 5 * S, |n| n.nodes[a]
+                .saw(|e| matches!(e, Event::Answered { .. }))),
+            "never answered"
+        );
+        assert!(net.nodes[a].saw(|e| matches!(e, Event::Answered { session, resumed: false } if *session == s)));
+    });
+}

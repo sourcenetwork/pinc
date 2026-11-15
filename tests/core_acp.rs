@@ -535,7 +535,7 @@ fn a_peer_first_heard_while_events_are_left_unread_is_reported_when_the_host_rea
         net.loss = None;
         net.run_for(SEC_NS);
         assert_eq!(
-            net.nodes[a].count(|e| matches!(e, Event::Answered { session } if *session == child)),
+            net.nodes[a].count(|e| matches!(e, Event::Answered { session, .. } if *session == child)),
             1
         );
         assert_eq!(net.nodes[a].ep.node_stats().events_lost, 0);

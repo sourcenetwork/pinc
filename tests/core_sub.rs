@@ -863,7 +863,7 @@ fn a_child_that_waited_for_its_parent_is_answered_by_its_peer_and_not_by_its_key
         write_new(&mut net, a, child, b"early");
         let end = net.now + 5 * SEC_NS;
         assert!(net.run(end, |n| {
-            n.nodes[a].saw(|e| matches!(e, Event::Answered { session } if *session == child))
+            n.nodes[a].saw(|e| matches!(e, Event::Answered { session, .. } if *session == child))
         }));
         assert!(answered(&net));
         net.run_for(SEC_NS);
