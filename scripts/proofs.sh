@@ -723,6 +723,8 @@ par witness_tlc dial_report_thin DialReport DialReport_thin ThinKeepsLimit
 par run_tlc handshake_confirm HandshakeConfirm HandshakeConfirm
 par witness_tlc handshake_confirm_nobound HandshakeConfirm HandshakeConfirm_nobound HalfOpenBounded
 par witness_tlc dial_report_floor DialReport DialReport_floor FloorOnLimit
+par witness_tlc dial_report_answeratreport DialReport DialReport_answeratreport AnsweredOnlyHeard
+par witness_tlc dial_report_noanswer DialReport DialReport_noanswer AnsweredWhenDone
 par run_tlc facade_records FacadeRecords FacadeRecords
 par witness_tlc facade_records_noseq FacadeRecords FacadeRecords_noseq NoRollback
 par run_tlc facade_open FacadeOpen FacadeOpen

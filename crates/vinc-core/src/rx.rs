@@ -261,7 +261,11 @@ ep_impl! {
         let r = conn.handle_datagram_with(&mut env, &mut self.stores, pid, buf);
         self.counters.stalled_in += u64::from(r == Err(Drop::Gated));
         let returned = conn.take_rejoined();
+        let mut answered_now = false;
         if r.is_ok() {
+            // An established session's packets are authenticated: a sub-session reported at once hears its peer here.
+            answered_now = slot.m.announced && !slot.m.answered && slot.m.state == State::Established;
+            slot.m.answered |= answered_now;
             // The connection took the path of a first packet to be direct; the address says if it is a relay's.
             if is_relay_addr(&remote) {
                 conn.set_path_info(pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
@@ -275,6 +279,10 @@ ep_impl! {
             if conn.path_validated(pid) && !is_relay_addr(&remote) {
                 self.udp_heard = Some(now);
             }
+        }
+        if answered_now {
+            let session = self.session_id(i);
+            self.emit(crate::api::Event::Answered { session });
         }
         self.settle(i, now);
         if let Some((path, rtt)) = returned {

@@ -616,6 +616,10 @@ name = "vinc_dial_failure"
 path = "vinc_dial_failure.rs"
 
 [[test]]
+name = "vinc_answered"
+path = "vinc_answered.rs"
+
+[[test]]
 name = "connect_record_seq"
 path = "connect_record_seq.rs"
 

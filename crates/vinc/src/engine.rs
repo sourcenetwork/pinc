@@ -12,7 +12,7 @@
 //! holds an entry only while its session or stream lives, so nothing grows with history; per-poll work is proportional
 //! to what changed, never to a table's capacity.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -135,6 +135,8 @@ pub(crate) struct SessInfo {
     pub resumed: bool,
     /// Why the session ended, set once when it leaves the table.
     pub ended: OnceCell<Error>,
+    /// The peer was heard on the session ([`Connection::answered`](crate::Connection::answered)).
+    pub answered: Cell<bool>,
 }
 
 impl SessInfo {
@@ -155,6 +157,8 @@ pub(crate) enum SKey {
     Open(bool),
     Read(StreamId),
     Write(StreamId),
+    /// The peer was heard on the session.
+    Answered,
 }
 
 /// What a future waits for outside any session.
@@ -629,6 +633,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 self.wake_open(session);
             }
             Event::OpenReady { session } => self.wake_open(session),
+            Event::Answered { session } => {
+                if let Some(s) = self.sessions.get(&session) {
+                    s.info.answered.set(true);
+                }
+                self.wake_s(session, SKey::Answered);
+            }
             Event::AcpCheck { check, node, alpn } => {
                 let dir = direction(alpn.as_bytes(), self.dialing(&node, alpn));
                 let own = self.admit.admit(&node, alpn.as_bytes(), dir);
@@ -721,6 +731,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             && (self.known.covers(now, node, alpn, dir) || self.admit.admit(node, alpn.as_bytes(), dir))
     }
 
+    /// Whether the peer was heard on `session`, as the core says.
+    fn peer_answered(&self, session: SessionId) -> bool {
+        matches!(self.node.endpoint().query(Query::Stats(session)), Answer::Stats(s) if s.answered)
+    }
+
     fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool, resumed: bool) {
         if !self.session_admitted(now, &node, alpn, direction(alpn.as_bytes(), dialer)) {
             let _ = self.cmd(now, || Command::Close { session, error: DENIED });
@@ -740,6 +755,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             dialer,
             resumed,
             ended: OnceCell::new(),
+            answered: Cell::new(!dialer || self.peer_answered(session)),
         });
         let route = self.route_of(&alpn);
         if !dialer {

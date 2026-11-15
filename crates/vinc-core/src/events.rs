@@ -268,6 +268,8 @@ ep_impl! {
         slot.m.alpn = Some(alpn);
         slot.m.state = State::Established;
         slot.m.resumed = resumed;
+        let answered_now = slot.m.announced && !slot.m.answered;
+        slot.m.answered |= answered_now;
         slot.m.last_app = now;
         if slot.m.unauth {
             slot.m.unauth = false;
@@ -280,6 +282,10 @@ ep_impl! {
         let sub = slot.m.sub;
         self.link_peer(peer, u32::try_from(i).unwrap_or(0));
         trace!(self, now, Session { slot: i as u64, step: 1, dialer: u64::from(client) });
+        if answered_now {
+            let session = self.session_id(i);
+            self.emit(Event::Answered { session });
+        }
         if sub {
             // A sub-session takes the access state of the peer; there was no handshake to measure.
             self.start_acp(i, now);
@@ -339,6 +345,9 @@ ep_impl! {
         let Some(slot) = self.slots.get_mut(i) else { return };
         let (Some(node), Some(alpn)) = (slot.m.peer, slot.m.alpn) else { return };
         slot.m.announced = true;
+        // A dial reported after its handshake heard the peer; an optimistic one and a sub-session have not yet.
+        slot.m.answered =
+            (!slot.m.optimistic && !slot.m.sub) || slot.conn.as_ref().is_some_and(|c| c.recovery().last_heard() > 0);
         let resumed = slot.m.resumed;
         self.emit(Event::Connected { session, node, alpn, resumed });
     }

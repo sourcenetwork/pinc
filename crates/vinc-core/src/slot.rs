@@ -245,6 +245,8 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) hold: u8,
     /// Whether the application was told this session exists.
     pub(crate) announced: bool,
+    /// The peer was heard since the application was told of the session, or before.
+    pub(crate) answered: bool,
     pub(crate) resumed: bool,
     pub(crate) parent: Option<SessionId>,
     pub(crate) has_sub: bool,
@@ -307,6 +309,7 @@ impl<const NP: usize> Meta<NP> {
         optimistic: false,
         hold: 0,
         announced: false,
+        answered: false,
         resumed: false,
         parent: None,
         has_sub: false,

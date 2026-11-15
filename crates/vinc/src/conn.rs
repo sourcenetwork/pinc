@@ -328,6 +328,23 @@ impl<H: Hosted> Connection<H> {
             .await;
     }
 
+    /// Wait until the peer has been heard on this connection. A dial towards a peer with a fresh cached allow, and a
+    /// protocol opened over a session the peer already has, are handed over before the peer answers, so a peer that
+    /// stopped looks connected until the dial ends as unanswered (3 s for a resume, 7.5 s for a full handshake). This
+    /// returns at once for an accepted connection and for a dial handed over after its handshake. A protocol opened
+    /// over another session hears the peer once it answers what this side sends, or sends something itself.
+    ///
+    /// # Errors
+    /// The reason the connection ended before the peer was heard.
+    pub async fn answered(&self) -> Result<()> {
+        self.0.sh.run(|core, _| core.answered(&self.0.info)).await
+    }
+
+    /// Whether the peer has been heard on this connection; see [`answered`](Self::answered).
+    pub fn is_answered(&self) -> bool {
+        self.0.info.answered.get()
+    }
+
     /// Wait until the connection ends and return why.
     pub async fn closed(&self) -> Error {
         self.0.sh.run(|core, _| core.closed(&self.0.info)).await

@@ -199,6 +199,8 @@ ep_impl! {
             let Some(slot) = self.slots.get_mut(i) else { return };
             if let (Some(node), Some(alpn)) = (slot.m.peer, slot.m.alpn) {
                 slot.m.announced = true;
+                // The peer opened it: it was heard.
+                slot.m.answered = true;
                 self.emit(Event::Incoming { session, node, alpn });
             }
         }

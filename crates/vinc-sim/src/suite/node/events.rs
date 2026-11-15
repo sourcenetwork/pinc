@@ -359,7 +359,8 @@ impl Core {
             | Event::PeerAwake { .. }
             | Event::ReachOut { .. }
             | Event::StreamStopped { .. }
-            | Event::TicketsReceived { .. } => {}
+            | Event::TicketsReceived { .. }
+            | Event::Answered { .. } => {}
         }
     }
 

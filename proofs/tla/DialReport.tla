@@ -36,7 +36,22 @@
 (*                 peer was last heard were lost;                          *)
 (*  ThinKeepsLimit a dial on a thin node ends early;                       *)
 (*  FloorOnLimit   the floor moves for anything but a Limit end;           *)
-(*  SubAtOnce      a dial over a held session waits.                       *)
+(*  SubAtOnce      a dial over a held session waits;                       *)
+(*  AnsweredOnlyHeard  the host is told the peer answered a dial whose     *)
+(*                 peer it never heard (Connection::answered returns for a *)
+(*                 peer that stopped);                                     *)
+(*  AnsweredWhenDone   a dial whose handshake finished, or a sub-session   *)
+(*                 whose peer was heard, is not told answered (answered    *)
+(*                 waits for a peer that answered).                        *)
+(*                                                                         *)
+(* The answered report: a dial reported before its peer answered (the     *)
+(* optimistic one, a sub-session) is told so, and told again with          *)
+(* Event::Answered once the peer is heard on it; a dial reported after its *)
+(* handshake is answered when it is reported. crates/vinc-core/src/        *)
+(* events.rs `announce` (the first value) and `on_established` (the        *)
+(* handshake of a reported dial ends), crates/vinc-core/src/rx.rs          *)
+(* `deliver` (the first packet on an established, reported session),       *)
+(* crates/vinc/src/conn.rs `Connection::answered`.                         *)
 (*                                                                         *)
 (* Rust: crates/vinc-core/src/commands.rs `connect` (the optimistic report *)
 (* calls `end_unanswered`); crates/vinc-transport/src/conn/hooks.rs        *)
@@ -62,6 +77,11 @@
 (*             ReachLive fails.                                            *)
 (*  _thin      the early end applies on a thin node; ThinKeepsLimit fails. *)
 (*  _floor     the early end raises the floor; FloorOnLimit fails.         *)
+(*  _answeratreport  the code before #493: a reported dial counts as       *)
+(*             answered from the start, so a dial to a stopped peer looks  *)
+(*             answered; AnsweredOnlyHeard fails.                          *)
+(*  _noanswer  no Answered event: an optimistic dial whose handshake ends  *)
+(*             stays unanswered; AnsweredWhenDone fails.                   *)
 (***************************************************************************)
 EXTENDS Naturals
 
@@ -78,7 +98,9 @@ CONSTANTS
     CountHeld,    \* a held timer counts as a flight (a planted bug)
     HeardResets,  \* a message from the peer starts the count again (FALSE: a planted bug)
     EarlyOnThin,  \* the early end applies on a thin node too (a planted bug)
-    FloorEarly    \* the early end raises the floor (a planted bug)
+    FloorEarly,   \* the early end raises the floor (a planted bug)
+    AnswerAtReport, \* a reported dial counts as answered from its report (the code before the answered report)
+    AnswerEvent   \* the host is told when a dial reported early is answered (FALSE: a planted bug)
 
 \* Assumption: the round trip is shorter than the first resend delay, as the code makes it (2 x the remembered RTT).
 ASSUME Rtt < First
@@ -108,7 +130,7 @@ LimitOf(thin) == IF thin THEN 2 * Limit ELSE Limit
 \* A dial that is idle: nothing started.
 Idle == [st |-> "idle", at |-> 1, sub |-> FALSE, told |-> FALSE, early |-> FALSE, thin |-> FALSE, sends |-> 0,
          unheard |-> 0, lost |-> 0, next |-> 0, ans |-> 0, hold |-> FALSE, wasHeld |-> FALSE, resume |-> FALSE,
-         tinc |-> 0, heard |-> FALSE, answered |-> FALSE, why |-> "none"]
+         tinc |-> 0, heard |-> FALSE, answered |-> FALSE, why |-> "none", told_ans |-> FALSE]
 
 \* Every variable has the shape it should.
 TypeOK ==
@@ -198,11 +220,13 @@ Start ==
     /\ steady' = alive                                \* the peer is steady from here only if it runs now
     /\ \E thin \in BOOLEAN, lose \in BOOLEAN :        \* the node may be thin; the first flight may be lost
         d' = IF held
-             THEN [Idle EXCEPT !.st = "up", !.at = now, !.sub = TRUE, !.told = TRUE]  \* a sub-session, at once
+             THEN [Idle EXCEPT !.st = "up", !.at = now, !.sub = TRUE, !.told = TRUE,  \* a sub-session, at once
+                               !.told_ans = AnswerAtReport]  \* not answered yet, unless the old rule is planted
              ELSE Send([Idle EXCEPT !.st = IF cached THEN "up" ELSE "hs",  \* optimistic: handed over now
                                     !.at = now,                             \* when it began
                                     !.told = cached,                        \* the host has it if optimistic
                                     !.early = cached,                       \* and then it may end early
+                                    !.told_ans = cached /\ AnswerAtReport,  \* reported unanswered (old rule: answered)
                                     !.thin = thin,                          \* the node's kind
                                     !.sends = 1,                            \* one send so far
                                     !.next = now + First,                   \* the first resend
@@ -224,7 +248,9 @@ Answer ==
                                     !.next = now + First,                       \* with the first delay
                                     !.resume = FALSE], lose)                    \* now a full handshake
             /\ UNCHANGED <<ticket, held>>
-       ELSE /\ d' = [d EXCEPT !.st = "up", !.told = TRUE, !.answered = TRUE, !.heard = TRUE, !.ans = 0]  \* done
+       ELSE /\ d' = [d EXCEPT !.st = "up", !.told = TRUE, !.answered = TRUE, !.heard = TRUE, !.ans = 0,  \* done
+                              \* a dial reported now is answered with its report; one reported early hears Answered
+                              !.told_ans = IF d.told THEN (@ \/ AnswerEvent) ELSE TRUE]
             /\ held' = TRUE                           \* the host holds the session
             /\ ticket' = inc                          \* and the peer gives us a ticket
     /\ UNCHANGED <<now, alive, inc, cached, steady, floor, limits>>
@@ -249,6 +275,15 @@ Fire ==
             /\ UNCHANGED <<floor>>
     /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, limits>>
 
+\* The peer answers what a sub-session sends: its first packet on the sub-session arrives. Only a peer that runs, and
+\* still holds the session the sub-session was opened over (a restart lost it), answers.
+SubHeard ==
+    /\ d.sub /\ d.st = "up" /\ ~d.heard               \* a sub-session not heard from yet
+    /\ alive /\ held                                  \* its peer runs and holds the parent
+    /\ d' = [d EXCEPT !.heard = TRUE,                  \* the peer was heard
+                      !.told_ans = @ \/ AnswerEvent]    \* and the host is told it answered
+    /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, floor, limits>>
+
 \* The first fix's end: at its fixed time, before anything else, held or not.
 FixedEnd ==
     /\ Waiting /\ FixedDue                            \* the fixed time came
@@ -269,7 +304,7 @@ Done ==
     /\ d' = Idle                                      \* ready for the next
     /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, floor, limits>>
 
-Next == Tick \/ Stop \/ Restart \/ Cache \/ DropHeld \/ Hold \/ Start \/ Answer \/ Fire \/ FixedEnd \/ GiveUp \/ Done
+Next == Tick \/ Stop \/ Restart \/ Cache \/ DropHeld \/ Hold \/ Start \/ Answer \/ SubHeard \/ Fire \/ FixedEnd \/ GiveUp \/ Done
 
 Spec == Init /\ [][Next]_vars
 
@@ -289,4 +324,10 @@ FloorOnLimit == floor = limits
 
 \* A dial over a held session is handed over in the step it starts.
 SubAtOnce == d.sub => d.st \in {"up", "idle"}
+
+\* The host is told a dial was answered only once its peer was heard on it.
+AnsweredOnlyHeard == d.told_ans => d.heard
+
+\* A dial whose handshake finished, or a sub-session whose peer was heard, is told answered.
+AnsweredWhenDone == (d.st = "up" /\ (d.answered \/ (d.sub /\ d.heard))) => d.told_ans
 =============================================================================

@@ -58,6 +58,7 @@ impl Port for Stub {
             pulse_due: false,
             last_app: 0,
             sub: false,
+            answered: true,
             transport: vinc_transport::conn::Stats::default(),
         })
     }

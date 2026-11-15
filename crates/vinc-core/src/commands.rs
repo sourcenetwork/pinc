@@ -625,6 +625,7 @@ ep_impl! {
             pulse_due: slot.m.pulse_due,
             last_app: slot.m.last_app,
             sub: slot.m.sub,
+            answered: slot.m.answered,
             transport,
         })
     }

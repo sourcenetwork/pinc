@@ -217,6 +217,13 @@ pub enum Event {
         /// How many tickets.
         count: usize,
     },
+    /// The peer was heard on a session reported before it answered: an optimistic dial finished its handshake, or a
+    /// sub-session took its first packet from the peer. Raised once per session, and never for a session reported
+    /// after its handshake ([`SessionStats::answered`] says which).
+    Answered {
+        /// The session.
+        session: SessionId,
+    },
 }
 
 impl Event {
@@ -247,7 +254,8 @@ impl Event {
             | Self::ReachOut { session }
             | Self::PeerAsleep { session }
             | Self::PeerAwake { session }
-            | Self::TicketsReceived { session, .. } => Some(session),
+            | Self::TicketsReceived { session, .. }
+            | Self::Answered { session } => Some(session),
             // A failed dial's session is no longer kept: the queue purges the events of a closed session, and this
             // one must reach the application.
             Self::ConnectFailed { .. } | Self::AcpCheck { .. } => None,
@@ -705,6 +713,10 @@ pub struct SessionStats {
     pub last_app: u64,
     /// This is a sub-session of another session to the same peer.
     pub sub: bool,
+    /// The peer was heard on the session since the application was told of it, or before ([`Event::Answered`]). A
+    /// dial with a cached allow and a sub-session are reported before the peer answers, so a peer that stopped can
+    /// look connected until this turns true or the session ends.
+    pub answered: bool,
     /// The transport counters, with the smoothed round trip in `srtt`.
     pub transport: Stats,
 }

@@ -372,6 +372,17 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         }
     }
 
+    /// Whether the peer was heard on the session, the reason the session ended first, else a wait.
+    pub(crate) fn answered(&self, info: &SessInfo) -> Try<Result<()>> {
+        if info.answered.get() {
+            Try::Done(Ok(()))
+        } else if self.sessions.contains_key(&info.id) {
+            Try::Wait(Wait::S(info.id, SKey::Answered))
+        } else {
+            Try::Done(Err(info.gone()))
+        }
+    }
+
     /// Whether the session is gone (its reason), else a wait.
     pub(crate) fn closed(&self, info: &SessInfo) -> Try<Error> {
         if self.sessions.contains_key(&info.id) {
