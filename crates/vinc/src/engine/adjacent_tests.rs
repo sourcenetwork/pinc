@@ -7,15 +7,15 @@ use vinc_keystore::SoftwareStore;
 use vinc_security::Alpn;
 
 use super::topics::ADJ_GAP;
-use super::{AllowAll, Core, CoreConfig};
+use super::{AllowAll, Core, CoreConfig, Up};
 use crate::keys::Identity;
 use crate::mem::Limits;
 
 const BURST: u64 = 1000;
 
-type C = Core<SoftwareStore, AllowAll>;
+pub(super) type C = Core<SoftwareStore, AllowAll>;
 
-fn core() -> C {
+pub(super) fn core() -> C {
     let cfg = CoreConfig {
         identity: Identity::from_seed(&[5; 32]).unwrap(),
         alpns: vec![b"app".to_vec()],
@@ -42,7 +42,7 @@ fn core() -> C {
     crate::start::build(cfg, 1).unwrap()
 }
 
-fn peer(i: u64) -> NodeId {
+pub(super) fn peer(i: u64) -> NodeId {
     let mut bytes = [0u8; 32];
     bytes[..8].copy_from_slice(&i.to_be_bytes());
     NodeId {
@@ -74,15 +74,11 @@ fn a_burst_of_sessions_is_one_record_a_turn() {
     let alpn = Alpn::new(b"app").unwrap();
     let start = signed(&c);
     let now = 10 * ADJ_GAP;
+    // The sessions come up as their `Incoming` would bring them: the endpoint has none of them, so the event itself
+    // would find each one gone.
     for i in 0..BURST {
-        c.on_event(
-            now,
-            Event::Incoming {
-                session: SessionId(i + 1),
-                node: peer(i),
-                alpn,
-            },
-        );
+        c.session_up(now, SessionId(i + 1), peer(i), alpn, Up::Accepted { held: 0 });
+        c.adjacent_changed();
     }
     turn(&mut c, now);
     assert_eq!(signed(&c) - start, 1, "one record for the whole burst");

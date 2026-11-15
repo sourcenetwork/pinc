@@ -123,6 +123,8 @@ import Vinc.TraceRtt
 import Vinc.CoreHalfOpen
 import Vinc.CoreHalfOpenThm
 import Vinc.TraceHalfOpen
+import Vinc.CoreBacklog
+import Vinc.CoreBacklogThm
 import Vinc.CoreTable
 import Vinc.CoreTableThm
 import Vinc.TraceCoreTable

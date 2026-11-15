@@ -13,7 +13,10 @@
 //! (1200 bytes for a full Initial, 464 for a short one) and fewer than 256 sessions are unauthenticated; a ticket
 //! resumption Hello is exempt from the count only when its ticket opens under this node's ticket store and is unused
 //! (single use), checked before any state is held, because that binder proves a past session. Every other Hello, a
-//! forged or replayed one included, counts like a full Initial. A later part of a first message that arrives before
+//! forged or replayed one included, counts like a full Initial. Every server session a first flight makes is owed to
+//! the host until the host reads its `Incoming` (`session_taken`) or it ends, and while the owed sessions fill the room
+//! the host has left to accept them (`set_backlog_room`) no first flight starts one, before a ticket is opened and with
+//! nothing kept, so a session that finishes its handshake always has a place to wait. A later part of a first message that arrives before
 //! the part that starts it is held for a moment in the endpoint's small table of such datagrams (see `orphan`) and
 //! handed to the session once the first part has created it.
 //!
@@ -330,7 +333,14 @@ ep_impl! {
                 return;
             }
         };
-        let resume = first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
+        // Back-pressure: every session this node owes its host would have to wait to be accepted, so while they fill
+        // the room the host has left none starts, before a ticket is opened and with nothing kept (the holders of the
+        // flight's id are left as they are); the dialer sends the flight again on its own timer.
+        if self.owed >= self.backlog_room {
+            self.counters.backlog_refused += 1;
+            return;
+        }
+        let resume =first.kind == MessageType::ResumeHello && self.opens_ticket(now, first.message);
         let admitted = buf.len() >= floor && (resume || self.half_open < MAX_HALF_OPEN);
         trace!(self, now, HalfOpen {
             admitted: u64::from(admitted),
@@ -403,7 +413,9 @@ ep_impl! {
         slot.conn = Some(conn);
         slot.m.odcid = Some(odcid);
         slot.m.unauth = true;
+        slot.m.owed = true;
         slot.m.half_open = !resume;
+        self.owed += 1;
         if !resume {
             self.half_open += 1;
         }
@@ -411,6 +423,45 @@ ep_impl! {
         trace!(self, now, Session { slot: i as u64, step: 0, dialer: 0 });
         Some(i)
     }
+
+    /// How many more sessions the host can take waiting to be accepted. While the server sessions this node owes the
+    /// host ([`NodeStats::owed`](crate::NodeStats::owed)) would fill it, a first flight is refused before any work and
+    /// nothing is kept for it (counted in [`NodeStats::backlog_refused`](crate::NodeStats::backlog_refused)); the
+    /// dialer sends it again on its own timer. A host that sets a room calls [`session_taken`](Self::session_taken) for
+    /// every [`Event::Incoming`](crate::Event::Incoming) it reads, so every session that finishes its handshake has a
+    /// place to wait. Unlimited until set.
+    pub const fn set_backlog_room(&mut self, room: usize) {
+        self.backlog_room = room;
+    }
+
+    /// The host read the `Incoming` of server session `id`: this node no longer owes it, and the answer says whether
+    /// the host keeps a place for it. A session that ended before the host read its `Incoming` stopped being owed when
+    /// it ended; it is [`Taken::Gone`] and gets no place (its `Closed` follows).
+    pub fn session_taken(&mut self, id: crate::SessionId) -> Taken {
+        let Some(slot) = self.slot_of(id).and_then(|i| self.slots.get_mut(i)) else { return Taken::Gone };
+        if !slot.m.owed {
+            return Taken::Unreserved { owed: self.owed };
+        }
+        slot.m.owed = false;
+        self.owed = self.owed.saturating_sub(1);
+        Taken::Reserved
+    }
+}
+
+/// What [`Endpoint::session_taken`](crate::Endpoint::session_taken) found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Taken {
+    /// A session its first flight made under the room
+    /// ([`Endpoint::set_backlog_room`](crate::Endpoint::set_backlog_room)): its place was held for it.
+    Reserved,
+    /// A live session no first flight made (a sub-session its peer opened inside a session it already has): no place
+    /// was held for it, and `owed` places are held for the sessions this node still owes, which it must not take.
+    Unreserved {
+        /// The sessions this node still owes the host.
+        owed: usize,
+    },
+    /// The session ended before the host read its `Incoming`.
+    Gone,
 }
 
 /// What the half-open bookkeeping holds for one slot in use, for trace validation (cargo feature `trace`).

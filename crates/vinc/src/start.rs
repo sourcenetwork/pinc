@@ -138,7 +138,9 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
     if cfg.port_mapping.on && !cfg.relaying && !local.ip().to_canonical().is_loopback() {
         node.start_port_mapping(now, cfg.port_mapping.gateway, local, vinc_portmap::client::LIFETIME);
     }
-    Ok(Core::new(Box::new(node), cfg, prekeys, ifaces))
+    let mut core = Core::new(Box::new(node), cfg, prekeys, ifaces);
+    core.sync_backlog();
+    Ok(core)
 }
 
 /// The local addresses the endpoint knows: one per family the socket can carry.

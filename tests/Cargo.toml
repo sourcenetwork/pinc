@@ -492,6 +492,10 @@ name = "core_defense"
 path = "core_defense.rs"
 
 [[test]]
+name = "core_backlog"
+path = "core_backlog.rs"
+
+[[test]]
 name = "core_datagram"
 path = "core_datagram.rs"
 
@@ -610,6 +614,10 @@ path = "vinc_scale.rs"
 [[test]]
 name = "vinc_stop"
 path = "vinc_stop.rs"
+
+[[test]]
+name = "vinc_accept_backlog"
+path = "vinc_accept_backlog.rs"
 
 [[test]]
 name = "vinc_dial_failure"

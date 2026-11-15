@@ -130,6 +130,7 @@ pub(crate) struct Counters {
     pub(crate) ext_dropped: u64,
     pub(crate) held_by_ledger: u64,
     pub(crate) stalled_in: u64,
+    pub(crate) backlog_refused: u64,
     pub(crate) holders_refused: u64,
     pub(crate) retired: u64,
 }
@@ -211,6 +212,11 @@ pub struct Endpoint<
     pub(crate) stash: [u8; MAX_DATAGRAM],
     pub(crate) stash_meta: Option<StashMeta>,
     pub(crate) udp_heard: Option<u64>,
+    /// How many more sessions the host can take waiting to be accepted (`set_backlog_room`).
+    pub(crate) backlog_room: usize,
+    /// Server sessions this node made that the host has not taken yet: their handshakes are under way, or their
+    /// `Incoming` waits to be read.
+    pub(crate) owed: usize,
     pub(crate) started: u64,
     pub(crate) t_first: Option<u64>,
     pub(crate) quiet_until: u64,
@@ -466,6 +472,8 @@ ep_impl! {
             stash: [0; MAX_DATAGRAM],
             stash_meta: None,
             udp_heard: None,
+            backlog_room: usize::MAX,
+            owed: 0,
             started: now,
             t_first: None,
             quiet_until: 0,
@@ -589,6 +597,7 @@ ep_impl! {
             ext_dropped: self.counters.ext_dropped,
             held_by_ledger: self.counters.held_by_ledger,
             stalled_in: self.counters.stalled_in,
+            backlog_refused: self.counters.backlog_refused,
             holders_refused: self.counters.holders_refused,
             events_queued: self.events.len(),
             events_dropped: self.events.dropped,
@@ -598,6 +607,7 @@ ep_impl! {
             fragments_expired: self.orphans.counts.expired,
             fragments_evicted: self.orphans.counts.evicted,
             fragments_waiting: self.orphans.waiting(),
+            owed: self.owed,
         }
     }
 
@@ -823,6 +833,10 @@ ep_impl! {
         if slot.m.half_open {
             self.half_open = self.half_open.saturating_sub(1);
             slot.m.half_open = false;
+        }
+        if slot.m.owed {
+            self.owed = self.owed.saturating_sub(1);
+            slot.m.owed = false;
         }
         let peer = slot.m.peer;
         let linked = slot.m.linked;

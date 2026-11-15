@@ -16,7 +16,7 @@ use std::ops::Range;
 use vinc_connect::client::Port;
 use vinc_core::{
     Answer, Command, CommandError, EndpointConfig, Event, IfaceEvent, IfaceId, NodeStats, PeerInfo, Query,
-    REACH_BODY_MAX, Reply, Restored, SendState, SessionId, SessionStats, StateError, TraceRecord, Transmit,
+    REACH_BODY_MAX, Reply, Restored, SendState, SessionId, SessionStats, StateError, Taken, TraceRecord, Transmit,
 };
 use vinc_crypto::{Drbg, NodeId, Software};
 use vinc_node::Ep as NodeEp;
@@ -96,6 +96,12 @@ macro_rules! define {
             }
             pub(crate) fn node_stats(&self) -> NodeStats {
                 match self { $(Self::$v(e) => e.node_stats(),)+ }
+            }
+            pub(crate) fn set_backlog_room(&mut self, room: usize) {
+                match self { $(Self::$v(e) => e.set_backlog_room(room),)+ }
+            }
+            pub(crate) fn session_taken(&mut self, session: SessionId) -> Taken {
+                match self { $(Self::$v(e) => e.session_taken(session),)+ }
             }
             pub(crate) fn set_prekey(&mut self, prekey: PrekeyInfo) {
                 match self { $(Self::$v(e) => e.set_prekey(prekey),)+ }

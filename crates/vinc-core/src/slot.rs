@@ -238,6 +238,8 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) half_open: bool,
     /// A server session whose peer is not authenticated yet.
     pub(crate) unauth: bool,
+    /// A server session the host has not taken yet (`Endpoint::session_taken`), counted in `Endpoint::owed`.
+    pub(crate) owed: bool,
     pub(crate) allowed: bool,
     pub(crate) optimistic: bool,
     /// 0 none, 1 waiting for the access check and READY, 2 allowed and waiting for READY, 3 READY seen and waiting
@@ -307,6 +309,7 @@ impl<const NP: usize> Meta<NP> {
         created: 0,
         half_open: false,
         unauth: false,
+        owed: false,
         allowed: false,
         optimistic: false,
         hold: 0,

@@ -770,6 +770,10 @@ pub struct NodeStats {
     /// Packets refused because they would raise events while the host left unrecoverable events unread or a session's
     /// held events were full; the peer sends them again.
     pub stalled_in: u64,
+    /// First flights refused before any work because the sessions this node owes its host would fill the room the
+    /// host left to accept them ([`Endpoint::set_backlog_room`](crate::Endpoint::set_backlog_room)); the peer sends
+    /// them again.
+    pub backlog_refused: u64,
     /// First flights dropped because the id they name already has four half-open sessions (also counted in
     /// `dropped_in`).
     pub holders_refused: u64,
@@ -790,6 +794,10 @@ pub struct NodeStats {
     pub fragments_evicted: u64,
     /// Handshake datagrams held now (at most 4).
     pub fragments_waiting: usize,
+    /// Server sessions this node made that the host has not taken yet
+    /// ([`Endpoint::session_taken`](crate::Endpoint::session_taken)): their handshakes are under way, or their
+    /// `Incoming` waits to be read.
+    pub owed: usize,
 }
 
 /// A peer in the round-trip table.
