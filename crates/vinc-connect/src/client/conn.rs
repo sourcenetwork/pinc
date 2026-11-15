@@ -735,6 +735,11 @@ impl<P: Provider, const R: usize, const PEERS: usize> Connectivity<P, R, PEERS> 
         self.poll_udp_from(buf).map(|(_, to, n)| (to, n))
     }
 
+    /// Whether [`Self::poll_udp`] has a datagram to give. When it says no, a call returns `None` and changes nothing.
+    pub fn udp_waiting(&self) -> bool {
+        self.udp_q.iter().any(Option::is_some)
+    }
+
     /// As [`Self::poll_udp`], with the local address the datagram must leave from when it rides a particular path (a
     /// tunnel packet leaves from the address of the hub session that carries it), `None` when any will do.
     pub fn poll_udp_from(&mut self, buf: &mut [u8]) -> Option<(Option<SocketAddr>, SocketAddr, usize)> {

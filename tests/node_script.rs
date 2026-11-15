@@ -36,12 +36,23 @@ pub(crate) struct Script {
     pub(crate) events: VecDeque<Event>,
     pub(crate) closed: Vec<SessionId>,
     pub(crate) dials: Vec<NodeId>,
+    /// The script says exactly what waits: no datagram to send ever, and an event only while one is queued. Off, it
+    /// says it cannot tell, as an endpoint without those answers does.
+    pub(crate) exact: bool,
+    /// The endpoint's deadline.
+    pub(crate) due: Option<u64>,
+    /// The next command arms or disarms a timer of the endpoint: the deadline becomes `next_due`.
+    pub(crate) rearm: bool,
+    pub(crate) next_due: Option<u64>,
 }
 
 impl Port for Script {
     type Src = NoSource;
     fn command(&mut self, _now: u64, cmd: Command<'_, NoSource>) -> Result<Reply, CommandError> {
         let mut value = Value::None;
+        if std::mem::take(&mut self.rearm) {
+            self.due = self.next_due;
+        }
         match cmd {
             Command::Close { session, .. } => self.closed.push(session),
             Command::Connect { node, .. } => {
@@ -77,11 +88,17 @@ impl Ep for Script {
     fn poll_transmit(&mut self, _now: u64, _out: &mut [u8]) -> Option<Transmit> {
         None
     }
+    fn transmit_waiting(&self) -> bool {
+        !self.exact
+    }
     fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
     }
+    fn events_waiting(&self) -> bool {
+        !self.exact || !self.events.is_empty()
+    }
     fn poll_timeout(&self) -> Option<u64> {
-        None
+        self.due
     }
     fn handle_timeout(&mut self, _now: u64) {}
     fn register_alpn(&mut self, _alpn: &[u8]) -> bool {

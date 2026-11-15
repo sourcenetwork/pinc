@@ -73,8 +73,12 @@ where
 
     /// The next request for a carrier stream.
     pub fn poll_io(&mut self) -> Option<CarrierIo> {
-        self.deadline.set(Due::Stale);
-        self.conn.poll_io()
+        // Only a request that left can have moved a deadline: asking and finding none changes nothing.
+        let io = self.conn.poll_io();
+        if io.is_some() {
+            self.deadline.set(Due::Stale);
+        }
+        io
     }
 
     /// The carrier stream of `relay` is open.
@@ -117,12 +121,24 @@ where
 
     /// The next UDP datagram of the connectivity layer (a relay probe, a lookup, a beacon).
     pub fn poll_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        if self.udp_idle() {
+            return None;
+        }
         self.deadline.set(Due::Stale);
         self.pm_poll_udp(buf).or_else(|| self.conn.poll_udp(buf))
     }
 
+    /// Whether neither the port-mapping client nor the connectivity layer has a datagram to give: asking then changes
+    /// nothing, so it is not an input and the deadline stands. A host asks after every operation.
+    fn udp_idle(&self) -> bool {
+        self.pm.is_none() && !self.conn.udp_waiting()
+    }
+
     /// As [`Self::poll_udp`], with the local address the datagram must leave from, when it has to leave from one.
     pub fn poll_udp_from(&mut self, buf: &mut [u8]) -> Option<(Option<SocketAddr>, SocketAddr, usize)> {
+        if self.udp_idle() {
+            return None;
+        }
         self.deadline.set(Due::Stale);
         self.pm_poll_udp(buf)
             .map(|(to, n)| (None, to, n))

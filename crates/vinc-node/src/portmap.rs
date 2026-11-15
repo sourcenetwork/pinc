@@ -192,7 +192,15 @@ where
     #[cfg(feature = "trace")]
     #[doc(hidden)]
     pub fn deadline_cached(&self) -> bool {
-        matches!(self.deadline.get(), Due::Known(_))
+        matches!(self.deadline.get(), Due::Known(..))
+    }
+
+    /// Whether the layers' part of the deadline is cached, as a probe (with the `trace` feature): a call that moves
+    /// only the endpoint must not clear it.
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn layers_deadline_cached(&self) -> bool {
+        matches!(self.deadline.get(), Due::Known(..) | Due::Endpoint(_))
     }
 
     /// What the port-mapping client dropped, and the draws of its nonce that failed; zero before it is turned on.

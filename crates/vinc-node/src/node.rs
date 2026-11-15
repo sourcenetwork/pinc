@@ -76,13 +76,25 @@ impl core::fmt::Display for StartError {
 
 impl core::error::Error for StartError {}
 
-/// What [`Node::poll_timeout`] last answered, while no call could have moved it.
+/// What [`Node::poll_timeout`] last answered, while no call could have moved it, and what the layers above the
+/// endpoint contributed to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Due {
-    /// A call since the last answer could have moved the deadline.
+    /// A call since the last answer could have moved any deadline.
     Stale,
-    /// The deadline, or none.
-    Known(Option<Nanos>),
+    /// A call since the last answer could have moved the endpoint's deadline and no layer's: the layers' stands.
+    Endpoint(Layers),
+    /// The deadline, or none, and the layers' part of it.
+    Known(Option<Nanos>, Layers),
+}
+
+/// The earliest deadline of the layers above the endpoint, and the node's clock when it was worked out. A layer's
+/// deadline is good from one of its inputs to the next, as the node's is for its host; a call that only moves the
+/// endpoint is no input of theirs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Layers {
+    at: Nanos,
+    due: Option<Nanos>,
 }
 
 /// The node. See the module docs for the driving contract.
@@ -316,6 +328,19 @@ where
         self.deadline.set(Due::Stale);
     }
 
+    /// Take the time of a call that can move the endpoint's deadline and no layer's (it moves the application's data
+    /// or asks for a datagram): the layers' deadline stands until one of them runs, which [`Self::settle_with`] and
+    /// every other call say. The DTN layer's deadline follows the wall clock, so with it every call counts for the
+    /// layers too.
+    fn begin_endpoint(&mut self, now: Nanos) {
+        self.io.now = self.io.now.max(now);
+        let kept = match self.deadline.get() {
+            Due::Known(_, l) | Due::Endpoint(l) if self.dtn.is_none() => Due::Endpoint(l),
+            _ => Due::Stale,
+        };
+        self.deadline.set(kept);
+    }
+
     /// Refresh what the layers read of the node: which hubs are alive, the ticket the address hash covers.
     pub(crate) fn refresh_alive(&mut self, now: Nanos) {
         self.io.hub_alive.clear();
@@ -360,6 +385,8 @@ where
 
     /// Settle, with or without the connectivity layer's own step (`connect`).
     fn settle_with(&mut self, now: Nanos, connect: bool) {
+        // The layers run: their deadlines may move.
+        self.deadline.set(Due::Stale);
         for _ in 0..SETTLE_ROUNDS {
             self.refresh_alive(now);
             let mut busy = self.service(now);
@@ -501,25 +528,43 @@ where
 
     /// When the host should next call [`Node::handle_timeout`].
     pub fn poll_timeout(&self) -> Option<Nanos> {
-        // A host asks many times between two calls that could move the answer: it is worked out once for them all.
-        if let Due::Known(d) = self.deadline.get() {
-            debug_assert_eq!(
-                d,
-                self.next_deadline(),
-                "a call moved the node's deadline and did not say so"
-            );
-            return d;
-        }
-        let d = self.next_deadline();
-        self.deadline.set(Due::Known(d));
+        // A host asks many times between two calls that could move the answer: it is worked out once for them all,
+        // and the layers' part once for all the calls that move only the endpoint.
+        let layers = match self.deadline.get() {
+            Due::Known(d, l) => {
+                debug_assert_eq!(
+                    d,
+                    self.with_endpoint(self.layers_deadline(l.at)),
+                    "a call moved the node's deadline and did not say so"
+                );
+                return d;
+            }
+            Due::Endpoint(l) => {
+                debug_assert_eq!(
+                    l.due,
+                    self.layers_deadline(l.at),
+                    "a call moved a layer's deadline and did not say so"
+                );
+                l
+            }
+            Due::Stale => Layers {
+                at: self.io.now,
+                due: self.layers_deadline(self.io.now),
+            },
+        };
+        let d = self.with_endpoint(layers.due);
+        self.deadline.set(Due::Known(d, layers));
         d
     }
 
-    /// The earliest deadline of the endpoint and of every layer, worked out now.
-    fn next_deadline(&self) -> Option<Nanos> {
-        let now = self.io.now;
+    /// The node's deadline: the endpoint's or the layers', whichever is earlier.
+    fn with_endpoint(&self, layers: Option<Nanos>) -> Option<Nanos> {
+        [self.io.ep.poll_timeout(), layers].into_iter().flatten().min()
+    }
+
+    /// The earliest deadline of every layer above the endpoint, worked out for the clock `now`.
+    fn layers_deadline(&self, now: Nanos) -> Option<Nanos> {
         [
-            self.io.ep.poll_timeout(),
             self.conn.next_deadline(now),
             self.in_group().then(|| self.mem.poll_timeout()),
             self.topics.poll_timeout(),
@@ -543,11 +588,13 @@ where
         if !self.io.ep.transmit_waiting() {
             return None;
         }
-        self.begin(now);
+        self.begin_endpoint(now);
         loop {
             let t = self.io.ep.poll_transmit(now, out)?;
             // A hub hands the host the packets for its own relay's members; the paths of its client are routed here.
             if is_relay_addr(&t.remote) && (self.conn.path_parts(&t.remote).is_some() || !self.io.is_hub) {
+                // The connectivity layer takes the packet: its deadlines may move.
+                self.deadline.set(Due::Stale);
                 let seg = t.segment_size.max(1);
                 if let Some(data) = out.get(..t.len) {
                     for s in data.chunks(seg) {
@@ -580,7 +627,7 @@ where
     /// # Errors
     /// The endpoint's refusal.
     pub fn data_command(&mut self, now: Nanos, cmd: Command<'_, E::Src>) -> Result<Value, CommandError> {
-        self.begin(now);
+        self.begin_endpoint(now);
         let r = self.io.cmd(cmd);
         if !self.io.evq.is_empty() || self.io.ep.events_waiting() {
             self.settle(now);

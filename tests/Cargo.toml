@@ -1305,6 +1305,10 @@ name = "node_alpn_owner"
 path = "node_alpn_owner.rs"
 
 [[test]]
+name = "node_deadline_cache"
+path = "node_deadline_cache.rs"
+
+[[test]]
 name = "node_refused_dial"
 path = "node_refused_dial.rs"
 
