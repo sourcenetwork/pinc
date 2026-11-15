@@ -22,6 +22,11 @@ pub trait Ep: Port {
     fn handle_datagram(&mut self, now: u64, local: SocketAddr, remote: SocketAddr, buf: &mut [u8]);
     /// The next datagram to send.
     fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit>;
+    /// Whether [`poll_transmit`](Self::poll_transmit) has anything to write or to do. When it says no, a call returns
+    /// `None` and changes nothing. An endpoint that cannot tell says yes.
+    fn transmit_waiting(&self) -> bool {
+        true
+    }
     /// The next event.
     fn poll_event(&mut self) -> Option<Event>;
     /// Whether [`poll_event`](Self::poll_event) has anything to give or to do. An endpoint that cannot tell says yes.
@@ -85,6 +90,10 @@ where
 
     fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit> {
         Endpoint::poll_transmit(self, now, out)
+    }
+
+    fn transmit_waiting(&self) -> bool {
+        Endpoint::transmit_waiting(self)
     }
 
     fn poll_event(&mut self) -> Option<Event> {

@@ -75,6 +75,12 @@ ep_impl! {
         }
     }
 
+    /// Whether [`poll_transmit`](Self::poll_transmit) has anything to write or to do: a datagram kept from the last
+    /// call, or a session that may have something to send. When it says no, a call returns `None` and changes nothing.
+    pub fn transmit_waiting(&self) -> bool {
+        self.stash_meta.is_some() || self.dirty_front().is_some()
+    }
+
     /// Record that session `i` produced a datagram on `path`.
     fn note_sent(&mut self, i: usize, now: u64, path: PathId) {
         if let Some(s) = self.slots.get_mut(i) {

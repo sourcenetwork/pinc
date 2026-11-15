@@ -140,6 +140,9 @@ macro_rules! define {
             fn poll_transmit(&mut self, now: u64, out: &mut [u8]) -> Option<Transmit> {
                 match self { $(Self::$v(e) => NodeEp::poll_transmit(&mut **e, now, out),)+ }
             }
+            fn transmit_waiting(&self) -> bool {
+                match self { $(Self::$v(e) => NodeEp::transmit_waiting(&**e),)+ }
+            }
             fn poll_event(&mut self) -> Option<Event> {
                 match self { $(Self::$v(e) => NodeEp::poll_event(&mut **e),)+ }
             }

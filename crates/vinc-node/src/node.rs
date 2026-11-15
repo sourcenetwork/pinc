@@ -538,6 +538,11 @@ where
     /// returned. A hub returns the packets for the members of its own relay, whose synthetic addresses its client does
     /// not know, for the host that runs the relay.
     pub fn poll_transmit(&mut self, now: Nanos, out: &mut [u8]) -> Option<Transmit> {
+        // Nothing waits to leave: the call would change nothing, so it is not an input, and the deadline worked out
+        // for the last one stands. A host asks after every operation; most of the time there is nothing.
+        if !self.io.ep.transmit_waiting() {
+            return None;
+        }
         self.begin(now);
         loop {
             let t = self.io.ep.poll_transmit(now, out)?;
