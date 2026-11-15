@@ -52,13 +52,13 @@ theorem allocSlot_tab (p : P) (T : Tab) (id i : Nat) (hf : firstFree T = some i)
     ∃ r : Slot, (allocSlot p T id).slots = T.slots.set i r ∧ (allocSlot p T id).ext = T.ext ∧
       (allocSlot p T id).rn = T.rn ∧ (allocSlot p T id).adv = T.adv ∧
       r.open_ = (!isUni id || !isLocal id) ∧ r.limit = (if (!isUni id || !isLocal id) = true then p.sw else 0) ∧
-      r.read = 0 ∧ r.held = [] ∧ r.fin = none ∧ r.hi = 0 ∧ r.id = some id := by
+      r.read = 0 ∧ r.held = [] ∧ r.fin = none ∧ r.hi = 0 ∧ r.id = some id ∧ r.chunks = 0 := by
   refine ⟨{ Slot.new with id := some id, open_ := !isUni id || !isLocal id,
                           limit := if (!isUni id || !isLocal id) = true then p.sw else 0,
                           size := if (!isUni id || !isLocal id) = true then p.sw else 0,
                           sdone := !(!isUni id || isLocal id), cnt := true,
                           ord := if isLocal id then T.lo.1 + T.lo.2 + 1 else 0 },
-    ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ <;>
+    ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩ <;>
   · simp only [allocSlot, hf, setSlot]
     split <;> rfl
 
@@ -111,19 +111,19 @@ theorem openLocal_ledger (p : P) (T : Tab)
       rw [Nat.add_mul, Nat.one_mul] at hfit
       have hfi := hfree i hf
       obtain ⟨hlt, -⟩ := List.findIdx?_eq_some_iff_getElem.mp hf
-      obtain ⟨r, hsl, hext, hrn, hadv, -, -, -, hheld, -, -, -⟩ := allocSlot_tab p T (T.lo.1 * 4 + 1) i hf
+      obtain ⟨r, hsl, hext, hrn, hadv, -, -, -, hheld, -, -, -, hch0⟩ := allocSlot_tab p T (T.lo.1 * 4 + 1) i hf
       have hsu := sum_map_set (fun s => min (s.unreceived p) p.firstW) T.slots i r hlt
-      have hsh := sum_map_set (fun s => s.held.length) T.slots i r hlt
+      have hsh := sum_map_set (fun s => s.chunks) T.slots i r hlt
       rw [hfi] at hsu hsh
       have hu0 : Slot.unreceived p Slot.new = 0 := by simp [Slot.unreceived, Slot.demandTo, poolDemand, Slot.new]
       have hur : min (r.unreceived p) p.firstW ≤ p.firstW := Nat.min_le_right _ _
-      simp only [hu0, hheld, List.length_nil, Nat.zero_min] at hsu hsh
-      have hh0 : (Slot.new).held.length = 0 := rfl
+      simp only [hu0, hheld, hch0, List.length_nil, Nat.zero_min] at hsu hsh
+      have hh0 : (Slot.new).chunks = 0 := rfl
       simp only [hh0] at hsh
       simp only [admCharge, avail, availC, used, heldTotal, resv, creditLeft, admitted] at hfit h ⊢
       simp only [hsl, hext, hrn, hadv]
-      have hSH : (List.map (fun s => s.held.length) (T.slots.set i r)).sum
-          = (List.map (fun s => s.held.length) T.slots).sum := by omega
+      have hSH : (List.map (fun s => s.chunks) (T.slots.set i r)).sum
+          = (List.map (fun s => s.chunks) T.slots).sum := by omega
       rw [hSH]
       omega
 

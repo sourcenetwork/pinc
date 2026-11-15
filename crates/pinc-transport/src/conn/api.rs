@@ -260,7 +260,7 @@ conn_impl! {
 
     /// The first run of stored bytes of a stream that reaches past `from`, cut to begin at `from` or later.
     pub fn stored_after(&self, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
-        self.streams.stored_after(id, from)
+        self.streams.stored_after(&self.pool, id, from)
     }
 
     /// The urgency of a stream; `None` if it is unknown.

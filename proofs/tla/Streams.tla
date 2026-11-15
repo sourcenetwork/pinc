@@ -9,7 +9,7 @@
 (*  - in-order delivery: a slot never reads past the prefix that is stored *)
 (*    without holes (read <= contig, the readable bytes are held in the    *)
 (*    pool), the read position never moves back, the stored ranges are     *)
-(*    sorted, disjoint, non-adjacent and at most RR;                       *)
+(*    sorted, disjoint, non-adjacent and at most RR, or SPR once spilled;  *)
 (*  - POOL_GRANT: the pool is never over its budget; a limit is raised    *)
 (*    only when the ledger (the credit granted and not yet received, as    *)
 (*    Charged counts it, with the first charges kept for the credit) fits  *)
@@ -39,6 +39,12 @@
 (*    twice what its own reader drained per round trip                     *)
 (*    (SizeFollowsOwnRate; Streams_meter, and the witness Streams_meter_w, *)
 (*    the connection-wide meter before #159, which breaks it);             *)
+(*  - SPILL: a stream's stored ranges fit RR inline and SPR in one pool    *)
+(*    chunk; a frame is refused Fragmented only beyond SPR or when the     *)
+(*    pool has no chunk for the spill, and the chunk counts in the pool    *)
+(*    (Pool) until the ranges are cleared (NoNeedlessFragmented, SpillHeld; *)
+(*    Streams_spill, and the witness Streams_spill_w, no spill as before   *)
+(*    #159, which breaks it);                                              *)
 (*  - flow-control updates: a limit moves only by at least 1/8 of   *)
 (*    the window, never down, and a window due to move is moved or         *)
 (*    deferred (NoMissedGrant); a deferred grant is retried after every     *)
@@ -88,7 +94,7 @@
 (* Lean counterpart: proofs/lean/Pinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 \* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
 CONSTANT STOPS
@@ -160,17 +166,11 @@ OpenBound == T.lo[0] + T.lo[1] <= N + 1
 ExtRelease == T.ext > 0 /\ T' = ExtTo(T, 0) /\ UNCHANGED <<clock, elo>>
 LSpec == Spec /\ WF_vars(ExtRelease)
 
-\* The state without the meters, for configs whose clock never moves (DT = 0, VIEW MeterFree). There a meter's epoch
-\* never closes (no consume is ever a round trip after the epoch's start), so its rate stays 0 and no window grows from
-\* it: two states that differ only in their meters behave alike, and fingerprinting them as one keeps the per-stream
-\* meters from multiplying the state space. The configs that check the meter (Streams_meter, DT = 1) keep it.
-MeterFree == <<[T EXCEPT !.slots = [k \in 1..N |-> [T.slots[k] EXCEPT !.m = [start |-> -1, bytes |-> 0, rate |-> 0]]]],
-               clock, elo>>
 (* ---- state invariants ---- *)
 Live == {i \in 1..N : T.slots[i].id # -1}
-Sorted(rs) == /\ Len(rs) <= RR
-              /\ \A k \in 1..Len(rs) : rs[k][1] < rs[k][2]
-              /\ \A k \in 1..(Len(rs) - 1) : rs[k][2] < rs[k + 1][1]
+Sorted(rs, cap) == /\ Len(rs) <= cap
+                   /\ \A k \in 1..Len(rs) : rs[k][1] < rs[k][2]
+                   /\ \A k \in 1..(Len(rs) - 1) : rs[k][2] < rs[k + 1][1]
 rs_in(iv, o) == iv[1] <= o /\ o < iv[2]
 Covered(r, o) == \E k \in 1..Len(r.rs) : rs_in(r.rs[k], o)
 Reach(r) == IF r.fin = -1 THEN r.limit ELSE Min(r.fin, r.limit)
@@ -180,7 +180,7 @@ SlotInv(r) ==
     /\ r.open =>
         /\ r.read <= r.contig /\ r.contig <= r.hi /\ r.hi <= r.limit
         /\ (r.fin # -1 => r.hi = r.fin)
-        /\ Sorted(r.rs)
+        /\ Sorted(r.rs, Cap(r))
         /\ (r.rs # <<>> => r.contig = First0(r.rs) /\ r.rs[Len(r.rs)][2] <= r.hi)
         \* the bytes still to be read are stored, and held in the pool (in-order delivery reads only held bytes)
         /\ \A o \in r.read..(r.contig - 1) : r.rs # <<>> => Covered(r, o)
@@ -370,6 +370,14 @@ FinalFixed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].fin # -1) => T'.slots
 \* nothing yet takes twice the other streams' rate, and Streams_meter_w finds it.
 SizeFollowsOwnRate == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].size > T.slots[i].size)
                             => T'.slots[i].size <= Target(T'.slots[i].m.rate)]_vars
+\* SPILL: a frame is refused Fragmented only by a stream whose ranges already spilled into a pool chunk and fill it;
+\* one whose inline ranges are full takes a chunk instead, or is Exhausted when the pool has none. Without the spill
+\* (SPR = RR) the frame is refused with the pool idle, and Streams_spill_w finds it.
+NoNeedlessFragmented == \A id \in Ids, off \in 0..HOR, len \in 1..Max(LMAX, 1) :
+    (off + len <= HOR /\ Frame(T, id, off, len, FALSE, FALSE).err = "Fragmented")
+        => (FindSlot(T, id) # 0 /\ T.slots[FindSlot(T, id)].sp)
+\* SPILL: a spill chunk is held only by a live stream that was not reset; the chunk goes back with the ranges
+SpillHeld == \A i \in 1..N : T.slots[i].sp => (T.slots[i].id # -1 /\ T.slots[i].rst = -1)
 \* a limit moves only by at least an eighth of the window
 EighthRule == [][\A i \in 1..N : (SameInc(i) /\ T'.slots[i].limit > T.slots[i].limit) =>
                     T'.slots[i].limit >= T.slots[i].limit + T'.slots[i].size \div 8]_vars

@@ -16,8 +16,9 @@
 (* send half completing), ExtTo (the other users of the pool: send         *)
 (* buffers, datagram queues, the early-data buffer, which the code charges *)
 (* to the same pool), CloseAll. The state T holds the table: slots, the    *)
-(* peer-opened and locally opened counters and the pool use of the         *)
-(* others. The pool use of the streams is the chunks their rings hold.     *)
+(* peer-opened and locally opened counters and the pool use of the        *)
+(* others. The pool use of the streams is the chunks their rings hold and *)
+(* one more for each whose ranges spilled.                                *)
 (*                                                                         *)
 (* Scaling. The real constants are CH = 16384, RING = 1025, RR = 96,       *)
 (* N = 100, B = the pool in chunks; the model is parameterised by *)
@@ -37,6 +38,15 @@
 (* asked the pool for far more credit than it holds and their grants were  *)
 (* deferred. PERSTREAM = FALSE sizes a stream from the connection's rate   *)
 (* (the sum of the streams' rates), that earlier behaviour (a witness).    *)
+(*                                                                         *)
+(* Spill. A stream's stored ranges fit RR intervals inline; a frame that   *)
+(* needs one more takes one pool chunk (r.sp), which holds SPR, and is     *)
+(* refused Fragmented only beyond that. The chunk is charged to the pool   *)
+(* (Used) and returned when the ranges are cleared: the stream read to its *)
+(* end, reset, or freed. Without a chunk free the frame is Exhausted.      *)
+(* Before #159 there was no spill (SPR = RR, a witness): the frame was     *)
+(* refused with the pool idle, its packet went unacknowledged and the      *)
+(* sender sent it again though it had arrived.                             *)
 (*                                                                         *)
 (* The ledger (Unreceived, GU). A receive half counts the chunks its credit *)
 (* may still claim: the first FIRSTK chunks of its window while the stream *)
@@ -96,7 +106,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR
 \* the table's max_remote is config.max_streams.min(N), and Streams::adopt only lowers it: never more than the slots
 ASSUME MAXREM \in 0..N
 
@@ -116,7 +126,7 @@ NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi 
             limit |-> 0, size |-> 0, pend |-> FALSE, defer |-> FALSE, rst |-> -1, obs |-> FALSE,
             sdone |-> TRUE, srst |-> 0,
             stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE, ord |-> 0,
-            m |-> [start |-> -1, bytes |-> 0, rate |-> 0]]
+            m |-> [start |-> -1, bytes |-> 0, rate |-> 0], sp |-> FALSE]
 
 WinC == ((SW + CH - 1) \div CH) * CH        \* the initial window in whole chunks
 \* what the ledger counts for a stream that has carried no data, and keeps for each stream inside the credit
@@ -147,16 +157,19 @@ Init0 == [slots |-> [i \in 1..N |-> NewSlot], rn |-> [c \in 0..1 |-> 0], lo |-> 
           rl |-> 0, ll |-> 0, ext |-> 0, hw |-> 0,
           ad |-> [lim |-> PM, adv |-> Adv0, pend |-> FALSE, early |-> FALSE]]
 
-(* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most RR ---- *)
-InsertR(rs, s, e) ==
+(* ---- the range set (ranges.rs): sorted, disjoint, non-adjacent intervals, at most cap ---- *)
+\* InsertRC merges [s, e) into the intervals rs and fails, leaving rs as it was, when more than cap intervals result
+InsertRC(rs, s, e, cap) ==
     IF s >= e THEN [ok |-> TRUE, rs |-> rs]
     ELSE LET n == Len(rs)
              from == Cardinality({k \in 1..n : rs[k][2] < s})
              to == Cardinality({k \in 1..n : rs[k][1] <= e})
              merged == IF from < to THEN <<Min(rs[from + 1][1], s), Max(rs[to][2], e)>> ELSE <<s, e>>
              newlen == n - (to - from) + 1
-         IN IF newlen > RR THEN [ok |-> FALSE, rs |-> rs]
+         IN IF newlen > cap THEN [ok |-> FALSE, rs |-> rs]
             ELSE [ok |-> TRUE, rs |-> SubSeq(rs, 1, from) \o <<merged>> \o SubSeq(rs, to + 1, n)]
+\* how many intervals a stream may hold: RR inline, SPR once its ranges spilled into a pool chunk
+Cap(r) == IF r.sp THEN SPR ELSE RR
 
 Overlaps(rs, lo, e) == \E k \in 1..Len(rs) : rs[k][1] < e /\ rs[k][2] > lo
 First0(rs) == IF Len(rs) > 0 /\ rs[1][1] = 0 THEN rs[1][2] ELSE 0
@@ -188,7 +201,9 @@ Due(r) == IF r.stop # 0 THEN -1 ELSE DueOld(r)
 
 (* ---- the pool ---- *)
 HeldTotal(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Cardinality(T.slots[i].held) IN f[N]
-Used(T) == HeldTotal(T) + T.ext
+\* a stream whose ranges spilled holds one pool chunk for them
+SpillTotal(T) == Cardinality({i \in 1..N : T.slots[i].sp})
+Used(T) == HeldTotal(T) + SpillTotal(T) + T.ext
 AvailC(T) == B - Used(T)
 Avail(T) == AvailC(T) * CH
 GU(T) == LET f[i \in 0..N] == IF i = 0 THEN 0 ELSE f[i - 1] + Unreceived(T.slots[i]) IN f[N]
@@ -321,7 +336,7 @@ Locate(T, id) ==
 (* recv.rs discard: a stream given up whose end is known drops every byte held and counts as read to its end, as a
    reset does but without one *)
 Discard(r) == IF r.fin # -1 /\ r.rst = -1
-              THEN [r EXCEPT !.read = r.fin, !.contig = r.fin, !.held = {}, !.rs = <<>>, !.obs = TRUE]
+              THEN [r EXCEPT !.read = r.fin, !.contig = r.fin, !.held = {}, !.rs = <<>>, !.sp = FALSE, !.obs = TRUE]
               ELSE r
 
 (* the receive of a stream frame; End is the rule for the end arriving on a stream asked to stop *)
@@ -331,12 +346,16 @@ OnDataWith(T, r, off, len, fin, diff, End(_)) ==
         first == lo \div CH
         last == (e - 1) \div CH
         missing == {k \in first..last : k \notin r.held}
-        ins == InsertR(r.rs, lo, e)
-        stored == [r EXCEPT !.held = r.held \cup (first..last), !.rs = ins.rs, !.contig = First0(ins.rs)]
+        \* RangeSet::insert_cost: the frame needs one more interval than the inline array holds, so it takes a chunk
+        spill == SPR > RR /\ ~r.sp /\ ~InsertRC(r.rs, lo, e, RR).ok
+        ins == InsertRC(r.rs, lo, e, IF r.sp \/ spill THEN SPR ELSE RR)
+        stored == [r EXCEPT !.held = r.held \cup (first..last), !.rs = ins.rs, !.contig = First0(ins.rs),
+                            !.sp = r.sp \/ spill]
         store == IF lo >= e THEN [r |-> r, err |-> "ok"]
                  ELSE IF last - r.read \div CH >= RING THEN [r |-> r, err |-> "FlowControl"]
                  ELSE IF lo < r.hi /\ diff /\ Overlaps(r.rs, lo, e) THEN [r |-> r, err |-> "Conflict"]
-                 ELSE IF Cardinality(missing) > AvailC(T) THEN [r |-> r, err |-> "Exhausted"]
+                 \* the ring's new chunks and, when it spills, the range set's chunk must all be free
+                 ELSE IF Cardinality(missing) + (IF spill THEN 1 ELSE 0) > AvailC(T) THEN [r |-> r, err |-> "Exhausted"]
                  ELSE IF ~ins.ok THEN [r |-> r, err |-> "Fragmented"]
                  ELSE [r |-> stored, err |-> "ok"]
         done0 == [store.r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @]
@@ -372,7 +391,8 @@ OnResetRWith(r, code, fs, ack) ==
     IF fs > MAXOFF \/ (r.fin # -1 /\ r.fin # fs) \/ fs < r.hi THEN [r |-> r, err |-> "FinalSize"]
     ELSE IF fs > r.limit THEN [r |-> r, err |-> "FlowControl"]
     ELSE IF r.rst # -1 THEN [r |-> r, err |-> "ok"]
-    ELSE LET d == [r EXCEPT !.hi = fs, !.fin = fs, !.rst = code, !.read = fs, !.contig = fs, !.held = {}, !.rs = <<>>]
+    ELSE LET d == [r EXCEPT !.hi = fs, !.fin = fs, !.rst = code, !.read = fs, !.contig = fs, !.held = {}, !.rs = <<>>,
+                    !.sp = FALSE]
          IN [r |-> IF ack /\ r.stop \in {1, 2} THEN [d EXCEPT !.stop = 3, !.qcode = -1] ELSE d, err |-> "ok"]
 \* the sender ended the stream: a stop request that waits or was sent is over (29fb6aa7), so one not yet sent is never
 \* sent and a lost one is not sent again
@@ -414,6 +434,7 @@ Consume(T, id, n, now, srtt) ==
         r1 == [r EXCEPT !.read = nr,
                         !.held = IF cut THEN {} ELSE r.held \ (r.read \div CH..(nr \div CH - 1)),
                         !.rs = IF cut THEN <<>> ELSE r.rs,
+                        !.sp = IF cut THEN FALSE ELSE r.sp,
                         !.m = m2,
                         !.size = Max(r.size, Target(SizeRate(T, i, m2.rate)))]
         r2 == [r1 EXCEPT !.obs = r1.obs \/ Status(r1) # "open"]

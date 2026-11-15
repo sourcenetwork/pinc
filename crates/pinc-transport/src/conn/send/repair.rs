@@ -25,7 +25,7 @@ conn_impl! {
         let mut short = false;
         for f in frames.as_slice().iter().rev() {
             let FrameRef::Stream { id, offset: first, len, fin } = *f else { continue };
-            if (len > 0 || !fin) && self.streams.is_acked(id, first, u64::from(len)) {
+            if (len > 0 || !fin) && self.streams.is_acked(&self.pool, id, first, u64::from(len)) {
                 continue;
             }
             // A part of the frame that is acknowledged for good was released and is not sent again.
@@ -44,7 +44,7 @@ conn_impl! {
             let chunk = crate::stream::StreamChunk { id, offset, len: dl, fin };
             let ok = payload
                     .get_mut(*pos + hdr..end)
-                    .is_some_and(|dst| self.streams.copy_out(&self.pool, &chunk, dst).is_ok())
+                    .is_some_and(|dst| self.streams.copy_out(&mut self.pool, &chunk, dst).is_ok())
                 && payload.get_mut(*pos..*pos + hdr).is_some_and(|h| put_stream_header(h, &chunk));
             if !ok {
                 break;

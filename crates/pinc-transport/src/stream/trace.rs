@@ -1,8 +1,8 @@
 //! Test-only observation of the stream table, for trace validation (cargo feature `trace`, off by default).
 //!
 //! [`Streams::trace_view`](super::Streams::trace_view) shows the state the receive and credit path works on: per
-//! slot the held chunk numbers, the stored ranges, the read position, the credit, the delivery meter, the send half's
-//! state that
+//! slot the held chunk numbers, the stored ranges and whether they spilled into a pool chunk, the read position, the
+//! credit, the delivery meter, the send half's state that
 //! frees the slot, the stop request and the ordinal of a stream we opened; per table the counters,
 //! the pool chunks the others hold and whether opens may pass the peer's limit. Nothing here is
 //! compiled without the feature, and nothing here feeds back into the table.
@@ -41,6 +41,8 @@ pub struct SlotView {
     pub size: u64,
     /// The delivery meter of this stream: the epoch start, the bytes in it, the last rate.
     pub meter: (Option<u64>, u64, u64),
+    /// The stored ranges are held in a pool chunk.
+    pub spilled: bool,
     /// A new limit is waiting to be sent.
     pub pending: bool,
     /// A grant is due but the pool had no room.
@@ -271,7 +273,7 @@ impl<S: StreamSource, const C: usize> SendProbe<S, C> {
 
     /// `Send::next_frame`.
     pub fn next_frame(&mut self, id: StreamId, retx: bool, budget: usize) -> Option<StreamChunk> {
-        self.half.next_frame(id, retx, budget)
+        self.half.next_frame(&mut self.pool, id, retx, budget)
     }
 
     /// `Send::copy_out`.
@@ -284,7 +286,7 @@ impl<S: StreamSource, const C: usize> SendProbe<S, C> {
 
     /// `Send::on_lost`.
     pub fn on_lost(&mut self, offset: u64, len: u64, fin: bool) -> usize {
-        self.half.on_lost(offset, len, fin)
+        self.half.on_lost(&mut self.pool, offset, len, fin)
     }
 
     /// `Send::on_acked`.
@@ -294,7 +296,7 @@ impl<S: StreamSource, const C: usize> SendProbe<S, C> {
 
     /// `Send::is_acked`.
     pub fn is_acked(&self, offset: u64, len: u64) -> bool {
-        self.half.is_acked(offset, len)
+        self.half.is_acked(&self.pool, offset, len)
     }
 
     /// `Send::clip`.

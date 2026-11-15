@@ -305,7 +305,7 @@ pub(crate) fn apply<S: StreamSource, const N: usize, const C: usize>(
             }
             for f in frames {
                 match *f {
-                    FrameRef::Stream { id, offset, len, fin } => streams.on_lost(id, offset, u64::from(len), fin),
+                    FrameRef::Stream { id, offset, len, fin } => streams.on_lost(pool, id, offset, u64::from(len), fin),
                     FrameRef::Control { kind, id } => lost(kind, id, streams, ctl, out),
                 }
             }

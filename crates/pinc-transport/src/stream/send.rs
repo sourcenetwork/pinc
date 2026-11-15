@@ -122,6 +122,17 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         self.ring.release_all(pool);
     }
 
+    /// Give back the pool chunks the lost and acknowledged ranges spilled into; the slot is being freed.
+    pub(super) fn release_sets(&mut self, pool: &mut BufferPool<'_>) {
+        self.lost.clear(pool);
+        self.acked.clear(pool);
+    }
+
+    /// How many of the lost and acknowledged range sets hold a pool chunk.
+    pub(super) fn spilled(&self) -> u64 {
+        u64::from(self.lost.is_spilled()) + u64::from(self.acked.is_spilled())
+    }
+
     /// Whether the send half is closed or its end and every byte are acknowledged, and the state of its reset
     /// (0 none, 1 pending, 2 sent, 3 acknowledged), and the error code of a reset that is not yet acknowledged.
     #[cfg(feature = "trace")]
@@ -151,8 +162,8 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             written: self.written,
             sent_max: self.sent_max,
             limit: self.limit,
-            lost: self.lost.to_vec(),
-            acked: self.acked.to_vec(),
+            lost: self.lost.to_vec(pool),
+            acked: self.acked.to_vec(pool),
             acked_prefix: self.acked_prefix,
             final_size: self.final_size,
             fin: match self.fin {
@@ -310,14 +321,14 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             final_size: self.used(),
         };
         self.source = None;
-        self.lost.clear();
-        self.acked.clear();
+        self.lost.clear(pool);
+        self.acked.clear(pool);
         self.release_all(pool);
         Ok(())
     }
 
     /// Whether the bytes `offset..offset + len` (or, for an empty range, the end marker) are acknowledged.
-    pub(super) fn is_acked(&self, offset: u64, len: u64) -> bool {
+    pub(super) fn is_acked(&self, pool: &BufferPool<'_>, offset: u64, len: u64) -> bool {
         if len == 0 {
             return self.fin == Fin::Acked;
         }
@@ -325,7 +336,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         let Some(end) = offset.checked_add(len) else {
             return false;
         };
-        self.acked.gaps(offset..end).next().is_none()
+        self.acked.gaps(pool, offset..end).next().is_none()
     }
 
     /// Whether the stream sends from application storage instead of a buffer.
@@ -338,7 +349,13 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
     }
 
     /// The next frame: `retx` selects the retransmission pass, otherwise fresh data.
-    pub(super) fn next_frame(&mut self, id: StreamId, retx: bool, budget: usize) -> Option<StreamChunk> {
+    pub(super) fn next_frame(
+        &mut self,
+        pool: &mut BufferPool<'_>,
+        id: StreamId,
+        retx: bool,
+        budget: usize,
+    ) -> Option<StreamChunk> {
         if !self.live() {
             return None;
         }
@@ -349,7 +366,7 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             fin,
         };
         if retx {
-            while let Some(r) = self.lost.take_front(budget as u64) {
+            while let Some(r) = self.lost.take_front(pool, budget as u64) {
                 let fin = self.fin == Fin::Pending && self.final_size == Some(r.end);
                 // The acknowledged prefix is never sent again: its chunks are released.
                 let start = self.clip(r.start).min(r.end);
@@ -401,14 +418,14 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
     /// Copy the data of `chunk` into `dst`.
     pub(super) fn copy_out(
         &mut self,
-        pool: &BufferPool<'_>,
+        pool: &mut BufferPool<'_>,
         chunk: &StreamChunk,
         dst: &mut [u8],
     ) -> Result<usize, StreamError> {
         let out = dst.get_mut(..chunk.len).ok_or(StreamError::BufferTooSmall)?;
         // A released chunk's slot may hold a later chunk's bytes once the ring has wrapped: refuse the copy.
         if self.source.is_none() && chunk.offset / (CHUNK_SIZE as u64) < self.acked_prefix / (CHUNK_SIZE as u64) {
-            self.requeue(chunk.offset, chunk.len as u64, chunk.fin);
+            self.requeue(pool, chunk.offset, chunk.len as u64, chunk.fin);
             return Err(StreamError::DataUnavailable);
         }
         let got = match self.source.as_mut() {
@@ -419,11 +436,11 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             return Ok(got);
         }
         // The frame cannot be completed: queue its range for another attempt rather than lose it.
-        self.requeue(chunk.offset, chunk.len as u64, chunk.fin);
+        self.requeue(pool, chunk.offset, chunk.len as u64, chunk.fin);
         Err(StreamError::DataUnavailable)
     }
 
-    fn requeue(&mut self, offset: u64, len: u64, fin: bool) -> usize {
+    fn requeue(&mut self, pool: &mut BufferPool<'_>, offset: u64, len: u64, fin: bool) -> usize {
         if !self.live() {
             return 0;
         }
@@ -431,19 +448,21 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
             self.fin = Fin::Pending;
         }
         let range = offset..offset.saturating_add(len).min(self.sent_max);
-        let mut widened = 0;
-        for gap in self.acked.gaps(range) {
-            widened += usize::from(self.lost.insert_widening(gap));
+        let (mut widened, mut at) = (0, range.start);
+        // One gap at a time: the acknowledged ranges are read from the pool and the lost ones written to it.
+        while let Some(gap) = self.acked.gaps(pool, at..range.end).next() {
+            at = gap.end;
+            widened += usize::from(self.lost.insert_widening(pool, gap));
         }
         widened
     }
 
     /// The range was declared lost. Returns how many range-map overflows were absorbed.
-    pub(super) fn on_lost(&mut self, offset: u64, len: u64, fin: bool) -> usize {
+    pub(super) fn on_lost(&mut self, pool: &mut BufferPool<'_>, offset: u64, len: u64, fin: bool) -> usize {
         if len == 0 && !fin && self.announce == Announce::Sent && self.sent_max == 0 {
             self.announce = Announce::Due;
         }
-        self.requeue(offset, len, fin)
+        self.requeue(pool, offset, len, fin)
     }
 
     /// The range was acknowledged (also when it had been declared lost and is still queued). Returns how many
@@ -458,11 +477,11 @@ impl<S: StreamSource, const C: usize> Send<S, C> {
         }
         let range = offset..offset.saturating_add(len).min(self.sent_max);
         if range.start < range.end {
-            if self.acked.insert(range.clone()).is_err() {
+            if self.acked.insert(pool, range.clone()).is_err() {
                 // Too many holes to remember: send it again, so the acknowledgement can be taken in order.
-                self.lost.insert_widening(range);
+                self.lost.insert_widening(pool, range);
                 overflows += 1;
-            } else if self.lost.remove(&range).is_err() {
+            } else if self.lost.remove(pool, &range).is_err() {
                 // The cut would split a full map: the range stays queued and is sent once more, harmlessly.
                 overflows += 1;
             }

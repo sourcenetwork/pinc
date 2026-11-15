@@ -74,15 +74,15 @@ theorem allocSlot_peer (p : P) (T : Tab) (id : Nat) (hch : 0 < p.ch) (hpeer : is
       rw [hgi]
       simpa using hpi
     have hfi := hnew i hidn
-    obtain ⟨r, hsl, hext, hrn, hadv, ho, hlim, hread, hheld, hfin, hhi, hrid⟩ := allocSlot_tab p T id i hf
+    obtain ⟨r, hsl, hext, hrn, hadv, ho, hlim, hread, hheld, hfin, hhi, hrid, hch0⟩ := allocSlot_tab p T id i hf
     simp [hpeer] at ho hlim
     have hur := fresh_unreceived_le p r hch ho hlim hread hheld hfin hhi
     have hsu := sum_map_set (fun s => s.unreceived p) T.slots i r hlt
-    have hsh := sum_map_set (fun s => s.held.length) T.slots i r hlt
+    have hsh := sum_map_set (fun s => s.chunks) T.slots i r hlt
     rw [hfi] at hsu hsh
     have hu0 : Slot.unreceived p Slot.new = 0 := by simp [Slot.unreceived, Slot.demandTo, poolDemand, Slot.new]
-    have hh0 : (Slot.new).held.length = 0 := rfl
-    simp only [hu0, hh0, hheld, List.length_nil] at hsu hsh
+    have hh0 : (Slot.new).chunks = 0 := rfl
+    simp only [hu0, hh0, hheld, hch0, List.length_nil] at hsu hsh
     refine ⟨?_, ?_, hext, hrn, hadv, ?_⟩
     · simp only [gu, hsl]
       omega

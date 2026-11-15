@@ -132,14 +132,14 @@ fn a_stream_has_data_to_send_while_new_bytes_or_a_retransmission_wait() {
     t.write(&mut pool, id, &[1u8; 2800], 1 << 20).unwrap();
     assert!(t.has_data_to_send(), "new bytes wait");
     let mut frames = Vec::new();
-    while let Some(f) = t.next_stream_frame(1400) {
+    while let Some(f) = t.next_stream_frame(&mut pool, 1400) {
         frames.push((f.offset, f.len as u64));
     }
     assert_eq!(frames.len(), 2);
     assert!(!t.has_data_to_send(), "everything is sent and nothing is lost");
-    t.on_lost(id, frames[0].0, frames[0].1, false);
+    t.on_lost(&mut pool, id, frames[0].0, frames[0].1, false);
     assert!(t.has_data_to_send(), "a lost range waits to be sent again");
-    let again = t.next_stream_frame(1400).unwrap();
+    let again = t.next_stream_frame(&mut pool, 1400).unwrap();
     assert!(!t.has_data_to_send());
     t.on_acked(&mut pool, id, again.offset, again.len as u64, false);
     t.on_acked(&mut pool, id, frames[1].0, frames[1].1, false);
@@ -152,7 +152,7 @@ fn sixty_four_holes_of_acknowledged_ranges_are_remembered_without_sending_any_ag
     let id = t.open_stream(&pool, true).unwrap();
     t.write(&mut pool, id, &[1u8; 1400 * 130], 1 << 20).unwrap();
     let mut frames = Vec::new();
-    while let Some(f) = t.next_stream_frame(1400) {
+    while let Some(f) = t.next_stream_frame(&mut pool, 1400) {
         frames.push((f.offset, f.len as u64));
     }
     assert_eq!(frames.len(), 130);
@@ -165,7 +165,7 @@ fn sixty_four_holes_of_acknowledged_ranges_are_remembered_without_sending_any_ag
         "an acknowledged range was queued to be sent again"
     );
     for &(offset, len) in frames.iter().skip(1).step_by(2).take(64) {
-        assert!(t.is_acked(id, offset, len));
+        assert!(t.is_acked(&pool, id, offset, len));
     }
 }
 
@@ -189,11 +189,11 @@ fn hot_paths_do_not_allocate() {
             t.set_urgency(id, (round % 4) as u8).unwrap();
             assert_eq!(t.write(&mut pool, id, &payload, 1 << 20).unwrap(), 1400);
             assert!(t.granted_unreceived() <= pool.available_bytes());
-            let frame = t.next_stream_frame(1400).unwrap();
-            t.copy_out(&pool, &frame, &mut buf).unwrap();
-            t.on_lost(id, frame.offset, frame.len as u64, false);
-            let again = t.next_stream_frame(1400).unwrap();
-            t.copy_out(&pool, &again, &mut buf).unwrap();
+            let frame = t.next_stream_frame(&mut pool, 1400).unwrap();
+            t.copy_out(&mut pool, &frame, &mut buf).unwrap();
+            t.on_lost(&mut pool, id, frame.offset, frame.len as u64, false);
+            let again = t.next_stream_frame(&mut pool, 1400).unwrap();
+            t.copy_out(&mut pool, &again, &mut buf).unwrap();
             t.on_acked(&mut pool, id, again.offset, again.len as u64, false);
             let _ = t.poll_writable(1 << 20);
             while next_control(&mut t).is_some() {}
@@ -233,7 +233,7 @@ fn source_frame_building_does_not_allocate() {
             n
         }
     }
-    let pool = BufferPool::new_boxed(2);
+    let mut pool = BufferPool::new_boxed(2);
     let mut config = Config::new(false);
     config.peer = peer();
     let mut t = Box::new(Streams::<Plain<'_>, 2, 65>::new(&config, &pool));
@@ -241,8 +241,8 @@ fn source_frame_building_does_not_allocate() {
     t.open_source(id, Plain(&data), data.len() as u64).unwrap();
     let mut buf = [0u8; 1500];
     let stats = measure(|| {
-        while let Some(c) = t.next_stream_frame(1400) {
-            assert_eq!(t.copy_out(&pool, &c, &mut buf).unwrap(), c.len);
+        while let Some(c) = t.next_stream_frame(&mut pool, 1400) {
+            assert_eq!(t.copy_out(&mut pool, &c, &mut buf).unwrap(), c.len);
         }
     });
     assert_eq!(stats.count(), 0);

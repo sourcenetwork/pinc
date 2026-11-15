@@ -69,14 +69,15 @@ pub const DEFAULT_MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
 pub const FIRST_CHARGE: u64 = 4 * pool::CHUNK_SIZE as u64;
 /// The urgency a stream starts with; a lower number is served first.
 pub const DEFAULT_URGENCY: u8 = 3;
-/// The most disjoint ranges a stream tracks of what it declared lost.
+/// The disjoint ranges a stream tracks inline of what it declared lost; past them the set moves into one pool chunk
+/// (1,024 ranges), so a loss burst no longer widens a range over bytes that were not lost.
 pub const RANGES: usize = 16;
-/// The most disjoint ranges a stream tracks of what the peer acknowledged. Past it a range is sent again, so the
-/// acknowledgement can be taken in order.
+/// The disjoint ranges a stream tracks inline of what the peer acknowledged; past them the set moves into one pool
+/// chunk. Only past that chunk, or with no chunk free, is a range sent again so the acknowledgement can be taken in order.
 pub const ACKED_RANGES: usize = 64;
-/// The most disjoint ranges a stream tracks of what it received. A packet that does not fit is dropped unacknowledged,
-/// so under deep reordering this must cover the holes of the packet-number tracking and the splits retransmissions
-/// add: the deepest reordering scenario measured needed 65 at 128 packet ranges, and 96 leaves room.
+/// The disjoint ranges a stream tracks inline of what it received; past them the set moves into one pool chunk. A packet
+/// that fits neither is dropped unacknowledged (or held back when no chunk is free), so the sender repeats it. Inline,
+/// the deepest reordering scenario measured needed 65 at 128 packet ranges; scattered drops at a large window need more.
 pub const RECV_RANGES: usize = 96;
 
 /// What the send half of a stream knows, for a host that paces work on it.
@@ -283,8 +284,11 @@ impl Config {
 /// Counters for events the layer absorbed instead of failing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamStats {
-    /// Range maps that were full, so a lost range was widened or an acknowledgement turned back into a retransmission.
+    /// Range maps that were full even spilled, so a lost range was widened, an acknowledgement turned back into a
+    /// retransmission, or a received frame was refused (`Fragmented`; its packet went unacknowledged).
     pub range_overflows: u64,
+    /// Range maps that outgrew their inline array and moved into a pool chunk (received, lost or acknowledged ranges).
+    pub range_spills: u64,
     /// Peer stream frames held back for want of a slot or of a free chunk in the pool (their packet went
     /// unacknowledged). Nonzero means the peer opened streams beyond the credit it was given, or the pool was full:
     /// other users took it, or more windows were in use at once than it holds.

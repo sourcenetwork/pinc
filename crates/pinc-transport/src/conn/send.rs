@@ -593,7 +593,7 @@ conn_impl! {
     fn requeue(&mut self, refs: &FrameRefs) {
         for f in refs {
             match *f {
-                FrameRef::Stream { id, offset, len, fin } => self.streams.on_lost(id, offset, u64::from(len), fin),
+                FrameRef::Stream { id, offset, len, fin } => self.streams.on_lost(&mut self.pool, id, offset, u64::from(len), fin),
                 FrameRef::Control { kind, id } => self.control_unsent(kind, id),
             }
         }
@@ -883,7 +883,7 @@ conn_impl! {
                 return;
             }
             let budget = room - STREAM_BUDGET;
-            let Some(chunk) = self.streams.next_stream_frame(budget) else {
+            let Some(chunk) = self.streams.next_stream_frame(&mut self.pool, budget) else {
                 out.drained = true;
                 return;
             };
@@ -892,10 +892,10 @@ conn_impl! {
             let ok = end <= payload.len()
                 && payload
                     .get_mut(*pos + hdr..end)
-                    .is_some_and(|dst| self.streams.copy_out(&self.pool, &chunk, dst).is_ok())
+                    .is_some_and(|dst| self.streams.copy_out(&mut self.pool, &chunk, dst).is_ok())
                 && payload.get_mut(*pos..*pos + hdr).is_some_and(|h| put_stream_header(h, &chunk));
             if !ok {
-                self.streams.on_lost(chunk.id, chunk.offset, chunk.len as u64, chunk.fin);
+                self.streams.on_lost(&mut self.pool, chunk.id, chunk.offset, chunk.len as u64, chunk.fin);
                 out.drained = false;
                 return;
             }

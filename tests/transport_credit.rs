@@ -250,9 +250,9 @@ fn a_peer_stream_whose_answer_has_left_no_longer_counts_against_the_limit() {
     assert_eq!(raise(&mut t, &pool), None, "no reply has left yet");
     // The replies leave. Nothing is acknowledged.
     let mut sent = Vec::new();
-    while let Some(c) = t.next_stream_frame(1200) {
+    while let Some(c) = t.next_stream_frame(&mut pool, 1200) {
         let mut buf = vec![0u8; c.len];
-        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.copy_out(&mut pool, &c, &mut buf).unwrap();
         sent.push(c);
     }
     assert_eq!(
@@ -419,9 +419,9 @@ fn a_window_is_charged_from_its_first_byte_and_a_stream_is_admitted_while_a_firs
         assert_eq!(read_to_end(&mut t, &mut pool, id), len);
         t.finish(id).unwrap();
     }
-    while let Some(c) = t.next_stream_frame(1200) {
+    while let Some(c) = t.next_stream_frame(&mut pool, 1200) {
         let mut buf = vec![0u8; c.len];
-        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.copy_out(&mut pool, &c, &mut buf).unwrap();
         t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);
     }
     assert_eq!(t.open_streams(), 0);
@@ -507,7 +507,7 @@ fn a_long_lived_stream_does_not_strand_the_credit_of_silent_unidirectional_opens
 
 #[test]
 fn a_refused_open_shows_the_peer_its_newest_silent_stream_of_each_kind_once() {
-    let pool = BufferPool::new_boxed(64);
+    let mut pool = BufferPool::new_boxed(64);
     let mut cfg = stream::Config::new(true);
     cfg.peer = stream::PeerLimits {
         window: 1 << 20,
@@ -519,21 +519,20 @@ fn a_refused_open_shows_the_peer_its_newest_silent_stream_of_each_kind_once() {
     }
     assert_eq!(t.open_stream(&pool, true), Err(StreamError::StreamLimit));
     t.announce_top();
-    let drain = |t: &mut Table| -> std::collections::BTreeSet<(u64, u64, usize, bool)> {
-        std::iter::from_fn(|| t.next_stream_frame(1200))
+    let drain = |t: &mut Table, pool: &mut BufferPool<'_>| -> std::collections::BTreeSet<(u64, u64, usize, bool)> {
+        std::iter::from_fn(|| t.next_stream_frame(pool, 1200))
             .map(|c| (c.id, c.offset, c.len, c.fin))
             .collect()
     };
-    assert_eq!(drain(&mut t), [(8, 0, 0, false), (2, 0, 0, false)].into());
+    assert_eq!(drain(&mut t, &mut pool), [(8, 0, 0, false), (2, 0, 0, false)].into());
     t.announce_top();
-    assert!(drain(&mut t).is_empty(), "each stream is shown once");
-    t.on_lost(8, 0, 0, false);
+    assert!(drain(&mut t, &mut pool).is_empty(), "each stream is shown once");
+    t.on_lost(&mut pool, 8, 0, 0, false);
     assert_eq!(
-        drain(&mut t),
+        drain(&mut t, &mut pool),
         [(8, 0, 0, false)].into(),
         "a lost announce is sent again"
     );
-    let mut pool = pool;
     t.on_acked(&mut pool, 8, 0, 0, false);
-    assert!(drain(&mut t).is_empty());
+    assert!(drain(&mut t, &mut pool).is_empty());
 }
