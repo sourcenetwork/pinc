@@ -14,6 +14,9 @@
 //! longer counts for the refusal, and keeps being served from the log. If the log evicted anything it was owed, it is
 //! told with RESTORED once it has caught up, as a member whose held subscription comes back is.
 //!
+//! A subscriber is put behind the same way when a repair it asked for (a GET, or the replay of a SUB) does not fit
+//! its stream (`gap.rs`): it is let go from the start, so a repair never paces the topic.
+//!
 //! What it costs is one small record for each subscriber that is behind in a topic.
 //!
 //! Invariants: a subscriber is in a topic's `behind` only while it is a live subscriber of that topic; it is sent the

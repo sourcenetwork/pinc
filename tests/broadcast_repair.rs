@@ -26,6 +26,54 @@ fn world() -> Net {
     net
 }
 
+/// A GET for more than the subscriber's stream takes is not answered in part (vinc#504): the messages the stream has
+/// no room for are owed from the hub's log, the hub keeping one place for them, and arrive in order when the stream
+/// has room, without waiting for the next periodic check.
+#[test]
+fn a_repair_larger_than_the_stream_takes_is_finished_when_the_stream_has_room() {
+    let mut net = world();
+    let m0 = net.publish(2, T, b"before");
+    net.run_until(5 * SEC);
+    net.link(3, 0, false);
+    let missed: Vec<[u8; 8]> = (0..40)
+        .map(|k| {
+            let m = net.publish(2, T, format!("during {k:02}").as_bytes());
+            net.advance(SEC / 1000);
+            m
+        })
+        .collect();
+    net.run_until(10 * SEC);
+    assert_eq!(net.delivered(3), vec![m0], "nothing crosses the cut");
+    // After the heal the subscriber's stream at the hub takes the HAVE and ten messages, then it is full. The
+    // subscriber asks at its next periodic check, 20 s after it started.
+    let sub = net.id(3);
+    net.nodes[0].h.room.insert(sub, 11);
+    net.link(3, 0, true);
+    net.run_until(25 * SEC);
+    let mut want = vec![m0];
+    want.extend(&missed[..10]);
+    assert_eq!(net.delivered(3), want, "the stream took ten of the forty");
+    assert_eq!(
+        net.nodes[0].t.behind_count(T),
+        1,
+        "the hub keeps the subscriber's place for the thirty it asked for and was not sent"
+    );
+    // Room again: the rest arrives now, in order, each once.
+    net.nodes[0].h.room.remove(&sub);
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.t.peer_writable(&mut n.h, now, &sub);
+    net.pump();
+    let mut all = vec![m0];
+    all.extend(&missed);
+    assert_eq!(net.delivered(3), all);
+    assert_eq!(net.nodes[0].t.behind_count(T), 0);
+    // And the subscriber is pushed live again.
+    let after = net.publish(2, T, b"after");
+    net.advance(SEC / 10);
+    assert_eq!(net.delivered(3).last(), Some(&after));
+}
+
 fn sub_times(net: &Net, from: usize) -> Vec<u64> {
     net.log
         .iter()

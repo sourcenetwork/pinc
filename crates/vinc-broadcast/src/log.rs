@@ -122,6 +122,12 @@ impl HubLog {
         self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)
     }
 
+    /// The sequence number of a logged message.
+    pub(crate) fn seq_of(&self, mid: u64) -> Option<u64> {
+        let seq = self.index.get(mid)?;
+        self.entry(mid).map(|_| seq)
+    }
+
     /// The head and body of a logged message.
     pub(crate) fn get(&self, mid: u64) -> Option<&[u8]> {
         let e = self.entry(mid)?;

@@ -9,19 +9,26 @@
 //! A hub offers every id of the span it is asked about or exchanges, in as many HAVE frames as that takes, so a node
 //! that was cut off learns of everything the log still holds, not only of the newest ids.
 //!
+//! A message a GET or a replay asks for that the subscriber's stream has no room for is not dropped: the subscriber
+//! is behind from it (`behind.rs`), let go from the start so that a repair never paces the topic, and is sent the
+//! log from that place, in order, when its stream has room; if the log evicted any of it by then it is told with
+//! RESTORED. So a gap larger than a stream takes is repaired whole, not a stream-full for each periodic check.
+//!
 //! Invariants: a HAVE and a GET carry at most [`HAVE_MAX`] ids; a GET names only ids the node lacks; a replay sends
-//! at most [`REPLAY_PUSH_MAX`] messages and never a member's own back to it.
+//! at most [`REPLAY_PUSH_MAX`] messages at once and never a member's own back to it; a message asked for by a
+//! subscriber whose stream is full is owed from the log, never dropped.
 
 use vinc_membership::{Nanos, NodeId};
 
 use alloc::vec::Vec;
 
+use crate::behind::Behind;
 use crate::consts::{
     AE_FROM, AE_TO, GAP_EVERY, GAP_LIVE, GAP_SPAN, HAVE_MAX, HUB_AE, LOG_CAP, REPLAY_PUSH_MAX, RESUB_BACK_MS, TABLE_MAX,
 };
 use crate::event::{Trace, topic_tag};
 use crate::host::{Host, Lane};
-use crate::node::{Refused, Topics};
+use crate::node::{Refused, Topic, Topics};
 use crate::reach::{offers, reaches};
 use crate::wire::{self, Head, get_u64, ty};
 
@@ -290,6 +297,7 @@ impl Topics {
         } else {
             false
         };
+        let mut owed = None;
         if let Some(log) = st.log.as_ref() {
             if replay {
                 let total = log.since(since).count();
@@ -298,12 +306,18 @@ impl Topics {
                     let Ok((head, _)) = Head::parse(l) else {
                         continue;
                     };
-                    if head.origin != from
-                        && reaches(&self.reach, head.origin, from)
-                        && wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok()
-                        && h.send(from, Lane::Reply, &self.scratch)
+                    if head.origin == from
+                        || !reaches(&self.reach, head.origin, from)
+                        || wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_err()
                     {
+                        continue;
+                    }
+                    if h.send(from, Lane::Reply, &self.scratch) {
                         self.sent.note(from, head.ts, head.origin);
+                    } else if h.backlogged(from, self.scratch.len()) {
+                        // The stream is full: the rest of the replay is owed from the log, in order.
+                        owed = log.seq_of(mid);
+                        break;
                     }
                 }
             } else {
@@ -324,6 +338,12 @@ impl Topics {
                         });
                     },
                 );
+            }
+        }
+        if let Some(next) = owed {
+            let wall = h.wall_ms();
+            if let Some(st) = self.topics.get_mut(topic) {
+                owe(st, &mut self.lagging, from, next, wall);
             }
         }
         if changed {
@@ -376,13 +396,22 @@ impl Topics {
         }
     }
 
-    /// A GET at a hub: send the messages behind the ids it still holds.
+    /// A GET at a hub: send the messages behind the ids it still holds. Once the subscriber's stream has no room, the
+    /// message it refused and the ones asked for after it are owed from the log (the earliest of them is the
+    /// subscriber's place), not dropped.
     pub(crate) fn on_get<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], rest: &[u8]) {
-        let Some(log) = self.topics.get(topic).and_then(|st| st.log.as_ref()) else {
+        let wall = h.wall_ms();
+        let Some(st) = self.topics.get_mut(topic) else {
             return;
         };
+        let Some(log) = st.log.as_ref() else {
+            return;
+        };
+        // The place of the earliest message asked for that found the stream full.
+        let mut owed: Option<u64> = None;
         for mid in rest.get(..8 * HAVE_MAX).unwrap_or(rest).as_chunks::<8>().0 {
-            let Some(l) = log.get(u64::from_le_bytes(*mid)) else {
+            let key = u64::from_le_bytes(*mid);
+            let Some(l) = log.get(key) else {
                 continue;
             };
             let Ok((head, _)) = Head::parse(l) else {
@@ -391,10 +420,42 @@ impl Topics {
             if !reaches(&self.reach, head.origin, from) {
                 continue;
             }
-            if wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_ok() && h.send(from, Lane::Reply, &self.scratch)
-            {
-                self.sent.note(from, head.ts, head.origin);
+            if owed.is_none() {
+                if wire::build(&mut self.scratch, ty::MSG, topic, &[l]).is_err() {
+                    continue;
+                }
+                if h.send(from, Lane::Reply, &self.scratch) {
+                    self.sent.note(from, head.ts, head.origin);
+                    continue;
+                }
+                if !h.backlogged(from, self.scratch.len()) {
+                    // The session is gone, or the host cannot tell: the next HAVE asks again, as before.
+                    continue;
+                }
+            }
+            if let Some(seq) = log.seq_of(key) {
+                owed = Some(owed.map_or(seq, |o| o.min(seq)));
             }
         }
+        if let Some(next) = owed {
+            owe(st, &mut self.lagging, from, next, wall);
+        }
     }
+}
+
+/// `peer`'s stream had no room for a logged message it asked for: `peer` is behind from sequence number `next` of the
+/// topic's log, or from its earlier place if it has one, let go from the start (a repair never holds back the log).
+/// Only a live subscriber has a place.
+fn owe(st: &mut Topic, lagging: &mut alloc::collections::BTreeSet<NodeId>, peer: &NodeId, next: u64, wall_ms: u64) {
+    if st.subs.get(peer) != Some(&true) {
+        return;
+    }
+    let b = st.behind.entry(*peer).or_insert(Behind {
+        next,
+        progress_ms: wall_ms,
+        held: true,
+        lost: false,
+    });
+    b.next = b.next.min(next);
+    lagging.insert(*peer);
 }

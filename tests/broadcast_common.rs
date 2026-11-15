@@ -15,7 +15,7 @@
     clippy::cast_possible_truncation
 )]
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use vinc_broadcast::{Config, Event, Host, Lane, Topics};
 use vinc_crypto::{IdentityAlg, Keypair};
@@ -94,6 +94,8 @@ pub struct NodeHost {
     pub skew_ms: i64,
     /// Peers whose stream has no room: a frame for one is refused, and the host says it is a full stream.
     pub full: BTreeSet<NodeId>,
+    /// How many more frames a peer's stream takes before it is full, for a peer listed here.
+    pub room: BTreeMap<NodeId, usize>,
 }
 
 impl NodeHost {
@@ -108,6 +110,12 @@ impl Host for NodeHost {
         if !self.reach.contains(peer) || self.full.contains(peer) {
             return false;
         }
+        if let Some(room) = self.room.get_mut(peer) {
+            if *room == 0 {
+                return false;
+            }
+            *room -= 1;
+        }
         self.out.push(Out {
             to: *peer,
             lane,
@@ -118,7 +126,7 @@ impl Host for NodeHost {
     }
 
     fn backlogged(&self, peer: &NodeId, _len: usize) -> bool {
-        self.reach.contains(peer) && self.full.contains(peer)
+        self.reach.contains(peer) && (self.full.contains(peer) || self.room.get(peer) == Some(&0))
     }
 
     fn send_member(&mut self, peer: &NodeId, frame: &[u8]) -> bool {
