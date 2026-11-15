@@ -77,6 +77,52 @@ fn the_ledger_holds_a_spoofed_resume_to_three_times_what_it_sent() {
     });
 }
 
+/// The time from a resumption dial with nothing written (a bare Hello) to the client's session being established, from
+/// the client's own address or from one the server never saw (`moved`), and the client's handshake resends. The
+/// server's identity is ML-DSA and its flights are not split, as in the default configuration. The dial is reported at
+/// once (the access check of the peer is cached), so the session's state is read instead of the event.
+fn bare_resume(moved: bool) -> (Option<u64>, u64) {
+    let mut net = CoreNet::new(5 * MS_NS);
+    let (s, c) = (net.add_whole_flights(1, IdentityAlg::MlDsa65), net.add(2));
+    let (sa, _) = net.connect_pair(c, s, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let now = net.now;
+    net.nodes[c].cmd(now, Command::Close { session: sa, error: 0 }).unwrap();
+    net.run_for(SEC_NS);
+    if moved {
+        net.nat = Some((net.nodes[c].addr, "10.7.7.7:5555".parse().unwrap()));
+    }
+    net.nodes[c].events.clear();
+    let (peer, to, t0) = (net.nodes[s].node, net.nodes[s].addr, net.now);
+    let rep = net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+    let session = net.nodes[c].session(&rep);
+    let stats = |n: &CoreNet| match n.nodes[c].ep.query(Query::Stats(session)) {
+        Answer::Stats(st) => Some(st),
+        _ => None,
+    };
+    let up = net.run(t0 + 30 * SEC_NS, |n| stats(n).is_some_and(|st| st.established));
+    let resends = stats(&net).map_or(0, |st| st.transport.handshake_retransmits);
+    (up.then(|| net.now - t0), resends)
+}
+
+#[test]
+fn a_bare_resumption_hello_from_a_new_address_completes() {
+    big_stack(|| {
+        let (home, home_resends) = bare_resume(false);
+        let (moved, moved_resends) = bare_resume(true);
+        eprintln!(
+            "bare resumption: home {:?} ms, {home_resends} resends; moved {:?} ms, {moved_resends} resends",
+            home.map(|t| t / MS_NS),
+            moved.map(|t| t / MS_NS)
+        );
+        assert!(home.is_some(), "the resumption from the client's own address failed");
+        let Some(moved) = moved else {
+            panic!("a bare resumption from a new address never got its Reply")
+        };
+        assert!(moved <= 5 * SEC_NS, "the resumption took {} ms", moved / MS_NS);
+    });
+}
+
 #[test]
 fn a_flood_of_spoofed_sources_keeps_the_ledger_bounded_and_each_source_at_three_times() {
     big_stack(|| {

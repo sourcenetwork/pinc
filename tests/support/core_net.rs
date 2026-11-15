@@ -162,6 +162,16 @@ impl TNode {
 
     /// A node whose identity uses `alg` and whose interface carries datagrams of up to `mtu` bytes.
     pub fn with_mtu(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16) -> Self {
+        Self::build(tag, addr, now, alg, mtu, false)
+    }
+
+    /// A node whose identity uses `alg` and that sends a first flight that fits whole in one datagram, as the default
+    /// configuration does.
+    pub fn with_whole_flights(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg) -> Self {
+        Self::build(tag, addr, now, alg, 1500, true)
+    }
+
+    fn build(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16, flight_split: bool) -> Self {
         let kp = Keypair::from_seed(alg, &vec![tag; alg.seed_len()]).unwrap();
         let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
         let prov = Caps(Software, true);
@@ -169,7 +179,7 @@ impl TNode {
         let mut cfg = EndpointConfig::new(u64::from(tag) * 0x9E37_79B9);
         cfg.conn.max_gso = 4;
         // The reassembly and fan-out tests need a first flight in several datagrams.
-        cfg.conn.flight_split = false;
+        cfg.conn.flight_split = flight_split;
         cfg.conn.interface_mtu = mtu;
         let ep_drbg = Drbg::new(&[tag ^ 0xa5; 32]);
         let mut ep = Box::new(Endpoint::new(now, prov, ep_drbg, identity, cfg, slots()));
@@ -456,6 +466,13 @@ impl CoreNet {
     pub fn add_with_alg(&mut self, tag: u8, alg: IdentityAlg) -> usize {
         let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
         self.nodes.push(TNode::with_alg(tag, addr, self.now, alg));
+        self.nodes.len() - 1
+    }
+
+    /// Add a node whose first flight fits whole in one datagram (see [`TNode::with_whole_flights`]).
+    pub fn add_whole_flights(&mut self, tag: u8, alg: IdentityAlg) -> usize {
+        let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
+        self.nodes.push(TNode::with_whole_flights(tag, addr, self.now, alg));
         self.nodes.len() - 1
     }
 
