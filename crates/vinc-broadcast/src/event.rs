@@ -198,6 +198,13 @@ pub enum Trace {
         /// How many topics.
         topics: u16,
     },
+    /// A hub could not give a subscriber every message it asked for and told it, or owes it the notice.
+    Short {
+        /// The subscriber.
+        peer: NodeId,
+        /// The topic.
+        topic: Tag,
+    },
     /// A hub forgot a member's subscriptions.
     SubsReleased {
         /// The member.

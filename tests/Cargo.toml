@@ -708,6 +708,10 @@ name = "broadcast_repair"
 path = "broadcast_repair.rs"
 
 [[test]]
+name = "broadcast_told"
+path = "broadcast_told.rs"
+
+[[test]]
 name = "broadcast_floors"
 path = "broadcast_floors.rs"
 

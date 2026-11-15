@@ -110,8 +110,10 @@ pub enum Event<'a> {
         /// The subscriber.
         to: &'a NodeId,
     },
-    /// A hub restored this member's held subscription to a topic: messages published while it was held may be
-    /// missing (it was confirmed down, or its stream stalled or fell too far behind and the log evicted them).
+    /// A hub tells this member that messages of a topic may be missing: its held subscription is live again (it was
+    /// confirmed down), its stream stalled or fell too far behind and the log evicted what it was owed, it subscribed
+    /// again asking from a time the hub's log no longer reaches back to, or it asked for a message the log dropped
+    /// meanwhile. One notice for each such subscription or request, not one for each message.
     Restored {
         /// The hub.
         hub: &'a NodeId,

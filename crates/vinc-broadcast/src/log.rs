@@ -6,7 +6,8 @@
 //!
 //! Invariants: entries are in arrival order; an entry's bytes are contiguous in the ring (a message that would
 //! straddle the end starts at the beginning, and the skipped tail is charged to it); a message id is in the log at
-//! most once; `origins` counts the entries of each origin, kept where an entry is pushed and popped.
+//! most once; `origins` counts the entries of each origin, kept where an entry is pushed and popped; `gone` is the
+//! newest stamp of a message that left the log, so a hub can say whether it still holds everything since a time.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec;
@@ -39,6 +40,8 @@ pub(crate) struct HubLog {
     used: usize,
     /// How many logged messages each origin has here.
     origins: BTreeMap<NodeId, u32>,
+    /// When the newest message that left the log (evicted or expired) was logged, on the hub's wall clock.
+    gone: Option<u64>,
 }
 
 impl HubLog {
@@ -51,7 +54,14 @@ impl HubLog {
             wpos: 0,
             used: 0,
             origins: BTreeMap::new(),
+            gone: None,
         }
+    }
+
+    /// Whether a message logged at or after `since_ms` (the hub's wall clock) has left the log: a hub asked for the
+    /// topic from that time cannot offer everything.
+    pub(crate) fn dropped_since(&self, since_ms: u64) -> bool {
+        self.gone.is_some_and(|w| w >= since_ms)
     }
 
     /// Whether a message of `origin` is logged here.
@@ -89,6 +99,12 @@ impl HubLog {
     pub(crate) fn at(&self, seq: u64) -> Option<&[u8]> {
         let e = self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)?;
         self.ring.get(e.off..e.off + e.len)
+    }
+
+    /// The hub's wall clock when the message with sequence number `seq` was logged, if it still is.
+    pub(crate) fn wall_at(&self, seq: u64) -> Option<u64> {
+        let e = self.entries.get(usize::try_from(seq.checked_sub(self.base)?).ok()?)?;
+        Some(e.wall_ms)
     }
 
     /// When the message with sequence number `seq` was logged, if it still is.
@@ -147,6 +163,7 @@ impl HubLog {
             self.index.remove(e.mid);
         }
         self.base += 1;
+        self.gone = Some(self.gone.map_or(e.wall_ms, |w| w.max(e.wall_ms)));
         self.used -= e.cost;
         if self.entries.is_empty() {
             self.wpos = 0;

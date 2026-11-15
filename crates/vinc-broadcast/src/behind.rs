@@ -12,7 +12,10 @@
 //! it and the publisher retries it. One subscriber must not pace the topic for ever, so a subscriber whose stream took
 //! nothing for [`PUSH_STALL_MS`], or that is owed a message older than [`PUSH_OWED_MAX`], is let go: it is held, no
 //! longer counts for the refusal, and keeps being served from the log. If the log evicted anything it was owed, it is
-//! told with RESTORED once it has caught up, as a member whose held subscription comes back is.
+//! told with RESTORED once it has caught up, as a member whose held subscription comes back is. The notice is owed
+//! like a message: a stream with no room for it keeps the place until it has. A subscriber whose session ends while it
+//! is behind loses its place, and the topic keeps the span (`Topic::forgot`), so it is told when it subscribes again
+//! from a time that does not reach back to what it was owed.
 //!
 //! A subscriber is put behind the same way when a repair it asked for (a GET, or the replay of a SUB) does not fit
 //! its stream (`gap.rs`): it is let go from the start, so a repair never paces the topic.
@@ -21,7 +24,8 @@
 //!
 //! Invariants: a subscriber is in a topic's `behind` only while it is a live subscriber of that topic; it is sent the
 //! logged messages in log order, each at most once from here, and none it published itself; the log evicts no
-//! message owed to a subscriber that is behind and not held; a subscriber that skipped evicted messages is told.
+//! message owed to a subscriber that is behind and not held; a subscriber that skipped evicted messages is told, on
+//! this session or when it subscribes on its next.
 
 use vinc_membership::{Nanos, NodeId};
 
@@ -151,14 +155,20 @@ impl Topics {
                     still = true;
                 }
                 Place::Caught => {
-                    st.behind.remove(peer);
-                    if b.lost && wire::build(&mut self.scratch, ty::RESTORED, topic, &[]).is_ok() {
-                        h.send(peer, Lane::Reply, &self.scratch);
+                    if !b.lost
+                        || wire::build(&mut self.scratch, ty::RESTORED, topic, &[]).is_err()
+                        || h.send(peer, Lane::Reply, &self.scratch)
+                    {
+                        st.behind.remove(peer);
+                    } else if h.backlogged(peer, self.scratch.len()) {
+                        // The notice is owed like a message: it waits for room, at the end of the log.
+                        st.behind.insert(*peer, b);
+                        still = true;
+                    } else {
+                        st.forget_place(peer, wall);
                     }
                 }
-                Place::Gone => {
-                    st.behind.remove(peer);
-                }
+                Place::Gone => st.forget_place(peer, wall),
             }
         }
         if !still {

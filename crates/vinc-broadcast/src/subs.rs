@@ -9,7 +9,8 @@
 //! knows whom to reach.
 //!
 //! Invariants: a SUBS frame lists at most `max_subscribers` nodes in id order, so two hubs with the same tables send the
-//! same bytes; a held member receives no push; a restore tells the member exactly the topics it had.
+//! same bytes; a held member receives no push; a restore tells the member exactly the topics it had; a release of a
+//! member that was behind in a topic leaves the span of what it was owed in that topic.
 
 use alloc::vec::Vec;
 use vinc_membership::NodeId;
@@ -175,14 +176,16 @@ impl Topics {
         }
     }
 
-    /// `member` is gone for good: forget its subscriptions. Its adjacency record goes once it expired and no log holds
-    /// a message of it.
+    /// `member`'s session ended and it was not confirmed down: forget its subscriptions. If it was behind in a topic,
+    /// the topic keeps the span, so the member is told when it subscribes again and is not offered what it was owed.
+    /// Its adjacency record goes once it expired and no log holds a message of it.
     pub fn release<H: Host>(&mut self, h: &mut H, member: &NodeId) {
         self.reach.leave(member);
+        let wall = h.wall_ms();
         let mut any = false;
         for (k, st) in &mut self.topics {
             let was_pub = st.pubs.remove(member);
-            st.behind.remove(member);
+            st.forget_place(member, wall);
             if st.subs.remove(member).is_some() {
                 any = true;
                 announce(

@@ -181,6 +181,11 @@ pub(crate) struct Topic {
     /// Hub: the subscribers whose stream had no room, each with its place in the log (see [`Behind`]). Such a
     /// subscriber is pushed nothing new: it is served from that place, in order.
     pub(crate) behind: BTreeMap<NodeId, Behind>,
+    /// Hub: the span in which it stopped serving subscribers it still owed something, because their sessions ended
+    /// (its wall clock): from when the earliest message it owed one of them was logged, to when it last forgot such
+    /// a place. A subscription that asks for the topic from inside the span is not offered that message, and is
+    /// told (`gap.rs`). One span for the topic, however many subscribers: it only ever widens.
+    pub(crate) forgot: Option<(u64, u64)>,
     pub(crate) seen: Seen,
     /// Ids a gap repair asked for and has not received.
     pub(crate) requested: BTreeSet<[u8; 8]>,
@@ -197,8 +202,37 @@ impl Topic {
             peers: Vec::new(),
             log: None,
             behind: BTreeMap::new(),
+            forgot: None,
             seen: Seen::with_capacity(SEEN_CAP),
             requested: BTreeSet::new(),
+        }
+    }
+
+    /// The hub owed a subscriber something of this topic logged at `from_ms` or later (0: something the log no
+    /// longer holds, or a notice) and can no longer send it: its session ended at `wall_ms`.
+    pub(crate) fn note_forgot(&mut self, from_ms: u64, wall_ms: u64) {
+        self.forgot = Some(
+            self.forgot
+                .map_or((from_ms, wall_ms), |(f, a)| (f.min(from_ms), a.max(wall_ms))),
+        );
+    }
+
+    /// Whether a subscription asking for the topic from `since_ms` is not offered something the hub owed a
+    /// subscriber whose session ended: it asks from after that message was logged, and from before the hub forgot.
+    pub(crate) fn forgot_since(&self, since_ms: u64) -> bool {
+        self.forgot.is_some_and(|(from, at)| from < since_ms && since_ms <= at)
+    }
+
+    /// Forget `peer`'s place in the log because its session ended at `wall_ms`. What it was owed from there is no
+    /// longer sent, so the span is kept; a place that owed nothing leaves none.
+    pub(crate) fn forget_place(&mut self, peer: &NodeId, wall_ms: u64) {
+        let Some(b) = self.behind.remove(peer) else { return };
+        let from = match self.log.as_ref() {
+            Some(log) if !b.lost && b.next >= log.base() => log.wall_at(b.next),
+            _ => Some(0),
+        };
+        if let Some(from) = from {
+            self.note_forgot(from, wall_ms);
         }
     }
 }

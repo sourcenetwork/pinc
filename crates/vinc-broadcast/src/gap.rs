@@ -14,9 +14,22 @@
 //! log from that place, in order, when its stream has room; if the log evicted any of it by then it is told with
 //! RESTORED. So a gap larger than a stream takes is repaired whole, not a stream-full for each periodic check.
 //!
+//! A hub that cannot give a subscriber everything it asks for says so (RESTORED, `Event::Restored` at the
+//! subscriber), once for the subscription or the request. That is the case when a SUB that makes the member a live
+//! subscriber, or the replay a restarted member asks for from its floor, asks from a time at or before a message the
+//! log has dropped since (evicted or expired; the floor's own message counts, so a member that restarts after the log
+//! let go of the last message it was sent is told although nothing else may be missing). Or when it asks from a time
+//! the answer does not reach back from to a message the hub owed a subscriber whose session ended while it was
+//! behind: after that message was logged and no later than the hub forgot the place (`Topic::forgot`; the subscriber
+//! that was behind asks from before its session ended, so it is told unless its answer covers what it was owed; the
+//! hub keeps one span for the topic and no record of the member). And when a GET names an id the log no longer
+//! holds. A subscriber that subscribes for the first time asks from now and is not told. A live subscriber's
+//! periodic check is not judged: it was pushed everything since it became live, or is behind and told from there.
+//!
 //! Invariants: a HAVE and a GET carry at most [`HAVE_MAX`] ids; a GET names only ids the node lacks; a replay sends
 //! at most [`REPLAY_PUSH_MAX`] messages at once and never a member's own back to it; a message asked for by a
-//! subscriber whose stream is full is owed from the log, never dropped.
+//! subscriber whose stream is full is owed from the log, never dropped; a live subscriber that asked for a message
+//! the log dropped is told, and the notice waits for room in its stream as a message does.
 
 use vinc_membership::{Nanos, NodeId};
 
@@ -28,7 +41,8 @@ use crate::consts::{
 };
 use crate::event::{Trace, topic_tag};
 use crate::host::{Host, Lane};
-use crate::node::{Refused, Topic, Topics};
+use crate::log::HubLog;
+use crate::node::{Refused, Topic, Topics, TraceQueue};
 use crate::reach::{offers, reaches};
 use crate::wire::{self, Head, get_u64, ty};
 
@@ -297,6 +311,12 @@ impl Topics {
         } else {
             false
         };
+        // The member becomes a live subscriber, or a new life of it replays from its floor, and asks from a time the
+        // hub cannot serve in full: the log dropped a message logged since then, or the time lies after a message the
+        // hub owed a subscriber whose session ended and before the hub forgot that place, so the answer does not
+        // reach back to the message.
+        let short =
+            (changed || replay) && (st.log.as_ref().is_some_and(|l| l.dropped_since(since)) || st.forgot_since(since));
         let mut owed = None;
         if let Some(log) = st.log.as_ref() {
             if replay {
@@ -345,6 +365,9 @@ impl Topics {
             if let Some(st) = self.topics.get_mut(topic) {
                 owe(st, &mut self.lagging, from, next, wall);
             }
+        }
+        if short && let Some(st) = self.topics.get_mut(topic) {
+            tell_short(h, &mut self.scratch, &mut self.tq, st, &mut self.lagging, from, topic);
         }
         if changed {
             self.announce_topic(h, topic);
@@ -398,7 +421,7 @@ impl Topics {
 
     /// A GET at a hub: send the messages behind the ids it still holds. Once the subscriber's stream has no room, the
     /// message it refused and the ones asked for after it are owed from the log (the earliest of them is the
-    /// subscriber's place), not dropped.
+    /// subscriber's place), not dropped. A subscriber that names an id the log dropped since it was offered is told.
     pub(crate) fn on_get<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], rest: &[u8]) {
         let wall = h.wall_ms();
         let Some(st) = self.topics.get_mut(topic) else {
@@ -409,9 +432,11 @@ impl Topics {
         };
         // The place of the earliest message asked for that found the stream full.
         let mut owed: Option<u64> = None;
+        let mut dropped = false;
         for mid in rest.get(..8 * HAVE_MAX).unwrap_or(rest).as_chunks::<8>().0 {
             let key = u64::from_le_bytes(*mid);
             let Some(l) = log.get(key) else {
+                dropped = true;
                 continue;
             };
             let Ok((head, _)) = Head::parse(l) else {
@@ -440,6 +465,54 @@ impl Topics {
         if let Some(next) = owed {
             owe(st, &mut self.lagging, from, next, wall);
         }
+        if dropped {
+            tell_short(h, &mut self.scratch, &mut self.tq, st, &mut self.lagging, from, topic);
+        }
+    }
+}
+
+/// Tell `peer`, a live subscriber, that the hub cannot give it every message of `topic` it asked for (RESTORED). The
+/// notice is owed like a message: a subscriber that is behind is told once it has caught up, and one whose stream has
+/// no room for the notice is behind at the end of the log, let go, until it has. If its session is gone the topic
+/// keeps the time, and it is told when it subscribes again.
+fn tell_short<H: Host>(
+    h: &mut H,
+    scratch: &mut Vec<u8>,
+    tq: &mut TraceQueue,
+    st: &mut Topic,
+    lagging: &mut alloc::collections::BTreeSet<NodeId>,
+    peer: &NodeId,
+    topic: &[u8],
+) {
+    if st.subs.get(peer) != Some(&true) {
+        return;
+    }
+    tq.push(|| Trace::Short {
+        peer: *peer,
+        topic: topic_tag(topic),
+    });
+    if let Some(b) = st.behind.get_mut(peer) {
+        b.lost = true;
+        return;
+    }
+    if wire::build(scratch, ty::RESTORED, topic, &[]).is_err() || h.send(peer, Lane::Reply, scratch) {
+        return;
+    }
+    let wall = h.wall_ms();
+    match st.log.as_ref().map(HubLog::end) {
+        Some(next) if h.backlogged(peer, scratch.len()) => {
+            st.behind.insert(
+                *peer,
+                Behind {
+                    next,
+                    progress_ms: wall,
+                    held: true,
+                    lost: true,
+                },
+            );
+            lagging.insert(*peer);
+        }
+        _ => st.note_forgot(0, wall),
     }
 }
 
