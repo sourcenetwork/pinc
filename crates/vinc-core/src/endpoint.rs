@@ -590,6 +590,7 @@ ep_impl! {
             held_by_ledger: self.counters.held_by_ledger,
             stalled_in: self.counters.stalled_in,
             holders_refused: self.counters.holders_refused,
+            events_queued: self.events.len(),
             events_dropped: self.events.dropped,
             events_lost: self.events.lost,
             fragments_held: self.orphans.counts.held,

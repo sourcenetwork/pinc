@@ -773,6 +773,8 @@ pub struct NodeStats {
     /// First flights dropped because the id they name already has four half-open sessions (also counted in
     /// `dropped_in`).
     pub holders_refused: u64,
+    /// Events waiting for the host now.
+    pub events_queued: usize,
     /// Events dropped because the event queue was full.
     pub events_dropped: u64,
     /// Events the application cannot recover that were dropped because the event queue held nothing else to give up;
