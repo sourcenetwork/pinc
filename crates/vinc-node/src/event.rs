@@ -86,7 +86,9 @@ pub enum NodeEvent {
         /// The topic.
         topic: Vec<u8>,
     },
-    /// A hub restored this node's held subscription to a topic.
+    /// A hub told this node that messages of a topic may be missing: its held subscription is live again, the log
+    /// dropped messages it was owed or asked for, or it subscribed again from a time the log no longer reaches back
+    /// to (`vinc_broadcast::Event::Restored`).
     Restored {
         /// The hub.
         hub: NodeId,

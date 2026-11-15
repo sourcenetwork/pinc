@@ -48,6 +48,20 @@ pub enum Event {
         /// The hub.
         hub: NodeId,
     },
+    /// A hub told this endpoint that messages of `topic` may be missing. It does so when the endpoint's subscription
+    /// was held while the hub took the endpoint for down and is live again; when the endpoint fell so far behind
+    /// that the hub's log dropped messages it was still owed; when the endpoint comes back, after its session with
+    /// the hub ended or as a new life of the same identity, and asks for the topic from a time the hub's log no
+    /// longer reaches back to; and when it asks for a message the log dropped meanwhile. The event says that
+    /// something may be missing, not what: an application that needs every message fetches the state it follows by
+    /// its own means. One event for each such occasion, not one for each message, and it can come when nothing was
+    /// missed (the hub does not know which of its last messages arrived before a session ended).
+    Missed {
+        /// The topic.
+        topic: Vec<u8>,
+        /// The hub.
+        hub: NodeId,
+    },
     /// With [`Builder::connected_topics`](crate::Builder::connected_topics): the hubs were not told every peer this
     /// endpoint holds sessions with, so they reach it from part of its component only. `named` is how many they were
     /// told: the first [`ADJ_MAX`](vinc_broadcast::consts::ADJ_MAX) when there are more, or `None` when the record

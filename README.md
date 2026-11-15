@@ -200,7 +200,10 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   topic, loses 0 of 60,000 deliveries where iroh and rust-libp2p lose about half
   ([#115](https://github.com/sourcenetwork/vinc/pull/115)): a publisher is told when its hub has room and a
   subscriber that fell behind is brought up from the log. The price is the median delivery time of such a burst,
-  7.0 s.
+  7.0 s. A subscriber the hub cannot give every message (it was away while the log moved on, or it fell too far
+  behind) is told so by the hub, and the application hears it as `Event::Missed`
+  ([#505](https://github.com/sourcenetwork/vinc/issues/505),
+  [#507](https://github.com/sourcenetwork/vinc/issues/507)).
 - **The facade** reaches peers directly and through relays, and has topic broadcast through a hub, lookup of a peer
   by its id through signed records, export and restore of its state, revocation, stream urgency, and two stream calls
   that pass a buffer instead of copying it (`RecvStream::read_with`, `SendStream::send_owned`). One endpoint can be

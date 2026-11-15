@@ -68,6 +68,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                     self.push_event(Event::Joined { topic, hub });
                 }
             }
+            NodeEvent::Restored { hub, topic } => {
+                if self.topics.contains_key(&topic) {
+                    let hub = self.node.full_id(&hub);
+                    self.push_event(Event::Missed { topic, hub });
+                }
+            }
             NodeEvent::ReachClosed => self.push_event(Event::ReachClosed),
             NodeEvent::ReachOpened => self.push_event(Event::ReachOpened),
             NodeEvent::Member(_) => self.neighbors_dirty = true,

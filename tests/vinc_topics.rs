@@ -333,3 +333,98 @@ async fn with_connected_topics_a_group_hears_only_the_publishers_its_sessions_li
     })
     .await;
 }
+
+/// Whether the endpoint hears a message within 300 ms; a notice that messages may be missing fails the test.
+macro_rules! heard_before {
+    ($ep:expr) => {{
+        let ep = $ep.clone();
+        nuclei::time::timeout(Duration::from_millis(300), async move {
+            loop {
+                match ep.event().await {
+                    Some(Event::Message { .. }) => break true,
+                    Some(Event::Missed { .. }) => panic!("a first join heard that messages may be missing"),
+                    Some(_) => {}
+                    None => break false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false)
+    }};
+}
+
+/// An endpoint stops, a burst longer than the hub's log goes by, and a new life of the same identity joins the topic:
+/// the hub replays what its log still holds and cannot give the rest, and the application hears it once
+/// (`Event::Missed`, vinc#507). A first join hears no such event.
+#[nuclei::test]
+async fn an_endpoint_that_comes_back_to_a_log_that_moved_past_it_hears_that_messages_may_be_missing() {
+    let hub = lo_endpoint!(vinc_common::builder().seed(&[10; 32]).unwrap().hub());
+    run(&hub);
+    let relay = hub_relay(hub.local_addr(), hub.id());
+    let publisher = lo_endpoint!(vinc_common::builder().seed(&[1; 32]).unwrap().relays([relay]));
+    run(&publisher);
+    // A second subscriber that stays: when it has the last message of the burst, the hub has logged all of it.
+    let watcher = lo_endpoint!(vinc_common::builder().seed(&[3; 32]).unwrap().relays([relay]));
+    run(&watcher);
+    let topic = b"feed".to_vec();
+    within(120, async {
+        let first = lo_endpoint!(vinc_common::builder().seed(&[2; 32]).unwrap().relays([relay]));
+        run(&first);
+        assert!(first.join(&topic, &[]).await.unwrap());
+        assert!(watcher.join(&topic, &[]).await.unwrap());
+        // A subscription takes a moment to reach the hub: publish until a message arrives at both.
+        let (mut a, mut b) = (false, false);
+        for _ in 0..200 {
+            publisher.publish(&topic, b"before", None).await.unwrap();
+            a = a || heard_before!(first);
+            b = b || heard_before!(watcher);
+            if a && b {
+                break;
+            }
+        }
+        assert!(a && b, "no message reached the subscribers");
+        first.close().await;
+        // More messages than the hub's log holds (2,048), none of them to the endpoint that stopped.
+        for k in 0..2_200u32 {
+            publisher.publish(&topic, &k.to_be_bytes(), None).await.unwrap();
+        }
+        publisher.publish(&topic, b"last", None).await.unwrap();
+        let w = watcher.clone();
+        let logged = nuclei::time::timeout(Duration::from_secs(60), async move {
+            loop {
+                match w.event().await {
+                    Some(Event::Message { payload, .. }) if payload == b"last" => break true,
+                    Some(_) => {}
+                    None => break false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        assert!(logged, "the burst did not reach the subscriber that stayed");
+        let again = lo_endpoint!(vinc_common::builder().seed(&[2; 32]).unwrap().relays([relay]));
+        run(&again);
+        assert!(again.join(&topic, &[]).await.unwrap());
+        let (ep, hub_id, want) = (again.clone(), hub.id(), topic.clone());
+        let missed = nuclei::time::timeout(Duration::from_secs(60), async move {
+            let mut n = 0;
+            let mut quiet = Duration::from_secs(60);
+            // After the first notice, read two more seconds of events: there is no second one.
+            loop {
+                match nuclei::time::timeout(quiet, ep.event()).await {
+                    Ok(Some(Event::Missed { topic, hub })) => {
+                        assert_eq!((topic, hub), (want.clone(), hub_id));
+                        n += 1;
+                        quiet = Duration::from_secs(2);
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => break n,
+                }
+            }
+        })
+        .await
+        .unwrap_or(0);
+        assert_eq!(missed, 1, "the new life is told once that messages may be missing");
+    })
+    .await;
+}
