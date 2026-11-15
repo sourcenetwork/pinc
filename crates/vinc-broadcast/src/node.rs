@@ -176,6 +176,16 @@ pub(crate) struct Topic {
     pub(crate) pubs: BTreeSet<NodeId>,
     /// Member: the subscribers a hub reported, for the member-to-member fallback.
     pub(crate) peers: Vec<NodeId>,
+    /// Member: the hub whose whole list `peers` was built from; only its deltas apply.
+    pub(crate) peers_from: Option<NodeId>,
+    /// Member: the version of `peers` (the hub's incarnation and list number); `None` while it waits for a whole list.
+    pub(crate) peers_ver: Option<(u64, u32)>,
+    /// Hub: the list last told the recipients (see `subs`).
+    pub(crate) told: Vec<NodeId>,
+    /// Hub: the number of `told`, raised by one at every change; with the incarnation it is the list's version.
+    pub(crate) told_seq: u32,
+    /// Hub: recipients that may not hold `told`, owed the whole list.
+    pub(crate) stale: BTreeSet<NodeId>,
     /// Hub: the message log.
     pub(crate) log: Option<HubLog>,
     /// Hub: the subscribers whose stream had no room, each with its place in the log (see [`Behind`]). Such a
@@ -203,6 +213,11 @@ impl Topic {
             rsubs: BTreeMap::new(),
             pubs: BTreeSet::new(),
             peers: Vec::new(),
+            peers_from: None,
+            peers_ver: None,
+            told: Vec::new(),
+            told_seq: 0,
+            stale: BTreeSet::new(),
             log: None,
             behind: BTreeMap::new(),
             forgot: None,
@@ -302,6 +317,9 @@ pub struct Topics {
     pub(crate) sent: SentFloors,
     /// Hub: the subscribers that are behind in some topic (see [`Topic::behind`]).
     pub(crate) lagging: BTreeSet<NodeId>,
+    /// Hub: every recipient whose stream refused a subscriber list, so that it may be stale in some topic (a superset
+    /// of the `stale` sets; see `subs`). At most the recipients of every topic.
+    pub(crate) owed: BTreeSet<NodeId>,
     pub(crate) gather: Gather,
     pub(crate) last_rx_wall: u64,
     /// The wall clock up to which every periodic check since the start reached back to the one before; starts at the
@@ -398,6 +416,7 @@ impl Topics {
             revoked: BTreeSet::new(),
             sent: SentFloors::default(),
             lagging: BTreeSet::new(),
+            owed: BTreeSet::new(),
             gather: Gather::new(cfg.is_hub),
             last_rx_wall: 0,
             last_gap_wall: wall_ms,
@@ -476,7 +495,9 @@ impl Topics {
     }
 
     /// Take `member` as a subscriber of `topic` that this node may send to straight when no hub is reachable (a join
-    /// hint). A hub's list of subscribers replaces it. False if the topic table or the subscriber list is full.
+    /// hint). A hub's list of subscribers replaces it, and once the node holds a hub's list a hint leaves it alone:
+    /// that list is the hub's at its version, which later changes are applied to. False if the topic table or the
+    /// subscriber list is full.
     pub fn hint(&mut self, topic: &[u8], member: &NodeId) -> bool {
         if *member == self.me || !self.ensure_topic(topic) {
             return false;
@@ -485,7 +506,7 @@ impl Topics {
         let Some(st) = self.topics.get_mut(topic) else {
             return false;
         };
-        if st.peers.contains(member) {
+        if st.peers_from.is_some() || st.peers.contains(member) {
             return true;
         }
         if st.peers.len() >= max {

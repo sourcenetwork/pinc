@@ -65,7 +65,7 @@ mod table;
 #[cfg(feature = "alloc")]
 mod timers;
 
-pub use event::{HoldWhy, PublishMode, Reject, Tag, Trace, topic_tag};
+pub use event::{HoldWhy, PublishMode, Reject, SubsDrop, Tag, Trace, topic_tag};
 pub use host::{Event, Host, Lane};
 #[cfg(feature = "alloc")]
 pub use node::{Config, Limits, Refused, StartError, Topics};

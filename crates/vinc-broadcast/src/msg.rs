@@ -350,7 +350,7 @@ impl Topics {
         let mut topics = core::mem::take(&mut self.topics);
         for (k, st) in &mut topics {
             if core::mem::take(&mut st.refused) && st.sub {
-                self.send_sub(h, &p, k, since, false);
+                self.send_sub(h, &p, k, since, false, st.held(&p));
             }
         }
         self.topics = topics;

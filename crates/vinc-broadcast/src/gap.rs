@@ -3,7 +3,8 @@
 //! A subscriber tells its primary hub the time it wants the topic from (`since`, in the wall-clock milliseconds the
 //! hub stamps its log with). The hub answers with the ids it logged since (HAVE), or with the messages themselves
 //! when the subscriber asks for a replay (flag 1 on SUB, `REPLAY_PUSH`): all of them, oldest first, bounded by the log
-//! and paced by the subscriber's stream. The subscriber asks for the ids it lacks
+//! and paced by the subscriber's stream; and with the whole subscriber list unless the SUB carries the version of the
+//! list the hub has now (flag 2). The subscriber asks for the ids it lacks
 //! (GET) and the hub sends them (MSG). A periodic check (`GAP_AE`) repeats the question while a topic is live, so a
 //! message a dead session swallowed is fetched; hubs also exchange the ids of their logs (HAVE) every [`HUB_AE`].
 //!
@@ -45,7 +46,13 @@ use crate::host::{Host, Lane};
 use crate::log::HubLog;
 use crate::node::{Refused, Topic, Topics, TraceQueue};
 use crate::reach::{offers, reaches};
+use crate::subs::{Ver, read_ver, ver_bytes};
 use crate::wire::{self, Head, get_u64, ty};
+
+/// SUB flag: replay the logged messages instead of offering their ids.
+pub(crate) const SUB_REPLAY: u8 = 1;
+/// SUB flag: the version of the subscriber list the member holds follows the flags.
+pub(crate) const SUB_VER: u8 = 2;
 
 /// Offer `mids` to `peers` as HAVE frames: every id, [`HAVE_MAX`] to a frame, oldest first. `sent` hears the peer and
 /// the id count of each frame. A log holds at most [`LOG_CAP`] messages, so an offer is at most four frames a peer.
@@ -90,13 +97,29 @@ impl Topics {
         base.max(self.last_rx_wall.saturating_sub(RESUB_BACK_MS).min(self.last_gap_wall))
     }
 
-    pub(crate) fn send_sub<H: Host>(&mut self, h: &mut H, hub: &NodeId, topic: &[u8], since_ms: u64, replay: bool) {
+    /// SUB `since | flags | version`: flag [`SUB_REPLAY`] asks for the messages themselves; flag [`SUB_VER`] says the
+    /// version of the hub's subscriber list this member holds follows, and the hub sends the whole list unless it is
+    /// the current one. With no flag the flags byte is left out, and a SUB with no version is sent the whole list.
+    pub(crate) fn send_sub<H: Host>(
+        &mut self,
+        h: &mut H,
+        hub: &NodeId,
+        topic: &[u8],
+        since_ms: u64,
+        replay: bool,
+        held: Option<Ver>,
+    ) {
         if *hub == self.me {
             return;
         }
         let since = since_ms.to_be_bytes();
-        let flag = [1u8];
-        let parts: &[&[u8]] = if replay { &[&since, &flag] } else { &[&since] };
+        let flag = [(u8::from(replay) * SUB_REPLAY) | (u8::from(held.is_some()) * SUB_VER)];
+        let ver = held.map(ver_bytes).unwrap_or_default();
+        let parts: &[&[u8]] = match (flag[0], held) {
+            (0, _) => &[&since],
+            (_, None) => &[&since, &flag],
+            (_, Some(_)) => &[&since, &flag, &ver],
+        };
         if wire::build(&mut self.scratch, ty::SUB, topic, parts).is_ok() {
             h.send(hub, Lane::Main, &self.scratch);
             self.trace(|| Trace::SubSent {
@@ -122,7 +145,8 @@ impl Topics {
             st.confirmed = false;
             if let Some(p) = self.primary {
                 let since = h.wall_ms();
-                self.send_sub(h, &p, topic, since, false);
+                let held = self.held_ver(&p, topic);
+                self.send_sub(h, &p, topic, since, false, held);
             }
         }
         Ok(())
@@ -149,7 +173,7 @@ impl Topics {
         let topics = core::mem::take(&mut self.topics);
         for (k, st) in &topics {
             if st.sub {
-                self.send_sub(h, hub, k, since_ms, false);
+                self.send_sub(h, hub, k, since_ms, false, st.held(hub));
             }
         }
         self.topics = topics;
@@ -190,7 +214,7 @@ impl Topics {
             {
                 h.send(o, Lane::Reply, &self.scratch);
             }
-            self.send_sub(h, new, k, since, false);
+            self.send_sub(h, new, k, since, false, st.held(new));
         }
         self.topics = topics;
     }
@@ -203,7 +227,7 @@ impl Topics {
         let topics = core::mem::take(&mut self.topics);
         for (k, st) in &topics {
             if st.sub {
-                self.send_sub(h, &p, k, floor_ms, true);
+                self.send_sub(h, &p, k, floor_ms, true, st.held(&p));
             }
         }
         self.topics = topics;
@@ -225,7 +249,7 @@ impl Topics {
         let mut asked = false;
         for (k, st) in &topics {
             if st.sub && st.seen.newest().is_some_and(|t| now.saturating_sub(t) < GAP_LIVE) {
-                self.send_sub(h, &p, k, since, false);
+                self.send_sub(h, &p, k, since, false, st.held(&p));
                 asked = true;
             }
         }
@@ -300,7 +324,11 @@ impl Topics {
         if self.lagging.contains(from) {
             self.peer_writable(h, now, from);
         }
-        let replay = rest.get(8) == Some(&1);
+        let flags = rest.get(8).copied().unwrap_or(0);
+        let replay = flags & SUB_REPLAY != 0;
+        let their_ver = (flags & SUB_VER != 0)
+            .then(|| rest.get(9..).and_then(read_ver).map(|(v, _)| v))
+            .flatten();
         if !self.ensure_topic(topic) {
             return;
         }
@@ -371,9 +399,11 @@ impl Topics {
         if short && let Some(st) = self.topics.get_mut(topic) {
             tell_short(h, &mut self.scratch, &mut self.tq, st, &mut self.lagging, from, topic);
         }
-        if changed {
-            self.announce_topic(h, topic);
-        }
+        // The others are told the change, if there is one; the subscriber is sent the whole list unless it holds the
+        // version the list has now, which a change raises (a new subscriber, one that missed a change or holds the list
+        // of an earlier life of this hub).
+        let fresh = (changed || their_ver != Some(self.cur_ver(topic))).then_some(from);
+        self.announce_topic(h, topic, changed, fresh);
     }
 
     /// An UNSUB at a hub.
@@ -384,7 +414,7 @@ impl Topics {
                 st.subs.remove(from).is_some()
             })
         {
-            self.announce_topic(h, topic);
+            self.announce_topic(h, topic, true, None);
         }
     }
 
