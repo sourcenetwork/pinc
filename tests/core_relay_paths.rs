@@ -313,6 +313,68 @@ fn an_idle_end_on_a_relay_path_answers_a_challenge_and_sends_none() {
     });
 }
 
+/// A datagram from a relay address the session does not track yet says nothing about the direct path the session is
+/// on. The endpoint names the new path a relay's, and the session stays where it is: the reference model chooses the
+/// active path by itself only from a relay. Chosen again here, a direct path slower than a second lost to a relay
+/// path that was added and never heard, whose round trip reads as zero.
+#[test]
+fn a_session_on_a_slow_direct_path_stays_on_it_when_a_datagram_comes_from_a_new_relay_address() {
+    big_stack(|| {
+        // One way 600 ms: the direct path's round trip is above the second a relay path is charged.
+        let one_way = 600 * MS;
+        let (mut net, direct, via) = pair(one_way);
+        let via2 = relay_addr(false, 4, 7);
+        net.nodes[1].extra.push(via2);
+        let (s, _) = net.connect_pair(0, 1, b"vinc/a", Role::Other);
+        // A relay path the session adds and never hears on: nothing passes through that relay.
+        net.loss = Some(Box::new(move |f, to, _| f == via || to == via));
+        let t = net.now;
+        net.nodes[0].cmd(t, Command::Punch { session: s, addr: via }).unwrap();
+        send(&mut net, s, &pattern(2_000, 1));
+        net.run_for(5 * SEC_NS);
+        // One datagram of node 1 is taken off the direct path and arrives later from the other relay address, behind
+        // a newer one, as a datagram that took the relay does.
+        let me = net.nodes[0].addr;
+        let held = std::rc::Rc::new(std::cell::RefCell::new(None::<Vec<u8>>));
+        let h = held.clone();
+        net.loss = Some(Box::new(move |f, to, bytes| {
+            if f == via || to == via {
+                return true;
+            }
+            if f == direct && to == me && h.borrow().is_none() {
+                *h.borrow_mut() = Some(bytes.to_vec());
+                return true;
+            }
+            false
+        }));
+        send(&mut net, s, &pattern(2_000, 2));
+        net.run_for(3 * SEC_NS);
+        send(&mut net, s, &pattern(2_000, 3));
+        net.run_for(3 * SEC_NS);
+        let Some(bytes) = held.borrow_mut().take() else {
+            panic!("node 1 sent nothing on the direct path")
+        };
+        net.inject(via2, me, bytes, 0);
+        net.run_for(SEC_NS);
+        // The session's next data leaves on the direct path, none of it towards the relay it never heard.
+        let from = net.now;
+        send(&mut net, s, &pattern(3_000, 4));
+        net.run_for(2 * SEC_NS);
+        let big = |to: SocketAddr| {
+            net.tapped
+                .iter()
+                .filter(|d| d.0 >= from && d.2 == to && d.3 > 1_000)
+                .count()
+        };
+        assert_eq!(
+            big(via),
+            0,
+            "the session left its direct path for a relay path it never heard on"
+        );
+        assert!(big(direct) > 0, "no data left on the direct path");
+    });
+}
+
 /// A valid relay path added to a session is pinged at once while data moved in the last 20 s, as the reference model's
 /// keepalive pings every valid path never sent on: nothing else would leave on it.
 #[test]

@@ -518,6 +518,11 @@ conn_impl! {
     /// by receiving on it and takes it to be direct; the endpoint knows when the address is a relay's, and a relay
     /// path must rank behind every direct one, or the session never leaves it for a direct path that validates. A path
     /// the connection does not track is left alone: the amplification limit still guards it.
+    ///
+    /// The active path is chosen again only if it is now a relay path (or there is none): the reference model
+    /// chooses by itself only from a relay, and otherwise when a direct path validates. A session on a direct path
+    /// stays on it whatever the endpoint says of another path. Chosen again there, it would leave a direct path
+    /// slower than a second for a relay path whose round trip is not known yet and reads as zero.
     pub fn set_path_info(&mut self, id: PathId, info: PathInfo) {
         let Some(i) = self.paths.find(id) else { return };
         if let Some(p) = self.paths.get_mut(i)
@@ -525,7 +530,9 @@ conn_impl! {
         {
             p.info = info;
             self.sync_kind(i);
-            self.choose_path();
+            if self.paths.active().is_none_or(|p| p.info.kind == PathKind::Relay) {
+                self.choose_path();
+            }
             // A path taken for direct that the endpoint names a relay's is valid as every relay path is. It becomes
             // a candidate for the next choice of the active path, not this one.
             if let Some(p) = self.paths.get_mut(i)
