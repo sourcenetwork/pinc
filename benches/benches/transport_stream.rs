@@ -96,8 +96,8 @@ fn bench_write(c: &mut Criterion) {
                 table.write(&mut pool, id, black_box(&payload), u64::MAX).unwrap(),
                 FRAME
             );
-            let frame = table.next_stream_frame(FRAME).unwrap();
-            table.copy_out(&pool, &frame, &mut out).unwrap();
+            let frame = table.next_stream_frame(&mut pool, FRAME).unwrap();
+            table.copy_out(&mut pool, &frame, &mut out).unwrap();
             table.on_acked(&mut pool, id, frame.offset, frame.len as u64, false);
             black_box(out[0])
         });
@@ -121,15 +121,15 @@ fn bench_source(c: &mut Criterion) {
     g.throughput(Throughput::Bytes(FRAME as u64));
     // A length that keeps every read whole: the source repeats a block that is a multiple of the frame size.
     let block = vec![0x3Cu8; FRAME * 64];
-    let pool = BufferPool::new_boxed(4);
+    let mut pool = BufferPool::new_boxed(4);
     let mut table = Box::new(Streams::<Repeating<'_>, 2, 65>::new(&config(), &pool));
     let id = table.open_stream(&pool, false).unwrap();
     table.open_source(id, Repeating(&block), 1 << 50).unwrap();
     let mut out = [0u8; FRAME];
     g.bench_function("source_backed_build_1400", |b| {
         b.iter(|| {
-            let frame = table.next_stream_frame(FRAME).unwrap();
-            table.copy_out(&pool, &frame, &mut out).unwrap();
+            let frame = table.next_stream_frame(&mut pool, FRAME).unwrap();
+            table.copy_out(&mut pool, &frame, &mut out).unwrap();
             black_box(out[0])
         });
     });

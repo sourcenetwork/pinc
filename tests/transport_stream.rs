@@ -247,7 +247,7 @@ fn a_deferred_grant_is_issued_when_acknowledged_send_data_gives_the_pool_back() 
         drain_control(&mut t).is_empty(),
         "no grant while the send buffer holds the pool"
     );
-    let sent = drain_frames(&mut t, &pool, 1 << 20);
+    let sent = drain_frames(&mut t, &mut pool, 1 << 20);
     assert!(!sent.is_empty());
     for (c, _) in &sent {
         t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);

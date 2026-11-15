@@ -22,6 +22,9 @@ structure P where
   ch : Nat
   ring : Nat
   rr : Nat
+  /-- The intervals a stream's ranges hold once they spilled into a pool chunk (`SPILL`, 1024 in the code); `rr` turns the
+  spill off, the behaviour before #159. -/
+  spr : Nat
   n : Nat
   maxrem : Nat
   b : Nat
@@ -84,12 +87,14 @@ structure Slot where
   ms : Option Nat
   mb : Nat
   mr : Nat
+  /-- The stream's stored ranges spilled into a pool chunk (`RangeSet::is_spilled`). -/
+  sp : Bool
   deriving DecidableEq, Repr, Inhabited
 
 def Slot.new : Slot :=
   { id := none, open_ := false, held := [], rs := [], read := 0, hi := 0, contig := 0, fin := none, limit := 0,
     size := 0, pend := false, defer := false, rst := none, obs := false, sdone := true, srst := 0, stop := 0, qcode := none, scode := none,
-    cnt := false, sfl := false, ord := 0, ms := none, mb := 0, mr := 0 }
+    cnt := false, sfl := false, ord := 0, ms := none, mb := 0, mr := 0, sp := false }
 
 structure Tab where
   slots : List Slot
@@ -171,7 +176,9 @@ def Slot.due (p : P) (r : Slot) : Option Nat :=
     if cand > r.limit && cand ≥ r.limit + r.size / 8 then some cand else none
 
 /-! ### The pool -/
-def heldTotal (T : Tab) : Nat := (T.slots.map (·.held.length)).sum
+/-- The pool chunks a slot holds: its ring's, and one more when its ranges spilled. -/
+def Slot.chunks (r : Slot) : Nat := r.held.length + if r.sp then 1 else 0
+def heldTotal (T : Tab) : Nat := (T.slots.map (·.chunks)).sum
 def used (T : Tab) : Nat := heldTotal T + T.ext
 def availC (p : P) (T : Tab) : Nat := p.b - used T
 def avail (p : P) (T : Tab) : Nat := availC p T * p.ch
@@ -313,13 +320,16 @@ def storeStep (p : P) (T : Tab) (r : Slot) (off len : Nat) (diff : Bool) : Slot 
   if lo ≥ e then (r, "ok")
   else if last - r.read / p.ch ≥ p.ring then (r, "FlowControl")
   else if lo < r.hi && diff && overlaps r.rs lo e then (r, "Conflict")
-  else if missing.length > availC p T then (r, "Exhausted")
-  else match insertR p.rr r.rs lo e with
+  -- `RangeSet::insert_cost`: a frame that needs one more interval than the inline ranges hold spills them into a chunk
+  else
+    let spill := p.spr > p.rr && !r.sp && (insertR p.rr r.rs lo e).isNone
+    if missing.length + (if spill then 1 else 0) > availC p T then (r, "Exhausted")
+    else match insertR (if r.sp || spill then p.spr else p.rr) r.rs lo e with
     | none => (r, "Fragmented")
     | some rs' =>
       ({ r with held := r.held.filter (· < first) ++ (List.range (last + 1 - first)).map (first + ·) ++
                         r.held.filter (· > last),
-                rs := rs', contig := first0 rs' }, "ok")
+                rs := rs', contig := first0 rs', sp := r.sp || spill }, "ok")
 
 def onData (p : P) (T : Tab) (r : Slot) (off len : Nat) (fin diff : Bool) : Slot × String :=
   let e := off + len
@@ -348,7 +358,10 @@ def onReset (p : P) (r : Slot) (code fs : Nat) : Slot × String :=
   if fs > p.maxoff || r.fin.any (· != fs) || fs < r.hi then (r, "FinalSize")
   else if fs > r.limit then (r, "FlowControl")
   else if r.rst.isSome then (r, "ok")
-  else ({ r with hi := fs, fin := some fs, rst := some code, read := fs, contig := fs, held := [], rs := [] }, "ok")
+  else
+    -- a reset frees the ranges with everything else, the spill chunk too
+    let r1 := { r with hi := fs, fin := some fs, rst := some code, read := fs, contig := fs, held := [], rs := [] }
+    ({ r1 with sp := false }, "ok")
 
 def reset (p : P) (T : Tab) (id code fs : Nat) : Tab × String :=
   let (T1, i, err) := locate p T id
@@ -381,6 +394,7 @@ def consume (p : P) (T : Tab) (id n now srtt : Nat) : Tab × String :=
       let r1 := { r with read := nr,
                          held := if cut then [] else r.held.filter (fun k => !(r.read / p.ch ≤ k && k < nr / p.ch)),
                          rs := if cut then [] else r.rs,
+                         sp := if cut then false else r.sp,
                          ms := ms, mb := mb, mr := mr,
                          size := max r.size (windowTarget p mr) }
       let r2 := { r1 with obs := r1.obs || r1.status != 0 }

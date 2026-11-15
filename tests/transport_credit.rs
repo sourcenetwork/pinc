@@ -248,9 +248,9 @@ fn a_peer_stream_whose_answer_has_left_no_longer_counts_against_the_limit() {
     assert_eq!(raise(&mut t, &pool), None, "no reply has left yet");
     // The replies leave. Nothing is acknowledged.
     let mut sent = Vec::new();
-    while let Some(c) = t.next_stream_frame(1200) {
+    while let Some(c) = t.next_stream_frame(&mut pool, 1200) {
         let mut buf = vec![0u8; c.len];
-        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.copy_out(&mut pool, &c, &mut buf).unwrap();
         sent.push(c);
     }
     assert_eq!(
@@ -417,9 +417,9 @@ fn a_window_is_charged_from_its_first_byte_and_a_stream_is_admitted_while_a_firs
         assert_eq!(read_to_end(&mut t, &mut pool, id), len);
         t.finish(id).unwrap();
     }
-    while let Some(c) = t.next_stream_frame(1200) {
+    while let Some(c) = t.next_stream_frame(&mut pool, 1200) {
         let mut buf = vec![0u8; c.len];
-        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.copy_out(&mut pool, &c, &mut buf).unwrap();
         t.on_acked(&mut pool, c.id, c.offset, c.len as u64, c.fin);
     }
     assert_eq!(t.open_streams(), 0);

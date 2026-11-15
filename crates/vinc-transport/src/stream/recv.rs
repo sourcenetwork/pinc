@@ -60,12 +60,12 @@ impl<const C: usize> Recv<C> {
 
     /// The slot view of the receive half; the table fills in the id and the send half.
     #[cfg(feature = "trace")]
-    pub(super) fn trace_view(&self) -> super::trace::SlotView {
+    pub(super) fn trace_view(&self, pool: &BufferPool<'_>) -> super::trace::SlotView {
         super::trace::SlotView {
             id: u64::MAX,
             open: self.open,
             held: self.ring.numbers(self.read_off / CHUNK_SIZE as u64),
-            ranges: self.ranges.to_vec(),
+            ranges: self.ranges.to_vec(pool),
             read: self.read_off,
             highest: self.highest,
             contig: self.contig,
@@ -73,6 +73,7 @@ impl<const C: usize> Recv<C> {
             limit: self.win.limit,
             size: self.win.size,
             meter: self.meter.view(),
+            spilled: self.ranges.is_spilled(),
             pending: self.win.pending,
             deferred: self.win.deferred,
             reset: self.reset,
@@ -143,7 +144,12 @@ impl<const C: usize> Recv<C> {
 
     pub(super) fn release_all(&mut self, pool: &mut BufferPool<'_>) {
         self.ring.release_all(pool);
-        self.ranges.clear();
+        self.ranges.clear(pool);
+    }
+
+    /// Whether the received ranges hold a pool chunk.
+    pub(super) const fn spilled(&self) -> bool {
+        self.ranges.is_spilled()
     }
 
     /// The pool bytes the credit up to the granted limit may still claim, as the ledger counts them
@@ -239,17 +245,17 @@ impl<const C: usize> Recv<C> {
             return Err(StreamError::FlowControl);
         }
         if lo < self.highest {
-            for ov in self.ranges.overlaps(lo..end) {
+            for ov in self.ranges.overlaps(pool, lo..end) {
                 let part = body.get((ov.start - lo) as usize..(ov.end - lo) as usize);
                 if part.is_none_or(|p| !self.ring.matches(pool, ov.start, p)) {
                     return Err(StreamError::Conflict);
                 }
             }
         }
-        if self.ring.missing(first, last) > pool.available_chunks() {
+        if self.ring.missing(first, last) + self.ranges.insert_cost(pool, &(lo..end)) > pool.available_chunks() {
             return Err(StreamError::Exhausted);
         }
-        self.ranges.insert(lo..end).map_err(|_| StreamError::Fragmented)?;
+        self.ranges.insert(pool, lo..end).map_err(|_| StreamError::Fragmented)?;
         self.ring.write(pool, lo, body)?;
         self.contig = self.ranges.first().filter(|r| r.start == 0).map_or(0, |r| r.end);
         Ok(())
@@ -272,19 +278,21 @@ impl<const C: usize> Recv<C> {
         if self.reset.is_some() || at < self.read_off {
             return None;
         }
-        let run = self.ranges.containing(at)?;
+        let run = self.ranges.containing(pool, at)?;
         let chunk = CHUNK_SIZE as u64;
         let len = usize::try_from((run.end - at).min(chunk - at % chunk)).ok()?;
         self.ring.span(pool, at / chunk, (at % chunk) as usize, len)
     }
 
     /// The first stored run that reaches past `from`, cut to start at `from` or later.
-    pub(super) fn stored_after(&self, from: u64) -> Option<core::ops::Range<u64>> {
+    pub(super) fn stored_after(&self, pool: &BufferPool<'_>, from: u64) -> Option<core::ops::Range<u64>> {
         if self.reset.is_some() {
             return None;
         }
         let from = from.max(self.read_off);
-        self.ranges.first_ending_after(from).map(|r| r.start.max(from)..r.end)
+        self.ranges
+            .first_ending_after(pool, from)
+            .map(|r| r.start.max(from)..r.end)
     }
 
     /// Release `n` readable bytes.

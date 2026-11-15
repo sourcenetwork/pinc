@@ -32,15 +32,15 @@ fn overflow_route<const C: usize>() {
     // One chunk is written and sent as frames of FRAME bytes; the rest waits for room in the ring.
     assert_eq!(t.write(&mut pool, id, &data[..CHUNK_SIZE], NO_CAP).unwrap(), CHUNK_SIZE);
     let mut frames = Vec::new();
-    while let Some(c) = t.next_stream_frame(FRAME) {
+    while let Some(c) = t.next_stream_frame(&mut pool, FRAME) {
         let mut buf = vec![0u8; c.len];
-        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.copy_out(&mut pool, &c, &mut buf).unwrap();
         frames.push(c);
     }
     let at = |i: usize| (frames[i].offset, frames[i].len as u64);
     // Frames 1 to 3 are one lost range and 15 more at every second frame fill the 16 ranges of the queue.
     for i in (1..4).chain((5..35).step_by(2)) {
-        t.on_lost(id, at(i).0, at(i).1, false);
+        t.on_lost(&mut pool, id, at(i).0, at(i).1, false);
     }
     // The acknowledgement of frame 2 would split the range of frames 1 to 3: it stays queued, acknowledged byte and all.
     t.on_acked(&mut pool, id, at(2).0, at(2).1, false);
@@ -56,9 +56,9 @@ fn overflow_route<const C: usize>() {
         assert!(n > 0, "the ring must have room after the release");
         done += n;
     }
-    while let Some(c) = t.next_stream_frame(FRAME) {
+    while let Some(c) = t.next_stream_frame(&mut pool, FRAME) {
         let mut buf = vec![0u8; c.len];
-        match t.copy_out(&pool, &c, &mut buf) {
+        match t.copy_out(&mut pool, &c, &mut buf) {
             Ok(_) => assert_eq!(
                 buf,
                 data[c.offset as usize..][..c.len],
@@ -91,9 +91,9 @@ fn repair_route_ring_of_2() {
     assert_eq!(t.write(&mut pool, id, &data[..first], NO_CAP).unwrap(), first);
     // The frame that crosses the boundary of chunks 0 and 1.
     let across = loop {
-        let c = t.next_stream_frame(1000).unwrap();
+        let c = t.next_stream_frame(&mut pool, 1000).unwrap();
         let mut buf = vec![0u8; c.len];
-        t.copy_out(&pool, &c, &mut buf).unwrap();
+        t.copy_out(&mut pool, &c, &mut buf).unwrap();
         if c.offset < CHUNK_SIZE as u64 && c.offset + c.len as u64 > CHUNK_SIZE as u64 {
             break c;
         }
@@ -108,7 +108,7 @@ fn repair_route_ring_of_2() {
     }
     let mut buf = vec![0u8; across.len];
     assert_eq!(
-        t.copy_out(&pool, &across, &mut buf),
+        t.copy_out(&mut pool, &across, &mut buf),
         Err(StreamError::DataUnavailable),
         "a copy of the same frame must carry the same bytes"
     );

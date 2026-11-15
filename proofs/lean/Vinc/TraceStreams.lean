@@ -23,7 +23,7 @@ open Vinc.Json Vinc.TransportStreams
 
 /-- The constants of `trace_streams`. -/
 def params : P :=
-  { ch := 16384, ring := 7, rr := 96, n := 4, maxrem := 2, b := 20, swc := 81920, mswc := 98304, pm := 2, firstk := 4,
+  { ch := 16384, ring := 7, rr := 96, spr := 1024, n := 4, maxrem := 2, b := 20, swc := 81920, mswc := 98304, pm := 2, firstk := 4,
     maxoff := 2000000000, retry := true }
 
 def optNat (j : J) (k : String) : Except String (Option Nat) := do
@@ -40,7 +40,7 @@ def slotOf (j : J) : Except String Slot := do
            rst := ← optNat j "rst", obs := ← boolF j "obs", sdone := ← boolF j "sdone", srst := ← natF j "srst",
            stop := ← natF j "stop", qcode := ← optNat j "qcode", scode := ← optNat j "scode",
            cnt := false, sfl := false, ord := ← natF j "ord",
-           ms := ← optNat j "ms", mb := ← natF j "mb", mr := ← natF j "mr" }
+           ms := ← optNat j "ms", mb := ← natF j "mb", mr := ← natF j "mr", sp := ← boolF j "sp" }
 
 def pairN (j : J) (k : String) : Except String (Nat × Nat) := do
   match ← natList (← field j k) with
