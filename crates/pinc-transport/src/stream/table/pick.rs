@@ -42,13 +42,13 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// The next stream frame of at most `budget` data bytes: the first stream in (urgency, id) order that has anything
     /// to send, its retransmissions first (lowest hole first), then new data. A better stream drains before a worse
     /// one gets anything. Copy its data with [`Streams::copy_out`].
-    pub fn next_stream_frame(&mut self, budget: usize) -> Option<StreamChunk> {
+    pub fn next_stream_frame(&mut self, pool: &mut BufferPool<'_>, budget: usize) -> Option<StreamChunk> {
         let mut floor = None;
         while let Some((key, i)) = self.next_hot(floor) {
             let frame = self.slots.get_mut(i).and_then(|slot| {
                 slot.send
-                    .next_frame(key.1, true, budget)
-                    .or_else(|| slot.send.next_frame(key.1, false, budget))
+                    .next_frame(pool, key.1, true, budget)
+                    .or_else(|| slot.send.next_frame(pool, key.1, false, budget))
             });
             self.refresh(i);
             if frame.is_some() {
@@ -68,7 +68,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// (the range is queued again).
     pub fn copy_out(
         &mut self,
-        pool: &BufferPool<'_>,
+        pool: &mut BufferPool<'_>,
         chunk: &StreamChunk,
         dst: &mut [u8],
     ) -> Result<usize, StreamError> {
@@ -84,19 +84,29 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     /// The frame was acknowledged: free the bytes it covered.
     pub fn on_acked(&mut self, pool: &mut BufferPool<'_>, id: StreamId, offset: u64, len: u64, fin: bool) {
         if let Some(i) = self.find(id) {
-            let overflows = self
-                .with_send(i, |send| send.on_acked(pool, offset, len, fin))
-                .unwrap_or(0);
+            let (overflows, spills) = self
+                .with_send(i, |send| {
+                    let before = send.spilled();
+                    let overflows = send.on_acked(pool, offset, len, fin);
+                    (overflows, send.spilled().saturating_sub(before))
+                })
+                .unwrap_or((0, 0));
             self.stats.range_overflows += overflows as u64;
+            self.stats.range_spills += spills;
             self.settle(pool, i);
         }
     }
 
     /// The frame was declared lost: queue its range again, lowest first.
-    pub fn on_lost(&mut self, id: StreamId, offset: u64, len: u64, fin: bool) {
+    pub fn on_lost(&mut self, pool: &mut BufferPool<'_>, id: StreamId, offset: u64, len: u64, fin: bool) {
         if let Some(i) = self.find(id) {
-            let overflows = self.slots.get_mut(i).map_or(0, |s| s.send.on_lost(offset, len, fin));
+            let (overflows, spills) = self.slots.get_mut(i).map_or((0, 0), |s| {
+                let before = s.send.spilled();
+                let overflows = s.send.on_lost(pool, offset, len, fin);
+                (overflows, s.send.spilled().saturating_sub(before))
+            });
             self.stats.range_overflows += overflows as u64;
+            self.stats.range_spills += spills;
             self.refresh(i);
         }
     }

@@ -469,7 +469,9 @@ par run_tlc streams_release Streams Streams_release
 par run_tlc streams_ledger Streams Streams_ledger
 par run_tlc streams_two Streams Streams_two
 par run_tlc streams_meter Streams Streams_meter
+par run_tlc streams_spill Streams Streams_spill
 par witness_tlc streams_meter_w Streams Streams_meter_w SizeFollowsOwnRate
+par witness_tlc streams_spill_w Streams Streams_spill_w NoNeedlessFragmented
 par run_tlc streams_held Streams Streams_held
 par witness_live_tlc streams_held_w Streams Streams_held_w
 par witness_tlc streams_two_w Streams Streams_two_w NoJump

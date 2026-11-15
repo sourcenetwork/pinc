@@ -85,6 +85,9 @@ theorem lt_of_open (l : List Slot) (i : Nat) (h : (l.getD i Slot.new).open_ = tr
 @[simp] theorem raised_defer (r : Slot) (c : Nat) : (r.raised c).defer = false := rfl
 @[simp] theorem raised_held (r : Slot) (c : Nat) : (r.raised c).held = r.held := rfl
 @[simp] theorem grown_held (r : Slot) (t : Nat) : (r.grown t).held = r.held := rfl
+/-- A grant leaves the pool chunks a slot holds as they were: its ring's and its spill chunk. -/
+@[simp] theorem raised_chunks (r : Slot) (c : Nat) : (r.raised c).chunks = r.chunks := rfl
+@[simp] theorem grown_chunks (r : Slot) (t : Nat) : (r.grown t).chunks = r.chunks := rfl
 
 /-! ### The 1/8 rule -/
 theorem due_spec (p : P) (r : Slot) (c : Nat) (h : r.due p = some c) :
@@ -242,14 +245,14 @@ theorem grantOne_ledger (p : P) (first : Nat) (T : Tab) (i : Nat)
     have hsum := sum_map_set (fun s => s.unreceived p) T.slots i
       (((T.slots.getD i Slot.new).grown 0).raised c) hl
     have hup := getD_le_sum (fun s => s.unreceived p) T.slots i hl
-    have hheld := sum_map_set (fun s => s.held.length) T.slots i
+    have hheld := sum_map_set (fun s => s.chunks) T.slots i
       (((T.slots.getD i Slot.new).grown 0).raised c) hl
     have hpd : (((T.slots.getD i Slot.new).grown 0).raised c).unreceived p
         = ((T.slots.getD i Slot.new).grown 0).demandTo p c := by
       simp [Slot.unreceived, Slot.demandTo, Slot.chargeTo, poolDemand, Slot.reach, Slot.raised, Slot.grown]
     simp only [hpd] at hsum
     simp only [gu, avail, availC, used, heldTotal, setSlot, resv, creditLeft, admitted] at hsum hup hheld hfit ⊢
-    simp only [raised_held, grown_held] at hheld
+    simp only [raised_chunks, grown_chunks] at hheld
     refine ledger_arith _ _ _ _ _ _ _ _ _ _ hup hsum ?_ hfit
     omega
 

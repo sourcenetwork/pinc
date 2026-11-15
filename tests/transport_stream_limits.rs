@@ -150,7 +150,7 @@ fn locally_opened_streams_are_capped_by_the_peer_and_the_cap_grows() {
     // A closed stream frees a place.
     t.write(&mut pool, 3, &[1; 10], NO_CAP).unwrap();
     t.finish(3).unwrap();
-    let frame = t.next_stream_frame(100).unwrap();
+    let frame = t.next_stream_frame(&mut pool, 100).unwrap();
     t.on_acked(&mut pool, 3, frame.offset, frame.len as u64, frame.fin);
     // The place is free, but the peer has given credit for two streams in all: it raises that as its streams end.
     assert_eq!(t.open_stream(&pool, false), Err(StreamError::StreamLimit));
@@ -286,8 +286,8 @@ fn a_stop_request_for_a_stream_far_beyond_the_limit_is_a_violation() {
 // ---- stream credit --------------------------------------------------------------------------------------------
 
 /// Move every frame `from` wants to send to `to`, as an honest network would.
-fn deliver(from: &mut Table, from_pool: &BufferPool<'_>, to: &mut Table, to_pool: &mut BufferPool<'_>) {
-    while let Some(c) = from.next_stream_frame(1200) {
+fn deliver(from: &mut Table, from_pool: &mut BufferPool<'_>, to: &mut Table, to_pool: &mut BufferPool<'_>) {
+    while let Some(c) = from.next_stream_frame(from_pool, 1200) {
         let mut buf = vec![0u8; c.len];
         assert_eq!(from.copy_out(from_pool, &c, &mut buf).unwrap(), c.len);
         assert_eq!(
@@ -323,7 +323,7 @@ fn the_opener_stops_at_the_credit_and_resumes_on_a_raise() {
         tx.write(&mut opool, id, &[7; 100], NO_CAP).unwrap();
         tx.finish(id).unwrap();
     }
-    deliver(&mut tx, &opool, &mut rx, &mut rpool);
+    deliver(&mut tx, &mut opool, &mut rx, &mut rpool);
     assert_eq!(rx.open_streams(), 2);
     // The receiver reads both to their end: the streams end and it has room for two more.
     for id in first {
@@ -346,7 +346,7 @@ fn the_opener_stops_at_the_credit_and_resumes_on_a_raise() {
         tx.write(&mut opool, id, &[9; 50], NO_CAP).unwrap();
         tx.finish(id).unwrap();
     }
-    deliver(&mut tx, &opool, &mut rx, &mut rpool);
+    deliver(&mut tx, &mut opool, &mut rx, &mut rpool);
     assert_eq!(rx.open_streams(), 2);
 }
 

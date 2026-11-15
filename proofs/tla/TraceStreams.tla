@@ -40,7 +40,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, SPR
 VARIABLES i, rs
 vars == <<i, rs>>
 
@@ -54,7 +54,7 @@ Ev == Trace[i]
 PS(r) == [id |-> r.id, open |-> r.open, held |-> r.held, rs |-> r.rs, read |-> r.read, hi |-> r.hi, contig |-> r.contig,
           fin |-> r.fin, limit |-> r.limit, size |-> r.size, pend |-> r.pend, defer |-> r.defer, rst |-> r.rst,
           obs |-> r.obs, sdone |-> r.sdone, srst |-> r.srst, stop |-> r.stop, qcode |-> r.qcode, scode |-> r.scode,
-          ord |-> r.ord, m |-> r.m]
+          ord |-> r.ord, m |-> r.m, sp |-> r.sp]
 PT(t) == [t EXCEPT !.slots = [k \in 1..N |-> PS(t.slots[k])]]
 
 SlotOf(s) ==
@@ -63,7 +63,7 @@ SlotOf(s) ==
           read |-> s.read, hi |-> s.hi, contig |-> s.contig, fin |-> s.fin, limit |-> s.limit, size |-> s.size,
           pend |-> s.pend, defer |-> s.defer, rst |-> s.rst, obs |-> s.obs, sdone |-> s.sdone, srst |-> s.srst,
           stop |-> s.stop, qcode |-> s.qcode, scode |-> s.scode, ord |-> s.ord,
-          m |-> [start |-> s.ms, bytes |-> s.mb, rate |-> s.mr]]
+          m |-> [start |-> s.ms, bytes |-> s.mb, rate |-> s.mr], sp |-> s.sp]
 
 TOf(v) ==
     [slots |-> [k \in 1..N |-> SlotOf(v.slots[k])],

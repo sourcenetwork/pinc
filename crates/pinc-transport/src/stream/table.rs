@@ -357,6 +357,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             self.buffered = self.buffered.saturating_sub(slot.send.buffered());
             slot.recv.release_all(pool);
             slot.send.release_all(pool);
+            slot.send.release_sets(pool);
             *slot = Slot::NEW;
         }
         if let Some(x) = self.ids.get_mut(i) {
@@ -632,8 +633,11 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         }
         let Some(i) = self.locate(pool, id)? else { return Ok(()) };
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
+        let spilled = slot.recv.spilled();
         let result = slot.recv.on_data(pool, offset, data, fin);
+        self.stats.range_spills += u64::from(!spilled && slot.recv.spilled());
         self.stats.held_back += u64::from(result == Err(StreamError::Exhausted));
+        self.stats.range_overflows += u64::from(result == Err(StreamError::Fragmented));
         self.settle(pool, i);
         result
     }
@@ -714,8 +718,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// The first run of stored bytes of a stream that reaches past `from` (and the read position), cut to begin at
     /// `from` or later. Bytes beyond the first hole show up here before they are readable.
-    pub fn stored_after(&self, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
-        self.slot(self.find(id)?)?.recv.stored_after(from)
+    pub fn stored_after(&self, pool: &BufferPool<'_>, id: StreamId, from: u64) -> Option<core::ops::Range<u64>> {
+        self.slot(self.find(id)?)?.recv.stored_after(pool, from)
     }
 
     /// The state of a stream's send half; `None` if the stream is unknown or closed.
@@ -802,10 +806,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
 
     /// Whether the bytes `offset..offset + len` of a stream are acknowledged (an empty range asks about the end
     /// marker). A stream that is gone counts as acknowledged.
-    pub fn is_acked(&self, id: StreamId, offset: u64, len: u64) -> bool {
+    pub fn is_acked(&self, pool: &BufferPool<'_>, id: StreamId, offset: u64, len: u64) -> bool {
         self.find(id)
             .and_then(|i| self.slot(i))
-            .is_none_or(|s| s.send.is_acked(offset, len))
+            .is_none_or(|s| s.send.is_acked(pool, offset, len))
     }
 
     /// The lowest offset at or after `offset` of a stream that is not acknowledged for good, so a frame sent again can
@@ -935,6 +939,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         for slot in self.slots.written_iter_mut() {
             slot.recv.release_all(pool);
             slot.send.release_all(pool);
+            slot.send.release_sets(pool);
         }
         self.slots.clear();
         self.ids = [NONE; N];

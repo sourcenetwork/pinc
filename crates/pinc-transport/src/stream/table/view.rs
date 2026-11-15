@@ -15,7 +15,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
             .iter()
             .zip(&self.ids)
             .map(|(s, &id)| {
-                let mut v = s.recv.trace_view();
+                let mut v = s.recv.trace_view(pool);
                 let (done, reset, code) = s.send.trace_state();
                 v.id = id;
                 v.send_done = done;
@@ -25,7 +25,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
                 v
             })
             .collect();
-        let held: u64 = slots.iter().map(|v| v.held.len() as u64).sum();
+        // A receive half whose ranges spilled holds one more chunk; a send half's spill counts with the others.
+        let held: u64 = slots.iter().map(|v| v.held.len() as u64 + u64::from(v.spilled)).sum();
         TableView {
             slots,
             remote_next: self.remote_next,

@@ -87,7 +87,7 @@ fn slot_json(s: &SlotView) -> String {
     let id = i64::try_from(s.id).unwrap();
     let rs: Vec<String> = s.ranges.iter().map(|(a, z)| format!("[{a},{z}]")).collect();
     format!(
-        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{},"ms":{},"mb":{},"mr":{}}}"#,
+        r#"{{"id":{id},"open":{},"held":{},"rs":[{}],"read":{},"hi":{},"contig":{},"fin":{},"limit":{},"size":{},"pend":{},"defer":{},"rst":{},"obs":{},"sdone":{},"srst":{},"stop":{},"qcode":{},"scode":{},"ord":{},"ms":{},"mb":{},"mr":{},"sp":{}}}"#,
         b(s.open),
         list(&s.held),
         rs.join(","),
@@ -109,7 +109,8 @@ fn slot_json(s: &SlotView) -> String {
         s.ordinal,
         opt(s.meter.0),
         s.meter.1,
-        s.meter.2
+        s.meter.2,
+        b(s.spilled)
     )
 }
 
@@ -544,7 +545,7 @@ impl Run<'_> {
     fn drain(&mut self) {
         let v = self.view();
         let mut ids = Vec::new();
-        while let Some(ch) = self.t.next_stream_frame(1 << 20) {
+        while let Some(ch) = self.t.next_stream_frame(&mut self.pool, 1 << 20) {
             let ord = v.slots.iter().find(|s| s.id == ch.id).map_or(0, |s| s.ordinal);
             assert!(
                 ord <= v.admit[0],
@@ -554,7 +555,7 @@ impl Run<'_> {
             );
             self.released |= self.past.contains(&ch.id);
             let mut buf = vec![0u8; ch.len];
-            let _ = self.t.copy_out(&self.pool, &ch, &mut buf);
+            let _ = self.t.copy_out(&mut self.pool, &ch, &mut buf);
             self.inflight.push((ch.id, ch.offset, ch.len as u64, ch.fin));
             ids.push(ch.id);
         }
@@ -794,14 +795,14 @@ fn stream_table_runs_match_the_models() {
             );
         }
         // The runs reach the interesting steps: a peer stream held back and admitted later, stop requests sent and lost, implicit opens, a deferred grant, a conflict, a stream
-        // that outgrew its ranges, a limit raised, a reset acknowledged.
+        // whose ranges outgrew their inline array and spilled into a pool chunk, a limit raised, a reset acknowledged.
         for needle in [
             r#""kind":"stop""#,
             r#""fresh":true"#,
             r#""admitted":true"#,
             r#""opened":2"#,
             r#""err":"Conflict""#,
-            r#""err":"Fragmented""#,
+            r#""sp":true"#,
             r#""err":"FlowControl""#,
             r#""err":"Exhausted""#,
             r#""defer":true"#,

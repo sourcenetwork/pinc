@@ -83,9 +83,9 @@ pub fn drain_control(t: &mut Table) -> Vec<ControlFrame> {
 }
 
 /// Build every frame the table wants to send now, copying out the data.
-pub fn drain_frames(t: &mut Table, pool: &BufferPool<'_>, budget: usize) -> Vec<(StreamChunk, Vec<u8>)> {
+pub fn drain_frames(t: &mut Table, pool: &mut BufferPool<'_>, budget: usize) -> Vec<(StreamChunk, Vec<u8>)> {
     let mut frames = Vec::new();
-    while let Some(chunk) = t.next_stream_frame(budget) {
+    while let Some(chunk) = t.next_stream_frame(pool, budget) {
         let mut buf = vec![0u8; chunk.len];
         assert_eq!(t.copy_out(pool, &chunk, &mut buf).unwrap(), chunk.len);
         frames.push((chunk, buf));
