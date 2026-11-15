@@ -27,6 +27,7 @@ use vinc_security::TicketBatch;
 use vinc_transport::conn::{CloseReason, Event as ConnEvent, PathId, code};
 use vinc_transport::frame::ext;
 
+use crate::acp::Release;
 use crate::api::{ConnectFailure, EndReason, Event, PathState};
 use crate::endpoint::{env, ep_impl};
 use crate::slot::{HeldEvent, State};
@@ -191,15 +192,16 @@ ep_impl! {
             return;
         }
         // An allowed session whose peer's answer lapsed holds its events and asks again: nothing leaves on an answer
-        // that no longer stands.
-        let lapsed = self
-            .slots
-            .get(i)
-            .is_some_and(|s| s.m.allowed && s.m.peer.is_some_and(|p| self.acp_cached(&p, now).is_none()));
-        if lapsed {
-            self.ask_acp(i, now, true);
-        }
-        let open = self.may_release(i, now);
+        // that no longer stands. The cached answer is looked up once for both questions; after asking, the predicate
+        // is asked afresh.
+        let open = match self.release_state(i, now) {
+            Release::Open => true,
+            Release::Shut => false,
+            Release::Lapsed => {
+                self.ask_acp(i, now, true);
+                self.may_release(i, now)
+            }
+        };
         let Some(slot) = self.slots.get_mut(i) else { return };
         // Behind earlier held events the new one waits too, so the order holds.
         if open && slot.m.hold != 2 && slot.m.held.len() == 0 {

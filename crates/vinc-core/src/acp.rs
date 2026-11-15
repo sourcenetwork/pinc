@@ -38,6 +38,17 @@ const fn recheck_at(until: u64) -> u64 {
     until.saturating_sub(ACP_RECHECK).saturating_add(1)
 }
 
+/// What stands between a session and its application events, as `release_state` found it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Release {
+    /// The session is allowed and its peer's cached answer is a standing allow: events leave.
+    Open,
+    /// The session is allowed and its peer's answer lapsed: events are held and the answer is asked for again.
+    Lapsed,
+    /// The session is not allowed, or its peer's standing answer is a deny.
+    Shut,
+}
+
 ep_impl! {
     /// The cached answer for `peer`, if it has not expired.
     pub(crate) fn acp_cached(&self, peer: &NodeId, now: u64) -> Option<AcpAnswer> {
@@ -47,9 +58,18 @@ ep_impl! {
     /// Whether session `i` may release application events now: it is allowed and its peer's cached answer has not
     /// lapsed and is an allow. Every path that releases events asks this one function.
     pub(crate) fn may_release(&self, i: usize, now: u64) -> bool {
-        self.slots.get(i).is_some_and(|s| {
-            s.m.allowed && s.m.peer.is_some_and(|p| self.acp_cached(&p, now).is_some_and(|a| a.allow))
-        })
+        self.release_state(i, now) == Release::Open
+    }
+
+    /// What stands between session `i` and its application events at `now`, with one look at the cached answer: the
+    /// predicate of [`may_release`](Self::may_release), and whether an allowed session's answer lapsed.
+    pub(crate) fn release_state(&self, i: usize, now: u64) -> Release {
+        let Some(s) = self.slots.get(i).filter(|s| s.m.allowed) else { return Release::Shut };
+        match s.m.peer.map(|p| self.acp_cached(&p, now)) {
+            Some(Some(a)) if a.allow => Release::Open,
+            Some(None) => Release::Lapsed,
+            _ => Release::Shut,
+        }
     }
 
     /// Resolve the access check of an established session, or ask for it.
