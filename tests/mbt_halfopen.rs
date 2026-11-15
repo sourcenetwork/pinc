@@ -28,13 +28,14 @@
 
 use std::fmt::Write as _;
 use std::net::SocketAddr;
+use std::rc::Rc;
 
 use vinc_core::{Endpoint, EndpointConfig, HALF_OPEN_LIFE, MAX_HALF_OPEN, Slot, TraceEvent};
 use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
 use vinc_security::message::{FULL_INITIAL_MIN, SHORT_INITIAL_MIN};
 use vinc_security::{ConnId, KeyHandle, LocalIdentity};
 use vinc_tests::{ALPN_A, Caps, Json, MS_NS, MbtCase, big_stack, mbt_cases};
-use vinc_transport::conn::{Resources, Tables};
+use vinc_transport::conn::{Held, Resources, Shared, Tables};
 use vinc_transport::packet::{LongHeader, LongType};
 use vinc_transport::recovery::LossEstimate;
 use vinc_transport::stream::pool::BufferPool;
@@ -44,34 +45,37 @@ use vinc_wire::Writer;
 /// The table of the endpoint: room past the cap, so the cap and not the table refuses.
 const K: usize = MAX_HALF_OPEN + 44;
 
-type Ep = Endpoint<'static, 'static, Caps, NoSource, 1, 2, 16, 1, K, { K * 10 }, 4, 4, 2>;
+type Ep<'s> = Endpoint<'s, 'static, Caps, NoSource, 1, 2, 16, 1, K, { K * 10 }, 4, 4, 2>;
 type TSlot = Slot<'static, Caps, NoSource, 1, 2, 16, 1>;
 
-// The endpoint of `trace_halfopen.rs`: a software provider, one registered protocol, one interface.
+// A slot's memory, owned by the slot: every case builds a table of `K` slots, so none of it may outlive its case.
 fn small_memory() -> Resources<'static, NoSource, 1, 2, 16> {
     let pool = BufferPool::new_boxed(4);
-    let streams: &'static mut Streams<NoSource, 1, 2> =
-        Box::leak(Box::new(Streams::new(&stream::Config::new(false), &pool)));
+    let streams = Box::new(Streams::new(&stream::Config::new(false), &pool));
     Resources {
         pool,
-        streams: streams.into(),
-        loss: (&*Box::leak(Box::new(LossEstimate::new()))).into(),
+        streams: Held::Owned(streams),
+        loss: Shared::Counted(Rc::new(LossEstimate::new())),
         tables: Tables::new(),
     }
 }
 
-fn server(now: u64) -> (Box<Ep>, SocketAddr) {
+fn slots() -> Box<[TSlot; K]> {
+    let v: Vec<TSlot> = (0..K).map(|_| Slot::new(small_memory())).collect();
+    v.into_boxed_slice().try_into().ok().unwrap()
+}
+
+// The endpoint of `trace_halfopen.rs` over `slots`: a software provider, one registered protocol, one interface.
+fn server(now: u64, slots: &mut [TSlot; K]) -> (Box<Ep<'_>>, SocketAddr) {
     let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[7u8; 32]).unwrap();
     let id = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
-    let v: Vec<TSlot> = (0..K).map(|_| Slot::new(small_memory())).collect();
-    let slots: Box<[TSlot; K]> = v.into_boxed_slice().try_into().ok().unwrap();
     let mut ep = Box::new(Endpoint::new(
         now,
         Caps(Software, true),
         Drbg::new(&[3; 32]),
         id,
         EndpointConfig::new(5),
-        Box::leak(slots),
+        slots,
     ));
     assert!(ep.register_alpn(ALPN_A));
     let addr: SocketAddr = "10.0.0.1:4433".parse().unwrap();
@@ -142,7 +146,7 @@ impl Map {
 }
 
 /// The endpoint's sessions against the model's `g` (the number made at each time) and `count`.
-fn same_state(ep: &Ep, st: &Json, map: &Map, at: &dyn Fn() -> String) {
+fn same_state(ep: &Ep<'_>, st: &Json, map: &Map, at: &dyn Fn() -> String) {
     let g: Vec<u64> = st.get("g").and_then(Json::arr).unwrap().iter().map(num).collect();
     let mut seen = vec![0u64; g.len()];
     for i in 0..K {
@@ -175,7 +179,7 @@ fn same_state(ep: &Ep, st: &Json, map: &Map, at: &dyn Fn() -> String) {
     );
 }
 
-fn drain(ep: &mut Ep) {
+fn drain(ep: &mut Ep<'_>) {
     while ep.poll_event().is_some() {}
 }
 
@@ -187,7 +191,8 @@ fn run(file: &str, case: &MbtCase, init: &Json, full: u64, short: u64, step: u64
         full,
         short,
     };
-    let (mut ep, addr) = server(map.origin);
+    let mut table = slots();
+    let (mut ep, addr) = server(map.origin, &mut table);
     while ep.poll_trace().is_some() {}
     let who = format!("{file} case {}", case.id);
     same_state(&ep, init, &map, &|| format!("{who}: the empty endpoint"));
