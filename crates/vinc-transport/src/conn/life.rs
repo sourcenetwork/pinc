@@ -61,6 +61,9 @@ pub(crate) struct Life {
     pub(crate) ack_now: bool,
     /// The packet number of the last probe-timeout PING, while a black-hole check waits for its acknowledgement.
     pub(crate) small_ping: Option<u64>,
+    /// The session counts as carrying application data until this time (the endpoint's last application activity,
+    /// either way, plus 20 s); always, until the endpoint says ([`Connection::set_app_until`](super::Connection)).
+    pub(crate) app_until: u64,
     /// When the application last wrote anything, and when it last wrote more than a control message.
     pub(crate) last_app: u64,
     pub(crate) last_data: u64,
@@ -99,6 +102,7 @@ impl Life {
             ping_owed: false,
             ack_now: false,
             small_ping: None,
+            app_until: u64::MAX,
             last_app: 0,
             last_data: 0,
             app_written: false,

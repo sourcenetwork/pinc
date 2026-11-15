@@ -17,7 +17,8 @@
 //! datagram, so both ends validate the path in one round trip and the session leaves the relay then (the reference
 //! model's responder starts its challenge only when the peer's candidate list arrives, a hop behind the peer's
 //! first challenge, where the address limit then holds it back until the next probe; a node declared thin keeps
-//! that cadence). The active path is chosen by cost: the smoothed round
+//! that cadence, and an end whose session moved no application data for 20 s only answers, as the reference model
+//! looks for no direct path on an idle session). The active path is chosen by cost: the smoothed round
 //! trip of the path, plus one second for a relay, minus 3 ms for IPv6; a validated UDP path that was silent for 15 s
 //! is left out; from a relay the connection moves at once, otherwise only for a gain above 5 ms. After three
 //! probe timeouts in a row on a direct path the path is dropped as validated, challenged on the re-join cadence, and
@@ -613,12 +614,15 @@ conn_impl! {
     /// then. Sent on its own after the response, the challenge would be more than an address that has only sent a
     /// challenge may be answered with (three times what arrived from it), and it would wait for the next probe; the
     /// two frames together fit. One challenge, never a second while it is out: the probes of a punch keep their own
-    /// cadence. An end whose active path is direct gains nothing from it and is left alone.
+    /// cadence. An end whose active path is direct gains nothing from it and is left alone, and so is an idle one (no
+    /// application data for 20 s): the reference model looks for no direct path on an idle session (its punch round
+    /// is skipped), so a session that lapsed onto its relay stays there until data moves again.
     pub(super) fn challenge_back(&mut self, env: &mut Env<'_, P>, i: usize) {
         // vertexia: a node the host declared thin keeps the reference model's cadence (its challenges are counted
         // against a thin uplink); lift this once the scenario matrix shows no thin row worse with it.
         let wanted = self.phase == Phase::Connected
             && !self.cfg.thin
+            && env.now < self.life.app_until
             && self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay)
             && self
                 .paths

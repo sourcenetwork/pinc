@@ -22,7 +22,7 @@
 use vinc_transport::conn::{Config, PathId, RJ_THIN_GAP, connect_limit};
 
 use crate::endpoint::{CLOSE_GRACE, env, ep_impl};
-use crate::keepalive::{Inputs, standby_due};
+use crate::keepalive::{ACTIVE_KEEP, Inputs, standby_due};
 use crate::trace::trace;
 
 ep_impl! {
@@ -73,6 +73,8 @@ ep_impl! {
                 hs_floor: self.rtt.hs_floor(),
             });
         }
+        // The connection sees only what this side writes: tell it until when the session carries application data.
+        conn.set_app_until(slot.m.last_app.saturating_add(ACTIVE_KEEP));
         if slot.m.node_ver != self.node_ver {
             slot.m.node_ver = self.node_ver;
             conn.set_node_rtt(self.rtt.tgr(), self.rtt.lrtt(), self.rtt.thin_node());

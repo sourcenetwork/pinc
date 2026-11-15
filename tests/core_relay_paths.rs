@@ -260,6 +260,59 @@ fn an_end_on_a_relay_path_validates_a_direct_path_in_the_round_trip_of_its_peers
     });
 }
 
+/// An idle end on a relay only answers a challenge on a direct path: the reference model looks for no direct path on
+/// a session that moved no application data for 20 s (its punch round is skipped), so the challenger validates the
+/// path and the idle end, which sends none of its own, stays on its relay.
+#[test]
+fn an_idle_end_on_a_relay_path_answers_a_challenge_and_sends_none() {
+    big_stack(|| {
+        let one_way = 25 * MS;
+        let mut net = CoreNet::new(one_way);
+        let (a, b) = (net.add(1), net.add(2));
+        let via = relay_addr(false, 3, 7);
+        net.nodes[b].extra.push(via);
+        let (peer, now) = (net.nodes[b].node, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, via, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        assert!(net.run(now + 10 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Connected { .. }))
+                && n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+        }));
+        let sb = net.nodes[b]
+            .events
+            .iter()
+            .find_map(|(_, e)| match e {
+                Event::Incoming { session, .. } => Some(*session),
+                _ => None,
+            })
+            .unwrap();
+        // No application data for more than 20 s: the session is idle at both ends.
+        net.run_for(21 * SEC_NS);
+        let to_a = net.nodes[a].addr;
+        let t0 = net.now;
+        net.nodes[b]
+            .cmd(
+                t0,
+                Command::Punch {
+                    session: sb,
+                    addr: to_a,
+                },
+            )
+            .unwrap();
+        net.run_for(SEC_NS);
+        assert_eq!(
+            validated_at(&net, b, sb, t0),
+            Some(t0 + 2 * one_way),
+            "the challenger did not validate the path in one round trip"
+        );
+        assert_eq!(
+            validated_at(&net, a, sa, t0),
+            None,
+            "an idle end on a relay challenged the direct path itself"
+        );
+    });
+}
+
 /// A valid relay path added to a session is pinged at once while data moved in the last 20 s, as the reference model's
 /// keepalive pings every valid path never sent on: nothing else would leave on it.
 #[test]

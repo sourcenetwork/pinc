@@ -96,6 +96,13 @@ conn_impl! {
         self.cids.epoch()
     }
 
+    /// Until when the session counts as carrying application data: the endpoint's last application activity on it,
+    /// sent or received (the transport sees only what this side writes), plus the 20 s after which the reference
+    /// model takes a session to be idle. An idle end on a relay does not look for a direct path (`challenge_back`).
+    pub const fn set_app_until(&mut self, at: u64) {
+        self.life.app_until = at;
+    }
+
     /// Feed the node-wide round trips back: the largest recent round trip (the probe timeout of a connection with
     /// no sample starts from it), the average handshake round trip, and whether the node is on a constrained link.
     /// A zero value leaves that input as it was.
