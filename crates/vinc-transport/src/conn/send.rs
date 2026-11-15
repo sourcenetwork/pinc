@@ -7,9 +7,11 @@
 //! and last a PING if one is forced. The last STREAM frame of a packet leaves its length out.
 //! Every packet that carries anything is recorded in recovery with the descriptors needed to send its content again.
 //!
-//! Invariants: a datagram never exceeds the path's datagram size or the output buffer, and an unvalidated path
+//! Invariants: a datagram never exceeds the path's datagram size or the output buffer, an unvalidated path
 //! never gets more than its amplification budget (each datagram counts 48 bytes more than its size, against the path
-//! and against the whole session); data and datagrams leave only while the congestion window and the pacer allow
+//! and against the whole session), and a path whose address the ledger holds never gets more than the room the
+//! ledger left it, so the ledger holds back nothing the connection counts as sent; data and datagrams leave only
+//! while the congestion window and the pacer allow
 //! (probes, acknowledgements and path frames are exempt); a packet number is used by exactly one packet; when the
 //! sent ring is full the frames just taken are given back to their owners and nothing is sent.
 //!
@@ -23,7 +25,7 @@ use vinc_security::Env;
 use vinc_security::amp::{FACTOR, OVERHEAD};
 use vinc_wire::Writer;
 
-use super::config::{MIN_MTU, PROBE_MTU, PathId};
+use super::config::{DATAGRAM_HEADERS, MIN_MTU, PROBE_MTU, PathId};
 use super::ctl::{EXT_BODY_MAX, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
 use super::event::Ev;
 use super::{Connection, Phase};
@@ -202,7 +204,8 @@ conn_impl! {
         order
     }
 
-    /// How many bytes an unvalidated path, and an unvalidated session, may still be sent.
+    /// How many bytes an unvalidated path, and an unvalidated session, may still be sent, and no more than the room the
+    /// endpoint's ledger left the path's address while it holds it.
     pub(super) fn amp_room(&self, ti: usize) -> usize {
         let left = |b: &AmpBudget| {
             if b.is_validated() {
@@ -211,11 +214,15 @@ conn_impl! {
             let allowed = b.received().saturating_mul(FACTOR);
             usize::try_from(allowed.saturating_sub(b.sent()).saturating_sub(OVERHEAD as u64)).unwrap_or(usize::MAX)
         };
+        let held = |room: Option<u64>| {
+            room.map_or(usize::MAX, |r| usize::try_from(r.saturating_sub(DATAGRAM_HEADERS)).unwrap_or(usize::MAX))
+        };
         match self.paths.get(ti) {
             // Once the session is validated its peer is known to hold the keys, so a path it moved to is not limited by
             // what arrived on it: the budget would be spent before the challenge that validates the path is answered.
-            Some(_) if self.sess_amp.is_validated() => usize::MAX,
-            Some(p) => left(&p.amp).min(left(&self.sess_amp)),
+            // The endpoint's ledger holds that address to three times what it sent until then.
+            Some(p) if self.sess_amp.is_validated() => held(p.room),
+            Some(p) => left(&p.amp).min(left(&self.sess_amp)).min(held(p.room)),
             None => 0,
         }
     }
@@ -223,7 +230,9 @@ conn_impl! {
     /// Build one datagram for path `ti` into `out`; returns its length.
     fn build_datagram(&mut self, env: &mut Env<'_, P>, ti: usize, out: &mut [u8]) -> Option<usize> {
         let now = env.now;
-        let probe = self.probe_size(ti, now, out.len());
+        let room = self.amp_room(ti);
+        // A probe is never cut short: one that does not fit the room waits.
+        let probe = self.probe_size(ti, now, out.len().min(room));
         let path_mtu = self.paths.get(ti).map_or(MIN_MTU, |p| p.mtu.current);
         let whole = self.cfg.flight_split
             && self.hs.whole_len().is_some_and(|n| n + FLIGHT_OVERHEAD <= usize::from(PROBE_MTU));
@@ -234,7 +243,7 @@ conn_impl! {
             usize::from(path_mtu)
         };
         let mtu = probe.unwrap_or(base).min(out.len());
-        let max_len = mtu.min(self.amp_room(ti));
+        let max_len = mtu.min(room);
         if max_len < MIN_ROOM {
             return None;
         }
@@ -280,6 +289,9 @@ conn_impl! {
         debug_assert!(self.sess_amp.is_validated() || p.amp.can_send(len as u64));
         p.amp.on_send(charge);
         p.last_tx = now;
+        if let Some(r) = p.room.as_mut() {
+            *r = r.saturating_sub(len as u64 + DATAGRAM_HEADERS);
+        }
         self.sess_amp.on_send(charge);
         self.stats.datagrams_sent += 1;
         self.stats.bytes_sent += len as u64;
@@ -288,10 +300,18 @@ conn_impl! {
     }
 
     /// The size of an MTU probe to send on path `ti` now, if one is due and the caller's buffer can hold it.
-    fn probe_size(&self, ti: usize, now: u64, room: usize) -> Option<usize> {
+    fn probe_size(&mut self, ti: usize, now: u64, room: usize) -> Option<usize> {
         let cc_ok = self.rec.can_send() && self.rec.pacer().next_release(now) <= now;
         let idle = self.life.probes == 0 && self.life.local_asleep.is_none();
-        if ti != self.paths.active || self.phase != Phase::Connected || !cc_ok || !idle {
+        // A path the ledger holds until its challenge is answered is not probed: the probe would spend the room the
+        // challenge needs.
+        let waits = self.paths.get(ti).is_some_and(|p| p.room.is_some() && p.challenge.is_some());
+        if ti != self.paths.active || self.phase != Phase::Connected || !cc_ok || !idle || waits {
+            return None;
+        }
+        // What the peer left behind on its old path is recovered first: the probe's lone acknowledgement is held for the
+        // ack delay and must not become the round trip that times that recovery (see `mtu`).
+        if self.rec.oldest_in_flight_path().is_some_and(|p| usize::from(p) != ti) {
             return None;
         }
         self.mtu_target(ti, now).map(usize::from).filter(|s| *s <= room)

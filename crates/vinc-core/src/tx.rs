@@ -3,7 +3,10 @@
 //! Sessions that may have something to send wait on two queues, ordinary sessions first and broadcast sessions after
 //! them (a broadcast session with a sub-session open still to leave counts as ordinary, so the open keeps its
 //! place). [`Endpoint::poll_transmit`] takes the first session, asks its connection for a datagram, and sends it
-//! through the ledger gate: a datagram the ledger holds back is dropped, which the connection treats as loss.
+//! through the ledger gate. Before it builds, the connection is told what the ledger still lets out to each address it
+//! holds, and it builds nothing beyond that, so the gate holds back nothing a connection counts as sent (a held
+//! datagram would be declared lost, and the congestion window would shrink for a path that only waits for evidence);
+//! a datagram the gate does hold back is dropped and counted.
 //! Between connections the endpoint batches for segmentation offload: after a datagram, the next sessions' datagrams
 //! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for another
 //! destination is kept for the next call. The session just served moves to the back of its queue, so each gets a turn.
@@ -43,6 +46,7 @@ ep_impl! {
         }
         loop {
             let (q, i) = self.dirty_front()?;
+            self.refresh_rooms(i, false);
             let Some(slot) = self.slots.get_mut(i).filter(|s| s.m.in_use) else {
                 self.dirty_pop(q);
                 continue;
@@ -79,6 +83,37 @@ ep_impl! {
     /// call, or a session that may have something to send. When it says no, a call returns `None` and changes nothing.
     pub fn transmit_waiting(&self) -> bool {
         self.stash_meta.is_some() || self.dirty_front().is_some()
+    }
+
+    /// Tell session `i` what the ledger still lets out to the addresses of its paths (see
+    /// `Connection::set_path_room`). Before every build only the paths whose address the ledger holds are brought up
+    /// to date (another session's datagrams to the same address, or the answer that validated it, changed their room
+    /// since), so a session with none costs one read; with `all`, after the endpoint gave the connection paths it did
+    /// not learn by receiving on them, every path is.
+    pub(crate) fn refresh_rooms(&mut self, i: usize, all: bool) {
+        let Some(conn) = self.slots.get(i).filter(|s| s.m.in_use).and_then(|s| s.conn.as_ref()) else { return };
+        if !all && !conn.has_held_paths() {
+            return;
+        }
+        let mut rooms: [Option<(PathId, Option<u64>)>; NP] = [None; NP];
+        let room = |id: PathId| self.path_addrs(id).and_then(|(_, remote)| self.ledger.room(&remote));
+        if all {
+            for (d, (id, _, _)) in rooms.iter_mut().zip(conn.path_list()) {
+                *d = Some((id, room(id)));
+            }
+        } else {
+            for (d, id) in rooms.iter_mut().zip(conn.held_paths()) {
+                *d = Some((id, room(id)));
+            }
+        }
+        if rooms.first().is_some_and(Option::is_none) {
+            return;
+        }
+        if let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
+            for (id, room) in rooms.into_iter().flatten() {
+                conn.set_path_room(id, room);
+            }
+        }
     }
 
     /// Record that session `i` produced a datagram on `path`.
@@ -135,6 +170,7 @@ ep_impl! {
         let mut segments = first.len.div_ceil(seg.max(1));
         while segments < limit && first.len == seg * segments && out.len() > first.len {
             let Some((q, j)) = self.dirty_front() else { return };
+            self.refresh_rooms(j, false);
             let Some(slot) = self.slots.get_mut(j).filter(|s| s.m.in_use) else {
                 self.dirty_pop(q);
                 continue;

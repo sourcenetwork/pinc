@@ -601,6 +601,51 @@ fn every_path_gets_its_own_connection_id() {
 }
 
 #[test]
+fn a_path_is_not_size_probed_while_a_packet_sent_on_another_path_is_in_flight() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        let mut link = Link::new(18, Params::new(10 * MS).mtu(1500));
+        link.add_route(
+            PathId(3),
+            PathId(4),
+            Params::new(10 * MS).mtu(1500),
+            Params::new(10 * MS).mtu(1500),
+        );
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        net.run(net.now + 2 * SEC, |_| false);
+        let now = net.now;
+        net.a
+            .with_env(now, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        assert!(net.run(net.now + 5 * SEC, |n| n.a.conn.path_validated(PathId(3))));
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(
+            net.a.conn.path_mtu(PathId(3)),
+            Some(1200),
+            "a path that is not active is not probed"
+        );
+        // A packet leaves on the first path and the session moves to the other before it is acknowledged.
+        let id = net.a.conn.open_uni().unwrap();
+        net.a.conn.write(id, &pattern(100, 3)).unwrap();
+        assert!(
+            poll_a(&mut net).is_some_and(|n| n < 700),
+            "the data packet leaves on the first path"
+        );
+        net.a.conn.set_active(PathId(3)).unwrap();
+        assert_ne!(
+            poll_a(&mut net),
+            Some(1452),
+            "no size probe while that packet is in flight"
+        );
+        assert_eq!(net.a.conn.path_mtu(PathId(3)), Some(1200));
+        // Once it is acknowledged the probe goes.
+        net.run(net.now + 2 * SEC, |_| false);
+        assert_eq!(net.a.conn.path_mtu(PathId(3)), Some(1452));
+    });
+}
+
+#[test]
 fn a_thin_node_rechallenges_an_idle_direct_path_on_a_backoff() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519);

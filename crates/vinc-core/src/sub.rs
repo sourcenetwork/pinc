@@ -160,6 +160,7 @@ ep_impl! {
                 k.adopt_rtt(rtt);
             }
         }
+        self.refresh_rooms(child, true);
     }
 
     /// Queue the sub-session open extension in `parent`. Returns whether it was queued.

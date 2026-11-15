@@ -16,8 +16,8 @@ use crate::table::Table;
 
 /// The most addresses the ledger tracks.
 pub const LEDGER_ENTRIES: usize = 1024;
-/// Header bytes added to every sent datagram.
-pub const DATAGRAM_OVERHEAD: u64 = 28;
+/// Header bytes added to every sent datagram; a connection counts the room it is left the same way.
+pub const DATAGRAM_OVERHEAD: u64 = vinc_transport::conn::DATAGRAM_HEADERS;
 /// Bytes that may be sent to an unvalidated address per byte it sent.
 pub const FACTOR: u64 = 3;
 
@@ -64,26 +64,24 @@ impl Ledger {
     }
 
     /// Count a datagram of `n` bytes received from `addr`. A first datagram creates the entry unvalidated; a later one
-    /// validates the address if we sent to it meanwhile.
-    pub fn on_receive(&mut self, addr: SocketAddr, n: u64) {
-        match self.table.get_mut(&addr) {
-            Some(e) => {
-                e.rx = e.rx.saturating_add(n);
-                if e.tx > 0 {
-                    e.validated = true;
-                }
+    /// validates the address if we sent to it meanwhile. Returns whether the address is held after it (not validated).
+    pub fn on_receive(&mut self, addr: SocketAddr, n: u64) -> bool {
+        if let Some(e) = self.table.get_mut(&addr) {
+            e.rx = e.rx.saturating_add(n);
+            if e.tx > 0 {
+                e.validated = true;
             }
-            None => {
-                self.table.insert(
-                    addr,
-                    LedgerEntry {
-                        rx: n,
-                        tx: 0,
-                        validated: false,
-                    },
-                );
-            }
+            return !e.validated;
         }
+        self.table.insert(
+            addr,
+            LedgerEntry {
+                rx: n,
+                tx: 0,
+                validated: false,
+            },
+        );
+        true
     }
 
     /// The host dials `addr`: the address counts as one we spoke to first, whatever it sent before. A peer that still
@@ -102,6 +100,13 @@ impl Ledger {
                 );
             }
         }
+    }
+
+    /// What may still be sent to `addr` while it is held to three times what it sent, headers included: `None` when
+    /// it is validated or not tracked (a datagram to an address not tracked is one we speak to first).
+    pub fn room(&self, addr: &SocketAddr) -> Option<u64> {
+        let e = self.table.get(addr).filter(|e| !e.validated)?;
+        Some(e.rx.saturating_mul(FACTOR).saturating_sub(e.tx))
     }
 
     /// Ask to send a datagram of `n` bytes (without headers) to `addr`: true charges it, false holds it.
@@ -177,6 +182,22 @@ mod tests {
         l.on_receive(a(3), 50);
         assert_eq!(l.get(&a(3)).map(|e| e.validated), Some(true));
         assert!(l.allow_send(a(3), 60_000));
+    }
+
+    #[test]
+    fn the_room_of_a_held_address_is_what_its_three_times_leave() {
+        let mut l = Ledger::new(1);
+        assert_eq!(l.room(&a(6)), None);
+        l.on_receive(a(6), 100);
+        assert_eq!(l.room(&a(6)), Some(300));
+        assert!(l.allow_send(a(6), 100 - DATAGRAM_OVERHEAD));
+        assert_eq!(l.room(&a(6)), Some(200));
+        assert!(!l.allow_send(a(6), 201 - DATAGRAM_OVERHEAD));
+        assert!(l.allow_send(a(6), 200 - DATAGRAM_OVERHEAD));
+        assert_eq!(l.room(&a(6)), Some(0));
+        // Something was sent to the address, so a datagram from it now answers that and validates it.
+        l.on_receive(a(6), 1);
+        assert_eq!(l.room(&a(6)), None);
     }
 
     #[test]

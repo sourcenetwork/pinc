@@ -41,8 +41,10 @@
 //!
 //! One packet-number space serves 0-RTT and 1-RTT packets; numbers strictly increase and are never reused. A
 //! datagram never exceeds the datagram size of its path, and an unvalidated path never receives more than three
-//! times what it sent us. Every buffer is charged to the pool; running out drops data (a received packet is not
-//! acknowledged, so the peer sends it again) and never overflows. Nothing allocates per packet and no input panics.
+//! times what it sent us (the endpoint's ledger holds the address of a path the session moved to to the same, and
+//! the connection never builds more than the room the ledger left it). Every buffer is charged to the pool; running
+//! out drops data (a received packet is not acknowledged, so the peer sends it again) and never overflows. Nothing
+//! allocates per packet and no input panics.
 
 /// Define methods on [`Connection`] without repeating its generics in every file.
 macro_rules! conn_impl {
@@ -73,6 +75,7 @@ mod params;
 mod path;
 mod reasm;
 mod recv;
+mod room;
 mod send;
 mod tables;
 mod timer;
@@ -86,8 +89,8 @@ pub use api::ExtensionError;
 #[cfg(feature = "trace")]
 pub use cid::trace::{CidTable, CidView};
 pub use config::{
-    ClientParams, Config, DEFAULT_SEND_WINDOW, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo,
-    ServerParams, Stats,
+    ClientParams, Config, DATAGRAM_HEADERS, DEFAULT_SEND_WINDOW, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId,
+    PathInfo, ServerParams, Stats,
 };
 #[cfg(feature = "trace")]
 pub use drive::EarlyView;

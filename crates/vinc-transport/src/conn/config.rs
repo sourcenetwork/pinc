@@ -11,6 +11,9 @@ use crate::stream;
 pub const MIN_MTU: u16 = 1200;
 /// The first size probed after the handshake.
 pub const PROBE_MTU: u16 = 1452;
+/// The header bytes (IP and UDP) the endpoint's ledger charges for each datagram, on top of its size; the room it
+/// leaves a path ([`Connection::set_path_room`](super::Connection::set_path_room)) is counted the same way.
+pub const DATAGRAM_HEADERS: u64 = 28;
 /// The largest size probed on a low-latency path (UDP, round trip under 2 ms, and only above 2904 bytes).
 pub const JUMBO_MTU: u16 = 8952;
 /// A path whose minimum round trip is under this (2 ms) also probes the jumbo size.

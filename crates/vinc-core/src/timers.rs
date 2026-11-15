@@ -100,15 +100,23 @@ ep_impl! {
                 in_flight: conn.recovery().packets_in_flight() > 0,
             }
             .plan();
-            if plan != slot.m.plan {
+            // While the ledger holds the address of the active path (the peer moved and the answer to the challenge
+            // is on its way) no keepalive is set: a PING the ledger's room cannot carry would leave its timer due with
+            // nothing to send.
+            let held = conn.has_held_paths() && conn.active_path().is_some_and(|a| conn.held_paths().any(|p| p == a));
+            let planned = plan != slot.m.plan;
+            if planned {
                 slot.m.plan = plan;
-                let interval = plan.ping_at.map(|p| p.saturating_sub(slot.m.last_tx));
-                conn.set_keepalive(if slot.m.pulse { None } else { interval });
+                slot.m.keepalive = plan.ping_at.map(|p| p.saturating_sub(slot.m.last_tx));
                 trace!(self, now, Keepalive {
                     slot: i as u64,
                     ping_at: plan.ping_at.unwrap_or(u64::MAX),
                     review_at: plan.review_at.unwrap_or(u64::MAX),
                 });
+            }
+            if planned || held != slot.m.held_active {
+                slot.m.held_active = held;
+                conn.set_keepalive(if slot.m.pulse || held { None } else { slot.m.keepalive });
             }
             note(plan.review_at);
             slot.m.pulse_due = slot.m.pulse && plan.ping_at.is_some_and(|p| p <= now);

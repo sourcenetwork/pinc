@@ -151,6 +151,7 @@ ep_impl! {
                 let mut env = env!(self, now);
                 let _ = conn.add_path(&mut env, pid, crate::commands::path_info(&remote, self.cfg.conn.interface_mtu));
                 let _ = conn.path_lost(lost);
+                self.refresh_rooms(i, true);
             }
             if wake && let Some(conn) = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()) {
                 // The link went away and came back on the new address: the peer is woken on the new path.

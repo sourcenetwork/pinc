@@ -258,6 +258,7 @@ ep_impl! {
                 }
                 conn.set_flight_fanout(list.get(..n).unwrap_or_default());
                 conn.set_flight_skip_primary(skip_primary);
+                self.refresh_rooms(i, true);
                 self.settle(i, now);
                 Ok(Value::None)
             }
@@ -319,6 +320,7 @@ ep_impl! {
                 let conn = self.slots.get_mut(i).and_then(|s| s.conn.as_mut()).ok_or(CommandError::NoSession)?;
                 let mut env = env!(self, now);
                 conn.punch(&mut env, pid, path_info(&addr, self.cfg.conn.interface_mtu)).map_err(|_| CommandError::Full)?;
+                self.refresh_rooms(i, true);
                 self.settle(i, now);
                 Ok(Value::None)
             }

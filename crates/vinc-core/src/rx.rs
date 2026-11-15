@@ -119,7 +119,7 @@ ep_impl! {
             self.counters.dropped_in += 1;
             return;
         }
-        self.ledger.on_receive(remote, buf.len() as u64);
+        self.rx_held = self.ledger.on_receive(remote, buf.len() as u64);
         trace!(self, now, LedgerRx {
             addr: addr_key(&remote),
             rx: self.ledger.get(&remote).map_or(0, |e| e.rx),
@@ -287,6 +287,11 @@ ep_impl! {
             if conn.path_validated(pid) && !is_relay_addr(&remote) {
                 self.udp_heard = Some(now);
             }
+        }
+        // The connection builds for the path only what the ledger will let out, so nothing it counts as sent is held.
+        // A source the ledger does not hold, on a session with no held path, has no room to set: nothing is looked up.
+        if self.rx_held || conn.has_held_paths() {
+            conn.set_path_room(pid, self.ledger.room(&remote));
         }
         self.settle(i, now);
         if let Some((path, rtt)) = returned {

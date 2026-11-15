@@ -264,6 +264,10 @@ pub(crate) struct Meta<const NP: usize> {
     pub(crate) held: Held,
     pub(crate) seen_peak: u64,
     pub(crate) plan: Plan,
+    /// The keepalive interval of the plan, as set on the connection unless the ledger holds the active path.
+    pub(crate) keepalive: Option<u64>,
+    /// The ledger held the address of the active path when the keepalive was last set (see `settle_core`).
+    pub(crate) held_active: bool,
     /// Whether the session was woken by suspension while timing out.
     pub(crate) sleep_doubt: bool,
     pub(crate) acp_recheck: Option<u64>,
@@ -332,6 +336,8 @@ impl<const NP: usize> Meta<NP> {
             ping_at: None,
             review_at: None,
         },
+        keepalive: None,
+        held_active: false,
         sleep_doubt: false,
         acp_recheck: None,
         node_ver: 0,
