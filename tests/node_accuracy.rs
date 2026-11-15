@@ -199,44 +199,63 @@ fn a_snapshot_after_a_heal_removes_nobody() {
             w.sim.partition(cut_at, &[&near, &m[3..]]);
             w.sim.heal(heal_at);
             w.run(secs(300));
-            // Every hub holds a carrier of every member, and the cut closes all of them: each hub confirms each cut
-            // member down on its own within the confirm deadline of its carrier closing, as the rule says.
+            // Every hub holds a carrier of every member, and the cut closes all of them. Each hub takes each cut member
+            // down within the confirm deadline of its carrier closing: by its own two probes, or by the report of a
+            // hub that confirmed first, which it accepts only once its own carrier of the member is closed. Which of
+            // the two a hub does depends on whose carrier closed first, so the rule is stated for both.
             let cut: Vec<[u8; 32]> = m[3..].iter().map(|n| w.id(*n)).collect();
-            for h in &hubs {
-                let traces = &w.sim.node(*h).traces;
-                let at = |pick: fn(&vinc_membership::Trace) -> Option<[u8; 32]>, member: &[u8; 32]| {
-                    traces.iter().find_map(|(t, it)| match &it.body {
-                        Body::Membership(x) if pick(x) == Some(*member) => Some(*t),
-                        _ => None,
-                    })
-                };
-                for c in &cut {
-                    let gone = at(
-                        |x| match x {
-                            vinc_membership::Trace::CarrierGone { member } => Some(*member),
-                            _ => None,
-                        },
-                        c,
-                    )
-                    .unwrap_or_else(|| panic!("seed {seed}: hub {h:?} never saw the carrier of a cut member close"));
-                    let confirmed = at(
-                        |x| match x {
-                            vinc_membership::Trace::Confirmed { member } => Some(*member),
-                            _ => None,
-                        },
-                        c,
-                    )
-                    .unwrap_or_else(|| panic!("seed {seed}: hub {h:?} did not confirm a cut member down"));
+            let first = |h: SimId, pick: fn(&vinc_membership::Trace) -> Option<[u8; 32]>, member: &[u8; 32]| {
+                w.sim.node(h).traces.iter().find_map(|(t, it)| match &it.body {
+                    Body::Membership(x) if pick(x) == Some(*member) => Some(*t),
+                    _ => None,
+                })
+            };
+            let gone_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
+                vinc_membership::Trace::CarrierGone { member } => Some(*member),
+                _ => None,
+            };
+            let confirmed_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
+                vinc_membership::Trace::Confirmed { member } => Some(*member),
+                _ => None,
+            };
+            let accepted_of: fn(&vinc_membership::Trace) -> Option<[u8; 32]> = |x| match x {
+                vinc_membership::Trace::DownAccepted { member } => Some(*member),
+                _ => None,
+            };
+            for c in &cut {
+                let origin = hubs.iter().filter_map(|h| first(*h, confirmed_of, c)).min();
+                let origin = origin.unwrap_or_else(|| panic!("seed {seed}: no hub confirmed a cut member down"));
+                for h in &hubs {
+                    let gone = first(*h, gone_of, c).unwrap_or_else(|| {
+                        panic!("seed {seed}: hub {h:?} never saw the carrier of a cut member close")
+                    });
+                    let (confirmed, accepted) = (first(*h, confirmed_of, c), first(*h, accepted_of, c));
+                    let down = confirmed
+                        .into_iter()
+                        .chain(accepted)
+                        .min()
+                        .unwrap_or_else(|| panic!("seed {seed}: hub {h:?} did not take a cut member down"));
                     assert!(
-                        gone >= cut_at && confirmed >= gone && confirmed <= gone + 2 * vinc_membership::consts::CONFIRM,
-                        "seed {seed}: hub {h:?} confirmed at {confirmed} after the carrier closed at {gone}"
+                        gone >= cut_at && down >= gone && down <= gone + 2 * vinc_membership::consts::CONFIRM,
+                        "seed {seed}: hub {h:?} took a cut member down at {down} after the carrier closed at {gone}"
                     );
+                    if let Some(t) = accepted {
+                        assert!(
+                            t >= origin,
+                            "seed {seed}: hub {h:?} accepted a report at {t} that no hub had confirmed before {origin}"
+                        );
+                    }
                 }
-                for (_, it) in traces {
-                    if let Body::Membership(vinc_membership::Trace::Confirmed { member }) = &it.body {
+            }
+            for h in &hubs {
+                for (_, it) in &w.sim.node(*h).traces {
+                    if let Body::Membership(
+                        vinc_membership::Trace::Confirmed { member } | vinc_membership::Trace::DownAccepted { member },
+                    ) = &it.body
+                    {
                         assert!(
                             cut.contains(member),
-                            "seed {seed}: hub {h:?} confirmed a near-side node down"
+                            "seed {seed}: hub {h:?} took a near-side node down"
                         );
                     }
                 }
