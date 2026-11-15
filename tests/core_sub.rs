@@ -836,3 +836,41 @@ fn a_sub_open_refused_for_an_unregistered_protocol_opens_when_repeated_after_it_
         assert_eq!(opened, 1);
     });
 }
+
+#[test]
+fn a_child_that_waited_for_its_parent_is_answered_by_its_peer_and_not_by_its_keys() {
+    big_stack(|| {
+        let mut net = CoreNet::new(10 * MS_NS);
+        let (a, b) = (net.add(1), net.add(2));
+        let (parent, _) = dial(&mut net, a, b, ALPN_A);
+        // The handshake still runs: the second protocol is reported at once and gets its keys when the parent is up.
+        let (child, _) = dial(&mut net, a, b, ALPN_B);
+        let answered = |n: &CoreNet| {
+            let Answer::Stats(st) = n.nodes[a].ep.query(Query::Stats(child)) else {
+                panic!()
+            };
+            st.answered
+        };
+        assert!(!answered(&net));
+        let end = net.now + 5 * SEC_NS;
+        assert!(net.run(end, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Connected { session, .. } if *session == parent))
+        }));
+        // The child has its keys and its open has only just left: the peer has not answered it.
+        assert!(!answered(&net), "a sub-session counts as answered by getting its keys");
+        assert!(!net.nodes[a].saw(|e| matches!(e, Event::Answered { .. })));
+        // The peer opens the child and acknowledges what it carries: that is its answer.
+        write_new(&mut net, a, child, b"early");
+        let end = net.now + 5 * SEC_NS;
+        assert!(net.run(end, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Answered { session } if *session == child))
+        }));
+        assert!(answered(&net));
+        net.run_for(SEC_NS);
+        assert_eq!(
+            net.nodes[a].count(|e| matches!(e, Event::Answered { .. })),
+            1,
+            "told once, and only for the session reported before its peer answered"
+        );
+    });
+}

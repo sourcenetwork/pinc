@@ -274,7 +274,9 @@ ep_impl! {
         slot.m.alpn = Some(alpn);
         slot.m.state = State::Established;
         slot.m.resumed = resumed;
-        let answered_now = slot.m.announced && !slot.m.answered;
+        // A handshake that ends heard the peer. A sub-session that waited for its parent gets its keys here, before
+        // the peer has seen its open: its first packet is its answer (`deliver`).
+        let answered_now = slot.m.announced && !slot.m.answered && !slot.m.sub;
         slot.m.answered |= answered_now;
         slot.m.last_app = now;
         if slot.m.unauth {

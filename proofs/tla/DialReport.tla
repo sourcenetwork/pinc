@@ -47,11 +47,15 @@
 (* The answered report: a dial reported before its peer answered (the     *)
 (* optimistic one, a sub-session) is told so, and told again with          *)
 (* Event::Answered once the peer is heard on it; a dial reported after its *)
-(* handshake is answered when it is reported. crates/vinc-core/src/        *)
-(* events.rs `announce` (the first value) and `on_established` (the        *)
-(* handshake of a reported dial ends), crates/vinc-core/src/rx.rs          *)
-(* `deliver` (the first packet on an established, reported session),       *)
-(* crates/vinc/src/conn.rs `Connection::answered`.                         *)
+(* handshake is answered when it is reported. A sub-session opened over a  *)
+(* session whose handshake still runs waits for its keys; getting them is  *)
+(* not an answer, the peer has not seen its open yet. crates/vinc-core/    *)
+(* src/events.rs `announce` (the first value) and `on_established` (the    *)
+(* handshake of a reported dial ends; a sub-session's keys are passed      *)
+(* over), crates/vinc-core/src/rx.rs `deliver` (the first packet on an     *)
+(* established, reported session), crates/vinc-core/src/sub.rs             *)
+(* `open_sub_wait`, `release_waiting`, crates/vinc/src/conn.rs             *)
+(* `Connection::answered`.                                                 *)
 (*                                                                         *)
 (* Rust: crates/vinc-core/src/commands.rs `connect` (the optimistic report *)
 (* calls `end_unanswered`); crates/vinc-transport/src/conn/hooks.rs        *)
@@ -82,6 +86,9 @@
 (*             answered; AnsweredOnlyHeard fails.                          *)
 (*  _noanswer  no Answered event: an optimistic dial whose handshake ends  *)
 (*             stays unanswered; AnsweredWhenDone fails.                   *)
+(*  _answeratkeys  a sub-session that waited for its parent counts as      *)
+(*             answered when it gets its keys, before the peer saw its     *)
+(*             open; AnsweredOnlyHeard fails.                              *)
 (***************************************************************************)
 EXTENDS Naturals
 
@@ -100,7 +107,8 @@ CONSTANTS
     EarlyOnThin,  \* the early end applies on a thin node too (a planted bug)
     FloorEarly,   \* the early end raises the floor (a planted bug)
     AnswerAtReport, \* a reported dial counts as answered from its report (the code before the answered report)
-    AnswerEvent   \* the host is told when a dial reported early is answered (FALSE: a planted bug)
+    AnswerEvent,  \* the host is told when a dial reported early is answered (FALSE: a planted bug)
+    AnswerAtKeys  \* a sub-session that waited for its parent counts as answered by its keys (a planted bug)
 
 \* Assumption: the round trip is shorter than the first resend delay, as the code makes it (2 x the remembered RTT).
 ASSUME Rtt < First
@@ -130,7 +138,7 @@ LimitOf(thin) == IF thin THEN 2 * Limit ELSE Limit
 \* A dial that is idle: nothing started.
 Idle == [st |-> "idle", at |-> 1, sub |-> FALSE, told |-> FALSE, early |-> FALSE, thin |-> FALSE, sends |-> 0,
          unheard |-> 0, lost |-> 0, next |-> 0, ans |-> 0, hold |-> FALSE, wasHeld |-> FALSE, resume |-> FALSE,
-         tinc |-> 0, heard |-> FALSE, answered |-> FALSE, why |-> "none", told_ans |-> FALSE]
+         tinc |-> 0, heard |-> FALSE, answered |-> FALSE, why |-> "none", told_ans |-> FALSE, wait |-> FALSE]
 
 \* Every variable has the shape it should.
 TypeOK ==
@@ -212,15 +220,17 @@ Hold ==
     /\ d' = [d EXCEPT !.hold = ~@, !.wasHeld = TRUE]  \* flips the hold, and remembers there was one
     /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, floor, limits>>
 
-\* A dial starts. Over a held session: a sub-session, handed over at once. Otherwise a handshake that sends its first
-\* flight now (the network may lose it): reported at once when optimistic, resumed when we hold a ticket, on a node
-\* that is thin or not.
+\* A dial starts. Over a held session, or over another dial of ours to the peer whose handshake still runs (`over`;
+\* that dial is not modelled, only what it does to this one): a sub-session, handed over at once; over a handshake it
+\* waits for its keys. Otherwise a handshake that sends its first flight now (the network may lose it): reported at
+\* once when optimistic, resumed when we hold a ticket, on a node that is thin or not.
 Start ==
     /\ d.st = "idle"                                  \* no dial running
     /\ steady' = alive                                \* the peer is steady from here only if it runs now
-    /\ \E thin \in BOOLEAN, lose \in BOOLEAN :        \* the node may be thin; the first flight may be lost
-        d' = IF held
+    /\ \E thin \in BOOLEAN, lose \in BOOLEAN, over \in BOOLEAN :  \* thin or not; a lost flight; a handshake runs
+        d' = IF held \/ over
              THEN [Idle EXCEPT !.st = "up", !.at = now, !.sub = TRUE, !.told = TRUE,  \* a sub-session, at once
+                               !.wait = ~held,               \* over a handshake: its keys come when that ends
                                !.told_ans = AnswerAtReport]  \* not answered yet, unless the old rule is planted
              ELSE Send([Idle EXCEPT !.st = IF cached THEN "up" ELSE "hs",  \* optimistic: handed over now
                                     !.at = now,                             \* when it began
@@ -278,11 +288,22 @@ Fire ==
 \* The peer answers what a sub-session sends: its first packet on the sub-session arrives. Only a peer that runs, and
 \* still holds the session the sub-session was opened over (a restart lost it), answers.
 SubHeard ==
-    /\ d.sub /\ d.st = "up" /\ ~d.heard               \* a sub-session not heard from yet
+    /\ d.sub /\ d.st = "up" /\ ~d.heard /\ ~d.wait    \* a sub-session with its keys, not heard from yet
     /\ alive /\ held                                  \* its peer runs and holds the parent
     /\ d' = [d EXCEPT !.heard = TRUE,                  \* the peer was heard
                       !.told_ans = @ \/ AnswerEvent]    \* and the host is told it answered
     /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, floor, limits>>
+
+\* The handshake a waiting sub-session was opened over ends and its session is allowed: the sub-session gets its keys
+\* and its open goes out. The peer answered that handshake, not the sub-session, which it has not seen yet. (The ticket
+\* that handshake leaves is the other dial's and is not taken here.)
+SubKeys ==
+    /\ d.sub /\ d.st = "up" /\ d.wait                 \* a sub-session that waits for its keys
+    /\ alive                                          \* a handshake ends only with a peer that runs
+    /\ d' = [d EXCEPT !.wait = FALSE,                 \* it has its keys
+                      !.told_ans = @ \/ AnswerAtKeys]  \* which are no answer (unless the bug is planted)
+    /\ held' = TRUE                                   \* the host holds the session it was opened over
+    /\ UNCHANGED <<now, alive, inc, ticket, cached, steady, floor, limits>>
 
 \* The first fix's end: at its fixed time, before anything else, held or not.
 FixedEnd ==
@@ -304,7 +325,9 @@ Done ==
     /\ d' = Idle                                      \* ready for the next
     /\ UNCHANGED <<now, alive, inc, ticket, cached, held, steady, floor, limits>>
 
-Next == Tick \/ Stop \/ Restart \/ Cache \/ DropHeld \/ Hold \/ Start \/ Answer \/ SubHeard \/ Fire \/ FixedEnd \/ GiveUp \/ Done
+Next ==
+    \/ Tick \/ Stop \/ Restart \/ Cache \/ DropHeld \/ Hold \/ Start \/ Answer \/ SubHeard \/ SubKeys \/ Fire
+    \/ FixedEnd \/ GiveUp \/ Done
 
 Spec == Init /\ [][Next]_vars
 
