@@ -4,7 +4,7 @@ import Vinc.Axioms
 # Subscriptions on a hub: hold, restore, release, and the SUBS frame
 
 The unbounded counterpart of `proofs/tla/BroadcastSubs.tla` (`subs.rs`, `gap.rs` `on_sub`, `on_unsub`) and of
-`build_subs`. A table is a list of entries `(topic, member, live)`; the invariant `Ok` says an entry is the only one
+`build_list`. A table is a list of entries `(topic, member, live)`; the invariant `Ok` says an entry is the only one
 of its `(topic, member)` and no topic has more than `max` entries. Facts, for every table: a push goes to exactly
 the live entries (`pushed_iff`); a hold keeps every entry and makes none live (`hold_keeps`); a restore tells the
 member each topic it had held, once, and none else (`told_iff`, `told_nodup`), and leaves none held
@@ -181,12 +181,12 @@ theorem release_others (tb : List E) (m : Nat) : ∀ e ∈ tb, e.m ≠ m → e �
 
 /-! ## The SUBS frame -/
 
-/-- Insert into a strictly sorted list (the binary search insert of `build_subs`). -/
+/-- Insert into a strictly sorted list (the binary search insert of `build_list`). -/
 def insSorted (n : Nat) : List Nat → List Nat
   | [] => [n]
   | x :: xs => if n < x then n :: x :: xs else if n = x then x :: xs else x :: insSorted n xs
 
-/-- `build_subs`: the candidates in order, each added unless present or the list is full. -/
+/-- `build_list`: the candidates in order, each added unless present or the list is full. -/
 def buildSubs (max : Nat) (cands : List Nat) : List Nat :=
   cands.foldl (fun acc n => if acc.contains n || max ≤ acc.length then acc else insSorted n acc) []
 

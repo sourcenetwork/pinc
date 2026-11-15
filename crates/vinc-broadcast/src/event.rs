@@ -53,6 +53,23 @@ pub enum Reject {
     HeldFull,
 }
 
+/// Why a SUBS frame changed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubsDrop {
+    /// The frame did not parse, or names a kind this node does not take.
+    Malformed,
+    /// An ASK at a node that is not a hub, or from a node the hub does not tell the list.
+    NotRecipient,
+    /// A list from a node that is not a hub.
+    NotHub,
+    /// A change from a hub other than the one the member's list came from.
+    OtherHub,
+    /// A change on a version the member does not hold; it asks for the whole list once.
+    OffBase,
+    /// The topic table is full.
+    TopicsFull,
+}
+
 /// Why a message waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldWhy {
@@ -216,6 +233,15 @@ pub enum Trace {
         hub: NodeId,
         /// The topic.
         topic: Tag,
+    },
+    /// A SUBS frame was dropped.
+    SubsDropped {
+        /// The sender.
+        from: NodeId,
+        /// The topic.
+        topic: Tag,
+        /// Why.
+        why: SubsDrop,
     },
     /// The primary hub changed.
     Primary {

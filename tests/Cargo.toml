@@ -1407,3 +1407,7 @@ path = "vinc_timer_bound.rs"
 [[test]]
 name = "layers_dtn_wake"
 path = "layers_dtn_wake.rs"
+
+[[test]]
+name = "broadcast_subs"
+path = "broadcast_subs.rs"

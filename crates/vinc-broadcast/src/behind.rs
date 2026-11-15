@@ -107,10 +107,12 @@ impl Topics {
 
     /// The stream of `peer` has room again. A publisher hands its hub the publishes that waited for room, oldest first;
     /// a hub sends the subscriber the logged messages it is behind on, in order, in every topic; each until the stream
-    /// is full again. The host calls this whenever a stream it reported as [`backlogged`](Host::backlogged) took more
-    /// bytes; calling it at any other time is harmless.
+    /// is full again; a hub sends a recipient whose stream refused a subscriber list the whole list. The host calls
+    /// this whenever a stream it reported as [`backlogged`](Host::backlogged) took more bytes; calling it at any other
+    /// time is harmless.
     pub fn peer_writable<H: Host>(&mut self, h: &mut H, now: Nanos, peer: &NodeId) {
         self.send_unsent(h, now, peer);
+        self.subs_writable(h, peer);
         if !self.lagging.contains(peer) {
             return;
         }
