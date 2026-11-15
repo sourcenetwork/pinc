@@ -9,7 +9,12 @@
 //!
 //! Both ends follow the peer at once: the highest-numbered packet that carries STREAM, DATAGRAM or WAKE data moves
 //! the active path to the path it came from, and a new UDP path is challenged in parallel (a new path gets three
-//! times what it sent us until its challenge is answered). The active path is chosen by cost: the smoothed round
+//! times what it sent us until its challenge is answered). An end that sends through a relay and is challenged on
+//! a direct path it has not validated, and has no challenge out on, answers with its own challenge in the same
+//! datagram, so both ends validate the path in one round trip and the session leaves the relay then (the reference
+//! model's responder starts its challenge only when the peer's candidate list arrives, a hop behind the peer's
+//! first challenge, where the address limit then holds it back until the next probe; a node declared thin keeps
+//! that cadence). The active path is chosen by cost: the smoothed round
 //! trip of the path, plus one second for a relay, minus 3 ms for IPv6; a validated UDP path that was silent for 15 s
 //! is left out; from a relay the connection moves at once, otherwise only for a gain above 5 ms. After three
 //! probe timeouts in a row on a direct path the path is dropped as validated, challenged on the re-join cadence, and
@@ -580,6 +585,28 @@ conn_impl! {
         self.set_challenge(env, i);
         if let Some(p) = self.paths.get_mut(i) {
             p.send_challenge = p.challenge.is_some();
+        }
+    }
+
+    /// The peer challenged path `i`. If this end sends through a relay, and the path is a direct one it has not
+    /// validated and has no challenge out on, its own challenge leaves with the response, in the same datagram, so
+    /// both ends validate the direct path in the round trip of the peer's challenge and the session leaves the relay
+    /// then. Sent on its own after the response, the challenge would be more than an address that has only sent a
+    /// challenge may be answered with (three times what arrived from it), and it would wait for the next probe; the
+    /// two frames together fit. One challenge, never a second while it is out: the probes of a punch keep their own
+    /// cadence. An end whose active path is direct gains nothing from it and is left alone.
+    pub(super) fn challenge_back(&mut self, env: &mut Env<'_, P>, i: usize) {
+        // vertexia: a node the host declared thin keeps the reference model's cadence (its challenges are counted
+        // against a thin uplink); lift this once the scenario matrix shows no thin row worse with it.
+        let wanted = self.phase == Phase::Connected
+            && !self.cfg.thin
+            && self.paths.active().is_none_or(|c| c.info.kind == PathKind::Relay)
+            && self
+                .paths
+                .get(i)
+                .is_some_and(|p| p.info.kind == PathKind::Direct && !p.validated && p.challenge.is_none());
+        if wanted {
+            self.queue_challenge(env, i);
         }
     }
 

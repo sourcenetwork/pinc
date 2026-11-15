@@ -1,6 +1,7 @@
 //! Sessions on relay and direct paths at the endpoint: a session whose relay path stops answering while the relay's
-//! carrier still does is closed, the re-join challenges of a thin node's sessions to one address are spaced, and a
-//! datagram heard on a relay path does not count as UDP heard for the short Initial.
+//! carrier still does is closed, the re-join challenges of a thin node's sessions to one address are spaced, a
+//! datagram heard on a relay path does not count as UDP heard for the short Initial, and an end on a relay path that
+//! is challenged on a direct path validates it in the round trip of that challenge.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
 #[path = "core_timing_common.rs"]
@@ -175,5 +176,85 @@ fn a_datagram_heard_on_a_relay_path_does_not_allow_the_short_initial() {
         dial(&mut net, a, c, ALPN_A, Role::Other);
         net.run_for(16 * SEC_NS);
         assert_eq!(flights(&net, marker, a, c), [1, 1, 1, 1, 1, 1]);
+    });
+}
+
+/// When session `s` of node `i` reported a validated path, at or after `from`.
+fn validated_at(net: &CoreNet, i: usize, s: SessionId, from: u64) -> Option<u64> {
+    net.nodes[i].events.iter().find_map(|(t, e)| {
+        let hit = matches!(e, Event::PathChanged { session, state: PathState::Validated, .. } if *session == s);
+        (hit && *t >= from).then_some(*t)
+    })
+}
+
+#[test]
+fn an_end_on_a_relay_path_validates_a_direct_path_in_the_round_trip_of_its_peers_challenge() {
+    big_stack(|| {
+        // Node a reaches node b through a relay only. Node b then challenges a's own address, and a is told b's
+        // address right after that challenge arrived, as it is when the peer's candidate list comes through the
+        // relay, a hop behind the challenge.
+        let one_way = 25 * MS;
+        let mut net = CoreNet::new(one_way);
+        let (a, b) = (net.add(1), net.add(2));
+        let via = relay_addr(false, 3, 7);
+        net.nodes[b].extra.push(via);
+        let (peer, now) = (net.nodes[b].node, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_A, via, Role::Other).unwrap();
+        let sa = net.nodes[a].session(&rep);
+        assert!(net.run(now + 10 * SEC_NS, |n| {
+            n.nodes[a].saw(|e| matches!(e, Event::Connected { .. }))
+                && n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+        }));
+        let sb = net.nodes[b]
+            .events
+            .iter()
+            .find_map(|(_, e)| match e {
+                Event::Incoming { session, .. } => Some(*session),
+                _ => None,
+            })
+            .unwrap();
+        net.run_for(SEC_NS);
+        let (to_a, to_b) = (net.nodes[a].addr, net.nodes[b].addr);
+        let t0 = net.now;
+        net.nodes[b]
+            .cmd(
+                t0,
+                Command::Punch {
+                    session: sb,
+                    addr: to_a,
+                },
+            )
+            .unwrap();
+        net.run(t0 + one_way, |_| false);
+        let t1 = net.now;
+        assert_eq!(t1, t0 + one_way);
+        // Node a's answer has left. A challenge sent on its own after it is more than an address that has sent
+        // 32 bytes may be answered with (three times that), so the endpoint's address limit holds it back. These two
+        // nodes already exchanged datagrams from the same addresses (the relay here is a second address of node b),
+        // so their limit is open: the test takes that one datagram off the wire itself.
+        let mut held = 0;
+        net.loss = Some(Box::new(move |from, to, bytes| {
+            let alone = from == to_a && to == to_b && bytes.len() == CHALLENGE_LEN && held == 0;
+            held += u32::from(alone);
+            alone
+        }));
+        net.nodes[a]
+            .cmd(
+                t1,
+                Command::Punch {
+                    session: sa,
+                    addr: to_b,
+                },
+            )
+            .unwrap();
+        net.run_for(SEC_NS);
+        // Node b has its answer after one round trip. Node a's challenge left with that answer, so its own answer
+        // comes one way later: it did not wait for the second probe of its punch, 33.3 ms on.
+        assert_eq!(validated_at(&net, b, sb, t0), Some(t0 + 2 * one_way));
+        assert_eq!(
+            validated_at(&net, a, sa, t0),
+            Some(t0 + 3 * one_way),
+            "the challenge of the end on the relay waited for its next probe"
+        );
     });
 }

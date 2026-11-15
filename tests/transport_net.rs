@@ -663,3 +663,57 @@ fn a_black_hole_drops_at_the_first_probe_timeout_and_the_next_probe_waits_for_a_
         assert_eq!(net.a.conn.path_mtu(PathId(1)), Some(1452));
     });
 }
+
+#[test]
+fn an_end_challenged_on_a_new_direct_path_answers_with_its_own_challenge_in_the_same_datagram() {
+    big_stack(|| {
+        let mut w = World::new(IdentityAlg::Ed25519);
+        let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+        // The session runs on a relay path; a direct route exists that neither end has used.
+        let mut link = Link::new(41, Params::new(40 * MS));
+        let direct = 25 * MS;
+        link.add_route(PathId(3), PathId(4), Params::new(direct), Params::new(direct));
+        let mut net = connected(&mut w, &mut sa, &mut sb, link);
+        let relay = PathInfo {
+            kind: PathKind::Relay,
+            ..PathInfo::default()
+        };
+        let now = net.now;
+        net.a.with_env(now, |c, env| c.add_path(env, PathId(1), relay)).unwrap();
+        net.b.with_env(now, |c, env| c.add_path(env, PathId(2), relay)).unwrap();
+        net.run(net.now + SEC, |_| false);
+        // A challenges the direct path. B learns the path from that challenge alone: nothing else names it to B.
+        let t0 = net.now;
+        let (a_sent, b_sent) = (net.a.tx_log.len(), net.b.tx_log.len());
+        net.a
+            .with_env(t0, |c, env| c.add_path(env, PathId(3), PathInfo::default()))
+            .unwrap();
+        assert!(
+            net.run(t0 + SEC, |n| n.b.saw(|r| *r == Rec::PathValidated(PathId(4)))),
+            "B never validated the direct path"
+        );
+        // A's challenge, B's answer with its own challenge, A's answer: three one-way trips.
+        assert_eq!(net.now - t0, 3 * direct, "B's challenge did not leave with its answer");
+        assert!(net.a.saw(|r| *r == Rec::PathValidated(PathId(3))));
+        // B's first datagram on the path carries both frames, nine bytes more than a challenge alone, and with the
+        // 28 bytes of its headers it stays within three times the one datagram that arrived from that address.
+        let challenge = net.a.tx_log[a_sent..]
+            .iter()
+            .find(|(_, _, p)| *p == PathId(3))
+            .unwrap()
+            .1;
+        let both = net.b.tx_log[b_sent..]
+            .iter()
+            .find(|(_, _, p)| *p == PathId(4))
+            .unwrap()
+            .1;
+        assert_eq!(both, challenge + 9);
+        assert!(both + 28 <= 3 * challenge, "{both} bytes answer {challenge}");
+        // Both ends leave the relay for the direct path.
+        net.run(net.now + SEC, |_| false);
+        assert_eq!(
+            (net.a.conn.active_path(), net.b.conn.active_path()),
+            (Some(PathId(3)), Some(PathId(4)))
+        );
+    });
+}

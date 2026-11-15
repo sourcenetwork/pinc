@@ -590,6 +590,7 @@ conn_impl! {
                 if let Some(p) = self.paths.get_mut(pi) {
                     p.response = Some(d);
                 }
+                self.challenge_back(env, pi);
             }
             Frame::PathResponse(d) => self.on_path_response(pi, d, now),
             Frame::Close { error } => self.on_peer_close(error),
