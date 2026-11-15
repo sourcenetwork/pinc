@@ -190,7 +190,7 @@ still being closed.
 
 ## Open items
 
-As of 13 November 2026, at the commit that carries this text. Every item names the issue that tracks it.
+As of 15 November 2026, at the commit that carries this text. Every item names the issue that tracks it.
 
 - **Message loss in broadcast.** The cases that lost messages lose none now, in three repetitions each in the
   harness. A burst of 2,000 messages of 4 KiB through a hub to ten subscribers lost 1.35% to 21% and loses 0, as
@@ -210,37 +210,42 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   the facade have; the plan is in [#99](https://github.com/sourcenetwork/vinc/issues/99) and its first phases are
   written but not merged: one of them raised a server's memory per connection, which is being looked into. An owned
   buffer written in the middle of a stream.
-- **Performance on loopback.** On the build host (13 November 2026, commit `6355d7d`, all three stacks in one quiet
-  window) VINC leads iroh and rust-libp2p on bulk throughput (713 against 514 and 465 MiB/s on one stream, 678
-  against 488 and 462 on sixteen), on CPU per byte (2.65 against 4.81 and 5.09 ns), on the 64-byte round trip (68
-  against 93 and 78 microseconds) and on connection setup (858 microseconds against 1,047 and 1,801). It is behind on
-  a client's memory per connection, 188 KiB against iroh's 176 and rust-libp2p's 110 (it was 250), and on the memory
-  of an idle endpoint, 5.8 MiB against 3.3 and 0.6 (it was 6.3); both measured on 13 November on a c7i.4xlarge in one
-  session with the other two ([#158](https://github.com/sourcenetwork/vinc/issues/158)). It is behind on the time to
-  the first byte when 1000 connections start at once (821 ms against iroh's 315,
+- **Performance on loopback.** On the build host (15 November 2026, commit `9dd66f05`, all three stacks in one quiet
+  window) VINC leads iroh and rust-libp2p on bulk throughput (710 against 507 and 471 MiB/s on one stream, 678
+  against 489 and 460 on sixteen), on CPU per byte (2.66 against 4.83 and 5.03 ns), on the 64-byte round trip (69
+  against 94 and 76 microseconds) and on connection setup (859 microseconds against 1,049 and 1,817). A client's
+  memory per connection is level with iroh's and behind rust-libp2p's, 177 KiB against 178 and 107 (it was 250), and
+  a server's lies between them, 113 against 120 and 88. The memory of an idle endpoint was last measured on
+  13 November on a c7i.4xlarge, 5.8 MiB against 3.3 and 0.6 (it was 6.3)
+  ([#158](https://github.com/sourcenetwork/vinc/issues/158)). It is behind on the time to the first byte when 1000
+  connections start at once (814 ms against iroh's 316,
   [#157](https://github.com/sourcenetwork/vinc/issues/157)).
 - **Performance on the emulated network** (containers on the build host, the same session, three repetitions,
-  medians). Under 1% loss on a 50 ms path a transfer runs at 6.28 MiB/s against 0.35 and 0.34. Requests on a stream
-  each over a 20 ms path, 512-byte bodies: with 64 in flight 2,799 a second against 2,311 for iroh and 48 for
-  rust-libp2p, the slowest hundredth at 26.0 ms against 40.2; with 4 KiB bodies 2,730 against 1,990, and 2,666
-  against 1,863 when 256 are asked for. Fetching a value over a WAN: 1 KiB in 104 ms against 114 and 155, 1 MiB in
-  390 ms against 473 and 511, 64 MiB in 6.06 s against 6.24 and 6.68, 256 MiB level with iroh (23.35 s against
-  23.32), and 64 MiB from three providers at once in 1.25 s against 1.27 s for rust-libp2p and 2.98 s for iroh.
+  medians). Under 1% loss on a 50 ms path a transfer runs at 6.65 MiB/s against 0.33 and 0.34. Requests on a stream
+  each over a 20 ms path, 512-byte bodies: with 64 in flight 2,801 a second against 2,287 for iroh and 48 for
+  rust-libp2p, the slowest hundredth at 25.9 ms against 40.4; with 4 KiB bodies 2,729 against 2,005, and 2,733
+  against 1,702 when 256 are asked for, where the slowest hundredth is 104 ms against iroh's 228. Fetching a value
+  over a WAN: 1 KiB in 104 ms against 114 and 155, 1 MiB in 393 ms against 472 and 512, 64 MiB in 6.06 s against 6.24
+  and 6.47, 256 MiB level with iroh (23.35 s against 23.32), and 64 MiB from three providers at once in 1.26 s,
+  level with rust-libp2p's 1.23 s, against 2.98 s for iroh.
   Behind:
-  - one stream on a clean 150 ms path fell from 12.1 to 10.8 MiB/s between 12 and 13 November (iroh 5.68; the
-    change that did it is being looked for, [#156](https://github.com/sourcenetwork/vinc/issues/156)), and sixteen streams there move 9.72 MiB/s against iroh's
+  - one stream on a clean 150 ms path moves 10.8 MiB/s, where it moved 12.1 on 12 November (iroh 5.68; the
+    change that did it is being looked for, [#156](https://github.com/sourcenetwork/vinc/issues/156)), and sixteen streams there move 9.64 MiB/s against iroh's
     11.2 ([#159](https://github.com/sourcenetwork/vinc/issues/159));
-  - one stream on a LAN, 85.8 against 90.3 MiB/s ([#159](https://github.com/sourcenetwork/vinc/issues/159)), and a burst of 500 connections there, 0.94 s
+  - one stream on a LAN, 84.4 against 90.9 MiB/s ([#159](https://github.com/sourcenetwork/vinc/issues/159)), and a burst of 500 connections there, 0.93 s
     against 0.56 s ([#157](https://github.com/sourcenetwork/vinc/issues/157));
-  - the slowest hundredth of requests with 16 in flight (22.1 ms against 21.1, [#94](https://github.com/sourcenetwork/vinc/issues/94)) and with 256 asked for
-    (230 ms against 158, [#162](https://github.com/sourcenetwork/vinc/issues/162));
-  - the median delivery of a topic message on a LAN (852 microseconds against 430, two hops by design,
-    [#102](https://github.com/sourcenetwork/vinc/issues/102)) and of a burst of 2,000 updates through a hub (3.49 s against iroh's 1.61 s, level with
+  - the slowest hundredth of requests with 16 in flight (23.9 ms against 21.2, [#94](https://github.com/sourcenetwork/vinc/issues/94));
+  - the median delivery of a topic message on a LAN (748 microseconds against 438, two hops by design,
+    [#102](https://github.com/sourcenetwork/vinc/issues/102)) and of a burst of 2,000 updates through a hub (3.46 s against iroh's 1.27 s, level with
     rust-libp2p, [#161](https://github.com/sourcenetwork/vinc/issues/161));
-  - CPU on a large value fetched from one provider (11.9 s over all nodes for 256 MiB against 9.79 and 9.37,
+  - CPU on a large value fetched from one provider (12.1 s over all nodes for 256 MiB against 9.91 and 9.48,
     [#163](https://github.com/sourcenetwork/vinc/issues/163));
   - three setup rows: the median on a LAN, the resumed median on a slow lossy path and the tail at 1% loss
     ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
+
+  Against the session of 13 November (commit `6355d7d`) 327 of 383 values are inside that session's spread. The
+  rows that are still above it, and what is known of each, are in
+  [#485](https://github.com/sourcenetwork/vinc/issues/485).
 
   `just compare` and the harness print every row, the ones VINC loses included.
 - **Transport and connectivity rules not in yet.** Five changes that bring the library closer to the reference model
@@ -269,5 +274,10 @@ As of 13 November 2026, at the commit that carries this text. Every item names t
   (`[debug] trace = true`, [#126](https://github.com/sourcenetwork/vinc/pull/126)).
 - **Planned.** Forward erasure correction as an option, off by default, that an application switches on through the
   builder ([#145](https://github.com/sourcenetwork/vinc/issues/145)).
-- **Housekeeping.** The memory test fails when it runs beside the whole suite on a busy host and passes alone
-  ([#148](https://github.com/sourcenetwork/vinc/issues/148)).
+- **Known gaps, each small.** On a topic with more subscribers than a hub lists (256 by default) a member the list
+  leaves out is subscribed and is never told so ([#483](https://github.com/sourcenetwork/vinc/issues/483)). Port
+  mapping skips a few cases the reviews named: an IPv6 gateway for NAT-PMP, a relative control URL in a UPnP
+  description, a local address that changes ([#476](https://github.com/sourcenetwork/vinc/issues/476)). When two
+  indices derive the same connection id, the highest index a connection has seen can run ahead of or stay behind the
+  one its peer used, so an index the peer may still use can lose its id; found by a model, not seen in a run
+  ([#463](https://github.com/sourcenetwork/vinc/issues/463)).
