@@ -10,6 +10,18 @@
 (* is the id the session in slot j was made under (0 for a free slot and a *)
 (* dial); the sessions that hold an id are its holders.                    *)
 (*                                                                         *)
+(* With QCAP > 0 the host's accept queue is in the model too (vinc         *)
+(* engine.rs session_up, sync_backlog; ops.rs accept_route): QCAP is       *)
+(* accept_sessions, q the sessions waiting in it, and the room the host    *)
+(* gives the endpoint (set_backlog_room) is QCAP - q, set again at every   *)
+(* change of q before anything else runs. ow are the sessions the endpoint *)
+(* owes the host (Meta::owed, Endpoint::owed): a first flight that makes a *)
+(* session adds it, the host reading its Incoming (session_taken) or its   *)
+(* end removes it. pend are the sessions whose Incoming the host has yet   *)
+(* to read; gone counts the Incomings of ended sessions the host will      *)
+(* still queue (only the RED BUG_GONE has any). A sub-session's Incoming   *)
+(* (SubUp) comes with no first flight. QCAP = 0 leaves all of this out.    *)
+(*                                                                         *)
 (* Checked:                                                                *)
 (*  - the count never passes MAX (Capped) and is the number of counted     *)
 (*    sessions (Exact); a counted session is unauthenticated and in use, a *)
@@ -18,9 +30,10 @@
 (*    creation (DeadlineBound), so poll_timeout is never later than the    *)
 (*    end of any unauthenticated session, and none while the event queue   *)
 (*    is stalled (PollBound);                                              *)
-(*  - a first flight that makes no session (a stalled queue, a type that   *)
-(*    starts nothing, the floor or the cap, no protocol, no free slot, a   *)
-(*    failed construction) changes nothing (RefusedRight);                 *)
+(*  - a first flight that makes no session (a stalled queue, no room left  *)
+(*    to accept, a type that starts nothing, the floor or the cap, no      *)
+(*    protocol, no free slot, a failed construction) changes nothing       *)
+(*    (RefusedRight);                                                      *)
 (*  - a session enters the count only when an admitted first flight that   *)
 (*    does not resume makes it, and leaves it only when it is established, *)
 (*    when its connection ends, or at a timer call at or after its end     *)
@@ -34,7 +47,13 @@
 (*    of its id included, leaves its slot only by a close or at a timer    *)
 (*    call at or after its end or when its connection ended (HolderKept);  *)
 (*  - an id never has more than MAXH holders, and a free slot holds no id  *)
-(*    (HeldBound).                                                         *)
+(*    (HeldBound);                                                         *)
+(*  - no first flight makes a session while the owed sessions fill the     *)
+(*    room, a new holder of a held id included (HeldRight);                *)
+(*  - the sessions waiting and those owed never pass QCAP (Placed), the    *)
+(*    owed are exactly those whose Incoming the host has not read, all in  *)
+(*    use (OwedExact), and no session that finished its handshake finds    *)
+(*    the queue full and is closed as busy (NoBusy).                       *)
 (* BUG_LE admits while count <= MAX and while the id has at most MAXH      *)
 (* holders: the witnesses HalfOpen_le and HalfOpen_le_held break Capped    *)
 (* and HeldBound. STRICT expires only past the end: the witness            *)
@@ -44,23 +63,40 @@
 (* witness HalfOpen_supersede breaks HolderKept. HalfOpen_reach and        *)
 (* HalfOpen_holders are reachability witnesses: a resumption is admitted   *)
 (* while the count is at the cap; an id gets MAXH holders.                 *)
-(* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean.                  *)
+(* The accept room (vinc#436): HalfOpen_room checks it all, HalfOpen_room2 *)
+(* at three slots and a queue of two. Each guard has a RED that breaks     *)
+(* NoBusy: BUG_ROOM admits with no room (HalfOpen_noroom); BUG_EST stops   *)
+(* owing a session at its establishment, before the host read its          *)
+(* Incoming (HalfOpen_owedest); BUG_GONE has the host queue the Incoming   *)
+(* of a session that ended before it was read, whose place went back when  *)
+(* it ended (HalfOpen_gone); BUG_SUB lets a sub-session take a place held  *)
+(* for an owed session (HalfOpen_sub). HalfOpen_roomreach is a witness: a  *)
+(* first flight is refused for want of room.                               *)
+(* Lean counterpart: proofs/lean/Vinc/CoreHalfOpen*.lean, and              *)
+(* proofs/lean/Vinc/CoreBacklog*.lean for the room.                        *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS K, MAX, LIFE, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE
-VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept
-vars == <<e, ids, stalled, refused, left, timed, resumed, atcap, kept>>
+CONSTANTS K, MAX, LIFE, FULL, SHORT, TMAX, LENS, IDS, MAXH, BUG_LE, STRICT, SUPERSEDE,
+          QCAP, BUG_ROOM, BUG_EST, BUG_GONE, BUG_SUB
+VARIABLES e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref
+bk == <<ow, pend, q, gone, busy, heldok, roomref>>
+vars == <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, q, gone, busy, heldok, roomref>>
 
 INSTANCE HalfOpenOps
 
 Slots == 0..(K - 1)
+\* the host set a room: the accept queue is modelled
+Limited == QCAP > 0
 Init == /\ e = [slots |-> Table0(K), count |-> 0] /\ ids = [j \in Slots |-> 0] /\ stalled = FALSE
         /\ refused = TRUE /\ left = TRUE /\ timed = TRUE /\ resumed = TRUE /\ atcap = FALSE /\ kept = TRUE
+        /\ ow = {} /\ pend = {} /\ q = 0 /\ gone = 0 /\ busy = FALSE /\ heldok = TRUE /\ roomref = FALSE
 
 AdmitM(count, kind, len, resume) ==
     IF BUG_LE THEN len >= Floor(kind, FULL, SHORT) /\ (resume \/ count <= MAX)
     ELSE Admit(count, kind, len, resume, MAX, FULL, SHORT)
 RoomM(held) == IF BUG_LE THEN held <= MAXH ELSE Room(held, MAXH)
+\* rx.rs unrouted: a first flight may start a session only while the owed sessions leave room (owed < room)
+Open == ~Limited \/ BUG_ROOM \/ Cardinality(ow) < QCAP - q
 
 \* the sessions that hold id x
 Holders(x) == {j \in Slots : e.slots[j].use /\ ids[j] = x}
@@ -70,20 +106,28 @@ Won(x, y) == {j \in Slots : ~x.slots[j].counted /\ y.slots[j].counted}
 \* the sessions of x (ids xi) that are not in their slot in y (ids yi) any more: freed, or replaced by another
 Ended(x, y, xi, yi) ==
     {j \in Slots : x.slots[j].use /\ ~(y.slots[j].use /\ y.slots[j].created = x.slots[j].created /\ yi[j] = xi[j])}
+\* the slots of x freed in y
+Freed(x, y) == {j \in Slots : x.slots[j].use /\ ~y.slots[j].use}
+\* sessions R of x end (endpoint.rs free_slot): they are owed no more and the host never reads their Incoming; under
+\* BUG_GONE the host still queues the Incoming of those that had raised one (established, not yet read)
+EndOwed(x, R) == /\ ow' = ow \ R /\ pend' = pend \ R
+                 /\ gone' = gone + (IF BUG_GONE THEN Cardinality({j \in R \cap pend : ~x.slots[j].unauth}) ELSE 0)
 
 \* a first flight for id x, a datagram every session that holds x refused as a first flight other than its own, or
 \* one for an id no session holds (a holder that takes the datagram is Est or Touch); alpn: a protocol is registered;
 \* fail: the construction or the id table fails; d: the new session's own deadline after the first flight. Under
 \* SUPERSEDE (the rule before #365) the one holder of x is freed first and the flight goes to the admission as for an id
-\* no session holds; an id held by more than one session took no first flight
+\* no session holds; an id held by more than one session took no first flight. With no room left to accept (Open) the
+\* flight is refused before the admission, after its type and floor are read
 Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOLEAN, alpn \in BOOLEAN,
              fail \in BOOLEAN, x \in IDS : \E d \in {t + 1, t + LIFE + 1} :
     /\ resume => (kind = 6 /\ alpn)
-    /\ LET gone == IF SUPERSEDE /\ ~stalled /\ First(kind) /\ Cardinality(Holders(x)) = 1 THEN Holders(x) ELSE {}
-           e0 == IF gone = {} THEN e ELSE Release(e, MinOf(gone))
-           ids0 == [k \in Slots |-> IF k \in gone THEN 0 ELSE ids[k]]
-           held == Cardinality(Holders(x) \ gone)
-           adm == /\ ~stalled /\ First(kind)
+    /\ LET gone0 == IF SUPERSEDE /\ ~stalled /\ First(kind) /\ Cardinality(Holders(x)) = 1 THEN Holders(x) ELSE {}
+           e0 == IF gone0 = {} THEN e ELSE Release(e, MinOf(gone0))
+           ids0 == [k \in Slots |-> IF k \in gone0 THEN 0 ELSE ids[k]]
+           held == Cardinality(Holders(x) \ gone0)
+           room == ~stalled /\ First(kind) /\ Open
+           adm == /\ room
                   /\ IF SUPERSEDE THEN held = 0 ELSE RoomM(held)
                   /\ AdmitM(e0.count, kind, len, resume)
            free == {k \in Slots : ~e0.slots[k].use}
@@ -97,15 +141,21 @@ Arrive == \E t \in 0..TMAX, kind \in {1, 2, 6, 4}, len \in LENS, resume \in BOOL
           /\ atcap' = (atcap \/ (adm /\ resume /\ e0.count = MAX))
           /\ left' = (left /\ Lost(e, e') = {} /\ Won(e, e') \subseteq (IF made /\ ~resume THEN {j} ELSE {}))
           /\ kept' = (kept /\ Ended(e, e', ids, ids') = {})
-    /\ UNCHANGED <<stalled, timed>>
+          /\ ow' = IF Limited /\ made THEN ow \cup {j} ELSE ow
+          /\ pend' = IF Limited /\ made THEN pend \cup {j} ELSE pend
+          /\ heldok' = (heldok /\ (Limited /\ Cardinality(ow) >= QCAP - q => ~made))
+          /\ roomref' = (roomref \/ (Limited /\ ~stalled /\ First(kind) /\ ~Open))
+    /\ UNCHANGED <<stalled, timed, q, gone, busy>>
 
-\* the handshake of an unauthenticated session completes
+\* the handshake of an unauthenticated session completes; under BUG_EST it is owed no more (the host has not read its
+\* Incoming yet)
 Est == \E j \in Slots, d \in 1..(TMAX + 1) :
     /\ e.slots[j].use /\ e.slots[j].unauth
     /\ e' = Settle(Establish(e, j), j, d, LIFE)
     /\ left' = (left /\ Lost(e, e') \subseteq {j} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
-    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>>
+    /\ ow' = IF BUG_EST THEN ow \ {j} ELSE ow
+    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap, pend, q, gone, busy, heldok, roomref>>
 
 \* a connection ends: a close finished, the peer gave up
 Close == \E j \in Slots :
@@ -114,7 +164,8 @@ Close == \E j \in Slots :
     /\ ids' = [ids EXCEPT ![j] = 0]
     /\ left' = (left /\ Lost(e, e') \subseteq {j} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids') \subseteq {j})
-    /\ UNCHANGED <<stalled, refused, timed, resumed, atcap>>
+    /\ EndOwed(e, {j})
+    /\ UNCHANGED <<stalled, refused, timed, resumed, atcap, q, busy, heldok, roomref>>
 
 \* any other input to a session moves its own deadline
 Touch == \E j \in Slots, d \in 1..(TMAX + 1) :
@@ -122,17 +173,17 @@ Touch == \E j \in Slots, d \in 1..(TMAX + 1) :
     /\ e' = Settle(e, j, d, LIFE)
     /\ left' = (left /\ Lost(e, e') = {} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
-    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>>
+    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>> /\ UNCHANGED bk
 
 DialA == \E t \in 0..TMAX, j \in Slots, d \in 1..(TMAX + 1) :
     /\ ~e.slots[j].use
     /\ e' = Settle(Dial(e, j, t), j, d, LIFE)
     /\ left' = (left /\ Lost(e, e') = {} /\ Won(e, e') = {})
     /\ kept' = (kept /\ Ended(e, e', ids, ids) = {})
-    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>>
+    /\ UNCHANGED <<ids, stalled, refused, timed, resumed, atcap>> /\ UNCHANGED bk
 
 \* the host leaves events unread, or reads them
-Stall == stalled' = ~stalled /\ UNCHANGED <<e, ids, refused, left, timed, resumed, atcap, kept>>
+Stall == stalled' = ~stalled /\ UNCHANGED <<e, ids, refused, left, timed, resumed, atcap, kept>> /\ UNCHANGED bk
 
 \* a timer call at t: each due connection's next deadline (or its end), and after how many pops the queue stalls
 Timer == \E t \in 0..TMAX : \E ds \in [Slots -> {t, t + 2, Gone}], cut \in 0..(K + 1) :
@@ -144,9 +195,41 @@ Timer == \E t \in 0..TMAX : \E ds \in [Slots -> {t, t + 2, Gone}], cut \in 0..(K
          /\ left' = (left /\ Won(e, e') = {}
                           /\ \A j \in Lost(e, e') : Expired(e.slots[j], t, LIFE) \/ ds[j] = Gone)
          /\ kept' = (kept /\ \A j \in Ended(e, e', ids, ids') : Expired(e.slots[j], t, LIFE) \/ ds[j] = Gone)
-         /\ UNCHANGED <<refused, resumed, atcap>>
+         /\ EndOwed(e, Freed(e, e'))
+         /\ UNCHANGED <<refused, resumed, atcap, q, busy, heldok, roomref>>
 
-Next == Arrive \/ Est \/ Close \/ Touch \/ DialA \/ Stall \/ Timer
+\* engine.rs on_event: the host reads the Incoming of an established session j and takes it (session_taken says
+\* Reserved): it waits in the queue, or, with the queue full, is closed as busy after its handshake
+Take == \E j \in pend :
+    /\ Limited /\ e.slots[j].use /\ ~e.slots[j].unauth
+    /\ pend' = pend \ {j} /\ ow' = ow \ {j}
+    /\ q' = IF q < QCAP THEN q + 1 ELSE q
+    /\ busy' = (busy \/ q >= QCAP)
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, gone, heldok, roomref>>
+
+\* BUG_GONE: the host queues the Incoming of a session that ended before it read it
+TakeGone ==
+    /\ gone > 0
+    /\ gone' = gone - 1
+    /\ q' = IF q < QCAP THEN q + 1 ELSE q
+    /\ busy' = (busy \/ q >= QCAP)
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, heldok, roomref>>
+
+\* the Incoming of a sub-session its peer opened inside a session it has (session_taken says Unreserved): it waits only
+\* in a place no owed session holds (BUG_SUB: in any free place), else it is closed as busy; it had no handshake
+SubUp ==
+    /\ Limited
+    /\ q' = IF (IF BUG_SUB THEN q < QCAP ELSE q + Cardinality(ow) < QCAP) THEN q + 1 ELSE q
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>>
+
+\* ops.rs accept_route: the application takes the oldest waiting session (a session that ended while it waited
+\* included: it keeps its place until then)
+Accept ==
+    /\ Limited /\ q > 0
+    /\ q' = q - 1
+    /\ UNCHANGED <<e, ids, stalled, refused, left, timed, resumed, atcap, kept, ow, pend, gone, busy, heldok, roomref>>
+
+Next == Arrive \/ Est \/ Close \/ Touch \/ DialA \/ Stall \/ Timer \/ Take \/ TakeGone \/ SubUp \/ Accept
 Spec == Init /\ [][Next]_vars
 
 Capped == e.count <= MAX
@@ -165,10 +248,16 @@ ResumeRight == resumed
 HolderKept == kept
 HeldBound == /\ \A j \in Slots : ~e.slots[j].use => ids[j] = 0
              /\ \A x \in IDS : Cardinality(Holders(x)) <= MAXH
+HeldRight == heldok
+Placed == q + Cardinality(pend) + gone <= QCAP \/ ~Limited
+OwedExact == ow = pend /\ \A j \in ow : e.slots[j].use
+NoBusy == ~busy
 Inv == Capped /\ Exact /\ Shape /\ DeadlineBound /\ PollBound /\ RefusedRight /\ LeftRight /\ TimerRight /\ ResumeRight
-       /\ HolderKept /\ HeldBound
+       /\ HolderKept /\ HeldBound /\ HeldRight /\ Placed /\ OwedExact /\ NoBusy
 
-\* reachability witnesses: a resumption is admitted while the count is at the cap; an id gets MAXH holders
+\* reachability witnesses: a resumption is admitted while the count is at the cap; an id gets MAXH holders; a first
+\* flight is refused for want of room
 NoResumeAtCap == ~atcap
 NoFullId == \A x \in IDS : Cardinality(Holders(x)) < MAXH
+NoRoomRefusal == ~roomref
 =============================================================================

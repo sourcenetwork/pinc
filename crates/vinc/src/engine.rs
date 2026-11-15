@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 use rapidhash::RapidHashMap;
-use vinc_core::{Answer, Command, CommandError, ConnectFailure, Event, IfaceId, Query, SessionId, Value};
+use vinc_core::{Answer, Command, CommandError, ConnectFailure, Event, IfaceId, Query, SessionId, Taken, Value};
 use vinc_crypto::{NodeId, Secret};
 use vinc_keystore::KeyStore;
 use vinc_node::HUB_ALPN;
@@ -39,6 +39,9 @@ mod adjacent_tests;
 mod gate;
 mod ops;
 mod state;
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests assert")]
+mod taken_tests;
 mod topics;
 pub use state::Restored;
 
@@ -57,6 +60,16 @@ const BUDGET: usize = 4096;
 const TRACKED: usize = 128;
 /// The most events of hub sessions kept for the relay role between two of its turns; the rest are dropped.
 const RELAY_EVENTS: usize = 1024;
+
+/// How a session came up.
+#[derive(Debug, Clone, Copy)]
+enum Up {
+    /// A dial of this endpoint, by a resumption or not.
+    Dialed { resumed: bool },
+    /// Accepted: it waits in its protocol's queue, which keeps `held` places for the sessions the endpoint still owes
+    /// it (`Taken::Unreserved`: a sub-session, for which no place was held, does not take theirs).
+    Accepted { held: usize },
+}
 
 /// A key answer that owns its bytes, so the request it answers can be dropped first.
 enum Answered {
@@ -602,11 +615,21 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 resumed,
                 ..
             } => {
-                self.session_up(now, session, node, alpn, true, resumed);
+                self.session_up(now, session, node, alpn, Up::Dialed { resumed });
                 self.adjacent_changed();
             }
             Event::Incoming { session, node, alpn } => {
-                self.session_up(now, session, node, alpn, false, false);
+                // Taken here, whatever becomes of it, and its place in the queue counted before the next datagram. A
+                // session that ended first gets no place: the place counted for it went when it ended.
+                let held = match self.node.endpoint_mut().session_taken(session) {
+                    Taken::Gone => None,
+                    Taken::Reserved => Some(0),
+                    Taken::Unreserved { owed } => Some(owed),
+                };
+                if let Some(held) = held {
+                    self.session_up(now, session, node, alpn, Up::Accepted { held });
+                }
+                self.sync_backlog();
                 self.adjacent_changed();
             }
             Event::ConnectFailed { session, reason, .. } => {
@@ -721,7 +744,12 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             && (self.known.covers(now, node, alpn, dir) || self.admit.admit(node, alpn.as_bytes(), dir))
     }
 
-    fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, dialer: bool, resumed: bool) {
+    /// A session came up: a dial's, or an accepted one, which waits in its protocol's queue.
+    fn session_up(&mut self, now: u64, session: SessionId, node: NodeId, alpn: Alpn, up: Up) {
+        let (dialer, resumed, held) = match up {
+            Up::Dialed { resumed } => (true, resumed, 0),
+            Up::Accepted { held } => (false, false, held),
+        };
         if !self.session_admitted(now, &node, alpn, direction(alpn.as_bytes(), dialer)) {
             let _ = self.cmd(now, || Command::Close { session, error: DENIED });
             if dialer && self.dials.contains_key(&session) {
@@ -746,7 +774,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             let full = self
                 .routes
                 .get(route)
-                .is_none_or(|r| r.queue.len() >= self.limits.accept_sessions);
+                .is_none_or(|r| r.queue.len().saturating_add(held) >= self.limits.accept_sessions);
             if self.sessions.len() >= self.limits.connections || full {
                 let _ = self.cmd(now, || Command::Close { session, error: BUSY });
                 return;
@@ -773,6 +801,19 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             r.queue.push_back(info);
             self.wake_g(GKey::Route(route));
         }
+    }
+
+    /// Tell the endpoint how many more sessions the fullest accept queue takes, so that it refuses the first flights
+    /// that would overfill it before their handshake rather than this closing finished sessions as busy. The fullest
+    /// queue holds back every protocol's dials: the endpoint cannot tell a first flight's protocol before it opens it.
+    pub(crate) fn sync_backlog(&mut self) {
+        let room = self
+            .routes
+            .iter()
+            .map(|r| self.limits.accept_sessions.saturating_sub(r.queue.len()))
+            .min()
+            .unwrap_or(usize::MAX);
+        self.node.endpoint_mut().set_backlog_room(room);
     }
 
     /// Whether a dial to `node` for `alpn` still waits for its answer. The dials are bounded by the connection table.

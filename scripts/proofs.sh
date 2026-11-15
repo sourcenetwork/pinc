@@ -549,6 +549,13 @@ par witness_tlc halfopen_le_held HalfOpen HalfOpen_le_held HeldBound
 par witness_tlc halfopen_strict HalfOpen HalfOpen_strict TimerRight
 par witness_tlc halfopen_supersede HalfOpen HalfOpen_supersede HolderKept
 par witness_tlc halfopen_holders HalfOpen HalfOpen_holders NoFullId
+par run_tlc halfopen_room HalfOpen HalfOpen_room
+par run_tlc halfopen_room2 HalfOpen HalfOpen_room2
+par witness_tlc halfopen_roomreach HalfOpen HalfOpen_roomreach NoRoomRefusal
+par witness_tlc halfopen_noroom HalfOpen HalfOpen_noroom NoBusy
+par witness_tlc halfopen_owedest HalfOpen HalfOpen_owedest NoBusy
+par witness_tlc halfopen_gone HalfOpen HalfOpen_gone NoBusy
+par witness_tlc halfopen_sub HalfOpen HalfOpen_sub NoBusy
 par run_tlc heap Heap Heap
 par witness_tlc heap_hi Heap Heap_hi Order
 par witness_tlc heap_full Heap Heap_full NotFull
