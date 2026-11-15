@@ -23,7 +23,7 @@ structure P where
   ring : Nat
   rr : Nat
   /-- The intervals a stream's ranges hold once they spilled into a pool chunk (`SPILL`, 1024 in the code); `rr` turns the
-  spill off, the behaviour before #159. -/
+  spill off, the behaviour before #478. -/
   spr : Nat
   n : Nat
   maxrem : Nat
