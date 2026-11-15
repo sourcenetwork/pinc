@@ -247,25 +247,27 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
     ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
 
   Against the session of 13 November (commit `6355d7d`) 327 of 383 values are inside that session's spread. The
-  rows that are still above it, and what is known of each, are in
+  rows that are still above it, and what is known of each, landed in
   [#485](https://github.com/sourcenetwork/vinc/issues/485).
 
   `just compare` and the harness print every row, the ones VINC loses included.
-- **Transport and connectivity rules not in yet.** Five changes that bring the library closer to the reference model
-  are written, tested and held back: its rules for a dial's first flight (which paths it takes, when the relay copy
-  leaves), its punch round that probes unvalidated direct paths again, a hub tunnel that takes only a route its
-  endpoint can send on ([#416](https://github.com/sourcenetwork/vinc/issues/416)) with the longer life of an
-  unauthenticated session on a thin node ([#417](https://github.com/sourcenetwork/vinc/issues/417)), a hub's floor
-  that covers a message sent after a member's restart ([#340](https://github.com/sourcenetwork/vinc/issues/340)),
-  and an amplification ledger that asks for evidence before it validates an address
-  ([#251](https://github.com/sourcenetwork/vinc/issues/251)). Each loses one or two deliveries in the same few
-  low-bandwidth and mobile seeds, at least one of which `master` delivers by accident, so they are being compared
-  with the reference model's own run of those seeds before they land.
+- **Transport and connectivity rules not in yet.** Two changes that bring the library closer to the reference model
+  are written, tested and held back: a hub's floor that covers a message sent after a member's restart
+  ([#340](https://github.com/sourcenetwork/vinc/issues/340)), and an amplification ledger that asks for evidence
+  before it validates an address ([#251](https://github.com/sourcenetwork/vinc/issues/251)). Each loses one or two
+  deliveries in a few low-bandwidth and mobile seeds, and they stay out until that is explained. The three held
+  back with them (the rules for a dial's first flight, the punch round that probes unvalidated direct paths again,
+  the hub tunnel with the longer life of an unauthenticated session on a thin node) landed in
+  [#517](https://github.com/sourcenetwork/vinc/pull/517).
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
-  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 92 at `b12aa0aa` (84 at
-  `97bbaa4`, 75 on its first run); the reference model the rules come from passes 88. The four that fail are the four
-  the model fails too ([#212](https://github.com/sourcenetwork/vinc/issues/212)). The two scenarios that need the
-  values and reconcile layers in one composition wait for them.
+  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 90 at `75b5aa7e` (92 at
+  `b12aa0aa`, 84 at `97bbaa4`, 75 on its first run); the reference model the rules come from passes 88. Four of the
+  six that fail are four the model fails too ([#212](https://github.com/sourcenetwork/vinc/issues/212)). The other two
+  came with the path rules of #517: three value fetches on low-bandwidth nodes that miss their deadline
+  ([#516](https://github.com/sourcenetwork/vinc/issues/516)). Those rows depend on which packets the emulated links
+  happen to lose: over four realizations of that loss the library fails 23 seed runs where it failed 30 before the
+  rules, and the realization the suite runs is the one of the four where the count went up. The two scenarios that
+  need the values and reconcile layers in one composition wait for them.
 - **The proofs** land with the code: a fix whose behaviour a model covers carries the model's update in the same pull
   request. What is still to prove or to check again is listed in
   [#105](https://github.com/sourcenetwork/vinc/issues/105), beside [Being closed](docs/PROOFS.md#being-closed).
