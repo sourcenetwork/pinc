@@ -2,7 +2,8 @@
 //!
 //! A subscriber tells its primary hub the time it wants the topic from (`since`, in the wall-clock milliseconds the
 //! hub stamps its log with). The hub answers with the ids it logged since (HAVE), or with the messages themselves
-//! when the subscriber asks for a replay (flag 1 on SUB, `REPLAY_PUSH`). The subscriber asks for the ids it lacks
+//! when the subscriber asks for a replay (flag 1 on SUB, `REPLAY_PUSH`): all of them, oldest first, bounded by the log
+//! and paced by the subscriber's stream. The subscriber asks for the ids it lacks
 //! (GET) and the hub sends them (MSG). A periodic check (`GAP_AE`) repeats the question while a topic is live, so a
 //! message a dead session swallowed is fetched; hubs also exchange the ids of their logs (HAVE) every [`HUB_AE`].
 //!
@@ -27,9 +28,9 @@
 //! periodic check is not judged: it was pushed everything since it became live, or is behind and told from there.
 //!
 //! Invariants: a HAVE and a GET carry at most [`HAVE_MAX`] ids; a GET names only ids the node lacks; a replay sends
-//! at most [`REPLAY_PUSH_MAX`] messages at once and never a member's own back to it; a message asked for by a
-//! subscriber whose stream is full is owed from the log, never dropped; a live subscriber that asked for a message
-//! the log dropped is told, and the notice waits for room in its stream as a message does.
+//! every message the log holds since the floor, oldest first, and never a member's own back to it; a message asked
+//! for by a subscriber whose stream is full is owed from the log, never dropped; a live subscriber that asked for a
+//! message the log dropped is told, and the notice waits for room in its stream as a message does.
 
 use vinc_membership::{Nanos, NodeId};
 
@@ -37,7 +38,7 @@ use alloc::vec::Vec;
 
 use crate::behind::Behind;
 use crate::consts::{
-    AE_FROM, AE_TO, GAP_EVERY, GAP_LIVE, GAP_SPAN, HAVE_MAX, HUB_AE, LOG_CAP, REPLAY_PUSH_MAX, RESUB_BACK_MS, TABLE_MAX,
+    AE_FROM, AE_TO, GAP_EVERY, GAP_LIVE, GAP_SPAN, HAVE_MAX, HUB_AE, LOG_CAP, RESUB_BACK_MS, TABLE_MAX,
 };
 use crate::event::{Trace, topic_tag};
 use crate::host::{Host, Lane};
@@ -320,8 +321,9 @@ impl Topics {
         let mut owed = None;
         if let Some(log) = st.log.as_ref() {
             if replay {
-                let total = log.since(since).count();
-                for mid in log.since(since).skip(total.saturating_sub(REPLAY_PUSH_MAX)) {
+                // Every message the log holds since the floor, oldest first, as far as the stream takes; the rest is
+                // owed below. (The reference model pushes the newest 256 and nothing of the others.)
+                for mid in log.since(since) {
                     let Some(l) = log.get(mid) else { continue };
                     let Ok((head, _)) = Head::parse(l) else {
                         continue;

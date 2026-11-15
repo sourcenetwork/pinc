@@ -60,8 +60,6 @@ pub const ORIGIN_MAX: usize = 128;
 pub const RESUB_BACK_MS: u64 = 15_000;
 /// A message older than this before the node started is not new (milliseconds).
 pub const OLD_SLACK_MS: u64 = 2_000;
-/// A `REPLAY_PUSH` carries at most this many messages.
-pub const REPLAY_PUSH_MAX: usize = 256;
 
 /// The default largest message body (matches the default maximum message size of common gossip stacks).
 pub const DEFAULT_MAX_BODY: usize = 65_536;

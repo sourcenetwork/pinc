@@ -51,14 +51,16 @@ fn a_message_that_found_the_held_set_full_is_repaired_not_lost() {
     let ids = checks(&net, 2);
     assert_eq!(ids.len(), 1);
     answer(&mut net, 2, ids[0], true);
-    assert_eq!(net.delivered(2).len(), HELD_MAX);
-    // The periodic check (every 20 s) asks the hub for the ids the node lacks; the verdict (30 s) still holds.
-    net.advance(25 * SEC);
+    // The held ones are delivered, and with room again the node asks the hub for the topic at once: the six that
+    // found no room arrive now, not at the next periodic check (vinc#510).
     let mut got = net.delivered(2);
     got.sort_unstable();
     got.dedup();
     sent.sort_unstable();
     assert_eq!(got, sent, "every message arrives once");
+    assert_eq!(net.delivered(2).len(), total);
+    // The periodic check (every 20 s) brings none of them again.
+    net.advance(25 * SEC);
     assert_eq!(net.delivered(2).len(), total);
 }
 

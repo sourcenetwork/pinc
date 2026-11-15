@@ -189,6 +189,9 @@ pub(crate) struct Topic {
     pub(crate) seen: Seen,
     /// Ids a gap repair asked for and has not received.
     pub(crate) requested: BTreeSet<[u8; 8]>,
+    /// Member: a message of the topic found no room to wait for an access answer and was left unseen; the hub is
+    /// asked for the topic again once there is room (`msg.rs`).
+    pub(crate) refused: bool,
 }
 
 impl Topic {
@@ -205,6 +208,7 @@ impl Topic {
             forgot: None,
             seen: Seen::with_capacity(SEEN_CAP),
             requested: BTreeSet::new(),
+            refused: false,
         }
     }
 

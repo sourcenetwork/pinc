@@ -256,6 +256,32 @@ fn a_have_carries_at_most_512_ids_and_the_offer_goes_on_in_further_frames() {
     assert_eq!(offered, sent, "every id, in the order it was logged");
 }
 
+/// A replay (a SUB with the replay flag) is answered with every message the log holds since the time asked, oldest
+/// first, not only the newest 256 (vinc#510).
+#[test]
+fn a_replay_is_answered_with_every_message_the_log_holds_oldest_first() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 2, SEC);
+    for i in 0..600u32 {
+        net.publish(1, T, &i.to_be_bytes());
+    }
+    let asker = net.id(2);
+    let now = net.now;
+    let n = &mut net.nodes[0];
+    n.h.out.clear();
+    let mut rest = 0u64.to_be_bytes().to_vec();
+    rest.push(1);
+    n.t.frame(&mut n.h, now, &asker, ty::SUB, T, &rest);
+    // Each message's body is its number, the last four bytes of its frame.
+    let pushed: Vec<u32> =
+        n.h.out
+            .iter()
+            .filter(|o| o.to == asker && o.bytes[4] == ty::MSG)
+            .map(|o| u32::from_be_bytes(o.bytes[o.bytes.len() - 4..].try_into().unwrap()))
+            .collect();
+    assert_eq!(pushed.len(), 600, "the replay left messages the log holds unsent");
+    assert_eq!(pushed, (0..600).collect::<Vec<u32>>(), "oldest first");
+}
+
 /// A site is cut off for fifteen seconds while fifty messages a second are published elsewhere: 750 messages, more
 /// than one HAVE carries. After the heal its hub learns of every one of them from the other hub, not only of the
 /// newest, and its subscriber misses none.

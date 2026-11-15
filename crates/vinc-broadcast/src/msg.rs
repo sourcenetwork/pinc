@@ -5,7 +5,8 @@
 //! has stored (or already holds), so an acknowledged message is one the hub verified.
 //!
 //! Invariants: a message is delivered at most once per id within the dedupe window; a message from an origin the
-//! access-control layer has not yet answered for is held (at most [`HELD_MAX`]) and delivered or dropped on the
+//! access-control layer has not yet answered for is held (at most [`HELD_MAX`]; one that finds no room is left unseen
+//! and its topic is asked for again from the hub when the answer makes room) and delivered or dropped on the
 //! answer; the steady path (verify, log, push, deliver) allocates nothing; a hub stores (and so acknowledges) no
 //! message whose eviction would drop one still owed to a subscriber that is behind (see `behind.rs`).
 
@@ -231,9 +232,13 @@ impl Topics {
         let holds = subscribed && !old && *origin != self.me && verdict.is_none();
         let already = self.held.iter().any(|e| e.mid == mid);
         if holds && !already && self.held.len() >= HELD_MAX {
-            // No room to wait for the answer: ask, and leave the id unseen so the gap repair brings it again.
+            // No room to wait for the answer: ask, and leave the id unseen so the gap repair brings it again. The
+            // topic is noted, so the hub is asked for it as soon as there is room and not at the next periodic check.
             self.ask_check(h, origin, topic);
             self.note_reject(mid, Reject::HeldFull);
+            if let Some(st) = self.topics.get_mut(topic) {
+                st.refused = true;
+            }
             return;
         }
         if let Some(st) = self.topics.get_mut(topic) {
@@ -328,5 +333,26 @@ impl Topics {
             }
             self.give_buf(e.data);
         }
+        if self.held.len() < HELD_MAX {
+            self.ask_refused(h);
+        }
+    }
+
+    /// The hold has room again: ask the primary hub for every topic in which a message found none, from as far back
+    /// as this life asks (its floor, else its start). The hub offers what its log holds since and the node asks for
+    /// what it lacks. A burst from an origin the access layer has not answered for yet, larger than the hold, is
+    /// completed by this: a periodic check reaches back 25 s only, which a replay's messages are older than.
+    fn ask_refused<H: Host>(&mut self, h: &mut H) {
+        let Some(p) = self.primary.filter(|p| *p != self.me && h.hub_up(p)) else {
+            return;
+        };
+        let since = self.gather.rfloor.map_or(self.born_wall, |f| f.wall);
+        let mut topics = core::mem::take(&mut self.topics);
+        for (k, st) in &mut topics {
+            if core::mem::take(&mut st.refused) && st.sub {
+                self.send_sub(h, &p, k, since, false);
+            }
+        }
+        self.topics = topics;
     }
 }

@@ -65,6 +65,36 @@ fn a_restarted_member_does_not_redeliver_what_its_earlier_life_delivered_and_get
     );
 }
 
+/// A replay gives the restarted member every message the hub's log holds since its floor, oldest first, not only
+/// the newest 256 (vinc#510): the log holds up to 2,048 and the member's stream paces what it takes.
+#[test]
+fn a_replay_gives_every_message_the_log_holds_since_the_floor() {
+    let mut net = world();
+    let m1 = net.publish(2, T, b"delivered before the restart");
+    net.run_until(5 * SEC);
+    assert_eq!(net.delivered(3), vec![m1]);
+    net.cut_from_hubs(3, false);
+    let missed: Vec<[u8; 8]> = (0..600u32)
+        .map(|k| {
+            let m = net.publish(2, T, &k.to_be_bytes());
+            net.advance(SEC / 1000);
+            m
+        })
+        .collect();
+    net.restart(3, 20 * SEC);
+    net.cut_from_hubs(3, true);
+    net.set_primary(3, 0);
+    net.subscribe(3, T);
+    net.attach(3);
+    net.run_until(25 * SEC);
+    assert_eq!(
+        net.delivered(3).len(),
+        missed.len(),
+        "the replay left messages the log holds unsent"
+    );
+    assert_eq!(net.delivered(3), missed, "in the order they were logged");
+}
+
 #[test]
 fn messages_arriving_before_every_hub_reported_are_held_and_released_in_order() {
     let mut net = world();
