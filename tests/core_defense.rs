@@ -124,6 +124,19 @@ fn a_bare_resumption_hello_from_a_new_address_completes() {
 }
 
 #[test]
+fn a_relay_path_is_neither_counted_nor_held_by_the_ledger() {
+    let relay = vinc_core::relay_addr(false, 2, 7);
+    let mut l = vinc_core::Ledger::new(1);
+    l.on_receive(relay, 30);
+    assert!(
+        l.allow_send(relay, 60_000),
+        "a relay path is held to three times what it sent"
+    );
+    assert_eq!(l.get(&relay), None, "a relay path takes an entry");
+    assert!(l.is_empty());
+}
+
+#[test]
 fn a_flood_of_spoofed_sources_keeps_the_ledger_bounded_and_each_source_at_three_times() {
     big_stack(|| {
         let (mut net, s, hello) = spoofable_resume();

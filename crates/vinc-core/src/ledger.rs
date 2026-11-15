@@ -5,6 +5,11 @@
 //! from the start, and so is an address the host dials, even one that wrote first. Each sent datagram counts its size
 //! plus 28 bytes (the IP and UDP headers).
 //!
+//! A relay path (see `relay_net`) is not a UDP address: what is sent there goes over the carrier to the relay, which
+//! hands it to the peer by its identity, never to a source that may be forged, and the transport never challenges
+//! such a path, so nothing could validate it. The ledger neither counts nor holds it, as the reference model gates
+//! only UDP datagrams.
+//!
 //! Invariants: the ledger holds at most [`LEDGER_ENTRIES`] addresses and evicts the one inserted first when full; for
 //! an address that is not validated the bytes charged never exceed three times the bytes received, so a spoofed
 //! source gets at most three times what it sent; the address of an evicted entry that is later written to counts as
@@ -12,6 +17,7 @@
 
 use core::net::SocketAddr;
 
+use crate::relay_net::is_relay_addr;
 use crate::table::Table;
 
 /// The most addresses the ledger tracks.
@@ -64,8 +70,11 @@ impl Ledger {
     }
 
     /// Count a datagram of `n` bytes received from `addr`. A first datagram creates the entry unvalidated; a later one
-    /// validates the address if we sent to it meanwhile.
+    /// validates the address if we sent to it meanwhile. A relay path is not counted.
     pub fn on_receive(&mut self, addr: SocketAddr, n: u64) {
+        if is_relay_addr(&addr) {
+            return;
+        }
         match self.table.get_mut(&addr) {
             Some(e) => {
                 e.rx = e.rx.saturating_add(n);
@@ -89,6 +98,9 @@ impl Ledger {
     /// The host dials `addr`: the address counts as one we spoke to first, whatever it sent before. A peer that still
     /// holds a session with us keeps writing to the address we restarted on, and that must not hold back our dial.
     pub fn open(&mut self, addr: SocketAddr) {
+        if is_relay_addr(&addr) {
+            return;
+        }
         match self.table.get_mut(&addr) {
             Some(e) => e.validated = true,
             None => {
@@ -104,8 +116,12 @@ impl Ledger {
         }
     }
 
-    /// Ask to send a datagram of `n` bytes (without headers) to `addr`: true charges it, false holds it.
+    /// Ask to send a datagram of `n` bytes (without headers) to `addr`: true charges it, false holds it. A relay path
+    /// is never held.
     pub fn allow_send(&mut self, addr: SocketAddr, n: u64) -> bool {
+        if is_relay_addr(&addr) {
+            return true;
+        }
         let charge = n.saturating_add(DATAGRAM_OVERHEAD);
         match self.table.get_mut(&addr) {
             None => {
