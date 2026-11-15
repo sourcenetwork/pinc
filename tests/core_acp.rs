@@ -488,6 +488,60 @@ fn a_stalled_session_still_takes_a_close_and_the_peers_acks() {
     });
 }
 
+#[test]
+fn a_peer_first_heard_while_events_are_left_unread_is_reported_when_the_host_reads() {
+    big_stack(|| {
+        let mut net = CoreNet::new(FAST);
+        let (a, b) = (net.add(1), net.add(2));
+        net.connect_pair(a, b, ALPN_A, Role::Other);
+        // A second protocol over the session is reported at once, before its peer answers.
+        let (peer, addr_b, now) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+        let rep = net.nodes[a].connect(now, peer, ALPN_B, addr_b, Role::Other).unwrap();
+        let child = net.nodes[a].session(&rep);
+        write_once(&mut net, a, child, b"x");
+        // What the peer answers is kept off the wire, to be handed over below.
+        let addr_a = net.nodes[a].addr;
+        net.capture = true;
+        net.loss = Some(Box::new(move |_, to, _| to == addr_a));
+        net.run_for(100 * MS_NS);
+        let answers: Vec<Vec<u8>> = net
+            .captured
+            .iter()
+            .filter(|(_, to, _)| *to == addr_a)
+            .map(|(_, _, d)| d.clone())
+            .collect();
+        assert!(!answers.is_empty(), "the peer answered nothing");
+        let heard = |n: &CoreNet| {
+            let Answer::Stats(st) = n.nodes[a].ep.query(Query::Stats(child)) else {
+                panic!()
+            };
+            st.answered
+        };
+        assert!(!heard(&net), "nothing of the peer arrived yet");
+        // The host stops reading events, and the answers arrive.
+        let t = net.now;
+        stall_events(&mut net.nodes[a].ep, t);
+        let queued = net.nodes[a].ep.node_stats().events_queued;
+        for mut d in answers {
+            net.nodes[a].ep.handle_datagram(t, addr_a, addr_b, &mut d);
+        }
+        assert!(heard(&net), "the peer was heard");
+        assert_eq!(
+            net.nodes[a].ep.node_stats().events_queued,
+            queued,
+            "a packet taken while the host leaves events unread raised an event"
+        );
+        // The host reads again: the report comes, once, and nothing was lost.
+        net.loss = None;
+        net.run_for(SEC_NS);
+        assert_eq!(
+            net.nodes[a].count(|e| matches!(e, Event::Answered { session } if *session == child)),
+            1
+        );
+        assert_eq!(net.nodes[a].ep.node_stats().events_lost, 0);
+    });
+}
+
 /// Opens a unidirectional stream on `n`'s session `s` and writes `data` to it.
 fn write_once(net: &mut CoreNet, n: usize, s: vinc_core::SessionId, data: &[u8]) {
     let t = net.now;

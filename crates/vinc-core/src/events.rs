@@ -75,6 +75,12 @@ ep_impl! {
             if !slot.m.in_use {
                 return;
             }
+            // The peer was heard on a session reported before it answered (`deliver`).
+            if core::mem::take(&mut slot.m.answer_due) {
+                let session = self.session_id(i);
+                self.emit(Event::Answered { session });
+                continue;
+            }
             // A session the application never heard of that ended needs its events read to be freed: its held ones go.
             let dead = !slot.m.allowed && slot.conn.as_ref().is_some_and(vinc_transport::conn::Connection::is_closed);
             if slot.m.held.stalled() && !dead {
