@@ -161,6 +161,8 @@ pub(crate) struct Path {
     pub(crate) dcid_seen: bool,
     /// The local address of the path is gone (the host's interface moved): nothing can use it again.
     pub(crate) gone: bool,
+    /// The endpoint's ledger holds the path's address until it answers something we sent (see `path_held`).
+    pub(crate) held: bool,
 }
 
 impl Path {
@@ -199,6 +201,7 @@ impl Path {
             dcid_pn: 0,
             dcid_seen: false,
             gone: false,
+            held: false,
         }
     }
 
@@ -263,6 +266,7 @@ impl core::error::Error for PathError {}
 pub(crate) struct Paths<const NP: usize> {
     pub(crate) slots: [Option<Path>; NP],
     pub(crate) active: usize,
+    pub(crate) held: usize,
 }
 
 impl<const NP: usize> Paths<NP> {
@@ -271,6 +275,7 @@ impl<const NP: usize> Paths<NP> {
         Self {
             slots: [None; NP],
             active: 0,
+            held: 0,
         }
     }
 
@@ -483,6 +488,7 @@ conn_impl! {
         if let Some(s) = self.paths.slots.get_mut(i) {
             *s = None;
         }
+        self.paths.recount();
         Ok(())
     }
 
@@ -511,6 +517,7 @@ conn_impl! {
                 *s = None;
             }
         }
+        self.paths.recount();
     }
 
     /// Whether the connection tracks path `id`.
@@ -614,6 +621,7 @@ conn_impl! {
         if let Some(slot) = self.paths.slots.get_mut(free) {
             *slot = Some(path);
         }
+        self.paths.recount();
         self.sync_kind(free);
         Some(free)
     }

@@ -288,10 +288,17 @@ conn_impl! {
     }
 
     /// The size of an MTU probe to send on path `ti` now, if one is due and the caller's buffer can hold it.
-    fn probe_size(&self, ti: usize, now: u64, room: usize) -> Option<usize> {
+    fn probe_size(&mut self, ti: usize, now: u64, room: usize) -> Option<usize> {
         let cc_ok = self.rec.can_send() && self.rec.pacer().next_release(now) <= now;
         let idle = self.life.probes == 0 && self.life.local_asleep.is_none();
-        if ti != self.paths.active || self.phase != Phase::Connected || !cc_ok || !idle {
+        // A path the ledger holds is not probed: the probe would be refused (see `mtu`).
+        let held = self.paths.get(ti).is_some_and(|p| p.held);
+        if ti != self.paths.active || self.phase != Phase::Connected || !cc_ok || !idle || held {
+            return None;
+        }
+        // What the peer left behind on its old path is recovered first: the probe's lone acknowledgement is held for the
+        // ack delay and must not become the round trip that times that recovery (see `mtu`).
+        if self.rec.oldest_in_flight_path().is_some_and(|p| usize::from(p) != ti) {
             return None;
         }
         self.mtu_target(ti, now).map(usize::from).filter(|s| *s <= room)

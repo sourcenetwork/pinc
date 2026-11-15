@@ -64,26 +64,24 @@ impl Ledger {
     }
 
     /// Count a datagram of `n` bytes received from `addr`. A first datagram creates the entry unvalidated; a later one
-    /// validates the address if we sent to it meanwhile.
-    pub fn on_receive(&mut self, addr: SocketAddr, n: u64) {
-        match self.table.get_mut(&addr) {
-            Some(e) => {
-                e.rx = e.rx.saturating_add(n);
-                if e.tx > 0 {
-                    e.validated = true;
-                }
+    /// validates the address if we sent to it meanwhile. Returns whether the address is held after it (not validated).
+    pub fn on_receive(&mut self, addr: SocketAddr, n: u64) -> bool {
+        if let Some(e) = self.table.get_mut(&addr) {
+            e.rx = e.rx.saturating_add(n);
+            if e.tx > 0 {
+                e.validated = true;
             }
-            None => {
-                self.table.insert(
-                    addr,
-                    LedgerEntry {
-                        rx: n,
-                        tx: 0,
-                        validated: false,
-                    },
-                );
-            }
+            return !e.validated;
         }
+        self.table.insert(
+            addr,
+            LedgerEntry {
+                rx: n,
+                tx: 0,
+                validated: false,
+            },
+        );
+        true
     }
 
     /// The host dials `addr`: the address counts as one we spoke to first, whatever it sent before. A peer that still
@@ -148,7 +146,7 @@ mod tests {
         let mut l = Ledger::new(1);
         assert!(l.allow_send(a(1), 1200));
         assert!(l.allow_send(a(1), 1200));
-        l.on_receive(a(2), 100);
+        assert!(l.on_receive(a(2), 100), "a first datagram leaves the address held");
         let mut sent = 0;
         while l.allow_send(a(2), 10) {
             sent += 10 + DATAGRAM_OVERHEAD;
@@ -160,9 +158,10 @@ mod tests {
     #[test]
     fn dialing_an_address_that_wrote_first_opens_it() {
         let mut l = Ledger::new(1);
-        l.on_receive(a(4), 25);
+        assert!(l.on_receive(a(4), 25));
         assert!(!l.allow_send(a(4), 1200));
         l.open(a(4));
+        assert!(!l.on_receive(a(4), 25), "an address we dialed is not held");
         assert!(l.allow_send(a(4), 1200));
         l.open(a(5));
         assert_eq!(l.get(&a(5)).map(|e| (e.rx, e.tx, e.validated)), Some((0, 0, true)));
@@ -171,10 +170,13 @@ mod tests {
     #[test]
     fn answering_validates() {
         let mut l = Ledger::new(1);
-        l.on_receive(a(3), 50);
+        assert!(l.on_receive(a(3), 50));
         assert!(!l.allow_send(a(3), 1000));
         assert!(l.allow_send(a(3), 20));
-        l.on_receive(a(3), 50);
+        assert!(
+            !l.on_receive(a(3), 50),
+            "after it answered what we sent, the address is not held"
+        );
         assert_eq!(l.get(&a(3)).map(|e| e.validated), Some(true));
         assert!(l.allow_send(a(3), 60_000));
     }

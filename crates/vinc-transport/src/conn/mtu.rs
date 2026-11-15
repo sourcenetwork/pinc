@@ -3,9 +3,13 @@
 //!
 //! Only direct (UDP) paths are probed, never on a thin node, and not for 10 s after a wake or a link return. A path
 //! is probed once: a lost probe is not retried, it waits for the next path event (a re-join that worked, a link
-//! return, a new address, a re-validation) or for 10 minutes. When a probe-timeout PING is acknowledged while a
-//! full-size packet sent before it still is not one round trip later, the path drops to 1200, because the signature
-//! is a path that carries small packets only.
+//! return, a new address, a re-validation) or for 10 minutes. A path whose address the endpoint's ledger still holds
+//! is not probed, because the ledger would refuse the probe and a lost probe is not retried for 10 minutes; it is
+//! probed once the address has answered. A path is not probed while the oldest packet in flight left on another path:
+//! that recovery is timed first, and the probe's lone acknowledgement, held for the ack delay, would stretch its round
+//! trip; the probe goes once those packets are acknowledged or declared lost. When a probe-timeout PING is
+//! acknowledged while a full-size packet sent before it still is not one round trip later, the path drops to 1200,
+//! because the signature is a path that carries small packets only.
 //!
 //! Invariants: at most one probe is in flight per path; a lost probe is not a congestion signal (recovery is told the
 //! packet is a probe); the datagram size only rises to a size the peer confirmed (an acknowledgement or an echo) and

@@ -3,7 +3,8 @@
 //! Sessions that may have something to send wait on two queues, ordinary sessions first and broadcast sessions after
 //! them (a broadcast session with a sub-session open still to leave counts as ordinary, so the open keeps its
 //! place). [`Endpoint::poll_transmit`] takes the first session, asks its connection for a datagram, and sends it
-//! through the ledger gate: a datagram the ledger holds back is dropped, which the connection treats as loss.
+//! through the ledger gate: a datagram the ledger holds back is dropped, which the connection treats as loss (the size
+//! probe is the exception: it is not built for a path whose address the ledger holds).
 //! Between connections the endpoint batches for segmentation offload: after a datagram, the next sessions' datagrams
 //! to the same destination of the same size follow in the same buffer, ending with a shorter one; a datagram for another
 //! destination is kept for the next call. The session just served moves to the back of its queue, so each gets a turn.

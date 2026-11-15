@@ -217,6 +217,8 @@ pub struct Endpoint<
     /// Server sessions this node made that the host has not taken yet: their handshakes are under way, or their
     /// `Incoming` waits to be read.
     pub(crate) owed: usize,
+    /// Whether the ledger holds the source of the datagram being handled (set by `handle_datagram`).
+    pub(crate) rx_held: bool,
     pub(crate) started: u64,
     pub(crate) t_first: Option<u64>,
     pub(crate) quiet_until: u64,
@@ -474,6 +476,7 @@ ep_impl! {
             udp_heard: None,
             backlog_room: usize::MAX,
             owed: 0,
+            rx_held: false,
             started: now,
             t_first: None,
             quiet_until: 0,

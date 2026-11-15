@@ -318,6 +318,12 @@ impl<const N: usize> Recovery<N> {
         self.cc.cwnd()
     }
 
+    /// The path the oldest packet still in flight left on; a packet declared lost or acknowledged is not in flight.
+    pub fn oldest_in_flight_path(&mut self) -> Option<u8> {
+        let i = self.ring.first_in_flight()?;
+        self.ring.get(i).map(|s| s.sent.path)
+    }
+
     /// Bytes sent and neither acknowledged nor declared lost.
     pub const fn bytes_in_flight(&self) -> u64 {
         self.acct.in_flight
