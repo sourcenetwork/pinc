@@ -266,7 +266,7 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
   ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds depends on which packets the
   emulated links lose, so it is read over eight realizations of that loss (`VINC_SUITE_LOSS_SALT`): the library passes
-  87 to 91 of the 96 seeds, 89 on average and 90 in the realization the suite runs by itself; the reference model the
+  87 to 90 of the 96 seeds, 89 on average and 90 in the realization the suite runs by itself; the reference model the
   rules come from passes 88 in its own. Four seeds fail in every realization, and they are four the model fails too
   ([#212](https://github.com/sourcenetwork/vinc/issues/212)). The others are deliveries on low-bandwidth links that
   miss their deadline in some realizations and not in others

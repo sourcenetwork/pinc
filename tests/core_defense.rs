@@ -70,9 +70,12 @@ fn the_ledger_holds_a_spoofed_resume_to_three_times_what_it_sent() {
         assert!(e.tx <= 3 * e.rx, "charged {} for {} received", e.tx, e.rx);
         let sent: u64 = net.tapped.iter().filter(|t| t.2 == x).map(|t| t.3 as u64 + 28).sum();
         assert_eq!(sent, e.tx, "every datagram that left was charged");
-        assert!(
-            net.nodes[s].ep.node_stats().held_by_ledger >= 1,
-            "the ledger held nothing back"
+        // The one datagram the ledger refused here was the server's size probe for the new address; the connection
+        // offers none for an address the ledger holds, so nothing is refused and the bound above is met by what left.
+        assert_eq!(
+            net.nodes[s].ep.node_stats().held_by_ledger,
+            0,
+            "the server built a size probe for an address the ledger holds"
         );
     });
 }
@@ -120,6 +123,59 @@ fn a_bare_resumption_hello_from_a_new_address_completes() {
             panic!("a bare resumption from a new address never got its Reply")
         };
         assert!(moved <= 5 * SEC_NS, "the resumption took {} ms", moved / MS_NS);
+    });
+}
+
+/// A bare resumption dial, from the client's own address or from a new one (`moved`), then a few seconds on. Returns
+/// what the server's side of the session shows: datagrams its ledger held back, packets its session declared lost and
+/// probe timeouts it fired. A datagram the ledger refuses is taken for sent by the connection, so it would be one of
+/// them.
+fn bare_resume_server(moved: bool) -> (u64, u64, u64) {
+    let mut net = CoreNet::new(5 * MS_NS);
+    let (s, c) = (net.add_whole_flights(1, IdentityAlg::MlDsa65), net.add(2));
+    let (sa, _) = net.connect_pair(c, s, ALPN_A, Role::Other);
+    net.run_for(SEC_NS);
+    let now = net.now;
+    net.nodes[c].cmd(now, Command::Close { session: sa, error: 0 }).unwrap();
+    net.run_for(SEC_NS);
+    if moved {
+        net.nat = Some((net.nodes[c].addr, "10.7.7.7:5555".parse().unwrap()));
+    }
+    let held0 = net.nodes[s].ep.node_stats().held_by_ledger;
+    let (peer, to, t0) = (net.nodes[s].node, net.nodes[s].addr, net.now);
+    net.nodes[c].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+    net.run_for(5 * SEC_NS);
+    let session = net.nodes[s]
+        .events
+        .iter()
+        .rev()
+        .find_map(|(at, e)| match e {
+            Event::Incoming { session, .. } if *at >= t0 => Some(*session),
+            _ => None,
+        })
+        .unwrap();
+    let Answer::Stats(st) = net.nodes[s].ep.query(Query::Stats(session)) else {
+        panic!("no stats")
+    };
+    let held = net.nodes[s].ep.node_stats().held_by_ledger - held0;
+    (held, st.transport.packets_lost, st.transport.ptos)
+}
+
+#[test]
+fn a_bare_resumption_from_a_new_address_leaves_nothing_held_and_nothing_lost() {
+    big_stack(|| {
+        let home = bare_resume_server(false);
+        let moved = bare_resume_server(true);
+        assert_eq!(
+            home,
+            (0, 0, 0),
+            "held, lost and probe timeouts of the resumption from the client's own address"
+        );
+        assert_eq!(
+            moved,
+            (0, 0, 0),
+            "held, lost and probe timeouts of the resumption from a new address"
+        );
     });
 }
 
@@ -577,7 +633,7 @@ fn a_charge_near_the_top_of_the_range_saturates_instead_of_overflowing() {
 }
 
 #[test]
-fn datagrams_out_counts_the_datagrams_that_left_and_held_counts_the_refusals() {
+fn datagrams_out_counts_the_datagrams_that_left_and_no_size_probe_is_built_for_a_held_address() {
     big_stack(|| {
         let (mut net, s, hello) = spoofable_resume();
         let x: SocketAddr = "10.9.9.9:1000".parse().unwrap();
@@ -590,6 +646,9 @@ fn datagrams_out_counts_the_datagrams_that_left_and_held_counts_the_refusals() {
         let ns = net.nodes[s].ep.node_stats();
         assert!(left >= 1);
         assert_eq!(ns.datagrams_out - out0, left, "a refused datagram never counts as out");
-        assert!(ns.held_by_ledger > held0, "the refusals are still counted");
+        assert_eq!(
+            ns.held_by_ledger, held0,
+            "the server built a size probe for an address the ledger holds"
+        );
     });
 }
