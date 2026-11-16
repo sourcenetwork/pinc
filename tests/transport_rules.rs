@@ -595,9 +595,16 @@ fn mtu_probes_go_on_direct_udp_paths_of_nodes_that_are_not_thin_and_not_just_res
 }
 
 #[test]
-fn a_jumbo_probe_needs_an_interface_above_2904_bytes() {
+fn a_jumbo_probe_needs_an_interface_that_carries_more_than_2904_bytes() {
     big_stack(|| {
-        for (iface, want) in [(2904u16, 1452u16), (3000, 3000), (9000, 8952)] {
+        // The probe is the interface's payload (its MTU less the 28 bytes of IPv4 and UDP headers) up to 8952.
+        for (iface, want) in [
+            (2904u16, 1452u16),
+            (2932, 1452),
+            (2933, 2905),
+            (3000, 2972),
+            (9000, 8952),
+        ] {
             let mut w = World::new(IdentityAlg::Ed25519);
             let (mut sa, mut sb) = (Store::new(true), Store::new(false));
             let mut net = setup(&mut w, &mut sa, &mut sb, Link::new(19, Params::new(MS / 4).mtu(9000)));
