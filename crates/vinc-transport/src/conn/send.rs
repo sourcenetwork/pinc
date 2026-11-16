@@ -225,6 +225,9 @@ conn_impl! {
         let now = env.now;
         let probe = self.probe_size(ti, now, out.len());
         let path_mtu = self.paths.get(ti).map_or(MIN_MTU, |p| p.mtu.current);
+        // A first flight that fits 1452 bytes leaves whole, above the path's datagram size: a path that drops it costs
+        // one handshake resend, and the resend is cut to the path's size. A relay path carries up to 1452 inner bytes
+        // (the carrier's `MAX_PACKET_LEN`). Only the handshake rides above the path's size; see `app_end` below.
         let whole = self.cfg.flight_split
             && self.hs.whole_len().is_some_and(|n| n + FLIGHT_OVERHEAD <= usize::from(PROBE_MTU));
         let base = if whole {
@@ -252,8 +255,10 @@ conn_impl! {
             return self.finish_datagram(ti, n, now);
         }
         let can_app = self.can_build_app();
+        // The packet behind the handshake ends at the path's datagram size; only an MTU probe is built larger.
+        let app_end = probe.unwrap_or(usize::from(path_mtu)).min(max_len);
         if can_app
-            && let Some(rest) = window.get_mut(used..)
+            && let Some(rest) = window.get_mut(used..app_end)
             && let Some(n) = self.build_app(env, ti, rest, probe)
         {
             used += n;

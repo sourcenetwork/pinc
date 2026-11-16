@@ -145,6 +145,7 @@ import Vinc.TraceExtIn
 import Vinc.TraceReach
 import Vinc.TransportMtu
 import Vinc.TraceMtu
+import Vinc.TransportDgramSize
 import Vinc.TransportPath
 import Vinc.TransportPathJoined
 import Vinc.TraceReplyPath
