@@ -7,6 +7,11 @@
 //!   and serves until it is killed.
 //! - `client <addr> <scenario> [numbers]` runs one scenario against it and prints one JSON line per result.
 //!
+//! `--endpoints=per-core` (or `VINC_BENCH_ENDPOINTS=per-core`; the default is `1`) asks a library that can for one
+//! endpoint on every worker of its runtime: the server serves on all of them and the `many` test spreads its clients
+//! over them. Every result line of a per-core process says so (`endpoints`: `per-core`; a line without it ran on one endpoint); the
+//! default code path is untouched, and the other tests run on one endpoint either way.
+//!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
 //! with `k` (the first byte of a connection), `S` is a sink that answers the byte count, `E` echoes everything it reads
 //! until the end of the stream (the `requests` scenario opens one such stream per request), and `T` answers the server's own resource counters (resident memory, CPU time,
@@ -40,7 +45,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 
 pub mod iroh;
 pub mod libp2p;
@@ -164,7 +169,13 @@ pub struct Rec(String);
 impl Rec {
     /// Start a line for `lib` and `scenario`.
     pub fn new(lib: &str, scenario: &str) -> Self {
-        Self(format!("{{\"lib\":\"{lib}\",\"scenario\":\"{scenario}\""))
+        let rec = format!("{{\"lib\":\"{lib}\",\"scenario\":\"{scenario}\"");
+        // A line of the default carries nothing new; one of a per-core process says so, so it is never read as the other.
+        Self(if per_core() {
+            format!("{rec},\"endpoints\":\"per-core\"")
+        } else {
+            rec
+        })
     }
     /// Add a text field (no quotes or backslashes in `v`).
     pub fn s(mut self, k: &str, v: &str) -> Self {
@@ -219,6 +230,8 @@ pub trait Lib: Sized + 'static {
     fn name() -> &'static str;
     /// Whether the library resumes a connection with data in the first flight.
     const RESUMES: bool;
+    /// Whether the library can run one endpoint on every worker of its runtime (`--endpoints=per-core`).
+    const PER_CORE: bool = false;
     /// An endpoint (a socket, an identity and the library's state).
     type Ep: 'static;
     /// An established connection.
@@ -232,6 +245,13 @@ pub trait Lib: Sized + 'static {
     fn run<T>(f: impl Future<Output = T>) -> T;
     /// Start `f` on the runtime.
     fn spawn(f: impl Future<Output = ()> + 'static);
+    /// Start the future `make` builds for client `i` of a crowd. A library that runs one endpoint on every worker
+    /// ([`per_core`]) starts it on worker `i` modulo the workers, where the client's endpoint is made; the default starts
+    /// it here, as [`spawn`](Self::spawn) does.
+    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) {
+        let _ = i;
+        Self::spawn(make());
+    }
     /// Wait.
     fn sleep(d: Duration) -> impl Future<Output = ()>;
     /// Bind a server on loopback, start serving [`handle`] on every stream, return its address as text.
@@ -665,7 +685,7 @@ async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
 
 /// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
 /// while every connection is still open.
-async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
+async fn many_one<L: Lib>(addr: &str, n: usize, each: u64) {
     let Ok(ctl_ep) = L::client().await else { return };
     let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
         Rec::new(L::name(), "many")
@@ -748,6 +768,170 @@ async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
     L::shutdown(ctl_ep).await;
 }
 
+/// The `many` test: on one endpoint as ever, or, with `--endpoints=per-core`, with the clients spread over the workers.
+async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
+    if per_core() {
+        many_spread::<L>(addr, n, each).await;
+    } else {
+        many_one::<L>(addr, n, each).await;
+    }
+}
+
+/// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
+/// while every connection is still open.
+///
+/// Each client is one job that [`Lib::spawn_client`] starts (on a worker of its own when the endpoints are per core):
+/// it makes its endpoint, waits for the start, connects and uploads, then holds its connection until it is released.
+/// The readings are the same either way: the client's memory after every endpoint is made and while every connection
+/// is open, the time from the start to the last upload.
+#[allow(clippy::too_many_lines)]
+async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64) {
+    let Ok(ctl_ep) = L::client().await else { return };
+    let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
+        Rec::new(L::name(), "many")
+            .s("status", "failed: no control connection")
+            .emit();
+        return;
+    };
+    let s_base = server_stats::<L>(&ctl).await.unwrap_or_default();
+    let c_base = Stats::now();
+    let (made, mut made_rx) = mpsc::unbounded::<bool>();
+    let (done, mut results) = mpsc::unbounded::<Result<Duration, String>>();
+    let (ended, mut ended_rx) = mpsc::unbounded::<()>();
+    let (mut go, mut release) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    for i in 0..n {
+        let (go_tx, go_rx) = oneshot::channel::<Instant>();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        go.push(go_tx);
+        release.push(release_tx);
+        let (addr, made, done, ended) = (addr.to_owned(), made.clone(), done.clone(), ended.clone());
+        L::spawn_client(i, move || async move {
+            // Each sender goes as soon as it has spoken: a job that ends early closes its channels instead of leaving
+            // the crowd waiting for it.
+            let Ok(ep) = L::client().await else {
+                let _ = made.unbounded_send(false);
+                return;
+            };
+            let _ = made.unbounded_send(true);
+            drop(made);
+            let held = match go_rx.await {
+                Ok(t) => {
+                    let r = async {
+                        let c = L::hello(&ep, &addr, false).await?;
+                        let up = t.elapsed();
+                        upload::<L>(&c, each).await?;
+                        io::Result::Ok((up, c))
+                    }
+                    .await;
+                    let held = match r {
+                        Ok((up, c)) => {
+                            let _ = done.unbounded_send(Ok(up));
+                            Some(c)
+                        }
+                        Err(e) => {
+                            let _ = done.unbounded_send(Err(e.to_string()));
+                            None
+                        }
+                    };
+                    drop(done);
+                    held
+                }
+                Err(_) => None,
+            };
+            let _ = release_rx.await;
+            if let Some(c) = held {
+                L::close(&ep, &c).await;
+            }
+            L::shutdown(ep).await;
+            let _ = ended.unbounded_send(());
+        });
+    }
+    drop((made, done, ended));
+    let mut no_endpoint = 0u32;
+    for _ in 0..n {
+        match made_rx.next().await {
+            Some(true) => {}
+            Some(false) | None => no_endpoint += 1,
+        }
+    }
+    let c_made = Stats::now();
+    let t = Instant::now();
+    for g in go {
+        let _ = g.send(t);
+    }
+    let (mut ok, mut up, mut failed, mut why) = (0u32, Vec::new(), no_endpoint, String::new());
+    for _ in 0..n.saturating_sub(no_endpoint as usize) {
+        match results.next().await {
+            Some(Ok(u)) => {
+                up.push(us(u));
+                ok += 1;
+            }
+            Some(Err(e)) => {
+                failed += 1;
+                why = e;
+            }
+            None => break,
+        }
+    }
+    let secs = t.elapsed().as_secs_f64();
+    // Let the memory settle before the readings.
+    L::sleep(Duration::from_millis(500)).await;
+    let (s1, c1) = (server_stats::<L>(&ctl).await.unwrap_or(s_base), Stats::now());
+    up.sort_by(f64::total_cmp);
+    let ok = f64::from(ok);
+    Rec::new(L::name(), "many")
+        .n("requested", n as f64)
+        .n("connected_and_moved", ok)
+        .n("failed", f64::from(failed))
+        .n("all_done_s", secs)
+        .n("first_byte_p50_ms", pct(&up, 0.5) / 1e3)
+        .n("first_byte_p99_ms", pct(&up, 0.99) / 1e3)
+        .n("server_rss_base_mib", s_base.rss_kb as f64 / 1024.0)
+        .n("server_rss_mib", s1.rss_kb as f64 / 1024.0)
+        .n(
+            "server_kib_per_conn",
+            s1.rss_kb.saturating_sub(s_base.rss_kb) as f64 / ok.max(1.0),
+        )
+        .n(
+            "client_kib_per_conn",
+            c1.rss_kb.saturating_sub(c_made.rss_kb) as f64 / ok.max(1.0),
+        )
+        .n("client_rss_before_mib", c_base.rss_kb as f64 / 1024.0)
+        .n("server_cpu_s", s1.cpu_secs_since(s_base))
+        .n("client_cpu_s", c1.cpu_secs_since(c_made))
+        .s("last_error", &why)
+        .emit();
+    for r in release {
+        let _ = r.send(());
+    }
+    while ended_rx.next().await.is_some() {}
+    L::shutdown(ctl_ep).await;
+}
+
+static PER_CORE: AtomicBool = AtomicBool::new(false);
+
+/// Whether this process runs one endpoint on every worker of the runtime: the server serves on all of them and the
+/// many-connection test spreads its clients over them. Set by `--endpoints=per-core` or `VINC_BENCH_ENDPOINTS=per-core`
+/// for a library that can ([`Lib::PER_CORE`]); a runtime with no workers runs one either way.
+pub fn per_core() -> bool {
+    PER_CORE.load(Relaxed)
+}
+
+/// Read the endpoints option: the `--endpoints=` argument (removed from `args`), else `VINC_BENCH_ENDPOINTS`, else `1`.
+fn endpoints_option<L: Lib>(args: &mut Vec<String>) -> Result<(), String> {
+    let arg = args
+        .iter()
+        .position(|a| a.starts_with("--endpoints="))
+        .map(|i| args.remove(i).trim_start_matches("--endpoints=").to_owned());
+    let v = arg.or_else(|| std::env::var("VINC_BENCH_ENDPOINTS").ok());
+    match v.as_deref() {
+        None | Some("1") => {}
+        Some("per-core") => PER_CORE.store(L::PER_CORE, Relaxed),
+        Some(other) => return Err(format!("the endpoints are `1` or `per-core`, not `{other}`")),
+    }
+    Ok(())
+}
+
 static VARIANT: OnceLock<String> = OnceLock::new();
 
 /// The variant of the library named on the command line (`quic` or `tcp` for rust-libp2p), `""` if none.
@@ -781,6 +965,10 @@ pub fn main<L: Lib>() {
 pub fn run_args<L: Lib>(mut args: Vec<String>) {
     if let Some(i) = args.iter().position(|a| a.starts_with("--variant=")) {
         let _ = VARIANT.set(args.remove(i).trim_start_matches("--variant=").to_owned());
+    }
+    if let Err(e) = endpoints_option::<L>(&mut args) {
+        eprintln!("{e}");
+        std::process::exit(2);
     }
     if args.iter().any(|a| a == "--count-allocs") {
         count_allocs();
@@ -825,7 +1013,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
         }
         _ => {
             eprintln!(
-                "usage: server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
+                "usage: [--endpoints=1|per-core] server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
             );
             std::process::exit(2);
         }

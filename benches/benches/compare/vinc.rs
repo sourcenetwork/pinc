@@ -6,6 +6,17 @@
 //! host to do. The endpoint's three I/O calls are a type here (`Net`, an `Io`), not closures, only so the harness can
 //! write the endpoint's type down; the facade's own calls are made directly, with no boxing and no `unsafe`. Everything
 //! runs on the thread that started it, one endpoint per thread, as the facade is meant to be used.
+//!
+//! With `--endpoints=per-core` (see `compare/mod.rs`) the server runs one endpoint on every worker of the runtime, all
+//! with one identity, each on a socket of its own on one port (`SO_REUSEPORT`: the kernel spreads peers among them by
+//! their address), and the clients of the `many` test are spread over the workers, each endpoint made, driven and
+//! dropped on its worker. Every other test's client runs on the thread that drives it.
+//!
+//! Limits of the per-core server, stated: a peer's datagrams reach the endpoint its address hashes to. A peer that moves
+//! to another address (a new socket, a changed port or address) may land on an endpoint that holds neither its session
+//! nor the tickets it was given; its session then ends at its timeouts and it dials again, as a stranger (a full
+//! handshake, not a resumption). A resumption from the same socket reaches the same endpoint and resumes. Each
+//! endpoint also limits its own sessions and half-open dials.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -35,11 +46,13 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use super::{Lib, Rx, Tx};
+use futures::StreamExt;
+use futures::channel::mpsc;
 use nuclei::Handle;
 use nuclei::net::UdpSocketBuilder;
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use vinc::{AllowAll, Connection, Endpoint, Io, IoHost, Limits, NodeAddr, RecvStream, SendStream, Vinc};
-use vinc_keystore::SoftwareStore;
+use vinc_keystore::{KeyStore, SoftwareStore};
 
 const ALPN: &[u8] = b"bench/1";
 /// What the socket's send and receive buffers are asked to hold.
@@ -108,16 +121,34 @@ type Ep = Endpoint<H>;
 type Conn = Connection<H>;
 
 fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
+    endpoint(socket(0, false)?, limits, None, run)
+}
+
+/// A socket on `port` (0 picks one) of the bind address; `shared` lets several sockets of the process bind the port
+/// (`SO_REUSEPORT`).
+fn socket(port: u16, shared: bool) -> io::Result<Handle<UdpSocket>> {
     // Socket buffers as a busy host sizes them (the system clamps them to its limit): the default of about 200 KiB
     // drops the first flights of a few hundred peers dialing at once.
     let builder = UdpSocketBuilder::new_v4()?;
     builder.set_recv_buffer_size(SOCKET_BUFFER)?;
     builder.set_send_buffer_size(SOCKET_BUFFER)?;
-    let sock = Rc::new(builder.bind(SocketAddr::new(super::bind_ip()?, 0))?);
+    if shared {
+        builder.set_reuseport(true)?;
+    }
+    builder.bind(SocketAddr::new(super::bind_ip()?, port))
+}
+
+/// An endpoint over `sock`, with the identity of `seed` (a fresh one without), driven by a task of its own if `run`.
+fn endpoint(sock: Handle<UdpSocket>, limits: Limits, seed: Option<&[u8; 32]>, run: bool) -> io::Result<Ep> {
+    let sock = Rc::new(sock);
     let udp = UdpSocketState::new(UdpSockRef::from(&*sock))?;
     // As many datagrams per transmit as the system sends in one call and the endpoint's 64 KiB buffer holds.
     let batch = udp.max_gso_segments().clamp(1, 40);
-    let ep = Vinc::builder()
+    let mut builder = Vinc::builder();
+    if let Some(seed) = seed {
+        builder = builder.seed(seed).map_err(io_err)?;
+    }
+    let ep = builder
         .alpn(ALPN.to_vec())
         .limits(limits)
         .local_addr(sock.local_addr()?)
@@ -140,6 +171,68 @@ fn bind(limits: Limits, run: bool) -> io::Result<Ep> {
         .detach();
     }
     Ok(ep)
+}
+
+/// Serve every stream of every session `ep` accepts, on this worker.
+async fn accept_all(ep: Ep) {
+    while let Some(inc) = ep.accept().await {
+        let conn = inc.into_connection();
+        nuclei::spawn_local(async move {
+            while let Ok((tx, rx)) = conn.accept_bi().await {
+                nuclei::spawn_local(async move {
+                    let _ = super::handle(tx, rx).await;
+                })
+                .detach();
+            }
+        })
+        .detach();
+    }
+}
+
+/// One endpoint on every worker of the runtime, all with one identity, each on a socket of its own on one port. The
+/// first socket of the group picks the port; it leaves once every endpoint has its own, before any peer is told the
+/// address, so nothing arrives on it. The address of the group is the first endpoint's.
+async fn serve_per_core() -> io::Result<String> {
+    let mut seed = [0u8; 32];
+    SoftwareStore::new()
+        .and_then(|mut s| s.random(&mut seed))
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let probe = socket(0, true)?;
+    let port = probe.local_addr()?.port();
+    let rt = nuclei::RuntimeHandle::current();
+    let workers = rt.workers().max(1);
+    let (ready, mut started) = mpsc::unbounded::<io::Result<String>>();
+    for w in 0..workers {
+        let ready = ready.clone();
+        let job = move || async move {
+            match socket(port, true).and_then(|s| endpoint(s, Limits::default(), Some(&seed), true)) {
+                Ok(ep) => {
+                    let _ = ready.unbounded_send(Ok(ep.addr().ticket()));
+                    drop(ready);
+                    accept_all(ep).await;
+                }
+                Err(e) => {
+                    let _ = ready.unbounded_send(Err(e));
+                }
+            }
+        };
+        if rt.workers() == 0 {
+            nuclei::spawn_local(job()).detach();
+        } else {
+            rt.spawn_local_on_worker(w, job)?.detach();
+        }
+    }
+    drop(ready);
+    let mut addr = None;
+    for _ in 0..workers {
+        let ticket = started
+            .next()
+            .await
+            .ok_or_else(|| io::Error::other("a worker's endpoint did not start"))??;
+        addr.get_or_insert(ticket);
+    }
+    drop(probe);
+    addr.ok_or_else(|| io::Error::other("no endpoint started"))
 }
 
 /// The library under test.
@@ -166,6 +259,7 @@ impl Lib for Vinc1 {
     }
 
     const RESUMES: bool = true;
+    const PER_CORE: bool = true;
     type Ep = Ep;
     type Conn = Conn;
     type Tx = SendStream<H>;
@@ -182,28 +276,29 @@ impl Lib for Vinc1 {
         nuclei::spawn_local(f).detach();
     }
 
+    fn spawn_client<F: Future<Output = ()> + 'static>(i: usize, make: impl FnOnce() -> F + Send + 'static) {
+        let rt = nuclei::RuntimeHandle::current();
+        match rt.workers() {
+            0 => Self::spawn(make()),
+            _ if !super::per_core() => Self::spawn(make()),
+            n => match rt.spawn_local_on_worker(i % n, make) {
+                Ok(task) => task.detach(),
+                Err(e) => panic!("worker {} took no client: {e}", i % n),
+            },
+        }
+    }
+
     async fn sleep(d: Duration) {
         nuclei::time::sleep(d).await;
     }
 
     async fn serve() -> io::Result<String> {
+        if super::per_core() {
+            return serve_per_core().await;
+        }
         let ep = bind(Limits::default(), true)?;
         let addr = ep.addr().ticket();
-        nuclei::spawn_local(async move {
-            while let Some(inc) = ep.accept().await {
-                let conn = inc.into_connection();
-                nuclei::spawn_local(async move {
-                    while let Ok((tx, rx)) = conn.accept_bi().await {
-                        nuclei::spawn_local(async move {
-                            let _ = super::handle(tx, rx).await;
-                        })
-                        .detach();
-                    }
-                })
-                .detach();
-            }
-        })
-        .detach();
+        nuclei::spawn_local(accept_all(ep)).detach();
         Ok(addr)
     }
 

@@ -648,6 +648,10 @@ name = "vinc_answered"
 path = "vinc_answered.rs"
 
 [[test]]
+name = "vinc_per_core"
+path = "vinc_per_core.rs"
+
+[[test]]
 name = "connect_record_seq"
 path = "connect_record_seq.rs"
 
