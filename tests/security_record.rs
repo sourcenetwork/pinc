@@ -397,6 +397,7 @@ fn labels_are_prefixed_unique_and_distinct_from_the_crypto_labels() {
     all.extend(vinc_crypto::labels::ALL);
     for l in &all {
         assert!(l.starts_with("VINC 2026 v1 "), "{l}");
+        assert!(l.starts_with(vinc_crypto::labels::RESERVED), "{l}");
         assert!(l.len() > labels::PREFIX.len(), "{l}");
         assert!(l.is_ascii());
         assert!(!l.contains('\u{2013}') && !l.contains('\u{2014}'));

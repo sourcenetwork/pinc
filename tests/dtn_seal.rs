@@ -350,9 +350,11 @@ fn labels_are_unique_and_prefixed() {
         .collect();
     let set: HashSet<_> = all.iter().collect();
     assert_eq!(set.len(), all.len());
+    assert!(all.iter().all(|l| l.starts_with(vinc_crypto::labels::RESERVED)));
     for l in vinc_dtn::labels::ALL {
         assert!(l.starts_with(vinc_dtn::labels::PREFIX));
         assert!(l.starts_with("VINC 2026 v1 "));
+        assert!(l.starts_with(vinc_crypto::labels::RESERVED));
     }
 }
 

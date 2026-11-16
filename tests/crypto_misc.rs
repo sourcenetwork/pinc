@@ -67,12 +67,19 @@ fn expand_is_an_xof_and_separates_labels() {
 fn every_label_has_the_prefix_and_is_unique() {
     for (i, a) in labels::ALL.iter().enumerate() {
         assert!(a.starts_with("VINC 2026 v1 "), "{a}");
+        assert!(a.starts_with(labels::RESERVED), "{a}");
         assert!(a.len() > labels::PREFIX.len(), "{a}");
         assert!(!a.contains('\u{2013}') && !a.contains('\u{2014}'));
         for b in &labels::ALL[i + 1..] {
             assert_ne!(a, b);
         }
     }
+}
+
+#[test]
+fn the_prefix_starts_with_the_reserved_start() {
+    assert!(labels::PREFIX.starts_with(labels::RESERVED));
+    assert!(labels::PREFIX.len() > labels::RESERVED.len());
 }
 
 #[test]
