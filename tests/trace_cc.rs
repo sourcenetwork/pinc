@@ -12,7 +12,8 @@
 //! byte counts and times up to `u64::MAX`, and a segment size outside its clamp.
 //!
 //! The test asserts what it can itself (the window stays between its floor and cap, a loss never raises it, the
-//! pacer lets exactly its burst out before a pause) so it is meaningful without the proof tools.
+//! pacer takes each packet's cost in tokens and pauses exactly at the packet that takes the last) so it is meaningful
+//! without the proof tools.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -29,7 +30,7 @@ use std::fmt::Write as _;
 
 use vinc_tests::SplitMix64;
 use vinc_transport::recovery::trace::CcView;
-use vinc_transport::recovery::{AckInput, BURST_PACKETS, Cubic, MAX_CWND, MIN_CWND, MS, Pacer};
+use vinc_transport::recovery::{AckInput, BURST_PACKETS, Cubic, MAX_CWND, MIN_CWND, MS, Pacer, packet_cost};
 
 /// The largest value of a 32-bit checker integer.
 const TOP: u64 = (1 << 31) - 1;
@@ -311,26 +312,36 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
                     } else {
                         pick(&mut rng, &[1200, 1452, 8952])
                     };
+                    let size: u32 = if wide {
+                        pick(&mut rng, &[0, 1, 1200, 65_535, u32::MAX])
+                    } else {
+                        let m = mtu as u32;
+                        pick(&mut rng, &[40, 1200, m, m, m, 2 * m + 7, 3 * m])
+                    };
                     let s = srtt.unwrap_or(if wide { u64::MAX } else { 20 * MS });
                     let limited = rng.next_u64().is_multiple_of(2);
-                    let (tokens_before, _, _) = r.p.trace_view();
-                    r.p.on_sent(r.now, mtu, s, cw, limited);
-                    let (tokens_after, _, start) = r.p.trace_view();
+                    let (tokens_before, next_before, _) = r.p.trace_view();
+                    r.p.on_sent(r.now, size, mtu, s, cw, limited);
+                    let (tokens_after, next_after, start) = r.p.trace_view();
+                    let cost = packet_cost(size, mtu);
                     assert!((1..=BURST_PACKETS).contains(&tokens_after));
-                    if tokens_before > 1 {
-                        assert_eq!(tokens_after, tokens_before - 1);
-                        if tokens_before == BURST_PACKETS {
-                            assert_eq!(start, r.now, "a burst begins with its first packet");
-                        }
+                    if tokens_before == BURST_PACKETS {
+                        assert_eq!(start, r.now, "a burst begins with its first packet");
+                    }
+                    if u64::from(tokens_before) > cost {
+                        assert_eq!(u64::from(tokens_after), u64::from(tokens_before) - cost);
+                        assert_eq!(next_after, next_before, "a packet with tokens left paused");
                         paced_in_burst += 1;
                     } else {
-                        // the burst was full when it began, so exactly BURST_PACKETS - 1 packets preceded this one
-                        assert_eq!(tokens_after, BURST_PACKETS);
+                        assert_eq!(
+                            tokens_after, BURST_PACKETS,
+                            "the packet that took the last token did not refill"
+                        );
                         paced_in_burst = 0;
                     }
                     r.sends += 1;
                     r.plog(&format!(
-                        r#""op":"psent","now":{},"mtu":{mtu},"srtt":{s},"cw":{cw},"lim":{limited}"#,
+                        r#""op":"psent","now":{},"size":{size},"mtu":{mtu},"srtt":{s},"cw":{cw},"lim":{limited}"#,
                         r.now
                     ));
                 }

@@ -71,7 +71,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
     check (c.gateCap (← natF j "mn") == (← optF j "cap")) "gate: the cap differs"
     same c j "gate"; pure w
   | "psent" =>
-    let p2 := w.p.onSent (← natF j "now") (← natF j "mtu") (← natF j "srtt") (← natF j "cw") (← boolF j "lim")
+    let p2 := w.p.onSent (← natF j "now") (← natF j "size") (← natF j "mtu") (← natF j "srtt") (← natF j "cw")
+      (← boolF j "lim")
     samePacer p2 j "psent"; pure { w with p := p2 }
   | "prel" =>
     let now ← natF j "now"

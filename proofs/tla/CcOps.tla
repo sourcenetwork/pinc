@@ -158,16 +158,23 @@ SetSlack(x, b) == [x EXCEPT !.slack = Mn(b, MAXC)]
 
 (* ---- the pacer ---- *)
 Gap(mtu, srtt, cwnd) == Mn(MulDiv(srtt, 4 * Mn(mtu, MAXMSS), 5 * Mx(cwnd, 1)), TOP)
-\* on_sent: start is the time of the first packet of the burst; the last packet of a burst sets the release, ten
-\* gaps after it, or one tick after it when the window does not limit the sender (lim is FALSE) and the burst took
-\* at least ten gaps already. The release only moves forward.
+\* the tokens a packet of size bytes costs: one, or as many as the datagrams it is worth when it is larger than one
+\* (the datagram size clamped to 1 .. MAXMSS)
+Cost(size, mtu) == LET m == Mx(Mn(mtu, MAXMSS), 1) IN Mx((size + m - 1) \div m, 1)
+\* on_sent under a rule: start is the time of the first packet of the burst; a packet takes its cost in tokens, and
+\* the packet that takes the last token or more than are left refills them and sets the release, a gap for every
+\* token the burst was charged after it, or one tick after it when the window does not limit the sender (lim is
+\* FALSE) and the burst took that long already. The release only moves forward. "cost" is the code; "onecost" (the
+\* rule before #552: a token per packet whatever it weighs) and "tenspan" (a pause of BURST gaps whatever the burst
+\* was charged) each remove one guard and have a RED configuration.
 StartAt(p, now) == IF p.tokens = BURST THEN now ELSE p.start
-Span(mtu, srtt, cwnd) == SMul(Gap(mtu, srtt, cwnd), BURST)
-Slow(p, now, mtu, srtt, cwnd, lim) == ~lim /\ Mx(now - StartAt(p, now), 0) >= Span(mtu, srtt, cwnd)
-OnSent(p, now, mtu, srtt, cwnd, lim) ==
-    IF p.tokens > 1 THEN [p EXCEPT !.tokens = p.tokens - 1, !.start = StartAt(p, now)]
-    ELSE [tokens |-> BURST,
-          next |-> Mx(p.next, SAdd(now, IF Slow(p, now, mtu, srtt, cwnd, lim) THEN 1 ELSE Span(mtu, srtt, cwnd))),
-          start |-> StartAt(p, now)]
+Charged(rule, p, c) == IF rule = "tenspan" THEN BURST ELSE (BURST - p.tokens) + c
+OnSentR(rule, p, now, size, mtu, srtt, cwnd, lim) ==
+    LET c == IF rule = "onecost" THEN 1 ELSE Cost(size, mtu)
+        span == SMul(Gap(mtu, srtt, cwnd), Charged(rule, p, c))
+        slow == ~lim /\ Mx(now - StartAt(p, now), 0) >= span
+    IN IF p.tokens > c THEN [p EXCEPT !.tokens = p.tokens - c, !.start = StartAt(p, now)]
+       ELSE [tokens |-> BURST, next |-> Mx(p.next, SAdd(now, IF slow THEN 1 ELSE span)), start |-> StartAt(p, now)]
+OnSent(p, now, size, mtu, srtt, cwnd, lim) == OnSentR("cost", p, now, size, mtu, srtt, cwnd, lim)
 NextRelease(p, now) == IF p.next > now THEN p.next ELSE now
 =============================================================================

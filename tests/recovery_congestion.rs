@@ -129,6 +129,29 @@ fn the_pause_uses_the_active_paths_datagram_size() {
     );
 }
 
+/// The recovery engine charges the pacer each packet's own size: four inner packets of 3,600 bytes, as a relay carrier
+/// forwards on a path of 1,200, cost three tokens each, so the fourth ends the burst and the sender waits twelve gaps.
+#[test]
+fn a_relay_sized_packet_costs_the_pacer_the_datagrams_it_is_worth() {
+    let mut rec = established();
+    let (srtt, cwnd) = (rec.rtt().smoothed(), rec.cwnd());
+    let now = 200 * MS;
+    for i in 0..3 {
+        rec.on_packet_sent(Sent {
+            size: 3600,
+            ..sent(1 + i, now)
+        })
+        .unwrap();
+        assert_eq!(rec.pacer().next_release(now), now, "packet {i} ended the burst");
+    }
+    rec.on_packet_sent(Sent {
+        size: 3600,
+        ..sent(4, now)
+    })
+    .unwrap();
+    assert_eq!(rec.pacer().next_release(now), now + 12 * (MSS * srtt * 4 / (5 * cwnd)));
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Path switches
 // ---------------------------------------------------------------------------------------------------------------

@@ -234,22 +234,41 @@ def Pacer.nextRelease (p : Pacer) (now : Nat) : Nat := if now < p.next then p.ne
 /-- The gap between two packets of a burst's pause. -/
 def gap (mtu srtt cwnd : Nat) : Nat := sat (min mtu maxMss * srtt * 4 / (5 * max cwnd 1))
 
-/-- The pause after a burst: ten gaps. -/
-def span (mtu srtt cwnd : Nat) : Nat := satMul (gap mtu srtt cwnd) burst
+/-- The pause after a burst charged `charged` tokens: a gap for each. -/
+def span (mtu srtt cwnd charged : Nat) : Nat := satMul (gap mtu srtt cwnd) charged
+
+/-- The tokens a packet of `size` bytes costs (`packet_cost`): one, or as many as the datagrams it is worth when it is
+larger than one, the datagram size clamped to `1..=65535`. -/
+def cost (size mtu : Nat) : Nat :=
+  let m := max (min mtu maxMss) 1
+  max ((size + m - 1) / m) 1
 
 /-- The start of the burst a packet at `now` belongs to: `now` for the first packet of a burst. -/
 def Pacer.startAt (p : Pacer) (now : Nat) : Nat := if p.tokens = burst then now else p.start
 
 /-- The burst took at least its pause and the window does not limit the sender: it has waited already. -/
-def Pacer.slow (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Bool :=
-  !limited && decide (span mtu srtt cwnd ≤ now - p.startAt now)
+def Pacer.slow (p : Pacer) (now c mtu srtt cwnd : Nat) (limited : Bool) : Bool :=
+  !limited && decide (span mtu srtt cwnd (burst - p.tokens + c) ≤ now - p.startAt now)
 
-/-- `on_sent`: a packet out of the burst takes a token; the last one refills the burst and sets the release, ten
-gaps after it, or one tick after it for a sender that was slow. The release only moves forward. -/
-def Pacer.onSent (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Pacer :=
-  if 1 < p.tokens then { p with tokens := p.tokens - 1, start := p.startAt now }
+/-- `on_sent`: a packet takes its cost in tokens; the one that takes the last token or more than are left refills the
+burst and sets the release, a gap for every token the burst was charged after it, or one tick after it for a sender
+that was slow. The release only moves forward. -/
+def Pacer.onSent (p : Pacer) (now size mtu srtt cwnd : Nat) (limited : Bool) : Pacer :=
+  let c := cost size mtu
+  if c < p.tokens then { p with tokens := p.tokens - c, start := p.startAt now }
   else { tokens := burst,
-         next := max p.next (satAdd now (if p.slow now mtu srtt cwnd limited then 1 else span mtu srtt cwnd)),
+         next := max p.next (satAdd now (if p.slow now c mtu srtt cwnd limited then 1
+                                          else span mtu srtt cwnd (burst - p.tokens + c))),
          start := p.startAt now }
+
+/-- The rule before #552, a token per packet whatever it weighed: kept to show that a packet of a datagram or less is
+paced exactly as before (`onSent_unit`) and where a larger one is not (`one_relay_no_pause`). -/
+def Pacer.onSentOne (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Pacer :=
+  if 1 < p.tokens then { p with tokens := p.tokens - 1, start := p.startAt now }
+  else
+    let s := satMul (gap mtu srtt cwnd) burst
+    { tokens := burst,
+      next := max p.next (satAdd now (if !limited && decide (s ≤ now - p.startAt now) then 1 else s)),
+      start := p.startAt now }
 
 end Vinc.TransportCc

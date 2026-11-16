@@ -491,7 +491,10 @@ par witness_tlc cid_reuse Cid Cid_reuse IssuedOnce
 par run_tlc cc Cc Cc
 par run_tlc cc_pacer Cc Cc_pacer
 par run_tlc cc_pacer_limited Cc Cc_pacer_limited
+par run_tlc cc_pacer_large Cc Cc_pacer_large
 par witness_tlc cc_pacer_strict Cc Cc_pacer_strict PacerRateStrict
+par witness_tlc cc_pacer_onecost Cc Cc_pacer_onecost BurstStarts
+par witness_tlc cc_pacer_tenspan Cc Cc_pacer_tenspan BurstStarts
 par run_tlc pn Pn Pn
 par run_tlc reasm Reasm Reasm
 par run_tlc early Early Early

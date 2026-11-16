@@ -24,6 +24,7 @@ use vinc_transport::recovery::{
 pub(crate) const MSS: u64 = 1200;
 
 mod cc_gate;
+mod cc_pacer;
 
 use cc_gate::with_rate;
 
@@ -802,20 +803,20 @@ proptest! {
             let t = c.cwnd();
             let r = p.next_release(t);
             prop_assert!(r >= t);
-            p.on_sent(t, t, t ^ 0xAAAA, t, t & 1 == 0);
+            p.on_sent(t, t as u32, t, t ^ 0xAAAA, t, t & 1 == 0);
         }
     }
 
     /// The pacer never panics and never waits less than zero, for any inputs.
     #[test]
     fn the_pacer_handles_any_inputs(
-        events in proptest::collection::vec((big(), big(), big(), big(), any::<bool>()), 1..60),
+        events in proptest::collection::vec((big(), any::<u32>(), big(), big(), big(), any::<bool>()), 1..60),
     ) {
         let mut p = Pacer::new();
-        for (now, mtu, srtt, cwnd, limited) in events {
+        for (now, size, mtu, srtt, cwnd, limited) in events {
             let r = p.next_release(now);
             prop_assert!(r >= now);
-            p.on_sent(now, mtu, srtt, cwnd, limited);
+            p.on_sent(now, size, mtu, srtt, cwnd, limited);
         }
     }
 

@@ -272,7 +272,7 @@ fn ten_packets_go_then_the_sender_waits_ten_gaps() {
     let mut p = Pacer::new();
     for i in 0..BURST_PACKETS {
         assert_eq!(p.next_release(1000), 1000, "packet {i} may leave at once");
-        p.on_sent(1000, mtu, srtt, cwnd, true);
+        p.on_sent(1000, mtu as u32, mtu, srtt, cwnd, true);
     }
     assert_eq!(p.next_release(1000), 1000 + 10 * gap);
     assert_eq!(p.next_release(1000 + 10 * gap - 1), 1000 + 10 * gap);
@@ -284,14 +284,14 @@ fn ten_packets_go_then_the_sender_waits_ten_gaps() {
 fn the_burst_is_ten_packets_even_after_a_long_idle() {
     let mut p = Pacer::new();
     for _ in 0..10 {
-        p.on_sent(0, MSS, 50 * MS, 50_000, true);
+        p.on_sent(0, MSS as u32, MSS, 50 * MS, 50_000, true);
     }
     let gap = MSS * 50 * MS * 4 / (5 * 50_000);
     // A minute later the next ten leave, and the eleventh waits: tokens are not banked while idle.
     let t = 60 * SECOND;
     for i in 0..10 {
         assert_eq!(p.next_release(t), t, "packet {i}");
-        p.on_sent(t, MSS, 50 * MS, 50_000, true);
+        p.on_sent(t, MSS as u32, MSS, 50 * MS, 50_000, true);
     }
     assert_eq!(p.next_release(t), t + 10 * gap);
 }
@@ -306,7 +306,7 @@ fn packets_that_leave_more_slowly_than_the_paced_rate_are_not_held() {
     for i in 0..100u64 {
         let t = i * srtt;
         assert_eq!(p.next_release(t), t, "packet {i} waits");
-        p.on_sent(t, MSS, srtt, cwnd, false);
+        p.on_sent(t, MSS as u32, MSS, srtt, cwnd, false);
         assert!(p.next_release(t) <= t + 1, "a packet behind packet {i} would wait");
     }
 }
@@ -320,15 +320,15 @@ fn a_burst_after_a_trickle_is_paused_after_eleven_packets() {
     let gap = MSS * srtt * 4 / (5 * cwnd);
     let mut p = Pacer::new();
     for i in 0..9u64 {
-        p.on_sent(i * SECOND, MSS, srtt, cwnd, false);
+        p.on_sent(i * SECOND, MSS as u32, MSS, srtt, cwnd, false);
     }
     let t = 60 * SECOND;
     assert_eq!(p.next_release(t), t);
-    p.on_sent(t, MSS, srtt, cwnd, false);
+    p.on_sent(t, MSS as u32, MSS, srtt, cwnd, false);
     assert_eq!(p.next_release(t), t + 1, "one tick after the tenth");
     for i in 0..10 {
         assert_eq!(p.next_release(t + 1), t + 1, "packet {i} of the burst");
-        p.on_sent(t + 1, MSS, srtt, cwnd, false);
+        p.on_sent(t + 1, MSS as u32, MSS, srtt, cwnd, false);
     }
     assert_eq!(p.next_release(t + 1), t + 1 + 10 * gap);
 }
@@ -341,7 +341,7 @@ fn ten_packets_faster_than_the_paced_rate_wait_the_whole_ten_packet_times() {
     let gap = MSS * srtt * 4 / (5 * cwnd);
     let mut p = Pacer::new();
     for i in 0..10u64 {
-        p.on_sent(1000 + i * gap / 2, MSS, srtt, cwnd, false);
+        p.on_sent(1000 + i * gap / 2, MSS as u32, MSS, srtt, cwnd, false);
     }
     let last = 1000 + 9 * gap / 2;
     assert_eq!(p.next_release(last), last + 10 * gap);
@@ -361,7 +361,7 @@ fn the_pacing_rate_is_one_and_a_quarter_windows_per_round_trip() {
 fn the_pacer_handles_a_zero_window() {
     let mut p = Pacer::new();
     for _ in 0..10 {
-        p.on_sent(0, MSS, SECOND, 0, true);
+        p.on_sent(0, MSS as u32, MSS, SECOND, 0, true);
     }
     assert_eq!(p.next_release(0), MSS * SECOND * 4 / 5 * 10);
 }
@@ -374,7 +374,7 @@ fn a_sender_its_window_limits_pauses_after_every_tenth_packet_however_slowly_the
     let gap = MSS * srtt * 4 / (5 * cwnd);
     let mut p = Pacer::new();
     for i in 0..10u64 {
-        p.on_sent(i * SECOND, MSS, srtt, cwnd, true);
+        p.on_sent(i * SECOND, MSS as u32, MSS, srtt, cwnd, true);
     }
     assert_eq!(p.next_release(9 * SECOND), 9 * SECOND + 10 * gap);
 }
