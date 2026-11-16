@@ -10,8 +10,9 @@
 //!
 //! Invariants: every method forwards to the endpoint method of the same name and adds nothing.
 
-use std::net::SocketAddr;
-use std::ops::Range;
+use alloc::boxed::Box;
+use core::net::SocketAddr;
+use core::ops::Range;
 
 use vinc_connect::client::Port;
 use vinc_core::{
@@ -25,7 +26,7 @@ use vinc_transport::stream::StreamId;
 
 use crate::mem::Ep;
 
-thread_local! {
+std::thread_local! {
     /// The boxes of handshake machines the endpoints of this thread share: an endpoint holds one only while a
     /// handshake of its runs.
     static MACHINES: vinc_transport::conn::Machines = vinc_transport::conn::Machines::new();

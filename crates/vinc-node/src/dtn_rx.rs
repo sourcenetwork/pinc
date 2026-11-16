@@ -360,6 +360,7 @@ where
                 }),
             );
             d.heads.entry(id).or_insert_with(|| signed.clone());
+            d.contacts_due = true;
             Some(due)
         };
         let Some(key) = self.apps.dtn().signer() else {

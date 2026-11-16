@@ -4,6 +4,8 @@
 //! a store that keeps extra material in the header (the TPM store keeps the wrapped key there) binds it to the
 //! ciphertext. The nonce is random per seal, which is safe for far fewer than 2^32 seals under one key.
 
+use alloc::vec::Vec;
+
 use vinc_crypto::{Aead, Provider, Secret, Software};
 use zeroize::Zeroizing;
 

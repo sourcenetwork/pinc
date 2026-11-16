@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
+use std::vec;
+use std::vec::Vec;
 
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey};
 use tpm2_protocol::TpmUnmarshal;

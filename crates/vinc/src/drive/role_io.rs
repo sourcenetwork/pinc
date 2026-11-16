@@ -15,11 +15,12 @@
 //! gets the relay clock and the endpoint the endpoint's, one fixed offset apart; nothing here runs until the role's
 //! records are restored.
 
-use std::cell::RefMut;
-use std::future::{pending, poll_fn};
-use std::net::SocketAddr;
-use std::pin::pin;
-use std::task::Poll;
+use alloc::vec::Vec;
+use core::cell::RefMut;
+use core::future::{pending, poll_fn};
+use core::net::SocketAddr;
+use core::pin::pin;
+use core::task::Poll;
 
 use super::Shared;
 use crate::engine::Core;

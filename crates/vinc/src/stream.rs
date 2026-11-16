@@ -16,7 +16,9 @@
 //! Dropping a [`SendStream`] without finishing it finishes it after the bytes already written (a clean end). Dropping a
 //! [`RecvStream`] discards what the peer still sends.
 
-use std::rc::Rc;
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::conn::ConnInner;
 use crate::engine::Try;

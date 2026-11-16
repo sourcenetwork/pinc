@@ -10,6 +10,9 @@
 //! relieved of custody (if the receiver ranks above it) and stops retransmitting. Retransmission timers count only the
 //! time a link is up, and a bundle ends at its expiry by the wall clock.
 //!
+//! A node looks at its contacts whenever it starts holding a bundle, whether it made the bundle or took custody of it,
+//! so a carrier dials the destination of a bundle it took custody of without waiting for a membership event.
+//!
 //! Receiving charges the ledger the full size of the bundle before a byte arrives, so a node never holds more than
 //! the host's budget, partial bundles included. A partial bundle outlives a broken stream: the next offer resumes it.
 //!

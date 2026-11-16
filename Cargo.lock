@@ -1446,7 +1446,9 @@ dependencies = [
 name = "vinc"
 version = "0.1.0"
 dependencies = [
+ "hashbrown",
  "nuclei",
+ "once_cell",
  "rapidhash",
  "vinc-broadcast",
  "vinc-connect",
@@ -1457,6 +1459,7 @@ dependencies = [
  "vinc-portmap",
  "vinc-security",
  "vinc-transport",
+ "zeroize",
 ]
 
 [[package]]

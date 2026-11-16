@@ -1,14 +1,17 @@
 //! [`SoftwareStore`]: keys held in process memory.
 //!
 //! Invariants: every private key and the sealing key are zeroized when the store is dropped or the key is removed;
-//! randomness comes from the operating system; the sealing key exists only in memory, so data sealed by one store
-//! value cannot be unsealed by another.
+//! randomness comes from the operating system (`new`, with `std`) or from a generator the host seeds (`from_entropy`);
+//! the sealing key exists only in memory, so data sealed by one store value cannot be unsealed by another.
 
-use std::collections::HashMap;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use vinc_crypto::provider::KEM_ENCAPS_KEY_LEN;
 use vinc_crypto::software::KemDecapsKey;
-use vinc_crypto::{IdentityAlg, Keypair, Provider, Secret, Software, identity};
+use vinc_crypto::{Drbg, IdentityAlg, Keypair, Provider, Secret, Software, identity};
 use zeroize::Zeroizing;
 
 use crate::{KeyHandle, KeyStore, KeyStoreError, Result, Signature, sealed};
@@ -26,8 +29,27 @@ enum Entry {
 /// Every algorithm of [`IdentityAlg`] is supported. Keys the TPM cannot hold (Ed25519, ML-DSA-65, hybrid and ML-KEM)
 /// belong here even when the node's P-256 identity lives in a TPM.
 pub struct SoftwareStore {
-    keys: HashMap<u64, Entry>,
-    seal_key: Secret<{ sealed::KEY_LEN }>,
+    keys: BTreeMap<u64, Entry>,
+    /// `None` only if the generator could not give the sealing key, which a 32-byte draw never does.
+    seal_key: Option<Secret<{ sealed::KEY_LEN }>>,
+    source: Source,
+}
+
+/// Where a store's random bytes come from.
+enum Source {
+    #[cfg(feature = "std")]
+    Os,
+    Drbg(Drbg),
+}
+
+impl Source {
+    fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+        match self {
+            #[cfg(feature = "std")]
+            Self::Os => os_random(out),
+            Self::Drbg(drbg) => Ok(drbg.fill(out)?),
+        }
+    }
 }
 
 impl core::fmt::Debug for SoftwareStore {
@@ -37,17 +59,44 @@ impl core::fmt::Debug for SoftwareStore {
 }
 
 impl SoftwareStore {
-    /// An empty store with a fresh sealing key.
+    /// An empty store with a fresh sealing key, drawing every random byte from the operating system.
     ///
     /// # Errors
     /// [`KeyStoreError::Entropy`] if the operating system cannot provide random bytes.
+    #[cfg(feature = "std")]
     pub fn new() -> Result<Self> {
         let mut key = Zeroizing::new([0u8; sealed::KEY_LEN]);
-        fill_os(key.as_mut_slice())?;
+        os_random(key.as_mut_slice())?;
         Ok(Self {
-            keys: HashMap::new(),
-            seal_key: Secret::new(*key),
+            keys: BTreeMap::new(),
+            seal_key: Some(Secret::new(*key)),
+            source: Source::Os,
         })
+    }
+
+    /// An empty store whose random bytes and sealing key come from a generator seeded with `entropy`.
+    ///
+    /// The host must give fresh entropy at every start: the same entropy gives the same keys, nonces and sealing key.
+    /// Use [`SoftwareStore::reseed`] to mix in more entropy later.
+    pub fn from_entropy(entropy: [u8; 32]) -> Self {
+        let mut drbg = Drbg::new(&entropy);
+        let mut key = Zeroizing::new([0u8; sealed::KEY_LEN]);
+        let seal_key = drbg.fill(key.as_mut_slice()).is_ok().then(|| Secret::new(*key));
+        Self {
+            keys: BTreeMap::new(),
+            seal_key,
+            source: Source::Drbg(drbg),
+        }
+    }
+
+    /// Mix `entropy` into the generator of a store made by [`SoftwareStore::from_entropy`]. A store that draws from
+    /// the operating system ignores it.
+    pub fn reseed(&mut self, entropy: &[u8; 32]) {
+        match &mut self.source {
+            Source::Drbg(drbg) => drbg.reseed(entropy),
+            #[cfg(feature = "std")]
+            Source::Os => {}
+        }
     }
 
     /// Add an existing key pair.
@@ -55,14 +104,14 @@ impl SoftwareStore {
         self.add(Entry::Identity(Box::new(keypair)))
     }
 
-    /// Generate a key pair for `alg` from operating system randomness.
+    /// Generate a key pair for `alg` from the store's random source.
     ///
     /// # Errors
     /// [`KeyStoreError::Entropy`] if randomness is unavailable; [`KeyStoreError::Crypto`] if no valid seed was drawn.
     pub fn generate(&mut self, alg: IdentityAlg) -> Result<KeyHandle> {
         let mut seed = Zeroizing::new(vec![0u8; alg.seed_len()]);
         for _ in 0..SEED_RETRIES {
-            fill_os(&mut seed)?;
+            self.source.fill(&mut seed)?;
             match Keypair::from_seed(alg, &seed) {
                 Ok(kp) => return Ok(self.insert(kp)),
                 Err(vinc_crypto::CryptoError::InvalidSecretKey) => {}
@@ -84,8 +133,8 @@ impl SoftwareStore {
     pub fn generate_kem(&mut self) -> Result<(KeyHandle, [u8; KEM_ENCAPS_KEY_LEN])> {
         let mut d = Zeroizing::new([0u8; 32]);
         let mut z = Zeroizing::new([0u8; 32]);
-        fill_os(d.as_mut_slice())?;
-        fill_os(z.as_mut_slice())?;
+        self.source.fill(d.as_mut_slice())?;
+        self.source.fill(z.as_mut_slice())?;
         let (dk, ek) = Software.kem_keygen(&d, &z);
         Ok((self.insert_kem(dk), Software.kem_encaps_key_bytes(&ek)))
     }
@@ -111,7 +160,11 @@ impl SoftwareStore {
 }
 
 /// Fill `out` from the operating system.
-pub(crate) fn fill_os(out: &mut [u8]) -> Result<()> {
+///
+/// # Errors
+/// [`KeyStoreError::Entropy`] if the operating system cannot provide random bytes.
+#[cfg(feature = "std")]
+pub fn os_random(out: &mut [u8]) -> Result<()> {
     getrandom::fill(out).map_err(|_| KeyStoreError::Entropy)
 }
 
@@ -145,18 +198,19 @@ impl KeyStore for SoftwareStore {
     }
 
     fn random(&mut self, out: &mut [u8]) -> Result<()> {
-        fill_os(out)
+        self.source.fill(out)
     }
 
     fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; 12];
-        fill_os(&mut nonce)?;
-        sealed::encrypt(&self.seal_key, &[VERSION], nonce, plaintext)
+        self.source.fill(&mut nonce)?;
+        let key = self.seal_key.as_ref().ok_or(KeyStoreError::Entropy)?;
+        sealed::encrypt(key, &[VERSION], nonce, plaintext)
     }
 
     fn unseal(&mut self, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         match sealed.split_first() {
-            Some((&VERSION, _)) => sealed::decrypt(&self.seal_key, sealed, 1),
+            Some((&VERSION, _)) => sealed::decrypt(self.seal_key.as_ref().ok_or(KeyStoreError::Entropy)?, sealed, 1),
             _ => Err(KeyStoreError::InvalidSealed),
         }
     }

@@ -12,12 +12,16 @@
 //! connection of it or to a stream of it lives; dropping the last handle drops its state without sending anything, so
 //! close what should be told first ([`Endpoint::close`], [`Connection::close`]).
 
-use std::future::{Future, poll_fn};
-use std::net::{Ipv4Addr, SocketAddr};
-use std::pin::pin;
-use std::rc::Rc;
-use std::task::Poll;
-use std::time::{Duration, Instant};
+use alloc::rc::Rc;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::{Future, poll_fn};
+use core::net::{Ipv4Addr, SocketAddr};
+use core::pin::pin;
+use core::task::Poll;
+use core::time::Duration;
+use std::time::Instant;
 
 use vinc_connect::record::{self, MAX_ADDRS, MAX_RECORD_LEN, Reach, RecordFields};
 use vinc_crypto::NodeId;
@@ -34,6 +38,7 @@ use crate::engine::{Core, CoreConfig, Try};
 use crate::error::{Error, ErrorKind, Result};
 use crate::host::{BatchHost, Host, Hosted, Io, IoHost};
 use crate::keys::Identity;
+use crate::maps::Keys;
 use crate::mem::Limits;
 use crate::node::RELAYS;
 use crate::protocol::{Protocol, Registered};
@@ -41,25 +46,13 @@ use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
 use crate::role::{Role, RoleSpec};
 use crate::start::{PortMapping, build, interfaces};
 
+mod discovery;
+#[cfg(test)]
+mod map_keys_tests;
 mod portmap;
 mod role;
 
-/// Finds addresses for a node the caller gave none for. It may do I/O; it runs before the dial starts, so dropping the
-/// dial while it runs leaves nothing behind.
-pub trait Discovery {
-    /// The addresses `node` may be reached at; empty if unknown.
-    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>>;
-}
-
-/// No discovery: a dial without addresses uses the address book only.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoDiscovery;
-
-impl Discovery for NoDiscovery {
-    fn lookup(&self, _node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> {
-        std::future::ready(Vec::new())
-    }
-}
+pub use discovery::{Discovery, NoDiscovery};
 
 /// The entry point: `Vinc::builder()`.
 #[derive(Debug, Clone, Copy)]
@@ -434,11 +427,15 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
         if relays.len() > RELAYS {
             return Err(Error::config("at most four relays"));
         }
-        let identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
+        let mut identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
+        let map_keys = Keys::draw(|out| identity.random(out))?;
+        let (seed, secrets) = map_keys.parts();
+        discovery.seed_maps(seed, secrets);
         let public: Rc<[u8]> = identity.public_key().into();
         let node = identity.node_id();
         let cfg = CoreConfig {
             identity,
+            map_keys,
             alpns,
             limits,
             admit: admission,
@@ -567,7 +564,7 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
             a.set_ip(if a.is_ipv4() {
                 Ipv4Addr::LOCALHOST.into()
             } else {
-                std::net::Ipv6Addr::LOCALHOST.into()
+                core::net::Ipv6Addr::LOCALHOST.into()
             });
         }
         NodeAddr {

@@ -16,10 +16,13 @@
 //! Invariants: at most one exchange runs at a time; an answer is read up to [`vinc_portmap::MAX_RESPONSE`] bytes and no
 //! further; a stream that fails ends the exchange with no answer.
 
-use std::future::Future;
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::Future;
+use core::task::Context;
 use std::io;
-use std::rc::Rc;
-use std::task::Context;
 
 use super::carrier_io::Op;
 use crate::carrier::CarrierKind;
@@ -221,12 +224,12 @@ impl<H: Hosted> Shared<H> {
                         ex.busy = false;
                         moved = true;
                         match r {
-                            Ok(0) => finished = Some(Some(std::mem::take(&mut ex.answer))),
+                            Ok(0) => finished = Some(Some(core::mem::take(&mut ex.answer))),
                             Ok(n) => {
                                 let room = vinc_portmap::MAX_RESPONSE.saturating_sub(ex.answer.len());
                                 ex.answer.extend_from_slice(buf.get(..n.min(room)).unwrap_or_default());
                                 if ex.answer.len() >= vinc_portmap::MAX_RESPONSE {
-                                    finished = Some(Some(std::mem::take(&mut ex.answer)));
+                                    finished = Some(Some(core::mem::take(&mut ex.answer)));
                                 }
                             }
                             Err(_) => finished = Some(None),

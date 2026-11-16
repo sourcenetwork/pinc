@@ -49,9 +49,12 @@
 //!     needs_send(&conn);
 //! }
 //! ```
+#![no_std]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
+// The host clock and I/O types are still the standard library's.
+extern crate std;
 
 /// The README's examples, compiled and run as doctests so they cannot drift.
 #[cfg(doctest)]
@@ -73,6 +76,7 @@ mod error;
 mod event;
 mod host;
 mod keys;
+mod maps;
 mod mem;
 mod node;
 mod protocol;

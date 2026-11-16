@@ -4,10 +4,12 @@
 //! share one [`Gate`]; the bar is borrowed only for a lookup or an update and never while the hook runs, so asking it
 //! never depends on what the endpoint is doing.
 
-use std::rc::Rc;
+use alloc::rc::Rc;
 
 use vinc_crypto::NodeId;
 use vinc_security::Alpn;
+
+use crate::maps::{self, Keys, Map, Set};
 
 /// Which way a connection was made, as the access hook is told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,14 +66,14 @@ pub const REVOKED_MAX: usize = 4096;
 /// for a lookup or an update and never while the hook runs, so asking it never depends on what the endpoint is doing.
 pub(crate) struct Gate<A> {
     hook: A,
-    revoked: core::cell::RefCell<rapidhash::RapidHashSet<NodeId>>,
+    revoked: core::cell::RefCell<Set<NodeId>>,
 }
 
 impl<A: Admit> Gate<A> {
-    pub(crate) fn new(hook: A) -> Self {
+    pub(crate) fn new(hook: A, keys: Keys) -> Self {
         Self {
             hook,
-            revoked: core::cell::RefCell::new(rapidhash::RapidHashSet::default()),
+            revoked: core::cell::RefCell::new(maps::set(keys)),
         }
     }
 
@@ -116,10 +118,13 @@ const KNOWN_MAX: usize = 1024;
 /// session of exactly that protocol and direction is taken up without asking the hook again, so a hook is asked once
 /// per question while the endpoint's own answer stands, not once per session. The table is bounded, and losing an
 /// entry is always safe: it costs one more call of the hook.
-#[derive(Default)]
-pub(crate) struct Known(rapidhash::RapidHashMap<[u8; 32], (Alpn, Direction, u64)>);
+pub(crate) struct Known(Map<[u8; 32], (Alpn, Direction, u64)>);
 
 impl Known {
+    pub(crate) fn new(keys: Keys) -> Self {
+        Self(maps::map(keys))
+    }
+
     /// Whether the answer remembered for `node` is an allow for this `alpn` and `dir` that has not run out at `now`.
     pub(crate) fn covers(&self, now: u64, node: &NodeId, alpn: Alpn, dir: Direction) -> bool {
         self.0

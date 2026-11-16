@@ -12,8 +12,10 @@
 //!
 //! Invariants: a tag is never empty and never longer than 64 bytes; reading a tag consumes exactly its bytes.
 
-use std::future::Future;
-use std::rc::{Rc, Weak};
+use alloc::rc::{Rc, Weak};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::future::Future;
 
 use crate::conn::Connection;
 use crate::drive::Shared;

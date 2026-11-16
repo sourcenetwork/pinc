@@ -9,7 +9,9 @@
 //! Invariants: no private key leaves a store; a rotated-out prekey is removed, which zeroizes it; errors name the
 //! failed operation and never a key.
 
-use std::rc::Rc;
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
 
 use vinc_crypto::{IdentityAlg, Keypair, NodeId};
 use vinc_keystore::{KeyHandle, KeyStore, SoftwareStore};

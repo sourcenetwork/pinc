@@ -8,9 +8,11 @@
 //! core while it waits; a dial whose future is dropped before it finishes closes the session it started, so nothing is left open
 //! that no one holds.
 
-use std::net::SocketAddr;
-use std::rc::Rc;
-use std::time::Duration;
+use alloc::rc::Rc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::net::SocketAddr;
+use core::time::Duration;
 
 use vinc_core::SessionId;
 use vinc_crypto::NodeId;

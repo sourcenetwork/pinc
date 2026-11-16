@@ -9,6 +9,7 @@ use crate::endpoint::{Discovery, Endpoint};
 use crate::engine::{Restored, Try};
 use crate::error::Result;
 use crate::host::Hosted;
+use alloc::vec::Vec;
 
 impl<H: Hosted, D: Discovery> Endpoint<H, D> {
     /// The state to keep across a restart: resumption tickets, per-peer round trips and prekey caches, and the address

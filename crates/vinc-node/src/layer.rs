@@ -151,8 +151,9 @@ where
         }
     }
 
-    /// Dial `peer` for `layer`, unless a session or a dial exists. The delay-tolerant layer also waits out a backoff;
-    /// values and reconcile redial by their own rules. A dial the node refuses is reported to the layer.
+    /// Dial `peer` for `layer`, unless a session or a dial exists. The delay-tolerant layer also waits out a backoff,
+    /// which a membership event about the peer clears; values and reconcile redial by their own rules. A dial the node
+    /// refuses is reported to the layer.
     pub(crate) fn dial_layer(&mut self, now: Nanos, layer: Layer, peer: &NodeId) {
         let key = (layer, *peer);
         let io = &self.io;

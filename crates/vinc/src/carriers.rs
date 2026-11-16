@@ -13,10 +13,14 @@
 //!
 //! Invariants: [`Relay`] is plain data; the closures are called only from the future that drives the endpoint.
 
-use std::future::{Future, ready};
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use core::future::{Future, ready};
+use core::marker::PhantomData;
+use core::net::SocketAddr;
 use std::io;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
 
 use vinc_connect::client::RelayCfg;
 use vinc_crypto::NodeId;

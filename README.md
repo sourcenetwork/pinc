@@ -107,8 +107,8 @@ keepalives) awaits `Endpoint::run()`.
 | Crate | What it does | `no_std` | Status |
 |---|---|---|---|
 | `vinc` | the facade: builder, connections, streams, datagrams, topics, lookup by id, the hub and relay roles, over the host's three closures | std ([#99](https://github.com/sourcenetwork/vinc/issues/99)) | built |
-| `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built, proven |
-| `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built, proven |
+| `vinc-wire` | varints and a strict canonical DAG-CBOR codec, parsed in place | yes | built; varints proven, the codec tested ([#606](https://github.com/sourcenetwork/vinc/issues/606)) |
+| `vinc-dag` | content-addressed blocks and CIDs, value roots, range proofs | yes, heap-free | built; roots and range proofs proven, CIDs, blocks and CAR tested ([#606](https://github.com/sourcenetwork/vinc/issues/606)) |
 | `vinc-crypto` | RustCrypto primitives behind one `Provider`: AEADs, X25519, ML-KEM-768, four identity algorithms, BLAKE3 | yes | built |
 | `vinc-keystore` | long-term keys behind a `KeyStore` trait; a software store and a pure-Rust TPM 2.0 store (`hwenc`) | no | built |
 | `vinc-security` | hybrid post-quantum handshake, resumption with 0-RTT, key schedule, packet protection, key roll | yes | built, proven |

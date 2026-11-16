@@ -3,9 +3,10 @@
 //! Each returns [`Try::Done`] with its result or [`Try::Wait`] naming what it waits for; the facade future repeats it
 //! when that changes, so every operation here is safe to repeat.
 
-use std::collections::VecDeque;
-use std::net::SocketAddr;
-use std::rc::Rc;
+use alloc::collections::VecDeque;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use core::net::SocketAddr;
 
 use vinc_core::{Answer, Command, CommandError, IfaceEvent, NodeStats, Query, Role, SessionId, SessionStats, Value};
 use vinc_crypto::NodeId;
@@ -616,7 +617,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
 
     /// The addresses this node can be reached at besides the one it is bound to: those the relays reported.
     pub(crate) fn candidates(&self) -> Vec<SocketAddr> {
-        let any = SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), 0);
+        let any = SocketAddr::new(core::net::Ipv4Addr::UNSPECIFIED.into(), 0);
         let mut c = [any; vinc_connect::record::MAX_ADDRS];
         let n = self.node.connectivity().candidates(&mut c);
         c.get(..n).unwrap_or_default().to_vec()

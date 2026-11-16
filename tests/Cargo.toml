@@ -21,7 +21,7 @@ vinc-wire = { workspace = true }
 vinc-dag = { workspace = true, features = ["alloc"] }
 vinc-crypto = { workspace = true, features = ["trace"] }
 vinc-security = { workspace = true }
-vinc-keystore = { workspace = true }
+vinc-keystore = { workspace = true, features = ["std"] }
 vinc-transport = { workspace = true, features = ["alloc", "trace", "inject"] }
 vinc-membership = { workspace = true, features = ["alloc"] }
 vinc-sim = { workspace = true, features = ["reference", "suite"] }
@@ -1399,3 +1399,7 @@ path = "node_timer_bound.rs"
 [[test]]
 name = "vinc_timer_bound"
 path = "vinc_timer_bound.rs"
+
+[[test]]
+name = "layers_dtn_wake"
+path = "layers_dtn_wake.rs"
