@@ -87,8 +87,8 @@ pub use api::ExtensionError;
 #[cfg(feature = "trace")]
 pub use cid::trace::{CidTable, CidView};
 pub use config::{
-    ClientParams, Config, DEFAULT_SEND_WINDOW, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU, PathId, PathInfo,
-    ServerParams, Stats,
+    ClientParams, Config, DEFAULT_SEND_WINDOW, HEADERS_V4, HEADERS_V6, IDLE_TIMEOUT, JUMBO_MTU, MIN_MTU, PROBE_MTU,
+    PathId, PathInfo, ServerParams, Stats, interface_payload,
 };
 #[cfg(feature = "trace")]
 pub use drive::EarlyView;

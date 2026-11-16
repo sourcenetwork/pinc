@@ -1,5 +1,6 @@
-//! Path datagram size: one probe of 1452 bytes after the handshake, and on a path under 2 ms one probe at the
-//! interface size up to 8952 when that is above 2904, each a PING plus PADDING packet of exactly the probed size.
+//! Path datagram size: one probe of 1452 bytes after the handshake (only when the interface carries that much on the
+//! path's address family), and on a path under 2 ms one probe at the interface's payload (its MTU less the IP and UDP
+//! headers) up to 8952 when that is above 2904, each a PING plus PADDING packet of exactly the probed size.
 //!
 //! Only direct (UDP) paths are probed, never on a thin node, and not for 10 s after a wake or a link return. A path
 //! is probed once: a lost probe is not retried, it waits for the next path event (a re-join that worked, a link
@@ -18,7 +19,7 @@
 use vinc_crypto::Provider;
 
 use super::Connection;
-use super::config::{JUMBO_FLOOR, JUMBO_MTU, JUMBO_RTT, MIN_MTU, PROBE_MTU};
+use super::config::{JUMBO_FLOOR, JUMBO_MTU, JUMBO_RTT, MIN_MTU, PROBE_MTU, interface_payload};
 use super::path::Mtu;
 use crate::recovery::{PathKind, SECOND};
 use crate::stream::StreamSource;
@@ -40,8 +41,10 @@ pub(crate) enum Jumbo {
 pub(crate) struct ProbeCtx {
     /// The configuration allows probing, the node is not thin, the path is direct, and the quiet period is over.
     pub(crate) allowed: bool,
-    /// The interface datagram size of the path.
+    /// The MTU of the path's interface, IP and UDP headers included.
     pub(crate) interface_mtu: u16,
+    /// The path is IPv6.
+    pub(crate) v6: bool,
     /// The path's minimum round trip is under [`JUMBO_RTT`].
     pub(crate) low_latency: bool,
 }
@@ -68,10 +71,11 @@ impl Mtu {
         if !ctx.allowed || !self.started || self.inflight.is_some() || self.retry_at > now {
             return None;
         }
+        let room = interface_payload(ctx.interface_mtu, ctx.v6);
         if !self.probed {
-            return (ctx.interface_mtu >= PROBE_MTU && self.current < PROBE_MTU).then_some(PROBE_MTU);
+            return (room >= PROBE_MTU && self.current < PROBE_MTU).then_some(PROBE_MTU);
         }
-        let jumbo = ctx.interface_mtu.min(JUMBO_MTU);
+        let jumbo = room.min(JUMBO_MTU);
         (self.jumbo == Jumbo::Untried && self.current == PROBE_MTU && ctx.low_latency && jumbo > JUMBO_FLOOR)
             .then_some(jumbo)
     }
@@ -153,6 +157,7 @@ conn_impl! {
         let ctx = ProbeCtx {
             allowed: self.cfg.probe_mtu && !self.cfg.thin && p.info.kind == PathKind::Direct && now >= self.life.qr_until,
             interface_mtu: p.info.interface_mtu,
+            v6: p.info.v6,
             low_latency: self.rec.rtt().min_rtt().is_some_and(|r| r < JUMBO_RTT),
         };
         p.mtu.target(ctx, now)
@@ -297,11 +302,12 @@ pub(super) mod trace {
         }
 
         /// The next size to probe, if one is due now.
-        pub fn target(&self, allowed: bool, interface_mtu: u16, low_latency: bool, now: u64) -> Option<u16> {
+        pub fn target(&self, allowed: bool, interface_mtu: u16, v6: bool, low_latency: bool, now: u64) -> Option<u16> {
             self.0.target(
                 ProbeCtx {
                     allowed,
                     interface_mtu,
+                    v6,
                     low_latency,
                 },
                 now,

@@ -52,6 +52,8 @@ struct Link {
     /// Bits per second from the listener to the dialer when it differs.
     reverse_bps: Option<u64>,
     mtu: u16,
+    /// The endpoints send a first flight whole when it fits, as the facade builds them.
+    whole_flights: bool,
     /// Bytes the dialer sends in the transfer.
     bytes: usize,
 }
@@ -64,6 +66,7 @@ const GEO: Link = Link {
     rate_bps: 20_000_000,
     reverse_bps: Some(2_000_000),
     mtu: 1500,
+    whole_flights: false,
     bytes: 2 << 20,
 };
 const LEO: Link = Link {
@@ -74,6 +77,7 @@ const LEO: Link = Link {
     rate_bps: 50_000_000,
     reverse_bps: None,
     mtu: 1500,
+    whole_flights: false,
     bytes: 4 << 20,
 };
 const LTE_RURAL: Link = Link {
@@ -84,6 +88,7 @@ const LTE_RURAL: Link = Link {
     rate_bps: 980_000,
     reverse_bps: None,
     mtu: 1500,
+    whole_flights: false,
     bytes: 512 << 10,
 };
 const LOW_BANDWIDTH: Link = Link {
@@ -94,6 +99,7 @@ const LOW_BANDWIDTH: Link = Link {
     rate_bps: 50_000,
     reverse_bps: None,
     mtu: 1500,
+    whole_flights: false,
     bytes: 32 << 10,
 };
 const BLE: Link = Link {
@@ -104,6 +110,7 @@ const BLE: Link = Link {
     rate_bps: 700_000,
     reverse_bps: None,
     mtu: 1280,
+    whole_flights: true,
     bytes: 512 << 10,
 };
 const SERIAL: Link = Link {
@@ -114,6 +121,7 @@ const SERIAL: Link = Link {
     rate_bps: 92_200,
     reverse_bps: None,
     mtu: 1500,
+    whole_flights: false,
     bytes: 64 << 10,
 };
 
@@ -147,8 +155,14 @@ impl Link {
         let jitter = self.jitter_us * 1000;
         let mut net = CoreNet::new(self.delay_us * 1000 - jitter);
         net.jitter = 2 * jitter;
-        let a = net.add_with_mtu(1, self.mtu);
-        let b = net.add_with_mtu(2, self.mtu);
+        let (a, b) = if self.whole_flights {
+            (
+                net.add_whole_flights_at(1, addr(1), self.mtu),
+                net.add_whole_flights_at(2, addr(2), self.mtu),
+            )
+        } else {
+            (net.add_with_mtu(1, self.mtu), net.add_with_mtu(2, self.mtu))
+        };
         let mut rate = RateLimit::new(self.rate_bps, self.queue_packets());
         if let Some(bps) = self.reverse_bps {
             rate = rate.with_rate_from(net.nodes[b].addr, bps);
@@ -414,7 +428,10 @@ fn a_full_handshake_on_an_interface_under_1500_bytes_sends_nothing_the_link_cann
                     took as f64 / 1e6
                 );
                 if largest > carries || took > bound {
-                    failed.push(format!("{mtu} v6 {v6}: {largest} of {carries} bytes, {} ms", took / MS_NS));
+                    failed.push(format!(
+                        "{mtu} v6 {v6}: {largest} of {carries} bytes, {} ms",
+                        took / MS_NS
+                    ));
                 }
             }
         }

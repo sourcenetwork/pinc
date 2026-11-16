@@ -306,9 +306,10 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         }
     }
 
-    /// The largest datagram the host's socket can send: the MTU of its interface (1500 when not set). On a path with a
-    /// round trip under 2 ms the endpoint probes datagrams of up to 8952 bytes when this allows it, so say 9000 on a
-    /// jumbo-frame network and 65535 on loopback, and give the receive closure a buffer that large.
+    /// The MTU of the host's interface, IP and UDP headers included (1500 when not set); the endpoint takes the headers
+    /// off (28 bytes on IPv4, 48 on IPv6) to size its datagrams. On a path with a round trip under 2 ms it probes
+    /// datagrams of up to 8952 bytes when this allows it, so say 9000 on a jumbo-frame network and 65535 on loopback,
+    /// and give the receive closure a buffer that large.
     #[must_use]
     pub const fn mtu(mut self, mtu: u16) -> Self {
         self.mtu = mtu;

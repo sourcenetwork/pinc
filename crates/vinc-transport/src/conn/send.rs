@@ -23,7 +23,7 @@ use vinc_security::Env;
 use vinc_security::amp::{FACTOR, OVERHEAD};
 use vinc_wire::Writer;
 
-use super::config::{MIN_MTU, PROBE_MTU, PathId};
+use super::config::{MIN_MTU, PROBE_MTU, PathId, interface_payload};
 use super::ctl::{EXT_BODY_MAX, K_EXT, K_READY, K_REKEY, K_STREAM_CTL, K_TICKETS};
 use super::event::Ev;
 use super::{Connection, Phase};
@@ -225,15 +225,19 @@ conn_impl! {
         let now = env.now;
         let probe = self.probe_size(ti, now, out.len());
         let path_mtu = self.paths.get(ti).map_or(MIN_MTU, |p| p.mtu.current);
-        // A first flight that fits 1452 bytes with its framing (`FLIGHT_OVERHEAD`) leaves whole, above the path's
-        // datagram size: a path that drops it costs one handshake resend, and the resend is cut to the path's size. A
-        // relay path carries up to 1452 inner bytes (the carrier's `MAX_PACKET_LEN`). Only the handshake rides above
-        // the path's size; see `app_end` below.
+        // A first flight that fits 1452 bytes with its framing (`FLIGHT_OVERHEAD`) and the interface's payload on this
+        // path leaves whole, above the path's datagram size: a path that drops it costs one handshake resend, and the
+        // resend is cut to the path's size. A longer flight is cut at the path's size from the start. A relay path
+        // carries up to 1452 inner bytes (the carrier's `MAX_PACKET_LEN`). Only the handshake rides above the path's
+        // size; see `app_end` below.
+        let room = self.paths.get(ti).map_or(MIN_MTU, |p| interface_payload(p.info.interface_mtu, p.info.v6));
         let whole = self.cfg.flight_split
-            && self.hs.whole_len().is_some_and(|n| n + FLIGHT_OVERHEAD <= usize::from(PROBE_MTU));
+            && self
+                .hs
+                .whole_len()
+                .is_some_and(|n| n + FLIGHT_OVERHEAD <= usize::from(PROBE_MTU.min(room)));
         let base = if whole {
-            let iface = self.paths.get(ti).map_or(MIN_MTU, |p| p.info.interface_mtu);
-            usize::from(path_mtu.max(PROBE_MTU.min(iface)))
+            usize::from(path_mtu.max(PROBE_MTU.min(room)))
         } else {
             usize::from(path_mtu)
         };

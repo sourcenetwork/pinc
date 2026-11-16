@@ -25,7 +25,7 @@
 use std::fmt::Write as _;
 
 use vinc_tests::SplitMix64;
-use vinc_transport::conn::{MIN_MTU, MtuProbe, MtuView, PROBE_MTU};
+use vinc_transport::conn::{HEADERS_V4, MIN_MTU, MtuProbe, MtuView, PROBE_MTU};
 
 const TOP: u64 = (1 << 31) - 1;
 
@@ -84,7 +84,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
                 let allowed = !rng.next_u64().is_multiple_of(8);
                 let im = sizes[(rng.next_u64() % 5) as usize];
                 let ll = rng.next_u64().is_multiple_of(2);
-                let r = p.target(allowed, im, ll, now);
+                let r = p.target(allowed, im + HEADERS_V4, false, ll, now);
                 if let Some(s) = r {
                     assert!(allowed && before.started && before.inflight.is_none() && before.retry_at <= now);
                     assert!(s > before.current, "a probe at or below the datagram size is due");
@@ -102,7 +102,7 @@ fn run(rng: &mut SplitMix64, out: &mut String, id: u32, steps: u32, wide: bool) 
                 // send what is due, as the connection does
                 let ll = rng.next_u64().is_multiple_of(2);
                 let im = sizes[(rng.next_u64() % 5) as usize];
-                if let Some(s) = p.target(true, im, ll, now) {
+                if let Some(s) = p.target(true, im + HEADERS_V4, false, ll, now) {
                     p.probe_sent(s);
                     log(&p, out, &format!(r#""op":"sent","size":{s}"#));
                 }

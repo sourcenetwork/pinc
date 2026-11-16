@@ -9,8 +9,12 @@ use crate::stream;
 
 /// The smallest datagram every path must carry, and the size a path starts at.
 pub const MIN_MTU: u16 = 1200;
-/// The first size probed after the handshake.
+/// The first size probed after the handshake: a 1500-byte interface less the IPv6 and UDP headers.
 pub const PROBE_MTU: u16 = 1452;
+/// The IPv4 and UDP headers an interface's datagram carries beyond its UDP payload.
+pub const HEADERS_V4: u16 = 28;
+/// The IPv6 and UDP headers an interface's datagram carries beyond its UDP payload.
+pub const HEADERS_V6: u16 = 48;
 /// The largest size probed on a low-latency path (UDP, round trip under 2 ms, and only above 2904 bytes).
 pub const JUMBO_MTU: u16 = 8952;
 /// A path whose minimum round trip is under this (2 ms) also probes the jumbo size.
@@ -24,6 +28,15 @@ pub(super) const JUMBO_FLOOR: u16 = 2 * PROBE_MTU;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PathId(pub u64);
 
+/// The largest UDP payload an interface of `interface_mtu` bytes (IP and UDP headers included) carries on a path of
+/// the given address family. Every size sent against the interface is bounded by it. A path still starts at
+/// [`MIN_MTU`] whatever it returns: the callers take the larger of the two, so an interface below the minimum is not
+/// a reason to send less.
+#[must_use]
+pub const fn interface_payload(interface_mtu: u16, v6: bool) -> u16 {
+    interface_mtu.saturating_sub(if v6 { HEADERS_V6 } else { HEADERS_V4 })
+}
+
 /// What the endpoint knows about a path and the connection cannot learn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PathInfo {
@@ -31,7 +44,8 @@ pub struct PathInfo {
     pub kind: PathKind,
     /// Whether the path is IPv6 (it gets a 3 ms bonus when choosing the active path).
     pub v6: bool,
-    /// The largest datagram the local interface sends on this path; bounds the jumbo probe.
+    /// The MTU of the local interface this path leaves by, IP and UDP headers included; the connection takes the
+    /// headers off ([`interface_payload`]) before it bounds a datagram or a probe.
     pub interface_mtu: u16,
 }
 
@@ -87,8 +101,9 @@ pub struct Config {
     /// `min(send_window, max(192 KiB, 1.5 x the congestion window))`. A path whose bandwidth times round trip is larger
     /// than this needs a larger value.
     pub send_window: u64,
-    /// The largest datagram the host's socket sends (the interface MTU); it bounds the datagram size probes on
-    /// paths the connection learns of by receiving on them. 1500 unless the host says otherwise.
+    /// The MTU of the host's interface, IP and UDP headers included (1500 unless the host says otherwise); the
+    /// transport takes the headers off ([`interface_payload`]) to bound the datagram size probes and the whole first
+    /// flight, on paths the connection learns of by receiving on them too.
     pub interface_mtu: u16,
     /// What this endpoint tells the peer about its limits (see [`CreditRecord`]); the window and the stream limit
     /// are clamped to what the stream table can hold, and the table runs with them: the window is the one every stream

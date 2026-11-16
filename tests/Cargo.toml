@@ -152,6 +152,10 @@ name = "transport_pool"
 path = "transport_pool.rs"
 
 [[test]]
+name = "transport_iface_payload"
+path = "transport_iface_payload.rs"
+
+[[test]]
 name = "transport_credit"
 path = "transport_credit.rs"
 
