@@ -644,6 +644,7 @@ par run_tlc mtu Mtu Mtu
 par run_tlc dgram_size DgramSize DgramSize
 par witness_tlc dgram_size_noguard DgramSize DgramSize_noguard AppFits
 par witness_tlc dgram_size_reach DgramSize DgramSize_reach Coalesced
+par witness_tlc dgram_size_noiface DgramSize DgramSize_noiface IfaceOK
 par run_tlc reply_path ReplyPath ReplyPath
 par run_tlc reply_path_one ReplyPath ReplyPath_one
 par witness_tlc reply_path_held ReplyPath ReplyPath_held ReplyTaken
