@@ -744,6 +744,10 @@ name = "broadcast_acp"
 path = "broadcast_acp.rs"
 
 [[test]]
+name = "broadcast_envelope"
+path = "broadcast_envelope.rs"
+
+[[test]]
 name = "broadcast_fallback"
 path = "broadcast_fallback.rs"
 

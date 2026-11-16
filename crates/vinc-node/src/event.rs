@@ -49,6 +49,9 @@ pub enum NodeEvent {
         mid: [u8; 8],
         /// The body.
         body: Vec<u8>,
+        /// The exact wire head: with the topic and the body, the signed envelope of the message. Empty unless the
+        /// broadcast limits keep heads.
+        head: Vec<u8>,
     },
     /// A hub acknowledged a publish.
     PublishAcked {

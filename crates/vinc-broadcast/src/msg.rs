@@ -98,7 +98,8 @@ impl Topics {
                 self.send_pack(h, from, mid);
             }
         } else {
-            self.offer(h, now, topic, mid, head.origin, from, body, head.ts);
+            let head_bytes = rest.get(..head.len()).unwrap_or_default();
+            self.offer(h, now, topic, mid, head.origin, from, head_bytes, body, head.ts);
         }
     }
 
@@ -188,7 +189,7 @@ impl Topics {
         let subscribed = self.topics.get(topic).is_some_and(|st| st.sub);
         if subscribed && *head.origin != self.me && self.may_reach(head.origin, &self.me) {
             let hop = sender.copied().unwrap_or(self.me);
-            self.offer(h, now, topic, head.mid, head.origin, &hop, body, head.ts);
+            self.offer(h, now, topic, head.mid, head.origin, &hop, head_bytes, body, head.ts);
         } else if let Some(st) = self.topics.get_mut(topic) {
             st.seen.insert(key, now, true);
         }
@@ -206,9 +207,11 @@ impl Topics {
         mid: [u8; 8],
         origin: &NodeId,
         hop: &NodeId,
+        head: &[u8],
         body: &[u8],
         ts: Hlc,
     ) {
+        let head = if self.limits.keep_heads { head } else { &[] };
         let key = u64::from_le_bytes(mid);
         if !self.ensure_topic(topic) {
             self.note_reject(mid, Reject::TopicsFull);
@@ -225,7 +228,7 @@ impl Topics {
         let old = self.is_old(origin, ts);
         if self.gather.gathering() && !self.is_hub {
             // Until every hub reported its floor, a message cannot be told from one an earlier life delivered.
-            self.hold_for_floor(mid, origin, hop, ts, topic, body);
+            self.hold_for_floor(mid, origin, hop, ts, topic, head, body);
             return;
         }
         let verdict = self.acp.get(origin).copied().filter(|(_, exp)| *exp >= now);
@@ -252,14 +255,14 @@ impl Topics {
         }
         if let Some((allow, _)) = verdict {
             if allow {
-                self.deliver(h, topic, mid, origin, hop, body);
+                self.deliver(h, topic, mid, origin, hop, head, body);
             }
             return;
         }
         // A copy that arrives after the dedupe set forgot the first, while the answer is still out, waits once.
         if !already {
             let mut data = self.take_buf();
-            if Self::pack(&mut data, topic, body) {
+            if Self::pack(&mut data, topic, head, body) {
                 self.held.push(Held {
                     mid,
                     origin: *origin,
@@ -288,21 +291,32 @@ impl Topics {
 
     /// Offer a message that was held for the floors, unless it arrived by another path meanwhile.
     pub(crate) fn offer_held<H: Host>(&mut self, h: &mut H, now: Nanos, e: Held) {
-        if let Some((topic, body)) = Self::unpack(&e.data)
+        if let Some((topic, head, body)) = Self::unpack(self.limits.keep_heads, &e.data)
             && !self.is_dup(topic, u64::from_le_bytes(e.mid), now)
         {
-            self.offer(h, now, topic, e.mid, &e.origin, &e.hop, body, e.ts);
+            self.offer(h, now, topic, e.mid, &e.origin, &e.hop, head, body, e.ts);
         }
         self.give_buf(e.data);
     }
 
-    fn deliver<H: Host>(&mut self, h: &mut H, topic: &[u8], mid: [u8; 8], origin: &NodeId, hop: &NodeId, body: &[u8]) {
+    #[allow(clippy::too_many_arguments)]
+    fn deliver<H: Host>(
+        &mut self,
+        h: &mut H,
+        topic: &[u8],
+        mid: [u8; 8],
+        origin: &NodeId,
+        hop: &NodeId,
+        head: &[u8],
+        body: &[u8],
+    ) {
         h.event(Event::Message {
             topic,
             origin,
             hop,
             mid,
             body,
+            head,
         });
         self.trace(|| Trace::Delivered {
             topic: topic_tag(topic),
@@ -328,8 +342,8 @@ impl Topics {
                 continue;
             }
             let e = self.held.remove(i);
-            if allow && let Some((topic, body)) = Self::unpack(&e.data) {
-                self.deliver(h, topic, e.mid, &e.origin, &e.hop, body);
+            if allow && let Some((topic, head, body)) = Self::unpack(self.limits.keep_heads, &e.data) {
+                self.deliver(h, topic, e.mid, &e.origin, &e.hop, head, body);
             }
             self.give_buf(e.data);
         }

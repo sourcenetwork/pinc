@@ -68,6 +68,9 @@ pub enum Event<'a> {
         mid: [u8; 8],
         /// The body, already checked against the signature.
         body: &'a [u8],
+        /// The exact wire head, which with the topic and the body is the signed envelope of the message (see
+        /// [`envelope`](crate::envelope)); empty unless [`Limits::keep_heads`](crate::Limits::keep_heads) is set.
+        head: &'a [u8],
     },
     /// A hub acknowledged a publish; it will not be retried.
     PublishAcked {

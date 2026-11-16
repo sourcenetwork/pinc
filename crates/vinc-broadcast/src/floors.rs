@@ -244,6 +244,7 @@ impl Topics {
     }
 
     /// Hold a message until the floors are known, unless it is already held. Returns whether it was taken.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn hold_for_floor(
         &mut self,
         mid: [u8; 8],
@@ -251,13 +252,14 @@ impl Topics {
         hop: &NodeId,
         ts: Hlc,
         topic: &[u8],
+        head: &[u8],
         body: &[u8],
     ) {
         if self.gather.fhold.len() >= FHOLD_MAX || self.gather.fhold.iter().any(|x| x.mid == mid) {
             return;
         }
         let mut data = self.take_buf();
-        if !Self::pack(&mut data, topic, body) {
+        if !Self::pack(&mut data, topic, head, body) {
             self.give_buf(data);
             return;
         }

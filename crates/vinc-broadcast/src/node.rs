@@ -47,6 +47,10 @@ pub struct Limits {
     /// The refused nodes it remembers are bounded by the records the bytes could hold. It must hold at least one
     /// record's fixed share.
     pub reach_bytes: usize,
+    /// Deliver the signed head of every message with it ([`Event::Message`](crate::Event::Message)`::head`), so the
+    /// application can keep a signed envelope. A message held for the replay floors or an access check then holds its
+    /// head too. Off by default: nothing more is held or copied.
+    pub keep_heads: bool,
 }
 
 impl Default for Limits {
@@ -57,6 +61,7 @@ impl Default for Limits {
             max_topics: DEFAULT_MAX_TOPICS,
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
             reach_bytes: DEFAULT_REACH_BYTES,
+            keep_heads: false,
         }
     }
 }
@@ -282,7 +287,7 @@ pub(crate) struct Pending {
     pub(crate) unsent: bool,
 }
 
-/// A message set aside until a decision arrives: `topic_len | topic | body`.
+/// A message set aside until a decision arrives, laid out by [`Topics::pack`].
 #[derive(Debug)]
 pub(crate) struct Held {
     pub(crate) mid: [u8; 8],
@@ -574,22 +579,36 @@ impl Topics {
         self.topic(topic).is_some()
     }
 
-    /// Lay `topic_len | topic | body` into `out`; false for a topic over 255 bytes.
-    pub(crate) fn pack(out: &mut Vec<u8>, topic: &[u8], body: &[u8]) -> bool {
+    /// Lay `topic_len | topic | head | body` into `out`, where `head` is empty unless the node keeps heads; false for a
+    /// topic over 255 bytes.
+    pub(crate) fn pack(out: &mut Vec<u8>, topic: &[u8], head: &[u8], body: &[u8]) -> bool {
         let Ok(tl) = u8::try_from(topic.len()) else {
             return false;
         };
         out.clear();
         out.push(tl);
         out.extend_from_slice(topic);
+        out.extend_from_slice(head);
         out.extend_from_slice(body);
         true
     }
 
-    /// Split what [`Topics::pack`] laid out.
-    pub(crate) fn unpack(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    /// Split what [`Topics::pack`] laid out into the topic, the head and the body. The head is told from the body by
+    /// parsing it, which only a node that keeps heads has to do.
+    pub(crate) fn unpack(keep_heads: bool, data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
         let (&tl, rest) = data.split_first()?;
-        rest.split_at_checked(usize::from(tl))
+        let (topic, rest) = rest.split_at_checked(usize::from(tl))?;
+        if !keep_heads {
+            return Some((topic, &[], rest));
+        }
+        let (head, _, _) = crate::wire::Head::parse_prefix(rest).ok()?;
+        let (head, body) = rest.split_at_checked(head.len())?;
+        Some((topic, head, body))
+    }
+
+    /// The bytes of the messages held for the replay floors or an access check, heads included.
+    pub fn held_bytes(&self) -> usize {
+        self.held.iter().chain(&self.gather.fhold).map(|e| e.data.len()).sum()
     }
 
     /// A cleared buffer from the pool, or a new one.

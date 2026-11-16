@@ -43,6 +43,7 @@ pub enum Ev {
         origin: NodeId,
         mid: [u8; 8],
         body: Vec<u8>,
+        head: Vec<u8>,
     },
     Acked([u8; 8]),
     GaveUp([u8; 8]),
@@ -161,12 +162,14 @@ impl Host for NodeHost {
                 origin,
                 mid,
                 body,
+                head,
                 ..
             } => Ev::Msg {
                 topic: topic.to_vec(),
                 origin: *origin,
                 mid,
                 body: body.to_vec(),
+                head: head.to_vec(),
             },
             Event::PublishAcked { mid } => Ev::Acked(mid),
             Event::PublishGaveUp { mid } => Ev::GaveUp(mid),
