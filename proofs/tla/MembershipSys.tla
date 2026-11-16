@@ -388,7 +388,8 @@ PrimaryStable == \A n \in Members : w.hist.primN[n] <= 2
 \* timer does, the reference model's rule)
 WaitKept == w.hist.okWait
 \* vinc#551: every timer call the host makes moves the node's membership deadline past now, so a host that serves due
-\* timers first (the facade's run_as, under Endpoint::close) always gets past them
+\* timers first (the facade's run_as, under Endpoint::close) always gets past membership's; the other layers'
+\* deadlines are not in this model
 TimerMoves == w.hist.okTimer
 \* ScrHealWait: the removal hub 1 reports at 76 s, deferred by the window of the heal at 75 s, is applied at the tick after
 \* that window's end and the extra look (75 + 10 + 5 s, ticks every 0.5 s), whatever window the heal at 79 s opened
