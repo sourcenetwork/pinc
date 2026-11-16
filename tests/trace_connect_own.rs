@@ -7,19 +7,22 @@
 //! `set_hints` (also too long), `probe_all` and the probes `tick` sends itself, QADR datagrams (valid for the probe
 //! sent to the relay; from an address no relay has; from the address of another relay's probe; with a fresh nonce; with
 //! the nonce of an earlier probe; the same answer twice; malformed bytes), `link_changed`, `tick` with no wall clock, the
-//! same wall clock, a higher one and a lower one (a clock set back), and the host's answers to the signature requests
-//! (a good length and a wrong one; the signature itself is a stub of zeros, the record is parsed, not verified). After
-//! every call the candidate list the node offers is read back (`candidates`) and recorded; a call that starts a record
-//! job records the fields of the record about to be signed (the sequence number, the home, the class, the addresses and
-//! the hints, read from the bytes of the signature request), the home and the class the node reports at that moment
-//! being inputs of the model (`ConnectClient`'s rules decide them).
+//! same wall clock, a higher one and a lower one (a clock set back), `restore_record_seq` below and above the last
+//! number, and the host's answers to the signature requests (a good length and a wrong one; the signature itself is a
+//! stub of zeros, the record is parsed, not verified). After every call the candidate list the node offers is read back
+//! (`candidates`) and recorded; a restore records the last number the node reports after it (`record_seq`); a call that
+//! starts a record job records the fields of the record about to be signed (the sequence number, the home, the class,
+//! the addresses and the hints, read from the bytes of the signature request), the home and the class the node reports
+//! at that moment being inputs of the model (`ConnectClient`'s rules decide them).
 //!
 //! The test also runs a plain reference of the rules (probe per relay, answer taken for the first relay with that
-//! address and the nonce of its probe, the candidates as a fold) and requires the same candidates after every call, the
-//! same taking of every answer as far as it shows in them (the test picks the reported addresses so it mostly does), and
-//! a job exactly when the reference says one starts. Two scripted runs show #287: two records signed between two ticks
-//! carry the same number, and a clock set back gives a lower one. Addresses are small numbers (the address `k` is
-//! `10.0.0.k:k`; a relay's UDP address `100 + k`), nonces are numbered from 1 in the order they are sent.
+//! address and the nonce of its probe, the candidates as one fold over the reflexive addresses in relay order and then
+//! the local ones, each listed once, the number as the wall clock or one above the last number) and requires the same
+//! candidates after every call, the same taking of every answer as far as it shows in them (the test picks the reported
+//! addresses so it mostly does), a job exactly when the reference says one starts, and the same number for every record,
+//! each above the one before. A scripted run shows #287 fixed: records signed in one tick, after a tick with no wall
+//! clock and after the clock was set back are each one above the one before. Addresses are small numbers (the address
+//! `k` is `10.0.0.k:k`; a relay's UDP address `100 + k`), nonces are numbered from 1 in the order they are sent.
 //! The trace is written to the directory in `VINC_TRACE_DIR` when it is set; otherwise nothing is written.
 #![allow(
     clippy::unwrap_used,
@@ -74,20 +77,27 @@ struct Reference {
     refl: Vec<Option<u16>>,
     local: Vec<u16>,
     wall: Option<u64>,
+    last_seq: u64,
     hints: Vec<u8>,
     want: bool,
     job: bool,
 }
 
 impl Reference {
+    /// The reflexive addresses in relay order, then the local ones, each once, at most `MAX_ADDRS`.
     fn cands(&self) -> Vec<u16> {
-        let mut c: Vec<u16> = self.refl.iter().flatten().copied().take(MAX_ADDRS).collect();
-        for a in &self.local {
+        let mut c: Vec<u16> = Vec::new();
+        for a in self.refl.iter().flatten().chain(&self.local) {
             if c.len() < MAX_ADDRS && !c.contains(a) {
                 c.push(*a);
             }
         }
         c
+    }
+
+    /// The number of the next record: the wall clock, or one above the last number when the clock is not past it.
+    fn next_seq(&self, wall: u64) -> u64 {
+        wall.max(self.last_seq.saturating_add(1))
     }
 
     /// The relay that takes an answer from `from` with `nonce`, if any.
@@ -107,7 +117,8 @@ struct Run {
     relay_ids: Vec<vinc_crypto::NodeId>,
     sig_len: usize,
     stats: Stats,
-    last_seq: Option<u64>,
+    seqs: Vec<u64>,
+    last_wall: Option<u64>,
 }
 
 #[derive(Default)]
@@ -115,12 +126,14 @@ struct Stats {
     taken: u32,
     refused: u32,
     jobs: u32,
-    same_seq: u32,
-    lower_seq: u32,
-    higher_seq: u32,
+    wall_seq: u32,
+    next_seq: u32,
+    set_back: u32,
+    restore_up: u32,
+    restore_kept: u32,
     full: u32,
     dedup: u32,
-    repeat_refl: u32,
+    shared_refl: u32,
     blocked: u32,
     toolong: u32,
     badsig: u32,
@@ -147,7 +160,7 @@ impl Run {
         }
         let refl: Vec<u16> = self.r.refl.iter().flatten().copied().collect();
         if refl.iter().enumerate().any(|(i, a)| refl[..i].contains(a)) {
-            self.stats.repeat_refl += 1;
+            self.stats.shared_refl += 1;
         }
         if self.r.local.iter().any(|a| refl.contains(a)) {
             self.stats.dedup += 1;
@@ -271,6 +284,24 @@ impl Run {
         self.drain_quiet();
     }
 
+    /// The host gives back a saved number: it only raises the last one.
+    fn restore(&mut self, n: u64) {
+        self.conn.restore_record_seq(n);
+        if n > self.r.last_seq {
+            self.r.last_seq = n;
+            self.stats.restore_up += 1;
+        } else {
+            self.stats.restore_kept += 1;
+        }
+        assert_eq!(
+            self.conn.record_seq(),
+            self.r.last_seq,
+            "a restored number only raises the last one"
+        );
+        let c = self.cands();
+        self.push(format!(r#"{{"t":"oseq","n":{n},"last":{},"c":{c}}}"#, self.r.last_seq));
+    }
+
     fn hints(&mut self, h: &[u8]) {
         let ok = self.conn.set_hints(h);
         assert_eq!(ok, h.len() <= MAX_HINT_LEN);
@@ -335,25 +366,33 @@ impl Run {
             tail += r#""j":0,"seq":0,"home":0,"reach":0,"a":[],"h":[]"#;
             return tail;
         };
+        let wall = self.r.wall.expect("a job needs a wall clock");
         assert_eq!(
-            Some(seq),
-            self.r.wall,
-            "the sequence number is the wall clock of the last tick"
+            seq,
+            self.r.next_seq(wall),
+            "the sequence number is the wall clock, or one above the last number"
         );
+        assert!(seq > self.r.last_seq, "a record's number is above the last one");
+        if let Some(prev) = self.seqs.last() {
+            assert!(seq > *prev, "a record's number is above the record before it");
+        }
         assert_eq!(home + 1, hm);
         assert_eq!(reach, cl);
         assert_eq!(addrs, self.r.cands());
         assert_eq!(hints, self.r.hints);
         self.r.job = true;
         self.stats.jobs += 1;
-        if let Some(l) = self.last_seq {
-            match seq.cmp(&l) {
-                std::cmp::Ordering::Equal => self.stats.same_seq += 1,
-                std::cmp::Ordering::Less => self.stats.lower_seq += 1,
-                std::cmp::Ordering::Greater => self.stats.higher_seq += 1,
-            }
+        if seq == wall {
+            self.stats.wall_seq += 1;
+        } else {
+            self.stats.next_seq += 1;
         }
-        self.last_seq = Some(seq);
+        if self.last_wall.is_some_and(|w| wall < w) {
+            self.stats.set_back += 1;
+        }
+        self.r.last_seq = seq;
+        self.seqs.push(seq);
+        self.last_wall = Some(wall);
         write!(
             tail,
             r#""j":1,"seq":{seq},"home":{hm},"reach":{reach},"a":{},"h":{}"#,
@@ -449,14 +488,16 @@ fn new_run(host: &Host, udp: &[u16], seed: u64, out: Vec<String>, stats: Stats) 
         relay_ids,
         sig_len: host.identity.alg().signature_len(),
         stats,
-        last_seq: None,
+        seqs: Vec::new(),
+        last_wall: None,
     };
     let c = run.cands();
     run.push(format!(r#"{{"t":"onew","udp":{},"cap":{MAX_ADDRS},"c":{c}}}"#, lst(&u)));
     run
 }
 
-/// A scripted run of #287: records signed between two ticks, a tick without a wall clock, a clock set back.
+/// A scripted run of #287 fixed: records signed in one tick, after a tick without a wall clock and after a clock set
+/// back are each one above the one before; a clock past the last number gives its own.
 fn scripted(host: &Host, out: Vec<String>, stats: Stats) -> (Vec<String>, Stats) {
     let mut run = new_run(host, &[101, 102], 1, out, stats);
     run.local(&[5, 6]);
@@ -486,7 +527,7 @@ fn scripted(host: &Host, out: Vec<String>, stats: Stats) -> (Vec<String>, Stats)
     run.hints(&[5]);
     run.tick(SEC, Some(7100));
     run.sign(true);
-    assert!(run.stats.same_seq >= 2 && run.stats.lower_seq >= 1 && run.stats.higher_seq >= 1);
+    assert_eq!(run.seqs, [7000, 7001, 7002, 7003, 7100]);
     (run.out, run.stats)
 }
 
@@ -508,7 +549,7 @@ fn episode(host: &Host, seed: u64, out: Vec<String>, stats: Stats) -> (Vec<Strin
     let pool: Vec<u16> = (1..=14).collect();
     let mut seen_nonces: Vec<[u8; 8]> = Vec::new();
     for _ in 0..70 {
-        match rng.next_u64() % 22 {
+        match rng.next_u64() % 23 {
             0 | 1 => {
                 let n = (rng.next_u64() % 12) as usize;
                 let a: Vec<u16> = (0..n).map(|_| pick(&mut rng, &pool)).collect();
@@ -564,6 +605,15 @@ fn episode(host: &Host, seed: u64, out: Vec<String>, stats: Stats) -> (Vec<Strin
                 };
                 run.tick(dt, wall);
             }
+            22 => {
+                let last = run.r.last_seq;
+                let n = match rng.next_u64() % 3 {
+                    0 => last.saturating_sub(1 + rng.next_u64() % 10),
+                    1 => last,
+                    _ => last + 1 + rng.next_u64() % 1000,
+                };
+                run.restore(n);
+            }
             18 | 19 => {
                 let len = match rng.next_u64() % 8 {
                     0 => MAX_HINT_LEN + 1,
@@ -595,15 +645,21 @@ fn the_own_record_and_address_discovery_trace() {
         assert!(stats.taken > 50, "answers taken: {}", stats.taken);
         assert!(stats.refused > 50, "answers refused: {}", stats.refused);
         assert!(stats.jobs > 50, "record jobs: {}", stats.jobs);
-        assert!(stats.same_seq > 5, "same-tick records: {}", stats.same_seq);
-        assert!(stats.lower_seq > 3, "clock set back: {}", stats.lower_seq);
-        assert!(stats.higher_seq > 3, "clock rose: {}", stats.higher_seq);
+        assert!(stats.wall_seq > 3, "numbers from the clock: {}", stats.wall_seq);
+        assert!(stats.next_seq > 5, "numbers one above the last: {}", stats.next_seq);
+        assert!(stats.set_back > 3, "records after a clock set back: {}", stats.set_back);
+        assert!(
+            stats.restore_up > 3,
+            "restores that raised the number: {}",
+            stats.restore_up
+        );
+        assert!(stats.restore_kept > 3, "restores that kept it: {}", stats.restore_kept);
         assert!(stats.full > 3, "full candidate lists: {}", stats.full);
         assert!(stats.dedup > 3, "own addresses already listed: {}", stats.dedup);
         assert!(
-            stats.repeat_refl > 3,
-            "a reflexive address twice (#308): {}",
-            stats.repeat_refl
+            stats.shared_refl > 3,
+            "an address that several relays report: {}",
+            stats.shared_refl
         );
         assert!(stats.toolong > 0, "hints too long");
         assert!(stats.badsig > 0, "signature of the wrong length");
