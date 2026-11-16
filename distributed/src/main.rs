@@ -7,6 +7,7 @@
 //!     [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
 //! vinc-distributed validate <scenario.toml>
 //! vinc-distributed plan <scenario.toml>
+//! vinc-distributed summarize <results dir>...
 //! vinc-distributed clean
 //! vinc-distributed node transport --stack <vinc|iroh|libp2p> server|client ...
 //! vinc-distributed helper          (started by the orchestrator through sudo; not for direct use)
@@ -21,6 +22,7 @@ use vinc_distributed::backend::ssh;
 use vinc_distributed::orchestrate::{self, Options};
 use vinc_distributed::plan::Plan;
 use vinc_distributed::quiet::Thresholds;
+use vinc_distributed::results;
 use vinc_distributed::scenario::Scenario;
 use vinc_distributed::serve::{ServeOptions, serve};
 use vinc_distributed::{helper, node};
@@ -32,6 +34,7 @@ const USAGE: &str = "usage:
       [--quiet-other <% of a core>] [--quiet-steal <%>] [--quiet-wait <s>]
   vinc-distributed validate <scenario.toml>
   vinc-distributed plan <scenario.toml>
+  vinc-distributed summarize <results dir>...
   vinc-distributed clean [--hosts <fleet.toml>]
   vinc-distributed node transport --stack <vinc|iroh|libp2p> server|client ...";
 
@@ -189,6 +192,25 @@ fn plan(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Rebuild the summary of each results directory from its rows, without running anything.
+fn summarize(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err(USAGE.into());
+    }
+    let mut failed = Vec::new();
+    for dir in args {
+        match results::resummarize(Path::new(dir)) {
+            Ok(changed) => println!("{}: {dir}", if changed { "changed" } else { "unchanged" }),
+            Err(e) => failed.push(e),
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("\n"))
+    }
+}
+
 fn clean(args: &[String]) -> Result<(), String> {
     logs();
     if let Some(f) = fleet(args)? {
@@ -228,6 +250,7 @@ fn main() -> ExitCode {
         "serve" => dashboard(rest),
         "validate" => validate(rest),
         "plan" => plan(rest),
+        "summarize" => summarize(rest),
         "clean" => clean(rest),
         _ => {
             eprintln!("{USAGE}");

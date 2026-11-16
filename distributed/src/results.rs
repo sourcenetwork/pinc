@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::metrics::NodeUse;
+use crate::scenario::Scenario;
 
 /// One measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -628,6 +629,55 @@ pub fn markdown(title: &str, conditions: &[String], tables: &[Table]) -> String 
 pub fn read_rows(dir: &Path) -> std::io::Result<Vec<Row>> {
     let text = std::fs::read_to_string(dir.join("raw.jsonl"))?;
     Ok(text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+}
+
+/// The stacks of a results directory in column order: the scenario's, else the order they first appear in `rows`.
+pub fn stacks_of(dir: &Path, rows: &[Row]) -> Vec<String> {
+    let from_file = std::fs::read_to_string(dir.join("scenario.toml"))
+        .ok()
+        .and_then(|t| Scenario::parse(&t).ok())
+        .map(|s| s.stacks.iter().map(|x| x.name().to_owned()).collect::<Vec<_>>());
+    from_file.unwrap_or_else(|| {
+        let mut v: Vec<String> = Vec::new();
+        for r in rows {
+            if !v.contains(&r.stack) {
+                v.push(r.stack.clone());
+            }
+        }
+        v
+    })
+}
+
+/// Rebuild `summary.md` of a results directory from its `raw.jsonl`, and say whether it changed.
+///
+/// The conditions in the old header (machine, CPU sets, versions) are not stored beside the rows, so the header of
+/// the old summary is kept as it is and only the tables and notes after it are regenerated. The old file is kept as
+/// `summary.before.md` (replacing an earlier one) when the content differs.
+///
+/// # Errors
+/// One plain sentence naming the directory: no readable `raw.jsonl`, or a file that cannot be written.
+pub fn resummarize(dir: &Path) -> Result<bool, String> {
+    let name = dir.display();
+    let rows = read_rows(dir).map_err(|_| format!("{name}: there is no readable raw.jsonl"))?;
+    let tables = summarize(&rows, &stacks_of(dir, &rows));
+    let title = dir
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let fresh = markdown(&title, &[], &tables);
+    let at = |t: &str| t.find("\n## ").unwrap_or(t.len());
+    let old = std::fs::read_to_string(dir.join("summary.md")).ok();
+    let new = old
+        .as_deref()
+        .map_or_else(|| fresh.clone(), |o| format!("{}{}", &o[..at(o)], &fresh[at(&fresh)..]));
+    if old.as_deref() == Some(new.as_str()) {
+        return Ok(false);
+    }
+    let io = |e: std::io::Error| format!("{name}: the summary could not be written ({e})");
+    if old.is_some() {
+        std::fs::rename(dir.join("summary.md"), dir.join("summary.before.md")).map_err(io)?;
+    }
+    std::fs::write(dir.join("summary.md"), new).map_err(io)?;
+    Ok(true)
 }
 
 /// The days since 1970-01-01 as a civil date `YYYY-MM-DD` (proleptic Gregorian).

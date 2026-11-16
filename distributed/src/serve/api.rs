@@ -21,7 +21,7 @@ use crate::backend::containers;
 use crate::docker;
 use crate::orchestrate::HostInfo;
 use crate::plan::Plan;
-use crate::results::{self, Row};
+use crate::results;
 use crate::scenario::Scenario;
 use crate::serve::{App, assets};
 
@@ -428,28 +428,12 @@ fn result_path(app: &App, dir: &str) -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-fn stacks_of(dir: &Path, rows: &[Row]) -> Vec<String> {
-    let from_file = std::fs::read_to_string(dir.join("scenario.toml"))
-        .ok()
-        .and_then(|t| Scenario::parse(&t).ok())
-        .map(|s| s.stacks.iter().map(|x| x.name().to_owned()).collect::<Vec<_>>());
-    from_file.unwrap_or_else(|| {
-        let mut v: Vec<String> = Vec::new();
-        for r in rows {
-            if !v.contains(&r.stack) {
-                v.push(r.stack.clone());
-            }
-        }
-        v
-    })
-}
-
 fn result(app: &App, dir: &str) -> Resp {
     let Some(p) = result_path(app, dir) else {
         return fail(StatusCode::NOT_FOUND, "no results of that name");
     };
     let rows = results::read_rows(&p).unwrap_or_default();
-    let stacks = stacks_of(&p, &rows);
+    let stacks = results::stacks_of(&p, &rows);
     let tables = results::summarize(&rows, &stacks);
     json_ok(&json!({
         "dir": dir, "run": read_json(&p.join("run.json")),
