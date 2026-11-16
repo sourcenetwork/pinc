@@ -31,10 +31,8 @@ VINC is a library, not a framework:
   per core.
 - **Hot path:** zero-copy parsing and no heap allocation in steady state are design rules.
 
-> **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. What is
-> open is in the issues, not here: [#580](https://github.com/sourcenetwork/vinc/issues/580) lists what is not built,
-> held back or defective, and [#579](https://github.com/sourcenetwork/vinc/issues/579) every measured row another
-> library leads.
+> **Status: pre-release.** The protocol crates are built and tested, and their proofs land crate by crate. Open work
+> is tracked in the [issues](https://github.com/sourcenetwork/vinc/issues).
 
 ## Usage
 
@@ -198,15 +196,3 @@ tracked in [#579](https://github.com/sourcenetwork/vinc/issues/579), which lists
 The 1% loss row is an 8 MiB transfer; a 64 MiB fetch on the same path runs at 1.16 MiB/s against 0.31 and 0.32
 ([#564](https://github.com/sourcenetwork/vinc/issues/564)). `just compare` and the harness print every row, the ones
 VINC loses included.
-
-## Open work
-
-- [#580](https://github.com/sourcenetwork/vinc/issues/580): what is not built, rules held back, defects and gaps.
-- [#579](https://github.com/sourcenetwork/vinc/issues/579): rows another library leads, and rows under VINC's own best.
-- [#529](https://github.com/sourcenetwork/vinc/issues/529): what is not measured yet.
-- [#527](https://github.com/sourcenetwork/vinc/issues/527): VINC on every link it is designed for.
-- [#105](https://github.com/sourcenetwork/vinc/issues/105): proofs still to close.
-
-One caution until [#572](https://github.com/sourcenetwork/vinc/issues/572) lands: `Endpoint::sign` signs the bytes it
-is given with the node's identity key, which also signs the protocol's own statements, so do not sign bytes a peer
-chose without wrapping them in a format of your own.
