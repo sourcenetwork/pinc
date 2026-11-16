@@ -149,6 +149,8 @@ pub struct TNode {
     pub checks: Vec<(u64, NodeId)>,
     /// Datagrams sent: time, destination, length.
     pub sent: Vec<(u64, SocketAddr, usize)>,
+    /// The interface's MTU, IP and UDP headers included: the link drops a datagram it cannot carry.
+    pub mtu: u16,
 }
 
 impl TNode {
@@ -170,6 +172,12 @@ impl TNode {
     /// configuration does.
     pub fn with_whole_flights(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg) -> Self {
         Self::build(tag, addr, now, alg, 1500, true)
+    }
+
+    /// A node at `addr` on an interface of `mtu` bytes that sends a first flight whole when it fits, as the default
+    /// configuration does.
+    pub fn with_whole_flights_at(tag: u8, addr: SocketAddr, now: u64, mtu: u16) -> Self {
+        Self::build(tag, addr, now, IdentityAlg::Ed25519, mtu, true)
     }
 
     fn build(tag: u8, addr: SocketAddr, now: u64, alg: IdentityAlg, mtu: u16, flight_split: bool) -> Self {
@@ -213,6 +221,7 @@ impl TNode {
             fin: Vec::new(),
             checks: Vec::new(),
             sent: Vec::new(),
+            mtu,
         }
     }
 
@@ -536,6 +545,13 @@ impl CoreNet {
         self.nodes.len() - 1
     }
 
+    /// Add a node at `addr` on an interface of `mtu` bytes, with the whole first flight on (see
+    /// [`TNode::with_whole_flights_at`]).
+    pub fn add_whole_flights_at(&mut self, tag: u8, addr: SocketAddr, mtu: u16) -> usize {
+        self.nodes.push(TNode::with_whole_flights_at(tag, addr, self.now, mtu));
+        self.nodes.len() - 1
+    }
+
     pub fn node_at(&self, a: SocketAddr) -> Option<usize> {
         self.nodes.iter().position(|n| n.addr == a || n.extra.contains(&a))
     }
@@ -575,13 +591,15 @@ impl CoreNet {
             if len > segment_size {
                 self.batches += 1;
             }
+            let carries = usize::from(node.mtu).saturating_sub(if remote.is_ipv6() { 48 } else { 28 });
             for chunk in buf[..len].chunks(segment_size) {
                 node.sent.push((now, remote, chunk.len()));
                 self.tapped.push((now, local, remote, chunk.len()));
                 if self.capture {
                     self.captured.push((local, remote, chunk.to_vec()));
                 }
-                let lost = self.loss.as_mut().is_some_and(|f| f(local, remote, chunk));
+                // An interface does not send a datagram above what it carries.
+                let lost = chunk.len() > carries || self.loss.as_mut().is_some_and(|f| f(local, remote, chunk));
                 let left = if lost {
                     None
                 } else {

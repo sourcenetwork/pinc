@@ -374,3 +374,50 @@ fn a_sender_can_have_its_own_rate() {
     assert_eq!(r.depart(addr(1), 0, 1250), Some(10 * MS_NS));
     assert_eq!(r.depart(addr(2), 0, 1250), Some(100 * MS_NS));
 }
+
+/// A full handshake over a link of one round trip of 60 ms, between endpoints built as the facade builds them (the
+/// whole first flight on), with the link dropping what the interface cannot carry.
+fn handshake_on(mtu: u16, v6: bool) -> (u64, usize, usize) {
+    let host = |tag: u8| -> SocketAddr {
+        if v6 {
+            ([0xfd00u16, 0, 0, 0, 0, 0, 0, u16::from(tag)], 4433).into()
+        } else {
+            ([10, 0, 0, tag], 4433).into()
+        }
+    };
+    let mut net = CoreNet::new(30 * MS_NS);
+    let a = net.add_whole_flights_at(1, host(1), mtu);
+    let b = net.add_whole_flights_at(2, host(2), mtu);
+    let (peer, to, t0) = (net.nodes[b].node, net.nodes[b].addr, net.now);
+    net.nodes[a].connect(t0, peer, ALPN_A, to, Role::Other).unwrap();
+    let ok = net.run(t0 + 10 * SEC_NS, |n| {
+        n.nodes[a].saw(|e| matches!(e, Event::Connected { .. }))
+            && n.nodes[b].saw(|e| matches!(e, Event::Incoming { .. }))
+    });
+    assert!(ok, "no session on an interface of {mtu} bytes (v6 {v6})");
+    let carries = usize::from(mtu) - if v6 { 48 } else { 28 };
+    let largest = net.tapped.iter().map(|t| t.3).max().unwrap_or(0);
+    (net.now - t0, largest, carries)
+}
+
+#[test]
+fn a_full_handshake_on_an_interface_under_1500_bytes_sends_nothing_the_link_cannot_carry_and_needs_no_resend() {
+    big_stack(|| {
+        // A handshake is a few round trips of 60 ms; a resend waits a second or more.
+        let bound = 12 * 60 * MS_NS;
+        let mut failed = Vec::new();
+        for v6 in [false, true] {
+            for mtu in [1280u16, 1400, 1420, 1472, 1500] {
+                let (took, largest, carries) = handshake_on(mtu, v6);
+                eprintln!(
+                    "interface {mtu} v6 {v6}: handshake {:.0} ms, largest datagram {largest} of {carries}",
+                    took as f64 / 1e6
+                );
+                if largest > carries || took > bound {
+                    failed.push(format!("{mtu} v6 {v6}: {largest} of {carries} bytes, {} ms", took / MS_NS));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "handshakes that sent too much or resent: {failed:?}");
+    });
+}
