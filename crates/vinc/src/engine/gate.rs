@@ -9,7 +9,7 @@ use alloc::rc::Rc;
 use vinc_crypto::NodeId;
 use vinc_security::Alpn;
 
-use crate::maps::{self, Map, Set};
+use crate::maps::{self, Keys, Map, Set};
 
 /// Which way a connection was made, as the access hook is told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,10 +70,10 @@ pub(crate) struct Gate<A> {
 }
 
 impl<A: Admit> Gate<A> {
-    pub(crate) fn new(hook: A, seed: u64) -> Self {
+    pub(crate) fn new(hook: A, keys: Keys) -> Self {
         Self {
             hook,
-            revoked: core::cell::RefCell::new(maps::set(seed)),
+            revoked: core::cell::RefCell::new(maps::set(keys)),
         }
     }
 
@@ -121,8 +121,8 @@ const KNOWN_MAX: usize = 1024;
 pub(crate) struct Known(Map<[u8; 32], (Alpn, Direction, u64)>);
 
 impl Known {
-    pub(crate) fn new(seed: u64) -> Self {
-        Self(maps::map(seed))
+    pub(crate) fn new(keys: Keys) -> Self {
+        Self(maps::map(keys))
     }
 
     /// Whether the answer remembered for `node` is an allow for this `alpn` and `dir` that has not run out at `now`.

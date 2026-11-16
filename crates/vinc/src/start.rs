@@ -192,7 +192,7 @@ mod tests {
     fn cfg(connections: usize) -> CoreConfig<SoftwareStore, AllowAll> {
         CoreConfig {
             identity: Identity::from_seed(&[3; 32]).unwrap(),
-            map_seed: 3,
+            map_keys: crate::maps::Keys::for_tests(3),
             alpns: vec![b"t".to_vec()],
             limits: Limits {
                 connections,

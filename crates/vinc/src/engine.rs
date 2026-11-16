@@ -31,7 +31,7 @@ use crate::carriers::Relay;
 use crate::error::{Error, ErrorKind, Result};
 use crate::event::Event as TopicEvent;
 use crate::keys::{Identity, Prekeys, is_identity};
-use crate::maps::{self, Map};
+use crate::maps::{self, Keys, Map};
 use crate::mem::Limits;
 use crate::node::{FacadeNode, RELAYS};
 use crate::standby::{Standby, Ticket};
@@ -114,8 +114,8 @@ fn answer<S: KeyStore>(identity: &RefCell<Identity<S>>, prekeys: &mut Prekeys, r
 pub(crate) struct CoreConfig<S, A> {
     /// The node's identity.
     pub identity: Identity<S>,
-    /// The seed of the endpoint's hash maps, drawn from the identity's key store.
-    pub map_seed: u64,
+    /// The keys of the endpoint's hash maps, drawn from the identity's key store.
+    pub map_keys: Keys,
     /// The protocols served; at most [`MAX_PROTOCOLS`](crate::MAX_PROTOCOLS) with those added later.
     pub alpns: Vec<Vec<u8>>,
     /// The sizes.
@@ -303,22 +303,22 @@ pub(crate) struct Core<S, A> {
 impl<S: KeyStore, A: Admit> Core<S, A> {
     /// A core over `node`, whose endpoint already holds the prekey, the protocols and the interfaces `ifaces`.
     pub(crate) fn new(node: Box<FacadeNode>, cfg: CoreConfig<S, A>, prekeys: Prekeys, ifaces: Vec<IfaceId>) -> Self {
-        let seed = cfg.map_seed;
+        let keys = cfg.map_keys;
         Self {
             node,
             identity: Rc::new(RefCell::new(cfg.identity)),
             prekeys,
-            admit: Rc::new(Gate::new(cfg.admit, seed)),
+            admit: Rc::new(Gate::new(cfg.admit, keys)),
             limits: cfg.limits,
-            sessions: maps::map(seed),
-            dials: maps::map(seed),
+            sessions: maps::map(keys),
+            dials: maps::map(keys),
             alpns: cfg.alpns,
-            known: Known::new(seed),
+            known: Known::new(keys),
             routes: vec![Route {
                 alpn: Vec::new(),
                 queue: VecDeque::new(),
             }],
-            book: maps::map(seed),
+            book: maps::map(keys),
             ifaces,
             shutdown: None,
             stopped: None,
@@ -333,7 +333,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             events: VecDeque::new(),
             lost: 0,
             topics: BTreeMap::new(),
-            hub_sessions: maps::map(seed),
+            hub_sessions: maps::map(keys),
             adjacent: cfg.connected_topics.then(Vec::new),
             adjacent_due: None,
             adjacent_next: 0,

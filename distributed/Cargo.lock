@@ -5519,6 +5519,7 @@ name = "vinc"
 version = "0.1.0"
 dependencies = [
  "hashbrown",
+ "once_cell",
  "rapidhash",
  "vinc-broadcast",
  "vinc-connect",

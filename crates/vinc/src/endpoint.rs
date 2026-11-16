@@ -38,6 +38,7 @@ use crate::engine::{Core, CoreConfig, Try};
 use crate::error::{Error, ErrorKind, Result};
 use crate::host::{BatchHost, Host, Hosted, Io, IoHost};
 use crate::keys::Identity;
+use crate::maps::Keys;
 use crate::mem::Limits;
 use crate::node::RELAYS;
 use crate::protocol::{Protocol, Registered};
@@ -46,6 +47,8 @@ use crate::role::{Role, RoleSpec};
 use crate::start::{PortMapping, build, interfaces};
 
 mod discovery;
+#[cfg(test)]
+mod map_keys_tests;
 mod portmap;
 mod role;
 
@@ -425,15 +428,14 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             return Err(Error::config("at most four relays"));
         }
         let mut identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
-        let mut map_seed = [0u8; 8];
-        identity.random(&mut map_seed)?;
-        let map_seed = u64::from_le_bytes(map_seed);
-        discovery.seed_maps(map_seed);
+        let map_keys = Keys::draw(|out| identity.random(out))?;
+        let (seed, secrets) = map_keys.parts();
+        discovery.seed_maps(seed, secrets);
         let public: Rc<[u8]> = identity.public_key().into();
         let node = identity.node_id();
         let cfg = CoreConfig {
             identity,
-            map_seed,
+            map_keys,
             alpns,
             limits,
             admit: admission,

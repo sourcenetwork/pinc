@@ -14,10 +14,10 @@ pub trait Discovery {
     /// The addresses `node` may be reached at; empty if unknown.
     fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>>;
 
-    /// Called once as the endpoint is built, with a seed for the hash tables the discovery keeps; a discovery with no
-    /// table ignores it.
+    /// Called once as the endpoint is built, with the seed and the secrets for the hash tables the discovery keeps; a
+    /// discovery with no table ignores them.
     #[doc(hidden)]
-    fn seed_maps(&self, _seed: u64) {}
+    fn seed_maps(&self, _seed: u64, _secrets: &'static [u64; 7]) {}
 }
 
 /// No discovery: a dial without addresses uses the address book only.
