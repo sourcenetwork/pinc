@@ -52,7 +52,7 @@ fn fallback_step<H: Host>(
         return 0;
     }
     let mut sent = 0;
-    for peer in &st.peers {
+    for peer in st.peers.iter().chain(&st.hints) {
         if sent >= FALLBACK_BATCH {
             break;
         }

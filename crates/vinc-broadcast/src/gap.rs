@@ -161,6 +161,7 @@ impl Topics {
             return;
         }
         st.confirmed = false;
+        st.hints.clear();
         if let Some(p) = self.primary.filter(|p| *p != self.me)
             && wire::build(&mut self.scratch, ty::UNSUB, topic, &[]).is_ok()
         {

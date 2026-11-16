@@ -177,6 +177,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             .broadcast()
             .known_subscribers(topic)
             .iter()
+            .chain(self.node.broadcast().hinted_subscribers(topic))
             .filter_map(|b| present.get(b).copied())
             .filter(|p| !self.admit.is_revoked(p))
             .collect();
