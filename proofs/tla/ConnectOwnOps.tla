@@ -4,8 +4,9 @@
 (* relay/discovery.rs (the QAD answer), client/conn.rs (set_local,         *)
 (* probe_all, handle_udp for a QADR, candidates, set_hints),               *)
 (* client/netcheck.rs (probe_sent, answered, reflexive_into) and           *)
-(* client/signing.rs (record_job, start_jobs). ConnectOwn.tla (the model   *)
-(* check) and TraceConnectOwn.tla (the trace validation) use them.         *)
+(* client/signing.rs (record_job, start_jobs) and restore_record_seq.      *)
+(* ConnectOwn.tla (the model check) and TraceConnectOwn.tla (the trace     *)
+(* validation) use them.                                                   *)
 (*                                                                         *)
 (* An address is a small natural, 0 meaning none; a relay is its position  *)
 (* 1..n in the node's configuration, cf.udp[k] its configured UDP address  *)
@@ -15,6 +16,7 @@
 (*   local     the node's own addresses, at most cf.cap (MAX_ADDRS = 8)    *)
 (*   wall      the wall clock of the last tick that had one, in ms (0:     *)
 (*             none yet)                                                   *)
+(*   last      the sequence number of the last record built (0: none yet)  *)
 (* cf.cap is MAX_ADDRS; the real value is 8, TLC checks small ones and the *)
 (* Lean theorems (ConnectOwn.lean) hold for all. The home relay, the       *)
 (* reachability class and the hints are inputs of the record: the home and *)
@@ -24,7 +26,8 @@ EXTENDS Integers, Sequences, FiniteSets
 
 Min(a, b) == IF a < b THEN a ELSE b
 
-NewNode(cf) == [probe |-> [k \in 1..Len(cf.udp) |-> 0], refl |-> [k \in 1..Len(cf.udp) |-> 0], local |-> <<>>, wall |-> 0]
+NewNode(cf) == [probe |-> [k \in 1..Len(cf.udp) |-> 0], refl |-> [k \in 1..Len(cf.udp) |-> 0], local |-> <<>>, wall |-> 0,
+                last |-> 0]
 
 (* relay/discovery.rs: a QAD query is answered with its own nonce and the address it came from *)
 QadReply(nonce, src) == [nonce |-> nonce, addr |-> src]
@@ -64,6 +67,17 @@ Cands(cf, S) == LET r0 == ReflList(cf, S)
 (* tick records the wall clock when it is given one *)
 Tick(S, wall) == IF wall # 0 THEN [S EXCEPT !.wall = wall] ELSE S
 
+(* the number of a record built at wall clock wall after the one numbered last: the clock, or one above the last when
+   the clock did not move past it (the code's addition saturates at 2^64 - 1, which the small numbers here never reach;
+   the Lean model has it) *)
+NextSeq(wall, last) == IF wall > last THEN wall ELSE last + 1
+
 (* record_job, called by start_jobs with the wall clock of the last tick: the fields of the record that is signed *)
-RecordJob(cf, S, home, class, hints) == [seq |-> S.wall, home |-> home, reach |-> class, addrs |-> Cands(cf, S), hints |-> hints]
+RecordJob(cf, S, home, class, hints) == [seq |-> NextSeq(S.wall, S.last), home |-> home, reach |-> class, addrs |-> Cands(cf, S), hints |-> hints]
+
+(* record_job keeps the number of the record it built as the last one *)
+Built(S, j) == [S EXCEPT !.last = j.seq]
+
+(* restore_record_seq: the last number is raised to n, never lowered *)
+RestoreSeq(S, n) == IF n > S.last THEN [S EXCEPT !.last = n] ELSE S
 =============================================================================

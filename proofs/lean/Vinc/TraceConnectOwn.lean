@@ -7,9 +7,9 @@ import Vinc.ConnectOwn
 The replay half of the trace validation of the node's own record and address discovery (the Rust test
 `trace_connect_own`, the TLA+ half is `TraceConnectOwn.tla`). Every recorded call is replayed through the functions the
 theorems of `ConnectOwnThm.lean` are about and any difference exits with an error naming the line: the candidate list
-the node offered after the call, whether an answer was taken, and for a call that may start a record job (a tick, an
-answer to a signature) whether a job started and the fields of the record: the sequence number, the home, the class, the
-addresses and the hints.
+the node offered after the call, whether an answer was taken, the last sequence number after a restore, and for a call
+that may start a record job (a tick, an answer to a signature) whether a job started and the fields of the record: the
+sequence number, the home, the class, the addresses and the hints.
 -/
 
 namespace Vinc.TraceConnectOwn
@@ -70,6 +70,12 @@ def replayEvent (j : J) (w : W) : Except String W := do
   | "onoop" =>
     offered j cf st
     pure w
+  | "oseq" =>
+    let st := step cf st (.restore (← natF j "n"))
+    let last ← natF j "last"
+    check (st.last == last) s!"last number: model {st.last}, code {last}"
+    offered j cf st
+    pure { w with st := st }
   | "ohint" =>
     let h ← natList (← field j "h")
     let st := if (← natF j "ok") == 1 then setHints st h else st
@@ -88,6 +94,6 @@ def replayEvent (j : J) (w : W) : Except String W := do
 
 /-- The tags this module replays. -/
 def isTag (t : String) : Bool :=
-  ["onew", "olocal", "oprobe", "oans", "orestart", "onoop", "ohint", "otick", "osign"].contains t
+  ["onew", "olocal", "oprobe", "oans", "orestart", "onoop", "oseq", "ohint", "otick", "osign"].contains t
 
 end Vinc.TraceConnectOwn
