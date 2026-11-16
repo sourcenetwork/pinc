@@ -21,5 +21,14 @@ fn a_member_and_a_hub_that_left_arm_no_timer_already_due() {
         // Long enough for every membership timer the two nodes held to fall due: ticks, renewals, the slow tick.
         w.run(secs(40));
         assert_eq!(w.sim.metrics().timer_violations, 0, "a node that left kept a due timer");
+        // The node holds back a deadline its timer calls do not move (vinc#569), so the simulator is handed it once at
+        // most: the node's own count shows the rest.
+        for n in [member, hub] {
+            assert_eq!(
+                w.sim.node(n).node.timer_stats().total(),
+                0,
+                "a node that left kept a due timer"
+            );
+        }
     });
 }

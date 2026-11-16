@@ -152,6 +152,26 @@ pub(crate) fn node_with<A: Apps<Caps>>(
     alpn: &'static [u8],
     apps: A,
 ) -> Result<Box<ScriptNode<A>>, StartError> {
+    node_built(is_hub, hubs, alpn, apps, false)
+}
+
+/// As [`node_with`], with the node's trace on.
+pub(crate) fn node_traced<A: Apps<Caps>>(
+    is_hub: bool,
+    hubs: &[NodeId],
+    alpn: &'static [u8],
+    apps: A,
+) -> Result<Box<ScriptNode<A>>, StartError> {
+    node_built(is_hub, hubs, alpn, apps, true)
+}
+
+fn node_built<A: Apps<Caps>>(
+    is_hub: bool,
+    hubs: &[NodeId],
+    alpn: &'static [u8],
+    apps: A,
+    trace: bool,
+) -> Result<Box<ScriptNode<A>>, StartError> {
     let kp = Keypair::from_seed(IdentityAlg::Ed25519, &[0x11; 32]).unwrap();
     let identity = LocalIdentity::from_keypair(&kp, KeyHandle(1)).unwrap();
     let prov = Caps(vinc_crypto::Software, true);
@@ -191,7 +211,7 @@ pub(crate) fn node_with<A: Apps<Caps>>(
         limits: Limits::default(),
         wall_ms: 1_700_000_000_000,
         local,
-        trace: false,
+        trace,
     };
     Node::with_apps(
         &cfg,

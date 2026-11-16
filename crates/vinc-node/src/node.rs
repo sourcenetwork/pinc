@@ -118,6 +118,8 @@ pub struct Node<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEE
     pub(crate) leaving: bool,
     /// The port-mapping client, once the host turned it on.
     pub(crate) pm: Option<Box<crate::portmap::Pm>>,
+    /// The bound on a deadline that a timer call did not move; see [`crate::timers`].
+    pub(crate) timers: crate::timers::Bound,
 }
 
 impl<E: Ep, P: Provider + Clone, St: Store, const R: usize, const PEERS: usize, A: Apps<P>> core::fmt::Debug
@@ -297,6 +299,7 @@ where
             deadline: Cell::new(Due::Stale),
             leaving: false,
             pm: None,
+            timers: crate::timers::Bound::default(),
         };
         node.refresh_alive(now);
         Ok(node)
@@ -531,10 +534,17 @@ where
         }
         self.pm_timeout(now);
         self.settle(now);
+        self.bound_timer(now);
     }
 
-    /// When the host should next call [`Node::handle_timeout`].
+    /// When the host should next call [`Node::handle_timeout`]. A deadline that two timer calls in a row did not move
+    /// is not answered again before one tick has passed (see [`TimerStats`](crate::TimerStats)).
     pub fn poll_timeout(&self) -> Option<Nanos> {
+        self.timers.answer(self.due())
+    }
+
+    /// The earliest deadline of the endpoint and the layers, as they name it.
+    pub(crate) fn due(&self) -> Option<Nanos> {
         // A host asks many times between two calls that could move the answer: it is worked out once for them all,
         // and the layers' part once for all the calls that move only the endpoint.
         let layers = match self.deadline.get() {
@@ -566,11 +576,17 @@ where
 
     /// The node's deadline: the endpoint's or the layers', whichever is earlier.
     fn with_endpoint(&self, layers: Option<Nanos>) -> Option<Nanos> {
-        [self.io.ep.poll_timeout(), layers].into_iter().flatten().min()
+        [self.ep_deadline(), layers].into_iter().flatten().min()
     }
 
     /// The earliest deadline of every layer above the endpoint, worked out for the clock `now`.
     fn layers_deadline(&self, now: Nanos) -> Option<Nanos> {
+        self.layer_deadlines(now).into_iter().flatten().min()
+    }
+
+    /// The deadline of each layer above the endpoint, in the order of [`Timed::ALL`](crate::Timed::ALL) after the
+    /// endpoint.
+    pub(crate) fn layer_deadlines(&self, now: Nanos) -> [Option<Nanos>; 8] {
         [
             self.conn.next_deadline(now),
             self.mem_timed().then(|| self.mem.poll_timeout()),
@@ -581,9 +597,6 @@ where
             self.duty_needed().then_some(self.next_duty),
             self.pm_deadline(),
         ]
-        .into_iter()
-        .flatten()
-        .min()
     }
 
     /// The next datagram to send. Packets that ride a relay carrier are handed to the connectivity layer and not

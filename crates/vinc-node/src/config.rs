@@ -36,6 +36,9 @@ pub(crate) const REDIAL_SOON: Nanos = 20 * MS;
 pub(crate) const DUTY_MEMBER: Nanos = 500 * MS;
 /// The cadence of the host-side duties of a hub.
 pub(crate) const DUTY_HUB: Nanos = S;
+/// One tick of the node's timer: after a timer call that did not move a deadline, the node asks for the next call
+/// this long after it.
+pub const TIMER_TICK: Nanos = MS;
 /// Frames kept for a peer while its session is being dialed.
 pub const QUEUE_FRAMES: usize = 256;
 /// The most entries of the dial backoff table and of the peer tables.

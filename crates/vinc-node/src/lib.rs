@@ -35,6 +35,9 @@
 //!   [`member_at`](Node::member_at), [`poll_member`](Node::poll_member)).
 //! - **Restart.** The host's bundle records bring held and partial bundles, with their copies and custody, back
 //!   ([`dtn_restore`](Node::dtn_restore)).
+//! - **A timer that moves.** A deadline that two timer calls in a row leave due where it was is counted against the
+//!   layer that holds it ([`Node::timer_stats`]), and the node asks for the next call one [`TIMER_TICK`] later, so a
+//!   host that serves due timers first does not spin on it.
 //! - **Revocation and leave.** A revoked peer loses every session within the call; a leave closes every hub session
 //!   with code 0x4C and then every other session.
 //!
@@ -75,6 +78,7 @@ mod portmap;
 mod probe;
 mod reconcile;
 mod relay;
+mod timers;
 pub mod trace;
 mod values;
 mod values_frames;
@@ -84,7 +88,8 @@ mod values_types;
 pub use apps::{Apps, DtnApp, Enabled, NoApps, NoDtn, NoIndex, NoSets, NoValues, Recipient, ServeSource, SetsApp};
 pub use config::{
     BACKOFF_CAP, BACKOFF_FIRST, BACKOFF_HUB_CAP, Config, DENY_CAP, DENY_FIRST, DTN_ALPN, HUB_ALPN, HUB_URGENCY, Nanos,
-    QUEUE_FRAMES, SESSION_LIVED, SETS_ALPN, SETS_URGENCY, STREAM_REPAIR, SURVIVOR, SURVIVOR_HAVE, Store, VALUES_ALPN,
+    QUEUE_FRAMES, SESSION_LIVED, SETS_ALPN, SETS_URGENCY, STREAM_REPAIR, SURVIVOR, SURVIVOR_HAVE, Store, TIMER_TICK,
+    VALUES_ALPN,
 };
 pub use dtn::{BUNDLES, DtnPlan, DtnSendError};
 pub use dtn_save::DtnRestored;
@@ -97,6 +102,7 @@ pub use portmap::PortMapStats;
 pub use probe::BackoffProbe;
 pub use reconcile::{ATTEMPTS, RESPONDERS, ROUNDS, SetsError};
 pub use relay::{MemberNotice, is_relay_request};
+pub use timers::{Timed, TimerStats};
 pub use trace::{Body, NodeTrace, TRACE_VERSION, TraceItem};
 #[cfg(feature = "trace")]
 pub use values_frames::probe as values_frames_probe;
