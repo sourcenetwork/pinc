@@ -67,6 +67,8 @@ pub enum SubsDrop {
     OtherHub,
     /// A change on a version the member does not hold; it asks for the whole list once.
     OffBase,
+    /// A change at or below the version the member holds (from an old session): ignored, the member keeps its version.
+    Old,
     /// The topic table is full.
     TopicsFull,
 }

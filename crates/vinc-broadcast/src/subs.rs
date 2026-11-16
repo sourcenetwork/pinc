@@ -121,9 +121,10 @@ pub(crate) fn apply(list: &mut Vec<NodeId>, add: &[NodeId], rem: &[NodeId], max:
     cut
 }
 
-/// Whether the hub tells `p` the list of `st`: a live subscriber, or a recent publisher.
+/// Whether the hub tells `p` the list of `st`: a live subscriber, or a recent publisher that holds no subscription (a
+/// held subscriber is told nothing, whatever else it did).
 fn is_recipient(st: &Topic, p: &NodeId) -> bool {
-    st.subs.get(p).copied().unwrap_or(false) || st.pubs.contains(p)
+    st.subs.get(p).copied().unwrap_or_else(|| st.pubs.contains(p))
 }
 
 /// Bring the recipients of `topic` to the current list: a delta to those that are not stale, then the whole list to
@@ -298,7 +299,8 @@ impl Topics {
         }
     }
 
-    /// Hub: how many recipients a refused list left owed the whole list, in any topic (the counter of `owed`).
+    /// Hub: how many nodes are in `owed`, the ones a refused list left owed the whole list in some topic. A superset
+    /// of the nodes still owed in a topic: an entry stays until its stream has room, though the topic dropped it.
     pub fn subs_owed(&self) -> usize {
         self.owed.len()
     }
@@ -500,6 +502,13 @@ impl Topics {
             }
             // A removal from a list cut below the hub's brings an id the member never saw into the hub's cut: only the
             // whole list tells which.
+            // Not newer than the version held: a late frame of an old session, nothing to apply or to ask for.
+            _ if st
+                .peers_ver
+                .is_some_and(|(e, s)| e == ver.0 && s.wrapping_sub(ver.1) < 1 << 31) =>
+            {
+                Some(SubsDrop::Old)
+            }
             (_, Some(rem))
                 if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1))) && (!st.peers_cut || rem.is_empty()) =>
             {

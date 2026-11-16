@@ -437,3 +437,79 @@ fn a_change_from_the_primary_after_a_late_list_from_the_old_hub_makes_the_member
     );
     assert_eq!(held.as_slice(), net.nodes[3].t.known_subscribers(T));
 }
+
+/// A subscriber the hub holds and that also published recently is told nothing: not the changes, and not the list an
+/// ASK or a stale flush would send.
+#[test]
+fn a_held_subscriber_that_also_published_is_not_a_recipient_of_the_list() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 3, SEC);
+    net.publish(1, T, b"first");
+    net.subscribe(1, T);
+    let one = net.id(1);
+    let hub = &mut net.nodes[0];
+    hub.t.hold(&mut hub.h, &one);
+    net.pump();
+    net.subscribe(2, T);
+    assert_eq!(inject(&mut net, 1, 0, &[2]), [SubsDrop::NotRecipient]);
+}
+
+/// A change older than the version the member holds (from an old session, after a newer whole list) is ignored: the
+/// member keeps its version and does not ask for the list.
+#[test]
+fn a_change_older_than_the_version_held_is_ignored_and_the_member_does_not_ask() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 3, SEC);
+    let seen = Rc::new(RefCell::new((0u64, 0u32)));
+    let s = Rc::clone(&seen);
+    net.filter = Some(Box::new(move |_, to, bytes| {
+        if to == 2 && bytes.get(4) == Some(&ty::SUBS) {
+            let rest = &bytes[6 + usize::from(bytes[5])..];
+            *s.borrow_mut() = (
+                u64::from_be_bytes(rest[1..9].try_into().unwrap()),
+                u32::from_be_bytes(rest[9..13].try_into().unwrap()),
+            );
+        }
+        true
+    }));
+    for i in 1..=3 {
+        net.subscribe(i, T);
+    }
+    net.filter = None;
+    let asks = |net: &Net| {
+        net.log
+            .iter()
+            .filter(|(_, from, to, t, _)| (*from, *to, *t) == (2, 0, ty::SUBS))
+            .count()
+    };
+    let before = asks(&net);
+    let held = net.nodes[2].t.known_subscribers(T).to_vec();
+    let (inc, seq) = *seen.borrow();
+    assert!(seq > 1);
+    let five = net.id(0);
+    inject(&mut net, 0, 2, &change((inc, seq - 1), &[five]));
+    net.pump();
+    assert_eq!(asks(&net), before, "the member asked for the list");
+    assert_eq!(net.nodes[2].t.known_subscribers(T), held.as_slice());
+}
+
+/// A SUB from a member whose stream is behind and is owed the list gets the list once, not once for the stream's
+/// room and again for the version its SUB carries.
+#[test]
+fn a_lagging_member_that_subscribes_again_is_sent_the_list_once() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 3, SEC);
+    net.subscribe(1, T);
+    let one = net.id(1);
+    net.nodes[0].h.full.insert(one);
+    net.publish(2, T, b"while full");
+    net.subscribe(3, T);
+    net.nodes[0].h.full.remove(&one);
+    let sent = |net: &Net| {
+        net.log
+            .iter()
+            .filter(|(_, _, to, t, _)| *to == 1 && *t == ty::SUBS)
+            .count()
+    };
+    let before = sent(&net);
+    resubscribe(&mut net, 1);
+    let lists = sent(&net) - before;
+    assert_eq!(lists, 1, "the member was sent the list {lists} times");
+}
