@@ -153,8 +153,14 @@ HeadPair(x) == IF {p \in Nodes \X Nodes : x.net[p] # <<>>} = {} THEN <<>>
                ELSE <<CHOOSE p \in {p \in Nodes \X Nodes : x.net[p] # <<>>} :
                         \A q \in {q \in Nodes \X Nodes : x.net[q] # <<>>} : p[1] < q[1] \/ (p[1] = q[1] /\ p[2] <= q[2])>>
 InboxDue(x) == {n \in Nodes : x.inbox[n] # <<>> /\ Ge(x.now, x.inbox[n][1].due)}
-\* a node that left stops ticking (the host stops calling it)
-TimerDue(x) == {n \in x.alive : ~x.nodes[n].leaving /\ Le(PollTimeout(x.nodes[n]), x.now)}
+\* A node that left keeps no membership timer: on_timeout does nothing once it is leaving, so the host neither asks its
+\* deadline nor calls it (vinc-node Node::mem_timed, vinc#551). LeftTimed is that rule. The witness
+\* MembershipSys_w_lefttimer overrides it with OldLeftTimed, the node before the fix, which kept asking the deadline of a
+\* node that left: the deadline stays due, every call leaves it due, and the host calls again at once (TimerMoves fails).
+LeftTimed(S) == ~S.leaving
+OldLeftTimed(S) == TRUE
+\* the nodes whose membership timer is due: the host calls them now
+TimerDue(x) == {n \in x.alive : LeftTimed(x.nodes[n]) /\ Le(PollTimeout(x.nodes[n]), x.now)}
 KaDue(x) == KeepaliveOn /\ Ge(x.now, x.nextKA)
 \* sessions that must be dialed or ended
 ToDial(x) == {p \in Nodes \X Nodes : p[2] \in Hubs /\ p[1] > p[2] /\ Pr(p[1], p[2]) \notin x.sess
@@ -197,9 +203,11 @@ ProcessStep(x) ==
     IN IF n \notin x.alive THEN x1
        ELSE CallAt(x1, n, LAMBDA S, e : CallBytes(S, e, x1.now, it.from, <<it.f>>, FALSE))
 
+\* a timer call moves the node's deadline past now: otherwise the host would call again at once, forever
 FireStep(x) ==
     LET n == CHOOSE n \in TimerDue(x) : \A m \in TimerDue(x) : n <= m
-    IN CallAt(x, n, LAMBDA S, e : CallTimeout(S, e, x.now))
+        x1 == CallAt(x, n, LAMBDA S, e : CallTimeout(S, e, x.now))
+    IN [x1 EXCEPT !.hist.okTimer = @ /\ Lt(x.now, PollTimeout(x1.nodes[n]))]
 
 KaStep(x) ==
     [x EXCEPT !.nextKA = SatAdd(x.now, SecW(30)),
@@ -207,7 +215,7 @@ KaStep(x) ==
                                             THEN x.now ELSE x.rx[p]]]
 
 Deadlines(x) ==
-    {PollTimeout(x.nodes[n]) : n \in {n \in x.alive : ~x.nodes[n].leaving}} \cup {x.nextKA} \cup {i.due : i \in {x.inbox[n][1] : n \in {n \in Nodes : x.inbox[n] # <<>>}}}
+    {PollTimeout(x.nodes[n]) : n \in {n \in x.alive : LeftTimed(x.nodes[n])}} \cup {x.nextKA} \cup {i.due : i \in {x.inbox[n][1] : n \in {n \in Nodes : x.inbox[n] # <<>>}}}
       \cup (IF x.pc <= Len(Script) THEN {SecW(START + Script[x.pc][2])} ELSE {})
 FutureDeadlines(x) == {d \in Deadlines(x) : Lt(x.now, d)}
 MinD(S) == CHOOSE d \in S : \A e \in S : Le(d, e)
@@ -272,7 +280,7 @@ ScriptStep(x) ==
 (* ---- the specification ---- *)
 HistInit == [down |-> {}, left |-> {}, susp |-> {}, conf |-> {}, acc |-> {}, rest |-> {}, resub |-> {}, rel |-> {},
              hold |-> {}, restore |-> {}, revcl |-> {}, lvcl |-> {}, lostProbes |-> 0, primN |-> [n \in Nodes |-> 0], supp |-> {}, restarts |-> 0,
-             okDown |-> TRUE, okInc |-> TRUE, okBounds |-> TRUE, okWait |-> TRUE, healWait |-> FALSE,
+             okDown |-> TRUE, okInc |-> TRUE, okBounds |-> TRUE, okWait |-> TRUE, okTimer |-> TRUE, healWait |-> FALSE,
              lastInc |-> [n \in Nodes |-> Z], crashAt |-> [n \in Nodes |-> <<>>]]
 
 StartAll ==
@@ -379,6 +387,9 @@ PrimaryStable == \A n \in Members : w.hist.primN[n] <= 2
 \* #284: a removal that a quiet window deferred moves only on its own schedule; no heal defers it again (only a late
 \* timer does, the reference model's rule)
 WaitKept == w.hist.okWait
+\* vinc#551: every timer call the host makes moves the node's membership deadline past now, so a host that serves due
+\* timers first (the facade's run_as, under Endpoint::close) always gets past them
+TimerMoves == w.hist.okTimer
 \* ScrHealWait: the removal hub 1 reports at 76 s, deferred by the window of the heal at 75 s, is applied at the tick after
 \* that window's end and the extra look (75 + 10 + 5 s, ticks every 0.5 s), whatever window the heal at 79 s opened
 HealGone == SecsSince(w, 91) => 5 \notin DOMAIN w.nodes[4].members

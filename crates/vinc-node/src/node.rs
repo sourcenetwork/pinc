@@ -310,6 +310,13 @@ where
         self.io.is_hub || !self.io.hubs.is_empty()
     }
 
+    /// Whether membership keeps a timer: the node is in a group and has not left it. Once it leaves,
+    /// [`Membership::on_timeout`] does nothing, so a deadline asked of it would stay due and the host would call again
+    /// at once, forever (vinc#551).
+    fn mem_timed(&self) -> bool {
+        self.in_group() && !self.leaving
+    }
+
     /// Whether the periodic duties have anything to keep: a group to attach to, a layer above broadcast, or tables
     /// of sessions and backoffs. An idle node arms no timer of its own.
     pub(crate) fn duty_needed(&self) -> bool {
@@ -507,7 +514,7 @@ where
         self.begin(now);
         self.io.ep.handle_timeout(now);
         self.refresh_alive(now);
-        if self.in_group() && now >= self.mem.poll_timeout() {
+        if self.mem_timed() && now >= self.mem.poll_timeout() {
             self.refresh_ticket();
             let (m, mut h) = self.mem_host();
             m.on_timeout(&mut h, now);
@@ -566,7 +573,7 @@ where
     fn layers_deadline(&self, now: Nanos) -> Option<Nanos> {
         [
             self.conn.next_deadline(now),
-            self.in_group().then(|| self.mem.poll_timeout()),
+            self.mem_timed().then(|| self.mem.poll_timeout()),
             self.topics.poll_timeout(),
             self.values_deadline(),
             self.sets_deadline(),
