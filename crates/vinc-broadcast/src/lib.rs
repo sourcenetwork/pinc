@@ -38,6 +38,7 @@ pub mod auth;
 pub mod consts;
 pub mod event;
 pub mod host;
+pub mod statement;
 pub mod wire;
 
 #[cfg(feature = "alloc")]
