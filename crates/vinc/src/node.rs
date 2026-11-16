@@ -65,8 +65,9 @@ macro_rules! define {
 
         impl AnyEp {
             /// The endpoint of the smallest rung that holds `connections` sessions, with ten connection id entries per
-            /// session and `pool_chunks` chunks for each; `None` above the ladder. It is not generic, so it is compiled
-            /// once, here, and optimised whatever the host's types: no host's build keeps a copy of a slot on the stack.
+            /// session and `pool_chunks` chunks for each, in segments if `pool_segments` (and the system has them); `None`
+            /// above the ladder. It is not generic, so it is compiled once, here, and optimised whatever the host's types:
+            /// no host's build keeps a copy of a slot on the stack.
             #[inline(never)]
             pub(crate) fn new(
                 connections: usize,
@@ -75,11 +76,13 @@ macro_rules! define {
                 identity: LocalIdentity,
                 cfg: EndpointConfig,
                 pool_chunks: usize,
+                pool_segments: bool,
             ) -> Option<Self> {
                 match connections {
                     $(n if n <= $k => Some(Self::$v({
                         let mut ep = Ep::<$k, { $k * 10 }>::new_owned(now, Software, drbg, identity, cfg, pool_chunks);
                         MACHINES.with(|m| ep.share_machines(m));
+                        ep.set_pool_segments(pool_segments && vinc_transport::stream::pool::SEGMENT_CHUNKS > 1);
                         ep
                     })),)+
                     _ => None,

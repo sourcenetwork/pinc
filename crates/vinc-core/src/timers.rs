@@ -16,6 +16,9 @@
 //! 200 addresses remembered, and until when a dial's resend may carry the short Initial (a validated UDP path heard
 //! within 90 s of the timer, not of the dial).
 //!
+//! The endpoint's deadline also covers the expiry of its spare pool segments (`Segments`): while one is spare the
+//! endpoint wakes once a period, with no session at all too, and gives back those no session took (vinc#435).
+//!
 //! Invariants: a session has at most one entry in the heap; a settled session that has ended is freed; a deadline
 //! after a timer is strictly later than the time of the call, so a timer cannot spin.
 
@@ -137,15 +140,31 @@ ep_impl! {
         }
     }
 
-    /// The next time [`handle_timeout`](Self::handle_timeout) must run, or `None` when no session has a timer.
-    /// While the event queue is near full no timer is due: read events with `poll_event` first.
+    /// The next time [`handle_timeout`](Self::handle_timeout) must run, or `None` when no session has a timer and no
+    /// pool segment is spare. While the event queue is near full no session's timer is due: read events with
+    /// `poll_event` first. The expiry of the spare segments is due whatever the queue: it raises no event.
+    ///
+    /// Not a pure read: the first ask after a segment went spare arms its expiry one period after the last input
+    /// (`Segments::deadline`). Every later ask returns that same moment until the expiry runs or no segment is spare,
+    /// so a host may keep the answer until its next call into the endpoint, and asking again (the node's debug check
+    /// does) changes nothing. Keep it so: a deadline that moved on each ask would make a kept answer wrong.
     pub fn poll_timeout(&self) -> Option<u64> {
-        self.heap.peek().map(|(t, _)| t).filter(|_| !self.events.stalled())
+        let sessions = self.heap.peek().map(|(t, _)| t).filter(|_| !self.events.stalled());
+        #[cfg(feature = "alloc")]
+        if let Some(spare) = self.fresh.as_ref().and_then(|f| f.segments.deadline(self.last_now)) {
+            return Some(sessions.map_or(spare, |t| t.min(spare)));
+        }
+        sessions
     }
 
-    /// Run every timer that is due at `now`.
+    /// Run every timer that is due at `now`. Spare pool segments go back to the system here and nowhere else, so a
+    /// packet or a command never waits on the system to unmap one.
     pub fn handle_timeout(&mut self, now: u64) {
         self.last_now = now;
+        #[cfg(feature = "alloc")]
+        if let Some(f) = self.fresh.as_ref() {
+            f.segments.expire(now);
+        }
         self.orphans.expire(now);
         for _ in 0..K {
             if self.events.stalled() {

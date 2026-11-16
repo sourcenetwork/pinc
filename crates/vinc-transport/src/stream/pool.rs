@@ -6,13 +6,16 @@
 //! a chunk cannot be freed twice through safe code. Allocation and free are O(1) (amortized for a grown pool): fresh
 //! chunks come from a bump cursor and returned chunks form a last-in first-out free list, stored in their first four
 //! bytes, or beside them in a grown pool. Exhaustion is a typed result, never an overflow. After
-//! [`BufferPool::trim`] a grown pool holds the memory of its chunks in use and of no other.
+//! [`BufferPool::trim`] a grown pool holds the memory of the segments with a chunk in use and of no other.
 //!
 //! A pool is one of three: over a slab the caller lends ([`BufferPool::from_slab`], no heap), over one flat buffer
 //! allocated when the pool is made ([`BufferPool::new_boxed`], no allocation afterwards), or grown
-//! ([`BufferPool::new_grown`]): a chunk's memory is allocated when the chunk is handed out and kept while the session
-//! is busy; a trim, when the session's streams have all ended, frees the idle ones. So a quiet session holds what it
-//! uses, in whole chunks, whatever the allocator commits lazily, and a busy one allocates nothing per chunk.
+//! ([`BufferPool::new_grown`]): a chunk's memory is made when it is first handed out (its first [`OWN_CHUNKS`] each on
+//! its own, the others in segments) and kept while the session is busy; a trim, when the session's streams have all
+//! ended, frees every segment with no chunk in use. So a quiet session holds nothing, and its segments go to the spare
+//! segments of its endpoint ([`Segments`]), which the endpoint's timer gives back to the system, not to the
+//! allocator's heap; a busy one allocates nothing per chunk. A segment passed to another session is emptied first, so
+//! a session never reads another's bytes; one the system refuses becomes chunks of their own (`grown`).
 
 use core::fmt;
 use core::num::NonZeroU32;
@@ -53,68 +56,12 @@ enum Slab<'p> {
     Grown(Grown),
 }
 
-/// A grown slab: the memory of each chunk index (none until it is handed out, and none again once a trim freed it),
-/// the free list of indices, most recently returned last, and how many entries at its bottom have no memory: a trim
-/// frees the memory of every idle chunk, so every entry above `bare` was returned since and has its memory.
 #[cfg(feature = "alloc")]
-struct Grown {
-    made: alloc::vec::Vec<Option<alloc::boxed::Box<[u8]>>>,
-    cap: usize,
-    free: alloc::vec::Vec<u32>,
-    bare: usize,
-}
-
+mod grown;
 #[cfg(feature = "alloc")]
-impl Grown {
-    /// Hand out the most recently returned chunk, or the one at the bump cursor `fresh`, with its memory.
-    fn take(&mut self, fresh: &mut u32) -> Option<usize> {
-        let i = if let Some(i) = self.free.pop() {
-            self.bare = self.bare.min(self.free.len());
-            i as usize
-        } else {
-            let i = *fresh as usize;
-            if i >= self.cap {
-                return None;
-            }
-            *fresh += 1;
-            i
-        };
-        if self.made.len() <= i {
-            self.made.resize_with(i + 1, || None);
-        }
-        let memory = self.made.get_mut(i)?;
-        if memory.is_none() {
-            *memory = Some(alloc::vec![0u8; CHUNK_SIZE].into_boxed_slice());
-        }
-        Some(i)
-    }
-
-    /// Take chunk `i` back, with its memory.
-    fn give(&mut self, i: usize) {
-        self.free.push(u32::try_from(i).unwrap_or(u32::MAX));
-    }
-
-    /// Free the memory of every idle chunk.
-    fn trim(&mut self) {
-        for &j in self.free.get(self.bare..).unwrap_or_default() {
-            if let Some(memory) = self.made.get_mut(j as usize) {
-                *memory = None;
-            }
-        }
-        self.bare = self.free.len();
-    }
-
-    /// Forget every chunk handed out and free their memory.
-    fn reset(&mut self) {
-        self.made.clear();
-        self.free.clear();
-        self.bare = 0;
-    }
-
-    fn held(&self) -> usize {
-        self.made.iter().filter(|m| m.is_some()).count()
-    }
-}
+use grown::Grown;
+#[cfg(feature = "alloc")]
+pub use grown::{OWN_CHUNKS, SEGMENT_CHUNKS, SEGMENT_DECAY, Segments};
 
 impl Slab<'_> {
     /// How many chunks the slab has or may have.
@@ -134,7 +81,7 @@ impl Slab<'_> {
             #[cfg(feature = "alloc")]
             Slab::Boxed(b) => b.as_chunks().0.get(i),
             #[cfg(feature = "alloc")]
-            Slab::Grown(g) => g.made.get(i)?.as_deref()?.as_chunks().0.first(),
+            Slab::Grown(g) => g.chunk(i),
         }
     }
 
@@ -144,7 +91,7 @@ impl Slab<'_> {
             #[cfg(feature = "alloc")]
             Slab::Boxed(b) => b.as_chunks_mut().0.get_mut(i),
             #[cfg(feature = "alloc")]
-            Slab::Grown(g) => g.made.get_mut(i)?.as_deref_mut()?.as_chunks_mut().0.first_mut(),
+            Slab::Grown(g) => g.chunk_mut(i),
         }
     }
 
@@ -194,18 +141,45 @@ impl<'p> BufferPool<'p> {
         Self::with_slab(Slab::Boxed(slab))
     }
 
-    /// A heap-backed pool of up to `chunks` chunks; the budget is all of them. A chunk's memory is allocated when the
-    /// chunk is first handed out and kept until a [`trim`](Self::trim) or a [`reset`](Self::reset): the pool holds what
-    /// its session uses, in whole chunks, on any allocator, where [`new_boxed`](Self::new_boxed) asks for the whole
-    /// budget at once and counts on the system not to commit it.
+    /// A heap-backed pool of up to `chunks` chunks; the budget is all of them. A chunk's memory is made when it is first
+    /// handed out: each of the first [`OWN_CHUNKS`] on its own, so a session that only shakes hands maps no segment,
+    /// and the others in a segment reserved when a chunk of it is first handed out and committed a chunk at a time. It
+    /// is kept until a [`trim`](Self::trim) finds none of the segment's chunks in use, or a [`reset`](Self::reset):
+    /// the pool holds what its session uses, where [`new_boxed`](Self::new_boxed) asks for the whole budget at once and
+    /// keeps it. A segment is as large as the system allocator maps on its own where it gives freed memory back
+    /// ([`SEGMENT_CHUNKS`]), so a trimmed segment's pages go back to the system and do not stay in the allocator's
+    /// heap; elsewhere it is one chunk. A segment the system refuses is counted ([`Segments::refused`]) and its chunks,
+    /// and those of the session's later segments, are allocations of their own: the pool of 16 KiB chunks.
     #[cfg(feature = "alloc")]
     pub fn new_grown(chunks: usize) -> Self {
-        Self::with_slab(Slab::Grown(Grown {
-            made: alloc::vec::Vec::new(),
-            cap: chunks,
-            free: alloc::vec::Vec::new(),
-            bare: 0,
-        }))
+        Self::new_grown_in(chunks, SEGMENT_CHUNKS)
+    }
+
+    /// Take new segments from `segments`, the spare segments the grown pools of an endpoint share, and give the freed
+    /// ones to it; the refusals of the system are counted there. A pool that shares none frees its segments to the
+    /// system and allocates every one it needs. Does nothing to a flat or borrowed pool.
+    #[cfg(feature = "alloc")]
+    pub fn share_segments(&mut self, segments: &Segments) {
+        if let Slab::Grown(g) = &mut self.slab {
+            g.share(segments);
+        }
+    }
+
+    /// As [`new_grown`](Self::new_grown), with segments of `segment_chunks` chunks, rounded up to a power of two: 1 is
+    /// the pool of 16 KiB chunks, each its own allocation, which a host whose allocator does not map and commit a large
+    /// request lazily asks for.
+    #[cfg(feature = "alloc")]
+    pub fn new_grown_in(chunks: usize, segment_chunks: usize) -> Self {
+        Self::with_slab(Slab::Grown(Grown::new(chunks, segment_chunks)))
+    }
+
+    /// The chunks of each segment of a grown pool (1 for a pool of 16 KiB chunks); 0 for a flat or borrowed pool.
+    pub fn segment_chunks(&self) -> usize {
+        match &self.slab {
+            #[cfg(feature = "alloc")]
+            Slab::Grown(g) => g.seg,
+            _ => 0,
+        }
     }
 
     fn with_slab(slab: Slab<'p>) -> Self {
@@ -219,8 +193,7 @@ impl<'p> BufferPool<'p> {
         }
     }
 
-    /// Free the memory of the idle chunks of a grown pool: for a pool whose
-    /// session is quiet. A flat or borrowed pool holds all its memory anyway; for it this does nothing.
+    /// Free the memory of every segment of a grown pool with no chunk in use: for a pool whose session is quiet. A flat or borrowed pool holds all its memory anyway; for it this does nothing.
     pub fn trim(&mut self) {
         #[cfg(feature = "alloc")]
         if let Slab::Grown(g) = &mut self.slab {
@@ -229,7 +202,7 @@ impl<'p> BufferPool<'p> {
     }
 
     /// Forget every chunk handed out, so the pool is as new: for a pool whose connection ended. Every
-    /// [`Chunk`] taken before is dead and must be dropped, not freed.
+    /// [`Chunk`] taken before is dead and must be dropped, not freed. A grown pool serves a new session after it.
     pub fn reset(&mut self) {
         self.fresh = 0;
         self.free_head = 0;
@@ -240,7 +213,8 @@ impl<'p> BufferPool<'p> {
         }
     }
 
-    /// Chunks of memory the pool holds now: every one of them, or for a grown pool those with their memory now.
+    /// Chunks of memory the pool holds now: every one of them, or for a grown pool those handed out since their
+    /// segment's memory was made (what its session committed of them).
     pub fn held_chunks(&self) -> usize {
         self.slab.held()
     }
@@ -296,7 +270,7 @@ impl<'p> BufferPool<'p> {
     pub fn free_chunk(&mut self, chunk: Chunk) {
         #[cfg(feature = "alloc")]
         if let Slab::Grown(g) = &mut self.slab {
-            if g.made.get(chunk.index()).is_some_and(Option::is_some) {
+            if g.has(chunk.index()) {
                 self.used = self.used.saturating_sub(1);
                 g.give(chunk.index());
             }
@@ -514,106 +488,5 @@ mod tests {
         let mut out = [0u8; 1];
         assert_eq!(ring.read(&pool, 0, &mut out), 1);
         assert_eq!(out, [7]);
-    }
-
-    #[test]
-    fn a_grown_pool_makes_a_chunk_when_it_is_first_needed_and_never_more_than_its_budget() {
-        let cap = 35;
-        let mut pool = BufferPool::new_grown(cap);
-        assert_eq!((pool.held_chunks(), pool.available_chunks()), (0, cap));
-        let mut held = alloc::vec::Vec::new();
-        for i in 0..cap {
-            held.push(pool.alloc_chunk().unwrap());
-            assert_eq!(pool.held_chunks(), i + 1, "after chunk {i}");
-        }
-        assert_eq!(pool.alloc_chunk(), Err(PoolExhausted));
-        assert_eq!((pool.held_chunks(), pool.available_chunks()), (cap, 0));
-        // Each chunk is its own memory.
-        for (i, ch) in held.iter().enumerate() {
-            pool.bytes_mut(ch).fill(u8::try_from(i).unwrap());
-        }
-        for (i, ch) in held.iter().enumerate() {
-            let v = u8::try_from(i).unwrap();
-            assert!(pool.bytes(ch).len() == CHUNK_SIZE && pool.bytes(ch).iter().all(|x| *x == v));
-        }
-        // A returned chunk is handed out again; nothing new is made for it.
-        let last = held.pop().unwrap();
-        pool.free_chunk(last);
-        let again = pool.alloc_chunk().unwrap();
-        assert!(pool.bytes(&again).iter().skip(4).all(|x| usize::from(*x) == cap - 1));
-        assert_eq!(pool.held_chunks(), cap);
-    }
-
-    #[test]
-    fn a_grown_pool_frees_its_chunks_when_it_is_reset() {
-        let mut pool = BufferPool::new_grown(64);
-        let held: alloc::vec::Vec<Chunk> = (0..17).map(|_| pool.alloc_chunk().unwrap()).collect();
-        assert_eq!(pool.held_chunks(), 17);
-        drop(held);
-        pool.reset();
-        assert_eq!(
-            (pool.held_chunks(), pool.used_chunks(), pool.available_chunks()),
-            (0, 0, 64)
-        );
-        // The pool is as new: it makes each chunk again as it hands it out.
-        let again: alloc::vec::Vec<Chunk> = (0..64).map(|_| pool.alloc_chunk().unwrap()).collect();
-        assert_eq!((again.len(), pool.held_chunks()), (64, 64));
-        assert_eq!(pool.alloc_chunk(), Err(PoolExhausted));
-    }
-
-    #[test]
-    fn a_grown_pool_keeps_returned_chunks_until_a_trim() {
-        let mut pool = BufferPool::new_grown(64);
-        let mut held: alloc::vec::Vec<Chunk> = (0..20).map(|_| pool.alloc_chunk().unwrap()).collect();
-        assert_eq!(pool.held_chunks(), 20);
-        // Returned chunks keep their memory, so a busy session allocates nothing for the chunks it reuses.
-        for _ in 0..10 {
-            pool.free_chunk(held.pop().unwrap());
-        }
-        assert_eq!((pool.used_chunks(), pool.held_chunks()), (10, 20));
-        let again: alloc::vec::Vec<Chunk> = (0..10).map(|_| pool.alloc_chunk().unwrap()).collect();
-        assert_eq!((pool.used_chunks(), pool.held_chunks()), (20, 20));
-        // A trim frees the idle ones, never one in use.
-        for ch in held.drain(..).chain(again) {
-            pool.free_chunk(ch);
-        }
-        assert_eq!((pool.used_chunks(), pool.held_chunks()), (0, 20));
-        pool.trim();
-        assert_eq!((pool.used_chunks(), pool.held_chunks()), (0, 0));
-        let in_use: alloc::vec::Vec<Chunk> = (0..5).map(|_| pool.alloc_chunk().unwrap()).collect();
-        pool.trim();
-        assert_eq!((pool.used_chunks(), pool.held_chunks()), (5, 5));
-        // A chunk handed out after a trim has its memory, whole.
-        assert!(in_use.iter().all(|c| pool.bytes(c).len() == CHUNK_SIZE));
-    }
-
-    #[test]
-    fn a_grown_pool_and_a_flat_one_behave_alike() {
-        // The same script of takes and returns gives the same handles, the same counts and the same refusals.
-        let (mut grown, mut flat) = (BufferPool::new_grown(21), BufferPool::new_boxed(21));
-        let (mut held_grown, mut held_flat) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
-        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
-        for _ in 0..2000 {
-            seed = seed
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            if !(seed >> 33).is_multiple_of(3) || held_grown.is_empty() {
-                let (a, b) = (grown.alloc_chunk(), flat.alloc_chunk());
-                assert_eq!(a.is_ok(), b.is_ok());
-                if let (Ok(a), Ok(b)) = (a, b) {
-                    assert_eq!(a, b);
-                    held_grown.push(a);
-                    held_flat.push(b);
-                }
-            } else {
-                let i = usize::try_from(seed >> 40).unwrap() % held_grown.len();
-                grown.free_chunk(held_grown.swap_remove(i));
-                flat.free_chunk(held_flat.swap_remove(i));
-            }
-            assert_eq!(
-                (grown.used_chunks(), grown.available_chunks(), grown.budget_bytes()),
-                (flat.used_chunks(), flat.available_chunks(), flat.budget_bytes())
-            );
-        }
     }
 }

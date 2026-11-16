@@ -118,6 +118,8 @@ impl Port for Stub {
             events_queued: 0,
             backlog_refused: 0,
             owed: 0,
+            segments_spare: 0,
+            segments_refused: 0,
         })
     }
 

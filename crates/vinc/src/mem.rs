@@ -13,12 +13,21 @@
 //! Per session, every slot of the shape reserves a connection, a stream table of [`STREAMS`] slots (a slot is a few KiB
 //! with a [`RING`] of 257 entries, and is written only when its stream is first used) and a pool of up to
 //! [`Limits::pool_chunks`] chunks of 16 KiB. The stream table and the table of sent packets are reserved memory the
-//! system commits only as it is used. The pool makes a chunk when the session first needs it and keeps it while the
-//! session is busy; when the session's last stream ends it frees its idle chunks, so a quiet session holds
-//! what it uses, on any allocator. A session that moved 64 KiB and went quiet holds about 96 KiB of the client's
-//! memory, and a client endpoint with no session about 620 KiB (`tests/vinc_client_memory.rs` holds them to 112 and 704
-//! KiB). The shape is rounded up to the next capacity of the ladder, which doubles at each step: ask for what you
-//! need, not for a round number above it.
+//! system commits only as it is used. The pool makes a chunk when the session first needs it, its first on its own
+//! and the others in segments, and keeps them while the session is busy; when the session's last stream ends it
+//! frees every segment with no chunk in use, so a quiet session holds what it uses. On 64-bit Linux with glibc a
+//! segment is 32 MiB, which the allocator maps on its own, and the system commits only the chunks the session uses:
+//! freeing it gives them back to the system, where 16 KiB chunks freed one by one would stay in the allocator's heap
+//! after a burst. A freed segment stays spare with its endpoint (emptied before another session takes it, so no session
+//! reads another's bytes), and the next session that needs one takes it again without the system, so neither a burst
+//! nor a session
+//! that goes quiet after every request maps and unmaps segments as it runs; the endpoint's timer gives a spare segment
+//! back once no session took it for a whole period of 500 ms, within a second of the last use. The timer runs while a
+//! future drives the endpoint, so a host that keeps quiet connections awaits `Endpoint::run()`, as their keepalives
+//! need anyway; an endpoint nothing polls keeps its spare segments until it runs again. A session that moved
+//! 64 KiB and went quiet holds about 63 KiB of the client's memory, and a client endpoint with no session about 620 KiB
+//! (`tests/vinc_client_memory.rs` holds them to 80 and 704 KiB). The shape is rounded up to the next capacity of the
+//! ladder, which doubles at each step: ask for what you need, not for a round number above it.
 //!
 //! Invariants: the memory of a session returns to its slot when the session ends; the slot table never grows.
 
@@ -58,6 +67,31 @@ pub struct Limits {
     /// use, so thousands of quiet sessions hold little whatever the ceiling. Streams that move data at once are charged
     /// their whole window, so a path whose bandwidth times round trip is above half the pool needs more.
     pub pool_chunks: usize,
+    /// Whether a session's pool takes its chunks past the first from segments of 32 MiB (2048 chunks), which a
+    /// quiet session frees whole so its pages go back to the system after a burst, or each chunk on its own, 16 KiB at
+    /// a time (`false`). The default is on for 64-bit Linux with glibc, the one system the segments are for (it maps a
+    /// request of 32 MiB or more on its own, commits only the pages written and unmaps it whole when it is freed), and
+    /// off everywhere else, where it cannot be turned on.
+    ///
+    /// With the default, a session's first chunk is a 16 KiB allocation of its own, and a handshake with a first
+    /// request and reply holds no more at once, so such a session maps no segment. A session that holds more reserves a
+    /// segment: 32 MiB of address space, of which the system commits only the 16 KiB chunks the session uses, one
+    /// segment per 2048 `pool_chunks` it holds at once. A quiet session's segment stays reserved, spare, until the
+    /// endpoint's timer gives it back within a second. So an endpoint reserves up to 32 MiB times the segments its
+    /// sessions held at once in the last second: 1,000 sessions busy at once reserve about 32 GB of address space,
+    /// and use what they write. What a host with a limit sees:
+    ///
+    /// - an address-space limit (`RLIMIT_AS`, `ulimit -v`) or a strict commit limit (`vm.overcommit_memory = 2`, which
+    ///   charges a segment whole though only its written pages are resident): a segment the system refuses aborts
+    ///   nothing. The session counts the refusal (`NodeStats::segments_refused`) and keeps its chunks in 16 KiB
+    ///   allocations of their own until it ends, as with this off; after a burst their memory may then stay in the
+    ///   allocator's heap, what the segments are for. The next session asks for a segment again.
+    /// - a memory limit that charges resident pages (a container's `memory.max`): only the chunks the sessions write
+    ///   count against it, as with this off.
+    ///
+    /// Turn it off on a host that installs its own global allocator (`#[global_allocator]`): the segments count on
+    /// glibc's behaviour, and another allocator may commit a segment whole or keep it when it is freed.
+    pub pool_segments: bool,
     /// The receive window a stream starts with, in bytes (default 1,310,720, 1.25 MiB). It grows toward twice the
     /// delivery rate while the stream is read, up to half the pool and `(RING - 1) * 16 KiB` (4 MiB): a stream moves at
     /// most one window per round trip. The pool is charged the window of a stream from its first byte, so a raised
@@ -101,6 +135,7 @@ impl Default for Limits {
         Self {
             connections: 1024,
             pool_chunks: 1024,
+            pool_segments: vinc_transport::stream::pool::SEGMENT_CHUNKS > 1,
             stream_window: 1_310_720,
             // vertexia: the transport's own default is the reference's 1,310,720 bytes, a figure sized for its test
             // links; at the facade a session of one stream or many would be held to 8.7 MiB/s on a 150 ms path

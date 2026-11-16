@@ -801,6 +801,12 @@ pub struct NodeStats {
     /// ([`Endpoint::session_taken`](crate::Endpoint::session_taken)): their handshakes are under way, or their
     /// `Incoming` waits to be read.
     pub owed: usize,
+    /// Buffer pool segments this endpoint keeps spare now, for its next sessions; its timer gives back those no session
+    /// took for a whole period (500 ms).
+    pub segments_spare: usize,
+    /// Buffer pool segments the system refused this endpoint's sessions (an address-space or commit limit), in all;
+    /// each such session kept its later chunks in allocations of 16 KiB of their own.
+    pub segments_refused: u64,
 }
 
 /// A peer in the round-trip table.
