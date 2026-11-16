@@ -14,7 +14,7 @@ mod layers_common;
 
 use layers_common::{LWorld, OWD, big, secs};
 use vinc_node::{BACKOFF_CAP, DtnPlan, Enabled, NodeEvent};
-use vinc_sim::{NodeId as SimId, SEC, Time};
+use vinc_sim::{MS, NodeId as SimId, SEC, Time};
 use vinc_tests::{LayerApps, NCmd, SplitMix64};
 
 /// One dial of the delay-tolerant layer to a peer that is up, from the dial to the carrier's report of delivery: the
@@ -147,7 +147,10 @@ fn a_carrier_that_holds_custody_for_a_destination_that_slept_delivers_after_it_w
             );
             let done = first_at(&w, cloud, |e| matches!(e, NodeEvent::DtnDelivered { .. }))
                 .unwrap_or_else(|| panic!("seed {seed}: the carrier reported no delivery"));
-            assert!(done > wake && done <= bound, "seed {seed}: the carrier reports it in time");
+            assert!(
+                done > wake && done <= bound,
+                "seed {seed}: the carrier reports it in time"
+            );
             let phone_id = w.id(phone);
             // The carrier dials the phone while it sleeps, on its own and not on word of the phone: no membership
             // event about the phone reaches it between the send and the wake.
@@ -157,8 +160,64 @@ fn a_carrier_that_holds_custody_for_a_destination_that_slept_delivers_after_it_w
                 "seed {seed}: the carrier dialed the phone for the layer before it woke: dials {tried:?}"
             );
             assert!(
-                member_events(&w, cloud, phone_id).iter().all(|t| *t <= sent || *t >= wake),
+                member_events(&w, cloud, phone_id)
+                    .iter()
+                    .all(|t| *t <= sent || *t >= wake),
                 "seed {seed}: no membership event about the phone reached the carrier while it slept"
+            );
+        }
+    });
+}
+
+#[test]
+fn the_return_of_a_member_the_carrier_gave_up_on_is_met_by_a_dial_at_once() {
+    big(|| {
+        for seed in [611u64, 612] {
+            let (mut w, [laptop, cloud, phone]) = world(seed);
+            // The phone is out of reach for long enough to be confirmed down, so the carrier's dials of it have
+            // backed off to the cap by the time it returns and the hubs announce it.
+            let (t0, sent, back) = (secs(30), secs(32), secs(130));
+            let keys = w.apps(phone).dtn.keys();
+            let payload = body(seed);
+            let hub_cloud: Vec<SimId> = w.hubs.iter().map(|h| h.0).chain([cloud]).collect();
+            let with_laptop: Vec<SimId> = hub_cloud.iter().copied().chain([laptop]).collect();
+            w.sim.partition(t0, &[&[phone], &with_laptop]);
+            w.sim.command(
+                sent,
+                laptop,
+                NCmd::DtnSend {
+                    to: Box::new(keys),
+                    payload: payload.clone(),
+                    plan: DtnPlan {
+                        lifetime_ms: 400_000,
+                        ..plan()
+                    },
+                },
+            );
+            // The laptop has handed the bundle to the carrier by then and stays away, so only the carrier can deliver.
+            w.sim.partition(secs(40), &[&[phone], &[laptop], &hub_cloud]);
+            let with_phone: Vec<SimId> = hub_cloud.iter().copied().chain([phone]).collect();
+            w.sim.partition(back, &[&[laptop], &with_phone]);
+            w.run(back + secs(120));
+
+            let phone_id = w.id(phone);
+            let heard = member_events(&w, cloud, phone_id);
+            let announced = heard
+                .iter()
+                .copied()
+                .find(|t| *t > back)
+                .unwrap_or_else(|| panic!("seed {seed}: the carrier never heard of the phone's return: {heard:?}"));
+            let done = first_at(&w, cloud, |e| matches!(e, NodeEvent::DtnDelivered { .. }))
+                .unwrap_or_else(|| panic!("seed {seed}: the carrier reported no delivery"));
+            // The announcement ends the carrier's wait: delivery follows within one dial of it, where the backoff
+            // in force would have held the dial for up to BACKOFF_CAP.
+            assert!(
+                done > announced && done <= announced + DIAL,
+                "seed {seed}: announced at {} ms, delivered at {} ms, one dial is {} ms; dials {:?}; events {heard:?}",
+                announced / MS,
+                done / MS,
+                DIAL / MS,
+                dials(&w, cloud, phone_id)
             );
         }
     });

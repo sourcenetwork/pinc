@@ -459,6 +459,9 @@ where
         while let Some(e) = self.mem.poll_event() {
             did = true;
             self.dtn_contacts_changed();
+            if let Some(member) = member_of(&e) {
+                self.io.lfailed.remove(&(Layer::Dtn, member));
+            }
             self.io.emit(NodeEvent::Member(e));
         }
         if self.io.tq.on() {
@@ -921,6 +924,22 @@ where
 
 /// The local address a datagram carried by a relay arrives at: the node's current address of the sender's family, so it
 /// names the path the sessions use after the node moved; the address the node started with only while none is set.
+/// The member a membership event is about, if it names one.
+const fn member_of(e: &vinc_membership::Event) -> Option<NodeId> {
+    use vinc_membership::Event::{
+        AddressChanged, MemberConfirmedDown, MemberJoined, MemberLeft, MemberRevoked, StackChanged,
+    };
+    match e {
+        MemberJoined { member }
+        | MemberConfirmedDown { member }
+        | MemberLeft { member }
+        | MemberRevoked { member }
+        | AddressChanged { member }
+        | StackChanged { member, .. } => Some(*member),
+        _ => None,
+    }
+}
+
 fn inbound_local(addrs: &[Option<SocketAddr>; MAX_ADDRS], from: &SocketAddr, fallback: SocketAddr) -> SocketAddr {
     addrs
         .iter()
