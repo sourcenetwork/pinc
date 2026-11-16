@@ -349,3 +349,37 @@ fn a_hub_owes_the_list_only_to_streams_that_refused_one() {
     assert_eq!(net.nodes[0].t.subs_owed(), 0);
     assert_all_hold(&net, &[1, 2, 3, 4, 5], 256);
 }
+
+/// A member whose subscriber limit is under its hub's holds the first of the hub's list; a change that removes from
+/// the list it holds is not applied (the id after the cut would never come back): it asks for the whole list.
+#[test]
+fn a_member_whose_subscriber_limit_is_under_its_hubs_asks_for_the_list_when_a_change_removes_from_a_cut_list() {
+    let small = vinc_broadcast::Limits {
+        max_subscribers: 2,
+        ..vinc_broadcast::Limits::default()
+    };
+    let mut net = Net::with_limits(&[IdentityAlg::Ed25519; 4], 1, SEC, small);
+    for i in 1..=3 {
+        net.attach(i);
+    }
+    // The hub keeps the default limit; the members keep two.
+    net.limits = vinc_broadcast::Limits::default();
+    let at = net.now;
+    net.restart(0, at);
+    let mut order: Vec<usize> = (1..=3).collect();
+    order.sort_by_key(|i| net.id(*i));
+    let (first, member) = (order[0], order[2]);
+    for i in 1..=3 {
+        net.subscribe(i, T);
+    }
+    assert_eq!(
+        net.nodes[member].t.known_subscribers(T),
+        expected(&net, &[1, 2, 3], 2).as_slice()
+    );
+    unsubscribe(&mut net, first);
+    let live: Vec<usize> = (1..=3).filter(|i| *i != first).collect();
+    assert_eq!(
+        net.nodes[member].t.known_subscribers(T),
+        expected(&net, &live, 2).as_slice()
+    );
+}

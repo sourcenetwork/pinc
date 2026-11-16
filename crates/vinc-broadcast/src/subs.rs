@@ -22,9 +22,10 @@
 //! Invariants: a list holds at most `max_subscribers` nodes in id order, so two hubs with the same tables send the
 //! same bytes; `told` is the list built from the tables after every change, and `(incarnation, told_seq)` its
 //! version; a member's list is always the list its hub had at the version the member holds: a delta is applied only
-//! on its own base, and only from the hub of the member's list, and a join hint never enters it; `stale` holds only
-//! recipients, and `Topics::owed` holds every recipient stale in some topic, so a stream's room is a lookup, not a walk
-//! of the topics; a held member receives no push; a restore tells the member exactly the topics it had; a release of a
+//! on its own base, and only from the hub of the member's list, a join hint never enters it, and a member whose limit
+//! cut the list asks for the whole list on a change that removes (the id past the cut is not in the change); `stale`
+//! holds only recipients, and `Topics::owed` holds every recipient stale in some topic, so a stream's room is a lookup,
+//! not a walk of the topics; a held member receives no push; a restore tells the member exactly the topics it had; a release of a
 //! member that was behind in a topic leaves the span of what it was owed in that topic.
 
 use alloc::collections::BTreeSet;
@@ -104,16 +105,19 @@ pub(crate) fn delta(old: &[NodeId], new: &[NodeId]) -> (Vec<NodeId>, Vec<NodeId>
     (only(new, old), only(old, new))
 }
 
-/// Apply a change to the sorted list `list`: remove `rem`, insert `add` in order, keep at most `max`. For sorted
-/// lists without duplicates and at most `max` long, `apply(old, delta(old, new))` is `new`.
-pub(crate) fn apply(list: &mut Vec<NodeId>, add: &[NodeId], rem: &[NodeId], max: usize) {
+/// Apply a change to the sorted list `list`: remove `rem`, insert `add` in order, keep at most `max`; true when the
+/// cut dropped an id. For sorted lists without duplicates and at most `max` long, `apply(old, delta(old, new))` is
+/// `new`.
+pub(crate) fn apply(list: &mut Vec<NodeId>, add: &[NodeId], rem: &[NodeId], max: usize) -> bool {
     list.retain(|n| !rem.contains(n));
     for n in add {
         if let Err(pos) = list.binary_search(n) {
             list.insert(pos, *n);
         }
     }
+    let cut = list.len() > max;
     list.truncate(max);
+    cut
 }
 
 /// Whether the hub tells `p` the list of `st`: a live subscriber, or a recent publisher.
@@ -470,14 +474,19 @@ impl Topics {
             (FULL, _) => {
                 st.peers.clear();
                 st.peers.extend(ids.iter().take(max).copied());
+                st.peers_cut = ids.len() > max;
                 st.peers_from = Some(*from);
                 st.peers_ver = Some(ver);
                 confirm(h, st, from, topic, &me);
                 None
             }
             _ if st.peers_from != Some(*from) => Some(SubsDrop::OtherHub),
-            (_, Some(rem)) if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1))) => {
-                apply(&mut st.peers, ids, rem, max);
+            // A removal from a list cut below the hub's brings an id the member never saw into the hub's cut: only the
+            // whole list tells which.
+            (_, Some(rem))
+                if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1))) && (!st.peers_cut || rem.is_empty()) =>
+            {
+                st.peers_cut |= apply(&mut st.peers, ids, rem, max);
                 st.peers_ver = Some(ver);
                 confirm(h, st, from, topic, &me);
                 None

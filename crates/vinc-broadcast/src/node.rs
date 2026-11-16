@@ -163,6 +163,7 @@ impl core::error::Error for Refused {}
 
 /// The state of one topic.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts about one topic")]
 pub(crate) struct Topic {
     /// This node subscribes to the topic.
     pub(crate) sub: bool,
@@ -180,6 +181,8 @@ pub(crate) struct Topic {
     pub(crate) peers_from: Option<NodeId>,
     /// Member: the version of `peers` (the hub's incarnation and list number); `None` while it waits for a whole list.
     pub(crate) peers_ver: Option<(u64, u32)>,
+    /// Member: `peers` was cut to this member's `max_subscribers`, so it lacks ids the hub's list has past the cut.
+    pub(crate) peers_cut: bool,
     /// Hub: the list last told the recipients (see `subs`).
     pub(crate) told: Vec<NodeId>,
     /// Hub: the number of `told`, raised by one at every change; with the incarnation it is the list's version.
@@ -215,6 +218,7 @@ impl Topic {
             peers: Vec::new(),
             peers_from: None,
             peers_ver: None,
+            peers_cut: false,
             told: Vec::new(),
             told_seq: 0,
             stale: BTreeSet::new(),
