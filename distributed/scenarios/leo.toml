@@ -1,0 +1,51 @@
+name = "leo"
+about = "A low-orbit satellite link, emulated (its delay, jitter, loss and rate, not the radio): 45 ms round trip (22.5 ms each way), 5 ms jitter, 4% loss per packet each way, 50 Mbit/s each way; typical is a median round trip of 40 to 50 ms, 4 to 8% loss at the 75th percentile and 50 to 100 Mbit/s down; the reconfiguration outages every 15 s are not modelled."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[[sites]]
+name = "ground"
+
+[[sites]]
+name = "orbit"
+
+[[nodes]]
+name = "n1"
+site = "ground"
+
+[[nodes]]
+name = "n2"
+site = "orbit"
+
+[[links]]
+a = "ground"
+b = "orbit"
+shape = { delay_ms = 22.5, jitter_ms = 5, loss_pct = 4, rate_mbit = 50 }
+
+[workload]
+kind = "transport"
+timeout_s = 600
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "setup"
+count = 200
+
+[[workload.tests]]
+test = "resume"
+count = 100
+
+[[workload.tests]]
+test = "latency"
+size = 64
+round_trips = 200
+
+[[workload.tests]]
+test = "throughput"
+bytes = 104857600
+streams = 1
+
+[[workload.tests]]
+test = "throughput"
+bytes = 104857600
+streams = 16

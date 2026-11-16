@@ -16,7 +16,6 @@ use crate::orchestrate::agg::{Subscriber, merge_lives, pubsub_figures};
 use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::window::Window;
 use crate::orchestrate::{Ctx, Event, faults, tracefile};
-use crate::plan::MTU;
 use crate::results::Row;
 use crate::scenario::Stack;
 use crate::workloads::Pubsub;
@@ -80,7 +79,7 @@ fn base_row(ctx: &Ctx, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Row {
 
 async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Pubsub, rep: u32, pair: &str) -> Result<Row> {
     let mut row = base_row(ctx, stack, w, rep, pair);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU)
+    let set = AppSet::new(b, &ctx.plan, stack)
         .with_iroh_gossip_max(w.iroh_gossip_max)
         .with_trace(tracefile::wanted(ctx, stack));
     let outcome = body(ctx, b, &set, w, stack, &mut row).await;

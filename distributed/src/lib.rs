@@ -28,5 +28,6 @@ pub mod plan;
 pub mod quiet;
 pub mod results;
 pub mod scenario;
+pub mod scenario_transport;
 pub mod serve;
 pub mod workloads;

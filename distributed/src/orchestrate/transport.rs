@@ -15,16 +15,15 @@ use crate::metrics::NodeUse;
 use crate::orchestrate::faults::{self, Launch};
 use crate::orchestrate::window::drops;
 use crate::orchestrate::{Ctx, Event};
-use crate::plan::MTU;
 use crate::quiet::Snapshot;
 use crate::results::Row;
 use crate::scenario::{Stack, Transport, TransportTest};
 
 /// The environment of a node program: the address it binds and the interface size VINC states.
-pub(crate) fn node_env(ip: std::net::Ipv4Addr) -> Vec<(String, String)> {
+pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)> {
     vec![
         ("VINC_BENCH_BIND".into(), ip.to_string()),
-        ("VINC_BENCH_MTU".into(), MTU.to_string()),
+        ("VINC_BENCH_MTU".into(), mtu.to_string()),
     ]
 }
 
@@ -96,7 +95,7 @@ async fn one(
         return Ok(row);
     }
     let server_args = args(stack, &["server".into()]);
-    let server_env = node_env(b.address(&ctx.plan, si).0);
+    let server_env = node_env(b.address(&ctx.plan, si).0, ctx.plan.mtu);
     let mut srv = b.spawn(si, &server_args, &server_env)?;
     let addr = match srv.expect("ADDR ", READY).await {
         Ok(a) => a,
@@ -119,7 +118,7 @@ async fn one(
     client_args.extend(test.client_args());
     let client_args = args(stack, &client_args);
     let quiet_from = Snapshot::take();
-    let mut cli = b.spawn(ci, &client_args, &node_env(b.address(&ctx.plan, ci).0))?;
+    let mut cli = b.spawn(ci, &client_args, &node_env(b.address(&ctx.plan, ci).0, ctx.plan.mtu))?;
     let launches = [Launch {
         node: si,
         args: server_args,
@@ -178,4 +177,16 @@ async fn one(
     row.kernel.insert("server".into(), NodeUse::between(&s0, &s1, ps));
     row.shaper_drops = Some(d1.saturating_sub(d0));
     Ok(row)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::node_env;
+
+    #[test]
+    fn the_nodes_are_told_the_scenarios_interface_size() {
+        let env = node_env("10.1.0.2".parse().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED), 1280);
+        assert!(env.contains(&("VINC_BENCH_MTU".to_owned(), "1280".to_owned())));
+        assert!(env.contains(&("VINC_BENCH_BIND".to_owned(), "10.1.0.2".to_owned())));
+    }
 }

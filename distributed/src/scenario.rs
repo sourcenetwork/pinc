@@ -4,8 +4,9 @@
 //! A scenario names sites (a LAN behind a router, optionally a home router doing address translation), node groups in
 //! those sites, links between the sites' routers, the workload and its parameters, and faults at times into each
 //! repetition. Every shaping value is per direction: a link's `shape` is the a-to-b direction and `reverse` patches it
-//! for b-to-a. [`Scenario::validate`] reports every problem at once, each with the path of the field it concerns, so
-//! the dashboard can point at it.
+//! for b-to-a. The scenario's `mtu` (1280 to 1500 bytes, 1500 when not set) is the size of every interface of the plan
+//! and the interface size the stacks are told. [`Scenario::validate`] reports every problem at once, each with the path
+//! of the field it concerns, so the dashboard can point at it.
 //!
 //! Invariants: a scenario that validates has unique names, existing references, values in range, a route between the
 //! two ends of every transport pair, and no transport server behind address translation from its client.
@@ -15,12 +16,20 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::scenario_transport::{Transport, TransportTest};
+
 /// The most nodes one scenario may have: the backend's address plan and the dashboard are sized for it.
 pub const MAX_NODES: usize = 512;
 /// The most nodes in one site (one /24 LAN).
 pub const MAX_SITE_NODES: usize = 250;
 /// The most sites (one router each).
 pub const MAX_SITES: usize = 200;
+
+/// The interface MTU of a scenario that does not set `mtu`.
+pub const DEFAULT_MTU: u32 = 1500;
+/// The smallest `mtu` a scenario may set: the smallest IPv6 link, and a path that carries the 1,200-byte datagrams the
+/// stacks send.
+pub const MIN_MTU: u32 = 1280;
 
 /// A stack under test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -304,134 +313,6 @@ pub struct Pair {
     pub server: String,
 }
 
-/// One transport test: the scenarios of the comparison benches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "test", rename_all = "kebab-case")]
-pub enum TransportTest {
-    /// Time to the first byte of `count` new connections, each from a fresh endpoint.
-    Setup {
-        /// Connections.
-        count: u32,
-    },
-    /// The same over the stack's resumption with early data.
-    Resume {
-        /// Connections.
-        count: u32,
-    },
-    /// Request and response round trips of `size` bytes on one stream.
-    Latency {
-        /// Bytes each way.
-        size: u32,
-        /// Round trips measured.
-        round_trips: u32,
-    },
-    /// `requests` requests of `size` bytes each way, `concurrency` in flight on one connection, each on a stream of its
-    /// own, as a request-response protocol sends them.
-    Requests {
-        /// Bytes each way.
-        size: u32,
-        /// Requests measured.
-        requests: u32,
-        /// Requests in flight at once.
-        concurrency: u32,
-    },
-    /// Upload `bytes` over `streams` concurrent streams of one connection.
-    Throughput {
-        /// Bytes in all.
-        bytes: u64,
-        /// Concurrent streams.
-        streams: u32,
-    },
-    /// `connections` clients at once, each moving `bytes_each`.
-    Many {
-        /// Clients.
-        connections: u32,
-        /// Bytes each.
-        bytes_each: u64,
-    },
-}
-
-impl TransportTest {
-    /// The client's arguments for the comparison harness.
-    pub fn client_args(&self) -> Vec<String> {
-        match *self {
-            Self::Setup { count } => vec!["setup".into(), count.to_string()],
-            Self::Resume { count } => vec!["resume".into(), count.to_string()],
-            Self::Latency { size, round_trips } => vec!["latency".into(), size.to_string(), round_trips.to_string()],
-            Self::Requests {
-                size,
-                requests,
-                concurrency,
-            } => vec![
-                "requests".into(),
-                size.to_string(),
-                requests.to_string(),
-                concurrency.to_string(),
-            ],
-            Self::Throughput { bytes, streams } => vec!["throughput".into(), bytes.to_string(), streams.to_string()],
-            Self::Many {
-                connections,
-                bytes_each,
-            } => vec!["many".into(), connections.to_string(), bytes_each.to_string()],
-        }
-    }
-
-    /// The name of the result line the client prints, which is also the test's id in results.
-    pub fn id(&self) -> String {
-        match *self {
-            Self::Setup { .. } => "setup".into(),
-            Self::Resume { .. } => "resume".into(),
-            Self::Latency { size, .. } => format!("latency_{size}b"),
-            Self::Requests { size, concurrency, .. } => format!("requests_{size}b_c{concurrency}"),
-            Self::Throughput { streams, .. } => format!("throughput_{streams}s"),
-            Self::Many { .. } => "many".into(),
-        }
-    }
-
-    fn check(&self, path: &str, out: &mut Vec<Problem>) {
-        let ok = match *self {
-            Self::Setup { count } | Self::Resume { count } => (1..=100_000).contains(&count),
-            Self::Latency { size, round_trips } => {
-                (1..=1 << 20).contains(&size) && (1..=10_000_000).contains(&round_trips)
-            }
-            Self::Requests {
-                size,
-                requests,
-                concurrency,
-            } => {
-                (1..=1 << 20).contains(&size)
-                    && (1..=10_000_000).contains(&requests)
-                    && (1..=1024).contains(&concurrency)
-            }
-            Self::Throughput { bytes, streams } => (1..=1 << 40).contains(&bytes) && (1..=256).contains(&streams),
-            Self::Many {
-                connections,
-                bytes_each,
-            } => (1..=10_000).contains(&connections) && bytes_each <= 1 << 30,
-        };
-        if !ok {
-            out.push(Problem::new(path, "a count or size of this test is out of range"));
-        }
-    }
-}
-
-/// The transport workload: the comparison benches' scenarios between pairs of nodes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Transport {
-    /// The pairs measured, one after the other.
-    pub pairs: Vec<Pair>,
-    /// The tests, in order.
-    pub tests: Vec<TransportTest>,
-    /// The longest one client run may take before it is stopped and reported as timed out.
-    #[serde(default = "timeout_default")]
-    pub timeout_s: u64,
-}
-
-fn timeout_default() -> u64 {
-    300
-}
-
 /// What the nodes do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -564,6 +445,10 @@ pub struct Scenario {
     /// Repetitions of every measurement; every number is reported with its spread over them.
     #[serde(default = "three")]
     pub repetitions: u32,
+    /// The MTU of every interface, in bytes (1500 when not set): 1280 to 1500. The stacks are told it as the interface
+    /// size.
+    #[serde(default = "default_mtu", skip_serializing_if = "is_default_mtu")]
+    pub mtu: u32,
     /// What every node gets.
     #[serde(default)]
     pub resources: Resources,
@@ -590,6 +475,18 @@ fn all_stacks() -> Vec<Stack> {
 
 fn three() -> u32 {
     3
+}
+
+fn default_mtu() -> u32 {
+    DEFAULT_MTU
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_default_mtu(m: &u32) -> bool {
+    *m == DEFAULT_MTU
 }
 
 /// One problem found by [`Scenario::validate`].
@@ -705,6 +602,14 @@ impl Scenario {
             out.push(Problem::new(
                 "repetitions",
                 "use 1 to 100 repetitions (3 or more to report a spread)",
+            ));
+        }
+        if !(MIN_MTU..=DEFAULT_MTU).contains(&self.mtu) {
+            out.push(Problem::new(
+                "mtu",
+                format!(
+                    "use {MIN_MTU} to {DEFAULT_MTU} bytes: the stacks need a path that carries 1200-byte datagrams"
+                ),
             ));
         }
         if !(1..=64).contains(&self.resources.cpus) {

@@ -13,7 +13,6 @@ use crate::error::Result;
 use crate::node::proto::Cmd;
 use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::{Ctx, Event, tracefile};
-use crate::plan::MTU;
 use crate::results::Row;
 use crate::scenario::Stack;
 use crate::workloads::Reach;
@@ -59,7 +58,7 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Reach, rep: u32, pair: &s
         host: None,
     };
     tracefile::mark(ctx, stack, &mut r);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_trace(tracefile::wanted(ctx, stack));
+    let set = AppSet::new(b, &ctx.plan, stack).with_trace(tracefile::wanted(ctx, stack));
     let outcome = body(ctx, &set, w, &mut r).await;
     tracefile::save(ctx, &set, stack, &r).await;
     set.stop_all().await;

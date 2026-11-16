@@ -52,6 +52,7 @@ pub struct Ssh {
     /// How many nodes each machine runs: its interface counters mean something only for one.
     on_host: Vec<usize>,
     memory_mib: u32,
+    mtu: u32,
     run: String,
     units: Mutex<Vec<String>>,
     spawned: AtomicU64,
@@ -92,7 +93,7 @@ pub fn iface_of(text: &str, ip: Ipv4Addr) -> Option<String> {
 
 /// The commands that give `iface` a `prio` queue with one class per destination machine and a `netem` on each, then a
 /// filter that sends the traffic for each destination to its class. `dests` are (class, address, shape).
-pub fn shaping_commands(iface: &str, dests: &[(usize, Ipv4Addr, Shape)]) -> Vec<String> {
+pub fn shaping_commands(iface: &str, dests: &[(usize, Ipv4Addr, Shape)], mtu: u32) -> Vec<String> {
     let zeros = ["0"; 16].join(" ");
     let mut v = vec![format!(
         "tc qdisc add dev {iface} root handle 1: prio bands 16 priomap {zeros}"
@@ -101,7 +102,7 @@ pub fn shaping_commands(iface: &str, dests: &[(usize, Ipv4Addr, Shape)]) -> Vec<
         let c = class + 2;
         v.push(format!(
             "tc qdisc add dev {iface} parent 1:{c} handle {c}0: {}",
-            netem_args(shape).join(" ")
+            netem_args(shape, mtu).join(" ")
         ));
         v.push(format!(
             "tc filter add dev {iface} protocol ip parent 1: prio 1 u32 match ip dst {ip}/32 flowid 1:{c}"
@@ -111,11 +112,11 @@ pub fn shaping_commands(iface: &str, dests: &[(usize, Ipv4Addr, Shape)]) -> Vec<
 }
 
 /// The command that gives class `class` of `iface` another shape.
-pub fn reshape_command(iface: &str, class: usize, shape: &Shape) -> String {
+pub fn reshape_command(iface: &str, class: usize, shape: &Shape, mtu: u32) -> String {
     let c = class + 2;
     format!(
         "tc qdisc change dev {iface} parent 1:{c} handle {c}0: {}",
-        netem_args(shape).join(" ")
+        netem_args(shape, mtu).join(" ")
     )
 }
 
@@ -271,6 +272,7 @@ impl Ssh {
             cpus,
             on_host: per_host,
             memory_mib: sc.resources.memory_mib,
+            mtu: plan.mtu,
             run: run.to_owned(),
             spawned: AtomicU64::new(0),
             site_hosts,
@@ -374,7 +376,7 @@ impl Ssh {
             }
             if !dests.is_empty() {
                 let iface = self.ifaces.get(h).cloned().unwrap_or_default();
-                plan_cmds.push((h, shaping_commands(&iface, &dests)));
+                plan_cmds.push((h, shaping_commands(&iface, &dests, self.mtu)));
             }
         }
         let _ = sc;
@@ -590,7 +592,7 @@ impl Ssh {
                 let (Some(host), Some(iface)) = (self.fleet.hosts.get(*h), self.ifaces.get(*h)) else {
                     continue;
                 };
-                remote(host, &host.root(&reshape_command(iface, *class, shape))).await?;
+                remote(host, &host.root(&reshape_command(iface, *class, shape, self.mtu))).await?;
             }
         }
         Ok(())
@@ -687,6 +689,7 @@ mod tests {
                 (0, "10.0.2.20".parse().unwrap(), s),
                 (1, "10.0.3.30".parse().unwrap(), s),
             ],
+            1500,
         );
         assert_eq!(cmds.len(), 5);
         assert!(cmds[0].starts_with("tc qdisc add dev ens5 root handle 1: prio bands 16 priomap 0 0"));
@@ -697,7 +700,7 @@ mod tests {
         assert!(cmds[3].contains("parent 1:3 handle 30: netem"));
         assert!(cmds[4].contains("match ip dst 10.0.3.30/32 flowid 1:3"));
         assert!(
-            reshape_command("ens5", 1, &s)
+            reshape_command("ens5", 1, &s, 1500)
                 .starts_with("tc qdisc change dev ens5 parent 1:3 handle 30: netem delay 25000us")
         );
     }

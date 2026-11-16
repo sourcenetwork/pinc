@@ -23,7 +23,7 @@ fn scenario(name: &str) -> Scenario {
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 32] = [
+const EXAMPLES: [&str; 38] = [
     "port-mapping",
     "port-mapping-upnp",
     "port-mapping-none",
@@ -39,6 +39,12 @@ const EXAMPLES: [&str; 32] = [
     "lan",
     "wan",
     "lossy",
+    "geo",
+    "leo",
+    "lte-rural",
+    "low-bandwidth",
+    "ble",
+    "serial",
     "home-routers",
     "three-site",
     "pubsub-lan",
@@ -414,22 +420,25 @@ fn netem_arguments_are_exact_integers() {
         rate_mbit: Some(100.0),
         queue_ms: None,
     };
-    let a = netem_args(&s);
+    let a = netem_args(&s, 1500);
     assert_eq!(a[..3], ["netem", "delay", "25000us"]);
     assert!(a.windows(2).any(|w| w == ["loss", "1%"]));
     assert!(a.windows(2).any(|w| w == ["rate", "100000kbit"]));
-    let j = netem_args(&Shape {
-        delay_ms: 100.0,
-        jitter_ms: 30.0,
-        loss_pct: 5.0,
-        rate_mbit: Some(10.0),
-        queue_ms: None,
-    });
+    let j = netem_args(
+        &Shape {
+            delay_ms: 100.0,
+            jitter_ms: 30.0,
+            loss_pct: 5.0,
+            rate_mbit: Some(10.0),
+            queue_ms: None,
+        },
+        1500,
+    );
     assert_eq!(
         j[..6],
         ["netem", "delay", "100000us", "30000us", "distribution", "normal"]
     );
-    let lan = netem_args(&Shape::lan());
+    let lan = netem_args(&Shape::lan(), 1500);
     assert_eq!(lan[2], "50us");
     assert!(!lan.contains(&"loss".to_owned()));
 }
@@ -442,13 +451,74 @@ fn queue_limit_holds_the_path_and_the_buffer() {
         rate_mbit: Some(100.0),
         ..Shape::default()
     };
-    assert_eq!(queue_limit(&s), 625 + 16);
+    assert_eq!(queue_limit(&s, 1500), 625 + 16);
     let tiny = Shape {
         delay_ms: 0.05,
         rate_mbit: Some(1.0),
         ..Shape::default()
     };
-    assert_eq!(queue_limit(&tiny), 64 + 16);
+    assert_eq!(queue_limit(&tiny, 1500), 64 + 16);
+}
+
+#[test]
+fn the_queue_counts_packets_of_the_interface_size() {
+    // 100 Mbit/s over 25 ms plus 50 ms of buffer is 937500 bytes: 733 packets of 1280 bytes, plus the margin.
+    let s = Shape {
+        delay_ms: 25.0,
+        rate_mbit: Some(100.0),
+        ..Shape::default()
+    };
+    assert_eq!(queue_limit(&s, 1280), 733 + 16);
+}
+
+#[test]
+fn a_scenario_without_mtu_gives_every_interface_1500() {
+    let sc = scenario("wan");
+    assert_eq!(sc.mtu, 1500);
+    assert!(!sc.to_toml().unwrap().contains("mtu"), "the default is not written");
+    let p = Plan::new(&sc, "r", 16);
+    assert_eq!(p.mtu, 1500);
+    let sizes = mtu_args(&p);
+    assert_eq!(sizes.len(), 10, "{sizes:?}");
+    assert!(sizes.iter().all(|m| m == "1500"), "{sizes:?}");
+}
+
+fn mtu_args(p: &Plan) -> Vec<String> {
+    p.setup
+        .iter()
+        .flat_map(|(_, cmds)| cmds)
+        .filter_map(|c| {
+            let i = c.args.iter().position(|a| a == "mtu")?;
+            c.args.get(i + 1).cloned()
+        })
+        .collect()
+}
+
+#[test]
+fn a_scenario_with_mtu_gives_every_interface_and_the_nodes_that_size() {
+    let mut sc = scenario("wan");
+    sc.mtu = 1280;
+    assert_eq!(sc.validate(), vec![]);
+    let again = Scenario::parse(&sc.to_toml().unwrap()).unwrap();
+    assert_eq!(again.mtu, 1280, "the value survives a save and a load");
+    let p = Plan::new(&sc, "r", 16);
+    let sizes = mtu_args(&p);
+    // two nodes (eth0), two bridges, two ports and two ifb devices, and both ends of the link
+    assert_eq!(sizes.len(), 2 + 2 + 2 + 2 + 2, "{sizes:?}");
+    assert!(sizes.iter().all(|m| m == "1280"), "{sizes:?}");
+}
+
+#[test]
+fn an_mtu_outside_1280_to_1500_is_refused_with_the_range() {
+    for bad in [1200, 9000] {
+        let mut sc = scenario("wan");
+        sc.mtu = bad;
+        let p = sc.validate();
+        assert!(
+            p.iter().any(|p| p.path == "mtu" && p.message.contains("1280 to 1500")),
+            "{bad}: {p:?}"
+        );
+    }
 }
 
 #[test]

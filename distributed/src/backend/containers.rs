@@ -148,6 +148,7 @@ pub struct Containers {
     image_id: String,
     ifb_loaded: bool,
     names: Vec<String>,
+    mtu: u32,
 }
 
 async fn cgroup_of(pid: u32) -> Result<PathBuf> {
@@ -232,6 +233,7 @@ impl Containers {
             image_id,
             ifb_loaded,
             names: Vec::new(),
+            mtu: plan.mtu,
         };
         me.save_state(&plan.run)?;
         match me.build(plan, image).await {
@@ -487,7 +489,7 @@ impl Containers {
             at.dev.clone(),
             "root".into(),
         ];
-        args.extend(netem_args(shape));
+        args.extend(netem_args(shape, self.mtu));
         self.helper.run(Some(pid), "tc", args).await.map(|_| ())
     }
 

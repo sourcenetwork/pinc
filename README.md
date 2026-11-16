@@ -151,9 +151,9 @@ just e2e          # the harness end to end: a two-node scenario, every stack (Do
 ```
 
 The distributed harness gives every node its own container and network stack, wired by veth pairs, bridges and a
-router per site, with an MTU of 1500, `tc netem` shaping each direction of each link, and address translation where a
-scenario puts a node behind a home router. Scenarios are TOML files in `distributed/scenarios/`; each run writes its
-raw rows, its conditions (machine, CPU sets, versions) and a summary table to `distributed/results/`. A run measures
+router per site, with an MTU of 1500 (a scenario's `mtu` field sets another, 1280 to 1500), `tc netem` shaping each
+direction of each link, and address translation where a scenario puts a node behind a home router. Scenarios are TOML
+files in `distributed/scenarios/`; each run writes its raw rows, its conditions (machine, CPU sets, versions) and a summary table to `distributed/results/`. A run measures
 only on a quiet machine and says so when it could not. The dashboard composes scenarios, shows a run live and compares
 results. The harness runs the transport tests (connection setup, resumed setup, request latency, one and 16 stream
 throughput, many connections) and the layers above them on nodes that stay up for a whole repetition: publish and

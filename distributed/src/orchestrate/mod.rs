@@ -26,7 +26,7 @@ use crate::backend::containers::{self, Containers};
 use crate::backend::fleet::Fleet;
 use crate::backend::ssh::Ssh;
 use crate::error::{Error, Result};
-use crate::plan::{MTU, Plan};
+use crate::plan::Plan;
 use crate::quiet::{self, Monitor, Snapshot, Thresholds, Usage};
 use crate::results::{self, Row};
 use crate::scenario::{Scenario, Workload};
@@ -573,7 +573,8 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
         },
         match &ctx.fleet {
             None => format!(
-                "Every interface has an MTU of {MTU}. Each node: {} CPU(s) of its own set, {} MiB; CPU sets {}{}.",
+                "Every interface has an MTU of {}. Each node: {} CPU(s) of its own set, {} MiB; CPU sets {}{}.",
+                ctx.plan.mtu,
                 ctx.sc.resources.cpus,
                 ctx.sc.resources.memory_mib,
                 ctx.plan
@@ -589,8 +590,8 @@ fn conditions(ctx: &Ctx, host: &HostInfo, reps_override: Option<u32>) -> Vec<Str
                 }
             ),
             Some(_) => format!(
-                "Each node: {} CPU(s) of its own set on its machine, {} MiB; the stacks are told an interface size of {MTU}.",
-                ctx.sc.resources.cpus, ctx.sc.resources.memory_mib
+                "Each node: {} CPU(s) of its own set on its machine, {} MiB; the stacks are told an interface size of {}.",
+                ctx.plan.mtu, ctx.sc.resources.cpus, ctx.sc.resources.memory_mib
             ),
         },
         format!(
@@ -662,7 +663,7 @@ fn write_run(
         "about_backend": if ctx.fleet.is_some() { "real machines over SSH: the network is theirs, with tc netem added between sites where the scenario shapes a link" } else { "one machine emulates the network: nodes, routers and shapers share its kernel and CPUs" },
         "host": host,
         "image": image,
-        "mtu": MTU,
+        "mtu": ctx.plan.mtu,
         "versions": versions().into_iter().collect::<std::collections::BTreeMap<_, _>>(),
         "built_for": built_for(),
         "git": git_commit(),

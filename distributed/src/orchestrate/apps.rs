@@ -144,7 +144,7 @@ pub(crate) const QUICK: Duration = Duration::from_secs(60);
 
 impl<'a> AppSet<'a> {
     /// The set-up of every node of the plan for `stack`.
-    pub(crate) fn new(b: &'a Cluster, plan: &'a Plan, stack: Stack, mtu: u32) -> Self {
+    pub(crate) fn new(b: &'a Cluster, plan: &'a Plan, stack: Stack) -> Self {
         let peers: Vec<PeerSpec> = plan
             .nodes
             .iter()
@@ -169,7 +169,7 @@ impl<'a> AppSet<'a> {
                 stack,
                 name: n.name.clone(),
                 peers: peers.clone(),
-                mtu,
+                mtu: plan.mtu,
                 sessions,
                 iroh_gossip_max: None,
                 dtn: None,

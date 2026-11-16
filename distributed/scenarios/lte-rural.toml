@@ -1,0 +1,51 @@
+name = "lte-rural"
+about = "Rural LTE, emulated (its delay, jitter, loss and rate, not the radio): 140 ms round trip (70 ms each way), 10 ms jitter each way, no random loss, 0.98 Mbit/s each way; typical is a median of 0.98 Mbit/s and a round trip of 140 ms under load."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[[sites]]
+name = "town"
+
+[[sites]]
+name = "farm"
+
+[[nodes]]
+name = "n1"
+site = "town"
+
+[[nodes]]
+name = "n2"
+site = "farm"
+
+[[links]]
+a = "town"
+b = "farm"
+shape = { delay_ms = 70, jitter_ms = 10, rate_mbit = 0.98 }
+
+[workload]
+kind = "transport"
+timeout_s = 600
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "setup"
+count = 60
+
+[[workload.tests]]
+test = "resume"
+count = 40
+
+[[workload.tests]]
+test = "latency"
+size = 64
+round_trips = 50
+
+[[workload.tests]]
+test = "throughput"
+bytes = 2097152
+streams = 1
+
+[[workload.tests]]
+test = "throughput"
+bytes = 2097152
+streams = 16

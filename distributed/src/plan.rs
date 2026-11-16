@@ -22,8 +22,6 @@ use std::net::Ipv4Addr;
 
 use crate::scenario::{Nat, PortMap, Role, Scenario, Shape};
 
-/// The interface MTU everywhere.
-pub const MTU: u32 = 1500;
 /// The label every container of a run carries, with the run id as its value.
 pub const LABEL: &str = "vinc.distributed";
 /// What a router container gets.
@@ -182,6 +180,8 @@ pub struct ShapePoint {
 pub struct Plan {
     /// The run id: every container name and label carries it.
     pub run: String,
+    /// The MTU of every interface, which the nodes are told too.
+    pub mtu: u32,
     /// The sites.
     pub sites: Vec<SitePlan>,
     /// The nodes.
@@ -238,10 +238,10 @@ pub fn cpu_sets(nodes: usize, per: u32, cpus: usize) -> (Vec<String>, bool) {
 }
 
 /// The packets a shaper may hold: what is in flight over the delay and jitter at the rate, plus the buffer.
-pub fn queue_limit(s: &Shape) -> u64 {
+pub fn queue_limit(s: &Shape, mtu: u32) -> u64 {
     let Some(rate) = s.rate_mbit else { return 10_000 };
     let secs = (s.delay_ms + 3.0 * s.jitter_ms + s.queue_ms.unwrap_or(50.0)) / 1000.0;
-    let packets = rate * 1e6 / 8.0 * secs / f64::from(MTU);
+    let packets = rate * 1e6 / 8.0 * secs / f64::from(mtu);
     // A float of at most a few million packets: the cast cannot truncate meaningfully.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let n = packets.ceil() as u64;
@@ -249,7 +249,7 @@ pub fn queue_limit(s: &Shape) -> u64 {
 }
 
 /// The `netem` arguments of a shape (after `tc qdisc add|change dev X root`).
-pub fn netem_args(s: &Shape) -> Vec<String> {
+pub fn netem_args(s: &Shape, mtu: u32) -> Vec<String> {
     // Microseconds and kbit/s as integers: tc parses them exactly, and a float would print in exponent form.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let us = |ms: f64| ((ms * 1000.0).round().max(0.0)) as u64;
@@ -265,7 +265,7 @@ pub fn netem_args(s: &Shape) -> Vec<String> {
         let kbit = (r * 1000.0).round().max(1.0) as u64;
         a.extend(["rate".into(), format!("{kbit}kbit")]);
     }
-    a.extend(["limit".into(), queue_limit(s).to_string()]);
+    a.extend(["limit".into(), queue_limit(s, mtu).to_string()]);
     a
 }
 
@@ -275,7 +275,7 @@ fn trim(v: f64) -> String {
 }
 
 /// The command that gives `dev` the shape `s`; `change` replaces a shaper that is already there.
-pub fn shape_cmd(dev: &str, s: &Shape, change: bool) -> Cmd {
+pub fn shape_cmd(dev: &str, s: &Shape, mtu: u32, change: bool) -> Cmd {
     let mut args = vec![
         "qdisc".to_owned(),
         if change { "change" } else { "add" }.to_owned(),
@@ -283,7 +283,7 @@ pub fn shape_cmd(dev: &str, s: &Shape, change: bool) -> Cmd {
         dev.to_owned(),
         "root".to_owned(),
     ];
-    args.extend(netem_args(s));
+    args.extend(netem_args(s, mtu));
     Cmd { tool: Tool::Tc, args }
 }
 
@@ -423,6 +423,7 @@ impl Plan {
             .collect();
         let mut plan = Self {
             run: run.to_owned(),
+            mtu: sc.mtu,
             sites,
             nodes,
             links,
@@ -455,7 +456,7 @@ impl Plan {
             let gw = self.sites.get(n.site).map_or(Ipv4Addr::UNSPECIFIED, |s| s.gateway);
             let ip = format!("{}/24", n.ip);
             let gw = gw.to_string();
-            let mtu = MTU.to_string();
+            let mtu = self.mtu.to_string();
             let cmds = vec![
                 Cmd::new(Tool::Ip, &["link", "set", "lo", "up"]),
                 // Segment offloaded batches here, so every shaper downstream sees MTU-sized packets.
@@ -469,7 +470,7 @@ impl Plan {
     }
 
     fn router_cmds(&self, s: usize, site: &SitePlan, hops: Option<&BTreeMap<usize, usize>>) -> Vec<Cmd> {
-        let mtu = MTU.to_string();
+        let mtu = self.mtu.to_string();
         let gw = format!("{}/24", site.gateway);
         let mut c = vec![
             Cmd::new(Tool::Ip, &["link", "set", "lo", "up"]),
@@ -484,10 +485,10 @@ impl Plan {
                 Tool::Ip,
                 &["link", "set", &n.port, "mtu", &mtu, "master", "lan", "up"],
             ));
-            c.push(shape_cmd(&n.port, &n.link, false));
+            c.push(shape_cmd(&n.port, &n.link, self.mtu, false));
             c.push(Cmd::new(Tool::Ip, &["link", "add", &n.ifb, "type", "ifb"]));
             c.push(Cmd::new(Tool::Ip, &["link", "set", &n.ifb, "mtu", &mtu, "up"]));
-            c.push(shape_cmd(&n.ifb, &n.link, false));
+            c.push(shape_cmd(&n.ifb, &n.link, self.mtu, false));
             c.push(Cmd::new(
                 Tool::Tc,
                 &["qdisc", "add", "dev", &n.port, "handle", "ffff:", "ingress"],
@@ -512,7 +513,7 @@ impl Plan {
             let addr = format!("{mine}/30");
             c.push(Cmd::new(Tool::Ip, &["addr", "add", &addr, "dev", &l.dev]));
             c.push(Cmd::new(Tool::Ip, &["link", "set", &l.dev, "mtu", &mtu, "up"]));
-            c.push(shape_cmd(&l.dev, &shape, false));
+            c.push(shape_cmd(&l.dev, &shape, self.mtu, false));
             if site.nat != Nat::None {
                 c.extend(nat_cmds(site.nat, &lan, &l.dev));
             }

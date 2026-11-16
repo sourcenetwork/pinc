@@ -14,7 +14,6 @@ use crate::node::proto::Cmd;
 use crate::orchestrate::apps::AppSet;
 use crate::orchestrate::window::Window;
 use crate::orchestrate::{Ctx, Event, faults, tracefile};
-use crate::plan::MTU;
 use crate::results::Row;
 use crate::scenario::{Role, Stack};
 use crate::workloads::{Reconcile, ValueSync};
@@ -84,7 +83,7 @@ pub(crate) async fn run_sync(ctx: &mut Ctx, b: &Cluster, w: &ValueSync) -> Resul
 
 async fn sync_one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &ValueSync, size: u64, rep: u32, pair: &str) -> Result<Row> {
     let mut r = row(ctx, stack, &ValueSync::id(size), pair, rep);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_trace(tracefile::wanted(ctx, stack));
+    let set = AppSet::new(b, &ctx.plan, stack).with_trace(tracefile::wanted(ctx, stack));
     let outcome = sync_body(ctx, b, &set, w, size, &mut r).await;
     tracefile::save(ctx, &set, stack, &r).await;
     if let Some(note) = set.configs().await.into_iter().next() {
@@ -235,7 +234,7 @@ async fn rec_one(
     pair: &str,
 ) -> Result<Row> {
     let mut r = row(ctx, stack, &Reconcile::id(items, diff), pair, rep);
-    let set = AppSet::new(b, &ctx.plan, stack, MTU).with_trace(tracefile::wanted(ctx, stack));
+    let set = AppSet::new(b, &ctx.plan, stack).with_trace(tracefile::wanted(ctx, stack));
     let outcome = rec_body(ctx, b, &set, w, (items, diff), &mut r).await;
     tracefile::save(ctx, &set, stack, &r).await;
     if let Some(note) = set.configs().await.into_iter().next() {

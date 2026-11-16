@@ -1,0 +1,52 @@
+name = "ble"
+about = "Bluetooth Low Energy carrying IPv6, emulated (its delay, jitter, loss, rate and datagram size, not the radio): the link layer fragments, so the interface carries 1280 bytes; 15 ms delay and 7.5 ms jitter each way (a connection interval of 30 ms taken as the wait for the next connection event), 0.7 Mbit/s each way, no random loss (the link layer retransmits); measured rates are 82 to 1320 kbit/s."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+mtu = 1280
+
+[[sites]]
+name = "phone"
+
+[[sites]]
+name = "sensor"
+
+[[nodes]]
+name = "n1"
+site = "phone"
+
+[[nodes]]
+name = "n2"
+site = "sensor"
+
+[[links]]
+a = "phone"
+b = "sensor"
+shape = { delay_ms = 15, jitter_ms = 7.5, rate_mbit = 0.7 }
+
+[workload]
+kind = "transport"
+timeout_s = 300
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "setup"
+count = 150
+
+[[workload.tests]]
+test = "resume"
+count = 80
+
+[[workload.tests]]
+test = "latency"
+size = 64
+round_trips = 300
+
+[[workload.tests]]
+test = "throughput"
+bytes = 1572864
+streams = 1
+
+[[workload.tests]]
+test = "throughput"
+bytes = 1572864
+streams = 16

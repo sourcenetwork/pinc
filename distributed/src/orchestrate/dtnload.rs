@@ -20,7 +20,6 @@ use crate::node::vinc::node_id;
 use crate::orchestrate::apps::{AppSet, QUICK};
 use crate::orchestrate::window::Window;
 use crate::orchestrate::{Ctx, Event, faults};
-use crate::plan::MTU;
 use crate::results::Row;
 use crate::scenario::Stack;
 
@@ -78,7 +77,7 @@ async fn one(ctx: &Ctx, b: &Cluster, stack: Stack, w: &Dtn, size: u64, rep: u32,
     let nonce = wall_ns();
     let plan = &ctx.plan;
     let sealed = w.sealed_len(size).unwrap_or(size);
-    let set = AppSet::new(b, plan, stack, MTU).with_dtn(|i| {
+    let set = AppSet::new(b, plan, stack).with_dtn(|i| {
         let n = plan.nodes.get(i)?;
         if stack != Stack::Vinc || !rules::runs_layer(n.role) {
             return None;

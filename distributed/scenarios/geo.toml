@@ -1,0 +1,52 @@
+name = "geo"
+about = "A geostationary satellite link, emulated (its delay, loss and rate, not the radio): 600 ms round trip (300 ms each way), 1% loss per packet each way, 20 Mbit/s from the client to the server and 2 Mbit/s back; typical for the service is 20 Mbit/s down and 2 up, about 600 ms and about 1% loss."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[[sites]]
+name = "gateway"
+
+[[sites]]
+name = "dish"
+
+[[nodes]]
+name = "n1"
+site = "gateway"
+
+[[nodes]]
+name = "n2"
+site = "dish"
+
+[[links]]
+a = "gateway"
+b = "dish"
+shape = { delay_ms = 300, loss_pct = 1, rate_mbit = 20 }
+reverse = { rate_mbit = 2 }
+
+[workload]
+kind = "transport"
+timeout_s = 900
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "setup"
+count = 12
+
+[[workload.tests]]
+test = "resume"
+count = 8
+
+[[workload.tests]]
+test = "latency"
+size = 64
+round_trips = 12
+
+[[workload.tests]]
+test = "throughput"
+bytes = 52428800
+streams = 1
+
+[[workload.tests]]
+test = "throughput"
+bytes = 52428800
+streams = 16

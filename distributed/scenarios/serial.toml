@@ -1,0 +1,51 @@
+name = "serial"
+about = "A serial line at 115200 baud, emulated (its delay, loss, rate and datagram size, not the line or any radio): ten bits a byte makes 11520 bytes a second, 0.0922 Mbit/s each way, 0.1 ms delay each way, no loss; framing is the host's, so datagrams of any size pass."
+stacks = ["vinc", "iroh", "libp2p"]
+repetitions = 3
+
+[[sites]]
+name = "left"
+
+[[sites]]
+name = "right"
+
+[[nodes]]
+name = "n1"
+site = "left"
+
+[[nodes]]
+name = "n2"
+site = "right"
+
+[[links]]
+a = "left"
+b = "right"
+shape = { delay_ms = 0.1, rate_mbit = 0.0922 }
+
+[workload]
+kind = "transport"
+timeout_s = 300
+pairs = [{ client = "n1", server = "n2" }]
+
+[[workload.tests]]
+test = "setup"
+count = 25
+
+[[workload.tests]]
+test = "resume"
+count = 15
+
+[[workload.tests]]
+test = "latency"
+size = 64
+round_trips = 400
+
+[[workload.tests]]
+test = "throughput"
+bytes = 229376
+streams = 1
+
+[[workload.tests]]
+test = "throughput"
+bytes = 229376
+streams = 16
