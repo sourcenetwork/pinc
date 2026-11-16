@@ -16,8 +16,11 @@ pub mod labels {
     pub const NODE_ID: &str = "VINC 2026 v1 node id";
     /// Domain of the message digest both halves of a hybrid signature sign.
     pub const HYBRID_SIGNATURE: &str = "VINC 2026 v1 hybrid signature";
+    /// The label of every signed statement's signature. It is not in [`ALL`] yet: the label registry the trace
+    /// tests and the models replay stays closed until the statement lands in them.
+    pub const STATEMENT: &str = "VINC 2026 v1 statement";
 
-    /// Every label above except [`PREFIX`], for tests that check uniqueness and the prefix.
+    /// Every label above except [`PREFIX`] and [`STATEMENT`], for tests that check uniqueness and the prefix.
     pub const ALL: [&str; 2] = [NODE_ID, HYBRID_SIGNATURE];
 }
 
@@ -40,4 +43,20 @@ pub fn expand(prk: &[u8; 32], label: &'static str, ctx: &[u8], out: &mut [u8]) {
     hasher.zeroize();
     #[cfg(feature = "derive-trace")]
     crate::trace::emit(&crate::trace::Derivation::Expand { prk, label, ctx, out });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::labels;
+
+    #[test]
+    fn labels_are_unique_and_prefixed() {
+        let every = [labels::NODE_ID, labels::HYBRID_SIGNATURE, labels::STATEMENT];
+        assert_eq!(labels::ALL, every[..2]);
+        for (i, a) in every.iter().enumerate() {
+            assert!(a.starts_with(labels::PREFIX), "{a} lacks the prefix");
+            assert!(every.iter().skip(i + 1).all(|b| a != b), "{a} is repeated");
+        }
+        assert_eq!(labels::STATEMENT.len(), 22);
+    }
 }
