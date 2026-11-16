@@ -7,7 +7,7 @@
 //! fragment the stored ranges), resets, consumes of the readable bytes, pending control frames that are then lost
 //! or acknowledged, locally opened streams with writes, sends and acknowledgements that take and give back pool
 //! chunks, other users of the pool, and the close of the table. After every call the table shows its state
-//! (`trace_view`): slots, held chunks, stored ranges, credit, counters, the window target, the delivery meter, the
+//! (`trace_view`): slots, held chunks, stored ranges, credit, counters, each slot's delivery meter, the
 //! ordinal of each stream we opened and whether opens may pass the peer's limit. Every drain of the stream frames is
 //! recorded with the streams whose frames left. Runs 25 to 40 are an optimistic dial: opens pass the peer's limit
 //! from the start (`set_early`), streams are opened past it with data queued, and the establishment raises the limit

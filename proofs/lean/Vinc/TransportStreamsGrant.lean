@@ -20,7 +20,8 @@ window arithmetic of `Streams::new`, `Streams::consume` and `Recv::due`. Sizes a
   and the ceiling, which is at most half the pool and `(C - 1)` chunks, so a frame inside the credit never
   reaches `C` chunks beyond the read position (the ring never overflows; RATE_WINDOW).
 * `target_own`, `target_idle`: a window grows toward twice what its own reader drained, so a stream that drained
-  nothing keeps its initial window whatever the other streams move (METER, #159).
+  nothing asks for its initial window (METER, #159). These are about the target alone: that no other stream's
+  traffic moves a stream's window is checked by the model (`SizeFollowsOwnRate` in `Streams.tla`).
 -/
 
 namespace Vinc.TransportStreams
@@ -340,7 +341,7 @@ theorem target_bounds (p : P) (rate : Nat) :
   constructor <;> omega
 
 /-- METER (#159): the target asks for no more than twice what the stream's own reader drained, or the initial window
-when that is smaller: a stream that drained nothing asks for its initial window, whatever the other streams move. -/
+when that is smaller: a stream that drained nothing asks for its initial window. -/
 theorem target_own (p : P) (rate : Nat) : windowTarget p rate ≤ max (rate * 2) p.sw := by
   unfold windowTarget
   omega

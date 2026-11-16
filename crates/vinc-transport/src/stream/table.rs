@@ -729,8 +729,9 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     }
 
     /// Release `n` readable bytes of a stream, freeing the chunks they filled and moving the peer's window forward.
-    /// `now` and `srtt` are the monotonic time and smoothed round trip in the same unit; they feed the delivery-rate
-    /// meter that sizes the windows. Consuming zero bytes after the end (or a reset) was seen lets the stream close.
+    /// `now` and `srtt` are the monotonic time and smoothed round trip in the same unit; they feed the stream's own
+    /// delivery-rate meter, which sizes its window. Consuming zero bytes after the end (or a reset) was seen lets the
+    /// stream close.
     ///
     /// # Errors
     /// [`StreamError::UnknownStream`], or [`StreamError::InvalidConsume`] if `n` exceeds the readable bytes.
@@ -747,8 +748,10 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         slot.recv.consume(pool, n as u64)?;
         let status = slot.recv.status();
-        // Each window follows what its own reader drains, so the windows together ask for twice the connection's
-        // rate however many streams share it, and a stream that sits idle asks for no more than the initial window.
+        // Each window grows only with what its own reader drains: a stream asks for the larger of the initial window
+        // and twice its own rate, so the windows together ask for at most the initial windows plus about twice the
+        // connection's rate, however many streams share it. A stream that has not drained fast asks for no more than
+        // the initial window; a window never shrinks.
         let rate = slot.recv.meter.consumed(n as u64, now, srtt);
         slot.recv.win.size = slot.recv.win.size.max(rate.saturating_mul(2).max(floor).min(ceiling));
         self.grant(pool, i);
