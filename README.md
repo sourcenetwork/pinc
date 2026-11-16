@@ -247,8 +247,8 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
     ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
 
   Against the session of 13 November (commit `6355d7d`) 327 of 383 values are inside that session's spread. A
-  second session the same day on `79cfc653`, after the changes that landed in between, has 362 of 383 values
-  inside the first one's spread. The rows that are still above 13 November, and what is known of each, are in
+  second session the same day on `79cfc653`, after the changes that landed in between, has 353 of 383 values
+  inside the first one's spread (a repeat of one build gave 214 of 223). The rows that are still above 13 November, and what is known of each, are in
   [#485](https://github.com/sourcenetwork/vinc/issues/485).
 
   `just compare` and the harness print every row, the ones VINC loses included.
