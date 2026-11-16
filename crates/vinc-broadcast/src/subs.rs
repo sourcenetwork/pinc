@@ -22,11 +22,12 @@
 //! Invariants: a list holds at most `max_subscribers` nodes in id order, so two hubs with the same tables send the
 //! same bytes; `told` is the list built from the tables after every change, and `(incarnation, told_seq)` its
 //! version; a member's list is always the list its hub had at the version the member holds: a delta is applied only
-//! on its own base, and only from the hub of the member's list, a join hint never enters it, and a member whose limit
+//! on its own base, and only from the hub of the member's list (a change from the primary makes it the hub of the
+//! list, and the member asks it for the whole list), a join hint never enters it, and a member whose limit
 //! cut the list asks for the whole list on a change that removes (the id past the cut is not in the change); `stale`
 //! holds only recipients, and `Topics::owed` holds every recipient stale in some topic, so a stream's room is a lookup,
-//! not a walk of the topics; a held member receives no push; a restore tells the member exactly the topics it had; a release of a
-//! member that was behind in a topic leaves the span of what it was owed in that topic.
+//! not a walk of the topics; a held member receives no push; a restore tells the member exactly the topics it had; a
+//! release of a member that was behind in a topic leaves the span of what it was owed in that topic.
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
@@ -458,7 +459,7 @@ impl Topics {
         if !self.ensure_topic(topic) {
             return Some(SubsDrop::TopicsFull);
         }
-        let max = self.limits.max_subscribers;
+        let (max, primary) = (self.limits.max_subscribers, self.primary);
         let st = self.topics.get_mut(topic)?;
         match (*kind, rem) {
             (FULL, _) if is_hub => {
@@ -487,7 +488,16 @@ impl Topics {
                 confirm(h, st, from, topic, &me);
                 None
             }
-            _ if st.peers_from != Some(*from) => Some(SubsDrop::OtherHub),
+            // A change from the primary after a late whole list of another hub: the primary is the source, whatever
+            // the list came from, so the member asks it for its whole list.
+            _ if st.peers_from != Some(*from) => {
+                if primary == Some(*from) {
+                    st.peers_from = Some(*from);
+                    st.peers_ver = None;
+                    ask(h, &mut self.scratch, from, topic);
+                }
+                Some(SubsDrop::OtherHub)
+            }
             // A removal from a list cut below the hub's brings an id the member never saw into the hub's cut: only the
             // whole list tells which.
             (_, Some(rem))
@@ -501,8 +511,8 @@ impl Topics {
             }
             _ => {
                 // A missed change: the member waits for a whole list and asks once; changes meanwhile are dropped.
-                if st.peers_ver.take().is_some() && wire::build(&mut self.scratch, ty::SUBS, topic, &[&[ASK]]).is_ok() {
-                    h.send(from, Lane::Main, &self.scratch);
+                if st.peers_ver.take().is_some() {
+                    ask(h, &mut self.scratch, from, topic);
                 }
                 Some(SubsDrop::OffBase)
             }
@@ -523,6 +533,13 @@ impl Topics {
     /// The number of subscribers (live or held) a hub tracks for `topic`.
     pub fn subscriber_count(&self, topic: &[u8]) -> usize {
         self.topics.get(topic).map_or(0, |st| st.subs.len().min(TABLE_MAX))
+    }
+}
+
+/// ASK `hub` for the whole list of `topic`.
+fn ask<H: Host>(h: &mut H, scratch: &mut Vec<u8>, hub: &NodeId, topic: &[u8]) {
+    if wire::build(scratch, ty::SUBS, topic, &[&[ASK]]).is_ok() {
+        h.send(hub, Lane::Main, scratch);
     }
 }
 
