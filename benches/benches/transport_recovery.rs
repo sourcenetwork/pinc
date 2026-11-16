@@ -97,7 +97,7 @@ fn bench_ack(c: &mut Criterion) {
     g.bench_function("pacer_next_release", |b| {
         let mut p = Pacer::new();
         for _ in 0..10 {
-            p.on_sent(0, 1200, 100 * MS, 120_000, true);
+            p.on_sent(0, 1200, 1200, 100 * MS, 120_000, true);
         }
         let mut now = 0u64;
         b.iter(|| {

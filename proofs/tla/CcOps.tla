@@ -58,7 +58,7 @@ MulDiv(a, m, d) == (m * (a \div d)) + Horner(BitsOf(m, <<>>), a % d, d, <<0, 0>>
 \* the controller; none is -1; ss = TOP is a threshold not set (u64::MAX)
 Cc0 == [cwnd |-> INITC, ss |-> TOP, wmax |-> 0, west |-> 0, k |-> 0, epoch |-> -1, rec |-> -1, streak |-> 0,
         rend |-> 0, ref |-> -1, rmin |-> -1, samp |-> 0, pst |-> -1, pby |-> 0, rate |-> 0, slack |-> GMID]
-Pc0 == [tokens |-> BURST, next |-> 0, start |-> 0]
+Pc0 == [spent |-> 0, next |-> 0, start |-> 0]
 
 (* ---- the slow-start exit detector ---- *)
 OnSample(x, s) == [x EXCEPT !.rmin = IF x.rmin < 0 THEN s ELSE Mn(x.rmin, s), !.samp = Mn(x.samp + 1, U32MAX)]
@@ -157,17 +157,36 @@ Resume(x, mn) == IF mn >= 0 THEN ApplyGate(x, mn) ELSE x
 SetSlack(x, b) == [x EXCEPT !.slack = Mn(b, MAXC)]
 
 (* ---- the pacer ---- *)
-Gap(mtu, srtt, cwnd) == Mn(MulDiv(srtt, 4 * Mn(mtu, MAXMSS), 5 * Mx(cwnd, 1)), TOP)
-\* on_sent: start is the time of the first packet of the burst; the last packet of a burst sets the release, ten
-\* gaps after it, or one tick after it when the window does not limit the sender (lim is FALSE) and the burst took
-\* at least ten gaps already. The release only moves forward.
-StartAt(p, now) == IF p.tokens = BURST THEN now ELSE p.start
-Span(mtu, srtt, cwnd) == SMul(Gap(mtu, srtt, cwnd), BURST)
-Slow(p, now, mtu, srtt, cwnd, lim) == ~lim /\ Mx(now - StartAt(p, now), 0) >= Span(mtu, srtt, cwnd)
-OnSent(p, now, mtu, srtt, cwnd, lim) ==
-    IF p.tokens > 1 THEN [p EXCEPT !.tokens = p.tokens - 1, !.start = StartAt(p, now)]
-    ELSE [tokens |-> BURST,
-          next |-> Mx(p.next, SAdd(now, IF Slow(p, now, mtu, srtt, cwnd, lim) THEN 1 ELSE Span(mtu, srtt, cwnd))),
-          start |-> StartAt(p, now)]
+\* the path's datagram size as the pacer charges it (clamped to 1 .. MAXMSS), a burst's budget of BURST of them, and
+\* the gap of one datagram at 1.25 x cwnd per smoothed round trip
+Dg(mtu) == Mx(Mn(mtu, MAXMSS), 1)
+Budget(mtu) == BURST * Dg(mtu)
+Gap(mtu, srtt, cwnd) == Mn(MulDiv(srtt, 4 * Dg(mtu), 5 * Mx(cwnd, 1)), TOP)
+\* the pause after a burst of b bytes: a gap for each whole datagram, the remainder at the same rate by its bytes
+SpanB(b, mtu, srtt, cwnd) ==
+    SAdd(SMul(Gap(mtu, srtt, cwnd), b \div Dg(mtu)), Mn(MulDiv(srtt, 4 * (b % Dg(mtu)), 5 * Mx(cwnd, 1)), TOP))
+\* on_sent under a rule. "bytes" is the code: each packet is charged its size (at least one byte), start is the time
+\* of the first packet of the burst, and the packet that brings the bytes charged to the budget or past it ends the
+\* burst and sets the release a span of those bytes after it, or one tick after it when the window does not limit the
+\* sender (lim is FALSE) and the burst took that span already. The release only moves forward.
+\* "count" is the rule before, the witness of what the byte budget changes: spent counts packets, the BURST-th ends
+\* the burst and waits BURST gaps whatever the packets weighed (one token each, a packet larger than the datagram
+\* included). The others each remove one guard of "bytes" (Cc_pacer_*.cfg say which invariant breaks):
+\* "every" ends a burst at every packet, "budget" charges the pause the budget instead of the bytes sent,
+\* "noelapsed" releases an unlimited sender after one tick however fast its burst left, "anylim" lets a sender the
+\* window limits be slow, "nostart" never moves start, "nomax" lets the release move back.
+OnSentR(rule, p, now, size, mtu, srtt, cwnd, lim) ==
+    LET st == IF p.spent = 0 /\ rule # "nostart" THEN now ELSE p.start
+        sp == IF rule = "count" THEN p.spent + 1 ELSE p.spent + Mx(size, 1)
+        ends == CASE rule = "count" -> sp >= BURST [] rule = "every" -> TRUE [] OTHER -> sp >= Budget(mtu)
+        span == CASE rule = "count" -> SMul(Gap(mtu, srtt, cwnd), BURST)
+                  [] rule = "budget" -> SpanB(Budget(mtu), mtu, srtt, cwnd)
+                  [] OTHER -> SpanB(sp, mtu, srtt, cwnd)
+        el == Mx(now - st, 0) >= span
+        slow == CASE rule = "noelapsed" -> ~lim [] rule = "anylim" -> el [] OTHER -> ~lim /\ el
+        rel == SAdd(now, IF slow THEN 1 ELSE span)
+    IN IF ~ends THEN [spent |-> sp, next |-> p.next, start |-> st]
+       ELSE [spent |-> 0, next |-> IF rule = "nomax" THEN rel ELSE Mx(p.next, rel), start |-> st]
+OnSent(p, now, size, mtu, srtt, cwnd, lim) == OnSentR("bytes", p, now, size, mtu, srtt, cwnd, lim)
 NextRelease(p, now) == IF p.next > now THEN p.next ELSE now
 =============================================================================

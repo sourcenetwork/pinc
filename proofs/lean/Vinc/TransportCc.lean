@@ -223,7 +223,8 @@ def Cc.setSlack (c : Cc) (b : Nat) : Cc := { c with slack := min b maxCwnd }
 /-! ### The pacer (`pacer.rs`) -/
 
 structure Pacer where
-  tokens : Nat := burst
+  /-- The bytes charged to the burst being counted. -/
+  spent : Nat := 0
   next : Nat := 0
   /-- When the first packet of the burst being counted left. -/
   start : Nat := 0
@@ -231,25 +232,59 @@ structure Pacer where
 
 def Pacer.nextRelease (p : Pacer) (now : Nat) : Nat := if now < p.next then p.next else now
 
-/-- The gap between two packets of a burst's pause. -/
-def gap (mtu srtt cwnd : Nat) : Nat := sat (min mtu maxMss * srtt * 4 / (5 * max cwnd 1))
+/-- The path's datagram size as the pacer charges it, clamped to `1..=65535`. -/
+def dg (mtu : Nat) : Nat := max (min mtu maxMss) 1
 
-/-- The pause after a burst: ten gaps. -/
-def span (mtu srtt cwnd : Nat) : Nat := satMul (gap mtu srtt cwnd) burst
+/-- The bytes a burst may carry back to back: ten datagrams. -/
+def budget (mtu : Nat) : Nat := burst * dg mtu
+
+/-- The bytes a packet is charged: its size, at least one. -/
+def charge (size : Nat) : Nat := max size 1
+
+/-- The gap of one datagram at 1.25 x cwnd per smoothed round trip. -/
+def gap (mtu srtt cwnd : Nat) : Nat := sat (dg mtu * srtt * 4 / (5 * max cwnd 1))
+
+/-- The pause after a burst of `b` bytes: a gap for each whole datagram, and the remainder at the same rate by its
+bytes. -/
+def spanB (b mtu srtt cwnd : Nat) : Nat :=
+  satAdd (satMul (gap mtu srtt cwnd) (b / dg mtu)) (sat (b % dg mtu * srtt * 4 / (5 * max cwnd 1)))
 
 /-- The start of the burst a packet at `now` belongs to: `now` for the first packet of a burst. -/
-def Pacer.startAt (p : Pacer) (now : Nat) : Nat := if p.tokens = burst then now else p.start
+def Pacer.startAt (p : Pacer) (now : Nat) : Nat := if p.spent = 0 then now else p.start
 
 /-- The burst took at least its pause and the window does not limit the sender: it has waited already. -/
-def Pacer.slow (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Bool :=
-  !limited && decide (span mtu srtt cwnd ≤ now - p.startAt now)
+def Pacer.slow (p : Pacer) (now size mtu srtt cwnd : Nat) (limited : Bool) : Bool :=
+  !limited && decide (spanB (p.spent + charge size) mtu srtt cwnd ≤ now - p.startAt now)
 
-/-- `on_sent`: a packet out of the burst takes a token; the last one refills the burst and sets the release, ten
-gaps after it, or one tick after it for a sender that was slow. The release only moves forward. -/
-def Pacer.onSent (p : Pacer) (now mtu srtt cwnd : Nat) (limited : Bool) : Pacer :=
-  if 1 < p.tokens then { p with tokens := p.tokens - 1, start := p.startAt now }
-  else { tokens := burst,
-         next := max p.next (satAdd now (if p.slow now mtu srtt cwnd limited then 1 else span mtu srtt cwnd)),
+/-- `on_sent`: a packet is charged its size; the one that brings the burst to its budget or past it ends the burst
+and sets the release a span of the burst's bytes after it, or one tick after it for a sender that was slow. The
+release only moves forward. -/
+def Pacer.onSent (p : Pacer) (now size mtu srtt cwnd : Nat) (limited : Bool) : Pacer :=
+  if p.spent + charge size < budget mtu then { p with spent := p.spent + charge size, start := p.startAt now }
+  else { spent := 0,
+         next := max p.next (satAdd now (if p.slow now size mtu srtt cwnd limited then 1
+                                          else spanB (p.spent + charge size) mtu srtt cwnd)),
          start := p.startAt now }
+
+/-! #### The rule before, kept as the witness of what the byte budget changes
+
+Each packet took one of ten tokens whatever it weighed (a packet larger than the path's datagram size included), and
+the tenth set a pause of ten gaps. `TransportCcThm` shows where the two rules differ: small packets paused before
+their bytes reached ten datagrams, and packets larger than a datagram were paced faster than their bytes allow. -/
+
+structure CountPacer where
+  tokens : Nat := burst
+  next : Nat := 0
+  start : Nat := 0
+
+def CountPacer.startAt (p : CountPacer) (now : Nat) : Nat := if p.tokens = burst then now else p.start
+
+def CountPacer.onSent (p : CountPacer) (now mtu srtt cwnd : Nat) (limited : Bool) : CountPacer :=
+  if 1 < p.tokens then { p with tokens := p.tokens - 1, start := p.startAt now }
+  else
+    let span := satMul (gap mtu srtt cwnd) burst
+    { tokens := burst,
+      next := max p.next (satAdd now (if !limited && decide (span ≤ now - p.startAt now) then 1 else span)),
+      start := p.startAt now }
 
 end Vinc.TransportCc

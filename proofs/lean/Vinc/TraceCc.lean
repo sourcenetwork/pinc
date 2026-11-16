@@ -42,7 +42,7 @@ def same (w : Bool) (m : Cc) (j : J) (what : String) : Except String Unit := do
 
 def samePacer (w : Bool) (m : Pacer) (j : J) (what : String) : Except String Unit := do
   let v ← field j "v"
-  let r : Pacer := { tokens := ← natF v "tokens", next := ← natF v "next", start := ← natF v "start" }
+  let r : Pacer := { spent := ← natF v "spent", next := ← natF v "next", start := ← natF v "start" }
   let m' := if w then m else { m with next := min m.next top32 }
   if m' == r then pure () else throw s!"{what}: the model computes {repr m'}, the code recorded {repr r}"
 
@@ -71,7 +71,8 @@ def replayEvent (j : J) (w : W) : Except String W := do
     check (c.gateCap (← natF j "mn") == (← optF j "cap")) "gate: the cap differs"
     same c j "gate"; pure w
   | "psent" =>
-    let p2 := w.p.onSent (← natF j "now") (← natF j "mtu") (← natF j "srtt") (← natF j "cw") (← boolF j "lim")
+    let p2 := w.p.onSent (← natF j "now") (← natF j "size") (← natF j "mtu") (← natF j "srtt") (← natF j "cw")
+      (← boolF j "lim")
     samePacer p2 j "psent"; pure { w with p := p2 }
   | "prel" =>
     let now ← natF j "now"

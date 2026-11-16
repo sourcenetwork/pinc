@@ -551,6 +551,7 @@ impl<const N: usize> Recovery<N> {
         if self.rtt.has_sample() {
             self.pacer.on_sent(
                 p.time,
+                p.size,
                 self.mtu,
                 self.rtt.smoothed(),
                 self.cc.cwnd(),

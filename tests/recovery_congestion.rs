@@ -121,12 +121,29 @@ fn the_pause_uses_the_active_paths_datagram_size() {
     rec.set_max_datagram_size(1452);
     let (srtt, cwnd) = (rec.rtt().smoothed(), rec.cwnd());
     for i in 0..10 {
-        rec.on_packet_sent(sent(1 + i, 200 * MS)).unwrap();
+        rec.on_packet_sent(Sent { size: 1452, ..sent(1 + i, 200 * MS) }).unwrap();
     }
     assert_eq!(
         rec.pacer().next_release(200 * MS),
         200 * MS + 10 * (1452 * srtt * 4 / (5 * cwnd))
     );
+}
+
+/// The pacer is charged each packet's own size: on a path whose datagram size a probe raised to 1,452 bytes, packets
+/// of 1,200 end the burst at the thirteenth, the first to bring it to ten datagrams' worth.
+#[test]
+fn packets_below_the_paths_datagram_size_are_paced_by_their_bytes() {
+    let mut rec = established();
+    rec.set_max_datagram_size(1452);
+    let (srtt, cwnd) = (rec.rtt().smoothed(), rec.cwnd());
+    let now = 200 * MS;
+    for i in 0..12 {
+        rec.on_packet_sent(sent(1 + i, now)).unwrap();
+        assert_eq!(rec.pacer().next_release(now), now, "packet {i} ended the burst");
+    }
+    rec.on_packet_sent(sent(13, now)).unwrap();
+    let want = 10 * (1452 * srtt * 4 / (5 * cwnd)) + 1080 * srtt * 4 / (5 * cwnd);
+    assert_eq!(rec.pacer().next_release(now), now + want);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

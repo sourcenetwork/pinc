@@ -45,7 +45,7 @@ pub use cubic::{
 pub use engine::{Event, Health, MAX_PATHS, PathKind, Recovery, Summary, Timeout};
 pub use frame_ref::{FrameRef, FrameRefs, FrameRefsFull, MAX_FRAME_REFS};
 pub use loss_estimate::{LossEstimate, REPAIR_MIN_AGE, REPAIR_THRESHOLD, SCALE as LOSS_SCALE};
-pub use pacer::{BURST_PACKETS, Pacer};
+pub use pacer::{BURST_PACKETS, Pacer, burst_budget};
 pub use recv::{MAX_ACK_RANGES, ReceivedPackets, RxOutcome, RxPacket};
 pub use rtt::{INITIAL_RTT, RttEstimator, max_ack_delay};
 pub use sent::{SENT_PACKETS, Sent, SentRing};

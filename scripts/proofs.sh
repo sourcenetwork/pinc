@@ -491,7 +491,17 @@ par witness_tlc cid_reuse Cid Cid_reuse IssuedOnce
 par run_tlc cc Cc Cc
 par run_tlc cc_pacer Cc Cc_pacer
 par run_tlc cc_pacer_limited Cc Cc_pacer_limited
+par run_tlc cc_pacer_sizes Cc Cc_pacer_sizes
+par run_tlc cc_pacer_eager Cc Cc_pacer_eager
 par witness_tlc cc_pacer_strict Cc Cc_pacer_strict PacerRateStrict
+par witness_tlc cc_pacer_count Cc Cc_pacer_count NoEarlyPause
+par witness_tlc cc_pacer_countbig Cc Cc_pacer_countbig BurstStarts
+par witness_tlc cc_pacer_every Cc Cc_pacer_every NoEarlyPause
+par witness_tlc cc_pacer_budget Cc Cc_pacer_budget BurstStarts
+par witness_tlc cc_pacer_noelapsed Cc Cc_pacer_noelapsed BurstStarts
+par witness_tlc cc_pacer_anylim Cc Cc_pacer_anylim PacerRate
+par witness_tlc cc_pacer_nostart Cc Cc_pacer_nostart BurstStarts
+par witness_tlc cc_pacer_nomax Cc Cc_pacer_nomax NextMono
 par run_tlc pn Pn Pn
 par run_tlc reasm Reasm Reasm
 par run_tlc early Early Early

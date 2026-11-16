@@ -17,12 +17,17 @@ What the model proves about the controller and the pacer, over unbounded windows
   (`onLoss_reduce`, `onLoss_filtered`, `onLoss_same_episode`); a reduction never raises the window (`onLoss_le`);
   the filter streak stops at 4 and decays after four smoothed round trips (`streak_decay`);
 - a restore never lowers the window (`restore_ge`);
-- the pacer holds one to ten tokens, lets exactly the tokens out before a pause, and after the burst waits ten gaps,
-  or one tick when the window does not limit the sender and the burst already took ten gaps; the release only moves
-  forward and is always at least ten gaps after the first packet of the burst, so the first packets of two bursts
-  are ten gaps apart whatever the sender; a pause starts only after a full burst, idle time adds nothing
-  (`pacer_tokens`, `pacer_burst`, `pacer_pause`, `pacer_next_mono`, `pacer_pause_limited`,
-  `pacer_span_from_start`, `pacer_release_ge`).
+- the pacer charges each packet its size and keeps the bytes of a burst below its budget of ten datagrams; a packet
+  that leaves the burst under its budget does not move the release, and the packet that reaches it waits the span of
+  the burst's bytes, or one tick when the window does not limit the sender and the burst already took that span; the
+  release only moves forward and is always at least that span after the first packet of the burst, so the first
+  packets of two bursts are that span apart whatever the sender; idle time adds nothing (`pacer_spent`,
+  `pacer_burst`, `pacer_pause`, `pacer_next_mono`, `pacer_pause_limited`, `pacer_span_from_start`,
+  `pacer_release_ge`, `runSends_no_pause`);
+- the span of a burst is never longer than its bytes take at 1.25 x cwnd per round trip (`spanB_le`), and a burst of
+  ten full datagrams waits exactly the ten gaps of the count rule before it (`spanB_full`); the count rule paused
+  ten small packets the byte budget lets go, and let four packets of three datagrams go that the byte budget pauses
+  (`count_pauses_small`, `bytes_small_no_pause`, `count_big_no_pause`, `bytes_big_pause`).
 -/
 
 namespace Vinc.TransportCc
@@ -297,66 +302,73 @@ theorem streak_decay (c : Cc) (a : Ack) (r : Nat) (hr : c.recovery = some r)
 
 /-! ### The pacer -/
 
-/-- The pacer holds one to ten tokens. -/
-theorem pacer_tokens (p : Pacer) (h1 : 1 ≤ p.tokens) (h2 : p.tokens ≤ burst) (now mtu srtt cw : Nat) (lim : Bool) :
-    1 ≤ (p.onSent now mtu srtt cw lim).tokens ∧ (p.onSent now mtu srtt cw lim).tokens ≤ burst := by
+theorem dg_pos (mtu : Nat) : 0 < dg mtu := by unfold dg; omega
+
+theorem budget_pos (mtu : Nat) : 0 < budget mtu := by
+  unfold budget burst; have := dg_pos mtu; omega
+
+/-- The bytes charged to the burst being counted stay below its budget. -/
+theorem pacer_spent (p : Pacer) (now size mtu srtt cw : Nat) (lim : Bool) :
+    (p.onSent now size mtu srtt cw lim).spent < budget mtu := by
   unfold Pacer.onSent
   split
-  · simp only []; omega
-  · simp only []; unfold burst; omega
+  · next h => exact h
+  · exact budget_pos mtu
 
-/-- A packet out of the burst takes one token and leaves the release where it was. -/
-theorem pacer_burst (p : Pacer) (h : 1 < p.tokens) (now mtu srtt cw : Nat) (lim : Bool) :
-    (p.onSent now mtu srtt cw lim).tokens = p.tokens - 1 ∧ (p.onSent now mtu srtt cw lim).next = p.next := by
+/-- A packet that leaves the burst under its budget is charged its size and leaves the release where it was. -/
+theorem pacer_burst (p : Pacer) (now size mtu srtt cw : Nat) (lim : Bool) (h : p.spent + charge size < budget mtu) :
+    (p.onSent now size mtu srtt cw lim).spent = p.spent + charge size ∧
+      (p.onSent now size mtu srtt cw lim).next = p.next := by
   unfold Pacer.onSent
   simp [h]
 
-/-- The last token refills the burst and sets the release: ten gaps from the packet, or one tick from it for a
-sender that was slow; never earlier than the release that stood. -/
-theorem pacer_pause (p : Pacer) (h : p.tokens ≤ 1) (now mtu srtt cw : Nat) (lim : Bool) :
-    (p.onSent now mtu srtt cw lim).tokens = burst ∧
-      (p.onSent now mtu srtt cw lim).next =
-        max p.next (satAdd now (if p.slow now mtu srtt cw lim then 1 else span mtu srtt cw)) := by
+/-- The packet that brings the burst to its budget ends it and sets the release: the span of the burst's bytes from
+the packet, or one tick from it for a sender that was slow; never earlier than the release that stood. -/
+theorem pacer_pause (p : Pacer) (now size mtu srtt cw : Nat) (lim : Bool) (h : budget mtu ≤ p.spent + charge size) :
+    (p.onSent now size mtu srtt cw lim).spent = 0 ∧
+      (p.onSent now size mtu srtt cw lim).next =
+        max p.next (satAdd now (if p.slow now size mtu srtt cw lim then 1
+                                else spanB (p.spent + charge size) mtu srtt cw)) := by
   unfold Pacer.onSent
-  have : ¬ 1 < p.tokens := by omega
+  have : ¬ p.spent + charge size < budget mtu := by omega
   simp [this]
 
 /-- The release only moves forward. -/
-theorem pacer_next_mono (p : Pacer) (now mtu srtt cw : Nat) (lim : Bool) :
-    p.next ≤ (p.onSent now mtu srtt cw lim).next := by
+theorem pacer_next_mono (p : Pacer) (now size mtu srtt cw : Nat) (lim : Bool) :
+    p.next ≤ (p.onSent now size mtu srtt cw lim).next := by
   unfold Pacer.onSent
   split
   · exact Nat.le_refl _
   · exact Nat.le_max_left _ _
 
-/-- A sender its window limits is never slow: after its burst it waits the ten gaps. -/
-theorem pacer_pause_limited (p : Pacer) (h : p.tokens ≤ 1) (now mtu srtt cw : Nat) :
-    satAdd now (span mtu srtt cw) ≤ (p.onSent now mtu srtt cw true).next := by
-  rw [(pacer_pause p h now mtu srtt cw true).2]
-  have : p.slow now mtu srtt cw true = false := by simp [Pacer.slow]
+/-- A sender its window limits is never slow: after its burst it waits the span of its bytes. -/
+theorem pacer_pause_limited (p : Pacer) (now size mtu srtt cw : Nat) (h : budget mtu ≤ p.spent + charge size) :
+    satAdd now (spanB (p.spent + charge size) mtu srtt cw) ≤ (p.onSent now size mtu srtt cw true).next := by
+  rw [(pacer_pause p now size mtu srtt cw true h).2]
+  have : p.slow now size mtu srtt cw true = false := by simp [Pacer.slow]
   rw [this]
   exact Nat.le_max_right _ _
 
 /-- The start of the burst is the time of its first packet, kept until the burst ends. -/
-theorem pacer_start (p : Pacer) (now mtu srtt cw : Nat) (lim : Bool) :
-    (p.onSent now mtu srtt cw lim).start = if p.tokens = burst then now else p.start := by
+theorem pacer_start (p : Pacer) (now size mtu srtt cw : Nat) (lim : Bool) :
+    (p.onSent now size mtu srtt cw lim).start = if p.spent = 0 then now else p.start := by
   unfold Pacer.onSent Pacer.startAt
   split <;> rfl
 
-/-- The rate, whatever the sender: the release after a burst is at least ten gaps after the first packet of that
-burst. A slow sender is released one tick after its tenth packet because those ten gaps have passed. So the first
-packets of two bursts in a row are at least ten gaps apart. -/
-theorem pacer_span_from_start (p : Pacer) (h : p.tokens ≤ 1) (now mtu srtt cw : Nat) (lim : Bool)
-    (hs : p.startAt now ≤ now) :
-    satAdd (p.startAt now) (span mtu srtt cw) ≤ (p.onSent now mtu srtt cw lim).next := by
-  rw [(pacer_pause p h now mtu srtt cw lim).2]
+/-- The rate, whatever the sender: the release after a burst is at least the span of its bytes after the first
+packet of that burst. A slow sender is released one tick after its last packet because that span has passed. So the
+first packets of two bursts in a row are at least the first burst's span apart. -/
+theorem pacer_span_from_start (p : Pacer) (now size mtu srtt cw : Nat) (lim : Bool)
+    (h : budget mtu ≤ p.spent + charge size) (hs : p.startAt now ≤ now) :
+    satAdd (p.startAt now) (spanB (p.spent + charge size) mtu srtt cw) ≤ (p.onSent now size mtu srtt cw lim).next := by
+  rw [(pacer_pause p now size mtu srtt cw lim h).2]
   refine Nat.le_trans ?_ (Nat.le_max_right _ _)
   unfold satAdd sat
-  cases hsl : p.slow now mtu srtt cw lim with
+  cases hsl : p.slow now size mtu srtt cw lim with
   | false => simp only [Bool.false_eq_true, ite_false]; omega
   | true =>
     simp only [ite_true]
-    have : span mtu srtt cw ≤ now - p.startAt now := by
+    have : spanB (p.spent + charge size) mtu srtt cw ≤ now - p.startAt now := by
       simp [Pacer.slow] at hsl; exact hsl.2
     omega
 
@@ -365,21 +377,101 @@ theorem pacer_release_ge (p : Pacer) (now : Nat) : now ≤ p.nextRelease now ∧
   unfold Pacer.nextRelease
   split <;> omega
 
-/-- Calls of `on_sent`, each with the time, the datagram size, round trip and window it was made with, and whether
-the window limited the sender. -/
-def runSends (p : Pacer) (l : List (Nat × Nat × Nat × Nat × Bool)) : Pacer :=
-  l.foldl (fun q a => q.onSent a.1 a.2.1 a.2.2.1 a.2.2.2.1 a.2.2.2.2) p
+/-- Calls of `on_sent` on a path of datagram size `mtu`, each with the time, the packet's size, the round trip and
+window it was made with, and whether the window limited the sender. -/
+def runSends (p : Pacer) (mtu : Nat) (l : List (Nat × Nat × Nat × Nat × Bool)) : Pacer :=
+  l.foldl (fun q a => q.onSent a.1 a.2.1 mtu a.2.2.1 a.2.2.2.1 a.2.2.2.2) p
 
-/-- Fewer packets than tokens leave back to back with no pause: the release does not move. -/
-theorem runSends_no_pause : ∀ (l : List (Nat × Nat × Nat × Nat × Bool)) (p : Pacer), l.length < p.tokens →
-    (runSends p l).tokens = p.tokens - l.length ∧ (runSends p l).next = p.next
-  | [], p, _ => by simp [runSends]
+/-- The bytes a run of packets is charged. -/
+def charged : List (Nat × Nat × Nat × Nat × Bool) → Nat
+  | [] => 0
+  | a :: t => charge a.2.1 + charged t
+
+/-- Packets whose bytes keep the burst under its budget leave back to back with no pause: the release does not
+move, and the burst holds their bytes. -/
+theorem runSends_no_pause (mtu : Nat) : ∀ (l : List (Nat × Nat × Nat × Nat × Bool)) (p : Pacer),
+    p.spent + charged l < budget mtu →
+    (runSends p mtu l).spent = p.spent + charged l ∧ (runSends p mtu l).next = p.next
+  | [], p, _ => by simp [runSends, charged]
   | a :: t, p, h => by
-    have h1 : 1 < p.tokens := by simp at h; omega
-    obtain ⟨b1, b2⟩ := pacer_burst p h1 a.1 a.2.1 a.2.2.1 a.2.2.2.1 a.2.2.2.2
-    have ih := runSends_no_pause t (p.onSent a.1 a.2.1 a.2.2.1 a.2.2.2.1 a.2.2.2.2) (by simp at h; omega)
+    simp only [charged] at h
+    have h1 : p.spent + charge a.2.1 < budget mtu := by omega
+    obtain ⟨b1, b2⟩ := pacer_burst p a.1 a.2.1 mtu a.2.2.1 a.2.2.2.1 a.2.2.2.2 h1
+    have ih := runSends_no_pause mtu t (p.onSent a.1 a.2.1 mtu a.2.2.1 a.2.2.2.1 a.2.2.2.2) (by rw [b1]; omega)
     simp only [runSends, List.foldl_cons] at ih ⊢
     obtain ⟨i1, i2⟩ := ih
-    exact ⟨by simp at h ⊢; omega, by rw [i2, b2]⟩
+    exact ⟨by rw [i1, b1]; simp only [charged]; omega, by rw [i2, b2]⟩
+
+theorem sat_le_self (v : Nat) : sat v ≤ v := Nat.min_le_left _ _
+
+theorem sat_mono {a b : Nat} (h : a ≤ b) : sat a ≤ sat b := by
+  unfold sat; omega
+
+theorem sat_sat (v : Nat) : sat (sat v) = sat v := by
+  unfold sat; rw [Nat.min_assoc, Nat.min_self]
+
+theorem add_div_le' (a b c : Nat) (hc : 0 < c) : a / c + b / c ≤ (a + b) / c :=
+  (Nat.le_div_iff_mul_le hc).2 (by
+    rw [Nat.add_mul]; exact Nat.add_le_add (Nat.div_mul_le_self a c) (Nat.div_mul_le_self b c))
+
+theorem div_mul_le' (a q c : Nat) (hc : 0 < c) : a / c * q ≤ a * q / c :=
+  (Nat.le_div_iff_mul_le hc).2 (by
+    rw [Nat.mul_right_comm]; exact Nat.mul_le_mul_right q (Nat.div_mul_le_self a c))
+
+/-- The pause after a burst is never longer than its bytes take at 1.25 x cwnd per smoothed round trip: the byte
+budget does not charge a packet more than it weighs. -/
+theorem spanB_le (b mtu srtt cw : Nat) : spanB b mtu srtt cw ≤ sat (b * srtt * 4 / (5 * max cw 1)) := by
+  have hD : 0 < 5 * max cw 1 := by omega
+  have hdm := Nat.div_add_mod b (dg mtu)
+  unfold spanB satAdd satMul gap
+  generalize 5 * max cw 1 = D at hD ⊢
+  apply sat_mono
+  have e1 : dg mtu * srtt * 4 = dg mtu * (srtt * 4) := by rw [Nat.mul_assoc]
+  have e2 : b % dg mtu * srtt * 4 = b % dg mtu * (srtt * 4) := by rw [Nat.mul_assoc]
+  have e3 : b * srtt * 4 = b * (srtt * 4) := by rw [Nat.mul_assoc]
+  rw [e1, e2, e3]
+  generalize srtt * 4 = X
+  generalize b / dg mtu = q at hdm
+  generalize b % dg mtu = r at hdm
+  subst hdm
+  have s1 : sat (sat (dg mtu * X / D) * q) ≤ dg mtu * X * q / D :=
+    Nat.le_trans (sat_le_self _) (Nat.le_trans (Nat.mul_le_mul_right q (sat_le_self _)) (div_mul_le' _ q D hD))
+  have s2 : sat (r * X / D) ≤ r * X / D := sat_le_self _
+  have s3 := add_div_le' (dg mtu * X * q) (r * X) D hD
+  have e4 : dg mtu * X * q + r * X = (dg mtu * q + r) * X := by
+    rw [Nat.add_mul, Nat.mul_right_comm (dg mtu) X q]
+  rw [e4] at s3
+  exact Nat.le_trans (Nat.add_le_add s1 s2) s3
+
+/-- Ten full datagrams wait exactly the ten gaps the count rule gave them. -/
+theorem spanB_full (mtu srtt cw : Nat) : spanB (budget mtu) mtu srtt cw = satMul (gap mtu srtt cw) burst := by
+  have hd := dg_pos mtu
+  unfold spanB budget
+  rw [Nat.mul_div_cancel _ hd, Nat.mul_mod_left]
+  simp only [Nat.zero_mul, Nat.zero_div]
+  unfold satAdd satMul
+  rw [show sat 0 = 0 from rfl, Nat.add_zero, sat_sat]
+
+/-- Ten packets of 120 bytes on a path of 1,200, 100 ms round trip and a 120,000-byte window: the count rule
+paused after the tenth, -/
+theorem count_pauses_small :
+    ((List.replicate 10 ()).foldl (fun q _ => q.onSent 1000 1200 (100 * ms) 120000 true) ({} : CountPacer)).next
+      = 1000 + 10 * 800000 := by decide
+
+/-- while the byte budget lets them go: they are one datagram's worth of the ten. -/
+theorem bytes_small_no_pause :
+    ((List.replicate 10 ()).foldl (fun q _ => q.onSent 1000 120 1200 (100 * ms) 120000 true) ({} : Pacer)).next
+      = 0 := by decide
+
+/-- Four packets of 3,600 bytes, a relay carrier's large inner packets, on the same path: the count rule let them go
+with no pause, -/
+theorem count_big_no_pause :
+    ((List.replicate 4 ()).foldl (fun q _ => q.onSent 1000 1200 (100 * ms) 120000 true) ({} : CountPacer)).next
+      = 0 := by decide
+
+/-- while the byte budget charges them the twelve datagrams they are worth. -/
+theorem bytes_big_pause :
+    ((List.replicate 4 ()).foldl (fun q _ => q.onSent 1000 3600 1200 (100 * ms) 120000 true) ({} : Pacer)).next
+      = 1000 + 12 * 800000 := by decide
 
 end Vinc.TransportCc
