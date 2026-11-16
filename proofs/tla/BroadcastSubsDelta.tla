@@ -27,10 +27,27 @@
 (* index, `owed`, that holds every recipient a stream refused: a lookup    *)
 (* per writable stream, not a walk of the topics. Writable below is that   *)
 (* step.) A frame that changes no list is traced (SubsDropped).            *)
-(* A member also takes join hints (node.rs Topics::hint): a node it may    *)
-(* reach with no hub. A hint goes into its list only while it holds no     *)
-(* hub's list; a hub's list is the hub's at its version, so a hint leaves  *)
-(* it alone.                                                               *)
+(* A member also takes join hints (node.rs Topics::hint): nodes it may    *)
+(* reach with no hub. A hint is kept beside the list, in its own set of at *)
+(* most HintMax nodes (max_subscribers in the code; a full set refuses a   *)
+(* new hint); a hub's list is the hub's at its version, so a hint never    *)
+(* enters it, and a list that names a hinted node drops the hint (the code *)
+(* also drops the hints of a topic the member leaves; the model has no     *)
+(* leave).                                                                 *)
+(*                                                                         *)
+(* Assumptions the model makes. One limit: Max is the limit of the hubs    *)
+(* and of the members alike. In the code a member's max_subscribers may be *)
+(* under its hub's: its list is then cut, and it takes a change that       *)
+(* removes an id as a missed one (asks for the whole list), because the id *)
+(* past the cut is not in the change (subs.rs peers_cut); not modelled.    *)
+(* A hub is never a stranger: the member's primary hub and the hub of its  *)
+(* list are not told apart, so the fix that makes a change from the        *)
+(* primary the source after a late list from another hub (take_subs) is    *)
+(* not modelled either; a change from another hub than the list's is here  *)
+(* ignored for good. A change not newer than the version held is ignored   *)
+(* in the code, where the model asks again: a stutter the model leaves     *)
+(* out. A held subscriber is not a state of the model (Unsub stands for    *)
+(* hold).                                                                  *)
 (*                                                                         *)
 (* What must never happen (ViewIsHubSet): a member holds a version of a    *)
 (* hub's list and a list that is not what that hub's list was at that      *)
@@ -44,8 +61,8 @@
 (*              (BroadcastSubsDelta_nofrom.cfg);                           *)
 (*  CapDelta  - the change between the capped lists, not the raw sets      *)
 (*              (BroadcastSubsDelta_nocap.cfg);                            *)
-(*  HintGuard - a hint only into a list that came from no hub              *)
-(*              (BroadcastSubsDelta_nohint.cfg).                           *)
+(*  HintGuard - a hint beside the list, never into a list that came from  *)
+(*              a hub (BroadcastSubsDelta_nohint.cfg).                     *)
 (* The whole list on a SUB, on an ASK, to a new publisher and to a stale   *)
 (* recipient bring a member back up to date; they are what makes progress, *)
 (* not what keeps a list right, so they have no RED of their own.          *)
@@ -57,17 +74,18 @@ EXTENDS Integers, Sequences, FiniteSets
 
 \* Hubs: the hubs; Members: the members (numbers, so they have an order); Max: max_subscribers; StreamCap: the frames a
 \* stream holds; MaxSteps: how many steps a run takes at most; MaxLives: how many lives a hub has at most; Hinted: the
-\* members that take join hints (every member in the code; fewer keep a large configuration small); the four guards
-\* are booleans (TRUE in the code).
-CONSTANTS Hubs, Members, Max, StreamCap, MaxSteps, MaxLives, Hinted, GapRule, FromCheck, CapDelta, HintGuard
+\* members that take join hints (every member in the code; fewer keep a large configuration small); HintMax: how many
+\* hints a member keeps (max_subscribers in the code); the four guards are booleans (TRUE in the code).
+CONSTANTS Hubs, Members, Max, StreamCap, MaxSteps, MaxLives, Hinted, HintMax, GapRule, FromCheck, CapDelta, HintGuard
 
 \* live: each hub's subscribers; pubs: its recent publishers; told: the list it last told; life: its incarnation;
 \* seq: the number of its list; hist: every (life, number, list) it ever had; stale: the recipients it owes the whole
 \* list; asks: the members whose ASK is on its way to it; chan: the frames on the stream from a hub to a member, oldest
 \* first; peers: each member's list; from: the hub that list came from ("none" before any); pver: the version the
-\* member holds (None while it waits for a whole list); steps: the steps taken, which bounds the runs.
-VARIABLES live, pubs, told, life, seq, hist, stale, asks, chan, peers, from, pver, steps
-vars == <<live, pubs, told, life, seq, hist, stale, asks, chan, peers, from, pver, steps>>
+\* member holds (None while it waits for a whole list); hints: each member's join hints, kept beside its list;
+\* steps: the steps taken, which bounds the runs.
+VARIABLES live, pubs, told, life, seq, hist, stale, asks, chan, peers, from, pver, hints, steps
+vars == <<live, pubs, told, life, seq, hist, stale, asks, chan, peers, from, pver, hints, steps>>
 
 \* A member that holds no version.
 None == <<0, 0>>
@@ -93,6 +111,7 @@ Init ==
     /\ stale = [h \in Hubs |-> {}] /\ asks = [h \in Hubs |-> {}]
     /\ chan = [h \in Hubs |-> [m \in Members |-> <<>>]]
     /\ peers = [m \in Members |-> {}] /\ from = [m \in Members |-> "none"] /\ pver = [m \in Members |-> None]
+    /\ hints = [m \in Members |-> {}]
     /\ steps = 0
 
 \* Hub h's set became nl and its publishers np; fresh are owed the whole list; ch is what its streams hold. This is
@@ -125,7 +144,7 @@ Announce(h, nl, np, fresh, ch) ==
         /\ hist' = [hist EXCEPT ![h] = @ \cup {<<v[1], v[2], nt>>}]
         /\ chan' = [chan EXCEPT ![h] = [p \in Members |-> IF p \in ok THEN Append(c1[p], Full(v, nt)) ELSE c1[p]]]
         /\ stale' = [stale EXCEPT ![h] = s2 \ ok]
-        /\ UNCHANGED <<life, asks, peers, from, pver>>
+        /\ UNCHANGED <<life, asks, peers, from, pver, hints>>
 
 \* What on_sub owes the whole list: a subscriber that is new, or whose SUB does not carry the current version.
 SubFresh(h, m, isnew) == IF isnew \/ Held(m, h) # Cur(h) THEN {m} ELSE {}
@@ -150,7 +169,7 @@ Writable(h, m) ==
     /\ m \in stale[h] /\ m \in Rcpt(h) /\ Len(chan[h][m]) < StreamCap
     /\ chan' = [chan EXCEPT ![h][m] = Append(@, Full(Cur(h), told[h]))]
     /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, asks, peers, from, pver>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, asks, peers, from, pver, hints>>
 
 \* subs.rs on_subs ASK at the hub: a recipient that asked is stale, and is sent the whole list if its stream has room.
 HubAsk(h, m) ==
@@ -161,13 +180,13 @@ HubAsk(h, m) ==
             /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
        ELSE /\ stale' = [stale EXCEPT ![h] = IF m \in Rcpt(h) THEN @ \cup {m} ELSE @]
             /\ UNCHANGED chan
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, peers, from, pver>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, peers, from, pver, hints>>
 
 \* A frame is lost on the way and nobody is told (a relay drop).
 Lose(h, m) ==
     /\ Len(chan[h][m]) > 0
     /\ chan' = [chan EXCEPT ![h][m] = Tail(@)]
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, asks, peers, from, pver>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, asks, peers, from, pver, hints>>
 
 \* The hub restarts: a new life with no subscribers and an empty list; its streams and the asks to it are lost.
 Restart(h) ==
@@ -178,7 +197,7 @@ Restart(h) ==
     /\ hist' = [hist EXCEPT ![h] = @ \cup {<<life[h] + 1, 0, {}>>}]
     /\ stale' = [stale EXCEPT ![h] = {}] /\ asks' = [asks EXCEPT ![h] = {}]
     /\ chan' = [chan EXCEPT ![h] = [m \in Members |-> <<>>]]
-    /\ UNCHANGED <<peers, from, pver>>
+    /\ UNCHANGED <<peers, from, pver, hints>>
 
 \* subs.rs on_subs at a member: the oldest frame on the stream from h arrives.
 Deliver(h, m) ==
@@ -207,15 +226,23 @@ Deliver(h, m) ==
             /\ UNCHANGED <<peers, from>>
        \* a change from another hub, or while the member already waits: ignored
        ELSE UNCHANGED <<peers, from, pver, asks>>
+    \* a list that names a hinted node covers it: the hint is dropped
+    /\ hints' = [hints EXCEPT ![m] = @ \ peers'[m]]
     /\ chan' = [chan EXCEPT ![h][m] = Tail(@)]
     /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale>>
 
-\* node.rs Topics::hint: member m takes n as a join hint. It goes into m's list (while the list has room) only when that
-\* list came from no hub; with the guard off, into a hub's list too.
+\* node.rs Topics::hint: member m takes n as a join hint. It is kept in m's own set of hints (at most HintMax, a full set
+\* refuses it) and never enters the list; with the guard off, it goes into the list (while it has room) even when the list
+\* came from a hub.
 Hint(m, n) ==
-    /\ n # m /\ n \notin peers[m] /\ Cardinality(peers[m]) < Max
-    /\ ~HintGuard \/ from[m] = "none"
-    /\ peers' = [peers EXCEPT ![m] = @ \cup {n}]
+    /\ n # m /\ n \notin peers[m]
+    /\ IF HintGuard
+       THEN /\ n \notin hints[m] /\ Cardinality(hints[m]) < HintMax
+            /\ hints' = [hints EXCEPT ![m] = @ \cup {n}]
+            /\ UNCHANGED peers
+       ELSE /\ Cardinality(peers[m]) < Max
+            /\ peers' = [peers EXCEPT ![m] = @ \cup {n}]
+            /\ UNCHANGED hints
     /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, asks, chan, from, pver>>
 
 \* Any member and hub take any step, up to MaxSteps steps in all.
@@ -234,6 +261,7 @@ TypeOK ==
     /\ \A h \in Hubs : stale[h] \subseteq Members /\ asks[h] \subseteq Members
     /\ \A h \in Hubs, m \in Members : Len(chan[h][m]) <= StreamCap
     /\ \A m \in Members : peers[m] \subseteq Members /\ from[m] \in Hubs \cup {"none"}
+    /\ \A m \in Members : hints[m] \subseteq Members /\ Cardinality(hints[m]) <= Max
 
 \* A hub's list is its subscribers' lowest Max ids, and its current version names it in the history.
 ToldIsList == \A h \in Hubs : told[h] = Cap(live[h]) /\ <<life[h], seq[h], told[h]>> \in hist[h]
@@ -245,6 +273,10 @@ ViewIsHubSet == \A m \in Members :
 \* A member that holds its hub's current version holds its hub's list.
 Synced == \A m \in Members :
     (from[m] # "none" /\ pver[m] = Cur(from[m])) => peers[m] = told[from[m]]
+
+\* A hint is never a node the member's list names: the list covers it (and a member's reach is the two sets together,
+\* each node once).
+HintsApart == \A m \in Members : hints[m] \cap peers[m] = {}
 
 \* A stale entry is always a recipient: the hub owes the whole list only to those it tells.
 StaleAreRecipients == \A h \in Hubs : stale[h] \subseteq Rcpt(h)

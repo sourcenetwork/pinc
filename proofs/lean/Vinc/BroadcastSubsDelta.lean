@@ -19,6 +19,10 @@ the version it makes, `(e, s + 1)`, and a member takes it (`recvDelta`, the DELT
 and holds the new version (`recv_on_base`); on any other base it applies nothing, holds no version (it waits for a
 whole list) and asks for one if it held a version (`recv_off_base`); a whole list at version `v` replaces the
 member's list with the hub's list at `v` and makes it hold `v`, waiting or not (`recv_full`).
+
+One limit. `max` is the hub's limit and the member's alike: `apply_delta` needs `new.length ≤ max`. A member whose limit is
+under its hub's holds a cut list, and the code (`peers_cut`) takes a change that removes an id as one on another base
+(it asks for the whole list); that case is not stated here.
 -/
 
 namespace Vinc.BroadcastSubsDelta
