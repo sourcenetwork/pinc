@@ -4,17 +4,20 @@
 The client side of `vinc-connect` as total functions over unbounded `Nat`, step for step the operators of
 `proofs/tla/ConnectOwnOps.tla`: `Connectivity::{set_local, set_hints, probe_all, candidates, tick}`, the QADR arm of
 `handle_udp` with `Netcheck::{probe_sent, answered, reflexive_into, restart}`, and `publish`, `start_jobs`,
-`record_job` and the record arm of `sign_response` (`client/signing.rs`, `client/timers.rs`). The theorems are in
-`ConnectOwnThm.lean`; the trace replay is `TraceConnectOwn.lean`.
+`record_job` and the record arm of `sign_response` (`client/signing.rs`, `client/timers.rs`), and
+`Connectivity::restore_record_seq`. The theorems are in `ConnectOwnThm.lean`; the trace replay is
+`TraceConnectOwn.lean`.
 
 An address is a natural, a relay is its position in the configuration (0-based here), `udp[k]` its configured UDP
 address (0: it takes none), a nonce is a natural (an `Option`: the code's nonce `[0; 8]` is as good as any). The home
 relay and the reachability class are inputs of `record_job` (`client/conn.rs` computes them: `ConnectClient.lean`).
-Time is in nanoseconds, as in the code; `wall` is the wall clock of the last tick that had one, in milliseconds.
+Time is in nanoseconds, as in the code; `wall` is the wall clock of the last tick that had one, in milliseconds, and
+`last` the sequence number of the last record built (`last_seq`, raised by `restore_record_seq`).
 
 Seams, stated: the signature is the host's (a job is signed or it fails: `signed` takes the outcome); the carrier is a
 Boolean, whether `frame_to` could send the record; sleep notices and beacons share the one signing slot in the code
-and are left out (they only delay a record job: `start` does nothing while a job is outstanding).
+and are left out (they only delay a record job: `start` does nothing while a job is outstanding); the node holds no
+port mapping (`set_mapped`: a mapped address a relay vouches for would lead the list, `mapped.rs`, tests only).
 -/
 
 namespace Vinc.ConnectOwn
@@ -45,6 +48,8 @@ structure St where
   refl : List (Option Nat)
   loc : List Nat := []
   wall : Option Nat := none
+  /-- `last_seq`, the number of the last record built (0 before the first) -/
+  last : Nat := 0
   hints : List Nat := []
   /-- `next_publish` -/
   np : Nat := 0
@@ -93,15 +98,17 @@ def observe (cf : Cf) (s : St) (from_ n a : Nat) : St × Bool :=
 def restart (s : St) : St :=
   { s with probe := s.probe.map fun _ => none, refl := s.refl.map fun _ => none }
 
-/-- `Netcheck::reflexive_into`: the reflexive addresses in relay order, as many as fit. -/
-def reflList (cf : Cf) (s : St) : List Nat := (s.refl.filterMap id).take cf.cap
-
-/-- One step of `candidates`' loop over the local addresses. -/
-def addLocal (cap : Nat) (acc : List Nat) (a : Nat) : List Nat :=
+/-- One step of the loops of `Netcheck::reflexive_into` and `Connectivity::candidates`: an address is written when
+there is room and it is not listed yet. -/
+def addNew (cap : Nat) (acc : List Nat) (a : Nat) : List Nat :=
   if acc.length < cap ∧ a ∉ acc then acc ++ [a] else acc
 
+/-- `Netcheck::reflexive_into`: the distinct reflexive addresses in relay order (an address that several relays report
+is listed once, at the first of them), as many as fit. -/
+def reflList (cf : Cf) (s : St) : List Nat := (s.refl.filterMap id).foldl (addNew cf.cap) []
+
 /-- `Connectivity::candidates`: the reflexive addresses first, then the local ones not yet there, up to `cap`. -/
-def cands (cf : Cf) (s : St) : List Nat := s.loc.foldl (addLocal cf.cap) (reflList cf s)
+def cands (cf : Cf) (s : St) : List Nat := s.loc.foldl (addNew cf.cap) (reflList cf s)
 
 /-- `tick`: the wall clock is taken when it is given one. -/
 def tick (s : St) (w : Option Nat) : St :=
@@ -109,12 +116,19 @@ def tick (s : St) (w : Option Nat) : St :=
   | some x => { s with wall := some x }
   | none => s
 
+/-- The number of a record built at the wall clock `w` after the one numbered `last`: the clock, or one above the last
+when the clock did not move past it (`wall_ms.max(last_seq.saturating_add(1))`). -/
+def nextSeq (w last : Nat) : Nat := max w (sadd last 1)
+
 /-- `record_job`, called with the wall clock of the last tick: the record that is signed (none without a home, a
 class or a wall clock). -/
 def recordJob (cf : Cf) (s : St) (home cls : Option Nat) : Option Rec :=
   match home, cls, s.wall with
-  | some h, some c, some w => some ⟨w, h, c, cands cf s, s.hints⟩
+  | some h, some c, some w => some ⟨nextSeq w s.last, h, c, cands cf s, s.hints⟩
   | _, _, _ => none
+
+/-- `restore_record_seq`: the last number is raised to `n`, never lowered. -/
+def restoreSeq (s : St) (n : Nat) : St := { s with last := max s.last n }
 
 /-- `set_hints` (the length check is the code's `MAX_HINT_LEN`; a refused call changes nothing): the hints and the
 record wanted. -/
@@ -129,7 +143,7 @@ def publish (s : St) (now : Nat) (canPublish : Bool) : St :=
 def changed (s : St) (now : Nat) : St := { s with np := now }
 
 /-- `start_jobs` for a record: nothing while a job is outstanding or before the first wall clock; a wanted record
-starts a job, or, when it cannot (no home or class), waits a retry period. -/
+starts a job and its number becomes the last one, or, when it cannot (no home or class), waits a retry period. -/
 def start (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) : St :=
   if s.job.isSome then s
   else match s.wall with
@@ -137,7 +151,7 @@ def start (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) : St :=
     | some _ =>
       if s.want then
         match recordJob cf s home cls with
-        | some j => { s with want := false, job := some j }
+        | some j => { s with want := false, job := some j, last := j.seq }
         | none => { s with want := false, np := sadd now retry }
       else s
 
@@ -163,6 +177,7 @@ inductive Op
   | changed (now : Nat)
   | start (now : Nat) (home cls : Option Nat)
   | signed (now : Nat) (ok sent : Bool)
+  | restore (n : Nat)
 
 def step (cf : Cf) (s : St) : Op → St
   | .setLocal a => setLocal cf s a
@@ -175,6 +190,7 @@ def step (cf : Cf) (s : St) : Op → St
   | .changed now => changed s now
   | .start now h c => start cf s now h c
   | .signed now ok sent => signed s now ok sent
+  | .restore n => restoreSeq s n
 
 def run (cf : Cf) (s : St) (ops : List Op) : St := ops.foldl (step cf) s
 

@@ -8,16 +8,22 @@ For the model of `ConnectOwn.lean`, over unbounded naturals and any `MAX_ADDRS` 
 
 * The candidate list: `cands_length` (at most `cap`), `cands_prefix` (the reflexive addresses come first, in relay
   order), `cands_tail` (then the node's own addresses, in their order, each once, none already listed), `cands_room`
-  (all of them when there is room), `cands_only` (nothing else). `reflexive_repeats` states the known behaviour #308: a
-  reflexive address repeats once per relay that reported it; `reflexive_dropped`: a ninth reflexive address is dropped.
+  (all of them when there is room), `cands_only` (nothing else), `cands_distinct` (every address once). The reflexive
+  addresses are distinct and in relay order (`reflexive_distinct`: an address that several relays report is listed
+  once, at the first of them, #308 fixed), all of them when there is room (`reflexive_room`), and a ninth distinct one
+  is dropped (`reflexive_dropped`).
 * The QADR answer: `observe_took` (taken only from the first relay with that configured address, for the nonce of its
   outstanding probe; it clears that probe, records the address, and changes no other relay), `observe_refused` (an
   answer not taken changes nothing), `observe_once` (a probe is answered once).
-* The sequence number is the wall clock of the last tick (`job_seq`). Two records signed with no tick that had a clock
-  between them have the same number (`same_tick_same_seq`, `seq_rises_only_across_ticks`: #287); if the wall clock rose
-  between the two record jobs the number rises, if it was set back the number falls (`seq_rises_with_wall`,
-  `seq_falls_when_clock_set_back`, `seq_lt_iff`). The relay refuses a number that is not above the stored one
-  (`not_above_refused`, from `ConnectRecords.lean`).
+* The sequence number is the wall clock of the last tick, or one above the last record's number when the clock did not
+  move past it (`job_seq`, `seq_wall_ahead`, `seq_wall_behind`, `seq_above_last`); a restore only raises the last
+  number (`restore_raises`) and no step lowers it (`run_floor`). So every record's number is strictly above the one
+  before it, whatever happened in between (`seq_rises`): two records with no tick that had a clock between them are one
+  apart (`same_tick_next_seq`, #287 fixed), and a clock set back does not lower the number (`clock_set_back_next_seq`).
+  The relay refuses a number that is not above the stored one (`not_above_refused`, from `ConnectRecords.lean`) and
+  stores the node's next record over the one before (`next_record_stored`), so that refusal never meets a node's own
+  consecutive records. A number is below `u64::MAX`, where the code's addition saturates (a hypothesis where it
+  matters).
 * When a record is signed: the candidates enter a job only when it starts (`start_job`), nothing else changes the job
   (`run_job_fixed`) and only the answer to the signature hands it on (`run_sent_fixed`, `signed_sent`), so a reflexive
   address learnt after the job started waits for the next one (`later_address_waits`). The record is asked for by a
@@ -29,28 +35,28 @@ namespace Vinc.ConnectOwn
 
 /-! ## The candidate list -/
 
-theorem addLocal_len (cap : Nat) (acc : List Nat) (a : Nat) (h : acc.length ≤ cap) :
-    (addLocal cap acc a).length ≤ cap := by
-  unfold addLocal
+theorem addNew_len (cap : Nat) (acc : List Nat) (a : Nat) (h : acc.length ≤ cap) :
+    (addNew cap acc a).length ≤ cap := by
+  unfold addNew
   split
   · rename_i hh; simp; omega
   · exact h
 
 theorem foldl_len (cap : Nat) (l acc : List Nat) (h : acc.length ≤ cap) :
-    (l.foldl (addLocal cap) acc).length ≤ cap := by
+    (l.foldl (addNew cap) acc).length ≤ cap := by
   induction l generalizing acc with
   | nil => exact h
-  | cons a l ih => exact ih _ (addLocal_len cap acc a h)
+  | cons a l ih => exact ih _ (addNew_len cap acc a h)
 
 theorem foldl_add (cap : Nat) (l acc : List Nat) :
-    ∃ t, l.foldl (addLocal cap) acc = acc ++ t ∧ t.Nodup ∧ (∀ x ∈ t, x ∉ acc) ∧ t.Sublist l := by
+    ∃ t, l.foldl (addNew cap) acc = acc ++ t ∧ t.Nodup ∧ (∀ x ∈ t, x ∉ acc) ∧ t.Sublist l := by
   induction l generalizing acc with
   | nil => exact ⟨[], by simp⟩
   | cons a l ih =>
     by_cases h : acc.length < cap ∧ a ∉ acc
     · obtain ⟨t, h1, h2, h3, h4⟩ := ih (acc ++ [a])
       refine ⟨a :: t, ?_, ?_, ?_, ?_⟩
-      · simp only [List.foldl_cons, addLocal, if_pos h, h1]; simp
+      · simp only [List.foldl_cons, addNew, if_pos h, h1]; simp
       · refine List.nodup_cons.2 ⟨?_, h2⟩
         intro hm; exact h3 a hm (by simp)
       · intro x hx hxa
@@ -60,34 +66,37 @@ theorem foldl_add (cap : Nat) (l acc : List Nat) :
       · exact h4.cons₂ a
     · obtain ⟨t, h1, h2, h3, h4⟩ := ih acc
       refine ⟨t, ?_, h2, h3, h4.cons a⟩
-      simp only [List.foldl_cons, addLocal, if_neg h, h1]
+      simp only [List.foldl_cons, addNew, if_neg h, h1]
 
-theorem foldl_room (cap : Nat) (l acc : List Nat) (hr : (l.foldl (addLocal cap) acc).length < cap) :
-    ∀ x ∈ l, x ∈ l.foldl (addLocal cap) acc := by
+theorem foldl_room (cap : Nat) (l acc : List Nat) (hr : (l.foldl (addNew cap) acc).length < cap) :
+    ∀ x ∈ l, x ∈ l.foldl (addNew cap) acc := by
   induction l generalizing acc with
   | nil => simp
   | cons a l ih =>
     intro x hx
-    have hr' : (l.foldl (addLocal cap) (addLocal cap acc a)).length < cap := by simpa using hr
-    obtain ⟨t, ht, _, _, _⟩ := foldl_add cap l (addLocal cap acc a)
-    have hlen : (addLocal cap acc a).length < cap := by
+    have hr' : (l.foldl (addNew cap) (addNew cap acc a)).length < cap := by simpa using hr
+    obtain ⟨t, ht, _, _, _⟩ := foldl_add cap l (addNew cap acc a)
+    have hlen : (addNew cap acc a).length < cap := by
       rw [ht] at hr'; simp at hr'; omega
-    have ha : a ∈ addLocal cap acc a := by
+    have ha : a ∈ addNew cap acc a := by
       by_cases hh : acc.length < cap ∧ a ∉ acc
-      · simp [addLocal, hh]
-      · have e : addLocal cap acc a = acc := by simp [addLocal, hh]
+      · simp [addNew, hh]
+      · have e : addNew cap acc a = acc := by simp [addNew, hh]
         rw [e] at hlen ⊢
         exact Classical.byContradiction fun hc => hh ⟨hlen, hc⟩
     rcases List.mem_cons.1 hx with hx | hx
     · rw [hx]
-      show a ∈ l.foldl (addLocal cap) (addLocal cap acc a)
+      show a ∈ l.foldl (addNew cap) (addNew cap acc a)
       rw [ht]; exact List.mem_append_left _ ha
     · exact ih _ hr' x hx
 
+theorem reflList_length (cf : Cf) (s : St) : (reflList cf s).length ≤ cf.cap :=
+  foldl_len cf.cap (s.refl.filterMap id) [] (Nat.zero_le _)
+
 /-- The record lists at most `cap` addresses. -/
 theorem cands_length (cf : Cf) (s : St) : (cands cf s).length ≤ cf.cap := by
-  unfold cands reflList
-  exact foldl_len _ _ _ (by simp; omega)
+  unfold cands
+  exact foldl_len _ _ _ (reflList_length cf s)
 
 /-- The reflexive addresses come first, in relay order. -/
 theorem cands_prefix (cf : Cf) (s : St) : ∃ t, cands cf s = reflList cf s ++ t := by
@@ -112,13 +121,27 @@ theorem cands_only (cf : Cf) (s : St) : ∀ x ∈ cands cf s, x ∈ reflList cf 
   · exact Or.inl h
   · exact Or.inr (h4.subset h)
 
-theorem reflList_length (cf : Cf) (s : St) : (reflList cf s).length ≤ cf.cap := by simp [reflList]; omega
+/-- #308 fixed: the reflexive addresses are listed each once, in relay order (an address that several relays report
+is listed once, at the first of them). -/
+theorem reflexive_distinct (cf : Cf) (s : St) :
+    (reflList cf s).Nodup ∧ (reflList cf s).Sublist (s.refl.filterMap id) := by
+  obtain ⟨t, h, h2, _, h4⟩ := foldl_add cf.cap (s.refl.filterMap id) []
+  unfold reflList
+  rw [h, List.nil_append]
+  exact ⟨h2, h4⟩
 
-/-- #308: two relays that report the same reflexive address list it twice. -/
-theorem reflexive_repeats :
-    reflList ⟨8, [10, 11]⟩ { probe := [none, none], refl := [some 5, some 5] } = [5, 5] := by decide
+/-- Every address a relay reported is listed when there is room. -/
+theorem reflexive_room (cf : Cf) (s : St) (h : (reflList cf s).length < cf.cap) :
+    ∀ a ∈ s.refl.filterMap id, a ∈ reflList cf s :=
+  foldl_room cf.cap (s.refl.filterMap id) [] h
 
-/-- A ninth reflexive address is dropped (the cap is 8). -/
+/-- Every address is listed once. -/
+theorem cands_distinct (cf : Cf) (s : St) : (cands cf s).Nodup := by
+  obtain ⟨t, h, h2, h3, _⟩ := cands_tail cf s
+  rw [h]
+  exact List.nodup_append.2 ⟨(reflexive_distinct cf s).1, h2, fun a ha b hb hab => h3 b hb (hab ▸ ha)⟩
+
+/-- A ninth distinct reflexive address is dropped (the cap is 8). -/
 theorem reflexive_dropped :
     (reflList ⟨8, List.replicate 9 10⟩
       { probe := List.replicate 9 none, refl := (List.range 9).map fun k => some (k + 1) }).length = 8 := by decide
@@ -249,72 +272,119 @@ theorem run_wall (cf : Cf) (s : St) (ops : List Op) (h : ∀ o ∈ ops, clockOp 
     show (run cf (step cf s o) ops).wall = s.wall
     rw [ih _ (fun o' ho' => h o' (List.mem_cons_of_mem _ ho')), step_wall cf s o (h o (by simp))]
 
-/-- The record's sequence number is the wall clock of the last tick that had one. -/
+/-- The operations that set the last number: a record job that starts, a restore. -/
+def lastOp : Op → Bool
+  | .start _ _ _ => true
+  | .restore _ => true
+  | _ => false
+
+theorem step_last (cf : Cf) (s : St) (o : Op) (h : lastOp o = false) : (step cf s o).last = s.last := by
+  cases o with
+  | start _ _ _ => simp [lastOp] at h
+  | restore _ => simp [lastOp] at h
+  | answer f n a =>
+    simp only [step]; unfold observe; split
+    · rfl
+    · split <;> rfl
+  | signed now ok sent =>
+    simp only [step, signed]
+    split
+    · rfl
+    · split
+      · split <;> rfl
+      · rfl
+  | publish now c =>
+    simp only [step, publish]
+    split
+    · rfl
+    · split <;> rfl
+  | tick w => cases w <;> rfl
+  | setLocal _ => rfl
+  | probe _ => rfl
+  | restart => rfl
+  | hints _ => rfl
+  | changed _ => rfl
+
+theorem run_last (cf : Cf) (s : St) (ops : List Op) (h : ∀ o ∈ ops, lastOp o = false) :
+    (run cf s ops).last = s.last := by
+  induction ops generalizing s with
+  | nil => rfl
+  | cons o ops ih =>
+    show (run cf (step cf s o) ops).last = s.last
+    rw [ih _ (fun o' ho' => h o' (List.mem_cons_of_mem _ ho')), step_last cf s o (h o (by simp))]
+
+/-- The record's sequence number is the wall clock of the last tick, or one above the last record's number when the
+clock did not move past it (the code's `wall_ms.max(last_seq.saturating_add(1))`). -/
 theorem job_seq (cf : Cf) (s : St) (home cls : Option Nat) (j : Rec) (h : recordJob cf s home cls = some j) :
-    s.wall = some j.seq := by
+    ∃ w, s.wall = some w ∧ j.seq = nextSeq w s.last := by
   unfold recordJob at h
   split at h
   · have := Option.some.inj h
     subst this
-    exact ‹s.wall = some _›
+    exact ⟨_, ‹s.wall = some _›, rfl⟩
   · simp at h
 
-/-- #287, as the code behaves: two records signed with no tick that had a wall clock between them carry the same
-sequence number, whatever else changed in between (addresses, hints, class, home). -/
-theorem same_tick_same_seq (cf : Cf) (s : St) (ops : List Op) (h : ∀ o ∈ ops, clockOp o = false)
-    (home cls home' cls' : Option Nat) (j1 j2 : Rec)
-    (h1 : recordJob cf s home cls = some j1) (h2 : recordJob cf (run cf s ops) home' cls' = some j2) :
-    j1.seq = j2.seq := by
-  have a := job_seq cf s home cls j1 h1
-  have b := job_seq cf _ home' cls' j2 h2
-  rw [run_wall cf s ops h, a] at b
-  exact Option.some.inj b
-
-/-- A different sequence number between two records means a tick with a wall clock came between them. -/
-theorem seq_rises_only_across_ticks (cf : Cf) (s : St) (ops : List Op) (home cls home' cls' : Option Nat)
-    (j1 j2 : Rec) (h1 : recordJob cf s home cls = some j1)
-    (h2 : recordJob cf (run cf s ops) home' cls' = some j2) (hne : j1.seq ≠ j2.seq) :
-    ∃ w, Op.tick (some w) ∈ ops := by
-  refine Classical.byContradiction fun hc => ?_
-  apply hne
-  refine same_tick_same_seq cf s ops ?_ home cls home' cls' j1 j2 h1 h2
-  intro o ho
-  cases o with
-  | tick w =>
-    cases w with
-    | none => rfl
-    | some w => exact absurd ⟨w, ho⟩ hc
-  | _ => rfl
-
-/-- The positive property: if the wall clock rose between the two record jobs, the number rises. -/
-theorem seq_rises_with_wall (cf : Cf) (s s' : St) (home cls home' cls' : Option Nat) (j1 j2 : Rec) (w1 w2 : Nat)
-    (hw1 : s.wall = some w1) (hw2 : s'.wall = some w2) (hlt : w1 < w2)
-    (h1 : recordJob cf s home cls = some j1) (h2 : recordJob cf s' home' cls' = some j2) : j1.seq < j2.seq := by
-  have a := job_seq cf s home cls j1 h1
-  have b := job_seq cf s' home' cls' j2 h2
-  rw [hw1] at a; rw [hw2] at b
-  have := Option.some.inj a; have := Option.some.inj b
+/-- The number is the wall clock when the clock is past the last number. -/
+theorem seq_wall_ahead (cf : Cf) (s : St) (home cls : Option Nat) (j : Rec) (w : Nat) (hw : s.wall = some w)
+    (hl : s.last < w) (h : recordJob cf s home cls = some j) : j.seq = w := by
+  obtain ⟨w', hw', e⟩ := job_seq cf s home cls j h
+  have hww : w = w' := Option.some.inj (hw.symm.trans hw')
+  simp only [nextSeq, sadd] at e
   omega
 
-/-- A clock set back gives a lower number than the record before it. -/
-theorem seq_falls_when_clock_set_back (cf : Cf) (s s' : St) (home cls home' cls' : Option Nat) (j1 j2 : Rec)
-    (w1 w2 : Nat) (hw1 : s.wall = some w1) (hw2 : s'.wall = some w2) (hlt : w2 < w1)
-    (h1 : recordJob cf s home cls = some j1) (h2 : recordJob cf s' home' cls' = some j2) : j2.seq < j1.seq := by
-  have a := job_seq cf s home cls j1 h1
-  have b := job_seq cf s' home' cls' j2 h2
-  rw [hw1] at a; rw [hw2] at b
-  have := Option.some.inj a; have := Option.some.inj b
+/-- When the clock did not move past the last number (a record signed again before the next clock, a clock set back),
+the record takes the number one above it. -/
+theorem seq_wall_behind (cf : Cf) (s : St) (home cls : Option Nat) (j : Rec) (w : Nat) (hw : s.wall = some w)
+    (hl : w ≤ s.last) (hm : s.last < uMax) (h : recordJob cf s home cls = some j) : j.seq = s.last + 1 := by
+  obtain ⟨w', hw', e⟩ := job_seq cf s home cls j h
+  have hww : w = w' := Option.some.inj (hw.symm.trans hw')
+  simp only [nextSeq, sadd] at e
   omega
 
-theorem seq_lt_iff (cf : Cf) (s s' : St) (home cls home' cls' : Option Nat) (j1 j2 : Rec)
-    (h1 : recordJob cf s home cls = some j1) (h2 : recordJob cf s' home' cls' = some j2) :
-    j1.seq < j2.seq ↔ ∃ w1 w2, s.wall = some w1 ∧ s'.wall = some w2 ∧ w1 < w2 := by
-  have a := job_seq cf s home cls j1 h1
-  have b := job_seq cf s' home' cls' j2 h2
-  constructor
-  · intro h; exact ⟨_, _, a, b, h⟩
-  · rintro ⟨w1, w2, e1, e2, hl⟩
-    exact seq_rises_with_wall cf s s' home cls home' cls' j1 j2 w1 w2 e1 e2 hl h1 h2
+/-- A record's number is above the last number. -/
+theorem seq_above_last (cf : Cf) (s : St) (home cls : Option Nat) (j : Rec) (hm : s.last < uMax)
+    (h : recordJob cf s home cls = some j) : s.last < j.seq := by
+  obtain ⟨w, _, e⟩ := job_seq cf s home cls j h
+  simp only [nextSeq, sadd] at e
+  omega
+
+/-- `restore_record_seq` raises the last number to the one given and never lowers it. -/
+theorem restore_raises (cf : Cf) (s : St) (n : Nat) : (step cf s (.restore n)).last = max s.last n := rfl
+
+/-- No step lowers the last number (up to `u64::MAX`, where the code's addition saturates). -/
+theorem step_floor (cf : Cf) (s : St) (o : Op) : min s.last uMax ≤ min (step cf s o).last uMax := by
+  cases ho : lastOp o with
+  | false =>
+    have := step_last cf s o ho
+    omega
+  | true =>
+    cases o with
+    | restore n =>
+      show min s.last uMax ≤ min (max s.last n) uMax
+      omega
+    | start now hm c =>
+      simp only [step, start]
+      split
+      · exact Nat.le_refl _
+      · split
+        · exact Nat.le_refl _
+        · split
+          · split
+            · rename_i j hj
+              obtain ⟨w, _, e⟩ := job_seq cf s hm c j hj
+              simp only [nextSeq, sadd] at e
+              show min s.last uMax ≤ min j.seq uMax
+              omega
+            · exact Nat.le_refl _
+          · exact Nat.le_refl _
+    | _ => simp [lastOp] at ho
+
+theorem run_floor (cf : Cf) (s : St) (ops : List Op) : min s.last uMax ≤ min (run cf s ops).last uMax := by
+  induction ops generalizing s with
+  | nil => exact Nat.le_refl _
+  | cons o ops ih =>
+    show min s.last uMax ≤ min (run cf (step cf s o) ops).last uMax
+    exact Nat.le_trans (step_floor cf s o) (ih _)
 
 /-- The relay refuses a record whose number is not above the stored one (unless it is the stored record itself). -/
 theorem not_above_refused (cf : Vinc.ConnectRecords.Cf) (st : Vinc.ConnectRecords.St) (now : Nat)
@@ -328,15 +398,16 @@ theorem not_above_refused (cf : Vinc.ConnectRecords.Cf) (st : Vinc.ConnectRecord
 /-! ## When a record is signed -/
 
 /-- A job starts when a record is wanted, none is outstanding and the clock is known: its candidates are those of
-that moment. -/
+that moment, its number follows the clock and the last number, and it becomes the last number. -/
 theorem start_job (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) (w : Nat) (j : Rec)
     (h0 : s.job = none) (hw : s.wall = some w) (hwant : s.want = true)
     (hj : recordJob cf s home cls = some j) :
-    step cf s (.start now home cls) = { s with want := false, job := some j } ∧ j.addrs = cands cf s ∧
-      j.seq = w := by
-  have a := job_seq cf s home cls j hj
-  rw [hw] at a
-  refine ⟨?_, ?_, (Option.some.inj a).symm⟩
+    step cf s (.start now home cls) = { s with want := false, job := some j, last := j.seq } ∧
+      j.addrs = cands cf s ∧ j.seq = nextSeq w s.last := by
+  obtain ⟨w', hw', e⟩ := job_seq cf s home cls j hj
+  have hww : w = w' := Option.some.inj (hw.symm.trans hw')
+  subst hww
+  refine ⟨?_, ?_, e⟩
   · simp [step, start, h0, hw, hwant, hj]
   · unfold recordJob at hj
     split at hj
@@ -387,6 +458,7 @@ theorem step_job (cf : Cf) (s : St) (o : Op) (h : jobOp o = false) : (step cf s 
   | tick w => cases w <;> rfl
   | hints _ => rfl
   | changed _ => rfl
+  | restore _ => rfl
 
 theorem step_sent (cf : Cf) (s : St) (o : Op) (h : signedOp o = false) : (step cf s o).sent = s.sent := by
   cases o with
@@ -401,6 +473,7 @@ theorem step_sent (cf : Cf) (s : St) (o : Op) (h : signedOp o = false) : (step c
   | tick w => cases w <;> rfl
   | hints _ => rfl
   | changed _ => rfl
+  | restore _ => rfl
 
 theorem run_job_fixed (cf : Cf) (s : St) (ops : List Op) (h : ∀ o ∈ ops, jobOp o = false) :
     (run cf s ops).job = s.job := by
@@ -506,6 +579,7 @@ theorem want_rises (cf : Cf) (s : St) (o : Op) (hw : s.want = false) (h : (step 
   | restart => simp [step, restart, hw] at h
   | tick w => cases w <;> simp [step, tick, hw] at h
   | changed now => simp [step, changed, hw] at h
+  | restore n => simp [step, restoreSeq, hw] at h
   | start now hm c =>
     simp only [step, start] at h
     split at h
@@ -522,5 +596,78 @@ theorem want_rises (cf : Cf) (s : St) (o : Op) (hw : s.want = false) (h : (step 
     · split at h
       · split at h <;> simp [hw] at h
       · simp [hw] at h
+
+/-! ## Consecutive records -/
+
+/-- Every record's number is strictly above the one before it, whatever happens in between: ticks with no clock, the
+same clock or a clock set back, restores, other records (below `u64::MAX`, where the code's addition saturates). -/
+theorem seq_rises (cf : Cf) (s : St) (now : Nat) (home cls home' cls' : Option Nat) (j1 j2 : Rec) (ops : List Op)
+    (h0 : s.job = none) (hwant : s.want = true) (h1 : recordJob cf s home cls = some j1)
+    (h2 : recordJob cf (run cf (step cf s (.start now home cls)) ops) home' cls' = some j2) (hm : j1.seq < uMax) :
+    j1.seq < j2.seq := by
+  obtain ⟨w1, hw1, _⟩ := job_seq cf s home cls j1 h1
+  have e1 : (step cf s (.start now home cls)).last = j1.seq := by
+    rw [(start_job cf s now home cls w1 j1 h0 hw1 hwant h1).1]
+  have f := run_floor cf (step cf s (.start now home cls)) ops
+  rw [e1] at f
+  obtain ⟨w2, _, e2⟩ := job_seq cf _ home' cls' j2 h2
+  simp only [nextSeq, sadd] at e2
+  omega
+
+/-- With no restore and no other record between two records, the second is one above the first when the clock at it is
+not past the first's number. -/
+theorem seq_next_behind (cf : Cf) (s : St) (now : Nat) (home cls home' cls' : Option Nat) (j1 j2 : Rec)
+    (ops : List Op) (w2 : Nat) (hops : ∀ o ∈ ops, lastOp o = false) (h0 : s.job = none) (hwant : s.want = true)
+    (hw2 : (run cf (step cf s (.start now home cls)) ops).wall = some w2) (hle : w2 ≤ j1.seq)
+    (h1 : recordJob cf s home cls = some j1)
+    (h2 : recordJob cf (run cf (step cf s (.start now home cls)) ops) home' cls' = some j2) (hm : j1.seq < uMax) :
+    j2.seq = j1.seq + 1 := by
+  obtain ⟨w1, hw1, _⟩ := job_seq cf s home cls j1 h1
+  have hlast : (run cf (step cf s (.start now home cls)) ops).last = j1.seq := by
+    rw [run_last cf _ ops hops, (start_job cf s now home cls w1 j1 h0 hw1 hwant h1).1]
+  obtain ⟨w, hw, e2⟩ := job_seq cf _ home' cls' j2 h2
+  have hww : w2 = w := Option.some.inj (hw2.symm.trans hw)
+  simp only [nextSeq, sadd] at e2
+  omega
+
+/-- #287 fixed: two records with no tick that had a wall clock between them, and no restore and no other record, are
+one apart (the code before gave them the same number, which the relay refuses). -/
+theorem same_tick_next_seq (cf : Cf) (s : St) (now : Nat) (home cls home' cls' : Option Nat) (j1 j2 : Rec)
+    (ops : List Op) (hops : ∀ o ∈ ops, clockOp o = false ∧ lastOp o = false) (h0 : s.job = none)
+    (hwant : s.want = true) (h1 : recordJob cf s home cls = some j1)
+    (h2 : recordJob cf (run cf (step cf s (.start now home cls)) ops) home' cls' = some j2) (hm : j1.seq < uMax) :
+    j2.seq = j1.seq + 1 := by
+  obtain ⟨w1, hw1, e1⟩ := job_seq cf s home cls j1 h1
+  have hw : (run cf (step cf s (.start now home cls)) ops).wall = some w1 := by
+    rw [run_wall cf _ ops (fun o ho => (hops o ho).1), step_wall cf s (.start now home cls) rfl]
+    exact hw1
+  simp only [nextSeq, sadd] at e1
+  exact seq_next_behind cf s now home cls home' cls' j1 j2 ops w1 (fun o ho => (hops o ho).2) h0 hwant hw
+    (by omega) h1 h2 hm
+
+/-- A clock set back does not lower the number: with no restore and no other record in between, the record after it is
+one above the record before (the code before gave it a lower number, which the relay refuses). -/
+theorem clock_set_back_next_seq (cf : Cf) (s : St) (now : Nat) (home cls home' cls' : Option Nat) (j1 j2 : Rec)
+    (ops : List Op) (w1 w2 : Nat) (hops : ∀ o ∈ ops, lastOp o = false) (h0 : s.job = none) (hwant : s.want = true)
+    (hw1 : s.wall = some w1) (hw2 : (run cf (step cf s (.start now home cls)) ops).wall = some w2) (hlt : w2 < w1)
+    (h1 : recordJob cf s home cls = some j1)
+    (h2 : recordJob cf (run cf (step cf s (.start now home cls)) ops) home' cls' = some j2) (hm : j1.seq < uMax) :
+    j2.seq = j1.seq + 1 := by
+  obtain ⟨w, hw, e1⟩ := job_seq cf s home cls j1 h1
+  have hww : w1 = w := Option.some.inj (hw1.symm.trans hw)
+  simp only [nextSeq, sadd] at e1
+  exact seq_next_behind cf s now home cls home' cls' j1 j2 ops w2 hops h0 hwant hw2 (by omega) h1 h2 hm
+
+/-- The relay stores the node's next record over the one before it, whose number it holds: so the refusal of a number
+that is not above the stored one (`not_above_refused`) never meets a node's own consecutive records. -/
+theorem next_record_stored (rcf : Vinc.ConnectRecords.Cf) (st : Vinc.ConnectRecords.St) (t : Nat)
+    (r : Vinc.ConnectRecords.Rec) (e : Vinc.ConnectRecords.Ent) (hf : Vinc.ConnectRecords.find st.ents r.node = some e)
+    (cf : Cf) (s : St) (now : Nat) (home cls home' cls' : Option Nat) (j1 j2 : Rec) (ops : List Op)
+    (h0 : s.job = none) (hwant : s.want = true) (h1 : recordJob cf s home cls = some j1)
+    (h2 : recordJob cf (run cf (step cf s (.start now home cls)) ops) home' cls' = some j2) (hm : j1.seq < uMax)
+    (he : e.r.seq = j1.seq) (hr : r.seq = j2.seq) :
+    Vinc.ConnectRecords.accept rcf st t r = (.stored, { st with ents := Vinc.ConnectRecords.put st.ents ⟨r, t⟩ }) := by
+  have := seq_rises cf s now home cls home' cls' j1 j2 ops h0 hwant h1 h2 hm
+  exact Vinc.ConnectRecords.accept_higher rcf st t r e hf (by omega)
 
 end Vinc.ConnectOwn
