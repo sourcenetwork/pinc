@@ -62,7 +62,8 @@ pub enum SubsDrop {
     NotRecipient,
     /// A list from a node that is not a hub.
     NotHub,
-    /// A change from a hub other than the one the member's list came from.
+    /// A change from a hub other than the one the member's list came from; from the member's primary it also makes the
+    /// primary the source, and the member asks it for the whole list.
     OtherHub,
     /// A change on a version the member does not hold; it asks for the whole list once.
     OffBase,

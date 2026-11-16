@@ -406,3 +406,34 @@ fn a_hint_is_dropped_once_a_hubs_list_names_it_and_when_the_topic_is_left() {
     unsubscribe(&mut net, 1);
     assert!(net.nodes[1].t.hinted_subscribers(T).is_empty());
 }
+
+/// A late whole list from the hub a member left must not pin the member to it: when the next change comes from the
+/// primary, the member takes the primary as its source and asks it for the whole list.
+#[test]
+fn a_change_from_the_primary_after_a_late_list_from_the_old_hub_makes_the_member_ask_the_primary() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 2, 3, SEC);
+    net.set_primary(2, 0);
+    net.set_primary(3, 1);
+    net.subscribe(2, T);
+    // The member moves to hub 1, which sends it the whole list; then a late whole list of hub 0 arrives.
+    net.set_primary(2, 1);
+    net.pump();
+    let mut late = vec![0u8];
+    late.extend_from_slice(&[0; 8]);
+    late.extend_from_slice(&1u32.to_be_bytes());
+    late.extend_from_slice(&1u16.to_be_bytes());
+    late.extend_from_slice(&net.id(2));
+    assert!(inject(&mut net, 0, 2, &late).is_empty());
+    // Hub 0 no longer tells the member anything; a change at hub 1 reaches it.
+    net.filter = Some(Box::new(|from, to, bytes| {
+        !(from == 0 && to == 2 && bytes.get(4) == Some(&ty::SUBS))
+    }));
+    net.subscribe(3, T);
+    net.pump();
+    let held = net.nodes[2].t.known_subscribers(T).to_vec();
+    assert!(
+        held.contains(&net.id(3)),
+        "the member never learned of the change at its primary"
+    );
+    assert_eq!(held.as_slice(), net.nodes[3].t.known_subscribers(T));
+}
