@@ -17,7 +17,7 @@ use crate::orchestrate::window::drops;
 use crate::orchestrate::{Ctx, Event};
 use crate::quiet::Snapshot;
 use crate::results::Row;
-use crate::scenario::{Stack, Transport, TransportTest};
+use crate::scenario::{Stack, Transport, TransportTest, VincEndpoints};
 
 /// The environment of a node program: the address it binds and the interface size VINC states.
 pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)> {
@@ -27,9 +27,13 @@ pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)
     ]
 }
 
-fn args(stack: Stack, rest: &[String]) -> Vec<String> {
+/// The node program's arguments; `per_core` asks the VINC program for one endpoint on every CPU of its node.
+fn args(stack: Stack, rest: &[String], per_core: bool) -> Vec<String> {
     let mut a = vec!["node".into(), "transport".into(), "--stack".into(), stack.name().into()];
     a.extend_from_slice(rest);
+    if per_core {
+        a.push("--endpoints=per-core".into());
+    }
     a
 }
 
@@ -94,7 +98,11 @@ async fn one(
         row.status = "not measured: the pair's nodes are not in the plan".into();
         return Ok(row);
     }
-    let server_args = args(stack, &["server".into()]);
+    // Only VINC's many test: every other test and stack runs on one endpoint.
+    let per_core = stack == Stack::Vinc
+        && ctx.sc.vinc_endpoints == VincEndpoints::PerCore
+        && matches!(test, TransportTest::Many { .. });
+    let server_args = args(stack, &["server".into()], per_core);
     let server_env = node_env(b.address(&ctx.plan, si).0, ctx.plan.mtu);
     let mut srv = b.spawn(si, &server_args, &server_env)?;
     let addr = match srv.expect("ADDR ", READY).await {
@@ -116,7 +124,7 @@ async fn one(
     );
     let mut client_args = vec!["client".into(), addr];
     client_args.extend(test.client_args());
-    let client_args = args(stack, &client_args);
+    let client_args = args(stack, &client_args, per_core);
     let quiet_from = Snapshot::take();
     let mut cli = b.spawn(ci, &client_args, &node_env(b.address(&ctx.plan, ci).0, ctx.plan.mtu))?;
     let launches = [Launch {

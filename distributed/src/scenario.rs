@@ -17,6 +17,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use crate::scenario_transport::{Transport, TransportTest};
+pub use crate::vinc_endpoints::VincEndpoints;
 
 /// The most nodes one scenario may have: the backend's address plan and the dashboard are sized for it.
 pub const MAX_NODES: usize = 512;
@@ -449,6 +450,10 @@ pub struct Scenario {
     /// size.
     #[serde(default = "default_mtu", skip_serializing_if = "is_default_mtu")]
     pub mtu: u32,
+    /// How many endpoints VINC runs in the transport workload's `many` test (see [`VincEndpoints`]); the other stacks
+    /// and every other test are unaffected.
+    #[serde(default, skip_serializing_if = "VincEndpoints::is_default")]
+    pub vinc_endpoints: VincEndpoints,
     /// What every node gets.
     #[serde(default)]
     pub resources: Resources,
@@ -618,6 +623,7 @@ impl Scenario {
         if !(64..=262_144).contains(&self.resources.memory_mib) {
             out.push(Problem::new("resources.memory_mib", "use 64 to 262144 MiB per node"));
         }
+        self.check_vinc_endpoints(&mut out);
         let site_names = self.check_sites(&mut out);
         let nodes = self.check_nodes(&site_names, &mut out);
         self.check_links(&site_names, &mut out);

@@ -16,14 +16,14 @@ use vinc_distributed::metrics::{Iface, NodeUse, Reading, parse_cpu_usec, parse_n
 use vinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
 use vinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
 use vinc_distributed::results::{Cell, Row, Table, civil_date, fmt_cell, fmt_num, markdown, spread, summarize};
-use vinc_distributed::scenario::{Nat, Scenario, Shape, Stack, Workload};
+use vinc_distributed::scenario::{Nat, Scenario, Shape, Stack, TransportTest, VincEndpoints, Workload};
 
 fn scenario(name: &str) -> Scenario {
     let path = format!("{}/scenarios/{name}.toml", env!("CARGO_MANIFEST_DIR"));
     Scenario::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-const EXAMPLES: [&str; 38] = [
+const EXAMPLES: [&str; 39] = [
     "port-mapping",
     "port-mapping-upnp",
     "port-mapping-none",
@@ -37,6 +37,7 @@ const EXAMPLES: [&str; 38] = [
     "dtn-fragment",
     "dtn-parity",
     "lan",
+    "lan-per-core",
     "wan",
     "lossy",
     "geo",
@@ -72,6 +73,34 @@ fn every_example_scenario_validates_and_round_trips() {
         let again = Scenario::parse(&sc.to_toml().unwrap()).unwrap();
         assert_eq!(again, sc, "{name} does not survive a save and a load");
     }
+}
+
+#[test]
+fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when_bad() {
+    assert_eq!(scenario("lan").vinc_endpoints, VincEndpoints::One);
+    let sc = scenario("lan-per-core");
+    assert_eq!(sc.vinc_endpoints, VincEndpoints::PerCore);
+    assert!(sc.to_toml().unwrap().contains("vinc_endpoints = \"per-core\""));
+    // The default is not written back, so a file made before the field existed stays as it was.
+    assert!(!scenario("lan").to_toml().unwrap().contains("vinc_endpoints"));
+    let text = std::fs::read_to_string(format!("{}/scenarios/lan-per-core.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bad = Scenario::parse(&text.replace("\"per-core\"", "\"two\""));
+    assert!(bad.is_err(), "a value that is neither one nor per-core is refused");
+    // Per-core with nothing it applies to is a problem, not a silent no-op.
+    let mut sc = scenario("lan-per-core");
+    sc.stacks = vec![Stack::Iroh];
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+    let mut sc = scenario("lan-per-core");
+    if let Workload::Transport(t) = &mut sc.workload {
+        t.tests.retain(|t| !matches!(t, TransportTest::Many { .. }));
+    }
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+    let mut sc = scenario("pubsub-lan");
+    sc.vinc_endpoints = VincEndpoints::PerCore;
+    let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
+    assert!(paths.contains("vinc_endpoints"), "{paths:?}");
 }
 
 #[test]

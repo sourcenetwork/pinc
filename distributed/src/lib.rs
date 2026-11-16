@@ -30,4 +30,5 @@ pub mod results;
 pub mod scenario;
 pub mod scenario_transport;
 pub mod serve;
+pub mod vinc_endpoints;
 pub mod workloads;
