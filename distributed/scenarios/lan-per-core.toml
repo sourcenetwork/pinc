@@ -39,3 +39,9 @@ streams = 16
 test = "many"
 connections = 500
 bytes_each = 65536
+
+[[workload.tests]]
+test = "many"
+connections = 500
+bytes_each = 65536
+reading = "undriven"

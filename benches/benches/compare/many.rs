@@ -7,15 +7,16 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use futures::channel::{mpsc, oneshot};
 
-use super::{Lib, Rec, Stats, pct, per_core, server_stats, upload, us};
+use super::{Lib, Rec, Stats, pct, per_core, reading, server_stats, settle, upload, us};
 
 /// `n` clients, each with its own endpoint, connect at once and move `each` bytes; the server's memory and CPU are read
 /// while every connection is still open.
 async fn many_one<L: Lib>(addr: &str, n: usize, each: u64) {
-    let Ok(ctl_ep) = L::client().await else { return };
+    let Ok(ctl_ep) = L::burst_client().await else { return };
     let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
         Rec::new(L::name(), "many")
             .s("status", "failed: no control connection")
+            .s("reading", reading())
             .emit();
         return;
     };
@@ -24,7 +25,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64) {
     let mut eps = Vec::with_capacity(n);
     let mut no_endpoint = 0u32;
     for _ in 0..n {
-        match L::client().await {
+        match L::burst_client().await {
             Ok(e) => eps.push(e),
             Err(_) => no_endpoint += 1,
         }
@@ -61,7 +62,7 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64) {
     }
     let secs = t.elapsed().as_secs_f64();
     // Let the memory settle before the readings.
-    L::sleep(Duration::from_millis(500)).await;
+    L::sleep(settle()).await;
     let (s1, c1) = (server_stats::<L>(&ctl).await.unwrap_or(s_base), Stats::now());
     up.sort_by(f64::total_cmp);
     let ok = held.len() as f64;
@@ -82,7 +83,16 @@ async fn many_one<L: Lib>(addr: &str, n: usize, each: u64) {
             "client_kib_per_conn",
             c1.rss_kb.saturating_sub(c_made.rss_kb) as f64 / ok.max(1.0),
         )
+        .n(
+            "server_peak_kib_per_conn",
+            s1.peak_kb.saturating_sub(s_base.rss_kb) as f64 / ok.max(1.0),
+        )
+        .n(
+            "client_peak_kib_per_conn",
+            c1.peak_kb.saturating_sub(c_base.rss_kb) as f64 / ok.max(1.0),
+        )
         .n("client_rss_before_mib", c_base.rss_kb as f64 / 1024.0)
+        .s("reading", reading())
         .n("server_cpu_s", s1.cpu_secs_since(s_base))
         .n("client_cpu_s", c1.cpu_secs_since(c_made))
         .s("last_error", &why)
@@ -112,10 +122,11 @@ pub(super) async fn many<L: Lib>(addr: &str, n: usize, each: u64) {
 /// is open, the time from the start to the last upload.
 #[allow(clippy::too_many_lines)]
 async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64) {
-    let Ok(ctl_ep) = L::client().await else { return };
+    let Ok(ctl_ep) = L::burst_client().await else { return };
     let Ok(ctl) = L::hello(&ctl_ep, addr, false).await else {
         Rec::new(L::name(), "many")
             .s("status", "failed: no control connection")
+            .s("reading", reading())
             .emit();
         return;
     };
@@ -134,7 +145,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64) {
         L::spawn_client(i, move || async move {
             // Each sender goes as soon as it has spoken: a job that ends early closes its channels instead of leaving
             // the crowd waiting for it.
-            let Ok(ep) = L::client().await else {
+            let Ok(ep) = L::burst_client().await else {
                 let _ = made.unbounded_send(false);
                 return;
             };
@@ -201,7 +212,7 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64) {
     }
     let secs = t.elapsed().as_secs_f64();
     // Let the memory settle before the readings.
-    L::sleep(Duration::from_millis(500)).await;
+    L::sleep(settle()).await;
     let (s1, c1) = (server_stats::<L>(&ctl).await.unwrap_or(s_base), Stats::now());
     up.sort_by(f64::total_cmp);
     let ok = f64::from(ok);
@@ -222,7 +233,16 @@ async fn many_spread<L: Lib>(addr: &str, n: usize, each: u64) {
             "client_kib_per_conn",
             c1.rss_kb.saturating_sub(c_made.rss_kb) as f64 / ok.max(1.0),
         )
+        .n(
+            "server_peak_kib_per_conn",
+            s1.peak_kb.saturating_sub(s_base.rss_kb) as f64 / ok.max(1.0),
+        )
+        .n(
+            "client_peak_kib_per_conn",
+            c1.peak_kb.saturating_sub(c_base.rss_kb) as f64 / ok.max(1.0),
+        )
         .n("client_rss_before_mib", c_base.rss_kb as f64 / 1024.0)
+        .s("reading", reading())
         .n("server_cpu_s", s1.cpu_secs_since(s_base))
         .n("client_cpu_s", c1.cpu_secs_since(c_made))
         .s("last_error", &why)

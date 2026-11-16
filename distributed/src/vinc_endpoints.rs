@@ -1,9 +1,38 @@
-//! The scenario's `vinc_endpoints` field: how many endpoints VINC runs in the transport workload's `many` test, and
-//! the check that it is asked for only where it applies.
+//! The options of the transport workload's `many` test: `vinc_endpoints` (how many endpoints VINC runs, and the check
+//! that it is asked for only where it applies) and `reading` (how the test reads memory).
 
 use serde::{Deserialize, Serialize};
 
 use crate::scenario::{Problem, Scenario, Stack, TransportTest, Workload};
+
+/// How the `many` test reads memory (the comparison harness's `--reading`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reading {
+    /// Client endpoints driven while the connections are open, 1.5 s before the reading.
+    #[default]
+    Driven,
+    /// VINC's client endpoints left undriven, 500 ms before the reading: the reading the row had before.
+    Undriven,
+}
+
+impl Reading {
+    /// The name in files and on the node program's command line.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Driven => "driven",
+            Self::Undriven => "undriven",
+        }
+    }
+
+    #[allow(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde's skip_serializing_if passes a reference"
+    )]
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::Driven
+    }
+}
 
 /// How many endpoints a VINC node runs in the transport workload's `many` test.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

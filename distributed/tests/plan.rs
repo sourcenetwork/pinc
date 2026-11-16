@@ -16,7 +16,9 @@ use vinc_distributed::metrics::{Iface, NodeUse, Reading, parse_cpu_usec, parse_n
 use vinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
 use vinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
 use vinc_distributed::results::{Cell, Row, Table, civil_date, fmt_cell, fmt_num, markdown, spread, summarize};
-use vinc_distributed::scenario::{Nat, Scenario, Shape, Stack, TransportTest, VincEndpoints, Workload};
+use vinc_distributed::scenario::{
+    Nat, Reading as ReadingMode, Scenario, Shape, Stack, TransportTest, VincEndpoints, Workload,
+};
 
 fn scenario(name: &str) -> Scenario {
     let path = format!("{}/scenarios/{name}.toml", env!("CARGO_MANIFEST_DIR"));
@@ -101,6 +103,42 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
     sc.vinc_endpoints = VincEndpoints::PerCore;
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
     assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+}
+
+#[test]
+fn the_many_test_reads_driven_by_default_undriven_on_request_and_names_each_reading() {
+    for name in ["lan", "lan-per-core"] {
+        let sc = scenario(name);
+        let Workload::Transport(t) = &sc.workload else {
+            panic!("{name} is a transport scenario")
+        };
+        let many: Vec<_> = t
+            .tests
+            .iter()
+            .filter(|t| matches!(t, TransportTest::Many { .. }))
+            .collect();
+        assert_eq!(many.len(), 2, "{name} has the many test in both readings");
+        assert_eq!(many[0].id(), "many", "{name}");
+        assert_eq!(many[1].id(), "many_undriven", "{name}");
+        assert_eq!(
+            many[0].scenario(),
+            many[1].scenario(),
+            "both print the result line `many`"
+        );
+        assert!(matches!(
+            many[0],
+            TransportTest::Many {
+                reading: ReadingMode::Driven,
+                ..
+            }
+        ));
+    }
+    let text = std::fs::read_to_string(format!("{}/scenarios/lan.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bad = text.replace("reading = \"undriven\"", "reading = \"idle\"");
+    assert!(
+        Scenario::parse(&bad).is_err(),
+        "a reading that is neither driven nor undriven is refused"
+    );
 }
 
 #[test]

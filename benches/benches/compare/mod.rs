@@ -12,6 +12,11 @@
 //! over them. Every result line of a per-core process says so (`endpoints`: `per-core`; a line without it ran on one endpoint); the
 //! default code path is untouched, and the other tests run on one endpoint either way.
 //!
+//! `--reading=driven|undriven` (or `VINC_BENCH_READING`; the default is `driven`) is how the `many` test reads memory:
+//! `driven` runs every client endpoint's own driver while the connections are open (VINC's `run()`; the other libraries
+//! always do) and settles 1.5 s before reading, `undriven` leaves VINC's client endpoints undriven and settles 500 ms,
+//! as the row was read before. Every `many` line says which (`reading`).
+//!
 //! The wire protocol is the same for every library: a bidirectional stream starts with a mode byte. `H` is answered
 //! with `k` (the first byte of a connection), `S` is a sink that answers the byte count, `E` echoes everything it reads
 //! until the end of the stream (the `requests` scenario opens one such stream per request), and `T` answers the server's own resource counters (resident memory, CPU time,
@@ -93,11 +98,38 @@ pub fn count_allocs() {
     ENABLED.store(true, Relaxed);
 }
 
+/// The KiB of the line `key` (`VmRSS:`, `VmHWM:`) of a `/proc/<pid>/status` text.
+fn parse_status_kb(status: &str, key: &str) -> Option<u64> {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(key))
+        .and_then(|v| v.split_whitespace().next()?.parse().ok())
+}
+
+fn status_kb(key: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| parse_status_kb(&s, key))
+        .unwrap_or(0)
+}
+
+/// This process's resident memory now, in KiB.
+pub fn resident_kb() -> u64 {
+    status_kb("VmRSS:")
+}
+
+/// The most resident memory this process has had, in KiB.
+pub fn peak_kb() -> u64 {
+    status_kb("VmHWM:")
+}
+
 /// What one process has used so far.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
     /// Resident memory in KiB.
     pub rss_kb: u64,
+    /// The most resident memory the process has had, in KiB (`VmHWM`).
+    pub peak_kb: u64,
     /// User plus system CPU time in clock ticks (the kernel counts 100 per second).
     pub cpu_ticks: u64,
     /// Allocation calls since counting was turned on.
@@ -109,14 +141,7 @@ pub struct Stats {
 impl Stats {
     /// Read this process.
     pub fn now() -> Self {
-        let rss_kb = std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| {
-                s.lines()
-                    .find_map(|l| l.strip_prefix("VmRSS:"))
-                    .and_then(|v| v.split_whitespace().next()?.parse().ok())
-            })
-            .unwrap_or(0);
+        let (rss_kb, peak_kb) = (resident_kb(), peak_kb());
         let cpu_ticks = std::fs::read_to_string("/proc/self/stat")
             .ok()
             .and_then(|s| {
@@ -128,24 +153,25 @@ impl Stats {
             .unwrap_or(0);
         Self {
             rss_kb,
+            peak_kb,
             cpu_ticks,
             allocs: ALLOCS.load(Relaxed),
             alloc_bytes: BYTES.load(Relaxed),
         }
     }
 
-    fn to_bytes(self) -> [u8; 32] {
-        let mut b = [0u8; 32];
+    fn to_bytes(self) -> [u8; 40] {
+        let mut b = [0u8; 40];
         for (c, v) in b
             .chunks_mut(8)
-            .zip([self.rss_kb, self.cpu_ticks, self.allocs, self.alloc_bytes])
+            .zip([self.rss_kb, self.cpu_ticks, self.allocs, self.alloc_bytes, self.peak_kb])
         {
             c.copy_from_slice(&v.to_le_bytes());
         }
         b
     }
 
-    fn from_bytes(b: &[u8; 32]) -> Self {
+    fn from_bytes(b: &[u8; 40]) -> Self {
         let v: Vec<u64> = b
             .chunks(8)
             .map(|c| u64::from_le_bytes(c.try_into().unwrap_or([0; 8])))
@@ -155,6 +181,7 @@ impl Stats {
             cpu_ticks: v[1],
             allocs: v[2],
             alloc_bytes: v[3],
+            peak_kb: v[4],
         }
     }
 
@@ -253,6 +280,11 @@ pub trait Lib: Sized + 'static {
         let _ = i;
         Self::spawn(make());
     }
+    /// A client endpoint of the many-connection test: [`client`](Self::client), driven by its own task when the reading is
+    /// `driven` for a library whose endpoint needs one (the others always are).
+    fn burst_client() -> impl Future<Output = io::Result<Self::Ep>> {
+        Self::client()
+    }
     /// Wait.
     fn sleep(d: Duration) -> impl Future<Output = ()>;
     /// Bind a server on loopback, start serving [`handle`] on every stream, return its address as text.
@@ -337,7 +369,7 @@ pub async fn handle<T: Tx, R: Rx>(mut tx: T, mut rx: R) -> io::Result<()> {
 async fn server_stats<L: Lib>(c: &L::Conn) -> io::Result<Stats> {
     let (mut tx, mut rx) = L::open(c).await?;
     tx.write_all(b"T").await?;
-    let mut b = [0u8; 32];
+    let mut b = [0u8; 40];
     read_exact(&mut rx, &mut b).await?;
     Ok(Stats::from_bytes(&b))
 }
@@ -684,6 +716,43 @@ async fn bulk_allocs<L: Lib>(addr: &str, total: u64) {
     L::shutdown(ep).await;
 }
 
+static DRIVEN: AtomicBool = AtomicBool::new(true);
+
+/// Whether the many-connection test reads memory from driven client endpoints (the default) rather than undriven ones.
+pub fn driven() -> bool {
+    DRIVEN.load(Relaxed)
+}
+
+/// How the reading is named in the results.
+pub fn reading() -> &'static str {
+    if driven() { "driven" } else { "undriven" }
+}
+
+/// How long the many-connection test lets memory settle before it reads it.
+fn settle() -> Duration {
+    Duration::from_millis(if driven() { 1500 } else { 500 })
+}
+
+/// Whether `v` (the option's text, if given) names the driven reading.
+fn parse_reading(v: Option<&str>) -> Result<bool, String> {
+    match v {
+        None | Some("driven") => Ok(true),
+        Some("undriven") => Ok(false),
+        Some(other) => Err(format!("the reading is `driven` or `undriven`, not `{other}`")),
+    }
+}
+
+/// Read the reading option: the `--reading=` argument (removed from `args`), else `VINC_BENCH_READING`, else `driven`.
+fn reading_option(args: &mut Vec<String>) -> Result<(), String> {
+    let arg = args
+        .iter()
+        .position(|a| a.starts_with("--reading="))
+        .map(|i| args.remove(i).trim_start_matches("--reading=").to_owned());
+    let env = std::env::var("VINC_BENCH_READING").ok();
+    DRIVEN.store(parse_reading(arg.or(env).as_deref())?, Relaxed);
+    Ok(())
+}
+
 static PER_CORE: AtomicBool = AtomicBool::new(false);
 
 /// Whether this process runs one endpoint on every worker of the runtime: the server serves on all of them and the
@@ -742,7 +811,7 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
     if let Some(i) = args.iter().position(|a| a.starts_with("--variant=")) {
         let _ = VARIANT.set(args.remove(i).trim_start_matches("--variant=").to_owned());
     }
-    if let Err(e) = endpoints_option::<L>(&mut args) {
+    if let Err(e) = endpoints_option::<L>(&mut args).and_then(|()| reading_option(&mut args)) {
         eprintln!("{e}");
         std::process::exit(2);
     }
@@ -789,9 +858,44 @@ pub fn run_args<L: Lib>(mut args: Vec<String>) {
         }
         _ => {
             eprintln!(
-                "usage: [--endpoints=1|per-core] server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
+                "usage: [--endpoints=1|per-core] [--reading=driven|undriven] server [--count-allocs] | client <addr> <setup|resume|throughput|latency|requests|allocs|many> [numbers]"
             );
             std::process::exit(2);
         }
+    }
+}
+
+// The benches have no test harness; these run in the harness crate that includes this module.
+#[cfg(test)]
+#[allow(unused_imports)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_peak_and_the_resident_size_are_read_from_a_status_text() {
+        let status = "Name:\tcompare\nVmPeak:\t  900000 kB\nVmHWM:\t  123456 kB\nVmRSS:\t   98765 kB\nThreads:\t4\n";
+        assert_eq!(parse_status_kb(status, "VmHWM:"), Some(123_456));
+        assert_eq!(parse_status_kb(status, "VmRSS:"), Some(98_765));
+        assert_eq!(parse_status_kb(status, "VmSwap:"), None);
+        assert_eq!(parse_status_kb("VmHWM:\tmany kB\n", "VmHWM:"), None);
+    }
+
+    #[test]
+    fn the_reading_is_driven_by_default_undriven_on_request_and_nothing_else() {
+        assert_eq!(parse_reading(None), Ok(true));
+        assert_eq!(parse_reading(Some("driven")), Ok(true));
+        assert_eq!(parse_reading(Some("undriven")), Ok(false));
+        assert!(parse_reading(Some("idle")).is_err());
+    }
+
+    #[test]
+    fn the_reading_argument_is_taken_out_of_the_arguments() {
+        let mut args = vec!["--reading=undriven".to_owned(), "server".to_owned()];
+        assert_eq!(reading_option(&mut args), Ok(()));
+        assert_eq!(args, ["server"]);
+        assert!(!driven());
+        DRIVEN.store(true, Relaxed);
+        let mut bad = vec!["--reading=never".to_owned()];
+        assert!(reading_option(&mut bad).is_err());
     }
 }

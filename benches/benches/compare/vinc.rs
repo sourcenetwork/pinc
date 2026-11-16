@@ -312,6 +312,17 @@ impl Lib for Vinc1 {
         )
     }
 
+    async fn burst_client() -> io::Result<Ep> {
+        // A host that keeps connections drives its endpoint (`run()`); the undriven reading leaves it to the dial.
+        bind(
+            Limits {
+                connections: 1,
+                ..Limits::default()
+            },
+            super::driven(),
+        )
+    }
+
     async fn connect(ep: &Ep, addr: &str) -> io::Result<Conn> {
         let addr = NodeAddr::parse(addr).map_err(io_err)?;
         ep.connect(addr, ALPN).await.map_err(io_err)

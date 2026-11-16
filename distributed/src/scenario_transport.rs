@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::scenario::Pair;
 use crate::scenario::Problem;
+use crate::vinc_endpoints::Reading;
 
 /// One transport test: the scenarios of the comparison benches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +51,9 @@ pub enum TransportTest {
         connections: u32,
         /// Bytes each.
         bytes_each: u64,
+        /// How memory is read (`driven`, or `undriven` for the reading the row had before).
+        #[serde(default, skip_serializing_if = "Reading::is_default")]
+        reading: Reading,
     },
 }
 
@@ -74,6 +78,7 @@ impl TransportTest {
             Self::Many {
                 connections,
                 bytes_each,
+                ..
             } => vec!["many".into(), connections.to_string(), bytes_each.to_string()],
         }
     }
@@ -86,7 +91,19 @@ impl TransportTest {
             Self::Latency { size, .. } => format!("latency_{size}b"),
             Self::Requests { size, concurrency, .. } => format!("requests_{size}b_c{concurrency}"),
             Self::Throughput { streams, .. } => format!("throughput_{streams}s"),
+            Self::Many {
+                reading: Reading::Undriven,
+                ..
+            } => "many_undriven".into(),
             Self::Many { .. } => "many".into(),
+        }
+    }
+
+    /// The name of the result line the client prints: the test's id, except that both readings of `many` print `many`.
+    pub fn scenario(&self) -> String {
+        match self {
+            Self::Many { .. } => "many".into(),
+            _ => self.id(),
         }
     }
 
@@ -109,6 +126,7 @@ impl TransportTest {
             Self::Many {
                 connections,
                 bytes_each,
+                ..
             } => (1..=10_000).contains(&connections) && bytes_each <= 1 << 30,
         };
         if !ok {

@@ -27,13 +27,11 @@ pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)
     ]
 }
 
-/// The node program's arguments; `per_core` asks the VINC program for one endpoint on every CPU of its node.
-fn args(stack: Stack, rest: &[String], per_core: bool) -> Vec<String> {
+/// The node program's arguments, then the options of the test (`--endpoints=per-core`, `--reading=...`).
+fn args(stack: Stack, rest: &[String], options: &[String]) -> Vec<String> {
     let mut a = vec!["node".into(), "transport".into(), "--stack".into(), stack.name().into()];
     a.extend_from_slice(rest);
-    if per_core {
-        a.push("--endpoints=per-core".into());
-    }
+    a.extend_from_slice(options);
     a
 }
 
@@ -102,7 +100,14 @@ async fn one(
     let per_core = stack == Stack::Vinc
         && ctx.sc.vinc_endpoints == VincEndpoints::PerCore
         && matches!(test, TransportTest::Many { .. });
-    let server_args = args(stack, &["server".into()], per_core);
+    let mut options = Vec::new();
+    if per_core {
+        options.push("--endpoints=per-core".to_owned());
+    }
+    if let TransportTest::Many { reading, .. } = test {
+        options.push(format!("--reading={}", reading.name()));
+    }
+    let server_args = args(stack, &["server".into()], &options);
     let server_env = node_env(b.address(&ctx.plan, si).0, ctx.plan.mtu);
     let mut srv = b.spawn(si, &server_args, &server_env)?;
     let addr = match srv.expect("ADDR ", READY).await {
@@ -124,7 +129,7 @@ async fn one(
     );
     let mut client_args = vec!["client".into(), addr];
     client_args.extend(test.client_args());
-    let client_args = args(stack, &client_args, per_core);
+    let client_args = args(stack, &client_args, &options);
     let quiet_from = Snapshot::take();
     let mut cli = b.spawn(ci, &client_args, &node_env(b.address(&ctx.plan, ci).0, ctx.plan.mtu))?;
     let launches = [Launch {
@@ -156,7 +161,7 @@ async fn one(
     srv.close().await;
     b.stop(ci).await?;
     b.stop(si).await?;
-    let id = test.id();
+    let id = test.scenario();
     let found = lines
         .iter()
         .filter_map(|l| serde_json::from_str::<Map<String, Value>>(l).ok())

@@ -82,9 +82,26 @@ SCENARIOS = {
         "rtt50-loss1": (["latency", "1024", "1000"], 3, 900, []),
         "rtt200-loss5-reorder": (["latency", "1024", "300"], 3, 900, []),
     },
+    # `many` reads memory from driven client endpoints after 1.5 s; `many_undriven` is the reading the row had before
+    # (undriven VINC clients, 500 ms), kept beside it for the session in which the row changed.
     "many": {"loopback": (["many", "1000", "65536"], 3, 900, [])},
+    "many_undriven": {"loopback": (["many", "1000", "65536", "--reading=undriven"], 3, 900, [])},
     "allocs_latency_64b": {"loopback": (["allocs", "20000", str(64 * MIB)], 3, 900, ["--count-allocs"])},
 }
+
+MANY_COLS = [
+    ("connected_and_moved", "connected", ""),
+    ("failed", "failed", ""),
+    ("all_done_s", "all done (s)", ""),
+    ("first_byte_p50_ms", "first byte p50 (ms)", ""),
+    ("first_byte_p99_ms", "first byte p99 (ms)", ""),
+    ("server_kib_per_conn", "server KiB/conn", ""),
+    ("client_kib_per_conn", "client KiB/conn", ""),
+    ("server_peak_kib_per_conn", "server peak KiB/conn", ""),
+    ("client_peak_kib_per_conn", "client peak KiB/conn", ""),
+    ("server_cpu_s", "server CPU s", ""),
+    ("client_cpu_s", "client CPU s", ""),
+]
 
 # scenario id -> the result line's scenario name, and the metrics to show: (key, label, unit)
 SHOW = {
@@ -106,20 +123,8 @@ SHOW = {
         "latency_1024b",
         [("p50_us", "p50", "us"), ("p99_us", "p99", "us"), ("p999_us", "p99.9", "us"), ("round_trips", "round trips", "")],
     ),
-    "many": (
-        "many",
-        [
-            ("connected_and_moved", "connected", ""),
-            ("failed", "failed", ""),
-            ("all_done_s", "all done (s)", ""),
-            ("first_byte_p50_ms", "first byte p50 (ms)", ""),
-            ("first_byte_p99_ms", "first byte p99 (ms)", ""),
-            ("server_kib_per_conn", "server KiB/conn", ""),
-            ("client_kib_per_conn", "client KiB/conn", ""),
-            ("server_cpu_s", "server CPU s", ""),
-            ("client_cpu_s", "client CPU s", ""),
-        ],
-    ),
+    "many": ("many", MANY_COLS),
+    "many_undriven": ("many", MANY_COLS),
     "allocs_latency_64b": (
         "latency_64b",
         [
@@ -403,6 +408,12 @@ def write_md(out, info, libs, profiles, scen, results, a):
             key, cols = SHOW[s]
             args, reps, _, _ = SCENARIOS[s][prof]
             md.append(f"### {s} ({' '.join(args)}; {reps} runs)\n")
+            if s.startswith("many"):
+                md.append(
+                    "`many` reads memory 1.5 s after the burst from client endpoints that are driven (VINC's `run()`; the other libraries always are); "
+                    "`many_undriven` is the earlier reading, VINC's client endpoints left undriven and 500 ms. "
+                    "The peak columns are the process's highest resident memory over the burst minus its memory before it, per connection that moved its bytes.\n"
+                )
             rows = []
             extra_cols = ALLOC_BULK if s == "allocs_latency_64b" else []
             head = ["library"] + [c[1] for c in cols] + [c[1] for c in extra_cols] + ["note"]

@@ -210,7 +210,7 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
             m(Node("streams_ok"), "streams done", "", Higher),
             m(WirePerByte, "wire bytes per payload byte", "", Lower),
         ],
-        "many" => vec![
+        "many" | "many_undriven" => vec![
             m(Node("connected_and_moved"), "connected", "", Higher),
             m(Node("all_done_s"), "all done", "s", Lower),
             m(Node("first_byte_p50_ms"), "first byte p50", "ms", Lower),
@@ -218,6 +218,18 @@ pub fn metrics_of(test: &str) -> Vec<Metric> {
             m(
                 Node("server_kib_per_conn"),
                 "server memory per connection",
+                "KiB",
+                Lower,
+            ),
+            m(
+                Node("server_peak_kib_per_conn"),
+                "server peak memory per connection",
+                "KiB",
+                Lower,
+            ),
+            m(
+                Node("client_peak_kib_per_conn"),
+                "client peak memory per connection",
                 "KiB",
                 Lower,
             ),
