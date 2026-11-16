@@ -147,6 +147,7 @@ just distributed run distributed/scenarios/wan.toml   # a scenario on an emulate
 just distributed run distributed/scenarios/wan.toml --hosts fleet.toml   # the same on real machines over SSH (see distributed/infra)
 just distributed serve                                # the dashboard, on http://127.0.0.1:7878
 just distributed clean                                # remove whatever a run left
+just distributed summarize distributed/results/<run>  # rebuild a run's summary from its raw rows, running nothing
 just e2e          # the harness end to end: a two-node scenario, every stack (Docker and sudo)
 ```
 
@@ -210,9 +211,12 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   hub and relay for other nodes (`Builder::relay_role`), run by its own `run` with nothing beside it. A session
   carries 100 streams each way, and a stream the peer opened gives its place back when its answer has left
   ([#128](https://github.com/sourcenetwork/vinc/pull/128)). Not yet: a build without `std`, which the crates below
-  the facade have; the plan is in [#99](https://github.com/sourcenetwork/vinc/issues/99) and its first phases are
-  written but not merged: one of them raised a server's memory per connection, which is being looked into. An owned
-  buffer written in the middle of a stream.
+  the facade have. The plan is in [#99](https://github.com/sourcenetwork/vinc/issues/99). Its first three phases are
+  written and not merged (the software key store without `std`; the facade's tables as hash tables keyed from the
+  key store; `core` and `alloc` wherever `std` only re-exports them): an earlier form of the second raised a server's
+  memory per connection, so it is measured before it lands. The phases that remove `std` itself (the host's clock,
+  errors and randomness behind a platform, and a `std` feature) are not written. An owned buffer written in the
+  middle of a stream.
 - **Performance on loopback.** On the build host (15 November 2026, commit `9dd66f05`, all three stacks in one quiet
   window) VINC leads iroh and rust-libp2p on bulk throughput (710 against 507 and 471 MiB/s on one stream, 678
   against 489 and 460 on sixteen), on CPU per byte (2.66 against 4.83 and 5.03 ns), on the 64-byte round trip (69
@@ -236,8 +240,12 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   level with rust-libp2p's 1.23 s, against 2.98 s for iroh.
   Behind:
   - one stream on a clean 150 ms path moves 10.8 MiB/s, where it moved 12.1 on 12 November (iroh 5.68; the
-    change that did it is being looked for, [#156](https://github.com/sourcenetwork/vinc/issues/156)), and sixteen streams there move 9.64 MiB/s against iroh's
-    11.2 ([#159](https://github.com/sourcenetwork/vinc/issues/159));
+    change that did it is being looked for, [#156](https://github.com/sourcenetwork/vinc/issues/156)). Sixteen
+    streams there moved 9.64 MiB/s against iroh's 11.2 in that session; since
+    [#557](https://github.com/sourcenetwork/vinc/pull/557) (16 November) they move 11.8 against 9.71 before it,
+    measured before and after on the build host with VINC alone, so the row leads iroh's session figure, at 12% more
+    sender CPU and 2% more bytes on the wire for the same transfer; the next session measures all three again
+    ([#159](https://github.com/sourcenetwork/vinc/issues/159));
   - one stream on a LAN, 84.4 against 90.9 MiB/s ([#159](https://github.com/sourcenetwork/vinc/issues/159)), and a burst of 500 connections there, 0.93 s
     against 0.56 s ([#157](https://github.com/sourcenetwork/vinc/issues/157));
   - the slowest hundredth of requests with 16 in flight (23.9 ms against 21.2, [#94](https://github.com/sourcenetwork/vinc/issues/94));
@@ -260,6 +268,15 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
     ([#562](https://github.com/sourcenetwork/vinc/issues/562)); a hub with 100 subscribers holds 44.7 MiB against
     iroh's 18.9, for 38% of iroh's CPU ([#203](https://github.com/sourcenetwork/vinc/issues/203)); and an update for
     a device that slept is not delivered when it wakes ([#560](https://github.com/sourcenetwork/vinc/issues/560)).
+
+  Six link classes are in the harness and in the tests since 16 November, each an emulated link and not the medium
+  itself: a geostationary and a low-orbit satellite link, rural LTE, a 2G or NB-IoT class link, Bluetooth Low Energy
+  carrying IPv6 (a 1,280-byte interface) and a serial line. A deterministic test over each sets up a session, resumes
+  it and moves a transfer within a bound without a datagram above the link's size. The four without random loss run
+  within 20% of their rate; the two satellite links, which lose packets at random, take 16 and 6 times what their
+  rate would (the same behaviour as #564 and #565). Their rows against the other two libraries are not measured yet
+  ([#524](https://github.com/sourcenetwork/vinc/issues/524)). Links whose frames are smaller than 1,200 bytes
+  (Bluetooth over GATT, LoRa, packet radio) are not covered: [#525](https://github.com/sourcenetwork/vinc/issues/525).
 
   Against the session of 13 November (commit `6355d7d`) 327 of 383 values are inside that session's spread. A
   second session the same day on `79cfc653`, after the changes that landed in between, has 353 of 383 values
@@ -296,6 +313,10 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   (`[debug] trace = true`, [#126](https://github.com/sourcenetwork/vinc/pull/126)).
 - **Planned.** Forward erasure correction as an option, off by default, that an application switches on through the
   builder ([#145](https://github.com/sourcenetwork/vinc/issues/145)).
+- **A caution for applications that sign.** `Endpoint::sign` signs the bytes it is given, as they are, with the
+  node's identity key, which also signs the protocol's own statements. Do not sign bytes a peer chose without wrapping
+  them in a format of your own; a guard for the protocol's labelled statements is being added
+  ([#572](https://github.com/sourcenetwork/vinc/issues/572)).
 - **Known gaps, each small.** On a topic with more subscribers than a hub lists (256 by default) a member the list
   leaves out is subscribed and is never told so ([#483](https://github.com/sourcenetwork/vinc/issues/483)). Port
   mapping skips a few cases the reviews named: an IPv6 gateway for NAT-PMP, a relative control URL in a UPnP
