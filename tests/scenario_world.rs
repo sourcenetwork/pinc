@@ -19,6 +19,8 @@ use vinc_sim::suite::world::{
     self, Params, SCENARIOS, SeedSet, Variant, add_adversary, adversary_for, build, variants,
 };
 
+mod scenario_support;
+
 const VECTORS: &str = include_str!("data/suite_worlds.txt");
 const PUBLIC_SEEDS: [u64; 2] = [1, 2];
 
@@ -187,4 +189,28 @@ fn adversary_is_deterministic_and_separate_from_the_world() {
 #[test]
 fn unknown_scenario_is_an_error() {
     assert!(world::generate("S7", &Params::new(), 1).is_err());
+}
+
+/// The default run of S6 is the first variant's `extra1` seed (86018, not the matrix seed 86017 that depends on the
+/// draw of the link loss), and every other scenario keeps its matrix seed. Only the default run is pinned: the full
+/// run selects all 96 seeds.
+#[test]
+fn default_selection_of_the_low_bandwidth_scenario_is_its_extra1_seed() {
+    if scenario_support::full() {
+        return;
+    }
+    let s6 = scenario_support::selected(&["S6"]);
+    assert_eq!(s6.len(), 1);
+    assert_eq!((s6[0].variant, s6[0].set, s6[0].seed), (1, SeedSet::Extra1, 86018));
+    let s1 = scenario_support::selected(&["S1"]);
+    assert_eq!(s1.len(), 1);
+    assert_eq!((s1[0].variant, s1[0].set), (1, SeedSet::Matrix));
+    assert_eq!(
+        s1[0].seed,
+        variants()
+            .iter()
+            .find(|v| v.id == "S1" && v.set == SeedSet::Matrix && v.variant == 1)
+            .unwrap()
+            .seed
+    );
 }

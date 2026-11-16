@@ -1,9 +1,15 @@
 //! Shared code of the scenario test targets: which seeds run, how a run is made (one child process per run, so a panic
 //! or a stack overflow in one cannot take the others down and the determinism check has a clean environment), what a passing run must show, and the full-run switch.
 //!
-//! Default run: the matrix seed of the first variant of every scenario a target covers (one run per scenario). With
-//! `VINC_SUITE_FULL=1` every target runs all 96 seeds of its scenarios; the `report` test of a target (ignored by
-//! default; `cargo nextest run --run-ignored all` or `cargo test -- --ignored`) prints the full tables.
+//! Default run: one seed of the first variant of every scenario a target covers, its matrix seed unless
+//! [`DEFAULT_SEED_SET`] names another group for the scenario (one run per scenario). With `VINC_SUITE_FULL=1` every
+//! target runs all 96 seeds of its scenarios; the `report` test of a target (ignored by default;
+//! `cargo nextest run --run-ignored all` or `cargo test -- --ignored`) prints the full tables.
+//!
+//! `VINC_SUITE_LOSS_SALT=k` (an integer, default 0) selects another realization of every LAN's packet loss: a row that
+//! depends on which packets a link happens to lose is judged over several realizations, not one, for example
+//! `VINC_SUITE_FULL=1 VINC_SUITE_LOSS_SALT=3 cargo nextest run --run-ignored all`. The switch is read by the
+//! reference random source of `vinc-sim` (`RefRng`), and a value that is not an integer fails the run.
 #![allow(
     dead_code,
     unreachable_pub,
@@ -39,11 +45,29 @@ pub fn full() -> bool {
     std::env::var("VINC_SUITE_FULL").is_ok_and(|v| v == "1")
 }
 
-/// The variants of `ids` that this run covers: all of them when [`full`], else the matrix seed of the first variant.
+/// The scenarios whose default seed is not the matrix seed of the first variant, with the group their default comes
+/// from. The full run still runs every seed.
+const DEFAULT_SEED_SET: &[(&str, SeedSet)] = &[
+    // The matrix seed 86017 depends on the draw of the link loss: it fails in five of eight realizations on master and
+    // in the reference model too (#516); it stays in the full run.
+    ("S6", SeedSet::Extra1),
+];
+
+/// The group of seeds the default run takes for scenario `id`.
+fn default_seed_set(id: &str) -> SeedSet {
+    DEFAULT_SEED_SET
+        .iter()
+        .find_map(|&(s, set)| (s == id).then_some(set))
+        .unwrap_or(SeedSet::Matrix)
+}
+
+/// The variants of `ids` that this run covers: all of them when [`full`], else one seed of the first variant (its
+/// matrix seed, or the group [`DEFAULT_SEED_SET`] names for the scenario). `VINC_SUITE_LOSS_SALT` does not change the
+/// selection, it changes the realization of the link loss the seeds run in.
 pub fn selected(ids: &[&str]) -> Vec<Variant> {
     variants()
         .into_iter()
-        .filter(|v| ids.contains(&v.id) && (full() || (v.set == SeedSet::Matrix && v.variant == 1)))
+        .filter(|v| ids.contains(&v.id) && (full() || (v.set == default_seed_set(v.id) && v.variant == 1)))
         .collect()
 }
 
@@ -289,8 +313,8 @@ macro_rules! scenario_target {
             $crate::scenario_support::child_main();
         }
 
-        /// Every gate that was evaluated passes on the selected seeds (the matrix seed of the first variant, or all
-        /// 96 seeds with `VINC_SUITE_FULL=1`), the samples are not vacuous, a waiting scenario is listed.
+        /// Every gate that was evaluated passes on the selected seeds (one seed of the first variant of each scenario,
+        /// or all 96 seeds with `VINC_SUITE_FULL=1`), the samples are not vacuous, a waiting scenario is listed.
         #[test]
         $(#[ignore = $why])?
         fn vinc_mode_gates() {

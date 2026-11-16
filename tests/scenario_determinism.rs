@@ -1,6 +1,6 @@
 //! G-DET: the same world gives the same trace hash twice in one process and in separate processes with a different
-//! environment (and so a different hash-map seed). The scenario is the matrix seed of the first variant of S5, or of
-//! every runnable scenario with `VINC_SUITE_FULL=1`.
+//! environment (and so a different hash-map seed). The scenario is the default seed of S5, or of every runnable
+//! scenario with `VINC_SUITE_FULL=1`.
 #![allow(missing_docs, clippy::unwrap_used, clippy::indexing_slicing)]
 
 mod scenario_support;

@@ -13,7 +13,7 @@
     clippy::too_many_lines
 )]
 
-use vinc_sim::reference::{Py, PyRandom, RefRng, blake2b_128, digest32, seed};
+use vinc_sim::reference::{Py, PyRandom, RefRng, blake2b_128, digest32, parse_loss_salt, seed};
 use vinc_sim::{Random, Stream};
 
 const VECTORS: &str = include_str!("data/reference_rng.txt");
@@ -376,5 +376,61 @@ fn rust_ln_matches_cpython_log_on_every_vector() {
             let v: Vec<f64> = (0..100_000).map(|_| (1.0 + (r.random() - 0.5) * 1e-6).ln()).collect();
             assert_eq!(digest_f(v), f[3], "near 1");
         }
+    }
+}
+
+/// The first three draws of a stream, as bits.
+fn draws(run_seed: u64, stream: Stream, salt: u64) -> [u64; 3] {
+    let mut r = RefRng::derive_salted(run_seed, stream, salt);
+    [(); 3].map(|()| r.random().to_bits())
+}
+
+const RUN: u64 = 86018;
+const PIN_UP: [u64; 3] = [0x3fd3_cf90_e73a_21a8, 0x3fea_8f0e_152c_fcac, 0x3fe2_cc60_61ea_9611];
+const PIN_DOWN: [u64; 3] = [0x3fa3_6d28_5e52_9ac0, 0x3faf_b7d5_5f91_5c10, 0x3fdf_5604_3ac9_9454];
+
+/// The default realization of the link loss never moves: these values were drawn before the switch existed, and salt 0
+/// (the variable unset or `0`) must give them again. `derive` reads the switch from the environment, which is
+/// `parse_loss_salt` over `VINC_SUITE_LOSS_SALT`; both are covered here, the wrapper that reads the variable is not.
+#[test]
+fn the_default_realization_of_the_lan_loss_is_pinned() {
+    assert_eq!(draws(RUN, Stream::LanUp(0), 0), PIN_UP);
+    assert_eq!(draws(RUN, Stream::LanDown(0), 0), PIN_DOWN);
+    assert_eq!(parse_loss_salt(None), Ok(0));
+    assert_eq!(parse_loss_salt(Some("0")), Ok(0));
+}
+
+#[test]
+fn another_realization_gives_other_lan_streams_the_same_on_a_second_call() {
+    for st in [Stream::LanUp(0), Stream::LanUp(3), Stream::LanDown(0)] {
+        let (d, k1, k2) = (draws(RUN, st, 0), draws(RUN, st, 1), draws(RUN, st, 2));
+        assert_ne!(d, k1, "{st:?}");
+        assert_ne!(d, k2, "{st:?}");
+        assert_ne!(k1, k2, "{st:?}");
+        assert_eq!(k1, draws(RUN, st, 1), "{st:?}");
+        assert_eq!(k2, draws(RUN, st, 2), "{st:?}");
+    }
+}
+
+#[test]
+fn the_streams_that_are_not_a_lan_loss_are_the_same_for_every_realization() {
+    for st in [
+        Stream::Nat(0),
+        Stream::Link { from: 1, to: 2 },
+        Stream::Flood(0),
+        Stream::Adversary,
+    ] {
+        assert_eq!(draws(RUN, st, 0), draws(RUN, st, 1), "{st:?}");
+        assert_eq!(draws(RUN, st, 0), draws(RUN, st, 2), "{st:?}");
+    }
+}
+
+#[test]
+fn the_loss_switch_parses_a_whole_number_and_refuses_the_rest() {
+    assert_eq!(parse_loss_salt(Some("7")), Ok(7));
+    assert_eq!(parse_loss_salt(Some(" 3 ")), Ok(3));
+    for bad in ["", "x", "-1", "1.5", "0x1"] {
+        let e = parse_loss_salt(Some(bad)).unwrap_err();
+        assert!(e.contains("VINC_SUITE_LOSS_SALT takes a whole number"), "{bad:?}: {e}");
     }
 }

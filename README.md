@@ -264,13 +264,14 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   the hub tunnel with the longer life of an unauthenticated session on a thin node) landed in
   [#517](https://github.com/sourcenetwork/vinc/pull/517).
 - **The scenario suite** passes every gate on the seeds it runs by default, the mobile scenario included
-  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds passes 90 at `75b5aa7e` (92 at
-  `b12aa0aa`, 84 at `97bbaa4`, 75 on its first run); the reference model the rules come from passes 88. Four of the
-  six that fail are four the model fails too ([#212](https://github.com/sourcenetwork/vinc/issues/212)). The other two
-  came with the path rules of #517: three value fetches on low-bandwidth nodes that miss their deadline
-  ([#516](https://github.com/sourcenetwork/vinc/issues/516)). Those rows depend on which packets the emulated links
-  happen to lose: over four realizations of that loss the library fails 23 seed runs where it failed 30 before the
-  rules, and the realization the suite runs is the one of the four where the count went up. The two scenarios that
+  ([#134](https://github.com/sourcenetwork/vinc/pull/134)). The full run over 96 seeds depends on which packets the
+  emulated links lose, so it is read over eight realizations of that loss (`VINC_SUITE_LOSS_SALT`): the library passes
+  87 to 91 of the 96 seeds, 89 on average and 90 in the realization the suite runs by itself; the reference model the
+  rules come from passes 88 in its own. Four seeds fail in every realization, and they are four the model fails too
+  ([#212](https://github.com/sourcenetwork/vinc/issues/212)). The others are deliveries on low-bandwidth links that
+  miss their deadline in some realizations and not in others
+  ([#516](https://github.com/sourcenetwork/vinc/issues/516)); the low-bandwidth scenario's default seed is therefore
+  one whose result does not depend on the draw, and the one that does stays in the full run. The two scenarios that
   need the values and reconcile layers in one composition wait for them.
 - **The proofs** land with the code: a fix whose behaviour a model covers carries the model's update in the same pull
   request. What is still to prove or to check again is listed in
