@@ -322,8 +322,12 @@ impl Topics {
         // A subscriber this hub keeps behind subscribes again on a new session, whose stream no host reports writable
         // (only a full stream that drains is): it goes on from its place in the log now, and is pushed live once
         // caught up.
+        let mut listed = false;
         if self.lagging.contains(from) {
+            let stale = |t: &Self| t.topics.get(topic).is_some_and(|st| st.stale.contains(from));
+            let was = stale(self);
             self.peer_writable(h, now, from);
+            listed = was && !stale(self);
         }
         let flags = rest.get(8).copied().unwrap_or(0);
         let replay = flags & SUB_REPLAY != 0;
@@ -403,7 +407,8 @@ impl Topics {
         // The others are told the change, if there is one; the subscriber is sent the whole list unless it holds the
         // version the list has now, which a change raises (a new subscriber, one that missed a change or holds the list
         // of an earlier life of this hub).
-        let fresh = (changed || their_ver != Some(self.cur_ver(topic))).then_some(from);
+        // A list the stream's room just sent is the current one; the SUB, sent before it arrived, does not ask again.
+        let fresh = (!listed && (changed || their_ver != Some(self.cur_ver(topic)))).then_some(from);
         self.announce_topic(h, topic, changed, fresh);
     }
 
