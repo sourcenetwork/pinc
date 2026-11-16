@@ -2,7 +2,8 @@
 //! performs (answering key requests and access checks, reading streams).
 //!
 //! [`CoreNet`] carries datagrams between [`TNode`]s with one fixed one-way delay (and optional loss by a closure),
-//! on virtual time. It does not depend on the simulator crate.
+//! on virtual time, and optionally a rate with a bounded queue ([`RateLimit`]). It does not depend on the simulator
+//! crate.
 #![allow(
     missing_docs,
     clippy::unwrap_used,
@@ -20,7 +21,7 @@
 )]
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 
@@ -416,6 +417,54 @@ impl Ord for Wire {
 /// Decides whether a datagram `(from, to, data)` is lost.
 pub type LossFn = Box<dyn FnMut(SocketAddr, SocketAddr, &[u8]) -> bool>;
 
+/// A link's serialisation: one queue per sending address, each with its own rate. A datagram of n bytes finishes
+/// leaving n*8/rate seconds after the previous one of the same sender finished (or at once, on an idle link), so a burst
+/// is spread at the rate and a standing queue adds delay. A datagram that finds `queue` datagrams still leaving is
+/// dropped, as a tail-drop shaper does. Deterministic: no clock and no randomness.
+#[derive(Debug, Clone)]
+pub struct RateLimit {
+    default_bps: u64,
+    rates: HashMap<SocketAddr, u64>,
+    queue: usize,
+    lanes: HashMap<SocketAddr, VecDeque<u64>>,
+}
+
+impl RateLimit {
+    /// Every sender at `bps` bits per second, with room for `queue` datagrams in flight on the link.
+    pub fn new(bps: u64, queue: usize) -> Self {
+        Self {
+            default_bps: bps,
+            rates: HashMap::new(),
+            queue,
+            lanes: HashMap::new(),
+        }
+    }
+
+    /// The datagrams `from` sends go at `bps` bits per second.
+    #[must_use]
+    pub fn with_rate_from(mut self, from: SocketAddr, bps: u64) -> Self {
+        self.rates.insert(from, bps);
+        self
+    }
+
+    /// When the last bit of a datagram of `len` bytes that `from` sends at `now` has left the link, or `None` when the
+    /// queue is full and the datagram is dropped.
+    pub fn depart(&mut self, from: SocketAddr, now: u64, len: usize) -> Option<u64> {
+        let bps = *self.rates.get(&from).unwrap_or(&self.default_bps);
+        let lane = self.lanes.entry(from).or_default();
+        while lane.front().is_some_and(|f| *f <= now) {
+            lane.pop_front();
+        }
+        if lane.len() >= self.queue {
+            return None;
+        }
+        let start = lane.back().copied().unwrap_or(now).max(now);
+        let finish = start + (len as u64 * 8 * SEC_NS).div_ceil(bps);
+        lane.push_back(finish);
+        Some(finish)
+    }
+}
+
 /// Nodes on one network with a fixed one-way delay, on virtual time.
 pub struct CoreNet {
     pub nodes: Vec<TNode>,
@@ -426,6 +475,8 @@ pub struct CoreNet {
     pub jitter: u64,
     seq: u64,
     pub loss: Option<LossFn>,
+    /// A rate with a bounded queue; a datagram that is not lost waits its turn on it before the delay starts.
+    pub rate: Option<RateLimit>,
     /// A NAT in front of one node: `(inside, outside)`. Datagrams the node sends carry the outside address as their
     /// source, datagrams to the outside address reach the node, and datagrams to the inside address reach nobody.
     pub nat: Option<(SocketAddr, SocketAddr)>,
@@ -449,6 +500,7 @@ impl CoreNet {
             jitter: 0,
             seq: 0,
             loss: None,
+            rate: None,
             nat: None,
             rng: SplitMix64::new(1),
             delivered: 0,
@@ -466,6 +518,14 @@ impl CoreNet {
     pub fn add_with_alg(&mut self, tag: u8, alg: IdentityAlg) -> usize {
         let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
         self.nodes.push(TNode::with_alg(tag, addr, self.now, alg));
+        self.nodes.len() - 1
+    }
+
+    /// Add a node whose interface carries datagrams of up to `mtu` bytes.
+    pub fn add_with_mtu(&mut self, tag: u8, mtu: u16) -> usize {
+        let addr: SocketAddr = ([10, 0, 0, tag], 4433).into();
+        self.nodes
+            .push(TNode::with_mtu(tag, addr, self.now, IdentityAlg::Ed25519, mtu));
         self.nodes.len() - 1
     }
 
@@ -522,7 +582,15 @@ impl CoreNet {
                     self.captured.push((local, remote, chunk.to_vec()));
                 }
                 let lost = self.loss.as_mut().is_some_and(|f| f(local, remote, chunk));
-                if !lost {
+                let left = if lost {
+                    None
+                } else {
+                    match self.rate.as_mut() {
+                        Some(r) => r.depart(local, now, chunk.len()),
+                        None => Some(now),
+                    }
+                };
+                if let Some(left) = left {
                     self.seq += 1;
                     let from = match self.nat {
                         Some((inside, outside)) if local == inside => outside,
@@ -534,7 +602,7 @@ impl CoreNet {
                         0
                     };
                     self.wires.push(Wire {
-                        at: now + self.delay + extra,
+                        at: left + self.delay + extra,
                         seq: self.seq,
                         to: remote,
                         from,

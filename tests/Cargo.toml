@@ -492,6 +492,10 @@ name = "core_setup"
 path = "core_setup.rs"
 
 [[test]]
+name = "core_links"
+path = "core_links.rs"
+
+[[test]]
 name = "core_defense"
 path = "core_defense.rs"
 
