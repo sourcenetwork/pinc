@@ -224,7 +224,10 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
   connections start at once (814 ms against iroh's 316,
   [#157](https://github.com/sourcenetwork/vinc/issues/157)).
 - **Performance on the emulated network** (containers on the build host, the same session, three repetitions,
-  medians). Under 1% loss on a 50 ms path a transfer runs at 6.65 MiB/s against 0.33 and 0.34. Requests on a stream
+  medians). Under 1% loss on a 50 ms path a transfer of 8 MiB runs at 6.65 MiB/s against 0.33 and 0.34; a fetch of
+  64 MiB on the same path runs at 1.16 MiB/s against 0.31 and 0.32 (16 November, the scenarios outside the regular
+  session), because the rate of the first second is not held over a long transfer
+  ([#564](https://github.com/sourcenetwork/vinc/issues/564)). Requests on a stream
   each over a 20 ms path, 512-byte bodies: with 64 in flight 2,801 a second against 2,287 for iroh and 48 for
   rust-libp2p, the slowest hundredth at 25.9 ms against 40.4; with 4 KiB bodies 2,729 against 2,005, and 2,733
   against 1,702 when 256 are asked for, where the slowest hundredth is 104 ms against iroh's 228. Fetching a value
@@ -247,7 +250,16 @@ As of 15 November 2026, at the commit that carries this text. Every item names t
     [#163](https://github.com/sourcenetwork/vinc/issues/163)); the harness's own node program, which added to the row
     a cost iroh's never had, no longer does;
   - three setup rows: the median on a LAN, the resumed median on a slow lossy path and the tail at 1% loss
-    ([#160](https://github.com/sourcenetwork/vinc/issues/160)).
+    ([#160](https://github.com/sourcenetwork/vinc/issues/160));
+  - from the scenarios outside the regular session (16 November, `2a46b74e`, each run once): with 5 ms of delay
+    jitter on the 1% loss path the 64 MiB fetch runs at 0.33 MiB/s, level with the other two (0.30 and 0.31,
+    [#565](https://github.com/sourcenetwork/vinc/issues/565)); a subscriber killed and started again loses what was
+    published while it was down, 12% of the deliveries of that scenario, as iroh does (12.2%; rust-libp2p 23.9%,
+    [#561](https://github.com/sourcenetwork/vinc/issues/561)); across three sites the farthest gets a message in
+    76 ms where the other two take 51 ms by a route through the middle site
+    ([#562](https://github.com/sourcenetwork/vinc/issues/562)); a hub with 100 subscribers holds 44.7 MiB against
+    iroh's 18.9, for 38% of iroh's CPU ([#203](https://github.com/sourcenetwork/vinc/issues/203)); and an update for
+    a device that slept is not delivered when it wakes ([#560](https://github.com/sourcenetwork/vinc/issues/560)).
 
   Against the session of 13 November (commit `6355d7d`) 327 of 383 values are inside that session's spread. A
   second session the same day on `79cfc653`, after the changes that landed in between, has 353 of 383 values
