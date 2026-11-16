@@ -52,6 +52,27 @@ async fn identity_is_the_seed_and_signs() {
     vinc_crypto::identity::verify(vinc_crypto::IdentityAlg::Ed25519, a.public_key(), b"message", &sig).unwrap();
 }
 
+#[nuclei::test]
+async fn sign_refuses_the_bytes_reserved_for_the_protocol() {
+    let a = bind(vinc_common::builder().seed(&[5; 32]).unwrap()).await;
+    let mut handshake = vinc_security::labels::SIGNATURE_RESPONDER.as_bytes().to_vec();
+    handshake.extend_from_slice(&[7; 32]);
+    let reserved: [&[u8]; 4] = [
+        &handshake,
+        b"VINC 2026 v1 anything",
+        b"VINC 2026 v2 later",
+        b"VINC 2026 ",
+    ];
+    for data in reserved {
+        let e = within(30, a.sign(data)).await.unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::Config, "{data:?}");
+    }
+    for data in [&b"VINC 2026"[..], b"vinc 2026 v1 x", b" VINC 2026 v1 x", b""] {
+        let sig = within(30, a.sign(data)).await.unwrap();
+        vinc_crypto::identity::verify(vinc_crypto::IdentityAlg::Ed25519, a.public_key(), data, &sig).unwrap();
+    }
+}
+
 struct Gate {
     seen: Arc<AtomicUsize>,
     deny: Option<NodeId>,

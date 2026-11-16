@@ -8,6 +8,8 @@ use zeroize::Zeroize;
 
 /// Domain-separation labels. Each one is unique and starts with [`PREFIX`](labels::PREFIX).
 pub mod labels {
+    /// The start of every label of every version: bytes a signature over application data must never begin with.
+    pub const RESERVED: &str = "VINC 2026 ";
     /// The prefix of every label.
     pub const PREFIX: &str = "VINC 2026 v1 ";
     /// Derives a node id from an algorithm tag and a public key.

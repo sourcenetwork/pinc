@@ -66,6 +66,13 @@ async fn peer(table: &Table) -> Endpoint<impl Hosted, Records<Table>> {
     ep
 }
 
+#[nuclei::test]
+async fn the_signed_record_still_verifies_beside_the_sign_guard() {
+    let ep = bind(builder().discovery(Records::new(Table::default()))).await;
+    let rec = within(30, ep.signed_record()).await.unwrap();
+    Record::parse_verified(&rec).unwrap();
+}
+
 async fn echo<H: Hosted>(c: &vinc::Connection<H>) -> Vec<u8> {
     let (mut tx, mut rx) = c.open_bi().await.unwrap();
     tx.write_all(b"found").await.unwrap();

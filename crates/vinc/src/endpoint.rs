@@ -545,9 +545,25 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
 
     /// Sign `data` with the node's identity key (Ed25519: 64 bytes).
     ///
+    /// The same key signs the protocol's own statements, so `data` that begins with the reserved prefix `"VINC 2026 "`
+    /// is refused. A topic message's statement is not labelled yet: do not sign bytes you did not build yourself that
+    /// could be one (`topic | id | hash | timestamp | flag`), and never sign bytes a peer chose without wrapping them
+    /// in a format of your own.
+    ///
     /// # Errors
-    /// [`crate::ErrorKind::Config`] if the key store fails, [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
+    /// [`crate::ErrorKind::Config`] if `data` begins with the reserved prefix or the key store fails,
+    /// [`crate::ErrorKind::Shutdown`] if the endpoint stopped.
     pub async fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
+        if data.starts_with(vinc_crypto::labels::RESERVED.as_bytes()) {
+            return Err(Error::config(
+                "these bytes are reserved for the protocol's own signatures",
+            ));
+        }
+        self.sign_unchecked(data).await
+    }
+
+    /// Sign bytes the library built itself, which may begin with a reserved prefix.
+    async fn sign_unchecked(&self, data: &[u8]) -> Result<Vec<u8>> {
         self.0.shared.run(|core, _| Try::Done(core.sign(data))).await
     }
 
@@ -872,7 +888,7 @@ impl<H: Hosted, R: Rendezvous> Endpoint<H, Records<R>> {
         let bad = |_| Error::config("the record could not be built");
         let mut out = vec![0u8; MAX_RECORD_LEN];
         let signed = record::prepare(&self.id(), self.public_key(), &fields, &mut out).map_err(bad)?;
-        let sig = self.sign(out.get(..signed).unwrap_or_default()).await?;
+        let sig = self.sign_unchecked(out.get(..signed).unwrap_or_default()).await?;
         let len = record::finish(&mut out, signed, &sig).map_err(bad)?;
         out.truncate(len);
         Ok(out)
