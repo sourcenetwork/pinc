@@ -1379,3 +1379,7 @@ path = "node_portmap.rs"
 [[test]]
 name = "node_portmap_relay"
 path = "node_portmap_relay.rs"
+
+[[test]]
+name = "node_leave_timer"
+path = "node_leave_timer.rs"
