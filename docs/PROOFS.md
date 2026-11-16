@@ -2,12 +2,16 @@
 
 `proofs/tla/` and `proofs/lean/` hold TLA+ specifications, checked with TLC, and Lean 4 proofs of VINC's state machines
 and pure functions. Both are kept identical to the Rust code by validating traces recorded from the real code against
-each. Proven in full: `vinc-wire`, `vinc-dag`, `vinc-crypto`, `vinc-keystore`, `vinc-values`, `vinc-dtn` (custody, the charged
+each. Proven in full: `vinc-crypto`, `vinc-keystore`, `vinc-values`, `vinc-dtn` (custody, the charged
 store, forwarding, erasure coding, layout, codecs, reception, one-shot encryption and the multi-node scenarios) and the
 relay side of `vinc-connect` with its codecs, carrier link, client rules and the protected carrier's framing, records and
-keys. `vinc-security` (handshake, key schedule, record keys, key roll, credit
+keys. Of `vinc-wire` the varints are proven, and of `vinc-dag` the verified-range sets, the tree layout, the builder and
+the range verifier (value roots and range proofs); the DAG-CBOR codec, the reader and writer, CIDs, blocks and CAR
+files are tested, not modelled. `vinc-security` (handshake, key schedule, record keys, key roll, credit
 record, amplification budget and padding, ticket stores), `vinc-membership`, `vinc-broadcast` and `vinc-reconcile` are proven except for the
-items under [Being closed](#being-closed).
+items under [Being closed](#being-closed). A model that is known to state an older rule than the code is listed in
+[#601](https://github.com/sourcenetwork/vinc/issues/601) until it is corrected: a green check of such a model says
+nothing about the rule that changed.
 Run everything with `just proofs`.
 
 ## How it is checked
@@ -501,6 +505,9 @@ The only things taken on trust are the dependencies, not this repository's code:
 ## Being closed
 
 These items are still open; they are listed so nothing is hidden:
+- `vinc-wire` and `vinc-dag`: the canonical DAG-CBOR codec (`vinc-wire`'s `cbor`, with the reader and the writer) and
+  CIDs, blocks and CAR files (`vinc-dag`'s `cid`, `block`, `car`) have no model; they are tested, not modelled
+  ([#606](https://github.com/sourcenetwork/vinc/issues/606)).
 - `vinc-crypto` and `vinc-keystore`: the labels of `vinc-broadcast` are private constants, so they are not in the label registry or its trace; the zeroization statement covers the named buffers of the crate, not the copies a dependency makes of a scalar passed by value; the TPM store is traced against a software TPM only, and a refused flush after a failed `ReadPublic` in `generate` leaks the handle without an error; the TPM refuses an object auth value longer than the digest of its name algorithm (32 bytes), which the client reports as the TPM's code. The TPM client's resend of a command answered `TPM_RC_RETRY`, `TPM_RC_YIELDED` or `TPM_RC_TESTING` is checked
   at the trace level (the same bytes sent again, at most 8 sends; the store's programs are checked on the commands
   that took effect); the typed error after the last resend is covered by unit tests, not by the TPM model.
