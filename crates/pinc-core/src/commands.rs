@@ -464,15 +464,21 @@ ep_impl! {
             path: pid,
             path_info: path_info(&first, self.cfg.conn.interface_mtu),
         };
+        let optimistic = self.acp_cached(&node, now).is_some_and(|a| a.allow && a.until > now.saturating_add(ACP_RECHECK));
+        let hub_resend = self.rtt.hub_resend(&node);
         let mut env = env!(self, now);
-        let mut conn = match Connection::client(cfg, params, mem, &mut env) {
-            Ok(c) => c,
-            Err(e) => {
-                self.retire_slot(i);
-                return Err(CommandError::Failure(e));
-            }
+        // The connection is built in its slot: by value it would be copied through every frame on the way there.
+        let built = match self.slots.get_mut(i) {
+            Some(slot) => Connection::client_in(&mut slot.conn, cfg, params, mem, &mut env).map(|_| ()),
+            None => Err(pinc_security::Failure::InvalidParameter),
         };
+        if let Err(e) = built {
+            self.retire_slot(i);
+            return Err(CommandError::Failure(e));
+        }
         self.t_first.get_or_insert(now);
+        let Some(slot) = self.slots.get_mut(i) else { return Err(CommandError::Full) };
+        let Some(conn) = slot.conn.as_mut() else { return Err(CommandError::Full) };
         conn.set_short_until(short_until);
         for a in addrs {
             self.ledger.open(*a);
@@ -485,11 +491,10 @@ ep_impl! {
         if resume
             && late
             && role.quiet()
-            && let Some(delay) = self.rtt.hub_resend(&node)
+            && let Some(delay) = hub_resend
         {
             conn.set_first_retransmit(now.saturating_add(delay));
         }
-        let optimistic = self.acp_cached(&node, now).is_some_and(|a| a.allow && a.until > now.saturating_add(ACP_RECHECK));
         // Reported before the peer answered: a peer that stopped ends it after its 4th unanswered flight, not at 30 s
         // (a thin node keeps its 60 s).
         if optimistic {
@@ -499,8 +504,6 @@ ep_impl! {
                 conn.allow_early_streams();
             }
         }
-        let Some(slot) = self.slots.get_mut(i) else { return Err(CommandError::Full) };
-        slot.conn = Some(conn);
         slot.m.peer = Some(node);
         slot.m.alpn = Some(alpn_t);
         slot.m.role = role;

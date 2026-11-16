@@ -399,18 +399,20 @@ impl Handshake {
     ///
     /// # Errors
     /// [`Failure::OutOfMemory`] if the pool has no free chunk.
+    /// The handshake of a connection whose state machine is the initiator's (`client`) or the responder's. The
+    /// machine itself is given next, with [`Handshake::install`]: it is tens of kilobytes, and given here it would lie
+    /// on the stack beside the connection being built around this value.
     pub(crate) fn new(
-        machine: Machine,
+        client: bool,
         machines: Machines,
         pool: &mut BufferPool<'_>,
         now: u64,
         timing: Timing,
     ) -> Result<Self, Failure> {
-        let client = matches!(machine, Machine::Client(_));
         let chunk = pool.alloc_chunk().map_err(|_| Failure::OutOfMemory)?;
         let (first, sends) = if client { (timing.first(), 1) } else { (SERVER_FIRST, 0) };
         Ok(Self {
-            machine: Some(boxed(&machines, machine)),
+            machine: None,
             machines,
             client,
             timing,
@@ -972,6 +974,11 @@ impl Handshake {
     }
 
     /// Shed what the machine holds and, with `alloc`, give its box back to the pool.
+    /// Give the handshake its state machine, once, before anything else is asked of it.
+    pub(crate) fn install(&mut self, machine: Machine) {
+        self.machine = Some(boxed(&self.machines, machine));
+    }
+
     pub(crate) fn retire_machine(&mut self) {
         match machine_of(&mut self.machine) {
             Some(Machine::Client(m)) => m.shed(),

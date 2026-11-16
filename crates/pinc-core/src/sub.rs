@@ -102,16 +102,16 @@ ep_impl! {
             path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() },
         };
         let mut env = env!(self, now);
-        let conn = match Connection::sub_session(cfg, open, mem, &mut env) {
-            Ok(c) => c,
-            Err(e) => {
-                self.retire_slot(child);
-                return Err(CommandError::Failure(e));
-            }
+        let built = match self.slots.get_mut(child) {
+            Some(s) => Connection::sub_session_in(&mut s.conn, cfg, open, mem, &mut env).map(|_| ()),
+            None => Err(pinc_security::Failure::InvalidParameter),
         };
+        if let Err(e) = built {
+            self.retire_slot(child);
+            return Err(CommandError::Failure(e));
+        }
         let pid = self.session_id(parent);
         if let Some(s) = self.slots.get_mut(child) {
-            s.conn = Some(conn);
             s.m.peer = Some(peer);
             s.m.alpn = Some(alpn);
             s.m.parent = Some(pid);
@@ -251,16 +251,16 @@ ep_impl! {
         let cfg = self.conn_config(Some(&peer));
         let open = SubWait { alpn, cc, cs, identity: self.identity, path, path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() } };
         let mut env = env!(self, now);
-        let conn = match Connection::sub_pending(cfg, open, mem, &mut env) {
-            Ok(c) => c,
-            Err(e) => {
-                self.retire_slot(child);
-                return Err(CommandError::Failure(e));
-            }
+        let built = match self.slots.get_mut(child) {
+            Some(s) => Connection::sub_pending_in(&mut s.conn, cfg, open, mem, &mut env).map(|_| ()),
+            None => Err(pinc_security::Failure::InvalidParameter),
         };
+        if let Err(e) = built {
+            self.retire_slot(child);
+            return Err(CommandError::Failure(e));
+        }
         let pid = self.session_id(parent);
         if let Some(s) = self.slots.get_mut(child) {
-            s.conn = Some(conn);
             s.m.peer = Some(peer);
             s.m.alpn = Some(alpn);
             s.m.parent = Some(pid);
@@ -361,14 +361,17 @@ ep_impl! {
             path_info: PathInfo { interface_mtu: self.cfg.conn.interface_mtu, ..PathInfo::default() },
         };
         let mut env = env!(self, now);
-        let Ok(conn) = Connection::sub_session(cfg, open, mem, &mut env) else {
+        let built = match self.slots.get_mut(child) {
+            Some(s) => Connection::sub_session_in(&mut s.conn, cfg, open, mem, &mut env).is_ok(),
+            None => false,
+        };
+        if !built {
             self.retire_slot(child);
             return;
-        };
+        }
         self.subs_seen.insert(cs, ());
         let pid = self.session_id(parent);
         if let Some(s) = self.slots.get_mut(child) {
-            s.conn = Some(conn);
             s.m.peer = Some(peer);
             s.m.alpn = Some(proto);
             s.m.parent = Some(pid);
