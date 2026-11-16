@@ -559,6 +559,8 @@ These items are still open; they are listed so nothing is hidden:
   session table has no room for, traced through a real node's duty passes). Not done: the rest of `dial_peer` and
   the host duties as a whole (a trace of the guard beyond the window, the reset and a prune that lets go of an entry
   needs more of a view of a `Node`), the delay-tolerant layer's own backoff table (`lfailed`), the
+  bound on a deadline that its timer calls do not move (`timers.rs`: counted against its layer and asked again one
+  tick later; tested, not modelled), the
   silence bound of `bound.rs` (`give_up`, `heal_after`: a pure function, tested, not modelled), and the queue of
   application events of `io.rs` (8192 places: the node stops taking the endpoint's events while it is nearly full,
   and a full queue gives up an event the application can recover by reading state before one it cannot; tested,
