@@ -1391,3 +1391,7 @@ path = "node_portmap_relay.rs"
 [[test]]
 name = "node_leave_timer"
 path = "node_leave_timer.rs"
+
+[[test]]
+name = "layers_dtn_wake"
+path = "layers_dtn_wake.rs"
