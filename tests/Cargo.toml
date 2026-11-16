@@ -228,6 +228,10 @@ name = "transport_rules"
 path = "transport_rules.rs"
 
 [[test]]
+name = "transport_dgram_size"
+path = "transport_dgram_size.rs"
+
+[[test]]
 name = "transport_forged"
 path = "transport_forged.rs"
 
