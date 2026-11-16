@@ -252,6 +252,10 @@ name = "membership_hub"
 path = "membership_hub.rs"
 
 [[test]]
+name = "membership_roster"
+path = "membership_roster.rs"
+
+[[test]]
 name = "membership_view"
 path = "membership_view.rs"
 

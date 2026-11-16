@@ -54,11 +54,13 @@ pub struct Host {
     pub gu: BTreeMap<NodeId, u64>,
     /// Every `send` the machine made, with whether a session took it (for the proof traces).
     pub sent_log: Vec<(NodeId, Route, Vec<u8>, bool)>,
+    /// A relayed probe through one of these hubs is refused, as a host with a full probe queue refuses it.
+    pub refuse_via: BTreeSet<NodeId>,
 }
 
 impl Session for Host {
     fn send(&mut self, peer: &NodeId, route: Route, frame: &[u8]) -> bool {
-        let ok = self.sessions.contains(peer);
+        let ok = self.sessions.contains(peer) && !matches!(route, Route::Via(x) if self.refuse_via.contains(&x));
         self.sent_log.push((*peer, route, frame.to_vec(), ok));
         if !ok {
             return false;
