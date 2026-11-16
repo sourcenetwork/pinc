@@ -5,6 +5,16 @@
 //! subscribers (join hints). Messages are signed by their publisher over the topic, the message id and the bytes, so a
 //! hub or a relay that alters one is caught, and a peer the access hook refuses (with [`Direction::Gossip`](crate::Direction))
 //! neither delivers nor receives anything.
+//!
+//! # Keeping a message as proof
+//!
+//! Build the endpoint with [`Builder::envelopes`](crate::Builder::envelopes)`(true)` and each [`Event::Message`] carries an
+//! [`Envelope`](crate::envelope::Envelope): store its [`as_bytes`](crate::envelope::Envelope::as_bytes), and later anyone
+//! checks it with [`envelope::verify`](crate::envelope::verify), with no endpoint, no session and no network. A verified
+//! envelope proves that the key behind the origin's id signed this topic, this message id, this exact payload and this
+//! timestamp. It does not prove the key was unrevoked then, the message's position among others, or that anyone
+//! received it. Everything sent on a stream or as a datagram is deniable by construction (both ends hold the keys), and
+//! is never part of an envelope.
 
 use alloc::vec::Vec;
 use core::time::Duration;

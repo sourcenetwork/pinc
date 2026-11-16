@@ -47,6 +47,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             carriers: self.carriers,
             hub: self.hub,
             connected_topics: self.connected_topics,
+            envelopes: self.envelopes,
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: RelayRole {

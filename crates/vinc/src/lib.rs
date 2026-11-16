@@ -72,6 +72,7 @@ mod endpoint;
 mod endpoint_state;
 mod endpoint_topics;
 mod engine;
+pub mod envelope;
 mod error;
 mod event;
 mod host;

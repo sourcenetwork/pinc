@@ -73,6 +73,7 @@ impl Vinc {
             carriers: NoCarriers,
             hub: false,
             connected_topics: false,
+            envelopes: false,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             port_mapping: PortMapping::OFF,
             role: (),
@@ -98,6 +99,7 @@ pub struct Builder<S = SoftwareStore, D = NoDiscovery, A = AllowAll, C = NoCarri
     carriers: C,
     hub: bool,
     connected_topics: bool,
+    envelopes: bool,
     connect_timeout: Duration,
     port_mapping: PortMapping,
     role: Q,
@@ -145,6 +147,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             carriers: self.carriers,
             hub: self.hub,
             connected_topics: self.connected_topics,
+            envelopes: self.envelopes,
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
@@ -215,6 +218,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             carriers: CarrierFns::new(open, read, write, close),
             hub: self.hub,
             connected_topics: self.connected_topics,
+            envelopes: self.envelopes,
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
@@ -237,6 +241,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             carriers: self.carriers,
             hub: self.hub,
             connected_topics: self.connected_topics,
+            envelopes: self.envelopes,
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
@@ -277,6 +282,15 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         self
     }
 
+    /// Whether every topic message arrives with its signed [`Envelope`](crate::envelope::Envelope), which the
+    /// application can store and later hand to anyone to verify offline (default off). An envelope costs the message's
+    /// signed head in bytes, about 122 for an Ed25519 origin and several kilobytes for a hybrid one.
+    #[must_use]
+    pub const fn envelopes(mut self, on: bool) -> Self {
+        self.envelopes = on;
+        self
+    }
+
     /// The sizes: connections, buffers and queues.
     #[must_use]
     pub const fn limits(mut self, limits: Limits) -> Self {
@@ -300,6 +314,7 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
             carriers: self.carriers,
             hub: self.hub,
             connected_topics: self.connected_topics,
+            envelopes: self.envelopes,
             connect_timeout: self.connect_timeout,
             port_mapping: self.port_mapping,
             role: self.role,
@@ -420,6 +435,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             carriers,
             hub,
             connected_topics,
+            envelopes,
             connect_timeout,
             port_mapping,
             role,
@@ -445,6 +461,7 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
             relays: relays.clone(),
             hub,
             connected_topics,
+            envelopes,
             relaying: <Q::Built as Role>::ON,
             connect_timeout: u64::try_from(connect_timeout.as_nanos()).unwrap_or(u64::MAX),
             port_mapping,

@@ -39,6 +39,7 @@ macro_rules! next_message {
                         hop,
                         direct,
                         payload,
+                        envelope: _,
                     }) => break Some((topic, origin, hop, direct, payload)),
                     Some(_) => {}
                     None => break None,
@@ -449,6 +450,94 @@ async fn an_endpoint_that_comes_back_to_a_log_that_moved_past_it_hears_that_mess
         .await
         .unwrap_or(0);
         assert_eq!(missed, 1, "the new life is told once that messages may be missing");
+    })
+    .await;
+}
+
+/// The next message of `ep` within `ms`: its topic, origin, payload and envelope.
+async fn next_envelope<H: vinc::Hosted + 'static>(
+    ep: &vinc::Endpoint<H>,
+    ms: u64,
+) -> Option<(Vec<u8>, NodeId, Vec<u8>, Option<vinc::envelope::Envelope>)> {
+    let ep = ep.clone();
+    nuclei::time::timeout(Duration::from_millis(ms), async move {
+        loop {
+            match ep.event().await {
+                Some(Event::Message {
+                    topic,
+                    origin,
+                    payload,
+                    envelope,
+                    ..
+                }) => break Some((topic, origin, payload, envelope)),
+                Some(_) => {}
+                None => break None,
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[nuclei::test]
+async fn a_message_comes_with_an_envelope_that_verifies_offline_when_asked_for_and_without_one_otherwise() {
+    let hub = lo_endpoint!(vinc_common::builder().seed(&[10; 32]).unwrap().hub());
+    run(&hub);
+    let relay = hub_relay(hub.local_addr(), hub.id());
+    let publisher = lo_endpoint!(vinc_common::builder().seed(&[1; 32]).unwrap().relays([relay]));
+    let keeper = lo_endpoint!(
+        vinc_common::builder()
+            .seed(&[2; 32])
+            .unwrap()
+            .relays([relay])
+            .envelopes(true)
+    );
+    let plain = lo_endpoint!(vinc_common::builder().seed(&[3; 32]).unwrap().relays([relay]));
+    run(&publisher);
+    run(&keeper);
+    run(&plain);
+    let topic = b"envelope/news".to_vec();
+    within(120, async {
+        assert!(keeper.join(&topic, &[]).await.unwrap());
+        assert!(plain.join(&topic, &[]).await.unwrap());
+        let (mut kept, mut seen) = (None, None);
+        // A subscription takes a moment to reach the hub, so publish until both heard one.
+        for _ in 0..200 {
+            publisher.publish(&topic, b"signed words", None).await.unwrap();
+            kept = kept.or(next_envelope(&keeper, 300).await);
+            seen = seen.or(next_envelope(&plain, 300).await);
+            if kept.is_some() && seen.is_some() {
+                break;
+            }
+        }
+        let (t, origin, payload, envelope) = kept.expect("the keeper heard nothing");
+        assert_eq!((t, &payload[..]), (topic.clone(), &b"signed words"[..]));
+        assert_eq!(origin, publisher.id());
+        let envelope = envelope.expect("the endpoint asked for envelopes");
+        let v = vinc::envelope::verify(envelope.as_bytes()).unwrap();
+        assert_eq!(
+            (v.origin, v.topic, v.payload),
+            (&publisher.id().bytes, &topic[..], &b"signed words"[..])
+        );
+        assert_eq!(envelope.verify().unwrap(), v);
+        // Stored as bytes and checked on a thread that has no endpoint and no runtime.
+        let stored = envelope.as_bytes().to_vec();
+        let checked = std::thread::spawn(move || {
+            let v = vinc::envelope::verify(&stored).unwrap();
+            (*v.origin, v.topic.to_vec(), v.payload.to_vec())
+        })
+        .join()
+        .unwrap();
+        assert_eq!(checked, (publisher.id().bytes, topic.clone(), b"signed words".to_vec()));
+        let mut tampered = envelope.as_bytes().to_vec();
+        *tampered.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            vinc::envelope::Envelope::from_bytes(tampered).verify().unwrap_err(),
+            vinc::envelope::EnvelopeError::BadSignature
+        );
+        let (_, _, _, none) = seen.expect("the endpoint without envelopes heard nothing");
+        assert!(none.is_none(), "no envelope unless the endpoint asked for one");
     })
     .await;
 }

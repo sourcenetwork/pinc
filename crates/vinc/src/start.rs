@@ -105,6 +105,7 @@ pub(crate) fn build<S: KeyStore, A: Admit>(mut cfg: CoreConfig<S, A>, now: u64) 
             log_bytes: cfg.limits.topic_log.max(cfg.limits.topic_message.saturating_mul(4)),
             max_topics: cfg.limits.topics,
             max_subscribers: DEFAULT_MAX_SUBSCRIBERS,
+            keep_heads: cfg.envelopes,
             ..BroadcastLimits::default()
         },
         wall_ms: wall_ms(),
@@ -206,6 +207,7 @@ mod tests {
             relays: Vec::new(),
             hub: false,
             connected_topics: false,
+            envelopes: false,
             relaying: false,
             connect_timeout: 1_000_000_000,
             port_mapping: PortMapping {

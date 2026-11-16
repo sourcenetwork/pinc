@@ -36,6 +36,7 @@ pub(super) fn core() -> C {
         relays: Vec::new(),
         hub: false,
         connected_topics: true,
+        envelopes: false,
         relaying: false,
         connect_timeout: 1_000_000_000,
         port_mapping: crate::start::PortMapping {

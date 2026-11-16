@@ -111,6 +111,7 @@ fn answer<S: KeyStore>(identity: &RefCell<Identity<S>>, prekeys: &mut Prekeys, r
 }
 
 /// What a core is built from.
+#[allow(clippy::struct_excessive_bools, reason = "independent switches of the endpoint")]
 pub(crate) struct CoreConfig<S, A> {
     /// The node's identity.
     pub identity: Identity<S>,
@@ -134,6 +135,8 @@ pub(crate) struct CoreConfig<S, A> {
     pub hub: bool,
     /// Topic messages reach the endpoint only from its connected component of application sessions.
     pub connected_topics: bool,
+    /// Topic messages are delivered with their signed envelope.
+    pub envelopes: bool,
     /// The endpoint runs the relay role: the events of its members' sessions are kept for it.
     pub relaying: bool,
     /// How long a dial may take, in nanoseconds.

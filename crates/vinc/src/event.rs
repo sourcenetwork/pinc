@@ -6,6 +6,8 @@
 use alloc::vec::Vec;
 use vinc_crypto::NodeId;
 
+use crate::envelope::Envelope;
+
 /// The id of a published message.
 pub type MessageId = [u8; 8];
 
@@ -38,6 +40,9 @@ pub enum Event {
         direct: bool,
         /// The bytes published.
         payload: Vec<u8>,
+        /// The signed envelope of the message, for an endpoint built with [`Builder::envelopes`](crate::Builder::envelopes);
+        /// `None` otherwise.
+        envelope: Option<Envelope>,
     },
     /// A hub holds this endpoint's subscription to `topic`, the first time since it joined: a message published to the
     /// topic through that hub from now on arrives. A join returns before any hub knows of it. The event comes from the
