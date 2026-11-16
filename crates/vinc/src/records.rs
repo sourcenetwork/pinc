@@ -17,7 +17,6 @@
 //! never replaces a higher one), and there are at most [`KNOWN_MAX`]; a borrow of the table lasts one call and is
 //! never held across an await.
 
-use rapidhash::RapidHashMap;
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::net::SocketAddr;
@@ -27,6 +26,7 @@ use vinc_crypto::NodeId;
 
 use crate::endpoint::Discovery;
 use crate::error::Result;
+use crate::maps::{self, Map};
 
 /// The most hint bytes a record carries.
 pub const MAX_HINTS: usize = MAX_HINT_LEN;
@@ -76,12 +76,24 @@ pub(crate) fn newest(known: Option<&PeerRecord>, fetched: Option<PeerRecord>) ->
     }
 }
 
+/// Keep `record` as the newest of `node`, forgetting one other peer's record first if the table is at [`KNOWN_MAX`].
+fn remember(known: &mut Map<NodeId, PeerRecord>, node: NodeId, record: PeerRecord) {
+    if known.len() >= KNOWN_MAX && !known.contains_key(&node) {
+        // Full: forget one record; that peer's next lookup takes whatever the store holds.
+        let evict = known.keys().next().copied();
+        if let Some(k) = evict {
+            known.remove(&k);
+        }
+    }
+    known.insert(node, record);
+}
+
 /// Discovery by signed records over the store `R`; see the module docs.
 pub struct Records<R> {
     store: R,
     pub(crate) hints: RefCell<Vec<u8>>,
     pub(crate) seq: Cell<u64>,
-    known: RefCell<RapidHashMap<NodeId, PeerRecord>>,
+    known: RefCell<Map<NodeId, PeerRecord>>,
 }
 
 impl<R> core::fmt::Debug for Records<R> {
@@ -97,7 +109,7 @@ impl<R> Records<R> {
             store,
             hints: RefCell::new(Vec::new()),
             seq: Cell::new(0),
-            known: RefCell::new(RapidHashMap::default()),
+            known: RefCell::new(maps::map(0)),
         }
     }
 
@@ -117,14 +129,7 @@ impl<R: Rendezvous> Records<R> {
             .and_then(|b| PeerRecord::verified(node, &b));
         let mut known = self.known.try_borrow_mut().ok()?;
         let best = newest(known.get(node), fetched)?;
-        if known.len() >= KNOWN_MAX && !known.contains_key(node) {
-            // Full: forget one record; that peer's next lookup takes whatever the store holds.
-            let evict = known.keys().next().copied();
-            if let Some(k) = evict {
-                known.remove(&k);
-            }
-        }
-        known.insert(*node, best.clone());
+        remember(&mut known, *node, best.clone());
         Some(best)
     }
 
@@ -134,7 +139,90 @@ impl<R: Rendezvous> Records<R> {
 }
 
 impl<R: Rendezvous> Discovery for Records<R> {
+    /// The table of known records is empty until the endpoint is built, so it takes the endpoint's seed then; a
+    /// `Records` used on its own keeps the fixed one of [`Records::new`].
+    fn seed_maps(&self, seed: u64) {
+        if let Ok(mut known) = self.known.try_borrow_mut()
+            && known.is_empty()
+        {
+            *known = maps::map(seed);
+        }
+    }
+
     async fn lookup(&self, node: &NodeId) -> Vec<SocketAddr> {
         self.find(node).await.map(|r| r.addrs).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use vinc_crypto::IdentityAlg;
+
+    use super::*;
+
+    fn node(n: u32) -> NodeId {
+        let mut bytes = [0u8; 32];
+        bytes[..4].copy_from_slice(&n.to_be_bytes());
+        NodeId {
+            alg: IdentityAlg::Ed25519,
+            bytes,
+        }
+    }
+
+    fn record(n: u32, seq: u64) -> PeerRecord {
+        PeerRecord {
+            node: node(n),
+            seq,
+            addrs: Vec::new(),
+            hints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_known_table_never_holds_more_than_known_max() {
+        let mut known = maps::map(1);
+        let extra = 10;
+        for n in 0..u32::try_from(KNOWN_MAX + extra).unwrap() {
+            remember(&mut known, node(n), record(n, 1));
+            assert!(known.len() <= KNOWN_MAX, "after {n}");
+            // The record just kept is always in the table.
+            assert!(known.contains_key(&node(n)), "after {n}");
+        }
+        assert_eq!(known.len(), KNOWN_MAX);
+    }
+
+    #[test]
+    fn a_full_table_replaces_a_known_peer_without_evicting() {
+        let mut known = maps::map(2);
+        for n in 0..u32::try_from(KNOWN_MAX).unwrap() {
+            remember(&mut known, node(n), record(n, 1));
+        }
+        remember(&mut known, node(7), record(7, 2));
+        assert_eq!(known.len(), KNOWN_MAX);
+        assert_eq!(known.get(&node(7)).map(|r| r.seq), Some(2));
+        assert!((0..u32::try_from(KNOWN_MAX).unwrap()).all(|n| known.contains_key(&node(n))));
+    }
+
+    struct Empty;
+
+    impl Rendezvous for Empty {
+        async fn publish(&self, _record: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        async fn fetch(&self, _node: &NodeId) -> Option<Vec<u8>> {
+            None
+        }
+    }
+
+    #[test]
+    fn the_endpoint_seeds_an_empty_table_once() {
+        let records = Records::new(Empty);
+        records.seed_maps(5);
+        assert!(records.known.borrow().is_empty());
+        remember(&mut records.known.borrow_mut(), node(1), record(1, 1));
+        records.seed_maps(6);
+        assert_eq!(records.known.borrow().len(), 1, "a table holding records keeps them");
     }
 }

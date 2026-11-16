@@ -73,6 +73,7 @@ mod error;
 mod event;
 mod host;
 mod keys;
+mod maps;
 mod mem;
 mod node;
 mod protocol;

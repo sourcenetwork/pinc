@@ -17,7 +17,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use rapidhash::RapidHashMap;
 use vinc_core::{Answer, Command, CommandError, ConnectFailure, Event, IfaceId, Query, SessionId, Taken, Value};
 use vinc_crypto::{NodeId, Secret};
 use vinc_keystore::KeyStore;
@@ -29,6 +28,7 @@ use crate::carriers::Relay;
 use crate::error::{Error, ErrorKind, Result};
 use crate::event::Event as TopicEvent;
 use crate::keys::{Identity, Prekeys, is_identity};
+use crate::maps::{self, Map};
 use crate::mem::Limits;
 use crate::node::{FacadeNode, RELAYS};
 use crate::standby::{Standby, Ticket};
@@ -111,6 +111,8 @@ fn answer<S: KeyStore>(identity: &RefCell<Identity<S>>, prekeys: &mut Prekeys, r
 pub(crate) struct CoreConfig<S, A> {
     /// The node's identity.
     pub identity: Identity<S>,
+    /// The seed of the endpoint's hash maps, drawn from the identity's key store.
+    pub map_seed: u64,
     /// The protocols served; at most [`MAX_PROTOCOLS`](crate::MAX_PROTOCOLS) with those added later.
     pub alpns: Vec<Vec<u8>>,
     /// The sizes.
@@ -242,15 +244,15 @@ pub(crate) struct Core<S, A> {
     /// The access hook, shared with the endpoint's handles so they can ask it without borrowing the core.
     admit: Rc<Gate<A>>,
     pub(crate) limits: Limits,
-    sessions: RapidHashMap<SessionId, Sess>,
-    dials: RapidHashMap<SessionId, Dial>,
+    sessions: Map<SessionId, Sess>,
+    dials: Map<SessionId, Dial>,
     /// The accept queues: the first takes every protocol no registered one claims.
     routes: Vec<Route>,
     /// The protocols served for the application: those the builder listed and those registered since.
     alpns: Vec<Vec<u8>>,
     /// The allows the hook gave the endpoint's per-peer question, which cover a session of the same protocol and direction.
     known: Known,
-    book: RapidHashMap<NodeId, Vec<SocketAddr>>,
+    book: Map<NodeId, Vec<SocketAddr>>,
     ifaces: Vec<IfaceId>,
     shutdown: Option<u64>,
     stopped: Option<Error>,
@@ -271,7 +273,7 @@ pub(crate) struct Core<S, A> {
     /// The topics joined, with the neighbours last reported for each.
     topics: BTreeMap<Vec<u8>, Vec<NodeId>>,
     /// The sessions of the hub protocol, by session, with their peer.
-    hub_sessions: RapidHashMap<SessionId, NodeId>,
+    hub_sessions: Map<SessionId, NodeId>,
     /// With [`Builder::connected_topics`](crate::Builder::connected_topics), the peers of the application's sessions
     /// last named to the hubs; `None` without it.
     adjacent: Option<Vec<[u8; 32]>>,
@@ -298,21 +300,22 @@ pub(crate) struct Core<S, A> {
 impl<S: KeyStore, A: Admit> Core<S, A> {
     /// A core over `node`, whose endpoint already holds the prekey, the protocols and the interfaces `ifaces`.
     pub(crate) fn new(node: Box<FacadeNode>, cfg: CoreConfig<S, A>, prekeys: Prekeys, ifaces: Vec<IfaceId>) -> Self {
+        let seed = cfg.map_seed;
         Self {
             node,
             identity: Rc::new(RefCell::new(cfg.identity)),
             prekeys,
-            admit: Rc::new(Gate::new(cfg.admit)),
+            admit: Rc::new(Gate::new(cfg.admit, seed)),
             limits: cfg.limits,
-            sessions: RapidHashMap::default(),
-            dials: RapidHashMap::default(),
+            sessions: maps::map(seed),
+            dials: maps::map(seed),
             alpns: cfg.alpns,
-            known: Known::default(),
+            known: Known::new(seed),
             routes: vec![Route {
                 alpn: Vec::new(),
                 queue: VecDeque::new(),
             }],
-            book: RapidHashMap::default(),
+            book: maps::map(seed),
             ifaces,
             shutdown: None,
             stopped: None,
@@ -327,7 +330,7 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
             events: VecDeque::new(),
             lost: 0,
             topics: BTreeMap::new(),
-            hub_sessions: RapidHashMap::default(),
+            hub_sessions: maps::map(seed),
             adjacent: cfg.connected_topics.then(Vec::new),
             adjacent_due: None,
             adjacent_next: 0,

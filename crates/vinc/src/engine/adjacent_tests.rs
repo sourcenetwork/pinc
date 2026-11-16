@@ -18,6 +18,7 @@ pub(super) type C = Core<SoftwareStore, AllowAll>;
 pub(super) fn core() -> C {
     let cfg = CoreConfig {
         identity: Identity::from_seed(&[5; 32]).unwrap(),
+        map_seed: 5,
         alpns: vec![b"app".to_vec()],
         limits: Limits {
             connections: 1024,

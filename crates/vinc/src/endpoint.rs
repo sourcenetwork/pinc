@@ -41,25 +41,11 @@ use crate::records::{MAX_HINTS, PeerRecord, Records, Rendezvous};
 use crate::role::{Role, RoleSpec};
 use crate::start::{PortMapping, build, interfaces};
 
+mod discovery;
 mod portmap;
 mod role;
 
-/// Finds addresses for a node the caller gave none for. It may do I/O; it runs before the dial starts, so dropping the
-/// dial while it runs leaves nothing behind.
-pub trait Discovery {
-    /// The addresses `node` may be reached at; empty if unknown.
-    fn lookup(&self, node: &NodeId) -> impl Future<Output = Vec<SocketAddr>>;
-}
-
-/// No discovery: a dial without addresses uses the address book only.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoDiscovery;
-
-impl Discovery for NoDiscovery {
-    fn lookup(&self, _node: &NodeId) -> impl Future<Output = Vec<SocketAddr>> {
-        std::future::ready(Vec::new())
-    }
-}
+pub use discovery::{Discovery, NoDiscovery};
 
 /// The entry point: `Vinc::builder()`.
 #[derive(Debug, Clone, Copy)]
@@ -434,11 +420,16 @@ impl<K: KeyStore, D: Discovery, A: Admission, C: Carriers, Q: RoleSpec<K>> Build
         if relays.len() > RELAYS {
             return Err(Error::config("at most four relays"));
         }
-        let identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
+        let mut identity = identity.ok_or(Error::config("the system has no randomness for a node identity"))?;
+        let mut map_seed = [0u8; 8];
+        identity.random(&mut map_seed)?;
+        let map_seed = u64::from_le_bytes(map_seed);
+        discovery.seed_maps(map_seed);
         let public: Rc<[u8]> = identity.public_key().into();
         let node = identity.node_id();
         let cfg = CoreConfig {
             identity,
+            map_seed,
             alpns,
             limits,
             admit: admission,

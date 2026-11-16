@@ -1446,6 +1446,7 @@ dependencies = [
 name = "vinc"
 version = "0.1.0"
 dependencies = [
+ "hashbrown",
  "nuclei",
  "rapidhash",
  "vinc-broadcast",
