@@ -5,7 +5,7 @@
 //!
 //! Invariants: a value that was not measured is absent, never zero; every cell is the median with the minimum and
 //! maximum over the repetitions and says how many there were; the best value of a row is marked only when two or more
-//! stacks have one.
+//! stacks have one, and a cost row compares only the stacks that completed the test (`completes`).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -338,8 +338,10 @@ pub struct Line {
     pub better: Better,
     /// One cell per stack, in the table's stack order.
     pub cells: Vec<Cell>,
-    /// The index of the best cell, when two or more stacks have a value.
+    /// The index of the best cell, when two or more stacks that completed the test have a value.
     pub best: Option<usize>,
+    /// Per cell: the stack did not complete the test and this is a cost row, so the cell is not compared.
+    pub out: Vec<bool>,
 }
 
 /// The table of one test between one pair.
@@ -370,7 +372,7 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
         .into_iter()
         .map(|(test, pair)| {
             let mine: Vec<&Row> = rows.iter().filter(|r| r.test == test && r.pair == pair).collect();
-            let lines = metrics_of(&test)
+            let measured: Vec<(Metric, Vec<Cell>)> = metrics_of(&test)
                 .into_iter()
                 .map(|met| {
                     let cells: Vec<Cell> = stacks
@@ -389,13 +391,27 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
                             }
                         })
                         .collect();
-                    let best = best_of(&cells, met.better);
+                    (met, cells)
+                })
+                .collect();
+            let done = completes(&test, &measured);
+            let lines: Vec<Line> = measured
+                .into_iter()
+                .map(|(met, cells)| {
+                    let cost = is_cost_row(&test, met.source);
+                    let compete: Vec<bool> = done.iter().map(|d| *d || !cost).collect();
+                    let out = cells
+                        .iter()
+                        .zip(&compete)
+                        .map(|(c, k)| !k && matches!(c, Cell::Value(_)))
+                        .collect();
                     Line {
                         label: met.label.into(),
                         unit: met.unit.into(),
                         better: met.better,
+                        best: best_of(&cells, met.better, &compete),
                         cells,
-                        best,
+                        out,
                     }
                 })
                 .collect();
@@ -414,6 +430,9 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
                     "{discarded} measurement(s) discarded and repeated: the host was busy"
                 ));
             }
+            if lines.iter().any(|l| l.out.contains(&true)) {
+                notes.push(NOT_COMPLETED.into());
+            }
             Table {
                 test,
                 pair,
@@ -425,12 +444,76 @@ pub fn summarize(rows: &[Row], stacks: &[String]) -> Vec<Table> {
         .collect()
 }
 
-fn best_of(cells: &[Cell], better: Better) -> Option<usize> {
+/// The note a table carries when some cell is marked [`MARK`].
+const NOT_COMPLETED: &str = "† did not complete the test (see the delivery row above): its cost is not compared.";
+
+/// The mark after a cell of a stack that did not complete the test.
+const MARK: &str = " †";
+
+/// The median of the node field `key` per stack, if the test has a row for it.
+fn medians_of(measured: &[(Metric, Vec<Cell>)], key: &str) -> Option<Vec<Option<f64>>> {
+    let (_, cells) = measured
+        .iter()
+        .find(|(m, _)| matches!(m.source, Source::Node(k) if k == key))?;
+    Some(
+        cells
+            .iter()
+            .map(|c| if let Cell::Value(s) = c { Some(s.median) } else { None })
+            .collect(),
+    )
+}
+
+/// Whether the row of `src` in `test` says whether the work was done: those rows are compared among every stack.
+fn is_cost_row(test: &str, src: Source) -> bool {
+    let progress: &[&str] = if test == "pubsub" {
+        &["loss_pct", "duplicates"]
+    } else if test.starts_with("dtn_") {
+        &["checks_passed", "delivered"]
+    } else {
+        return false;
+    };
+    !matches!(src, Source::Node(k) if progress.contains(&k))
+}
+
+/// Per stack, whether it completed the test, from the medians the table shows: a pubsub stack lost within one
+/// percentage point of the least loss; a dtn stack delivered the largest share, above zero (a test that delivers
+/// nothing by design asks only for `checks_passed`). Any other test: every stack completes.
+fn completes(test: &str, measured: &[(Metric, Vec<Cell>)]) -> Vec<bool> {
+    let n = measured.first().map_or(0, |(_, c)| c.len());
+    let fold = |v: &[Option<f64>], pick: fn(f64, f64) -> f64| v.iter().flatten().copied().reduce(pick);
+    if test == "pubsub" {
+        let loss = medians_of(measured, "loss_pct").unwrap_or_else(|| vec![None; n]);
+        let least = fold(&loss, f64::min);
+        return loss
+            .iter()
+            .map(|l| matches!((l, least), (Some(l), Some(m)) if l - m <= 1.0))
+            .collect();
+    }
+    if test.starts_with("dtn_") {
+        let delivered = medians_of(measured, "delivered").unwrap_or_else(|| vec![None; n]);
+        return match fold(&delivered, f64::max) {
+            Some(top) => delivered
+                .iter()
+                .map(|d| matches!(d, Some(d) if d.total_cmp(&top).is_eq() && *d > 0.0))
+                .collect(),
+            None => medians_of(measured, "checks_passed")
+                .unwrap_or_else(|| vec![None; n])
+                .iter()
+                .map(Option::is_some)
+                .collect(),
+        };
+    }
+    vec![true; n]
+}
+
+/// The best cell of a row among the cells `compete` allows.
+fn best_of(cells: &[Cell], better: Better, compete: &[bool]) -> Option<usize> {
     let vals: Vec<(usize, f64)> = cells
         .iter()
+        .zip(compete)
         .enumerate()
-        .filter_map(|(i, c)| {
-            if let Cell::Value(s) = c {
+        .filter_map(|(i, (c, k))| {
+            if let (Cell::Value(s), true) = (c, k) {
                 Some((i, s.median))
             } else {
                 None
@@ -522,6 +605,8 @@ pub fn markdown(title: &str, conditions: &[String], tables: &[Table]) -> String 
                 .map(|(i, c)| {
                     if l.best == Some(i) {
                         format!("**{}**", fmt_cell(c))
+                    } else if l.out.get(i) == Some(&true) {
+                        format!("{}{MARK}", fmt_cell(c))
                     } else {
                         fmt_cell(c)
                     }

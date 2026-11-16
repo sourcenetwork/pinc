@@ -15,7 +15,7 @@ use vinc_distributed::helper::{gateway_conf, host_ns_allowed, readable};
 use vinc_distributed::metrics::{Iface, NodeUse, Reading, parse_cpu_usec, parse_net_dev, parse_tc};
 use vinc_distributed::plan::{Ns, Plan, Tool, cpu_sets, netem_args, queue_limit};
 use vinc_distributed::quiet::{Monitor, Snapshot, Thresholds, parse_stat_line};
-use vinc_distributed::results::{Cell, Row, civil_date, fmt_cell, fmt_num, spread, summarize};
+use vinc_distributed::results::{Cell, Row, Table, civil_date, fmt_cell, fmt_num, markdown, spread, summarize};
 use vinc_distributed::scenario::{Nat, Scenario, Shape, Stack, Workload};
 
 fn scenario(name: &str) -> Scenario {
@@ -660,6 +660,140 @@ fn a_tie_is_not_a_win() {
     let rows = vec![row("vinc", 0, 5.0), row("iroh", 0, 5.0)];
     let stacks = vec!["vinc".to_owned(), "iroh".to_owned()];
     assert_eq!(summarize(&rows, &stacks)[0].lines[0].best, None);
+}
+
+const MARK_NOTE: &str = "† did not complete the test (see the delivery row above): its cost is not compared.";
+
+/// A table of `test` with one row per stack: `(stack, node fields, cost)`, the cost being its CPU seconds and bytes sent.
+type Fields<'a> = &'a [(&'a str, f64)];
+
+fn table_of(test: &str, stacks: &[(&str, Fields, u32)]) -> Table {
+    let rows: Vec<Row> = stacks
+        .iter()
+        .map(|(s, fields, cost)| {
+            let mut r = row(s, 0, 0.0);
+            r.test = test.into();
+            r.node = fields
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), serde_json::json!(v)))
+                .collect();
+            r.kernel.insert(
+                "client".into(),
+                NodeUse {
+                    cpu_s: Some(f64::from(*cost)),
+                    eth0: Some(Iface {
+                        tx_bytes: u64::from(*cost),
+                        ..Iface::default()
+                    }),
+                    ..NodeUse::default()
+                },
+            );
+            r
+        })
+        .collect();
+    let names: Vec<String> = stacks.iter().map(|(s, ..)| (*s).to_owned()).collect();
+    summarize(&rows, &names).remove(0)
+}
+
+fn line<'a>(t: &'a Table, label: &str) -> &'a vinc_distributed::results::Line {
+    t.lines.iter().find(|l| l.label == label).unwrap()
+}
+
+fn has_mark_note(t: &Table) -> bool {
+    t.notes.iter().any(|n| n == MARK_NOTE)
+}
+
+#[test]
+fn dtn_cost_is_compared_only_among_the_stacks_that_delivered() {
+    let t = table_of(
+        "dtn_store_forward",
+        &[
+            ("vinc", &[("delivered", 1.0)], 200),
+            ("iroh", &[("delivered", 1.0)], 100),
+            ("libp2p", &[("delivered", 0.0)], 10),
+        ],
+    );
+    let wire = line(&t, "bytes on the wire");
+    assert_eq!(wire.best, Some(1));
+    assert_eq!(wire.out, [false, false, true]);
+    assert!(has_mark_note(&t));
+    let md = markdown("t", &[], std::slice::from_ref(&t));
+    assert!(md.contains("| bytes on the wire (B) | 200 | **100** | 10 † |"), "{md}");
+    let delivered = line(&t, "bundles delivered intact");
+    assert_eq!((delivered.best, delivered.out.contains(&true)), (None, false));
+}
+
+#[test]
+fn dtn_without_a_delivery_share_compares_the_stacks_with_checks() {
+    let t = table_of(
+        "dtn_ledger",
+        &[
+            ("vinc", &[("checks_passed", 3.0)], 200),
+            ("iroh", &[("checks_passed", 3.0)], 100),
+            ("libp2p", &[], 10),
+        ],
+    );
+    let wire = line(&t, "bytes on the wire");
+    assert_eq!(wire.best, Some(1));
+    assert_eq!(wire.out, [false, false, true]);
+}
+
+#[test]
+fn pubsub_cost_of_a_stack_that_lost_everything_is_not_compared() {
+    let t = table_of(
+        "pubsub",
+        &[("vinc", &[("loss_pct", 0.0)], 5), ("iroh", &[("loss_pct", 100.0)], 1)],
+    );
+    let cpu = line(&t, "CPU, all nodes (kernel)");
+    assert_eq!(cpu.best, None);
+    assert_eq!(cpu.out, [false, true]);
+    assert!(has_mark_note(&t));
+}
+
+#[test]
+fn pubsub_latency_of_a_stack_that_lost_messages_is_not_a_win() {
+    let t = table_of(
+        "pubsub",
+        &[
+            ("vinc", &[("loss_pct", 0.0), ("p99_us", 13.8e6)], 1),
+            ("iroh", &[("loss_pct", 0.0), ("p99_us", 13.8e6)], 1),
+            ("libp2p", &[("loss_pct", 12.5), ("p99_us", 1300.0)], 1),
+        ],
+    );
+    let p99 = line(&t, "delivery latency p99");
+    assert_eq!((p99.best, p99.out.clone()), (None, vec![false, false, true]));
+    let loss = line(&t, "messages lost");
+    assert_eq!((loss.best, loss.out.contains(&true)), (None, false));
+}
+
+#[test]
+fn pubsub_loss_within_a_point_of_the_least_completes() {
+    let t = table_of(
+        "pubsub",
+        &[
+            ("vinc", &[("loss_pct", 12.0), ("p99_us", 900.0)], 1),
+            ("iroh", &[("loss_pct", 12.2), ("p99_us", 800.0)], 1),
+            ("libp2p", &[("loss_pct", 23.9), ("p99_us", 10.0)], 1),
+        ],
+    );
+    let p99 = line(&t, "delivery latency p99");
+    assert_eq!((p99.best, p99.out.clone()), (Some(1), vec![false, false, true]));
+}
+
+#[test]
+fn sync_and_latency_tables_compare_every_stack() {
+    for test in ["sync_1mib", "latency_64b"] {
+        let t = table_of(
+            test,
+            &[
+                ("vinc", &[("p50_us", 9.0), ("fetch_ms", 9.0)], 3),
+                ("iroh", &[("p50_us", 5.0), ("fetch_ms", 5.0)], 2),
+            ],
+        );
+        assert!(t.lines.iter().all(|l| !l.out.contains(&true)), "{test}");
+        assert!(!has_mark_note(&t));
+        assert_eq!(t.lines[0].best, Some(1));
+    }
 }
 
 #[test]

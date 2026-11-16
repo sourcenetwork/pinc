@@ -251,6 +251,8 @@ td.v { text-align: right; white-space: nowrap; }
 td.v .rng { color: var(--muted); font-size: var(--text-xs); margin-left: 4px; }
 td.v.best { font-weight: 700; color: var(--accent); }
 td.v.best::after { content: "\25B4"; margin-left: 3px; font-size: 9px; vertical-align: 1px; }
+td.v.out { color: var(--muted); }
+td.v.out::after { content: "\2020"; margin-left: 3px; }
 td.v.missing { color: var(--muted); font-family: var(--font-sans); font-size: var(--text-sm); white-space: normal; text-align: left; }
 tbody tr:hover td { background: var(--paper-2); }
 tr.sel td { background: var(--accent-weak); }

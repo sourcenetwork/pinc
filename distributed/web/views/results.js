@@ -3,10 +3,10 @@
 import { h, clear, api, toast } from "../lib/dom.js";
 import { num, when } from "../lib/fmt.js";
 
-function cell(c, best) {
+function cell(c, best, out) {
   if (c && typeof c === "object" && "median" in c) {
     const range = c.n > 1 ? h("span", { class: "rng" }, `[${num(c.min)}..${num(c.max)}]`) : null;
-    return h("td", { class: `v${best ? " best" : ""}`, title: `${c.n} value${c.n === 1 ? "" : "s"}${best ? ", best of the row" : ""}` }, num(c.median), range);
+    return h("td", { class: `v${best ? " best" : ""}${out ? " out" : ""}`, title: `${c.n} value${c.n === 1 ? "" : "s"}${best ? ", best of the row" : ""}${out ? ", did not complete the test" : ""}` }, num(c.median), range);
   }
   return h("td", { class: "v missing" }, String(c || "not measured").replace(/^not measured: /, "not measured: "));
 }
@@ -19,7 +19,7 @@ export function tablesView(tables, stacks, { rows = null } = {}) {
     const body = t.lines.map((l) => h("tr", {},
       h("th", { scope: "row" }, l.label, l.unit ? h("span", { class: "metric-unit" }, l.unit) : null,
         l.better === "lower" ? h("span", { class: "metric-unit", title: "lower is better" }, "↓") : l.better === "higher" ? h("span", { class: "metric-unit", title: "higher is better" }, "↑") : null),
-      l.cells.map((c, i) => cell(c, l.best === i))));
+      l.cells.map((c, i) => cell(c, l.best === i, l.out?.[i]))));
     const mine = rows ? rows.filter((r) => r.test === t.test && r.pair === t.pair) : [];
     return h("div", { class: "table-block" },
       h("header", {}, h("h2", {}, t.test), h("span", { class: "sub mono" }, t.pair)),
