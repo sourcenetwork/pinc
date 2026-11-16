@@ -586,6 +586,15 @@ par witness_tlc corestate_tailstrict CoreState CoreState_tailstrict Strict
 par witness_tlc corestate_mutant CoreState CoreState_NoAcceptedMutant NoAcceptedMutant
 par witness_tlc corestate_full CoreState CoreState_NoFullTables NoFullTables
 par witness_tlc corestate_evict CoreState CoreState_NoEviction NoEviction
+par run_tlc segtimer SegmentTimer SegmentTimer
+par witness_tlc segtimer_eager SegmentTimer SegmentTimer_eager RxNeverUnmaps
+par witness_tlc segtimer_all SegmentTimer SegmentTimer_all NoFreshFreed
+par witness_live_tlc segtimer_noarm SegmentTimer SegmentTimer_noarm
+par run_tlc seghandoff SegmentHandoff SegmentHandoff
+par witness_tlc seghandoff_noclear SegmentHandoff SegmentHandoff_noclear NoForeignBytes
+par witness_tlc seghandoff_clearown SegmentHandoff SegmentHandoff_clearown OwnKept
+par witness_tlc seghandoff_abort SegmentHandoff SegmentHandoff_abort NoAbort
+par witness_tlc seghandoff_noown SegmentHandoff SegmentHandoff_noown HelloMapsNothing
 par run_tlc queue Queue Queue
 par witness_tlc queue_over Queue Queue_over BurstKeeps
 par witness_tlc queue_head Queue Queue_head PushRule
