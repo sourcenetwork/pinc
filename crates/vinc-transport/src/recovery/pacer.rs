@@ -3,23 +3,26 @@
 //!
 //! Pacing starts only once a round-trip sample exists (the owner calls [`Pacer::on_sent`] only then). Each packet is
 //! charged its own size. A burst's budget is ten of the path's datagrams ([`burst_budget`], the datagram size clamped
-//! to `1..=65535`); the packet that brings the bytes charged to the budget or past it ends the burst and sets the
+//! to `1..=65535`); the packet after which less than one datagram of the budget is left ends the burst and sets the
 //! release a span after it: `spent` bytes, every byte of the burst with that packet's whole size, at
 //! `gap = mtu * srtt * 4 / (5 * max(cwnd, 1))` a datagram, so a gap for each whole datagram and the remainder by its
-//! bytes. One case is different: a sender its window does not limit (less than half of it in
-//! flight) whose burst took at least `span` from its first packet to its last has sent more slowly than the paced rate
-//! and waited already; it is released one tick of the clock after its last packet. A sender the window limits, and any
-//! burst that left faster than the paced rate, waits the span.
+//! bytes. A burst that stopped short of its budget by less than a datagram would otherwise stay open across a stall
+//! of the window and charge its whole pause to the first packet of the next flight. One case is different: a sender
+//! its window does not limit (less than half of it in flight) whose burst took at least `span` from its first packet
+//! to its last has sent more slowly than the paced rate and waited already; it is released one tick of the clock
+//! after its last packet. A sender the window limits, and any burst that left faster than the paced rate, waits the
+//! span.
 //!
 //! The reference model's pacer counts packets instead: each costs one of ten tokens whatever it weighs, and only a
-//! packet larger than the path's datagram size costs as many as the datagrams it is worth. Full-size packets end a
-//! burst at the same packet under both rules and wait the same ten gaps; a smaller packet is no longer charged a whole
-//! datagram, so a sender of small packets leaves at the documented rate instead of below it.
+//! packet larger than the path's datagram size costs as many as the datagrams it is worth. Packets of a datagram, or
+//! less by under a tenth, end a burst at the tenth under both rules, and the byte budget waits at most the ten gaps of
+//! the count; a smaller packet is no longer charged a whole datagram, so a sender of small packets leaves at the
+//! documented rate instead of below it.
 //!
 //! The tick keeps one thing as it was: after a burst the sender gives the driver a turn before it sends more.
 //! Acknowledgements never wait for the pacer: only data consults [`Pacer::next_release`].
 //!
-//! Invariants: `spent < burst_budget(mtu)` for the datagram size of the last call; `next` only moves forward.
+//! Invariants: `spent + mtu <= burst_budget(mtu)` for the datagram size of the last call; `next` only moves forward.
 //! Overflow bound: `spent` stays below `10 * 65535 + 2^32`; each product of the span has a factor below `2^33`, `srtt`
 //! below `2^64` and 4, so stays below `2^99` in `u128`, and the span saturates in `u64`.
 
@@ -91,7 +94,7 @@ impl Pacer {
             self.start = now;
         }
         self.spent += u64::from(size.max(1));
-        if self.spent < burst_budget(mtu) {
+        if self.spent + datagram(mtu) <= burst_budget(mtu) {
             return;
         }
         let span = span(self.spent, mtu, srtt, cwnd);

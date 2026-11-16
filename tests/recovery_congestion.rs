@@ -121,7 +121,11 @@ fn the_pause_uses_the_active_paths_datagram_size() {
     rec.set_max_datagram_size(1452);
     let (srtt, cwnd) = (rec.rtt().smoothed(), rec.cwnd());
     for i in 0..10 {
-        rec.on_packet_sent(Sent { size: 1452, ..sent(1 + i, 200 * MS) }).unwrap();
+        rec.on_packet_sent(Sent {
+            size: 1452,
+            ..sent(1 + i, 200 * MS)
+        })
+        .unwrap();
     }
     assert_eq!(
         rec.pacer().next_release(200 * MS),

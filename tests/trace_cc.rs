@@ -333,7 +333,10 @@ fn run(seed: u64, out: &mut String, id: u32, steps: u32, wide: bool) {
                         assert_eq!(next_after, next_before, "a packet within the budget paused");
                         paced_in_burst += 1;
                     } else {
-                        assert_eq!(spent_after, 0, "the packet that reached the budget did not end the burst");
+                        assert_eq!(
+                            spent_after, 0,
+                            "the packet that reached the budget did not end the burst"
+                        );
                         paced_in_burst = 0;
                     }
                     r.sends += 1;
