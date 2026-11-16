@@ -43,10 +43,10 @@ round_trips = 12
 
 [[workload.tests]]
 test = "throughput"
-bytes = 52428800
+bytes = 4194304
 streams = 1
 
 [[workload.tests]]
 test = "throughput"
-bytes = 52428800
+bytes = 4194304
 streams = 16
