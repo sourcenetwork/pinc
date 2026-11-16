@@ -203,3 +203,20 @@ fn a_member_push_with_a_forged_body_is_rejected() {
     net.publish(1, T, b"late");
     assert_eq!(net.delivered(2).len(), 1, "only the warm-up message");
 }
+
+/// A join hint is kept beside the list of a hub: node 4 subscribed while the publisher was cut off, so no hub list
+/// the publisher holds names it; hinted, it is reached with every hub down, as well as the listed subscribers.
+#[test]
+fn a_hinted_node_is_reached_when_no_hub_is_though_a_hubs_list_was_held() {
+    let mut net = world();
+    net.cut_from_hubs(1, false);
+    net.subscribe(4, T);
+    for i in 2..=4 {
+        net.cut_from_hubs(i, false);
+    }
+    let four = net.id(4);
+    assert!(net.nodes[1].t.hint(T, &four));
+    let m = net.publish(1, T, b"late");
+    assert!(net.delivered(4).contains(&m), "the hinted node was not reached");
+    assert!(net.delivered(2).contains(&m) && net.delivered(3).contains(&m));
+}

@@ -183,6 +183,9 @@ pub(crate) struct Topic {
     pub(crate) peers_ver: Option<(u64, u32)>,
     /// Member: `peers` was cut to this member's `max_subscribers`, so it lacks ids the hub's list has past the cut.
     pub(crate) peers_cut: bool,
+    /// Member: join hints, nodes taken as subscribers beside the hub's list; at most `max_subscribers`, none of them
+    /// in `peers`. A hint leaves when a hub's list names it and when the topic is left.
+    pub(crate) hints: Vec<NodeId>,
     /// Hub: the list last told the recipients (see `subs`).
     pub(crate) told: Vec<NodeId>,
     /// Hub: the number of `told`, raised by one at every change; with the incarnation it is the list's version.
@@ -219,6 +222,7 @@ impl Topic {
             peers_from: None,
             peers_ver: None,
             peers_cut: false,
+            hints: Vec::new(),
             told: Vec::new(),
             told_seq: 0,
             stale: BTreeSet::new(),
@@ -493,15 +497,23 @@ impl Topics {
         self.topics.get(topic).and_then(|t| t.subs.get(member)).copied()
     }
 
-    /// The subscribers a node knows for `topic`, for the member-to-member fallback.
+    /// The subscribers a hub reported for `topic`, for the member-to-member fallback: that hub's list at the version
+    /// this node holds, cut to this node's limit. Join hints are beside it ([`Topics::hinted_subscribers`]).
     pub fn known_subscribers(&self, topic: &[u8]) -> &[NodeId] {
         self.topics.get(topic).map_or(&[], |t| t.peers.as_slice())
     }
 
+    /// The join hints taken for `topic` that no hub's list names (yet), which the fallback sends to as well as to
+    /// [`Topics::known_subscribers`]; no node is in both.
+    pub fn hinted_subscribers(&self, topic: &[u8]) -> &[NodeId] {
+        self.topics.get(topic).map_or(&[], |t| t.hints.as_slice())
+    }
+
     /// Take `member` as a subscriber of `topic` that this node may send to straight when no hub is reachable (a join
-    /// hint). A hub's list of subscribers replaces it, and once the node holds a hub's list a hint leaves it alone:
-    /// that list is the hub's at its version, which later changes are applied to. False if the topic table or the
-    /// subscriber list is full.
+    /// hint). It is kept beside the hub's list, which a hint never enters: that list is the hub's at its version, which
+    /// later changes are applied to. A hub's list that names the node covers it, and the hint is dropped. Hints are
+    /// bounded by `max_subscribers`: when they are full a new one is refused (false), the kept ones stay. False also
+    /// if the topic table is full.
     pub fn hint(&mut self, topic: &[u8], member: &NodeId) -> bool {
         if *member == self.me || !self.ensure_topic(topic) {
             return false;
@@ -510,13 +522,13 @@ impl Topics {
         let Some(st) = self.topics.get_mut(topic) else {
             return false;
         };
-        if st.peers_from.is_some() || st.peers.contains(member) {
+        if st.peers.contains(member) || st.hints.contains(member) {
             return true;
         }
-        if st.peers.len() >= max {
+        if st.hints.len() >= max {
             return false;
         }
-        st.peers.push(*member);
+        st.hints.push(*member);
         true
     }
 

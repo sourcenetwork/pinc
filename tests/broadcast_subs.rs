@@ -1,6 +1,11 @@
 //! The subscriber list a hub replicates to its members (SUBS): what a join costs each member, and that every member
 //! ends with the hub's list whatever happened to the frames on the way: a change is never applied on the wrong base.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::cast_possible_truncation)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::assert_is_empty
+)]
 
 #[path = "broadcast_common.rs"]
 mod common;
@@ -382,4 +387,22 @@ fn a_member_whose_subscriber_limit_is_under_its_hubs_asks_for_the_list_when_a_ch
         net.nodes[member].t.known_subscribers(T),
         expected(&net, &live, 2).as_slice()
     );
+}
+
+/// A hint is kept beside the hub's list: dropped once a hub's list names the hinted node, and when the topic is left.
+#[test]
+fn a_hint_is_dropped_once_a_hubs_list_names_it_and_when_the_topic_is_left() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 5, SEC);
+    for i in 1..=3 {
+        net.subscribe(i, T);
+    }
+    let (two, four, five) = (net.id(2), net.id(4), net.id(5));
+    assert!(net.nodes[1].t.hint(T, &two));
+    assert!(net.nodes[1].t.hint(T, &four));
+    assert_eq!(net.nodes[1].t.hinted_subscribers(T), [four].as_slice());
+    net.subscribe(4, T);
+    assert!(net.nodes[1].t.hinted_subscribers(T).is_empty());
+    assert!(net.nodes[1].t.hint(T, &five));
+    unsubscribe(&mut net, 1);
+    assert!(net.nodes[1].t.hinted_subscribers(T).is_empty());
 }

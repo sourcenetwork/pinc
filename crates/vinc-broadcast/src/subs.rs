@@ -223,6 +223,12 @@ fn announce<H: Host>(
 }
 
 impl Topic {
+    /// Forget the hints a hub's list names: the list covers them, and no node is in both.
+    fn drop_covered_hints(&mut self) {
+        let peers = &self.peers;
+        self.hints.retain(|n| !peers.contains(n));
+    }
+
     /// The version of this topic's list a member holds from `hub`, if it holds one. Read from the topic itself, since
     /// the loops that send SUB take the topic table out of `Topics` while they run.
     pub(crate) fn held(&self, hub: &NodeId) -> Option<Ver> {
@@ -477,6 +483,7 @@ impl Topics {
                 st.peers_cut = ids.len() > max;
                 st.peers_from = Some(*from);
                 st.peers_ver = Some(ver);
+                st.drop_covered_hints();
                 confirm(h, st, from, topic, &me);
                 None
             }
@@ -488,6 +495,7 @@ impl Topics {
             {
                 st.peers_cut |= apply(&mut st.peers, ids, rem, max);
                 st.peers_ver = Some(ver);
+                st.drop_covered_hints();
                 confirm(h, st, from, topic, &me);
                 None
             }
