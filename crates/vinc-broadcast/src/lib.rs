@@ -35,11 +35,13 @@
 extern crate alloc;
 
 pub mod auth;
+pub mod auth2;
 pub mod consts;
 pub mod event;
 pub mod host;
 pub mod statement;
 pub mod wire;
+pub mod wire2;
 
 #[cfg(feature = "alloc")]
 mod behind;
