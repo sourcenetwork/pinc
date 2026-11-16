@@ -5,7 +5,8 @@
 //! owns no socket: the host passes the time and the frames in, carries the frames out through [`Host`], and hears
 //! the results as [`Event`]s and [`Trace`] records.
 //!
-//! The wire format ([`wire`]), the signing ([`auth`]) and the host interface ([`host`]) need no allocator. The state
+//! The wire format ([`wire`]), the signing ([`auth`]), the signed envelope ([`envelope`]) and the host interface ([`host`])
+//! need no allocator. The state
 //! machine keeps bounded tables and the hub log, and needs the `alloc` feature.
 //!
 //! The rules, in short:
@@ -37,6 +38,7 @@ extern crate alloc;
 pub mod auth;
 pub mod auth2;
 pub mod consts;
+pub mod envelope;
 pub mod event;
 pub mod host;
 pub mod statement;

@@ -114,6 +114,19 @@ impl<'a> Head<'a> {
     /// [`Malformed`] for an unknown algorithm, a reserved flag, a body whose length differs from `blen`. The size limit
     /// is the node's configuration, checked by the caller.
     pub fn parse(rest: &'a [u8]) -> Result<(Self, &'a [u8]), Malformed> {
+        let (head, blen, body) = Self::parse_prefix(rest)?;
+        if body.len() != blen {
+            return Err(Malformed("body length"));
+        }
+        Ok((head, body))
+    }
+
+    /// Parse the head at the start of `rest` and return it with the body length it names and every byte after it, which
+    /// the caller checks against that length.
+    ///
+    /// # Errors
+    /// [`Malformed`] for an unknown algorithm, a reserved flag, or a head cut short.
+    pub fn parse_prefix(rest: &'a [u8]) -> Result<(Self, usize, &'a [u8]), Malformed> {
         let mut r = Reader::new(rest);
         let mid = r.read_array::<MID_LEN>()?;
         let origin = <&NodeId>::try_from(r.read_bytes(32)?).map_err(|_| Malformed("origin"))?;
@@ -127,10 +140,7 @@ impl<'a> Head<'a> {
         let blen = usize::try_from(r.read_u32()?).map_err(|_| Malformed("body length"))?;
         let ts = Hlc::new(r.read_u64()?, r.read_u32()?);
         let n = r.remaining();
-        let body = r.read_bytes(n)?;
-        if body.len() != blen {
-            return Err(Malformed("body length"));
-        }
+        let tail = r.read_bytes(n)?;
         Ok((
             Self {
                 mid,
@@ -141,7 +151,8 @@ impl<'a> Head<'a> {
                 isb,
                 ts,
             },
-            body,
+            blen,
+            tail,
         ))
     }
 
