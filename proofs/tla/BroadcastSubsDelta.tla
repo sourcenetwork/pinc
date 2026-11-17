@@ -45,9 +45,12 @@
 (* primary the source after a late list from another hub (take_subs) is    *)
 (* not modelled either; a change from another hub than the list's is here  *)
 (* ignored for good. A change not newer than the version held is ignored   *)
-(* in the code, where the model asks again: a stutter the model leaves     *)
-(* out. A held subscriber is not a state of the model (Unsub stands for    *)
-(* hold).                                                                  *)
+(* in the code; the model's counterpart is the loss of that frame (Lose),  *)
+(* which changes nothing at the member. A held subscriber is not a state of *)
+(* the model (Unsub stands for hold). Hub-to-hub mirroring (the other hubs' *)
+(* reports in a hub's list) is not modelled: a hub's list is its own       *)
+(* subscribers. The SUB's version is read at the hub's step; in the code it *)
+(* is the one in the frame the member sent earlier.                        *)
 (*                                                                         *)
 (* What must never happen (ViewIsHubSet): a member holds a version of a    *)
 (* hub's list and a list that is not what that hub's list was at that      *)
@@ -261,7 +264,7 @@ TypeOK ==
     /\ \A h \in Hubs : stale[h] \subseteq Members /\ asks[h] \subseteq Members
     /\ \A h \in Hubs, m \in Members : Len(chan[h][m]) <= StreamCap
     /\ \A m \in Members : peers[m] \subseteq Members /\ from[m] \in Hubs \cup {"none"}
-    /\ \A m \in Members : hints[m] \subseteq Members /\ Cardinality(hints[m]) <= Max
+    /\ \A m \in Members : hints[m] \subseteq Members /\ Cardinality(hints[m]) <= HintMax
 
 \* A hub's list is its subscribers' lowest Max ids, and its current version names it in the history.
 ToldIsList == \A h \in Hubs : told[h] = Cap(live[h]) /\ <<life[h], seq[h], told[h]>> \in hist[h]
