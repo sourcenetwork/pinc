@@ -96,6 +96,20 @@ impl Core {
                         layers.event(local, self, LayerEvent::Message { origin, body: &body });
                     }
                 }
+                NEv::Envelope { origin, envelope, .. } => {
+                    if self.deliver() {
+                        let origin = self.shared.index_of_bytes(&origin);
+                        let local = self.now;
+                        layers.event(
+                            local,
+                            self,
+                            LayerEvent::Message {
+                                origin,
+                                body: envelope.payload(),
+                            },
+                        );
+                    }
+                }
                 NEv::BroadcastAcpCheck { id, origin, .. } => {
                     let principal = self.shared.index_of_bytes(&origin);
                     let (allow, _) = self.shared.rec.borrow_mut().acp_decide(self.now, self.idx, principal);
