@@ -60,7 +60,8 @@ pub enum Push {
     NoSlot,
 }
 
-/// A message handed back by [`Mailbox::pop`]; its body is in the buffer given to `pop`.
+/// A message handed back by [`Mailbox::pop`], [`Mailbox::pop_fitting`] or [`Mailbox::look`]; its body is in the buffer
+/// given to the call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Delivered {
     /// The node the message came from.

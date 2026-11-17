@@ -7,8 +7,8 @@
 //! SELF, PING, PONG, an unexpected RECV, PUB of an own and of a foreign record, SLEEP of an own, a foreign and a
 //! mis-signed notice), frames from peer relays and from a node that is no peer (FWD, SYNC, PING, PONG, an unexpected
 //! frame), `add_peer` and `remove_peer`, `udp_heard` and `udp_gone`, SPU datagrams with and without a validated
-//! member, `member_returned`, sleep notices over UDP, the host's `tunnel_ready` answer for a member (changed by a call of
-//! its own, so a held message is refused and kept), and `handle_timeout`. Times step by amounts around every rule
+//! member, `member_returned`, sleep notices over UDP, the host's `tunnel_ready` answer for a member (changed by a call
+//! of its own, so a held message is refused and kept), and `handle_timeout`. Times step by amounts around every rule
 //! constant (10, 15, 20, 30 s, the sweep, the quota window, the session limit, the mailbox age); every time is a whole
 //! number of seconds, written in seconds (the Lean replay multiplies by 10^9 and TLC keeps 32-bit integers).
 //!
