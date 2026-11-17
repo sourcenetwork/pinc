@@ -65,6 +65,9 @@ pub enum SubsDrop {
     /// A change from a hub other than the one the member's list came from; from the member's primary it also makes the
     /// primary the source, and the member asks it for the whole list.
     OtherHub,
+    /// A piece of a list that does not follow the pieces before it (one was lost, or the list changed): the gathering
+    /// is dropped and a member asks the hub for the whole list once.
+    Gap,
     /// A change on a version the member does not hold, or a removal from a list the member cut below its hub's; it
     /// asks for the whole list once.
     OffBase,

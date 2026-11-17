@@ -34,6 +34,11 @@ pub const AE_FROM: Nanos = 30 * S;
 pub const AE_TO: Nanos = S;
 /// The most ids one HAVE or GET carries.
 pub const HAVE_MAX: usize = 512;
+/// The most ids one piece of a subscriber list carries. Every piece fits the smallest valid frame, so a list of any
+/// length (up to `max_subscribers`) goes out, one piece after the other.
+pub const SUBS_PIECE: usize = 128;
+// A piece (25 bytes, the topic, and the ids) must fit a frame of a node whose body limit is zero.
+const _: () = assert!(25 + MAX_TOPIC + 32 * SUBS_PIECE <= 4 + 2 + MAX_TOPIC + crate::wire::MAX_HEAD);
 /// A subscriber asks for the ids of the recent log this often while the topic is live.
 pub const GAP_EVERY: Nanos = 20 * S;
 /// A topic is live while it had traffic within this long.

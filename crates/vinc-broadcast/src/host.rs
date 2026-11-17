@@ -91,10 +91,11 @@ pub enum Event<'a> {
         mid: [u8; 8],
     },
     /// Member: a hub's subscriber set for a topic this node subscribes to lists this node, the first time since it
-    /// subscribed. The hub holds the subscription: a message published to the topic through it from now on reaches
-    /// this node. Two limits. A hub's set names at most `max_subscribers` nodes, in id order, so on a topic with more
-    /// subscribers a node the set leaves out is never told although it is subscribed. And a node that unsubscribes
-    /// and subscribes again at once may be told by a set the hub sent before it saw the unsubscribe.
+    /// subscribed. It fires when the whole set has arrived (a set of more than 128 ids comes in pieces, and a piece
+    /// alone fires nothing). The hub holds the subscription: a message published to the topic through it from now on
+    /// reaches this node. Two limits. A hub's set names at most `max_subscribers` nodes, in id order, so on a topic
+    /// with more subscribers a node the set leaves out is never told although it is subscribed. And a node that
+    /// unsubscribes and subscribes again at once may be told by a set the hub sent before it saw the unsubscribe.
     Subscribed {
         /// The hub.
         hub: &'a NodeId,

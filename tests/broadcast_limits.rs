@@ -145,7 +145,7 @@ fn an_invalid_config_is_refused_at_start() {
             ..ok
         })
         .err(),
-        Some(StartError::InvalidLimits)
+        Some(StartError::TooManySubscribers)
     );
     assert_eq!(
         start(Limits { reach_bytes: 0, ..ok }).err(),
@@ -183,4 +183,27 @@ fn the_subscriber_set_a_publisher_learns_is_capped_by_config() {
     }
     net.publish(1, T, b"x");
     assert_eq!(net.nodes[1].t.known_subscribers(T).len(), 2);
+}
+
+/// The subscriber list goes in pieces, so no body limit bounds the subscribers: only a limit past what one list can
+/// count is refused, under a sentence that names it.
+#[test]
+fn only_a_subscriber_limit_past_what_a_list_counts_is_refused() {
+    let smallest = Limits {
+        max_body: 0,
+        log_bytes: MAX_HEAD,
+        ..Limits::default()
+    };
+    let at = |max_subscribers| {
+        start(Limits {
+            max_subscribers,
+            ..smallest
+        })
+    };
+    assert!(at(65_535).is_ok());
+    assert_eq!(at(65_536).err(), Some(StartError::TooManySubscribers));
+    assert_eq!(
+        StartError::TooManySubscribers.to_string(),
+        "max_subscribers is above 65,535, the most ids one subscriber list can count"
+    );
 }

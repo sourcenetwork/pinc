@@ -14,26 +14,35 @@
 //! of that hub's list, and the hub answers one that is not its current version with the whole list. The hub also
 //! sends the whole list, without being asked, to a recipient that it knows may lack it (a new publisher, a restored
 //! member, one whose stream refused a frame: `stale`), on the next change or when its stream has room. The other hubs
-//! are sent the hub's local set whole, when it changes. Deltas keep the bytes a change costs a recipient independent
-//! of the number of subscribers: the whole list on every change made the join of `n` subscribers cost `n` lists of up
-//! to `max_subscribers` nodes on every session. A SUBS frame that changes nothing is traced with why
-//! ([`Trace::SubsDropped`]).
+//! are sent the hub's local set whole, when it changes.
+//!
+//! A whole list goes as ordered pieces of at most [`SUBS_PIECE`] ids, all at one version, so no list is bigger than the
+//! smallest valid frame whatever `max_subscribers` is. The hub keeps each stale recipient's place (the next piece) and
+//! goes on from it when the stream has room; a change to the list sends every recipient back to the first piece, and a
+//! fresh SUB, which does not change the list, leaves a recipient where it is (a member sends one every 20 s, and a slow
+//! stream needs longer than that for a long list). A receiver gathers the pieces of each hub apart and acts only on a
+//! whole list: a piece that does not follow the ones before it (a lost piece) breaks the gathering, is traced
+//! ([`SubsDrop::Gap`]) and makes a member ask the hub once. Deltas keep the bytes a change costs a recipient
+//! independent of the number of subscribers: the whole list on every change made the join of `n` subscribers cost `n`
+//! lists of up to `max_subscribers` nodes on every session. A change of more than [`SUBS_PIECE`] ids is sent as the
+//! whole list. A SUBS frame that changes nothing is traced with why ([`Trace::SubsDropped`]).
 //!
 //! Invariants: a list holds at most `max_subscribers` nodes in id order, so two hubs with the same tables send the
 //! same bytes; `told` is the list built from the tables after every change, and `(incarnation, told_seq)` its
 //! version; a member's list is always the list its hub had at the version the member holds: a delta is applied only
 //! on its own base, and only from the hub of the member's list (a change from the primary makes it the hub of the
-//! list, and the member asks it for the whole list), a join hint never enters it, and a member whose limit
-//! cut the list asks for the whole list on a change that removes (the id past the cut is not in the change); `stale`
-//! holds only recipients, and `Topics::owed` holds every recipient stale in some topic, so a stream's room is a lookup,
-//! not a walk of the topics; a held member receives no push; a restore tells the member exactly the topics it had; a
-//! release of a member that was behind in a topic leaves the span of what it was owed in that topic.
+//! list, and the member asks it for the whole list), a join hint never enters it, and a member whose limit cut the
+//! list asks for the whole list on a change that removes (the id past the cut is not in the change); a member's list
+//! changes only when a gathering completes, never on a piece; `stale` holds only recipients, and `Topics::owed` holds
+//! every recipient stale in some topic, so a stream's room is a lookup, not a walk of the topics; a held member
+//! receives no push; a restore tells the member exactly the topics it had; a release of a member that was behind in
+//! a topic leaves the span of what it was owed in that topic.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use vinc_membership::NodeId;
 
-use crate::consts::TABLE_MAX;
+use crate::consts::{SUBS_PIECE, TABLE_MAX};
 use crate::event::{SubsDrop, Trace, topic_tag};
 use crate::host::{Event, Host, Lane};
 use crate::node::{Topic, Topics};
@@ -42,7 +51,9 @@ use crate::wire::{self, ty};
 /// How many recent publishers a hub tells the subscriber list of one topic.
 const PUBS_MAX: usize = 256;
 
-/// A SUBS frame that carries the whole list (`version | count | ids`): the receiver replaces its own.
+/// A SUBS frame that carries a piece of the whole list (`version | first | total | count | ids`): the ids of ranks
+/// `first` to `first + count - 1` of a list of `total` ids. The receiver replaces its own list when the pieces of one
+/// version make the whole list.
 pub(crate) const FULL: u8 = 0;
 /// A SUBS frame that carries a change (`version | count | added ids | count | removed ids`) from the version before
 /// `version`: the receiver applies it only on that base.
@@ -88,16 +99,114 @@ fn count(n: usize) -> [u8; 2] {
     u16::try_from(n).unwrap_or(u16::MAX).to_be_bytes()
 }
 
-/// A FULL frame of `list` at version `ver` in `scratch`. An empty list is sent too, so a node that knew subscribers
-/// learns they are gone.
-fn full_frame(scratch: &mut Vec<u8>, topic: &[u8], ver: Ver, list: &[NodeId]) -> bool {
+/// The pieces a list of `n` ids goes in: an empty list is one piece, so a node that knew subscribers learns they are
+/// gone.
+fn pieces(n: usize) -> usize {
+    n.div_ceil(SUBS_PIECE).max(1)
+}
+
+/// The piece of `list` at version `ver` that starts at rank `first`, in `scratch`.
+fn piece_frame(scratch: &mut Vec<u8>, topic: &[u8], ver: Ver, list: &[NodeId], first: usize) -> bool {
+    let rest = list.get(first..).unwrap_or_default();
+    let ids = rest.get(..SUBS_PIECE).unwrap_or(rest);
     wire::build(
         scratch,
         ty::SUBS,
         topic,
-        &[&[FULL], &ver_bytes(ver), &count(list.len()), list.as_flattened()],
+        &[
+            &[FULL],
+            &ver_bytes(ver),
+            &count(first),
+            &count(list.len()),
+            &count(ids.len()),
+            ids.as_flattened(),
+        ],
     )
     .is_ok()
+}
+
+/// What one receiver holds of the list a hub is sending it in pieces.
+#[derive(Debug)]
+pub(crate) struct Part {
+    ver: Ver,
+    total: u16,
+    /// The ids counted so far, kept or not.
+    got: u16,
+    /// The first `max` of them.
+    ids: Vec<NodeId>,
+    /// A piece did not follow the ones before it: nothing more is taken until a first piece restarts it.
+    broken: bool,
+}
+
+/// What a piece did to the gathering of its sender.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Gathered {
+    /// The list is whole: the gathered ids, or the ids of the piece itself when it alone is the list (`None`).
+    Whole(Option<Vec<NodeId>>),
+    /// More pieces are due; nothing changed.
+    Partial,
+    /// The piece does not follow the ones before it; `ask` when this breaks the gathering (once per gathering).
+    Gap { ask: bool },
+}
+
+/// Take the piece of ranks `first..first + ids.len()` of a list of `total` ids at `ver` from `from`, keeping at most
+/// `max` ids. A first piece starts the gathering of `from` again; any other joins it only when it follows the ones
+/// before it at the same version and total.
+pub(crate) fn gather(
+    parts: &mut BTreeMap<NodeId, Part>,
+    from: &NodeId,
+    ver: Ver,
+    first: u16,
+    total: u16,
+    ids: &[NodeId],
+    max: usize,
+) -> Gathered {
+    let n = u16::try_from(ids.len()).unwrap_or(u16::MAX);
+    if first == 0 {
+        if n == total {
+            parts.remove(from);
+            return Gathered::Whole(None);
+        }
+        parts.insert(
+            *from,
+            Part {
+                ver,
+                total,
+                got: n,
+                ids: ids.iter().take(max).copied().collect(),
+                broken: false,
+            },
+        );
+        return Gathered::Partial;
+    }
+    // A piece that does not follow starts a broken gathering of its own version, and asks; the rest of that version
+    // ask nothing more.
+    let broken = Part {
+        ver,
+        total,
+        got: 0,
+        ids: Vec::new(),
+        broken: true,
+    };
+    let Some(p) = parts.get_mut(from) else {
+        parts.insert(*from, broken);
+        return Gathered::Gap { ask: true };
+    };
+    let same = p.ver == ver && p.total == total;
+    if p.broken && same {
+        return Gathered::Gap { ask: false };
+    }
+    if !same || p.got != first {
+        *p = broken;
+        return Gathered::Gap { ask: true };
+    }
+    let room = max.saturating_sub(p.ids.len());
+    p.ids.extend(ids.iter().take(room).copied());
+    p.got = p.got.saturating_add(n);
+    if p.got < p.total {
+        return Gathered::Partial;
+    }
+    Gathered::Whole(parts.remove(from).map(|p| p.ids))
 }
 
 /// What turns the sorted list `old` into the sorted list `new`: the nodes only `new` has, and those only `old` has.
@@ -127,9 +236,10 @@ fn is_recipient(st: &Topic, p: &NodeId) -> bool {
     st.subs.get(p).copied().unwrap_or_else(|| st.pubs.contains(p))
 }
 
-/// Bring the recipients of `topic` to the current list: a delta to those that are not stale, then the whole list to
-/// the stale ones. A recipient whose stream refuses its frame is stale until one takes the whole list. `inc` is the
-/// hub's incarnation, the first half of every version it sends.
+/// Bring the recipients of `topic` to the current list: a delta to those that are not stale (the whole list when the
+/// change names more than [`SUBS_PIECE`] ids), then the whole list to the stale ones. A recipient whose stream refuses
+/// its frame is stale until one takes the whole list. A change sends every recipient back to the first piece. `inc` is
+/// the hub's incarnation, the first half of every version it sends.
 #[allow(
     clippy::too_many_arguments,
     reason = "the disjoint fields of `Topics` the iteration over its topics leaves free"
@@ -157,27 +267,32 @@ fn tell_members<H: Host>(
             &count(rem.len()),
             rem.as_flattened(),
         ];
-        let built = wire::build(scratch, ty::SUBS, topic, &parts).is_ok();
+        let built = add.len() + rem.len() <= SUBS_PIECE && wire::build(scratch, ty::SUBS, topic, &parts).is_ok();
         let subs = st.subs.keys();
         let others = st.pubs.iter().filter(|p| !st.subs.contains_key(*p));
         let mut refused = Vec::new();
         for p in subs
             .chain(others)
-            .filter(|p| is_recipient(st, p) && !st.stale.contains(*p))
+            .filter(|p| is_recipient(st, p) && !st.stale.contains_key(*p))
         {
             if !built || !h.send(p, Lane::Reply, scratch) {
                 refused.push(*p);
             }
         }
-        st.stale.extend(refused);
+        // The pieces sent so far were of the list before this change.
+        // vertexia: a change restarts a list in flight; holding the change for recipients mid-list if a stream
+        // slower than the churn must still converge
+        st.stale.values_mut().for_each(|place| *place = 0);
+        st.stale.extend(refused.into_iter().map(|p| (p, 0)));
         st.told.clone_from(nodes);
     }
     flush_stale(h, scratch, owed, topic, st, None, inc);
 }
 
-/// Send the whole list to the stale recipients of `st`, or only to `only`; a recipient whose stream took it is no
-/// longer stale. A stale entry that is no longer a recipient is dropped: it is sent nothing, and the whole list again
-/// if it comes back. Every recipient still stale afterwards is in `owed`, so its stream's room brings it the list.
+/// Send the next pieces of the whole list to the stale recipients of `st`, or only to `only`; a recipient whose stream
+/// took the last piece is no longer stale, and one whose stream refused a piece keeps its place. A stale entry that is
+/// no longer a recipient is dropped: it is sent nothing, and the whole list again if it comes back. Every recipient
+/// still stale afterwards is in `owed`, so its stream's room brings it the rest of the list.
 fn flush_stale<H: Host>(
     h: &mut H,
     scratch: &mut Vec<u8>,
@@ -187,18 +302,48 @@ fn flush_stale<H: Host>(
     only: Option<&NodeId>,
     inc: u64,
 ) {
-    let gone: Vec<NodeId> = st.stale.iter().filter(|p| !is_recipient(st, p)).copied().collect();
+    let gone: Vec<NodeId> = st.stale.keys().filter(|p| !is_recipient(st, p)).copied().collect();
     for p in &gone {
         st.stale.remove(p);
     }
-    if !st.stale.is_empty() && full_frame(scratch, topic, (inc, st.told_seq), &st.told) {
-        st.stale
-            .retain(|p| only.is_some_and(|o| o != p) || !h.send(p, Lane::Reply, scratch));
+    let ver = (inc, st.told_seq);
+    let n = u16::try_from(pieces(st.told.len())).unwrap_or(u16::MAX);
+    if let Some(p) = only {
+        let mut at = st.stale.get(p).copied().filter(|at| *at < n).unwrap_or(0);
+        while st.stale.contains_key(p) {
+            let sent = piece_frame(scratch, topic, ver, &st.told, usize::from(at) * SUBS_PIECE)
+                && h.send(p, Lane::Reply, scratch);
+            if !sent {
+                st.stale.insert(*p, at);
+                break;
+            }
+            at += 1;
+            if at >= n {
+                st.stale.remove(p);
+            }
+        }
+    } else {
+        // Each piece is built once and sent to every recipient at that place; the next one goes to the lowest
+        // place above it, the recipients that took this piece among them.
+        let mut at = st.stale.values().copied().min();
+        while let Some(place) = at.filter(|at| *at < n) {
+            if piece_frame(scratch, topic, ver, &st.told, usize::from(place) * SUBS_PIECE) {
+                for (p, slot) in st.stale.iter_mut().filter(|(_, slot)| **slot == place) {
+                    if h.send(p, Lane::Reply, scratch) {
+                        *slot = place + 1;
+                    }
+                }
+            }
+            at = st.stale.values().copied().filter(|at| *at > place).min();
+        }
+        st.stale.retain(|_, at| *at < n);
     }
-    owed.extend(st.stale.iter().copied());
+    owed.extend(st.stale.keys().copied());
 }
 
-/// Tell the recipients of `topic` what changed, and, when the local set changed, the other hubs the local set.
+/// Tell the recipients of `topic` what changed, and, when the local set changed, the other hubs the local set, in
+/// pieces. A hub whose stream refuses a piece is sent no more of this set and none is kept for it: it takes the next
+/// set whole.
 #[allow(
     clippy::too_many_arguments,
     reason = "the disjoint fields of `Topics` the iteration over its topics leaves free"
@@ -216,12 +361,20 @@ fn announce<H: Host>(
     inc: u64,
 ) {
     tell_members(h, scratch, nodes, owed, topic, st, max, inc);
-    if local_changed {
+    if local_changed && !hubs.is_empty() {
         build_list(nodes, st, true, max);
-        // The other hub keeps this set whole and does not read its version.
-        if full_frame(scratch, topic, (inc, st.told_seq), nodes) {
-            for hub in hubs {
-                h.send(hub, Lane::Main, scratch);
+        // The other hub keeps this set whole and reads the version only to join the pieces.
+        // At most `MAX_HUBS` (64) hubs, one bit each.
+        let mut refused = 0u64;
+        for first in (0..pieces(nodes.len())).map(|i| i * SUBS_PIECE) {
+            if !piece_frame(scratch, topic, (inc, st.told_seq), nodes, first) {
+                break;
+            }
+            for (bit, hub) in (0u32..).zip(hubs) {
+                let mask = 1u64.wrapping_shl(bit);
+                if refused & mask == 0 && !h.send(hub, Lane::Main, scratch) {
+                    refused |= mask;
+                }
             }
         }
     }
@@ -247,7 +400,8 @@ impl Topic {
 
 impl Topics {
     /// Replicate the subscriber list of `topic` after a change; `local_changed` when the local set changed. `fresh`
-    /// is a recipient that must be sent the whole list (a subscriber that just subscribed, again or for the first time).
+    /// is a recipient that must be sent the whole list (a subscriber that just subscribed, again or for the first
+    /// time): it is sent from the start unless it is in the middle of the list already, which a SUB does not restart.
     pub(crate) fn announce_topic<H: Host>(
         &mut self,
         h: &mut H,
@@ -257,7 +411,7 @@ impl Topics {
     ) {
         if let Some(st) = self.topics.get_mut(topic) {
             if let Some(f) = fresh {
-                st.stale.insert(*f);
+                st.stale.entry(*f).or_insert(0);
             }
             announce(
                 h,
@@ -285,18 +439,18 @@ impl Topics {
         if st.subs.contains_key(from) || st.pubs.len() >= PUBS_MAX || !st.pubs.insert(*from) {
             return;
         }
-        st.stale.insert(*from);
+        st.stale.insert(*from, 0);
         flush_stale(h, &mut self.scratch, &mut self.owed, topic, st, Some(from), self.inc);
     }
 
-    /// The stream of `peer` has room again: send it the whole list of every topic it is stale in. A peer no stream
-    /// refused a list costs a lookup in `owed`, not a walk of the topic table.
+    /// The stream of `peer` has room again: send it the rest of the whole list of every topic it is stale in, from its
+    /// place. A peer no stream refused a list costs a lookup in `owed`, not a walk of the topic table.
     pub(crate) fn subs_writable<H: Host>(&mut self, h: &mut H, peer: &NodeId) {
         if !self.owed.remove(peer) {
             return;
         }
         for (k, st) in &mut self.topics {
-            if st.stale.contains(peer) {
+            if st.stale.contains_key(peer) {
                 flush_stale(h, &mut self.scratch, &mut self.owed, k, st, Some(peer), self.inc);
             }
         }
@@ -361,7 +515,7 @@ impl Topics {
                 if wire::build(&mut self.scratch, ty::RESTORED, k, &[]).is_ok() {
                     h.send(member, Lane::Reply, &self.scratch);
                 }
-                st.stale.insert(*member);
+                st.stale.insert(*member, 0);
                 announce(
                     h,
                     &mut self.scratch,
@@ -419,9 +573,10 @@ impl Topics {
         }
     }
 
-    /// A SUBS frame. A hub answers a recipient's ASK with the whole list, and keeps another hub's local set (always
-    /// whole) and tells its own recipients what changed in the union. A member replaces its list with a whole one and
-    /// remembers which hub sent it and its version; it applies a delta only from that hub and only on the version it
+    /// A SUBS frame. A hub answers a recipient's ASK with the whole list, and keeps another hub's local set (once all
+    /// its pieces came) and tells its own recipients what changed in the union. A member replaces its list with a whole
+    /// one (the pieces of one version, gathered per hub, never a part of it) and remembers which hub sent it and its
+    /// version; it applies a delta only from that hub and only on the version it
     /// holds. A delta on any other base means the member missed a change: it applies nothing, waits for a whole list
     /// (deltas meanwhile are ignored) and asks the hub for one.
     pub(crate) fn on_subs<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], rest: &[u8]) {
@@ -434,8 +589,9 @@ impl Topics {
         }
     }
 
-    /// [`Topics::on_subs`] but the trace: why the frame changed nothing, if it did not. Every field the sender
-    /// controls is checked before any state changes; an off-base change still asks for the whole list.
+    /// [`Topics::on_subs`] but the trace: why the frame changed nothing, if it did not (a piece that is not the last
+    /// changes nothing and is not traced). Every field the sender controls is checked before any state changes; an
+    /// off-base change and a piece out of order still ask for the whole list.
     fn take_subs<H: Host>(&mut self, h: &mut H, from: &NodeId, topic: &[u8], rest: &[u8]) -> Option<SubsDrop> {
         let Some((kind, rest)) = rest.split_first() else {
             return Some(SubsDrop::Malformed);
@@ -445,89 +601,124 @@ impl Topics {
             let Some(st) = self.topics.get_mut(topic).filter(|st| is_hub && is_recipient(st, from)) else {
                 return Some(SubsDrop::NotRecipient);
             };
-            st.stale.insert(*from);
+            st.stale.insert(*from, 0);
             flush_stale(h, &mut self.scratch, &mut self.owed, topic, st, Some(from), self.inc);
             return None;
         }
         if !self.is_boot(from) {
             return Some(SubsDrop::NotHub);
         }
-        let parsed = read_ver(rest).and_then(|(ver, r)| read_ids(r).map(|(ids, tail)| (ver, ids, tail)));
-        let Some((ver, ids, tail)) = parsed else {
+        let Some((ver, rest)) = read_ver(rest) else {
+            return Some(SubsDrop::Malformed);
+        };
+        if *kind == FULL {
+            return self.take_piece(h, from, topic, ver, rest);
+        }
+        let Some((ids, tail)) = read_ids(rest) else {
             return Some(SubsDrop::Malformed);
         };
         let rem = read_ids(tail).map(|(rem, _)| rem);
-        let (is_hub, inc, me) = (self.is_hub, self.inc, self.me);
-        if !(*kind == FULL || (*kind == DELTA && !is_hub && rem.is_some())) {
+        let Some(rem) = rem.filter(|_| *kind == DELTA && !self.is_hub) else {
             return Some(SubsDrop::Malformed);
-        }
+        };
         if !self.ensure_topic(topic) {
             return Some(SubsDrop::TopicsFull);
         }
-        let (max, primary) = (self.limits.max_subscribers, self.primary);
+        let (max, primary, me) = (self.limits.max_subscribers, self.primary, self.me);
         let st = self.topics.get_mut(topic)?;
-        match (*kind, rem) {
-            (FULL, _) if is_hub => {
-                let e = st.rsubs.entry(*from).or_default();
-                e.clear();
-                e.extend(ids.iter().take(max).copied());
-                tell_members(
-                    h,
-                    &mut self.scratch,
-                    &mut self.nodes,
-                    &mut self.owed,
-                    topic,
-                    st,
-                    max,
-                    inc,
-                );
-                None
-            }
-            (FULL, _) => {
-                st.peers.clear();
-                st.peers.extend(ids.iter().take(max).copied());
-                st.peers_cut = ids.len() > max;
+        // A change from the primary after a late whole list of another hub: the primary is the source, whatever the
+        // list came from, so the member asks it for its whole list.
+        if st.peers_from != Some(*from) {
+            if primary == Some(*from) {
                 st.peers_from = Some(*from);
-                st.peers_ver = Some(ver);
-                st.drop_covered_hints();
-                confirm(h, st, from, topic, &me);
-                None
+                st.peers_ver = None;
+                ask(h, &mut self.scratch, from, topic);
             }
-            // A change from the primary after a late whole list of another hub: the primary is the source, whatever
-            // the list came from, so the member asks it for its whole list.
-            _ if st.peers_from != Some(*from) => {
-                if primary == Some(*from) {
+            return Some(SubsDrop::OtherHub);
+        }
+        // Not newer than the version held: a late frame of an old session, nothing to apply or to ask for.
+        if st
+            .peers_ver
+            .is_some_and(|(e, s)| e == ver.0 && s.wrapping_sub(ver.1) < 1 << 31)
+        {
+            return Some(SubsDrop::Old);
+        }
+        // A removal of an id the member holds, from a list cut below the hub's, brings an id the member never saw into
+        // the hub's cut: only the whole list tells which. (An id past the cut changes nothing here.)
+        if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1)))
+            && !(st.peers_cut && rem.iter().any(|r| st.peers.binary_search(r).is_ok()))
+        {
+            st.peers_cut |= apply(&mut st.peers, ids, rem, max);
+            st.peers_ver = Some(ver);
+            st.drop_covered_hints();
+            confirm(h, st, from, topic, &me);
+            return None;
+        }
+        // A missed change: the member waits for a whole list and asks once; changes meanwhile are dropped.
+        if st.peers_ver.take().is_some() {
+            ask(h, &mut self.scratch, from, topic);
+        }
+        Some(SubsDrop::OffBase)
+    }
+
+    /// A piece of a whole list, `rest` being what follows its version: gathered per sending hub, and acted on only when
+    /// the list is whole.
+    fn take_piece<H: Host>(
+        &mut self,
+        h: &mut H,
+        from: &NodeId,
+        topic: &[u8],
+        ver: Ver,
+        rest: &[u8],
+    ) -> Option<SubsDrop> {
+        let Some((first, total, ids)) = read_piece(rest) else {
+            return Some(SubsDrop::Malformed);
+        };
+        if !self.ensure_topic(topic) {
+            return Some(SubsDrop::TopicsFull);
+        }
+        let (is_hub, inc, me, max) = (self.is_hub, self.inc, self.me, self.limits.max_subscribers);
+        let st = self.topics.get_mut(topic)?;
+        match gather(&mut st.parts, from, ver, first, total, ids, max) {
+            Gathered::Partial => None,
+            Gathered::Gap { ask: wanted } => {
+                // A hub keeps the last whole list of the other hub and asks for nothing.
+                if !is_hub {
+                    if st.peers_from == Some(*from) {
+                        st.peers_ver = None;
+                    }
+                    if wanted {
+                        ask(h, &mut self.scratch, from, topic);
+                    }
+                }
+                Some(SubsDrop::Gap)
+            }
+            Gathered::Whole(whole) => {
+                let list = whole.as_deref().unwrap_or(ids);
+                if is_hub {
+                    let e = st.rsubs.entry(*from).or_default();
+                    e.clear();
+                    e.extend(list.iter().take(max).copied());
+                    tell_members(
+                        h,
+                        &mut self.scratch,
+                        &mut self.nodes,
+                        &mut self.owed,
+                        topic,
+                        st,
+                        max,
+                        inc,
+                    );
+                } else {
+                    st.peers.clear();
+                    st.peers.extend(list.iter().take(max).copied());
+                    st.peers_cut = usize::from(total) > max;
                     st.peers_from = Some(*from);
-                    st.peers_ver = None;
-                    ask(h, &mut self.scratch, from, topic);
+                    st.peers_ver = Some(ver);
+                    st.drop_covered_hints();
+                    confirm(h, st, from, topic, &me);
                 }
-                Some(SubsDrop::OtherHub)
-            }
-            // Not newer than the version held: a late frame of an old session, nothing to apply or to ask for.
-            _ if st
-                .peers_ver
-                .is_some_and(|(e, s)| e == ver.0 && s.wrapping_sub(ver.1) < 1 << 31) =>
-            {
-                Some(SubsDrop::Old)
-            }
-            // A removal of an id the member holds, from a list cut below the hub's, brings an id the member never saw
-            // into the hub's cut: only the whole list tells which. (An id past the cut changes nothing here.)
-            (_, Some(rem))
-                if st.peers_ver == Some((ver.0, ver.1.wrapping_sub(1)))
-                    && !(st.peers_cut && rem.iter().any(|r| st.peers.binary_search(r).is_ok())) =>
-            {
-                st.peers_cut |= apply(&mut st.peers, ids, rem, max);
-                st.peers_ver = Some(ver);
-                st.drop_covered_hints();
-                confirm(h, st, from, topic, &me);
                 None
-            }
-            _ => {
-                // A missed change: the member waits for a whole list and asks once; changes meanwhile are dropped.
-                if st.peers_ver.take().is_some() {
-                    ask(h, &mut self.scratch, from, topic);
-                }
-                Some(SubsDrop::OffBase)
             }
         }
     }
@@ -572,11 +763,29 @@ fn read_ids(b: &[u8]) -> Option<(&[NodeId], &[u8])> {
     Some((ids.as_chunks::<32>().0, tail))
 }
 
+/// `first | total | count | ids` of a piece; `None` when it is short or names ids that cannot be in the list: more
+/// than `total` ranks, or no id in a list that has some.
+fn read_piece(b: &[u8]) -> Option<(u16, u16, &[NodeId])> {
+    let (first, rest) = b.split_first_chunk::<2>()?;
+    let (total, rest) = rest.split_first_chunk::<2>()?;
+    let (first, total) = (u16::from_be_bytes(*first), u16::from_be_bytes(*total));
+    let (ids, _) = read_ids(rest)?;
+    let end = usize::from(first) + ids.len();
+    (end <= usize::from(total) && (!ids.is_empty() || total == 0)).then_some((first, total, ids))
+}
+
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "tests assert"
+)]
 mod tests {
+    use alloc::collections::BTreeMap;
     use alloc::vec::Vec;
 
-    use super::{apply, delta};
+    use super::{Gathered, apply, delta, gather};
     use vinc_membership::NodeId;
 
     fn id(n: u8) -> NodeId {
@@ -605,5 +814,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every split of a list of 10 into non-empty pieces, fed in order, is a whole list only at the last piece, and the
+    /// list is the first `max` ids with the cut known from the total. A piece out of order breaks the gathering once.
+    #[test]
+    fn pieces_gather_to_the_list_cut_at_max() {
+        let (hub, ver) = (id(200), (7, 3));
+        let all: Vec<NodeId> = (0..10).map(id).collect();
+        for max in [4usize, 10, 64] {
+            for cuts in 0u16..1024 {
+                let mut parts = BTreeMap::new();
+                let mut at = 0usize;
+                let mut got = None;
+                while at < 10 {
+                    let len = (1..=10 - at)
+                        .find(|n| at + n == 10 || cuts & (1 << (at + n)) != 0)
+                        .unwrap();
+                    let piece = &all[at..at + len];
+                    let r = gather(&mut parts, &hub, ver, at as u16, 10, piece, max);
+                    at += len;
+                    if at < 10 {
+                        assert_eq!(r, Gathered::Partial, "a piece that is not the last");
+                    } else if len == 10 {
+                        assert_eq!(r, Gathered::Whole(None), "one piece is the list itself");
+                    } else {
+                        got = Some(r);
+                    }
+                }
+                if let Some(r) = got {
+                    assert_eq!(r, Gathered::Whole(Some(all.iter().take(max).copied().collect())));
+                }
+                assert!(parts.is_empty(), "a whole list leaves no gathering");
+            }
+        }
+
+        let mut parts = BTreeMap::new();
+        assert_eq!(gather(&mut parts, &hub, ver, 0, 10, &all[..3], 64), Gathered::Partial);
+        // A piece that skips ranks, the rest of that version, and a piece of another version all break it once.
+        assert_eq!(
+            gather(&mut parts, &hub, ver, 5, 10, &all[5..8], 64),
+            Gathered::Gap { ask: true }
+        );
+        assert_eq!(
+            gather(&mut parts, &hub, ver, 3, 10, &all[3..6], 64),
+            Gathered::Gap { ask: false }
+        );
+        // A first piece starts over.
+        assert_eq!(gather(&mut parts, &hub, ver, 0, 10, &all[..3], 64), Gathered::Partial);
+        assert_eq!(
+            gather(&mut parts, &hub, (7, 4), 3, 10, &all[3..6], 64),
+            Gathered::Gap { ask: true }
+        );
+        // A piece of a list whose first piece never came.
+        assert_eq!(
+            gather(&mut parts, &id(201), ver, 3, 10, &all[3..6], 64),
+            Gathered::Gap { ask: true }
+        );
+        // Two hubs gather apart.
+        assert_eq!(gather(&mut parts, &hub, ver, 0, 10, &all[..3], 64), Gathered::Partial);
+        assert_eq!(
+            gather(&mut parts, &id(201), ver, 0, 10, &all[..5], 64),
+            Gathered::Partial
+        );
+        assert_eq!(
+            gather(&mut parts, &hub, ver, 3, 10, &all[3..10], 64),
+            Gathered::Whole(Some(all.clone()))
+        );
     }
 }

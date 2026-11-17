@@ -278,6 +278,18 @@ fn inject(net: &mut Net, from: usize, to: usize, rest: &[u8]) -> Vec<SubsDrop> {
     why
 }
 
+/// A SUBS piece payload: kind 0, the version, the rank of the first id, the length of the whole list, the ids.
+fn piece(ver: (u64, u32), first: u16, total: u16, ids: &[NodeId]) -> Vec<u8> {
+    let mut b = vec![0u8];
+    b.extend_from_slice(&ver.0.to_be_bytes());
+    b.extend_from_slice(&ver.1.to_be_bytes());
+    b.extend_from_slice(&first.to_be_bytes());
+    b.extend_from_slice(&total.to_be_bytes());
+    b.extend_from_slice(&(ids.len() as u16).to_be_bytes());
+    b.extend_from_slice(ids.as_flattened());
+    b
+}
+
 /// A SUBS change payload: kind 1, the version, the added ids, the removed ids.
 fn change(ver: (u64, u32), add: &[NodeId]) -> Vec<u8> {
     let mut b = vec![1u8];
@@ -418,11 +430,7 @@ fn a_change_from_the_primary_after_a_late_list_from_the_old_hub_makes_the_member
     // The member moves to hub 1, which sends it the whole list; then a late whole list of hub 0 arrives.
     net.set_primary(2, 1);
     net.pump();
-    let mut late = vec![0u8];
-    late.extend_from_slice(&[0; 8]);
-    late.extend_from_slice(&1u32.to_be_bytes());
-    late.extend_from_slice(&1u16.to_be_bytes());
-    late.extend_from_slice(&net.id(2));
+    let late = piece((0, 1), 0, 1, &[net.id(2)]);
     assert!(inject(&mut net, 0, 2, &late).is_empty());
     // Hub 0 no longer tells the member anything; a change at hub 1 reaches it.
     net.filter = Some(Box::new(|from, to, bytes| {
@@ -563,11 +571,7 @@ fn an_exact_duplicate_of_a_change_is_ignored_and_a_late_older_list_is_repaired_b
     assert_eq!(net.nodes[2].t.known_subscribers(T), held.as_slice());
 
     // A whole list of an earlier version of the same life: the member takes it.
-    let mut old = vec![0u8];
-    old.extend_from_slice(&inc.to_be_bytes());
-    old.extend_from_slice(&1u32.to_be_bytes());
-    old.extend_from_slice(&1u16.to_be_bytes());
-    old.extend_from_slice(&net.id(1));
+    let old = piece((inc, 1), 0, 1, &[net.id(1)]);
     assert!(inject(&mut net, 0, 2, &old).is_empty());
     assert_eq!(net.nodes[2].t.known_subscribers(T), [net.id(1)].as_slice());
     net.publish(2, T, b"live");

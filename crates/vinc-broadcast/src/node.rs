@@ -23,6 +23,7 @@ use crate::consts::{
 use crate::event::Trace;
 use crate::floors::{Gather, SentFloors};
 use crate::log::HubLog;
+use crate::subs::Part;
 use crate::table::Seen;
 
 /// The size limits of a node. The defaults suit small messages; raise `max_body` (and `log_bytes` with it) for a
@@ -72,7 +73,6 @@ impl Limits {
         self.max_topics > 0
             && self.max_subscribers > 0
             && self.reach_bytes >= crate::consts::REACH_RECORD_BASE
-            && u16::try_from(self.max_subscribers).is_ok()
             && u32::try_from(self.max_body).is_ok()
             && self.max_body.saturating_add(crate::wire::MAX_HEAD) <= self.log_bytes
     }
@@ -105,6 +105,8 @@ pub enum StartError {
     KeyMismatch,
     /// The limits are unusable: a body (with its head) larger than the log ring, or a zero table.
     InvalidLimits,
+    /// `max_subscribers` is above 65,535, the most ids one subscriber list can count.
+    TooManySubscribers,
 }
 
 impl core::fmt::Display for StartError {
@@ -115,6 +117,7 @@ impl core::fmt::Display for StartError {
             Self::InvalidLimits => {
                 "the limits are unusable: the log must hold a full message and no table may be empty"
             }
+            Self::TooManySubscribers => "max_subscribers is above 65,535, the most ids one subscriber list can count",
         })
     }
 }
@@ -190,8 +193,10 @@ pub(crate) struct Topic {
     pub(crate) told: Vec<NodeId>,
     /// Hub: the number of `told`, raised by one at every change; with the incarnation it is the list's version.
     pub(crate) told_seq: u32,
-    /// Hub: recipients that may not hold `told`, owed the whole list.
-    pub(crate) stale: BTreeSet<NodeId>,
+    /// Hub: recipients that may not hold `told`, owed the whole list, each with the number of the next piece to send.
+    pub(crate) stale: BTreeMap<NodeId, u16>,
+    /// Member, or a hub for the other hubs: the pieces gathered so far of the list each hub is sending.
+    pub(crate) parts: BTreeMap<NodeId, Part>,
     /// Hub: the message log.
     pub(crate) log: Option<HubLog>,
     /// Hub: the subscribers whose stream had no room, each with its place in the log (see [`Behind`]). Such a
@@ -225,7 +230,8 @@ impl Topic {
             hints: Vec::new(),
             told: Vec::new(),
             told_seq: 0,
-            stale: BTreeSet::new(),
+            stale: BTreeMap::new(),
+            parts: BTreeMap::new(),
             log: None,
             behind: BTreeMap::new(),
             forgot: None,
@@ -370,7 +376,8 @@ impl Topics {
     /// Start a node at `now` (monotonic) with the wall clock `wall_ms`. `key` is the node's signing key.
     ///
     /// # Errors
-    /// [`StartError`] for too many hubs or a key that is not the node's.
+    /// [`StartError`] for too many hubs, a key that is not the node's, `max_subscribers` above 65,535, or limits that
+    /// cannot carry one message or leave a table empty.
     pub fn start(
         cfg: &Config<'_>,
         key: alloc::boxed::Box<Keypair>,
@@ -385,6 +392,9 @@ impl Topics {
         }
         if hubs.len() > vinc_membership::consts::MAX_HUBS {
             return Err(StartError::TooManyHubs);
+        }
+        if u16::try_from(cfg.limits.max_subscribers).is_err() {
+            return Err(StartError::TooManySubscribers);
         }
         if !cfg.limits.valid() {
             return Err(StartError::InvalidLimits);

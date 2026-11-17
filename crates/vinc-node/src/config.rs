@@ -58,9 +58,9 @@ pub(crate) const GONE_TTL: Nanos = 600 * S;
 /// The close code of a refusal (a denied or revoked node).
 pub(crate) const DENIED: u64 = vinc_membership::session::DENIED_CODE;
 
-/// The default protocol id of the hub stream. Its second name: the subscriber list moved to a new layout, so a node
-/// and a hub that speak the first name do not connect to this build.
-pub const HUB_ALPN: &[u8] = b"vinc/hub/2";
+/// The default protocol id of the hub stream. Its third name: the subscriber list moved to pieces of at most 128 ids,
+/// so a node and a hub that speak an earlier name do not connect to this build.
+pub const HUB_ALPN: &[u8] = b"vinc/hub/3";
 /// The protocol id of the values layer.
 pub const VALUES_ALPN: &[u8] = b"vinc/values";
 /// The protocol id of the reconcile layer.

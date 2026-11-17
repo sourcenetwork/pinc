@@ -621,13 +621,14 @@ fn an_unknown_alpn_is_refused() {
     });
 }
 
-/// The subscriber list is sent as changes since the hub protocol's second name: a hub that offers only the first name
-/// speaks the old layout, so a node of this build is refused at the handshake and never exchanges a list with it.
+/// The subscriber list is sent in pieces since the hub protocol's third name: a hub that offers only the second name
+/// speaks the layout of whole lists and changes (a piece read as one of those would take its first rank for a count), so
+/// a node of this build is refused at the handshake and never exchanges a list with it.
 #[test]
-fn a_hub_that_offers_only_the_old_hub_protocol_name_is_refused() {
+fn a_hub_that_offers_only_the_second_hub_protocol_name_is_refused() {
     big_stack(|| {
         let mut w = World::new(IdentityAlg::Ed25519, IdentityAlg::Ed25519, false, false);
-        w.r_alpns = vec![b"vinc/hub"];
+        w.r_alpns = vec![b"vinc/hub/2"];
         let dial = w.dial();
         let mut i = w.initiator_with(dial, vinc_node::HUB_ALPN, false, false);
         let mut r = w.responder();

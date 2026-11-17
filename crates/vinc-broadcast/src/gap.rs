@@ -324,7 +324,7 @@ impl Topics {
         // caught up.
         let mut listed = false;
         if self.lagging.contains(from) {
-            let stale = |t: &Self| t.topics.get(topic).is_some_and(|st| st.stale.contains(from));
+            let stale = |t: &Self| t.topics.get(topic).is_some_and(|st| st.stale.contains_key(from));
             let was = stale(self);
             self.peer_writable(h, now, from);
             listed = was && !stale(self);

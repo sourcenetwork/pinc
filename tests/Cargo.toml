@@ -1419,3 +1419,7 @@ path = "layers_dtn_wake.rs"
 [[test]]
 name = "broadcast_subs"
 path = "broadcast_subs.rs"
+
+[[test]]
+name = "broadcast_subs_pieces"
+path = "broadcast_subs_pieces.rs"

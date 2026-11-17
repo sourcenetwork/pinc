@@ -39,8 +39,10 @@ pub mod ty {
     /// A message pushed straight to a subscriber over a member session.
     pub const MEMBER_PUSH: u8 = 17;
     /// The subscribers of a topic, replicated by the hubs, `version` being the hub's incarnation (8 bytes) and the
-    /// list's number (4): `0 | version | count | ids` (the whole list), `1 | version | count | added ids | count |
-    /// removed ids` (the change from the version before), or `2` from a member (send me the whole list).
+    /// list's number (4): `0 | version | first | total | count | ids` (the ids of ranks `first` to `first + count - 1`
+    /// of a list of `total` ids: a piece of the whole list, at most 128 ids; a list is one piece or several in order),
+    /// `1 | version | count | added ids | count | removed ids` (the change from the version before), or `2` from a
+    /// member (send me the whole list).
     pub const SUBS: u8 = 18;
     /// A hub tells a member its held subscriptions of a topic are live again.
     pub const RESTORED: u8 = 19;
