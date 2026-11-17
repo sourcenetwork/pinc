@@ -238,3 +238,34 @@ pub fn all_layers(seed: u64, until: Time) -> LWorld {
     w.run(until);
     w
 }
+
+/// A member with the values layer enabled and nothing else.
+pub fn values_on(tag: u8) -> LayerApps {
+    LayerApps::new(
+        tag,
+        Enabled {
+            values: true,
+            ..Enabled::NONE
+        },
+    )
+}
+
+/// `len` bytes drawn from `seed`.
+pub fn data(seed: u64, len: usize) -> Vec<u8> {
+    let mut v = vec![0; len];
+    SplitMix64::new(seed).fill(&mut v);
+    v
+}
+
+/// The node ids of `nodes`.
+pub fn ids(w: &LWorld, nodes: &[SimId]) -> Vec<[u8; 32]> {
+    nodes.iter().map(|n| w.id(*n)).collect()
+}
+
+/// How many fetches completed on node `n`.
+pub fn completes(w: &LWorld, n: SimId) -> usize {
+    w.node_events(n)
+        .iter()
+        .filter(|(_, e)| matches!(e, NodeEvent::ValueComplete { .. }))
+        .count()
+}

@@ -545,15 +545,9 @@ where
         );
     }
 
-    /// Bytes or the end arrived on a stream of the values protocol.
+    /// Bytes or the end arrived on a stream of the values protocol. A stream the layer does not hold (it finished and
+    /// was dropped, and this is a late frame) does nothing: a request is registered only when the peer opens it.
     pub(crate) fn values_readable(&mut self, now: Nanos, session: SessionId, stream: StreamId) {
-        let known = self
-            .vals
-            .as_deref()
-            .is_some_and(|v| v.net.lid_of(session, stream).is_some());
-        if !known {
-            self.values_stream_opened(now, session, stream);
-        }
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };

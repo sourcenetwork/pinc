@@ -12,38 +12,11 @@
 
 mod layers_common;
 
-use layers_common::{LWorld, big, secs};
+use layers_common::{LWorld, big, completes, data, ids, secs, values_on};
+use vinc_node::NodeEvent;
 use vinc_node::trace::{Body, NodeTrace};
-use vinc_node::{Enabled, NodeEvent};
-use vinc_sim::{Loss, MS, NodeId as SimId};
-use vinc_tests::{LayerApps, Lie, NCmd, SplitMix64};
-
-fn values_on(tag: u8) -> LayerApps {
-    LayerApps::new(
-        tag,
-        Enabled {
-            values: true,
-            ..Enabled::NONE
-        },
-    )
-}
-
-fn data(seed: u64, len: usize) -> Vec<u8> {
-    let mut v = vec![0; len];
-    SplitMix64::new(seed).fill(&mut v);
-    v
-}
-
-fn ids(w: &LWorld, nodes: &[SimId]) -> Vec<[u8; 32]> {
-    nodes.iter().map(|n| w.id(*n)).collect()
-}
-
-fn completes(w: &LWorld, n: SimId) -> usize {
-    w.node_events(n)
-        .iter()
-        .filter(|(_, e)| matches!(e, NodeEvent::ValueComplete { .. }))
-        .count()
-}
+use vinc_sim::{LinkChange, Loss, MS, NodeId as SimId};
+use vinc_tests::{Lie, NCmd};
 
 fn fails(w: &LWorld, n: SimId) -> usize {
     w.node_events(n)
@@ -185,13 +158,8 @@ fn a_finished_fetch_gives_its_providers_back() {
     });
 }
 
-/// The longest the request stream of a finished fetch may take to give its provider back on a quiet net, in seconds:
-/// measured, the provider is free 136 s after the fetch started (the layer's session closing).
-const SETTLE: u64 = 150;
-
-/// A world in which node 0 fetched a 64 KiB value from node 1, stored it and, `SETTLE` seconds at most after the
-/// fetch started, held no provider again; returns the world, the root, the length, the provider ids and the second
-/// the net reached.
+/// A world in which node 0 fetched a 64 KiB value from node 1 and stored it, and holds no provider at the second the
+/// first completion is seen; returns the world, the root, the length, the provider ids and that second.
 fn stored_value(seed: u64) -> (LWorld, [u8; 32], u64, Vec<[u8; 32]>, u64) {
     let mut w = LWorld::build_with(seed, 2, 3, 8_000_000, false, values_on);
     let m = w.members.clone();
@@ -209,16 +177,69 @@ fn stored_value(seed: u64) -> (LWorld, [u8; 32], u64, Vec<[u8; 32]>, u64) {
         },
     );
     let mut at = 30;
-    while w.sim.node(m[0]).node.values_stats().providers_in_use > 0 || completes(&w, m[0]) == 0 {
-        assert!(
-            at < 30 + SETTLE,
-            "the first fetch still holds a provider {SETTLE} s after it started"
-        );
+    while completes(&w, m[0]) == 0 {
+        assert!(at < 40, "the first fetch did not complete within ten seconds");
         at += 1;
         w.run(secs(at));
     }
     assert_eq!(completes(&w, m[0]), 1, "the first fetch completes and stores the value");
+    assert_eq!(
+        w.sim.node(m[0]).node.values_stats().providers_in_use,
+        0,
+        "nothing uses a provider once the fetch completed"
+    );
     (w, root, value.len() as u64, providers, at)
+}
+
+/// Node 0 fetches from node 1 twice; during the second fetch most datagrams from node 0 to node 1 are lost, so node 1
+/// retransmits what node 0 already read to the end. Returns, per seed, the providers in use on node 0 and on node 1
+/// once the net is quiet.
+fn late_frames(seeds: &[u64]) -> Vec<(u64, usize, usize)> {
+    let mut held = Vec::new();
+    for seed in seeds {
+        let mut w = LWorld::build_with(*seed, 2, 3, 8_000_000, false, values_on);
+        let m = w.members.clone();
+        let (a, b) = (data(*seed, 64 << 10), data(*seed + 100, 256 << 10));
+        let (ra, rb) = (w.provide(m[1], a.clone()), w.provide(m[1], b.clone()));
+        for (at, root, len) in [(30, ra, a.len()), (60, rb, b.len())] {
+            w.sim.command(
+                secs(at),
+                m[0],
+                NCmd::ValuesFetch {
+                    root,
+                    length: len as u64,
+                    ranges: vec![],
+                    providers: ids(&w, &m[1..2]),
+                },
+            );
+        }
+        // From just after the second request reached the provider, most datagrams on the path are lost for a second.
+        let lossy = LinkChange::Loss(Loss::Bernoulli(0.9));
+        w.sim.link_change(secs(60) + 6 * MS, m[0], m[1], lossy);
+        w.sim.link_change(secs(61), m[0], m[1], LinkChange::Loss(Loss::None));
+        w.run(secs(90));
+        assert_eq!(completes(&w, m[0]), 2, "seed {seed}: both fetches complete");
+        held.push((
+            *seed,
+            w.sim.node(m[0]).node.values_stats().providers_in_use,
+            w.sim.node(m[1]).node.values_stats().providers_in_use,
+        ));
+    }
+    held
+}
+
+#[test]
+fn a_late_frame_for_a_stream_the_fetch_read_to_the_end_holds_no_provider() {
+    // The acknowledgements of node 0 are lost, so node 1 retransmits the end of a response node 0 has read whole and
+    // dropped: a frame for a stream the layer no longer holds. It registers no request.
+    big(|| {
+        let held = late_frames(&[281, 282, 283, 284, 285, 286]);
+        assert!(
+            held.iter()
+                .all(|(_, fetcher, provider)| *fetcher == 0 && *provider == 0),
+            "(seed, providers in use on the fetcher, on the provider): {held:?}"
+        );
+    });
 }
 
 #[test]
