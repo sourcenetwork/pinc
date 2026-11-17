@@ -78,6 +78,18 @@ pub(crate) struct Net {
     pub(crate) provided: Provided,
 }
 
+/// The id for a new fetch after `last`: not 0 (the server's trace tag) and not the id of a fetch for which `running`
+/// is true. At most as many steps as there are running fetches plus two.
+pub(crate) fn next_fetch_id(last: u32, running: impl Fn(u32) -> bool) -> u32 {
+    let mut id = last;
+    loop {
+        id = id.wrapping_add(1);
+        if id != 0 && !running(id) {
+            return id;
+        }
+    }
+}
+
 impl Net {
     fn slot_of(&self, peer: &NodeId) -> Option<usize> {
         self.provs.iter().position(|s| s.is_some_and(|s| s.peer == *peer))
@@ -174,11 +186,12 @@ impl Net {
         Ok(got)
     }
 
-    /// A fetch started and holds `provs`: they are given back by [`Net::end_fetch`].
+    /// A fetch started and holds `provs`: they are given back by [`Net::end_fetch`]. The id is not one of a running
+    /// fetch ([`next_fetch_id`]); were it, both lists would be kept and given back together, never one early.
     pub(crate) fn begin_fetch(&mut self, fetch: u32, provs: Vec<Provider>) {
-        if let Some(old) = self.held.insert(fetch, provs) {
-            self.release_all(&old);
-        }
+        let held = self.held.entry(fetch).or_default();
+        debug_assert!(held.is_empty(), "a fetch id was handed out while the fetch was running");
+        held.extend(provs);
     }
 
     /// A fetch ended (finished, failed or cancelled): give back what it holds.
@@ -329,6 +342,25 @@ mod tests {
         // One slot is free now: the same fetch is served and takes it.
         assert_eq!(net.acquire_all(&[peer(TABLE_MAX as u32)]).unwrap(), vec![held[0]]);
         assert_eq!(net.refused(), 2);
+    }
+
+    #[test]
+    fn a_fetch_id_after_the_wrap_is_neither_zero_nor_one_that_is_running() {
+        assert_eq!(next_fetch_id(7, |_| false), 8);
+        assert_eq!(next_fetch_id(u32::MAX, |_| false), 1);
+        assert_eq!(next_fetch_id(u32::MAX, |id| id == 1), 2);
+        assert_eq!(next_fetch_id(u32::MAX - 1, |id| id == u32::MAX || id == 1), 2);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "handed out while the fetch was running")]
+    fn a_running_fetchs_id_is_never_begun_again() {
+        let mut net = Net::default();
+        let a = net.acquire(&peer(1)).unwrap();
+        net.begin_fetch(1, vec![a]);
+        let b = net.acquire(&peer(2)).unwrap();
+        net.begin_fetch(1, vec![b]);
     }
 
     #[test]

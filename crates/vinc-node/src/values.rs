@@ -44,7 +44,7 @@ use crate::layer::Layer;
 use crate::node::Node;
 use crate::trace::{Body, NodeTrace, tag};
 use crate::values_frames::{AHEAD_RUNS, EXT_MAX, head_sid, new_parts, stored_runs, with_sid};
-use crate::values_net::{Net, Owner, Pace};
+use crate::values_net::{Net, Owner, Pace, next_fetch_id};
 use crate::values_types::{FETCHES, ValuesError, ValuesRequest, ValuesStats};
 
 /// The most requests the server holds at once.
@@ -335,8 +335,8 @@ where
         let provs = v
             .net
             .acquire_all(req.providers.get(..MAX_PROVIDERS).unwrap_or(req.providers))?;
-        v.next_fetch = v.next_fetch.wrapping_add(1);
-        let fid = v.next_fetch;
+        let fid = next_fetch_id(v.next_fetch, |id| v.fetches.iter().any(|(f, _)| *f == id));
+        v.next_fetch = fid;
         let mut fetch = Box::new(Fetch::new());
         v.sink.fetch = fid;
         let spec = FetchSpec {
