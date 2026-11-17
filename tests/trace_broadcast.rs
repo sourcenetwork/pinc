@@ -151,7 +151,8 @@ impl World {
             );
             let ts = head.ts.wall.saturating_sub(WALL0) * 8 + u64::from(head.ts.counter.min(7));
             self.line(&format!(
-                "{{\"t\":\"bc\",\"op\":\"sign\",\"sig\":{sig},\"org\":{org},\"tid\":{t},\"mid\":{m},\"bid\":{bd},\"ts\":{ts},\"isb\":{}}}",
+                "{{\"t\":\"bc\",\"op\":\"sign\",\"sig\":{sig},\"org\":{org},\"tid\":{t},\"mid\":{m},\"bid\":{bd},\
+             \"ts\":{ts},\"isb\":{}}}",
                 head.isb
             ));
         }

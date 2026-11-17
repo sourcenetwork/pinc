@@ -1,7 +1,12 @@
 //! The id tables place ids by a keyed hash, so a sender cannot choose where its ids land; no walk is refused, a long
 //! one is counted, and a print kept beside an entry moves with its slot.
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests assert")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "tests assert"
+)]
 
 use super::*;
 
@@ -80,14 +85,36 @@ fn the_slot_depends_on_the_key_and_not_on_the_low_bits_of_the_id() {
     );
 }
 
+/// The home slot of `id` by the documented formula, in 128-bit arithmetic of the test's own: the keyed multiply of
+/// `id ^ seed` by the first secret, folded (low half xor high half); then the finishing multiply of that by the
+/// hasher's public constant, folded; the low bits of the result.
+fn home_by_formula(id: u64, seed: u64, first_secret: u64, slots: u64) -> u64 {
+    const PUBLIC: u64 = 0x8bb8_4b93_962e_acc9;
+    let fold = |a: u64, b: u64| {
+        let r = u128::from(a) * u128::from(b);
+        (r as u64) ^ ((r >> 64) as u64)
+    };
+    fold(fold(id ^ seed, first_secret), PUBLIC) & (slots - 1)
+}
+
 #[test]
 fn ids_are_placed_by_the_two_step_hash_of_the_endpoints_map_keys() {
-    let m = MidMap::with_capacity(8192, key(0x5eed));
-    let two_step = SeedableState::custom(0x5eed, &TEST_SECRETS);
-    for id in (0..1000u64).map(|i| i * 0x9e37_79b9 + 1) {
-        let want = usize::try_from(two_step.hash_one(id) & (m.keys.len() as u64 - 1)).unwrap();
-        assert_eq!(m.home(id), want, "id {id:#x}");
+    for seed in [0x5eed, 0] {
+        let m = MidMap::with_capacity(8192, key(seed));
+        let slots = m.keys.len() as u64;
+        for id in (0..64u64).map(|i| i.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ i) {
+            let want = home_by_formula(id, seed, TEST_SECRETS[0], slots);
+            assert_eq!(
+                u64::try_from(m.home(id)).unwrap(),
+                want,
+                "id {id:#x} under seed {seed:#x}"
+            );
+        }
     }
+    // Three answers worked out once and kept as literals.
+    let m = MidMap::with_capacity(8192, key(0x5eed));
+    assert_eq!((m.home(1), m.home(0xdead_beef)), (1155, 9858));
+    assert_eq!(MidMap::with_capacity(8192, key(0)).home(1), 3766);
 }
 
 #[test]

@@ -56,6 +56,8 @@ impl Topics {
             _ => true,
         };
         if !allowed {
+            // Counted but not traced: the proof trace's reasons are a closed list, and this return names no id.
+            self.rejects.note(Reject::NotAllowed);
             return;
         }
         let Ok((head, body)) = Head::parse(rest) else {

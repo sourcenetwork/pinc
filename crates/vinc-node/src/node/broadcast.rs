@@ -77,13 +77,14 @@ where
     }
 
     /// On a hub: what its adjacency table holds, what it refused and whether it is closed
-    /// ([`NodeEvent::ReachClosed`](crate::NodeEvent::ReachClosed)); on a member: how many adjacency records it signed. See
-    /// [`Topics::reach_stats`](vinc_broadcast::Topics::reach_stats).
+    /// ([`NodeEvent::ReachClosed`](crate::NodeEvent::ReachClosed)); on a member: how many adjacency records it signed.
+    /// See [`Topics::reach_stats`](vinc_broadcast::Topics::reach_stats).
     pub fn reach_stats(&self) -> ReachStats {
         self.topics.reach_stats()
     }
 
-    /// The access-control layer answered a broadcast check ([`NodeEvent::BroadcastAcpCheck`](crate::NodeEvent::BroadcastAcpCheck)).
+    /// The access-control layer answered a broadcast check
+    /// ([`NodeEvent::BroadcastAcpCheck`](crate::NodeEvent::BroadcastAcpCheck)).
     pub fn broadcast_acp_answer(&mut self, now: Nanos, id: u32, allow: bool) {
         self.begin(now);
         self.refresh_alive(now);

@@ -7,11 +7,11 @@
 //!
 //! A message id is chosen by the origin that sends it, so the map never places an id by its own bits: the home slot
 //! is a keyed hash of the id under the node's [`IdKey`], the endpoint's own map keys, which a sender cannot read.
-//! The hash has two steps, the keyed multiply and the hasher's finishing multiply, because the keyed multiply alone puts
-//! ids that form an arithmetic progression on slots that form one. It is a seeded hash that is not cryptographic.
-//! Nothing is refused for a long walk: the tables hold at most half their slots, so a walk reads at most one slot more than
-//! the table holds entries (8,193 for the dedupe set, 2,049 for a log index), whatever the placement. A walk of
-//! [`PROBE_LONG`] slots or more is counted, so a sender that did learn the key shows.
+//! The hash has two steps, the keyed multiply and the hasher's finishing multiply, because the keyed multiply alone
+//! puts ids that form an arithmetic progression on slots that form one. It is a seeded hash that is not
+//! cryptographic. Nothing is refused for a long walk: the tables hold at most half their slots, so a walk reads at
+//! most one slot more than the table holds entries (8,193 for the dedupe set, 2,049 for a log index), whatever the
+//! placement. A walk of [`PROBE_LONG`] slots or more is counted, so a sender that did learn the key shows.
 //!
 //! Invariants: the map never holds more than its capacity (an insert past it is refused); a value stored is never
 //! `u64::MAX`; the set's entries are in insertion order, which is time order because time only goes forward, so

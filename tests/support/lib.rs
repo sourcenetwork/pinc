@@ -201,7 +201,11 @@ pub static MAP_SECRETS: [u64; 7] = [
 ];
 
 /// The id key of a test node with `seed`, over [`MAP_SECRETS`].
-#[allow(clippy::unwrap_used, reason = "the secrets are fixed and nonzero")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::missing_panics_doc,
+    reason = "the secrets are fixed and nonzero"
+)]
 pub fn id_key(seed: u64) -> vinc_broadcast::IdKey {
     vinc_broadcast::IdKey::new(seed, &MAP_SECRETS).unwrap()
 }

@@ -275,6 +275,7 @@ impl HubLog {
 mod tests {
     use super::*;
 
+    #[allow(clippy::unwrap_used, reason = "the secrets are fixed and nonzero")]
     fn key() -> IdKey {
         IdKey::new(7, &crate::table::TEST_SECRETS).unwrap()
     }

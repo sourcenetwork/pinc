@@ -170,6 +170,9 @@ fn log_let_go() -> (Net, [u8; 8]) {
         net.publish(2, T, &[7u8; 1024]);
     }
     net.filter = None;
+    // The ring lets the oldest go first, so a log that holds fewer than the eleven messages published has let `mid` go.
+    let held = net.nodes[0].t.log_len(T);
+    assert!(held < 11, "the log let the first message go, yet it holds {held} of 11");
     (net, mid)
 }
 
@@ -235,6 +238,21 @@ fn a_long_run_is_delivered_stored_and_acknowledged() {
         net.nodes[0].t.reject_stats().long_walks() > 0,
         "the long walks are counted"
     );
+}
+
+/// A publish at a node that is not a hub is turned away and counted, though no record of it is traced.
+#[test]
+fn a_frame_from_a_sender_not_allowed_is_counted() {
+    let mut net = Net::new(ALG, 1, 2, SEC);
+    let first = tap_first(&mut net, 1);
+    net.publish(1, T, b"mine");
+    let rest = rest_of(&first.borrow().clone().unwrap());
+    let (now, from) = (net.now, net.id(1));
+    let before = net.nodes[2].t.reject_stats().count(Reject::NotAllowed);
+    let n = &mut net.nodes[2];
+    n.h.tick(now);
+    n.t.frame(&mut n.h, now, &from, ty::PUB, T, &rest);
+    assert_eq!(n.t.reject_stats().count(Reject::NotAllowed), before + 1);
 }
 
 /// The rejections are counted whether or not the node queues trace records.
