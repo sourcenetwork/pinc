@@ -230,7 +230,6 @@ AdvanceStep(x) ==
 
 (* ---- the script ---- *)
 \* ends every session of n at the live peers (code `code` as seen by the peer) and at n
-CloseSessions(x, n, code) == CloseSessionsBut(x, n, code, 0)
 \* the same, except that the close to `skip` is lost: that peer keeps its session
 CloseSessionsBut(x, n, code, skip) ==
     LET peers == Ordered({p \in Nodes : Pr(n, p) \in x.sess /\ p # skip}, NONE)
@@ -242,6 +241,7 @@ CloseSessionsBut(x, n, code, skip) ==
                              y3 == IF n \in y2.alive THEN CallAt(y2, n, LAMBDA S, e : CallDown(S, e, y2.now, p, Z)) ELSE y2
                          IN Go(y3, i + 1)
     IN Go(x, 1)
+CloseSessions(x, n, code) == CloseSessionsBut(x, n, code, 0)
 
 ScriptStep(x) ==
     LET en == Script[x.pc]
