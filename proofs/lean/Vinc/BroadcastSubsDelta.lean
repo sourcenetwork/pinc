@@ -33,6 +33,16 @@ makes the primary the source: the member drops its version and asks it for the w
 hub a frame came from, not about a list, so it is not stated here; the model has no primary (a change from another hub
 is ignored for good there).
 
+Pieces. A whole list travels as ordered pieces of a fixed number of ids, all at one version, each naming its rank
+`first` and the `total` of the list. A member gathers them per sending hub (`Part`, `gather` in the code) and never
+acts on a partial list (`recvPiece`): a piece that is the whole list is taken now; the first of more starts a
+gathering; a later piece joins only the unbroken gathering of the same version and total that has counted exactly
+`first` ids; anything else breaks the gathering, changes the list not at all, drops the version held when the sender is
+the list's hub (`own`) and asks the hub once per broken gathering. What must hold: any split of a list into non-empty
+pieces, fed in order, leaves the member holding the list cut at its limit at that version (`recv_pieces`); a piece that
+does not complete the list changes nothing the member holds (`recv_piece_partial`); a piece that does not follow the
+gathering takes nothing and asks once (`recv_piece_gap`).
+
 One limit in the model. `apply_delta` needs `new.length ≤ max` for the member's own limit; with the member's limit
 under its hub's the new list may be longer than `max`, and `recv_cut` is what keeps such a member right.
 -/
@@ -206,6 +216,191 @@ theorem recv_full (m : Member) (v : Nat × Nat) (list : List Nat) (max : Nat) (h
     recvFull m v list max = ⟨list, some v, false⟩ := by
   simp [recvFull, List.take_of_length_le hl, Nat.not_lt.2 hl]
 
+/-- What a member has gathered of one hub's pieces of a whole list (`Part` in subs.rs): the version and total of the
+list, how many ids it has counted, the ids kept (at most the member's limit), and whether a piece broke it. -/
+structure Part where
+  ver : Nat × Nat
+  total : Nat
+  got : Nat
+  ids : List Nat
+  broken : Bool
+
+/-- The SUBS piece arm of `on_subs` for a member (`gather` and the member's side of `take_subs`): the piece of ranks
+`first` to `first + ids.length` of a list of `total` ids at version `v`, from a hub whose gathering is `p`; `own` says
+the hub is the member's list's hub. The result is the member, the gathering, and whether the member asks the hub for
+the whole list. A piece that is the whole list replaces the member's list and version and drops the gathering; the
+first of more pieces starts the gathering and changes nothing else; a later piece joins the unbroken gathering of the
+same version and total that counted exactly `first` ids, and at the last piece the member takes the gathered list
+(cut at `max`, cut when `total` is above it) and version; any other piece breaks the gathering, drops the version the
+member holds when the hub is its own, and asks once per broken gathering. -/
+def recvPiece (own : Bool) (m : Member) (p : Option Part) (v : Nat × Nat) (first total : Nat) (ids : List Nat)
+    (max : Nat) : Member × Option Part × Bool :=
+  if first = 0 then
+    -- the first piece: the whole list, or the start of a gathering
+    if ids.length = total then (recvFull m v ids max, none, false)
+    else (m, some ⟨v, total, ids.length, ids.take max, false⟩, false)
+  else
+    -- a piece that does not follow: nothing is taken, the version held is dropped when the hub is the list's hub
+    let gapM : Member := if own then { m with ver := none } else m
+    let brk : Part := ⟨v, total, 0, [], true⟩
+    match p with
+    | none => (gapM, some brk, true)
+    | some q =>
+      if q.ver = v ∧ q.total = total then
+        if q.broken then (gapM, some q, false)
+        else if q.got = first then
+          -- it follows: keep the ids the limit has room for, count all of them
+          if q.got + ids.length < total then
+            (m, some ⟨v, total, q.got + ids.length, q.ids ++ ids.take (max - q.ids.length), false⟩, false)
+          else (⟨q.ids ++ ids.take (max - q.ids.length), some v, decide (max < total)⟩, none, false)
+        else (gapM, some brk, true)
+      else (gapM, some brk, true)
+
+/-- A piece of the right rank, version and total for an unbroken gathering is joined: the gathering counts it, or at
+the last piece the member takes the gathered list at the piece's version. -/
+theorem recvPiece_chain (own : Bool) (m : Member) (q : Part) (v : Nat × Nat) (first total max : Nat) (ids : List Nat)
+    (hf : first ≠ 0) (hv : q.ver = v) (ht : q.total = total) (hb : q.broken = false) (hg : q.got = first) :
+    recvPiece own m (some q) v first total ids max =
+      if first + ids.length < total then
+        (m, some ⟨v, total, first + ids.length, q.ids ++ ids.take (max - q.ids.length), false⟩, false)
+      else (⟨q.ids ++ ids.take (max - q.ids.length), some v, decide (max < total)⟩, none, false) := by
+  simp [recvPiece, hf, hv, ht, hb, hg]
+
+/-- A piece that does not complete the list changes nothing the member holds: its list, version and cut flag stay,
+it asks for nothing, and the gathering is kept. The piece is the first of more (rank 0, fewer ids than the total), or
+it follows an unbroken gathering and leaves ids still due. -/
+theorem recv_piece_partial (own : Bool) (m : Member) (p : Option Part) (v : Nat × Nat) (first total max : Nat)
+    (ids : List Nat)
+    (h : (first = 0 ∧ ids.length < total) ∨
+      ∃ q, p = some q ∧ first ≠ 0 ∧ q.ver = v ∧ q.total = total ∧ q.broken = false ∧ q.got = first ∧
+        first + ids.length < total) :
+    (recvPiece own m p v first total ids max).1 = m ∧ (recvPiece own m p v first total ids max).2.2 = false ∧
+      (recvPiece own m p v first total ids max).2.1.isSome = true := by
+  rcases h with ⟨h0, hl⟩ | ⟨q, rfl, hf, hv, ht, hb, hg, hl⟩
+  · have hne : ids.length ≠ total := Nat.ne_of_lt hl
+    simp [recvPiece, h0, hne]
+  · rw [recvPiece_chain own m q v first total max ids hf hv ht hb hg, if_pos hl]
+    simp
+
+/-- A later piece that does not follow takes nothing: the list and cut flag stay, the version is dropped when the hub
+is the list's hub, the gathering is broken at the piece's version and total, and the member asks the hub. This holds
+when the hub has no gathering, when it is of another version or total, and when it is unbroken but has not counted
+`first` ids. When the gathering is already broken at that version and total, the member asks nothing more. -/
+theorem recv_piece_gap (own : Bool) (m : Member) (p : Option Part) (v : Nat × Nat) (first total max : Nat)
+    (ids : List Nat) (hf : first ≠ 0) :
+    ((p = none ∨ ∃ q, p = some q ∧ (q.ver ≠ v ∨ q.total ≠ total ∨ (q.broken = false ∧ q.got ≠ first))) →
+      recvPiece own m p v first total ids max =
+        ((if own then { m with ver := none } else m), some ⟨v, total, 0, [], true⟩, true)) ∧
+    ((∃ q, p = some q ∧ q.ver = v ∧ q.total = total ∧ q.broken = true) →
+      recvPiece own m p v first total ids max = ((if own then { m with ver := none } else m), p, false)) := by
+  constructor
+  · rintro (rfl | ⟨q, rfl, h⟩)
+    · simp [recvPiece, hf]
+    · by_cases hv : q.ver = v
+      · by_cases ht : q.total = total
+        · rcases h with h | h | ⟨hb, hg⟩
+          · exact absurd hv h
+          · exact absurd ht h
+          · simp [recvPiece, hf, hv, ht, hb, hg]
+        · simp [recvPiece, hf, hv, ht]
+      · simp [recvPiece, hf, hv]
+  · rintro ⟨q, rfl, hv, ht, hb⟩
+    simp [recvPiece, hf, hv, ht, hb]
+
+/-- Feed the pieces `cs` of a list of `total` ids at version `v` in order to a member, from the rank `k`, through
+`recvPiece`; the result is the member and its gathering. -/
+def feed (own : Bool) (v : Nat × Nat) (total max : Nat) : Nat → Member → Option Part → List (List Nat) →
+    Member × Option Part
+  | _, m, p, [] => (m, p)
+  | k, m, p, c :: cs =>
+    let r := recvPiece own m p v k total c max
+    feed own v total max (k + c.length) r.1 r.2.1 cs
+
+/-- Keeping the first `max` ids of a gathering and then what room is left of a piece is cutting the joined list. -/
+theorem take_gather (acc c : List Nat) (max : Nat) :
+    acc.take max ++ c.take (max - (acc.take max).length) = (acc ++ c).take max := by
+  rw [List.take_append, List.length_take]
+  have h : max - min max acc.length = max - acc.length := by omega
+  rw [h]
+
+/-- Pieces that all hold ids and together hold none are no pieces. -/
+theorem rest_empty : ∀ cs : List (List Nat), (∀ c ∈ cs, c ≠ []) → cs.flatten.length = 0 → cs = []
+  | [], _, _ => rfl
+  | d :: ds, hne, h => by
+    have hd : d ≠ [] := hne d (List.mem_cons_self ..)
+    have hpos : 0 < d.length := Nat.pos_of_ne_zero (fun h0 => hd (List.eq_nil_of_length_eq_zero h0))
+    simp only [List.flatten_cons, List.length_append] at h
+    omega
+
+/-- Once a gathering of `acc` (not empty, not the whole list) is joined by the pieces `cs` in order, the member ends
+with the list `acc ++ cs.flatten` cut at `max`, at version `v`, uncut when the list fits, and no gathering. -/
+theorem feed_go (own : Bool) (v : Nat × Nat) (total max : Nat) :
+    ∀ (cs : List (List Nat)) (m : Member) (acc : List Nat),
+      (∀ c ∈ cs, c ≠ []) → cs ≠ [] → acc ≠ [] → (acc ++ cs.flatten).length = total →
+      feed own v total max acc.length m (some ⟨v, total, acc.length, acc.take max, false⟩) cs =
+        (⟨(acc ++ cs.flatten).take max, some v, decide (max < total)⟩, none) := by
+  intro cs
+  induction cs with
+  | nil => intro m acc _ h; exact absurd rfl h
+  | cons c cs ih =>
+    intro m acc hne _ hacc htot
+    have hc : c ≠ [] := hne c (List.mem_cons_self ..)
+    have hf : acc.length ≠ 0 := fun h => hacc (List.eq_nil_of_length_eq_zero h)
+    have hcpos : 0 < c.length := Nat.pos_of_ne_zero (fun h0 => hc (List.eq_nil_of_length_eq_zero h0))
+    have step := recvPiece_chain own m ⟨v, total, acc.length, acc.take max, false⟩ v acc.length total max c hf
+      rfl rfl rfl rfl
+    by_cases hlt : acc.length + c.length < total
+    · -- more pieces are due: this one joins, and the rest end the list
+      simp only [feed, step, hlt, ↓reduceIte]
+      have hcs : cs ≠ [] := by
+        rintro rfl
+        simp only [List.flatten_cons, List.flatten_nil, List.append_nil, List.length_append] at htot
+        omega
+      have := ih m (acc ++ c) (fun x hx => hne x (List.mem_cons_of_mem _ hx)) hcs (by simp [hacc])
+        (by simp only [List.length_append, List.flatten_cons] at htot ⊢; omega)
+      rw [take_gather acc c max, ← List.length_append, List.flatten_cons, ← List.append_assoc]
+      first | exact this | simpa [List.flatten_cons, List.append_assoc] using this
+    · -- this piece is the last: no piece follows
+      simp only [feed, step, hlt, ↓reduceIte]
+      rcases cs with _ | ⟨d, ds⟩
+      · simp only [feed, List.flatten_cons, List.flatten_nil, List.append_nil]
+        first | (rw [take_gather acc c max]; done) | (rw [take_gather acc c max]; rfl)
+      · exfalso
+        have hd : d ≠ [] := hne d (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+        have hpos : 0 < d.length := Nat.pos_of_ne_zero (fun h0 => hd (List.eq_nil_of_length_eq_zero h0))
+        simp only [List.flatten_cons, List.length_append] at htot
+        omega
+
+/-- Any split of a list `l` into non-empty pieces, fed in order from rank 0 to a member that holds nothing of the hub's
+pieces, leaves the member holding the list cut at its limit `max`, at version `v`, cut exactly when `l` is longer than
+`max`, with no gathering left: the member takes the list whole, as a one-piece FULL. -/
+theorem recv_pieces (own : Bool) (m : Member) (v : Nat × Nat) (max : Nat) (l : List Nat) (pcs : List (List Nat))
+    (hne : ∀ c ∈ pcs, c ≠ []) (hpcs : pcs ≠ []) (hl : pcs.flatten = l) :
+    feed own v l.length max 0 m none pcs = (⟨l.take max, some v, decide (max < l.length)⟩, none) := by
+  subst hl
+  rcases pcs with _ | ⟨c, cs⟩
+  · exact absurd rfl hpcs
+  · have hc : c ≠ [] := hne c (List.mem_cons_self ..)
+    have hrest : ∀ x ∈ cs, x ≠ [] := fun x hx => hne x (List.mem_cons_of_mem _ hx)
+    by_cases h0 : c.length = (c :: cs).flatten.length
+    · -- the first piece is the whole list
+      have hcs : cs = [] := by
+        apply rest_empty cs hrest
+        simp only [List.flatten_cons, List.length_append] at h0
+        omega
+      subst hcs
+      simp [feed, recvPiece, recvFull]
+    · -- the first of more pieces: a gathering starts, and the rest join it
+      have hcs : cs ≠ [] := by
+        rintro rfl
+        simp at h0
+      have step : recvPiece own m none v 0 (c :: cs).flatten.length c max =
+          (m, some ⟨v, (c :: cs).flatten.length, c.length, c.take max, false⟩, false) := by
+        rw [recvPiece, if_pos rfl, if_neg h0]
+      have := feed_go own v (c :: cs).flatten.length max cs m c hrest hcs hc (by simp)
+      simp only [feed, step, Nat.zero_add]
+      first | exact this | simpa [List.flatten_cons] using this
+
 #audit_axioms Vinc.BroadcastSubsDelta.recv_old
 #audit_axioms Vinc.BroadcastSubsDelta.recv_cut
 #audit_axioms Vinc.BroadcastSubsDelta.applyAll_delta
@@ -215,5 +410,8 @@ theorem recv_full (m : Member) (v : Nat × Nat) (list : List Nat) (max : Nat) (h
 #audit_axioms Vinc.BroadcastSubsDelta.delta_mem
 #audit_axioms Vinc.BroadcastSubsDelta.apply_delta
 #audit_axioms Vinc.BroadcastSubsDelta.eq_of_sorted_mem
+#audit_axioms Vinc.BroadcastSubsDelta.recv_pieces
+#audit_axioms Vinc.BroadcastSubsDelta.recv_piece_partial
+#audit_axioms Vinc.BroadcastSubsDelta.recv_piece_gap
 
 end Vinc.BroadcastSubsDelta
