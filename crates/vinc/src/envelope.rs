@@ -15,13 +15,14 @@
 //! Invariants: an envelope is one buffer, built once per delivered message; [`Envelope::from_bytes`] checks nothing, and
 //! every check is in [`verify`].
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 pub use vinc_broadcast::envelope::{EnvelopeError, Verified, verify_bytes as verify};
 
 /// The canonical bytes of a signed topic message: the topic, the origin's signed head and the payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Envelope(Vec<u8>);
+pub struct Envelope(Box<[u8]>);
 
 impl Envelope {
     /// The envelope of a message from its parts; one allocation.
@@ -29,12 +30,12 @@ impl Envelope {
         let parts = vinc_broadcast::envelope::Envelope::topic(topic, head, body);
         let mut bytes = Vec::with_capacity(parts.encoded_len());
         parts.encode_into(&mut bytes);
-        Self(bytes)
+        Self(bytes.into_boxed_slice())
     }
 
     /// An envelope read back from stored bytes. Nothing is checked here: [`verify`](Self::verify) does it.
-    pub const fn from_bytes(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(bytes.into_boxed_slice())
     }
 
     /// The canonical bytes, to store or to hand to anyone.

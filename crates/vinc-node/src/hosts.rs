@@ -12,6 +12,7 @@
 //! Invariants: no method blocks; a frame that no session took reports `false`, and so does a relayed probe for a
 //! member with no session or with the probe queue full.
 
+use alloc::boxed::Box;
 use vinc_broadcast::{Event as BcEvent, Host as BcHost, Lane, Topics};
 use vinc_membership::session::{Broadcast, Carrier, CloseReason, Evidence, Local, Nanos, Route, Session, StoreError};
 use vinc_membership::{Membership, NodeId};
@@ -207,7 +208,7 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
                 hop: *hop,
                 mid,
                 body: body.to_vec(),
-                head: head.to_vec(),
+                head: Box::from(head),
             },
             BcEvent::PublishAcked { mid } => NodeEvent::PublishAcked { mid },
             BcEvent::PublishGaveUp { mid } => NodeEvent::PublishGaveUp { mid },
