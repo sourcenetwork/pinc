@@ -587,3 +587,39 @@ fn a_late_key_answer_does_not_shorten_the_wait_for_the_peer_to_confirm() {
         assert_eq!(net.a.closed(), Some(CloseReason::Unconfirmed));
     });
 }
+
+#[test]
+fn a_responder_that_only_rejected_is_not_held_60_s() {
+    big_stack(|| {
+        // The responder answers the first message with a reject (it holds no such ticket, or no such prekey) and the
+        // dialer's next flight never arrives: a reject is not an answer to the handshake, so it ends at the 30 s
+        // connect limit, not at the 60 s an answered responder holds.
+        for short in [false, true] {
+            let mut w = World::new(IdentityAlg::Ed25519);
+            let ticket = if short {
+                None
+            } else {
+                let mut tickets = first_session(&mut w);
+                let ticket = tickets.take(&w.rp.id.node_id(), ALPN, T0).unwrap();
+                *w.stores = Stores::default();
+                Some(ticket)
+            };
+            w.short = short;
+            let (mut sa, mut sb) = (Store::new(true), Store::new(false));
+            let a = w.client(&mut sa, ticket, vinc_security::ClientTickets::new());
+            let b = w.server(&mut sb);
+            let mut net = Net::new(a, b, Link::new(57, Params::new(10 * MS)), &mut w.stores);
+            let t0 = net.now;
+            assert!(net.run(t0 + SEC, |n| !n.b.tx_log.is_empty()), "short {short}: no reject");
+            net.link.route(PathId(1)).up = false;
+            net.run(t0 + 29_900 * MS, |_| false);
+            assert_eq!(net.b.closed(), None, "short {short}: ended before the connect limit");
+            net.run(t0 + 30_100 * MS, |_| false);
+            assert_eq!(
+                net.b.closed(),
+                Some(CloseReason::HandshakeTimeout),
+                "short {short}: a responder that only rejected is held past the connect limit"
+            );
+        }
+    });
+}

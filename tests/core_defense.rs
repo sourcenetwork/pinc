@@ -12,14 +12,18 @@
     clippy::large_stack_arrays
 )]
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use vinc_core::{
     Answer, Command, Endpoint, EndpointConfig, Event, LEDGER_ENTRIES, MAX_HALF_OPEN, Query, Role, Slot, TraceEvent,
 };
 use vinc_crypto::identity::MAX_SIGNATURE_LEN;
-use vinc_crypto::{Drbg, IdentityAlg, Keypair, Software};
-use vinc_security::{ConnId, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys};
+use vinc_crypto::{Aead, Drbg, IdentityAlg, Keypair, Software};
+use vinc_security::message::{FULL_INITIAL_MIN, Initial, MessageType, PrekeyField, ResumeHello, SHORT_INITIAL_MIN};
+use vinc_security::{
+    AeadSet, ConnId, CreditRecord, Env, KeyHandle, KeyResponse, LocalIdentity, SoftKeys, SoftPrekeys, VERSION,
+};
 use vinc_tests::*;
 use vinc_transport::conn::{Resources, Tables};
 use vinc_transport::packet::{LongHeader, LongType};
@@ -650,5 +654,250 @@ fn datagrams_out_counts_the_datagrams_that_left_and_no_size_probe_is_built_for_a
             ns.held_by_ledger, held0,
             "the server built a size probe for an address the ledger holds"
         );
+    });
+}
+
+// ---- first packets the responder will reject take no half-open slot ----
+
+/// A long handshake datagram of at least `len` bytes (zero padded) that carries the whole `message` as its first
+/// fragment, as a dialer's first packet does.
+fn first_datagram(odcid: u64, message: &[u8], len: usize) -> Vec<u8> {
+    let dcid = ConnId::new(&odcid.to_be_bytes()).unwrap();
+    let mut head = [0u8; 16];
+    let mut w = Writer::new(&mut head);
+    w.put_varint(message.len() as u64).unwrap();
+    w.put_varint(0).unwrap();
+    let mut body = w.written().to_vec();
+    body.extend_from_slice(message);
+    let d = forge_packet(dcid, &body);
+    if d.len() >= len {
+        return d;
+    }
+    body.resize(body.len() + len - d.len(), 0);
+    forge_packet(dcid, &body)
+}
+
+/// A well-formed resumption Hello for a ticket nobody issued: random ticket id, key and binder.
+fn forged_hello(seed: u64) -> Vec<u8> {
+    let mut rng = SplitMix64::new(seed);
+    let (mut tid, mut e, mut binder) = ([0u8; 16], [0u8; 32], [0u8; 32]);
+    rng.fill(&mut tid);
+    rng.fill(&mut e);
+    rng.fill(&mut binder);
+    let cid = ConnId::new(&[1, 2, 3, 4]).unwrap();
+    let hello = ResumeHello {
+        version: VERSION,
+        dcid: cid,
+        scid: cid,
+        alpn: ALPN_A,
+        aead: Aead::ChaCha20Poly1305,
+        tid,
+        e,
+        binder,
+        credit: CreditRecord::NONE,
+    };
+    let mut buf = [0u8; 256];
+    let mut w = Writer::new(&mut buf);
+    hello.write(&mut w).unwrap();
+    w.written().to_vec()
+}
+
+/// A well-formed short Initial that names a prekey nobody sent: a random id.
+fn unknown_key_initial(seed: u64) -> Vec<u8> {
+    let mut rng = SplitMix64::new(seed);
+    let (mut e, mut key_id) = ([0u8; 32], [0u8; 32]);
+    rng.fill(&mut e);
+    rng.fill(&mut key_id);
+    let cid = ConnId::new(&[1, 2, 3, 4]).unwrap();
+    let initial = Initial {
+        version: VERSION,
+        dcid: cid,
+        scid: cid,
+        alpn: ALPN_A,
+        aead_offer: AeadSet::from_bits(1).unwrap(),
+        e,
+        prekey: PrekeyField::Hash(&key_id),
+        credit: CreditRecord::NONE,
+    };
+    let mut buf = [0u8; 256];
+    let mut w = Writer::new(&mut buf);
+    initial.write(&mut w).unwrap();
+    w.written().to_vec()
+}
+
+/// What the endpoint sent and received per address while `flood` fed it: `(bytes received, bytes sent with the 28
+/// bytes of headers each datagram carries)`.
+type Tally = HashMap<SocketAddr, (u64, u64)>;
+
+/// Feed the endpoint of `d` the datagram `make(i)` from its own address for each `i` of `ids`, taking what it sends
+/// after every datagram as a host does.
+fn flood(d: &mut Duo, ids: std::ops::Range<u64>, make: &dyn Fn(u64) -> Vec<u8>, tally: &mut Tally) {
+    let now = d.net.now;
+    let mut out = vec![0u8; 65_536];
+    for i in ids {
+        let mut dgram = make(i);
+        let from: SocketAddr = ([10, 1, (i >> 8) as u8, i as u8], 9).into();
+        tally.entry(from).or_default().0 += dgram.len() as u64;
+        d.srv.handle_datagram(now, d.addr, from, &mut dgram);
+        while let Some(t) = d.srv.poll_transmit(now, &mut out) {
+            for seg in out[..t.len].chunks(t.segment_size) {
+                tally.entry(t.remote).or_default().1 += seg.len() as u64 + 28;
+            }
+        }
+    }
+}
+
+/// Every forged address was sent at most three times what it sent.
+fn assert_within_three_times(tally: &Tally) {
+    for (addr, (rx, tx)) in tally {
+        assert!(*tx <= 3 * rx, "{addr} was sent {tx} bytes for {rx}");
+    }
+}
+
+#[test]
+fn ten_thousand_forged_resumption_hellos_leave_the_half_open_table_empty() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let mut tally = Tally::new();
+        // Half are 20-byte datagrams that start a Hello, half whole Hellos of a ticket nobody issued.
+        let hello = |i: u64| {
+            if i % 2 == 0 {
+                first_datagram(i + 1, &[6], 20)
+            } else {
+                first_datagram(i + 1, &forged_hello(i), 0)
+            }
+        };
+        flood(&mut d, 0..5_000, &hello, &mut tally);
+        assert_eq!(
+            d.srv.node_stats().half_open,
+            0,
+            "forged Hellos hold half-open slots: {:?}",
+            d.srv.node_stats()
+        );
+        // A genuine dial in the middle of the flood completes.
+        d.dial();
+        flood(&mut d, 5_000..10_000, &hello, &mut tally);
+        let ns = d.srv.node_stats();
+        assert_eq!((ns.half_open, ns.sessions), (0, 1), "{ns:?}");
+        assert_within_three_times(&tally);
+    });
+}
+
+#[test]
+fn ten_thousand_short_initials_with_unknown_keys_leave_the_half_open_table_empty() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let mut tally = Tally::new();
+        // Half are as small as a short Initial may be, half larger.
+        let short = |i: u64| {
+            let len = if i % 2 == 0 { SHORT_INITIAL_MIN } else { 900 };
+            first_datagram(i + 1, &unknown_key_initial(i), len)
+        };
+        flood(&mut d, 0..5_000, &short, &mut tally);
+        assert_eq!(
+            d.srv.node_stats().half_open,
+            0,
+            "short Initials of unknown keys hold half-open slots: {:?}",
+            d.srv.node_stats()
+        );
+        d.dial();
+        flood(&mut d, 5_000..10_000, &short, &mut tally);
+        let ns = d.srv.node_stats();
+        assert_eq!((ns.half_open, ns.sessions), (0, 1), "{ns:?}");
+        assert_within_three_times(&tally);
+    });
+}
+
+#[test]
+fn a_hello_with_a_wrong_binder_gets_no_answer_and_no_session_and_the_genuine_hello_resumes() {
+    big_stack(|| {
+        let mut d = Duo::new();
+        let first = d.dial();
+        d.hang_up(first);
+        // The next dial resumes; its flight is kept from the server for now.
+        let mark = d.net.captured.len();
+        let id = LocalIdentity::from_keypair(&d.host.kp, KeyHandle(1)).unwrap();
+        let (now, to) = (d.net.now, d.addr);
+        d.net.nodes[0]
+            .connect(now, id.node_id(), ALPN_A, to, Role::Other)
+            .unwrap();
+        d.net.run_for(10 * MS_NS);
+        d.taken = d.net.captured.len();
+        let flight: Vec<&[u8]> = d.net.captured[mark..]
+            .iter()
+            .filter(|c| c.1 == d.addr)
+            .map(|c| c.2.as_slice())
+            .collect();
+        let mut message = first_message(flight.iter().copied()).unwrap();
+        assert_eq!(MessageType::of(&message).unwrap(), MessageType::ResumeHello);
+        let dcid = LongHeader::parse(flight[0]).unwrap().0.dcid;
+        // The credit record ends the message and the binder covers it: the ticket opens, the binder does not.
+        *message.last_mut().unwrap() ^= 1;
+        let (sessions, now) = (d.srv.node_stats().sessions, d.net.now);
+        let x: SocketAddr = "10.9.9.9:1000".parse().unwrap();
+        d.srv.handle_datagram(now, d.addr, x, &mut forge_message(dcid, &message));
+        let mut out = vec![0u8; 65_536];
+        assert!(d.srv.poll_transmit(now, &mut out).is_none(), "a wrong binder was answered");
+        let ns = d.srv.node_stats();
+        assert_eq!((ns.half_open, ns.sessions), (0, sessions), "a wrong binder left a session: {ns:?}");
+        // The ticket is still there: the genuine Hello resumes.
+        let n = d.net.nodes[0].count(|e| matches!(e, Event::Connected { .. }));
+        d.taken = mark;
+        d.drive(300 * MS_NS);
+        assert_eq!(
+            d.net.nodes[0].count(|e| matches!(e, Event::Connected { .. })),
+            n + 1,
+            "the genuine resumption did not connect"
+        );
+        assert_eq!(d.srv.node_stats().half_open, 0);
+    });
+}
+
+/// The half-open session made at `now` by a first flight that never completes is there at `limit` and gone one tick
+/// past it.
+fn assert_ends_strictly_past(ep: &mut BigEp, addr: SocketAddr, now: u64, limit: u64, what: &str) {
+    feed(ep, addr, now, 9_000, craft(9_000, 1, FULL_INITIAL_MIN));
+    assert_eq!(ep.node_stats().half_open, 1, "{what}: no half-open session");
+    ep.handle_timeout(now + limit - 1);
+    assert_eq!(ep.node_stats().half_open, 1, "{what}: gone before the limit");
+    ep.handle_timeout(now + limit);
+    assert_eq!(ep.node_stats().half_open, 1, "{what}: gone at the limit itself");
+    ep.handle_timeout(now + limit + 1);
+    assert_eq!(ep.node_stats().half_open, 0, "{what}: still there one tick past the limit");
+}
+
+#[test]
+fn a_half_open_session_ends_strictly_past_30_s() {
+    big_stack(|| {
+        let now = 100 * SEC_NS;
+        let (mut ep, addr) = big_server(now);
+        assert_ends_strictly_past(&mut ep, addr, now, 30 * SEC_NS, "30 s");
+    });
+}
+
+#[test]
+fn a_half_open_session_of_a_thin_node_ends_strictly_past_60_s() {
+    big_stack(|| {
+        // 150 ms each way: the node measures a 300 ms round trip on its own dial, so it is thin.
+        let mut net = CoreNet::new(150 * MS_NS);
+        let (s, w) = (net.add(1), net.add(2));
+        net.connect_pair(s, w, ALPN_A, Role::Other);
+        assert!(net.nodes[s].ep.node_stats().thin, "the node is not thin");
+        let (addr, now) = (net.nodes[s].addr, net.now);
+        // The first flight never completes, so the responder never answers and its life is the node's own limit.
+        let ep = &mut net.nodes[s].ep;
+        ep.handle_datagram(
+            now,
+            addr,
+            "10.9.9.9:1000".parse().unwrap(),
+            &mut craft(9_000, 1, FULL_INITIAL_MIN),
+        );
+        assert_eq!(ep.node_stats().half_open, 1, "60 s: no half-open session");
+        ep.handle_timeout(now + 60 * SEC_NS - 1);
+        assert_eq!(ep.node_stats().half_open, 1, "60 s: gone before the limit");
+        ep.handle_timeout(now + 60 * SEC_NS);
+        assert_eq!(ep.node_stats().half_open, 1, "60 s: gone at the limit itself");
+        ep.handle_timeout(now + 60 * SEC_NS + 1);
+        assert_eq!(ep.node_stats().half_open, 0, "60 s: still there one tick past the limit");
     });
 }
