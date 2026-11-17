@@ -39,7 +39,6 @@ macro_rules! next_message {
                         hop,
                         direct,
                         payload,
-                        envelope: _,
                     }) => break Some((topic, origin, hop, direct, payload)),
                     Some(_) => {}
                     None => break None,
@@ -454,22 +453,16 @@ async fn an_endpoint_that_comes_back_to_a_log_that_moved_past_it_hears_that_mess
     .await;
 }
 
-/// The next message of `ep` within `ms`: its topic, origin, payload and envelope.
+/// The next envelope of `ep` within `ms`: its origin and the envelope.
 async fn next_envelope<H: vinc::Hosted + 'static>(
     ep: &vinc::Endpoint<H>,
     ms: u64,
-) -> Option<(Vec<u8>, NodeId, Vec<u8>, Option<vinc::envelope::Envelope>)> {
+) -> Option<(NodeId, vinc::envelope::Envelope)> {
     let ep = ep.clone();
     nuclei::time::timeout(Duration::from_millis(ms), async move {
         loop {
             match ep.event().await {
-                Some(Event::Message {
-                    topic,
-                    origin,
-                    payload,
-                    envelope,
-                    ..
-                }) => break Some((topic, origin, payload, envelope)),
+                Some(Event::Envelope { origin, envelope, .. }) => break Some((origin, envelope)),
                 Some(_) => {}
                 None => break None,
             }
@@ -481,7 +474,7 @@ async fn next_envelope<H: vinc::Hosted + 'static>(
 }
 
 #[nuclei::test]
-async fn a_message_comes_with_an_envelope_that_verifies_offline_when_asked_for_and_without_one_otherwise() {
+async fn a_message_comes_as_an_envelope_that_verifies_offline_when_asked_for_and_as_a_plain_message_otherwise() {
     let hub = lo_endpoint!(vinc_common::builder().seed(&[10; 32]).unwrap().hub());
     run(&hub);
     let relay = hub_relay(hub.local_addr(), hub.id());
@@ -506,15 +499,14 @@ async fn a_message_comes_with_an_envelope_that_verifies_offline_when_asked_for_a
         for _ in 0..200 {
             publisher.publish(&topic, b"signed words", None).await.unwrap();
             kept = kept.or(next_envelope(&keeper, 300).await);
-            seen = seen.or(next_envelope(&plain, 300).await);
+            seen = seen.or(next_message!(plain, 300));
             if kept.is_some() && seen.is_some() {
                 break;
             }
         }
-        let (t, origin, payload, envelope) = kept.expect("the keeper heard nothing");
-        assert_eq!((t, &payload[..]), (topic.clone(), &b"signed words"[..]));
+        let (origin, envelope) = kept.expect("the keeper heard nothing");
+        assert_eq!((envelope.topic(), envelope.payload()), (&topic[..], &b"signed words"[..]));
         assert_eq!(origin, publisher.id());
-        let envelope = envelope.expect("the endpoint asked for envelopes");
         let v = vinc::envelope::verify(envelope.as_bytes()).unwrap();
         assert_eq!(
             (v.origin, v.topic, v.payload),
@@ -531,14 +523,17 @@ async fn a_message_comes_with_an_envelope_that_verifies_offline_when_asked_for_a
         .join()
         .unwrap();
         assert_eq!(checked, (publisher.id().bytes, topic.clone(), b"signed words".to_vec()));
-        let mut tampered = envelope.as_bytes().to_vec();
+        let mut tampered = envelope.into_bytes();
         *tampered.last_mut().unwrap() ^= 1;
         assert_eq!(
-            vinc::envelope::Envelope::from_bytes(tampered).verify().unwrap_err(),
+            vinc::envelope::verify(&tampered).unwrap_err(),
             vinc::envelope::EnvelopeError::BadSignature
         );
-        let (_, _, _, none) = seen.expect("the endpoint without envelopes heard nothing");
-        assert!(none.is_none(), "no envelope unless the endpoint asked for one");
+        let (t, _, _, _, payload) = seen.expect("the endpoint without envelopes heard nothing");
+        assert_eq!((t, &payload[..]), (topic.clone(), &b"signed words"[..]));
+        // Each endpoint hears the one kind of event it asked for, never both.
+        assert!(next_message!(keeper, 300).is_none(), "an envelope replaces the plain message");
+        assert!(next_envelope(&plain, 300).await.is_none(), "no envelope unless the endpoint asked for one");
     })
     .await;
 }

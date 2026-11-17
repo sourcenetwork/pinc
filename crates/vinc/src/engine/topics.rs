@@ -17,7 +17,6 @@ use vinc_node::{HUB_ALPN, NodeEvent};
 
 use super::{Admit, Core, Direction, GKey, Try, Wait};
 use crate::addr::NodeAddr;
-use crate::envelope::Envelope;
 use crate::error::{Error, ErrorKind, Result};
 use crate::event::{Event, MessageId};
 
@@ -43,11 +42,8 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                 origin,
                 hop,
                 body,
-                head,
                 ..
             } => {
-                // A kept head is never empty, so an empty one means the endpoint did not ask for envelopes.
-                let envelope = (!head.is_empty()).then(|| Envelope::new(&topic, &head, &body));
                 let (origin, hop) = (self.node.full_id(&origin), self.node.full_id(&hop));
                 self.push_event(Event::Message {
                     topic,
@@ -55,6 +51,19 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
                     hop,
                     direct: origin == hop,
                     payload: body,
+                });
+            }
+            NodeEvent::Envelope {
+                origin,
+                hop,
+                envelope,
+                ..
+            } => {
+                let (origin, hop) = (self.node.full_id(&origin), self.node.full_id(&hop));
+                self.push_event(Event::Envelope {
+                    origin,
+                    hop,
+                    direct: origin == hop,
                     envelope,
                 });
             }

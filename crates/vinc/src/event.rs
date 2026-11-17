@@ -40,9 +40,19 @@ pub enum Event {
         direct: bool,
         /// The bytes published.
         payload: Vec<u8>,
-        /// The signed envelope of the message, for an endpoint built with [`Builder::envelopes`](crate::Builder::envelopes);
-        /// `None` otherwise.
-        envelope: Option<Envelope>,
+    },
+    /// A topic message as a signed envelope, for an endpoint built with
+    /// [`Builder::envelopes`](crate::Builder::envelopes): it arrives in place of [`Event::Message`], and its signature by `origin` verified.
+    #[non_exhaustive]
+    Envelope {
+        /// Who published it.
+        origin: NodeId,
+        /// The peer whose session delivered it, as the handshake authenticated it.
+        hop: NodeId,
+        /// Whether it came straight from the publisher, with no hub between.
+        direct: bool,
+        /// The topic, the origin's signed head and the payload: store [`Envelope::as_bytes`] and verify it later.
+        envelope: Envelope,
     },
     /// A hub holds this endpoint's subscription to `topic`, the first time since it joined: a message published to the
     /// topic through that hub from now on arrives. A join returns before any hub knows of it. The event comes from the

@@ -12,7 +12,7 @@
 //! Invariants: no method blocks; a frame that no session took reports `false`, and so does a relayed probe for a
 //! member with no session or with the probe queue full.
 
-use alloc::boxed::Box;
+use vinc_broadcast::envelope::EnvelopeRef;
 use vinc_broadcast::{Event as BcEvent, Host as BcHost, Lane, Topics};
 use vinc_membership::session::{Broadcast, Carrier, CloseReason, Evidence, Local, Nanos, Route, Session, StoreError};
 use vinc_membership::{Membership, NodeId};
@@ -195,6 +195,7 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
 
     fn event(&mut self, event: BcEvent<'_>) {
         let e = match event {
+            // A kept head is never empty, so an empty one means the node does not keep heads.
             BcEvent::Message {
                 topic,
                 origin,
@@ -202,13 +203,25 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
                 mid,
                 body,
                 head,
+            } if !head.is_empty() => NodeEvent::Envelope {
+                origin: *origin,
+                hop: *hop,
+                mid,
+                envelope: EnvelopeRef::topic(topic, head, body).into_owned(),
+            },
+            BcEvent::Message {
+                topic,
+                origin,
+                hop,
+                mid,
+                body,
+                ..
             } => NodeEvent::Message {
                 topic: topic.to_vec(),
                 origin: *origin,
                 hop: *hop,
                 mid,
                 body: body.to_vec(),
-                head: Box::from(head),
             },
             BcEvent::PublishAcked { mid } => NodeEvent::PublishAcked { mid },
             BcEvent::PublishGaveUp { mid } => NodeEvent::PublishGaveUp { mid },

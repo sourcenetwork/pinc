@@ -282,10 +282,11 @@ impl<S, D, A, C, Q> Builder<S, D, A, C, Q> {
         self
     }
 
-    /// Whether every topic message arrives with its signed [`Envelope`](crate::envelope::Envelope), which the
-    /// application can store and later hand to anyone to verify offline (default off). Each delivered message then costs
-    /// its signed head (about 122 bytes for an Ed25519 origin, several kilobytes for a hybrid one) and a second copy of
-    /// the topic and the payload, in one more allocation.
+    /// Whether topic messages arrive as [`Event::Envelope`](crate::Event::Envelope) instead of
+    /// [`Event::Message`](crate::Event::Message) (default off): an [`Envelope`](crate::envelope::Envelope) the application can store and hand to anyone to verify
+    /// offline. The node builds each envelope once, in one allocation that holds the topic, the origin's signed head and
+    /// the payload, where a plain message takes two; the head adds about 122 bytes for an Ed25519 origin and up to 5,415
+    /// for a hybrid one, also to each message held for an access check or the replay floors.
     #[must_use]
     pub const fn envelopes(mut self, on: bool) -> Self {
         self.envelopes = on;

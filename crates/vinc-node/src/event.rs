@@ -5,8 +5,8 @@
 //! is dropped first and counted, and the count is delivered as [`NodeEvent::Lost`] before the next event, so a gap
 //! never reads as silence.
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
+use vinc_broadcast::envelope::Envelope;
 use vinc_connect::client::Notice;
 use vinc_membership::NodeId;
 
@@ -50,9 +50,19 @@ pub enum NodeEvent {
         mid: [u8; 8],
         /// The body.
         body: Vec<u8>,
-        /// The exact wire head: with the topic and the body, the signed envelope of the message. Empty unless the
-        /// broadcast limits keep heads.
-        head: Box<[u8]>,
+    },
+    /// A broadcast message as a signed envelope, delivered once in place of [`NodeEvent::Message`] when the broadcast
+    /// limits keep heads; its signature verified.
+    #[non_exhaustive]
+    Envelope {
+        /// The origin's node id.
+        origin: NodeId,
+        /// The peer whose session delivered it: a hub, or the origin itself when it sent the message straight.
+        hop: NodeId,
+        /// The message id.
+        mid: [u8; 8],
+        /// The topic, the origin's signed head and the body, in one allocation.
+        envelope: Envelope,
     },
     /// A hub acknowledged a publish.
     PublishAcked {
