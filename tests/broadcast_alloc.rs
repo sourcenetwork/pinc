@@ -76,7 +76,7 @@ struct World {
     now: u64,
 }
 
-fn world(alg: IdentityAlg) -> World {
+fn world(alg: IdentityAlg, keep_heads: bool) -> World {
     let (hk, mk, pk) = (kp(alg, 1), kp(alg, 2), kp(alg, 3));
     let (hub_id, member_id, pub_id) = (hk.node_id().bytes, mk.node_id().bytes, pk.node_id().bytes);
     let hubs = [hub_id];
@@ -86,7 +86,10 @@ fn world(alg: IdentityAlg) -> World {
         hubs: &hubs,
         incarnation: 1 << 16,
         trace: false,
-        limits: vinc_broadcast::Limits::default(),
+        limits: vinc_broadcast::Limits {
+            keep_heads,
+            ..vinc_broadcast::Limits::default()
+        },
     };
     let now = SEC;
     let wall = 1_700_000_000_000;
@@ -142,9 +145,9 @@ fn parts(frame: &[u8]) -> (u8, Vec<u8>, Vec<u8>) {
 }
 
 /// Run the steady paths with `alg` and return the allocations of each: the hub, the member, and the publisher.
-fn steady(alg: IdentityAlg, warm: usize, run: usize) -> [u64; 3] {
+fn steady(alg: IdentityAlg, warm: usize, run: usize, keep_heads: bool) -> [u64; 3] {
     // First, with no one counting: capture the frames a publisher sends the hub, and the frames the hub pushes.
-    let mut w = world(alg);
+    let mut w = world(alg, keep_heads);
     w.pub_h.keep_to = Some(w.hub_id);
     let mut mids = Vec::new();
     for i in 0..warm + run {
@@ -162,7 +165,7 @@ fn steady(alg: IdentityAlg, warm: usize, run: usize) -> [u64; 3] {
 
     // The hub, on fresh state: warm on the first frames, then count the rest. Each message is verified, logged,
     // pushed to two subscribers and acknowledged.
-    let mut w = world(alg);
+    let mut w = world(alg, keep_heads);
     let setup_sent = w.hub_h.sent;
     for (ty_, topic, rest) in publish_frames.iter().take(warm) {
         w.hub.frame(&mut w.hub_h, w.now, &w.pub_id, *ty_, topic, rest);
@@ -216,17 +219,17 @@ fn steady(alg: IdentityAlg, warm: usize, run: usize) -> [u64; 3] {
 
 #[test]
 fn the_steady_path_allocates_nothing_with_ed25519() {
-    assert_eq!(steady(IdentityAlg::Ed25519, 16, 64), [0, 0, 0]);
+    assert_eq!(steady(IdentityAlg::Ed25519, 16, 64, false), [0, 0, 0]);
 }
 
 #[test]
 fn the_steady_path_allocates_nothing_with_p256() {
-    assert_eq!(steady(IdentityAlg::EcdsaP256, 16, 64), [0, 0, 0]);
+    assert_eq!(steady(IdentityAlg::EcdsaP256, 16, 64, false), [0, 0, 0]);
 }
 
 #[test]
 fn a_timer_pass_over_warm_tables_allocates_nothing() {
-    let mut w = world(IdentityAlg::Ed25519);
+    let mut w = world(IdentityAlg::Ed25519, false);
     w.pub_h.keep_to = None;
     for i in 0..16u8 {
         w.publisher.publish(&mut w.pub_h, w.now, T, &[i; 10]).unwrap();
@@ -252,6 +255,12 @@ fn a_timer_pass_over_warm_tables_allocates_nothing() {
 
 #[test]
 fn the_steady_path_allocates_nothing_with_the_post_quantum_algorithms() {
-    assert_eq!(steady(IdentityAlg::MlDsa65, 3, 6), [0, 0, 0]);
-    assert_eq!(steady(IdentityAlg::Hybrid, 3, 6), [0, 0, 0]);
+    assert_eq!(steady(IdentityAlg::MlDsa65, 3, 6, false), [0, 0, 0]);
+    assert_eq!(steady(IdentityAlg::Hybrid, 3, 6, false), [0, 0, 0]);
+}
+
+#[test]
+fn the_steady_path_allocates_nothing_with_heads_kept() {
+    assert_eq!(steady(IdentityAlg::Ed25519, 16, 64, true), [0, 0, 0]);
+    assert_eq!(steady(IdentityAlg::EcdsaP256, 16, 64, true), [0, 0, 0]);
 }

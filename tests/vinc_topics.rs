@@ -521,6 +521,7 @@ async fn a_message_comes_with_an_envelope_that_verifies_offline_when_asked_for_a
             (&publisher.id().bytes, &topic[..], &b"signed words"[..])
         );
         assert_eq!(envelope.verify().unwrap(), v);
+        assert_eq!(v.author(), origin, "the verified author is the event's origin");
         // Stored as bytes and checked on a thread that has no endpoint and no runtime.
         let stored = envelope.as_bytes().to_vec();
         let checked = std::thread::spawn(move || {

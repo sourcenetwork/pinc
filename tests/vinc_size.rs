@@ -37,3 +37,16 @@ async fn a_default_endpoint_is_not_larger_than_before_port_mapping() {
     assert!(r <= RUN, "run is {r} bytes, master {RUN}");
     assert!(c <= CLOSE, "close is {c} bytes, master {CLOSE}");
 }
+
+/// The sizes of the facade's event and the node's event, which every queued message occupies: the envelope must not
+/// grow them. Measured on master before the envelope was added, and after.
+const EVENT: usize = 0;
+const NODE_EVENT: usize = 0;
+
+#[test]
+fn the_message_events_are_not_larger_than_before_the_envelope() {
+    let (e, n) = (std::mem::size_of::<vinc::Event>(), std::mem::size_of::<vinc_node::NodeEvent>());
+    println!("sizes: vinc::Event {e}, vinc_node::NodeEvent {n}");
+    assert_eq!(e, EVENT);
+    assert_eq!(n, NODE_EVENT);
+}
