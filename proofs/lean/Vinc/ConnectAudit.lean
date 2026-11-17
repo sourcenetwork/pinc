@@ -56,6 +56,9 @@ import Vinc.ConnectOwnThm
 #audit_axioms Vinc.ConnectRelay.tunnel_spec
 #audit_axioms Vinc.ConnectRelay.tunnel_ready_spec
 #audit_axioms Vinc.ConnectRelay.spu_member
+#audit_axioms Vinc.ConnectRelay.heard_idle
+#audit_axioms Vinc.ConnectRelay.heard_unready_quiet
+#audit_axioms Vinc.ConnectRelay.held_first
 #audit_axioms Vinc.ConnectRelay.sleep_spec
 #audit_axioms Vinc.ConnectRelay.close_asleep
 #audit_axioms Vinc.ConnectRelay.close_asleep_of
