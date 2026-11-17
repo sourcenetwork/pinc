@@ -314,3 +314,27 @@ fn a_stop_request_for_a_stream_the_peer_cannot_send_on_is_a_violation() {
         assert_eq!(r, Err(Drop::Closed));
     });
 }
+
+/// The connection's statistics show the stream layer's range counters: a peer stream whose received ranges outgrow the
+/// inline array moves them into a pool chunk, once.
+#[test]
+fn the_connection_statistics_count_a_stream_range_spill() {
+    gated_pair(|net| {
+        while net.b.conn.poll_event().is_some() {}
+        let stats = net.b.conn.stats();
+        assert_eq!((stats.range_spills, stats.range_overflows), (0, 0));
+        // One-byte frames at every 20th offset leave 100 holes, past the 96 ranges kept inline.
+        let frames: Vec<Frame<'_>> = (0..100u64)
+            .map(|k| Frame::Stream {
+                id: 0,
+                offset: 20 * k + 10,
+                fin: false,
+                data: b"x",
+                implicit_len: false,
+            })
+            .collect();
+        opened_by(net, 5000, &frames);
+        let stats = net.b.conn.stats();
+        assert_eq!((stats.range_spills, stats.range_overflows), (1, 0));
+    });
+}

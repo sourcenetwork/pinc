@@ -82,6 +82,36 @@ fn a_loss_burst_spills_the_lost_set_and_the_repair_gives_the_chunk_back() {
     );
 }
 
+/// loss makes.
+#[test]
+fn a_frame_queued_again_by_a_failed_copy_counts_the_spill_it_causes() {
+    let mut pool = BufferPool::new_boxed(64);
+    let (mut t, id) = sender(&pool);
+    // One whole chunk written and sent as one frame, then 16 disjoint ranges declared lost.
+    t.write(&mut pool, id, &alloc::vec![1u8; CHUNK_SIZE], u64::MAX).unwrap();
+    assert_eq!(
+        t.next_stream_frame(&mut pool, CHUNK_SIZE).map(|c| c.len),
+        Some(CHUNK_SIZE)
+    );
+    for k in 0..16 {
+        t.on_lost(&mut pool, id, 20 * k, 10, false);
+    }
+    assert_eq!(t.stats().range_spills, 0, "16 ranges fit inline");
+    // Ten bytes asked at 16380, of which four lie in the chunk held: the copy falls short and queues 16380..16384, the
+    // 17th range.
+    let short = StreamChunk {
+        id,
+        offset: CHUNK_SIZE as u64 - 4,
+        len: FRAME,
+        fin: false,
+    };
+    assert_eq!(
+        t.copy_out(&mut pool, &short, &mut [0u8; FRAME]),
+        Err(StreamError::DataUnavailable)
+    );
+    assert_eq!(t.stats().range_spills, 1);
+}
+
 /// The acknowledged set spills at 65 disjoint ranges and gives its chunk back when the holes are filled.
 #[test]
 fn the_acknowledged_set_gives_its_chunk_back_when_the_holes_are_filled() {

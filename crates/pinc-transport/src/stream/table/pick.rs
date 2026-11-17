@@ -75,6 +75,7 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         let i = self.require(chunk.id)?;
         let slot = self.slots.get_mut(i).ok_or(StreamError::UnknownStream)?;
         let result = slot.send.copy_out(pool, chunk, dst);
+        self.stats.range_spills += slot.send.take_spills();
         self.refresh(i);
         result
     }
