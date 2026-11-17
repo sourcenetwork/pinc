@@ -82,10 +82,10 @@ SCENARIOS = {
         "rtt50-loss1": (["latency", "1024", "1000"], 3, 900, []),
         "rtt200-loss5-reorder": (["latency", "1024", "300"], 3, 900, []),
     },
-    # `many` reads memory from driven client endpoints after 1.5 s; `many_undriven` is the reading the row had before
-    # (undriven VINC clients, 500 ms), kept beside it for the session in which the row changed.
+    # `many` is the reading the row has always had (undriven VINC clients, 500 ms); `many_driven` drives every client
+    # endpoint and reads after 1.5 s.
     "many": {"loopback": (["many", "1000", "65536"], 3, 900, [])},
-    "many_undriven": {"loopback": (["many", "1000", "65536", "--reading=undriven"], 3, 900, [])},
+    "many_driven": {"loopback": (["many", "1000", "65536", "--reading=driven"], 3, 900, [])},
     "allocs_latency_64b": {"loopback": (["allocs", "20000", str(64 * MIB)], 3, 900, ["--count-allocs"])},
 }
 
@@ -124,7 +124,7 @@ SHOW = {
         [("p50_us", "p50", "us"), ("p99_us", "p99", "us"), ("p999_us", "p99.9", "us"), ("round_trips", "round trips", "")],
     ),
     "many": ("many", MANY_COLS),
-    "many_undriven": ("many", MANY_COLS),
+    "many_driven": ("many", MANY_COLS),
     "allocs_latency_64b": (
         "latency_64b",
         [
@@ -243,6 +243,17 @@ def cargo_lock_version(name):
     return m.group(1) if m else "unknown"
 
 
+def settings():
+    """The environment settings that change what VINC runs, when they are not the default (the server and the client
+    inherit them)."""
+    found = {}
+    for key, name, default in (("VINC_BENCH_ENDPOINTS", "endpoints", "1"), ("VINC_BENCH_READING", "reading", "undriven")):
+        value = os.environ.get(key, default)
+        if value != default:
+            found[name] = value
+    return found
+
+
 def host_info():
     cpu = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")), "unknown")
     mem = next((l.split()[1] for l in open("/proc/meminfo") if l.startswith("MemTotal")), "0")
@@ -257,6 +268,7 @@ def host_info():
         "git": sh(f"git -C {ROOT} rev-parse --short HEAD").stdout.strip(),
         "versions": {n: cargo_lock_version(n) for n in ("iroh", "noq", "libp2p", "libp2p-quic", "libp2p-stream", "quinn", "tokio", "nuclei")},
         "loadavg_at_start": open("/proc/loadavg").read().strip(),
+        **settings(),
     }
 
 
@@ -396,6 +408,10 @@ def write_md(out, info, libs, profiles, scen, results, a):
     md.append(f"Date {datetime.date.today().isoformat()}, host `{info['host']}`: {info['cpu']}, {info['cores']} cores, {info['mem_gib']} GiB, kernel {info['kernel']}, {info['rustc']}, commit {info['git']}.")
     md.append("Versions: " + ", ".join(f"{k} {v}" for k, v in info["versions"].items()) + ". Every library compiled with `RUSTFLAGS=" + (info.get("rustflags") or "") + "`.")
     md.append("Every cell is the median over the repetitions with the range [min..max]; a single value is one run. The client and the server are two processes on loopback.")
+    if "endpoints" in info:
+        md.append(f"VINC runs `{info['endpoints']}` endpoints (`VINC_BENCH_ENDPOINTS`) on every scenario's server; the default is one.")
+    if "reading" in info:
+        md.append(f"The many test reads memory `{info['reading']}` (`VINC_BENCH_READING`) wherever a scenario does not name its reading; the default is undriven.")
     if a.scale != 1.0 or a.reps:
         md.append(f"\n**This is a reduced run (scale {a.scale}, reps {a.reps}); do not quote it.**")
     for prof in profiles:
@@ -410,8 +426,8 @@ def write_md(out, info, libs, profiles, scen, results, a):
             md.append(f"### {s} ({' '.join(args)}; {reps} runs)\n")
             if s.startswith("many"):
                 md.append(
-                    "`many` reads memory 1.5 s after the burst from client endpoints that are driven (VINC's `run()`; the other libraries always are); "
-                    "`many_undriven` is the earlier reading, VINC's client endpoints left undriven and 500 ms. "
+                    "`many` reads memory 500 ms after the burst with VINC's client endpoints left undriven, as every earlier session did; "
+                    "`many_driven` drives every client endpoint (VINC's `run()`; the other libraries always do) and reads after 1.5 s. "
                     "The peak columns are the process's highest resident memory over the burst minus its memory before it, per connection that moved its bytes.\n"
                 )
             rows = []
