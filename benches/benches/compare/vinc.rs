@@ -472,7 +472,7 @@ mod tests {
                 let addr = serve_per_core().await.unwrap();
                 let before: Vec<usize> = ACCEPTED.iter().map(|a| a.load(Relaxed)).collect();
                 let mut held = Vec::new();
-                for _ in 0..16 {
+                for _ in 0..64 {
                     let ep = Vinc1::client().await.unwrap();
                     // A bound on the dial: a lost datagram must fail the test, not hang it.
                     let dial = Box::pin(Vinc1::hello(&ep, &addr, false));
@@ -488,10 +488,10 @@ mod tests {
         });
         assert_eq!(
             served.iter().sum::<usize>(),
-            16,
+            64,
             "every dial was accepted once: {served:?}"
         );
-        // The kernel hashes each peer's address to a socket: all 16 on one worker has a chance of 2^-15.
+        // The kernel hashes each peer's address to a socket: all 64 on one worker has a chance of 2^-63.
         assert!(served.iter().all(|&s| s > 0), "both workers served some: {served:?}");
     }
 }
