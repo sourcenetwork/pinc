@@ -14,12 +14,12 @@
 (* session was answered on a relay path, and a timer step follows. Every   *)
 (* call must be the step the operators of PathOps.tla compute, for the     *)
 (* kind of message the code answered (rx: k), and the table recorded after *)
-(* it (the held paths in slot order, each with whether it has a round      *)
-(* trip, the active one), whether the session is established, whether the  *)
-(* round trip has a sample, whether the active path failed its probe       *)
-(* timeouts and the dropped count must be the model's. reply_from is not   *)
-(* recorded: the model carries it, and the path a later key answer moves   *)
-(* the session to checks it.                                               *)
+(* it (the held paths in slot order, each with whether it has a cost and   *)
+(* whether it is seen, the active one), whether the session is             *)
+(* established, whether the round trip has a sample, whether the active    *)
+(* path failed its probe timeouts and the dropped count must be the        *)
+(* model's. reply_from is not recorded: the model carries it, and the path *)
+(* a later key answer moves the session to checks it.                      *)
 (*                                                                         *)
 (* Needs the TLA+ CommunityModules (Json, IOUtils) and the environment     *)
 (* variable VINC_TRACE_DIR, the directory that holds reply_path.ndjson.    *)
@@ -28,21 +28,25 @@ EXTENDS Integers, Sequences, TLC, Json, IOUtils
 CONSTANTS NP, RT
 VARIABLES i, c
 vars == <<i, c>>
-INSTANCE PathOps WITH RelayKeep <- TRUE, Rank <- "full"
+INSTANCE PathOps WITH RelayKeep <- TRUE, Forget <- TRUE, Rank <- "full"
 
 Trace == ndJsonDeserialize(IOEnv.VINC_TRACE_DIR \o "/reply_path.ndjson")
 Ev0 == Trace[i]
 
 \* the dialing side on path id of kind kd: the path validated and active in the first slot
 C0(id, kd) ==
-    [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE, k |-> kd, r |-> 0] ELSE Empty], act |-> 1,
-     hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, f |-> FALSE, hd |-> 0]
+    [t |-> [j \in 1..NP |-> IF j = 1 THEN [id |-> id, v |-> TRUE, k |-> kd, r |-> 0, sn |-> FALSE, lf |-> FALSE]
+                            ELSE Empty],
+     act |-> 1, hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, f |-> FALSE, hd |-> 0]
 
-\* the held paths in slot order with their kind and whether they have a round trip, as path_list and path_rtt give them
+\* the held paths in slot order with their kind, whether they have a cost and whether they are seen, as path_list,
+\* path_rtt and the library's seen fact give them
 RECURSIVE HeldFrom(_, _)
 HeldFrom(t, j) ==
     IF j > NP THEN <<>>
-    ELSE (IF t[j].id # 0 THEN <<[id |-> t[j].id, v |-> t[j].v, kind |-> t[j].k, m |-> t[j].r > 0]>> ELSE <<>>)
+    ELSE (IF t[j].id # 0
+          THEN <<[id |-> t[j].id, v |-> t[j].v, kind |-> t[j].k, m |-> t[j].r > 0, seen |-> t[j].sn]>>
+          ELSE <<>>)
          \o HeldFrom(t, j + 1)
 
 Same(x, v) == /\ HeldFrom(x.t, 1) = v.paths

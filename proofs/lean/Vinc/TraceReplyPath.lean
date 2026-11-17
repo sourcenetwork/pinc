@@ -9,10 +9,10 @@ The Lean half of the trace validation of the path a dialing side's handshake rep
 reads the `rp` events written by the Rust test `trace_reply_path` and replays every call through the functions of
 `Vinc.TransportPath`: the table recorded after it (the held paths in slot order and the active one), whether the
 session is established, whether the round trip has a sample, whether the active path failed its probe timeouts and
-the dropped count must be the model's (and, per held path, whether it has a round trip), and so must whether
-`add_path` took the path and what `remove_path` answered. The endpoint's naming of a path's kind (`info`) and a timer
-step (`timer`) are replayed through `setInfo` and `timer`; the relay penalty is the model's, one more than the largest
-round trip it holds (`penalty`).
+the dropped count must be the model's (and, per held path, whether it has a cost and whether it is seen), and so
+must whether `add_path` took the path and what `remove_path` answered. The endpoint's naming of a path's kind (`info`)
+and a timer step (`timer`) are replayed through `setInfo` and `timer`; the relay penalty is the model's, one more than
+the largest round trip it holds (`penalty`).
 -/
 
 namespace Vinc.TraceReplyPath
@@ -28,19 +28,20 @@ structure W where
 /-- The relay penalty of the replay: the traces hold round trips of 1 at most, so a relay path costs 2 more. -/
 def penalty : Nat := 2
 
-/-- What the recorder shows of a connection: the held paths (id, validated, relay, has a round trip) in slot order, the
+/-- What the recorder shows of a connection: the held paths (id, validated, relay, has a cost, seen) in slot order, the
 active path's id (0 for none), established, the round trip has a sample, the active path failed its probe timeouts, the
 dropped count. -/
-abbrev View := List (Nat × Bool × Bool × Bool) × Nat × Bool × Bool × Bool × Nat
+abbrev View := List (Nat × Bool × Bool × Bool × Bool) × Nat × Bool × Bool × Bool × Nat
 
 def view (np : Nat) (c : C) : View :=
-  ((List.range np).filterMap (fun j => (c.t j).map (fun p => (p.id, p.v, p.r, decide (p.rt ≠ 0)))),
+  ((List.range np).filterMap (fun j => (c.t j).map (fun p => (p.id, p.v, p.r, decide (p.rt ≠ 0), p.seen))),
     ((c.t c.act).map P.id).getD 0, decide (c.hs = .done), c.smp, c.f, c.hd)
 
-def pathsOf (j : J) : Except String (List (Nat × Bool × Bool × Bool)) := do
+def pathsOf (j : J) : Except String (List (Nat × Bool × Bool × Bool × Bool)) := do
   match j.arr? with
   | some a =>
-    a.toList.mapM fun e => do pure (← natF e "id", ← boolF e "v", (← strF e "kind") == "relay", ← boolF e "m")
+    a.toList.mapM fun e => do
+      pure (← natF e "id", ← boolF e "v", (← strF e "kind") == "relay", ← boolF e "m", ← boolF e "seen")
   | none => throw "paths: expected an array"
 
 def viewOf (v : J) : Except String View := do

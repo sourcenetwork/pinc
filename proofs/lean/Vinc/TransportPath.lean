@@ -30,24 +30,34 @@ What it proves:
 - the rule before #399 drops a dialing side's handshake packet on a path it does not hold, so a reply there never
   establishes the session (`rxOld_drops`, `rxOld_never`);
 - the choice of the active path ranks the usable paths by `(unseen, cost, slot)`, an unseen path being a relay path
-  with no round trip that is not the active one (or is, after `PTO_FALLBACK` probe timeouts in a row): the session
-  moves onto an unseen relay path only when no usable path is seen (`choose_sighted`), an active unseen relay path
-  gives way to a seen one (`choose_escapes`), and so does the fall-back of a failed direct path (`fall_sighted`).
+  that is not seen (a packet sent on it was acknowledged: a fact of its own, which the stamp on a path the session
+  leaves does not make true) and is not the active one (or is, after `PTO_FALLBACK` probe timeouts in a row): the
+  session moves onto an unseen relay path only when no usable path is seen (`choose_sighted`), an active unseen
+  relay path gives way to a seen one (`choose_escapes`), and so does the fall-back of a failed direct path
+  (`fall_sighted`); a relay path the session left at the probe-timeout bound with nothing acknowledged on it is not
+  the next choice (`choose_no_return`, `stamp_keeps_seen`). A path that takes a slot is unseen and has no cost by
+  construction (`learnNew`).
 
 `Vinc.TransportPathJoined` has the reply with a 1-RTT packet behind it in the same datagram, the rule before the
 correction (`noLookup_dup`) and the responder; `Vinc.TraceReplyPath` replays the recorded runs of the real code through
 these functions.
+
+Not modelled: what a datagram to a standby path carries, and fail-over between relay paths (vinc#625, not built): a
+failing relay path is left only for a path that ranks before it. The stamp is the same positive cost on every path.
 -/
 
 namespace Vinc.TransportPath
 
-/-- A held path: its id, whether it is validated, whether it runs through a relay (`r`), and its round trip (`rt`, 0 for
-none: `Path::rtt`). A relay path is valid from the moment the connection tracks it and is never challenged. -/
+/-- A held path: its id, whether it is validated, whether it runs through a relay (`r`), its cost (`rt`, 0 for none:
+`Path::rtt`, the session's estimate stamped on it) and whether it is seen (`seen`: a packet sent on it was
+acknowledged; a fact of its own, which a stamp does not make true). A relay path is valid from the moment the
+connection tracks it and is never challenged. -/
 structure P where
   id : Nat
   v : Bool
   r : Bool
   rt : Nat
+  seen : Bool
   deriving DecidableEq, Repr
 
 /-- The table: slot `i` holds a path or nothing; only the slots below `np` are used (`Bounded`). -/
@@ -144,7 +154,7 @@ def slot (np : Nat) (t : T) (act : Nat) : Option Nat :=
 /-- `learnNew_path`: the path joins the table at `slot`, unvalidated; `none` when the table has no room. -/
 def learnNew (np : Nat) (t : T) (act pid : Nat) : T × Option Nat :=
   match slot np t act with
-  | some i => (set t i (some ⟨pid, false, false, 0⟩), some i)
+  | some i => (set t i (some ⟨pid, false, false, 0, false⟩), some i)
   | none => (t, none)
 
 /-- `learn_path` (`new_path_slot`): the slot of a path already held, its state untouched, else `learnNew`. -/
@@ -244,7 +254,7 @@ theorem learnNew_snd {np : Nat} {t : T} {act pid : Nat} : (learnNew np t act pid
 
 /-- The slot the path joins holds it, unvalidated. -/
 theorem learnNew_at {np : Nat} {t : T} {act pid i : Nat} (h : (learnNew np t act pid).2 = some i) :
-    (learnNew np t act pid).1 i = some ⟨pid, false, false, 0⟩ := by
+    (learnNew np t act pid).1 i = some ⟨pid, false, false, 0, false⟩ := by
   rw [learnNew_snd] at h
   unfold learnNew
   rw [h]
@@ -405,7 +415,8 @@ structure C where
 
 /-- The table of a dialing side when it dials on path `pid` (through a relay when `relay`): the path validated and
 active in slot 0. -/
-def dial (pid : Nat) (relay : Bool := false) : C := { t := fun j => if j = 0 then some ⟨pid, true, relay, 0⟩ else none }
+def dial (pid : Nat) (relay : Bool := false) : C :=
+  { t := fun j => if j = 0 then some ⟨pid, true, relay, 0, false⟩ else none }
 
 /-- `Path::left` for the slot `a` the session leaves: a relay path is as it was (it stays valid for as long as the
 connection tracks it), a direct path is no longer validated. -/
@@ -520,7 +531,7 @@ structure Inv (np : Nat) (c : C) : Prop where
 def On (c' : C) (pid : Nat) : Prop := ∃ p, c'.t c'.act = some p ∧ p.id = pid ∧ p.v = true
 
 theorem inv_dial (np pid : Nat) (relay : Bool) (h : 0 < np) : Inv np (dial pid relay) := by
-  refine ⟨?_, ?_, h, ⟨⟨pid, true, relay, 0⟩, by simp [dial], rfl⟩, by simp [dial]⟩
+  refine ⟨?_, ?_, h, ⟨⟨pid, true, relay, 0, false⟩, by simp [dial], rfl⟩, by simp [dial]⟩
   · intro j hj; simp [dial]; omega
   · intro i j x hi hj
     simp [dial, idOf] at hi hj
@@ -595,7 +606,7 @@ theorem follow_taken {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) (hrf : c.rf 
     have hia : i ≠ c.act := slot_ne_act hpa hs
     have hl : (learnNew np c.t c.act pid).2 = some i := by rw [learnNew_snd, hs]
     rw [follow_learnt hrf hf hl, ite_eq_right hia]
-    refine ⟨⟨pid, true, false, 0⟩, ?_, rfl, rfl⟩
+    refine ⟨⟨pid, true, false, 0, false⟩, ?_, rfl, rfl⟩
     show setV (leave (learnNew np c.t c.act pid).1 c.act) i true i = _
     rw [setV_at, leave_other _ _ hia, learnNew_at hl]
     rfl
@@ -644,7 +655,7 @@ theorem inv_follow {np : Nat} {c : C} (hi : Inv np c) (hhs : c.hs ≠ .key) : In
         rw [ite_eq_right hia] at he
         refine ⟨by rw [he]; exact bounded_setV (bounded_leave (learnNew_bounded hi.bounded) _) _ _,
           by rw [he]; exact unique_setV (unique_leave (learnNew_unique hi.bounded hi.unique hf) _) _ _,
-          by rw [he]; exact hil, ⟨⟨pid, true, false, 0⟩, ?_, rfl⟩, hw⟩
+          by rw [he]; exact hil, ⟨⟨pid, true, false, 0, false⟩, ?_, rfl⟩, hw⟩
         rw [he]
         show setV (leave (learnNew np c.t c.act pid).1 c.act) i true i = _
         rw [setV_at, leave_other _ _ hia, learnNew_at hl]
@@ -878,11 +889,11 @@ theorem inv_remove {np : Nat} {c : C} {pid : Nat} (hi : Inv np c) : Inv np (remo
 
 `conn/path.rs` `rank`, `best_path`, `choose_path`, `set_path_info`, `switch_active` and the fall-back of
 `conn/path_fall.rs`, as `proofs/tla/PathOps.tla` has them (`Choose`, `SetInfo`, `Fallback`, `Timer`). The usable paths
-(held and validated) are ranked by `(unseen, cost, slot)`, least first. A relay path with no round trip is unseen when
-it is not the active path, or is the active path after `PTO_FALLBACK` probe timeouts in a row. So a path with a
-round trip, or a direct path, always ranks ahead of an unseen one: the session moves onto an unseen relay path only
-when no usable path is seen (`choose_sighted`), an active unseen relay path gives way to a seen one (`choose_escapes`)
-and so does the fall-back of a failed direct path (`fall_sighted`). -/
+(held and validated) are ranked by `(unseen, cost, slot)`, least first. A relay path that is not seen is unseen when
+it is not the active path, or is the active path after `PTO_FALLBACK` probe timeouts in a row. So a seen path, or a
+direct path, always ranks ahead of an unseen one: the session moves onto an unseen relay path only when no usable
+path is seen (`choose_sighted`), an active unseen relay path gives way to a seen one (`choose_escapes`) and so does
+the fall-back of a failed direct path (`fall_sighted`). -/
 
 /-- Whether slot `i` holds a validated path (a usable one). -/
 def usable (t : T) (i : Nat) : Bool :=
@@ -896,11 +907,12 @@ def vrel (t : T) (i : Nat) : Bool :=
   | some p => p.v && p.r
   | none => false
 
-/-- The first key of the rank: slot `i` holds a relay path with no round trip that is not the active path, or is the
-active path after `PTO_FALLBACK` probe timeouts in a row (`f`). -/
+/-- The first key of the rank: slot `i` holds a relay path that is not seen and is not the active path, or is the
+active path after `PTO_FALLBACK` probe timeouts in a row (`f`). The seen fact is read, not the cost: a stamp gives a
+path a cost and does not make it seen. -/
 def unseen (t : T) (act : Nat) (f : Bool) (i : Nat) : Bool :=
   match t i with
-  | some p => p.r && decide (p.rt = 0) && (i != act || f)
+  | some p => p.r && !p.seen && (i != act || f)
   | none => false
 
 /-- The cost of a path: its round trip, and the relay penalty `pen` for a relay path. -/
@@ -1033,8 +1045,8 @@ def fallTo (np pen : Nat) (t : T) (act : Nat) (f : Bool) : Option Nat :=
   | some i => some i
   | none => lastOf (rl t) np
 
-/-- `switch_active`'s stamp: the path the session leaves takes the connection's sample as its own round trip. Any
-positive one will do: two measured relay paths are not compared by the model. -/
+/-- `switch_active`'s stamp: the path the session leaves takes the connection's sample as its own cost, and is not
+seen for that. Any positive one will do: two stamped relay paths are not compared by the model. -/
 def stamp (t : T) (a : Nat) : T := fun j => if j = a then (t j).map (fun p => { p with rt := 1 }) else t j
 
 /-- `switch_active`: the session moves to slot `i` by its own choice, and the path it leaves is stamped when the
@@ -1135,7 +1147,7 @@ theorem unseen_rl {t : T} {act : Nat} {f : Bool} {i : Nat} (h : unseen t act f i
   | none => simp [hti] at h
   | some p => cases hr : p.r <;> simp [hti, hr] at h ⊢
 
-/-- An active unseen relay path (it failed its probe timeouts, and has no round trip) gives way to a usable path that
+/-- An active unseen relay path (it failed its probe timeouts, and is not seen) gives way to a usable path that
 is not unseen, when there is one. -/
 theorem choose_escapes {np pen : Nat} {c : C} (hact : unseen c.t c.act c.f c.act = true)
     (hj : ∃ j, j < np ∧ usable c.t j = true ∧ unseen c.t c.act c.f j = false) :
@@ -1183,6 +1195,110 @@ theorem fall_sighted {np pen : Nat} {t : T} {act : Nat} {f : Bool}
   unfold Lt3 rank
   simp [hu, hn']
 
+/-! ### The way back
+
+A relay path the session left at the probe-timeout bound with nothing acknowledged on it is not the choice of the
+next timer pass: the stamp the switch writes gives the path a cost and does not make it seen (the second round read
+"seen" off the cost, and the session went back). -/
+
+/-- The stamp changes the cost of the path the session leaves, and nothing else. -/
+theorem stamp_other (t : T) (a : Nat) {j : Nat} (h : j ≠ a) : stamp t a j = t j := by
+  simp [stamp, h]
+
+theorem stamp_at (t : T) (a : Nat) : stamp t a a = (t a).map (fun p => { p with rt := 1 }) := by
+  simp [stamp]
+
+/-- A stamp does not make a path seen: the path keeps its seen fact. -/
+theorem stamp_keeps_seen {t : T} {a : Nat} {p : P} (h : t a = some p) :
+    ∃ q, stamp t a a = some q ∧ q.seen = p.seen :=
+  ⟨{ p with rt := 1 }, by simp [stamp, h], rfl⟩
+
+theorem usable_stamp (t : T) (a j : Nat) : usable (stamp t a) j = usable t j := by
+  unfold usable stamp
+  by_cases h : j = a
+  · subst h
+    cases ht : t j <;> simp [ht]
+  · simp [h]
+
+theorem unseen_parts {t : T} {act : Nat} {f : Bool} {i : Nat} (h : unseen t act f i = true) :
+    ∃ p, t i = some p ∧ p.r = true ∧ p.seen = false := by
+  unfold unseen at h
+  cases hti : t i with
+  | none => simp [hti] at h
+  | some p =>
+    have h1 : p.r = true := by cases hr : p.r <;> simp_all
+    have h2 : p.seen = false := by cases hs : p.seen <;> simp_all
+    exact ⟨p, rfl, h1, h2⟩
+
+/-- The choice does not take the session to `a` when it is not on `a` and `a` is not the best path. -/
+theorem choose_act_ne {np pen : Nat} {c : C} {a : Nat} (h1 : c.act ≠ a)
+    (h2 : best np pen c.t c.act c.f ≠ some a) : (choose np pen c).act ≠ a := by
+  unfold choose
+  cases hb : best np pen c.t c.act c.f with
+  | none => simp only [hb]; exact h1
+  | some b2 =>
+    simp only [hb]
+    have hb2 : b2 ≠ a := fun e => h2 (by rw [hb, e])
+    by_cases hg : ((c.t c.act).isNone || rl c.t c.act) = true
+    · rw [ite_eq_left hg]
+      unfold switch
+      by_cases h3 : (b2 == c.act || (c.t b2).isNone) = true
+      · rw [ite_eq_left h3]; exact h1
+      · rw [ite_eq_right h3]; exact hb2
+    · rw [ite_eq_right hg]; exact h1
+
+/-- After the session leaves a relay path at the probe-timeout bound (the path is not seen and the session holds a
+sample, so it is stamped), the next choice does not take the session back to it. The stamp is at most as high as the
+cost the path had (`hrt`: the model stamps 1), so the path ranks no better than it did when the session left it. -/
+theorem choose_no_return {np pen : Nat} {c : C} (hf : c.f = true) (hsm : c.smp = true)
+    (hact : unseen c.t c.act c.f c.act = true) (hrt : ∀ p, c.t c.act = some p → p.rt ≤ 1)
+    (hne : (choose np pen c).act ≠ c.act) : (choose np pen (choose np pen c)).act ≠ c.act := by
+  obtain ⟨b, hbdef⟩ : ∃ b, (choose np pen c).act = b := ⟨_, rfl⟩
+  have hne' : b ≠ c.act := by rw [← hbdef]; exact hne
+  have hbest : best np pen c.t c.act c.f = some b := choose_moves hbdef hne'
+  have hg : ((c.t c.act).isNone || rl c.t c.act) = true := by simp [unseen_rl hact]
+  obtain ⟨hbl, hbo, hmin⟩ := least_spec hbest
+  have hsome : (c.t b).isNone = false := by
+    unfold usable at hbo
+    cases hcb : c.t b with
+    | none => simp [hcb] at hbo
+    | some _ => rfl
+  have hsw : ¬ ((b == c.act || (c.t b).isNone) = true) := by simp [hne', hsome]
+  have hc1 : choose np pen c = { c with t := stamp c.t c.act, act := b } := by
+    simp only [choose, hbest]
+    rw [ite_eq_left hg]
+    unfold switch
+    rw [ite_eq_right hsw]
+    simp [hsm]
+  rw [hc1]
+  refine choose_act_ne ?_ ?_
+  · exact hne'
+  · intro hbest1
+    have hbest1' : least (usable (stamp c.t c.act)) (rank pen (stamp c.t c.act) b c.f) np = some c.act := hbest1
+    obtain ⟨hal, hao, hamin⟩ := least_spec hbest1'
+    have hao' : usable c.t c.act = true := by rw [← usable_stamp c.t c.act c.act]; exact hao
+    have hbo' : usable (stamp c.t c.act) b = true := by rw [usable_stamp]; exact hbo
+    obtain ⟨pa, hpa, hpar, hpas⟩ := unseen_parts hact
+    have hrk_a0 : rank pen c.t c.act c.f c.act = (1, pa.rt + pen, c.act) := by
+      unfold rank cost
+      simp [hact, hpa, hpar]
+    have hrk_a : rank pen (stamp c.t c.act) b c.f c.act = (1, 1 + pen, c.act) := by
+      unfold rank unseen cost
+      rw [stamp_at, hpa]
+      simp [hpar, hpas, Ne.symm hne']
+    have hrk_b : rank pen (stamp c.t c.act) b c.f b = rank pen c.t c.act c.f b := by
+      unfold rank unseen cost
+      rw [stamp_other c.t c.act hne', hf]
+      simp
+    obtain ⟨u, cb, hrb⟩ : ∃ u cb, rank pen c.t c.act c.f b = (u, cb, b) := ⟨_, _, rfl⟩
+    have hA := hmin c.act hal hao'
+    have hB := hamin b hbl hbo'
+    rw [hrk_a0, hrb] at hA
+    rw [hrk_b, hrb, hrk_a] at hB
+    have hr := hrt pa hpa
+    simp only [Lt3] at hA hB
+    omega
+
 #audit_axioms learn_bounded
 #audit_axioms learn_gives_up
 #audit_axioms learn_none_iff
@@ -1209,5 +1325,7 @@ theorem fall_sighted {np pen : Nat} {t : T} {act : Nat} {f : Bool}
 #audit_axioms choose_sighted
 #audit_axioms choose_escapes
 #audit_axioms fall_sighted
+#audit_axioms stamp_keeps_seen
+#audit_axioms choose_no_return
 
 end Vinc.TransportPath

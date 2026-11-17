@@ -46,18 +46,26 @@
 (*              the reply that learnt the path in the same datagram;       *)
 (*              ActiveHeld, ActiveValid, KeyWaits;                         *)
 (*  RankRule    the choice of the active path moves the session onto a     *)
-(*              relay path with no round trip only from an active path     *)
+(*              relay path that is not seen only from an active path       *)
 (*              that is not usable or has failed PTO_FALLBACK probe        *)
-(*              timeouts, and only when no usable path has a round trip    *)
-(*              or is a direct path (the choice is made from the table as  *)
-(*              it is, and after the endpoint named a path's kind);        *)
-(*  EscapeRule  an active relay path with no round trip that failed        *)
+(*              timeouts, and only when no usable path is seen or is a     *)
+(*              direct path (the choice is made from the table as it       *)
+(*              is, and after the endpoint named a path's kind);           *)
+(*  EscapeRule  an active relay path that is not seen and failed           *)
 (*              PTO_FALLBACK probe timeouts gives way to a usable path     *)
 (*              that is not such a relay path, when there is one;          *)
-(*  FallRule    the fall-back of a failed direct path takes a relay path:  *)
-(*              the usable one of least rank, so one with a round trip     *)
-(*              when there is one, else the last relay path; the failed    *)
-(*              path is no longer validated.                               *)
+(*  BackRule    after the session leaves a relay path at the probe-        *)
+(*              timeout bound with nothing acknowledged on it, it does     *)
+(*              not go back to that path while the path it moved to is     *)
+(*              usable and nothing was acknowledged on the path it         *)
+(*              left (a stamp on the path it left is not an                *)
+(*              acknowledgement);                                          *)
+(*  FallRule    the fall-back of a failed direct path takes a relay        *)
+(*              path: the usable one of least rank, so a seen one when     *)
+(*              there is one, else the last relay path; the failed         *)
+(*              path is no longer validated;                               *)
+(*  SlotFresh   a path that takes a slot takes it with no cost and         *)
+(*              unseen, whatever the path that held it had.                *)
 (*                                                                         *)
 (* The bound itself is the table's shape: NP slots, and every path the     *)
 (* connection holds takes one (TypeOK).                                    *)
@@ -80,15 +88,22 @@
 (*              of the datagram (none), adds it a second time; Unique      *)
 (*              fails. The model found it; the code now looks the id up.  *)
 (*  _rank       the rule before the second round of #598, Rank = "none":  *)
-(*              the cost and the slot alone, so a relay path with no       *)
-(*              round trip ties with, and by its slot beats, the relay     *)
-(*              path the session is on; RankRule fails.                    *)
-(*  _escape     Rank = "seen": no escape, so an active relay path that     *)
-(*              failed, with no round trip, never gives way to a relay     *)
-(*              path with one; EscapeRule fails.                           *)
+(*              the cost and the slot alone, so a relay path that is not   *)
+(*              seen ties with, and by its slot beats, the relay path the  *)
+(*              session is on; RankRule fails.                             *)
+(*  _escape     Rank = "noescape": no escape, so an active relay path that *)
+(*              failed and is not seen never gives way to a seen relay     *)
+(*              path; EscapeRule fails.                                    *)
 (*  _fall       Rank = "none": the fall-back of a failed direct path takes *)
-(*              a relay path with no round trip before one with a round    *)
-(*              trip; FallRule fails.                                      *)
+(*              a relay path that is not seen before a seen one; FallRule  *)
+(*              fails.                                                     *)
+(*  _back       Rank = "cost", the rule of the second round, which read    *)
+(*              "seen" off the cost: the stamp on the relay path the       *)
+(*              session leaves at the bound makes it seen, and the next    *)
+(*              timer pass takes the session back to it; BackRule fails.   *)
+(*  _slot       Forget = FALSE: an evicted path hands its cost and its     *)
+(*              seen fact to the path that takes its slot; SlotFresh       *)
+(*              fails.                                                     *)
 (***************************************************************************)
 EXTENDS PathOps, TLC
 
@@ -97,8 +112,9 @@ CONSTANTS Ids,    \* the path ids a datagram may arrive on; 1 is the dialed path
           Old,    \* TRUE: the rule before #399
           \* RelayKeep (PathOps): FALSE is the rule before the correction that keeps a relay path valid
           Lookup, \* FALSE: the rule before the correction (learning does not look the id up)
-          \* RT, Rank (PathOps): RT = 0 has no round trips (the rule of the first round); Rank "none" and "seen" are the
-          \* rules before the second round
+          \* Forget (PathOps): FALSE is the rule before the slot forgets its path
+          \* RT, Rank (PathOps): RT = 0 has no costs (the rule of the first round); Rank "none", "noescape" and "cost"
+          \* are the rules before the third round
           HDMAX   \* the dropped-packet counts explored
 
 VARIABLES role, c
@@ -106,13 +122,16 @@ vars == <<role, c>>
 
 \* a datagram carries a 1-RTT packet behind its handshake packet, or not
 Coals == BOOLEAN
-\* a path of a table: a relay path is validated
-SlotOf(S) == [id : S, v : BOOLEAN, k : {"direct"}, r : 0..RT] \cup [id : S, v : {TRUE}, k : {"relay"}, r : 0..RT]
-SlotVals == {Empty} \cup SlotOf(Ids \ {1})
+\* a path of a table: a relay path is validated; a seen path has a cost (the acknowledgement that makes it seen gives it
+\* the session's estimate); L is the values of the ghost lf
+SlotOf(S, L) ==
+    {x \in [id : S, v : BOOLEAN, k : {"direct"}, r : 0..RT, sn : BOOLEAN, lf : L] \cup
+           [id : S, v : {TRUE}, k : {"relay"}, r : 0..RT, sn : BOOLEAN, lf : L] : x.sn => x.r > 0}
+SlotVals == {Empty} \cup SlotOf(Ids \ {1}, {FALSE})
 UniqueT(t) == \A i, j \in 1..NP : (t[i].id # 0 /\ t[i].id = t[j].id) => i = j
+Dialed(d) == [id |-> 1, v |-> TRUE, k |-> d, r |-> 0, sn |-> FALSE, lf |-> FALSE]
 DialTables ==
-    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE, k |-> d, r |-> 0] ELSE f[i]] :
-                f \in [1..NP -> SlotVals], d \in PKinds} :
+    {t \in {[i \in 1..NP |-> IF i = 1 THEN Dialed(d) ELSE f[i]] : f \in [1..NP -> SlotVals], d \in PKinds} :
         UniqueT(t)}
 C0(t) == [t |-> t, act |-> 1, hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, f |-> FALSE, hd |-> 0]
 
@@ -145,7 +164,7 @@ Bound == c.hd <= HDMAX
 
 TypeOK ==
     /\ role \in {"dial", "resp"}
-    /\ c.t \in [1..NP -> {Empty} \cup SlotOf(Ids)]
+    /\ c.t \in [1..NP -> {Empty} \cup SlotOf(Ids, BOOLEAN)]
     /\ c.act \in 1..NP /\ c.hs \in {"wait", "key", "done"}
     /\ c.rf \in Ids \cup {0} /\ c.pend \in Ids \cup {0} /\ c.smp \in BOOLEAN /\ c.f \in BOOLEAN /\ c.hd \in Nat
 
@@ -210,22 +229,22 @@ GiveUpRule ==
 \* the tables the choice of the active path may be made from: c as it is, or after the endpoint named one path's kind
 Pre(c0) == {c0} \cup {SetKind(c0, id, kd) : id \in Ids, kd \in PKinds}
 
-\* a usable path that is not a relay path with no round trip
-Seen(c0, j) == Usable(c0, j) /\ ~(c0.t[j].k = "relay" /\ c0.t[j].r = 0)
+\* a usable path that is not a relay path that is unseen: a direct path, or a seen one
+Proven(c0, j) == Usable(c0, j) /\ ~(c0.t[j].k = "relay" /\ ~c0.t[j].sn)
 
 RankStep(c0) ==
     LET c1 == Choose(c0)
-    IN (c1.act # c0.act /\ c1.t[c1.act].k = "relay" /\ c1.t[c1.act].r = 0) =>
+    IN (c1.act # c0.act /\ c1.t[c1.act].k = "relay" /\ ~c1.t[c1.act].sn) =>
            /\ (~Usable(c0, c0.act) \/ c0.f)
-           /\ \A j \in 1..NP : ~Seen(c0, j)
+           /\ \A j \in 1..NP : ~Proven(c0, j)
 RankRule == \A c0 \in Pre(c) : RankStep(c0)
 
 EscapeStep(c0) ==
     LET c1 == Choose(c0)
         a == c0.t[c0.act]
-    IN (a.id # 0 /\ a.k = "relay" /\ a.r = 0 /\ c0.f /\ \E j \in 1..NP : Seen(c0, j)) =>
+    IN (a.id # 0 /\ a.k = "relay" /\ ~a.sn /\ c0.f /\ \E j \in 1..NP : Proven(c0, j)) =>
            /\ c1.act # c0.act
-           /\ Seen(c0, c1.act)
+           /\ Proven(c0, c1.act)
 EscapeRule == \A c0 \in Pre(c) : EscapeStep(c0)
 
 FallStep(c0) ==
@@ -237,7 +256,29 @@ FallStep(c0) ==
            /\ c1.act \in rel
            /\ ~c1.t[c0.act].v
            /\ (vrel # {} => c1.act \in vrel)
-           /\ ((\E j \in vrel : c0.t[j].r > 0) => c0.t[c1.act].r > 0)
+           /\ ((\E j \in vrel : c0.t[j].sn) => c0.t[c1.act].sn)
            /\ (vrel = {} => c1.act = Last(rel))
 FallRule == FallStep(c)
+
+\* a relay path the session left at the bound, with nothing acknowledged on it since (a stamp is not an
+\* acknowledgement), is not the choice while the path the session is on is usable
+BackStep(c0) ==
+    \A i \in 1..NP :
+        (c0.t[i].id # 0 /\ c0.t[i].lf /\ c0.t[i].k = "relay" /\ ~c0.t[i].sn /\ Usable(c0, c0.act)) =>
+            Choose(c0).act # i
+\* the tables the choice may be made from, as Pre, without the endpoint naming the kind of the path the session is on: a
+\* path the session moved to that is named a relay path afterwards is a new relay path that has not been acknowledged
+\* either, and it ties with the path left (found by TLC: the left path wins by its slot)
+PreMoved(c0) == {c0} \cup {SetKind(c0, id, kd) : id \in Ids \ {c0.t[c0.act].id}, kd \in PKinds}
+BackRule == \A c0 \in PreMoved(c) : BackStep(c0)
+
+\* every path that a step puts in a slot that held another path comes with no cost and unseen
+Fresh1(c0, c1) ==
+    \A i \in 1..NP : (c1.t[i].id # 0 /\ c1.t[i].id # c0.t[i].id) => (c1.t[i].r = 0 /\ ~c1.t[i].sn)
+SlotFresh ==
+    /\ role = "dial" => \A id \in Ids, k \in Kinds, co \in Coals, s \in BOOLEAN :
+           Fresh1(c, Rx(c, id, k, co, s, Old, Lookup))
+    /\ role = "dial" => \A r \in {"ok", "more", "bad"}, s \in BOOLEAN : Fresh1(c, Key(c, r, s))
+    /\ role = "resp" => \A id \in Ids, est \in BOOLEAN : Fresh1(c, RRx(c, id, est))
+    /\ \A id \in Ids : Fresh1(c, App(c, id)) /\ Fresh1(c, [c EXCEPT !.t = AddPath(c.t, c.act, id).t])
 =============================================================================

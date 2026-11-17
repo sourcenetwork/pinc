@@ -64,7 +64,7 @@ theorem joined_unique {np : Nat} {c : C} {pid : Nat} {k : Kind} (hi : Inv np c) 
 /-- What `follow` does to the table when the reply's path is learnt in slot `i`. -/
 theorem follow_slots {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
     (hs : slot np c.t c.act = some i) (hia : i ≠ c.act) :
-    (follow np c).act = i ∧ (follow np c).t i = some ⟨pid, true, false, 0⟩ ∧
+    (follow np c).act = i ∧ (follow np c).t i = some ⟨pid, true, false, 0, false⟩ ∧
       (follow np c).t c.act = (c.t c.act).map (fun p => if p.r = true then p else { p with v := false }) ∧
       ∀ j, j ≠ i → j ≠ c.act → (follow np c).t j = c.t j := by
   have hl : (learnNew np c.t c.act pid).2 = some i := by rw [learnNew_snd, hs]
@@ -110,7 +110,8 @@ on it, the path it left is held (no longer validated), and every other slot is a
 one path is given up, the one in slot `i`, never the one the session left. -/
 theorem joined_gives_up_one {np : Nat} {c : C} {pid i : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done)
     (hf : find np c.t pid = none) (hs : slot np c.t c.act = some i) (s : Bool) :
-    (rx false np c pid .auth true s).act = i ∧ (rx false np c pid .auth true s).t i = some ⟨pid, true, false, 0⟩ ∧
+    (rx false np c pid .auth true s).act = i ∧
+      (rx false np c pid .auth true s).t i = some ⟨pid, true, false, 0, false⟩ ∧
       (rx false np c pid .auth true s).t c.act =
         (c.t c.act).map (fun p => if p.r = true then p else { p with v := false }) ∧
       ∀ j, j ≠ i → j ≠ c.act → (rx false np c pid .auth true s).t j = c.t j := by
@@ -122,15 +123,15 @@ theorem joined_gives_up_one {np : Nat} {c : C} {pid i : Nat} (hi : Inv np c) (hh
 /-- The rule before the correction (found by this model): the same datagram, the dial on path 1 with two free slots
 and the resume Reply on path 9, leaves path 9 held twice. -/
 theorem noLookup_dup :
-    (rxNoLook 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true, false, 0⟩ ∧
-      (rxNoLook 3 (dial 1) 9 .auth true false).t 2 = some ⟨9, false, false, 0⟩ ∧
+    (rxNoLook 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true, false, 0, false⟩ ∧
+      (rxNoLook 3 (dial 1) 9 .auth true false).t 2 = some ⟨9, false, false, 0, false⟩ ∧
       (rxNoLook 3 (dial 1) 9 .auth true false).act = 1 ∧
       uniqueB 3 (rxNoLook 3 (dial 1) 9 .auth true false).t = false := by
   decide
 
 /-- The corrected rule on that datagram holds path 9 once. -/
 theorem lookup_once :
-    (rx false 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true, false, 0⟩ ∧
+    (rx false 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true, false, 0, false⟩ ∧
       (rx false 3 (dial 1) 9 .auth true false).t 2 = none ∧
       uniqueB 3 (rx false 3 (dial 1) 9 .auth true false).t = true := by
   decide
