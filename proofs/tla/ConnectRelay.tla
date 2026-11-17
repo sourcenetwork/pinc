@@ -42,26 +42,39 @@
 (* 1389 does not fit the tunnel) and MBytes the byte quota of a member's  *)
 (* mailbox; ConnectRelay_fwd and ConnectRelay_long reach a member that    *)
 (* holds mail and is homed elsewhere, and one that holds a long message.  *)
+(*  SpuSilent      an uploaded packet from a member whose UDP stamp finds   *)
+(*                 the table full is no refusal: nothing is traced        *)
+(* FullUdp starts with the UDP table full of other nodes (ConnectRelay_full) *)
+(* and LoudSpu puts the traced refusal back (ConnectRelay_wfull).          *)
 (* Lean: Vinc/ConnectRelayThm.lean (peer_unauth, forward_peer, no_reforward,*)
 (* back_window, charge_inv, tunnel_spec, spu_member, heard_idle,           *)
 (* heard_unready_quiet, forwarded, sleep_spec, ...).                       *)
 (***************************************************************************)
 EXTENDS ConnectRelayOps
 
-CONSTANTS Times, MaxNs, Depth, WithSleep, WithReady, OldHeld, HoldBehind, StopFirst, Seed, Lens, MBytes
+CONSTANTS Times, MaxNs, Depth, WithSleep, WithReady, OldHeld, HoldBehind, StopFirst, Seed, Lens, MBytes, FullUdp, LoudSpu
 cf == [me |-> 9, C |-> 2, R |-> 2, MN |-> 1, MB |-> MBytes, Bytes |-> 3, Window |-> 3, SessT |-> 4, Age |-> 40,
        old |-> OldHeld, hb |-> HoldBehind, stop |-> StopFirst]
 Cl == {1, 2}
+
+\* the earlier SPU, for a witness only (LoudSpu): a full UDP table is traced as a refusal and the datagram goes on
+SpuLoud(cf0, R0, now, m, dst, flag, len) ==
+    IF len = 0 \/ 35 + len > MAXTUN THEN Fail(R0, "baddg", m)
+    ELSE IF m = 0 THEN Fail(R0, "unauth", 0)
+    ELSE LET uh == UdpHeard(cf0, R0, now, m) IN
+         IF dst = cf0.me THEN After(uh.ef, Fail(uh.R, "noroute", m))
+         ELSE After(uh.ef, Route(cf0, uh.R, now, m, dst, flag, len, "tunnel"))
 Peers == {5, 6}
-VARIABLES R, clock, last, steps, ref, fw, heard, step
-vars == <<R, clock, last, steps, ref, fw, heard, step>>
+VARIABLES R, clock, last, steps, ref, fw, heard, step, quiet
+vars == <<R, clock, last, steps, ref, fw, heard, step, quiet>>
 
 SeedRelay == [NewRelay(cf) EXCEPT !.bk = [x \in {1, 2, 3, 5, 6, 9} |-> x % 2],
                   !.peers = [i \in 1..MAXPEERS |-> IF i = 1 THEN Seed ELSE 0],
+                  !.udp = IF FullUdp THEN [x \in {3, 4} |-> 0] ELSE [x \in {} |-> 0],
                   !.rec = IF Seed = 0 THEN [x \in {} |-> 0] ELSE [x \in {2} |-> [seq |-> 1, home |-> Seed, rcv |-> 0]]]
 
 Init == /\ R = SeedRelay
-        /\ clock = 0 /\ steps = 0 /\ last = TRUE /\ ref = FALSE /\ fw = TRUE /\ heard = TRUE /\ step = TRUE
+        /\ clock = 0 /\ steps = 0 /\ last = TRUE /\ ref = FALSE /\ fw = TRUE /\ heard = TRUE /\ step = TRUE /\ quiet = TRUE
 
 IsFwd(e) == Len(e) >= 3 /\ e[1] = "peer" /\ e[3] = "fwd"
 IsUdp(e) == Len(e) >= 3 /\ e[1] = "udp"
@@ -115,9 +128,13 @@ StepsOk(kind, o, node, tm) ==
         Queue(o.R, node) = Over(IF node \in DOMAIN R.mb.held THEN ExpireH(MC(cf), tm, R.mb.held[node]).h.q ELSE <<>>,
                                Fit(o.R, node))
 
+\* SpuSilent on one call: an uploaded packet from a member whose UDP stamp does not fit the full table is no refusal
+SpuQuiet(kind, o) == kind = "spu" => \A k \in 1..Len(o.ef) : o.ef[k] # RejE("full", 1)
+
 Do(kind, o, from, dst) == /\ R' = o.R /\ last' = Checks(kind, o, from, clock') /\ steps' = steps + 1
                           /\ fw' = FwdOk(kind, o, dst, clock') /\ heard' = HeardOk(kind, o, dst)
                           /\ step' = StepsOk(kind, o, dst, clock')
+                          /\ quiet' = SpuQuiet(kind, o)
                           /\ ref' = (ref \/ \E k \in 1..Len(o.ef) : IsNoTunnel(o.ef[k]))
 
 Frames(nd, tm) == {<<"send", d, 0, 1>> : d \in {1, 2, 3}}
@@ -131,15 +148,15 @@ Next == \/ \E t \in Times : t >= clock /\ clock' = t /\
             \/ (\E p \in Peers \cup {1}, s \in {3}, d \in {1, 3}, ln \in Lens :
                     Do("peer", PeerFrame(cf, R, t, p, <<"fwd", s, d, 0, ln>>), p, d))
             \/ (\E n \in Cl : Do("udp", UdpHeard(cf, R, t, n), 0, n))
-            \/ (\E m \in {0, 1}, d \in {2, 3} : Do("spu", Spu(cf, R, t, m, d, 0, 1), 0, d))
+            \/ (\E m \in {0, 1}, d \in {2, 3} : Do("spu", IF LoudSpu THEN SpuLoud(cf, R, t, m, d, 0, 1) ELSE Spu(cf, R, t, m, d, 0, 1), 0, d))
             \/ (WithReady /\ \E n \in Cl : Do("ret", MemberReturned(cf, R, t, n), 0, 0))
             \/ Do("time", Timeout(cf, R, t), 0, 0) )
-        \/ (\E p \in Peers : R' = AddPeer(R, p).R /\ UNCHANGED <<clock, last, ref, fw, heard, step>>
+        \/ (\E p \in Peers : R' = AddPeer(R, p).R /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet>>
                           /\ steps' = steps + 1)
-        \/ (\E p \in Peers : R' = RemovePeer(R, p) /\ UNCHANGED <<clock, last, ref, fw, heard, step>>
+        \/ (\E p \in Peers : R' = RemovePeer(R, p) /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet>>
                           /\ steps' = steps + 1)
         \/ (WithReady /\ \E n \in Cl, o \in {0, 1} :
-                R' = SetReady(R, n, o) /\ UNCHANGED <<clock, last, ref, fw, heard, step>> /\ steps' = steps + 1)
+                R' = SetReady(R, n, o) /\ UNCHANGED <<clock, last, ref, fw, heard, step, quiet>> /\ steps' = steps + 1)
 
 Spec == Init /\ [][Next]_vars
 
@@ -162,6 +179,8 @@ MailboxOk == /\ \A n \in DOMAIN R.mb.held : LET h == R.mb.held[n] IN
 Forwarded == fw
 HeardDelivers == heard
 StepsOver == step
+\* the uploaded packet of a member is answered, with the table full, as without a stamp and not as a refusal
+SpuSilent == quiet
 \* a bounded model check: calls up to a depth of Depth
 SmallMb == steps <= Depth
 \* witness: some call refused the hand-over of a held message (only possible when the host reports a member not ready)

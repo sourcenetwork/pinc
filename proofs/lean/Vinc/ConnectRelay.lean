@@ -397,7 +397,7 @@ def spu (cf : CF) (r : RS) (now m dst flag len : Nat) : Out :=
   if len == 0 || 35 + len > maxTun then fail r "baddg" m
   else if m == 0 then fail r "unauth" 0
   else
-    let uh := udpHeard cf r now m
+    let uh := if acan r.udp m cf.C then udpHeard cf r now m else okOut r []
     if dst == cf.me then (fail uh.r "noroute" m).after uh.ef
     else (route cf uh.r now m dst flag len .tunnel).after uh.ef
 

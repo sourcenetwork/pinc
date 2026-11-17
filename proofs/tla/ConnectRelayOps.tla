@@ -332,7 +332,7 @@ MemberReturned(cf, R, now, node) ==
 Spu(cf, R, now, m, dst, flag, len) ==
     IF len = 0 \/ 35 + len > MAXTUN THEN Fail(R, "baddg", m)
     ELSE IF m = 0 THEN Fail(R, "unauth", 0)
-    ELSE LET uh == UdpHeard(cf, R, now, m) IN
+    ELSE LET uh == IF CanPut(R.udp, m, cf.C) THEN UdpHeard(cf, R, now, m) ELSE [R |-> R, res |-> "ok", ef |-> <<>>] IN
          IF dst = cf.me THEN After(uh.ef, Fail(uh.R, "noroute", m))
          ELSE After(uh.ef, Route(cf, uh.R, now, m, dst, flag, len, "tunnel"))
 
