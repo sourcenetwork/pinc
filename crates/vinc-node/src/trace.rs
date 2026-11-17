@@ -112,6 +112,13 @@ pub enum NodeTrace {
     },
     /// The node left the group.
     Left,
+    /// A timer call did not move this deadline, which the call before had left due, for the first time since the node
+    /// started; [`Node::timer_stats`](crate::Node::timer_stats) counts every time.
+    TimerStuck {
+        /// The deadline: 0 the endpoint, 1 connectivity, 2 membership, 3 broadcast, 4 values, 5 reconcile,
+        /// 6 delay-tolerant, 7 the node's duties, 8 port mapping.
+        timer: u64,
+    },
     /// A dial of a layer above broadcast started (1 values, 2 reconcile, 3 delay-tolerant).
     LayerDial {
         /// The layer.
@@ -282,6 +289,7 @@ impl NodeTrace {
             Self::Carrier { .. } => "carrier",
             Self::Revoked { .. } => "revoked",
             Self::Left => "left",
+            Self::TimerStuck { .. } => "timer_stuck",
             Self::LayerDial { .. } => "layer_dial",
             Self::LayerUp { .. } => "layer_up",
             Self::LayerDown { .. } => "layer_down",
@@ -322,6 +330,7 @@ impl NodeTrace {
             Self::Carrier { member, open } => ([("member", member), ("open", open), z], 2),
             Self::Revoked { peer, sessions } => ([("peer", peer), ("sessions", sessions), z], 2),
             Self::Left => ([z, z, z], 0),
+            Self::TimerStuck { timer } => ([("timer", timer), z, z], 1),
             Self::LayerDial { layer, peer } | Self::LayerDown { layer, peer } => {
                 ([("layer", layer), ("peer", peer), z], 2)
             }

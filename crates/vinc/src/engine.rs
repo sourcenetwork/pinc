@@ -352,6 +352,11 @@ impl<S: KeyStore, A: Admit> Core<S, A> {
         self.stopped
     }
 
+    /// Whether the endpoint is shutting down or has stopped.
+    pub(crate) const fn stopping(&self) -> bool {
+        self.shutdown.is_some() || self.stopped.is_some()
+    }
+
     /// The identity the core signs with, for the relay role to share.
     pub(crate) fn identity(&self) -> Rc<RefCell<Identity<S>>> {
         Rc::clone(&self.identity)

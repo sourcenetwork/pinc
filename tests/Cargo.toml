@@ -1393,5 +1393,13 @@ name = "node_leave_timer"
 path = "node_leave_timer.rs"
 
 [[test]]
+name = "node_timer_bound"
+path = "node_timer_bound.rs"
+
+[[test]]
+name = "vinc_timer_bound"
+path = "vinc_timer_bound.rs"
+
+[[test]]
 name = "layers_dtn_wake"
 path = "layers_dtn_wake.rs"

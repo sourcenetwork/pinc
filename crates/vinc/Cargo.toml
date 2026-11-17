@@ -30,8 +30,9 @@ zeroize = { workspace = true }
 [features]
 # Lets a TPM key store (`vinc-keystore`) hold the identity: pass it to `Builder::key_store`.
 hwenc = ["vinc-keystore/hwenc"]
-# A slab of tickets of its own (`StandbyProbe`), driven call by call, for the trace check of the proofs.
-trace = []
+# A slab of tickets of its own (`StandbyProbe`), driven call by call, for the trace check of the proofs, and the
+# node's probes.
+trace = ["vinc-node/trace"]
 
 [lints]
 workspace = true

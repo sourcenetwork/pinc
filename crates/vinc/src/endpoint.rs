@@ -750,6 +750,28 @@ impl<H: Hosted, D: Discovery> Endpoint<H, D> {
         self.0.shared.run(|core, _| Try::Done(Ok(core.node_stats()))).await
     }
 
+    /// How many timer calls did not move a deadline of the endpoint or of a layer above it that the call before had
+    /// left due, by the layer that holds the deadline. All zero unless a layer has a defect: each such call is
+    /// counted, and the endpoint asks for its next timer call a millisecond later and goes on working.
+    pub fn timer_stats(&self) -> crate::TimerStats {
+        self.0
+            .shared
+            .lock()
+            .map_or_else(crate::TimerStats::default, |core| core.node.timer_stats())
+    }
+
+    /// Give the endpoint a deadline that is due now and that no call moves, as a probe (with the `trace` feature,
+    /// which the tests enable): a layer that breaks the timer contract.
+    #[cfg(feature = "trace")]
+    #[doc(hidden)]
+    pub fn stick_timer(&self) {
+        let now = self.0.shared.now();
+        if let Some(mut core) = self.0.shared.lock() {
+            core.node.stick_timer(Some(now));
+            core.wake_driver();
+        }
+    }
+
     /// The relay this endpoint is homed on now: the one its record names and a relayed path's first stop. A relay pinned
     /// with [`Relay::home`](crate::Relay::home) is it once that relay answers. `None` before any relay answered.
     pub fn home_relay(&self) -> Option<NodeId> {

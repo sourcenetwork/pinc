@@ -286,7 +286,10 @@ impl<H: Hosted> Shared<H> {
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 };
-                if core.service(now) > 0 {
+                // What was served is sent before the attempt runs. Not once the endpoint is stopping: an attempt that
+                // ends with the endpoint must not wait for the timers to have nothing due (vinc#551, vinc#569).
+                let served = core.service(now) > 0;
+                if served && !core.stopping() {
                     return Poll::Ready(Step::Io);
                 }
                 if H::Role::ON && owner && self.role_serve(&mut core, now) {
@@ -300,7 +303,7 @@ impl<H: Hosted> Shared<H> {
                     }
                     Try::Wait(w) => w,
                 };
-                if core.take_dirty() {
+                if core.take_dirty() || served {
                     return Poll::Ready(Step::Io);
                 }
                 let t = *turn.ticket.get_or_insert_with(|| core.standby.alloc());
