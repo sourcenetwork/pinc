@@ -108,8 +108,14 @@ impl<const N: usize> Recovery<N> {
             self.rtt.update(sample);
             self.tgr = self.rtt.smoothed().max(self.tgr - (self.tgr >> 5));
             self.cc.on_rtt_sample(sample);
-            if let Some(r) = self.path_rtt.get_mut(usize::from(newest_path)) {
+            // A packet sent on a path that has since left its slot says nothing of the path now in it.
+            let slot = usize::from(newest_path);
+            let left = self.path_left.get(slot).copied().flatten();
+            if let (Some(r), Some(bit)) = (self.path_rtt.get_mut(slot), 1u8.checked_shl(u32::from(newest_path)))
+                && left.is_none_or(|l| newest_time > l)
+            {
                 *r = self.rtt.smoothed();
+                self.path_seen |= bit;
             }
         }
         self.pto_count = 0;

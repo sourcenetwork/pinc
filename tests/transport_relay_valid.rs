@@ -147,7 +147,7 @@ fn see_other(net: &mut Net<'_, '_>, delay: u64) {
     let settle = net.now + SEC;
     net.run(settle, |_| false);
     assert!(
-        net.a.conn.path_rtt(OTHER).is_some(),
+        net.a.conn.recovery().path_seen(1),
         "no packet sent on the path the Reply came on was acknowledged"
     );
 }

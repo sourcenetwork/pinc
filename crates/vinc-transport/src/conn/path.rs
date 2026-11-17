@@ -18,14 +18,21 @@
 //! model's responder starts its challenge only when the peer's candidate list arrives, a hop behind the peer's
 //! first challenge, where the address limit then holds it back until the next probe; a node declared thin keeps
 //! that cadence, and an end whose session moved no application data for 20 s only answers, as the reference model
-//! looks for no direct path on an idle session). The active path is chosen by rank: first a relay path
-//! with no round trip yet ranks behind every other (this library's own rule: a session answered through a relay
-//! stays on it, and a path nothing was measured on never takes it from the path it runs on; the active relay path is
-//! unseen too after three probe timeouts in a row), then by cost, the smoothed round trip of the path, plus one second
-//! for a relay, minus 3 ms for IPv6, then by slot; a validated UDP path that was silent for 15 s is left out; from a
-//! relay the connection moves at once, otherwise only for a gain above 5 ms. After three probe timeouts in a row on a
-//! direct path the path is dropped as validated, challenged on the re-join cadence, and the connection falls back to
-//! the validated relay path of least rank, else the last relay path, if it has one.
+//! looks for no direct path on an idle session). The active path is chosen by rank: first a relay path nothing was
+//! seen on ranks behind every other (this library's own rule: a session answered through a relay stays on it, and a
+//! path nothing was seen on never takes it from the path it runs on; the active relay path is unseen too after three
+//! probe timeouts in a row), then by cost, then by slot. A path is seen when a packet sent on it was acknowledged, and
+//! only then (recovery keeps that fact per slot and forgets it when the slot's path leaves). Cost is the round trip
+//! of the path plus one second for a relay, minus 3 ms for IPv6: the session's smoothed round trip at the last
+//! acknowledgement of a packet sent on the path, or, on a path the session just left, the session's own estimate
+//! stamped on it as it left, which is a number and no evidence that the path carried anything. A validated UDP path
+//! that was silent for 15 s is left out; from a relay the connection moves at once, otherwise only for a gain above
+//! 5 ms. After three probe timeouts in a row on a direct path the path is dropped as validated, challenged on the
+//! re-join cadence, and the connection falls back to the validated relay path of least rank, else the last relay
+//! path, if it has one. A failing active relay path is left for a seen path always, and for an unseen one only when
+//! that one ranks before it; a relay path that was seen and then stops delivering is not left by the transport's own
+//! timers, and a standby relay path takes over through `path_lost`, the host's `set_active` or the peer's data on it
+//! (fail-over between relay paths is vinc#625).
 //!
 //! A challenge sent to a new or abandoned path follows a cadence that depends on why: a new path is probed 9 times
 //! from `max(33.3 ms, srtt / 8)`, doubling up to 2 s; a path abandoned after probe timeouts is probed at a flat gap
@@ -37,13 +44,17 @@
 //! one node space their re-join challenges to one address. A path that never answers stays
 //! unvalidated and is only removed when its slot is needed.
 //!
-//! A relay path is valid from the moment the connection tracks it, with no challenge: the relay authenticated the
-//! node at each end, as the reference model takes a relay path to be. It is validated by the dial, the responder,
-//! following the peer onto it and naming it a relay, and unvalidated only when its local address is gone or a
-//! sub-session adopts its parent's paths. Like every validated standby path it is kept alive by the endpoint's
-//! keepalive, which is what keeps a member's carrier heard by its hub and the hub's by the member. Leaving a relay
-//! path for another path (a dial answered through another relay) does not take its validity away; leaving a direct
-//! path does.
+//! A relay path is valid from the moment the connection tracks it as one, with no challenge: the relay authenticated
+//! the node at each end, as the reference model takes a relay path to be. It is validated by the dial or `add_path`
+//! naming it a relay, by the endpoint naming a tracked path a relay's ([`Connection::set_path_info`]), by the
+//! handshake's reply arriving on it, by a sub-session taking its parent's validated paths, and by an answered
+//! challenge (a probe or a punch can start one on a relay path); following the peer onto it later validates nothing.
+//! It is unvalidated when its local address is gone or a sub-session adopts paths its parent does not hold validated.
+//! Like every validated standby path it is kept alive by the endpoint's keepalive, which is what keeps a member's
+//! carrier heard by its hub and the hub's by the member. Leaving a relay path for another path (a dial answered
+//! through another relay) does not take its validity away; of the paths the session leaves only a direct one loses
+//! it, and only when the handshake's reply moves the session ([`Path::left`]): `switch_active`, following the peer
+//! and `set_active` leave a direct path validated.
 //!
 //! Invariants: the active path index always names a live slot; an unvalidated path never sends past its
 //! amplification budget; a direct path is validated only by an answer to a challenge sent to it.
@@ -83,7 +94,7 @@ const RELAY_PENALTY: u64 = SECOND;
 /// An IPv6 path costs this much less.
 const V6_BONUS: u64 = 3 * MS;
 /// A path replaces the active one only when it is cheaper by more than this.
-const SWITCH_GAIN: u64 = 5 * MS;
+pub(super) const SWITCH_GAIN: u64 = 5 * MS;
 /// A validated direct path silent for longer than this is no longer validated.
 pub(crate) const PATH_IDLE_DIRECT: u64 = 15 * SECOND;
 /// A session with no application data for this long is idle.
@@ -234,7 +245,7 @@ impl Path {
     }
 
     /// The cost used to rank paths.
-    fn cost(&self) -> u64 {
+    pub(super) fn cost(&self) -> u64 {
         let mut c = self.rtt;
         if self.info.kind == PathKind::Relay {
             c = c.saturating_add(RELAY_PENALTY);
@@ -503,11 +514,25 @@ conn_impl! {
         if i == self.paths.active {
             return Err(PathError::Active);
         }
+        self.drop_slot(i);
+        self.paths.recount();
+        Ok(())
+    }
+
+    /// Empty slot `i`. The path's round trip and the fact that it was seen go with it, and an acknowledgement of a
+    /// packet already sent on the slot counts for no path that takes it.
+    fn drop_slot(&mut self, i: usize) {
         if let Some(s) = self.paths.slots.get_mut(i) {
             *s = None;
         }
-        self.paths.recount();
-        Ok(())
+        self.forget_slot(i);
+    }
+
+    /// Forget what recovery holds of slot `i`'s path.
+    fn forget_slot(&mut self, i: usize) {
+        if let Ok(slot) = u8::try_from(i) {
+            self.rec.forget_path(slot);
+        }
     }
 
     /// Tell the connection the local address of path `id` is gone (the host's interface moved). The path is no longer
@@ -530,9 +555,9 @@ conn_impl! {
     /// Stop tracking the paths whose local address is gone, except the active one.
     pub(super) fn forget_gone(&mut self) {
         let active = self.paths.active;
-        for (i, s) in self.paths.slots.iter_mut().enumerate() {
-            if i != active && s.as_ref().is_some_and(|p| p.gone) {
-                *s = None;
+        for i in 0..NP {
+            if i != active && self.paths.get(i).is_some_and(|p| p.gone) {
+                self.drop_slot(i);
             }
         }
         self.paths.recount();
@@ -567,7 +592,8 @@ conn_impl! {
     /// The active path is chosen again only if it is now a relay path (or there is none): the reference model
     /// chooses by itself only from a relay, and otherwise when a direct path validates. A session on a direct path
     /// stays on it whatever the endpoint says of another path. Chosen again there, it would leave a direct path
-    /// slower than a second for a relay path whose round trip is not known yet and reads as zero.
+    /// slower than a second for a relay path that was seen with a smaller round trip, which the reference model does
+    /// not do.
     pub fn set_path_info(&mut self, id: PathId, info: PathInfo) {
         let Some(i) = self.paths.find(id) else { return };
         if let Some(p) = self.paths.get_mut(i)
@@ -636,6 +662,10 @@ conn_impl! {
         let mut path = Path::new(id, info);
         path.mtu.started = self.phase == Phase::Connected;
         path.last_rx = now;
+        if self.paths.get(free).is_some() {
+            // The evicted path leaves its slot.
+            self.forget_slot(free);
+        }
         if let Some(slot) = self.paths.slots.get_mut(free) {
             *slot = Some(path);
         }
@@ -814,39 +844,6 @@ conn_impl! {
         }
         self.rx.set_min_rtt(self.rec.rtt().min_rtt());
         self.shed_extensions();
-    }
-
-    /// The rank of path `i`, the least being the best: a relay path with no round trip is unseen and ranks behind every
-    /// other, unless it is the active path and still answering (it is unseen too after `PTO_FALLBACK` probe timeouts
-    /// in a row), then by cost, then by slot. A relay path nothing was measured on thus cannot take the session from
-    /// the path it runs on, and the session leaves it for a measured one when it stops answering.
-    pub(super) fn rank(&self, i: usize, p: &Path) -> (bool, u64, usize) {
-        let unseen = p.info.kind == PathKind::Relay
-            && p.rtt == 0
-            && (i != self.paths.active || self.rec.pto_count() >= PTO_FALLBACK);
-        (unseen, p.cost(), i)
-    }
-
-    /// The best usable path: validated, and not a direct path that went quiet for 15 s.
-    fn best_path(&self) -> Option<usize> {
-        let now = self.life.clock;
-        self.paths
-            .iter()
-            .filter(|(_, p)| {
-                p.validated && !(p.info.kind == PathKind::Direct && now.saturating_sub(p.last_rx) > PATH_IDLE_DIRECT)
-            })
-            .min_by_key(|(i, p)| self.rank(*i, p))
-            .map(|(i, _)| i)
-    }
-
-    /// Move to the cheapest usable path: at once from a relay, otherwise for a gain above 5 ms.
-    pub(super) fn choose_path(&mut self) {
-        let Some(best) = self.best_path() else { return };
-        let (Some(b), cur) = (self.paths.get(best).copied(), self.paths.active().copied()) else { return };
-        if cur.is_none_or(|c| c.gone || c.info.kind == PathKind::Relay || b.rtt.saturating_add(SWITCH_GAIN) < c.rtt) {
-            self.switch_active(best);
-            self.forget_gone();
-        }
     }
 
     /// Take the round trips recovery measured per path.

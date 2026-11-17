@@ -73,6 +73,7 @@ mod params;
 mod path;
 mod path_fall;
 mod path_held;
+mod path_rank;
 mod reasm;
 mod recv;
 mod send;

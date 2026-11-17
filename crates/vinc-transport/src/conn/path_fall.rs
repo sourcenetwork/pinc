@@ -2,7 +2,8 @@
 //! probe timeouts in a row, and the fall-back to a relay path both lead to.
 //!
 //! Invariants: the fall-back moves the session only to a relay path the connection tracks, the validated one of least
-//! rank first (see `rank`), so a relay path nothing was measured on is chosen only when no validated one exists.
+//! rank first (see `rank`: a seen path before an unseen one, then by cost and slot), else the last relay path. A relay
+//! path is validated from the moment it is tracked, so one nothing was seen on is taken whenever no seen one exists.
 
 use vinc_crypto::Provider;
 use vinc_security::Env;
@@ -72,6 +73,7 @@ conn_impl! {
         }
         self.relay_fallback();
     }
+
     /// Move the active path to the validated relay path of least rank, else to the last relay path, if the connection
     /// has one.
     fn relay_fallback(&mut self) {

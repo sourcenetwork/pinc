@@ -222,6 +222,11 @@ pub struct Recovery<const N: usize> {
     pub(super) lrtt: u64,
     pub(super) paths: [PathKind; MAX_PATHS],
     pub(super) path_rtt: [u64; MAX_PATHS],
+    /// One bit per slot: a packet sent on the slot's path was acknowledged since the slot last changed hands.
+    pub(super) path_seen: u8,
+    /// Per slot: when its path last left it, if one did; an acknowledgement of a packet sent then or before counts for
+    /// no path now in the slot.
+    pub(super) path_left: [Option<u64>; MAX_PATHS],
     pub(super) active: u8,
     pub(super) flip_at: Option<u64>,
     pub(super) mtu: u64,
@@ -264,6 +269,8 @@ impl<const N: usize> Recovery<N> {
             lrtt: 0,
             paths: [PathKind::Direct; MAX_PATHS],
             path_rtt: [0; MAX_PATHS],
+            path_seen: 0,
+            path_left: [None; MAX_PATHS],
             active: 0,
             flip_at: None,
             mtu: mtu.clamp(MIN_MSS, MAX_MSS),
@@ -405,6 +412,28 @@ impl<const N: usize> Recovery<N> {
     /// The round trip last measured on `path`, if it carried the newest acknowledged packet of some acknowledgement.
     pub fn path_rtt(&self, path: u8) -> Option<u64> {
         self.path_rtt.get(usize::from(path)).copied().filter(|r| *r > 0)
+    }
+
+    /// Whether a packet sent on `path` was acknowledged since the slot last changed hands: the one fact that a path
+    /// carries traffic (a round trip of the session's, stamped on the path by a switch, is not).
+    pub fn path_seen(&self, path: u8) -> bool {
+        1u8.checked_shl(u32::from(path))
+            .is_some_and(|bit| self.path_seen & bit != 0)
+    }
+
+    /// The path in slot `path` left it: forget its round trip and that it was seen, and ignore the acknowledgement of
+    /// any packet already sent on the slot for the path that takes it next. Does nothing for a slot out of range.
+    pub fn forget_path(&mut self, path: u8) {
+        let i = usize::from(path);
+        if let (Some(r), Some(left), Some(bit)) = (
+            self.path_rtt.get_mut(i),
+            self.path_left.get_mut(i),
+            1u8.checked_shl(u32::from(path)),
+        ) {
+            *r = 0;
+            *left = Some(self.clock);
+            self.path_seen &= !bit;
+        }
     }
 
     // ---- configuration ----
