@@ -5,9 +5,9 @@
 //! owns no socket: the host passes the time and the frames in, carries the frames out through [`Host`], and hears
 //! the results as [`Event`]s and [`Trace`] records.
 //!
-//! The wire format ([`wire`]), the signing ([`auth`]), the signed envelope ([`envelope`]) and the host interface ([`host`])
-//! need no allocator. The state
-//! machine keeps bounded tables and the hub log, and needs the `alloc` feature.
+//! The wire format ([`wire`]), the signing ([`auth`]), the signed envelope ([`envelope`]) and the host interface
+//! ([`host`]) need no allocator. The state machine keeps bounded tables and the hub log, and needs the `alloc`
+//! feature.
 //!
 //! The rules, in short:
 //! - A publisher hands a message to every hub at once when all are up (FANP to the primary, FAN to the others on a
