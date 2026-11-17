@@ -16,7 +16,8 @@ it, over unbounded times (saturating at `u64::MAX`), and what it proves, for eve
   `bhc_keep`);
 - the acknowledgement and the loss of a probe are applied only while that probe, named by its size and the packet
   number it left in, is the one in flight; any other probe changes nothing (`raise_other`, `lost_other`), among them the
-  probe of a path that was replaced by a new path in its slot (`raise_old_probe`, `lost_old_probe`);
+  probe of a path that was replaced by a new path in its slot, which the packet number counter that only grows makes
+  a different number from the new path's (`send_above`, `raise_old_probe`, `lost_old_probe`);
 - a lost probe waits for a path event or 600 s (`lost_wait`, `event_reset`);
 - a black-hole suspicion exists only above the floor (`Susp`, `susp_*`);
 - the acknowledgement, the loss and the echo of a probe change the state of the path they name and of no other
@@ -41,9 +42,8 @@ def ceiling (imtu : Nat) : Nat := min imtu jumboMtu
 
 structure M where
   cur : Nat := minMtu
-  infl : Option Nat := none
-  /-- The identity of the probe in flight (the packet number it left in). -/
-  ptok : Option Nat := none
+  /-- The probe in flight: its size and the packet number it left in, kept together as the code keeps them. -/
+  infl : Option (Nat × Nat) := none
   probed : Bool := false
   jdone : Bool := false
   retry : Nat := 0
@@ -62,32 +62,34 @@ def target (m : M) (allowed : Bool) (imtu : Nat) (lowlat : Bool) (now : Nat) : O
   else none
 
 def probeSent (m : M) (size tok : Nat) : M :=
-  if size = probeMtu ∧ !m.probed then { m with infl := some size, ptok := some tok, probed := true }
-  else { m with infl := some size, ptok := some tok, jdone := true }
+  if size = probeMtu ∧ !m.probed then { m with infl := some (size, tok), probed := true }
+  else { m with infl := some (size, tok), jdone := true }
 
 /-- The probe of this size and identity is the one in flight. -/
-abbrev Holds (m : M) (size tok : Nat) : Prop := m.infl = some size ∧ m.ptok = some tok
+abbrev Holds (m : M) (size tok : Nat) : Prop := m.infl = some (size, tok)
 
-instance (m : M) (size tok : Nat) : Decidable (Holds m size tok) := inferInstanceAs (Decidable (_ ∧ _))
+instance (m : M) (size tok : Nat) : Decidable (Holds m size tok) := inferInstanceAs (Decidable (m.infl = some (size, tok)))
 
 /-- The probe of `size` and identity `tok` was acknowledged: the state and the new datagram size if it rose. Only the
 probe in flight is taken: any other probe (a path that never sent it, a mark already cleared, a path that took the slot
 of the one that sent it) changes nothing. -/
 def raise (m : M) (size tok : Nat) : M × Option Nat :=
   if Holds m size tok then
-    (if m.cur < size then ({ m with infl := none, ptok := none, cur := size }, some size)
-     else ({ m with infl := none, ptok := none }, none))
+    (if m.cur < size then ({ m with infl := none, cur := size }, some size)
+     else ({ m with infl := none }, none))
   else (m, none)
 
 /-- A peer echoed `size` on the path: taken only if it is the size of the probe in flight and no larger than `bound`. -/
 def echo (m : M) (size bound : Nat) : M × Option Nat :=
-  if m.infl = some size ∧ size ≤ bound then raise m size (m.ptok.getD 0) else (m, none)
+  match m.infl with
+  | some (s, pn) => if s = size ∧ size ≤ bound then raise m size pn else (m, none)
+  | none => (m, none)
 
 /-- The probe of `size` and identity `tok` was lost; any other probe changes nothing. -/
 def probeLost (m : M) (size tok now : Nat) : M :=
   if Holds m size tok then
-    (if probeMtu < size then { m with infl := none, ptok := none, retry := satAdd now reprobe, jdone := true }
-     else { m with infl := none, ptok := none, retry := satAdd now reprobe })
+    (if probeMtu < size then { m with infl := none, retry := satAdd now reprobe, jdone := true }
+     else { m with infl := none, retry := satAdd now reprobe })
   else m
 
 def event (m : M) : M := { m with probed := false, jdone := false, retry := 0 }
@@ -110,7 +112,7 @@ def blackHoleCheck (m : M) (now : Nat) : M × Bool :=
     if covered m.backed big = true ∨ m.cur ≤ minMtu then ({ m with susp := none }, false)
     else if now < at_ then (m, false)
     else ({ m with susp := none, cur := minMtu, infl := none, lbig := none, pbig := none,
-                   retry := satAdd now reprobe, probed := true, jdone := true, ptok := none }, true)
+                   retry := satAdd now reprobe, probed := true, jdone := true }, true)
 
 def start (m : M) : M := { m with started := true }
 def setBig (m : M) (lb ba pb : Option Nat) : M := { m with lbig := lb, backed := ba, pbig := pb }
@@ -150,9 +152,12 @@ theorem inv_raise (m : M) (h : Inv m) (s tok : Nat) : Inv (raise m s tok).1 := b
 
 theorem inv_echo (m : M) (h : Inv m) (s b : Nat) : Inv (echo m s b).1 := by
   unfold echo
-  by_cases hb : m.infl = some s ∧ s ≤ b
-  · rw [if_pos hb]; exact inv_raise m h s _
-  · rw [if_neg hb]; exact h
+  rcases hi : m.infl with _ | ⟨s0, pn⟩
+  · exact h
+  · show Inv (if s0 = s ∧ s ≤ b then raise m s pn else (m, none)).1
+    by_cases hb : s0 = s ∧ s ≤ b
+    · rw [if_pos hb]; exact inv_raise m h s pn
+    · rw [if_neg hb]; exact h
 
 theorem inv_blackHole (m : M) (h : Inv m) (now rtt : Nat) : Inv (blackHole m now rtt) := by
   unfold blackHole
@@ -225,47 +230,46 @@ theorem raise_other (m : M) (size tok : Nat) (h : ¬ Holds m size tok) : raise m
   unfold raise; rw [if_neg h]
 
 /-- The acknowledgement of the probe in flight clears the mark. -/
-theorem raise_clears (m : M) (size tok : Nat) (h : Holds m size tok) :
-    (raise m size tok).1.infl = none ∧ (raise m size tok).1.ptok = none := by
+theorem raise_clears (m : M) (size tok : Nat) (h : Holds m size tok) : (raise m size tok).1.infl = none := by
   unfold raise
   rw [if_pos h]
   by_cases hlt : m.cur < size
-  · rw [if_pos hlt]; exact ⟨rfl, rfl⟩
-  · rw [if_neg hlt]; exact ⟨rfl, rfl⟩
+  · rw [if_pos hlt]
+  · rw [if_neg hlt]
 
 theorem probeSent_holds (m : M) (size tok : Nat) : Holds (probeSent m size tok) size tok := by
-  unfold probeSent; split <;> exact ⟨rfl, rfl⟩
-
-/-- The acknowledgement of a probe that left before the probe now in flight (the path was replaced and the new path
-sent a probe of the same size) changes nothing. -/
-theorem raise_old_probe (m : M) (size tok tok' : Nat) (h : tok ≠ tok') :
-    raise (probeSent m size tok') size tok = (probeSent m size tok', none) := by
-  apply raise_other
-  intro ⟨_, h2⟩
-  have h3 := (probeSent_holds m size tok').2
-  rw [h2] at h3
-  exact h (Option.some.inj h3)
+  unfold probeSent; split <;> rfl
 
 /-- An echo with no probe in flight, or of another size than the probe in flight, changes nothing. -/
-theorem echo_noinfl (m : M) (size bound : Nat) (h : m.infl ≠ some size) : echo m size bound = (m, none) := by
+theorem echo_noinfl (m : M) (size bound : Nat) (h : ∀ pn, m.infl ≠ some (size, pn)) : echo m size bound = (m, none) := by
   unfold echo
-  rw [if_neg (fun hh => h hh.1)]
+  rcases hi : m.infl with _ | ⟨s0, pn⟩
+  · rfl
+  · show (if s0 = size ∧ size ≤ bound then raise m size pn else (m, none)) = (m, none)
+    rw [if_neg (fun hh => h pn (by rw [hi, hh.1]))]
 
 /-- An echo above the bound changes nothing, whatever is in flight. -/
 theorem echo_over_bound (m : M) (size bound : Nat) (h : bound < size) : echo m size bound = (m, none) := by
   unfold echo
-  rw [if_neg (fun hh => absurd hh.2 (by omega))]
+  rcases hi : m.infl with _ | ⟨s0, pn⟩
+  · rfl
+  · show (if s0 = size ∧ size ≤ bound then raise m size pn else (m, none)) = (m, none)
+    rw [if_neg (fun hh => absurd hh.2 (by omega))]
 
 /-- An echo is taken only for the size of the probe in flight, within the bound, and only if it is above the datagram
 size. -/
 theorem echo_spec (m : M) (size bound n : Nat) (h : (echo m size bound).2 = some n) :
-    n = size ∧ size ≤ bound ∧ m.infl = some size ∧ m.cur < size := by
+    n = size ∧ size ≤ bound ∧ (∃ pn, m.infl = some (size, pn)) ∧ m.cur < size := by
   unfold echo at h
-  by_cases hb : m.infl = some size ∧ size ≤ bound
-  · rw [if_pos hb] at h
-    obtain ⟨hn, _, hlt, _⟩ := (raise_spec m size (m.ptok.getD 0)).1 n h
-    exact ⟨hn, hb.2, hb.1, hlt⟩
-  · rw [if_neg hb] at h; simp at h
+  rcases hi : m.infl with _ | ⟨s0, pn⟩
+  · rw [hi] at h; simp at h
+  · rw [hi] at h
+    change (if s0 = size ∧ size ≤ bound then raise m size pn else (m, none)).2 = some n at h
+    by_cases hb : s0 = size ∧ size ≤ bound
+    · rw [if_pos hb] at h
+      obtain ⟨hn, _, hlt, _⟩ := (raise_spec m size pn).1 n h
+      exact ⟨hn, hb.2, ⟨pn, by rw [hb.1]⟩, hlt⟩
+    · rw [if_neg hb] at h; simp at h
 
 /-- The echo of a path never takes it above what its interface carries or the jumbo size. -/
 theorem echo_ceiling (m : M) (size imtu n : Nat) (h : (echo m size (ceiling imtu)).2 = some n) :
@@ -287,22 +291,12 @@ theorem lost_wait (m : M) (size tok now : Nat) (h : Holds m size tok) :
 theorem lost_other (m : M) (size tok now : Nat) (h : ¬ Holds m size tok) : probeLost m size tok now = m := by
   unfold probeLost; rw [if_neg h]
 
-/-- The loss of a probe that left before the probe now in flight (the path was replaced) changes nothing. -/
-theorem lost_old_probe (m : M) (size tok tok' now : Nat) (h : tok ≠ tok') :
-    probeLost (probeSent m size tok') size tok now = probeSent m size tok' := by
-  apply lost_other
-  intro ⟨_, h2⟩
-  have h3 := (probeSent_holds m size tok').2
-  rw [h2] at h3
-  exact h (Option.some.inj h3)
-
 theorem event_reset (m : M) : (event m).retry = 0 ∧ (event m).probed = false ∧ (event m).jdone = false := ⟨rfl, rfl, rfl⟩
 
 theorem bhc_drop (m : M) (now : Nat) (h : (blackHoleCheck m now).2 = true) :
     (blackHoleCheck m now).1.cur = minMtu ∧ (blackHoleCheck m now).1.infl = none ∧
       (blackHoleCheck m now).1.probed = true ∧ (blackHoleCheck m now).1.jdone = true ∧
-      (blackHoleCheck m now).1.susp = none ∧ (blackHoleCheck m now).1.retry = satAdd now reprobe ∧
-      (blackHoleCheck m now).1.ptok = none := by
+      (blackHoleCheck m now).1.susp = none ∧ (blackHoleCheck m now).1.retry = satAdd now reprobe := by
   unfold blackHoleCheck at h ⊢
   split at h
   · simp at h
@@ -312,7 +306,7 @@ theorem bhc_drop (m : M) (now : Nat) (h : (blackHoleCheck m now).2 = true) :
     · by_cases hn : now < at_
       · rw [if_neg hc, if_pos hn] at h; simp at h
       · rw [if_neg hc, if_neg hn]
-        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- Without the fallback the datagram size does not change. -/
 theorem bhc_keep (m : M) (now : Nat) (h : (blackHoleCheck m now).2 = false) : (blackHoleCheck m now).1.cur = m.cur := by
@@ -370,5 +364,70 @@ theorem ack_this_path (w : W) (p : Bool) (size tok : Nat) : (ackOn w p size tok)
 theorem lost_this_path (w : W) (p : Bool) (size tok now : Nat) :
     (lostOn w p size tok now).get p = probeLost (w.get p) size tok now := by
   cases p <;> simp [lostOn, W.get, W.put]
+
+theorem W.put_get (w : W) (i : Bool) : w.put i (w.get i) = w := by cases i <;> rfl
+theorem W.get_put (w : W) (i : Bool) (m : M) : (w.put i m).get i = m := by cases i <;> rfl
+
+/-! ### The packet number counter
+
+The connection numbers its packets from one counter that only grows (`next_pn`), and a probe is named by the number it
+left in. `S` is the two paths with that counter: a probe sent takes the number the counter shows and moves it up, and a
+path replaced by a new one in its slot keeps the counter. So a number issued before is below the counter, and the probe
+a new path sends in the slot is named by a number above every probe an earlier path left. -/
+
+/-- The two paths of a connection and the next packet number. -/
+structure S where
+  w : W := {}
+  next : Nat := 0
+
+/-- A probe of `size` leaves on path `p`: it takes the next packet number. -/
+def S.send (s : S) (p : Bool) (size : Nat) : S :=
+  { w := s.w.put p (probeSent (s.w.get p) size s.next), next := s.next + 1 }
+
+/-- Path `p` is removed and a new one takes its slot: a fresh state with discovery started, the counter unchanged. -/
+def S.replace (s : S) (p : Bool) : S := { s with w := s.w.put p (start {}) }
+
+/-- The packet number `tok` was issued: it is below the counter. -/
+def S.issued (s : S) (tok : Nat) : Prop := tok < s.next
+
+theorem send_next (s : S) (p : Bool) (size : Nat) : (s.send p size).next = s.next + 1 := rfl
+theorem replace_next (s : S) (p : Bool) : (s.replace p).next = s.next := rfl
+
+/-- The counter only grows, so a number issued before stays issued. -/
+theorem send_issued (s : S) (p : Bool) (size tok : Nat) (h : s.issued tok) : (s.send p size).issued tok := by
+  unfold S.issued at *; rw [send_next]; omega
+
+theorem replace_issued (s : S) (p : Bool) (tok : Nat) (h : s.issued tok) : (s.replace p).issued tok := h
+
+/-- A probe sent takes a number above every number issued before it. -/
+theorem send_above (s : S) (p : Bool) (size tok : Nat) (h : s.issued tok) :
+    tok < s.next ∧ ((s.send p size).w.get p).infl = some (size, s.next) := by
+  refine ⟨h, ?_⟩
+  show ((s.w.put p (probeSent (s.w.get p) size s.next)).get p).infl = some (size, s.next)
+  rw [W.get_put]; exact probeSent_holds _ _ _
+
+/-- A probe sent after a number was issued is not that number's probe: the path does not hold it. -/
+theorem send_not_holds (s : S) (p : Bool) (size size' tok : Nat) (h : s.issued tok) :
+    ¬ Holds ((s.send p size').w.get p) size tok := by
+  intro hh
+  have h1 := (send_above s p size' tok h).2
+  have hh' : ((s.send p size').w.get p).infl = some (size, tok) := hh
+  rw [h1] at hh'
+  have := (Prod.mk.inj (Option.some.inj hh')).2
+  unfold S.issued at h; omega
+
+/-- The acknowledgement of a probe that an earlier path left, arriving after the slot was refilled and the new path sent
+a probe (of the same size or not), changes nothing. -/
+theorem raise_old_probe (s : S) (p : Bool) (size size' tok : Nat) (h : s.issued tok) :
+    ackOn ((s.replace p).send p size').w p size tok = (((s.replace p).send p size').w, none) := by
+  have hn := send_not_holds (s.replace p) p size size' tok (replace_issued s p tok h)
+  simp only [ackOn, raise_other _ _ _ hn, W.put_get]
+
+/-- The loss of a probe that an earlier path left, arriving after the slot was refilled and the new path sent a probe,
+changes nothing. -/
+theorem lost_old_probe (s : S) (p : Bool) (size size' tok now : Nat) (h : s.issued tok) :
+    lostOn ((s.replace p).send p size').w p size tok now = ((s.replace p).send p size').w := by
+  have hn := send_not_holds (s.replace p) p size size' tok (replace_issued s p tok h)
+  simp only [lostOn, lost_other _ _ _ _ hn, W.put_get]
 
 end Vinc.TransportMtu

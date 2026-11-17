@@ -652,6 +652,7 @@ par witness_tlc rtt_peakzero Rtt Rtt_peakzero NoPeakZero
 par run_tlc mtu Mtu Mtu
 par witness_tlc mtu_active Mtu Mtu_active OutcomeOnProbePath
 par witness_tlc mtu_unbound Mtu Mtu_unbound EchoBounded
+par witness_tlc mtu_sizeonly Mtu Mtu_sizeonly AppliedOwnToken
 par run_tlc dgram_size DgramSize DgramSize
 par witness_tlc dgram_size_noguard DgramSize DgramSize_noguard AppFits
 par witness_tlc dgram_size_reach DgramSize DgramSize_reach Coalesced

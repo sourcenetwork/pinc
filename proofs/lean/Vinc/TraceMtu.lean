@@ -25,7 +25,11 @@ def mOf (v : J) : Except String M := do
   let susp : Option (Nat × Nat) := match (← intList (← field v "susp")) with
     | [b, a] => if b < 0 then none else some (b.toNat, a.toNat)
     | _ => none
-  pure { cur := ← natF v "cur", infl := ← optF v "infl", ptok := ← optF v "ptok", probed := ← boolF v "probed", jdone := ← boolF v "jdone",
+  let infl ← match (← optF v "infl"), (← optF v "ptok") with
+    | none, none => pure none
+    | some sz, some pn => pure (some (sz, pn))
+    | _, _ => throw "a recorded probe in flight has a size or a packet number but not both"
+  pure { cur := ← natF v "cur", infl, probed := ← boolF v "probed", jdone := ← boolF v "jdone",
          retry := ← natF v "retry", started := ← boolF v "started", lbig := ← optF v "lbig", backed := ← optF v "backed",
          pbig := ← optF v "pbig", susp }
 
