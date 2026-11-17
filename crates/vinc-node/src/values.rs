@@ -102,25 +102,30 @@ pub(crate) struct VSess<'a, E: Ep, St: Store> {
     owner: Owner,
 }
 
+/// Abandon a stream of the endpoint in both directions: reset it, ask the peer to stop sending on it and forget it.
+/// The one way a stream is refused or given up, whether the layer holds it or not.
+fn abandon_real<E: Ep, St: Store>(io: &mut Io<E, St>, session: SessionId, stream: StreamId, code: u64) {
+    // A refused reset leaves the stream to the peer's reset or the session's end.
+    let _ = io.cmd(Command::Reset {
+        session,
+        stream,
+        error: code,
+    });
+    let _ = io.cmd(Command::StopSending {
+        session,
+        stream,
+        error: code,
+    });
+    io.drop_strm(session, stream);
+}
+
 impl<E: Ep, St: Store> VSess<'_, E, St> {
     /// Abandon a stream in both directions and forget it.
     fn abandon(&mut self, lid: u64, code: u64) {
         let Some(s) = self.net.drop_stream(lid) else {
             return;
         };
-        let (session, stream) = (s.session, s.stream);
-        // A refused reset leaves the stream to the peer's reset or the session's end.
-        let _ = self.io.cmd(Command::Reset {
-            session,
-            stream,
-            error: code,
-        });
-        let _ = self.io.cmd(Command::StopSending {
-            session,
-            stream,
-            error: code,
-        });
-        self.io.drop_strm(session, stream);
+        abandon_real(self.io, s.session, s.stream, code);
     }
 }
 
@@ -519,15 +524,21 @@ where
         if v.net.by_real.contains_key(&(session, stream)) {
             return;
         }
-        let Some(prov) = v.net.acquire(&peer) else {
-            return;
-        };
-        let Some(lid) = v.net.add(session, stream, Owner::Serve, prov) else {
-            let _ = self.io.cmd(Command::Reset {
-                session,
-                stream,
-                error: vinc_values::knobs::code::BUSY,
-            });
+        // The table cannot fill at today's limits (the server holds 32 requests, the fetches 32 providers), so this
+        // refusal is a guard; `add` gives the use back when it fails.
+        let Some((lid, prov)) = v
+            .net
+            .acquire(&peer)
+            .and_then(|p| v.net.add(session, stream, Owner::Serve, p).map(|lid| (lid, p)))
+        else {
+            let code = vinc_values::knobs::code::BUSY;
+            abandon_real(&mut self.io, session, stream, code);
+            // The stream was never added, so the trace carries the transport's stream id, not a layer number.
+            if let Some(v) = self.vals.as_deref_mut() {
+                v.sink.fetch = 0;
+                v.sink.trace(now, Trace::Refused { stream, code });
+            }
+            self.values_drain();
             return;
         };
         self.server_in(
