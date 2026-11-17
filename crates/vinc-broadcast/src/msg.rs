@@ -2,7 +2,8 @@
 //!
 //! Every message is checked before it is used: the head must parse, the origin must not be revoked, and the
 //! signature must cover the topic, the id and the exact body. A hub acknowledges a PUB or FANP only for a message it
-//! has stored (or already holds), so an acknowledged message is one the hub verified.
+//! has stored, or one it receives again that IS the message it stored under that id (same origin, timestamp, flag and
+//! body), so an acknowledged message is one the hub verified. An id the hub holds for another message is refused.
 //!
 //! Invariants: a message is delivered at most once per id within the dedupe window; a message from an origin the
 //! access-control layer has not yet answered for is held (at most [`HELD_MAX`]; one that finds no room is left unseen
@@ -24,6 +25,16 @@ use crate::node::{Held, Topics};
 use crate::table::{ProbeLimit, Refused};
 use crate::wire::{self, Head, ty};
 
+/// A publish whose id is known, compared with the message the log stored under it.
+enum Stored {
+    /// The same origin, timestamp, flag and body.
+    Same,
+    /// A different message under the same id.
+    Other,
+    /// The log does not hold the id (the dedupe set remembers it), so there is nothing to compare with.
+    Unknown,
+}
+
 impl Topics {
     /// Whether the dedupe set or the hub log holds `key`; [`ProbeLimit`] when a lookup passed the probe bound, in
     /// which case the message is refused and counted, not walked for.
@@ -32,6 +43,27 @@ impl Topics {
             return Ok(false);
         };
         Ok(st.seen.lookup(key, now)? || st.log.as_ref().map_or(Ok(false), |l| l.lookup(key))?)
+    }
+
+    /// What the hub's log holds under `key`, set against the publish that arrived with that id: the log has the
+    /// bytes of the message it stored, whose signature was verified then.
+    fn stored_as(&self, topic: &[u8], key: u64, head: &Head<'_>, body: &[u8]) -> Stored {
+        let Some(bytes) = self
+            .topics
+            .get(topic)
+            .and_then(|st| st.log.as_ref())
+            .and_then(|l| l.get(key))
+        else {
+            return Stored::Unknown;
+        };
+        let Ok((old, old_body)) = Head::parse(bytes) else {
+            return Stored::Unknown;
+        };
+        if old.origin == head.origin && old.ts == head.ts && old.isb == head.isb && old_body == body {
+            Stored::Same
+        } else {
+            Stored::Other
+        }
     }
 
     /// Record `mid` as seen in `topic`. A refusal (the probe bound, a full set) is counted in the trace and returns
@@ -85,10 +117,21 @@ impl Topics {
                 return;
             }
             Ok(true) => {
-                if ack {
-                    self.send_pack(h, from, mid);
+                // The acknowledgement says this origin's this body is stored. The comparison is with the stored
+                // message, whose signature was verified when it was stored, so an exact duplicate needs no second
+                // verification. A known id with anything else in it is another message under a taken id: refused,
+                // not acknowledged, so its publisher is not told it was stored. An id the log no longer holds (only
+                // the dedupe set remembers it) cannot be compared, so it is not acknowledged either.
+                match self.stored_as(topic, key, &head, body) {
+                    Stored::Same => {
+                        if ack {
+                            self.send_pack(h, from, mid);
+                        }
+                        self.note_reject(mid, Reject::Duplicate);
+                    }
+                    Stored::Other => self.note_reject(mid, Reject::IdTaken),
+                    Stored::Unknown => self.note_reject(mid, Reject::Duplicate),
                 }
-                self.note_reject(mid, Reject::Duplicate);
                 return;
             }
             Ok(false) => {}

@@ -51,6 +51,9 @@ pub enum Reject {
     /// The messages held for an access answer are at their limit; the message is left unseen so the gap repair
     /// brings it again.
     HeldFull,
+    /// A hub holds the id for another message (another origin, or the same origin with another body, timestamp or
+    /// flag), so the publish is not acknowledged.
+    IdTaken,
     /// The id's probe in the dedupe set or the log index would pass the probe bound, so the message is refused (or
     /// its id is not remembered). With ids placed by a keyed hash this does not happen for any honest sender.
     ProbeLimit,

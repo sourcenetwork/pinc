@@ -32,7 +32,10 @@ impl Topics {
         }
     }
 
-    /// A hub acknowledged a publish: stop retrying it.
+    /// A hub acknowledged a publish: stop retrying it. `pending` holds only this node's own publishes, and a hub
+    /// acknowledges an id only for the message it stored under it (same origin and body, see `msg.rs`), so an
+    /// acknowledgement of a pending id is final for this node's own message. If another origin took the id first the
+    /// hub sends none, and the publish ends in the give-up like one no hub acknowledged.
     fn on_pack<H: Host>(&mut self, h: &mut H, from: &NodeId, rest: &[u8]) {
         let Some(mid) = rest.first_chunk::<MID_LEN>().copied() else {
             return;
