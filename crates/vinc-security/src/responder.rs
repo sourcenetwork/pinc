@@ -721,6 +721,11 @@ pub fn screen_first<const PK: usize, const TK: usize>(
             let th_hello = hello_transcript(&hello_fields(&hello)).snapshot();
             match find_ticket(&stores.tickets, now, alpn, &hello, &th_hello) {
                 Ticket::Opens(_) => Screen::Admit { resume: true },
+                // A live ticket with a wrong binder gets no answer, where a missing, expired or mismatched ticket
+                // gets a reject: the reject sends a dialer that holds a ticket to a full handshake, and this sender
+                // has not shown it holds the ticket's secret. The id is 16 random bytes the responder gave the
+                // session's peer and that cross the wire only in that peer's Hello, so the silence tells only a
+                // sender that already has the id that the ticket is live.
                 Ticket::Binder => Screen::Drop,
                 Ticket::Expired(i) => {
                     stores.tickets.remove(i);
