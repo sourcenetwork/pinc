@@ -18,8 +18,9 @@
 //! behind a lost packet verify without waiting for it. The stream id in a proof frame is the endpoint's stream id,
 //! which both ends share; the layer's own handle for a stream is local to the node.
 //!
-//! Invariants: every table is bounded, the provider table by the providers in use; only bytes the fetcher verified reach the store; a fetch that finished leaves
-//! no stream behind; a served response slot is freed when the response is acknowledged.
+//! Invariants: every table is bounded, the provider table by the providers in use; only bytes the fetcher verified
+//! reach the store; a fetch that finished leaves no stream behind; a served response slot is freed when the response
+//! is acknowledged.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -44,7 +45,7 @@ use crate::layer::Layer;
 use crate::node::Node;
 use crate::trace::{Body, NodeTrace, tag};
 use crate::values_frames::{AHEAD_RUNS, EXT_MAX, head_sid, new_parts, stored_runs, with_sid};
-use crate::values_net::{Net, Owner, Pace, next_fetch_id};
+use crate::values_net::{Net, Owner, Pace, VStream, next_fetch_id};
 use crate::values_types::{FETCHES, ValuesError, ValuesRequest, ValuesStats};
 
 /// The most requests the server holds at once.
@@ -125,14 +126,14 @@ impl<E: Ep, St: Store> VSess<'_, E, St> {
         let Some(s) = self.net.drop_stream(lid) else {
             return;
         };
-        abandon_real(self.io, s.session, s.stream, code);
+        abandon_real(self.io, s.session(), s.stream(), code);
     }
 }
 
 impl<E: Ep, St: Store> VSess<'_, E, St> {
     /// The endpoint's session and stream of a layer stream.
     fn real(&self, stream: StreamId) -> Option<(SessionId, StreamId)> {
-        self.net.streams.get(&stream).map(|s| (s.session, s.stream))
+        self.net.stream(stream).map(|s| (s.session(), s.stream()))
     }
 }
 
@@ -169,7 +170,7 @@ impl<E: Ep, St: Store> Session for VSess<'_, E, St> {
         let Some((session, real)) = self.real(stream) else {
             return;
         };
-        let Some(s) = self.net.streams.get_mut(&stream) else {
+        let Some(s) = self.net.stream_mut(stream) else {
             return;
         };
         let mut want = upto.saturating_sub(s.base);
@@ -285,7 +286,7 @@ where
     }
 
     fn serve(&mut self, stream: StreamId, source: ValueSource<H>, len: u64) -> bool {
-        let Some((session, real)) = self.net.streams.get(&stream).map(|s| (s.session, s.stream)) else {
+        let Some((session, real)) = self.net.stream(stream).map(|s| (s.session(), s.stream())) else {
             return false;
         };
         let Some(source) = <E::Src as ServeSource<H>>::from_source(source) else {
@@ -301,7 +302,7 @@ where
             })
             .is_ok();
         if ok {
-            self.net.served.push_back(stream);
+            self.net.serve_began(stream);
         }
         ok
     }
@@ -399,13 +400,7 @@ where
             return false;
         };
         v.fetches.remove(i);
-        let owned: Vec<u64> = v
-            .net
-            .streams
-            .iter()
-            .filter(|(_, s)| s.owner == Owner::Fetch(fetch))
-            .map(|(lid, _)| *lid)
-            .collect();
+        let owned = v.net.of_owner(Owner::Fetch(fetch));
         let mut se = VSess {
             io: &mut self.io,
             net: &mut v.net,
@@ -492,8 +487,8 @@ where
             let serve = self
                 .vals
                 .as_deref()
-                .and_then(|v| v.net.streams.get(&lid))
-                .is_some_and(|s| s.owner == Owner::Serve);
+                .and_then(|v| v.net.stream(lid))
+                .is_some_and(|s| s.owner() == Owner::Serve);
             if serve {
                 self.server_in(now, &ServerIn::Reset(lid));
             }
@@ -521,7 +516,7 @@ where
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
-        if v.net.by_real.contains_key(&(session, stream)) {
+        if v.net.lid_of(session, stream).is_some() {
             return;
         }
         // The table cannot fill at today's limits (the server holds 32 requests, the fetches 32 providers), so this
@@ -555,20 +550,20 @@ where
         let known = self
             .vals
             .as_deref()
-            .is_some_and(|v| v.net.by_real.contains_key(&(session, stream)));
+            .is_some_and(|v| v.net.lid_of(session, stream).is_some());
         if !known {
             self.values_stream_opened(now, session, stream);
         }
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
-        let Some(lid) = v.net.by_real.get(&(session, stream)).copied() else {
+        let Some(lid) = v.net.lid_of(session, stream) else {
             return;
         };
-        let Some(s) = v.net.streams.get_mut(&lid) else {
+        let Some(s) = v.net.stream_mut(lid) else {
             return;
         };
-        let owner = s.owner;
+        let owner = s.owner();
         let Owner::Fetch(fid) = owner else {
             self.server_in(now, &ServerIn::Readable(lid));
             return;
@@ -611,10 +606,10 @@ where
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
-        let Some(s) = v.net.streams.get_mut(&lid) else {
+        let Some(s) = v.net.stream_mut(lid) else {
             return;
         };
-        let Owner::Fetch(fid) = s.owner else { return };
+        let Owner::Fetch(fid) = s.owner() else { return };
         if s.announced {
             return;
         }
@@ -626,7 +621,7 @@ where
         if let Some(v) = self.vals.as_deref_mut()
             && let Some(s) = v.net.drop_stream(lid)
         {
-            self.io.drop_strm(s.session, s.stream);
+            self.io.drop_strm(s.session(), s.stream());
         }
     }
 
@@ -635,13 +630,13 @@ where
         let Some(v) = self.vals.as_deref_mut() else {
             return;
         };
-        let Some(lid) = v.net.by_real.get(&(session, stream)).copied() else {
+        let Some(lid) = v.net.lid_of(session, stream) else {
             return;
         };
         let Some(s) = v.net.drop_stream(lid) else {
             return;
         };
-        match s.owner {
+        match s.owner() {
             Owner::Fetch(fid) => self.fetch_in(
                 now,
                 fid,
@@ -679,10 +674,10 @@ where
                 continue;
             }
             let Some(v) = self.vals.as_deref() else { continue };
-            let Some(lid) = head_sid(body).and_then(|real| v.net.by_real.get(&(session, real)).copied()) else {
+            let Some(lid) = head_sid(body).and_then(|real| v.net.lid_of(session, real)) else {
                 continue;
             };
-            let Some(owner) = v.net.streams.get(&lid).map(|s| s.owner) else {
+            let Some(owner) = v.net.stream(lid).map(VStream::owner) else {
                 continue;
             };
             let mut local = [0u8; EXT_MAX];
@@ -702,23 +697,23 @@ where
         let Some(v) = self.vals.as_deref() else {
             return false;
         };
-        if v.net.served.is_empty() {
+        if v.net.served().is_empty() {
             return false;
         }
         let mut lids = [0u64; SERVERS];
         let mut n = 0;
-        for (d, l) in lids.iter_mut().zip(v.net.served.iter()) {
+        for (d, l) in lids.iter_mut().zip(v.net.served().iter()) {
             *d = *l;
             n += 1;
         }
         let mut did = false;
         for lid in lids.iter().take(n) {
             let Some(v) = self.vals.as_deref_mut() else { break };
-            let Some(s) = v.net.streams.get_mut(lid) else {
-                v.net.served.retain(|x| x != lid);
+            let Some(s) = v.net.stream_mut(*lid) else {
+                v.net.served_forget(*lid);
                 continue;
             };
-            let (session, real, pace) = (s.session, s.stream, s.pace);
+            let (session, real, pace) = (s.session(), s.stream(), s.pace);
             let state = self.io.ep.send_state(session, real);
             if state.is_none_or(|st| st.done) {
                 did = true;
@@ -746,7 +741,7 @@ where
             } else {
                 None
             };
-            if let Some(s) = self.vals.as_deref_mut().and_then(|v| v.net.streams.get_mut(lid)) {
+            if let Some(s) = self.vals.as_deref_mut().and_then(|v| v.net.stream_mut(*lid)) {
                 s.pace = Pace {
                     sent: st.sent,
                     lost: st.lost,

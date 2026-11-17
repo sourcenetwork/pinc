@@ -46,18 +46,19 @@ pub enum ValuesError {
 impl fmt::Display for ValuesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Off => "the values layer is not enabled on this node",
-            Self::Busy => "too many fetches are running",
-            Self::TooManyRanges => "a fetch takes at most 255 ranges",
-            Self::OutOfBounds => "a range runs past the end of the value",
-            Self::Providers => "this node is at its provider limit",
+            Self::Off => "the values layer is not enabled on this node; enable it before fetching",
+            Self::Busy => "too many fetches are running; retry when one has ended",
+            Self::TooManyRanges => "a fetch takes at most 255 ranges; ask for fewer",
+            Self::OutOfBounds => "a range runs past the end of the value; ask for ranges inside it",
+            Self::Providers => "this node is at its provider limit; retry when a fetch has ended",
         })
     }
 }
 
 impl core::error::Error for ValuesError {}
 
-/// What the values layer counts, since the node started; all zero while the layer is off.
+/// What the values layer counts: the providers in use now and the fetches refused since the node started; all zero
+/// while the layer is off.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ValuesStats {
     /// The providers in use now: peers a running fetch or a stream of the layer refers to.

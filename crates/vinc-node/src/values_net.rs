@@ -4,8 +4,11 @@
 //! Invariants: every table is bounded by [`TABLE_MAX`]. A provider number is a slot of the provider table and means one
 //! peer for as long as any holder (a running fetch, a stream of the layer) holds a use of it; the last use given back
 //! frees the slot, and a free slot is reused before the table grows, so the table is bounded by the providers in use,
-//! not by the node's history. A stream gives back its use of its provider at the one place it is forgotten
-//! ([`Net::drop_stream`]), a fetch at the one place it ends ([`Net::end_fetch`]).
+//! not by the node's history. Every use is given back in one of five places: [`Net::drop_stream`] for a stream's use
+//! (the only way out of the stream tables), [`Net::add`] for the use handed to it when the stream table is full, the
+//! rollback in [`Net::acquire_all`] for the uses taken for a fetch the table cannot hold whole, [`Net::end_fetch`] for
+//! what a fetch holds when it finishes, fails or is cancelled, and [`Net::release_all`] for the start path of the node
+//! when a fetch is refused or already done as it starts (a fetch that never entered the table of running fetches).
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
@@ -29,9 +32,9 @@ pub(crate) enum Owner {
 /// A stream of the values protocol and the bytes the value layer has not released.
 #[derive(Debug)]
 pub(crate) struct VStream {
-    pub(crate) session: SessionId,
-    pub(crate) stream: StreamId,
-    pub(crate) owner: Owner,
+    session: SessionId,
+    stream: StreamId,
+    owner: Owner,
     /// The provider number of the stream's peer; the stream holds one use of it.
     prov: Provider,
     /// The absolute stream offset up to which the layer released the bytes.
@@ -45,6 +48,23 @@ pub(crate) struct VStream {
     pub(crate) announced: bool,
     /// For a served response: what the server was last told about its sending.
     pub(crate) pace: Pace,
+}
+
+impl VStream {
+    /// The endpoint's session of the stream.
+    pub(crate) const fn session(&self) -> SessionId {
+        self.session
+    }
+
+    /// The endpoint's id of the stream.
+    pub(crate) const fn stream(&self) -> StreamId {
+        self.stream
+    }
+
+    /// Who the stream belongs to: a fetch or the server.
+    pub(crate) const fn owner(&self) -> Owner {
+        self.owner
+    }
 }
 
 /// What the server was last told of a response it serves.
@@ -65,8 +85,8 @@ struct Slot {
 /// and the provider table.
 #[derive(Debug, Default)]
 pub(crate) struct Net {
-    pub(crate) streams: BTreeMap<u64, VStream>,
-    pub(crate) by_real: BTreeMap<(SessionId, StreamId), u64>,
+    streams: BTreeMap<u64, VStream>,
+    by_real: BTreeMap<(SessionId, StreamId), u64>,
     next: u64,
     /// The provider table: a provider number is an index; `None` is a free slot.
     provs: Vec<Option<Slot>>,
@@ -74,7 +94,7 @@ pub(crate) struct Net {
     held: BTreeMap<u32, Vec<Provider>>,
     /// Fetches refused because the provider table was full.
     refused: u64,
-    pub(crate) served: VecDeque<u64>,
+    served: VecDeque<u64>,
     pub(crate) provided: Provided,
 }
 
@@ -101,10 +121,19 @@ impl Net {
     /// providers in use (each use is given back by [`Net::release`]) and a scan finds a peer or a free slot in at most
     /// [`TABLE_MAX`] steps.
     pub(crate) fn acquire(&mut self, peer: &NodeId) -> Option<Provider> {
-        let i = match self
-            .slot_of(peer)
-            .or_else(|| self.provs.iter().position(Option::is_none))
-        {
+        let mut free = None;
+        let mut found = None;
+        for (i, s) in self.provs.iter().enumerate() {
+            match s {
+                Some(s) if s.peer == *peer => {
+                    found = Some(i);
+                    break;
+                }
+                None if free.is_none() => free = Some(i),
+                _ => {}
+            }
+        }
+        let i = match found.or(free) {
             Some(i) => i,
             None if self.provs.len() < TABLE_MAX => {
                 self.provs.push(None);
@@ -257,6 +286,44 @@ impl Net {
         Some(s)
     }
 
+    /// The stream with the layer's number `lid`.
+    pub(crate) fn stream(&self, lid: u64) -> Option<&VStream> {
+        self.streams.get(&lid)
+    }
+
+    pub(crate) fn stream_mut(&mut self, lid: u64) -> Option<&mut VStream> {
+        self.streams.get_mut(&lid)
+    }
+
+    /// The layer's number of the endpoint's stream `stream` of `session`.
+    pub(crate) fn lid_of(&self, session: SessionId, stream: StreamId) -> Option<u64> {
+        self.by_real.get(&(session, stream)).copied()
+    }
+
+    /// The streams `owner` holds.
+    pub(crate) fn of_owner(&self, owner: Owner) -> Vec<u64> {
+        self.streams
+            .iter()
+            .filter(|(_, s)| s.owner == owner)
+            .map(|(lid, _)| *lid)
+            .collect()
+    }
+
+    /// The served responses in the order they began.
+    pub(crate) const fn served(&self) -> &VecDeque<u64> {
+        &self.served
+    }
+
+    /// A response began on stream `lid`.
+    pub(crate) fn serve_began(&mut self, lid: u64) {
+        self.served.push_back(lid);
+    }
+
+    /// Stop tracking the served response on `lid`.
+    pub(crate) fn served_forget(&mut self, lid: u64) {
+        self.served.retain(|x| *x != lid);
+    }
+
     pub(crate) fn of_session(&self, session: SessionId) -> Vec<u64> {
         self.streams
             .iter()
@@ -384,7 +451,7 @@ mod tests {
     fn the_refusal_reads_as_the_provider_limit() {
         assert_eq!(
             alloc::format!("{}", ValuesError::Providers),
-            "this node is at its provider limit"
+            "this node is at its provider limit; retry when a fetch has ended"
         );
     }
 
