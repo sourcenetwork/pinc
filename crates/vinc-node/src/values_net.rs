@@ -371,67 +371,180 @@ mod tests {
         );
     }
 
-    #[derive(Debug, Clone, Copy)]
+    #[test]
+    fn a_stream_keeps_its_provider_after_the_fetch_ended_and_frees_it_when_dropped() {
+        let mut net = Net::default();
+        let provs = net.acquire_all(&[peer(1)]).unwrap();
+        let p = provs[0];
+        net.begin_fetch(1, provs);
+        let lid = net.add_for(SessionId(1), 4, Owner::Fetch(1), p).unwrap();
+        net.end_fetch(1);
+        assert_eq!(net.peer_of(p), Some(peer(1)), "the stream still names its peer");
+        assert_eq!(net.in_use(), 1);
+        net.drop_stream(lid);
+        assert_eq!(net.in_use(), 0);
+        assert!(net.provs.is_empty());
+    }
+
+    #[test]
+    fn a_full_stream_table_refuses_a_stream_and_gives_its_use_back() {
+        let mut net = Net::default();
+        for n in 0..TABLE_MAX as u64 {
+            let p = net.acquire(&peer(0)).unwrap();
+            assert!(net.add(SessionId(1), n, Owner::Serve, p).is_some());
+        }
+        let p = net.acquire(&peer(1)).unwrap();
+        assert_eq!(net.add(SessionId(1), TABLE_MAX as u64, Owner::Serve, p), None);
+        assert_eq!(net.peer_of(p), None, "the refused stream left no use of its peer");
+        assert_eq!(net.in_use(), 1);
+        let p = net.acquire(&peer(0)).unwrap();
+        assert_eq!(net.add_for(SessionId(1), TABLE_MAX as u64, Owner::Serve, p), None);
+        net.release(p);
+        for lid in net.streams.keys().copied().collect::<Vec<_>>() {
+            net.drop_stream(lid);
+        }
+        assert_eq!(net.in_use(), 0);
+        assert!(net.provs.is_empty());
+    }
+
+    #[derive(Debug, Clone)]
     enum Op {
         Open(usize),
         Hold(usize),
         Close(usize),
+        Begin(Vec<u32>),
+        End(usize),
+        Add(usize),
+        AddFor(usize),
+        Drop(usize),
     }
 
     fn ops() -> impl Strategy<Value = Vec<Op>> {
         prop::collection::vec(
-            (0u8..3, 0usize..24).prop_map(|(k, i)| match k {
+            (0u8..8, 0usize..24, prop::collection::vec(0u32..24, 0..5)).prop_map(|(k, i, peers)| match k {
                 0 => Op::Open(i),
                 1 => Op::Hold(i),
-                _ => Op::Close(i),
+                2 => Op::Close(i),
+                3 => Op::Begin(peers),
+                4 => Op::End(i),
+                5 => Op::Add(i),
+                6 => Op::AddFor(i),
+                _ => Op::Drop(i),
             }),
             0..300,
         )
+    }
+
+    /// Every use a holder has in flight, as the number it was given and the peer it was given for.
+    #[derive(Default)]
+    struct Model {
+        loose: Vec<(Provider, u32)>,
+        streams: Vec<(u64, Provider, u32)>,
+        fetches: Vec<(u32, Vec<(Provider, u32)>)>,
+    }
+
+    impl Model {
+        fn all(&self) -> Vec<(Provider, u32)> {
+            let streams = self.streams.iter().map(|s| (s.1, s.2));
+            let fetches = self.fetches.iter().flat_map(|f| f.1.iter().copied());
+            self.loose.iter().copied().chain(streams).chain(fetches).collect()
+        }
     }
 
     proptest! {
         #[test]
         fn the_table_holds_exactly_the_peers_in_use_and_a_number_in_use_keeps_its_peer(ops in ops()) {
             let mut net = Net::default();
-            // The holders in flight: the number each was given and the peer it was given for.
-            let mut holders: Vec<(Provider, u32)> = Vec::new();
+            let mut m = Model::default();
+            let (mut next_fetch, mut next_stream) = (0u32, 0u64);
             for op in ops {
                 match op {
                     Op::Open(i) => {
                         let n = u32::try_from(i).unwrap();
-                        let p = net.acquire(&peer(n)).unwrap();
-                        holders.push((p, n));
+                        m.loose.push((net.acquire(&peer(n)).unwrap(), n));
                     }
                     Op::Hold(i) => {
-                        if let Some((p, n)) = holders.get(i % holders.len().max(1)).copied() {
+                        if let Some((p, n)) = m.loose.get(i % m.loose.len().max(1)).copied() {
                             prop_assert_eq!(net.hold(p), Some(p));
-                            holders.push((p, n));
+                            m.loose.push((p, n));
                         }
                     }
                     Op::Close(i) => {
-                        if !holders.is_empty() {
-                            let (p, _) = holders.swap_remove(i % holders.len());
+                        if !m.loose.is_empty() {
+                            let (p, _) = m.loose.swap_remove(i % m.loose.len());
                             net.release(p);
                         }
                     }
+                    Op::Begin(peers) => {
+                        let ids: Vec<NodeId> = peers.iter().map(|n| peer(*n)).collect();
+                        let got = net.acquire_all(&ids).unwrap();
+                        next_fetch += 1;
+                        net.begin_fetch(next_fetch, got.clone());
+                        m.fetches.push((next_fetch, got.into_iter().zip(peers).collect()));
+                    }
+                    Op::End(i) => {
+                        if !m.fetches.is_empty() {
+                            let (id, _) = m.fetches.swap_remove(i % m.fetches.len());
+                            net.end_fetch(id);
+                        }
+                    }
+                    Op::Add(i) => {
+                        if !m.loose.is_empty() {
+                            let (p, n) = m.loose.swap_remove(i % m.loose.len());
+                            next_stream += 1;
+                            let lid = net.add(SessionId(1), next_stream, Owner::Serve, p).unwrap();
+                            m.streams.push((lid, p, n));
+                        }
+                    }
+                    Op::AddFor(i) => {
+                        let all = m.all();
+                        if !all.is_empty() {
+                            let (p, n) = all[i % all.len()];
+                            next_stream += 1;
+                            let lid = net.add_for(SessionId(1), next_stream, Owner::Fetch(1), p).unwrap();
+                            m.streams.push((lid, p, n));
+                        }
+                    }
+                    Op::Drop(i) => {
+                        if !m.streams.is_empty() {
+                            let (lid, _, _) = m.streams.swap_remove(i % m.streams.len());
+                            prop_assert!(net.drop_stream(lid).is_some());
+                        }
+                    }
                 }
-                prop_assert!(net.in_use() <= holders.len());
+                let all = m.all();
+                prop_assert!(net.in_use() <= all.len());
                 prop_assert!(net.provs.last().is_none_or(Option::is_some));
-                let mut peers: Vec<u32> = holders.iter().map(|h| h.1).collect();
+                let mut peers: Vec<u32> = all.iter().map(|h| h.1).collect();
                 peers.sort_unstable();
                 peers.dedup();
-                prop_assert_eq!(net.in_use(), peers.len(), "a peer nothing uses is in the table, or one in use is missing");
-                for (p, n) in &holders {
+                prop_assert_eq!(
+                    net.in_use(),
+                    peers.len(),
+                    "a peer nothing uses is in the table, or one in use is missing"
+                );
+                prop_assert_eq!(net.streams.len(), m.streams.len());
+                prop_assert_eq!(net.held.len(), m.fetches.len());
+                for (p, n) in &all {
                     prop_assert_eq!(net.peer_of(*p), Some(peer(*n)));
                     prop_assert_eq!(net.lookup(&peer(*n)), Some(*p));
-                    let uses = holders.iter().filter(|h| h.0 == *p).count();
+                    let uses = all.iter().filter(|h| h.0 == *p).count();
                     prop_assert_eq!(net.provs[p.0 as usize].map(|s| s.uses as usize), Some(uses));
                 }
             }
-            for (p, _) in holders {
+            for (lid, _, _) in m.streams {
+                net.drop_stream(lid);
+            }
+            for (id, _) in m.fetches {
+                net.end_fetch(id);
+            }
+            for (p, _) in m.loose {
                 net.release(p);
             }
             prop_assert!(net.provs.is_empty());
+            prop_assert!(net.held.is_empty());
+            prop_assert!(net.streams.is_empty());
+            prop_assert!(net.by_real.is_empty());
         }
     }
 }

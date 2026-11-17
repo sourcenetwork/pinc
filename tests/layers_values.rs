@@ -15,7 +15,7 @@ mod layers_common;
 use layers_common::{LWorld, big, secs};
 use vinc_node::trace::{Body, NodeTrace};
 use vinc_node::{Enabled, NodeEvent};
-use vinc_sim::{Loss, NodeId as SimId};
+use vinc_sim::{Loss, MS, NodeId as SimId};
 use vinc_tests::{LayerApps, Lie, NCmd, SplitMix64};
 
 fn values_on(tag: u8) -> LayerApps {
@@ -162,6 +162,11 @@ fn a_finished_fetch_gives_its_providers_back() {
                 },
             );
         }
+        w.run(secs(30) + 50 * MS);
+        assert!(
+            w.sim.node(m[0]).node.values_stats().providers_in_use > 0,
+            "a running fetch holds its provider"
+        );
         w.run(secs(120));
         assert_eq!(completes(&w, m[0]), 3, "all three fetches complete");
         let stats = w.sim.node(m[0]).node.values_stats();
@@ -170,6 +175,102 @@ fn a_finished_fetch_gives_its_providers_back() {
             "nothing uses a provider once its fetch finished"
         );
         assert_eq!(stats.providers_refused, 0);
+        for (k, provider) in m.iter().enumerate().take(4).skip(1) {
+            assert_eq!(
+                w.sim.node(*provider).node.values_stats().providers_in_use,
+                0,
+                "provider {k} serves nothing once the fetch finished"
+            );
+        }
+    });
+}
+
+/// The longest the request stream of a finished fetch may take to give its provider back on a quiet net, in seconds:
+/// measured, the provider is free 136 s after the fetch started (the layer's session closing).
+const SETTLE: u64 = 150;
+
+/// A world in which node 0 fetched a 64 KiB value from node 1, stored it and, `SETTLE` seconds at most after the
+/// fetch started, held no provider again; returns the world, the root, the length, the provider ids and the second
+/// the net reached.
+fn stored_value(seed: u64) -> (LWorld, [u8; 32], u64, Vec<[u8; 32]>, u64) {
+    let mut w = LWorld::build_with(seed, 2, 3, 8_000_000, false, values_on);
+    let m = w.members.clone();
+    let value = data(seed, 64 << 10);
+    let root = w.provide(m[1], value.clone());
+    let providers = ids(&w, &m[1..2]);
+    w.sim.command(
+        secs(30),
+        m[0],
+        NCmd::ValuesFetch {
+            root,
+            length: value.len() as u64,
+            ranges: vec![],
+            providers: providers.clone(),
+        },
+    );
+    let mut at = 30;
+    while w.sim.node(m[0]).node.values_stats().providers_in_use > 0 || completes(&w, m[0]) == 0 {
+        assert!(
+            at < 30 + SETTLE,
+            "the first fetch still holds a provider {SETTLE} s after it started"
+        );
+        at += 1;
+        w.run(secs(at));
+    }
+    assert_eq!(completes(&w, m[0]), 1, "the first fetch completes and stores the value");
+    (w, root, value.len() as u64, providers, at)
+}
+
+#[test]
+fn a_fetch_refused_at_start_holds_no_provider() {
+    big(|| {
+        let (mut w, root, length, providers, at) = stored_value(272);
+        let m0 = w.members[0];
+        let past_the_end = [vinc_values::span::Span { off: length, len: 1 }];
+        let req = vinc_node::ValuesRequest {
+            root,
+            length,
+            ranges: &past_the_end,
+            providers: &providers,
+            deadline: None,
+        };
+        let node = &mut w.sim.node_mut(m0).node;
+        assert_eq!(
+            node.values_fetch(secs(at) + MS, &req),
+            Err(vinc_node::ValuesError::OutOfBounds)
+        );
+        assert_eq!(node.values_stats().providers_in_use, 0, "a refused fetch holds nothing");
+        w.run(secs(at + 30));
+        assert_eq!(w.sim.node(m0).node.values_stats().providers_in_use, 0);
+    });
+}
+
+#[test]
+fn a_fetch_done_at_start_holds_no_provider() {
+    big(|| {
+        let (mut w, root, length, providers, at) = stored_value(273);
+        let m0 = w.members[0];
+        let req = vinc_node::ValuesRequest {
+            root,
+            length,
+            ranges: &[],
+            providers: &providers,
+            deadline: None,
+        };
+        let node = &mut w.sim.node_mut(m0).node;
+        assert!(node.values_fetch(secs(at) + MS, &req).is_ok());
+        assert_eq!(
+            node.values_running(),
+            0,
+            "the value is stored, so the fetch was done at start"
+        );
+        assert_eq!(
+            node.values_stats().providers_in_use,
+            0,
+            "a fetch done at start holds nothing"
+        );
+        w.run(secs(at + 30));
+        assert_eq!(w.sim.node(m0).node.values_stats().providers_in_use, 0);
     });
 }
 
@@ -498,6 +599,11 @@ fn a_cancelled_fetch_reports_nothing_more_and_its_streams_are_gone() {
             "a cancelled fetch kept receiving"
         );
         assert_eq!(w.sim.node(m[0]).node.values_running(), 0);
+        assert_eq!(
+            w.sim.node(m[0]).node.values_stats().providers_in_use,
+            0,
+            "a cancelled fetch gives its providers back"
+        );
         assert!(
             !w.sim.node_mut(m[0]).node.values_cancel(secs(121), 1),
             "a finished cancel finds nothing"
