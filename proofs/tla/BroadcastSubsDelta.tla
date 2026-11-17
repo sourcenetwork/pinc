@@ -21,6 +21,25 @@
 (*    whole list unless it is the current one.                             *)
 (*  - A member applies changes only from the hub its whole list came from. *)
 (*  - A change is taken between the capped lists.                          *)
+(* The whole list travels as ordered pieces of Piece ids (the lowest ranks *)
+(* first), all at one version; a list of at most Piece ids is one piece.   *)
+(* The hub keeps each stale recipient's place (the next piece) and sends   *)
+(* one piece per step while its stream has room; a recipient stays stale   *)
+(* until its last piece. Any change to the list, a restart, an ASK, a new  *)
+(* SUB and a new publisher put the places back to 0. A member gathers the  *)
+(* pieces of each hub apart and never acts on a partial list:              *)
+(*  - first 0 and the piece is the whole list: take it now, drop the       *)
+(*    gathering of that hub;                                               *)
+(*  - first 0 and more due: start (or restart) that hub's gathering;       *)
+(*  - first above 0: join the unbroken gathering of that hub only when it  *)
+(*    has the same version and total and has counted exactly `first` ids   *)
+(*    (the chain check); at the last piece take the gathered list and its  *)
+(*    version;                                                             *)
+(*  - anything else breaks the gathering: nothing is taken, the member     *)
+(*    asks that hub once per broken gathering, and drops the version it    *)
+(*    holds if that hub is its list's hub.                                 *)
+(* A piece that does not complete the list changes nothing the member      *)
+(* holds: its list, version and hints stay.                                *)
 (* The hub also sends the whole list on its own to a new publisher and to  *)
 (* a recipient whose stream refused a frame ("stale"), once there is room. *)
 (* (The code finds the stale recipients of a stream with room through an   *)
@@ -35,7 +54,11 @@
 (* also drops the hints of a topic the member leaves; the model has no     *)
 (* leave).                                                                 *)
 (*                                                                         *)
-(* Assumptions the model makes. One limit: Max is the limit of the hubs    *)
+(* Assumptions the model makes. In the code a change of more than a piece  *)
+(* of ids is not sent: the recipients get the whole list; the model sends  *)
+(* the change whatever its size. Hub-to-hub pieces (a hub's report of its  *)
+(* own subscribers to another hub) are not modelled, as the report is not. *)
+(* One limit: Max is the limit of the hubs                                 *)
 (* and of the members alike. In the code a member's max_subscribers may be *)
 (* under its hub's: its list is then cut, and it takes a change that       *)
 (* removes an id as a missed one (asks for the whole list), because the id *)
@@ -66,9 +89,17 @@
 (*              (BroadcastSubsDelta_nocap.cfg);                            *)
 (*  HintGuard - a hint beside the list, never into a list that came from  *)
 (*              a hub (BroadcastSubsDelta_nohint.cfg).                     *)
+(*  ChainCheck - a piece joins a gathering only on its version, its total  *)
+(*              and its rank (BroadcastSubsDelta_nochain.cfg);             *)
+(*  WholeOnly - a gathering is taken only whole, never into the list as    *)
+(*              the pieces arrive (BroadcastSubsDelta_partial.cfg).        *)
 (* The whole list on a SUB, on an ASK, to a new publisher and to a stale   *)
 (* recipient bring a member back up to date; they are what makes progress, *)
-(* not what keeps a list right, so they have no RED of their own.          *)
+(* not what keeps a list right, so they have no RED of their own. The same *)
+(* holds for the place resets and the ASK on a broken gathering.           *)
+(* PartIsPrefix: an unbroken gathering holds the lowest ids of the hub's   *)
+(* list at its version, as many as it has counted; with ViewIsHubSet this  *)
+(* is "the member's view equals the hub's set" across the pieces.          *)
 (*                                                                         *)
 (* Lean counterpart: proofs/lean/Vinc/BroadcastSubsDelta.lean (the change  *)
 (* of two sorted lists, applied, gives the new list: Apply below).         *)
@@ -78,30 +109,43 @@ EXTENDS Integers, Sequences, FiniteSets
 \* Hubs: the hubs; Members: the members (numbers, so they have an order); Max: max_subscribers; StreamCap: the frames a
 \* stream holds; MaxSteps: how many steps a run takes at most; MaxLives: how many lives a hub has at most; Hinted: the
 \* members that take join hints (every member in the code; fewer keep a large configuration small); HintMax: how many
-\* hints a member keeps (max_subscribers in the code); the four guards are booleans (TRUE in the code).
-CONSTANTS Hubs, Members, Max, StreamCap, MaxSteps, MaxLives, Hinted, HintMax, GapRule, FromCheck, CapDelta, HintGuard
+\* hints a member keeps (max_subscribers in the code); Piece: how many ids a piece of the whole list carries (SUBS_PIECE
+\* in the code; Max makes every list one piece); the six guards are booleans (TRUE in the code).
+CONSTANTS Hubs, Members, Max, StreamCap, MaxSteps, MaxLives, Hinted, HintMax, Piece,
+          GapRule, FromCheck, CapDelta, HintGuard, ChainCheck, WholeOnly
 
 \* live: each hub's subscribers; pubs: its recent publishers; told: the list it last told; life: its incarnation;
 \* seq: the number of its list; hist: every (life, number, list) it ever had; stale: the recipients it owes the whole
-\* list; asks: the members whose ASK is on its way to it; chan: the frames on the stream from a hub to a member, oldest
-\* first; peers: each member's list; from: the hub that list came from ("none" before any); pver: the version the
-\* member holds (None while it waits for a whole list); hints: each member's join hints, kept beside its list;
-\* steps: the steps taken, which bounds the runs.
-VARIABLES live, pubs, told, life, seq, hist, stale, asks, chan, peers, from, pver, hints, steps
-vars == <<live, pubs, told, life, seq, hist, stale, asks, chan, peers, from, pver, hints, steps>>
+\* list; place: the next piece of the whole list a stale recipient is owed (0 for any other); asks: the members whose
+\* ASK is on its way to it; chan: the frames on the stream from a hub to a member, oldest first; peers: each member's
+\* list; from: the hub that list came from ("none" before any); pver: the version the member holds (None while it waits
+\* for a whole list); part: each member's gathering of the pieces from each hub (NoPart when there is none); hints:
+\* each member's join hints, kept beside its list; steps: the steps taken, which bounds the runs.
+VARIABLES live, pubs, told, life, seq, hist, stale, place, asks, chan, peers, from, pver, part, hints, steps
+vars == <<live, pubs, told, life, seq, hist, stale, place, asks, chan, peers, from, pver, part, hints, steps>>
 
 \* A member that holds no version.
 None == <<0, 0>>
+\* A member with no gathering from a hub; a gathering has the version and total of the list, the ids counted so far, the
+\* ids kept (the lowest ones, in order), and whether a piece broke it.
+NoPart == [on |-> FALSE, v |-> None, total |-> 0, got |-> 0, ids |-> {}, broken |-> FALSE]
+\* The lowest n ids of a set.
+Low(S, n) == {x \in S : Cardinality({y \in S : y < x}) < n}
 \* The lowest Max ids of a set: what build_list keeps.
-Cap(S) == {x \in S : Cardinality({y \in S : y < x}) < Max}
+Cap(S) == Low(S, Max)
+\* The ids of piece j of a list: the ranks j * Piece to (j + 1) * Piece - 1.
+Ids(S, j) == Low(S, (j + 1) * Piece) \ Low(S, j * Piece)
+\* Whether piece j is the last piece of the list.
+Last(S, j) == (j + 1) * Piece >= Cardinality(S)
 \* The members a hub sends its list to: its live subscribers and its recent publishers.
 Rcpt(h) == live[h] \cup pubs[h]
 \* A hub's current version.
 Cur(h) == <<life[h], seq[h]>>
-\* The whole list at version v, as a frame.
-Full(v, S) == [k |-> "full", v |-> v, s |-> S, add |-> {}, rem |-> {}]
+\* Piece j of the whole list S at version v, as a frame.
+PieceF(v, S, j) ==
+    [k |-> "piece", v |-> v, s |-> Ids(S, j), add |-> {}, rem |-> {}, first |-> j * Piece, total |-> Cardinality(S)]
 \* A change making version v, as a frame.
-Delta(v, a, r) == [k |-> "delta", v |-> v, s |-> {}, add |-> a, rem |-> r]
+Delta(v, a, r) == [k |-> "delta", v |-> v, s |-> {}, add |-> a, rem |-> r, first |-> 0, total |-> 0]
 \* A member applies a change: drop the removed, add the added, keep the lowest Max (subs.rs apply).
 Apply(P, a, r) == Cap((P \ r) \cup a)
 \* The version of h's list member m holds: what its SUB to h carries (held_ver).
@@ -112,14 +156,16 @@ Init ==
     /\ life = [h \in Hubs |-> 1] /\ seq = [h \in Hubs |-> 0]
     /\ hist = [h \in Hubs |-> {<<1, 0, {}>>}]
     /\ stale = [h \in Hubs |-> {}] /\ asks = [h \in Hubs |-> {}]
+    /\ place = [h \in Hubs |-> [m \in Members |-> 0]]
     /\ chan = [h \in Hubs |-> [m \in Members |-> <<>>]]
     /\ peers = [m \in Members |-> {}] /\ from = [m \in Members |-> "none"] /\ pver = [m \in Members |-> None]
+    /\ part = [m \in Members |-> [h \in Hubs |-> NoPart]]
     /\ hints = [m \in Members |-> {}]
     /\ steps = 0
 
-\* Hub h's set became nl and its publishers np; fresh are owed the whole list; ch is what its streams hold. This is
-\* announce: tell_members sends the change to the recipients that are not stale, then flush_stale sends the whole list
-\* to the stale ones that have room.
+\* Hub h's set became nl and its publishers np; fresh are owed the whole list from its first piece; ch is what its
+\* streams hold. This is announce: tell_members sends the change to the recipients that are not stale, then flush_stale
+\* sends the next piece of the whole list to the stale ones that have room.
 Announce(h, nl, np, fresh, ch) ==
     LET rc == nl \cup np
         \* the new list, and whether it changed
@@ -138,16 +184,21 @@ Announce(h, nl, np, fresh, ch) ==
         refused == {p \in dto : Len(ch[p]) >= StreamCap}
         c1 == [p \in Members |-> IF p \in dto \ refused THEN Append(ch[p], Delta(v, a, r)) ELSE ch[p]]
         s2 == s1 \cup refused
-        \* the stale recipients whose stream has room take the whole list and are no longer stale
+        \* where each owed recipient is: a change, a fresh SUB, ASK or publisher and a refused change put it at piece 0
+        pl == [p \in Members |-> IF chg \/ p \in fresh \/ p \notin s2 THEN 0 ELSE place[h][p]]
+        \* the stale recipients whose stream has room take their next piece
         ok == {p \in s2 : Len(c1[p]) < StreamCap}
+        \* those that took the last piece are no longer stale
+        done == {p \in ok : Last(nt, pl[p])}
     IN  /\ live' = [live EXCEPT ![h] = nl]
         /\ pubs' = [pubs EXCEPT ![h] = np]
         /\ told' = [told EXCEPT ![h] = nt]
         /\ seq' = [seq EXCEPT ![h] = v[2]]
         /\ hist' = [hist EXCEPT ![h] = @ \cup {<<v[1], v[2], nt>>}]
-        /\ chan' = [chan EXCEPT ![h] = [p \in Members |-> IF p \in ok THEN Append(c1[p], Full(v, nt)) ELSE c1[p]]]
-        /\ stale' = [stale EXCEPT ![h] = s2 \ ok]
-        /\ UNCHANGED <<life, asks, peers, from, pver, hints>>
+        /\ chan' = [chan EXCEPT ![h] = [p \in Members |-> IF p \in ok THEN Append(c1[p], PieceF(v, nt, pl[p])) ELSE c1[p]]]
+        /\ stale' = [stale EXCEPT ![h] = s2 \ done]
+        /\ place' = [place EXCEPT ![h] = [p \in Members |-> IF p \in done THEN 0 ELSE IF p \in ok THEN pl[p] + 1 ELSE pl[p]]]
+        /\ UNCHANGED <<life, asks, peers, from, pver, part, hints>>
 
 \* What on_sub owes the whole list: a subscriber that is new, or whose SUB does not carry the current version.
 SubFresh(h, m, isnew) == IF isnew \/ Held(m, h) # Cur(h) THEN {m} ELSE {}
@@ -167,31 +218,43 @@ Resub(h, m) == m \in live[h] /\ Announce(h, live[h], pubs[h], SubFresh(h, m, FAL
 \* subs.rs note_publisher: a member that is not a subscriber publishes at h; it is owed the whole list.
 Pub(h, m) == m \notin live[h] /\ m \notin pubs[h] /\ Announce(h, live[h], pubs[h] \cup {m}, {m}, chan[h])
 
-\* behind.rs peer_writable, subs.rs subs_writable: m's stream has room and m is stale: it is sent the whole list.
+\* behind.rs peer_writable, subs.rs subs_writable: m's stream has room and m is stale: it is sent its next piece, and
+\* stays stale until the last one.
 Writable(h, m) ==
     /\ m \in stale[h] /\ m \in Rcpt(h) /\ Len(chan[h][m]) < StreamCap
-    /\ chan' = [chan EXCEPT ![h][m] = Append(@, Full(Cur(h), told[h]))]
-    /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, asks, peers, from, pver, hints>>
+    /\ chan' = [chan EXCEPT ![h][m] = Append(@, PieceF(Cur(h), told[h], place[h][m]))]
+    /\ IF Last(told[h], place[h][m])
+       THEN /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
+            /\ place' = [place EXCEPT ![h][m] = 0]
+       ELSE /\ place' = [place EXCEPT ![h][m] = @ + 1]
+            /\ UNCHANGED stale
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, asks, peers, from, pver, part, hints>>
 
-\* subs.rs on_subs ASK at the hub: a recipient that asked is stale, and is sent the whole list if its stream has room.
+\* subs.rs on_subs ASK at the hub: a recipient that asked is stale at piece 0, and is sent that piece if its stream has
+\* room.
 HubAsk(h, m) ==
     /\ m \in asks[h]
     /\ asks' = [asks EXCEPT ![h] = @ \ {m}]
     /\ IF m \in Rcpt(h) /\ Len(chan[h][m]) < StreamCap
-       THEN /\ chan' = [chan EXCEPT ![h][m] = Append(@, Full(Cur(h), told[h]))]
-            /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
+       THEN /\ chan' = [chan EXCEPT ![h][m] = Append(@, PieceF(Cur(h), told[h], 0))]
+            /\ IF Last(told[h], 0)
+               THEN /\ stale' = [stale EXCEPT ![h] = @ \ {m}]
+                    /\ place' = [place EXCEPT ![h][m] = 0]
+               ELSE /\ stale' = [stale EXCEPT ![h] = @ \cup {m}]
+                    /\ place' = [place EXCEPT ![h][m] = 1]
        ELSE /\ stale' = [stale EXCEPT ![h] = IF m \in Rcpt(h) THEN @ \cup {m} ELSE @]
+            /\ place' = [place EXCEPT ![h][m] = 0]
             /\ UNCHANGED chan
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, peers, from, pver, hints>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, peers, from, pver, part, hints>>
 
 \* A frame is lost on the way and nobody is told (a relay drop).
 Lose(h, m) ==
     /\ Len(chan[h][m]) > 0
     /\ chan' = [chan EXCEPT ![h][m] = Tail(@)]
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, asks, peers, from, pver, hints>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, place, asks, peers, from, pver, part, hints>>
 
-\* The hub restarts: a new life with no subscribers and an empty list; its streams and the asks to it are lost.
+\* The hub restarts: a new life with no subscribers and an empty list; its streams, its places and the asks to it are
+\* lost.
 Restart(h) ==
     /\ life[h] < MaxLives
     /\ life' = [life EXCEPT ![h] = @ + 1]
@@ -199,8 +262,18 @@ Restart(h) ==
     /\ live' = [live EXCEPT ![h] = {}] /\ pubs' = [pubs EXCEPT ![h] = {}] /\ told' = [told EXCEPT ![h] = {}]
     /\ hist' = [hist EXCEPT ![h] = @ \cup {<<life[h] + 1, 0, {}>>}]
     /\ stale' = [stale EXCEPT ![h] = {}] /\ asks' = [asks EXCEPT ![h] = {}]
+    /\ place' = [place EXCEPT ![h] = [m \in Members |-> 0]]
     /\ chan' = [chan EXCEPT ![h] = [m \in Members |-> <<>>]]
-    /\ UNCHANGED <<peers, from, pver, hints>>
+    /\ UNCHANGED <<peers, from, pver, part, hints>>
+
+\* Member m takes the list S at version v from hub h: it replaces its list, names its hub and its version.
+Take(m, h, v, S) ==
+    /\ peers' = [peers EXCEPT ![m] = S]
+    /\ from' = [from EXCEPT ![m] = h]
+    /\ pver' = [pver EXCEPT ![m] = v]
+
+\* A gathering's ids reach the member's list as they come: what a member that does not wait for the whole list does.
+Prefix(m, h, v, S) == IF WholeOnly THEN UNCHANGED <<peers, from, pver>> ELSE Take(m, h, v, S)
 
 \* subs.rs on_subs at a member: the oldest frame on the stream from h arrives.
 Deliver(h, m) ==
@@ -210,29 +283,58 @@ Deliver(h, m) ==
            mine == ~FromCheck \/ from[m] = h
            \* the base check: the change starts from the version the member holds (with the guard)
            onbase == ~GapRule \/ pver[m] = <<f.v[1], f.v[2] - 1>>
+           \* the gathering of h's pieces, how many ids the piece carries, and the ids and count with it
+           p == part[m][h]
+           cnt == Cardinality(f.s)
+           same == p.v = f.v /\ p.total = f.total
+           chained == p.on /\ ~p.broken /\ (~ChainCheck \/ (same /\ p.got = f.first))
+           \* the broken gathering of this frame's version (gather: a gap)
+           broke == [on |-> TRUE, v |-> f.v, total |-> f.total, got |-> 0, ids |-> {}, broken |-> TRUE]
+           gathered == [on |-> TRUE, v |-> f.v, total |-> f.total, got |-> p.got + cnt, ids |-> p.ids \cup f.s,
+                        broken |-> FALSE]
        IN
-       \* a whole list replaces the member's, names its hub and its version
-       IF f.k = "full"
-       THEN /\ peers' = [peers EXCEPT ![m] = f.s]
-            /\ from' = [from EXCEPT ![m] = h]
-            /\ pver' = [pver EXCEPT ![m] = f.v]
+       \* the first piece is the whole list: it replaces the member's, names its hub and its version
+       IF f.k = "piece" /\ f.first = 0 /\ cnt = f.total
+       THEN /\ Take(m, h, f.v, f.s)
+            /\ part' = [part EXCEPT ![m][h] = NoPart]
             /\ UNCHANGED asks
-       ELSE IF mine /\ onbase
+       \* the first of more pieces: the gathering of h starts again, and the member takes nothing yet
+       ELSE IF f.k = "piece" /\ f.first = 0
+       THEN /\ part' = [part EXCEPT ![m][h] = [on |-> TRUE, v |-> f.v, total |-> f.total, got |-> cnt, ids |-> f.s,
+                                                  broken |-> FALSE]]
+            /\ Prefix(m, h, f.v, f.s)
+            /\ UNCHANGED asks
+       \* a later piece that follows the gathering: with the last one the member takes the gathered list
+       ELSE IF f.k = "piece" /\ chained
+       THEN /\ IF gathered.got >= f.total
+               THEN /\ Take(m, h, f.v, gathered.ids)
+                    /\ part' = [part EXCEPT ![m][h] = NoPart]
+               ELSE /\ part' = [part EXCEPT ![m][h] = gathered]
+                    /\ Prefix(m, h, f.v, gathered.ids)
+            /\ UNCHANGED asks
+       \* a later piece that does not follow: the gathering is broken and the member takes nothing; it asks h once per
+       \* broken gathering, and drops its version if h is its list's hub
+       ELSE IF f.k = "piece"
+       THEN /\ part' = [part EXCEPT ![m][h] = IF p.on /\ p.broken /\ same THEN p ELSE broke]
+            /\ asks' = [asks EXCEPT ![h] = IF p.on /\ p.broken /\ same THEN @ ELSE @ \cup {m}]
+            /\ pver' = [pver EXCEPT ![m] = IF from[m] = h THEN None ELSE @]
+            /\ UNCHANGED <<peers, from>>
        \* a change on its base is applied and the member holds the new version
+       ELSE IF mine /\ onbase
        THEN /\ peers' = [peers EXCEPT ![m] = Apply(@, f.add, f.rem)]
             /\ pver' = [pver EXCEPT ![m] = f.v]
-            /\ UNCHANGED <<from, asks>>
+            /\ UNCHANGED <<from, asks, part>>
        ELSE IF mine /\ pver[m] # None
        \* a change on another base: the member applies nothing, waits, and asks for the whole list
        THEN /\ pver' = [pver EXCEPT ![m] = None]
             /\ asks' = [asks EXCEPT ![h] = @ \cup {m}]
-            /\ UNCHANGED <<peers, from>>
+            /\ UNCHANGED <<peers, from, part>>
        \* a change from another hub, or while the member already waits: ignored
-       ELSE UNCHANGED <<peers, from, pver, asks>>
+       ELSE UNCHANGED <<peers, from, pver, asks, part>>
     \* a list that names a hinted node covers it: the hint is dropped
     /\ hints' = [hints EXCEPT ![m] = @ \ peers'[m]]
     /\ chan' = [chan EXCEPT ![h][m] = Tail(@)]
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, place>>
 
 \* node.rs Topics::hint: member m takes n as a join hint. It is kept in m's own set of hints (at most HintMax, a full set
 \* refuses it) and never enters the list; with the guard off, it goes into the list (while it has room) even when the list
@@ -246,7 +348,7 @@ Hint(m, n) ==
        ELSE /\ Cardinality(peers[m]) < Max
             /\ peers' = [peers EXCEPT ![m] = @ \cup {n}]
             /\ UNCHANGED hints
-    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, asks, chan, from, pver>>
+    /\ UNCHANGED <<live, pubs, told, life, seq, hist, stale, place, asks, chan, from, pver, part>>
 
 \* Any member and hub take any step, up to MaxSteps steps in all.
 Next == /\ steps < MaxSteps
@@ -258,12 +360,14 @@ Next == /\ steps < MaxSteps
            \/ \E m \in Hinted, n \in Members : Hint(m, n)
 Spec == Init /\ [][Next]_vars
 
-\* Every variable holds what it should.
+\* Every variable holds what it should. A place is 0 unless the recipient is stale.
 TypeOK ==
     /\ \A h \in Hubs : live[h] \subseteq Members /\ pubs[h] \subseteq Members /\ told[h] \subseteq Members
     /\ \A h \in Hubs : stale[h] \subseteq Members /\ asks[h] \subseteq Members
+    /\ \A h \in Hubs, m \in Members : place[h][m] \in 0..Max /\ (m \notin stale[h] => place[h][m] = 0)
     /\ \A h \in Hubs, m \in Members : Len(chan[h][m]) <= StreamCap
     /\ \A m \in Members : peers[m] \subseteq Members /\ from[m] \in Hubs \cup {"none"}
+    /\ \A m \in Members, h \in Hubs : part[m][h].ids \subseteq Members /\ part[m][h].got <= Max
     /\ \A m \in Members : hints[m] \subseteq Members /\ Cardinality(hints[m]) <= HintMax
 
 \* A hub's list is its subscribers' lowest Max ids, and its current version names it in the history.
@@ -283,4 +387,13 @@ HintsApart == \A m \in Members : hints[m] \cap peers[m] = {}
 
 \* A stale entry is always a recipient: the hub owes the whole list only to those it tells.
 StaleAreRecipients == \A h \in Hubs : stale[h] \subseteq Rcpt(h)
+
+\* An unbroken gathering holds exactly the lowest ids it has counted of the hub's list at its version, and that list
+\* has the gathering's total.
+PartIsPrefix == \A m \in Members, h \in Hubs :
+    (part[m][h].on /\ ~part[m][h].broken) =>
+        \E e \in hist[h] : /\ e[1] = part[m][h].v[1] /\ e[2] = part[m][h].v[2]
+                           /\ Cardinality(e[3]) = part[m][h].total
+                           /\ Cardinality(part[m][h].ids) = part[m][h].got
+                           /\ part[m][h].ids = Low(e[3], part[m][h].got)
 =============================================================================
