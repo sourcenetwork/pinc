@@ -453,7 +453,10 @@ where
         s.datagrams_dropped_send = self.dgrams.send_dropped();
         s.datagrams_dropped_recv = self.dgrams.recv_dropped();
         s.events_lost = self.events.lost;
-        s.held_back = self.streams.stats().held_back;
+        let streams = self.streams.stats();
+        s.held_back = streams.held_back;
+        s.range_overflows = streams.range_overflows;
+        s.range_spills = streams.range_spills;
         s
     }
 
