@@ -6,13 +6,14 @@
 //! parts and datagrams too long to be read; fill the half-open table to its cap with forgeries that arrive at staggered
 //! times and keep offering more; dial it for real (a full handshake, then a resumption while the table is full, then
 //! replays of the used Hello); close a half-open session; leave it with no protocol registered and with a full slot
-//! table; stall it by leaving events unread; and step the clock to just before, onto and past the end of each
-//! session's 30 s, and back. One line is written per call of the endpoint that decided something or changed the
-//! bookkeeping, and for every datagram and timer call: the inputs the decision used (the message type and length the
-//! test reads off the datagram, how many sessions held its id, whether the event queue was stalled), the decisions the
-//! endpoint recorded in its own trace ring during the call (admissions, sessions made, established, expired and freed)
-//! and the slots whose bookkeeping changed, read through the `trace` view `half_open_slot`, with the count, the stall
-//! and `poll_timeout` after the call.
+//! table; stall it by leaving events unread; shrink the room the host leaves to accept sessions; and step the clock to
+//! just before, onto and past the end of each session's life, and back. One line is written per call of the endpoint
+//! that decided something or changed the bookkeeping, and for every datagram and timer call: the inputs the decision
+//! used (the message type and length the test reads off the datagram, whether the datagram is one a genuine dialer
+//! sent as it left it, how many sessions held its id, whether the event queue was stalled), the decisions the endpoint
+//! recorded in its own trace ring during the call (admissions with the count, the room and the sessions owed; sessions
+//! made, established, expired and freed) and the slots whose bookkeeping changed, read through the `trace` view
+//! `half_open_slot`, with the count, the stall and `poll_timeout` after the call.
 //!
 //! The host's clock ticks in milliseconds, so every time of a call and every creation time is a whole millisecond:
 //! `halfopen.ndjson` writes times in milliseconds (a deadline rounded up, which keeps every comparison of a deadline
@@ -20,10 +21,17 @@
 //! Lean replay only, has the same lines in nanoseconds.
 //!
 //! The test compares every call with a naive reading of the rules: the count is the number of counted sessions and at
-//! most 256, a counted session is unauthenticated, an unauthenticated session's deadline is at most 30 s after its
-//! creation and `poll_timeout` is the earliest deadline (none while stalled), a timer call leaves no session past its
-//! 30 s, an admission is `len >= floor && (resume || count < 256)`, a refused first flight changes no slot and counts
-//! one dropped (or stalled) datagram, and a session leaves the count only by being established or freed.
+//! most 256, a counted session is unauthenticated, an unauthenticated session's deadline is at most its own life after
+//! its creation (30 s, 60 s once it answered as a responder) and `poll_timeout` is the earliest deadline (none while
+//! stalled), a timer call leaves no session at or past its end, one tick past its life, and a session leaves the count
+//! only by being established or freed. A first packet is admitted only when it meets the floor of its type (1200
+//! bytes for a full Initial, 464 for a short one, 93 for a Hello), the owed sessions leave room, and it resumes or the
+//! count is under the cap, which is 256 or half the room the host left, rounded up, when that is less. A short Initial
+//! or a Hello that the responder would only reject, or not answer, is decided without a session (admitted 2, answered
+//! with a reject, or 3, dropped) and takes no slot, and a packet of a genuine dialer that finds no session under its
+//! ids is never decided so. A refused or dropped first flight changes no slot and counts one dropped, refused or
+//! stalled datagram; a reject counts none in its call unless the ledger or a full queue refuses it, and is counted as
+//! sent when it is written.
 #![allow(
     clippy::unwrap_used,
     clippy::too_many_lines,
@@ -91,6 +99,7 @@ fn the_half_open_cap_matches_the_models() {
         seen.rejected > 0,
         "no forged or replayed first packet was answered without a session"
     );
+    assert!(seen.dropped_first > 0, "no first packet was dropped by the screening");
     assert!(
         seen.refused_half > 0,
         "no first flight was refused at half a room smaller than twice the cap"

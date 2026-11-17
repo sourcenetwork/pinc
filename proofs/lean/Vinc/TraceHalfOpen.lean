@@ -12,8 +12,10 @@ a session made, established, expired or freed) must be the one `Vinc.CoreHalfOpe
 and the count the model computes must be the recorded ones; the deadlines a session's connection asks for are the
 endpoint's own. The cap a first flight meets is the smaller of the code's and half the room, rounded up, and none starts
 a session while the owed sessions fill the room. A first packet the responder would only reject or not answer is
-recorded as decided without a session (admitted 2): a short Initial or a Hello of its floor's size or more, no
-resumption, that finds room to be decided on. An admission happens only
+recorded as decided without a session, answered with a reject because its prekey or ticket is not held (admitted 2)
+or dropped without an answer (admitted 3): a short Initial or a Hello of its floor's size or more, no resumption,
+that finds room to be decided on, and never one the test sent as a genuine dialer does while no session holds its id. A reject is counted once at
+most in the call (a refusal by the ledger or a full queue); one that is queued is counted when it is sent. An admission happens only
 while the id has fewer holders than `holders` (`room`), and a datagram whose first flight went to the admission frees
 no session that was in use before it (only one it made itself): an arrival never frees the session that holds its id.
 After every call the count is at most the cap and the number of counted sessions, every slot is good (`good`),
@@ -62,10 +64,10 @@ structure St where
   adm : Option (Bool × Bool)
 
 /-- One decision of a call: `[0, admitted, count, resume, room, owed]` an admission (admitted 1 made a session, 0 was
-refused, 2 was answered without a session or dropped), `[1, slot, dial, 0, 0, 0]` a session made, `[2, slot, 0, 0, 0,
+refused, 2 was answered with a reject without a session, 3 was dropped), `[1, slot, dial, 0, 0, 0]` a session made, `[2, slot, 0, 0, 0,
 0]` established, `[3, slot, 0, 0, 0, 0]` expired (the next decision frees it), `[4, slot, 0, 0, 0, 0]` freed; `n` is
 how many sessions held the datagram's id. -/
-def stepOf (p : P) (op : String) (now kind len n : Nat) (st : St) (s : List Nat) (next : Option (List Nat)) :
+def stepOf (p : P) (op : String) (now kind len n genuine : Nat) (st : St) (s : List Nat) (next : Option (List Nat)) :
     Except String St := do
   match s with
   | [0, a, c, r, rm, ow] =>
@@ -74,10 +76,10 @@ def stepOf (p : P) (op : String) (now kind len n : Nat) (st : St) (s : List Nat)
     check (room p n) s!"a first flight went to the admission for an id that {n} sessions hold"
     check (c == st.e.count) s!"the admission used the count {c}, the model holds {st.e.count}"
     check (r == 0 || kind == 6) "a resumption that is no Hello"
-    check (a ≤ 2) "an admission that is neither made, refused nor answered without a session"
-    if a == 2 then
-      check (r == 0 && forged kind && decide (ow < rm) && decide (floor p kind ≤ len))
-        "a first packet answered without a session that is not a short Initial or a Hello of its floor's size, or no room"
+    check (a ≤ 3) "an admission that is neither made, refused, answered with a reject nor dropped"
+    if a ≥ 2 then
+      check (r == 0 && forged kind && decide (ow < rm) && decide (floor p kind ≤ len) && (genuine == 0 || n > 0))
+        "a first packet answered without a session that is not a short Initial or a Hello of its floor's size, or no room, or a genuine one with no session under its id"
     else
       check ((a == 1) == (decide (ow < rm) && admits { p with max := halfCap p.max rm } st.e.count kind len (r == 1)))
         "the admission differs from the rule"
@@ -101,11 +103,11 @@ def stepOf (p : P) (op : String) (now kind len n : Nat) (st : St) (s : List Nat)
   | [4, j, _, _, _, _] => pure { st with e := release st.e j }
   | _ => throw s!"unknown decision {s}"
 
-def foldSteps (p : P) (op : String) (now kind len n : Nat) : St → List (List Nat) → Except String St
+def foldSteps (p : P) (op : String) (now kind len n genuine : Nat) : St → List (List Nat) → Except String St
   | st, [] => pure st
   | st, s :: rest => do
-    let st' ← stepOf p op now kind len n st s rest.head?
-    foldSteps p op now kind len n st' rest
+    let st' ← stepOf p op now kind len n genuine st s rest.head?
+    foldSteps p op now kind len n genuine st' rest
 
 /-- Every session the decisions free was not in use before the call (`before`), or was made earlier in the call
 (`made`). -/
@@ -129,6 +131,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let kind ← natF j "kind"
     let len ← natF j "len"
     let n ← natF j "n"
+    let genuine ← natF j "genuine"
     let stalled0 := (← natF j "stalled0") == 1
     let stalled := (← natF j "stalled") == 1
     let count ← natF j "count"
@@ -140,7 +143,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     let timeout : Option Nat := match ← natList (← field j "timeout") with
       | [t] => some t
       | _ => none
-    let st ← foldSteps p op now kind len n { e := w.e, adm := none } steps
+    let st ← foldSteps p op now kind len n genuine { e := w.e, adm := none } steps
     -- the slots and the count the model computes are the endpoint's; the deadlines are the endpoint's own
     let sl := diff.foldl (fun acc (x : Nat × Option Sl) => put acc x.1 x.2) w.e.slots
     check (sl.map bare == st.e.slots.map bare)
@@ -168,7 +171,10 @@ def replayEvent (j : J) (w : W) : Except String W := do
         "a type that starts no session decided"
       check (stalled0 || !isFirst kind || decided) "a first message type was not decided"
       check (made || diff.isEmpty) "a first flight that made no session changed a slot"
-      check (!decided || made || dropped + otherwise == 1) "a first flight that made no session was not counted once"
+      -- a reject that is queued is counted when it is sent, not in this call
+      let answered := steps.head?.bind (fun s => s[1]?) == some 2
+      check (!decided || made || (if answered then dropped + otherwise ≤ 1 else dropped + otherwise == 1))
+        "a first flight that made no session was not counted once"
     pure { w with e := e' }
 
 end Vinc.TraceHalfOpen

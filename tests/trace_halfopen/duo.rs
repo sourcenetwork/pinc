@@ -76,12 +76,14 @@ impl Duo {
         while let Some((from, to, mut d)) = self.net.captured.get(self.taken).cloned() {
             self.taken += 1;
             if to == self.r.addr {
+                let mut genuine = true;
                 if self.damage && matches!(kind_of(&d), 1 | 2) {
                     self.damage = false;
                     self.reverse = true;
+                    genuine = false;
                     damage(&mut d);
                 }
-                batch.push((from, d));
+                batch.push((from, d, genuine));
             }
         }
         if self.reverse && batch.len() > 1 {
@@ -89,8 +91,12 @@ impl Duo {
             // is what completes it
             batch.reverse();
         }
-        for (from, d) in batch {
-            self.r.dgram(now, from, d, None);
+        for (from, d, genuine) in batch {
+            if genuine {
+                self.r.peer_dgram(now, from, d);
+            } else {
+                self.r.dgram(now, from, d, None);
+            }
         }
         self.r.tick(now);
         for (local, remote, d) in self.r.transmit(now) {

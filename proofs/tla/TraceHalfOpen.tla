@@ -11,7 +11,8 @@
 (* table, a stalled event queue and timer calls before, at and after the   *)
 (* ends of the sessions, the clock stepping back too. One line per call:   *)
 (* the inputs the decisions used (the message type and length read off the *)
-(* datagram, how many sessions held its id, the stall), the decisions the  *)
+(* datagram, whether the test sent it as a genuine dialer would, how many  *)
+(* sessions held its id, the stall), the decisions the                     *)
 (* endpoint recorded in its own trace ring (admissions with the count, the *)
 (* room the host left to accept sessions and the sessions owed, and the    *)
 (* ticket's verdict they used, sessions made, established, expired and     *)
@@ -25,14 +26,20 @@
 (* flight meets is the smaller of the code's and half the room, rounded    *)
 (* up, and no flight starts a session while the owed sessions fill the     *)
 (* room. A first packet the responder would only reject, or not answer at  *)
-(* all, is recorded as decided without a session (admitted 2): the         *)
-(* endpoint answers it without one, a short Initial or a Hello of the      *)
-(* floor's size or more, and it takes no slot. A first flight              *)
-(* goes to the                                                            *)
-(* admission only while its id has fewer holders than the endpoint allows  *)
-(* (Room), and a datagram whose first flight went to the admission frees   *)
-(* no session that was in use before it, only one it made itself: an       *)
-(* arrival never frees the session that holds its id. Times are in         *)
+(* all, is recorded as decided without a session: answered with a reject   *)
+(* because its prekey or ticket is not held (admitted 2) or dropped        *)
+(* without an answer (admitted 3), only a short Initial or a Hello of the  *)
+(* floor's size or more, no resumption, that finds room to be decided on,  *)
+(* and never a packet the test sent as a genuine dialer does when no       *)
+(* session holds its id: that first packet is admitted or refused, never   *)
+(* rejected or dropped (a copy of it that finds its session may be). A     *)
+(* reject is counted once at most in the call (a refusal by the ledger, or *)
+(* a full queue of rejects); one that is queued is counted when it is      *)
+(* sent. A first flight goes to the admission only while its id has fewer  *)
+(* holders than the endpoint allows (Room), and a datagram whose first     *)
+(* flight went to the admission frees no session that was in use before    *)
+(* it, only one it made itself: an arrival never frees the session that    *)
+(* holds its id. Times are in                                              *)
 (* milliseconds (a deadline rounded up, so every comparison is the one the *)
 (* code makes).                                                            *)
 (*                                                                         *)
@@ -62,8 +69,8 @@ HalfCapOf(max, room) == IF Half(room) < max THEN Half(room) ELSE max
 
 \* the decisions of one call, in the order the endpoint recorded them, from the state before it: st = [e, ok, adm],
 \* adm the last admission <<admitted, resume>> (<<>> once a session took it); a step is <<code, a, b, c, d, f>>: 0 an
-\* admission <<0, admitted, count, resume, room, owed>> (admitted 1 made a session, 0 was refused, 2 was answered
-\* without a session or dropped; Ev.n sessions held the datagram's id), 1 a session made in slot a (b = 1 for a
+\* admission <<0, admitted, count, resume, room, owed>> (admitted 1 made a session, 0 was refused, 2 was answered with a
+\* reject without a session, 3 was dropped; Ev.n sessions held the datagram's id), 1 a session made in slot a (b = 1 for a
 \* dial), 2 established, 3 expired, 4 freed
 RECURSIVE Fold(_, _, _)
 Fold(st, steps, k) ==
@@ -76,12 +83,15 @@ Fold(st, steps, k) ==
                            ok |-> /\ st.ok /\ Ev.op = "dgram" /\ First(Ev.kind) /\ s[3] = x.count
                                   /\ Room(Ev.n, p.holders)
                                   /\ (s[4] = 1 => Ev.kind = 6)
-                                  /\ s[2] \in 0..2
-                                  \* a first packet answered without a session is a short Initial or a Hello of the
-                                  \* floor's size or more that finds room to be decided on, and no resumption
-                                  /\ (s[2] = 2 => /\ Forged(Ev.kind) /\ s[4] = 0 /\ s[6] < s[5]
-                                                  /\ Ev.len >= Floor(Ev.kind, p.full, p.short, p.hello))
-                                  /\ (s[2] # 2 => (s[2] = 1) = (s[6] < s[5]
+                                  /\ s[2] \in 0..3
+                                  \* a first packet answered with a reject or dropped, without a session, is a short
+                                  \* Initial or a Hello of the floor's size or more that finds room to be decided on, no
+                                  \* resumption, and not one the test sent as a genuine dialer does while no session
+                                  \* holds its id
+                                  /\ (s[2] >= 2 => /\ Forged(Ev.kind) /\ s[4] = 0 /\ s[6] < s[5]
+                                                  /\ Ev.len >= Floor(Ev.kind, p.full, p.short, p.hello)
+                                                  /\ (Ev.genuine = 0 \/ Ev.n > 0))
+                                  /\ (s[2] < 2 => (s[2] = 1) = (s[6] < s[5]
                                           /\ Admit(x.count, Ev.kind, Ev.len, s[4] = 1, HalfCapOf(p.max, s[5]),
                                                    p.full, p.short, p.hello)))]
                       [] s[1] = 1 /\ s[3] = 1 ->
@@ -144,9 +154,10 @@ CallEv ==
             /\ Ev.stalled0 = 0 /\ ~First(Ev.kind) => Ev.steps = <<>> /\ (Ev.kind # 0 => Ev.dropped = 1)
             /\ Ev.stalled0 = 0 /\ First(Ev.kind) => decided
             /\ ~made => Ev.diff = <<>>
-            \* what decides and makes no session is counted once: dropped, or (otherwise) answered with a reject, held back by
-            \* the ledger, or refused for want of room
-            /\ decided /\ ~made => Ev.dropped + Ev.otherwise = 1
+            \* what decides and makes no session is counted once: dropped, or (otherwise) a reject the ledger refused, or
+            \* refused for want of room; a reject that is queued is counted when it is sent, not in this call
+            /\ decided /\ ~made =>
+                 IF Ev.steps[1][2] = 2 THEN Ev.dropped + Ev.otherwise <= 1 ELSE Ev.dropped + Ev.otherwise = 1
        /\ UNCHANGED p
 
 Init == /\ i = 1 /\ e = [slots |-> Table0(1), count |-> 0]

@@ -31,6 +31,7 @@ pub struct Seen {
     pub expired_at_end: u32,
     pub spared_at_limit: u32,
     pub rejected: u32,
+    pub dropped_first: u32,
     pub refused_half: u32,
     pub left_by_est: u32,
     pub left_uncounted_by_est: u32,
@@ -76,6 +77,9 @@ pub struct Rec<const K: usize, const D: usize> {
     pub seen: Seen,
     /// What the next first flight's ticket must give, when the test knows.
     pub expect_resume: Option<bool>,
+    /// The next datagram is one a genuine dialer sent, as it left the dialer: while no session holds its ids the
+    /// endpoint never rejects or drops it.
+    pub genuine: bool,
     pub last_now: u64,
 }
 
@@ -92,6 +96,7 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             host: Host::new(),
             seen: Seen::default(),
             expect_resume: None,
+            genuine: false,
             last_now: now,
         };
         while r.ep.poll_trace().is_some() {}
@@ -145,8 +150,8 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         let timeout = self.ep.poll_timeout();
         let diff: Vec<usize> = (0..K).filter(|i| self.prev[*i] != after[*i]).collect();
         let dropped = ns1.dropped_in - ns0.dropped_in;
-        let otherwise = (ns1.stateless_rejects + ns1.stateless_refused + ns1.backlog_refused)
-            - (ns0.stateless_rejects + ns0.stateless_refused + ns0.backlog_refused);
+        // a reject that is queued is counted when it is sent, in a later call: only a refusal counts in this one
+        let otherwise = (ns1.stateless_refused + ns1.backlog_refused) - (ns0.stateless_refused + ns0.backlog_refused);
         let stalled_in = ns1.stalled_in - ns0.stalled_in;
         self.check(
             now,
@@ -204,10 +209,11 @@ impl<const K: usize, const D: usize> Rec<K, D> {
                 let to = timeout.map_or(String::new(), |t| up(t).to_string());
                 let _ = writeln!(
                     out,
-                    r#"{{"t":"coho","run":{},"op":"{opn}","now":{},"kind":{kind},"len":{len},"n":{},"stalled0":{},"steps":[{}],"diff":[{}],"count":{},"stalled":{},"timeout":[{to}],"dropped":{dropped},"otherwise":{otherwise},"stalledIn":{stalled_in}}}"#,
+                    r#"{{"t":"coho","run":{},"op":"{opn}","now":{},"kind":{kind},"len":{len},"n":{},"genuine":{},"stalled0":{},"steps":[{}],"diff":[{}],"count":{},"stalled":{},"timeout":[{to}],"dropped":{dropped},"otherwise":{otherwise},"stalledIn":{stalled_in}}}"#,
                     self.run,
                     exact(now),
                     n.unwrap_or(255).min(255),
+                    u8::from(self.genuine),
                     u8::from(stalled0),
                     steps_s.join(","),
                     diff_s.join(","),
@@ -353,18 +359,27 @@ impl<const K: usize, const D: usize> Rec<K, D> {
         // on while the owed sessions fill the room
         let cap = MAX.min((room as usize).div_ceil(2));
         let open = owed < room;
-        if admitted == 2 {
-            // answered without a session or dropped: a short Initial or a Hello at its floor or more, no resumption
+        if admitted >= 2 {
+            // answered with a reject or dropped, without a session: a short Initial or a Hello at its floor or more, no
+            // resumption, and never a first packet a genuine dialer sent (this branch runs only while no session holds
+            // the ids)
             assert!(
                 matches!(kind, 2 | 6) && resume == 0 && len >= f && open,
                 "a first packet was answered without a session that the responder would not only reject"
             );
+            assert!(!self.genuine, "a genuine first packet was rejected or dropped");
             assert!(
                 steps.len() == 1 && !changed,
                 "an answered first packet changed the table"
             );
-            assert_eq!(dropped + otherwise, 1, "an answered first packet was not counted once");
-            self.seen.rejected += 1;
+            if admitted == 3 {
+                assert_eq!(dropped + otherwise, 1, "a dropped first packet was not counted once");
+            } else {
+                // a queued reject is counted when it is sent; only a refusal or a full queue counts in this call
+                assert!(dropped + otherwise <= 1, "a rejected first packet was counted twice");
+            }
+            self.seen.rejected += u32::from(admitted == 2);
+            self.seen.dropped_first += u32::from(admitted == 3);
             return;
         }
         let want = len >= f && open && (resume == 1 || count0 < cap);
@@ -396,6 +411,13 @@ impl<const K: usize, const D: usize> Rec<K, D> {
             assert_eq!(dropped, 1);
             self.seen.accept_failed += 1;
         }
+    }
+
+    /// A datagram of the genuine dialer, as it left it.
+    pub fn peer_dgram(&mut self, now: u64, from: SocketAddr, d: Vec<u8>) {
+        self.genuine = true;
+        self.dgram(now, from, d, None);
+        self.genuine = false;
     }
 
     pub fn dgram(&mut self, now: u64, from: SocketAddr, mut d: Vec<u8>, expect_resume: Option<bool>) {
@@ -516,6 +538,7 @@ pub fn add(a: &mut Seen, b: &Seen) {
     a.expired_at_end += b.expired_at_end;
     a.spared_at_limit += b.spared_at_limit;
     a.rejected += b.rejected;
+    a.dropped_first += b.dropped_first;
     a.refused_half += b.refused_half;
     a.left_by_est += b.left_by_est;
     a.left_uncounted_by_est += b.left_uncounted_by_est;
