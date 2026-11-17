@@ -630,13 +630,10 @@ format!(
              one port; the client spreads its connections over one endpoint per CPU)."
                 .into(),
         );
+        c.push("The other stacks run their runtime over all the node's CPUs.".into());
         c.push(
-            "Every other test runs VINC on one endpoint, and the other stacks run their runtime over all the node's CPUs."
-                .into(),
-        );
-        c.push(
-            "Each VINC endpoint has its own admission limits and socket buffers, so part of any gain at many connections \
-             is that added capacity."
+            "Each VINC endpoint has its own admission limits and socket buffers, so part of any gain at many \
+             connections is that added capacity."
                 .into(),
         );
     }

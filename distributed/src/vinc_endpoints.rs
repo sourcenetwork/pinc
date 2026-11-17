@@ -71,11 +71,15 @@ impl Scenario {
         if self.vinc_endpoints == VincEndpoints::One {
             return;
         }
-        let many = matches!(&self.workload, Workload::Transport(t) if t.tests.iter().any(|t| matches!(t, TransportTest::Many { .. })));
+        let many = matches!(
+            &self.workload,
+            Workload::Transport(t) if t.tests.iter().any(|t| matches!(t, TransportTest::Many { .. }))
+        );
         if !self.stacks.contains(&Stack::Vinc) || !many {
             out.push(Problem::new(
                 "vinc_endpoints",
-                "per-core applies to the many test of the transport workload run by the vinc stack: add both or use one",
+                "per-core applies to the many test of the transport workload run by the vinc stack: add both or \
+                 use one",
             ));
         }
         if let Workload::Transport(t) = &self.workload {

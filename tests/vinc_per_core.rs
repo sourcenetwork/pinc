@@ -1,7 +1,9 @@
-//! One endpoint per worker on a shared port, as the comparison's per-core server runs (`benches/benches/compare/vinc.rs`):
-//! two endpoints of one identity, each on a socket of its own on one port (`SO_REUSEPORT`) and on a worker of its own.
+//! One endpoint per worker on a shared port, as the comparison's per-core server runs
+//! (`benches/benches/compare/vinc.rs`): two endpoints of one identity, each on a socket of its own on one port
+//! (`SO_REUSEPORT`) and on a worker of its own.
 //! The kernel hands every peer's datagrams to the endpoint its address hashes to: many clients are spread over both,
-//! each served by exactly one, and a client that dials again from the same socket reaches the same endpoint and resumes.
+//! each served by exactly one, and a client that dials again from the same socket reaches the same endpoint and
+//! resumes.
 #![allow(
     clippy::semicolon_if_nothing_returned,
     clippy::unwrap_used,

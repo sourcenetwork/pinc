@@ -24,6 +24,8 @@ pub(crate) fn node_env(ip: std::net::Ipv4Addr, mtu: u32) -> Vec<(String, String)
     vec![
         ("VINC_BENCH_BIND".into(), ip.to_string()),
         ("VINC_BENCH_MTU".into(), mtu.to_string()),
+        // A remote login environment must not turn a row per-core; the per-core argument still wins.
+        ("VINC_BENCH_ENDPOINTS".into(), "1".into()),
     ]
 }
 
@@ -211,6 +213,12 @@ mod tests {
         let env = node_env("10.1.0.2".parse().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED), 1280);
         assert!(env.contains(&("VINC_BENCH_MTU".to_owned(), "1280".to_owned())));
         assert!(env.contains(&("VINC_BENCH_BIND".to_owned(), "10.1.0.2".to_owned())));
+    }
+
+    #[test]
+    fn the_nodes_run_one_endpoint_whatever_their_login_environment_says() {
+        let env = node_env(std::net::Ipv4Addr::UNSPECIFIED, 1280);
+        assert!(env.contains(&("VINC_BENCH_ENDPOINTS".to_owned(), "1".to_owned())));
     }
 
     #[test]
