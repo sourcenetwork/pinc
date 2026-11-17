@@ -845,24 +845,23 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         }
         if self.hub.is_none() {
             self.counters.hub_dropped += 1;
-        } else if let Some(n) = member {
-            // vertexia: the machine counts and traces a refused stamp; the effects of a released message go out here
-            let _ = self.sm.udp_heard(now, &n, &mut self.fx);
-            self.flush();
         }
         false
     }
 
     /// The endpoint read a session packet from the validated direct address of `member` (asked after the read): the
     /// member's UDP session was heard now. Asked after the read, the packet that validated the address, or that moved
-    /// the session onto it, counts, as the reference model stamps the path a packet came in on.
+    /// the session onto it, counts, as the reference model stamps the path a packet came in on. This is the one call
+    /// per packet that stamps and releases what the member's mailbox holds; it flushes only when it emitted something.
     pub(crate) fn on_heard(&mut self, now: u64, member: Option<NodeId>) {
         let Some(n) = member else { return };
         self.fx.set_direct(&n, true);
         if self.hub.is_some() {
             // vertexia: the machine counts and traces a refused stamp; the effects of a released message go out here
             let _ = self.sm.udp_heard(now, &n, &mut self.fx);
-            self.flush();
+            if self.fx.pending() {
+                self.flush();
+            }
         }
     }
 

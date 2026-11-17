@@ -749,8 +749,10 @@ impl<const K: usize, const D: usize> Core<K, D> {
             }
             self.apply(now, s);
         } else {
-            if self.hub.is_some()
-                && data.first().is_some_and(|b| *b >= 0x40)
+            let session = self.hub.is_some() && data.first().is_some_and(|b| *b >= 0x40);
+            self.node.handle_datagram(now, self.addr, remote, data);
+            // Asked once the endpoint read the packet: the answer that validates the member's address counts as heard.
+            if session
                 && let Some(n) = self.node.member_at(&remote)
                 && let Some(h) = self.hub.as_mut()
             {
@@ -758,7 +760,6 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 let _ = h.relay.udp_heard(now, &n, &mut s);
                 self.apply(now, s);
             }
-            self.node.handle_datagram(now, self.addr, remote, data);
         }
         self.pump(now);
     }

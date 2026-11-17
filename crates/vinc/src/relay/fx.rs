@@ -51,6 +51,11 @@ impl Fx {
         }
     }
 
+    /// Whether a call of the machine left anything to apply.
+    pub(crate) fn pending(&self) -> bool {
+        !self.items.is_empty() || self.lost > 0
+    }
+
     /// Append `len` bytes written by `fill` and return their range, or `None` if it failed.
     fn put(&mut self, max: usize, fill: impl FnOnce(&mut [u8]) -> Option<usize>) -> Option<(usize, usize)> {
         let start = self.arena.len();
