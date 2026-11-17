@@ -25,7 +25,7 @@ def mOf (v : J) : Except String M := do
   let susp : Option (Nat × Nat) := match (← intList (← field v "susp")) with
     | [b, a] => if b < 0 then none else some (b.toNat, a.toNat)
     | _ => none
-  pure { cur := ← natF v "cur", infl := ← optF v "infl", probed := ← boolF v "probed", jdone := ← boolF v "jdone",
+  pure { cur := ← natF v "cur", infl := ← optF v "infl", ptok := ← optF v "ptok", probed := ← boolF v "probed", jdone := ← boolF v "jdone",
          retry := ← natF v "retry", started := ← boolF v "started", lbig := ← optF v "lbig", backed := ← optF v "backed",
          pbig := ← optF v "pbig", susp }
 
@@ -48,12 +48,16 @@ def replayEvent (j : J) (m : M) : Except String M := do
     let r := target m (← boolF j "allowed") (← natF j "im") (← boolF j "ll") (← natF j "now")
     check ((r.map (fun n => (n : Int))).getD (-1) == (← intF j "r")) "target: the size due differs"
     upd m "target"
-  | "sent" => upd (probeSent m (← natF j "size")) "sent"
+  | "sent" => upd (probeSent m (← natF j "size") (← natF j "pn")) "sent"
   | "raise" =>
-    let (m2, r) := raise m (← natF j "size")
+    let (m2, r) := raise m (← natF j "size") (← natF j "pn")
     check ((r.map (fun n => (n : Int))).getD (-1) == (← intF j "r")) "raise: the answer differs"
     upd m2 "raise"
-  | "lost" => upd (probeLost m (← natF j "size") (← natF j "now")) "lost"
+  | "echo" =>
+    let (m2, r) := echo m (← natF j "size") (ceiling (← natF j "im"))
+    check ((r.map (fun n => (n : Int))).getD (-1) == (← intF j "r")) "echo: the answer differs"
+    upd m2 "echo"
+  | "lost" => upd (probeLost m (← natF j "size") (← natF j "pn") (← natF j "now")) "lost"
   | "event" => upd (event m) "event"
   | "bh" => upd (blackHole m (← natF j "now") (← natF j "rtt")) "bh"
   | "bhc" =>
