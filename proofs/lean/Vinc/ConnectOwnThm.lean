@@ -351,32 +351,42 @@ theorem seq_above_last (cf : Cf) (s : St) (home cls : Option Nat) (j : Rec) (hm 
 /-- `restore_record_seq` raises the last number to the one given and never lowers it. -/
 theorem restore_raises (cf : Cf) (s : St) (n : Nat) : (step cf s (.restore n)).last = max s.last n := rfl
 
+/-- `min · U` is monotone. Stated for any bound `U` and applied at `uMax`, so the kernel checks no arithmetic on that
+numeral (`step_floor` proved by `omega` on goals with `min _ uMax` on both sides ran the kernel out of memory). -/
+theorem min_mono {a b : Nat} (U : Nat) (h : a ≤ b) : min a U ≤ min b U := by omega
+
+/-- A record's number is not below the last number, up to any bound `U` of the addition. -/
+theorem floor_next (w l U : Nat) : min l U ≤ min (max w (min (l + 1) U)) U := by omega
+
+/-- `start` keeps the last number, or sets it to the number of the record job it starts. -/
+theorem start_last (cf : Cf) (s : St) (now : Nat) (home cls : Option Nat) :
+    (start cf s now home cls).last = s.last ∨
+      ∃ j, recordJob cf s home cls = some j ∧ (start cf s now home cls).last = j.seq := by
+  by_cases h1 : s.job.isSome = true
+  · left; simp [start, h1]
+  · cases hw : s.wall with
+    | none => left; simp [start, h1, hw]
+    | some w =>
+      by_cases h2 : s.want = true
+      · cases hj : recordJob cf s home cls with
+        | none => left; simp [start, h1, hw, h2, hj]
+        | some j => exact Or.inr ⟨j, rfl, by simp [start, h1, hw, h2, hj]⟩
+      · left; simp [start, h1, hw, h2]
+
 /-- No step lowers the last number (up to `u64::MAX`, where the code's addition saturates). -/
 theorem step_floor (cf : Cf) (s : St) (o : Op) : min s.last uMax ≤ min (step cf s o).last uMax := by
   cases ho : lastOp o with
-  | false =>
-    have := step_last cf s o ho
-    omega
+  | false => exact min_mono uMax (Nat.le_of_eq (step_last cf s o ho).symm)
   | true =>
     cases o with
-    | restore n =>
-      show min s.last uMax ≤ min (max s.last n) uMax
-      omega
-    | start now hm c =>
-      simp only [step, start]
-      split
-      · exact Nat.le_refl _
-      · split
-        · exact Nat.le_refl _
-        · split
-          · split
-            · rename_i j hj
-              obtain ⟨w, _, e⟩ := job_seq cf s hm c j hj
-              simp only [nextSeq, sadd] at e
-              show min s.last uMax ≤ min j.seq uMax
-              omega
-            · exact Nat.le_refl _
-          · exact Nat.le_refl _
+    | restore n => exact min_mono uMax (Nat.le_max_left s.last n)
+    | start now home cls =>
+      rcases start_last cf s now home cls with e | ⟨j, hj, e⟩
+      · exact min_mono uMax (Nat.le_of_eq e.symm)
+      · obtain ⟨w, _, e2⟩ := job_seq cf s home cls j hj
+        have e3 : (step cf s (.start now home cls)).last = max w (min (s.last + 1) uMax) := e.trans e2
+        rw [e3]
+        exact floor_next w s.last uMax
     | _ => simp [lastOp] at ho
 
 theorem run_floor (cf : Cf) (s : St) (ops : List Op) : min s.last uMax ≤ min (run cf s ops).last uMax := by
