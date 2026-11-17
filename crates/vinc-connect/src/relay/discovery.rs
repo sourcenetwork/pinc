@@ -35,7 +35,7 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
     ) -> Result<(), Reject> {
         let d = Datagram::decode(bytes).map_err(|e| self.reject(sink, Reject::BadDatagram(e), from_member.copied()))?;
         if let Some(m) = from_member {
-            let _ = self.udp.insert(*m, now);
+            let _ = self.udp_heard(now, m, sink);
         }
         match d {
             Datagram::Qad { nonce } => {

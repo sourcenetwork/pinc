@@ -104,7 +104,7 @@ fn the_hub_tunnel_down_uses_a_udp_session_heard_within_20_seconds() {
     fx.fx();
     let p = [0x41u8; 50];
     // the member has no carrier but a UDP session heard at T0
-    fx.r.udp_heard(&member, T0).unwrap();
+    fx.r.udp_heard(T0, &member, &mut fx.s).unwrap();
     let go = |fx: &mut Fx, at: u64| {
         fx.send(
             at,
@@ -199,7 +199,7 @@ fn a_member_heard_by_udp_without_a_direct_route_is_not_tunnelled_and_goes_to_the
     let member_id = id(&kp);
     let rec = record_bytes(&kp, p1, 1);
     fx.peer(T0, p1, &Frame::Sync { record: &rec }).unwrap();
-    fx.r.udp_heard(&member_id, T0).unwrap();
+    fx.r.udp_heard(T0, &member_id, &mut fx.s).unwrap();
     fx.fx();
     fx.s.2.push(member_id);
     fx.send(
@@ -257,7 +257,7 @@ fn a_sleeping_member_heard_by_udp_without_a_direct_route_gets_its_packet_in_the_
     fx.r.sleep_notice(T0, &notice(&kp, &me, T0 / 1_000_000), None, &mut fx.s)
         .unwrap();
     fx.r.carrier_closed(T0 + SEC, &m, sm, &mut fx.s);
-    fx.r.udp_heard(&m, T0 + 2 * SEC).unwrap();
+    fx.r.udp_heard(T0 + 2 * SEC, &m, &mut fx.s).unwrap();
     fx.s.2.push(m);
     fx.fx();
     fx.send(
@@ -282,7 +282,7 @@ fn a_member_carrier_silent_for_more_than_15_seconds_also_gets_the_tunnel_copy() 
     let (a, b) = (nid(0xa1), nid(0xb2));
     let sa = fx.open(T0, a);
     fx.open(T0, b);
-    fx.r.udp_heard(&b, T0 + 100 * SEC).unwrap();
+    fx.r.udp_heard(T0 + 100 * SEC, &b, &mut fx.s).unwrap();
     fx.fx();
     let p = [0x41u8; 50];
     // b's carrier last spoke at T0; a sends at T0 + 15 s exactly: not stale yet
@@ -299,7 +299,7 @@ fn a_member_carrier_silent_for_more_than_15_seconds_also_gets_the_tunnel_copy() 
     .unwrap();
     assert_eq!(fx.fx().len(), 1);
     // one nanosecond later it is stale: carrier and tunnel both
-    fx.r.udp_heard(&b, T0 + 15 * SEC + 1).unwrap();
+    fx.r.udp_heard(T0 + 15 * SEC + 1, &b, &mut fx.s).unwrap();
     fx.send(
         T0 + 15 * SEC + 1,
         a,
@@ -593,7 +593,7 @@ fn a_member_that_wakes_over_udp_gets_its_mailbox_down_the_udp_session() {
     assert!(fx.fx().is_empty());
     assert_eq!(fx.r.mailbox_pending(&m).0, 1, "still held");
     // its UDP session is heard: the packet goes down it, once
-    fx.r.udp_heard(&m, T0 + 4 * SEC).unwrap();
+    fx.r.udp_heard(T0 + 4 * SEC, &m, &mut fx.s).unwrap();
     fx.r.member_returned(T0 + 4 * SEC, &m, &mut fx.s);
     assert_eq!(
         fx.fx(),
@@ -731,7 +731,7 @@ fn a_held_packet_too_long_for_a_datagram_stays_held_until_the_carrier_reopens() 
     .unwrap();
     fx.fx();
     // the member wakes over UDP: the packet cannot go down a datagram, so it stays held (it was dropped before)
-    fx.r.udp_heard(&m, T0 + 3 * SEC).unwrap();
+    fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
     fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
     assert!(fx.fx().is_empty());
     assert_eq!(fx.r.mailbox_pending(&m).0, 1, "still held");
@@ -800,7 +800,7 @@ fn held_messages_stay_held_while_the_tunnel_is_not_ready_and_arrive_in_order_onc
     let (a, m, seqs) = hold_for_sleeper(&mut fx, 3);
     assert_eq!(seqs.len(), 3);
     // its UDP session is fresh but it has no validated direct route: the tunnel refuses
-    fx.r.udp_heard(&m, T0 + 3 * SEC).unwrap();
+    fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
     fx.s.2.push(m);
     let rejected = fx.r.stats().rejected;
     fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
@@ -853,7 +853,7 @@ fn a_long_packet_in_front_holds_back_the_shorter_ones_behind_it_and_one_behind_s
             .unwrap();
     }
     fx.fx();
-    fx.r.udp_heard(&m, T0 + 3 * SEC).unwrap();
+    fx.r.udp_heard(T0 + 3 * SEC, &m, &mut fx.s).unwrap();
     fx.r.member_returned(T0 + 3 * SEC, &m, &mut fx.s);
     let got: Vec<Rec> = fx.fx().into_iter().filter(|r| matches!(r, Rec::Udp(..))).collect();
     assert_eq!(got.len(), 1, "only the short one in front goes: {got:?}");

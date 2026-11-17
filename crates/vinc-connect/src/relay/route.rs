@@ -261,13 +261,13 @@ impl<const C: usize, const R: usize, const MN: usize, const MB: usize> Relay<C, 
         self.deliver_held(now, node, sink);
     }
 
-    /// The host heard `node` on its validated UDP session at `at`: tunnel packets may use it for
+    /// The host heard `node` on its validated UDP session at `now`: tunnel packets may use it for
     /// [`rule::HUB_TUNNEL_FRESH_NS`].
     ///
     /// # Errors
     /// [`Reject::SessionsFull`] if the table has no room for a new member.
-    pub fn udp_heard(&mut self, node: &NodeId, at: u64) -> Result<(), Reject> {
-        self.udp.insert(*node, at).map(|_| ()).map_err(|_| Reject::SessionsFull)
+    pub fn udp_heard<S: Sink>(&mut self, now: u64, node: &NodeId, _sink: &mut S) -> Result<(), Reject> {
+        self.udp.insert(*node, now).map(|_| ()).map_err(|_| Reject::SessionsFull)
     }
 
     /// Forget the UDP session of `node`.

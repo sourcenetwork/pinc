@@ -34,7 +34,9 @@ impl<A: SimApps> SimNode<A> {
                 && session
                 && let Some(n) = self.member_at(&remote)
             {
-                let _ = self.hub.as_mut().unwrap().relay.udp_heard(&n, now);
+                let mut s = Collect::default();
+                let _ = self.hub.as_mut().unwrap().relay.udp_heard(now, &n, &mut s);
+                self.apply(now, s);
             }
         }
         self.pump(now);

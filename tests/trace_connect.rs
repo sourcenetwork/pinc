@@ -599,7 +599,7 @@ fn run(seed: u64, out: &mut Vec<String>, cov: &mut Cov, cache: &mut Cache) {
                         // before a frame and the model 20 s, the edge of the freshness bound.)
                         now - ((rng.next_u64() % 25) * SEC).min(now)
                     };
-                    let x = r.udp_heard(&ids[node], at);
+                    let x = r.udp_heard(at, &ids[node], &mut sink);
                     res = res_name(&x);
                     head = format!(r#"{{"t":"rudph","n":{},"at":{}"#, node + 1, at / SEC);
                 }

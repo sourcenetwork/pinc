@@ -44,7 +44,7 @@ fn the_relay_allocates_nothing_in_steady_state() {
         let sa = r.carrier_opened(0, a, &mut s).unwrap();
         let sb = r.carrier_opened(0, b, &mut s).unwrap();
         r.add_peer(p1);
-        r.udp_heard(&m, 0).unwrap();
+        r.udp_heard(0, &m, &mut s).unwrap();
         let packet = [0x41u8; 900];
         let spu = {
             let mut buf = [0u8; 2048];

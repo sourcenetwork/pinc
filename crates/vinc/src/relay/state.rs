@@ -846,7 +846,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         if self.hub.is_none() {
             self.counters.hub_dropped += 1;
         } else if let Some(n) = member {
-            let _ = self.sm.udp_heard(&n, now);
+            // vertexia: the machine counts and traces a refused stamp; the effects of a released message go out here
+            let _ = self.sm.udp_heard(now, &n, &mut self.fx);
+            self.flush();
         }
         false
     }
@@ -858,7 +860,9 @@ impl<S, K: KeyStore, A: Access> Core<S, K, A> {
         let Some(n) = member else { return };
         self.fx.set_direct(&n, true);
         if self.hub.is_some() {
-            let _ = self.sm.udp_heard(&n, now);
+            // vertexia: the machine counts and traces a refused stamp; the effects of a released message go out here
+            let _ = self.sm.udp_heard(now, &n, &mut self.fx);
+            self.flush();
         }
     }
 

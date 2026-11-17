@@ -250,7 +250,9 @@ impl Core {
             && let Some(n) = self.node.as_ref().and_then(|n| n.member_at(&remote))
             && let Some(h) = self.hub.as_mut()
         {
-            let _ = h.relay.udp_heard(&n, now);
+            let mut s = Collect::default();
+            let _ = h.relay.udp_heard(now, &n, &mut Host::new(&mut s, &self.node));
+            self.apply(s);
         }
     }
 

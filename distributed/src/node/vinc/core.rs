@@ -754,7 +754,9 @@ impl<const K: usize, const D: usize> Core<K, D> {
                 && let Some(n) = self.node.member_at(&remote)
                 && let Some(h) = self.hub.as_mut()
             {
-                let _ = h.relay.udp_heard(&n, now);
+                let mut s = Collect::default();
+                let _ = h.relay.udp_heard(now, &n, &mut s);
+                self.apply(now, s);
             }
             self.node.handle_datagram(now, self.addr, remote, data);
         }
