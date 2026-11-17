@@ -1423,3 +1423,7 @@ path = "broadcast_subs.rs"
 [[test]]
 name = "broadcast_subs_pieces"
 path = "broadcast_subs_pieces.rs"
+
+[[test]]
+name = "broadcast_subs_room"
+path = "broadcast_subs_room.rs"

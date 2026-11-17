@@ -96,6 +96,10 @@ pub struct NodeHost {
     pub full: BTreeSet<NodeId>,
     /// How many more frames a peer's stream takes before it is full, for a peer listed here.
     pub room: BTreeMap<NodeId, usize>,
+    /// What every stream takes when nothing is queued on it, in bytes; 0 is a host that cannot tell.
+    pub holds: usize,
+    /// How many more bytes a peer's stream takes, for a peer listed here.
+    pub bytes: BTreeMap<NodeId, usize>,
 }
 
 impl NodeHost {
@@ -116,6 +120,12 @@ impl Host for NodeHost {
             }
             *room -= 1;
         }
+        if let Some(room) = self.bytes.get_mut(peer) {
+            if *room < frame.len() {
+                return false;
+            }
+            *room -= frame.len();
+        }
         self.out.push(Out {
             to: *peer,
             lane,
@@ -125,8 +135,15 @@ impl Host for NodeHost {
         true
     }
 
-    fn backlogged(&self, peer: &NodeId, _len: usize) -> bool {
-        self.reach.contains(peer) && (self.full.contains(peer) || self.room.get(peer) == Some(&0))
+    fn backlogged(&self, peer: &NodeId, len: usize) -> bool {
+        self.reach.contains(peer)
+            && (self.full.contains(peer)
+                || self.room.get(peer) == Some(&0)
+                || self.bytes.get(peer).is_some_and(|room| len > *room))
+    }
+
+    fn stream_holds(&self, _peer: &NodeId) -> usize {
+        self.holds
     }
 
     fn send_member(&mut self, peer: &NodeId, frame: &[u8]) -> bool {

@@ -10,120 +10,21 @@
 
 #[path = "broadcast_common.rs"]
 mod common;
+#[path = "broadcast_subs_support.rs"]
+mod support;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use common::{Ev, Net, SEC, ty};
+use common::{Net, SEC, ty};
+use support::{
+    HOLDS, T, count_pieces, fake, gaps, hand, holds, inject, piece, resubscribe, sorted, subs_kind, subscribed, synth,
+    wide_net, wire_bytes, writable,
+};
 use vinc_broadcast::consts::{GAP_EVERY, SUBS_PIECE};
-use vinc_broadcast::{Limits, SubsDrop, Trace};
+use vinc_broadcast::{Limits, SubsDrop};
 use vinc_crypto::IdentityAlg;
 use vinc_membership::NodeId;
-
-const T: &[u8] = b"roster";
-
-fn resubscribe(net: &mut Net, i: usize) {
-    let (now, hub) = (net.now, net.id(0));
-    let n = &mut net.nodes[i];
-    n.t.resubscribe(&mut n.h, now, &hub);
-    net.pump();
-}
-
-/// Hand node `to` the SUBS payload `rest` as if `from` sent it, and return the drop reasons it traced.
-fn inject(net: &mut Net, from: usize, to: usize, rest: &[u8]) -> Vec<SubsDrop> {
-    let (now, fid) = (net.now, net.id(from));
-    let n = &mut net.nodes[to];
-    while n.t.poll_trace().is_some() {}
-    n.t.frame(&mut n.h, now, &fid, ty::SUBS, T, rest);
-    let mut why = Vec::new();
-    while let Some(t) = n.t.poll_trace() {
-        if let Trace::SubsDropped { why: w, .. } = t {
-            why.push(w);
-        }
-    }
-    why
-}
-
-/// A SUBS piece payload: kind 0, the version, the rank of the first id, the length of the whole list, the ids.
-fn piece(ver: (u64, u32), first: u16, total: u16, ids: &[NodeId]) -> Vec<u8> {
-    let mut b = vec![0u8];
-    b.extend_from_slice(&ver.0.to_be_bytes());
-    b.extend_from_slice(&ver.1.to_be_bytes());
-    b.extend_from_slice(&first.to_be_bytes());
-    b.extend_from_slice(&total.to_be_bytes());
-    b.extend_from_slice(&(ids.len() as u16).to_be_bytes());
-    b.extend_from_slice(ids.as_flattened());
-    b
-}
-
-/// A node that is not in anyone's reach: a send to it is refused.
-fn fake(i: u32) -> NodeId {
-    let mut id = [0xEE; 32];
-    id[..4].copy_from_slice(&i.to_be_bytes());
-    id
-}
-
-/// Hand hub 0 a SUB from each of `ids`, as if they subscribed from a session the hub cannot write to.
-fn hand(net: &mut Net, ids: &[NodeId]) {
-    let now = net.now;
-    let hub = &mut net.nodes[0];
-    hub.h.tick(now);
-    for id in ids {
-        hub.t.frame(&mut hub.h, now, id, ty::SUB, T, &0u64.to_be_bytes());
-    }
-    net.pump();
-}
-
-/// A hub and `members` attached members, with room for 512 subscribers in a list.
-fn wide_net(members: usize) -> Net {
-    let limits = Limits {
-        max_subscribers: 512,
-        ..Limits::default()
-    };
-    let mut net = Net::with_limits(&vec![IdentityAlg::Ed25519; 1 + members], 1, SEC, limits);
-    for i in 1..=members {
-        net.attach(i);
-    }
-    net
-}
-
-/// Hand hub 0 `n` subscribers it cannot reach.
-fn synth(net: &mut Net, n: u32) -> Vec<NodeId> {
-    let ids: Vec<NodeId> = (0..n).map(fake).collect();
-    hand(net, &ids);
-    ids
-}
-
-/// The kind of a SUBS frame in flight and, for a piece, the rank of its first id.
-fn subs_kind(bytes: &[u8]) -> Option<(u8, u16)> {
-    let at = 6 + T.len();
-    let kind = *bytes.get(at).filter(|_| bytes.get(4) == Some(&ty::SUBS))?;
-    let first = bytes
-        .get(at + 13..at + 15)
-        .map_or(0, |b| u16::from_be_bytes([b[0], b[1]]));
-    Some((kind, first))
-}
-
-fn holds(net: &Net, i: usize, want: &[NodeId]) -> bool {
-    net.nodes[i].t.known_subscribers(T) == want
-}
-
-fn subscribed(net: &Net, i: usize) -> bool {
-    net.events(i).iter().any(|e| matches!(e, Ev::Subscribed { .. }))
-}
-
-fn gaps(net: &mut Net, i: usize) -> usize {
-    let mut n = 0;
-    while let Some(t) = net.nodes[i].t.poll_trace() {
-        n += usize::from(matches!(t, Trace::SubsDropped { why: SubsDrop::Gap, .. }));
-    }
-    n
-}
-
-fn sorted(mut ids: Vec<NodeId>) -> Vec<NodeId> {
-    ids.sort_unstable();
-    ids
-}
 
 /// A hub that cannot write to `synth_n` subscribers is joined by three members: each ends with all the ids, the
 /// widest SUBS frame is a piece, and the hub still owes the list to the ones it cannot reach.
@@ -334,48 +235,40 @@ fn a_full_stream_resumes_the_list_from_its_place() {
     assert_eq!(net.count_between(0, 3, ty::SUBS), 3);
 }
 
-/// A list that changes before every time the stream has room never ends: each change sends the recipient back to the
-/// first piece. What holds is the bound: once the changes stop, the list ends as soon as the stream has taken the
-/// pieces still owed, one more write per piece.
+/// A list that fits the stream ends whole at a member whose stream never has room for all of it while the list
+/// changes: nothing is handed over meanwhile, and one call hands it all once the room is there.
 #[test]
 fn a_list_that_changes_before_every_writable() {
     let mut net = wide_net(3);
+    net.nodes[0].h.holds = HOLDS;
     let mut want = synth(&mut net, 297);
     for i in [1, 2] {
         net.subscribe(i, T);
     }
-    let (three, now) = (net.id(3), net.now);
-    net.nodes[0].h.room.insert(three, 1);
+    let three = net.id(3);
+    let pieces = count_pieces(&mut net, 3);
+    net.nodes[0].h.bytes.insert(three, 0);
     net.subscribe(3, T);
-    let write = |net: &mut Net| {
-        net.nodes[0].h.room.insert(three, 1);
-        let hub = &mut net.nodes[0];
-        hub.t.peer_writable(&mut hub.h, now, &three);
-        net.pump();
-    };
     for k in 0..6 {
         let id = fake(1000 + k);
+        // Room for two pieces, never for all three.
+        net.nodes[0].h.bytes.insert(three, 2 * (25 + T.len() + 32 * SUBS_PIECE));
         hand(&mut net, &[id]);
         want.push(id);
-        write(&mut net);
-        assert!(
-            net.nodes[3].t.known_subscribers(T).is_empty(),
-            "the list ended under a change"
-        );
+        writable(&mut net, &three);
     }
     want.extend((1..=3).map(|i| net.id(i)));
     let want = sorted(want);
-    let mut writes = 0;
-    while !holds(&net, 3, &want) && writes < 10 {
-        write(&mut net);
-        writes += 1;
-    }
+    assert_eq!(pieces.get(), 0, "pieces were handed over while the room was short");
+    net.nodes[0].h.bytes.insert(three, wire_bytes(want.len()));
+    writable(&mut net, &three);
     assert!(
         holds(&net, 3, &want),
         "member 3 holds {} ids",
         net.nodes[3].t.known_subscribers(T).len()
     );
-    assert_eq!(writes, 2, "the pieces still owed after the last change");
+    assert_eq!(pieces.get(), want.len().div_ceil(SUBS_PIECE), "each piece once");
+    assert_eq!(gaps(&mut net, 3), 0);
 }
 
 /// The ids of `n` fake subscribers, in id order.

@@ -44,6 +44,9 @@ impl Host for Pipe {
         self.used += 1;
         true
     }
+    fn stream_holds(&self, _peer: &NodeId) -> usize {
+        usize::MAX
+    }
     fn send_member(&mut self, peer: &NodeId, frame: &[u8]) -> bool {
         self.send(peer, Lane::Main, frame)
     }

@@ -17,8 +17,11 @@
 //! are sent the hub's local set whole, when it changes.
 //!
 //! A whole list goes as ordered pieces of at most [`SUBS_PIECE`] ids, all at one version, so no list is bigger than the
-//! smallest valid frame whatever `max_subscribers` is. The hub keeps each stale recipient's place (the next piece) and
-//! goes on from it when the stream has room; a change to the list sends every recipient back to the first piece, and a
+//! smallest valid frame whatever `max_subscribers` is. A list that fits what the recipient's stream holds
+//! ([`Host::stream_holds`]) is queued whole or not at all: at its start it waits until the stream has room for all of
+//! it ([`Host::backlogged`]), then every piece goes in one call, so a stream that drains slower than the list changes
+//! still gets a whole list. A longer list, or a host that cannot tell, goes piece by piece: the hub keeps each stale
+//! recipient's place (the next piece) and goes on from it when the stream has room; a change to the list sends every recipient back to the first piece, and a
 //! fresh SUB, which does not change the list, leaves a recipient where it is (a member sends one every 20 s, and a slow
 //! stream needs longer than that for a long list). A receiver gathers the pieces of each hub apart and acts only on a
 //! whole list: a piece that does not follow the ones before it (a lost piece) breaks the gathering, is traced
@@ -105,24 +108,38 @@ fn pieces(n: usize) -> usize {
     n.div_ceil(SUBS_PIECE).max(1)
 }
 
-/// The piece of `list` at version `ver` that starts at rank `first`, in `scratch`.
-fn piece_frame(scratch: &mut Vec<u8>, topic: &[u8], ver: Ver, list: &[NodeId], first: usize) -> bool {
+/// The parts after the topic of the piece of `list` at version `ver` that starts at rank `first`, handed to `f`.
+fn with_piece<R>(ver: Ver, list: &[NodeId], first: usize, f: impl FnOnce(&[&[u8]]) -> R) -> R {
     let rest = list.get(first..).unwrap_or_default();
     let ids = rest.get(..SUBS_PIECE).unwrap_or(rest);
-    wire::build(
-        scratch,
-        ty::SUBS,
-        topic,
-        &[
-            &[FULL],
-            &ver_bytes(ver),
-            &count(first),
-            &count(list.len()),
-            &count(ids.len()),
-            ids.as_flattened(),
-        ],
-    )
-    .is_ok()
+    f(&[
+        &[FULL],
+        &ver_bytes(ver),
+        &count(first),
+        &count(list.len()),
+        &count(ids.len()),
+        ids.as_flattened(),
+    ])
+}
+
+/// The piece of `list` at version `ver` that starts at rank `first`, in `scratch`.
+fn piece_frame(scratch: &mut Vec<u8>, topic: &[u8], ver: Ver, list: &[NodeId], first: usize) -> bool {
+    with_piece(ver, list, first, |parts| {
+        wire::build(scratch, ty::SUBS, topic, parts).is_ok()
+    })
+}
+
+/// The bytes `list` takes on the wire as pieces, length prefixes included: what [`piece_frame`] builds, summed.
+fn list_bytes(topic: &[u8], ver: Ver, list: &[NodeId]) -> usize {
+    (0..pieces(list.len()))
+        .map(|i| with_piece(ver, list, i * SUBS_PIECE, |parts| wire::frame_len(topic, parts)))
+        .sum()
+}
+
+/// Whether the whole list of `bytes` waits for `p`: the stream holds a list of that size, and has no room for all of
+/// it now. A list the stream cannot hold whole, or a host that cannot tell what it holds, is sent piece by piece.
+fn waits<H: Host>(h: &H, p: &NodeId, bytes: usize) -> bool {
+    bytes <= h.stream_holds(p) && h.backlogged(p, bytes)
 }
 
 /// What one receiver holds of the list a hub is sending it in pieces.
@@ -280,8 +297,8 @@ fn tell_members<H: Host>(
             }
         }
         // The pieces sent so far were of the list before this change.
-        // vertexia: a change restarts a list in flight; holding the change for recipients mid-list if a stream
-        // slower than the churn must still converge
+        // vertexia: a list larger than the stream holds restarts on a change; vinc#643 keeps the list in flight
+        // unchanged
         st.stale.values_mut().for_each(|place| *place = 0);
         st.stale.extend(refused.into_iter().map(|p| (p, 0)));
         st.told.clone_from(nodes);
@@ -290,9 +307,11 @@ fn tell_members<H: Host>(
 }
 
 /// Send the next pieces of the whole list to the stale recipients of `st`, or only to `only`; a recipient whose stream
-/// took the last piece is no longer stale, and one whose stream refused a piece keeps its place. A stale entry that is
-/// no longer a recipient is dropped: it is sent nothing, and the whole list again if it comes back. Every recipient
-/// still stale afterwards is in `owed`, so its stream's room brings it the rest of the list.
+/// took the last piece is no longer stale, and one whose stream refused a piece keeps its place. A recipient at the
+/// start of a list that fits what its stream holds ([`Host::stream_holds`]) is sent nothing until the stream has room
+/// for all of it ([`Host::backlogged`]), and then every piece in this call; a longer list goes piece by piece. A stale
+/// entry that is no longer a recipient is dropped: it is sent nothing, and the whole list again if it comes back.
+/// Every recipient still stale afterwards is in `owed`, so its stream's room brings it the rest of the list.
 fn flush_stale<H: Host>(
     h: &mut H,
     scratch: &mut Vec<u8>,
@@ -308,9 +327,15 @@ fn flush_stale<H: Host>(
     }
     let ver = (inc, st.told_seq);
     let n = u16::try_from(pieces(st.told.len())).unwrap_or(u16::MAX);
+    let mut bytes = None;
     if let Some(p) = only {
         let mut at = st.stale.get(p).copied().filter(|at| *at < n).unwrap_or(0);
         while st.stale.contains_key(p) {
+            // A list that fits the stream is queued whole or not at all: at its start it waits for the room.
+            if at == 0 && waits(h, p, *bytes.get_or_insert_with(|| list_bytes(topic, ver, &st.told))) {
+                st.stale.insert(*p, 0);
+                break;
+            }
             let sent = piece_frame(scratch, topic, ver, &st.told, usize::from(at) * SUBS_PIECE)
                 && h.send(p, Lane::Reply, scratch);
             if !sent {
@@ -329,6 +354,9 @@ fn flush_stale<H: Host>(
         while let Some(place) = at.filter(|at| *at < n) {
             if piece_frame(scratch, topic, ver, &st.told, usize::from(place) * SUBS_PIECE) {
                 for (p, slot) in st.stale.iter_mut().filter(|(_, slot)| **slot == place) {
+                    if place == 0 && waits(h, p, *bytes.get_or_insert_with(|| list_bytes(topic, ver, &st.told))) {
+                        continue;
+                    }
                     if h.send(p, Lane::Reply, scratch) {
                         *slot = place + 1;
                     }
@@ -785,7 +813,7 @@ mod tests {
     use alloc::collections::BTreeMap;
     use alloc::vec::Vec;
 
-    use super::{Gathered, apply, delta, gather};
+    use super::{Gathered, apply, delta, gather, list_bytes, piece_frame};
     use vinc_membership::NodeId;
 
     fn id(n: u8) -> NodeId {
@@ -812,6 +840,27 @@ mod tests {
                     apply(&mut got, &add, &rem, max);
                     assert_eq!(got, new);
                 }
+            }
+        }
+    }
+
+    /// The byte count a list of any length takes as pieces is the sum of the frames `piece_frame` builds, for topics
+    /// of several lengths: the room asked for is the room the pieces take.
+    #[test]
+    fn the_bytes_of_a_list_are_the_sum_of_its_piece_frames() {
+        let mut scratch = Vec::with_capacity(8192);
+        let ids: Vec<NodeId> = (0..600u16).map(|n| [n.to_be_bytes()[1]; 32]).collect();
+        for tl in [0usize, 1, 6, 64, 255] {
+            let topic = alloc::vec![b't'; tl];
+            for n in 0..600 {
+                let list = &ids[..n];
+                let sum: usize = (0..super::pieces(n))
+                    .map(|i| {
+                        assert!(piece_frame(&mut scratch, &topic, (3, 4), list, i * super::SUBS_PIECE));
+                        scratch.len()
+                    })
+                    .sum();
+                assert_eq!(list_bytes(&topic, (3, 4), list), sum, "topic {tl}, list {n}");
             }
         }
     }

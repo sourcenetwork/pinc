@@ -707,6 +707,11 @@ impl<E: Ep, St: Store> Io<E, St> {
         false
     }
 
+    /// The bytes a peer's write stream takes when nothing is queued on it.
+    pub(crate) fn out_cap(&self) -> usize {
+        self.out_cap
+    }
+
     pub(crate) fn backlog_full(&self, peer: &NodeId, len: usize) -> bool {
         let Some((conn, out)) = self.links.get(peer).and_then(|l| Some((l.conn?, l.out?))) else {
             return false;

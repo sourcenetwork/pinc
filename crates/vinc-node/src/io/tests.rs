@@ -10,6 +10,7 @@
     reason = "tests assert freely"
 )]
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -310,4 +311,77 @@ fn a_relayed_probe_the_full_queue_cannot_take_is_refused_and_the_queue_stays_bou
     assert_eq!(io.probes.len(), taken);
     assert!(!host(&mut io).send(&PEER, Route::Via([9; 32]), b"probe"));
     assert_eq!(io.probes.len(), taken, "a refused probe is not queued");
+}
+
+/// What the stream of `PEER` has queued and not yet handed to the transport.
+fn queued(io: &Io<Stub, ()>) -> usize {
+    io.strm.get(&(SESSION, STREAM)).unwrap().pending()
+}
+
+/// Let the stream of `PEER` take bytes until it has room for `room` more.
+fn drain_to(io: &mut Io<Stub, ()>, room: usize) {
+    let st = io.strm.get_mut(&(SESSION, STREAM)).unwrap();
+    st.off = st.outb.len().saturating_sub(CAP.saturating_sub(room));
+}
+
+/// A hub over the real stream hand-off: a subscriber list that fits the stream is queued on it whole or not at all.
+/// With room for less than the list, and the list changing before every time the stream takes bytes, nothing is
+/// queued; with room for the list as it then is, all of it is, in one call.
+#[test]
+fn a_subscriber_list_that_fits_the_stream_is_queued_whole_or_not_at_all() {
+    use vinc_broadcast::wire::ty;
+    use vinc_broadcast::{Config, Limits, Topics};
+    use vinc_crypto::Keypair;
+
+    const TOPIC: &[u8] = b"t";
+    const SUBS: usize = 300;
+    let wire = |n: usize| 32 * n + n.div_ceil(128) * (25 + TOPIC.len());
+    let key = Keypair::from_seed(IdentityAlg::Ed25519, &vec![9; IdentityAlg::Ed25519.seed_len()]).unwrap();
+    let cfg = Config {
+        me: key.node_id().bytes,
+        is_hub: true,
+        hubs: &[],
+        incarnation: 1 << 16,
+        trace: false,
+        limits: Limits {
+            max_subscribers: 4096,
+            ..Limits::default()
+        },
+    };
+    let (now, wall) = (1_000_000_000, 1_700_000_000_000);
+    let mut hub = Topics::start(&cfg, Box::new(key), now, wall).unwrap();
+    let mut io = io();
+    with_stream(&mut io);
+    fill(&mut io, 0);
+    let subscribe = |hub: &mut Topics, io: &mut Io<Stub, ()>, who: [u8; 32]| {
+        let mut h = crate::hosts::Bc { io, mem: None };
+        hub.frame(&mut h, now, &who, ty::SUB, TOPIC, &0u64.to_be_bytes());
+    };
+    subscribe(&mut hub, &mut io, PEER);
+    for i in 0..SUBS - 1 {
+        let mut other = [0xEE; 32];
+        other[..4].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
+        subscribe(&mut hub, &mut io, other);
+    }
+    assert_eq!(queued(&io), CAP, "a full stream was handed a piece");
+    let writable = |hub: &mut Topics, io: &mut Io<Stub, ()>| {
+        let mut h = crate::hosts::Bc { io, mem: None };
+        hub.peer_writable(&mut h, now, &PEER);
+    };
+    // One byte short of the list as it will be after the next change.
+    for k in 0..3u8 {
+        drain_to(&mut io, wire(SUBS + usize::from(k) + 1) - 1);
+        subscribe(&mut hub, &mut io, [0xFA + k; 32]);
+        writable(&mut hub, &mut io);
+        assert_eq!(
+            queued(&io),
+            CAP - wire(SUBS + usize::from(k) + 1) + 1,
+            "a piece was queued without room"
+        );
+    }
+    let n = SUBS + 3;
+    drain_to(&mut io, wire(n));
+    let before = queued(&io);
+    writable(&mut hub, &mut io);
+    assert_eq!(queued(&io) - before, wire(n), "the whole list, in one call");
 }

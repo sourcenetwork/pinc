@@ -29,11 +29,20 @@ pub trait Host {
     fn send(&mut self, peer: &NodeId, lane: Lane, frame: &[u8]) -> bool;
 
     /// Whether a frame of `len` bytes was refused by `peer`'s stream only because the stream has no room for it now:
-    /// the session is up and will take it later, and the host then calls [`Topics::peer_writable`](crate::Topics::peer_writable).
-    /// A hub keeps its place in the topic's log for such a subscriber and loses nothing. A host that cannot tell
-    /// answers `false`, and a refused frame is then left to the repair paths as before.
+    /// the session is up and will take it later, and the host then calls
+    /// [`Topics::peer_writable`](crate::Topics::peer_writable). A hub keeps its place in the topic's log for such a
+    /// subscriber and loses nothing. A host that cannot tell answers `false`, and a refused frame is then left to the
+    /// repair paths as before.
     fn backlogged(&self, _peer: &NodeId, _len: usize) -> bool {
         false
+    }
+
+    /// How many bytes `peer`'s stream takes when nothing is queued on it. A hub queues a subscriber list that is no
+    /// longer than this whole or not at all, asking [`Host::backlogged`] for the room of all of it, so a list that
+    /// fits is never left half on a stream that never has room for the rest. A longer list goes piece by piece. A
+    /// host that cannot tell answers 0, and every list then goes piece by piece.
+    fn stream_holds(&self, _peer: &NodeId) -> usize {
+        0
     }
 
     /// Hand one complete frame to `peer` over a member session, opening it if none is up. Returns whether the frame

@@ -209,6 +209,18 @@ pub fn get_u64(b: &[u8]) -> Option<u64> {
 }
 
 #[cfg(feature = "alloc")]
+/// The bytes after the length prefix of the frame [`build`] lays down: type, topic length, topic and parts.
+fn body_len(topic: &[u8], parts: &[&[u8]]) -> usize {
+    2 + topic.len() + parts.iter().map(|p| p.len()).sum::<usize>()
+}
+
+#[cfg(feature = "alloc")]
+/// The bytes of the frame [`build`] lays down for `topic` and `parts`, the length prefix included.
+pub(crate) fn frame_len(topic: &[u8], parts: &[&[u8]]) -> usize {
+    4 + body_len(topic, parts)
+}
+
+#[cfg(feature = "alloc")]
 /// Build `len32 | ty | topic_len | topic | parts...` in `out`, which is cleared first and never grows: a frame that
 /// does not fit `out`'s capacity is refused.
 ///
@@ -216,7 +228,7 @@ pub fn get_u64(b: &[u8]) -> Option<u64> {
 /// [`TooLong`] for a topic over 255 bytes or a frame over the capacity of `out`.
 pub fn build(out: &mut alloc::vec::Vec<u8>, ty: u8, topic: &[u8], parts: &[&[u8]]) -> Result<(), TooLong> {
     let tl = u8::try_from(topic.len()).map_err(|_| TooLong)?;
-    let body = 2 + topic.len() + parts.iter().map(|p| p.len()).sum::<usize>();
+    let body = body_len(topic, parts);
     if 4 + body > out.capacity() || topic.len() > crate::consts::MAX_TOPIC {
         return Err(TooLong);
     }

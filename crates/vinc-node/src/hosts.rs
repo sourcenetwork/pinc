@@ -176,6 +176,10 @@ impl<E: Ep, St: Store> BcHost for Bc<'_, E, St> {
         self.io.backlog_full(peer, len)
     }
 
+    fn stream_holds(&self, _peer: &NodeId) -> usize {
+        self.io.out_cap()
+    }
+
     fn send_member(&mut self, peer: &NodeId, frame: &[u8]) -> bool {
         self.io.send_stream(peer, Lane::Main, frame)
     }

@@ -42,6 +42,9 @@ impl Host for Sink {
         }
         true
     }
+    fn stream_holds(&self, _peer: &NodeId) -> usize {
+        usize::MAX
+    }
     fn send_member(&mut self, _peer: &NodeId, _frame: &[u8]) -> bool {
         true
     }
