@@ -22,17 +22,17 @@ structure W where
   np : Nat := 4
   c : C := dial 1
 
-/-- What the recorder shows of a connection: the held paths (id, validated) in slot order, the active path's id (0 for
-none), established, the round trip has a sample, the dropped count. -/
-abbrev View := List (Nat × Bool) × Nat × Bool × Bool × Nat
+/-- What the recorder shows of a connection: the held paths (id, validated, relay) in slot order, the active path's id
+(0 for none), established, the round trip has a sample, the dropped count. -/
+abbrev View := List (Nat × Bool × Bool) × Nat × Bool × Bool × Nat
 
 def view (np : Nat) (c : C) : View :=
-  ((List.range np).filterMap (fun j => (c.t j).map (fun p => (p.id, p.v))), ((c.t c.act).map P.id).getD 0,
+  ((List.range np).filterMap (fun j => (c.t j).map (fun p => (p.id, p.v, p.r))), ((c.t c.act).map P.id).getD 0,
     decide (c.hs = .done), c.smp, c.hd)
 
-def pathsOf (j : J) : Except String (List (Nat × Bool)) := do
+def pathsOf (j : J) : Except String (List (Nat × Bool × Bool)) := do
   match j.arr? with
-  | some a => a.toList.mapM fun e => do pure (← natF e "id", ← boolF e "v")
+  | some a => a.toList.mapM fun e => do pure (← natF e "id", ← boolF e "v", (← strF e "kind") == "relay")
   | none => throw "paths: expected an array"
 
 def viewOf (v : J) : Except String View := do
@@ -67,7 +67,7 @@ def replayEvent (j : J) (w : W) : Except String W := do
     if mine == rec' then pure { np, c }
     else throw s!"{what}: the model computes {repr mine}, the code recorded {repr rec'}"
   match ← strF j "op" with
-  | "init" => upd (← natF j "np") (dial (← natF j "id")) "init"
+  | "init" => upd (← natF j "np") (dial (← natF j "id") ((← strF j "kind") == "relay")) "init"
   | "add" =>
     let (c2, ok) := addPath w.np w.c (← natF j "id")
     check (ok == ((← strF j "r") == "ok")) "add: whether the path was taken differs"

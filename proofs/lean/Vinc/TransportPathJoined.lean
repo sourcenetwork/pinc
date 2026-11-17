@@ -64,30 +64,50 @@ theorem joined_unique {np : Nat} {c : C} {pid : Nat} {k : Kind} (hi : Inv np c) 
 /-- What `follow` does to the table when the reply's path is learnt in slot `i`. -/
 theorem follow_slots {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
     (hs : slot np c.t c.act = some i) (hia : i ≠ c.act) :
-    (follow np c).act = i ∧ (follow np c).t i = some ⟨pid, true⟩ ∧
-      (follow np c).t c.act = (c.t c.act).map (fun p => { p with v := false }) ∧
+    (follow np c).act = i ∧ (follow np c).t i = some ⟨pid, true, false⟩ ∧
+      (follow np c).t c.act = (c.t c.act).map (fun p => { p with v := p.r }) ∧
       ∀ j, j ≠ i → j ≠ c.act → (follow np c).t j = c.t j := by
   have hl : (learnNew np c.t c.act pid).2 = some i := by rw [learnNew_snd, hs]
   rw [follow_learnt hrf hf hl, ite_eq_right hia]
   refine ⟨rfl, ?_, ?_, ?_⟩
-  · show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true i = _
+  · show setV (setV (learnNew np c.t c.act pid).1 c.act (rl (learnNew np c.t c.act pid).1 c.act)) i true i = _
     rw [setV_at, setV_other _ _ _ hia, learnNew_at hl]
     rfl
-  · show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true c.act = _
-    rw [setV_other _ _ _ (Ne.symm hia), setV_at,
-      learnNew_other (by rw [hl]; intro e; exact hia (Option.some.inj e))]
+  · show setV (setV (learnNew np c.t c.act pid).1 c.act (rl (learnNew np c.t c.act pid).1 c.act)) i true c.act = _
+    have hk : (learnNew np c.t c.act pid).1 c.act = c.t c.act :=
+      learnNew_other (by rw [hl]; intro e; exact hia (Option.some.inj e))
+    have hr : rl (learnNew np c.t c.act pid).1 c.act = rl c.t c.act := by unfold rl; rw [hk]
+    rw [setV_other _ _ _ (Ne.symm hia), setV_at, hk, hr]
+    cases h : c.t c.act <;> simp [rl, h]
   · intro j hji hja
-    show setV (setV (learnNew np c.t c.act pid).1 c.act false) i true j = _
+    show setV (setV (learnNew np c.t c.act pid).1 c.act (rl (learnNew np c.t c.act pid).1 c.act)) i true j = _
     rw [setV_other _ _ _ hji, setV_other _ _ _ hja,
       learnNew_other (by rw [hl]; intro e; exact hji (Option.some.inj e).symm)]
+
+/-- The path a session leaves when it moves to the path its Reply came on, by its kind: a relay path stays valid for as
+long as the connection tracks it. -/
+theorem left_relay_valid {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
+    (hs : slot np c.t c.act = some i) (hia : i ≠ c.act) {p : P} (hp : c.t c.act = some p) (hr : p.r = true) :
+    (follow np c).t c.act = some { p with v := true } := by
+  have h := (follow_slots hrf hf hs hia).2.2.1
+  rw [hp] at h
+  simpa [hr] using h
+
+/-- A direct path the session leaves is no longer validated. -/
+theorem left_direct_unvalidated {np : Nat} {c : C} {pid i : Nat} (hrf : c.rf = some pid) (hf : find np c.t pid = none)
+    (hs : slot np c.t c.act = some i) (hia : i ≠ c.act) {p : P} (hp : c.t c.act = some p) (hr : p.r = false) :
+    (follow np c).t c.act = some { p with v := false } := by
+  have h := (follow_slots hrf hf hs hia).2.2.1
+  rw [hp] at h
+  simpa [hr] using h
 
 /-- A reply with a 1-RTT packet behind it, on a path the dial does not hold, that joins at slot `i`: the session is
 on it, the path it left is held (no longer validated), and every other slot is as it was, so at a full table exactly
 one path is given up, the one in slot `i`, never the one the session left. -/
 theorem joined_gives_up_one {np : Nat} {c : C} {pid i : Nat} (hi : Inv np c) (hhs : c.hs ≠ .done)
     (hf : find np c.t pid = none) (hs : slot np c.t c.act = some i) (s : Bool) :
-    (rx false np c pid .auth true s).act = i ∧ (rx false np c pid .auth true s).t i = some ⟨pid, true⟩ ∧
-      (rx false np c pid .auth true s).t c.act = (c.t c.act).map (fun p => { p with v := false }) ∧
+    (rx false np c pid .auth true s).act = i ∧ (rx false np c pid .auth true s).t i = some ⟨pid, true, false⟩ ∧
+      (rx false np c pid .auth true s).t c.act = (c.t c.act).map (fun p => { p with v := p.r }) ∧
       ∀ j, j ≠ i → j ≠ c.act → (rx false np c pid .auth true s).t j = c.t j := by
   obtain ⟨pa, hpa, _⟩ := hi.active
   have hia : i ≠ c.act := slot_ne_act hpa hs
@@ -97,15 +117,15 @@ theorem joined_gives_up_one {np : Nat} {c : C} {pid i : Nat} (hi : Inv np c) (hh
 /-- The rule before the correction (found by this model): the same datagram, the dial on path 1 with two free slots
 and the resume Reply on path 9, leaves path 9 held twice. -/
 theorem noLookup_dup :
-    (rxNoLook 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true⟩ ∧
-      (rxNoLook 3 (dial 1) 9 .auth true false).t 2 = some ⟨9, false⟩ ∧
+    (rxNoLook 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true, false⟩ ∧
+      (rxNoLook 3 (dial 1) 9 .auth true false).t 2 = some ⟨9, false, false⟩ ∧
       (rxNoLook 3 (dial 1) 9 .auth true false).act = 1 ∧
       uniqueB 3 (rxNoLook 3 (dial 1) 9 .auth true false).t = false := by
   decide
 
 /-- The corrected rule on that datagram holds path 9 once. -/
 theorem lookup_once :
-    (rx false 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true⟩ ∧
+    (rx false 3 (dial 1) 9 .auth true false).t 1 = some ⟨9, true, false⟩ ∧
       (rx false 3 (dial 1) 9 .auth true false).t 2 = none ∧
       uniqueB 3 (rx false 3 (dial 1) 9 .auth true false).t = true := by
   decide
@@ -167,6 +187,8 @@ theorem respRx_active {np : Nat} {c : C} {pid : Nat} {p : P} (hp : c.t c.act = s
 #audit_axioms joined_eq
 #audit_axioms joined_unique
 #audit_axioms joined_gives_up_one
+#audit_axioms left_relay_valid
+#audit_axioms left_direct_unvalidated
 #audit_axioms noLookup_dup
 #audit_axioms lookup_once
 #audit_axioms respRx_bounded

@@ -37,6 +37,11 @@
 (*              active one, one path at most (remove_path aside, which the *)
 (*              host asks for): a reply with a 1-RTT packet behind it at a *)
 (*              full table gives up one path, not the one it moves from;   *)
+(*  LeavesRule  a session that moves to the path its Reply came on leaves  *)
+(*              the path it was on according to its kind: a direct path   *)
+(*              is no longer validated, a relay path stays valid for as   *)
+(*              long as the connection tracks it; RelayValid, a relay      *)
+(*              path the connection holds is validated, in every state;    *)
 (*  Unique      no path is held twice, also when a 1-RTT packet follows    *)
 (*              the reply that learnt the path in the same datagram;       *)
 (*              ActiveHeld, ActiveValid, KeyWaits.                         *)
@@ -44,6 +49,10 @@
 (* connection holds takes one (TypeOK).                                    *)
 (*                                                                         *)
 (* Witnesses (scripts/proofs.sh witness_tlc):                              *)
+(*  _relay      the rule before the correction, RelayKeep = FALSE: the     *)
+(*              session leaves a relay path unvalidated whatever its kind, *)
+(*              and nothing validates it again (a relay path is never      *)
+(*              challenged); RelayValid fails.                             *)
 (*  _held       the rule before #399, Old: a dialing side drops a          *)
 (*              handshake packet on a path it does not hold (NoPath), so a *)
 (*              reply that comes back on another path is never taken;      *)
@@ -62,6 +71,7 @@ EXTENDS PathOps, TLC
 CONSTANTS Ids,    \* the path ids a datagram may arrive on; 1 is the dialed path
           Roles,  \* a subset of {"dial", "resp"}
           Old,    \* TRUE: the rule before #399
+          \* RelayKeep (PathOps): FALSE is the rule before the correction that keeps a relay path valid
           Lookup, \* FALSE: the rule before the correction (learning does not look the id up)
           HDMAX   \* the dropped-packet counts explored
 
@@ -70,10 +80,13 @@ vars == <<role, c>>
 
 \* a datagram carries a 1-RTT packet behind its handshake packet, or not
 Coals == BOOLEAN
-SlotVals == {Empty} \cup [id : Ids \ {1}, v : BOOLEAN]
+\* a path of a table: a relay path is validated
+SlotOf(S) == [id : S, v : BOOLEAN, k : {"direct"}] \cup [id : S, v : {TRUE}, k : {"relay"}]
+SlotVals == {Empty} \cup SlotOf(Ids \ {1})
 UniqueT(t) == \A i, j \in 1..NP : (t[i].id # 0 /\ t[i].id = t[j].id) => i = j
 DialTables ==
-    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE] ELSE f[i]] : f \in [1..NP -> SlotVals]} : UniqueT(t)}
+    {t \in {[i \in 1..NP |-> IF i = 1 THEN [id |-> 1, v |-> TRUE, k |-> d] ELSE f[i]] : f \in [1..NP -> SlotVals], d \in PKinds} :
+        UniqueT(t)}
 C0(t) == [t |-> t, act |-> 1, hs |-> "wait", rf |-> 0, pend |-> 0, smp |-> FALSE, hd |-> 0]
 
 Init ==
@@ -98,11 +111,14 @@ Bound == c.hd <= HDMAX
 
 TypeOK ==
     /\ role \in {"dial", "resp"}
-    /\ c.t \in [1..NP -> SlotVals \cup {[id |-> 1, v |-> b] : b \in BOOLEAN}]
+    /\ c.t \in [1..NP -> {Empty} \cup SlotOf(Ids)]
     /\ c.act \in 1..NP /\ c.hs \in {"wait", "key", "done"}
     /\ c.rf \in Ids \cup {0} /\ c.pend \in Ids \cup {0} /\ c.smp \in BOOLEAN /\ c.hd \in Nat
 
 Unique == UniqueT(c.t)
+\* a relay path the connection holds is validated: nothing but a challenge validates a path, and a relay path is never
+\* challenged
+RelayValid == \A i \in 1..NP : (c.t[i].id # 0 /\ c.t[i].k = "relay") => c.t[i].v
 ActiveHeld == (\E i \in 1..NP : c.t[i].id # 0) => c.t[c.act].id # 0
 \* a dialing side's active path is validated: the dialed one, then the reply's
 ActiveValid == role = "dial" => c.t[c.act].v
@@ -124,6 +140,16 @@ ReplyTaken ==
 
 KeyTaken ==
     (role = "dial" /\ c.hs = "key") => \A s \in BOOLEAN : LET a == Key(c, "ok", s) IN a.hs = "done" /\ Taken(c, a, c.pend)
+
+\* the path c0 was on, once c1 is on another: a relay path stays valid, a direct path is no longer validated
+Left1(c0, c1) ==
+    c1.act # c0.act =>
+        LET s == c1.t[c0.act] IN s.id = c0.t[c0.act].id /\ (s.k = "relay" => s.v) /\ (s.k = "direct" => ~s.v)
+
+LeavesRule ==
+    (role = "dial" /\ c.hs # "done") =>
+        /\ \A id \in Ids, co \in Coals, s \in BOOLEAN : Left1(c, Rx(c, id, "auth", co, s, Old, Lookup))
+        /\ c.hs = "key" => \A s \in BOOLEAN : Left1(c, Key(c, "ok", s))
 
 Still(c0, c1) == c1.t = c0.t /\ c1.act = c0.act /\ c1.smp = c0.smp /\ c1.hs # "done"
 Quiet ==

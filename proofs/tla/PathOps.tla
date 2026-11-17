@@ -6,8 +6,13 @@
 (* ReplyPath.tla checks the operators over every interleaving and every    *)
 (* input; TraceReplyPath.tla replays the recorded runs of the real code.   *)
 (*                                                                         *)
-(* A table t is NP slots: Empty, or the path's id (from 1) and whether it  *)
-(* is validated (v). act is the slot of the active path. Learn is          *)
+(* A table t is NP slots: Empty, or the path's id (from 1), whether it is  *)
+(* validated (v) and its kind (k: "direct", or "relay", a path through a   *)
+(* relay). A relay path is valid from the moment the connection tracks it  *)
+(* and is never challenged, so a relay path is always validated; a path a  *)
+(* connection learns by receiving on it is direct (the endpoint names a    *)
+(* relay path afterwards, which the model leaves out). act is the slot of  *)
+(* the active path. Learn is                                               *)
 (* new_path_slot as learn_path calls it, the one rule of both roles for a  *)
 (* path the connection learns by receiving on it: the slot of the path if *)
 (* it is held already, else the first empty slot, else the first          *)
@@ -34,9 +39,12 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS NP
+CONSTANTS NP,
+          RelayKeep \* TRUE: the rule of the code, the path a session leaves keeps its validity if it is a relay path;
+                    \* FALSE: the rule before the correction, whatever the kind the path it leaves is unvalidated
 
-Empty == [id |-> 0, v |-> FALSE]
+PKinds == {"direct", "relay"}
+Empty == [id |-> 0, v |-> FALSE, k |-> "direct"]
 Kinds == {"none", "bad", "other", "rej", "pend", "auth"}
 
 \* the least element of a set of slots, 0 for none
@@ -54,7 +62,7 @@ Slot(t, act) ==
 \* the table has no room
 Place(t, act, id) ==
     LET i == Slot(t, act)
-    IN IF i = 0 THEN [t |-> t, i |-> 0] ELSE [t |-> [t EXCEPT ![i] = [id |-> id, v |-> FALSE]], i |-> i]
+    IN IF i = 0 THEN [t |-> t, i |-> 0] ELSE [t |-> [t EXCEPT ![i] = [id |-> id, v |-> FALSE, k |-> "direct"]], i |-> i]
 
 \* learn_path (new_path_slot): the slot of a path already held, its state untouched, else Place
 Learn(t, act, id) == IF Find(t, id) # 0 THEN [t |-> t, i |-> Find(t, id)] ELSE Place(t, act, id)
@@ -69,15 +77,19 @@ RemovePath(t, act, id) ==
        ELSE IF i = act THEN [t |-> t, r |-> "active"]
        ELSE [t |-> [t EXCEPT ![i] = Empty], r |-> "ok"]
 
+\* the path a session moves off (Path::left): a direct path is no longer validated, a relay path stays valid for as long
+\* as the connection tracks it
+Left(s) == [s EXCEPT !.v = IF RelayKeep /\ s.k = "relay" THEN @ ELSE FALSE]
+
 \* follow_reply: the reply's path is learnt (found when it is held); the session moves to it, which is validated, and
-\* the path it leaves is no longer validated. With no room for it the session stays on its path.
+\* the path it leaves is left (Left). With no room for it the session stays on its path.
 FollowReply(c) ==
     LET id == c.rf
         l == Learn(c.t, c.act, id)
         c0 == [c EXCEPT !.rf = 0]
     IN IF id = 0 \/ l.i = 0 THEN c0
        ELSE IF l.i = c.act THEN [c0 EXCEPT !.t = l.t]
-       ELSE [c0 EXCEPT !.t = [l.t EXCEPT ![c.act].v = FALSE, ![l.i].v = TRUE], !.act = l.i]
+       ELSE [c0 EXCEPT !.t = [l.t EXCEPT ![c.act] = Left(l.t[c.act]), ![l.i].v = TRUE], !.act = l.i]
 
 \* pump at the establishment: follow_reply, and the round trip sample feed took if the first flight went unrepeated (s)
 Establish(c, s) == FollowReply([c EXCEPT !.hs = "done", !.pend = 0, !.smp = @ \/ s])
