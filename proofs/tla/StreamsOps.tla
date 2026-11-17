@@ -81,13 +81,26 @@
 (* retransmission on the same id meets the table as the first arrival did  *)
 (* and the stream is admitted once Admits holds. There is no refused queue. *)
 (*                                                                         *)
+(* Discard. The application's stop of a receive half (StopReq, drop_recv and  *)
+(* stop_recv in the facade) marks the slot dropped (the field drop). With   *)
+(* DISCARD the half then holds nothing: its chunks and ranges are released  *)
+(* at once; what arrives later is checked as before and not stored (OnData); *)
+(* it is granted no more credit (Due) and the ledger counts nothing for it  *)
+(* (PoolDemand); it counts as observed, and reads Finished once its final   *)
+(* size is known, so its slot is freed when the peer's end has arrived and  *)
+(* the send half is done, at the stop itself if both already hold. Without  *)
+(* DISCARD the mark is set and nothing else changes: the half keeps         *)
+(* storing, keeps its credit and, with bytes unread, its slot (the earlier  *)
+(* behaviour, the witnesses Streams_stop_w, Streams_stopgrant_w and         *)
+(* Streams_stopfree_w, and the trace replay until the code discards).       *)
+(*                                                                         *)
 (* Data bytes are not part of the state here; a frame carries `diff`, whether *)
 (* its bytes differ from the bytes already stored where they overlap. The *)
 (* content theorems are in Vinc/TransportStreams.lean.                     *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, DISCARD
 
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
@@ -103,7 +116,7 @@ SW == Min(SWC, MaxStream)           \* the initial window; the ceiling is MaxStr
 
 NewSlot == [id |-> -1, open |-> FALSE, held |-> {}, rs |-> <<>>, read |-> 0, hi |-> 0, contig |-> 0, fin |-> -1,
             limit |-> 0, size |-> 0, pend |-> FALSE, defer |-> FALSE, rst |-> -1, obs |-> FALSE,
-            sdone |-> TRUE, srst |-> 0,
+            sdone |-> TRUE, srst |-> 0, drop |-> FALSE,
             stop |-> 0, qcode |-> -1, scode |-> -1, cnt |-> FALSE, sfl |-> FALSE, ord |-> 0,
             m |-> [start |-> -1, bytes |-> 0, rate |-> 0]]
 
@@ -151,22 +164,23 @@ Overlaps(rs, lo, e) == \E k \in 1..Len(rs) : rs[k][1] < e /\ rs[k][2] > lo
 First0(rs) == IF Len(rs) > 0 /\ rs[1][1] = 0 THEN rs[1][2] ELSE 0
 
 (* ---- the receive half (recv.rs, flow.rs) ---- *)
-Status(r) == IF r.rst # -1 THEN "reset" ELSE IF r.fin # -1 /\ r.fin = r.read THEN "fin" ELSE "open"
-Readable(r) == IF r.rst # -1 THEN 0 ELSE Max(r.contig - r.read, 0)
+Dropped(r) == DISCARD /\ r.drop     \* the application stopped this half and the rule discards
+Status(r) == IF r.rst # -1 THEN "reset" ELSE IF r.fin # -1 /\ (r.fin = r.read \/ Dropped(r)) THEN "fin" ELSE "open"
+Readable(r) == IF r.rst # -1 \/ Dropped(r) THEN 0 ELSE Max(r.contig - r.read, 0)
 RecvDone(r) == ~r.open \/ (r.obs /\ Status(r) # "open")
 SendDone(r) == r.sdone \/ r.srst = 3
 
 (* pool_demand: the pool bytes credit up to l may still claim: the chunks of the span from the read position to l not yet held *)
 PoolDemand(r, l) ==
     LET reach == IF r.fin = -1 THEN l ELSE Min(r.fin, l)
-    IN IF ~r.open \/ reach <= r.read THEN 0
+    IN IF ~r.open \/ Dropped(r) \/ reach <= r.read THEN 0
        ELSE LET span == (reach - 1) \div CH - r.read \div CH + 1
             IN Max(span - Cardinality(r.held), 0) * CH
 Unreceived(r) == PoolDemand(r, Charged(r, r.limit))
 
 (* due: the limit the window is due to move to, once an eighth of the window was freed *)
 Due(r) ==
-    IF ~r.open THEN -1
+    IF ~r.open \/ Dropped(r) THEN -1
     ELSE LET cap == IF r.fin = -1 THEN MAXOFF ELSE r.fin
              cand == Min(r.read + r.size, cap)
          IN IF cand > r.limit /\ cand >= r.limit + r.size \div 8 THEN cand ELSE -1
@@ -307,8 +321,8 @@ OnData(T, r, off, len, fin, diff) ==
        ELSE IF r.fin # -1 /\ (e > r.fin \/ (fin /\ e # r.fin)) THEN [r |-> r, err |-> "FinalSize"]
        ELSE IF r.fin = -1 /\ fin /\ e < r.hi THEN [r |-> r, err |-> "FinalSize"]
        ELSE IF e > r.limit THEN [r |-> r, err |-> "FlowControl"]
-       ELSE IF r.rst = -1 /\ store.err # "ok" THEN [r |-> r, err |-> store.err]
-       ELSE IF r.rst = -1 THEN [r |-> done, err |-> "ok"]
+       ELSE IF r.rst = -1 /\ ~Dropped(r) /\ store.err # "ok" THEN [r |-> r, err |-> store.err]
+       ELSE IF r.rst = -1 /\ ~Dropped(r) THEN [r |-> done, err |-> "ok"]
        ELSE [r |-> [r EXCEPT !.hi = Max(@, e), !.fin = IF fin THEN e ELSE @], err |-> "ok"]
 
 (* Frame: Streams::on_stream_frame, the new table and the error *)
@@ -441,15 +455,19 @@ AppReset(T, id, code, ext2) ==
         T1 == IF change THEN [SetSlot(T, i, [r EXCEPT !.srst = 1, !.scode = code]) EXCEPT !.ext = ext2] ELSE T
     IN IF i = 0 THEN T ELSE Settle(T1, i)
 (* Streams::stop_sending: ask the peer to stop sending on a stream we receive on; queued once, nothing if the sender
-   already ended the stream *)
+   already ended the stream. The half is marked dropped; with DISCARD it also releases what it holds, counts as
+   observed and settles (Recv::abandon, then settle): its slot is freed at once if the peer's end has arrived and the
+   send half is done. The request itself is queued under the same rule as before. *)
 StopReq(T, id, code) ==
     LET i == FindSlot(T, id)
         r == IF i = 0 THEN NewSlot ELSE T.slots[i]
+        asked == IF r.rst = -1 /\ r.fin = -1 /\ r.stop = 0 THEN [r EXCEPT !.stop = 1, !.qcode = code] ELSE r
+        gone == IF DISCARD THEN [asked EXCEPT !.drop = TRUE, !.obs = TRUE, !.held = {}, !.rs = <<>>]
+                           ELSE [asked EXCEPT !.drop = TRUE]
     IN IF i = 0 THEN [t |-> T, err |-> "UnknownStream"]
        ELSE IF ~r.open THEN [t |-> T, err |-> "StreamState"]
-       ELSE IF r.rst = -1 /\ r.fin = -1 /\ r.stop = 0
-               THEN [t |-> SetSlot(T, i, [r EXCEPT !.stop = 1, !.qcode = code]), err |-> "ok"]
-       ELSE [t |-> T, err |-> "ok"]
+       ELSE IF DISCARD THEN [t |-> Settle(SetSlot(T, i, gone), i), err |-> "ok"]
+       ELSE [t |-> SetSlot(T, i, gone), err |-> "ok"]
 (* Streams::on_stop_sending: a stop request arrived for a stream we send on. The peer stream is located (opened
    implicitly if new) and, if its send half can still be stopped, reset with the peer's code; fresh says it was. *)
 OnStop(T, id, code, ext2) ==

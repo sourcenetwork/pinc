@@ -40,7 +40,7 @@
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets, TLC, Json, IOUtils
 
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, DISCARD
 VARIABLES i, rs
 vars == <<i, rs>>
 

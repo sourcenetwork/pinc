@@ -478,6 +478,11 @@ par witness_tlc streams_early_w Streams Streams_early_w OpenerInside
 par witness_tlc streams_early_rel Streams Streams_early_rel NoReleaseOfEarly
 par run_tlc streams_early_ctl Streams Streams_early_ctl
 par witness_tlc streams_early_ctl_w Streams Streams_early_ctl_w PeerNeverRefuses
+# The stop witnesses run the module without the discard (DISCARD = FALSE) at the smallest constants that show each
+# violation: one peer stream, one slot, a window of two one-byte chunks and one byte in flight.
+par witness_tlc streams_stop_w Streams Streams_stop_w StoppedHoldsNothing
+par witness_tlc streams_stopgrant_w Streams Streams_stopgrant_w StoppedNoGrant
+par witness_tlc streams_stopfree_w Streams Streams_stopfree_w StoppedEndedIsFree
 par run_tlc recovery Recovery Recovery
 par run_tlc recovery_count Recovery Recovery_count
 par run_tlc recovery_flags Recovery Recovery_flags

@@ -48,6 +48,12 @@
 (*    and sent again if lost unless the sender ended the stream; a stop    *)
 (*    that arrives resets the send half with the peer's code (StopEndsWithCode), *)
 (*    and the code of a reset never changes (CodeKept);                    *)
+(*  - STOP DISCARDS (DISCARD): the application's stop of a receive half    *)
+(*    releases what it holds at once (StoppedHoldsNothing), grants it no   *)
+(*    more credit (StoppedNoGrant) and frees its slot as soon as the       *)
+(*    peer's end has arrived and the send half is done (StoppedEndedIsFree);  *)
+(*    the witnesses Streams_stop_w, Streams_stopgrant_w and                 *)
+(*    Streams_stopfree_w run the module without it (DISCARD = FALSE);       *)
 (*  - RESET: a reset fixes the final size, frees the buffered bytes and    *)
 (*    leaves the stream readable to its end (nothing more is readable).    *)
 (* Streams_local (a pool with no other user, a peer stream and a local    *)
@@ -75,7 +81,7 @@
 (* Lean counterpart: proofs/lean/Vinc/TransportStreams.lean.               *)
 (***************************************************************************)
 EXTENDS Integers, Sequences, FiniteSets
-CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM
+CONSTANTS CH, RING, RR, N, MAXREM, B, SWC, MSWC, PM, MAXOFF, RETRY, RemIds, LocIds, FIRSTK, RELEASE, PERSTREAM, DISCARD
 CONSTANTS HOR, LMAX, EXTMAX, SRTTS, DT
 \* STOPS = FALSE leaves out the stop requests and our own resets (configs that check the credit only)
 CONSTANT STOPS
@@ -253,19 +259,30 @@ LedgerOnAdmit == \A id \in RemIds : LET L == Locate(T, id) IN
     (L.err = "ok" /\ L.t.rl > T.rl) => GU(L.t) + Resv(L.t) <= Max(GU(T) + Resv(T), Avail(T))
 \* a frame inside the span the ledger counts (the whole window of a stream that carried data, the first FIRSTK chunks
 \* of one that has not) needs no more chunks than the ledger counted for its stream
-NeedCovered == \A i \in Live : T.slots[i].open =>
+\* (about a half that stores what arrives: a stopped half stores nothing, so it takes no chunk and is charged nothing;
+\* StoppedHoldsNothing is the check that a stopped half takes no chunk)
+NeedCovered == \A i \in Live : (T.slots[i].open /\ ~Dropped(T.slots[i])) =>
     \A e \in (T.slots[i].read + 1)..Charged(T.slots[i], Reach(T.slots[i])) :
         Cardinality({k \in (T.slots[i].read \div CH)..((e - 1) \div CH) : k \notin T.slots[i].held}) * CH
             <= Unreceived(T.slots[i])
+
+\* a stopped half holds no chunk and no stored range (checked with DISCARD; Streams_stop_w.cfg runs without it)
+StoppedHoldsNothing == \A i \in Live : T.slots[i].drop => (T.slots[i].held = {} /\ T.slots[i].rs = <<>>)
 
 (* ---- liveness: a stream whose peer is blocked at its limit, all of it read, gets a new limit once the *)
 (* other users of the pool let go: no deadlock, and the grant is not waiting for a read that cannot come     *)
 Blocked(i) == LET r == T.slots[i] IN
     r.id # -1 /\ r.open /\ r.fin = -1 /\ r.rst = -1 /\ r.read = r.limit /\ r.limit < MAXOFF
 Progress == \A i \in 1..N : [](Blocked(i) => <>~Blocked(i))
+\* a stopped half whose peer's end has arrived (a final size, from the end or a reset) and whose send half is done is
+\* not in a slot: it is freed in the very step that makes the three hold (Settle runs after every call that can).
+\* Streams_stopfree_w.cfg: without DISCARD an unread byte keeps the slot for good.
+StoppedEndedIsFree == \A i \in Live : ~(T.slots[i].drop /\ T.slots[i].fin # -1 /\ SendDone(T.slots[i]))
 
 (* ---- transition properties ---- *)
 SameInc(i) == T.slots[i].id # -1 /\ T'.slots[i].id = T.slots[i].id
+\* a stopped half is granted no more credit: its limit never rises (Streams_stopgrant_w.cfg runs without DISCARD)
+StoppedNoGrant == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].drop) => T'.slots[i].limit <= T.slots[i].limit]_vars
 LimitsMonotone == [][\A i \in 1..N : SameInc(i) => T'.slots[i].limit >= T.slots[i].limit]_vars
 ReadMonotone == [][\A i \in 1..N : SameInc(i) => T'.slots[i].read >= T.slots[i].read]_vars
 FinalFixed == [][\A i \in 1..N : (SameInc(i) /\ T.slots[i].fin # -1) => T'.slots[i].fin = T.slots[i].fin]_vars
