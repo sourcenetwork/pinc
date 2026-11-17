@@ -285,7 +285,9 @@ pub struct StreamStats {
     /// Range maps that were full even spilled, so a lost range was widened, an acknowledgement turned back into a
     /// retransmission, or a received frame was refused (`Fragmented`; its packet went unacknowledged).
     pub range_overflows: u64,
-    /// Range maps that outgrew their inline array and moved into a pool chunk (received, lost or acknowledged ranges).
+    /// Times a range map outgrew its inline array and moved into a pool chunk (received, lost or acknowledged ranges).
+    /// A map that holds at most half its inline capacity again moves back and returns the chunk, so a stream can count
+    /// more than once.
     pub range_spills: u64,
     /// Peer stream frames held back for want of a slot or of a free chunk in the pool (their packet went
     /// unacknowledged). Nonzero means the peer opened streams beyond the credit it was given, or the pool was full:

@@ -86,9 +86,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
         if let Some(i) = self.find(id) {
             let (overflows, spills) = self
                 .with_send(i, |send| {
-                    let before = send.spilled();
                     let overflows = send.on_acked(pool, offset, len, fin);
-                    (overflows, send.spilled().saturating_sub(before))
+                    (overflows, send.take_spills())
                 })
                 .unwrap_or((0, 0));
             self.stats.range_overflows += overflows as u64;
@@ -101,9 +100,8 @@ impl<S: StreamSource, const N: usize, const C: usize> Streams<S, N, C> {
     pub fn on_lost(&mut self, pool: &mut BufferPool<'_>, id: StreamId, offset: u64, len: u64, fin: bool) {
         if let Some(i) = self.find(id) {
             let (overflows, spills) = self.slots.get_mut(i).map_or((0, 0), |s| {
-                let before = s.send.spilled();
                 let overflows = s.send.on_lost(pool, offset, len, fin);
-                (overflows, s.send.spilled().saturating_sub(before))
+                (overflows, s.send.take_spills())
             });
             self.stats.range_overflows += overflows as u64;
             self.stats.range_spills += spills;
