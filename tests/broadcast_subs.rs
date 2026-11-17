@@ -524,6 +524,60 @@ fn a_lagging_member_that_subscribes_again_is_sent_the_list_once() {
     assert_eq!(lists, 1, "the member was sent the list {lists} times");
 }
 
+/// A change that is the version the member holds, again (a copy from an old session), is ignored without an ask, and
+/// so is a whole list older than the one held: today the member takes any whole list from its hub as the newest, so the
+/// older list replaces the newer and the next gap check repairs it (the SUB carries the version, which is then not the
+/// hub's). The second half pins that: the member holds the older list, and the repair brings the current one.
+#[test]
+fn an_exact_duplicate_of_a_change_is_ignored_and_a_late_older_list_is_repaired_by_the_next_check() {
+    let mut net = Net::new(IdentityAlg::Ed25519, 1, 3, SEC);
+    let seen = Rc::new(RefCell::new((0u64, 0u32)));
+    let s = Rc::clone(&seen);
+    net.filter = Some(Box::new(move |_, to, bytes| {
+        if to == 2 && bytes.get(4) == Some(&ty::SUBS) {
+            let rest = &bytes[6 + usize::from(bytes[5])..];
+            *s.borrow_mut() = (
+                u64::from_be_bytes(rest[1..9].try_into().unwrap()),
+                u32::from_be_bytes(rest[9..13].try_into().unwrap()),
+            );
+        }
+        true
+    }));
+    for i in 1..=3 {
+        net.subscribe(i, T);
+    }
+    net.filter = None;
+    let asks = |net: &Net| {
+        net.log
+            .iter()
+            .filter(|(_, from, to, t, _)| (*from, *to, *t) == (2, 0, ty::SUBS))
+            .count()
+    };
+    let (inc, seq) = *seen.borrow();
+    let held = net.nodes[2].t.known_subscribers(T).to_vec();
+    let before = asks(&net);
+    let stranger = net.id(0);
+    inject(&mut net, 0, 2, &change((inc, seq), &[stranger]));
+    net.pump();
+    assert_eq!(asks(&net), before, "a duplicate made the member ask");
+    assert_eq!(net.nodes[2].t.known_subscribers(T), held.as_slice());
+
+    // A whole list of an earlier version of the same life: the member takes it.
+    let mut old = vec![0u8];
+    old.extend_from_slice(&inc.to_be_bytes());
+    old.extend_from_slice(&1u32.to_be_bytes());
+    old.extend_from_slice(&1u16.to_be_bytes());
+    old.extend_from_slice(&net.id(1));
+    assert!(inject(&mut net, 0, 2, &old).is_empty());
+    assert_eq!(net.nodes[2].t.known_subscribers(T), [net.id(1)].as_slice());
+    net.publish(2, T, b"live");
+    net.advance(vinc_broadcast::consts::GAP_EVERY + SEC);
+    assert_eq!(
+        net.nodes[2].t.known_subscribers(T),
+        expected(&net, &[1, 2, 3], 256).as_slice()
+    );
+}
+
 /// A removal of an id the member never held (past its cut) changes nothing and asks for nothing.
 #[test]
 fn a_removal_past_the_cut_of_a_member_with_a_lower_limit_asks_for_nothing() {
