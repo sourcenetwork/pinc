@@ -65,8 +65,8 @@ impl VincEndpoints {
 }
 
 impl Scenario {
-    /// `per-core` changes nothing unless VINC runs the transport workload's `many` test: say so instead of letting a
-    /// row read as per-core when it was not.
+    /// `per-core` changes nothing unless VINC runs the transport workload's `many` test, and it must not stand over a
+    /// test that runs on one endpoint: say so instead of letting a row read as per-core when it was not.
     pub(crate) fn check_vinc_endpoints(&self, out: &mut Vec<Problem>) {
         if self.vinc_endpoints == VincEndpoints::One {
             return;
@@ -77,6 +77,17 @@ impl Scenario {
                 "vinc_endpoints",
                 "per-core applies to the many test of the transport workload run by the vinc stack: add both or use one",
             ));
+        }
+        if let Workload::Transport(t) = &self.workload {
+            for other in t.tests.iter().filter(|t| !matches!(t, TransportTest::Many { .. })) {
+                out.push(Problem::new(
+                    "vinc_endpoints",
+                    format!(
+                        "per-core applies to the many tests only, so the {} test cannot be in this scenario",
+                        other.id()
+                    ),
+                ));
+            }
         }
     }
 }

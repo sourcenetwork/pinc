@@ -107,6 +107,21 @@ fn vinc_endpoints_default_to_one_and_per_core_is_read_validated_and_refused_when
     }
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
     assert!(paths.contains("vinc_endpoints"), "{paths:?}");
+    // A test that runs on one endpoint cannot stand in a per-core scenario, even beside a many test.
+    let mut sc = scenario("lan-per-core");
+    if let Workload::Transport(t) = &mut sc.workload {
+        t.tests.push(TransportTest::Throughput {
+            bytes: 1 << 20,
+            streams: 1,
+        });
+    }
+    let problems: Vec<_> = sc
+        .validate()
+        .into_iter()
+        .filter(|p| p.path == "vinc_endpoints")
+        .collect();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].message.contains("throughput_1s"), "{problems:?}");
     let mut sc = scenario("pubsub-lan");
     sc.vinc_endpoints = VincEndpoints::PerCore;
     let paths: BTreeSet<String> = sc.validate().into_iter().map(|p| p.path).collect();
